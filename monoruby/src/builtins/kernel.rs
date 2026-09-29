@@ -61,7 +61,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         false,
         Effect::CAPTURE,
     );
-    globals.define_builtin_module_func_with_effect(
+    let binding_fid = globals.define_builtin_module_func_with_effect(
         kernel_class,
         "binding",
         binding,
@@ -70,6 +70,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         false,
         Effect::CAPTURE | Effect::BINDING,
     );
+    globals.store.set_kernel_binding_fid(binding_fid);
     globals.define_builtin_module_func_with_effect(
         kernel_class,
         "local_variables",
@@ -874,6 +875,23 @@ fn lambda(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/binding.html]
 #[monoruby_builtin]
 fn binding(vm: &mut Executor, globals: &mut Globals, _: Lfp, pc: BytecodePtr) -> Result<Value> {
+    // `rb_vm_make_binding` wants the frame that called `binding` to be
+    // a Ruby frame. Reached through `Method#call`, `bind_call`,
+    // `public_send` or the proc `Method#to_proc` makes, that frame is
+    // the builtin's own, and CRuby refuses rather than hand out the
+    // Ruby frame below it (#1665). The builtins CRuby dispatches with
+    // no frame of their own are looked through instead.
+    let mut caller = vm.cfp().prev();
+    while let Some(cfp) = caller
+        && cfp.lfp().meta().is_native()
+    {
+        if !globals.store.is_cruby_frameless(cfp.lfp().func_id()) {
+            return Err(MonorubyErr::runtimeerr(
+                "Cannot create Binding object for non-Ruby caller",
+            ));
+        }
+        caller = cfp.prev();
+    }
     // Code later eval'd against this Binding can reach raw parameter
     // slots on the captured frame's outer chain — materialize any
     // pending lazy `(...)`-forwarding marker first.
@@ -8000,6 +8018,58 @@ mod tests {
         eval("a=42", b)
         $res << eval("x + a", b)
         $res
+        "##,
+        );
+    }
+
+    /// `binding` reached through a builtin that has a frame of its own in
+    /// CRuby — `Method#call`, the proc `Method#to_proc` makes,
+    /// `bind_call`, `public_send` — raises; through one that has none —
+    /// `send`, `Proc#call`, a Symbol's proc — it captures the Ruby frame
+    /// below (#1665). The `run` method gets JIT-compiled, so the inlined
+    /// `Method#call` is exercised as well as the builtin.
+    #[test]
+    fn binding_refuses_a_non_ruby_caller() {
+        run_test(
+            r##"
+        def t
+          r = yield
+          r.is_a?(Binding) ? "Binding" : r.inspect
+        rescue => e
+          "#{e.class}: #{e.message}"
+        end
+        def run
+          r = []
+          m = method(:binding)
+          r << t { m.call }
+          r << t { m.call(&nil) }
+          r << t { m.to_proc.call }
+          r << t { m.to_proc.() }
+          r << t { Kernel.instance_method(:binding).bind_call(self) }
+          r << t { Kernel.instance_method(:binding).bind(self).call }
+          r << t { Kernel.method(:binding).call }
+          r << t { Kernel.public_send(:binding) }
+          r << t { public_send(:binding) }
+          r << t { instance_exec(&m) }
+          r << t { eval("method(:binding).call") }
+          r << t { method(:send).call(:binding) }
+          r << t { method(:__send__).call(:binding) }
+          r << t { :binding.to_proc.method(:call).call(Kernel) }
+          r << t { [1].each { m.call } }
+          r << t { send(:binding) }
+          r << t { __send__(:binding) }
+          r << t { send(:send, :binding) }
+          r << t { Kernel.send(:binding) }
+          r << t { :binding.to_proc.call(Kernel) }
+          r << t { :binding.to_proc.(Kernel) }
+          r << t { binding }
+          r << t { Kernel.binding }
+          r << t { instance_eval { binding } }
+          r
+        end
+        res = nil
+        30.times { res = run }
+        res
         "##,
         );
     }

@@ -100,6 +100,12 @@ pub struct Store {
     /// one?" and compute the digest inline instead of dispatching. See
     /// `doc/bop_redefinition.md`.
     kernel_hash_fid: Option<FuncId>,
+    /// The builtin `Kernel#binding`, which refuses a caller that is not a
+    /// Ruby frame (#1665). See `method_call_inline_bails`.
+    kernel_binding_fid: Option<FuncId>,
+    /// The builtin `Proc#call` (with its aliases), one of the builtins
+    /// CRuby dispatches without a frame. See `is_cruby_frameless`.
+    proc_call_fid: Option<FuncId>,
     array_hash_fid: Option<FuncId>,
     hash_hash_fid: Option<FuncId>,
     /// `FuncId` of the Ruby `Class#new` trampoline (`builtins/class.rb`),
@@ -845,6 +851,8 @@ impl Store {
             functions: function::Funcs::default(),
             basic_ops: basic_op::BasicOpTable::new(),
             kernel_hash_fid: None,
+            kernel_binding_fid: None,
+            proc_call_fid: None,
             class_new_fid: None,
             object_send_fids: vec![],
             array_hash_fid: None,
@@ -1072,6 +1080,39 @@ impl Store {
     /// Record the builtin `Kernel#hash`. Called once, at bootstrap.
     pub(crate) fn set_kernel_hash_fid(&mut self, fid: FuncId) {
         self.kernel_hash_fid = Some(fid);
+    }
+
+    /// Record the builtin `Kernel#binding`. Called once, at bootstrap.
+    pub(crate) fn set_kernel_binding_fid(&mut self, fid: FuncId) {
+        self.kernel_binding_fid = Some(fid);
+    }
+
+    /// Record the builtin `Proc#call`. Called once, at bootstrap.
+    pub(crate) fn set_proc_call_fid(&mut self, fid: FuncId) {
+        self.proc_call_fid = Some(fid);
+    }
+
+    /// Whether CRuby dispatches the builtin `fid` without a control frame
+    /// of its own, so that a method it calls sees *its* caller as the
+    /// caller: `send` / `__send__` (`vm_call_opt_send`), `Proc#call` and
+    /// its aliases (`vm_call_opt_call`), and the block a Symbol makes
+    /// (`vm_yield_with_symbol`). `Method#call`, `UnboundMethod#bind_call`,
+    /// `public_send` and the proc `Method#to_proc` makes all push one.
+    pub(crate) fn is_cruby_frameless(&self, fid: FuncId) -> bool {
+        fid == SYMBOL_TO_PROC_BODY_FUNCID
+            || self.proc_call_fid == Some(fid)
+            || self.is_object_send(fid)
+    }
+
+    /// The Methods the JIT's inlined `Method#call` must not call directly
+    /// but hand to the builtin, so that its own frame is on the stack:
+    /// `Kernel#binding`, which refuses a caller that is not a Ruby frame,
+    /// and the frameless builtins that could forward to it (#1665).
+    pub(crate) fn method_call_inline_bails(&self) -> impl Iterator<Item = FuncId> + '_ {
+        self.kernel_binding_fid
+            .into_iter()
+            .chain(self.proc_call_fid)
+            .chain(self.object_send_fids.iter().copied())
     }
 
     ///

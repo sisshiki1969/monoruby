@@ -1595,14 +1595,22 @@ pub(super) extern "C" fn object_send_missing(
 }
 
 ///
-/// `Method#call` on a `method_missing` proxy Method.
+/// `Method#call` on a Method the inline path cannot call itself.
 ///
 /// The inlined `Method#call` (`Codegen::method_object_call_inline`) reads
 /// the bound `FuncId` and receiver straight out of the `MethodInner` and
-/// builds the callee frame itself, which cannot express the proxy's
-/// dispatch: `receiver.method_missing(target, *args)` with the target name
-/// prepended. A proxy therefore leaves the inline path here, and this
-/// rebuilds the call from the caller's frame the way the builtin does.
+/// builds the callee frame itself. Two Methods leave that path here:
+///
+/// - a `method_missing` proxy, whose dispatch it cannot express —
+///   `receiver.method_missing(target, *args)` with the target name
+///   prepended — so this rebuilds the call from the caller's frame the
+///   way the builtin does;
+/// - one bound to `Kernel#binding`, which refuses a caller that is not a
+///   Ruby frame (#1665) and so must find `Method#call`'s own native
+///   frame below it, which the inline path never pushes — or to a
+///   frameless builtin (`send`, `Proc#call`) that could forward to it
+///   (`Store::method_call_inline_bails`): this calls the builtin the
+///   ordinary way.
 ///
 /// Reached only for a call site the inline generator accepted, so the
 /// arguments are simple and positional.
@@ -1618,15 +1626,32 @@ pub(super) extern "C" fn method_object_call_proxy(
     let bh = cs.block_handler(lfp);
     // SAFETY: the slots come from the call site being executed, so they
     // name live registers of this very frame.
-    let method = lfp.register(recv_slot).unwrap();
-    let method = method.as_method();
-    let receiver = method.receiver();
-    let target = method.method_missing_name().unwrap();
-    let mut args = vec![Value::symbol(target)];
-    args.extend(unsafe { lfp.args_to_vec(args_slot, pos_num) });
-    vm.invoke_method_inner(globals, IdentId::METHOD_MISSING, receiver, &args, bh, None)
-        .map_err(|err| vm.set_error(err))
-        .ok()
+    let method_val = lfp.register(recv_slot).unwrap();
+    let method = method_val.as_method();
+    let args = unsafe { lfp.args_to_vec(args_slot, pos_num) };
+    let res = match method.method_missing_name() {
+        Some(target) => {
+            let mut args_with_target = vec![Value::symbol(target)];
+            args_with_target.extend(args);
+            vm.invoke_method_inner(
+                globals,
+                IdentId::METHOD_MISSING,
+                method.receiver(),
+                &args_with_target,
+                bh,
+                None,
+            )
+        }
+        None => vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("call"),
+            method_val,
+            &args,
+            bh,
+            None,
+        ),
+    };
+    res.map_err(|err| vm.set_error(err)).ok()
 }
 
 pub(crate) extern "C" fn invoke_method_missing(
