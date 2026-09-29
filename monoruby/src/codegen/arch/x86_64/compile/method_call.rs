@@ -607,8 +607,7 @@ impl Codegen {
         }
         // `Kernel#binding` refuses a caller that is not a Ruby frame, so
         // it must see `Method#call`'s own frame, which only the builtin
-        // pushes (#1665) — likewise the frameless builtins (`send`,
-        // `Proc#call`) that would forward to it.
+        // pushes (#1665) — likewise `send`, which would forward to it.
         for fid in store.method_call_inline_bails() {
             monoasm! { &mut self.jit,
                 cmpl rdx, (fid.get());

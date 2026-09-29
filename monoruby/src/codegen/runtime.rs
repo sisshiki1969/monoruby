@@ -1607,10 +1607,9 @@ pub(super) extern "C" fn object_send_missing(
 ///   way the builtin does;
 /// - one bound to `Kernel#binding`, which refuses a caller that is not a
 ///   Ruby frame (#1665) and so must find `Method#call`'s own native
-///   frame below it, which the inline path never pushes — or to a
-///   frameless builtin (`send`, `Proc#call`) that could forward to it
-///   (`Store::method_call_inline_bails`): this calls the builtin the
-///   ordinary way.
+///   frame below it, which the inline path never pushes — or to `send`,
+///   which `binding` looks through (`Store::method_call_inline_bails`):
+///   this calls the builtin the ordinary way.
 ///
 /// Reached only for a call site the inline generator accepted, so the
 /// arguments are simple and positional.

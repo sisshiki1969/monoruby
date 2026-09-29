@@ -172,10 +172,9 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// Declines unless the call site proved a `Method` receiver, since the
 /// emitted code reads `MethodInner` fields off it. A `method_missing`
-/// proxy and a Method bound to `Kernel#binding` or to a frameless
-/// builtin that could forward to it (`Store::method_call_inline_bails`)
-/// leave the emitted code at run time for
-/// `runtime::method_object_call_proxy`.
+/// proxy and a Method bound to `Kernel#binding` or to `send`
+/// (`Store::method_call_inline_bails`) leave the emitted code at run
+/// time for `runtime::method_object_call_proxy`.
 ///
 pub fn method_object_call(
     state: &mut AbstractState,

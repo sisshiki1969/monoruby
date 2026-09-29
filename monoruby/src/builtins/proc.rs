@@ -32,7 +32,6 @@ pub(super) fn init(globals: &mut Globals) {
         true,
     );
     globals.store[call_fid].set_native_variadic();
-    globals.store.set_proc_call_fid(call_fid);
     globals.define_builtin_func(PROC_CLASS, "binding", binding_, 0);
     globals.define_builtin_func(PROC_CLASS, "source_location", source_location, 0);
     globals.define_builtin_funcs(PROC_CLASS, "to_s", &["inspect"], to_s, 0);
