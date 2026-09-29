@@ -754,7 +754,9 @@ bin/test
 1. `cargo llvm-cov nextest` with the stress features (`stress-spill-pool`, plus
    `gc-stress` only when `GC_STRESS=1` is exported — it is opt-in, so pushes
    and PRs never pay the per-safepoint stress; see the manual `gc-stress`
-   workflow below)
+   workflow below), then the thread-related unit tests once more with
+   `MONORUBY_THREAD_MODEL=native`, so `scheduler/native.rs` and the GVL's
+   contended paths are exercised and counted in the coverage report
 2. Builds a debug benchmark binary with the **same** feature list, so under
    `GC_STRESS=1` the benchmark/optcarrot/spec phases are stressed too (that
    run takes hours — it is a manual, deliberate exercise)

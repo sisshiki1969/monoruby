@@ -660,3 +660,13 @@ dead になったカーネルスレッドを `join` してから戻る — イ�
 - シグナル配送・`Thread#backtrace`(park 中の `resume_exec`)・割り込みマスクの
   意味論は green と同じコードを使う。`SCHED_CALL_DEPTH` はカーネルスレッドごとの
   TLS になり、swap は不要。
+
+### 12.6 テスト
+
+`cargo test --lib` は green(既定)と `MONORUBY_THREAD_MODEL=native` の両方で
+全件通る。CI(`bin/test`)は通常の nextest に続けて、スレッドに関わるユニット
+テスト(`builtins::{thread,socket,process,io,fiber}` / `gvl` / `vm` / `fork`、
+約 350 件・20 秒程度)を `MONORUBY_THREAD_MODEL=native` でもう一度走らせ、
+両方のプロファイルを 1 つのカバレッジレポートに合算する。native モードで
+しか通らない経路(`scheduler/native.rs`、GVL の競合経路)はこの 2 回目の
+実行で計測される。
