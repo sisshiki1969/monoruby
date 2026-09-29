@@ -28,6 +28,7 @@ use std::collections::HashMap;
 
 use crate::alloc::Allocator;
 use crate::codegen::Codegen;
+use crate::gvl::{Gvl, GvlThread};
 use crate::scheduler::Scheduler;
 use crate::{ClassId, IdentId, RValue};
 
@@ -39,6 +40,10 @@ use crate::{ClassId, IdentId, RValue};
 /// `OnceCell`s initialised on first use — the same laziness the
 /// `thread_local!`s had.
 pub(crate) struct Vm {
+    /// The Global VM Lock, held by the thread that created this `Vm`
+    /// (its handle is `main_thread`) until other kernel threads exist.
+    gvl: Gvl,
+    main_thread: GvlThread,
     /// The GC heap (`alloc::ALLOC`).
     alloc: OnceCell<RefCell<Allocator<RValue>>>,
     /// `GC.start` asked for a Major collection at the next safepoint.
@@ -74,7 +79,10 @@ impl Vm {
     /// Only `const`-constructible state; everything else is lazy. Must
     /// not touch [`CURRENT`]: it is called before the `Vm` is installed.
     fn new() -> Self {
+        let (gvl, main_thread) = Gvl::new();
         Self {
+            gvl,
+            main_thread,
             alloc: OnceCell::new(),
             gc_force_major: Cell::new(false),
             codegen: OnceCell::new(),
@@ -95,6 +103,14 @@ impl Vm {
 
 #[cfg(test)]
 static DROPPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+impl Vm {
+    /// The Global VM Lock and the creating thread's handle on it.
+    #[allow(dead_code)]
+    pub(crate) fn gvl(&self) -> (&Gvl, &GvlThread) {
+        (&self.gvl, &self.main_thread)
+    }
+}
 
 impl Drop for Vm {
     fn drop(&mut self) {

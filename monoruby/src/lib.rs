@@ -55,6 +55,7 @@ mod executor;
 mod ext;
 mod fork;
 mod globals;
+mod gvl;
 mod id_table;
 mod native_pool;
 pub mod parser;
