@@ -368,6 +368,60 @@ impl<'a> JitContext<'a> {
         true
     }
 
+    ///
+    /// Settle the class proofs of heap objects after Ruby code may have run.
+    ///
+    /// An object proved to be of class `C` stops being of it the moment it
+    /// is given a singleton class (`def obj.m`, `extend`, `singleton_class`,
+    /// `define_singleton_method`, `instance_eval` with a string), and any
+    /// call may do that to any object this unit holds. Carrying the proof
+    /// across the call is only sound while no instance of `C` has one yet
+    /// (`ClassInfo::instance_singleton`, a one-way latch). So, at the head
+    /// of the first instruction after such code:
+    ///
+    /// - a proof whose class has latched is dropped (a `self` proof, which
+    ///   the unit is keyed by, is checked at run time instead: a class
+    ///   guard that deopts if `self` has changed class);
+    /// - every other proof is kept, and the unit records its class
+    ///   (`singleton_deps`). The first singleton class given to an
+    ///   instance of it poisons the unit's version word, so the
+    ///   class-version guard emitted here — right after the call, before
+    ///   any use of the proof — fails, and salvage refuses to re-stamp
+    ///   (`Store::singleton_deps_hold`): the unit is recompiled, now
+    ///   without the proof.
+    ///
+    /// The guard is the one the next call site would have emitted anyway,
+    /// moved forward; what it newly covers is the guard-free uses in
+    /// between — a folded `respond_to?`, an inlined `Array#[]`.
+    /// See `doc/singleton_class_facts.md`.
+    ///
+    pub(super) fn settle_class_proofs(&mut self, state: &mut AbstractState, ir: &mut AsmIr) {
+        state.set_class_proofs_settled();
+        let state::ClassProofScan {
+            kept,
+            latched_consts,
+            latched_self,
+            ..
+        } = state.settle_class_proofs(self.store);
+        for (slot, v) in latched_consts {
+            ir.lit2stack(v, slot);
+            state.def_S(slot);
+        }
+        if !kept.is_empty() {
+            for class in kept {
+                if !self.singleton_deps.contains(&class) {
+                    self.singleton_deps.push(class);
+                }
+            }
+            self.guard_class_version(state, ir, true);
+        }
+        if let Some(class) = latched_self {
+            let deopt = ir.new_deopt(state);
+            ir.self2reg(GP::Rdi);
+            ir.push(AsmInst::GuardClass(GP::Rdi, class, deopt));
+        }
+    }
+
     fn compile_instruction(
         &mut self,
         ir: &mut AsmIr,
@@ -384,6 +438,17 @@ impl<'a> JitContext<'a> {
         let pc = self.get_pc(bc_pos);
         state.set_pc(pc);
         let trace_ir = TraceIr::from_pc(pc, self.store);
+        // Ruby code ran since the last instruction (a call, a yield, a
+        // generic operator): re-examine what the state believes about the
+        // classes of the objects it holds before anything relies on it. A
+        // `ret` relies on nothing — the caller settles what it gets back.
+        // (Nor can the guards go on a call's trailing `InlineCache` word:
+        // the VM cannot resume there.)
+        if state.class_proofs_unsettled()
+            && !matches!(trace_ir, TraceIr::Ret(_) | TraceIr::InlineCache)
+        {
+            self.settle_class_proofs(state, ir);
+        }
         // ④-b: the unfrozen-slot proofs survive only across instructions
         // that provably execute no Ruby code and reach no safepoint — either
         // could freeze an object (a callee via `freeze`, a safepoint via

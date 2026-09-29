@@ -12,7 +12,12 @@ impl Codegen {
         jit_entry: DestLabel,
         class_version: u32,
         is_recompile: Option<RecompileReason>,
-    ) -> Option<(Vec<InlineCacheEntry>, DestLabel, ConstSalvageMap)> {
+    ) -> Option<(
+        Vec<InlineCacheEntry>,
+        Vec<ClassId>,
+        DestLabel,
+        ConstSalvageMap,
+    )> {
         self.compile(
             globals,
             iseq_id,
@@ -203,7 +208,12 @@ impl Codegen {
         entry_label: DestLabel,
         class_version: u32,
         _is_recompile: Option<RecompileReason>,
-    ) -> Option<(Vec<InlineCacheEntry>, DestLabel, ConstSalvageMap)> {
+    ) -> Option<(
+        Vec<InlineCacheEntry>,
+        Vec<ClassId>,
+        DestLabel,
+        ConstSalvageMap,
+    )> {
         if position.is_none() && globals.store[iseq_id].jit_invalidated() {
             return None;
         }
@@ -271,7 +281,14 @@ impl Codegen {
             class_version,
             const_version,
         ) {
-            Ok((cache, specialized_info, class_version_label, bop_deps, const_map)) => {
+            Ok((
+                cache,
+                singleton_deps,
+                specialized_info,
+                class_version_label,
+                bop_deps,
+                const_map,
+            )) => {
                 globals.store[iseq_id].add_bop_deps(bop_deps);
                 let codeptr = self.jit.get_label_address(&entry_label);
                 let (end0, end1) = self.get_address_pair();
@@ -320,7 +337,7 @@ impl Codegen {
                     self.jit.select_page(0);
                 }
 
-                Some((cache, class_version_label, const_map))
+                Some((cache, singleton_deps, class_version_label, const_map))
             }
             Err(_) => {
                 if position.is_none() {
@@ -450,7 +467,7 @@ impl Codegen {
         };
         let jit_entry = self.jit.label();
         let class_version = self.jit_class_version();
-        let (cache, class_version_label, const_map) = self.compile_method(
+        let (cache, singleton_deps, class_version_label, const_map) = self.compile_method(
             globals,
             iseq_id,
             self_class,
@@ -469,6 +486,7 @@ impl Codegen {
             self_class,
             class_version_label,
             cache,
+            singleton_deps,
             const_map,
         );
         let patch_point = self.jit.get_label_address(&patch_point);
@@ -509,7 +527,7 @@ impl Codegen {
             class_version,
             Some(reason),
         );
-        let Some((cache, class_version_label, const_map)) = compiled else {
+        let Some((cache, singleton_deps, class_version_label, const_map)) = compiled else {
             self.jit.finalize();
             return None;
         };
@@ -521,6 +539,7 @@ impl Codegen {
             self_class,
             class_version_label,
             cache,
+            singleton_deps,
             const_map,
         );
         let guard = self.a64_gen_class_guard_stub(class, &jit_entry);
@@ -580,7 +599,7 @@ impl Codegen {
             });
         }
 
-        let ret = if let Some((cache, version_label, const_map)) = self.compile(
+        let ret = if let Some((cache, singleton_deps, version_label, const_map)) = self.compile(
             globals,
             iseq_id,
             Some(self_class),
@@ -601,6 +620,7 @@ impl Codegen {
                 index,
                 version_label,
                 cache,
+                singleton_deps,
                 const_map,
             );
             Some(())

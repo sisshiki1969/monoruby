@@ -970,6 +970,64 @@ impl SlotState {
         }
     }
 
+    /// Sort this frame's class proofs of heap objects for
+    /// `JitContext::settle_class_proofs`, after Ruby code may have run:
+    /// which proofs stand on the assumption that no instance of their class
+    /// has been given a singleton class since (their classes go to
+    /// `kept`), and which cannot stand because an instance of the class
+    /// already has one (`latched`, `latched_consts`, and `latched_self` for
+    /// slot 0). Only an instance whose class can change is looked at
+    /// (`Store::class_proof_may_break`); a frozen constant never gains a
+    /// method, so it keeps its class for our purposes.
+    ///
+    /// `with_self` includes slot 0. Only the innermost frame's `self` is
+    /// settled here: an outer frame is suspended in a call, and settles its
+    /// own when that call returns.
+    pub(in crate::codegen::jitgen) fn scan_class_proofs(
+        &self,
+        store: &Store,
+        with_self: bool,
+    ) -> ClassProofScan {
+        let mut scan = ClassProofScan::default();
+        let start = if with_self { 0 } else { 1 };
+        for i in start..self.slots.len() {
+            let slot = SlotId(i as u16);
+            match self.slots[i].mode {
+                LinkMode::S(Guarded::Class(class)) if store.class_proof_may_break(class) => {
+                    if !store[class].instance_singleton() {
+                        scan.kept.push(class);
+                    } else if i == 0 {
+                        scan.latched_self = Some(class);
+                    } else {
+                        scan.latched.push(slot);
+                    }
+                }
+                LinkMode::C(v)
+                    if i != 0
+                        && !v.is_packed_value()
+                        && !v.is_frozen()
+                        && v.is_class_or_module().is_none()
+                        && store.class_proof_may_break(v.class()) =>
+                {
+                    if !store[v.class()].instance_singleton() {
+                        scan.kept.push(v.class());
+                    } else {
+                        scan.latched_consts.push((slot, v));
+                    }
+                }
+                _ => {}
+            }
+        }
+        scan
+    }
+
+    /// Drop the class proofs `scan_class_proofs` found `latched`.
+    pub(in crate::codegen::jitgen) fn forget_latched_class_proofs(&mut self, slots: &[SlotId]) {
+        for slot in slots {
+            self.slots[slot.0 as usize].mode = LinkMode::S(Guarded::Value);
+        }
+    }
+
     ///
     /// Link *slot* to stack with guard.
     ///
@@ -2325,6 +2383,20 @@ impl LinkMode {
         }
         slots
     }
+}
+
+/// What [`SlotState::scan_class_proofs`] found in one frame.
+#[derive(Debug, Default)]
+pub(in crate::codegen::jitgen) struct ClassProofScan {
+    /// Classes of proofs that stand as long as no instance of the class
+    /// gets a singleton class. May repeat.
+    pub kept: Vec<ClassId>,
+    /// Stack slots whose class proof no longer stands.
+    pub latched: Vec<SlotId>,
+    /// Constant slots whose class proof no longer stands.
+    pub latched_consts: Vec<(SlotId, Value)>,
+    /// `self`'s class, when its proof no longer stands.
+    pub latched_self: Option<ClassId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Eq, Hash)]

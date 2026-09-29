@@ -156,6 +156,14 @@ pub struct Store {
     /// enclosing method has no name to resolve it under. Poisoned on
     /// every change, which is what the global word used to do for all.
     jit_wildcard_units: HashSet<JitUnitId>,
+    /// Which compilation units carried a class proof across a call on the
+    /// assumption that no instance of the class gets a singleton class
+    /// (`ClassInfo::instance_singleton`), class-first. The first singleton
+    /// class given to an instance poisons exactly these units
+    /// (`note_instance_singleton`), and their salvage refuses from then on.
+    jit_singleton_deps: HashMap<ClassId, HashSet<JitUnitId>>,
+    /// The reverse map of `jit_singleton_deps`.
+    jit_unit_singleton_classes: HashMap<JitUnitId, Vec<ClassId>>,
     /// class table.
     pub(in crate::globals) classes: ClassInfoTable,
     /// call site info.
@@ -505,10 +513,17 @@ impl Store {
         self_class: Option<ClassId>,
         class_version_label: DestLabel,
         cache: Vec<InlineCacheEntry>,
+        singleton_deps: Vec<ClassId>,
         const_map: ConstSalvageMap,
     ) {
-        self.jit_register_unit((iseq_id, self_class, None), &cache);
-        self[iseq_id].set_salvage_record(self_class, class_version_label, cache, const_map);
+        self.jit_register_unit((iseq_id, self_class, None), &cache, &singleton_deps);
+        self[iseq_id].set_salvage_record(
+            self_class,
+            class_version_label,
+            cache,
+            singleton_deps,
+            const_map,
+        );
     }
 
     ///
@@ -547,10 +562,22 @@ impl Store {
         index: crate::bytecodegen::BcIndex,
         class_version_label: DestLabel,
         cache: Vec<InlineCacheEntry>,
+        singleton_deps: Vec<ClassId>,
         const_map: ConstSalvageMap,
     ) {
-        self.jit_register_unit((iseq_id, Some(self_class), Some(index)), &cache);
-        self[iseq_id].set_loop_jit_info(self_class, index, class_version_label, cache, const_map);
+        self.jit_register_unit(
+            (iseq_id, Some(self_class), Some(index)),
+            &cache,
+            &singleton_deps,
+        );
+        self[iseq_id].set_loop_jit_info(
+            self_class,
+            index,
+            class_version_label,
+            cache,
+            singleton_deps,
+            const_map,
+        );
     }
 
     /// Permanently give up on JIT-compiling *iseq_id*, withdrawing its
@@ -568,8 +595,23 @@ impl Store {
         self.jit_method_changed(name);
     }
 
-    fn jit_register_unit(&mut self, unit: JitUnitId, cache: &[InlineCacheEntry]) {
+    fn jit_register_unit(
+        &mut self,
+        unit: JitUnitId,
+        cache: &[InlineCacheEntry],
+        singleton_deps: &[ClassId],
+    ) {
         self.jit_forget_unit(unit);
+        for class in singleton_deps {
+            self.jit_singleton_deps
+                .entry(*class)
+                .or_default()
+                .insert(unit);
+        }
+        if !singleton_deps.is_empty() {
+            self.jit_unit_singleton_classes
+                .insert(unit, singleton_deps.to_vec());
+        }
         let mut names: Vec<IdentId> = Vec::with_capacity(cache.len());
         let mut wildcard = false;
         for entry in cache {
@@ -623,6 +665,16 @@ impl Store {
             }
         }
         self.jit_wildcard_units.remove(&unit);
+        if let Some(classes) = self.jit_unit_singleton_classes.remove(&unit) {
+            for class in classes {
+                if let Some(set) = self.jit_singleton_deps.get_mut(&class) {
+                    set.remove(&unit);
+                    if set.is_empty() {
+                        self.jit_singleton_deps.remove(&class);
+                    }
+                }
+            }
+        }
     }
 
     /// Withdraw every unit of *iseq_id* from the index (its records are
@@ -631,6 +683,7 @@ impl Store {
         let units: Vec<JitUnitId> = self
             .jit_unit_names
             .keys()
+            .chain(self.jit_unit_singleton_classes.keys())
             .filter(|unit| unit.0 == iseq_id)
             .copied()
             .collect();
@@ -650,6 +703,92 @@ impl Store {
         if let Some(set) = self.jit_method_deps.get(&name) {
             units.extend(set.iter().copied());
         }
+        self.jit_poison_units(units);
+    }
+
+    /// Give *units* a class-version miss on their next guard: their version
+    /// word and guard immediates are set to a value the JIT word can never
+    /// hold. What the miss then does is up to the unit's salvage record.
+    ///
+    /// Get the singleton class of *obj*, creating it if needed — and when
+    /// that is the first singleton class any instance of the object's class
+    /// has had, invalidate the compiled units that relied on there being
+    /// none (see `ClassInfo::instance_singleton`). Shadows the
+    /// `ClassInfoTable` method so every `store.get_singleton` goes through
+    /// here.
+    ///
+    pub(crate) fn get_singleton(&mut self, obj: Value) -> Result<Module> {
+        let res = self.classes.get_singleton(obj);
+        self.note_instance_singletons();
+        res
+    }
+
+    /// `ClassInfoTable::clone_singleton_class`, followed by the same
+    /// bookkeeping as [`Self::get_singleton`].
+    pub(crate) fn clone_singleton_class(&mut self, original: Value, copy: Value) -> Result<()> {
+        let res = self.classes.clone_singleton_class(original, copy);
+        self.note_instance_singletons();
+        res
+    }
+
+    /// Poison every unit that carried a proof of a class across a call on
+    /// the assumption that no instance of it acquires a singleton class,
+    /// for the classes one of whose instances just did. The running frames of
+    /// those units deopt at the class-version guard that follows each such
+    /// call; their salvage refuses (`singleton_deps_hold`), so they are
+    /// recompiled without the assumption.
+    fn note_instance_singletons(&mut self) {
+        if self.classes.new_instance_singletons.is_empty() {
+            return;
+        }
+        let classes = std::mem::take(&mut self.classes.new_instance_singletons);
+        let mut units = vec![];
+        for class in classes {
+            // Latch the class only when some unit relied on it: from then on
+            // its proofs are not carried across calls, so a class whose
+            // instances keep acquiring singleton classes costs each unit one
+            // recompile, not one per acquisition.
+            if let Some(set) = self.jit_singleton_deps.remove(&class) {
+                self.classes[class].set_instance_singleton();
+                units.extend(set);
+            }
+        }
+        self.jit_poison_units(units);
+    }
+
+    /// Can an object proved to be of *class* stop being of it — by being
+    /// given a singleton class? Not an immediate, a `Range` or a `Complex`
+    /// (they cannot have one), not a class or module object (whose class is
+    /// its metaclass, reasoned about elsewhere), and not an object whose
+    /// class already is a singleton class.
+    pub(crate) fn class_proof_may_break(&self, class: ClassId) -> bool {
+        !matches!(
+            class,
+            NIL_CLASS
+                | TRUE_CLASS
+                | FALSE_CLASS
+                | BOOL_CLASS
+                | INTEGER_CLASS
+                | BIGNUM_CLASS
+                | FLOAT_CLASS
+                | SYMBOL_CLASS
+                | RANGE_CLASS
+                | COMPLEX_CLASS
+                | CLASS_CLASS
+                | MODULE_CLASS
+        ) && self[class]
+            .try_get_module()
+            .is_some_and(|m| m.is_singleton().is_none())
+    }
+
+    /// Does every class a unit carried a proof of across calls still have
+    /// no instance with a singleton class? A salvage must not re-stamp a
+    /// unit for which this fails.
+    pub(crate) fn singleton_deps_hold(&self, deps: &[ClassId]) -> bool {
+        deps.iter().all(|class| !self[*class].instance_singleton())
+    }
+
+    fn jit_poison_units(&mut self, units: Vec<JitUnitId>) {
         if units.is_empty() {
             return;
         }
@@ -716,6 +855,8 @@ impl Store {
             jit_method_deps: HashMap::default(),
             jit_unit_names: HashMap::default(),
             jit_wildcard_units: HashSet::default(),
+            jit_singleton_deps: HashMap::default(),
+            jit_unit_singleton_classes: HashMap::default(),
             constsite_info: vec![],
             cached_constsites: vec![],
             callsite_info: vec![],
@@ -2422,6 +2563,10 @@ pub struct ClassInfoTable {
     /// `builtins/*.rb` bootstrap bodies — as they are installed as
     /// methods; `is_internal_helper` finds its own helpers among them.
     pub(in crate::globals) builtin_funcs: HashSet<FuncId>,
+    /// Classes whose `ClassInfo::instance_singleton` was just set, waiting
+    /// for `Store::note_instance_singletons` to poison the compiled units
+    /// that assumed otherwise (the unit index lives on `Store`).
+    pub(in crate::globals) new_instance_singletons: Vec<ClassId>,
 }
 
 impl std::ops::Index<ClassId> for ClassInfoTable {
@@ -2447,6 +2592,7 @@ impl ClassInfoTable {
             table: vec![ClassInfo::new(); 100],
             objects,
             builtin_funcs: HashSet::default(),
+            new_instance_singletons: vec![],
         }
     }
 

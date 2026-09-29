@@ -4895,6 +4895,10 @@ pub fn object_send(
         r#gen.object_send_inline(callid, store, using_fpr, &error, no_splat, call_site_pc);
     });
     state.def_reg2acc(ir, GP::Rax, callsite.dst);
+    // The method sent to runs arbitrary Ruby: it can define methods and
+    // give the objects this frame holds singleton classes.
+    state.unset_class_version_guard();
+    state.unset_const_version_guard();
     true
 }
 

@@ -13,7 +13,7 @@ pub(super) use liveness::Liveness;
 pub(super) use read_slot::DeoptPoint;
 pub(in crate::codegen::jitgen) use slot::SfGuarded;
 pub(in crate::codegen::jitgen) use slot::DynVarAliasLoad;
-pub(super) use slot::{Guarded, Keep, LinkMode, SlotState};
+pub(super) use slot::{ClassProofScan, Guarded, Keep, LinkMode, SlotState};
 
 /// A frame of the abstract-state chain, shared by reference.
 ///
@@ -41,6 +41,35 @@ impl AbstractState {
         for frame in self.frames.iter_mut() {
             FrameRef::make_mut(frame).forget_heap_object_classes();
         }
+    }
+}
+
+impl AbstractState {
+    /// The frame-walking half of `JitContext::settle_class_proofs`: drop,
+    /// in every frame of the chain, the class proofs of heap objects whose
+    /// class some instance has already left for a singleton class, and
+    /// report the rest. `self` and constants are reported for the innermost
+    /// frame only (see `SlotState::scan_class_proofs`); an outer frame's
+    /// latched constant is left alone — it is only ever re-read after the
+    /// outer frame's own call returns, which settles it again.
+    pub(in crate::codegen::jitgen) fn settle_class_proofs(
+        &mut self,
+        store: &Store,
+    ) -> ClassProofScan {
+        let innermost = self.frames.len() - 1;
+        let mut total = ClassProofScan::default();
+        for (i, frame) in self.frames.iter_mut().enumerate() {
+            let scan = frame.scan_class_proofs(store, i == innermost);
+            if !scan.latched.is_empty() {
+                FrameRef::make_mut(frame).forget_latched_class_proofs(&scan.latched);
+            }
+            total.kept.extend(scan.kept);
+            if i == innermost {
+                total.latched_consts = scan.latched_consts;
+                total.latched_self = scan.latched_self;
+            }
+        }
+        total
     }
 }
 
@@ -758,6 +787,14 @@ impl AbstractFrame {
         self.invariants.no_capture_guard = false;
     }
 
+    pub(super) fn class_proofs_unsettled(&self) -> bool {
+        self.invariants.class_proofs_unsettled
+    }
+
+    pub(super) fn set_class_proofs_settled(&mut self) {
+        self.invariants.class_proofs_unsettled = false;
+    }
+
     pub(super) fn class_version_guard(&self) -> bool {
         self.invariants.class_version_guard
     }
@@ -768,6 +805,7 @@ impl AbstractFrame {
 
     pub(crate) fn unset_class_version_guard(&mut self) {
         self.invariants.class_version_guard = false;
+        self.invariants.class_proofs_unsettled = true;
     }
 
     pub(super) fn const_version_guard(&self) -> bool {
@@ -1191,6 +1229,7 @@ impl ReturnState {
                 class_version_guard: true,
                 const_version_guard: true,
                 side_effect_guard: false,
+                class_proofs_unsettled: false,
                 no_capture_guard: true,
             },
         }
@@ -1286,6 +1325,12 @@ struct Invariants {
     /// 3) no method calls that may have side effects.
     /// 4) no ensure clauses
     side_effect_guard: bool,
+    /// Ruby code may have run since the class proofs of heap objects were
+    /// last settled — see `JitContext::settle_class_proofs`. Set together
+    /// with every `unset_class_version_guard`, cleared by the settle at the
+    /// head of the next instruction. Joined by OR: one unsettled path makes
+    /// the merge unsettled.
+    class_proofs_unsettled: bool,
 }
 
 impl Invariants {
@@ -1302,6 +1347,7 @@ impl Invariants {
             const_version_guard: false,
             no_capture_guard: true,
             side_effect_guard,
+            class_proofs_unsettled: false,
         }
     }
 
@@ -1312,6 +1358,7 @@ impl Invariants {
             // loop compilation is started only if the current local frame is not captured.
             no_capture_guard: true,
             side_effect_guard: false,
+            class_proofs_unsettled: false,
         }
     }
 
@@ -1325,6 +1372,7 @@ impl Invariants {
             // specialized methods and blocks are always guarded frame capture.
             no_capture_guard: true,
             side_effect_guard,
+            class_proofs_unsettled: false,
         }
     }
 
@@ -1333,6 +1381,7 @@ impl Invariants {
         self.const_version_guard &= other.const_version_guard;
         self.no_capture_guard &= other.no_capture_guard;
         self.side_effect_guard &= other.side_effect_guard;
+        self.class_proofs_unsettled |= other.class_proofs_unsettled;
     }
 }
 
@@ -1354,6 +1403,7 @@ mod tests {
                 const_version_guard: false,
                 no_capture_guard: true,
                 side_effect_guard: true,
+                class_proofs_unsettled: false,
             },
         };
         // Pre-condition: const-folding would fire.
@@ -1376,6 +1426,7 @@ mod tests {
                 const_version_guard: false,
                 no_capture_guard: true,
                 side_effect_guard: true,
+                class_proofs_unsettled: false,
             },
         };
         s.taint_for_unmodeled_rescue();
@@ -1393,6 +1444,7 @@ mod tests {
                 const_version_guard: false,
                 no_capture_guard: true,
                 side_effect_guard: false,
+                class_proofs_unsettled: false,
             },
         };
         s.taint_for_unmodeled_rescue();

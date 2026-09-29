@@ -1006,6 +1006,13 @@ pub(crate) struct JitContext<'a> {
     pub(crate) inline_method_cache: Vec<InlineCacheEntry>,
 
     ///
+    /// Classes whose proofs this compilation carries across a call on the
+    /// assumption that no instance of them gets a singleton class — see
+    /// [`JitContext::carry_class_proofs_across_call`].
+    ///
+    pub(crate) singleton_deps: Vec<ClassId>,
+
+    ///
     /// Every constant this compilation folded (root body and inlined
     /// specialized children alike), recorded for const-version salvage —
     /// see [`crate::globals::ConstSalvageMap`].
@@ -1106,6 +1113,7 @@ impl<'a> JitContext<'a> {
             const_version,
             refinements,
             inline_method_cache: vec![],
+            singleton_deps: vec![],
             const_fold_cache: vec![],
             bop_deps: vec![],
             stack_frame,
@@ -1164,6 +1172,7 @@ impl<'a> JitContext<'a> {
             const_version: self.const_version,
             refinements: self.refinements,
             inline_method_cache: vec![],
+            singleton_deps: vec![],
             const_fold_cache: vec![],
             bop_deps: vec![],
             stack_frame,
