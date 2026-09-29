@@ -8026,11 +8026,13 @@ mod tests {
 
     /// `binding` reached through a builtin — `Method#call`, the proc
     /// `Method#to_proc` makes, `bind_call`, `public_send` — raises;
-    /// through `send` / `__send__`, which push no frame, it captures the
-    /// Ruby frame below (#1665). The `run` method gets JIT-compiled, so
-    /// the inlined `Method#call` is exercised as well as the builtin.
-    /// The cases here agree with CRuby; the ones that differ, because
-    /// the builtin between is native here and not there, are in
+    /// through `send` / `__send__`, which push no frame, or a `&:binding`
+    /// block a Ruby method yields to, which pushes none either, it
+    /// captures the Ruby frame below (#1665). The `run` method gets
+    /// JIT-compiled, so the inlined `Method#call` and the JIT's yield are
+    /// exercised as well as the builtin and the VM's. The cases here
+    /// agree with CRuby; the ones that differ, because the builtin
+    /// between is native here and Ruby there or the reverse, are in
     /// `binding_refuses_a_native_caller_of_its_own`.
     #[test]
     fn binding_refuses_a_non_ruby_caller() {
@@ -8042,9 +8044,14 @@ mod tests {
         rescue => e
           "#{e.class}: #{e.message}"
         end
+        def yielder; yield Kernel; end
         def run
           r = []
           m = method(:binding)
+          r << t { yielder(&:binding) }
+          r << t { pr = :binding.to_proc; yielder(&pr) }
+          r << t { Kernel.tap(&:binding) }
+          r << t { Kernel.then(&:binding) }
           r << t { m.call }
           r << t { m.call(&nil) }
           r << t { m.to_proc.call }
@@ -8060,7 +8067,6 @@ mod tests {
           r << t { method(:__send__).call(:binding) }
           r << t { :binding.to_proc.method(:call).call(Kernel) }
           r << t { [1].each { m.call } }
-          r << t { [Kernel].map(&:binding).size }
           r << t { send(:binding) }
           r << t { __send__(:binding) }
           r << t { send(:send, :binding) }
@@ -8079,9 +8085,10 @@ mod tests {
 
     /// Where CRuby and monoruby implement the builtin between differently,
     /// the rule is applied to monoruby's frames, not CRuby's: `Proc#call`
-    /// and a Symbol's proc are native here, where CRuby dispatches both
-    /// with no frame and returns a Binding. Checked against monoruby's
-    /// own answer, not the oracle.
+    /// is native here, where CRuby dispatches it with no frame and returns
+    /// a Binding; `Array#map` is Ruby here and yields to `&:binding` with
+    /// no frame between, where CRuby's is C and raises. Checked against
+    /// monoruby's own answer, not the oracle.
     #[test]
     fn binding_refuses_a_native_caller_of_its_own() {
         let res = run_test_no_result_check(
@@ -8096,6 +8103,7 @@ mod tests {
           r = []
           r << t { :binding.to_proc.call(Kernel) }
           r << t { :binding.to_proc.(Kernel) }
+          r << t { [Kernel].map(&:binding).size }
           r
         end
         res = nil
@@ -8106,6 +8114,7 @@ mod tests {
         let expected = [
             "RuntimeError: Cannot create Binding object for non-Ruby caller",
             "RuntimeError: Cannot create Binding object for non-Ruby caller",
+            "1",
         ];
         let res = res.as_array();
         assert_eq!(res.len(), expected.len());

@@ -273,6 +273,8 @@ impl Codegen {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
         let skip = self.jit.label();
+        let symbol = self.jit.label();
+        let done = self.jit.label();
         // Stack check only, mirroring x86 `vm_yield` (and `a64_op_send`).
         // The block body's entry poll (`a64_op_init_method` / JIT
         // `InitMethod`) fires on every yield, so signals / GC / preemption
@@ -287,7 +289,11 @@ impl Codegen {
             mov x1, x(GLOBALS.0);
             mov x9, (runtime::get_yield_data as *const () as u64);
             blr x9;
-            cbz x1, raise;  // no block -> error set
+            cbz x0, raise;  // no block -> error set
+        // `&:sym` answers no FuncId, the symbol's frame in x0: the named
+        // method is called straight from this frame, with no block frame
+        // between (`yield_symbol_proc`).
+            cbz x1, symbol;
             mov x25, x0;  // X25 = outer (callee-saved across later calls)
         // get_func_data from func_id (X1) -> X15
             lsl x10, x1, #(32);
@@ -341,6 +347,7 @@ impl Codegen {
             str x10, [x(EXEC.0), #(EXECUTOR_CFP as u32)];
             ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];  // restore caller LFP
         // pop_cont_frame + store result to ret slot [pc+4]
+            done:
             ldr x(PC.0), [sp];
             add sp, sp, #(16);
             cbz x0, raise;
@@ -353,6 +360,21 @@ impl Codegen {
             skip:
         );
         self.a64_fetch_and_dispatch();
+
+        // yield_symbol_proc(vm, globals, callid, caller_lfp, outer) -> x0 =
+        // Option<Value>; the cont frame above is still pushed, so it rejoins
+        // the epilogue that pops it.
+        self.jit.bind_label(symbol);
+        monoasm_arm64!(&mut self.jit,
+            mov x4, x0;                 // outer: the symbol's frame
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldr w2, [x(PC.0)];          // callid
+            mov x3, x(LFP.0);
+            mov x9, (runtime::yield_symbol_proc as *const () as u64);
+            blr x9;
+        );
+        self.jit.b_label(&done);
         p
     }
 

@@ -548,12 +548,20 @@ mod oracle {
         }
 
         // Re-read under the lock: another process may have appended entries
-        // since our startup load.
+        // since our startup load. A file that exists but cannot be read is
+        // not an empty one: rewriting from an empty map would replace
+        // every entry with this one (a qemu-user run whose reads failed
+        // with EFAULT left a ten-line oracle behind that way), so the
+        // record is given up instead.
         let mut entries: BTreeMap<String, (String, String)> = BTreeMap::new();
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            for (k, out_esc, snip_esc) in parse_lines(&text) {
-                entries.insert(k.to_string(), (out_esc.to_string(), snip_esc.to_string()));
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                for (k, out_esc, snip_esc) in parse_lines(&text) {
+                    entries.insert(k.to_string(), (out_esc.to_string(), snip_esc.to_string()));
+                }
             }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
         }
         let snippet: String = code.chars().take(80).collect();
         entries.insert(

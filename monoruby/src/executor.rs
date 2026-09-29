@@ -3715,6 +3715,63 @@ impl Executor {
             MethodMissingStyle::Plain
         };
         let cs_name = cs.name;
+        let bh = cs.block_handler(lfp);
+
+        let method_name = if let Some(name) = cs_name {
+            name
+        } else {
+            let func_id = self.method_func_id();
+            globals.store[func_id].name().unwrap()
+        };
+        let (mut args, kw) = match self.callsite_args(globals, lfp, callsite) {
+            Ok(args) => args,
+            Err(err) => {
+                self.set_error(err);
+                return None;
+            }
+        };
+        args.insert(0, Value::symbol(method_name));
+        // method_missing should always be callable regardless of visibility.
+        // In Ruby, method_missing is conventionally private, but the VM must
+        // still dispatch to it when a method is not found.
+        //
+        // When a proxy block handler is present, we must adjust its depth by -1.
+        // invoke_method_missing is called from JIT/VM code without adding a
+        // frame to the CFP chain, but invoke_func (called downstream) applies
+        // delegate() which increments the proxy depth by 1. Without this
+        // pre-adjustment, block_arg in the method_missing body would try to
+        // walk too many frames and panic.
+        let bh = bh.map(|bh| bh.undelegate());
+        let res = self.invoke_method(
+            globals,
+            IdentId::METHOD_MISSING,
+            true,
+            receiver,
+            &args,
+            bh,
+            kw,
+        );
+        if res.is_none() {
+            self.pop_error_trace();
+        }
+        res
+    }
+
+    ///
+    /// The arguments the call site `callsite` holds in `lfp`, as a method
+    /// receives them: the positional ones with every splat expanded, and
+    /// the keyword Hash if the site passes keywords. For a dispatch that
+    /// takes the site's arguments somewhere its bytecode did not
+    /// resolve — `method_missing`, a `yield` to `&:sym`.
+    ///
+    pub(crate) fn callsite_args(
+        &mut self,
+        globals: &mut Globals,
+        lfp: Lfp,
+        callsite: CallSiteId,
+    ) -> Result<(Vec<Value>, Option<Hashmap>)> {
+        // Extract all needed fields from callsite before we mutably borrow self/globals.
+        let cs = &globals.store[callsite];
         let cs_args = cs.args;
         let cs_pos_num = cs.pos_num;
         let cs_splat_pos = cs.splat_pos().to_vec();
@@ -3727,14 +3784,7 @@ impl Executor {
         let cs_kw_dedup_at: Vec<usize> = (0..cs_kw_order.len())
             .filter(|i| cs.kw_overwritten_literal(*i))
             .collect();
-        let bh = cs.block_handler(lfp);
 
-        let method_name = if let Some(name) = cs_name {
-            name
-        } else {
-            let func_id = self.method_func_id();
-            globals.store[func_id].name().unwrap()
-        };
         // SAFETY: args_to_vec safely accesses the arguments stored in the local frame pointer.
         // The callsite.args and callsite.pos_num are valid and within bounds.
         let mut args = unsafe { lfp.args_to_vec(cs_args, cs_pos_num) };
@@ -3755,7 +3805,6 @@ impl Executor {
             }
             args = expanded;
         }
-        args.insert(0, Value::symbol(method_name));
         let kw = if cs_kw_len == 0 {
             None
         } else {
@@ -3763,7 +3812,7 @@ impl Executor {
             // `HashmapInner`): `insert` / `#to_hash` re-enter Ruby, and a
             // fresh `#to_hash` result plus the half-built map must
             // survive those collections.
-            let res = self.with_temp_scope(|vm| {
+            let hash = self.with_temp_scope(|vm| {
                 vm.temp_push(Value::hash_from_inner(HashmapInner::default()));
                 let map_idx = vm.temp_len() - 1;
                 // In source order: a literal `k: v` pair writes its key,
@@ -3795,39 +3844,10 @@ impl Executor {
                     }
                 }
                 Ok(vm.temp_at(map_idx).as_hash())
-            });
-            match res {
-                Ok(h) => Some(h),
-                Err(err) => {
-                    self.set_error(err);
-                    return None;
-                }
-            }
+            })?;
+            Some(hash)
         };
-        // method_missing should always be callable regardless of visibility.
-        // In Ruby, method_missing is conventionally private, but the VM must
-        // still dispatch to it when a method is not found.
-        //
-        // When a proxy block handler is present, we must adjust its depth by -1.
-        // invoke_method_missing is called from JIT/VM code without adding a
-        // frame to the CFP chain, but invoke_func (called downstream) applies
-        // delegate() which increments the proxy depth by 1. Without this
-        // pre-adjustment, block_arg in the method_missing body would try to
-        // walk too many frames and panic.
-        let bh = bh.map(|bh| bh.undelegate());
-        let res = self.invoke_method(
-            globals,
-            IdentId::METHOD_MISSING,
-            true,
-            receiver,
-            &args,
-            bh,
-            kw,
-        );
-        if res.is_none() {
-            self.pop_error_trace();
-        }
-        res
+        Ok((args, kw))
     }
 
     /// Whether a refinement of `to_s` is in effect at the current frame.
@@ -3954,6 +3974,32 @@ impl Executor {
         if let Some(func_id) = self.symbol_proc_method(globals, symbol, recv) {
             return self.invoke_func_inner(globals, func_id, recv, args, bh, kw);
         }
+        // `&:sym` calls with `CALL_PUBLIC` (`rb_sym_proc_call`): a private
+        // or protected method is refused whatever frame the call comes
+        // from — a yield from a Ruby `tap` has the receiver itself for
+        // `self`, which the ordinary protected rule would let through.
+        // As `public_send` does, the refusal goes to `method_missing`, so
+        // a receiver that handles it sees the name, and the default one
+        // words the NoMethodError by the visibility.
+        if let Some(entry) = globals.check_method_for_class(recv.class(), symbol)
+            && matches!(
+                entry.visibility(),
+                Visibility::Private | Visibility::Protected
+            )
+        {
+            let mut mm_args = Vec::with_capacity(args.len() + 1);
+            mm_args.push(Value::symbol(symbol));
+            mm_args.extend_from_slice(args);
+            self.reset_method_missing_vcall();
+            return self.invoke_method_inner(
+                globals,
+                IdentId::METHOD_MISSING,
+                recv,
+                &mm_args,
+                bh,
+                kw,
+            );
+        }
         self.invoke_method_inner_vis(globals, symbol, recv, args, bh, kw, false)
     }
 
@@ -3962,11 +4008,14 @@ impl Executor {
     /// cache in `Globals` or resolved and recorded there.
     ///
     /// `None` whenever the plain path must run instead: a receiver whose
-    /// `symbol` is private, protected or absent (the errors and the
-    /// `method_missing` fallback are `invoke_method_inner_vis`'s to
+    /// `symbol` is private, protected or absent (the refusal and the
+    /// `method_missing` fallback are `dispatch_symbol_proc_kw`'s to
     /// produce, and are not worth caching), or an active refinement, which
     /// makes the resolution depend on the calling scope rather than on the
-    /// receiver's class alone.
+    /// receiver's class alone. Only a *public* method is cached: the cache
+    /// is keyed by the receiver's class alone, so an entry that a
+    /// frame-dependent visibility rule let in would serve every later
+    /// caller, whatever its frame.
     ///
     fn symbol_proc_method(
         &mut self,
@@ -3987,9 +4036,11 @@ impl Executor {
         if let Some(func_id) = globals.cached_symbol_method(symbol, class_id, class_version) {
             return Some(func_id);
         }
-        // `is_func_call = false` is what makes this `public_send`: the
-        // same restricted lookup the uncached path performs.
-        let func_id = self.find_method(globals, recv, symbol, false).ok()?;
+        let entry = globals.check_method_for_class(class_id, symbol)?;
+        if entry.visibility() != Visibility::Public {
+            return None;
+        }
+        let func_id = entry.func_id()?;
         globals.cache_symbol_method(symbol, class_id, class_version, func_id);
         Some(func_id)
     }

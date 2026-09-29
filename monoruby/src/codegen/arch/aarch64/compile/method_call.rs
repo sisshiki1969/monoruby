@@ -1829,6 +1829,8 @@ impl Codegen {
         } else {
             runtime::jit_handle_arguments_no_block as *const () as u64
         };
+        let symbol = self.jit.label();
+        let done = self.jit.label();
         // get_yield_data(vm, globals) -> x0 = outer Lfp, x1 = FuncId.
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;
@@ -1840,6 +1842,10 @@ impl Codegen {
         );
         self.a64_resolve_invalidated_outer(0);
         self.emit_handle_error(error); // null outer (no block given) -> error
+        // `&:sym` answers no FuncId, the symbol's frame in x0: the named
+        // method is called straight from this frame, with no block frame
+        // between (`yield_symbol_proc`).
+        monoasm_arm64!(&mut self.jit, cbz x1, symbol;);
         monoasm_arm64!(&mut self.jit, mov x25, x0;); // outer (callee-saved)
         // get_func_data: FuncId (x1) -> &FuncData (x9 -> x26).
         monoasm_arm64!(&mut self.jit, mov x2, x1;);
@@ -1908,6 +1914,24 @@ impl Codegen {
             sub x10, x29, #((BP_CFP + CFP_LFP) as u32);
             ldr x22, [x10];
         );
+        self.jit.b_label(&done);
+
+        // yield_symbol_proc(vm, globals, callid, caller_lfp, outer) -> x0 =
+        // Option<Value>. Inline and branched around, as the proxy path of
+        // `method_object_call_inline` is.
+        self.jit.bind_label(symbol);
+        monoasm_arm64!(&mut self.jit,
+            mov x4, x0;                               // outer: the symbol's frame
+            mov x0, x19;
+            mov x1, x20;
+            mov x2, (callid.get() as u64);
+            mov x3, x22;
+            str x30, [sp, #-16]!;
+            mov x9, (runtime::yield_symbol_proc as *const () as u64);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.jit.bind_label(done);
         self.set_deopt_with_return_addr(return_addr, evict);
         true
     }
