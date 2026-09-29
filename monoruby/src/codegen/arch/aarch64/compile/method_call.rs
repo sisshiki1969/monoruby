@@ -652,6 +652,16 @@ impl Codegen {
             cbnz w9, proxy;
             ldr w2, [x11, #(METHOD_FUNC_ID_OFFSET as u32)];
         );
+        // `Kernel#binding` refuses a caller that is not a Ruby frame, so
+        // it must see `Method#call`'s own frame, which only the builtin
+        // pushes (#1665) — likewise `send`, which would forward to it.
+        for fid in store.method_call_inline_bails() {
+            monoasm_arm64!(&mut self.jit,
+                mov x9, (fid.get() as u64);
+                cmp w2, w9;
+            );
+            self.jit.bcond_label(monoasm::Cond::Eq, &proxy);
+        }
         self.a64_get_func_data_x2(); // x9 = &FuncData
         monoasm_arm64!(&mut self.jit, mov x26, x9;);
         // callee frame fields: OUTER=0, META from funcdata, SVAR=0, block, SELF.

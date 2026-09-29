@@ -605,6 +605,15 @@ impl Codegen {
             jne  proxy;
             movl rdx, [rdi + (METHOD_FUNC_ID_OFFSET as i32)];
         }
+        // `Kernel#binding` refuses a caller that is not a Ruby frame, so
+        // it must see `Method#call`'s own frame, which only the builtin
+        // pushes (#1665) — likewise `send`, which would forward to it.
+        for fid in store.method_call_inline_bails() {
+            monoasm! { &mut self.jit,
+                cmpl rdx, (fid.get());
+                jeq  proxy;
+            }
+        }
         self.get_func_data();
         // r15 <- &FuncData
 
