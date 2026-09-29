@@ -2233,6 +2233,11 @@ impl Globals {
         self.random.rand_int(max)
     }
 
+    /// Run a draw helper against the global PRNG's generator.
+    pub(crate) fn random_with_mt<R>(&mut self, f: impl FnOnce(&mut prng::Mt, &mut u64) -> R) -> R {
+        self.random.with_mt(f)
+    }
+
     pub(crate) fn random_fill_bytes(&mut self, dest: &mut [u8]) {
         self.random.fill_bytes(dest)
     }

@@ -478,6 +478,13 @@ impl Prng {
         rand_int(&mut self.mt, &mut cnt, max)
     }
 
+    /// Run a draw helper directly against this generator (the same
+    /// helpers a `Random` instance's in-place state goes through).
+    pub(crate) fn with_mt<R>(&mut self, f: impl FnOnce(&mut Mt, &mut u64) -> R) -> R {
+        let mut cnt = 0;
+        f(&mut self.mt, &mut cnt)
+    }
+
     pub(crate) fn fill_bytes(&mut self, dest: &mut [u8]) {
         self.mt.fill_bytes(dest)
     }
