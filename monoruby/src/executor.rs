@@ -3974,6 +3974,32 @@ impl Executor {
         if let Some(func_id) = self.symbol_proc_method(globals, symbol, recv) {
             return self.invoke_func_inner(globals, func_id, recv, args, bh, kw);
         }
+        // `&:sym` calls with `CALL_PUBLIC` (`rb_sym_proc_call`): a private
+        // or protected method is refused whatever frame the call comes
+        // from — a yield from a Ruby `tap` has the receiver itself for
+        // `self`, which the ordinary protected rule would let through.
+        // As `public_send` does, the refusal goes to `method_missing`, so
+        // a receiver that handles it sees the name, and the default one
+        // words the NoMethodError by the visibility.
+        if let Some(entry) = globals.check_method_for_class(recv.class(), symbol)
+            && matches!(
+                entry.visibility(),
+                Visibility::Private | Visibility::Protected
+            )
+        {
+            let mut mm_args = Vec::with_capacity(args.len() + 1);
+            mm_args.push(Value::symbol(symbol));
+            mm_args.extend_from_slice(args);
+            self.reset_method_missing_vcall();
+            return self.invoke_method_inner(
+                globals,
+                IdentId::METHOD_MISSING,
+                recv,
+                &mm_args,
+                bh,
+                kw,
+            );
+        }
         self.invoke_method_inner_vis(globals, symbol, recv, args, bh, kw, false)
     }
 
@@ -3982,11 +4008,14 @@ impl Executor {
     /// cache in `Globals` or resolved and recorded there.
     ///
     /// `None` whenever the plain path must run instead: a receiver whose
-    /// `symbol` is private, protected or absent (the errors and the
-    /// `method_missing` fallback are `invoke_method_inner_vis`'s to
+    /// `symbol` is private, protected or absent (the refusal and the
+    /// `method_missing` fallback are `dispatch_symbol_proc_kw`'s to
     /// produce, and are not worth caching), or an active refinement, which
     /// makes the resolution depend on the calling scope rather than on the
-    /// receiver's class alone.
+    /// receiver's class alone. Only a *public* method is cached: the cache
+    /// is keyed by the receiver's class alone, so an entry that a
+    /// frame-dependent visibility rule let in would serve every later
+    /// caller, whatever its frame.
     ///
     fn symbol_proc_method(
         &mut self,
@@ -4007,9 +4036,11 @@ impl Executor {
         if let Some(func_id) = globals.cached_symbol_method(symbol, class_id, class_version) {
             return Some(func_id);
         }
-        // `is_func_call = false` is what makes this `public_send`: the
-        // same restricted lookup the uncached path performs.
-        let func_id = self.find_method(globals, recv, symbol, false).ok()?;
+        let entry = globals.check_method_for_class(class_id, symbol)?;
+        if entry.visibility() != Visibility::Public {
+            return None;
+        }
+        let func_id = entry.func_id()?;
         globals.cache_symbol_method(symbol, class_id, class_version, func_id);
         Some(func_id)
     }

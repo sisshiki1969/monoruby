@@ -1481,6 +1481,7 @@
 48ec778e794b6f04e315383345199648	["0.0", "-0.0", "1.5", "-2.5"]	__a = [];__a << (require "json"; JSON.generate(0.0));__a << (require "json"; JSO
 491e6e98d6a793843248846a95652c6d	[3, 7, :a, [:zsuper, :zs], :fwd]	def base; yield :s; end\n        def relay; base { |s| yield(s) }; end\n 
 492435923a4859ca15afa3b4f458a0a8	nil	if false then 100 end
+492eb0e2d388bfb33325dc03ed8c1151	[["C#m", "Object#y1"], [C, 1, 0], [C, 2, 0], "NoMethodError: undefined method 'kw' for an instance of Array", [C, 4, 5], [C, 6, 7], [C, 6, 0], "{k: 8}", {k: 8}, "ArgumentError: no receiver given", "NoMethodError: private method 'priv' called for an instance of C", [NoMethodError, :pro, NoMethodError], "NoMethodError: protected method 'pro' called for an instance of C", "NoMethodError: protected method 'pro' called for an instance of C", :mm, [:ghost, [1]], "NoMethodError: undefined method 'nope' for an instance of C", ["C#m", "Object#y1"]]	class C\n          def m = caller(0).first(2).map { |l| l[/in '(.*)'/, 1
 4940aab6109c0ac7ad8a593d007f7537	[2, 3, -3, -2, 4, 0]	def rem_a; 17 % 5; end\n            def rem_b; -17 % 5; end\n        
 49474d8fdfcda56581bd37c6364edbf5	12.0	class Float; alias __orig :*; def *(o); __orig(o); end; end; 3.0 * 4.0
 494ec06a0bfc00cd79fe70cbb1732bbc	[true, true, :te, true, true, "proto_edge.rb", [:proto, :proto, :circ]]	dir = File.join(ENV["TMPDIR"] || "/tmp", "mrb_req_proto_#{Process.p
@@ -3217,7 +3218,6 @@ a207205e2108ee451fae4d6f0df8308a	nil	File.open("Cargo.toml") { |f| f.ungetc(100)
 a20d5f6e46ac5fe25c72c48a4933aa82	[["SQLite3::CantOpenException", "unable to open database file"], "SQLite3::CantOpenException", [[7]], "UTF-16LE", "SQLite3::CantOpenException"]	require "rubygems"\n        require "sqlite3"\n        require "tmpdir"\n 
 a21ceda5ef436f9167f0988b18686885	[true, true, "backtrace must be an Array of String or an Array of Thread::Backtrace::Location", true]	def probe = caller_locations\n        locs = probe\n        e = RuntimeEr
 a2258a3c861ffb257f7a53cf3eb62746	[10, 20, 30]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \ns.to_
-a226e10668ff3a5df333dde5b12be63d	[["C#m", "Object#y1"], [C, 1, 0], [C, 2, 0], "NoMethodError: undefined method 'kw' for an instance of Array", [C, 4, 5], [C, 6, 7], [C, 6, 0], "{k: 8}", {k: 8}, "ArgumentError: no receiver given", "NoMethodError: private method 'priv' called for an instance of C", :mm, [:ghost, [1]], "NoMethodError: undefined method 'nope' for an instance of C", ["C#m", "Object#y1"]]	class C\n          def m = caller(0).first(2).map { |l| l[/in '(.*)'/, 1
 a228de78f3361a64902cd2242ba752da	[true, true, false]	class Foo\n              def bar; 1; end\n              alias_method 
 a2322fa23f012da65cf949f8289c8193	["UTF-16LE", "ISO-8859-5", "EUC-JP", "Windows-31J", false, false, true, true, [false, false], [true, false], [false, false, true], [true, false], [[97, 98, 99, 100], 4]]	__a = [];__a << (Encoding::UTF_16LE.name);__a << (Encoding::ISO_8859_5.name);__a
 a2359d988b1e9852b116a4aa588e8ad7	99	module M; class N; CONST = 99; end; end\n            \nM.const_get(":

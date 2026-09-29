@@ -642,8 +642,16 @@ mod tests {
           def kw(x, k: 0) = [self.class, x, k]
           def mm = :mm
           private def priv = :priv
+          protected def pro = :pro
           def method_missing(name, *a) = name == :ghost ? [:ghost, a] : super
           def respond_to_missing?(name, priv = false) = name == :ghost || super
+          # `&:sym` calls as `public_send`: a protected method is refused
+          # even from inside its own class, where `self.pro` is allowed —
+          # and a refusal from here must not be what a later call from
+          # outside gets either way (the resolution is cached per class).
+          def from_inside
+            [(tap(&:pro) rescue $!.class), self.pro, ([self].map(&:pro) rescue $!.class)]
+          end
         end
         def y1; yield C.new; end
         def y2; yield C.new, 1; end
@@ -672,6 +680,9 @@ mod tests {
           r << y_kw_only(&:itself)
           r << t { y_none(&:m) }
           r << t { y1(&:priv) }
+          r << C.new.from_inside
+          r << t { y1(&:pro) }
+          r << t { [C.new].map(&:pro) }
           r << y1(&:mm)
           r << y2(&:ghost)
           r << t { y1(&:nope) }
