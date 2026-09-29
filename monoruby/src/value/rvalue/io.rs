@@ -2,7 +2,6 @@ mod buf;
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashSet,
     io::{BufRead, IsTerminal, Read, Seek, SeekFrom},
     mem::ManuallyDrop,
     os::fd::{AsRawFd, FromRawFd, IntoRawFd},
@@ -112,22 +111,23 @@ fn drain_err(e: DrainErr, store: &Store) -> MonorubyErr {
     }
 }
 
-thread_local! {
-    /// File descriptors currently *owned* (autoclose = true) by a live
-    /// `FileDescriptor` — i.e. fds that will be `close(2)`d when their
-    /// `FileDescriptor` drops.
-    ///
-    /// monoruby stores every fd inside a Rust `std::fs::File` (an `OwnedFd`),
-    /// and Rust's std **aborts the process** ("IO Safety violation: owned
-    /// file descriptor already closed") if the same fd is closed twice. So
-    /// `IO.new(existing_io.fileno)` — which by default (`autoclose: true`)
-    /// would wrap the *already-owned* fd in a second closing `OwnedFd` —
-    /// must not create a second owner. `io_new` consults this set and, when
-    /// the fd is already owned, opens the new IO as a *borrow*
-    /// (`autoclose: false`, released via `into_raw_fd` without closing) so
-    /// only the original owner ever closes the fd.
-    static OWNED_FDS: RefCell<HashSet<i32>> = RefCell::new(HashSet::new());
-}
+/// File descriptors currently *owned* (autoclose = true) by a live
+/// `FileDescriptor` — i.e. fds that will be `close(2)`d when their
+/// `FileDescriptor` drops.
+///
+/// monoruby stores every fd inside a Rust `std::fs::File` (an `OwnedFd`),
+/// and Rust's std **aborts the process** ("IO Safety violation: owned
+/// file descriptor already closed") if the same fd is closed twice. So
+/// `IO.new(existing_io.fileno)` — which by default (`autoclose: true`)
+/// would wrap the *already-owned* fd in a second closing `OwnedFd` —
+/// must not create a second owner. `io_new` consults this set and, when
+/// the fd is already owned, opens the new IO as a *borrow*
+/// (`autoclose: false`, released via `into_raw_fd` without closing) so
+/// only the original owner ever closes the fd.
+///
+/// One set per interpreter (`vm::OWNED_FDS`): in the 1:1 thread model
+/// several OS threads open and wrap descriptors of the same process.
+use crate::vm::OWNED_FDS;
 
 /// Whether `fd` is already owned by a live autoclosing `FileDescriptor`.
 pub fn fd_is_owned(fd: i32) -> bool {
@@ -141,9 +141,9 @@ fn register_owned_fd(fd: i32) {
 }
 
 fn unregister_owned_fd(fd: i32) {
-    // `try_with`, because this also runs while the thread is being torn
-    // down: `Allocator::drop` frees the thread's remaining objects from a
-    // TLS destructor, and `OWNED_FDS` may already have been destroyed.
+    // `try_with`, because this also runs while the interpreter is being
+    // torn down: `Allocator::drop` frees its remaining objects from the
+    // `Vm`'s destructor, when the `Vm` is no longer reachable.
     // There is nothing to unregister once the set is gone — the caller
     // still closes the fd — so a failure here is the expected end state,
     // not an error.
@@ -490,8 +490,10 @@ impl Drop for FileDescriptor {
         if self.autoclose.get() {
             // Normal case: dropping the `IoReader<File>` closes the fd via
             // `OwnedFd::drop`. This descriptor was the owner; release the
-            // fd from the owned-fd set (before the number can be reused).
+            // fd from the owned-fd set (before the number can be reused),
+            // and wake any thread blocked waiting on it.
             unregister_owned_fd(fd);
+            crate::scheduler::fd_closing(fd);
             drop(reader);
         } else {
             // Borrowed-fd case: release ownership without closing. Some

@@ -1024,12 +1024,16 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
    preempt timer state and a few caches (weak maps, generic-ivar table,
    const epochs, `Regexp.timeout`, JSON's class ids) are fields of one
    `vm::Vm`, reached through `vm::vm()`. Each OS thread carries only a
-   pointer to the `Vm` it serves (`vm::CURRENT`); today a `Vm` is created
-   lazily by the first OS thread that touches it and owned by that thread,
-   so "one interpreter per OS thread" still holds (the test harness runs one
-   per test thread). The `vm::VmField` statics keep the `KEY.with(|c| ..)`
-   shape of the `thread_local!`s they replaced. What stays a genuine
-   `thread_local!` is per *OS thread* state: the poll-word address
-   (`poll_flag`, reachable from inside the global allocator), the
-   scheduler-entry depth, the `hash`/`inspect` recursion guards. Do not use
-   `CODEGEN` or `ALLOC` from a thread other than the one running that `Vm`.
+   pointer to the `Vm` it serves (`vm::CURRENT`); a `Vm` is created lazily
+   by the first OS thread that touches it and owned by that thread (the
+   test harness runs one per test thread). The `vm::VmField` statics keep
+   the `KEY.with(|c| ..)` shape of the `thread_local!`s they replaced. What
+   stays a genuine `thread_local!` is per *OS thread* state: the poll-word
+   address (`poll_flag`, reachable from inside the global allocator), the
+   scheduler-entry depth, the `hash`/`inspect` recursion guards.
+   With `MONORUBY_THREAD_MODEL=native` (`scheduler/native.rs`, off by
+   default) each Ruby `Thread` is a kernel thread that *adopts* the
+   spawner's `Vm` (`vm::adopt`) and touches it only while holding the GVL
+   (`src/gvl.rs`), so `CODEGEN` / `ALLOC` / `SCHEDULER` are still never
+   used concurrently; every GVL release is at a safepoint (`doc/threads.md`
+   §12).

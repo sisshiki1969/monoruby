@@ -1108,6 +1108,13 @@ pub(crate) struct VmHandlers {
     pub concat: CodePtr,       // 181
 }
 
+impl Codegen {
+    /// The address of this interpreter's poll word (see poll_flag.rs).
+    pub(crate) fn poll_flag_addr(&self) -> *mut u32 {
+        self.jit.get_label_address(&self.poll_flag).as_ptr() as *mut u32
+    }
+}
+
 impl Drop for Codegen {
     fn drop(&mut self) {
         // The poll word lives in this Codegen's JIT memory and is written

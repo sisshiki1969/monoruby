@@ -37,6 +37,15 @@
 //! - `SCHEDULER` is a `RefCell`: it is never borrowed across a context
 //!   switch, and no Ruby allocation happens while it is borrowed (GC
 //!   marking re-enters it).
+//!
+//! ## The 1:1 model
+//!
+//! With `MONORUBY_THREAD_MODEL=native` each Ruby thread is a kernel
+//! thread instead, serialized by the GVL; the registry below is shared
+//! and every entry point branches to `native` at its top. See
+//! scheduler/native.rs.
+
+pub(crate) mod native;
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -107,6 +116,9 @@ pub(crate) struct Scheduler {
     /// invoke can itself park (full pipe), and the park entry is a flush
     /// point.
     flushing_reports: bool,
+    /// 1:1 model: the kernel threads, by Ruby thread object id, joined
+    /// once their thread is dead (`native::terminate_all`).
+    native_joins: Vec<(u64, std::thread::JoinHandle<()>)>,
 }
 
 impl Scheduler {
@@ -123,6 +135,7 @@ impl Scheduler {
             machinery: false,
             pending_reports: vec![],
             flushing_reports: false,
+            native_joins: vec![],
         }
     }
 
@@ -353,6 +366,9 @@ pub(crate) fn thread_list(vm: &mut Executor) -> Vec<Value> {
 pub(crate) fn fork_child_reset_threads(vm: &mut Executor) {
     let cur = SCHEDULER.with(|s| s.borrow().current);
     let _ = vm;
+    if native::enabled() {
+        return native::fork_child_reset_threads(cur);
+    }
     SCHEDULER.with(|s| {
         let threads = s.borrow().threads.clone();
         for mut t in threads {
@@ -412,8 +428,12 @@ fn is_current_main() -> bool {
     })
 }
 
-/// Register a freshly created thread object and queue it for execution.
-pub(crate) fn spawn(vm: &mut Executor, thread: Value) {
+/// Register a freshly created thread object and queue it for execution
+/// (1:1 model: start its kernel thread).
+pub(crate) fn spawn(vm: &mut Executor, globals: &mut Globals, thread: Value) -> Result<()> {
+    if native::enabled() {
+        return native::spawn(vm, globals, thread);
+    }
     ensure_main(vm);
     SCHEDULER.with(|s| {
         let mut s = s.borrow_mut();
@@ -421,6 +441,7 @@ pub(crate) fn spawn(vm: &mut Executor, thread: Value) {
         s.ready.push_back(thread);
     });
     notify_thread_count();
+    Ok(())
 }
 
 /// Wake a thread parked in `sleep` (`Thread#wakeup` / `#run`). Returns
@@ -450,9 +471,13 @@ fn wakeup_inner(thread: Value, permit: bool) -> bool {
         match inner.state() {
             ThreadState::Dead => false,
             ThreadState::Sleeping => {
-                inner.state = ThreadState::Runnable;
-                if Some(thread) != s.main {
-                    s.ready.push_back(thread);
+                if native::enabled() {
+                    native::wake_parked(thread);
+                } else {
+                    inner.state = ThreadState::Runnable;
+                    if Some(thread) != s.main {
+                        s.ready.push_back(thread);
+                    }
                 }
                 true
             }
@@ -475,6 +500,9 @@ pub(crate) fn sleep(
     dur: Option<Duration>,
 ) -> Result<Duration> {
     let _guard = SchedCall::enter();
+    if native::enabled() {
+        return native::sleep(vm, globals, dur);
+    }
     ensure_main(vm);
     flush_pending_reports(vm, globals);
     // A pending interrupt allowed at blocking points fires *instead of*
@@ -528,6 +556,9 @@ pub(crate) fn sleep(
 /// `handle_interrupt` masks are bypassed: the process is ending, so
 /// there is no later delivery point to defer to.
 pub(crate) fn terminate_all(vm: &mut Executor, globals: &mut Globals) {
+    if native::enabled() {
+        return native::terminate_all(vm, globals);
+    }
     ensure_main(vm);
     if !is_current_main() {
         return;
@@ -578,6 +609,9 @@ pub(crate) fn terminate_all(vm: &mut Executor, globals: &mut Globals) {
 /// `Thread.pass`: give every currently runnable thread a chance to run.
 pub(crate) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
     let _guard = SchedCall::enter();
+    if native::enabled() {
+        return native::pass(vm, globals);
+    }
     ensure_main(vm);
     flush_pending_reports(vm, globals);
     // `Thread.pass` is a delivery point for `:immediate` interrupts but
@@ -656,6 +690,9 @@ pub(crate) fn join(
     timeout: Option<Duration>,
 ) -> Result<bool> {
     let _guard = SchedCall::enter();
+    if native::enabled() {
+        return native::join(vm, globals, target, timeout);
+    }
     ensure_main(vm);
     let cur = SCHEDULER.with(|s| s.borrow().current.unwrap());
     if target == cur {
@@ -925,7 +962,9 @@ pub(crate) fn interrupt(
     // queued interrupt is masked `:never`; a parked thread counts as
     // blocking, so `:on_blocking` wakes too.
     let wake = wake_worthy(&globals.store, target);
-    if wake {
+    if wake && native::enabled() {
+        native::wake_parked(target);
+    } else if wake {
         SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
             let inner = target.as_thread_inner_mut();
@@ -979,6 +1018,9 @@ pub(crate) fn wait_fds(
     fds: &[(i32, i16)],
     deadline: Option<Instant>,
 ) -> Result<()> {
+    if native::enabled() {
+        return native::wait_fds(vm, globals, fds, deadline);
+    }
     ensure_main(vm);
     let cur0 = SCHEDULER.with(|s| s.borrow().current.unwrap());
     deliver_pending_now(vm, globals, cur0, true)?;
@@ -1016,6 +1058,15 @@ pub(crate) fn wait_fds(
         let result = park_switch(vm, globals, cur);
         unregister_io_waiter(cur);
         result
+    }
+}
+
+/// An fd is about to be closed (`FileDescriptor::drop`). The green
+/// poller notices a closed fd by itself (`POLLNVAL`); a kernel thread
+/// blocked in `poll(2)` on it has to be woken (1:1 model).
+pub(crate) fn fd_closing(fd: i32) {
+    if native::enabled() {
+        native::fd_closing(fd);
     }
 }
 
@@ -1495,6 +1546,10 @@ fn finalize_common(globals: &mut Globals, mut thread: Value) {
         for mut j in joiners {
             let ji = j.as_thread_inner_mut();
             if ji.state() == ThreadState::Joining {
+                if native::enabled() {
+                    native::wake_parked(j);
+                    continue;
+                }
                 ji.state = ThreadState::Runnable;
                 if Some(j) != main {
                     s.ready.push_back(j);
@@ -1676,6 +1731,10 @@ fn forward_exception_to_main(globals: &mut Globals, thread: Value) -> bool {
         .push_back(PendingInterrupt::Raise(err));
     // Wake a parked main so delivery happens promptly (mirrors
     // `interrupt`); delivery itself still honors handle_interrupt masks.
+    if native::enabled() {
+        native::wake_parked(main);
+        return true;
+    }
     let inner = main.as_thread_inner_mut();
     if matches!(
         inner.state(),

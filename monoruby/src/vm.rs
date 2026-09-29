@@ -73,6 +73,9 @@ pub(crate) struct Vm {
     const_epoch_names: OnceCell<RefCell<HashMap<IdentId, u64>>>,
     /// The global `Regexp.timeout`, in nanoseconds (0 = unset).
     regexp_global_timeout: Cell<u64>,
+    /// File descriptors owned by a live autoclosing `FileDescriptor`
+    /// (`rvalue::io::OWNED_FDS`).
+    owned_fds: RefCell<crate::HashSet<i32>>,
 }
 
 impl Vm {
@@ -97,6 +100,7 @@ impl Vm {
             const_epoch_wildcard: Cell::new(0),
             const_epoch_names: OnceCell::new(),
             regexp_global_timeout: Cell::new(0),
+            owned_fds: RefCell::new(crate::HashSet::default()),
         }
     }
 }
@@ -106,7 +110,6 @@ static DROPPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize:
 
 impl Vm {
     /// The Global VM Lock and the creating thread's handle on it.
-    #[allow(dead_code)]
     pub(crate) fn gvl(&self) -> (&Gvl, &GvlThread) {
         (&self.gvl, &self.main_thread)
     }
@@ -165,6 +168,22 @@ pub(crate) fn vm() -> &'static Vm {
     // no reference escapes a `VmField::with` closure, and the `Vm` is
     // never dropped while this thread runs.
     unsafe { &*p }
+}
+
+/// Serve an interpreter another OS thread owns: the kernel thread of a
+/// Ruby `Thread` in the 1:1 model. The thread must have no interpreter
+/// of its own, and must call [`unadopt`] before it exits (the owner
+/// tears the `Vm` down, and only after every adopter is gone).
+pub(crate) fn adopt(vm: &Vm) {
+    CURRENT.with(|c| {
+        assert!(c.get().is_null(), "this OS thread already serves a Vm");
+        c.set(vm as *const Vm);
+    });
+}
+
+/// Undo [`adopt`].
+pub(crate) fn unadopt() {
+    let _ = CURRENT.try_with(|c| c.set(std::ptr::null()));
 }
 
 /// Like [`vm`], but `None` when this thread has no interpreter yet or
@@ -276,6 +295,8 @@ pub(crate) static CONST_EPOCH_NAMES: VmField<RefCell<HashMap<IdentId, u64>>> =
 
 pub(crate) static REGEXP_GLOBAL_TIMEOUT: VmField<Cell<u64>> =
     VmField::new(|vm| &vm.regexp_global_timeout);
+
+pub(crate) static OWNED_FDS: VmField<RefCell<crate::HashSet<i32>>> = VmField::new(|vm| &vm.owned_fds);
 
 #[cfg(test)]
 mod tests {

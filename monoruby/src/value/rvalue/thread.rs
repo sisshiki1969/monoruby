@@ -103,6 +103,16 @@ pub struct ThreadInner {
     /// park, so the scheduler swaps the counter through here at every
     /// context switch. See `scheduler::SCHED_CALL_DEPTH`.
     pub(crate) sched_call_depth: u32,
+    /// The 1:1 model's wake pipe (`scheduler::native`): what a parked
+    /// kernel thread polls and a waker writes to. `None` in the green
+    /// model, and until the thread's first park.
+    pub(crate) parker: Option<crate::scheduler::native::Parker>,
+    /// 1:1 model: the current park has no deadline and no fd — only
+    /// another thread can end it (the deadlock check's input).
+    pub(crate) park_indefinite: bool,
+    /// 1:1 model: the fds the current `IoWaiting` park polls, so that
+    /// closing one of them can wake the thread (`native::fd_closing`).
+    pub(crate) park_fds: Vec<i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +205,9 @@ impl ThreadInner {
             park_permit: false,
             last_status: None,
             sched_call_depth: 0,
+            parker: None,
+            park_indefinite: false,
+            park_fds: vec![],
         }
     }
 
@@ -228,6 +241,9 @@ impl ThreadInner {
             park_permit: false,
             last_status: None,
             sched_call_depth: 0,
+            parker: None,
+            park_indefinite: false,
+            park_fds: vec![],
         }
     }
 
@@ -253,6 +269,9 @@ impl ThreadInner {
             park_permit: false,
             last_status: None,
             sched_call_depth: 0,
+            parker: None,
+            park_indefinite: false,
+            park_fds: vec![],
         }
     }
 

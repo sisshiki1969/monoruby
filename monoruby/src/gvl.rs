@@ -18,10 +18,6 @@
 //! thread registers. Until the kernel-thread model lands, the `Vm`'s
 //! creating thread is the sole registrant and the only holder.
 
-// Nothing runs on a second kernel thread yet; the users of this API are
-// the native thread model's scheduler and blocking regions.
-#![allow(dead_code)]
-
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -30,6 +26,20 @@ use std::sync::{Arc, Condvar, Mutex};
 /// [`Gvl::register`], holds a parking slot the handoff wakes.
 pub(crate) struct GvlThread {
     slot: Arc<Slot>,
+}
+
+/// A view of a [`GvlThread`]'s queue position, for the thread that
+/// spawned it (the handle itself moves to the kernel thread).
+pub(crate) struct GvlWaitProbe {
+    slot: Arc<Slot>,
+}
+
+impl GvlThread {
+    pub(crate) fn wait_probe(&self) -> GvlWaitProbe {
+        GvlWaitProbe {
+            slot: self.slot.clone(),
+        }
+    }
 }
 
 struct Slot {
@@ -95,6 +105,35 @@ impl Gvl {
     /// How many threads share this lock.
     pub(crate) fn registered(&self) -> usize {
         self.state.lock().unwrap().registered
+    }
+
+    /// Whether `th` is queued for the lock right now. A spawner uses it
+    /// to hand a freshly started thread its first slice: once the new
+    /// thread is in the queue, a [`Gvl::yield_now`] reaches it.
+    pub(crate) fn is_waiting(&self, probe: &GvlWaitProbe) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .waiters
+            .iter()
+            .any(|w| Arc::ptr_eq(w, &probe.slot))
+    }
+
+    /// Whether any thread is queued for the lock.
+    pub(crate) fn has_waiter(&self) -> bool {
+        !self.state.lock().unwrap().waiters.is_empty()
+    }
+
+    /// A `fork(2)` child has exactly one thread, the forking one, and
+    /// it holds the lock: forget every other registrant and waiter
+    /// (their kernel threads do not exist here). `th` is the survivor's
+    /// handle; whatever grant was pending on it is cleared too.
+    pub(crate) fn reset_after_fork(&self, th: &GvlThread) {
+        let mut st = self.state.lock().unwrap();
+        st.held = true;
+        st.waiters.clear();
+        st.registered = 1;
+        *th.slot.granted.lock().unwrap() = false;
     }
 
     /// Take the lock, waiting FIFO behind earlier waiters.

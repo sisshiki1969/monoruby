@@ -455,7 +455,7 @@ fn thread_initialize(
     if let Some(storage) = super::fiber::current_fiber_storage(vm, globals)? {
         self_.as_thread_inner_mut().seed_fiber_storage(storage);
     }
-    scheduler::spawn(vm, self_);
+    scheduler::spawn(vm, globals, self_)?;
     // The eager first slice must keep `self_` (and this frame's Values)
     // rooted: `pass` is a scheduler entry (GC-safe park point), and the
     // thread is reachable via the scheduler registry.
@@ -500,7 +500,7 @@ fn thread_start(
             .set_ivar(thread, IdentId::get_id("@__spawn_location"), loc);
     }
     let _ = &mut thread;
-    scheduler::spawn(vm, thread);
+    scheduler::spawn(vm, globals, thread)?;
     scheduler::pass(vm, globals)?;
     Ok(thread)
 }

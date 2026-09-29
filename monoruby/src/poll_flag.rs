@@ -82,6 +82,13 @@ pub(crate) fn register(addr: *mut u32) {
     SIGNAL_FLAG_ADDR.store(addr as usize, Ordering::Release);
 }
 
+/// A kernel thread that serves an interpreter another OS thread owns
+/// (`vm::adopt`) polls that interpreter's word: register it here for
+/// this thread only — the signal-handler registry is the owner's.
+pub(crate) fn adopt(addr: *mut u32) {
+    FLAG_ADDR.with(|a| a.set(addr as usize));
+}
+
 /// Signal handlers were just `sigaction`ed to point at this interpreter
 /// (e.g. `Signal.trap`): make the handler-side registry follow, so the
 /// SIGNAL lane lands in *this* interpreter's word. This mirrors the old

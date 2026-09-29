@@ -60,7 +60,7 @@ Two things to know before reading:
 | [`safepoint.md`](safepoint.md) | JA | reference | The one mechanism GC, preemption and signal delivery all go through. Read this before any of the three below. |
 | [`gc.md`](gc.md) | JA | reference | The collector as it actually is — non-moving, single-threaded, stop-the-world, generational — plus the `GC` module's real numbers. |
 | [`signal.md`](signal.md) | JA | reference | Deferred signal delivery: set a flag, convert it to a Ruby exception or a `Signal.trap` handler at the next safepoint. |
-| [`threads.md`](threads.md) | JA | reference | M:1 green threads, Fibers, non-blocking IO and time-slice preemption. |
+| [`threads.md`](threads.md) | JA | reference | M:1 green threads, Fibers, non-blocking IO and time-slice preemption; §12 the 1:1 model behind `MONORUBY_THREAD_MODEL=native` (kernel threads under the GVL). |
 | [`scheduler_state_diagram.md`](scheduler_state_diagram.md) | JA | reference | `ThreadState` and `FiberState` transitions — the companion diagrams to `threads.md`. |
 
 Diagrams referenced by the above: [`fiber_state_diagram.svg`](fiber_state_diagram.svg),
