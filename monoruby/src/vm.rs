@@ -93,8 +93,13 @@ impl Vm {
     }
 }
 
+#[cfg(test)]
+static DROPPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 impl Drop for Vm {
     fn drop(&mut self) {
+        #[cfg(test)]
+        DROPPED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         // The preempt timer (another OS thread) writes into the poll
         // word inside `codegen`'s JIT memory. `Codegen::drop` detaches
         // it through `preempt::codegen_dropped`, which reaches the timer
@@ -271,5 +276,22 @@ mod tests {
             .unwrap();
         assert_ne!(here, there);
         assert!(vm_try().is_some());
+    }
+
+    /// A thread's `Vm` — and with it the heap's 2 GB reservation and the
+    /// JIT memory — is torn down when the thread exits, as the
+    /// `thread_local!`s it replaced were.
+    #[test]
+    fn the_vm_is_dropped_when_its_thread_exits() {
+        use std::sync::atomic::Ordering;
+        let before = DROPPED.load(Ordering::SeqCst);
+        std::thread::spawn(|| {
+            ALLOC.with(|a| assert!(a.try_borrow().is_ok()));
+            CODEGEN.with(|c| assert!(c.try_borrow().is_ok()));
+        })
+        .join()
+        .unwrap();
+        // `>`: other tests' threads drop their own `Vm`s concurrently.
+        assert!(DROPPED.load(Ordering::SeqCst) > before);
     }
 }
