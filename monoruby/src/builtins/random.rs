@@ -450,7 +450,7 @@ fn random_srand(
 ///
 /// - rand -> Float
 /// - rand(max) -> Integer | Float
-/// - [NOT SUPPORTED] rand(range) -> Integer | Float
+/// - rand(range) -> Integer | Float
 ///
 /// Also bound as `Random.random_number`.
 ///
@@ -462,26 +462,10 @@ fn random_rand(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let arg = match lfp.try_arg(0) {
-        Some(v)
-            if v.try_fixnum().is_none()
-                && !v.is_float()
-                && v.is_range().is_none()
-                && !matches!(v.unpack(), RV::BigInt(_)) =>
-        {
-            // A non-numeric, non-Range maximum is coerced with #to_int.
-            Some(vm.invoke_method_inner(
-                globals,
-                IdentId::get_id("to_int"),
-                v,
-                &[],
-                None,
-                None,
-            )?)
-        }
-        other => other,
-    };
-    rand_with_arg(globals, arg)
+    // Same argument handling as `Random#rand`, drawn from the global
+    // PRNG (CRuby: `Random.rand` is `Random::DEFAULT.rand`).
+    let req = prepare_rand(vm, globals, lfp.try_arg(0))?;
+    Ok(globals.random_with_mt(|mt, c| draw_rand(mt, c, req)))
 }
 
 ///
@@ -489,7 +473,7 @@ fn random_rand(
 ///
 /// - rand -> Float
 /// - rand(max) -> Integer
-/// - [NOT SUPPORTED]rand(range) -> Integer
+/// - rand(range) -> Integer | Float
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Random/i/rand.html]
 #[monoruby_builtin]
@@ -510,8 +494,8 @@ enum RandReq {
     Int(num::BigInt),
     /// `rand(float)` — a Float in `[0, max)` (`0.0` means `[0, 1)`).
     FloatMax(f64),
-    /// `rand(a..b)` over Integers: `start + [0, span)`.
-    IntRange { start: i64, span: i64 },
+    /// `rand(a..b)` over Integers (Fixnum or Bignum end points).
+    IntRange(IntSpan),
     /// `rand(a..b)` with a Float end point: `s + real * (e - s)`, the
     /// real drawn inclusively for `..` (CRuby `int_pair_to_real_inclusive`)
     /// and half-open for `...`.
@@ -528,12 +512,8 @@ fn prepare_rand(vm: &mut Executor, globals: &mut Globals, arg: Option<Value>) ->
         let start = r.start();
         let end = r.end();
         let excl = r.exclude_end();
-        let any_float = start.is_float() || end.is_float();
-        if !any_float
-            && let (Some(s), Some(e)) = (start.try_fixnum(), end.try_fixnum())
-        {
-            let span = e - s + if excl { 0 } else { 1 };
-            if span <= 0 {
+        if let Some(span) = IntSpan::new(start, end, excl) {
+            if span.is_empty() {
                 // `Random#rand` rejects an empty range (`Kernel#rand`
                 // is the one that answers nil).
                 return Err(MonorubyErr::argumenterr(format!(
@@ -541,13 +521,10 @@ fn prepare_rand(vm: &mut Executor, globals: &mut Globals, arg: Option<Value>) ->
                     arg.inspect(&globals.store)
                 )));
             }
-            return Ok(RandReq::IntRange { start: s, span });
+            return Ok(RandReq::IntRange(span));
         }
         // If either end point is a Float, both are treated as Floats.
-        let to_f = |v: Value| -> Option<f64> {
-            v.try_float().or_else(|| v.try_fixnum().map(|i| i as f64))
-        };
-        if let (Some(s), Some(e)) = (to_f(start), to_f(end)) {
+        if let (Some(s), Some(e)) = (num_to_f(start), num_to_f(end)) {
             return Ok(RandReq::FloatRange { start: s, end: e, excl });
         }
         return Err(MonorubyErr::argumenterr("bad value for range"));
@@ -590,10 +567,7 @@ fn draw_rand<M: MtDraw>(mt: &mut M, c: &mut u64, req: RandReq) -> Value {
             let f = next_real(mt, c);
             Value::float(if max == 0.0 { f } else { f * max })
         }
-        RandReq::IntRange { start, span } => {
-            let v = rand_int(mt, c, &num::BigInt::from(span));
-            Value::integer(start + v.try_fixnum().unwrap_or(0))
-        }
+        RandReq::IntRange(span) => span.draw(mt, c),
         RandReq::FloatRange { start, end, excl } => {
             let f = if excl { next_real(mt, c) } else { next_real_inclusive(mt, c) };
             Value::float(start + f * (end - start))
@@ -601,43 +575,72 @@ fn draw_rand<M: MtDraw>(mt: &mut M, c: &mut u64, req: RandReq) -> Value {
     }
 }
 
-/// Shared implementation for `Random.rand`, `Random.random_number`,
-/// and `Random#rand`. monoruby's per-instance state is not yet
-/// distinct from the global PRNG, so all three currently share it.
-fn rand_with_arg(globals: &mut Globals, arg: Option<Value>) -> Result<Value> {
-    let arg = match arg {
-        Some(v) => v,
-        None => return Ok(Value::float(globals.random_float())),
-    };
-    if let Some(max) = arg.try_fixnum() {
-        if max <= 0 {
-            return Err(MonorubyErr::argumenterr(format!(
-                "invalid argument - {}",
-                max
-            )));
+/// An Integer or Float end point as a Float (a Bignum included), for a
+/// range `rand` with at least one Float end.
+pub(crate) fn num_to_f(v: Value) -> Option<f64> {
+    match v.unpack() {
+        RV::Float(f) => Some(f),
+        RV::Fixnum(i) => Some(i as f64),
+        RV::BigInt(b) => Some(num::ToPrimitive::to_f64(b).unwrap_or(f64::NAN)),
+        _ => None,
+    }
+}
+
+/// The integer draw behind `rand(a..b)` / `rand(a...b)` when both end
+/// points are Integers: `start + [0, span)`. Bounds or a span outside
+/// `i64` take the multi-word path (CRuby `rand_range` →
+/// `random_ulong_limited_big`), which consumes the generator exactly as
+/// `rand(span)` with a Bignum `span` does.
+pub(crate) enum IntSpan {
+    Small {
+        start: i64,
+        span: i64,
+    },
+    Big {
+        start: num::BigInt,
+        span: num::BigInt,
+    },
+}
+
+impl IntSpan {
+    /// `None` unless both end points are Integers (Fixnum or Bignum).
+    pub(crate) fn new(start: Value, end: Value, excl: bool) -> Option<Self> {
+        let incl = if excl { 0 } else { 1 };
+        if let (Some(s), Some(e)) = (start.try_fixnum(), end.try_fixnum())
+            && let Some(span) = e.checked_sub(s).and_then(|d| d.checked_add(incl))
+        {
+            return Some(IntSpan::Small { start: s, span });
         }
-        Ok(globals.random_rand_int(&num::BigInt::from(max)))
-    } else if let Some(max) = arg.try_float() {
-        if max < 0.0 {
-            return Err(MonorubyErr::argumenterr(format!(
-                "invalid argument - {}",
-                max
-            )));
+        let big = |v: Value| match v.unpack() {
+            RV::Fixnum(i) => Some(num::BigInt::from(i)),
+            RV::BigInt(b) => Some(b.clone()),
+            _ => None,
+        };
+        let (s, e) = (big(start)?, big(end)?);
+        let span = &e - &s + incl;
+        Some(IntSpan::Big { start: s, span })
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        match self {
+            IntSpan::Small { span, .. } => *span <= 0,
+            IntSpan::Big { span, .. } => !span.is_positive(),
         }
-        let f = globals.random_float();
-        if max == 0.0 {
-            Ok(Value::float(f))
-        } else {
-            Ok(Value::float(f * max))
+    }
+
+    /// Draw from a non-empty span.
+    pub(crate) fn draw<M: MtDraw>(&self, mt: &mut M, c: &mut u64) -> Value {
+        match self {
+            IntSpan::Small { start, span } => {
+                let r = ulong_limited(mt, c, *span as u64 - 1) as i64;
+                // `start + r` stays within `[start, end]`, both i64.
+                Value::integer(start + r)
+            }
+            IntSpan::Big { start, span } => {
+                let r = to_bigint(rand_int(mt, c, span));
+                Value::bigint(start + r)
+            }
         }
-    } else if arg.is_range().is_some() {
-        Err(MonorubyErr::runtimeerr(
-            "Range argument is not supported in Random#rand",
-        ))
-    } else {
-        Err(MonorubyErr::runtimeerr(
-            "the argument is not supported in Random#rand",
-        ))
     }
 }
 
@@ -974,6 +977,25 @@ mod tests {
             r#"(r=Random.new(99); r.rand(1..6); r.rand(1...10))"#,
             r#"begin; Random.new(Complex(20,2)); :no; rescue RangeError; :range; end"#,
             r#"(o=Object.new; def o.to_int; 99; end; Random.rand(o).is_a?(Integer))"#,
+        ]);
+    }
+
+    #[test]
+    fn rand_bignum_range() {
+        // A Range with a Bignum bound (or a span past i64) draws from the
+        // span with the multi-word path, matching CRuby's seeded stream
+        // for Kernel#rand, Random.rand and Random#rand alike (#1662).
+        run_tests(&[
+            r#"(srand(3); 4.times.map { rand(-(2**80)..2**80) })"#,
+            r#"(srand(3); [rand(-(2**62)..2**62), rand(0..2**64), rand(2**64..2**64+3)])"#,
+            r#"(srand(3); [rand(2**81..2**80), rand(2**80...2**80), rand(2**80..2**80)])"#,
+            r#"(srand(5); 3.times.map { rand(1.0..2**80) })"#,
+            r#"(r=Random.new(1); 4.times.map { r.rand(2**80..2**81) })"#,
+            r#"(r=Random.new(1); [r.rand(2**80...2**81), r.rand(-(2**62)..2**62), r.rand(2**64-1..2**64+1), r.rand(-5..2**70)])"#,
+            r#"(r=Random.new(1); [r.rand(-(2**100)...-(2**99)), r.rand(1.0..2**80), r.random_number(0...2**64)])"#,
+            r#"(r=Random.new(1); begin; r.rand(2**81..2**80); rescue ArgumentError => e; e.message; end)"#,
+            r#"(Random.srand(7); [Random.rand(1..10), Random.rand(2**80..2**81), Random.random_number(-3...2**65)])"#,
+            r#"begin; Random.rand(2**80...2**80); rescue ArgumentError => e; e.message; end"#,
         ]);
     }
 

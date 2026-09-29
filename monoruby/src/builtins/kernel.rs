@@ -1752,17 +1752,16 @@ fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         let start = range.start();
         let end = range.end();
         let excl = range.exclude_end();
-        // Both endpoints Integer: an Integer in the range (nil when empty).
-        if let (Some(s), Some(e)) = (start.try_fixnum(), end.try_fixnum()) {
-            let span = e - s + if excl { 0 } else { 1 };
-            if span <= 0 {
+        // Both endpoints Integer (Fixnum or Bignum): an Integer in the
+        // range (nil when empty).
+        if let Some(span) = super::random::IntSpan::new(start, end, excl) {
+            if span.is_empty() {
                 return Ok(Value::nil());
             }
-            let r = globals.random_ulong_limited(span as u64 - 1) as i64;
-            return Ok(Value::integer(s + r));
+            return Ok(globals.random_with_mt(|mt, c| span.draw(mt, c)));
         }
         // Any Float endpoint makes the result a Float in [s, e).
-        let to_f = |v: Value| v.try_float().or_else(|| v.try_fixnum().map(|i| i as f64));
+        let to_f = super::random::num_to_f;
         if let (Some(s), Some(e)) = (to_f(start), to_f(end)) {
             if e < s || (excl && e <= s) {
                 return Ok(Value::nil());
