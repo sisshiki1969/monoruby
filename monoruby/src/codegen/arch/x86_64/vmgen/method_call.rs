@@ -121,21 +121,51 @@ impl Codegen {
     /// ~~~
     pub(super) fn vm_yield(&mut self, is_simple: bool) -> CodePtr {
         let label = self.jit.get_current_address();
+        let symbol = self.jit.label();
+        let done = self.jit.label();
         // Stack check only — the block body's entry poll (`vm_init` / JIT
         // `InitMethod`) fires on every yield, so no call-site poll is needed.
         self.vm_check_stack();
         self.get_proc_data();
         // rax: outer, rdx: FuncId
         self.vm_handle_error();
+        // `&:sym` answers no FuncId, the symbol's frame in rax: the named
+        // method is called straight from this frame, with no block frame
+        // between (`yield_symbol_proc`).
+        monoasm! { &mut self.jit,
+            testq rdx, rdx;
+            jeq  symbol;
+        }
         self.get_func_data();
         // rax: outer, r15: &FuncData
         self.push_cont_frame();
         self.set_block_self_outer();
         self.vm_call(is_simple);
         self.pop_cont_frame();
+        monoasm! { &mut self.jit,
+        done:
+        }
         self.vm_handle_error();
         self.vm_store_rdi(GP::Rax);
         self.fetch_and_dispatch();
+
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        symbol:
+            movq r8, rax;                   // outer: the symbol's frame
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, [r13 + (CALLSITE_ID)];
+            movq rcx, r14;
+            movq rax, (runtime::yield_symbol_proc);
+            call rax;
+            // What `pop_cont_frame` leaves behind: the ret slot in rdi,
+            // r13 past the 2-unit instruction (it enters one unit in).
+            movzxw rdi, [r13 + (RET_REG)];
+            addq r13, 16;
+            jmp  done;
+        }
+        self.jit.select_page(0);
         label
     }
 

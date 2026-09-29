@@ -625,6 +625,65 @@ mod tests {
         run_test_error(r#":object_id.to_proc.call"#);
     }
 
+    /// A `yield` to `&:sym` calls the named method straight from the
+    /// yielding frame, with no frame for the block between — as CRuby's
+    /// `vm_yield_with_symbol` does — so a backtrace shows none, and every
+    /// argument shape the yield can take reaches the method as its
+    /// arguments: the receiver first, then the rest, splats expanded,
+    /// keywords as keywords, a single Array left whole. Each yielder is
+    /// called enough to be JIT-compiled, so the VM's `vm_yield` and the
+    /// JIT's generic `Yield` are both exercised.
+    #[test]
+    fn symbol_to_proc_yield_pushes_no_frame() {
+        run_test(
+            r##"
+        class C
+          def m = caller(0).first(2).map { |l| l[/in '(.*)'/, 1] }
+          def kw(x, k: 0) = [self.class, x, k]
+          def mm = :mm
+          private def priv = :priv
+          def method_missing(name, *a) = name == :ghost ? [:ghost, a] : super
+          def respond_to_missing?(name, priv = false) = name == :ghost || super
+        end
+        def y1; yield C.new; end
+        def y2; yield C.new, 1; end
+        def y_splat; yield(*[C.new, 2]); end
+        def y_ary; yield [C.new, 3]; end
+        def y_kw; yield C.new, 4, k: 5; end
+        def y_kw_splat(h); yield C.new, 6, **h; end
+        def y_kw_only; yield k: 8; end
+        def y_none; yield; end
+        def t
+          yield
+        rescue => e
+          "#{e.class}: #{e.message}"
+        end
+        res = []
+        30.times do
+          r = []
+          r << y1(&:m)
+          r << y2(&:kw)
+          r << y_splat(&:kw)
+          r << t { y_ary(&:kw) }
+          r << y_kw(&:kw)
+          r << y_kw_splat({k: 7}, &:kw)
+          r << y_kw_splat({}, &:kw)
+          r << y_kw_only(&:to_s)
+          r << y_kw_only(&:itself)
+          r << t { y_none(&:m) }
+          r << t { y1(&:priv) }
+          r << y1(&:mm)
+          r << y2(&:ghost)
+          r << t { y1(&:nope) }
+          pr = :m.to_proc
+          r << y1(&pr)
+          res = r
+        end
+        res
+        "##,
+        );
+    }
+
     #[test]
     fn symbol_to_s_chilled_basics() {
         run_tests(&[

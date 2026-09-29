@@ -127,10 +127,17 @@ impl Codegen {
         simple: bool,
         error: &DestLabel,
     ) -> CodePtr {
+        let symbol = self.jit.label();
+        let done = self.jit.label();
         self.get_proc_data();
         self.handle_error(&error);
         // rax <- outer, rdx <- FuncId
+        // `&:sym` answers no FuncId, the symbol's frame in rax: the named
+        // method is called straight from this frame, with no block frame
+        // between (`yield_symbol_proc`).
         monoasm! { &mut self.jit,
+            testq rdx, rdx;
+            jeq  symbol;
             movq rdi, rax;
         }
         // rdi <- outer, rdx <- FuncId
@@ -156,7 +163,25 @@ impl Codegen {
             runtime::jit_handle_arguments_no_block
         });
         self.handle_error(error);
-        self.call_funcdata()
+        let return_addr = self.call_funcdata();
+        monoasm! { &mut self.jit,
+        done:
+        }
+
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        symbol:
+            movq r8, rax;                   // outer: the symbol's frame
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (callid.get());
+            movq rcx, r14;
+            movq rax, (runtime::yield_symbol_proc);
+            call rax;
+            jmp  done;
+        }
+        self.jit.select_page(0);
+        return_addr
     }
 
     ///

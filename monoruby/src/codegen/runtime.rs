@@ -687,6 +687,19 @@ impl ProcData {
         self.func_id
     }
 
+    /// The `ProcData` `get_yield_data` answers for a `&:sym` block: the
+    /// symbol's frame as `outer` (a live heap frame, so the machine code's
+    /// "no block" test on `outer` and its `invalidated` probe both pass)
+    /// and no `func_id`, which tells the yield to dispatch through
+    /// `yield_symbol_proc` instead of building a frame for
+    /// `symbol_to_proc_body`.
+    pub(crate) fn frameless_symbol(outer: Lfp) -> Self {
+        Self {
+            outer: Some(outer),
+            func_id: None,
+        }
+    }
+
     /// The frame this proc closes over — its LEP once resolved with
     /// `Lfp::mfp`. `None` for procs with no captured environment.
     pub(crate) fn outer(&self) -> Option<Lfp> {
@@ -721,12 +734,72 @@ pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals
         }
     };
     match vm.get_block_data(globals, bh) {
+        // `&:sym` pushes no frame of its own, as in CRuby
+        // (`vm_yield_with_symbol`): the yield calls the named method
+        // directly from the yielding frame — see `yield_symbol_proc`.
+        Ok(data) if data.func_id() == Some(SYMBOL_TO_PROC_BODY_FUNCID) => {
+            ProcData::frameless_symbol(data.outer().unwrap())
+        }
         Ok(data) => data,
         Err(err) => {
             vm.set_error(err);
             ProcData::default()
         }
     }
+}
+
+///
+/// `yield` to a `&:sym` block, from the yielding frame: `args[0].sym(*args[1..])`.
+///
+/// The `Yield` lowerings (VM and JIT, both backends) come here when
+/// `get_yield_data` answered `ProcData::frameless_symbol`, instead of
+/// building a block frame for `symbol_to_proc_body`. The named method's
+/// frame then sits directly on the yielding frame, which is what CRuby's
+/// frameless symbol block gives: `Kernel#binding` reached this way sees
+/// a Ruby caller, and a backtrace shows no frame for the block. The
+/// arguments are read off the call site in `lfp`, splats and keywords
+/// included; `outer` is the symbol's frame `get_yield_data` answered.
+///
+pub(super) extern "C" fn yield_symbol_proc(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    callid: CallSiteId,
+    lfp: Lfp,
+    outer: Lfp,
+) -> Option<Value> {
+    let symbol = outer.self_val().as_symbol();
+    let cs = &globals.store[callid];
+    let res = if cs.splat_pos().is_empty() && cs.kw_len() == 0 {
+        // Plain positional arguments — `yield x` is nearly every yield to
+        // `&:sym` — straight off the caller's slots, with nothing
+        // allocated: the receiver is the first, the rest follow in the
+        // slots above it (a slot's address falls as its number rises).
+        let (args_slot, pos_num) = (cs.args, cs.pos_num);
+        if pos_num == 0 {
+            Err(MonorubyErr::argumenterr("no receiver given"))
+        } else {
+            let recv = lfp.register(args_slot).unwrap();
+            let rest: smallvec::SmallVec<[Value; 8]> = (1..pos_num)
+                .map(|i| lfp.register(args_slot + i).unwrap())
+                .collect();
+            vm.dispatch_symbol_proc_kw(globals, symbol, recv, &rest, None, None)
+        }
+    } else {
+        vm.callsite_args(globals, lfp, callid)
+            .and_then(|(args, kw)| match (args.split_first(), kw) {
+                (Some((recv, rest)), kw) => {
+                    vm.dispatch_symbol_proc_kw(globals, symbol, *recv, rest, None, kw)
+                }
+                // Keywords alone are the receiver, as for `Proc#call`:
+                // `yield(k: 1)` to `&:to_s` is `{k: 1}.to_s`, the body
+                // having no keyword parameters to bind them to.
+                (None, Some(kw)) => {
+                    vm.dispatch_symbol_proc_kw(globals, symbol, kw.as_val(), &[], None, None)
+                }
+                (None, None) => Err(MonorubyErr::argumenterr("no receiver given")),
+            })
+    };
+    res.map_err(|err| vm.set_error(err)).ok()
 }
 
 /// `BlockArg`: the value of the `&block` parameter of the frame `outer`
