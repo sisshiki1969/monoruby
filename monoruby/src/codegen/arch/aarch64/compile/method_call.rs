@@ -119,7 +119,9 @@ impl Codegen {
         self.a64_frame_load(0, lfp, conv(recv) as u32); // x0 = receiver
         monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
-            bl get_class;                      // x0 = receiver's ClassId
+        );
+        self.a64_far_branch(&get_class, true); // x0 = receiver's ClassId
+        monoasm_arm64!(&mut self.jit,
             ldr x30, [sp], #16;
             mov x9, (cache);
             ldr w11, [x9];                     // cached class
@@ -279,7 +281,9 @@ impl Codegen {
         self.a64_frame_load(0, lfp, conv(recv) as u32); // x0 = receiver
         monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
-            bl get_class;            // x0 = receiver's ClassId
+        );
+        self.a64_far_branch(&get_class, true); // x0 = receiver's ClassId
+        monoasm_arm64!(&mut self.jit,
             ldr x30, [sp], #16;
             mov x13, x0;             // x13: receiver class, kept across the check
             mov x9, (cc_addr);

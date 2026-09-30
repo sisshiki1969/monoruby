@@ -231,4 +231,38 @@ impl Codegen {
             skip:
         );
     }
+
+    /// `b target` (or `bl target` with `link`) to a shared stub that is
+    /// already bound: `entry_raise`, `vm_fetch`, `vm_entry`, the
+    /// write-barrier / `alloc_cell` / `get_class` / `f64_to_val` helpers.
+    ///
+    /// `B` / `BL` reach +/-128MB, and those stubs sit at the start of the
+    /// code page while JIT code keeps being appended after them (a
+    /// superseded unit is never reclaimed), so a unit emitted far enough in
+    /// cannot reach them directly — rubyboy's `Cpu#exec`, recompiled some
+    /// eighteen times at ~14MB a time, got there before its first
+    /// iteration and died with "B/BL displacement out of range". Past the
+    /// range the branch goes through x16 (IP0, the ABI's veneer register,
+    /// which JIT code never holds a value in). x86-64's rel32 reaches
+    /// +/-2GB and does not need this.
+    pub(in crate::codegen) fn a64_far_branch(&mut self, target: &DestLabel, link: bool) {
+        let dest = self.jit.get_label_address(target).as_ptr() as i64;
+        let here = self.jit.get_current_address().as_ptr() as i64;
+        // Keep a margin below the architectural +/-2^27 bytes.
+        const REACH: i64 = (1 << 27) - (1 << 20);
+        if (dest - here).abs() < REACH {
+            if link {
+                monoasm_arm64!(&mut self.jit, bl target;);
+            } else {
+                monoasm_arm64!(&mut self.jit, b target;);
+            }
+        } else {
+            monoasm_arm64!(&mut self.jit, mov x16, (dest as u64););
+            if link {
+                monoasm_arm64!(&mut self.jit, blr x16;);
+            } else {
+                monoasm_arm64!(&mut self.jit, br x16;);
+            }
+        }
+    }
 }
