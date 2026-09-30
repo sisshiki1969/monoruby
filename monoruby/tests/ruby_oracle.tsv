@@ -255,6 +255,7 @@
 0b56e400524c40599f5741f2c015962d	7	class Foo\n              def method_missing(name, *args)\n           
 0b63fbdd1138fbc95382e627f7e211d9	[[:zap, [1]], 3]	class P\n          def respond_to_missing?(n, p) = n == :zap\n          d
 0b645df6fa816084c17746fbb8754151	-4	class Integer; alias __orig :~; def ~; __orig; end; end; ~(3)
+0b66c41e73ee790b5b784469c442e4fe	{"String" => 100}	class C\n          attr_accessor :a8\n          def initialize\n          
 0b67f0becaeeca974d1e74004df4c680	[[:x], [1, :y]]	class C\n                 def initialize; @log = []; end\n                 def []=
 0b6f7cc39b8a933c537afbbde31e4c61	[0, 198, 9900]	def nlr_a\n          yield\n        end\n        def nlr_b\n          nlr_a
 0b7609ef6d4ba5f8e723f231492ce8ea	1	class Zero\n              def >(other); false; end\n              def

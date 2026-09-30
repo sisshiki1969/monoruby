@@ -318,9 +318,11 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit, generic:);
         self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
+            // val first: the attr_writer passes src in GP::Rax, which is
+            // x0, so writing the base into x0 first would store the receiver.
+            mov x2, x(s);              // val
             mov x0, x(rdi);            // base: &mut RValue
             mov x1, (ivar as u64);     // id: IvarId
-            mov x2, x(s);              // val
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;

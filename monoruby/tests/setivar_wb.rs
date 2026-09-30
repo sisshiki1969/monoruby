@@ -343,3 +343,30 @@ fn attr_writer_frozen_fold() {
         "##,
     );
 }
+
+#[test]
+fn attr_writer_grows_heap_ivar_table() {
+    // An inlined `attr_writer` onto a heap-spilled ivar (past the
+    // `OBJECT_INLINE_IVAR` inline slots) of an object whose var-table is
+    // still too short takes the cold `set_ivar` path. The objects are
+    // built before `@a8` is first registered, so every one of them does.
+    // aarch64 used to marshal the receiver into x0 before reading the
+    // value out of x0 (`GP::Rax`), storing the receiver itself.
+    run_test_once(
+        r##"
+        class C
+          attr_accessor :a8
+          def initialize
+            @a1 = @a2 = @a3 = @a4 = @a5 = @a6 = @a7 = 0
+          end
+        end
+        pool = Array.new(100) { C.new }
+        C.new.a8 = 0
+        def f(c, v)
+          c.a8 = v
+          c
+        end
+        pool.map { |c| f(c, "s").a8.class.to_s }.tally
+        "##,
+    );
+}
