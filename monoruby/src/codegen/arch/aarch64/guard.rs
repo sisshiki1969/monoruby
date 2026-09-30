@@ -98,9 +98,7 @@ impl Codegen {
                 tbnz x(r), #(0), exit;   // fixnum -> JIT body
             );
             self.a64_guard_rvalue(r, INTEGER_CLASS, fail); // heap non-Integer -> miss
-            monoasm_arm64!(&mut self.jit,
-                b vm_entry;              // heap Integer (BigNum) -> VM
-            );
+            self.a64_far_branch(&vm_entry, false); // heap Integer (BigNum) -> VM
             self.jit.bind_label(exit);
         } else {
             self.a64_guard_class(reg, class_id, fail);

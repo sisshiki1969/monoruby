@@ -574,8 +574,8 @@ impl Codegen {
         // PC == x21.
         monoasm_arm64!(&mut self.jit,
             mov x21, (pc_ptr);
-            b fetch;
         );
+        self.a64_far_branch(&fetch, false);
     }
 
     /// `log_deoptimize(vm, globals, pc[, exit_id])`, which feeds the `deopt`
@@ -656,8 +656,8 @@ impl Codegen {
         let raise = self.entry_raise();
         monoasm_arm64!(&mut self.jit,
             mov x21, (pc0);
-            b raise;
         );
+        self.a64_far_branch(&raise, false);
     }
 
     /// Write back live values to LFP slots for a side exit, r14(x22)-relative
@@ -914,9 +914,7 @@ impl Codegen {
         // this matters for its `goto` path, which resumes the VM with sp
         // untouched.
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
-        monoasm_arm64!(&mut self.jit,
-            b raise;
-        );
+        self.a64_far_branch(&raise, false);
     }
 
     /// Lower `BlockBreak`: a `break` out of a block. Same shape as
@@ -943,9 +941,7 @@ impl Codegen {
         // Same ordering as `a64_method_ret`: undo after the runtime call,
         // before `b raise`.
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
-        monoasm_arm64!(&mut self.jit,
-            b raise;
-        );
+        self.a64_far_branch(&raise, false);
     }
 
     /// `[lfp - slot*8 - LFP_SELF] <- imm` via a scratch register (x9/x10).
@@ -999,7 +995,7 @@ impl Codegen {
         let f64_to_val = self.f64_to_val.clone();
         let off = slot.0 as u32 * 8 + LFP_SELF as u32;
         self.a64_fpr_load(src, 0, base); // value -> d0 (pool fmov or spill load)
-        monoasm_arm64!(&mut self.jit, bl f64_to_val;); // x0 = Value(f64)
+        self.a64_far_branch(&f64_to_val, true); // x0 = Value(f64)
         self.a64_frame_store(0, lfp, off);
     }
 
@@ -2351,7 +2347,9 @@ impl Codegen {
         let alloc_cell = self.alloc_cell.clone();
         monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
-            bl alloc_cell;
+        );
+        self.a64_far_branch(&alloc_cell, true);
+        monoasm_arm64!(&mut self.jit,
             ldr x30, [sp], #16;
         );
         // alloc-flag / new-page territory: hand back to the runtime.
@@ -3400,7 +3398,7 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
-        monoasm_arm64!(&mut self.jit, b raise;);
+        self.a64_far_branch(&raise, false);
         true
     }
 
@@ -3428,7 +3426,7 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
-        monoasm_arm64!(&mut self.jit, b raise;);
+        self.a64_far_branch(&raise, false);
         true
     }
 
@@ -3451,7 +3449,7 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
-        monoasm_arm64!(&mut self.jit, b raise;);
+        self.a64_far_branch(&raise, false);
         true
     }
 
@@ -3490,9 +3488,9 @@ impl Codegen {
             self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
             monoasm_arm64!(&mut self.jit,
                 mov x21, (pc0);
-                b raise;
-                cont:
             );
+            self.a64_far_branch(&raise, false);
+            self.jit.bind_label(cont.clone());
             return true;
         }
         // Spliced form (#1185) — mirrors x86 `emit_ensure_end`: the runtime
@@ -3584,9 +3582,9 @@ impl Codegen {
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
         monoasm_arm64!(&mut self.jit,
             mov x21, (pc0);
-            b raise;
-            cont:
         );
+        self.a64_far_branch(&raise, false);
+        self.jit.bind_label(cont.clone());
         true
     }
 
@@ -3749,8 +3747,10 @@ impl Codegen {
             ldr x30, [sp], #16;
             cbz x0, cont;
             mov x21, (pc.as_ptr() as u64);
-            b raise;
-            cont:
+        );
+        self.a64_far_branch(&raise, false);
+        self.jit.bind_label(cont.clone());
+        monoasm_arm64!(&mut self.jit,
             mov x0, (tag);
         );
         self.method_return_specialized(callee);

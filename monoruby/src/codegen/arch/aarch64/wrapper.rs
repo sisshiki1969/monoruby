@@ -74,9 +74,7 @@ impl Codegen {
                     // (mirrors x86 `gen_wrapper` emitting `gen_vm_stub`). Without
                     // this gate the method JIT — and its class-version recompile
                     // path — fires regardless of the flag.
-                    monoasm_arm64!(&mut self.jit,
-                        b vm_entry;
-                    );
+                    self.a64_far_branch(&vm_entry, false);
                 } else {
                     let counter_addr = Box::into_raw(Box::new(COUNT_START_COMPILE)) as u64;
                     let jit_slot = Box::into_raw(Box::new(0u64)) as u64;
@@ -96,7 +94,10 @@ impl Codegen {
                         // range. So branch over a *near* label and reach
                         // `vm_entry` with an unconditional `b` (±128MB).
                         cbz x11, compile_hot;    // hot → fall through to compile
-                        b vm_entry;              // not hot yet → VM (long range)
+                    );
+                    // not hot yet → VM (long range; see `a64_far_branch`)
+                    self.a64_far_branch(&vm_entry, false);
+                    monoasm_arm64!(&mut self.jit,
                     compile_hot:
                         // hot enough overall: profile this self-class and
                         // compile only if *it* (not just any class) is hot.
@@ -235,7 +236,9 @@ impl Codegen {
             sub x11, x11, #1;
             str w11, [x9];
             cbz x11, compile_next;   // hot for this new class -> compile it
-            b vm_entry;              // still cold -> VM
+        );
+        self.a64_far_branch(&vm_entry, false); // still cold -> VM
+        monoasm_arm64!(&mut self.jit,
         compile_next:
             // profile this new class; compile a specialization only once it is
             // hot (re-arming next_counter otherwise — see jit_profile_patch).

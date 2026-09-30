@@ -235,7 +235,9 @@ impl Codegen {
             cbnz x9, skip;             // immediate child -> skip
             mov x9, x(p);              // parent -> stub arg (x9)
             str x30, [sp, #-16]!;
-            bl wb;
+        );
+        self.a64_far_branch(&wb, true);
+        monoasm_arm64!(&mut self.jit,
             ldr x30, [sp], #16;
             skip:
         );
@@ -258,7 +260,9 @@ impl Codegen {
             tbz x9, #(6), skip;        // WB_ARMED clear -> skip
             mov x9, x(p);              // parent -> stub arg (x9)
             str x30, [sp, #-16]!;
-            bl wb;
+        );
+        self.a64_far_branch(&wb, true);
+        monoasm_arm64!(&mut self.jit,
             ldr x30, [sp], #16;
             skip:
         );
