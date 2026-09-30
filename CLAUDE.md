@@ -1056,4 +1056,8 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
    redefinition converts the compiled frames of *every* thread — the
    callers by the chain walk, the frame stopped at a safepoint poll by the
    poll's own deopt exit (`executor::POLL_DEOPT`; `doc/threads.md` §12.9,
-   `doc/chain_deopt.md` §10.1).
+   `doc/chain_deopt.md` §10.1). A `fork(2)` holds the GVL's state lock
+   across the fork (`fork::prepare`), and the child keeps only the
+   forking thread, as main. Process exit runs the `at_exit` handlers,
+   then kills the remaining threads, then runs the finalizers.
+   `Thread#native_thread_id` is the real kernel thread id.

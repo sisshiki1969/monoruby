@@ -210,8 +210,9 @@ Ruby 側(startup.rb、`class Thread`):
 - `#thread_variable_get` / `_set` / `#thread_variable?` / `#thread_variables`(`@thread_variables` に格納)
 - `#priority` / `#priority=`(-3..3 にクランプして `@priority` に保存するのみ。実際の
   スケジューリングには影響しない)
-- `#native_thread_id`(生存中は `object_id`、死後は `nil` を返す。実カーネル tid ではなく
-  オブジェクトごとに一意なトークン)
+- `#native_thread_id`(走っているカーネルスレッドの id。Linux は `gettid(2)`、Darwin は
+  `pthread_threadid_np`。死後は `nil`。green では全スレッドがインタプリタのカーネル
+  スレッドを共有するので同じ id、1:1 では各スレッド固有)
 - `#report_on_exception`(インスタンスのみ)
 - `Thread.ignore_deadlock` / `=`(クラス変数に丸めるだけ。デッドロック検出器自体は止めない)
 - `Thread::Waiter`(`Process.detach` 用。native `Thread.new` はブロック必須なので
@@ -539,8 +540,7 @@ GVL を手放して実行し、pool は使わない — §12.7。)
    —— `class MyThread < Thread; def initialize(*a); ...; super; end; end` は CRuby と
    一致する。
 3. `Thread#priority` は保存のみ(スケジューリングに影響しない)。`native_thread_id` は
-   実 tid ではなくオブジェクト単位トークン。`ThreadGroup` / `fork` との相互作用は
-   未実装。`Thread.ignore_deadlock` は両モデルで検出器を止める(§12.4)。
+   実カーネル tid(green では全員同じ)。`ThreadGroup` との相互作用は未実装。`Thread.ignore_deadlock` は両モデルで検出器を止める(§12.4)。
 4. (green)ネイティブオフロード(§9)の往復は、ワーカープール化後も 40µs 前後ある
    (park/wake の往復そのもの)。1:1 モデルには往復がない(§12.7)。`sqlite3_step` のように**行単位で呼ばれる**関数は
    依然オフロードできず、busy_timeout 待ちは他の green thread を止める。これを
@@ -674,9 +674,19 @@ dead になったカーネルスレッドを `join` してから戻る — イ�
   だけ** — main が走っているときは main の executor はコレクタ自身のルートで、
   `Executor::init` の途中で publish した後に移動した古いポインタかもしれない)。
   JIT コードとの関係は §12.9。
-- `fork`: 子では fork したスレッドだけが残り **main になる**(`s.main = cur`)。
-  `Gvl::reset_after_fork`、wake パイプの作り直し(fd テーブル共有のため)、
-  ブロックしていたシグナルの解除。
+- `fork`: `fork::prepare` が GVL の状態ロックを fork をまたいで保持する
+  (`Gvl::prepare_fork`)。fork の瞬間に別のカーネルスレッドが `acquire` / `release`
+  の中でそのロックを握っていると、そのスレッドのいない子は最初の `state.lock()` で
+  永久に止まるので、その瞬間を作らない。子はそのガード経由で「登録 1、待機者なし、
+  fork したスレッドが保持」にリセットする(`GvlForkGuard::reset_child`)。子では
+  fork したスレッドだけが残り **main になる**(`s.main = cur`)。他のスレッドは
+  dead になり `Thread.list` と実行キューからも消える(両モデル)。wake パイプの
+  作り直し(fd テーブル共有のため)、ブロックしていたシグナルの解除、
+  `native_thread_id` の更新(新しいプロセスなので tid が変わる)。
+- プロセス終了の順序は CRuby と同じで両モデル共通: `at_exit` ハンドラ →
+  `terminate_all`(残りスレッドを kill し ensure を走らせ、1:1 ではカーネルスレッドを
+  join)→ `ObjectSpace` の finalizer(`Executor::run_at_exit_handlers` /
+  `run_finalizers`)。
 - ブロッキング IO は §7 の経路(fd 待ちを `wait_fds` で park)をそのまま使う。
   park が GVL を手放すので、fd 待ちの間は他のスレッドが走る。
   `has_other_live_threads` が偽なら従来どおり本当にブロックする。fd で待てない

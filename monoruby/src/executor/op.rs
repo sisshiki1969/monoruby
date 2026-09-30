@@ -817,13 +817,13 @@ pub(crate) fn cmp_teq_values_bool(
 }
 
 impl Executor {
-    /// Run `Kernel#at_exit` handlers (LIFO) and `ObjectSpace` finalizers
-    /// at program termination. Invoked once from `Globals::run` after the
-    /// script body finishes, regardless of how it finished.
+    /// Run the `Kernel#at_exit` handlers (LIFO) at program termination.
+    /// Invoked once from `Globals::run` after the script body finishes,
+    /// regardless of how it finished, and before the other threads are
+    /// killed; [`Self::run_finalizers`] follows once they are gone.
     ///
     /// Each handler is dispatched via `#call`, matching CRuby: at_exit
-    /// blocks are Procs, finalizers may be any callable (Proc, Method, or
-    /// an object with `call`). Finalizers receive the object's id.
+    /// blocks are Procs.
     ///
     /// Errors raised inside a handler do not abort the remaining ones,
     /// but they do affect the process exit status, which is what the
@@ -836,14 +836,14 @@ impl Executor {
     ///   exposed as `$!` to the handlers that run after it, and makes
     ///   the process fail with status 1 (unless a `SystemExit` chose a
     ///   status explicitly).
-    pub(crate) fn run_exit_handlers(&mut self, globals: &mut Globals) -> Option<i32> {
+    pub(crate) fn run_at_exit_handlers(&mut self, globals: &mut Globals) -> Option<i32> {
         // The `Signal.trap(:EXIT)` handler runs before the at_exit
         // handlers (CRuby order). Pushing it last makes the LIFO pop
         // below run it first, with identical error semantics.
         if let Some(handler) = globals.exit_trap_handler.take() {
             globals.at_exit_handlers.push(handler);
         }
-        if globals.at_exit_handlers.is_empty() && globals.finalizers.is_empty() {
+        if globals.at_exit_handlers.is_empty() {
             return None;
         }
         let call = IdentId::get_id("call");
@@ -866,16 +866,29 @@ impl Executor {
                 handler_failed = true;
             }
         }
-        // Finalizers run last. Draining the vector (rather than iterating a
-        // snapshot) lets a finalizer define further finalizers that then
-        // run too, matching CRuby.
+        status_override.or(if handler_failed { Some(1) } else { None })
+    }
+
+    /// Run the `ObjectSpace` finalizers at program termination — last,
+    /// after the `at_exit` handlers and after the other threads have
+    /// been killed (CRuby: `rb_objspace_call_finalizer`, after
+    /// `rb_thread_terminate_all`). Finalizers may be any callable (Proc,
+    /// Method, or an object with `call`) and receive the object's id; an
+    /// error is reported and does not affect the exit status.
+    pub(crate) fn run_finalizers(&mut self, globals: &mut Globals) {
+        if globals.finalizers.is_empty() {
+            return;
+        }
+        let call = IdentId::get_id("call");
+        // Draining the vector (rather than iterating a snapshot) lets a
+        // finalizer define further finalizers that then run too,
+        // matching CRuby.
         while let Some((obj, callable)) = globals.finalizers.pop() {
             let arg = Value::integer(obj.id() as i64);
             if let Err(err) = self.invoke_method_inner(globals, call, callable, &[arg], None, None) {
                 self.report_finalizer_error(globals, err);
             }
         }
-        status_override.or(if handler_failed { Some(1) } else { None })
     }
 
     /// Report (or swallow) an error escaping an `ObjectSpace` finalizer.

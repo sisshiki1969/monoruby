@@ -1435,7 +1435,7 @@ pub(super) fn signal_trap(
     let signo = trap_signo(vm, globals, lfp.arg(0))?;
     if signo == 0 {
         // The EXIT pseudo-signal: not a signal at all but an exit hook,
-        // run before the `at_exit` handlers (see run_exit_handlers).
+        // run before the `at_exit` handlers (see run_at_exit_handlers).
         use signal_table::SignalDisposition;
         let new_disp = if let Some(cmd) = lfp.try_arg(1) {
             command_disposition(cmd)?
@@ -2955,6 +2955,44 @@ mod new_api_tests {
             res = r.read
             Process.wait(pid)
             res
+            "#,
+        );
+    }
+
+    /// A fork while another thread keeps taking and releasing the GVL
+    /// (`Thread.pass`): the child must neither inherit that thread nor
+    /// a lock it held at the instant of the fork. The child is the
+    /// forking thread alone, as main, and can still run a thread and
+    /// park. A wedged child is killed after a deadline and counted as
+    /// a failure rather than hanging the test.
+    #[test]
+    fn fork_while_another_thread_contends_for_the_gvl() {
+        run_test_once(
+            r#"
+            t = Thread.new { loop { Thread.pass } }
+            ok = 0
+            20.times do
+              pid = fork do
+                fine = Thread.list.size == 1 && Thread.current == Thread.main
+                fine &&= Thread.new { 2 }.value == 2
+                sleep 0.001
+                exit!(fine ? 0 : 1)
+              end
+              deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+              st = nil
+              until (st = Process.wait2(pid, Process::WNOHANG))
+                if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+                  Process.kill(:KILL, pid)
+                  Process.wait(pid)
+                  break
+                end
+                sleep 0.001
+              end
+              ok += 1 if st && st[1].exitstatus == 0
+            end
+            t.kill
+            t.join
+            ok
             "#,
         );
     }

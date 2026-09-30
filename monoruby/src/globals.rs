@@ -1408,13 +1408,16 @@ impl Globals {
                 executor.set_errinfo(err_val);
             }
         }
-        let handler_status = executor.run_exit_handlers(self);
+        let handler_status = executor.run_at_exit_handlers(self);
         executor.set_errinfo(unwind_errinfo);
         // CRuby kills the remaining threads *after* the `at_exit`
         // handlers and *before* the uncaught-exception report: each
         // runs the ensure clauses of its current fiber chain (never of
         // suspended fibers) on the way out.
         crate::scheduler::terminate_all(&mut executor, self);
+        // And the `ObjectSpace` finalizers run last, once no other
+        // thread can still be using the objects.
+        executor.run_finalizers(self);
         crate::rvalue::io::flush_std_streams();
         #[cfg(any(feature = "profile", feature = "jit-log"))]
         self.show_stats();

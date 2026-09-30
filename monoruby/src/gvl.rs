@@ -61,6 +61,33 @@ pub(crate) struct Gvl {
     state: Mutex<State>,
 }
 
+/// The GVL's state, held across a `fork(2)` by the forking thread
+/// ([`Gvl::prepare_fork`]).
+pub(crate) struct GvlForkGuard {
+    state: std::sync::MutexGuard<'static, State>,
+    /// The forking thread's slot: the child's only thread, and its
+    /// holder.
+    survivor: Arc<Slot>,
+}
+
+impl GvlForkGuard {
+    /// The child's side: it has exactly one thread, the forking one,
+    /// and that thread holds the lock. Forget every other registrant
+    /// and waiter (their kernel threads do not exist here) and whatever
+    /// grant was pending on the survivor's slot, then release the state
+    /// on the thread that took it.
+    pub(crate) fn reset_child(self) {
+        let GvlForkGuard {
+            mut state,
+            survivor,
+        } = self;
+        state.held = true;
+        state.waiters.clear();
+        state.registered = 1;
+        *survivor.granted.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    }
+}
+
 impl Gvl {
     /// A lock already held by its creator, the `Vm`'s own thread, whose
     /// handle is returned with it.
@@ -114,16 +141,19 @@ impl Gvl {
         !self.state.lock().unwrap().waiters.is_empty()
     }
 
-    /// A `fork(2)` child has exactly one thread, the forking one, and
-    /// it holds the lock: forget every other registrant and waiter
-    /// (their kernel threads do not exist here). `th` is the survivor's
-    /// handle; whatever grant was pending on it is cleared too.
-    pub(crate) fn reset_after_fork(&self, th: &GvlThread) {
-        let mut st = self.state.lock().unwrap();
-        st.held = true;
-        st.waiters.clear();
-        st.registered = 1;
-        *th.slot.granted.lock().unwrap() = false;
+    /// Hold the lock's state across a `fork(2)`, on the forking thread
+    /// (part of `crate::fork::prepare`). Another kernel thread may be
+    /// inside `acquire` / `release` at the instant of the fork, holding
+    /// `state`; the child, where that thread does not exist, would then
+    /// block forever on its first `state.lock()`. Holding the state here
+    /// makes that instant impossible. The parent drops the guard as soon
+    /// as the fork returns; the child spends it on
+    /// [`GvlForkGuard::reset_child`].
+    pub(crate) fn prepare_fork(&'static self, th: &GvlThread) -> GvlForkGuard {
+        GvlForkGuard {
+            state: self.state.lock().unwrap_or_else(|e| e.into_inner()),
+            survivor: th.slot.clone(),
+        }
     }
 
     /// Take the lock, waiting FIFO behind earlier waiters.

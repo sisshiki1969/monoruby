@@ -456,13 +456,56 @@ pub(crate) fn fork_child_reset_threads(vm: &mut Executor) {
         return native::fork_child_reset_threads(cur);
     }
     SCHEDULER.with(|s| {
-        let threads = s.borrow().threads.clone();
+        let mut s = s.borrow_mut();
+        let threads = s.threads.clone();
         for mut t in threads {
             if Some(t) != cur {
                 t.as_thread_inner_mut().mark_dead_for_fork();
             }
         }
+        // Gone from `Thread.list` too, as a thread that finished is,
+        // and out of the run queues: nothing of the parent's is ever
+        // dispatched here.
+        s.threads.retain(|t| Some(*t) == cur);
+        s.ready.retain(|t| Some(*t) == cur);
+        s.sleepers.retain(|(_, t)| Some(*t) == cur);
+        s.io_waiters.retain(|(_, _, t)| Some(*t) == cur);
     });
+}
+
+/// The calling kernel thread's id as the OS reports it (`gettid(2)`;
+/// `pthread_threadid_np` on Darwin): what `Thread#native_thread_id`
+/// returns.
+pub(crate) fn current_kernel_tid() -> i64 {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: gettid(2) takes no arguments and cannot fail.
+        unsafe { libc::syscall(libc::SYS_gettid) as i64 }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut id: u64 = 0;
+        // SAFETY: pthread_self() is a valid thread; `id` is a valid out
+        // pointer for the call's duration.
+        unsafe { libc::pthread_threadid_np(libc::pthread_self(), &mut id) };
+        id as i64
+    }
+}
+
+/// `Thread#native_thread_id`: the kernel thread `thread` runs on, or
+/// `None` once it is dead. Green threads all run on the `Vm`'s own
+/// kernel thread, which is the calling one; a 1:1 thread reports the
+/// one it was started on (`None` until its body has been dispatched).
+pub(crate) fn native_thread_id(thread: Value) -> Option<i64> {
+    let inner = thread.as_thread_inner();
+    if inner.is_dead() {
+        return None;
+    }
+    if native::enabled() {
+        inner.native_tid
+    } else {
+        Some(current_kernel_tid())
+    }
 }
 
 /// Whether a live (not dead) thread with the given object id exists.
