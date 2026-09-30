@@ -58,6 +58,10 @@ fn find_ruby() -> Option<String> {
 }
 
 fn main() {
+    // `cfg(coverage)` is set by cargo-llvm-cov on an instrumented build
+    // (`executor::terminate_with_signal` flushes the profile under it);
+    // declare it so the unexpected-cfg lint knows it.
+    println!("cargo::rustc-check-cfg=cfg(coverage)");
     // The JIT is always compiled in (the `--no-jit` runtime flag disables it
     // at run time; there is no build-time switch). The front-end
     // (bytecode→TraceIR→AsmIR) and arch backends are selected purely by
