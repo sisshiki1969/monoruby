@@ -6024,4 +6024,86 @@ mod tests {
             "(srand(7); 200.times.map { Time.at(rand(2**34..2**37), Rational(rand(10**9), 3), :nsec).to_f }).sum",
         ]);
     }
+
+    /// `shift_whole_nanos` on each zone kind: an offset past `i64`
+    /// nanoseconds lands, and one past chrono's calendar (or past `i64`
+    /// seconds) is "out of Time range" rather than a chrono panic.
+    #[test]
+    fn shift_whole_nanos_range() {
+        use super::{TimeInner, Zone, shift_whole_nanos};
+        use chrono::{DateTime, FixedOffset, Utc};
+        let utc = DateTime::<Utc>::from_timestamp(1_700_000_000, 5).unwrap();
+        let fixed = utc.with_timezone(&FixedOffset::east_opt(9 * 3600).unwrap());
+        let times = [
+            TimeInner::Utc(utc),
+            TimeInner::Local(fixed, Zone::Fixed { exact: None }),
+            TimeInner::Local(
+                fixed,
+                Zone::System {
+                    name: None,
+                    dst: false,
+                },
+            ),
+        ];
+        let ns = 1_000_000_000i128;
+        for t in &times {
+            let later = shift_whole_nanos(t, (1i128 << 35) * ns).unwrap();
+            assert_eq!(later.year(), 3112);
+            let earlier = shift_whole_nanos(t, -(1i128 << 35) * ns - 7).unwrap();
+            assert_eq!(earlier.year(), 935);
+            assert_eq!(earlier.nanosecond(), 999_999_998);
+            // Past the calendar, past `Duration`, past `i64` seconds.
+            for whole in [
+                10i128.pow(13) * ns,
+                -(10i128.pow(13) * ns),
+                1i128 << 100,
+                -(1i128 << 120),
+            ] {
+                assert!(shift_whole_nanos(t, whole).is_err(), "{whole}");
+            }
+        }
+    }
+
+    /// The BigInt conversion answers what the i128 one does on every
+    /// branch: whole nanoseconds, a reduced denominator below `2^53`, and
+    /// the correctly rounded fallback past it.
+    #[test]
+    fn time_ratio_to_f64_big_matches_small() {
+        use super::{time_ratio_to_f64_big, time_ratio_to_f64_small};
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut cases: Vec<(i128, i128)> = vec![
+            (1_600_000_000_987_654_321, 1_000_000_000),
+            (-1, 3),
+            (1, 1 << 53),
+            (1, (1 << 53) + 1),
+            (1_700_000_000 * 3_i128.pow(35) + 1, 3_i128.pow(35)),
+        ];
+        for _ in 0..20_000 {
+            let secs = (next() % (1 << 36)) as i128 - (1 << 35);
+            let den = match next() % 4 {
+                0 => 1_000_000_000,
+                1 => (next() % 1_000_000 + 1) as i128 * 1_000_000_000,
+                2 => (next() % (1 << 40) + 1) as i128,
+                _ => (next() % (1 << 60) + 1) as i128,
+            };
+            let frac = (next() as i128).rem_euclid(den);
+            cases.push((secs * den + frac, den));
+        }
+        let mut checked = 0;
+        for (n, d) in cases {
+            let Some(f) = time_ratio_to_f64_small(n, d) else {
+                continue;
+            };
+            let g = time_ratio_to_f64_big(&num::BigInt::from(n), &num::BigInt::from(d));
+            assert_eq!(f.to_bits(), g.to_bits(), "{n} / {d}: {f} vs {g}");
+            checked += 1;
+        }
+        assert!(checked > 19_000, "only {checked} cases compared");
+    }
 }
