@@ -469,6 +469,10 @@ unsafe fn child_exec(spec: &ExecSpec) -> (u8, i32) {
                 libc::signal(sig, libc::SIG_DFL);
             }
         }
+        // ... and the signal mask: a non-main kernel thread of the 1:1
+        // model blocks the asynchronous signals, and the child would
+        // inherit that (`scheduler::command_for_child`).
+        crate::scheduler::reset_child_sigmask();
         if let Some(pg) = spec.pgroup
             && libc::setpgid(0, pg) != 0
         {

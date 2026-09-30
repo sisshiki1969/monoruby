@@ -139,6 +139,13 @@ pub(crate) enum ThreadState {
     Joining,
     /// Parked waiting for fd readiness (scheduler `io_waiters`).
     IoWaiting,
+    /// 1:1 model only: inside a GVL-less kernel wait
+    /// (`scheduler::without_gvl` — `flock`, a FIFO `open`, `waitpid`).
+    /// Sleeping as far as Ruby is concerned (`#status` "sleep",
+    /// `#stop?`), but not parked: there is no parker to wake, an
+    /// interrupt reaches it through `blocking_tid` (`interrupt_blocking`),
+    /// and it is never a deadlock.
+    Blocking,
     /// Terminated (body returned, raised, or was killed).
     Dead,
 }

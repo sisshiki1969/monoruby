@@ -3574,7 +3574,10 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // The child inherits our std fds; flush so our own pending output
     // precedes whatever it writes (CRuby orders them this way).
     crate::rvalue::io::flush_std_streams();
-    let mut child = match Command::new(&program).args(&args).spawn() {
+    let mut cmd = Command::new(&program);
+    cmd.args(&args);
+    crate::scheduler::command_for_child(&mut cmd);
+    let mut child = match cmd.spawn() {
         Ok(child) => child,
         // ENOEXEC (an executable file without a shebang that isn't a
         // binary): retry through `sh`, like execvp-era shells and CRuby.
@@ -3755,6 +3758,7 @@ fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             c
         }
     };
+    crate::scheduler::command_for_child(&mut builder);
     let child = builder
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -9129,6 +9133,25 @@ mod tests {
             "false.nil?",
             "[].nil?",
         ]);
+    }
+
+    #[test]
+    fn system_runs_a_script_without_a_shebang_through_sh() {
+        // An executable text file without a shebang fails `execve` with
+        // ENOEXEC and runs through /bin/sh instead (execvp's fallback).
+        // From a thread, so the child's signal mask is reset on that
+        // path too (`scheduler::command_for_child`).
+        run_test_once(
+            r#"
+            require 'tmpdir'
+            path = File.join(Dir.tmpdir, "mrb_noshebang_#{Process.pid}")
+            File.write(path, "exit 7\n")
+            File.chmod(0o755, path)
+            r = Thread.new { [system(path), $?.exitstatus, system(path, "a")] }.value
+            File.delete(path)
+            r
+            "#,
+        );
     }
 
     #[test]

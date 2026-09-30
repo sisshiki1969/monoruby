@@ -678,7 +678,10 @@ fn thread_status(vm: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                 Value::bool(false)
             }
         }
-        ThreadState::Sleeping | ThreadState::Joining | ThreadState::IoWaiting => {
+        ThreadState::Sleeping
+        | ThreadState::Joining
+        | ThreadState::IoWaiting
+        | ThreadState::Blocking => {
             // A killed thread parked inside its ensure clauses still
             // reports "sleep" (CRuby: the sleep state wins over
             // to_kill), and so does one whose kill is queued but not
@@ -791,6 +794,7 @@ fn thread_stop_p(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             | ThreadState::Sleeping
             | ThreadState::Joining
             | ThreadState::IoWaiting
+            | ThreadState::Blocking
     )))
 }
 
@@ -2636,6 +2640,68 @@ mod tests {
             end
             Process.wait(pid)
             [got, $?.exitstatus]
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_thread_blocked_in_a_kernel_wait_is_asleep() {
+        // A thread inside a GVL-less kernel wait (`flock`, a FIFO `open`)
+        // reports "sleep" / `stop?` like CRuby's blocking region, so a
+        // `Thread.pass while t.status != "sleep"` spin ends — and the
+        // kill still reaches it through the unblocking signal.
+        run_test_once(
+            r#"
+            require 'tmpdir'
+            path = File.join(Dir.tmpdir, "mrb_flock_status_#{Process.pid}")
+            f1 = File.open(path, "w")
+            f2 = File.open(path, "w")
+            f1.flock(File::LOCK_EX)
+            r = []
+            t = Thread.new { f2.flock(File::LOCK_EX); :locked }
+            Thread.pass while t.status != "sleep"
+            r << t.status << t.stop? << t.alive?
+            t.kill
+            t.join
+            r << t.status
+            fifo = File.join(Dir.tmpdir, "mrb_fifo_status_#{Process.pid}")
+            File.mkfifo(fifo)
+            t2 = Thread.new { File.open(fifo, "r") { |io| io.read } }
+            Thread.pass while t2.status != "sleep"
+            r << t2.status << t2.stop?
+            t2.kill
+            t2.join
+            f1.flock(File::LOCK_UN)
+            f1.close; f2.close; File.delete(path); File.delete(fifo)
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_child_spawned_from_a_thread_starts_with_an_empty_signal_mask() {
+        // A non-main kernel thread of the 1:1 model blocks the
+        // asynchronous signals; a child it spawns must not inherit that
+        // mask (CRuby's children start with an empty one). `sleep` keeps
+        // whatever mask it is given, so with the mask inherited the TERM
+        // stays pending and it exits normally after its 3 seconds.
+        run_test_once(
+            r#"
+            Thread.new do
+              r = []
+              pid = Process.spawn("sleep", "3")
+              sleep 0.1
+              Process.kill(:TERM, pid)
+              Process.wait(pid)
+              r << $?.signaled? << $?.termsig
+              IO.popen(["sleep", "3"]) do |io|
+                sleep 0.1
+                Process.kill(:TERM, io.pid)
+                io.read
+              end
+              r << $?.signaled? << $?.termsig
+              r
+            end.value
             "#,
         );
     }

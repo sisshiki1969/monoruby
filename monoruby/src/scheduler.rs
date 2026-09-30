@@ -1151,6 +1151,42 @@ pub(crate) fn without_gvl<R>(vm: &mut Executor, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// A child process inherits the signal mask of the kernel thread that
+/// forks it. In the 1:1 model every non-main kernel thread blocks the
+/// asynchronous signals (`native::block_async_signals`, so the kernel
+/// delivers them to main), and a `system` / backtick / `IO.popen` from
+/// such a Ruby thread would hand the child a mask in which `SIGTERM`
+/// stays pending forever (ruby/spec's `Process.kill` fixture traps it
+/// from a thread-spawned child). Have the child start with an empty
+/// mask, as CRuby's do. Only needed off main, whose mask is empty, so
+/// the `posix_spawn` fast path stays available there.
+pub(crate) fn command_for_child(cmd: &mut std::process::Command) {
+    if native::enabled() && !is_current_main() {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: `reset_child_sigmask` is async-signal-safe (no
+        // allocation, two libc calls) and touches no Rust state.
+        unsafe {
+            cmd.pre_exec(|| {
+                reset_child_sigmask();
+                // The child `execve`s next, taking these lines with it.
+                crate::fork::flush_coverage_profile();
+                Ok(())
+            });
+        }
+    }
+}
+
+/// Empty the calling thread's signal mask — in a forked child before
+/// `execve`, or in the process about to `exec`. Async-signal-safe.
+pub(crate) fn reset_child_sigmask() {
+    // SAFETY: a signal set built on the stack and applied to this thread.
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::pthread_sigmask(libc::SIG_SETMASK, &set, std::ptr::null_mut());
+    }
+}
+
 /// Park the current thread until `fd` reports one of `events` (or the
 /// deadline passes, or another thread wakes/interrupts it). The caller
 /// re-checks readiness afterwards — spurious wakeups are fine.

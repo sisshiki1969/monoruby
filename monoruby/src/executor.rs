@@ -124,20 +124,9 @@ pub fn install_panic_hook() {
 /// and only runs if the kernel declined to terminate us (defensive).
 pub fn terminate_with_signal(signo: i32) -> ! {
     // A process the kernel kills never reaches the profiling runtime's
-    // exit hook, so an instrumented build (cargo-llvm-cov sets
-    // `--cfg coverage`) writes its profile here: the path that leads to
-    // this signal death is otherwise invisible to coverage.
-    #[cfg(coverage)]
-    {
-        unsafe extern "C" {
-            fn __llvm_profile_write_file() -> libc::c_int;
-        }
-        // SAFETY: provided by the profiling runtime every instrumented
-        // build links; it only writes the profile of this process.
-        unsafe {
-            __llvm_profile_write_file();
-        }
-    }
+    // exit hook: the path that leads to this signal death is otherwise
+    // invisible to coverage.
+    crate::fork::flush_coverage_profile();
     unsafe {
         // SAFETY: plain POSIX calls on this process; `signo` came from the
         // signal table / a validated SignalException, so it is a real signal.
