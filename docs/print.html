@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c1100ddb.js";
+            window.path_to_searchindex_js = "searchindex-1cac4695.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -9712,6 +9712,13 @@ remembered/armed の区別はオブジェクトと寿命を共にし、死んだ
 <a href="#green-thread-スケジューラ-thread--fiber-の状態遷移図">scheduler_state_diagram.md</a> —
 Thread / Fiber の状態遷移図(mermaid + SVG)と遷移⇔実装対応表。</p>
 <h2 id="0-全体像"><a class="header" href="#0-全体像">0. 全体像</a></h2>
+<blockquote>
+<p><strong>2026-09-30 以降の既定は §12 の 1:1 モデル</strong>(Ruby <code>Thread</code> 1 つ = カーネル
+スレッド 1 つ、GVL で直列化)。本節〜§11 が述べる M:1 グリーンスレッドは
+<code>MONORUBY_THREAD_MODEL=green</code> で選べる旧モデルで、以下の記述はその前提で読む。
+Fiber、非ブロッキング IO、プリエンプション(§8)、GC 統合(§6)の説明は
+両モデルに共通する。</p>
+</blockquote>
 <ul>
 <li><strong>M:1 グリーンスレッド</strong>。Ruby の <code>Thread</code> は 1 本の OS スレッド上で多重化される。
 真の並列性はない(GVL 型でもない — そもそも VM を回す OS スレッドが 1 本)。
@@ -10253,10 +10260,11 @@ thread+IO の各パターン、IO.select エッジ、fiber-local / thread-variab
 かつてスペックランナーをハングさせた <code>core/io/copy_stream_spec.rb</code> と
 <code>core/io/select_spec.rb</code> は完走・全パスする。</li>
 </ul>
-<h2 id="12-11-モデルmonoruby_thread_modelnative-schedulernativers"><a class="header" href="#12-11-モデルmonoruby_thread_modelnative-schedulernativers">12. 1:1 モデル(<code>MONORUBY_THREAD_MODEL=native</code>, <code>scheduler/native.rs</code>)</a></h2>
+<h2 id="12-11-モデル既定schedulernativers"><a class="header" href="#12-11-モデル既定schedulernativers">12. 1:1 モデル(既定、<code>scheduler/native.rs</code>)</a></h2>
 <p>M:1 から 1:1 への移行(<code>reports/thread_1to1_migration_plan_2026-09-29.md</code> の P2)。
-環境変数 <code>MONORUBY_THREAD_MODEL=native</code> で Ruby <code>Thread</code> 1 つにカーネルスレッド
-1 つを割り当てる。既定は引き続き green(§3)。両モードは同じバイナリに共存し、
+Ruby <code>Thread</code> 1 つにカーネルスレッド 1 つを割り当てる。P7(2026-09-30)で
+<strong>これが既定</strong>になり、環境変数 <code>MONORUBY_THREAD_MODEL=green</code> で旧 M:1 green
+(§3)を選べる(<code>native</code> は既定を明示するだけ)。両モードは同じバイナリに共存し、
 <code>scheduler.rs</code> の各エントリポイント(<code>spawn</code> / <code>sleep</code> / <code>pass</code> / <code>join</code> /
 <code>wait_fds</code> / <code>terminate_all</code> / <code>fork_child_reset_threads</code>、および wake の分岐)が
 先頭で <code>native::enabled()</code> を見て分岐する。</p>
@@ -10381,14 +10389,14 @@ park が GVL を手放すので、fd 待ちの間は他のスレッドが走る�
 TLS になり、swap は不要。</li>
 </ul>
 <h3 id="126-テスト"><a class="header" href="#126-テスト">12.6 テスト</a></h3>
-<p><code>cargo test --lib</code> は green(既定)と <code>MONORUBY_THREAD_MODEL=native</code> の両方で
-全件通る。CI(<code>bin/test</code>)は通常の nextest に続けて、スレッドに関わるユニット
-テスト(<code>builtins::{thread,socket,process,io,fiber}</code> / <code>gvl</code> / <code>vm</code> / <code>fork</code>、
-約 700 件・30 秒程度。<code>file</code> / <code>fiddle</code> は flock / FFI のカーネル待ちのため)を
-<code>MONORUBY_THREAD_MODEL=native</code> でもう一度走らせ、
-両方のプロファイルを 1 つのカバレッジレポートに合算する。native モードで
-しか通らない経路(<code>scheduler/native.rs</code>、GVL の競合経路)はこの 2 回目の
-実行で計測される。</p>
+<p><code>cargo test --lib</code> は native(既定)と <code>MONORUBY_THREAD_MODEL=green</code> の両方で
+全件通る。CI(<code>bin/test</code>)は通常の nextest(native)に続けて、スレッドに関わる
+ユニットテスト(<code>builtins::{thread,socket,process,io,file,fiber,fiddle}</code> /
+<code>gvl</code> / <code>vm</code> / <code>fork</code>、約 700 件・30 秒程度。<code>file</code> / <code>fiddle</code> は flock / FFI の
+カーネル待ちのため)を <code>MONORUBY_THREAD_MODEL=green</code> でもう一度走らせ、
+両方のプロファイルを 1 つのカバレッジレポートに合算する。green でしか通らない
+経路(<code>scheduler.rs</code> のイベントループ、<code>scheduler_run</code>、<code>Parker</code> を使わない
+park)はこの 2 回目の実行で計測される。</p>
 <h3 id="127-gvl-を手放す区間schedulerwithout_gvlp3"><a class="header" href="#127-gvl-を手放す区間schedulerwithout_gvlp3">12.7 GVL を手放す区間(<code>scheduler::without_gvl</code>、P3)</a></h3>
 <p>fd で待てないカーネル待ち — <code>flock</code> / FIFO の <code>open</code> / <code>fcntl(F_SETLKW)</code> /
 <code>waitpid</code> / <code>getaddrinfo</code> / <code>blocking: true</code> の FFI 呼び出し / 拡張の
@@ -10485,7 +10493,7 @@ entry 巻き戻し、salvage のバージョン語の書き換え)手放した�
 する。green も同じ穴を持っていたので両モデル共通の修正。詳細は
 <code>doc/chain_deopt.md</code> §10.1。</li>
 </ul>
-<p>これらは <code>MONORUBY_THREAD_MODEL=native</code> の <code>cargo test --lib</code>(§12.6)と、
+<p>これらは <code>cargo test --lib</code>(既定 = native、§12.6)と、
 <code>MONORUBY_PREEMPT_STRESS=1</code> を重ねた同じフィルタで検証する。gc-stress は
 手動ワークフロー(<code>gc-stress.yml</code>)で、native モードは同じ環境変数を足して回す。</p>
 <div style="break-before: page; page-break-before: always;"></div>
