@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1e0ffa63.js";
+            window.path_to_searchindex_js = "../searchindex-c1100ddb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -384,8 +384,9 @@ main なら <code>scheduler_run</code> を呼び、戻ったら <code>take_main_
 <li><code>#thread_variable_get</code> / <code>_set</code> / <code>#thread_variable?</code> / <code>#thread_variables</code>(<code>@thread_variables</code> に格納)</li>
 <li><code>#priority</code> / <code>#priority=</code>(-3..3 にクランプして <code>@priority</code> に保存するのみ。実際の
 スケジューリングには影響しない)</li>
-<li><code>#native_thread_id</code>(生存中は <code>object_id</code>、死後は <code>nil</code> を返す。実カーネル tid ではなく
-オブジェクトごとに一意なトークン)</li>
+<li><code>#native_thread_id</code>(走っているカーネルスレッドの id。Linux は <code>gettid(2)</code>、Darwin は
+<code>pthread_threadid_np</code>。死後は <code>nil</code>。green では全スレッドがインタプリタのカーネル
+スレッドを共有するので同じ id、1:1 では各スレッド固有)</li>
 <li><code>#report_on_exception</code>(インスタンスのみ)</li>
 <li><code>Thread.ignore_deadlock</code> / <code>=</code>(クラス変数に丸めるだけ。デッドロック検出器自体は止めない)</li>
 <li><code>Thread::Waiter</code>(<code>Process.detach</code> 用。native <code>Thread.new</code> はブロック必須なので
@@ -715,8 +716,7 @@ waiter で共有なので、未充足の waiter は再 park する。</li>
 —— <code>class MyThread &lt; Thread; def initialize(*a); ...; super; end; end</code> は CRuby と
 一致する。</li>
 <li><code>Thread#priority</code> は保存のみ(スケジューリングに影響しない)。<code>native_thread_id</code> は
-実 tid ではなくオブジェクト単位トークン。<code>ThreadGroup</code> / <code>fork</code> との相互作用は
-未実装。<code>Thread.ignore_deadlock</code> は両モデルで検出器を止める(§12.4)。</li>
+実カーネル tid(green では全員同じ)。<code>ThreadGroup</code> との相互作用は未実装。<code>Thread.ignore_deadlock</code> は両モデルで検出器を止める(§12.4)。</li>
 <li>(green)ネイティブオフロード(§9)の往復は、ワーカープール化後も 40µs 前後ある
 (park/wake の往復そのもの)。1:1 モデルには往復がない(§12.7)。<code>sqlite3_step</code> のように<strong>行単位で呼ばれる</strong>関数は
 依然オフロードできず、busy_timeout 待ちは他の green thread を止める。これを
@@ -799,7 +799,12 @@ GVL を取り、<code>Executor::invoke_proc</code> で本体ブロックを <str
 drain してから次の park に入るため、古い byte で空振りすることはない。
 <code>sleep</code> は <code>woken || deadline</code> まで park を繰り返し(EINTR は継続)、<code>join</code> は
 green と同じループ(flush → 割り込み配送 → dead 判定 → park)、<code>wait_fds</code> は
-1 回 park して呼び出し側の再チェックに任せる。<code>pass</code> は <code>Gvl::yield_now</code>。</p>
+1 回 park して呼び出し側の再チェックに任せる。<code>pass</code> は <code>Gvl::yield_now</code>: 状態
+ロックの下で先頭の待ち手にロックを渡す<strong>のと同時に</strong>自分を待ち行列の末尾に並べる
+(<code>release</code> → <code>acquire</code> の 2 段ではない)。2 段だと間に待ち行列が空になる瞬間があり、
+渡された側がそこで <code>Thread.pass</code> すると誰もいないと見て走り続ける — <code>Thread.pass</code>
+の ping-pong(と、待っている間に相手の compiled frame を evict する §12.9)は
+「譲った側が次の順番にいる」ことを前提にしている。</p>
 <p>fd 待ちには green に無い起床経路が 1 つ要る: 別スレッドがその fd を <code>close</code> した
 とき、green のポーラは <code>POLLNVAL</code> で即座に気付くが、<code>poll(2)</code> 中のカーネルスレッドは
 (カーネルが元のファイルを見続けるので)起きない。<code>FileDescriptor::drop</code> →
@@ -838,9 +843,26 @@ main の root executor を辿れる(<code>in_scheduler</code> は最初の publi
 だけ</strong> — main が走っているときは main の executor はコレクタ自身のルートで、
 <code>Executor::init</code> の途中で publish した後に移動した古いポインタかもしれない)。
 JIT コードとの関係は §12.9。</li>
-<li><code>fork</code>: 子では fork したスレッドだけが残り <strong>main になる</strong>(<code>s.main = cur</code>)。
-<code>Gvl::reset_after_fork</code>、wake パイプの作り直し(fd テーブル共有のため)、
-ブロックしていたシグナルの解除。</li>
+<li><code>fork</code>: <code>fork::prepare</code> が GVL の状態ロックを fork をまたいで保持する
+(<code>Gvl::prepare_fork</code>)。fork の瞬間に別のカーネルスレッドが <code>acquire</code> / <code>release</code>
+の中でそのロックを握っていると、そのスレッドのいない子は最初の <code>state.lock()</code> で
+永久に止まるので、その瞬間を作らない。子はそのガード経由で「登録 1、待機者なし、
+fork したスレッドが保持」にリセットする(<code>GvlForkGuard::reset_child</code>)。子では
+fork したスレッドだけが残り <strong>main になる</strong>(<code>s.main = cur</code>)。他のスレッドは
+dead になり <code>Thread.list</code> と実行キューからも消える(両モデル)。wake パイプの
+作り直し(fd テーブル共有のため)、ブロックしていたシグナルの解除、
+<code>native_thread_id</code> の更新(新しいプロセスなので tid が変わる)。main 以外の
+スレッドから fork しても同じで、そのスレッドが子の main になる(両モデル)。
+<code>fork { ... }</code> の子はブロックが終わったら(または例外で抜けたら)main スレッドの
+終了として扱い、下のプロセス終了シーケンスを通ってから exit する
+(<code>Globals::exit_forked_child</code>: at_exit → 未捕捉例外の報告 → finalizer →
+ストリーム flush。<code>exit</code> の status はそのまま、ハンドラ内の <code>exit</code> が優先、
+シグナル例外はそのシグナルで死ぬ)。以前は <code>std::process::exit</code> 直行で
+at_exit も finalizer も走らなかった。</li>
+<li>プロセス終了の順序は CRuby と同じで両モデル共通: <code>at_exit</code> ハンドラ →
+<code>terminate_all</code>(残りスレッドを kill し ensure を走らせ、1:1 ではカーネルスレッドを
+join)→ <code>ObjectSpace</code> の finalizer(<code>Executor::run_at_exit_handlers</code> /
+<code>run_finalizers</code>)。</li>
 <li>ブロッキング IO は §7 の経路(fd 待ちを <code>wait_fds</code> で park)をそのまま使う。
 park が GVL を手放すので、fd 待ちの間は他のスレッドが走る。
 <code>has_other_live_threads</code> が偽なら従来どおり本当にブロックする。fd で待てない
