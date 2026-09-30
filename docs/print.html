@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1cac4695.js";
+            window.path_to_searchindex_js = "searchindex-c9ae765d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -10411,7 +10411,20 @@ raw fd・整数・自前バッファのみ)。GVL 側の手続きは park と同
 <code>resume_exec</code>(<code>Thread#backtrace</code> 用)、main なら <code>publish_main_exec</code>
 (他スレッドが起こす GC が main のルートを辿るため)、そして
 <code>ThreadInner::blocking_tid</code>(自分の <code>pthread_self</code>)を立ててから
-<code>release()</code> → <code>f()</code> → <code>acquire()</code> → 両方を戻す。</li>
+<code>release()</code> → <code>f()</code> → <code>acquire()</code> → 両方を戻す。区間中の <code>state</code> は
+<code>ThreadState::Blocking</code>: Ruby からは眠っている(<code>#status</code> “sleep” /
+<code>#stop?</code> true。CRuby の blocking region が <code>THREAD_STOPPED</code> になるのと同じで、
+spec は <code>Thread.pass while t.status != "sleep"</code> で待つ)が、park では
+ないので <code>wake_parked</code> は触らず(割り込みは下の ubf 経路)、
+<code>check_deadlock</code> にも数えない。</li>
+<li><strong>子プロセスのシグナルマスク</strong>: 非 main のカーネルスレッドは
+<code>block_async_signals</code> でほぼ全シグナルをブロックしており、そのスレッドから
+fork した子はそのマスクを継承する(<code>SIGTERM</code> が永遠に保留 — ruby/spec の
+<code>Process.kill</code> fixture がまさにこれ)。<code>system</code> / バッククォート /
+<code>IO.popen</code>(<code>std::process::Command</code>)は <code>scheduler::command_for_child</code> の
+<code>pre_exec</code> で、<code>Process.spawn</code> / <code>exec</code>(<code>spawn::child_exec</code>)は
+<code>reset_child_sigmask</code> で、子のマスクを空にしてから <code>execve</code> する。
+<code>Process.fork</code> の子は fork 直後に forker が main になる際に全解除する(§12.5)。</li>
 <li><strong>割り込み(ubf)</strong>: <code>Thread#kill</code> / <code>#raise</code> の相手が park 中でなく
 <code>blocking_tid</code> を持っていれば、<code>native::interrupt_blocking</code> が
 <code>pthread_kill(tid, SIGVTALRM)</code> を送る。ハンドラは空(<code>ubf_handler</code>、
