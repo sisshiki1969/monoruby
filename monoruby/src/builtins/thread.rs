@@ -2338,4 +2338,71 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn thread_killed_or_raised_before_it_starts() {
+        // A kill / raise queued on a thread whose body has not run yet
+        // decides how the thread dies (FIFO, as dispatch would); under the
+        // 1:1 model the spawner still holds the GVL when it queues them.
+        run_test_once(
+            r#"
+            r = []
+            t = Thread.new { sleep }
+            t.kill
+            t.join
+            r << t.status << t.alive?
+            t2 = Thread.new { sleep }
+            t2.raise(ArgumentError, "before start")
+            begin
+              t2.join
+            rescue ArgumentError => e
+              r << e.message
+            end
+            r << t2.status
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn threads_left_running_are_killed_at_exit() {
+        // The program ends with one thread parked forever and one that
+        // already finished: `terminate_all` kills the first (its ensure
+        // clause runs) and reaps the second.
+        run_test_once(
+            r#"
+            done = Thread.new { 1 }
+            done.join
+            t = Thread.new { begin; sleep; ensure; $ensured = true; end }
+            Thread.pass until t.stop?
+            [done.value, t.status]
+            "#,
+        );
+    }
+
+    #[test]
+    fn deadlock_detected_by_main() {
+        // Main parks forever while the only other thread is already parked
+        // forever: main's own park entry reports the deadlock.
+        run_test_error(
+            r#"
+            t = Thread.new { sleep }
+            Thread.pass until t.stop?
+            t.join
+            "#,
+        );
+    }
+
+    #[test]
+    fn deadlock_detected_by_a_non_main_thread() {
+        // Main parks first, then the other thread parks forever: that
+        // thread finds every thread parked and raises the fatal error
+        // into main.
+        run_test_error(
+            r#"
+            Thread.new { sleep }
+            sleep
+            "#,
+        );
+    }
 }
