@@ -629,7 +629,12 @@ park(cur, state, fds, deadline):        // GVL を持って呼ぶ
 drain してから次の park に入るため、古い byte で空振りすることはない。
 `sleep` は `woken || deadline` まで park を繰り返し(EINTR は継続)、`join` は
 green と同じループ(flush → 割り込み配送 → dead 判定 → park)、`wait_fds` は
-1 回 park して呼び出し側の再チェックに任せる。`pass` は `Gvl::yield_now`。
+1 回 park して呼び出し側の再チェックに任せる。`pass` は `Gvl::yield_now`: 状態
+ロックの下で先頭の待ち手にロックを渡す**のと同時に**自分を待ち行列の末尾に並べる
+(`release` → `acquire` の 2 段ではない)。2 段だと間に待ち行列が空になる瞬間があり、
+渡された側がそこで `Thread.pass` すると誰もいないと見て走り続ける — `Thread.pass`
+の ping-pong(と、待っている間に相手の compiled frame を evict する §12.9)は
+「譲った側が次の順番にいる」ことを前提にしている。
 
 fd 待ちには green に無い起床経路が 1 つ要る: 別スレッドがその fd を `close` した
 とき、green のポーラは `POLLNVAL` で即座に気付くが、`poll(2)` 中のカーネルスレッドは

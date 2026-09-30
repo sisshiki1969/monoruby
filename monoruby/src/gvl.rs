@@ -196,12 +196,34 @@ impl Gvl {
     /// Let a waiter run, if there is one: hand the lock to the oldest
     /// waiter and rejoin the queue at the back. With no waiter this is
     /// a single lock-and-look and the caller keeps the lock.
+    ///
+    /// The handoff and the requeue are one step under the state lock,
+    /// not a `release` followed by an `acquire`: in between those the
+    /// queue would be empty, and the thread just handed the lock could
+    /// reach its own `yield_now` before the yielder was back in line,
+    /// find nobody waiting and keep running. `Thread.pass` ping-pong
+    /// (and everything built on it, such as the eviction of another
+    /// thread's compiled frames while it waits here) relies on the
+    /// yielder being the next in line the moment the other side runs.
     pub(crate) fn yield_now(&self, th: &GvlThread) {
-        let has_waiter = !self.state.lock().unwrap().waiters.is_empty();
-        if has_waiter {
-            self.release(th);
-            self.acquire(th);
+        let next = {
+            let mut st = self.state.lock().unwrap();
+            debug_assert!(st.held);
+            let Some(next) = st.waiters.pop_front() else {
+                return;
+            };
+            *th.slot.granted.lock().unwrap() = false;
+            st.waiters.push_back(th.slot.clone());
+            next
+        };
+        *next.granted.lock().unwrap() = true;
+        next.wake.notify_one();
+        let mut granted = th.slot.granted.lock().unwrap();
+        while !*granted {
+            granted = th.slot.wake.wait(granted).unwrap();
         }
+        drop(granted);
+        self.on_acquired(th);
     }
 
     /// Run `f` without the lock: the blocking region. `f` must not
@@ -363,5 +385,39 @@ mod tests {
         order.lock().unwrap().push("main again");
         other.join().unwrap();
         assert_eq!(*order.lock().unwrap(), vec!["other", "main again"]);
+    }
+
+    /// A yielder is back in the queue by the time the thread it handed
+    /// the lock to runs, so two threads that only ever `yield_now` to
+    /// each other alternate strictly: neither side ever finds the queue
+    /// empty and keeps the lock.
+    #[test]
+    fn a_yielder_is_queued_before_the_next_holder_runs() {
+        const ROUNDS: usize = 200;
+        let (gvl, main) = shared();
+        let other = {
+            let gvl = gvl.clone();
+            let th = gvl.register();
+            thread::spawn(move || {
+                gvl.acquire(&th);
+                for _ in 0..ROUNDS {
+                    assert!(gvl.has_waiter(), "the yielder must already be in line");
+                    gvl.yield_now(&th);
+                }
+                gvl.release(&th);
+                gvl.unregister(th);
+            })
+        };
+        wait_for_waiters(&gvl, 1);
+        for _ in 0..ROUNDS {
+            gvl.yield_now(&main);
+            // Handed back by the other side's `yield_now`, so it is the
+            // one in line now.
+            assert!(gvl.has_waiter());
+        }
+        gvl.release(&main);
+        other.join().unwrap();
+        gvl.acquire(&main);
+        assert_eq!(gvl.registered(), 1);
     }
 }
