@@ -1627,6 +1627,53 @@ fn bigint_ratio_to_f64(num: &num::BigInt, den: &num::BigInt) -> f64 {
     f * (2f64).powi(exp)
 }
 
+/// An exact number of seconds `num / den` (`den > 0`) as the Float
+/// `Time#to_f` and `Time#-` answer, the way CRuby's
+/// `rb_time_unmagnify_to_float` makes it (#1657).
+///
+/// CRuby keeps a time as nanoseconds. When that is a whole number it
+/// converts the nanoseconds to a double and divides by `1e9` — two
+/// roundings, which can land an ulp away from the correctly rounded
+/// quotient (`Time.at(1_600_000_000, 987_654_321, :nsec).to_f` is
+/// `1600000000.9876544`, not `...9876542`). Only a sub-nanosecond value
+/// is a Rational there, and that one goes through `Rational#to_f`, whose
+/// `rb_int_fdiv_double` likewise divides the reduced numerator and
+/// denominator as two doubles while the denominator is below `2^53`.
+/// Past that it switches to a truncating long division
+/// (`big_fdiv_int`), for which the correctly rounded
+/// [`bigint_ratio_to_f64`] stands in.
+fn time_ratio_to_f64_small(num: i128, den: i128) -> Option<f64> {
+    let ns = num.checked_mul(NANOS_I128)?;
+    if ns % den == 0 {
+        return Some((ns / den) as f64 / 1e9);
+    }
+    let g = gcd_u128(num.unsigned_abs(), den as u128) as i128;
+    let (num, den) = (num / g, den / g);
+    if den < 1 << 53 {
+        return Some(num as f64 / den as f64);
+    }
+    small_ratio_to_f64(num, den)
+}
+
+/// [`time_ratio_to_f64_small`] for BigInt parts.
+fn time_ratio_to_f64_big(num: &num::BigInt, den: &num::BigInt) -> f64 {
+    use num::{Integer, Zero};
+    let to_f = |b: &num::BigInt| b.to_f64().unwrap_or(f64::NAN);
+    let (q, r) = (num * num::BigInt::from(NANOS_I128)).div_rem(den);
+    if r.is_zero() {
+        return to_f(&q) / 1e9;
+    }
+    let g = num.gcd(den);
+    let (num, den) = (num / &g, den / &g);
+    if den.bits() <= 53 && den != num::BigInt::from(1i64 << 53) {
+        let n = to_f(&num);
+        if n.is_finite() {
+            return n / to_f(&den);
+        }
+    }
+    bigint_ratio_to_f64(&num, &den)
+}
+
 /// A `Time`'s exact instant in seconds since the epoch, as
 /// `(numerator, denominator)` with `denominator > 0`.
 fn exact_instant_parts(globals: &Globals, time: Value) -> (num::BigInt, num::BigInt) {
@@ -3900,12 +3947,12 @@ fn to_i(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn to_f(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     if let Some((num, den)) = exact_instant_small(globals, lfp.self_val())
-        && let Some(f) = small_ratio_to_f64(num, den)
+        && let Some(f) = time_ratio_to_f64_small(num, den)
     {
         return Ok(Value::float(f));
     }
     let (num, den) = exact_instant_parts(globals, lfp.self_val());
-    Ok(Value::float(bigint_ratio_to_f64(&num, &den)))
+    Ok(Value::float(time_ratio_to_f64_big(&num, &den)))
 }
 
 ///
@@ -3943,6 +3990,34 @@ fn utc_offset(
     }
 }
 
+/// `t` moved by `whole` nanoseconds, or "out of Time range" when the
+/// result falls outside chrono's calendar.
+///
+/// The offset is split into seconds and a nanosecond remainder rather
+/// than handed to `Duration::nanoseconds`, whose `i64` runs out at about
+/// 292 years — far short of where the calendar itself ends (#1656).
+fn shift_whole_nanos(t: &TimeInner, whole: i128) -> Result<TimeInner> {
+    let out_of_range = || MonorubyErr::argumenterr("out of Time range");
+    let secs = i64::try_from(whole.div_euclid(NANOS_I128)).map_err(|_| out_of_range())?;
+    let nanos = whole.rem_euclid(NANOS_I128) as i64;
+    let dur = Duration::try_seconds(secs)
+        .and_then(|d| d.checked_add(&Duration::nanoseconds(nanos)))
+        .ok_or_else(out_of_range)?;
+    Ok(match t {
+        // As in `impl Add<Duration> for TimeInner`: a system-zone time is
+        // localized again at the new instant.
+        TimeInner::Local(t, Zone::System { .. }) => localize(
+            t.checked_add_signed(dur)
+                .ok_or_else(out_of_range)?
+                .with_timezone(&Utc),
+        ),
+        TimeInner::Local(t, zone) => {
+            TimeInner::Local(t.checked_add_signed(dur).ok_or_else(out_of_range)?, *zone)
+        }
+        TimeInner::Utc(t) => TimeInner::Utc(t.checked_add_signed(dur).ok_or_else(out_of_range)?),
+    })
+}
+
 /// Advance `base` by an exact number of seconds, keeping whatever
 /// falls below the nanosecond the `DateTime` can hold.
 ///
@@ -3958,9 +4033,7 @@ fn shift_by_exact(
     sign: i8,
 ) -> Result<Value> {
     if let Some((whole, rem, total_den)) = shift_small(globals, base, delta, sign) {
-        let whole_ns =
-            i64::try_from(whole).map_err(|_| MonorubyErr::argumenterr("out of Time range"))?;
-        let inner = base.as_time().clone() + chrono::Duration::nanoseconds(whole_ns);
+        let inner = shift_whole_nanos(base.as_time(), whole)?;
         let derived = derived_time(globals, base, inner)?;
         if rem == 0 {
             clear_stale_subsec(globals, derived)?;
@@ -4000,10 +4073,10 @@ fn shift_by_exact(
     let total_num = &sign * &dn * &billion * &ex_den + &ex_num * &dd;
     let total_den = &dd * &ex_den;
     let (whole, rem) = total_num.div_mod_floor(&total_den);
-    let whole_ns = whole
-        .to_i64()
+    let whole = whole
+        .to_i128()
         .ok_or_else(|| MonorubyErr::argumenterr("out of Time range"))?;
-    let inner = base.as_time().clone() + chrono::Duration::nanoseconds(whole_ns);
+    let inner = shift_whole_nanos(base.as_time(), whole)?;
     let derived = derived_time(globals, base, inner)?;
     // The result's own sub-second value: its nanoseconds, plus the
     // remainder that did not reach one.
@@ -4038,7 +4111,7 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             .zip(rn.checked_mul(ld))
             .and_then(|(a, b)| a.checked_sub(b))
             && let Some(den) = ld.checked_mul(rd)
-            && let Some(f) = small_ratio_to_f64(num, den)
+            && let Some(f) = time_ratio_to_f64_small(num, den)
         {
             return Ok(Value::float(f));
         }
@@ -4046,7 +4119,7 @@ fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let (rn, rd) = exact_instant_parts(globals, rhs_rv);
         let num = &ln * &rd - &rn * &ld;
         let den = &ld * &rd;
-        Ok(Value::float(bigint_ratio_to_f64(&num, &den)))
+        Ok(Value::float(time_ratio_to_f64_big(&num, &den)))
     } else {
         // Time - numeric (seconds). The offset is coerced as an exact
         // number so Rational / Float / `#to_r` arguments keep
@@ -5919,6 +5992,36 @@ mod tests {
             "(a = Time.at(1_700_000_000.5); [a.to_f, a - Time.at(1_700_000_000), (a + Rational(1, 2)).to_i]).inspect",
             // A result whose sub-nanosecond denominator outgrows i128 once scaled.
             "(t = Time.at(Rational(1, 2**62)); u = t + Rational(1, 2**61 - 1); [u.subsec, u.to_r, u.nsec, (u - Rational(1, 2**61 - 1)) == t]).inspect",
+        ]);
+    }
+
+    /// #1656: an offset past `i64` nanoseconds (~292 years) is still well
+    /// inside the calendar, on both the i128 and the BigInt path.
+    #[test]
+    fn time_shift_beyond_i64_nanos() {
+        run_tests(&[
+            "(t = Time.at(1_700_000_000); [(t + 2**35).year, (t - 2**35).year, (t + Rational(2**35, 3)).year, (t + Rational(2**35, 3)).subsec, (t - 2**35).to_i]).inspect",
+            "(t = Time.at(1_700_000_000, 123_456_789, :nsec); [(t + 2**40).year, (t + 2**40).nsec, (t - 10**11).inspect, (t + 10**11 + Rational(1, 7)).to_r]).inspect",
+            "(t = Time.at(0, Rational(1, 3), :nanosecond); [(t + 2**36).subsec, (t - 2**36).to_r, (t + Rational(2**36, 2**62 - 1)).to_r]).inspect",
+            "[(Time.utc(2000) + 10**11).inspect, (Time.new(2000, 1, 1, 0, 0, 0, \"+09:00\") - 10**11).inspect, (Time.new(2000, 1, 1, 0, 0, 0, \"-05:00\") + 2**35).utc_offset]",
+            "(Time.at(0) + 2**35 + Rational(1, 2**70)).to_r.inspect",
+        ]);
+    }
+
+    /// #1657: whole-nanosecond times convert the way CRuby's
+    /// `rb_time_unmagnify_to_float` does (nanoseconds as a double, then
+    /// `/ 1e9`), and sub-nanosecond ones as `Rational#to_f` does while the
+    /// denominator is below `2^53`.
+    #[test]
+    fn time_to_f_matches_cruby_rounding() {
+        run_tests(&[
+            "(t = Time.at(1_600_000_000, 987_654_321, :nsec); [t.to_f, t - Time.at(0), t - Time.at(1, 5, :nsec), Time.at(0) - t]).inspect",
+            "[Time.at(-12_084_920_372, 592_322_000, :nsec).to_f, Time.at(2**37, 987_654_321, :nsec).to_f, Time.at(-2**34, 1, :nsec).to_f]",
+            "(srand(3); 200.times.map { Time.at(rand(-2**34..2**34), rand(10**9), :nsec).to_f }).sum",
+            "(srand(4); 200.times.map { Time.at(rand(-2**34..2**34), rand(10**9), :nsec) - Time.at(rand(2**31), rand(10**9), :nsec) }).sum",
+            "(srand(5); 200.times.map { Time.at(rand(2**31), Rational(rand(10**15), 10**6), :nsec).to_f }).sum",
+            "(srand(6); 200.times.map { Time.at(rand(2**31), Rational(rand(10**9), 7), :nsec) - Time.at(rand(2**31), Rational(rand(10**9), 13), :nsec) }).sum",
+            "(srand(7); 200.times.map { Time.at(rand(2**34..2**37), Rational(rand(10**9), 3), :nsec).to_f }).sum",
         ]);
     }
 }
