@@ -174,19 +174,22 @@ pub(crate) const GENERIC_SEND_CACHE_FID: i32 = std::mem::offset_of!(GenericSendC
 const GENERIC_IVAR_TABLE_BITS: u32 = 12;
 
 #[derive(Clone, Copy)]
-struct GenericIvarEntry {
+pub(crate) struct GenericIvarEntry {
     class: u32,
     name: u32,
     ivar: u32,
 }
 
-thread_local! {
-    static GENERIC_IVAR_TABLE: std::cell::RefCell<Box<[GenericIvarEntry]>> =
-        std::cell::RefCell::new(
-            vec![GenericIvarEntry { class: 0, name: 0, ivar: 0 }; 1 << GENERIC_IVAR_TABLE_BITS]
-                .into_boxed_slice(),
-        );
+impl GenericIvarEntry {
+    /// An empty table, sized `1 << GENERIC_IVAR_TABLE_BITS`.
+    pub(crate) fn new_table() -> Box<[GenericIvarEntry]> {
+        vec![GenericIvarEntry { class: 0, name: 0, ivar: 0 }; 1 << GENERIC_IVAR_TABLE_BITS]
+            .into_boxed_slice()
+    }
 }
+
+/// The table, one per interpreter.
+use crate::vm::GENERIC_IVAR_TABLE;
 
 fn generic_ivar_index(class: u32, name: u32) -> usize {
     let h = (class as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -1999,17 +2002,13 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_send_splat(
     }
 }
 
-thread_local! {
-    /// Cached `ClassId` of `Enumerator::ArithmeticSequence`. The
-    /// class is defined in Ruby (`monoruby/builtins/enumerable.rb`)
-    /// so its `ClassId` isn't known at compile time, but it's
-    /// stable across the lifetime of a `Globals` once the startup
-    /// files have loaded. We pay one constant lookup the first
-    /// time, then a plain `ClassId` compare from there.
-    static AS_CLASS_ID_CACHE: std::cell::Cell<Option<ClassId>> = const {
-        std::cell::Cell::new(None)
-    };
-}
+/// Cached `ClassId` of `Enumerator::ArithmeticSequence`. The
+/// class is defined in Ruby (`monoruby/builtins/enumerable.rb`)
+/// so its `ClassId` isn't known at compile time, but it's
+/// stable across the lifetime of a `Globals` once the startup
+/// files have loaded. We pay one constant lookup the first
+/// time, then a plain `ClassId` compare from there.
+use crate::vm::AS_CLASS_ID_CACHE;
 
 /// Fast check: is `v` an instance of `Enumerator::ArithmeticSequence`?
 /// Mirrors the way Array's `[]` dispatch needs to recognise an AS

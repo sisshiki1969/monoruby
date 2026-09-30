@@ -79,12 +79,8 @@ pub(crate) type FiberInvoker = extern "C" fn(
     &mut Executor,
 ) -> Option<Value>;
 
-thread_local! {
-    pub static CODEGEN: std::cell::RefCell<Codegen> = std::cell::RefCell::new(
-    {
-        Codegen::new()
-    });
-}
+/// The interpreter's code generator, one per [`crate::vm::Vm`].
+pub(crate) use crate::vm::CODEGEN;
 
 #[cfg(feature = "perf")]
 thread_local! {
@@ -1110,6 +1106,13 @@ pub(crate) struct VmHandlers {
     pub range_incl: CodePtr,   // 179
     pub range_excl: CodePtr,   // 180
     pub concat: CodePtr,       // 181
+}
+
+impl Codegen {
+    /// The address of this interpreter's poll word (see poll_flag.rs).
+    pub(crate) fn poll_flag_addr(&self) -> *mut u32 {
+        self.jit.get_label_address(&self.poll_flag).as_ptr() as *mut u32
+    }
 }
 
 impl Drop for Codegen {

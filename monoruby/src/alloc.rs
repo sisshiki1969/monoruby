@@ -1,6 +1,5 @@
 use crate::RValue;
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -364,17 +363,15 @@ pub(crate) fn set_gc_enabled(enabled: bool) {
     GC_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
-thread_local! {
-    /// Set by `GC.start` so the next safepoint collection is a Major
-    /// (full) one — running a collection inline from a builtin is
-    /// unsafe, so `GC.start` asks for one at the next poll via
-    /// [`request_gc`]. Thread-local like the allocator itself: each
-    /// test thread runs its own interpreter, and a process-global flag
-    /// let one thread's `GC.start` turn another thread's next
-    /// collection into a Major (observable through
-    /// `GC.stat(:major_gc_count)` — deterministic under `gc-stress`).
-    static GC_FORCE_MAJOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
+/// Set by `GC.start` so the next safepoint collection is a Major
+/// (full) one — running a collection inline from a builtin is
+/// unsafe, so `GC.start` asks for one at the next poll via
+/// [`request_gc`]. Per interpreter like the allocator itself: each
+/// test thread runs its own interpreter, and a process-global flag
+/// let one thread's `GC.start` turn another thread's next
+/// collection into a Major (observable through
+/// `GC.stat(:major_gc_count)` — deterministic under `gc-stress`).
+use crate::vm::GC_FORCE_MAJOR;
 
 /// Live bytes in tracked `malloc` buffers (`GC.stat`'s
 /// `malloc_increase_bytes`).
@@ -426,9 +423,8 @@ fn request_gc_if_malloc_over(total: usize) {
     crate::poll_flag::set_gc();
 }
 
-thread_local!(
-    pub static ALLOC: RefCell<Allocator<RValue>> = RefCell::new(Allocator::new());
-);
+/// The interpreter's heap, one per [`crate::vm::Vm`].
+pub(crate) use crate::vm::ALLOC;
 
 const SIZE: usize = 64;
 const GCBOX_SIZE: usize = std::mem::size_of::<RValue>();

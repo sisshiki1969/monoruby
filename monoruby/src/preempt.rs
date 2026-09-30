@@ -34,7 +34,6 @@
 //!   safepoint performs a switch attempt: the deterministic torture
 //!   mode, the scheduling analog of `gc-stress`.
 
-use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -52,21 +51,25 @@ struct Shared {
     flag_addr: Mutex<usize>,
 }
 
-struct State {
+pub(crate) struct State {
     shared: Arc<Shared>,
     timer: Option<std::thread::JoinHandle<()>>,
 }
 
-thread_local! {
-    /// Per interpreter OS thread, like `ALLOC` / `CODEGEN` / `SCHEDULER`.
-    static STATE: RefCell<State> = RefCell::new(State {
-        shared: Arc::new(Shared {
-            stop: AtomicBool::new(false),
-            flag_addr: Mutex::new(0),
-        }),
-        timer: None,
-    });
+impl State {
+    pub(crate) fn new() -> Self {
+        State {
+            shared: Arc::new(Shared {
+                stop: AtomicBool::new(false),
+                flag_addr: Mutex::new(0),
+            }),
+            timer: None,
+        }
+    }
 }
+
+/// Per interpreter, like `ALLOC` / `CODEGEN` / `SCHEDULER`.
+use crate::vm::PREEMPT_STATE as STATE;
 
 fn no_preempt() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -93,13 +96,16 @@ pub(crate) fn register_flag(addr: *mut u32) {
 /// `Codegen` is being dropped: detach the flag so the timer can never
 /// write into freed JIT memory, and let the timer wind down.
 pub(crate) fn codegen_dropped() {
-    // `try_with`: thread-local teardown order is unspecified; if `STATE`
-    // is already gone its timer got no flag to write through anyway.
-    let _ = STATE.try_with(|st| {
-        let st = st.borrow();
-        *st.shared.flag_addr.lock().unwrap() = 0;
-        st.shared.stop.store(true, Ordering::Relaxed);
-    });
+    // `try_with`: a `Codegen` dropped after its interpreter is gone
+    // (`Vm::drop` detached the flag itself, see [`detach`]) or on a
+    // thread that never had one has no timer to detach from.
+    let _ = STATE.try_with(|st| detach(&st.borrow()));
+}
+
+/// Zero the timer's copy of the poll-word address and ask it to stop.
+pub(crate) fn detach(st: &State) {
+    *st.shared.flag_addr.lock().unwrap() = 0;
+    st.shared.stop.store(true, Ordering::Relaxed);
 }
 
 /// The live (non-dead) thread count changed. The timer runs exactly

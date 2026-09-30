@@ -55,6 +55,7 @@ mod executor;
 mod ext;
 mod fork;
 mod globals;
+mod gvl;
 mod id_table;
 mod native_pool;
 pub mod parser;
@@ -64,6 +65,7 @@ mod ruby_probe;
 mod scheduler;
 pub mod tests;
 mod value;
+mod vm;
 mod watchdog;
 
 pub(crate) use crate::codegen::runtime::ProcData;

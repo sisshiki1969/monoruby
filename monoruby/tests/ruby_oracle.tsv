@@ -1947,6 +1947,7 @@
 611625ebb5923d755fa0f3c12f0fd31e	["llo there", "hello ", "hello there"]	__a = [];__a << ("hello there".byteslice(2..));__a << ("hello there".byteslice(.
 61163d4d16d5c6f9c2f86809889cf976	[[:v]]	r = []; Enumerator.new { |y| y.yield :v }.each { |*a| r << a }; r
 61306b90033822c29e1a8ad476312632	[["ISO-2022-JP", true], ["ISO2022-JP", true], ["ISO-2022-JP-2", true], ["ISO-2022-JP-KDDI", true], ["ISO-2022-JP-2004", true], ["CP50220", true], ["CP50221", true], ["UTF-7", true], ["UTF-8", true], ["Big5-HKSCS", true], ["Shift_JIS", true], ["Windows-31J", true], ["MacJapanese", true], ["EUC-JP", true], ["eucJP", true], ["eucJP-ms", true], ["euc-jp-ms", true], ["CP51932", true], ["stateless-ISO-2022-JP", true], ["stateless-ISO-2022-JP-KDDI", true], ["EUC-JIS-2004", true], ["EUC-JISX0213", true], ["NOPE", true]]	# The `UTF8-MAC` names and `CESU-8` still disagree: those\n         
+613940e3b9376e4421840b2fcb90226e	[false, false, "before start", nil]	r = []\n            t = Thread.new { sleep }\n            t.kill\n    
 6147a71cf82e509be18d0243463094f7	[[nil, 1], [[1, 2]]]	__a = [];__a << (\n            h = Hash.new(99)\n            h[:a] = 1\n           
 61660a919ed4f692e9e171857accf5f5	{amount: 9, unit: "m"}	M = Data.define(:amount, :unit)\nM.new(1, "m").with("amount" => 9).to_h
 616efb681caa4d7c28b46d9f16f821ab	[:args, :blk, :kw]	def m(*args, **kw, &blk); local_variables.sort; end; m(1)
@@ -4662,6 +4663,7 @@ e8d18691c8598b8b04ba50790971486a	[false, false, false, true, false, false, true,
 e8d378ac2de74d8f8a7585a1b80eb15c	[Errno::EINVAL, Errno::EBADF, 0, 0]	require 'fcntl'\n        DARWIN = RUBY_PLATFORM.include?("darwin")\n     
 e8e220b680848457259609fb951e4dbd	["ensure in f", "ensure in g", 42]	def g\n          begin\n            yield\n          ensure\n            $r
 e8f73c5ee545fe5b71d1c667d8bec38b	[3, [:gt, :gt]]	class Gt\n              attr_reader :calls\n              def initial
+e8f7c47b26a50223b7bea94c5ffbe7e6	[1, "sleep"]	done = Thread.new { 1 }\n            done.join\n            t = Threa
 e8fff433024d62ecc658476201cd2358	[0.0, 750.0]	def call_block\n          yield\n        end\n        def d4(n)\n          
 e90638f8f74350ab109848abe99b3ee9	:from_emit	def emit(tag); throw tag, :from_emit; end\n            catch(:x) { e
 e914ade5f0d260b48213150bbe2de79e	[[true, false], ["bar", "foo", "oof"], true, true, {"a" => 2}]	__a = [];__a << (s = "x"; h = { s => 1 }; [h.keys.first.frozen?, h.keys.first.eq

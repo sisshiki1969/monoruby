@@ -103,7 +103,9 @@ last_status:   $? / Process.last_status をスレッドごとに保持(#972)
 
 ## 3. スケジューラ
 
-`src/scheduler.rs`。OS スレッドごとの `thread_local!` シングルトン(`SCHEDULER: RefCell<Scheduler>`)。
+`src/scheduler.rs`。インタプリタ・インスタンス(`vm::Vm`、`src/vm.rs`)が持つシングルトン
+(`SCHEDULER: RefCell<Scheduler>`)。`Vm` は現状 OS スレッドごとに 1 つ遅延生成されるので、
+「OS スレッドごとのシングルトン」という性質は変わっていない。
 
 ```
 threads:          生存スレッドの registry(main 含む)— GC ルート
@@ -135,8 +137,9 @@ flushing_reports: flush_pending_reports の再入ラッチ
 スロットは 1 個で足りる(green thread は `scheduler_run` を呼ばないため、
 ループのインスタンスは常に高々 1 つ)。
 
-`SCHED_RSP` は **OS スレッドごと**(`thread_local` の `Cell<u64>`)。各 OS スレッドの
-`Codegen` が自分のスロットのアドレスをスタブに焼き込む(poll ワードと同じ構図)。
+`SCHED_RSP` は **インタプリタごと**(`vm::Vm` のフィールド `Cell<u64>`。`Vm` は `Box` 上に
+あるのでアドレスは動かない)。各インタプリタの `Codegen` が自分のスロットのアドレスを
+スタブに焼き込む(poll ワードと同じ構図)。
 テストハーネスのように複数のインタプリタが別 OS スレッドで並走しても衝突しない。
 
 ### 3.2 コンテキストスイッチのスタブ(×2 アーキ)
@@ -540,7 +543,8 @@ poll(2) で readiness を待てるもの(ソケット等)はスケジューラ�
    逃がす等)が要る。対象操作は flock / FIFO open / blocking 指定 FFI /
    `fcntl` の待つコマンドで、まだ増やす余地はある。
 5. 真の並列化は別の話(Ractor 型の分離が現アーキテクチャ —
-   OS スレッドごとの ALLOC / CODEGEN / SCHEDULER — と整合的)。
+   インタプリタ・インスタンスごとの ALLOC / CODEGEN / SCHEDULER — と整合的)。
+   1:1 モデル(§12)でも GVL の下で一度に走る Ruby スレッドは 1 つ。
 
 (解決済み: `Thread.handle_interrupt` マスキング、mid-operation の IO ブロック(§7 の
 would-block エミュレーション)、タイムスライス・プリエンプション(§8)、
@@ -559,3 +563,110 @@ would-block エミュレーション)、タイムスライス・プリエンプ�
   `core/conditionvariable` / `core/io` を実行。
   かつてスペックランナーをハングさせた `core/io/copy_stream_spec.rb` と
   `core/io/select_spec.rb` は完走・全パスする。
+
+## 12. 1:1 モデル(`MONORUBY_THREAD_MODEL=native`, `scheduler/native.rs`)
+
+M:1 から 1:1 への移行(`reports/thread_1to1_migration_plan_2026-09-29.md` の P2)。
+環境変数 `MONORUBY_THREAD_MODEL=native` で Ruby `Thread` 1 つにカーネルスレッド
+1 つを割り当てる。既定は引き続き green(§3)。両モードは同じバイナリに共存し、
+`scheduler.rs` の各エントリポイント(`spawn` / `sleep` / `pass` / `join` /
+`wait_fds` / `terminate_all` / `fork_child_reset_threads`、および wake の分岐)が
+先頭で `native::enabled()` を見て分岐する。
+
+### 12.1 何を共有し、何を置き換えるか
+
+- **共有**: §3 の registry(`threads` / `main` / `current` / `main_exec` /
+  `pending_reports`)は `Vm` の中にそのまま置く。GVL(`gvl.rs`)を持つスレッド
+  だけが触るので、`RefCell` のままで足りる。`current` は「GVL ホルダ」そのもので、
+  acquire のたびに書き換える(`native::acquire`)。`ready` / `sleepers` /
+  `io_waiters` / `machinery` / `SCHED_RSP` は使わない — GVL の FIFO 待ち行列が
+  ready キューの代わりになる。
+- **置き換え**: コンテキストスイッチ。green thread が `switch_to_scheduler` で
+  スケジューラループへ飛ぶところを、native thread は **GVL を手放して自分の
+  wake パイプ(`Parker`)+ 待ち fd を `poll(2)` する**(`native::park`)。
+  green で ready キューに積む操作(`wakeup` / joiner 起床 / 割り込み / deadline)
+  は、パイプへ 1 byte 書く `unpark` になる。
+
+### 12.2 スレッドの一生(`native::spawn` → `thread_main`)
+
+1. `Thread#initialize` → `scheduler::spawn` → `native::spawn`: GVL に `register`
+   し、`Parker` を作り、`std::thread::Builder`(8 MiB スタック)でカーネルスレッドを
+   起動。起動側は新スレッドが **GVL の待ち行列に並ぶまで** spin(`Gvl::is_waiting`)
+   してから戻る。続く `Thread.pass` = `Gvl::yield_now` が新スレッドへロックを
+   渡すので、green の「eager first slice」(生成直後に本体が最初の park まで走る)
+   と同じ順序になる。
+2. カーネルスレッド側(`thread_main`): `vm::adopt` で起動側の `Vm` を自分の
+   `CURRENT` にし、`poll_flag::adopt` でポールワードを共有し、非同期シグナルを
+   `pthread_sigmask` でブロック(→ プロセス向けシグナルはカーネルが main に配る)。
+   GVL を取り、`Executor::invoke_proc` で本体ブロックを **自分のカーネルスタック上で**
+   実行(`init_stack_limit` で main と同じ 1 MiB 予算、`enter_root_svar_scope`)。
+   `thread_invoker` などのスタック切替スタブは使わない。
+3. 終了: `set_terminated` → `finalize`(§2 と共通: 結果 / 例外の記録、joiner の
+   起床、registry からの除去、report_on_exception のキュー、main への転送)。
+   その後は Thread オブジェクトに触らず GVL を `release` → `unregister` →
+   `vm::unadopt`。
+
+### 12.3 park / unpark
+
+```
+park(cur, state, fds, deadline):        // GVL を持って呼ぶ
+  state / park_indefinite / resume_exec を記録; main なら main_exec を publish
+  fds も deadline も無い park なら deadlock 検査(12.4)
+  release(GVL)
+  poll([wake_fd] + fds, timeout)
+  acquire(GVL)                          // ここから書き手は居ない
+  wake パイプを drain; woken = (state が Runnable に変えられていた)
+  EINTR なら execute_gc(main の trap ハンドラ配送)
+```
+
+書き手(`wakeup` / `interrupt` / `finalize_common` / deadline)は必ず GVL を
+持っているので、park 側が GVL を取り直した時点でパイプに新しい byte は来ない。
+drain してから次の park に入るため、古い byte で空振りすることはない。
+`sleep` は `woken || deadline` まで park を繰り返し(EINTR は継続)、`join` は
+green と同じループ(flush → 割り込み配送 → dead 判定 → park)、`wait_fds` は
+1 回 park して呼び出し側の再チェックに任せる。`pass` は `Gvl::yield_now`。
+
+fd 待ちには green に無い起床経路が 1 つ要る: 別スレッドがその fd を `close` した
+とき、green のポーラは `POLLNVAL` で即座に気付くが、`poll(2)` 中のカーネルスレッドは
+(カーネルが元のファイルを見続けるので)起きない。`FileDescriptor::drop` →
+`scheduler::fd_closing(fd)` が、その fd を `park_fds` に持つ `IoWaiting` スレッドを
+unpark し、起きた側は stream が閉じているのを見て `IOError`(CRuby の
+`rb_thread_fd_close` 相当)。
+
+### 12.4 デッドロック検出と停止
+
+green はスケジューラループが「走れるものが無い」を検知したが、1:1 ではループが
+無いので **park の入口で** 判定する: 自分が deadline も fd も無い park に入ろうと
+していて、他の生存スレッドがすべて同じ状態(`park_indefinite`)なら
+`fatal "No live threads left. Deadlock?"`。main 自身なら即 `Err`、他スレッドなら
+main の `pending` に `Raise(fatal)` を積んで unpark する。
+
+`terminate_all`(プロセス終了時)は各スレッドに `Kill` を積んで unpark し、
+全員 dead になるまで GVL を渡し続け(待ち手が居なければ 1 ms 手放す、上限 10,000 回)、
+dead になったカーネルスレッドを `join` してから戻る — インタプリタ(`Vm`)より
+長生きするカーネルスレッドを残さないため。
+
+### 12.5 GC / fork / まだ green と同じもの
+
+- GC はホルダだけが起こす。他スレッドは全員 safepoint で park 中なので、
+  `Scheduler::mark` が `threads` 経由で各 `Executor` を、`main_exec` 経由で
+  main の root executor を辿れる(`in_scheduler` は最初の publish で常時 true)。
+- `fork`: 子では fork したスレッドだけが残り **main になる**(`s.main = cur`)。
+  `Gvl::reset_after_fork`、wake パイプの作り直し(fd テーブル共有のため)、
+  ブロックしていたシグナルの解除。
+- P2 の時点では、ブロッキング IO は §7 の経路(fd 待ちを `wait_fds` で park)を
+  そのまま使う。`has_other_live_threads` が偽なら従来どおり本当にブロックする。
+  GVL を手放してカーネルでブロックする(`Gvl::without`)のは P3。
+- シグナル配送・`Thread#backtrace`(park 中の `resume_exec`)・割り込みマスクの
+  意味論は green と同じコードを使う。`SCHED_CALL_DEPTH` はカーネルスレッドごとの
+  TLS になり、swap は不要。
+
+### 12.6 テスト
+
+`cargo test --lib` は green(既定)と `MONORUBY_THREAD_MODEL=native` の両方で
+全件通る。CI(`bin/test`)は通常の nextest に続けて、スレッドに関わるユニット
+テスト(`builtins::{thread,socket,process,io,fiber}` / `gvl` / `vm` / `fork`、
+約 350 件・20 秒程度)を `MONORUBY_THREAD_MODEL=native` でもう一度走らせ、
+両方のプロファイルを 1 つのカバレッジレポートに合算する。native モードで
+しか通らない経路(`scheduler/native.rs`、GVL の競合経路)はこの 2 回目の
+実行で計測される。
