@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-5a46026f.js";
+            window.path_to_searchindex_js = "../searchindex-1e0ffa63.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -833,7 +833,11 @@ dead になったカーネルスレッドを <code>join</code> してから戻�
 <ul>
 <li>GC はホルダだけが起こす。他スレッドは全員 safepoint で park 中なので、
 <code>Scheduler::mark</code> が <code>threads</code> 経由で各 <code>Executor</code> を、<code>main_exec</code> 経由で
-main の root executor を辿れる(<code>in_scheduler</code> は最初の publish で常時 true)。</li>
+main の root executor を辿れる(<code>in_scheduler</code> は最初の publish で常時 true。
+ただし 1:1 では <code>main_exec</code> を deref するのは <strong>main が current でないとき
+だけ</strong> — main が走っているときは main の executor はコレクタ自身のルートで、
+<code>Executor::init</code> の途中で publish した後に移動した古いポインタかもしれない)。
+JIT コードとの関係は §12.9。</li>
 <li><code>fork</code>: 子では fork したスレッドだけが残り <strong>main になる</strong>(<code>s.main = cur</code>)。
 <code>Gvl::reset_after_fork</code>、wake パイプの作り直し(fd テーブル共有のため)、
 ブロックしていたシグナルの解除。</li>
@@ -915,6 +919,44 @@ park 中(<code>wake_parked</code> → unpark)、<code>without_gvl</code> 中(<co
 <code>SIGVTALRM</code> → <code>EINTR</code>、§12.7)。<code>handle_interrupt</code> のマスクと
 <code>pending_interrupt?</code> は green と同じキュー(§6)。</li>
 </ul>
+<h3 id="129-jit-コードと-gvlp5"><a class="header" href="#129-jit-コードと-gvlp5">12.9 JIT コードと GVL(P5)</a></h3>
+<p>JIT コードの生成・パッチ・実行はすべて GVL の下で起きるので、複数のカーネル
+スレッドが同じコードページを同時に触ることはない。それでも 1 つの OS スレッドで
+回っていた green と違う点が 3 つある。</p>
+<ul>
+<li><strong>命令ストリームの可視性</strong>。ホルダがコードを書いて(コンパイル、BOP 再定義の
+entry 巻き戻し、salvage のバージョン語の書き換え)手放した後、次のホルダは
+別のコアでそれを実行する。書き手側のフラッシュ(aarch64 の <code>dc cvau</code> /
+<code>ic ivau</code>、x86 は不要)は monoasm が <code>set_executable</code> でやる。実行側の
+シリアライズは <code>Gvl::on_acquired</code> が <strong>取得のたびに無条件で</strong> 行う
+(<code>cpuid</code> / <code>isb</code>)。「コードが書かれたときだけ」の世代カウンタは、書き込み
+箇所を漏れなく列挙し続ける必要があり、しかも GVL のハンドオフ(futex の
+起床)の隣では 1 命令の差は測れないので、無条件にした。</li>
+<li><strong>macOS arm64 の <code>MAP_JIT</code></strong>。書き込み可否は <code>pthread_jit_write_protect_np</code>
+による <strong>スレッドごと</strong> の状態だが、monoasm はページ全体で 1 つの <code>writable</code>
+フラグを持つ。フラグが信用できるのは「ホルダでないスレッドは全員フラグと同じ
+状態にいる」ときで、ホルダは GVL の下でしか書かず、手放す前に必ず
+<code>set_executable</code>(フラグ false)まで済ませるので、ハンドオフ時点の状態は常に
+「実行可」。新しいカーネルスレッドもその状態で始める必要があり、
+<code>thread_main</code> が最初に <code>pthread_jit_write_protect_np(1)</code> を呼ぶ
+(<code>jit_pages_executable_for_this_thread</code>)。プラットフォームの既定が書き込み可
+だと、最初の JIT 命令でフォールトし、フラグは既に「書ける」と言っているので
+遅延フリップも助けない。darwin の CI ジョブは <code>bin/test</code> を通すので、この
+経路は native モードの 2 回目の nextest で実機検証される。</li>
+<li><strong>BOP 再定義と他スレッドのフレーム</strong>。<code>def Integer#+</code> を実行したスレッド以外は
+全員コンパイル済みフレームを持ったまま止まっている。<code>check_bop_redefine</code> は
+自分の CFP 鎖に加えて <code>scheduler::suspended_executors</code> が返す各スレッドの鎖
+(park / pass / <code>without_gvl</code> が公開する <code>resume_exec</code> と、その
+<code>parent_fiber</code> 連鎖)も変換する。呼び出し側でない最内フレーム — タイムスライス
+やシグナルで <strong>poll</strong> から手放したフレーム — は poll 自身から抜ける:
+<code>execute_gc</code> が自 iseq の <code>bop_evictions</code> を跨いで比べ、動いていれば
+<code>POLL_DEOPT</code> を返し、コンパイル済み poll のコールドパスがそれを見て deopt
+する。green も同じ穴を持っていたので両モデル共通の修正。詳細は
+<code>doc/chain_deopt.md</code> §10.1。</li>
+</ul>
+<p>これらは <code>MONORUBY_THREAD_MODEL=native</code> の <code>cargo test --lib</code>(§12.6)と、
+<code>MONORUBY_PREEMPT_STRESS=1</code> を重ねた同じフィルタで検証する。gc-stress は
+手動ワークフロー(<code>gc-stress.yml</code>)で、native モードは同じ環境変数を足して回す。</p>
 
                     </main>
 

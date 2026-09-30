@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-5a46026f.js";
+            window.path_to_searchindex_js = "../searchindex-1e0ffa63.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -261,7 +261,10 @@ dispatch word をゼロ化（<code>invalidate_jit_code</code> 内）。</li>
 戻ってきた時点で VM に落ちる。かつてはコードそのものに <code>jmp deopt</code> を
 書き込む <code>immediate_eviction</code> がこれを担っていたが、chain deopt が完全に
 置き換えたので自己書き換えコードは無くなった。
-<code>method_added</code> は任意の Ruby を走らせるので、その前に片付けておく必要がある。</p>
+<code>method_added</code> は任意の Ruby を走らせるので、その前に片付けておく必要がある。
+歩くのは自スレッドの鎖だけではない: 他の Ruby スレッド(green も 1:1 も、
+この瞬間は全員サスペンド中)の鎖と、poll で止まった最内フレームの始末は
+<code>doc/chain_deopt.md</code> §10.1。</p>
 <p>この配置には 2 つ性質がある。</p>
 <ul>
 <li><strong>レベルトリガであってエッジトリガではない。</strong> <code>check_bop_redefine</code> は

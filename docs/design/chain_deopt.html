@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-5a46026f.js";
+            window.path_to_searchindex_js = "../searchindex-1e0ffa63.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -728,6 +728,45 @@ address is no longer at hand, names the site it belongs to. <code>AsmEvict</code
 <p><code>Codegen::evict_suspended_frames</code> and <code>Codegen::chain_deopt</code> were the same CFP
 walk once the patch fallback was gone, and are now one function
 (<code>chain_deopt</code>), used by both <code>check_bop_redefine</code> and <code>runtime::chain_deopt</code>.</p>
+<h3 id="101-the-other-threads-chains-and-the-frame-at-a-poll"><a class="header" href="#101-the-other-threads-chains-and-the-frame-at-a-poll">10.1 The other threads’ chains, and the frame at a poll</a></h3>
+<p>A basic-op redefinition is the one caller of the walk whose stale frames are
+not all on the redefining thread’s stack. Every other Ruby thread is
+suspended under it — a green thread until the scheduler switches to it, a
+kernel thread until it gets the GVL (doc/threads.md §12) — and each holds
+compiled frames that inlined the operator just replaced. <code>check_bop_redefine</code>
+therefore walks every chain: its own, then the chain of each executor
+<code>scheduler::suspended_executors</code> returns (the context a thread parked or
+yielded in — <code>resume_exec</code>, published by <code>park</code>, <code>pass</code> and <code>without_gvl</code>
+in both models — followed by its <code>parent_fiber</code> links, so a thread parked
+inside a fiber contributes the fiber’s frames and the resumer’s). Those
+frames are as quiescent as the caller’s own: nothing runs on them until
+this thread lets go.</p>
+<p>The walk converts <em>callers</em> — a frame is rewritten through the return
+address its callee holds — so a chain’s innermost compiled frame is beyond
+it. On the redefining thread that frame is the one running the <code>def</code>, and
+<code>AsmInst::CheckBOP</code> after <code>MethodDef</code> takes care of it. On another thread
+the innermost frame is whatever it let go from: a call site (<code>sleep</code>, a
+<code>Queue#pop</code>, <code>Thread.pass</code>, all of which push a frame whose return address
+the walk finds) or a <strong>safepoint poll</strong> — a timeslice tick or a signal taken
+at a <code>LoopStart</code> / method-entry poll, where there is no callee frame and the
+compiled body would simply continue. That frame leaves from the poll itself:
+<code>ISeqInfo::bop_evictions</code> counts evictions per iseq, <code>executor::execute_gc</code>
+snapshots the polling frame’s count on entry and, if it moved while the
+frame was away, returns <code>POLL_DEOPT</code> instead of <code>nil</code>; the compiled poll’s
+cold path compares for it and jumps to the poll’s own deopt exit
+(<code>AsmInst::ExecGc::deopt</code>, <code>AsmIr::new_poll_deopt</code>), resuming the
+interpreter at <code>LoopStart</code> itself or at the instruction after <code>InitMethod</code>.
+That exit deliberately does not set <code>had_deopt</code> (§6): by the time it can
+fire, the walk has already rewritten every caller of the frame, so no
+compiled continuation exists for the interpreter to surprise — and marking
+it would put <code>had_deopt</code> on every body, since every method entry polls.
+The same exit covers the redefining thread’s own poll when a trap handler
+or a finalizer run from the poll does the redefinition.</p>
+<p>What stays out of reach in every model is a fiber that is <em>suspended</em>
+(not parked) inside one of those threads: it is not in any chain the walk
+sees, and it polls nothing until resumed. Regression tests:
+<code>builtins::thread::tests::bop_redefinition_reaches_*</code> (parked, parked in a
+fiber, yielded through <code>Thread.pass</code>, preempted at a poll).</p>
 <h2 id="11-the-speculation-as-shipped-5-steps-45"><a class="header" href="#11-the-speculation-as-shipped-5-steps-45">11. The speculation as shipped (§5 steps 4–5)</a></h2>
 <p><strong>Scope</strong> (§7, enforced by <code>float_speculation_qualifies</code> +
 poison hooks): a block-passing call site whose callee is a plain iseq and

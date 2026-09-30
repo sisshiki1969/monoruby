@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-5a46026f.js";
+            window.path_to_searchindex_js = "searchindex-1e0ffa63.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -6986,7 +6986,10 @@ dispatch word をゼロ化（<code>invalidate_jit_code</code> 内）。</li>
 戻ってきた時点で VM に落ちる。かつてはコードそのものに <code>jmp deopt</code> を
 書き込む <code>immediate_eviction</code> がこれを担っていたが、chain deopt が完全に
 置き換えたので自己書き換えコードは無くなった。
-<code>method_added</code> は任意の Ruby を走らせるので、その前に片付けておく必要がある。</p>
+<code>method_added</code> は任意の Ruby を走らせるので、その前に片付けておく必要がある。
+歩くのは自スレッドの鎖だけではない: 他の Ruby スレッド(green も 1:1 も、
+この瞬間は全員サスペンド中)の鎖と、poll で止まった最内フレームの始末は
+<code>doc/chain_deopt.md</code> §10.1。</p>
 <p>この配置には 2 つ性質がある。</p>
 <ul>
 <li><strong>レベルトリガであってエッジトリガではない。</strong> <code>check_bop_redefine</code> は
@@ -8347,6 +8350,45 @@ address is no longer at hand, names the site it belongs to. <code>AsmEvict</code
 <p><code>Codegen::evict_suspended_frames</code> and <code>Codegen::chain_deopt</code> were the same CFP
 walk once the patch fallback was gone, and are now one function
 (<code>chain_deopt</code>), used by both <code>check_bop_redefine</code> and <code>runtime::chain_deopt</code>.</p>
+<h3 id="101-the-other-threads-chains-and-the-frame-at-a-poll"><a class="header" href="#101-the-other-threads-chains-and-the-frame-at-a-poll">10.1 The other threads’ chains, and the frame at a poll</a></h3>
+<p>A basic-op redefinition is the one caller of the walk whose stale frames are
+not all on the redefining thread’s stack. Every other Ruby thread is
+suspended under it — a green thread until the scheduler switches to it, a
+kernel thread until it gets the GVL (doc/threads.md §12) — and each holds
+compiled frames that inlined the operator just replaced. <code>check_bop_redefine</code>
+therefore walks every chain: its own, then the chain of each executor
+<code>scheduler::suspended_executors</code> returns (the context a thread parked or
+yielded in — <code>resume_exec</code>, published by <code>park</code>, <code>pass</code> and <code>without_gvl</code>
+in both models — followed by its <code>parent_fiber</code> links, so a thread parked
+inside a fiber contributes the fiber’s frames and the resumer’s). Those
+frames are as quiescent as the caller’s own: nothing runs on them until
+this thread lets go.</p>
+<p>The walk converts <em>callers</em> — a frame is rewritten through the return
+address its callee holds — so a chain’s innermost compiled frame is beyond
+it. On the redefining thread that frame is the one running the <code>def</code>, and
+<code>AsmInst::CheckBOP</code> after <code>MethodDef</code> takes care of it. On another thread
+the innermost frame is whatever it let go from: a call site (<code>sleep</code>, a
+<code>Queue#pop</code>, <code>Thread.pass</code>, all of which push a frame whose return address
+the walk finds) or a <strong>safepoint poll</strong> — a timeslice tick or a signal taken
+at a <code>LoopStart</code> / method-entry poll, where there is no callee frame and the
+compiled body would simply continue. That frame leaves from the poll itself:
+<code>ISeqInfo::bop_evictions</code> counts evictions per iseq, <code>executor::execute_gc</code>
+snapshots the polling frame’s count on entry and, if it moved while the
+frame was away, returns <code>POLL_DEOPT</code> instead of <code>nil</code>; the compiled poll’s
+cold path compares for it and jumps to the poll’s own deopt exit
+(<code>AsmInst::ExecGc::deopt</code>, <code>AsmIr::new_poll_deopt</code>), resuming the
+interpreter at <code>LoopStart</code> itself or at the instruction after <code>InitMethod</code>.
+That exit deliberately does not set <code>had_deopt</code> (§6): by the time it can
+fire, the walk has already rewritten every caller of the frame, so no
+compiled continuation exists for the interpreter to surprise — and marking
+it would put <code>had_deopt</code> on every body, since every method entry polls.
+The same exit covers the redefining thread’s own poll when a trap handler
+or a finalizer run from the poll does the redefinition.</p>
+<p>What stays out of reach in every model is a fiber that is <em>suspended</em>
+(not parked) inside one of those threads: it is not in any chain the walk
+sees, and it polls nothing until resumed. Regression tests:
+<code>builtins::thread::tests::bop_redefinition_reaches_*</code> (parked, parked in a
+fiber, yielded through <code>Thread.pass</code>, preempted at a poll).</p>
 <h2 id="11-the-speculation-as-shipped-5-steps-45"><a class="header" href="#11-the-speculation-as-shipped-5-steps-45">11. The speculation as shipped (§5 steps 4–5)</a></h2>
 <p><strong>Scope</strong> (§7, enforced by <code>float_speculation_qualifies</code> +
 poison hooks): a block-passing call site whose callee is a plain iseq and
@@ -10300,7 +10342,11 @@ dead になったカーネルスレッドを <code>join</code> してから戻�
 <ul>
 <li>GC はホルダだけが起こす。他スレッドは全員 safepoint で park 中なので、
 <code>Scheduler::mark</code> が <code>threads</code> 経由で各 <code>Executor</code> を、<code>main_exec</code> 経由で
-main の root executor を辿れる(<code>in_scheduler</code> は最初の publish で常時 true)。</li>
+main の root executor を辿れる(<code>in_scheduler</code> は最初の publish で常時 true。
+ただし 1:1 では <code>main_exec</code> を deref するのは <strong>main が current でないとき
+だけ</strong> — main が走っているときは main の executor はコレクタ自身のルートで、
+<code>Executor::init</code> の途中で publish した後に移動した古いポインタかもしれない)。
+JIT コードとの関係は §12.9。</li>
 <li><code>fork</code>: 子では fork したスレッドだけが残り <strong>main になる</strong>(<code>s.main = cur</code>)。
 <code>Gvl::reset_after_fork</code>、wake パイプの作り直し(fd テーブル共有のため)、
 ブロックしていたシグナルの解除。</li>
@@ -10382,6 +10428,44 @@ park 中(<code>wake_parked</code> → unpark)、<code>without_gvl</code> 中(<co
 <code>SIGVTALRM</code> → <code>EINTR</code>、§12.7)。<code>handle_interrupt</code> のマスクと
 <code>pending_interrupt?</code> は green と同じキュー(§6)。</li>
 </ul>
+<h3 id="129-jit-コードと-gvlp5"><a class="header" href="#129-jit-コードと-gvlp5">12.9 JIT コードと GVL(P5)</a></h3>
+<p>JIT コードの生成・パッチ・実行はすべて GVL の下で起きるので、複数のカーネル
+スレッドが同じコードページを同時に触ることはない。それでも 1 つの OS スレッドで
+回っていた green と違う点が 3 つある。</p>
+<ul>
+<li><strong>命令ストリームの可視性</strong>。ホルダがコードを書いて(コンパイル、BOP 再定義の
+entry 巻き戻し、salvage のバージョン語の書き換え)手放した後、次のホルダは
+別のコアでそれを実行する。書き手側のフラッシュ(aarch64 の <code>dc cvau</code> /
+<code>ic ivau</code>、x86 は不要)は monoasm が <code>set_executable</code> でやる。実行側の
+シリアライズは <code>Gvl::on_acquired</code> が <strong>取得のたびに無条件で</strong> 行う
+(<code>cpuid</code> / <code>isb</code>)。「コードが書かれたときだけ」の世代カウンタは、書き込み
+箇所を漏れなく列挙し続ける必要があり、しかも GVL のハンドオフ(futex の
+起床)の隣では 1 命令の差は測れないので、無条件にした。</li>
+<li><strong>macOS arm64 の <code>MAP_JIT</code></strong>。書き込み可否は <code>pthread_jit_write_protect_np</code>
+による <strong>スレッドごと</strong> の状態だが、monoasm はページ全体で 1 つの <code>writable</code>
+フラグを持つ。フラグが信用できるのは「ホルダでないスレッドは全員フラグと同じ
+状態にいる」ときで、ホルダは GVL の下でしか書かず、手放す前に必ず
+<code>set_executable</code>(フラグ false)まで済ませるので、ハンドオフ時点の状態は常に
+「実行可」。新しいカーネルスレッドもその状態で始める必要があり、
+<code>thread_main</code> が最初に <code>pthread_jit_write_protect_np(1)</code> を呼ぶ
+(<code>jit_pages_executable_for_this_thread</code>)。プラットフォームの既定が書き込み可
+だと、最初の JIT 命令でフォールトし、フラグは既に「書ける」と言っているので
+遅延フリップも助けない。darwin の CI ジョブは <code>bin/test</code> を通すので、この
+経路は native モードの 2 回目の nextest で実機検証される。</li>
+<li><strong>BOP 再定義と他スレッドのフレーム</strong>。<code>def Integer#+</code> を実行したスレッド以外は
+全員コンパイル済みフレームを持ったまま止まっている。<code>check_bop_redefine</code> は
+自分の CFP 鎖に加えて <code>scheduler::suspended_executors</code> が返す各スレッドの鎖
+(park / pass / <code>without_gvl</code> が公開する <code>resume_exec</code> と、その
+<code>parent_fiber</code> 連鎖)も変換する。呼び出し側でない最内フレーム — タイムスライス
+やシグナルで <strong>poll</strong> から手放したフレーム — は poll 自身から抜ける:
+<code>execute_gc</code> が自 iseq の <code>bop_evictions</code> を跨いで比べ、動いていれば
+<code>POLL_DEOPT</code> を返し、コンパイル済み poll のコールドパスがそれを見て deopt
+する。green も同じ穴を持っていたので両モデル共通の修正。詳細は
+<code>doc/chain_deopt.md</code> §10.1。</li>
+</ul>
+<p>これらは <code>MONORUBY_THREAD_MODEL=native</code> の <code>cargo test --lib</code>(§12.6)と、
+<code>MONORUBY_PREEMPT_STRESS=1</code> を重ねた同じフィルタで検証する。gc-stress は
+手動ワークフロー(<code>gc-stress.yml</code>)で、native モードは同じ環境変数を足して回す。</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="green-thread-スケジューラ-thread--fiber-の状態遷移図"><a class="header" href="#green-thread-スケジューラ-thread--fiber-の状態遷移図">Green thread スケジューラ: Thread / Fiber の状態遷移図</a></h1>
 <p><code>doc/threads.md</code> の補足。スケジューラ(<code>src/scheduler.rs</code>)が管理する
