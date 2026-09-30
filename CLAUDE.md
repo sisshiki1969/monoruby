@@ -1058,6 +1058,8 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
    poll's own deopt exit (`executor::POLL_DEOPT`; `doc/threads.md` §12.9,
    `doc/chain_deopt.md` §10.1). A `fork(2)` holds the GVL's state lock
    across the fork (`fork::prepare`), and the child keeps only the
-   forking thread, as main. Process exit runs the `at_exit` handlers,
-   then kills the remaining threads, then runs the finalizers.
+   forking thread, as main; a `fork { }` child leaves through the same
+   exit sequence as the process (`Globals::exit_forked_child`). Process
+   exit runs the `at_exit` handlers, then kills the remaining threads,
+   then runs the finalizers.
    `Thread#native_thread_id` is the real kernel thread id.

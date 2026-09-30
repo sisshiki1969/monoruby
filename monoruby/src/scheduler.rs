@@ -470,6 +470,11 @@ pub(crate) fn fork_child_reset_threads(vm: &mut Executor) {
         s.ready.retain(|t| Some(*t) == cur);
         s.sleepers.retain(|(_, t)| Some(*t) == cur);
         s.io_waiters.retain(|(_, _, t)| Some(*t) == cur);
+        // The forking thread is the child's main thread (CRuby), as in
+        // the 1:1 model.
+        if cur.is_some() {
+            s.main = cur;
+        }
     });
 }
 

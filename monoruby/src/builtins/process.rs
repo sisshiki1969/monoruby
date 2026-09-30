@@ -2959,6 +2959,87 @@ mod new_api_tests {
         );
     }
 
+    /// A `fork { }` child ends like a process, not like a block: its
+    /// `at_exit` handlers run (after the block, and after an uncaught
+    /// error's report), `exit` inside the block keeps its status, and a
+    /// handler's own `exit` overrides the block's.
+    #[test]
+    fn fork_block_child_runs_the_exit_sequence() {
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            pid = fork do
+              r.close
+              at_exit { w.syswrite("at_exit ") }
+              ObjectSpace.define_finalizer(Object.new, proc { w.syswrite("finalizer ") })
+              w.syswrite("block ")
+            end
+            w.close
+            s = r.read
+            _, st = Process.wait2(pid)
+            [s, st.exitstatus]
+            "#,
+        );
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            pid = fork do
+              r.close
+              at_exit { w.syswrite("at_exit ") }
+              exit 3
+            end
+            w.close
+            s = r.read
+            _, st = Process.wait2(pid)
+            [s, st.exitstatus]
+            "#,
+        );
+        run_test_once(
+            r#"
+            pid = fork do
+              at_exit { exit 5 }
+              exit 3
+            end
+            _, st = Process.wait2(pid)
+            st.exitstatus
+            "#,
+        );
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            pid = fork do
+              r.close
+              $stderr.reopen(w)
+              at_exit { w.syswrite("at_exit(#{$!.message}) ") }
+              raise "boom"
+            end
+            w.close
+            s = r.read
+            _, st = Process.wait2(pid)
+              [s.include?("boom (RuntimeError)"), s.end_with?("at_exit(boom) "), st.exitstatus]
+            "#,
+        );
+    }
+
+    /// A fork from a thread other than main: the forking thread is the
+    /// child's only thread and its main (in the 1:1 model its own GVL
+    /// handle, not the `Vm`'s main one, is the survivor's).
+    #[test]
+    fn fork_from_a_non_main_thread() {
+        run_test_once(
+            r#"
+            Thread.new do
+              pid = fork do
+                fine = Thread.current == Thread.main && Thread.list.size == 1
+                fine &&= Thread.new { 3 }.value == 3
+                exit!(fine ? 0 : 1)
+              end
+              Process.wait2(pid)[1].exitstatus
+            end.value
+            "#,
+        );
+    }
+
     /// A fork while another thread keeps taking and releasing the GVL
     /// (`Thread.pass`): the child must neither inherit that thread nor
     /// a lock it held at the instant of the fork. The child is the

@@ -682,7 +682,14 @@ dead になったカーネルスレッドを `join` してから戻る — イ�
   fork したスレッドだけが残り **main になる**(`s.main = cur`)。他のスレッドは
   dead になり `Thread.list` と実行キューからも消える(両モデル)。wake パイプの
   作り直し(fd テーブル共有のため)、ブロックしていたシグナルの解除、
-  `native_thread_id` の更新(新しいプロセスなので tid が変わる)。
+  `native_thread_id` の更新(新しいプロセスなので tid が変わる)。main 以外の
+  スレッドから fork しても同じで、そのスレッドが子の main になる(両モデル)。
+  `fork { ... }` の子はブロックが終わったら(または例外で抜けたら)main スレッドの
+  終了として扱い、下のプロセス終了シーケンスを通ってから exit する
+  (`Globals::exit_forked_child`: at_exit → 未捕捉例外の報告 → finalizer →
+  ストリーム flush。`exit` の status はそのまま、ハンドラ内の `exit` が優先、
+  シグナル例外はそのシグナルで死ぬ)。以前は `std::process::exit` 直行で
+  at_exit も finalizer も走らなかった。
 - プロセス終了の順序は CRuby と同じで両モデル共通: `at_exit` ハンドラ →
   `terminate_all`(残りスレッドを kill し ensure を走らせ、1:1 ではカーネルスレッドを
   join)→ `ObjectSpace` の finalizer(`Executor::run_at_exit_handlers` /
