@@ -3019,6 +3019,30 @@ mod new_api_tests {
               [s.include?("boom (RuntimeError)"), s.end_with?("at_exit(boom) "), st.exitstatus]
             "#,
         );
+        // A signal exception leaving the block kills the child with that
+        // signal, after its `at_exit` handlers; an `Interrupt` also reports
+        // itself first, as the main script's does.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            pid = fork do
+              r.close
+              $stderr.reopen(w)
+              at_exit { w.syswrite("at_exit ") }
+              raise Interrupt
+            end
+            w.close
+            s = r.read
+            _, st = Process.wait2(pid)
+            pid2 = fork do
+              r.close
+              $stderr.reopen(File::NULL)
+              raise SignalException, "TERM"
+            end
+            _, st2 = Process.wait2(pid2)
+            [s.include?("Interrupt"), s.end_with?("at_exit "), st.signaled?, st.termsig, st2.signaled?, st2.termsig]
+            "#,
+        );
     }
 
     /// A fork from a thread other than main: the forking thread is the
