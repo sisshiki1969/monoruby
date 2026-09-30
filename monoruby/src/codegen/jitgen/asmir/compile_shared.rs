@@ -190,11 +190,21 @@ impl Codegen {
                 });
             }
             // GC safepoint.
-            AsmInst::ExecGc { write_back, error } => {
+            AsmInst::ExecGc {
+                write_back,
+                error,
+                deopt,
+            } => {
                 let error = labels[error].clone();
+                let deopt = self.deopt_label(
+                    labels,
+                    deopt,
+                    DeoptCause::Static("basic op redefined (evicted at a poll)"),
+                );
                 self.encode_linst(LInst::ExecGc {
                     write_back,
                     error,
+                    deopt,
                     base: frame.base_stack_offset,
                 });
             }
@@ -2143,9 +2153,10 @@ impl Codegen {
             LInst::ExecGc {
                 write_back,
                 error,
+                deopt,
                 base,
             } => {
-                self.emit_exec_gc(write_back, &error, base);
+                self.emit_exec_gc(write_back, &error, &deopt, base);
             }
             LInst::IntegerCmp { kind, lhs, rhs } => {
                 self.emit_integer_cmp(kind, lhs, rhs);

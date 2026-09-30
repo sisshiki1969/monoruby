@@ -509,13 +509,13 @@ impl<'a> JitContext<'a> {
                 // so this is a fully frame-consistent poll point that
                 // fires on every entry regardless of the caller
                 // (including the poll-free Rust invokers).
-                state.exec_gc(ir, false);
+                state.exec_gc(ir, false, pc + 1isize);
             }
             TraceIr::LoopStart { .. } => {
                 state.flush_gp(ir);
                 state.unset_side_effect_guard();
                 self.inc_loop_count();
-                state.exec_gc(ir, false);
+                state.exec_gc(ir, false, pc);
             }
             TraceIr::LoopEnd => {
                 state.flush_gp(ir);

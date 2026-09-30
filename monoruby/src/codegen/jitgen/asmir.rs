@@ -462,6 +462,31 @@ impl AsmIr {
         AsmEvict(i)
     }
 
+    /// The exit a safepoint poll takes when its body was evicted by a
+    /// basic-op redefinition while the frame sat at the poll
+    /// (`executor::POLL_DEOPT`; resumes the interpreter at `pc`).
+    ///
+    /// Unlike every other deopt this one leaves `had_deopt` alone. That
+    /// flag tells a caller that the callee may resume in the interpreter
+    /// behind its back and reach the caller's frame through a block or a
+    /// return (`forget_constants` at the call); this exit cannot be taken
+    /// that way. It fires only after `Codegen::check_bop_redefine` ran with
+    /// this frame suspended at the poll, and that walk had already
+    /// rewritten every caller on the chain — inside the unit and across
+    /// units — to the VM continuation, so no compiled continuation exists
+    /// for the interpreter to surprise. Marking it would put `had_deopt`
+    /// on every body (every method entry polls) and cost the constant
+    /// keeping it guards everywhere.
+    #[cfg_attr(feature = "deopt", track_caller)]
+    pub(crate) fn new_poll_deopt(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmDeopt {
+        let i = self.new_label(SideExit::Deoptimize(
+            pc,
+            state.get_write_back(),
+            self.chain_frames,
+        ));
+        AsmDeopt(i)
+    }
+
     #[cfg_attr(feature = "deopt", track_caller)]
     pub(crate) fn new_deopt_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmDeopt {
         let i = self.new_label(SideExit::Deoptimize(
@@ -598,14 +623,24 @@ impl AsmIr {
     /// - rax, rcx
     /// - stack
     ///
-    pub(super) fn exec_gc(&mut self, write_back: WriteBack, error: AsmError, check_stack: bool) {
+    pub(super) fn exec_gc(
+        &mut self,
+        write_back: WriteBack,
+        error: AsmError,
+        deopt: AsmDeopt,
+        check_stack: bool,
+    ) {
         if check_stack {
             self.push(AsmInst::CheckStack {
                 write_back: write_back.clone(),
                 error,
             });
         }
-        self.push(AsmInst::ExecGc { write_back, error });
+        self.push(AsmInst::ExecGc {
+            write_back,
+            error,
+            deopt,
+        });
     }
 
     ///
@@ -1942,6 +1977,10 @@ pub(super) enum AsmInst {
     ExecGc {
         write_back: WriteBack,
         error: AsmError,
+        /// Taken when the poll returns `executor::POLL_DEOPT`: the body
+        /// was evicted while the frame waited here. See
+        /// [`AsmIr::new_poll_deopt`].
+        deopt: AsmDeopt,
     },
     ///
     /// Check stack overflow.
@@ -3292,6 +3331,7 @@ impl AsmInst {
             Self::ExecGc {
                 write_back,
                 error: _,
+                deopt: _,
             } => format!("exec_gc {:?}", write_back),
             _ => format!("{:?}", self),
         }

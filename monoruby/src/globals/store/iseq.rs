@@ -393,6 +393,14 @@ pub struct ISeqInfo {
     /// body at all. Empty means no compiled body ever leaned on a basic op,
     /// so no redefinition can make one stale.
     pub(super) bop_deps: Vec<(ClassId, IdentId)>,
+    /// How many times a basic-op redefinition has thrown this iseq's
+    /// compiled code away (`evict_jit_code`). A compiled poll site
+    /// compares it across the poll (`executor::execute_gc`): a frame
+    /// whose body was evicted while it was suspended at the poll is the
+    /// one frame the eviction walk cannot convert — it is the innermost,
+    /// and a frame is rewritten through the return address its callee
+    /// holds — so it leaves for the interpreter from the poll itself.
+    pub(super) bop_evictions: u32,
     ///
     /// Basic block information.
     ///
@@ -605,6 +613,7 @@ impl ISeqInfo {
             jit_class_profile: Vec::new(),
             jit_invalidated: false,
             bop_deps: Vec::new(),
+            bop_evictions: 0,
             bb_info: BasicBlockInfo::default(),
             callsite_map: HashMap::default(),
             hint: ISeqHint::Normal,
@@ -1207,6 +1216,12 @@ impl ISeqInfo {
         self.bop_deps.clear();
         self.drop_jit_code();
         self.clear_loop_jit_entries();
+        self.bop_evictions = self.bop_evictions.wrapping_add(1);
+    }
+
+    /// See the field: the count a compiled poll site snapshots.
+    pub(crate) fn bop_evictions(&self) -> u32 {
+        self.bop_evictions
     }
 
     ///

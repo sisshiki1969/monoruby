@@ -1223,6 +1223,7 @@
 3c8ff8a61fbbe949e66a439108e31147	["ASCII-8BIT", "ASCII-8BIT", true, true, [97, 195, 159], true, true, true, false, "ASCII-8BIT", true, true, "US-ASCII", false, true, "ASCII-8BIT", RegexpError]	u = Regexp.union(/[\\x01-\\x7f]/n, /[\\xC2-\\xDF][\\x80-\\xBF]/n)\n        r =
 3ca7dc56ff22d6c2b33235faf84f9b0e	[:gets, :read, :gets_threaded]	require "socket"\n            res = []\n            s = TCPServer.new
 3cb3f3d12e7c4d524b7a71d20767c6cd	[[["fo", "ob", "ar"], "ar", ""], [["o", "o"], "o", "bar"], [["bar", "baz", "bar", "baz"], "baz", ""], ["foobarbazfoobarbaz", ["BAR", "BAZ", "BAR", "BAZ"], "baz", ""], ["hello", "hello"], [["abc", "abc"], ["def", "def"], ["ghi", "ghi"]], nil, [["c", "d"], ["f", "g"]], [[nil]], [["fo", "o", ""], ["foo", ""], ["", "", "", ""], ["foo", ""]], ["a", "", "b", "", "", "c", ""], [["fo", "o", ""], ""], ["o", "hello"], [3, "l"], ["", "", "", ""], ["", "", "", ""], [["a", "X"], ["b", "X"]], [["あ", "X"], ["い", "X"]], "def", "hoge", "hige", "髭男", "髭面", true, false, false, nil, 7, 10, 21, 20, 1, nil, nil, nil, nil, nil, 1, 1, 10, 5, 1, 3, 3, 5, nil, 5, 0, nil, 0, nil, 11, 1, 1]	__a = [];__a << (\n        res = "foobar".scan(/../)\n        [res, $&, $']\n      
+3cd30d4eddc140fb4dbf7777dc04de7a	999	def m(q, x)\n              y = q.pop\n              x + y\n           
 3ce7965bcdd4bc0665bc690fe92e4295	[[1, 3, 5, 7, 9], [1, 3, 5], [1.0, 1.5, 2.0], [5, 4, 3, 2, 1], [1, 2, 3, 4, 5]]	__a = [];__a << (res = []; 1.step(10, 2) {|i| res << i}; res);__a << (res = []; 
 3cf3f35be7b9d2b608bbbb558e61e961	[["abc!!gh!!r", "abc!!gh!!r", "def", "r"], ["2,5,3,,75841,", "2,5,3,,75841,", ".", ""], [nil, "abcdefghdefr", nil, nil], "def-abc-ghi", "[hello] [world]", "a\\\\c"]	__a = [];__a << (\n        s = "abcdefghdefr"\n        res = s.gsub!(/def/, "!!")\n
 3cf87379e16fe1d3a9d2d96970f0d8bd	true	A = Struct.new(:x)\n            B = Struct.new(:x)\n            \n\n   
@@ -2263,6 +2264,7 @@
 70d61ef5f4ed6c1e8f4e23f26222ad7d	"mm:hello:[]"	class Foo\n              private\n              def method_missing(na
 70e58b5b7dbd4dc37d12b0b873604fa6	[:my_is_a?, :is_a?, true]	class C\n              define_method(:my_is_a?, Kernel.instance_meth
 70f7acec9f0acd89dac21a550187070f	[[:a_one, 0], [:a_two, 0], [:b_one, 0], [:b_two, 0]]	class A\n          def one(x) = [:a_one, x]\n          def two(x) = [:a_t
+70ffde0daf73d462e50c5ca339059aba	999	def m(q, x)\n              y = q.pop\n              x + y\n           
 710af167780333af253a35d1dc8b0346	[20008, "head", "tail", 20000]	path = "/tmp/mr_buf_big.txt"\n            f = File.open(path, "w")\n 
 71162a257d8e169827b30d204b43f796	[[4, 8, 73, 58, 8, 226, 134, 146, 6, 58, 6, 69, 84], [4, 8, 58, 8, 226, 134, 146], [4, 8, 91, 7, 73, 58, 8, 226, 134, 146, 6, 58, 6, 69, 84, 59, 0], "→"]	__a = [];__a << (Marshal.dump("→".to_sym).bytes);__a << (Marshal.dump("→".dup.fo
 711aa5cc92164813c06e40b326f626bd	["Bonjour", "Bonjour", "Bonjour", "Guten Tag"]	class F\n          def hello\n            "Bonjour"\n          end\n       
@@ -3542,6 +3544,7 @@ b15052c5abbd93a1a9004be3b57beb9c	[:foo, :bar]	$res = []\n            obj = Objec
 b15ea9d8d319614d35c4044d16eebf97	[[2, 4], [2, 3], [0, 1], true, false, true, false]	def k(&b); [1, 2].map(&b); end\n        def l(&); k(&); end\n        def 
 b161a8fa057a5be6404848094b6f4e5d	["10.000000", "10.687500", "8.550000e+01", "1010.555000", "1.500000e+10"]	__a = [];__a << ("%f" % "0xA");__a << ("%f" % "0xA.B");__a << ("%e" % "0xA.Bp3")
 b16ea47fda0023dc535817515b3e24cf	[["GBK", 4, :finished, 4, 0], ["GBK", 5, :finished, 4, 0], ["GBK", 8, :finished, 4, 0], ["EUC-JP", 4, :destination_buffer_full, 4, 0], ["EUC-JP", 5, :destination_buffer_full, 5, 0], ["EUC-JP", 8, :finished, 6, 0], ["UTF-16BE", 4, :finished, 4, 0], ["UTF-16BE", 5, :finished, 4, 0], ["UTF-16BE", 8, :finished, 4, 0]]	["GBK", "EUC-JP", "UTF-16BE"].flat_map do |dst|\n              [4, 5
+b18067f419c5e8bb8800a4321a69e921	999	$stop = true\n            def m(x)\n              i = 0\n             
 b18169111f27cd344540accc05f616fe	nil	File.open("Cargo.toml") { |f| IO.new(f.fileno, autoclose: false).path }
 b18a80835134d8dffe61ec8e951213f0	["あcba", "あcba", true]	s = "abcあ".dup\n              t = s.reverse!\n              [s, t, 
 b196364f0e469cc01f39c67211d6218a	["abcdef", "abcdef", "abc", ["abcdef", "UTF-8"], "abcdef"]	File.write("/tmp/mr_cr5.txt", "abcdef")\n            r = []\n        
@@ -3652,6 +3655,7 @@ b6aca556c6399f547ba3bb3ac5005179	10	def foo(&b)\n          b\n        end\n     
 b6ba588f2d7306ef117e4e3c470a4b66	true	res = nil\n            k = Class.new { |c| res = c }\n            res
 b6bd962cfccd912a07dc6a5d26084a70	["sleep", "sleep", "sleep", "sleep", "sleep"]	require "socket"\n            require "tmpdir"\n            res = []\n
 b6c8e6ca6f1c4a33c2343829c6261f01	[200, 200, 200]	$res = []\n\n        class S\n            def f(x)\n                $res <<
+b6cd9c4910efada8e7d16a25003f04db	[[11000, 30900, 50800, 70700, 90600, 110500, 130400, 150300], true]	def fib(n) = n < 2 ? n : fib(n - 1) + fib(n - 2)\n            def wo
 b6d1b4d4e1ae4574a89c62456ad9ddce	43990	parents = []\n            300.times { |i| parents << ("hello world "
 b6d47e1aff62ee9cd1aa1825069153f4	["aaa\\n", "bbb\\n"]	path = "/tmp/monoruby_test_file_foreach_#{Process.pid}"\n           
 b6e1b26f26c510fe896a5e3a645bc4c5	"42"	class HasToInt; def to_int; 42; end; end\n            sprintf("%d", 
@@ -4856,6 +4860,7 @@ f212deed776e67ad2663d333efdef52c	true	b = binding\n            b.eval("z = 1")\n
 f216b4de4c4cc3516688e358d154cc58	[{k: 0}, 1, {a: 1, b: 0}, [:a, :b], [1, 0], false, true, {k: 1}, 1, {a: 1, b: 1}, [:a, :b], [1, 1], false, true, {k: 2}, 1, {a: 1, b: 2}, [:a, :b], [1, 2], false, true, {k: 3}, 1, {a: 1, b: 3}, [:a, :b], [1, 3], false, true, {k: 4}, 1, {a: 1, b: 4}, [:a, :b], [1, 4], false, true, {k: 5}, 1, {a: 1, b: 5}, [:a, :b], [1, 5], false, true, {k: 6}, 1, {a: 1, b: 6}, [:a, :b], [1, 6], false, true, {k: 7}, 1, {a: 1, b: 7}, [:a, :b], [1, 7], false, true, {k: 8}, 1, {a: 1, b: 8}, [:a, :b], [1, 8], false, true, {k: 9}, 1, {a: 1, b: 9}, [:a, :b], [1, 9], false, true, {k: 10}, 1, {a: 1, b: 10}, [:a, :b], [1, 10], false, true, {k: 11}, 1, {a: 1, b: 11}, [:a, :b], [1, 11], false, true, {k: 12}, 1, {a: 1, b: 12}, [:a, :b], [1, 12], false, true, {k: 13}, 1, {a: 1, b: 13}, [:a, :b], [1, 13], false, true, {k: 14}, 1, {a: 1, b: 14}, [:a, :b], [1, 14], false, true, {k: 15}, 1, {a: 1, b: 15}, [:a, :b], [1, 15], false, true, {k: 16}, 1, {a: 1, b: 16}, [:a, :b], [1, 16], false, true, {k: 17}, 1, {a: 1, b: 17}, [:a, :b], [1, 17], false, true, {k: 18}, 1, {a: 1, b: 18}, [:a, :b], [1, 18], false, true, {k: 19}, 1, {a: 1, b: 19}, [:a, :b], [1, 19], false, true]	res = []\n        20.times do |i|\n            h = {}\n            h[:k] =
 f22519398782fff9ad6b785620879b69	["{self: {...}}", true]	__a = [];__a << (\n        h = {}\n        h[:self] = h\n        h.inspect\n        
 f23123b9dd02c44e8ecaab90da6df75a	[false, false, true, true, false, true, false]	__a = [];__a << (File.empty?("Cargo.toml"));__a << (File.empty?("nonexistent_xyz
+f25968eb0f2ed9dbb586ee260a5d70a3	999	def m(x, n)\n              s = 0\n              n.times { Thread.pass
 f25dbd56f5e0a43cccce8f621b699cac	[[false, "true", "A!"], [true, "false", "A!"]]	module RefBool\n          refine String do\n            def shout = upcas
 f26668c920f1005b0bda63f17b161606	["3.1.6", true]	require "strscan"\n        [StringScanner::Version, StringScanner::Versi
 f278d110b91e27cba6d94dd2fa48e555	[680, 19, 38, 19]	def __f(x)\n          \n        acc = 0\n        i = 0\n        while i < 2

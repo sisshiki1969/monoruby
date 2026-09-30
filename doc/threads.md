@@ -669,7 +669,11 @@ dead になったカーネルスレッドを `join` してから戻る — イ�
 
 - GC はホルダだけが起こす。他スレッドは全員 safepoint で park 中なので、
   `Scheduler::mark` が `threads` 経由で各 `Executor` を、`main_exec` 経由で
-  main の root executor を辿れる(`in_scheduler` は最初の publish で常時 true)。
+  main の root executor を辿れる(`in_scheduler` は最初の publish で常時 true。
+  ただし 1:1 では `main_exec` を deref するのは **main が current でないとき
+  だけ** — main が走っているときは main の executor はコレクタ自身のルートで、
+  `Executor::init` の途中で publish した後に移動した古いポインタかもしれない)。
+  JIT コードとの関係は §12.9。
 - `fork`: 子では fork したスレッドだけが残り **main になる**(`s.main = cur`)。
   `Gvl::reset_after_fork`、wake パイプの作り直し(fd テーブル共有のため)、
   ブロックしていたシグナルの解除。
@@ -754,3 +758,43 @@ fd で待てないカーネル待ち — `flock` / FIFO の `open` / `fcntl(F_SE
   park 中(`wake_parked` → unpark)、`without_gvl` 中(`interrupt_blocking` →
   `SIGVTALRM` → `EINTR`、§12.7)。`handle_interrupt` のマスクと
   `pending_interrupt?` は green と同じキュー(§6)。
+
+### 12.9 JIT コードと GVL(P5)
+
+JIT コードの生成・パッチ・実行はすべて GVL の下で起きるので、複数のカーネル
+スレッドが同じコードページを同時に触ることはない。それでも 1 つの OS スレッドで
+回っていた green と違う点が 3 つある。
+
+- **命令ストリームの可視性**。ホルダがコードを書いて(コンパイル、BOP 再定義の
+  entry 巻き戻し、salvage のバージョン語の書き換え)手放した後、次のホルダは
+  別のコアでそれを実行する。書き手側のフラッシュ(aarch64 の `dc cvau` /
+  `ic ivau`、x86 は不要)は monoasm が `set_executable` でやる。実行側の
+  シリアライズは `Gvl::on_acquired` が **取得のたびに無条件で** 行う
+  (`cpuid` / `isb`)。「コードが書かれたときだけ」の世代カウンタは、書き込み
+  箇所を漏れなく列挙し続ける必要があり、しかも GVL のハンドオフ(futex の
+  起床)の隣では 1 命令の差は測れないので、無条件にした。
+- **macOS arm64 の `MAP_JIT`**。書き込み可否は `pthread_jit_write_protect_np`
+  による **スレッドごと** の状態だが、monoasm はページ全体で 1 つの `writable`
+  フラグを持つ。フラグが信用できるのは「ホルダでないスレッドは全員フラグと同じ
+  状態にいる」ときで、ホルダは GVL の下でしか書かず、手放す前に必ず
+  `set_executable`(フラグ false)まで済ませるので、ハンドオフ時点の状態は常に
+  「実行可」。新しいカーネルスレッドもその状態で始める必要があり、
+  `thread_main` が最初に `pthread_jit_write_protect_np(1)` を呼ぶ
+  (`jit_pages_executable_for_this_thread`)。プラットフォームの既定が書き込み可
+  だと、最初の JIT 命令でフォールトし、フラグは既に「書ける」と言っているので
+  遅延フリップも助けない。darwin の CI ジョブは `bin/test` を通すので、この
+  経路は native モードの 2 回目の nextest で実機検証される。
+- **BOP 再定義と他スレッドのフレーム**。`def Integer#+` を実行したスレッド以外は
+  全員コンパイル済みフレームを持ったまま止まっている。`check_bop_redefine` は
+  自分の CFP 鎖に加えて `scheduler::suspended_executors` が返す各スレッドの鎖
+  (park / pass / `without_gvl` が公開する `resume_exec` と、その
+  `parent_fiber` 連鎖)も変換する。呼び出し側でない最内フレーム — タイムスライス
+  やシグナルで **poll** から手放したフレーム — は poll 自身から抜ける:
+  `execute_gc` が自 iseq の `bop_evictions` を跨いで比べ、動いていれば
+  `POLL_DEOPT` を返し、コンパイル済み poll のコールドパスがそれを見て deopt
+  する。green も同じ穴を持っていたので両モデル共通の修正。詳細は
+  `doc/chain_deopt.md` §10.1。
+
+これらは `MONORUBY_THREAD_MODEL=native` の `cargo test --lib`(§12.6)と、
+`MONORUBY_PREEMPT_STRESS=1` を重ねた同じフィルタで検証する。gc-stress は
+手動ワークフロー(`gc-stress.yml`)で、native モードは同じ環境変数を足して回す。

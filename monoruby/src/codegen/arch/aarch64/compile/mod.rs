@@ -2186,6 +2186,7 @@ impl Codegen {
         &mut self,
         write_back: WriteBack,
         error: &DestLabel,
+        deopt: &DestLabel,
         base: usize,
     ) -> bool {
         let error = error.clone();
@@ -2253,6 +2254,15 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             cbz x0, error;             // None -> error
         );
+        // `executor::POLL_DEOPT`: the body was evicted while the frame
+        // waited at this poll; leave for the interpreter (x86: the same
+        // compare in `execute_gc_inner`).
+        let poll_deopt = Value::integer(crate::executor::POLL_DEOPT).id();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (poll_deopt);
+            cmp x0, x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, deopt);
         self.jit.bind_label(skip);
         true
     }

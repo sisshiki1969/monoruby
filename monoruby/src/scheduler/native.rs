@@ -423,6 +423,26 @@ fn block_async_signals() {
     }
 }
 
+/// Apple Silicon: the JIT pages are `MAP_JIT`, and whether a thread may
+/// write to them (and then not execute them) is *per thread*
+/// (`pthread_jit_write_protect_np`), while monoasm keeps one `writable`
+/// flag for the whole region. The flag is trustworthy across a GVL
+/// handoff only if every thread agrees with it whenever it is not the
+/// holder: the holder writes code only under the GVL and re-protects
+/// (`set_executable`, flag cleared) before any release, so the state
+/// the flag describes at a handoff is always "executable". A new
+/// kernel thread must start in that state too, whatever the platform's
+/// default for a fresh thread is — a thread that came up writable would
+/// fault on its first compiled instruction, and the lazy flip would not
+/// save it, since the flag already says so.
+fn jit_pages_executable_for_this_thread() {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    // SAFETY: a per-thread mode switch with no preconditions.
+    unsafe {
+        libc::pthread_jit_write_protect_np(1);
+    }
+}
+
 /// The kernel thread's whole life.
 fn thread_main(start: Start) {
     // SAFETY: the spawner's interpreter, alive until every kernel thread
@@ -431,6 +451,7 @@ fn thread_main(start: Start) {
     crate::vm::adopt(vm);
     crate::poll_flag::adopt(start.poll_flag as *mut u32);
     block_async_signals();
+    jit_pages_executable_for_this_thread();
     let th = start.gvl_thread.lock().unwrap().take().unwrap();
     GVL_THREAD.with(|t| *t.borrow_mut() = Some(th));
     // SAFETY: as `vm` — and dereferenced only under the GVL.
@@ -657,13 +678,18 @@ pub(super) fn sleep(
 pub(super) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
     ensure_main(vm);
     flush_pending_reports(vm, globals);
-    let cur = current();
+    let mut cur = current();
     deliver_pending_now(vm, globals, cur, false)?;
     set_park_blocking(cur, false);
     if is_current_main() {
         publish_main_exec(vm);
     }
+    // Published for the span another thread runs, as `park` does: a
+    // basic-op redefinition there converts this thread's compiled
+    // frames through it (`scheduler::suspended_executors`).
+    cur.as_thread_inner_mut().resume_exec = Some(std::ptr::NonNull::from(&mut *vm));
     yield_now(cur);
+    cur.as_thread_inner_mut().resume_exec = None;
     flush_pending_reports(vm, globals);
     deliver_pending_now(vm, globals, cur, false)
 }

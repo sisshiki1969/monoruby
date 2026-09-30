@@ -167,11 +167,19 @@ impl Scheduler {
         for (_, _, t) in &self.io_waiters {
             t.mark(alloc);
         }
+        // The 1:1 model never leaves `in_scheduler` (main publishes
+        // before every release and nothing runs on its behalf), so
+        // there the pointer is fresh exactly while main is *not* the
+        // running thread. While main runs it is the collector's own
+        // root, and a pointer published before `Executor::init` moved
+        // the executor out would be stale.
         if self.in_scheduler
+            && !(native::enabled() && self.current == self.main)
             && let Some(main_exec) = self.main_exec
         {
-            // SAFETY: refreshed at scheduler_run entry; the main
-            // executor outlives the loop that set it.
+            // SAFETY: refreshed at scheduler_run entry (green) or at
+            // every GVL release by main (native); the main executor
+            // outlives the loop that set it.
             unsafe { main_exec.as_ref().mark(alloc) };
         }
     }
@@ -371,6 +379,51 @@ pub(crate) fn main_thread(vm: &mut Executor) -> Value {
 /// parked main is quiescent until the scheduler switches back to it).
 pub(crate) fn main_exec_ptr() -> Option<std::ptr::NonNull<Executor>> {
     SCHEDULER.with(|s| s.borrow().main_exec)
+}
+
+/// The executors of every thread that is not the running one and has
+/// frames: the context each is suspended in (`resume_exec`, or the
+/// published root for a parked main) followed by the fiber contexts it
+/// is nested in, root last. Every one is quiescent while the caller
+/// runs — a green thread until the scheduler switches to it, a kernel
+/// thread until it gets the GVL — so their frame chains can be read and
+/// rewritten in place. What a basic-op redefinition walks to convert
+/// the compiled frames of the *other* threads (`Codegen::
+/// check_bop_redefine`), the way it converts the redefining thread's.
+///
+/// A thread that has not started, or is done, has no frames; a runnable
+/// green thread in the ready queue is mid-switch with no published
+/// context and is skipped the way `Thread#backtrace` skips it (its
+/// frames are the ones its body pushes once dispatched, all of them
+/// after the redefinition).
+pub(crate) fn suspended_executors() -> Vec<std::ptr::NonNull<Executor>> {
+    SCHEDULER.with(|s| {
+        let s = s.borrow();
+        let mut execs = vec![];
+        for &t in &s.threads {
+            if Some(t) == s.current {
+                continue;
+            }
+            let inner = t.as_thread_inner();
+            if matches!(inner.state(), ThreadState::Created | ThreadState::Dead) {
+                continue;
+            }
+            let start = inner.resume_exec.or_else(|| {
+                (Some(t) == s.main && s.in_scheduler)
+                    .then_some(s.main_exec)
+                    .flatten()
+            });
+            let mut cur = start;
+            while let Some(exec) = cur {
+                execs.push(exec);
+                // SAFETY: a suspended executor is live, and the
+                // `parent_fiber` links of a nested fiber point at the
+                // live executors that resumed it.
+                cur = unsafe { exec.as_ref().parent_fiber() };
+            }
+        }
+        execs
+    })
 }
 
 /// `$?` / `Process.last_status` of the current thread (CRuby keeps the
@@ -1177,13 +1230,18 @@ fn scheduler_run(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
         s.main_exec = Some(root_exec(vm));
         s.in_scheduler = true;
         s.machinery = true;
+        // The context main parks in — a fiber's when it parks inside
+        // one — for `suspended_executors`; `main_exec` is the root.
+        let mut main = s.main.unwrap();
+        main.as_thread_inner_mut().resume_exec = Some(std::ptr::NonNull::from(&mut *vm));
     });
     let result = scheduler_loop(vm, globals);
     SCHEDULER.with(|s| {
         let mut s = s.borrow_mut();
         s.in_scheduler = false;
         s.machinery = false;
-        let main = s.main.unwrap();
+        let mut main = s.main.unwrap();
+        main.as_thread_inner_mut().resume_exec = None;
         s.current = Some(main);
     });
     result

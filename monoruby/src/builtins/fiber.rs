@@ -331,7 +331,10 @@ fn fiber_yield_inline(
     // resumer could free a value the frame still holds (e.g. an
     // interpolation operand). Write the frame back (the standard GC
     // safepoint) before yielding so every live slot is materialised.
-    state.exec_gc(ir, false);
+    // The poll precedes the yield, so if it finds the body evicted the
+    // interpreter resumes at this very call and performs the yield.
+    let pc = state.pc();
+    state.exec_gc(ir, false, pc);
     let using_fpr = state.get_using_fpr(ir);
     let error = ir.new_error(state);
     ir.fpr_save(using_fpr);

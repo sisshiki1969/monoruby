@@ -2608,4 +2608,159 @@ mod tests {
             "#,
         );
     }
+
+    /// A basic-op redefinition converts the compiled frames of the
+    /// *other* threads too (`Codegen::check_bop_redefine` over
+    /// `scheduler::suspended_executors`): `m` is compiled with `+`
+    /// inlined, `t` is parked inside it (at `q.pop`, a call site, so its
+    /// compiled frame is a convertible caller), and main replaces
+    /// `Integer#+` while it waits. Without the walk `m` resumes its
+    /// compiled body and returns 11.
+    #[test]
+    fn bop_redefinition_reaches_a_thread_parked_in_jit_code() {
+        run_test_once(
+            r#"
+            def m(q, x)
+              y = q.pop
+              x + y
+            end
+            q = Queue.new
+            40.times { q << 1 }
+            40.times { m(q, 1) }
+            q2 = Queue.new
+            t = Thread.new { m(q2, 10) }
+            Thread.pass until t.status == "sleep"
+            class Integer
+              def +(o) = 999
+            end
+            q2 << 1
+            t.value
+            "#,
+        );
+    }
+
+    /// The same with the roles swapped, and main parked inside a fiber:
+    /// the walk starts from the context main parked in and follows the
+    /// fiber's parent links, so the frame of `m` is found even though
+    /// the published root executor is the fiber's resumer.
+    #[test]
+    fn bop_redefinition_reaches_a_main_parked_in_a_fiber() {
+        run_test_once(
+            r#"
+            def m(q, x)
+              y = q.pop
+              x + y
+            end
+            q = Queue.new
+            40.times { q << 1 }
+            40.times { m(q, 1) }
+            q2 = Queue.new
+            t = Thread.new do
+              Thread.pass until Thread.main.status == "sleep"
+              class Integer
+                def +(o) = 999
+              end
+              q2 << 1
+            end
+            f = Fiber.new { m(q2, 10) }
+            r = f.resume
+            t.join
+            r
+            "#,
+        );
+    }
+
+    /// A thread that let go through `Thread.pass` (a call site inside
+    /// compiled code) is converted like a parked one.
+    #[test]
+    fn bop_redefinition_reaches_a_thread_that_passed_from_jit_code() {
+        run_test_once(
+            r#"
+            def m(x, n)
+              s = 0
+              n.times { Thread.pass }
+              x + s
+            end
+            40.times { m(1, 1) }
+            r = nil
+            t = Thread.new { r = m(10, 200) }
+            Thread.pass
+            class Integer
+              def +(o) = 999
+            end
+            t.join
+            r
+            "#,
+        );
+    }
+
+    /// Several threads drive the same methods across the JIT thresholds
+    /// at once, handing control back and forth mid-warm-up, so every
+    /// compile, entry patch and class-version stamp happens while other
+    /// threads hold frames in the code being replaced; then `foo` is
+    /// redefined under threads that keep calling it, and each sees the
+    /// definition current at its call (the class-version guard, read
+    /// after every GVL handoff).
+    #[test]
+    fn threads_compile_the_same_methods_concurrently() {
+        run_test_once(
+            r#"
+            def fib(n) = n < 2 ? n : fib(n - 1) + fib(n - 2)
+            def work(k)
+              s = 0
+              200.times { |i| s += fib(10) + i * k; Thread.pass if i % 7 == 0 }
+              s
+            end
+            ths = 8.times.map { |k| Thread.new { work(k) } }
+            r = [ths.map(&:value)]
+            def foo = 1
+            seen = Array.new(4) { [] }
+            ths = 4.times.map do |i|
+              Thread.new do
+                300.times { seen[i] << foo; Thread.pass if rand(3) == 0 }
+              end
+            end
+            50.times { Thread.pass }
+            def foo = 2
+            50.times { Thread.pass }
+            def foo = 3
+            ths.each(&:join)
+            # Each thread saw 1, then 2, then 3, in that order and nothing else.
+            r << seen.map { |a| a.chunk_while { |x, y| x == y }.map(&:first) }.all? { |a| a == [1, 2, 3] || a == [1, 3] || a == [1, 2] || a == [1] }
+            r
+            "#,
+        );
+    }
+
+    /// The frame the eviction walk cannot rewrite: `t` is inside compiled
+    /// `m` with nothing above it but its loop, so when the timeslice tick
+    /// takes it off at the loop's safepoint poll its innermost frame is
+    /// `m` itself. Main redefines `+` while `t` waits for the GVL (or the
+    /// scheduler, in the green model); on the way back the poll finds
+    /// `m`'s body evicted (`executor::POLL_DEOPT`) and `m` resumes in the
+    /// interpreter, where both the loop's `+= 1` and the final `+` are
+    /// the new method. Without that exit `m` finishes its compiled body
+    /// and returns 10.
+    #[test]
+    fn bop_redefinition_reaches_a_thread_preempted_at_a_poll() {
+        run_test_once(
+            r#"
+            $stop = true
+            def m(x)
+              i = 0
+              i += 1 until $stop
+              x + 0
+            end
+            40.times { m(1) }
+            $stop = false
+            t = Thread.new { m(10) }
+            sleep 0.05
+            class Integer
+              def +(o) = 999
+            end
+            $stop = true
+            t.value
+            "#,
+        );
+    }
 }
