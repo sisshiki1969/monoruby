@@ -21,17 +21,6 @@ class Thread
     nil
   end
 
-  # Whether a detected deadlock is ignored rather than aborting. monoruby
-  # does not run the deadlock detector, but the flag round-trips.
-  @@ignore_deadlock = false
-  def self.ignore_deadlock
-    @@ignore_deadlock
-  end
-
-  def self.ignore_deadlock=(flag)
-    @@ignore_deadlock = flag
-  end
-
   # NOTE: every raise inside an *instance* method of Thread must be the
   # explicit `Kernel.raise` — a bare `raise` dispatches on `self`, and
   # `self` here is the receiver Thread, so it would silently become the
@@ -471,7 +460,7 @@ class Thread
         end
         (@waiters ||= []) << Thread.current
         begin
-          Thread.stop
+          Thread.__stop
         ensure
           @waiters.delete(Thread.current)
         end
@@ -549,7 +538,7 @@ class Thread
       start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       unlock
       begin
-        timeout ? Kernel.sleep(timeout) : Thread.stop
+        timeout ? Kernel.sleep(timeout) : Thread.__stop
       ensure
         # The re-acquire must complete even when a kill / Thread#raise
         # arrives while parked waiting for the lock (CRuby re-acquires

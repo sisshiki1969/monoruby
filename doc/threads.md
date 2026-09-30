@@ -531,13 +531,16 @@ GVL を手放して実行し、pool は使わない — §12.7。)
 
 ## 10. 既知の制限と今後
 
-1. **シグナルは「ポーリングしたスレッド」で変換される**(CRuby は main に配送)。
+1. (green)**park 中の main には trap ハンドラが届かない** — 他スレッドが 1 つでも
+   生きていると main の `sleep` / `join` はスケジューラループの中で待ち、そこは
+   `signal_delivery_ok` の入口深さガードが配送を拒むので、ハンドラは main が
+   起きた後の最初の poll まで遅れる。1:1 モデルは解消済み(§12.8)。
 2. (解消済み)`Thread` のサブクラスは Ruby の `initialize` オーバーライドを実行する
    —— `class MyThread < Thread; def initialize(*a); ...; super; end; end` は CRuby と
    一致する。
 3. `Thread#priority` は保存のみ(スケジューリングに影響しない)。`native_thread_id` は
-   実 tid ではなくオブジェクト単位トークン。`ThreadGroup` / `fork` との相互作用、
-   `Thread.ignore_deadlock` の実効(検出器の停止)は未実装。
+   実 tid ではなくオブジェクト単位トークン。`ThreadGroup` / `fork` との相互作用は
+   未実装。`Thread.ignore_deadlock` は両モデルで検出器を止める(§12.4)。
 4. (green)ネイティブオフロード(§9)の往復は、ワーカープール化後も 40µs 前後ある
    (park/wake の往復そのもの)。1:1 モデルには往復がない(§12.7)。`sqlite3_step` のように**行単位で呼ばれる**関数は
    依然オフロードできず、busy_timeout 待ちは他の green thread を止める。これを
@@ -641,7 +644,21 @@ green はスケジューラループが「走れるものが無い」を検知�
 無いので **park の入口で** 判定する: 自分が deadline も fd も無い park に入ろうと
 していて、他の生存スレッドがすべて同じ状態(`park_indefinite`)なら
 `fatal "No live threads left. Deadlock?"`。main 自身なら即 `Err`、他スレッドなら
-main の `pending` に `Raise(fatal)` を積んで unpark する。
+main の `pending` に `Raise(fatal)` を積んで unpark する。判定は park の入口だけ
+なので、待っている間に他のスレッドが死んで残りが全員 park 中になっても起きない —
+CRuby も同じ(`rb_check_deadlock` は `sleep_forever` の入口でしか呼ばれない)。
+GVL 待ちや `without_gvl` 中のスレッドは `Runnable` なのでデッドロックではない。
+
+`Thread.ignore_deadlock = true` は検出器を止める(`Scheduler::ignore_deadlock`、
+`check_deadlock` の先頭で見る)。用途は「全員が永遠に待ち、trap ハンドラが誰かを
+起こす」プログラムで、1:1 モデルでは §12.8 によりそのハンドラが park 中の main
+で走り、起こされた main は park から戻る(ハンドラは park 状態のまま走るので、
+自分への `wakeup` / `Queue#push` も起床として数える)。green はループの
+「何も走れない」分岐で fatal の代わりにシグナルを待ち(`idle_wait_for_signal`)、
+届いたら入口深さガードを外してその場でハンドラを走らせる
+(`deliver_signals_from_idle`: 切替中のコンテキストが無い唯一の待ち地点)。単独の `Thread.stop` は CRuby と同じく `ThreadError`
+(stopping only thread)で、純 Ruby の Mutex / ConditionVariable の待ちは
+`Thread.__stop`(検査なし)を使うので、`Queue#pop` 単独は従来どおり fatal。
 
 `terminate_all`(プロセス終了時)は各スレッドに `Kill` を積んで unpark し、
 全員 dead になるまで GVL を渡し続け(待ち手が居なければ 1 ms 手放す、上限 10,000 回)、
@@ -714,3 +731,26 @@ fd で待てないカーネル待ち — `flock` / FIFO の `open` / `fcntl(F_SE
   両モードで park 経路のまま。読み取りバッファを GVL の内外で分けて
   `read(2)` 自体を GVL 外に出す設計は採っていない — park が GVL を手放す
   ので、fd 待ちの間に他スレッドが走る目的はすでに達している。
+
+### 12.8 シグナルと割り込みの配送(P4)
+
+- **シグナルは main で変換する**。非 main のカーネルスレッドは
+  `block_async_signals` で非同期シグナルをブロックしているので、プロセス宛の
+  シグナルはカーネルが main のカーネルスレッドに配る。ハンドラは SIGNAL レーンを
+  立てるだけで、変換(trap ハンドラの呼び出し / `Interrupt` 等への変換)は
+  main の poll で行う。1:1 モデルの `signal_delivery_ok` は「current が main か」
+  だけを見る: green の入口深さガード(`SCHED_CALL_DEPTH`)は保存中のコンテキスト
+  の上でハンドラを走らせないためのもので、コンテキストを保存しない 1:1 には
+  守るものがない。したがって main は **自分の park(`poll` の `EINTR`)や
+  `without_gvl` の `EINTR` の直後の poll でもハンドラを走らせ**、その後 sleep の
+  残りや待ちを続ける(CRuby と同じタイミング)。
+- **ホルダは GVL を譲る**。main 以外がホルダのときに poll でシグナル保留を見たら、
+  その poll を preempt として扱い `pass`(`Gvl::yield_now`)する。main は
+  `EINTR` で起きて GVL の待ち行列に並んでいる(か、並ぼうとしている)ので、
+  次のタイムスライス(10 ms)を待たずにハンドラが走る。待ち手がいなければ
+  `yield_now` は何もしない。
+- **kill / raise は全状態に届く**: 走行中(次の poll で `pass` → 配送)、GVL 待ち
+  (待っていた `pass` / park / `without_gvl` の戻りで `deliver_pending_now`)、
+  park 中(`wake_parked` → unpark)、`without_gvl` 中(`interrupt_blocking` →
+  `SIGVTALRM` → `EINTR`、§12.7)。`handle_interrupt` のマスクと
+  `pending_interrupt?` は green と同じキュー(§6)。

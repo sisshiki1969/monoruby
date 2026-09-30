@@ -119,6 +119,12 @@ pub(crate) struct Scheduler {
     /// 1:1 model: the kernel threads, by Ruby thread object id, joined
     /// once their thread is dead (`native::terminate_all`).
     native_joins: Vec<(u64, std::thread::JoinHandle<()>)>,
+    /// `Thread.ignore_deadlock` (the truthiness of the value last
+    /// assigned, as CRuby stores it). While set, the deadlock detector
+    /// is off and a program whose threads all wait forever simply
+    /// waits — for a signal handler to wake one of them, the case the
+    /// flag exists for.
+    ignore_deadlock: bool,
 }
 
 impl Scheduler {
@@ -136,6 +142,7 @@ impl Scheduler {
             pending_reports: vec![],
             flushing_reports: false,
             native_joins: vec![],
+            ignore_deadlock: false,
         }
     }
 
@@ -227,6 +234,18 @@ fn swap_sched_call_depth(depth: u32) -> u32 {
 /// invoked over a context that is about to be — or already is — saved
 /// gets replayed when that context is restored).
 pub(crate) fn signal_delivery_ok() -> bool {
+    if native::enabled() {
+        // 1:1 model: no context is ever saved and replayed, so the
+        // entry-depth guard has nothing to protect. What matters is
+        // only *which thread* polls: the main thread — at any of its
+        // poll points, including the `EINTR` return of its own park or
+        // GVL-less region — runs the handler on its own kernel stack;
+        // any other thread leaves the signal pending for main.
+        return SCHEDULER.with(|s| {
+            let s = s.borrow();
+            s.current.zip(s.main).is_none_or(|(c, m)| c.id() == m.id())
+        });
+    }
     SCHED_CALL_DEPTH.with(|d| d.get()) == 0
         && SCHEDULER.with(|s| {
             let s = s.borrow();
@@ -247,6 +266,20 @@ pub(crate) fn preempt_ok() -> bool {
         let s = s.borrow();
         !s.machinery && s.main.is_some()
     }) && has_other_live_threads()
+}
+
+/// Whether the 1:1 model is selected (`MONORUBY_THREAD_MODEL=native`).
+pub(crate) fn native_enabled() -> bool {
+    native::enabled()
+}
+
+/// `Thread.ignore_deadlock`: whether the deadlock detector is off.
+pub(crate) fn ignore_deadlock() -> bool {
+    SCHEDULER.with(|s| s.borrow().ignore_deadlock)
+}
+
+pub(crate) fn set_ignore_deadlock(on: bool) {
+    SCHEDULER.with(|s| s.borrow_mut().ignore_deadlock = on);
 }
 
 /// Toggle the machinery marker around the context switch in `dispatch`.
@@ -1190,6 +1223,12 @@ fn scheduler_loop(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
         match (has_io, nearest_deadline()) {
             (true, deadline) => poll_io_waiters(vm, globals, deadline)?,
             (false, Some(deadline)) => interruptible_sleep_until(vm, globals, deadline)?,
+            (false, None) if ignore_deadlock() => {
+                // `Thread.ignore_deadlock`: wait for a signal instead of
+                // aborting — a trap handler is what will wake a thread,
+                // so it has to run here, from the idle wait itself.
+                idle_wait_for_signal(vm, globals)?;
+            }
             (false, None) => {
                 return Err(MonorubyErr::fatal(
                     "No live threads left. Deadlock?".to_string(),
@@ -1307,6 +1346,48 @@ fn nearest_deadline() -> Option<Instant> {
             .filter_map(|(dl, _)| *dl)
             .min()
     })
+}
+
+/// Run the main thread's poll point from the scheduler's idle wait,
+/// with the entry-depth guard and the machinery marker lifted for the
+/// call. The guard keeps a trap handler off a context that is being
+/// saved or restored (`dispatch`); in the idle wait no switch is in
+/// flight — the main thread's own context is live on this stack, the
+/// handler runs on it like any main-context call (a `sleep` inside it
+/// nests a scheduler run), and its wakeups are what the next loop
+/// iteration picks up. Used where nothing else could ever wake a
+/// thread (`Thread.ignore_deadlock`): elsewhere the idle wait leaves
+/// the signal for main's next poll after the wait, as before.
+fn idle_wait_for_signal(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
+    loop {
+        if crate::codegen::signal_table::has_pending_signals() {
+            return deliver_signals_from_idle(vm, globals);
+        }
+        // A nap that a signal cuts short (no SA_RESTART on the
+        // handlers); bounded, so a signal that landed between the check
+        // and the nap is seen within the second.
+        let ts = libc::timespec {
+            tv_sec: 1,
+            tv_nsec: 0,
+        };
+        // SAFETY: plain POSIX nanosleep on a valid timespec.
+        unsafe { libc::nanosleep(&ts, std::ptr::null_mut()) };
+    }
+}
+
+fn deliver_signals_from_idle(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
+    if !crate::codegen::signal_table::has_pending_signals() {
+        return Ok(());
+    }
+    let depth = swap_sched_call_depth(0);
+    set_machinery(false);
+    let r = crate::executor::execute_gc(vm, globals);
+    set_machinery(true);
+    swap_sched_call_depth(depth);
+    if r.is_none() {
+        return Err(vm.take_error());
+    }
+    Ok(())
 }
 
 /// Sleep the whole process until `deadline`, staying signal-responsive:
