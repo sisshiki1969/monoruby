@@ -5726,7 +5726,7 @@ pub(crate) extern "C" fn execute_gc(
     // collection, a timeslice switch, or both is decided lane by lane —
     // a pure preempt tick never runs a spurious full GC. See
     // poll_flag.rs for the lane protocol.
-    let preempt = crate::poll_flag::consume_preempt() || crate::preempt::stress();
+    let mut preempt = crate::poll_flag::consume_preempt() || crate::preempt::stress();
     let current_exec = executor as *mut Executor;
     // Drain the pending-signal bitmap. The lowest-numbered pending signal
     // is consumed; any others observed in the same drain are dropped on
@@ -5750,6 +5750,17 @@ pub(crate) extern "C" fn execute_gc(
         // armed, which keeps the poll word non-zero: main still wakes
         // (an allocation-free `nil until flag` spin on main polls only
         // while the word is non-zero).
+        //
+        // 1:1 model: the kernel delivered the signal to the main kernel
+        // thread (the others block it), so main is awake and queued for
+        // the GVL, or about to be. Hand the lock over now rather than
+        // at the next timeslice tick: the handler runs as soon as main
+        // holds the lock.
+        if crate::scheduler::native_enabled()
+            && crate::codegen::signal_table::has_pending_signals()
+        {
+            preempt = true;
+        }
         0
     };
     // A pending signal this poll may not drain (delivery is gated to the

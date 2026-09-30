@@ -1045,3 +1045,9 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
    released (`scheduler::without_gvl`, §12.7) instead of on the native
    pool; an interrupt reaches it through `SIGVTALRM` (`EINTR`, then
    delivery). The closure must touch nothing of the interpreter.
+   Signals are converted (trap handlers run) on the main thread only:
+   the kernel delivers them to main's kernel thread, whose park or
+   GVL-less region returns `EINTR`, and a non-main holder that sees the
+   pending signal at its poll point hands the GVL over at once
+   (§12.8). `Thread.ignore_deadlock` switches the deadlock detector off
+   in both models.

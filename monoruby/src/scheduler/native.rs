@@ -551,9 +551,9 @@ fn park(
     acquire(cur);
     // Under the GVL again: no waker can write to the pipe now, so a
     // drain leaves it empty for the next park.
-    let woken = {
+    cur.as_thread_inner_mut().parker.as_ref().unwrap().drain();
+    let unpark = |mut cur: Value| {
         let inner = cur.as_thread_inner_mut();
-        inner.parker.as_ref().unwrap().drain();
         let woken = inner.state != state;
         inner.state = ThreadState::Runnable;
         inner.park_indefinite = false;
@@ -563,15 +563,23 @@ fn park(
     };
     if let Some(err) = err {
         if err.raw_os_error() == Some(libc::EINTR) {
-            // A signal: run the poll point (trap handlers on main).
-            if crate::executor::execute_gc(vm, globals).is_none() {
+            // A signal: run the poll point — on main, the trap handler
+            // (`signal_delivery_ok`). It runs with the park state still
+            // in place, so a wakeup it performs on this very thread
+            // (`Thread.main.wakeup`, a `Queue#push` to the queue main
+            // pops) counts as a wake, as it does in CRuby, where the
+            // handler runs inside the sleep loop's interrupt check.
+            let r = crate::executor::execute_gc(vm, globals);
+            let woken = unpark(cur);
+            if r.is_none() {
                 return Err(vm.take_error());
             }
-        } else {
-            return Err(MonorubyErr::ioerr(format!("poll failed: {err}")));
+            return Ok(woken);
         }
+        unpark(cur);
+        return Err(MonorubyErr::ioerr(format!("poll failed: {err}")));
     }
-    Ok(woken)
+    Ok(unpark(cur))
 }
 
 /// `cur` is about to park with nothing that could ever wake it but
@@ -580,6 +588,9 @@ fn park(
 /// Deadlock?" — a fatal error in the main thread. Returned to a main
 /// `cur` to raise in place; queued on main (and main woken) otherwise.
 fn check_deadlock(cur: Value, is_main: bool) -> Option<MonorubyErr> {
+    if ignore_deadlock() {
+        return None;
+    }
     let all_parked = SCHEDULER.with(|s| {
         s.borrow().threads.iter().all(|t| {
             let inner = t.as_thread_inner();

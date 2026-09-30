@@ -32,6 +32,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(THREAD_CLASS, "pass", thread_pass, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "list", thread_list, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "stop", thread_stop, 0);
+    globals.define_builtin_class_func(THREAD_CLASS, "__stop", thread_park_forever, 0);
+    globals.define_builtin_class_func(THREAD_CLASS, "ignore_deadlock", thread_ignore_deadlock, 0);
+    globals.define_builtin_class_func(THREAD_CLASS, "ignore_deadlock=", thread_set_ignore_deadlock, 1);
 
     globals.define_builtin_func_with(THREAD_CLASS, "join", thread_join, 0, 1, false);
     globals.define_builtin_func(THREAD_CLASS, "value", thread_value, 0);
@@ -553,8 +556,49 @@ fn thread_list(vm: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Thread/s/stop.html]
 #[monoruby_builtin]
 fn thread_stop(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    // CRuby (`rb_thread_stop`): the only live thread cannot stop — no
+    // one could ever wake it. `sleep` is the way to wait forever.
+    if !scheduler::has_other_live_threads() {
+        return Err(MonorubyErr::threaderr(
+            &globals.store,
+            "stopping only thread\n\tnote: use sleep to stop forever",
+        ));
+    }
     scheduler::sleep(vm, globals, None)?;
     Ok(Value::nil())
+}
+
+/// `Thread.__stop`: park until woken, without `Thread.stop`'s only-thread
+/// check — the wait of the pure-Ruby `Mutex` / `ConditionVariable`
+/// (builtins/thread.rb), where waiting alone is a deadlock for the
+/// detector to report, not a `ThreadError`.
+#[monoruby_builtin]
+fn thread_park_forever(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    scheduler::sleep(vm, globals, None)?;
+    Ok(Value::nil())
+}
+
+///
+/// ### Thread.ignore_deadlock
+///
+/// - ignore_deadlock -> bool
+/// - ignore_deadlock = flag -> flag
+///
+/// While truthy, the deadlock detector ("No live threads left.
+/// Deadlock?") is off: a program whose threads all wait forever keeps
+/// waiting, for a signal handler to wake one of them.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Thread/s/ignore_deadlock.html]
+#[monoruby_builtin]
+fn thread_ignore_deadlock(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(scheduler::ignore_deadlock()))
+}
+
+#[monoruby_builtin]
+fn thread_set_ignore_deadlock(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let v = lfp.arg(0);
+    scheduler::set_ignore_deadlock(v.as_bool());
+    Ok(v)
 }
 
 fn join_timeout(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Option<std::time::Duration>> {
@@ -2402,6 +2446,123 @@ mod tests {
             r#"
             Thread.new { sleep }
             sleep
+            "#,
+        );
+    }
+
+    #[test]
+    fn thread_stop_as_the_only_thread_raises() {
+        // CRuby: the only live thread cannot `Thread.stop` (nothing could
+        // wake it) — a ThreadError, not the deadlock detector's fatal.
+        // With another thread alive it parks and can be woken as usual.
+        run_test_once(
+            r#"
+            r = []
+            begin; Thread.stop; rescue ThreadError => e; r << e.message; end
+            t = Thread.new { Thread.stop; :woken }
+            Thread.pass until t.stop?
+            t.wakeup
+            r << t.value
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn ignore_deadlock_round_trips() {
+        run_test_once(
+            r#"
+            r = [Thread.ignore_deadlock]
+            r << (Thread.ignore_deadlock = 1)
+            r << Thread.ignore_deadlock
+            r << (Thread.ignore_deadlock = false)
+            r << Thread.ignore_deadlock
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn ignore_deadlock_waits_for_a_signal_instead_of_aborting() {
+        // The flag's purpose: every thread waits forever, and a signal
+        // handler is what wakes one of them — here it runs while main is
+        // parked (inside the 1:1 park's EINTR return, or the green
+        // scheduler's idle wait). Forked, so a regression (the detector
+        // aborting, or the handler never running) fails by timeout
+        // rather than wedging the harness.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            pid = fork do
+              r.close
+              Thread.ignore_deadlock = true
+              q = Thread::Queue.new
+              Signal.trap(:USR1) { q << :sig }
+              Thread.new { sleep }             # another thread, parked forever
+              sender = fork { sleep 0.2; Process.kill(:USR1, Process.ppid) }
+              v = q.pop                        # main waiting forever too
+              Process.wait(sender)
+              w.write(v.to_s)
+              w.close
+              exit
+            end
+            w.close
+            got = nil
+            100.times do
+              break if (got = r.read_nonblock(64, exception: false)) && got != :wait_readable
+              sleep 0.1
+            end
+            if got.nil? || got == :wait_readable
+              Process.kill(:KILL, pid) rescue nil
+              got = "starved"
+            end
+            Process.wait(pid)
+            [got, $?.exitstatus]
+            "#,
+        );
+    }
+
+    #[test]
+    fn signal_reaches_a_parked_main_while_another_thread_runs() {
+        // A trap handler runs on main while main is parked in `sleep`
+        // and another thread keeps the CPU: the kernel delivers the
+        // signal to the main kernel thread (the others block it), whose
+        // `poll` returns EINTR; the holder hands the GVL over at its
+        // next poll point, and main runs the handler before going back
+        // to sleep — CRuby's timing, not the end of the sleep. 1:1
+        // model only: the green scheduler leaves the signal for main's
+        // next poll after the sleep (doc/threads.md §10).
+        if !crate::scheduler::native_enabled() {
+            return;
+        }
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            pid = fork do
+              r.close
+              t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+              at = nil
+              Signal.trap(:USR1) { at = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0 }
+              Thread.new { i = 0; loop { i += 1 } }
+              sender = fork { sleep 0.2; Process.kill(:USR1, Process.ppid) }
+              sleep 1
+              Process.wait(sender)
+              w.write(at && at < 0.7 ? "prompt" : "late")
+              w.close
+              exit
+            end
+            w.close
+            got = nil
+            100.times do
+              break if (got = r.read_nonblock(64, exception: false)) && got != :wait_readable
+              sleep 0.1
+            end
+            if got.nil? || got == :wait_readable
+              Process.kill(:KILL, pid) rescue nil
+              got = "starved"
+            end
+            Process.wait(pid)
+            [got, $?.exitstatus]
             "#,
         );
     }
