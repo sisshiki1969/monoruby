@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cbd88ccd.js";
+            window.path_to_searchindex_js = "searchindex-5a46026f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -10174,13 +10174,16 @@ waiter で共有なので、未充足の waiter は再 park する。</li>
 </ul>
 <h2 id="10-既知の制限と今後"><a class="header" href="#10-既知の制限と今後">10. 既知の制限と今後</a></h2>
 <ol>
-<li><strong>シグナルは「ポーリングしたスレッド」で変換される</strong>(CRuby は main に配送)。</li>
+<li>(green)<strong>park 中の main には trap ハンドラが届かない</strong> — 他スレッドが 1 つでも
+生きていると main の <code>sleep</code> / <code>join</code> はスケジューラループの中で待ち、そこは
+<code>signal_delivery_ok</code> の入口深さガードが配送を拒むので、ハンドラは main が
+起きた後の最初の poll まで遅れる。1:1 モデルは解消済み(§12.8)。</li>
 <li>(解消済み)<code>Thread</code> のサブクラスは Ruby の <code>initialize</code> オーバーライドを実行する
 —— <code>class MyThread &lt; Thread; def initialize(*a); ...; super; end; end</code> は CRuby と
 一致する。</li>
 <li><code>Thread#priority</code> は保存のみ(スケジューリングに影響しない)。<code>native_thread_id</code> は
-実 tid ではなくオブジェクト単位トークン。<code>ThreadGroup</code> / <code>fork</code> との相互作用、
-<code>Thread.ignore_deadlock</code> の実効(検出器の停止)は未実装。</li>
+実 tid ではなくオブジェクト単位トークン。<code>ThreadGroup</code> / <code>fork</code> との相互作用は
+未実装。<code>Thread.ignore_deadlock</code> は両モデルで検出器を止める(§12.4)。</li>
 <li>(green)ネイティブオフロード(§9)の往復は、ワーカープール化後も 40µs 前後ある
 (park/wake の往復そのもの)。1:1 モデルには往復がない(§12.7)。<code>sqlite3_step</code> のように<strong>行単位で呼ばれる</strong>関数は
 依然オフロードできず、busy_timeout 待ちは他の green thread を止める。これを
@@ -10275,7 +10278,20 @@ unpark し、起きた側は stream が閉じているのを見て <code>IOError
 無いので <strong>park の入口で</strong> 判定する: 自分が deadline も fd も無い park に入ろうと
 していて、他の生存スレッドがすべて同じ状態(<code>park_indefinite</code>)なら
 <code>fatal "No live threads left. Deadlock?"</code>。main 自身なら即 <code>Err</code>、他スレッドなら
-main の <code>pending</code> に <code>Raise(fatal)</code> を積んで unpark する。</p>
+main の <code>pending</code> に <code>Raise(fatal)</code> を積んで unpark する。判定は park の入口だけ
+なので、待っている間に他のスレッドが死んで残りが全員 park 中になっても起きない —
+CRuby も同じ(<code>rb_check_deadlock</code> は <code>sleep_forever</code> の入口でしか呼ばれない)。
+GVL 待ちや <code>without_gvl</code> 中のスレッドは <code>Runnable</code> なのでデッドロックではない。</p>
+<p><code>Thread.ignore_deadlock = true</code> は検出器を止める(<code>Scheduler::ignore_deadlock</code>、
+<code>check_deadlock</code> の先頭で見る)。用途は「全員が永遠に待ち、trap ハンドラが誰かを
+起こす」プログラムで、1:1 モデルでは §12.8 によりそのハンドラが park 中の main
+で走り、起こされた main は park から戻る(ハンドラは park 状態のまま走るので、
+自分への <code>wakeup</code> / <code>Queue#push</code> も起床として数える)。green はループの
+「何も走れない」分岐で fatal の代わりにシグナルを待ち(<code>idle_wait_for_signal</code>)、
+届いたら入口深さガードを外してその場でハンドラを走らせる
+(<code>deliver_signals_from_idle</code>: 切替中のコンテキストが無い唯一の待ち地点)。単独の <code>Thread.stop</code> は CRuby と同じく <code>ThreadError</code>
+(stopping only thread)で、純 Ruby の Mutex / ConditionVariable の待ちは
+<code>Thread.__stop</code>(検査なし)を使うので、<code>Queue#pop</code> 単独は従来どおり fatal。</p>
 <p><code>terminate_all</code>(プロセス終了時)は各スレッドに <code>Kill</code> を積んで unpark し、
 全員 dead になるまで GVL を渡し続け(待ち手が居なければ 1 ms 手放す、上限 10,000 回)、
 dead になったカーネルスレッドを <code>join</code> してから戻る — インタプリタ(<code>Vm</code>)より
@@ -10342,6 +10358,29 @@ FFI / 拡張の呼び出しは再発行しない(<code>NativeOp::retries_eintr</
 両モードで park 経路のまま。読み取りバッファを GVL の内外で分けて
 <code>read(2)</code> 自体を GVL 外に出す設計は採っていない — park が GVL を手放す
 ので、fd 待ちの間に他スレッドが走る目的はすでに達している。</li>
+</ul>
+<h3 id="128-シグナルと割り込みの配送p4"><a class="header" href="#128-シグナルと割り込みの配送p4">12.8 シグナルと割り込みの配送(P4)</a></h3>
+<ul>
+<li><strong>シグナルは main で変換する</strong>。非 main のカーネルスレッドは
+<code>block_async_signals</code> で非同期シグナルをブロックしているので、プロセス宛の
+シグナルはカーネルが main のカーネルスレッドに配る。ハンドラは SIGNAL レーンを
+立てるだけで、変換(trap ハンドラの呼び出し / <code>Interrupt</code> 等への変換)は
+main の poll で行う。1:1 モデルの <code>signal_delivery_ok</code> は「current が main か」
+だけを見る: green の入口深さガード(<code>SCHED_CALL_DEPTH</code>)は保存中のコンテキスト
+の上でハンドラを走らせないためのもので、コンテキストを保存しない 1:1 には
+守るものがない。したがって main は <strong>自分の park(<code>poll</code> の <code>EINTR</code>)や
+<code>without_gvl</code> の <code>EINTR</code> の直後の poll でもハンドラを走らせ</strong>、その後 sleep の
+残りや待ちを続ける(CRuby と同じタイミング)。</li>
+<li><strong>ホルダは GVL を譲る</strong>。main 以外がホルダのときに poll でシグナル保留を見たら、
+その poll を preempt として扱い <code>pass</code>(<code>Gvl::yield_now</code>)する。main は
+<code>EINTR</code> で起きて GVL の待ち行列に並んでいる(か、並ぼうとしている)ので、
+次のタイムスライス(10 ms)を待たずにハンドラが走る。待ち手がいなければ
+<code>yield_now</code> は何もしない。</li>
+<li><strong>kill / raise は全状態に届く</strong>: 走行中(次の poll で <code>pass</code> → 配送)、GVL 待ち
+(待っていた <code>pass</code> / park / <code>without_gvl</code> の戻りで <code>deliver_pending_now</code>)、
+park 中(<code>wake_parked</code> → unpark)、<code>without_gvl</code> 中(<code>interrupt_blocking</code> →
+<code>SIGVTALRM</code> → <code>EINTR</code>、§12.7)。<code>handle_interrupt</code> のマスクと
+<code>pending_interrupt?</code> は green と同じキュー(§6)。</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="green-thread-スケジューラ-thread--fiber-の状態遷移図"><a class="header" href="#green-thread-スケジューラ-thread--fiber-の状態遷移図">Green thread スケジューラ: Thread / Fiber の状態遷移図</a></h1>
