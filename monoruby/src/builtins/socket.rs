@@ -294,7 +294,7 @@ fn value_to_port(globals: &Globals, v: Value) -> Result<u16> {
 
 /// Resolve `host` to an IPv4 address (network byte order). `for_bind`
 /// selects the nil default: INADDR_ANY for servers, loopback for clients.
-fn resolve_ipv4(store: &Store, host: Option<&str>, for_bind: bool) -> Result<u32> {
+fn resolve_ipv4(vm: &mut Executor, store: &Store, host: Option<&str>, for_bind: bool) -> Result<u32> {
     let host = match host {
         None => {
             return Ok(if for_bind {
@@ -311,7 +311,9 @@ fn resolve_ipv4(store: &Store, host: Option<&str>, for_bind: bool) -> Result<u32
     // Name lookup via getaddrinfo(3), IPv4/stream only. Local names
     // (localhost, /etc/hosts entries) resolve without network traffic;
     // anything slower is accepted as a blocking call, like CRuby without
-    // the resolv replacement.
+    // the resolv replacement — one that lets the other threads run in
+    // the 1:1 model (`scheduler::without_gvl`; the query works on its
+    // own C string and out pointer only).
     let c_host = std::ffi::CString::new(host)
         .map_err(|_| socket_error(store, "getaddrinfo: Name or service not known"))?;
     // SAFETY: hints is a plain zeroed struct we fill; res is an out
@@ -321,7 +323,9 @@ fn resolve_ipv4(store: &Store, host: Option<&str>, for_bind: bool) -> Result<u32
         hints.ai_family = libc::AF_INET;
         hints.ai_socktype = libc::SOCK_STREAM;
         let mut res: *mut libc::addrinfo = std::ptr::null_mut();
-        let rc = libc::getaddrinfo(c_host.as_ptr(), std::ptr::null(), &hints, &mut res);
+        let rc = crate::scheduler::without_gvl(vm, || {
+            libc::getaddrinfo(c_host.as_ptr(), std::ptr::null(), &hints, &mut res)
+        });
         if rc != 0 {
             let msg = std::ffi::CStr::from_ptr(libc::gai_strerror(rc)).to_string_lossy();
             return Err(socket_error(store, format!("getaddrinfo: {msg}")));
@@ -515,7 +519,7 @@ fn tcp_server_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         ),
         None => (None, value_to_port(globals, lfp.arg(0))?),
     };
-    let addr = resolve_ipv4(&globals.store, host.as_deref(), true)?;
+    let addr = resolve_ipv4(vm, &globals.store, host.as_deref(), true)?;
     let fd = new_tcp_fd(&globals.store)?;
     let sin = sockaddr_in(addr, port);
     // SAFETY: fd is a fresh socket we own; sin is a valid sockaddr_in.
@@ -640,7 +644,7 @@ fn socket_listen(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
 fn tcp_socket_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let host = value_to_host(globals, lfp.arg(0))?;
     let port = value_to_port(globals, lfp.arg(1))?;
-    let addr = resolve_ipv4(&globals.store, host.as_deref(), false)?;
+    let addr = resolve_ipv4(vm, &globals.store, host.as_deref(), false)?;
     // kw slots: arg(4) = connect_timeout, arg(5) = open_timeout. CRuby
     // treats open_timeout as an overall bound (resolution + connect);
     // resolution is synchronous here, so both bound the connect wait.
@@ -664,7 +668,7 @@ fn tcp_socket_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
             Some(v) if !v.is_nil() => value_to_port(globals, v)?,
             _ => 0,
         };
-        let laddr = resolve_ipv4(&globals.store, lhost.as_deref(), true)?;
+        let laddr = resolve_ipv4(vm, &globals.store, lhost.as_deref(), true)?;
         let lsin = sockaddr_in(laddr, lport);
         // SAFETY: bind(2) on our fresh fd.
         if unsafe {
@@ -836,9 +840,9 @@ fn connect_ctx(host: Option<&str>, port: u16) -> String {
 /// - getaddress(host) -> String
 ///
 #[monoruby_builtin]
-fn ip_getaddress(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn ip_getaddress(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let host = value_to_host(globals, lfp.arg(0))?;
-    let addr = resolve_ipv4(&globals.store, host.as_deref(), false)?;
+    let addr = resolve_ipv4(vm, &globals.store, host.as_deref(), false)?;
     Ok(Value::string(
         std::net::Ipv4Addr::from(u32::from_be(addr)).to_string(),
     ))
@@ -1741,13 +1745,13 @@ fn socket_connect_nonblock(
 /// - pack_sockaddr_in(port, host) -> String
 ///
 #[monoruby_builtin]
-fn pack_sockaddr_in(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn pack_sockaddr_in(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let port = match lfp.arg(0).try_fixnum() {
         Some(i) if (0..=65535).contains(&i) => i as u16,
         _ => value_to_port(globals, lfp.arg(0))?,
     };
     let host = value_to_host(globals, lfp.arg(1))?;
-    let addr = resolve_ipv4(&globals.store, host.as_deref(), true)?;
+    let addr = resolve_ipv4(vm, &globals.store, host.as_deref(), true)?;
     let sin = sockaddr_in(addr, port);
     // SAFETY: viewing a POD struct as bytes.
     let bytes = unsafe {
@@ -2026,10 +2030,10 @@ fn udp_socket_new(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 /// - bind(host, port) -> 0
 ///
 #[monoruby_builtin]
-fn udp_bind(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn udp_bind(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let host = value_to_host(globals, lfp.arg(0))?;
     let port = value_to_port(globals, lfp.arg(1))?;
-    let addr = resolve_ipv4(&globals.store, host.as_deref(), true)?;
+    let addr = resolve_ipv4(vm, &globals.store, host.as_deref(), true)?;
     let sin = sockaddr_in(addr, port);
     let fd = lfp.self_val().as_io_inner().fileno()?;
     // SAFETY: bind(2) with a valid sockaddr_in.
@@ -2054,10 +2058,10 @@ fn udp_bind(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// Datagram connect just records the default peer — no handshake, so no
 /// parking is needed.
 #[monoruby_builtin]
-fn udp_connect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn udp_connect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let host = value_to_host(globals, lfp.arg(0))?;
     let port = value_to_port(globals, lfp.arg(1))?;
-    let addr = resolve_ipv4(&globals.store, host.as_deref(), false)?;
+    let addr = resolve_ipv4(vm, &globals.store, host.as_deref(), false)?;
     let sin = sockaddr_in(addr, port);
     let fd = lfp.self_val().as_io_inner().fileno()?;
     // SAFETY: connect(2) with a valid sockaddr_in.
@@ -2090,7 +2094,7 @@ fn udp_send(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         (Some(host), Some(port)) if !port.is_nil() => {
             let host = value_to_host(globals, host)?;
             let port = value_to_port(globals, port)?;
-            let addr = resolve_ipv4(&globals.store, host.as_deref(), false)?;
+            let addr = resolve_ipv4(vm, &globals.store, host.as_deref(), false)?;
             let sin = sockaddr_in(addr, port);
             // SAFETY: viewing a POD struct as bytes.
             let sa = unsafe {

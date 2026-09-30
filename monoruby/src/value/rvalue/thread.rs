@@ -113,6 +113,12 @@ pub struct ThreadInner {
     /// 1:1 model: the fds the current `IoWaiting` park polls, so that
     /// closing one of them can wake the thread (`native::fd_closing`).
     pub(crate) park_fds: Vec<i32>,
+    /// 1:1 model: the kernel thread this thread is running on while it
+    /// is inside a GVL-less region (`scheduler::without_gvl`: a syscall
+    /// or foreign call that blocks in the kernel). `Some` only for the
+    /// region's duration; an interrupt sends the unblocking signal
+    /// there (`native::interrupt_blocking`).
+    pub(crate) blocking_tid: Option<libc::pthread_t>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +214,7 @@ impl ThreadInner {
             parker: None,
             park_indefinite: false,
             park_fds: vec![],
+            blocking_tid: None,
         }
     }
 
@@ -244,6 +251,7 @@ impl ThreadInner {
             parker: None,
             park_indefinite: false,
             park_fds: vec![],
+            blocking_tid: None,
         }
     }
 
@@ -272,6 +280,7 @@ impl ThreadInner {
             parker: None,
             park_indefinite: false,
             park_fds: vec![],
+            blocking_tid: None,
         }
     }
 

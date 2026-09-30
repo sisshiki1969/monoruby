@@ -2405,4 +2405,46 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn interrupt_a_thread_blocked_in_a_kernel_wait() {
+        // `Thread#kill` / `#raise` reach a thread blocked in a syscall
+        // that polls nothing (`flock`, a FIFO `open`): the green model
+        // discards the pool ticket, the 1:1 model sends the unblocking
+        // signal to the kernel thread (EINTR, then delivery).
+        run_test_once(
+            r#"
+            require 'tmpdir'
+            path = File.join(Dir.tmpdir, "mrb_flock_kill_#{Process.pid}")
+            f1 = File.open(path, "w")
+            f2 = File.open(path, "w")
+            f1.flock(File::LOCK_EX)
+            r = []
+            t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            t = Thread.new { f2.flock(File::LOCK_EX); :locked }
+            sleep 0.05
+            r << t.alive?
+            t.kill
+            t.join
+            r << t.status << t.value
+            r << ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) < 2)
+            fifo = File.join(Dir.tmpdir, "mrb_fifo_raise_#{Process.pid}")
+            File.mkfifo(fifo)
+            t2 = Thread.new do
+              begin
+                File.open(fifo, "r") { |io| io.read }
+              rescue ArgumentError => e
+                e.message
+              end
+            end
+            sleep 0.05
+            r << t2.alive?
+            t2.raise(ArgumentError, "unblocked")
+            r << t2.value
+            f1.flock(File::LOCK_UN)
+            f1.close; f2.close; File.delete(path); File.delete(fifo)
+            r
+            "#,
+        );
+    }
 }

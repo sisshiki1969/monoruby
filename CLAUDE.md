@@ -755,7 +755,8 @@ bin/test
    `gc-stress` only when `GC_STRESS=1` is exported — it is opt-in, so pushes
    and PRs never pay the per-safepoint stress; see the manual `gc-stress`
    workflow below), then the thread-related unit tests once more with
-   `MONORUBY_THREAD_MODEL=native`, so `scheduler/native.rs` and the GVL's
+   `MONORUBY_THREAD_MODEL=native` (the modules that spawn, park, wait on
+   fds or block in the kernel), so `scheduler/native.rs` and the GVL's
    contended paths are exercised and counted in the coverage report
 2. Builds a debug benchmark binary with the **same** feature list, so under
    `GC_STRESS=1` the benchmark/optcarrot/spec phases are stressed too (that
@@ -1038,4 +1039,9 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
    spawner's `Vm` (`vm::adopt`) and touches it only while holding the GVL
    (`src/gvl.rs`), so `CODEGEN` / `ALLOC` / `SCHEDULER` are still never
    used concurrently; every GVL release is at a safepoint (`doc/threads.md`
-   §12).
+   §12). A syscall that blocks in the kernel with nothing to poll
+   (`flock`, a FIFO `open`, `waitpid`, `getaddrinfo`, a blocking FFI or
+   extension call) runs on the calling kernel thread with the GVL
+   released (`scheduler::without_gvl`, §12.7) instead of on the native
+   pool; an interrupt reaches it through `SIGVTALRM` (`EINTR`, then
+   delivery). The closure must touch nothing of the interpreter.

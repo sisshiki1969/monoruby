@@ -47,6 +47,43 @@ pub(crate) fn enabled() -> bool {
 /// frames of the builtins beneath it.
 const NATIVE_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+/// The unblocking signal: sent with `pthread_kill` to a kernel thread
+/// that is inside a GVL-less region (`without_gvl`) when an interrupt
+/// is queued for its Ruby thread, so that the syscall it is blocked in
+/// returns `EINTR` and the thread comes back under the GVL to take the
+/// interrupt. Its handler does nothing; the signal exists to make the
+/// kernel return. CRuby's `ubf_pthread` uses the same signal, which is
+/// why `SIGVTALRM` is one of the reserved, untrappable ones.
+const UBF_SIGNAL: libc::c_int = libc::SIGVTALRM;
+
+extern "C" fn ubf_handler(_: libc::c_int) {}
+
+/// Make sure `ubf_handler` is the process's disposition for
+/// `UBF_SIGNAL`, without `SA_RESTART` (the whole point is that the
+/// blocked syscall is *not* restarted). Checked, not installed once:
+/// the default disposition of `SIGVTALRM` terminates the process, so a
+/// disposition reset by anything else must be found before a
+/// `pthread_kill`, never after. A Ruby program cannot reset it (the
+/// signal is reserved), but a failed in-process `exec` leaves every
+/// disposition at its default (`spawn::child_exec`), and foreign code
+/// can do as it likes.
+fn ensure_ubf_handler() {
+    let handler = ubf_handler as *const () as usize as libc::sighandler_t;
+    // SAFETY: plain sigaction calls with a handler that lives in the
+    // executable for the process lifetime.
+    unsafe {
+        let mut old: libc::sigaction = std::mem::zeroed();
+        if libc::sigaction(UBF_SIGNAL, std::ptr::null(), &mut old) == 0 && old.sa_sigaction == handler {
+            return;
+        }
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = handler;
+        sa.sa_flags = 0;
+        libc::sigemptyset(&mut sa.sa_mask);
+        libc::sigaction(UBF_SIGNAL, &sa, std::ptr::null_mut());
+    }
+}
+
 /// A thread's wake pipe. The parking thread polls the read end; a waker
 /// writes one byte. Both ends are non-blocking: the writer never stalls
 /// on a full pipe (one byte is all a park needs), and the parker drains
@@ -178,6 +215,99 @@ pub(super) fn wake_parked(mut thread: Value) -> bool {
     }
 }
 
+/// An interrupt was queued for `thread`, which is not parked. If it is
+/// inside a GVL-less region (`without_gvl`), send the unblocking signal
+/// to its kernel thread: the blocked syscall returns `EINTR`, the region
+/// ends, and the thread takes the interrupt on its way back under the
+/// GVL. Returns whether a signal was sent. A thread that is simply
+/// running Ruby needs nothing: it reaches a poll point on its own.
+pub(super) fn interrupt_blocking(thread: Value) -> bool {
+    match thread.as_thread_inner().blocking_tid {
+        Some(tid) => {
+            ensure_ubf_handler();
+            // SAFETY: `tid` is a live kernel thread of this process — it
+            // clears `blocking_tid` (under the GVL, which we hold) before
+            // it can exit — and the signal has a no-op handler.
+            unsafe { libc::pthread_kill(tid, UBF_SIGNAL) };
+            true
+        }
+        None => false,
+    }
+}
+
+/// Run `f` with the GVL released, on the calling kernel thread. For a
+/// syscall or foreign call that blocks in the kernel with no fd to poll
+/// (`flock`, a FIFO `open`, `waitpid`, `getaddrinfo`, a blocking FFI or
+/// extension call): the other Ruby threads run meanwhile, as they do
+/// while this thread is parked. `f` must touch nothing of the
+/// interpreter — no `Value`, no `Globals` — since another thread owns
+/// them for the duration; it works on raw fds, integers and its own
+/// buffers. The GVL-holding side of the protocol is the same as
+/// `park`'s: `resume_exec` is published for `Thread#backtrace`, main's
+/// root executor for a collection another thread starts, and
+/// `blocking_tid` for an interrupt's unblocking signal. Delivery of a
+/// pending interrupt is the caller's job (`deliver_pending_now` after
+/// an `EINTR`), as after a park.
+pub(super) fn without_gvl<R>(vm: &mut Executor, f: impl FnOnce() -> R) -> R {
+    ensure_main(vm);
+    let mut cur = current();
+    let is_main = SCHEDULER.with(|s| s.borrow().main == Some(cur));
+    {
+        let inner = cur.as_thread_inner_mut();
+        inner.resume_exec = Some(std::ptr::NonNull::from(&mut *vm));
+        // SAFETY: pthread_self has no preconditions.
+        inner.blocking_tid = Some(unsafe { libc::pthread_self() });
+    }
+    if is_main {
+        publish_main_exec(vm);
+    }
+    release();
+    let r = f();
+    acquire(cur);
+    let inner = cur.as_thread_inner_mut();
+    inner.blocking_tid = None;
+    inner.resume_exec = None;
+    r
+}
+
+/// The 1:1 model's `native_pool::run_blocking`: the operation runs on
+/// the calling kernel thread with the GVL released instead of on a pool
+/// worker, so there is no completion pipe to park on and no 40 µs
+/// round trip. A signal ends the syscall early (`EINTR`) — an
+/// interrupt's unblocking signal, or on main a trapped signal — and is
+/// handled under the GVL like a park's: the poll point runs, a pending
+/// interrupt is delivered, and the syscall is issued again (they are
+/// all idempotent waits). A foreign call is never re-issued; an `EINTR`
+/// inside it is the callee's own business.
+pub(crate) fn run_blocking(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    op: crate::native_pool::NativeOp,
+) -> Result<crate::native_pool::Completion> {
+    use crate::native_pool::{run_op, Completion};
+    ensure_main(vm);
+    let cur = current();
+    deliver_pending_now(vm, globals, cur, true)?;
+    set_park_blocking(cur, true);
+    loop {
+        let (ret, errno) = without_gvl(vm, || run_op(&op, false));
+        if errno == libc::EINTR && op.retries_eintr() {
+            if crate::executor::execute_gc(vm, globals).is_none() {
+                return Err(vm.take_error());
+            }
+            deliver_pending_now(vm, globals, cur, true)?;
+            continue;
+        }
+        // An interrupt that arrived meanwhile is delivered before the
+        // result is handed back, as CRuby checks interrupts on leaving a
+        // blocking region: a foreign call that the unblocking signal cut
+        // short (its `EINTR` is inside `ret`) must not run on as if it
+        // had completed.
+        deliver_pending_now(vm, globals, cur, true)?;
+        return Ok(Completion { ret, errno });
+    }
+}
+
 /// `fd` is about to be closed. A thread parked in `poll(2)` on it would
 /// not notice — the kernel keeps polling the file the descriptor
 /// referred to — where the green scheduler's poller saw `POLLNVAL` at
@@ -221,6 +351,7 @@ unsafe impl Send for Start {}
 /// scheduler's eager dispatch does.
 pub(super) fn spawn(vm: &mut Executor, globals: &mut Globals, mut thread: Value) -> Result<()> {
     ensure_main(vm);
+    ensure_ubf_handler();
     let (gvl_thread, probe) = with_gvl(|gvl, _| {
         let th = gvl.register();
         let probe = th.wait_probe();
@@ -284,6 +415,7 @@ fn block_async_signals() {
             libc::SIGTRAP,
             libc::SIGABRT,
             libc::SIGSYS,
+            UBF_SIGNAL,
         ] {
             libc::sigdelset(&mut set, sig);
         }
@@ -600,7 +732,9 @@ pub(super) fn terminate_all(vm: &mut Executor, globals: &mut Globals) {
             t.as_thread_inner_mut()
                 .pending
                 .push_back(PendingInterrupt::Kill);
-            wake_parked(t);
+            if !wake_parked(t) {
+                interrupt_blocking(t);
+            }
         }
         publish_main_exec(vm);
         for _ in 0..10_000 {
