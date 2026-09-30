@@ -269,6 +269,13 @@ pub(super) fn without_gvl<R>(vm: &mut Executor, f: impl FnOnce() -> R) -> R {
         inner.resume_exec = Some(std::ptr::NonNull::from(&mut *vm));
         // SAFETY: pthread_self has no preconditions.
         inner.blocking_tid = Some(unsafe { libc::pthread_self() });
+        // Ruby sees a thread blocked in the kernel as sleeping (CRuby's
+        // blocking region sets THREAD_STOPPED: `#status` "sleep",
+        // `#stop?` true), and specs spin on exactly that
+        // (`Thread.pass while t.status != "sleep"`). `Blocking` is that
+        // state without a parker behind it, so `wake_parked` leaves it
+        // to `interrupt_blocking` and `check_deadlock` does not count it.
+        inner.state = ThreadState::Blocking;
     }
     if is_main {
         publish_main_exec(vm);
@@ -277,6 +284,7 @@ pub(super) fn without_gvl<R>(vm: &mut Executor, f: impl FnOnce() -> R) -> R {
     let r = f();
     acquire(cur);
     let inner = cur.as_thread_inner_mut();
+    inner.state = ThreadState::Runnable;
     inner.blocking_tid = None;
     inner.resume_exec = None;
     r

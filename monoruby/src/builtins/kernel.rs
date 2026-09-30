@@ -3574,12 +3574,18 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // The child inherits our std fds; flush so our own pending output
     // precedes whatever it writes (CRuby orders them this way).
     crate::rvalue::io::flush_std_streams();
-    let mut child = match Command::new(&program).args(&args).spawn() {
+    let mut cmd = Command::new(&program);
+    cmd.args(&args);
+    crate::scheduler::command_for_child(&mut cmd);
+    let mut child = match cmd.spawn() {
         Ok(child) => child,
         // ENOEXEC (an executable file without a shebang that isn't a
         // binary): retry through `sh`, like execvp-era shells and CRuby.
         Err(err) if err.raw_os_error() == Some(libc::ENOEXEC) => {
-            match Command::new("/bin/sh").arg(&program).args(&args).spawn() {
+            let mut cmd = Command::new("/bin/sh");
+            cmd.arg(&program).args(&args);
+            crate::scheduler::command_for_child(&mut cmd);
+            match cmd.spawn() {
                 Ok(child) => child,
                 Err(_) => return Ok(Value::nil()),
             }
@@ -3755,6 +3761,7 @@ fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             c
         }
     };
+    crate::scheduler::command_for_child(&mut builder);
     let child = builder
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

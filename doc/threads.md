@@ -740,7 +740,20 @@ fd で待てないカーネル待ち — `flock` / FIFO の `open` / `fcntl(F_SE
   `resume_exec`(`Thread#backtrace` 用)、main なら `publish_main_exec`
   (他スレッドが起こす GC が main のルートを辿るため)、そして
   `ThreadInner::blocking_tid`(自分の `pthread_self`)を立ててから
-  `release()` → `f()` → `acquire()` → 両方を戻す。
+  `release()` → `f()` → `acquire()` → 両方を戻す。区間中の `state` は
+  `ThreadState::Blocking`: Ruby からは眠っている(`#status` "sleep" /
+  `#stop?` true。CRuby の blocking region が `THREAD_STOPPED` になるのと同じで、
+  spec は `Thread.pass while t.status != "sleep"` で待つ)が、park では
+  ないので `wake_parked` は触らず(割り込みは下の ubf 経路)、
+  `check_deadlock` にも数えない。
+- **子プロセスのシグナルマスク**: 非 main のカーネルスレッドは
+  `block_async_signals` でほぼ全シグナルをブロックしており、そのスレッドから
+  fork した子はそのマスクを継承する(`SIGTERM` が永遠に保留 — ruby/spec の
+  `Process.kill` fixture がまさにこれ)。`system` / バッククォート /
+  `IO.popen`(`std::process::Command`)は `scheduler::command_for_child` の
+  `pre_exec` で、`Process.spawn` / `exec`(`spawn::child_exec`)は
+  `reset_child_sigmask` で、子のマスクを空にしてから `execve` する。
+  `Process.fork` の子は fork 直後に forker が main になる際に全解除する(§12.5)。
 - **割り込み(ubf)**: `Thread#kill` / `#raise` の相手が park 中でなく
   `blocking_tid` を持っていれば、`native::interrupt_blocking` が
   `pthread_kill(tid, SIGVTALRM)` を送る。ハンドラは空(`ubf_handler`、

@@ -2748,6 +2748,7 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         }
     }
     command.stderr(Stdio::inherit());
+    crate::scheduler::command_for_child(&mut command);
 
     let child = command
         .spawn()
