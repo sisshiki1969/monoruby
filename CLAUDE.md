@@ -283,10 +283,11 @@ cd ../monoruby
 bin/spec
 ```
 
-> **Note**: With green threads (the `thread` branch series), the formerly
+> **Note**: Under monoruby's thread scheduler (the 1:1 model by default,
+> the M:1 green one with `MONORUBY_THREAD_MODEL=green`), the formerly
 > hang-prone specs (`core/io/copy_stream_spec.rb`, `core/io/select_spec.rb`)
-> now run to completion — blocking IO parks the calling thread on the
-> scheduler's fd poller instead of blocking the process.
+> run to completion — blocking IO parks the calling thread (releasing the
+> GVL) on an fd poll instead of blocking the process.
 
 ---
 
@@ -755,9 +756,9 @@ bin/test
    `gc-stress` only when `GC_STRESS=1` is exported — it is opt-in, so pushes
    and PRs never pay the per-safepoint stress; see the manual `gc-stress`
    workflow below), then the thread-related unit tests once more with
-   `MONORUBY_THREAD_MODEL=native` (the modules that spawn, park, wait on
-   fds or block in the kernel), so `scheduler/native.rs` and the GVL's
-   contended paths are exercised and counted in the coverage report
+   `MONORUBY_THREAD_MODEL=green` (the modules that spawn, park, wait on
+   fds or block in the kernel), so the M:1 green scheduler, no longer the
+   default, is still exercised and counted in the coverage report
 2. Builds a debug benchmark binary with the **same** feature list, so under
    `GC_STRESS=1` the benchmark/optcarrot/spec phases are stressed too (that
    run takes hours — it is a manual, deliberate exercise)
@@ -1034,8 +1035,9 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
    stays a genuine `thread_local!` is per *OS thread* state: the poll-word
    address (`poll_flag`, reachable from inside the global allocator), the
    scheduler-entry depth, the `hash`/`inspect` recursion guards.
-   With `MONORUBY_THREAD_MODEL=native` (`scheduler/native.rs`, off by
-   default) each Ruby `Thread` is a kernel thread that *adopts* the
+   By default (`scheduler/native.rs`; `MONORUBY_THREAD_MODEL=green`
+   selects the older M:1 green scheduler in `scheduler.rs`) each Ruby
+   `Thread` is a kernel thread that *adopts* the
    spawner's `Vm` (`vm::adopt`) and touches it only while holding the GVL
    (`src/gvl.rs`), so `CODEGEN` / `ALLOC` / `SCHEDULER` are still never
    used concurrently; every GVL release is at a safepoint (`doc/threads.md`

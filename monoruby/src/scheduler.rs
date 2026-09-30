@@ -40,10 +40,10 @@
 //!
 //! ## The 1:1 model
 //!
-//! With `MONORUBY_THREAD_MODEL=native` each Ruby thread is a kernel
-//! thread instead, serialized by the GVL; the registry below is shared
-//! and every entry point branches to `native` at its top. See
-//! scheduler/native.rs.
+//! By default each Ruby thread is a kernel thread instead, serialized
+//! by the GVL (`MONORUBY_THREAD_MODEL=green` selects the M:1 scheduler
+//! described above); the registry below is shared and every entry point
+//! branches to `native` at its top. See scheduler/native.rs.
 
 pub(crate) mod native;
 
@@ -276,7 +276,7 @@ pub(crate) fn preempt_ok() -> bool {
     }) && has_other_live_threads()
 }
 
-/// Whether the 1:1 model is selected (`MONORUBY_THREAD_MODEL=native`).
+/// Whether the 1:1 model is selected (the default; see `native::enabled`).
 pub(crate) fn native_enabled() -> bool {
     native::enabled()
 }

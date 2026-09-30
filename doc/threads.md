@@ -22,6 +22,12 @@ Thread / Fiber の状態遷移図(mermaid + SVG)と遷移⇔実装対応表。
 
 ## 0. 全体像
 
+> **2026-09-30 以降の既定は §12 の 1:1 モデル**(Ruby `Thread` 1 つ = カーネル
+> スレッド 1 つ、GVL で直列化)。本節〜§11 が述べる M:1 グリーンスレッドは
+> `MONORUBY_THREAD_MODEL=green` で選べる旧モデルで、以下の記述はその前提で読む。
+> Fiber、非ブロッキング IO、プリエンプション(§8)、GC 統合(§6)の説明は
+> 両モデルに共通する。
+
 - **M:1 グリーンスレッド**。Ruby の `Thread` は 1 本の OS スレッド上で多重化される。
   真の並列性はない(GVL 型でもない — そもそも VM を回す OS スレッドが 1 本)。
   カーネルブロッキング syscall のオフロード(§9)には別の短命 OS スレッドを使うが、
@@ -569,11 +575,12 @@ would-block エミュレーション)、タイムスライス・プリエンプ�
   かつてスペックランナーをハングさせた `core/io/copy_stream_spec.rb` と
   `core/io/select_spec.rb` は完走・全パスする。
 
-## 12. 1:1 モデル(`MONORUBY_THREAD_MODEL=native`, `scheduler/native.rs`)
+## 12. 1:1 モデル(既定、`scheduler/native.rs`)
 
 M:1 から 1:1 への移行(`reports/thread_1to1_migration_plan_2026-09-29.md` の P2)。
-環境変数 `MONORUBY_THREAD_MODEL=native` で Ruby `Thread` 1 つにカーネルスレッド
-1 つを割り当てる。既定は引き続き green(§3)。両モードは同じバイナリに共存し、
+Ruby `Thread` 1 つにカーネルスレッド 1 つを割り当てる。P7(2026-09-30)で
+**これが既定**になり、環境変数 `MONORUBY_THREAD_MODEL=green` で旧 M:1 green
+(§3)を選べる(`native` は既定を明示するだけ)。両モードは同じバイナリに共存し、
 `scheduler.rs` の各エントリポイント(`spawn` / `sleep` / `pass` / `join` /
 `wait_fds` / `terminate_all` / `fork_child_reset_threads`、および wake の分岐)が
 先頭で `native::enabled()` を見て分岐する。
@@ -709,14 +716,14 @@ dead になったカーネルスレッドを `join` してから戻る — イ�
 
 ### 12.6 テスト
 
-`cargo test --lib` は green(既定)と `MONORUBY_THREAD_MODEL=native` の両方で
-全件通る。CI(`bin/test`)は通常の nextest に続けて、スレッドに関わるユニット
-テスト(`builtins::{thread,socket,process,io,fiber}` / `gvl` / `vm` / `fork`、
-約 700 件・30 秒程度。`file` / `fiddle` は flock / FFI のカーネル待ちのため)を
-`MONORUBY_THREAD_MODEL=native` でもう一度走らせ、
-両方のプロファイルを 1 つのカバレッジレポートに合算する。native モードで
-しか通らない経路(`scheduler/native.rs`、GVL の競合経路)はこの 2 回目の
-実行で計測される。
+`cargo test --lib` は native(既定)と `MONORUBY_THREAD_MODEL=green` の両方で
+全件通る。CI(`bin/test`)は通常の nextest(native)に続けて、スレッドに関わる
+ユニットテスト(`builtins::{thread,socket,process,io,file,fiber,fiddle}` /
+`gvl` / `vm` / `fork`、約 700 件・30 秒程度。`file` / `fiddle` は flock / FFI の
+カーネル待ちのため)を `MONORUBY_THREAD_MODEL=green` でもう一度走らせ、
+両方のプロファイルを 1 つのカバレッジレポートに合算する。green でしか通らない
+経路(`scheduler.rs` のイベントループ、`scheduler_run`、`Parker` を使わない
+park)はこの 2 回目の実行で計測される。
 
 ### 12.7 GVL を手放す区間(`scheduler::without_gvl`、P3)
 
@@ -817,6 +824,6 @@ JIT コードの生成・パッチ・実行はすべて GVL の下で起きる�
   する。green も同じ穴を持っていたので両モデル共通の修正。詳細は
   `doc/chain_deopt.md` §10.1。
 
-これらは `MONORUBY_THREAD_MODEL=native` の `cargo test --lib`(§12.6)と、
+これらは `cargo test --lib`(既定 = native、§12.6)と、
 `MONORUBY_PREEMPT_STRESS=1` を重ねた同じフィルタで検証する。gc-stress は
 手動ワークフロー(`gc-stress.yml`)で、native モードは同じ環境変数を足して回す。
