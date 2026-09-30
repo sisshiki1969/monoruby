@@ -1,7 +1,7 @@
 //! The 1:1 thread model: each Ruby `Thread` runs on a kernel thread of
 //! its own, and the threads take turns under the Global VM Lock
-//! (`crate::gvl`). Selected with `MONORUBY_THREAD_MODEL=native`; the
-//! green scheduler in the parent module stays the default.
+//! (`crate::gvl`). This is the default model; `MONORUBY_THREAD_MODEL=green`
+//! selects the M:1 green scheduler in the parent module instead.
 //!
 //! The registry is the parent module's, unchanged: `Scheduler::threads`,
 //! `main`, `current`, the pending reports all live in the `Vm`, and
@@ -33,13 +33,13 @@ use std::time::{Duration, Instant};
 use super::*;
 use crate::gvl::{Gvl, GvlThread};
 
-/// Whether the 1:1 model is selected (`MONORUBY_THREAD_MODEL=native`).
+/// Whether the 1:1 model is selected: it is, unless
+/// `MONORUBY_THREAD_MODEL=green` asks for the M:1 green scheduler
+/// (`native` names this model explicitly; anything else is ignored).
 /// Read once; the model cannot change while threads exist.
 pub(crate) fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var("MONORUBY_THREAD_MODEL").is_ok_and(|v| v == "native")
-    })
+    *ON.get_or_init(|| !std::env::var("MONORUBY_THREAD_MODEL").is_ok_and(|v| v == "green"))
 }
 
 /// Machine stack of a kernel thread: room for the 1 MiB Ruby-frame
