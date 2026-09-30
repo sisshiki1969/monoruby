@@ -949,12 +949,21 @@ fn do_waitpid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Opti
     };
     let mut status: i32 = 0;
     let ret = loop {
-        // SAFETY: waitpid is a POSIX system call.
-        let ret = unsafe { libc::waitpid(pid, &mut status, flags) };
+        // SAFETY: waitpid is a POSIX system call; `status` is a stack
+        // slot, so the GVL-less region touches no interpreter state.
+        let mut wait = || {
+            let ret = unsafe { libc::waitpid(pid, &mut status, flags) };
+            (ret, std::io::Error::last_os_error())
+        };
+        // `WNOHANG` never blocks, so it is not worth letting go of the GVL.
+        let (ret, err) = if flags & libc::WNOHANG != 0 {
+            wait()
+        } else {
+            crate::scheduler::without_gvl(vm, wait)
+        };
         if ret != -1 {
             break ret;
         }
-        let err = std::io::Error::last_os_error();
         // Signal handlers are installed without SA_RESTART, so a signal
         // delivered while blocked in waitpid EINTRs it. Run the VM poll
         // point (raise the converted SignalException, or run the trap
@@ -1015,12 +1024,21 @@ fn process_status_wait(
     };
     let mut raw: i32 = 0;
     let ret = loop {
-        // SAFETY: waitpid is a POSIX system call.
-        let ret = unsafe { libc::waitpid(pid, &mut raw, flags) };
+        // SAFETY: waitpid is a POSIX system call; `raw` is a stack slot,
+        // so the GVL-less region touches no interpreter state.
+        let mut wait = || {
+            let ret = unsafe { libc::waitpid(pid, &mut raw, flags) };
+            (ret, std::io::Error::last_os_error())
+        };
+        // `WNOHANG` never blocks, so it is not worth letting go of the GVL.
+        let (ret, err) = if flags & libc::WNOHANG != 0 {
+            wait()
+        } else {
+            crate::scheduler::without_gvl(vm, wait)
+        };
         if ret != -1 {
             break ret;
         }
-        let err = std::io::Error::last_os_error();
         match err.raw_os_error() {
             Some(libc::ECHILD) => break -1,
             Some(libc::EINTR) => {
@@ -1658,10 +1676,14 @@ fn process_waitall(
         let pairs_idx = vm.temp_len() - 1;
         loop {
             let mut status: i32 = 0;
-            // SAFETY: waitpid is a POSIX system call.
-            let ret = unsafe { libc::waitpid(-1, &mut status, 0) };
+            // SAFETY: waitpid is a POSIX system call; `status` is a
+            // stack slot, so the GVL-less region touches no interpreter
+            // state.
+            let (ret, err) = crate::scheduler::without_gvl(vm, || {
+                let ret = unsafe { libc::waitpid(-1, &mut status, 0) };
+                (ret, std::io::Error::last_os_error())
+            });
             if ret == -1 {
-                let err = std::io::Error::last_os_error();
                 match err.raw_os_error() {
                     Some(libc::ECHILD) => break,
                     Some(libc::EINTR) => {

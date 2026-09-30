@@ -441,6 +441,8 @@ true のままだから)。
 poll(2) で readiness を待てるもの(ソケット等)はスケジューラの fd ポーラで扱えるが、
 **待つべき fd を持たないカーネルブロッキング syscall** はグリーンスレッドの単一 OS
 スレッドをそのままブロックしてしまう。これらだけを別の短命 OS スレッドへ逃がす。
+(green モデルの話。1:1 モデルでは同じ `NativeOp` を呼び出したカーネルスレッド自身が
+GVL を手放して実行し、pool は使わない — §12.7。)
 
 - **オフロード対象**(`NativeOp`):
   - `flock(2)` のブロッキング取得(`File#flock`)。`LOCK_NB` / `LOCK_UN` は
@@ -536,8 +538,8 @@ poll(2) で readiness を待てるもの(ソケット等)はスケジューラ�
 3. `Thread#priority` は保存のみ(スケジューリングに影響しない)。`native_thread_id` は
    実 tid ではなくオブジェクト単位トークン。`ThreadGroup` / `fork` との相互作用、
    `Thread.ignore_deadlock` の実効(検出器の停止)は未実装。
-4. ネイティブオフロード(§9)の往復は、ワーカープール化後も 40µs 前後ある
-   (park/wake の往復そのもの)。`sqlite3_step` のように**行単位で呼ばれる**関数は
+4. (green)ネイティブオフロード(§9)の往復は、ワーカープール化後も 40µs 前後ある
+   (park/wake の往復そのもの)。1:1 モデルには往復がない(§12.7)。`sqlite3_step` のように**行単位で呼ばれる**関数は
    依然オフロードできず、busy_timeout 待ちは他の green thread を止める。これを
    外すには往復を無くす方向(呼び出しをインラインで試し、ブロックしそうなときだけ
    逃がす等)が要る。対象操作は flock / FIFO open / blocking 指定 FFI /
@@ -654,9 +656,10 @@ dead になったカーネルスレッドを `join` してから戻る — イ�
 - `fork`: 子では fork したスレッドだけが残り **main になる**(`s.main = cur`)。
   `Gvl::reset_after_fork`、wake パイプの作り直し(fd テーブル共有のため)、
   ブロックしていたシグナルの解除。
-- P2 の時点では、ブロッキング IO は §7 の経路(fd 待ちを `wait_fds` で park)を
-  そのまま使う。`has_other_live_threads` が偽なら従来どおり本当にブロックする。
-  GVL を手放してカーネルでブロックする(`Gvl::without`)のは P3。
+- ブロッキング IO は §7 の経路(fd 待ちを `wait_fds` で park)をそのまま使う。
+  park が GVL を手放すので、fd 待ちの間は他のスレッドが走る。
+  `has_other_live_threads` が偽なら従来どおり本当にブロックする。fd で待てない
+  カーネル待ちは §12.7。
 - シグナル配送・`Thread#backtrace`(park 中の `resume_exec`)・割り込みマスクの
   意味論は green と同じコードを使う。`SCHED_CALL_DEPTH` はカーネルスレッドごとの
   TLS になり、swap は不要。
@@ -666,7 +669,48 @@ dead になったカーネルスレッドを `join` してから戻る — イ�
 `cargo test --lib` は green(既定)と `MONORUBY_THREAD_MODEL=native` の両方で
 全件通る。CI(`bin/test`)は通常の nextest に続けて、スレッドに関わるユニット
 テスト(`builtins::{thread,socket,process,io,fiber}` / `gvl` / `vm` / `fork`、
-約 350 件・20 秒程度)を `MONORUBY_THREAD_MODEL=native` でもう一度走らせ、
+約 700 件・30 秒程度。`file` / `fiddle` は flock / FFI のカーネル待ちのため)を
+`MONORUBY_THREAD_MODEL=native` でもう一度走らせ、
 両方のプロファイルを 1 つのカバレッジレポートに合算する。native モードで
 しか通らない経路(`scheduler/native.rs`、GVL の競合経路)はこの 2 回目の
 実行で計測される。
+
+### 12.7 GVL を手放す区間(`scheduler::without_gvl`、P3)
+
+fd で待てないカーネル待ち — `flock` / FIFO の `open` / `fcntl(F_SETLKW)` /
+`waitpid` / `getaddrinfo` / `blocking: true` の FFI 呼び出し / 拡張の
+`call_blocking` — は、green では native pool(§9)に投げて完了パイプで park
+していた。1:1 モデルでは **呼び出したカーネルスレッド自身が GVL を手放して**
+実行する(`native::without_gvl`)。pool もパイプも往復コスト(約 40 µs)も
+なくなり、`native_pool::run_blocking` は `native::enabled()` なら
+`native::run_blocking` に委ねる(`run_op` はそのまま呼び出し側で走る)。
+
+- **区間の約束**: クロージャはインタプリタに触れない(`Value` / `Globals` 禁止、
+  raw fd・整数・自前バッファのみ)。GVL 側の手続きは park と同じで、
+  `resume_exec`(`Thread#backtrace` 用)、main なら `publish_main_exec`
+  (他スレッドが起こす GC が main のルートを辿るため)、そして
+  `ThreadInner::blocking_tid`(自分の `pthread_self`)を立ててから
+  `release()` → `f()` → `acquire()` → 両方を戻す。
+- **割り込み(ubf)**: `Thread#kill` / `#raise` の相手が park 中でなく
+  `blocking_tid` を持っていれば、`native::interrupt_blocking` が
+  `pthread_kill(tid, SIGVTALRM)` を送る。ハンドラは空(`ubf_handler`、
+  `SA_RESTART` なし)で、目的はブロック中の syscall を `EINTR` で戻すこと
+  だけ。CRuby の `ubf_pthread` と同じシグナルで、そのため `VTALRM` は
+  trap 不可の予約シグナルになっている。非 main のカーネルスレッドは
+  `block_async_signals` でほぼ全シグナルをブロックするが、このシグナルだけは
+  通す。ハンドラの登録は最初の `native::spawn` で 1 回。
+- **`EINTR` の扱い**: `native::run_blocking` は `run_op(op, retry_eintr =
+  false)` で呼ぶので、`flock` / `open` / `fcntl` は `EINTR` を呼び出し側に
+  返す。呼び出し側は GVL を取り直してから poll point(`execute_gc`: main の
+  trap ハンドラ)と `deliver_pending_now`(kill / raise の配送)を実行し、
+  配送がなければ同じ syscall をもう一度発行する(いずれも冪等な待ち)。
+  FFI / 拡張の呼び出しは再発行しない(`NativeOp::retries_eintr`)。
+  戻ってきた `EINTR` は C 側の流儀に任せ、戻った後で配送する。
+  `waitpid` は既存の `EINTR` ループ(poll point → 再試行)がそのまま使える。
+- **green は不変**: `scheduler::without_gvl` は green ではただ `f()` を呼ぶ
+  (プロセスがブロックする。スレッドのない CRuby と同じ)。`waitpid` /
+  `getaddrinfo` はもともと green でもインラインだった。
+- **まだ pool 側に残るもの**: §7 の `blocking_io_region`(fd 待ち)は
+  両モードで park 経路のまま。読み取りバッファを GVL の内外で分けて
+  `read(2)` 自体を GVL 外に出す設計は採っていない — park が GVL を手放す
+  ので、fd 待ちの間に他スレッドが走る目的はすでに達している。

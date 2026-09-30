@@ -224,7 +224,7 @@ fn worker() {
 
 /// Run one job and hand its result to the waiter.
 fn complete(job: Job) {
-    let (ret, errno) = run_op(&job.op);
+    let (ret, errno) = run_op(&job.op, true);
     let comp = Completion { ret, errno };
     {
         let mut orphans = orphans().lock().unwrap();
@@ -318,7 +318,20 @@ pub(crate) fn discard(id: u64) {
     }
 }
 
-fn run_op(op: &NativeOp) -> (i64, i32) {
+impl NativeOp {
+    /// Whether `run_op` may re-issue this operation after `EINTR`: the
+    /// three syscalls are idempotent waits, a foreign call is not.
+    pub(crate) fn retries_eintr(&self) -> bool {
+        !matches!(self, NativeOp::Ffi(_) | NativeOp::Ext(_))
+    }
+}
+
+/// Perform `op` on the calling OS thread. With `retry_eintr` a syscall
+/// interrupted by a signal is issued again here (the pool worker, which
+/// has nothing else to do); without it the `EINTR` is returned to the
+/// caller, which handles the signal under the GVL and retries itself
+/// (the 1:1 model's `native::run_blocking`).
+pub(crate) fn run_op(op: &NativeOp, retry_eintr: bool) -> (i64, i32) {
     match op {
         NativeOp::Flock { fd, op } => loop {
             // SAFETY: plain flock(2) on a raw fd owned by the caller's
@@ -328,7 +341,7 @@ fn run_op(op: &NativeOp) -> (i64, i32) {
                 return (0, 0);
             }
             let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            if errno != libc::EINTR {
+            if errno != libc::EINTR || !retry_eintr {
                 return (r as i64, errno);
             }
         },
@@ -339,7 +352,7 @@ fn run_op(op: &NativeOp) -> (i64, i32) {
                 return (r as i64, 0);
             }
             let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            if errno != libc::EINTR {
+            if errno != libc::EINTR || !retry_eintr {
                 return (-1, errno);
             }
         },
@@ -352,7 +365,7 @@ fn run_op(op: &NativeOp) -> (i64, i32) {
                 return (r as i64, 0);
             }
             let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            if errno != libc::EINTR {
+            if errno != libc::EINTR || !retry_eintr {
                 return (-1, errno);
             }
         },
@@ -373,6 +386,11 @@ pub(crate) fn run_blocking(
     globals: &mut crate::globals::Globals,
     op: NativeOp,
 ) -> crate::executor::Result<Completion> {
+    if crate::scheduler::native::enabled() {
+        // 1:1 model: on the calling kernel thread, GVL released — no
+        // worker, no completion pipe.
+        return crate::scheduler::native::run_blocking(vm, globals, op);
+    }
     let id = submit(op);
     loop {
         if let Some(comp) = try_take(id) {

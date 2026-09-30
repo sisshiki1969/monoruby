@@ -103,12 +103,12 @@ cov_nextest "${NEXTEST_FEATURES[@]}"
 # exercises only the green scheduler and leaves src/scheduler/native.rs and
 # the GVL's contended paths uncovered. Run the thread-related unit tests a
 # second time with each Ruby Thread on its own kernel thread. The filter is
-# the modules that spawn, park, join, kill, fork and wait on fds — ~350 tests,
-# about 20 s — and the profiles of both runs merge into one report. Same
+# the modules that spawn, park, join, kill, fork, wait on fds and block in
+# the kernel (flock, FFI) — ~700 tests, about 30 s — and the profiles of both runs merge into one report. Same
 # feature list, so nothing is rebuilt.
 phase "nextest (thread-related unit tests, MONORUBY_THREAD_MODEL=native)"
 MONORUBY_THREAD_MODEL=native cov_nextest "${NEXTEST_FEATURES[@]}" --lib -p monoruby \
-  -E 'test(/^(builtins::(thread|socket|process|io|fiber)|gvl|vm|fork)::/)'
+  -E 'test(/^(builtins::(thread|socket|process|io|file|fiber|fiddle)|gvl|vm|fork)::/)'
 
 # Build the binary the remaining phases run. It uses the same feature list as
 # nextest (see above), so under GC_STRESS=1 the benchmark / optcarrot /

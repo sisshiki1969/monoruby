@@ -963,7 +963,9 @@ pub(crate) fn interrupt(
     // blocking, so `:on_blocking` wakes too.
     let wake = wake_worthy(&globals.store, target);
     if wake && native::enabled() {
-        native::wake_parked(target);
+        if !native::wake_parked(target) {
+            native::interrupt_blocking(target);
+        }
     } else if wake {
         SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
@@ -996,6 +998,23 @@ fn take_main_pending(vm: &mut Executor, globals: &mut Globals, at_blocking: bool
     let main = SCHEDULER.with(|s| s.borrow().main.unwrap());
     // The handle_interrupt mask still applies at this delivery point.
     deliver_pending_now(vm, globals, main, at_blocking)
+}
+
+/// Run `f` — a syscall that blocks in the kernel with no fd to poll,
+/// such as `waitpid(2)` or `getaddrinfo(3)` — without the GVL in the
+/// 1:1 model, so the other Ruby threads keep running meanwhile; in the
+/// green model it simply runs (the process blocks, as CRuby without
+/// threads). `f` must not touch the interpreter: no `Value`, no
+/// `Globals`, only raw fds, integers and its own buffers. An interrupt
+/// queued for the calling thread while it is inside `f` makes the
+/// syscall return `EINTR` (`native::interrupt_blocking`); the caller's
+/// `EINTR` handling — the poll point, then retry — is where it is
+/// delivered.
+pub(crate) fn without_gvl<R>(vm: &mut Executor, f: impl FnOnce() -> R) -> R {
+    if native::enabled() {
+        return native::without_gvl(vm, f);
+    }
+    f()
 }
 
 /// Park the current thread until `fd` reports one of `events` (or the

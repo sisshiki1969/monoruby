@@ -3053,6 +3053,7 @@
 9a22f6dc0c7579d2bfa1447443b56f1f	[42, "nil"]	def bar\n              begin\n                raise "err"\n           
 9a29e613d3183de95f2d0f2acb84a31a	[["ArgumentError", "step boom"], ["RuntimeError", "final boom"], [[3]], [[6]]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 9a380b66d043485e0a0a37c95be6a53e	["LoadError", "nonexistent_file_that_does_not_exist_12345"]	begin\n              require "nonexistent_file_that_does_not_exist_1
+9a5726a218396b23ae3413f6cba0b996	[true, false, nil, true, true, "unblocked"]	require 'tmpdir'\n            path = File.join(Dir.tmpdir, "mrb_floc
 9a58b637620220adb6559dcd29ab4ce1	[[10, 20, 30, :not_found], 40]	$n = 0\n        def inner(arr)\n          begin\n            arr.each { |y
 9a6e41140cc5bce63cf4551de96c121c	[{a: 1, b: "x"}, 1, nil]	Fiber[:a] = 1\n            Fiber[:b] = "x"\n            [Fiber.curren
 9a7c12c16e1ba0fafa05ddfb9e353d1b	[7, 3]	def leaky\n          [1].each { return 9 }\n        ensure\n          retu
