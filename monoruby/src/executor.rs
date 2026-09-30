@@ -725,6 +725,12 @@ impl Executor {
         self.cfp.unwrap()
     }
 
+    /// The current control frame, or `None` for a context that has not
+    /// pushed one (a thread's root executor before its body runs).
+    pub(crate) fn try_cfp(&self) -> Option<Cfp> {
+        self.cfp
+    }
+
     pub(crate) unsafe fn get_slot(&self, index: SlotId) -> Option<Value> {
         self.cfp().lfp().register(index)
     }
@@ -5708,6 +5714,13 @@ impl<'a, 'b> alloc::GCRoot<RValue> for Root<'a, 'b> {
 ///
 /// Execute garbage collection.
 ///
+/// What [`execute_gc`] hands back to a compiled poll site whose frame
+/// must leave for the interpreter (as a `Value`, so the VM-tier stub's
+/// "zero is an error" test is unaffected): its body was evicted by a
+/// basic-op redefinition while it was suspended at the poll. See
+/// `ISeqInfo::bop_evictions`.
+pub(crate) const POLL_DEOPT: i64 = 1;
+
 pub(crate) extern "C" fn execute_gc(
     mut executor: &mut Executor,
     globals: &mut Globals,
@@ -5716,6 +5729,16 @@ pub(crate) extern "C" fn execute_gc(
     // hang watchdog's countdown (no-op unless armed). See
     // doc/signal.md B+.
     crate::watchdog::poll();
+    // The polling frame's iseq and its eviction count, compared at the
+    // end: a redefinition that runs while this frame is away — in
+    // another thread, or in a trap handler or finalizer of this one —
+    // converts every *caller* on every chain (`check_bop_redefine`) but
+    // cannot rewrite the frame at the poll itself. That frame deopts
+    // from the poll site instead, told so by the return value.
+    let polling_iseq = executor
+        .try_cfp()
+        .and_then(|cfp| globals.store[cfp.lfp().func_id()].is_iseq());
+    let evictions_before = polling_iseq.map(|iseq| globals.store[iseq].bop_evictions());
     // `gc-stress`: force a collection at EVERY safepoint, unconditionally
     // — independent of the runtime `GC.stress` flag and of how this poll
     // was triggered. The guard re-arms the GC lane on every exit path, so
@@ -5851,6 +5874,11 @@ pub(crate) extern "C" fn execute_gc(
             vm.set_error(err);
             return None;
         }
+    }
+    if let Some(iseq) = polling_iseq
+        && evictions_before != Some(globals.store[iseq].bop_evictions())
+    {
+        return Some(Value::integer(POLL_DEOPT));
     }
     Some(Value::nil())
 }

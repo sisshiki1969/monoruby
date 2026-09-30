@@ -19,7 +19,6 @@
 //! creating thread is the sole registrant and the only holder.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 /// One kernel thread's handle on the lock. Created by
@@ -46,10 +45,6 @@ struct Slot {
     /// `true` once a releasing holder handed the lock to this thread.
     granted: Mutex<bool>,
     wake: Condvar,
-    /// The code epoch this thread last saw while holding the lock, so
-    /// it can serialize its instruction stream if JIT code was written
-    /// while it was away (see [`Gvl::note_code_written`]).
-    seen_epoch: AtomicU64,
 }
 
 struct State {
@@ -64,10 +59,6 @@ struct State {
 
 pub(crate) struct Gvl {
     state: Mutex<State>,
-    /// Bumped whenever JIT code is written or patched, read on every
-    /// acquire: a thread that finds it moved runs a serializing
-    /// instruction before executing possibly-rewritten code.
-    code_epoch: AtomicU64,
 }
 
 impl Gvl {
@@ -80,7 +71,6 @@ impl Gvl {
                 waiters: VecDeque::new(),
                 registered: 1,
             }),
-            code_epoch: AtomicU64::new(0),
         };
         let main = GvlThread {
             slot: Arc::new(Slot::new()),
@@ -200,17 +190,16 @@ impl Gvl {
         r
     }
 
-    /// JIT code was written or patched (by the holder). Threads that
-    /// were away will serialize before running it.
-    pub(crate) fn note_code_written(&self) {
-        self.code_epoch.fetch_add(1, Ordering::Release);
-    }
-
-    fn on_acquired(&self, th: &GvlThread) {
-        let epoch = self.code_epoch.load(Ordering::Acquire);
-        if th.slot.seen_epoch.swap(epoch, Ordering::Relaxed) != epoch {
-            serialize_instruction_stream();
-        }
+    /// The holder that just left may have written or patched JIT code
+    /// (a compile, an entry jump reverted by a basic-op redefinition, a
+    /// version word re-stamped by a salvage); it flushed on its side.
+    /// This side serializes before it can execute any of it. Every
+    /// acquire pays the one instruction rather than tracking which
+    /// releases followed a write: the handoff itself is a futex wake,
+    /// next to which a `cpuid` / `isb` is noise, and there is no list of
+    /// code-writing sites to keep complete.
+    fn on_acquired(&self, _th: &GvlThread) {
+        serialize_instruction_stream();
     }
 }
 
@@ -219,7 +208,6 @@ impl Slot {
         Slot {
             granted: Mutex::new(false),
             wake: Condvar::new(),
-            seen_epoch: AtomicU64::new(0),
         }
     }
 }
@@ -244,6 +232,7 @@ fn serialize_instruction_stream() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
     use std::sync::atomic::AtomicUsize;
     use std::thread;
     use std::time::Duration;
@@ -344,15 +333,5 @@ mod tests {
         order.lock().unwrap().push("main again");
         other.join().unwrap();
         assert_eq!(*order.lock().unwrap(), vec!["other", "main again"]);
-    }
-
-    #[test]
-    fn a_code_write_is_noticed_on_the_next_acquire() {
-        let (gvl, main) = Gvl::new();
-        assert_eq!(main.slot.seen_epoch.load(Ordering::Relaxed), 0);
-        gvl.note_code_written();
-        gvl.release(&main);
-        gvl.acquire(&main);
-        assert_eq!(main.slot.seen_epoch.load(Ordering::Relaxed), 1);
     }
 }

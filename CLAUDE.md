@@ -1050,4 +1050,10 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
    GVL-less region returns `EINTR`, and a non-main holder that sees the
    pending signal at its poll point hands the GVL over at once
    (§12.8). `Thread.ignore_deadlock` switches the deadlock detector off
-   in both models.
+   in both models. JIT code is written only under the GVL; every acquire
+   serializes the instruction stream (`Gvl::on_acquired`), a new kernel
+   thread starts with the `MAP_JIT` pages executable, and a basic-op
+   redefinition converts the compiled frames of *every* thread — the
+   callers by the chain walk, the frame stopped at a safepoint poll by the
+   poll's own deopt exit (`executor::POLL_DEOPT`; `doc/threads.md` §12.9,
+   `doc/chain_deopt.md` §10.1).

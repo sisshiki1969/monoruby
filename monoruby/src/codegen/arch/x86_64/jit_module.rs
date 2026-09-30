@@ -291,9 +291,15 @@ impl JitModule {
     /// cold (page-1) path before the GC call; the VM passes a no-op, the JIT
     /// passes the spill write-back. Taking a closure keeps the JIT-only
     /// `WriteBack` type out of this VM-tier helper's signature.
+    ///
+    /// `deopt` is the compiled poll's exit for `executor::POLL_DEOPT`
+    /// (the frame's body was evicted while it waited at the poll); the
+    /// VM passes `None` and ignores that answer, its frame being an
+    /// interpreter frame already.
     pub(in crate::codegen) fn execute_gc_inner(
         &mut self,
         error: &DestLabel,
+        deopt: Option<&DestLabel>,
         write_back: impl FnOnce(&mut Self),
     ) {
         let poll_flag = self.poll_flag.clone();
@@ -314,8 +320,20 @@ impl JitModule {
         monoasm! { &mut self.jit,
             call exec_gc;
             testq rax, rax;
-            jne  exit;
-            jmp  error;
+            jeq  error;
+        }
+        if let Some(deopt) = deopt {
+            let poll_deopt = Value::integer(executor::POLL_DEOPT).id() as i32;
+            monoasm! { &mut self.jit,
+                cmpq rax, (poll_deopt);
+                jne  exit;
+                movq rdi, (Value::symbol_from_str("_poll_evicted").id());
+                jmp  deopt;
+            }
+        } else {
+            monoasm! { &mut self.jit,
+                jmp  exit;
+            }
         }
         self.jit.select_page(0);
     }
@@ -729,7 +747,7 @@ impl JitModule {
     ///
     pub(in crate::codegen) fn vm_execute_gc(&mut self) {
         let raise = self.entry_raise.clone();
-        self.execute_gc_inner(&raise, |_| {});
+        self.execute_gc_inner(&raise, None, |_| {});
     }
 
     ///

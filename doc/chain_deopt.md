@@ -610,6 +610,49 @@ address is no longer at hand, names the site it belongs to. `AsmEvict` and
 walk once the patch fallback was gone, and are now one function
 (`chain_deopt`), used by both `check_bop_redefine` and `runtime::chain_deopt`.
 
+### 10.1 The other threads' chains, and the frame at a poll
+
+A basic-op redefinition is the one caller of the walk whose stale frames are
+not all on the redefining thread's stack. Every other Ruby thread is
+suspended under it — a green thread until the scheduler switches to it, a
+kernel thread until it gets the GVL (doc/threads.md §12) — and each holds
+compiled frames that inlined the operator just replaced. `check_bop_redefine`
+therefore walks every chain: its own, then the chain of each executor
+`scheduler::suspended_executors` returns (the context a thread parked or
+yielded in — `resume_exec`, published by `park`, `pass` and `without_gvl`
+in both models — followed by its `parent_fiber` links, so a thread parked
+inside a fiber contributes the fiber's frames and the resumer's). Those
+frames are as quiescent as the caller's own: nothing runs on them until
+this thread lets go.
+
+The walk converts *callers* — a frame is rewritten through the return
+address its callee holds — so a chain's innermost compiled frame is beyond
+it. On the redefining thread that frame is the one running the `def`, and
+`AsmInst::CheckBOP` after `MethodDef` takes care of it. On another thread
+the innermost frame is whatever it let go from: a call site (`sleep`, a
+`Queue#pop`, `Thread.pass`, all of which push a frame whose return address
+the walk finds) or a **safepoint poll** — a timeslice tick or a signal taken
+at a `LoopStart` / method-entry poll, where there is no callee frame and the
+compiled body would simply continue. That frame leaves from the poll itself:
+`ISeqInfo::bop_evictions` counts evictions per iseq, `executor::execute_gc`
+snapshots the polling frame's count on entry and, if it moved while the
+frame was away, returns `POLL_DEOPT` instead of `nil`; the compiled poll's
+cold path compares for it and jumps to the poll's own deopt exit
+(`AsmInst::ExecGc::deopt`, `AsmIr::new_poll_deopt`), resuming the
+interpreter at `LoopStart` itself or at the instruction after `InitMethod`.
+That exit deliberately does not set `had_deopt` (§6): by the time it can
+fire, the walk has already rewritten every caller of the frame, so no
+compiled continuation exists for the interpreter to surprise — and marking
+it would put `had_deopt` on every body, since every method entry polls.
+The same exit covers the redefining thread's own poll when a trap handler
+or a finalizer run from the poll does the redefinition.
+
+What stays out of reach in every model is a fiber that is *suspended*
+(not parked) inside one of those threads: it is not in any chain the walk
+sees, and it polls nothing until resumed. Regression tests:
+`builtins::thread::tests::bop_redefinition_reaches_*` (parked, parked in a
+fiber, yielded through `Thread.pass`, preempted at a poll).
+
 ## 11. The speculation as shipped (§5 steps 4–5)
 
 **Scope** (§7, enforced by `float_speculation_qualifies` +

@@ -995,6 +995,8 @@ pub(in crate::codegen) enum LInst {
     ExecGc {
         write_back: WriteBack,
         error: DestLabel,
+        /// The poll-site eviction exit (`AsmInst::ExecGc::deopt`).
+        deopt: DestLabel,
         base: usize,
     },
     IntegerCmp {

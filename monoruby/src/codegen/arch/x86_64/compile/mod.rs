@@ -1200,9 +1200,10 @@ impl Codegen {
         &mut self,
         write_back: WriteBack,
         error: &DestLabel,
+        deopt: &DestLabel,
         base: usize,
     ) -> bool {
-        self.jit_execute_gc(&write_back, error, base);
+        self.jit_execute_gc(&write_back, error, deopt, base);
         true
     }
 

@@ -696,8 +696,14 @@ impl JitModule {
     /// - stack
     ///
     #[cfg(target_arch = "x86_64")]
-    fn jit_execute_gc(&mut self, wb: &jitgen::WriteBack, error: &DestLabel, base: usize) {
-        self.execute_gc_inner(error, |s| s.gen_write_back(wb, base));
+    fn jit_execute_gc(
+        &mut self,
+        wb: &jitgen::WriteBack,
+        error: &DestLabel,
+        deopt: &DestLabel,
+        base: usize,
+    ) {
+        self.execute_gc_inner(error, Some(deopt), |s| s.gen_write_back(wb, base));
     }
 }
 
@@ -1760,6 +1766,21 @@ impl Codegen {
     /// Called after every method definition. Evicts on-stack JIT frames only
     /// when the definition just executed actually redefined a basic op —
     /// `set_bop_redefine` arms the flag and this consumes it.
+    ///
+    /// The other threads' frames are converted too: each one is suspended
+    /// under this thread's feet (a green thread until the scheduler
+    /// switches to it, a kernel thread until it gets the GVL), and its
+    /// compiled callers would otherwise resume the inlined operator the
+    /// definition just replaced. Only *callers* are convertible — a frame
+    /// is rewritten through the return address its callee holds — so a
+    /// thread that let go at a safepoint poll rather than a call keeps its
+    /// innermost compiled frame here; that frame leaves from the poll
+    /// itself, which finds its body evicted on the way back
+    /// (`executor::POLL_DEOPT`, `ISeqInfo::bop_evictions`), as the
+    /// redefining thread's own frame leaves through `AsmInst::CheckBOP`
+    /// after the `def`. What stays out of reach in every model is a
+    /// fiber suspended (not parked) inside one of those threads: its
+    /// frames are found neither here nor at a poll until it is resumed.
     pub fn check_bop_redefine(cfp: Cfp) {
         CODEGEN.with(|codegen| {
             let mut codegen = codegen.borrow_mut();
@@ -1768,6 +1789,14 @@ impl Codegen {
                 // boundaries, so it walks to the bottom instead of passing a
                 // frame count (`JitContext::chain_deopt_frames`).
                 codegen.chain_deopt_into(cfp, None);
+                for exec in crate::scheduler::suspended_executors() {
+                    // SAFETY: `suspended_executors` returns live, quiescent
+                    // contexts; nothing runs on them until this thread
+                    // lets go.
+                    if let Some(cfp) = unsafe { exec.as_ref() }.try_cfp() {
+                        codegen.chain_deopt_into(cfp, None);
+                    }
+                }
             }
         });
     }

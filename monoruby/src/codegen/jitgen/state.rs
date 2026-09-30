@@ -1098,10 +1098,17 @@ impl AbstractFrame {
     /// - rax, rcx
     /// - stack
     ///
-    pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool) {
+    /// `deopt_pc` is where the interpreter resumes if the poll finds this
+    /// frame's body evicted (`AsmIr::new_poll_deopt`): the poll's own
+    /// instruction where re-executing it is harmless (`LoopStart`), the
+    /// one after it where it is not (`InitMethod` fills and destructures
+    /// arguments; the poll follows the prologue, so the state at the poll
+    /// is exactly "about to run the next instruction").
+    pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool, deopt_pc: BytecodePtr) {
         let wb = self.get_gc_write_back();
         let error = ir.new_error(self);
-        ir.exec_gc(wb, error, check_stack);
+        let deopt = ir.new_poll_deopt(self, deopt_pc);
+        ir.exec_gc(wb, error, deopt, check_stack);
     }
 
     ///
