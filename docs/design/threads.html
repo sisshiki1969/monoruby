@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-977f71b3.js";
+            window.path_to_searchindex_js = "../searchindex-cbd88ccd.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -610,7 +610,9 @@ uncaptured フレームは他スレッドから到達不能なのでレジスタ
 <h2 id="9-ネイティブ-syscall-オフロードnative_poolrs-962"><a class="header" href="#9-ネイティブ-syscall-オフロードnative_poolrs-962">9. ネイティブ syscall オフロード(<code>native_pool.rs</code>, #962)</a></h2>
 <p>poll(2) で readiness を待てるもの(ソケット等)はスケジューラの fd ポーラで扱えるが、
 <strong>待つべき fd を持たないカーネルブロッキング syscall</strong> はグリーンスレッドの単一 OS
-スレッドをそのままブロックしてしまう。これらだけを別の短命 OS スレッドへ逃がす。</p>
+スレッドをそのままブロックしてしまう。これらだけを別の短命 OS スレッドへ逃がす。
+(green モデルの話。1:1 モデルでは同じ <code>NativeOp</code> を呼び出したカーネルスレッド自身が
+GVL を手放して実行し、pool は使わない — §12.7。)</p>
 <ul>
 <li><strong>オフロード対象</strong>(<code>NativeOp</code>):
 <ul>
@@ -712,8 +714,8 @@ waiter で共有なので、未充足の waiter は再 park する。</li>
 <li><code>Thread#priority</code> は保存のみ(スケジューリングに影響しない)。<code>native_thread_id</code> は
 実 tid ではなくオブジェクト単位トークン。<code>ThreadGroup</code> / <code>fork</code> との相互作用、
 <code>Thread.ignore_deadlock</code> の実効(検出器の停止)は未実装。</li>
-<li>ネイティブオフロード(§9)の往復は、ワーカープール化後も 40µs 前後ある
-(park/wake の往復そのもの)。<code>sqlite3_step</code> のように<strong>行単位で呼ばれる</strong>関数は
+<li>(green)ネイティブオフロード(§9)の往復は、ワーカープール化後も 40µs 前後ある
+(park/wake の往復そのもの)。1:1 モデルには往復がない(§12.7)。<code>sqlite3_step</code> のように<strong>行単位で呼ばれる</strong>関数は
 依然オフロードできず、busy_timeout 待ちは他の green thread を止める。これを
 外すには往復を無くす方向(呼び出しをインラインで試し、ブロックしそうなときだけ
 逃がす等)が要る。対象操作は flock / FIFO open / blocking 指定 FFI /
@@ -819,9 +821,10 @@ main の root executor を辿れる(<code>in_scheduler</code> は最初の publi
 <li><code>fork</code>: 子では fork したスレッドだけが残り <strong>main になる</strong>(<code>s.main = cur</code>)。
 <code>Gvl::reset_after_fork</code>、wake パイプの作り直し(fd テーブル共有のため)、
 ブロックしていたシグナルの解除。</li>
-<li>P2 の時点では、ブロッキング IO は §7 の経路(fd 待ちを <code>wait_fds</code> で park)を
-そのまま使う。<code>has_other_live_threads</code> が偽なら従来どおり本当にブロックする。
-GVL を手放してカーネルでブロックする(<code>Gvl::without</code>)のは P3。</li>
+<li>ブロッキング IO は §7 の経路(fd 待ちを <code>wait_fds</code> で park)をそのまま使う。
+park が GVL を手放すので、fd 待ちの間は他のスレッドが走る。
+<code>has_other_live_threads</code> が偽なら従来どおり本当にブロックする。fd で待てない
+カーネル待ちは §12.7。</li>
 <li>シグナル配送・<code>Thread#backtrace</code>(park 中の <code>resume_exec</code>)・割り込みマスクの
 意味論は green と同じコードを使う。<code>SCHED_CALL_DEPTH</code> はカーネルスレッドごとの
 TLS になり、swap は不要。</li>
@@ -830,10 +833,49 @@ TLS になり、swap は不要。</li>
 <p><code>cargo test --lib</code> は green(既定)と <code>MONORUBY_THREAD_MODEL=native</code> の両方で
 全件通る。CI(<code>bin/test</code>)は通常の nextest に続けて、スレッドに関わるユニット
 テスト(<code>builtins::{thread,socket,process,io,fiber}</code> / <code>gvl</code> / <code>vm</code> / <code>fork</code>、
-約 350 件・20 秒程度)を <code>MONORUBY_THREAD_MODEL=native</code> でもう一度走らせ、
+約 700 件・30 秒程度。<code>file</code> / <code>fiddle</code> は flock / FFI のカーネル待ちのため)を
+<code>MONORUBY_THREAD_MODEL=native</code> でもう一度走らせ、
 両方のプロファイルを 1 つのカバレッジレポートに合算する。native モードで
 しか通らない経路(<code>scheduler/native.rs</code>、GVL の競合経路)はこの 2 回目の
 実行で計測される。</p>
+<h3 id="127-gvl-を手放す区間schedulerwithout_gvlp3"><a class="header" href="#127-gvl-を手放す区間schedulerwithout_gvlp3">12.7 GVL を手放す区間(<code>scheduler::without_gvl</code>、P3)</a></h3>
+<p>fd で待てないカーネル待ち — <code>flock</code> / FIFO の <code>open</code> / <code>fcntl(F_SETLKW)</code> /
+<code>waitpid</code> / <code>getaddrinfo</code> / <code>blocking: true</code> の FFI 呼び出し / 拡張の
+<code>call_blocking</code> — は、green では native pool(§9)に投げて完了パイプで park
+していた。1:1 モデルでは <strong>呼び出したカーネルスレッド自身が GVL を手放して</strong>
+実行する(<code>native::without_gvl</code>)。pool もパイプも往復コスト(約 40 µs)も
+なくなり、<code>native_pool::run_blocking</code> は <code>native::enabled()</code> なら
+<code>native::run_blocking</code> に委ねる(<code>run_op</code> はそのまま呼び出し側で走る)。</p>
+<ul>
+<li><strong>区間の約束</strong>: クロージャはインタプリタに触れない(<code>Value</code> / <code>Globals</code> 禁止、
+raw fd・整数・自前バッファのみ)。GVL 側の手続きは park と同じで、
+<code>resume_exec</code>(<code>Thread#backtrace</code> 用)、main なら <code>publish_main_exec</code>
+(他スレッドが起こす GC が main のルートを辿るため)、そして
+<code>ThreadInner::blocking_tid</code>(自分の <code>pthread_self</code>)を立ててから
+<code>release()</code> → <code>f()</code> → <code>acquire()</code> → 両方を戻す。</li>
+<li><strong>割り込み(ubf)</strong>: <code>Thread#kill</code> / <code>#raise</code> の相手が park 中でなく
+<code>blocking_tid</code> を持っていれば、<code>native::interrupt_blocking</code> が
+<code>pthread_kill(tid, SIGVTALRM)</code> を送る。ハンドラは空(<code>ubf_handler</code>、
+<code>SA_RESTART</code> なし)で、目的はブロック中の syscall を <code>EINTR</code> で戻すこと
+だけ。CRuby の <code>ubf_pthread</code> と同じシグナルで、そのため <code>VTALRM</code> は
+trap 不可の予約シグナルになっている。非 main のカーネルスレッドは
+<code>block_async_signals</code> でほぼ全シグナルをブロックするが、このシグナルだけは
+通す。ハンドラの登録は最初の <code>native::spawn</code> で 1 回。</li>
+<li><strong><code>EINTR</code> の扱い</strong>: <code>native::run_blocking</code> は <code>run_op(op, retry_eintr = false)</code> で呼ぶので、<code>flock</code> / <code>open</code> / <code>fcntl</code> は <code>EINTR</code> を呼び出し側に
+返す。呼び出し側は GVL を取り直してから poll point(<code>execute_gc</code>: main の
+trap ハンドラ)と <code>deliver_pending_now</code>(kill / raise の配送)を実行し、
+配送がなければ同じ syscall をもう一度発行する(いずれも冪等な待ち)。
+FFI / 拡張の呼び出しは再発行しない(<code>NativeOp::retries_eintr</code>)。
+戻ってきた <code>EINTR</code> は C 側の流儀に任せ、戻った後で配送する。
+<code>waitpid</code> は既存の <code>EINTR</code> ループ(poll point → 再試行)がそのまま使える。</li>
+<li><strong>green は不変</strong>: <code>scheduler::without_gvl</code> は green ではただ <code>f()</code> を呼ぶ
+(プロセスがブロックする。スレッドのない CRuby と同じ)。<code>waitpid</code> /
+<code>getaddrinfo</code> はもともと green でもインラインだった。</li>
+<li><strong>まだ pool 側に残るもの</strong>: §7 の <code>blocking_io_region</code>(fd 待ち)は
+両モードで park 経路のまま。読み取りバッファを GVL の内外で分けて
+<code>read(2)</code> 自体を GVL 外に出す設計は採っていない — park が GVL を手放す
+ので、fd 待ちの間に他スレッドが走る目的はすでに達している。</li>
+</ul>
 
                     </main>
 
