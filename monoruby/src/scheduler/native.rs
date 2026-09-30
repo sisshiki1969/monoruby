@@ -150,6 +150,18 @@ thread_local! {
     static GVL_THREAD: RefCell<Option<GvlThread>> = const { RefCell::new(None) };
 }
 
+/// The GVL's part of `crate::fork::prepare`: its state, held by the
+/// forking thread across the fork (see `Gvl::prepare_fork`). Taken in
+/// both thread models; in the green one nobody else can be contending
+/// for it, so it costs one uncontended lock.
+pub(crate) fn gvl_fork_guard() -> crate::gvl::GvlForkGuard {
+    let (gvl, main) = crate::vm::vm().gvl();
+    GVL_THREAD.with(|t| match &*t.borrow() {
+        Some(th) => gvl.prepare_fork(th),
+        None => gvl.prepare_fork(main),
+    })
+}
+
 fn with_gvl<R>(f: impl FnOnce(&Gvl, &GvlThread) -> R) -> R {
     let (gvl, main) = crate::vm::vm().gvl();
     GVL_THREAD.with(|t| match &*t.borrow() {
@@ -472,6 +484,7 @@ fn run_body(globals: &mut Globals, mut thread: Value) {
     let (handle, proc, args, root_lep) = {
         let inner = thread.as_thread_inner_mut();
         debug_assert_eq!(inner.state(), ThreadState::Created);
+        inner.native_tid = Some(super::current_kernel_tid());
         // Killed / raised into before the body ran: dies unstarted, the
         // first queued interrupt deciding how (FIFO, as `dispatch`).
         match inner.pending.pop_front() {
@@ -821,6 +834,8 @@ pub(super) fn fork_child_reset_threads(cur: Option<Value>) {
                 t.as_thread_inner_mut().mark_dead_for_fork();
             }
         }
+        // Gone from `Thread.list` too, as a thread that finished is.
+        s.threads.retain(|t| Some(*t) == cur);
         if cur.is_some() {
             s.main = cur;
         }
@@ -835,8 +850,11 @@ pub(super) fn fork_child_reset_threads(cur: Option<Value>) {
         if inner.parker.is_some() {
             inner.parker = Some(Parker::new());
         }
+        // A new process, so a new kernel thread id.
+        inner.native_tid = Some(super::current_kernel_tid());
     }
-    with_gvl(|gvl, th| gvl.reset_after_fork(th));
+    // The GVL itself was reset through the guard `crate::fork::prepare`
+    // took (`GvlForkGuard::reset_child`), before this runs.
     // A non-main thread that forked is now the main thread, and must
     // receive the signals it used to leave to main.
     if GVL_THREAD.with(|t| t.borrow().is_some()) {

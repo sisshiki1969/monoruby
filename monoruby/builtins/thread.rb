@@ -253,13 +253,6 @@ class Thread
     @priority = value
   end
 
-  # A per-Thread identifier while the thread is alive (nil once it has
-  # finished). monoruby multiplexes green threads onto one OS thread, so
-  # this is a distinct-per-object token rather than a real kernel tid.
-  def native_thread_id
-    alive? ? object_id : nil
-  end
-
   # Thread#backtrace / #backtrace_locations: the native `__backtrace`
   # yields the raw frame strings (nil for a dead thread); the argument
   # slicing and Location wrapping live here.

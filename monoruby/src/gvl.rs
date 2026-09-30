@@ -61,6 +61,33 @@ pub(crate) struct Gvl {
     state: Mutex<State>,
 }
 
+/// The GVL's state, held across a `fork(2)` by the forking thread
+/// ([`Gvl::prepare_fork`]).
+pub(crate) struct GvlForkGuard {
+    state: std::sync::MutexGuard<'static, State>,
+    /// The forking thread's slot: the child's only thread, and its
+    /// holder.
+    survivor: Arc<Slot>,
+}
+
+impl GvlForkGuard {
+    /// The child's side: it has exactly one thread, the forking one,
+    /// and that thread holds the lock. Forget every other registrant
+    /// and waiter (their kernel threads do not exist here) and whatever
+    /// grant was pending on the survivor's slot, then release the state
+    /// on the thread that took it.
+    pub(crate) fn reset_child(self) {
+        let GvlForkGuard {
+            mut state,
+            survivor,
+        } = self;
+        state.held = true;
+        state.waiters.clear();
+        state.registered = 1;
+        *survivor.granted.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    }
+}
+
 impl Gvl {
     /// A lock already held by its creator, the `Vm`'s own thread, whose
     /// handle is returned with it.
@@ -114,16 +141,19 @@ impl Gvl {
         !self.state.lock().unwrap().waiters.is_empty()
     }
 
-    /// A `fork(2)` child has exactly one thread, the forking one, and
-    /// it holds the lock: forget every other registrant and waiter
-    /// (their kernel threads do not exist here). `th` is the survivor's
-    /// handle; whatever grant was pending on it is cleared too.
-    pub(crate) fn reset_after_fork(&self, th: &GvlThread) {
-        let mut st = self.state.lock().unwrap();
-        st.held = true;
-        st.waiters.clear();
-        st.registered = 1;
-        *th.slot.granted.lock().unwrap() = false;
+    /// Hold the lock's state across a `fork(2)`, on the forking thread
+    /// (part of `crate::fork::prepare`). Another kernel thread may be
+    /// inside `acquire` / `release` at the instant of the fork, holding
+    /// `state`; the child, where that thread does not exist, would then
+    /// block forever on its first `state.lock()`. Holding the state here
+    /// makes that instant impossible. The parent drops the guard as soon
+    /// as the fork returns; the child spends it on
+    /// [`GvlForkGuard::reset_child`].
+    pub(crate) fn prepare_fork(&'static self, th: &GvlThread) -> GvlForkGuard {
+        GvlForkGuard {
+            state: self.state.lock().unwrap_or_else(|e| e.into_inner()),
+            survivor: th.slot.clone(),
+        }
     }
 
     /// Take the lock, waiting FIFO behind earlier waiters.
@@ -166,12 +196,34 @@ impl Gvl {
     /// Let a waiter run, if there is one: hand the lock to the oldest
     /// waiter and rejoin the queue at the back. With no waiter this is
     /// a single lock-and-look and the caller keeps the lock.
+    ///
+    /// The handoff and the requeue are one step under the state lock,
+    /// not a `release` followed by an `acquire`: in between those the
+    /// queue would be empty, and the thread just handed the lock could
+    /// reach its own `yield_now` before the yielder was back in line,
+    /// find nobody waiting and keep running. `Thread.pass` ping-pong
+    /// (and everything built on it, such as the eviction of another
+    /// thread's compiled frames while it waits here) relies on the
+    /// yielder being the next in line the moment the other side runs.
     pub(crate) fn yield_now(&self, th: &GvlThread) {
-        let has_waiter = !self.state.lock().unwrap().waiters.is_empty();
-        if has_waiter {
-            self.release(th);
-            self.acquire(th);
+        let next = {
+            let mut st = self.state.lock().unwrap();
+            debug_assert!(st.held);
+            let Some(next) = st.waiters.pop_front() else {
+                return;
+            };
+            *th.slot.granted.lock().unwrap() = false;
+            st.waiters.push_back(th.slot.clone());
+            next
+        };
+        *next.granted.lock().unwrap() = true;
+        next.wake.notify_one();
+        let mut granted = th.slot.granted.lock().unwrap();
+        while !*granted {
+            granted = th.slot.wake.wait(granted).unwrap();
         }
+        drop(granted);
+        self.on_acquired(th);
     }
 
     /// Run `f` without the lock: the blocking region. `f` must not
@@ -333,5 +385,39 @@ mod tests {
         order.lock().unwrap().push("main again");
         other.join().unwrap();
         assert_eq!(*order.lock().unwrap(), vec!["other", "main again"]);
+    }
+
+    /// A yielder is back in the queue by the time the thread it handed
+    /// the lock to runs, so two threads that only ever `yield_now` to
+    /// each other alternate strictly: neither side ever finds the queue
+    /// empty and keeps the lock.
+    #[test]
+    fn a_yielder_is_queued_before_the_next_holder_runs() {
+        const ROUNDS: usize = 200;
+        let (gvl, main) = shared();
+        let other = {
+            let gvl = gvl.clone();
+            let th = gvl.register();
+            thread::spawn(move || {
+                gvl.acquire(&th);
+                for _ in 0..ROUNDS {
+                    assert!(gvl.has_waiter(), "the yielder must already be in line");
+                    gvl.yield_now(&th);
+                }
+                gvl.release(&th);
+                gvl.unregister(th);
+            })
+        };
+        wait_for_waiters(&gvl, 1);
+        for _ in 0..ROUNDS {
+            gvl.yield_now(&main);
+            // Handed back by the other side's `yield_now`, so it is the
+            // one in line now.
+            assert!(gvl.has_waiter());
+        }
+        gvl.release(&main);
+        other.join().unwrap();
+        gvl.acquire(&main);
+        assert_eq!(gvl.registered(), 1);
     }
 }

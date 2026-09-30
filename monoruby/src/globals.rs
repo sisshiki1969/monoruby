@@ -1317,6 +1317,53 @@ impl Globals {
         self.run_with_prelude(requires, "", code, path)
     }
 
+    /// End a `fork { ... }` child once its block has returned or raised.
+    /// The block's end is the end of the child's main thread, so the
+    /// child goes through the process exit sequence — the `at_exit`
+    /// handlers, the uncaught error's report, the remaining threads, the
+    /// `ObjectSpace` finalizers, the stream flush — with the status rules
+    /// of [`Globals::run_with_prelude`] and `main::handle_error`: a
+    /// `SystemExit` keeps its status, an uncaught error exits with 1
+    /// after its report (a signal exception kills the child *as that
+    /// signal*, so the parent's `$?` sees a signal death), and a status
+    /// the handlers choose overrides the block's.
+    pub(crate) fn exit_forked_child(&mut self, executor: &mut Executor, res: Result<Value>) -> ! {
+        // Root the error's Values across the handlers (see
+        // `run_with_prelude`), and expose the exception as `$!`.
+        let root_len = executor.temp_len();
+        if let Err(err) = &res {
+            err.for_each_value(|v| executor.temp_push(v));
+            if !matches!(err.kind(), MonorubyErrKind::SystemExit(_)) {
+                executor.set_error(err.clone());
+                let err_val = executor.take_ex_obj(self);
+                executor.set_errinfo(err_val);
+            }
+        }
+        let handler_status = executor.run_at_exit_handlers(self);
+        let status = match &res {
+            Ok(_) => 0,
+            Err(err) => match err.kind() {
+                MonorubyErrKind::SystemExit(status) => *status as i32,
+                _ => {
+                    if let Some((signo, is_interrupt)) = err.signal_exception_signo(&self.store) {
+                        if is_interrupt {
+                            err.show_error_message_and_all_loc(&self.store);
+                        }
+                        crate::rvalue::io::flush_std_streams();
+                        crate::executor::terminate_with_signal(signo);
+                    }
+                    err.show_error_message_and_all_loc(&self.store);
+                    1
+                }
+            },
+        };
+        crate::scheduler::terminate_all(executor, self);
+        executor.run_finalizers(self);
+        executor.temp_clear(root_len);
+        crate::rvalue::io::flush_std_streams();
+        std::process::exit(handler_status.unwrap_or(status))
+    }
+
     ///
     /// Like [`Globals::run_with_requires`], but first evaluates
     /// *prelude* (Ruby source synthesized from command-line switches:
@@ -1408,13 +1455,16 @@ impl Globals {
                 executor.set_errinfo(err_val);
             }
         }
-        let handler_status = executor.run_exit_handlers(self);
+        let handler_status = executor.run_at_exit_handlers(self);
         executor.set_errinfo(unwind_errinfo);
         // CRuby kills the remaining threads *after* the `at_exit`
         // handlers and *before* the uncaught-exception report: each
         // runs the ensure clauses of its current fiber chain (never of
         // suspended fibers) on the way out.
         crate::scheduler::terminate_all(&mut executor, self);
+        // And the `ObjectSpace` finalizers run last, once no other
+        // thread can still be using the objects.
+        executor.run_finalizers(self);
         crate::rvalue::io::flush_std_streams();
         #[cfg(any(feature = "profile", feature = "jit-log"))]
         self.show_stats();

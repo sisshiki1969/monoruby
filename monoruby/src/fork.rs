@@ -133,6 +133,7 @@ impl<T: Default + 'static> ForkGuard<T> {
 /// [`reset_child`](Self::reset_child) in the child. Nothing that takes
 /// one of these locks may run in between.
 pub(crate) struct ForkGuards {
+    gvl: crate::gvl::GvlForkGuard,
     pool: native_pool::ForkLocks,
     idents: id_table::ForkLock,
     regexps: regexp::ForkLocks,
@@ -144,7 +145,12 @@ pub(crate) struct ForkGuards {
 /// after the standard streams are flushed (the flush takes their locks)
 /// and immediately before `libc::fork`.
 pub(crate) fn prepare() -> ForkGuards {
-    // The pool first: its own lock order is pool, orphans, results, and a
+    // The GVL's state: in the 1:1 model another kernel thread may be
+    // inside `acquire` / `release` (it holds nothing else there), and
+    // the child must not inherit that lock held by a thread it does not
+    // have. Taken first, so no thread changes hands from here on.
+    let gvl = crate::scheduler::native::gvl_fork_guard();
+    // The pool: its own lock order is pool, orphans, results, and a
     // worker holds nothing else while it holds one of those.
     let pool = native_pool::prepare_fork();
     let idents = id_table::prepare_fork();
@@ -154,6 +160,7 @@ pub(crate) fn prepare() -> ForkGuards {
     // the child abandons its lock instead (`preempt::ForkState`).
     let preempt = preempt::prepare_fork();
     ForkGuards {
+        gvl,
         pool,
         idents,
         regexps,
@@ -168,12 +175,14 @@ impl ForkGuards {
     /// release the mutexes.
     pub(crate) fn reset_child(self) {
         let ForkGuards {
+            gvl,
             pool,
             idents,
             regexps,
             _streams,
             preempt,
         } = self;
+        gvl.reset_child();
         pool.reset_child();
         preempt.reset_child();
         idents.reset_child();

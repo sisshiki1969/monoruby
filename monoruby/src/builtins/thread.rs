@@ -44,6 +44,7 @@ pub(super) fn init(globals: &mut Globals) {
     // Ruby (builtins/thread.rb).
     globals.define_builtin_func(THREAD_CLASS, "__backtrace", thread_backtrace, 0);
     globals.define_builtin_func(THREAD_CLASS, "alive?", thread_alive, 0);
+    globals.define_builtin_func(THREAD_CLASS, "native_thread_id", thread_native_thread_id, 0);
     globals.define_builtin_func(THREAD_CLASS, "stop?", thread_stop_p, 0);
     globals.define_builtin_func(THREAD_CLASS, "wakeup", thread_wakeup, 0);
     globals.define_builtin_func(THREAD_CLASS, "__wakeup_permit", thread_wakeup_permit, 0);
@@ -752,6 +753,27 @@ fn thread_backtrace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
 #[monoruby_builtin]
 fn thread_alive(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(!lfp.self_val().as_thread_inner().is_dead()))
+}
+
+///
+/// ### Thread#native_thread_id
+///
+/// The id of the kernel thread this thread runs on (`gettid(2)`;
+/// `pthread_threadid_np` on Darwin), nil once it is dead. Green threads
+/// share the interpreter's kernel thread and so report the same id.
+///
+/// [https://docs.ruby-lang.org/en/master/Thread.html#method-i-native_thread_id]
+#[monoruby_builtin]
+fn thread_native_thread_id(
+    _: &mut Executor,
+    _: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(match scheduler::native_thread_id(lfp.self_val()) {
+        Some(tid) => Value::integer(tid),
+        None => Value::nil(),
+    })
 }
 
 ///
@@ -2404,6 +2426,57 @@ mod tests {
             end
             r << t2.status
             r
+            "#,
+        );
+    }
+
+    /// `native_thread_id` is the kernel thread's id: an Integer while
+    /// the thread is alive, nil once it is dead.
+    #[test]
+    fn native_thread_id_is_the_kernel_thread() {
+        run_test_once(
+            r#"
+            t = Thread.new { sleep }
+            Thread.pass until t.status == "sleep"
+            a = [Thread.current.native_thread_id.is_a?(Integer), t.native_thread_id.is_a?(Integer)]
+            t.kill
+            t.join
+            a << t.native_thread_id
+            "#,
+        );
+        // Each 1:1 thread has a kernel thread of its own (green threads
+        // all share the interpreter's).
+        if crate::scheduler::native::enabled() {
+            run_test_once(
+                r#"
+                t = Thread.new { sleep }
+                Thread.pass until t.status == "sleep"
+                r = t.native_thread_id != Thread.current.native_thread_id
+                t.kill
+                t.join
+                r
+                "#,
+            );
+        }
+    }
+
+    /// A fork child is a new process, and the forking thread is its
+    /// only (main) thread: its id is the child's pid (Linux tids).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_fork_child_reports_its_own_kernel_thread() {
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            pid = fork do
+              r.close
+              w.syswrite((Thread.current.native_thread_id == Process.pid).to_s)
+              exit!(0)
+            end
+            w.close
+            s = r.read
+            Process.wait(pid)
+            s
             "#,
         );
     }

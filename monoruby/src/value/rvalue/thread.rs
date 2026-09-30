@@ -119,6 +119,11 @@ pub struct ThreadInner {
     /// region's duration; an interrupt sends the unblocking signal
     /// there (`native::interrupt_blocking`).
     pub(crate) blocking_tid: Option<libc::pthread_t>,
+    /// 1:1 model: the id of the kernel thread this thread runs on
+    /// (`Thread#native_thread_id`), recorded when the body is
+    /// dispatched and refreshed in a fork child. The main thread's is
+    /// the creating kernel thread's.
+    pub(crate) native_tid: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,6 +220,7 @@ impl ThreadInner {
             park_indefinite: false,
             park_fds: vec![],
             blocking_tid: None,
+            native_tid: None,
         }
     }
 
@@ -252,6 +258,7 @@ impl ThreadInner {
             park_indefinite: false,
             park_fds: vec![],
             blocking_tid: None,
+            native_tid: Some(crate::scheduler::current_kernel_tid()),
         }
     }
 
@@ -281,6 +288,7 @@ impl ThreadInner {
             park_indefinite: false,
             park_fds: vec![],
             blocking_tid: None,
+            native_tid: None,
         }
     }
 

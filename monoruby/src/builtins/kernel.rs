@@ -3686,29 +3686,14 @@ pub(super) fn fork(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
         // Child process (the default `_fork` already reset the green-
         // thread scheduler).
         if let Some(bh) = lfp.block() {
-            let data = vm.get_block_data(globals, bh)?;
-            match vm.invoke_block(globals, &data, &[]) {
-                Ok(_) => std::process::exit(0),
-                Err(err) => {
-                    if let MonorubyErrKind::SystemExit(status) = &err.kind {
-                        std::process::exit(*status as i32)
-                    }
-                    // An uncaught SignalException must kill the child *as
-                    // that signal* so the parent's `$?.signaled?`/`termsig`
-                    // see a signal death (CRuby semantics; see the same
-                    // logic in main.rs handle_error). Interrupt reports,
-                    // plain SignalException dies silently.
-                    if let Some((signo, is_interrupt)) = err.signal_exception_signo(&globals.store)
-                    {
-                        if is_interrupt {
-                            err.show_error_message_and_all_loc(&globals.store);
-                        }
-                        crate::executor::terminate_with_signal(signo);
-                    }
-                    err.show_error_message_and_all_loc(&globals.store);
-                    std::process::exit(1)
-                }
-            }
+            // The block's end is the end of the child's main thread: the
+            // child leaves through the process exit sequence (`at_exit`
+            // handlers, finalizers, stream flush), whatever the block
+            // did (`Globals::exit_forked_child`).
+            let res = vm
+                .get_block_data(globals, bh)
+                .and_then(|data| vm.invoke_block(globals, &data, &[]));
+            globals.exit_forked_child(vm, res)
         }
         Ok(Value::nil())
     } else {
