@@ -3060,6 +3060,7 @@
 99cfc04650144986127f45b7743e69aa	[900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900, 900]	class A\n          def m(a, *r) = yield(a + r.sum)\n        end\n        c
 99d9f00bc752fd756d973756cc553768	:OVERRIDDEN	class Hash; def [](k); :OVERRIDDEN; end; end; ({1=>2})[1]
 99ecbfe1c60911aafcec1d108ca89493	[false, true, true]	path = "/tmp/monoruby_io_eof_#{Process.pid}_#{rand(100000)}"\n      
+99f1e62b134fbed5f6cdd460c808d269	[false, 7, false]	require 'tmpdir'\n            path = File.join(Dir.tmpdir, "mrb_nosh
 9a0667a0e8629eb2eaac005054aa16db	[[:finished, [], [164, 162, 164, 164, 117]], [:finished, [], [164, 162]], [:finished, [], [0, 97, 0, 98]]]	[["UTF-8", "EUC-JP", "あいu", 5],\n             ["UTF-8", "EUC-JP", "あ
 9a0db96111752b4a7ebf036bac1d4c9d	[nil, nil]	[\n              NameError.new.name,\n              NameError.new("ju
 9a1505ab976bab44314875f75f0aad94	true	o = Object.new\n            def o.to_str = "CORE"\n            Proces

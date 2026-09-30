@@ -3582,10 +3582,7 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         // ENOEXEC (an executable file without a shebang that isn't a
         // binary): retry through `sh`, like execvp-era shells and CRuby.
         Err(err) if err.raw_os_error() == Some(libc::ENOEXEC) => {
-            let mut cmd = Command::new("/bin/sh");
-            cmd.arg(&program).args(&args);
-            crate::scheduler::command_for_child(&mut cmd);
-            match cmd.spawn() {
+            match Command::new("/bin/sh").arg(&program).args(&args).spawn() {
                 Ok(child) => child,
                 Err(_) => return Ok(Value::nil()),
             }
@@ -9136,6 +9133,25 @@ mod tests {
             "false.nil?",
             "[].nil?",
         ]);
+    }
+
+    #[test]
+    fn system_runs_a_script_without_a_shebang_through_sh() {
+        // An executable text file without a shebang fails `execve` with
+        // ENOEXEC and runs through /bin/sh instead (execvp's fallback).
+        // From a thread, so the child's signal mask is reset on that
+        // path too (`scheduler::command_for_child`).
+        run_test_once(
+            r#"
+            require 'tmpdir'
+            path = File.join(Dir.tmpdir, "mrb_noshebang_#{Process.pid}")
+            File.write(path, "exit 7\n")
+            File.chmod(0o755, path)
+            r = Thread.new { [system(path), $?.exitstatus, system(path, "a")] }.value
+            File.delete(path)
+            r
+            "#,
+        );
     }
 
     #[test]

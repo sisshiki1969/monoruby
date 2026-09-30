@@ -144,6 +144,25 @@ pub(crate) struct ForkGuards {
 /// Quiesce the process for a `fork(2)` — see the module doc. Call it
 /// after the standard streams are flushed (the flush takes their locks)
 /// and immediately before `libc::fork`.
+/// Write this process's coverage profile now. A process that never
+/// reaches the profiling runtime's exit hook — one the kernel kills, or
+/// a forked child on its way to `execve` — would otherwise leave the
+/// lines it ran invisible to coverage. A no-op outside an instrumented
+/// build (cargo-llvm-cov sets `--cfg coverage`).
+pub(crate) fn flush_coverage_profile() {
+    #[cfg(coverage)]
+    {
+        unsafe extern "C" {
+            fn __llvm_profile_write_file() -> libc::c_int;
+        }
+        // SAFETY: provided by the profiling runtime every instrumented
+        // build links; it only writes the profile of this process.
+        unsafe {
+            __llvm_profile_write_file();
+        }
+    }
+}
+
 pub(crate) fn prepare() -> ForkGuards {
     // The GVL's state: in the 1:1 model another kernel thread may be
     // inside `acquire` / `release` (it holds nothing else there), and

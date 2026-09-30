@@ -1168,6 +1168,8 @@ pub(crate) fn command_for_child(cmd: &mut std::process::Command) {
         unsafe {
             cmd.pre_exec(|| {
                 reset_child_sigmask();
+                // The child `execve`s next, taking these lines with it.
+                crate::fork::flush_coverage_profile();
                 Ok(())
             });
         }
