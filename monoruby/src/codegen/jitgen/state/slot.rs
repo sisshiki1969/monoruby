@@ -3355,4 +3355,78 @@ mod tests {
         "###,
         );
     }
+
+    /// Phase 2: an inlined `nil?` whose boolean feeds the immediately
+    /// following branch narrows the receiver on both sides, through
+    /// `if` / `unless` / ternary consumption.
+    #[test]
+    fn nilor_nil_p_peephole() {
+        run_test_with_prelude(
+            r###"
+        res = []
+        40.times do |i|
+          x = i.odd? ? Foo.new(i) : nil
+          if x.nil?
+            res << :nil
+          else
+            res << x.v
+          end
+          unless x.nil?
+            res << x.v * 2
+          else
+            res << :nil2
+          end
+          res << (x.nil? ? -1 : x.v)
+        end
+        res
+        "###,
+            r###"
+        class Foo
+          attr_reader :v
+          def initialize(v) = @v = v
+        end
+        "###,
+        );
+    }
+
+    /// Phase 2 soundness: a redefined `nil?` resolves to its own method
+    /// (no inline, no fact); a non-adjacent consumption and a `x = x.nil?`
+    /// overwrite narrow nothing but must stay correct.
+    #[test]
+    fn nilor_nil_p_peephole_soundness() {
+        run_test_with_prelude(
+            r###"
+        res = []
+        40.times do |i|
+          w = i.odd? ? Weird.new : nil
+          if w.nil?
+            res << :claims_nil
+          else
+            res << :claims_non_nil
+          end
+          x = i.odd? ? Foo.new(i) : nil
+          t = x.nil?
+          res << :sep
+          if t
+            res << :was_nil
+          else
+            res << x.v
+          end
+          y = i.odd? ? Foo.new(i) : nil
+          y = y.nil?
+          res << y
+        end
+        res
+        "###,
+            r###"
+        class Foo
+          attr_reader :v
+          def initialize(v) = @v = v
+        end
+        class Weird
+          def nil? = true
+        end
+        "###,
+        );
+    }
 }
