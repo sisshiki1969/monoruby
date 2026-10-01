@@ -294,7 +294,7 @@ fn render_cause(
                     }
                 }
             };
-            let want = globals.store.debug_class_name(expected);
+            let want = globals.store.debug_class_name(expected.id());
             // `GuardClass` on `Integer` / `Float` is a *representation* test,
             // not a class test: it checks the Fixnum tag (`testq r, 0b001`)
             // or the Flonum tag, so a heap-allocated Integer (BigInt) or
@@ -304,7 +304,7 @@ fn render_cause(
             // kind of line that sends an investigation down a wrong path.
             // Say what the guard actually tested instead.
             if actual == want {
-                let boxed = match expected {
+                let boxed = match expected.id() {
                     INTEGER_CLASS => Some("an immediate Fixnum, but this is a heap Integer (BigInt)"),
                     FLOAT_CLASS => Some("an immediate Flonum, but this is a heap Float"),
                     _ => None,

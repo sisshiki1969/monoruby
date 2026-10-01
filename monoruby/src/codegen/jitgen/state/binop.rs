@@ -237,11 +237,11 @@ impl AbstractState {
         // abstract type in place (keeping the resident) — a later integer op on
         // the same slot consumes it guard-free via `is_fixnum`, resident or not.
         if lhs_guard {
-            ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+            ir.push(AsmInst::GuardClass(lhs_gp, CachedClass::INTEGER, deopt));
             self.refine_S_fixnum(lhs);
         }
         if rhs_guard {
-            ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
+            ir.push(AsmInst::GuardClass(rhs_gp, CachedClass::INTEGER, deopt));
             self.refine_S_fixnum(rhs);
         }
         if double {
@@ -279,7 +279,7 @@ impl AbstractState {
         let deopt = ir.new_deopt(self);
         let dst_gp = self.take_dst_reg(ir, plan, lhs, lhs_gp, &[], dst);
         if lhs_guard {
-            ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+            ir.push(AsmInst::GuardClass(lhs_gp, CachedClass::INTEGER, deopt));
             self.refine_S_fixnum(lhs);
         }
         ir.push(AsmInst::IntegerBinOpImm {
@@ -531,7 +531,7 @@ impl AbstractState {
             let (var_gp, var_guard) = self.gp_ensure(ir, var, &[]);
             if var_guard {
                 let deopt = ir.new_deopt(self);
-                ir.push(AsmInst::GuardClass(var_gp, INTEGER_CLASS, deopt));
+                ir.push(AsmInst::GuardClass(var_gp, CachedClass::INTEGER, deopt));
                 self.refine_S_fixnum(var);
             }
         }
@@ -610,7 +610,7 @@ impl AbstractState {
             let next_sp = self.next_sp();
             self.gp_regfile.free_above_sp(next_sp);
             if lhs_guard {
-                ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+                ir.push(AsmInst::GuardClass(lhs_gp, CachedClass::INTEGER, deopt));
                 self.refine_S_fixnum(lhs);
             }
             ir.push(AsmInst::IntegerCmpImm {
@@ -641,11 +641,11 @@ impl AbstractState {
         // operand a fixnum, so record that on the slot and later integer ops
         // consume it guard-free.
         if lhs_guard {
-            ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+            ir.push(AsmInst::GuardClass(lhs_gp, CachedClass::INTEGER, deopt));
             self.refine_S_fixnum(lhs);
         }
         if rhs_guard {
-            ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
+            ir.push(AsmInst::GuardClass(rhs_gp, CachedClass::INTEGER, deopt));
             self.refine_S_fixnum(rhs);
         }
         ir.integer_cmp_reg(kind, dst, lhs_gp, rhs_gp);
@@ -702,7 +702,7 @@ impl AbstractState {
             let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
             let deopt = ir.new_deopt(self);
             if lhs_guard {
-                ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+                ir.push(AsmInst::GuardClass(lhs_gp, CachedClass::INTEGER, deopt));
                 self.refine_S_fixnum(lhs);
             }
             self.flush_gp(ir);
@@ -724,11 +724,11 @@ impl AbstractState {
         // recorded on the slot (not the register file), so it survives the
         // block-terminator flush below and propagates to the successor blocks.
         if lhs_guard {
-            ir.push(AsmInst::GuardClass(lhs_gp, INTEGER_CLASS, deopt));
+            ir.push(AsmInst::GuardClass(lhs_gp, CachedClass::INTEGER, deopt));
             self.refine_S_fixnum(lhs);
         }
         if rhs_guard {
-            ir.push(AsmInst::GuardClass(rhs_gp, INTEGER_CLASS, deopt));
+            ir.push(AsmInst::GuardClass(rhs_gp, CachedClass::INTEGER, deopt));
             self.refine_S_fixnum(rhs);
         }
         // Block terminator: spill the dirty residents to their stack homes before
@@ -902,14 +902,14 @@ impl AbstractState {
         &mut self,
         ir: &mut AsmIr,
         slot: SlotId,
-        class: ClassId,
+        class: CachedClass,
         // `Some`: a guard miss exits through a counter-gated recompile of
         // *target* (reason `BecamePolymorphic`) instead of a plain deopt,
         // so a site compiled before the VM saw class variance flips to the
         // polymorphic treatment instead of side-exiting forever.
         heal: Option<RecompileTarget>,
     ) {
-        if self.class(slot) == Some(class) {
+        if self.class(slot) == Some(class.id()) {
             return;
         }
         // NOTE: a compile-time heap constant of the right class (a bignum
@@ -925,15 +925,15 @@ impl AbstractState {
             None => ir.new_deopt(state),
         };
         match class {
-            INTEGER_CLASS => {
+            CachedClass::INTEGER => {
                 let (gp, needs_guard) = self.gp_ensure(ir, slot, &[]);
                 if needs_guard {
                     let deopt = new_deopt(self, ir);
-                    ir.push(AsmInst::GuardClass(gp, INTEGER_CLASS, deopt));
+                    ir.push(AsmInst::GuardClass(gp, CachedClass::INTEGER, deopt));
                     self.refine_S_fixnum(slot);
                 }
             }
-            FLOAT_CLASS => {
+            CachedClass::FLOAT => {
                 // The unboxing guard admits both float representations
                 // (flonum and heap Float), so its misses are genuine class
                 // misses — but the deopt is welded into `load_fpr`; healing

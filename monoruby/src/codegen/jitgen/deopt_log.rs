@@ -70,7 +70,7 @@ pub(crate) enum DeoptCause {
     /// against the one baked in at compile time. Both halves matter: a
     /// class guard's story is "expected X, got a Y", and the expected half
     /// is not recoverable from the operand alone.
-    ClassGuard(GP, ClassId),
+    ClassGuard(GP, CachedClass),
     /// A Ruby `Value` in this GP register, which the guard compared
     /// against a `Value` baked into the code at compile time.
     ValueVsBaked(GP, crate::Value),

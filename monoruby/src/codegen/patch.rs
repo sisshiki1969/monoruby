@@ -241,7 +241,7 @@ impl Codegen {
         guard:
             movq rdi, [r14 - (LFP_SELF)];
         }
-        self.guard_class2(GP::Rdi, self_class, &failed);
+        self.guard_class2(GP::Rdi, CachedClass::from_class(self_class), &failed);
         monoasm! { &mut self.jit,
         patch_point:
             jmp jit_entry;

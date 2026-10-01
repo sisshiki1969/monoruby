@@ -79,7 +79,7 @@ impl<'a> JitContext<'a> {
             let self_class = self
                 .self_class()
                 .expect("a loop body is compiled for a concrete self class");
-            ir.push(AsmInst::GuardClass(GP::Rdi, self_class, deopt));
+            ir.push(AsmInst::GuardClass(GP::Rdi, CachedClass::from_class(self_class), deopt));
             ir.push(AsmInst::Preparation);
             // Loop JIT runs inside an existing invoker / interpreter
             // frame, so its prologue isn't JIT-emitted. Any
@@ -422,7 +422,7 @@ impl<'a> JitContext<'a> {
         if let Some(class) = latched_self {
             let deopt = ir.new_deopt(state);
             ir.self2reg(GP::Rdi);
-            ir.push(AsmInst::GuardClass(GP::Rdi, class, deopt));
+            ir.push(AsmInst::GuardClass(GP::Rdi, CachedClass::from_class(class), deopt));
         }
     }
 
@@ -563,12 +563,12 @@ impl<'a> JitContext<'a> {
                 self.restore_unfrozen(Some(dst));
             }
             TraceIr::StringFreeze(dst, val) => {
-                if self.basic_op_assumable(STRING_CLASS, IdentId::FREEZE) {
+                if self.basic_op_assumable(CachedClass::STRING, IdentId::FREEZE) {
                     // The builtin `String#freeze`: the answer is the interned
                     // literal itself, loaded like any frozen literal. The
                     // recorded dependency evicts this body if `freeze` is
                     // later redefined.
-                    self.record_bop_dep(STRING_CLASS, IdentId::FREEZE);
+                    self.record_bop_dep(CachedClass::STRING, IdentId::FREEZE);
                     state.def_lit2gp(ir, dst, val);
                     self.restore_unfrozen(Some(dst));
                 } else {
@@ -1528,7 +1528,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         ir: &mut AsmIr,
         recv: SlotId,
-        recv_class: ClassId,
+        recv_class: CachedClass,
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
@@ -1557,8 +1557,8 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         lhs: SlotId,
         rhs: SlotId,
-        lhs_class: ClassId,
-        rhs_class: Option<ClassId>,
+        lhs_class: CachedClass,
+        rhs_class: Option<CachedClass>,
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
         recv_miss: RecvMissMode,
@@ -1584,8 +1584,8 @@ impl<'a> JitContext<'a> {
         recv: SlotId,
         idx: SlotId,
         src: SlotId,
-        recv_class: ClassId,
-        idx_class: Option<ClassId>,
+        recv_class: CachedClass,
+        idx_class: Option<CachedClass>,
         name: impl Into<IdentId>,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
@@ -1670,7 +1670,7 @@ impl<'a> JitContext<'a> {
     ///
     fn jit_check_call(
         &mut self,
-        recv_class: ClassId,
+        recv_class: CachedClass,
         name: Option<IdentId>,
     ) -> Option<(FuncId, Visibility)> {
         if let Some(name) = name {
@@ -1704,21 +1704,21 @@ impl<'a> JitContext<'a> {
     /// Basic ops are public by definition, so the snapshot carries no
     /// visibility of its own.
     ///
-    fn resolve_basic_op(&self, class_id: ClassId, name: IdentId) -> Option<(FuncId, Visibility)> {
+    fn resolve_basic_op(&self, class_id: CachedClass, name: IdentId) -> Option<(FuncId, Visibility)> {
         if self.in_internal_builtin()
-            && let Some(fid) = self.store.basic_op_armed_func(class_id, name)
+            && let Some(fid) = self.store.basic_op_armed_func(class_id.id(), name)
         {
             return Some((fid, Visibility::Public));
         }
         self.jit_check_method(class_id, name)
     }
 
-    fn jit_check_method(&self, class_id: ClassId, name: IdentId) -> Option<(FuncId, Visibility)> {
+    fn jit_check_method(&self, class_id: CachedClass, name: IdentId) -> Option<(FuncId, Visibility)> {
         let refinements = self.refinements();
         let class_version = self.class_version();
         let entry = if refinements.is_empty() {
             self.store
-                .check_method_for_class_with_version(class_id, name, class_version)?
+                .check_method_for_class_with_version(class_id.id(), name, class_version)?
         } else {
             // The compiling body activated refinements, so resolution is
             // a function of its set too. Recorded with the result in
@@ -1728,7 +1728,7 @@ impl<'a> JitContext<'a> {
             // version-stamped and must not touch the CODEGEN RefCell,
             // which this compilation already holds.
             self.store.check_method_with_refinements_with_version(
-                class_id,
+                class_id.id(),
                 name,
                 refinements,
                 class_version,
@@ -1769,12 +1769,12 @@ impl<'a> JitContext<'a> {
     ///
     /// Check whether `super` of class *class_id* exists in compile time.
     ///
-    fn jit_check_super(&mut self, recv_class: ClassId) -> Option<FuncId> {
+    fn jit_check_super(&mut self, recv_class: CachedClass) -> Option<FuncId> {
         // for super
         let mother = self.iseq().mother().0;
         let mother_fid = self.store[mother].func_id();
         let func_name = self.store[mother_fid].name().unwrap();
-        self.store.check_super(recv_class, mother_fid, func_name)
+        self.store.check_super(recv_class.id(), mother_fid, func_name)
     }
 }
 
@@ -1784,15 +1784,17 @@ impl AbstractState {
         &self,
         lhs: SlotId,
         rhs: SlotId,
-        ic: Option<(ClassId, ClassId)>,
-    ) -> (Option<ClassId>, Option<ClassId>) {
+        ic: Option<(CachedClass, CachedClass)>,
+    ) -> (Option<CachedClass>, Option<CachedClass>) {
+        // A lattice-proven class beats the IC's record; using it as a
+        // dispatch/guard key is the explicit C→B crossing.
         let lhs_class = if let Some(class) = self.class(lhs) {
-            Some(class)
+            Some(CachedClass::from_class(class))
         } else {
             ic.map(|(class, _)| class)
         };
         let rhs_class = if let Some(class) = self.class(rhs) {
-            Some(class)
+            Some(CachedClass::from_class(class))
         } else {
             ic.map(|(_, class)| class)
         };

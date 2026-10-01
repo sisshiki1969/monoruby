@@ -3484,9 +3484,9 @@ impl Executor {
         };
         let entry = globals
             .store
-            .check_method_with_refinements(class_id, func_name, set)
+            .check_method_with_refinements(class_id.id(), func_name, set)
             .or_else(|| {
-                if class_id == BOOL_CLASS {
+                if class_id == CachedClass::BOOL {
                     globals
                         .store
                         .check_method_with_refinements(recv.class(), func_name, set)

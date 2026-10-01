@@ -693,13 +693,13 @@ impl Value {
     /// (which holds the same `FuncId` as `FALSE_CLASS` for any method
     /// shared between booleans, by construction in `bool_class::init`).
     ///
-    pub(crate) fn class_for_ic(&self) -> ClassId {
+    pub(crate) fn class_for_ic(&self) -> CachedClass {
         let v = self.0.get();
-        if v == TRUE_VALUE || v == FALSE_VALUE {
+        CachedClass::from_class(if v == TRUE_VALUE || v == FALSE_VALUE {
             BOOL_CLASS
         } else {
             self.class()
-        }
+        })
     }
 
     #[allow(dead_code)]

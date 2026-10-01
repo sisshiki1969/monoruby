@@ -158,8 +158,8 @@ fn float_binop_gen(kind: BinOpK) -> Box<InlineGenBinary> {
                 return BinaryInlineOutcome::Declined;
             }
             let rhs_fop = match rhs_class {
-                Some(INTEGER_CLASS) => FOpClass::Integer,
-                Some(FLOAT_CLASS) => FOpClass::Float,
+                Some(CachedClass::INTEGER) => FOpClass::Integer,
+                Some(CachedClass::FLOAT) => FOpClass::Float,
                 _ => return BinaryInlineOutcome::Declined,
             };
             let CallSiteInfo {
@@ -192,8 +192,8 @@ fn float_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
                 return BinaryInlineOutcome::Declined;
             }
             let rhs_fop = match rhs_class {
-                Some(INTEGER_CLASS) => FOpClass::Integer,
-                Some(FLOAT_CLASS) => FOpClass::Float,
+                Some(CachedClass::INTEGER) => FOpClass::Integer,
+                Some(CachedClass::FLOAT) => FOpClass::Float,
                 _ => return BinaryInlineOutcome::Declined,
             };
             let CallSiteInfo {
@@ -341,8 +341,8 @@ fn float_toi(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {

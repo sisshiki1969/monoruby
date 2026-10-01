@@ -169,8 +169,8 @@ pub(super) fn object_frozen(
     callid: CallSiteId,
     // The receiver Value is all this reads, so an unproven class
     // (a multi-class dispatch arm / the class-set guard) is no obstacle.
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -347,8 +347,8 @@ fn object_not(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -430,8 +430,8 @@ pub(super) fn object_object_id(
     callid: CallSiteId,
     // The receiver Value is all this reads, so an unproven class
     // (a multi-class dispatch arm / the class-set guard) is no obstacle.
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {

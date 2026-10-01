@@ -101,7 +101,7 @@ pub(super) extern "C" fn find_method(
     }
     let cache_class = {
         let ic_class = recv.class_for_ic();
-        if ic_class == BOOL_CLASS {
+        if ic_class == CachedClass::BOOL {
             let unified = match name {
                 Some(name) => globals
                     .store
@@ -109,7 +109,13 @@ pub(super) extern "C" fn find_method(
                     .is_some(),
                 None => false,
             };
-            if unified { BOOL_CLASS } else { recv.class() }
+            if unified {
+                CachedClass::BOOL
+            } else {
+                // The method is not unified across TrueClass/FalseClass:
+                // cache the real bool class so the ways stay distinct.
+                CachedClass::from_class(recv.class())
+            }
         } else {
             ic_class
         }
@@ -321,7 +327,10 @@ pub(super) extern "C" fn pmc_record_binary(
     old_rhs: u32,
 ) {
     let displaced = match (ClassId::from(old_lhs), ClassId::from(old_rhs)) {
-        (Some(l), r @ Some(_)) => Some((l, r)),
+        (Some(l), r @ Some(_)) => Some((
+            CachedClass::from_class(l),
+            r.map(CachedClass::from_class),
+        )),
         _ => None,
     };
     pmc_record_from_pc(vm, globals, pc, true, displaced);
@@ -335,7 +344,7 @@ pub(super) extern "C" fn pmc_record_unary(
     pc: BytecodePtr,
     old_recv: u32,
 ) {
-    let displaced = ClassId::from(old_recv).map(|c| (c, None));
+    let displaced = ClassId::from(old_recv).map(|c| (CachedClass::from_class(c), None));
     pmc_record_from_pc(vm, globals, pc, false, displaced);
 }
 
@@ -344,7 +353,7 @@ fn pmc_record_from_pc(
     globals: &mut Globals,
     pc: BytecodePtr,
     binary: bool,
-    displaced: Option<(ClassId, Option<ClassId>)>,
+    displaced: Option<(CachedClass, Option<CachedClass>)>,
 ) {
     let iseq_id = globals.store[vm.cfp().lfp().func_id()].as_iseq();
     let bc_pos = globals.store[iseq_id].get_pc_index(Some(pc));

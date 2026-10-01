@@ -458,10 +458,10 @@ fn get_value_inline(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: Option<ClassId>,
-    _: Option<ClassId>,
+    recv_class: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
-    if recv_class != Some(IO_BUFFER_CLASS) {
+    if recv_class.map(CachedClass::id) != Some(IO_BUFFER_CLASS) {
         return false;
     }
     let callsite = &store[callid];
@@ -526,10 +526,10 @@ fn set_value_inline(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: Option<ClassId>,
-    _: Option<ClassId>,
+    recv_class: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
-    if recv_class != Some(IO_BUFFER_CLASS) {
+    if recv_class.map(CachedClass::id) != Some(IO_BUFFER_CLASS) {
         return false;
     }
     let callsite = &store[callid];

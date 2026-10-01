@@ -216,7 +216,7 @@ impl FprFixnumLoad {
                     None => ir.stack2reg(slot, GP::Rdi),
                 }
                 if guard {
-                    ir.push(AsmInst::GuardClass(GP::Rdi, INTEGER_CLASS, deopt.unwrap()));
+                    ir.push(AsmInst::GuardClass(GP::Rdi, CachedClass::INTEGER, deopt.unwrap()));
                 }
                 ir.fixnum2fpr(GP::Rdi, x);
             }
@@ -384,7 +384,7 @@ impl AbstractFrame {
                 // possibly-stale stack home (the conversion copies to Rdi first, so
                 // the resident register survives intact).
                 let gp = self.gp_regfile.reg_of(slot);
-                let guard = self.guard_class_state(slot, INTEGER_CLASS);
+                let guard = self.guard_class_state(slot, CachedClass::INTEGER);
                 let x = self.set_new_Sf(slot, SfGuarded::Fixnum);
                 (x, FprFixnumLoad::FromStack(x, guard, gp))
             }

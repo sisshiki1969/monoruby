@@ -122,8 +122,8 @@ fn as_begin_inline(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     inline_field_load(state, ir, store, callid, crate::rvalue::AS_BEGIN_OFFSET)
 }
@@ -145,8 +145,8 @@ fn as_end_inline(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     inline_field_load(state, ir, store, callid, crate::rvalue::AS_END_OFFSET)
 }
@@ -168,8 +168,8 @@ fn as_step_inline(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     inline_field_load(state, ir, store, callid, crate::rvalue::AS_STEP_OFFSET)
 }
@@ -198,8 +198,8 @@ fn as_exclude_end_inline(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {

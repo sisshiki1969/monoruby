@@ -108,6 +108,9 @@ impl<'a> JitContext<'a> {
             return Ok(CompileResult::Continue);
         }
         let (recv_class, func_id, visibility) = if let Some(recv_class) = recv_class {
+            // A lattice-proven class used as the dispatch key — the C→B
+            // crossing, explicit by construction.
+            let recv_class = CachedClass::from_class(recv_class);
             // A proven receiver class lets the compile-time lookup below
             // resolve a site the VM has *never run*. Doing so is what makes
             // a never-taken branch cost the branch that is taken: the
@@ -127,7 +130,7 @@ impl<'a> JitContext<'a> {
             // the receiver class is known.
             if let Some((func_id, visibility)) = self.jit_check_call(recv_class, callsite.name) {
                 (recv_class, func_id, visibility)
-            } else if callsite.name.is_some() && recv_class != BOOL_CLASS {
+            } else if callsite.name.is_some() && recv_class != CachedClass::BOOL {
                 // The class is known and it does not have the method: this
                 // call is `method_missing`, now and until a definition
                 // moves the class version. Asking for a recompile instead
@@ -195,7 +198,9 @@ impl<'a> JitContext<'a> {
         let arg_class = {
             let callsite = &self.store[callid];
             if callsite.is_simple() && callsite.pos_num == 1 {
-                state.class(callsite.args)
+                // A lattice-proven argument class, as a generator gate — the
+                // C→B crossing.
+                state.class(callsite.args).map(CachedClass::from_class)
             } else {
                 None
             }
@@ -317,8 +322,8 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
-        recv_class: ClassId,
-        arg_class: Option<ClassId>,
+        recv_class: CachedClass,
+        arg_class: Option<CachedClass>,
         func_id: FuncId,
         visibility: Visibility,
         callid: CallSiteId,
@@ -330,7 +335,7 @@ impl<'a> JitContext<'a> {
         // (`unbox_to_S_for_outgoing_block`, a `C` becomes `S`) describes a
         // frame the declared merge does not share, and the bridge cannot
         // turn a value back into a constant.
-        if state.class(recv) == Some(recv_class)
+        if state.class(recv) == Some(recv_class.id())
             || callsite.pmc.entries().len() < 2
             || self.in_dispatch_arm()
             || !self.generic_send_eligible(callid)
@@ -513,9 +518,9 @@ impl<'a> JitContext<'a> {
     fn pmc_same_target_classes(
         &mut self,
         callid: CallSiteId,
-        recv_class: ClassId,
+        recv_class: CachedClass,
         func_id: FuncId,
-    ) -> Option<Box<[ClassId]>> {
+    ) -> Option<Box<[CachedClass]>> {
         // A target this site would *specialize* keeps its single-class
         // guard. The set guard is the better trade only when what it
         // replaces is a plain call: it buys one compare in place of a
@@ -540,7 +545,7 @@ impl<'a> JitContext<'a> {
         let name = callsite.name?;
         let pmc = &callsite.pmc;
         let observations = pmc.observations();
-        let mut classes: Vec<(ClassId, u32)> =
+        let mut classes: Vec<(CachedClass, u32)> =
             pmc.entries().iter().map(|e| (e.recv, e.count)).collect();
         if !classes.iter().any(|(c, _)| *c == recv_class) {
             classes.push((recv_class, 0));
@@ -608,7 +613,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
-        recv_class: ClassId,
+        recv_class: CachedClass,
         callid: CallSiteId,
     ) -> JitResult<CompileResult> {
         let callsite = &self.store[callid];
@@ -648,8 +653,8 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
-        recv_class: ClassId,
-        arg_class: Option<ClassId>,
+        recv_class: CachedClass,
+        arg_class: Option<CachedClass>,
         func_id: FuncId,
         visibility: Visibility,
         callid: CallSiteId,
@@ -729,7 +734,13 @@ impl<'a> JitContext<'a> {
                     }
                 };
                 return self.compile_method_call(
-                    state, ir, recv_class, arg_class, target, visibility, direct,
+                    state,
+                    ir,
+                    recv_class,
+                    arg_class.map(CachedClass::from_class),
+                    target,
+                    visibility,
+                    direct,
                     // The receiver guard the nested call emits is this
                     // site's only one, so the site keeps the miss policy it
                     // came in with. Under `Learn` a miss recompiles once —
@@ -855,13 +866,13 @@ impl<'a> JitContext<'a> {
         // handle `None`, the ordinary builtin call carries boxed Values.
         let mut recv_const_unrefined = false;
         if !same_target_set_guarded
-            && state.class(recv) != Some(recv_class)
-            && state.is_const_of_class(recv, recv_class)
+            && state.class(recv) != Some(recv_class.id())
+            && state.is_const_of_class(recv, recv_class.id())
         {
             same_target_set_guarded = true;
             recv_const_unrefined = true;
         }
-        if !same_target_set_guarded && state.class(recv) != Some(recv_class) {
+        if !same_target_set_guarded && state.class(recv) != Some(recv_class.id()) {
             if recv_miss != RecvMissMode::PartB
                 && let Some(classes) = self.pmc_same_target_classes(callid, recv_class, func_id)
             {
@@ -933,7 +944,7 @@ impl<'a> JitContext<'a> {
                     // exclusion: its guard already admits both the flonum
                     // and the heap representation.)
                     RecvMissMode::Learn => {
-                        recv_class != INTEGER_CLASS && self.store[callid].pmc.entries().len() < 2
+                        recv_class != CachedClass::INTEGER && self.store[callid].pmc.entries().len() < 2
                     }
                     RecvMissMode::Plain | RecvMissMode::Residual(_) => false,
                 };
@@ -1152,7 +1163,7 @@ impl<'a> JitContext<'a> {
         // lowerings that do not resolve anything class-specific (the
         // `Struct` accessors take their slot from the `FuncKind` itself)
         // are unaffected.
-        let recv_class_proven = !same_target_set_guarded || state.class(recv) == Some(recv_class);
+        let recv_class_proven = !same_target_set_guarded || state.class(recv) == Some(recv_class.id());
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
         let (fid, outer_lfp) = match self.store[func_id].kind {
             FuncKind::AttrReader { ivar_name } if recv_class_proven => {
@@ -1509,7 +1520,14 @@ impl<'a> JitContext<'a> {
         // `recv_class`'s JIT body — hand `None` so the lowering dispatches
         // through the callee's wrapper (see `AsmInst::Call::recv_class`).
         let proven_recv_class = (!same_target_set_guarded).then_some(recv_class);
-        state.send(ir, &self.store, callid, fid, proven_recv_class, outer_lfp);
+        state.send(
+            ir,
+            &self.store,
+            callid,
+            fid,
+            proven_recv_class.map(CachedClass::id),
+            outer_lfp,
+        );
 
         // `eval` and its family run arbitrary source against objects this
         // unit holds class facts about, and one of the things that source
@@ -1827,7 +1845,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         ir: &mut AsmIr,
         callid: CallSiteId,
-        recv_class: ClassId,
+        recv_class: CachedClass,
         ivar_name: IdentId,
     ) -> CompileResult {
         let callsite = &self.store[callid];
@@ -1844,17 +1862,17 @@ impl<'a> JitContext<'a> {
         assert!(callsite.block_arg.is_none());
         state.load(ir, recv, GP::Rdi);
         state.discard(dst);
-        if recv_class.is_always_frozen() {
+        if recv_class.id().is_always_frozen() {
             if dst.is_some() {
                 ir.lit2reg(Value::nil(), GP::Rax);
             }
         } else {
-            let ivarid = if let Some(id) = self.store[recv_class].get_ivarid(ivar_name) {
+            let ivarid = if let Some(id) = self.store[recv_class.id()].get_ivarid(ivar_name) {
                 id
             } else {
                 return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
             };
-            let is_object_ty = self.store[recv_class].is_object_ty_instance();
+            let is_object_ty = self.store[recv_class.id()].is_object_ty_instance();
             if is_object_ty && ivarid.is_inline() {
                 ir.push(AsmInst::LoadIVarInline {
                     ivarid,
@@ -1880,7 +1898,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         ir: &mut AsmIr,
         callid: CallSiteId,
-        recv_class: ClassId,
+        recv_class: CachedClass,
         ivar_name: IdentId,
     ) -> CompileResult {
         let callsite = &self.store[callid];
@@ -1895,7 +1913,7 @@ impl<'a> JitContext<'a> {
         assert_eq!(1, pos_num);
         assert!(!callsite.kw_may_exists());
         assert!(block_fid.is_none());
-        let ivarid = if let Some(id) = self.store[recv_class].get_ivarid(ivar_name) {
+        let ivarid = if let Some(id) = self.store[recv_class.id()].get_ivarid(ivar_name) {
             id
         } else {
             return CompileResult::Recompile(RecompileReason::IvarIdNotFound);
@@ -1911,7 +1929,7 @@ impl<'a> JitContext<'a> {
         let wb = !state.is_guarded_immediate(args);
         state.load(ir, args, GP::Rax);
         let src = GP::Rax;
-        let is_object_ty = self.store[recv_class].is_object_ty_instance();
+        let is_object_ty = self.store[recv_class.id()].is_object_ty_instance();
         let using_fpr = state.get_using_fpr(ir);
         if is_object_ty && ivarid.is_inline() {
             ir.push(AsmInst::StoreIVarInline { src, ivarid, wb })
@@ -1963,7 +1981,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
-        recv_class: ClassId,
+        recv_class: CachedClass,
         recv: SlotId,
         dst: Option<SlotId>,
         body: &frameless::LeafBody,
@@ -1976,13 +1994,13 @@ impl<'a> JitContext<'a> {
         // agree on where its ivars live: a subclass that assigns one of its
         // own first shifts every inherited slot. Reading `@n` at the
         // parent's index would then hit whatever the subclass put there.
-        if state.class(recv) != Some(recv_class) {
+        if state.class(recv) != Some(recv_class.id()) {
             return false;
         }
         // Only `RValue`s with the object layout have inline ivar slots at a
         // fixed offset; anything else goes through the heap table, which
         // needs `using_fpr` bookkeeping and a possible reallocation call.
-        if !self.store[recv_class].is_object_ty_instance() {
+        if !self.store[recv_class.id()].is_object_ty_instance() {
             return false;
         }
         // Resolve every ivar before emitting anything, so a body that is
@@ -1991,7 +2009,7 @@ impl<'a> JitContext<'a> {
         // (a subclass whose own initializer never ran); decline rather than
         // recompile — the ordinary call is correct.
         let resolve = |this: &Self, name: IdentId| -> Option<IvarId> {
-            this.store[recv_class]
+            this.store[recv_class.id()]
                 .get_ivarid(name)
                 .filter(|ivarid| ivarid.is_inline())
         };
@@ -2018,7 +2036,7 @@ impl<'a> JitContext<'a> {
                 frameless::LeafOp::Cmp(_, _, class) => class,
                 _ => INTEGER_CLASS,
             };
-            if !self.basic_op_assumable(class, name) {
+            if !self.basic_op_assumable(CachedClass::from_class(class), name) {
                 return false;
             }
             bop_deps.push((class, name));
@@ -2126,8 +2144,8 @@ impl<'a> JitContext<'a> {
                     // Neither operand is statically typed here — the
                     // receiver's class is known but its ivars' contents are
                     // not, and a parameter is whatever the caller passed.
-                    ir.push(AsmInst::GuardClass(GP::Rax, INTEGER_CLASS, deopt));
-                    ir.push(AsmInst::GuardClass(GP::Rcx, INTEGER_CLASS, deopt));
+                    ir.push(AsmInst::GuardClass(GP::Rax, CachedClass::INTEGER, deopt));
+                    ir.push(AsmInst::GuardClass(GP::Rcx, CachedClass::INTEGER, deopt));
                     ir.integer_binop_reg(kind, GP::Rax, GP::Rax, GP::Rcx, deopt);
                     acc_immediate = true;
                 }
@@ -2138,8 +2156,8 @@ impl<'a> JitContext<'a> {
                     // bit equality for an immediate, a signed read of the
                     // tagged bits for a fixnum. The recogniser admits the
                     // non-fixnum classes for equality only.
-                    ir.push(AsmInst::GuardClass(GP::Rax, class, deopt));
-                    ir.push(AsmInst::GuardClass(GP::Rcx, class, deopt));
+                    ir.push(AsmInst::GuardClass(GP::Rax, CachedClass::from_class(class), deopt));
+                    ir.push(AsmInst::GuardClass(GP::Rcx, CachedClass::from_class(class), deopt));
                     // The comparison zeroes rax before reading its operands,
                     // so the accumulator has to step aside first.
                     ir.reg_move(GP::Rax, GP::Rsi);
@@ -2167,7 +2185,7 @@ impl<'a> JitContext<'a> {
             }
         }
         for (class, name) in bop_deps {
-            self.record_bop_dep(class, name);
+            self.record_bop_dep(CachedClass::from_class(class), name);
         }
         self.const_fold_cache.extend(body.consts.iter().cloned());
         state.def_reg2acc(ir, GP::Rax, dst);
@@ -2266,7 +2284,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         ir: &mut AsmIr,
         callid: CallSiteId,
-        recv_class: ClassId,
+        recv_class: CachedClass,
     ) -> bool {
         let callsite = &self.store[callid];
         if callsite.block_fid.is_some()
@@ -2287,7 +2305,7 @@ impl<'a> JitContext<'a> {
         // The receiver of `Class#new` is a class object, so its class is
         // that class's singleton (metaclass); unwrap to the attached class,
         // which is the one being instantiated.
-        let mut self_module = self.store[recv_class].get_module();
+        let mut self_module = self.store[recv_class.id()].get_module();
         if let Some(origin) = self_module.is_singleton() {
             self_module = origin.as_class();
         }
@@ -2405,7 +2423,7 @@ impl<'a> JitContext<'a> {
         // inherited one in a subclass, both silently kept the old behaviour
         // at an already-hot site.
         self.inline_method_cache.push(InlineCacheEntry {
-            recv_class: class_id,
+            recv_class: CachedClass::from_class(class_id),
             name: Some(IdentId::INITIALIZE),
             refinements: self.refinements(),
             func_id: Some(init_fid),
@@ -2441,7 +2459,15 @@ impl<'a> JitContext<'a> {
                 // The constructor's return value is discarded by `new`, so
                 // the expansion writes no destination — `dst` keeps the
                 // object.
-                let ok = self.expand_ivar_stores(state, ir, class_id, dst, None, &body, &arg_slots);
+                let ok = self.expand_ivar_stores(
+                    state,
+                    ir,
+                    CachedClass::from_class(class_id),
+                    dst,
+                    None,
+                    &body,
+                    &arg_slots,
+                );
                 // The plan was fully resolved above, so this cannot miss.
                 debug_assert!(ok);
             }
@@ -2453,7 +2479,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
-        recv_class: ClassId,
+        recv_class: CachedClass,
         recv: SlotId,
         dst: Option<SlotId>,
         body: &frameless::IvarStoreBody,
@@ -2462,7 +2488,7 @@ impl<'a> JitContext<'a> {
         // Only `RValue`s with the object layout have inline ivar slots at a
         // fixed offset; anything else stores through the heap table, which
         // needs `using_fpr` bookkeeping and a possible reallocation call.
-        if !self.store[recv_class].is_object_ty_instance() {
+        if !self.store[recv_class.id()].is_object_ty_instance() {
             return false;
         }
         // Resolve every slot *before* emitting anything, so a body that is
@@ -2475,7 +2501,7 @@ impl<'a> JitContext<'a> {
             // this site is not the one the body writes (a subclass whose own
             // `new` has never run). Decline rather than recompile: the
             // ordinary call is correct and this is only an optimization.
-            let Some(ivarid) = self.store[recv_class].get_ivarid(name) else {
+            let Some(ivarid) = self.store[recv_class.id()].get_ivarid(name) else {
                 return false;
             };
             if !ivarid.is_inline() {
@@ -2601,7 +2627,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         ir: &mut AsmIr,
         callid: CallSiteId,
-        recv_class: ClassId,
+        recv_class: CachedClass,
         fid: FuncId,
         iseq: ISeqId,
         specializable: bool,
@@ -2636,7 +2662,7 @@ impl<'a> JitContext<'a> {
         let compiled = self.compile_specialized_func(
             state,
             iseq,
-            Some(recv_class),
+            Some(recv_class.id()),
             args_info,
             None,
             callid,
@@ -3162,14 +3188,14 @@ impl<'a> JitContext<'a> {
             &JitContext,
             &Store,
             CallSiteId,
-            Option<ClassId>,
-            Option<ClassId>,
+            Option<CachedClass>,
+            Option<CachedClass>,
         ) -> bool,
         callid: CallSiteId,
         // `None` when the call site could not prove the receiver's class —
         // see `InlineGen`.
-        recv_class: Option<ClassId>,
-        arg_class: Option<ClassId>,
+        recv_class: Option<CachedClass>,
+        arg_class: Option<CachedClass>,
     ) -> bool {
         // No GP flush here: a register-only inline keeps the residents live,
         // while a C-ABI-call inline flushes them at its `get_using_fpr`
@@ -3199,13 +3225,13 @@ impl<'a> JitContext<'a> {
             &JitContext,
             &Store,
             CallSiteId,
-            ClassId,
-            Option<ClassId>,
+            CachedClass,
+            Option<CachedClass>,
             BinaryInlineMode,
         ) -> BinaryInlineOutcome,
         callid: CallSiteId,
-        recv_class: ClassId,
-        arg_class: Option<ClassId>,
+        recv_class: CachedClass,
+        arg_class: Option<CachedClass>,
         mode: BinaryInlineMode,
     ) -> BinaryInlineOutcome {
         let state_save = state.clone();
@@ -3237,9 +3263,9 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
-        f: impl Fn(&mut AbstractState, &mut AsmIr, &JitContext, &Store, CallSiteId, ClassId) -> bool,
+        f: impl Fn(&mut AbstractState, &mut AsmIr, &JitContext, &Store, CallSiteId, CachedClass) -> bool,
         callid: CallSiteId,
-        recv_class: ClassId,
+        recv_class: CachedClass,
     ) -> bool {
         let state_save = state.clone();
         let ir_save = ir.save();

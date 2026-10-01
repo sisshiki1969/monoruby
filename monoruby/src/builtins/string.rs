@@ -424,8 +424,8 @@ fn string_eq_gen(
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    arg_class: Option<ClassId>,
+    _: Option<CachedClass>,
+    arg_class: Option<CachedClass>,
 ) -> bool {
     string_cmp_const_gen(state, ir, ctx, store, callid, arg_class, false)
 }
@@ -438,8 +438,8 @@ fn string_ne_gen(
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    arg_class: Option<ClassId>,
+    _: Option<CachedClass>,
+    arg_class: Option<CachedClass>,
 ) -> bool {
     string_cmp_const_gen(state, ir, ctx, store, callid, arg_class, true)
 }
@@ -450,7 +450,7 @@ fn string_cmp_const_gen(
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    arg_class: Option<ClassId>,
+    arg_class: Option<CachedClass>,
     result: bool,
 ) -> bool {
     let callsite = &store[callid];
@@ -467,7 +467,7 @@ fn string_cmp_const_gen(
     let Some(rhs_class) = arg_class else {
         return false;
     };
-    if rhs_class == STRING_CLASS || !store.no_to_str(rhs_class, ctx.class_version()) {
+    if rhs_class == CachedClass::STRING || !store.no_to_str(rhs_class.id(), ctx.class_version()) {
         return false;
     }
     // The rhs class may be speculative (observed by the binop inline cache
@@ -937,8 +937,8 @@ fn string_shl_gen(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: Option<ClassId>,
-    arg_class: Option<ClassId>,
+    recv_class: Option<CachedClass>,
+    arg_class: Option<CachedClass>,
 ) -> bool {
     let Some(recv_class) = recv_class else {
         // The call site could not prove the receiver's class (a multi-class
@@ -950,8 +950,8 @@ fn string_shl_gen(
         return false;
     }
     let hint = match arg_class {
-        Some(INTEGER_CLASS) => crate::codegen::StringShlHint::Fixnum,
-        Some(STRING_CLASS) => crate::codegen::StringShlHint::Str,
+        Some(CachedClass::INTEGER) => crate::codegen::StringShlHint::Fixnum,
+        Some(CachedClass::STRING) => crate::codegen::StringShlHint::Str,
         _ => crate::codegen::StringShlHint::Both,
     };
     state.load(ir, callsite.recv, GP::Rdi);
@@ -969,7 +969,7 @@ fn string_shl_gen(
     let error = ir.new_error(state);
     ir.handle_error(error);
     // both the inline store and the helper answer the receiver itself
-    state.def_reg2acc_class(ir, GP::Rax, callsite.dst, recv_class);
+    state.def_reg2acc_class(ir, GP::Rax, callsite.dst, recv_class.id());
     true
 }
 
@@ -7047,8 +7047,8 @@ fn string_bytesize(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -7456,8 +7456,8 @@ fn string_getbyte(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() || callsite.pos_num != 1 {
@@ -7485,8 +7485,8 @@ fn string_setbyte(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() || callsite.pos_num != 2 {

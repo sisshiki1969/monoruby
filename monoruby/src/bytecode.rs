@@ -109,12 +109,12 @@ impl Bytecode {
         self.op2.0
     }
 
-    pub fn classid1(&self) -> Option<ClassId> {
-        ClassId::from(self.op2.0 as u32)
+    pub fn classid1(&self) -> Option<CachedClass> {
+        ClassId::from(self.op2.0 as u32).map(CachedClass::from_class)
     }
 
-    pub fn classid2(&self) -> Option<ClassId> {
-        ClassId::from((self.op2.0 >> 32) as u32)
+    pub fn classid2(&self) -> Option<CachedClass> {
+        ClassId::from((self.op2.0 >> 32) as u32).map(CachedClass::from_class)
     }
 
     pub fn cached_version(&self) -> u32 {
@@ -364,11 +364,11 @@ impl BytecodePtr {
         (*(self + 1)).fid()
     }
 
-    pub fn cached_class1(self) -> Option<ClassId> {
+    pub fn cached_class1(self) -> Option<CachedClass> {
         (*(self + 1)).classid1()
     }
 
-    pub fn cached_class0(self) -> Option<ClassId> {
+    pub fn cached_class0(self) -> Option<CachedClass> {
         self.classid1()
     }
 

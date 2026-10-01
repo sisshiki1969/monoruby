@@ -32,8 +32,8 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         op: IdentId,
         base: SlotId,
-        recv_class: ClassId,
-        idx_class: Option<ClassId>,
+        recv_class: CachedClass,
+        idx_class: Option<CachedClass>,
         bc_pos: BcIndex,
     ) -> bool {
         let Some((fid, visibility)) = self.resolve_basic_op(recv_class, op) else {
@@ -60,7 +60,7 @@ impl<'a> JitContext<'a> {
         // that declines after the guard was emitted must leave no trace.
         let state_save = state.clone();
         let ir_save = ir.save();
-        if state.class(base) != Some(recv_class) {
+        if state.class(base) != Some(recv_class.id()) {
             let deopt = ir.new_deopt(state);
             state.load(ir, base, GP::Rdi);
             state.guard_class(ir, base, GP::Rdi, recv_class, deopt);
@@ -90,7 +90,7 @@ impl<'a> JitContext<'a> {
     /// other arm is a C call either way, so preferring the class that can be
     /// inlined is unambiguous.
     ///
-    fn index_inline_class(&mut self, callid: CallSiteId) -> Option<(ClassId, FuncId)> {
+    fn index_inline_class(&mut self, callid: CallSiteId) -> Option<(CachedClass, FuncId)> {
         let callsite = &self.store[callid];
         let name = IdentId::_INDEX;
         let pmc = &callsite.pmc;
@@ -99,7 +99,7 @@ impl<'a> JitContext<'a> {
         if pmc.entries().len() < 2 {
             return None;
         }
-        let mut classes: Vec<(ClassId, u32)> =
+        let mut classes: Vec<(CachedClass, u32)> =
             pmc.entries().iter().map(|e| (e.recv, e.count)).collect();
         classes.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
         for (class, _) in classes {
@@ -158,7 +158,7 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         base: SlotId,
         idx: SlotId,
-        idx_class: Option<ClassId>,
+        idx_class: Option<CachedClass>,
         bc_pos: BcIndex,
     ) -> JitResult<bool> {
         let Some(callid) = self.store.get_callsite_id(self.iseq_id(), bc_pos) else {
@@ -223,7 +223,7 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         base: SlotId,
         idx: SlotId,
-        ic: Option<(ClassId, ClassId)>,
+        ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
@@ -277,7 +277,7 @@ impl<'a> JitContext<'a> {
         base: SlotId,
         idx: SlotId,
         src: SlotId,
-        ic: Option<(ClassId, ClassId)>,
+        ic: Option<(CachedClass, CachedClass)>,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         let (base_class, idx_class) = state.binary_class(base, idx, ic);

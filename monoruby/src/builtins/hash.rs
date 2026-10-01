@@ -1040,8 +1040,8 @@ fn hash_default_assign(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() || callsite.pos_num != 1 {
@@ -1083,8 +1083,8 @@ fn hash_index(
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: Option<ClassId>,
-    idx_class: Option<ClassId>,
+    recv_class: Option<CachedClass>,
+    idx_class: Option<CachedClass>,
 ) -> bool {
     let Some(recv_class) = recv_class else {
         // The call site could not prove the receiver's class (a multi-class
@@ -1098,7 +1098,7 @@ fn hash_index(
     if callsite.pos_num != 1 {
         return false;
     }
-    if recv_class != HASH_CLASS {
+    if !recv_class.is(HASH_CLASS) {
         return false;
     }
     state.load(ir, callsite.args, GP::Rcx);
@@ -1122,12 +1122,12 @@ fn hash_index(
     // key-monomorphic.
     let key_polymorphic = {
         let pmc = &callsite.pmc;
-        let mut seen: Option<Option<ClassId>> = None;
+        let mut seen: Option<Option<CachedClass>> = None;
         pmc.overflow() != 0
             || pmc
                 .entries()
                 .iter()
-                .filter(|e| e.recv == HASH_CLASS)
+                .filter(|e| e.recv.is(HASH_CLASS))
                 .any(|e| match seen {
                     None => {
                         seen = Some(e.arg);
@@ -1136,7 +1136,7 @@ fn hash_index(
                     Some(first) => first != e.arg,
                 })
     };
-    let probe = idx_class.filter(|_| !key_polymorphic).and_then(|kc| match kc {
+    let probe = idx_class.filter(|_| !key_polymorphic).and_then(|kc| match kc.id() {
         SYMBOL_CLASS | NIL_CLASS | TRUE_CLASS | FALSE_CLASS => {
             Some((kc, packed_digest_c as *const () as u64, None))
         }
@@ -1183,8 +1183,8 @@ fn hash_get_or_key(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: Option<ClassId>,
-    _: Option<ClassId>,
+    recv_class: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let Some(recv_class) = recv_class else {
         // The call site could not prove the receiver's class (a multi-class
@@ -1195,7 +1195,7 @@ fn hash_get_or_key(
     if !callsite.is_simple() || callsite.pos_num != 1 {
         return false;
     }
-    if recv_class != HASH_CLASS {
+    if !recv_class.is(HASH_CLASS) {
         return false;
     }
     state.load(ir, callsite.args, GP::Rcx);
@@ -1224,8 +1224,8 @@ fn hash_index_assign(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() || callsite.pos_num != 2 {
@@ -1518,8 +1518,8 @@ fn hash_compare_by_identity(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let Some(callsite) = hash_accessor_callsite(store, callid) else {
         return false;
@@ -1540,8 +1540,8 @@ fn hash_default_value(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     hash_default_inline(state, ir, store, callid, false)
 }
@@ -1555,8 +1555,8 @@ fn hash_default_proc(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     hash_default_inline(state, ir, store, callid, true)
 }
@@ -1587,8 +1587,8 @@ fn hash_size(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -1618,8 +1618,8 @@ fn hash_entry_count(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -1646,11 +1646,11 @@ fn hash_live_at(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    idx_class: Option<ClassId>,
+    _: Option<CachedClass>,
+    idx_class: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
-    if !callsite.is_simple() || callsite.pos_num != 1 || idx_class != Some(INTEGER_CLASS) {
+    if !callsite.is_simple() || callsite.pos_num != 1 || idx_class != Some(CachedClass::INTEGER) {
         return false;
     }
     let Some(layout) = hash_entries_layout() else {
@@ -1675,11 +1675,11 @@ fn hash_entry_at_inline(
     ir: &mut AsmIr,
     store: &Store,
     callid: CallSiteId,
-    idx_class: Option<ClassId>,
+    idx_class: Option<CachedClass>,
     want_key: bool,
 ) -> bool {
     let callsite = &store[callid];
-    if !callsite.is_simple() || callsite.pos_num != 1 || idx_class != Some(INTEGER_CLASS) {
+    if !callsite.is_simple() || callsite.pos_num != 1 || idx_class != Some(CachedClass::INTEGER) {
         return false;
     }
     let Some(layout) = hash_entries_layout() else {
@@ -1700,8 +1700,8 @@ fn hash_key_at(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    idx_class: Option<ClassId>,
+    _: Option<CachedClass>,
+    idx_class: Option<CachedClass>,
 ) -> bool {
     hash_entry_at_inline(state, ir, store, callid, idx_class, true)
 }
@@ -1712,8 +1712,8 @@ fn hash_value_at(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    idx_class: Option<ClassId>,
+    _: Option<CachedClass>,
+    idx_class: Option<CachedClass>,
 ) -> bool {
     hash_entry_at_inline(state, ir, store, callid, idx_class, false)
 }

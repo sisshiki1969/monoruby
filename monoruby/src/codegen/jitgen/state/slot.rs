@@ -1842,7 +1842,7 @@ impl AbstractFrame {
         ir: &mut AsmIr,
         slot: SlotId,
         r: GP,
-        class: ClassId,
+        class: CachedClass,
         deopt: AsmDeopt,
     ) {
         if self.guard_class_state(slot, class) {
@@ -1861,12 +1861,12 @@ impl AbstractFrame {
     pub(in crate::codegen::jitgen) fn guard_class_state(
         &mut self,
         slot: SlotId,
-        class: ClassId,
+        class: CachedClass,
     ) -> bool {
-        if self.class(slot) == Some(class) {
+        if self.class(slot) == Some(class.id()) {
             return false;
         }
-        let class_guarded = Guarded::from_class(class);
+        let class_guarded = Guarded::from_cached(class);
         // Operate on a local copy and write it back (item ② encapsulation;
         // `LinkMode` is `Copy`). The `return false`s below skip both the
         // write-back and the guard emission, exactly as the prior `return`s did.
@@ -1903,13 +1903,13 @@ impl AbstractFrame {
                 // in this case, Guard will always fail
             }
             LinkMode::C(v) => {
-                if class == INTEGER_CLASS {
+                if class == CachedClass::INTEGER {
                     if v.is_fixnum() {
                         return false;
                     }
                     // If v is Bignum, Guard will fail
                 } else {
-                    if v.class() == class {
+                    if class.is(v.class()) {
                         return false;
                     }
                     // in this case, Guard will always fail
@@ -1928,7 +1928,7 @@ impl AbstractFrame {
 
     pub(crate) fn guard_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {
         let deopt = ir.new_deopt(self);
-        self.guard_class(ir, slot, r, INTEGER_CLASS, deopt);
+        self.guard_class(ir, slot, r, CachedClass::INTEGER, deopt);
     }
 
     /// Snapshot the live physical FP pool registers (which the runtime-call
@@ -2486,7 +2486,7 @@ impl Guarded {
             // Use the IC class so `true` and `false` literals collapse to
             // a single `BOOL_CLASS` guard, avoiding a deopt when a slot
             // toggles between the two booleans.
-            Guarded::Class(v.class_for_ic())
+            Guarded::Class(v.class_for_ic().id())
         }
     }
 
@@ -2505,6 +2505,14 @@ impl Guarded {
             FLOAT_CLASS => Guarded::Float,
             class => Guarded::Class(class),
         }
+    }
+
+    /// The B→C boundary: what a *cache/guard* key proves on the lattice.
+    /// Sound against the JIT guard's representation semantics — the
+    /// `INTEGER` key's guard tests the Fixnum tag, so `Guarded::Fixnum`
+    /// (never Bignum) is exactly what passing it establishes.
+    pub fn from_cached(class: CachedClass) -> Self {
+        Self::from_class(class.id())
     }
 
     pub fn class(&self) -> Option<ClassId> {
@@ -2818,7 +2826,7 @@ impl AbstractFrame {
                 {
                     let deopt = ir.new_deopt_with_pc(&self, pc + 1);
                     ir.stack2reg(slot, GP::Rax);
-                    ir.push(AsmInst::GuardClass(GP::Rax, class, deopt));
+                    ir.push(AsmInst::GuardClass(GP::Rax, CachedClass::from_class(class), deopt));
                     self.set_S_with_guard(slot, guarded);
                 }
             }

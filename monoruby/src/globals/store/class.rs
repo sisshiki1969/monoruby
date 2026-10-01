@@ -193,6 +193,78 @@ impl From<ClassId> for u32 {
     }
 }
 
+///
+/// A class as the dispatch caches and class guards see it — the *cache
+/// domain*, kept apart by type from the real Ruby class
+/// ([`crate::Value::class`]) and from the JIT's abstract type lattice
+/// (`Guarded`):
+///
+/// - `true` / `false` are usually unified to [`BOOL_CLASS`] (one cache
+///   way, one guard); a bool receiver whose method is *not* unified
+///   across `TrueClass` / `FalseClass` is cached under its real class
+///   instead (see `codegen::runtime::find_method`).
+/// - [`INTEGER_CLASS`] / [`FLOAT_CLASS`] name a **representation** at the
+///   JIT tier: `GuardClass(INTEGER)` tests the Fixnum tag — a Bignum
+///   fails it — and `GuardClass(FLOAT)` passes a flonum or a heap
+///   `Float`, while the VM-tier dispatch guard for `INTEGER` admits heap
+///   Integers too. The same u32 with two meanings is exactly what this
+///   newtype keeps from leaking into real-class code.
+///
+/// Produced by [`crate::Value::class_for_ic`] (and the bool fallback
+/// above); stored in inline-cache words and the polymorphic method cache
+/// (`#[repr(transparent)]`, so the raw-u32 cache layout is unchanged);
+/// consumed by dispatch comparison, the `GuardClass` emitters, and —
+/// through [`Guarded::from_cached`](crate::codegen::jitgen) — the type
+/// lattice. Leave the domain explicitly with [`Self::id`].
+///
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CachedClass(ClassId);
+
+impl std::fmt::Debug for CachedClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Cached({:?})", self.0)
+    }
+}
+
+impl CachedClass {
+    /// The Fixnum-**representation** guard key (a Bignum fails the JIT
+    /// guard carrying this).
+    pub(crate) const INTEGER: Self = Self(INTEGER_CLASS);
+    /// The float-representation guard key (flonum or heap `Float`).
+    pub(crate) const FLOAT: Self = Self(FLOAT_CLASS);
+    pub(crate) const NIL: Self = Self(NIL_CLASS);
+    pub(crate) const BOOL: Self = Self(BOOL_CLASS);
+    pub(crate) const STRING: Self = Self(STRING_CLASS);
+
+    ///
+    /// Enter the cache domain from a bare [`ClassId`] the caller knows is
+    /// a cache/guard key (a lattice class read back off `Guarded`, a
+    /// special-class constant, a decoded cache word). Prefer
+    /// [`crate::Value::class_for_ic`] where a value is at hand.
+    ///
+    pub(crate) const fn from_class(class: ClassId) -> Self {
+        Self(class)
+    }
+
+    /// Leave the domain explicitly — for display, `Store` indexing, and
+    /// every place that genuinely wants the `ClassId` the cache key was
+    /// derived from.
+    pub(crate) const fn id(self) -> ClassId {
+        self.0
+    }
+
+    pub fn u32(self) -> u32 {
+        self.0.u32()
+    }
+
+    /// Does this cache key name *class*? Explicit (and greppable) where a
+    /// bare `==` would let the two domains mix silently.
+    pub(crate) fn is(self, class: ClassId) -> bool {
+        self.0 == class
+    }
+}
+
 impl ClassId {
     pub const fn new(id: u32) -> Self {
         Self(NonZeroU32::new(id).unwrap())
@@ -2959,7 +3031,7 @@ impl Store {
         };
         for entry in cache_map {
             let func_id =
-                self.check_method_for_name(lfp, entry.recv_class, entry.name, entry.refinements);
+                self.check_method_for_name(lfp, entry.recv_class.id(), entry.name, entry.refinements);
             if func_id != entry.func_id {
                 #[cfg(feature = "jit-log")]
                 crate::codegen::jit_stats::bump(
@@ -3133,7 +3205,7 @@ impl Store {
             .inline_cache_map;
         for entry in cache_map {
             let func_id =
-                self.check_method_for_name(lfp, entry.recv_class, entry.name, entry.refinements);
+                self.check_method_for_name(lfp, entry.recv_class.id(), entry.name, entry.refinements);
             if func_id != entry.func_id {
                 #[cfg(feature = "jit-log")]
                 crate::codegen::jit_stats::bump(
