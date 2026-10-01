@@ -964,6 +964,10 @@ impl<'a> JitContext<'a> {
             let mut narm = entry.clone();
             narm.load(ir, lhs, GP::Rdi);
             ir.push(AsmInst::BrClassNe(GP::Rdi, CachedClass::NIL, not_nil));
+            // Reaching the arm is the proof — and recording it is what
+            // lets the merge keep `NilOr(Fixnum)` for `lhs` (nil arm ⊔
+            // the Integer arm's fixnum guard) instead of ⊤.
+            narm.guard_class_state(lhs, CachedClass::NIL);
             narm.load(ir, rhs, GP::Rsi);
             // Raw `cmp` + fused branch; `NIL_VALUE` is not a tagged fixnum,
             // but for `Eq` bit-equality is exactly the question (no other

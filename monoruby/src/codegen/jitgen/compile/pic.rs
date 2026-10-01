@@ -411,10 +411,12 @@ impl<'a> JitContext<'a> {
                 miss = Some(next);
             }
             // Reaching an arm proves the receiver's class only when the arm
-            // holds one. A multi-class arm leaves it unrefined, so
-            // `compile_method_call` sees an unproven receiver and restricts
-            // itself to class-independent inline generators — the same
-            // treatment the class-set guard gets, for the same reason.
+            // holds one. A multi-class arm proves membership — which the
+            // lattice can keep when the set folds ({NilClass, c} →
+            // `NilOr(c)`) — but no single class, so `compile_method_call`
+            // still sees an unproven receiver and restricts itself to
+            // class-independent inline generators — the same treatment the
+            // class-set guard gets, for the same reason.
             let recv_class = match group.single_class() {
                 Some(class) => {
                     // `guard_class_state` refines without emitting a guard,
@@ -423,7 +425,10 @@ impl<'a> JitContext<'a> {
                     arm.guard_class_state(recv, class);
                     class
                 }
-                None => group.classes[0],
+                None => {
+                    arm.refine_S_guarded(recv, Guarded::from_cached_set(&group.classes));
+                    group.classes[0]
+                }
             };
             // Specialization is suppressed inside an arm (see
             // `JitContext::in_dispatch_arm`), and every other way out of

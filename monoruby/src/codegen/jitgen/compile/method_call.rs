@@ -340,6 +340,13 @@ impl<'a> JitContext<'a> {
             || self.in_dispatch_arm()
             || !self.generic_send_eligible(callid)
             || self.store[func_id].possibly_capture_without_block()
+            // A receiver the state proves `NilOr(g)` can only be `nil` or a
+            // `g` — both inside the same-target set the plain path guards —
+            // so the residual arm is dead weight, and building it costs the
+            // nil?-peephole its fact (the fact must assume the residual's
+            // by-name re-dispatch could reach a redefined `nil?`). Let the
+            // plain set-guarded form compile instead.
+            || matches!(state.mode(recv), LinkMode::S(Guarded::NilOr(_)))
         {
             return Ok(None);
         }
@@ -906,6 +913,12 @@ impl<'a> JitContext<'a> {
                         });
                     }
                 }
+                // What the membership guard proves, reflected on the
+                // lattice: a {NilClass, c} set — the shape of the
+                // `Kernel#nil?`-style sites this path exists for — folds
+                // to `NilOr(c)`, so a following branch can recover `c`.
+                // State-only; the deopt snapshot above is taken first.
+                let set_proof = Guarded::from_cached_set(&classes);
                 if let RecvMissMode::Residual(residual) = recv_miss {
                     state.load(ir, recv, GP::Rdi);
                     ir.push(AsmInst::BrClassNotIn(GP::Rdi, classes, residual));
@@ -914,6 +927,7 @@ impl<'a> JitContext<'a> {
                     state.load(ir, recv, GP::Rdi);
                     ir.push(AsmInst::GuardClassIn(GP::Rdi, classes, deopt));
                 }
+                state.refine_S_guarded(recv, set_proof);
                 same_target_set_guarded = true;
             } else {
                 let use_recompile = match recv_miss {
@@ -999,7 +1013,17 @@ impl<'a> JitContext<'a> {
                             // Record the fact for an immediately following
                             // `CondBr dst` (`compile_instruction` drops it
                             // on the next instruction otherwise).
+                            // Only when this inline is the *sole* writer
+                            // of `dst` in the instruction: inside a PIC arm
+                            // (`in_dispatch_arm`) or beside a residual arm,
+                            // another arm re-dispatches `nil?` by name for
+                            // the classes this arm never sees — a receiver
+                            // whose `nil?` is redefined would make the
+                            // boolean lie about recv's nil-ness, and the
+                            // narrowed continuation would run on it.
                             if Some(func_id) == self.store.kernel_nil()
+                                && !self.in_dispatch_arm()
+                                && !matches!(recv_miss, RecvMissMode::Residual(_))
                                 && let CallSiteInfo {
                                     recv,
                                     dst: Some(dst),

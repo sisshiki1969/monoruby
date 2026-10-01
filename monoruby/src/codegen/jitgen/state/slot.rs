@@ -959,21 +959,32 @@ impl SlotState {
     /// have a singleton class. Slot 0, `self`, keeps its class, the
     /// unit's compile-time constant.
     pub(in crate::codegen::jitgen) fn forget_heap_object_classes(&mut self) {
+        let is_immediate_class = |class: ClassId| {
+            matches!(
+                class,
+                NIL_CLASS
+                    | TRUE_CLASS
+                    | FALSE_CLASS
+                    | BOOL_CLASS
+                    | INTEGER_CLASS
+                    | BIGNUM_CLASS
+                    | FLOAT_CLASS
+                    | SYMBOL_CLASS
+            )
+        };
         for i in 1..self.slots.len() {
-            if let LinkMode::S(Guarded::Class(class)) = self.slots[i].mode
-                && !matches!(
-                    class,
-                    NIL_CLASS
-                        | TRUE_CLASS
-                        | FALSE_CLASS
-                        | BOOL_CLASS
-                        | INTEGER_CLASS
-                        | BIGNUM_CLASS
-                        | FLOAT_CLASS
-                        | SYMBOL_CLASS
-                )
-            {
-                self.slots[i].mode = LinkMode::S(Guarded::Value);
+            match self.slots[i].mode {
+                LinkMode::S(Guarded::Class(class)) if !is_immediate_class(class) => {
+                    self.slots[i].mode = LinkMode::S(Guarded::Value);
+                }
+                // The non-nil half of a `NilOr` is a heap-class proof like
+                // any other; nothing expressible remains once it falls.
+                LinkMode::S(Guarded::NilOr(NonNil::Class(class)))
+                    if !is_immediate_class(class) =>
+                {
+                    self.slots[i].mode = LinkMode::S(Guarded::Value);
+                }
+                _ => {}
             }
         }
     }
@@ -1001,7 +1012,14 @@ impl SlotState {
         for i in start..self.slots.len() {
             let slot = SlotId(i as u16);
             match self.slots[i].mode {
-                LinkMode::S(Guarded::Class(class)) if store.class_proof_may_break(class) => {
+                // A `NilOr(Class(c))`'s non-nil half stands on the same
+                // no-singleton assumption as a plain `Class(c)` proof —
+                // narrowing recovers exactly that proof, so it must be
+                // latched under the same rule. (`self` is never `NilOr`.)
+                LinkMode::S(Guarded::Class(class))
+                | LinkMode::S(Guarded::NilOr(NonNil::Class(class)))
+                    if store.class_proof_may_break(class) =>
+                {
                     if !store[class].instance_singleton() {
                         scan.kept.push(class);
                     } else if i == 0 {
@@ -1055,6 +1073,19 @@ impl SlotState {
     pub(in crate::codegen::jitgen) fn refine_S_fixnum(&mut self, slot: SlotId) {
         if matches!(self.mode(slot), LinkMode::S(_)) {
             self.set_mode(slot, LinkMode::S(Guarded::Fixnum));
+        }
+    }
+
+    /// Refine *slot*'s abstract type in place with what a membership
+    /// guard proved (`Guarded::from_cached_set`) — the state half of a
+    /// `GuardClassIn` / arm-entry `BrClassNotIn`, which establishes a
+    /// join of classes rather than a single one. Strictly a narrowing
+    /// from ⊤: a slot the state already knows something about is left
+    /// alone, so this can never widen (or contradict) existing proof.
+    #[allow(non_snake_case)]
+    pub(in crate::codegen::jitgen) fn refine_S_guarded(&mut self, slot: SlotId, guarded: Guarded) {
+        if guarded != Guarded::Value && matches!(self.mode(slot), LinkMode::S(Guarded::Value)) {
+            self.set_mode(slot, LinkMode::S(guarded));
         }
     }
 
@@ -2515,6 +2546,20 @@ impl Guarded {
         Self::from_class(class.id())
     }
 
+    /// What a *membership* guard over the cache keys in `classes` proves
+    /// on the lattice: the join of each key's claim. `{NilClass, Foo}`
+    /// folds to `NilOr(Class(Foo))` — the PMC-observed set of a
+    /// same-target site or a multi-class dispatch arm, reflected instead
+    /// of dropped — while `{NilClass, BOOL}` or three-way sets widen to
+    /// `Value` by the ordinary join rules.
+    pub fn from_cached_set(classes: &[CachedClass]) -> Self {
+        classes
+            .iter()
+            .map(|c| Guarded::from_cached(*c))
+            .reduce(|a, b| a.join_raw(&b))
+            .unwrap_or(Guarded::Value)
+    }
+
     pub fn class(&self) -> Option<ClassId> {
         Some(match self {
             Guarded::Value => return None,
@@ -3427,6 +3472,72 @@ mod tests {
         end
         class Weird
           def nil? = true
+        end
+        "###,
+        );
+    }
+
+    /// A `nil | Foo` receiver that reaches `nil?` with *no* lattice proof
+    /// (a parameter): the same-target class-set guard is the only source
+    /// of type information. Correctness under both the residual and the
+    /// set-guarded compilation of the site.
+    #[test]
+    fn nilor_set_guard_param_receiver() {
+        run_test_with_prelude(
+            r###"
+        res = []
+        40.times do |i|
+          res << check(i.odd? ? Foo.new(i) : nil)
+          res << check2(i.even? ? Foo.new(i) : nil)
+        end
+        res
+        "###,
+            r###"
+        class Foo
+          attr_reader :v
+          def initialize(v) = @v = v
+        end
+        def check(x)
+          if x.nil?
+            0
+          else
+            x.v
+          end
+        end
+        def check2(x)
+          x.nil? ? 0 : x.v
+        end
+        "###,
+        );
+    }
+
+    /// The nil?-peephole fact must not survive a multi-arm dispatch: here
+    /// the site is polymorphic over `NilClass` (builtin `nil?`) and a class
+    /// that *redefines* `nil?`, and both branch sides read the receiver —
+    /// a stale fact would narrow the truthy side to `NilClass` and answer
+    /// `x.class` wrongly for the redefined receiver.
+    #[test]
+    fn nilor_nil_p_peephole_multi_arm_soundness() {
+        run_test_with_prelude(
+            r###"
+        objs = [Weird.new, nil]
+        res = []
+        40.times do |i|
+          res << probe(objs[i % 2])
+        end
+        res
+        "###,
+            r###"
+        class Weird
+          def nil? = true
+          def tag = :weird
+        end
+        def probe(x)
+          if x.nil?
+            x.class.to_s
+          else
+            x.tag.to_s
+          end
         end
         "###,
         );
