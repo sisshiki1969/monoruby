@@ -1726,7 +1726,19 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     if lfp.self_val().as_io_inner().is_closed() {
         return Ok(Value::nil());
     }
-    let popen_result = lfp.self_val().as_io_inner_mut().close(&globals.store)?;
+    // The child is reaped outside the GVL: the wait runs as long as the
+    // child does, and holding the GVL across it stops every other Ruby
+    // thread for that long.
+    let detached = lfp
+        .self_val()
+        .as_io_inner_mut()
+        .close_detaching_child(&globals.store)?;
+    let popen_result = detached.map(|(child, pid)| {
+        let status = crate::scheduler::without_gvl(vm, move || {
+            crate::value::rvalue::io::reap_child(child)
+        });
+        (status, pid)
+    });
     if let Some((exit_status, pid)) = popen_result {
         // Set $? (Process::Status) via Process::Status.new(exitstatus, pid)
         let status_class =
@@ -2778,8 +2790,19 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             }
             vm.temp_push(io_val);
             let mut io_close = io_val;
-            if let Ok(Some((exit_status, pid))) = io_close.as_io_inner_mut().close(&globals.store)
-            {
+            // Reaped outside the GVL, as `IO#close` does.
+            let detached = io_close
+                .as_io_inner_mut()
+                .close_detaching_child(&globals.store)
+                .map(|d| {
+                    d.map(|(child, pid)| {
+                        let status = crate::scheduler::without_gvl(vm, move || {
+                            crate::value::rvalue::io::reap_child(child)
+                        });
+                        (status, pid)
+                    })
+                });
+            if let Ok(Some((exit_status, pid))) = detached {
                 if let Ok(status_class) =
                     vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
                 {

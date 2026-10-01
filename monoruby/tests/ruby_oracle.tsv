@@ -1324,6 +1324,7 @@
 41b59c86263395008f0b6d37d9de814c	["Enumerator", "Enumerator", "nil", 2, 2, "z", "z"]	__a = [];__a << ([1, 2, 3].find.class.name);__a << ([1, 2, 3].rfind.class.name);
 41ddfa3d947230443c7eb469c3269928	[{a: 3, "s" => 4, 1 => 6}, 3, [:a, "s", 1]]	def d; {a: 1, "s" => 2, a: 3, "s" => 4, 1 => 5, 1 => 6}; end\n      
 41ea26ef4d9889d1fd64c6e220bca834	[[:ljerr], 40]	$n = 0\n        def mid(arr, &blk)\n          begin\n            arr.each 
+41fa83b5f0cbdeb9dfb02ac15798e5d6	[:main_ran, :closed]	order = []\n            t = Thread.new { IO.popen(["sleep", "1"]) { 
 41ff156d1627b1e617a43d7649247d1f	[[[1985, 1984], "UTF-8"], [[1985], "UTF-8"], [[1633, 1632], "UTF-8"], [[1633], "UTF-8"], [[4161, 4160], "UTF-8"], [[4161], "UTF-8"], [[65297, 65296], "UTF-8"], [[65297], "UTF-8"], [[171], "UTF-8"], [[182], "UTF-8"], [[1488, 1488], "UTF-8"], [[689], "UTF-8"]]	(g=->(str){ begin; [str.succ.codepoints, str.succ.encoding.name]; rescue => e; [
 4201651c81088820aab64210097ab3f7	[2, "NoMethodError"]	r = Module.new do\n              refine Array do\n                ali
 420fd4ef995831a71e5964759ba88f3b	"ああabc"	"abc".rjust(5, "あ")
@@ -3428,6 +3429,7 @@ aad2bfda760893a138c4884a558ad072	[[:dynamic, [1, 2]], [:dynamic, [3]], [:dynamic
 aadd8748b0f862759047055ef8ee291d	"piped"	require "open3"; Open3.capture3("cat", stdin_data: "piped").first
 aae6b9aa0d96352bf9b4ef52696aca7e	[42]	class E\n                 def []=(*a); @v = a; end\n                 def go; self[
 aae6ed0fbc6ac3776bb745bc101bcc2e	[300000, true, true]	require "open3"\n            data = "x" * 300000\n            out, _, st = Open3.c
+aaea11bffb8c7a9507213cd2a585774f	[:main_ran, :closed]	order = []\n            io = IO.popen(["sleep", "1"])\n            t 
 aaedf0251eca99b1554de529a1ef7cf5	46900	class H\n          attr_reader :a, :b\n          def initialize(a: nil, b
 ab179294b513908c8865c19e0c1bc7b7	[["ello", "UTF-8"], ["FrozenError", "can't modify frozen String: \\"hello\\""], ["FrozenError", "can't modify frozen String: \\"hello\\""], true, true, ["hi", "UTF-8"]]	(o=Object.new; def o.to_str; "h"; end; c=Class.new(String); f=->(&b){ begin; v=b
 ab1c3b30bca082ec8aa9ba5a6009b151	[["a", "e", "f", "h", "i", "j", "d", "b", "g", "k", "c"], [8, 30, 6, 27, 9, 28, 13, 22, 12, 24, 19, 5, 4, 25, 17, 15, 21, 10, 16, 26, 1, 2, 23, 11, 20, 18, 7, 29, 3, 14], [5, 2], ["a", "c", "b"]]	__a = [];__a << (srand(123); %w[a b c d e f g h i j k].shuffle);__a << (srand(12
