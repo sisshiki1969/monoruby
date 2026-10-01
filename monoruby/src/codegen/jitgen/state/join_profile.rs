@@ -132,6 +132,14 @@ fn op_sf(g: SfGuarded, is_const: bool) -> Op {
 static TABLE: LazyLock<Mutex<HashMap<(Site, Op, Op), u64>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// `AsmInst::GuardClass` instructions pushed into codegen-mode streams —
+/// the emitted-guard count the phase-1 before/after comparison reads.
+static GUARD_CLASS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn count_guard_class() {
+    GUARD_CLASS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn record(site: Site, a: Op, b: Op) {
     // The joins are commutative; normalize the pair so `x ⊔ y` and `y ⊔ x`
     // land in one bucket.
@@ -241,6 +249,10 @@ pub(crate) fn dump(store: &Store) {
     eprintln!(
         " [frame + return]  total: {total}   nil-involved: {nil} ({:.2}%)",
         percent(nil, total)
+    );
+    eprintln!(
+        " GuardClass emitted: {}",
+        GUARD_CLASS.load(std::sync::atomic::Ordering::Relaxed)
     );
 }
 

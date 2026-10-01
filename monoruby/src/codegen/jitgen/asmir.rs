@@ -312,6 +312,10 @@ impl AsmIr {
 
     pub(super) fn push(&mut self, inst: AsmInst) {
         if self.codegen_mode {
+            #[cfg(feature = "profile")]
+            if matches!(inst, AsmInst::GuardClass(..)) {
+                crate::codegen::jitgen::join_profile::count_guard_class();
+            }
             self.inst.push(inst);
         }
     }
