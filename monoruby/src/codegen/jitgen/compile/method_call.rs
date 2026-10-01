@@ -981,6 +981,24 @@ impl<'a> JitContext<'a> {
                         let proven = (!same_target_set_guarded).then_some(recv_class);
                         if self.inline_asm(state, ir, f, callid, proven, arg_class) {
                             state.unset_side_effect_guard();
+                            // Phase-2 branch peephole: an inlined builtin
+                            // `nil?` left `(recv == nil)` in `dst` — the
+                            // dispatch guards above pin the resolution to
+                            // the builtin, so the boolean is trustworthy.
+                            // Record the fact for an immediately following
+                            // `CondBr dst` (`compile_instruction` drops it
+                            // on the next instruction otherwise).
+                            if Some(func_id) == self.store.kernel_nil()
+                                && let CallSiteInfo {
+                                    recv,
+                                    dst: Some(dst),
+                                    ..
+                                } = *callsite
+                                && dst != recv
+                            {
+                                self.nil_pred =
+                                    Some(crate::codegen::jitgen::context::NilPred { dst, recv });
+                            }
                             return Ok(CompileResult::Continue);
                         }
                     }

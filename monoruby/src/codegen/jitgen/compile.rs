@@ -1,4 +1,4 @@
-use crate::codegen::jitgen::state::LinkMode;
+use crate::codegen::jitgen::state::{Guarded, LinkMode};
 
 use super::*;
 
@@ -136,6 +136,10 @@ impl<'a> JitContext<'a> {
         // no promise about every incoming path, and a loop head's safepoint
         // is a preemption point where another thread can `freeze` an object.
         self.unfrozen_slots.clear();
+        // The nil?-peephole fact is a straight-line fact too: a fact left
+        // by the previous BB's last instruction must not survive into a
+        // block other paths can enter.
+        self.nil_pred = None;
 
         let mut state = match self.incoming_context(bbid, false)? {
             Some(bb) => bb,
@@ -429,6 +433,11 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         assert!(state.no_capture_guard());
+        // Phase-2 branch peephole: the fact an inlined `nil?` left behind
+        // is valid only for the *immediately following* instruction — take
+        // it here, so anything that is not the consuming `CondBr` drops it
+        // (the `nil?` lowering of THIS instruction re-arms it).
+        let nil_pred = self.nil_pred.take();
         // A fusing arm (e.g. `try_fuse_array_minmax`) already emitted this
         // instruction's work together with its predecessor's.
         if self.fused_skip == Some(bc_pos) {
@@ -952,8 +961,11 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::InlineCache => {
                 // The operand-carrier word of a two-word instruction: emits
-                // nothing, so the ④-b proofs pass straight through.
+                // nothing, so the ④-b proofs pass straight through — and so
+                // does the nil?-peephole fact (the call that set it ends at
+                // this word; the next real instruction is its successor).
                 self.restore_unfrozen(None);
+                self.nil_pred = nil_pred;
             }
 
             TraceIr::ArrayTEq { lhs, rhs } => {
@@ -1386,7 +1398,41 @@ impl<'a> JitContext<'a> {
                     }
                 } else {
                     state.load(ir, cond_, GP::Rax);
-                    self.gen_cond_br(state, ir, bc_pos, dest_bb, brkind);
+                    // A `NilOr` condition splits on the branch: `NonNil`
+                    // never holds a falsy type, so the truthy side is
+                    // exactly the non-nil half and the falsy side is
+                    // exactly `nil`. State-only — no extra machine code,
+                    // and only the condition slot itself is narrowed.
+                    let mut side_state = state.clone();
+                    if let LinkMode::S(Guarded::NilOr(g)) = state.mode(cond_) {
+                        let (taken, fallthrough) = match brkind {
+                            BrKind::BrIf => (g.into(), Guarded::Class(NIL_CLASS)),
+                            BrKind::BrIfNot => (Guarded::Class(NIL_CLASS), g.into()),
+                        };
+                        side_state.set_S_with_guard(cond_, taken);
+                        state.set_S_with_guard(cond_, fallthrough);
+                    }
+                    // Phase-2 peephole: the condition is the boolean an
+                    // inlined `nil?` wrote in the immediately preceding
+                    // instruction, so it decides `recv`'s nil-ness, not
+                    // just its own truthiness: the side where it is true
+                    // has `recv == nil`; the other side recovers a
+                    // `NilOr`'s non-nil half. State-only, `recv` only.
+                    if let Some(context::NilPred { dst, recv }) = nil_pred
+                        && dst == cond_
+                    {
+                        let (nil_side, non_nil_side) = match brkind {
+                            BrKind::BrIf => (&mut side_state, &mut *state),
+                            BrKind::BrIfNot => (&mut *state, &mut side_state),
+                        };
+                        if matches!(nil_side.mode(recv), LinkMode::S(_)) {
+                            nil_side.set_S_with_guard(recv, Guarded::Class(NIL_CLASS));
+                        }
+                        if let LinkMode::S(Guarded::NilOr(g)) = non_nil_side.mode(recv) {
+                            non_nil_side.set_S_with_guard(recv, g.into());
+                        }
+                    }
+                    self.gen_cond_br(side_state, ir, bc_pos, dest_bb, brkind);
                 }
             }
             TraceIr::NilBr(cond_, disp) => {
@@ -1399,7 +1445,16 @@ impl<'a> JitContext<'a> {
                     let branch_dest = self.label();
                     state.load(ir, cond_, GP::Rax);
                     ir.push(AsmInst::NilBr(branch_dest));
-                    self.new_side_branch(bc_pos, dest_bb, state.clone(), branch_dest);
+                    // The branch is taken exactly when the value is `nil`,
+                    // so the side state knows it and, for a `NilOr`, the
+                    // fall-through recovers the non-nil half. State-only;
+                    // only the condition slot itself is narrowed.
+                    let mut side_state = state.clone();
+                    side_state.set_S_with_guard(cond_, Guarded::Class(NIL_CLASS));
+                    self.new_side_branch(bc_pos, dest_bb, side_state, branch_dest);
+                    if let LinkMode::S(Guarded::NilOr(g)) = state.mode(cond_) {
+                        state.set_S_with_guard(cond_, g.into());
+                    }
                 }
             }
             TraceIr::CondBr(_, _, true, _) => {
@@ -1555,9 +1610,12 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    /// `side_state` is the abstract state of the branch-taken side — the
+    /// caller builds it (usually a clone of the fall-through state, possibly
+    /// narrowed differently, e.g. the `NilOr` split).
     fn gen_cond_br(
         &mut self,
-        state: &mut AbstractState,
+        side_state: AbstractState,
         ir: &mut AsmIr,
         src_idx: BcIndex,
         dest: BasicBlockId,
@@ -1565,7 +1623,7 @@ impl<'a> JitContext<'a> {
     ) {
         let branch_dest = self.label();
         ir.push(AsmInst::CondBr(brkind, branch_dest));
-        self.new_side_branch(src_idx, dest, state.clone(), branch_dest);
+        self.new_side_branch(src_idx, dest, side_state, branch_dest);
     }
 
     fn recompile_and_deopt(

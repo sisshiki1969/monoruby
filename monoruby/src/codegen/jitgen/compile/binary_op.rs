@@ -1306,7 +1306,7 @@ impl<'a> JitContext<'a> {
                 CompileResult::Continue
             }),
             BinaryLowering::Generic => {
-                self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
+                self.gen_cond_br(state.clone(), ir, src_idx, dest_bb, brkind);
                 Ok(CompileResult::Continue)
             }
             BinaryLowering::Called(res) => {
@@ -1337,7 +1337,7 @@ impl<'a> JitContext<'a> {
                         }
                         // BrIf on a falsy value: branch statically dead.
                     } else {
-                        self.gen_cond_br(state, ir, src_idx, dest_bb, brkind);
+                        self.gen_cond_br(state.clone(), ir, src_idx, dest_bb, brkind);
                     }
                 }
                 Ok(res)

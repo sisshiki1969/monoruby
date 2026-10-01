@@ -311,6 +311,8 @@ impl AbstractFrame {
                     LinkMode::Sf(y, guarded) => (y, guarded),
                     _ => unreachable!(),
                 };
+                #[cfg(feature = "profile")]
+                join_profile::record_frame_sf(guarded, false, other_g, false);
                 guarded.join(other_g);
                 if x == other_fpr {
                     SetSf(x, guarded)
@@ -319,18 +321,36 @@ impl AbstractFrame {
                 }
             }
             (LinkMode::Sf(x, mut guarded), LinkMode::C(r)) if r.is_float() || r.is_fixnum() => {
+                #[cfg(feature = "profile")]
+                join_profile::record_frame_sf(
+                    guarded,
+                    false,
+                    SfGuarded::from_concrete_value(r),
+                    true,
+                );
                 guarded.join(SfGuarded::from_concrete_value(r));
                 SetSf(x, guarded)
             }
             (LinkMode::C(v), LinkMode::F(_)) if v.is_float() => TryFreshFElseS,
             (LinkMode::C(v), LinkMode::Sf(_, r)) if v.is_float() || v.is_fixnum() => {
                 let mut guarded = SfGuarded::from_concrete_value(v);
+                #[cfg(feature = "profile")]
+                join_profile::record_frame_sf(guarded, true, r, false);
                 guarded.join(r);
                 TryFreshSfElseS(guarded)
             }
             (LinkMode::C(l), LinkMode::C(r)) if l == r => Nop,
             (LinkMode::C(l), LinkMode::C(r)) if l.is_float() && r.is_float() => TryFreshFElseS,
-            _ => SetS(self.guarded(i).join(&other.guarded(i))),
+            _ => {
+                #[cfg(feature = "profile")]
+                join_profile::record_frame_generic(
+                    &self.guarded(i),
+                    matches!(self.mode(i), LinkMode::C(_)),
+                    &other.guarded(i),
+                    matches!(other.mode(i), LinkMode::C(_)),
+                );
+                SetS(self.guarded(i).join(&other.guarded(i)))
+            }
         }
     }
 

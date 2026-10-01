@@ -4,6 +4,8 @@ use crate::codegen::jitgen::context::DeferredForward;
 mod binop;
 mod index;
 mod join;
+#[cfg(feature = "profile")]
+pub(crate) mod join_profile;
 mod liveness;
 mod read_slot;
 mod slot;
@@ -11,6 +13,7 @@ mod slot;
 use liveness::IsUsed;
 pub(super) use liveness::Liveness;
 pub(super) use read_slot::DeoptPoint;
+pub(in crate::codegen::jitgen) use slot::NonNil;
 pub(in crate::codegen::jitgen) use slot::SfGuarded;
 pub(in crate::codegen::jitgen) use slot::DynVarAliasLoad;
 pub(super) use slot::{ClassProofScan, Guarded, Keep, LinkMode, SlotState};
@@ -1045,8 +1048,8 @@ impl AbstractFrame {
                 ReturnValue::Const(v) => {
                     self.def_C(dst, v);
                 }
-                ReturnValue::Class(class) => {
-                    self.def_return_store_guarded(ir, GP::Rax, dst, slot::Guarded::from_class(class));
+                ReturnValue::Typed(guarded) => {
+                    self.def_return_store_guarded(ir, GP::Rax, dst, guarded);
                 }
                 ReturnValue::Value => {
                     self.def_return_store_guarded(ir, GP::Rax, dst, slot::Guarded::Value);
@@ -1217,8 +1220,33 @@ pub(super) struct ReturnState {
 enum ReturnValue {
     UD,
     Const(Value),
-    Class(ClassId),
+    /// A non-constant claim carried on the type lattice itself. Never
+    /// `Guarded::Value` (that is [`Self::Value`]); constructed only by
+    /// [`Self::from_guarded`]. Carrying `Guarded` keeps the lattice's own
+    /// distinctions (`Fixnum` is not `Class(INTEGER_CLASS)`, nil-ness is
+    /// explicit) instead of re-encoding them in a bare `ClassId` with
+    /// conventions on the side.
+    Typed(Guarded),
     Value,
+}
+
+impl ReturnValue {
+    /// The value claim as a [`Guarded`].
+    fn to_guarded(self) -> Guarded {
+        match self {
+            ReturnValue::UD => unreachable!(),
+            ReturnValue::Const(v) => Guarded::from_concrete_value(v),
+            ReturnValue::Typed(g) => g,
+            ReturnValue::Value => Guarded::Value,
+        }
+    }
+
+    pub(super) fn from_guarded(g: Guarded) -> Self {
+        match g {
+            Guarded::Value => ReturnValue::Value,
+            g => ReturnValue::Typed(g),
+        }
+    }
 }
 
 impl ReturnState {
@@ -1268,13 +1296,6 @@ impl ReturnState {
         self.invariants.side_effect_guard = false;
     }
 
-    fn return_class(&self) -> Option<ClassId> {
-        match self.ret {
-            ReturnValue::Const(v) => Some(v.class()),
-            ReturnValue::Class(class) => Some(class),
-            _ => None,
-        }
-    }
 
     #[allow(dead_code)] // retained for `taint_for_unmodeled_rescue` tests
     pub(in crate::codegen::jitgen) fn const_folded(&self) -> Option<Value> {
@@ -1301,13 +1322,19 @@ impl ReturnState {
             _ => {}
         }
 
-        if let Some(class) = self.return_class()
-            && other.return_class() == Some(class)
-        {
-            self.ret = ReturnValue::Class(class);
-            return;
+        // Join the value claims on the `Guarded` lattice (the mapping is the
+        // one `as_return` inverts), so a `return nil` path folds into
+        // `NilOr` instead of widening the whole method to `Value`. This also
+        // routes `Const`s through `from_concrete_value`, which keeps a
+        // Bignum constant at `Value` — `v.class()`-based comparison used to
+        // meet it with a `Fixnum` path as `Class(INTEGER_CLASS)`, which the
+        // caller reads back as `Guarded::Fixnum`.
+        let joined = self.ret.to_guarded().join_raw(&other.ret.to_guarded());
+        #[cfg(feature = "profile")]
+        if joined == Guarded::Value {
+            join_profile::record_return(&self.ret, &other.ret);
         }
-        self.ret = ReturnValue::Value;
+        self.ret = ReturnValue::from_guarded(joined);
     }
 }
 
@@ -1422,12 +1449,12 @@ mod tests {
         assert!(s.const_folded().is_none());
     }
 
-    /// `Class(c)` is also unsafe — the rescue path may return a different
-    /// class — so it must be downgraded to `Value` too.
+    /// A typed claim is also unsafe — the rescue path may return a
+    /// different class — so it must be downgraded to `Value` too.
     #[test]
     fn taint_for_unmodeled_rescue_downgrades_class() {
         let mut s = ReturnState {
-            ret: ReturnValue::Class(crate::SYMBOL_CLASS),
+            ret: ReturnValue::Typed(Guarded::Class(crate::SYMBOL_CLASS)),
             invariants: Invariants {
                 class_version_guard: true,
                 const_version_guard: false,
