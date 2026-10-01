@@ -27,7 +27,7 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         op: IdentId,
         recv: SlotId,
-        recv_class: ClassId,
+        recv_class: CachedClass,
         bc_pos: BcIndex,
     ) -> bool {
         let Some((fid, _visibility)) = self.resolve_basic_op(recv_class, op) else {
@@ -66,25 +66,25 @@ impl<'a> JitContext<'a> {
         kind: UnOpK,
         dst: SlotId,
         src: SlotId,
-        ic: Option<ClassId>,
+        ic: Option<CachedClass>,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
-        let Some(recv_class) = state.class(src).or(ic) else {
+        let Some(recv_class) = state.class(src).map(CachedClass::from_class).or(ic) else {
             return Ok(CompileResult::Recompile(RecompileReason::NotCached));
         };
         // The unary paths are not (yet) representation-aware: normalize the
         // profile's Bignum tag back to `Integer` so a Bignum-profiled site
         // compiles exactly as it did before the binop ICs learned to
         // distinguish the representations.
-        let recv_class = if recv_class == BIGNUM_CLASS {
-            INTEGER_CLASS
+        let recv_class = if recv_class.is(BIGNUM_CLASS) {
+            CachedClass::INTEGER
         } else {
             recv_class
         };
         if self.fire_unary_inline(state, ir, kind.into(), src, recv_class, bc_pos) {
             // ④-b: the Integer/Float inline unaries are pure arithmetic
             // (guards exit the trace) — the unfrozen-slot proofs survive.
-            if recv_class == INTEGER_CLASS || recv_class == FLOAT_CLASS {
+            if recv_class == CachedClass::INTEGER || recv_class == CachedClass::FLOAT {
                 self.restore_unfrozen(Some(dst));
             }
             return Ok(CompileResult::Continue);

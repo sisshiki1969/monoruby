@@ -14,12 +14,12 @@ impl Codegen {
     pub(in crate::codegen) fn a64_guard_class(
         &mut self,
         reg: GP,
-        class_id: ClassId,
+        class_id: CachedClass,
         fail: &DestLabel,
     ) -> bool {
         let r = reg.a64().0;
         let fail = fail.clone();
-        match class_id {
+        match class_id.id() {
             INTEGER_CLASS => {
                 // fixnum: bit0 == 1; fail when clear.
                 monoasm_arm64!(&mut self.jit, tbz x(r), #(0), fail;);
@@ -66,11 +66,11 @@ impl Codegen {
                     tbnz x(r), #(0), fail;   // fixnum -> fail
                     tbnz x(r), #(1), exit;   // flonum -> ok
                 );
-                self.a64_guard_rvalue(r, class_id, &fail);
+                self.a64_guard_rvalue(r, class_id.id(), &fail);
                 self.jit.bind_label(exit);
             }
             _ => {
-                self.a64_guard_rvalue(r, class_id, &fail);
+                self.a64_guard_rvalue(r, class_id.id(), &fail);
             }
         }
         true
@@ -87,10 +87,10 @@ impl Codegen {
     pub(in crate::codegen) fn a64_guard_class2(
         &mut self,
         reg: GP,
-        class_id: ClassId,
+        class_id: CachedClass,
         fail: &DestLabel,
     ) {
-        if class_id == INTEGER_CLASS {
+        if class_id == CachedClass::INTEGER {
             let r = reg.a64().0;
             let vm_entry = self.vm_entry();
             let exit = self.jit.label();

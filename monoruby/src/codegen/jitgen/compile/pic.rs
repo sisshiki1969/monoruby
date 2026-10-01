@@ -71,14 +71,14 @@ const PIC_WAYS: usize = PMC_WAYS;
 struct PicGroup {
     func_id: FuncId,
     visibility: Visibility,
-    classes: Vec<ClassId>,
+    classes: Vec<CachedClass>,
 }
 
 impl PicGroup {
     /// The class every receiver reaching this arm has, when there is only
     /// one. `None` for a multi-class arm, which may not refine the state and
     /// so may only fire class-independent inline generators.
-    fn single_class(&self) -> Option<ClassId> {
+    fn single_class(&self) -> Option<CachedClass> {
         match self.classes.as_slice() {
             [class] => Some(*class),
             _ => None,
@@ -97,7 +97,7 @@ struct PicPlan {
     /// non-canonical accessor shape). They deopt plainly, as they did under
     /// the monomorphic guard — and a rebuild would drop them again, so
     /// their miss must never be the one that requests it.
-    dropped: Vec<ClassId>,
+    dropped: Vec<CachedClass>,
     /// Whether a miss on a class the PMC has *not* seen can still be
     /// recorded: the PMC has a free way and has not overflowed. Only then
     /// can a rebuild produce a different chain, so only then is the last
@@ -147,7 +147,7 @@ impl<'a> JitContext<'a> {
         let pmc = &callsite.pmc;
         let observations = pmc.observations();
         let can_learn = pmc.entries().len() < PMC_WAYS && pmc.overflow() == 0;
-        let mut classes: Vec<(ClassId, u32)> =
+        let mut classes: Vec<(CachedClass, u32)> =
             pmc.entries().iter().map(|e| (e.recv, e.count)).collect();
         #[cfg(feature = "deopt")]
         eprintln!(
@@ -157,8 +157,8 @@ impl<'a> JitContext<'a> {
                 .iter()
                 .map(|(c, n)| {
                     // Pseudo-class IC tags (`BIGNUM_CLASS`) have no module.
-                    let name = if self.store[*c].try_get_module().is_some() {
-                        self.store.get_class_name(*c)
+                    let name = if self.store[c.id()].try_get_module().is_some() {
+                        self.store.get_class_name(c.id())
                     } else {
                         format!("{c:?}")
                     };
@@ -173,7 +173,7 @@ impl<'a> JitContext<'a> {
         }
         classes.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
         let mut groups: Vec<PicGroup> = Vec::with_capacity(classes.len());
-        let mut dropped: Vec<ClassId> = Vec::new();
+        let mut dropped: Vec<CachedClass> = Vec::new();
         let mut admitted = 0usize;
         // Every recorded class gets an arm while the chain has room — no
         // share threshold. The PMC counts *misses*, not calls, so the share
@@ -411,10 +411,12 @@ impl<'a> JitContext<'a> {
                 miss = Some(next);
             }
             // Reaching an arm proves the receiver's class only when the arm
-            // holds one. A multi-class arm leaves it unrefined, so
-            // `compile_method_call` sees an unproven receiver and restricts
-            // itself to class-independent inline generators — the same
-            // treatment the class-set guard gets, for the same reason.
+            // holds one. A multi-class arm proves membership — which the
+            // lattice can keep when the set folds ({NilClass, c} →
+            // `NilOr(c)`) — but no single class, so `compile_method_call`
+            // still sees an unproven receiver and restricts itself to
+            // class-independent inline generators — the same treatment the
+            // class-set guard gets, for the same reason.
             let recv_class = match group.single_class() {
                 Some(class) => {
                     // `guard_class_state` refines without emitting a guard,
@@ -423,7 +425,10 @@ impl<'a> JitContext<'a> {
                     arm.guard_class_state(recv, class);
                     class
                 }
-                None => group.classes[0],
+                None => {
+                    arm.refine_S_guarded(recv, Guarded::from_cached_set(&group.classes));
+                    group.classes[0]
+                }
             };
             // Specialization is suppressed inside an arm (see
             // `JitContext::in_dispatch_arm`), and every other way out of

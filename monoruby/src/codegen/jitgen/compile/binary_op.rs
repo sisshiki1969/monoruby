@@ -144,14 +144,14 @@ impl<'a> JitContext<'a> {
     /// generator has actually emitted (or folded) code, via
     /// [`record_bop_dep`](Self::record_bop_dep). A generator that declines
     /// leaves no spurious dependency behind.
-    pub(super) fn basic_op_assumable(&self, class: ClassId, op: IdentId) -> bool {
+    pub(super) fn basic_op_assumable(&self, class: CachedClass, op: IdentId) -> bool {
         // Only a pair the redefinition machinery tracks may be assumed: an
         // untracked pair is never marked redefined, so a guard-free inline of
         // it would outlive its own redefinition. Every pair the numeric
         // generators use is in the table; the index paths (`Hash#[]=`, which
         // deliberately has no entry) rely on this check to stay on the
         // class-version-guarded call path.
-        if !self.store.is_basic_op_pair(class, op) {
+        if !self.store.is_basic_op_pair(class.id(), op) {
             return false;
         }
         // Except in monoruby's own Ruby-written core (`builtins/*.rb`),
@@ -167,7 +167,7 @@ impl<'a> JitContext<'a> {
             return true;
         }
         // An ordinary redefinition binds everywhere.
-        if self.store.basic_op_globally_redefined_for(class, op) {
+        if self.store.basic_op_globally_redefined_for(class.id(), op) {
             return false;
         }
         // A refinement binds lexically, so only a body compiled under a set
@@ -176,7 +176,7 @@ impl<'a> JitContext<'a> {
         // that refines some *other* operator — keeps it.
         if self
             .store
-            .basic_op_refined_in_scope(class, op, self.refinements())
+            .basic_op_refined_in_scope(class.id(), op, self.refinements())
         {
             return false;
         }
@@ -186,9 +186,9 @@ impl<'a> JitContext<'a> {
     /// Record the compiled body's dependence on the builtin `class#op`:
     /// `set_bop_redefine` reads the recorded set back to find exactly the
     /// bodies a later redefinition invalidates.
-    pub(super) fn record_bop_dep(&mut self, class: ClassId, op: IdentId) {
-        if !self.bop_deps.contains(&(class, op)) {
-            self.bop_deps.push((class, op));
+    pub(super) fn record_bop_dep(&mut self, class: CachedClass, op: IdentId) {
+        if !self.bop_deps.contains(&(class.id(), op)) {
+            self.bop_deps.push((class.id(), op));
         }
     }
 
@@ -230,8 +230,8 @@ impl<'a> JitContext<'a> {
         op: IdentId,
         lhs: SlotId,
         rhs: SlotId,
-        lhs_class: ClassId,
-        rhs_class: Option<ClassId>,
+        lhs_class: CachedClass,
+        rhs_class: Option<CachedClass>,
         bc_pos: BcIndex,
         mode: BinaryInlineMode,
         // `Some`: the receiver guard exits through a counter-gated,
@@ -245,7 +245,7 @@ impl<'a> JitContext<'a> {
         // Bignum-profiled receiver would operate on a heap pointer. A
         // Bignum receiver has no inline form; the caller's residual
         // (generic helper / dispatch slow arm) is its fast path.
-        if lhs_class == BIGNUM_CLASS {
+        if lhs_class.is(BIGNUM_CLASS) {
             return None;
         }
         let (fid, _visibility) = self.resolve_basic_op(lhs_class, op)?;
@@ -327,11 +327,12 @@ impl<'a> JitContext<'a> {
         let op: IdentId = kind.into();
         let mut deps = Vec::with_capacity(OPT_EQ_IMMEDIATE_CLASSES.len() + 1);
         for &class in OPT_EQ_IMMEDIATE_CLASSES {
+            let class = CachedClass::from_class(class);
             if !self.basic_op_assumable(class, eq) {
                 return false;
             }
             deps.push((class, eq));
-            if op != eq && self.store.is_basic_op_pair(class, op) {
+            if op != eq && self.store.is_basic_op_pair(class.id(), op) {
                 if !self.basic_op_assumable(class, op) {
                     return false;
                 }
@@ -373,14 +374,14 @@ impl<'a> JitContext<'a> {
         callid: CallSiteId,
         op: IdentId,
         nil_arm_eligible: bool,
-    ) -> Option<ClassId> {
+    ) -> Option<CachedClass> {
         if !self.pmc_really_alternates(callid)
             && !(nil_arm_eligible && self.store[callid].pmc.entries().len() >= 2)
         {
             return None;
         }
         let pmc = &self.store[callid].pmc;
-        let mut classes: Vec<(ClassId, u32)> =
+        let mut classes: Vec<(CachedClass, u32)> =
             pmc.entries().iter().map(|e| (e.recv, e.count)).collect();
         classes.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
         classes.into_iter().map(|(class, _)| class).find(|&class| {
@@ -389,7 +390,7 @@ impl<'a> JitContext<'a> {
             // representation — a Bignum can never enter it. Its share is
             // served by the residual arm (where `BrClassNe(INTEGER)`'s tag
             // test already routes every heap Integer).
-            class != BIGNUM_CLASS
+            !class.is(BIGNUM_CLASS)
                 && matches!(
                     self.jit_check_method(class, op)
                         .and_then(|(fid, _)| self.store.inline_info.get_inline(fid)),
@@ -416,7 +417,7 @@ impl<'a> JitContext<'a> {
     /// ~2% slower before this test existed on the two-arm dispatch.)
     ///
     /// Did the VM ever observe *class* as this site's receiver?
-    fn pmc_recv_contains(&self, callid: CallSiteId, class: ClassId) -> bool {
+    fn pmc_recv_contains(&self, callid: CallSiteId, class: CachedClass) -> bool {
         self.store[callid]
             .pmc
             .entries()
@@ -467,13 +468,13 @@ impl<'a> JitContext<'a> {
     /// them can only merge as `S(Value)`, boxing the float arm's result for
     /// the next instruction to decode again.
     ///
-    fn pmc_arms_agree_on_float(&self, callid: CallSiteId, rhs_class: Option<ClassId>) -> bool {
-        rhs_class == Some(FLOAT_CLASS)
+    fn pmc_arms_agree_on_float(&self, callid: CallSiteId, rhs_class: Option<CachedClass>) -> bool {
+        rhs_class == Some(CachedClass::FLOAT)
             || !self.store[callid]
                 .pmc
                 .entries()
                 .iter()
-                .any(|e| e.recv == FLOAT_CLASS)
+                .any(|e| e.recv == CachedClass::FLOAT)
     }
 
     ///
@@ -515,7 +516,7 @@ impl<'a> JitContext<'a> {
         dst: Option<SlotId>,
         lhs: SlotId,
         rhs: SlotId,
-        rhs_class: Option<ClassId>,
+        rhs_class: Option<CachedClass>,
         case_semantics: bool,
         bc_pos: BcIndex,
     ) -> JitResult<bool> {
@@ -526,8 +527,8 @@ impl<'a> JitContext<'a> {
         // See the `nil_arm` comment below; computed up front because it also
         // loosens the dispatch gate (`dispatch_inline_class`).
         let nil_arm_eligible = matches!(binop, BinaryOp::Cmp(CmpKind::Eq | CmpKind::TEq))
-            && self.pmc_recv_contains(callid, NIL_CLASS)
-            && self.basic_op_assumable(NIL_CLASS, op);
+            && self.pmc_recv_contains(callid, CachedClass::NIL)
+            && self.basic_op_assumable(CachedClass::NIL, op);
         let Some(inline_class) = self.dispatch_inline_class(callid, op, nil_arm_eligible) else {
             return Ok(false);
         };
@@ -577,7 +578,7 @@ impl<'a> JitContext<'a> {
         // Licence: the arm bakes in the builtin, so it is gated on and
         // recorded against the (NIL_CLASS, op) basic-op pair — `!=` has no
         // such pair and is excluded by the gate itself.
-        let nil_arm = nil_arm_eligible && inline_class != NIL_CLASS;
+        let nil_arm = nil_arm_eligible && !inline_class.is(NIL_CLASS);
         let nil_chk = self.label();
         let arm1_miss = if nil_arm { nil_chk.clone() } else { slow.clone() };
 
@@ -618,7 +619,7 @@ impl<'a> JitContext<'a> {
             // Rdi still holds the receiver: the only way here is arm 1's
             // class branch, which sits after the load.
             let mut narm = entry.clone();
-            ir.push(AsmInst::BrClassNe(GP::Rdi, NIL_CLASS, slow));
+            ir.push(AsmInst::BrClassNe(GP::Rdi, CachedClass::NIL, slow));
             narm.load(ir, rhs, GP::Rsi);
             // `IntegerCmpImm` is a raw `cmp` + flag-to-bool; `NIL_VALUE` is
             // not a tagged fixnum, but for `Eq` bit-equality is exactly the
@@ -632,7 +633,7 @@ impl<'a> JitContext<'a> {
             });
             narm.def_rax2acc(ir, dst);
             self.end_arm(narm, ir, &merge, true);
-            self.record_bop_dep(NIL_CLASS, op);
+            self.record_bop_dep(CachedClass::NIL, op);
         }
 
         // ---- residual arm: every other operand pair, through the generic
@@ -689,11 +690,11 @@ impl<'a> JitContext<'a> {
         let Some(recv_class) = recvs.next() else {
             return Ok(false);
         };
-        if recv_class == INTEGER_CLASS
-            || recv_class == FLOAT_CLASS
+        if recv_class == CachedClass::INTEGER
+            || recv_class == CachedClass::FLOAT
             // The Bignum tag is numeric too (and `BrClassNe` cannot test a
             // representation): its sites belong to the generic helper.
-            || recv_class == BIGNUM_CLASS
+            || recv_class.is(BIGNUM_CLASS)
             || !recvs.all(|c| c == recv_class)
         {
             return Ok(false);
@@ -779,7 +780,7 @@ impl<'a> JitContext<'a> {
         dst: Option<SlotId>,
         lhs: SlotId,
         rhs: SlotId,
-        ic: Option<(ClassId, ClassId)>,
+        ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
         bc_pos: BcIndex,
         mode: BinaryInlineMode,
@@ -808,7 +809,7 @@ impl<'a> JitContext<'a> {
             && let Some(func_id) = self.inline_module_teq(target)
         {
             self.inline_method_cache.push(InlineCacheEntry {
-                recv_class: target.as_val().class(),
+                recv_class: target.as_val().class_for_ic(),
                 name: Some(IdentId::_TEQ),
                 refinements: self.refinements(),
                 func_id: Some(func_id),
@@ -881,7 +882,7 @@ impl<'a> JitContext<'a> {
         // comparison, so it is gated on bop assumability and records the
         // dependency.
         if let BinaryOp::Cmp(kind) = binop
-            && lhs_class == INTEGER_CLASS
+            && lhs_class == CachedClass::INTEGER
             && !polymorphic
         {
             let rhs_big = state.is_bigint_literal_sign(rhs).is_some();
@@ -889,19 +890,19 @@ impl<'a> JitContext<'a> {
             // Exactly one constant side, and the variable side profiled
             // Integer (that's where the fold's fixnum guard lands).
             if rhs_big != lhs_big
-                && (rhs_big || rhs_class == Some(INTEGER_CLASS))
-                && self.basic_op_assumable(INTEGER_CLASS, binop.into())
+                && (rhs_big || rhs_class == Some(CachedClass::INTEGER))
+                && self.basic_op_assumable(CachedClass::INTEGER, binop.into())
             {
                 match mode {
                     BinaryInlineMode::Value => {
                         if state.fold_bigint_const_cmp(ir, kind, dst, lhs, rhs) {
-                            self.record_bop_dep(INTEGER_CLASS, binop.into());
+                            self.record_bop_dep(CachedClass::INTEGER, binop.into());
                             return Ok(BinaryLowering::Emitted);
                         }
                     }
                     BinaryInlineMode::CmpBr { .. } => {
                         if let Some(b) = state.fold_bigint_const_cmpbr(ir, kind, lhs, rhs) {
-                            self.record_bop_dep(INTEGER_CLASS, binop.into());
+                            self.record_bop_dep(CachedClass::INTEGER, binop.into());
                             return Ok(BinaryLowering::Folded(b));
                         }
                     }
@@ -938,8 +939,8 @@ impl<'a> JitContext<'a> {
         if let Some(callid) = fused_poly_callid
             && let BinaryInlineMode::CmpBr { brkind, dest } = mode
             && matches!(binop, BinaryOp::Cmp(CmpKind::Eq | CmpKind::TEq))
-            && self.pmc_recv_contains(callid, NIL_CLASS)
-            && self.pmc_recv_contains(callid, INTEGER_CLASS)
+            && self.pmc_recv_contains(callid, CachedClass::NIL)
+            && self.pmc_recv_contains(callid, CachedClass::INTEGER)
             // The peel has no generic arm: a receiver outside {nil,
             // Integer} lands on the Integer arm's guard, a plain deopt. So
             // it only serves sites whose whole observed profile is the
@@ -951,8 +952,8 @@ impl<'a> JitContext<'a> {
                 .pmc
                 .entries()
                 .iter()
-                .all(|e| e.recv == NIL_CLASS || e.recv == INTEGER_CLASS)
-            && self.basic_op_assumable(NIL_CLASS, binop.into())
+                .all(|e| e.recv == CachedClass::NIL || e.recv == CachedClass::INTEGER)
+            && self.basic_op_assumable(CachedClass::NIL, binop.into())
         {
             let state_save = state.clone();
             let ir_save = ir.save();
@@ -962,7 +963,11 @@ impl<'a> JitContext<'a> {
             // nil arm: `nil == x` ⇔ `x` is nil — raw bit compare, fused.
             let mut narm = entry.clone();
             narm.load(ir, lhs, GP::Rdi);
-            ir.push(AsmInst::BrClassNe(GP::Rdi, NIL_CLASS, not_nil));
+            ir.push(AsmInst::BrClassNe(GP::Rdi, CachedClass::NIL, not_nil));
+            // Reaching the arm is the proof — and recording it is what
+            // lets the merge keep `NilOr(Fixnum)` for `lhs` (nil arm ⊔
+            // the Integer arm's fixnum guard) instead of ⊤.
+            narm.guard_class_state(lhs, CachedClass::NIL);
             narm.load(ir, rhs, GP::Rsi);
             // Raw `cmp` + fused branch; `NIL_VALUE` is not a tagged fixnum,
             // but for `Eq` bit-equality is exactly the question (no other
@@ -988,14 +993,14 @@ impl<'a> JitContext<'a> {
                 binop.into(),
                 lhs,
                 rhs,
-                INTEGER_CLASS,
+                CachedClass::INTEGER,
                 rhs_class,
                 bc_pos,
                 mode,
                 None,
             ) {
                 Some(BinaryInlineOutcome::Done) => {
-                    self.record_bop_dep(NIL_CLASS, binop.into());
+                    self.record_bop_dep(CachedClass::NIL, binop.into());
                     self.end_arm(iarm, ir, &merge, false);
                     self.bind_merge(state, ir, merge);
                     return Ok(BinaryLowering::Emitted);
@@ -1083,8 +1088,8 @@ impl<'a> JitContext<'a> {
                     // so the unfrozen-slot proofs survive them. Other classes'
                     // inline generators are not audited for that; drop the
                     // proofs there.
-                    if (lhs_class == INTEGER_CLASS || lhs_class == FLOAT_CLASS)
-                        && (rhs_class == Some(INTEGER_CLASS) || rhs_class == Some(FLOAT_CLASS))
+                    if (lhs_class == CachedClass::INTEGER || lhs_class == CachedClass::FLOAT)
+                        && (rhs_class == Some(CachedClass::INTEGER) || rhs_class == Some(CachedClass::FLOAT))
                     {
                         self.restore_unfrozen(dst);
                     }
@@ -1128,7 +1133,7 @@ impl<'a> JitContext<'a> {
         // the profile tags every boolean BOOL_CLASS, so a recompile re-asks
         // the same unanswerable question and the site deopts forever.
         // Dispatch through the generic helper instead.
-        if lhs_class == BOOL_CLASS
+        if lhs_class == CachedClass::BOOL
             && self
                 .jit_check_method(lhs_class, IdentId::from(binop))
                 .is_none()
@@ -1148,7 +1153,7 @@ impl<'a> JitContext<'a> {
         // and a site that later turns fixnum flips polymorphic (the tag
         // change stamps POLY) and takes the dispatch, whose Integer arm
         // serves the fixnum share inline.
-        if lhs_class == BIGNUM_CLASS {
+        if lhs_class.is(BIGNUM_CLASS) {
             state.flush_gp(ir);
             let is_func_call = self
                 .store
@@ -1182,7 +1187,7 @@ impl<'a> JitContext<'a> {
         dst: Option<SlotId>,
         lhs: SlotId,
         rhs: SlotId,
-        ic: Option<(ClassId, ClassId)>,
+        ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
@@ -1218,7 +1223,7 @@ impl<'a> JitContext<'a> {
         dst: Option<SlotId>,
         lhs: SlotId,
         rhs: SlotId,
-        ic: Option<(ClassId, ClassId)>,
+        ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
@@ -1251,7 +1256,7 @@ impl<'a> JitContext<'a> {
     /// redefined `Module#===`, or a refinement active in the compiling body.
     ///
     fn inline_module_teq(&self, target: Module) -> Option<FuncId> {
-        let (fid, _) = self.jit_check_method(target.as_val().class(), IdentId::_TEQ)?;
+        let (fid, _) = self.jit_check_method(target.as_val().class_for_ic(), IdentId::_TEQ)?;
         // Version passed explicitly: `check_method_for_class` reads the
         // version through the CODEGEN RefCell, which this compilation
         // already holds mutably.
@@ -1272,7 +1277,7 @@ impl<'a> JitContext<'a> {
         rhs: SlotId,
         dest_bb: BasicBlockId,
         brkind: BrKind,
-        ic: Option<(ClassId, ClassId)>,
+        ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {

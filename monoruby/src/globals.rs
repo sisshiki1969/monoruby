@@ -189,8 +189,8 @@ pub(crate) type InlineGen = dyn Fn(
     &crate::jitgen::JitContext,
     &Store,
     CallSiteId,
-    Option<ClassId>,
-    Option<ClassId>,
+    Option<CachedClass>,
+    Option<CachedClass>,
 ) -> bool;
 
 /// Binary-operator inline generator: the JIT-inline implementation of a
@@ -215,8 +215,8 @@ pub(crate) type InlineGenBinary = dyn Fn(
     &crate::jitgen::JitContext,
     &Store,
     CallSiteId,
-    ClassId,
-    Option<ClassId>,
+    CachedClass,
+    Option<CachedClass>,
     jitgen::BinaryInlineMode,
 ) -> jitgen::BinaryInlineOutcome;
 
@@ -237,7 +237,7 @@ pub(crate) type InlineGenUnary = dyn Fn(
     &crate::jitgen::JitContext,
     &Store,
     CallSiteId,
-    ClassId,
+    CachedClass,
 ) -> bool;
 
 /// Universal inline generator that always declines to inline (returns

@@ -446,8 +446,8 @@ fn kernel_nil(
     callid: CallSiteId,
     // The receiver Value is all this reads, so an unproven class
     // (a multi-class dispatch arm / the class-set guard) is no obstacle.
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -533,8 +533,8 @@ fn kernel_not_match(
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: Option<ClassId>,
-    _: Option<ClassId>,
+    recv_class: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let Some(recv_class) = recv_class else {
         // The call site could not prove the receiver's class (a multi-class
@@ -547,9 +547,9 @@ fn kernel_not_match(
     }
     // BOOL_CLASS is the IC pseudo-class for bool receivers; it has no
     // method table of its own to resolve `=~` against.
-    if recv_class == BOOL_CLASS
+    if recv_class == CachedClass::BOOL
         || store
-            .match_method(recv_class, ctx.class_version())
+            .match_method(recv_class.id(), ctx.class_version())
             .is_none()
     {
         return false;
@@ -576,8 +576,8 @@ fn kernel_block_given(
     jitctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -4886,8 +4886,8 @@ pub fn object_send(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     let no_splat = !callsite.object_send_single_splat();
@@ -4967,8 +4967,8 @@ fn kernel_is_a(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: Option<ClassId>,
-    _: Option<ClassId>,
+    recv_class: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let Some(recv_class) = recv_class else {
         // The call site could not prove the receiver's class (a multi-class
@@ -4990,7 +4990,7 @@ fn kernel_is_a(
     // Synthetic classes like BOOL_CLASS have no backing Module object —
     // their superclass chain isn't meaningful for is_a? folding. Fall
     // back to the regular dispatch in that case.
-    let Some(recv_module) = store[recv_class].try_get_module() else {
+    let Some(recv_module) = store[recv_class.id()].try_get_module() else {
         return false;
     };
     // The receiver-class guard + class_version guard upstream ensure
@@ -5636,8 +5636,8 @@ fn object_respond_to(
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: Option<ClassId>,
-    _: Option<ClassId>,
+    recv_class: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let Some(recv_class) = recv_class else {
         // The call site could not prove the receiver's class (a multi-class
@@ -5673,7 +5673,7 @@ fn object_respond_to(
         return false;
     };
     if let Some(entry) =
-        store.check_method_for_class_with_version(recv_class, method_name, ctx.class_version())
+        store.check_method_for_class_with_version(recv_class.id(), method_name, ctx.class_version())
     {
         if include_all || entry.is_public() {
             if let Some(dst) = dst {
@@ -5693,7 +5693,7 @@ fn object_respond_to(
     // override that would change the resolution.
     let resolved = store
         .check_method_for_class_with_version(
-            recv_class,
+            recv_class.id(),
             IdentId::RESPOND_TO_MISSING_,
             ctx.class_version(),
         )
@@ -5901,8 +5901,8 @@ fn kernel_instance_of(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: Option<ClassId>,
-    _: Option<ClassId>,
+    recv_class: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let Some(recv_class) = recv_class else {
         // The call site could not prove the receiver's class (a multi-class
@@ -5920,7 +5920,7 @@ fn kernel_instance_of(
         return false;
     };
     // Synthetic classes (e.g. BOOL_CLASS) have no backing Module object.
-    let Some(recv_module) = store[recv_class].try_get_module() else {
+    let Some(recv_module) = store[recv_class.id()].try_get_module() else {
         return false;
     };
     let result = recv_module.get_real_class().id() == target.id();

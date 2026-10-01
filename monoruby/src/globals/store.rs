@@ -2325,9 +2325,9 @@ impl Store {
                 .entries()
                 .iter()
                 .map(|e| {
-                    let mut s = self.debug_class_name(e.recv);
+                    let mut s = self.debug_class_name(e.recv.id());
                     if let Some(arg) = e.arg {
-                        s += &format!("/{}", self.debug_class_name(arg));
+                        s += &format!("/{}", self.debug_class_name(arg.id()));
                     }
                     if let Some(fid) = e.fid {
                         s += &format!("={}", self.func_description(fid));
@@ -2780,11 +2780,11 @@ pub(crate) type JitUnitId = (ISeqId, Option<ClassId>, Option<crate::bytecodegen:
 pub struct PolyCacheEntry {
     /// The receiver's class (`class_for_ic`-unified for method calls, so
     /// `true`/`false` share a way when their method is unified).
-    pub recv: ClassId,
+    pub recv: CachedClass,
     /// The first argument's class — recorded for the pair-keyed sites
     /// (BinOp / Cmp / Index / StoreIndex), `None` for method calls and
     /// unary operators.
-    pub arg: Option<ClassId>,
+    pub arg: Option<CachedClass>,
     /// The resolved method — method-call sites only; the operator/index
     /// sites re-resolve from the class at JIT compile time.
     pub fid: Option<FuncId>,
@@ -2807,7 +2807,7 @@ pub struct PolyCache {
 }
 
 impl PolyCache {
-    pub fn record(&mut self, recv: ClassId, arg: Option<ClassId>, fid: Option<FuncId>) {
+    pub fn record(&mut self, recv: CachedClass, arg: Option<CachedClass>, fid: Option<FuncId>) {
         for e in self.entries.iter_mut() {
             if e.recv == recv && e.arg == arg {
                 e.count += 1;

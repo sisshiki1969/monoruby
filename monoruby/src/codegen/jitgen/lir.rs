@@ -479,7 +479,7 @@ pub(in crate::codegen) enum LInst {
     /// guards carry the side-exit they fall through to).
     GuardClass {
         reg: GP,
-        class: ClassId,
+        class: CachedClass,
         deopt: DestLabel,
     },
     /// Class *dispatch arm*: fall through when `reg`'s runtime class is
@@ -489,7 +489,7 @@ pub(in crate::codegen) enum LInst {
     /// be booked as a guard failure by the `profile` recorder.
     BrClassNe {
         reg: GP,
-        class: ClassId,
+        class: CachedClass,
         target: DestLabel,
     },
     /// Dispatch arm over a class set: fall through when `reg`'s runtime class
@@ -497,14 +497,14 @@ pub(in crate::codegen) enum LInst {
     /// flow (the next arm), not a side exit.
     BrClassNotIn {
         reg: GP,
-        classes: Box<[ClassId]>,
+        classes: Box<[CachedClass]>,
         target: DestLabel,
     },
     /// Class-set guard: pass when `reg`'s runtime class is any of `classes`,
     /// branch to `deopt` otherwise.
     GuardClassIn {
         reg: GP,
-        classes: Box<[ClassId]>,
+        classes: Box<[CachedClass]>,
         deopt: DestLabel,
     },
     /// Type guard: deopt unless `reg` holds an `Array`.

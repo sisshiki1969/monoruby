@@ -13,6 +13,7 @@ mod slot;
 use liveness::IsUsed;
 pub(super) use liveness::Liveness;
 pub(super) use read_slot::DeoptPoint;
+#[cfg(feature = "profile")]
 pub(in crate::codegen::jitgen) use slot::NonNil;
 pub(in crate::codegen::jitgen) use slot::SfGuarded;
 pub(in crate::codegen::jitgen) use slot::DynVarAliasLoad;

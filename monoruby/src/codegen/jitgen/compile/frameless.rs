@@ -477,7 +477,7 @@ pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody>
 /// evidence either; a polymorphic site means it saw more than one operand
 /// class, so a fixnum-only expansion would exit on the others.
 ///
-fn saw_fixnums(ic: Option<(ClassId, ClassId)>, polymorphic: bool) -> Option<()> {
+fn saw_fixnums(ic: Option<(CachedClass, CachedClass)>, polymorphic: bool) -> Option<()> {
     cmp_operand_class(ic, polymorphic, CmpKind::Lt).filter(|c| *c == INTEGER_CLASS)?;
     Some(())
 }
@@ -504,7 +504,7 @@ fn saw_fixnums(ic: Option<(ClassId, ClassId)>, polymorphic: bool) -> Option<()> 
 /// `Comparable`), so the other classes are admitted for equality alone.
 ///
 fn cmp_operand_class(
-    ic: Option<(ClassId, ClassId)>,
+    ic: Option<(CachedClass, CachedClass)>,
     polymorphic: bool,
     kind: CmpKind,
 ) -> Option<ClassId> {
@@ -520,9 +520,9 @@ fn cmp_operand_class(
         return None;
     }
     let equality = matches!(kind, CmpKind::Eq | CmpKind::Ne | CmpKind::TEq);
-    match lhs {
-        INTEGER_CLASS => Some(lhs),
-        NIL_CLASS | TRUE_CLASS | FALSE_CLASS | SYMBOL_CLASS if equality => Some(lhs),
+    match lhs.id() {
+        INTEGER_CLASS => Some(lhs.id()),
+        NIL_CLASS | TRUE_CLASS | FALSE_CLASS | SYMBOL_CLASS if equality => Some(lhs.id()),
         _ => None,
     }
 }

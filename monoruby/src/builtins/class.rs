@@ -24,8 +24,8 @@ pub(super) fn gen_class_allocate_inline(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    self_class: Option<ClassId>,
-    _: Option<ClassId>,
+    self_class: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let Some(self_class) = self_class else {
         // The call site could not prove the receiver's class (a multi-class
@@ -39,7 +39,7 @@ pub(super) fn gen_class_allocate_inline(
     // `Class#allocate`'s receiver is a class object, so its class is
     // that class's singleton (metaclass). Unwrap to the attached class
     // to read the right `alloc_func`.
-    let mut self_module = store[self_class].get_module();
+    let mut self_module = store[self_class.id()].get_module();
     if let Some(origin) = self_module.is_singleton() {
         self_module = origin.as_class();
     }

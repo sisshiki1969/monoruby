@@ -1743,13 +1743,13 @@ pub(super) enum AsmInst {
     /// ### in
     /// - R(*reg*): Value
     ///
-    GuardClass(GP, ClassId, AsmDeopt),
+    GuardClass(GP, CachedClass, AsmDeopt),
     /// Class-set guard: pass when R(*reg*)'s runtime class is any of the
     /// listed classes, deopt otherwise. For polymorphic call sites whose
     /// observed receiver classes (PMC ∪ inline cache) all re-resolve to one
     /// `FuncId` at compile time — the whole set shares a single target, so
     /// one membership guard replaces the per-class deopt.
-    GuardClassIn(GP, Box<[ClassId]>, AsmDeopt),
+    GuardClassIn(GP, Box<[CachedClass]>, AsmDeopt),
     GuardArrayTy(GP, AsmDeopt),
     ///
     /// `rax <- Value::bool(R(reg).is_a?(class))`: the inline `Module#===`
@@ -1877,7 +1877,7 @@ pub(super) enum AsmInst {
     /// *branch-taken* path; the taken path's state is the caller's
     /// business.
     ///
-    BrClassNe(GP, ClassId, JitLabel),
+    BrClassNe(GP, CachedClass, JitLabel),
     ///
     /// Dispatch arm over a *set* of classes: fall through when `GP`'s runtime
     /// class is any of them, branch to the label otherwise.
@@ -1887,7 +1887,7 @@ pub(super) enum AsmInst {
     /// `GuardClass`. A miss here is control flow, not a guard failure, so the
     /// `profile` recorder must not book it as one.
     ///
-    BrClassNotIn(GP, Box<[ClassId]>, JitLabel),
+    BrClassNotIn(GP, Box<[CachedClass]>, JitLabel),
     CheckLocal(JitLabel),
     CheckKwRest(SlotId),
     OptCase {

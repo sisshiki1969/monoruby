@@ -351,8 +351,8 @@ fn array_size(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -390,8 +390,8 @@ fn array_clone(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    class_id: Option<ClassId>,
-    _: Option<ClassId>,
+    class_id: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let Some(class_id) = class_id else {
         // The call site could not prove the receiver's class (a multi-class
@@ -410,7 +410,7 @@ fn array_clone(
         r#gen.emit_array_clone(array_clone_extern as *const () as u64)
     });
     ir.fpr_restore(using_fpr);
-    state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
+    state.def_reg2acc_class(ir, GP::Rax, dst, class_id.id());
     true
 }
 
@@ -438,8 +438,8 @@ fn array_dup_inline(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    class_id: Option<ClassId>,
-    _: Option<ClassId>,
+    class_id: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let Some(class_id) = class_id else {
         // The call site could not prove the receiver's class (a multi-class
@@ -458,7 +458,7 @@ fn array_dup_inline(
         r#gen.emit_array_dup(array_dup_extern as *const () as u64)
     });
     ir.fpr_restore(using_fpr);
-    state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
+    state.def_reg2acc_class(ir, GP::Rax, dst, class_id.id());
     true
 }
 
@@ -961,8 +961,8 @@ fn array_shl(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: Option<ClassId>,
-    _: Option<ClassId>,
+    recv_class: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let Some(recv_class) = recv_class else {
         // The call site could not prove the receiver's class (a multi-class
@@ -987,7 +987,7 @@ fn array_shl(
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| r#gen.emit_array_shl(ary_shl as *const () as u64));
     ir.fpr_restore(using_fpr);
-    state.def_reg2acc_class(ir, GP::Rax, dst, recv_class);
+    state.def_reg2acc_class(ir, GP::Rax, dst, recv_class.id());
     true
 }
 
@@ -1016,8 +1016,8 @@ fn array_rotate_(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: Option<ClassId>,
-    arg_class: Option<ClassId>,
+    recv_class: Option<CachedClass>,
+    arg_class: Option<CachedClass>,
 ) -> bool {
     let Some(recv_class) = recv_class else {
         // The call site could not prove the receiver's class (a multi-class
@@ -1031,7 +1031,7 @@ fn array_rotate_(
     // `arg_class` is only fed for 1-positional-argument sites, which is
     // exactly the form we narrow; the 0-argument form rotates by 1.
     let has_arg = callsite.pos_num == 1;
-    if has_arg && arg_class != Some(INTEGER_CLASS) {
+    if has_arg && arg_class != Some(CachedClass::INTEGER) {
         return false;
     }
     let CallSiteInfo {
@@ -1049,7 +1049,7 @@ fn array_rotate_(
         r#gen.emit_array_rotate_(ary_rotate_ as *const () as u64, has_arg)
     });
     ir.fpr_restore(using_fpr);
-    state.def_reg2acc_class(ir, GP::Rax, dst, recv_class);
+    state.def_reg2acc_class(ir, GP::Rax, dst, recv_class.id());
     true
 }
 
@@ -1303,11 +1303,11 @@ fn array_index(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    idx_class: Option<ClassId>,
+    _: Option<CachedClass>,
+    idx_class: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
-    if !callsite.is_simple() || callsite.pos_num != 1 || idx_class != Some(INTEGER_CLASS) {
+    if !callsite.is_simple() || callsite.pos_num != 1 || idx_class != Some(CachedClass::INTEGER) {
         return false;
     }
     let CallSiteInfo {
@@ -1414,8 +1414,8 @@ fn array_index_assign(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    idx_class: Option<ClassId>,
+    _: Option<CachedClass>,
+    idx_class: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -1423,7 +1423,7 @@ fn array_index_assign(
     }
     match callsite.pos_num {
         2 => {
-            if idx_class != Some(INTEGER_CLASS) {
+            if idx_class != Some(CachedClass::INTEGER) {
                 return false;
             }
             let CallSiteInfo {

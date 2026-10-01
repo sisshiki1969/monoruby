@@ -175,8 +175,8 @@ fn numeric_pos_gen() -> Box<InlineGenUnary> {
         }
         let CallSiteInfo { dst, recv, .. } = *callsite;
         match recv_class {
-            INTEGER_CLASS => state.unop_integer_pos(ir, dst, recv),
-            FLOAT_CLASS => state.unop_float(ir, UnOpK::Pos, dst, recv),
+            CachedClass::INTEGER => state.unop_integer_pos(ir, dst, recv),
+            CachedClass::FLOAT => state.unop_float(ir, UnOpK::Pos, dst, recv),
             _ => return false,
         }
         true

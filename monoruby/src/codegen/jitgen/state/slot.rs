@@ -959,21 +959,32 @@ impl SlotState {
     /// have a singleton class. Slot 0, `self`, keeps its class, the
     /// unit's compile-time constant.
     pub(in crate::codegen::jitgen) fn forget_heap_object_classes(&mut self) {
+        let is_immediate_class = |class: ClassId| {
+            matches!(
+                class,
+                NIL_CLASS
+                    | TRUE_CLASS
+                    | FALSE_CLASS
+                    | BOOL_CLASS
+                    | INTEGER_CLASS
+                    | BIGNUM_CLASS
+                    | FLOAT_CLASS
+                    | SYMBOL_CLASS
+            )
+        };
         for i in 1..self.slots.len() {
-            if let LinkMode::S(Guarded::Class(class)) = self.slots[i].mode
-                && !matches!(
-                    class,
-                    NIL_CLASS
-                        | TRUE_CLASS
-                        | FALSE_CLASS
-                        | BOOL_CLASS
-                        | INTEGER_CLASS
-                        | BIGNUM_CLASS
-                        | FLOAT_CLASS
-                        | SYMBOL_CLASS
-                )
-            {
-                self.slots[i].mode = LinkMode::S(Guarded::Value);
+            match self.slots[i].mode {
+                LinkMode::S(Guarded::Class(class)) if !is_immediate_class(class) => {
+                    self.slots[i].mode = LinkMode::S(Guarded::Value);
+                }
+                // The non-nil half of a `NilOr` is a heap-class proof like
+                // any other; nothing expressible remains once it falls.
+                LinkMode::S(Guarded::NilOr(NonNil::Class(class)))
+                    if !is_immediate_class(class) =>
+                {
+                    self.slots[i].mode = LinkMode::S(Guarded::Value);
+                }
+                _ => {}
             }
         }
     }
@@ -1001,7 +1012,14 @@ impl SlotState {
         for i in start..self.slots.len() {
             let slot = SlotId(i as u16);
             match self.slots[i].mode {
-                LinkMode::S(Guarded::Class(class)) if store.class_proof_may_break(class) => {
+                // A `NilOr(Class(c))`'s non-nil half stands on the same
+                // no-singleton assumption as a plain `Class(c)` proof —
+                // narrowing recovers exactly that proof, so it must be
+                // latched under the same rule. (`self` is never `NilOr`.)
+                LinkMode::S(Guarded::Class(class))
+                | LinkMode::S(Guarded::NilOr(NonNil::Class(class)))
+                    if store.class_proof_may_break(class) =>
+                {
                     if !store[class].instance_singleton() {
                         scan.kept.push(class);
                     } else if i == 0 {
@@ -1055,6 +1073,19 @@ impl SlotState {
     pub(in crate::codegen::jitgen) fn refine_S_fixnum(&mut self, slot: SlotId) {
         if matches!(self.mode(slot), LinkMode::S(_)) {
             self.set_mode(slot, LinkMode::S(Guarded::Fixnum));
+        }
+    }
+
+    /// Refine *slot*'s abstract type in place with what a membership
+    /// guard proved (`Guarded::from_cached_set`) — the state half of a
+    /// `GuardClassIn` / arm-entry `BrClassNotIn`, which establishes a
+    /// join of classes rather than a single one. Strictly a narrowing
+    /// from ⊤: a slot the state already knows something about is left
+    /// alone, so this can never widen (or contradict) existing proof.
+    #[allow(non_snake_case)]
+    pub(in crate::codegen::jitgen) fn refine_S_guarded(&mut self, slot: SlotId, guarded: Guarded) {
+        if guarded != Guarded::Value && matches!(self.mode(slot), LinkMode::S(Guarded::Value)) {
+            self.set_mode(slot, LinkMode::S(guarded));
         }
     }
 
@@ -1842,7 +1873,7 @@ impl AbstractFrame {
         ir: &mut AsmIr,
         slot: SlotId,
         r: GP,
-        class: ClassId,
+        class: CachedClass,
         deopt: AsmDeopt,
     ) {
         if self.guard_class_state(slot, class) {
@@ -1861,12 +1892,12 @@ impl AbstractFrame {
     pub(in crate::codegen::jitgen) fn guard_class_state(
         &mut self,
         slot: SlotId,
-        class: ClassId,
+        class: CachedClass,
     ) -> bool {
-        if self.class(slot) == Some(class) {
+        if self.class(slot) == Some(class.id()) {
             return false;
         }
-        let class_guarded = Guarded::from_class(class);
+        let class_guarded = Guarded::from_cached(class);
         // Operate on a local copy and write it back (item ② encapsulation;
         // `LinkMode` is `Copy`). The `return false`s below skip both the
         // write-back and the guard emission, exactly as the prior `return`s did.
@@ -1903,13 +1934,13 @@ impl AbstractFrame {
                 // in this case, Guard will always fail
             }
             LinkMode::C(v) => {
-                if class == INTEGER_CLASS {
+                if class == CachedClass::INTEGER {
                     if v.is_fixnum() {
                         return false;
                     }
                     // If v is Bignum, Guard will fail
                 } else {
-                    if v.class() == class {
+                    if class.is(v.class()) {
                         return false;
                     }
                     // in this case, Guard will always fail
@@ -1928,7 +1959,7 @@ impl AbstractFrame {
 
     pub(crate) fn guard_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId, r: GP) {
         let deopt = ir.new_deopt(self);
-        self.guard_class(ir, slot, r, INTEGER_CLASS, deopt);
+        self.guard_class(ir, slot, r, CachedClass::INTEGER, deopt);
     }
 
     /// Snapshot the live physical FP pool registers (which the runtime-call
@@ -2486,7 +2517,7 @@ impl Guarded {
             // Use the IC class so `true` and `false` literals collapse to
             // a single `BOOL_CLASS` guard, avoiding a deopt when a slot
             // toggles between the two booleans.
-            Guarded::Class(v.class_for_ic())
+            Guarded::Class(v.class_for_ic().id())
         }
     }
 
@@ -2505,6 +2536,28 @@ impl Guarded {
             FLOAT_CLASS => Guarded::Float,
             class => Guarded::Class(class),
         }
+    }
+
+    /// The B→C boundary: what a *cache/guard* key proves on the lattice.
+    /// Sound against the JIT guard's representation semantics — the
+    /// `INTEGER` key's guard tests the Fixnum tag, so `Guarded::Fixnum`
+    /// (never Bignum) is exactly what passing it establishes.
+    pub fn from_cached(class: CachedClass) -> Self {
+        Self::from_class(class.id())
+    }
+
+    /// What a *membership* guard over the cache keys in `classes` proves
+    /// on the lattice: the join of each key's claim. `{NilClass, Foo}`
+    /// folds to `NilOr(Class(Foo))` — the PMC-observed set of a
+    /// same-target site or a multi-class dispatch arm, reflected instead
+    /// of dropped — while `{NilClass, BOOL}` or three-way sets widen to
+    /// `Value` by the ordinary join rules.
+    pub fn from_cached_set(classes: &[CachedClass]) -> Self {
+        classes
+            .iter()
+            .map(|c| Guarded::from_cached(*c))
+            .reduce(|a, b| a.join_raw(&b))
+            .unwrap_or(Guarded::Value)
     }
 
     pub fn class(&self) -> Option<ClassId> {
@@ -2818,7 +2871,7 @@ impl AbstractFrame {
                 {
                     let deopt = ir.new_deopt_with_pc(&self, pc + 1);
                     ir.stack2reg(slot, GP::Rax);
-                    ir.push(AsmInst::GuardClass(GP::Rax, class, deopt));
+                    ir.push(AsmInst::GuardClass(GP::Rax, CachedClass::from_class(class), deopt));
                     self.set_S_with_guard(slot, guarded);
                 }
             }
@@ -3419,6 +3472,72 @@ mod tests {
         end
         class Weird
           def nil? = true
+        end
+        "###,
+        );
+    }
+
+    /// A `nil | Foo` receiver that reaches `nil?` with *no* lattice proof
+    /// (a parameter): the same-target class-set guard is the only source
+    /// of type information. Correctness under both the residual and the
+    /// set-guarded compilation of the site.
+    #[test]
+    fn nilor_set_guard_param_receiver() {
+        run_test_with_prelude(
+            r###"
+        res = []
+        40.times do |i|
+          res << check(i.odd? ? Foo.new(i) : nil)
+          res << check2(i.even? ? Foo.new(i) : nil)
+        end
+        res
+        "###,
+            r###"
+        class Foo
+          attr_reader :v
+          def initialize(v) = @v = v
+        end
+        def check(x)
+          if x.nil?
+            0
+          else
+            x.v
+          end
+        end
+        def check2(x)
+          x.nil? ? 0 : x.v
+        end
+        "###,
+        );
+    }
+
+    /// The nil?-peephole fact must not survive a multi-arm dispatch: here
+    /// the site is polymorphic over `NilClass` (builtin `nil?`) and a class
+    /// that *redefines* `nil?`, and both branch sides read the receiver —
+    /// a stale fact would narrow the truthy side to `NilClass` and answer
+    /// `x.class` wrongly for the redefined receiver.
+    #[test]
+    fn nilor_nil_p_peephole_multi_arm_soundness() {
+        run_test_with_prelude(
+            r###"
+        objs = [Weird.new, nil]
+        res = []
+        40.times do |i|
+          res << probe(objs[i % 2])
+        end
+        res
+        "###,
+            r###"
+        class Weird
+          def nil? = true
+          def tag = :weird
+        end
+        def probe(x)
+          if x.nil?
+            x.class.to_s
+          else
+            x.tag.to_s
+          end
         end
         "###,
         );

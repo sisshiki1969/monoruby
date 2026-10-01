@@ -41,7 +41,7 @@ pub(crate) struct FBinOpInfo {
 
 #[derive(Debug, Clone)]
 pub(crate) struct MethodCacheEntry {
-    pub recv_class: ClassId,
+    pub recv_class: CachedClass,
     pub func_id: FuncId,
     pub version: u32,
 }
@@ -66,7 +66,7 @@ pub(crate) enum MethodCache {
     /// the VM populated the cache.
     MethodMissing {
         #[allow(dead_code)] // kept for debugging/symmetry; only `version` is read.
-        recv_class: ClassId,
+        recv_class: CachedClass,
         version: u32,
     },
     /// Nothing cached yet (the call site has not been executed by the VM).
@@ -170,7 +170,7 @@ pub(crate) enum TraceIr {
         /// discarded), so this is only used by the TraceIR dump.
         _dst: SlotId,
         src: SlotId,
-        ic: Option<ClassId>,
+        ic: Option<CachedClass>,
         /// The VM observed operand-class variance at this site
         /// (`opcode_sub`). Not yet consumed by the JIT — reserved for the
         /// polymorphic-cache lowering (see `doc/polymorphic_call.md`).
@@ -182,7 +182,7 @@ pub(crate) enum TraceIr {
         dst: Option<SlotId>,
         lhs: SlotId,
         rhs: SlotId,
-        ic: Option<(ClassId, ClassId)>,
+        ic: Option<(CachedClass, CachedClass)>,
         /// The VM saw this site with more than one operand class. Set by the
         /// *same* `vm_save_binary_class` that marks `BinCmp`, so it has
         /// always been recorded here — it simply had no consumer until the
@@ -194,7 +194,7 @@ pub(crate) enum TraceIr {
         dst: Option<SlotId>,
         lhs: SlotId,
         rhs: SlotId,
-        ic: Option<(ClassId, ClassId)>,
+        ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
     },
     BinCmpBr {
@@ -204,7 +204,7 @@ pub(crate) enum TraceIr {
         rhs: SlotId,
         disp: i32,
         brkind: BrKind,
-        ic: Option<(ClassId, ClassId)>,
+        ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
     },
     ArrayTEq {
@@ -218,7 +218,7 @@ pub(crate) enum TraceIr {
         _dst: SlotId,
         base: SlotId,
         idx: SlotId,
-        class: Option<(ClassId, ClassId)>, // (base_class, idx_class)
+        class: Option<(CachedClass, CachedClass)>, // (base_class, idx_class)
         /// The VM observed operand-class variance at this site
         /// (`opcode_sub`) — see `UnOp::_polymorphic`. Consumed by
         /// `JitContext::index`, which answers a polymorphic site with a
@@ -230,7 +230,7 @@ pub(crate) enum TraceIr {
         base: SlotId,
         idx: SlotId,
         src: SlotId,
-        class: Option<(ClassId, ClassId)>, // (base_class, idx_class)
+        class: Option<(CachedClass, CachedClass)>, // (base_class, idx_class)
         /// See `UnOp::_polymorphic`.
         _polymorphic: bool,
     },
@@ -414,9 +414,12 @@ impl TraceIr {
                 16 => TraceIr::LoadIvar(
                     SlotId::new(op1_w),
                     IdentId::from(op1_l),
+                    // An ivar cache holds the receiver's *object* class —
+                    // no bool/fixnum receiver owns ivars, so the cache
+                    // domain's unifications never apply; leave it at once.
                     if let Some(class) = pc.cached_class0() {
                         let ivar = pc.cached_ivarid();
-                        Some((class, ivar))
+                        Some((class.id(), ivar))
                     } else {
                         None
                     },
@@ -426,7 +429,7 @@ impl TraceIr {
                     IdentId::from(op1_l),
                     if let Some(class) = pc.cached_class0() {
                         let ivar = pc.cached_ivarid();
-                        Some((class, ivar))
+                        Some((class.id(), ivar))
                     } else {
                         None
                     },
@@ -809,20 +812,12 @@ impl TraceIr {
             }
         }
 
-        fn fmt(store: &Store, s: String, class: Option<(ClassId, ClassId)>) -> String {
+        fn fmt(store: &Store, s: String, class: Option<(CachedClass, CachedClass)>) -> String {
             format!(
                 "{:36} [{}][{}]",
                 s,
-                store.debug_class_name(if let Some((lhs, _)) = class {
-                    Some(lhs)
-                } else {
-                    None
-                }),
-                store.debug_class_name(if let Some((_, rhs)) = class {
-                    Some(rhs)
-                } else {
-                    None
-                }),
+                store.debug_class_name(class.map(|(lhs, _)| lhs.id())),
+                store.debug_class_name(class.map(|(_, rhs)| rhs.id())),
             )
         }
 
@@ -832,11 +827,11 @@ impl TraceIr {
             dst: Option<SlotId>,
             lhs: SlotId,
             rhs: SlotId,
-            class: impl Into<Option<(ClassId, ClassId)>>,
+            class: impl Into<Option<(CachedClass, CachedClass)>>,
             optimizable: bool,
             polymorphic: bool,
         ) -> String {
-            let class: Option<(ClassId, ClassId)> = class.into();
+            let class: Option<(CachedClass, CachedClass)> = class.into();
             let s = format!(
                 "{}{}{} = {:?} {:?} {:?}",
                 if polymorphic { "POLY " } else { "" },
@@ -855,7 +850,7 @@ impl TraceIr {
             dst: Option<SlotId>,
             lhs: SlotId,
             rhs: SlotId,
-            class: impl Into<Option<(ClassId, ClassId)>>,
+            class: impl Into<Option<(CachedClass, CachedClass)>>,
             polymorphic: bool,
         ) -> String {
             let class: Option<_> = class.into();
@@ -1049,7 +1044,11 @@ impl TraceIr {
                 _polymorphic: _,
             } => {
                 let op1 = format!("{:?} = {}{:?}", dst, kind, src);
-                format!("{:36} [{}]", op1, store.debug_class_name(src_class),)
+                format!(
+                    "{:36} [{}]",
+                    op1,
+                    store.debug_class_name(src_class.map(CachedClass::id)),
+                )
             }
             TraceIr::BinOp {
                 kind,
@@ -1122,7 +1121,7 @@ impl TraceIr {
                     "{:36} {}[{}] {}",
                     op1,
                     if polymorphic { "POLYMORPHIC " } else { "" },
-                    store.debug_class_name(cache_class),
+                    store.debug_class_name(cache_class.map(CachedClass::id)),
                     cache_fid
                 )
             }

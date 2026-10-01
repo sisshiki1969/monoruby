@@ -224,7 +224,7 @@ impl Codegen {
         // self.class != self_class -> miss; a heap Integer (BigNum) receiver is
         // routed straight to vm_entry by `a64_guard_class2` rather than the miss
         // chain (the JIT body only handles fixnum Integer).
-        self.a64_guard_class2(GP::Rax, self_class, &miss);
+        self.a64_guard_class2(GP::Rax, CachedClass::from_class(self_class), &miss);
         monoasm_arm64!(&mut self.jit,
             b jit_entry;             // matched -> tail-call the JIT code
         miss:

@@ -85,7 +85,7 @@ impl ISeqId {
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InlineCacheEntry {
-    pub recv_class: ClassId,
+    pub recv_class: CachedClass,
     /// `None` for a `super` call site.
     pub name: Option<IdentId>,
     pub refinements: RefinementSetId,

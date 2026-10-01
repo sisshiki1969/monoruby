@@ -101,7 +101,7 @@ impl Codegen {
     /// ### in
     /// - R(*reg*): Value
     ///
-    pub(super) fn guard_class(&mut self, reg: GP, class_id: ClassId, fail: &DestLabel) {
+    pub(super) fn guard_class(&mut self, reg: GP, class_id: CachedClass, fail: &DestLabel) {
         let fail = if reg != GP::Rdi {
             let label = self.jit.label();
             if self.jit.get_page() == 0 {
@@ -127,7 +127,7 @@ impl Codegen {
         } else {
             fail.clone()
         };
-        match class_id {
+        match class_id.id() {
             INTEGER_CLASS => {
                 monoasm!( &mut self.jit,
                     testq R(reg as _), 0b001;
@@ -182,7 +182,7 @@ impl Codegen {
                     jnz fail;
                 );
             }
-            _ => self.guard_rvalue(reg, class_id, &fail),
+            _ => self.guard_rvalue(reg, class_id.id(), &fail),
         }
         //if reg != GP::Rdi {
         //    monoasm!( &mut self.jit,
@@ -331,7 +331,7 @@ impl Codegen {
     /// except that under `profile` the miss is recorded first — see
     /// [`Self::class_guard_fail_recorder`].
     ///
-    pub(crate) fn guard_class_deopt(&mut self, reg: GP, class_id: ClassId, deopt: &DestLabel) {
+    pub(crate) fn guard_class_deopt(&mut self, reg: GP, class_id: CachedClass, deopt: &DestLabel) {
         #[cfg(feature = "profile")]
         {
             let recorder = self.class_guard_fail_recorder(deopt);
@@ -348,7 +348,7 @@ impl Codegen {
     ///
     /// if *reg* is Bignum, always dispatched to VM entry.
     ///
-    pub(crate) fn guard_class2(&mut self, reg: GP, class_id: ClassId, fail: &DestLabel) {
+    pub(crate) fn guard_class2(&mut self, reg: GP, class_id: CachedClass, fail: &DestLabel) {
         let vm_entry = self.vm_entry();
         let fail = if reg != GP::Rdi {
             let label = self.jit.label();
@@ -375,7 +375,7 @@ impl Codegen {
         } else {
             fail.clone()
         };
-        match class_id {
+        match class_id.id() {
             INTEGER_CLASS => {
                 let exit = self.jit.label();
                 monoasm!( &mut self.jit,
@@ -436,7 +436,7 @@ impl Codegen {
                     jnz fail;
                 );
             }
-            _ => self.guard_rvalue(reg, class_id, &fail),
+            _ => self.guard_rvalue(reg, class_id.id(), &fail),
         }
         //if reg != GP::Rdi {
         //    monoasm!( &mut self.jit,
@@ -690,7 +690,7 @@ mod tests {
             (FALSE_CLASS, Value::bool(false)),
         ] {
             let entry_point = r#gen.jit.get_current_address();
-            r#gen.guard_class(GP::Rdi, class, &side_exit);
+            r#gen.guard_class(GP::Rdi, CachedClass::from_class(class), &side_exit);
             monoasm!( &mut r#gen.jit,
                 xorq rax, rax;
                 ret;

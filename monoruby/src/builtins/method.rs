@@ -182,10 +182,10 @@ pub fn method_object_call(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    recv_class: Option<ClassId>,
-    _: Option<ClassId>,
+    recv_class: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
-    if recv_class != Some(METHOD_CLASS) {
+    if recv_class.map(CachedClass::id) != Some(METHOD_CLASS) {
         return false;
     }
     let callsite = &store[callid];

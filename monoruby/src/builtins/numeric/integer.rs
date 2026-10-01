@@ -249,8 +249,8 @@ fn integer_succ(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() || callsite.pos_num != 0 {
@@ -288,8 +288,8 @@ fn integer_tof(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    _: Option<ClassId>,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -582,14 +582,14 @@ fn integer_shr(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    rhs_class: Option<ClassId>,
+    _: Option<CachedClass>,
+    rhs_class: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }
-    if rhs_class != Some(INTEGER_CLASS) {
+    if rhs_class != Some(CachedClass::INTEGER) {
         return false;
     }
     let CallSiteInfo {
@@ -669,14 +669,14 @@ fn integer_shl(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    rhs_class: Option<ClassId>,
+    _: Option<CachedClass>,
+    rhs_class: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }
-    if rhs_class != Some(INTEGER_CLASS) {
+    if rhs_class != Some(CachedClass::INTEGER) {
         return false;
     }
     let CallSiteInfo {
@@ -756,8 +756,8 @@ fn integer_rem(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    rhs_class: Option<ClassId>,
+    _: Option<CachedClass>,
+    rhs_class: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -768,8 +768,8 @@ fn integer_rem(
     } = *callsite;
 
     match rhs_class {
-        Some(INTEGER_CLASS) => integer_rem_int_rhs(state, ir, dst, recv, args),
-        Some(FLOAT_CLASS) => integer_rem_float_rhs(state, ir, dst, recv, args),
+        Some(CachedClass::INTEGER) => integer_rem_int_rhs(state, ir, dst, recv, args),
+        Some(CachedClass::FLOAT) => integer_rem_float_rhs(state, ir, dst, recv, args),
         _ => false,
     }
 }
@@ -871,8 +871,8 @@ fn integer_pow(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    rhs_class: Option<ClassId>,
+    _: Option<CachedClass>,
+    rhs_class: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     if !callsite.is_simple() {
@@ -883,8 +883,8 @@ fn integer_pow(
     } = *callsite;
 
     match rhs_class {
-        Some(INTEGER_CLASS) => integer_pow_int_rhs(state, ir, dst, recv, args),
-        Some(FLOAT_CLASS) => integer_pow_float_rhs(state, ir, dst, recv, args),
+        Some(CachedClass::INTEGER) => integer_pow_int_rhs(state, ir, dst, recv, args),
+        Some(CachedClass::FLOAT) => integer_pow_float_rhs(state, ir, dst, recv, args),
         _ => false,
     }
 }
@@ -996,7 +996,7 @@ fn integer_binop_gen(kind: BinOpK) -> Box<InlineGenBinary> {
                 dst, recv, args, ..
             } = *callsite;
             match rhs_class {
-                Some(INTEGER_CLASS) => {
+                Some(CachedClass::INTEGER) => {
                     // A bignum-constant operand (`x & 0xffff_ffff_ffff_ffff`,
                     // the dewasm mask idiom) has no fixnum lowering: the
                     // fixnum guard would land on the constant and fail on
@@ -1009,7 +1009,7 @@ fn integer_binop_gen(kind: BinOpK) -> Box<InlineGenBinary> {
                     state.binop_integer(ir, kind, dst, recv, args);
                     BinaryInlineOutcome::Done
                 }
-                Some(FLOAT_CLASS)
+                Some(CachedClass::FLOAT)
                     if matches!(kind, BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Div) =>
                 {
                     state.binop_float(
@@ -1048,8 +1048,8 @@ fn integer_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
                 dst, recv, args, ..
             } = *callsite;
             let float_info = match rhs_class {
-                Some(INTEGER_CLASS) => None,
-                Some(FLOAT_CLASS) => Some(FBinOpInfo {
+                Some(CachedClass::INTEGER) => None,
+                Some(CachedClass::FLOAT) => Some(FBinOpInfo {
                     lhs: recv,
                     rhs: args,
                     lhs_class: FOpClass::Integer,
@@ -1112,12 +1112,12 @@ fn integer_index(
     _: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<ClassId>,
-    nth_class: Option<ClassId>,
+    _: Option<CachedClass>,
+    nth_class: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
     // `self[nth, len]` / `self[range]` keep the generic path.
-    if !callsite.is_simple() || callsite.pos_num != 1 || nth_class != Some(INTEGER_CLASS) {
+    if !callsite.is_simple() || callsite.pos_num != 1 || nth_class != Some(CachedClass::INTEGER) {
         return false;
     }
     let CallSiteInfo {
