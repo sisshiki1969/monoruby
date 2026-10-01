@@ -1048,11 +1048,8 @@ impl AbstractFrame {
                 ReturnValue::Const(v) => {
                     self.def_C(dst, v);
                 }
-                ReturnValue::Class(class) => {
-                    self.def_return_store_guarded(ir, GP::Rax, dst, slot::Guarded::from_class(class));
-                }
-                ReturnValue::NilOr(nn) => {
-                    self.def_return_store_guarded(ir, GP::Rax, dst, slot::Guarded::NilOr(nn));
+                ReturnValue::Typed(guarded) => {
+                    self.def_return_store_guarded(ir, GP::Rax, dst, guarded);
                 }
                 ReturnValue::Value => {
                     self.def_return_store_guarded(ir, GP::Rax, dst, slot::Guarded::Value);
@@ -1223,35 +1220,31 @@ pub(super) struct ReturnState {
 enum ReturnValue {
     UD,
     Const(Value),
-    Class(ClassId),
-    /// `nil`, or a value of the non-nil type inside — the return-value
-    /// mirror of [`Guarded::NilOr`] (a method with a `return nil` path).
-    NilOr(slot::NonNil),
+    /// A non-constant claim carried on the type lattice itself. Never
+    /// `Guarded::Value` (that is [`Self::Value`]); constructed only by
+    /// [`Self::from_guarded`]. Carrying `Guarded` keeps the lattice's own
+    /// distinctions (`Fixnum` is not `Class(INTEGER_CLASS)`, nil-ness is
+    /// explicit) instead of re-encoding them in a bare `ClassId` with
+    /// conventions on the side.
+    Typed(Guarded),
     Value,
 }
 
 impl ReturnValue {
-    /// The value claim as a [`Guarded`] — the same mapping
-    /// [`LinkMode::as_return`] inverts (`Class(INTEGER_CLASS)` stands for
-    /// `Fixnum`: a Bignum never produces it, `Guarded::from_concrete_value`
-    /// keeps Bignum at `Value` and `as_return` maps `Guarded::Fixnum` to it).
+    /// The value claim as a [`Guarded`].
     fn to_guarded(self) -> Guarded {
         match self {
             ReturnValue::UD => unreachable!(),
             ReturnValue::Const(v) => Guarded::from_concrete_value(v),
-            ReturnValue::Class(c) => Guarded::from_class(c),
-            ReturnValue::NilOr(nn) => Guarded::NilOr(nn),
+            ReturnValue::Typed(g) => g,
             ReturnValue::Value => Guarded::Value,
         }
     }
 
-    fn from_guarded(g: Guarded) -> Self {
+    pub(super) fn from_guarded(g: Guarded) -> Self {
         match g {
-            Guarded::Fixnum => ReturnValue::Class(INTEGER_CLASS),
-            Guarded::Float => ReturnValue::Class(FLOAT_CLASS),
-            Guarded::Class(c) => ReturnValue::Class(c),
-            Guarded::NilOr(nn) => ReturnValue::NilOr(nn),
             Guarded::Value => ReturnValue::Value,
+            g => ReturnValue::Typed(g),
         }
     }
 }
@@ -1456,12 +1449,12 @@ mod tests {
         assert!(s.const_folded().is_none());
     }
 
-    /// `Class(c)` is also unsafe — the rescue path may return a different
-    /// class — so it must be downgraded to `Value` too.
+    /// A typed claim is also unsafe — the rescue path may return a
+    /// different class — so it must be downgraded to `Value` too.
     #[test]
     fn taint_for_unmodeled_rescue_downgrades_class() {
         let mut s = ReturnState {
-            ret: ReturnValue::Class(crate::SYMBOL_CLASS),
+            ret: ReturnValue::Typed(Guarded::Class(crate::SYMBOL_CLASS)),
             invariants: Invariants {
                 class_version_guard: true,
                 const_version_guard: false,

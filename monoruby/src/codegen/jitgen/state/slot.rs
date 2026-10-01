@@ -2309,13 +2309,7 @@ impl LinkMode {
         match self {
             LinkMode::C(v) => ReturnValue::Const(*v),
             LinkMode::MaybeNone | LinkMode::None | LinkMode::V => unreachable!(),
-            l => match l.guarded() {
-                Guarded::Class(class) => ReturnValue::Class(class),
-                Guarded::Fixnum => ReturnValue::Class(INTEGER_CLASS),
-                Guarded::Float => ReturnValue::Class(FLOAT_CLASS),
-                Guarded::NilOr(nn) => ReturnValue::NilOr(nn),
-                Guarded::Value => ReturnValue::Value,
-            },
+            l => ReturnValue::from_guarded(l.guarded()),
         }
     }
 

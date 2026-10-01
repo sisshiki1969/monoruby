@@ -176,8 +176,7 @@ pub(super) fn record_frame_sf(l: SfGuarded, l_const: bool, r: SfGuarded, r_const
 pub(super) fn record_return(l: &ReturnValue, r: &ReturnValue) {
     let to_op = |v: &ReturnValue| match v {
         ReturnValue::Const(v) => op(&Guarded::from_concrete_value(*v), true),
-        ReturnValue::Class(c) => op(&Guarded::from_class(*c), false),
-        ReturnValue::NilOr(nn) => op(&Guarded::NilOr(*nn), false),
+        ReturnValue::Typed(g) => op(g, false),
         // `UD` cannot reach the fallback (joined-away earlier); fold it
         // into ⊤ defensively rather than panicking in a stats hook.
         ReturnValue::Value | ReturnValue::UD => Op {
