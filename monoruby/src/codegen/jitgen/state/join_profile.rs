@@ -49,11 +49,13 @@ pub(super) struct Op {
     /// The operand was a compile-time constant (`LinkMode::C` /
     /// `ReturnValue::Const`).
     is_const: bool,
+    /// The operand was a `NilOr` of `kind` (`kind` is the non-nil half).
+    nil_or: bool,
     kind: TyKind,
 }
 
 impl Op {
-    fn sort_key(&self) -> (u8, u32, u8) {
+    fn sort_key(&self) -> (u8, u32, u8, u8) {
         let (d, c) = match self.kind {
             TyKind::Nil => (0, 0),
             TyKind::Bool => (1, 0),
@@ -62,11 +64,11 @@ impl Op {
             TyKind::Class(c) => (4, c.u32()),
             TyKind::Top => (5, 0),
         };
-        (d, c, self.is_const as u8)
+        (d, c, self.nil_or as u8, self.is_const as u8)
     }
 
     fn is_nil(&self) -> bool {
-        self.kind == TyKind::Nil
+        self.kind == TyKind::Nil || self.nil_or
     }
 
     fn render(&self, store: &Store) -> String {
@@ -78,6 +80,11 @@ impl Op {
             TyKind::Class(c) => format!("Class({})", store.debug_class_name(c)),
             TyKind::Top => "Value".to_string(),
         };
+        let kind = if self.nil_or {
+            format!("nil|{kind}")
+        } else {
+            kind
+        };
         if self.is_const {
             format!("C[{kind}]")
         } else {
@@ -87,17 +94,26 @@ impl Op {
 }
 
 fn op(g: &Guarded, is_const: bool) -> Op {
-    let kind = match g {
-        Guarded::Fixnum => TyKind::Fixnum,
-        Guarded::Float => TyKind::Float,
-        Guarded::Value => TyKind::Top,
+    let (nil_or, kind) = match g {
+        Guarded::Fixnum => (false, TyKind::Fixnum),
+        Guarded::Float => (false, TyKind::Float),
+        Guarded::Value => (false, TyKind::Top),
         Guarded::Class(c) => match *c {
-            NIL_CLASS => TyKind::Nil,
-            BOOL_CLASS | TRUE_CLASS | FALSE_CLASS => TyKind::Bool,
-            c => TyKind::Class(c),
+            NIL_CLASS => (false, TyKind::Nil),
+            BOOL_CLASS | TRUE_CLASS | FALSE_CLASS => (false, TyKind::Bool),
+            c => (false, TyKind::Class(c)),
+        },
+        Guarded::NilOr(nn) => match nn {
+            NonNil::Fixnum => (true, TyKind::Fixnum),
+            NonNil::Float => (true, TyKind::Float),
+            NonNil::Class(c) => (true, TyKind::Class(*c)),
         },
     };
-    Op { is_const, kind }
+    Op {
+        is_const,
+        nil_or,
+        kind,
+    }
 }
 
 fn op_sf(g: SfGuarded, is_const: bool) -> Op {
@@ -106,7 +122,11 @@ fn op_sf(g: SfGuarded, is_const: bool) -> Op {
         SfGuarded::Float => TyKind::Float,
         SfGuarded::FixnumOrFloat => TyKind::Top,
     };
-    Op { is_const, kind }
+    Op {
+        is_const,
+        nil_or: false,
+        kind,
+    }
 }
 
 static TABLE: LazyLock<Mutex<HashMap<(Site, Op, Op), u64>>> =
@@ -128,10 +148,10 @@ pub(super) fn record_guarded(l: &Guarded, r: &Guarded) {
     record(Site::Guarded, op(l, false), op(r, false));
 }
 
-/// The generic arm of `decide_join`: records only when the meet widens
-/// (`l != r`; equal operands keep their type).
+/// The generic arm of `decide_join`: records only when the meet widens all
+/// the way to `Value` (a meet to `NilOr` keeps its type).
 pub(super) fn record_frame_generic(l: &Guarded, l_const: bool, r: &Guarded, r_const: bool) {
-    if l != r {
+    if l != r && l.join_raw(r) == Guarded::Value {
         record(Site::Frame, op(l, l_const), op(r, r_const));
     }
 }
@@ -149,10 +169,12 @@ pub(super) fn record_return(l: &ReturnValue, r: &ReturnValue) {
     let to_op = |v: &ReturnValue| match v {
         ReturnValue::Const(v) => op(&Guarded::from_concrete_value(*v), true),
         ReturnValue::Class(c) => op(&Guarded::from_class(*c), false),
+        ReturnValue::NilOr(nn) => op(&Guarded::NilOr(*nn), false),
         // `UD` cannot reach the fallback (joined-away earlier); fold it
         // into ⊤ defensively rather than panicking in a stats hook.
         ReturnValue::Value | ReturnValue::UD => Op {
             is_const: false,
+            nil_or: false,
             kind: TyKind::Top,
         },
     };

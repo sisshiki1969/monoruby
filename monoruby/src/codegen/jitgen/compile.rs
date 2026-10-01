@@ -1,4 +1,4 @@
-use crate::codegen::jitgen::state::LinkMode;
+use crate::codegen::jitgen::state::{Guarded, LinkMode};
 
 use super::*;
 
@@ -1386,7 +1386,21 @@ impl<'a> JitContext<'a> {
                     }
                 } else {
                     state.load(ir, cond_, GP::Rax);
-                    self.gen_cond_br(state, ir, bc_pos, dest_bb, brkind);
+                    // A `NilOr` condition splits on the branch: `NonNil`
+                    // never holds a falsy type, so the truthy side is
+                    // exactly the non-nil half and the falsy side is
+                    // exactly `nil`. State-only — no extra machine code,
+                    // and only the condition slot itself is narrowed.
+                    let mut side_state = state.clone();
+                    if let LinkMode::S(Guarded::NilOr(g)) = state.mode(cond_) {
+                        let (taken, fallthrough) = match brkind {
+                            BrKind::BrIf => (g.into(), Guarded::Class(NIL_CLASS)),
+                            BrKind::BrIfNot => (Guarded::Class(NIL_CLASS), g.into()),
+                        };
+                        side_state.set_S_with_guard(cond_, taken);
+                        state.set_S_with_guard(cond_, fallthrough);
+                    }
+                    self.gen_cond_br(side_state, ir, bc_pos, dest_bb, brkind);
                 }
             }
             TraceIr::NilBr(cond_, disp) => {
@@ -1399,7 +1413,16 @@ impl<'a> JitContext<'a> {
                     let branch_dest = self.label();
                     state.load(ir, cond_, GP::Rax);
                     ir.push(AsmInst::NilBr(branch_dest));
-                    self.new_side_branch(bc_pos, dest_bb, state.clone(), branch_dest);
+                    // The branch is taken exactly when the value is `nil`,
+                    // so the side state knows it and, for a `NilOr`, the
+                    // fall-through recovers the non-nil half. State-only;
+                    // only the condition slot itself is narrowed.
+                    let mut side_state = state.clone();
+                    side_state.set_S_with_guard(cond_, Guarded::Class(NIL_CLASS));
+                    self.new_side_branch(bc_pos, dest_bb, side_state, branch_dest);
+                    if let LinkMode::S(Guarded::NilOr(g)) = state.mode(cond_) {
+                        state.set_S_with_guard(cond_, g.into());
+                    }
                 }
             }
             TraceIr::CondBr(_, _, true, _) => {
@@ -1555,9 +1578,12 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    /// `side_state` is the abstract state of the branch-taken side — the
+    /// caller builds it (usually a clone of the fall-through state, possibly
+    /// narrowed differently, e.g. the `NilOr` split).
     fn gen_cond_br(
         &mut self,
-        state: &mut AbstractState,
+        side_state: AbstractState,
         ir: &mut AsmIr,
         src_idx: BcIndex,
         dest: BasicBlockId,
@@ -1565,7 +1591,7 @@ impl<'a> JitContext<'a> {
     ) {
         let branch_dest = self.label();
         ir.push(AsmInst::CondBr(brkind, branch_dest));
-        self.new_side_branch(src_idx, dest, state.clone(), branch_dest);
+        self.new_side_branch(src_idx, dest, side_state, branch_dest);
     }
 
     fn recompile_and_deopt(

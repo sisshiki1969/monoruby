@@ -572,6 +572,14 @@ impl SlotState {
                     || c == BOOL_CLASS
                     || c == SYMBOL_CLASS
             }
+            // `nil` itself is packed, so the pair is immediate iff the
+            // non-nil half only has packed representatives — the same rule
+            // as the plain arms above (`Float` covers heap RValues too).
+            Guarded::NilOr(nn) => match nn {
+                NonNil::Fixnum => true,
+                NonNil::Float => false,
+                NonNil::Class(c) => c == SYMBOL_CLASS,
+            },
         }
     }
 
@@ -1697,6 +1705,8 @@ impl SlotState {
                 // truthiness is unknown — be conservative and return
                 // false.
                 Guarded::Class(class) => !class.is_falsy() && class != BOOL_CLASS,
+                // Statically unknown: may be `nil`.
+                Guarded::NilOr(_) => false,
             },
         }
     }
@@ -1712,6 +1722,8 @@ impl SlotState {
                 Guarded::Value => false,
                 // Same caveat as `is_truthy`: BOOL_CLASS could be either.
                 Guarded::Class(class) => class.is_falsy() && class != BOOL_CLASS,
+                // Statically unknown: may be the (truthy) non-nil half.
+                Guarded::NilOr(_) => false,
             },
         }
     }
@@ -1726,6 +1738,7 @@ impl SlotState {
                 Guarded::Float => false,
                 Guarded::Value => false,
                 Guarded::Class(class) => class.is_nil(),
+                Guarded::NilOr(_) => false,
             },
         }
     }
@@ -1740,6 +1753,7 @@ impl SlotState {
                 Guarded::Float => true,
                 Guarded::Value => false,
                 Guarded::Class(class) => !class.is_nil(),
+                Guarded::NilOr(_) => false,
             },
         }
     }
@@ -2299,6 +2313,7 @@ impl LinkMode {
                 Guarded::Class(class) => ReturnValue::Class(class),
                 Guarded::Fixnum => ReturnValue::Class(INTEGER_CLASS),
                 Guarded::Float => ReturnValue::Class(FLOAT_CLASS),
+                Guarded::NilOr(nn) => ReturnValue::NilOr(nn),
                 Guarded::Value => ReturnValue::Value,
             },
         }
@@ -2406,6 +2421,62 @@ pub enum Guarded {
     Fixnum,
     Float,
     Class(ClassId),
+    /// `nil`, or a value of the non-nil type inside: the merge of a
+    /// `Class(NIL_CLASS)` path with a `NonNil`-convertible one keeps what it
+    /// knew instead of widening to ⊤ (`x = cond ? Foo.new : nil`,
+    /// `@x ||= ...`, a `return nil` path). Statically it answers nothing
+    /// (`class()` is `None`, all truthiness predicates are `false`); its
+    /// value is recovered by narrowing — `NilBr`/`CondBr` split it into
+    /// `Class(NIL_CLASS)` and the inner type, and a class guard on the inner
+    /// type also rejects `nil`, so `guard_class_state` narrows it like a
+    /// `Value`.
+    NilOr(NonNil),
+}
+
+///
+/// A type that is neither `nil` nor a boolean — what the truthy side of a
+/// branch over a [`Guarded::NilOr`] recovers.
+///
+/// - `Fixnum`, not `Class(INTEGER_CLASS)`: [`Guarded::from_concrete_value`]
+///   keeps Bignum at `Value`, so an INTEGER_CLASS-keyed variant could not be
+///   narrowed back to `Fixnum` soundly.
+/// - The nil/boolean classes (`NIL_CLASS`, `TRUE_CLASS`, `FALSE_CLASS`,
+///   `BOOL_CLASS`) never get in: a falsy value other than `nil` inside would
+///   leak through the truthy-side narrowing. A join of `nil` with one of
+///   them widens to `Value` instead.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NonNil {
+    Fixnum,
+    Float,
+    Class(ClassId),
+}
+
+impl NonNil {
+    fn from_guarded(g: Guarded) -> Option<Self> {
+        match g {
+            Guarded::Fixnum => Some(NonNil::Fixnum),
+            Guarded::Float => Some(NonNil::Float),
+            Guarded::Class(c) => {
+                if c == NIL_CLASS || c == TRUE_CLASS || c == FALSE_CLASS || c == BOOL_CLASS {
+                    None
+                } else {
+                    Some(NonNil::Class(c))
+                }
+            }
+            Guarded::Value | Guarded::NilOr(_) => None,
+        }
+    }
+}
+
+impl From<NonNil> for Guarded {
+    fn from(nn: NonNil) -> Guarded {
+        match nn {
+            NonNil::Fixnum => Guarded::Fixnum,
+            NonNil::Float => Guarded::Float,
+            NonNil::Class(c) => Guarded::Class(c),
+        }
+    }
 }
 
 impl Guarded {
@@ -2448,20 +2519,58 @@ impl Guarded {
             Guarded::Fixnum => INTEGER_CLASS,
             Guarded::Float => FLOAT_CLASS,
             Guarded::Class(c) => *c,
+            // `None`, deliberately: a `Some` here is a licence to elide a
+            // class guard, and a `NilOr` value may be `nil`.
+            Guarded::NilOr(_) => return None,
         })
     }
 
-    /// Type-lattice meet (item ②): two equal types stay; disagreement widens to
-    /// `Value` (⊤). This is the *type* component of `AbstractFrame::join` — the
-    /// fused join's resulting type equals this meet for every non-sentinel slot
-    /// (placement reconciliation is the rest of `join`).
+    /// Type-lattice meet (item ②): two equal types stay; `nil` against a
+    /// `NonNil`-convertible type (or against a `NilOr` of one) folds into
+    /// `NilOr`; any other disagreement widens to `Value` (⊤). This is the
+    /// *type* component of `AbstractFrame::join` — the fused join's resulting
+    /// type equals this meet for every non-sentinel slot (placement
+    /// reconciliation is the rest of `join`).
     pub(super) fn join(&self, other: &Self) -> Self {
-        if self == other {
-            *self
-        } else {
-            #[cfg(feature = "profile")]
+        let res = self.join_raw(other);
+        #[cfg(feature = "profile")]
+        if res == Guarded::Value && self != other {
             super::join_profile::record_guarded(self, other);
-            Guarded::Value
+        }
+        res
+    }
+
+    /// [`Self::join`] without the `profile`-feature stats hook — for callers
+    /// that only probe the meet (the hook would double-count).
+    pub(super) fn join_raw(&self, other: &Self) -> Self {
+        if self == other {
+            return *self;
+        }
+        let is_nil = |g: &Guarded| matches!(g, Guarded::Class(c) if *c == NIL_CLASS);
+        if is_nil(self) {
+            return Self::join_with_nil(*other);
+        }
+        if is_nil(other) {
+            return Self::join_with_nil(*self);
+        }
+        match (*self, *other) {
+            (Guarded::NilOr(a), b) | (b, Guarded::NilOr(a))
+                if NonNil::from_guarded(b) == Some(a) =>
+            {
+                Guarded::NilOr(a)
+            }
+            _ => Guarded::Value,
+        }
+    }
+
+    /// `Class(NIL_CLASS) ⊔ x` for `x != Class(NIL_CLASS)`.
+    fn join_with_nil(x: Guarded) -> Guarded {
+        match x {
+            Guarded::NilOr(a) => Guarded::NilOr(a),
+            x => match NonNil::from_guarded(x) {
+                Some(nn) => Guarded::NilOr(nn),
+                None => Guarded::Value,
+            },
         }
     }
 }
@@ -2989,6 +3098,260 @@ mod tests {
           res
         end
         test
+        "###,
+        );
+    }
+
+    /// Lattice laws of `Guarded::join` with the `NilOr` element, over a
+    /// representative element set (⊤, the primitives, the nil/boolean
+    /// classes, two object classes, and their `NilOr`s).
+    #[test]
+    fn guarded_join_lattice_laws() {
+        use super::*;
+        let foo = ClassId::new(100);
+        let bar = ClassId::new(101);
+        let elems = [
+            Guarded::Value,
+            Guarded::Fixnum,
+            Guarded::Float,
+            Guarded::Class(NIL_CLASS),
+            Guarded::Class(BOOL_CLASS),
+            Guarded::Class(TRUE_CLASS),
+            Guarded::Class(FALSE_CLASS),
+            Guarded::Class(foo),
+            Guarded::Class(bar),
+            Guarded::NilOr(NonNil::Fixnum),
+            Guarded::NilOr(NonNil::Float),
+            Guarded::NilOr(NonNil::Class(foo)),
+            Guarded::NilOr(NonNil::Class(bar)),
+        ];
+        // idempotent
+        for a in elems {
+            assert_eq!(a.join(&a), a, "{a:?}");
+        }
+        // commutative
+        for a in elems {
+            for b in elems {
+                assert_eq!(a.join(&b), b.join(&a), "{a:?} {b:?}");
+            }
+        }
+        // associative
+        for a in elems {
+            for b in elems {
+                for c in elems {
+                    assert_eq!(
+                        a.join(&b).join(&c),
+                        a.join(&b.join(&c)),
+                        "{a:?} {b:?} {c:?}"
+                    );
+                }
+            }
+        }
+        // nil folds into NilOr instead of ⊤ ...
+        assert_eq!(
+            Guarded::Class(NIL_CLASS).join(&Guarded::Fixnum),
+            Guarded::NilOr(NonNil::Fixnum)
+        );
+        assert_eq!(
+            Guarded::Class(NIL_CLASS).join(&Guarded::Float),
+            Guarded::NilOr(NonNil::Float)
+        );
+        assert_eq!(
+            Guarded::Class(NIL_CLASS).join(&Guarded::Class(foo)),
+            Guarded::NilOr(NonNil::Class(foo))
+        );
+        // ... absorbs nil and its own non-nil half ...
+        assert_eq!(
+            Guarded::NilOr(NonNil::Class(foo)).join(&Guarded::Class(NIL_CLASS)),
+            Guarded::NilOr(NonNil::Class(foo))
+        );
+        assert_eq!(
+            Guarded::NilOr(NonNil::Class(foo)).join(&Guarded::Class(foo)),
+            Guarded::NilOr(NonNil::Class(foo))
+        );
+        // ... and widens against anything else.
+        assert_eq!(
+            Guarded::NilOr(NonNil::Fixnum).join(&Guarded::Float),
+            Guarded::Value
+        );
+        assert_eq!(
+            Guarded::NilOr(NonNil::Fixnum).join(&Guarded::NilOr(NonNil::Float)),
+            Guarded::Value
+        );
+        assert_eq!(
+            Guarded::NilOr(NonNil::Class(foo)).join(&Guarded::Class(bar)),
+            Guarded::Value
+        );
+        // The boolean/falsy classes never get inside a NilOr.
+        for c in [BOOL_CLASS, TRUE_CLASS, FALSE_CLASS] {
+            assert_eq!(
+                Guarded::Class(NIL_CLASS).join(&Guarded::Class(c)),
+                Guarded::Value
+            );
+        }
+        // A Bignum reads as ⊤ (`from_concrete_value`), so nil ⊔ Bignum can
+        // never fold into `NilOr(Fixnum)` — ⊤ ⊔ nil is ⊤ by the laws above.
+        assert_eq!(
+            Guarded::Class(NIL_CLASS).join(&Guarded::Value),
+            Guarded::Value
+        );
+    }
+
+    /// Doc test 1: narrow a `nil | Foo` local through every branch form.
+    #[test]
+    fn nilor_branch_narrowing() {
+        run_test_with_prelude(
+            r###"
+        res = []
+        40.times do |i|
+          x = i.odd? ? Foo.new(i) : nil
+          res << (x ? x.v : -1)
+          res << (x.nil? ? -2 : x.v)
+          res << (x&.v)
+          if x
+            res << x.v
+          else
+            res << :none
+          end
+          unless x
+            res << :none2
+          else
+            res << x.v
+          end
+        end
+        res
+        "###,
+            r###"
+        class Foo
+          attr_reader :v
+          def initialize(v) = @v = v
+        end
+        "###,
+        );
+    }
+
+    /// Doc test 2: the loop back edge alternates a local between nil and an
+    /// object / a fixnum.
+    #[test]
+    fn nilor_loop_backedge() {
+        run_test(
+            r###"
+        x = nil
+        s = 0
+        50.times do |i|
+          s += x ? x : 0
+          x = i.even? ? (i + 1) : nil
+        end
+        [s, x]
+        "###,
+        );
+    }
+
+    /// Doc test 3: a `NilOr(Float)` narrowed on the truthy side feeds a
+    /// float loop (the fpr-promotion path).
+    #[test]
+    fn nilor_float_narrowing_fpr() {
+        run_test(
+            r###"
+        s = 0.0
+        y = nil
+        100.times do |i|
+          y = i.odd? ? nil : (i * 0.5)
+          if y
+            s += y * 2.0 + 1.0
+          end
+        end
+        [s, y]
+        "###,
+        );
+    }
+
+    /// Doc test 4 (soundness): a Bignum path must not be narrowed back to
+    /// Fixnum through `nil | Integer`.
+    #[test]
+    fn nilor_bignum_soundness() {
+        run_test(
+            r###"
+        res = []
+        40.times do |i|
+          x = i.odd? ? 2**70 : nil
+          if x
+            res << x + 1
+          else
+            res << :nil
+          end
+        end
+        res
+        "###,
+        );
+    }
+
+    /// Doc test 5 (soundness): `false | nil` and `true | nil` stay outside
+    /// the `NilOr` lattice — neither side may be treated as truthy.
+    #[test]
+    fn nilor_boolean_soundness() {
+        run_test(
+            r###"
+        res = []
+        40.times do |i|
+          x = i.odd? ? false : nil
+          res << (x ? :t : :f)
+          res << (x&.to_s)
+          y = i.odd? ? true : nil
+          res << (y ? :t : :f)
+          res << (y&.to_s)
+        end
+        res
+        "###,
+        );
+    }
+
+    /// Doc test 6: a callee whose return is `nil | Foo`, consumed by a
+    /// branch — through a block-local call (specialization/inlining) and a
+    /// plain top-level call.
+    #[test]
+    fn nilor_return_value() {
+        run_test_with_prelude(
+            r###"
+        res = []
+        40.times do |i|
+          x = pick(i)
+          res << (x ? x.v * 2 : :none)
+          res << (pick(i + 1)&.v)
+        end
+        res
+        "###,
+            r###"
+        class Foo
+          attr_reader :v
+          def initialize(v) = @v = v
+        end
+        def pick(i)
+          return nil if i % 3 == 0
+          Foo.new(i)
+        end
+        "###,
+        );
+    }
+
+    /// Doc test 7: reassigning a different type to the slot after a
+    /// narrowing.
+    #[test]
+    fn nilor_reassign_after_narrowing() {
+        run_test(
+            r###"
+        res = []
+        40.times do |i|
+          x = i.odd? ? 5 : nil
+          if x
+            res << x + 1
+            x = "s"
+            res << x * 2
+          end
+          x = 1.5 if i % 3 == 0
+          res << x.class.to_s
+        end
+        res
         "###,
         );
     }
