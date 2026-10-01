@@ -70,6 +70,12 @@ impl<'a> JitContext<'a> {
             self.set_outer_claim_barrier();
         }
         let recv_class = state.class(callsite.recv);
+        #[cfg(feature = "profile")]
+        crate::codegen::jitgen::join_profile::record_dispatch_recv(
+            state.mode(callsite.recv),
+            recv_class,
+            callsite.name,
+        );
         // A frame-dependent `super` site (the method body occupies several
         // positions in the receiver's ancestor chain, or is a define_method
         // block whose super name follows the called name) cannot be resolved

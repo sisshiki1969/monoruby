@@ -136,6 +136,44 @@ static TABLE: LazyLock<Mutex<HashMap<(Site, Op, Op), u64>>> =
 /// the emitted-guard count the phase-1 before/after comparison reads.
 static GUARD_CLASS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Dispatch-entry receiver classification (`method_call`): how often a
+/// call site compiles with a lattice-proven class, a `NilOr`, or ⊤.
+static RECV_PROVEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static RECV_TOP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static RECV_NILOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static RECV_OTHER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static NILOR_RECV_NAMES: LazyLock<Mutex<HashMap<(Option<IdentId>, Op), u64>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Classify the receiver's abstract state at the dispatch choke point.
+pub(crate) fn record_dispatch_recv(
+    mode: LinkMode,
+    proven: Option<ClassId>,
+    name: Option<IdentId>,
+) {
+    use std::sync::atomic::Ordering;
+    if proven.is_some() {
+        RECV_PROVEN.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    match mode {
+        LinkMode::S(g @ Guarded::NilOr(_)) => {
+            RECV_NILOR.fetch_add(1, Ordering::Relaxed);
+            *NILOR_RECV_NAMES
+                .lock()
+                .unwrap()
+                .entry((name, op(&g, false)))
+                .or_insert(0) += 1;
+        }
+        LinkMode::S(Guarded::Value) => {
+            RECV_TOP.fetch_add(1, Ordering::Relaxed);
+        }
+        _ => {
+            RECV_OTHER.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 pub(crate) fn count_guard_class() {
     GUARD_CLASS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
@@ -253,6 +291,26 @@ pub(crate) fn dump(store: &Store) {
         " GuardClass emitted: {}",
         GUARD_CLASS.load(std::sync::atomic::Ordering::Relaxed)
     );
+    let g = |c: &std::sync::atomic::AtomicU64| c.load(std::sync::atomic::Ordering::Relaxed);
+    eprintln!();
+    eprintln!(
+        " dispatch-entry receivers: proven-class {}  top {}  NilOr {}  other {}",
+        g(&RECV_PROVEN),
+        g(&RECV_TOP),
+        g(&RECV_NILOR),
+        g(&RECV_OTHER)
+    );
+    let names = NILOR_RECV_NAMES.lock().unwrap();
+    let mut rows: Vec<_> = names.iter().collect();
+    rows.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+    for ((name, guarded), count) in rows.into_iter().take(20) {
+        eprintln!(
+            "    {:>8}   {} on {}",
+            count,
+            name.map_or("<super>".to_string(), |n| n.to_string()),
+            guarded.render(store)
+        );
+    }
 }
 
 fn percent(part: u64, total: u64) -> f64 {
