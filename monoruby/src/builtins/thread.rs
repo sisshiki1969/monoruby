@@ -2708,6 +2708,15 @@ mod tests {
 
     #[test]
     fn closing_a_popen_io_does_not_hold_the_gvl() {
+        // Only the 1:1 model has a GVL to hand over: in the M:1 green
+        // model `scheduler::without_gvl` runs its closure inline, so a
+        // waitpid stops the process there by design (`Process.wait` is the
+        // same) and the order below is legitimately reversed. `bin/test`
+        // re-runs this module under `MONORUBY_THREAD_MODEL=green`, so skip
+        // it there rather than assert the other model's behaviour.
+        if std::env::var("MONORUBY_THREAD_MODEL").is_ok_and(|v| v == "green") {
+            return;
+        }
         // `IO#close` on a popen stream waits for the child. That wait
         // lasts as long as the child runs, so it has to happen outside
         // the GVL: with the GVL held, every other Ruby thread stopped for
