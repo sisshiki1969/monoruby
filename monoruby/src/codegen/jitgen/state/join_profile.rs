@@ -144,6 +144,13 @@ static RECV_NILOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 static RECV_OTHER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static NILOR_RECV_NAMES: LazyLock<Mutex<HashMap<(Option<IdentId>, Op), u64>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Where an *unproven* (⊤) dispatch receiver was written in its BB.
+static TOP_RECV_SOURCE: LazyLock<Mutex<HashMap<&'static str, u64>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub(crate) fn record_top_recv_source(kind: &'static str) {
+    *TOP_RECV_SOURCE.lock().unwrap().entry(kind).or_insert(0) += 1;
+}
 
 /// Classify the receiver's abstract state at the dispatch choke point.
 pub(crate) fn record_dispatch_recv(
@@ -300,6 +307,14 @@ pub(crate) fn dump(store: &Store) {
         g(&RECV_NILOR),
         g(&RECV_OTHER)
     );
+    let srcs = TOP_RECV_SOURCE.lock().unwrap();
+    let mut src_rows: Vec<_> = srcs.iter().collect();
+    src_rows.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+    let src_total: u64 = src_rows.iter().map(|(_, c)| **c).sum();
+    eprintln!(" top-receiver sources (of {src_total}):");
+    for (kind, count) in src_rows {
+        eprintln!("    {:>8}   {}", count, kind);
+    }
     let names = NILOR_RECV_NAMES.lock().unwrap();
     let mut rows: Vec<_> = names.iter().collect();
     rows.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));

@@ -966,6 +966,14 @@ pub(crate) struct JitContext<'a> {
     /// it cleared at BB entry (a merge makes no path promise).
     pub(super) nil_pred: Option<NilPred>,
 
+    /// `profile` only: which kind of instruction last wrote each slot in
+    /// the basic block being compiled — the provenance classifier behind
+    /// the dispatch-entry receiver stats (`join_profile`). Cleared at BB
+    /// entry; approximate (unmodeled writers leave stale entries), used
+    /// for steering data only.
+    #[cfg(feature = "profile")]
+    pub(super) prof_writer: std::collections::HashMap<SlotId, &'static str>,
+
     ///
     /// Monotone count of capture-relevant compile events — see
     /// [`Self::capture_events`].
@@ -1126,6 +1134,8 @@ impl<'a> JitContext<'a> {
             unfrozen_slots: Vec::new(),
             instr_unfrozen: Vec::new(),
             nil_pred: None,
+            #[cfg(feature = "profile")]
+            prof_writer: std::collections::HashMap::new(),
             capture_events: 0,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,
@@ -1186,6 +1196,8 @@ impl<'a> JitContext<'a> {
             unfrozen_slots: Vec::new(),
             instr_unfrozen: Vec::new(),
             nil_pred: None,
+            #[cfg(feature = "profile")]
+            prof_writer: std::collections::HashMap::new(),
             capture_events: 0,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,

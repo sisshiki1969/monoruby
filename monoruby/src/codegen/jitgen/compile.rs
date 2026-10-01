@@ -140,6 +140,8 @@ impl<'a> JitContext<'a> {
         // by the previous BB's last instruction must not survive into a
         // block other paths can enter.
         self.nil_pred = None;
+        #[cfg(feature = "profile")]
+        self.prof_writer.clear();
 
         let mut state = match self.incoming_context(bbid, false)? {
             Some(bb) => bb,
@@ -447,6 +449,8 @@ impl<'a> JitContext<'a> {
         let pc = self.get_pc(bc_pos);
         state.set_pc(pc);
         let trace_ir = TraceIr::from_pc(pc, self.store);
+        #[cfg(feature = "profile")]
+        self.prof_track_writer(&trace_ir);
         // Ruby code ran since the last instruction (a call, a yield, a
         // generic operator): re-examine what the state believes about the
         // classes of the objects it holds before anything relies on it. A
@@ -924,7 +928,18 @@ impl<'a> JitContext<'a> {
                 _polymorphic: _,
                 callid,
                 cache,
-            } => return self.method_call(state, ir, callid, cache),
+            } => {
+                #[cfg(feature = "profile")]
+                if state.class(self.store[callid].recv).is_none() {
+                    crate::codegen::jitgen::join_profile::record_top_recv_source(
+                        self.prof_writer
+                            .get(&self.store[callid].recv)
+                            .copied()
+                            .unwrap_or("param/outside-bb"),
+                    );
+                }
+                return self.method_call(state, ir, callid, cache);
+            }
             TraceIr::Yield { callid } => {
                 // Specialized (inlined) yield is lowered on both x86 and aarch64.
                 if let Some(block_info) = self.current_method_given_block()
@@ -1801,4 +1816,49 @@ impl AbstractState {
         (lhs_class, rhs_class)
     }
 
+}
+
+#[cfg(feature = "profile")]
+impl JitContext<'_> {
+    /// Provenance classifier for the dispatch-entry receiver stats: record
+    /// which kind of instruction wrote each slot (best effort — unmodeled
+    /// writers leave stale entries).
+    fn prof_track_writer(&mut self, trace_ir: &TraceIr) {
+        let dst_kind: Option<(SlotId, &'static str)> = match trace_ir {
+            TraceIr::LoadIvar(dst, ..) => Some((*dst, "ivar")),
+            TraceIr::LoadGvar { dst, .. }
+            | TraceIr::LoadCvar { dst, .. }
+            | TraceIr::CheckCvar { dst, .. } => Some((*dst, "gvar/cvar")),
+            TraceIr::LoadConst(dst, _) => Some((*dst, "const")),
+            TraceIr::Literal(dst, _)
+            | TraceIr::FrozenLiteral(dst, _)
+            | TraceIr::StringFreeze(dst, _) => Some((*dst, "literal")),
+            TraceIr::Array { dst, .. } | TraceIr::Hash { dst, .. } | TraceIr::Range { dst, .. } => {
+                Some((*dst, "new-container"))
+            }
+            TraceIr::Index { _dst, .. } => Some((*_dst, "index")),
+            TraceIr::BinOp { dst: Some(dst), .. } | TraceIr::BinCmp { dst: Some(dst), .. } => {
+                Some((*dst, "operator"))
+            }
+            TraceIr::UnOp { _dst, .. } => Some((*_dst, "operator")),
+            TraceIr::LoadDynVar(dst, _) => Some((*dst, "dynvar")),
+            TraceIr::BlockArgProxy(dst, ..) | TraceIr::BlockArg(dst, ..) => {
+                Some((*dst, "block-arg"))
+            }
+            TraceIr::MethodCall { callid, .. } | TraceIr::Yield { callid, .. } => {
+                self.store[*callid].dst.map(|dst| (dst, "call-result"))
+            }
+            TraceIr::Mov(dst, src) => Some((
+                *dst,
+                self.prof_writer
+                    .get(src)
+                    .copied()
+                    .unwrap_or("param/outside-bb"),
+            )),
+            _ => None,
+        };
+        if let Some((dst, kind)) = dst_kind {
+            self.prof_writer.insert(dst, kind);
+        }
+    }
 }
