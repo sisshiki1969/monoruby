@@ -4,6 +4,8 @@ use crate::codegen::jitgen::context::DeferredForward;
 mod binop;
 mod index;
 mod join;
+#[cfg(feature = "profile")]
+pub(crate) mod join_profile;
 mod liveness;
 mod read_slot;
 mod slot;
@@ -1307,6 +1309,8 @@ impl ReturnState {
             self.ret = ReturnValue::Class(class);
             return;
         }
+        #[cfg(feature = "profile")]
+        join_profile::record_return(&self.ret, &other.ret);
         self.ret = ReturnValue::Value;
     }
 }

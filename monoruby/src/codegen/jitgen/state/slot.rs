@@ -2456,7 +2456,13 @@ impl Guarded {
     /// fused join's resulting type equals this meet for every non-sentinel slot
     /// (placement reconciliation is the rest of `join`).
     pub(super) fn join(&self, other: &Self) -> Self {
-        if self == other { *self } else { Guarded::Value }
+        if self == other {
+            *self
+        } else {
+            #[cfg(feature = "profile")]
+            super::join_profile::record_guarded(self, other);
+            Guarded::Value
+        }
     }
 }
 
