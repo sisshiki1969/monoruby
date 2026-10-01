@@ -160,6 +160,17 @@ fn encode_wait_status(status: &std::process::ExitStatus) -> i32 {
     status.into_raw()
 }
 
+/// Wait for a popen child and encode its status. This blocks for as long
+/// as the child runs, so a caller holding the GVL must wrap it in
+/// `scheduler::without_gvl` (see [`IoInner::close_detaching_child`]). It
+/// touches nothing the interpreter owns, which is what makes that legal.
+pub(crate) fn reap_child(mut child: std::process::Child) -> i32 {
+    match child.wait() {
+        Ok(s) => encode_wait_status(&s),
+        Err(_) => 0,
+    }
+}
+
 /// Whether an async signal handler has recorded a pending signal that the
 /// VM has not yet drained at a poll point.
 fn signal_pending() -> bool {
@@ -505,7 +516,10 @@ impl Drop for FileDescriptor {
 
 #[derive(Debug)]
 pub struct PopenDescriptor {
-    child: std::process::Child,
+    /// `None` only between [`IoInner::close_detaching_child`] taking the
+    /// child out and the stream becoming `Closed` on the next line, so no
+    /// reader ever observes it empty.
+    child: Option<std::process::Child>,
     pub(crate) reader: Option<IoReader<std::process::ChildStdout>>,
     pub(crate) writer: Option<IoWriter<std::process::ChildStdin>>,
     /// See `FileDescriptor::pushback`.
@@ -858,6 +872,22 @@ impl IoInner {
     /// callers (and `Process::Status`) can distinguish exit code, signal
     /// termination, and core-dump state.
     pub fn close(&mut self, store: &Store) -> Result<Option<(i32, u32)>> {
+        Ok(self
+            .close_detaching_child(store)?
+            .map(|(child, pid)| (reap_child(child), pid)))
+    }
+
+    /// `close`, but handing the popen child back rather than waiting for
+    /// it. The stream is `Closed` when this returns and the child lives
+    /// only in the returned value, so the caller can reap it with
+    /// [`reap_child`] from *outside* the GVL — which is the point: that
+    /// wait lasts as long as the child does, and in the 1:1 thread model
+    /// holding the GVL across it stops every other Ruby thread for the
+    /// duration (closing a `sleep 30` child's IO froze them for 30 s).
+    pub fn close_detaching_child(
+        &mut self,
+        store: &Store,
+    ) -> Result<Option<(std::process::Child, u32)>> {
         if self.is_closed() {
             return Err(MonorubyErr::ioerr("closed stream"));
         }
@@ -870,13 +900,12 @@ impl IoInner {
             let popen = Rc::get_mut(popen).unwrap();
             popen.reader = None;
             popen.writer = None;
-            popen.child.stdout.take();
-            let pid = popen.child.id();
-            let raw_status = match popen.child.wait() {
-                Ok(s) => encode_wait_status(&s),
-                Err(_) => 0,
-            };
-            Some((raw_status, pid))
+            let mut child = popen.child.take();
+            let pid = child.as_ref().map(|c| c.id());
+            if let Some(child) = child.as_mut() {
+                child.stdout.take();
+            }
+            child.zip(pid)
         } else {
             None
         };
@@ -1010,7 +1039,7 @@ impl IoInner {
         // is waiting on the other end of this pipe.
         let writer = child.stdin.take().map(|w| IoWriter::new(w, true, false));
         Self::with_kind(IoKind::Popen(Rc::new(PopenDescriptor {
-            child,
+            child: Some(child),
             reader,
             writer,
             pushback: RefCell::new(Vec::new()),
@@ -1019,7 +1048,7 @@ impl IoInner {
 
     pub(crate) fn pid(&self) -> Option<u32> {
         match &self.kind {
-            IoKind::Popen(popen) => Some(popen.child.id()),
+            IoKind::Popen(popen) => popen.child.as_ref().map(|c| c.id()),
             _ => None,
         }
     }
@@ -1913,7 +1942,7 @@ impl IoInner {
             IoKind::Stderr => Ok(2),
             IoKind::File(file) => Ok(file.reader.get_ref().as_raw_fd()),
             IoKind::Popen(popen) => {
-                if let Some(ref stdout) = popen.child.stdout {
+                if let Some(stdout) = popen.child.as_ref().and_then(|c| c.stdout.as_ref()) {
                     Ok(stdout.as_raw_fd())
                 } else if let Some(ref reader) = popen.reader {
                     Ok(reader.get_ref().as_raw_fd())
@@ -1933,7 +1962,7 @@ impl IoInner {
         if events & libc::POLLOUT != 0
             && let IoKind::Popen(popen) = &self.kind
         {
-            if let Some(ref stdin) = popen.child.stdin {
+            if let Some(stdin) = popen.child.as_ref().and_then(|c| c.stdin.as_ref()) {
                 return Ok(stdin.as_raw_fd());
             }
             if let Some(ref writer) = popen.writer {
