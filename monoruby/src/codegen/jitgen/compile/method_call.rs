@@ -765,6 +765,20 @@ impl<'a> JitContext<'a> {
             return Ok(CompileResult::Deopt);
         }
         let callsite = &self.store[callid];
+        // EXPERIMENT (lattice-spec): was the receiver's class proven by
+        // the abstract lattice *before* this dispatch emits its own
+        // guard — a TypeIc-speculated call result, a set-guard
+        // reflection, a narrowed branch — rather than by the dispatch
+        // guard itself? Sampled here, at function entry, because the
+        // dispatch guard below refines the slot and erases the
+        // distinction. `self` (%0) is excluded (its class is proven in
+        // every unit; admitting it would specialize every simple
+        // self-call), and so is `LinkMode::C` (the heap-constant
+        // receiver shape `is_C_immediate` deliberately excludes — see
+        // the `attr_reader_in_different_class` note at the gate).
+        let lattice_proven_recv = callsite.recv.0 != 0
+            && matches!(state.mode(callsite.recv), LinkMode::S(_))
+            && state.class(callsite.recv).is_some();
         self.inline_method_cache.push(InlineCacheEntry {
             recv_class,
             name: callsite.name,
@@ -1515,12 +1529,22 @@ impl<'a> JitContext<'a> {
                 // most: a computed float is neither an immediate constant
                 // nor a forwarded argument, so float-heavy call sites
                 // never specialized at all.
-                let specializable = self.store.is_simple_call(func_id, callid)
+                let base_specializable = self.store.is_simple_call(func_id, callid)
                     && (forwarding_callee
                         || state.is_C_immediate(callsite.recv)
                         || (pos_num != 0
                             && (args..args + pos_num)
                                 .any(|i| state.is_C_immediate(i) || state.is_fpr_resident(i))));
+                // EXPERIMENT (lattice-spec): a receiver the lattice had
+                // already proven (sampled at function entry, before the
+                // dispatch guard) opens the gate too, under a per-callee
+                // budget so one popular callee cannot buy a body per call
+                // site (the Object#should shape).
+                let lattice_spec = !base_specializable
+                    && lattice_proven_recv
+                    && self.store.is_simple_call(func_id, callid)
+                    && lattice_spec_budget_ok(iseq);
+                let specializable = base_specializable || lattice_spec;
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
                 // The forwarded `initialize` inside the Ruby `Class#new`
                 // (the privileged `recv.__builtin_initialize__(...)`
@@ -1577,6 +1601,9 @@ impl<'a> JitContext<'a> {
                     // See `callee_forwards_block` at the entry.
                     && !callee_forwards_block
                 {
+                    if lattice_spec {
+                        lattice_spec_bump(iseq);
+                    }
                     return self.specialized_iseq(
                         state,
                         ir,
@@ -3388,6 +3415,49 @@ const SPECIALIZE_DEPTH_LIMIT: usize = 3;
 /// trampoline materializes the rest `Array` that D1 exists to elide
 /// (`send` passes `defer_rest: false` unconditionally).
 const FORWARD_EXEMPT_RECURSION_CAP: usize = 32;
+
+/// EXPERIMENT (lattice-spec): per-callee budget for specializations
+/// opened by the lattice-proven-receiver trigger alone. Counted across
+/// the whole process (compilation runs under the GVL on the Vm's
+/// thread, so a plain thread-local map suffices); once a callee has
+/// been copied this many times by the new trigger, further sites fall
+/// back to the plain call, which is exactly today's behavior.
+const LATTICE_SPEC_BUDGET: u32 = 16;
+
+thread_local! {
+    static LATTICE_SPEC_COUNTS: std::cell::RefCell<std::collections::HashMap<ISeqId, u32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// (opened, budget-declined) — experiment telemetry, printed nowhere;
+    /// read ad hoc under a debugger or a temporary eprintln.
+    static LATTICE_SPEC_STATS: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+fn lattice_spec_budget_ok(iseq: ISeqId) -> bool {
+    let ok = LATTICE_SPEC_COUNTS
+        .with(|m| m.borrow().get(&iseq).copied().unwrap_or(0) < LATTICE_SPEC_BUDGET);
+    if !ok {
+        LATTICE_SPEC_STATS.with(|s| {
+            let (o, d) = s.get();
+            s.set((o, d + 1));
+        });
+    }
+    ok
+}
+
+fn lattice_spec_bump(iseq: ISeqId) {
+    LATTICE_SPEC_COUNTS.with(|m| *m.borrow_mut().entry(iseq).or_insert(0) += 1);
+    LATTICE_SPEC_STATS.with(|s| {
+        let (o, d) = s.get();
+        s.set((o + 1, d));
+    });
+}
+
+/// EXPERIMENT (lattice-spec): how often the new trigger opened the gate
+/// and how often the budget declined it.
+#[cfg_attr(not(feature = "profile"), allow(dead_code))]
+pub(crate) fn lattice_spec_stats() -> (u64, u64) {
+    LATTICE_SPEC_STATS.with(|s| s.get())
+}
 
 impl AbstractState {
     ///

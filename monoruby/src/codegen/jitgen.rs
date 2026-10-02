@@ -19,6 +19,8 @@ pub(in crate::codegen) use self::context::SplicePlan;
 pub(crate) use self::state::{AbstractFrame, AbstractState};
 #[cfg(feature = "profile")]
 pub(crate) use self::state::join_profile;
+#[cfg(feature = "profile")]
+pub(crate) use self::compile::lattice_spec_stats;
 use state::{DeoptPoint, FrameRef, Keep, LinkMode, ReturnState};
 
 use super::*;

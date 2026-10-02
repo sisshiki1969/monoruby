@@ -169,6 +169,11 @@ impl Globals {
                 );
             }
             self.dump_type_ic_stats();
+            {
+                let (opened, declined) = crate::codegen::jitgen::lattice_spec_stats();
+                eprintln!();
+                eprintln!(" lattice-spec experiment: opened {opened}  budget-declined {declined}");
+            }
             crate::codegen::jitgen::join_profile::dump_type_ic_lattice(&self.store);
             crate::codegen::jitgen::join_profile::dump(&self.store);
         }

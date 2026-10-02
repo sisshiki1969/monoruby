@@ -13,6 +13,8 @@ mod frameless;
 mod index;
 mod loop_analysis;
 mod method_call;
+#[cfg(feature = "profile")]
+pub(crate) use method_call::lattice_spec_stats;
 mod pic;
 mod variables;
 
