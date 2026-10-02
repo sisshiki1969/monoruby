@@ -3543,10 +3543,13 @@ mod tests {
         );
     }
 
-    /// `TypeIc` speculation, monomorphic: a call result whose site always
-    /// produced one class is guarded to it, and the next dispatch rides
-    /// the proof. The mixed phase then feeds a second class through the
-    /// same site — the guard must heal (TypeIcMiss ratchet), not wedge.
+    /// `TypeIc` recording under class churn: a site that warms
+    /// monomorphic, then feeds a second class, then a third — the
+    /// recorder advances mono → bi → mega while compiled code keeps
+    /// running the site, and the answers stay exact throughout. (The
+    /// speculation phase that briefly consumed this feedback was
+    /// reverted — see the `TraceIr::TypeIc` arm — but the recording it
+    /// pinned is the census's substrate and must survive recompiles.)
     #[test]
     fn type_ic_mono_then_poly() {
         run_test_with_prelude(
@@ -3585,9 +3588,10 @@ mod tests {
         );
     }
 
-    /// `TypeIc` speculation over `{NilClass, c}`: the pair folds to
-    /// `NilOr(c)` under a membership guard, branch narrowing consumes it,
-    /// and the truthy side dispatches on the proven class.
+    /// A `{NilClass, c}` `TypeIc` site: the alternating nil/object
+    /// result is recorded as the bi-class pair while the branchy
+    /// consumer compiles and runs — exactness under the shape the
+    /// `NilOr` lattice work targets.
     #[test]
     fn type_ic_nil_or() {
         run_test_with_prelude(
@@ -3621,13 +3625,12 @@ mod tests {
     }
 
     /// A mono-`Integer` `TypeIc` site that starts producing Bignums: the
-    /// recorder latches megamorphic (the `INTEGER` guard key is a
-    /// fixnum-tag test a Bignum can never pass — recording it as
-    /// `INTEGER` would freeze the word while a speculated guard deopts
-    /// forever). Numeric proofs are currently not speculated on at all,
-    /// so this exercises the recorder's latch and exactness only; it
-    /// becomes load-bearing again the moment a consumer starts using
-    /// mono-`INTEGER` `TypeIc` feedback.
+    /// recorder latches megamorphic (the `INTEGER` cache key licenses a
+    /// fixnum-tag guard a Bignum can never pass, so recording the
+    /// matching class id would freeze the word and leave any future
+    /// consumer of the feedback deopting forever) — and the sums stay
+    /// exact. Load-bearing for whichever consumer reads the IC next; the
+    /// census reports such sites as megamorphic rather than mono.
     #[test]
     fn type_ic_bignum_latch() {
         run_test_with_prelude(

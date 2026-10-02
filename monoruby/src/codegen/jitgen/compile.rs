@@ -955,14 +955,26 @@ impl<'a> JitContext<'a> {
                 // nothing, so the ④-b proofs pass straight through.
                 self.restore_unfrozen(None);
             }
-            TraceIr::TypeIc(reg, a, b) => {
-                // Speculation phase: turn the VM-recorded class(es) into a
-                // runtime-guarded lattice proof on the register (see
-                // `speculate_type_ic`). The ④-b proofs still pass through
-                // like the InlineCache word's: the guard reads the slot and
-                // writes nothing, so a frozen proof about it survives.
+            TraceIr::TypeIc(..) => {
+                // Profile-only — the VM records, the JIT emits nothing
+                // (and must not count the slot as used). The proofs pass
+                // through like the InlineCache word's.
+                //
+                // A speculation phase lived here briefly (#1695): mono →
+                // `GuardClass` + typed slot, `{nil, c}` → `GuardClassIn` +
+                // `NilOr(c)`, healed by a counter-gated `TypeIcMiss`
+                // recompile. It was reverted on evidence: wall time moved
+                // nowhere (class guards are free, and the downstream
+                // consumers' own guards already established the same
+                // classes), and the gate-relaxation experiment built on
+                // top of it showed the hot sites' types are carried by
+                // specialization, not by this aggregate per-bytecode
+                // cache (lattice-vs-IC divergence profile: on
+                // activerecord, 53% of exec-weight sat where the lattice
+                // was typed and the IC had gone megamorphic). The IC
+                // itself stays: the census and the divergence profile it
+                // feeds are how that evidence was gathered.
                 self.restore_unfrozen(None);
-                self.speculate_type_ic(state, ir, reg, a, b);
             }
 
             TraceIr::ArrayTEq { lhs, rhs } => {
