@@ -1620,15 +1620,93 @@ impl Codegen {
 
     /// op 131 `TypeIc`: record the class of slot `:1`'s value into the
     /// instruction's own cache words (`runtime::vm_record_type_ic`).
+    /// `TypeIc` (op 131): the hot shapes — the cache is latched
+    /// megamorphic, or the observed class is already recorded — settle
+    /// inline without leaving the dispatch loop. The inline classifier
+    /// mirrors `Value::class_for_ic` (booleans fold to `BOOL`); only a
+    /// cache that has to change calls the recorder, plus the one key the
+    /// inline path must not settle: a heap `Integer` (Bignum), whose
+    /// honest record is the megamorphic latch — see
+    /// `vm_record_type_ic`. The execution counter (op1's low u32,
+    /// saturating) is maintained here unconditionally; the recorder no
+    /// longer touches it.
     fn vm_type_ic(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
+        let count_done = self.jit.label();
+        let not_fixnum = self.jit.label();
+        let not_flonum = self.jit.label();
+        let imm_other = self.jit.label();
+        let not_nil = self.jit.label();
+        let not_bool = self.jit.label();
+        let have_c = self.jit.label();
+        let slow = self.jit.label();
+        let done = self.jit.label();
         self.fetch2();
         self.vm_get_slot_value(GP::R15);
         monoasm! { &mut self.jit,
+            // Saturating execution counter in op1's low u32.
+            cmpl [r13 - 16], (-1);
+            je   count_done;
+            addl [r13 - 16], 1;
+        count_done:
+            // Cache slot b (op2's high u32); u32::MAX is the megamorphic
+            // latch — nothing can change any more. `movl` zero-extends,
+            // so the compares below can be 64-bit.
+            movl rsi, [r13 - 4];
+            cmpl rsi, (-1);
+            je   done;
+            // The observed value's cache class, without a call.
+            testq r15, 0b001;
+            jz   not_fixnum;
+            movl rax, (INTEGER_CLASS.u32());
+            jmp  have_c;
+        not_fixnum:
+            testq r15, 0b010;
+            jz   not_flonum;
+            movl rax, (FLOAT_CLASS.u32());
+            jmp  have_c;
+        not_flonum:
+            testq r15, 0b111;
+            jnz  imm_other;
+            // Heap pointer: the RValue's class word — except a heap
+            // `Integer`, which must latch megamorphic.
+            movl rax, [r15 + (RVALUE_OFFSET_CLASS)];
+            cmpl rax, (INTEGER_CLASS.u32());
+            je   slow;
+            jmp  have_c;
+        imm_other:
+            cmpq r15, (NIL_VALUE);
+            jne  not_nil;
+            movl rax, (NIL_CLASS.u32());
+            jmp  have_c;
+        not_nil:
+            // true (0x1c) and false (0x14) differ only in bit 3: OR it in
+            // and both collapse to TRUE_VALUE (`class_for_ic` folds them
+            // to `BOOL`).
+            movq rcx, r15;
+            orq  rcx, 0b1000;
+            cmpq rcx, (TRUE_VALUE);
+            jne  not_bool;
+            movl rax, (BOOL_CLASS.u32());
+            jmp  have_c;
+        not_bool:
+            movq rcx, r15;
+            andq rcx, 0xff;
+            cmpq rcx, (TAG_SYMBOL);
+            jne  slow;
+            movl rax, (SYMBOL_CLASS.u32());
+        have_c:
+            cmpq rax, rsi;          // c == b?
+            je   done;
+            movl rcx, [r13 - 8];    // cache slot a (op2's low u32)
+            cmpq rax, rcx;          // c == a?
+            je   done;
+        slow:
             lea  rdi, [r13 - 16];   // &this instruction
             movq rsi, r15;          // the observed value
             movq rax, (runtime::vm_record_type_ic);
             call rax;
+        done:
         };
         self.fetch_and_dispatch();
         label
