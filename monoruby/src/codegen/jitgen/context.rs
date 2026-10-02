@@ -918,15 +918,6 @@ impl JitStackFrame {
 ///
 /// Context for JIT compilation.
 ///
-/// See [`JitContext::nil_pred`].
-#[derive(Debug, Clone, Copy)]
-pub(super) struct NilPred {
-    /// The slot the inlined `nil?` wrote its boolean result into.
-    pub(super) dst: SlotId,
-    /// The receiver the boolean speaks about.
-    pub(super) recv: SlotId,
-}
-
 pub(crate) struct JitContext<'a> {
     pub store: &'a Store,
     codegen_mode: bool,
@@ -956,15 +947,6 @@ pub(crate) struct JitContext<'a> {
     /// `instr_unfrozen_contains`, published back via `restore_unfrozen`.
     pub(super) instr_unfrozen: Vec<SlotId>,
 
-    /// Phase-2 branch peephole: the instruction just compiled was the
-    /// inlined builtin `Kernel#nil?`, writing `(recv == nil)` into `dst`
-    /// (`dst != recv`). An *immediately following* `CondBr dst` narrows
-    /// `recv` on both sides (truthy: `recv` is `nil`; falsy: a
-    /// `NilOr(g)` recovers `g`). `compile_instruction` takes it at the
-    /// head of every instruction — the pattern is strictly adjacent, so
-    /// anything in between drops it — and `compile_basic_block` leaves
-    /// it cleared at BB entry (a merge makes no path promise).
-    pub(super) nil_pred: Option<NilPred>,
 
     ///
     /// Monotone count of capture-relevant compile events — see
@@ -1125,7 +1107,6 @@ impl<'a> JitContext<'a> {
             fused_skip: None,
             unfrozen_slots: Vec::new(),
             instr_unfrozen: Vec::new(),
-            nil_pred: None,
             capture_events: 0,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,
@@ -1185,7 +1166,6 @@ impl<'a> JitContext<'a> {
             widened_outer_log: vec![],
             unfrozen_slots: Vec::new(),
             instr_unfrozen: Vec::new(),
-            nil_pred: None,
             capture_events: 0,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,

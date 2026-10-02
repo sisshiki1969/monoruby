@@ -136,10 +136,6 @@ impl<'a> JitContext<'a> {
         // no promise about every incoming path, and a loop head's safepoint
         // is a preemption point where another thread can `freeze` an object.
         self.unfrozen_slots.clear();
-        // The nil?-peephole fact is a straight-line fact too: a fact left
-        // by the previous BB's last instruction must not survive into a
-        // block other paths can enter.
-        self.nil_pred = None;
 
         let mut state = match self.incoming_context(bbid, false)? {
             Some(bb) => bb,
@@ -433,11 +429,6 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         assert!(state.no_capture_guard());
-        // Phase-2 branch peephole: the fact an inlined `nil?` left behind
-        // is valid only for the *immediately following* instruction — take
-        // it here, so anything that is not the consuming `CondBr` drops it
-        // (the `nil?` lowering of THIS instruction re-arms it).
-        let nil_pred = self.nil_pred.take();
         // A fusing arm (e.g. `try_fuse_array_minmax`) already emitted this
         // instruction's work together with its predecessor's.
         if self.fused_skip == Some(bc_pos) {
@@ -961,11 +952,8 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::InlineCache => {
                 // The operand-carrier word of a two-word instruction: emits
-                // nothing, so the ④-b proofs pass straight through — and so
-                // does the nil?-peephole fact (the call that set it ends at
-                // this word; the next real instruction is its successor).
+                // nothing, so the ④-b proofs pass straight through.
                 self.restore_unfrozen(None);
-                self.nil_pred = nil_pred;
             }
 
             TraceIr::ArrayTEq { lhs, rhs } => {
@@ -1411,26 +1399,6 @@ impl<'a> JitContext<'a> {
                         };
                         side_state.set_S_with_guard(cond_, taken);
                         state.set_S_with_guard(cond_, fallthrough);
-                    }
-                    // Phase-2 peephole: the condition is the boolean an
-                    // inlined `nil?` wrote in the immediately preceding
-                    // instruction, so it decides `recv`'s nil-ness, not
-                    // just its own truthiness: the side where it is true
-                    // has `recv == nil`; the other side recovers a
-                    // `NilOr`'s non-nil half. State-only, `recv` only.
-                    if let Some(context::NilPred { dst, recv }) = nil_pred
-                        && dst == cond_
-                    {
-                        let (nil_side, non_nil_side) = match brkind {
-                            BrKind::BrIf => (&mut side_state, &mut *state),
-                            BrKind::BrIfNot => (&mut *state, &mut side_state),
-                        };
-                        if matches!(nil_side.mode(recv), LinkMode::S(_)) {
-                            nil_side.set_S_with_guard(recv, Guarded::Class(NIL_CLASS));
-                        }
-                        if let LinkMode::S(Guarded::NilOr(g)) = non_nil_side.mode(recv) {
-                            non_nil_side.set_S_with_guard(recv, g.into());
-                        }
                     }
                     self.gen_cond_br(side_state, ir, bc_pos, dest_bb, brkind);
                 }
