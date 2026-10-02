@@ -340,13 +340,6 @@ impl<'a> JitContext<'a> {
             || self.in_dispatch_arm()
             || !self.generic_send_eligible(callid)
             || self.store[func_id].possibly_capture_without_block()
-            // A receiver the state proves `NilOr(g)` can only be `nil` or a
-            // `g` — both inside the same-target set the plain path guards —
-            // so the residual arm is dead weight, and building it costs the
-            // nil?-peephole its fact (the fact must assume the residual's
-            // by-name re-dispatch could reach a redefined `nil?`). Let the
-            // plain set-guarded form compile instead.
-            || matches!(state.mode(recv), LinkMode::S(Guarded::NilOr(_)))
         {
             return Ok(None);
         }
@@ -1006,34 +999,6 @@ impl<'a> JitContext<'a> {
                         let proven = (!same_target_set_guarded).then_some(recv_class);
                         if self.inline_asm(state, ir, f, callid, proven, arg_class) {
                             state.unset_side_effect_guard();
-                            // Phase-2 branch peephole: an inlined builtin
-                            // `nil?` left `(recv == nil)` in `dst` — the
-                            // dispatch guards above pin the resolution to
-                            // the builtin, so the boolean is trustworthy.
-                            // Record the fact for an immediately following
-                            // `CondBr dst` (`compile_instruction` drops it
-                            // on the next instruction otherwise).
-                            // Only when this inline is the *sole* writer
-                            // of `dst` in the instruction: inside a PIC arm
-                            // (`in_dispatch_arm`) or beside a residual arm,
-                            // another arm re-dispatches `nil?` by name for
-                            // the classes this arm never sees — a receiver
-                            // whose `nil?` is redefined would make the
-                            // boolean lie about recv's nil-ness, and the
-                            // narrowed continuation would run on it.
-                            if Some(func_id) == self.store.kernel_nil()
-                                && !self.in_dispatch_arm()
-                                && !matches!(recv_miss, RecvMissMode::Residual(_))
-                                && let CallSiteInfo {
-                                    recv,
-                                    dst: Some(dst),
-                                    ..
-                                } = *callsite
-                                && dst != recv
-                            {
-                                self.nil_pred =
-                                    Some(crate::codegen::jitgen::context::NilPred { dst, recv });
-                            }
                             return Ok(CompileResult::Continue);
                         }
                     }

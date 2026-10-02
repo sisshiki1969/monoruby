@@ -26,14 +26,13 @@ pub fn define_loop_mode_builtins(globals: &mut Globals) {
 pub(super) fn init(globals: &mut Globals) -> Module {
     let klass = globals.define_toplevel_module("Kernel");
     let kernel_class = klass.id();
-    let nil_fid = globals.define_builtin_inline_func(
+    globals.define_builtin_inline_func(
         kernel_class,
         "nil?",
         nil,
         inline_gen2!(kernel_nil),
         0,
     );
-    globals.store.set_kernel_nil(nil_fid);
     globals.define_builtin_inline_func(
         kernel_class,
         "!~",

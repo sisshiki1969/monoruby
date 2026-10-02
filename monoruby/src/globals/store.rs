@@ -187,9 +187,6 @@ pub struct Store {
     /// FuncId of the default `BasicObject#!=`, used to recognize that an
     /// unredefined `!=` may be computed as `!(a == b)` without dispatch.
     default_neq: Option<FuncId>,
-    /// FuncId of the builtin `Kernel#nil?`, used by the JIT's branch
-    /// peephole to recognize an inlined `nil?` feeding the next `CondBr`.
-    kernel_nil: Option<FuncId>,
     /// FuncIds of the default `initialize_copy` / `initialize_dup` /
     /// `initialize_clone` builtins. `Kernel#dup` / `#clone` compare a
     /// class's resolved hooks against these to recognize the no-op case
@@ -871,7 +868,6 @@ impl Store {
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
             default_neq: None,
-            kernel_nil: None,
             default_copy_hooks: None,
             method_cache: RefCell::new(GlobalMethodCache::default()),
             compile_warnings: vec![],
@@ -2003,13 +1999,6 @@ impl Store {
         self.default_neq = Some(fid);
     }
 
-    pub(crate) fn set_kernel_nil(&mut self, fid: FuncId) {
-        self.kernel_nil = Some(fid);
-    }
-
-    pub(crate) fn kernel_nil(&self) -> Option<FuncId> {
-        self.kernel_nil
-    }
 
     /// Record the FuncIds of the default `initialize_copy` /
     /// `initialize_dup` / `initialize_clone` builtins (see
