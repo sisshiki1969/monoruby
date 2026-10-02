@@ -236,6 +236,14 @@ impl<'a> BytecodeGen<'a> {
                 let op1 = self.slot_id(&local);
                 Bytecode::from(enc_wl(19, op1.0, 0))
             }
+            BytecodeInst::TypeIc(reg) => {
+                // 131. op1 low 32 bits: saturating execution counter;
+                // op2: the two observed cache classes (0 = empty slot,
+                // u32::MAX in the second = megamorphic) — all written by
+                // the VM handler (`runtime::vm_record_type_ic`).
+                let op1 = self.slot_id(&reg);
+                Bytecode::from(enc_wl(131, op1.0, 0))
+            }
             BytecodeInst::OptCase {
                 reg,
                 min,

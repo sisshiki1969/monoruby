@@ -189,6 +189,7 @@ impl Codegen {
         let block_arg = self.a64_op_block_arg();
         let check_cvar = self.a64_op_check_cvar();
         let check_kw_rest = self.a64_op_check_kw_rest();
+        let type_ic = self.a64_op_type_ic();
 
         let load_dvar = self.a64_op_load_dvar();
         let store_dvar = self.a64_op_store_dvar();
@@ -230,6 +231,7 @@ impl Codegen {
             store_ivar,
             check_const,
             check_kw_rest,
+            type_ic,
             check_local,
             block_arg_proxy,
             singleton_class_def,
@@ -538,6 +540,25 @@ impl Codegen {
 
     /// op 19 `CheckKwRest`: if the kw-rest slot `[pc+4]` is nil, replace it
     /// with a fresh empty hash.
+    /// op 131 `TypeIc`: record the class of slot `[pc+4]`'s value into the
+    /// instruction's own cache words (`runtime::vm_record_type_ic`).
+    pub(in crate::codegen) fn a64_op_type_ic(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0), #(4)];
+        );
+        self.a64_slot_addr(X10);
+        monoasm_arm64!(&mut self.jit,
+            ldr x1, [x10];          // the observed value
+            mov x0, x(PC.0);        // &this instruction
+            mov x9, (runtime::vm_record_type_ic as *const () as u64);
+            blr x9;
+            add x(PC.0), x(PC.0), #(16);
+        );
+        self.a64_fetch_and_dispatch();
+        p
+    }
+
     pub(in crate::codegen) fn a64_op_check_kw_rest(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let exit = self.jit.label();

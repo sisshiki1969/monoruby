@@ -759,7 +759,7 @@ impl ISeqInfo {
     ///
     /// Get a reference of bytecode.
     ///
-    fn bytecode(&self) -> &[Bytecode] {
+    pub(crate) fn bytecode(&self) -> &[Bytecode] {
         self.bytecode.as_ref().unwrap()
     }
 
