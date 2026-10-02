@@ -342,7 +342,7 @@ pub(in crate::codegen::jitgen) fn record_type_ic(
     a: Option<CachedClass>,
     b: Option<CachedClass>,
     execs: u32,
-) {
+) -> Option<IcLattice> {
     let lattice = match mode {
         LinkMode::S(Guarded::Value) => None,
         LinkMode::S(g) => Some(g),
@@ -357,7 +357,7 @@ pub(in crate::codegen::jitgen) fn record_type_ic(
             g => Some(g),
         },
         // Not a value-bearing state; a TypeIc should never see these.
-        LinkMode::V | LinkMode::None | LinkMode::MaybeNone => return,
+        LinkMode::V | LinkMode::None | LinkMode::MaybeNone => return None,
     };
     // The IC's proof: megamorphic latch first ((0, MEGA) is a Bignum
     // latch on a never-otherwise-recorded site, not an empty IC).
@@ -417,6 +417,7 @@ pub(in crate::codegen::jitgen) fn record_type_ic(
         ent.0 += 1;
         ent.1 += e;
     }
+    Some(bucket)
 }
 
 pub(crate) fn dump_type_ic_lattice(store: &Store) {

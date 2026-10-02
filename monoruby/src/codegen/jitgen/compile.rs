@@ -961,12 +961,28 @@ impl<'a> JitContext<'a> {
                 // codegen pass (the analysis pass sees the same state).
                 #[cfg(feature = "profile")]
                 if ir.codegen_mode() {
-                    crate::codegen::jitgen::join_profile::record_type_ic(
+                    use crate::codegen::jitgen::join_profile::{self, IcLattice};
+                    let bucket = join_profile::record_type_ic(
                         state.mode(reg),
                         a,
                         b,
                         (*state.pc()).op1() as u32,
                     );
+                    // Investigation probe: name every genuine
+                    // lattice/IC contradiction as it is compiled.
+                    if bucket == Some(IcLattice::TypedDisjoint) {
+                        let fid = self.iseq().func_id();
+                        eprintln!(
+                            "[ic-contradiction] {} [bc:{:?}] unit={} level={} lattice={:?} ic=[{:?}|{:?}]",
+                            self.store.func_description(fid),
+                            bc_pos,
+                            if self.is_specialized() { "specialized" } else { "whole" },
+                            self.specialize_level(),
+                            state.mode(reg),
+                            a.map(|c| self.store.debug_class_name(c.id())),
+                            b.map(|c| self.store.debug_class_name(c.id())),
+                        );
+                    }
                 }
                 // Speculation phase: turn the VM-recorded class(es) into a
                 // runtime-guarded lattice proof on the register (see
