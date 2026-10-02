@@ -140,6 +140,68 @@ impl Codegen {
         );
     }
 
+    /// Inlined `Integer#[nth]` for a *variable* fixnum `nth`: the same
+    /// tagged-form trick as [`Self::gen_bit_index_imm`], with the shift
+    /// amount clamped at run time and a negative `nth` answering 0.
+    /// aarch64 twin of the x86 `gen_bit_index_var`: self in Rdi (x4),
+    /// nth in Rcx (both tagged fixnums, nth guarded by the caller);
+    /// result in Rdi; destroys Rcx and x9.
+    pub(crate) fn gen_bit_index_var(&mut self) {
+        let rdi = GP::Rdi.a64().0;
+        let rcx = GP::Rcx.a64().0;
+        let neg = self.jit.label();
+        let fin = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            asr x(rcx), x(rcx), #(1);      // raw nth
+            tbnz x(rcx), #(63), neg;       // negative bit position reads 0
+            mov x9, #(63);
+            cmp x(rcx), x9;
+            csel x(rcx), x9, x(rcx), gt;   // past the fixnum: sign replicates
+            asr x(rdi), x(rdi), x(rcx);    // bit nth of n = bit nth+1 of 2n+1
+            mov x9, #(2);
+            and x(rdi), x(rdi), x9;
+            mov x9, #(1);
+            orr x(rdi), x(rdi), x9;
+            b fin;
+        neg:
+            mov x(rdi), #(1);              // Fixnum 0
+        fin:
+        );
+    }
+
+    /// Inlined `Integer#even?` / `#odd?`: bit 0 of `n` is bit 1 of the
+    /// tagged `2n+1`, so mask it, (for `even?`) flip it, and widen the
+    /// 0/2 into `FALSE_VALUE` (0x14) / `TRUE_VALUE` (0x1c), which differ
+    /// exactly in bit 3. Branchless; self in/out Rdi (x4), destroys x9.
+    pub(crate) fn gen_fixnum_parity(&mut self, odd: bool) {
+        let rdi = GP::Rdi.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            mov x9, #(2);
+            and x(rdi), x(rdi), x9;
+        );
+        if !odd {
+            monoasm_arm64!(&mut self.jit,
+                eor x(rdi), x(rdi), x9;
+            );
+        }
+        monoasm_arm64!(&mut self.jit,
+            lsl x(rdi), x(rdi), #(2);
+            add x(rdi), x(rdi), #(FALSE_VALUE as u32);
+        );
+    }
+
+    /// Inlined `Integer#zero?`: the tagged fixnum 0 is exactly 1.
+    /// self in/out Rdi (x4); destroys x9 and x10.
+    pub(crate) fn gen_fixnum_zero_p(&mut self) {
+        let rdi = GP::Rdi.a64().0;
+        monoasm_arm64!(&mut self.jit,
+            cmp x(rdi), #(1);
+            mov x9, #(TRUE_VALUE as u32);
+            mov x10, #(FALSE_VALUE as u32);
+            csel x(rdi), x9, x10, eq;
+        );
+    }
+
     /// Inlined `Integer#<<` by a constant shift amount, with a fixnum-overflow
     /// guard that deopts. Operand `2n+1` in Rdi (x4). aarch64 twin of x86
     /// `gen_shl_rhs_imm`. x86 uses `lzcnt` for the overflow test; monoasm has
