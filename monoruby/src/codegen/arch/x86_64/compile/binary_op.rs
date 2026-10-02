@@ -782,6 +782,83 @@ impl Codegen {
     }
 
     ///
+    /// Inlined `Integer#[nth]` for a *variable* fixnum `nth`: the same
+    /// tagged-form trick as [`Self::gen_bit_index_imm`], with the shift
+    /// amount clamped at run time and a negative `nth` answering 0.
+    ///
+    /// ### in
+    /// - rdi: self:Value (fixnum)
+    /// - rcx: nth:Value (fixnum, guarded by the caller)
+    ///
+    /// ### out
+    /// - rdi: result:Value (fixnum 0 or 1)
+    ///
+    /// ### destroy
+    /// - rcx
+    ///
+    pub(crate) fn gen_bit_index_var(&mut self) {
+        let neg = self.jit.label();
+        let sh = self.jit.label();
+        let fin = self.jit.label();
+        monoasm! { &mut self.jit,
+            sarq rcx, 1;        // raw nth
+            js   neg;           // a negative bit position always reads 0
+            cmpq rcx, 63;
+            jle  sh;
+            movq rcx, 63;       // past the fixnum: the sign bit replicates
+        sh:
+            sarq rdi, rcx;      // bit nth of n = bit nth+1 of 2n+1 -> bit 1
+            andq rdi, 2;
+            orq  rdi, 1;
+            jmp  fin;
+        neg:
+            movq rdi, 1;        // Fixnum 0
+        fin:
+        }
+    }
+
+    ///
+    /// Inlined `Integer#even?` / `#odd?`: bit 0 of `n` is bit 1 of the
+    /// tagged `2n+1`, so mask it, (for `even?`) flip it, and widen the
+    /// 0/2 into `FALSE_VALUE` (0x14) / `TRUE_VALUE` (0x1c), which differ
+    /// exactly in bit 3. Branchless.
+    ///
+    /// ### in/out
+    /// - rdi: self:Value (fixnum) -> result:Value (true/false)
+    ///
+    pub(crate) fn gen_fixnum_parity(&mut self, odd: bool) {
+        monoasm! { &mut self.jit,
+            andq rdi, 2;
+        }
+        if !odd {
+            monoasm! { &mut self.jit,
+                xorq rdi, 2;
+            }
+        }
+        monoasm! { &mut self.jit,
+            shlq rdi, 2;
+            orq  rdi, (FALSE_VALUE);
+        }
+    }
+
+    ///
+    /// Inlined `Integer#zero?`: the tagged fixnum 0 is exactly 1.
+    ///
+    /// ### in/out
+    /// - rdi: self:Value (fixnum) -> result:Value (true/false)
+    ///
+    pub(crate) fn gen_fixnum_zero_p(&mut self) {
+        let fin = self.jit.label();
+        monoasm! { &mut self.jit,
+            cmpq rdi, 1;
+            movq rdi, (FALSE_VALUE);
+            jne  fin;
+            movq rdi, (TRUE_VALUE);
+        fin:
+        }
+    }
+
+    ///
     /// gen code for shift-left of integer.
     ///
     /// ### in

@@ -125,10 +125,28 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         2,
         false,
     );
-    globals.define_builtin_func(INTEGER_CLASS, "even?", even_, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "odd?", odd_, 0);
+    globals.define_builtin_inline_func(
+        INTEGER_CLASS,
+        "even?",
+        even_,
+        inline_gen2!(integer_pred(IntegerPred::Even)),
+        0,
+    );
+    globals.define_builtin_inline_func(
+        INTEGER_CLASS,
+        "odd?",
+        odd_,
+        inline_gen2!(integer_pred(IntegerPred::Odd)),
+        0,
+    );
     globals.define_builtin_func(INTEGER_CLASS, "nonzero?", nonzero_, 0);
-    globals.define_builtin_func(INTEGER_CLASS, "zero?", zero_, 0);
+    globals.define_builtin_inline_func(
+        INTEGER_CLASS,
+        "zero?",
+        zero_,
+        inline_gen2!(integer_pred(IntegerPred::Zero)),
+        0,
+    );
     globals.define_builtin_func(INTEGER_CLASS, "size", size, 0);
     globals.define_builtin_func(INTEGER_CLASS, "bit_length", bit_length, 0);
     // `inspect` is a true alias of `to_s` (shares one FuncId), so
@@ -1124,7 +1142,14 @@ fn integer_index(
         dst, args, recv, ..
     } = *callsite;
     let Some(nth) = state.is_fixnum_literal(args) else {
-        return false;
+        // A variable index: guard it fixnum and shift by register — the
+        // same tagged-form trick as the immediate path, clamped and
+        // negative-checked at run time (`gen_bit_index_var`).
+        state.load(ir, recv, GP::Rdi);
+        state.load_fixnum(ir, args, GP::Rcx);
+        ir.inline(move |r#gen, _, _, _| r#gen.gen_bit_index_var());
+        state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+        return true;
     };
     let nth = nth.get();
 
@@ -1146,6 +1171,48 @@ fn integer_index(
     ir.inline(move |r#gen, _, _, _| r#gen.gen_bit_index_imm(nth));
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
+}
+
+///
+/// Inline generator for `Integer#even?` / `#odd?` / `#zero?`: the
+/// receiver is a guard-proven fixnum, so each is a few branchless
+/// instructions on the tagged word (see the arch `gen_fixnum_parity` /
+/// `gen_fixnum_zero_p`). The result slot is typed `BOOL`.
+fn integer_pred(
+    kind: IntegerPred,
+) -> impl Fn(
+    &mut AbstractState,
+    &mut AsmIr,
+    &JitContext,
+    &Store,
+    CallSiteId,
+    Option<CachedClass>,
+    Option<CachedClass>,
+) -> bool {
+    move |state, ir, _, store, callid, _, _| {
+        let callsite = &store[callid];
+        if !callsite.is_simple() || callsite.pos_num != 0 {
+            return false;
+        }
+        let CallSiteInfo { dst, recv, .. } = *callsite;
+        if let Some(dst) = dst {
+            state.load(ir, recv, GP::Rdi);
+            ir.inline(move |r#gen, _, _, _| match kind {
+                IntegerPred::Even => r#gen.gen_fixnum_parity(false),
+                IntegerPred::Odd => r#gen.gen_fixnum_parity(true),
+                IntegerPred::Zero => r#gen.gen_fixnum_zero_p(),
+            });
+            state.def_reg2acc_class(ir, GP::Rdi, dst, BOOL_CLASS);
+        }
+        true
+    }
+}
+
+#[derive(Clone, Copy)]
+enum IntegerPred {
+    Even,
+    Odd,
+    Zero,
 }
 
 ///
@@ -2328,6 +2395,50 @@ mod tests {
     #[test]
     fn integer_index_negative() {
         run_tests(&["0b11010[-2, 3]", "0b11010[1, 3]"]);
+    }
+
+    /// `Integer#[nth]` with a *variable* `nth` is JIT-inlined by
+    /// `integer_index`'s register-shift path (`gen_bit_index_var`):
+    /// positive, negative and past-the-fixnum positions, a negative
+    /// receiver (sign replication), a Bignum receiver (stays on the
+    /// generic path via the receiver guard) and a Bignum index (fixnum
+    /// guard deopts to the exact C implementation).
+    #[test]
+    fn integer_index_variable() {
+        run_test(
+            r#"
+        res = []
+        n = 0b1011010
+        m = -6
+        big = 1 << 70
+        40.times do |i|
+          idx = i - 3
+          res << n[idx] << m[idx] << big[idx]
+        end
+        res << n[10_000_000_000] << m[10_000_000_000] << n[1 << 70]
+        res
+        "#,
+        );
+    }
+
+    /// `Integer#even?` / `#odd?` / `#zero?` are JIT-inlined to a few
+    /// branchless instructions on the tagged word; the sums pin the
+    /// answers across the JIT threshold, including negative receivers.
+    #[test]
+    fn integer_pred_inline() {
+        run_test(
+            r#"
+        res = 0
+        40.times do |i|
+          j = i - 20
+          res += 1 if j.even?
+          res += 2 if j.odd?
+          res += 4 if j.zero?
+          res += 8 if (j * 2).even?
+        end
+        [res, 0.zero?, 1.zero?, (-3).odd?, (-4).even?]
+        "#,
+        );
     }
 
     /// `Integer#[nth]` with a literal `nth` is JIT-inlined by `integer_index`
