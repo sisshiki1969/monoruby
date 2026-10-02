@@ -323,7 +323,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         inline_gen2!(super::object::object_object_id),
         0,
     );
-    globals.define_builtin_inline_func_with(
+    let respond_to_fid = globals.define_builtin_inline_func_with(
         kernel_class,
         "respond_to?",
         respond_to,
@@ -332,6 +332,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         2,
         false,
     );
+    globals.store.set_respond_to_fid(respond_to_fid);
     globals.define_builtin_func(kernel_class, "singleton_class", singleton_class, 0);
     globals.define_builtin_func(kernel_class, "to_s", to_s, 0);
     globals.define_builtin_func(kernel_class, "inspect", inspect, 0);

@@ -104,6 +104,11 @@ pub struct Store {
     /// Ruby frame (#1665). See `method_call_inline_bails`.
     kernel_binding_fid: Option<FuncId>,
     array_hash_fid: Option<FuncId>,
+    /// The standard `Kernel#respond_to?` builtin, recorded at registration:
+    /// the runtime conversion probes (`default_responds_to`) take their
+    /// frame-free fast path only when a receiver resolves `respond_to?` to
+    /// exactly this body.
+    respond_to_fid: Option<FuncId>,
     hash_hash_fid: Option<FuncId>,
     /// `FuncId` of the Ruby `Class#new` trampoline (`builtins/class.rb`),
     /// recorded once the bootstrap sources have loaded. The JIT compares a
@@ -852,6 +857,7 @@ impl Store {
             class_new_fid: None,
             object_send_fids: vec![],
             array_hash_fid: None,
+            respond_to_fid: None,
             hash_hash_fid: None,
             iseqs: vec![],
             literals: vec![],
@@ -1121,6 +1127,14 @@ impl Store {
 
     pub(crate) fn set_array_hash_fid(&mut self, fid: FuncId) {
         self.array_hash_fid = Some(fid);
+    }
+
+    pub(crate) fn set_respond_to_fid(&mut self, fid: FuncId) {
+        self.respond_to_fid = Some(fid);
+    }
+
+    pub(crate) fn respond_to_fid(&self) -> Option<FuncId> {
+        self.respond_to_fid
     }
 
     pub(crate) fn set_hash_hash_fid(&mut self, fid: FuncId) {
