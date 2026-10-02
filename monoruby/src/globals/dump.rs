@@ -209,9 +209,12 @@ impl Globals {
                 let op2 = bc.op2();
                 let (a, b) = (op2 as u32, (op2 >> 32) as u32);
                 let bucket = match (a, b) {
+                    // Before the empty arm: a Bignum latches megamorphic
+                    // without ever filling the first slot, so (0, MEGA)
+                    // is a mega site, not a never-executed one.
+                    (_, MEGA) => &mut mega,
                     (0, _) => &mut empty,
                     (_, 0) => &mut mono,
-                    (_, MEGA) => &mut mega,
                     _ if a == nil_u32 || b == nil_u32 => &mut bi_nil,
                     _ => &mut bi,
                 };

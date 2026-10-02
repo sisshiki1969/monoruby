@@ -1141,10 +1141,25 @@ pub(super) extern "C" fn vm_record_type_ic(pc: BytecodePtr, val: Value) {
     if cnt != u32::MAX {
         pc.write1((op1 & !0xffff_ffff) | (cnt as u64 + 1));
     }
-    let c = val.class_for_ic().u32();
     let op2 = bc.op2();
     let (a, b) = (op2 as u32, (op2 >> 32) as u32);
-    if a == c || b == c || b == MEGA {
+    if b == MEGA {
+        return;
+    }
+    // A heap `Integer` (Bignum) classes as `INTEGER`, but the JIT guard
+    // that cache key licenses is a fixnum-tag test — the one value this
+    // IC's class domain cannot describe honestly. Recording it as
+    // `INTEGER` would leave a mono site's compiled guard deopting
+    // forever *without ever moving this word* (the recorded class
+    // already matches), so the `TypeIcMiss` ratchet could never
+    // converge. Latch megamorphic instead.
+    let cached = val.class_for_ic();
+    if cached == CachedClass::INTEGER && !val.is_fixnum() {
+        pc.write2((a as u64) | ((MEGA as u64) << 32));
+        return;
+    }
+    let c = cached.u32();
+    if a == c || b == c {
         return;
     }
     let new = if a == 0 {

@@ -236,6 +236,11 @@ impl CachedClass {
     pub(crate) const NIL: Self = Self(NIL_CLASS);
     pub(crate) const BOOL: Self = Self(BOOL_CLASS);
     pub(crate) const STRING: Self = Self(STRING_CLASS);
+    /// The `TypeIc` megamorphic latch (`u32::MAX` in the IC's second
+    /// slot): not a class at all — it never names a real `ClassId` and no
+    /// guard can carry it. Decoded like any other cache word, so the
+    /// compile side compares against this instead of a raw `u32::MAX`.
+    pub(crate) const MEGA: Self = Self(ClassId::new(u32::MAX));
 
     ///
     /// Enter the cache domain from a bare [`ClassId`] the caller knows is

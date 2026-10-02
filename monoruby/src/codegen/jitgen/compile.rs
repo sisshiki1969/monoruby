@@ -955,11 +955,14 @@ impl<'a> JitContext<'a> {
                 // nothing, so the ④-b proofs pass straight through.
                 self.restore_unfrozen(None);
             }
-            TraceIr::TypeIc(..) => {
-                // P0: profile-only — the VM records, the JIT emits nothing
-                // (and must not count the slot as used). The proofs pass
-                // through like the InlineCache word's.
+            TraceIr::TypeIc(reg, a, b) => {
+                // Speculation phase: turn the VM-recorded class(es) into a
+                // runtime-guarded lattice proof on the register (see
+                // `speculate_type_ic`). The ④-b proofs still pass through
+                // like the InlineCache word's: the guard reads the slot and
+                // writes nothing, so a frozen proof about it survives.
                 self.restore_unfrozen(None);
+                self.speculate_type_ic(state, ir, reg, a, b);
             }
 
             TraceIr::ArrayTEq { lhs, rhs } => {

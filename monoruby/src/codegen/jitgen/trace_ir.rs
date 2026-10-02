@@ -1138,12 +1138,16 @@ impl TraceIr {
             }
             TraceIr::InlineCache => return None,
             TraceIr::TypeIc(reg, a, b) => {
-                format!(
-                    "type_ic {:?} [{}|{}]",
-                    reg,
-                    store.debug_class_name(a.map(CachedClass::id)),
-                    store.debug_class_name(b.map(CachedClass::id)),
-                )
+                // The megamorphic latch is a cache word, not a class — it
+                // must not reach `debug_class_name`'s table lookup.
+                let name = |c: Option<CachedClass>| {
+                    if c == Some(CachedClass::MEGA) {
+                        "MEGA".to_string()
+                    } else {
+                        store.debug_class_name(c.map(CachedClass::id))
+                    }
+                };
+                format!("type_ic {:?} [{}|{}]", reg, name(a), name(b))
             }
             TraceIr::MethodDef { name, func_id } => {
                 format!("method_def {name}: {:?}", func_id)
