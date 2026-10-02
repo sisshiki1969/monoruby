@@ -956,6 +956,18 @@ impl<'a> JitContext<'a> {
                 self.restore_unfrozen(None);
             }
             TraceIr::TypeIc(reg, a, b) => {
+                // Lattice-vs-IC divergence stats: sampled before the
+                // speculation below refines the slot, and only in the
+                // codegen pass (the analysis pass sees the same state).
+                #[cfg(feature = "profile")]
+                if ir.codegen_mode() {
+                    crate::codegen::jitgen::join_profile::record_type_ic(
+                        state.mode(reg),
+                        a,
+                        b,
+                        (*state.pc()).op1() as u32,
+                    );
+                }
                 // Speculation phase: turn the VM-recorded class(es) into a
                 // runtime-guarded lattice proof on the register (see
                 // `speculate_type_ic`). The ④-b proofs still pass through

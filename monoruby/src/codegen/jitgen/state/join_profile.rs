@@ -262,3 +262,204 @@ fn percent(part: u64, total: u64) -> f64 {
         part as f64 * 100.0 / total as f64
     }
 }
+
+// ---------------------------------------------------------------------
+// TypeIc-vs-lattice divergence: at every `TypeIc` the codegen pass
+// compiles, classify what the abstract lattice already knows about the
+// register against what the instruction's IC recorded — sampled *before*
+// `speculate_type_ic` refines the slot, so the lattice side is the
+// state's own knowledge, never the IC's reflection. Counted per
+// compilation (a recompile or a specialization counts again: the table
+// measures what the compiler sees, as often as it sees it), weighted
+// both by site and by the IC's own VM execution counter.
+// ---------------------------------------------------------------------
+
+///
+/// The relation of the lattice's knowledge (`L`) to the IC's proof (`P` =
+/// what a membership guard over the recorded set would establish,
+/// `Guarded::from_cached`/`from_cached_set`).
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum IcLattice {
+    /// L = ⊤, IC empty: neither side knows anything (the site never ran
+    /// in the VM tier under this body).
+    TopIcEmpty,
+    /// L = ⊤, IC usable (mono, or a foldable `{nil, c}`): the IC fills a
+    /// vacuum — exactly where `speculate_type_ic` fires.
+    TopIcUsable,
+    /// L = ⊤, IC an unfoldable pair: observation exists but proves
+    /// nothing the lattice can carry.
+    TopIcUnfoldable,
+    /// L = ⊤, IC megamorphic.
+    TopIcMega,
+    /// L typed, IC empty: a proven path the VM tier never executed
+    /// (specialized bodies compiled from caller context).
+    TypedIcEmpty,
+    /// L typed and the IC's proof is exactly it.
+    TypedAgree,
+    /// L typed, IC proof strictly narrower (`L ⊔ P = L`, `P ≠ L`): the
+    /// observation refines the proof — e.g. lattice `NilOr(c)` from a
+    /// merge, IC mono-`c` because nil never actually flowed. The
+    /// narrowing the ⊤-only speculation gate leaves on the table.
+    TypedIcNarrower,
+    /// L typed, IC proof strictly wider but compatible (`L ⊔ P = P`):
+    /// the IC aggregates other contexts — e.g. lattice `Class(c)` on a
+    /// specialized path, IC `{nil, c}` across all callers.
+    TypedIcWider,
+    /// L typed, IC megamorphic or unfoldable (its proof is ⊤): the
+    /// aggregate view lost what this path proves.
+    TypedIcTop,
+    /// L typed, IC proof disjoint (`L ⊔ P = ⊤`, both ≠ ⊤): a genuine
+    /// contradiction — a guard from the IC would always fail here. The
+    /// shape the lattice-first precedence exists to neutralize.
+    TypedDisjoint,
+}
+
+const IC_LATTICE_ORDER: [(IcLattice, &str); 10] = [
+    (IcLattice::TopIcEmpty, "top    & IC empty"),
+    (IcLattice::TopIcUsable, "top    & IC usable (speculated)"),
+    (IcLattice::TopIcUnfoldable, "top    & IC unfoldable pair"),
+    (IcLattice::TopIcMega, "top    & IC megamorphic"),
+    (IcLattice::TypedAgree, "typed  & IC agrees"),
+    (IcLattice::TypedIcEmpty, "typed  & IC empty"),
+    (IcLattice::TypedIcNarrower, "typed  & IC narrower"),
+    (IcLattice::TypedIcWider, "typed  & IC wider (compatible)"),
+    (IcLattice::TypedIcTop, "typed  & IC top (mega/unfoldable)"),
+    (IcLattice::TypedDisjoint, "typed  & IC disjoint"),
+];
+
+/// (sites, exec-weight) per bucket.
+static IC_LATTICE: LazyLock<Mutex<HashMap<IcLattice, (u64, u64)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The divergent buckets broken down by (lattice kind, IC-proof kind),
+/// so a disagreement can be named.
+static IC_LATTICE_DETAIL: LazyLock<Mutex<HashMap<(IcLattice, Op, Op), (u64, u64)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub(in crate::codegen::jitgen) fn record_type_ic(
+    mode: LinkMode,
+    a: Option<CachedClass>,
+    b: Option<CachedClass>,
+    execs: u32,
+) {
+    let lattice = match mode {
+        LinkMode::S(Guarded::Value) => None,
+        LinkMode::S(g) => Some(g),
+        LinkMode::Sf(_, g) => Some(g.into()),
+        LinkMode::F(_) => Some(Guarded::Float),
+        // The guarded view the compiler itself reads off a constant
+        // (`Value` for the classes the lattice cannot carry, e.g. a
+        // Bignum literal — those few count as ⊤, matching what every
+        // downstream consumer sees).
+        LinkMode::C(v) => match Guarded::from_concrete_value(v) {
+            Guarded::Value => None,
+            g => Some(g),
+        },
+        // Not a value-bearing state; a TypeIc should never see these.
+        LinkMode::V | LinkMode::None | LinkMode::MaybeNone => return,
+    };
+    // The IC's proof: megamorphic latch first ((0, MEGA) is a Bignum
+    // latch on a never-otherwise-recorded site, not an empty IC).
+    let ic = if b == Some(CachedClass::MEGA) {
+        Some(Guarded::Value)
+    } else {
+        match (a, b) {
+            (None, _) => None,
+            (Some(a), None) => Some(Guarded::from_cached(a)),
+            (Some(a), Some(b)) => Some(Guarded::from_cached_set(&[a, b])),
+        }
+    };
+    let bucket = match (lattice, ic) {
+        (None, None) => IcLattice::TopIcEmpty,
+        (None, Some(Guarded::Value)) => {
+            // Mega latch vs unfoldable pair: both read back as ⊤, told
+            // apart by the raw words.
+            if b == Some(CachedClass::MEGA) {
+                IcLattice::TopIcMega
+            } else {
+                IcLattice::TopIcUnfoldable
+            }
+        }
+        (None, Some(_)) => IcLattice::TopIcUsable,
+        (Some(_), None) => IcLattice::TypedIcEmpty,
+        (Some(l), Some(p)) => {
+            if p == l {
+                IcLattice::TypedAgree
+            } else if p == Guarded::Value {
+                IcLattice::TypedIcTop
+            } else if l.join_raw(&p) == p {
+                IcLattice::TypedIcWider
+            } else if l.join_raw(&p) == l {
+                IcLattice::TypedIcNarrower
+            } else {
+                IcLattice::TypedDisjoint
+            }
+        }
+    };
+    let e = execs as u64;
+    {
+        let mut t = IC_LATTICE.lock().unwrap();
+        let ent = t.entry(bucket).or_insert((0, 0));
+        ent.0 += 1;
+        ent.1 += e;
+    }
+    if matches!(
+        bucket,
+        IcLattice::TypedIcNarrower
+            | IcLattice::TypedIcWider
+            | IcLattice::TypedDisjoint
+            | IcLattice::TypedIcTop
+    ) && let (Some(l), Some(p)) = (lattice, ic)
+    {
+        let mut t = IC_LATTICE_DETAIL.lock().unwrap();
+        let ent = t.entry((bucket, op(&l, false), op(&p, false))).or_insert((0, 0));
+        ent.0 += 1;
+        ent.1 += e;
+    }
+}
+
+pub(crate) fn dump_type_ic_lattice(store: &Store) {
+    let table = IC_LATTICE.lock().unwrap();
+    if table.is_empty() {
+        return;
+    }
+    let (mut sites, mut execs) = (0u64, 0u64);
+    for (s, e) in table.values() {
+        sites += s;
+        execs += e;
+    }
+    eprintln!();
+    eprintln!(" type-ic lattice-vs-IC divergence (per compiled TypeIc, codegen pass):");
+    eprintln!(
+        "    {:34} {:>8}  {:>6}   {:>12}  {:>6}",
+        "", "sites", "", "exec-weight", ""
+    );
+    for (bucket, label) in IC_LATTICE_ORDER {
+        let (s, e) = table.get(&bucket).copied().unwrap_or((0, 0));
+        eprintln!(
+            "    {:34} {:>8} {:>6.2}%   {:>12} {:>6.2}%",
+            label,
+            s,
+            percent(s, sites),
+            e,
+            percent(e, execs)
+        );
+    }
+    let detail = IC_LATTICE_DETAIL.lock().unwrap();
+    if !detail.is_empty() {
+        eprintln!("    divergent pairs (lattice vs IC proof):");
+        let mut rows: Vec<_> = detail.iter().collect();
+        rows.sort_unstable_by(|(_, a), (_, b)| (b.1, b.0).cmp(&(a.1, a.0)));
+        for ((bucket, l, p), (s, e)) in rows.into_iter().take(20) {
+            eprintln!(
+                "      {:11} {} vs {}   {} sites  {} execs",
+                format!("{:?}", bucket),
+                l.render(store),
+                p.render(store),
+                s,
+                e
+            );
+        }
+    }
+}

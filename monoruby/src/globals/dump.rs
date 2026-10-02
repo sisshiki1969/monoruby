@@ -169,6 +169,7 @@ impl Globals {
                 );
             }
             self.dump_type_ic_stats();
+            crate::codegen::jitgen::join_profile::dump_type_ic_lattice(&self.store);
             crate::codegen::jitgen::join_profile::dump(&self.store);
         }
         #[cfg(feature = "jit-log")]
