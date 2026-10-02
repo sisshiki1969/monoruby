@@ -492,6 +492,98 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// `TypeIc` (op 131) speculation: turn the classes the VM recorded for
+    /// the preceding call's result into a runtime-guarded lattice proof on
+    /// its register, so the type chain survives an *unspecialized* call
+    /// boundary — the next dispatch on this slot gets a proven receiver
+    /// (direct call, attr/frameless inlining), branch narrowing keeps
+    /// working, and the class guard a later consumer would have emitted is
+    /// elided against this one.
+    ///
+    /// Speculates only when both hold:
+    /// - the abstract state knows nothing about the slot (`⊤` in its
+    ///   stack home). A specialized callee's typed return or a constant is
+    ///   already at least as strong, and guarding *against* a standing
+    ///   proof would make the guard a permanent deopt;
+    /// - the IC licenses a usable proof: a single class, or a pair that
+    ///   folds on the lattice (`{NilClass, c}` → `NilOr(c)`). An empty IC
+    ///   (the site never ran in the VM tier), a megamorphic one, or an
+    ///   unfoldable pair emit nothing — byte-for-byte the profile-only
+    ///   pass-through.
+    ///
+    /// The guard's miss is a counter-gated `TypeIcMiss` recompile: each
+    /// miss re-executes the `TypeIc` in the VM, whose recorder advances
+    /// the IC monotonically (mono → bi → mega; a Bignum latches mega
+    /// directly, see `vm_record_type_ic`), so by the time the counter
+    /// opens, the recompile reads a *moved* profile and speculates less —
+    /// a site reaches its final shape in at most two rebuilds, and the
+    /// per-method `MAX_RECOMPILES_PER_METHOD` budget caps the body as a
+    /// whole.
+    ///
+    pub(super) fn speculate_type_ic(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        a: Option<CachedClass>,
+        b: Option<CachedClass>,
+    ) {
+        if !matches!(state.mode(slot), LinkMode::S(Guarded::Value)) {
+            return;
+        }
+        let Some(a) = a else { return };
+        if b == Some(CachedClass::MEGA) {
+            return;
+        }
+        let proof = match b {
+            None => Guarded::from_cached(a),
+            Some(b) => {
+                let proof = Guarded::from_cached_set(&[a, b]);
+                if proof == Guarded::Value {
+                    // An unfoldable pair: a membership guard would cost a
+                    // deopt edge and prove nothing the lattice can carry.
+                    return;
+                }
+                proof
+            }
+        };
+        if matches!(proof, Guarded::Fixnum | Guarded::Float)
+            || proof == Guarded::Class(BOOL_CLASS)
+        {
+            // A numeric result is not worth a speculation of its own: its
+            // consumers (binop/cmp fast paths, `fpr` loads) carry exactly
+            // one representation guard already, so the proof only *moves*
+            // that guard up here — while a result consumed several times,
+            // or not at all, pays it as a pure addition. Measured on
+            // aobench (Float results on every hot call): speculating here
+            // cost ~5% wall time and elided nothing. A `BOOL` proof is
+            // weaker still: it folds no branch (`is_truthy`/`is_falsy`
+            // treat `BOOL_CLASS` as unknown) and nothing dispatches on
+            // booleans, so a predicate-shaped site would pay the guard
+            // for no consumer at all. Heap classes, `NilClass` (which
+            // *does* fold the branch to the falsy side) and `NilOr` are
+            // the profitable half — they make the next dispatch's
+            // receiver proven, which is what unlocks inlining.
+            return;
+        }
+        let deopt = match self.recv_miss_recompile_target() {
+            Some(target) => ir.new_recompile_deopt(state, RecompileReason::TypeIcMiss, target),
+            None => ir.new_deopt(state),
+        };
+        // Rdi is never a pool resident (`GP_ALLOC_SET`), so the load
+        // clobbers nothing; a slot still register-resident from the call's
+        // own def moves over with one reg-reg mov.
+        state.load(ir, slot, GP::Rdi);
+        match b {
+            None => state.guard_class(ir, slot, GP::Rdi, a, deopt),
+            Some(b) => {
+                ir.push(AsmInst::GuardClassIn(GP::Rdi, Box::new([a, b]), deopt));
+                state.refine_S_guarded(slot, proof);
+            }
+        }
+    }
+
+    ///
     /// The observed receiver classes of *callid* that all resolve to
     /// *func_id*, when there are at least two of them worth a compare.
     ///

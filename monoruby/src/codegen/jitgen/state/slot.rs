@@ -3542,4 +3542,115 @@ mod tests {
         "###,
         );
     }
+
+    /// `TypeIc` speculation, monomorphic: a call result whose site always
+    /// produced one class is guarded to it, and the next dispatch rides
+    /// the proof. The mixed phase then feeds a second class through the
+    /// same site — the guard must heal (TypeIcMiss ratchet), not wedge.
+    #[test]
+    fn type_ic_mono_then_poly() {
+        run_test_with_prelude(
+            r###"
+        res = []
+        40.times { res << go(1000, 0) }
+        40.times { res << go(1000, 1) }
+        40.times { res << go(1000, 2) }
+        res
+        "###,
+            r###"
+        class A
+          def tag = 1
+        end
+        class B
+          def tag = 2
+        end
+        def pick(i, phase)
+          case phase
+          when 0 then A.new
+          when 1 then i.even? ? A.new : B.new
+          else [A.new, B.new, :sym][i % 3]
+          end
+        end
+        def go(n, phase)
+          s = 0
+          i = 0
+          while i < n
+            v = pick(i, phase)
+            s += v.respond_to?(:tag) ? v.tag : 3
+            i += 1
+          end
+          s
+        end
+        "###,
+        );
+    }
+
+    /// `TypeIc` speculation over `{NilClass, c}`: the pair folds to
+    /// `NilOr(c)` under a membership guard, branch narrowing consumes it,
+    /// and the truthy side dispatches on the proven class.
+    #[test]
+    fn type_ic_nil_or() {
+        run_test_with_prelude(
+            r###"
+        res = 0
+        40.times { res = go(2000) }
+        res
+        "###,
+            r###"
+        class Foo
+          def initialize = @v = 1
+          attr_reader :v
+        end
+        FOO = Foo.new
+        def pick(i)
+          return nil if i % 3 == 0
+          FOO
+        end
+        def go(n)
+          s = 0
+          i = 0
+          while i < n
+            x = pick(i)
+            s += x ? x.v : 1
+            i += 1
+          end
+          s
+        end
+        "###,
+        );
+    }
+
+    /// A mono-`Integer` `TypeIc` site that starts producing Bignums: the
+    /// recorder latches megamorphic (the `INTEGER` guard key is a
+    /// fixnum-tag test a Bignum can never pass — recording it as
+    /// `INTEGER` would freeze the word while a speculated guard deopts
+    /// forever). Numeric proofs are currently not speculated on at all,
+    /// so this exercises the recorder's latch and exactness only; it
+    /// becomes load-bearing again the moment a consumer starts using
+    /// mono-`INTEGER` `TypeIc` feedback.
+    #[test]
+    fn type_ic_bignum_latch() {
+        run_test_with_prelude(
+            r###"
+        res = []
+        40.times { res << go(1000, false) }
+        10.times { res << go(100, true) }
+        res
+        "###,
+            r###"
+        def big(i, bump)
+          bump ? (1 << 80) + i : i
+        end
+        def go(n, bump)
+          s = 0
+          i = 0
+          while i < n
+            s += big(i, bump)
+            i += 1
+          end
+          s
+        end
+        "###,
+        );
+    }
 }
