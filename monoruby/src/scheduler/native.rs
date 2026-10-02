@@ -56,6 +56,11 @@ const NATIVE_STACK_SIZE: usize = 8 * 1024 * 1024;
 /// why `SIGVTALRM` is one of the reserved, untrappable ones.
 const UBF_SIGNAL: libc::c_int = libc::SIGVTALRM;
 
+/// How often a waiter re-sends the unblocking signal to a target that
+/// stays in `Blocking` with a deliverable interrupt queued — the heal
+/// for the signal lost to the pre-syscall window (see `join`).
+const UBF_RETRY_TICK: Duration = Duration::from_millis(10);
+
 extern "C" fn ubf_handler(_: libc::c_int) {}
 
 /// Make sure `ubf_handler` is the process's disposition for
@@ -743,8 +748,30 @@ pub(super) fn join(
         {
             return Ok(false);
         }
+        // A queued interrupt can lose its one unblocking signal to the
+        // window between the target marking itself `Blocking` and its
+        // GVL-less syscall actually starting (`without_gvl` publishes
+        // the state *before* releasing the lock, and the spec idiom
+        // `Thread.pass while t.status != "sleep"; t.kill` keys off
+        // exactly that state): the no-op handler swallows the early
+        // signal, the wait then blocks with nothing left to interrupt
+        // it, and this join would wait forever — the CI-load flake in
+        // `a_thread_blocked_in_a_kernel_wait_is_asleep`. The joiner is
+        // the one with a stake in the death, so it re-sends while the
+        // target stays blocking with a deliverable interrupt, parking
+        // on a short deadline so the retry is periodic rather than
+        // one-shot.
+        let park_deadline = if target.as_thread_inner().state() == ThreadState::Blocking
+            && super::wake_worthy(&globals.store, target)
+        {
+            interrupt_blocking(target);
+            let retry = Instant::now() + UBF_RETRY_TICK;
+            Some(deadline.map_or(retry, |dl| dl.min(retry)))
+        } else {
+            deadline
+        };
         target.as_thread_inner_mut().joiners.push(cur);
-        let res = park(vm, globals, cur, ThreadState::Joining, &[], deadline);
+        let res = park(vm, globals, cur, ThreadState::Joining, &[], park_deadline);
         // Finalization takes the joiners it wakes; a timeout or a signal
         // leaves ours behind.
         target.as_thread_inner_mut().joiners.retain(|j| *j != cur);
@@ -798,6 +825,20 @@ pub(super) fn terminate_all(vm: &mut Executor, globals: &mut Globals) {
         for _ in 0..10_000 {
             if targets.iter().all(|t| t.as_thread_inner().is_dead()) {
                 break;
+            }
+            // Same lost-wakeup as `join`'s: the one signal sent above can
+            // land before the target's GVL-less syscall starts and be
+            // swallowed by the no-op handler. Re-send to the ones still
+            // blocking with the Kill queued — idempotent, and the loop is
+            // bounded.
+            for t in targets.iter().copied() {
+                let inner = t.as_thread_inner();
+                if !inner.is_dead()
+                    && inner.state() == ThreadState::Blocking
+                    && super::wake_worthy(&globals.store, t)
+                {
+                    interrupt_blocking(t);
+                }
             }
             // Hand the lock over; when nobody is queued yet (a woken
             // thread still on its way out of `poll`), give it a moment.
