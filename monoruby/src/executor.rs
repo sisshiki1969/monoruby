@@ -5672,18 +5672,6 @@ pub enum RecompileReason {
     /// unlike the class version, the constant version keeps moving in
     /// programs that assign constants at run time.
     ConstVersionGuardFailed = 5,
-    /// A `TypeIc` speculation guard missed: the class(es) the
-    /// instruction's inline cache had recorded for its register — and the
-    /// JIT turned into a runtime-guarded lattice proof — stopped covering
-    /// the values that actually flow there. Each miss re-executes the
-    /// `TypeIc` in the VM, whose recorder advances the IC monotonically
-    /// (mono → bi → megamorphic; a heap `Integer` latches megamorphic
-    /// directly), so the counter-gated recompile always reads a *moved*
-    /// profile and speculates less: a site reaches the unspeculated state
-    /// in at most two rebuilds. Budgeted like `BecamePolymorphic`
-    /// (`MAX_RECOMPILES_PER_METHOD`) — a body full of `TypeIc` sites must
-    /// not buy each one its own rebuild streak.
-    TypeIcMiss = 6,
 }
 
 struct Root<'a, 'b> {

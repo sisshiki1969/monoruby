@@ -380,25 +380,20 @@ impl Codegen {
         }
     }
 
-    /// Whether a `BecamePolymorphic` / `TypeIcMiss` recompile of
-    /// `(iseq_id, self_class)` would exceed `MAX_RECOMPILES_PER_METHOD`.
-    /// Only the profile-driven reasons are budgeted: they are the ones a
-    /// body can request over and over (each fresh body starts with a fresh
-    /// `COUNT_DEOPT_RECOMPILE` budget, a site that overflowed its PIC
-    /// misses again just as often in the new body, and a body may hold one
-    /// `TypeIc` site per call), while a version-guard failure means the
-    /// program really redefined something and the method must be rebuilt
-    /// however often that happens.
+    /// Whether a `BecamePolymorphic` recompile of `(iseq_id, self_class)`
+    /// would exceed `MAX_RECOMPILES_PER_METHOD`. Only that reason is
+    /// budgeted: it is the one a body can request over and over (each fresh
+    /// body starts with a fresh `COUNT_DEOPT_RECOMPILE` budget, and a site
+    /// that overflowed its PIC misses again just as often in the new body),
+    /// while a version-guard failure means the program really redefined
+    /// something and the method must be rebuilt however often that happens.
     fn recompile_budget_exhausted(
         &mut self,
         iseq_id: ISeqId,
         self_class: Option<ClassId>,
         reason: RecompileReason,
     ) -> bool {
-        if !matches!(
-            reason,
-            RecompileReason::BecamePolymorphic | RecompileReason::TypeIcMiss
-        ) {
+        if !matches!(reason, RecompileReason::BecamePolymorphic) {
             return false;
         }
         let n = self.recompile_counts.entry((iseq_id, self_class)).or_insert(0);
