@@ -300,6 +300,7 @@ impl IdentId {
     /// and what `gsub(regex, Hash)` checks is still the builtin before it
     /// probes the map directly instead of calling `Hash#[]`.
     pub const DEFAULT: IdentId = id!(101);
+    pub const RESPOND_TO_: IdentId = id!(102);
 
     // The special global variables whose assignment `write_special_check`
     // (globals/gvar.rs) validates or coerces. Deliberately a *consecutive*
@@ -607,6 +608,7 @@ impl IdentifierTable {
         table.set_id("initialize_clone", IdentId::INITIALIZE_CLONE);
         table.set_id("initialize_dup", IdentId::INITIALIZE_DUP);
         table.set_id("respond_to_missing?", IdentId::RESPOND_TO_MISSING_);
+        table.set_id("respond_to?", IdentId::RESPOND_TO_);
         for (name, id) in IdentId::SPECIAL_GVARS {
             table.set_id(name, id);
         }

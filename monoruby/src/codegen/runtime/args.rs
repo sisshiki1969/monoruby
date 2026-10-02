@@ -597,11 +597,16 @@ fn block_arg_to_ary(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resul
     // decides whether `#method_missing` supplies one (prism's
     // `LexCompat::Token` delegates to its array that way). Anything else
     // passes through as a single scalar argument, never a NoMethodError.
-    let respond_to = IdentId::get_id("respond_to?");
-    let responds = if globals.check_method(v, respond_to).is_some() {
+    let responds = if let Some(b) =
+        super::default_responds_to(vm, globals, v, IdentId::TO_ARY)
+    {
+        // The default predicates decide from cached lookups alone — no
+        // `respond_to?` frame.
+        b
+    } else if globals.check_method(v, IdentId::RESPOND_TO_).is_some() {
         vm.invoke_method_inner(
             globals,
-            respond_to,
+            IdentId::RESPOND_TO_,
             v,
             &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
             None,
@@ -611,12 +616,11 @@ fn block_arg_to_ary(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resul
     } else if globals.check_method(v, IdentId::TO_ARY).is_some() {
         true
     } else {
-        let respond_to_missing = IdentId::get_id("respond_to_missing?");
-        globals.check_method(v, respond_to_missing).is_some()
+        globals.check_method(v, IdentId::RESPOND_TO_MISSING_).is_some()
             && vm
                 .invoke_method_inner(
                     globals,
-                    respond_to_missing,
+                    IdentId::RESPOND_TO_MISSING_,
                     v,
                     &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
                     None,

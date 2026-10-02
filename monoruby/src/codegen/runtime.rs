@@ -1128,6 +1128,63 @@ pub(super) extern "C" fn array_concat(
     Some(dst)
 }
 
+/// The `respond_to?(name, true)` gate the runtime conversions use —
+/// CRuby's `rb_check_funcall` probe — answered without pushing the
+/// `respond_to?` frame when the default machinery is in charge.
+///
+/// `Some(answer)` when the probe is decidable from (negative-cached)
+/// method-table lookups alone: the receiver resolves `respond_to?` to
+/// the standard builtin, and a missing `name` is settled by a
+/// `respond_to_missing?` whose body carries a constant-return hint —
+/// the default `false`, or a user override answering a literal (the
+/// same shortcut the builtin itself takes, see `kernel::respond_to`).
+/// `None` sends the caller down its existing dynamic path, so an
+/// overridden `respond_to?`, a receiver without one (`BasicObject`),
+/// or a computing `respond_to_missing?` behave exactly as before.
+///
+/// `name` is resolved through the current frame's refinement set — the
+/// set the invoked builtin would read as its caller's. On activerecord
+/// this removes one builtin frame per non-Array splat/destructure
+/// operand (4.7M `to_ary`/`to_a` probes per benchmark run, String and
+/// nil sources almost all of them).
+///
+pub(crate) fn default_responds_to(
+    vm: &Executor,
+    globals: &mut Globals,
+    recv: Value,
+    name: IdentId,
+) -> Option<bool> {
+    let rt_fid = globals.check_method(recv, IdentId::RESPOND_TO_)?;
+    if Some(rt_fid) != globals.store.respond_to_fid() {
+        return None;
+    }
+    // `include_all = true`: visibility never matters here; refinements do.
+    let set = vm.current_refinements(globals);
+    if globals
+        .store
+        .check_method_with_refinements(recv.class(), name, set)
+        .is_some_and(|e| e.func_id().is_some())
+    {
+        return Some(true);
+    }
+    // Missing: the dynamic predicate falls to `respond_to_missing?`.
+    let rtm_fid = match globals.check_method(recv, IdentId::RESPOND_TO_MISSING_) {
+        Some(fid) => fid,
+        None => return Some(false),
+    };
+    let func = &globals.store[rtm_fid];
+    if let Some(iseq) = func.is_iseq()
+        && func.is_not_block()
+        && let ISeqHint::ConstReturn(v) = globals.store[iseq].hint
+        && func.no_keyword()
+        && func.positional_arity_ok(2)
+    {
+        Some(Value::from(v).as_bool())
+    } else {
+        None
+    }
+}
+
 /// `TypeIc` (op 131) recorder — the VM handler's slow path: record the
 /// class of the observed value into the instruction's own op2 word,
 /// which holds up to two cache classes (0 = empty, `u32::MAX` in the
@@ -1500,28 +1557,33 @@ pub(super) extern "C" fn expand_array(
     // method-table lookup, so honour an overridden `respond_to?` here too.
     let src = if src.is_array_ty() {
         src
-    } else if globals
-        .check_method(src, IdentId::get_id("respond_to?"))
-        .is_none()
-    {
-        // An object that does not even respond to `#respond_to?` (a bare
-        // `BasicObject`) cannot be coerced: leave it a scalar rather than
-        // raising `NoMethodError`, matching CRuby.
-        src
-    } else if match vm.invoke_method_inner(
-        globals,
-        IdentId::get_id("respond_to?"),
-        src,
-        &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
-        None,
-        None,
-    ) {
-        Ok(v) => v.as_bool(),
-        Err(err) => {
-            vm.set_error(err);
-            return None;
+    } else if match default_responds_to(vm, globals, src, IdentId::TO_ARY) {
+        // The default predicates decide from cached lookups alone —
+        // no `respond_to?` frame.
+        Some(b) => !b,
+        None if globals.check_method(src, IdentId::RESPOND_TO_).is_none() => {
+            // An object that does not even respond to `#respond_to?` (a bare
+            // `BasicObject`) cannot be coerced: leave it a scalar rather than
+            // raising `NoMethodError`, matching CRuby.
+            true
         }
+        None => !match vm.invoke_method_inner(
+            globals,
+            IdentId::RESPOND_TO_,
+            src,
+            &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
+            None,
+            None,
+        ) {
+            Ok(v) => v.as_bool(),
+            Err(err) => {
+                vm.set_error(err);
+                return None;
+            }
+        },
     } {
+        src
+    } else {
         match vm.invoke_method_inner(globals, IdentId::TO_ARY, src, &[], None, None) {
             Ok(v) if v.is_array_ty() => v,
             Ok(v) if v.is_nil() => src,
@@ -1534,8 +1596,6 @@ pub(super) extern "C" fn expand_array(
                 return None;
             }
         }
-    } else {
-        src
     };
     let rest_pos: Option<usize> = if rest == 0 { None } else { Some(rest - 1) };
     match src.try_array_ty() {
@@ -3199,15 +3259,16 @@ pub(super) extern "C" fn to_a(
     // method-table lookup. An object without `#respond_to?` (a bare
     // `BasicObject`) falls back to the raw lookup — CRuby's
     // `rb_check_funcall` still calls a `to_a` defined on it.
-    let responds = if globals
-        .check_method(src, IdentId::get_id("respond_to?"))
-        .is_none()
-    {
+    let responds = if let Some(b) = default_responds_to(vm, globals, src, IdentId::TO_A) {
+        // The default predicates decide from cached lookups alone — no
+        // `respond_to?` frame.
+        b
+    } else if globals.check_method(src, IdentId::RESPOND_TO_).is_none() {
         globals.check_method(src, IdentId::TO_A).is_some()
     } else {
         match vm.invoke_method_inner(
             globals,
-            IdentId::get_id("respond_to?"),
+            IdentId::RESPOND_TO_,
             src,
             &[Value::symbol(IdentId::TO_A), Value::bool(true)],
             None,
