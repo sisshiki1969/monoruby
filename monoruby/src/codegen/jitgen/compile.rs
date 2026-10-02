@@ -955,6 +955,12 @@ impl<'a> JitContext<'a> {
                 // nothing, so the ④-b proofs pass straight through.
                 self.restore_unfrozen(None);
             }
+            TraceIr::TypeIc(..) => {
+                // P0: profile-only — the VM records, the JIT emits nothing
+                // (and must not count the slot as used). The proofs pass
+                // through like the InlineCache word's.
+                self.restore_unfrozen(None);
+            }
 
             TraceIr::ArrayTEq { lhs, rhs } => {
                 state.flush_gp(ir);

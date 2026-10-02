@@ -4,24 +4,36 @@ mod arguments;
 
 impl<'a> BytecodeGen<'a> {
     pub(super) fn emit_call(&mut self, callsite: CallSite, loc: Loc) {
+        let ret = callsite.dst;
         self.emit(BytecodeInst::MethodCall(Box::new(callsite.clone())), loc);
         self.emit(BytecodeInst::InlineCache, loc);
+        if let Some(ret) = ret {
+            self.emit(BytecodeInst::TypeIc(ret), loc);
+        }
     }
 
     pub(super) fn emit_super(&mut self, callsite: CallSite, loc: Loc) {
         // super (any form) forwards the caller's block — the enclosing
         // method uses its block (see `ISeqInfo::uses_block`).
         self.store[self.mother.0].uses_block = true;
+        let ret = callsite.dst;
         self.emit(BytecodeInst::Super(Box::new(callsite.clone())), loc);
         self.emit(BytecodeInst::InlineCache, loc);
+        if let Some(ret) = ret {
+            self.emit(BytecodeInst::TypeIc(ret), loc);
+        }
     }
 
     pub(super) fn emit_yield(&mut self, callsite: CallSite, loc: Loc) {
         // yield targets the mother method's block, even from a nested
         // block (see `ISeqInfo::uses_block`).
         self.store[self.mother.0].uses_block = true;
+        let ret = callsite.dst;
         self.emit(BytecodeInst::Yield(Box::new(callsite.clone())), loc);
         self.emit(BytecodeInst::InlineCache, loc);
+        if let Some(ret) = ret {
+            self.emit(BytecodeInst::TypeIc(ret), loc);
+        }
     }
 
     pub(super) fn emit_binary_op(

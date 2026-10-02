@@ -1128,6 +1128,35 @@ pub(super) extern "C" fn array_concat(
     Some(dst)
 }
 
+/// `TypeIc` (op 131) VM handler body: record the class of the observed
+/// value into the instruction's own words — op2 holds up to two cache
+/// classes (0 = empty, `u32::MAX` in the second slot latches megamorphic),
+/// op1's low 32 bits count executions (saturating). Single-threaded under
+/// the GVL; plain u32 stores into the owning instruction.
+pub(super) extern "C" fn vm_record_type_ic(pc: BytecodePtr, val: Value) {
+    const MEGA: u32 = u32::MAX;
+    let bc = *pc;
+    let op1 = bc.op1();
+    let cnt = op1 as u32;
+    if cnt != u32::MAX {
+        pc.write1((op1 & !0xffff_ffff) | (cnt as u64 + 1));
+    }
+    let c = val.class_for_ic().u32();
+    let op2 = bc.op2();
+    let (a, b) = (op2 as u32, (op2 >> 32) as u32);
+    if a == c || b == c || b == MEGA {
+        return;
+    }
+    let new = if a == 0 {
+        (c as u64) | ((b as u64) << 32)
+    } else if b == 0 {
+        (a as u64) | ((c as u64) << 32)
+    } else {
+        (a as u64) | ((MEGA as u64) << 32)
+    };
+    pc.write2(new);
+}
+
 pub(super) extern "C" fn empty_hash() -> Value {
     let map = RubyMap::default();
     Value::hash(map)

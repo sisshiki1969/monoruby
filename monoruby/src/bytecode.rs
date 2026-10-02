@@ -354,6 +354,11 @@ impl BytecodePtr {
         Self(std::ptr::NonNull::from(bc))
     }
 
+    pub fn write1(self, data: u64) {
+        // SAFETY: writing the first u64 slot of the bytecode instruction.
+        unsafe { *(self.as_ptr() as *mut u64) = data }
+    }
+
     pub fn write2(self, data: u64) {
         // SAFETY: Writing to the second u64 slot of the bytecode instruction.
         // The bytecode buffer has sufficient space for this write.

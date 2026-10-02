@@ -378,6 +378,7 @@ impl Codegen {
             store_ivar: self.vm_store_ivar(),
             check_const: self.vm_check_const(),
             check_kw_rest: self.vm_check_kw_rest(),
+            type_ic: self.vm_type_ic(),
             check_local: self.vm_check_local(&branch),
             block_arg_proxy: self.vm_block_arg_proxy(),
             singleton_class_def: self.vm_singleton_class_def(),
@@ -1612,6 +1613,22 @@ impl Codegen {
         monoasm! { &mut self.jit,
             testq r15, r15;
             jne  branch;
+        };
+        self.fetch_and_dispatch();
+        label
+    }
+
+    /// op 131 `TypeIc`: record the class of slot `:1`'s value into the
+    /// instruction's own cache words (`runtime::vm_record_type_ic`).
+    fn vm_type_ic(&mut self) -> CodePtr {
+        let label = self.jit.get_current_address();
+        self.fetch2();
+        self.vm_get_slot_value(GP::R15);
+        monoasm! { &mut self.jit,
+            lea  rdi, [r13 - 16];   // &this instruction
+            movq rsi, r15;          // the observed value
+            movq rax, (runtime::vm_record_type_ic);
+            call rax;
         };
         self.fetch_and_dispatch();
         label

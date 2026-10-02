@@ -196,6 +196,10 @@ pub(super) enum BytecodeInst {
     },
     CheckLocal(BcReg, Label),
     CheckKwRest(BcReg),
+    /// Type IC: record (in the VM) / speculate on (in the JIT) the class of
+    /// the value in the register. Emitted after instructions that break the
+    /// type chain — v1: method/super/yield results.
+    TypeIc(BcReg),
     Br(Label),
     CondBr(BcReg, Label, bool, BrKind),
     /// when *BcReg* is nil, goto *Label*.

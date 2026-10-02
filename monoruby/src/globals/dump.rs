@@ -168,6 +168,7 @@ impl Globals {
                     count
                 );
             }
+            self.dump_type_ic_stats();
             crate::codegen::jitgen::join_profile::dump(&self.store);
         }
         #[cfg(feature = "jit-log")]
@@ -178,6 +179,56 @@ impl Globals {
                 CODEGEN.with(|codegen| codegen.borrow().jit_compile_time)
             );
             crate::codegen::jit_stats::dump();
+        }
+    }
+}
+
+impl Globals {
+    /// `TypeIc` (op 131) site census: scan every iseq's bytecode and
+    /// classify each type-IC's final profile, counting sites and
+    /// (saturating) recorded executions.
+    #[cfg(feature = "profile")]
+    fn dump_type_ic_stats(&self) {
+        const MEGA: u32 = u32::MAX;
+        let nil_u32 = NIL_CLASS.u32();
+        // (sites, execs) per bucket
+        let mut empty = (0u64, 0u64);
+        let mut mono = (0u64, 0u64);
+        let mut bi_nil = (0u64, 0u64);
+        let mut bi = (0u64, 0u64);
+        let mut mega = (0u64, 0u64);
+        for info in self.store.functions().iter() {
+            let FuncKind::ISeq(iseq_id) = info.kind else {
+                continue;
+            };
+            for bc in self.store[iseq_id].bytecode() {
+                if (bc.op1() >> 48) as u16 != 131 {
+                    continue;
+                }
+                let execs = bc.op1() as u32 as u64;
+                let op2 = bc.op2();
+                let (a, b) = (op2 as u32, (op2 >> 32) as u32);
+                let bucket = match (a, b) {
+                    (0, _) => &mut empty,
+                    (_, 0) => &mut mono,
+                    (_, MEGA) => &mut mega,
+                    _ if a == nil_u32 || b == nil_u32 => &mut bi_nil,
+                    _ => &mut bi,
+                };
+                bucket.0 += 1;
+                bucket.1 += execs;
+            }
+        }
+        eprintln!();
+        eprintln!(" type-ic census (sites / recorded VM execs):");
+        for (name, (s, x)) in [
+            ("never-executed", empty),
+            ("monomorphic", mono),
+            ("bi {nil, c}", bi_nil),
+            ("bi {a, b}", bi),
+            ("megamorphic", mega),
+        ] {
+            eprintln!("    {name:16} {s:>8} sites   {x:>12} execs");
         }
     }
 }
