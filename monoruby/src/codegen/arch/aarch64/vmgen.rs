@@ -541,18 +541,106 @@ impl Codegen {
     /// op 19 `CheckKwRest`: if the kw-rest slot `[pc+4]` is nil, replace it
     /// with a fresh empty hash.
     /// op 131 `TypeIc`: record the class of slot `[pc+4]`'s value into the
-    /// instruction's own cache words (`runtime::vm_record_type_ic`).
+    /// instruction's own cache words. The hot shapes — the cache is
+    /// latched megamorphic, or the observed class is already recorded —
+    /// settle inline without leaving the dispatch loop; the inline
+    /// classifier mirrors `Value::class_for_ic` (booleans fold to
+    /// `BOOL`). Only a cache that has to change calls the recorder
+    /// (`runtime::vm_record_type_ic`), plus the one key the inline path
+    /// must not settle: a heap `Integer` (Bignum), whose honest record
+    /// is the megamorphic latch. The execution counter (op1's low u32,
+    /// saturating) is maintained here unconditionally; the recorder no
+    /// longer touches it. Mirrors the x86 `vm_type_ic`.
     pub(in crate::codegen) fn a64_op_type_ic(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
+        let count_done = self.jit.label();
+        let is_fixnum = self.jit.label();
+        let is_flonum = self.jit.label();
+        let is_heap = self.jit.label();
+        let not_nil = self.jit.label();
+        let not_bool = self.jit.label();
+        let have_c = self.jit.label();
+        let slow = self.jit.label();
+        let done = self.jit.label();
         monoasm_arm64!(&mut self.jit,
             ldrh x10, [x(PC.0), #(4)];
         );
         self.a64_slot_addr(X10);
         monoasm_arm64!(&mut self.jit,
-            ldr x1, [x10];          // the observed value
-            mov x0, x(PC.0);        // &this instruction
+            ldr x1, [x10];            // the observed value
+            // Saturating execution counter in op1's low u32.
+            ldr w9, [x(PC.0)];
+            add w11, w9, #(1);
+            cbz w11, count_done;      // was u32::MAX: stay saturated
+            str w11, [x(PC.0)];
+        count_done:
+            // Cache slot b (op2's high u32); u32::MAX is the megamorphic
+            // latch — nothing can change any more. `ldr w` zero-extends,
+            // so the x-register compares below are exact.
+            ldr w9, [x(PC.0), #(12)];
+            add w11, w9, #(1);
+            cbz w11, done;
+            // The observed value's cache class, without a call.
+            tbnz x1, #(0), is_fixnum;
+            tbnz x1, #(1), is_flonum;
+            tbz  x1, #(2), is_heap;
+            // Immediate, not fixnum/flonum: nil / true / false / symbol.
+            cmp x1, #(NIL_VALUE as u32);
+        );
+        self.jit.bcond_label(Cond::Ne, &not_nil);
+        monoasm_arm64!(&mut self.jit,
+            mov x11, (NIL_CLASS.u32() as u64);
+            b have_c;
+        not_nil:
+            // true (0x1c) and false (0x14) differ only in bit 3: OR it
+            // in and both collapse to TRUE_VALUE (`class_for_ic` folds
+            // them to `BOOL`).
+            mov x12, (0b1000);
+            orr x12, x1, x12;
+            cmp x12, #(TRUE_VALUE as u32);
+        );
+        self.jit.bcond_label(Cond::Ne, &not_bool);
+        monoasm_arm64!(&mut self.jit,
+            mov x11, (BOOL_CLASS.u32() as u64);
+            b have_c;
+        not_bool:
+            mov x12, (0xff);
+            and x12, x1, x12;
+            cmp x12, #(TAG_SYMBOL as u32);
+        );
+        self.jit.bcond_label(Cond::Ne, &slow);
+        monoasm_arm64!(&mut self.jit,
+            mov x11, (SYMBOL_CLASS.u32() as u64);
+            b have_c;
+        is_fixnum:
+            mov x11, (INTEGER_CLASS.u32() as u64);
+            b have_c;
+        is_flonum:
+            mov x11, (FLOAT_CLASS.u32() as u64);
+            b have_c;
+        is_heap:
+            // The RValue's class word — except a heap `Integer`
+            // (Bignum), whose honest record is the megamorphic latch.
+            ldr w11, [x1, #(RVALUE_OFFSET_CLASS as u32)];
+            cmp w11, #(INTEGER_CLASS.u32());
+        );
+        self.jit.bcond_label(Cond::Eq, &slow);
+        monoasm_arm64!(&mut self.jit,
+        have_c:
+            cmp x11, x9;              // c == b?
+        );
+        self.jit.bcond_label(Cond::Eq, &done);
+        monoasm_arm64!(&mut self.jit,
+            ldr w12, [x(PC.0), #(8)]; // cache slot a (op2's low u32)
+            cmp x11, x12;             // c == a?
+        );
+        self.jit.bcond_label(Cond::Eq, &done);
+        monoasm_arm64!(&mut self.jit,
+        slow:
+            mov x0, x(PC.0);          // &this instruction
             mov x9, (runtime::vm_record_type_ic as *const () as u64);
             blr x9;
+        done:
             add x(PC.0), x(PC.0), #(16);
         );
         self.a64_fetch_and_dispatch();

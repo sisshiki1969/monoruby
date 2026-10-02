@@ -1128,19 +1128,19 @@ pub(super) extern "C" fn array_concat(
     Some(dst)
 }
 
-/// `TypeIc` (op 131) VM handler body: record the class of the observed
-/// value into the instruction's own words — op2 holds up to two cache
-/// classes (0 = empty, `u32::MAX` in the second slot latches megamorphic),
-/// op1's low 32 bits count executions (saturating). Single-threaded under
-/// the GVL; plain u32 stores into the owning instruction.
+/// `TypeIc` (op 131) recorder — the VM handler's slow path: record the
+/// class of the observed value into the instruction's own op2 word,
+/// which holds up to two cache classes (0 = empty, `u32::MAX` in the
+/// second slot latches megamorphic). The handler settles the hot shapes
+/// (already-recorded class, megamorphic latch) inline and maintains the
+/// execution counter (op1's low u32, saturating) itself, so this runs
+/// only when the cache may actually change — plus for the class keys
+/// the inline path leaves to this function: `true`/`false`/`Symbol`,
+/// and the heap `Integer` below. Single-threaded under the GVL; plain
+/// u32 stores into the owning instruction.
 pub(super) extern "C" fn vm_record_type_ic(pc: BytecodePtr, val: Value) {
     const MEGA: u32 = u32::MAX;
     let bc = *pc;
-    let op1 = bc.op1();
-    let cnt = op1 as u32;
-    if cnt != u32::MAX {
-        pc.write1((op1 & !0xffff_ffff) | (cnt as u64 + 1));
-    }
     let op2 = bc.op2();
     let (a, b) = (op2 as u32, (op2 >> 32) as u32);
     if b == MEGA {
