@@ -856,6 +856,10 @@ impl<'a> JitContext<'a> {
         // best and — since only one of the arm's classes is `recv_class` —
         // would deopt the rest at worst.
         let mut same_target_set_guarded = self.in_set_guarded_arm();
+        // The membership-guarded class set, kept for the inline-generator
+        // dispatch below: a generator whose answer is uniform over the
+        // whole set can fold even though no single class is proven.
+        let mut set_for_gens: Option<Box<[CachedClass]>> = None;
         // A compile-time heap-constant receiver of the right class needs no
         // runtime guard — its class is a static fact (`M64 - x` reaching the
         // direct-call residual: the Integer guard is a fixnum-tag test a
@@ -912,6 +916,7 @@ impl<'a> JitContext<'a> {
                 // to `NilOr(c)`, so a following branch can recover `c`.
                 // State-only; the deopt snapshot above is taken first.
                 let set_proof = Guarded::from_cached_set(&classes);
+                set_for_gens = Some(classes.clone());
                 if let RecvMissMode::Residual(residual) = recv_miss {
                     state.load(ir, recv, GP::Rdi);
                     ir.push(AsmInst::BrClassNotIn(GP::Rdi, classes, residual));
@@ -997,7 +1002,12 @@ impl<'a> JitContext<'a> {
                     // to the ordinary builtin call instead.
                     if !recv_const_unrefined {
                         let proven = (!same_target_set_guarded).then_some(recv_class);
-                        if self.inline_asm(state, ir, f, callid, proven, arg_class) {
+                        if set_for_gens.is_some() {
+                            self.set_same_target_classes(set_for_gens.take());
+                        }
+                        let fired = self.inline_asm(state, ir, f, callid, proven, arg_class);
+                        self.set_same_target_classes(None);
+                        if fired {
                             state.unset_side_effect_guard();
                             return Ok(CompileResult::Continue);
                         }

@@ -1090,6 +1090,13 @@ pub(crate) struct JitContext<'a> {
     /// the previous walks already reached — see [`spec_memo::SpecMemo`].
     ///
     spec_memo: std::rc::Rc<std::cell::RefCell<spec_memo::SpecMemo>>,
+    /// The receiver-class set the current call's same-target membership
+    /// guard admits — what `recv_class: None` *means* to an inline
+    /// generator asked under that guard. Present only while that call's
+    /// generators run (`compile_method_call` scopes it around the
+    /// dispatch); a generator that can answer uniformly over the whole
+    /// set (`kernel_is_a`) folds on it, everyone else keeps ignoring it.
+    same_target_classes: Option<Box<[CachedClass]>>,
 }
 
 impl<'a> JitContext<'a> {
@@ -1122,6 +1129,7 @@ impl<'a> JitContext<'a> {
             specialized_frame_sizes: HashMap::default(),
             call_site_fpr_saves: HashMap::default(),
             kept_outer_views: vec![],
+            same_target_classes: None,
             outer_claim_barrier: false,
             widened_outer_log: vec![],
             spec_memo: Default::default(),
@@ -1185,6 +1193,9 @@ impl<'a> JitContext<'a> {
             // Shared, not reset: answering one walk's call sites from
             // what the previous walks compiled is the whole point.
             spec_memo: self.spec_memo.clone(),
+            // Scoped per call around the inline-generator dispatch; never
+            // live across a context clone.
+            same_target_classes: None,
         }
     }
 
@@ -3254,6 +3265,16 @@ impl<'a> JitContext<'a> {
 
     pub(crate) fn const_version(&self) -> u64 {
         self.const_version
+    }
+
+    /// See the `same_target_classes` field: the class set the current
+    /// call's membership guard admits, while its inline generators run.
+    pub(crate) fn same_target_classes(&self) -> Option<&[CachedClass]> {
+        self.same_target_classes.as_deref()
+    }
+
+    pub(super) fn set_same_target_classes(&mut self, classes: Option<Box<[CachedClass]>>) {
+        self.same_target_classes = classes;
     }
 
     pub(super) fn specialize_level(&self) -> usize {
