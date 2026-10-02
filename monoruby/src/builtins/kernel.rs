@@ -4961,20 +4961,31 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     ))
 }
 
+/// The compile-time `is_a?` answer for one cache class: walk its raw
+/// superclass chain (ICLASS entries included, so included/prepended
+/// modules are seen) looking for `target_id`. `None` for a class with
+/// no backing Module object (the synthetic BOOL_CLASS), whose chain is
+/// not meaningful.
+fn is_a_chain(store: &Store, class: CachedClass, target_id: ClassId) -> Option<bool> {
+    let mut cur = Some(store[class.id()].try_get_module()?);
+    while let Some(m) = cur {
+        if m.id() == target_id {
+            return Some(true);
+        }
+        cur = m.superclass();
+    }
+    Some(false)
+}
+
 fn kernel_is_a(
     state: &mut AbstractState,
     _ir: &mut AsmIr,
-    _: &JitContext,
+    ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
     recv_class: Option<CachedClass>,
     _: Option<CachedClass>,
 ) -> bool {
-    let Some(recv_class) = recv_class else {
-        // The call site could not prove the receiver's class (a multi-class
-        // dispatch arm / the class-set guard); this generator needs it.
-        return false;
-    };
     let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
@@ -4987,25 +4998,34 @@ fn kernel_is_a(
         return false;
     };
     let target_id = target.id();
-    // Synthetic classes like BOOL_CLASS have no backing Module object —
-    // their superclass chain isn't meaningful for is_a? folding. Fall
-    // back to the regular dispatch in that case.
-    let Some(recv_module) = store[recv_class.id()].try_get_module() else {
+    // The receiver-class guard (or the membership guard) + class_version
+    // guard upstream fix the inheritance chains at this point, so the
+    // answer is a compile-time walk. With a single proven class it is
+    // that class's; under a same-target membership guard it folds only
+    // when it is uniform over every admitted class — exactly the
+    // polymorphic `value.is_a?(SomeClass)` shape, where the answer is
+    // `false` for every observed receiver class alike.
+    let result = if let Some(recv_class) = recv_class {
+        match is_a_chain(store, recv_class, target_id) {
+            Some(r) => r,
+            None => return false,
+        }
+    } else if let Some(classes) = ctx.same_target_classes() {
+        let mut uniform: Option<bool> = None;
+        for &class in classes {
+            match is_a_chain(store, class, target_id) {
+                Some(r) if *uniform.get_or_insert(r) == r => {}
+                _ => return false,
+            }
+        }
+        match uniform {
+            Some(r) => r,
+            None => return false,
+        }
+    } else {
+        // A multi-class dispatch arm without the set at hand.
         return false;
     };
-    // The receiver-class guard + class_version guard upstream ensure
-    // recv_class is exact at this point, so the inheritance chain is
-    // fixed: walk recv_module's superclasses to compute the result at
-    // compile time.
-    let mut cur = Some(recv_module);
-    let mut result = false;
-    while let Some(m) = cur {
-        if m.id() == target_id {
-            result = true;
-            break;
-        }
-        cur = m.superclass();
-    }
     if let Some(dst) = dst {
         state.def_C(dst, Immediate::bool(result));
     }
@@ -5898,17 +5918,12 @@ fn instance_of(
 fn kernel_instance_of(
     state: &mut AbstractState,
     _ir: &mut AsmIr,
-    _: &JitContext,
+    ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
     recv_class: Option<CachedClass>,
     _: Option<CachedClass>,
 ) -> bool {
-    let Some(recv_class) = recv_class else {
-        // The call site could not prove the receiver's class (a multi-class
-        // dispatch arm / the class-set guard); this generator needs it.
-        return false;
-    };
     let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
@@ -5920,10 +5935,31 @@ fn kernel_instance_of(
         return false;
     };
     // Synthetic classes (e.g. BOOL_CLASS) have no backing Module object.
-    let Some(recv_module) = store[recv_class.id()].try_get_module() else {
+    let instance_of = |class: CachedClass| -> Option<bool> {
+        Some(store[class.id()].try_get_module()?.get_real_class().id() == target.id())
+    };
+    let result = if let Some(recv_class) = recv_class {
+        match instance_of(recv_class) {
+            Some(r) => r,
+            None => return false,
+        }
+    } else if let Some(classes) = ctx.same_target_classes() {
+        // Under a same-target membership guard: fold only a uniform
+        // answer (see `kernel_is_a`).
+        let mut uniform: Option<bool> = None;
+        for &class in classes {
+            match instance_of(class) {
+                Some(r) if *uniform.get_or_insert(r) == r => {}
+                _ => return false,
+            }
+        }
+        match uniform {
+            Some(r) => r,
+            None => return false,
+        }
+    } else {
         return false;
     };
-    let result = recv_module.get_real_class().id() == target.id();
     if let Some(dst) = dst {
         state.def_C(dst, Immediate::bool(result));
     }
@@ -8653,6 +8689,37 @@ mod tests {
             a.instance_variable_set("@k", 10);
             a.instance_variables.sort
             "#,
+        );
+    }
+
+    /// `is_a?` / `instance_of?` folding under a same-target membership
+    /// guard (polymorphic receiver, every class resolving to the
+    /// builtin): a uniform answer folds (`SetLike` false everywhere,
+    /// `Comparable` true everywhere), a non-uniform one declines to the
+    /// per-receiver dispatch, and an `include` performed after warmup
+    /// flips one member's answer — the recompile must see it.
+    #[test]
+    fn is_a_set_guarded_fold() {
+        run_test_with_prelude(
+            r#"
+        objs = [:a, "s", 1, 2.0]
+        res = []
+        60.times do |i|
+          o = objs[i % 4]
+          res << o.is_a?(SetLike) << o.is_a?(Comparable) << o.is_a?(Integer)
+          res << o.instance_of?(SetLike) << o.instance_of?(Symbol)
+        end
+        k = Class.new
+        objs2 = [k.new, "s"]
+        60.times { |i| res << objs2[i % 2].is_a?(Mx) }
+        k.include(Mx)
+        60.times { |i| res << objs2[i % 2].is_a?(Mx) }
+        res
+        "#,
+            r#"
+        class SetLike; end
+        module Mx; end
+        "#,
         );
     }
 
