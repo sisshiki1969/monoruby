@@ -1564,6 +1564,18 @@ impl SlotState {
         }
     }
 
+    /// The slot's compile-time value, when the lattice carries one
+    /// (`LinkMode::C`): an immediate literal, a Bignum literal, a frozen
+    /// heap literal, or a folded constant. The identity promise of `C`
+    /// is exactly what makes a digest baked from this value the value
+    /// the runtime will present.
+    pub(crate) fn concrete_value(&self, slot: SlotId) -> Option<Value> {
+        match self.mode(slot) {
+            LinkMode::C(v) => Some(v),
+            _ => None,
+        }
+    }
+
     pub fn is_fixnum_literal(&self, slot: SlotId) -> Option<Fixnum> {
         if let LinkMode::C(v) = self.mode(slot) {
             v.is_immediate()?.try_fixnum()

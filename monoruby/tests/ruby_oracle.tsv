@@ -3731,6 +3731,7 @@ b9a1050c1afeca64589ff13f70296957	[["UTF-8", ["Encoding::InvalidByteSequenceError
 b9a3cf79facba89ba9427e8a3927bcc8	[[["a", 1], ["b", 2], ["c", 3]], [["a", 1], ["b", 2], ["c", 3]], [["a", 1], ["b", 2], ["c", 3]]]	h = { "b" => 2, "a" => 1, "c" => 3 }\n            [\n              h.
 b9a7a07ccfa8e547bb15218d8ea8a606	:ok	c = Class.new do\n              def foo; :foo; end\n            end\n 
 b9a8e93ca294ef22a9d91b72fa37855f	"gen"	(Enumerator.new { |y| raise "gen" }.each { }) rescue $!.message
+b9bab7fc09b02f93e145954f03c5f632	[7509, 5, 63, 0, 100]	KEY = "k63"\n        \n\n        h = {}\n        acc = 0\n        64.times d
 b9dbd678dcd9ac118f3688056e263903	[[:undefined_conversion, [98], [97]], [:invalid_byte_sequence, [254, 99, 100], [97, 98]], [:destination_buffer_full, "ark", "g"], [:finished, "", "glark"], [:undefined_conversion, [98], [97]], [:invalid_byte_sequence, [254, 99, 100], [97, 98]], [:destination_buffer_full, "ark", "g"], [:finished, "", "glark"]]	r = []\n            ["US-ASCII", "BINARY"].each do |dst|\n           
 b9e4a202e801d221011f287254121bb3	"Errno::EPIPE"	r, w = IO.pipe\n            r.close\n            begin\n              
 b9ee309e3978ec232bdf774078592539	["5", 2]	def apply(x, &b); b.call(x); end\n              [apply(5, &:to_s),

@@ -948,10 +948,15 @@ impl AbstractFrame {
     /// the stack home, where GC then scans the heap pointer), and spilled at the
     /// next `flush_gp` — exactly as the old `def_reg2acc_concrete_value` path
     /// left the pointer physically in the stack slot.
-    pub(crate) fn def_lit2gp(&mut self, ir: &mut AsmIr, dst: SlotId, v: Value) {
-        let gp = self.alloc_gp_for(ir, dst, Guarded::from_concrete_value(v));
-        ir.lit2reg(v, gp);
-        self.bind_gp_resident(gp, dst);
+    pub(crate) fn def_lit2gp(&mut self, _ir: &mut AsmIr, dst: SlotId, v: Value) {
+        // `LinkMode::C`, like a Bignum literal or a folded constant: the
+        // identity is the interned literal's own, every execution. Reads
+        // materialize the pointer per use (`GpLoad::Lit`, one `movabs`),
+        // GC safety is the const fold's (`wb_literal` homes the pointer
+        // before every safepoint) — and carrying the *value* instead of
+        // just its class is what lets a consumer fold on it (a frozen
+        // String literal as a Hash key bakes its digest at compile time).
+        self.def_C(dst, v);
     }
 
     pub(crate) fn def_reg2acc(&mut self, ir: &mut AsmIr, src: GP, dst: impl Into<Option<SlotId>>) {

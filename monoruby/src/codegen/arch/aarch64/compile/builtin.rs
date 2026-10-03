@@ -793,7 +793,7 @@ impl Codegen {
         &mut self,
         layout: rubymap::EntriesLayout,
         hashindex: u64,
-        digest: u64,
+        digest: crate::codegen::jitgen::asmir::ProbeDigest,
         key_eq: Option<u64>,
     ) {
         let lp = self.jit.label();
@@ -828,16 +828,28 @@ impl Codegen {
             ldr x3, [x2, #(content)];           // 0 = Map, 1 = IdentMap
         );
         self.jit.cbnz_label(monoasm::GReg(3), &miss);
+        match digest {
+            crate::codegen::jitgen::asmir::ProbeDigest::Call(digest) => {
+                monoasm_arm64!(&mut self.jit,
+                    // digest = digest(key); keep x1 / x2 for the miss path.
+                    stp x1, x2, [sp, #(-16)]!;
+                    mov x0, x1;
+                    mov x9, (digest);
+                    str x30, [sp, #(-16)]!;
+                    blr x9;
+                    ldr x30, [sp], #(16);
+                    ldp x1, x2, [sp], #(16);
+                    mov x10, x0;                // x10 = digest
+                );
+            }
+            crate::codegen::jitgen::asmir::ProbeDigest::Const(digest) => {
+                // The key is a compile-time constant: its digest is too.
+                monoasm_arm64!(&mut self.jit,
+                    mov x10, (digest);          // x10 = digest
+                );
+            }
+        }
         monoasm_arm64!(&mut self.jit,
-            // digest = digest(key); keep x1 / x2 for the miss path.
-            stp x1, x2, [sp, #(-16)]!;
-            mov x0, x1;
-            mov x9, (digest);
-            str x30, [sp, #(-16)]!;
-            blr x9;
-            ldr x30, [sp], #(16);
-            ldp x1, x2, [sp], #(16);
-            mov x10, x0;                        // x10 = digest
             ldr x4, [x2, #(map_ptr)];
             ldrb w3, [x4, #(linear_off)];
         );

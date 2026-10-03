@@ -1103,6 +1103,40 @@ fn hash_index(
     }
     state.load(ir, callsite.args, GP::Rcx);
     state.load(ir, callsite.recv, GP::Rdx);
+    // A compile-time key (`LinkMode::C`: a frozen String literal, a folded
+    // String constant, an immediate literal) carries an identity promise
+    // stronger than any class guard, so its digest is computed *now* — by
+    // the same leaves the runtime probe would call, under the same
+    // per-process seed — and baked into the probe as an immediate. The
+    // key-class guard and the key-polymorphism question disappear with
+    // the runtime hashing: whatever other keys this site has seen, *this*
+    // compile indexes with exactly this key.
+    if let Some(layout) = hash_entries_layout()
+        && let Some(v) = state.concrete_value(callsite.args)
+    {
+        use crate::codegen::jitgen::asmir::ProbeDigest;
+        let const_probe = if v.is_packed_value() {
+            // Identity (`key_eq: None`) is exact for every packed key.
+            Some((ProbeDigest::Const(packed_digest_c(v.id())), None))
+        } else if v.is_plain_rstring_inner().is_some() {
+            Some((
+                ProbeDigest::Const(string_digest_c(v.id())),
+                Some(string_key_eq_c as *const () as u64),
+            ))
+        } else {
+            None
+        };
+        if let Some((digest, key_eq)) = const_probe {
+            let using_fpr = state.get_using_fpr(ir);
+            ir.fpr_save(using_fpr);
+            ir.hash_probe(layout, hashindex as *const () as u64, digest, key_eq);
+            ir.fpr_restore(using_fpr);
+            let error = ir.new_error(state);
+            ir.handle_error(error);
+            state.def_rax2acc(ir, callsite.dst);
+            return true;
+        }
+    }
     // The probe in line, when the key is one of the immediates whose digest
     // is its bits through the mixer (a fixnum's goes through SipHash first
     // — `Value::ruby_hash_packed` — and stays on the call until that is
@@ -1156,7 +1190,12 @@ fn hash_index(
         state.guard_class(ir, callsite.args, GP::Rcx, kc, deopt);
         let using_fpr = state.get_using_fpr(ir);
         ir.fpr_save(using_fpr);
-        ir.hash_probe(layout, hashindex as *const () as u64, digest, key_eq);
+        ir.hash_probe(
+            layout,
+            hashindex as *const () as u64,
+            crate::codegen::jitgen::asmir::ProbeDigest::Call(digest),
+            key_eq,
+        );
         ir.fpr_restore(using_fpr);
         let error = ir.new_error(state);
         ir.handle_error(error);
@@ -3812,6 +3851,39 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// `Hash#[]` with a compile-time key (`LinkMode::C`): a frozen
+    /// String literal (`"..".freeze`), a folded String constant, and
+    /// immediate literals bake their digest into the inline probe at
+    /// JIT compile time. Pins hits, misses, the default fallback, and
+    /// both map regimes (the hash grows across the linear→indexed
+    /// boundary mid-test, so the baked digest must keep finding its
+    /// key after rehashes).
+    #[test]
+    fn hash_index_baked_digest() {
+        run_test_with_prelude(
+            r#"
+        h = {}
+        acc = 0
+        64.times do |i|
+          h["k#{i}"] = i
+          h[:sym] = i if i == 0
+          h[7] = i + 100 if i == 0
+          acc += h["k5".freeze].to_i
+          acc += h[KEY].to_i
+          acc += h[:sym] + h[7]
+          acc += h["absent".freeze].to_i
+          acc += h.fetch("k9".freeze, 0).to_i
+        end
+        d = Hash.new { |_, k| k.size }
+        64.times { acc += d["dflt".freeze] }
+        [acc, h["k5".freeze], h[KEY], h[:sym], h[7]]
+        "#,
+            r#"
+        KEY = "k63"
+        "#,
+        );
+    }
 
     /// A key that inherits the builtin identity `hash` skips the `#hash`
     /// dispatch and digests `id()` inline. The digest has to be the one the
