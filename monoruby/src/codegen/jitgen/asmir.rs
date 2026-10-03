@@ -1558,6 +1558,17 @@ impl LoopRspOffset {
 pub(crate) enum ProbeDigest {
     /// Call the digest leaf (`fn(key_bits) -> digest`) at run time.
     Call(u64),
+    /// Like `Call`, through a site-local last-key memo: the emitted
+    /// probe keeps one `(last_key, last_digest)` word pair in JIT data,
+    /// answers an identity-matching key without calling the leaf, and
+    /// re-memoizes only *frozen* keys (identity + frozen permanence is
+    /// what makes a later hit's digest valid without re-reading the
+    /// bytes; a mutable key is digested every time, exactly as `Call`).
+    /// The key must be a heap value — the emitter reads its header
+    /// flag. The GC zeroes every registered key word
+    /// (`vm::zero_probe_memos`) so a collected key's recycled address
+    /// can never alias a hit.
+    CallMemoized(u64),
     /// The digest, computed at compile time from a `LinkMode::C` key —
     /// a frozen String literal or a folded constant. The mixer seed is
     /// per process (`RubyRandomState::new`), and the JIT compiles in

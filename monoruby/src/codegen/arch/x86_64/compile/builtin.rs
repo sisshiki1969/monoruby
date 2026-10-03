@@ -848,6 +848,40 @@ impl Codegen {
                     movq r8, rax;               // r8 = digest
                 }
             }
+            crate::codegen::jitgen::asmir::ProbeDigest::CallMemoized(digest) => {
+                // Site-local last-key memo (String keys): an identity hit
+                // skips the digest leaf — the bytes of a *frozen* key can
+                // never change, so a digest memoized under the frozen flag
+                // stays valid for the object's lifetime, and the GC zeroes
+                // the key word so a collected key's recycled address can
+                // never alias (`vm::zero_probe_memos`). A mutable key is
+                // digested every time, exactly like `Call`.
+                let memo = crate::vm::alloc_probe_memo() as u64;
+                let slow = self.jit.label();
+                let have = self.jit.label();
+                monoasm! { &mut self.jit,
+                    movq rax, (memo);
+                    cmpq rcx, [rax];
+                    jne  slow;
+                    movq r8, [rax + 8];
+                    jmp  have;
+                slow:
+                    pushq rdx;
+                    pushq rcx;
+                    movq rdi, rcx;
+                    movq rax, (digest);
+                    call rax;
+                    popq rcx;
+                    popq rdx;
+                    movq r8, rax;
+                    testb [rcx + (RVALUE_OFFSET_FLAG)], (0b10);
+                    jz   have;      // not frozen: no memo
+                    movq rax, (memo);
+                    movq [rax], rcx;
+                    movq [rax + 8], r8;
+                have:
+                }
+            }
             crate::codegen::jitgen::asmir::ProbeDigest::Const(digest) => {
                 // The key is a compile-time constant: its digest is too.
                 monoasm! { &mut self.jit,
