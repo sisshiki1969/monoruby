@@ -393,6 +393,13 @@ impl<'a> JitContext<'a> {
             *state = state_save;
             (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
             self.fused_skip = fused_skip_save;
+            // The discarded fast arm parked the callsite's fused branch
+            // (its dispatch gate moves it to the leftover cell); hand it
+            // back so the single-path compile the caller falls to can
+            // still fuse it.
+            if let Some(fused) = self.take_fused_leftover() {
+                self.set_fused_br(Some(fused));
+            }
             return Ok(None);
         }
         self.end_arm(fast, ir, &merge, true);
@@ -981,6 +988,16 @@ impl<'a> JitContext<'a> {
             }
         }
 
+        // A dispatch arm is one of several paths joining before the fused
+        // branch: a predicate generator taking the branch inside it would
+        // leave the sibling arms (the other PIC arms, or the residual's
+        // generic send) falling through the join with no truthiness test
+        // at all. Park the branch — the method-call arm then emits the
+        // plain test on the joined result, and the arm's generators still
+        // fire in their value-materializing form.
+        if self.in_dispatch_arm() || matches!(recv_miss, RecvMissMode::Residual(_)) {
+            self.park_fused_br();
+        }
         if callsite.block_fid.is_none()
             && let Some(info) = self.store.inline_info.get_inline(func_id)
         {

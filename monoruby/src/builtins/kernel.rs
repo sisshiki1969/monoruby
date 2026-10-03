@@ -26,12 +26,12 @@ pub fn define_loop_mode_builtins(globals: &mut Globals) {
 pub(super) fn init(globals: &mut Globals) -> Module {
     let klass = globals.define_toplevel_module("Kernel");
     let kernel_class = klass.id();
-    globals.define_builtin_inline_func(
-        kernel_class,
-        "nil?",
-        nil,
-        inline_gen2!(kernel_nil),
-        0,
+    let nil_fid = globals.define_builtin_func(kernel_class, "nil?", nil, 0);
+    globals.store.inline_info.add_inline(
+        nil_fid,
+        crate::executor::inline::InlineFuncInfo::new_inline_gen_predicate(inline_gen2!(
+            kernel_nil
+        )),
     );
     globals.define_builtin_inline_func(
         kernel_class,
@@ -441,7 +441,7 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn kernel_nil(
     state: &mut AbstractState,
     ir: &mut AsmIr,
-    _: &JitContext,
+    ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
     // The receiver Value is all this reads, so an unproven class
@@ -461,6 +461,21 @@ fn kernel_nil(
     } else if state.is_not_nil(recv) {
         if let Some(dst) = dst {
             state.def_C(dst, Immediate::bool(false));
+        }
+    } else if let Some(fused) = ctx.take_fused_br() {
+        use crate::bytecodegen::inst::BrKind;
+        // A branch fused onto this call (`if x.nil?`): compare the
+        // receiver Value against nil and jump — no boolean materialized,
+        // no truthiness retest. The branch is a block boundary, so dirty
+        // GP residents go home first (see `integer_pred`).
+        state.flush_gp(ir);
+        state.load(ir, recv, GP::Rdi);
+        let truthy = fused.brkind == BrKind::BrIf;
+        ir.br_if_value_eq(GP::Rdi, crate::value::NIL_VALUE as u16, truthy, fused.label);
+        if let Some(dst) = dst {
+            // The temp is the branch's sole use; park a nil so any later
+            // write-back of the dead slot is still a Value.
+            state.def_C(dst, Immediate::nil());
         }
     } else {
         state.load(ir, recv, GP::Rdi);
@@ -9201,6 +9216,34 @@ mod tests {
             "false.nil?",
             "[].nil?",
         ]);
+    }
+
+    /// `nil?` in a conditional fuses into the branch (a Value compare
+    /// against nil, no boolean materialized, no class guard): `if` /
+    /// `unless` / `while` shapes, a statically-known receiver (folds),
+    /// and a value-context use next to a fused one.
+    #[test]
+    fn kernel_nil_branch_fusion() {
+        run_test(
+            r#"
+        a = [nil, 1, nil, "x"]
+        c = 0; d = 0; e = 0
+        40.times do |i|
+          x = a[i % 4]
+          c += 1 if x.nil?
+          d += 1 unless x.nil?
+          e += 1 if nil.nil?
+          j = a[i % 2]
+          while j.nil?
+            j = i
+            e += 10
+          end
+          f = x.nil?
+          e += 100 if f
+        end
+        [c, d, e]
+        "#,
+        );
     }
 
     #[test]
