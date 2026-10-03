@@ -71,7 +71,24 @@ impl<'a> BytecodeGen<'a> {
     ) -> Result<()> {
         let loc = lhs.loc;
         let old = self.temp;
-        let lhs = self.push_expr(lhs)?.into();
+        // A `when` String literal is emitted frozen and interned, like a
+        // Hash-literal key (`push_hash_key`): `"lit" === subject` never
+        // exposes the receiver's identity, CRuby fstrings its
+        // when-literals the same way, and the frozen literal reaches the
+        // JIT as `LinkMode::C` — which is what lets `string_eq_gen` fold
+        // the dispatch's compare.
+        let lhs: BcReg = if matches!(
+            &lhs.kind,
+            NodeKind::String(_) | NodeKind::Bytes(_) | NodeKind::EncodedString(..)
+        ) {
+            let enc = self.source_encoding();
+            let v = self.static_hash_key(&lhs, enc);
+            let dst: BcReg = self.push().into();
+            self.emit(BytecodeInst::FrozenLiteral(dst, v), loc);
+            dst
+        } else {
+            self.push_expr(lhs)?.into()
+        };
         self.emit(
             BytecodeInst::Cmp(CmpKind::TEq, Some(lhs), (lhs, rhs), true),
             loc,
