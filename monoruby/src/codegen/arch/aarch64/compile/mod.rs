@@ -1396,7 +1396,20 @@ impl Codegen {
             // aarch64 grows the recorder.
             LInst::BrIfBitSet { reg, bit, set, target } => {
                 let r = reg.a64().0;
-                if set {
+                if self.far_branch_mode {
+                    // `tbz`/`tbnz` reach ±32 KiB (Test14) and the target is a
+                    // BB edge megabytes away in a far frame: test the
+                    // *inverted* bit over a `b` (±128 MiB). A GP bit test has
+                    // no NaN subtlety, so the inversion is exact.
+                    let cont = self.jit.label();
+                    if set {
+                        monoasm_arm64!(&mut self.jit, tbz x(r), #(bit as u32), cont;);
+                    } else {
+                        monoasm_arm64!(&mut self.jit, tbnz x(r), #(bit as u32), cont;);
+                    }
+                    monoasm_arm64!(&mut self.jit, b target;);
+                    self.jit.bind_label(cont);
+                } else if set {
                     monoasm_arm64!(&mut self.jit, tbnz x(r), #(bit as u32), target;);
                 } else {
                     monoasm_arm64!(&mut self.jit, tbz x(r), #(bit as u32), target;);
@@ -1405,10 +1418,22 @@ impl Codegen {
             LInst::BrIfValueEq { reg, imm, eq, target } => {
                 let r = reg.a64().0;
                 monoasm_arm64!(&mut self.jit, cmp x(r), #(imm as u32););
-                self.jit.bcond_label(
-                    if eq { monoasm::Cond::Eq } else { monoasm::Cond::Ne },
-                    &target,
-                );
+                if self.far_branch_mode {
+                    // `b.cond` reaches ±1 MiB (Imm19); in a far frame take the
+                    // inverted integer condition over a `b` (±128 MiB).
+                    let cont = self.jit.label();
+                    self.jit.bcond_label(
+                        if eq { monoasm::Cond::Ne } else { monoasm::Cond::Eq },
+                        &cont,
+                    );
+                    monoasm_arm64!(&mut self.jit, b target;);
+                    self.jit.bind_label(cont);
+                } else {
+                    self.jit.bcond_label(
+                        if eq { monoasm::Cond::Eq } else { monoasm::Cond::Ne },
+                        &target,
+                    );
+                }
             }
             LInst::BrClassNe { reg, class, target } => {
                 if self.far_branch_mode {
