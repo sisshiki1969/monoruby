@@ -1113,6 +1113,13 @@ impl<'a> JitContext<'a> {
             }
         }
 
+        // The inline-generator dispatch is over: a fused branch no
+        // generator took must not stay visible past this point — the
+        // nested compile of an inlined callee runs the same machinery,
+        // and an unrelated inner callsite would clobber or steal it.
+        // Park it for the method-call arm to read back.
+        self.park_fused_br();
+
         //
         // generate JIT code for a cached method call.
         //

@@ -1115,6 +1115,11 @@ pub(crate) struct JitContext<'a> {
     /// `Value` materialized; left untaken, the arm emits the ordinary
     /// truthiness branch after the call, byte-for-byte today's code.
     fused_br: std::cell::RefCell<Option<FusedBr>>,
+    /// Where `method_call` parks a fused branch its generator dispatch
+    /// left untaken (`park_fused_br`), so the live cell is empty while an
+    /// inlined callee compiles under it. Bracketed by the method-call arm
+    /// together with `fused_br`.
+    fused_br_leftover: std::cell::RefCell<Option<FusedBr>>,
 }
 
 impl<'a> JitContext<'a> {
@@ -1149,6 +1154,7 @@ impl<'a> JitContext<'a> {
             kept_outer_views: vec![],
             same_target_classes: None,
             fused_br: std::cell::RefCell::new(None),
+            fused_br_leftover: std::cell::RefCell::new(None),
             outer_claim_barrier: false,
             widened_outer_log: vec![],
             spec_memo: Default::default(),
@@ -1216,6 +1222,7 @@ impl<'a> JitContext<'a> {
             // live across a context clone.
             same_target_classes: None,
             fused_br: std::cell::RefCell::new(None),
+            fused_br_leftover: std::cell::RefCell::new(None),
         }
     }
 
@@ -3308,8 +3315,35 @@ impl<'a> JitContext<'a> {
         *self.fused_br.borrow_mut() = fused;
     }
 
-    pub(super) fn fused_br_pending(&self) -> bool {
-        self.fused_br.borrow().is_some()
+    /// Swap the fused-branch cell, returning what it held. The method-call
+    /// arm brackets a callsite with this so nothing of an enclosing
+    /// callsite's fusion survives into — or leaks out of — a nested
+    /// compile.
+    pub(super) fn swap_fused_br(&self, fused: Option<FusedBr>) -> Option<FusedBr> {
+        std::mem::replace(&mut *self.fused_br.borrow_mut(), fused)
+    }
+
+    /// Move a fused branch no generator consumed out of the live cell.
+    /// `method_call` calls this once its inline-generator dispatch is
+    /// over: everything after that point — the ordinary call emission and
+    /// above all the nested compile of an inlined callee — must see an
+    /// empty cell, or an unrelated inner callsite would clobber or steal
+    /// the branch (optparse's `make_switch` lost every long option to
+    /// exactly that). The method-call arm reads the parked value back
+    /// with `take_fused_leftover`.
+    pub(crate) fn park_fused_br(&self) {
+        let pending = self.fused_br.borrow_mut().take();
+        if pending.is_some() {
+            *self.fused_br_leftover.borrow_mut() = pending;
+        }
+    }
+
+    pub(super) fn take_fused_leftover(&self) -> Option<FusedBr> {
+        self.fused_br_leftover.borrow_mut().take()
+    }
+
+    pub(super) fn swap_fused_leftover(&self, fused: Option<FusedBr>) -> Option<FusedBr> {
+        std::mem::replace(&mut *self.fused_br_leftover.borrow_mut(), fused)
     }
 
     pub(super) fn specialize_level(&self) -> usize {
