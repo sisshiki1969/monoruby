@@ -65,6 +65,44 @@ fn fused_branch_survives_nested_inline_compile() {
         end
         puts "ok"
     "#;
+    run(script);
+}
+
+/// A fused predicate on a polymorphic receiver: the callsite compiles as
+/// a class dispatch (PIC arms, or a fast arm over a generic residual),
+/// and a predicate generator firing *inside one arm* must not take the
+/// fused branch — the sibling arms would join and fall through with no
+/// truthiness test at all. `zero?` over {Integer, Float} and `nil?` over
+/// a six-class mix both counted wrongly (591 / 594 instead of 400)
+/// before the dispatch-arm gate parked the branch.
+#[test]
+fn fused_branch_not_taken_inside_dispatch_arms() {
+    let script = r#"
+        vals = [0, 1, 0.0, 2.5]
+        c = 0
+        200.times { vals.each { |x| c += 1 if x.zero? } }
+        raise "zero?: #{c}" unless c == 400
+
+        mixed = [1, nil, "s", nil, :sym, 2.5]
+        c = 0
+        d = 0
+        200.times do
+          mixed.each do |x|
+            c += 1 if x.nil?
+            d += 1 unless x.nil?
+          end
+        end
+        raise "nil? each: #{c} #{d}" unless c == 400 && d == 800
+
+        c = 0
+        300.times { |i| x = mixed[i % 6]; c += 1 if x.nil? }
+        raise "nil? index: #{c}" unless c == 100
+        puts "ok"
+    "#;
+    run(script);
+}
+
+fn run(script: &str) {
     let out = Command::new(env!("CARGO_BIN_EXE_monoruby"))
         .env_remove("RUBYOPT")
         .env_remove("RUBYLIB")

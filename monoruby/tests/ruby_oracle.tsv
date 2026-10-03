@@ -1553,6 +1553,7 @@
 4b998c100dbe735e23675ef9ca09e8a1	[true, true, true, true, true]	(fs=Encoding.find("filesystem"); [Dir.home.encoding == fs, Dir.home("root").enco
 4ba2572278d477946c8815ee58fef0de	"hello"	class Foo\n              def hello; "hello"; end\n              alias
 4bb8dfa79710364063ae0b96416ec24a	"[C2, C1, M, Object, Kernel, BasicObject]"	module M\n            end\n            class C1\n              include
+4be609b79a34acf496547ddebe04da01	[20, 20, 2240]	a = [nil, 1, nil, "x"]\n        c = 0; d = 0; e = 0\n        40.times do 
 4be82552906332efdc535e4cb0bd01a5	[[[1, 0], [1, 0, 0], [255]], [1, 0], [[104, 233, 108, 108, 112], "ISO-8859-1"], [[104, 233, 108, 108, 111], "ISO-8859-1"], [[120, 32, 104, 233, 108, 108, 111, 32, 121], "ISO-8859-1"], [[255], "ASCII-8BIT"], [[233, 61, 51], "ISO-8859-1"], [255, 15, 42], ["\\"h\\\\xE9llo\\"", "ISO-8859-1"], ["\\"\\\\xFF\\"", "ASCII-8BIT"]]	__a = [];__a << (["\\xFF".b.succ.bytes, "\\xFF\\xFF".b.succ.bytes, "\\xFE".b.succ.by
 4bf63b7ab095dc317e165b1b582247af	[10, 1]	def m(y: 10) = y; [m, m(y: 1)]
 4c06a0a42fd3ede2fb9498305d7c50b3	["{a: 1, A: 1, _x: 1, foo?: 1, foo!: 1, \\"foo=\\": 1, \\"0\\": 1, \\"!\\": 1, \\"+\\": 1, \\"a b\\": 1, \\"a-b\\": 1, \\"\\": 1, x1: 1, CONST: 1, \\"1abc\\": 1, \\"@iv\\": 1, \\"$g\\": 1, \\"==\\": 1, \\"[]\\": 1, \\"[]=\\": 1}", "{a: 1, \\"b c\\": 2, \\"+\\": 3}", "{foo?: 1, bar!: 2, \\"baz=\\": 3}", "{\\"\\\\xFF\\": 1}", "{\\"\\\\xE3\\\\x81\\": 2, ok: 3}"]	__a = [];__a << (\n            h = {}\n            [:a, :A, :_x, :foo?, :foo!, :"f
