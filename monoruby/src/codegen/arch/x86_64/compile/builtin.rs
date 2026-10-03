@@ -797,7 +797,7 @@ impl Codegen {
         &mut self,
         layout: rubymap::EntriesLayout,
         hashindex: u64,
-        digest: u64,
+        digest: crate::codegen::jitgen::asmir::ProbeDigest,
         key_eq: Option<u64>,
     ) {
         let lp = self.jit.label();
@@ -832,16 +832,30 @@ impl Codegen {
             movq rsi, [rdx + (content)];        // 0 = Map, 1 = IdentMap
             testq rsi, rsi;
             jne  miss;
-            // digest = digest(key). A leaf, but a C call: rdx / rcx are
-            // caller-saved, and the miss path still needs them.
-            pushq rdx;
-            pushq rcx;
-            movq rdi, rcx;
-            movq rax, (digest);
-            call rax;
-            popq rcx;
-            popq rdx;
-            movq r8, rax;                       // r8 = digest
+        }
+        match digest {
+            crate::codegen::jitgen::asmir::ProbeDigest::Call(digest) => {
+                // digest = digest(key). A leaf, but a C call: rdx / rcx are
+                // caller-saved, and the miss path still needs them.
+                monoasm! { &mut self.jit,
+                    pushq rdx;
+                    pushq rcx;
+                    movq rdi, rcx;
+                    movq rax, (digest);
+                    call rax;
+                    popq rcx;
+                    popq rdx;
+                    movq r8, rax;               // r8 = digest
+                }
+            }
+            crate::codegen::jitgen::asmir::ProbeDigest::Const(digest) => {
+                // The key is a compile-time constant: its digest is too.
+                monoasm! { &mut self.jit,
+                    movq r8, (digest);          // r8 = digest
+                }
+            }
+        }
+        monoasm! { &mut self.jit,
             movq rdi, [rdx + (map_ptr)];
             movzxb rsi, [rdi + (linear_off)];
             testq rsi, rsi;

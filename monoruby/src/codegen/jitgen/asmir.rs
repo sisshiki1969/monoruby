@@ -1286,7 +1286,7 @@ impl AsmIr {
         &mut self,
         layout: rubymap::EntriesLayout,
         hashindex: u64,
-        digest: u64,
+        digest: ProbeDigest,
         key_eq: Option<u64>,
     ) {
         self.inst.push(AsmInst::HashProbe {
@@ -1551,6 +1551,18 @@ impl LoopRspOffset {
             ),
         }
     }
+}
+
+/// How `AsmInst::HashProbe` obtains the key's bucketing digest.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ProbeDigest {
+    /// Call the digest leaf (`fn(key_bits) -> digest`) at run time.
+    Call(u64),
+    /// The digest, computed at compile time from a `LinkMode::C` key —
+    /// a frozen String literal or a folded constant. The mixer seed is
+    /// per process (`RubyRandomState::new`), and the JIT compiles in
+    /// the process it emits for, so the baked value is the map's.
+    Const(u64),
 }
 
 #[derive(Debug)]
@@ -2337,8 +2349,8 @@ pub(super) enum AsmInst {
         layout: rubymap::EntriesLayout,
         /// `hashindex`'s address — the miss path.
         hashindex: u64,
-        /// The digest leaf's address: `fn(key_bits) -> digest`.
-        digest: u64,
+        /// How the probe gets the key's digest.
+        digest: ProbeDigest,
         /// The equality leaf's address, `fn(stored_key_bits, key_bits) -> 0 | 1`,
         /// for a key kind not decided by its bits; `None` compares bits.
         key_eq: Option<u64>,
