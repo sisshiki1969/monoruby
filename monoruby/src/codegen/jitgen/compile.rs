@@ -915,7 +915,77 @@ impl<'a> JitContext<'a> {
                 _polymorphic: _,
                 callid,
                 cache,
-            } => return self.method_call(state, ir, callid, cache),
+            } => {
+                // A conditional branch fused onto this call (`if a.even?`
+                // — bytecodegen marked the following CondBr optimizable):
+                // offer it to the call's inline generators; a predicate
+                // generator takes it and branches directly, with no
+                // boolean materialized. Untaken, the fallback below emits
+                // the same load + truthiness branch the plain CondBr arm
+                // would — byte for byte today's code.
+                if let Some((br_pos, brkind, dest_bb)) =
+                    self.peek_fused_condbr(bc_pos, self.store[callid].dst)
+                {
+                    // Bracket the two fusion cells: the live cell holds the
+                    // branch only until `method_call`'s generator dispatch
+                    // is over (it parks an untaken one in the leftover cell
+                    // before anything nested can compile), and whatever an
+                    // enclosing callsite had in flight is restored on the
+                    // way out.
+                    let dest_label = self.label();
+                    let saved_cell = self.swap_fused_br(Some(
+                        crate::codegen::jitgen::context::FusedBr {
+                            brkind,
+                            label: dest_label,
+                        },
+                    ));
+                    let saved_leftover = self.swap_fused_leftover(None);
+                    let res = self.method_call(state, ir, callid, cache);
+                    // Untaken on either cell means no predicate generator
+                    // emitted the branch; both empty is the claim one did.
+                    let untaken = self.take_fused_br().or_else(|| self.take_fused_leftover());
+                    self.set_fused_br(saved_cell);
+                    self.swap_fused_leftover(saved_leftover);
+                    let res = res?;
+                    if !matches!(res, CompileResult::Continue) {
+                        // The block ended inside the call (deopt / cease);
+                        // the branch is unreachable in this compilation.
+                        return Ok(res);
+                    }
+                    if untaken.is_none() {
+                        // A predicate generator emitted the branch; book
+                        // the side edge now, after emission, so both
+                        // successors see the generator's refinements —
+                        // exactly `binary_cmp_br`'s ordering.
+                        self.new_side_branch(br_pos, dest_bb, state.clone(), dest_label);
+                        return Ok(CompileResult::Continue);
+                    }
+                    // Ordinary call: resolve a state-known result
+                    // statically (an inline generator may have folded the
+                    // callsite dst to a constant), else branch on it. A
+                    // branch is a block boundary either way, so dirty GP
+                    // residents go home first — the static resolution ends
+                    // the block just as surely as the emitted branch.
+                    let dst = self.store[callid].dst.unwrap();
+                    if state.is_truthy(dst) {
+                        if brkind == BrKind::BrIf {
+                            state.flush_gp(ir);
+                            return Ok(CompileResult::Branch(dest_bb));
+                        }
+                    } else if state.is_falsy(dst) {
+                        if brkind == BrKind::BrIfNot {
+                            state.flush_gp(ir);
+                            return Ok(CompileResult::Branch(dest_bb));
+                        }
+                    } else {
+                        state.flush_gp(ir);
+                        state.load(ir, dst, GP::Rax);
+                        self.gen_cond_br(state.clone(), ir, br_pos, dest_bb, brkind);
+                    }
+                    return Ok(CompileResult::Continue);
+                }
+                return self.method_call(state, ir, callid, cache);
+            }
             TraceIr::Yield { callid } => {
                 // Specialized (inlined) yield is lowered on both x86 and aarch64.
                 if let Some(block_info) = self.current_method_given_block()
@@ -1394,7 +1464,7 @@ impl<'a> JitContext<'a> {
                 let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
                 return Ok(CompileResult::Branch(dest_bb));
             }
-            TraceIr::CondBr(cond_, disp, false, brkind) => {
+            TraceIr::CondBr(cond_, disp, opt_, brkind) if !opt_ || self.condbr_unconsumed(bc_pos) => {
                 state.flush_gp(ir);
                 let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
                 if state.is_truthy(cond_) {
@@ -1446,7 +1516,8 @@ impl<'a> JitContext<'a> {
                     }
                 }
             }
-            TraceIr::CondBr(_, _, true, _) => {
+            TraceIr::CondBr(..) => {
+                // Consumed by the preceding compare or method-call fusion.
                 state.flush_gp(ir);
             }
             TraceIr::CheckLocal(local, disp) => {
@@ -1597,6 +1668,76 @@ impl<'a> JitContext<'a> {
         } else {
             Ok(CompileResult::Recompile(RecompileReason::MethodNotFound))
         }
+    }
+
+    /// Whether the optimizable `CondBr` at `bc_pos` was left unconsumed by
+    /// its feeding instruction: neither decoded into a `BinCmpBr` nor taken
+    /// by the method-call fusion peek. Such an orphan must be compiled as a
+    /// plain value-test branch rather than skipped.
+    fn condbr_unconsumed(&self, bc_pos: BcIndex) -> bool {
+        if bc_pos.to_usize() >= 1
+            && matches!(
+                TraceIr::from_pc(
+                    self.iseq().get_pc(BcIndex::from(bc_pos.to_usize() - 1)),
+                    self.store
+                ),
+                TraceIr::BinCmpBr { .. }
+            )
+        {
+            return false;
+        }
+        for back in 2..=3usize {
+            if bc_pos.to_usize() >= back {
+                let prev = BcIndex::from(bc_pos.to_usize() - back);
+                if let TraceIr::MethodCall { callid, .. } =
+                    TraceIr::from_pc(self.iseq().get_pc(prev), self.store)
+                    && self
+                        .peek_fused_condbr(prev, self.store[callid].dst)
+                        .is_some_and(|(pos, ..)| pos == bc_pos)
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// The conditional branch bytecodegen fused onto the call at
+    /// `bc_pos`, if any: an optimizable `CondBr` on the call's dst,
+    /// separated from it only by the call's own cache word and an
+    /// optional `TypeIc`. Only the method-call `CondBr`s bytecodegen
+    /// marks optimizable can appear here (the compare fusion keeps its
+    /// own, decoded shape), and the pair is never split by a branch
+    /// target — the same guarantee the compare fusion rests on.
+    fn peek_fused_condbr(
+        &self,
+        bc_pos: BcIndex,
+        dst: Option<SlotId>,
+    ) -> Option<(BcIndex, BrKind, BasicBlockId)> {
+        let dst = dst?;
+        // +1 is the call's InlineCache word; the branch sits at +2, or at
+        // +3 behind the `TypeIc`.
+        for off in 2..=3usize {
+            let pos = bc_pos + off;
+            if pos.to_usize() >= self.iseq().bytecode().len() {
+                return None;
+            }
+            // Never fuse across a basic-block head: a word with another
+            // predecessor (the safe-navigation nil edge joining at the
+            // CondBr, say) must keep the plain value test — the fused
+            // branch would be emitted on one incoming path only.
+            if self.iseq().bb_info.is_bb_head(pos).is_some() {
+                return None;
+            }
+            match TraceIr::from_pc(self.iseq().get_pc(pos), self.store) {
+                TraceIr::TypeIc(..) => continue,
+                TraceIr::CondBr(cond, disp, true, brkind) if cond == dst => {
+                    return Some((pos, brkind, self.iseq().get_bb(pos + 1 + disp)));
+                }
+                _ => return None,
+            }
+        }
+        None
     }
 
     /// `side_state` is the abstract state of the branch-taken side — the

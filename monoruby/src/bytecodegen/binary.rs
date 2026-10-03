@@ -144,6 +144,21 @@ impl<'a> BytecodeGen<'a> {
             } else {
                 self.gen_opt_lor_condbr(jmp_if_true, lhs, rhs, else_pos)?;
             }
+        } else if matches!(
+            cond.kind,
+            NodeKind::MethodCall { safe_nav: false, .. } | NodeKind::FuncCall { safe_nav: false, .. }
+        ) {
+            // A method-call condition (`if a.even?`): mark the branch
+            // optimizable, like a compare's. The JIT offers the branch to
+            // the call's inline generators (a predicate generator jumps
+            // directly, materializing no boolean); the VM — and any call
+            // the JIT compiles without a taker — still writes the temp
+            // and tests it, so the flag is purely an optimization
+            // license. The temp is fresh, so the branch is its sole use.
+            let old = self.temp;
+            let cond = self.gen_expr_reg(cond)?;
+            self.temp = old;
+            self.emit_condbr(cond, else_pos, jmp_if_true, true);
         } else {
             let old = self.temp;
             let cond = self.gen_expr_reg(cond)?;

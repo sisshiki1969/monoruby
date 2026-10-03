@@ -487,6 +487,22 @@ pub(in crate::codegen) enum LInst {
     /// `GuardClass` emits, kept separate because the miss is ordinary
     /// control flow (the next arm) rather than a side exit — so it must not
     /// be booked as a guard failure by the `profile` recorder.
+    /// Predicate branch: to `target` when bit `bit` of `reg` is set /
+    /// clear. See `AsmInst::BrIfBitSet`.
+    BrIfBitSet {
+        reg: GP,
+        bit: u8,
+        set: bool,
+        target: DestLabel,
+    },
+    /// Predicate branch: to `target` when `reg` equals / differs from the
+    /// small immediate. See `AsmInst::BrIfValueEq`.
+    BrIfValueEq {
+        reg: GP,
+        imm: u16,
+        eq: bool,
+        target: DestLabel,
+    },
     BrClassNe {
         reg: GP,
         class: CachedClass,

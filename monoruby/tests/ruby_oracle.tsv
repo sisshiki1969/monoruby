@@ -3845,6 +3845,7 @@ be89db2e4e8d046b8a6387300e1417a7	[["Other 1\\n", true], [false, "Line 1\\n"], "O
 be99d9b9ef932ccac7c6d76c7e115282	[3, 9, 9, 1]	a, b = 3, 9\n            x = [b, a]\n            r = nil\n            
 bea8826dff62c61422cfd5dbadf7f523	[ArgumentError, "invalid byte sequence in UTF-8"]	x = [150].pack("C").force_encoding("utf-8");\n               (/(.).(.)/.match("ab
 bebe2a3ffc95a122d7271f229189fb04	[5, 0, 3, 0, 0, 0, 5, 5, 1, 1, 2, 1, 1, "heo word, heo ruby", "hello world, hello ruby", "héo wörd ", "hllo wörld ll", "abc", "ab", "helo world, helo ruby", "helo", "helllo", "héélo", "hélllo", "a", "heo word, heo ruby", nil, "helo", nil, 500, 500]	s = "hello world, hello ruby"\n        m = "héllo wörld ll"\n        [\n  
+bee071347d365cbd59e388b5dd42d0db	[480, 40, 20, 20]	acc = 0\n        40.times do |i|\n          acc += 1 if i.even?\n         
 bef395432e59d26fc5fff098936a8e74	[["Encoding::UndefinedConversionError", "U+FEFF from UTF-8 to EUC-JP"], [239, 187, 191, 97], ["Encoding::InvalidByteSequenceError", "\\"\\\\xFF\\" on UTF-8"], ["Encoding::InvalidByteSequenceError", "\\"\\\\xFF\\" on UTF-8"], ""]	(t=->(&b){ begin; b.call; rescue => e; [e.class.to_s, e.message]; end }\n        
 befb7bb929d62293c096da8d0fa1c2f4	false	class Float; alias __orig :==; def ==(o); __orig(o); end; end; 3.0 == 4.0
 beff793a575fd1da376ddff78afa2cac	"ok"	class Plain; end\n            \nbegin; "%c" % Plain.new; rescue T
@@ -4695,6 +4696,7 @@ e8657222505766ebb61f86dfdcc11cb2	["Array", true, true, true, true, true, true, t
 e8663c97e820ca6aa3b720c87c95f4ff	"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"	r, w = IO.pipe\n            t = Thread.new { r.read }\n            w.
 e86dad34113a8d3e0115c06073ba9c0a	[[Encoding::ConverterNotFoundError, "code converter not found (UTF-8 to bogus)"], 2, 1, [Encoding::ConverterNotFoundError, "code converter not found (UTF-8 to bogus)"], 2, 1, "EUC-JP", 1, 1, [TypeError, "no implicit conversion of Object into String"], [ArgumentError, "string contains null byte"]]	class S\n          def initialize(s) = (@s = s; @n = 0)\n          def to
 e86f1d136bc147bc86fabb026ba5ec24	599	c = Class.new { def m; 1; end }\n        o = c.new\n        s = 0\n       
+e8725aa5299b38b5c143ac96f54115d6	[480, 40, 20]	acc = 0\n        40.times do |i|\n          acc += 1 if i.even?\n         
 e874e1da171336c766ccb7c7051d0664	true	e = Exception.new\n            r = Marshal.load(Marshal.dump([e, e])
 e88599070c8943da135687c83d834899	["SELECT a FROM t WHERE a = ? OR a = :n", "SELECT a FROM t WHERE a = NULL OR a = NULL", "SELECT a FROM t WHERE a = 42 OR a = 'x'", true, "SELECT a FROM t WHERE a = NULL OR a = NULL", true, 2, ["SQLite3::Exception", "SQLite3::Exception", "SQLite3::Exception", "SQLite3::Exception"]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 e889ad07ee40049b513a3a933fb0546e	["E2", [:inner, :outer]]	$log = []\n        def f\n          begin\n            begin\n             

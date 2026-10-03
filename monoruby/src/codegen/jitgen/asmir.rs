@@ -1282,6 +1282,16 @@ impl AsmIr {
     }
 
     /// See [`AsmInst::HashProbe`].
+    /// See [`AsmInst::BrIfBitSet`].
+    pub(crate) fn br_if_bit_set(&mut self, r: GP, bit: u8, set: bool, dest: JitLabel) {
+        self.inst.push(AsmInst::BrIfBitSet { r, bit, set, dest });
+    }
+
+    /// See [`AsmInst::BrIfValueEq`].
+    pub(crate) fn br_if_value_eq(&mut self, r: GP, imm: u16, eq: bool, dest: JitLabel) {
+        self.inst.push(AsmInst::BrIfValueEq { r, imm, eq, dest });
+    }
+
     pub(crate) fn hash_probe(
         &mut self,
         layout: rubymap::EntriesLayout,
@@ -1890,6 +1900,26 @@ pub(super) enum AsmInst {
     ///
     Br(JitLabel),
     ///
+    /// Predicate branch: jump to `dest` when bit `bit` of the raw word in
+    /// `r` is set (`set: true`) / clear (`set: false`). The fused lowering
+    /// of `Integer#even?`/`#odd?` (bit 1 of a tagged fixnum is the
+    /// parity): one test-and-branch, no boolean `Value` materialized.
+    BrIfBitSet {
+        r: GP,
+        bit: u8,
+        set: bool,
+        dest: JitLabel,
+    },
+    /// Predicate branch: jump to `dest` when the word in `r` equals
+    /// (`eq: true`) / differs from (`eq: false`) the small immediate.
+    /// Fused `Integer#zero?` (tagged 0 is exactly 1) and the
+    /// truthy-test of a proven-BOOL value (compare against FALSE).
+    BrIfValueEq {
+        r: GP,
+        imm: u16,
+        eq: bool,
+        dest: JitLabel,
+    },
     /// Class dispatch arm: fall through when *r*'s runtime class is *class*,
     /// branch to *dst* otherwise.
     ///
