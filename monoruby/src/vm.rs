@@ -61,6 +61,8 @@ pub(crate) struct Vm {
     preempt: OnceCell<RefCell<crate::preempt::State>>,
     /// Every live `ObjectSpace::WeakMap`, as raw cells (not roots).
     weakmaps: RefCell<Vec<*mut RValue>>,
+    /// See [`PROBE_MEMOS`].
+    probe_memos: RefCell<Vec<Box<[u64; 2]>>>,
     /// The generic-ivar inline cache of the JIT runtime.
     generic_ivar_table: OnceCell<RefCell<Box<[crate::codegen::runtime::GenericIvarEntry]>>>,
     /// Cached `ClassId` of `Enumerator::ArithmeticSequence`.
@@ -93,6 +95,7 @@ impl Vm {
             sched_rsp: Cell::new(0),
             preempt: OnceCell::new(),
             weakmaps: RefCell::new(Vec::new()),
+            probe_memos: RefCell::new(Vec::new()),
             generic_ivar_table: OnceCell::new(),
             as_class_id_cache: Cell::new(None),
             json_state_class: Cell::new(None),
@@ -271,6 +274,38 @@ pub(crate) static PREEMPT_STATE: VmField<RefCell<crate::preempt::State>> =
     VmField::new(|vm| vm.preempt.get_or_init(|| RefCell::new(crate::preempt::State::new())));
 
 pub(crate) static WEAKMAPS: VmField<RefCell<Vec<*mut RValue>>> = VmField::new(|vm| &vm.weakmaps);
+
+/// The JIT hash-probe key memos (see `gen_hash_probe`): addresses of the
+/// per-site `last_key` words, zeroed at every collection so a dead key's
+/// recycled address can never alias a later hit.
+pub(crate) static PROBE_MEMOS: VmField<RefCell<Vec<Box<[u64; 2]>>>> =
+    VmField::new(|vm| &vm.probe_memos);
+
+/// Allocate one probe-memo word pair `(last_key, last_digest)` and
+/// return its address, to be baked into the emitting probe. The Vm owns
+/// the box, so the pair lives exactly as long as the code that points
+/// at it.
+pub(crate) fn alloc_probe_memo() -> usize {
+    PROBE_MEMOS.with(|v| {
+        let mut v = v.borrow_mut();
+        v.push(Box::new([0, 0]));
+        v.last().unwrap().as_ptr() as usize
+    })
+}
+
+/// Zero every registered probe-memo key word — the GC's part of the memo
+/// protocol (`Root::clear_weak_refs`): a memo hit is an *identity* match,
+/// so a key that did not survive this collection must not leave its
+/// address behind for a future String to alias. Zero never matches (a
+/// `Value` is `NonZeroU64`), and the digest word needs no clearing — it
+/// is unreachable without a key match.
+pub(crate) fn zero_probe_memos() {
+    PROBE_MEMOS.with(|v| {
+        for pair in v.borrow_mut().iter_mut() {
+            pair[0] = 0;
+        }
+    });
+}
 
 pub(crate) static GENERIC_IVAR_TABLE: VmField<RefCell<Box<[crate::codegen::runtime::GenericIvarEntry]>>> =
     VmField::new(|vm| {

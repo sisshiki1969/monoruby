@@ -842,6 +842,40 @@ impl Codegen {
                     mov x10, x0;                // x10 = digest
                 );
             }
+            crate::codegen::jitgen::asmir::ProbeDigest::CallMemoized(digest) => {
+                // Site-local last-key memo (String keys) — the aarch64
+                // twin of the x86 arm: identity hit loads the memoized
+                // digest; the slow path digests and re-memoizes only a
+                // frozen key. Key in x1, digest lands in x10.
+                let memo = crate::vm::alloc_probe_memo() as u64;
+                let slow = self.jit.label();
+                let have = self.jit.label();
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (memo);
+                    ldr x12, [x9];
+                    cmp x1, x12;
+                );
+                self.jit.bcond_label(monoasm::Cond::Ne, &slow);
+                monoasm_arm64!(&mut self.jit,
+                    ldr x10, [x9, #(8)];
+                    b have;
+                slow:
+                    stp x1, x2, [sp, #(-16)]!;
+                    mov x0, x1;
+                    mov x9, (digest);
+                    str x30, [sp, #(-16)]!;
+                    blr x9;
+                    ldr x30, [sp], #(16);
+                    ldp x1, x2, [sp], #(16);
+                    mov x10, x0;                // x10 = digest
+                    ldrb w9, [x1, #(RVALUE_OFFSET_FLAG as u32)];
+                    tbz x9, #(1), have;         // not frozen: no memo
+                    mov x9, (memo);
+                    str x1, [x9];
+                    str x10, [x9, #(8)];
+                have:
+                );
+            }
             crate::codegen::jitgen::asmir::ProbeDigest::Const(digest) => {
                 // The key is a compile-time constant: its digest is too.
                 monoasm_arm64!(&mut self.jit,

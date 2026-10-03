@@ -1170,16 +1170,25 @@ fn hash_index(
                     Some(first) => first != e.arg,
                 })
     };
-    let probe = idx_class.filter(|_| !key_polymorphic).and_then(|kc| match kc.id() {
-        SYMBOL_CLASS | NIL_CLASS | TRUE_CLASS | FALSE_CLASS => {
-            Some((kc, packed_digest_c as *const () as u64, None))
+    let probe = idx_class.filter(|_| !key_polymorphic).and_then(|kc| {
+        use crate::codegen::jitgen::asmir::ProbeDigest;
+        match kc.id() {
+            SYMBOL_CLASS | NIL_CLASS | TRUE_CLASS | FALSE_CLASS => Some((
+                kc,
+                ProbeDigest::Call(packed_digest_c as *const () as u64),
+                None,
+            )),
+            // String keys go through the site-local last-key memo: the
+            // run-time-variable-but-frozen key (an attribute name, an
+            // interned column) is the shape where the full byte hash per
+            // lookup actually hurts.
+            STRING_CLASS => Some((
+                kc,
+                ProbeDigest::CallMemoized(string_digest_c as *const () as u64),
+                Some(string_key_eq_c as *const () as u64),
+            )),
+            _ => None,
         }
-        STRING_CLASS => Some((
-            kc,
-            string_digest_c as *const () as u64,
-            Some(string_key_eq_c as *const () as u64),
-        )),
-        _ => None,
     });
     if let (Some(layout), Some((kc, digest, key_eq))) = (hash_entries_layout(), probe) {
         // A key-monomorphic site's guard must not deopt forever once the
@@ -1190,12 +1199,7 @@ fn hash_index(
         state.guard_class(ir, callsite.args, GP::Rcx, kc, deopt);
         let using_fpr = state.get_using_fpr(ir);
         ir.fpr_save(using_fpr);
-        ir.hash_probe(
-            layout,
-            hashindex as *const () as u64,
-            crate::codegen::jitgen::asmir::ProbeDigest::Call(digest),
-            key_eq,
-        );
+        ir.hash_probe(layout, hashindex as *const () as u64, digest, key_eq);
         ir.fpr_restore(using_fpr);
         let error = ir.new_error(state);
         ir.handle_error(error);
@@ -3851,6 +3855,35 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// The probe's site-local last-key memo: run-time-built *frozen*
+    /// keys hit it (same object per site), a rotating key set thrashes
+    /// it harmlessly, a *mutable* key is never memoized — its in-place
+    /// mutation must be re-digested (the staleness this design must
+    /// never exhibit) — and an explicit GC between lookups exercises
+    /// the key-word zeroing.
+    #[test]
+    fn hash_probe_key_memo() {
+        run_test(
+            r#"
+        h = {}
+        32.times { |i| h["key#{i}"] = i }
+        frozen_keys = (0...32).map { |i| "key#{i}".freeze }
+        acc = 0
+        64.times do |r|
+          acc += h[frozen_keys[r % 32]]
+          acc += h[frozen_keys[5]]
+        end
+        mk = "key7".dup
+        64.times { acc += h[mk].to_i }
+        mk.sub!("7", "9")
+        64.times { acc += h[mk].to_i }
+        GC.start
+        64.times { acc += h[frozen_keys[5]] }
+        [acc, h[frozen_keys[31]], h[mk]]
+        "#,
+        );
+    }
 
     /// `Hash#[]` with a compile-time key (`LinkMode::C`): a frozen
     /// String literal (`"..".freeze`), a folded String constant, and

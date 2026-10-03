@@ -5713,6 +5713,7 @@ impl<'a, 'b> alloc::GCRoot<RValue> for Root<'a, 'b> {
 
     fn clear_weak_refs(&self, alloc: &mut alloc::Allocator<RValue>) {
         crate::value::rvalue::weakmap_clear_dead(alloc);
+        crate::vm::zero_probe_memos();
     }
 }
 
