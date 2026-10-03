@@ -102,6 +102,24 @@ impl Codegen {
             // miss is ordinary control flow, so it lowers through its own LIR
             // op rather than `GuardClass` (which books a miss as a guard
             // failure under `profile`).
+            AsmInst::BrIfBitSet { r, bit, set, dest } => {
+                let target = frame.resolve_label(&mut self.jit, dest);
+                self.encode_linst(LInst::BrIfBitSet {
+                    reg: r,
+                    bit,
+                    set,
+                    target,
+                });
+            }
+            AsmInst::BrIfValueEq { r, imm, eq, dest } => {
+                let target = frame.resolve_label(&mut self.jit, dest);
+                self.encode_linst(LInst::BrIfValueEq {
+                    reg: r,
+                    imm,
+                    eq,
+                    target,
+                });
+            }
             AsmInst::BrClassNe(r, class, dest) => {
                 let target = frame.resolve_label(&mut self.jit, dest);
                 self.encode_linst(LInst::BrClassNe {

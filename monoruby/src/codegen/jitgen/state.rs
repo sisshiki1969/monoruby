@@ -1169,7 +1169,7 @@ impl AbstractFrame {
         self.gp_regfile.residents()
     }
 
-    pub(in crate::codegen::jitgen) fn flush_gp(&mut self, ir: &mut AsmIr) {
+    pub(crate) fn flush_gp(&mut self, ir: &mut AsmIr) {
         if self.gp_regfile.is_empty() {
             return;
         }

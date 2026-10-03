@@ -918,6 +918,17 @@ impl JitStackFrame {
 ///
 /// Context for JIT compilation.
 ///
+/// A conditional branch fused onto a method call (`if a.even?` — the
+/// `CondBr` bytecodegen marked optimizable right after the call): what a
+/// predicate inline generator needs to branch directly instead of
+/// materializing a boolean.
+pub(crate) struct FusedBr {
+    /// `BrIf`: branch to `label` when the predicate is truthy;
+    /// `BrIfNot`: when falsy.
+    pub(crate) brkind: crate::bytecodegen::inst::BrKind,
+    pub(crate) label: JitLabel,
+}
+
 pub(crate) struct JitContext<'a> {
     pub store: &'a Store,
     codegen_mode: bool,
@@ -1097,6 +1108,13 @@ pub(crate) struct JitContext<'a> {
     /// dispatch); a generator that can answer uniformly over the whole
     /// set (`kernel_is_a`) folds on it, everyone else keeps ignoring it.
     same_target_classes: Option<Box<[CachedClass]>>,
+    /// The conditional branch fused onto the current call — present only
+    /// while the call's inline generators run (`compile_instruction`'s
+    /// `MethodCall` arm scopes it, like `same_target_classes`). A
+    /// predicate generator `take`s it and branches directly — no boolean
+    /// `Value` materialized; left untaken, the arm emits the ordinary
+    /// truthiness branch after the call, byte-for-byte today's code.
+    fused_br: std::cell::RefCell<Option<FusedBr>>,
 }
 
 impl<'a> JitContext<'a> {
@@ -1130,6 +1148,7 @@ impl<'a> JitContext<'a> {
             call_site_fpr_saves: HashMap::default(),
             kept_outer_views: vec![],
             same_target_classes: None,
+            fused_br: std::cell::RefCell::new(None),
             outer_claim_barrier: false,
             widened_outer_log: vec![],
             spec_memo: Default::default(),
@@ -1196,6 +1215,7 @@ impl<'a> JitContext<'a> {
             // Scoped per call around the inline-generator dispatch; never
             // live across a context clone.
             same_target_classes: None,
+            fused_br: std::cell::RefCell::new(None),
         }
     }
 
@@ -3275,6 +3295,21 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn set_same_target_classes(&mut self, classes: Option<Box<[CachedClass]>>) {
         self.same_target_classes = classes;
+    }
+
+    /// Take the branch fused onto the current call, if any — the
+    /// predicate generators' half of the fusion protocol. Taking it is
+    /// the claim to have emitted the branch.
+    pub(crate) fn take_fused_br(&self) -> Option<FusedBr> {
+        self.fused_br.borrow_mut().take()
+    }
+
+    pub(super) fn set_fused_br(&self, fused: Option<FusedBr>) {
+        *self.fused_br.borrow_mut() = fused;
+    }
+
+    pub(super) fn fused_br_pending(&self) -> bool {
+        self.fused_br.borrow().is_some()
     }
 
     pub(super) fn specialize_level(&self) -> usize {

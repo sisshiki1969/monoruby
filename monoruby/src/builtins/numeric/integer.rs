@@ -125,27 +125,27 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         2,
         false,
     );
-    globals.define_builtin_inline_func(
-        INTEGER_CLASS,
-        "even?",
-        even_,
-        inline_gen2!(integer_pred(IntegerPred::Even)),
-        0,
+    let even_fid = globals.define_builtin_func(INTEGER_CLASS, "even?", even_, 0);
+    globals.store.inline_info.add_inline(
+        even_fid,
+        crate::executor::inline::InlineFuncInfo::new_inline_gen_predicate(inline_gen2!(
+            integer_pred(IntegerPred::Even)
+        )),
     );
-    globals.define_builtin_inline_func(
-        INTEGER_CLASS,
-        "odd?",
-        odd_,
-        inline_gen2!(integer_pred(IntegerPred::Odd)),
-        0,
+    let odd_fid = globals.define_builtin_func(INTEGER_CLASS, "odd?", odd_, 0);
+    globals.store.inline_info.add_inline(
+        odd_fid,
+        crate::executor::inline::InlineFuncInfo::new_inline_gen_predicate(inline_gen2!(
+            integer_pred(IntegerPred::Odd)
+        )),
     );
     globals.define_builtin_func(INTEGER_CLASS, "nonzero?", nonzero_, 0);
-    globals.define_builtin_inline_func(
-        INTEGER_CLASS,
-        "zero?",
-        zero_,
-        inline_gen2!(integer_pred(IntegerPred::Zero)),
-        0,
+    let zero_fid = globals.define_builtin_func(INTEGER_CLASS, "zero?", zero_, 0);
+    globals.store.inline_info.add_inline(
+        zero_fid,
+        crate::executor::inline::InlineFuncInfo::new_inline_gen_predicate(inline_gen2!(
+            integer_pred(IntegerPred::Zero)
+        )),
     );
     globals.define_builtin_func(INTEGER_CLASS, "size", size, 0);
     globals.define_builtin_func(INTEGER_CLASS, "bit_length", bit_length, 0);
@@ -1189,12 +1189,39 @@ fn integer_pred(
     Option<CachedClass>,
     Option<CachedClass>,
 ) -> bool {
-    move |state, ir, _, store, callid, _, _| {
+    move |state, ir, ctx, store, callid, _, _| {
         let callsite = &store[callid];
         if !callsite.is_simple() || callsite.pos_num != 0 {
             return false;
         }
         let CallSiteInfo { dst, recv, .. } = *callsite;
+        // A branch fused onto this call (`if a.even?`): test the tagged
+        // word and jump — no boolean Value, no truthiness retest. The
+        // receiver is a guard-proven fixnum; bit 1 of `2n+1` is the
+        // parity, and the tagged zero is exactly 1.
+        if let Some(fused) = ctx.take_fused_br() {
+            use crate::bytecodegen::inst::BrKind;
+            // The branch is a block boundary: every dirty GP resident
+            // must reach its stack home on *both* edges, so flush before
+            // emitting it (the taken edge otherwise reads a stale home —
+            // the fallthrough-only flush the CondBr word performs is too
+            // late for it).
+            state.flush_gp(ir);
+            state.load(ir, recv, GP::Rdi);
+            let truthy = fused.brkind == BrKind::BrIf;
+            match kind {
+                // even? is truthy when bit 1 is clear.
+                IntegerPred::Even => ir.br_if_bit_set(GP::Rdi, 1, !truthy, fused.label),
+                IntegerPred::Odd => ir.br_if_bit_set(GP::Rdi, 1, truthy, fused.label),
+                IntegerPred::Zero => ir.br_if_value_eq(GP::Rdi, 1, truthy, fused.label),
+            }
+            if let Some(dst) = dst {
+                // The temp is the branch's sole use; park a nil so any
+                // later write-back of the dead slot is still a Value.
+                state.def_C(dst, Immediate::nil());
+            }
+            return true;
+        }
         if let Some(dst) = dst {
             state.load(ir, recv, GP::Rdi);
             ir.inline(move |r#gen, _, _, _| match kind {
@@ -2417,6 +2444,40 @@ mod tests {
         end
         res << n[10_000_000_000] << m[10_000_000_000] << n[1 << 70]
         res
+        "#,
+        );
+    }
+
+    /// Predicate branch fusion: `if a.even?` / `unless` / a `while`
+    /// condition compile to a single test-and-branch with no boolean
+    /// materialized (the optimizable CondBr the new bytecodegen arm
+    /// marks, taken by the predicate generators). Pins both branch
+    /// polarities, loop conditions, the fallback for a call with no
+    /// predicate generator, and the value context staying intact.
+    #[test]
+    fn integer_pred_branch_fusion() {
+        run_test(
+            r#"
+        acc = 0
+        40.times do |i|
+          acc += 1 if i.even?
+          acc += 2 if i.odd?
+          acc += 4 if (i - 20).zero?
+          acc += 8 unless i.even?
+          j = i % 5
+          while j.odd?
+            j -= 1
+            acc += 16
+          end
+        end
+        acc2 = 0
+        40.times { |i| acc2 += 1 if [i].include?(i) }
+        flags = 0
+        40.times { |i| f = i.even?; flags += 1 if f }
+        sn = 0
+        maybe = [nil, { a: 1 }]
+        40.times { |i| h = maybe[i % 2]; sn += 1 if h&.key?(:a) }
+        [acc, acc2, flags, sn]
         "#,
         );
     }

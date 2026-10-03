@@ -991,7 +991,7 @@ impl<'a> JitContext<'a> {
                 // itself, which is how `nil?` / `frozen?` / `__id__` /
                 // `object_id` keep firing there while a generator that needs
                 // the class declines to the ordinary call.
-                InlineFuncInfo::InlineGen(f) => {
+                InlineFuncInfo::InlineGen(f) | InlineFuncInfo::InlineGenPredicate(f) => {
                     // Not behind a const-receiver guard skip: the Integer
                     // generators load the receiver raw on the strength of
                     // the caller's guard (a set guard's INTEGER member is

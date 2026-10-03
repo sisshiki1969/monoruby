@@ -1394,6 +1394,22 @@ impl Codegen {
             // the x86 dispatch stub only), so guards and arms lower alike
             // here — the ops stay distinct so the distinction survives if
             // aarch64 grows the recorder.
+            LInst::BrIfBitSet { reg, bit, set, target } => {
+                let r = reg.a64().0;
+                if set {
+                    monoasm_arm64!(&mut self.jit, tbnz x(r), #(bit as u32), target;);
+                } else {
+                    monoasm_arm64!(&mut self.jit, tbz x(r), #(bit as u32), target;);
+                }
+            }
+            LInst::BrIfValueEq { reg, imm, eq, target } => {
+                let r = reg.a64().0;
+                monoasm_arm64!(&mut self.jit, cmp x(r), #(imm as u32););
+                self.jit.bcond_label(
+                    if eq { monoasm::Cond::Eq } else { monoasm::Cond::Ne },
+                    &target,
+                );
+            }
             LInst::BrClassNe { reg, class, target } => {
                 if self.far_branch_mode {
                     // `a64_guard_class` may reference its fail label with a

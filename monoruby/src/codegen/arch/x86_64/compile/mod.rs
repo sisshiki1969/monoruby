@@ -56,6 +56,8 @@ impl Codegen {
             | AsmInst::NilBr(..)
             | AsmInst::Br(..)
             | AsmInst::BrClassNe(..)
+            | AsmInst::BrIfBitSet { .. }
+            | AsmInst::BrIfValueEq { .. }
             | AsmInst::CheckLocal(..)
             | AsmInst::OptCase { .. }
             | AsmInst::GuardClass(..)
@@ -656,6 +658,32 @@ impl Codegen {
                 self.guard_class_deopt(reg, class, &deopt)
             }
             // Dispatch arm: the miss is the next arm, not a side exit.
+            // Predicate branches (fused `even?`/`odd?`/`zero?` and kin):
+            // one test / compare straight to the branch target, no boolean
+            // Value in between.
+            LInst::BrIfBitSet { reg, bit, set, target } => {
+                let r = reg as u64;
+                let mask = 1u64 << bit;
+                monoasm!( &mut self.jit,
+                    testq R(r), (mask);
+                );
+                if set {
+                    monoasm!( &mut self.jit, jnz target; );
+                } else {
+                    monoasm!( &mut self.jit, jz target; );
+                }
+            }
+            LInst::BrIfValueEq { reg, imm, eq, target } => {
+                let r = reg as u64;
+                monoasm!( &mut self.jit,
+                    cmpq R(r), (imm as u64);
+                );
+                if eq {
+                    monoasm!( &mut self.jit, jeq target; );
+                } else {
+                    monoasm!( &mut self.jit, jne target; );
+                }
+            }
             LInst::BrClassNe { reg, class, target } => self.guard_class(reg, class, &target),
             // Same membership chain as `GuardClassIn`, with the last
             // candidate's miss going to the next arm instead of a side exit.
