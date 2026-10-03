@@ -88,7 +88,14 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "__strscan_match", string_strscan_match, 3);
     globals.define_builtin_func_with(STRING_CLASS, "index", string_index, 1, 2, false);
     globals.define_builtin_func_with(STRING_CLASS, "rindex", string_rindex, 1, 2, false);
-    globals.define_builtin_funcs(STRING_CLASS, "length", &["size"], length, 0);
+    globals.define_builtin_inline_funcs(
+        STRING_CLASS,
+        "length",
+        &["size"],
+        length,
+        inline_gen2!(string_length_gen),
+        0,
+    );
     globals.define_builtin_inline_funcs(
         STRING_CLASS,
         "bytesize",
@@ -139,12 +146,25 @@ pub(super) fn init(globals: &mut Globals) {
         &["chomp"],
         false,
     );
-    globals.define_builtin_func(STRING_CLASS, "empty?", empty, 0);
+    globals.define_builtin_inline_func(
+        STRING_CLASS,
+        "empty?",
+        empty,
+        inline_gen2!(string_empty_gen),
+        0,
+    );
     globals.define_builtin_func_with(STRING_CLASS, "to_i", to_i, 0, 1, false);
     globals.define_builtin_func(STRING_CLASS, "to_f", to_f, 0);
     globals.define_builtin_func(STRING_CLASS, "hex", hex, 0);
     globals.define_builtin_func(STRING_CLASS, "oct", oct, 0);
-    globals.define_builtin_funcs(STRING_CLASS, "to_sym", &["intern"], to_sym, 0);
+    globals.define_builtin_inline_funcs(
+        STRING_CLASS,
+        "to_sym",
+        &["intern"],
+        to_sym,
+        inline_gen2!(string_to_sym_gen),
+        0,
+    );
     globals.define_builtin_funcs(STRING_CLASS, "-@", &["dedup"], string_uminus, 0);
     globals.define_builtin_func_rest(STRING_CLASS, "upcase", upcase);
     globals.define_builtin_func_rest(STRING_CLASS, "upcase!", upcase_);
@@ -424,10 +444,11 @@ fn string_eq_gen(
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<CachedClass>,
+    recv_class: Option<CachedClass>,
     arg_class: Option<CachedClass>,
 ) -> bool {
-    string_cmp_const_gen(state, ir, ctx, store, callid, arg_class, false)
+    string_eq_baked_gen(state, ir, ctx, store, callid, recv_class, arg_class, false)
+        || string_cmp_const_gen(state, ir, ctx, store, callid, arg_class, false)
 }
 
 /// JIT inliner for the basic-op `String#!=`: same compile-time analysis as
@@ -438,10 +459,123 @@ fn string_ne_gen(
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
-    _: Option<CachedClass>,
+    recv_class: Option<CachedClass>,
     arg_class: Option<CachedClass>,
 ) -> bool {
-    string_cmp_const_gen(state, ir, ctx, store, callid, arg_class, true)
+    string_eq_baked_gen(state, ir, ctx, store, callid, recv_class, arg_class, true)
+        || string_cmp_const_gen(state, ir, ctx, store, callid, arg_class, true)
+}
+
+/// `String#==` with both operands plain Strings, as a frame-free leaf —
+/// the exact predicate (`RStringInner::eq`: bytes and encoding
+/// compatibility), no `Lfp`, no dispatch, nothing it can raise. The
+/// `vm`/`globals` slots exist only to ride `emit_call_2args`'s
+/// convention.
+extern "C" fn string_eq_leaf(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Value {
+    Value::bool(*lhs.as_rstring_inner() == *rhs.as_rstring_inner())
+}
+
+/// The negation of [`string_eq_leaf`], for the `!=` basic op.
+extern "C" fn string_ne_leaf(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+) -> Value {
+    Value::bool(*lhs.as_rstring_inner() != *rhs.as_rstring_inner())
+}
+
+/// The compile-time-key fast paths of `String#==` / `#!=` (and their
+/// `===` / `eql?` aliases): when either operand is a `LinkMode::C`
+/// plain String — a frozen literal (a `when "lit"` clause, a
+/// `frozen_string_literal` file, `".."​.freeze`) or a folded constant —
+/// the full builtin frame is unnecessary:
+///
+/// - both operands constant: the answer is a compile-time constant;
+/// - one side constant, the other a (guarded) plain String: a
+///   frame-free leaf call ([`string_eq_leaf`]) replaces the builtin
+///   dispatch — no `Lfp` marshalling, no `to_str` probing (both sides
+///   are proven Strings, where `==`, `===` and `eql?` coincide).
+///
+/// Everything else declines to the existing paths (the class-mismatch
+/// constant fold below, or the ordinary builtin call).
+fn string_eq_baked_gen(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    ctx: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: Option<CachedClass>,
+    arg_class: Option<CachedClass>,
+    ne: bool,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 1 {
+        return false;
+    }
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
+    let plain = |v: Value| v.is_plain_rstring_inner().is_some();
+    let recv_c = state.concrete_value(recv).filter(|v| plain(*v));
+    let arg_c = state.concrete_value(args).filter(|v| plain(*v));
+    let leaf = if ne {
+        string_ne_leaf as *const () as u64
+    } else {
+        string_eq_leaf as *const () as u64
+    };
+    match (recv_c, arg_c) {
+        (Some(l), Some(r)) => {
+            let eq = *l.as_rstring_inner() == *r.as_rstring_inner();
+            state.def_C(dst, Immediate::bool(eq ^ ne));
+            true
+        }
+        (None, Some(_)) => {
+            // The argument is the constant; the receiver reached this
+            // resolution through its own class guard (or a same-target
+            // membership guard whose every member resolves here — all
+            // String-representation classes either way). A multi-class
+            // dispatch arm without the set at hand stays on the builtin.
+            if recv_class.is_none() && ctx.same_target_classes().is_none() {
+                return false;
+            }
+            state.load(ir, recv, GP::Rdx);
+            state.load(ir, args, GP::Rcx);
+            let using_fpr = state.get_using_fpr(ir);
+            ir.fpr_save(using_fpr);
+            ir.inline(move |r#gen, _, _, _| r#gen.emit_call_2args(leaf));
+            ir.fpr_restore(using_fpr);
+            state.def_reg2acc_class(ir, GP::Rax, dst, BOOL_CLASS);
+            true
+        }
+        (Some(_), None) => {
+            // The receiver is the constant (`"lit" === x`): the argument
+            // must be a *guarded* plain String for the leaf's contract —
+            // the binop cache's class is speculative, so guard it; any
+            // other observed class keeps the paths below (the
+            // class-mismatch fold, or the builtin and its `to_str`
+            // probing).
+            if arg_class != Some(CachedClass::STRING) {
+                return false;
+            }
+            let deopt = ir.new_deopt(state);
+            state.load(ir, recv, GP::Rdx);
+            state.load(ir, args, GP::Rcx);
+            state.guard_class(ir, args, GP::Rcx, CachedClass::STRING, deopt);
+            let using_fpr = state.get_using_fpr(ir);
+            ir.fpr_save(using_fpr);
+            ir.inline(move |r#gen, _, _, _| r#gen.emit_call_2args(leaf));
+            ir.fpr_restore(using_fpr);
+            state.def_reg2acc_class(ir, GP::Rax, dst, BOOL_CLASS);
+            true
+        }
+        (None, None) => false,
+    }
 }
 
 fn string_cmp_const_gen(
@@ -7041,6 +7175,91 @@ fn bytesize(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     Ok(Value::integer(length as i64))
 }
 
+/// `String#length`/`#size` for a `LinkMode::C` receiver (a frozen
+/// literal or a folded constant): the encoding-aware char count is a
+/// compile-time constant. A non-constant receiver keeps the builtin
+/// call (char counting is not a field read).
+fn string_length_gen(
+    state: &mut AbstractState,
+    _ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let Some(v) = state.concrete_value(callsite.recv) else {
+        return false;
+    };
+    let Some(inner) = v.is_plain_rstring_inner() else {
+        return false;
+    };
+    let n = inner.char_length() as i64;
+    let Some(imm) = Immediate::check_fixnum(n) else {
+        return false;
+    };
+    state.def_C(callsite.dst, imm);
+    true
+}
+
+/// `String#empty?` for a `LinkMode::C` receiver: a compile-time bool.
+fn string_empty_gen(
+    state: &mut AbstractState,
+    _ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let Some(v) = state.concrete_value(callsite.recv) else {
+        return false;
+    };
+    let Some(inner) = v.is_plain_rstring_inner() else {
+        return false;
+    };
+    state.def_C(callsite.dst, Immediate::bool(inner.is_empty()));
+    true
+}
+
+/// `String#to_sym`/`#intern` for a `LinkMode::C` receiver: Symbols are
+/// interned and identity-stable, so the conversion is a compile-time
+/// constant. Content that cannot name a symbol (invalid in its own
+/// encoding) declines to the builtin, which raises.
+fn string_to_sym_gen(
+    state: &mut AbstractState,
+    _ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let Some(v) = state.concrete_value(callsite.recv) else {
+        return false;
+    };
+    let Some(inner) = v.is_plain_rstring_inner() else {
+        return false;
+    };
+    let Ok(id) = intern_string(store, inner) else {
+        return false;
+    };
+    state.def_C(callsite.dst, Immediate::symbol(id));
+    true
+}
+
 fn string_bytesize(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -7055,6 +7274,14 @@ fn string_bytesize(
         return false;
     }
     let dst = callsite.dst;
+    // A constant receiver's byte length is a compile-time constant.
+    if let Some(v) = state.concrete_value(callsite.recv)
+        && let Some(inner) = v.is_plain_rstring_inner()
+        && let Some(imm) = Immediate::check_fixnum(inner.len() as i64)
+    {
+        state.def_C(dst, imm);
+        return true;
+    }
     state.load(ir, callsite.recv, GP::Rdi);
     // Pure-LIR container length (no arch-specific closure): inline-or-heap byte
     // length of the string receiver in Rdi, fixnum-tagged into Rax.
@@ -12831,6 +13058,50 @@ fn unicode_normalize_(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// Compile-time String folds riding `LinkMode::C` literals: `case`
+    /// `when` string clauses (now emitted frozen, like Hash-literal
+    /// keys) and `==`/`!=` against frozen literals / constants go
+    /// through the frame-free leaf or fold outright; `length`/`size`,
+    /// `bytesize`, `empty?` and `to_sym` on constant receivers fold to
+    /// constants. Pins the encoding edge (same bytes, incompatible
+    /// encoding → unequal) and a String-subclass receiver.
+    #[test]
+    fn string_literal_folds() {
+        run_test_with_prelude(
+            r#"
+        acc = []
+        strs = ["GET", "POST", "PUT", "zzz"]
+        40.times do |i|
+          m = strs[i % 4]
+          acc << case m
+                 when "GET" then 1
+                 when "POST" then 2
+                 when "PUT" then 3
+                 else 0
+                 end
+          acc << (m == "GET".freeze) << ("POST".freeze == m) << (m != KEYC)
+        end
+        b = "xy".dup.force_encoding("ASCII-8BIT")
+        u = "αβ".dup.force_encoding("ASCII-8BIT")
+        40.times do
+          acc << ("xy".freeze == b) << ("αβ".freeze == u)
+          acc << (MS == MS2) << (MS == "GET".freeze)
+        end
+        acc << "hello".freeze.size << "αβγ".freeze.length << "αβγ".freeze.bytesize
+        acc << "".freeze.empty? << "x".freeze.empty?
+        acc << "foo_bar".freeze.to_sym << "a".freeze.intern
+        acc << ("a".freeze == "a".freeze) << ("a".freeze == "b".freeze) << ("a".freeze != "b".freeze)
+        acc
+        "#,
+            r#"
+        KEYC = "PUT"
+        class MyS < String; end
+        MS = MyS.new("GET")
+        MS2 = MyS.new("GET")
+        "#,
+        );
+    }
 
     #[test]
     fn utf16_32_inspect_writes_a_unit_that_is_no_character_as_its_bytes() {

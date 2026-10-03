@@ -2075,7 +2075,7 @@ impl<'a> BytecodeGen<'a> {
     /// The key `Value` of a static pair: a String key is the interned
     /// frozen string, the same object on every evaluation (CRuby's
     /// `fstring` for a literal key).
-    fn static_hash_key(&mut self, node: &Node, enc: crate::value::Encoding) -> Value {
+    pub(super) fn static_hash_key(&mut self, node: &Node, enc: crate::value::Encoding) -> Value {
         match &node.kind {
             NodeKind::String(s) => self.store.intern_frozen_str(s.as_bytes(), enc),
             NodeKind::Bytes(b) => self.store.intern_frozen_str(b, enc),
