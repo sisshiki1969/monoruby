@@ -236,10 +236,14 @@ impl<'a> JitContext<'a> {
             // Folding one here would trade the two-instruction accessor for
             // a call through its wrapper; an arm of its own keeps the
             // inline lowering and costs one compare.
+            // `Class#new` is the same trade: `inline_class_new` needs the
+            // receiver proven to be one class object, so a folded arm would
+            // call the trampoline where an arm of its own emits the whole
+            // construction inline.
             let folds = !matches!(
                 self.store[func_id].kind,
                 FuncKind::AttrReader { .. } | FuncKind::AttrWriter { .. }
-            );
+            ) && self.store.class_new_fid() != Some(func_id);
             if folds && let Some(g) = groups.iter_mut().find(|g| g.func_id == func_id) {
                 g.classes.push(class);
             } else {
