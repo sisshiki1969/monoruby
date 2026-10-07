@@ -196,16 +196,13 @@ pub(crate) enum TraceIr {
         rhs: SlotId,
         ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
-    },
-    BinCmpBr {
-        kind: crate::ast::CmpKind,
-        _dst: Option<SlotId>,
-        lhs: SlotId,
-        rhs: SlotId,
-        disp: i32,
-        brkind: BrKind,
-        ic: Option<(CachedClass, CachedClass)>,
-        polymorphic: bool,
+        /// Opcodes 150–156: bytecodegen marked the result as consumed only
+        /// by the optimizable `CondBr` that follows (an `if` / `while` /
+        /// `case`-`when` condition). The comparison then may leave its
+        /// answer in the condition flags for that branch instead of a
+        /// boolean (see `CondFlags`), and `===` takes `case`/`when`'s
+        /// funcall semantics.
+        fused: bool,
     },
     ArrayTEq {
         lhs: SlotId,
@@ -660,6 +657,7 @@ impl TraceIr {
                         rhs,
                         ic,
                         polymorphic: pc.opcode_sub() == 1,
+                        fused: false,
                     }
                 }
 
@@ -689,19 +687,14 @@ impl TraceIr {
                     } else {
                         None
                     };
-                    let (disp, brkind) = match TraceIr::from_pc(pc + 1, store) {
-                        TraceIr::CondBr(_, dest, true, brkind) => (dest + 1, brkind),
-                        _ => unreachable!(),
-                    };
-                    TraceIr::BinCmpBr {
+                    TraceIr::BinCmp {
                         kind,
-                        _dst: dst,
+                        dst,
                         lhs,
                         rhs,
-                        disp,
-                        brkind,
                         ic,
                         polymorphic: pc.opcode_sub() == 1,
+                        fused: true,
                     }
                 }
                 44 => {
@@ -1072,16 +1065,8 @@ impl TraceIr {
                 rhs,
                 ic,
                 polymorphic,
-            } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), false, polymorphic),
-            TraceIr::BinCmpBr {
-                kind,
-                _dst: dst,
-                lhs,
-                rhs,
-                ic,
-                polymorphic,
-                ..
-            } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), true, polymorphic),
+                fused,
+            } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), fused, polymorphic),
 
             TraceIr::ArrayTEq { lhs, rhs } => {
                 format!("{lhs:?} = *{lhs:?} === {rhs:?}")

@@ -56,8 +56,7 @@ impl Codegen {
             | AsmInst::NilBr(..)
             | AsmInst::Br(..)
             | AsmInst::BrClassNe(..)
-            | AsmInst::BrIfBitSet { .. }
-            | AsmInst::BrIfValueEq { .. }
+            | AsmInst::BrFlags { .. }
             | AsmInst::CheckLocal(..)
             | AsmInst::OptCase { .. }
             | AsmInst::GuardClass(..)
@@ -102,15 +101,16 @@ impl Codegen {
             | AsmInst::IntegerBinOpReg { .. }
             | AsmInst::IntegerCmpReg { .. }
             | AsmInst::IntegerCmpImm { .. }
-            | AsmInst::IntegerCmpBrReg { .. }
-            | AsmInst::IntegerCmpBrImm { .. }
+            | AsmInst::CmpFlags { .. }
+            | AsmInst::CmpImmFlags { .. }
+            | AsmInst::TestBitFlags { .. }
             | AsmInst::IntegerBinOpImm { .. }
             | AsmInst::IntegerDouble { .. }
             | AsmInst::FloatBinOp { .. }
             | AsmInst::FloatUnOp { .. }
             | AsmInst::I64ToBoth(..)
             | AsmInst::FloatCmp { .. }
-            | AsmInst::FloatCmpBr { .. }
+            | AsmInst::FloatCmpFlags { .. }
             | AsmInst::Ret
             | AsmInst::MethodRet(..)
             | AsmInst::BlockBreak(..)
@@ -612,6 +612,13 @@ impl Codegen {
                 LCond::Gt => monoasm! { &mut self.jit, jgt target; },
                 LCond::Ge => monoasm! { &mut self.jit, jge target; },
             },
+            LInst::TestBit { reg, bit } => {
+                let r = reg as u64;
+                let mask = 1u64 << bit;
+                monoasm!( &mut self.jit,
+                    testq R(r), (mask);
+                );
+            }
             // Ruby-truthiness branch: `orq 0x10` folds nil(0x04)/false(0x14) to
             // FALSE_VALUE; truthy (non-FALSE) takes jnz, falsy takes jz.
             LInst::BranchTruthy { negate, target } => {
@@ -658,32 +665,6 @@ impl Codegen {
                 self.guard_class_deopt(reg, class, &deopt)
             }
             // Dispatch arm: the miss is the next arm, not a side exit.
-            // Predicate branches (fused `even?`/`odd?`/`zero?` and kin):
-            // one test / compare straight to the branch target, no boolean
-            // Value in between.
-            LInst::BrIfBitSet { reg, bit, set, target } => {
-                let r = reg as u64;
-                let mask = 1u64 << bit;
-                monoasm!( &mut self.jit,
-                    testq R(r), (mask);
-                );
-                if set {
-                    monoasm!( &mut self.jit, jnz target; );
-                } else {
-                    monoasm!( &mut self.jit, jz target; );
-                }
-            }
-            LInst::BrIfValueEq { reg, imm, eq, target } => {
-                let r = reg as u64;
-                monoasm!( &mut self.jit,
-                    cmpq R(r), (imm as u64);
-                );
-                if eq {
-                    monoasm!( &mut self.jit, jeq target; );
-                } else {
-                    monoasm!( &mut self.jit, jne target; );
-                }
-            }
             LInst::BrClassNe { reg, class, target } => self.guard_class(reg, class, &target),
             // Same membership chain as `GuardClassIn`, with the last
             // candidate's miss going to the next arm instead of a side exit.
@@ -989,17 +970,8 @@ impl Codegen {
                 self.cmp_float((lhs, rhs), base);
                 self.setflag_float(kind);
             }
-            LInst::FloatCmpBr {
-                kind,
-                lhs,
-                rhs,
-                brkind,
-                dest,
-                base,
-            } => {
-                self.cmp_float((lhs, rhs), base);
-                self.condbr_float(kind, dest, brkind);
-            }
+            LInst::FloatCmpFlags { lhs, rhs, base } => self.cmp_float((lhs, rhs), base),
+            LInst::FloatCondBr { kind, brkind, dest } => self.condbr_float(kind, dest, brkind),
             // ---- FP pool save/restore + FP C-calls ---------------------------
             LInst::FprSave { using_fpr, cont } => self.fpr_save_with_cont(using_fpr, cont),
             LInst::FprRestore { using_fpr, cont } => self.fpr_restore_with_cont(using_fpr, cont),

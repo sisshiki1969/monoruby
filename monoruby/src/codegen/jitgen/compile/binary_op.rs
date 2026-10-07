@@ -93,19 +93,15 @@ impl BinaryOp {
 /// How far [`JitContext::compile_binary`] got, and what the caller must still
 /// do to sink the result.
 ///
-/// The sink is the one thing the three opcodes genuinely disagree about — a
-/// slot for `BinOp`/`BinCmp`, a fused branch for `BinCmpBr` — so it is the
-/// one thing handed back rather than decided in the skeleton.
+/// What is left is sinking a helper's result into `dst`; a comparison whose
+/// result feeds the next conditional branch may instead have left it in the
+/// condition flags (`JitContext::set_cond_flags`), or — in a dispatch —
+/// branched on it at the end of every arm.
 ///
 enum BinaryLowering {
     /// Inline code was emitted — a guarded generator, or the merge of a
-    /// two-arm dispatch. In `CmpBr` mode the fused branch is emitted too and
-    /// the caller records the side branch; in `Value` mode `dst` is defined.
+    /// dispatch. `dst` is defined (or the answer is in the condition flags).
     Emitted,
-    /// `CmpBr` mode only: both operands were compile-time constants, so the
-    /// comparison folded and *no code was emitted*. Carries the raw result,
-    /// before `brkind` is applied.
-    Folded(bool),
     /// The class-independent C helper was emitted and its error handled;
     /// `Option<Value>` is in rax for the caller to sink.
     Generic,
@@ -208,9 +204,9 @@ impl<'a> JitContext<'a> {
     /// **No class-version guard** is emitted: soundness comes from the
     /// recorded bop_dep (a redefinition evicts every dependent body via
     /// `set_bop_redefine`). The dep is recorded only when the generator
-    /// emitted (`Done`) or folded (`Folded` — a fold bakes in the builtin's
-    /// semantics just the same), so a declined generator leaves no spurious
-    /// dependency.
+    /// emitted (`Done`, which includes a constant fold — a fold bakes in the
+    /// builtin's semantics just the same), so a declined generator leaves no
+    /// spurious dependency.
     ///
     /// The receiver guard is emitted here rather than inside each generator
     /// so that a generator may simply assume its receiver class — which is
@@ -233,7 +229,6 @@ impl<'a> JitContext<'a> {
         lhs_class: CachedClass,
         rhs_class: Option<CachedClass>,
         bc_pos: BcIndex,
-        mode: BinaryInlineMode,
         // `Some`: the receiver guard exits through a counter-gated,
         // POLY-byte-checked recompile of *target* instead of a plain deopt
         // (see `compile_binary` step 4). `None` inside a dispatch arm, where
@@ -274,11 +269,10 @@ impl<'a> JitContext<'a> {
         state.guard_recv_class(ir, lhs, lhs_class, heal);
         let outcome = match self.store.inline_info.get_inline(fid).unwrap() {
             InlineFuncInfo::InlineGenBinary(f) => {
-                self.inline_asm_binary(state, ir, f, callid, lhs_class, rhs_class, mode)
+                self.inline_asm_binary(state, ir, f, callid, lhs_class, rhs_class)
             }
-            // The plain generators (`Integer#% ** << >>`) have no fused
-            // compare-and-branch form, so they only serve `Value` mode.
-            InlineFuncInfo::InlineGen(f) if matches!(mode, BinaryInlineMode::Value) => {
+            // The plain generators (`Integer#% ** << >>`).
+            InlineFuncInfo::InlineGen(f) => {
                 if self.inline_asm(state, ir, f, callid, Some(lhs_class), rhs_class) {
                     BinaryInlineOutcome::Done
                 } else {
@@ -600,13 +594,12 @@ impl<'a> JitContext<'a> {
                 inline_class,
                 rhs_class,
                 bc_pos,
-                BinaryInlineMode::Value,
                 None,
             ),
             Some(BinaryInlineOutcome::Done)
         ) {
-            // A generator that folded or declined has no arm to be; back the
-            // whole dispatch out and let the caller emit the ordinary form.
+            // A generator that declined has no arm to be; back the whole
+            // dispatch out and let the caller emit the ordinary form.
             ir.restore(ir_save);
             *state = state_save;
             return Ok(false);
@@ -749,8 +742,9 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Lower a binary site: the shared skeleton behind `BinOp`, `BinCmp` and
-    /// `BinCmpBr`.
+    /// Lower a binary site: the shared skeleton behind `BinOp` and `BinCmp`
+    /// (plain, or fused — the comparison whose result only the following
+    /// `CondBr` reads).
     ///
     /// All three are the same instruction shape — one receiver, one argument,
     /// an inline cache, a PMC, a call site — and lower through the same five
@@ -765,9 +759,8 @@ impl<'a> JitContext<'a> {
     /// 5. fall back: the guard-free generic helper once the VM has marked
     ///    the site polymorphic, a guarded call while it is still monomorphic.
     ///
-    /// What is genuinely per-opcode is the *sink* — a slot, or a fused
-    /// branch — and that is what the caller gets back in [`BinaryLowering`]
-    /// to finish. Everything above it is shared, so a fix to the
+    /// What is genuinely per-opcode is the *sink* of a helper's result, and
+    /// that is what the caller gets back in [`BinaryLowering`] to finish. Everything above it is shared, so a fix to the
     /// license checking, the bop dependency or the deopt policy lands on all
     /// three at once instead of on whichever tail happened to be edited.
     ///
@@ -783,13 +776,14 @@ impl<'a> JitContext<'a> {
         ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
         bc_pos: BcIndex,
-        mode: BinaryInlineMode,
+        // The fused comparison (opcodes 150–156, followed by the `CondBr`
+        // that consumes it).
+        fused: bool,
     ) -> JitResult<BinaryLowering> {
-        // `BinCmpBr` is the case/when and rescue-matching opcode, and
-        // dispatches `===` with funcall semantics; every other form is a
-        // public-only call. The mode identifies the opcode, so the two need
-        // not be threaded separately.
-        let case_semantics = matches!(mode, BinaryInlineMode::CmpBr { .. });
+        // The fused comparison is the case/when and rescue-matching opcode,
+        // and dispatches `===` with funcall semantics; every other form is a
+        // public-only call.
+        let case_semantics = fused;
 
         // ---- 0. `Klass === v` with a constant Class / Module receiver whose
         // `===` still resolves to the builtin `Module#===`: `case … when
@@ -821,7 +815,7 @@ impl<'a> JitContext<'a> {
                 class: target.id(),
             });
             // Leaves `Value::bool` in rax, exactly like the generic helper:
-            // `binary_cmp` parks it in *dst*, `binary_cmp_br` branches on it.
+            // `binary_cmp` parks it in *dst*, for the `CondBr` to test.
             return Ok(BinaryLowering::Generic);
         }
 
@@ -832,13 +826,11 @@ impl<'a> JitContext<'a> {
         // guarding. (A proven lhs class is monomorphic by construction,
         // whatever the VM saw at other times.)
         //
-        // Not attempted in `CmpBr` mode: `CondBr` consumes the accumulator,
-        // which a merge does not preserve — the arms would have to land the
-        // flag in a slot and reload it — and the fused form is the reason
-        // that opcode exists. Its polymorphic residual already never deopts,
-        // and the fused sites are a rounding error in practice: ~24 side
-        // exits across the whole benchmark set, against 1.8M for the plain
-        // `BinCmp` the dispatch does take.
+        // Not attempted for a fused comparison: its polymorphic sites get
+        // the nil/Integer peel (3c) or the guard-free residual instead, and
+        // are a rounding error in practice: ~24 side exits across the whole
+        // benchmark set, against 1.8M for the plain `BinCmp` the dispatch
+        // does take.
         if polymorphic
             && !case_semantics
             && state.class(lhs).is_none()
@@ -893,28 +885,18 @@ impl<'a> JitContext<'a> {
                 && (rhs_big || rhs_class == Some(CachedClass::INTEGER))
                 && self.basic_op_assumable(CachedClass::INTEGER, binop.into())
             {
-                match mode {
-                    BinaryInlineMode::Value => {
-                        if state.fold_bigint_const_cmp(ir, kind, dst, lhs, rhs) {
-                            self.record_bop_dep(CachedClass::INTEGER, binop.into());
-                            return Ok(BinaryLowering::Emitted);
-                        }
-                    }
-                    BinaryInlineMode::CmpBr { .. } => {
-                        if let Some(b) = state.fold_bigint_const_cmpbr(ir, kind, lhs, rhs) {
-                            self.record_bop_dep(CachedClass::INTEGER, binop.into());
-                            return Ok(BinaryLowering::Folded(b));
-                        }
-                    }
+                // `dst` becomes the constant answer; a following `CondBr`
+                // resolves statically on it.
+                if state.fold_bigint_const_cmp(ir, kind, dst, lhs, rhs) {
+                    self.record_bop_dep(CachedClass::INTEGER, binop.into());
+                    return Ok(BinaryLowering::Emitted);
                 }
             }
         }
 
-        // ---- 3c. A *fused* comparison (`BinCmpBr`) at a site the VM marked
-        // polymorphic and whose receiver genuinely alternates. The two-arm
-        // *value* dispatch (step 2) cannot serve the fused form — its arms
-        // would have to materialize the very flag the fusion exists to
-        // avoid — so these sites used to fall through to the single-class
+        // ---- 3c. A *fused* comparison at a site the VM marked polymorphic
+        // and whose receiver genuinely alternates. These sites used to fall
+        // through to the single-class
         // guard and side-exit on every off-class operand, forever (dewasm
         // DOOM: thousands of `Integer == nil` exits per tick, the "~24
         // fused side exits" note on step 2 notwithstanding). The 1/8-share
@@ -926,18 +908,14 @@ impl<'a> JitContext<'a> {
 
         // The nil/Integer alternation gets real arms, not the C helper: the
         // arms of a *fused* dispatch need no value merge, because each one
-        // branches for itself — the nil arm is one raw compare of the
-        // argument against `NIL_VALUE` fused straight into the branch, and
-        // the Integer arm is the ordinary fused inline (whose receiver
-        // guard now only ever sees the leftover classes). Both arms jump to
-        // the same branch label with every slot at home (`declare_merge`
-        // flushed the operands, the inline's own flush covers its spills),
-        // so the caller's single side-branch bookkeeping — registered
-        // against the conservative merge state — covers them both.
+        // branches for itself at its end (`end_arm` under the `CondBr`
+        // sink) — the nil arm on one raw compare of the argument against
+        // `NIL_VALUE`, the Integer arm on the flags of the ordinary inline
+        // compare (whose receiver guard now only ever sees the leftover
+        // classes).
         // Licence as everywhere: the nil arm bakes in `NilClass#==`/`===`,
         // so it is gated on and recorded against the basic-op pair.
         if let Some(callid) = fused_poly_callid
-            && let BinaryInlineMode::CmpBr { brkind, dest } = mode
             && matches!(binop, BinaryOp::Cmp(CmpKind::Eq | CmpKind::TEq))
             && self.pmc_recv_contains(callid, CachedClass::NIL)
             && self.pmc_recv_contains(callid, CachedClass::INTEGER)
@@ -957,10 +935,10 @@ impl<'a> JitContext<'a> {
         {
             let state_save = state.clone();
             let ir_save = ir.save();
-            let (entry, merge) = self.declare_merge(state, ir, &[lhs, rhs], None);
+            let (entry, merge) = self.declare_merge(state, ir, &[lhs, rhs], dst);
             let not_nil = self.label();
 
-            // nil arm: `nil == x` ⇔ `x` is nil — raw bit compare, fused.
+            // nil arm: `nil == x` ⇔ `x` is nil — raw bit compare.
             let mut narm = entry.clone();
             narm.load(ir, lhs, GP::Rdi);
             ir.push(AsmInst::BrClassNe(GP::Rdi, CachedClass::NIL, not_nil));
@@ -968,17 +946,29 @@ impl<'a> JitContext<'a> {
             // lets the merge keep `NilOr(Fixnum)` for `lhs` (nil arm ⊔
             // the Integer arm's fixnum guard) instead of ⊤.
             narm.guard_class_state(lhs, CachedClass::NIL);
+            narm.flush_gp(ir);
             narm.load(ir, rhs, GP::Rsi);
-            // Raw `cmp` + fused branch; `NIL_VALUE` is not a tagged fixnum,
-            // but for `Eq` bit-equality is exactly the question (no other
-            // value shares nil's encoding; `===` on nil is the same test).
-            ir.push(AsmInst::IntegerCmpBrImm {
-                kind: CmpKind::Eq,
-                brkind,
-                branch_dest: dest,
-                lhs: GP::Rsi,
-                imm: crate::value::NIL_VALUE as i32,
-            });
+            // Raw `cmp`; `NIL_VALUE` is not a tagged fixnum, but for `Eq`
+            // bit-equality is exactly the question (no other value shares
+            // nil's encoding; `===` on nil is the same test). Left in the
+            // flags for the arm's branch.
+            let nil_imm = crate::value::NIL_VALUE as i32;
+            match self.wants_cond_flags(dst) {
+                Some(slot) => {
+                    ir.cmp_imm_flags(GP::Rsi, nil_imm);
+                    narm.def_C(slot, Value::nil());
+                    self.set_cond_flags(slot, CondFlags::Int(CmpKind::Eq));
+                }
+                None => {
+                    ir.push(AsmInst::IntegerCmpImm {
+                        kind: CmpKind::Eq,
+                        dst: None,
+                        lhs: GP::Rsi,
+                        imm: nil_imm,
+                    });
+                    narm.def_rax2acc(ir, dst);
+                }
+            }
             self.end_arm(narm, ir, &merge, true);
 
             // Integer arm: the fused inline the mono path would have
@@ -996,7 +986,6 @@ impl<'a> JitContext<'a> {
                 CachedClass::INTEGER,
                 rhs_class,
                 bc_pos,
-                mode,
                 None,
             ) {
                 Some(BinaryInlineOutcome::Done) => {
@@ -1005,12 +994,12 @@ impl<'a> JitContext<'a> {
                     self.bind_merge(state, ir, merge);
                     return Ok(BinaryLowering::Emitted);
                 }
-                // The generator declined (or, impossibly for an unknown
-                // receiver, folded): back the peel out and take the
+                // The generator declined: back the peel out and take the
                 // residual routing below.
                 _ => {
                     ir.restore(ir_save);
                     *state = state_save;
+                    self.discard_cond_results();
                 }
             }
         }
@@ -1078,7 +1067,6 @@ impl<'a> JitContext<'a> {
                 lhs_class,
                 rhs_class,
                 bc_pos,
-                mode,
                 heal,
             ) {
                 Some(BinaryInlineOutcome::Done) => {
@@ -1095,7 +1083,6 @@ impl<'a> JitContext<'a> {
                     }
                     return Ok(BinaryLowering::Emitted);
                 }
-                Some(BinaryInlineOutcome::Folded(b)) => return Ok(BinaryLowering::Folded(b)),
                 Some(BinaryInlineOutcome::Declined) | None => {}
             }
         }
@@ -1112,7 +1099,7 @@ impl<'a> JitContext<'a> {
             // times a monomorphic call. Branch on the receiver into a direct
             // call of the one method the VM saw instead, and let anything
             // else take the helper.
-            if !matches!(mode, BinaryInlineMode::CmpBr { .. })
+            if !fused
                 && self.binary_recv_dispatch(state, ir, binop, dst, lhs, rhs, case_semantics, bc_pos)?
             {
                 return Ok(BinaryLowering::Emitted);
@@ -1201,7 +1188,7 @@ impl<'a> JitContext<'a> {
             ic,
             polymorphic,
             bc_pos,
-            BinaryInlineMode::Value,
+            false,
         )? {
             BinaryLowering::Emitted => Ok(CompileResult::Continue),
             BinaryLowering::Generic => {
@@ -1209,9 +1196,6 @@ impl<'a> JitContext<'a> {
                 Ok(CompileResult::Continue)
             }
             BinaryLowering::Called(res) | BinaryLowering::Ceased(res) => Ok(res),
-            // `Folded` is a `CmpBr`-mode outcome: in `Value` mode a fold is
-            // reported as `Done` with the constant already in `dst`.
-            BinaryLowering::Folded(_) => unreachable!(),
         }
     }
 
@@ -1225,6 +1209,10 @@ impl<'a> JitContext<'a> {
         rhs: SlotId,
         ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
+        // Only the following `CondBr` reads the result (opcodes 150–156):
+        // case/when semantics for `===`, and the inline compare may answer
+        // in the condition flags.
+        fused: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         match self.compile_binary(
@@ -1237,7 +1225,7 @@ impl<'a> JitContext<'a> {
             ic,
             polymorphic,
             bc_pos,
-            BinaryInlineMode::Value,
+            fused,
         )? {
             BinaryLowering::Emitted => Ok(CompileResult::Continue),
             BinaryLowering::Generic => {
@@ -1245,7 +1233,6 @@ impl<'a> JitContext<'a> {
                 Ok(CompileResult::Continue)
             }
             BinaryLowering::Called(res) | BinaryLowering::Ceased(res) => Ok(res),
-            BinaryLowering::Folded(_) => unreachable!(),
         }
     }
 
@@ -1267,90 +1254,6 @@ impl<'a> JitContext<'a> {
         (fid == builtin && matches!(self.store[fid].kind, FuncKind::Builtin { .. })).then_some(fid)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn binary_cmp_br(
-        &mut self,
-        state: &mut AbstractState,
-        ir: &mut AsmIr,
-        kind: CmpKind,
-        lhs: SlotId,
-        rhs: SlotId,
-        dest_bb: BasicBlockId,
-        brkind: BrKind,
-        ic: Option<(CachedClass, CachedClass)>,
-        polymorphic: bool,
-        bc_pos: BcIndex,
-    ) -> JitResult<CompileResult> {
-        let dest = self.label();
-        let src_idx = bc_pos + 1;
-        match self.compile_binary(
-            state,
-            ir,
-            kind.into(),
-            None,
-            lhs,
-            rhs,
-            ic,
-            polymorphic,
-            bc_pos,
-            BinaryInlineMode::CmpBr { brkind, dest },
-        )? {
-            // The fused form guards + compares + branches without ever
-            // materializing the flag. Side-branch bookkeeping stays here; the
-            // state is cloned *after* emission so both successors see the
-            // operand refinements (`refine_S_fixnum`) the guards established.
-            BinaryLowering::Emitted => {
-                self.new_side_branch(src_idx, dest_bb, state.clone(), dest);
-                Ok(CompileResult::Continue)
-            }
-            // A both-operands-constant compare emits no code, and the
-            // orphaned `dest` label is never resolved.
-            BinaryLowering::Folded(b) => Ok(if b ^ (brkind == BrKind::BrIfNot) {
-                CompileResult::Branch(dest_bb)
-            } else {
-                CompileResult::Continue
-            }),
-            BinaryLowering::Generic => {
-                self.gen_cond_br(state.clone(), ir, src_idx, dest_bb, brkind);
-                Ok(CompileResult::Continue)
-            }
-            BinaryLowering::Called(res) => {
-                if let CompileResult::Continue = res {
-                    state.unset_class_version_guard();
-                    state.unset_const_version_guard();
-                    // An inline gen may have resolved the comparison to a
-                    // state-known constant (e.g. `String == nil` folds to
-                    // `false` under the gen's class guards, LinkMode::C on the
-                    // callsite dst). The trailing branch must then be resolved
-                    // statically, exactly like `TraceIr::CondBr` does —
-                    // emitting a dynamic CondBr here would read a result from
-                    // rax that no code ever produced.
-                    let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
-                    let dst = self.store[callid].dst;
-                    if let Some(dst) = dst
-                        && state.is_truthy(dst)
-                    {
-                        if brkind == BrKind::BrIf {
-                            return Ok(CompileResult::Branch(dest_bb));
-                        }
-                        // BrIfNot on a truthy value: branch statically dead.
-                    } else if let Some(dst) = dst
-                        && state.is_falsy(dst)
-                    {
-                        if brkind == BrKind::BrIfNot {
-                            return Ok(CompileResult::Branch(dest_bb));
-                        }
-                        // BrIf on a falsy value: branch statically dead.
-                    } else {
-                        self.gen_cond_br(state.clone(), ir, src_idx, dest_bb, brkind);
-                    }
-                }
-                Ok(res)
-            }
-            BinaryLowering::Ceased(res) => Ok(res),
-        }
-    }
-
     ///
     /// Emit the class-independent C implementation of *binop*: no
     /// receiver-class guard, so the site never side-exits on receiver class
@@ -1367,9 +1270,9 @@ impl<'a> JitContext<'a> {
         binop: BinaryOp,
         lhs: SlotId,
         rhs: SlotId,
-        // `BinCmpBr` (case/when and rescue matching) dispatches `===` with
-        // funcall semantics; a plain `BinCmp` (`a === b`) is a public-only
-        // call.
+        // The fused comparison (case/when and rescue matching) dispatches
+        // `===` with funcall semantics; a plain `BinCmp` (`a === b`) is a
+        // public-only call.
         case_semantics: bool,
         // The call site's func-call flag: for `==`/`!=`/`<=>`/plain `===` a
         // private operator is callable only from `self OP x`.

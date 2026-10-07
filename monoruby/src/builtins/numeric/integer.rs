@@ -2,7 +2,7 @@ use super::*;
 use crate::ast::CmpKind;
 use crate::bytecodegen::BinOpK;
 use jitgen::trace_ir::{FBinOpInfo, FOpClass};
-use jitgen::{AbstractState, BinaryInlineMode, BinaryInlineOutcome, JitContext};
+use jitgen::{AbstractState, BinaryInlineOutcome, CondFlags, JitContext};
 use num::{BigInt, ToPrimitive, Zero};
 use std::ops::{BitAnd, BitOr, BitXor};
 use crate::codegen::jitgen::deopt_log::DeoptCause;
@@ -125,27 +125,27 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         2,
         false,
     );
-    let even_fid = globals.define_builtin_func(INTEGER_CLASS, "even?", even_, 0);
-    globals.store.inline_info.add_inline(
-        even_fid,
-        crate::executor::inline::InlineFuncInfo::new_inline_gen_predicate(inline_gen2!(
-            integer_pred(IntegerPred::Even)
-        )),
+    globals.define_builtin_inline_func(
+        INTEGER_CLASS,
+        "even?",
+        even_,
+        inline_gen2!(integer_pred(IntegerPred::Even)),
+        0,
     );
-    let odd_fid = globals.define_builtin_func(INTEGER_CLASS, "odd?", odd_, 0);
-    globals.store.inline_info.add_inline(
-        odd_fid,
-        crate::executor::inline::InlineFuncInfo::new_inline_gen_predicate(inline_gen2!(
-            integer_pred(IntegerPred::Odd)
-        )),
+    globals.define_builtin_inline_func(
+        INTEGER_CLASS,
+        "odd?",
+        odd_,
+        inline_gen2!(integer_pred(IntegerPred::Odd)),
+        0,
     );
     globals.define_builtin_func(INTEGER_CLASS, "nonzero?", nonzero_, 0);
-    let zero_fid = globals.define_builtin_func(INTEGER_CLASS, "zero?", zero_, 0);
-    globals.store.inline_info.add_inline(
-        zero_fid,
-        crate::executor::inline::InlineFuncInfo::new_inline_gen_predicate(inline_gen2!(
-            integer_pred(IntegerPred::Zero)
-        )),
+    globals.define_builtin_inline_func(
+        INTEGER_CLASS,
+        "zero?",
+        zero_,
+        inline_gen2!(integer_pred(IntegerPred::Zero)),
+        0,
     );
     globals.define_builtin_func(INTEGER_CLASS, "size", size, 0);
     globals.define_builtin_func(INTEGER_CLASS, "bit_length", bit_length, 0);
@@ -1005,9 +1005,9 @@ fn integer_bitnot_gen() -> Box<InlineGenUnary> {
 /// per-arch `unreachable!`).
 fn integer_binop_gen(kind: BinOpK) -> Box<InlineGenBinary> {
     Box::new(
-        move |state, ir, _, store, callid, _recv_class, rhs_class, mode| {
+        move |state, ir, _, store, callid, _recv_class, rhs_class| {
             let callsite = &store[callid];
-            if !callsite.is_simple() || !matches!(mode, BinaryInlineMode::Value) {
+            if !callsite.is_simple() {
                 return BinaryInlineOutcome::Declined;
             }
             let CallSiteInfo {
@@ -1050,14 +1050,14 @@ fn integer_binop_gen(kind: BinOpK) -> Box<InlineGenBinary> {
 }
 
 /// Factory for the [`InlineGenBinary`] of an Integer comparison operator.
-/// `Value` mode produces the boolean into the callsite dst
-/// (`gen_cmp_integer` / `gen_cmp_float`); `CmpBr` mode emits the fused
-/// compare-and-branch (`gen_cmpbr_integer` / `gen_cmpbr_float`), resolving
-/// a both-operands-constant compare to `Folded` so the caller kills the
-/// branch statically.
+/// The boolean goes to the callsite dst (`gen_cmp_integer` /
+/// `gen_cmp_float`, constant compares folded there) — unless only the
+/// following conditional branch reads it (`JitContext::wants_cond_flags`):
+/// then the compare leaves its answer in the condition flags
+/// (`gen_cmp_integer_flags` / `gen_cmp_float_flags`) for that branch.
 fn integer_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
     Box::new(
-        move |state, ir, _, store, callid, _recv_class, rhs_class, mode| {
+        move |state, ir, ctx, store, callid, _recv_class, rhs_class| {
             let callsite = &store[callid];
             if !callsite.is_simple() {
                 return BinaryInlineOutcome::Declined;
@@ -1075,39 +1075,21 @@ fn integer_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
                 }),
                 _ => return BinaryInlineOutcome::Declined,
             };
-            match mode {
-                BinaryInlineMode::Value => {
-                    match float_info {
-                        None => state.gen_cmp_integer(ir, kind, dst, recv, args),
-                        Some(info) => state.gen_cmp_float(ir, dst, info, kind),
-                    }
-                    BinaryInlineOutcome::Done
-                }
-                BinaryInlineMode::CmpBr { brkind, dest } => {
-                    match float_info {
-                        None => {
-                            if let Some((l, r)) = state.check_concrete_i64(recv, args) {
-                                return BinaryInlineOutcome::Folded(AbstractState::fold_cmp(
-                                    kind, l, r,
-                                ));
-                            }
-                            if let Some(b) = state.fold_bigint_const_cmpbr(ir, kind, recv, args) {
-                                return BinaryInlineOutcome::Folded(b);
-                            }
-                            state.gen_cmpbr_integer(ir, kind, recv, args, brkind, dest);
-                        }
-                        Some(info) => {
-                            if let Some((l, r)) = state.check_binary_C_f64(recv, args) {
-                                return BinaryInlineOutcome::Folded(AbstractState::fold_cmp(
-                                    kind, l, r,
-                                ));
-                            }
-                            state.gen_cmpbr_float(ir, info, kind, brkind, dest);
-                        }
-                    }
-                    BinaryInlineOutcome::Done
+            if let Some(slot) = ctx.wants_cond_flags(dst) {
+                let flags = match float_info {
+                    None => state.gen_cmp_integer_flags(ir, kind, slot, recv, args),
+                    Some(info) => state.gen_cmp_float_flags(ir, slot, info, kind),
+                };
+                if let Some(flags) = flags {
+                    ctx.set_cond_flags(slot, flags);
+                    return BinaryInlineOutcome::Done;
                 }
             }
+            match float_info {
+                None => state.gen_cmp_integer(ir, kind, dst, recv, args),
+                Some(info) => state.gen_cmp_float(ir, dst, info, kind),
+            }
+            BinaryInlineOutcome::Done
         },
     )
 }
@@ -1195,31 +1177,35 @@ fn integer_pred(
             return false;
         }
         let CallSiteInfo { dst, recv, .. } = *callsite;
-        // A branch fused onto this call (`if a.even?`): test the tagged
-        // word and jump — no boolean Value, no truthiness retest. The
-        // receiver is a guard-proven fixnum; bit 1 of `2n+1` is the
-        // parity, and the tagged zero is exactly 1.
-        if let Some(fused) = ctx.take_fused_br() {
-            use crate::bytecodegen::inst::BrKind;
-            // The branch is a block boundary: every dirty GP resident
-            // must reach its stack home on *both* edges, so flush before
-            // emitting it (the taken edge otherwise reads a stale home —
-            // the fallthrough-only flush the CondBr word performs is too
-            // late for it).
+        // The result feeds the next conditional branch only (`if a.even?`):
+        // test the tagged word and leave the answer in the condition flags —
+        // no boolean Value, no truthiness retest. The receiver is a
+        // guard-proven fixnum; bit 1 of `2n+1` is the parity, and the tagged
+        // zero is exactly 1.
+        if let Some(dst) = ctx.wants_cond_flags(dst) {
+            // Nothing may come between the flags and their branch, and the
+            // branch is a block boundary: settle the GP residents first.
             state.flush_gp(ir);
             state.load(ir, recv, GP::Rdi);
-            let truthy = fused.brkind == BrKind::BrIf;
-            match kind {
-                // even? is truthy when bit 1 is clear.
-                IntegerPred::Even => ir.br_if_bit_set(GP::Rdi, 1, !truthy, fused.label),
-                IntegerPred::Odd => ir.br_if_bit_set(GP::Rdi, 1, truthy, fused.label),
-                IntegerPred::Zero => ir.br_if_value_eq(GP::Rdi, 1, truthy, fused.label),
-            }
-            if let Some(dst) = dst {
-                // The temp is the branch's sole use; park a nil so any
-                // later write-back of the dead slot is still a Value.
-                state.def_C(dst, Immediate::nil());
-            }
+            let flags = match kind {
+                // even? is true when bit 1 is clear.
+                IntegerPred::Even => {
+                    ir.test_bit_flags(GP::Rdi, 1);
+                    CondFlags::Int(CmpKind::Eq)
+                }
+                IntegerPred::Odd => {
+                    ir.test_bit_flags(GP::Rdi, 1);
+                    CondFlags::Int(CmpKind::Ne)
+                }
+                IntegerPred::Zero => {
+                    ir.cmp_imm_flags(GP::Rdi, 1);
+                    CondFlags::Int(CmpKind::Eq)
+                }
+            };
+            // The temp is the branch's sole use; park a nil so any later
+            // write-back of the dead slot is still a Value.
+            state.def_C(dst, Immediate::nil());
+            ctx.set_cond_flags(dst, flags);
             return true;
         }
         if let Some(dst) = dst {
@@ -2478,6 +2464,61 @@ mod tests {
         maybe = [nil, { a: 1 }]
         40.times { |i| h = maybe[i % 2]; sn += 1 if h&.key?(:a) }
         [acc, acc2, flags, sn]
+        "#,
+        );
+    }
+
+    /// A predicate condition dispatched over several receiver classes
+    /// branches at the end of every arm: the Integer arm on the condition
+    /// flags its bit test left, a user-defined `even?` on the truthiness of
+    /// whatever it returned. Before, the arm that took the fused branch was
+    /// the only one that branched, and every other arm's result was never
+    /// tested (`Foo.new(false).even?` took the `then` side).
+    #[test]
+    fn predicate_branch_per_dispatch_arm() {
+        run_test(
+            r#"
+        class PredFoo
+          def initialize(v) = @v = v
+          def even? = @v
+          def zero? = @v
+          def nil? = @v
+        end
+        def pe(x) = (if x.even? then 1 else 2 end)
+        def pz(x) = (unless x.zero? then 1 else 2 end)
+        def pn(x) = (x.nil? ? 1 : 2)
+        vals = [2, 3, PredFoo.new(false), 0, PredFoo.new(true), PredFoo.new(nil), PredFoo.new(0), nil]
+        res = []
+        200.times do |i|
+          v = vals[i % vals.size]
+          res << [(pe(v) rescue :e), (pz(v) rescue :e), pn(v)]
+        end
+        res
+        "#,
+        );
+    }
+
+    /// `if x.nil?` answers in the condition flags (`cmp` against nil's
+    /// encoding) when the receiver's nil-ness is not known statically,
+    /// alone and inside `&&` / `||` chains and loop conditions.
+    #[test]
+    fn nil_p_branch_flags() {
+        run_test(
+            r#"
+        vals = [nil, 1, "a", nil, :s, 2.5, [], false]
+        acc = []
+        40.times do |i|
+          v = vals[i % vals.size]
+          w = vals[(i + 3) % vals.size]
+          acc << (v.nil? ? 1 : 2)
+          acc << (unless v.nil? then 3 else 4 end)
+          acc << (v.nil? && w.nil? ? 5 : 6)
+          acc << (v.nil? || !w.nil? ? 7 : 8)
+          n = 0
+          n += 1 until (i + n) % 3 == 0 || v.nil?
+          acc << n
+        end
+        acc
         "#,
         );
     }

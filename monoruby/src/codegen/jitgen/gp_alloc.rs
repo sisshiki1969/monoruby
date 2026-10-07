@@ -5,7 +5,7 @@
 //! to fixnum operands and results, **reusing** a register across instructions
 //! when a slot it already caches is read again. The GP-aware operations that
 //! drive it online are the integer binops (`binop_integer_gp`), the integer
-//! compares / compare-branches (`gen_cmp_integer_gp` / `gen_cmpbr_integer`),
+//! compares / flag-setting compares (`gen_cmp_integer_gp` / `gen_cmp_integer_flags`),
 //! call/yield-result parking (`def_rax2gp`) and concrete-literal defs
 //! (`def_lit2gp`); generic slot reads and write-backs consult the residents,
 //! and dirty residents are threaded into deopt / GC write-backs. For

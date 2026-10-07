@@ -916,19 +916,47 @@ impl JitStackFrame {
 }
 
 ///
-/// Context for JIT compilation.
+/// A conditional branch that consumes the result of the instruction being
+/// compiled: the `CondBr` bytecodegen marked optimizable right after a
+/// comparison (`Cmp`, opcodes 150–156) or a method call, testing that
+/// instruction's `dst` and nothing else.
 ///
-/// A conditional branch fused onto a method call (`if a.even?` — the
-/// `CondBr` bytecodegen marked optimizable right after the call): what a
-/// predicate inline generator needs to branch directly instead of
-/// materializing a boolean.
-pub(crate) struct FusedBr {
-    /// `BrIf`: branch to `label` when the predicate is truthy;
-    /// `BrIfNot`: when falsy.
-    pub(crate) brkind: crate::bytecodegen::inst::BrKind,
-    pub(crate) label: JitLabel,
+/// The producing instruction's arm in `compile_instruction` installs it
+/// (`JitContext::swap_cond_sink`) for the duration of its own lowering.
+/// While it is installed, an inline generator answering for that `dst` may
+/// leave its result in the condition flags instead of a boolean
+/// (`JitContext::wants_cond_flags` / `set_cond_flags`), and an intra-block
+/// dispatch declared for that `dst` emits the branch at the end of every
+/// arm (`declare_merge` / `end_arm`).
+///
+#[derive(Clone, Copy, Debug)]
+pub(super) struct CondBrSink {
+    /// The slot the branch tests — the producer's `dst`.
+    pub(super) cond: SlotId,
+    /// The position of the `CondBr` itself.
+    pub(super) pos: BcIndex,
+    pub(super) brkind: BrKind,
+    pub(super) dest_bb: BasicBlockId,
+    /// `stack_frame_len()` of the producer's frame: a nested (specialized)
+    /// compile running underneath it never matches.
+    pub(super) depth: usize,
 }
 
+///
+/// "The condition flags currently hold the truth value of `slot`": left by
+/// an inline generator for a [`CondBrSink`] it answered, read by the
+/// `CondBr` (or by the dispatch arm's own branch) that follows.
+///
+#[derive(Clone, Copy, Debug)]
+struct PendingFlags {
+    slot: SlotId,
+    flags: CondFlags,
+    depth: usize,
+}
+
+///
+/// Context for JIT compilation.
+///
 pub(crate) struct JitContext<'a> {
     pub store: &'a Store,
     codegen_mode: bool,
@@ -1108,18 +1136,17 @@ pub(crate) struct JitContext<'a> {
     /// dispatch); a generator that can answer uniformly over the whole
     /// set (`kernel_is_a`) folds on it, everyone else keeps ignoring it.
     same_target_classes: Option<Box<[CachedClass]>>,
-    /// The conditional branch fused onto the current call — present only
-    /// while the call's inline generators run (`compile_instruction`'s
-    /// `MethodCall` arm scopes it, like `same_target_classes`). A
-    /// predicate generator `take`s it and branches directly — no boolean
-    /// `Value` materialized; left untaken, the arm emits the ordinary
-    /// truthiness branch after the call, byte-for-byte today's code.
-    fused_br: std::cell::RefCell<Option<FusedBr>>,
-    /// Where `method_call` parks a fused branch its generator dispatch
-    /// left untaken (`park_fused_br`), so the live cell is empty while an
-    /// inlined callee compiles under it. Bracketed by the method-call arm
-    /// together with `fused_br`.
-    fused_br_leftover: std::cell::RefCell<Option<FusedBr>>,
+    /// The conditional branch consuming the result of the instruction
+    /// being lowered — see [`CondBrSink`].
+    cond_sink: Option<CondBrSink>,
+    /// Condition flags left for the following `CondBr` — see
+    /// [`PendingFlags`]. A `Cell` because the inline generators that set it
+    /// see the context only by shared reference.
+    cond_flags: std::cell::Cell<Option<PendingFlags>>,
+    /// `(pos, depth)` of an optimizable `CondBr` whose branch was already
+    /// emitted at the end of every arm of the dispatch that produced its
+    /// operand (`bind_merge`): the `CondBr` itself then emits nothing.
+    condbr_done: Option<(BcIndex, usize)>,
 }
 
 impl<'a> JitContext<'a> {
@@ -1153,8 +1180,9 @@ impl<'a> JitContext<'a> {
             call_site_fpr_saves: HashMap::default(),
             kept_outer_views: vec![],
             same_target_classes: None,
-            fused_br: std::cell::RefCell::new(None),
-            fused_br_leftover: std::cell::RefCell::new(None),
+            cond_sink: None,
+            cond_flags: std::cell::Cell::new(None),
+            condbr_done: None,
             outer_claim_barrier: false,
             widened_outer_log: vec![],
             spec_memo: Default::default(),
@@ -1221,8 +1249,9 @@ impl<'a> JitContext<'a> {
             // Scoped per call around the inline-generator dispatch; never
             // live across a context clone.
             same_target_classes: None,
-            fused_br: std::cell::RefCell::new(None),
-            fused_br_leftover: std::cell::RefCell::new(None),
+            cond_sink: None,
+            cond_flags: std::cell::Cell::new(None),
+            condbr_done: None,
         }
     }
 
@@ -3304,46 +3333,96 @@ impl<'a> JitContext<'a> {
         self.same_target_classes = classes;
     }
 
-    /// Take the branch fused onto the current call, if any — the
-    /// predicate generators' half of the fusion protocol. Taking it is
-    /// the claim to have emitted the branch.
-    pub(crate) fn take_fused_br(&self) -> Option<FusedBr> {
-        self.fused_br.borrow_mut().take()
+    /// Install the conditional branch that consumes the current
+    /// instruction's result (see [`CondBrSink`]), returning what was there
+    /// before. The producer's arm brackets its lowering with two calls, so
+    /// nothing of an enclosing instruction's sink survives into — or leaks
+    /// out of — a nested compile.
+    pub(super) fn swap_cond_sink(&mut self, sink: Option<CondBrSink>) -> Option<CondBrSink> {
+        std::mem::replace(&mut self.cond_sink, sink)
     }
 
-    pub(super) fn set_fused_br(&self, fused: Option<FusedBr>) {
-        *self.fused_br.borrow_mut() = fused;
+    /// The installed sink, if it consumes `dst` in the frame being compiled.
+    pub(super) fn cond_sink_for(&self, dst: Option<SlotId>) -> Option<CondBrSink> {
+        let sink = self.cond_sink?;
+        (Some(sink.cond) == dst && sink.depth == self.stack_frame_len()).then_some(sink)
     }
 
-    /// Swap the fused-branch cell, returning what it held. The method-call
-    /// arm brackets a callsite with this so nothing of an enclosing
-    /// callsite's fusion survives into — or leaks out of — a nested
-    /// compile.
-    pub(super) fn swap_fused_br(&self, fused: Option<FusedBr>) -> Option<FusedBr> {
-        std::mem::replace(&mut *self.fused_br.borrow_mut(), fused)
+    /// The inline generators' half of the flags protocol: `Some(dst)` when
+    /// the result the generator is about to produce in `dst` is consumed
+    /// only by the conditional branch that follows. Such a generator may
+    /// leave its answer in the condition flags (emitting nothing that
+    /// touches them afterwards) and report them with
+    /// [`set_cond_flags`](Self::set_cond_flags) instead of materializing a
+    /// boolean; it is free to ignore the offer and produce the value as
+    /// usual.
+    pub(crate) fn wants_cond_flags(&self, dst: Option<SlotId>) -> Option<SlotId> {
+        self.cond_sink_for(dst).map(|sink| sink.cond)
     }
 
-    /// Move a fused branch no generator consumed out of the live cell.
-    /// `method_call` calls this once its inline-generator dispatch is
-    /// over: everything after that point — the ordinary call emission and
-    /// above all the nested compile of an inlined callee — must see an
-    /// empty cell, or an unrelated inner callsite would clobber or steal
-    /// the branch (optparse's `make_switch` lost every long option to
-    /// exactly that). The method-call arm reads the parked value back
-    /// with `take_fused_leftover`.
-    pub(crate) fn park_fused_br(&self) {
-        let pending = self.fused_br.borrow_mut().take();
-        if pending.is_some() {
-            *self.fused_br_leftover.borrow_mut() = pending;
+    /// Report that the condition flags now hold the truth value of `slot`
+    /// (which [`wants_cond_flags`](Self::wants_cond_flags) offered).
+    pub(crate) fn set_cond_flags(&self, slot: SlotId, flags: CondFlags) {
+        debug_assert_eq!(self.wants_cond_flags(Some(slot)), Some(slot));
+        self.cond_flags.set(Some(PendingFlags {
+            slot,
+            flags,
+            depth: self.stack_frame_len(),
+        }));
+    }
+
+    /// Take the flags left for `slot` in the frame being compiled, if any.
+    pub(super) fn take_cond_flags(&self, slot: SlotId) -> Option<CondFlags> {
+        let pending = self.cond_flags.get()?;
+        if pending.slot == slot && pending.depth == self.stack_frame_len() {
+            self.cond_flags.set(None);
+            Some(pending.flags)
+        } else {
+            None
         }
     }
 
-    pub(super) fn take_fused_leftover(&self) -> Option<FusedBr> {
-        self.fused_br_leftover.borrow_mut().take()
+    /// Whether flags are pending in the frame being compiled.
+    pub(super) fn cond_flags_pending(&self) -> bool {
+        self.cond_flags
+            .get()
+            .is_some_and(|p| p.depth == self.stack_frame_len())
     }
 
-    pub(super) fn swap_fused_leftover(&self, fused: Option<FusedBr>) -> Option<FusedBr> {
-        std::mem::replace(&mut *self.fused_br_leftover.borrow_mut(), fused)
+    /// Clear pending flags: a generator that left them and then declined
+    /// (its code was rolled back with them).
+    pub(super) fn clear_cond_flags(&self) {
+        self.cond_flags.set(None);
+    }
+
+    /// Forget whatever the producer of the installed sink's operand left for
+    /// its branch — flags or the per-arm mark — when its code was rolled back.
+    pub(super) fn discard_cond_results(&mut self) {
+        self.clear_cond_flags();
+        if let Some(sink) = self.cond_sink {
+            self.take_condbr_done(sink.pos);
+        }
+    }
+
+    pub(super) fn set_condbr_done(&mut self, pos: BcIndex) {
+        self.condbr_done = Some((pos, self.stack_frame_len()));
+    }
+
+    /// Whether the `CondBr` at `pos` was already emitted by the dispatch
+    /// that produced its operand; consumes the mark.
+    pub(super) fn take_condbr_done(&mut self, pos: BcIndex) -> bool {
+        if self.condbr_done == Some((pos, self.stack_frame_len())) {
+            self.condbr_done = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Whether a `CondBr` mark is pending in the frame being compiled.
+    pub(super) fn condbr_done_pending(&self) -> bool {
+        self.condbr_done
+            .is_some_and(|(_, depth)| depth == self.stack_frame_len())
     }
 
     pub(super) fn specialize_level(&self) -> usize {

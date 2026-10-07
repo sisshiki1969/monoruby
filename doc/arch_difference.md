@@ -86,9 +86,10 @@ identical families covered on both arches include:
 - Guards: `GuardClass`, `GuardClassVersion`, `GuardConstBaseClass`,
   `GuardConstVersion`, `GuardArrayTy`, `GuardFrozen`, `GuardCapture`,
   `CheckBOP`, `CheckStack`, `ExecGc`.
-- Arithmetic: `IntegerBinOp`, `IntegerCmp`, `IntegerCmpBr`, `FloatBinOp`,
-  `FloatUnOp`, `FloatCmp`, `FloatCmpBr`, `FixnumNeg`, `FixnumBitNot`,
-  `RegAdd`, `RegSub`.
+- Arithmetic: `IntegerBinOp`, `IntegerCmp`, `FloatBinOp`, `FloatUnOp`,
+  `FloatCmp`, `FixnumNeg`, `FixnumBitNot`, `RegAdd`, `RegSub`.
+- Condition flags: `CmpFlags`, `CmpImmFlags`, `TestBitFlags`,
+  `FloatCmpFlags` (set the flags only) and `BrFlags` (branch on them).
 - FP transfer: `FprMove`, `FprSwap`, `F64ToFpr`, `FixnumToFpr`, `FloatToFpr`,
   `FprToStack`, `I64ToBoth`, `FprSave`, `FprRestore`, `CFunc_F_F`,
   `CFunc_FF_F`.

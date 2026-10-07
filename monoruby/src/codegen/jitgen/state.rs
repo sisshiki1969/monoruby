@@ -1157,7 +1157,7 @@ impl AbstractFrame {
     /// rest of codegen always observes a slot in its canonical stack home. The
     /// GP-aware operations that keep the file live across instructions are the
     /// integer binops (`binop_integer_gp`), the integer compares /
-    /// compare-branches (`gen_cmp_integer_gp` / `gen_cmpbr_integer`),
+    /// flag-setting compares (`gen_cmp_integer_gp` / `gen_cmp_integer_flags`),
     /// call/yield-result parking (`def_rax2gp`) and concrete-literal defs
     /// (`def_lit2gp`); generic slot reads and write-backs consult the residents
     /// without flushing. A no-op when the file is empty.

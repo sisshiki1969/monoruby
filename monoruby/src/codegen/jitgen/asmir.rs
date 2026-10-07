@@ -1068,24 +1068,22 @@ impl AsmIr {
         });
     }
 
-    /// Register-form fused fixnum compare + conditional branch, operands already
-    /// in GP registers and fixnum-guarded. The lowering compares and branches to
-    /// `branch_dest` per `kind`/`brkind`.
-    pub(in crate::codegen::jitgen) fn integer_cmpbr_reg(
-        &mut self,
-        kind: CmpKind,
-        brkind: BrKind,
-        branch_dest: JitLabel,
-        lhs: GP,
-        rhs: GP,
-    ) {
-        self.push(AsmInst::IntegerCmpBrReg {
-            kind,
-            brkind,
-            branch_dest,
-            lhs,
-            rhs,
-        });
+    /// Flag-setting fixnum compare, operands already in GP registers and
+    /// fixnum-guarded; the flags are read by the following
+    /// [`AsmInst::BrFlags`].
+    pub(in crate::codegen::jitgen) fn cmp_flags(&mut self, lhs: GP, rhs: GP) {
+        self.push(AsmInst::CmpFlags { lhs, rhs });
+    }
+
+    /// Flag-setting compare of `lhs` against an immediate; see
+    /// [`AsmInst::CmpImmFlags`].
+    pub(crate) fn cmp_imm_flags(&mut self, lhs: GP, imm: i32) {
+        self.push(AsmInst::CmpImmFlags { lhs, imm });
+    }
+
+    /// Flag-setting bit test; see [`AsmInst::TestBitFlags`].
+    pub(crate) fn test_bit_flags(&mut self, r: GP, bit: u8) {
+        self.push(AsmInst::TestBitFlags { r, bit });
     }
 
     ///
@@ -1109,19 +1107,10 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn float_cmp_br(
-        &mut self,
-        binary_fpr: (FPReg, FPReg),
-        kind: CmpKind,
-        brkind: BrKind,
-        branch_dest: JitLabel,
-    ) {
-        self.push(AsmInst::FloatCmpBr {
+    pub(super) fn float_cmp_flags(&mut self, binary_fpr: (FPReg, FPReg)) {
+        self.push(AsmInst::FloatCmpFlags {
             lhs: binary_fpr.0,
             rhs: binary_fpr.1,
-            kind,
-            brkind,
-            branch_dest,
         });
     }
 }
@@ -1282,16 +1271,6 @@ impl AsmIr {
     }
 
     /// See [`AsmInst::HashProbe`].
-    /// See [`AsmInst::BrIfBitSet`].
-    pub(crate) fn br_if_bit_set(&mut self, r: GP, bit: u8, set: bool, dest: JitLabel) {
-        self.inst.push(AsmInst::BrIfBitSet { r, bit, set, dest });
-    }
-
-    /// See [`AsmInst::BrIfValueEq`].
-    pub(crate) fn br_if_value_eq(&mut self, r: GP, imm: u16, eq: bool, dest: JitLabel) {
-        self.inst.push(AsmInst::BrIfValueEq { r, imm, eq, dest });
-    }
-
     pub(crate) fn hash_probe(
         &mut self,
         layout: rubymap::EntriesLayout,
@@ -1899,27 +1878,6 @@ pub(super) enum AsmInst {
     /// is reached by fall-through from the last arm.
     ///
     Br(JitLabel),
-    ///
-    /// Predicate branch: jump to `dest` when bit `bit` of the raw word in
-    /// `r` is set (`set: true`) / clear (`set: false`). The fused lowering
-    /// of `Integer#even?`/`#odd?` (bit 1 of a tagged fixnum is the
-    /// parity): one test-and-branch, no boolean `Value` materialized.
-    BrIfBitSet {
-        r: GP,
-        bit: u8,
-        set: bool,
-        dest: JitLabel,
-    },
-    /// Predicate branch: jump to `dest` when the word in `r` equals
-    /// (`eq: true`) / differs from (`eq: false`) the small immediate.
-    /// Fused `Integer#zero?` (tagged 0 is exactly 1) and the
-    /// truthy-test of a proven-BOOL value (compare against FALSE).
-    BrIfValueEq {
-        r: GP,
-        imm: u16,
-        eq: bool,
-        dest: JitLabel,
-    },
     /// Class dispatch arm: fall through when *r*'s runtime class is *class*,
     /// branch to *dst* otherwise.
     ///
@@ -2540,40 +2498,56 @@ pub(super) enum AsmInst {
         lhs: GP,
         imm: i32,
     },
-    ///
-    /// Register-form fused fixnum compare + conditional branch, operands already
-    /// in GP registers and fixnum-guarded. The lowering compares and branches to
-    /// `branch_dest` per `kind`/`brkind`.
-    ///
-    IntegerCmpBrReg {
-        kind: CmpKind,
-        brkind: BrKind,
-        branch_dest: JitLabel,
-        lhs: GP,
-        rhs: GP,
-    },
-    ///
-    /// Immediate-form fused fixnum compare + conditional branch. `imm` is the
-    /// tagged constant `2k+1`.
-    ///
-    IntegerCmpBrImm {
-        kind: CmpKind,
-        brkind: BrKind,
-        branch_dest: JitLabel,
-        lhs: GP,
-        imm: i32,
-    },
     FloatCmp {
         kind: CmpKind,
         lhs: FPReg,
         rhs: FPReg,
     },
-    FloatCmpBr {
-        kind: CmpKind,
+    ///
+    /// Flag-setting integer compare `cmp lhs, rhs`: no result register, only
+    /// the CPU condition flags, which the following [`Self::BrFlags`] reads.
+    /// Emitted for a comparison whose boolean is consumed only by the next
+    /// conditional branch (see [`CondFlags`]).
+    ///
+    CmpFlags {
+        lhs: GP,
+        rhs: GP,
+    },
+    ///
+    /// Flag-setting integer compare against an immediate (a tagged fixnum
+    /// `2k+1`, or a raw immediate such as `NIL_VALUE`).
+    ///
+    CmpImmFlags {
+        lhs: GP,
+        imm: i32,
+    },
+    ///
+    /// Flag-setting bit test of the raw word in `r`: afterwards `Ne` holds
+    /// exactly when bit `bit` is set.
+    ///
+    TestBitFlags {
+        r: GP,
+        bit: u8,
+    },
+    ///
+    /// Flag-setting float compare `lhs <=> rhs` (`ucomisd` / `fcmp`), read
+    /// by a [`Self::BrFlags`] carrying [`CondFlags::Float`].
+    ///
+    FloatCmpFlags {
         lhs: FPReg,
         rhs: FPReg,
+    },
+    ///
+    /// Conditional branch on the condition flags a preceding flag-setting
+    /// instruction (`CmpFlags`, `CmpImmFlags`, `TestBitFlags`,
+    /// `FloatCmpFlags`) left: jump to `dest` when the predicate the flags
+    /// describe is true (`BrIf`) / false (`BrIfNot`). Nothing that may touch
+    /// the flags is emitted between the two.
+    ///
+    BrFlags {
+        flags: CondFlags,
         brkind: BrKind,
-        branch_dest: JitLabel,
+        dest: JitLabel,
     },
     ///
     /// Generic binary operation through a `BinaryOpFn` C helper.
@@ -3308,7 +3282,7 @@ impl AsmInst {
             Self::CFunc_F_F { src, dst, .. } => vec![*src, *dst],
             Self::CFunc_FF_F { lhs, rhs, dst, .. } => vec![*lhs, *rhs, *dst],
             Self::FloatCmp { lhs, rhs, .. } => vec![*lhs, *rhs],
-            Self::FloatCmpBr { lhs, rhs, .. } => vec![*lhs, *rhs],
+            Self::FloatCmpFlags { lhs, rhs } => vec![*lhs, *rhs],
             _ => vec![],
         }
     }

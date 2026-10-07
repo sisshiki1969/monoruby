@@ -35,6 +35,24 @@
 //! the element it wants: `LinkMode::Sf(fpr, SfGuarded::FixnumOrFloat)`, a
 //! boxed slot with a live float shadow. Teaching `declare_merge` to take a
 //! caller-supplied merge shape is the natural next step.
+//!
+//! **A dispatch whose result feeds a conditional branch branches per arm.**
+//! When `dst` is consumed only by the optimizable `CondBr` that follows (the
+//! installed [`CondBrSink`]), each arm emits that branch itself at its end —
+//! on the condition flags its inline generator left, on a state-known truth
+//! value, or on the truthiness of its own result — and only the fall-through
+//! reaches the merge. The arms never have to agree on a boolean `Value`, and
+//! the taken edge of each carries that arm's own refinements:
+//!
+//! ```text
+//!         br_class_ne recv, C0 -> L1
+//!         <arm 0>  cmp / test         ; flags only
+//!         j<cc> taken
+//!         br merge
+//!   L1:   <residual>  call            ; Value in rax
+//!         <truthiness test> -> taken
+//!   merge:                            ; the CondBr itself emits nothing
+//! ```
 
 use super::*;
 
@@ -50,6 +68,9 @@ pub(super) struct DispatchMerge {
     merge: JitLabel,
     /// The bytecode position the bridges are emitted at.
     pc: BytecodePtr,
+    /// The conditional branch consuming the dispatch's `dst`, emitted at the
+    /// end of every arm (see the module docs).
+    sink: Option<CondBrSink>,
 }
 
 impl<'a> JitContext<'a> {
@@ -69,6 +90,7 @@ impl<'a> JitContext<'a> {
         dst: Option<SlotId>,
     ) -> (AbstractState, DispatchMerge) {
         let pc = state.pc();
+        let sink = self.cond_sink_for(dst);
         state.write_back_slots(ir, operands);
         state.flush_gp(ir);
         let entry = state.clone();
@@ -97,6 +119,7 @@ impl<'a> JitContext<'a> {
                 target,
                 merge,
                 pc,
+                sink,
             },
         )
     }
@@ -106,6 +129,11 @@ impl<'a> JitContext<'a> {
     ///
     /// The last arm may fall through instead (`jump` false), which saves a
     /// branch when the merge label is emitted immediately after it.
+    ///
+    /// Under a [`CondBrSink`] the arm first emits the conditional branch on
+    /// its own result ([`emit_cond_branch`](Self::emit_cond_branch)); an arm
+    /// whose result is statically known to take the branch jumps straight to
+    /// it and never reaches the merge.
     ///
     pub(super) fn end_arm(
         &mut self,
@@ -120,6 +148,26 @@ impl<'a> JitContext<'a> {
         // pool register (which is exactly where a call result lands). The
         // merge state inherited an empty file from `declare_merge`, so every
         // arm has to pay its own residents back to their stack homes first.
+        // (An arm that left the condition flags flushed before setting them;
+        // nothing may come between the flags and their branch.)
+        if let Some(sink) = m.sink
+            // An inner dispatch for the same `dst` already branched per arm.
+            && !self.take_condbr_done(sink.pos)
+        {
+            if !self.cond_flags_pending() {
+                arm.flush_gp(ir);
+            }
+            if self.emit_cond_branch(&mut arm, ir, sink.cond, sink.pos, sink.dest_bb, sink.brkind)
+            {
+                // Statically taken: this arm leaves for the branch target.
+                arm.flush_gp(ir);
+                let dest = self.label();
+                ir.push(AsmInst::Br(dest));
+                arm.set_next_sp(self.iseq().get_sp(sink.pos));
+                self.new_side_branch(sink.pos, sink.dest_bb, arm, dest);
+                return;
+            }
+        }
         arm.flush_gp(ir);
         arm.gen_bridge_all(ir, &m.target.frames_cloned(), m.pc, &self.chain_surrender_table());
         if jump {
@@ -138,5 +186,9 @@ impl<'a> JitContext<'a> {
     ) {
         ir.push(AsmInst::Label(m.merge));
         *state = m.target;
+        if let Some(sink) = m.sink {
+            // Every arm branched on its own result: the `CondBr` emits nothing.
+            self.set_condbr_done(sink.pos);
+        }
     }
 }

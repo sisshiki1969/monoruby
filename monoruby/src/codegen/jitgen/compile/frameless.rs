@@ -416,6 +416,7 @@ pub(super) fn leaf_expr_body(store: &Store, iseq_id: ISeqId) -> Option<LeafBody>
                 rhs,
                 ic,
                 polymorphic,
+                fused: false,
             } => {
                 let class = cmp_operand_class(ic, polymorphic, kind)?;
                 let chain = extend(

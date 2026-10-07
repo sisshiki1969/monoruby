@@ -441,7 +441,7 @@ fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn kernel_nil(
     state: &mut AbstractState,
     ir: &mut AsmIr,
-    _: &JitContext,
+    ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
     // The receiver Value is all this reads, so an unproven class
@@ -462,6 +462,20 @@ fn kernel_nil(
         if let Some(dst) = dst {
             state.def_C(dst, Immediate::bool(false));
         }
+    } else if let Some(dst) = ctx.wants_cond_flags(dst) {
+        // Only the following conditional branch reads the answer
+        // (`if x.nil?`): compare against nil's unique encoding and leave it
+        // in the condition flags. Nothing may come between the flags and
+        // the branch, which is a block boundary: settle the GP residents
+        // first, and park a nil in the dead temp.
+        state.flush_gp(ir);
+        state.load(ir, recv, GP::Rdi);
+        ir.cmp_imm_flags(GP::Rdi, crate::value::NIL_VALUE as i32);
+        state.def_C(dst, Immediate::nil());
+        ctx.set_cond_flags(
+            dst,
+            jitgen::CondFlags::Int(crate::ast::CmpKind::Eq),
+        );
     } else {
         state.load(ir, recv, GP::Rdi);
         // Pure-LIR predicate (no arch-specific closure): Rax = (Rdi == nil).
