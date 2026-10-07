@@ -384,6 +384,24 @@ impl AsmInfo {
         keep
     }
 
+    ///
+    /// The label *label* resolves to once jump-threading aliases are
+    /// followed (`resolve_label`), as a `JitLabel`: two labels are the same
+    /// emission point when their canonical forms agree.
+    ///
+    pub(super) fn canonical_label(&self, label: JitLabel) -> JitLabel {
+        let mut label = label;
+        let mut guard = self.label_alias.len() + 1;
+        while let Some(&next) = self.label_alias.get(&label) {
+            label = next;
+            guard -= 1;
+            if guard == 0 {
+                break;
+            }
+        }
+        label
+    }
+
     pub(super) fn resolve_bb_label(&mut self, jit: &mut JitMemory, bb: BasicBlockId) -> DestLabel {
         let label = self.basic_block_labels.get(&bb).copied().unwrap();
         self.resolve_label(jit, label)
@@ -397,6 +415,10 @@ impl AsmInfo {
 
     pub(super) fn inline_bridge_exists(&self, src_bb: BasicBlockId) -> bool {
         self.inline_bridges.contains_key(&Some(src_bb))
+    }
+
+    pub(super) fn inline_bridge_exists_for(&self, src_bb: Option<BasicBlockId>) -> bool {
+        self.inline_bridges.contains_key(&src_bb)
     }
 
     pub(super) fn remove_inline_bridge(
