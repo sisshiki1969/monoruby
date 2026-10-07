@@ -4870,8 +4870,10 @@ f090e128d692f747d1595559a1145a25	[499500, 4]	module Hot; end\n        class Inte
 f098937c1782ad342405a495ac2f0063	true	class Foo\n              def bar; end\n            end\n            \n\n
 f09f3eb9548625635df9c1a64f0614c9	[2, :redefined, false]	def probe(a, b) = a == b\n                def probe_ne(a, b) = a
 f0a0b5c1549bcc5e0de3a83ecf19fd1f	[true, true, true, true]	__a = [];__a << ("abcd".force_encoding("UTF-32LE").encoding == Encoding::UTF_32L
+f0b130bdd3885607422ad3a3b9fcc1b3	[[[1, 171], [2, 129], [:yy, 42], [false, 86], [true, 172]], 1, :xx, 1, false, 1]	class Zz; def initialize(v) = @v = v; def zero? = @v; def even? = !
 f0c130f386e3895d3c36f721f172b025	[1, 10, 5, nil, 3, 1, nil]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 f0c50bd8de554c94bd61a098ac6b9b78	"#<data M amount=42, unit=\\"km\\">"	M = Data.define(:amount, :unit)\nM.new(42, "km").to_s
+f0cb2a28a8c1989f4f35b56373502811	[[:t, 350], [false, 50]]	classes = (1..6).map { |i| Class.new { define_method(:nil?) { i } }
 f0cfe725e252464afecaf562e1a70112	[[false, true], [false, true], [false, true], [false, true], [false, true], [false, true], [true, true], [true, true], [true, true], [false, true], [false, true], [false, true]]	bits = [0x0000_0000_0000_0000, 0x8000_0000_0000_0000,\n                0
 f0e946f362739bd5f3dcdd127d2dbfe2	[:toa, :single]	class E1 < StandardError; end\n            class Custom; def to_a; [
 f10c097ac461b11c7df33359da94f9a8	[36788, 3, 10, 20, [20, 92, 158, 63, 135, 9, 143, 176], [127, 180, 196, 239], [95, 145, 177, 102], 1067342868, true, true, [752595690692, 108744157686, 291964244179, 650496783975, 396459895993, 611018672663, 309610205529, 474247592490, 936371205000, 719526270950], true, true, false, false, true, true, 4, :range, true]	__a = [];__a << (Random.new(36788).seed);__a << (Random.new(3.4).seed);__a << (R
