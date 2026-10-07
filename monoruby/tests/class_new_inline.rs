@@ -217,3 +217,95 @@ fn class_new_define_method_initialize() {
         "#
     ));
 }
+
+#[test]
+fn class_new_frameless_initialize() {
+    // `initialize` bodies the frameless leg takes through the site's
+    // `initialize` twin (`CallSiteInfo::class_new_init`): branches, a
+    // computed store, a call on `self`, a zero-argument constructor, a
+    // constant argument (whose window slot is never written), and one
+    // whose body reads `self` back through an accessor.
+    run_test(&format!(
+        r#"
+        class CNBr
+          def initialize(a)
+            @a = a > 5 ? a : -a
+            @b = a * 2
+          end
+          def to_a = [@a, @b]
+        end
+        class CNCall
+          def initialize(x)
+            @x = x
+            setup
+          end
+          def setup = @y = @x + 1
+          def to_a = [@x, @y]
+        end
+        class CNZero
+          def initialize = @z = [1, 2]
+          def z = @z
+        end
+        class CNConst
+          def initialize(a, b) = (@a = a; @b = b)
+          def to_a = [@a, @b]
+        end
+        r = []
+        {LOOP}.times do |i|
+          r = [CNBr.new(i).to_a, CNBr.new(3).to_a, CNCall.new(i).to_a, CNZero.new.z, CNConst.new(i, 2).to_a]
+        end
+        r
+        "#
+    ));
+}
+
+#[test]
+fn class_new_frameless_initialize_redo() {
+    // A side exit inside the frameless `initialize` hands the whole
+    // construction back to the interpreter: the receiver of `a + b`
+    // changes class mid-loop, and the constant argument `2` — which the
+    // window never held — must reach the interpreted body all the same.
+    run_test_once(&format!(
+        r#"
+        class CNRedo
+          def initialize(a, b)
+            @s = a + b
+          end
+          def s = @s
+        end
+        def cn_redo(a) = CNRedo.new(a, 2).s
+        r = []
+        {LOOP}.times {{ |i| r << cn_redo(i) }}
+        r << cn_redo(1.5) << cn_redo("x".dup.force_encoding("UTF-8") + "y") rescue r << $!.class
+        r << cn_redo(2.5)
+        r
+        "#
+    ));
+}
+
+#[test]
+fn class_new_frameless_initialize_frozen() {
+    // The fresh object is stored to without a frozen guard — until the
+    // body runs Ruby code that could freeze it. `freeze` inside
+    // `initialize` must still make the following store raise.
+    run_test_once(&format!(
+        r#"
+        class CNFrz
+          def initialize(a, f)
+            @a = a
+            freeze if f
+            @b = a
+          end
+          def to_a = [@a, @b]
+        end
+        r = []
+        {LOOP}.times {{ |i| r << CNFrz.new(i, false).to_a }}
+        begin
+          CNFrz.new(1, true)
+        rescue => e
+          r << e.class
+        end
+        r.last(2)
+        "#
+    ));
+}

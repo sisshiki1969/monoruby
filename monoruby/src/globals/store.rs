@@ -1838,6 +1838,7 @@ impl Store {
             vcall,
             pmc: PolyCache::default(),
             send_direct: None,
+            class_new_init: None,
         });
         id
     }
@@ -1846,6 +1847,12 @@ impl Store {
     /// [`CallSiteInfo::send_direct`].
     pub(crate) fn set_send_direct(&mut self, callid: CallSiteId, direct: CallSiteId) {
         self.callsite_info[callid.0 as usize].send_direct = Some(direct);
+    }
+
+    /// Attach the `initialize` twin of a `recv.new(args)` site — see
+    /// [`CallSiteInfo::class_new_init`].
+    pub(crate) fn set_class_new_init(&mut self, callid: CallSiteId, init: CallSiteId) {
+        self.callsite_info[callid.0 as usize].class_new_init = Some(init);
     }
 
     pub(crate) fn new_constsite(
@@ -2962,6 +2969,16 @@ pub struct CallSiteInfo {
     /// established that this site still resolves to the builtin `send`
     /// (a redefinition moves the class version, which retires the code).
     pub(crate) send_direct: Option<CallSiteId>,
+    /// For `recv.new(args)` with plain positionals and no block: an
+    /// alternate call site describing `obj.initialize(args)` — the
+    /// receiver is this site's result slot (where the new object lands),
+    /// the arguments are this site's, the result is discarded, and
+    /// `bypass_visibility` is set as for the Ruby `Class#new`'s
+    /// `__builtin_initialize__`. Prepared by bytecodegen and never
+    /// executed by the VM; the JIT's inline `Class#new` compiles the
+    /// constructor through it as a frameless callee of the allocating
+    /// site (`inline_class_new`).
+    pub(crate) class_new_init: Option<CallSiteId>,
 }
 
 impl CallSiteInfo {

@@ -145,6 +145,16 @@ impl<'a> JitContext<'a> {
         // no promise about every incoming path, and a loop head's safepoint
         // is a preemption point where another thread can `freeze` an object.
         self.unfrozen_slots.clear();
+        // A fresh `self` (`AsmInfo::self_fresh`) is the one fact that does
+        // hold on every incoming path: the frame is loop-free (frameless),
+        // its blocks are compiled in bytecode order with only forward
+        // edges between them, and the flag is cleared the moment any block
+        // compiles an instruction that could run Ruby code — so a block
+        // reached with the flag still set has no such instruction on any
+        // path from the entry.
+        if self.current_frame().self_fresh {
+            self.unfrozen_slots.push(SlotId::self_());
+        }
 
         let mut state = match self.incoming_context(bbid, false)? {
             Some(bb) => bb,
@@ -161,7 +171,13 @@ impl<'a> JitContext<'a> {
             ir.bc_index(bc_pos);
             state.set_next_sp(self.iseq().get_sp(bc_pos));
 
-            match self.compile_instruction(&mut ir, &mut state, bc_pos)? {
+            let res = self.compile_instruction(&mut ir, &mut state, bc_pos)?;
+            // The instruction dropped the proofs (it could run Ruby code,
+            // or compiled inside a dispatch arm): `self` is fresh no more.
+            if self.current_frame().self_fresh && !self.unfrozen_slots.contains(&SlotId::self_()) {
+                self.current_frame_mut().self_fresh = false;
+            }
+            match res {
                 CompileResult::Continue => {}
                 CompileResult::Raise => {
                     self.unset_return_context_side_effect_guard();
@@ -597,6 +613,10 @@ impl<'a> JitContext<'a> {
                 // runs no loop and no call: its caller's own polls cover it.
                 if !self.in_frameless_frame() {
                     state.exec_gc(ir, false, pc + 1isize);
+                } else {
+                    // No poll, no call: the entry is transparent to the
+                    // unfrozen proofs (a fresh `self`, `AsmInfo::self_fresh`).
+                    self.restore_unfrozen(None);
                 }
             }
             TraceIr::LoopStart { .. } => {

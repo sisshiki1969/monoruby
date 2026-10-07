@@ -184,6 +184,19 @@ impl<'a> BytecodeGen<'a> {
             callid.send_direct_name = Some(name);
         }
 
+        // `recv.new(a, b)` with nothing but plain positionals: give the
+        // site the `initialize` twin the JIT's inline `Class#new` drives
+        // the constructor through (`CallSiteInfo::class_new_init`).
+        if method == IdentId::NEW
+            && !safe_nav
+            && callid.is_simple()
+            && !callid.forwarding
+            && callid.block_fid.is_none()
+            && callid.block_arg.is_none()
+        {
+            callid.class_new_init = true;
+        }
+
         self.temp = old_temp;
         if push_flag {
             self.push();

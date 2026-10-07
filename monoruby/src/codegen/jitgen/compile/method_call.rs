@@ -2370,6 +2370,9 @@ impl<'a> JitContext<'a> {
         enum InitPlan {
             /// A trivial body: nothing to emit at all.
             Fold,
+            /// The constructor compiled as a frameless callee of this site,
+            /// through its `initialize` twin (`CallSiteInfo::class_new_init`).
+            Frameless(CallSiteId, ISeqId),
             /// A plain constructor, expanded into the caller.
             Stores(frameless::IvarStoreBody),
         }
@@ -2391,6 +2394,24 @@ impl<'a> JitContext<'a> {
                 ) =>
             {
                 InitPlan::Fold
+            }
+            // A small loop-free body runs inline in a window of this
+            // frame, as any such callee would (`compile/frameless_call.rs`);
+            // the twin is the call site that describes `obj.initialize(args)`
+            // for it. The body is compiled only after the allocation is
+            // emitted, so a body that turns out to need a frame rolls the
+            // whole construction back (below) and the Ruby `Class#new`
+            // handles it. The gates are the ordinary call's
+            // (`compile_method_call`'s frameless block).
+            Some(init_iseq)
+                if let Some(init_callid) = callsite.class_new_init
+                    && !self.in_dispatch_arm()
+                    && !self.frameless_rejected.contains(&init_iseq)
+                    && !self.store[init_iseq].has_generic_jit()
+                    && self.specialize_level() < SPECIALIZE_DEPTH_LIMIT
+                    && frameless_call::eligible(&self.store, init_fid, init_iseq, init_callid) =>
+            {
+                InitPlan::Frameless(init_callid, init_iseq)
             }
             // Not expandable, or not this shape at all (a native
             // `initialize`, an `alias_method :initialize, :x=`): the Ruby
@@ -2435,6 +2456,11 @@ impl<'a> JitContext<'a> {
         // Defining `initialize` where it was inherited, or overriding an
         // inherited one in a subclass, both silently kept the old behaviour
         // at an already-hot site.
+        // Everything from here on is undone if the frameless leg fails
+        // (its body compiles only after the allocation is emitted).
+        let ir_save = ir.save();
+        let state_save = state.clone();
+        let cache_len = self.inline_method_cache.len();
         self.inline_method_cache.push(InlineCacheEntry {
             recv_class: CachedClass::from_class(class_id),
             name: Some(IdentId::INITIALIZE),
@@ -2451,8 +2477,22 @@ impl<'a> JitContext<'a> {
         state.load(ir, recv, GP::Rax);
         let deopt = ir.new_deopt(state);
         ir.guard_value_identity(self_module.as_val(), deopt);
-
         let using_fpr = state.get_using_fpr(ir);
+        if let InitPlan::Frameless(init_callid, _) = plan {
+            // The receiver is now known to be exactly that class object;
+            // the snapshot below is to carry it as such.
+            state.def_C(recv, self_module.as_val());
+            // Where the frameless body hands the call back to: this
+            // instruction, with the frame as it is *now* — the class in
+            // the receiver slot, the arguments untouched, the result slot
+            // not yet written. Taken here, after `get_using_fpr`'s flush,
+            // for the same reason `send_frameless` takes its own here:
+            // the fprs it reads are the ones the `InlineCall` restores.
+            // The allocation below writes the result slot, which may be
+            // the receiver's, so a snapshot taken at the call would hand
+            // the interpreter the new object as the receiver of `new`.
+            self.pending_class_new_redo = Some((init_callid, ir.new_deopt(state)));
+        }
         ir.fpr_save(using_fpr);
         ir.inline(move |r#gen, _, _, _| {
             r#gen.emit_class_allocate(class_id.u32(), alloc_func as *const () as u64, inline_alloc)
@@ -2464,6 +2504,36 @@ impl<'a> JitContext<'a> {
 
         match plan {
             InitPlan::Fold => {}
+            InitPlan::Frameless(init_callid, init_iseq) => {
+                // The object is fresh: the body's ivar stores need no
+                // frozen guard on `self` (`AsmInfo::self_fresh`).
+                self.pending_fresh_self = true;
+                let res = self.try_frameless_iseq(
+                    state,
+                    ir,
+                    init_callid,
+                    CachedClass::from_class(class_id),
+                    init_fid,
+                    init_iseq,
+                );
+                self.pending_fresh_self = false;
+                self.pending_class_new_redo = None;
+                match res {
+                    Some(CompileResult::Continue) => {}
+                    // The body needs a frame after all (or does not come
+                    // back to the caller, which a constructor reached
+                    // through `new` has no business doing): take the
+                    // allocation back and leave the site to the ordinary
+                    // call of the Ruby `Class#new`. `try_frameless_iseq`
+                    // remembers the rejection, so the retry is cheap.
+                    _ => {
+                        ir.restore(ir_save);
+                        *state = state_save;
+                        self.inline_method_cache.truncate(cache_len);
+                        return false;
+                    }
+                }
+            }
             InitPlan::Stores(body) => {
                 let dst = dst.unwrap();
                 let arg_slots: Vec<frameless::ArgSlot> = (0..pos_num)
@@ -2764,6 +2834,13 @@ impl<'a> JitContext<'a> {
             let using_fpr = frozen_using_fpr;
             debug_assert!(using_fpr.is_superset_of(&live), "{using_fpr:?} < {live:?}");
             self.record_call_site_fpr_save(spec_id, using_fpr);
+            let redo = match self.pending_class_new_redo {
+                Some((site, redo)) if site == callid => {
+                    self.pending_class_new_redo = None;
+                    Some(redo)
+                }
+                _ => None,
+            };
             state.send_frameless(
                 ir,
                 &self.store,
@@ -2774,6 +2851,7 @@ impl<'a> JitContext<'a> {
                 using_fpr,
                 &arg_hints,
                 &float_args,
+                redo,
             );
             let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
             state.capture_guard_after_call(ir, &self.store, dst);
@@ -3099,6 +3177,7 @@ impl<'a> JitContext<'a> {
     ) -> JitResult<SpecializedCompileResult> {
         let mut frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
         frame.asm_info.frameless = frameless;
+        frame.asm_info.self_fresh = frameless && std::mem::take(&mut self.pending_fresh_self);
         if bmethod {
             // A define_method proc-method body: semantically a METHOD
             // frame even though its iseq is a block — `return` targets

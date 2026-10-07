@@ -239,12 +239,15 @@ impl AbstractState {
         using_fpr: UsingFpr,
         arg_hints: &[(GP, SlotId)],
         float_args: &[(SlotId, FPReg)],
+        redo: Option<AsmDeopt>,
     ) {
         // Taken when the callee hands the call back: deopt to this very
         // call instruction, with this frame as it stands before the call.
         // Made after `get_using_fpr`'s flush, so it reads nothing the body
-        // clobbers but the fprs the `InlineCall` brings back first.
-        let redo = ir.new_deopt(self);
+        // clobbers but the fprs the `InlineCall` brings back first. A
+        // caller that already changed this frame on the way to the call
+        // (`inline_class_new`) supplies one taken before it did.
+        let redo = redo.unwrap_or_else(|| ir.new_deopt(self));
         ir.fpr_save(using_fpr);
         self.fill_window(store, ir, callid, callee_fid, delta, arg_hints, float_args);
         self.discard(store[callid].dst);
@@ -321,7 +324,14 @@ impl AbstractState {
             // locals). Boxing it here would be the one allocation of the
             // call.
             let in_register = float_args.iter().any(|(param, _)| param.0 as usize == 1 + i);
-            if !direct_filled.contains(&i) && !in_register {
+            // A constant is bound `C` in the callee too
+            // (`LinkMode::from_caller`, `SlotState::new_method`), and a
+            // frameless body reads nothing from the slot of a `C` local:
+            // its calls write their arguments from the state, and its
+            // side exits hand the whole call back to this frame, whose
+            // own state has the constant. Nothing is stored.
+            let constant = matches!(self.mode(args + i), LinkMode::C(_));
+            if !direct_filled.contains(&i) && !in_register && !constant {
                 self.fetch_to_slot(ir, args + i, window(1 + i as i32));
             }
         }
