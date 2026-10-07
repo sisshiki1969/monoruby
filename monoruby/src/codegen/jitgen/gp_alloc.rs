@@ -68,6 +68,19 @@ use crate::jitgen::SlotId;
 /// rather than fused into the type fixpoint.
 pub(in crate::codegen::jitgen) const GP_ALLOC_SET: &[GP] = &[GP::R8, GP::R9, GP::R10, GP::R11];
 
+/// The registers the file tracks: the allocatable set, then rax — the
+/// *volatile* entry. rax is never handed out by the allocator; it caches the
+/// slot a call/yield result was just defined into (`def_rax2gp`), so the
+/// next instruction can use the value where the call left it. Nearly every
+/// lowering uses rax as scratch, so this residency is short-lived: the
+/// compile loop settles it (moves it into the pool, or spills it) at the
+/// head of every instruction that is not known to keep rax
+/// (`JitContext::settle_rax`).
+const GP_TRACKED: &[GP] = &[GP::R8, GP::R9, GP::R10, GP::R11, GP::Rax];
+
+/// Index of rax in [`GP_TRACKED`].
+const RAX_IDX: usize = GP_TRACKED.len() - 1;
+
 /// One fixnum binop in the typed IR: `dst = lhs <kind> rhs`, all stack slots.
 ///
 /// `next_sp` is the stack pointer *after* this instruction: every resident slot
@@ -137,10 +150,10 @@ struct Holder {
 /// block merge (the per-block-locality the design requires).
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(in crate::codegen::jitgen) struct GpRegFile {
-    /// `holders[i]` is the set of slots `GP_ALLOC_SET[i]` caches (empty = free).
+    /// `holders[i]` is the set of slots `GP_TRACKED[i]` caches (empty = free).
     holders: Vec<Vec<Holder>>,
     /// `age[i]`: monotonically-increasing stamp set when a slot was last bound
-    /// to `GP_ALLOC_SET[i]`, used to pick the oldest register as the eviction
+    /// to `GP_TRACKED[i]`, used to pick the oldest register as the eviction
     /// victim (FIFO).
     age: Vec<u64>,
     /// FIFO clock for victim selection.
@@ -156,8 +169,8 @@ impl Default for GpRegFile {
 impl GpRegFile {
     pub(in crate::codegen::jitgen) fn new() -> Self {
         Self {
-            holders: vec![vec![]; GP_ALLOC_SET.len()],
-            age: vec![0; GP_ALLOC_SET.len()],
+            holders: vec![vec![]; GP_TRACKED.len()],
+            age: vec![0; GP_TRACKED.len()],
             clock: 0,
         }
     }
@@ -192,7 +205,7 @@ impl GpRegFile {
                 self.holders[i]
                     .iter()
                     .filter(|h| f(h))
-                    .map(move |h| (GP_ALLOC_SET[i], h.slot))
+                    .map(move |h| (GP_TRACKED[i], h.slot))
             })
             .collect()
     }
@@ -214,7 +227,7 @@ impl GpRegFile {
     }
 
     fn index_of(reg: GP) -> usize {
-        GP_ALLOC_SET.iter().position(|&r| r == reg).unwrap()
+        GP_TRACKED.iter().position(|&r| r == reg).unwrap()
     }
 
     /// True when `reg` holds no resident (free for immediate reuse).
@@ -240,7 +253,7 @@ impl GpRegFile {
 
     /// The register currently caching `slot`, if any (the reuse lookup).
     pub(in crate::codegen::jitgen) fn reg_of(&self, slot: SlotId) -> Option<GP> {
-        self.position_of(slot).map(|(i, _)| GP_ALLOC_SET[i])
+        self.position_of(slot).map(|(i, _)| GP_TRACKED[i])
     }
 
     /// The register caching `slot` only if that cache is **dirty** (its value
@@ -250,7 +263,7 @@ impl GpRegFile {
     pub(in crate::codegen::jitgen) fn dirty_reg_of(&self, slot: SlotId) -> Option<GP> {
         self.position_of(slot)
             .filter(|&(i, j)| self.holders[i][j].dirty)
-            .map(|(i, _)| GP_ALLOC_SET[i])
+            .map(|(i, _)| GP_TRACKED[i])
     }
 
     /// A free register that is not `pinned`. Pinned registers hold operands that
@@ -258,7 +271,7 @@ impl GpRegFile {
     /// operand slot, `invalidate(dst)` leaves the operand's register unbound but
     /// still in use), so they must never be handed out even when free.
     fn find_free(&self, pinned: &[GP]) -> Option<GP> {
-        (0..self.holders.len())
+        (0..GP_ALLOC_SET.len())
             .find(|&i| self.holders[i].is_empty() && !pinned.contains(&GP_ALLOC_SET[i]))
             .map(|i| GP_ALLOC_SET[i])
     }
@@ -273,7 +286,7 @@ impl GpRegFile {
         if let Some(reg) = self.find_free(pinned) {
             return (reg, vec![]);
         }
-        let victim_idx = (0..self.holders.len())
+        let victim_idx = (0..GP_ALLOC_SET.len())
             .filter(|&i| !pinned.contains(&GP_ALLOC_SET[i]))
             .min_by_key(|&i| self.age[i])
             .expect("more pinned registers than the allocatable set");
@@ -328,7 +341,21 @@ impl GpRegFile {
     pub(in crate::codegen::jitgen) fn sync(&mut self, slot: SlotId) -> Option<GP> {
         let (i, j) = self.position_of(slot)?;
         self.holders[i][j].dirty = false;
-        Some(GP_ALLOC_SET[i])
+        Some(GP_TRACKED[i])
+    }
+
+    /// The slots rax caches (see [`GP_TRACKED`]), each with its dirty bit.
+    pub(in crate::codegen::jitgen) fn rax_holders(&self) -> Vec<(SlotId, bool)> {
+        self.holders[RAX_IDX]
+            .iter()
+            .map(|h| (h.slot, h.dirty))
+            .collect()
+    }
+
+    /// Forget whatever rax caches. The caller has re-homed the values
+    /// (moved them into a pool register, or stored them) first.
+    pub(in crate::codegen::jitgen) fn clear_rax(&mut self) {
+        self.holders[RAX_IDX].clear();
     }
 
     /// Free every register caching a slot at or above `sp` — those temporaries
@@ -375,12 +402,12 @@ impl GpRegFile {
         dst: Option<SlotId>,
     ) -> Vec<(GP, SlotId)> {
         let free_later = |hs: &Vec<Holder>| hs.iter().all(|h| h.slot >= sp || Some(h.slot) == dst);
-        if (0..self.holders.len())
+        if (0..GP_ALLOC_SET.len())
             .any(|i| !pinned.contains(&GP_ALLOC_SET[i]) && free_later(&self.holders[i]))
         {
             return vec![];
         }
-        let victim_idx = (0..self.holders.len())
+        let victim_idx = (0..GP_ALLOC_SET.len())
             .filter(|&i| !pinned.contains(&GP_ALLOC_SET[i]))
             .min_by_key(|&i| self.age[i])
             .expect("more pinned registers than the allocatable set");

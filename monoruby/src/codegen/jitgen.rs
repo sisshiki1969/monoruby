@@ -1289,6 +1289,14 @@ impl JitModule {
     /// - rax, rcx
     ///
     pub(super) fn gen_write_back(&mut self, wb: &WriteBack, base: usize) {
+        // GP residents first: the fpr and literal stores below use rax as
+        // scratch, and rax may itself be a resident (a call result left in
+        // place, `def_rax2gp`).
+        for (reg, slot) in &wb.gp {
+            monoasm! { &mut *self,
+                movq [rbp - (rbp_local(*slot))], R(*reg as _);
+            }
+        }
         for (fpr, v) in &wb.fpr {
             self.fpr_to_stack(*fpr, v, base);
         }
@@ -1297,11 +1305,6 @@ impl JitModule {
         }
         for slot in &wb.void {
             self.literal_to_stack(*slot, Value::nil());
-        }
-        for (reg, slot) in &wb.gp {
-            monoasm! { &mut *self,
-                movq [rbp - (rbp_local(*slot))], R(*reg as _);
-            }
         }
     }
 
@@ -1317,6 +1320,14 @@ impl JitModule {
     /// - rax, rcx
     ///
     pub(super) fn gen_write_back_for_deopt(&mut self, wb: &WriteBack, base: usize) {
+        // GP residents first: the fpr and literal stores below use rax as
+        // scratch, and rax may itself be a resident (a call result left in
+        // place, `def_rax2gp`).
+        for (reg, slot) in &wb.gp {
+            monoasm! { &mut *self,
+                movq [r14 - (conv(*slot))], R(*reg as _);
+            }
+        }
         for (fpr, v) in &wb.fpr {
             self.fpr_to_stack2(*fpr, v, base);
         }
@@ -1325,11 +1336,6 @@ impl JitModule {
         }
         for slot in &wb.void {
             self.literal_to_stack2(*slot, Value::nil());
-        }
-        for (reg, slot) in &wb.gp {
-            monoasm! { &mut *self,
-                movq [r14 - (conv(*slot))], R(*reg as _);
-            }
         }
         // D1: materialize deferred forwarding-rest arrays. Runs last so
         // the literal loop above has already written the `dst` slot

@@ -292,40 +292,32 @@ impl AbstractFrame {
     /// ### panic
     /// - if *slot* is V or None.
     ///
-    /// A load into rdi is skipped when rdi already holds *slot* from the
-    /// same source with nothing emitted since but class tests on rdi — the
-    /// shape of a call site's receiver guard followed by an inline
-    /// generator that loads the receiver again (see [`AsmIr::rdi_holds`]).
+    /// A load into rdi or rax is skipped when the register already holds
+    /// *slot* from the same source with nothing emitted since that could
+    /// change it — a call site's receiver guard followed by an inline
+    /// generator that loads the receiver again, or a `ret` of a result just
+    /// stored from rax (see [`AsmIr::reg_holds`]).
     ///
     pub(crate) fn load(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP) {
         let g = self.load_state(slot, dst);
-        if dst == GP::Rdi {
-            let src = g.src();
-            if !ir.rdi_holds(slot, src) {
-                ir.gp_load(g);
-                ir.set_rdi_holds(slot, src);
-            }
-        } else {
+        let src = g.src();
+        if !ir.reg_holds(dst, slot, src) {
             ir.gp_load(g);
+            ir.set_reg_holds(dst, slot, src);
         }
     }
 
     ///
     /// Note that rdi holds *slot* right here — after a `Label` all of whose
     /// incoming edges carry it in rdi — so a following [`Self::load`] of it
-    /// into rdi is skipped. A slot that would need boxing is not noted.
+    /// into rdi is skipped. Only a slot held in its stack home or a resident
+    /// register is noted.
     ///
     pub(in crate::codegen::jitgen) fn note_rdi_holds(&self, ir: &mut AsmIr, slot: SlotId) {
-        let src = match self.mode(slot) {
-            LinkMode::C(v) => GpSrc::Lit(v),
-            LinkMode::Sf(_, _) | LinkMode::S(_) => match self.gp_regfile.reg_of(slot) {
-                Some(r) => GpSrc::Reg(r),
-                None => GpSrc::Home,
-            },
-            LinkMode::MaybeNone => GpSrc::Home,
-            LinkMode::F(_) | LinkMode::V | LinkMode::None => return,
-        };
-        ir.set_rdi_holds(slot, src);
+        if matches!(self.mode(slot), LinkMode::S(_) | LinkMode::Sf(_, _)) {
+            let src = self.gp_regfile.reg_of(slot).map_or(GpSrc::Home, GpSrc::Reg);
+            ir.set_reg_holds(GP::Rdi, slot, src);
+        }
     }
 
     ///

@@ -219,19 +219,25 @@ pub(crate) struct AsmIr {
     /// Stamped once from [`JitContext::chain_deopt_frames`] so the side-exit
     /// constructors are the single consultation point.
     chain_frames: u32,
-    /// What rdi is known to hold at the end of the stream: set by a GP load
-    /// of a slot into rdi, kept across class guards that only *test* rdi
-    /// (they fall through with it untouched), and valid only while
-    /// `inst.len()` still equals its `len` — any other instruction may
-    /// clobber rdi, and a `Label` may be reached with something else in it.
-    /// Lets [`AbstractFrame::load`] skip re-loading the receiver a call
-    /// site's guard has just loaded (the inline generators load it again).
-    rdi_holds: Option<RdiHolds>,
+    /// What rdi and rax (in that order, see [`TRACKED_REGS`]) are known to
+    /// hold at the end of the stream: set by a GP load of a slot into the
+    /// register or a store of the register to a slot's home, and valid only
+    /// while `inst.len()` still equals its `len` — any other instruction may
+    /// clobber the register, and a `Label` may be reached with something
+    /// else in it. Source-position records (`BcIndex`) emit no code and keep
+    /// both; class tests on rdi keep rdi (they fall through with it
+    /// untouched). Lets [`AbstractFrame::load`] skip re-loading the receiver
+    /// a call site's guard has just loaded (the inline generators load it
+    /// again), and a `ret` skip re-loading a result just stored from rax.
+    reg_holds: [Option<RegHolds>; 2],
 }
 
-/// See [`AsmIr::rdi_holds`].
+/// The registers [`AsmIr::reg_holds`] tracks.
+const TRACKED_REGS: [GP; 2] = [GP::Rdi, GP::Rax];
+
+/// See [`AsmIr::reg_holds`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct RdiHolds {
+struct RegHolds {
     slot: SlotId,
     src: GpSrc,
     len: usize,
@@ -290,32 +296,41 @@ impl AsmIr {
             deferred_rest: false,
             needs_rest_array: false,
             chain_frames: ctx.chain_deopt_frames(),
-            rdi_holds: None,
+            reg_holds: [None; 2],
         }
     }
 
-    ///
-    /// Does rdi already hold *slot*, read from *src*, at this point of the
-    /// stream? Only ever true in codegen mode.
-    ///
-    pub(in crate::codegen::jitgen) fn rdi_holds(&self, slot: SlotId, src: GpSrc) -> bool {
-        self.codegen_mode
-            && self.rdi_holds
-                == Some(RdiHolds {
-                    slot,
-                    src,
-                    len: self.inst.len(),
-                })
+    fn tracked_index(reg: GP) -> Option<usize> {
+        TRACKED_REGS.iter().position(|&r| r == reg)
     }
 
     ///
-    /// Record that rdi holds *slot* (read from *src*) at this point of the
-    /// stream — right after loading it, or right after a `Label` every
-    /// incoming edge of which has it there.
+    /// Does *reg* (rdi or rax) already hold *slot*, read from *src*, at this
+    /// point of the stream? Only ever true in codegen mode.
     ///
-    pub(in crate::codegen::jitgen) fn set_rdi_holds(&mut self, slot: SlotId, src: GpSrc) {
-        if self.codegen_mode {
-            self.rdi_holds = Some(RdiHolds {
+    pub(in crate::codegen::jitgen) fn reg_holds(&self, reg: GP, slot: SlotId, src: GpSrc) -> bool {
+        self.codegen_mode
+            && Self::tracked_index(reg).is_some_and(|i| {
+                self.reg_holds[i]
+                    == Some(RegHolds {
+                        slot,
+                        src,
+                        len: self.inst.len(),
+                    })
+            })
+    }
+
+    ///
+    /// Record that *reg* holds *slot* (read from *src*) at this point of the
+    /// stream — right after loading or storing it, or right after a `Label`
+    /// every incoming edge of which has it there. A no-op for a register
+    /// that is not tracked.
+    ///
+    pub(in crate::codegen::jitgen) fn set_reg_holds(&mut self, reg: GP, slot: SlotId, src: GpSrc) {
+        if self.codegen_mode
+            && let Some(i) = Self::tracked_index(reg)
+        {
+            self.reg_holds[i] = Some(RegHolds {
                 slot,
                 src,
                 len: self.inst.len(),
@@ -376,23 +391,27 @@ impl AsmIr {
             if matches!(inst, AsmInst::GuardClass(..)) {
                 crate::codegen::jitgen::join_profile::count_guard_class();
             }
-            // A class test on rdi leaves it as it was on the fall-through
-            // path (both backends test or compare it in place, using scratch
-            // registers), so what rdi held before still holds after.
-            let keeps_rdi = matches!(
-                inst,
+            // A source-position record emits no code. A class test on rdi
+            // leaves it as it was on the fall-through path (both backends
+            // test or compare it in place, using scratch registers), so what
+            // rdi held before still holds after.
+            let (keeps_rdi, keeps_rax) = match inst {
+                AsmInst::BcIndex(_) => (true, true),
                 AsmInst::GuardClass(GP::Rdi, ..)
-                    | AsmInst::GuardClassIn(GP::Rdi, ..)
-                    | AsmInst::BrClassNe(GP::Rdi, ..)
-                    | AsmInst::BrClassNotIn(GP::Rdi, ..)
-            );
+                | AsmInst::GuardClassIn(GP::Rdi, ..)
+                | AsmInst::BrClassNe(GP::Rdi, ..)
+                | AsmInst::BrClassNotIn(GP::Rdi, ..) => (true, false),
+                _ => (false, false),
+            };
             let len = self.inst.len();
             self.inst.push(inst);
-            if let Some(holds) = &mut self.rdi_holds
-                && keeps_rdi
-                && holds.len == len
-            {
-                holds.len += 1;
+            for (holds, keeps) in self.reg_holds.iter_mut().zip([keeps_rdi, keeps_rax]) {
+                if let Some(h) = holds
+                    && keeps
+                    && h.len == len
+                {
+                    h.len += 1;
+                }
             }
         }
     }
@@ -529,7 +548,7 @@ impl AsmIr {
         ),
     ) {
         self.inst.truncate(inst);
-        self.rdi_holds = None;
+        self.reg_holds = [None; 2];
         self.side_exit.truncate(side_exit);
         #[cfg(feature = "deopt")]
         self.created_at.truncate(side_exit);
@@ -770,6 +789,8 @@ impl AsmIr {
     pub(crate) fn reg2stack(&mut self, src: GP, dst: impl Into<Option<SlotId>>) {
         if let Some(dst) = dst.into() {
             self.push(AsmInst::RegToStack(src, dst));
+            // `src` now holds what `dst`'s home holds.
+            self.set_reg_holds(src, dst, GpSrc::Home);
         }
     }
 

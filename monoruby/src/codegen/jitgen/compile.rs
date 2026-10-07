@@ -403,6 +403,12 @@ impl<'a> JitContext<'a> {
             latched_self,
             ..
         } = state.settle_class_proofs(self.store);
+        // Everything below may clobber rax: the literal stores use it as
+        // scratch, and a version guard's recovery path calls into the
+        // runtime before resuming here.
+        if !latched_consts.is_empty() || !kept.is_empty() || latched_self.is_some() {
+            state.settle_rax(ir, false);
+        }
         for (slot, v) in latched_consts {
             ir.lit2stack(v, slot);
             state.def_S(slot);
@@ -422,6 +428,39 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    /// Does *trace_ir* leave a value cached in rax (see `def_rax2gp`) intact
+    /// up to its use? `InlineCache` / `TypeIc` emit nothing; a `ret` of a
+    /// method frame loads its operand into rax and returns. A `ret` of a
+    /// specialized frame branches to a return segment through a bridge,
+    /// which may use rax.
+    fn keeps_rax(&self, trace_ir: &TraceIr) -> bool {
+        match trace_ir {
+            TraceIr::InlineCache | TraceIr::TypeIc(..) => true,
+            TraceIr::Ret(_) => self.caller_pos().is_none(),
+            _ => false,
+        }
+    }
+
+    /// Does the arm for *trace_ir* flush the GP register file before it
+    /// emits anything else? Then rax is settled by spilling it to its home,
+    /// which the flush would do with the pool register it was moved to.
+    fn flushes_first(trace_ir: &TraceIr) -> bool {
+        matches!(
+            trace_ir,
+            TraceIr::Br(_)
+                | TraceIr::CondBr(..)
+                | TraceIr::NilBr(..)
+                | TraceIr::MethodRet(_)
+                | TraceIr::BlockBreak(_)
+                | TraceIr::Raise(_)
+                | TraceIr::EnsureEnd
+                | TraceIr::LoopStart { .. }
+                | TraceIr::LoopEnd
+                | TraceIr::StoreDynVar { .. }
+                | TraceIr::LoadDynVar { .. }
+        )
+    }
+
     fn compile_instruction(
         &mut self,
         ir: &mut AsmIr,
@@ -433,11 +472,22 @@ impl<'a> JitContext<'a> {
         // instruction's work together with its predecessor's.
         if self.fused_skip == Some(bc_pos) {
             self.fused_skip = None;
+            state.settle_rax(ir, false);
             return Ok(CompileResult::Continue);
         }
         let pc = self.get_pc(bc_pos);
         state.set_pc(pc);
         let trace_ir = TraceIr::from_pc(pc, self.store);
+        // A call/yield result the previous instruction left in rax
+        // (`def_rax2gp`) is used in place only by the words that emit
+        // nothing, and by a method's `ret` of it. Everything else may use rax
+        // as scratch, so it is settled here, ahead of any emission
+        // (including the class-proof guards below): straight to its home for
+        // an instruction that flushes the register file first anyway, into a
+        // pool register otherwise.
+        if !self.keeps_rax(&trace_ir) {
+            state.settle_rax(ir, Self::flushes_first(&trace_ir));
+        }
         // Ruby code ran since the last instruction (a call, a yield, a
         // generic operator): re-examine what the state believes about the
         // classes of the objects it holds before anything relies on it. A
@@ -459,9 +509,17 @@ impl<'a> JitContext<'a> {
         // The settling guards would clobber the flags; the branch relies on
         // no class proof, and both of its successors still see the state
         // unsettled and settle at their first instruction.
+        // A `TypeIc` emits nothing and relies on nothing either, and a
+        // `CondBr` relies on no class proof (its successors settle at their
+        // first instruction, as when the flags are live): skipping them keeps
+        // a call result the previous instruction left in rax there for a
+        // `ret` or a truthiness test.
         if state.class_proofs_unsettled()
             && !flags_live
-            && !matches!(trace_ir, TraceIr::Ret(_) | TraceIr::InlineCache)
+            && !matches!(
+                trace_ir,
+                TraceIr::Ret(_) | TraceIr::InlineCache | TraceIr::TypeIc(..) | TraceIr::CondBr(..)
+            )
         {
             self.settle_class_proofs(state, ir);
         }
