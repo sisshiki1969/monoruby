@@ -22,11 +22,25 @@ pub(crate) fn set_frame_arguments(
     // same value the eager path stores for a keyword-less call site.
     if let Some(rest_slot) = globals.store.lazy_forwarding_rest(callee_fid) {
         let cs = &globals[callid];
-        if cs.splat_pos().is_empty() && cs.kw_args().is_empty() && cs.hash_splat_pos().is_empty() {
+        // Literal keywords (`Foo.new(a: 1)`) defer too: the `**kwrest`
+        // slot then holds the same marker, and the forwarding consume
+        // binds the keywords straight from this frame's keyword window
+        // (`lazy_kw_pending`). A `**hash` splat still materializes.
+        let kwr = globals[callee_fid].kw_rest();
+        if cs.splat_pos().is_empty()
+            && cs.hash_splat_pos().is_empty()
+            && (cs.kw_args().is_empty() || kwr.is_some())
+        {
+            let marker = Value::integer(callid.get() as i64);
+            let kw_marker = if cs.kw_args().is_empty() {
+                Value::nil()
+            } else {
+                marker
+            };
             unsafe {
-                *callee_lfp.register_ptr(rest_slot) = Some(Value::integer(callid.get() as i64));
-                if let Some(kwr) = globals[callee_fid].kw_rest() {
-                    *callee_lfp.register_ptr(kwr) = Some(Value::nil());
+                *callee_lfp.register_ptr(rest_slot) = Some(marker);
+                if let Some(kwr) = kwr {
+                    *callee_lfp.register_ptr(kwr) = Some(kw_marker);
                 }
             }
             return Ok(());
@@ -53,10 +67,16 @@ pub(crate) fn set_frame_arguments(
                 );
             }
             // Shapes outside the direct gate (callee with *named*
-            // keyword parameters, extra user splats as in `g(*a, ...)`)
-            // still need any pending lazy marker materialized before the
-            // generic machinery interprets the splat slots.
-            materialize_lazy_at_callsite(vm, globals, callid, caller_lfp);
+            // keyword parameters, extra user splats as in `g(*a, ...)`):
+            // a pending lazy marker is either bound directly (deferred
+            // literal keywords into a keyword-taking callee) or
+            // materialized before the generic machinery interprets the
+            // splat slots.
+            if resolve_lazy_forwarding(
+                vm, globals, callid, callee_lfp, callee_fid, caller_lfp, true,
+            )? {
+                return Ok(());
+            }
         }
     }
     set_callee_frame_arguments(vm, globals, callid, callee_fid, callee_lfp, caller_lfp)
@@ -240,11 +260,41 @@ pub(crate) fn resolve_lazy_forwarding(
     let sp = cs.splat_pos()[0];
     let args_ptr = caller_lfp.register_ptr(cs.args) as *const Value;
     let splat_v = unsafe { *args_ptr.sub(sp) };
-    let Some((orig_ptr, orig_num)) =
-        lazy_marker_source(vm, globals, splat_v, caller_lfp, sp + 1 == cs.pos_num)
+    let Some(LazySource {
+        ptr: orig_ptr,
+        len: orig_num,
+        callid: orig_cid,
+        lfp: orig_lfp,
+    }) = lazy_marker_source(vm, globals, splat_v, caller_lfp, sp + 1 == cs.pos_num)
     else {
         return Ok(false);
     };
+
+    if lazy_kw_pending(globals, orig_cid) {
+        // Deferred literal keywords. The forwarding site may add nothing
+        // of its own (its only keyword source is the `**kwrest` slot that
+        // holds the marker), and the callee must take keywords: one that
+        // takes none would receive them as a trailing positional Hash,
+        // which the generic machinery builds.
+        let callee = &globals.store[callee_fid];
+        if allow_direct
+            && cs.kw_args().is_empty()
+            && cs.hash_splat_pos().len() == 1
+            && !callee.no_keyword()
+            && !callee.forbid_keyword()
+            && !callee.single_arg_expand()
+        {
+            lazy_forward_fill(
+                globals, callid, callee_lfp, callee_fid, caller_lfp, sp, orig_ptr, orig_num,
+            )?;
+            // Exactly what a direct `g(a: 1)` from the original caller
+            // binds: the same keyword window, read in the same frame.
+            handle_keyword(vm, globals, callee_fid, orig_cid, callee_lfp, orig_lfp, None)?;
+            return Ok(true);
+        }
+        materialize_lazy_at_callsite(vm, globals, callid, caller_lfp);
+        return Ok(false);
+    }
 
     let kw_empty = cs.kw_args().is_empty()
         && cs.hash_splat_pos().iter().all(|p| {
@@ -375,6 +425,17 @@ fn store_empty_kw_rest(globals: &Globals, callee_lfp: Lfp, callee_fid: FuncId) {
 ///   must be the last positional), so `trailing` (computed by the caller
 ///   as `sp + 1 == pos_num`) must hold.
 ///
+/// The original call site behind a lazy-forwarding marker.
+struct LazySource {
+    /// The first positional argument slot (arguments descend from it).
+    ptr: *const Value,
+    /// The number of positional arguments.
+    len: usize,
+    callid: CallSiteId,
+    /// The original caller's frame, which holds the keyword window too.
+    lfp: Lfp,
+}
+
 #[inline]
 fn lazy_marker_source(
     vm: &Executor,
@@ -382,7 +443,7 @@ fn lazy_marker_source(
     splat_v: Value,
     caller_lfp: Lfp,
     trailing: bool,
-) -> Option<(*const Value, usize)> {
+) -> Option<LazySource> {
     if !trailing {
         return None;
     }
@@ -398,11 +459,42 @@ fn lazy_marker_source(
         .prev()
         .expect("lazy forwarding: original caller frame missing")
         .lfp();
-    let orig_cs = &globals[CallSiteId(orig_cid as u32)];
-    Some((
-        orig_lfp.register_ptr(orig_cs.args) as *const Value,
-        orig_cs.pos_num,
-    ))
+    let callid = CallSiteId(orig_cid as u32);
+    let orig_cs = &globals[callid];
+    Some(LazySource {
+        ptr: orig_lfp.register_ptr(orig_cs.args) as *const Value,
+        len: orig_cs.pos_num,
+        callid,
+        lfp: orig_lfp,
+    })
+}
+
+///
+/// Whether the original call site behind a lazy marker passed literal
+/// keywords, which the trampoline's `**kwrest` slot then defers as the
+/// same marker (see the entry store in `set_frame_arguments`).
+///
+#[inline]
+fn lazy_kw_pending(globals: &Globals, orig_cid: CallSiteId) -> bool {
+    !globals[orig_cid].kw_args().is_empty()
+}
+
+///
+/// The `**kwrest` Hash a deferred keyword call would have built at frame
+/// entry: the original site's literal pairs in source order, an
+/// overwritten pair dropped (`kw_overwritten_literal`).
+///
+fn lazy_kw_hash(globals: &Globals, orig_cid: CallSiteId, orig_lfp: Lfp) -> Value {
+    let cs = &globals[orig_cid];
+    let mut h = RubyMap::default();
+    for i in 0..cs.kw_len() {
+        if let KwElem::Kw(name) = cs.kw_order()[i]
+            && !cs.kw_overwritten_literal(i)
+        {
+            h.insert_sym(RubySymbol::new(name), orig_lfp.register(cs.kw_pos + i).unwrap());
+        }
+    }
+    Value::hash(h)
 }
 
 ///
@@ -435,14 +527,28 @@ fn materialize_lazy_at_callsite(
             continue;
         }
         let splat_v = unsafe { *args_ptr.sub(sp) };
-        if let Some((orig_ptr, orig_num)) =
+        if let Some(src) =
             lazy_marker_source(vm, globals, splat_v, caller_lfp, sp + 1 == cs.pos_num)
         {
-            let ary =
-                Value::array_from_iter((0..orig_num).map(|i| unsafe { *orig_ptr.sub(i) }));
+            let ary = Value::array_from_iter((0..src.len).map(|i| unsafe { *src.ptr.sub(i) }));
             unsafe {
                 *caller_lfp.register_ptr(rest_slot) = Some(ary);
                 *(args_ptr as *mut Option<Value>).sub(sp) = Some(ary);
+            }
+            if lazy_kw_pending(globals, src.callid) {
+                let h = lazy_kw_hash(globals, src.callid, src.lfp);
+                let marker = Some(splat_v);
+                unsafe {
+                    if let Some(kwr) = globals[caller_lfp.func_id()].kw_rest() {
+                        *caller_lfp.register_ptr(kwr) = Some(h);
+                    }
+                    // The forwarding site's copy of the `**kwrest` slot.
+                    for &p in cs.hash_splat_pos() {
+                        if caller_lfp.register(p) == marker {
+                            *caller_lfp.register_ptr(p) = Some(h);
+                        }
+                    }
+                }
             }
         }
     }
@@ -474,12 +580,19 @@ pub(crate) fn materialize_lazy_forwarding(globals: &mut Globals, start: Cfp) {
                 .prev()
                 .expect("lazy forwarding: original caller frame missing")
                 .lfp();
-            let orig_cs = &globals[CallSiteId(orig_cid as u32)];
+            let orig_cid = CallSiteId(orig_cid as u32);
+            let orig_cs = &globals[orig_cid];
             let orig_ptr = orig_lfp.register_ptr(orig_cs.args) as *const Value;
             let ary = Value::array_from_iter(
                 (0..orig_cs.pos_num).map(|i| unsafe { *orig_ptr.sub(i) }),
             );
             unsafe { *lfp.register_ptr(rest_slot) = Some(ary) };
+            if lazy_kw_pending(globals, orig_cid)
+                && let Some(kwr) = globals[lfp.func_id()].kw_rest()
+            {
+                let h = lazy_kw_hash(globals, orig_cid, orig_lfp);
+                unsafe { *lfp.register_ptr(kwr) = Some(h) };
+            }
         }
         cfp = c.prev();
     }
@@ -533,11 +646,15 @@ fn forwarded_set_arguments_core(
         // materialized-Array path below keeps its code size (this is
         // the JIT tier's per-call helper).
         if splat_ary.is_none()
-            && let Some((orig_ptr, orig_num)) =
+            && let Some(src) =
                 lazy_marker_source(vm, globals, splat_v, caller_lfp, sp + 1 == pos_args)
         {
+            // `kw_empty` held, so the `**kwrest` slot is nil: the original
+            // site passed no keywords (`lazy_kw_pending` would have left
+            // the marker there).
+            debug_assert!(!lazy_kw_pending(globals, src.callid));
             return lazy_forward_fill(
-                globals, callid, callee_lfp, callee_fid, caller_lfp, sp, orig_ptr, orig_num,
+                globals, callid, callee_lfp, callee_fid, caller_lfp, sp, src.ptr, src.len,
             );
         }
         let splat_len = splat_ary.as_ref().map_or(
@@ -564,9 +681,12 @@ fn forwarded_set_arguments_core(
         store_empty_kw_rest(globals, callee_lfp, callee_fid);
         Ok(())
     } else {
-        // keywords actually forwarded: defer to the proven generic path
-        // (materializing any pending lazy marker first).
-        materialize_lazy_at_callsite(vm, globals, callid, caller_lfp);
+        // keywords actually forwarded: bind deferred literal keywords
+        // directly, else defer to the proven generic path (materializing
+        // any pending lazy marker first).
+        if resolve_lazy_forwarding(vm, globals, callid, callee_lfp, callee_fid, caller_lfp, true)? {
+            return Ok(());
+        }
         set_callee_frame_arguments(vm, globals, callid, callee_fid, callee_lfp, caller_lfp)
     }
 }
@@ -1906,6 +2026,52 @@ mod tests {
             res << (begin; fwd(1); rescue ArgumentError => e; e.message; end)
             res << fwd(1, 2)
             res
+            "#,
+        );
+    }
+
+    #[test]
+    fn lazy_forwarding_keywords() {
+        // Literal keywords into a lazy `(...)` trampoline (the Ruby
+        // `Class#new`, user-defined forwarders) defer like positionals:
+        // the `**kwrest` slot holds the marker and the consume binds the
+        // original site's keyword window. Everything a direct call would
+        // do — defaults, duplicate keys, `**rest` surplus, errors — must
+        // hold, as must the shapes that still materialize (a callee that
+        // takes no keywords, a `**h` site) and an observer (`binding`).
+        run_test(
+            r#"
+            class LK1; def initialize(a:, b: 2); @a = a; @b = b; end; def v = [@a, @b]; end
+            class LK2; def initialize(x, a:, **rest); @v = [x, a, rest]; end; def v = @v; end
+            class LK3; def initialize(h); @h = h; end; def v = @h; end
+            class LK4; def initialize(x = 0, k: :d); @v = [x, k]; end; def v = @v; end
+            class LK5; def initialize(a:); @v = [a, yield]; end; def v = @v; end
+            LKS ||= Struct.new(:a, :b, keyword_init: true)
+            class LK6; def initialize(a:); @v = binding.local_variable_get(:a); end; def v = @v; end
+            class LK7; def self.new(...) = super(...); def initialize(a:) = @a = a; def v = @a; end
+            class LK8; def initialize(a, b:); @v = [a, b]; end; def v = @v; end
+            def lk_mk(...) = LK8.new(...)
+            res = []
+            30.times do |i|
+              res << LK1.new(a: i).v
+              res << LK1.new(b: 5, a: 1).v
+              res << LK2.new(1, a: 2, z: 3, y: 4).v
+              res << LK3.new(a: 1).v
+              res << LK4.new(k: 9).v
+              res << LK4.new(1).v
+              res << LK5.new(a: 1) { :blk }.v
+              res << LKS.new(a: 1, b: 2).to_a
+              res << LK6.new(a: 4).v
+              res << LK7.new(a: 7).v
+              res << lk_mk(1, b: 2).v
+              h = {a: 3}
+              res << LK1.new(**h).v
+              res << (begin; LK1.new(b: 1); rescue ArgumentError => e; e.message; end)
+              res << (begin; LK1.new(a: 1, c: 1); rescue ArgumentError => e; e.message; end)
+              res << (begin; LK1.new(1, a: 1); rescue ArgumentError => e; e.message; end)
+              res << (begin; Object.new(a: 1); rescue ArgumentError => e; e.message; end)
+            end
+            res.uniq
             "#,
         );
     }

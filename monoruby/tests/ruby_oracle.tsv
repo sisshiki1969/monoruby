@@ -1022,6 +1022,7 @@
 31e9b020860b3439dfb171b0b2800af8	["aaa ddd ccc", "abed"]	__a = [];__a << (s = "aaa bbb ccc"; s[/a (bbb) c/, 1] = "ddd"; s);__a << (s = "a
 31f3712b2429172d3392a127e35af2c9	[RuntimeError, RuntimeError, RuntimeError, RuntimeError, RuntimeError, :ok, :ok, :ok, :ok, :ok, :ok]	__a = [];__a << (begin; s="a b c".dup; s.scan(/\\w/){ s << "x" }; :ok; rescue => 
 3216e8a4e5532edd1d8a9a107a61cb60	"nil"	def t; end; (public).inspect
+3224032fd52bf14f25bca7c2513de38a	[[0, 2], [1, 5], [1, 2, {z: 3, y: 4}], {a: 1}, [0, 9], [1, :d], [1, :blk], [1, 2], 4, 7, [3, 2], "missing keyword: :a", "unknown keyword: :c", "wrong number of arguments (given 1, expected 0; required keyword: a)", "wrong number of arguments (given 1, expected 0)", [2, 2], [4, 2], [5, 2], [6, 2], [7, 2], [8, 2], [9, 2], [10, 2], [11, 2], [12, 2], [13, 2], [14, 2], [15, 2], [16, 2], [17, 2], [18, 2], [19, 2], [20, 2], [21, 2], [22, 2], [23, 2], [24, 2], [25, 2], [26, 2], [27, 2], [28, 2], [29, 2]]	class LK1; def initialize(a:, b: 2); @a = a; @b = b; end; def v = [
 322e46d74493215493ff0a4bc52f813f	[1050.018406, 4.048969]	def call_block\n          yield\n        end\n        def p4(n)\n          
 323248fe474a5afa887e12205ed145d2	C	a = class C\n          self\n        end\n        a\n        
 3241d752b39412d4f6c02d9dd853ba08	["foo"]	class A; def a(*r); r; end; end\n            class B < A; def a(*r);
