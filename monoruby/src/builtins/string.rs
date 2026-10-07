@@ -614,9 +614,8 @@ fn string_cmp_const_gen(
     // guards above; any later (re)definition is caught by the class-
     // version guard the inline dispatch emits). Value uses read it from
     // the abstract state, and branch uses are resolved statically: a
-    // bare CondBr by its own truthiness check, a fused BinCmpBr by
-    // `binary_cmp_br`, which checks the callsite dst for a state-known
-    // truthiness before emitting the branch.
+    // `CondBr` reads the state-known truthiness of the callsite dst
+    // (`emit_cond_branch`) before emitting any branch.
     state.def_C(dst, Immediate::bool(result));
     true
 }
@@ -13845,7 +13844,7 @@ mod tests {
 
     #[test]
     fn string_eq_nil_fused_branch_fold() {
-        // `if a == nil` compiles to a fused BinCmpBr; the inline gen's
+        // `if a == nil` compiles to a fused compare + CondBr; the inline gen's
         // constant fold must statically resolve that branch (and dead-
         // eliminate the then-block) instead of leaving the CondBr to read
         // a result no code produced. Mirrors the addressable URI#validate

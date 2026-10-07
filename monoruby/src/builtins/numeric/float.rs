@@ -5,7 +5,7 @@ use crate::ast::CmpKind;
 use crate::bytecodegen::{BinOpK, UnOpK};
 use crate::executor::Visibility;
 use jitgen::trace_ir::{FBinOpInfo, FOpClass};
-use jitgen::{AbstractState, BinaryInlineMode, BinaryInlineOutcome, JitContext};
+use jitgen::{AbstractState, BinaryInlineOutcome, JitContext};
 use crate::codegen::jitgen::deopt_log::DeoptCause;
 
 //
@@ -152,9 +152,9 @@ fn float_neg_gen() -> Box<InlineGenUnary> {
 /// `binop_float` (constant fold to a flonum immediate, else the fpr path).
 fn float_binop_gen(kind: BinOpK) -> Box<InlineGenBinary> {
     Box::new(
-        move |state, ir, _, store, callid, _recv_class, rhs_class, mode| {
+        move |state, ir, _, store, callid, _recv_class, rhs_class| {
             let callsite = &store[callid];
-            if !callsite.is_simple() || !matches!(mode, BinaryInlineMode::Value) {
+            if !callsite.is_simple() {
                 return BinaryInlineOutcome::Declined;
             }
             let rhs_fop = match rhs_class {
@@ -182,11 +182,12 @@ fn float_binop_gen(kind: BinOpK) -> Box<InlineGenBinary> {
 }
 
 /// Factory for the [`InlineGenBinary`] of a Float comparison operator: the
-/// xmm mirror of `integer_cmp_gen` (`gen_cmp_float` in `Value` mode,
-/// `gen_cmpbr_float` fused, both-constant compares resolved to `Folded`).
+/// xmm mirror of `integer_cmp_gen` (`gen_cmp_float` for a value,
+/// `gen_cmp_float_flags` for the next conditional branch, both-constant
+/// compares folded into the dst).
 fn float_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
     Box::new(
-        move |state, ir, _, store, callid, _recv_class, rhs_class, mode| {
+        move |state, ir, ctx, store, callid, _recv_class, rhs_class| {
             let callsite = &store[callid];
             if !callsite.is_simple() {
                 return BinaryInlineOutcome::Declined;
@@ -205,19 +206,14 @@ fn float_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
                 lhs_class: FOpClass::Float,
                 rhs_class: rhs_fop,
             };
-            match mode {
-                BinaryInlineMode::Value => {
-                    state.gen_cmp_float(ir, dst, info, kind);
-                    BinaryInlineOutcome::Done
-                }
-                BinaryInlineMode::CmpBr { brkind, dest } => {
-                    if let Some((l, r)) = state.check_binary_C_f64(recv, args) {
-                        return BinaryInlineOutcome::Folded(AbstractState::fold_cmp(kind, l, r));
-                    }
-                    state.gen_cmpbr_float(ir, info, kind, brkind, dest);
-                    BinaryInlineOutcome::Done
-                }
+            if let Some(slot) = ctx.wants_cond_flags(dst)
+                && let Some(flags) = state.gen_cmp_float_flags(ir, slot, info, kind)
+            {
+                ctx.set_cond_flags(slot, flags);
+                return BinaryInlineOutcome::Done;
             }
+            state.gen_cmp_float(ir, dst, info, kind);
+            BinaryInlineOutcome::Done
         },
     )
 }

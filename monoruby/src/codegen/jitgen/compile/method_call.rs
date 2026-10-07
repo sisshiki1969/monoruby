@@ -393,6 +393,7 @@ impl<'a> JitContext<'a> {
             *state = state_save;
             (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
             self.fused_skip = fused_skip_save;
+            self.discard_cond_results();
             return Ok(None);
         }
         self.end_arm(fast, ir, &merge, true);
@@ -991,7 +992,7 @@ impl<'a> JitContext<'a> {
                 // itself, which is how `nil?` / `frozen?` / `__id__` /
                 // `object_id` keep firing there while a generator that needs
                 // the class declines to the ordinary call.
-                InlineFuncInfo::InlineGen(f) | InlineFuncInfo::InlineGenPredicate(f) => {
+                InlineFuncInfo::InlineGen(f) => {
                     // Not behind a const-receiver guard skip: the Integer
                     // generators load the receiver raw on the strength of
                     // the caller's guard (a set guard's INTEGER member is
@@ -1033,15 +1034,9 @@ impl<'a> JitContext<'a> {
                     // Declined: fall through to the ordinary builtin call.
                 }
                 InlineFuncInfo::InlineGenBinary(f) => {
-                    if let BinaryInlineOutcome::Done = self.inline_asm_binary(
-                        state,
-                        ir,
-                        f,
-                        callid,
-                        recv_class,
-                        arg_class,
-                        BinaryInlineMode::Value,
-                    ) {
+                    if let BinaryInlineOutcome::Done =
+                        self.inline_asm_binary(state, ir, f, callid, recv_class, arg_class)
+                    {
                         return Ok(CompileResult::Continue);
                     }
                     // Declined: fall through to the ordinary builtin call.
@@ -1112,13 +1107,6 @@ impl<'a> JitContext<'a> {
                 }
             }
         }
-
-        // The inline-generator dispatch is over: a fused branch no
-        // generator took must not stay visible past this point — the
-        // nested compile of an inlined callee runs the same machinery,
-        // and an unrelated inner callsite would clobber or steal it.
-        // Park it for the method-call arm to read back.
-        self.park_fused_br();
 
         //
         // generate JIT code for a cached method call.
@@ -3213,14 +3201,15 @@ impl<'a> JitContext<'a> {
         } else {
             *state = state_save;
             ir.restore(ir_save);
+            // Condition flags it reported went with its code.
+            self.clear_cond_flags();
             false
         }
     }
 
     /// [`inline_asm`](Self::inline_asm) for binary-operator generators —
-    /// same transactional save/restore protocol, with the firing mode passed
-    /// through and the three-way [`BinaryInlineOutcome`] returned (`Declined`
-    /// rolls back).
+    /// same transactional save/restore protocol, with the two-way
+    /// [`BinaryInlineOutcome`] returned (`Declined` rolls back).
     pub(super) fn inline_asm_binary(
         &mut self,
         state: &mut AbstractState,
@@ -3233,12 +3222,10 @@ impl<'a> JitContext<'a> {
             CallSiteId,
             CachedClass,
             Option<CachedClass>,
-            BinaryInlineMode,
         ) -> BinaryInlineOutcome,
         callid: CallSiteId,
         recv_class: CachedClass,
         arg_class: Option<CachedClass>,
-        mode: BinaryInlineMode,
     ) -> BinaryInlineOutcome {
         let state_save = state.clone();
         let ir_save = ir.save();
@@ -3250,11 +3237,11 @@ impl<'a> JitContext<'a> {
             callid,
             recv_class,
             arg_class,
-            mode,
         ) {
             BinaryInlineOutcome::Declined => {
                 *state = state_save;
                 ir.restore(ir_save);
+                self.clear_cond_flags();
                 BinaryInlineOutcome::Declined
             }
             outcome => outcome,

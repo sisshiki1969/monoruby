@@ -15,6 +15,7 @@ use crate::{
 
 pub(crate) use crate::basic_block::{BasicBlockId, BasicBlockInfoEntry};
 pub(crate) use self::context::JitContext;
+use self::context::CondBrSink;
 pub(in crate::codegen) use self::context::SplicePlan;
 pub(crate) use self::state::{AbstractFrame, AbstractState};
 #[cfg(feature = "profile")]
@@ -93,35 +94,36 @@ enum CompileResult {
 pub(crate) struct JitLabel(usize);
 
 ///
-/// How a binary inline generator ([`crate::globals::InlineGenBinary`]) is
-/// being fired.
+/// What the CPU condition flags hold after a flag-setting AsmIR instruction
+/// (`CmpFlags` / `CmpImmFlags` / `TestBitFlags` / `FloatCmpFlags`), i.e. how
+/// to read a Ruby truth value out of them.
 ///
-/// `Value` asks for the ordinary result-producing form (the callsite `dst`
-/// receives the result, possibly as a folded constant). `CmpBr` is the fused
-/// compare-and-branch form (`TraceIr::BinCmpBr`): the generator emits the
-/// comparison and a conditional branch to `dest`; the caller owns the
-/// side-branch bookkeeping.
+/// A comparison or predicate whose boolean is consumed only by the following
+/// conditional branch (bytecodegen marked that `CondBr` optimizable) leaves
+/// its answer here instead of materializing a `true`/`false` `Value`: the
+/// producer records the flags in the [`JitContext`]
+/// (`JitContext::set_cond_flags`) and the `CondBr` branches on them directly
+/// (`AsmInst::BrFlags`).
 ///
-#[derive(Clone, Copy)]
-pub(crate) enum BinaryInlineMode {
-    Value,
-    CmpBr {
-        brkind: crate::bytecodegen::inst::BrKind,
-        dest: JitLabel,
-    },
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum CondFlags {
+    /// Integer flags: the predicate is true when the signed integer
+    /// condition `kind` holds (`TEq` reads as `Eq`). After a bit test
+    /// (`TestBitFlags`), `Ne` means the bit is set.
+    Int(CmpKind),
+    /// Float flags (`ucomisd` / `fcmp`): the predicate is `kind`, NaN-aware
+    /// (an unordered result is false for everything but `!=`).
+    Float(CmpKind),
 }
 
 ///
 /// What a binary inline generator did.
 ///
 pub(crate) enum BinaryInlineOutcome {
-    /// Code (or a Value-mode constant fold) was emitted; state updated.
+    /// Code (or a constant fold) was emitted; state updated. A comparison
+    /// whose result feeds the next conditional branch may have left it in
+    /// the condition flags instead (`JitContext::set_cond_flags`).
     Done,
-    /// `CmpBr` mode only: the comparison folded to a compile-time constant
-    /// (the raw comparison result, before `brkind` is applied). No code was
-    /// emitted and the callsite dst was not touched — the caller resolves
-    /// the branch statically.
-    Folded(bool),
     /// The generator declined; the caller rolls back and takes the ordinary
     /// method-call path.
     Declined,

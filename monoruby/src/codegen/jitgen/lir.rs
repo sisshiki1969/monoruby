@@ -439,7 +439,13 @@ pub(in crate::codegen) enum LInst {
     Label(DestLabel),
     /// Unconditional branch to `target`.
     Br(DestLabel),
-    /// Branch to `target` when the preceding `Cmp` satisfied `cond`.
+    /// Set the condition flags from the bit test `reg & (1 << bit)`:
+    /// afterwards `Ne` holds exactly when the bit is set.
+    TestBit {
+        reg: GP,
+        bit: u8,
+    },
+    /// Branch to `target` when the preceding `Cmp` / `TestBit` satisfied `cond`.
     CondBr {
         cond: LCond,
         target: DestLabel,
@@ -487,22 +493,6 @@ pub(in crate::codegen) enum LInst {
     /// `GuardClass` emits, kept separate because the miss is ordinary
     /// control flow (the next arm) rather than a side exit — so it must not
     /// be booked as a guard failure by the `profile` recorder.
-    /// Predicate branch: to `target` when bit `bit` of `reg` is set /
-    /// clear. See `AsmInst::BrIfBitSet`.
-    BrIfBitSet {
-        reg: GP,
-        bit: u8,
-        set: bool,
-        target: DestLabel,
-    },
-    /// Predicate branch: to `target` when `reg` equals / differs from the
-    /// small immediate. See `AsmInst::BrIfValueEq`.
-    BrIfValueEq {
-        reg: GP,
-        imm: u16,
-        eq: bool,
-        target: DestLabel,
-    },
     BrClassNe {
         reg: GP,
         class: CachedClass,
@@ -729,14 +719,19 @@ pub(in crate::codegen) enum LInst {
         rhs: FPReg,
         base: usize,
     },
-    /// Fused float compare + conditional branch to `dest` (NaN-correct).
-    FloatCmpBr {
-        kind: CmpKind,
+    /// Set the condition flags from the float compare `lhs <=> rhs`
+    /// (`ucomisd` / `fcmp`); read by the following `FloatCondBr`.
+    FloatCmpFlags {
         lhs: FPReg,
         rhs: FPReg,
+        base: usize,
+    },
+    /// Branch to `dest` on the flags a `FloatCmpFlags` left: when `kind`
+    /// holds (`BrIf`) / does not hold (`BrIfNot`), NaN-correct.
+    FloatCondBr {
+        kind: CmpKind,
         brkind: BrKind,
         dest: DestLabel,
-        base: usize,
     },
     /// Save the live FP pool registers before a C-call (`cont` reserves a
     /// continuation frame).

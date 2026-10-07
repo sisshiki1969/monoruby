@@ -102,24 +102,6 @@ impl Codegen {
             // miss is ordinary control flow, so it lowers through its own LIR
             // op rather than `GuardClass` (which books a miss as a guard
             // failure under `profile`).
-            AsmInst::BrIfBitSet { r, bit, set, dest } => {
-                let target = frame.resolve_label(&mut self.jit, dest);
-                self.encode_linst(LInst::BrIfBitSet {
-                    reg: r,
-                    bit,
-                    set,
-                    target,
-                });
-            }
-            AsmInst::BrIfValueEq { r, imm, eq, dest } => {
-                let target = frame.resolve_label(&mut self.jit, dest);
-                self.encode_linst(LInst::BrIfValueEq {
-                    reg: r,
-                    imm,
-                    eq,
-                    target,
-                });
-            }
             AsmInst::BrClassNe(r, class, dest) => {
                 let target = frame.resolve_label(&mut self.jit, dest);
                 self.encode_linst(LInst::BrClassNe {
@@ -535,44 +517,43 @@ impl Codegen {
                     });
                 }
             }
-            // Register-form compare+branch. Operands are already in GP registers
-            // and fixnum-guarded; compare and branch per `kind`/`brkind`.
-            AsmInst::IntegerCmpBrReg {
-                kind,
-                brkind,
-                branch_dest,
+            // Flag-setting compares: no result, only the condition flags the
+            // following `BrFlags` reads (see `CondFlags`).
+            AsmInst::CmpFlags { lhs, rhs } => self.encode_linst(LInst::Cmp {
+                lhs: lhs.into(),
+                rhs: rhs.into(),
+            }),
+            AsmInst::CmpImmFlags { lhs, imm } => self.encode_linst(LInst::Cmp {
+                lhs: lhs.into(),
+                rhs: LOperand::Imm(imm as i64),
+            }),
+            AsmInst::TestBitFlags { r, bit } => self.encode_linst(LInst::TestBit { reg: r, bit }),
+            AsmInst::FloatCmpFlags { lhs, rhs } => self.encode_linst(LInst::FloatCmpFlags {
                 lhs,
                 rhs,
-            } => {
-                let target = frame.resolve_label(&mut self.jit, branch_dest);
-                self.encode_linst(LInst::Cmp {
-                    lhs: lhs.into(),
-                    rhs: rhs.into(),
-                });
-                let mut cond = LCond::from_int_cmp(kind).unwrap_or(LCond::Eq);
-                if brkind == BrKind::BrIfNot {
-                    cond = cond.invert();
-                }
-                self.encode_linst(LInst::CondBr { cond, target });
-            }
-            // Immediate-form fused compare + branch (tagged constant rhs).
-            AsmInst::IntegerCmpBrImm {
-                kind,
+                base: frame.base_stack_offset,
+            }),
+            // Branch on the flags the preceding flag-setting instruction left.
+            AsmInst::BrFlags {
+                flags,
                 brkind,
-                branch_dest,
-                lhs,
-                imm,
+                dest,
             } => {
-                let target = frame.resolve_label(&mut self.jit, branch_dest);
-                self.encode_linst(LInst::Cmp {
-                    lhs: lhs.into(),
-                    rhs: LOperand::Imm(imm as i64),
-                });
-                let mut cond = LCond::from_int_cmp(kind).unwrap_or(LCond::Eq);
-                if brkind == BrKind::BrIfNot {
-                    cond = cond.invert();
+                let target = frame.resolve_label(&mut self.jit, dest);
+                match flags {
+                    CondFlags::Int(kind) => {
+                        let mut cond = LCond::from_int_cmp(kind).unwrap_or(LCond::Eq);
+                        if brkind == BrKind::BrIfNot {
+                            cond = cond.invert();
+                        }
+                        self.encode_linst(LInst::CondBr { cond, target });
+                    }
+                    CondFlags::Float(kind) => self.encode_linst(LInst::FloatCondBr {
+                        kind,
+                        brkind,
+                        dest: target,
+                    }),
                 }
-                self.encode_linst(LInst::CondBr { cond, target });
             }
             AsmInst::FloatBinOp {
                 kind,
@@ -607,23 +588,6 @@ impl Codegen {
                 rhs,
                 base: frame.base_stack_offset,
             }),
-            AsmInst::FloatCmpBr {
-                kind,
-                lhs,
-                rhs,
-                brkind,
-                branch_dest,
-            } => {
-                let dest = frame.resolve_label(&mut self.jit, branch_dest);
-                self.encode_linst(LInst::FloatCmpBr {
-                    kind,
-                    lhs,
-                    rhs,
-                    brkind,
-                    dest,
-                    base: frame.base_stack_offset,
-                });
-            }
             // Method return family. `Ret` tears down the frame and returns;
             // `MethodRet` sets the resume PC then returns through the
             // method-return path; `BlockBreak` does the same through the

@@ -3,12 +3,6 @@ use super::*;
 #[allow(non_camel_case_types)]
 pub(crate) enum InlineFuncInfo {
     InlineGen(Box<InlineGen>),
-    /// An `InlineGen` whose builtin is a *predicate* — the result is
-    /// guaranteed boolean and the generator honours a branch fused onto
-    /// the call (`JitContext::take_fused_br`): in branch context it
-    /// jumps directly, materializing no boolean `Value`; in value
-    /// context it behaves exactly like `InlineGen`.
-    InlineGenPredicate(Box<InlineGen>),
     /// A numeric binary operator / comparison generator, fired guard-free
     /// from the binop/cmp bytecode dispatchers under the basic-op license
     /// (and from `compile_method_call` for explicit sends). See
@@ -25,10 +19,6 @@ pub(crate) enum InlineFuncInfo {
 impl InlineFuncInfo {
     pub(crate) fn new_inline_gen(f: Box<InlineGen>) -> Self {
         InlineFuncInfo::InlineGen(f)
-    }
-
-    pub(crate) fn new_inline_gen_predicate(f: Box<InlineGen>) -> Self {
-        InlineFuncInfo::InlineGenPredicate(f)
     }
 
     pub(crate) fn new_inline_gen_binary(f: Box<InlineGenBinary>) -> Self {

@@ -225,7 +225,7 @@ VM は **メソッド呼び出し・二項演算の両方で** polymorphic を�
   バイトコード内 IC に (lhs_class, rhs_class) の 1 ペアを保存し、
   どちらかの変化を検出したら `opcode_sub = 1`。
 
-TraceIR はどちらも読み取り済みで、`BinCmp`/`BinCmpBr`/`BinOp` は
+TraceIR はどちらも読み取り済みで、`BinCmp`/`BinOp` は
 `polymorphic` を **消費している**(単相 → ペアガード +
 recompile-on-miss(Part B)、多相 → ガードなし generic C-call +
 Eq/Ne は即値 fast path(Part C))。一方 `TraceIr::MethodCall` の

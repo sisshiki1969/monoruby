@@ -562,22 +562,6 @@ impl AbstractState {
         true
     }
 
-    /// The fused compare-and-branch form of the bignum-constant fold
-    /// (`x >= 0x8000_0000_0000_0000 ? … : …`, the dewasm sign-test
-    /// idiom): emit only the fixnum guard and hand the static answer to
-    /// the caller, which resolves the branch like a constant `CondBr`.
-    pub(crate) fn fold_bigint_const_cmpbr(
-        &mut self,
-        ir: &mut AsmIr,
-        kind: CmpKind,
-        lhs: SlotId,
-        rhs: SlotId,
-    ) -> Option<bool> {
-        let (var, b) = self.bigint_cmp_fold_plan(kind, lhs, rhs)?;
-        self.guard_fixnum_for_fold(ir, var);
-        Some(b)
-    }
-
     /// the register-allocated fixnum comparison. Operands are
     /// brought into GP registers (reusing residents from a prior binop), guarded,
     /// and compared in registers; the boolean result is stored to `dst`'s stack
@@ -674,50 +658,50 @@ impl AbstractState {
         self.def_rax2acc(ir, dst);
     }
 
-    /// The register-allocated fixnum compare + branch. Like `gen_cmp_integer_gp`,
-    /// the operands are brought into GP registers (reusing residents from a prior
-    /// binop) and fixnum-guarded. Because this terminates the basic block, the
-    /// register file is then **flushed** — every dirty resident spilled to its
-    /// stack home — *before* the conditional branch, so both successor blocks
-    /// (taken and fall-through) observe slots in their canonical homes and start
-    /// with an empty file. The operands stay in their registers for the compare.
-    pub(crate) fn gen_cmpbr_integer(
+    /// The register-allocated fixnum compare whose answer is consumed only by
+    /// the following conditional branch: like `gen_cmp_integer_gp`, but the
+    /// boolean is never materialized — the compare leaves it in the condition
+    /// flags, which this returns for the caller to report
+    /// (`JitContext::set_cond_flags`), and the dead `dst` temp is parked as
+    /// `nil`.
+    ///
+    /// The branch terminates the basic block, so the register file is
+    /// **flushed** — every dirty resident spilled to its stack home — *before*
+    /// the compare (nothing may come between the flags and the branch), and
+    /// both successor blocks see slots in their canonical homes. The operands
+    /// stay in their registers for the compare.
+    ///
+    /// `None`, emitting nothing, when the comparison folds at compile time
+    /// (both operands constant, or a bignum constant on one side): the caller
+    /// takes [`gen_cmp_integer`](Self::gen_cmp_integer), which links `dst` to
+    /// the answer, and the branch resolves statically.
+    pub(crate) fn gen_cmp_integer_flags(
         &mut self,
         ir: &mut AsmIr,
         kind: CmpKind,
+        dst: SlotId,
         lhs: SlotId,
         rhs: SlotId,
-        brkind: BrKind,
-        branch_dest: JitLabel,
-    ) {
+    ) -> Option<CondFlags> {
+        if self.check_concrete_i64(lhs, rhs).is_some()
+            || self.bigint_cmp_fold_plan(kind, lhs, rhs).is_some()
+        {
+            return None;
+        }
         // Immediate form, as in `gen_cmp_integer_gp`: fold a constant rhs
         // into the compare as its tagged value `2k+1`.
-        if let Some(k) = self.is_fixnum_literal(rhs)
-            && let Some(imm) = k
-                .get()
+        let imm = self.is_fixnum_literal(rhs).and_then(|k| {
+            k.get()
                 .checked_mul(2)
                 .and_then(|v| v.checked_add(1))
                 .and_then(|v| i32::try_from(v).ok())
-        {
-            let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
-            let deopt = ir.new_deopt(self);
-            if lhs_guard {
-                ir.push(AsmInst::GuardClass(lhs_gp, CachedClass::INTEGER, deopt));
-                self.refine_S_fixnum(lhs);
-            }
-            self.flush_gp(ir);
-            ir.push(AsmInst::IntegerCmpBrImm {
-                kind,
-                brkind,
-                branch_dest,
-                lhs: lhs_gp,
-                imm,
-            });
-            return;
-        }
+        });
         let (lhs_gp, lhs_guard) = self.gp_ensure(ir, lhs, &[]);
-        let (rhs_gp, rhs_guard) = self.gp_ensure(ir, rhs, &[lhs_gp]);
-        // Snapshot the deopt write-back before the flush/branch (the guards
+        let rhs_gp = match imm {
+            Some(_) => None,
+            None => Some(self.gp_ensure(ir, rhs, &[lhs_gp])),
+        };
+        // Snapshot the deopt write-back before the flush (the guards
         // side-exit to a point where the interpreter re-reads the operands).
         let deopt = ir.new_deopt(self);
         // Guard-then-refine, as in `binop_integer_gp`. The refinement is
@@ -727,15 +711,23 @@ impl AbstractState {
             ir.push(AsmInst::GuardClass(lhs_gp, CachedClass::INTEGER, deopt));
             self.refine_S_fixnum(lhs);
         }
-        if rhs_guard {
+        if let Some((rhs_gp, true)) = rhs_gp {
             ir.push(AsmInst::GuardClass(rhs_gp, CachedClass::INTEGER, deopt));
             self.refine_S_fixnum(rhs);
         }
-        // Block terminator: spill the dirty residents to their stack homes before
-        // the branch (the operands' registers still hold their values for the
-        // compare), leaving the file empty for both successors.
+        // Block terminator: spill the dirty residents to their stack homes
+        // before the compare (the operands' registers still hold their values
+        // for it), leaving the file empty for both successors.
+        self.gp_regfile.invalidate(dst);
         self.flush_gp(ir);
-        ir.integer_cmpbr_reg(kind, brkind, branch_dest, lhs_gp, rhs_gp);
+        match rhs_gp {
+            Some((rhs_gp, _)) => ir.cmp_flags(lhs_gp, rhs_gp),
+            None => ir.cmp_imm_flags(lhs_gp, imm.unwrap()),
+        }
+        // The temp is the branch's sole use; park a nil so any later
+        // write-back of the dead slot is still a Value.
+        self.def_C(dst, Value::nil());
+        Some(CondFlags::Int(kind))
     }
 
     pub(in crate::codegen::jitgen) fn load_binary_fpr(&mut self, ir: &mut AsmIr, info: FBinOpInfo) -> (FPReg, FPReg) {
@@ -951,31 +943,30 @@ impl AbstractState {
         }
     }
 
-    /// The compile-time comparison fold shared by the primitives and the
-    /// binary inline generators' `CmpBr`-mode constant resolution.
-    pub(crate) fn fold_cmp<T>(kind: CmpKind, lhs: T, rhs: T) -> bool
-    where
-        T: PartialEq + PartialOrd,
-    {
-        cmp(kind, lhs, rhs)
-    }
-
-    /// The fused float compare + branch: the xmm mirror of
-    /// [`gen_cmpbr_integer`](Self::gen_cmpbr_integer). As a block terminator
-    /// it flushes the GP residents to their homes before the branch (this
-    /// also makes a mixed integer operand's home current for the compare's
-    /// stack read), then compares in xmm and branches.
-    pub(crate) fn gen_cmpbr_float(
+    /// The float compare consumed only by the following conditional branch:
+    /// the xmm mirror of [`gen_cmp_integer_flags`](Self::gen_cmp_integer_flags).
+    /// As a block terminator it flushes the GP residents to their homes before
+    /// the compare (this also makes a mixed integer operand's home current for
+    /// the compare's stack read), then compares in xmm and leaves the answer
+    /// in the condition flags. `None`, emitting nothing, when both operands
+    /// are constant: the caller folds through
+    /// [`gen_cmp_float`](Self::gen_cmp_float).
+    pub(crate) fn gen_cmp_float_flags(
         &mut self,
         ir: &mut AsmIr,
+        dst: SlotId,
         info: FBinOpInfo,
         kind: CmpKind,
-        brkind: BrKind,
-        branch_dest: JitLabel,
-    ) {
+    ) -> Option<CondFlags> {
+        if self.check_binary_C_f64(info.lhs, info.rhs).is_some() {
+            return None;
+        }
+        self.gp_regfile.invalidate(dst);
         self.flush_gp(ir);
         let mode = self.load_binary_fpr(ir, info);
-        ir.float_cmp_br(mode, kind, brkind, branch_dest);
+        ir.float_cmp_flags(mode);
+        self.def_C(dst, Value::nil());
+        Some(CondFlags::Float(kind))
     }
 
     fn fetch_float_assume(&mut self, ir: &mut AsmIr, rhs: SlotId, class: FOpClass) -> FPReg {

@@ -348,7 +348,7 @@ JIT の `TraceIr::ConcatStr` → `AsmInst::ConcatStr` → `LInst::ConcatStr` →
 `guard_class` を出し、後からの（再）定義はインライン dispatch が既に出して
 いる class-version ガードが捕まえる。結果は `state.def_C` で登録するので、
 値としての利用は抽象状態から読み、分岐での利用は静的に解決される（素の
-`CondBr` は真偽で、融合した `BinCmpBr` は `binary_cmp_br` で）。`no_to_str`
+`CondBr` が `emit_cond_branch` で dst の既知の真偽を読む）。`no_to_str`
 はクラス × class_version でメモ化され、JIT コンパイル中に global method
 cache の `RefCell` が借用中でも呼べるよう、キャッシュしない祖先走査で
 解決する。

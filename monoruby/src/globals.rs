@@ -204,11 +204,12 @@ pub(crate) type InlineGen = dyn Fn(
 ///   (`1.+(2)`), where the class-version and receiver guards were already
 ///   emitted.
 ///
-/// The generator receives the receiver (lhs) class the site resolved on,
-/// the argument (rhs) class when known, and the firing mode (value-producing
-/// vs fused compare-and-branch). It emits operand guards itself only for
-/// operands not already proven (`gp_ensure` / float-load discipline), so
-/// both firing contexts get exactly the guards they need and no more.
+/// The generator receives the receiver (lhs) class the site resolved on and
+/// the argument (rhs) class when known. It emits operand guards itself only
+/// for operands not already proven (`gp_ensure` / float-load discipline), so
+/// both firing contexts get exactly the guards they need and no more. A
+/// comparison whose result only the following conditional branch reads may
+/// leave it in the condition flags (`JitContext::wants_cond_flags`).
 pub(crate) type InlineGenBinary = dyn Fn(
     &mut jitgen::AbstractState,
     &mut jitgen::asmir::AsmIr,
@@ -217,7 +218,6 @@ pub(crate) type InlineGenBinary = dyn Fn(
     CallSiteId,
     CachedClass,
     Option<CachedClass>,
-    jitgen::BinaryInlineMode,
 ) -> jitgen::BinaryInlineOutcome;
 
 /// Unary-operator inline generator: the JIT-inline implementation of a

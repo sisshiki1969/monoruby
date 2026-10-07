@@ -44,8 +44,8 @@ mod variables;
 
 
 /// Signed aarch64 condition for a fixnum comparison. `BrIf` gives the
-/// "taken-when-true" condition; `BrIfNot` gives its inverse (so a CmpBr lands
-/// on the fall-through case). TEq behaves like Eq for integers.
+/// "taken-when-true" condition; `BrIfNot` gives its inverse (so a flags
+/// branch lands on the fall-through case). TEq behaves like Eq for integers.
 fn a64_cond_for_cmp(kind: CmpKind, brkind: BrKind) -> monoasm::Cond {
     use monoasm::Cond;
     let taken = match kind {
@@ -1338,6 +1338,14 @@ impl Codegen {
                 };
                 self.a64_bcond_bb(c, &target);
             }
+            LInst::TestBit { reg, bit } => {
+                let r = reg.a64().0;
+                let mask = 1u64 << bit;
+                monoasm_arm64!(&mut self.jit,
+                    mov x10, (mask);
+                    tst x(r), x10;
+                );
+            }
             // Ruby-truthiness branch: `orr 0x10` folds nil(0x04)/false(0x14) to
             // FALSE_VALUE; truthy (!= FALSE) takes Ne, falsy takes Eq.
             LInst::BranchTruthy { negate, target } => {
@@ -1394,47 +1402,6 @@ impl Codegen {
             // the x86 dispatch stub only), so guards and arms lower alike
             // here — the ops stay distinct so the distinction survives if
             // aarch64 grows the recorder.
-            LInst::BrIfBitSet { reg, bit, set, target } => {
-                let r = reg.a64().0;
-                if self.far_branch_mode {
-                    // `tbz`/`tbnz` reach ±32 KiB (Test14) and the target is a
-                    // BB edge megabytes away in a far frame: test the
-                    // *inverted* bit over a `b` (±128 MiB). A GP bit test has
-                    // no NaN subtlety, so the inversion is exact.
-                    let cont = self.jit.label();
-                    if set {
-                        monoasm_arm64!(&mut self.jit, tbz x(r), #(bit as u32), cont;);
-                    } else {
-                        monoasm_arm64!(&mut self.jit, tbnz x(r), #(bit as u32), cont;);
-                    }
-                    monoasm_arm64!(&mut self.jit, b target;);
-                    self.jit.bind_label(cont);
-                } else if set {
-                    monoasm_arm64!(&mut self.jit, tbnz x(r), #(bit as u32), target;);
-                } else {
-                    monoasm_arm64!(&mut self.jit, tbz x(r), #(bit as u32), target;);
-                }
-            }
-            LInst::BrIfValueEq { reg, imm, eq, target } => {
-                let r = reg.a64().0;
-                monoasm_arm64!(&mut self.jit, cmp x(r), #(imm as u32););
-                if self.far_branch_mode {
-                    // `b.cond` reaches ±1 MiB (Imm19); in a far frame take the
-                    // inverted integer condition over a `b` (±128 MiB).
-                    let cont = self.jit.label();
-                    self.jit.bcond_label(
-                        if eq { monoasm::Cond::Ne } else { monoasm::Cond::Eq },
-                        &cont,
-                    );
-                    monoasm_arm64!(&mut self.jit, b target;);
-                    self.jit.bind_label(cont);
-                } else {
-                    self.jit.bcond_label(
-                        if eq { monoasm::Cond::Eq } else { monoasm::Cond::Ne },
-                        &target,
-                    );
-                }
-            }
             LInst::BrClassNe { reg, class, target } => {
                 if self.far_branch_mode {
                     // `a64_guard_class` may reference its fail label with a
@@ -1886,17 +1853,12 @@ impl Codegen {
                     orr x(rax.0), x(rax.0), x9;
                 );
             }
-            LInst::FloatCmpBr {
-                kind,
-                lhs,
-                rhs,
-                brkind,
-                dest,
-                base,
-            } => {
+            LInst::FloatCmpFlags { lhs, rhs, base } => {
                 let lp = self.a64_fpr_read(lhs, 0, base);
                 let rp = self.a64_fpr_read(rhs, 1, base);
                 monoasm_arm64!(&mut self.jit, fcmp d(lp), d(rp););
+            }
+            LInst::FloatCondBr { kind, brkind, dest } => {
                 let cond = a64_float_cond_for_cmp(kind, brkind);
                 self.a64_bcond_bb(cond, &dest);
             }
