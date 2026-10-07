@@ -55,14 +55,19 @@ impl Codegen {
             return;
         };
         let lfp = GP::R14.a64().0; // x22
+        let rdi = GP::Rdi.a64().0; // x4
         let f = extend_ivar as *const () as u64;
         let extend = self.jit.label();
         let exit = self.jit.label();
         // x0 = self (&RValue) and x1 = heap_len are also the `extend_ivar` args,
         // so they are set up *before* the var-table checks (which may branch to
-        // `extend` straight away on a None table).
+        // `extend` straight away on a None table). `self` goes through rdi
+        // (x4) so that, as on x86, the register holds it afterwards on both
+        // paths: a frameless callee's entry relies on that
+        // (`note_rdi_holds` in the frameless `InitMethod`).
         monoasm_arm64!(&mut self.jit,
-            ldur x0, [x(lfp), #(-(LFP_SELF as i32))];   // self
+            ldur x(rdi), [x(lfp), #(-(LFP_SELF as i32))]; // self
+            mov x0, x(rdi);
             mov x1, (heap_len as u64);                  // heap_len
             ldr x9, [x0, #(RVALUE_OFFSET_VAR as u32)];  // var_table ptr
             cbz x9, extend;                             // None -> grow
@@ -81,10 +86,8 @@ impl Codegen {
             mov x9, (f);
             blr x9;
             ldr x30, [sp], #16;
-            // The call clobbered x0; the fall-through path leaves `self`
-            // in it, and a frameless callee's entry relies on that
-            // (`note_rdi_holds` in the frameless `InitMethod`).
-            ldur x0, [x(lfp), #(-(LFP_SELF as i32))];
+            // The call clobbered rdi (x4, caller-saved); put `self` back.
+            ldur x(rdi), [x(lfp), #(-(LFP_SELF as i32))];
             exit:
         );
     }
