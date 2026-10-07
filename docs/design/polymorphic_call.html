@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-3dd96510.js";
+            window.path_to_searchindex_js = "../searchindex-20efc593.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -383,7 +383,7 @@ FUNCID、1 エントリ)が populated かつ receiver class 不一致のとき
 バイトコード内 IC に (lhs_class, rhs_class) の 1 ペアを保存し、
 どちらかの変化を検出したら <code>opcode_sub = 1</code>。</li>
 </ul>
-<p>TraceIR はどちらも読み取り済みで、<code>BinCmp</code>/<code>BinCmpBr</code>/<code>BinOp</code> は
+<p>TraceIR はどちらも読み取り済みで、<code>BinCmp</code>/<code>BinOp</code> は
 <code>polymorphic</code> を <strong>消費している</strong>(単相 → ペアガード +
 recompile-on-miss(Part B)、多相 → ガードなし generic C-call +
 Eq/Ne は即値 fast path(Part C))。一方 <code>TraceIr::MethodCall</code> の

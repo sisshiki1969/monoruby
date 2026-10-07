@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-3dd96510.js";
+            window.path_to_searchindex_js = "../searchindex-20efc593.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -277,7 +277,7 @@ benefit. The <code>lir.rs</code> unit test uses <code>matches!</code> instead of
 <tr><td>GC / nil</td><td><code>WriteBarrier { parent, value }</code>, <code>NilIfZero { reg }</code></td></tr>
 <tr><td>Guards (carry a side-exit <code>deopt</code>)</td><td><code>GuardClass</code>, <code>GuardArrayTy</code>, <code>GuardFrozen</code>, <code>GuardConstBaseClass</code>, <code>GuardConstVersion</code>, <code>GuardCapture</code>, <code>CheckBOP</code></td></tr>
 <tr><td>Integer arithmetic</td><td><code>IntegerBinOp { …, deopt }</code>, <code>IntegerCmp</code>, <code>FixnumNeg { …, deopt }</code>, <code>FixnumBitNot</code></td></tr>
-<tr><td>Floating-point</td><td><code>FprMove</code>, <code>F64ToFpr</code>, <code>FixnumToFpr</code>, <code>FprToStack</code>, <code>FprSwap</code>, <code>FloatToFpr</code> (deopt), <code>I64ToBoth</code>, <code>FloatBinOp</code>, <code>FloatUnOp</code>, <code>FloatCmp</code>, <code>FloatCmpBr</code>, <code>FprSave</code>, <code>FprRestore</code>, <code>CFunc_F_F</code>, <code>CFunc_FF_F</code> (FP ops carry the spill <code>base</code>)</td></tr>
+<tr><td>Floating-point</td><td><code>FprMove</code>, <code>F64ToFpr</code>, <code>FixnumToFpr</code>, <code>FprToStack</code>, <code>FprSwap</code>, <code>FloatToFpr</code> (deopt), <code>I64ToBoth</code>, <code>FloatBinOp</code>, <code>FloatUnOp</code>, <code>FloatCmp</code>, <code>FloatCmpFlags</code>, <code>FloatCondBr</code>, <code>FprSave</code>, <code>FprRestore</code>, <code>CFunc_F_F</code>, <code>CFunc_FF_F</code> (FP ops carry the spill <code>base</code>)</td></tr>
 <tr><td>Heap ivar (macro-op)</td><td><code>LoadIVarHeap</code>, <code>StoreIVarHeap</code></td></tr>
 <tr><td>Construction (macro-op)</td><td><code>CreateArray</code>, <code>NewArray</code>, <code>NewHash</code>, <code>HashInsert</code>, <code>ArrayConcat</code>, <code>NewRange</code>, <code>ConcatStr</code>, <code>ConcatRegexp</code>, <code>ToA</code>, <code>DeepCopyLit</code>, <code>ExpandArray</code></td></tr>
 <tr><td>Variables (macro-op)</td><td><code>StoreConstant</code>, <code>LoadGVar</code>, <code>StoreGVar</code>, <code>LoadCVar</code>, <code>CheckCVar</code>, <code>StoreCVar</code>, <code>LoadDynVar</code>, <code>StoreDynVar</code>, <code>AliasGvar</code></td></tr>
@@ -389,7 +389,7 @@ accumulator).</p>
 <tr><td>3-D</td><td>fixnum <code>IntegerBinOp</code> (overflow deopt)</td><td>hottest arithmetic path</td></tr>
 <tr><td>3-E</td><td>FP transfer/convert (<code>FprMove</code> / <code>F64ToFpr</code> / <code>FixnumToFpr</code> / <code>FprToStack</code>)</td><td>first FP family; real decomposition</td></tr>
 <tr><td>3-F</td><td>FP swap / <code>FloatToFpr</code> (deopt) / <code>I64ToBoth</code></td><td></td></tr>
-<tr><td>3-G</td><td>FP arithmetic &amp; compare (<code>FloatBinOp</code> / <code>FloatUnOp</code> / <code>FloatCmp</code> / <code>FloatCmpBr</code>)</td><td>NaN-correct conditions</td></tr>
+<tr><td>3-G</td><td>FP arithmetic &amp; compare (<code>FloatBinOp</code> / <code>FloatUnOp</code> / <code>FloatCmp</code> / <code>FloatCmpFlags</code> + <code>FloatCondBr</code>)</td><td>NaN-correct conditions</td></tr>
 <tr><td>3-H</td><td>FP C-calls (<code>CFunc_F_F</code> / <code>CFunc_FF_F</code>) + <code>FprSave</code> / <code>FprRestore</code></td><td>completes the FP family</td></tr>
 <tr><td>A</td><td>bounds-checked heap-ivar load/store (<code>LoadIVarHeap</code> / <code>StoreIVarHeap</code>)</td><td>first macro-op via <code>encode_linst_macro</code></td></tr>
 <tr><td>B1</td><td>variable + construction macro-ops (g/c/dyn-var, array/hash/range/str, <code>to_a</code>, <code>defined?</code>, generic binop, alias/undef, …)</td><td>bulk macro-op routing</td></tr>
