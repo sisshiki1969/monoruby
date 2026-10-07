@@ -69,6 +69,25 @@ impl<'a> BytecodeGen<'a> {
             UseMode2::Push | UseMode2::Ret => (Some(self.sp().into()), true),
             UseMode2::Store(dst) => (Some(dst), false),
         };
+        // `recv.new(args)` as a statement: the object still needs a slot
+        // to live in while its `initialize` twin runs inline
+        // (`CallSiteInfo::class_new_init`, below), so the result goes to
+        // a temp that is popped right after the call. The shape test is
+        // the twin's own, made on the argument list.
+        let discarded_new = dst.is_none()
+            && method == IdentId::NEW
+            && !safe_nav
+            && !arglist.splat
+            && !arglist.forwarding
+            && !arglist.delegate_block
+            && arglist.block.is_none()
+            && arglist.kw_args.is_empty()
+            && arglist.hash_splat.is_empty();
+        let (dst, push_flag) = if discarded_new {
+            (Some(self.sp().into()), true)
+        } else {
+            (dst, push_flag)
+        };
         let old_temp = self.temp;
         // `"lit".freeze` with no arguments, in a file without the
         // `frozen_string_literal` pragma: CRuby's `opt_str_freeze`. One
@@ -214,6 +233,9 @@ impl<'a> BytecodeGen<'a> {
             } else {
                 self.apply_label(nil_exit);
             }
+        }
+        if discarded_new {
+            self.pop();
         }
         if use_mode.is_ret() {
             self.emit_ret(None)?;

@@ -331,3 +331,30 @@ fn class_new_frameless_initialize_implicit_self() {
         "#
     ));
 }
+
+#[test]
+fn class_new_frameless_initialize_discarded_result() {
+    // `recv.new(args)` as a statement: the site gets a temp for the
+    // object so its `initialize` still runs inline, and the temp is
+    // popped right after — the surrounding expression's temps must be
+    // unaffected.
+    run_test_once(&format!(
+        r#"
+        $log = []
+        class CND
+          def initialize(a, b)
+            $log << a + b if a % 1000 == 0
+          end
+        end
+        def cnd(i)
+          x = i * 2
+          CND.new(i, 1)
+          y = x + 1
+          CND.new(y, 1); y
+        end
+        r = 0
+        {LOOP}.times {{ |i| r += cnd(i) }}
+        [r, $log.size, $log.last(2)]
+        "#
+    ));
+}
