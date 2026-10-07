@@ -49,8 +49,8 @@ which lowers each `AsmInst` by one of two routes:
 2. **Per-arch arm** — the `other =>` fallthrough calls `compile_asmir_arch`,
    the backend-private match
    (`compile_asmir_arch` in each backend's `compile/mod.rs`).
-   On both arches this handles only the *same five* specialized inlined-frame
-   variants (`LoadCallerSlot`, `GuardClassVersionSpecialized`,
+   On both arches this handles only the *same four* specialized inlined-frame
+   variants (`GuardClassVersionSpecialized`,
    `GuardConstVersionSpecialized`, `RecompileDeoptSpecialized`,
    `SetArgumentsForwarded`); everything else is handled by the shared arm.
 

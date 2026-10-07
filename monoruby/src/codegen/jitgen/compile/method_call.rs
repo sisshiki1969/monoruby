@@ -1153,8 +1153,7 @@ impl<'a> JitContext<'a> {
         // against `recv_class` needs the proof: two classes sharing one
         // method need not agree on where its ivars live, so a set-guarded
         // arm would read or write the first class's slot for all of them.
-        // `expand_leaf_body` makes the same test for the same reason; the
-        // lowerings that do not resolve anything class-specific (the
+        // The lowerings that do not resolve anything class-specific (the
         // `Struct` accessors take their slot from the `FuncKind` itself)
         // are unaffected.
         let recv_class_proven = !same_target_set_guarded || state.class(recv) == Some(recv_class.id());
@@ -1323,80 +1322,6 @@ impl<'a> JitContext<'a> {
                             ir.set_deferred_rest();
                         }
                         return Ok(CompileResult::Continue);
-                    }
-                    // Frame-free expansion of the constructor idiom
-                    // (`def initialize(a, b) = (@a = a; @b = b)`): emit the
-                    // stores as the caller's own instructions instead of
-                    // pushing a frame to run three `mov`s. Same gate as the
-                    // folds above, because it needs the same thing they do —
-                    // an argument shape that binds without `ArgumentError`.
-                    // Frame-free expansion of the leaf idiom (`@count += 1`,
-                    // `@a * 2`, `@sum + x`, `@a`): the accumulator chain runs
-                    // in the caller's registers, and every guard exits to the
-                    // call instruction. Tried first — a body it recognises is
-                    // never one the constructor recogniser would take.
-                    if let Some(leaf) = frameless::leaf_expr_body(&self.store, iseq) {
-                        let callee_pos = self.store[func_id].params().total_positional_args();
-                        // Plain positional arguments in this frame's own
-                        // slots. A `...` forward leaves its positionals in
-                        // the *caller's* window instead, which only the
-                        // constructor expansion below reads; a forwarding
-                        // callee is not `simple_fold`, so it falls through
-                        // to it rather than being handled here.
-                        if simple_fold && pos_num == callee_pos {
-                            let arg_slots: Vec<SlotId> =
-                                (0..callee_pos).map(|i| args + i).collect();
-                            if self.expand_leaf_body(
-                                state, ir, recv_class, recv, dst, &leaf, &arg_slots,
-                            ) {
-                                return Ok(CompileResult::Continue);
-                            }
-                        }
-                    }
-                    if let Some(body) = frameless::ivar_store_body(&self.store, iseq) {
-                        let callee_pos = self.store[func_id].params().total_positional_args();
-                        // Where each callee parameter lives in *this* frame.
-                        // Direct call sites hand them over contiguously from
-                        // `args`; a `...` forward splits them into the lead
-                        // positionals plus the D1-deferred rest range, which
-                        // is where `Class#new`'s `__builtin_initialize__(...)`
-                        // — the shape that actually matters — lands.
-                        let arg_slots: Option<Vec<frameless::ArgSlot>> = if simple_fold {
-                            (pos_num == callee_pos).then(|| {
-                                (0..callee_pos)
-                                    .map(|i| frameless::ArgSlot::Own(args + i))
-                                    .collect()
-                            })
-                        } else {
-                            let lead_num = pos_num - 1;
-                            state
-                                .deferred_rest_src(args + lead_num)
-                                .filter(|(_, len)| lead_num + *len as usize == callee_pos)
-                                .map(|(rest, len)| {
-                                    (0..lead_num)
-                                        .map(|i| frameless::ArgSlot::Own(args + i))
-                                        .chain(
-                                            (0..len as usize)
-                                                .map(|i| frameless::ArgSlot::Caller(rest + i)),
-                                        )
-                                        .collect()
-                                })
-                        };
-                        if recv_class_proven
-                            && let Some(arg_slots) = arg_slots
-                            && self.expand_ivar_stores(
-                                state, ir, recv_class, recv, dst, &body, &arg_slots,
-                            )
-                        {
-                            // Frame-free expansion — same as the fold above.
-                            if forwarded_fold {
-                                // Same reasoning as the fold above: the
-                                // expansion *is* the forwarding consume, so
-                                // keep the caller-side `create_array` skip on.
-                                ir.set_deferred_rest();
-                            }
-                            return Ok(CompileResult::Continue);
-                        }
                     }
                 }
                 // Frameless specialization (`compile/frameless_call.rs`),
@@ -1969,263 +1894,6 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    ///
-    /// Emit a recognised leaf body ([`frameless::leaf_expr_body`]) as the
-    /// caller's own instructions — no frame pushed, no call made.
-    ///
-    /// Returns `false` (having emitted nothing) when the receiver class
-    /// cannot serve the body's ivars inline, in which case the caller falls
-    /// through to the ordinary call.
-    ///
-    /// # Where the guards exit to
-    ///
-    /// Every guard here — each operand's fixnum check, each arithmetic
-    /// overflow check, the frozen check before a store — side-exits to the
-    /// deopt taken at the *call* instruction, so the interpreter re-performs
-    /// the whole call and produces whatever the real body would have,
-    /// including any exception, from a real frame. That is sound only
-    /// because nothing has happened yet when a guard fires: the recogniser
-    /// admits a single `StoreIvar` and only as the last thing before the
-    /// `Ret`, so every exit precedes the one effect. A zero divisor is one
-    /// of those exits, so `x / 0` raises `ZeroDivisionError` from the frame
-    /// the interpreter builds, with the backtrace that frame gives it.
-    ///
-    fn expand_leaf_body(
-        &mut self,
-        state: &mut AbstractState,
-        ir: &mut AsmIr,
-        recv_class: CachedClass,
-        recv: SlotId,
-        dst: Option<SlotId>,
-        body: &frameless::LeafBody,
-        arg_slots: &[SlotId],
-    ) -> bool {
-        // Every ivar below is resolved against `recv_class`, so the site
-        // must have proven the receiver *is* that class. A set-guarded
-        // dispatch arm has only proven membership in a set of classes that
-        // share this `func_id` — and two classes sharing a method need not
-        // agree on where its ivars live: a subclass that assigns one of its
-        // own first shifts every inherited slot. Reading `@n` at the
-        // parent's index would then hit whatever the subclass put there.
-        if state.class(recv) != Some(recv_class.id()) {
-            return false;
-        }
-        // Only `RValue`s with the object layout have inline ivar slots at a
-        // fixed offset; anything else goes through the heap table, which
-        // needs `using_fpr` bookkeeping and a possible reallocation call.
-        if !self.store[recv_class.id()].is_object_ty_instance() {
-            return false;
-        }
-        // Resolve every ivar before emitting anything, so a body that is
-        // only partly expandable emits nothing at all. A miss means the
-        // class reaching this site is not the one the body was written for
-        // (a subclass whose own initializer never ran); decline rather than
-        // recompile — the ordinary call is correct.
-        let resolve = |this: &Self, name: IdentId| -> Option<IvarId> {
-            this.store[recv_class.id()]
-                .get_ivarid(name)
-                .filter(|ivarid| ivarid.is_inline())
-        };
-        // The arithmetic and the comparison below are emitted as machine
-        // instructions with no runtime check, which is only licensed while
-        // the operator is still the built-in one. Take that licence for
-        // every operator the body uses *before* emitting anything, and
-        // record the dependency after, so `set_bop_redefine` evicts this
-        // body. Without it a redefinition is not repairable by any side
-        // exit: the class-version guard fires, the body recompiles, and the
-        // recompiled body emits the same unconditional fast path again —
-        // `frameless_leaf_bodies_bop_redefine` is the regression.
-        let mut bop_deps: Vec<(ClassId, IdentId)> = Vec::new();
-        for op in &body.ops {
-            let name: IdentId = match *op {
-                frameless::LeafOp::Bin(kind, _) => kind.into(),
-                frameless::LeafOp::Cmp(kind, _, _) => kind.into(),
-                _ => continue,
-            };
-            // The class the guards will prove, so the licence is the tight
-            // one: a `Symbol` comparison needs `Symbol#==` unredefined, not
-            // `Integer#==`.
-            let class = match *op {
-                frameless::LeafOp::Cmp(_, _, class) => class,
-                _ => INTEGER_CLASS,
-            };
-            if !self.basic_op_assumable(CachedClass::from_class(class), name) {
-                return false;
-            }
-            bop_deps.push((class, name));
-        }
-
-        // Resolve every ivar name the body mentions, up front.
-        let mut ivars: Vec<Option<IvarId>> = Vec::with_capacity(body.ops.len());
-        for op in &body.ops {
-            let name = match *op {
-                frameless::LeafOp::Load(frameless::LeafValue::SelfIvar(name))
-                | frameless::LeafOp::Bin(_, frameless::LeafValue::SelfIvar(name))
-                | frameless::LeafOp::Cmp(_, frameless::LeafValue::SelfIvar(name), _)
-                | frameless::LeafOp::Store(name) => name,
-                _ => {
-                    ivars.push(None);
-                    continue;
-                }
-            };
-            match resolve(self, name) {
-                Some(ivarid) => ivars.push(Some(ivarid)),
-                None => return false,
-            }
-        }
-
-        // The constants the body folded. Their values were baked in against
-        // the *callee's* inline caches, which are only right at the version
-        // they were resolved at: the body cannot redefine a constant (it
-        // contains no call), but anything else in the program can, between
-        // this compilation and a later execution of the code emitted here.
-        // So the expansion carries the same guard and salvage record a
-        // `LoadConst` in this frame would (`load_constant`) — one guard per
-        // trace covers them all — and declines a fold resolved at another
-        // version, since the ordinary call is correct.
-        if body
-            .consts
-            .iter()
-            .any(|site| site.cache.version as u64 != self.const_version())
-        {
-            return false;
-        }
-        // Emitted before anything else, so a miss still hands the whole call
-        // back — the all-or-nothing property every other guard here keeps.
-        if let Some(version) = body.consts.first().map(|site| site.cache.version) {
-            self.guard_const_version(state, ir, version);
-        }
-
-        state.flush_gp(ir);
-        // The receiver, for every inline ivar access and the frozen guard.
-        state.load(ir, recv, GP::Rdi);
-        let deopt = ir.new_deopt(state);
-
-        ///
-        /// Emit one operand into `reg`.
-        ///
-        /// Returns whether rdi (the receiver) may have been clobbered. Only
-        /// a parameter load can do it: the slot may hold an unboxed float,
-        /// and boxing it calls out. The ivar load and the literal write
-        /// their destination and nothing else.
-        ///
-        fn emit_value(
-            ir: &mut AsmIr,
-            state: &mut AbstractState,
-            arg_slots: &[SlotId],
-            v: frameless::LeafValue,
-            ivarid: Option<IvarId>,
-            reg: GP,
-        ) -> bool {
-            match v {
-                frameless::LeafValue::SelfIvar(_) => {
-                    ir.push(AsmInst::LoadIVarInline {
-                        ivarid: ivarid.unwrap(),
-                        dst: reg,
-                    });
-                    false
-                }
-                frameless::LeafValue::Fixnum(val) => {
-                    ir.lit2reg(val, reg);
-                    false
-                }
-                frameless::LeafValue::Param(i) => {
-                    state.load(ir, arg_slots[i as usize], reg);
-                    true
-                }
-            }
-        }
-
-        // The accumulator lives in rax; rcx holds each op's right operand.
-        // Tracked alongside it: whether rax is known to hold an immediate,
-        // which is what decides the write barrier on a store.
-        let mut acc_immediate = false;
-        // The frozen guard is hoisted to the first store and covers every
-        // later one — nothing between them can call out and freeze the
-        // receiver.
-        let mut frozen_guarded = false;
-        // rdi still holds the receiver, so a store needs no reload.
-        let mut recv_live = true;
-        for (i, op) in body.ops.iter().enumerate() {
-            match *op {
-                frameless::LeafOp::Load(v) => {
-                    recv_live &= !emit_value(ir, state, arg_slots, v, ivars[i], GP::Rax);
-                    acc_immediate = matches!(v, frameless::LeafValue::Fixnum(_));
-                }
-                frameless::LeafOp::Bin(kind, operand) => {
-                    recv_live &= !emit_value(ir, state, arg_slots, operand, ivars[i], GP::Rcx);
-                    // Neither operand is statically typed here — the
-                    // receiver's class is known but its ivars' contents are
-                    // not, and a parameter is whatever the caller passed.
-                    ir.push(AsmInst::GuardClass(GP::Rax, CachedClass::INTEGER, deopt));
-                    ir.push(AsmInst::GuardClass(GP::Rcx, CachedClass::INTEGER, deopt));
-                    ir.integer_binop_reg(kind, GP::Rax, GP::Rax, GP::Rcx, deopt);
-                    acc_immediate = true;
-                }
-                frameless::LeafOp::Cmp(kind, operand, class) => {
-                    recv_live &= !emit_value(ir, state, arg_slots, operand, ivars[i], GP::Rcx);
-                    // Both backends compare with a plain register compare, so
-                    // the guarded class decides what that compare *means*:
-                    // bit equality for an immediate, a signed read of the
-                    // tagged bits for a fixnum. The recogniser admits the
-                    // non-fixnum classes for equality only.
-                    ir.push(AsmInst::GuardClass(GP::Rax, CachedClass::from_class(class), deopt));
-                    ir.push(AsmInst::GuardClass(GP::Rcx, CachedClass::from_class(class), deopt));
-                    // The comparison zeroes rax before reading its operands,
-                    // so the accumulator has to step aside first.
-                    ir.reg_move(GP::Rax, GP::Rsi);
-                    ir.integer_cmp_reg(kind, None, GP::Rsi, GP::Rcx);
-                    acc_immediate = true;
-                }
-                frameless::LeafOp::Store(_) => {
-                    if !recv_live {
-                        state.load(ir, recv, GP::Rdi);
-                        recv_live = true;
-                    }
-                    if !frozen_guarded {
-                        ir.guard_frozen(deopt);
-                        frozen_guarded = true;
-                    }
-                    ir.push(AsmInst::StoreIVarInline {
-                        src: GP::Rax,
-                        ivarid: ivars[i].unwrap(),
-                        // A guarded arithmetic result or a fixnum literal
-                        // needs no write barrier; a bare value
-                        // (`def set(x) = @a = x`) may be a heap object.
-                        wb: !acc_immediate,
-                    });
-                }
-            }
-        }
-        for (class, name) in bop_deps {
-            self.record_bop_dep(CachedClass::from_class(class), name);
-        }
-        self.const_fold_cache.extend(body.consts.iter().cloned());
-        state.def_reg2acc(ir, GP::Rax, dst);
-        state.unset_side_effect_guard();
-        true
-    }
-
-    /// Emit a recognised constructor body ([`frameless::ivar_store_body`])
-    /// as the caller's own instructions — no frame pushed, no call made.
-    ///
-    /// `arg_slots[i]` is the caller slot supplying the callee's parameter
-    /// `i`. Returns `false` when the receiver class cannot take the stores
-    /// this way, in which case nothing has been emitted and the caller
-    /// falls through to the ordinary call.
-    ///
-    /// # Why the frozen guard is hoisted
-    ///
-    /// Storing to a frozen object must raise `FrozenError`, and the raise
-    /// has to come from a real `initialize` frame with the right backtrace
-    /// — which is exactly the frame this path does not build. So the guard
-    /// runs **before any store**, and a frozen receiver deopts to the call
-    /// instruction: the VM then performs the whole call itself and raises
-    /// properly. That is only sound while no store has happened yet, which
-    /// is why the body must be straight-line (a conditional store would
-    /// leave the guard proving something about a path that never stores).
-    ///
-    ///
     /// Frame-free `Foo.new`.
     ///
     /// `Class#new` is a Ruby trampoline (`builtins/class.rb`):
@@ -2233,8 +1901,7 @@ impl<'a> JitContext<'a> {
     /// halves already compile away *inside* that trampoline — the
     /// allocation to an inline free-list pop (`emit_class_allocate`), the
     /// `initialize` to nothing at all when its body is trivial
-    /// (`ISeqHint`) or to a handful of stores when it is a plain
-    /// constructor (`frameless::ivar_store_body`). What is left is the
+    /// (`ISeqHint`). What is left is the
     /// trampoline's own frame: a class-version guard, a stack-overflow
     /// check, ~10 stores of frame setup and a `call`/`ret`, to run code
     /// that is a dozen instructions. This emits the same two halves as the
@@ -2260,11 +1927,13 @@ impl<'a> JitContext<'a> {
     ///   `SelfReturn`) — nothing but the allocation is emitted. This is
     ///   every class that does not define one, since
     ///   `BasicObject#initialize` is an empty Ruby body;
-    /// * a plain ivar-store constructor — expanded into the caller's own
-    ///   stores (`expand_ivar_stores`).
+    /// * a small loop-free `initialize` body — compiled as a frameless
+    ///   callee of this site, in a window of this frame
+    ///   (`compile/frameless_call.rs`), through the site's `initialize`
+    ///   twin (`CallSiteInfo::class_new_init`).
     ///
     /// Anything else — a native `initialize` (`String`, `Hash`), a body
-    /// too big to expand — is left to the Ruby `Class#new`, which the
+    /// that needs a frame — is left to the Ruby `Class#new`, which the
     /// forwarding-hop exemption specializes into this unit anyway (so its
     /// `(...)` still binds without a rest `Array`). Emitting that case as
     /// a direct call to `initialize` here was measured at 4-13 % on the
@@ -2281,7 +1950,7 @@ impl<'a> JitContext<'a> {
     /// * the receiver is (provably, see the identity guard) the attached
     ///   class object;
     /// * `initialize` is an ISeq that binds those positionals without
-    ///   `ArgumentError`, and either folds away or expands into stores.
+    ///   `ArgumentError`, and either folds away or compiles frameless.
     ///
     /// The allocator need *not* be the stock one: a class with its own
     /// `alloc_func` (String, Array, Hash, …) keeps the runtime call
@@ -2365,16 +2034,13 @@ impl<'a> JitContext<'a> {
             return false;
         };
         // Decide the whole plan before emitting anything: both legs are
-        // all-or-nothing, and the allocation is already emitted by the time
-        // `expand_ivar_stores` would report a miss.
+        // all-or-nothing.
         enum InitPlan {
             /// A trivial body: nothing to emit at all.
             Fold,
             /// The constructor compiled as a frameless callee of this site,
             /// through its `initialize` twin (`CallSiteInfo::class_new_init`).
             Frameless(CallSiteId, ISeqId),
-            /// A plain constructor, expanded into the caller.
-            Stores(frameless::IvarStoreBody),
         }
 
         // Both legs consume the body itself, so they need an `initialize`
@@ -2413,30 +2079,15 @@ impl<'a> JitContext<'a> {
             {
                 InitPlan::Frameless(init_callid, init_iseq)
             }
-            // Not expandable, or not this shape at all (a native
-            // `initialize`, an `alias_method :initialize, :x=`): the Ruby
-            // `Class#new` handles it.
-            Some(init_iseq) => {
-                let Some(body) =
-                    frameless::ivar_store_body(&self.store, init_iseq).filter(|body| {
-                        pos_num == self.store[init_fid].params().total_positional_args()
-                            && self.store[class_id].is_object_ty_instance()
-                            && body.stores.iter().all(|&(name, _)| {
-                                self.store[class_id]
-                                    .get_ivarid(name)
-                                    .is_some_and(|id| id.is_inline())
-                            })
-                    })
-                else {
-                    return false;
-                };
-                InitPlan::Stores(body)
-            }
+            // Not this shape at all (a native `initialize`, an
+            // `alias_method :initialize, :x=`), or a body that needs a
+            // frame: the Ruby `Class#new` handles it.
+            Some(_) => return false,
             None => return false,
         };
 
         if !matches!(plan, InitPlan::Fold) {
-            // The store leg runs against the object this very instruction
+            // The body runs against the object this very instruction
             // allocates, so its slot must exist — and must not be one of
             // the argument slots it then reads, since the object lands in
             // `dst` *before* they run.
@@ -2539,99 +2190,7 @@ impl<'a> JitContext<'a> {
                     }
                 }
             }
-            InitPlan::Stores(body) => {
-                let dst = dst.unwrap();
-                let arg_slots: Vec<frameless::ArgSlot> = (0..pos_num)
-                    .map(|i| frameless::ArgSlot::Own(args + i))
-                    .collect();
-                // The constructor's return value is discarded by `new`, so
-                // the expansion writes no destination — `dst` keeps the
-                // object.
-                let ok = self.expand_ivar_stores(
-                    state,
-                    ir,
-                    CachedClass::from_class(class_id),
-                    dst,
-                    None,
-                    &body,
-                    &arg_slots,
-                );
-                // The plan was fully resolved above, so this cannot miss.
-                debug_assert!(ok);
-            }
         }
-        true
-    }
-
-    fn expand_ivar_stores(
-        &mut self,
-        state: &mut AbstractState,
-        ir: &mut AsmIr,
-        recv_class: CachedClass,
-        recv: SlotId,
-        dst: Option<SlotId>,
-        body: &frameless::IvarStoreBody,
-        arg_slots: &[frameless::ArgSlot],
-    ) -> bool {
-        // Only `RValue`s with the object layout have inline ivar slots at a
-        // fixed offset; anything else stores through the heap table, which
-        // needs `using_fpr` bookkeeping and a possible reallocation call.
-        if !self.store[recv_class.id()].is_object_ty_instance() {
-            return false;
-        }
-        // Resolve every slot *before* emitting anything, so a body that is
-        // only partly expandable emits nothing at all.
-        let mut plan = Vec::with_capacity(body.stores.len());
-        for &(name, param) in &body.stores {
-            // The ivar id is created by the first execution of this store,
-            // and `initialize` has necessarily run in the interpreter to get
-            // the caller this hot — so a miss here means the class reaching
-            // this site is not the one the body writes (a subclass whose own
-            // `new` has never run). Decline rather than recompile: the
-            // ordinary call is correct and this is only an optimization.
-            let Some(ivarid) = self.store[recv_class.id()].get_ivarid(name) else {
-                return false;
-            };
-            if !ivarid.is_inline() {
-                return false;
-            }
-            plan.push((ivarid, arg_slots[param as usize]));
-        }
-        state.load(ir, recv, GP::Rdi);
-        let deopt = ir.new_deopt(state);
-        ir.guard_frozen(deopt);
-        for (ivarid, src_slot) in plan {
-            // A caller-frame slot has no abstract-state proof here, so it
-            // keeps the barrier; an own slot elides it when the state
-            // proves the value immediate.
-            let (src, wb) = match src_slot {
-                frameless::ArgSlot::Own(slot) => {
-                    state.load(ir, slot, GP::Rax);
-                    (GP::Rax, !state.is_guarded_immediate(slot))
-                }
-                frameless::ArgSlot::Caller(slot) => {
-                    ir.push(AsmInst::LoadCallerSlot { slot, dst: GP::Rax });
-                    (GP::Rax, true)
-                }
-            };
-            // Re-materialize the base: an argument living in an FP register
-            // is boxed on the way out, and boxing is a call.
-            state.load(ir, recv, GP::Rdi);
-            ir.push(AsmInst::StoreIVarInline { src, ivarid, wb });
-        }
-        if let Some(dst) = dst {
-            // The body returns its last assignment's RHS.
-            match arg_slots[body.ret as usize] {
-                // Copying the slot (rather than reading it back) keeps an
-                // unboxed float unboxed.
-                frameless::ArgSlot::Own(slot) => state.copy_slot(ir, slot, dst),
-                frameless::ArgSlot::Caller(slot) => {
-                    ir.push(AsmInst::LoadCallerSlot { slot, dst: GP::Rax });
-                    state.def_rax2acc(ir, Some(dst));
-                }
-            }
-        }
-        state.unset_side_effect_guard();
         true
     }
 
@@ -5052,10 +4611,9 @@ mod tests {
         );
     }
 
-    /// Frame-free expansion of the leaf idiom
-    /// ([`frameless::leaf_expr_body`]): a counter, a reader, arithmetic on
-    /// an ivar and on a parameter, and a plain writer. Every one of these
-    /// runs in the caller with no frame, so the results have to match the
+    /// The leaf idiom as frameless callees: a counter, a reader,
+    /// arithmetic on an ivar and on a parameter, and a plain writer. Every
+    /// one of these runs in the caller with no frame, so the results have to match the
     /// interpreter exactly — including the values the guards send back to
     /// it.
     #[test]
