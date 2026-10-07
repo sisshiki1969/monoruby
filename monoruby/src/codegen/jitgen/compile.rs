@@ -617,6 +617,10 @@ impl<'a> JitContext<'a> {
                     // No poll, no call: the entry is transparent to the
                     // unfrozen proofs (a fresh `self`, `AsmInfo::self_fresh`).
                     self.restore_unfrozen(None);
+                    // The caller filled the window with `self` through rdi,
+                    // last (`AbstractState::fill_window`), and nothing since
+                    // has touched it.
+                    state.note_rdi_holds(ir, SlotId::self_());
                 }
             }
             TraceIr::LoopStart { .. } => {

@@ -315,7 +315,6 @@ impl AbstractState {
                 direct_filled.push(i);
             }
         }
-        self.fetch_to_slot(ir, callsite.recv, window(0));
         for i in 0..req {
             // A parameter handed over in a register leaves its slot
             // unwritten: the body binds it `F` and reads the register,
@@ -346,6 +345,14 @@ impl AbstractState {
             self.use_as_float_at(args + i);
             ir.float_arg_move(src, *dst);
         }
+        // `self`, through rdi and after everything that could call out:
+        // the body enters with rdi still holding it (nothing between here
+        // and its first instruction touches rdi — the frame shift and the
+        // fpr saves use other registers), and its entry notes that
+        // (`note_rdi_holds` in the frameless `InitMethod`), so the first
+        // use of `self` reads no slot.
+        self.load(ir, callsite.recv, GP::Rdi);
+        ir.push(AsmInst::RegToStack(GP::Rdi, window(0)));
     }
 
     /// `[dst] <- slot`, through rax; *dst* is a pseudo slot of this frame

@@ -439,6 +439,11 @@ impl AsmIr {
                 | AsmInst::GuardClassIn(GP::Rdi, ..)
                 | AsmInst::BrClassNe(GP::Rdi, ..)
                 | AsmInst::BrClassNotIn(GP::Rdi, ..) => (true, false),
+                // An inline ivar access addresses through rdi and writes
+                // only its destination (and scratch other than rdi); a
+                // store's write barrier may call out, which does not.
+                AsmInst::LoadIVarInline { dst, .. } if dst != GP::Rdi => (true, false),
+                AsmInst::StoreIVarInline { wb: false, .. } => (true, false),
                 _ => (false, false),
             };
             let len = self.inst.len();
@@ -854,7 +859,13 @@ impl AsmIr {
     }
 
     pub(crate) fn self2reg(&mut self, dst: GP) {
-        self.push(AsmInst::StackToReg(SlotId::self_(), dst));
+        // Skipped where *dst* is known to hold `self` already (a tracked
+        // register, loaded from its home and untouched since).
+        let slot = SlotId::self_();
+        if !self.reg_holds(dst, slot, GpSrc::Home) {
+            self.push(AsmInst::StackToReg(slot, dst));
+            self.set_reg_holds(dst, slot, GpSrc::Home);
+        }
     }
 
     pub(super) fn fpr_move(&mut self, src: FPReg, dst: FPReg) {
