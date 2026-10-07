@@ -1652,12 +1652,7 @@ impl<'a> JitContext<'a> {
         let res = f(self);
         self.swap_cond_sink(saved);
         if !matches!(res, Ok(CompileResult::Continue)) {
-            if self.cond_flags_pending() {
-                self.clear_cond_flags();
-            }
-            if let Some(sink) = sink {
-                self.take_condbr_done(sink.pos);
-            }
+            self.discard_cond_results();
         }
         res
     }

@@ -720,10 +720,9 @@ impl AbstractState {
         // for it), leaving the file empty for both successors.
         self.gp_regfile.invalidate(dst);
         self.flush_gp(ir);
-        match (imm, rhs_gp) {
-            (Some(imm), _) => ir.cmp_imm_flags(lhs_gp, imm),
-            (None, Some((rhs_gp, _))) => ir.cmp_flags(lhs_gp, rhs_gp),
-            (None, None) => unreachable!(),
+        match rhs_gp {
+            Some((rhs_gp, _)) => ir.cmp_flags(lhs_gp, rhs_gp),
+            None => ir.cmp_imm_flags(lhs_gp, imm.unwrap()),
         }
         // The temp is the branch's sole use; park a nil so any later
         // write-back of the dead slot is still a Value.

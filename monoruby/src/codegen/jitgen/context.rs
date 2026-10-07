@@ -3373,13 +3373,12 @@ impl<'a> JitContext<'a> {
 
     /// Take the flags left for `slot` in the frame being compiled, if any.
     pub(super) fn take_cond_flags(&self, slot: SlotId) -> Option<CondFlags> {
-        let pending = self.cond_flags.get()?;
-        if pending.slot == slot && pending.depth == self.stack_frame_len() {
-            self.cond_flags.set(None);
-            Some(pending.flags)
-        } else {
-            None
-        }
+        let pending = self
+            .cond_flags
+            .get()
+            .filter(|p| p.slot == slot && p.depth == self.stack_frame_len())?;
+        self.cond_flags.set(None);
+        Some(pending.flags)
     }
 
     /// Whether flags are pending in the frame being compiled.
@@ -3395,13 +3394,13 @@ impl<'a> JitContext<'a> {
         self.cond_flags.set(None);
     }
 
-    /// Forget whatever the producer of the installed sink's operand left for
-    /// its branch — flags or the per-arm mark — when its code was rolled back.
+    /// Forget whatever a producer left for its branch — flags or the per-arm
+    /// mark — when its code was rolled back or its block ended before the
+    /// branch. Nothing else can be pending then: a producer runs only right
+    /// after the previous one's branch consumed its results.
     pub(super) fn discard_cond_results(&mut self) {
         self.clear_cond_flags();
-        if let Some(sink) = self.cond_sink {
-            self.take_condbr_done(sink.pos);
-        }
+        self.condbr_done = None;
     }
 
     pub(super) fn set_condbr_done(&mut self, pos: BcIndex) {

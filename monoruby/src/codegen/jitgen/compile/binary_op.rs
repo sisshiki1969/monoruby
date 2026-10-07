@@ -916,6 +916,8 @@ impl<'a> JitContext<'a> {
         // Licence as everywhere: the nil arm bakes in `NilClass#==`/`===`,
         // so it is gated on and recorded against the basic-op pair.
         if let Some(callid) = fused_poly_callid
+            // The arms answer in the condition flags for the `CondBr` ahead.
+            && let Some(slot) = self.wants_cond_flags(dst)
             && matches!(binop, BinaryOp::Cmp(CmpKind::Eq | CmpKind::TEq))
             && self.pmc_recv_contains(callid, CachedClass::NIL)
             && self.pmc_recv_contains(callid, CachedClass::INTEGER)
@@ -953,22 +955,9 @@ impl<'a> JitContext<'a> {
             // nil's encoding; `===` on nil is the same test). Left in the
             // flags for the arm's branch.
             let nil_imm = crate::value::NIL_VALUE as i32;
-            match self.wants_cond_flags(dst) {
-                Some(slot) => {
-                    ir.cmp_imm_flags(GP::Rsi, nil_imm);
-                    narm.def_C(slot, Value::nil());
-                    self.set_cond_flags(slot, CondFlags::Int(CmpKind::Eq));
-                }
-                None => {
-                    ir.push(AsmInst::IntegerCmpImm {
-                        kind: CmpKind::Eq,
-                        dst: None,
-                        lhs: GP::Rsi,
-                        imm: nil_imm,
-                    });
-                    narm.def_rax2acc(ir, dst);
-                }
-            }
+            ir.cmp_imm_flags(GP::Rsi, nil_imm);
+            narm.def_C(slot, Value::nil());
+            self.set_cond_flags(slot, CondFlags::Int(CmpKind::Eq));
             self.end_arm(narm, ir, &merge, true);
 
             // Integer arm: the fused inline the mono path would have
@@ -1681,6 +1670,26 @@ mod tests {
             [res.tally.sort_by { |k, _| k.to_s },
              hit(nil, nil), inv(nil, nil), teq(nil, nil),
              hit(nil, 7.0), hit(7, 7.0), hit(1 << 70, 7)]
+            "#,
+        );
+    }
+
+    /// The nil/Integer peel whose Integer arm declines (a String argument
+    /// has no inline compare): the peel backs out, flags and all, and the
+    /// site takes the ordinary path.
+    #[test]
+    fn fused_nil_peel_declined_integer_arm() {
+        run_test(
+            r#"
+            def hit(prev, key)
+              if prev == key then :hit else :miss end
+            end
+            res = []
+            300.times do |n|
+              v = n % 3 == 0 ? nil : n
+              res << hit(v, "7")
+            end
+            [res.tally, hit(nil, nil), hit(7, 7)]
             "#,
         );
     }
