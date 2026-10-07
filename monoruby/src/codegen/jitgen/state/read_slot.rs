@@ -17,11 +17,22 @@ use super::*;
 pub(in crate::codegen::jitgen) struct DeoptPoint {
     pc: BytecodePtr,
     write_back: WriteBack,
+    /// The frame's `side_effect_guard` at the point: whether a frameless
+    /// callee may still hand its whole call back from here.
+    side_effect_free: bool,
 }
 
 impl DeoptPoint {
-    pub(super) fn new(pc: BytecodePtr, write_back: WriteBack) -> Self {
-        Self { pc, write_back }
+    pub(super) fn new(pc: BytecodePtr, write_back: WriteBack, side_effect_free: bool) -> Self {
+        Self {
+            pc,
+            write_back,
+            side_effect_free,
+        }
+    }
+
+    pub(in crate::codegen::jitgen) fn side_effect_free(&self) -> bool {
+        self.side_effect_free
     }
 
     pub(in crate::codegen::jitgen) fn pc(&self) -> BytecodePtr {
@@ -449,7 +460,7 @@ impl AbstractFrame {
     /// snapshot, minus the `side_exit` push.
     ///
     pub(in crate::codegen::jitgen) fn deopt_point(&self) -> DeoptPoint {
-        DeoptPoint::new(self.pc(), self.get_write_back())
+        DeoptPoint::new(self.pc(), self.get_write_back(), self.side_effect_guard())
     }
 
     #[allow(non_snake_case)]

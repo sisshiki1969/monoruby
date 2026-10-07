@@ -412,7 +412,11 @@ impl Codegen {
                             );
                         }
                         lir.push(LInst::SideExit {
-                            kind: LSideExitKind::Deopt { chain: key.2 },
+                            kind: if frame.frameless {
+                                LSideExitKind::Redo { recompile: None }
+                            } else {
+                                LSideExitKind::Deopt { chain: key.2 }
+                            },
                             pc: key.0,
                             wb: key.1.clone(),
                             entry: label.clone(),
@@ -439,10 +443,16 @@ impl Codegen {
                         );
                     }
                     lir.push(LInst::SideExit {
-                        kind: LSideExitKind::RecompileDeopt {
-                            reason,
-                            target,
-                            chain,
+                        kind: if frame.frameless {
+                            LSideExitKind::Redo {
+                                recompile: Some((reason, target)),
+                            }
+                        } else {
+                            LSideExitKind::RecompileDeopt {
+                                reason,
+                                target,
+                                chain,
+                            }
                         },
                         pc,
                         wb,
@@ -531,6 +541,40 @@ impl Codegen {
         if bytes > 0 {
             self.a64_sp_add(bytes as u32);
         }
+    }
+
+    /// The side exit of a frameless specialized callee: return `0` to the
+    /// call site, which re-executes the whole call in the interpreter. The
+    /// x86 twin is `Codegen::gen_frameless_redo`. A recompile exit keeps its
+    /// counter-gated recompile (with the same `BecamePolymorphic` gate as
+    /// `LSideExitKind::RecompileDeopt`); a recompile that fails is not
+    /// reported from here — the re-executed call meets it again.
+    fn a64_gen_frameless_redo(
+        &mut self,
+        pc: BytecodePtr,
+        entry: DestLabel,
+        recompile: Option<(RecompileReason, RecompileTarget)>,
+    ) {
+        self.jit.bind_label(entry);
+        let redo = self.jit.label();
+        if let Some((reason, target)) = recompile {
+            if reason == RecompileReason::BecamePolymorphic {
+                let poly_byte = pc.as_ptr() as u64 + 7;
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (poly_byte);
+                    ldrb w9, [x9];
+                    cbz w9, redo;
+                );
+            }
+            self.emit_recompile_deopt(target, &redo, None, reason);
+        }
+        monoasm_arm64!(&mut self.jit,
+        redo:
+            mov x0, #0;
+            mov sp, x29;
+            ldp x29, x30, [sp], #16;
+            ret;
+        );
     }
 
     /// Deopt handler: write all live Ruby values back to the LFP (so the frame
@@ -2012,6 +2056,7 @@ impl Codegen {
                 LSideExitKind::Error { chain } => {
                     self.a64_gen_handle_error(pc, &wb, entry, loop_jit_spill_bytes, base, chain)
                 }
+                LSideExitKind::Redo { recompile } => self.a64_gen_frameless_redo(pc, entry, recompile),
             },
             // Macro-ops (irreducible runtime-call shapes) are delegated to the
             // arch-neutral fallback, which dispatches to the per-arch `emit_*`.

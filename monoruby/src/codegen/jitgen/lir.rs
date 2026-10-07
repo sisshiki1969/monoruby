@@ -299,6 +299,14 @@ pub(in crate::codegen::jitgen) enum LSideExitKind {
         target: RecompileTarget,
         chain: u32,
     },
+    /// The side exit of a frameless specialized callee: return `0` to the
+    /// call site, which re-executes the whole call in the interpreter
+    /// (`Codegen::gen_frameless_redo`). The write-back is unused — the
+    /// callee has no frame to write it into. A recompile exit keeps its
+    /// counter-gated recompile.
+    Redo {
+        recompile: Option<(RecompileReason, RecompileTarget)>,
+    },
     /// Error handler: write back then jump to the raise/`handle_error` path.
     /// `chain` as on `Deopt` — an in-frame `rescue` resumes this frame in the
     /// interpreter, and an unwinding raise `ret`s through the (now rewritten)

@@ -10,6 +10,7 @@ mod unary_op;
 #[cfg(feature = "emit-cfg")]
 mod dump_cfg;
 mod frameless;
+mod frameless_call;
 mod index;
 mod loop_analysis;
 mod method_call;
@@ -117,6 +118,14 @@ impl<'a> JitContext<'a> {
         }
 
         self.backedge_branches();
+
+        // A frameless callee compiled something it cannot run without a
+        // frame: abandon it like any other failed compile, and the call
+        // site calls it the ordinary way.
+        if self.current_frame().frameless && self.current_frame().has_frameless_violation() {
+            self.discard_frame();
+            return Err(CompileError);
+        }
 
         // ④-b: a (possibly nested, specialized) compile is done — its
         // frame's unfrozen-slot proofs must not leak into the enclosing
@@ -583,7 +592,12 @@ impl<'a> JitContext<'a> {
                 // so this is a fully frame-consistent poll point that
                 // fires on every entry regardless of the caller
                 // (including the poll-free Rust invokers).
-                state.exec_gc(ir, false, pc + 1isize);
+                //
+                // A frameless callee has no frame to make consistent, and
+                // runs no loop and no call: its caller's own polls cover it.
+                if !self.in_frameless_frame() {
+                    state.exec_gc(ir, false, pc + 1isize);
+                }
             }
             TraceIr::LoopStart { .. } => {
                 state.flush_gp(ir);

@@ -1467,6 +1467,23 @@ impl Codegen {
                     },
                 );
             }
+            // Direct call into a frameless callee: no control frame, so no
+            // return address to register for the chain walk.
+            AsmInst::FramelessCall { entry } => {
+                let entry_label = frame.resolve_label(&mut self.jit, entry);
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.do_frameless_call(entry_label);
+                    },
+                );
+            }
+            AsmInst::FramelessRedo { deopt } => {
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("frameless redo"));
+                self.encode_linst(LInst::HandleError { error: deopt });
+            }
             // Specialized `yield`: build the block frame, then branch into the
             // inlined block entry (no patch point).
             AsmInst::YieldArrayExpand {
