@@ -309,3 +309,25 @@ fn class_new_frameless_initialize_frozen() {
         "#
     ));
 }
+
+#[test]
+fn class_new_frameless_initialize_implicit_self() {
+    // `new(args)` with `self` as the implicit receiver (a class-method
+    // constructor): the receiver slot is `self`, which cannot be rebound
+    // to the class constant the redo exit would otherwise carry. It is
+    // not the result slot either, so it needs no rebinding.
+    run_test_once(&format!(
+        r#"
+        class CNSelf
+          def initialize(a, b)
+            @v = a * b
+          end
+          def self.make(a) = new(a, 3)
+          def v = @v
+        end
+        r = []
+        {LOOP}.times {{ |i| r << CNSelf.make(i).v }}
+        r.last(3)
+        "#
+    ));
+}

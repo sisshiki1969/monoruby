@@ -2480,8 +2480,13 @@ impl<'a> JitContext<'a> {
         let using_fpr = state.get_using_fpr(ir);
         if let InitPlan::Frameless(init_callid, _) = plan {
             // The receiver is now known to be exactly that class object;
-            // the snapshot below is to carry it as such.
-            state.def_C(recv, self_module.as_val());
+            // the snapshot below is to carry it as such. `self` (an
+            // implicit-receiver `new(args)` in a class method) cannot be
+            // rebound, and need not be: it is never the result slot, so
+            // the allocation leaves it as it is.
+            if !recv.is_self() {
+                state.def_C(recv, self_module.as_val());
+            }
             // Where the frameless body hands the call back to: this
             // instruction, with the frame as it is *now* — the class in
             // the receiver slot, the arguments untouched, the result slot

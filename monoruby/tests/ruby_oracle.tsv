@@ -3286,6 +3286,7 @@ a34c4e369e6d5139f06cb9ce6026b999	42	class C\n          def self.class_method\n  
 a350f18bfa74eb691291c66f2ed106e8	11200072.0	def clamped(d)\n          return 0.0 if d < 1.0\n          160.0 / d\n    
 a359b845a5de697d94d846bfda30d830	14614	class C\n          def initialize\n            @a = [0.0, 1.0, 2.0]\n     
 a3618f8ad00f6c37b513a42900293bee	[[233], "Windows-1250", [234, 247, 241], "Ω≈±", [240, 210, 201, 215, 197, 212], "Привет", [146, 165, 225, 226], "абв"]	(a="é".encode("Windows-1250").bytes; b="é".encode("Windows-1250").encoding.name;
+a36cd547c1ea4f22ac7451d25987c484	[891, 894, 897]	class CNSelf\n          def initialize(a, b)\n            @v = a * b\n    
 a3921c92237d852a5bc1ad370ba61b79	["Enumerator::Yielder", true]	y = nil\n            Enumerator.new { |yy| y = yy; yy.yield 1 }.firs
 a3a980b1cd62d4aed339050d922dd977	[["foo.rb", nil], [1, nil, nil]]	__a = [];__a << (l = eval("caller_locations(0)[0]", nil, "foo.rb"); [l.path, l.a
 a3baab6cd54895307ab33a2e43c7a755	true	rng = Random.new(42)\n        a = rng.rand(100)\n        a.is_a?(Integer)
