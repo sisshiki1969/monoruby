@@ -1620,14 +1620,21 @@ impl<'a> JitContext<'a> {
     ///
     /// Reserve room in the current frame for the virtual frame of the
     /// inline callee *callee*, just compiled and popped: its whole local
-    /// area, from the outer word of its LFP header down to its last
-    /// spill slot (`total - PROLOGUE_OVERHEAD`), minus the one word of it
-    /// that overlaps the caller's own area (see
-    /// [`Self::inline_window_delta`]).
+    /// area below its (virtual) frame pointer, `total - PROLOGUE_OVERHEAD`
+    /// bytes, exactly what its own prologue would have reserved. The top
+    /// of that area is placed `RBP_LOCAL_FRAME - 8` bytes above where this
+    /// frame's spill region would otherwise begin (see
+    /// [`Self::inline_window_delta`]), so the spill region has to move down
+    /// by the whole area, not by the area minus the two control-frame words
+    /// at its top that a frameless body never writes: counting those out
+    /// (as this once did) put the callee's bottom word — its last spill
+    /// slot, or its last local — on top of the caller's first spill slot,
+    /// which a callee that spills then clobbered (seen as a wrong
+    /// `blurhash` under `stress-spill-pool`).
     ///
     pub(super) fn note_inline_window(&mut self, callee: SpecializedId) {
         let total = self.frame_sizes_or_panic(callee).total;
-        let bytes = total - PROLOGUE_OVERHEAD - 2 * 8;
+        let bytes = total - PROLOGUE_OVERHEAD;
         debug_assert_eq!(bytes % 16, 0);
         let frame = self.current_frame_mut();
         frame.window_bytes = frame.window_bytes.max(bytes);

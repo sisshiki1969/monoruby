@@ -310,3 +310,39 @@ fn frameless_window_in_toplevel_loop() {
         "#,
     );
 }
+
+#[test]
+fn frameless_callee_spills_below_the_callers_spills() {
+    // The shape of ruby-bench's blurhash: a block that keeps floats of
+    // its own and of the enclosing method live across an inline call
+    // whose body spills too (under `stress-spill-pool` every third float
+    // does). The callee's last spill slot is the bottom word of its
+    // window, which once sat on top of the caller's first spill slot and
+    // clobbered `basis` — the window must be the callee's whole local
+    // area, so the caller's spill region starts below it.
+    run_test_once(
+        r#"
+        def srgb(value)
+          v = value.to_f / 255
+          if v <= 0.04045
+            v / 12.92
+          else
+            ((v + 0.055) / 1.055) ** 2.4
+          end
+        end
+        def mul(w, h, rgb)
+          r = 0.0
+          h.times do |y|
+            y_coef = Math.cos(Math::PI * y / h)
+            w.times do |x|
+              basis = Math.cos(Math::PI * x / w) * y_coef
+              r += basis * srgb(rgb[x + y * w])
+            end
+          end
+          r
+        end
+        rgb = (0...(30 * 30)).map { |i| (i * 37) % 256 }
+        mul(30, 30, rgb)
+        "#,
+    );
+}
