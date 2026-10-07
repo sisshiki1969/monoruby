@@ -219,6 +219,36 @@ pub(crate) struct AsmIr {
     /// Stamped once from [`JitContext::chain_deopt_frames`] so the side-exit
     /// constructors are the single consultation point.
     chain_frames: u32,
+    /// What rdi is known to hold at the end of the stream: set by a GP load
+    /// of a slot into rdi, kept across class guards that only *test* rdi
+    /// (they fall through with it untouched), and valid only while
+    /// `inst.len()` still equals its `len` — any other instruction may
+    /// clobber rdi, and a `Label` may be reached with something else in it.
+    /// Lets [`AbstractFrame::load`] skip re-loading the receiver a call
+    /// site's guard has just loaded (the inline generators load it again).
+    rdi_holds: Option<RdiHolds>,
+}
+
+/// See [`AsmIr::rdi_holds`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RdiHolds {
+    slot: SlotId,
+    src: GpSrc,
+    len: usize,
+}
+
+/// Where a GP load of a slot took its value from. Two loads of the same slot
+/// with no instruction between them read the same value only if they read
+/// it from the same place: an abstract-only transition in between (say a
+/// slot that became a known constant) shows up as a different source.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::codegen::jitgen) enum GpSrc {
+    /// The slot's stack home (including a boxed `F` written back there).
+    Home,
+    /// A register the slot is resident in.
+    Reg(GP),
+    /// A compile-time constant.
+    Lit(Value),
 }
 
 impl std::ops::Index<AsmEvict> for AsmIr {
@@ -260,6 +290,36 @@ impl AsmIr {
             deferred_rest: false,
             needs_rest_array: false,
             chain_frames: ctx.chain_deopt_frames(),
+            rdi_holds: None,
+        }
+    }
+
+    ///
+    /// Does rdi already hold *slot*, read from *src*, at this point of the
+    /// stream? Only ever true in codegen mode.
+    ///
+    pub(in crate::codegen::jitgen) fn rdi_holds(&self, slot: SlotId, src: GpSrc) -> bool {
+        self.codegen_mode
+            && self.rdi_holds
+                == Some(RdiHolds {
+                    slot,
+                    src,
+                    len: self.inst.len(),
+                })
+    }
+
+    ///
+    /// Record that rdi holds *slot* (read from *src*) at this point of the
+    /// stream — right after loading it, or right after a `Label` every
+    /// incoming edge of which has it there.
+    ///
+    pub(in crate::codegen::jitgen) fn set_rdi_holds(&mut self, slot: SlotId, src: GpSrc) {
+        if self.codegen_mode {
+            self.rdi_holds = Some(RdiHolds {
+                slot,
+                src,
+                len: self.inst.len(),
+            });
         }
     }
 
@@ -316,7 +376,24 @@ impl AsmIr {
             if matches!(inst, AsmInst::GuardClass(..)) {
                 crate::codegen::jitgen::join_profile::count_guard_class();
             }
+            // A class test on rdi leaves it as it was on the fall-through
+            // path (both backends test or compare it in place, using scratch
+            // registers), so what rdi held before still holds after.
+            let keeps_rdi = matches!(
+                inst,
+                AsmInst::GuardClass(GP::Rdi, ..)
+                    | AsmInst::GuardClassIn(GP::Rdi, ..)
+                    | AsmInst::BrClassNe(GP::Rdi, ..)
+                    | AsmInst::BrClassNotIn(GP::Rdi, ..)
+            );
+            let len = self.inst.len();
             self.inst.push(inst);
+            if let Some(holds) = &mut self.rdi_holds
+                && keeps_rdi
+                && holds.len == len
+            {
+                holds.len += 1;
+            }
         }
     }
 
@@ -452,6 +529,7 @@ impl AsmIr {
         ),
     ) {
         self.inst.truncate(inst);
+        self.rdi_holds = None;
         self.side_exit.truncate(side_exit);
         #[cfg(feature = "deopt")]
         self.created_at.truncate(side_exit);

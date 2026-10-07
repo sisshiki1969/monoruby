@@ -128,6 +128,17 @@ pub(in crate::codegen::jitgen) enum GpLoad {
 }
 
 impl GpLoad {
+    /// Where this load reads the slot's value from.
+    fn src(&self) -> GpSrc {
+        match self {
+            GpLoad::FprBox(..) | GpLoad::DynVarAlias(..) | GpLoad::Stack(..) => GpSrc::Home,
+            GpLoad::Lit(v, _) => GpSrc::Lit(*v),
+            GpLoad::FromGp(src, _) => GpSrc::Reg(*src),
+        }
+    }
+}
+
+impl GpLoad {
     fn emit(self, ir: &mut AsmIr) {
         match self {
             GpLoad::FprBox(fpr, slot, dst) => {
@@ -281,9 +292,40 @@ impl AbstractFrame {
     /// ### panic
     /// - if *slot* is V or None.
     ///
+    /// A load into rdi is skipped when rdi already holds *slot* from the
+    /// same source with nothing emitted since but class tests on rdi — the
+    /// shape of a call site's receiver guard followed by an inline
+    /// generator that loads the receiver again (see [`AsmIr::rdi_holds`]).
+    ///
     pub(crate) fn load(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP) {
         let g = self.load_state(slot, dst);
-        ir.gp_load(g);
+        if dst == GP::Rdi {
+            let src = g.src();
+            if !ir.rdi_holds(slot, src) {
+                ir.gp_load(g);
+                ir.set_rdi_holds(slot, src);
+            }
+        } else {
+            ir.gp_load(g);
+        }
+    }
+
+    ///
+    /// Note that rdi holds *slot* right here — after a `Label` all of whose
+    /// incoming edges carry it in rdi — so a following [`Self::load`] of it
+    /// into rdi is skipped. A slot that would need boxing is not noted.
+    ///
+    pub(in crate::codegen::jitgen) fn note_rdi_holds(&self, ir: &mut AsmIr, slot: SlotId) {
+        let src = match self.mode(slot) {
+            LinkMode::C(v) => GpSrc::Lit(v),
+            LinkMode::Sf(_, _) | LinkMode::S(_) => match self.gp_regfile.reg_of(slot) {
+                Some(r) => GpSrc::Reg(r),
+                None => GpSrc::Home,
+            },
+            LinkMode::MaybeNone => GpSrc::Home,
+            LinkMode::F(_) | LinkMode::V | LinkMode::None => return,
+        };
+        ir.set_rdi_holds(slot, src);
     }
 
     ///
