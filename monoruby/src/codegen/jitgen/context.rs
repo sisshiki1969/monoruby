@@ -1768,7 +1768,7 @@ impl<'a> JitContext<'a> {
         self.stack_frame.len()
     }
 
-    fn caller_pos(&self) -> Option<usize> {
+    pub(super) fn caller_pos(&self) -> Option<usize> {
         self.stack_frame.len().checked_sub(2)
     }
 

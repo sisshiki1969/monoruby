@@ -665,6 +665,14 @@ impl Codegen {
     /// `gen_write_back_for_deopt`, including the D1 deferred forwarding-rest
     /// materialization, which runs last (see `a64_gen_forward_rest_materialize`).
     fn a64_gen_write_back_for_deopt(&mut self, wb: &WriteBack, base: usize) {
+        // GP residents first: the fpr and literal stores below may use the
+        // rax register as scratch, and it may itself be a resident (a call
+        // result left in place, `def_rax2gp`).
+        let lfp = GP::R14.a64().0; // x22
+        for (reg, slot) in &wb.gp {
+            let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+            self.a64_frame_store(reg.a64().0, lfp, off);
+        }
         // Spill each live FP-pool register to its slot(s) as a boxed Float
         // Value, so the interpreter sees the up-to-date float after the deopt.
         for (fpr, slots) in &wb.fpr {
@@ -672,16 +680,11 @@ impl Codegen {
                 self.emit_fpr_to_stack(*fpr, *slot, base);
             }
         }
-        let lfp = GP::R14.a64().0; // x22
         for (v, slot) in &wb.literal {
             self.a64_store_imm_to_slot(v.id(), *slot, lfp);
         }
         for slot in &wb.void {
             self.a64_store_imm_to_slot(NIL_VALUE as u64, *slot, lfp);
-        }
-        for (reg, slot) in &wb.gp {
-            let off = slot.0 as u32 * 8 + LFP_SELF as u32;
-            self.a64_frame_store(reg.a64().0, lfp, off);
         }
         // D1: materialize deferred forwarding-rest arrays. Runs last so the
         // literal loop above has already written the `dst` slot (mode `C(nil)`),

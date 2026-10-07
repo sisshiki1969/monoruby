@@ -128,6 +128,17 @@ pub(in crate::codegen::jitgen) enum GpLoad {
 }
 
 impl GpLoad {
+    /// Where this load reads the slot's value from.
+    fn src(&self) -> GpSrc {
+        match self {
+            GpLoad::FprBox(..) | GpLoad::DynVarAlias(..) | GpLoad::Stack(..) => GpSrc::Home,
+            GpLoad::Lit(v, _) => GpSrc::Lit(*v),
+            GpLoad::FromGp(src, _) => GpSrc::Reg(*src),
+        }
+    }
+}
+
+impl GpLoad {
     fn emit(self, ir: &mut AsmIr) {
         match self {
             GpLoad::FprBox(fpr, slot, dst) => {
@@ -281,9 +292,32 @@ impl AbstractFrame {
     /// ### panic
     /// - if *slot* is V or None.
     ///
+    /// A load into rdi or rax is skipped when the register already holds
+    /// *slot* from the same source with nothing emitted since that could
+    /// change it — a call site's receiver guard followed by an inline
+    /// generator that loads the receiver again, or a `ret` of a result just
+    /// stored from rax (see [`AsmIr::reg_holds`]).
+    ///
     pub(crate) fn load(&mut self, ir: &mut AsmIr, slot: SlotId, dst: GP) {
         let g = self.load_state(slot, dst);
-        ir.gp_load(g);
+        let src = g.src();
+        if !ir.reg_holds(dst, slot, src) {
+            ir.gp_load(g);
+            ir.set_reg_holds(dst, slot, src);
+        }
+    }
+
+    ///
+    /// Note that rdi holds *slot* right here — after a `Label` all of whose
+    /// incoming edges carry it in rdi — so a following [`Self::load`] of it
+    /// into rdi is skipped. Only a slot held in its stack home or a resident
+    /// register is noted.
+    ///
+    pub(in crate::codegen::jitgen) fn note_rdi_holds(&self, ir: &mut AsmIr, slot: SlotId) {
+        if matches!(self.mode(slot), LinkMode::S(_) | LinkMode::Sf(_, _)) {
+            let src = self.gp_regfile.reg_of(slot).map_or(GpSrc::Home, GpSrc::Reg);
+            ir.set_reg_holds(GP::Rdi, slot, src);
+        }
     }
 
     ///

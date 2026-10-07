@@ -342,6 +342,8 @@ impl<'a> JitContext<'a> {
             ));
             ir.deopt(&entry);
             ir.push(AsmInst::Label(not_dropped));
+            // Reached only from the class test, which leaves rdi alone.
+            entry.note_rdi_holds(ir, recv);
         }
 
         // The chain tests each arm's class set in turn and the *last* arm's
@@ -362,6 +364,9 @@ impl<'a> JitContext<'a> {
             let last = i + 1 == groups.len();
             if let Some(miss) = miss.take() {
                 ir.push(AsmInst::Label(miss));
+                // Only the previous arm's class test branches here, and it
+                // leaves the receiver in rdi.
+                entry.note_rdi_holds(ir, recv);
             }
             let mut arm = entry.clone();
             if last && let Some(residual) = residual {
@@ -451,6 +456,7 @@ impl<'a> JitContext<'a> {
         }
         if let Some(residual) = residual {
             ir.push(AsmInst::Label(residual));
+            entry.note_rdi_holds(ir, recv);
             let mut rest = entry.clone();
             self.generic_send_arm(&mut rest, ir, callid);
             self.end_arm(rest, ir, &merge, false);
@@ -463,6 +469,39 @@ impl<'a> JitContext<'a> {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// Every arm after the first is entered at a label only the previous
+    /// arm's class test branches to, so the receiver is still in rdi there
+    /// and the arm's guard and inline generator reuse it rather than reload
+    /// it. The generators read the receiver raw out of rdi, so a wrong reuse
+    /// shows up as a wrong answer — check each arm, the residual of an
+    /// overflowed site, and a class arriving after warmup.
+    #[test]
+    fn pic_arms_reuse_receiver_in_rdi() {
+        run_test(
+            r#"
+            class Zz; def initialize(v) = @v = v; def zero? = @v; def even? = !@v; end
+            class Yy; def zero? = :yy; def even? = :yy; end
+            def z(x) = (x.zero? ? 1 : 2)
+            def e(x) = x.even?
+            vals = [0, 1, 0.0, 2.5, Zz.new(true), Zz.new(false), Yy.new]
+            res = []
+            300.times { |i| v = vals[i % 7]; res << z(v) << e(v.is_a?(Float) ? 4 : v) }
+            class Xx; def zero? = :xx; def even? = :xx; end
+            [res.tally.sort_by(&:to_s), z(Xx.new), e(Xx.new), z(0), e(7), z(0.0)]
+            "#,
+        );
+        run_test(
+            r#"
+            classes = (1..6).map { |i| Class.new { define_method(:nil?) { i } } }
+            vals = classes.map(&:new) + [nil, 3]
+            def n(x) = (x.nil? ? :t : x.nil?)
+            res = []
+            400.times { |i| res << n(vals[i % 8]) }
+            res.tally.sort_by(&:to_s)
+            "#,
+        );
+    }
 
     /// A site whose receiver classes resolve to *different* bodies — the case
     /// the class-set guard cannot take. Each class must dispatch its own
