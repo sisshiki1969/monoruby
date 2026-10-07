@@ -460,6 +460,30 @@ mod tests {
         );
     }
 
+    /// A polymorphic `KS[i].new` site gets one PIC arm per receiver class,
+    /// each emitting its construction inline: every arm must build its own
+    /// class, pick up a later `initialize` redefinition in one class only,
+    /// and still raise for a singleton class reaching the site.
+    #[test]
+    fn class_new_inline_polymorphic() {
+        run_test_once(
+            r#"
+        class Q1; def initialize(a, b); @a = a; @b = b; end; def v; [self.class.to_s, @a, @b]; end; end
+        class Q2 < Q1; end
+        class Q3 < Q1; def initialize(a, b); @a = b; @b = a; end; end
+        class Q4 < Q1; end
+        ks = [Q1, Q2, Q3, Q4]
+        res = []
+        40.times { |i| res << ks[i & 3].new(i, 1).v }
+        class Q2; def initialize(a, b); @a = :redef; @b = b; end; end
+        40.times { |i| res << ks[i & 3].new(i, 1).v }
+        ks[3] = Q4.new(0, 0).singleton_class
+        res << (begin; 40.times { |i| ks[i & 3].new(i, 1) }; rescue TypeError => e; e.message; end)
+        res
+        "#,
+        );
+    }
+
     /// Shapes the frame-free path must decline rather than mis-compile: a
     /// constructor with a block, with keywords, with a splat, one that
     /// calls `super`, and a class whose allocator is not the stock object
