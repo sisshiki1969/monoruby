@@ -81,6 +81,10 @@ impl Codegen {
             mov x9, (f);
             blr x9;
             ldr x30, [sp], #16;
+            // The call clobbered x0; the fall-through path leaves `self`
+            // in it, and a frameless callee's entry relies on that
+            // (`note_rdi_holds` in the frameless `InitMethod`).
+            ldur x0, [x(lfp), #(-(LFP_SELF as i32))];
             exit:
         );
     }

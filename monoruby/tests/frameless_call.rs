@@ -346,3 +346,32 @@ fn frameless_callee_spills_below_the_callers_spills() {
         "#,
     );
 }
+
+#[test]
+fn frameless_entry_extends_the_ivar_table() {
+    // A frameless callee enters with `self` in rdi (`note_rdi_holds`), and
+    // its `Preparation` may have to grow the receiver's heap ivar table on
+    // the way: that cold path calls out, and must put `self` back in rdi
+    // before the body's first heap ivar load addresses through it.
+    run_test(
+        r#"
+        class C
+          def initialize(full)
+            if full
+              40.times { |i| instance_variable_set(:"@v#{i}", i) }
+              @h = 7
+            end
+          end
+          def h = @h
+          def g = @v30
+        end
+        def f(o) = o.h
+        def f2(o) = o.g
+        res = []
+        o = C.new(true)
+        30.times { res << f(o) << f2(o) }
+        30.times { res << f(C.new(false)) << f2(C.new(false)) }
+        res
+        "#,
+    );
+}

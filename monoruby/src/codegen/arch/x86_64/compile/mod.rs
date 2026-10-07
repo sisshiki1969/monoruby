@@ -2405,6 +2405,10 @@ impl Codegen {
             fail:
                 movq rax, (extend_ivar);
                 call rax;
+                // The call clobbered rdi; the fall-through path leaves
+                // `self` in it, and a frameless callee's entry relies on
+                // that (`note_rdi_holds` in the frameless `InitMethod`).
+                movq rdi, [r14 - (LFP_SELF)];
                 jmp exit;
             );
             self.jit.select_page(0);
