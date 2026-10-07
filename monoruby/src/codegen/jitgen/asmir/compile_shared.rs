@@ -592,6 +592,9 @@ impl Codegen {
             // `MethodRet` sets the resume PC then returns through the
             // method-return path; `BlockBreak` does the same through the
             // block-break path (a non-local `break` out of a block).
+            // An inline callee has no frame of its own to leave: its `Ret`
+            // jumps to the continuation of the `InlineCall` it runs under.
+            AsmInst::Ret if frame.frameless => self.encode_linst(LInst::InlineRet),
             AsmInst::Ret => self.encode_linst(LInst::Ret {
                 // Only a handler-carrying iseq can ever own a parked
                 // deferral at its own `Ret` (#1186) — e.g. an OSR'd loop
@@ -743,6 +746,14 @@ impl Codegen {
             // Method prologue: establish fp/lr, reserve the local frame, nil-fill
             // non-argument locals (aarch64 bails if the frame exceeds the 12-bit
             // sub-sp immediate).
+            // An inline callee's frame is the window its caller filled, with
+            // the frame pointer and the LFP already moved into it
+            // (`InlineCall`): no prologue. Its non-argument locals are not
+            // nil-filled either — the abstract state binds them to `nil`
+            // and nothing reads a slot it has not written, since the body
+            // has no safepoint to scan the window and no exit that writes
+            // it back.
+            AsmInst::Init { .. } if frame.frameless => {}
             AsmInst::Init {
                 info,
                 prologue_offset,
@@ -1467,23 +1478,29 @@ impl Codegen {
                     },
                 );
             }
-            // Direct call into a frameless callee: no control frame, so no
-            // return address to register for the chain walk.
-            AsmInst::FramelessCall { entry } => {
-                let entry_label = frame.resolve_label(&mut self.jit, entry);
+            // The body of a frameless callee, emitted here inside the caller's
+            // (`Codegen::gen_inline_call`). A callee side exit lands on the
+            // caller's deopt at this call.
+            AsmInst::InlineCall {
+                spec_id,
+                delta,
+                redo,
+                using_fpr,
+            } => {
+                let redo = self.deopt_label(labels, redo, DeoptCause::Static("inline redo"));
                 self.lower_via_inline(
                     store,
                     labels,
                     frame.base_stack_offset,
-                    move |cg, _, _, _| {
-                        cg.do_frameless_call(entry_label);
+                    move |cg, store, _, _| {
+                        cg.gen_inline_call(store, spec_id, delta, redo, using_fpr, class_version);
                     },
                 );
             }
-            AsmInst::FramelessRedo { deopt } => {
-                let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("frameless redo"));
-                self.encode_linst(LInst::HandleError { error: deopt });
-            }
+            AsmInst::U64ToStack(imm, slot) => self.encode_linst(LInst::StoreImm {
+                imm,
+                mem: LMem::Slot(slot),
+            }),
             // Specialized `yield`: build the block frame, then branch into the
             // inlined block entry (no patch point).
             AsmInst::YieldArrayExpand {
@@ -2165,6 +2182,9 @@ impl Codegen {
             }
             LInst::Ret { check_deferred } => {
                 self.emit_ret(check_deferred);
+            }
+            LInst::InlineRet => {
+                self.emit_inline_ret();
             }
             LInst::MethodRet {
                 pc,

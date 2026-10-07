@@ -2288,24 +2288,30 @@ pub(super) enum AsmInst {
         evict: AsmEvict,
     },
     ///
-    /// Call a frameless specialized callee (`AsmInfo::frameless`): point
-    /// the LFP at the callee's local frame and call, with no control frame
-    /// pushed. rax is the callee's return value, or 0 when it handed the
-    /// call back ([`AsmInst::FramelessRedo`]).
+    /// Run a frameless specialized callee (`AsmInfo::frameless`) inline:
+    /// its body (`Codegen::inline_bodies[spec_id]`) is emitted right here,
+    /// with the native frame pointer and the LFP moved `delta` bytes down
+    /// into the window the caller reserved for it, so the callee's slots,
+    /// header and spills are addressed exactly as they would be in a frame
+    /// of its own. The caller's live fprs (`using_fpr`, saved before the
+    /// window was filled) are restored on both ways out: the callee's
+    /// `Ret` lands on the continuation with rax the return value (or xmm1
+    /// the raw float), and every side exit of the callee lands on `redo`,
+    /// the caller's deopt at this very call.
     ///
     /// ### destroy
     /// - caller save registers
     ///
-    FramelessCall {
-        entry: JitLabel,
+    InlineCall {
+        spec_id: super::context::SpecializedId,
+        delta: i32,
+        redo: AsmDeopt,
+        using_fpr: UsingFpr,
     },
-    ///
-    /// Deoptimize to the call instruction when the frameless callee just
-    /// called returned 0: the interpreter then performs the whole call.
-    ///
-    FramelessRedo {
-        deopt: AsmDeopt,
-    },
+    /// `[slot] <- imm`, any 64-bit word: the header words of an inline
+    /// callee's window (`0` and the callee's `Meta`), which `LitToStack`
+    /// cannot write since they are not `Value`s.
+    U64ToStack(u64, SlotId),
     /// Store the call-site bytecode pc into the outgoing cont-frame
     /// slot (`[rsp]` / `[sp]` == the callee frame's CFP+24, the slot
     /// Kernel#caller reads). The 16-byte cont-frame region itself is
@@ -3740,7 +3746,11 @@ impl Codegen {
             self.encode_linst(inst);
         }
 
-        if entry.is_some() && exit.is_some() {
+        // An outlined bridge is cold code — except in an inline callee,
+        // whose return segments are its only way to the continuation and
+        // run on every call: those stay on the hot page.
+        let cold = entry.is_some() && exit.is_some() && !frame.frameless;
+        if cold {
             self.encode_linst(LInst::SelectPage(1));
         }
 
@@ -3786,7 +3796,7 @@ impl Codegen {
                 jmp exit;
             }
         }
-        if entry.is_some() && exit.is_some() {
+        if cold {
             self.encode_linst(LInst::SelectPage(0));
         }
     }

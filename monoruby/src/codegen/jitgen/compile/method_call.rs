@@ -2660,7 +2660,7 @@ impl<'a> JitContext<'a> {
         } else {
             JitArgumentInfo::default()
         };
-        let float_args = self.plan_float_args(state, &mut args_info, fid, callid);
+        let float_args = self.plan_float_args(state, &mut args_info, fid, callid, frameless);
         // What this frame is holding as a constant on the way in. The
         // callee's compile may take some of those claims away — its block
         // stores into our frame, and `store_dynvar` says so — and a claim
@@ -2755,6 +2755,10 @@ impl<'a> JitContext<'a> {
             }
         }
         if frameless {
+            // The callee's body runs in a window of this frame: reserve it,
+            // and find where it is.
+            self.note_inline_window(spec_id);
+            let delta = self.inline_window_delta();
             let arg_hints = state.peek_gp_residents();
             let live = state.get_using_fpr(ir);
             let using_fpr = frozen_using_fpr;
@@ -2765,7 +2769,8 @@ impl<'a> JitContext<'a> {
                 &self.store,
                 callid,
                 fid,
-                entry,
+                spec_id,
+                delta,
                 using_fpr,
                 &arg_hints,
                 &float_args,
@@ -2997,7 +3002,11 @@ impl<'a> JitContext<'a> {
     /// the caller's slots out from under it — but only its *locals*
     /// (`AbstractState::barrier_outer_claims` walks `locals()`, and the
     /// kept outer views it drains are of locals too), so a temp still
-    /// holds at `set_arguments` what it held here.
+    /// holds at `set_arguments` what it held here. A frameless callee
+    /// cannot widen anything (no block, no frame-pushing call survives its
+    /// compile), so its call site may pass a local as well — and, having
+    /// no safepoint, leaves the register-passed parameter's slot unwritten
+    /// (`AbstractState::fill_window`).
     ///
     /// Everything from the call's `fpr_save_cont` to the callee's entry
     /// poll preserves the pool: the frame setup and the call write no fpr,
@@ -3012,6 +3021,10 @@ impl<'a> JitContext<'a> {
         args_info: &mut JitArgumentInfo,
         callee_fid: FuncId,
         callid: CallSiteId,
+        // The callee is compiled frameless (`compile/frameless_call.rs`):
+        // a body with no block and no frame-pushing call, which leaves
+        // the caller's locals alone, so they can travel in a register too.
+        frameless: bool,
     ) -> Vec<(SlotId, FPReg)> {
         let Some(modes) = args_info.0.as_mut() else {
             return vec![];
@@ -3036,7 +3049,7 @@ impl<'a> JitContext<'a> {
         // one would box on the way in.
         let fpr_resident =
             |slot: SlotId| matches!(state.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _));
-        if fpr_resident(cs.recv) || cs.args < state.temp_start() {
+        if fpr_resident(cs.recv) || (!frameless && cs.args < state.temp_start()) {
             return vec![];
         }
         let sources: Vec<(SlotId, FPReg)> = (0..cs.pos_num)

@@ -163,7 +163,7 @@ impl JitArgumentInfo {
 }
 
 #[derive(Debug)]
-pub(super) struct AsmInfo {
+pub(in crate::codegen) struct AsmInfo {
     ///
     /// Type of compilation for this frame.
     ///
@@ -624,6 +624,17 @@ pub(super) struct JitStackFrame {
     base_stack_offset: usize,
 
     ///
+    /// The bytes this frame's native frame grows by to hold the virtual
+    /// frames of its inline (frameless) callees: the largest window any of
+    /// them needs ([`JitContext::note_inline_window`]). The window sits
+    /// right below the slot area, where the spill region would otherwise
+    /// begin, so the frame's own spills move down by this much
+    /// ([`JitContext::pop_frame`]). Inline callees of this frame's inline
+    /// callees are inside *their* windows, which their totals account for.
+    ///
+    window_bytes: usize,
+
+    ///
     /// Unique identifier assigned by [`JitContext::push_frame`]. After
     /// the frame is popped via [`JitContext::pop_frame`], the
     /// finalised `stack_offset` is recorded in
@@ -853,6 +864,7 @@ impl JitStackFrame {
             return_context: HashMap::default(),
             stack_offset,
             base_stack_offset: stack_offset,
+            window_bytes: 0,
             // Sentinel — overwritten by [`JitContext::push_frame`].
             specialized_id: SpecializedId(usize::MAX),
             had_deopt: false,
@@ -892,6 +904,7 @@ impl JitStackFrame {
             return_context: HashMap::default(),
             stack_offset: self.stack_offset,
             base_stack_offset: self.base_stack_offset,
+            window_bytes: self.window_bytes,
             // Preserve the source frame's id — the dup is used by
             // [`JitContext::loop_analysis`] which performs read-only
             // walks over a snapshot of the stack and never reaches
@@ -1571,7 +1584,12 @@ impl<'a> JitContext<'a> {
         // Rust runtime helpers that emit movapd) keeps a 16-byte
         // aligned rsp under the SysV x86-64 ABI.
         let spill_bytes = (spill_count * 8 + 15) & !15;
-        frame.stack_offset += spill_bytes;
+        // The inline callees' window comes first, right below the slot
+        // area; the spill region follows it. `base` names where the spill
+        // region begins for every spill-addressing lowering (`PhysMap`),
+        // so it is the shifted value that is handed on from here.
+        let base = frame.base_stack_offset + frame.window_bytes;
+        frame.stack_offset += frame.window_bytes + spill_bytes;
         // Record the finalised frame sizes for the resolve pass.
         // After this point, `frame.stack_offset` will not be modified
         // (the `+=`/`-=` adjustments inside `specialized_compile`
@@ -1581,7 +1599,7 @@ impl<'a> JitContext<'a> {
             frame.specialized_id,
             FrameSizes {
                 total: frame.stack_offset,
-                base: frame.base_stack_offset,
+                base,
             },
         );
         // Stamp the JIT-owned spill bytes onto the AsmInfo so that
@@ -1592,11 +1610,43 @@ impl<'a> JitContext<'a> {
         if matches!(frame.asm_info.jit_type, JitType::Loop(_)) {
             frame.asm_info.loop_jit_spill_bytes = frame.stack_offset - frame.base_stack_offset;
         }
-        // Mirror `base_stack_offset` onto the AsmInfo so that
+        // Mirror the (window-shifted) spill base onto the AsmInfo so that
         // codegen-side spill-aware lowerings can compute spill slot
         // offsets directly.
-        frame.asm_info.base_stack_offset = frame.base_stack_offset;
+        frame.asm_info.base_stack_offset = base;
         frame
+    }
+
+    ///
+    /// Reserve room in the current frame for the virtual frame of the
+    /// inline callee *callee*, just compiled and popped: its whole local
+    /// area, from the outer word of its LFP header down to its last
+    /// spill slot (`total - PROLOGUE_OVERHEAD`), minus the one word of it
+    /// that overlaps the caller's own area (see
+    /// [`Self::inline_window_delta`]).
+    ///
+    pub(super) fn note_inline_window(&mut self, callee: SpecializedId) {
+        let total = self.frame_sizes_or_panic(callee).total;
+        let bytes = total - PROLOGUE_OVERHEAD - 2 * 8;
+        debug_assert_eq!(bytes % 16, 0);
+        let frame = self.current_frame_mut();
+        frame.window_bytes = frame.window_bytes.max(bytes);
+    }
+
+    ///
+    /// How far below this frame's native frame pointer an inline callee's
+    /// virtual frame pointer sits (`AsmInst::InlineCall::delta`).
+    ///
+    /// The callee's local area starts `RBP_LOCAL_FRAME - 8` bytes under
+    /// its frame pointer (the outer word at the top of its LFP header) and
+    /// is placed so that it begins exactly where this frame's spill region
+    /// would have — `base - 24` below the frame pointer, the home of the
+    /// first spill slot (`PhysMap`) — which `pop_frame` moves down by the
+    /// window.
+    ///
+    pub(super) fn inline_window_delta(&self) -> i32 {
+        let base = self.current_frame().base_stack_offset;
+        (base - 24 - (RBP_LOCAL_FRAME - 8) as usize) as i32
     }
 
     pub(super) fn current_frame_id(&self) -> SpecializedId {
@@ -2714,8 +2764,10 @@ impl<'a> JitContext<'a> {
             // list, the frame's own sizes. All codegen, and the memo is
             // consulted only where no code is emitted. `jit_type` and
             // `ivar_heap_accessed` are read out of it through the
-            // `Deref` below.
+            // `Deref` below. `window_bytes` is a frame size too, grown
+            // only by inline callees this frame emits.
             asm_info: _,
+            window_bytes: _,
             // The frame's identity, carried by
             // [`spec_memo::SpecCallSite::chain`]. `callid` is set and
             // cleared around the call by `specialized_compile`, so at
@@ -3922,11 +3974,6 @@ impl<'a> JitContext<'a> {
                 let src = float_ret_src(inner.mode(ret_slot))
                     .expect("float_return edge carries no raw f64");
                 ir.float_ret_store(src);
-                // A frameless caller reads rax == 0 as "redo the call";
-                // any nonzero word says this is a real return.
-                if frame.frameless {
-                    ir.lit2reg(Value::nil(), GP::Rax);
-                }
             } else {
                 inner.load(&mut ir, ret_slot, GP::Rax);
             }

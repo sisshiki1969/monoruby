@@ -30,7 +30,7 @@ use trace_ir::*;
 
 pub mod asmir;
 mod compile;
-mod context;
+pub(in crate::codegen) mod context;
 mod definition;
 pub(crate) mod deopt_log;
 #[allow(dead_code)]
@@ -820,6 +820,17 @@ impl Codegen {
                     class_version_label: class_version.clone(),
                 });
             }
+            // A frameless callee is not a function of its own: its body is
+            // emitted inside this frame's, where the `InlineCall` that runs
+            // it is lowered (`gen_inline_call`). It still took its patch
+            // entry above, so the indices the frame's exits were compiled
+            // with (`RecompileTarget::Specialized`) stay in step.
+            if specialized_info.frameless {
+                let id = specialized_info.specialized_id;
+                let prev = self.inline_bodies.insert(id, (specialized_info, root));
+                assert!(prev.is_none(), "inline body {id:?} parked twice");
+                continue;
+            }
             let entry = frame.resolve_label(&mut self.jit, specialized_entry);
             self.gen_machine_code(
                 specialized_info,
@@ -964,8 +975,13 @@ impl Codegen {
         // decides.
         #[cfg(target_arch = "aarch64")]
         self.a64_drain_side_exits(&mut frame, !had_outline_bridges && fallthrough_in);
+        // The pending jump tables are the whole unit's, and an inline body
+        // ends with its caller's still referencing blocks not yet emitted;
+        // the outermost frame patches them all.
         #[cfg(target_arch = "aarch64")]
-        self.a64_patch_jump_tables();
+        if self.inline_ctx.is_empty() {
+            self.a64_patch_jump_tables();
+        }
         #[cfg(not(target_arch = "aarch64"))]
         let _ = had_outline_bridges;
 
@@ -973,8 +989,11 @@ impl Codegen {
             self.specialized_base = self.specialized_info.len();
         }
 
+        // An inline body is listed as part of its caller's code (and a
+        // `finalize` here would meet the caller's unresolved forward
+        // branches).
         #[cfg(feature = "emit-asm")]
-        if self.startup_flag {
+        if self.startup_flag && self.inline_ctx.is_empty() {
             // Resolve branch displacements so the listing shows real targets
             // (the real `finalize` happens in `jit_compile` / the outer caller).
             self.jit.finalize();
@@ -994,6 +1013,125 @@ impl Codegen {
             let fid = store[iseq_id].func_id();
             let desc = format!("JIT:<{}>", store.func_description(fid));
             self.perf_info(pair, &desc);
+        }
+    }
+}
+
+impl Codegen {
+    ///
+    /// Emit the body of the frameless callee *spec_id* in place
+    /// (`AsmInst::InlineCall`). The caller has filled the callee's window
+    /// (`AbstractState::fill_window`) and saved its live fprs
+    /// (`using_fpr`); from here:
+    ///
+    /// ```text
+    ///     <frame pointer, LFP -= delta>
+    ///     <callee body>            Ret -> done, every side exit -> redo
+    /// done:
+    ///     <frame pointer, LFP += delta>; <restore fprs>
+    /// redo:  (cold: the x86 cold page, or behind a `b cont` on aarch64)
+    ///     <frame pointer, LFP += delta>; <restore fprs>; jmp deopt
+    /// cont:
+    /// ```
+    ///
+    /// With the frame pointer moved, every frame-pointer-relative access the
+    /// body makes — its slots on x86, its spill slots on both arches — and
+    /// every LFP-relative one lands in the window, so the body is emitted
+    /// exactly as it would be for a frame of its own, prologue and `ret`
+    /// aside (`LInst::InlineRet`, the `Init` lowering). Nothing in the
+    /// body reads the native frame link above the frame pointer: that is
+    /// what `frameless_call::eligible` and the frameless violations keep
+    /// out of it.
+    ///
+    fn gen_inline_call(
+        &mut self,
+        store: &Store,
+        spec_id: context::SpecializedId,
+        delta: i32,
+        deopt: DestLabel,
+        using_fpr: UsingFpr,
+        class_version: DestLabel,
+    ) {
+        let (info, root) = self
+            .inline_bodies
+            .remove(&spec_id)
+            .unwrap_or_else(|| panic!("inline body {spec_id:?} was not parked"));
+        debug_assert!(info.frameless);
+        let done = self.jit.label();
+        let redo = self.jit.label();
+        let cont = self.jit.label();
+        let level = self.inline_ctx.len() + 1;
+        self.inline_frame_shift(delta);
+        self.inline_ctx.push(InlineCtx {
+            done: done.clone(),
+            redo: redo.clone(),
+        });
+        let entry = self.jit.label();
+        self.gen_machine_code(info, store, entry, level, class_version, root);
+        self.inline_ctx.pop();
+        self.jit.bind_label(done);
+        self.inline_frame_unshift(delta);
+        self.inline_fpr_restore(using_fpr);
+        self.inline_redo_trampoline(redo, delta, using_fpr, &deopt, &cont);
+        self.jit.bind_label(cont);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+impl Codegen {
+    /// Move the native frame pointer and the LFP down into an inline
+    /// callee's window.
+    fn inline_frame_shift(&mut self, delta: i32) {
+        monoasm! { &mut self.jit,
+            subq rbp, (delta);
+            subq r14, (delta);
+        }
+    }
+
+    fn inline_frame_unshift(&mut self, delta: i32) {
+        monoasm! { &mut self.jit,
+            addq rbp, (delta);
+            addq r14, (delta);
+        }
+    }
+
+    fn inline_fpr_restore(&mut self, using_fpr: UsingFpr) {
+        self.fpr_restore(using_fpr);
+    }
+
+    /// The cold way out of an inline body: undo the frame shift, bring the
+    /// caller's fprs back and take the caller's deopt. On the cold page, so
+    /// the hot path falls straight through to *cont*.
+    fn inline_redo_trampoline(
+        &mut self,
+        redo: DestLabel,
+        delta: i32,
+        using_fpr: UsingFpr,
+        deopt: &DestLabel,
+        _cont: &DestLabel,
+    ) {
+        assert_eq!(0, self.jit.get_page());
+        self.jit.select_page(1);
+        self.jit.bind_label(redo);
+        self.inline_frame_unshift(delta);
+        self.inline_fpr_restore(using_fpr);
+        monoasm! { &mut self.jit,
+            jmp deopt;
+        }
+        self.jit.select_page(0);
+    }
+
+    /// `LInst::InlineRet`: leave the inline callee's body for the
+    /// continuation of the `InlineCall` running it.
+    pub(in crate::codegen) fn emit_inline_ret(&mut self) {
+        let done = self
+            .inline_ctx
+            .last()
+            .expect("InlineRet outside an inline body")
+            .done
+            .clone();
+        monoasm! { &mut self.jit,
+            jmp done;
         }
     }
 }
@@ -1737,11 +1875,12 @@ impl Codegen {
     /// The side exit of a frameless specialized callee (`AsmInfo::frameless`).
     ///
     /// The callee has no frame to write back into and nothing to resume:
-    /// it returns `0` to its call site, which re-executes the whole call in
-    /// the interpreter from the caller's frame (`AsmInst::FramelessRedo`).
-    /// Sound because every such exit precedes the callee's first side
-    /// effect. A recompile exit still runs its counter first, so a guard
-    /// that keeps missing heals the unit as it would anywhere else.
+    /// it leaves for the redo trampoline of the `InlineCall` running it
+    /// (`Codegen::gen_inline_call`), which re-executes the whole call in
+    /// the interpreter from the caller's frame. Sound because every such
+    /// exit precedes the callee's first side effect. A recompile exit still
+    /// runs its counter first, so a guard that keeps missing heals the unit
+    /// as it would anywhere else.
     ///
     pub(in crate::codegen) fn gen_frameless_redo(
         &mut self,
@@ -1755,10 +1894,15 @@ impl Codegen {
         if let Some((reason, target)) = recompile {
             self.gen_recompile_hook(pc, reason, target);
         }
+        let redo = self
+            .inline_ctx
+            .last()
+            .expect("frameless redo outside an inline body")
+            .redo
+            .clone();
         monoasm!( &mut self.jit,
-            xorq rax, rax;
+            jmp redo;
         );
-        self.epilogue();
         self.jit.select_page(0);
     }
 

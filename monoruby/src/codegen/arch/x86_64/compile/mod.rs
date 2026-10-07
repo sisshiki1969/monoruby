@@ -185,8 +185,8 @@ impl Codegen {
             | AsmInst::YieldArrayExpand { .. }
             | AsmInst::SetupYieldFrame { .. }
             | AsmInst::SpecializedCall { .. }
-            | AsmInst::FramelessCall { .. }
-            | AsmInst::FramelessRedo { .. }
+            | AsmInst::InlineCall { .. }
+            | AsmInst::U64ToStack(..)
             | AsmInst::SpecializedYield { .. }
             | AsmInst::LoadDynVarSpecialized { .. }
             | AsmInst::StoreOuterFprHomeF { .. }

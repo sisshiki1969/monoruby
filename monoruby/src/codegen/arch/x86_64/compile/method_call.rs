@@ -379,19 +379,6 @@ impl Codegen {
         return_addr
     }
 
-    /// `FramelessCall`: the callee's local frame is linked to nothing, so
-    /// only the LFP is set (`set_lfp` also leaves it in the callee's
-    /// would-be `cfp.lfp` slot, which is where `restore_lfp` finds it when
-    /// the callee itself makes a frameless call). The caller's LFP comes
-    /// back from its own control frame afterwards.
-    pub(in crate::codegen::jitgen) fn do_frameless_call(&mut self, entry: DestLabel) {
-        self.set_lfp();
-        monoasm! { &mut self.jit,
-            call entry;
-        }
-        self.restore_lfp();
-    }
-
     ///
     /// Set block.
     ///
