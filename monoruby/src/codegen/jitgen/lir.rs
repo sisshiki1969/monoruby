@@ -1036,6 +1036,10 @@ pub(in crate::codegen) enum LInst {
         /// handler-carrying iseq, whose frame can own one at its `Ret`.
         check_deferred: bool,
     },
+    /// The `Ret` of an inline (frameless) callee: no frame to tear down,
+    /// so a jump to the continuation of the `InlineCall` being emitted
+    /// (`Codegen::inline_ctx`), with the value in rax / x0.
+    InlineRet,
     MethodRet {
         pc: BytecodePtr,
         /// The frame's loop-JIT spill region, released before resuming the

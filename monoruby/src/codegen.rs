@@ -783,6 +783,16 @@ pub(crate) enum CellHeader {
     NewbornOf(u64),
 }
 
+/// The two ways out of an inline callee's body (`Codegen::inline_ctx`).
+pub(in crate::codegen) struct InlineCtx {
+    /// The continuation of the `InlineCall`: the body's `Ret` jumps here
+    /// with the return value in rax / x0 (or xmm1 / d1 for a raw float).
+    pub(in crate::codegen) done: DestLabel,
+    /// Where every side exit of the body goes: a trampoline that undoes
+    /// the frame shift and continues to the caller's deopt at the call.
+    pub(in crate::codegen) redo: DestLabel,
+}
+
 ///
 /// A patchable top-level specialized-callee body: the target of a
 /// `RecompileDeoptSpecialized` / `GuardClassVersionSpecialized` recompile
@@ -895,6 +905,20 @@ pub struct Codegen {
     nil_pair: DestLabel,
     pub(crate) specialized_info: Vec<SpecializedPatchEntry>,
     pub(crate) specialized_base: usize,
+    /// The frameless callees of the unit being emitted, by frame id, parked
+    /// here by `gen_machine_code` until the `InlineCall` that runs each one
+    /// is lowered and emits its body in place (`gen_inline_call`). The
+    /// second half is the unit's root, which the nested emission passes on.
+    pub(in crate::codegen) inline_bodies: HashMap<
+        jitgen::context::SpecializedId,
+        (
+            jitgen::context::AsmInfo,
+            (ISeqId, Option<ClassId>, Option<BytecodePtr>),
+        ),
+    >,
+    /// The `InlineCall`s whose bodies are being emitted, innermost last:
+    /// where the body's `Ret` continues and where its side exits go.
+    pub(in crate::codegen) inline_ctx: Vec<InlineCtx>,
     /// The const-version snapshot word of the unit currently being compiled:
     /// every `GuardConstVersion` / `GuardConstVersionSpecialized` lowered for
     /// the unit compares the global const counter against this one word
@@ -1326,6 +1350,8 @@ impl Codegen {
             nil_pair,
             specialized_info: Vec::new(),
             specialized_base: 0,
+            inline_bodies: HashMap::default(),
+            inline_ctx: Vec::new(),
             unit_const_version: None,
             vm_entry: entry_panic.clone(),
             vm_code_position: (None, 0, None, 0),

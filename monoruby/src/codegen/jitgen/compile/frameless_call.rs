@@ -1,30 +1,39 @@
-//! Frameless specialization: calling a small specialized callee without a
-//! Ruby frame of its own.
+//! Frameless specialization: running a small specialized callee inline,
+//! without a Ruby frame of its own.
 //!
 //! An ordinary specialized call (`send_specialized`) still pays for a
 //! whole method frame: the stack check, the call-site pc for
 //! `Kernel#caller`, the control-frame push and pop, the callee's entry
 //! poll, and the eviction / chain-deopt bookkeeping that lets a suspended
-//! frame be converted later. For a small loop-free body that does none of
-//! the things those pieces exist for, they are most of the call.
+//! frame be converted later — and then the `call` / `ret` pair and a
+//! prologue around a body of a few instructions. For a small loop-free
+//! body that does none of the things those pieces exist for, they are
+//! most of the call.
 //!
-//! A frameless callee keeps its native frame — it is still a separate
-//! function, reached by `call`, with its own prologue and its own
-//! rbp-relative slots — and its local frame header (`SetupMethodFrame`),
-//! so everything that reads the LFP finds what it expects. What it drops
-//! is everything that makes the frame *visible*: no control frame is
-//! linked, so nothing can ever find the callee suspended, report it in a
-//! backtrace, or rescue in it.
+//! A frameless callee has no frame at all. Its slots, its LFP header and
+//! its spill slots live in a *window* the caller reserves inside its own
+//! native frame, right below the caller's slot area
+//! (`JitContext::note_inline_window`); the caller writes `self`, the
+//! arguments and, when the body reads it, the header into the window as
+//! plain slot stores of its own (`AbstractState::fill_window`), then
+//! moves the native frame pointer and the LFP down into it and runs the
+//! callee's body in place (`AsmInst::InlineCall`,
+//! `Codegen::gen_inline_call`). With both pointers shifted, the body is
+//! emitted exactly as it would be for a frame of its own, prologue and
+//! `ret` aside, and everything that reads the LFP finds what it expects.
+//! What is gone is everything that makes the frame *visible*: no control
+//! frame is linked, so nothing can ever find the callee suspended, report
+//! it in a backtrace, or rescue in it.
 //!
 //! # Exits
 //!
 //! That only holds if the callee never needs to be found. It must not
 //! suspend (no safepoint, no call that pushes a frame), raise, or deopt
 //! into the interpreter in its own frame. Every side exit is therefore
-//! turned into a *redo*: the callee returns 0 in rax, and the caller
-//! deopts at the call instruction, so the interpreter performs the whole
-//! call again, with a real frame. That is sound while the callee has not
-//! done anything observable yet — exactly `side_effect_guard` — so an exit
+//! turned into a *redo*: it leaves the body for the caller's deopt at the
+//! call instruction, so the interpreter performs the whole call again,
+//! with a real frame. That is sound while the callee has not done
+//! anything observable yet — exactly `side_effect_guard` — so an exit
 //! compiled after a side effect, an error exit, an eviction point or a
 //! poll makes the callee ineligible ([`AsmIr::set_frameless_violation`]);
 //! the call site then rolls back and calls it the ordinary way.
@@ -165,13 +174,59 @@ impl<'a> JitContext<'a> {
     }
 }
 
+///
+/// Does the body of *iseq_id* read its own LFP header? The window of an
+/// inline callee gets a header (outer, meta, svar, block) only when
+/// something in the body can look at it: a method call, which may be
+/// lowered to an inline builtin that reads the block word or the meta
+/// (`block_given?`, `__method__`), an index operation, whose runtime
+/// helpers can re-enter Ruby, or anything that touches `$~` / `$_`. A body
+/// of loads, stores, arithmetic and branches reads `self` and its
+/// arguments from the slots and nothing above them.
+///
+fn reads_frame_header(store: &Store, iseq_id: ISeqId) -> bool {
+    let iseq = &store[iseq_id];
+    (0..iseq.bytecode().len()).any(|i| {
+        let pc = iseq.get_pc(BcIndex::from(i));
+        !matches!(
+            TraceIr::from_pc(pc, store),
+            TraceIr::Br(..)
+                | TraceIr::CondBr(..)
+                | TraceIr::NilBr(..)
+                | TraceIr::OptCase { .. }
+                | TraceIr::FrozenLiteral(..)
+                | TraceIr::StringFreeze(..)
+                | TraceIr::Literal(..)
+                | TraceIr::Array { .. }
+                | TraceIr::Hash { .. }
+                | TraceIr::Range { .. }
+                | TraceIr::LoadConst(..)
+                | TraceIr::LoadIvar(..)
+                | TraceIr::StoreIvar(..)
+                | TraceIr::UnOp { .. }
+                | TraceIr::BinOp { .. }
+                | TraceIr::BinCmp { .. }
+                | TraceIr::Ret(..)
+                | TraceIr::Mov(..)
+                | TraceIr::InitMethod(..)
+                | TraceIr::InlineCache
+                | TraceIr::TypeIc(..)
+        )
+    })
+}
+
 impl AbstractState {
     ///
     /// Call a frameless specialized callee — the frameless counterpart of
-    /// `send_specialized`.
+    /// `send_specialized`: fill the callee's window in this frame and run
+    /// its body inline (`AsmInst::InlineCall`).
     ///
-    /// ### in
-    /// rdi: receiver: Value
+    /// *delta* is where the window is (`JitContext::inline_window_delta`):
+    /// the callee's slot `s` is this frame's pseudo slot `s + delta / 8`,
+    /// and the four header words sit just above its slot 0. They are
+    /// written with the frame pointer still this frame's, as plain slot
+    /// stores; the `InlineCall` then moves the frame pointer and the LFP
+    /// down by *delta* for the body.
     ///
     pub(super) fn send_frameless(
         &mut self,
@@ -179,34 +234,114 @@ impl AbstractState {
         store: &Store,
         callid: CallSiteId,
         callee_fid: FuncId,
-        entry: JitLabel,
+        spec_id: context::SpecializedId,
+        delta: i32,
         using_fpr: UsingFpr,
         arg_hints: &[(GP, SlotId)],
         float_args: &[(SlotId, FPReg)],
     ) {
         // Taken when the callee hands the call back: deopt to this very
         // call instruction, with this frame as it stands before the call.
-        // Made after `get_using_fpr`'s flush, so it reads nothing the call
-        // clobbers but the fprs `fpr_restore_cont` brings back first.
+        // Made after `get_using_fpr`'s flush, so it reads nothing the body
+        // clobbers but the fprs the `InlineCall` brings back first.
         let redo = ir.new_deopt(self);
-        ir.fpr_save_cont(using_fpr);
-        self.set_arguments(store, ir, callid, callee_fid, false, arg_hints, float_args);
+        ir.fpr_save(using_fpr);
+        self.fill_window(store, ir, callid, callee_fid, delta, arg_hints, float_args);
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
-        // The header still goes in: whatever reads the callee's LFP
-        // (`block_given?`, `$~`, the GC if it ever scans it) finds a
-        // well-formed frame, just one that is linked to nothing.
-        ir.push(AsmInst::SetupMethodFrame {
-            meta: store[callee_fid].meta(),
-            callid,
-            outer_lfp: None,
+        ir.push(AsmInst::InlineCall {
+            spec_id,
+            delta,
+            redo,
+            using_fpr,
         });
-        ir.push(AsmInst::FramelessCall { entry });
-        ir.fpr_restore_cont(using_fpr);
-        ir.push(AsmInst::FramelessRedo { deopt: redo });
         // `side_effect_guard` is left alone: the callee's return state
         // carries its own, which the result store joins in. A callee that
         // did nothing observable leaves this frame's guard standing — and
         // a frameless caller free to make another frameless call after it.
+    }
+
+    ///
+    /// The window counterpart of `set_arguments` for the one call shape a
+    /// frameless callee accepts (`eligible`): `self` and the required
+    /// positionals, plus the header when the body reads it. Same order as
+    /// `set_arguments`: the GP-pool residents go straight to their slots
+    /// first, before a boxing call can take the pool with them, and the
+    /// register-passed floats move last.
+    ///
+    fn fill_window(
+        &mut self,
+        store: &Store,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+        callee_fid: FuncId,
+        delta: i32,
+        arg_hints: &[(GP, SlotId)],
+        float_args: &[(SlotId, FPReg)],
+    ) {
+        let callee = &store[callee_fid];
+        let callsite = &store[callid];
+        let args = callsite.args;
+        let req = callee.req_num();
+        debug_assert_eq!(delta % 8, 0);
+        debug_assert_eq!(callsite.pos_num, req);
+        // The callee's slot `s` as this frame's pseudo slot; the header
+        // words are the (negative) slots above `self`.
+        let window = |s: i32| SlotId((s + delta / 8) as u16);
+
+        if reads_frame_header(store, callee.as_iseq()) {
+            ir.push(AsmInst::U64ToStack(0, window(-(LFP_SELF - LFP_OUTER) / 8)));
+            ir.push(AsmInst::U64ToStack(
+                callee.meta().get(),
+                window(-(LFP_SELF - LFP_META) / 8),
+            ));
+            ir.push(AsmInst::U64ToStack(0, window(-(LFP_SELF - LFP_SVAR) / 8)));
+            ir.push(AsmInst::U64ToStack(0, window(-(LFP_SELF - LFP_BLOCK) / 8)));
+        }
+
+        let hinted = |slot: SlotId| {
+            arg_hints
+                .iter()
+                .find(|(reg, s)| *s == slot && *reg != GP::R11)
+                .map(|(reg, _)| *reg)
+        };
+        let mut direct_filled = vec![];
+        for i in 0..req {
+            if let Some(reg) = hinted(args + i) {
+                ir.push(AsmInst::RegToStack(reg, window(1 + i as i32)));
+                direct_filled.push(i);
+            }
+        }
+        self.fetch_to_slot(ir, callsite.recv, window(0));
+        for i in 0..req {
+            // A parameter handed over in a register leaves its slot
+            // unwritten: the body binds it `F` and reads the register,
+            // and no safepoint or write-back ever looks at the slot
+            // (see the `Init` lowering for the same argument about the
+            // locals). Boxing it here would be the one allocation of the
+            // call.
+            let in_register = float_args.iter().any(|(param, _)| param.0 as usize == 1 + i);
+            if !direct_filled.contains(&i) && !in_register {
+                self.fetch_to_slot(ir, args + i, window(1 + i as i32));
+            }
+        }
+        // Last: a boxing above can call out, and a call takes the whole
+        // pool with it.
+        for (param, dst) in float_args {
+            let i = param.0 as usize - 1;
+            let src = match self.mode(args + i) {
+                LinkMode::F(x) | LinkMode::Sf(x, _) => x,
+                mode => unreachable!("float-passed argument is not fpr-resident: {mode:?}"),
+            };
+            self.use_as_float_at(args + i);
+            ir.float_arg_move(src, *dst);
+        }
+    }
+
+    /// `[dst] <- slot`, through rax; *dst* is a pseudo slot of this frame
+    /// that no state tracks, so this bypasses `reg2stack`.
+    fn fetch_to_slot(&mut self, ir: &mut AsmIr, slot: SlotId, dst: SlotId) {
+        self.load(ir, slot, GP::Rax);
+        ir.push(AsmInst::RegToStack(GP::Rax, dst));
     }
 }

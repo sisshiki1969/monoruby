@@ -217,3 +217,132 @@ fn frameless_callee_redefined_inside_loop() {
         "#,
     );
 }
+
+#[test]
+fn frameless_caller_keeps_floats_across_the_window() {
+    // The caller holds floats in registers across the inline call, and
+    // enough of them that some are spilled: the spill region sits below
+    // the callee's window and both survive the call.
+    run_test(
+        r#"
+        def half(x) = x * 0.5
+        def pick(a, b) = a > b ? a : b
+        def run
+          a = 1.5; b = 2.5; c = 3.5; d = 4.5; e = 5.5; f = 6.5; g = 7.5
+          s = 0.0
+          i = 0
+          while i < 40
+            s += half(a) + half(b) + half(c) + half(d) + half(e) + half(f) + half(g)
+            a += 0.25; b += 0.5; c += 0.75; d += 1.0; e += 1.25; f += 1.5; g += 1.75
+            s += pick(a, g) - pick(b, f)
+            i += 1
+          end
+          [s, a, b, c, d, e, f, g]
+        end
+        res = []
+        30.times { res << run }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_deep_nesting_and_wide_callees() {
+    // Three levels of inline callees, the innermost with many locals and
+    // temporaries, so the windows nest and each one is sized by its body.
+    run_test(
+        r#"
+        def wide(a, b, c, d)
+          t1 = a + b; t2 = c + d; t3 = t1 * t2; t4 = t3 - a
+          t5 = t4 + b; t6 = t5 * 2; t7 = t6 - c; t8 = t7 + d
+          t9 = t8 > 100 ? t8 - 100 : t8
+          t9 + t1 + t2 + t3
+        end
+        def mid(x, y) = wide(x, y, x + 1, y + 1) + wide(y, x, 2, 3)
+        def top(x) = mid(x, x + 2) * 2 + mid(1, x)
+        res = []
+        40.times { |i| res << top(i) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_inside_specialized_block() {
+    // The caller is a block compiled into the method it is passed to, so
+    // its outer-variable accesses walk a frame chain that has to account
+    // for the window inside it.
+    run_test(
+        r#"
+        def sq(x) = x * x
+        def add(a, b) = a + b
+        def run(arr)
+          s = 0
+          t = 0.0
+          arr.each { |x| s = add(s, sq(x)); t += sq(x * 0.5) }
+          [s, t]
+        end
+        res = []
+        arr = (1..20).to_a
+        30.times { res << run(arr) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_window_in_toplevel_loop() {
+    // A loop compiled on its own (loop JIT) reserves the window too.
+    run_test_once(
+        r#"
+        def f(a, b) = a * 3 + b
+        def g(x) = x > 50 ? x - 50 : x
+        res = []
+        i = 0
+        x = 0.5
+        while i < 400
+          res << f(i, g(i)) if i % 7 == 0
+          x += 0.25
+          i += 1
+        end
+        res << x
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_callee_spills_below_the_callers_spills() {
+    // The shape of ruby-bench's blurhash: a block that keeps floats of
+    // its own and of the enclosing method live across an inline call
+    // whose body spills too (under `stress-spill-pool` every third float
+    // does). The callee's last spill slot is the bottom word of its
+    // window, which once sat on top of the caller's first spill slot and
+    // clobbered `basis` — the window must be the callee's whole local
+    // area, so the caller's spill region starts below it.
+    run_test_once(
+        r#"
+        def srgb(value)
+          v = value.to_f / 255
+          if v <= 0.04045
+            v / 12.92
+          else
+            ((v + 0.055) / 1.055) ** 2.4
+          end
+        end
+        def mul(w, h, rgb)
+          r = 0.0
+          h.times do |y|
+            y_coef = Math.cos(Math::PI * y / h)
+            w.times do |x|
+              basis = Math.cos(Math::PI * x / w) * y_coef
+              r += basis * srgb(rgb[x + y * w])
+            end
+          end
+          r
+        end
+        rgb = (0...(30 * 30)).map { |i| (i * 37) % 256 }
+        mul(30, 30, rgb)
+        "#,
+    );
+}

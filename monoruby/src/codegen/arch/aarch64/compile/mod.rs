@@ -543,9 +543,10 @@ impl Codegen {
         }
     }
 
-    /// The side exit of a frameless specialized callee: return `0` to the
-    /// call site, which re-executes the whole call in the interpreter. The
-    /// x86 twin is `Codegen::gen_frameless_redo`. A recompile exit keeps its
+    /// The side exit of a frameless specialized callee: leave for the redo
+    /// trampoline of the `InlineCall` running it (`Codegen::gen_inline_call`),
+    /// which re-executes the whole call in the interpreter. The x86 twin is
+    /// `Codegen::gen_frameless_redo`. A recompile exit keeps its
     /// counter-gated recompile (with the same `BecamePolymorphic` gate as
     /// `LSideExitKind::RecompileDeopt`); a recompile that fails is not
     /// reported from here — the re-executed call meets it again.
@@ -556,7 +557,12 @@ impl Codegen {
         recompile: Option<(RecompileReason, RecompileTarget)>,
     ) {
         self.jit.bind_label(entry);
-        let redo = self.jit.label();
+        let redo = self
+            .inline_ctx
+            .last()
+            .expect("frameless redo outside an inline body")
+            .redo
+            .clone();
         if let Some((reason, target)) = recompile {
             if reason == RecompileReason::BecamePolymorphic {
                 let poly_byte = pc.as_ptr() as u64 + 7;
@@ -569,12 +575,78 @@ impl Codegen {
             self.emit_recompile_deopt(target, &redo, None, reason);
         }
         monoasm_arm64!(&mut self.jit,
-        redo:
-            mov x0, #0;
-            mov sp, x29;
-            ldp x29, x30, [sp], #16;
-            ret;
+            b redo;
         );
+    }
+
+    /// Move the frame pointer and the LFP down into an inline callee's
+    /// window (`Codegen::gen_inline_call`).
+    pub(in crate::codegen) fn inline_frame_shift(&mut self, delta: i32) {
+        let delta = delta as u32;
+        if delta <= 4095 {
+            monoasm_arm64!(&mut self.jit,
+                sub x29, x29, #(delta);
+                sub x22, x22, #(delta);
+            );
+        } else {
+            monoasm_arm64!(&mut self.jit,
+                mov x9, (delta as u64);
+                sub x29, x29, x9;
+                sub x22, x22, x9;
+            );
+        }
+    }
+
+    pub(in crate::codegen) fn inline_frame_unshift(&mut self, delta: i32) {
+        let delta = delta as u32;
+        if delta <= 4095 {
+            monoasm_arm64!(&mut self.jit,
+                add x29, x29, #(delta);
+                add x22, x22, #(delta);
+            );
+        } else {
+            monoasm_arm64!(&mut self.jit,
+                mov x9, (delta as u64);
+                add x29, x29, x9;
+                add x22, x22, x9;
+            );
+        }
+    }
+
+    pub(in crate::codegen) fn inline_fpr_restore(&mut self, using_fpr: UsingFpr) {
+        self.emit_fpr_restore(using_fpr, false);
+    }
+
+    /// The cold way out of an inline body: undo the frame shift, bring the
+    /// caller's fprs back and take the caller's deopt. aarch64 has no cold
+    /// page: it is laid down in the stream, behind the `b cont` that skips
+    /// it.
+    pub(in crate::codegen) fn inline_redo_trampoline(
+        &mut self,
+        redo: DestLabel,
+        delta: i32,
+        using_fpr: UsingFpr,
+        deopt: &DestLabel,
+        cont: &DestLabel,
+    ) {
+        let (deopt, cont) = (deopt.clone(), cont.clone());
+        monoasm_arm64!(&mut self.jit, b cont;);
+        self.jit.bind_label(redo);
+        self.inline_frame_unshift(delta);
+        self.inline_fpr_restore(using_fpr);
+        monoasm_arm64!(&mut self.jit, b deopt;);
+    }
+
+    /// `LInst::InlineRet`: leave the inline callee's body for the
+    /// continuation of the `InlineCall` running it.
+    pub(in crate::codegen) fn emit_inline_ret(&mut self) {
+        let done = self
+            .inline_ctx
+            .last()
+            .expect("InlineRet outside an inline body")
+            .done
+            .clone();
+        monoasm_arm64!(&mut self.jit, b done;);
     }
 
     /// Deopt handler: write all live Ruby values back to the LFP (so the frame

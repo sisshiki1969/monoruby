@@ -367,8 +367,16 @@ impl SlotState {
                 // boxed copy `set_arguments` stored stays canonical, so
                 // the parameter's first float use reads the register
                 // with no unbox while a value use still reads the slot.
+                // A frameless callee is the exception: its caller leaves
+                // the slot unwritten (`AbstractState::fill_window`), so
+                // the register is all there is — `F`, and a value use
+                // boxes from it.
                 if let Some((_, fpr)) = float_args.iter().find(|(s, _)| *s == slot) {
-                    ctx.set_Sf(slot, *fpr, SfGuarded::Float);
+                    if cc.in_frameless_frame() {
+                        ctx.set_F(slot, *fpr);
+                    } else {
+                        ctx.set_Sf(slot, *fpr, SfGuarded::Float);
+                    }
                     continue;
                 }
                 match arg {
