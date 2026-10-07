@@ -1677,6 +1677,92 @@ impl Codegen {
     }
 
     ///
+    /// The counter-gated, one-shot recompile a `RecompileDeoptimize` exit
+    /// runs before it leaves the compiled code (see `side_exit_with_label`).
+    /// Falls through when it does not recompile, and after it did.
+    ///
+    fn gen_recompile_hook(
+        &mut self,
+        pc: BytecodePtr,
+        reason: RecompileReason,
+        target: RecompileTarget,
+    ) {
+        let recompile_lbl = self.jit.label();
+        let skip = self.jit.label();
+        let counter = self.jit.data_i32(match target {
+            RecompileTarget::Whole(_) => COUNT_DEOPT_RECOMPILE,
+            RecompileTarget::Specialized(_) => COUNT_DEOPT_RECOMPILE_SPECIALIZED,
+        });
+        // `BecamePolymorphic` is checked, not assumed: recompile only
+        // once the VM has actually stamped the site's POLY byte
+        // (`opcode_sub`, op1 bits 63:56 — the interpreter sets it on an
+        // operand/receiver *class* change). A miss the profile cannot
+        // describe as a class change re-executes in the VM without
+        // moving the byte, and a recompile against an unchanged profile
+        // would reproduce the same guard: the activerecord
+        // `out_of_range?` shape recompiled 8,756 times that way. With
+        // the gate such a site just deopts plainly, byte-for-byte the
+        // pre-heal behavior. (Binop/cmp ICs record a heap Integer under
+        // the `BIGNUM_CLASS` tag, so a Bignum miss *is* a class change
+        // there and heals into the dispatch; the gate still protects
+        // the send-side exits, whose ICs class every Integer alike.)
+        if reason == RecompileReason::BecamePolymorphic {
+            let poly_byte = pc.as_ptr() as usize + 7;
+            monoasm!( &mut self.jit,
+                movq rax, (poly_byte);
+                cmpb [rax], 0;
+                jeq  skip;
+            );
+        }
+        monoasm!( &mut self.jit,
+            cmpl [rip + counter], 0;
+            jle  skip;
+            subl [rip + counter], 1;
+            jne  skip;
+        );
+        match target {
+            RecompileTarget::Whole(position) => {
+                self.gen_recompile(position, recompile_lbl, reason, None)
+            }
+            RecompileTarget::Specialized(idx) => {
+                self.gen_recompile_specialized(self.specialized_base + idx, recompile_lbl, reason)
+            }
+        }
+        monoasm!( &mut self.jit,
+        skip:
+        );
+    }
+
+    ///
+    /// The side exit of a frameless specialized callee (`AsmInfo::frameless`).
+    ///
+    /// The callee has no frame to write back into and nothing to resume:
+    /// it returns `0` to its call site, which re-executes the whole call in
+    /// the interpreter from the caller's frame (`AsmInst::FramelessRedo`).
+    /// Sound because every such exit precedes the callee's first side
+    /// effect. A recompile exit still runs its counter first, so a guard
+    /// that keeps missing heals the unit as it would anywhere else.
+    ///
+    pub(in crate::codegen) fn gen_frameless_redo(
+        &mut self,
+        pc: BytecodePtr,
+        entry: DestLabel,
+        recompile: Option<(RecompileReason, RecompileTarget)>,
+    ) {
+        assert_eq!(0, self.jit.get_page());
+        self.jit.select_page(1);
+        self.jit.bind_label(entry);
+        if let Some((reason, target)) = recompile {
+            self.gen_recompile_hook(pc, reason, target);
+        }
+        monoasm!( &mut self.jit,
+            xorq rax, rax;
+        );
+        self.epilogue();
+        self.jit.select_page(0);
+    }
+
+    ///
     /// Get *DestLabel* for fallback to interpreter.
     ///
     /// ### in
@@ -1773,52 +1859,7 @@ impl Codegen {
         // site's POLY bit) before we recompile; once exhausted it
         // never recompiles again (monotone / one-shot).
         if let Some((reason, target)) = recompile {
-            let recompile_lbl = self.jit.label();
-            let skip = self.jit.label();
-            let counter = self.jit.data_i32(match target {
-                RecompileTarget::Whole(_) => COUNT_DEOPT_RECOMPILE,
-                RecompileTarget::Specialized(_) => COUNT_DEOPT_RECOMPILE_SPECIALIZED,
-            });
-            // `BecamePolymorphic` is checked, not assumed: recompile only
-            // once the VM has actually stamped the site's POLY byte
-            // (`opcode_sub`, op1 bits 63:56 — the interpreter sets it on an
-            // operand/receiver *class* change). A miss the profile cannot
-            // describe as a class change re-executes in the VM without
-            // moving the byte, and a recompile against an unchanged profile
-            // would reproduce the same guard: the activerecord
-            // `out_of_range?` shape recompiled 8,756 times that way. With
-            // the gate such a site just deopts plainly, byte-for-byte the
-            // pre-heal behavior. (Binop/cmp ICs record a heap Integer under
-            // the `BIGNUM_CLASS` tag, so a Bignum miss *is* a class change
-            // there and heals into the dispatch; the gate still protects
-            // the send-side exits, whose ICs class every Integer alike.)
-            if reason == RecompileReason::BecamePolymorphic {
-                let poly_byte = pc.as_ptr() as usize + 7;
-                monoasm!( &mut self.jit,
-                    movq rax, (poly_byte);
-                    cmpb [rax], 0;
-                    jeq  skip;
-                );
-            }
-            monoasm!( &mut self.jit,
-                cmpl [rip + counter], 0;
-                jle  skip;
-                subl [rip + counter], 1;
-                jne  skip;
-            );
-            match target {
-                RecompileTarget::Whole(position) => {
-                    self.gen_recompile(position, recompile_lbl, reason, None)
-                }
-                RecompileTarget::Specialized(idx) => self.gen_recompile_specialized(
-                    self.specialized_base + idx,
-                    recompile_lbl,
-                    reason,
-                ),
-            }
-            monoasm!( &mut self.jit,
-            skip:
-            );
+            self.gen_recompile_hook(pc, reason, target);
         }
         let fetch = self.vm_fetch();
         monoasm!( &mut self.jit,

@@ -1367,6 +1367,19 @@ impl Codegen {
         );
     }
 
+    /// `FramelessCall`: mirrors x86 `do_frameless_call` — set the callee
+    /// LFP (and its would-be `cfp.lfp` slot, read back if the callee makes
+    /// a frameless call of its own), `bl entry`, then reload this frame's
+    /// LFP from its control frame. No control frame is pushed.
+    pub(in crate::codegen::jitgen::asmir) fn do_frameless_call(&mut self, entry: DestLabel) {
+        monoasm_arm64!(&mut self.jit,
+            sub x22, sp, #(RSP_LOCAL_FRAME as u32);  // callee LFP
+            stur x22, [sp, #(-((RSP_CFP + CFP_LFP) as i32))];
+            bl entry;
+            ldur x22, [x29, #(-((BP_CFP + CFP_LFP) as i32))];
+        );
+    }
+
     /// `SpecializedCall` / `SpecializedYield`: a direct branch-with-link into
     /// an inlined method/block entry already emitted in this code buffer.
     /// Mirrors x86 `do_specialized_call`: set_lfp + push_frame, `bl entry`,

@@ -185,6 +185,8 @@ impl Codegen {
             | AsmInst::YieldArrayExpand { .. }
             | AsmInst::SetupYieldFrame { .. }
             | AsmInst::SpecializedCall { .. }
+            | AsmInst::FramelessCall { .. }
+            | AsmInst::FramelessRedo { .. }
             | AsmInst::SpecializedYield { .. }
             | AsmInst::LoadDynVarSpecialized { .. }
             | AsmInst::StoreOuterFprHomeF { .. }
@@ -1162,6 +1164,7 @@ impl Codegen {
                     exit_id,
                 ),
                 LSideExitKind::Error { chain } => self.gen_handle_error(pc, wb, entry, base, chain),
+                LSideExitKind::Redo { recompile } => self.gen_frameless_redo(pc, entry, recompile),
             },
             // Macro-ops (irreducible runtime-call shapes) are delegated to the
             // arch-neutral fallback, which dispatches to the per-arch `emit_*`.

@@ -219,6 +219,17 @@ pub(crate) struct AsmIr {
     /// Stamped once from [`JitContext::chain_deopt_frames`] so the side-exit
     /// constructors are the single consultation point.
     chain_frames: u32,
+    /// This IR belongs to a frameless specialized callee (see
+    /// `AsmInfo::frameless`). Its side exits re-execute the whole call, so
+    /// the constructors below check that each one is still sound to take.
+    frameless: bool,
+    /// Set when something was compiled here that a frameless callee cannot
+    /// run: an exit after a side effect, an error exit, an eviction point,
+    /// or a call that needs a frame of its own. The frame's compile is then
+    /// abandoned and the call site falls back to an ordinary specialized
+    /// call. Sticky across `save` / `restore`: a rolled-back attempt only
+    /// makes the verdict more conservative.
+    frameless_violation: bool,
     /// What rdi and rax (in that order, see [`TRACKED_REGS`]) are known to
     /// hold at the end of the stream: set by a GP load of a slot into the
     /// register or a store of the register to a slot's home, and valid only
@@ -296,7 +307,34 @@ impl AsmIr {
             deferred_rest: false,
             needs_rest_array: false,
             chain_frames: ctx.chain_deopt_frames(),
+            frameless: ctx.in_frameless_frame(),
+            frameless_violation: false,
             reg_holds: [None; 2],
+        }
+    }
+
+    pub(super) fn frameless_violation(&self) -> bool {
+        self.frameless_violation
+    }
+
+    ///
+    /// Record that this frameless callee compiled something it cannot run
+    /// without a frame. A no-op outside a frameless frame.
+    ///
+    pub(super) fn set_frameless_violation(&mut self) {
+        if self.frameless {
+            self.frameless_violation = true;
+        }
+    }
+
+    ///
+    /// A deopt exit in a frameless callee re-executes the call from its
+    /// start, which is only sound while the callee has done nothing
+    /// observable yet (`side_effect_guard`).
+    ///
+    fn check_frameless_exit(&mut self, side_effect_free: bool) {
+        if !side_effect_free {
+            self.set_frameless_violation();
         }
     }
 
@@ -559,6 +597,7 @@ impl AsmIr {
     }
 
     pub(crate) fn new_evict(&mut self) -> AsmEvict {
+        self.set_frameless_violation();
         let i = self.new_label(SideExit::Evict(None));
         AsmEvict(i)
     }
@@ -580,6 +619,7 @@ impl AsmIr {
     /// keeping it guards everywhere.
     #[cfg_attr(feature = "deopt", track_caller)]
     pub(crate) fn new_poll_deopt(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmDeopt {
+        self.set_frameless_violation();
         let i = self.new_label(SideExit::Deoptimize(
             pc,
             state.get_write_back(),
@@ -590,6 +630,7 @@ impl AsmIr {
 
     #[cfg_attr(feature = "deopt", track_caller)]
     pub(crate) fn new_deopt_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmDeopt {
+        self.check_frameless_exit(state.side_effect_guard());
         let i = self.new_label(SideExit::Deoptimize(
             pc,
             state.get_write_back(),
@@ -634,6 +675,7 @@ impl AsmIr {
     ///
     #[cfg_attr(feature = "deopt", track_caller)]
     pub(super) fn deopt_from_point(&mut self, point: &DeoptPoint) -> AsmDeopt {
+        self.check_frameless_exit(point.side_effect_free());
         let i = self.new_label(SideExit::Deoptimize(
             point.pc(),
             point.write_back().clone(),
@@ -660,6 +702,7 @@ impl AsmIr {
         reason: RecompileReason,
         target: RecompileTarget,
     ) -> AsmDeopt {
+        self.check_frameless_exit(state.side_effect_guard());
         let pc = state.pc();
         let i = self.new_label(SideExit::RecompileDeoptimize(
             pc,
@@ -673,6 +716,9 @@ impl AsmIr {
     }
 
     pub(crate) fn new_error_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmError {
+        // An error raised here would be reported from the caller's frame:
+        // the callee has none to put in the backtrace or to rescue in.
+        self.set_frameless_violation();
         let i = self.new_label(SideExit::Error(
             pc,
             state.get_write_back(),
@@ -2241,6 +2287,25 @@ pub(super) enum AsmInst {
         entry: JitLabel,
         evict: AsmEvict,
     },
+    ///
+    /// Call a frameless specialized callee (`AsmInfo::frameless`): point
+    /// the LFP at the callee's local frame and call, with no control frame
+    /// pushed. rax is the callee's return value, or 0 when it handed the
+    /// call back ([`AsmInst::FramelessRedo`]).
+    ///
+    /// ### destroy
+    /// - caller save registers
+    ///
+    FramelessCall {
+        entry: JitLabel,
+    },
+    ///
+    /// Deoptimize to the call instruction when the frameless callee just
+    /// called returned 0: the interpreter then performs the whole call.
+    ///
+    FramelessRedo {
+        deopt: AsmDeopt,
+    },
     /// Store the call-site bytecode pc into the outgoing cont-frame
     /// slot (`[rsp]` / `[sp]` == the callee frame's CFP+24, the slot
     /// Kernel#caller reads). The 16-byte cont-frame region itself is
@@ -3596,7 +3661,11 @@ impl Codegen {
                             });
                         }
                         lir.push(LInst::SideExit {
-                            kind: LSideExitKind::Deopt { chain: t.2 },
+                            kind: if frame.frameless {
+                                LSideExitKind::Redo { recompile: None }
+                            } else {
+                                LSideExitKind::Deopt { chain: t.2 }
+                            },
                             pc: t.0,
                             wb: t.1.clone(),
                             entry: label.clone(),
@@ -3622,10 +3691,16 @@ impl Codegen {
                         });
                     }
                     lir.push(LInst::SideExit {
-                        kind: LSideExitKind::RecompileDeopt {
-                            reason,
-                            target,
-                            chain,
+                        kind: if frame.frameless {
+                            LSideExitKind::Redo {
+                                recompile: Some((reason, target)),
+                            }
+                        } else {
+                            LSideExitKind::RecompileDeopt {
+                                reason,
+                                target,
+                                chain,
+                            }
                         },
                         pc,
                         wb,

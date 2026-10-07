@@ -169,6 +169,13 @@ pub(super) struct AsmInfo {
     ///
     jit_type: JitType,
     ///
+    /// A specialized callee compiled *frameless*: called without a Ruby
+    /// frame of its own (no control frame, no header), and every side
+    /// exit hands the whole call back to the caller, which re-executes it
+    /// in the interpreter. See `compile/frameless_call.rs`.
+    ///
+    pub(super) frameless: bool,
+    ///
     /// Level of inlining.
     ///
     specialize_level: usize,
@@ -284,6 +291,7 @@ impl AsmInfo {
     fn dup(&self) -> Self {
         Self {
             jit_type: self.jit_type.clone(),
+            frameless: self.frameless,
             specialize_level: self.specialize_level,
             iseq_id: self.iseq_id,
             self_class: self.self_class,
@@ -392,6 +400,23 @@ impl AsmInfo {
 
     pub(super) fn iter_ir_mut(&mut self) -> std::slice::IterMut<'_, (Option<BasicBlockId>, AsmIr)> {
         self.ir.iter_mut()
+    }
+
+    ///
+    /// Some stream of this frame — a block, or a bridge between blocks —
+    /// compiled something a frameless callee cannot run
+    /// ([`AsmIr::frameless_violation`]).
+    ///
+    pub(super) fn has_frameless_violation(&self) -> bool {
+        self.ir.iter().any(|(_, ir)| ir.frameless_violation())
+            || self
+                .outline_bridges
+                .iter()
+                .any(|(ir, ..)| ir.frameless_violation())
+            || self
+                .inline_bridges
+                .values()
+                .any(|(ir, _)| ir.frameless_violation())
     }
 
     pub(super) fn iter_outline_bridges_mut(
@@ -789,6 +814,7 @@ impl JitStackFrame {
         Self {
             asm_info: AsmInfo {
                 jit_type,
+                frameless: false,
                 specialize_level,
                 iseq_id,
                 self_class,
@@ -1147,6 +1173,11 @@ pub(crate) struct JitContext<'a> {
     /// emitted at the end of every arm of the dispatch that produced its
     /// operand (`bind_merge`): the `CondBr` itself then emits nothing.
     condbr_done: Option<(BcIndex, usize)>,
+    /// Callees whose frameless compile was abandoned in this unit
+    /// (`compile/frameless_call.rs`): not tried frameless again, so a
+    /// callee that is not frameless costs one failed attempt, not one per
+    /// call site and nesting level.
+    pub(super) frameless_rejected: std::collections::HashSet<ISeqId>,
 }
 
 impl<'a> JitContext<'a> {
@@ -1183,6 +1214,7 @@ impl<'a> JitContext<'a> {
             cond_sink: None,
             cond_flags: std::cell::Cell::new(None),
             condbr_done: None,
+            frameless_rejected: Default::default(),
             outer_claim_barrier: false,
             widened_outer_log: vec![],
             spec_memo: Default::default(),
@@ -1252,6 +1284,9 @@ impl<'a> JitContext<'a> {
             cond_sink: None,
             cond_flags: std::cell::Cell::new(None),
             condbr_done: None,
+            // Per walk, like the decisions it records: a walk must make
+            // the same frameless calls the code generation pass will.
+            frameless_rejected: Default::default(),
         }
     }
 
@@ -1466,6 +1501,12 @@ impl<'a> JitContext<'a> {
     }
 
     // handling frame
+
+    /// The innermost frame is a frameless specialized callee.
+    pub(super) fn in_frameless_frame(&self) -> bool {
+        self.stack_frame.last().is_some_and(|frame| frame.frameless)
+    }
+
     pub(super) fn current_frame(&self) -> &JitStackFrame {
         self.stack_frame.last().unwrap()
     }
@@ -3881,6 +3922,11 @@ impl<'a> JitContext<'a> {
                 let src = float_ret_src(inner.mode(ret_slot))
                     .expect("float_return edge carries no raw f64");
                 ir.float_ret_store(src);
+                // A frameless caller reads rax == 0 as "redo the call";
+                // any nonzero word says this is a real return.
+                if frame.frameless {
+                    ir.lit2reg(Value::nil(), GP::Rax);
+                }
             } else {
                 inner.load(&mut ir, ret_slot, GP::Rax);
             }

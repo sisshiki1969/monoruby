@@ -828,6 +828,12 @@ impl AbstractFrame {
         self.invariants.side_effect_guard = false;
     }
 
+    /// Nothing observable has happened in this frame yet (see
+    /// `Invariants::side_effect_guard`).
+    pub(super) fn side_effect_guard(&self) -> bool {
+        self.invariants.side_effect_guard
+    }
+
     pub(super) fn as_return(&self, slot: SlotId) -> ReturnState {
         let ret = self.mode(slot).as_return();
         ReturnState {

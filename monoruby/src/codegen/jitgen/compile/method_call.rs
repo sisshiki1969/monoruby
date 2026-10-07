@@ -1247,6 +1247,7 @@ impl<'a> JitContext<'a> {
                             iseq,
                             true,
                             Some(proc.outer_lfp()),
+                            false,
                         );
                     }
                 }
@@ -1398,6 +1399,22 @@ impl<'a> JitContext<'a> {
                         }
                     }
                 }
+                // Frameless specialization (`compile/frameless_call.rs`),
+                // tried for every small loop-free callee whatever its
+                // arguments are: it is cheap enough to be worth it on the
+                // call overhead alone. A callee that turns out to need a
+                // frame rolls back and takes the gate below.
+                if recv_class_proven
+                    && !self.in_dispatch_arm()
+                    && !callee_forwards_block
+                    && !self.store[iseq].has_generic_jit()
+                    && self.specialize_level() < SPECIALIZE_DEPTH_LIMIT
+                    && frameless_call::eligible(&self.store, func_id, iseq, callid)
+                    && let Some(res) =
+                        self.try_frameless_iseq(state, ir, callid, recv_class, func_id, iseq)
+                {
+                    return Ok(res);
+                }
                 // Use `is_C_immediate` here, not `is_C`: heap-resident
                 // `LinkMode::C` (e.g. class constants newly folded by
                 // `load_constant`) would otherwise trigger specialization
@@ -1499,6 +1516,7 @@ impl<'a> JitContext<'a> {
                         iseq,
                         specializable,
                         None,
+                        false,
                     );
                 }
                 (func_id, None)
@@ -1681,6 +1699,7 @@ impl<'a> JitContext<'a> {
                 args_info,
                 Some(outer),
                 callid,
+                false,
                 false,
             );
             // See the method-send site: disarmed before the `?`.
@@ -2616,7 +2635,7 @@ impl<'a> JitContext<'a> {
         CompileResult::Continue
     }
 
-    fn specialized_iseq(
+    pub(super) fn specialized_iseq(
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
@@ -2631,6 +2650,9 @@ impl<'a> JitContext<'a> {
         // plain method here, so the whole option is the bmethod marker —
         // a bmethod defined at toplevel still carries its outer).
         bmethod_outer: Option<Option<Lfp>>,
+        // Compile and call the callee frameless — see
+        // `compile/frameless_call.rs`.
+        frameless: bool,
     ) -> JitResult<CompileResult> {
         let dst = self.store[callid].dst;
         let mut args_info = if specializable {
@@ -2651,7 +2673,11 @@ impl<'a> JitContext<'a> {
         // #1185 stage 2: an exit compiled anywhere under this call may
         // want to run THIS frame's `ensure` on the way out, which needs a
         // landing after the call below. Say so for the duration.
-        self.current_frame_mut().landing_sink = true;
+        //
+        // A frameless callee has no such exit (an exit there either hands
+        // the whole call back or abandons the frameless compile), so it
+        // never asks for one.
+        self.current_frame_mut().landing_sink = !frameless;
         let splice_widen_mark = self.widen_log_mark();
         let compiled = self.compile_specialized_func(
             state,
@@ -2661,6 +2687,7 @@ impl<'a> JitContext<'a> {
             None,
             callid,
             bmethod_outer.is_some(),
+            frameless,
         );
         // Disarmed before the `?`: the flag is only ever true while the
         // call it belongs to is compiling, so an aborted compile cannot
@@ -2726,6 +2753,26 @@ impl<'a> JitContext<'a> {
                 // constants above.
                 state.home_deferred_floats(ir, &deferred_homes, generic_yield);
             }
+        }
+        if frameless {
+            let arg_hints = state.peek_gp_residents();
+            let live = state.get_using_fpr(ir);
+            let using_fpr = frozen_using_fpr;
+            debug_assert!(using_fpr.is_superset_of(&live), "{using_fpr:?} < {live:?}");
+            self.record_call_site_fpr_save(spec_id, using_fpr);
+            state.send_frameless(
+                ir,
+                &self.store,
+                callid,
+                fid,
+                entry,
+                using_fpr,
+                &arg_hints,
+                &float_args,
+            );
+            let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
+            state.capture_guard_after_call(ir, &self.store, dst);
+            return Ok(res);
         }
         let evict = ir.new_evict();
         // Pre-flush GP-pool snapshot for direct argument stores — see
@@ -2875,6 +2922,9 @@ impl<'a> JitContext<'a> {
         outer: Option<usize>,
         callid: CallSiteId,
         bmethod: bool,
+        // Compile the callee frameless (`AsmInfo::frameless`). Only ever
+        // asked for a loop-free callee, which the memo never holds.
+        frameless: bool,
     ) -> JitResult<SpecializedCompileResult> {
         // The memo pays for itself only where the compile it stands in
         // for is the expensive kind. A tower spans the whole frame
@@ -2885,9 +2935,10 @@ impl<'a> JitContext<'a> {
         // its own call site.
         if self.codegen_mode() || !self.store[iseq_id].bb_info.has_loop() {
             return self.compile_specialized_func_uncached(
-                state, iseq_id, self_class, args_info, outer, callid, bmethod,
+                state, iseq_id, self_class, args_info, outer, callid, bmethod, frameless,
             );
         }
+        debug_assert!(!frameless, "a frameless callee has no loop");
         let site = spec_memo::SpecCallSite {
             iseq_id,
             self_class,
@@ -2908,7 +2959,7 @@ impl<'a> JitContext<'a> {
         let entered = (!self.spec_memo_is_full(&site)).then(|| self.tower(state));
         let marks = self.spec_memo_marks();
         let res = self.compile_specialized_func_uncached(
-            state, iseq_id, self_class, args_info, outer, callid, bmethod,
+            state, iseq_id, self_class, args_info, outer, callid, bmethod, false,
         )?;
         if let Some(entered) = entered {
             let returned = self.tower(state);
@@ -3031,8 +3082,10 @@ impl<'a> JitContext<'a> {
         outer: Option<usize>,
         callid: CallSiteId,
         bmethod: bool,
+        frameless: bool,
     ) -> JitResult<SpecializedCompileResult> {
         let mut frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
+        frame.asm_info.frameless = frameless;
         if bmethod {
             // A define_method proc-method body: semantically a METHOD
             // frame even though its iseq is a block — `return` targets
@@ -3623,6 +3676,21 @@ impl AbstractState {
     ) {
         let next_pc = self.pc().next();
         ir[evict] = SideExit::Evict(Some((next_pc, self.get_write_back())));
+        self.capture_guard_after_call(ir, store, dst);
+    }
+
+    ///
+    /// The capture half of [`Self::immediate_evict`]: when the call may
+    /// have moved this frame to the heap, re-prove that it did not before
+    /// the stack copy is read again.
+    ///
+    pub(super) fn capture_guard_after_call(
+        &mut self,
+        ir: &mut AsmIr,
+        store: &Store,
+        dst: Option<SlotId>,
+    ) {
+        let next_pc = self.pc().next();
         if self.no_capture_guard() {
             return;
         }
@@ -3700,7 +3768,7 @@ impl AbstractState {
         Some(route)
     }
 
-    fn set_arguments(
+    pub(super) fn set_arguments(
         &mut self,
         store: &Store,
         ir: &mut AsmIr,
