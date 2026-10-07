@@ -539,14 +539,16 @@ fn materialize_lazy_at_callsite(
                 let h = lazy_kw_hash(globals, src.callid, src.lfp);
                 let marker = Some(splat_v);
                 unsafe {
-                    if let Some(kwr) = globals[caller_lfp.func_id()].kw_rest() {
-                        *caller_lfp.register_ptr(kwr) = Some(h);
-                    }
-                    // The forwarding site's copy of the `**kwrest` slot.
+                    // The forwarding site's `**kwrest` operand (in practice
+                    // the trampoline's kwrest local itself), then that local
+                    // in case the operand was a copy.
                     for &p in cs.hash_splat_pos() {
                         if caller_lfp.register(p) == marker {
                             *caller_lfp.register_ptr(p) = Some(h);
                         }
+                    }
+                    if let Some(kwr) = globals[caller_lfp.func_id()].kw_rest() {
+                        *caller_lfp.register_ptr(kwr) = Some(h);
                     }
                 }
             }
