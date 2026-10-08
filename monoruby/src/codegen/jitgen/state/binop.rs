@@ -946,9 +946,9 @@ impl AbstractState {
     /// The float compare consumed only by the following conditional branch:
     /// the xmm mirror of [`gen_cmp_integer_flags`](Self::gen_cmp_integer_flags).
     /// As a block terminator it flushes the GP residents to their homes before
-    /// the compare (this also makes a mixed integer operand's home current for
-    /// the compare's stack read), then compares in xmm and leaves the answer
-    /// in the condition flags. `None`, emitting nothing, when both operands
+    /// the compare (after the operand loads, which read a resident operand
+    /// from its register), then compares in xmm and leaves the answer in the
+    /// condition flags. `None`, emitting nothing, when both operands
     /// are constant: the caller folds through
     /// [`gen_cmp_float`](Self::gen_cmp_float).
     pub(crate) fn gen_cmp_float_flags(
@@ -961,9 +961,13 @@ impl AbstractState {
         if self.check_binary_C_f64(info.lhs, info.rhs).is_some() {
             return None;
         }
+        // Load the operands before dropping `dst`'s resident: `dst` is the
+        // rhs itself for a `_%n = %m > %n` compare, and an operand that lives
+        // only in a GP register (an ivar just loaded) must be read from
+        // there (`FprLoad::FromStack`'s `gp`), not from its stale home.
+        let mode = self.load_binary_fpr(ir, info);
         self.gp_regfile.invalidate(dst);
         self.flush_gp(ir);
-        let mode = self.load_binary_fpr(ir, info);
         ir.float_cmp_flags(mode);
         self.def_C(dst, Value::nil());
         Some(CondFlags::Float(kind))

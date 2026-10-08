@@ -20,19 +20,33 @@ pub(in crate::codegen::jitgen) struct DeoptPoint {
     /// The frame's `side_effect_guard` at the point: whether a frameless
     /// callee may still hand its whole call back from here.
     side_effect_free: bool,
+    /// The slots the state holds nothing for at the point (`wb_void`): what
+    /// a frameless callee's materializing exit has to nil-fill, since its
+    /// window never was (`AsmIr::exit_write_back`).
+    void: Vec<SlotId>,
 }
 
 impl DeoptPoint {
-    pub(super) fn new(pc: BytecodePtr, write_back: WriteBack, side_effect_free: bool) -> Self {
+    pub(super) fn new(
+        pc: BytecodePtr,
+        write_back: WriteBack,
+        side_effect_free: bool,
+        void: Vec<SlotId>,
+    ) -> Self {
         Self {
             pc,
             write_back,
             side_effect_free,
+            void,
         }
     }
 
     pub(in crate::codegen::jitgen) fn side_effect_free(&self) -> bool {
         self.side_effect_free
+    }
+
+    pub(in crate::codegen::jitgen) fn void(&self) -> &[SlotId] {
+        &self.void
     }
 
     pub(in crate::codegen::jitgen) fn pc(&self) -> BytecodePtr {
@@ -460,7 +474,12 @@ impl AbstractFrame {
     /// snapshot, minus the `side_exit` push.
     ///
     pub(in crate::codegen::jitgen) fn deopt_point(&self) -> DeoptPoint {
-        DeoptPoint::new(self.pc(), self.get_write_back(), self.side_effect_guard())
+        DeoptPoint::new(
+            self.pc(),
+            self.get_write_back(),
+            self.side_effect_guard(),
+            self.wb_void(),
+        )
     }
 
     #[allow(non_snake_case)]

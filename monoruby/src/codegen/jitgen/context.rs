@@ -1671,41 +1671,46 @@ impl<'a> JitContext<'a> {
 
     ///
     /// Reserve room in the current frame for the virtual frame of the
-    /// inline callee *callee*, just compiled and popped: its whole local
-    /// area below its (virtual) frame pointer, `total - PROLOGUE_OVERHEAD`
-    /// bytes, exactly what its own prologue would have reserved. The top
-    /// of that area is placed `RBP_LOCAL_FRAME - 8` bytes above where this
-    /// frame's spill region would otherwise begin (see
-    /// [`Self::inline_window_delta`]), so the spill region has to move down
-    /// by the whole area, not by the area minus the two control-frame words
-    /// at its top that a frameless body never writes: counting those out
-    /// (as this once did) put the callee's bottom word — its last spill
-    /// slot, or its last local — on top of the caller's first spill slot,
-    /// which a callee that spills then clobbered (seen as a wrong
-    /// `blurhash` under `stress-spill-pool`).
+    /// inline callee *callee*, just compiled and popped: its whole frame,
+    /// `total` bytes — the local area below its (virtual) frame pointer,
+    /// `total - PROLOGUE_OVERHEAD` bytes, exactly what its own prologue
+    /// would have reserved, plus the four control words above it (saved
+    /// frame pointer, return address, caller pc, pad). The window is placed
+    /// where the interpreter would have built the callee's frame
+    /// (`Self::inline_window_delta`), so the spill region has to move down
+    /// by the whole frame. A frameless body never writes the control
+    /// words, but a *materializing* exit (`LSideExitKind::Materialize`)
+    /// does, turning the window into a real frame in place, and nothing of
+    /// this frame may sit under them.
     ///
     pub(super) fn note_inline_window(&mut self, callee: SpecializedId) {
         let total = self.frame_sizes_or_panic(callee).total;
-        let bytes = total - PROLOGUE_OVERHEAD;
-        debug_assert_eq!(bytes % 16, 0);
+        debug_assert_eq!(total % 16, 0);
         let frame = self.current_frame_mut();
-        frame.window_bytes = frame.window_bytes.max(bytes);
+        frame.window_bytes = frame.window_bytes.max(total);
     }
 
     ///
     /// How far below this frame's native frame pointer an inline callee's
     /// virtual frame pointer sits (`AsmInst::InlineCall::delta`).
     ///
-    /// The callee's local area starts `RBP_LOCAL_FRAME - 8` bytes under
-    /// its frame pointer (the outer word at the top of its LFP header) and
-    /// is placed so that it begins exactly where this frame's spill region
-    /// would have — `base - 24` below the frame pointer, the home of the
-    /// first spill slot (`PhysMap`) — which `pop_frame` moves down by the
-    /// window.
+    /// The window is exactly where the interpreter would build the
+    /// callee's frame: the VM's local area of this frame ends at
+    /// `rbp - (base - PROLOGUE_OVERHEAD)` (the depth `init_method` reserves),
+    /// a call reserves the 16-byte continuation frame under it, and the
+    /// `call` and the callee prologue push the return address and the
+    /// saved frame pointer below that — so the callee's frame pointer lands
+    /// `base` bytes under this frame's. `pop_frame` moves this frame's spill
+    /// region down by the window, so the callee's bottom word sits right
+    /// above this frame's first spill slot. `base` is a multiple of 16, so
+    /// the window frame pointer keeps the alignment of a real one — which a
+    /// materialized callee needs when it returns through `leave; ret` into
+    /// the interpreted caller.
     ///
     pub(super) fn inline_window_delta(&self) -> i32 {
         let base = self.current_frame().base_stack_offset;
-        (base - 24 - (RBP_LOCAL_FRAME - 8) as usize) as i32
+        debug_assert_eq!(base % 16, 0);
+        base as i32
     }
 
     pub(super) fn current_frame_id(&self) -> SpecializedId {

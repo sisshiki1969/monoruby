@@ -375,3 +375,203 @@ fn frameless_entry_extends_the_ivar_table() {
         "#,
     );
 }
+
+// Materializing exits (`LSideExitKind::Materialize`): a side exit after
+// the callee's first side effect cannot redo the call, so it makes the
+// window a real frame and resumes the callee in the interpreter.
+
+#[test]
+fn frameless_materialize_after_store() {
+    // `x + 1` overflows at one iteration: the deopt comes after the `@n`
+    // store, the callee finishes in the interpreter, and its result
+    // reaches the caller through the continuation stub. `@n` moves once
+    // per call.
+    run_test(
+        r#"
+        class C
+          def initialize = (@n = 0; @k = 0)
+          attr_reader :n, :k
+          def acc(x) = (@n += 1; @k = x + 1)
+          def mul(x, y) = (@n += 1; @k = x * y; @k - 1)
+        end
+        c = C.new
+        res = []
+        80.times do |i|
+          x = i == 70 ? 2**62 : i
+          res << c.acc(x) << c.mul(x, 3)
+          GC.start if i == 71
+        end
+        res << c.n << c.k
+        "#,
+    );
+}
+
+#[test]
+fn frameless_materialize_error_after_store() {
+    // `Array#[]=` with an out-of-range negative index raises from the slow
+    // path: the callee's frame exists by then, so the error names it and
+    // the store before it stays done.
+    run_test(
+        r#"
+        class C
+          def initialize = (@n = 0; @a = [0, 1, 2, 3, 4, 5, 6, 7])
+          attr_reader :n, :a
+          def put(i, v) = (@n += 1; @a[i] = v; @n)
+        end
+        c = C.new
+        res = []
+        80.times do |i|
+          begin
+            res << c.put(i == 75 ? -100 : i % 8, i)
+          rescue IndexError => e
+            res << [e.class, e.backtrace_locations.map(&:label).include?("C#put"), c.n]
+          end
+        end
+        res << c.n << c.a
+        "#,
+    );
+}
+
+#[test]
+fn frameless_materialize_nested() {
+    // The inner callee's overflow deopt materializes both inline levels:
+    // the inner frame resumes in the interpreter, returns into the outer
+    // frame's continuation, which finishes `* 2` interpreted and returns
+    // into the framed caller.
+    run_test(
+        r#"
+        class C
+          def initialize = (@n = 0; @m = 0)
+          attr_reader :n, :m
+          def inner(x) = (@m += 1; x + 1)
+          def outer(x) = (@n += 1; inner(x) * 2)
+        end
+        c = C.new
+        res = []
+        80.times do |i|
+          x = i == 70 ? 2**62 : i
+          res << c.outer(x)
+        end
+        res << c.n << c.m
+        "#,
+    );
+}
+
+#[test]
+fn frameless_materialize_with_floats() {
+    // The callee's float parameters arrive in registers and the caller
+    // keeps floats of its own across the window: both are boxed into their
+    // slots by the exit, and the caller's come back for the interpreter.
+    run_test(
+        r#"
+        class C
+          def initialize = (@n = 0; @k = 0.0; @j = 0)
+          attr_reader :n, :k, :j
+          def fl(a, b, i) = (@n += 1; @k = a * b; @j = i + 1; @k)
+        end
+        c = C.new
+        res = []
+        s = 1.5
+        t = 0.25
+        80.times do |i|
+          f = i * 0.5
+          s += c.fl(f, 2.0, i == 70 ? 2**62 : i) + t
+          t *= 1.01
+          res << s
+        end
+        res << c.n << c.k << c.j
+        "#,
+    );
+}
+
+#[test]
+fn frameless_materialize_on_float_guard() {
+    // The exit is the Float guard of a float load (`load_fpr`), taken
+    // after the counter store, with the locals after it still unwritten:
+    // the materialized frame must hold `nil` in them for the interpreter.
+    run_test(
+        r#"
+        class C
+          def initialize = (@n = 0; @t = 1.5)
+          attr_reader :n
+          def t=(v); @t = v; end
+          def g(x) = (@n += 1; y = x * @t; z = y + 1.0; w = z * 2; w)
+        end
+        c = C.new
+        res = []
+        80.times do |i|
+          c.t = 3 if i == 70
+          res << c.g(i.to_f)
+        end
+        res << c.n
+        "#,
+    );
+}
+
+#[test]
+fn frameless_materialize_in_toplevel_loop() {
+    run_test(
+        r#"
+        class C
+          def initialize = (@n = 0; @k = 0)
+          attr_reader :n, :k
+          def acc(x) = (@n += 1; @k = x + 1)
+        end
+        c = C.new
+        res = []
+        i = 0
+        while i < 80
+          x = i == 70 ? 2**62 : i
+          res << c.acc(x)
+          i += 1
+        end
+        res << c.n << c.k
+        "#,
+    );
+}
+
+#[test]
+fn frameless_materialize_class_new() {
+    // The `initialize` twin of `P.new(x)` (`inline_class_new`) runs
+    // frameless right after the allocation: its exit after the first
+    // store resumes the constructor in the interpreter, and `new` still
+    // answers the object, with both stores done.
+    run_test(
+        r#"
+        class P
+          def initialize(x) = (@a = x; @b = x + 1)
+          attr_reader :a, :b
+        end
+        res = []
+        80.times do |i|
+          p = P.new(i == 70 ? 2**62 : i)
+          res << p.a << p.b
+        end
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_materialize_recompile_exit() {
+    // A class guard that misses after the store takes the recompile
+    // flavour of the exit: the site heals to the polymorphic lowering, and
+    // every call in between completes in the interpreter.
+    run_test(
+        r#"
+        class C
+          def initialize = (@n = 0; @t = 5)
+          attr_reader :n
+          def t=(v); @t = v; end
+          def cmp(x) = (@n += 1; x > @t ? 1 : 0)
+        end
+        c = C.new
+        res = []
+        80.times do |i|
+          c.t = (i % 3 == 0 ? 5.5 : 5) if i >= 70
+          res << c.cmp(i)
+        end
+        res << c.n
+        "#,
+    );
+}

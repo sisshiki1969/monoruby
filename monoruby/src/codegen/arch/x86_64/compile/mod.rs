@@ -1156,6 +1156,21 @@ impl Codegen {
                 ),
                 LSideExitKind::Error { chain } => self.gen_handle_error(pc, wb, entry, base, chain),
                 LSideExitKind::Redo { recompile } => self.gen_frameless_redo(pc, entry, recompile),
+                LSideExitKind::Materialize {
+                    recompile,
+                    chain,
+                    error,
+                } => self.gen_frameless_materialize(
+                    pc,
+                    &wb,
+                    entry,
+                    base,
+                    chain,
+                    recompile,
+                    error,
+                    #[cfg(feature = "deopt")]
+                    exit_id,
+                ),
             },
             // Macro-ops (irreducible runtime-call shapes) are delegated to the
             // arch-neutral fallback, which dispatches to the per-arch `emit_*`.

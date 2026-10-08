@@ -751,8 +751,9 @@ impl Codegen {
             // (`InlineCall`): no prologue. Its non-argument locals are not
             // nil-filled either — the abstract state binds them to `nil`
             // and nothing reads a slot it has not written, since the body
-            // has no safepoint to scan the window and no exit that writes
-            // it back.
+            // has no safepoint to scan the window; the one exit that makes
+            // the window a frame (`LSideExitKind::Materialize`) writes the
+            // `nil`s itself, from its write-back.
             AsmInst::Init { .. } if frame.frameless => {}
             AsmInst::Init {
                 info,
@@ -1502,20 +1503,31 @@ impl Codegen {
             }
             // The body of a frameless callee, emitted here inside the caller's
             // (`Codegen::gen_inline_call`). A callee side exit lands on the
-            // caller's deopt at this call.
+            // caller's deopt at this call, or — after a side effect — makes
+            // the window a frame and converts this one by `spec`.
             AsmInst::InlineCall {
                 spec_id,
                 delta,
                 redo,
                 using_fpr,
+                spec,
             } => {
                 let redo = self.deopt_label(labels, redo, DeoptCause::Static("inline redo"));
+                let replay = spec.into_replay(frame.base_stack_offset);
                 self.lower_via_inline(
                     store,
                     labels,
                     frame.base_stack_offset,
                     move |cg, store, _, _| {
-                        cg.gen_inline_call(store, spec_id, delta, redo, using_fpr, class_version);
+                        cg.gen_inline_call(
+                            store,
+                            spec_id,
+                            delta,
+                            redo,
+                            using_fpr,
+                            replay,
+                            class_version,
+                        );
                     },
                 );
             }

@@ -786,14 +786,26 @@ pub(crate) enum CellHeader {
     NewbornOf(u64),
 }
 
-/// The two ways out of an inline callee's body (`Codegen::inline_ctx`).
+/// The ways out of an inline callee's body (`Codegen::inline_ctx`), and
+/// what a materializing exit needs to know about the `InlineCall` running
+/// it (`Codegen::gen_frameless_materialize`).
 pub(in crate::codegen) struct InlineCtx {
     /// The continuation of the `InlineCall`: the body's `Ret` jumps here
     /// with the return value in rax / x0 (or xmm1 / d1 for a raw float).
     pub(in crate::codegen) done: DestLabel,
-    /// Where every side exit of the body goes: a trampoline that undoes
-    /// the frame shift and continues to the caller's deopt at the call.
+    /// Where a redo exit of the body goes: a trampoline that undoes the
+    /// frame shift and continues to the caller's deopt at the call.
     pub(in crate::codegen) redo: DestLabel,
+    /// How far the frame pointer and the LFP were moved down into the
+    /// window.
+    pub(in crate::codegen) delta: i32,
+    /// The caller's fprs the `InlineCall` saved below the stack pointer.
+    pub(in crate::codegen) using_fpr: jitgen::UsingFpr,
+    /// The caller's state at the call: its write-back, spill base, result
+    /// slot and call-site pc.
+    pub(in crate::codegen) replay: jitgen::ChainReplay,
+    /// The callee's `Meta`, the word a frame of it carries at `LFP_META`.
+    pub(in crate::codegen) meta: u64,
 }
 
 ///
