@@ -987,43 +987,65 @@ impl Codegen {
                     forward,
                 });
             }
-            // Store into a heap-spilled instance variable of self (the table is
-            // known large enough, so no bounds check / runtime extend).
-            // `self.@ivar = src` where the ivar spilled to self's heap var-table
-            // (which is known large enough — no bounds check). The two derefs
-            // (RValue → var-table struct → buffer pointer) go through the scratch
-            // pointer so rdi is preserved as the barrier's parent.
+            // `self`'s ivar buffer: `self.var_table.ptr`, two loads off self.
+            AsmInst::LoadSelfIVarBase => {
+                let base: LReg = SELF_IVAR_BASE.into();
+                self.encode_linst(LInst::Load {
+                    dst: base,
+                    mem: LMem::Slot(SlotId::self_()),
+                });
+                self.encode_linst(LInst::Load {
+                    dst: base,
+                    mem: LMem::Field {
+                        base,
+                        disp: RVALUE_OFFSET_VAR as i32,
+                    },
+                });
+                self.encode_linst(LInst::Load {
+                    dst: base,
+                    mem: LMem::Field {
+                        base,
+                        disp: MONOVEC_PTR as i32,
+                    },
+                });
+            }
+            #[cfg(target_arch = "x86_64")]
+            AsmInst::ReleaseSelfIVarBase { pc } => self.encode_linst(LInst::LoadImm {
+                dst: SELF_IVAR_BASE.into(),
+                imm: pc.as_ptr() as u64,
+            }),
+            #[cfg(target_arch = "aarch64")]
+            AsmInst::ReleaseSelfIVarBase { .. } => {}
+            // `dst <- self.@ivar` from the cached buffer; an unset slot
+            // reads as 0 and becomes nil.
+            AsmInst::LoadSelfIVarHeap {
+                ivarid,
+                is_object_ty,
+                dst,
+            } => {
+                self.encode_linst(LInst::Load {
+                    dst: dst.into(),
+                    mem: LMem::Field {
+                        base: SELF_IVAR_BASE.into(),
+                        disp: self_heap_ivar_index(ivarid, is_object_ty) * 8,
+                    },
+                });
+                self.encode_linst(LInst::NilIfZero { reg: dst });
+            }
+            // `self.@ivar = src` into the cached buffer (the table is known
+            // large enough, so no bounds check / runtime extend), then the
+            // barrier with self (rdi) as the parent.
             AsmInst::StoreSelfIVarHeap {
                 src,
                 ivarid,
                 is_object_ty,
                 wb,
             } => {
-                let ivar = ivarid.get() as i32;
-                let idx = if is_object_ty {
-                    ivar - OBJECT_INLINE_IVAR as i32
-                } else {
-                    ivar
-                };
-                self.encode_linst(LInst::Load {
-                    dst: LReg::Scratch,
-                    mem: LMem::Field {
-                        base: GP::Rdi.into(),
-                        disp: RVALUE_OFFSET_VAR as i32,
-                    },
-                });
-                self.encode_linst(LInst::Load {
-                    dst: LReg::Scratch,
-                    mem: LMem::Field {
-                        base: LReg::Scratch,
-                        disp: MONOVEC_PTR as i32,
-                    },
-                });
                 self.encode_linst(LInst::Store {
                     src,
                     mem: LMem::Field {
-                        base: LReg::Scratch,
-                        disp: idx * 8,
+                        base: SELF_IVAR_BASE.into(),
+                        disp: self_heap_ivar_index(ivarid, is_object_ty) * 8,
                     },
                 });
                 if wb {
@@ -2433,6 +2455,17 @@ impl Codegen {
 // backends' emission primitives. The asm that loads and calls them differs per
 // arch, but the Rust bodies are identical, so they live here once rather than
 // being duplicated in `arch/x86_64/compile/*.rs` (x86) and `arch/aarch64/compile.rs` (aarch64).
+
+/// Index of a heap-spilled ivar in its table: an `ObjTy::OBJECT` keeps the
+/// first `OBJECT_INLINE_IVAR` in the cell.
+fn self_heap_ivar_index(ivarid: IvarId, is_object_ty: bool) -> i32 {
+    let ivar = ivarid.get() as i32;
+    if is_object_ty {
+        ivar - OBJECT_INLINE_IVAR as i32
+    } else {
+        ivar
+    }
+}
 
 /// `self.@ivar = val` cold path (StoreIVarHeap): set via IvarId, growing the
 /// var-table as needed.

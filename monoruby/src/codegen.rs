@@ -147,9 +147,12 @@ pub(crate) enum GP {
 /// A64 registers, used by the aarch64 AsmIR→machine-code lowering (Phase 3b).
 ///
 /// The **global** roles must match the aarch64 VM's global registers so that
-/// JIT↔VM transitions agree: `R12`(Globals)→x20, `R13`(PC)→x21, `R14`(LFP)→x22,
-/// `R15`(accumulator)→x23 (and the executor `rbx`→x19 is implicit, not in this
-/// enum). The **scratch** set maps to distinct caller-saved `x0..=x8`; `x9..=x15`
+/// JIT↔VM transitions agree: `R12`(Globals)→x20, `R14`(LFP)→x22,
+/// `R15`(accumulator)→x23 (and the executor `rbx`→x19 and the PC x21 are
+/// implicit, not in this enum). `R13`, the PC on x86-64, is only ever named
+/// as the JIT's `SELF_IVAR_BASE` and maps to x24 here: x21 is read as a PC
+/// by several aarch64 call sequences, while x24 is free in JIT code and
+/// saved by every invoker. The **scratch** set maps to distinct caller-saved `x0..=x8`; `x9..=x15`
 /// are left free for per-`AsmInst` lowering temps. `Rsp`→`sp`.
 ///
 /// Note: the x86 and aarch64 C-call ABIs differ (x86 passes args in
@@ -170,7 +173,7 @@ impl GP {
             GP::R10 => 7,
             GP::R11 => 8,
             GP::R12 => 20,
-            GP::R13 => 21,
+            GP::R13 => 24,
             GP::R14 => 22,
             GP::R15 => 23,
             GP::Rsp => 31,

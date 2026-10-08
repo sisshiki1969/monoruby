@@ -241,6 +241,72 @@ pub(crate) struct AsmIr {
     /// a call site's guard has just loaded (the inline generators load it
     /// again), and a `ret` skip re-loading a result just stored from rax.
     reg_holds: [Option<RegHolds>; 2],
+    /// [`SELF_IVAR_BASE`] holds the buffer of `self`'s heap ivar table while
+    /// this equals `inst.len()`: set by [`Self::self_ivar_base`], carried
+    /// across the instructions [`keeps_self_ivar_base`] admits, and dropped
+    /// by any other.
+    ivar_base_at: Option<usize>,
+    /// A bytecode pointer of the unit being compiled, written into the base
+    /// register ahead of the instructions that read it as a pc (x86-64
+    /// only, see [`AsmInst::ReleaseSelfIVarBase`]).
+    ivar_base_release_pc: BytecodePtr,
+}
+
+/// The register that caches the buffer of `self`'s heap ivar table: `r13`
+/// on x86-64, `x24` on aarch64 (see `GP::a64`). Both are callee-saved in the
+/// C ABI and saved by every invoker, and JIT code touches them only in call
+/// sequences, which end a cached run.
+pub(super) const SELF_IVAR_BASE: GP = GP::R13;
+
+///
+/// Whether [`SELF_IVAR_BASE`] still holds `self`'s heap ivar buffer after
+/// *inst*: the instruction neither writes the register nor can reach code
+/// that grows an ivar table (`RValue::set_ivar_by_ivarid` /
+/// `RValue::extend_ivar`) — no Ruby code, no GVL release, no `set_ivar`
+/// slow path. Calls into Rust helpers (Float boxing, the write barrier, an
+/// integer helper) are fine: they preserve callee-saved registers, and the
+/// collector never moves or reallocates an ivar table. Anything not listed
+/// ends the run, which only costs a reload.
+///
+fn keeps_self_ivar_base(inst: &AsmInst) -> bool {
+    matches!(
+        inst,
+        AsmInst::BcIndex(_)
+            | AsmInst::RegToStack(..)
+            | AsmInst::StackToReg(..)
+            | AsmInst::LitToReg(..)
+            | AsmInst::LitToStack(..)
+            | AsmInst::RegMove(..)
+            | AsmInst::FprMove(..)
+            | AsmInst::FprSwap(..)
+            | AsmInst::FloatBinOp { .. }
+            | AsmInst::FloatUnOp { .. }
+            | AsmInst::F64ToFpr(..)
+            | AsmInst::I64ToBoth(..)
+            | AsmInst::FprToStack(..)
+            | AsmInst::FixnumToFpr(..)
+            | AsmInst::FloatToFpr(..)
+            | AsmInst::GuardClass(..)
+            | AsmInst::GuardClassIn(..)
+            | AsmInst::GuardFrozen { .. }
+            | AsmInst::LoadIVarInline { .. }
+            | AsmInst::StoreIVarInline { .. }
+            | AsmInst::LoadSelfIVarBase
+            | AsmInst::LoadSelfIVarHeap { .. }
+            | AsmInst::StoreSelfIVarHeap { .. }
+            | AsmInst::IntegerBinOpReg { .. }
+            | AsmInst::IntegerBinOpImm { .. }
+            | AsmInst::IntegerDouble { .. }
+            | AsmInst::IntegerCmpReg { .. }
+            | AsmInst::IntegerCmpImm { .. }
+            | AsmInst::FloatCmp { .. }
+            | AsmInst::CmpFlags { .. }
+            | AsmInst::CmpImmFlags { .. }
+            | AsmInst::TestBitFlags { .. }
+            | AsmInst::FloatCmpFlags { .. }
+            | AsmInst::FixnumNeg { .. }
+            | AsmInst::FixnumBitNot { .. }
+    )
 }
 
 /// The registers [`AsmIr::reg_holds`] tracks.
@@ -310,6 +376,8 @@ impl AsmIr {
             frameless: ctx.in_frameless_frame(),
             frameless_violation: false,
             reg_holds: [None; 2],
+            ivar_base_at: None,
+            ivar_base_release_pc: ctx.get_pc(BcIndex::from(0)),
         }
     }
 
@@ -425,6 +493,17 @@ impl AsmIr {
 
     pub(super) fn push(&mut self, inst: AsmInst) {
         if self.codegen_mode {
+            // These hand the base register on as a pc: give them one, as
+            // whatever ran before (possibly a cached run, possibly in an
+            // earlier block) may have left a buffer pointer there.
+            if matches!(
+                inst,
+                AsmInst::Yield { .. } | AsmInst::ClassDef { .. } | AsmInst::SingletonClassDef { .. }
+            ) {
+                self.push(AsmInst::ReleaseSelfIVarBase {
+                    pc: self.ivar_base_release_pc,
+                });
+            }
             #[cfg(feature = "profile")]
             if matches!(inst, AsmInst::GuardClass(..)) {
                 crate::codegen::jitgen::join_profile::count_guard_class();
@@ -444,10 +523,19 @@ impl AsmIr {
                 // store's write barrier may call out, which does not.
                 AsmInst::LoadIVarInline { dst, .. } if dst != GP::Rdi => (true, false),
                 AsmInst::StoreIVarInline { wb: false, .. } => (true, false),
+                // The cached-base ivar accesses address through the base
+                // register only.
+                AsmInst::LoadSelfIVarHeap { dst, .. } if dst != GP::Rdi => (true, false),
+                AsmInst::StoreSelfIVarHeap { wb: false, .. } => (true, false),
+                AsmInst::LoadSelfIVarBase | AsmInst::ReleaseSelfIVarBase { .. } => (true, true),
                 _ => (false, false),
             };
             let len = self.inst.len();
+            let keeps_base = self.ivar_base_at == Some(len) && keeps_self_ivar_base(&inst);
             self.inst.push(inst);
+            if keeps_base {
+                self.ivar_base_at = Some(len + 1);
+            }
             for (holds, keeps) in self.reg_holds.iter_mut().zip([keeps_rdi, keeps_rax]) {
                 if let Some(h) = holds
                     && keeps
@@ -498,6 +586,7 @@ impl AsmIr {
     pub(super) fn optimize_peephole(&mut self) -> usize {
         let before = self.inst.len();
         self.inst.retain(|inst| !inst.is_self_move());
+        self.ivar_base_at = None;
         before - self.inst.len()
     }
 
@@ -537,6 +626,7 @@ impl AsmIr {
     pub(super) fn pop_trailing_br(&mut self) {
         debug_assert!(matches!(self.inst.last(), Some(AsmInst::Br(_))));
         self.inst.pop();
+        self.ivar_base_at = None;
     }
 
     pub(super) fn ends_with_ret(&self) -> bool {
@@ -551,6 +641,7 @@ impl AsmIr {
     pub(super) fn pop_trailing_ret(&mut self) {
         debug_assert!(self.ends_with_ret());
         self.inst.pop();
+        self.ivar_base_at = None;
     }
 
     ///
@@ -627,6 +718,7 @@ impl AsmIr {
     ) {
         self.inst.truncate(inst);
         self.reg_holds = [None; 2];
+        self.ivar_base_at = None;
         self.side_exit.truncate(side_exit);
         #[cfg(feature = "deopt")]
         self.created_at.truncate(side_exit);
@@ -891,6 +983,19 @@ impl AsmIr {
 
     pub(crate) fn stack2reg(&mut self, src: SlotId, dst: GP) {
         self.push(AsmInst::StackToReg(src, dst));
+    }
+
+    ///
+    /// Make [`SELF_IVAR_BASE`] hold the buffer of `self`'s heap ivar table,
+    /// reusing the one loaded earlier in this run if nothing since could
+    /// have moved it. The caller guarantees the table exists (the frame's
+    /// `Preparation` extends it on entry, see `set_ivar_heap_accessed`).
+    ///
+    pub(crate) fn self_ivar_base(&mut self) {
+        if self.codegen_mode && self.ivar_base_at != Some(self.inst.len()) {
+            self.push(AsmInst::LoadSelfIVarBase);
+            self.ivar_base_at = Some(self.inst.len());
+        }
     }
 
     pub(crate) fn self2reg(&mut self, dst: GP) {
@@ -2101,6 +2206,21 @@ pub(super) enum AsmInst {
 
     Preparation,
     ///
+    /// [`SELF_IVAR_BASE`] <- the buffer of `self`'s heap ivar table
+    /// (`self.var_table.ptr`). Emitted by [`AsmIr::self_ivar_base`] only.
+    ///
+    LoadSelfIVarBase,
+    ///
+    /// Put a bytecode pointer of this unit into [`SELF_IVAR_BASE`]. On
+    /// x86-64 the register is `r13`, which `yield` and `class` definitions
+    /// hand on (minus 16) as the call site's bytecode pointer without
+    /// setting it first (`call_funcdata`); a cached run may have left an
+    /// ivar buffer there. No code on aarch64, whose base register is x24.
+    ///
+    ReleaseSelfIVarBase {
+        pc: BytecodePtr,
+    },
+    ///
     /// Loop JIT entry rsp bump. Emits `subq rsp, X` where `X` is the
     /// JIT-managed spill region for this Loop frame (the existing
     /// invoker / interpreter prologue is left untouched). The
@@ -3023,13 +3143,23 @@ pub(super) enum AsmInst {
         wb: bool,
     },
     ///
-    /// Store *src* in an instance var *ivarid* of the object *rdi*.
+    /// Load `self`'s heap-spilled ivar *ivarid* into *dst* (nil if unset).
     ///
     /// #### in
-    /// - rdi: &RValue
+    /// - [`SELF_IVAR_BASE`]: `self`'s ivar buffer ([`AsmInst::LoadSelfIVarBase`])
     ///
-    /// #### destroy
-    /// - rdx
+    LoadSelfIVarHeap {
+        ivarid: IvarId,
+        is_object_ty: bool,
+        dst: GP,
+    },
+    ///
+    /// Store *src* in `self`'s heap-spilled ivar *ivarid*. The table is
+    /// known large enough (`Preparation`).
+    ///
+    /// #### in
+    /// - rdi: self (the write barrier's parent)
+    /// - [`SELF_IVAR_BASE`]: `self`'s ivar buffer ([`AsmInst::LoadSelfIVarBase`])
     ///
     StoreSelfIVarHeap {
         src: GP,
