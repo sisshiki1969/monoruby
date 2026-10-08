@@ -181,3 +181,42 @@ fn ivar_ty_widened_by_another_thread() {
         "#,
     );
 }
+
+/// A typed ivar lets the compile run past where the interpreter has ever
+/// been: a division whose divisor the state cannot name and whose cache
+/// is empty deopts to fill the cache (and recompiles) instead of being
+/// left an out-of-line call for good.
+#[test]
+fn ivar_ty_unrun_division_fills_its_cache() {
+    run_test_once(
+        r#"
+        class Tm
+          def initialize; @cycles = 0; @tac = 0; @tima = 0; end
+          attr_writer :tac
+          def step(c)
+            before = @cycles
+            after = @cycles + c
+            @cycles = after & 0xffff
+            return if @tac[2] == 0
+            divider = case @tac & 0b11
+                      when 0b00 then 1024
+                      when 0b01 then 16
+                      when 0b10 then 64
+                      when 0b11 then 256
+                      end
+            @tima += after / divider - before / divider
+          end
+          def tima = @tima
+        end
+        t = Tm.new
+        i = 0
+        while i < 3000
+          t.step(4 + (i & 4))
+          t.tac = 0b100 if i == 1000
+          t.tac = 0b111 if i == 2000
+          i += 1
+        end
+        t.tima
+        "#,
+    );
+}

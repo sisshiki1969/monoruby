@@ -672,6 +672,7 @@
 1f22844ce32fd2036c65263ce0b9319d	1	x = "Z"; (/#{x}/i =~ "qzq")
 1f3121c4382667758c3988faab82811f	"US-ASCII"	"abcc".dup.force_encoding("US-ASCII").tr_s("c", "X").encoding.to_s
 1f3c6f92f15e5a19c15d9a31f44affc5	[[2.0, 1.0], [2.5, 1.0]]	__a = [];__a << (1.0.coerce(2));__a << (1.0.coerce(2.5));__a
+1f4035d0ff7df128e83281b52b78e897	30	class Tm\n          def initialize; @cycles = 0; @tac = 0; @tima = 0; en
 1f7d35b4f9519972e0e08c370bcbc7d1	[6, [0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 1, 0, 1, 1, 1, 2, 1, 3, 1, 4, 2, 0, 2, 1, 2, 2, 2, 3, 2, 4, 3, 0, 3, 1, 3, 2, 3, 3, 3, 4, 4, 0, 4, 1, 4, 2, 4, 3, 4, 4]]	__a = [];__a << (eval "1+2+3");__a << (\n        res = []\n        5.times do |a|\n
 1f8b1e139544d2b5d5fa2c7ed022deaf	[true, true, true, true]	__a = [];__a << (test(?e, "/etc/hosts") == true);__a << (test(?f, "/etc/hosts") 
 1fa3e3a0998c480c3b2134908102a18f	999000	a = Array.new(2000) { |i| [i % 1000] }\n            1000.times { [1]
