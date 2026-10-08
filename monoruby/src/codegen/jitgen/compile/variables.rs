@@ -18,15 +18,15 @@ impl<'a> JitContext<'a> {
         // evicted victim; the load writes only `gp` (its scratch is rdi/rsi/rdx,
         // none of them pool registers), so other residents survive.
         let gp = state.alloc_gp_for(ir, dst, Guarded::Value);
-        ir.self2reg(GP::Rdi);
         let is_object_ty = self.self_ty() == Some(ObjTy::OBJECT);
         if is_object_ty && ivarid.is_inline() {
+            ir.self2reg(GP::Rdi);
             ir.push(AsmInst::LoadIVarInline { ivarid, dst: gp });
         } else {
-            ir.push(AsmInst::LoadIVarHeap {
+            ir.self_ivar_base();
+            ir.push(AsmInst::LoadSelfIVarHeap {
                 ivarid,
                 is_object_ty,
-                self_: true,
                 dst: gp,
             });
             self.set_ivar_heap_accessed();
@@ -61,6 +61,7 @@ impl<'a> JitContext<'a> {
         if is_object_ty && ivarid.is_inline() {
             ir.push(AsmInst::StoreIVarInline { src, ivarid, wb });
         } else {
+            ir.self_ivar_base();
             ir.push(AsmInst::StoreSelfIVarHeap {
                 src,
                 ivarid,

@@ -400,6 +400,13 @@ register assignment in `codegen/arch/aarch64/`):
 
 JIT-compiled code keeps no fixed accumulator: `GP_ALLOC_POOL` is empty and
 `jitgen/gp_alloc.rs` allocates GP registers per basic block.
+Inside JIT code `r13` (aarch64: `x24`) doubles as `SELF_IVAR_BASE`: the
+buffer of `self`'s heap ivar table, cached across a straight-line run of
+instructions that cannot grow it (`AsmIr::self_ivar_base`,
+`keeps_self_ivar_base` in `jitgen/asmir.rs`). On x86-64 `call_funcdata`
+reads `r13 - 16` as the call site's pc, so every JIT call sequence that
+reaches it sets `r13` first (`yield` and class bodies get an
+`AsmInst::ReleaseSelfIVarBase`).
 
 ### JIT Compiler (`codegen/`)
 

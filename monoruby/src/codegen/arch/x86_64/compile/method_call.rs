@@ -558,6 +558,11 @@ impl Codegen {
             self.generic_handle_arguments(runtime::jit_handle_arguments_no_block_for_send_splat);
             self.handle_error(&error);
         }
+        // `call_funcdata` hands a with-pc builtin `r13 - 16` as the call
+        // site's bytecode pointer.
+        monoasm! { &mut self.jit,
+            movq r13, (call_site_pc + 16);
+        }
         self.call_funcdata();
         monoasm! { &mut self.jit,
         done:
@@ -657,6 +662,11 @@ impl Codegen {
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
         );
         self.method_object_call_handle_arguments(args, pos_num, callid, error);
+        // `call_funcdata` hands a with-pc builtin `r13 - 16` as the call
+        // site's bytecode pointer.
+        monoasm! { &mut self.jit,
+            movq r13, (call_site_pc + 16);
+        }
         self.call_funcdata();
         monoasm! { &mut self.jit,
         done:

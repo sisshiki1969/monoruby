@@ -146,6 +146,9 @@ impl Codegen {
             | AsmInst::BlockArg { .. }
             | AsmInst::LoopJitRspBump { .. }
             | AsmInst::StoreSelfIVarHeap { .. }
+            | AsmInst::LoadSelfIVarBase
+            | AsmInst::ReleaseSelfIVarBase { .. }
+            | AsmInst::LoadSelfIVarHeap { .. }
             | AsmInst::StoreIVarHeap { .. }
             | AsmInst::LoadIVarHeap { .. }
             | AsmInst::UndefMethod { .. }
