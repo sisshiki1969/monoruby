@@ -67,7 +67,15 @@ impl<'a> JitContext<'a> {
         }
         if self.inline_asm(state, ir, f, callid, Some(recv_class), idx_class) {
             self.record_bop_dep(recv_class, op);
-            state.unset_side_effect_guard();
+            // An Integer-indexed `Array#[]` only reads: a guard after it can
+            // still redo the whole call, so a frameless callee such as
+            // `@x = @table[i]` stays frameless.
+            if !(op == IdentId::_INDEX
+                && recv_class.id() == ARRAY_CLASS
+                && idx_class == Some(CachedClass::INTEGER))
+            {
+                state.unset_side_effect_guard();
+            }
             true
         } else {
             *state = state_save;
