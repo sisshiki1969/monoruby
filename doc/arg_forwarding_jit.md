@@ -315,12 +315,13 @@ forwarding callsite に対しても、
 - **trivial method fold**（`ISeqHint::ConstReturn` / `SelfReturn`）— 呼び出し
   自体が消える。call を消すこと自体が転送の consume なので、`ir.set_deferred_rest()`
   を立てて caller 側スキップを維持する（さもないと誰も見ない Array を作る）。
-- **frameless な ivar ストア展開**（`compile/frameless.rs::ivar_store_body`）—
-  `ArgSlot::Caller` / `AsmInst::LoadCallerSlot` で呼び出し元スロットを直読み
-  して `@a = a` 相当のストアを caller の命令として展開する。
 
-が効く。Ruby レベルの `Class#new` は `o.__builtin_initialize__(...)`
-（`bypass_visibility` 付きの forwarding call）という*まさにこの形*なので、
+が効く。（かつてはここに `compile/frameless.rs::ivar_store_body` による
+ivar ストア展開もあったが、`recv.new(args)` は現在 bytecodegen が付ける
+`initialize` twin call site（`CallSiteInfo::class_new_init`）経由で
+frameless callee として本体をインライン出力するので、認識器は削除された。）
+Ruby レベルの `Class#new` は `o.__builtin_initialize__(...)`
+（`bypass_visibility` 付きの forwarding call）という形なので、
 `X.new(a, b)` が **allocate + ivar ストア 2 本**にまで落ちる。これが実利上
 最大の効果である。
 
@@ -362,7 +363,7 @@ specialization 深度上限を使い切った深い呼び出し位置では成�
 | `codegen/jitgen/compile/method_call.rs::set_arguments` | 4 段の分岐、`kw_forward_route`、拒否権 |
 | `codegen/jitgen/compile/method_call.rs::send_specialized` | `defer_rest` の確定（producer） |
 | `codegen/jitgen/compile.rs`（`CheckKwRest`） | 空 Hash 生成の省略 |
-| `codegen/jitgen/asmir.rs` | `SetArgumentsForwarded` / `…Helper` / `LoadCallerSlot` |
+| `codegen/jitgen/asmir.rs` | `SetArgumentsForwarded` / `…Helper` |
 | `arch/{x86_64,aarch64}/compile/…` | 上記の lowering、deopt 実体化 |
 | `codegen/jitgen.rs::gen_write_back_for_deopt` | `forward_rest` / `forward_kwrest` の実体化 |
 | `codegen/runtime/args.rs` | 専用ヘルパ、lazy 規約（マーカー / 解決 / 実体化）、`SmallVec` 化 |

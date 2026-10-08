@@ -219,18 +219,6 @@ impl Codegen {
             | AsmInst::RestKw { .. } => {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
-            // `dst <- [caller_rbp - rbp_local(slot)]`. This body established
-            // its own rbp (`init_func`), so the caller's is the value saved
-            // at `[rbp]`; the D1 gate guarantees the caller is exactly one
-            // level up. Same addressing as `jit_set_arguments_forwarded`.
-            AsmInst::LoadCallerSlot { slot, dst } => {
-                let r = dst as u64;
-                let ofs = rbp_local(slot);
-                monoasm! { &mut self.jit,
-                    movq R(r), [rbp];
-                    movq R(r), [R(r) - (ofs)];
-                }
-            }
             AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
                 let deopt = &self.deopt_label(labels, deopt, DeoptCause::Static("class version (specialized)"));
                 self.guard_class_version_specialized(
