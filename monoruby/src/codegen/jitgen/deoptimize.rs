@@ -6,11 +6,12 @@ impl Codegen {
         position: Option<BytecodePtr>,
         deopt: &DestLabel,
         reason: RecompileReason,
+        counter: DestLabel,
     ) {
         let recompile = self.jit.label();
         let dec = self.jit.label();
 
-        self.dec_counter(&dec, &recompile, deopt, COUNT_DEOPT_RECOMPILE);
+        self.dec_shared_counter(&dec, &recompile, deopt, &counter);
 
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
@@ -55,6 +56,17 @@ impl Codegen {
         count: i32,
     ) {
         let counter = self.jit.data_i32(count);
+        self.dec_shared_counter(dec, recompile, deopt, &counter);
+    }
+
+    fn dec_shared_counter(
+        &mut self,
+        dec: &DestLabel,
+        recompile: &DestLabel,
+        deopt: &DestLabel,
+        counter: &DestLabel,
+    ) {
+        let counter = counter.clone();
         monoasm!( &mut self.jit,
             xorq rdi, rdi;
             cmpl [rip + counter], 0;

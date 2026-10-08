@@ -2364,11 +2364,32 @@ impl Codegen {
         reason: RecompileReason,
     ) {
         match target {
-            RecompileTarget::Whole(position) => self.recompile_and_deopt(position, deopt, reason),
+            RecompileTarget::Whole(position) => {
+                let counter = self.jit.data_i32(COUNT_DEOPT_RECOMPILE);
+                self.recompile_and_deopt(position, deopt, reason, counter)
+            }
             RecompileTarget::Specialized(idx) => {
                 self.recompile_and_deopt_specialized(deopt, self.specialized_base + idx, reason)
             }
         }
+    }
+
+    /// Main-body recompile point (`AsmInst::RecompileDeopt`): like a
+    /// `Whole` [`Self::emit_recompile_deopt`], but every such exit of the unit
+    /// draws on the unit's one shared budget word
+    /// (`Codegen::unit_recompile_counter`, see `unit_recompile_budget`).
+    pub(in crate::codegen::jitgen) fn emit_unit_recompile_deopt(
+        &mut self,
+        position: Option<BytecodePtr>,
+        deopt: &DestLabel,
+        _error: Option<&DestLabel>,
+        reason: RecompileReason,
+    ) {
+        let counter = match &self.unit_recompile_counter {
+            Some(counter) => counter.clone(),
+            None => self.jit.data_i32(COUNT_DEOPT_RECOMPILE),
+        };
+        self.recompile_and_deopt(position, deopt, reason, counter)
     }
 
     /// Method prologue. Always succeeds on x86 (the bool result mirrors the

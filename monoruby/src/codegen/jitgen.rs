@@ -667,9 +667,26 @@ impl Codegen {
         // small inlined frame still spans everything emitted after it. A
         // per-frame decision let exactly that overflow (a generated sqlite
         // module placed a jump table 1.55 MiB past its `adr`).
+        let unit_insts = unit_inst_len(&mut frame.asm_info);
         #[cfg(target_arch = "aarch64")]
         {
-            self.far_branch_mode = unit_inst_len(&mut frame.asm_info) > 8192;
+            self.far_branch_mode = unit_insts > 8192;
+        }
+        // One recompile budget for the whole unit's `RecompileDeopt` exits,
+        // sized by what a recompile of this unit costs (see
+        // `unit_recompile_budget`).
+        let budget = unit_recompile_budget(unit_insts);
+        #[cfg(feature = "jit-log")]
+        if self.startup_flag {
+            eprintln!("    unit insts:{unit_insts} recompile budget:{budget}");
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            self.unit_recompile_counter = Some(self.jit.data_i32(budget));
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            self.unit_recompile_counter = Some(Box::into_raw(Box::new(budget)) as u64);
         }
         // x86: collect this unit's class-version imm32 patch sites (one per
         // emitted guard, root and inlined children alike — one compilation
@@ -723,6 +740,7 @@ impl Codegen {
             }
         }
         self.unit_const_version = None;
+        self.unit_recompile_counter = None;
         // Snapshot the involved names' epochs *at compile time*; a later
         // guard failure compares against these to prove the folds unchanged.
         let mut name_epochs: Vec<(IdentId, u64)> = vec![];
@@ -796,7 +814,6 @@ impl Codegen {
 
 /// Total AsmIr instruction count of a whole compilation unit: the frame's
 /// blocks and bridges plus, recursively, every inlined specialized callee's.
-#[cfg(target_arch = "aarch64")]
 fn unit_inst_len(info: &mut AsmInfo) -> usize {
     let mut total: usize = info
         .iter_ir_mut()

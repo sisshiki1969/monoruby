@@ -3348,6 +3348,47 @@ impl Codegen {
         error: Option<&DestLabel>,
         reason: RecompileReason,
     ) {
+        let counter = Box::into_raw(Box::new(match target {
+            RecompileTarget::Whole(_) => COUNT_DEOPT_RECOMPILE,
+            RecompileTarget::Specialized(_) => COUNT_DEOPT_RECOMPILE_SPECIALIZED,
+        })) as u64;
+        self.emit_recompile_deopt_on(target, deopt, error, reason, counter);
+    }
+
+    /// Main-body recompile point (`AsmInst::RecompileDeopt`): like a
+    /// `Whole` [`Self::emit_recompile_deopt`], but every such exit of the unit
+    /// draws on the unit's one shared budget word
+    /// (`Codegen::unit_recompile_counter`, see `unit_recompile_budget`).
+    pub(in crate::codegen::jitgen) fn emit_unit_recompile_deopt(
+        &mut self,
+        position: Option<BytecodePtr>,
+        deopt: &DestLabel,
+        error: Option<&DestLabel>,
+        reason: RecompileReason,
+    ) {
+        let counter = match self.unit_recompile_counter {
+            Some(counter) => counter,
+            None => Box::into_raw(Box::new(COUNT_DEOPT_RECOMPILE)) as u64,
+        };
+        self.emit_recompile_deopt_on(
+            RecompileTarget::Whole(position),
+            deopt,
+            error,
+            reason,
+            counter,
+        );
+    }
+
+    /// The body of [`Self::emit_recompile_deopt`] over the counter word at
+    /// `counter`.
+    fn emit_recompile_deopt_on(
+        &mut self,
+        target: RecompileTarget,
+        deopt: &DestLabel,
+        error: Option<&DestLabel>,
+        reason: RecompileReason,
+        counter: u64,
+    ) {
         let deopt = deopt.clone();
         // Counter-gated one-shot recompile, then fall through to the deopt side
         // exit (which undoes any loop sp-bump, writes back live values, and
@@ -3356,10 +3397,6 @@ impl Codegen {
         // and x5-x8 GP pool (R8-R11) around the C call because the deopt
         // write-back that follows reads both (d8-d15 / x19-x28 are
         // callee-saved).
-        let counter = Box::into_raw(Box::new(match target {
-            RecompileTarget::Whole(_) => COUNT_DEOPT_RECOMPILE,
-            RecompileTarget::Specialized(_) => COUNT_DEOPT_RECOMPILE_SPECIALIZED,
-        })) as u64;
         monoasm_arm64!(&mut self.jit,
             mov x9, (counter);
             ldr w11, [x9];
