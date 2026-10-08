@@ -439,6 +439,11 @@ impl AsmIr {
                 | AsmInst::GuardClassIn(GP::Rdi, ..)
                 | AsmInst::BrClassNe(GP::Rdi, ..)
                 | AsmInst::BrClassNotIn(GP::Rdi, ..) => (true, false),
+                // An inline ivar access addresses through rdi and writes
+                // only its destination (and scratch other than rdi); a
+                // store's write barrier may call out, which does not.
+                AsmInst::LoadIVarInline { dst, .. } if dst != GP::Rdi => (true, false),
+                AsmInst::StoreIVarInline { wb: false, .. } => (true, false),
                 _ => (false, false),
             };
             let len = self.inst.len();
@@ -511,6 +516,41 @@ impl AsmIr {
         self.inst
             .last()
             .is_some_and(AsmInst::is_unconditional_terminator)
+    }
+
+    ///
+    /// The target of the unconditional branch this block ends with, if it
+    /// ends with one.
+    ///
+    pub(super) fn trailing_br(&self) -> Option<JitLabel> {
+        match self.inst.last() {
+            Some(AsmInst::Br(label)) => Some(*label),
+            _ => None,
+        }
+    }
+
+    ///
+    /// Drop the unconditional branch this block ends with (`trailing_br`):
+    /// its target is laid down right after the block, so the fall-through
+    /// reaches it.
+    ///
+    pub(super) fn pop_trailing_br(&mut self) {
+        debug_assert!(matches!(self.inst.last(), Some(AsmInst::Br(_))));
+        self.inst.pop();
+    }
+
+    pub(super) fn ends_with_ret(&self) -> bool {
+        matches!(self.inst.last(), Some(AsmInst::Ret))
+    }
+
+    ///
+    /// Drop the `Ret` this block ends with: in an inline callee it is a
+    /// branch to the `InlineCall`'s continuation, which is laid down right
+    /// after the block.
+    ///
+    pub(super) fn pop_trailing_ret(&mut self) {
+        debug_assert!(self.ends_with_ret());
+        self.inst.pop();
     }
 
     ///
@@ -854,7 +894,13 @@ impl AsmIr {
     }
 
     pub(crate) fn self2reg(&mut self, dst: GP) {
-        self.push(AsmInst::StackToReg(SlotId::self_(), dst));
+        // Skipped where *dst* is known to hold `self` already (a tracked
+        // register, loaded from its home and untouched since).
+        let slot = SlotId::self_();
+        if !self.reg_holds(dst, slot, GpSrc::Home) {
+            self.push(AsmInst::StackToReg(slot, dst));
+            self.set_reg_holds(dst, slot, GpSrc::Home);
+        }
     }
 
     pub(super) fn fpr_move(&mut self, src: FPReg, dst: FPReg) {
@@ -3604,6 +3650,7 @@ impl Codegen {
         // no skip branch to elide and the flag is unused here.
         _fallthrough_in: bool,
     ) {
+        let ends_unconditionally = ir.ends_unconditionally();
         let mut side_exits = SideExitLabels::new();
         #[cfg(feature = "deopt")]
         let mut deopt_table: HashMap<(BytecodePtr, WriteBack, u32), (DestLabel, u32)> =
@@ -3790,7 +3837,11 @@ impl Codegen {
             }
         }
 
-        if let Some(exit) = exit {
+        // A bridge that already left (a `Ret`, a deopt) has nothing to
+        // branch to its exit block.
+        if let Some(exit) = exit
+            && !ends_unconditionally
+        {
             let exit = frame.resolve_bb_label(&mut self.jit, exit);
             monoasm! { &mut self.jit,
                 jmp exit;

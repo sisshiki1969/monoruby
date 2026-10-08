@@ -753,6 +753,7 @@ impl<'a> BytecodeGen<'a> {
             recv,
             block_fid,
             send_direct_name,
+            class_new_init,
             ..
         } = callsite;
         let ret = match dst {
@@ -800,6 +801,35 @@ impl<'a> BytecodeGen<'a> {
             );
             self.store.set_send_direct(callid, direct);
         }
+        // The `initialize` twin of `recv.new(args)`: the receiver is the
+        // object this site produces (its result slot), the arguments are
+        // the site's own, the result is discarded (`new` returns the
+        // object), and `bypass_visibility` reaches the private
+        // `initialize` as the Ruby `Class#new` does. Only the JIT's inline
+        // `Class#new` looks it up (`CallSiteInfo::class_new_init`); the
+        // VM runs the Ruby trampoline. A site that discards its result
+        // has no slot for the object to live in and gets none.
+        if class_new_init && let Some(obj) = dst_slot {
+            let init = self.store.new_callsite(
+                Some(IdentId::INITIALIZE),
+                bc_pos,
+                pos_num,
+                SlotId(0),
+                indexmap::IndexMap::default(),
+                vec![],
+                vec![],
+                vec![],
+                None,
+                None,
+                if pos_num == 0 { obj } else { arg_slot },
+                obj,
+                None,
+                false,
+                true,
+                false,
+            );
+            self.store.set_class_new_init(callid, init);
+        }
         let op1 = enc_wl(opcode, ret, callid.get());
         let op2 = enc_www(
             0,
@@ -835,6 +865,7 @@ impl<'a> BytecodeGen<'a> {
             // Consumed by `encode_call`, which builds the twin call site
             // before handing the original here.
             send_direct_name: _,
+            class_new_init: _,
         } = callsite;
 
         let args = self.slot_id(&args);

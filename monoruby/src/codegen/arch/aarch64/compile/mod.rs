@@ -287,6 +287,7 @@ impl Codegen {
         // `gen_asm` signatures stay identical.
         _fallthrough_in: bool,
     ) {
+        let ends_unconditionally = ir.ends_unconditionally();
         // Pure-deopt block (e.g. a loop's natural exit): its whole body is
         // `[Label(bb), Deopt(d)]`, i.e. a bare jump to its deopt handler. Emit
         // the deopt inline *at* the block label instead of laying a cold
@@ -514,7 +515,11 @@ impl Codegen {
                 self.a64_thunk_side_exits(frame, &mut labels, &links);
             }
         }
-        if let Some(exit) = exit {
+        // A bridge that already left (a `Ret`, a deopt) has nothing to
+        // branch to its exit block.
+        if let Some(exit) = exit
+            && !ends_unconditionally
+        {
             let exit = frame.resolve_bb_label(&mut self.jit, exit);
             monoasm_arm64!(&mut self.jit, b exit;);
         }

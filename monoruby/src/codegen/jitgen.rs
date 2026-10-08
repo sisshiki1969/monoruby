@@ -904,6 +904,37 @@ impl Codegen {
         // the main loop as before.
         let outline_bridges = frame.thread_empty_outline_bridges();
 
+        // The first outlined bridge is laid down right after the last main
+        // block. Where that block ends with a branch to the bridge's entry
+        // (an inline callee's single `ret` edge: `Br(seg)` then the segment
+        // at `seg`), the branch is to the next instruction and goes; the
+        // bridge is then fall-through reachable. Only where the bridges
+        // are hot code: x86 outlines them to the cold page except inside
+        // an inline callee, aarch64 has no cold page.
+        let mut first_bridge_fallthrough = false;
+        // The same for a body with no bridge at all whose last main block
+        // ends in the `Ret` (see `elide_last_ret` below).
+        if cfg!(target_arch = "x86_64")
+            && frame.frameless
+            && outline_bridges.is_empty()
+            && let Some((bbid, ir)) = ir_vec.last_mut()
+            && !frame.inline_bridge_exists_for(*bbid)
+            && ir.ends_with_ret()
+        {
+            ir.pop_trailing_ret();
+        }
+        if (cfg!(target_arch = "aarch64") || frame.frameless)
+            && let Some((_, entry, _)) = outline_bridges.first()
+            && let Some((bbid, ir)) = ir_vec.last_mut()
+            && !frame.inline_bridge_exists_for(*bbid)
+            && ir
+                .trailing_br()
+                .is_some_and(|l| frame.canonical_label(l) == frame.canonical_label(*entry))
+        {
+            ir.pop_trailing_br();
+            first_bridge_fallthrough = true;
+        }
+
         let mut live_bb: HashSet<BasicBlockId> = HashSet::default();
         ir_vec.iter().for_each(|(bb, ir)| {
             if let Some(bb) = bb {
@@ -954,16 +985,30 @@ impl Codegen {
         // unconditional `b exit`, so neither it nor its successor is
         // fall-through reachable.
         let had_outline_bridges = !outline_bridges.is_empty();
-        for (ir, entry, exit) in outline_bridges {
+        // x86: an inline callee's `Ret` is a jump to the `InlineCall`'s
+        // continuation (`emit_inline_ret`), which `gen_inline_call` binds
+        // right after this body; nothing else of the body goes on the hot
+        // page after the last bridge, so a `Ret` ending the last bridge
+        // (or, with no bridge, the last main block) is a jump to the next
+        // instruction and goes. aarch64 lays its side-exit island after the
+        // bridges, so the jump stays there.
+        let elide_last_ret = cfg!(target_arch = "x86_64") && frame.frameless;
+        let n = outline_bridges.len();
+        for (i, (mut ir, entry, exit)) in outline_bridges.into_iter().enumerate() {
             let entry = frame.resolve_label(&mut self.jit, entry);
+            let mut exit = Some(exit);
+            if elide_last_ret && i + 1 == n && ir.ends_with_ret() {
+                ir.pop_trailing_ret();
+                exit = None;
+            }
             self.gen_asm(
                 ir,
                 store,
                 &mut frame,
                 Some(entry),
-                Some(exit),
+                exit,
                 class_version.clone(),
-                false,
+                i == 0 && first_bridge_fallthrough,
             );
         }
 

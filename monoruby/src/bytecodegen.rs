@@ -281,6 +281,11 @@ struct CallSite {
     /// direct-call twin the JIT compiles in place of the runtime name
     /// lookup — see `CallSiteInfo::send_direct`.
     send_direct_name: Option<IdentId>,
+    /// `recv.new(args)` with plain positional arguments and no block:
+    /// `encode_call` gives it a twin describing `obj.initialize(args)`
+    /// on the object the site produces — see
+    /// `CallSiteInfo::class_new_init`.
+    class_new_init: bool,
 }
 
 impl CallSite {
@@ -311,6 +316,7 @@ impl CallSite {
             bypass_visibility: false,
             vcall: false,
             send_direct_name: None,
+            class_new_init: false,
         }
     }
 

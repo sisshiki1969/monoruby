@@ -176,6 +176,15 @@ pub(in crate::codegen) struct AsmInfo {
     ///
     pub(super) frameless: bool,
     ///
+    /// A frameless callee whose `self` is an object its caller allocated
+    /// just before the call and nothing has seen since (the `initialize`
+    /// body `inline_class_new` drives): `self` is proven unfrozen at the
+    /// head of every basic block until the first instruction that could
+    /// run Ruby code, which drops the proof and clears this. See
+    /// `compile_basic_block`.
+    ///
+    pub(super) self_fresh: bool,
+    ///
     /// Level of inlining.
     ///
     specialize_level: usize,
@@ -292,6 +301,7 @@ impl AsmInfo {
         Self {
             jit_type: self.jit_type.clone(),
             frameless: self.frameless,
+            self_fresh: self.self_fresh,
             specialize_level: self.specialize_level,
             iseq_id: self.iseq_id,
             self_class: self.self_class,
@@ -374,6 +384,24 @@ impl AsmInfo {
         keep
     }
 
+    ///
+    /// The label *label* resolves to once jump-threading aliases are
+    /// followed (`resolve_label`), as a `JitLabel`: two labels are the same
+    /// emission point when their canonical forms agree.
+    ///
+    pub(super) fn canonical_label(&self, label: JitLabel) -> JitLabel {
+        let mut label = label;
+        let mut guard = self.label_alias.len() + 1;
+        while let Some(&next) = self.label_alias.get(&label) {
+            label = next;
+            guard -= 1;
+            if guard == 0 {
+                break;
+            }
+        }
+        label
+    }
+
     pub(super) fn resolve_bb_label(&mut self, jit: &mut JitMemory, bb: BasicBlockId) -> DestLabel {
         let label = self.basic_block_labels.get(&bb).copied().unwrap();
         self.resolve_label(jit, label)
@@ -387,6 +415,10 @@ impl AsmInfo {
 
     pub(super) fn inline_bridge_exists(&self, src_bb: BasicBlockId) -> bool {
         self.inline_bridges.contains_key(&Some(src_bb))
+    }
+
+    pub(super) fn inline_bridge_exists_for(&self, src_bb: Option<BasicBlockId>) -> bool {
+        self.inline_bridges.contains_key(&src_bb)
     }
 
     pub(super) fn remove_inline_bridge(
@@ -826,6 +858,7 @@ impl JitStackFrame {
             asm_info: AsmInfo {
                 jit_type,
                 frameless: false,
+                self_fresh: false,
                 specialize_level,
                 iseq_id,
                 self_class,
@@ -1191,6 +1224,21 @@ pub(crate) struct JitContext<'a> {
     /// callee that is not frameless costs one failed attempt, not one per
     /// call site and nesting level.
     pub(super) frameless_rejected: std::collections::HashSet<ISeqId>,
+    /// Set by `inline_class_new` for the frameless compile it is about to
+    /// start: the callee's `self` is the object just allocated, so its
+    /// frame is marked `AsmInfo::self_fresh`. Taken by the frame's
+    /// creation (`compile_specialized_func_uncached`).
+    pub(super) pending_fresh_self: bool,
+    /// Also set by `inline_class_new` for that compile: the exit its
+    /// callee's side exits hand the call back to. Taken before the
+    /// allocation is emitted, with the receiver slot bound to the class
+    /// it was identity-guarded to be — the result slot of `new` may be
+    /// that very slot, and by the time the body runs it holds the new
+    /// object, which a snapshot taken then would hand the interpreter as
+    /// the receiver of the re-executed `new`.
+    /// Keyed by the twin call site: the body may make frameless calls of
+    /// its own, whose exits are their own.
+    pub(super) pending_class_new_redo: Option<(CallSiteId, AsmDeopt)>,
 }
 
 impl<'a> JitContext<'a> {
@@ -1228,6 +1276,8 @@ impl<'a> JitContext<'a> {
             cond_flags: std::cell::Cell::new(None),
             condbr_done: None,
             frameless_rejected: Default::default(),
+            pending_fresh_self: false,
+            pending_class_new_redo: None,
             outer_claim_barrier: false,
             widened_outer_log: vec![],
             spec_memo: Default::default(),
@@ -1300,6 +1350,8 @@ impl<'a> JitContext<'a> {
             // Per walk, like the decisions it records: a walk must make
             // the same frameless calls the code generation pass will.
             frameless_rejected: Default::default(),
+            pending_fresh_self: false,
+            pending_class_new_redo: None,
         }
     }
 
