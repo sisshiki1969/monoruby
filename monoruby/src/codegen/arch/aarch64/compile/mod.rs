@@ -3366,10 +3366,9 @@ impl Codegen {
         error: Option<&DestLabel>,
         reason: RecompileReason,
     ) {
-        let counter = match self.unit_recompile_counter {
-            Some(counter) => counter,
-            None => Box::into_raw(Box::new(COUNT_DEOPT_RECOMPILE)) as u64,
-        };
+        let counter = self
+            .unit_recompile_counter
+            .expect("RecompileDeopt lowered outside jit_compile");
         self.emit_recompile_deopt_on(
             RecompileTarget::Whole(position),
             deopt,

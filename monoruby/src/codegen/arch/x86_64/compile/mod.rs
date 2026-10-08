@@ -2352,43 +2352,23 @@ impl Codegen {
         self.jit_set_arguments(callid, callee_fid, offset);
     }
 
-    /// Recompile-or-deopt: deopt now and schedule recompilation once the inline
-    /// cache warms.
-    pub(in crate::codegen::jitgen) fn emit_recompile_deopt(
+    /// Main-body recompile point (`AsmInst::RecompileDeopt`): deopt now and
+    /// recompile the method/loop once the unit's one shared budget word
+    /// (`Codegen::unit_recompile_counter`, see `unit_recompile_budget`) runs
+    /// out — every such exit of the unit draws on it.
+    pub(in crate::codegen::jitgen) fn emit_unit_recompile_deopt(
         &mut self,
-        target: RecompileTarget,
+        position: Option<BytecodePtr>,
         deopt: &DestLabel,
         // x86 recompiles in place (no extern-boundary panic surfaced here), so
         // the aarch64-only error side-exit is unused.
         _error: Option<&DestLabel>,
         reason: RecompileReason,
     ) {
-        match target {
-            RecompileTarget::Whole(position) => {
-                let counter = self.jit.data_i32(COUNT_DEOPT_RECOMPILE);
-                self.recompile_and_deopt(position, deopt, reason, counter)
-            }
-            RecompileTarget::Specialized(idx) => {
-                self.recompile_and_deopt_specialized(deopt, self.specialized_base + idx, reason)
-            }
-        }
-    }
-
-    /// Main-body recompile point (`AsmInst::RecompileDeopt`): like a
-    /// `Whole` [`Self::emit_recompile_deopt`], but every such exit of the unit
-    /// draws on the unit's one shared budget word
-    /// (`Codegen::unit_recompile_counter`, see `unit_recompile_budget`).
-    pub(in crate::codegen::jitgen) fn emit_unit_recompile_deopt(
-        &mut self,
-        position: Option<BytecodePtr>,
-        deopt: &DestLabel,
-        _error: Option<&DestLabel>,
-        reason: RecompileReason,
-    ) {
-        let counter = match &self.unit_recompile_counter {
-            Some(counter) => counter.clone(),
-            None => self.jit.data_i32(COUNT_DEOPT_RECOMPILE),
-        };
+        let counter = self
+            .unit_recompile_counter
+            .clone()
+            .expect("RecompileDeopt lowered outside jit_compile");
         self.recompile_and_deopt(position, deopt, reason, counter)
     }
 
