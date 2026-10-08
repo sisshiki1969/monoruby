@@ -220,15 +220,19 @@ pub(crate) struct AsmIr {
     /// constructors are the single consultation point.
     chain_frames: u32,
     /// This IR belongs to a frameless specialized callee (see
-    /// `AsmInfo::frameless`). Its side exits re-execute the whole call, so
-    /// the constructors below check that each one is still sound to take.
+    /// `AsmInfo::frameless`). A side exit of it either re-executes the
+    /// whole call (a *redo*, while the callee has done nothing observable)
+    /// or makes the callee's window a real frame and resumes the callee in
+    /// the interpreter (a *materializing* exit, after a side effect); the
+    /// constructors below decide which, and carry a write-back that covers
+    /// the window's unwritten slots.
     frameless: bool,
     /// Set when something was compiled here that a frameless callee cannot
-    /// run: an exit after a side effect, an error exit, an eviction point,
-    /// or a call that needs a frame of its own. The frame's compile is then
-    /// abandoned and the call site falls back to an ordinary specialized
-    /// call. Sticky across `save` / `restore`: a rolled-back attempt only
-    /// makes the verdict more conservative.
+    /// run: an eviction point, a safepoint poll, an error exit of a path
+    /// that can run Ruby code, or a call that needs a frame of its own. The
+    /// frame's compile is then abandoned and the call site falls back to an
+    /// ordinary specialized call. Sticky across `save` / `restore`: a
+    /// rolled-back attempt only makes the verdict more conservative.
     frameless_violation: bool,
     /// What rdi and rax (in that order, see [`TRACKED_REGS`]) are known to
     /// hold at the end of the stream: set by a GP load of a slot into the
@@ -396,13 +400,30 @@ impl AsmIr {
     }
 
     ///
-    /// A deopt exit in a frameless callee re-executes the call from its
-    /// start, which is only sound while the callee has done nothing
-    /// observable yet (`side_effect_guard`).
+    /// Does a deopt exit of this frame materialize the callee's frame?
+    /// Re-executing the call from its start (a redo) is only sound while
+    /// the callee has done nothing observable yet (`side_effect_guard`);
+    /// after that the exit has to resume the callee where it is, in a frame
+    /// of its own (`LSideExitKind::Materialize`). Always `false` outside a
+    /// frameless frame.
     ///
-    fn check_frameless_exit(&mut self, side_effect_free: bool) {
-        if !side_effect_free {
-            self.set_frameless_violation();
+    fn materializes(&self, side_effect_free: bool) -> bool {
+        self.frameless && !side_effect_free
+    }
+
+    ///
+    /// The write-back of a side exit of this frame. A frameless callee's
+    /// window was never nil-filled (the `Init` lowering skips it), so an
+    /// exit that makes the window a frame must also write `nil` into every
+    /// slot the state holds nothing for, or the interpreter and the
+    /// collector would read whatever the window held before. A framed body
+    /// needs none of that: its prologue filled the slots.
+    ///
+    pub(crate) fn exit_write_back(&self, state: &AbstractFrame) -> WriteBack {
+        if self.frameless {
+            state.get_write_back_with_void()
+        } else {
+            state.get_write_back()
         }
     }
 
@@ -686,7 +707,7 @@ impl AsmIr {
         deopt: AsmDeopt,
     ) -> Option<(BytecodePtr, &WriteBack, u32)> {
         if self.side_exit.len() == 1
-            && let SideExit::Deoptimize(pc, wb, chain) = &self.side_exit[deopt.0]
+            && let SideExit::Deoptimize(pc, wb, chain, false) = &self.side_exit[deopt.0]
         {
             Some((*pc, wb, *chain))
         } else {
@@ -756,17 +777,19 @@ impl AsmIr {
             pc,
             state.get_write_back(),
             self.chain_frames,
+            false,
         ));
         AsmDeopt(i)
     }
 
     #[cfg_attr(feature = "deopt", track_caller)]
     pub(crate) fn new_deopt_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmDeopt {
-        self.check_frameless_exit(state.side_effect_guard());
+        let materialize = self.materializes(state.side_effect_guard());
         let i = self.new_label(SideExit::Deoptimize(
             pc,
-            state.get_write_back(),
+            self.exit_write_back(state),
             self.chain_frames,
+            materialize,
         ));
         self.had_deopt = true;
         AsmDeopt(i)
@@ -807,11 +830,17 @@ impl AsmIr {
     ///
     #[cfg_attr(feature = "deopt", track_caller)]
     pub(super) fn deopt_from_point(&mut self, point: &DeoptPoint) -> AsmDeopt {
-        self.check_frameless_exit(point.side_effect_free());
+        let materialize = self.materializes(point.side_effect_free());
+        let mut wb = point.write_back().clone();
+        if self.frameless {
+            // As `exit_write_back`: the window's unwritten slots.
+            wb.set_void(point.void().to_vec());
+        }
         let i = self.new_label(SideExit::Deoptimize(
             point.pc(),
-            point.write_back().clone(),
+            wb,
             self.chain_frames,
+            materialize,
         ));
         self.had_deopt = true;
         AsmDeopt(i)
@@ -834,26 +863,48 @@ impl AsmIr {
         reason: RecompileReason,
         target: RecompileTarget,
     ) -> AsmDeopt {
-        self.check_frameless_exit(state.side_effect_guard());
+        let materialize = self.materializes(state.side_effect_guard());
         let pc = state.pc();
         let i = self.new_label(SideExit::RecompileDeoptimize(
             pc,
-            state.get_write_back(),
+            self.exit_write_back(state),
             reason,
             target,
             self.chain_frames,
+            materialize,
         ));
         self.had_deopt = true;
         AsmDeopt(i)
     }
 
     pub(crate) fn new_error_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmError {
-        // An error raised here would be reported from the caller's frame:
-        // the callee has none to put in the backtrace or to rescue in.
+        // The path that can take this exit can run Ruby code before it
+        // does (a generic helper dispatching a user-defined method), and
+        // a frameless callee's window is invisible to the collector and
+        // to the frame walk while that code runs. Such a path is kept out
+        // of a frameless body; see `new_error_pure` for the other kind.
         self.set_frameless_violation();
         let i = self.new_label(SideExit::Error(
             pc,
             state.get_write_back(),
+            self.chain_frames,
+        ));
+        AsmError(i)
+    }
+
+    ///
+    /// Like `new_error`, for the error exit of a path that runs no Ruby
+    /// code before taking it — a Rust helper that only raises (`Array#[]=`
+    /// on an out-of-range index). Allowed in a frameless callee: the exit
+    /// makes the window a real frame before the raise
+    /// (`LSideExitKind::Materialize`), so the error is reported from, and
+    /// can be rescued in, the callee's own frame.
+    ///
+    pub(crate) fn new_error_pure(&mut self, state: &AbstractFrame) -> AsmError {
+        let pc = state.pc();
+        let i = self.new_label(SideExit::Error(
+            pc,
+            self.exit_write_back(state),
             self.chain_frames,
         ));
         AsmError(i)
@@ -2462,8 +2513,14 @@ pub(super) enum AsmInst {
     /// of its own. The caller's live fprs (`using_fpr`, saved before the
     /// window was filled) are restored on both ways out: the callee's
     /// `Ret` lands on the continuation with rax the return value (or xmm1
-    /// the raw float), and every side exit of the callee lands on `redo`,
-    /// the caller's deopt at this very call.
+    /// the raw float). A side exit of the callee lands on `redo`, the
+    /// caller's deopt at this very call, while the callee has done nothing
+    /// observable; after that it *materializes* instead: it writes the
+    /// control words that make the window a real frame, converts this
+    /// frame to the interpreter as a call site would be by a chain deopt —
+    /// `spec` is this frame's replay data at the call, exactly what a
+    /// `ChainExit` carries — and resumes the callee in the interpreter
+    /// (`Codegen::gen_frameless_materialize`).
     ///
     /// ### destroy
     /// - caller save registers
@@ -2473,6 +2530,7 @@ pub(super) enum AsmInst {
         delta: i32,
         redo: AsmDeopt,
         using_fpr: UsingFpr,
+        spec: ChainExitSpec,
     },
     /// `[slot] <- imm`, any 64-bit word: the header words of an inline
     /// callee's window (`0` and the callee's `Meta`), which `LitToStack`
@@ -3703,7 +3761,13 @@ pub enum SideExit {
     /// makes the handler call `runtime::chain_deopt` after its write-back
     /// to convert the `n` suspended frames of this compilation unit before
     /// this frame resumes in the interpreter (or starts unwinding).
-    Deoptimize(BytecodePtr, WriteBack, u32),
+    /// The trailing `bool` on `Deoptimize` / `RecompileDeoptimize` is
+    /// meaningful in a frameless callee only: `true` makes the exit
+    /// materialize the callee's frame and resume it in the interpreter
+    /// (`LSideExitKind::Materialize`), `false` re-executes the whole call
+    /// (`LSideExitKind::Redo`). An `Error` exit of a frameless callee
+    /// always materializes. See [`AsmIr::materializes`].
+    Deoptimize(BytecodePtr, WriteBack, u32, bool),
     ///
     /// A deopt that, after a small number of misses, recompiles the
     /// target (whole method/loop, or one specialized entry) with the
@@ -3720,6 +3784,7 @@ pub enum SideExit {
         RecompileReason,
         RecompileTarget,
         u32,
+        bool,
     ),
     Error(BytecodePtr, WriteBack, u32),
 }
@@ -3762,10 +3827,10 @@ impl Codegen {
         let ends_unconditionally = ir.ends_unconditionally();
         let mut side_exits = SideExitLabels::new();
         #[cfg(feature = "deopt")]
-        let mut deopt_table: HashMap<(BytecodePtr, WriteBack, u32), (DestLabel, u32)> =
+        let mut deopt_table: HashMap<(BytecodePtr, WriteBack, u32, bool), (DestLabel, u32)> =
             HashMap::default();
         #[cfg(not(feature = "deopt"))]
-        let mut deopt_table: HashMap<(BytecodePtr, WriteBack, u32), DestLabel> =
+        let mut deopt_table: HashMap<(BytecodePtr, WriteBack, u32, bool), DestLabel> =
             HashMap::default();
         let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
         let base = frame.base_stack_offset;
@@ -3802,8 +3867,8 @@ impl Codegen {
                     });
                     label
                 }
-                SideExit::Deoptimize(pc, wb, chain) => {
-                    let t = (pc, wb, chain);
+                SideExit::Deoptimize(pc, wb, chain, materialize) => {
+                    let t = (pc, wb, chain, materialize);
                     if let Some(entry) = deopt_table.get(&t) {
                         #[cfg(feature = "deopt")]
                         {
@@ -3823,10 +3888,16 @@ impl Codegen {
                             });
                         }
                         lir.push(LInst::SideExit {
-                            kind: if frame.frameless {
-                                LSideExitKind::Redo { recompile: None }
-                            } else {
+                            kind: if !frame.frameless {
                                 LSideExitKind::Deopt { chain: t.2 }
+                            } else if t.3 {
+                                LSideExitKind::Materialize {
+                                    recompile: None,
+                                    chain: t.2,
+                                    error: false,
+                                }
+                            } else {
+                                LSideExitKind::Redo { recompile: None }
                             },
                             pc: t.0,
                             wb: t.1.clone(),
@@ -3843,7 +3914,7 @@ impl Codegen {
                         label
                     }
                 }
-                SideExit::RecompileDeoptimize(pc, wb, reason, target, chain) => {
+                SideExit::RecompileDeoptimize(pc, wb, reason, target, chain, materialize) => {
                     let label = self.jit.label();
                     #[cfg(feature = "deopt")]
                     {
@@ -3853,15 +3924,21 @@ impl Codegen {
                         });
                     }
                     lir.push(LInst::SideExit {
-                        kind: if frame.frameless {
-                            LSideExitKind::Redo {
-                                recompile: Some((reason, target)),
-                            }
-                        } else {
+                        kind: if !frame.frameless {
                             LSideExitKind::RecompileDeopt {
                                 reason,
                                 target,
                                 chain,
+                            }
+                        } else if materialize {
+                            LSideExitKind::Materialize {
+                                recompile: Some((reason, target)),
+                                chain,
+                                error: false,
+                            }
+                        } else {
+                            LSideExitKind::Redo {
+                                recompile: Some((reason, target)),
                             }
                         },
                         pc,
@@ -3877,7 +3954,15 @@ impl Codegen {
                 SideExit::Error(pc, wb, chain) => {
                     let label = self.jit.label();
                     lir.push(LInst::SideExit {
-                        kind: LSideExitKind::Error { chain },
+                        kind: if frame.frameless {
+                            LSideExitKind::Materialize {
+                                recompile: None,
+                                chain,
+                                error: true,
+                            }
+                        } else {
+                            LSideExitKind::Error { chain }
+                        },
                         pc,
                         wb,
                         entry: label.clone(),

@@ -334,12 +334,12 @@ impl Codegen {
         let mut labels = SideExitLabels::new();
         #[cfg(feature = "deopt")]
         let mut deopt_table: std::collections::HashMap<
-            (BytecodePtr, WriteBack, u32),
+            (BytecodePtr, WriteBack, u32, bool),
             (DestLabel, u32, usize),
         > = std::collections::HashMap::new();
         #[cfg(not(feature = "deopt"))]
         let mut deopt_table: std::collections::HashMap<
-            (BytecodePtr, WriteBack, u32),
+            (BytecodePtr, WriteBack, u32, bool),
             (DestLabel, usize),
         > = std::collections::HashMap::new();
         // Loop-JIT entry sp-bump to undo before any exit resumes the VM.
@@ -391,8 +391,8 @@ impl Codegen {
                     links.push((pending_base + lir.len() - 1, labels.len()));
                     label
                 }
-                SideExit::Deoptimize(pc, wb, chain) => {
-                    let key = (pc, wb, chain);
+                SideExit::Deoptimize(pc, wb, chain, materialize) => {
+                    let key = (pc, wb, chain, materialize);
                     if let Some(entry) = deopt_table.get(&key) {
                         #[cfg(feature = "deopt")]
                         {
@@ -413,10 +413,16 @@ impl Codegen {
                             );
                         }
                         lir.push(LInst::SideExit {
-                            kind: if frame.frameless {
-                                LSideExitKind::Redo { recompile: None }
-                            } else {
+                            kind: if !frame.frameless {
                                 LSideExitKind::Deopt { chain: key.2 }
+                            } else if key.3 {
+                                LSideExitKind::Materialize {
+                                    recompile: None,
+                                    chain: key.2,
+                                    error: false,
+                                }
+                            } else {
+                                LSideExitKind::Redo { recompile: None }
                             },
                             pc: key.0,
                             wb: key.1.clone(),
@@ -435,7 +441,7 @@ impl Codegen {
                         label
                     }
                 }
-                SideExit::RecompileDeoptimize(pc, wb, reason, target, chain) => {
+                SideExit::RecompileDeoptimize(pc, wb, reason, target, chain, materialize) => {
                     let label = self.jit.label();
                     #[cfg(feature = "deopt")]
                     {
@@ -444,15 +450,21 @@ impl Codegen {
                         );
                     }
                     lir.push(LInst::SideExit {
-                        kind: if frame.frameless {
-                            LSideExitKind::Redo {
-                                recompile: Some((reason, target)),
-                            }
-                        } else {
+                        kind: if !frame.frameless {
                             LSideExitKind::RecompileDeopt {
                                 reason,
                                 target,
                                 chain,
+                            }
+                        } else if materialize {
+                            LSideExitKind::Materialize {
+                                recompile: Some((reason, target)),
+                                chain,
+                                error: false,
+                            }
+                        } else {
+                            LSideExitKind::Redo {
+                                recompile: Some((reason, target)),
                             }
                         },
                         pc,
@@ -469,7 +481,15 @@ impl Codegen {
                 SideExit::Error(pc, wb, chain) => {
                     let label = self.jit.label();
                     lir.push(LInst::SideExit {
-                        kind: LSideExitKind::Error { chain },
+                        kind: if frame.frameless {
+                            LSideExitKind::Materialize {
+                                recompile: None,
+                                chain,
+                                error: true,
+                            }
+                        } else {
+                            LSideExitKind::Error { chain }
+                        },
                         pc,
                         wb,
                         entry: label.clone(),
@@ -582,6 +602,113 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             b redo;
         );
+    }
+
+    /// The materializing side exit of a frameless callee
+    /// (`LSideExitKind::Materialize`); the twin of the x86
+    /// `Codegen::gen_frameless_materialize`, which documents the steps. The
+    /// frame layout is the same on both arches (`doc/stack_frame.md`): the
+    /// callee's window frame pointer is x29, `[x29 - 16]` its lfp slot,
+    /// `[x29 - 8]` its prev cfp, `[x29]` the saved frame pointer, `[x29 + 8]`
+    /// the return address (x30 of a real call), `[x29 + 16]` the call-site
+    /// pc and `[x29 + 24]` the continuation word.
+    fn a64_gen_frameless_materialize(
+        &mut self,
+        pc: BytecodePtr,
+        wb: &WriteBack,
+        entry: DestLabel,
+        base: usize,
+        chain: u32,
+        recompile: Option<(RecompileReason, RecompileTarget)>,
+        error: bool,
+        #[cfg(feature = "deopt")] exit_id: u32,
+    ) {
+        self.jit.bind_label(entry);
+        self.a64_gen_write_back_for_deopt(wb, base);
+        let cont_stub = self.jit.get_label_address(&self.chain_cont_stub).as_ptr() as u64;
+        let levels: Vec<(i32, UsingFpr, ChainReplay, u64)> = self
+            .inline_ctx
+            .iter()
+            .rev()
+            .map(|ctx| (ctx.delta, ctx.using_fpr, ctx.replay.clone(), ctx.meta))
+            .collect();
+        assert!(!levels.is_empty(), "frameless materialize outside an inline body");
+        let lfp = GP::R14.a64().0; // x22
+        let mut total_delta = 0;
+        for (i, (delta, using_fpr, replay, meta)) in levels.into_iter().enumerate() {
+            debug_assert!(replay.write_back_all().gp_is_empty());
+            let site_pc = replay.pc().as_ptr() as u64;
+            let cont_data = replay.cont_data();
+            // LFP header: outer 0, meta, svar 0, block 0.
+            monoasm_arm64!(&mut self.jit,
+                mov x10, (0u64);
+                mov x9, (meta);
+                stur x10, [x(lfp), #(-LFP_OUTER)];
+                stur x9, [x(lfp), #(-LFP_META)];
+                stur x10, [x(lfp), #(-LFP_SVAR)];
+                stur x10, [x(lfp), #(-LFP_BLOCK)];
+                // Control frame: lfp, prev cfp (= the enclosing frame's x29 - 8).
+                stur x(lfp), [x29, #(-(BP_CFP + CFP_LFP))];
+                mov x9, ((delta - BP_CFP) as u64);
+                add x9, x29, x9;
+                stur x9, [x29, #(-BP_CFP)];
+                // Continuation frame: saved frame pointer, return address,
+                // call-site pc, continuation word.
+                mov x9, (delta as u64);
+                add x9, x29, x9;
+                str x9, [x29];
+                mov x9, (cont_stub);
+                str x9, [x29, #(8)];
+                mov x9, (site_pc);
+                str x9, [x29, #(16)];
+                mov x9, (cont_data);
+                str x9, [x29, #(24)];
+            );
+            if i == 0 {
+                monoasm_arm64!(&mut self.jit,
+                    sub x9, x29, #(BP_CFP as u32);
+                    str x9, [x19, #(EXECUTOR_CFP as u32)];
+                );
+            }
+            self.inline_frame_unshift(delta);
+            self.inline_fpr_restore(using_fpr);
+            self.a64_gen_write_back_for_deopt(replay.write_back_all(), replay.base());
+            total_delta += delta;
+        }
+        #[cfg(any(feature = "deopt", feature = "profile"))]
+        self.a64_call_log_deoptimize(
+            pc,
+            #[cfg(feature = "deopt")]
+            exit_id,
+        );
+        if chain != 0 {
+            self.a64_call_chain_deopt(chain);
+        }
+        let cont = self.jit.label();
+        if let Some((reason, target)) = recompile {
+            if reason == RecompileReason::BecamePolymorphic {
+                let poly_byte = pc.as_ptr() as u64 + 7;
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (poly_byte);
+                    ldrb w9, [x9];
+                    cbz w9, cont;
+                );
+            }
+            self.emit_recompile_deopt(target, &cont, None, reason);
+        }
+        self.jit.bind_label(cont);
+        self.inline_frame_shift(total_delta);
+        let pc0 = pc.as_ptr() as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x21, (pc0);
+        );
+        if error {
+            let raise = self.entry_raise();
+            self.a64_far_branch(&raise, false);
+        } else {
+            let fetch = self.vm_fetch();
+            self.a64_far_branch(&fetch, false);
+        }
     }
 
     /// Move the frame pointer and the LFP down into an inline callee's
@@ -2134,6 +2261,21 @@ impl Codegen {
                     self.a64_gen_handle_error(pc, &wb, entry, loop_jit_spill_bytes, base, chain)
                 }
                 LSideExitKind::Redo { recompile } => self.a64_gen_frameless_redo(pc, entry, recompile),
+                LSideExitKind::Materialize {
+                    recompile,
+                    chain,
+                    error,
+                } => self.a64_gen_frameless_materialize(
+                    pc,
+                    &wb,
+                    entry,
+                    base,
+                    chain,
+                    recompile,
+                    error,
+                    #[cfg(feature = "deopt")]
+                    exit_id,
+                ),
             },
             // Macro-ops (irreducible runtime-call shapes) are delegated to the
             // arch-neutral fallback, which dispatches to the per-arch `emit_*`.

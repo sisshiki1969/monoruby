@@ -58,7 +58,9 @@ pub(crate) fn array_integer_index_assign(
         if let Some(idx) = self.is_u16(idx) {
             self.load(ir, src, GP::Rdx);
             let using_fpr = self.get_using_fpr(ir);
-            let error = ir.new_error(self);
+            // The slow path (`set_index`) only raises: no Ruby code runs
+            // before the exit, so a frameless body may take it.
+            let error = ir.new_error_pure(self);
             ir.push(AsmInst::ArrayIndexAssign {
                 kind: ArrayIndexKind::U16(idx),
                 using_fpr,
@@ -68,7 +70,9 @@ pub(crate) fn array_integer_index_assign(
             self.load_fixnum(ir, idx, GP::Rsi);
             self.load(ir, src, GP::Rdx);
             let using_fpr = self.get_using_fpr(ir);
-            let error = ir.new_error(self);
+            // The slow path (`set_index`) only raises: no Ruby code runs
+            // before the exit, so a frameless body may take it.
+            let error = ir.new_error_pure(self);
             ir.push(AsmInst::ArrayIndexAssign {
                 kind: ArrayIndexKind::Fixnum,
                 using_fpr,

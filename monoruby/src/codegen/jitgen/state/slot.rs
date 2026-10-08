@@ -2084,6 +2084,18 @@ impl AbstractFrame {
         )
     }
 
+    ///
+    /// [`Self::get_write_back`] plus a `nil` for every slot the state holds
+    /// nothing for (`LinkMode::V`): the write-back of a side exit that makes
+    /// a frameless callee's never-nil-filled window a frame
+    /// (`AsmIr::exit_write_back`).
+    ///
+    pub(crate) fn get_write_back_with_void(&self) -> WriteBack {
+        let mut wb = self.get_write_back();
+        wb.set_void(self.wb_void());
+        wb
+    }
+
     fn fpr_swap(&mut self, l: FPReg, r: FPReg) {
         // A physical fpr swap (`FprSwap`) only changes *which register* holds
         // each live value; every slot keeps its own representation and
@@ -2141,7 +2153,7 @@ impl AbstractFrame {
             .collect()
     }
 
-    fn wb_void(&self) -> Vec<SlotId> {
+    pub(super) fn wb_void(&self) -> Vec<SlotId> {
         self.all_regs()
             .filter_map(|idx| match self.mode(idx) {
                 LinkMode::V => Some(idx),

@@ -27,16 +27,34 @@
 //!
 //! # Exits
 //!
-//! That only holds if the callee never needs to be found. It must not
-//! suspend (no safepoint, no call that pushes a frame), raise, or deopt
-//! into the interpreter in its own frame. Every side exit is therefore
-//! turned into a *redo*: it leaves the body for the caller's deopt at the
-//! call instruction, so the interpreter performs the whole call again,
-//! with a real frame. That is sound while the callee has not done
-//! anything observable yet — exactly `side_effect_guard` — so an exit
-//! compiled after a side effect, an error exit, an eviction point or a
-//! poll makes the callee ineligible ([`AsmIr::set_frameless_violation`]);
-//! the call site then rolls back and calls it the ordinary way.
+//! That only holds while the callee is running compiled. The moment it
+//! has to leave for the interpreter it needs a frame, and a side exit
+//! gives it one in one of two ways:
+//!
+//! - A *redo* exit leaves the body for the caller's deopt at the call
+//!   instruction, so the interpreter performs the whole call again, with
+//!   a real frame. That is sound while the callee has not done anything
+//!   observable yet — exactly `side_effect_guard`.
+//! - A *materializing* exit (`LSideExitKind::Materialize`,
+//!   `Codegen::gen_frameless_materialize`) is what an exit after the
+//!   callee's first side effect takes, and what every error exit takes:
+//!   it turns the window into the frame the interpreter would have built
+//!   — the window already sits where that frame would be
+//!   (`JitContext::inline_window_delta`) — links it as the current control
+//!   frame, converts the caller as a chain deopt converts a suspended call
+//!   site, and resumes the callee in the interpreter where it is. A frame
+//!   that materializes this way is never nil-filled, so the exit's
+//!   write-back stores `nil` into every slot the body has not written
+//!   (`AbstractFrame::get_write_back_with_void`).
+//!
+//! What a frameless body still cannot contain is anything that needs the
+//! frame while it keeps running compiled: a safepoint poll or an eviction
+//! point (the window is invisible to the collector and to the walks that
+//! convert suspended frames), a call that pushes a frame, and an error
+//! exit whose path can run Ruby code before it is taken (`AsmIr::new_error`
+//! versus `new_error_pure`). Each of those makes the callee ineligible
+//! ([`AsmIr::set_frameless_violation`]); the call site then rolls back and
+//! calls it the ordinary way.
 //!
 //! The static check below is only a cheap pre-filter for that compile:
 //! the violation tracking is what makes the result sound.
@@ -250,13 +268,24 @@ impl AbstractState {
         let redo = redo.unwrap_or_else(|| ir.new_deopt(self));
         ir.fpr_save(using_fpr);
         self.fill_window(store, ir, callid, callee_fid, delta, arg_hints, float_args);
-        self.discard(store[callid].dst);
+        let dst = store[callid].dst;
+        self.discard(dst);
         self.clear_above_next_sp();
+        // What a materializing exit of the callee writes back into this
+        // frame: its state at the call, `dst` untouched, the same snapshot
+        // a framed call registers for the chain walk (`ChainExitSpec::new`).
+        // The fprs it reads are the ones the exit restores from the save
+        // above before using it. Unlike the redo, it describes the frame
+        // *after* everything the site did on the way in (`inline_class_new`
+        // allocates the receiver before the body runs; the interpreter
+        // resumes after the call, with the object in its slot).
+        let spec = ChainExitSpec::new_with(ir.exit_write_back(self), using_fpr, dst, self.pc());
         ir.push(AsmInst::InlineCall {
             spec_id,
             delta,
             redo,
             using_fpr,
+            spec,
         });
         // `side_effect_guard` is left alone: the callee's return state
         // carries its own, which the result store joins in. A callee that

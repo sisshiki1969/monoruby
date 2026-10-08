@@ -307,6 +307,21 @@ pub(in crate::codegen::jitgen) enum LSideExitKind {
     Redo {
         recompile: Option<(RecompileReason, RecompileTarget)>,
     },
+    /// The side exit of a frameless specialized callee that has already
+    /// done something observable, so the call cannot be redone: make the
+    /// callee's window a real frame (header, control words, `Executor::cfp`),
+    /// convert every enclosing frameless caller the same way and the
+    /// innermost framed caller as a chain deopt would at the call, then
+    /// resume the callee in the interpreter at `pc` — or, with `error`,
+    /// raise from it (`Codegen::gen_frameless_materialize`). `chain` as on
+    /// `Deopt`, counted from the callee: the materialized frames above the
+    /// framed caller are skipped by the walk (their return address is the
+    /// VM continuation stub) and counted.
+    Materialize {
+        recompile: Option<(RecompileReason, RecompileTarget)>,
+        chain: u32,
+        error: bool,
+    },
     /// Error handler: write back then jump to the raise/`handle_error` path.
     /// `chain` as on `Deopt` — an in-frame `rescue` resumes this frame in the
     /// interpreter, and an unwinding raise `ret`s through the (now rewritten)

@@ -309,6 +309,10 @@ impl WriteBack {
         self.gp.is_empty()
     }
 
+    pub(crate) fn set_void(&mut self, void: Vec<SlotId>) {
+        self.void = void;
+    }
+
     pub(crate) fn forward_rest_entries(&self) -> &[(SlotId, SlotId, u16)] {
         &self.forward_rest
     }
@@ -431,6 +435,23 @@ impl ChainExitSpec {
         }
     }
 
+    /// The same snapshot from a write-back taken by the caller — one that
+    /// also covers the window's unwritten slots when the frame is itself
+    /// frameless (`AsmIr::exit_write_back`), for `AsmInst::InlineCall`.
+    pub(crate) fn new_with(
+        wb: WriteBack,
+        using_fpr: UsingFpr,
+        dst: Option<SlotId>,
+        pc: BytecodePtr,
+    ) -> Self {
+        Self {
+            wb,
+            using_fpr,
+            dst,
+            pc,
+        }
+    }
+
     pub(in crate::codegen) fn into_replay(self, base: usize) -> ChainReplay {
         ChainReplay {
             wb: self.wb,
@@ -477,6 +498,11 @@ impl ChainReplay {
         self.base
     }
 
+    /// The call-site pc.
+    pub(crate) fn pc(&self) -> BytecodePtr {
+        self.pc
+    }
+
     /// Where the call's `FprSave` put a pool-resident `FPReg`: one slot per
     /// set bit of `using_fpr`, in bit order, from `callee_bp + 32`. `None`
     /// for a register outside the pool, whose value stayed in the caller's
@@ -494,7 +520,7 @@ impl ChainReplay {
     /// per-opcode-size aware, which is what makes one shared stub correct
     /// for both 2-unit sends and 1-unit operator sites).
     ///
-    fn cont_data(&self) -> u64 {
+    pub(crate) fn cont_data(&self) -> u64 {
         let dst = match self.dst {
             Some(dst) => conv(dst) as u64,
             None => 0,
@@ -1086,7 +1112,10 @@ impl Codegen {
     /// aside (`LInst::InlineRet`, the `Init` lowering). Nothing in the
     /// body reads the native frame link above the frame pointer: that is
     /// what `frameless_call::eligible` and the frameless violations keep
-    /// out of it.
+    /// out of it. A side exit after a side effect does not come back this
+    /// way: it makes the window a frame and leaves for the interpreter
+    /// (`Self::gen_frameless_materialize`), with *replay* — this frame's
+    /// state at the call — to convert this frame by.
     ///
     fn gen_inline_call(
         &mut self,
@@ -1095,6 +1124,7 @@ impl Codegen {
         delta: i32,
         deopt: DestLabel,
         using_fpr: UsingFpr,
+        replay: ChainReplay,
         class_version: DestLabel,
     ) {
         let (info, root) = self
@@ -1102,6 +1132,7 @@ impl Codegen {
             .remove(&spec_id)
             .unwrap_or_else(|| panic!("inline body {spec_id:?} was not parked"));
         debug_assert!(info.frameless);
+        let meta = store[store[info.iseq_id].func_id()].meta().get();
         let done = self.jit.label();
         let redo = self.jit.label();
         let cont = self.jit.label();
@@ -1110,6 +1141,10 @@ impl Codegen {
         self.inline_ctx.push(InlineCtx {
             done: done.clone(),
             redo: redo.clone(),
+            delta,
+            using_fpr,
+            replay,
+            meta,
         });
         let entry = self.jit.label();
         self.gen_machine_code(info, store, entry, level, class_version, root);
@@ -1948,6 +1983,153 @@ impl Codegen {
         monoasm!( &mut self.jit,
             jmp redo;
         );
+        self.jit.select_page(0);
+    }
+
+    ///
+    /// The side exit of a frameless specialized callee that cannot redo the
+    /// call (`LSideExitKind::Materialize`): the callee has done something
+    /// observable, so it is resumed in the interpreter where it is, in a
+    /// frame of its own, and its callers are converted as a deopt converts
+    /// a suspended chain (`doc/chain_deopt.md`).
+    ///
+    /// The window already has the layout of a frame
+    /// (`JitContext::inline_window_delta`); what it lacks is written here:
+    ///
+    /// 1. the callee's write-back, like any deopt's (the frame pointer and
+    ///    the LFP are still the callee's);
+    /// 2. for every inline level, innermost first: the LFP header (outer
+    ///    `0`, the callee's meta, svar `0`, block `0`), the control words
+    ///    (prev cfp = the enclosing frame's, the lfp slot, the saved frame
+    ///    pointer, the return address = the VM continuation stub, the
+    ///    call-site pc, the continuation word with the result slot and the
+    ///    resume advance — what a chain conversion stores for a suspended
+    ///    call site), then the enclosing frame's registers (undo the
+    ///    shift, bring its fprs back) and its write-back at the call
+    ///    (`InlineCtx::replay`). The innermost frame becomes `Executor::cfp`;
+    /// 3. with the framed caller's registers restored: the deopt log, the
+    ///    chain walk for *its* callers (`chain` counts the materialized
+    ///    frames too — the walk skips them by their VM return address —
+    ///    and then the framed caller's depth in the unit), the recompile
+    ///    hook;
+    /// 4. the frame pointer and the LFP back to the callee's, and the VM
+    ///    fetch at `pc` — or `entry_raise`, for an error exit.
+    ///
+    /// When the callee `ret`s in the interpreter it `leave`s its window and
+    /// lands in the continuation stub, which stores its result into the
+    /// enclosing frame's result slot and resumes that frame, interpreted,
+    /// after the call: the stack pointer it leaves at is the enclosing
+    /// frame's own VM depth, since the window sits exactly where the
+    /// interpreter would have built the frame.
+    ///
+    pub(in crate::codegen) fn gen_frameless_materialize(
+        &mut self,
+        pc: BytecodePtr,
+        wb: &WriteBack,
+        entry: DestLabel,
+        base: usize,
+        chain: u32,
+        recompile: Option<(RecompileReason, RecompileTarget)>,
+        error: bool,
+        #[cfg(feature = "deopt")] exit_id: u32,
+    ) {
+        assert_eq!(0, self.jit.get_page());
+        self.jit.select_page(1);
+        self.jit.bind_label(entry);
+        self.gen_write_back_for_deopt(wb, base);
+        let cont_stub = self.jit.get_label_address(&self.chain_cont_stub).as_ptr() as u64;
+        let levels: Vec<(i32, UsingFpr, ChainReplay, u64)> = self
+            .inline_ctx
+            .iter()
+            .rev()
+            .map(|ctx| (ctx.delta, ctx.using_fpr, ctx.replay.clone(), ctx.meta))
+            .collect();
+        assert!(!levels.is_empty(), "frameless materialize outside an inline body");
+        let mut total_delta = 0;
+        for (i, (delta, using_fpr, replay, meta)) in levels.into_iter().enumerate() {
+            // The caller's residents were flushed before the window was
+            // filled; the body has clobbered every register since.
+            debug_assert!(replay.write_back_all().gp_is_empty());
+            let site_pc = replay.pc().as_ptr() as u64;
+            let cont_data = replay.cont_data();
+            monoasm! { &mut self.jit,
+                // LFP header.
+                movq [r14 - (LFP_OUTER)], 0;
+                movq rax, (meta);
+                movq [r14 - (LFP_META)], rax;
+                movq [r14 - (LFP_SVAR)], 0;
+                movq [r14 - (LFP_BLOCK)], 0;
+                // Control frame: lfp, prev cfp.
+                movq [rbp - (BP_CFP + CFP_LFP)], r14;
+                lea  rax, [rbp + (delta - BP_CFP)];
+                movq [rbp - (BP_CFP)], rax;
+                // Continuation frame: saved frame pointer, return address,
+                // call-site pc, continuation word.
+                lea  rax, [rbp + (delta)];
+                movq [rbp], rax;
+                movq rax, (cont_stub);
+                movq [rbp + 8], rax;
+                movq rax, (site_pc);
+                movq [rbp + 16], rax;
+                movq rax, (cont_data);
+                movq [rbp + 24], rax;
+            }
+            if i == 0 {
+                monoasm! { &mut self.jit,
+                    lea  rax, [rbp - (BP_CFP)];
+                    movq [rbx + (EXECUTOR_CFP)], rax;
+                }
+            }
+            self.inline_frame_unshift(delta);
+            self.inline_fpr_restore(using_fpr);
+            self.gen_write_back_for_deopt(replay.write_back_all(), replay.base());
+            total_delta += delta;
+        }
+        monoasm!( &mut self.jit,
+            movq r13, (pc.as_ptr());
+        );
+        #[cfg(any(feature = "deopt", feature = "profile"))]
+        {
+            monoasm!( &mut self.jit,
+                movq rdi, rbx;
+                movq rsi, r12;
+                movq rdx, r13;
+            );
+            #[cfg(feature = "deopt")]
+            monoasm!( &mut self.jit,
+                movl rcx, (exit_id);
+            );
+            monoasm!( &mut self.jit,
+                movq rax, (crate::globals::log_deoptimize);
+                call rax;
+            );
+        }
+        if chain != 0 {
+            monoasm!( &mut self.jit,
+                movq rdi, rbx;
+                movl rsi, (chain);
+                movq rax, (runtime::chain_deopt);
+                call rax;
+            );
+        }
+        // After the walk and with every frame homed, as in
+        // `side_exit_with_label`: the recompile can run a GC.
+        if let Some((reason, target)) = recompile {
+            self.gen_recompile_hook(pc, reason, target);
+        }
+        self.inline_frame_shift(total_delta);
+        if error {
+            let raise = self.entry_raise();
+            monoasm!( &mut self.jit,
+                movq r13, ((pc + 1).as_ptr());
+                jmp  raise;
+            );
+        } else {
+            let fetch = self.vm_fetch();
+            monoasm!( &mut self.jit,
+                jmp fetch;
+            );
+        }
         self.jit.select_page(0);
     }
 
