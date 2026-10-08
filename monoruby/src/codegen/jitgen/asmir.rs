@@ -569,8 +569,8 @@ impl AsmIr {
     }
 
     /// Number of `AsmInst`s in the stream — the frame-size estimate the
-    /// aarch64 branch-relaxation decision reads (`Codegen::far_branch_mode`).
-    #[cfg(target_arch = "aarch64")]
+    /// aarch64 branch-relaxation decision reads (`Codegen::far_branch_mode`),
+    /// and the size the unit's recompile budget scales with.
     pub(super) fn inst_len(&self) -> usize {
         self.inst.len()
     }

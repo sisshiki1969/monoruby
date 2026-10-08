@@ -110,6 +110,34 @@ const COUNT_DEOPT_RECOMPILE: i32 = 10;
 const MAX_RECOMPILES_PER_METHOD: u32 = 4;
 const COUNT_DEOPT_RECOMPILE_SPECIALIZED: i32 = 50;
 
+/// AsmIr instructions of a unit per `RecompileDeopt` hit its recompile
+/// budget allows (see `unit_recompile_budget`).
+const UNIT_RECOMPILE_INSTS_PER_DEOPT: usize = 32;
+
+///
+/// The recompile budget of a compilation unit: how many times its
+/// `RecompileDeopt` exits (sites the VM had not profiled when the unit was
+/// compiled — `NotCached` and friends) may be taken, in total, before the
+/// unit is recompiled.
+///
+/// The budget is shared by every such exit of the unit rather than counted
+/// per exit, and it grows with the unit's size. A recompile rebuilds the
+/// whole unit, so its cost is proportional to the unit's size, while each
+/// deopt costs roughly the same whatever the unit: paying for a recompile
+/// only after the deopts have cost a comparable amount bounds the waste
+/// either way (the ski-rental argument). A small unit keeps the old count
+/// of `COUNT_DEOPT_RECOMPILE`. A huge one — a 256-way opcode `case`, whose
+/// branches the VM profiles one by one as they first run — no longer
+/// recompiles every time one of its many not-yet-profiled branches has been
+/// taken ten times: with a per-exit count of ten, rubyboy's `Cpu#exec`
+/// (≈350k instructions, ≈0.5 s to compile) was rebuilt 17 times, which was
+/// 6 s of compilation on a 15 s run.
+///
+fn unit_recompile_budget(unit_insts: usize) -> i32 {
+    (unit_insts / UNIT_RECOMPILE_INSTS_PER_DEOPT)
+        .clamp(COUNT_DEOPT_RECOMPILE as usize, i32::MAX as usize) as i32
+}
+
 /// §9 9d allocatable GP pool. **Empty on both arches**: GP-pool residence
 /// (`LinkMode::G`) has been abolished, so no slot is ever coloured into a
 /// physical GP register — every general-purpose value lives in its frame home
@@ -941,6 +969,15 @@ pub struct Codegen {
     /// for the duration of the unit's machine-code generation; `None`
     /// outside a compilation.
     pub(in crate::codegen) unit_const_version: Option<DestLabel>,
+    /// The recompile budget word shared by every whole-unit
+    /// `RecompileDeopt` exit of the unit currently being compiled (see
+    /// `unit_recompile_budget`). x86 reads it rip-relative; aarch64 bakes the
+    /// address of a heap word, as its per-exit counters always did. `None`
+    /// outside a compilation.
+    #[cfg(target_arch = "x86_64")]
+    pub(in crate::codegen) unit_recompile_counter: Option<DestLabel>,
+    #[cfg(target_arch = "aarch64")]
+    pub(in crate::codegen) unit_recompile_counter: Option<u64>,
     vm_code_position: (Option<CodePtr>, usize, Option<CodePtr>, usize),
     vm_entry: DestLabel,
     vm_fetch: DestLabel,
@@ -1368,6 +1405,7 @@ impl Codegen {
             inline_bodies: HashMap::default(),
             inline_ctx: Vec::new(),
             unit_const_version: None,
+            unit_recompile_counter: None,
             vm_entry: entry_panic.clone(),
             vm_code_position: (None, 0, None, 0),
             vm_fetch: entry_panic.clone(),

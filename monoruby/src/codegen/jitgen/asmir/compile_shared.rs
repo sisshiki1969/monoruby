@@ -2372,13 +2372,9 @@ impl Codegen {
             } => {
                 // Main-body recompile point (`AsmInst::RecompileDeopt`): always
                 // a whole-method/loop target — the specialized main-body twin
-                // is `AsmInst::RecompileDeoptSpecialized`.
-                self.emit_recompile_deopt(
-                    RecompileTarget::Whole(position),
-                    &deopt,
-                    error.as_ref(),
-                    reason,
-                );
+                // is `AsmInst::RecompileDeoptSpecialized`. Every one of
+                // them in the unit shares the unit's recompile budget.
+                self.emit_unit_recompile_deopt(position, &deopt, error.as_ref(), reason);
             }
             LInst::ClassDef {
                 base,
