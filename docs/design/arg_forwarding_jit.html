@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-20efc593.js";
+            window.path_to_searchindex_js = "../searchindex-dd3df7a2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -457,12 +457,13 @@ forwarding callsite に対しても、</p>
 <li><strong>trivial method fold</strong>（<code>ISeqHint::ConstReturn</code> / <code>SelfReturn</code>）— 呼び出し
 自体が消える。call を消すこと自体が転送の consume なので、<code>ir.set_deferred_rest()</code>
 を立てて caller 側スキップを維持する（さもないと誰も見ない Array を作る）。</li>
-<li><strong>frameless な ivar ストア展開</strong>（<code>compile/frameless.rs::ivar_store_body</code>）—
-<code>ArgSlot::Caller</code> / <code>AsmInst::LoadCallerSlot</code> で呼び出し元スロットを直読み
-して <code>@a = a</code> 相当のストアを caller の命令として展開する。</li>
 </ul>
-<p>が効く。Ruby レベルの <code>Class#new</code> は <code>o.__builtin_initialize__(...)</code>
-（<code>bypass_visibility</code> 付きの forwarding call）という<em>まさにこの形</em>なので、
+<p>が効く。（かつてはここに <code>compile/frameless.rs::ivar_store_body</code> による
+ivar ストア展開もあったが、<code>recv.new(args)</code> は現在 bytecodegen が付ける
+<code>initialize</code> twin call site（<code>CallSiteInfo::class_new_init</code>）経由で
+frameless callee として本体をインライン出力するので、認識器は削除された。）
+Ruby レベルの <code>Class#new</code> は <code>o.__builtin_initialize__(...)</code>
+（<code>bypass_visibility</code> 付きの forwarding call）という形なので、
 <code>X.new(a, b)</code> が <strong>allocate + ivar ストア 2 本</strong>にまで落ちる。これが実利上
 最大の効果である。</p>
 <p>ただしこれはトランポリンがそのコンパイル単位に<strong>インラインされたとき
@@ -505,7 +506,7 @@ specialization 深度上限を使い切った深い呼び出し位置では成�
 <tr><td><code>codegen/jitgen/compile/method_call.rs::set_arguments</code></td><td>4 段の分岐、<code>kw_forward_route</code>、拒否権</td></tr>
 <tr><td><code>codegen/jitgen/compile/method_call.rs::send_specialized</code></td><td><code>defer_rest</code> の確定（producer）</td></tr>
 <tr><td><code>codegen/jitgen/compile.rs</code>（<code>CheckKwRest</code>）</td><td>空 Hash 生成の省略</td></tr>
-<tr><td><code>codegen/jitgen/asmir.rs</code></td><td><code>SetArgumentsForwarded</code> / <code>…Helper</code> / <code>LoadCallerSlot</code></td></tr>
+<tr><td><code>codegen/jitgen/asmir.rs</code></td><td><code>SetArgumentsForwarded</code> / <code>…Helper</code></td></tr>
 <tr><td><code>arch/{x86_64,aarch64}/compile/…</code></td><td>上記の lowering、deopt 実体化</td></tr>
 <tr><td><code>codegen/jitgen.rs::gen_write_back_for_deopt</code></td><td><code>forward_rest</code> / <code>forward_kwrest</code> の実体化</td></tr>
 <tr><td><code>codegen/runtime/args.rs</code></td><td>専用ヘルパ、lazy 規約（マーカー / 解決 / 実体化）、<code>SmallVec</code> 化</td></tr>

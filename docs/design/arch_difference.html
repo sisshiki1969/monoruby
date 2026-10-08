@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-20efc593.js";
+            window.path_to_searchindex_js = "../searchindex-dd3df7a2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -224,8 +224,8 @@ structurally and calls a tiny per-arch <strong>emission primitive</strong>
 <li><strong>Per-arch arm</strong> — the <code>other =&gt;</code> fallthrough calls <code>compile_asmir_arch</code>,
 the backend-private match
 (<code>compile_asmir_arch</code> in each backend’s <code>compile/mod.rs</code>).
-On both arches this handles only the <em>same five</em> specialized inlined-frame
-variants (<code>LoadCallerSlot</code>, <code>GuardClassVersionSpecialized</code>,
+On both arches this handles only the <em>same four</em> specialized inlined-frame
+variants (<code>GuardClassVersionSpecialized</code>,
 <code>GuardConstVersionSpecialized</code>, <code>RecompileDeoptSpecialized</code>,
 <code>SetArgumentsForwarded</code>); everything else is handled by the shared arm.</li>
 </ol>
