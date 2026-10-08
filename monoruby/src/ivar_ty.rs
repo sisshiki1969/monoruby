@@ -118,23 +118,26 @@ impl IvarTy {
 
     #[inline]
     fn kind_of(val: Value) -> Kind {
-        if val.is_nil() {
+        if let Some(rv) = val.try_rvalue() {
+            // Heap objects first: one header read gives the class.
+            match rv.class() {
+                FLOAT_CLASS => Kind::Mono(Self::FLOAT),
+                // A Bignum is an `Integer` the Fixnum guard rejects; keep
+                // `INTEGER_CLASS` meaning "Fixnum" by never recording it.
+                INTEGER_CLASS => Kind::Top,
+                class => Kind::Mono(Self::CLASS | ((class.u32() as u64) << 32)),
+            }
+        } else if val.is_nil() {
             Kind::Nil
         } else if val.is_fixnum() {
             Kind::Mono(Self::FIXNUM)
-        } else if val.is_float() {
+        } else if val.id() & 0b11 == 0b10 {
+            // flonum
             Kind::Mono(Self::FLOAT)
         } else if val.id() == TRUE_VALUE || val.id() == FALSE_VALUE {
             Kind::Mono(Self::BOOL)
         } else {
-            let class = val.class();
-            // A Bignum is an `Integer` the Fixnum guard rejects; keep
-            // `INTEGER_CLASS` meaning "Fixnum" by never recording it.
-            if class == INTEGER_CLASS {
-                Kind::Top
-            } else {
-                Kind::Mono(Self::CLASS | ((class.u32() as u64) << 32))
-            }
+            Kind::Mono(Self::CLASS | ((val.class().u32() as u64) << 32))
         }
     }
 
