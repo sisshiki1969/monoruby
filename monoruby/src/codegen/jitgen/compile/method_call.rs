@@ -5148,4 +5148,55 @@ mod tests {
             "#,
         );
     }
+
+    /// An `Array#[]` read with an Integer index is pure, so it leaves the
+    /// callee side-effect free and a guard after it (here the ivar store's
+    /// frozen guard) can still redo the whole call: a body that reads a
+    /// table and stores the element is frameless. The edges: an index out
+    /// of range or negative, a heap (spilled) Array, the table becoming a
+    /// Hash (class guard), a frozen receiver (`FrozenError` with nothing
+    /// written), and `Array#[]` redefined.
+    #[test]
+    fn frameless_array_index_then_store() {
+        run_test_once(
+            r#"
+            class T
+              def initialize(lut); @on = true; @lut = lut; @out = nil; end
+              def fetch(i)
+                return unless @on
+                @out = @lut[i]
+              end
+              def fetch2(i)
+                @out = [@lut[i & 7], @lut[-1 - (i & 3)]]
+              end
+              attr_accessor :out, :on, :lut
+              def run(n)
+                r = []
+                n.times { |i| fetch(i % 12 - 2); r << @out; r << fetch2(i) }
+                r
+              end
+            end
+            res = []
+            t = T.new([10, 20, 30, 40, 50, 60, 70, 80])
+            res << t.run(50).last(6)
+            t.lut = [1, 2, 3]
+            res << t.run(50).last(6)
+            t.lut = [1, 2, 3, 4, 5]
+            res << t.run(50).last(6)
+            t.lut = { 1 => :a, 3 => :b, 7 => :c, -1 => :d }
+            res << (begin; t.run(50).last(6); rescue => e; e.class; end)
+            t.lut = (0..20).to_a
+            t.on = false
+            res << t.run(50).last(6)
+            t.on = true
+            f = T.new([5, 6, 7, 8, 9, 10, 11, 12]).freeze
+            res << (begin; f.fetch(1); rescue => e; [e.class, f.out]; end)
+            class Array
+              def [](i) = :redefined
+            end
+            res << (begin; t.run(20).last(4); rescue => e; e.class; end)
+            res
+            "#,
+        );
+    }
 }
