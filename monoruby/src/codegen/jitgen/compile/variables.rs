@@ -12,25 +12,49 @@ impl<'a> JitContext<'a> {
         ivarid: IvarId,
     ) {
         assert!(!self_class.is_always_frozen());
+        let typed = self.ivar_ty_for_load(state, ir, self_class, ivarid);
+        let guarded = typed.map_or(Guarded::Value, |(g, _)| g);
         // Allocate a pool register and load the ivar value straight into it (a
         // resident), so a following integer op consumes it without a stack
         // round-trip. `alloc_gp_for` clears `dst`'s stale link and spills an
         // evicted victim; the load writes only `gp` (its scratch is rdi/rsi/rdx,
         // none of them pool registers), so other residents survive.
-        let gp = state.alloc_gp_for(ir, dst, Guarded::Value);
+        let gp = state.alloc_gp_for(ir, dst, guarded);
+        // A non-nil typed load deopts on an unset slot (re-executing this
+        // load in the VM): taken after the allocation, so the side exit's
+        // snapshot already has the victim spilled and `dst` not yet bound.
+        let unset_deopt = match typed {
+            Some((_, true)) => Some(ir.new_deopt(state)),
+            _ => None,
+        };
+        let nil_if_unset = unset_deopt.is_none();
         let is_object_ty = self.self_ty() == Some(ObjTy::OBJECT);
-        if is_object_ty && ivarid.is_inline() {
+        let inline = is_object_ty && ivarid.is_inline();
+        if inline {
             ir.self2reg(GP::Rdi);
-            ir.push(AsmInst::LoadIVarInline { ivarid, dst: gp });
+            ir.push(AsmInst::LoadIVarInline {
+                ivarid,
+                dst: gp,
+                nil_if_unset,
+            });
         } else {
             ir.self_ivar_base();
             ir.push(AsmInst::LoadSelfIVarHeap {
                 ivarid,
                 is_object_ty,
                 dst: gp,
+                nil_if_unset,
             });
             self.set_ivar_heap_accessed();
         };
+        if let Some(deopt) = unset_deopt {
+            ir.push(AsmInst::IvarUnset {
+                reg: gp,
+                ivarid,
+                self_obj: !inline,
+                deopt,
+            });
+        }
         state.bind_gp_resident(gp, dst);
     }
 
@@ -51,12 +75,14 @@ impl<'a> JitContext<'a> {
         // A provably-immediate stored value needs no GC write barrier.
         let wb = !state.is_guarded_immediate(src);
         state.load(ir, src, GP::Rax);
+        let slot = src;
         let src = GP::Rax;
         ir.self2reg(GP::Rdi);
         if !frozen_checked {
             let deopt = ir.new_deopt(state);
             ir.guard_frozen(deopt);
         }
+        self.ivar_ty_check(state, ir, self_class, ivarid, slot, src);
         let is_object_ty = self.self_ty() == Some(ObjTy::OBJECT);
         if is_object_ty && ivarid.is_inline() {
             ir.push(AsmInst::StoreIVarInline { src, ivarid, wb });
@@ -69,6 +95,125 @@ impl<'a> JitContext<'a> {
                 wb,
             });
             self.set_ivar_heap_accessed();
+        }
+    }
+
+    /// The type a load of ivar *ivarid* of a *class* instance may assume
+    /// from `crate::ivar_ty`'s type state, and whether an unset slot must
+    /// deoptimize (the type excludes nil). When typed, the assumption is
+    /// recorded for the unit and the class version is re-checked if a
+    /// state could have changed since the last check (see
+    /// `Invariants::ivar_ty_guard`).
+    pub(super) fn ivar_ty_for_load(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        class: ClassId,
+        ivarid: IvarId,
+    ) -> Option<(Guarded, bool)> {
+        let ty = crate::ivar_ty::ivar_ty(class, ivarid);
+        if !crate::ivar_ty::class_reliable(ty) {
+            return None;
+        }
+        let mono = ty.mono_class()?;
+        // A Float is unboxed through a flonum / heap test either way, so
+        // knowing the class buys nothing over the guard at the use, and
+        // the unset check would only add to it.
+        if mono == FLOAT_CLASS {
+            return None;
+        }
+        let g = Guarded::from_class(mono);
+        let typed = if ty.nil() {
+            (
+                Guarded::NilOr(crate::codegen::jitgen::state::NonNil::from_guarded(g)?),
+                false,
+            )
+        } else {
+            (g, true)
+        };
+        if !state.ivar_ty_guard() {
+            state.force_class_version_recheck();
+            self.guard_class_version(state, ir, true);
+        }
+        self.assume_ivar_ty(class, ivarid, ty);
+        Some(typed)
+    }
+
+    fn assume_ivar_ty(&mut self, class: ClassId, ivarid: IvarId, ty: crate::ivar_ty::IvarTy) {
+        let dep = crate::ivar_ty::IvarTyDep { class, ivarid, ty };
+        if !self.ivar_ty_deps.contains(&dep) {
+            self.ivar_ty_deps.push(dep);
+        }
+    }
+
+    /// Keep `crate::ivar_ty`'s per-(class, ivar) type state exact across
+    /// an inline store of *slot* (already in *src*) into ivar *ivarid* of
+    /// the *class* instance in rdi: emit a check that widens the state
+    /// unless the state is already Top or the abstract state proves the
+    /// value conforms.
+    pub(super) fn ivar_ty_check(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        class: ClassId,
+        ivarid: IvarId,
+        slot: SlotId,
+        src: GP,
+    ) {
+        let expect = crate::ivar_ty::ivar_ty(class, ivarid);
+        if expect.is_top() || Self::ivar_ty_conforms(state, slot, expect) {
+            return;
+        }
+        ir.push(AsmInst::IvarTyCheck {
+            src,
+            ivarid,
+            expect,
+            state: crate::ivar_ty::state_word(class, ivarid),
+        });
+        // The check's slow path may widen a state a typed load relies on.
+        state.unset_ivar_ty_guard();
+        // A check compiled against a monomorphic state stays correct when
+        // the state widens (it only calls out more often), and the live
+        // state word answers the common widenings (to Top, by nil) without
+        // the call, so this unit is not recompiled for it: a recompile at
+        // a later point can find colder, more polymorphic call sites than
+        // the code it replaces. Only a check with nothing to compare
+        // against (no write seen yet) asks for one, to get a real state.
+        if expect.mono_class().is_none() {
+            self.assume_ivar_ty(class, ivarid, expect);
+        }
+    }
+
+    /// Does every value *slot* can hold at run time leave *expect* as is?
+    fn ivar_ty_conforms(
+        state: &AbstractState,
+        slot: SlotId,
+        expect: crate::ivar_ty::IvarTy,
+    ) -> bool {
+        use crate::codegen::jitgen::state::NonNil;
+        if let LinkMode::C(v) = state.mode(slot) {
+            return expect.joined(v) == expect;
+        }
+        let mono = expect.mono_class();
+        let class_ok = |c: ClassId| match mono {
+            Some(BOOL_CLASS) => c == TRUE_CLASS || c == FALSE_CLASS || c == BOOL_CLASS,
+            Some(m) => m == c,
+            None => false,
+        };
+        match state.guarded(slot) {
+            Guarded::Value => false,
+            Guarded::Fixnum => mono == Some(INTEGER_CLASS),
+            Guarded::Float => mono == Some(FLOAT_CLASS),
+            Guarded::Class(NIL_CLASS) => expect.nil(),
+            Guarded::Class(c) => class_ok(c),
+            Guarded::NilOr(nn) => {
+                expect.nil()
+                    && match nn {
+                        NonNil::Fixnum => mono == Some(INTEGER_CLASS),
+                        NonNil::Float => mono == Some(FLOAT_CLASS),
+                        NonNil::Class(c) => class_ok(c),
+                    }
+            }
         }
     }
 
@@ -546,6 +691,8 @@ impl AbstractState {
             using_fpr,
         });
         ir.handle_error(error);
+        // The store may widen an ivar type state (`crate::ivar_ty`).
+        self.unset_ivar_ty_guard();
     }
 
     pub(super) fn jit_load_cvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {

@@ -541,6 +541,19 @@ pub struct JitModule {
     ///
     write_barrier: DestLabel,
     ///
+    /// Shared out-of-line half of an inline ivar store's type check
+    /// (`LInst::IvarTyCheck`): widen the slot's type state with
+    /// `ivar_ty::jit_ivar_ty_observe`.
+    ///
+    /// #### in (x86-64)
+    /// - rdi: the object
+    /// - [rsp + 8]: the ivar id, [rsp + 16]: the stored value
+    ///
+    /// #### destroy
+    /// - nothing (fully transparent)
+    ///
+    ivar_ty_observe: DestLabel,
+    ///
     /// Raise StackOverFlow error.
     ///
     /// #### in

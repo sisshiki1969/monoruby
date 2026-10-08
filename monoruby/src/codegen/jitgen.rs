@@ -627,6 +627,7 @@ impl Codegen {
 
         let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
         let singleton_deps = std::mem::take(&mut ctx.singleton_deps);
+        let ivar_ty_deps = std::mem::take(&mut ctx.ivar_ty_deps);
         let const_folds = std::mem::take(&mut ctx.const_fold_cache);
         // The basic-op invariants this body inlined without a runtime guard.
         // Handed back so the iseq can remember what a later redefinition
@@ -721,6 +722,10 @@ impl Codegen {
                 let key = self.jit.get_label_address(&class_version_label).as_ptr() as u64;
                 self.version_imm_sites.insert(key, sites);
             }
+        }
+        {
+            let addr = self.jit.get_label_address(&class_version_label).as_ptr() as u64;
+            crate::ivar_ty::register_unit(ivar_ty_deps, &class_version_label, addr);
         }
         self.unit_const_version = None;
         // Snapshot the involved names' epochs *at compile time*; a later

@@ -208,6 +208,176 @@ impl Codegen {
     }
 
     ///
+    /// The inline half of an ivar store's type check (`LInst::IvarTyCheck`):
+    /// test *src* against the slot's type state *expect*, and on a mismatch
+    /// call the shared `ivar_ty_observe` stub (object in rdi, the ivar id
+    /// and the value passed on the stack) to widen it. Transparent: every
+    /// register survives; flags do not.
+    ///
+    pub(super) fn emit_ivar_ty_check(
+        &mut self,
+        src: GP,
+        ivarid: IvarId,
+        expect: crate::ivar_ty::IvarTy,
+        state: u64,
+    ) {
+        let ok = self.jit.label();
+        let cold = self.jit.label();
+        let r = src as u64;
+        if expect.nil() {
+            monoasm! { &mut self.jit,
+                cmpq R(r), (NIL_VALUE);
+                jeq  ok;
+            }
+        }
+        match expect.mono_class() {
+            None => {
+                monoasm! { &mut self.jit,
+                    jmp cold;
+                }
+            }
+            Some(INTEGER_CLASS) => {
+                monoasm! { &mut self.jit,
+                    testq R(r), 0b001;
+                    jz   cold;
+                }
+            }
+            Some(FLOAT_CLASS) => {
+                monoasm! { &mut self.jit,
+                    testq R(r), 0b001;
+                    jnz  cold;
+                    testq R(r), 0b010;
+                    jnz  ok;
+                    testq R(r), 0b111;
+                    jnz  cold;
+                    cmpl [R(r) + 4], (FLOAT_CLASS.u32());
+                    jne  cold;
+                }
+            }
+            Some(BOOL_CLASS) => {
+                monoasm! { &mut self.jit,
+                    cmpq R(r), (TRUE_VALUE);
+                    jeq  ok;
+                    cmpq R(r), (FALSE_VALUE);
+                    jne  cold;
+                }
+            }
+            Some(SYMBOL_CLASS) => {
+                monoasm! { &mut self.jit,
+                    cmpb R(r), (TAG_SYMBOL);
+                    jne  cold;
+                }
+            }
+            Some(class) => {
+                monoasm! { &mut self.jit,
+                    testq R(r), 0b111;
+                    jnz  cold;
+                    cmpl [R(r) + 4], (class.u32());
+                    jne  cold;
+                }
+            }
+        }
+        let stub = self.ivar_ty_observe.clone();
+        let id = ivarid.get() as i32;
+        // A scratch register other than *src*, saved around its use (`pop`
+        // leaves the flags alone).
+        let t = if src == GP::Rax { GP::Rdi } else { GP::Rax } as u64;
+        let slow = |jit: &mut monoasm::JitMemory| {
+            let call = jit.label();
+            let covered = jit.label();
+            monoasm! { jit,
+            cold:
+                // The state may have widened since this was compiled.
+                pushq R(t);
+                movq R(t), (state);
+                movq R(t), [R(t)];
+                cmpq R(t), (crate::ivar_ty::IvarTy::TOP.get() as i32);
+                jeq  covered;
+                cmpq R(r), (NIL_VALUE);
+                jne  call;
+                testq R(t), (crate::ivar_ty::IvarTy::NIL_BIT as i32);
+                jne  covered;
+            call:
+                popq R(t);
+                lea  rsp, [rsp - 16];
+                movq [rsp + 8], R(r);
+                movq [rsp], (id);
+                call stub;
+                lea  rsp, [rsp + 16];
+                jmp  ok;
+            covered:
+                popq R(t);
+                jmp  ok;
+            }
+        };
+        if self.jit.get_page() == 0 {
+            self.jit.select_page(1);
+            slow(&mut self.jit);
+            self.jit.select_page(0);
+        } else {
+            let skip = self.jit.label();
+            monoasm! { &mut self.jit,
+                jmp skip;
+            }
+            slow(&mut self.jit);
+            self.jit.bind_label(skip);
+        }
+        self.jit.bind_label(ok);
+    }
+
+    ///
+    /// `LInst::IvarUnset`: if *reg* (a raw ivar slot) is 0, record nil into
+    /// the slot's type state through the `ivar_ty_observe` stub and
+    /// deoptimize.
+    ///
+    pub(super) fn emit_ivar_unset(
+        &mut self,
+        reg: GP,
+        ivarid: IvarId,
+        self_obj: bool,
+        deopt: &DestLabel,
+    ) {
+        let cold = self.jit.label();
+        let r = reg as u64;
+        monoasm! { &mut self.jit,
+            testq R(r), R(r);
+            jz   cold;
+        }
+        let stub = self.ivar_ty_observe.clone();
+        let id = ivarid.get() as i32;
+        let deopt = deopt.clone();
+        let page = self.jit.get_page();
+        let skip = self.jit.label();
+        if page == 0 {
+            self.jit.select_page(1);
+        } else {
+            monoasm! { &mut self.jit,
+                jmp skip;
+            }
+        }
+        self.jit.bind_label(cold);
+        if self_obj {
+            self.encode_linst(LInst::Load {
+                dst: GP::Rdi.into(),
+                mem: LMem::Slot(SlotId::self_()),
+            });
+        }
+        monoasm! { &mut self.jit,
+            lea  rsp, [rsp - 16];
+            movq [rsp + 8], (NIL_VALUE);
+            movq [rsp], (id);
+            call stub;
+            lea  rsp, [rsp + 16];
+            jmp  deopt;
+        }
+        if page == 0 {
+            self.jit.select_page(0);
+        } else {
+            self.jit.bind_label(skip);
+        }
+    }
+
+    ///
     /// The bulk variant of [`Self::emit_write_barrier_rdi`], for an inline
     /// store that wrote *several* children (an array slice copy). Checking
     /// each one is not worth it, so an armed parent is remembered regardless

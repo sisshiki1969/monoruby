@@ -131,6 +131,8 @@ impl Codegen {
             | AsmInst::GuardFrozen { .. }
             | AsmInst::LoadIVarInline { .. }
             | AsmInst::StoreIVarInline { .. }
+            | AsmInst::IvarTyCheck { .. }
+            | AsmInst::IvarUnset { .. }
             | AsmInst::LoadStructSlotInline { .. }
             | AsmInst::StoreStructSlotInline { .. }
             | AsmInst::LoadStructSlotHeap { .. }
@@ -642,6 +644,18 @@ impl Codegen {
                 debug_assert_eq!(parent, GP::Rdi, "x86 write barrier expects parent in rdi");
                 self.emit_write_barrier_rdi(value);
             }
+            LInst::IvarTyCheck {
+                src,
+                ivarid,
+                expect,
+                state,
+            } => self.emit_ivar_ty_check(src, ivarid, expect, state),
+            LInst::IvarUnset {
+                reg,
+                ivarid,
+                self_obj,
+                deopt,
+            } => self.emit_ivar_unset(reg, ivarid, self_obj, &deopt),
             // reg <- nil if reg == 0 (x86: branch over the nil mov).
             LInst::NilIfZero { reg } => {
                 let r = reg as u64;

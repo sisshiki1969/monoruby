@@ -301,7 +301,7 @@ fn new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> R
     // subclass and run its `#initialize(*args)` (CRuby binds the block
     // before `initialize`, so a custom `initialize` need not `super`).
     let mut obj: Value = p.into();
-    obj.change_class(class_id);
+    obj.change_class_fresh(class_id);
     let args: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
     let temp = vm.temp_len();
     vm.temp_push(obj);

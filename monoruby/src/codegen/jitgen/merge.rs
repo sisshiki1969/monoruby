@@ -110,10 +110,29 @@ impl<'a> JitContext<'a> {
             // is the same one that keeps `bridge_at` asserting no outer
             // `F`/`Sf`.
             let mut target = incoming;
+            let mut hoist_version_guard = false;
             if let Some((liveness, backedge)) = self.loop_info(bbid) {
                 let backedge_for_floats = backedge.as_ref().map(|b| b.slot_state().clone());
                 if let Some(backedge) = backedge {
                     target.join(backedge);
+                    // Loop-entry hoisting of the class-version guard. The
+                    // fixpoint analysed the body from a head without the
+                    // guard, so a back edge that still has it checked the
+                    // version after the body's last call: it arrives with
+                    // the guard whatever the head had. Checking it once on
+                    // each forward entry then lets the head keep it, and
+                    // the body's typed ivar loads (`crate::ivar_ty`) need no
+                    // guard per iteration. Only inline entries are bridged
+                    // this way (the guard is emitted on the inline page).
+                    if backedge.class_version_guard()
+                        && !target.class_version_guard()
+                        && entries
+                            .iter()
+                            .all(|e| !matches!(e.mode, BranchMode::Side { .. }))
+                    {
+                        target.set_loop_head_version_guard(backedge.ivar_ty_guard());
+                        hoist_version_guard = true;
+                    }
                 }
 
                 target.liveness_analysis(liveness);
@@ -263,7 +282,14 @@ impl<'a> JitContext<'a> {
             // LoopStart's PC) directly; an extra `+1` here would push
             // the deopt resume past the fused BinCmp into the bare
             // CondBr, which then reads a stale `%dst` — see #480.
-            self.gen_bridges_for_branches(&target, entries, bbid, pc, &outer_inits);
+            self.gen_bridges_for_branches(
+                &target,
+                entries,
+                bbid,
+                pc,
+                &outer_inits,
+                hoist_version_guard,
+            );
             self.new_backedge(target.frames_cloned(), bbid);
 
             Some(target)
@@ -272,7 +298,7 @@ impl<'a> JitContext<'a> {
             eprintln!("\n===gen_merge {bbid:?}");
 
             let target = AbstractState::join_entries(&entries);
-            self.gen_bridges_for_branches(&target, entries, bbid, pc, &[]);
+            self.gen_bridges_for_branches(&target, entries, bbid, pc, &[], false);
 
             Some(target)
         };
@@ -292,6 +318,7 @@ impl<'a> JitContext<'a> {
         bbid: BasicBlockId,
         pc: BytecodePtr,
         outer_inits: &[(Vec<SpecializedId>, usize, SlotId, OuterFprHome)],
+        hoist_version_guard: bool,
     ) {
         let target = target.frames_cloned();
         #[cfg(feature = "jit-debug")]
@@ -325,6 +352,21 @@ impl<'a> JitContext<'a> {
                 ir.push(AsmInst::GuardFloatToOuterHomeF {
                     home: home.clone(),
                     deopt,
+                });
+            }
+            if hoist_version_guard && !state.class_version_guard() {
+                // See `incoming_context`: a miss resumes at the loop head's
+                // first body instruction, like the other entry guards.
+                let deopt = ir.new_deopt_with_pc(&state, pc + 1);
+                ir.push(match self.jit_type() {
+                    JitType::Specialized { idx, .. } => {
+                        AsmInst::GuardClassVersionSpecialized { idx: *idx, deopt }
+                    }
+                    _ => AsmInst::GuardClassVersion {
+                        position: self.position(),
+                        with_recovery: true,
+                        deopt,
+                    },
                 });
             }
             state.gen_bridge_all(&mut ir, &target, pc, &self.chain_surrender_table());

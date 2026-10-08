@@ -1812,10 +1812,35 @@ impl<'a> JitContext<'a> {
             };
             let is_object_ty = self.store[recv_class.id()].is_object_ty_instance();
             if is_object_ty && ivarid.is_inline() {
+                let typed = if dst.is_some() {
+                    self.ivar_ty_for_load(state, ir, recv_class.id(), ivarid)
+                } else {
+                    None
+                };
+                // The type check above may have re-guarded the class
+                // version (rax only); rdi still holds the receiver.
+                let unset_deopt = match typed {
+                    Some((_, true)) => Some(ir.new_deopt(state)),
+                    _ => None,
+                };
                 ir.push(AsmInst::LoadIVarInline {
                     ivarid,
                     dst: GP::R15,
-                })
+                    nil_if_unset: unset_deopt.is_none(),
+                });
+                if let Some(deopt) = unset_deopt {
+                    ir.push(AsmInst::IvarUnset {
+                        reg: GP::R15,
+                        ivarid,
+                        self_obj: false,
+                        deopt,
+                    });
+                }
+                if let Some((g, _)) = typed {
+                    state.def_reg2acc_guarded(ir, GP::R15, dst, g);
+                    self.restore_unfrozen(dst);
+                    return CompileResult::Continue;
+                }
             } else {
                 ir.push(AsmInst::LoadIVarHeap {
                     ivarid,
@@ -1867,6 +1892,7 @@ impl<'a> JitContext<'a> {
         let wb = !state.is_guarded_immediate(args);
         state.load(ir, args, GP::Rax);
         let src = GP::Rax;
+        self.ivar_ty_check(state, ir, recv_class.id(), ivarid, args, src);
         let is_object_ty = self.store[recv_class.id()].is_object_ty_instance();
         let using_fpr = state.get_using_fpr(ir);
         if is_object_ty && ivarid.is_inline() {

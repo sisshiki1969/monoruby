@@ -244,6 +244,102 @@ impl Codegen {
     }
 
     ///
+    /// The inline half of an ivar store's type check (`LInst::IvarTyCheck`):
+    /// test *src* against the slot's type state *expect*, and on a mismatch
+    /// call the shared `ivar_ty_observe` stub (object in x9, value in x10,
+    /// ivar id in x11) to widen it. aarch64 twin of x86
+    /// `emit_ivar_ty_check`; transparent like the write barrier.
+    ///
+    pub(in crate::codegen::jitgen) fn emit_ivar_ty_check(
+        &mut self,
+        src: GP,
+        ivarid: IvarId,
+        expect: crate::ivar_ty::IvarTy,
+        state: u64,
+    ) {
+        let ok = self.jit.label();
+        let cold = self.jit.label();
+        let call = self.jit.label();
+        let r = src.a64().0;
+        let obj = GP::Rdi.a64().0;
+        if expect.nil() {
+            monoasm_arm64!(&mut self.jit, cmp x(r), #(NIL_VALUE as u32););
+            self.jit.bcond_label(monoasm::Cond::Eq, &ok);
+        }
+        match expect.mono_class() {
+            None => monoasm_arm64!(&mut self.jit, b cold;),
+            Some(class) => {
+                self.a64_guard_class(src, CachedClass::from_class(class), &cold);
+            }
+        }
+        let stub = self.ivar_ty_observe.clone();
+        // The state may have widened since this was compiled (x86:
+        // `emit_ivar_ty_check`): accept the value if the live state word
+        // covers it.
+        monoasm_arm64!(&mut self.jit,
+            b ok;
+            cold:
+            mov x9, (state);
+            ldr x9, [x9];
+            cmp x9, #(crate::ivar_ty::IvarTy::TOP.get() as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &ok);
+        monoasm_arm64!(&mut self.jit, cmp x(r), #(NIL_VALUE as u32););
+        self.jit.bcond_label(monoasm::Cond::Ne, &call);
+        monoasm_arm64!(&mut self.jit,
+            tbnz x9, #(3), ok;  // IvarTy::NIL_BIT
+            call:
+            mov x9, x(obj);
+            mov x10, x(r);
+            mov x11, (ivarid.get() as u64);
+            str x30, [sp, #-16]!;
+        );
+        self.a64_far_branch(&stub, true);
+        monoasm_arm64!(&mut self.jit,
+            ldr x30, [sp], #16;
+            ok:
+        );
+    }
+
+    ///
+    /// `LInst::IvarUnset`: if *reg* (a raw ivar slot) is 0, record nil into
+    /// the slot's type state through the `ivar_ty_observe` stub and
+    /// deoptimize. aarch64 twin of x86 `emit_ivar_unset`.
+    ///
+    pub(in crate::codegen::jitgen) fn emit_ivar_unset(
+        &mut self,
+        reg: GP,
+        ivarid: IvarId,
+        self_obj: bool,
+        deopt: &DestLabel,
+    ) {
+        let ok = self.jit.label();
+        let r = reg.a64().0;
+        let obj = GP::Rdi.a64().0;
+        monoasm_arm64!(&mut self.jit, cbnz x(r), ok;);
+        if self_obj {
+            self.encode_linst(LInst::Load {
+                dst: GP::Rdi.into(),
+                mem: LMem::Slot(SlotId::self_()),
+            });
+        }
+        let stub = self.ivar_ty_observe.clone();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, x(obj);
+            mov x10, (NIL_VALUE);
+            mov x11, (ivarid.get() as u64);
+            str x30, [sp, #-16]!;
+        );
+        self.a64_far_branch(&stub, true);
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            ldr x30, [sp], #16;
+            b deopt;
+            ok:
+        );
+    }
+
+    ///
     /// The bulk variant of [`Self::emit_write_barrier`], for an inline store
     /// that wrote *several* children (an array slice copy). Checking each one
     /// is not worth it, so an armed parent is remembered regardless of what

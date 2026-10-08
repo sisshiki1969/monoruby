@@ -851,9 +851,20 @@ impl Value {
         Ok(())
     }
 
+    /// Change the class of a freshly created object, which nothing can
+    /// reference yet (so no ivar type state can name its old class).
+    pub(crate) fn change_class_fresh(&mut self, new_class_id: ClassId) {
+        if let Some(rv) = self.try_rvalue_mut() {
+            rv.change_class(new_class_id, false);
+        } else {
+            let class = self.class();
+            unreachable!("the class of primitive class {class:?} can not be changed.");
+        }
+    }
+
     pub(crate) fn change_class(&mut self, new_class_id: ClassId) {
         if let Some(rv) = self.try_rvalue_mut() {
-            rv.change_class(new_class_id);
+            rv.change_class(new_class_id, true);
         } else {
             let class = self.class();
             unreachable!("the class of primitive class {class:?} can not be changed.");

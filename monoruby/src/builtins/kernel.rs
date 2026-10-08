@@ -5111,7 +5111,7 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     // carried over — only `clone` copies them (CRuby semantics).
     let real = self_val.real_class(&globals.store).id();
     if copy.class() != real {
-        copy.change_class(real);
+        copy.change_class_fresh(real);
     }
     copy_finalizers(globals, self_val, copy);
     // When the class uses the default (no-op) copy hooks, skip the hook

@@ -497,6 +497,23 @@ pub(in crate::codegen) enum LInst {
         parent: GP,
         value: GP,
     },
+    /// Type check of a value about to be stored into ivar `ivarid` of the
+    /// object in rdi against the slot's type state `expect` (see
+    /// `crate::ivar_ty`); on a mismatch, the out-of-line half widens the
+    /// state. Transparent: preserves every register.
+    IvarTyCheck {
+        src: GP,
+        ivarid: IvarId,
+        expect: crate::ivar_ty::IvarTy,
+        state: u64,
+    },
+    /// See `AsmInst::IvarUnset`.
+    IvarUnset {
+        reg: GP,
+        ivarid: IvarId,
+        self_obj: bool,
+        deopt: DestLabel,
+    },
     /// `reg <- nil` if `reg == 0` (an unset inline-ivar slot reads as 0). The
     /// arches differ structurally — x86 branches over a `mov`, aarch64 uses a
     /// branchless `csel` — so this is its own op rather than a Load + branch.

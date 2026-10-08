@@ -152,6 +152,61 @@ impl Codegen {
         );
     }
 
+    /// The ivar type check's shared out-of-line half (object in x9, value
+    /// in x10, ivar id in x11); same register discipline as
+    /// [`Self::a64_gen_write_barrier`].
+    pub(in crate::codegen) fn a64_gen_ivar_ty_observe(&mut self) {
+        let wb = self.ivar_ty_observe.clone();
+        let f = crate::ivar_ty::jit_ivar_ty_observe as *const () as u64;
+        monoasm_arm64!(&mut self.jit,
+            wb:
+            sub sp, sp, #(144);
+            str x0, [sp, #(0)];
+            str x1, [sp, #(8)];
+            str x2, [sp, #(16)];
+            str x3, [sp, #(24)];
+            str x4, [sp, #(32)];
+            str x5, [sp, #(40)];
+            str x6, [sp, #(48)];
+            str x7, [sp, #(56)];
+            str x8, [sp, #(64)];
+            str d0, [sp, #(72)];
+            str d1, [sp, #(80)];
+            str d2, [sp, #(88)];
+            str d3, [sp, #(96)];
+            str d4, [sp, #(104)];
+            str d5, [sp, #(112)];
+            str d6, [sp, #(120)];
+            str d7, [sp, #(128)];
+            str x30, [sp, #(136)];
+            mov x0, x9;                // object -> arg0
+            mov x1, x11;               // ivar id -> arg1
+            mov x2, x10;               // value -> arg2
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp, #(136)];
+            ldr d7, [sp, #(128)];
+            ldr d6, [sp, #(120)];
+            ldr d5, [sp, #(112)];
+            ldr d4, [sp, #(104)];
+            ldr d3, [sp, #(96)];
+            ldr d2, [sp, #(88)];
+            ldr d1, [sp, #(80)];
+            ldr d0, [sp, #(72)];
+            ldr x8, [sp, #(64)];
+            ldr x7, [sp, #(56)];
+            ldr x6, [sp, #(48)];
+            ldr x5, [sp, #(40)];
+            ldr x4, [sp, #(32)];
+            ldr x3, [sp, #(24)];
+            ldr x2, [sp, #(16)];
+            ldr x1, [sp, #(8)];
+            ldr x0, [sp, #(0)];
+            add sp, sp, #(144);
+            ret;
+        );
+    }
+
     /// `f64_to_val`: convert the f64 in `D0` to a boxed `Value` in `X0` —
     /// flonum-encode when the exponent is in range, else heap-allocate a
     /// `Float`. Mirrors x86 `gen_f64_to_val`. Called via `bl` from `FprToStack`.

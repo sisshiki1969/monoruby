@@ -9221,7 +9221,7 @@ fn string_uminus(
         // variables behind.
         let mut copy = Value::string_from_inner(self_.as_rstring_inner().clone());
         if self_.class() != STRING_CLASS {
-            copy.change_class(self_.class());
+            copy.change_class_fresh(self_.class());
         }
         copy.set_frozen();
         return Ok(copy);

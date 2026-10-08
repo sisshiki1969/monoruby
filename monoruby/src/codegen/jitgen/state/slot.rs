@@ -2510,7 +2510,7 @@ pub enum NonNil {
 }
 
 impl NonNil {
-    fn from_guarded(g: Guarded) -> Option<Self> {
+    pub(in crate::codegen::jitgen) fn from_guarded(g: Guarded) -> Option<Self> {
         match g {
             Guarded::Fixnum => Some(NonNil::Fixnum),
             Guarded::Float => Some(NonNil::Float),

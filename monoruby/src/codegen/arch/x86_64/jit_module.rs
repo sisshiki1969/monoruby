@@ -32,6 +32,7 @@ impl JitModule {
         let f64_to_val = jit.label();
         let stack_overflow = jit.label();
         let write_barrier = jit.label();
+        let ivar_ty_observe = jit.label();
 
         // dispatch table.
         let entry_unimpl = jit.get_current_address();
@@ -59,6 +60,7 @@ impl JitModule {
             vm_stack_overflow: stack_overflow,
             entry_panic,
             write_barrier,
+            ivar_ty_observe,
             dispatch: dispatch.into_boxed_slice().try_into().unwrap(),
             bop_redefined_flags,
             bop_flags,
@@ -159,6 +161,28 @@ impl JitModule {
         self.save_registers();
         monoasm! { &mut self.jit,
             movq rax, (crate::codegen::jit_module::jit_write_barrier);
+            call rax;
+        }
+        self.restore_registers();
+        monoasm! { &mut self.jit,
+            popq rax;
+            ret;
+        }
+
+        // The ivar type check's out-of-line half (see the field doc): the
+        // site pushed the value and the ivar id; rdi is the object.
+        // [rsp]: saved rax (+192 after `save_registers`), then the return
+        // address, the ivar id and the value.
+        let label = self.ivar_ty_observe.clone();
+        monoasm! { &mut self.jit,
+        label:
+            pushq rax;
+        }
+        self.save_registers();
+        monoasm! { &mut self.jit,
+            movq rsi, [rsp + 208];
+            movq rdx, [rsp + 216];
+            movq rax, (crate::ivar_ty::jit_ivar_ty_observe);
             call rax;
         }
         self.restore_registers();

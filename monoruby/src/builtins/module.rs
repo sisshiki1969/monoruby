@@ -286,7 +286,7 @@ fn module_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // When called on a subclass of Module, re-tag the header so `#class`
     // reports the subclass rather than the plain `Module` class.
     if self_class_id != MODULE_CLASS {
-        module_val.change_class(self_class_id);
+        module_val.change_class_fresh(self_class_id);
     }
     // Invoke `#initialize` so subclasses that override it (with args and
     // block) run their setup. For plain `Module.new`, the default
@@ -3170,7 +3170,7 @@ fn refine(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         None => {
             let module = globals.store.define_unnamed_module();
             let mut val = module.as_val();
-            val.change_class(REFINEMENT_CLASS);
+            val.change_class_fresh(REFINEMENT_CLASS);
             globals.store[module.id()].set_refinement_of(refined, owner);
             globals.store[owner].add_refinement(module.id());
             module
