@@ -137,6 +137,10 @@ impl<'a> JitContext<'a> {
         if let Some(backedge) = self.loop_backedge(loop_start) {
             state.join(backedge);
         };
+        // The liveness is the loop's own: what was read or overwritten
+        // before the loop (a method JIT's `i = 0`) must not stand in for
+        // what the loop does with the slot.
+        state.reset_liveness();
         ctx.branch_continue(loop_start, state);
 
         for bbid in loop_start..=loop_end {

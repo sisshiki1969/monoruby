@@ -14,9 +14,10 @@
 //! the method from its entry in analysis mode, joins the states that arrive
 //! at each loop head along its forward entries, and takes the slot types
 //! found there as *predictions* ([`JitContext::loop_entry_seeds`]; one walk
-//! per method and `self` class, cached by `Codegen`). Each predicted slot
-//! the loop does not overwrite before reading it is guarded once at the
-//! loop entry; a miss takes a counter-gated recompile exit
+//! per method and `self` class, cached by `Codegen`). The walk analyses
+//! each loop from that entry state (its back-edge fixpoint), and each
+//! predicted slot the loop reads before overwriting it is guarded once at
+//! the loop entry; a miss takes a counter-gated recompile exit
 //! (`RecompileReason::LoopEntryGuardFailed`) that resumes the interpreter
 //! after the `LoopStart`, and the recompile drops the slots that missed
 //! ([`LoopSeedRecord::note_entry_miss`]).
@@ -276,13 +277,14 @@ impl<'a> JitContext<'a> {
                 break;
             }
         }
-        // A slot a loop overwrites before any read is discarded at its head
-        // anyway (`liveness_analysis`): its guard would buy nothing and
-        // could only miss. The liveness is the one the walk's own merge at
-        // that head computed.
+        // Only a slot the loop reads before overwriting it gains from a
+        // type at the head; a guard on any other slot buys nothing and
+        // could only miss. The liveness is the one the walk's back-edge
+        // fixpoint at that head computed: the loop analysed afresh from
+        // the entry state the prefix reached.
         for (head, typed) in predictions.0.iter_mut() {
             match ctx.loop_info(*head) {
-                Some((liveness, _)) => typed.retain(|(slot, _)| !liveness.is_killed(*slot)),
+                Some((liveness, _)) => typed.retain(|(slot, _)| liveness.is_used(*slot)),
                 None => typed.clear(),
             }
         }

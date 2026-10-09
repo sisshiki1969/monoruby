@@ -1177,6 +1177,21 @@ impl SlotState {
         self.slots[slot.0 as usize].dynvar_src
     }
 
+    ///
+    /// Liveness: *slot* is read by the instruction being compiled
+    /// ([`TraceIr::read_slots`]), before that instruction's own uses and
+    /// definitions are recorded.
+    ///
+    pub(in crate::codegen::jitgen) fn reset_liveness(&mut self) {
+        for slot in self.slots.iter_mut() {
+            slot.used = IsUsed::ND;
+        }
+    }
+
+    pub(in crate::codegen::jitgen) fn note_read(&mut self, slot: SlotId) {
+        self.is_used_mut(slot).read();
+    }
+
     pub(super) fn use_as_value(&mut self, slot: SlotId) {
         self.is_used_mut(slot).use_as_non_float();
     }

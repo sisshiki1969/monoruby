@@ -534,6 +534,9 @@ impl<'a> JitContext<'a> {
         let pc = self.get_pc(bc_pos);
         state.set_pc(pc);
         let trace_ir = TraceIr::from_pc(pc, self.store);
+        for slot in trace_ir.read_slots(self.store) {
+            state.note_read(slot);
+        }
         // A call/yield result the previous instruction left in rax
         // (`def_rax2gp`) is used in place only by the words that emit
         // nothing, and by a method's `ret` of it. Everything else may use rax
