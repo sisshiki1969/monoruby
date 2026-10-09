@@ -58,6 +58,14 @@ impl Liveness {
     }
 
     ///
+    /// Whether *slot* is read on some path through the loop before being
+    /// overwritten.
+    ///
+    pub(in crate::codegen::jitgen) fn is_used(&self, slot: SlotId) -> bool {
+        matches!(self.0.get(slot.0 as usize), Some(IsUsed::Used(_)))
+    }
+
+    ///
     /// Collect killed (and not used) slots.
     ///
     pub(super) fn killed(&self) -> impl Iterator<Item = SlotId> {
@@ -133,6 +141,17 @@ impl IsUsed {
     }
 
     ///
+    /// Read, in a form not yet known: makes the slot live without
+    /// saying how it is used, so the float verdict is left to the
+    /// typed uses (`use_as_float` / `use_as_non_float`).
+    ///
+    pub(super) fn read(&mut self) {
+        if let IsUsed::ND = self {
+            *self = IsUsed::Used(UsedAs::read());
+        }
+    }
+
+    ///
     /// Everything the compiler can observe about this record: whether
     /// it is the `Killed` variant, which is the kill set
     /// ([`Liveness::killed`]), and the float verdict, which is the
@@ -152,7 +171,7 @@ impl IsUsed {
             IsUsed::Used(used) if !used.killed => match used.ty {
                 UseTy::Float => Some(true),
                 UseTy::Both => Some(false),
-                UseTy::NonFloat => None,
+                UseTy::NonFloat | UseTy::Read => None,
             },
             _ => None,
         };
@@ -189,6 +208,13 @@ impl UsedAs {
         }
     }
 
+    fn read() -> Self {
+        UsedAs {
+            ty: UseTy::Read,
+            killed: false,
+        }
+    }
+
     fn non_float() -> Self {
         UsedAs {
             ty: UseTy::NonFloat,
@@ -220,6 +246,8 @@ impl UsedAs {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum UseTy {
+    /// The slot is read, in no particular form (the identity of `join`).
+    Read,
     /// The slot is used as f64 with no conversion.
     Float,
     NonFloat,
@@ -229,6 +257,7 @@ enum UseTy {
 impl UseTy {
     fn join(&self, other: &Self) -> Self {
         match (self, other) {
+            (UseTy::Read, x) | (x, UseTy::Read) => *x,
             (UseTy::Float, UseTy::Float) => UseTy::Float,
             (UseTy::NonFloat, UseTy::NonFloat) => UseTy::NonFloat,
             (_, _) => UseTy::Both,

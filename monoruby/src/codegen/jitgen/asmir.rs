@@ -880,6 +880,30 @@ impl AsmIr {
         AsmDeopt(i)
     }
 
+    ///
+    /// [`Self::new_recompile_deopt`] resuming at *pc* instead of the
+    /// state's own pc.
+    ///
+    pub(crate) fn new_recompile_deopt_with_pc(
+        &mut self,
+        state: &AbstractFrame,
+        pc: BytecodePtr,
+        reason: RecompileReason,
+        target: RecompileTarget,
+    ) -> AsmDeopt {
+        let materialize = self.materializes(state.side_effect_guard());
+        let i = self.new_label(SideExit::RecompileDeoptimize(
+            pc,
+            self.exit_write_back(state),
+            reason,
+            target,
+            self.chain_frames,
+            materialize,
+        ));
+        self.had_deopt = true;
+        AsmDeopt(i)
+    }
+
     pub(crate) fn new_error_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmError {
         // The path that can take this exit can run Ruby code before it
         // does (a generic helper dispatching a user-defined method), and

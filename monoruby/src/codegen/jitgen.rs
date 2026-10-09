@@ -18,6 +18,7 @@ pub(crate) use self::context::JitContext;
 use self::context::CondBrSink;
 pub(in crate::codegen) use self::context::SplicePlan;
 pub(crate) use self::state::{AbstractFrame, AbstractState};
+pub(in crate::codegen) use self::compile::{LiveTypes, LoopPredictions, LoopSeedInput, LoopSeedRecord, LoopSeeded};
 #[cfg(feature = "profile")]
 pub(crate) use self::state::join_profile;
 use state::{DeoptPoint, FrameRef, Keep, LinkMode, ReturnState};
@@ -616,7 +617,9 @@ impl Codegen {
             refinements,
             vec![],
         );
+        ctx.loop_seed_input = self.loop_seed_input.take().filter(|_| position.is_some());
         let mut frame = ctx.traceir_to_asmir(frame, None)?;
+        self.loop_seed_output = std::mem::take(&mut ctx.loop_seeded);
         let specialized_info = SpecializedCodeInfo::from(&frame);
 
         // Now that every frame's `stack_offset` has been finalised

@@ -798,6 +798,110 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
 }
 
 impl TraceIr {
+    ///
+    /// The slots of the current frame this instruction reads, for the
+    /// loop liveness (`Liveness`). Exhaustive by construction: a new
+    /// instruction has to say what it reads. Reads through the frame
+    /// chain (`LoadDynVar`) are not this frame's and are left out, as are
+    /// the slots a `Hash`/`ConcatStr`-style instruction only writes.
+    ///
+    pub(crate) fn read_slots(&self, store: &Store) -> Vec<SlotId> {
+        fn range(start: SlotId, len: usize) -> impl Iterator<Item = SlotId> {
+            (start.0..start.0 + len as u16).map(SlotId)
+        }
+        fn callsite(store: &Store, callid: CallSiteId, recv: bool) -> Vec<SlotId> {
+            let cs = &store[callid];
+            let mut v: Vec<SlotId> = vec![];
+            if recv {
+                v.push(cs.recv);
+            }
+            v.extend(range(cs.args, cs.pos_num));
+            v.extend(range(cs.kw_pos, cs.kw_len()));
+            v.extend(cs.hash_splat_pos().iter().copied());
+            v.extend(cs.block_arg);
+            v
+        }
+        match self {
+            TraceIr::Br(_)
+            | TraceIr::FrozenLiteral(..)
+            | TraceIr::StringFreeze(..)
+            | TraceIr::Literal(..)
+            | TraceIr::Lambda
+            | TraceIr::BlockArgProxy(..)
+            | TraceIr::BlockArg(..)
+            | TraceIr::LoadConst(..)
+            | TraceIr::LoadDynVar(..)
+            | TraceIr::LoadIvar(..)
+            | TraceIr::LoadGvar { .. }
+            | TraceIr::LoadCvar { .. }
+            | TraceIr::CheckCvar { .. }
+            | TraceIr::Retry
+            | TraceIr::Redo
+            | TraceIr::EnsureEnd
+            | TraceIr::InitMethod(_)
+            | TraceIr::InlineCache
+            | TraceIr::TypeIc(..)
+            | TraceIr::MethodDef { .. }
+            | TraceIr::UndefMethod { .. }
+            | TraceIr::AliasGvar { .. }
+            | TraceIr::DefinedYield { .. }
+            | TraceIr::DefinedConst { .. }
+            | TraceIr::DefinedSuper { .. }
+            | TraceIr::DefinedGvar { .. }
+            | TraceIr::DefinedIvar { .. }
+            | TraceIr::DefinedCvar { .. }
+            | TraceIr::LoopStart { .. }
+            | TraceIr::LoopEnd => vec![],
+            TraceIr::CondBr(slot, ..)
+            | TraceIr::NilBr(slot, _)
+            | TraceIr::CheckLocal(slot, _)
+            | TraceIr::OptCase { cond: slot, .. }
+            | TraceIr::CheckKwRest(slot)
+            | TraceIr::StoreConst(slot, _)
+            | TraceIr::StoreDynVar(_, slot)
+            | TraceIr::StoreIvar(slot, ..)
+            | TraceIr::StoreGvar { src: slot, .. }
+            | TraceIr::StoreCvar { src: slot, .. }
+            | TraceIr::UnOp { src: slot, .. }
+            | TraceIr::ArrayAny { reg: slot }
+            | TraceIr::Ret(slot)
+            | TraceIr::MethodRet(slot)
+            | TraceIr::BlockBreak(slot)
+            | TraceIr::Raise(slot)
+            | TraceIr::ToA { src: slot, .. }
+            | TraceIr::Mov(_, slot)
+            | TraceIr::SingletonMethodDef { obj: slot, .. }
+            | TraceIr::SingletonClassDef { base: slot, .. }
+            | TraceIr::ExpandArray { src: slot, .. }
+            | TraceIr::DefinedMethod { recv: slot, .. } => vec![*slot],
+            TraceIr::ArrayConcat { dst: a, src: b }
+            | TraceIr::Range { start: a, end: b, .. }
+            | TraceIr::BinOp { lhs: a, rhs: b, .. }
+            | TraceIr::BinCmp { lhs: a, rhs: b, .. }
+            | TraceIr::ArrayTEq { lhs: a, rhs: b }
+            | TraceIr::Index { base: a, idx: b, .. }
+            | TraceIr::AliasMethod { new: a, old: b } => vec![*a, *b],
+            TraceIr::IndexAssign { base, idx, src, .. } => vec![*base, *idx, *src],
+            TraceIr::Hash { args, len, .. } => range(*args, *len as usize).collect(),
+            TraceIr::HashInsert { hash, args, len } => {
+                std::iter::once(*hash).chain(range(*args, *len as usize)).collect()
+            }
+            TraceIr::ConcatStr(_, args, len) | TraceIr::ConcatRegexp(_, args, len) => {
+                range(*args, *len as usize).collect()
+            }
+            TraceIr::ClassDef {
+                base, superclass, ..
+            } => base.iter().chain(superclass.iter()).copied().collect(),
+            TraceIr::ModuleDef { base, .. } => base.iter().copied().collect(),
+            TraceIr::Array { callid, .. } | TraceIr::Yield { callid } => {
+                callsite(store, *callid, false)
+            }
+            TraceIr::MethodCall { callid, .. } => callsite(store, *callid, true),
+        }
+    }
+}
+
+impl TraceIr {
     #[cfg(feature = "dump-traceir")]
     pub(crate) fn format(store: &Store, iseq_id: ISeqId, pc: BytecodePtr) -> Option<String> {
         fn optstr(opt: bool) -> &'static str {

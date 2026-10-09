@@ -919,6 +919,17 @@ pub struct Codegen {
     /// guard failures are not counted (see
     /// `Codegen::recompile_budget_exhausted`).
     recompile_counts: HashMap<(ISeqId, Option<ClassId>), u32>,
+    /// Loop-entry type seeding, per loop (iseq, loop head): what each
+    /// loop's current compile guards and which slots earlier entry-guard
+    /// misses vetoed (`jitgen/compile/loop_entry.rs`).
+    loop_seeds: HashMap<(ISeqId, BcIndex), jitgen::LoopSeedRecord>,
+    /// The loop-entry predictions of each iseq, per `self` class: one
+    /// walk serves every loop of the method.
+    loop_predictions: HashMap<(ISeqId, ClassId), std::rc::Rc<jitgen::LoopPredictions>>,
+    /// Handed from `compile_partial_by_id` to the loop compile it starts.
+    loop_seed_input: Option<jitgen::LoopSeedInput>,
+    /// Handed back by that compile: the slots it guarded.
+    loop_seed_output: jitgen::LoopSeeded,
     /// `doc/chain_deopt.md` §5 step 1 / §9.3. Keyed by the return-address
     /// slot of a suspended frame (§3.4), which is all the walk has to go on:
     /// return address of a chain-eligible call -> the entry of that site's
@@ -1408,6 +1419,10 @@ impl Codegen {
             compilation_unit: Vec::new(),
             asm_return_addr_table: HashMap::default(),
             recompile_counts: HashMap::default(),
+            loop_seeds: HashMap::default(),
+            loop_predictions: HashMap::default(),
+            loop_seed_input: None,
+            loop_seed_output: Default::default(),
             chain_deopt_table: HashMap::default(),
             chain_cont_stub: entry_panic.clone(),
             alloc_cell: entry_panic.clone(),
