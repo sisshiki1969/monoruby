@@ -5673,6 +5673,10 @@ pub enum RecompileReason {
     /// unlike the class version, the constant version keeps moving in
     /// programs that assign constants at run time.
     ConstVersionGuardFailed = 5,
+    /// A loop JIT's entry guard on a slot type predicted from the code
+    /// before the loop (`codegen/jitgen/compile/loop_entry.rs`) missed.
+    /// The recompile drops the slots that missed from the seeding.
+    LoopEntryGuardFailed = 6,
 }
 
 struct Root<'a, 'b> {

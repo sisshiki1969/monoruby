@@ -58,6 +58,14 @@ impl Liveness {
     }
 
     ///
+    /// Whether *slot* is overwritten before any read on every path through
+    /// the loop (what [`Self::killed`] collects).
+    ///
+    pub(in crate::codegen::jitgen) fn is_killed(&self, slot: SlotId) -> bool {
+        matches!(self.0.get(slot.0 as usize), Some(IsUsed::Killed))
+    }
+
+    ///
     /// Collect killed (and not used) slots.
     ///
     pub(super) fn killed(&self) -> impl Iterator<Item = SlotId> {

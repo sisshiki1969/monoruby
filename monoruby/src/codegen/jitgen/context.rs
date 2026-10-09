@@ -1246,6 +1246,11 @@ pub(crate) struct JitContext<'a> {
     /// Keyed by the twin call site: the body may make frameless calls of
     /// its own, whose exits are their own.
     pub(super) pending_class_new_redo: Option<(CallSiteId, AsmDeopt)>,
+    /// The loop JIT's entry-seeding input (`compile/loop_entry.rs`); set
+    /// on the root context of a loop compile only.
+    pub(in crate::codegen) loop_seed_input: Option<super::compile::LoopSeedInput>,
+    /// What that loop compile guarded at its entry.
+    pub(in crate::codegen) loop_seeded: super::compile::LoopSeeded,
 }
 
 impl<'a> JitContext<'a> {
@@ -1289,6 +1294,8 @@ impl<'a> JitContext<'a> {
             outer_claim_barrier: false,
             widened_outer_log: vec![],
             spec_memo: Default::default(),
+            loop_seed_input: None,
+            loop_seeded: Default::default(),
         }
     }
 
@@ -1311,6 +1318,23 @@ impl<'a> JitContext<'a> {
             .filter(|(head, _)| **head != loop_start)
             .map(|(head, info)| (*head, info.clone()))
             .collect();
+        ctx
+    }
+
+    ///
+    /// The throwaway context for the walk of this frame's iseq *as a
+    /// method*, from its entry up to a loop head
+    /// ([`JitContext::loop_entry_seeds`]): what the method JIT would know
+    /// there.
+    ///
+    pub(super) fn method_prefix_analysis(&self) -> Self {
+        let mut ctx = self.analysis_clone();
+        let frame = ctx.stack_frame.last_mut().unwrap();
+        frame.jit_type = JitType::Entry;
+        frame.loop_info = Default::default();
+        frame.branch_map = Default::default();
+        frame.backedge_map = Default::default();
+        frame.loop_count = 0;
         ctx
     }
 
@@ -1361,6 +1385,8 @@ impl<'a> JitContext<'a> {
             frameless_rejected: Default::default(),
             pending_fresh_self: false,
             pending_class_new_redo: None,
+            loop_seed_input: None,
+            loop_seeded: Default::default(),
         }
     }
 
@@ -3758,6 +3784,10 @@ impl<'a> JitContext<'a> {
                 mode: BranchMode::Continue,
             }],
         );
+    }
+
+    pub(super) fn branch_entries(&self, bb: BasicBlockId) -> Option<&Vec<BranchEntry>> {
+        self.current_frame().branch_map.get(&bb)
     }
 
     pub(super) fn remove_branch(&mut self, bb: BasicBlockId) -> Option<Vec<BranchEntry>> {
