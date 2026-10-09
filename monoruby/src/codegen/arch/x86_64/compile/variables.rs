@@ -347,13 +347,16 @@ impl Codegen {
         let id = ivarid.get() as i32;
         let deopt = deopt.clone();
         let page = self.jit.get_page();
-        let skip = self.jit.label();
-        if page == 0 {
-            self.jit.select_page(1);
-        } else {
+        // Only made when it is bound: an unbound label stays on the
+        // assembler's label list for good, and every finalize walks it.
+        let skip = (page != 0).then(|| self.jit.label());
+        if let Some(skip) = &skip {
+            let skip = skip.clone();
             monoasm! { &mut self.jit,
                 jmp skip;
             }
+        } else {
+            self.jit.select_page(1);
         }
         self.jit.bind_label(cold);
         if self_obj {
@@ -370,10 +373,9 @@ impl Codegen {
             lea  rsp, [rsp + 16];
             jmp  deopt;
         }
-        if page == 0 {
-            self.jit.select_page(0);
-        } else {
-            self.jit.bind_label(skip);
+        match skip {
+            Some(skip) => self.jit.bind_label(skip),
+            None => self.jit.select_page(0),
         }
     }
 
