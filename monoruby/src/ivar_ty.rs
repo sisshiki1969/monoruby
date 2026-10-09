@@ -355,6 +355,29 @@ pub(crate) fn class_reliable(ty: IvarTy) -> bool {
     }
 }
 
+/// The type state of *class*'s ivar slot *id* in words, for listings:
+/// `Integer`, `Point|nil`, `nil`, `Empty`, `Top`, with ` (escaped)` when
+/// the class is not trusted for typed loads (see [`note_class_escape`]).
+#[cfg(feature = "emit-asm")]
+pub(crate) fn describe(store: &crate::globals::Store, class: ClassId, id: IvarId) -> String {
+    let ty = ivar_ty(class, id);
+    let nil = if ty.nil() { "|nil" } else { "" };
+    match ty.mono_class() {
+        Some(c) => {
+            let name = match ty.tag() {
+                IvarTy::FIXNUM => "Integer".to_string(),
+                IvarTy::BOOL => "true|false".to_string(),
+                _ => store.debug_class_name(c),
+            };
+            let escaped = if class_reliable(ty) { "" } else { " (escaped)" };
+            format!("{name}{nil}{escaped}")
+        }
+        None if ty.is_top() => "Top".to_string(),
+        None if ty.nil() => "nil".to_string(),
+        None => "Empty".to_string(),
+    }
+}
+
 /// File a freshly compiled unit's assumptions under its class-version
 /// word *label* (at *addr*).
 pub(crate) fn register_unit(deps: Vec<IvarTyDep>, label: &DestLabel, addr: u64) {

@@ -108,3 +108,17 @@ replaces). Instead the slow path first reads the live state word
 the value without the call if the state is now Top, or the value is nil
 and the state has the nil bit. Only a check compiled against an empty
 state registers a dependency, to be recompiled with a real one.
+
+## Seeing the states
+
+A build with `--features emit-asm` prints, next to each ivar load and
+store in the listing, the slot's state as the compile saw it
+(`ivar_ty::describe`):
+
+```
+    :00007 %3 = @x: P[IvarId(0)]  [ivar ty: Integer]
+    :00008 %4 = @n: P[IvarId(1)]  [ivar ty: Array|nil]
+```
+
+A load is typed when the state names one class other than `Float`, and
+the class is not marked `(escaped)`.
