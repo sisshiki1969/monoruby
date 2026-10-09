@@ -1714,6 +1714,20 @@ impl Codegen {
         (start1..start1 + size1).contains(&addr) || (start2..start2 + size2).contains(&addr)
     }
 
+    /// For an ivar access in the emit-asm listing: the slot's type state
+    /// (`crate::ivar_ty`) as the compile saw it, e.g. `  [ivar ty: Point|nil]`.
+    #[cfg(feature = "emit-asm")]
+    fn ivar_ty_annotation(store: &Store, pc: BytecodePtr) -> String {
+        use jitgen::trace_ir::TraceIr;
+        match TraceIr::from_pc(pc, store) {
+            TraceIr::LoadIvar(_, _, Some((class, ivarid)))
+            | TraceIr::StoreIvar(_, _, Some((class, ivarid))) => {
+                format!("  [ivar ty: {}]", crate::ivar_ty::describe(store, class, ivarid))
+            }
+            _ => String::new(),
+        }
+    }
+
     #[cfg(feature = "emit-asm")]
     pub(crate) fn dump_disas(
         &mut self,
@@ -1777,11 +1791,12 @@ impl Codegen {
                     }
                     let pc = iseq.get_pc(bc_pos);
                     eprintln!(
-                        "    {bc_pos} {}",
+                        "    {bc_pos} {}{}",
                         match jitgen::trace_ir::TraceIr::format(store, iseq_id, pc) {
                             Some(s) => s,
                             None => "".to_string(),
-                        }
+                        },
+                        Self::ivar_ty_annotation(store, pc),
                     );
                 });
 
