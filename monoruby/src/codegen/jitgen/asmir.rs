@@ -295,6 +295,8 @@ fn keeps_self_ivar_base(inst: &AsmInst) -> bool {
             | AsmInst::GuardFrozen { .. }
             | AsmInst::LoadIVarInline { .. }
             | AsmInst::StoreIVarInline { .. }
+            | AsmInst::IvarTyCheck { .. }
+            | AsmInst::IvarUnset { .. }
             | AsmInst::LoadSelfIVarBase
             | AsmInst::LoadSelfIVarHeap { .. }
             | AsmInst::StoreSelfIVarHeap { .. }
@@ -549,6 +551,7 @@ impl AsmIr {
                 AsmInst::LoadSelfIVarHeap { dst, .. } if dst != GP::Rdi => (true, false),
                 AsmInst::StoreSelfIVarHeap { wb: false, .. } => (true, false),
                 AsmInst::LoadSelfIVarBase | AsmInst::ReleaseSelfIVarBase { .. } => (true, true),
+                AsmInst::IvarTyCheck { .. } | AsmInst::IvarUnset { .. } => (true, true),
                 _ => (false, false),
             };
             let len = self.inst.len();
@@ -3180,6 +3183,9 @@ pub(super) enum AsmInst {
     LoadIVarInline {
         ivarid: IvarId,
         dst: GP,
+        /// Substitute nil for an unset slot (0). `false` when a following
+        /// [`AsmInst::IvarUnset`] handles it.
+        nil_if_unset: bool,
     },
     ///
     /// Store *src* in an instance var *ivarid* of the object *rdi*.
@@ -3210,6 +3216,23 @@ pub(super) enum AsmInst {
         ivarid: IvarId,
         is_object_ty: bool,
         dst: GP,
+        /// See [`AsmInst::LoadIVarInline::nil_if_unset`].
+        nil_if_unset: bool,
+    },
+    ///
+    /// *reg* holds a raw ivar slot (0 = unset) whose type the unit assumed
+    /// non-nil (`crate::ivar_ty`). An unset slot reads as nil, which the
+    /// assumption excludes: record that nil into the type state (widening
+    /// it, poisoning the assuming units) and deoptimize.
+    ///
+    /// #### in
+    /// - rdi: the object, unless `self_obj` (then it is `self`)
+    ///
+    IvarUnset {
+        reg: GP,
+        ivarid: IvarId,
+        self_obj: bool,
+        deopt: AsmDeopt,
     },
     ///
     /// Store *src* in `self`'s heap-spilled ivar *ivarid*. The table is
@@ -3225,6 +3248,26 @@ pub(super) enum AsmInst {
         is_object_ty: bool,
         /// See [`AsmInst::StoreIVarHeap::wb`].
         wb: bool,
+    },
+    ///
+    /// Check *src*, about to be stored into ivar *ivarid* of the object in
+    /// `rdi`, against the slot's type state *expect* and widen the state on
+    /// a mismatch (`crate::ivar_ty`). Preserves every register.
+    ///
+    /// *expect* is the state at compile time; a later widening does not
+    /// recompile the unit, so before calling out the mismatch path reads
+    /// the live state word at address *state* (`ivar_ty::state_word`) and
+    /// accepts the value if that already covers it (Top, or nil with the
+    /// nil bit).
+    ///
+    /// #### in
+    /// - rdi: &RValue
+    ///
+    IvarTyCheck {
+        src: GP,
+        ivarid: IvarId,
+        expect: crate::ivar_ty::IvarTy,
+        state: u64,
     },
     ///
     /// Store *src* in ivar embedded to RValue `rdi`. (only for object type)

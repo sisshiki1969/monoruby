@@ -1605,6 +1605,7 @@ impl RValue {
     }
 
     pub(crate) fn set_ivar_by_ivarid(&mut self, id: IvarId, val: Value) {
+        crate::ivar_ty::observe(self.class(), id, val);
         let mut i = id.into_usize();
         if self.ty() == ObjTy::OBJECT {
             if i < OBJECT_INLINE_IVAR {
@@ -1645,8 +1646,35 @@ impl RValue {
         }
     }
 
-    pub(super) fn change_class(&mut self, new_class_id: ClassId) {
+    /// *escape*: the object may already be referenced from an ivar whose
+    /// type state recorded its old class (see `ivar_ty::note_class_escape`);
+    /// `false` only for an object created just now.
+    pub(super) fn change_class(&mut self, new_class_id: ClassId, escape: bool) {
+        if escape {
+            crate::ivar_ty::note_class_escape(self.class());
+        }
         self.header.change_class(new_class_id);
+        // The ivars already held were observed under the old class; the
+        // new class's type states must cover them too.
+        let inline = if self.ty() == ObjTy::OBJECT {
+            OBJECT_INLINE_IVAR
+        } else {
+            0
+        };
+        if inline != 0 {
+            for i in 0..OBJECT_INLINE_IVAR {
+                if let Some(v) = self.as_object()[i] {
+                    crate::ivar_ty::observe(new_class_id, IvarId::new(i as u32), v);
+                }
+            }
+        }
+        if let Some(t) = &self.var_table {
+            for (i, v) in t.iter().enumerate() {
+                if let Some(v) = v {
+                    crate::ivar_ty::observe(new_class_id, IvarId::new((inline + i) as u32), *v);
+                }
+            }
+        }
     }
 
     pub(super) fn deep_copy(&self) -> Self {

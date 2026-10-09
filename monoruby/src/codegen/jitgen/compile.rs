@@ -626,6 +626,9 @@ impl<'a> JitContext<'a> {
                 state.flush_gp(ir);
                 state.unset_side_effect_guard();
                 self.inc_loop_count();
+                // Another thread may run at the poll and widen an ivar
+                // type; the poll deopts then (`ivar_ty::poison_epoch`),
+                // so the typed loads after it need no new guard.
                 state.exec_gc(ir, false, pc);
             }
             TraceIr::LoopEnd => {

@@ -57,6 +57,7 @@ mod fork;
 mod globals;
 mod gvl;
 mod id_table;
+mod ivar_ty;
 mod native_pool;
 pub mod parser;
 mod poll_flag;

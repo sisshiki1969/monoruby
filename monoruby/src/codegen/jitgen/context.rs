@@ -1123,6 +1123,13 @@ pub(crate) struct JitContext<'a> {
     /// [`JitContext::carry_class_proofs_across_call`].
     ///
     pub(crate) singleton_deps: Vec<ClassId>,
+    ///
+    /// The ivar type states this compilation relied on (`crate::ivar_ty`):
+    /// typed ivar loads and store-side checks. Filed under the unit's
+    /// class-version word, so a change poisons the unit and salvage
+    /// refuses.
+    ///
+    pub(crate) ivar_ty_deps: Vec<crate::ivar_ty::IvarTyDep>,
 
     ///
     /// Every constant this compilation folded (root body and inlined
@@ -1264,6 +1271,7 @@ impl<'a> JitContext<'a> {
             refinements,
             inline_method_cache: vec![],
             singleton_deps: vec![],
+            ivar_ty_deps: vec![],
             const_fold_cache: vec![],
             bop_deps: vec![],
             stack_frame,
@@ -1330,6 +1338,7 @@ impl<'a> JitContext<'a> {
             refinements: self.refinements,
             inline_method_cache: vec![],
             singleton_deps: vec![],
+            ivar_ty_deps: vec![],
             const_fold_cache: vec![],
             bop_deps: vec![],
             stack_frame,

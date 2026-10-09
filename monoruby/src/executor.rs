@@ -5745,6 +5745,10 @@ pub(crate) extern "C" fn execute_gc(
         .try_cfp()
         .and_then(|cfp| globals.store[cfp.lfp().func_id()].is_iseq());
     let evictions_before = polling_iseq.map(|iseq| globals.store[iseq].bop_evictions());
+    // Likewise for an ivar type state the polling frame's typed loads may
+    // rely on (`ivar_ty::poison_epoch`): compiled code does not re-check
+    // the class version after a poll.
+    let ivar_ty_epoch = crate::ivar_ty::poison_epoch();
     // `gc-stress`: force a collection at EVERY safepoint, unconditionally
     // — independent of the runtime `GC.stress` flag and of how this poll
     // was triggered. The guard re-arms the GC lane on every exit path, so
@@ -5884,6 +5888,9 @@ pub(crate) extern "C" fn execute_gc(
     if let Some(iseq) = polling_iseq
         && evictions_before != Some(globals.store[iseq].bop_evictions())
     {
+        return Some(Value::integer(POLL_DEOPT));
+    }
+    if ivar_ty_epoch != crate::ivar_ty::poison_epoch() {
         return Some(Value::integer(POLL_DEOPT));
     }
     Some(Value::nil())

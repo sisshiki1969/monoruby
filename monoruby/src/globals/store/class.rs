@@ -3056,7 +3056,11 @@ impl Store {
             // JIT entry was invalidated between cache_map check and here.
             crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_FAIL_NO_ENTRY);
         }
-        version_label
+        let version_label = version_label?;
+        if !ivar_tys_hold(&version_label) {
+            return None;
+        }
+        Some(version_label)
     }
 
     /// Two-tier const-version salvage of a compilation unit (whole-method
@@ -3224,6 +3228,9 @@ impl Store {
             .unwrap()
             .singleton_deps;
         if !self.singleton_deps_hold(deps) {
+            return None;
+        }
+        if !ivar_tys_hold(&version_label) {
             return None;
         }
         Some(version_label)
@@ -3409,4 +3416,12 @@ impl Globals {
             };
         }
     }
+}
+
+/// Do the ivar type states the unit with class-version word *label*
+/// assumed still hold (`crate::ivar_ty`)?
+fn ivar_tys_hold(label: &DestLabel) -> bool {
+    let addr = crate::codegen::CODEGEN
+        .with(|codegen| codegen.borrow().jit.get_label_address(label).as_ptr() as u64);
+    crate::ivar_ty::unit_holds(addr)
 }

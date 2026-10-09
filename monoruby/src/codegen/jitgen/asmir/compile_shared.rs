@@ -807,7 +807,11 @@ impl Codegen {
             // 12-bit scaled load/store immediate.
             // Inline ivar load: `dst <- self.@ivar` at a fixed field offset on
             // the receiver (rdi); an unset slot reads as 0 and becomes nil.
-            AsmInst::LoadIVarInline { ivarid, dst } => {
+            AsmInst::LoadIVarInline {
+                ivarid,
+                dst,
+                nil_if_unset,
+            } => {
                 let disp = RVALUE_OFFSET_KIND as i32 + ivarid.get() as i32 * 8;
                 self.encode_linst(LInst::Load {
                     dst: dst.into(),
@@ -816,8 +820,35 @@ impl Codegen {
                         disp,
                     },
                 });
-                self.encode_linst(LInst::NilIfZero { reg: dst });
+                if nil_if_unset {
+                    self.encode_linst(LInst::NilIfZero { reg: dst });
+                }
             }
+            AsmInst::IvarUnset {
+                reg,
+                ivarid,
+                self_obj,
+                deopt,
+            } => {
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("ivar unset"));
+                self.encode_linst(LInst::IvarUnset {
+                    reg,
+                    ivarid,
+                    self_obj,
+                    deopt,
+                });
+            }
+            AsmInst::IvarTyCheck {
+                src,
+                ivarid,
+                expect,
+                state,
+            } => self.encode_linst(LInst::IvarTyCheck {
+                src,
+                ivarid,
+                expect,
+                state,
+            }),
             // Inline ivar store: `self.@ivar = src` at a fixed field offset on
             // the receiver (rdi), followed by the GC write barrier.
             AsmInst::StoreIVarInline { src, ivarid, wb } => {
@@ -1023,6 +1054,7 @@ impl Codegen {
                 ivarid,
                 is_object_ty,
                 dst,
+                nil_if_unset,
             } => {
                 self.encode_linst(LInst::Load {
                     dst: dst.into(),
@@ -1031,7 +1063,9 @@ impl Codegen {
                         disp: self_heap_ivar_index(ivarid, is_object_ty) * 8,
                     },
                 });
-                self.encode_linst(LInst::NilIfZero { reg: dst });
+                if nil_if_unset {
+                    self.encode_linst(LInst::NilIfZero { reg: dst });
+                }
             }
             // `self.@ivar = src` into the cached buffer (the table is known
             // large enough, so no bounds check / runtime extend), then the

@@ -13,7 +13,6 @@ mod slot;
 use liveness::IsUsed;
 pub(super) use liveness::Liveness;
 pub(super) use read_slot::DeoptPoint;
-#[cfg(feature = "profile")]
 pub(in crate::codegen::jitgen) use slot::NonNil;
 pub(in crate::codegen::jitgen) use slot::SfGuarded;
 pub(in crate::codegen::jitgen) use slot::DynVarAliasLoad;
@@ -805,11 +804,38 @@ impl AbstractFrame {
 
     pub(super) fn set_class_version_guard(&mut self) {
         self.invariants.class_version_guard = true;
+        self.invariants.ivar_ty_guard = true;
     }
 
     pub(crate) fn unset_class_version_guard(&mut self) {
         self.invariants.class_version_guard = false;
         self.invariants.class_proofs_unsettled = true;
+        self.invariants.ivar_ty_guard = false;
+    }
+
+    /// See `Invariants::ivar_ty_guard`.
+    pub(super) fn ivar_ty_guard(&self) -> bool {
+        self.invariants.ivar_ty_guard
+    }
+
+    /// An ivar type state may have changed (a safepoint poll, a widening
+    /// store check): the next typed ivar load re-checks the class version.
+    pub(super) fn unset_ivar_ty_guard(&mut self) {
+        self.invariants.ivar_ty_guard = false;
+    }
+
+    /// The loop head is entered with the class version checked: every
+    /// forward entry checks it in its bridge (`JitContext::incoming_context`)
+    /// and the back edge arrives with it checked whatever the head had.
+    pub(super) fn set_loop_head_version_guard(&mut self, ivar_ty_guard: bool) {
+        self.invariants.class_version_guard = true;
+        self.invariants.ivar_ty_guard = ivar_ty_guard;
+    }
+
+    /// Make the next `guard_class_version` emit even though the version
+    /// was checked already (for `ivar_ty_guard`, which one re-establishes).
+    pub(super) fn force_class_version_recheck(&mut self) {
+        self.invariants.class_version_guard = false;
     }
 
     pub(super) fn const_version_guard(&self) -> bool {
@@ -1035,7 +1061,7 @@ impl AbstractFrame {
         self.def_reg2acc_guarded(ir, src, dst, Guarded::from_concrete_value(v))
     }
 
-    fn def_reg2acc_guarded(
+    pub(in crate::codegen::jitgen) fn def_reg2acc_guarded(
         &mut self,
         ir: &mut AsmIr,
         src: GP,
@@ -1323,6 +1349,7 @@ impl ReturnState {
                 const_version_guard: true,
                 side_effect_guard: false,
                 class_proofs_unsettled: false,
+                ivar_ty_guard: false,
                 no_capture_guard: true,
             },
         }
@@ -1423,6 +1450,14 @@ struct Invariants {
     /// head of the next instruction. Joined by OR: one unsettled path makes
     /// the merge unsettled.
     class_proofs_unsettled: bool,
+    /// The class version has been checked since the last point where an
+    /// ivar type state could have changed (`crate::ivar_ty`): a call, a
+    /// safepoint poll (another thread may run), or an inline store whose
+    /// type check may widen. A typed ivar load needs it — a change poisons
+    /// the assuming units' version words, so this guard is what makes a
+    /// frame already running such a unit stop before the stale load.
+    /// Implied by every class-version guard emitted.
+    ivar_ty_guard: bool,
 }
 
 impl Invariants {
@@ -1440,6 +1475,7 @@ impl Invariants {
             no_capture_guard: true,
             side_effect_guard,
             class_proofs_unsettled: false,
+            ivar_ty_guard: false,
         }
     }
 
@@ -1451,6 +1487,7 @@ impl Invariants {
             no_capture_guard: true,
             side_effect_guard: false,
             class_proofs_unsettled: false,
+            ivar_ty_guard: false,
         }
     }
 
@@ -1465,6 +1502,7 @@ impl Invariants {
             no_capture_guard: true,
             side_effect_guard,
             class_proofs_unsettled: false,
+            ivar_ty_guard: false,
         }
     }
 
@@ -1474,6 +1512,7 @@ impl Invariants {
         self.no_capture_guard &= other.no_capture_guard;
         self.side_effect_guard &= other.side_effect_guard;
         self.class_proofs_unsettled |= other.class_proofs_unsettled;
+        self.ivar_ty_guard &= other.ivar_ty_guard;
     }
 }
 
@@ -1544,6 +1583,7 @@ mod tests {
                 no_capture_guard: true,
                 side_effect_guard: true,
                 class_proofs_unsettled: false,
+                ivar_ty_guard: false,
             },
         };
         // Pre-condition: const-folding would fire.
@@ -1567,6 +1607,7 @@ mod tests {
                 no_capture_guard: true,
                 side_effect_guard: true,
                 class_proofs_unsettled: false,
+                ivar_ty_guard: false,
             },
         };
         s.taint_for_unmodeled_rescue();
@@ -1585,6 +1626,7 @@ mod tests {
                 no_capture_guard: true,
                 side_effect_guard: false,
                 class_proofs_unsettled: false,
+                ivar_ty_guard: false,
             },
         };
         s.taint_for_unmodeled_rescue();

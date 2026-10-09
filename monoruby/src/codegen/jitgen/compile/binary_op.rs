@@ -862,6 +862,21 @@ impl<'a> JitContext<'a> {
                 RecompileReason::NotCached,
             )));
         };
+        // ---- 3a. A numeric receiver the state proves, at a site the VM has
+        // never run, with an argument class nobody knows: the Integer /
+        // Float generators pick their emission from the argument class and
+        // decline without one, which would leave an out-of-line call that
+        // records nothing — every later compile would find the cache just
+        // as empty and call out again. Deopt instead, so the interpreter
+        // runs the site once and fills it.
+        if ic.is_none()
+            && rhs_class.is_none()
+            && (lhs_class == CachedClass::INTEGER || lhs_class == CachedClass::FLOAT)
+        {
+            return Ok(BinaryLowering::Ceased(CompileResult::Recompile(
+                RecompileReason::NotCached,
+            )));
+        }
 
         // ---- 3b. A comparison with exactly one bignum-constant operand
         // folds to its sign-decided answer here, BEFORE the inline

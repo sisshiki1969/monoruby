@@ -1632,6 +1632,22 @@ impl Codegen {
                 }
             }
             // GC write barrier (aarch64 takes the parent register explicitly).
+            LInst::IvarTyCheck {
+                src,
+                ivarid,
+                expect,
+                state,
+            } => {
+                self.emit_ivar_ty_check(src, ivarid, expect, state);
+            }
+            LInst::IvarUnset {
+                reg,
+                ivarid,
+                self_obj,
+                deopt,
+            } => {
+                self.emit_ivar_unset(reg, ivarid, self_obj, &deopt);
+            }
             LInst::WriteBarrier { parent, value } => {
                 self.emit_write_barrier(parent, value);
             }

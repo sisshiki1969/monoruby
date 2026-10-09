@@ -422,7 +422,7 @@ fn hash_bracket(
     // Tag the result with the calling class so `MyHash[...]` returns a
     // `MyHash`. Do NOT call `#initialize` on the subclass (matches CRuby).
     if class_id != HASH_CLASS {
-        result.change_class(class_id);
+        result.change_class_fresh(class_id);
     }
     Ok(result)
 }
@@ -1890,7 +1890,7 @@ fn clone(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let inner = lfp.self_val().as_hashmap_inner().clone_inner();
     let mut v = Value::hash_from_inner(inner);
     if class_id != HASH_CLASS {
-        v.change_class(class_id);
+        v.change_class_fresh(class_id);
     }
     Ok(v)
 }

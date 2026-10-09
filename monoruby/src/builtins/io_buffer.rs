@@ -715,7 +715,7 @@ fn each_byte(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
 /// Allocator: a null buffer; #initialize fills it in.
 pub(crate) extern "C" fn io_buffer_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
     let mut v = Value::new_io_buffer(IoBufferInner::null());
-    v.change_class(class_id);
+    v.change_class_fresh(class_id);
     v
 }
 

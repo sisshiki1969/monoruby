@@ -78,6 +78,8 @@ pub(crate) struct Vm {
     /// File descriptors owned by a live autoclosing `FileDescriptor`
     /// (`rvalue::io::OWNED_FDS`).
     owned_fds: RefCell<crate::HashSet<i32>>,
+    /// The per-(class, ivar) type states (`ivar_ty::IVAR_TYS`).
+    ivar_tys: RefCell<crate::ivar_ty::IvarTyTable>,
 }
 
 impl Vm {
@@ -104,6 +106,7 @@ impl Vm {
             const_epoch_names: OnceCell::new(),
             regexp_global_timeout: Cell::new(0),
             owned_fds: RefCell::new(crate::HashSet::default()),
+            ivar_tys: RefCell::new(Default::default()),
         }
     }
 }
@@ -366,4 +369,9 @@ mod tests {
         // `>`: other tests' threads drop their own `Vm`s concurrently.
         assert!(DROPPED.load(Ordering::SeqCst) > before);
     }
+}
+
+/// Field projection for [`crate::ivar_ty::IVAR_TYS`].
+pub(crate) fn ivar_tys(vm: &Vm) -> &RefCell<crate::ivar_ty::IvarTyTable> {
+    &vm.ivar_tys
 }
