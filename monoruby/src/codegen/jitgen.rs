@@ -899,14 +899,22 @@ impl Codegen {
             if self.startup_flag {
                 let iseq = &store[frame.iseq_id];
                 let name = store.func_description(iseq.func_id());
+                let indent = " ".repeat(level * 3);
                 eprintln!(
-                    "  {}>>> [{}] {:?} <{}> self_class:{}",
-                    " ".repeat(level * 3),
+                    "  {indent}>>> [{}] {:?} <{}> self_class:{} {}:{}",
                     frame.specialize_level(),
                     frame.iseq_id,
                     name,
                     store.debug_class_name(frame.self_class),
+                    iseq.sourceinfo.file_name(),
+                    iseq.sourceinfo.get_line(&iseq.loc),
                 );
+                if let Some(ivars) = frame
+                    .self_class
+                    .and_then(|c| crate::ivar_ty::describe_class(store, c))
+                {
+                    eprintln!("  {indent}    ivars: {ivars}");
+                }
             }
         }
 
