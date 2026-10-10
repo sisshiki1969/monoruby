@@ -3737,9 +3737,7 @@ impl AsmInst {
         }
     }
 
-    #[allow(dead_code)]
     #[cfg(feature = "emit-asm")]
-    #[allow(dead_code)]
     pub fn dump(&self, store: &Store) -> String {
         match self {
             Self::RegToStack(gpr, slot) => format!("{:?} = {:?}", slot, gpr),
@@ -4071,12 +4069,18 @@ impl Codegen {
         // instead of emitting), then drain it. The buffer is the seam the future
         // GP physical-allocation pass slots between these two loops; today it
         // drains immediately, so the output is byte-identical.
+        #[cfg(feature = "emit-asm")]
+        if self.startup_flag {
+            for inst in &ir.inst {
+                if matches!(inst, AsmInst::BcIndex(_)) {
+                    frame.asmir_dump.push(vec![]);
+                } else {
+                    frame.asmir_dump.last_mut().unwrap().push(inst.dump(store));
+                }
+            }
+        }
         self.lir_buf = Some(Vec::new());
         for inst in ir.inst {
-            #[cfg(feature = "emit-asm")]
-            {
-                //eprintln!("  ; {}", inst.dump(store));
-            }
             self.compile_asmir(store, frame, &side_exits, inst, class_version.clone());
         }
         let body = self.lir_buf.take().unwrap();

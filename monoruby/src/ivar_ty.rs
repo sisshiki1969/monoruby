@@ -358,7 +358,7 @@ pub(crate) fn class_reliable(ty: IvarTy) -> bool {
 /// The type state of *class*'s ivar slot *id* in words, for listings:
 /// `Integer`, `Point|nil`, `nil`, `Empty`, `Top`, with ` (escaped)` when
 /// the class is not trusted for typed loads (see [`note_class_escape`]).
-#[cfg(feature = "emit-asm")]
+#[cfg(any(feature = "emit-asm", feature = "jit-log"))]
 pub(crate) fn describe(store: &crate::globals::Store, class: ClassId, id: IvarId) -> String {
     let ty = ivar_ty(class, id);
     let nil = if ty.nil() { "|nil" } else { "" };
@@ -375,6 +375,22 @@ pub(crate) fn describe(store: &crate::globals::Store, class: ClassId, id: IvarId
         None if ty.is_top() => "Top".to_string(),
         None if ty.nil() => "nil".to_string(),
         None => "Empty".to_string(),
+    }
+}
+
+/// Every ivar slot of *class* with its type state, for the JIT listing's
+/// per-method header: `@x: Integer, @y: Point|nil`. `None` for a class
+/// with no ivar slots.
+#[cfg(any(feature = "emit-asm", feature = "jit-log"))]
+pub(crate) fn describe_class(store: &crate::globals::Store, class: ClassId) -> Option<String> {
+    let v: Vec<_> = store[class]
+        .ivar_names()
+        .map(|(name, id)| format!("{name}: {}", describe(store, class, *id)))
+        .collect();
+    if v.is_empty() {
+        None
+    } else {
+        Some(v.join(", "))
     }
 }
 

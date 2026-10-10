@@ -275,6 +275,14 @@ pub(in crate::codegen) struct AsmInfo {
     ///
     pub(super) sourcemap: Vec<(BcIndex, usize)>,
     ///
+    /// emit-asm: the AsmIr listing, grouped by the `AsmInst::BcIndex` that
+    /// precedes each instruction in emission order. Group 0 holds what comes
+    /// before the first `BcIndex`; group `k + 1` belongs to `sourcemap[k]`
+    /// (each `BcIndex` lowers to exactly one `sourcemap` entry).
+    ///
+    #[cfg(feature = "emit-asm")]
+    pub(super) asmir_dump: Vec<Vec<String>>,
+    ///
     /// Start position of the machine code in `JitMemory`.
     ///
     pub(super) start_codepos: usize,
@@ -318,6 +326,8 @@ impl AsmInfo {
             base_stack_offset: 0,
             ivar_heap_accessed: false,
             sourcemap: vec![],
+            #[cfg(feature = "emit-asm")]
+            asmir_dump: vec![vec![]],
             start_codepos: 0,
             #[cfg(target_arch = "aarch64")]
             pending_side_exits: Vec::new(),
@@ -875,6 +885,8 @@ impl JitStackFrame {
                 specialized_id: SpecializedId(usize::MAX),
                 base_stack_offset: 0,
                 sourcemap: vec![],
+                #[cfg(feature = "emit-asm")]
+                asmir_dump: vec![vec![]],
                 start_codepos: 0,
                 #[cfg(target_arch = "aarch64")]
                 pending_side_exits: Vec::new(),
