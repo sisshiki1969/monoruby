@@ -618,6 +618,7 @@ impl Codegen {
             vec![],
         );
         ctx.loop_seed_input = self.loop_seed_input.take().filter(|_| position.is_some());
+        ctx.loop_hoist_disabled = self.loop_hoist_disabled();
         let mut frame = ctx.traceir_to_asmir(frame, None)?;
         self.loop_seed_output = std::mem::take(&mut ctx.loop_seeded);
         let specialized_info = SpecializedCodeInfo::from(&frame);

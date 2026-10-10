@@ -1,6 +1,6 @@
 use super::*;
 use crate::codegen::jitgen::context::SpecializedId;
-use state::SfGuarded;
+use state::{Guarded, SfGuarded};
 
 impl<'a> JitContext<'a> {
     ///
@@ -111,6 +111,7 @@ impl<'a> JitContext<'a> {
             // `F`/`Sf`.
             let mut target = incoming;
             let mut hoist_version_guard = false;
+            let mut hoisted_guards = vec![];
             if let Some((liveness, backedge)) = self.loop_info(bbid) {
                 let backedge_for_floats = backedge.as_ref().map(|b| b.slot_state().clone());
                 if let Some(backedge) = backedge {
@@ -136,6 +137,19 @@ impl<'a> JitContext<'a> {
                 }
 
                 target.liveness_analysis(liveness);
+
+                // Loop-invariant guard hoisting: a slot the forward entries
+                // bring in untyped but the back edge carries typed was
+                // guarded (or typed) on every path through the body, and
+                // the head's join throws that away each iteration. Guard
+                // it once on the forward entries instead, so the head
+                // keeps the type and the body's guards fold away.
+                if !no_calc_backedge && let Some(be) = backedge {
+                    hoisted_guards = self.loop_hoist_guards(&target, &entries, liveness, be);
+                    for &(slot, g) in &hoisted_guards {
+                        target.refine_S_guarded(slot, g);
+                    }
+                }
 
                 // §15.5 loop-entry float specialization: a loop JIT enters a
                 // loop-carried float from the VM as a conservative boxed
@@ -289,6 +303,7 @@ impl<'a> JitContext<'a> {
                 pc,
                 &outer_inits,
                 hoist_version_guard,
+                &hoisted_guards,
             );
             self.new_backedge(target.frames_cloned(), bbid);
 
@@ -298,7 +313,7 @@ impl<'a> JitContext<'a> {
             eprintln!("\n===gen_merge {bbid:?}");
 
             let target = AbstractState::join_entries(&entries);
-            self.gen_bridges_for_branches(&target, entries, bbid, pc, &[], false);
+            self.gen_bridges_for_branches(&target, entries, bbid, pc, &[], false, &[]);
 
             Some(target)
         };
@@ -319,13 +334,14 @@ impl<'a> JitContext<'a> {
         pc: BytecodePtr,
         outer_inits: &[(Vec<SpecializedId>, usize, SlotId, OuterFprHome)],
         hoist_version_guard: bool,
+        hoisted_guards: &[(SlotId, Guarded)],
     ) {
         let target = target.frames_cloned();
         #[cfg(feature = "jit-debug")]
         eprintln!("  bridge to:{bbid:?} target:{target:?}");
         for BranchEntry {
             src_bb,
-            state,
+            mut state,
             mode,
             ..
         } in entries
@@ -334,6 +350,23 @@ impl<'a> JitContext<'a> {
             eprintln!("    {mode:?} src:{src_bb:?}");
 
             let mut ir = AsmIr::new(self);
+            // Loop-invariant guard hoisting (see `incoming_context`): a
+            // miss resumes at the loop head's first body instruction with
+            // this entry's write-back, and after a few misses recompiles
+            // the unit without hoisting in this iseq.
+            for &(slot, g) in hoisted_guards {
+                if state.mode(slot) != LinkMode::S(Guarded::Value) {
+                    continue;
+                }
+                let deopt = ir.new_recompile_deopt_with_pc(
+                    &state,
+                    pc + 1,
+                    RecompileReason::LoopHoistGuardFailed,
+                    self.loop_hoist_recompile_target(),
+                );
+                state.load(&mut ir, slot, GP::Rdi);
+                state.guard_class(&mut ir, slot, GP::Rdi, hoist_cached_class(g), deopt);
+            }
             // Stage-C loop adoption: establish each adopted outer view on
             // this entry edge — load the owner's boxed slot through the
             // chain, guard it a Float (a miss deopts to the loop head's
@@ -384,5 +417,84 @@ impl<'a> JitContext<'a> {
         }
         #[cfg(feature = "jit-debug")]
         eprintln!("  bridge end");
+    }
+}
+
+fn hoist_cached_class(g: Guarded) -> CachedClass {
+    match g {
+        Guarded::Fixnum => CachedClass::INTEGER,
+        Guarded::Class(class) => CachedClass::from_class(class),
+        Guarded::Float | Guarded::Value | Guarded::NilOr(_) => unreachable!(),
+    }
+}
+
+impl<'a> JitContext<'a> {
+    ///
+    /// The slots of this frame worth guarding on the forward entries of a
+    /// loop head instead of in the body (loop-invariant guard hoisting):
+    ///
+    /// - the head's join leaves the slot `S(Value)`, but the back edge
+    ///   carries it as a `Fixnum` or a non-nil, non-boolean class — every
+    ///   path around the loop guarded it to that type, or wrote one;
+    /// - the loop reads it (a guard on a slot it only overwrites buys
+    ///   nothing and could only miss);
+    /// - every forward entry has it either untyped (`S(Value)`, guarded on
+    ///   that entry) or already of that type.
+    ///
+    /// Only inline entries are bridged this way, like the class-version
+    /// guard hoisting. Floats are left to the loop-entry float adoption.
+    ///
+    fn loop_hoist_guards(
+        &self,
+        target: &AbstractState,
+        entries: &[BranchEntry],
+        liveness: &Liveness,
+        backedge: &AbstractState,
+    ) -> Vec<(SlotId, Guarded)> {
+        let block_param = self.iseq().block_param_slot();
+        if self.loop_hoist_disabled.contains(&self.iseq_id())
+            || entries
+                .iter()
+                .any(|e| matches!(e.mode, BranchMode::Side { .. }))
+        {
+            return vec![];
+        }
+        (1..=self.local_num())
+            .map(|i| SlotId(i as u16))
+            .filter(|slot| Some(*slot) != block_param)
+            .filter(|slot| target.mode(*slot) == LinkMode::S(Guarded::Value))
+            .filter(|slot| liveness.is_used(*slot))
+            .filter_map(|slot| {
+                let g = match backedge.mode(slot) {
+                    LinkMode::S(g @ Guarded::Fixnum) => g,
+                    LinkMode::S(g @ Guarded::Class(c))
+                        if c != NIL_CLASS
+                            && c != TRUE_CLASS
+                            && c != FALSE_CLASS
+                            && c != BOOL_CLASS =>
+                    {
+                        g
+                    }
+                    _ => return None,
+                };
+                let mut needs_guard = false;
+                for e in entries {
+                    match e.state.mode(slot) {
+                        LinkMode::S(Guarded::Value) => needs_guard = true,
+                        LinkMode::S(eg) if eg == g => {}
+                        LinkMode::C(v) if Guarded::from_concrete_value(v) == g => {}
+                        _ => return None,
+                    }
+                }
+                needs_guard.then_some((slot, g))
+            })
+            .collect()
+    }
+
+    fn loop_hoist_recompile_target(&self) -> RecompileTarget {
+        match self.jit_type() {
+            JitType::Specialized { idx, .. } => RecompileTarget::Specialized(*idx),
+            _ => RecompileTarget::Whole(self.position()),
+        }
     }
 }

@@ -238,6 +238,12 @@ pub(crate) struct SlotState {
     /// merge despite living in the cloned `SlotState`.
     pub(in crate::codegen::jitgen) gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile,
     local_num: usize,
+    /// Copy provenance ([`Slot::copy_src`]) is still valid: every
+    /// instruction since the copies were made was a plain move or literal
+    /// load, so no local has been rewritten behind them. Closed (and the
+    /// provenance dropped) at the start of the instruction following any
+    /// other instruction ([`SlotState::begin_instruction`]).
+    copy_window: bool,
 }
 
 ///
@@ -276,6 +282,15 @@ struct Slot {
     /// and dropped with the binding on any mode transition
     /// ([`SlotState::clear`]).
     dynvar_alias: Option<DynVarAliasLoad>,
+    /// Copy provenance: this temporary holds the value a `Mov` copied
+    /// from the local `src`, and neither has been redefined since — so a
+    /// type guard on the temporary proves the local's type too
+    /// ([`SlotState::refine_copy_source`]). A bytecode operand is
+    /// usually such a copy (`%16 = %3; %19 = %16.[%17]`), and without
+    /// this the local itself would stay untyped, re-guarded on every
+    /// use. Valid only inside the instruction window
+    /// [`SlotState::begin_instruction`] maintains.
+    copy_src: Option<SlotId>,
 }
 
 ///
@@ -316,6 +331,7 @@ impl SlotState {
             fpr_alloc: FprAllocator::new(),
             gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile::new(),
             local_num,
+            copy_window: false,
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
@@ -459,6 +475,7 @@ impl SlotState {
             || self.local_num != other.local_num
             || self.fpr_alloc != other.fpr_alloc
             || self.gp_regfile != other.gp_regfile
+            || self.copy_window != other.copy_window
         {
             return false;
         }
@@ -468,6 +485,7 @@ impl SlotState {
                 && a.dynvar_src == b.dynvar_src
                 && a.subtree_float_read == b.subtree_float_read
                 && a.dynvar_alias == b.dynvar_alias
+                && a.copy_src == b.copy_src
                 && a.used.observable() == b.used.observable()
         })
     }
@@ -479,12 +497,14 @@ impl SlotState {
         self.local_num.hash(state);
         self.fpr_alloc.hash(state);
         self.gp_regfile.hash(state);
+        self.copy_window.hash(state);
         for i in self.all_regs() {
             let s = &self.slots[i.0 as usize];
             s.mode.hash(state);
             s.dynvar_src.hash(state);
             s.subtree_float_read.hash(state);
             s.dynvar_alias.hash(state);
+            s.copy_src.hash(state);
             s.used.observable().hash(state);
         }
     }
@@ -758,6 +778,7 @@ impl SlotState {
             // A redefinition ends the dynvar provenance — the new value did
             // not come through the frame chain.
             self.slots[slot.0 as usize].dynvar_src = None;
+            self.drop_copy_links(slot);
         }
     }
 
@@ -1081,6 +1102,7 @@ impl SlotState {
     pub(in crate::codegen::jitgen) fn refine_S_fixnum(&mut self, slot: SlotId) {
         if matches!(self.mode(slot), LinkMode::S(_)) {
             self.set_mode(slot, LinkMode::S(Guarded::Fixnum));
+            self.refine_copy_source(slot, Guarded::Fixnum);
         }
     }
 
@@ -1094,6 +1116,7 @@ impl SlotState {
     pub(in crate::codegen::jitgen) fn refine_S_guarded(&mut self, slot: SlotId, guarded: Guarded) {
         if guarded != Guarded::Value && matches!(self.mode(slot), LinkMode::S(Guarded::Value)) {
             self.set_mode(slot, LinkMode::S(guarded));
+            self.refine_copy_source(slot, guarded);
         }
     }
 
@@ -1277,6 +1300,7 @@ impl SlotState {
     /// marks from either path remain evidence.
     ///
     pub(super) fn join_subtree_read_meta(&mut self, other: &SlotState) {
+        self.copy_window &= other.copy_window;
         for (l, r) in self.slots.iter_mut().zip(other.slots.iter()) {
             if l.dynvar_src != r.dynvar_src {
                 l.dynvar_src = None;
@@ -1287,6 +1311,9 @@ impl SlotState {
             // claim.
             if l.dynvar_alias != r.dynvar_alias {
                 l.dynvar_alias = None;
+            }
+            if l.copy_src != r.copy_src {
+                l.copy_src = None;
             }
         }
     }
@@ -1437,6 +1464,55 @@ impl SlotState {
     ///
     pub(in crate::codegen::jitgen) fn invalidate_slot(&mut self, slot: SlotId) {
         self.set_mode(slot, LinkMode::S(Guarded::Value));
+        self.drop_copy_links(slot);
+    }
+
+    ///
+    /// *slot* was redefined: it is no longer a copy of anything, and no
+    /// temporary is a copy of it any more.
+    ///
+    fn drop_copy_links(&mut self, slot: SlotId) {
+        self.slots[slot.0 as usize].copy_src = None;
+        for s in &mut self.slots {
+            if s.copy_src == Some(slot) {
+                s.copy_src = None;
+            }
+        }
+    }
+
+    ///
+    /// Open or close the copy-provenance window at the start of an
+    /// instruction (*mov_like*: the instruction only copies a slot or
+    /// loads a literal). Provenance recorded by the moves leading up to an
+    /// instruction stays valid through that instruction — the one that
+    /// consumes the copies and guards them — and is dropped at the start
+    /// of the next one, so nothing that can rewrite a local (a call, a
+    /// store through the frame chain, a `binding` write) ever runs between
+    /// a copy and a guard that trusts it.
+    ///
+    pub(in crate::codegen::jitgen) fn begin_instruction(&mut self, mov_like: bool) {
+        if !self.copy_window {
+            for s in &mut self.slots {
+                s.copy_src = None;
+            }
+        }
+        self.copy_window = mov_like;
+    }
+
+    ///
+    /// A guard just proved the temporary *slot* to be of type *guarded*:
+    /// if it is a live copy of a still-untyped local, that local is of the
+    /// same type.
+    ///
+    fn refine_copy_source(&mut self, slot: SlotId, guarded: Guarded) {
+        if guarded == Guarded::Value {
+            return;
+        }
+        if let Some(src) = self.slots[slot.0 as usize].copy_src
+            && self.mode(src) == LinkMode::S(Guarded::Value)
+        {
+            self.set_mode(src, LinkMode::S(guarded));
+        }
     }
 
     /// Every local this frame is still holding as a constant.
@@ -1890,6 +1966,16 @@ impl SlotState {
                 unreachable!("copy_slot() {:?} {:?}: {:?}", src, self.mode(src), self);
             }
         }
+        // Copy provenance: a temporary copied from a local (directly or
+        // through another temporary's copy).
+        if dst.0 as usize > self.local_num {
+            let origin = if (1..=self.local_num).contains(&(src.0 as usize)) {
+                Some(src)
+            } else {
+                self.slots[src.0 as usize].copy_src
+            };
+            self.slots[dst.0 as usize].copy_src = origin;
+        }
     }
 }
 
@@ -1943,6 +2029,7 @@ impl AbstractFrame {
                     return false;
                 } else if *guarded == Guarded::Value {
                     *guarded = class_guarded;
+                    self.refine_copy_source(slot, class_guarded);
                 } else {
                     // in this case, Guard will always fail
                     *guarded = class_guarded;
