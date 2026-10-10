@@ -4871,6 +4871,7 @@ ed06e4b3aaaf57db436613d3ad55b04a	[["EUC-JP"], ["ISO-8859-1"], ["ISO-8859-1"], ["
 ed0945afe4039a8b35864ef4571b934a	[["a", "あ", "b", "い", "c"], ["a", "あ", "bいc"], ["a", "あ", "b", "い", "c", ""], [], ["漢", "A", "字"], ["a", "あ", "b"], ["aあbいc"]]	__a = [];__a << ("aあbいc".encode("EUC-JP").split("").map { |x| x.encode("UTF-8") 
 ed0e20c8bb4c374081ab10bd2a0e9853	[31375, [200, 2]]	$flag = true\n        def osr\n          [1].each { return 5 }\n        en
 ed1b9d1127bc95203a639e5a1aec8a0c	false	(0x8000_0000_0000_0000 + 39) == (0x8000_0000_0000_0000 + 39 + 0.0)
+ed2073eb0cd55a26f1ed2ee81ca67bf2	[[14.0, 1181.25], [2.5, 15.25]]	def f(n)\n          x = 1.5\n          r = 0.0\n          i = 0\n          
 ed21697a03332cf5034e4574459d9bdf	[:ok, [:x, :y]]	A = Struct.new(nil, :x, :y)\n            \n\n            [A.name.nil? 
 ed28bfe5026b80f84e13d7fba26140c1	[nil, true, nil, true, true]	__a = [];__a << (Encoding.default_internal);__a << (\n            Encoding.defaul
 ed2d1c8786b057689885f97c2f7a6f93	[(5+2i), (-3+2i), "-1-2i", "-1-2i", ["R+0i", "3+4i"], "1.0+2i", "2+0.0i", "1+0.0i"]	class R < Numeric\n              def real?; true; end\n              

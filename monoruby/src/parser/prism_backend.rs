@@ -689,35 +689,6 @@ struct Lowerer<'pr> {
     /// compiles and so is the one caller that would otherwise miss an
     /// `unsupported_node` inside a method body.
     defer_bodies: bool,
-    /// The prism scopes currently entered whose locals can be read as a
-    /// call receiver or a left operand, innermost last; see
-    /// [`Lowerer::lower_operand_before`].
-    scope_entries: Vec<ScopeEntry<'pr>>,
-}
-
-/// A prism scope (program, def, block, lambda, class body) the lowerer is
-/// inside: what to scan to learn which of its locals a later operand can
-/// reassign behind an earlier read (see [`Lowerer::lower_operand_before`]).
-struct ScopeEntry<'pr> {
-    /// `prism_scope_level` of the scope.
-    level: u32,
-    /// The nodes that make up the scope (parameters and body); `None`
-    /// when they are not at hand (a class body), which makes every local
-    /// of the scope count as reachable from a call.
-    roots: Option<Vec<prism::Node<'pr>>>,
-    /// [`ScopeScan`] of `roots`, computed on first use.
-    info: Option<Rc<ScopeLocals>>,
-}
-
-/// What a whole scope says about how its locals can change behind a
-/// straight-line read.
-struct ScopeLocals {
-    /// Locals of the scope that a block or lambda nested in it refers to:
-    /// any call can run that closure and write them.
-    captured: std::collections::HashSet<Vec<u8>>,
-    /// The scope (or a closure in it) calls `binding` or one of the
-    /// string-`eval`s, which can write any local.
-    exposed: bool,
 }
 
 /// See [`Lowerer::scope_wraps`].
@@ -746,7 +717,6 @@ impl<'pr> Lowerer<'pr> {
             cli_loop_wrap: None,
             ctx: ctx.clone(),
             defer_bodies: true,
-            scope_entries: Vec::new(),
         }
     }
 
@@ -775,15 +745,8 @@ impl<'pr> Lowerer<'pr> {
     /// Enter a prism scope (def/class/block/lambda body): bumps the
     /// scope level and hands out a fresh `LvarCollector`, returning
     /// the outer one for `exit_prism_scope` to restore.
-    /// `roots` are the scope's own nodes (parameters and body), kept for
-    /// [`Self::lower_operand_before`]; `None` when they are not at hand.
-    fn enter_prism_scope(&mut self, roots: Option<Vec<prism::Node<'pr>>>) -> LvarCollector {
+    fn enter_prism_scope(&mut self) -> LvarCollector {
         self.prism_scope_level += 1;
-        self.scope_entries.push(ScopeEntry {
-            level: self.prism_scope_level,
-            roots,
-            info: None,
-        });
         std::mem::take(&mut self.lvars)
     }
 
@@ -792,9 +755,6 @@ impl<'pr> Lowerer<'pr> {
     /// to attach it to the produced `BlockInfo`).
     fn exit_prism_scope(&mut self, saved: LvarCollector) -> LvarCollector {
         let leaving = self.prism_scope_level;
-        while self.scope_entries.last().is_some_and(|e| e.level == leaving) {
-            self.scope_entries.pop();
-        }
         while self.anon_rest_levels.last() == Some(&leaving) {
             self.anon_rest_levels.pop();
         }
@@ -910,11 +870,6 @@ impl<'pr> Lowerer<'pr> {
         // would have produced (bytecodegen reads `LvarCollector` to
         // assign register slots before walking the tree).
         self.collect_locals(&node.locals())?;
-        self.scope_entries.push(ScopeEntry {
-            level: self.prism_scope_level,
-            roots: Some(vec![node.statements().as_node()]),
-            info: None,
-        });
         // `BEGIN { ... }` blocks run before the rest of the code
         // unit, in source order: CRuby hoists them to the top of the
         // program, and their bodies share the toplevel scope, so
@@ -1124,7 +1079,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::SingletonClassNode { .. } => {
                 let n = node.as_singleton_class_node().unwrap();
                 let singleton = self.lower_node(&n.expression())?;
-                let saved = self.enter_prism_scope(None);
+                let saved = self.enter_prism_scope();
                 if let Err(e) = self.collect_locals(&n.locals()) {
                     self.exit_prism_scope(saved);
                     return Err(e);
@@ -2841,7 +2796,7 @@ impl<'pr> Lowerer<'pr> {
         body: Option<prism::Node<'pr>>,
         loc: Loc,
     ) -> Result<BlockInfo, MonorubyErr> {
-        let saved = self.enter_prism_scope(None);
+        let saved = self.enter_prism_scope();
         let body_res = self.lower_compact_body(body, loc);
         match body_res {
             Ok(body_inner) => {
@@ -2880,7 +2835,7 @@ impl<'pr> Lowerer<'pr> {
         // The class body's `locals` list lives on the ClassNode itself
         // (Prism scopes it to the class definition). Seed the lowerer
         // with those before lowering the body.
-        let saved = self.enter_prism_scope(None);
+        let saved = self.enter_prism_scope();
         if let Err(e) = self.collect_locals(&node.locals()) {
             self.exit_prism_scope(saved);
             return Err(e);
@@ -2905,7 +2860,7 @@ impl<'pr> Lowerer<'pr> {
     fn lower_module(&mut self, node: &ModuleNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
         let (base, name) = self.split_class_path(&node.constant_path())?;
-        let saved = self.enter_prism_scope(None);
+        let saved = self.enter_prism_scope();
         if let Err(e) = self.collect_locals(&node.locals()) {
             self.exit_prism_scope(saved);
             return Err(e);
@@ -4630,9 +4585,7 @@ impl<'pr> Lowerer<'pr> {
     ///
     fn lower_def_body(&mut self, node: &DefNode<'pr>) -> Result<BlockInfo, MonorubyErr> {
         let loc = location_to_loc(&node.location());
-        let saved = self.enter_prism_scope(Some(
-            node.parameters().map(|p| p.as_node()).into_iter().chain(node.body()).collect(),
-        ));
+        let saved = self.enter_prism_scope();
         let result =
             (|this: &mut Self| -> Result<(Vec<crate::ast::FormalParam>, Node), MonorubyErr> {
                 // Parameters first so the LvarCollector's special
@@ -4695,7 +4648,7 @@ impl<'pr> Lowerer<'pr> {
     /// proc depending on how it's used.
     fn lower_lambda(&mut self, node: &LambdaNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
-        let saved = self.enter_prism_scope(Some(node.parameters().into_iter().chain(node.body()).collect()));
+        let saved = self.enter_prism_scope();
         let result =
             (|this: &mut Self| -> Result<(Vec<crate::ast::FormalParam>, Node), MonorubyErr> {
                 let params = match node.parameters() {
@@ -4793,7 +4746,7 @@ impl<'pr> Lowerer<'pr> {
         // and install a fresh table for the block body. The body
         // lowering is wrapped so an error inside it doesn't leak the
         // partially-built block scope into the outer lowerer.
-        let saved = self.enter_prism_scope(Some(node.parameters().into_iter().chain(node.body()).collect()));
+        let saved = self.enter_prism_scope();
         let result =
             (|this: &mut Self| -> Result<(Vec<crate::ast::FormalParam>, Node), MonorubyErr> {
                 // Parameters first (see comment on the def-node lowerer for
@@ -5437,18 +5390,16 @@ impl<'pr> Lowerer<'pr> {
 
     ///
     /// `recv` (an operand evaluated before `later`) as lowered, wrapped so
-    /// bytecodegen evaluates it into a temp when it reads a local that
-    /// `later` can reassign.
+    /// bytecodegen evaluates it into a temp when `later` might reassign the
+    /// local it reads.
     ///
     /// Bytecodegen uses a local's own register as a receiver or left
     /// operand (`gen_expr_reg`), and the instruction reads it only after
     /// the later operands ran. CRuby has the value in hand already, so
-    /// `x + (x = 2.5)` and `x.to_s(x = 2)` must see the old `x`. The copy
-    /// is needed when `later` assigns `x` itself, or when it can run code
-    /// (a call, a yield, an interpolation, ...) and something other than
-    /// straight-line code can write `x`: a closure of this scope refers to
-    /// it, or the scope hands its locals out through `binding` / `eval`.
-    /// A block whose binding a callee reads (`blk.binding`) is not seen.
+    /// `x + (x = 2.5)` and `x.to_s(x = 2)` must see the old `x`. Besides
+    /// a direct assignment, any code `later` runs (a call, a yield, an
+    /// interpolation, ...) can write `x` through a closure, `binding` or
+    /// `eval`, so either one makes the copy.
     ///
     fn lower_operand_before(
         &mut self,
@@ -5456,7 +5407,7 @@ impl<'pr> Lowerer<'pr> {
         later: &[prism::Node<'pr>],
     ) -> Result<Node, MonorubyErr> {
         let node = self.lower_node(recv)?;
-        if !self.local_operand_needs_copy(recv, later) {
+        if !is_frame_local(recv) || !later.iter().any(may_write_locals) {
             return Ok(node);
         }
         let loc = node.loc;
@@ -5464,62 +5415,6 @@ impl<'pr> Lowerer<'pr> {
             kind: NodeKind::CompStmt(vec![node]),
             loc,
         })
-    }
-
-    fn local_operand_needs_copy(
-        &mut self,
-        recv: &prism::Node<'pr>,
-        later: &[prism::Node<'pr>],
-    ) -> bool {
-        if later.is_empty() || !is_frame_local(recv) {
-            return false;
-        }
-        let read = recv.as_local_variable_read_node().unwrap();
-        let name = read.name().as_slice();
-        let mut scan = OperandScan {
-            name,
-            nest: 0,
-            writes: false,
-            runs_code: false,
-        };
-        for n in later {
-            scan.visit(n);
-        }
-        if scan.writes {
-            return true;
-        }
-        if !scan.runs_code {
-            return false;
-        }
-        match self.scope_locals() {
-            Some(info) => info.exposed || info.captured.contains(name),
-            None => true,
-        }
-    }
-
-    /// [`ScopeLocals`] of the scope being lowered, scanned on first use.
-    fn scope_locals(&mut self) -> Option<Rc<ScopeLocals>> {
-        let level = self.prism_scope_level;
-        let entry = self.scope_entries.last_mut()?;
-        if entry.level != level {
-            return None;
-        }
-        let roots = entry.roots.as_ref()?;
-        if entry.info.is_none() {
-            let mut scan = ScopeScan {
-                nest: 0,
-                captured: Default::default(),
-                exposed: false,
-            };
-            for n in roots {
-                scan.visit(n);
-            }
-            entry.info = Some(Rc::new(ScopeLocals {
-                captured: scan.captured,
-                exposed: scan.exposed,
-            }));
-        }
-        entry.info.clone()
     }
 }
 
@@ -5530,219 +5425,62 @@ fn is_frame_local(node: &prism::Node<'_>) -> bool {
         .is_some_and(|r| r.depth() == 0)
 }
 
-/// Method names that hand the caller's locals to code the lowerer can't
-/// see (`binding`, and the `eval`s that take a string).
-fn exposes_locals(name: &[u8]) -> bool {
-    matches!(
-        name,
-        b"binding" | b"eval" | b"instance_eval" | b"class_eval" | b"module_eval"
-    )
+/// Can evaluating `node` assign a local, or run code that might?
+fn may_write_locals(node: &prism::Node<'_>) -> bool {
+    let mut scan = WriteScan { found: false };
+    scan.visit(node);
+    scan.found
 }
 
-/// Scans a whole scope for its locals referred to from nested closures,
-/// and for `binding` / `eval`. See [`ScopeLocals`].
-struct ScopeScan {
-    /// Closures entered below the scope.
-    nest: u32,
-    captured: std::collections::HashSet<Vec<u8>>,
-    exposed: bool,
+/// See [`may_write_locals`]. Any local assignment counts, whichever local
+/// it is and however deep in a block literal.
+struct WriteScan {
+    found: bool,
 }
 
-impl ScopeScan {
-    fn note(&mut self, name: ConstantId<'_>, depth: u32) {
-        if self.nest > 0 && depth == self.nest {
-            self.captured.insert(name.as_slice().to_vec());
-        }
+impl<'pr> prism::Visit<'pr> for WriteScan {
+    fn visit_branch_node_enter(&mut self, node: prism::Node<'pr>) {
+        self.check(&node);
+    }
+    fn visit_leaf_node_enter(&mut self, node: prism::Node<'pr>) {
+        self.check(&node);
     }
 }
 
-impl<'pr> prism::Visit<'pr> for ScopeScan {
-    fn visit_block_node(&mut self, node: &BlockNode<'pr>) {
-        self.nest += 1;
-        prism::visit_block_node(self, node);
-        self.nest -= 1;
-    }
-    fn visit_lambda_node(&mut self, node: &LambdaNode<'pr>) {
-        self.nest += 1;
-        prism::visit_lambda_node(self, node);
-        self.nest -= 1;
-    }
-    // A `def` / `class` / `module` body is a scope of its own and sees
-    // none of these locals; only the parts evaluated out here are walked.
-    fn visit_def_node(&mut self, node: &DefNode<'pr>) {
-        if let Some(r) = node.receiver() {
-            self.visit(&r);
+impl WriteScan {
+    fn check(&mut self, node: &prism::Node<'_>) {
+        use prism::Node::*;
+        if matches!(
+            node,
+            // Code that runs: calls (operators included), implicit
+            // conversions (`to_s`, `to_a`, `to_hash`, `to_proc`), and
+            // bodies that execute in place.
+            CallNode { .. }
+                | YieldNode { .. }
+                | SuperNode { .. }
+                | ForwardingSuperNode { .. }
+                | EmbeddedStatementsNode { .. }
+                | EmbeddedVariableNode { .. }
+                | SplatNode { .. }
+                | AssocSplatNode { .. }
+                | BlockArgumentNode { .. }
+                | XStringNode { .. }
+                | InterpolatedXStringNode { .. }
+                | ForNode { .. }
+                | DefNode { .. }
+                | ClassNode { .. }
+                | ModuleNode { .. }
+                | SingletonClassNode { .. }
+                // Local assignments.
+                | LocalVariableWriteNode { .. }
+                | LocalVariableTargetNode { .. }
+                | LocalVariableOperatorWriteNode { .. }
+                | LocalVariableAndWriteNode { .. }
+                | LocalVariableOrWriteNode { .. }
+                | MatchWriteNode { .. }
+        ) {
+            self.found = true;
         }
-    }
-    fn visit_class_node(&mut self, node: &ClassNode<'pr>) {
-        self.visit(&node.constant_path());
-        if let Some(s) = node.superclass() {
-            self.visit(&s);
-        }
-    }
-    fn visit_module_node(&mut self, node: &ModuleNode<'pr>) {
-        self.visit(&node.constant_path());
-    }
-    fn visit_singleton_class_node(&mut self, node: &prism::SingletonClassNode<'pr>) {
-        self.visit(&node.expression());
-    }
-    fn visit_call_node(&mut self, node: &prism::CallNode<'pr>) {
-        if exposes_locals(node.name().as_slice()) {
-            self.exposed = true;
-        }
-        prism::visit_call_node(self, node);
-    }
-    fn visit_local_variable_read_node(&mut self, node: &LocalVariableReadNode<'pr>) {
-        self.note(node.name(), node.depth());
-    }
-    fn visit_local_variable_write_node(&mut self, node: &LocalVariableWriteNode<'pr>) {
-        self.note(node.name(), node.depth());
-        prism::visit_local_variable_write_node(self, node);
-    }
-    fn visit_local_variable_target_node(&mut self, node: &prism::LocalVariableTargetNode<'pr>) {
-        self.note(node.name(), node.depth());
-    }
-    fn visit_local_variable_operator_write_node(
-        &mut self,
-        node: &prism::LocalVariableOperatorWriteNode<'pr>,
-    ) {
-        self.note(node.name(), node.depth());
-        prism::visit_local_variable_operator_write_node(self, node);
-    }
-    fn visit_local_variable_and_write_node(
-        &mut self,
-        node: &prism::LocalVariableAndWriteNode<'pr>,
-    ) {
-        self.note(node.name(), node.depth());
-        prism::visit_local_variable_and_write_node(self, node);
-    }
-    fn visit_local_variable_or_write_node(
-        &mut self,
-        node: &prism::LocalVariableOrWriteNode<'pr>,
-    ) {
-        self.note(node.name(), node.depth());
-        prism::visit_local_variable_or_write_node(self, node);
-    }
-}
-
-/// Scans the operands evaluated after a local was read: does any of them
-/// assign that local, or run code that might? See
-/// [`Lowerer::lower_operand_before`].
-struct OperandScan<'a> {
-    name: &'a [u8],
-    /// Closures entered below the operands.
-    nest: u32,
-    writes: bool,
-    runs_code: bool,
-}
-
-impl OperandScan<'_> {
-    fn note_write(&mut self, name: ConstantId<'_>, depth: u32) {
-        if depth == self.nest && name.as_slice() == self.name {
-            self.writes = true;
-        }
-    }
-}
-
-impl<'pr> prism::Visit<'pr> for OperandScan<'_> {
-    fn visit_block_node(&mut self, node: &BlockNode<'pr>) {
-        self.nest += 1;
-        prism::visit_block_node(self, node);
-        self.nest -= 1;
-    }
-    fn visit_lambda_node(&mut self, node: &LambdaNode<'pr>) {
-        self.nest += 1;
-        prism::visit_lambda_node(self, node);
-        self.nest -= 1;
-    }
-    fn visit_def_node(&mut self, node: &DefNode<'pr>) {
-        self.runs_code = true;
-        if let Some(r) = node.receiver() {
-            self.visit(&r);
-        }
-    }
-    fn visit_class_node(&mut self, _node: &ClassNode<'pr>) {
-        self.runs_code = true;
-    }
-    fn visit_module_node(&mut self, _node: &ModuleNode<'pr>) {
-        self.runs_code = true;
-    }
-    fn visit_singleton_class_node(&mut self, _node: &prism::SingletonClassNode<'pr>) {
-        self.runs_code = true;
-    }
-    fn visit_call_node(&mut self, node: &prism::CallNode<'pr>) {
-        self.runs_code = true;
-        prism::visit_call_node(self, node);
-    }
-    fn visit_yield_node(&mut self, node: &prism::YieldNode<'pr>) {
-        self.runs_code = true;
-        prism::visit_yield_node(self, node);
-    }
-    fn visit_super_node(&mut self, node: &prism::SuperNode<'pr>) {
-        self.runs_code = true;
-        prism::visit_super_node(self, node);
-    }
-    fn visit_forwarding_super_node(&mut self, node: &prism::ForwardingSuperNode<'pr>) {
-        self.runs_code = true;
-        prism::visit_forwarding_super_node(self, node);
-    }
-    // Implicit conversions (`to_s`, `to_a`, `to_hash`, `to_proc`) and
-    // backticks are method calls too.
-    fn visit_embedded_statements_node(&mut self, node: &prism::EmbeddedStatementsNode<'pr>) {
-        self.runs_code = true;
-        prism::visit_embedded_statements_node(self, node);
-    }
-    fn visit_embedded_variable_node(&mut self, node: &prism::EmbeddedVariableNode<'pr>) {
-        self.runs_code = true;
-        prism::visit_embedded_variable_node(self, node);
-    }
-    fn visit_splat_node(&mut self, node: &prism::SplatNode<'pr>) {
-        self.runs_code = true;
-        prism::visit_splat_node(self, node);
-    }
-    fn visit_assoc_splat_node(&mut self, node: &prism::AssocSplatNode<'pr>) {
-        self.runs_code = true;
-        prism::visit_assoc_splat_node(self, node);
-    }
-    fn visit_block_argument_node(&mut self, node: &prism::BlockArgumentNode<'pr>) {
-        self.runs_code = true;
-        prism::visit_block_argument_node(self, node);
-    }
-    fn visit_x_string_node(&mut self, node: &prism::XStringNode<'pr>) {
-        self.runs_code = true;
-        prism::visit_x_string_node(self, node);
-    }
-    fn visit_for_node(&mut self, node: &prism::ForNode<'pr>) {
-        self.runs_code = true;
-        prism::visit_for_node(self, node);
-    }
-    fn visit_local_variable_write_node(&mut self, node: &LocalVariableWriteNode<'pr>) {
-        self.note_write(node.name(), node.depth());
-        prism::visit_local_variable_write_node(self, node);
-    }
-    fn visit_local_variable_target_node(&mut self, node: &prism::LocalVariableTargetNode<'pr>) {
-        self.note_write(node.name(), node.depth());
-    }
-    fn visit_local_variable_operator_write_node(
-        &mut self,
-        node: &prism::LocalVariableOperatorWriteNode<'pr>,
-    ) {
-        self.note_write(node.name(), node.depth());
-        prism::visit_local_variable_operator_write_node(self, node);
-    }
-    fn visit_local_variable_and_write_node(
-        &mut self,
-        node: &prism::LocalVariableAndWriteNode<'pr>,
-    ) {
-        self.note_write(node.name(), node.depth());
-        prism::visit_local_variable_and_write_node(self, node);
-    }
-    fn visit_local_variable_or_write_node(
-        &mut self,
-        node: &prism::LocalVariableOrWriteNode<'pr>,
-    ) {
-        self.note_write(node.name(), node.depth());
-        prism::visit_local_variable_or_write_node(self, node);
     }
 }
 

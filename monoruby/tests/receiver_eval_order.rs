@@ -67,3 +67,39 @@ fn receiver_reassigned_in_method() {
         "#,
     );
 }
+
+// A Float op computing into its own lhs must not do so in place while a
+// copy's source still shares the lhs register (#1726), and a local unboxed
+// through its copy keeps its value.
+#[test]
+fn float_op_on_copy_keeps_source() {
+    run_test(
+        r#"
+        def f(n)
+          x = 1.5
+          r = 0.0
+          i = 0
+          while i < n
+            x = x + 0.25
+            y = x
+            y = y * 2.0
+            r += x + y
+            i += 1
+          end
+          [x, r]
+        end
+        def g(a, b, n)
+          aik = a[0]
+          s = 0.0
+          j = 0
+          while j < n
+            s += aik * b[j]
+            aik = aik + 1.0 if j == 2
+            j += 1
+          end
+          [aik, s]
+        end
+        [f(50), g([1.5], [0.5, 1.0, 2.0, 4.0], 4)]
+        "#,
+    );
+}
