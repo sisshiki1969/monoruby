@@ -2525,17 +2525,18 @@ pub(in crate::codegen::jitgen) extern "C" fn unreachable() {
     unreachable!("reached unreachable code");
 }
 
-/// Generic `Array#[]=` fallback (out-of-fast-path index). Returns `None` and
-/// sets the error on failure (negative index past the start).
+/// Generic `Array#[]=` fallback (out-of-fast-path index, shared view, or a
+/// frozen receiver). Returns `None` and sets the error on failure (frozen,
+/// or a negative index past the start).
 pub(in crate::codegen::jitgen) extern "C" fn set_array_integer_index(
     base: Value,
     index: i64,
     vm: &mut Executor,
-    _globals: &mut Globals,
+    globals: &mut Globals,
     src: Value,
 ) -> Option<Value> {
-    base.as_array()
-        .set_index(index, src)
+    base.as_array_mut(&globals.store)
+        .and_then(|mut ary| ary.set_index(index, src))
         .map_err(|err| vm.set_error(err))
         .ok()
 }

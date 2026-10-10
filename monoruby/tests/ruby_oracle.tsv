@@ -1500,6 +1500,7 @@
 485bf08e02403f54f0c7e3b421c182c3	[[[94, 92, 45], [94, 92, 45], [94, 122, 122]], [[94, 92, 45], [94, 92, 45], [94, 122, 122]], [[94, 92, 45], [94, 92, 45], [94, 122, 122]], [[94, 92, 45], [94, 92, 45], [94, 122, 122]]]	def b(a, e) = a.pack("C*").dup.force_encoding(e)\n            ["EUC-
 485bfcadd99bf357e22c80c24adff41d	[true, true, true, true, true]	cri = Struct.new(:value) do\n              def to_int; value; end\n  
 486696700c00f3fb37eb234c9c60f677	["only a", false]	a = Object.new\n            b = Object.new\n            a.define_sing
+4869cf541b6afbadc9531e7612056c46	[FrozenError, [1, 2, 3], FrozenError, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19], FrozenError, 150, [1, 2, 3], [7, 149, 3]]	def f(a, i, v) = a[i] = v\n        small = [1, 2, 3]\n        big = (0...
 487927ebd8b0cf91b6d9fda1a66df40d	[[true, 19800], [3600, 13]]	__a = [];__a << (\n            class GZ\n              def initialize(o); @o = o; 
 487cc9210936ff4dca6cb9c0ff58df7e	["undefined method 'foo' for nil", "undefined method 'foo' for true", "undefined method 'foo' for false", "undefined method 'foo' for an instance of Integer"]	__a = [];__a << ((begin; nil.foo; rescue NoMethodError => e; e.message; end));__
 4881ebb6c3803fe8080483f460180234	[["ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", true], "US-ASCII", "ASCII-8BIT", ["UTF-8", [195, 169]], ["S", "ASCII-8BIT"], "Exception"]	__a = [];__a << (s = "foo".b; e = Exception.new(s); [s.encoding.to_s, e.message.
