@@ -770,7 +770,9 @@ impl AbstractState {
         self.pin_fpr(lhs);
         self.pin_fpr(rhs);
         let dst = dst.map(|dst| {
-            if dst == info.lhs {
+            // In place only when nothing else holds `lhs`'s fpr: a copy
+            // (`y = x`) shares it with its source (#1726).
+            if dst == info.lhs && !self.fpr_shared(lhs, dst) {
                 self.def_F_with_fpr(dst, lhs);
                 lhs
             } else {

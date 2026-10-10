@@ -668,6 +668,47 @@ impl SlotState {
         })
     }
 
+    /// Whether a slot other than *slot* is bound to *fpr*: an op must not
+    /// compute into *fpr* in place for *slot* then.
+    pub(in crate::codegen::jitgen) fn fpr_shared(&self, fpr: FPReg, slot: SlotId) -> bool {
+        self.fpr_slots(fpr).any(|s| s != slot)
+    }
+
+    ///
+    /// *slot* has just been unboxed from the GP register *gp* into *fpr*
+    /// as a Float (`S` -> `Sf`). A local caching the same register cleanly
+    /// is the value *slot* was copied from (`copy_slot` shares the
+    /// register), so it is the same Float: bind it to *fpr* as well and
+    /// return it, rather than unboxing it again on its next float use.
+    /// This is what keeps a local unboxed across a loop when bytecodegen
+    /// reads it through a temp copy (a receiver evaluated before operands
+    /// that may reassign it).
+    ///
+    pub(in crate::codegen::jitgen) fn share_unboxed_float(
+        &mut self,
+        slot: SlotId,
+        gp: GP,
+        fpr: FPReg,
+    ) -> Vec<SlotId> {
+        let sharers: Vec<SlotId> = self
+            .gp_regfile
+            .residents()
+            .into_iter()
+            .filter(|&(r, s)| {
+                r == gp
+                    && s != slot
+                    && (1..=self.local_num).contains(&(s.0 as usize))
+                    && matches!(self.mode(s), LinkMode::S(Guarded::Value | Guarded::Float))
+                    && self.gp_regfile.dirty_reg_of(s).is_none()
+            })
+            .map(|(_, s)| s)
+            .collect();
+        for &s in &sharers {
+            self.set_Sf(s, fpr, SfGuarded::Float);
+        }
+        sharers
+    }
+
     fn pool_occupancy(&self) -> PoolOccupancy {
         let mut occ = PoolOccupancy {
             occupied: [false; PHYS_FPR_POOL],

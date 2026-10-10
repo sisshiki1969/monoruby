@@ -39,6 +39,7 @@ use crate::ast::{
 };
 use crate::globals::{ExternalContext, MonorubyErr};
 use crate::id_table::IdentId;
+use ruby_prism::Visit as _;
 
 /// Reserved, unspellable local names bound to anonymous `*` / `**`
 /// parameters so their forwarding forms (`foo(*)` / `foo(**)`) can
@@ -2519,8 +2520,13 @@ impl<'pr> Lowerer<'pr> {
 
     fn lower_range(&mut self, node: &RangeNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
+        let later: Vec<prism::Node<'pr>> = if node.left().as_ref().is_some_and(is_frame_local) {
+            node.right().into_iter().collect()
+        } else {
+            Vec::new()
+        };
         let start = match node.left() {
-            Some(n) => Some(self.lower_node(&n)?),
+            Some(n) => Some(self.lower_operand_before(&n, &later)?),
             None => None,
         };
         let end = match node.right() {
@@ -5142,6 +5148,18 @@ impl<'pr> Lowerer<'pr> {
 
     fn lower_call(&mut self, node: &prism::CallNode<'pr>, loc: Loc) -> Result<Node, MonorubyErr> {
         let receiver_opt = node.receiver();
+        // What runs between reading the receiver and the call: see
+        // `lower_operand_before`. A block literal runs inside the call,
+        // after the receiver is in hand.
+        let later: Vec<prism::Node<'pr>> = if receiver_opt.as_ref().is_some_and(is_frame_local) {
+            node.arguments()
+                .map(|a| a.as_node())
+                .into_iter()
+                .chain(node.block().filter(|b| b.as_block_node().is_none()))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let name_bytes = node.name().as_slice();
         let method = std::str::from_utf8(name_bytes)
             .map(str::to_owned)
@@ -5196,7 +5214,7 @@ impl<'pr> Lowerer<'pr> {
             && method == "[]"
             && !node.is_safe_navigation()
         {
-            let base = self.lower_node(recv)?;
+            let base = self.lower_operand_before(recv, &later)?;
             // `recv[k => v]` / `recv[**h]`: the `NodeKind::Index`
             // fast path is positional-only and would drop the
             // keyword/`**` portion. Keep it as a real `[]` method
@@ -5249,7 +5267,7 @@ impl<'pr> Lowerer<'pr> {
             && !args.is_empty()
         {
             let value = args.pop().unwrap();
-            let base = self.lower_node(recv)?;
+            let base = self.lower_operand_before(recv, &later)?;
             let read_name = method.strip_suffix('=').unwrap_or(&method).to_string();
             let target = if read_name == "[]" {
                 Node {
@@ -5295,7 +5313,7 @@ impl<'pr> Lowerer<'pr> {
             && !forwarding
             && let Some(op) = unop_from_name(&method)
         {
-            let inner = self.lower_node(recv)?;
+            let inner = self.lower_operand_before(recv, &later)?;
             return Ok(Node {
                 kind: NodeKind::UnOp(op, Box::new(inner)),
                 loc,
@@ -5319,7 +5337,7 @@ impl<'pr> Lowerer<'pr> {
             && !forwarding
             && let Some(op) = binop_from_name(&method)
         {
-            let lhs = self.lower_node(recv)?;
+            let lhs = self.lower_operand_before(recv, &later)?;
             let rhs = args.into_iter().next().unwrap();
             return Ok(Node {
                 kind: NodeKind::BinOp(op, Box::new(lhs), Box::new(rhs)),
@@ -5348,7 +5366,7 @@ impl<'pr> Lowerer<'pr> {
 
         Ok(match receiver_opt {
             Some(recv) => {
-                let receiver_node = self.lower_node(&recv)?;
+                let receiver_node = self.lower_operand_before(&recv, &later)?;
                 Node {
                     kind: NodeKind::MethodCall {
                         receiver: Box::new(receiver_node),
@@ -5368,6 +5386,101 @@ impl<'pr> Lowerer<'pr> {
                 loc,
             },
         })
+    }
+
+    ///
+    /// `recv` (an operand evaluated before `later`) as lowered, wrapped so
+    /// bytecodegen evaluates it into a temp when `later` might reassign the
+    /// local it reads.
+    ///
+    /// Bytecodegen uses a local's own register as a receiver or left
+    /// operand (`gen_expr_reg`), and the instruction reads it only after
+    /// the later operands ran. CRuby has the value in hand already, so
+    /// `x + (x = 2.5)` and `x.to_s(x = 2)` must see the old `x`. Besides
+    /// a direct assignment, any code `later` runs (a call, a yield, an
+    /// interpolation, ...) can write `x` through a closure, `binding` or
+    /// `eval`, so either one makes the copy.
+    ///
+    fn lower_operand_before(
+        &mut self,
+        recv: &prism::Node<'pr>,
+        later: &[prism::Node<'pr>],
+    ) -> Result<Node, MonorubyErr> {
+        let node = self.lower_node(recv)?;
+        if !is_frame_local(recv) || !later.iter().any(may_write_locals) {
+            return Ok(node);
+        }
+        let loc = node.loc;
+        Ok(Node {
+            kind: NodeKind::CompStmt(vec![node]),
+            loc,
+        })
+    }
+}
+
+/// A read of a local of the scope being lowered: the operand shape
+/// bytecodegen reads in place (an outer local is loaded into a temp).
+fn is_frame_local(node: &prism::Node<'_>) -> bool {
+    node.as_local_variable_read_node()
+        .is_some_and(|r| r.depth() == 0)
+}
+
+/// Can evaluating `node` assign a local, or run code that might?
+fn may_write_locals(node: &prism::Node<'_>) -> bool {
+    let mut scan = WriteScan { found: false };
+    scan.visit(node);
+    scan.found
+}
+
+/// See [`may_write_locals`]. Any local assignment counts, whichever local
+/// it is and however deep in a block literal.
+struct WriteScan {
+    found: bool,
+}
+
+impl<'pr> prism::Visit<'pr> for WriteScan {
+    fn visit_branch_node_enter(&mut self, node: prism::Node<'pr>) {
+        self.check(&node);
+    }
+    fn visit_leaf_node_enter(&mut self, node: prism::Node<'pr>) {
+        self.check(&node);
+    }
+}
+
+impl WriteScan {
+    fn check(&mut self, node: &prism::Node<'_>) {
+        use prism::Node::*;
+        if matches!(
+            node,
+            // Code that runs: calls (operators included), implicit
+            // conversions (`to_s`, `to_a`, `to_hash`, `to_proc`), and
+            // bodies that execute in place.
+            CallNode { .. }
+                | YieldNode { .. }
+                | SuperNode { .. }
+                | ForwardingSuperNode { .. }
+                | EmbeddedStatementsNode { .. }
+                | EmbeddedVariableNode { .. }
+                | SplatNode { .. }
+                | AssocSplatNode { .. }
+                | BlockArgumentNode { .. }
+                | XStringNode { .. }
+                | InterpolatedXStringNode { .. }
+                | ForNode { .. }
+                | DefNode { .. }
+                | ClassNode { .. }
+                | ModuleNode { .. }
+                | SingletonClassNode { .. }
+                // Local assignments.
+                | LocalVariableWriteNode { .. }
+                | LocalVariableTargetNode { .. }
+                | LocalVariableOperatorWriteNode { .. }
+                | LocalVariableAndWriteNode { .. }
+                | LocalVariableOrWriteNode { .. }
+                | MatchWriteNode { .. }
+        ) {
+            self.found = true;
+        }
     }
 }
 

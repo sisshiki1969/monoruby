@@ -564,6 +564,11 @@ impl AbstractState {
                 // home (see `load_fpr_fixnum_state`).
                 let gp = self.gp_regfile.reg_of(slot);
                 let x = self.set_new_Sf(slot, SfGuarded::Float);
+                if let Some(gp) = gp {
+                    for local in self.share_unboxed_float(slot, gp, x) {
+                        self.use_as_float(local);
+                    }
+                }
                 (x, FprLoad::FromStack(x, gp))
             }
             LinkMode::C(v) => self.load_fpr_from_C_state(slot, v),
