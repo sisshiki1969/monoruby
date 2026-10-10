@@ -3180,7 +3180,7 @@ fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                 "{}{} {}",
                 format_args!("{}-{}", year_digits(t.year()), dt.format("%m-%d %H:%M:%S")),
                 frac,
-                dt.format("%z")
+                offset_hhmm(dt.offset().local_minus_utc(), true)
             )
         }
         TimeInner::Utc(dt) => format!(
@@ -3697,6 +3697,21 @@ fn pad_core(
     format!("{sign}{fill}{digits}")
 }
 
+/// The `+hhmm` offset `Time#to_s` prints, truncated toward zero as
+/// CRuby's `%z` is (chrono's `%z` rounds a local-mean-time offset
+/// such as Tokyo's `+09:18:59` up to `+0919`). With `secs`, a
+/// non-zero seconds part is appended — `Time#inspect`'s `+091859`.
+fn offset_hhmm(total_secs: i32, secs: bool) -> String {
+    let sign = if total_secs < 0 { '-' } else { '+' };
+    let abs = total_secs.unsigned_abs();
+    let (h, m, s) = (abs / 3600, (abs / 60) % 60, abs % 60);
+    if secs && s != 0 {
+        format!("{sign}{h:02}{m:02}{s:02}")
+    } else {
+        format!("{sign}{h:02}{m:02}")
+    }
+}
+
 /// Format a `%z` family directive. `colons` is the number of `:` in
 /// the directive (0 to 3; `3` is "as many as the offset needs"). A
 /// UTC-mode time with the `-` flag emits CRuby's RFC 3339 `-0000` /
@@ -3801,8 +3816,12 @@ fn to_s(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // The year is spelled here rather than by chrono, which writes a
     // five-digit one as `+10000`.
     let rest = match t {
-        TimeInner::Local(dt, _) => dt.format("%m-%d %H:%M:%S %z"),
-        TimeInner::Utc(dt) => dt.format("%m-%d %H:%M:%S UTC"),
+        TimeInner::Local(dt, _) => format!(
+            "{} {}",
+            dt.format("%m-%d %H:%M:%S"),
+            offset_hhmm(dt.offset().local_minus_utc(), false)
+        ),
+        TimeInner::Utc(dt) => dt.format("%m-%d %H:%M:%S UTC").to_string(),
     };
     let s = format!("{}-{rest}", year_digits(t.year()));
     let mut v = Value::string(s);
@@ -4458,7 +4477,12 @@ impl std::fmt::Display for TimeInner {
         let year = year_digits(self.year());
         match self {
             TimeInner::Local(t, _) => {
-                write!(f, "{year}-{}", t.format("%m-%d %H:%M:%S %z"))
+                write!(
+                    f,
+                    "{year}-{} {}",
+                    t.format("%m-%d %H:%M:%S"),
+                    offset_hhmm(t.offset().local_minus_utc(), false)
+                )
             }
             TimeInner::Utc(t) => write!(f, "{year}-{}", t.format("%m-%d %H:%M:%S UTC")),
         }
