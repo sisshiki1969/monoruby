@@ -1806,7 +1806,11 @@ impl Codegen {
                 .iter()
                 .enumerate()
                 .filter_map(|(k, (bc_pos, code_pos))| {
-                    if *code_pos == i { Some((k, *bc_pos)) } else { None }
+                    if *code_pos == i {
+                        Some((k, *bc_pos))
+                    } else {
+                        None
+                    }
                 })
                 .for_each(|(k, bc_pos)| {
                     if iseq.bb_info.is_bb_head(bc_pos).is_some() {
