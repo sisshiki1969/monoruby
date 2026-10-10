@@ -91,6 +91,9 @@ impl Codegen {
         let heap = self.jit.label();
         let generic = generic.clone();
         monoasm_arm64! { &mut self.jit,
+            // A frozen receiver raises `FrozenError` from the generic path.
+            ldrb w9, [x4, #(RVALUE_OFFSET_FLAG as u32)];
+            tbnz x9, #(1), generic;
             ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
             cmp x0, #(ARRAY_INLINE_CAPA as u32);
             b.gt heap;
