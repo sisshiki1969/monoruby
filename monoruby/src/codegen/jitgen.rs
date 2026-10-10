@@ -1099,7 +1099,7 @@ impl Codegen {
                 eprintln!("  >>> JIT (aarch64) <{}>", store.func_description(fid));
             }
             let iseq_id = frame.iseq_id;
-            self.dump_disas(store, &frame.sourcemap, iseq_id);
+            self.dump_disas(store, &frame.sourcemap, &frame.asmir_dump, iseq_id);
             eprintln!("  <<<");
         }
 

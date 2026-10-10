@@ -1748,6 +1748,7 @@ impl Codegen {
         &mut self,
         store: &Store,
         sourcemap: &Vec<(bytecodegen::BcIndex, usize)>,
+        asmir_dump: &[Vec<String>],
         iseq_id: ISeqId,
     ) {
         let (start, code_end, end) = self.jit.code_block.last().unwrap();
@@ -1792,15 +1793,22 @@ impl Codegen {
             })
             .collect();
         let iseq = &store[iseq_id];
+        // AsmIr: printed (`; ...`) under the bytecode it was generated for,
+        // before that bytecode's machine code.
+        let print_asmir = |group: usize| {
+            for s in asmir_dump.get(group).into_iter().flatten() {
+                eprintln!("        ; {s}");
+            }
+        };
+        print_asmir(0);
         for (i, text) in dump {
             sourcemap
                 .iter()
-                .filter_map(
-                    |(bc_pos, code_pos)| {
-                        if *code_pos == i { Some(*bc_pos) } else { None }
-                    },
-                )
-                .for_each(|bc_pos| {
+                .enumerate()
+                .filter_map(|(k, (bc_pos, code_pos))| {
+                    if *code_pos == i { Some((k, *bc_pos)) } else { None }
+                })
+                .for_each(|(k, bc_pos)| {
                     if iseq.bb_info.is_bb_head(bc_pos).is_some() {
                         eprintln!("  {:?}", iseq.bb_info.get_bb_id(bc_pos));
                     }
@@ -1813,6 +1821,7 @@ impl Codegen {
                         },
                         Self::ivar_ty_annotation(store, pc),
                     );
+                    print_asmir(k + 1);
                 });
 
             eprintln!("      {:06x}: {}", i, text);
