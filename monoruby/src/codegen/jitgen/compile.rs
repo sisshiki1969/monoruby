@@ -534,6 +534,10 @@ impl<'a> JitContext<'a> {
         let pc = self.get_pc(bc_pos);
         state.set_pc(pc);
         let trace_ir = TraceIr::from_pc(pc, self.store);
+        state.begin_instruction(matches!(
+            trace_ir,
+            TraceIr::Mov(..) | TraceIr::FrozenLiteral(..) | TraceIr::Literal(..)
+        ));
         for slot in trace_ir.read_slots(self.store) {
             state.note_read(slot);
         }

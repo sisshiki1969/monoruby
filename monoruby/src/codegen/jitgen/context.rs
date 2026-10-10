@@ -1263,6 +1263,9 @@ pub(crate) struct JitContext<'a> {
     pub(in crate::codegen) loop_seed_input: Option<super::compile::LoopSeedInput>,
     /// What that loop compile guarded at its entry.
     pub(in crate::codegen) loop_seeded: super::compile::LoopSeeded,
+    /// Iseqs whose loops do not hoist type guards onto their entries
+    /// (`merge.rs`): a hoisted guard of theirs kept missing.
+    pub(in crate::codegen) loop_hoist_disabled: std::rc::Rc<std::collections::HashSet<ISeqId>>,
 }
 
 impl<'a> JitContext<'a> {
@@ -1308,6 +1311,7 @@ impl<'a> JitContext<'a> {
             spec_memo: Default::default(),
             loop_seed_input: None,
             loop_seeded: Default::default(),
+            loop_hoist_disabled: Default::default(),
         }
     }
 
@@ -1399,6 +1403,7 @@ impl<'a> JitContext<'a> {
             pending_class_new_redo: None,
             loop_seed_input: None,
             loop_seeded: Default::default(),
+            loop_hoist_disabled: self.loop_hoist_disabled.clone(),
         }
     }
 

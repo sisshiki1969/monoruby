@@ -5677,6 +5677,10 @@ pub enum RecompileReason {
     /// before the loop (`codegen/jitgen/compile/loop_entry.rs`) missed.
     /// The recompile drops the slots that missed from the seeding.
     LoopEntryGuardFailed = 6,
+    /// A type guard hoisted out of a loop onto the loop's forward entries
+    /// (`codegen/jitgen/merge.rs`, loop-invariant guard hoisting) missed.
+    /// The recompile stops hoisting in the iseq that owns the loop.
+    LoopHoistGuardFailed = 7,
 }
 
 struct Root<'a, 'b> {

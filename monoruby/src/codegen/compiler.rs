@@ -406,6 +406,20 @@ impl Codegen {
         false
     }
 
+    ///
+    /// A guard hoisted onto a loop's entries (`jitgen/merge.rs`) of
+    /// *iseq_id* missed often enough to recompile: its loops stop hoisting.
+    ///
+    fn note_loop_hoist_miss(&mut self, iseq_id: ISeqId, reason: RecompileReason) {
+        if reason == RecompileReason::LoopHoistGuardFailed {
+            std::rc::Rc::make_mut(&mut self.loop_hoist_disabled).insert(iseq_id);
+        }
+    }
+
+    pub(super) fn loop_hoist_disabled(&self) -> std::rc::Rc<std::collections::HashSet<ISeqId>> {
+        self.loop_hoist_disabled.clone()
+    }
+
     fn recompile_method(
         &mut self,
         globals: &mut Globals,
@@ -414,6 +428,7 @@ impl Codegen {
     ) -> Option<()> {
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
+        self.note_loop_hoist_miss(iseq_id, reason);
         let self_class = globals.store[iseq_id].unit_class(lfp.self_val().class());
         self.recompile_method_by_id(globals, iseq_id, self_class, reason)
     }
@@ -591,6 +606,9 @@ impl Codegen {
         let entry_label = self.jit.label();
         let class_version = self.jit_class_version();
         let index = globals.store[iseq_id].get_pc_index(Some(pc));
+        if let Some(reason) = is_recompile {
+            self.note_loop_hoist_miss(iseq_id, reason);
+        }
         let record = self.loop_seeds.entry((iseq_id, index)).or_default();
         if is_recompile == Some(RecompileReason::LoopEntryGuardFailed) {
             record.note_entry_miss(live.as_ref());
@@ -720,6 +738,7 @@ impl Codegen {
             owner,
             ..
         } = self.specialized_info[idx].clone();
+        self.note_loop_hoist_miss(_iseq_id, reason);
         #[cfg(feature = "jit-log")]
         eprintln!(
             "[JIT] recompile_specialized idx={idx} iseq={:?} ({:?})",
