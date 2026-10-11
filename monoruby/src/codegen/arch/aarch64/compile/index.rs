@@ -84,16 +84,30 @@ impl Codegen {
         using_fpr: UsingFpr,
         generic: &DestLabel,
         error: &DestLabel,
+        src_kind: StoredKind,
     ) {
         // Cold (heap / generic-C-call) blocks laid out inline; see array_index
         // for why select_page can't be used on aarch64.
         let exit = self.jit.label();
         let heap = self.jit.label();
+        let flags = self.jit.label();
+        let checked = self.jit.label();
         let generic = generic.clone();
         monoasm_arm64! { &mut self.jit,
             // A frozen receiver raises `FrozenError` from the generic path.
             ldrb w9, [x4, #(RVALUE_OFFSET_FLAG as u32)];
             tbnz x9, #(1), generic;
+        }
+        if src_kind != StoredKind::Fixnum {
+            monoasm_arm64! { &mut self.jit,
+                tbnz x9, #(5), flags;               // ARRAY_ELEMS_FIXNUM
+            }
+        } else {
+            // Unused: a Fixnum store keeps the bit.
+            self.jit.bind_label(flags.clone());
+        }
+        monoasm_arm64! { &mut self.jit,
+        checked:
             ldr x0, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
             cmp x0, #(ARRAY_INLINE_CAPA as u32);
             b.gt heap;
@@ -128,6 +142,18 @@ impl Codegen {
             add x9, x4, x3, lsl #3;
             str x2, [x9];
             b exit;
+        }
+        if src_kind != StoredKind::Fixnum {
+            self.jit.bind_label(flags);
+            if src_kind == StoredKind::Unknown {
+                monoasm_arm64! { &mut self.jit,
+                    tbnz x2, #(0), checked;         // a Fixnum keeps the bit
+                }
+            }
+            self.emit_clear_elems_fixnum(GP::Rdi, None);
+            monoasm_arm64! { &mut self.jit,
+                b checked;
+            }
         }
         self.jit.bind_label(generic);
         self.emit_fpr_save(using_fpr, false);
@@ -197,6 +223,7 @@ impl Codegen {
         kind: ArrayIndexKind,
         using_fpr: UsingFpr,
         error: &DestLabel,
+        src_kind: StoredKind,
     ) {
         match kind {
             ArrayIndexKind::U16(idx) => {
@@ -204,7 +231,7 @@ impl Codegen {
                 monoasm_arm64! { &mut self.jit,
                     mov x3, (idx as u64);   // index (already non-negative)
                 }
-                self.array_index_assign(using_fpr, &generic, error);
+                self.array_index_assign(using_fpr, &generic, error, src_kind);
             }
             ArrayIndexKind::Fixnum => {
                 // Single-page layout (no select_page — see array_index_assign).
@@ -222,7 +249,7 @@ impl Codegen {
                     b generic;              // past the start -> out of range
                 }
                 self.jit.bind_label(checked.clone());
-                self.array_index_assign(using_fpr, &generic, error);
+                self.array_index_assign(using_fpr, &generic, error, src_kind);
             }
         }
     }

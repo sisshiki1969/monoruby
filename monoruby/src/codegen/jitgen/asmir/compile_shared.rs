@@ -1638,13 +1638,14 @@ impl Codegen {
                 kind,
                 using_fpr,
                 error,
+                src_kind,
             } => {
                 self.lower_via_inline(
                     store,
                     labels,
                     frame.base_stack_offset,
                     move |cg, _, labels, _| {
-                        cg.gen_array_index_assign(kind, using_fpr, &labels[error]);
+                        cg.gen_array_index_assign(kind, using_fpr, &labels[error], src_kind);
                     },
                 );
             }

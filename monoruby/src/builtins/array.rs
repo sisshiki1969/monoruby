@@ -287,6 +287,9 @@ fn init_fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     }
     let val = lfp.arg(1);
     *self_val = ArrayInner::from(smallvec![val; size]);
+    if val.is_fixnum() || size == 0 {
+        self_val.set_elems_fixnum();
+    }
     Ok(self_val.into())
 }
 
@@ -1002,9 +1005,9 @@ extern "C" fn ary_rotate_(mut ary: Array, count: i64) -> Value {
     let ary_len = ary.len() as i64;
     if ary_len != 0 {
         if count > 0 {
-            ary.rotate_left(wrap_rotate_count(count, ary_len));
+            ary.permute().rotate_left(wrap_rotate_count(count, ary_len));
         } else {
-            ary.rotate_right(wrap_rotate_count(count, ary_len));
+            ary.permute().rotate_right(wrap_rotate_count(count, ary_len));
         }
     }
     ary.into()
@@ -3767,7 +3770,7 @@ fn reverse(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[monoruby_builtin]
 fn reverse_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array_mut(&globals.store)?;
-    ary.reverse();
+    ary.permute().reverse();
     Ok(ary.into())
 }
 
@@ -3844,11 +3847,11 @@ fn rotate_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let ary_len = ary.len() as i64;
     if ary_len == 0 {
     } else if i > 0 {
-        ary.rotate_left(wrap_rotate_count(i, ary_len));
+        ary.permute().rotate_left(wrap_rotate_count(i, ary_len));
     } else {
         // `-i` can overflow for `i == i64::MIN`; wrap first, then negate the
         // (in-range) remainder.
-        ary.rotate_right(wrap_rotate_count(i, ary_len));
+        ary.permute().rotate_right(wrap_rotate_count(i, ary_len));
     };
     Ok(lfp.self_val())
 }

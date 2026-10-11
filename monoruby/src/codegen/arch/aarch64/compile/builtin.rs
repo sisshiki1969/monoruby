@@ -1381,6 +1381,8 @@ impl Codegen {
         let dst_heap = self.jit.label();
         let dst_ready = self.jit.label();
         let exit = self.jit.label();
+        // A slice copy may store anything: forget the elements kind.
+        self.emit_clear_elems_fixnum(GP::Rdi, None);
         monoasm_arm64!(&mut self.jit,
             asr x(rsi), x(rsi), #(1u32);       // untag start
             tbnz x(rsi), #(63), slow;          // negative: let the callee wrap it
@@ -1527,6 +1529,7 @@ impl Codegen {
         let grow = self.jit.label();
         let stored = self.jit.label();
         let exit = self.jit.label();
+        self.emit_clear_elems_fixnum(GP::Rdi, Some(GP::Rsi));
         monoasm_arm64!(&mut self.jit,
             ldr x0, [x(rdi), #(RVALUE_OFFSET_ARY_CAPA as u32)];
             cmp x0, #(ARRAY_INLINE_CAPA as u32);

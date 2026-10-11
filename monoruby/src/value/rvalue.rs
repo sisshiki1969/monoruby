@@ -104,7 +104,7 @@ const CHILLED_LITERAL_BIT: u16 = 0b1000_0000;
 /// `Header::newborn`): everything except the generational-GC state. Shared
 /// with the JIT, whose inline literal copy masks the template's header word
 /// with exactly this, so the two cannot drift apart.
-pub const NEWBORN_FLAG_MASK: u16 = 0b0001_0111 | CHILLED_LITERAL_BIT;
+pub const NEWBORN_FLAG_MASK: u16 = 0b0001_0111 | ARRAY_ELEMS_FIXNUM as u16 | CHILLED_LITERAL_BIT;
 pub const RVALUE_OFFSET_FLAG: usize = std::mem::offset_of!(RValue, header.meta.flag);
 pub const RVALUE_OFFSET_TY: usize = std::mem::offset_of!(RValue, header.meta.ty);
 // `ty_flags_ptr` addresses the per-type metadata byte as `ty` + 1.
@@ -750,7 +750,25 @@ impl RValue {
     /// receives every element at once through this swap.
     ///
     pub fn swap_kind(&mut self, other: &mut Self) {
+        // `ARRAY_ELEMS_FIXNUM` describes the payload, so it travels with
+        // it; clearing first moves the epoch for a receiver whose
+        // contents change under a set bit.
+        let arrays = self.ty() == ObjTy::ARRAY && other.ty() == ObjTy::ARRAY;
+        let (self_fix, other_fix) = if arrays {
+            let flags = (self.array_elems_fixnum(), other.array_elems_fixnum());
+            self.clear_array_elems_fixnum();
+            other.clear_array_elems_fixnum();
+            flags
+        } else {
+            (false, false)
+        };
         std::mem::swap(&mut self.kind, &mut other.kind);
+        if other_fix {
+            self.set_array_elems_fixnum();
+        }
+        if self_fix {
+            other.set_array_elems_fixnum();
+        }
         self.write_barrier_bulk();
         other.write_barrier_bulk();
     }
@@ -1160,6 +1178,14 @@ impl alloc::GCBox for RValue {
                 }
                 ObjTy::TIME => {}
                 ObjTy::ARRAY => {
+                    // Every collection re-checks the elements-kind bit of
+                    // each live array in debug builds: a mutation path
+                    // that forgot to clear it shows up here.
+                    debug_assert!(
+                        !self.array_elems_fixnum()
+                            || self.as_array().iter().all(|v| v.is_fixnum()),
+                        "ARRAY_ELEMS_FIXNUM set on an array with a non-Fixnum element"
+                    );
                     // A view keeps its (hidden, frozen) root alive — the
                     // root owns the buffer, and marks the elements itself.
                     if let Some(root) = self.as_array().shared_root() {
@@ -1375,6 +1401,48 @@ impl RValue {
             std::ptr::NonNull::new_unchecked(
                 (self as *const RValue as *mut u8).add(RVALUE_OFFSET_TY + 1),
             )
+        }
+    }
+
+    /// Whether this ARRAY carries `ARRAY_ELEMS_FIXNUM`: every element is a
+    /// Fixnum. `false` means *unknown*, not "some element is not".
+    #[inline(always)]
+    pub(crate) fn array_elems_fixnum(&self) -> bool {
+        debug_assert_eq!(self.ty(), ObjTy::ARRAY);
+        self.header.flag_bits(ARRAY_ELEMS_FIXNUM as u16)
+    }
+
+    /// Record that every element of this ARRAY is a Fixnum. The caller
+    /// must know it is true.
+    pub(crate) fn set_array_elems_fixnum(&mut self) {
+        debug_assert_eq!(self.ty(), ObjTy::ARRAY);
+        self.header.set_flag_bits(ARRAY_ELEMS_FIXNUM as u16);
+    }
+
+    /// Forget `ARRAY_ELEMS_FIXNUM`, moving the elements-kind epoch when it
+    /// was set (see [`elems_kind_epoch`]).
+    #[inline(always)]
+    pub(crate) fn clear_array_elems_fixnum(&mut self) {
+        debug_assert_eq!(self.ty(), ObjTy::ARRAY);
+        if self.header.flag_bits(ARRAY_ELEMS_FIXNUM as u16) {
+            self.header.clear_flag_bits(ARRAY_ELEMS_FIXNUM as u16);
+            bump_elems_kind_epoch();
+        }
+    }
+
+    /// Check every element of this ARRAY and set `ARRAY_ELEMS_FIXNUM` when
+    /// they are all Fixnums. Returns whether the bit is now set.
+    pub(crate) fn scan_array_elems_fixnum(&mut self) -> bool {
+        assert_eq!(self.ty(), ObjTy::ARRAY);
+        if self.array_elems_fixnum() {
+            return true;
+        }
+        // SAFETY: the assert above checked that this is an ARRAY.
+        if unsafe { self.as_array() }.iter().all(|v| v.is_fixnum()) {
+            self.set_array_elems_fixnum();
+            true
+        } else {
+            false
         }
     }
 
@@ -3087,6 +3155,18 @@ impl Header {
         header
     }
 
+    fn flag_bits(&self, bits: u16) -> bool {
+        unsafe { self.meta.flag & bits != 0 }
+    }
+
+    fn set_flag_bits(&mut self, bits: u16) {
+        unsafe { self.meta.flag |= bits }
+    }
+
+    fn clear_flag_bits(&mut self, bits: u16) {
+        unsafe { self.meta.flag &= !bits }
+    }
+
     fn is_frozen(&self) -> bool {
         unsafe { self.meta.flag & 0b10 != 0 }
     }
@@ -3132,9 +3212,10 @@ impl Header {
     //
     // bit3 `0b000_1000` = OLD            (promoted to old generation)
     // bit4 `0b001_0000` = WB_UNPROTECTED (shady; never promoted)
-    // bit5 `0b010_0000` = (free — was REMEMBERED; "in the remembered
-    //                     set" is now derived as `OLD && !WB_ARMED`,
-    //                     and the set itself is `Allocator::remembered`)
+    // bit5 `0b010_0000` = (not GC state: an Array's ARRAY_ELEMS_FIXNUM.
+    //                     It was REMEMBERED; "in the remembered set" is
+    //                     now derived as `OLD && !WB_ARMED`, and the set
+    //                     itself is `Allocator::remembered`)
     // bit6 `0b100_0000` = WB_ARMED       (see `is_wb_armed`)
     //
     // A freshly allocated object has `flag == 1`, so all these bits
