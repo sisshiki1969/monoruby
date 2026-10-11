@@ -98,6 +98,7 @@ fn op(g: &Guarded, is_const: bool) -> Op {
         Guarded::Fixnum => (false, TyKind::Fixnum),
         Guarded::Float => (false, TyKind::Float),
         Guarded::Value => (false, TyKind::Top),
+        Guarded::FixnumArray => (false, TyKind::Class(ARRAY_CLASS)),
         Guarded::Class(c) => match *c {
             NIL_CLASS => (false, TyKind::Nil),
             BOOL_CLASS | TRUE_CLASS | FALSE_CLASS => (false, TyKind::Bool),

@@ -258,6 +258,10 @@ impl<'a> JitContext<'a> {
             idx_class,
             bc_pos,
         ) {
+            // The inline `Array#[]` only reads.
+            if base_class.id() == ARRAY_CLASS && idx_class == Some(CachedClass::INTEGER) {
+                self.keep_elems_kind();
+            }
             return Ok(CompileResult::Continue);
         }
         // Visibility (`#[]` may be private) is enforced in the shared
@@ -292,6 +296,7 @@ impl<'a> JitContext<'a> {
         let Some(base_class) = base_class else {
             return Ok(CompileResult::Recompile(RecompileReason::NotCached));
         };
+        let src_fixnum = state.is_fixnum(src);
         if self.fire_index_inline(
             state,
             ir,
@@ -301,6 +306,15 @@ impl<'a> JitContext<'a> {
             idx_class,
             bc_pos,
         ) {
+            // The inline `Array#[]=` of a Fixnum keeps every array's
+            // elements-kind bit (its generic path leaves the unit, see
+            // `array_index_assign`).
+            if base_class.id() == ARRAY_CLASS
+                && idx_class == Some(CachedClass::INTEGER)
+                && src_fixnum
+            {
+                self.keep_elems_kind();
+            }
             return Ok(CompileResult::Continue);
         }
         // Visibility (`#[]=` may be private) is enforced in the shared

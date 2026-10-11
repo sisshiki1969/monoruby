@@ -24,11 +24,16 @@ impl AbstractFrame {
             // `is_fixnum` above took the Fixnum constants.
             LinkMode::C(_) => StoredKind::NonFixnum,
             _ => match self.guarded(slot) {
-                Guarded::Float => StoredKind::NonFixnum,
+                Guarded::Float | Guarded::FixnumArray => StoredKind::NonFixnum,
                 Guarded::Class(c) if c != INTEGER_CLASS => StoredKind::NonFixnum,
                 _ => StoredKind::Unknown,
             },
         }
+    }
+
+    /// Whether *slot* holds an Array proven to contain only Fixnums.
+    pub(crate) fn is_fixnum_array(&self, slot: SlotId) -> bool {
+        self.mode(slot) == LinkMode::S(Guarded::FixnumArray)
     }
 
 
@@ -39,19 +44,27 @@ pub(crate) fn array_integer_index(
         dst: SlotId,
         base: SlotId,
         idx: SlotId,
+        oob: Option<AsmDeopt>,
     ) {
         self.load_array_ty(ir, store, base, GP::Rdi);
         if let Some(idx) = self.is_u16(idx) {
             ir.push(AsmInst::ArrayIndex {
                 kind: ArrayIndexKind::U16(idx),
+                oob,
             });
         } else {
             self.load_fixnum(ir, idx, GP::Rsi);
             ir.push(AsmInst::ArrayIndex {
                 kind: ArrayIndexKind::Fixnum,
+                oob,
             });
         }
         self.def_rax2acc(ir, dst);
+        if oob.is_some() {
+            // In bounds (the exit took the rest), so an element of an
+            // array of Fixnums.
+            self.refine_S_fixnum(dst);
+        }
     }
 
     ///
@@ -71,9 +84,13 @@ pub(crate) fn array_integer_index_assign(
         src: SlotId,
         base: SlotId,
         idx: SlotId,
+        generic_deopt: Option<AsmDeopt>,
     ) {
         self.load_array_ty(ir, store, base, GP::Rdi);
         let src_kind = self.stored_kind(src);
+        // Only a Fixnum store can leave the proofs standing (the caller
+        // creates the exit for it alone).
+        let generic_deopt = generic_deopt.filter(|_| src_kind == StoredKind::Fixnum);
         if let Some(idx) = self.is_u16(idx) {
             self.load(ir, src, GP::Rdx);
             let using_fpr = self.get_using_fpr(ir);
@@ -85,6 +102,7 @@ pub(crate) fn array_integer_index_assign(
                 using_fpr,
                 error,
                 src_kind,
+                generic_deopt,
             });
         } else {
             self.load_fixnum(ir, idx, GP::Rsi);
@@ -98,6 +116,7 @@ pub(crate) fn array_integer_index_assign(
                 using_fpr,
                 error,
                 src_kind,
+                generic_deopt,
             });
         }
     }

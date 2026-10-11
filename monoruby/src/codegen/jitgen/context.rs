@@ -1069,6 +1069,11 @@ pub(crate) struct JitContext<'a> {
     /// compiled (see [`Self::unfrozen_slots`]). Read via
     /// `instr_unfrozen_contains`, published back via `restore_unfrozen`.
     pub(super) instr_unfrozen: Vec<SlotId>,
+    /// The instruction being compiled leaves every array's
+    /// `ARRAY_ELEMS_FIXNUM` bit alone, so the state's `Guarded::FixnumArray`
+    /// proofs survive it. Cleared at the head of each instruction, set by
+    /// the arms that know (see `JitContext::compile_instruction`).
+    pub(super) elems_kind_keep: bool,
 
 
     ///
@@ -1266,6 +1271,17 @@ pub(crate) struct JitContext<'a> {
     /// Iseqs whose loops do not hoist type guards onto their entries
     /// (`merge.rs`): a hoisted guard of theirs kept missing.
     pub(in crate::codegen) loop_hoist_disabled: std::rc::Rc<std::collections::HashSet<ISeqId>>,
+    /// Iseqs whose loops do not speculate on arrays of Fixnums
+    /// (`Guarded::FixnumArray`, `merge.rs`): a check of theirs kept missing.
+    pub(in crate::codegen) elems_kind_disabled: std::rc::Rc<std::collections::HashSet<ISeqId>>,
+}
+
+///
+/// The loop information `JitContext::take_loop_infos` removed.
+///
+pub(super) struct SavedLoopInfos {
+    infos: Vec<(BasicBlockId, (Liveness, Option<AbstractState>))>,
+    outer_reads: Option<(BasicBlockId, (bool, Vec<(usize, SlotId)>))>,
 }
 
 impl<'a> JitContext<'a> {
@@ -1283,6 +1299,7 @@ impl<'a> JitContext<'a> {
             fused_skip: None,
             unfrozen_slots: Vec::new(),
             instr_unfrozen: Vec::new(),
+            elems_kind_keep: false,
             capture_events: 0,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,
@@ -1312,6 +1329,7 @@ impl<'a> JitContext<'a> {
             loop_seed_input: None,
             loop_seeded: Default::default(),
             loop_hoist_disabled: Default::default(),
+            elems_kind_disabled: Default::default(),
         }
     }
 
@@ -1370,6 +1388,7 @@ impl<'a> JitContext<'a> {
             widened_outer_log: vec![],
             unfrozen_slots: Vec::new(),
             instr_unfrozen: Vec::new(),
+            elems_kind_keep: false,
             capture_events: 0,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,
@@ -1404,6 +1423,7 @@ impl<'a> JitContext<'a> {
             loop_seed_input: None,
             loop_seeded: Default::default(),
             loop_hoist_disabled: self.loop_hoist_disabled.clone(),
+            elems_kind_disabled: self.elems_kind_disabled.clone(),
         }
     }
 
@@ -3778,6 +3798,47 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut()
             .loop_info
             .insert(entry_bb, (liveness, backedge));
+    }
+
+    ///
+    /// Remove (and return) what the back-edge fixpoints recorded for the
+    /// loop heads in `loop_start..=loop_end`, so that the next fixpoint of
+    /// that loop starts from scratch rather than from the recorded back
+    /// edges (`JitContext::loop_elems_kind`).
+    ///
+    pub(super) fn take_loop_infos(
+        &mut self,
+        loop_start: BasicBlockId,
+        loop_end: BasicBlockId,
+    ) -> SavedLoopInfos {
+        let heads: Vec<BasicBlockId> = self
+            .iseq()
+            .bb_info
+            .loops_within(loop_start, loop_end)
+            .into_iter()
+            .map(|(begin, _)| begin)
+            .collect();
+        let frame = self.current_frame_mut();
+        let infos = heads
+            .into_iter()
+            .filter_map(|head| frame.loop_info.shift_remove(&head).map(|i| (head, i)))
+            .collect();
+        let outer_reads = frame
+            .loop_outer_reads
+            .remove(&loop_start)
+            .map(|r| (loop_start, r));
+        SavedLoopInfos { infos, outer_reads }
+    }
+
+    /// Put back what `take_loop_infos` removed.
+    pub(super) fn restore_loop_infos(&mut self, saved: SavedLoopInfos) {
+        let frame = self.current_frame_mut();
+        for (head, info) in saved.infos {
+            frame.loop_info.insert(head, info);
+        }
+        if let Some((head, r)) = saved.outer_reads {
+            frame.loop_outer_reads.insert(head, r);
+        }
     }
 
     pub(super) fn loop_count(&self) -> usize {

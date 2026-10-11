@@ -11,9 +11,9 @@ impl Codegen {
     /// - rsi: index non-negative i64
     ///
     /// ### out
-    /// - rax: result Value
+    /// - rax: result Value (`nil` when out of range, or a jump to *oob*)
     ///
-    pub(crate) fn array_index(&mut self, out_range: &DestLabel) {
+    pub(crate) fn array_index(&mut self, out_range: &DestLabel, oob: Option<&DestLabel>) {
         let exit = self.jit.label();
         let heap = self.jit.label();
         monoasm! { &mut self.jit,
@@ -42,8 +42,16 @@ impl Codegen {
             movq rax, [rdi + rsi * 8];
             jmp exit;
         out_range:
-            movl rax, (NIL_VALUE);
-            jmp  exit;
+        }
+        if let Some(oob) = oob {
+            monoasm! { &mut self.jit,
+                jmp  oob;
+            }
+        } else {
+            monoasm! { &mut self.jit,
+                movl rax, (NIL_VALUE);
+                jmp  exit;
+            }
         }
         self.jit.select_page(0);
     }
@@ -65,6 +73,7 @@ impl Codegen {
         generic: &DestLabel,
         error: &DestLabel,
         src_kind: StoredKind,
+        generic_deopt: Option<&DestLabel>,
     ) {
         let exit = self.jit.label();
         let heap = self.jit.label();
@@ -146,6 +155,13 @@ impl Codegen {
             jmp  exit;
         };
         self.jit.bind_label(generic.clone());
+        if let Some(deopt) = generic_deopt {
+            monoasm! { &mut self.jit,
+                jmp  deopt;
+            };
+            self.jit.select_page(0);
+            return;
+        }
         self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq r8, rdx;
@@ -163,18 +179,68 @@ impl Codegen {
     }
 
     ///
+    /// `AsmInst::GuardElemsFixnum`: the Array in rdi carries
+    /// `ARRAY_ELEMS_FIXNUM`, or every element turns out to be a Fixnum and
+    /// the bit is set now; otherwise jump to *deopt*.
+    ///
+    /// ### in
+    /// - rdi: an Array
+    ///
+    /// ### destroy
+    /// - rax, rcx, rsi
+    ///
+    pub(crate) fn guard_elems_fixnum(&mut self, deopt: &DestLabel) {
+        let done = self.jit.label();
+        let scan = self.jit.label();
+        let heap = self.jit.label();
+        let lp = self.jit.label();
+        let set = self.jit.label();
+        monoasm! { &mut self.jit,
+            testb [rdi + (RVALUE_OFFSET_FLAG as i32)], (ARRAY_ELEMS_FIXNUM as i32);
+            jz   scan;
+        done:
+        }
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        scan:
+            // Inline storage keeps the length in the capa word; a heap
+            // buffer (owned or a shared view) has its own length and pointer.
+            movq rcx, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
+            lea  rsi, [rdi + (RVALUE_OFFSET_INLINE)];
+            cmpq rcx, (ARRAY_INLINE_CAPA);
+            jle  lp;
+        heap:
+            movq rcx, [rdi + (RVALUE_OFFSET_HEAP_LEN)];
+            movq rsi, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
+        lp:
+            testq rcx, rcx;
+            jz   set;
+            movq rax, [rsi];
+            testq rax, 1;
+            jz   deopt;
+            addq rsi, 8;
+            subq rcx, 1;
+            jmp  lp;
+        set:
+            orb  [rdi + (RVALUE_OFFSET_FLAG as i32)], (ARRAY_ELEMS_FIXNUM as i8);
+            jmp  done;
+        }
+        self.jit.select_page(0);
+    }
+
+    ///
     /// §20 (B): emit an array integer-index **read** for `AsmInst::ArrayIndex`.
     /// The index-register setup + `array_index` call that used to live in the
     /// `ir.inline(|gen| …)` closure, now driven by the typed `ArrayIndexKind`.
     ///
-    pub(crate) fn gen_array_index(&mut self, kind: ArrayIndexKind) {
+    pub(crate) fn gen_array_index(&mut self, kind: ArrayIndexKind, oob: Option<&DestLabel>) {
         match kind {
             ArrayIndexKind::U16(idx) => {
                 let out_range = self.jit.label();
                 monoasm! { &mut self.jit,
                     movl rsi, (idx);
                 }
-                self.array_index(&out_range);
+                self.array_index(&out_range, oob);
             }
             ArrayIndexKind::Fixnum => {
                 let generic = self.jit.label();
@@ -186,7 +252,7 @@ impl Codegen {
                     js   negative;
                 checked:
                 };
-                self.array_index(&generic);
+                self.array_index(&generic, oob);
 
                 self.jit.select_page(1);
                 self.jit.bind_label(negative);
@@ -211,6 +277,7 @@ impl Codegen {
         using_fpr: UsingFpr,
         error: &DestLabel,
         src_kind: StoredKind,
+        generic_deopt: Option<&DestLabel>,
     ) {
         match kind {
             ArrayIndexKind::U16(idx) => {
@@ -218,7 +285,7 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     movl rsi, (idx);
                 }
-                self.array_index_assign(using_fpr, &generic, error, src_kind);
+                self.array_index_assign(using_fpr, &generic, error, src_kind, generic_deopt);
             }
             ArrayIndexKind::Fixnum => {
                 let generic = self.jit.label();
@@ -230,7 +297,7 @@ impl Codegen {
                     js   negative;
                 checked:
                 };
-                self.array_index_assign(using_fpr, &generic, error, src_kind);
+                self.array_index_assign(using_fpr, &generic, error, src_kind, generic_deopt);
 
                 self.jit.select_page(1);
                 self.jit.bind_label(negative);

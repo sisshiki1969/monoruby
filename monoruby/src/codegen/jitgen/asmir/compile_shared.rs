@@ -1624,13 +1624,16 @@ impl Codegen {
             // `ir.inline` closures, so `AsmInst` is `Clone`). The per-arch
             // index-register setup + `array_index*` call lives in
             // `gen_array_index*`.
-            AsmInst::ArrayIndex { kind } => {
+            AsmInst::ArrayIndex { kind, oob } => {
+                let oob = oob.map(|d| {
+                    self.deopt_label(labels, d, DeoptCause::Static("array index out of bounds"))
+                });
                 self.lower_via_inline(
                     store,
                     labels,
                     frame.base_stack_offset,
                     move |cg, _, _, _| {
-                        cg.gen_array_index(kind);
+                        cg.gen_array_index(kind, oob.as_ref());
                     },
                 );
             }
@@ -1639,13 +1642,34 @@ impl Codegen {
                 using_fpr,
                 error,
                 src_kind,
+                generic_deopt,
             } => {
+                let generic_deopt = generic_deopt.map(|d| {
+                    self.deopt_label(labels, d, DeoptCause::Static("array index assign generic"))
+                });
                 self.lower_via_inline(
                     store,
                     labels,
                     frame.base_stack_offset,
                     move |cg, _, labels, _| {
-                        cg.gen_array_index_assign(kind, using_fpr, &labels[error], src_kind);
+                        cg.gen_array_index_assign(
+                            kind,
+                            using_fpr,
+                            &labels[error],
+                            src_kind,
+                            generic_deopt.as_ref(),
+                        );
+                    },
+                );
+            }
+            AsmInst::GuardElemsFixnum { deopt } => {
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("elems kind"));
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.guard_elems_fixnum(&deopt);
                     },
                 );
             }

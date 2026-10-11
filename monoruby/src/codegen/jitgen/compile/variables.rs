@@ -206,6 +206,7 @@ impl<'a> JitContext<'a> {
             Guarded::Float => mono == Some(FLOAT_CLASS),
             Guarded::Class(NIL_CLASS) => expect.nil(),
             Guarded::Class(c) => class_ok(c),
+            Guarded::FixnumArray => class_ok(ARRAY_CLASS),
             Guarded::NilOr(nn) => {
                 expect.nil()
                     && match nn {

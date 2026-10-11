@@ -5681,6 +5681,12 @@ pub enum RecompileReason {
     /// (`codegen/jitgen/merge.rs`, loop-invariant guard hoisting) missed.
     /// The recompile stops hoisting in the iseq that owns the loop.
     LoopHoistGuardFailed = 7,
+    /// A speculation that an array holds only Fixnums
+    /// (`Guarded::FixnumArray`, `codegen/jitgen/merge.rs`) failed: the
+    /// loop-entry check found a non-Fixnum element, an `a[i]` read was out
+    /// of bounds, or an `a[i] = fixnum` store left the inline path. The
+    /// recompile stops the speculation in the iseq that owns the loop.
+    ElemsKindFailed = 8,
 }
 
 struct Root<'a, 'b> {
@@ -5757,6 +5763,10 @@ pub(crate) extern "C" fn execute_gc(
     // rely on (`ivar_ty::poison_epoch`): compiled code does not re-check
     // the class version after a poll.
     let ivar_ty_epoch = crate::ivar_ty::poison_epoch();
+    // And for the arrays it knows to hold only Fixnums
+    // (`Guarded::FixnumArray`): an array's `ARRAY_ELEMS_FIXNUM` bit cleared
+    // meanwhile moves the elements-kind epoch.
+    let elems_kind_epoch = crate::value::elems_kind_epoch();
     // `gc-stress`: force a collection at EVERY safepoint, unconditionally
     // — independent of the runtime `GC.stress` flag and of how this poll
     // was triggered. The guard re-arms the GC lane on every exit path, so
@@ -5899,6 +5909,9 @@ pub(crate) extern "C" fn execute_gc(
         return Some(Value::integer(POLL_DEOPT));
     }
     if ivar_ty_epoch != crate::ivar_ty::poison_epoch() {
+        return Some(Value::integer(POLL_DEOPT));
+    }
+    if elems_kind_epoch != crate::value::elems_kind_epoch() {
         return Some(Value::integer(POLL_DEOPT));
     }
     Some(Value::nil())
