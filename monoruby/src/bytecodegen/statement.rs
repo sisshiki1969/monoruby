@@ -16,8 +16,8 @@ impl<'a> BytecodeGen<'a> {
     ) -> Result<()> {
         let loc = iter.loc;
         if let NodeKind::Range {
-            start: box Some(start),
-            end: box Some(end),
+            start: Some(start),
+            end: Some(end),
             exclude_end,
             ..
         } = &iter.kind
@@ -244,7 +244,7 @@ impl<'a> BytecodeGen<'a> {
         cont_pos: Label,
         jmp_if_true: bool,
     ) -> Result<()> {
-        if let NodeKind::Splat(box when) = when.kind {
+        if let NodeKind::Splat(deref!(when)) = when.kind {
             let loc = when.loc;
             let old = self.temp;
             let lhs = self.push_expr(when)?.into();
@@ -329,7 +329,7 @@ impl<'a> BytecodeGen<'a> {
         let else_pos = self.new_label();
         let exit_pos = self.new_label();
         let base = self.temp;
-        if let Some(box cond) = cond {
+        if let Some(deref!(cond)) = cond {
             let loc = cond.loc;
             let reg = self.push_expr(cond)?.into();
             if let Some((min, max)) = check_opt(&when_) {
@@ -337,7 +337,7 @@ impl<'a> BytecodeGen<'a> {
                 let mut bodies = vec![];
                 let mut labels = vec![else_pos];
                 for branch in when_ {
-                    let CaseBranch { box body, when } = branch;
+                    let CaseBranch { body: deref!(body), when } = branch;
                     let then_pos = self.new_label();
                     labels.push(then_pos);
                     for when in when {
@@ -370,7 +370,7 @@ impl<'a> BytecodeGen<'a> {
                 }
             } else {
                 for branch in when_ {
-                    let CaseBranch { box body, mut when } = branch;
+                    let CaseBranch { body: deref!(body), mut when } = branch;
                     let succ_pos = self.new_label();
                     if when.len() == 1 {
                         let when = when.remove(0);
@@ -396,7 +396,7 @@ impl<'a> BytecodeGen<'a> {
             }
         } else {
             for branch in when_ {
-                let CaseBranch { box body, mut when } = branch;
+                let CaseBranch { body: deref!(body), mut when } = branch;
                 let succ_pos = self.new_label();
                 if when.len() == 1 {
                     let when = when.remove(0);
@@ -511,10 +511,10 @@ impl<'a> BytecodeGen<'a> {
             for RescueEntry {
                 exception_list,
                 assign,
-                box body,
+                body: deref!(body),
             } in rescue
             {
-                if let Some(box assign) = assign {
+                if let Some(deref!(assign)) = assign {
                     let loc = assign.loc;
                     // `rescue => recv&.attr`: assign the caught exception via a
                     // safe-navigation setter — skip the store when `recv` is nil.
@@ -525,7 +525,7 @@ impl<'a> BytecodeGen<'a> {
                                 && arglist.kw_args.is_empty())
                     {
                         let NodeKind::MethodCall {
-                            box receiver,
+                            receiver: deref!(receiver),
                             method,
                             ..
                         } = assign.kind
@@ -632,7 +632,7 @@ impl<'a> BytecodeGen<'a> {
             let no_match_pos = self.new_label();
             self.apply_label(no_match_pos);
             // no rescue branch was matched.
-            if let Some(box ensure) = &ensure {
+            if let Some(deref!(ensure)) = &ensure {
                 // Keep `err_reg` reserved while emitting the `ensure` body: the
                 // re-raise below reads the in-flight exception back out of
                 // `err_reg`, so the body's scratch temps must not reuse that
@@ -700,7 +700,7 @@ impl<'a> BytecodeGen<'a> {
                 );
             }
             // no rescue branch.
-            if let Some(box ensure) = &ensure {
+            if let Some(deref!(ensure)) = &ensure {
                 self.emit_br(else_label);
                 let err_reg = self.push().into();
                 let rescue_pos = self.new_label();
@@ -740,12 +740,12 @@ impl<'a> BytecodeGen<'a> {
             }
         }
         self.apply_label(else_label);
-        if let Some(box else_) = else_ {
+        if let Some(deref!(else_)) = else_ {
             self.gen_expr(else_, rescue_use)?;
         }
         self.apply_label(ensure_label);
         self.ensure.pop().unwrap();
-        if let Some(box ensure) = ensure {
+        if let Some(deref!(ensure)) = ensure {
             self.gen_expr(ensure, UseMode2::NotUse)?;
             self.emit(BytecodeInst::EnsureEnd, Loc::default());
             if use_mode.is_ret() {

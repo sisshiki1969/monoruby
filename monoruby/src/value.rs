@@ -3396,8 +3396,8 @@ impl Value {
                 NReal::Integer(i) => Value::complex(0, *i),
                 NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
-            NodeKind::Rational(box (n, d)) => Value::rational(n.clone(), d.clone()),
-            NodeKind::RImaginary(box (n, d)) => {
+            NodeKind::Rational(deref!((n, d))) => Value::rational(n.clone(), d.clone()),
+            NodeKind::RImaginary(deref!((n, d))) => {
                 let f = n.to_f64().unwrap_or(f64::INFINITY) / d.to_f64().unwrap_or(f64::INFINITY);
                 Value::complex(0, f)
             }
@@ -3416,7 +3416,7 @@ impl Value {
                     .map(|node| Self::from_ast_inner(node, vm, globals, src_enc));
                 Value::array_from_iter(iter)
             }
-            NodeKind::Const(box ConstInfo {
+            NodeKind::Const(ConstInfo {
                 toplevel,
                 parent,
                 prefix,
@@ -3465,8 +3465,8 @@ impl Value {
                 }
             }
             NodeKind::Range {
-                box start,
-                box end,
+                start: deref!(start),
+                end: deref!(end),
                 exclude_end,
                 ..
             } => {
@@ -3491,7 +3491,7 @@ impl Value {
                 }
                 Value::hash(map)
             }
-            NodeKind::UnOp(crate::ast::UnOp::Neg, box inner) => {
+            NodeKind::UnOp(crate::ast::UnOp::Neg, deref!(inner)) => {
                 let v = Self::from_ast_inner(inner, vm, globals, src_enc);
                 match v.unpack() {
                     RV::Float(f) => Value::float(-f),
@@ -3503,11 +3503,11 @@ impl Value {
                     ),
                 }
             }
-            NodeKind::BinOp(crate::ast::BinOp::Div, box lhs, box rhs) => {
+            NodeKind::BinOp(crate::ast::BinOp::Div, deref!(lhs), deref!(rhs)) => {
                 // CRuby's `p` outputs rationals as `(num/den)`, which parses as BinOp(Div).
                 match (&lhs.kind, &rhs.kind) {
                     (NodeKind::Integer(n), NodeKind::Integer(d)) => Value::rational(*n, *d),
-                    (NodeKind::UnOp(crate::ast::UnOp::Neg, box inner), NodeKind::Integer(d)) => {
+                    (NodeKind::UnOp(crate::ast::UnOp::Neg, deref!(inner)), NodeKind::Integer(d)) => {
                         if let NodeKind::Integer(n) = &inner.kind {
                             Value::rational(-n, *d)
                         } else {
@@ -3529,7 +3529,7 @@ impl Value {
                     }
                 }
             }
-            NodeKind::BinOp(crate::ast::BinOp::Add, box lhs, box rhs) => {
+            NodeKind::BinOp(crate::ast::BinOp::Add, deref!(lhs), deref!(rhs)) => {
                 let lhs = Self::from_ast_inner(lhs, vm, globals, src_enc);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
                     Value::complex(Real::try_from(globals, lhs).unwrap(), im.clone())
@@ -3537,7 +3537,7 @@ impl Value {
                     unreachable!()
                 }
             }
-            NodeKind::BinOp(crate::ast::BinOp::Sub, box lhs, box rhs) => {
+            NodeKind::BinOp(crate::ast::BinOp::Sub, deref!(lhs), deref!(rhs)) => {
                 let lhs = Self::from_ast_inner(lhs, vm, globals, src_enc);
                 if let NodeKind::Imaginary(im) = &rhs.kind {
                     Value::complex(
@@ -3563,8 +3563,8 @@ impl Value {
                 NReal::Integer(i) => Value::complex(0, *i),
                 NReal::Bignum(b) => Value::complex(0, b.clone()),
             },
-            NodeKind::Rational(box (n, d)) => Value::rational(n.clone(), d.clone()),
-            NodeKind::RImaginary(box (n, d)) => {
+            NodeKind::Rational(deref!((n, d))) => Value::rational(n.clone(), d.clone()),
+            NodeKind::RImaginary(deref!((n, d))) => {
                 let f = n.to_f64().unwrap_or(f64::INFINITY) / d.to_f64().unwrap_or(f64::INFINITY);
                 Value::complex(0, f)
             }
@@ -3582,8 +3582,8 @@ impl Value {
                 Value::array_from_iter(iter)
             }
             NodeKind::Range {
-                box start,
-                box end,
+                start: deref!(start),
+                end: deref!(end),
                 exclude_end,
                 ..
             } => {

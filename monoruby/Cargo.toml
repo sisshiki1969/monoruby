@@ -131,22 +131,14 @@ encoding_rs = "0.8"
 smallvec = { git = "https://github.com/sisshiki1969/rust-smallvec.git", features = [
   "const_generics",
 ] }
-escape_string = "0.1.2"
 hex = "0.4.3"
-rand = "0.9.1"
-regex = "1.12.3"
 libc = "0.2.186"
 getrandom = "0.3.3"
-rand_mt = { version = "5.0.0", features = ["rand-traits"] }
 bitvec = "1.0.1"
-ansi_term = "0.12.1"
 dirs = "6.0.0"
-html-escape = "0.2.13"
 unicode-general-category = "1.0.0"
 unicode-normalization = "0.1.25"
 unicode-segmentation = "1.13.2"
-signal-hook = "0.4.4"
-divrem = "1.0.0"
 libffi = "5.1.0"
 # Digest builtins (`builtins/digest.rs`) — used on every platform, so these
 # must stay in the cross-platform `[dependencies]`, not a target block.

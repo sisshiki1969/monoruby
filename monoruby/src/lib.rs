@@ -1,4 +1,4 @@
-#![feature(box_patterns)]
+#![feature(deref_patterns)]
 #![allow(clippy::too_many_arguments)]
 #![feature(iter_next_chunk)]
 #![feature(step_trait)]

@@ -2417,7 +2417,7 @@ impl Store {
     ) -> Result<CompileInfo> {
         let BlockInfo {
             params,
-            box body,
+            body: deref!(body),
             loc,
             ..
         } = info;
@@ -2477,7 +2477,7 @@ impl Store {
                     post_num += 1;
                     flatten_destruct(&entries, ExpandSrc::Surface(src), &mut expand, &mut destruct_args);
                 }
-                ParamKind::Optional(name, box initializer) => {
+                ParamKind::Optional(name, deref!(initializer)) => {
                     let local = BcLocal(args_names.len() as u16);
                     args_names.push(Some(IdentId::get_id_from_string(name)));
                     optional_num += 1;
