@@ -19,6 +19,45 @@ pub(crate) const ARRAY_SHARE_MIN: usize = 16;
 /// where the view's `ptr` / `len` overlay the spilled buffer's fields.
 pub(crate) const ARRAY_SHARED_TAG: usize = isize::MAX as usize;
 
+/// The header flag bit (bit 5 of the low byte at `RVALUE_OFFSET_FLAG`,
+/// beside FROZEN) saying every element of an Array is a Fixnum. Sharing
+/// the byte with FROZEN lets the JIT's `a[i] = v` test both in one
+/// instruction.
+///
+/// Set means "all Fixnum"; unset means *unknown*. Every mutable access to
+/// the payload (`Value::as_array_inner_mut`, which `Array`'s `DerefMut`
+/// and inherent mutators go through) clears it, and only a few stores
+/// that see a Fixnum put it back (`Array::push`, `set_index`, …). So a
+/// mutation path that knows nothing of the bit costs precision, never
+/// soundness. `RValue::scan_array_elems_fixnum` recovers it. Copies made
+/// through `Header::newborn` keep it (`NEWBORN_FLAG_MASK`).
+pub(crate) const ARRAY_ELEMS_FIXNUM: u8 = 0b10_0000;
+
+/// Moves whenever an `ARRAY_ELEMS_FIXNUM` bit that was set is cleared, by
+/// Rust or by JIT code. Process-wide, so it can only move too often.
+static ELEMS_KIND_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// See [`ELEMS_KIND_EPOCH`].
+// Read by the safepoint poll once the JIT relies on the bit.
+#[allow(dead_code)]
+pub(crate) fn elems_kind_epoch() -> u64 {
+    ELEMS_KIND_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The address JIT code increments when it clears a set bit.
+pub(crate) fn elems_kind_epoch_addr() -> u64 {
+    ELEMS_KIND_EPOCH.as_ptr() as u64
+}
+
+#[cold]
+pub(super) fn bump_elems_kind_epoch() {
+    // Not a locked read-modify-write: the interpreter's threads only get
+    // here holding the GVL, and a lost update between two interpreter
+    // instances still moves the counter, which is all a reader compares.
+    let e = ELEMS_KIND_EPOCH.load(std::sync::atomic::Ordering::Relaxed);
+    ELEMS_KIND_EPOCH.store(e.wrapping_add(1), std::sync::atomic::Ordering::Relaxed);
+}
+
 #[monoruby_object(write_barrier)]
 pub struct Array(Value);
 
@@ -95,23 +134,67 @@ impl Array {
 // a barrier; removers (`pop`, `remove`, `truncate`, `clear`, `drain`) do
 // not. See `doc/gc.md`.
 impl Array {
+    /// Whether every element is known to be a Fixnum (`ARRAY_ELEMS_FIXNUM`).
+    pub(crate) fn elems_fixnum(&self) -> bool {
+        self.0.rvalue().array_elems_fixnum()
+    }
+
+    /// Record that every element is a Fixnum. The caller must know it.
+    pub(crate) fn set_elems_fixnum(&mut self) {
+        debug_assert!(self.iter().all(|v| v.is_fixnum()));
+        self.0.rvalue_mut().set_array_elems_fixnum();
+    }
+
+    /// Mutable access for an in-place permutation (`rotate!`, `reverse!`):
+    /// the elements stay the same, so `ARRAY_ELEMS_FIXNUM` stays too. No
+    /// write barrier either: a permutation adds no reference the array did
+    /// not already hold.
+    #[inline(always)]
+    pub(crate) fn permute(&mut self) -> &mut ArrayInner {
+        self.0.as_array_inner_mut_keeping_kind()
+    }
+
+    /// The payload for a store. When *keeps* (the store leaves every
+    /// element a Fixnum and the bit is already set) the bit stays as it
+    /// is; otherwise the access clears it (`Value::as_array_inner_mut`).
+    #[inline(always)]
+    fn inner_for_store(&mut self, keeps: bool) -> &mut ArrayInner {
+        if keeps {
+            self.0.as_array_inner_mut_keeping_kind()
+        } else {
+            self.0.as_array_inner_mut()
+        }
+    }
+
     pub fn push(&mut self, value: Value) {
-        self.0.as_array_inner_mut().push(value);
-        self.0.write_barrier(value);
+        self.0.as_array_inner_mut_keeping_kind().push(value);
+        if !value.is_fixnum() {
+            self.0.rvalue_mut().clear_array_elems_fixnum();
+            self.0.write_barrier(value);
+        }
     }
 
     pub fn insert(&mut self, index: usize, element: Value) {
-        self.0.as_array_inner_mut().insert(index, element);
-        self.0.write_barrier(element);
+        self.0.as_array_inner_mut_keeping_kind().insert(index, element);
+        if !element.is_fixnum() {
+            self.0.rvalue_mut().clear_array_elems_fixnum();
+            self.0.write_barrier(element);
+        }
     }
 
     pub fn fill(&mut self, value: Value) {
         self.0.as_array_inner_mut().fill(value);
+        // Every element is now *value*.
+        if value.is_fixnum() {
+            self.0.rvalue_mut().set_array_elems_fixnum();
+        }
         self.0.write_barrier(value);
     }
 
     pub fn resize(&mut self, new_len: usize, value: Value) {
-        self.0.as_array_inner_mut().resize(new_len, value);
+        // Shrinking keeps a set bit whatever *value* is.
+        let keeps = self.elems_fixnum() && (new_len <= self.len() || value.is_fixnum());
+        self.inner_for_store(keeps).resize(new_len, value);
         self.0.write_barrier(value);
     }
 
@@ -136,13 +219,20 @@ impl Array {
     }
 
     pub(crate) fn set_index(&mut self, idx: i64, src: Value) -> Result<Value> {
-        let r = self.0.as_array_inner_mut().set_index(idx, src)?;
+        // Storing past the end pads with nil.
+        let keeps = self.elems_fixnum() && src.is_fixnum() && idx <= self.len() as i64;
+        let r = self.inner_for_store(keeps).set_index(idx, src)?;
         self.0.write_barrier(src);
         Ok(r)
     }
 
     pub(crate) fn set_index2(&mut self, index: usize, length: usize, val: Value) -> Result<Value> {
-        let r = self.0.as_array_inner_mut().set_index2(index, length, val)?;
+        // `a[i, n] = ary` splices `ary`'s elements, anything else is one
+        // element; starting past the end pads with nil.
+        let keeps = self.elems_fixnum()
+            && index <= self.len()
+            && (val.is_fixnum() || val.try_array_ty().is_some_and(|a| a.elems_fixnum()));
+        let r = self.inner_for_store(keeps).set_index2(index, length, val)?;
         self.0.write_barrier(val);
         Ok(r)
     }
@@ -801,5 +891,72 @@ mod shared_view_tests {
         assert_eq!(other[0], Value::integer(5));
         assert_eq!(root.as_array_inner()[5], Value::integer(5));
         assert_eq!(root.as_array_inner().len(), 40);
+    }
+}
+
+#[cfg(test)]
+mod elems_kind_tests {
+    use super::*;
+
+    fn fix(n: i64) -> Value {
+        Value::integer(n)
+    }
+
+    /// `ARRAY_ELEMS_FIXNUM` starts set on an empty array, survives Fixnum
+    /// stores, and is cleared (moving the epoch) by anything else.
+    #[test]
+    fn stores_keep_or_clear_the_bit() {
+        let mut a = Array::new_empty();
+        assert!(a.elems_fixnum());
+        a.push(fix(1));
+        a.insert(0, fix(0));
+        a.set_index(1, fix(5)).unwrap();
+        a.resize(4, fix(7));
+        assert!(a.elems_fixnum());
+        assert_eq!(&a[..], &[fix(0), fix(5), fix(7), fix(7)]);
+
+        let epoch = elems_kind_epoch();
+        a.push(Value::nil());
+        assert!(!a.elems_fixnum());
+        assert_ne!(epoch, elems_kind_epoch());
+
+        // A store past the end pads with nil.
+        let mut b = Array::new_empty();
+        b.set_index(2, fix(1)).unwrap();
+        assert!(!b.elems_fixnum());
+
+        // Shrinking keeps it whatever the fill value is.
+        let mut c = Array::new_empty();
+        c.push(fix(1));
+        c.push(fix(2));
+        c.resize(1, Value::nil());
+        assert!(c.elems_fixnum());
+
+        // `fill` with a Fixnum makes it true again.
+        let mut d = Array::new_from_vec(vec![Value::nil(), Value::bool(true)]);
+        assert!(!d.elems_fixnum());
+        d.fill(fix(3));
+        assert!(d.elems_fixnum());
+    }
+
+    /// Any other mutable access clears it; a scan recovers it.
+    #[test]
+    fn mutable_access_clears_and_scan_recovers() {
+        let mut a = Array::new_empty();
+        a.push(fix(2));
+        a.push(fix(1));
+        a.sort_unstable_by_key(|v| v.id());
+        assert!(!a.elems_fixnum());
+        assert!(a.0.rvalue_mut().scan_array_elems_fixnum());
+        assert!(a.elems_fixnum());
+
+        // A permutation keeps it.
+        a.permute().rotate_left(1);
+        a.permute().reverse();
+        assert!(a.elems_fixnum());
+
+        let mut b = Array::new_from_vec(vec![fix(1), Value::nil()]);
+        assert!(!b.0.rvalue_mut().scan_array_elems_fixnum());
+        assert!(!b.elems_fixnum());
     }
 }

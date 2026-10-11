@@ -3319,6 +3319,7 @@ a3921c92237d852a5bc1ad370ba61b79	["Enumerator::Yielder", true]	y = nil\n        
 a3a980b1cd62d4aed339050d922dd977	[["foo.rb", nil], [1, nil, nil]]	__a = [];__a << (l = eval("caller_locations(0)[0]", nil, "foo.rb"); [l.path, l.a
 a3baab6cd54895307ab33a2e43c7a755	true	rng = Random.new(42)\n        a = rng.rand(100)\n        a.is_a?(Integer)
 a3c1f3715d0c4e66afd79ece55a249ad	[1, "c", Errno::EEXIST, [ArgumentError, "invalid access mode rx"], "invalid access mode ax", "invalid access mode fake", [ArgumentError, "wrong number of arguments (given 4, expected 1..3)"]]	(f="/tmp/mono_x_#{Process.pid}"; a=File.open(f, "wx") { |x| x.write("c") }; b=Fi
+a3e971295dbef5a53a2c974802163439	[[0, 1, 2, 3, 1], [0, 1, 2, 3, 4, 5, 6, 7, 8, 1], [0, 1, 1, 3, 4, 5], [0, 1, 2, 3, "s"], [0, 1, 2, 3, 4, 5, 6, 7, 8, "s"], [0, "s", "s", 3, 4, 5], [0, 1, 2, 3, nil], [0, 1, 2, 3, 4, 5, 6, 7, 8, nil], [0, nil, nil, 3, 4, 5], [0, 1, 2, 3, [1]], [0, 1, 2, 3, 4, 5, 6, 7, 8, [1]], [0, [1], [1], 3, 4, 5]]	r = []\n        [1, "s", nil, [1]].each do |v|\n          a = []\n        
 a3ee8370b62260dbe97cbc7ed605dd03	"missing keyword: :x"	def msg; yield; "no error"; rescue ArgumentError => e; e.message; end; def m(x:,
 a3fbe69a6d5dbf4f950d529b546578ff	[true, true]	def bar(x); x * 2; end\n        m = method(:bar)\n        loc = m.source_
 a40cda8b2c175e21feb1879eeb9ab44f	[]	def m\n              "foofoo" =~ /(?<matched>foo)/\n              loc
@@ -3799,6 +3800,7 @@ ba33ae227745c6540c696d6d1939ee32	Complex	8.0.fdiv(Complex(2, 1)).class
 ba39d4e07d48704cbbd5237bda1f2e52	3	class C\n          def f(a = ($x = 3)); self; end\n        end\n        C.
 ba3e73d62c5db2b4428bbeab1207b07f	[true, false, true]	# frozen_string_literal: true\n        a = 'abc'.freeze\n        [a.froze
 ba4b2a427a6ae2a8c8e93903224a4e27	[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, true, :lexical, :lexical, :lexical, :lexical, :lexical, :lexical, :lexical, :lexical, :lexical, :lexical]	$r = []\n        # Constants stored directly in the singleton class.\n   
+ba4be5bfd96fa516a737375802201b34	[["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], [:x, 0, 1, 2, 3, 4], [0, 1, 2, 3, 4, "y"], ["z", "z", "z", "z"], [0, 1, 2, nil, nil, nil, 1]]	a = []\n        10.times { |i| a << i }\n        a.map! { |x| x.to_s }\n  
 ba4f1d7bb4ae928b997cbb3df7f887d9	nil	m = Module.new\n            m.name\n            
 ba4ff971390140cc452d6a37019cd25e	["hello", "hellohellohellohellohellohellohellohellohellohello"]	class Foo\n          def initialize(data)\n            @key = data\n      
 ba657172c9c846fc29d3c12c19422d81	3	m = Mutex.new\n            cv = ConditionVariable.new\n            wo
@@ -4403,6 +4405,7 @@ d6b1e91ca6f365857969484299ed0f51	nil	/(?<z>foo)/ =~ "nope"
 d6b954fc5289ea6d95ff086bc292725e	[1, 2, 3]	class A < Array; end\nA[1, 2, 3]
 d6bfe4296b93f2e640133c89a4ab8e47	false	def g; proc{ 1 }; end; g == g
 d6c0eb29e576b66ef1234e2d00a6f0b7	[[1, 0], [2, 1]]	r = []; [1, 2].each.with_index(nil) { |v, i| r << [v, i] }; r
+d6dbc27e8f53e6225c75180a0dc5515c	[[0, 1, 2, 3, 4, 5, 1, 1], [0, 1, 2], [0, 1, 2, 3, 4, 5, "s", "s"], [0, "s", 2], [0, 1, 2, 3, 4, 5, 2.5, 2.5], [0, 2.5, 2], [0, 1, 2, 3, 4, 5, nil, nil], [0, nil, 2], [0, 1, 2, 3, 4, 5, :sym, :sym], [0, :sym, 2], [0, 1, 2, 3, 4, 5, 3, 3], [0, 3, 2]]	def st(a, i, v) = a[i] = v\n        r = []\n        [1, "s", 2.5, nil, :s
 d6f0bdbc406695c7ec64d5b4ebc4b2ea	[["cd", "ab\\xC3\\xA4", "\\xE2\\x82\\xAC ef", 4, 6, [4, 6], "ASCII-8BIT", "ASCII-8BIT"], [3, 4], 10, 12, nil, true, true, true, false, true, 4, 10, nil, nil, nil, 10, 6, [6, 7], 10, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, Encoding::CompatibilityError, nil, ["a", nil, ["a", nil], ["a", nil]], "cd!", 8, "ASCII-8BIT", [1, 3]]	t = ->(&blk) { begin; blk.call; rescue => e; e.class; end }\n        b =
 d6fd88af713f62b2a7bf0032d40dad05	6	def inner(&)\n          yield 1, 2, 3\n        end\n\n        def middle(&)
 d6fe60605dab5e23cdf5c31a576cf702	[0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, 21, 21, 22, 22, 23, 23, 24, 24, 25, 25, 26, 26, 27, 27, 28, 28, 29, 29, 30, 30, 31, 31, 32, 32, 33, 33, 34, 34, 35, 35, 36, 36, 37, 37, 38, 38, 39, 39, 40, 40, 41, 41, 42, 42, 43, 43, 44, 44, 45, 45, 46, 46, 47, 47, 48, 48, 49, 49, 50, 50, 51, 51, 52, 52, 53, 53, 54, 54, 55, 55, 56, 56, 57, 57, 58, 58, 59, 59, 60, 60, 61, 61, 62, 62, 63, 63, 64, 64, 65, 65, 66, 66, 67, 67, 68, 68, 69, 69, 70, 4611686018427387904, 4611686018427387905, 71, 72, 72, 73, 73, 74, 74, 75, 75, 76, 76, 77, 77, 78, 78, 79, 79, 80]	class P\n          def initialize(x) = (@a = x; @b = x + 1)\n          at

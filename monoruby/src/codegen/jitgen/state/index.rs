@@ -10,9 +10,27 @@
 //!
 
 use super::*;
-use crate::codegen::jitgen::asmir::ArrayIndexKind;
+use crate::codegen::jitgen::asmir::{ArrayIndexKind, StoredKind};
 
 impl AbstractFrame {
+    /// What a store of *slot* into an Array does to the Array's
+    /// `ARRAY_ELEMS_FIXNUM` bit (see `StoredKind`).
+    fn stored_kind(&self, slot: SlotId) -> StoredKind {
+        if self.is_fixnum(slot) {
+            return StoredKind::Fixnum;
+        }
+        match self.mode(slot) {
+            LinkMode::F(_) | LinkMode::Sf(_, SfGuarded::Float) => StoredKind::NonFixnum,
+            // `is_fixnum` above took the Fixnum constants.
+            LinkMode::C(_) => StoredKind::NonFixnum,
+            _ => match self.guarded(slot) {
+                Guarded::Float => StoredKind::NonFixnum,
+                Guarded::Class(c) if c != INTEGER_CLASS => StoredKind::NonFixnum,
+                _ => StoredKind::Unknown,
+            },
+        }
+    }
+
 
 pub(crate) fn array_integer_index(
         &mut self,
@@ -55,6 +73,7 @@ pub(crate) fn array_integer_index_assign(
         idx: SlotId,
     ) {
         self.load_array_ty(ir, store, base, GP::Rdi);
+        let src_kind = self.stored_kind(src);
         if let Some(idx) = self.is_u16(idx) {
             self.load(ir, src, GP::Rdx);
             let using_fpr = self.get_using_fpr(ir);
@@ -65,6 +84,7 @@ pub(crate) fn array_integer_index_assign(
                 kind: ArrayIndexKind::U16(idx),
                 using_fpr,
                 error,
+                src_kind,
             });
         } else {
             self.load_fixnum(ir, idx, GP::Rsi);
@@ -77,6 +97,7 @@ pub(crate) fn array_integer_index_assign(
                 kind: ArrayIndexKind::Fixnum,
                 using_fpr,
                 error,
+                src_kind,
             });
         }
     }

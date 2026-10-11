@@ -56,6 +56,15 @@ pub(crate) enum ArrayIndexKind {
     Fixnum,
 }
 
+/// What the JIT knows about a value it stores into an Array, i.e. whether
+/// the store can break the Array's `ARRAY_ELEMS_FIXNUM` bit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum StoredKind {
+    Fixnum,
+    NonFixnum,
+    Unknown,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct AsmEvict(usize);
 
@@ -2640,6 +2649,9 @@ pub(super) enum AsmInst {
         kind: ArrayIndexKind,
         using_fpr: UsingFpr,
         error: AsmError,
+        /// Whether the stored value can clear the array's
+        /// `ARRAY_ELEMS_FIXNUM` bit.
+        src_kind: StoredKind,
     },
     /// `dst <- [base + disp]`: load a field of a heap object into a GP register.
     /// A typed replacement for the `ir.inline(|gen| gen.emit_*())` escape hatch
