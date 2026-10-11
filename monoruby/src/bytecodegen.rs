@@ -885,7 +885,7 @@ impl<'a> BytecodeGen<'a> {
             let local = BcLocal((kw_reg + id) as u16).into();
             let next = self.new_label();
             self.emit_check_local(local, next);
-            if let Some(box init) = initializer {
+            if let Some(deref!(init)) = initializer {
                 self.gen_store_expr(local, init)?;
             } else {
                 self.emit_nil(local);
@@ -941,7 +941,7 @@ impl<'a> BytecodeGen<'a> {
                     // def foo; end
                     return Some(ISeqHint::ConstReturn(Immediate::nil()));
                 }
-                NodeKind::Return(box ret) if !return_escapes => {
+                NodeKind::Return(deref!(ret)) if !return_escapes => {
                     // def foo; return expr; end
                     &ret.kind
                 }
@@ -1973,7 +1973,7 @@ impl<'a> BytecodeGen<'a> {
 
     fn eval_lvalue(&mut self, lhs: &Node) -> Result<(LvalueKind, bool)> {
         let lhs = match &lhs.kind {
-            NodeKind::Const(box ConstInfo {
+            NodeKind::Const(ConstInfo {
                 toplevel,
                 name,
                 parent,
@@ -1981,7 +1981,7 @@ impl<'a> BytecodeGen<'a> {
             }) => {
                 let name = IdentId::get_id(name);
                 let prefix = prefix.iter().map(|s| IdentId::get_id(s)).collect();
-                let parent = if let Some(box parent) = parent {
+                let parent = if let Some(deref!(parent)) = parent {
                     Some(self.push_expr(parent.clone())?.into())
                 } else {
                     None
@@ -2026,7 +2026,7 @@ impl<'a> BytecodeGen<'a> {
                 .into();
                 LvalueKind::DynamicVar { outer, dst }
             }
-            NodeKind::Index { box base, index } => {
+            NodeKind::Index { base: deref!(base), index } => {
                 if index.iter().any(|i| i.is_splat()) {
                     // `a[*idx] = v` / `a[i, *idx, j] = v`: the index list
                     // expands at runtime, so lower it like a `[]=` call whose
@@ -2072,7 +2072,7 @@ impl<'a> BytecodeGen<'a> {
                 }
             }
             NodeKind::MethodCall {
-                box receiver,
+                receiver: deref!(receiver),
                 method,
                 arglist,
                 safe_nav,
@@ -2234,7 +2234,7 @@ impl<'a> BytecodeGen<'a> {
         let mut splat_pos = vec![];
         let len = args.len();
         for (i, arg) in args.into_iter().enumerate() {
-            if let NodeKind::Splat(box expr) = arg.kind {
+            if let NodeKind::Splat(deref!(expr)) = arg.kind {
                 let loc = arg.loc;
                 if matches!(expr.kind, NodeKind::Array(..)) {
                     self.push_expr(expr)?;

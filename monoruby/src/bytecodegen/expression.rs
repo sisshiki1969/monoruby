@@ -64,7 +64,7 @@ impl<'a> BytecodeGen<'a> {
     pub(super) fn push_check_expr(&mut self, expr: Node) -> Result<BcTemp> {
         let ret = self.sp();
         match expr.kind {
-            NodeKind::Const(box ConstInfo {
+            NodeKind::Const(ConstInfo {
                 toplevel,
                 name,
                 parent,
@@ -74,7 +74,7 @@ impl<'a> BytecodeGen<'a> {
                 let dst = self.push().into();
                 //self.gen_store_expr(dst, expr)?;
                 let loc = expr.loc;
-                let base: Option<BcReg> = if let Some(box parent) = parent {
+                let base: Option<BcReg> = if let Some(deref!(parent)) = parent {
                     let base = self.gen_temp_expr(parent)?;
                     Some(base)
                 } else {
@@ -145,8 +145,8 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::Bignum(bigint) => self.emit_bigint(dst, bigint),
             NodeKind::Float(f) => self.emit_float(dst, f),
             NodeKind::Imaginary(r) => self.emit_imaginary(dst, r.into()),
-            NodeKind::Rational(box (n, d)) => self.emit_rational(dst, n, d),
-            NodeKind::RImaginary(box (n, d)) => self.emit_rimaginary(dst, &n, &d),
+            NodeKind::Rational(deref!((n, d))) => self.emit_rational(dst, n, d),
+            NodeKind::RImaginary(deref!((n, d))) => self.emit_rimaginary(dst, &n, &d),
             NodeKind::String(s) => self.emit_string(dst, s, loc),
             NodeKind::Bytes(b) => self.emit_bytes(dst, b, loc),
             NodeKind::EncodedString(b, enc) => self.emit_encoded_string(dst, b, enc, loc),
@@ -162,14 +162,14 @@ impl<'a> BytecodeGen<'a> {
                 self.emit_literal(dst, val);
             }
             NodeKind::Range {
-                box start,
-                box end,
+                start: deref!(start),
+                end: deref!(end),
                 exclude_end,
                 is_const: false,
             } => self.gen_range(dst, start, end, exclude_end, loc)?,
             NodeKind::Lambda(info) => self.gen_lambda(dst, info, loc)?,
             NodeKind::Index {
-                box base,
+                base: deref!(base),
                 mut index,
             } => {
                 // `self[i]` uses the fast `Index` opcode like any other
@@ -192,13 +192,13 @@ impl<'a> BytecodeGen<'a> {
                     )?;
                 };
             }
-            NodeKind::UnOp(op, box rhs) => match op {
+            NodeKind::UnOp(op, deref!(rhs)) => match op {
                 UnOp::Neg => {
                     match rhs.kind {
                         NodeKind::Integer(i) => self.emit_integer(dst, -i),
                         NodeKind::Imaginary(r) => self.emit_imaginary(dst, -Real::from(r)),
                         NodeKind::Float(f) => self.emit_float(dst, -f),
-                        NodeKind::Rational(box (n, d)) => self.emit_rational(dst, -n, d),
+                        NodeKind::Rational(deref!((n, d))) => self.emit_rational(dst, -n, d),
                         _ => self.emit_unary_op(UnOpK::Neg, dst, rhs, loc)?,
                     };
                 }
@@ -207,14 +207,14 @@ impl<'a> BytecodeGen<'a> {
                         NodeKind::Integer(i) => self.emit_integer(dst, i),
                         NodeKind::Imaginary(r) => self.emit_imaginary(dst, r.into()),
                         NodeKind::Float(f) => self.emit_float(dst, f),
-                        NodeKind::Rational(box (n, d)) => self.emit_rational(dst, n, d),
+                        NodeKind::Rational(deref!((n, d))) => self.emit_rational(dst, n, d),
                         _ => self.emit_unary_op(UnOpK::Pos, dst, rhs, loc)?,
                     };
                 }
                 UnOp::Not => self.emit_unary_op(UnOpK::Not, dst, rhs, loc)?,
                 UnOp::BitNot => self.emit_unary_op(UnOpK::BitNot, dst, rhs, loc)?,
             },
-            NodeKind::BinOp(op, box lhs, box rhs) => {
+            NodeKind::BinOp(op, deref!(lhs), deref!(rhs)) => {
                 self.gen_binop(op, lhs, rhs, UseMode2::Store(dst), loc)?;
             }
             NodeKind::MulAssign(mut mlhs, mut mrhs) => {
@@ -232,7 +232,7 @@ impl<'a> BytecodeGen<'a> {
                         // `recv&.attr = rhs` in value context (see the
                         // `gen_expr` twin for the short-circuit rationale).
                         let NodeKind::MethodCall {
-                            box receiver,
+                            receiver: deref!(receiver),
                             method,
                             ..
                         } = lhs.kind
@@ -291,13 +291,13 @@ impl<'a> BytecodeGen<'a> {
                     self.emit(BytecodeInst::BlockArg(dst, outer, slot), loc);
                 }
             }
-            NodeKind::Const(box ConstInfo {
+            NodeKind::Const(ConstInfo {
                 toplevel,
                 name,
                 parent,
                 prefix,
             }) => {
-                let base: Option<BcReg> = if let Some(box parent) = parent {
+                let base: Option<BcReg> = if let Some(deref!(parent)) = parent {
                     let base = self.gen_temp_expr(parent)?;
                     Some(base)
                 } else {
@@ -334,9 +334,9 @@ impl<'a> BytecodeGen<'a> {
                 );
             }
             NodeKind::MethodCall {
-                box receiver,
+                receiver: deref!(receiver),
                 method,
-                box arglist,
+                arglist: deref!(arglist),
                 safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
@@ -352,7 +352,7 @@ impl<'a> BytecodeGen<'a> {
             }
             NodeKind::FuncCall {
                 method,
-                box arglist,
+                arglist: deref!(arglist),
                 safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
@@ -383,10 +383,10 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::Super(arglist) => {
                 self.gen_super(arglist.map(|arglist| *arglist), UseMode2::Store(dst), loc)?;
             }
-            NodeKind::Yield(box arglist) => {
+            NodeKind::Yield(deref!(arglist)) => {
                 self.gen_yield(arglist, UseMode2::Store(dst), loc)?;
             }
-            NodeKind::Return(box val) => {
+            NodeKind::Return(deref!(val)) => {
                 if self.return_escapes() {
                     return self.gen_method_return(val, UseMode2::Store(dst));
                 } else {
@@ -400,7 +400,7 @@ impl<'a> BytecodeGen<'a> {
                 base,
                 name,
                 superclass,
-                box info,
+                info: deref!(info),
                 is_module,
             } => {
                 let name = IdentId::get_id_from_string(name);
@@ -507,12 +507,12 @@ impl<'a> BytecodeGen<'a> {
                 let ret = self.push().into();
                 self.gen_store_expr(ret, expr)?;
             }
-            NodeKind::BinOp(op, box lhs, box rhs) => {
+            NodeKind::BinOp(op, deref!(lhs), deref!(rhs)) => {
                 self.gen_binop(op, lhs, rhs, use_mode, loc)?;
                 return Ok(());
             }
             NodeKind::Index {
-                box base,
+                base: deref!(base),
                 mut index,
             } => {
                 // `self[i]` uses the fast `Index` opcode; a literal `self` base
@@ -534,7 +534,7 @@ impl<'a> BytecodeGen<'a> {
                     return Ok(());
                 };
             }
-            NodeKind::AssignOp(op, box lhs, box rhs) => {
+            NodeKind::AssignOp(op, deref!(lhs), deref!(rhs)) => {
                 if let Some(local) = self.is_assign_local(&lhs) {
                     self.gen_binop(op, lhs, rhs, UseMode2::Store(local.into()), loc)?;
                     self.handle_mode(use_mode, local.into())?;
@@ -580,7 +580,7 @@ impl<'a> BytecodeGen<'a> {
                 // to re-read, so it stays on the simpler path below.
                 if matches!(
                     &lhs.kind,
-                    NodeKind::Const(box ConstInfo {
+                    NodeKind::Const(ConstInfo {
                         parent: Some(_),
                         ..
                     })
@@ -630,7 +630,7 @@ impl<'a> BytecodeGen<'a> {
                                 && arglist.kw_args.is_empty())
                     {
                         let NodeKind::MethodCall {
-                            box receiver,
+                            receiver: deref!(receiver),
                             method,
                             ..
                         } = lhs.kind
@@ -712,9 +712,9 @@ impl<'a> BytecodeGen<'a> {
             }
 
             NodeKind::MethodCall {
-                box receiver,
+                receiver: deref!(receiver),
                 method,
-                box arglist,
+                arglist: deref!(arglist),
                 safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
@@ -730,7 +730,7 @@ impl<'a> BytecodeGen<'a> {
             }
             NodeKind::FuncCall {
                 method,
-                box arglist,
+                arglist: deref!(arglist),
                 safe_nav,
             } => {
                 let method = IdentId::get_id_from_string(method);
@@ -739,7 +739,7 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::Super(arglist) => {
                 return self.gen_super(arglist.map(|arglist| *arglist), use_mode, loc);
             }
-            NodeKind::Command(box expr) => {
+            NodeKind::Command(deref!(expr)) => {
                 let method = IdentId::get_id("`");
                 // A non-interpolated command literal (`` `cmd` `` / `%x{…}`)
                 // passes its command string to the `` ` `` method FROZEN,
@@ -780,9 +780,9 @@ impl<'a> BytecodeGen<'a> {
                 return self.gen_method_call(method, None, arglist, false, true, use_mode, loc);
             }
             NodeKind::If {
-                box cond,
-                box then_,
-                box else_,
+                cond: deref!(cond),
+                then_: deref!(then_),
+                else_: deref!(else_),
             } => {
                 let else_pos = self.new_label();
                 self.gen_opt_condbr(false, cond, else_pos)?;
@@ -807,8 +807,8 @@ impl<'a> BytecodeGen<'a> {
                 return Ok(());
             }
             NodeKind::While {
-                box cond,
-                box body,
+                cond: deref!(cond),
+                body: deref!(body),
                 cond_op,
                 postfix,
             } => {
@@ -824,8 +824,8 @@ impl<'a> BytecodeGen<'a> {
             }
             NodeKind::For {
                 param,
-                box iter,
-                box body,
+                iter: deref!(iter),
+                body: deref!(body),
             } => {
                 self.gen_for(param, iter, body, use_mode.use_val())?;
                 if use_mode.is_ret() {
@@ -836,11 +836,11 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::Case {
                 cond,
                 when_,
-                box else_,
+                else_: deref!(else_),
             } => {
                 return self.gen_case(cond, when_, else_, use_mode);
             }
-            NodeKind::Break(box val) => {
+            NodeKind::Break(deref!(val)) => {
                 let LoopInfo {
                     break_dest,
                     ret,
@@ -887,7 +887,7 @@ impl<'a> BytecodeGen<'a> {
                 }
                 return Ok(());
             }
-            NodeKind::Next(box val) => {
+            NodeKind::Next(deref!(val)) => {
                 let LoopInfo {
                     next_dest,
                     ensure_depth,
@@ -978,7 +978,7 @@ impl<'a> BytecodeGen<'a> {
                 self.emit(BytecodeInst::Retry(dest), loc);
                 return Ok(());
             }
-            NodeKind::Return(box val) => {
+            NodeKind::Return(deref!(val)) => {
                 if self.return_escapes() {
                     self.gen_method_return(val, use_mode)?;
                 } else {
@@ -989,20 +989,20 @@ impl<'a> BytecodeGen<'a> {
             }
             NodeKind::CompStmt(nodes) => return self.gen_comp_stmts(nodes, None, use_mode),
             NodeKind::Begin {
-                box body,
+                body: deref!(body),
                 rescue,
                 else_,
                 ensure,
             } => {
                 return self.gen_begin(body, rescue, else_, ensure, use_mode);
             }
-            NodeKind::MethodDef(name, box deferred) => {
+            NodeKind::MethodDef(name, deref!(deferred)) => {
                 let name = IdentId::get_id_from_string(name);
                 let block = self.lower_def_body(&deferred)?;
                 self.gen_method_def(name, block, use_mode, loc)?;
                 return Ok(());
             }
-            NodeKind::SingletonMethodDef(box obj, name, box deferred) => {
+            NodeKind::SingletonMethodDef(deref!(obj), name, deref!(deferred)) => {
                 self.gen_expr(obj, UseMode2::Push)?;
                 let name = IdentId::get_id_from_string(name);
                 let block = self.lower_def_body(&deferred)?;
@@ -1013,7 +1013,7 @@ impl<'a> BytecodeGen<'a> {
                 base,
                 name,
                 superclass,
-                box info,
+                info: deref!(info),
                 is_module,
             } => {
                 let name = IdentId::get_id_from_string(name);
@@ -1021,8 +1021,8 @@ impl<'a> BytecodeGen<'a> {
                 return Ok(());
             }
             NodeKind::SingletonClassDef {
-                box singleton,
-                box info,
+                singleton: deref!(singleton),
+                info: deref!(info),
             } => {
                 self.gen_singleton_class_def(singleton, info, use_mode, loc)?;
                 return Ok(());
@@ -1094,7 +1094,7 @@ impl<'a> BytecodeGen<'a> {
                 }
                 return Ok(());
             }
-            NodeKind::AliasMethod(box new, box old) => {
+            NodeKind::AliasMethod(deref!(new), deref!(old)) => {
                 if let (NodeKind::Symbol(new_name), NodeKind::Symbol(old_name)) =
                     (&new.kind, &old.kind)
                 {
@@ -1151,7 +1151,7 @@ impl<'a> BytecodeGen<'a> {
                 //}
                 //return Ok(());
             }
-            NodeKind::UndefMethod(box undef) => {
+            NodeKind::UndefMethod(deref!(undef)) => {
                 if let NodeKind::Symbol(name) = &undef.kind {
                     let temp = self.temp;
                     let undef = IdentId::get_id(name);
@@ -1177,7 +1177,7 @@ impl<'a> BytecodeGen<'a> {
                 }
                 self.push_nil();
             }
-            NodeKind::Defined(box node) => {
+            NodeKind::Defined(deref!(node)) => {
                 // `defined?` in a void (statement) context evaluates nothing:
                 // CRuby elides the whole expression, so the operand's
                 // receiver side effects never fire. In a value context the
@@ -2421,7 +2421,7 @@ impl<'a> BytecodeGen<'a> {
         loc: Loc,
     ) -> Result<()> {
         let old = self.temp;
-        let base = if let Some(box base) = base {
+        let base = if let Some(deref!(base)) = base {
             Some(self.push_expr(base)?.into())
         } else {
             None
@@ -2429,7 +2429,7 @@ impl<'a> BytecodeGen<'a> {
         let compile_info = Store::handle_args(info, vec![])?;
         let func_id = self.add_classdef(Some(name), compile_info, loc, false, is_module)?;
         let superclass = match superclass {
-            Some(box superclass) => Some(self.push_expr(superclass)?.into()),
+            Some(deref!(superclass)) => Some(self.push_expr(superclass)?.into()),
             None => None,
         };
         self.temp = old;

@@ -25,7 +25,7 @@ jobs:
           # toolchain the build actually uses is the pinned one anyway —
           # rustup auto-fetches it from rust-toolchain.toml — so install
           # exactly that and nothing else.
-          toolchain: nightly-2026-08-18
+          toolchain: nightly-2026-09-27
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: taiki-e/install-action@nextest
 
@@ -102,7 +102,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           # Keep in sync with rust-toolchain.toml (see the amd64 job).
-          toolchain: nightly-2026-08-18
+          toolchain: nightly-2026-09-27
       - uses: Swatinem/rust-cache@v2
       # build.rs is host-Ruby independent, so this job needs no ruby.
       - run: cargo check -p monoruby --all-features
@@ -165,7 +165,7 @@ jobs:
           # toolchain the build actually uses is the pinned one anyway —
           # rustup auto-fetches it from rust-toolchain.toml — so install
           # exactly that and nothing else.
-          toolchain: nightly-2026-08-18
+          toolchain: nightly-2026-09-27
       - uses: taiki-e/install-action@nextest
 
       - name: Clone optcarrot

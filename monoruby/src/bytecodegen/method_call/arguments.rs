@@ -64,7 +64,7 @@ impl<'a> BytecodeGen<'a> {
             (None, Some(block))
         } else {
             let block_arg = self.sp().into();
-            let block_fid = if let Some(box block) = std::mem::take(&mut arglist.block) {
+            let block_fid = if let Some(deref!(block)) = std::mem::take(&mut arglist.block) {
                 self.block_arg(block, loc)?
             } else {
                 None
@@ -319,7 +319,7 @@ impl<'a> BytecodeGen<'a> {
                 if let Some(local) = self.refer_local(ident) {
                     return Ok((local, 1, vec![]));
                 }
-            } /*  else if let NodeKind::Splat(box node) = &arglist.args[0].kind {
+            } /*  else if let NodeKind::Splat(deref!(node)) = &arglist.args[0].kind {
             // in the case of "f(*a)"
             if let NodeKind::LocalVar(0, ident) = &node.kind {
             if let Some(local) = self.refer_local(ident) {
@@ -417,7 +417,7 @@ impl<'a> BytecodeGen<'a> {
             // reports `lambda? == true` and keeps strict arity; an ordinary
             // block stays block-style. (See core/proc/lambda_spec "preserved
             // when passing a Proc with & ...".)
-            NodeKind::Lambda(box block) => {
+            NodeKind::Lambda(deref!(block)) => {
                 return Ok(Some(if block.is_lambda {
                     self.handle_lambda(block)?
                 } else {

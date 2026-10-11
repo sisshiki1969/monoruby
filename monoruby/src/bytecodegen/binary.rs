@@ -126,19 +126,19 @@ impl<'a> BytecodeGen<'a> {
         cond: Node,
         else_pos: Label,
     ) -> Result<()> {
-        if let NodeKind::BinOp(BinOp::Cmp(kind), box lhs, box rhs) = cond.kind {
+        if let NodeKind::BinOp(BinOp::Cmp(kind), deref!(lhs), deref!(rhs)) = cond.kind {
             let loc = cond.loc;
             let cond = self.sp().into();
             self.gen_cmp(UseMode2::Push, kind, lhs, rhs, true, loc)?;
             self.pop();
             self.emit_condbr(cond, else_pos, jmp_if_true, true);
-        } else if let NodeKind::BinOp(BinOp::LAnd, box lhs, box rhs) = cond.kind {
+        } else if let NodeKind::BinOp(BinOp::LAnd, deref!(lhs), deref!(rhs)) = cond.kind {
             if jmp_if_true {
                 self.gen_opt_lor_condbr(jmp_if_true, lhs, rhs, else_pos)?;
             } else {
                 self.gen_opt_land_condbr(jmp_if_true, lhs, rhs, else_pos)?;
             }
-        } else if let NodeKind::BinOp(BinOp::LOr, box lhs, box rhs) = cond.kind {
+        } else if let NodeKind::BinOp(BinOp::LOr, deref!(lhs), deref!(rhs)) = cond.kind {
             if jmp_if_true {
                 self.gen_opt_land_condbr(jmp_if_true, lhs, rhs, else_pos)?;
             } else {

@@ -418,7 +418,7 @@ impl<'a> BytecodeGen<'a> {
                     self.level_down(n, level);
                 });
             }
-            NodeKind::Lambda(box BlockInfo { params, body, .. }) => {
+            NodeKind::Lambda(BlockInfo { params, body, .. }) => {
                 self.level_down(body, level + 1);
                 for p in params {
                     match &mut p.kind {
@@ -472,25 +472,25 @@ impl<'a> BytecodeGen<'a> {
             | NodeKind::Defined(n) => {
                 self.level_down(n, level);
             }
-            NodeKind::Const(box ConstInfo { parent, .. }) => {
+            NodeKind::Const(ConstInfo { parent, .. }) => {
                 if let Some(n) = parent {
                     self.level_down(n, level);
                 }
             }
-            NodeKind::BinOp(_, box n1, box n2)
-            | NodeKind::AssignOp(_, box n1, box n2)
+            NodeKind::BinOp(_, deref!(n1), deref!(n2))
+            | NodeKind::AssignOp(_, deref!(n1), deref!(n2))
             | NodeKind::While {
-                cond: box n1,
-                body: box n2,
+                cond: deref!(n1),
+                body: deref!(n2),
                 ..
             }
-            | NodeKind::AliasMethod(box n1, box n2) => {
+            | NodeKind::AliasMethod(deref!(n1), deref!(n2)) => {
                 self.level_down(n1, level);
                 self.level_down(n2, level);
             }
             NodeKind::Range {
-                start: box n1,
-                end: box n2,
+                start: deref!(n1),
+                end: deref!(n2),
                 ..
             } => {
                 if let Some(n1) = n1 {
@@ -500,7 +500,7 @@ impl<'a> BytecodeGen<'a> {
                     self.level_down(n2, level);
                 }
             }
-            NodeKind::UndefMethod(box n1) => {
+            NodeKind::UndefMethod(deref!(n1)) => {
                 self.level_down(n1, level);
             }
             NodeKind::If {
@@ -535,7 +535,7 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::For {
                 param,
                 iter,
-                box body,
+                body: deref!(body),
             } => {
                 for (outer, name) in param {
                     if level == *outer {

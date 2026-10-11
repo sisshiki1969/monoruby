@@ -50,7 +50,7 @@ you extracted that tree.
 ### 1. Install Rust
 
 **Only nightly Rust works.** monoruby uses several nightly-only language
-features (`box_patterns`, `iter_next_chunk`, `step_trait`,
+features (`deref_patterns`, `iter_next_chunk`, `step_trait`,
 `coverage_attribute`), so a stable toolchain fails to build.
 
 You do not have to select the channel by hand: `rust-toolchain.toml` pins the
@@ -61,7 +61,7 @@ checkout.
 ```toml
 # rust-toolchain.toml
 [toolchain]
-channel = "nightly-2026-08-18"
+channel = "nightly-2026-09-27"
 ```
 
 If you have no Rust at all yet, [install

@@ -177,7 +177,7 @@ impl NodeKind {
         match self {
             NodeKind::Ident(s) => Some(s),
             NodeKind::LocalVar(_, s) => Some(s),
-            NodeKind::Const(box ConstInfo {
+            NodeKind::Const(ConstInfo {
                 toplevel: false,
                 parent: None,
                 prefix,
@@ -504,7 +504,7 @@ impl Node {
         let s: &str = match &self.kind {
             NodeKind::Ident(s) => s,
             NodeKind::LocalVar(_, s) => s,
-            NodeKind::Const(box ConstInfo {
+            NodeKind::Const(ConstInfo {
                 toplevel: false,
                 parent: None,
                 prefix,

@@ -63,7 +63,7 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::MulAssign(lhs, rhs) => {
                 if lhs.len() == 1 && rhs.len() == 1 {
                     let lhs = lhs[0].clone();
-                    if let NodeKind::Index { base: box b, .. } = lhs.kind {
+                    if let NodeKind::Index { base: deref!(b), .. } = lhs.kind {
                         let name = IdentId::_INDEX_ASSIGN;
                         if top {
                             let body_start = self.new_label();
@@ -108,10 +108,10 @@ impl<'a> BytecodeGen<'a> {
                     self.check_defined(s, nil_label, ret, false)?;
                 }
             }
-            NodeKind::Splat(box n) | NodeKind::Begin { body: box n, .. } => {
+            NodeKind::Splat(deref!(n)) | NodeKind::Begin { body: deref!(n), .. } => {
                 self.check_defined(n, nil_label, ret, false)?
             }
-            NodeKind::UnOp(_, box n) => {
+            NodeKind::UnOp(_, deref!(n)) => {
                 // `defined?(not X)` / `defined?(!X)` / `defined?(-X)` parse
                 // the operator as a method call `X.op`. When the operand `X`
                 // is itself a method call, CRuby *evaluates* it (as the
@@ -155,7 +155,7 @@ impl<'a> BytecodeGen<'a> {
                     self.check_defined(n, nil_label, ret, false)?;
                 }
             }
-            NodeKind::BinOp(op, box l, box r) => {
+            NodeKind::BinOp(op, deref!(l), deref!(r)) => {
                 // `&&` / `||` (and `and`/`or`) are not method calls:
                 // CRuby `defined?(a && b)` is always "expression" and
                 // the operands are *not* checked. Keep the "expression"
@@ -246,7 +246,7 @@ impl<'a> BytecodeGen<'a> {
                 }
             }
             NodeKind::MethodCall {
-                receiver: box r,
+                receiver: deref!(r),
                 method,
                 arglist,
                 ..
@@ -286,7 +286,7 @@ impl<'a> BytecodeGen<'a> {
                 self.emit(BytecodeInst::DefinedYield { dst: ret }, node.loc);
             }
             NodeKind::Index {
-                base: box b,
+                base: deref!(b),
                 index: v,
             } => {
                 if top {
@@ -323,7 +323,7 @@ impl<'a> BytecodeGen<'a> {
                     self.check_defined(n, nil_label, ret, false)?;
                 }
             }
-            NodeKind::Const(box ConstInfo {
+            NodeKind::Const(ConstInfo {
                 toplevel,
                 parent,
                 prefix,
@@ -334,7 +334,7 @@ impl<'a> BytecodeGen<'a> {
                     .into_iter()
                     .map(IdentId::get_id_from_string)
                     .collect();
-                let base = if let Some(box parent) = parent {
+                let base = if let Some(deref!(parent)) = parent {
                     // Evaluate the parent expression; if it raises, defined? yields nil.
                     let body_start = self.new_label();
                     let body_end = self.new_label();
@@ -443,7 +443,7 @@ fn defined_str(node: &Node) -> &'static str {
         NodeKind::GlobalVar(..) => "global-variable",
         // CRuby uses a space (not a hyphen) for class variables.
         NodeKind::ClassVar(..) => "class variable",
-        NodeKind::Const(box ConstInfo { .. }) => "constant",
+        NodeKind::Const(ConstInfo { .. }) => "constant",
         // `target ||= value` / `&&=` desugar to
         // `BinOp(LOr/LAnd, target, MulAssign([target], [value]))`;
         // `defined?` reports these as "assignment". A plain `a || b`
@@ -463,7 +463,7 @@ fn defined_str(node: &Node) -> &'static str {
         | NodeKind::Ident(_)
         | NodeKind::Index { .. }
         | NodeKind::UnOp(..) => "method",
-        NodeKind::Begin { box body, .. } => defined_str(body),
+        NodeKind::Begin { body: deref!(body), .. } => defined_str(body),
         NodeKind::CompStmt(v) => match v.last() {
             Some(node) => defined_str(node),
             None => "nil",

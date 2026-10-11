@@ -491,17 +491,17 @@ impl<'a> BytecodeGen<'a> {
                 let op1 = self.slot_id(&val);
                 Bytecode::from(enc_wl(29, op1.0, name.get()))
             }
-            BytecodeInst::MethodCall(box callsite) => {
+            BytecodeInst::MethodCall(deref!(callsite)) => {
                 // 30, 31
                 let opcode = if callsite.is_simple() { 30 } else { 31 };
                 self.encode_call(opcode, callsite, bc_pos)?
             }
-            BytecodeInst::Super(box callsite) => {
+            BytecodeInst::Super(deref!(callsite)) => {
                 // 32, 33
                 let opcode = if callsite.is_simple() { 32 } else { 33 };
                 self.encode_call(opcode, callsite, bc_pos)?
             }
-            BytecodeInst::Yield(box callsite) => {
+            BytecodeInst::Yield(deref!(callsite)) => {
                 // 34, 35
                 let opcode = if callsite.is_simple() { 34 } else { 35 };
                 self.encode_call(opcode, callsite, bc_pos)?
@@ -580,7 +580,7 @@ impl<'a> BytecodeGen<'a> {
                     .new_callsite_map_entry(self.iseq_id, bc_pos, callid);
                 Bytecode::from_with_class2(enc_www(133, op1.0, op2.0, op3.0))
             }
-            BytecodeInst::Array(ret, box callsite) => {
+            BytecodeInst::Array(ret, deref!(callsite)) => {
                 // 39
                 let op1 = self.slot_id(&ret);
                 let callid = self.new_callsite(callsite, bc_pos)?;
