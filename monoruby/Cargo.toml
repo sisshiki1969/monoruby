@@ -79,7 +79,7 @@ shadow-placement = []
 # formula it replaces (verified via `shadow-placement` digests); the seam where
 # P4's loop-aware allocator swaps in. Default-off until the M1 A/B gate clears.
 phys-table = []
-emit-cfg = ["dump-bc", "dump-traceir"]
+emit-cfg = ["dump-bc", "dump-traceir", "dep:html-escape"]
 dump-require = []
 
 # Which C library each extension that carries one is built against.
@@ -136,6 +136,8 @@ libc = "0.2.186"
 getrandom = "0.3.3"
 bitvec = "1.0.1"
 dirs = "6.0.0"
+# Only the `emit-cfg` DOT dump escapes labels, so the crate is optional.
+html-escape = { version = "0.2.13", optional = true }
 unicode-general-category = "1.0.0"
 unicode-normalization = "0.1.25"
 unicode-segmentation = "1.13.2"
