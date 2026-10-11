@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dd3df7a2.js";
+            window.path_to_searchindex_js = "searchindex-d7482bfa.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -248,7 +248,7 @@ you extracted that tree.</p>
 <h2 id="building-from-source"><a class="header" href="#building-from-source">Building from source</a></h2>
 <h3 id="1-install-rust"><a class="header" href="#1-install-rust">1. Install Rust</a></h3>
 <p><strong>Only nightly Rust works.</strong> monoruby uses several nightly-only language
-features (<code>box_patterns</code>, <code>iter_next_chunk</code>, <code>step_trait</code>,
+features (<code>deref_patterns</code>, <code>iter_next_chunk</code>, <code>step_trait</code>,
 <code>coverage_attribute</code>), so a stable toolchain fails to build.</p>
 <p>You do not have to select the channel by hand: <code>rust-toolchain.toml</code> pins the
 exact nightly the project is developed and tested against, and <code>rustup</code>
@@ -256,7 +256,7 @@ installs and uses it automatically the first time you run <code>cargo</code> in 
 checkout.</p>
 <pre><code class="language-toml"># rust-toolchain.toml
 [toolchain]
-channel = "nightly-2026-08-18"
+channel = "nightly-2026-09-27"
 </code></pre>
 <p>If you have no Rust at all yet, <a href="https://www.rust-lang.org/tools/install">install
 rustup</a> first.</p>
