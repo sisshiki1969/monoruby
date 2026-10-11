@@ -1412,7 +1412,7 @@ impl Value {
 
     /// A new Array whose (empty, or all-Fixnum) payload carries
     /// `ARRAY_ELEMS_FIXNUM`.
-    fn array_elems_fixnum(inner: ArrayInner) -> Self {
+    pub(crate) fn array_elems_fixnum(inner: ArrayInner) -> Self {
         debug_assert!(inner.iter().all(|v| v.is_fixnum()));
         let mut v = Value::array(inner);
         v.rvalue_mut().set_array_elems_fixnum();

@@ -38,8 +38,7 @@ pub(crate) const ARRAY_ELEMS_FIXNUM: u8 = 0b10_0000;
 static ELEMS_KIND_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// See [`ELEMS_KIND_EPOCH`].
-// Read by the safepoint poll once the JIT relies on the bit.
-#[allow(dead_code)]
+// Read by the safepoint poll (`executor::execute_gc`).
 pub(crate) fn elems_kind_epoch() -> u64 {
     ELEMS_KIND_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -154,6 +153,14 @@ impl Array {
         self.0.as_array_inner_mut_keeping_kind()
     }
 
+    /// Mutable access that only removes elements (`delete_at`, `pop`,
+    /// `shift`): what is left was already there, so `ARRAY_ELEMS_FIXNUM`
+    /// stays, and nothing new needs a write barrier.
+    #[inline(always)]
+    pub(crate) fn shrink(&mut self) -> &mut ArrayInner {
+        self.0.as_array_inner_mut_keeping_kind()
+    }
+
     /// The payload for a store. When *keeps* (the store leaves every
     /// element a Fixnum and the bit is already set) the bit stays as it
     /// is; otherwise the access clears it (`Value::as_array_inner_mut`).
@@ -203,6 +210,16 @@ impl Array {
         self.0.write_barrier_bulk();
     }
 
+    /// `insert_many` of a slice, keeping a set `ARRAY_ELEMS_FIXNUM` when
+    /// every inserted value is a Fixnum (`Array#insert`).
+    pub fn insert_from_slice(&mut self, index: usize, vals: &[Value]) {
+        let keeps =
+            self.elems_fixnum() && index <= self.len() && vals.iter().all(|v| v.is_fixnum());
+        self.inner_for_store(keeps)
+            .insert_many(index, vals.iter().cloned());
+        self.0.write_barrier_bulk();
+    }
+
     pub fn extend(&mut self, iter: impl std::iter::IntoIterator<Item = Value>) {
         self.0.as_array_inner_mut().extend(iter);
         self.0.write_barrier_bulk();
@@ -229,9 +246,14 @@ impl Array {
     pub(crate) fn set_index2(&mut self, index: usize, length: usize, val: Value) -> Result<Value> {
         // `a[i, n] = ary` splices `ary`'s elements, anything else is one
         // element; starting past the end pads with nil.
+        // The spliced Array's elements are copied anyway: scanning them when
+        // its own bit is clear costs no more than that.
         let keeps = self.elems_fixnum()
             && index <= self.len()
-            && (val.is_fixnum() || val.try_array_ty().is_some_and(|a| a.elems_fixnum()));
+            && (val.is_fixnum()
+                || val
+                    .try_array_ty()
+                    .is_some_and(|a| a.elems_fixnum() || a.iter().all(|v| v.is_fixnum())));
         let r = self.inner_for_store(keeps).set_index2(index, length, val)?;
         self.0.write_barrier(val);
         Ok(r)

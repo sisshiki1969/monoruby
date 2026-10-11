@@ -115,7 +115,9 @@ impl<'a> JitContext<'a> {
                         Guarded::Fixnum => CachedClass::INTEGER,
                         Guarded::Float => CachedClass::FLOAT,
                         Guarded::Class(class) => CachedClass::from_class(class),
-                        Guarded::Value | Guarded::NilOr(_) => unreachable!(),
+                        Guarded::Value | Guarded::NilOr(_) | Guarded::FixnumArray => {
+                            unreachable!()
+                        }
                     };
                     ir.stack2reg(slot, GP::Rdi);
                     state.guard_class(&mut ir, slot, GP::Rdi, class, deopt);
@@ -517,7 +519,124 @@ impl<'a> JitContext<'a> {
         )
     }
 
+    ///
+    /// Compile one instruction, keeping the state's `Guarded::FixnumArray`
+    /// proofs only across instructions known to leave every array's
+    /// `ARRAY_ELEMS_FIXNUM` bit alone.
+    ///
+    /// Aliasing is not tracked, so a proof about one array dies with any
+    /// store that may clear another's bit. The rule is a whitelist: an
+    /// instruction outside it drops every proof before it is compiled (so
+    /// a branch it takes carries none either), and the `Index` /
+    /// `IndexAssign` arms keep them only when they compiled to the inline
+    /// Array access ([`Self::keep_elems_kind`]). Ruby code that runs in a
+    /// kept instruction anyway (a redefined operator) is caught by
+    /// `settle_class_proofs`, which drops them too.
+    ///
     fn compile_instruction(
+        &mut self,
+        ir: &mut AsmIr,
+        state: &mut AbstractState,
+        bc_pos: BcIndex,
+    ) -> JitResult<CompileResult> {
+        let keep = if state.has_fixnum_arrays() {
+            let trace_ir = TraceIr::from_pc(self.get_pc(bc_pos), self.store);
+            match self.elems_kind_effect(&trace_ir, state) {
+                ElemsKindEffect::Keep => true,
+                ElemsKindEffect::Decide => false,
+                ElemsKindEffect::Drop => {
+                    state.forget_fixnum_arrays();
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        let outer = std::mem::replace(&mut self.elems_kind_keep, keep);
+        let res = self.compile_instruction_inner(ir, state, bc_pos);
+        if !std::mem::replace(&mut self.elems_kind_keep, outer) {
+            state.forget_fixnum_arrays();
+        }
+        res
+    }
+
+    /// An `Index` / `IndexAssign` arm compiled to the inline Array access,
+    /// which leaves the `Guarded::FixnumArray` proofs standing.
+    pub(super) fn keep_elems_kind(&mut self) {
+        self.elems_kind_keep = true;
+    }
+
+    /// What *trace_ir* may do to arrays' `ARRAY_ELEMS_FIXNUM` bits, as far
+    /// as it can be told before the instruction is compiled.
+    fn elems_kind_effect(&self, trace_ir: &TraceIr, state: &AbstractState) -> ElemsKindEffect {
+        let numeric = |c: Option<CachedClass>| {
+            matches!(c, Some(c) if c == CachedClass::INTEGER || c == CachedClass::FLOAT)
+        };
+        match trace_ir {
+            // Moves, literals, branches, the loop-head poll (which deopts
+            // when another thread or a trap handler cleared a bit there,
+            // `executor::execute_gc`), and the operand-carrier words.
+            TraceIr::Mov(..)
+            | TraceIr::FrozenLiteral(..)
+            | TraceIr::Literal(..)
+            | TraceIr::Br(_)
+            | TraceIr::CondBr(..)
+            | TraceIr::NilBr(..)
+            | TraceIr::CheckLocal(..)
+            | TraceIr::LoopStart { .. }
+            | TraceIr::LoopEnd
+            | TraceIr::InlineCache
+            | TraceIr::TypeIc(..)
+            | TraceIr::LoadIvar(..)
+            | TraceIr::StoreIvar(..)
+            | TraceIr::LoadDynVar(..)
+            | TraceIr::StoreDynVar(..)
+            | TraceIr::Ret(_)
+            | TraceIr::MethodRet(_)
+            | TraceIr::BlockBreak(_) => ElemsKindEffect::Keep,
+            // Arithmetic and comparison on numbers.
+            TraceIr::BinOp { lhs, rhs, ic, .. } | TraceIr::BinCmp { lhs, rhs, ic, .. } => {
+                let (l, r) = state.binary_class(*lhs, *rhs, *ic);
+                if numeric(l) && numeric(r) {
+                    ElemsKindEffect::Keep
+                } else {
+                    ElemsKindEffect::Drop
+                }
+            }
+            TraceIr::UnOp { src, ic, .. } => {
+                let c = state.class(*src).map(CachedClass::from_class).or(*ic);
+                if numeric(c) {
+                    ElemsKindEffect::Keep
+                } else {
+                    ElemsKindEffect::Drop
+                }
+            }
+            TraceIr::Index { .. } | TraceIr::IndexAssign { .. } => ElemsKindEffect::Decide,
+            // A monomorphic call of a builtin Array reader (whether it
+            // fires inline or calls the Rust function, it only loads).
+            TraceIr::MethodCall {
+                _polymorphic: false,
+                callid,
+                cache: MethodCache::Cached(entry),
+            } if entry.recv_class.id() == ARRAY_CLASS
+                && self.store[*callid].block_fid.is_none()
+                && self.store[*callid].block_arg.is_none()
+                && self.store[*callid].pos_num == 0
+                && !self.store[*callid].forwarding
+                && self.store[entry.func_id].name().is_some_and(|name| {
+                    name == IdentId::get_id("size")
+                        || name == IdentId::get_id("length")
+                        || name == IdentId::get_id("empty?")
+                })
+                && self.store[entry.func_id].is_iseq().is_none() =>
+            {
+                ElemsKindEffect::Keep
+            }
+            _ => ElemsKindEffect::Drop,
+        }
+    }
+
+    fn compile_instruction_inner(
         &mut self,
         ir: &mut AsmIr,
         state: &mut AbstractState,
@@ -2045,4 +2164,14 @@ impl AbstractState {
         (lhs_class, rhs_class)
     }
 
+}
+
+/// See `JitContext::elems_kind_effect`.
+enum ElemsKindEffect {
+    /// Leaves every array's elements-kind bit alone.
+    Keep,
+    /// The arm decides (`JitContext::keep_elems_kind`).
+    Decide,
+    /// May clear one: every `Guarded::FixnumArray` proof is dropped first.
+    Drop,
 }

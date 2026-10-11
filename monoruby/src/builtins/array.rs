@@ -885,7 +885,7 @@ fn shift(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             return Ok(Value::nil());
         }
         let res = ary[0];
-        ary.drain(0..1);
+        ary.shrink().drain(0..1);
         Ok(res)
     } else {
         let i = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
@@ -893,7 +893,7 @@ fn shift(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             return Err(MonorubyErr::negative_array_size());
         }
         let num = std::cmp::min(i as usize, ary.len());
-        let iter = ary.drain(0..num);
+        let iter = ary.shrink().drain(0..num);
         Ok(Value::array_from_iter(iter))
     }
 }
@@ -1089,10 +1089,10 @@ fn pop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let len = ary.len();
         let start = if n >= len { 0 } else { len - n };
         let result = Value::array_from_slice(&ary[start..]);
-        ary.truncate(start);
+        ary.shrink().truncate(start);
         Ok(result)
     } else {
-        let res = ary.pop().unwrap_or_default();
+        let res = ary.shrink().pop().unwrap_or_default();
         Ok(res)
     }
 }
@@ -1303,7 +1303,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn array_index(
     state: &mut AbstractState,
     ir: &mut AsmIr,
-    _: &JitContext,
+    ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
     _: Option<CachedClass>,
@@ -1321,7 +1321,12 @@ fn array_index(
     } else {
         return true;
     };
-    state.array_integer_index(ir, store, dst, recv, args);
+    // An element of an array of Fixnums is a Fixnum, as long as it is in
+    // bounds: the read leaves the unit for the rest.
+    let oob = state
+        .is_fixnum_array(recv)
+        .then(|| ctx.elems_kind_exit(ir, state));
+    state.array_integer_index(ir, store, dst, recv, args, oob);
     true
 }
 
@@ -1414,7 +1419,7 @@ fn index_assign(
 fn array_index_assign(
     state: &mut AbstractState,
     ir: &mut AsmIr,
-    _: &JitContext,
+    ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
     _: Option<CachedClass>,
@@ -1433,7 +1438,12 @@ fn array_index_assign(
                 recv, args, dst, ..
             } = *callsite;
             assert!(dst.is_none());
-            state.array_integer_index_assign(ir, store, args + 1usize, recv, args);
+            // With `Guarded::FixnumArray` proofs live, a Fixnum store must
+            // not take the generic path, whose nil padding would clear a bit.
+            let generic_deopt = state
+                .has_fixnum_arrays()
+                .then(|| ctx.elems_kind_exit(ir, state));
+            state.array_integer_index_assign(ir, store, args + 1usize, recv, args, generic_deopt);
             true
         }
         3 => array_slice_assign(state, ir, store, callid),
@@ -4845,7 +4855,7 @@ fn delete_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     } else {
         pos as usize
     };
-    Ok(ary.remove(pos))
+    Ok(ary.shrink().remove(pos))
 }
 
 ///
@@ -4933,7 +4943,7 @@ fn insert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if nth >= ary.len() {
         ary.resize(nth, Value::nil());
     }
-    ary.insert_many(nth, val.iter().cloned());
+    ary.insert_from_slice(nth, &val);
     Ok(lfp.self_val())
 }
 

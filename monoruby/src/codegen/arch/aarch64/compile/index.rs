@@ -33,7 +33,7 @@ impl Codegen {
     /// ### out
     /// - Rax (x0): result Value (NIL when out of range)
     ///
-    pub(crate) fn array_index(&mut self, out_range: &DestLabel) {
+    pub(crate) fn array_index(&mut self, out_range: &DestLabel, oob: Option<&DestLabel>) {
         // Unlike x86, the cold (heap / out-of-range) blocks are laid out inline
         // on the same page: aarch64 b/b.cond can't reach monoasm's second page
         // (it is mapped far past the ±128 MB branch range).
@@ -61,8 +61,14 @@ impl Codegen {
             b exit;
         }
         self.jit.bind_label(out_range);
-        monoasm_arm64! { &mut self.jit,
-            mov x0, #(NIL_VALUE as u32);
+        if let Some(oob) = oob {
+            monoasm_arm64! { &mut self.jit,
+                b oob;
+            }
+        } else {
+            monoasm_arm64! { &mut self.jit,
+                mov x0, #(NIL_VALUE as u32);
+            }
         }
         self.jit.bind_label(exit); // out_range falls through to exit
     }
@@ -85,6 +91,7 @@ impl Codegen {
         generic: &DestLabel,
         error: &DestLabel,
         src_kind: StoredKind,
+        generic_deopt: Option<&DestLabel>,
     ) {
         // Cold (heap / generic-C-call) blocks laid out inline; see array_index
         // for why select_page can't be used on aarch64.
@@ -156,6 +163,13 @@ impl Codegen {
             }
         }
         self.jit.bind_label(generic);
+        if let Some(deopt) = generic_deopt {
+            monoasm_arm64! { &mut self.jit,
+                b deopt;
+            }
+            self.jit.bind_label(exit);
+            return;
+        }
         self.emit_fpr_save(using_fpr, false);
         // set_array_integer_index(base, index, vm, globals, src). Source regs at
         // entry: base=x4, index=x3, src=x2. Reorder into the C ABI args
@@ -178,18 +192,60 @@ impl Codegen {
     }
 
     ///
+    /// `AsmInst::GuardElemsFixnum` (aarch64 twin of the x86 one): the Array
+    /// in Rdi (x4) carries `ARRAY_ELEMS_FIXNUM`, or every element turns out
+    /// to be a Fixnum and the bit is set now; otherwise branch to *deopt*.
+    ///
+    /// ### destroy
+    /// - Rax (x0), Rsi (x3), Rcx (x1), x9
+    ///
+    pub(crate) fn guard_elems_fixnum(&mut self, deopt: &DestLabel) {
+        let done = self.jit.label();
+        let scan = self.jit.label();
+        let lp = self.jit.label();
+        let set = self.jit.label();
+        let deopt = deopt.clone();
+        monoasm_arm64! { &mut self.jit,
+            ldrb w9, [x4, #(RVALUE_OFFSET_FLAG as u32)];
+            tbnz x9, #(5), done;
+        scan:
+            // Inline storage keeps the length in the capa word; a heap
+            // buffer (owned or a shared view) has its own length and pointer.
+            ldr x1, [x4, #(RVALUE_OFFSET_ARY_CAPA as u32)];
+            add x3, x4, #(RVALUE_OFFSET_INLINE as u32);
+            cmp x1, #(ARRAY_INLINE_CAPA as u32);
+            b.le lp;
+            ldr x1, [x4, #(RVALUE_OFFSET_HEAP_LEN as u32)];
+            ldr x3, [x4, #(RVALUE_OFFSET_HEAP_PTR as u32)];
+        lp:
+            cbz x1, set;
+            ldr x0, [x3];
+            tbz x0, #(0), deopt;
+            add x3, x3, #(8);
+            sub x1, x1, #(1);
+            b lp;
+        set:
+            ldrb w9, [x4, #(RVALUE_OFFSET_FLAG as u32)];
+            mov x1, (ARRAY_ELEMS_FIXNUM as u64);
+            orr x9, x9, x1;
+            strb w9, [x4, #(RVALUE_OFFSET_FLAG as u32)];
+        done:
+        }
+    }
+
+    ///
     /// §20 (B): emit an array integer-index **read** for `AsmInst::ArrayIndex`
     /// (aarch64). The index-register setup + `array_index` call that used to live
     /// in the `ir.inline(|gen| …)` closure, driven by the typed `ArrayIndexKind`.
     ///
-    pub(crate) fn gen_array_index(&mut self, kind: ArrayIndexKind) {
+    pub(crate) fn gen_array_index(&mut self, kind: ArrayIndexKind, oob: Option<&DestLabel>) {
         match kind {
             ArrayIndexKind::U16(idx) => {
                 let out_range = self.jit.label();
                 monoasm_arm64! { &mut self.jit,
                     mov x3, (idx as u64);   // index (already non-negative)
                 }
-                self.array_index(&out_range);
+                self.array_index(&out_range, oob);
             }
             ArrayIndexKind::Fixnum => {
                 // Single-page layout (no select_page — see Codegen::array_index):
@@ -209,7 +265,7 @@ impl Codegen {
                     b generic;              // past the start -> out of range
                 }
                 self.jit.bind_label(checked.clone());
-                self.array_index(&generic);
+                self.array_index(&generic, oob);
             }
         }
     }
@@ -224,6 +280,7 @@ impl Codegen {
         using_fpr: UsingFpr,
         error: &DestLabel,
         src_kind: StoredKind,
+        generic_deopt: Option<&DestLabel>,
     ) {
         match kind {
             ArrayIndexKind::U16(idx) => {
@@ -231,7 +288,7 @@ impl Codegen {
                 monoasm_arm64! { &mut self.jit,
                     mov x3, (idx as u64);   // index (already non-negative)
                 }
-                self.array_index_assign(using_fpr, &generic, error, src_kind);
+                self.array_index_assign(using_fpr, &generic, error, src_kind, generic_deopt);
             }
             ArrayIndexKind::Fixnum => {
                 // Single-page layout (no select_page — see array_index_assign).
@@ -249,7 +306,7 @@ impl Codegen {
                     b generic;              // past the start -> out of range
                 }
                 self.jit.bind_label(checked.clone());
-                self.array_index_assign(using_fpr, &generic, error, src_kind);
+                self.array_index_assign(using_fpr, &generic, error, src_kind, generic_deopt);
             }
         }
     }

@@ -202,6 +202,7 @@ impl Codegen {
             | AsmInst::Inline(..)
             | AsmInst::ArrayIndex { .. }
             | AsmInst::ArrayIndexAssign { .. }
+            | AsmInst::GuardElemsFixnum { .. }
             | AsmInst::LoadFieldToReg { .. }
             | AsmInst::BoolFieldToReg { .. }
             | AsmInst::ArrayLenFixnum { .. }
