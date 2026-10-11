@@ -1137,7 +1137,6 @@ pub(crate) struct VmHandlers {
     pub store_ivar: CodePtr,           // 17
     pub check_const: CodePtr,          // 18
     pub check_kw_rest: CodePtr,        // 19
-    pub type_ic: CodePtr,              // 131
     pub check_local: CodePtr,          // 20
     pub block_arg_proxy: CodePtr,      // 21
     pub singleton_class_def: CodePtr,  // 22
@@ -1279,7 +1278,6 @@ impl Codegen {
         self.dispatch[17] = h.store_ivar;
         self.dispatch[18] = h.check_const;
         self.dispatch[19] = h.check_kw_rest;
-        self.dispatch[131] = h.type_ic;
         self.dispatch[20] = h.check_local;
         self.dispatch[21] = h.block_arg_proxy;
         self.dispatch[22] = h.singleton_class_def;

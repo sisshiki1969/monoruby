@@ -1297,7 +1297,7 @@ impl Store {
         self.basic_ops.is_basic_op_name(name)
     }
 
-    #[cfg(any(feature = "emit-bc", feature = "profile"))]
+    #[cfg(feature = "emit-bc")]
     pub(super) fn functions(&self) -> &[FuncInfo] {
         self.functions.functions()
     }
