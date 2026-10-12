@@ -66,7 +66,13 @@ impl Codegen {
                     tbz x12, #(63), done;        // same sign -> no adjust
                     sub x10, x10, #(1u32);       // floor: q -= 1
                     done:
-                    lsl x(rax), x10, #(1u32);    // 2q
+                    // 2q, flag-setting: the only quotient outside the i63
+                    // range is `FIXNUM_MIN / -1 = 2**62`, whose doubling
+                    // overflows (V); the interpreter promotes it to a Bignum.
+                    adds x(rax), x10, x10;
+                );
+                self.jit.bcond_label(monoasm::Cond::Vs, &deopt);
+                monoasm_arm64!(&mut self.jit,
                     add x(rax), x(rax), #(1u32); // 2q+1 (tagged)
                 );
             }
@@ -329,9 +335,7 @@ impl Codegen {
         self.jit.bcond_label(monoasm::Cond::Lt, &shr); // negative -> right shift
         // Overflow bound: the tagged lhs's top bit sits at position
         // `63 - lzcnt`, so shifting `2n` left sets the sign bit once
-        // `k >= lzcnt` — deopt there (the x86 `gen_shl_lhs_imm` uses `jgt`
-        // here, which is an off-by-one that lets `lit << lzcnt` overflow
-        // silently; `b.ge` is the correct bound).
+        // `k >= lzcnt` — deopt there (the same `jge` bound as x86).
         monoasm_arm64!(&mut self.jit, cmp x1, #(lzcnt);); // baked overflow bound
         self.jit.bcond_label(monoasm::Cond::Ge, &deopt); // shift >= lzcnt -> overflow
         monoasm_arm64!(&mut self.jit,

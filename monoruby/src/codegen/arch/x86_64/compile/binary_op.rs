@@ -72,6 +72,7 @@ impl Codegen {
                 let exit = self.jit.label();
                 let negative_divisor = self.jit.label();
                 let dec = self.jit.label();
+                let overflow = self.jit.label();
                 monoasm!( &mut self.jit,
                     sarq R(rhs_r), 1;
                     testq R(rhs_r), R(rhs_r);
@@ -94,13 +95,21 @@ impl Codegen {
                 dec:
                     subq rax, 1;
                 exit:
+                    // The only quotient outside the i63 range is
+                    // `FIXNUM_MIN / -1 = 2**62`, which the tagging shift
+                    // overflows (OF is set exactly when the sign flips):
+                    // the interpreter promotes it to a Bignum.
                     salq rax, 1;
+                    jo   overflow;
                     orq  rax, 1;
                 );
                 self.jit.select_page(1);
                 monoasm!( &mut self.jit,
                 zero_div:
                     movq rdi, (Value::symbol_from_str("_divide_by_zero").id());
+                    jmp deopt;
+                overflow:
+                    movq rdi, (Value::symbol_from_str("_arith_overflow").id());
                     jmp deopt;
                 );
                 self.jit.select_page(0);
@@ -732,8 +741,10 @@ impl Codegen {
         shl:
             negq rcx;
             lzcntq rax, rdi;
+            // Shifting `2n` left by `k` sets the sign bit once `k >= lzcnt`
+            // (the same bound as `gen_shl`); `jgt` let `k == lzcnt` wrap.
             cmpq rcx, rax;
-            jgt deopt;
+            jge deopt;
             subq rdi, 1;
             salq rdi, rcx;
             jmp after;
