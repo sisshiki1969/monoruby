@@ -911,10 +911,7 @@ impl Codegen {
                     iseq.sourceinfo.file_name(),
                     iseq.sourceinfo.get_line(&iseq.loc),
                 );
-                if let Some(ivars) = frame
-                    .self_class
-                    .and_then(|c| crate::ivar_ty::describe_class(store, c))
-                {
+                if let Some(ivars) = crate::ivar_ty::describe_class(store, frame.self_class) {
                     eprintln!("  {indent}    ivars: {ivars}");
                 }
             }
