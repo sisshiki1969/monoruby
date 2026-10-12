@@ -1828,19 +1828,7 @@ impl Codegen {
                 table: table.expect("kwrest table laid down before codegen"),
             }),
             // Not a shared instruction: hand off to the per-arch backend.
-            // (§9a-ii) Not-yet-LIR-ized arms still emit directly in the per-arch
-            // `compile_asmir_arch`. During the buffering pass, defer them as
-            // `LInst::DeferredArch` so they run at drain (correct position)
-            // rather than emitting now (which would scramble order vs. the
-            // buffered ops). Otherwise (immediate path) dispatch directly.
             other => {
-                if let Some(buf) = self.lir_buf.as_mut() {
-                    buf.push(LInst::DeferredArch {
-                        inst: other,
-                        class_version,
-                    });
-                    return true;
-                }
                 return self.compile_asmir_arch(store, frame, labels, other, class_version);
             }
         }
@@ -1912,46 +1900,20 @@ impl Codegen {
         labels: &SideExitLabels,
         base: usize,
     ) {
-        // (§9a-ii) Buffering pass: collect, don't run the generator yet.
-        if let Some(buf) = self.lir_buf.as_mut() {
-            buf.push(inst);
-            return;
-        }
         match inst {
             LInst::Inline(proc) => (proc.proc)(self, store, labels, base),
             _ => unreachable!("encode_linst_inline only handles LInst::Inline"),
         }
     }
 
-    /// (§9 9d) GP physical-allocation pass over a buffered region body. This is
-    /// the seam between buffering (`gen_asm` collects the body into one ordered
-    /// `Vec<LInst>`) and the drain (emission). Today it is the **identity**: the
-    /// body drains exactly as buffered, so the output is byte-identical. §9d
-    /// fills it in — walking the stream, assigning each allocatable virtual GP
-    /// (`VReg::Alloc`, a bytecode slot) to a pool register (`GP_ALLOC_POOL`) or
-    /// leaving it in its stack home, inserting loads/stores and the call /
-    /// safepoint flush-and-demote (`G -> S`, no reload — a GP pool value's spill
-    /// home *is* its slot). The ① fixpoint's loop-head liveness / loop-carried
-    /// metadata is threaded in here when that step lands (the §9c wiring).
-    pub(in crate::codegen::jitgen) fn allocate_gp(&self, body: Vec<LInst>) -> Vec<LInst> {
-        body
-    }
-
-    /// (§9 9a) Drain a frame-needing ordering pseudo-op. Unlike `encode_linst`
+    /// (§9 9a) Emit a frame-needing ordering pseudo-op. Unlike `encode_linst`
     /// (frameless) and `encode_linst_inline` (`store`/`labels`/`base`), this
     /// reproduces the position-metadata side effects that read/write the frame.
-    /// It is the frame-aware seam the whole-region buffering will route through.
     pub(in crate::codegen::jitgen) fn encode_linst_frame(
         &mut self,
         inst: LInst,
         frame: &mut AsmInfo,
     ) {
-        // (§9a-ii) Buffering pass: collect, don't record the position yet (the
-        // position is only meaningful at drain time, in emission order).
-        if let Some(buf) = self.lir_buf.as_mut() {
-            buf.push(inst);
-            return;
-        }
         match inst {
             LInst::SourcePos { idx } => {
                 let pos = self.jit.get_current() - frame.start_codepos;

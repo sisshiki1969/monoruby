@@ -425,6 +425,17 @@ ordered sequence the allocator can walk and the drainer can replay faithfully.
 
 ### Staged increments
 
+> **Status (2026-10-12).** Increment 9a-ii — buffering a unit's whole body as
+> one `Vec<LInst>` in `Codegen::lir_buf` (with `LInst::DeferredArch` carrying
+> the not-yet-LIR-ized arms) and draining it through an identity
+> `allocate_gp` — was removed again. It emitted byte-identical code, had no
+> consumer, and its cost was all compile time: total instructions on the
+> compile-heavy workloads fell by 0.6% (railsbench), 1.0% (lobsters) and 2.1%
+> (rubyboy, startup) without it. Emission is single-pass again; the ordering
+> pseudo-ops (`BindLabel`, `SelectPage`, `SourcePos`) stay, so re-introducing
+> the buffer is a matter of making `encode_linst*` collect instead of emit
+> once a 9d allocator exists to consume the stream.
+
 - **9a — Make the emission stream fully reified.** Add the ordering pseudo-ops so
   `compile_asmir` + the side-exit loop produce a single `Vec<LInst>` covering
   *all* of byte emission, label binding, page selection, and sourcemap. Verify

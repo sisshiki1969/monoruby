@@ -49,7 +49,7 @@
 // Some `LInst` variants / helpers are only used by not-yet-migrated families
 // (the `AsmInst::Inline` builtin generators); keep them ahead of their consumers.
 #![allow(dead_code)]
-// `LInst` is `pub(in crate::codegen)` (named by `Codegen::lir_buf`), but its
+// `LInst` is `pub(in crate::codegen)`, but its
 // payload types (`VReg`/`LMem`/… and the wrapped `AsmInst`/`InlineProcedure`)
 // are intentionally `jitgen`-internal during the LIR migration. Widening
 // `AsmInst` to match would cascade into its own fields, so allow the mismatch
@@ -1372,15 +1372,6 @@ pub(in crate::codegen) enum LInst {
     /// variant can eventually go away) is the "express inline-builtin codegen
     /// once" goal (`doc/lir.md` §8).
     Inline(super::asmir::InlineProcedure),
-    /// (§9a-ii) A not-yet-LIR-ized `AsmInst` whose per-arch lowering
-    /// (`compile_asmir_arch`) still emits directly via `monoasm!`. Buffered
-    /// verbatim and re-dispatched to `compile_asmir_arch` at drain — where the
-    /// frame is in hand — so its direct emission lands at the correct position
-    /// in the one ordered stream (rather than during the buffering pass).
-    DeferredArch {
-        inst: super::asmir::AsmInst,
-        class_version: DestLabel,
-    },
 }
 
 /// A straight-line sequence of `LInst`s produced by lowering one (or more)
@@ -1408,10 +1399,7 @@ impl Lir {
         self.insts.iter()
     }
 
-    /// Consume the buffer, yielding its `LInst`s in order. The drain point for
-    /// the two-phase pipeline (§9): a region is buffered, then replayed through
-    /// `encode_linst` here. (A later increment runs the physical-allocation pass
-    /// over the `Vec` between buffering and this drain.)
+    /// Consume the buffer, yielding its `LInst`s in order.
     pub(in crate::codegen::jitgen) fn into_insts(self) -> Vec<LInst> {
         self.insts
     }
