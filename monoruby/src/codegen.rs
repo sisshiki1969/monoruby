@@ -1085,12 +1085,6 @@ pub struct Codegen {
     /// control-frame chain patching return addresses that were already
     /// patched.
     bop_eviction_pending: bool,
-    /// (§9a-ii) When `Some`, `encode_linst*` and the per-arch fallthrough buffer
-    /// the lowered `LInst`s here instead of emitting, so the region driver
-    /// (`gen_asm`) collects the whole body into one ordered stream and drains it
-    /// (the seam the future GP physical-allocation pass slots into). `None`
-    /// during the drain and everywhere else — emission is immediate.
-    pub(in crate::codegen) lir_buf: Option<Vec<crate::codegen::jitgen::lir::LInst>>,
     #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
     pub(crate) jit_compile_time: std::time::Duration,
 }
@@ -1467,7 +1461,6 @@ impl Codegen {
             #[cfg(target_arch = "aarch64")]
             pending_jump_tables: Vec::new(),
             bop_eviction_pending: false,
-            lir_buf: None,
             #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
             jit_compile_time: std::time::Duration::default(),
         };
