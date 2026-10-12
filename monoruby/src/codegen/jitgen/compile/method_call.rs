@@ -3103,9 +3103,7 @@ impl AbstractState {
         // When a capture guard follows (the callee may `move_frame_to_heap`,
         // e.g. by turning a block into a Proc), the result must be homed via
         // the LFP so it follows the frame onto the heap — see
-        // `def_rax2acc_capturing`. Otherwise park the result in a GP-pool
-        // register (a resident) so a following integer op consumes it without a
-        // stack round-trip — see `def_rax2gp`.
+        // `def_rax2acc_capturing`. Otherwise store it rbp-relative.
         if self.no_capture_guard() {
             self.def_rax2gp(ir, dst);
         } else {
@@ -3273,8 +3271,7 @@ impl AbstractState {
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
         // A yielded block can capture this frame; home the result via the LFP
-        // when a capture guard follows (see `def_rax2acc_capturing`). Otherwise
-        // park it in a GP-pool register resident (see `def_rax2gp`).
+        // when a capture guard follows (see `def_rax2acc_capturing`).
         if self.no_capture_guard() {
             self.def_rax2gp(ir, dst);
         } else {

@@ -914,8 +914,7 @@ impl Codegen {
     /// materialization, which runs last (see `a64_gen_forward_rest_materialize`).
     fn a64_gen_write_back_for_deopt(&mut self, wb: &WriteBack, base: usize) {
         // GP residents first: the fpr and literal stores below may use the
-        // rax register as scratch, and it may itself be a resident (a call
-        // result left in place, `def_rax2gp`).
+        // rax register as scratch.
         let lfp = GP::R14.a64().0; // x22
         for (reg, slot) in &wb.gp {
             let off = slot.0 as u32 * 8 + LFP_SELF as u32;
