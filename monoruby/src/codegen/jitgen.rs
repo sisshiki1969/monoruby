@@ -1956,12 +1956,22 @@ impl Codegen {
         // the `BIGNUM_CLASS` tag, so a Bignum miss *is* a class change
         // there and heals into the dispatch; the gate still protects
         // the send-side exits, whose ICs class every Integer alike.)
+        let poly_byte = pc.as_ptr() as usize + 7;
         if reason == RecompileReason::BecamePolymorphic {
-            let poly_byte = pc.as_ptr() as usize + 7;
             monoasm!( &mut self.jit,
                 movq rax, (poly_byte);
-                cmpb [rax], 0;
+                testb [rax], (crate::bytecode::OPCODE_SUB_POLY as i8);
                 jeq  skip;
+            );
+        }
+        // The site's own arithmetic exit is the only witness of its
+        // overflow: stamp the site so the recompile compiles it in the
+        // two-arm form (`compile_binary` 2a), and so it is never
+        // converted to this exit again.
+        if reason == RecompileReason::IntegerOverflow {
+            monoasm!( &mut self.jit,
+                movq rax, (poly_byte);
+                orb  [rax], (crate::bytecode::OPCODE_SUB_OVERFLOW as i8);
             );
         }
         monoasm!( &mut self.jit,

@@ -363,12 +363,22 @@ impl<'a> JitContext<'a> {
     /// site with any observed nil dispatches regardless of the runner-up's
     /// share. Non-nil stragglers keep the 1/8 rule: their arm is the
     /// generic *call*, which really does want a fair share of the traffic.
+    ///
+    /// *forced*: the site is an Integer arithmetic site stamped by its
+    /// `IntegerOverflow` exit (`compile_binary` 2a). The profile is not
+    /// consulted — it says "monomorphic", which is true and beside the
+    /// point — and the typed arm is Integer's, if it has a generator.
+    ///
     fn dispatch_inline_class(
         &mut self,
         callid: CallSiteId,
         op: IdentId,
         nil_arm_eligible: bool,
+        forced: bool,
     ) -> Option<CachedClass> {
+        if forced {
+            return self.arm_inlinable(CachedClass::INTEGER, op).then_some(CachedClass::INTEGER);
+        }
         if !self.pmc_really_alternates(callid)
             && !(nil_arm_eligible && self.store[callid].pmc.entries().len() >= 2)
         {
@@ -378,23 +388,33 @@ impl<'a> JitContext<'a> {
         let mut classes: Vec<(CachedClass, u32)> =
             pmc.entries().iter().map(|e| (e.recv, e.count)).collect();
         classes.sort_unstable_by_key(|(_, count)| std::cmp::Reverse(*count));
-        classes.into_iter().map(|(class, _)| class).find(|&class| {
+        classes
+            .into_iter()
+            .map(|(class, _)| class)
+            .find(|&class| self.arm_inlinable(class, op))
+    }
+
+    /// Can *class* be the typed arm of a dispatch on *op*?
+    fn arm_inlinable(&mut self, class: CachedClass, op: IdentId) -> bool {
+        {
             // The Bignum tag resolves to Integer's methods and would look
             // inlinable, but the arm guard proves the *fixnum*
             // representation — a Bignum can never enter it. Its share is
             // served by the residual arm (where `BrClassNe(INTEGER)`'s tag
             // test already routes every heap Integer).
             !class.is(BIGNUM_CLASS)
+                // Both generator shapes `fire_binary_inline` fires: the
+                // binary ones and the plain `Integer#<< >> % **`.
                 && matches!(
                     self.jit_check_method(class, op)
                         .and_then(|(fid, _)| self.store.inline_info.get_inline(fid)),
-                    Some(InlineFuncInfo::InlineGenBinary(_))
+                    Some(InlineFuncInfo::InlineGenBinary(_) | InlineFuncInfo::InlineGen(_))
                 )
                 // Same licence the guarded direct-fire path needs: the arm
                 // runs without a class-version guard, so a redefinition has
                 // to reach it through the recorded bop dependency.
                 && self.basic_op_assumable(class, op)
-        })
+        }
     }
 
     ///
@@ -440,16 +460,32 @@ impl<'a> JitContext<'a> {
     /// `None` (an argument whose class the VM did not record) counts as
     /// variation: it is exactly the case there is no evidence for.
     ///
+    /// A Bignum argument counts as an Integer one: the Integer arm's
+    /// argument guard is the fixnum tag test, and under the arm's deopt
+    /// redirect its miss is the residual arm, not a side exit — so a site
+    /// whose argument alternates between the two representations (`x ^
+    /// (x << 13)` on a 64-bit `x`) is served without a deopt.
+    ///
     fn pmc_arg_is_stable(&self, callid: CallSiteId) -> bool {
         let mut args = self.store[callid]
             .pmc
             .entries()
             .iter()
-            .map(|e| e.arg);
+            .map(|e| e.arg.map(Self::arg_class_repr));
         let Some(Some(first)) = args.next() else {
             return false;
         };
         args.all(|a| a == Some(first))
+    }
+
+    /// The class a dispatch arm sees an argument as: the Bignum tag is a
+    /// representation of Integer (see `pmc_arg_is_stable`).
+    fn arg_class_repr(class: CachedClass) -> CachedClass {
+        if class.is(BIGNUM_CLASS) {
+            CachedClass::INTEGER
+        } else {
+            class
+        }
     }
 
     ///
@@ -512,6 +548,10 @@ impl<'a> JitContext<'a> {
         rhs: SlotId,
         rhs_class: Option<CachedClass>,
         case_semantics: bool,
+        // The site is stamped `IntegerOverflow` (`compile_binary` 2a): the
+        // Integer arm whatever the profile says, with no argument gate —
+        // the caller has checked the argument is Integer-typed.
+        forced: bool,
         bc_pos: BcIndex,
     ) -> JitResult<bool> {
         let Some(callid) = self.store.get_callsite_id(self.iseq_id(), bc_pos) else {
@@ -520,12 +560,20 @@ impl<'a> JitContext<'a> {
         let op: IdentId = binop.into();
         // See the `nil_arm` comment below; computed up front because it also
         // loosens the dispatch gate (`dispatch_inline_class`).
-        let nil_arm_eligible = matches!(binop, BinaryOp::Cmp(CmpKind::Eq | CmpKind::TEq))
+        let nil_arm_eligible = !forced
+            && matches!(binop, BinaryOp::Cmp(CmpKind::Eq | CmpKind::TEq))
             && self.pmc_recv_contains(callid, CachedClass::NIL)
             && self.basic_op_assumable(CachedClass::NIL, op);
-        let Some(inline_class) = self.dispatch_inline_class(callid, op, nil_arm_eligible) else {
+        let Some(inline_class) =
+            self.dispatch_inline_class(callid, op, nil_arm_eligible, forced)
+        else {
             return Ok(false);
         };
+        // The inline cache holds the last pair, so an argument that was a
+        // Bignum on the VM's last visit reads as `BIGNUM`; the arm is the
+        // fixnum one and guards the argument itself (a miss takes the
+        // residual arm, below), so it is compiled for `Integer`.
+        let rhs_class = rhs_class.map(Self::arg_class_repr);
         // The dispatch guards the *receiver*. An arithmetic arm still guards
         // its own argument internally — `Integer#+` takes a different path for
         // an Integer rhs than for a Float one — so at a site whose argument
@@ -551,6 +599,7 @@ impl<'a> JitContext<'a> {
         // arm pays a box the next float instruction has to undo. That measured
         // +62%.
         if matches!(binop, BinaryOp::Arith(_))
+            && !forced
             && (!self.pmc_arg_is_stable(callid)
                 || !self.pmc_arms_agree_on_float(callid, rhs_class))
         {
@@ -584,20 +633,30 @@ impl<'a> JitContext<'a> {
         // receiver guard sees a state that already knows the class and emits
         // nothing.
         fast.guard_class_state(lhs, inline_class);
-        if !matches!(
-            self.fire_binary_inline(
-                &mut fast,
-                ir,
-                op,
-                lhs,
-                rhs,
-                inline_class,
-                rhs_class,
-                bc_pos,
-                None,
-            ),
-            Some(BinaryInlineOutcome::Done)
-        ) {
+        // Everything the arm would side-exit on — its argument guard, a
+        // fixnum overflow, an over-wide shift, a zero divisor — is a case
+        // the residual arm answers correctly, from the same operands (the
+        // entry state has them at their stack homes, and nothing the
+        // generator emits before its checks has an observable effect). So
+        // the arm's exits branch there instead of leaving the compiled
+        // code: a 64-bit `x ^ (x << 13)` whose operands alternate between
+        // fixnum and Bignum used to deopt on every Bignum (2M exits on 2M
+        // iterations of an xorshift), and never recompiled, because the
+        // profile had already been consulted.
+        ir.redirect_deopts(slow);
+        let outcome = self.fire_binary_inline(
+            &mut fast,
+            ir,
+            op,
+            lhs,
+            rhs,
+            inline_class,
+            rhs_class,
+            bc_pos,
+            None,
+        );
+        ir.end_deopt_redirect();
+        if !matches!(outcome, Some(BinaryInlineOutcome::Done)) {
             // A generator that declined has no arm to be; back the whole
             // dispatch out and let the caller emit the ordinary form.
             ir.restore(ir_save);
@@ -775,6 +834,10 @@ impl<'a> JitContext<'a> {
         rhs: SlotId,
         ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
+        // A fixnum-compiled body left this site through its arithmetic
+        // exit (`RecompileReason::IntegerOverflow`): give it the two-arm
+        // form whatever the profile says. Arithmetic sites only.
+        overflowed: bool,
         bc_pos: BcIndex,
         // The fused comparison (opcodes 150–156, followed by the `CondBr`
         // that consumes it).
@@ -834,7 +897,29 @@ impl<'a> JitContext<'a> {
         if polymorphic
             && !case_semantics
             && state.class(lhs).is_none()
-            && self.binary_dispatch(state, ir, binop, dst, lhs, rhs, rhs_class, false, bc_pos)?
+            && self.binary_dispatch(
+                state, ir, binop, dst, lhs, rhs, rhs_class, false, false, bc_pos,
+            )?
+        {
+            return Ok(BinaryLowering::Emitted);
+        }
+        // ---- 2a. An Integer site whose fixnum body kept leaving through
+        // its arithmetic exit (`1 << sq` with `sq` reaching 62, a hash
+        // multiply that overflows on every byte). The interpreter never
+        // saw a class change — both operands are fixnums — so the profile
+        // is of no help; the `IntegerOverflow` exit stamped the site
+        // instead. The two-arm form puts the fixnum arm's exits on the
+        // residual generic arm, which computes the Bignum result in place.
+        // The fixnum arm is unchanged from the monomorphic body, so the
+        // site's steady fixnum traffic pays one class branch and a boxed
+        // `dst` at the merge for never deopting again.
+        if overflowed
+            && matches!(binop, BinaryOp::Arith(_))
+            && lhs_class == Some(CachedClass::INTEGER)
+            && rhs_class.is_some_and(|c| c == CachedClass::INTEGER || c.is(BIGNUM_CLASS))
+            && self.binary_dispatch(
+                state, ir, binop, dst, lhs, rhs, rhs_class, false, true, bc_pos,
+            )?
         {
             return Ok(BinaryLowering::Emitted);
         }
@@ -1062,7 +1147,23 @@ impl<'a> JitContext<'a> {
             let heal = (!polymorphic)
                 .then(|| self.recv_miss_recompile_target())
                 .flatten();
-            match self.fire_binary_inline(
+            // A fixnum × fixnum arithmetic site's other exits — overflow,
+            // shift width, zero divisor, a non-fixnum argument — are
+            // invisible to the interpreter's profile (see 2a), so they are
+            // counter-gated `IntegerOverflow` recompiles of the unit rather
+            // than plain deopts: the exit stamps the site, and the
+            // recompile takes 2a. Never for a site already stamped (a
+            // generator that declined the two-arm form would otherwise
+            // recompile on every few misses), and never for the
+            // comparisons, which have no such exit.
+            let overflow_recompile = matches!(binop, BinaryOp::Arith(_))
+                && !overflowed
+                && lhs_class == CachedClass::INTEGER
+                && rhs_class == Some(CachedClass::INTEGER);
+            if overflow_recompile && let Some(target) = self.recv_miss_recompile_target() {
+                ir.recompile_deopts(RecompileReason::IntegerOverflow, target);
+            }
+            let outcome = self.fire_binary_inline(
                 state,
                 ir,
                 binop.into(),
@@ -1072,7 +1173,9 @@ impl<'a> JitContext<'a> {
                 rhs_class,
                 bc_pos,
                 heal,
-            ) {
+            );
+            ir.end_deopt_recompile();
+            match outcome {
                 Some(BinaryInlineOutcome::Done) => {
                     // ④-b: the Integer/Float inline lowerings are pure
                     // arithmetic — overflow promotes via a Rust helper, guards
@@ -1180,6 +1283,7 @@ impl<'a> JitContext<'a> {
         rhs: SlotId,
         ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
+        overflowed: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         match self.compile_binary(
@@ -1191,6 +1295,7 @@ impl<'a> JitContext<'a> {
             rhs,
             ic,
             polymorphic,
+            overflowed,
             bc_pos,
             false,
         )? {
@@ -1228,6 +1333,7 @@ impl<'a> JitContext<'a> {
             rhs,
             ic,
             polymorphic,
+            false,
             bc_pos,
             fused,
         )? {
@@ -1984,6 +2090,94 @@ mod tests {
               end
               res
             end
+        "##,
+        );
+    }
+
+    #[test]
+    fn bignum_alternating_dispatch() {
+        // 64-bit arithmetic through masks: `x` is a fixnum one iteration in
+        // four and a Bignum otherwise, on both sides of `^` / `<<` / `>>`.
+        // Every such site is a two-arm dispatch whose fixnum arm's exits
+        // (argument guard, shift overflow) fall to the generic arm, so the
+        // loop runs in compiled code without a deopt.
+        run_test(
+            r##"
+            m = 0xffff_ffff_ffff_ffff
+            x = 88172645463325252
+            i = 0
+            while i < 300
+              x ^= (x << 13) & m
+              x ^= x >> 7
+              x ^= (x << 17) & m
+              i += 1
+            end
+            x
+        "##,
+        );
+    }
+
+    #[test]
+    fn integer_overflow_recompiles_into_dispatch() {
+        // `1 << sq` never sees a non-fixnum operand, so the interpreter
+        // never marks the site; its overflow (sq >= 62) is an
+        // `IntegerOverflow` exit that stamps the site and recompiles it in
+        // the two-arm form. The same for a fixnum multiply that overflows
+        // on most inputs, a divide by zero and a `-@` overflow neighbour.
+        run_test_with_prelude(
+            r##"
+            res = [bits(200), hash(200)]
+            [0, 3, 1 << 40].each { |d| res << (div(1 << 62, d) rescue :zero) }
+            res
+        "##,
+            r##"
+            def bits(n)
+              total = 0
+              i = 0
+              while i < n
+                b = 1 << (i & 63)
+                total += b
+                i += 1
+              end
+              total
+            end
+            def hash(n)
+              h = 0xcbf29ce484222325 & 0x3fff_ffff_ffff_ffff
+              i = 0
+              while i < n
+                h = ((h ^ (i & 255)) * 0x100000001b3) & 0xffff_ffff_ffff_ffff
+                i += 1
+              end
+              h
+            end
+            def div(a, b)
+              i = 0
+              r = nil
+              while i < 30
+                r = a / b
+                i += 1
+              end
+              r
+            end
+        "##,
+        );
+    }
+
+    #[test]
+    fn dispatch_arm_float_argument_falls_to_generic() {
+        // A receiver alternating Integer / Float with a stable Integer
+        // argument dispatches; a Float that then shows up as the *argument*
+        // misses the Integer arm's guard and takes the generic arm.
+        run_test_with_prelude(
+            r##"
+            res = []
+            xs = [3, 2.5, 7, 1.25]
+            ys = [2, 2, 2, 2, 2.0, 2]
+            40.times { |i| res << add(xs[i % 4], ys[i % 6]) }
+            res
+        "##,
+            r##"
+            def add(a, b) = a + b
         "##,
         );
     }

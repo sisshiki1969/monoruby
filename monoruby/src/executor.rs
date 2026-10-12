@@ -5681,6 +5681,16 @@ pub enum RecompileReason {
     /// (`codegen/jitgen/merge.rs`, loop-invariant guard hoisting) missed.
     /// The recompile stops hoisting in the iseq that owns the loop.
     LoopHoistGuardFailed = 7,
+    /// A fixnum-compiled Integer arithmetic site left through one of the
+    /// exits its generator emits — an overflow, an over-wide shift, a
+    /// zero divisor, or a non-fixnum argument — often enough to matter
+    /// (`1 << sq` with `sq` reaching 62). The interpreter cannot see any
+    /// of these as a class change (both operands are fixnums), so the
+    /// exit handler stamps the site itself (`OPCODE_SUB_OVERFLOW`) and the
+    /// recompile gives it the two-arm form: the fixnum arm with its exits
+    /// routed to a residual generic arm (`binary_dispatch`). One-shot per
+    /// site: a stamped site is never converted again.
+    IntegerOverflow = 8,
 }
 
 struct Root<'a, 'b> {

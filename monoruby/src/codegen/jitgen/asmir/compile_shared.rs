@@ -1836,6 +1836,11 @@ impl Codegen {
         #[cfg(all(feature = "deopt", target_arch = "x86_64"))]
         {
             let (exit_id, created_at) = labels.deopt_meta(idx);
+            // A `SideExit::Branch` is ordinary control flow, not an exit:
+            // nothing to log.
+            if exit_id == u32::MAX {
+                return labels.raw_deopt(idx).clone();
+            }
             let site = deopt_log::register_site(deopt_log::DeoptSite {
                 lowered_at: std::panic::Location::caller(),
                 created_at,

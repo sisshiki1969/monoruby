@@ -139,8 +139,19 @@ impl SideExitLabels {
     ///
     pub(crate) fn raw_deopt(&self, index: AsmDeopt) -> &DestLabel {
         #[cfg(target_arch = "aarch64")]
-        self.touched.borrow_mut().push(self.pending_idx[index.0]);
+        self.note_touched(index.0);
         &self.labels[index.0]
+    }
+
+    /// aarch64: a lowering referenced entry *idx*; remember its handler for
+    /// the thunk pass — unless the entry is a [`SideExit::Branch`], which
+    /// has no handler (sentinel `usize::MAX`).
+    #[cfg(target_arch = "aarch64")]
+    fn note_touched(&self, idx: usize) {
+        let pending = self.pending_idx[idx];
+        if pending != usize::MAX {
+            self.touched.borrow_mut().push(pending);
+        }
     }
 
     /// aarch64: record the accumulator index of the handler just pushed —
@@ -173,7 +184,7 @@ impl std::ops::Index<AsmError> for SideExitLabels {
         // Every fetch is a (potential) reference — record it for the
         // aarch64 thunk pass, like `raw_deopt`.
         #[cfg(target_arch = "aarch64")]
-        self.touched.borrow_mut().push(self.pending_idx[index.0]);
+        self.note_touched(index.0);
         &self.labels[index.0]
     }
 }
@@ -183,7 +194,7 @@ impl std::ops::Index<AsmEvict> for SideExitLabels {
 
     fn index(&self, index: AsmEvict) -> &Self::Output {
         #[cfg(target_arch = "aarch64")]
-        self.touched.borrow_mut().push(self.pending_idx[index.0]);
+        self.note_touched(index.0);
         &self.labels[index.0]
     }
 }
@@ -234,6 +245,18 @@ pub(crate) struct AsmIr {
     /// ordinary specialized call. Sticky across `save` / `restore`: a
     /// rolled-back attempt only makes the verdict more conservative.
     frameless_violation: bool,
+    /// While `Some`, every deopt exit created through this IR is a
+    /// [`SideExit::Branch`] to this label instead (see there). Set and
+    /// cleared explicitly around a dispatch arm's generator by
+    /// [`Self::redirect_deopts`] / [`Self::end_deopt_redirect`]; not part
+    /// of `save` / `restore`.
+    deopt_redirect: Option<JitLabel>,
+    /// While `Some`, every deopt exit created here is a counter-gated
+    /// `RecompileDeoptimize` with this reason and target instead of a plain
+    /// `Deoptimize` — the `IntegerOverflow` conversion of a fixnum
+    /// arithmetic site's exits (`compile_binary` step 4). Scoped like
+    /// `deopt_redirect`, which takes precedence.
+    deopt_recompile: Option<(RecompileReason, RecompileTarget)>,
     /// What rdi and rax (in that order, see [`TRACKED_REGS`]) are known to
     /// hold at the end of the stream: set by a GP load of a slot into the
     /// register or a store of the register to a slot's home, and valid only
@@ -381,10 +404,48 @@ impl AsmIr {
             chain_frames: ctx.chain_deopt_frames(),
             frameless: ctx.in_frameless_frame(),
             frameless_violation: false,
+            deopt_redirect: None,
+            deopt_recompile: None,
             reg_holds: [None; 2],
             ivar_base_at: None,
             ivar_base_release_pc: ctx.get_pc(BcIndex::from(0)),
         }
+    }
+
+    ///
+    /// Until [`Self::end_deopt_redirect`], every deopt exit created here
+    /// (`new_deopt`, `new_deopt_with_pc`, `deopt_from_point`) becomes a
+    /// branch to *label* — see [`SideExit::Branch`]. Recompiling, poll and
+    /// error exits are not redirected.
+    ///
+    /// The caller guarantees that nothing emitted under the redirect has an
+    /// observable effect before its exits: a value loaded into a scratch
+    /// register, a resident written back to its own home, a guard, an
+    /// arithmetic check — never a call, a store into an object or a slot
+    /// definition the branch target's state does not know about.
+    ///
+    pub(super) fn redirect_deopts(&mut self, label: JitLabel) {
+        debug_assert!(self.deopt_redirect.is_none());
+        self.deopt_redirect = Some(label);
+    }
+
+    pub(super) fn end_deopt_redirect(&mut self) {
+        self.deopt_redirect = None;
+    }
+
+    ///
+    /// Until [`Self::end_deopt_recompile`], every deopt exit created here
+    /// (`new_deopt`, `new_deopt_with_pc`, `deopt_from_point`) is a
+    /// counter-gated recompile of *target* for *reason* — see the
+    /// `deopt_recompile` field. A redirect in force wins.
+    ///
+    pub(super) fn recompile_deopts(&mut self, reason: RecompileReason, target: RecompileTarget) {
+        debug_assert!(self.deopt_recompile.is_none());
+        self.deopt_recompile = Some((reason, target));
+    }
+
+    pub(super) fn end_deopt_recompile(&mut self) {
+        self.deopt_recompile = None;
     }
 
     pub(super) fn frameless_violation(&self) -> bool {
@@ -788,6 +849,12 @@ impl AsmIr {
 
     #[cfg_attr(feature = "deopt", track_caller)]
     pub(crate) fn new_deopt_with_pc(&mut self, state: &AbstractFrame, pc: BytecodePtr) -> AsmDeopt {
+        if let Some(label) = self.deopt_redirect {
+            return AsmDeopt(self.new_label(SideExit::Branch(label)));
+        }
+        if let Some((reason, target)) = self.deopt_recompile {
+            return self.new_recompile_deopt_with_pc(state, pc, reason, target);
+        }
         let materialize = self.materializes(state.side_effect_guard());
         let i = self.new_label(SideExit::Deoptimize(
             pc,
@@ -834,18 +901,28 @@ impl AsmIr {
     ///
     #[cfg_attr(feature = "deopt", track_caller)]
     pub(super) fn deopt_from_point(&mut self, point: &DeoptPoint) -> AsmDeopt {
+        if let Some(label) = self.deopt_redirect {
+            return AsmDeopt(self.new_label(SideExit::Branch(label)));
+        }
         let materialize = self.materializes(point.side_effect_free());
         let mut wb = point.write_back().clone();
         if self.frameless {
             // As `exit_write_back`: the window's unwritten slots.
             wb.set_void(point.void().to_vec());
         }
-        let i = self.new_label(SideExit::Deoptimize(
-            point.pc(),
-            wb,
-            self.chain_frames,
-            materialize,
-        ));
+        let exit = if let Some((reason, target)) = self.deopt_recompile {
+            SideExit::RecompileDeoptimize(
+                point.pc(),
+                wb,
+                reason,
+                target,
+                self.chain_frames,
+                materialize,
+            )
+        } else {
+            SideExit::Deoptimize(point.pc(), wb, self.chain_frames, materialize)
+        };
+        let i = self.new_label(exit);
         self.had_deopt = true;
         AsmDeopt(i)
     }
@@ -3854,6 +3931,18 @@ pub enum SideExit {
         bool,
     ),
     Error(BytecodePtr, WriteBack, u32),
+    ///
+    /// Not an exit at all: a "deopt" that is really a branch to an in-body
+    /// label. Created in place of every `Deoptimize` while
+    /// [`AsmIr::redirect_deopts`] is in force — inside the typed arm of a
+    /// dispatch (`binary_dispatch`), whose argument guards and overflow /
+    /// shift / divide-by-zero checks then fall to the residual (generic)
+    /// arm instead of leaving the compiled code. The residual arm starts
+    /// from the dispatch's entry state (operands at their stack homes, GP
+    /// pool empty), which is exactly what a deopt write-back would have
+    /// re-established — minus the trip through the interpreter.
+    ///
+    Branch(JitLabel),
 }
 
 ///
@@ -3866,7 +3955,7 @@ pub enum SideExit {
 /// the emitter adds `specialized_base`), which re-points the caller's patch
 /// point at the fresh body.
 ///
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum RecompileTarget {
     Whole(Option<BytecodePtr>),
     Specialized(usize),
@@ -3899,6 +3988,18 @@ impl Codegen {
         #[cfg(not(feature = "deopt"))]
         let mut deopt_table: HashMap<(BytecodePtr, WriteBack, u32, bool), DestLabel> =
             HashMap::default();
+        type RecompileKey = (
+            BytecodePtr,
+            WriteBack,
+            RecompileReason,
+            RecompileTarget,
+            u32,
+            bool,
+        );
+        #[cfg(feature = "deopt")]
+        let mut recompile_table: HashMap<RecompileKey, (DestLabel, u32)> = HashMap::default();
+        #[cfg(not(feature = "deopt"))]
+        let mut recompile_table: HashMap<RecompileKey, DestLabel> = HashMap::default();
         let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
         let base = frame.base_stack_offset;
         // §9 (9a, first brick): reify the isolated side-exit handler block into a
@@ -3982,41 +4083,62 @@ impl Codegen {
                     }
                 }
                 SideExit::RecompileDeoptimize(pc, wb, reason, target, chain, materialize) => {
-                    let label = self.jit.label();
-                    #[cfg(feature = "deopt")]
-                    {
-                        exit_id = deopt_log::register_exit(deopt_log::DeoptExit::Recompile {
-                            reason,
-                            chain,
-                        });
-                    }
-                    lir.push(LInst::SideExit {
-                        kind: if !frame.frameless {
-                            LSideExitKind::RecompileDeopt {
-                                reason,
-                                target,
-                                chain,
-                            }
-                        } else if materialize {
-                            LSideExitKind::Materialize {
-                                recompile: Some((reason, target)),
-                                chain,
-                                error: false,
-                            }
-                        } else {
-                            LSideExitKind::Redo {
-                                recompile: Some((reason, target)),
-                            }
-                        },
-                        pc,
-                        wb,
-                        entry: label.clone(),
-                        loop_jit_spill_bytes,
-                        base,
+                    // Deduplicated like `Deoptimize`: the `IntegerOverflow`
+                    // conversion makes every exit of a fixnum arithmetic
+                    // site one of these, and a site's guards and overflow
+                    // check share one snapshot.
+                    let t = (pc, wb, reason, target, chain, materialize);
+                    if let Some(entry) = recompile_table.get(&t) {
                         #[cfg(feature = "deopt")]
-                        exit_id,
-                    });
-                    label
+                        {
+                            exit_id = entry.1;
+                        }
+                        #[cfg(feature = "deopt")]
+                        let label = entry.0.clone();
+                        #[cfg(not(feature = "deopt"))]
+                        let label = entry.clone();
+                        label
+                    } else {
+                        let label = self.jit.label();
+                        #[cfg(feature = "deopt")]
+                        {
+                            exit_id = deopt_log::register_exit(deopt_log::DeoptExit::Recompile {
+                                reason,
+                                chain,
+                            });
+                        }
+                        lir.push(LInst::SideExit {
+                            kind: if !frame.frameless {
+                                LSideExitKind::RecompileDeopt {
+                                    reason,
+                                    target,
+                                    chain,
+                                }
+                            } else if materialize {
+                                LSideExitKind::Materialize {
+                                    recompile: Some((reason, target)),
+                                    chain,
+                                    error: false,
+                                }
+                            } else {
+                                LSideExitKind::Redo {
+                                    recompile: Some((reason, target)),
+                                }
+                            },
+                            pc: t.0,
+                            wb: t.1.clone(),
+                            entry: label.clone(),
+                            loop_jit_spill_bytes,
+                            base,
+                            #[cfg(feature = "deopt")]
+                            exit_id,
+                        });
+                        #[cfg(feature = "deopt")]
+                        recompile_table.insert(t, (label.clone(), exit_id));
+                        #[cfg(not(feature = "deopt"))]
+                        recompile_table.insert(t, label.clone());
+                        label
+                    }
                 }
                 SideExit::Error(pc, wb, chain) => {
                     let label = self.jit.label();
@@ -4040,6 +4162,10 @@ impl Codegen {
                     });
                     label
                 }
+                // No handler: the "exit" is the dispatch's residual arm.
+                // (`exit_id` stays `u32::MAX`, which is how `deopt_label`
+                // knows not to interpose a logging trampoline.)
+                SideExit::Branch(label) => frame.resolve_label(&mut self.jit, label),
                 _ => unreachable!("unexpected {side_exit:?}"),
             };
             side_exits.push(

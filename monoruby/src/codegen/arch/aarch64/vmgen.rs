@@ -5,6 +5,7 @@
 
 use super::*;
 use monoasm_macro::monoasm_arm64;
+use crate::bytecode::OPCODE_SUB_POLY;
 
 mod definition;
 pub mod init_method;
@@ -1429,8 +1430,10 @@ impl Codegen {
         );
         self.jit.bcond_label(Cond::Eq, &skip);
         monoasm_arm64!(&mut self.jit,
-            mov x11, (1);
-            strb w11, [x(PC.0), #(7)]; // opcode_sub = 1 (polymorphic)
+            ldrb w11, [x(PC.0), #(7)];
+            tbnz w11, #(OPCODE_SUB_POLY.trailing_zeros()), record; // already stamped
+            add w11, w11, #(OPCODE_SUB_POLY as u32);
+            strb w11, [x(PC.0), #(7)]; // opcode_sub |= POLY
             record:
             // Feed the call site's polymorphic method cache — population and
             // transitions only. The operand (x2) is already documented as
@@ -1505,8 +1508,10 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             b skip;
             set_poly:
-            mov x11, (1);
-            strb w11, [x(PC.0), #(7)];  // opcode_sub = 1 (polymorphic)
+            ldrb w11, [x(PC.0), #(7)];
+            tbnz w11, #(OPCODE_SUB_POLY.trailing_zeros()), record; // already stamped
+            add w11, w11, #(OPCODE_SUB_POLY as u32);
+            strb w11, [x(PC.0), #(7)];  // opcode_sub |= POLY
             record:
             // Feed the call site's polymorphic method cache — population and
             // transitions only, never the steady state. Preserve the operand

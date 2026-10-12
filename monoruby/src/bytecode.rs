@@ -298,6 +298,13 @@ impl std::ops::Add<isize> for BytecodePtr {
     }
 }
 
+/// `opcode_sub` bit: the site's receiver / operand class changed (set by the
+/// interpreter's inline-cache slow paths).
+pub const OPCODE_SUB_POLY: u8 = 1;
+/// `opcode_sub` bit: a fixnum-compiled Integer arithmetic site took its
+/// arithmetic exit (set by the `IntegerOverflow` recompile exit).
+pub const OPCODE_SUB_OVERFLOW: u8 = 2;
+
 impl std::ops::Sub<isize> for BytecodePtr {
     type Output = BytecodePtr;
     fn sub(self, rhs: isize) -> BytecodePtr {
@@ -342,8 +349,25 @@ impl BytecodePtr {
         (self.op1 >> 48) as u8
     }
 
+    ///
+    /// The instruction's profile byte (op1 bits 63:56). A bit set:
+    /// [`OPCODE_SUB_POLY`] by the interpreter when a site's receiver /
+    /// operand class changed, [`OPCODE_SUB_OVERFLOW`] by a JIT side exit
+    /// (`RecompileReason::IntegerOverflow`). Both writers `or` their bit in.
+    ///
     pub fn opcode_sub(&self) -> u8 {
         (self.op1 >> 56) as u8
+    }
+
+    /// The VM saw more than one receiver / operand class here.
+    pub fn polymorphic(&self) -> bool {
+        self.opcode_sub() & OPCODE_SUB_POLY != 0
+    }
+
+    /// A fixnum-compiled Integer arithmetic site here left through its
+    /// arithmetic exit (see `RecompileReason::IntegerOverflow`).
+    pub fn integer_overflowed(&self) -> bool {
+        self.opcode_sub() & OPCODE_SUB_OVERFLOW != 0
     }
 
     pub fn as_ptr(&self) -> *mut Bytecode {
