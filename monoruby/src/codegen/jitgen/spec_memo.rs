@@ -165,13 +165,10 @@ pub(super) struct FrameState {
     pub(super) stack_offset: usize,
     pub(super) base_stack_offset: usize,
     pub(super) spill_home_watermark: usize,
-    pub(super) speculation_poisoned: bool,
     pub(super) had_deopt: bool,
     pub(super) generic_yield: bool,
     pub(super) has_boxed_return: bool,
     pub(super) ivar_heap_accessed: bool,
-    pub(super) speculated_using_fpr: UsingFpr,
-    pub(super) speculated_floats: Vec<(SlotId, FPReg)>,
     pub(super) spill_home_ids: std::collections::HashSet<usize>,
     pub(super) return_context: HashMap<usize, ReturnState>,
     pub(super) jit_type: JitType,
@@ -209,7 +206,6 @@ pub(super) struct Effect {
     pub(super) kept: Vec<(usize, SlotId)>,
     /// The compile raised the stage-C claim barrier.
     pub(super) claim_barrier: bool,
-    pub(super) capture_events: usize,
     pub(super) result: SpecializedCompileResultMemo,
 }
 
@@ -221,7 +217,6 @@ pub(super) struct Effect {
 pub(super) struct CallMarks {
     pub(super) widened: usize,
     pub(super) kept: usize,
-    pub(super) capture_events: usize,
     pub(super) claim_barrier: bool,
 }
 

@@ -48,15 +48,10 @@
 //! cross-block merge, it avoids the loop-back-edge placement coupling that made
 //! the old analysis-fused `LinkMode::G` load-bearing (doc §13.8).
 //!
-//! This module holds the register file ([`GpRegFile`], driven online by the
-//! codegen paths above) plus a **pure reference allocator** ([`allocate_run`]):
-//! the latter consumes a list of binop records (each tagged with the
-//! post-instruction `next_sp`), produces a list of [`GpAction`]s, and is
-//! unit-tested in isolation. Unlike the online driver it does not model the
-//! slot-side abstract types, so it guards every fresh load; the online driver
-//! keys guards off `is_fixnum(slot)` instead (see `gp_ensure`).
+//! This module holds the register file ([`GpRegFile`]), driven online by the
+//! codegen paths above; the guard on a fresh load is decided by the driver
+//! from the slot's abstract type (`is_fixnum`, see `gp_ensure`).
 
-use crate::bytecodegen::BinOpK;
 use crate::codegen::GP;
 use crate::jitgen::SlotId;
 
@@ -80,44 +75,6 @@ const GP_TRACKED: &[GP] = &[GP::R8, GP::R9, GP::R10, GP::R11, GP::Rax];
 
 /// Index of rax in [`GP_TRACKED`].
 const RAX_IDX: usize = GP_TRACKED.len() - 1;
-
-/// One fixnum binop in the typed IR: `dst = lhs <kind> rhs`, all stack slots.
-///
-/// `next_sp` is the stack pointer *after* this instruction: every resident slot
-/// whose index is `>= next_sp` is a dead temporary (mirrors
-/// `clear_above_next_sp`) and is freed once the op has consumed it.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(in crate::codegen::jitgen) struct BinOpInst {
-    pub kind: BinOpK,
-    pub dst: SlotId,
-    pub lhs: SlotId,
-    pub rhs: SlotId,
-    pub next_sp: SlotId,
-}
-
-/// A single lowered action the allocator emits for the codegen half to replay.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(in crate::codegen::jitgen) enum GpAction {
-    /// Load `slot` from its stack home into `reg`. `guard` requests a fixnum
-    /// type guard. In this pure reference every fresh stack read is guarded;
-    /// the online driver (`gp_ensure`) instead decides the guard from the
-    /// slot's abstract type (`is_fixnum`), so a slot a prior guard/def already
-    /// proved a fixnum reloads guard-free.
-    Load { slot: SlotId, reg: GP, guard: bool },
-    /// `dst = lhs <kind> rhs`, all three already in registers. The overflow /
-    /// type side-exit is the consumer's responsibility (it is a deopt point).
-    BinOp {
-        kind: BinOpK,
-        dst: GP,
-        lhs: GP,
-        rhs: GP,
-    },
-    /// Spill `reg` to `slot`'s stack home — emitted when a *dirty* resident is
-    /// evicted to free its register, or at the block-boundary flush. A clean
-    /// resident (freshly loaded, unmodified) already matches its home and is
-    /// dropped without a store.
-    Spill { reg: GP, slot: SlotId },
-}
 
 /// One slot an allocatable register currently caches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -308,16 +265,6 @@ impl GpRegFile {
         spills
     }
 
-    /// Internal `alloc` used by the pure `allocate_run` reference: like
-    /// [`Self::alloc_reg`] but emits the spills into `out`.
-    fn alloc(&mut self, pinned: &[GP], out: &mut Vec<GpAction>) -> GP {
-        let (reg, spills) = self.alloc_reg(pinned);
-        for (reg, slot) in spills {
-            out.push(GpAction::Spill { reg, slot });
-        }
-        reg
-    }
-
     /// Record that `reg` now (also) caches `slot`, dropping any prior cache of
     /// `slot`. The register's other holders are kept: they carry the same value,
     /// which is exactly what a slot copy relies on (`%dst = %src` binds `dst`
@@ -415,62 +362,6 @@ impl GpRegFile {
     }
 }
 
-/// Allocate GP registers for a straight-line run of fixnum binops (one basic
-/// block, or a maximal binop sub-run within one). Returns the lowered
-/// [`GpAction`] stream, terminated by the flush of every dirty resident.
-pub(in crate::codegen::jitgen) fn allocate_run(insts: &[BinOpInst]) -> Vec<GpAction> {
-    let mut rf = GpRegFile::new();
-    let mut out = Vec::new();
-
-    for inst in insts {
-        // 1. Load the operands.
-        let lhs_reg = ensure(&mut rf, inst.lhs, &[], &mut out);
-        let rhs_reg = ensure(&mut rf, inst.rhs, &[lhs_reg], &mut out);
-        // 2. The result is (re)defined: drop any stale cache of it.
-        rf.invalidate(inst.dst);
-        // 3. Clear `next_sp`: the popped temporaries (the just-consumed operands
-        //    included) are dead. Done before the result allocation so the result
-        //    can reuse a freed operand's register.
-        rf.free_above_sp(inst.next_sp);
-        // 4. Claim a register for the result (always — results stay resident),
-        //    pinning only `rhs` so the result may reuse `lhs` in place.
-        let dst_reg = rf.alloc(&[rhs_reg], &mut out);
-        out.push(GpAction::BinOp {
-            kind: inst.kind,
-            dst: dst_reg,
-            lhs: lhs_reg,
-            rhs: rhs_reg,
-        });
-        rf.bind(dst_reg, inst.dst, /* dirty */ true);
-    }
-
-    flush_dirty(&mut rf, &mut out);
-    out
-}
-
-/// Bring `slot` into a register and return it, reusing the resident copy when
-/// present (no reload, no re-guard) and otherwise loading + fixnum-guarding it.
-fn ensure(rf: &mut GpRegFile, slot: SlotId, pinned: &[GP], out: &mut Vec<GpAction>) -> GP {
-    if let Some(reg) = rf.reg_of(slot) {
-        return reg;
-    }
-    let reg = rf.alloc(pinned, out);
-    out.push(GpAction::Load {
-        slot,
-        reg,
-        guard: true,
-    });
-    rf.bind(reg, slot, /* dirty */ false);
-    reg
-}
-
-/// Flush dirty residents to their stack homes and clear the file.
-fn flush_dirty(rf: &mut GpRegFile, out: &mut Vec<GpAction>) {
-    for (reg, slot) in rf.take_dirty_spills() {
-        out.push(GpAction::Spill { reg, slot });
-    }
-}
-
 impl GpRegFile {
     /// A slot is about to be redefined: drop any stale register cache of it (the
     /// old value is dead, so no spill). The register's other holders stay.
@@ -489,115 +380,9 @@ mod tests {
         SlotId::new(i)
     }
 
-    /// `dst = lhs + rhs`, with `next_sp` so that slots `>= next_sp` are dead.
-    fn add(dst: u16, lhs: u16, rhs: u16, next_sp: u16) -> BinOpInst {
-        BinOpInst {
-            kind: BinOpK::Add,
-            dst: sl(dst),
-            lhs: sl(lhs),
-            rhs: sl(rhs),
-            next_sp: sl(next_sp),
-        }
-    }
-
     const R8: GP = GP::R8;
     const R9: GP = GP::R9;
     const R10: GP = GP::R10;
-
-    /// The worked example `%1 = %2 + %3` (operands %2/%3 popped, %1 live):
-    /// %2 → R8, %3 → R9; then `next_sp` frees both operand registers, so the
-    /// result reuses `lhs`'s R8 in place — R8 = R8 + R9 — and is spilled to %1's
-    /// home at flush.
-    #[test]
-    fn single_binop() {
-        // next_sp = 2 → slots %2,%3 (idx 2,3) dead, %1 (idx 1) live.
-        let out = allocate_run(&[add(1, 2, 3, 2)]);
-        assert_eq!(
-            out,
-            vec![
-                GpAction::Load { slot: sl(2), reg: R8, guard: true },
-                GpAction::Load { slot: sl(3), reg: R9, guard: true },
-                GpAction::BinOp { kind: BinOpK::Add, dst: R8, lhs: R8, rhs: R9 },
-                GpAction::Spill { reg: R8, slot: sl(1) },
-            ]
-        );
-    }
-
-    /// `%1 = %2 + %3; %4 = %1 + %5` — `%1` stays resident and is reused as an
-    /// operand with no reload; `%2`/`%3` freed by the stack pointer are reused.
-    #[test]
-    fn result_reused_as_operand() {
-        let out = allocate_run(&[add(1, 2, 3, 2), add(4, 1, 5, 4)]);
-        // %1 is never reloaded (it is produced in a register and consumed there).
-        assert!(!out
-            .iter()
-            .any(|a| matches!(a, GpAction::Load { slot, .. } if *slot == sl(1))));
-        // The second op's `lhs` is exactly the register the first op produced
-        // `%1` in — the result flows directly into the next op with no reload.
-        let binops: Vec<_> = out
-            .iter()
-            .filter_map(|a| match a {
-                GpAction::BinOp { dst, lhs, .. } => Some((*dst, *lhs)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(binops.len(), 2);
-        assert_eq!(binops[1].1, binops[0].0);
-    }
-
-    /// The result is always kept in a register even under pressure: four live
-    /// results force an eviction (spill of the oldest) rather than spilling the
-    /// new result.
-    #[test]
-    fn result_always_resident_under_pressure() {
-        // Five chained results, all kept live (next_sp high so nothing is freed).
-        // %2..%6 are source locals; results %10..%14. With only 4 registers the
-        // 5th result must evict the oldest resident, not skip its own register.
-        let insts = [
-            add(10, 2, 3, 100),
-            add(11, 10, 4, 100),
-            add(12, 11, 5, 100),
-            add(13, 12, 6, 100),
-            add(14, 13, 7, 100),
-        ];
-        let out = allocate_run(&insts);
-        // Every binop result lands in a register (there is a BinOp for each).
-        let binops = out
-            .iter()
-            .filter(|a| matches!(a, GpAction::BinOp { .. }))
-            .count();
-        assert_eq!(binops, 5);
-        // Pressure forced at least one mid-run spill (a victim eviction).
-        let mid_spills = out
-            .iter()
-            .take_while(|a| !matches!(a, GpAction::BinOp { .. } if false)) // all
-            .filter(|a| matches!(a, GpAction::Spill { .. }))
-            .count();
-        assert!(mid_spills >= 1, "pressure should force a victim spill");
-    }
-
-    /// Liveness via the stack pointer frees a dead temporary's register so a
-    /// later op reuses it instead of growing register pressure.
-    #[test]
-    fn sp_frees_dead_temporary() {
-        // op1: %3 = %1 + %2, next_sp = 3 → %1,%2 dead, freed. %3 live in a reg.
-        // op2: %5 = %3 + %4 — %1,%2's registers are free for %4 / the result.
-        let out = allocate_run(&[add(3, 1, 2, 3), add(5, 3, 4, 5)]);
-        // %1 and %2 are each loaded exactly once; their registers are recycled.
-        for s in [1u16, 2] {
-            let loads = out
-                .iter()
-                .filter(|a| matches!(a, GpAction::Load { slot, .. } if *slot == sl(s)))
-                .count();
-            assert_eq!(loads, 1);
-        }
-        // No spill of the dead operands %1/%2 (freed without write-back).
-        for s in [1u16, 2] {
-            assert!(!out
-                .iter()
-                .any(|a| matches!(a, GpAction::Spill { slot, .. } if *slot == sl(s))));
-        }
-    }
 
     /// A slot copy binds the destination to the source's register as a second
     /// (dirty) holder: both resolve to the register, only the copy owes a store,
