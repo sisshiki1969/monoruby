@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a72d176c.js";
+            window.path_to_searchindex_js = "searchindex-2b9cb5d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -2054,6 +2054,18 @@ Therefore the buffer must model these as <strong>ordering pseudo-ops</strong> in
 so the <em>entire</em> emission stream — bytes <strong>and</strong> position metadata — is one
 ordered sequence the allocator can walk and the drainer can replay faithfully.</p>
 <h3 id="staged-increments"><a class="header" href="#staged-increments">Staged increments</a></h3>
+<blockquote>
+<p><strong>Status (2026-10-12).</strong> Increment 9a-ii — buffering a unit’s whole body as
+one <code>Vec&lt;LInst&gt;</code> in <code>Codegen::lir_buf</code> (with <code>LInst::DeferredArch</code> carrying
+the not-yet-LIR-ized arms) and draining it through an identity
+<code>allocate_gp</code> — was removed again. It emitted byte-identical code, had no
+consumer, and its cost was all compile time: total instructions on the
+compile-heavy workloads fell by 0.6% (railsbench), 1.0% (lobsters) and 2.1%
+(rubyboy, startup) without it. Emission is single-pass again; the ordering
+pseudo-ops (<code>BindLabel</code>, <code>SelectPage</code>, <code>SourcePos</code>) stay, so re-introducing
+the buffer is a matter of making <code>encode_linst*</code> collect instead of emit
+once a 9d allocator exists to consume the stream.</p>
+</blockquote>
 <ul>
 <li><strong>9a — Make the emission stream fully reified.</strong> Add the ordering pseudo-ops so
 <code>compile_asmir</code> + the side-exit loop produce a single <code>Vec&lt;LInst&gt;</code> covering
