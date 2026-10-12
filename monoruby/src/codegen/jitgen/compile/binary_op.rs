@@ -352,6 +352,128 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Does the raw-u64 result the arithmetic at *bc_pos* writes to *dst*
+    /// flow only into an `&` with a mask in [0, 2^64)? Then the arithmetic
+    /// may wrap: reduction mod 2^64 is a ring homomorphism and the bit ops
+    /// are bitwise, so `(X op Y) & c == ((X op Y) mod 2^64) & c` for every
+    /// chain of `+ - * << & | ^` whose other operands are Integers, and the
+    /// mask keeps only those low 64 bits. The walk follows the value through
+    /// such a chain (the design doc's §2.7, one or more stages) to the `&`,
+    /// within the basic block.
+    ///
+    /// What makes this sound at an exit in between: every chain operand
+    /// must be an Integer at run time, or the interpreter, resuming on the
+    /// wrapped intermediate, would observe it through a Float conversion.
+    /// So an operand qualifies only when it is proven: a literal or folded
+    /// constant in [0, 2^64), or a `U` / `Su` resident (whose unbox guard
+    /// already passed), untouched up to its use. And the intermediates must
+    /// be temps nothing else reads, which bytecodegen's expression temps
+    /// are: each is consumed once, by the next operator in the chain.
+    ///
+    fn mask_sink_after(&self, state: &AbstractState, bc_pos: BcIndex, dst: Option<SlotId>) -> bool {
+        let Some(mut cur) = dst else {
+            return false;
+        };
+        let is_temp = |slot: SlotId| slot.0 as usize > self.local_num();
+        if !is_temp(cur) {
+            return false;
+        }
+        let iseq = self.iseq();
+        let len = iseq.bytecode().len();
+        // Slots proven in [0, 2^64) by a literal / folded constant seen on
+        // the walk, and slots written on the walk (a resident's proof no
+        // longer holds for them).
+        let mut proven: Vec<SlotId> = vec![];
+        let mut written: Vec<SlotId> = vec![];
+        let mut pos: BcIndex = bc_pos + 1;
+        for _ in 0..8 {
+            if pos.to_usize() >= len || iseq.bb_info.is_bb_head(pos).is_some() {
+                return false;
+            }
+            match TraceIr::from_pc(iseq.get_pc(pos), self.store) {
+                TraceIr::Literal(slot, v) => {
+                    if slot == cur {
+                        return false;
+                    }
+                    proven.retain(|s| *s != slot);
+                    written.push(slot);
+                    if v.try_u64().is_some() {
+                        proven.push(slot);
+                    }
+                }
+                TraceIr::LoadConst(slot, id) => {
+                    if slot == cur {
+                        return false;
+                    }
+                    proven.retain(|s| *s != slot);
+                    written.push(slot);
+                    // Folded only at the compile-time const version (see
+                    // `load_constant`; anything else recompiles, discarding
+                    // this code with it).
+                    if self.store[id].cache.as_ref().is_some_and(|c| {
+                        c.version as u64 == self.const_version() && c.value.try_u64().is_some()
+                    }) {
+                        proven.push(slot);
+                    }
+                }
+                TraceIr::BinOp {
+                    kind,
+                    dst: d,
+                    lhs,
+                    rhs,
+                    ..
+                } => {
+                    if lhs != cur && rhs != cur {
+                        if let Some(d) = d {
+                            proven.retain(|s| *s != d);
+                            written.push(d);
+                        }
+                    } else {
+                        let other = if lhs == cur { rhs } else { lhs };
+                        let other_ok = other == cur
+                            || proven.contains(&other)
+                            || (state.is_u64_resident(other) && !written.contains(&other));
+                        if !other_ok || !self.basic_op_assumable(CachedClass::INTEGER, kind.into()) {
+                            return false;
+                        }
+                        match kind {
+                            BinOpK::BitAnd => return true,
+                            BinOpK::Add
+                            | BinOpK::Sub
+                            | BinOpK::Mul
+                            | BinOpK::BitOr
+                            | BinOpK::BitXor => {}
+                            // The low bits of a left shift depend only on
+                            // the low bits of the value; a count does not.
+                            BinOpK::Shl if lhs == cur => {}
+                            _ => return false,
+                        }
+                        let Some(d) = d else {
+                            return false;
+                        };
+                        if !is_temp(d) {
+                            return false;
+                        }
+                        proven.retain(|s| *s != d);
+                        written.push(d);
+                        cur = d;
+                    }
+                }
+                other => {
+                    if other.read_slots(self.store).contains(&cur) {
+                        return false;
+                    }
+                    // Anything else may write a slot the proofs rely on:
+                    // stop here.
+                    return false;
+                }
+            }
+            pos = pos + 1;
+        }
+        false
+    }
+
+    ///
     /// May [`AsmIr::opt_eq_cmp`]'s inline fast path be emitted for *kind*?
     ///
     /// That fast path answers **bit equality** whenever neither operand is a
@@ -963,7 +1085,15 @@ impl<'a> JitContext<'a> {
                     ir.recompile_deopts(RecompileReason::U64GuardFailed, target);
                 }
                 match u64_form {
-                    BinaryOp::Arith(kind) => state.binop_u64(ir, kind, dst, lhs, rhs, true),
+                    BinaryOp::Arith(kind) => {
+                        // `(x op y) & c`: a result consumed only by a mask
+                        // in [0, 2^64) needs no range check (`mask_sink_after`).
+                        let checked = !(matches!(
+                            kind,
+                            BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Shl
+                        ) && self.mask_sink_after(state, bc_pos, dst));
+                        state.binop_u64(ir, kind, dst, lhs, rhs, checked)
+                    }
                     BinaryOp::Cmp(kind) => {
                         if let Some(slot) = self.wants_cond_flags(dst) {
                             let flags = state.gen_cmp_u64_flags(ir, kind, slot, lhs, rhs);

@@ -329,3 +329,102 @@ fn gp_resident_operand_before_exit() {
         PRELUDE,
     );
 }
+
+/// The wrapping forms at the boundaries of [0, 2^64): a result consumed
+/// only by `& c` wraps instead of exiting, and must agree with the exact
+/// Bignum result masked.
+#[test]
+fn wrapping_boundaries() {
+    run_test_with_prelude(
+        r##"
+        def w(a, b, k)
+          [(a + b) & M, (a - b) & M, (b - a) & M, (a * b) & M, (a << k) & M, (a << k) & 0xff,
+           (a << 1) & M, (a << 63) & M, (a << 64) & M, (a << 100) & M, (b + 1) & M, (b * 3) & 0xffff,
+           b & (b - 1), (a + b) & 0x8000_0000_0000_0000]
+        end
+        out = []
+        vals = [M, M - 1, 2**63, 2**63 - 1, 2**63 + 1, 2**62, 1, 0]
+        ks = [0, 1, 7, 31, 63, 64, 65, 100]
+        40.times do |i|
+          a = vals[i % vals.size]
+          b = vals[(i * 3 + 1) % vals.size]
+          out << w(a, b, ks[i % ks.size])
+        end
+        out
+        "##,
+        PRELUDE,
+    );
+}
+
+/// Chains of wrap-safe operators between the arithmetic and the mask.
+#[test]
+fn wrapping_chains() {
+    run_test_with_prelude(
+        r##"
+        def xs(x)
+          x = (x ^ (x << 13)) & M
+          x ^= x >> 7
+          (x ^ (x << 17)) & M
+        end
+        def mix(a, b, c)
+          [((a + b) * c) & M, ((a << 3) | 1) & M, (((a * b) ^ c) + 7) & M, ((a - b) ^ (b - a)) & M, ((a << 5) & 0xff0) & M]
+        end
+        x = 0x9E3779B97F4A7C15
+        out = []
+        30.times do |i|
+          x = xs(x)
+          out << x if i % 7 == 0
+          out << mix(x, (x >> 3) | 1, 0x100000001b3)
+        end
+        out
+        "##,
+        PRELUDE,
+    );
+}
+
+/// Consumers the fusion must not accept: no mask, a negative mask, a mask
+/// at or above 2^64, a Float further down the chain, a local as the
+/// intermediate. Each keeps the checked form and the exact answer.
+#[test]
+fn no_fusion_for_other_consumers() {
+    run_test_with_prelude(
+        r##"
+        def f(a, b, fl)
+          t = a * b
+          [(a << 3) | b, (a + b) & -1, (a * b) & (2**64 + 0xff), (a + b) * 1.5, ((a + b) + fl) & M, t & M,
+           (a * b) + 1 & M, ((a << 10) >> 2) & M, (a - b) & M, (b - a)]
+        end
+        out = []
+        20.times do |i|
+          a = 2**63 + i
+          b = 2**62 + 3 * i
+          out << f(a, b, 0.5)
+        end
+        out
+        "##,
+        PRELUDE,
+    );
+}
+
+/// A chain operand proven by an earlier unbox (`z = y & M` makes `y` a
+/// resident): the fusion relies on that proof, and a `y` that fails the
+/// guard (a negative, 2^64 or more) must exit there, before any wrapped
+/// arithmetic, and recompile the site into the boxed forms.
+#[test]
+fn exit_inside_a_fused_chain() {
+    run_test_with_prelude(
+        r##"
+        def g(a, b, y)
+          z = y & M
+          [((a * b) ^ y) & M, ((a << 9) + y) & M, z]
+        end
+        out = []
+        ys = [5, 7, 11, -5, 2**64 + 1, 9]
+        30.times do |i|
+          out << (g(2**63 + i, 0x100000001b3, ys[i % ys.size]) rescue :err)
+        end
+        out
+        "##,
+        PRELUDE,
+    );
+}
