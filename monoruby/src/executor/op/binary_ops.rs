@@ -218,6 +218,15 @@ macro_rules! binop_values {
             ) -> Option<Value> {
                 // Integer operands answered here rather than through
                 // `RealKind`, whose `try_from` clones a BigInt receiver.
+                // Two 128-bit Integers (fixnums, or Bignums held inline —
+                // `rvalue::BignumInner`) compute in `i128`, before `unpack`
+                // would ask either for a `BigInt`.
+                if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
+                    return Some(match l.[<checked_ $op>](r) {
+                        Some(c) => Value::from_i128(c),
+                        None => Value::bigint(BigInt::from(l).$op(BigInt::from(r))),
+                    });
+                }
                 match (lhs.unpack(), rhs.unpack()) {
                     (RV::Fixnum(l), RV::Fixnum(r)) => {
                         return Some(match l.[<checked_ $op>](r) {
@@ -330,6 +339,16 @@ pub(crate) extern "C" fn div_values_raw(
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
+    // Two 128-bit Integers: floor division in `i128` (see `add_values_raw`).
+    if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
+        if r == 0 {
+            vm.err_divide_by_zero();
+            return None;
+        }
+        if let Some(q) = i128_floor_div(l, r) {
+            return Some(Value::from_i128(q));
+        }
+    }
     match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
         (Some(lhs), Some(rhs)) => {
             if rhs.check_zero_div() && !lhs.is_float() {
@@ -372,6 +391,16 @@ pub(crate) extern "C" fn rem_values_raw(
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
+    // Two 128-bit Integers: remainder in `i128` (see `add_values_raw`).
+    if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
+        if r == 0 {
+            vm.err_divide_by_zero();
+            return None;
+        }
+        if let Some(m) = i128_floor_rem(l, r) {
+            return Some(Value::from_i128(m));
+        }
+    }
     match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
         (Some(lhs), Some(rhs)) => {
             // For modulo, both integer zero and float zero raise ZeroDivisionError
@@ -629,6 +658,10 @@ macro_rules! int_binop_values {
                 if vm.dispatch_redefined_op(globals, lhs.class(), $op_str) {
                     return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
                 }
+                // Two 128-bit Integers compute in `i128` (see `add_values_raw`).
+                if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
+                    return Some(Value::from_i128(l.$op(r)));
+                }
                 let v = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Fixnum(lhs), RV::Fixnum(rhs)) => Value::integer(lhs.$op(&rhs)),
                     (RV::Fixnum(lhs), RV::BigInt(rhs)) => Value::bigint(BigInt::from(lhs).$op(rhs)),
@@ -668,6 +701,13 @@ pub(crate) extern "C" fn shr_values_raw(
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
+    // A 128-bit Integer shifted by a small amount computes in `i128` (see
+    // `add_values_raw`); a wider shift falls through to the BigInt paths.
+    if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.try_fixnum())
+        && let Some(v) = i128_shift(l, -r)
+    {
+        return Some(v);
+    }
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
             if rhs >= 0 {
@@ -741,6 +781,12 @@ pub(crate) extern "C" fn shl_values_raw(
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
+    // See `shr_values_raw`.
+    if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.try_fixnum())
+        && let Some(v) = i128_shift(l, r)
+    {
+        return Some(v);
+    }
     let v = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => {
             if rhs >= 0 {
@@ -810,6 +856,47 @@ pub(crate) extern "C" fn shl_values_raw(
 }
 
 /// Safe shift helpers that handle shift amounts > 32 bits without truncation.
+///
+/// `lhs << amount` (a negative *amount* shifts right) in `i128`, when the
+/// result fits one: a right shift by any amount (saturating to `0` / `-1`
+/// past 127 bits), a left shift whose high bits survive the shift back.
+/// `None` otherwise, for the BigInt paths.
+///
+#[inline]
+pub(crate) fn i128_shift(lhs: i128, amount: i64) -> Option<Value> {
+    if amount >= 0 {
+        if amount >= 128 {
+            return (lhs == 0).then(|| Value::integer(0));
+        }
+        let res = lhs << amount;
+        (res >> amount == lhs).then(|| Value::from_i128(res))
+    } else {
+        let amount = amount.unsigned_abs();
+        Some(if amount >= 128 {
+            Value::integer(if lhs < 0 { -1 } else { 0 })
+        } else {
+            Value::from_i128(lhs >> amount)
+        })
+    }
+}
+
+/// Ruby's `/` on Integers: the quotient rounded toward negative infinity.
+/// `None` only for `i128::MIN / -1`. *rhs* must not be `0`.
+#[inline]
+pub(crate) fn i128_floor_div(lhs: i128, rhs: i128) -> Option<i128> {
+    let q = lhs.checked_div(rhs)?;
+    let m = lhs % rhs;
+    Some(if m != 0 && ((m < 0) != (rhs < 0)) { q - 1 } else { q })
+}
+
+/// Ruby's `%` on Integers: the remainder with the divisor's sign. `None`
+/// only for `i128::MIN % -1`. *rhs* must not be `0`.
+#[inline]
+pub(crate) fn i128_floor_rem(lhs: i128, rhs: i128) -> Option<i128> {
+    let m = lhs.checked_rem(rhs)?;
+    Some(if m != 0 && ((m < 0) != (rhs < 0)) { m + rhs } else { m })
+}
+
 fn safe_int_shr(lhs: i64, rhs: u64) -> Value {
     if rhs >= 64 {
         Value::integer(if lhs >= 0 { 0 } else { -1 })

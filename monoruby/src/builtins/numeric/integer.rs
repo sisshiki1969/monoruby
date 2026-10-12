@@ -3040,6 +3040,58 @@ mod tests {
     }
 
     #[test]
+    fn inline_bignum_arithmetic_matrix() {
+        // Bignums up to 128 bits are held inline (`rvalue::BignumInner`) and
+        // the operators compute on the `i128`; the matrix crosses the
+        // boundaries — fixnum / 64-bit / 127-bit / beyond — so each operator
+        // is seen on both sides of every representation change. `0 | x`
+        // forces the runtime helpers rather than constant folding.
+        run_test(
+            r#"
+            vs = [0, 1, -1, 7, 2**62 - 1, -(2**62), 2**62, -(2**62) - 1,
+                  2**63 - 1, 2**63, 2**64 - 1, 2**64, 0xcbf29ce484222325,
+                  2**126, 2**127 - 1, -(2**127), 2**127, 2**128 - 1, 2**128,
+                  3**90, -(3**90)].map { |v| 0 | v }
+            r = []
+            vs.each do |a|
+              vs.each do |b|
+                r << (a + b) << (a - b) << (a * b) << (a & b) << (a | b) << (a ^ b)
+                r << (a <=> b) << (a == b) << (a < b)
+                unless b == 0
+                  r << (a / b) << (a % b) << a.divmod(b)
+                end
+              end
+              r << -a << ~a << (a << 3) << (a >> 3) << (a << 70) << (a >> 70)
+              r << (a << 128) << (a >> 128) << (a << -5) << (a >> -5)
+              r << a.to_s << a.to_s(16) << a.hash.class << (a.hash == (0 | a).hash)
+            end
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn inline_bignum_as_hash_key_and_after_to_s() {
+        // A Bignum a consumer asked to see as a `BigInt` (`to_s`, `hash`)
+        // is converted in place; it must keep comparing and computing like
+        // one that was not, and equal values must hash alike as Hash keys.
+        run_test(
+            r#"
+            a = 0 | (2**64 - 1)
+            b = 0 | (2**64 - 1)
+            s = a.to_s
+            h = { a => 1 }
+            r = [s, h[b], a == b, a.eql?(b), a.equal?(b), a + 1 == b + 1, (a ^ b)]
+            r << (a * a).to_s << ((a * a) == (b * b)) << h.key?(2**64 - 1)
+            x = 88172645463325252
+            200.times { x ^= (x << 13) & 0xffff_ffff_ffff_ffff; x ^= x >> 7; x ^= (x << 17) & 0xffff_ffff_ffff_ffff }
+            r << x << x.to_s(2).size << Marshal.load(Marshal.dump(x)) << [x].pack("Q>").unpack1("Q>")
+            r
+            "#,
+        );
+    }
+
+    #[test]
     fn integer_shl_overflow_promotes_to_bignum() {
         // Regression (#687): `safe_int_shl` used `checked_shl` + a sign-preserve
         // guard, which let a value overflow (shift amount < 64) wrap into i64

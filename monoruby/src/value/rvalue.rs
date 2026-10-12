@@ -10,6 +10,7 @@ use std::mem::ManuallyDrop;
 use crate::ast::{Loc, SourceInfoRef};
 
 pub use argf::*;
+pub(crate) use bignum::BignumInner;
 pub use arithmetic_sequence::{
     AS_BEGIN_OFFSET, AS_END_OFFSET, AS_EXCLUDE_END_OFFSET, AS_STEP_OFFSET, ArithmeticSequenceInner,
 };
@@ -71,6 +72,7 @@ pub use weakmap::*;
 mod argf;
 mod arithmetic_sequence;
 mod array;
+mod bignum;
 mod binding;
 mod complex;
 mod converter;
@@ -233,7 +235,7 @@ pub union ObjKind {
     invalid: (),
     class: ManuallyDrop<ModuleInner>,
     object: [Option<Value>; OBJECT_INLINE_IVAR],
-    bignum: ManuallyDrop<BigInt>,
+    bignum: ManuallyDrop<BignumInner>,
     float: f64,
     complex: ManuallyDrop<ComplexInner>,
     string: ManuallyDrop<RStringInner>,
@@ -367,7 +369,7 @@ impl ObjKind {
         }
     }
 
-    fn bignum(b: BigInt) -> Self {
+    fn bignum(b: BignumInner) -> Self {
         Self {
             bignum: ManuallyDrop::new(b),
         }
@@ -1693,7 +1695,7 @@ impl RValue {
                         ObjKind::class(class.id(), class.superclass(), class.class_type().clone())
                     }
                     ObjTy::OBJECT => ObjKind::object(),
-                    ObjTy::BIGNUM => ObjKind::bignum(self.as_bignum().clone()),
+                    ObjTy::BIGNUM => ObjKind::bignum((*self.kind.bignum).clone()),
                     ObjTy::FLOAT => ObjKind {
                         float: self.as_float(),
                     },
@@ -2034,10 +2036,20 @@ impl RValue {
 // constructors.
 //
 impl RValue {
+    /// *bigint* must be outside the fixnum range (`Value::bigint` normalizes).
     pub(super) fn new_bigint(bigint: BigInt) -> Self {
         RValue {
             header: Header::new(INTEGER_CLASS, ObjTy::BIGNUM),
-            kind: ObjKind::bignum(bigint),
+            kind: ObjKind::bignum(BignumInner::from_bigint(bigint)),
+            var_table: None,
+        }
+    }
+
+    /// *i* must be outside the fixnum range (`Value::from_i128` normalizes).
+    pub(super) fn new_int128(i: i128) -> Self {
+        RValue {
+            header: Header::new(INTEGER_CLASS, ObjTy::BIGNUM),
+            kind: ObjKind::bignum(BignumInner::from_i128(i)),
             var_table: None,
         }
     }
@@ -2667,7 +2679,7 @@ impl RValue {
     pub(crate) fn eq(store: &Store, lhs: &Self, rhs: &Self) -> bool {
         unsafe {
             match (lhs.ty(), rhs.ty()) {
-                (ObjTy::BIGNUM, ObjTy::BIGNUM) => lhs.as_bignum() == rhs.as_bignum(),
+                (ObjTy::BIGNUM, ObjTy::BIGNUM) => *lhs.kind.bignum == *rhs.kind.bignum,
                 (ObjTy::FLOAT, ObjTy::FLOAT) => lhs.as_float() == rhs.as_float(),
                 (ObjTy::RATIONAL, ObjTy::RATIONAL) => lhs.as_rational() == rhs.as_rational(),
                 (ObjTy::COMPLEX, ObjTy::COMPLEX) => {
@@ -2757,10 +2769,27 @@ impl RValue {
         unsafe { self.kind.float }
     }
 
+    ///
+    /// The Bignum as a `&BigInt`. An inline value (see [`BignumInner`]) is
+    /// converted to the `Big` form in place, through the shared reference:
+    /// the object heap is mutated through `Value` handles everywhere, every
+    /// access runs under the GVL, and the conversion happens at most once
+    /// per object and preserves its value, so no other reference observes
+    /// a change of meaning.
+    ///
     pub(super) unsafe fn as_bignum(&self) -> &BigInt {
         // SAFETY: Caller must ensure this RValue contains a BIGNUM type.
         // Accessing the bignum union field is valid only when the type is BIGNUM.
-        unsafe { &self.kind.bignum }
+        unsafe {
+            let inner: *mut BignumInner = &raw const *self.kind.bignum as *mut BignumInner;
+            (*inner).materialize()
+        }
+    }
+
+    /// The Bignum as an `i128`, when it fits one (never allocates).
+    pub(super) unsafe fn bignum_as_i128(&self) -> Option<i128> {
+        // SAFETY: Caller must ensure this RValue contains a BIGNUM type.
+        unsafe { self.kind.bignum.as_i128() }
     }
 
     pub(super) unsafe fn as_complex(&self) -> &ComplexInner {
