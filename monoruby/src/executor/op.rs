@@ -46,6 +46,35 @@ pub(crate) fn bigint_cmp_float(bigint: &BigInt, f: f64) -> Option<std::cmp::Orde
     }
 }
 
+/// Compare a fixnum with an f64 exactly, as CRuby's `rb_integer_float_cmp`
+/// does. `i as f64` rounds once `|i| > 2**53`, so `2**53 + 1 == 2.0**53`
+/// would wrongly hold; past that bound the float is compared through its
+/// integral part instead. Returns the ordering of `i` relative to `f`, or
+/// `None` if `f` is NaN.
+pub(crate) fn fixnum_cmp_float(i: i64, f: f64) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    const EXACT: i64 = 1 << 53;
+    if (-EXACT..=EXACT).contains(&i) {
+        return (i as f64).partial_cmp(&f);
+    }
+    if f.is_nan() {
+        return None;
+    }
+    // `i` is an i63, so a float outside the i64 range is decided by its sign.
+    if f >= 9223372036854775808.0 {
+        return Some(Ordering::Less);
+    }
+    if f < -9223372036854775808.0 {
+        return Some(Ordering::Greater);
+    }
+    let t = f.trunc();
+    // `t` is integral and within the i64 range, so the cast is exact.
+    match i.cmp(&(t as i64)) {
+        Ordering::Equal => 0.0f64.partial_cmp(&(f - t)),
+        ord => Some(ord),
+    }
+}
+
 //
 // Generic operations.
 //
@@ -243,7 +272,10 @@ macro_rules! cmp_values {
                 let b = match (lhs.unpack(), rhs.unpack()) {
                     (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.$op(&rhs),
                     (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).$op(&rhs),
-                    (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).$op(&rhs),
+                    (RV::Fixnum(lhs), RV::Float(rhs)) => match fixnum_cmp_float(lhs, rhs) {
+                        Some(ord) => ord.$op(&std::cmp::Ordering::Equal),
+                        None => false, // NaN comparisons are always false
+                    },
                     (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.$op(&BigInt::from(rhs)),
                     (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.$op(&rhs),
                     (RV::BigInt(lhs), RV::Float(rhs)) => {
@@ -274,7 +306,10 @@ macro_rules! cmp_values {
                         return None;
                     }
 
-                    (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.$op(&(rhs as f64)),
+                    (RV::Float(lhs), RV::Fixnum(rhs)) => match fixnum_cmp_float(rhs, lhs) {
+                        Some(ord) => ord.reverse().$op(&std::cmp::Ordering::Equal),
+                        None => false, // NaN comparisons are always false
+                    },
                     (RV::Float(lhs), RV::BigInt(rhs)) => {
                         match bigint_cmp_float(&rhs, lhs) {
                             Some(ord) => ord.reverse().$op(&std::cmp::Ordering::Equal),
@@ -393,7 +428,9 @@ impl Executor {
             (RV::Nil, _) => false,
             (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
             (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
-            (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
+            (RV::Fixnum(lhs), RV::Float(rhs)) => {
+                fixnum_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
+            }
             (RV::Fixnum(_), _) => {
                 // Reverse dispatch: try rhs == lhs (boolean-coerced, like
                 // CRuby's num_equal -> rb_equal)
@@ -408,7 +445,9 @@ impl Executor {
                 // Reverse dispatch: try rhs == lhs (boolean-coerced)
                 return Ok(Value::bool(self.invoke_eq(globals, rhs, lhs)?));
             }
-            (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
+            (RV::Float(lhs), RV::Fixnum(rhs)) => {
+                fixnum_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
+            }
             (RV::Float(lhs), RV::BigInt(rhs)) => {
                 bigint_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
             }
@@ -739,7 +778,9 @@ fn cmp_teq_values_impl(
         (RV::Bool(_), _) => false,
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
         (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
-        (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
+        (RV::Fixnum(lhs), RV::Float(rhs)) => {
+            fixnum_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
+        }
         (RV::Fixnum(_), _) => {
             // Reverse dispatch for Integer === non-numeric
             return vm.invoke_method_simple(globals, IdentId::_EQ, rhs, &[lhs]);
@@ -753,7 +794,9 @@ fn cmp_teq_values_impl(
             // Reverse dispatch for Integer === non-numeric
             return vm.invoke_method_simple(globals, IdentId::_EQ, rhs, &[lhs]);
         }
-        (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
+        (RV::Float(lhs), RV::Fixnum(rhs)) => {
+            fixnum_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
+        }
         (RV::Float(lhs), RV::BigInt(rhs)) => {
             bigint_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
         }
@@ -784,7 +827,9 @@ pub(crate) fn cmp_teq_values_bool(
         (RV::Bool(_), _) => false,
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
         (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
-        (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).eq(&rhs),
+        (RV::Fixnum(lhs), RV::Float(rhs)) => {
+            fixnum_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
+        }
         (RV::Fixnum(_), _) => {
             // Reverse dispatch: try rhs == lhs
             return vm.invoke_eq(globals, rhs, lhs);
@@ -798,7 +843,9 @@ pub(crate) fn cmp_teq_values_bool(
             // Reverse dispatch: try rhs == lhs
             return vm.invoke_eq(globals, rhs, lhs);
         }
-        (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.eq(&(rhs as f64)),
+        (RV::Float(lhs), RV::Fixnum(rhs)) => {
+            fixnum_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
+        }
         (RV::Float(lhs), RV::BigInt(rhs)) => {
             bigint_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
         }
@@ -1140,13 +1187,15 @@ impl Executor {
             (RV::Bool(_), _) => None,
             (RV::Fixnum(lhs), RV::Fixnum(rhs)) => Some(lhs.cmp(&rhs)),
             (RV::Fixnum(lhs), RV::BigInt(rhs)) => Some(BigInt::from(lhs).cmp(rhs)),
-            (RV::Fixnum(lhs), RV::Float(rhs)) => (lhs as f64).partial_cmp(&rhs),
+            (RV::Fixnum(lhs), RV::Float(rhs)) => fixnum_cmp_float(lhs, rhs),
             (RV::Fixnum(_), _) => None,
             (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&BigInt::from(rhs)),
             (RV::BigInt(lhs), RV::BigInt(rhs)) => Some(lhs.cmp(rhs)),
             (RV::BigInt(lhs), RV::Float(rhs)) => bigint_cmp_float(lhs, rhs),
             (RV::BigInt(_), _) => None,
-            (RV::Float(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&(rhs as f64)),
+            (RV::Float(lhs), RV::Fixnum(rhs)) => {
+                fixnum_cmp_float(rhs, lhs).map(|ord| ord.reverse())
+            }
             (RV::Float(lhs), RV::BigInt(rhs)) => {
                 bigint_cmp_float(rhs, lhs).map(|ord| ord.reverse())
             }

@@ -206,6 +206,9 @@ fn float_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
                 lhs_class: FOpClass::Float,
                 rhs_class: rhs_fop,
             };
+            if !state.float_cmp_literals_exact(info) {
+                return BinaryInlineOutcome::Declined;
+            }
             if let Some(slot) = ctx.wants_cond_flags(dst)
                 && let Some(flags) = state.gen_cmp_float_flags(ir, slot, info, kind)
             {
@@ -483,7 +486,9 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let rhs = lfp.arg(0);
     let ord = match (lhs.try_float(), rhs.unpack()) {
         (None, _) => unreachable!(),
-        (Some(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&(rhs as f64)),
+        (Some(lhs), RV::Fixnum(rhs)) => {
+            super::super::op::fixnum_cmp_float(rhs, lhs).map(|ord| ord.reverse())
+        }
         (Some(lhs), RV::BigInt(rhs)) => {
             super::super::op::bigint_cmp_float(rhs, lhs).map(|ord| ord.reverse())
         }
@@ -1526,6 +1531,24 @@ mod tests {
         );
         // Object without coerce -> nil
         run_test("1.5 <=> 'a'");
+    }
+
+    #[test]
+    fn float_toi_nan_jit() {
+        // The inlined `to_i` must not convert NaN (aarch64 `fcvtzs` gives 0).
+        run_test_with_prelude(
+            r#"
+            res = []
+            30.times { res << toi(1.5) << toi(-2.5) }
+            [Float::NAN, Float::INFINITY, -Float::INFINITY].each do |v|
+              res << begin; toi(v); rescue FloatDomainError => e; e.message; end
+            end
+            res
+            "#,
+            r#"
+            def toi(x) = x.to_i
+            "#,
+        );
     }
 
     #[test]

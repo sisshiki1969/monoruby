@@ -1989,6 +1989,71 @@ mod tests {
     }
 
     #[test]
+    fn int_div_quotient_overflow() {
+        // `FIXNUM_MIN / -1 = 2**62` is the one fixnum quotient outside the
+        // fixnum range: the JIT's tagging shift must deopt there so the
+        // interpreter promotes it, not wrap to `FIXNUM_MIN`.
+        run_test_with_prelude(
+            r##"
+            res = []
+            30.times { res << div(-(1 << 62), -1) << div(-(1 << 62), 1) << div((1 << 62) - 1, -1) << div(-7, 2) }
+            res
+        "##,
+            r##"
+            def div(a, b) = a / b
+        "##,
+        );
+    }
+
+    #[test]
+    fn shr_by_negative_amount_overflow() {
+        // `a >> -k` is a left shift; `k == lzcnt` of the tagged value is the
+        // first amount that overflows the fixnum range.
+        run_test_with_prelude(
+            r##"
+            res = []
+            30.times do
+              res << shr((1 << 62) - 1, -1) << shr(1, -62) << shr(1, -61) << shr(5, -60)
+              res << shr(-1, -62) << shr(-1, -61) << shr(3, -2)
+            end
+            res
+        "##,
+            r##"
+            def shr(a, b) = a >> b
+        "##,
+        );
+    }
+
+    #[test]
+    fn integer_float_compare_exact() {
+        // Integer vs Float compares exactly, even where the fixnum's f64
+        // conversion rounds (|n| > 2**53).
+        run_test_with_prelude(
+            r##"
+            xs = [1, -3, 2**53 + 1, -(2**53) - 1, 2**62 - 1, -(2**62), 2**53, 2**53 - 1]
+            fs = [0.5, 9007199254740992.0, -9007199254740992.0, 4.611686018427388e18, -4.611686018427388e18, Float::NAN, Float::INFINITY]
+            res = []
+            30.times do
+              res = []
+              xs.each { |x| fs.each { |f| res << [lt(x, f), gt(x, f), eq(x, f), cmp(x, f), flt(x, f), br(x, f)] } }
+              fs.each { |f| res << [lit1(f), lit2(f)] }
+            end
+            res
+        "##,
+            r##"
+            def lt(a, b) = a < b
+            def gt(a, b) = a > b
+            def eq(a, b) = a == b
+            def cmp(a, b) = a <=> b
+            def flt(a, b) = b < a
+            def br(a, b) = (a > b) ? 1 : 0
+            def lit1(b) = (2**53 + 1) > b
+            def lit2(b) = b < 9007199254740993
+        "##,
+        );
+    }
+
+    #[test]
     fn binop_imm_forms() {
         // Immediate forms and their fallbacks: small consts (folded),
         // i32-boundary consts (2k just fits / just overflows i32 -> register

@@ -43,6 +43,9 @@ where
     }
 }
 
+/// The magnitude bound below which every integer converts to f64 exactly.
+const F64_EXACT_INT: i64 = 1 << 53;
+
 impl AbstractState {
     fn fold_constant_cmp<T>(&mut self, kind: CmpKind, lhs: T, rhs: T, dst: Option<SlotId>)
     where
@@ -649,6 +652,7 @@ impl AbstractState {
             self.fold_constant_cmp(kind, lhs, rhs, dst);
             return;
         };
+        self.guard_float_cmp_exact(ir, info);
         let binary_fpr = self.load_binary_fpr(ir, info);
         ir.push(AsmInst::FloatCmp {
             kind,
@@ -967,12 +971,59 @@ impl AbstractState {
         // rhs itself for a `_%n = %m > %n` compare, and an operand that lives
         // only in a GP register (an ivar just loaded) must be read from
         // there (`FprLoad::FromStack`'s `gp`), not from its stale home.
+        self.guard_float_cmp_exact(ir, info);
         let mode = self.load_binary_fpr(ir, info);
         self.gp_regfile.invalidate(dst);
         self.flush_gp(ir);
         ir.float_cmp_flags(mode);
         self.def_C(dst, Value::nil());
         Some(CondFlags::Float(kind))
+    }
+
+    /// Can an Integer/Float comparison be lowered to an xmm compare at all?
+    /// Converting a fixnum to f64 rounds once `|n| > 2**53`, and Ruby
+    /// compares Integer with Float exactly (`2**53 + 1 > 2.0**53`). A
+    /// variable fixnum operand gets a runtime range guard
+    /// ([`Self::guard_float_cmp_exact`]); a fixnum *literal* outside the
+    /// exact range would fail that guard on every execution, so the
+    /// generators decline such a site to the ordinary method call instead.
+    pub(crate) fn float_cmp_literals_exact(&self, info: FBinOpInfo) -> bool {
+        [(info.lhs, info.lhs_class), (info.rhs, info.rhs_class)]
+            .into_iter()
+            .all(|(slot, class)| {
+                class != FOpClass::Integer
+                    || self
+                        .is_fixnum_literal(slot)
+                        .is_none_or(|n| (-F64_EXACT_INT..F64_EXACT_INT).contains(&n.get()))
+            })
+    }
+
+    /// Deopt unless every variable fixnum operand of an Integer/Float
+    /// comparison lies in `[-2**53, 2**53)`, where its f64 conversion is
+    /// exact; the interpreter compares the rest exactly
+    /// (`op::fixnum_cmp_float`). Literal operands were vetted by
+    /// [`Self::float_cmp_literals_exact`].
+    fn guard_float_cmp_exact(&mut self, ir: &mut AsmIr, info: FBinOpInfo) {
+        for (slot, class) in [(info.lhs, info.lhs_class), (info.rhs, info.rhs_class)] {
+            if class != FOpClass::Integer || self.is_fixnum_literal(slot).is_some() {
+                continue;
+            }
+            self.load_fixnum(ir, slot, GP::Rdi);
+            let deopt = ir.new_deopt(self);
+            ir.inline(move |r#gen, _, labels, _| {
+                let d = r#gen.deopt_label(
+                    labels,
+                    deopt,
+                    crate::codegen::jitgen::deopt_log::DeoptCause::Static(
+                        "fixnum beyond f64 precision",
+                    ),
+                );
+                r#gen.guard_fixnum_f64_exact(&d)
+            });
+            if info.lhs == info.rhs {
+                break;
+            }
+        }
     }
 
     fn fetch_float_assume(&mut self, ir: &mut AsmIr, rhs: SlotId, class: FOpClass) -> FPReg {

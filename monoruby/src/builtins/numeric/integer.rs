@@ -411,7 +411,9 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     let b = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(l), RV::Fixnum(r)) => l == r,
         (RV::Fixnum(l), RV::BigInt(r)) => BigInt::from(l) == *r,
-        (RV::Fixnum(l), RV::Float(r)) => (l as f64) == r,
+        (RV::Fixnum(l), RV::Float(r)) => {
+            super::super::op::fixnum_cmp_float(l, r) == Some(std::cmp::Ordering::Equal)
+        }
         (RV::BigInt(l), RV::Fixnum(r)) => *l == BigInt::from(r),
         (RV::BigInt(l), RV::BigInt(r)) => l == r,
         (RV::BigInt(l), RV::Float(r)) => {
@@ -451,7 +453,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let ord = match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.cmp(&rhs),
         (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).cmp(rhs),
-        (RV::Fixnum(lhs), RV::Float(rhs)) => match (lhs as f64).partial_cmp(&rhs) {
+        (RV::Fixnum(lhs), RV::Float(rhs)) => match super::super::op::fixnum_cmp_float(lhs, rhs) {
             Some(ord) => ord,
             None => {
                 return Ok(Value::nil());
@@ -1075,6 +1077,11 @@ fn integer_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
                 }),
                 _ => return BinaryInlineOutcome::Declined,
             };
+            if let Some(info) = float_info
+                && !state.float_cmp_literals_exact(info)
+            {
+                return BinaryInlineOutcome::Declined;
+            }
             if let Some(slot) = ctx.wants_cond_flags(dst) {
                 let flags = match float_info {
                     None => state.gen_cmp_integer_flags(ir, kind, slot, recv, args),

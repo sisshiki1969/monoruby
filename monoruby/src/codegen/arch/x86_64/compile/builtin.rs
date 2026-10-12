@@ -1455,6 +1455,22 @@ impl Codegen {
         }
     }
 
+    /// Deopt unless the tagged fixnum in rdi lies in `[-2**53, 2**53)`, the
+    /// range whose f64 conversion is exact (an Integer/Float comparison).
+    /// `2n+1` is in range iff `2n+1 + 2**54` is in `[1, 2**55)`; anything
+    /// outside wraps or lands at or above `2**55`.
+    ///
+    /// ### destroy
+    /// - rax
+    pub(crate) fn guard_fixnum_f64_exact(&mut self, deopt: &DestLabel) {
+        monoasm! { &mut self.jit,
+            movq rax, (1u64 << 54);
+            addq rax, rdi;
+            shrq rax, 55;
+            jnz  deopt;
+        }
+    }
+
     /// `Fiber.yield` with no args: the yielded value (rsi) is nil.
     pub(crate) fn emit_fiber_yield_value_nil(&mut self) {
         monoasm! { &mut self.jit,

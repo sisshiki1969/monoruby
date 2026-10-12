@@ -92,6 +92,11 @@ impl Codegen {
         let rdi = GP::Rdi.a64().0; // x4
         self.a64_fpr_into_d0(fsrc, base);
         let deopt = deopt.clone();
+        // `fcvtzs` converts NaN to 0 (x86's `cvttsd2si` gives i64::MIN, which
+        // the doubling below catches), so test for NaN first: the builtin
+        // raises FloatDomainError. ±Infinity saturates and overflows below.
+        monoasm_arm64!(&mut self.jit, fcmp d0, d0;);
+        self.jit.bcond_label(monoasm::Cond::Vs, &deopt); // unordered -> NaN
         monoasm_arm64!(&mut self.jit,
             fcvtzs x(rdi), d0;
             adds x(rdi), x(rdi), x(rdi);   // ×2, set NZCV
@@ -99,6 +104,23 @@ impl Codegen {
         self.jit.bcond_label(monoasm::Cond::Vs, &deopt); // overflow -> deopt
         monoasm_arm64!(&mut self.jit,
             add x(rdi), x(rdi), #(1);      // tag (low bit clear after ×2)
+        );
+    }
+
+    /// Deopt unless the tagged fixnum in Rdi (x4) lies in `[-2**53, 2**53)`,
+    /// the range whose f64 conversion is exact (an Integer/Float
+    /// comparison). aarch64 twin of x86 `guard_fixnum_f64_exact`.
+    ///
+    /// ### destroy
+    /// - x9
+    pub(crate) fn guard_fixnum_f64_exact(&mut self, deopt: &DestLabel) {
+        let rdi = GP::Rdi.a64().0; // x4
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (1u64 << 54);
+            add x9, x9, x(rdi);
+            lsr x9, x9, #(55);
+            cbnz x9, deopt;
         );
     }
 
