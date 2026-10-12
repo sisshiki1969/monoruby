@@ -4856,6 +4856,7 @@ eb229f1c9e6cc14d6170bdb3acbd0e71	[:broken, :returned, :done]	def inner; yield; :
 eb421d775d0e26969e7df70d80788ed0	[60, 20, true, false, "é😀"]	def cpapp(s, n)\n          i = 0\n          while i < n\n            s << 
 eb480c65027479d5c43e622f7002a48d	true	"abc".force_encoding("ISO-8859-13").encoding == Encoding::ISO_8859_13
 eb6c44b9b44eacb6b79ea0cf796154f7	4500	def f(n, k)\n          i = 0\n          r = 0\n          while i < n\n     
+eb859ca9b6382f90ce262175cb82eafa	0	EPS = 1e-6\n            def float_equal(a, b)\n              (a - b).
 eb8bfa74383a9c461c1974ce255f62ae	[200, -200, 200, -130, -140, true, false]	__a = [];__a << (249.round(-2));__a << ((-249).round(-2));__a << (150.round(-2))
 eb95d935f094af9857548a9bc31a9d9c	[[1, 0, 97, 0, 98, 0], :nul, :too_long, :bad_family, :not_str, "AF_UNIX", "AF_UNIX", true]	require "socket"\n            require "tmpdir"\n            res = []\n
 eb964a5d470f9976795a0f65e5e4c883	[1, [2, 3]]	def f\n            \tyield [1,2,3]\n            end\n            \n\n    
