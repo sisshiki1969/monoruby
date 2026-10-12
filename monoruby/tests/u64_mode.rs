@@ -306,3 +306,26 @@ fn raw_temp_as_argument() {
         PRELUDE,
     );
 }
+
+/// An operand still in a GP register (its stack home stale) when it
+/// reaches a raw-u64 site: the conversion must flush it first, since the
+/// exit re-reads the home (`c` read back as nil after the `*` overflowed).
+#[test]
+fn gp_resident_operand_before_exit() {
+    run_test_with_prelude(
+        r##"
+        def f(x)
+          a = x * 3 + 1
+          b = a * 5 + 2
+          c = b * 7 + 3
+          d = c * 0x3fffffffffffff + 4
+          e = (c ^ 0x8000_0000_0000_0000) + x
+          [a, b, c, d, e]
+        end
+        out = []
+        40.times { |i| out << f(i) if i % 13 == 0 }
+        out
+        "##,
+        PRELUDE,
+    );
+}

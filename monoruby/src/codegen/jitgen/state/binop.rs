@@ -1075,7 +1075,16 @@ impl AbstractState {
                 // `S` (or a fixnum with an f64 cache): the boxed Integer is
                 // in the home, or in a GP resident `load` reads.
                 let deopt = ir.new_deopt(self);
-                self.load(ir, slot, GP::Rdi);
+                // The slot becomes `Su`, whose stack home is canonical: a GP
+                // resident (home stale) is flushed first, as the `S -> Sf`
+                // conversion does (`FprFixnumLoad::FromStack`).
+                match self.gp_regfile.reg_of(slot) {
+                    Some(reg) => {
+                        ir.reg2stack(reg, slot);
+                        ir.reg_move(reg, GP::Rdi);
+                    }
+                    None => ir.stack2reg(slot, GP::Rdi),
+                }
                 let x = self.set_new_Su(slot);
                 ir.u64_unbox(GP::Rdi, x, deopt);
                 x
