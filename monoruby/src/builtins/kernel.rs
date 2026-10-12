@@ -4975,25 +4975,9 @@ fn is_a(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     ))
 }
 
-/// The compile-time `is_a?` answer for one cache class: walk its raw
-/// superclass chain (ICLASS entries included, so included/prepended
-/// modules are seen) looking for `target_id`. `None` for a class with
-/// no backing Module object (the synthetic BOOL_CLASS), whose chain is
-/// not meaningful.
-fn is_a_chain(store: &Store, class: CachedClass, target_id: ClassId) -> Option<bool> {
-    let mut cur = Some(store[class.id()].try_get_module()?);
-    while let Some(m) = cur {
-        if m.id() == target_id {
-            return Some(true);
-        }
-        cur = m.superclass();
-    }
-    Some(false)
-}
-
 fn kernel_is_a(
     state: &mut AbstractState,
-    _ir: &mut AsmIr,
+    ir: &mut AsmIr,
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
@@ -5004,7 +4988,9 @@ fn kernel_is_a(
     if !callsite.is_simple() {
         return false;
     }
-    let CallSiteInfo { args, dst, .. } = *callsite;
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
     // Only fold when the argument is a concrete class/module value.
     // Anything else (including a literal that isn't a class/module — which
     // would raise TypeError) falls back to the regular dispatch.
@@ -5014,34 +5000,103 @@ fn kernel_is_a(
     let target_id = target.id();
     // The receiver-class guard (or the membership guard) + class_version
     // guard upstream fix the inheritance chains at this point, so the
-    // answer is a compile-time walk. With a single proven class it is
-    // that class's; under a same-target membership guard it folds only
-    // when it is uniform over every admitted class — exactly the
-    // polymorphic `value.is_a?(SomeClass)` shape, where the answer is
-    // `false` for every observed receiver class alike.
-    let result = if let Some(recv_class) = recv_class {
-        match is_a_chain(store, recv_class, target_id) {
-            Some(r) => r,
-            None => return false,
+    // answer is a compile-time walk per class. With a single proven class
+    // it is that class's; under a same-target membership guard it is a
+    // function of the admitted class, lowered by
+    // `class_predicate_under_set_guard` (folded when uniform — the
+    // polymorphic `value.is_a?(SomeClass)` shape, `false` for every
+    // observed receiver class alike — or a class test otherwise).
+    // Every answer is recorded (`crate::ancestry`): the class-version
+    // salvage re-asks method resolutions, which an `include` that changes
+    // the answer leaves untouched, so it re-walks these chains instead.
+    let answer = |class: CachedClass| {
+        let answer = crate::ancestry::answer(store, class.id(), target_id)?;
+        ctx.assume_ancestry(class.id(), target_id, answer);
+        Some(answer)
+    };
+    if let Some(recv_class) = recv_class {
+        let Some(result) = answer(recv_class) else {
+            return false;
+        };
+        if let Some(dst) = dst {
+            state.def_C(dst, Immediate::bool(result));
         }
-    } else if let Some(classes) = ctx.same_target_classes() {
-        let mut uniform: Option<bool> = None;
-        for &class in classes {
-            match is_a_chain(store, class, target_id) {
-                Some(r) if *uniform.get_or_insert(r) == r => {}
-                _ => return false,
-            }
-        }
-        match uniform {
-            Some(r) => r,
-            None => return false,
-        }
+        true
     } else {
-        // A multi-class dispatch arm without the set at hand.
+        class_predicate_under_set_guard(state, ir, ctx, recv, dst, answer)
+    }
+}
+
+///
+/// Lower a predicate whose answer is a function of the receiver's class
+/// under a membership guard (`JitContext::same_target_classes`), given
+/// `answer` for each admitted class (`None`: not decidable at compile
+/// time — the whole lowering declines to the builtin call).
+///
+/// A uniform answer folds to a constant. Otherwise the receiver's class is
+/// tested against the smaller of the two answering sets
+/// (`AsmInst::ClassInToBool`) — a few compares in place of the builtin
+/// call — and when only the following conditional branch reads the result,
+/// the test stays in the condition flags and the branch narrows the
+/// receiver to the classes that answer `true` / `false` on its two sides
+/// (`JitContext::set_cond_flags_class_split`).
+///
+/// Soundness is the membership guard's: the receiver is one of `classes`,
+/// each member's resolution of the predicate is recorded in the unit's
+/// inline cache, and a redefinition / `include` that changes an answer
+/// moves the class version.
+///
+fn class_predicate_under_set_guard(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    ctx: &JitContext,
+    recv: SlotId,
+    dst: Option<SlotId>,
+    answer: impl Fn(CachedClass) -> Option<bool>,
+) -> bool {
+    // A multi-class dispatch arm without the set at hand declines.
+    let Some(classes) = ctx.same_target_classes() else {
         return false;
     };
-    if let Some(dst) = dst {
-        state.def_C(dst, Immediate::bool(result));
+    let mut yes = vec![];
+    let mut no = vec![];
+    for &class in classes {
+        match answer(class) {
+            Some(true) => yes.push(class),
+            Some(false) => no.push(class),
+            None => return false,
+        }
+    }
+    if yes.is_empty() || no.is_empty() {
+        if let Some(dst) = dst {
+            state.def_C(dst, Immediate::bool(no.is_empty()));
+        }
+        return true;
+    }
+    // The predicate has no effect; an unread answer computes nothing.
+    let Some(dst) = dst else {
+        return true;
+    };
+    if let Some(slot) = ctx.wants_cond_flags(Some(dst)) {
+        // Only the following conditional branch reads the answer: leave it
+        // in the condition flags. Nothing may come between the flags and
+        // the branch, which is a block boundary: settle the GP residents
+        // first, and park a nil in the dead temp (as `kernel_nil` does).
+        state.flush_gp(ir);
+        state.load(ir, recv, GP::Rdi);
+        let (chain, kind) = if yes.len() <= no.len() {
+            (&yes, crate::ast::CmpKind::Eq)
+        } else {
+            (&no, crate::ast::CmpKind::Ne)
+        };
+        ir.class_in_to_bool(GP::Rdi, chain.clone().into_boxed_slice());
+        ir.cmp_imm_flags(GP::Rax, crate::value::TRUE_VALUE as i32);
+        state.def_C(slot, Immediate::nil());
+        ctx.set_cond_flags_class_split(slot, jitgen::CondFlags::Int(kind), recv, &yes, &no);
+    } else {
+        state.load(ir, recv, GP::Rdi);
+        ir.class_in_to_bool(GP::Rdi, yes.into_boxed_slice());
+        state.def_rax2acc(ir, dst);
     }
     true
 }
@@ -5666,30 +5721,24 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 
 fn object_respond_to(
     state: &mut AbstractState,
-    _: &mut AsmIr,
+    ir: &mut AsmIr,
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
     recv_class: Option<CachedClass>,
     _: Option<CachedClass>,
 ) -> bool {
-    let Some(recv_class) = recv_class else {
-        // The call site could not prove the receiver's class (a multi-class
-        // dispatch arm / the class-set guard); this generator needs it.
-        return false;
-    };
     let callsite = &store[callid];
     if !callsite.is_simple() {
         return false;
     }
     let CallSiteInfo {
-        dst, args, pos_num, ..
+        recv,
+        dst,
+        args,
+        pos_num,
+        ..
     } = *callsite;
-    //let dst = if let Some(dst) = dst {
-    //    dst
-    //} else {
-    //    return false;
-    //};
     let include_all = if pos_num != 1 {
         if state.is_truthy(args + 1usize) {
             true
@@ -5706,42 +5755,69 @@ fn object_respond_to(
     } else {
         return false;
     };
-    if let Some(entry) =
-        store.check_method_for_class_with_version(recv_class.id(), method_name, ctx.class_version())
-    {
-        if include_all || entry.is_public() {
-            if let Some(dst) = dst {
-                state.def_C(dst, Immediate::bool(true));
-            }
-            return true;
+    let answer =
+        |class: CachedClass| respond_to_answer(store, ctx, class, method_name, include_all);
+    if let Some(recv_class) = recv_class {
+        let Some(result) = answer(recv_class) else {
+            return false;
+        };
+        if let Some(dst) = dst {
+            state.def_C(dst, Immediate::bool(result));
         }
-        // Found but private and !include_all: CRuby still consults
-        // respond_to_missing?, so fall through.
+        true
+    } else {
+        // The call site could not prove the receiver's class: under a
+        // same-target membership guard the answer is a function of the
+        // admitted class (see `kernel_is_a`); in a multi-class dispatch arm
+        // this declines.
+        class_predicate_under_set_guard(state, ir, ctx, recv, dst, answer)
     }
-    // Method not visible. CRuby calls `recv.respond_to_missing?(name, include_all)`
-    // and coerces the result to bool. If `respond_to_missing?` resolves to
-    // an ISeq whose hint says it returns a constant (typical for the
-    // default `Object#respond_to_missing?` which is `def ...; false; end`
-    // and any user override that just returns a literal), fold the call
-    // to that value. The class_version guard upstream catches any later
-    // override that would change the resolution.
-    let resolved = store
+}
+
+/// The compile-time `respond_to?` answer for one cache class, or `None`
+/// when it depends on something the class version does not pin down.
+fn respond_to_answer(
+    store: &Store,
+    ctx: &JitContext,
+    class: CachedClass,
+    method_name: IdentId,
+    include_all: bool,
+) -> Option<bool> {
+    // The resolutions this answer stands on are recorded for the
+    // class-version salvage, which otherwise re-asks only the call sites'
+    // own (`respond_to?` itself, which a later `def evaluate` leaves as it
+    // was). A visibility change alone (`private :evaluate`) is not caught;
+    // the single-class fold never was either.
+    let entry =
+        store.check_method_for_class_with_version(class.id(), method_name, ctx.class_version());
+    ctx.assume_resolution(class, method_name, entry.as_ref().and_then(|e| e.func_id()));
+    if let Some(entry) = entry
+        && (include_all || entry.is_public())
+    {
+        return Some(true);
+    }
+    // Method not visible (or found but private and !include_all). CRuby
+    // calls `recv.respond_to_missing?(name, include_all)` and coerces the
+    // result to bool. If `respond_to_missing?` resolves to an ISeq whose
+    // hint says it returns a constant (typical for the default
+    // `Object#respond_to_missing?` which is `def ...; false; end` and any
+    // user override that just returns a literal), the answer is that
+    // value. The class_version guard upstream catches any later override
+    // that would change the resolution.
+    let fid = store
         .check_method_for_class_with_version(
-            recv_class.id(),
+            class.id(),
             IdentId::RESPOND_TO_MISSING_,
             ctx.class_version(),
         )
         .and_then(|e| e.func_id());
-    if let Some(fid) = resolved
-        && let Some(iseq) = store[fid].is_iseq()
-        && let ISeqHint::ConstReturn(v) = store[iseq].hint
-    {
-        if let Some(dst) = dst {
-            state.def_C(dst, Immediate::bool(v.as_bool()));
-        }
-        return true;
+    ctx.assume_resolution(class, IdentId::RESPOND_TO_MISSING_, fid);
+    let iseq = store[fid?].is_iseq()?;
+    if let ISeqHint::ConstReturn(v) = store[iseq].hint {
+        Some(v.as_bool())
+    } else {
+        None
     }
-    false
 }
 
 ///
@@ -5931,7 +6007,7 @@ fn instance_of(
 /// constant and emits nothing at all.
 fn kernel_instance_of(
     state: &mut AbstractState,
-    _ir: &mut AsmIr,
+    ir: &mut AsmIr,
     ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
@@ -5942,42 +6018,31 @@ fn kernel_instance_of(
     if !callsite.is_simple() {
         return false;
     }
-    let CallSiteInfo { args, dst, .. } = *callsite;
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
     // Anything that is not a concrete class/module literal — including a
     // literal of the wrong type, which must raise TypeError — falls back.
     let Some(target) = state.is_class_or_module_literal(args) else {
         return false;
     };
     // Synthetic classes (e.g. BOOL_CLASS) have no backing Module object.
-    let instance_of = |class: CachedClass| -> Option<bool> {
+    let answer = |class: CachedClass| -> Option<bool> {
         Some(store[class.id()].try_get_module()?.get_real_class().id() == target.id())
     };
-    let result = if let Some(recv_class) = recv_class {
-        match instance_of(recv_class) {
-            Some(r) => r,
-            None => return false,
+    if let Some(recv_class) = recv_class {
+        let Some(result) = answer(recv_class) else {
+            return false;
+        };
+        if let Some(dst) = dst {
+            state.def_C(dst, Immediate::bool(result));
         }
-    } else if let Some(classes) = ctx.same_target_classes() {
-        // Under a same-target membership guard: fold only a uniform
-        // answer (see `kernel_is_a`).
-        let mut uniform: Option<bool> = None;
-        for &class in classes {
-            match instance_of(class) {
-                Some(r) if *uniform.get_or_insert(r) == r => {}
-                _ => return false,
-            }
-        }
-        match uniform {
-            Some(r) => r,
-            None => return false,
-        }
+        true
     } else {
-        return false;
-    };
-    if let Some(dst) = dst {
-        state.def_C(dst, Immediate::bool(result));
+        // Under a same-target membership guard: a function of the admitted
+        // class (see `kernel_is_a`).
+        class_predicate_under_set_guard(state, ir, ctx, recv, dst, answer)
     }
-    true
 }
 
 ///
@@ -11223,6 +11288,158 @@ BTL_ABS = caller_locations(0)[0].absolute_path
             end
             r
             "##,
+        );
+    }
+
+    /// A polymorphic `is_a?` / `kind_of?` site whose admitted classes
+    /// answer differently: under the membership guard the answer becomes
+    /// a class test (`ClassInToBool`) instead of the builtin call, both
+    /// feeding a branch and used as a value; a post-warmup `include`
+    /// flips one class's answer through the class version — a fold the
+    /// salvage must not re-stamp (`crate::ancestry`). Single-run: the
+    /// `include`s persist across runs.
+    #[test]
+    fn polymorphic_is_a_non_uniform() {
+        run_test_once(
+            r#"
+            module Tag; end
+            class TA; end
+            class TB < TA; end
+            vals = [1, "s", [1], nil, :sym, TA.new, TB.new, 2.5]
+            def br(x) = x.is_a?(String) ? 1 : 2
+            def val(x) = x.kind_of?(Integer)
+            def sub(x) = x.is_a?(TA) ? x.class.name : "no"
+            def tag(x) = x.is_a?(Tag)
+            def unless_br(x) = (x.is_a?(Array) || x.is_a?(Symbol)) ? 0 : 1
+            res = []
+            acc = 0
+            400.times do |i|
+              x = vals[i % 8]
+              acc += br(x)
+              acc += 10 if val(x)
+              acc += 100 if tag(x)
+              acc += unless_br(x)
+              res << sub(x) if i < 8
+            end
+            res << acc
+            class TA; include Tag; end
+            String.include(Tag)
+            res << vals.map { |v| tag(v) }
+            res << vals.map { |v| br(v) } << vals.map { |v| val(v) }
+            res
+            "#,
+        );
+    }
+
+    /// Same for `instance_of?`: the real class decides, so a subclass
+    /// answers `false` where `is_a?` answered `true`.
+    #[test]
+    fn polymorphic_instance_of_non_uniform() {
+        run_test(
+            r#"
+            class IA; end
+            class IB < IA; end
+            class IC; end
+            vals = [IA.new, IB.new, "s", IC.new, nil, 7]
+            def f(x) = x.instance_of?(IA) ? :a : :other
+            def g(x) = x.instance_of?(String)
+            res = []
+            acc = 0
+            300.times do |i|
+              x = vals[i % 6]
+              acc += 1 if f(x) == :a
+              acc += 10 if g(x)
+              res << f(x) if i < 6
+            end
+            res << acc
+            res << vals.map { |v| g(v) }
+            res
+            "#,
+        );
+    }
+
+    /// Same for `respond_to?`: a method defined on some admitted classes,
+    /// a private one (false without `include_all`), a
+    /// `respond_to_missing?` override returning a literal, and a
+    /// post-warmup `def` that adds the method to another class (a
+    /// resolution the fold recorded, so the salvage refuses). Single-run:
+    /// the `def` persists across runs.
+    #[test]
+    fn polymorphic_respond_to_non_uniform() {
+        run_test_once(
+            r#"
+            class RA; def evaluate = 1; end
+            class RB; private def evaluate = 2; end
+            class RC; def respond_to_missing?(n, p = false) = true; end
+            class RD; end
+            vals = ["s", RA.new, nil, RB.new, RC.new, RD.new, 3]
+            def ev(x) = x.respond_to?(:evaluate) ? 1 : 0
+            def ev_all(x) = x.respond_to?(:evaluate, true)
+            def sz(x) = x.respond_to?(:size)
+            res = []
+            acc = 0
+            350.times do |i|
+              x = vals[i % 7]
+              acc += ev(x)
+              acc += 10 if ev_all(x)
+              acc += 100 if sz(x)
+            end
+            res << acc
+            class RD; def evaluate = 4; end
+            res << vals.map { |v| ev(v) } << vals.map { |v| ev_all(v) } << vals.map { |v| sz(v) }
+            res
+            "#,
+        );
+    }
+
+    /// The branch on a class predicate narrows the receiver on both sides:
+    /// the code under it runs on the narrowed type (an Integer add, a
+    /// String method) in `if` / `unless` / `while` forms, through a local
+    /// the receiver was copied from, and with the predicate used as a
+    /// value instead.
+    #[test]
+    fn class_predicate_branch_narrows_receiver() {
+        run_test(
+            r#"
+            vals = [1, "ab", nil, [1, 2], 3, "xyz"]
+            def f(x)
+              if x.is_a?(Integer)
+                x + 1
+              elsif x.is_a?(String)
+                x.size * 10
+              else
+                -1
+              end
+            end
+            def g(x)
+              y = x
+              unless y.instance_of?(String)
+                return y.nil? ? 0 : 100
+              end
+              y.length
+            end
+            def h(x)
+              n = 0
+              while x.is_a?(Integer) && n < 3
+                x += 1
+                n += 1
+              end
+              x.is_a?(Integer) ? x : n
+            end
+            def k(x)
+              r = x.is_a?(Array)
+              r ? x.size : (r ? 1 : 2)
+            end
+            acc = 0
+            res = []
+            300.times do |i|
+              x = vals[i % 6]
+              acc += f(x) + g(x) + h(x) + k(x)
+              res << [f(x), g(x), h(x), k(x)] if i < 6
+            end
+            res << acc
+            res
+            "#,
         );
     }
 }

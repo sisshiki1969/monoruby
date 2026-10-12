@@ -549,7 +549,8 @@ impl AsmIr {
                 AsmInst::GuardClass(GP::Rdi, ..)
                 | AsmInst::GuardClassIn(GP::Rdi, ..)
                 | AsmInst::BrClassNe(GP::Rdi, ..)
-                | AsmInst::BrClassNotIn(GP::Rdi, ..) => (true, false),
+                | AsmInst::BrClassNotIn(GP::Rdi, ..)
+                | AsmInst::ClassInToBool(GP::Rdi, ..) => (true, false),
                 // An inline ivar access addresses through rdi and writes
                 // only its destination (and scratch other than rdi); a
                 // store's write barrier may call out, which does not.
@@ -1681,6 +1682,12 @@ impl AsmIr {
         self.inst.push(AsmInst::IsNilToBool { dst, src });
     }
 
+    /// `rax <- Value::bool(class(reg) ∈ classes)`; see
+    /// [`AsmInst::ClassInToBool`].
+    pub(crate) fn class_in_to_bool(&mut self, reg: GP, classes: Box<[CachedClass]>) {
+        self.push(AsmInst::ClassInToBool(reg, classes));
+    }
+
     /// Emit `dst <- !src` as a Ruby bool `Value` (`BasicObject#!`). Typed
     /// alternative to `inline`; destroys `src` and the `GP::Rsi` scratch.
     pub(crate) fn not_to_bool(&mut self, dst: GP, src: GP) {
@@ -2161,6 +2168,15 @@ pub(super) enum AsmInst {
     /// on aarch64); *reg* must be neither.
     ///
     KindOfConst { reg: GP, class: ClassId },
+    ///
+    /// `rax <- Value::bool(class(reg) ∈ classes)`: the class-membership
+    /// test of `GuardClassIn` as a boolean instead of a side exit. The
+    /// predicate generators (`is_a?` / `instance_of?` / `respond_to?`)
+    /// emit it under a membership guard whose classes answer differently,
+    /// chaining over whichever of the answering sets is smaller. Clobbers
+    /// rax (x86 also scratches it mid-chain); *reg* must not be rax.
+    ///
+    ClassInToBool(GP, Box<[CachedClass]>),
     GuardCapture(AsmDeopt),
     /// In place of `GuardCapture` when the next instruction is a plain
     /// `ret` of *slot*: if the frame was captured, copy *slot* from the
@@ -3814,6 +3830,9 @@ impl AsmInst {
             }
             Self::BrClassNotIn(gpr, classes, label) => {
                 format!("br_class_not_in {:?} {:?} {:?}", gpr, classes, label)
+            }
+            Self::ClassInToBool(gpr, classes) => {
+                format!("class_in_to_bool {:?} {:?}", gpr, classes)
             }
             Self::CheckLocal(label) => format!("check_local {:?}", label),
             Self::OptCase {

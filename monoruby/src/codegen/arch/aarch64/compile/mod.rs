@@ -1754,6 +1754,32 @@ impl Codegen {
                 self.jit.bcond_label(monoasm::Cond::Ne, &deopt);
             }
             // Deopt if the receiver (rdi) is frozen.
+            // The `GuardClassIn` chain with a boolean in x0 instead of a side
+            // exit; see `AsmInst::ClassInToBool` and the x86 lowering. Every
+            // branch is local, so no far-branch veneer is needed.
+            LInst::ClassInToBool { reg, classes } => {
+                let rax = GP::Rax.a64().0;
+                assert!(reg.a64().0 != rax);
+                let hit = self.jit.label();
+                let exit = self.jit.label();
+                for class in classes.iter() {
+                    let next = self.jit.label();
+                    self.a64_guard_class(reg, *class, &next);
+                    monoasm_arm64!(&mut self.jit,
+                        b hit;
+                    );
+                    self.jit.bind_label(next);
+                }
+                monoasm_arm64!(&mut self.jit,
+                    mov x(rax), #(FALSE_VALUE);
+                    b exit;
+                );
+                self.jit.bind_label(hit);
+                monoasm_arm64!(&mut self.jit,
+                    mov x(rax), #(TRUE_VALUE);
+                );
+                self.jit.bind_label(exit);
+            }
             // Inline `Module#===`: see `AsmInst::KindOfConst` and the x86
             // `kind_of_const`. x9 = class id / scratch, x10 = target class
             // id, x11 = class object pointer during the walk.

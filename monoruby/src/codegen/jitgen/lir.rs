@@ -563,6 +563,12 @@ pub(in crate::codegen) enum LInst {
         reg: GP,
         class: ClassId,
     },
+    /// `rax <- Value::bool(class(reg) ∈ classes)`; see
+    /// `AsmInst::ClassInToBool`.
+    ClassInToBool {
+        reg: GP,
+        classes: Box<[CachedClass]>,
+    },
     /// Deopt if the receiver (rdi) is frozen.
     GuardFrozen {
         deopt: DestLabel,

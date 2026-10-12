@@ -3052,7 +3052,7 @@ impl Store {
             crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_FAIL_NO_ENTRY);
         }
         let version_label = version_label?;
-        if !ivar_tys_hold(&version_label) {
+        if !ivar_tys_hold(&version_label) || !ancestry_holds(self, &version_label) {
             return None;
         }
         Some(version_label)
@@ -3225,7 +3225,7 @@ impl Store {
         if !self.singleton_deps_hold(deps) {
             return None;
         }
-        if !ivar_tys_hold(&version_label) {
+        if !ivar_tys_hold(&version_label) || !ancestry_holds(self, &version_label) {
             return None;
         }
         Some(version_label)
@@ -3416,7 +3416,16 @@ impl Globals {
 /// Do the ivar type states the unit with class-version word *label*
 /// assumed still hold (`crate::ivar_ty`)?
 fn ivar_tys_hold(label: &DestLabel) -> bool {
-    let addr = crate::codegen::CODEGEN
-        .with(|codegen| codegen.borrow().jit.get_label_address(label).as_ptr() as u64);
-    crate::ivar_ty::unit_holds(addr)
+    crate::ivar_ty::unit_holds(version_word_addr(label))
+}
+
+/// Do the `is_a?` answers the unit with class-version word *label* folded
+/// still hold (`crate::ancestry`)?
+fn ancestry_holds(store: &Store, label: &DestLabel) -> bool {
+    crate::ancestry::unit_holds(store, version_word_addr(label))
+}
+
+fn version_word_addr(label: &DestLabel) -> u64 {
+    crate::codegen::CODEGEN
+        .with(|codegen| codegen.borrow().jit.get_label_address(label).as_ptr() as u64)
 }
