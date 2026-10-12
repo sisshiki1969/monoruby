@@ -259,7 +259,11 @@ impl<'a> JitContext<'a> {
                             LinkMode::F(_) => Guarded::Float,
                             LinkMode::Sf(_, sf) => sf.into(),
                             LinkMode::C(v) => Guarded::from_concrete_value(v),
-                            LinkMode::V | LinkMode::None | LinkMode::MaybeNone => return None,
+                            LinkMode::V
+                            | LinkMode::None
+                            | LinkMode::MaybeNone
+                            | LinkMode::U(_)
+                            | LinkMode::Su(_) => return None,
                         };
                         // `NilOr` has no single class to guard, and `Value`
                         // says nothing. A local still `nil` at the head is

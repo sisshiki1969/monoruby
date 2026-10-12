@@ -2709,8 +2709,12 @@ impl<'a> JitContext<'a> {
         }
         // The receiver is fetched like any argument, so an fpr-resident
         // one would box on the way in.
-        let fpr_resident =
-            |slot: SlotId| matches!(state.mode(slot), LinkMode::F(_) | LinkMode::Sf(_, _));
+        let fpr_resident = |slot: SlotId| {
+            matches!(
+                state.mode(slot),
+                LinkMode::F(_) | LinkMode::Sf(_, _) | LinkMode::U(_) | LinkMode::Su(_)
+            )
+        };
         if fpr_resident(cs.recv) || (!frameless && cs.args < state.temp_start()) {
             return vec![];
         }

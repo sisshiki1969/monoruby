@@ -1,5 +1,6 @@
 use crate::bytecodegen::BinOpK;
 use crate::codegen::jitgen::lir::{LInst, LSideExitKind, Lir};
+pub(crate) use crate::codegen::jitgen::lir::U64Operand;
 
 use super::*;
 use crate::codegen::jitgen::lir::ConstMiss;
@@ -313,6 +314,12 @@ fn keeps_self_ivar_base(inst: &AsmInst) -> bool {
             | AsmInst::FprToStack(..)
             | AsmInst::FixnumToFpr(..)
             | AsmInst::FloatToFpr(..)
+            | AsmInst::U64Unbox { .. }
+            | AsmInst::U64Box { .. }
+            | AsmInst::U64Imm { .. }
+            | AsmInst::U64BinOp { .. }
+            | AsmInst::U64CmpFlags { .. }
+            | AsmInst::U64Cmp { .. }
             | AsmInst::GuardClass(..)
             | AsmInst::GuardClassIn(..)
             | AsmInst::GuardFrozen { .. }
@@ -1245,6 +1252,25 @@ impl AsmIr {
     ///
     pub fn f64_to_fpr(&mut self, f: f64, x: FPReg) {
         self.push(AsmInst::F64ToFpr(f, x));
+    }
+
+    /// Unbox the Integer in *reg* to a raw u64 in *x* (see `AsmInst::U64Unbox`).
+    pub fn u64_unbox(&mut self, reg: GP, x: FPReg, deopt: AsmDeopt) {
+        self.push(AsmInst::U64Unbox {
+            src: reg,
+            dst: x,
+            deopt,
+        });
+    }
+
+    /// Box the raw u64 in *x* into stack *slot* (rax = the Value).
+    pub fn u64_to_stack(&mut self, x: FPReg, slot: SlotId) {
+        self.push(AsmInst::U64Box { src: x, slot });
+    }
+
+    /// *x* = *imm* (raw u64 bits).
+    pub fn u64_imm(&mut self, imm: u64, x: FPReg) {
+        self.push(AsmInst::U64Imm { imm, dst: x });
     }
 
     ///
@@ -2185,6 +2211,68 @@ pub(super) enum AsmInst {
     /// - rax, rdi
     ///
     FloatToFpr(GP, FPReg, AsmDeopt),
+
+    // ---- raw u64 (`LinkMode::U`) family --------------------------------
+    ///
+    /// Unbox the Integer Value in *src* to a raw u64 in fpr *dst*: a
+    /// non-negative fixnum, or an inline Bignum (`BignumInner::Inline`)
+    /// with `hi == 0`. Anything else (a negative, a non-Integer, a value at
+    /// or above 2^64, a `Big` payload) goes to *deopt*.
+    ///
+    /// ### destroy
+    /// - rax, rcx (x9, x10)
+    ///
+    U64Unbox {
+        src: GP,
+        dst: FPReg,
+        deopt: AsmDeopt,
+    },
+    ///
+    /// Box the raw u64 in *src* (`u64_to_val`: a fixnum below 2^62, else an
+    /// inline Bignum) and store it to stack *slot*.
+    ///
+    /// ### out
+    /// - rax: Value
+    ///
+    U64Box {
+        src: FPReg,
+        slot: SlotId,
+    },
+    /// fpr *dst* = *imm* (raw bits).
+    U64Imm {
+        imm: u64,
+        dst: FPReg,
+    },
+    ///
+    /// *dst* = *lhs* `kind` *rhs* on raw u64s. With *deopt* the operation is
+    /// checked — an `Add` / `Sub` / `Mul` that leaves [0, 2^64), a `Shl`
+    /// that loses bits (or a count of 64 or more) exits there; `Shr` by 64
+    /// or more yields 0 and never exits. `None` is the wrapping form (a
+    /// masked result consumes the low 64 bits only). `kind` is one of
+    /// `Add`, `Sub`, `Mul`, `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`.
+    ///
+    /// ### destroy
+    /// - rax, rcx, rdx (x9, x10, x11)
+    ///
+    U64BinOp {
+        kind: BinOpK,
+        lhs: FPReg,
+        rhs: U64Operand,
+        dst: FPReg,
+        deopt: Option<AsmDeopt>,
+    },
+    /// Set the flags from the unsigned compare *lhs* - *rhs* (read by a
+    /// `BrFlags { flags: CondFlags::U64(_) }`).
+    U64CmpFlags {
+        lhs: FPReg,
+        rhs: U64Operand,
+    },
+    /// rax = `Value::bool(lhs <kind> rhs)` on raw u64s (unsigned order).
+    U64Cmp {
+        kind: CmpKind,
+        lhs: FPReg,
+        rhs: U64Operand,
+    },
 
     ///
     /// Class version guard for JIT.
@@ -3805,6 +3893,22 @@ impl AsmInst {
             }
             Self::FixnumToFpr(_, x) => vec![*x],
             Self::FloatToFpr(_, x, _) => vec![*x],
+            Self::U64Unbox { dst, .. } | Self::U64Imm { dst, .. } => vec![*dst],
+            Self::U64Box { src, .. } => vec![*src],
+            Self::U64BinOp { lhs, rhs, dst, .. } => {
+                let mut v = vec![*lhs, *dst];
+                if let U64Operand::Reg(r) = rhs {
+                    v.push(*r);
+                }
+                v
+            }
+            Self::U64CmpFlags { lhs, rhs } | Self::U64Cmp { lhs, rhs, .. } => {
+                let mut v = vec![*lhs];
+                if let U64Operand::Reg(r) = rhs {
+                    v.push(*r);
+                }
+                v
+            }
             Self::CFunc_F_F { src, dst, .. } => vec![*src, *dst],
             Self::CFunc_FF_F { lhs, rhs, dst, .. } => vec![*lhs, *rhs, *dst],
             Self::FloatCmp { lhs, rhs, .. } => vec![*lhs, *rhs],
@@ -3841,6 +3945,25 @@ impl AsmInst {
             Self::LitToStack(val, slot) => format!("{:?} = {}", slot, val.debug(store)),
             Self::DeepCopyLit(val, _using_fpr) => format!("DeepCopyLiteral {}", val.debug(store)),
             Self::FloatToFpr(gpr, fpr, _deopt) => format!("{:?} = {:?} Float to f64", fpr, gpr),
+            Self::U64Unbox { src, dst, .. } => format!("{:?} = {:?} Integer to u64", dst, src),
+            Self::U64Box { src, slot } => format!("{:?} = {:?} u64 to Integer", slot, src),
+            Self::U64Imm { imm, dst } => format!("{:?} = {imm}u64", dst),
+            Self::U64BinOp {
+                kind,
+                lhs,
+                rhs,
+                dst,
+                deopt,
+            } => format!(
+                "{:?} = {:?} {:?} {:?} (u64{})",
+                dst,
+                lhs,
+                kind,
+                rhs,
+                if deopt.is_some() { ", checked" } else { ", wrapping" }
+            ),
+            Self::U64CmpFlags { lhs, rhs } => format!("flags = {:?} <=> {:?} (u64)", lhs, rhs),
+            Self::U64Cmp { kind, lhs, rhs } => format!("rax = {:?} {:?} {:?} (u64)", lhs, kind, rhs),
             Self::GuardClassVersion {
                 position: _,
                 with_recovery: _,

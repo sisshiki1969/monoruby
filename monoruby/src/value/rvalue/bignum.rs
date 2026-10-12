@@ -21,14 +21,30 @@ use num::BigInt;
 /// split into two 8-byte words so the payload keeps the cell's 8-byte
 /// alignment (an `i128` would force 16).
 ///
+/// The layout is fixed (`repr(C, u64)`) because JIT code reads an inline
+/// value straight out of the cell: the discriminant word at
+/// `RVALUE_OFFSET_KIND` (`Inline` = [`BignumInner::INLINE_TAG`]), then
+/// `lo` at [`BignumInner::LO_OFFSET`] and `hi` at [`BignumInner::HI_OFFSET`]
+/// from the payload (see `AsmInst::U64Unbox`).
+///
 #[derive(Clone)]
+#[repr(C, u64)]
 pub(crate) enum BignumInner {
-    Inline { lo: u64, hi: i64 },
-    Big(BigInt),
+    Inline { lo: u64, hi: i64 } = 0,
+    Big(BigInt) = 1,
 }
 
 const _: () = assert!(std::mem::size_of::<BignumInner>() <= 48);
 const _: () = assert!(std::mem::align_of::<BignumInner>() <= 8);
+
+impl BignumInner {
+    /// The discriminant word of an `Inline` payload.
+    pub(crate) const INLINE_TAG: u64 = 0;
+    /// Byte offset of `Inline::lo` from the start of the payload.
+    pub(crate) const LO_OFFSET: usize = 8;
+    /// Byte offset of `Inline::hi` from the start of the payload.
+    pub(crate) const HI_OFFSET: usize = 16;
+}
 
 impl BignumInner {
     /// *i* must be outside the fixnum range (the caller normalizes).
@@ -88,5 +104,32 @@ impl PartialEq for BignumInner {
             (Self::Inline { .. }, Self::Big(b)) => i128::try_from(b).ok() == self.as_i128(),
             (Self::Big(a), Self::Inline { .. }) => i128::try_from(a).ok() == other.as_i128(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The JIT's `U64Unbox` reads the three words at fixed offsets.
+    #[test]
+    fn inline_layout() {
+        let v = BignumInner::Inline {
+            lo: 0x1122_3344_5566_7788,
+            hi: -2,
+        };
+        let p = &v as *const BignumInner as *const u8;
+        // SAFETY: the reads stay inside the enum (size ≥ 24 is asserted
+        // by the offsets below being within `size_of`).
+        unsafe {
+            assert!(BignumInner::HI_OFFSET + 8 <= std::mem::size_of::<BignumInner>());
+            assert_eq!(p.cast::<u64>().read(), BignumInner::INLINE_TAG);
+            assert_eq!(p.add(BignumInner::LO_OFFSET).cast::<u64>().read(), 0x1122_3344_5566_7788);
+            assert_eq!(p.add(BignumInner::HI_OFFSET).cast::<i64>().read(), -2);
+        }
+        let b = BignumInner::Big(BigInt::from(1) << 200);
+        let p = &b as *const BignumInner as *const u64;
+        // SAFETY: the discriminant word is the first word of the payload.
+        unsafe { assert_ne!(p.read(), BignumInner::INLINE_TAG) };
     }
 }

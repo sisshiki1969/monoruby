@@ -542,6 +542,20 @@ pub struct JitModule {
     ///
     f64_to_val: DestLabel,
     ///
+    /// Convert a raw u64 to an Integer Value: a fixnum below 2^62, else an
+    /// inline Bignum (`Value::integer_from_u64_c`).
+    ///
+    /// ### in
+    /// - xmm0 (d0): the u64 bits
+    ///
+    /// ### out
+    /// - rax (x0): Value
+    ///
+    /// ### destroy
+    /// - rcx (x9)
+    ///
+    u64_to_val: DestLabel,
+    ///
     /// Dump stack trace and go panic.
     ///
     /// #### in

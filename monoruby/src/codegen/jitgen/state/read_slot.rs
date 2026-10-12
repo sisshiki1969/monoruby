@@ -142,6 +142,10 @@ pub(in crate::codegen::jitgen) enum GpLoad {
     /// `FprBox` arm performs — and move it into `dst`. No re-boxing, and
     /// no flonum-encodability branch.
     DynVarAlias(super::slot::DynVarAliasLoad, SlotId, GP),
+    /// `U` slot: box the raw u64 to its stack home (leaving the Value in
+    /// rax), then move rax into `dst`. `u64_to_stack(fpr, slot);
+    /// reg_move(rax, dst)`.
+    U64Box(FPReg, SlotId, GP),
     /// `lit2reg(value, dst)`
     Lit(Value, GP),
     /// `stack2reg(slot, dst)`
@@ -156,7 +160,10 @@ impl GpLoad {
     /// Where this load reads the slot's value from.
     fn src(&self) -> GpSrc {
         match self {
-            GpLoad::FprBox(..) | GpLoad::DynVarAlias(..) | GpLoad::Stack(..) => GpSrc::Home,
+            GpLoad::FprBox(..)
+            | GpLoad::U64Box(..)
+            | GpLoad::DynVarAlias(..)
+            | GpLoad::Stack(..) => GpSrc::Home,
             GpLoad::Lit(v, _) => GpSrc::Lit(*v),
             GpLoad::FromGp(src, _) => GpSrc::Reg(*src),
         }
@@ -168,6 +175,10 @@ impl GpLoad {
         match self {
             GpLoad::FprBox(fpr, slot, dst) => {
                 ir.fpr2stack(fpr, slot);
+                ir.reg_move(GP::Rax, dst);
+            }
+            GpLoad::U64Box(fpr, slot, dst) => {
+                ir.u64_to_stack(fpr, slot);
                 ir.reg_move(GP::Rax, dst);
             }
             GpLoad::DynVarAlias(alias, slot, dst) => {
@@ -366,7 +377,12 @@ impl AbstractFrame {
                 }
             }
             LinkMode::C(v) => GpLoad::Lit(v, dst),
-            LinkMode::Sf(_, _) | LinkMode::S(_) => {
+            LinkMode::U(fpr) => {
+                // U -> Su: box once, the register stays as the raw cache.
+                self.set_Su(slot, fpr);
+                GpLoad::U64Box(fpr, slot, dst)
+            }
+            LinkMode::Sf(_, _) | LinkMode::Su(_) | LinkMode::S(_) => {
                 // A live GP resident holds the slot's (possibly dirty) value in a
                 // register; move it from there rather than reading a stale home.
                 if let Some(src) = self.gp_regfile.reg_of(slot) {
@@ -409,6 +425,17 @@ impl AbstractFrame {
     /// ### destroy
     /// - rdi
     ///
+    ///
+    /// A raw u64 (`LinkMode::U`) consumed as anything but a u64 is boxed
+    /// into its home first (`U -> Su`); the f64 loaders then treat the
+    /// slot as the boxed Integer it is.
+    ///
+    pub(in crate::codegen::jitgen) fn box_raw_u64(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        if matches!(self.mode(slot), LinkMode::U(_)) {
+            self.write_back(ir, slot, Keep::All);
+        }
+    }
+
     pub(crate) fn load_fpr_fixnum(&mut self, ir: &mut AsmIr, slot: SlotId) -> FPReg {
         // Only the `S`/`G` arms guard, so a deopt point is recorded only for
         // them — and *before* the state transition, so its write-back snapshot
@@ -417,8 +444,9 @@ impl AbstractFrame {
         // later `stack2reg`/`reg2stack` are pure emits that don't perturb the
         // snapshot. The guard-free `Sf`/`F`/`C` arms record no deopt, exactly as
         // before. The side-exit itself is materialized in the emit half.
+        self.box_raw_u64(ir, slot);
         let deopt =
-            matches!(self.mode(slot), LinkMode::S(_)).then(|| self.deopt_point());
+            matches!(self.mode(slot), LinkMode::S(_) | LinkMode::Su(_)).then(|| self.deopt_point());
         let (x, load) = self.load_fpr_fixnum_state(slot);
         ir.fpr_fixnum_load(load, slot, deopt);
         x
@@ -434,7 +462,8 @@ impl AbstractFrame {
         self.use_as_value(slot);
         match self.mode(slot) {
             LinkMode::Sf(x, _) | LinkMode::F(x) => (x, FprFixnumLoad::None),
-            LinkMode::S(_) => {
+            // See `load_fpr_state`: an `Su` register is not an f64.
+            LinkMode::S(_) | LinkMode::Su(_) => {
                 // S -> Sf. Refine the type first (its guard verdict) then take
                 // the placement; `set_new_Sf` overwrites the refined `S` guarded
                 // with `Sf(Fixnum)`, exactly as `guard_fixnum` + `set_new_Sf` did.
@@ -451,7 +480,7 @@ impl AbstractFrame {
                 let (x, load) = self.load_fpr_from_C_state(slot, v);
                 (x, FprFixnumLoad::Numeric(load))
             }
-            LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
+            LinkMode::U(_) | LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("load_fpr_fixnum() {:?}", self.mode(slot));
             }
         }
@@ -521,6 +550,7 @@ impl AbstractState {
         // doc/regalloc_separation.md §9. The record carries the program point
         // (pc + write-back), not a frozen `AsmDeopt`; the emit half materializes
         // the side-exit from it.
+        self.box_raw_u64(ir, slot);
         let deopt = self.deopt_point();
         let (x, load) = self.load_fpr_state(slot);
         ir.fpr_load(load, slot, deopt);
@@ -558,7 +588,9 @@ impl AbstractState {
         self.use_as_float(slot);
         match self.mode(slot) {
             LinkMode::Sf(x, _) | LinkMode::F(x) => (x, FprLoad::None),
-            LinkMode::S(_) => {
+            // An `Su` register holds a u64, never an f64: it is a plain
+            // boxed slot here (`box_raw_u64` boxed a `U` before this).
+            LinkMode::S(_) | LinkMode::Su(_) => {
                 // -> Sf. Capture any live GP resident before `set_new_Sf` clears
                 // it so the emit reads from the register rather than the stack
                 // home (see `load_fpr_fixnum_state`).
@@ -572,7 +604,7 @@ impl AbstractState {
                 (x, FprLoad::FromStack(x, gp))
             }
             LinkMode::C(v) => self.load_fpr_from_C_state(slot, v),
-            LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
+            LinkMode::U(_) | LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
                 unreachable!("load_fpr() {:?}", self.mode(slot));
             }
         }

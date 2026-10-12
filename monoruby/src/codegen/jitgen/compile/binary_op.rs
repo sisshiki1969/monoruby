@@ -295,6 +295,63 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// The raw-u64 form to compile this site in, if any (see
+    /// `compile_binary` step 1): the operator must be one the u64 ops cover
+    /// (`+ - * & | ^ << >>` and the comparisons), both operands must be
+    /// Integers as far as anyone knows (a raw u64, a constant in
+    /// [0, 2^64), or a slot the state or the profile classes `Integer` /
+    /// `BIGNUM`), and one of them must give the form a reason: a raw
+    /// operand, a constant at or above 2^62, a `BIGNUM` in the profile, or
+    /// the site's overflow stamp.
+    ///
+    fn u64_form(
+        &self,
+        state: &AbstractState,
+        binop: BinaryOp,
+        lhs: SlotId,
+        rhs: SlotId,
+        lhs_class: Option<CachedClass>,
+        rhs_class: Option<CachedClass>,
+        overflowed: bool,
+    ) -> Option<BinaryOp> {
+        match binop {
+            BinaryOp::Arith(
+                BinOpK::Add
+                | BinOpK::Sub
+                | BinOpK::Mul
+                | BinOpK::BitAnd
+                | BinOpK::BitOr
+                | BinOpK::BitXor
+                | BinOpK::Shl
+                | BinOpK::Shr,
+            )
+            | BinaryOp::Cmp(_) => {}
+            BinaryOp::Arith(_) => return None,
+        }
+        let integer_like = |slot: SlotId, class: Option<CachedClass>| {
+            if state.is_u64_resident(slot) {
+                return true;
+            }
+            if let LinkMode::C(v) = state.mode(slot) {
+                return v.try_u64().is_some();
+            }
+            class.is_some_and(|c| c == CachedClass::INTEGER || c.is(BIGNUM_CLASS))
+        };
+        if !integer_like(lhs, lhs_class) || !integer_like(rhs, rhs_class) {
+            return None;
+        }
+        let wide_literal = |slot: SlotId| state.is_u64_literal(slot).is_some_and(|v| v >= 1 << 62);
+        let reason = state.is_u64_resident(lhs)
+            || state.is_u64_resident(rhs)
+            || wide_literal(lhs)
+            || wide_literal(rhs)
+            || lhs_class.is_some_and(|c| c.is(BIGNUM_CLASS))
+            || rhs_class.is_some_and(|c| c.is(BIGNUM_CLASS))
+            || (overflowed && matches!(binop, BinaryOp::Arith(_)));
+        reason.then_some(binop)
+    }
+
+    ///
     /// May [`AsmIr::opt_eq_cmp`]'s inline fast path be emitted for *kind*?
     ///
     /// That fast path answers **bit equality** whenever neither operand is a
@@ -838,6 +895,9 @@ impl<'a> JitContext<'a> {
         // exit (`RecompileReason::IntegerOverflow`): give it the two-arm
         // form whatever the profile says. Arithmetic sites only.
         overflowed: bool,
+        // The site left a u64-compiled body through its guard
+        // (`RecompileReason::U64GuardFailed`): the u64 form is barred.
+        nou64: bool,
         bc_pos: BcIndex,
         // The fused comparison (opcodes 150–156, followed by the `CondBr`
         // that consumes it).
@@ -883,6 +943,43 @@ impl<'a> JitContext<'a> {
         }
 
         let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
+
+        // ---- 1. The raw-u64 form (`LinkMode::U`): an Integer site that
+        // works in [0, 2^64) — a bit board, a hash, a mask — computes on
+        // unboxed u64s with no fixnum / Bignum boundary to cross. Adopted
+        // only where the evidence says the values leave the fixnum range:
+        // an operand already raw, a bignum literal, a `BIGNUM` in the
+        // profile, or the overflow stamp. Every exit of the form — the
+        // unbox guard (a negative, a non-Integer, 2^64 or more) and a
+        // checked result — stamps the site `NOU64` and recompiles, so a
+        // site this does not fit falls back to the forms below for good.
+        if !nou64
+            && let Some(u64_form) = self.u64_form(state, binop, lhs, rhs, lhs_class, rhs_class, overflowed)
+        {
+            let op = IdentId::from(binop);
+            if self.basic_op_assumable(CachedClass::INTEGER, op) {
+                self.record_bop_dep(CachedClass::INTEGER, op);
+                if let Some(target) = self.recv_miss_recompile_target() {
+                    ir.recompile_deopts(RecompileReason::U64GuardFailed, target);
+                }
+                match u64_form {
+                    BinaryOp::Arith(kind) => state.binop_u64(ir, kind, dst, lhs, rhs, true),
+                    BinaryOp::Cmp(kind) => {
+                        if let Some(slot) = self.wants_cond_flags(dst) {
+                            let flags = state.gen_cmp_u64_flags(ir, kind, slot, lhs, rhs);
+                            self.set_cond_flags(slot, flags);
+                        } else {
+                            state.gen_cmp_u64(ir, kind, lhs, rhs);
+                            state.def_rax2acc(ir, dst);
+                        }
+                    }
+                }
+                ir.end_deopt_recompile();
+                // Pure arithmetic, as the Integer inline lowerings (4).
+                self.restore_unfrozen(dst);
+                return Ok(BinaryLowering::Emitted);
+            }
+        }
 
         // ---- 2. A site the VM saw comparing more than one lhs class, whose
         // lhs the abstract state cannot pin down: dispatch instead of
@@ -1284,6 +1381,7 @@ impl<'a> JitContext<'a> {
         ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
         overflowed: bool,
+        nou64: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         match self.compile_binary(
@@ -1296,6 +1394,7 @@ impl<'a> JitContext<'a> {
             ic,
             polymorphic,
             overflowed,
+            nou64,
             bc_pos,
             false,
         )? {
@@ -1322,6 +1421,7 @@ impl<'a> JitContext<'a> {
         // case/when semantics for `===`, and the inline compare may answer
         // in the condition flags.
         fused: bool,
+        nou64: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         match self.compile_binary(
@@ -1334,6 +1434,7 @@ impl<'a> JitContext<'a> {
             ic,
             polymorphic,
             false,
+            nou64,
             bc_pos,
             fused,
         )? {

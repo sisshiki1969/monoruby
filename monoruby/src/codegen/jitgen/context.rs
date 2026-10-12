@@ -4165,6 +4165,14 @@ impl<'a> JitContext<'a> {
                                 "return-edge F diverged: lvl{lvl} {slot:?} {l:?} vs {tfm:?}"
                             );
                         }
+                        // A suspended raw u64 is path-invariant for the same
+                        // reason as a pool `F`.
+                        (LinkMode::U(l), tfm) => {
+                            debug_assert!(
+                                matches!(tfm, LinkMode::U(r) if l == r),
+                                "return-edge U diverged: lvl{lvl} {slot:?} {l:?} vs {tfm:?}"
+                            );
+                        }
                         // Everything else is a pure state demotion (the
                         // slot already holds the value) or identical.
                         _ => {}

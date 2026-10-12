@@ -90,6 +90,12 @@ impl Codegen {
             | AsmInst::F64ToFpr(..)
             | AsmInst::FixnumToFpr(..)
             | AsmInst::FloatToFpr(..)
+            | AsmInst::U64Unbox { .. }
+            | AsmInst::U64Box { .. }
+            | AsmInst::U64Imm { .. }
+            | AsmInst::U64BinOp { .. }
+            | AsmInst::U64CmpFlags { .. }
+            | AsmInst::U64Cmp { .. }
             | AsmInst::FprToStack(..)
             | AsmInst::FloatRetStore(..)
             | AsmInst::FloatRetLoad(..)
@@ -599,6 +605,10 @@ impl Codegen {
                 LCond::Le => monoasm! { &mut self.jit, jle target; },
                 LCond::Gt => monoasm! { &mut self.jit, jgt target; },
                 LCond::Ge => monoasm! { &mut self.jit, jge target; },
+                LCond::Lo => monoasm! { &mut self.jit, jb target; },
+                LCond::Ls => monoasm! { &mut self.jit, jbe target; },
+                LCond::Hi => monoasm! { &mut self.jit, ja target; },
+                LCond::Hs => monoasm! { &mut self.jit, jae target; },
             },
             LInst::TestBit { reg, bit } => {
                 let r = reg as u64;
@@ -851,6 +861,49 @@ impl Codegen {
             }
             LInst::FprToStack { src, slot, base } => {
                 self.fpr_to_stack(src, &[slot], base);
+            }
+            // ---- raw u64 family ----------------------------------------------
+            LInst::U64Unbox {
+                src,
+                dst,
+                deopt,
+                base,
+            } => self.u64_unbox(src, dst, &deopt, base),
+            LInst::U64Box { src, slot, base } => self.u64_to_stack(src, &[slot], base, false),
+            LInst::U64Imm { imm, dst, base } => {
+                monoasm!( &mut self.jit, movq rax, (imm); );
+                self.u64_from_rax(dst, base);
+            }
+            LInst::U64BinOp {
+                kind,
+                lhs,
+                rhs,
+                dst,
+                deopt,
+                base,
+            } => self.u64_binop(kind, lhs, rhs, dst, deopt.as_ref(), base),
+            LInst::U64CmpFlags { lhs, rhs, base } => self.u64_cmp_flags(lhs, rhs, base),
+            LInst::U64Cmp {
+                kind,
+                lhs,
+                rhs,
+                base,
+            } => {
+                self.u64_cmp_flags(lhs, rhs, base);
+                // `mov` leaves the flags alone; `setcc` writes the low byte.
+                monoasm!( &mut self.jit, movq rax, 0; );
+                match kind {
+                    CmpKind::Eq | CmpKind::TEq => monoasm!( &mut self.jit, seteq rax; ),
+                    CmpKind::Ne => monoasm!( &mut self.jit, setne rax; ),
+                    CmpKind::Lt => monoasm!( &mut self.jit, setb rax; ),
+                    CmpKind::Le => monoasm!( &mut self.jit, setbe rax; ),
+                    CmpKind::Gt => monoasm!( &mut self.jit, seta rax; ),
+                    CmpKind::Ge => monoasm!( &mut self.jit, setae rax; ),
+                }
+                monoasm!( &mut self.jit,
+                    shlq rax, 3;
+                    orq rax, (FALSE_VALUE);
+                );
             }
             LInst::FloatRetStore { src, base } => {
                 match src {

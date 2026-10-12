@@ -375,6 +375,55 @@ impl Codegen {
                 slot,
                 base: frame.base_stack_offset,
             }),
+            // The raw u64 family.
+            AsmInst::U64Unbox { src, dst, deopt } => {
+                let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(src));
+                self.encode_linst(LInst::U64Unbox {
+                    src,
+                    dst,
+                    deopt,
+                    base: frame.base_stack_offset,
+                });
+            }
+            AsmInst::U64Box { src, slot } => self.encode_linst(LInst::U64Box {
+                src,
+                slot,
+                base: frame.base_stack_offset,
+            }),
+            AsmInst::U64Imm { imm, dst } => self.encode_linst(LInst::U64Imm {
+                imm,
+                dst,
+                base: frame.base_stack_offset,
+            }),
+            AsmInst::U64BinOp {
+                kind,
+                lhs,
+                rhs,
+                dst,
+                deopt,
+            } => {
+                let deopt =
+                    deopt.map(|d| self.deopt_label(labels, d, DeoptCause::Static("u64 range")));
+                self.encode_linst(LInst::U64BinOp {
+                    kind,
+                    lhs,
+                    rhs,
+                    dst,
+                    deopt,
+                    base: frame.base_stack_offset,
+                });
+            }
+            AsmInst::U64CmpFlags { lhs, rhs } => self.encode_linst(LInst::U64CmpFlags {
+                lhs,
+                rhs,
+                base: frame.base_stack_offset,
+            }),
+            AsmInst::U64Cmp { kind, lhs, rhs } => self.encode_linst(LInst::U64Cmp {
+                kind,
+                lhs,
+                rhs,
+                base: frame.base_stack_offset,
+            }),
             AsmInst::FloatRetStore(x) => self.encode_linst(LInst::FloatRetStore {
                 src: x,
                 base: frame.base_stack_offset,
@@ -541,6 +590,13 @@ impl Codegen {
                         brkind,
                         dest: target,
                     }),
+                    CondFlags::U64(kind) => {
+                        let mut cond = LCond::from_u64_cmp(kind);
+                        if brkind == BrKind::BrIfNot {
+                            cond = cond.invert();
+                        }
+                        self.encode_linst(LInst::CondBr { cond, target });
+                    }
                 }
             }
             AsmInst::FloatBinOp {

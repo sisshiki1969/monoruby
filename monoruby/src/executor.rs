@@ -5691,6 +5691,25 @@ pub enum RecompileReason {
     /// routed to a residual generic arm (`binary_dispatch`). One-shot per
     /// site: a stamped site is never converted again.
     IntegerOverflow = 8,
+    /// An Integer site compiled in the unboxed u64 form (`LinkMode::U`,
+    /// `doc`: reports/u64_mode_design) found an operand outside [0, 2^64)
+    /// or a result that does not fit: an unbox guard or a checked
+    /// operation missed. The exit handler stamps the site
+    /// (`OPCODE_SUB_NOU64`) and the recompile gives it the Integer forms
+    /// of the other reasons (`compile_binary` 2 / 2a). One-shot per site.
+    U64GuardFailed = 9,
+}
+
+impl RecompileReason {
+    /// The `opcode_sub` bit the exit for this reason stamps on its site
+    /// before recompiling, if any (see `BytecodePtr::opcode_sub`).
+    pub(crate) fn site_stamp(self) -> Option<u8> {
+        match self {
+            Self::IntegerOverflow => Some(crate::bytecode::OPCODE_SUB_OVERFLOW),
+            Self::U64GuardFailed => Some(crate::bytecode::OPCODE_SUB_NOU64),
+            _ => None,
+        }
+    }
 }
 
 struct Root<'a, 'b> {

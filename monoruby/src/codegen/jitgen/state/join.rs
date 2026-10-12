@@ -240,6 +240,14 @@ enum JoinAction {
     /// `Sf(h, Float)` or `F(h)` weakens the slot-current half and keeps
     /// the home, emitting nothing (the home is current on both sides).
     SetF(FPReg),
+    /// try a fresh-fpr `U`; keep `U(l)` if no phys fpr is free (the bridge
+    /// swaps). [`U` / `U` arm, registers disagree]
+    TryFreshUKeep,
+    /// rebind to `Su(x)` with the current fpr `x` (registers agree).
+    SetSu(FPReg),
+    /// try a fresh-fpr `Su`; keep `Su(x)` if no phys fpr is free.
+    /// [`U`|`Su` / `Su`|`U` arm, registers disagree]
+    TryFreshSuElseKeep(FPReg),
 }
 
 impl JoinAction {
@@ -260,6 +268,10 @@ impl JoinAction {
             JoinAction::SetSf(x, guarded) => JoinAction::SetSf(x, guarded),
             JoinAction::TryFreshSfElseKeep(_, guarded)
             | JoinAction::TryFreshSfElseS(guarded) => JoinAction::SetS(guarded.into()),
+            JoinAction::TryFreshUKeep | JoinAction::TryFreshSuElseKeep(_) => {
+                JoinAction::SetS(Guarded::Value)
+            }
+            JoinAction::SetSu(x) => JoinAction::SetSu(x),
             other => other,
         }
     }
@@ -341,6 +353,27 @@ impl AbstractFrame {
             }
             (LinkMode::C(l), LinkMode::C(r)) if l == r => Nop,
             (LinkMode::C(l), LinkMode::C(r)) if l.is_float() && r.is_float() => TryFreshFElseS,
+            // Raw u64s: the same register on both sides stays; a register
+            // disagreement takes a fresh one (the bridges move / swap into
+            // it). A `U` against an `Su` weakens to the cached view. Any
+            // other partner boxes (`SetS`, below): a `U` meets a plain
+            // boxed slot as `S(Value)`.
+            (LinkMode::U(l), LinkMode::U(r)) => {
+                if l != r {
+                    TryFreshUKeep
+                } else {
+                    Nop
+                }
+            }
+            (LinkMode::U(x), LinkMode::Su(y))
+            | (LinkMode::Su(x), LinkMode::U(y))
+            | (LinkMode::Su(x), LinkMode::Su(y)) => {
+                if x == y {
+                    SetSu(x)
+                } else {
+                    TryFreshSuElseKeep(x)
+                }
+            }
             _ => {
                 #[cfg(feature = "profile")]
                 join_profile::record_frame_generic(
@@ -393,6 +426,15 @@ impl AbstractFrame {
                 // rebind resolves; the reverse map stays exact.
                 self.grow_fpr_to(x.0 + 1);
                 self.set_F(i, x);
+            }
+            JoinAction::TryFreshUKeep => {
+                let _ = self.try_set_new_U(i);
+            }
+            JoinAction::SetSu(x) => self.set_Su(i, x),
+            JoinAction::TryFreshSuElseKeep(x) => {
+                if self.try_set_new_Su(i).is_none() {
+                    self.set_Su(i, x);
+                }
             }
         }
     }
