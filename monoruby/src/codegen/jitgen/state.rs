@@ -36,23 +36,6 @@ pub(crate) struct AbstractState {
 }
 
 impl AbstractState {
-    /// Whether any frame of the chain holds a `Guarded::FixnumArray` proof.
-    pub(crate) fn has_fixnum_arrays(&self) -> bool {
-        self.frames.iter().any(|f| f.has_fixnum_arrays())
-    }
-
-    /// Drop every `Guarded::FixnumArray` proof in every frame of the chain
-    /// (they become plain `Array` proofs). Aliasing is not tracked, so
-    /// anything that may clear one array's `ARRAY_ELEMS_FIXNUM` bit
-    /// invalidates them all.
-    pub(in crate::codegen::jitgen) fn forget_fixnum_arrays(&mut self) {
-        for frame in self.frames.iter_mut() {
-            if frame.has_fixnum_arrays() {
-                FrameRef::make_mut(frame).forget_fixnum_arrays();
-            }
-        }
-    }
-
     /// `SlotState::forget_heap_object_classes` on every frame of the
     /// specialization tower, for a call after which no heap object's class
     /// can be trusted (an `eval`-family callee may have attached a
@@ -76,8 +59,6 @@ impl AbstractState {
         &mut self,
         store: &Store,
     ) -> ClassProofScan {
-        // Ruby code may have cleared any array's elements-kind bit.
-        self.forget_fixnum_arrays();
         let innermost = self.frames.len() - 1;
         let mut total = ClassProofScan::default();
         for (i, frame) in self.frames.iter_mut().enumerate() {

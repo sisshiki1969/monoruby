@@ -762,10 +762,8 @@ fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     let self_ = lfp.self_val();
     let range = self_.as_range();
     if let Some((start, end)) = range.try_fixnum() {
-        // Every element lies between two Fixnums, so is one.
-        Ok(Value::array_elems_fixnum(
-            (start..end).map(Value::integer).collect(),
-        ))
+        let vec = (start..end).map(Value::integer).collect();
+        Ok(Value::array_from_vec(vec))
     } else if let Some(start) = range.start().is_str()
         && let Some(end) = range.end().is_str()
     {

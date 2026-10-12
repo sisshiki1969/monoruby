@@ -83,9 +83,8 @@ impl<'a> JitContext<'a> {
             // back-edge instead of round-tripping its stack home each iteration.
             let incoming = AbstractState::join_entries(&entries);
             let target_incoming = incoming.clone();
-            let mut elems_kind = vec![];
             if !no_calc_backedge {
-                elems_kind = self.analyse_loop_head(&incoming, &entries, bbid, loop_start, loop_end)?;
+                self.analyse_loop_head(&incoming, &entries, bbid, loop_start, loop_end)?;
             }
 
             // Everything the loop-entry merge does spans the chain — the
@@ -145,12 +144,6 @@ impl<'a> JitContext<'a> {
                 // the head's join throws that away each iteration. Guard
                 // it once on the forward entries instead, so the head
                 // keeps the type and the body's guards fold away.
-                // Arrays the body keeps all-Fixnum, checked on the forward
-                // entries (`loop_elems_kind`). Before the class guards: an
-                // entry's class guard for such a slot is emitted with it.
-                for &slot in &elems_kind {
-                    target.set_fixnum_array(slot);
-                }
                 if !no_calc_backedge && let Some(be) = backedge {
                     hoisted_guards = self.loop_hoist_guards(&target, &entries, liveness, be);
                     for &(slot, g) in &hoisted_guards {
@@ -311,7 +304,6 @@ impl<'a> JitContext<'a> {
                 &outer_inits,
                 hoist_version_guard,
                 &hoisted_guards,
-                &elems_kind,
             );
             self.new_backedge(target.frames_cloned(), bbid);
 
@@ -321,7 +313,7 @@ impl<'a> JitContext<'a> {
             eprintln!("\n===gen_merge {bbid:?}");
 
             let target = AbstractState::join_entries(&entries);
-            self.gen_bridges_for_branches(&target, entries, bbid, pc, &[], false, &[], &[]);
+            self.gen_bridges_for_branches(&target, entries, bbid, pc, &[], false, &[]);
 
             Some(target)
         };
@@ -343,7 +335,6 @@ impl<'a> JitContext<'a> {
         outer_inits: &[(Vec<SpecializedId>, usize, SlotId, OuterFprHome)],
         hoist_version_guard: bool,
         hoisted_guards: &[(SlotId, Guarded)],
-        elems_kind: &[SlotId],
     ) {
         let target = target.frames_cloned();
         #[cfg(feature = "jit-debug")]
@@ -375,25 +366,6 @@ impl<'a> JitContext<'a> {
                 );
                 state.load(&mut ir, slot, GP::Rdi);
                 state.guard_class(&mut ir, slot, GP::Rdi, hoist_cached_class(g), deopt);
-            }
-            // Arrays of Fixnums (`loop_elems_kind`): an Array whose bit is
-            // set, or whose elements all scan as Fixnums. A miss resumes
-            // like the guards above and, after a few, recompiles without
-            // the speculation in this iseq.
-            for &slot in elems_kind {
-                if state.mode(slot) == LinkMode::S(Guarded::FixnumArray) {
-                    continue;
-                }
-                let deopt = ir.new_recompile_deopt_with_pc(
-                    &state,
-                    pc + 1,
-                    RecompileReason::ElemsKindFailed,
-                    self.loop_hoist_recompile_target(),
-                );
-                state.load(&mut ir, slot, GP::Rdi);
-                state.guard_class(&mut ir, slot, GP::Rdi, CachedClass::from_class(ARRAY_CLASS), deopt);
-                ir.push(AsmInst::GuardElemsFixnum { deopt });
-                state.set_fixnum_array(slot);
             }
             // Stage-C loop adoption: establish each adopted outer view on
             // this entry edge — load the owner's boxed slot through the
@@ -452,9 +424,7 @@ fn hoist_cached_class(g: Guarded) -> CachedClass {
     match g {
         Guarded::Fixnum => CachedClass::INTEGER,
         Guarded::Class(class) => CachedClass::from_class(class),
-        Guarded::Float | Guarded::Value | Guarded::NilOr(_) | Guarded::FixnumArray => {
-            unreachable!()
-        }
+        Guarded::Float | Guarded::Value | Guarded::NilOr(_) => unreachable!(),
     }
 }
 
@@ -521,20 +491,6 @@ impl<'a> JitContext<'a> {
             .collect()
     }
 
-    ///
-    /// A side exit for a `Guarded::FixnumArray` speculation that turned out
-    /// wrong (`RecompileReason::ElemsKindFailed`): it resumes the
-    /// interpreter at the current instruction and, after a few misses,
-    /// recompiles the unit without the speculation in this iseq.
-    ///
-    pub(crate) fn elems_kind_exit(&self, ir: &mut AsmIr, state: &AbstractFrame) -> AsmDeopt {
-        ir.new_recompile_deopt(
-            state,
-            RecompileReason::ElemsKindFailed,
-            self.loop_hoist_recompile_target(),
-        )
-    }
-
     fn loop_hoist_recompile_target(&self) -> RecompileTarget {
         match self.jit_type() {
             JitType::Specialized { idx, .. } => RecompileTarget::Specialized(*idx),
@@ -545,28 +501,20 @@ impl<'a> JitContext<'a> {
 
 impl<'a> JitContext<'a> {
     ///
-    /// Run the back-edge fixpoint of the loop at *head*, speculating that
-    /// some of its locals hold Arrays of Fixnums (`Guarded::FixnumArray`).
-    /// Returns the slots speculated on; each forward entry then checks
-    /// them once (`AsmInst::GuardElemsFixnum`) instead of the body guarding
-    /// every element it reads.
+    /// Run the back-edge fixpoint of the loop at *head*, seeding the locals
+    /// whose elements the loop reads (`a[i]`, see `loop_reads_elements`) as
+    /// `Array` at the head when the forward entries bring them in untyped.
     ///
-    /// A candidate is a local whose elements the loop reads (`a[i]`, see
-    /// `loop_reads_elements`) and that the forward entries bring in as an
-    /// `Array`. The fixpoint runs once, with the candidates seeded as
-    /// `FixnumArray` at the head: a candidate the body keeps one (no
-    /// instruction in it may clear an array's bit — see
-    /// `JitContext::compile_instruction`) arrives at the back edge as one,
-    /// and is speculated on; the others widen to `Array` at the head as the
-    /// walk repeats, as if never seeded.
-    ///
-    /// That walk must describe the head the real compile gets, which is
-    /// `incoming ⊔ backedge`, then refined by this speculation and by the
-    /// loop-invariant guard hoisting (`loop_hoist_guards`). A candidate the
-    /// forward entries bring in untyped therefore needs that hoisting to
-    /// apply to it, and a candidate must end up `FixnumArray` or `Array` at
-    /// the back edge. Should one end up anything else, the loop is analysed
-    /// again without speculation.
+    /// The walk must describe the head the real compile gets, which is
+    /// `incoming ⊔ backedge` refined by the loop-invariant guard hoisting
+    /// (`loop_hoist_guards`): a candidate the body keeps an `Array` arrives
+    /// at the back edge as one, the hoisting guards it on the forward
+    /// entries, and the body's own guards fold away. Without the seed, an
+    /// untyped head would make the fixpoint re-guard it on every read, so
+    /// the back edge would still carry `Array` but a `Value` head would be
+    /// what the hoisting compares against. Should a candidate end up
+    /// anything but `Array` at the back edge, the loop is analysed again
+    /// without the seed.
     ///
     fn analyse_loop_head(
         &mut self,
@@ -575,49 +523,38 @@ impl<'a> JitContext<'a> {
         head: BasicBlockId,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
-    ) -> JitResult<Vec<SlotId>> {
-        let candidates = self.elems_kind_candidates(incoming, entries, head, loop_start, loop_end);
+    ) -> JitResult<()> {
+        let candidates = self.array_seed_candidates(incoming, entries, head, loop_start, loop_end);
         if candidates.is_empty() {
-            self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end)?;
-            return Ok(vec![]);
+            return self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end);
         }
         let saved = self.take_loop_infos(loop_start, loop_end);
         let mut seeded = incoming.clone();
         for &slot in &candidates {
-            seeded.set_fixnum_array(slot);
+            seeded.refine_S_guarded(slot, Guarded::Class(ARRAY_CLASS));
         }
         self.analyse_backedge_fixpoint(seeded, loop_start, loop_end)?;
         let array = LinkMode::S(Guarded::Class(ARRAY_CLASS));
-        let mut kept = vec![];
         let fits = match self.loop_info(head) {
-            Some((_, Some(backedge))) => candidates.iter().all(|&slot| match backedge.mode(slot) {
-                LinkMode::S(Guarded::FixnumArray) => {
-                    kept.push(slot);
-                    true
-                }
-                // Widened to `Array` at the head: what the real head has
-                // (an untyped entry is guarded `Array` by the hoisting).
-                m => m == array,
-            }),
+            Some((_, Some(backedge))) => candidates.iter().all(|&slot| backedge.mode(slot) == array),
             _ => false,
         };
         if !fits {
             self.take_loop_infos(loop_start, loop_end);
             self.restore_loop_infos(saved);
             self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end)?;
-            return Ok(vec![]);
         }
-        Ok(kept)
+        Ok(())
     }
 
     ///
-    /// The locals of `analyse_loop_head`'s speculation: read element-wise
-    /// in the loop, and brought in by the forward entries as an `Array`
-    /// (or untyped, where the loop-invariant guard hoisting will guard it
-    /// one). A back edge an enclosing loop's analysis already recorded for
-    /// this head must carry them as an `Array` too.
+    /// The locals `analyse_loop_head` seeds: read element-wise in the loop,
+    /// and brought in by the forward entries untyped (where the
+    /// loop-invariant guard hoisting will guard them an `Array`) or as an
+    /// `Array`. A back edge an enclosing loop's analysis already recorded
+    /// for this head must carry them as an `Array` too.
     ///
-    fn elems_kind_candidates(
+    fn array_seed_candidates(
         &self,
         incoming: &AbstractState,
         entries: &[BranchEntry],
@@ -625,7 +562,7 @@ impl<'a> JitContext<'a> {
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
     ) -> Vec<SlotId> {
-        if self.elems_kind_disabled.contains(&self.iseq_id())
+        if self.loop_hoist_disabled.contains(&self.iseq_id())
             || entries
                 .iter()
                 .any(|e| matches!(e.mode, BranchMode::Side { .. }))
@@ -633,36 +570,28 @@ impl<'a> JitContext<'a> {
             return vec![];
         }
         let array = LinkMode::S(Guarded::Class(ARRAY_CLASS));
-        let hoistable = !self.loop_hoist_disabled.contains(&self.iseq_id());
         let block_param = self.iseq().block_param_slot();
         let recorded = self.loop_backedge(head);
         (1..=self.local_num())
             .map(|i| SlotId(i as u16))
             .filter(|slot| Some(*slot) != block_param)
             .filter(|slot| match incoming.mode(*slot) {
-                m if m == array => true,
-                LinkMode::S(Guarded::Value) => {
-                    hoistable
-                        && entries.iter().all(|e| {
-                            let m = e.state.mode(*slot);
-                            m == array || m == LinkMode::S(Guarded::Value)
-                        })
-                }
+                LinkMode::S(Guarded::Value) => entries.iter().all(|e| {
+                    let m = e.state.mode(*slot);
+                    m == array || m == LinkMode::S(Guarded::Value)
+                }),
                 _ => false,
             })
             .filter(|slot| recorded.is_none_or(|be| be.mode(*slot) == array))
             .filter(|slot| self.loop_reads_elements(loop_start, loop_end, *slot))
             .collect()
     }
-}
 
-impl<'a> JitContext<'a> {
     ///
     /// Whether the loop `loop_start..=loop_end` reads an element of the
     /// local *slot* with an Integer index (`slot[i]`, as the inline cache
-    /// saw it). Only those reads gain from `Guarded::FixnumArray`; an
-    /// Array the loop merely carries (or that is live after it) is not
-    /// worth an entry check.
+    /// saw it). Only those reads gain from the seed; an Array the loop
+    /// merely carries is left to the ordinary hoisting.
     ///
     fn loop_reads_elements(
         &self,

@@ -1407,26 +1407,15 @@ impl Value {
     }
 
     pub fn array_empty() -> Self {
-        Value::array_elems_fixnum(ArrayInner::new())
-    }
-
-    /// A new Array whose (empty, or all-Fixnum) payload carries
-    /// `ARRAY_ELEMS_FIXNUM`.
-    pub(crate) fn array_elems_fixnum(inner: ArrayInner) -> Self {
-        debug_assert!(inner.iter().all(|v| v.is_fixnum()));
-        let mut v = Value::array(inner);
-        v.rvalue_mut().set_array_elems_fixnum();
-        v
+        Value::array(ArrayInner::new())
     }
 
     pub fn array_empty_with_class(class_id: ClassId) -> Self {
-        let mut v = RValue::new_array_with_class(ArrayInner::new(), class_id).pack();
-        v.rvalue_mut().set_array_elems_fixnum();
-        v
+        RValue::new_array_with_class(ArrayInner::new(), class_id).pack()
     }
 
     pub fn array_with_capacity(len: usize) -> Self {
-        Value::array_elems_fixnum(ArrayInner::with_capacity(len))
+        Value::array(ArrayInner::with_capacity(len))
     }
 
     pub fn array_from_vec(v: Vec<Value>) -> Self {
@@ -2719,20 +2708,7 @@ impl Value {
         unsafe { self.rvalue().as_array() }
     }
 
-    #[inline(always)]
     fn as_array_inner_mut(&mut self) -> &mut ArrayInner {
-        // Any mutable access may break `ARRAY_ELEMS_FIXNUM`; the few
-        // stores that know they keep it use `as_array_inner_mut_keeping_kind`.
-        assert_eq!(ObjTy::ARRAY, self.rvalue().ty());
-        self.rvalue_mut().clear_array_elems_fixnum();
-        // SAFETY: The assert ensures this RValue contains an array.
-        unsafe { self.rvalue_mut().as_array_mut() }
-    }
-
-    /// `as_array_inner_mut` leaving `ARRAY_ELEMS_FIXNUM` alone, for a store
-    /// that keeps every element a Fixnum (`Array::push` of a Fixnum, …).
-    #[inline(always)]
-    fn as_array_inner_mut_keeping_kind(&mut self) -> &mut ArrayInner {
         assert_eq!(ObjTy::ARRAY, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains an array.
         unsafe { self.rvalue_mut().as_array_mut() }
@@ -3603,11 +3579,7 @@ impl Value {
             }
             NodeKind::Array(v, ..) => {
                 let iter = v.iter().map(|node| Self::from_const_ast(node, src_enc));
-                let mut ary = Value::array_from_iter(iter);
-                // Its copies (`deep_copy`, the JIT's inline literal copy)
-                // take the header, `ARRAY_ELEMS_FIXNUM` included.
-                ary.rvalue_mut().scan_array_elems_fixnum();
-                ary
+                Value::array_from_iter(iter)
             }
             NodeKind::Range {
                 start: deref!(start),

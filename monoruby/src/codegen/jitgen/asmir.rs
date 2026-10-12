@@ -56,15 +56,6 @@ pub(crate) enum ArrayIndexKind {
     Fixnum,
 }
 
-/// What the JIT knows about a value it stores into an Array, i.e. whether
-/// the store can break the Array's `ARRAY_ELEMS_FIXNUM` bit.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum StoredKind {
-    Fixnum,
-    NonFixnum,
-    Unknown,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct AsmEvict(usize);
 
@@ -2657,10 +2648,6 @@ pub(super) enum AsmInst {
     /// `array_index` call is dispatched in `gen_array_index`.
     ArrayIndex {
         kind: ArrayIndexKind,
-        /// The base is a `Guarded::FixnumArray`, whose element the state
-        /// types as a Fixnum: an out-of-bounds read (which would be `nil`)
-        /// leaves through this exit instead.
-        oob: Option<AsmDeopt>,
     },
     /// §20 (B): array integer-index **assign** (`ary[idx] = src`). Typed twin of
     /// `ArrayIndex`; carries the `using_fpr` save-set and the generic-path error
@@ -2669,23 +2656,6 @@ pub(super) enum AsmInst {
         kind: ArrayIndexKind,
         using_fpr: UsingFpr,
         error: AsmError,
-        /// Whether the stored value can clear the array's
-        /// `ARRAY_ELEMS_FIXNUM` bit.
-        src_kind: StoredKind,
-        /// `Guarded::FixnumArray` proofs are live across this Fixnum store:
-        /// instead of calling `set_array_integer_index`, whose nil padding
-        /// could clear a bit they rely on, the generic path leaves through
-        /// this exit and the interpreter does the store.
-        generic_deopt: Option<AsmDeopt>,
-    },
-    /// Loop-entry check of a `Guarded::FixnumArray` speculation: the Array
-    /// in rdi has `ARRAY_ELEMS_FIXNUM` set, or a scan of its elements finds
-    /// only Fixnums and sets it; otherwise `deopt`.
-    ///
-    /// ### destroy
-    /// - rax, rsi, rcx (x86-64); x0, x1, x3, x9 (aarch64)
-    GuardElemsFixnum {
-        deopt: AsmDeopt,
     },
     /// `dst <- [base + disp]`: load a field of a heap object into a GP register.
     /// A typed replacement for the `ir.inline(|gen| gen.emit_*())` escape hatch

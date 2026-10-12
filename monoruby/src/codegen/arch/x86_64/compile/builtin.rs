@@ -1208,7 +1208,6 @@ impl Codegen {
         let grow = self.jit.label();
         let stored = self.jit.label();
         let exit = self.jit.label();
-        self.emit_clear_elems_fixnum_rdi(Some(GP::Rsi));
         monoasm! { &mut self.jit,
             movq rax, [rdi + (RVALUE_OFFSET_ARY_CAPA)];
             cmpq rax, (ARRAY_INLINE_CAPA);
@@ -1276,8 +1275,6 @@ impl Codegen {
         let dst_heap = self.jit.label();
         let dst_ready = self.jit.label();
         let exit = self.jit.label();
-        // A slice copy may store anything: forget the elements kind.
-        self.emit_clear_elems_fixnum_rdi(None);
         monoasm! { &mut self.jit,
             sarq rsi, 1;                 // untag start
             js   slow;                   // negative start: let the callee wrap it

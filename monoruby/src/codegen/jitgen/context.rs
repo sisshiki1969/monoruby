@@ -1055,11 +1055,6 @@ pub(crate) struct JitContext<'a> {
     /// compiled (see [`Self::unfrozen_slots`]). Read via
     /// `instr_unfrozen_contains`, published back via `restore_unfrozen`.
     pub(super) instr_unfrozen: Vec<SlotId>,
-    /// The instruction being compiled leaves every array's
-    /// `ARRAY_ELEMS_FIXNUM` bit alone, so the state's `Guarded::FixnumArray`
-    /// proofs survive it. Cleared at the head of each instruction, set by
-    /// the arms that know (see `JitContext::compile_instruction`).
-    pub(super) elems_kind_keep: bool,
 
 
     ///
@@ -1261,9 +1256,6 @@ pub(crate) struct JitContext<'a> {
     /// Iseqs whose loops do not hoist type guards onto their entries
     /// (`merge.rs`): a hoisted guard of theirs kept missing.
     pub(in crate::codegen) loop_hoist_disabled: std::rc::Rc<std::collections::HashSet<ISeqId>>,
-    /// Iseqs whose loops do not speculate on arrays of Fixnums
-    /// (`Guarded::FixnumArray`, `merge.rs`): a check of theirs kept missing.
-    pub(in crate::codegen) elems_kind_disabled: std::rc::Rc<std::collections::HashSet<ISeqId>>,
 }
 
 ///
@@ -1289,7 +1281,6 @@ impl<'a> JitContext<'a> {
             fused_skip: None,
             unfrozen_slots: Vec::new(),
             instr_unfrozen: Vec::new(),
-            elems_kind_keep: false,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,
             class_version,
@@ -1320,7 +1311,6 @@ impl<'a> JitContext<'a> {
             loop_seed_input: None,
             loop_seeded: Default::default(),
             loop_hoist_disabled: Default::default(),
-            elems_kind_disabled: Default::default(),
         }
     }
 
@@ -1379,7 +1369,6 @@ impl<'a> JitContext<'a> {
             widened_outer_log: vec![],
             unfrozen_slots: Vec::new(),
             instr_unfrozen: Vec::new(),
-            elems_kind_keep: false,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,
             class_version: self.class_version,
@@ -1415,7 +1404,6 @@ impl<'a> JitContext<'a> {
             loop_seed_input: None,
             loop_seeded: Default::default(),
             loop_hoist_disabled: self.loop_hoist_disabled.clone(),
-            elems_kind_disabled: self.elems_kind_disabled.clone(),
         }
     }
 
@@ -3824,22 +3812,11 @@ impl<'a> JitContext<'a> {
             .and_then(|(_, be)| be.as_ref())
     }
 
-    pub(super) fn add_loop_info(
-        &mut self,
-        entry_bb: BasicBlockId,
-        liveness: Liveness,
-        backedge: Option<AbstractState>,
-    ) {
-        self.current_frame_mut()
-            .loop_info
-            .insert(entry_bb, (liveness, backedge));
-    }
-
     ///
     /// Remove (and return) what the back-edge fixpoints recorded for the
     /// loop heads in `loop_start..=loop_end`, so that the next fixpoint of
     /// that loop starts from scratch rather than from the recorded back
-    /// edges (`JitContext::loop_elems_kind`).
+    /// edges (`JitContext::analyse_loop_head`).
     ///
     pub(super) fn take_loop_infos(
         &mut self,
@@ -3874,6 +3851,17 @@ impl<'a> JitContext<'a> {
         if let Some((head, r)) = saved.outer_reads {
             frame.loop_outer_reads.insert(head, r);
         }
+    }
+
+    pub(super) fn add_loop_info(
+        &mut self,
+        entry_bb: BasicBlockId,
+        liveness: Liveness,
+        backedge: Option<AbstractState>,
+    ) {
+        self.current_frame_mut()
+            .loop_info
+            .insert(entry_bb, (liveness, backedge));
     }
 
     pub(super) fn loop_count(&self) -> usize {

@@ -592,7 +592,7 @@ impl SlotState {
         }
         match self.guarded(slot) {
             Guarded::Fixnum => true,
-            Guarded::Float | Guarded::Value | Guarded::FixnumArray => false,
+            Guarded::Float | Guarded::Value => false,
             Guarded::Class(c) => {
                 c == NIL_CLASS
                     || c == TRUE_CLASS
@@ -1047,9 +1047,6 @@ impl SlotState {
                 LinkMode::S(Guarded::Class(class)) if !is_immediate_class(class) => {
                     self.slots[i].mode = LinkMode::S(Guarded::Value);
                 }
-                LinkMode::S(Guarded::FixnumArray) => {
-                    self.slots[i].mode = LinkMode::S(Guarded::Value);
-                }
                 // The non-nil half of a `NilOr` is a heap-class proof like
                 // any other; nothing expressible remains once it falls.
                 LinkMode::S(Guarded::NilOr(NonNil::Class(class)))
@@ -1118,35 +1115,6 @@ impl SlotState {
             }
         }
         scan
-    }
-
-    /// Whether any slot of this frame carries a `Guarded::FixnumArray` proof.
-    pub(in crate::codegen::jitgen) fn has_fixnum_arrays(&self) -> bool {
-        self.slots
-            .iter()
-            .any(|s| s.mode == LinkMode::S(Guarded::FixnumArray))
-    }
-
-    /// Weaken every `Guarded::FixnumArray` proof of this frame to a plain
-    /// `Array` one: something may have cleared an array's
-    /// `ARRAY_ELEMS_FIXNUM` bit.
-    pub(in crate::codegen::jitgen) fn forget_fixnum_arrays(&mut self) {
-        for s in &mut self.slots {
-            if s.mode == LinkMode::S(Guarded::FixnumArray) {
-                s.mode = LinkMode::S(Guarded::Class(ARRAY_CLASS));
-            }
-        }
-    }
-
-    /// Speculate that the Array in *slot* has only Fixnum elements: a loop
-    /// head's `Guarded::FixnumArray` seed, checked on each forward entry
-    /// (`JitContext::loop_elems_kind`). *slot* must be untyped or an Array.
-    pub(in crate::codegen::jitgen) fn set_fixnum_array(&mut self, slot: SlotId) {
-        debug_assert!(matches!(
-            self.mode(slot),
-            LinkMode::S(Guarded::Value | Guarded::Class(ARRAY_CLASS) | Guarded::FixnumArray)
-        ));
-        self.set_mode(slot, LinkMode::S(Guarded::FixnumArray));
     }
 
     /// Drop the class proofs `scan_class_proofs` found `latched`.
@@ -1864,10 +1832,7 @@ impl SlotState {
     }
 
     pub fn is_array_ty(&self, store: &Store, slot: SlotId) -> bool {
-        let g = self.guarded(slot);
-        let b = if g == Guarded::FixnumArray {
-            true
-        } else if let Guarded::Class(class) = g {
+        let b = if let Guarded::Class(class) = self.guarded(slot) {
             store[class].is_array_ty_instance()
         } else {
             false
@@ -1920,9 +1885,7 @@ impl SlotState {
             INTEGER_CLASS => self.is_fixnum(slot),
             FLOAT_CLASS => self.is_float(slot),
             _ => {
-                let g = self.guarded(slot);
-                let b = g == Guarded::Class(class)
-                    || (class == ARRAY_CLASS && g == Guarded::FixnumArray);
+                let b = self.guarded(slot) == Guarded::Class(class);
                 match self.mode(slot) {
                     LinkMode::F(_) => assert!(!b),
                     LinkMode::C(v) => assert_eq!(v.class() == class, b),
@@ -1946,7 +1909,6 @@ impl SlotState {
                 // truthiness is unknown — be conservative and return
                 // false.
                 Guarded::Class(class) => !class.is_falsy() && class != BOOL_CLASS,
-                Guarded::FixnumArray => true,
                 // Statically unknown: may be `nil`.
                 Guarded::NilOr(_) => false,
             },
@@ -1964,7 +1926,6 @@ impl SlotState {
                 Guarded::Value => false,
                 // Same caveat as `is_truthy`: BOOL_CLASS could be either.
                 Guarded::Class(class) => class.is_falsy() && class != BOOL_CLASS,
-                Guarded::FixnumArray => false,
                 // Statically unknown: may be the (truthy) non-nil half.
                 Guarded::NilOr(_) => false,
             },
@@ -1981,7 +1942,6 @@ impl SlotState {
                 Guarded::Float => false,
                 Guarded::Value => false,
                 Guarded::Class(class) => class.is_nil(),
-                Guarded::FixnumArray => false,
                 Guarded::NilOr(_) => false,
             },
         }
@@ -1997,7 +1957,6 @@ impl SlotState {
                 Guarded::Float => true,
                 Guarded::Value => false,
                 Guarded::Class(class) => !class.is_nil(),
-                Guarded::FixnumArray => true,
                 Guarded::NilOr(_) => false,
             },
         }
@@ -2693,13 +2652,6 @@ pub enum Guarded {
     /// type also rejects `nil`, so `guard_class_state` narrows it like a
     /// `Value`.
     NilOr(NonNil),
-    /// An `Array` whose elements are all Fixnums (`ARRAY_ELEMS_FIXNUM`):
-    /// `class()` is `ARRAY_CLASS`, and an in-bounds `a[i]` is a Fixnum.
-    /// Only a loop head establishes it (`JitContext::loop_elems_kind`,
-    /// checked on the loop's entries), and any instruction that could
-    /// clear an array's bit drops every such proof in the state
-    /// (`AbstractState::forget_fixnum_arrays`).
-    FixnumArray,
 }
 
 ///
@@ -2733,7 +2685,6 @@ impl NonNil {
                     Some(NonNil::Class(c))
                 }
             }
-            Guarded::FixnumArray => Some(NonNil::Class(ARRAY_CLASS)),
             Guarded::Value | Guarded::NilOr(_) => None,
         }
     }
@@ -2802,7 +2753,6 @@ impl Guarded {
             Guarded::Fixnum => INTEGER_CLASS,
             Guarded::Float => FLOAT_CLASS,
             Guarded::Class(c) => *c,
-            Guarded::FixnumArray => ARRAY_CLASS,
             // `None`, deliberately: a `Some` here is a licence to elide a
             // class guard, and a `NilOr` value may be `nil`.
             Guarded::NilOr(_) => return None,
@@ -2843,8 +2793,6 @@ impl Guarded {
             {
                 Guarded::NilOr(a)
             }
-            (Guarded::FixnumArray, Guarded::Class(ARRAY_CLASS))
-            | (Guarded::Class(ARRAY_CLASS), Guarded::FixnumArray) => Guarded::Class(ARRAY_CLASS),
             _ => Guarded::Value,
         }
     }
@@ -3105,14 +3053,6 @@ impl AbstractFrame {
                 }
             }
             (LinkMode::S(_), LinkMode::S(guarded)) => {
-                // A `FixnumArray` proof is established only by the loop-entry
-                // bridges (`gen_bridges_for_branches`), never by a bridge.
-                assert!(
-                    guarded != Guarded::FixnumArray
-                        || self.mode(slot) == LinkMode::S(Guarded::FixnumArray),
-                    "bridge {:?} -> FixnumArray at {slot:?}",
-                    self.mode(slot)
-                );
                 if let Some(class) = guarded.class()
                     && !self.is_class(slot, class)
                 {

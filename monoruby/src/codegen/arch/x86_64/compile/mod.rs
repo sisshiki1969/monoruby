@@ -201,7 +201,6 @@ impl Codegen {
             | AsmInst::Inline(..)
             | AsmInst::ArrayIndex { .. }
             | AsmInst::ArrayIndexAssign { .. }
-            | AsmInst::GuardElemsFixnum { .. }
             | AsmInst::LoadFieldToReg { .. }
             | AsmInst::BoolFieldToReg { .. }
             | AsmInst::ArrayLenFixnum { .. }
@@ -1478,12 +1477,8 @@ impl Codegen {
         let slow = self.jit.label();
         let cont = self.jit.label();
         // 8-byte object header: flag=1 (live) | ty=ARRAY<<16 | class=ARRAY_CLASS<<32.
-        let mut header: u64 =
+        let header: u64 =
             ((ARRAY_CLASS.u32() as u64) << 32) | ((ObjTy::ARRAY.get() as u64) << 16) | 1;
-        if len == 0 {
-            // `[]`: vacuously all Fixnum (`ARRAY_ELEMS_FIXNUM`, a flag bit).
-            header |= ARRAY_ELEMS_FIXNUM as u64;
-        }
         self.emit_alloc_cell(CellHeader::Imm(header), &slow);
         monoasm! { &mut self.jit,
             movq [rax + (RVALUE_OFFSET_VAR)], 0;      // var_table = None
