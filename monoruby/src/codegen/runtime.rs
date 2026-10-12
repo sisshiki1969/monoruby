@@ -782,10 +782,7 @@ pub(super) extern "C" fn gen_array(
                 .cloned()
         };
         if callsite.splat_pos().is_empty() {
-            let mut ary = Value::array_from_iter(iter);
-            // A literal is short: record whether it is all Fixnum.
-            ary.rvalue_mut().scan_array_elems_fixnum();
-            Some(ary)
+            Some(Value::array_from_iter(iter))
         } else {
             let mut ary = Array::new_empty();
             for (i, v) in iter.enumerate() {

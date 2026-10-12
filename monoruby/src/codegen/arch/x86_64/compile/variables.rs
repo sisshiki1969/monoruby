@@ -177,33 +177,6 @@ impl Codegen {
 
 impl Codegen {
     ///
-    /// Clear `ARRAY_ELEMS_FIXNUM` on the Array in *rdi* unless *src*, the
-    /// value about to be stored into it, is a Fixnum (`None`: always), and
-    /// move the elements-kind epoch when the bit was set.
-    ///
-    /// #### destroy
-    /// - rax
-    ///
-    pub(super) fn emit_clear_elems_fixnum_rdi(&mut self, src: Option<GP>) {
-        let skip = self.jit.label();
-        let epoch = elems_kind_epoch_addr();
-        if let Some(src) = src {
-            monoasm! { &mut self.jit,
-                testq R(src as _), 0b1;
-                jnz  skip;
-            }
-        }
-        monoasm! { &mut self.jit,
-            testb [rdi + (RVALUE_OFFSET_FLAG as i32)], (ARRAY_ELEMS_FIXNUM as i32);
-            jz   skip;
-            andb [rdi + (RVALUE_OFFSET_FLAG as i32)], (!ARRAY_ELEMS_FIXNUM as i8);
-            movq rax, (epoch);
-            addq [rax], 1;
-        skip:
-        }
-    }
-
-    ///
     /// Emit the generational GC write barrier after a JIT inline store
     /// whose parent object is in `rdi` and whose stored child value is in
     /// `child`.

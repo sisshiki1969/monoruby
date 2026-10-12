@@ -1,8 +1,6 @@
 use super::*;
 use monoasm_macro::monoasm_arm64;
 
-const _: () = assert!(ARRAY_ELEMS_FIXNUM == 1 << 5);
-
 impl Codegen {
 
     /// Walk `outer` outer-LFP links, leaving the target outer LFP in `dst`.
@@ -150,45 +148,6 @@ impl Codegen {
         self.a64_get_outer(dst.outer, lfp, 9);
         self.a64_frame_store(s, 9, off);
         true
-    }
-
-    ///
-    /// Clear `ARRAY_ELEMS_FIXNUM` on the Array in *ary* unless *src*, the
-    /// value about to be stored into it, is a Fixnum (`None`: always), and
-    /// move the elements-kind epoch when the bit was set. aarch64 twin of x86
-    /// `emit_clear_elems_fixnum_rdi`.
-    ///
-    /// #### destroy
-    /// - x9, x10
-    ///
-    pub(in crate::codegen::jitgen) fn emit_clear_elems_fixnum(
-        &mut self,
-        ary: GP,
-        src: Option<GP>,
-    ) {
-        let skip = self.jit.label();
-        let a = ary.a64().0;
-        let flag = RVALUE_OFFSET_FLAG as u32;
-        let epoch = elems_kind_epoch_addr();
-        if let Some(src) = src {
-            let s = src.a64().0;
-            monoasm_arm64!(&mut self.jit,
-                tbnz x(s), #(0), skip;
-            );
-        }
-        monoasm_arm64!(&mut self.jit,
-            ldrb w9, [x(a), #(flag)];
-            tbz x9, #(5), skip;                // ARRAY_ELEMS_FIXNUM
-            // The bit is set: flipping it clears it.
-            mov x10, (ARRAY_ELEMS_FIXNUM as u64);
-            eor x9, x9, x10;
-            strb w9, [x(a), #(flag)];
-            mov x9, (epoch);
-            ldr x10, [x9];
-            add x10, x10, #(1);
-            str x10, [x9];
-            skip:
-        );
     }
 
     ///

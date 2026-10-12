@@ -287,9 +287,6 @@ fn init_fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     }
     let val = lfp.arg(1);
     *self_val = ArrayInner::from(smallvec![val; size]);
-    if val.is_fixnum() || size == 0 {
-        self_val.set_elems_fixnum();
-    }
     Ok(self_val.into())
 }
 
@@ -885,7 +882,7 @@ fn shift(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             return Ok(Value::nil());
         }
         let res = ary[0];
-        ary.shrink().drain(0..1);
+        ary.drain(0..1);
         Ok(res)
     } else {
         let i = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
@@ -893,7 +890,7 @@ fn shift(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             return Err(MonorubyErr::negative_array_size());
         }
         let num = std::cmp::min(i as usize, ary.len());
-        let iter = ary.shrink().drain(0..num);
+        let iter = ary.drain(0..num);
         Ok(Value::array_from_iter(iter))
     }
 }
@@ -1005,9 +1002,9 @@ extern "C" fn ary_rotate_(mut ary: Array, count: i64) -> Value {
     let ary_len = ary.len() as i64;
     if ary_len != 0 {
         if count > 0 {
-            ary.permute().rotate_left(wrap_rotate_count(count, ary_len));
+            ary.rotate_left(wrap_rotate_count(count, ary_len));
         } else {
-            ary.permute().rotate_right(wrap_rotate_count(count, ary_len));
+            ary.rotate_right(wrap_rotate_count(count, ary_len));
         }
     }
     ary.into()
@@ -1089,10 +1086,10 @@ fn pop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         let len = ary.len();
         let start = if n >= len { 0 } else { len - n };
         let result = Value::array_from_slice(&ary[start..]);
-        ary.shrink().truncate(start);
+        ary.truncate(start);
         Ok(result)
     } else {
-        let res = ary.shrink().pop().unwrap_or_default();
+        let res = ary.pop().unwrap_or_default();
         Ok(res)
     }
 }
@@ -1303,7 +1300,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn array_index(
     state: &mut AbstractState,
     ir: &mut AsmIr,
-    ctx: &JitContext,
+    _: &JitContext,
     store: &Store,
     callid: CallSiteId,
     _: Option<CachedClass>,
@@ -1321,12 +1318,7 @@ fn array_index(
     } else {
         return true;
     };
-    // An element of an array of Fixnums is a Fixnum, as long as it is in
-    // bounds: the read leaves the unit for the rest.
-    let oob = state
-        .is_fixnum_array(recv)
-        .then(|| ctx.elems_kind_exit(ir, state));
-    state.array_integer_index(ir, store, dst, recv, args, oob);
+    state.array_integer_index(ir, store, dst, recv, args);
     true
 }
 
@@ -1419,7 +1411,7 @@ fn index_assign(
 fn array_index_assign(
     state: &mut AbstractState,
     ir: &mut AsmIr,
-    ctx: &JitContext,
+    _: &JitContext,
     store: &Store,
     callid: CallSiteId,
     _: Option<CachedClass>,
@@ -1438,12 +1430,7 @@ fn array_index_assign(
                 recv, args, dst, ..
             } = *callsite;
             assert!(dst.is_none());
-            // With `Guarded::FixnumArray` proofs live, a Fixnum store must
-            // not take the generic path, whose nil padding would clear a bit.
-            let generic_deopt = state
-                .has_fixnum_arrays()
-                .then(|| ctx.elems_kind_exit(ir, state));
-            state.array_integer_index_assign(ir, store, args + 1usize, recv, args, generic_deopt);
+            state.array_integer_index_assign(ir, store, args + 1usize, recv, args);
             true
         }
         3 => array_slice_assign(state, ir, store, callid),
@@ -3780,7 +3767,7 @@ fn reverse(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[monoruby_builtin]
 fn reverse_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array_mut(&globals.store)?;
-    ary.permute().reverse();
+    ary.reverse();
     Ok(ary.into())
 }
 
@@ -3857,11 +3844,11 @@ fn rotate_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let ary_len = ary.len() as i64;
     if ary_len == 0 {
     } else if i > 0 {
-        ary.permute().rotate_left(wrap_rotate_count(i, ary_len));
+        ary.rotate_left(wrap_rotate_count(i, ary_len));
     } else {
         // `-i` can overflow for `i == i64::MIN`; wrap first, then negate the
         // (in-range) remainder.
-        ary.permute().rotate_right(wrap_rotate_count(i, ary_len));
+        ary.rotate_right(wrap_rotate_count(i, ary_len));
     };
     Ok(lfp.self_val())
 }
@@ -4855,7 +4842,7 @@ fn delete_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     } else {
         pos as usize
     };
-    Ok(ary.shrink().remove(pos))
+    Ok(ary.remove(pos))
 }
 
 ///
@@ -4943,7 +4930,7 @@ fn insert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if nth >= ary.len() {
         ary.resize(nth, Value::nil());
     }
-    ary.insert_from_slice(nth, &val);
+    ary.insert_many(nth, val.iter().cloned());
     Ok(lfp.self_val())
 }
 

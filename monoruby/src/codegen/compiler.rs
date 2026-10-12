@@ -414,13 +414,6 @@ impl Codegen {
         if reason == RecompileReason::LoopHoistGuardFailed {
             std::rc::Rc::make_mut(&mut self.loop_hoist_disabled).insert(iseq_id);
         }
-        if reason == RecompileReason::ElemsKindFailed {
-            std::rc::Rc::make_mut(&mut self.elems_kind_disabled).insert(iseq_id);
-        }
-    }
-
-    pub(super) fn elems_kind_disabled(&self) -> std::rc::Rc<std::collections::HashSet<ISeqId>> {
-        self.elems_kind_disabled.clone()
     }
 
     pub(super) fn loop_hoist_disabled(&self) -> std::rc::Rc<std::collections::HashSet<ISeqId>> {
