@@ -791,7 +791,10 @@ impl Codegen {
             b done;
         miss:
         );
-        self.a64_far_branch(deopt, false);
+        // The exit stub is emitted later (the side-exit pass), so this is
+        // a relocated `b`, as every other deopt branch in the lowering.
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit, b deopt;);
         self.jit.bind_label(after);
     }
 
@@ -934,7 +937,8 @@ impl Codegen {
                 b after;
             miss:
             );
-            self.a64_far_branch(deopt, false);
+            let deopt = deopt.clone();
+            monoasm_arm64!(&mut self.jit, b deopt;);
             self.jit.bind_label(after);
         } else {
             // Never branched to; bound so the label resolves.

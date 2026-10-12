@@ -296,12 +296,12 @@ fn raw_temp_as_argument() {
           r
         end
         def add3(a, b, c) = a + b + c
-        res = []
+        out = []
         25.times do |n|
-          [0, 3, 1 << 40].each { |d| res << (div(1 << 62, d) rescue :zero) }
-          res << add3(1 << 63, (n ^ 0x8000_0000_0000_0001) & M, n)
+          [0, 3, 1 << 40].each { |d| out << (div(1 << 62, d) rescue :zero) }
+          out << add3(1 << 63, (n ^ 0x8000_0000_0000_0001) & M, n)
         end
-        res.uniq
+        out.uniq
         "##,
         PRELUDE,
     );
