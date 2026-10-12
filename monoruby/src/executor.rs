@@ -5681,6 +5681,41 @@ pub enum RecompileReason {
     /// (`codegen/jitgen/merge.rs`, loop-invariant guard hoisting) missed.
     /// The recompile stops hoisting in the iseq that owns the loop.
     LoopHoistGuardFailed = 7,
+    /// A fixnum-compiled Integer arithmetic site left through one of the
+    /// exits its generator emits — an overflow, an over-wide shift, a
+    /// zero divisor, or a non-fixnum argument — often enough to matter
+    /// (`1 << sq` with `sq` reaching 62). The interpreter cannot see any
+    /// of these as a class change (both operands are fixnums), so the
+    /// exit handler stamps the site itself (`OPCODE_SUB_OVERFLOW`) and the
+    /// recompile gives it the two-arm form: the fixnum arm with its exits
+    /// routed to a residual generic arm (`binary_dispatch`). One-shot per
+    /// site: a stamped site is never converted again.
+    IntegerOverflow = 8,
+    /// An Integer site compiled in the unboxed u64 form (`LinkMode::U`,
+    /// `doc`: reports/u64_mode_design) found an operand outside [0, 2^64)
+    /// or a result that does not fit: an unbox guard or a checked
+    /// operation missed. The exit handler stamps the site
+    /// (`OPCODE_SUB_NOU64`) and the recompile gives it the Integer forms
+    /// of the other reasons (`compile_binary` 2 / 2a). One-shot per site.
+    U64GuardFailed = 9,
+    /// A loop head adopted the back edge's raw-u64 placement of a
+    /// loop-carried slot (`jitgen/merge.rs`, the counterpart of the
+    /// loop-entry float adoption), and the unbox on a forward entry found
+    /// the value outside [0, 2^64). The recompile keeps such slots boxed
+    /// at the heads of the iseq that owns the loop.
+    LoopU64AdoptFailed = 10,
+}
+
+impl RecompileReason {
+    /// The `opcode_sub` bit the exit for this reason stamps on its site
+    /// before recompiling, if any (see `BytecodePtr::opcode_sub`).
+    pub(crate) fn site_stamp(self) -> Option<u8> {
+        match self {
+            Self::IntegerOverflow => Some(crate::bytecode::OPCODE_SUB_OVERFLOW),
+            Self::U64GuardFailed => Some(crate::bytecode::OPCODE_SUB_NOU64),
+            _ => None,
+        }
+    }
 }
 
 struct Root<'a, 'b> {

@@ -13,6 +13,7 @@ mod variables;
 /// call site polymorphic so the JIT can read it back via
 /// `BytecodePtr::opcode_sub()`.
 const OPCODE_SUB: i64 = 7 - 16;
+use crate::bytecode::OPCODE_SUB_POLY;
 
 macro_rules! vm_cmp_opt {
   ($op:ident, $bop:ident) => {
@@ -635,7 +636,7 @@ impl Codegen {
             jeq   record;      // first population: record without the flag
             cmpl  r8, rax;
             jeq   skip;
-            movb  [r13 + (OPCODE_SUB)], 1;
+            orb   [r13 + (OPCODE_SUB)], (OPCODE_SUB_POLY as i8);
         record:
             // Feed the call site's polymorphic method cache — population and
             // transitions only, see `vm_save_binary_class`. The caller keeps
@@ -716,7 +717,7 @@ impl Codegen {
             jne   set_poly;
             jmp   skip;
         set_poly:
-            movb  [r13 + (OPCODE_SUB)], 1;
+            orb   [r13 + (OPCODE_SUB)], (OPCODE_SUB_POLY as i8);
         record:
             // Feed the call site's polymorphic method cache. Population and
             // transitions only — the steady state never gets here — so the

@@ -5,6 +5,7 @@
 
 use super::*;
 use monoasm_macro::monoasm_arm64;
+use crate::bytecode::OPCODE_SUB_POLY;
 
 mod definition;
 pub mod init_method;
@@ -65,6 +66,8 @@ impl Codegen {
         // f64_to_val helper (D0 f64 -> X0 boxed Value), used by `FprToStack`.
         let f64_to_val = self.f64_to_val.clone();
         self.a64_gen_f64_to_val(&f64_to_val);
+        let u64_to_val = self.u64_to_val.clone();
+        self.a64_gen_u64_to_val(&u64_to_val);
         let vm_entry = self.jit.label();
         let entry_fetch = self.jit.label();
         // vm_entry: establish the frame pointer (x86: `pushq rbp; movq rbp,rsp`).
@@ -1429,8 +1432,10 @@ impl Codegen {
         );
         self.jit.bcond_label(Cond::Eq, &skip);
         monoasm_arm64!(&mut self.jit,
-            mov x11, (1);
-            strb w11, [x(PC.0), #(7)]; // opcode_sub = 1 (polymorphic)
+            ldrb w11, [x(PC.0), #(7)];
+            tbnz w11, #(OPCODE_SUB_POLY.trailing_zeros()), record; // already stamped
+            add w11, w11, #(OPCODE_SUB_POLY as u32);
+            strb w11, [x(PC.0), #(7)]; // opcode_sub |= POLY
             record:
             // Feed the call site's polymorphic method cache — population and
             // transitions only. The operand (x2) is already documented as
@@ -1505,8 +1510,10 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             b skip;
             set_poly:
-            mov x11, (1);
-            strb w11, [x(PC.0), #(7)];  // opcode_sub = 1 (polymorphic)
+            ldrb w11, [x(PC.0), #(7)];
+            tbnz w11, #(OPCODE_SUB_POLY.trailing_zeros()), record; // already stamped
+            add w11, w11, #(OPCODE_SUB_POLY as u32);
+            strb w11, [x(PC.0), #(7)];  // opcode_sub |= POLY
             record:
             // Feed the call site's polymorphic method cache — population and
             // transitions only, never the steady state. Preserve the operand

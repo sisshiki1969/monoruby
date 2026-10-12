@@ -423,6 +423,10 @@ impl Executor {
         rhs: Value,
         is_func_call: bool,
     ) -> Result<Value> {
+        // See `cmp_values`: Integers that fit an `i128` compare there.
+        if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
+            return Ok(Value::bool(l == r));
+        }
         let b = match (lhs.unpack(), rhs.unpack()) {
             (RV::Nil, RV::Nil) => true,
             (RV::Nil, _) => false,
@@ -769,6 +773,10 @@ fn cmp_teq_values_impl(
     if vm.dispatch_redefined_op(globals, lhs.class(), IdentId::_TEQ) {
         return vm.invoke_method(globals, IdentId::_TEQ, private_ok, lhs, &[rhs], None, None);
     }
+    // See `cmp_values`: Integers that fit an `i128` compare there.
+    if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
+        return Some(Value::bool(l == r));
+    }
     let b = match (lhs.unpack(), rhs.unpack()) {
         (RV::Nil, RV::Nil) => true,
         (RV::Nil, _) => false,
@@ -818,6 +826,10 @@ pub(crate) fn cmp_teq_values_bool(
     lhs: Value,
     rhs: Value,
 ) -> Result<bool> {
+    // See `cmp_values`: Integers that fit an `i128` compare there.
+    if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
+        return Ok(l == r);
+    }
     let b = match (lhs.unpack(), rhs.unpack()) {
         (RV::Nil, RV::Nil) => true,
         (RV::Nil, _) => false,
@@ -1178,6 +1190,11 @@ impl Executor {
         if self.dispatch_redefined_op(globals, lhs.class(), IdentId::_CMP) {
             return Ok(self.dispatch_cmp(globals, lhs, rhs)?);
         }
+        // Two 128-bit Integers (fixnums or inline Bignums) compare as
+        // `i128`, before `unpack` would ask either for a `BigInt`.
+        if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
+            return Ok(Some(l.cmp(&r)));
+        }
         let res = match (lhs.unpack(), rhs.unpack()) {
             (RV::Nil, RV::Nil) => Some(Ordering::Equal),
             (RV::Nil, _) => None,
@@ -1271,6 +1288,13 @@ pub(crate) extern "C" fn neg_value_raw(
             Some(lhs) => Value::integer(lhs),
             None => Value::bigint(-BigInt::from(lhs)),
         },
+        // An inline Bignum negates in `i128` (`as_i128` precedes `unpack`
+        // so the object is not asked for a `BigInt`).
+        _ if let Some(l) = lhs.as_i128()
+            && let Some(n) = l.checked_neg() =>
+        {
+            Value::from_i128(n)
+        }
         RV::BigInt(lhs) => Value::bigint(-lhs),
         RV::Float(lhs) => Value::float(-lhs),
         RV::Complex(c) => {
@@ -1384,6 +1408,7 @@ pub(crate) extern "C" fn bitnot_value_raw(
 ) -> Option<Value> {
     let v = match lhs.unpack() {
         RV::Fixnum(lhs) => Value::integer(!lhs),
+        _ if let Some(l) = lhs.as_i128() => Value::from_i128(!l),
         RV::BigInt(lhs) => Value::bigint(!lhs),
         _ => {
             return vm.invoke_method(globals, IdentId::_BNOT, is_func_call, lhs, &[], None, None);

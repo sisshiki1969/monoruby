@@ -121,15 +121,16 @@ mod alloc_policy {
             .min_by_key(|&fpr| ctx.victim_rank(fpr))?;
         // Demoting the slots is what frees the register: the file is
         // derived from the modes, so there is no reverse entry to clear.
-        let to_demote: Vec<(SlotId, SfGuarded)> = state
+        let to_demote: Vec<(SlotId, Guarded)> = state
             .fpr_slots(victim)
             .map(|s| match state.mode(s) {
-                LinkMode::Sf(_, g) => (s, g),
+                LinkMode::Sf(_, g) => (s, g.into()),
+                LinkMode::Su(_) => (s, Guarded::Value),
                 _ => unreachable!(),
             })
             .collect();
         for (s, g) in to_demote {
-            state.set_mode(s, LinkMode::S(g.into()));
+            state.set_mode(s, LinkMode::S(g));
         }
         Some(victim)
     }
@@ -534,6 +535,7 @@ impl SlotState {
                 }
                 LinkMode::C(_) => {}
                 LinkMode::Sf(_, _) => {}
+                LinkMode::U(_) | LinkMode::Su(_) => {}
                 LinkMode::F(x) => {
                     if !as_f64 {
                         self.set_Sf(slot, x, SfGuarded::Float);
@@ -664,7 +666,10 @@ impl SlotState {
     /// register file, read off the slot modes.
     fn fpr_slots(&self, fpr: FPReg) -> impl Iterator<Item = SlotId> + '_ {
         self.all_regs().filter(move |&s| {
-            matches!(self.mode(s), LinkMode::F(x) | LinkMode::Sf(x, _) if x == fpr)
+            matches!(
+                self.mode(s),
+                LinkMode::F(x) | LinkMode::Sf(x, _) | LinkMode::U(x) | LinkMode::Su(x) if x == fpr
+            )
         })
     }
 
@@ -716,11 +721,11 @@ impl SlotState {
         };
         for s in self.all_regs() {
             match self.mode(s) {
-                LinkMode::F(x) if x.0 < PHYS_FPR_POOL => {
+                LinkMode::F(x) | LinkMode::U(x) if x.0 < PHYS_FPR_POOL => {
                     occ.occupied[x.0] = true;
                     occ.all_sf[x.0] = false;
                 }
-                LinkMode::Sf(x, _) if x.0 < PHYS_FPR_POOL => {
+                LinkMode::Sf(x, _) | LinkMode::Su(x) if x.0 < PHYS_FPR_POOL => {
                     occ.occupied[x.0] = true;
                 }
                 _ => {}
@@ -941,6 +946,73 @@ impl SlotState {
     }
 
     ///
+    /// The raw-u64 counterpart of [`Self::keep_backedge_floats`]: a
+    /// loop-carried slot the boxed loop entry left `S` while the back edge
+    /// carries it raw (`U`) or cached (`Su`) re-adopts that placement at
+    /// the head, so the value goes around the loop unboxed instead of being
+    /// boxed at the back edge and unboxed again by the body's first use.
+    /// `adopt(i)` is the back edge's placement (`Some(true)` for `U`,
+    /// `Some(false)` for `Su`); `promotable(i)` gates each slot on every
+    /// forward entry having a `_ -> U` bridge (`S` / `U` / `Su` / a u64
+    /// `C`). Only a free physical fpr is taken (`try_set_new_*`), as for
+    /// the floats. Returns the adopted slots, `true` for `U`.
+    ///
+    pub(in crate::codegen::jitgen) fn keep_backedge_u64(
+        &mut self,
+        adopt: impl Fn(SlotId) -> Option<bool>,
+        promotable: impl Fn(SlotId) -> bool,
+    ) -> Vec<(SlotId, bool)> {
+        let mut adopted = vec![];
+        for i in self.all_regs() {
+            if !matches!(self.mode(i), LinkMode::S(_)) || !promotable(i) {
+                continue;
+            }
+            let Some(to_u) = adopt(i) else {
+                continue;
+            };
+            let taken = if to_u {
+                self.try_set_new_U(i)
+            } else {
+                self.try_set_new_Su(i)
+            };
+            if taken.is_some() {
+                adopted.push((i, to_u));
+            }
+        }
+        adopted
+    }
+
+    ///
+    /// Unbox a boxed (`S`) *slot* on a loop's forward entry into a fresh
+    /// raw-u64 register (`U` when *to_u*, else `Su`) under *deopt*, the
+    /// recompile exit the caller armed before the transition. A GP
+    /// resident is flushed to the home first: `Su` claims the home
+    /// canonical, and the exit re-reads it. The entry bridge then moves
+    /// the register into the head's (`U -> U` / `Su -> Su`).
+    ///
+    pub(in crate::codegen::jitgen) fn unbox_u64_entry(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        to_u: bool,
+        deopt: AsmDeopt,
+    ) {
+        match self.gp_regfile.reg_of(slot) {
+            Some(reg) => {
+                ir.reg2stack(reg, slot);
+                ir.reg_move(reg, GP::Rdi);
+            }
+            None => ir.stack2reg(slot, GP::Rdi),
+        }
+        let x = if to_u {
+            self.set_new_U(slot)
+        } else {
+            self.set_new_Su(slot)
+        };
+        ir.u64_unbox(GP::Rdi, x, deopt);
+    }
+
+    ///
     /// F/Sf -> F
     ///
     #[allow(non_snake_case)]
@@ -1006,6 +1078,56 @@ impl SlotState {
     #[allow(non_snake_case)]
     pub(super) fn set_Sf_float(&mut self, slot: SlotId, fpr: FPReg) {
         self.set_Sf(slot, fpr, SfGuarded::Float)
+    }
+
+    ///
+    /// _ -> U (bind *slot* to the raw u64 in *fpr*).
+    ///
+    #[allow(non_snake_case)]
+    pub(super) fn set_U(&mut self, slot: SlotId, fpr: FPReg) {
+        self.clear(slot);
+        self.set_mode(slot, LinkMode::U(fpr));
+    }
+
+    ///
+    /// _ -> Su (the stack is canonical, *fpr* caches the raw u64).
+    ///
+    #[allow(non_snake_case)]
+    pub(super) fn set_Su(&mut self, slot: SlotId, fpr: FPReg) {
+        self.clear(slot);
+        self.set_mode(slot, LinkMode::Su(fpr));
+    }
+
+    /// _ -> U in a fresh register.
+    #[allow(non_snake_case)]
+    pub(super) fn set_new_U(&mut self, slot: SlotId) -> FPReg {
+        let x = self.alloc_fpr();
+        self.set_U(slot, x);
+        x
+    }
+
+    /// _ -> Su in a fresh register.
+    #[allow(non_snake_case)]
+    pub(super) fn set_new_Su(&mut self, slot: SlotId) -> FPReg {
+        let x = self.alloc_fpr();
+        self.set_Su(slot, x);
+        x
+    }
+
+    /// _ -> U in a fresh pool register, or `None` under pressure.
+    #[allow(non_snake_case)]
+    pub(super) fn try_set_new_U(&mut self, slot: SlotId) -> Option<FPReg> {
+        let x = self.try_alloc_fpr()?;
+        self.set_U(slot, x);
+        Some(x)
+    }
+
+    /// _ -> Su in a fresh pool register, or `None` under pressure.
+    #[allow(non_snake_case)]
+    pub(super) fn try_set_new_Su(&mut self, slot: SlotId) -> Option<FPReg> {
+        let x = self.try_alloc_fpr()?;
+        self.set_Su(slot, x);
+        Some(x)
     }
 }
 
@@ -1197,6 +1319,24 @@ impl SlotState {
     pub(crate) fn def_F_with_fpr(&mut self, slot: SlotId, fpr: FPReg) -> FPReg {
         self.discard(slot);
         self.set_F(slot, fpr);
+        fpr
+    }
+
+    ///
+    /// Define *slot* as a raw u64 in a new fpr register (`LinkMode::U`).
+    ///
+    #[allow(non_snake_case)]
+    pub(crate) fn def_U(&mut self, slot: SlotId) -> FPReg {
+        let fpr = self.alloc_fpr();
+        self.discard(slot);
+        self.set_U(slot, fpr);
+        fpr
+    }
+
+    #[allow(non_snake_case)]
+    pub(crate) fn def_U_with_fpr(&mut self, slot: SlotId, fpr: FPReg) -> FPReg {
+        self.discard(slot);
+        self.set_U(slot, fpr);
         fpr
     }
 
@@ -1480,6 +1620,31 @@ impl SlotState {
                 Spill::None
             }
             (LinkMode::Sf(_, _), Keep::Nothing) => {
+                self.clear(slot);
+                self.set_mode(slot, LinkMode::S(Guarded::Value));
+                Spill::None
+            }
+            // A raw u64 is boxed into its home like an `F`; the register
+            // stays a read-only cache (`Su`) when the claim is kept.
+            (LinkMode::U(fpr), Keep::All) => {
+                self.set_Su(slot, fpr);
+                Spill::U64(fpr, slot)
+            }
+            (LinkMode::U(fpr), Keep::Type | Keep::Nothing) => {
+                self.clear(slot);
+                self.set_mode(slot, LinkMode::S(Guarded::Value));
+                Spill::U64(fpr, slot)
+            }
+            (LinkMode::U(fpr), Keep::Claims) => {
+                if fpr.0 < PHYS_FPR_POOL {
+                    let h = self.fpr_alloc.push_spill();
+                    self.set_mode(slot, LinkMode::U(h));
+                    ir.fpr_move(fpr, h);
+                }
+                Spill::None
+            }
+            (LinkMode::Su(_), Keep::All | Keep::Claims) => Spill::None,
+            (LinkMode::Su(_), Keep::Type | Keep::Nothing) => {
                 self.clear(slot);
                 self.set_mode(slot, LinkMode::S(Guarded::Value));
                 Spill::None
@@ -1994,6 +2159,16 @@ impl SlotState {
                 self.discard(dst);
                 self.set_Sf(dst, x, guarded);
             }
+            LinkMode::U(x) => {
+                self.discard(dst);
+                self.set_U(dst, x);
+            }
+            LinkMode::Su(x) => {
+                ir.stack2reg(src, GP::Rax);
+                ir.reg2stack(GP::Rax, dst);
+                self.discard(dst);
+                self.set_Su(dst, x);
+            }
             LinkMode::S(guarded) => {
                 // The copy is free: `dst` joins `src`'s register as a dirty
                 // holder and no store is emitted now. The store to `dst`'s
@@ -2117,6 +2292,10 @@ impl AbstractFrame {
                 }
                 // in this case, Guard will always fail
             }
+            // A raw u64's boxed form is an Integer that may or may not be a
+            // fixnum: the guard is emitted (on the boxed value, which the
+            // caller loaded), and nothing is refined.
+            LinkMode::U(_) | LinkMode::Su(_) => {}
             LinkMode::C(v) => {
                 if class == CachedClass::INTEGER {
                     if v.is_fixnum() {
@@ -2180,7 +2359,8 @@ impl AbstractFrame {
         // Only physical pool slots need save/restore at call
         // boundaries; spill slots already live on the stack.
         for s in self.all_regs() {
-            if let LinkMode::F(x) | LinkMode::Sf(x, _) = self.mode(s)
+            if let LinkMode::F(x) | LinkMode::Sf(x, _) | LinkMode::U(x) | LinkMode::Su(x) =
+                self.mode(s)
                 && x.0 < PHYS_FPR_POOL
             {
                 b.set(x.0, true);
@@ -2227,12 +2407,13 @@ impl AbstractFrame {
         // registers themselves survive the collection — `exec_gc` preserves the
         // caller-saved set). Empty without the feature.
         let gp = self.gp_regfile.dirty_residents();
-        WriteBack::new(vec![], literal, void, gp, vec![], vec![])
+        WriteBack::new(vec![], vec![], literal, void, gp, vec![], vec![])
     }
 
     pub(crate) fn get_write_back(&self) -> WriteBack {
         let f = |_| true;
         let fpr = self.wb_fpr(f);
+        let u64 = self.wb_u64(f);
         let literal = self.wb_literal(f);
         // re-home dirty GP residents (a binop result still in a
         // register) so a deopt resuming in the VM reads them from their stack
@@ -2240,6 +2421,7 @@ impl AbstractFrame {
         let gp = self.gp_regfile.dirty_residents();
         WriteBack::new(
             fpr,
+            u64,
             literal,
             vec![],
             gp,
@@ -2272,7 +2454,7 @@ impl AbstractFrame {
         for slot in self.all_regs() {
             let mut link = self.mode(slot);
             match &mut link {
-                LinkMode::F(x) | LinkMode::Sf(x, _) => {
+                LinkMode::F(x) | LinkMode::Sf(x, _) | LinkMode::U(x) | LinkMode::Su(x) => {
                     if *x == l {
                         *x = r;
                     } else if *x == r {
@@ -2296,6 +2478,24 @@ impl AbstractFrame {
         let mut by_reg: Vec<(FPReg, Vec<SlotId>)> = Vec::new();
         for s in self.all_regs() {
             if let LinkMode::F(x) = self.mode(s)
+                && f(s)
+            {
+                match by_reg.iter_mut().find(|(r, _)| *r == x) {
+                    Some((_, v)) => v.push(s),
+                    None => by_reg.push((x, vec![s])),
+                }
+            }
+        }
+        by_reg.sort_by_key(|(r, _)| r.0);
+        by_reg
+    }
+
+    /// Every register holding a `U` slot, with those slots — the raw u64s
+    /// a side exit has to box into their stack homes (`u64_to_val`).
+    fn wb_u64(&self, f: impl Fn(SlotId) -> bool) -> Vec<(FPReg, Vec<SlotId>)> {
+        let mut by_reg: Vec<(FPReg, Vec<SlotId>)> = Vec::new();
+        for s in self.all_regs() {
+            if let LinkMode::U(x) = self.mode(s)
                 && f(s)
             {
                 match by_reg.iter_mut().find(|(r, _)| *r == x) {
@@ -2391,6 +2591,8 @@ pub(in crate::codegen::jitgen) enum Spill {
     Fpr(FPReg, SlotId),
     /// `ir.lit2stack(value, slot)`
     Lit(Value, SlotId),
+    /// `ir.u64_to_stack(fpr, slot)`
+    U64(FPReg, SlotId),
 }
 
 impl Spill {
@@ -2399,6 +2601,7 @@ impl Spill {
             Spill::None => {}
             Spill::Fpr(fpr, slot) => ir.fpr2stack(fpr, slot),
             Spill::Lit(v, slot) => ir.lit2stack(v, slot),
+            Spill::U64(fpr, slot) => ir.u64_to_stack(fpr, slot),
         }
     }
 }
@@ -2481,6 +2684,22 @@ pub(in crate::codegen::jitgen) enum LinkMode {
     ///
     Sf(FPReg, SfGuarded),
     ///
+    /// An Integer in [0, 2^64) held **raw** (unboxed, as a `u64`) in the
+    /// fpr register *x* (`movq xmm, r64` / `fmov d, x` — the pool register
+    /// or spill slot is reused as an 8-byte home, no f64 is ever read from
+    /// it). The stack slot is stale, exactly as for `F`: the value is boxed
+    /// back by `u64_to_val` (a fixnum below 2^62, else an inline Bignum) on
+    /// a write-back. The type is `Guarded::Value` on the lattice — the class
+    /// predicates deliberately answer nothing for it, since
+    /// `is_class(INTEGER)` is the fixnum-tag shortcut elsewhere.
+    ///
+    U(FPReg),
+    ///
+    /// On the stack slot (the boxed Integer, canonical) and raw in the fpr
+    /// register as a read-only `u64` cache; demoting to `S` is free.
+    ///
+    Su(FPReg),
+    ///
     /// Concrete value.
     ///
     /// `Value` may be any packed immediate (fixnum, flonum, nil, true,
@@ -2515,6 +2734,7 @@ impl LinkMode {
             LinkMode::S(guarded) => *guarded,
             LinkMode::Sf(_, guarded) => (*guarded).into(),
             LinkMode::F(_) => Guarded::Float,
+            LinkMode::U(_) | LinkMode::Su(_) => Guarded::Value,
             LinkMode::C(v) => Guarded::from_concrete_value(*v),
             LinkMode::V => Guarded::Class(NIL_CLASS),
             _ => unreachable!("{:?}", self),
@@ -2953,6 +3173,11 @@ impl AbstractFrame {
             // block-handing call site — so the stale slot is never read
             // and the binding stays.
             LinkMode::F(_) => OuterBarrier::Kept,
+            // The boxed cache view goes, as for `Sf`.
+            LinkMode::Su(_) => {
+                self.set_mode(slot, LinkMode::S(Guarded::Value));
+                OuterBarrier::Widened
+            }
             _ => OuterBarrier::Kept,
         }
     }
@@ -3023,6 +3248,28 @@ impl AbstractFrame {
                     self.gen_fpr_swap(ir, x, tmp);
                 }
             }
+            (LinkMode::S(_), LinkMode::Sf(x, SfGuarded::Fixnum)) => {
+                // S -> Sf(Fixnum): re-materialize a fixnum's f64 cache. A
+                // dispatch arm under fpr pressure demotes an `Sf` it did not
+                // need to `S` (the stack is canonical, so nothing is emitted),
+                // and the merge target, declared from the pre-arm state,
+                // still carries the cache; the bridge converts the fixnum
+                // again. The class is normally already proved (the demote
+                // keeps the guard); a guard with a side exit covers the rest.
+                ir.stack2reg(slot, GP::Rdi);
+                if !self.is_class(slot, INTEGER_CLASS) {
+                    let deopt = ir.new_deopt_with_pc(&self, pc + 1);
+                    ir.push(AsmInst::GuardClass(GP::Rdi, CachedClass::INTEGER, deopt));
+                }
+                if self.is_fpr_vacant(x) {
+                    ir.fixnum2fpr(GP::Rdi, x);
+                    self.set_Sf(slot, x, SfGuarded::Fixnum);
+                } else {
+                    let tmp = self.set_new_Sf(slot, SfGuarded::Fixnum);
+                    ir.fixnum2fpr(GP::Rdi, tmp);
+                    self.gen_fpr_swap(ir, x, tmp);
+                }
+            }
             (LinkMode::S(_), LinkMode::F(x)) => {
                 // S -> F: one-time unbox of a boxed float into a pure-fpr
                 // binding (no boxed cache) — a loop pre-header entry adopting the
@@ -3051,6 +3298,89 @@ impl AbstractFrame {
                     self.gen_fpr_swap(ir, l, r);
                     self.set_F(slot, r);
                 }
+            }
+            // ---- raw u64 (`U` / `Su`) arms; the register transfers mirror
+            // the float ones, the conversions are the u64 unbox / box.
+            (LinkMode::U(l), LinkMode::U(r)) => {
+                if l != r {
+                    self.vacate_for_shared(ir, slot, l, r);
+                    if self.is_fpr_vacant(r) {
+                        self.set_U(slot, r);
+                        ir.fpr_move(l, r);
+                    } else {
+                        self.gen_fpr_swap(ir, l, r);
+                    }
+                }
+            }
+            (LinkMode::U(l), LinkMode::Su(r)) => {
+                ir.u64_to_stack(l, slot);
+                if l == r {
+                    self.set_Su(slot, l);
+                } else {
+                    self.to_su(ir, slot, l, r);
+                }
+            }
+            (LinkMode::U(_), LinkMode::S(_)) => {
+                self.write_back(ir, slot, Keep::All);
+            }
+            (LinkMode::Su(l), LinkMode::Su(r)) => {
+                if l != r {
+                    self.to_su(ir, slot, l, r);
+                }
+            }
+            (LinkMode::Su(l), LinkMode::U(r)) => {
+                if l != r {
+                    self.vacate_for_shared(ir, slot, l, r);
+                }
+                if l == r {
+                    self.set_U(slot, l);
+                } else if self.is_fpr_vacant(r) {
+                    self.set_U(slot, r);
+                    ir.fpr_move(l, r);
+                } else {
+                    self.gen_fpr_swap(ir, l, r);
+                    self.set_U(slot, r);
+                }
+            }
+            (LinkMode::Su(_), LinkMode::S(_)) => {
+                self.set_S_with_guard(slot, Guarded::Value);
+            }
+            (LinkMode::S(_), LinkMode::U(x)) | (LinkMode::S(_), LinkMode::Su(x)) => {
+                // S -> U / Su: unbox with the range guard (a non-negative
+                // fixnum or an inline Bignum below 2^64). A dispatch arm
+                // under register pressure demoted an `Su` the merge target
+                // still carries (cf. `S -> Sf(Fixnum)`), or a loop entry
+                // adopts the back edge's raw placement.
+                let to_u = matches!(target.mode(slot), LinkMode::U(_));
+                ir.stack2reg(slot, GP::Rdi);
+                let deopt = ir.new_deopt_with_pc(&self, pc + 1);
+                if self.is_fpr_vacant(x) {
+                    ir.u64_unbox(GP::Rdi, x, deopt);
+                    if to_u {
+                        self.set_U(slot, x);
+                    } else {
+                        self.set_Su(slot, x);
+                    }
+                } else {
+                    let tmp = if to_u {
+                        self.set_new_U(slot)
+                    } else {
+                        self.set_new_Su(slot)
+                    };
+                    ir.u64_unbox(GP::Rdi, tmp, deopt);
+                    self.gen_fpr_swap(ir, x, tmp);
+                }
+            }
+            (LinkMode::C(v), LinkMode::U(r)) => {
+                let imm = v.try_u64().unwrap_or_else(|| unreachable!("{v:?} -> U"));
+                self.set_U(slot, r);
+                ir.u64_imm(imm, r);
+            }
+            (LinkMode::C(v), LinkMode::Su(r)) => {
+                let imm = v.try_u64().unwrap_or_else(|| unreachable!("{v:?} -> Su"));
+                self.set_Su(slot, r);
+                ir.u64_imm(imm, r);
+                ir.lit2stack(v, slot);
             }
             (LinkMode::S(_), LinkMode::S(guarded)) => {
                 if let Some(class) = guarded.class()
@@ -3118,6 +3448,50 @@ impl AbstractFrame {
     fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: FPReg, r: FPReg, guarded: SfGuarded) {
         let f = self.to_sf_state(slot, l, r, guarded);
         ir.fp_xfer(f);
+    }
+
+    ///
+    /// Generate bridge AsmIr from U/Su(l) to Su(r): the `Su` twin of
+    /// [`Self::to_sf`].
+    ///
+    fn to_su(&mut self, ir: &mut AsmIr, slot: SlotId, l: FPReg, r: FPReg) {
+        self.vacate_for_shared(ir, slot, l, r);
+        let f = if self.is_fpr_vacant(r) {
+            self.set_Su(slot, r);
+            FpXfer::Move(l, r)
+        } else {
+            self.fpr_swap(l, r);
+            self.set_mode(slot, LinkMode::Su(r));
+            FpXfer::Swap(l, r)
+        };
+        ir.fp_xfer(f);
+    }
+
+    ///
+    /// A raw-u64 bridge is about to move *slot* from *l* into a *r* that is
+    /// not vacant. When *l* is shared (`y = x` binds both to one register),
+    /// a swap would carry the partners along — and a partner bridged
+    /// earlier in slot order already sits at its target, *l*. So *r* is
+    /// vacated instead and the transfer becomes a move: a cached view
+    /// (`Sf` / `Su`) holding *r* is dropped, its home being current; a raw
+    /// value (`F` / `U`) is boxed into its home, and its own bridge, later
+    /// in the walk, starts from `S`. Holders of *r* never have *r* as their
+    /// target here: the join hands a slot a register that is fresh in the
+    /// target, or the one it already had on every edge.
+    ///
+    fn vacate_for_shared(&mut self, ir: &mut AsmIr, slot: SlotId, l: FPReg, r: FPReg) {
+        if self.is_fpr_vacant(r) || !self.fpr_shared(l, slot) {
+            return;
+        }
+        let holders: Vec<SlotId> = self.fpr_slots(r).collect();
+        for h in holders {
+            match self.mode(h) {
+                LinkMode::Sf(_, g) => self.set_S_with_guard(h, g.into()),
+                LinkMode::Su(_) => self.set_S_with_guard(h, Guarded::Value),
+                LinkMode::F(_) | LinkMode::U(_) => self.write_back(ir, h, Keep::Type),
+                m => unreachable!("vacate_for_shared {m:?}"),
+            }
+        }
     }
 
     ///

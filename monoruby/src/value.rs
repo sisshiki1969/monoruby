@@ -1049,6 +1049,13 @@ impl Value {
         top & 0b1 == 0
     }
 
+    /// Does *num* fit the fixnum range `[-2**62, 2**62)`?
+    pub fn is_i63_i128(num: i128) -> bool {
+        const MIN: i128 = -(1 << 62);
+        const MAX: i128 = (1 << 62) - 1;
+        (MIN..=MAX).contains(&num)
+    }
+
     pub(crate) fn from_ord(ord: std::cmp::Ordering) -> Self {
         Value::i32(ord as i32)
     }
@@ -1083,15 +1090,56 @@ impl Value {
         if Self::is_i63(num) {
             Value::fixnum(num)
         } else {
-            RValue::new_bigint(BigInt::from(num)).pack()
+            RValue::new_int128(num as i128).pack()
         }
     }
 
     pub fn integer_from_u64(num: u64) -> Self {
-        if let Ok(i) = i64::try_from(num) {
-            Value::integer(i)
+        Self::from_i128(num as i128)
+    }
+
+    /// The Integer as a `u64`: a non-negative fixnum or a Bignum in
+    /// [2^62, 2^64). `None` otherwise — the range the JIT's raw-u64 mode
+    /// (`LinkMode::U`) holds.
+    pub fn try_u64(&self) -> Option<u64> {
+        u64::try_from(self.as_i128()?).ok()
+    }
+
+    /// `integer_from_u64` for the JIT's `u64_to_val` box stub, which only
+    /// reaches it for a value at or above 2^62 (a fixnum is built inline).
+    pub extern "C" fn integer_from_u64_c(num: u64) -> Value {
+        Self::from_i128(num as i128)
+    }
+
+    ///
+    /// The Integer *num*: a fixnum when it fits, else a Bignum holding the
+    /// `i128` inline (no `BigInt` is built — see `rvalue::BignumInner`).
+    ///
+    pub fn from_i128(num: i128) -> Self {
+        if Self::is_i63_i128(num) {
+            Value::fixnum(num as i64)
         } else {
-            Value::bigint(BigInt::from(num))
+            RValue::new_int128(num).pack()
+        }
+    }
+
+    ///
+    /// The Integer as an `i128`: a fixnum, or a Bignum that fits one.
+    /// `None` for a wider Bignum and for every non-Integer. Never
+    /// allocates; the integer operators take this path before touching a
+    /// `BigInt`.
+    ///
+    #[inline]
+    pub fn as_i128(&self) -> Option<i128> {
+        if let Some(i) = self.try_fixnum() {
+            Some(i as i128)
+        } else if let Some(rv) = self.try_rvalue()
+            && rv.ty() == ObjTy::BIGNUM
+        {
+            // SAFETY: the type was just checked.
+            unsafe { rv.bignum_as_i128() }
+        } else {
+            None
         }
     }
 
@@ -1141,8 +1189,8 @@ impl Value {
     }
 
     pub fn bigint(bigint: BigInt) -> Self {
-        if let Ok(i) = i64::try_from(&bigint) {
-            Value::integer(i)
+        if let Ok(i) = i128::try_from(&bigint) {
+            Value::from_i128(i)
         } else {
             RValue::new_bigint(bigint).pack()
         }

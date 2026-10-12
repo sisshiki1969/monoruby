@@ -1,5 +1,6 @@
 use super::*;
 use monoasm_macro::monoasm_arm64;
+use crate::bytecode::OPCODE_SUB_POLY;
 
 impl Codegen {
 
@@ -233,8 +234,10 @@ impl Codegen {
             slow_class:
             ldr w11, [x(PC.0), #(16)];  // CACHED_FUNCID
             cbz w11, slow_ver;          // nothing cached yet -> first resolution
-            mov x11, (1);
-            strb w11, [x(PC.0), #(7)];  // opcode_sub = 1 (polymorphic)
+            ldrb w11, [x(PC.0), #(7)];
+            tbnz w11, #(OPCODE_SUB_POLY.trailing_zeros()), slow_ver; // already stamped
+            add w11, w11, #(OPCODE_SUB_POLY as u32);
+            strb w11, [x(PC.0), #(7)];  // opcode_sub |= POLY
             slow_ver:
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);

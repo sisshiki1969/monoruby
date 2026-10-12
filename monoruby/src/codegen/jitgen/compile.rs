@@ -955,8 +955,22 @@ impl<'a> JitContext<'a> {
                 rhs,
                 ic,
                 polymorphic,
+                overflowed,
+                nou64,
             } => {
-                return self.binary_op(state, ir, kind, dst, lhs, rhs, ic, polymorphic, bc_pos);
+                return self.binary_op(
+                    state,
+                    ir,
+                    kind,
+                    dst,
+                    lhs,
+                    rhs,
+                    ic,
+                    polymorphic,
+                    overflowed,
+                    nou64,
+                    bc_pos,
+                );
             }
             TraceIr::BinCmp {
                 kind,
@@ -966,6 +980,7 @@ impl<'a> JitContext<'a> {
                 ic,
                 polymorphic,
                 fused,
+                nou64,
             } => {
                 // A comparison whose boolean only the following `CondBr`
                 // reads: install that branch as the sink, so the inline
@@ -973,7 +988,19 @@ impl<'a> JitContext<'a> {
                 // (and a dispatch emit the branch per arm).
                 let sink = if fused { self.cond_sink_after(bc_pos, dst) } else { None };
                 return self.with_cond_sink(sink, |this| {
-                    this.binary_cmp(state, ir, kind, dst, lhs, rhs, ic, polymorphic, fused, bc_pos)
+                    this.binary_cmp(
+                        state,
+                        ir,
+                        kind,
+                        dst,
+                        lhs,
+                        rhs,
+                        ic,
+                        polymorphic,
+                        fused,
+                        nou64,
+                        bc_pos,
+                    )
                 });
             }
             TraceIr::Index {

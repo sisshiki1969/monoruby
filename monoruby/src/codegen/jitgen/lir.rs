@@ -191,9 +191,29 @@ pub(in crate::codegen::jitgen) enum LCond {
     Gt,
     /// signed `>=`
     Ge,
+    /// unsigned `<`
+    Lo,
+    /// unsigned `<=`
+    Ls,
+    /// unsigned `>`
+    Hi,
+    /// unsigned `>=`
+    Hs,
 }
 
 impl LCond {
+    /// Map a `CmpKind` to its unsigned LIR condition (`TEq` reads as `Eq`).
+    pub(in crate::codegen::jitgen) fn from_u64_cmp(kind: CmpKind) -> Self {
+        match kind {
+            CmpKind::Eq | CmpKind::TEq => LCond::Eq,
+            CmpKind::Ne => LCond::Ne,
+            CmpKind::Lt => LCond::Lo,
+            CmpKind::Le => LCond::Ls,
+            CmpKind::Gt => LCond::Hi,
+            CmpKind::Ge => LCond::Hs,
+        }
+    }
+
     /// Map an integer-comparison `CmpKind` to its signed LIR condition. Returns
     /// `None` for `TEq` (`===`), which is not a plain signed integer comparison
     /// and is lowered through another path.
@@ -218,6 +238,26 @@ impl LCond {
             LCond::Le => LCond::Gt,
             LCond::Gt => LCond::Le,
             LCond::Ge => LCond::Lt,
+            LCond::Lo => LCond::Hs,
+            LCond::Ls => LCond::Hi,
+            LCond::Hi => LCond::Ls,
+            LCond::Hs => LCond::Lo,
+        }
+    }
+}
+
+/// The right operand of a raw-u64 instruction: a register or an immediate.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum U64Operand {
+    Reg(FPReg),
+    Imm(u64),
+}
+
+impl std::fmt::Debug for U64Operand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            U64Operand::Reg(r) => write!(f, "{r:?}"),
+            U64Operand::Imm(i) => write!(f, "{i}u64"),
         }
     }
 }
@@ -708,6 +748,54 @@ pub(in crate::codegen) enum LInst {
         src: GP,
         dst: FPReg,
         deopt: DestLabel,
+        base: usize,
+    },
+    // ---- raw u64 (`LinkMode::U`) family ----------------------------------
+    // The FP registers double as 8-byte raw homes (`movq xmm, r64` / `fmov
+    // d, x`); the encoders compute in GP scratch (x86 rax/rcx/rdx/rsi, aarch64
+    // x9-x12) and move the result back.
+    /// `dst <- unbox_u64(src)`: a non-negative fixnum or an inline Bignum
+    /// with `hi == 0`; anything else branches to `deopt`.
+    U64Unbox {
+        src: GP,
+        dst: FPReg,
+        deopt: DestLabel,
+        base: usize,
+    },
+    /// `[slot] <- u64_to_val(src)` (rax = the Value).
+    U64Box {
+        src: FPReg,
+        slot: SlotId,
+        base: usize,
+    },
+    /// `dst <- imm` (raw bits).
+    U64Imm {
+        imm: u64,
+        dst: FPReg,
+        base: usize,
+    },
+    /// `dst <- lhs <kind> rhs` on raw u64s; `deopt` makes the op checked
+    /// (see `AsmInst::U64BinOp`).
+    U64BinOp {
+        kind: BinOpK,
+        lhs: FPReg,
+        rhs: U64Operand,
+        dst: FPReg,
+        deopt: Option<DestLabel>,
+        base: usize,
+    },
+    /// Flags from the unsigned compare `lhs - rhs`; read by a `CondBr` with
+    /// an unsigned `LCond`.
+    U64CmpFlags {
+        lhs: FPReg,
+        rhs: U64Operand,
+        base: usize,
+    },
+    /// rax <- `Value::bool(lhs <kind> rhs)`, unsigned order.
+    U64Cmp {
+        kind: CmpKind,
+        lhs: FPReg,
+        rhs: U64Operand,
         base: usize,
     },
     /// Materialize the constant integer `i` as both a boxed `Value` (into frame

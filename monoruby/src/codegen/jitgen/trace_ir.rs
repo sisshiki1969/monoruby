@@ -188,6 +188,14 @@ pub(crate) enum TraceIr {
         /// always been recorded here — it simply had no consumer until the
         /// dispatchers were unified.
         polymorphic: bool,
+        /// A JIT body compiled for fixnum operands left this site through
+        /// its arithmetic exit (`BytecodePtr::integer_overflowed`,
+        /// `RecompileReason::IntegerOverflow`): compile the two-arm form.
+        overflowed: bool,
+        /// A body compiled this site in the unboxed u64 form and left
+        /// through its guard (`BytecodePtr::integer_nou64`,
+        /// `RecompileReason::U64GuardFailed`): never adopt that form here.
+        nou64: bool,
     },
     BinCmp {
         kind: crate::ast::CmpKind,
@@ -196,6 +204,8 @@ pub(crate) enum TraceIr {
         rhs: SlotId,
         ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
+        /// See `BinOp::nou64`.
+        nou64: bool,
         /// Opcodes 150–156: bytecodegen marked the result as consumed only
         /// by the optimizable `CondBr` that follows (an `if` / `while` /
         /// `case`-`when` condition). The comparison then may leave its
@@ -472,11 +482,7 @@ impl TraceIr {
                 },
                 30..=33 => {
                     let callid = op1_l.into();
-                    let polymorphic = match pc.opcode_sub() {
-                        0 => false,
-                        1 => true,
-                        _ => unreachable!(),
-                    };
+                    let polymorphic = pc.polymorphic();
                     let cache = pc.method_cache_state();
                     TraceIr::MethodCall {
                         _polymorphic: polymorphic,
@@ -602,7 +608,7 @@ impl TraceIr {
                         _dst: dst,
                         src,
                         ic: pc.classid1(),
-                        _polymorphic: pc.opcode_sub() == 1,
+                        _polymorphic: pc.polymorphic(),
                     }
                 }
                 130 => TraceIr::InlineCache,
@@ -617,7 +623,7 @@ impl TraceIr {
                     } else {
                         None
                     },
-                    polymorphic: pc.opcode_sub() == 1,
+                    polymorphic: pc.polymorphic(),
                 },
                 133 => TraceIr::IndexAssign {
                     base: SlotId::new(op2_w2),
@@ -630,7 +636,7 @@ impl TraceIr {
                     } else {
                         None
                     },
-                    _polymorphic: pc.opcode_sub() == 1,
+                    _polymorphic: pc.polymorphic(),
                 },
                 140..=146 => {
                     let kind = CmpKind::from(opcode - 140);
@@ -650,8 +656,9 @@ impl TraceIr {
                         lhs,
                         rhs,
                         ic,
-                        polymorphic: pc.opcode_sub() == 1,
+                        polymorphic: pc.polymorphic(),
                         fused: false,
+                        nou64: pc.integer_nou64(),
                     }
                 }
 
@@ -687,8 +694,9 @@ impl TraceIr {
                         lhs,
                         rhs,
                         ic,
-                        polymorphic: pc.opcode_sub() == 1,
+                        polymorphic: pc.polymorphic(),
                         fused: true,
+                        nou64: pc.integer_nou64(),
                     }
                 }
                 44 => {
@@ -729,7 +737,9 @@ impl TraceIr {
                         lhs,
                         rhs,
                         ic,
-                        polymorphic: pc.opcode_sub() == 1,
+                        polymorphic: pc.polymorphic(),
+                        overflowed: pc.integer_overflowed(),
+                        nou64: pc.integer_nou64(),
                     }
                 }
 
@@ -926,11 +936,13 @@ impl TraceIr {
             class: impl Into<Option<(CachedClass, CachedClass)>>,
             optimizable: bool,
             polymorphic: bool,
+            nou64: bool,
         ) -> String {
             let class: Option<(CachedClass, CachedClass)> = class.into();
             let s = format!(
-                "{}{}{} = {:?} {:?} {:?}",
+                "{}{}{}{} = {:?} {:?} {:?}",
                 if polymorphic { "POLY " } else { "" },
+                if nou64 { "NOU64 " } else { "" },
                 optstr(optimizable),
                 ret_str(dst),
                 lhs,
@@ -948,11 +960,15 @@ impl TraceIr {
             rhs: SlotId,
             class: impl Into<Option<(CachedClass, CachedClass)>>,
             polymorphic: bool,
+            overflowed: bool,
+            nou64: bool,
         ) -> String {
             let class: Option<_> = class.into();
             let op1 = format!(
-                "{}{} = {:?} {} {:?}",
+                "{}{}{}{} = {:?} {} {:?}",
                 if polymorphic { "POLY " } else { "" },
+                if overflowed { "OVF " } else { "" },
+                if nou64 { "NOU64 " } else { "" },
                 ret_str(dst),
                 lhs,
                 kind,
@@ -1153,7 +1169,9 @@ impl TraceIr {
                 rhs,
                 ic,
                 polymorphic,
-            } => binop_fmt(store, kind, dst, lhs, rhs, ic.clone(), polymorphic),
+                overflowed,
+                nou64,
+            } => binop_fmt(store, kind, dst, lhs, rhs, ic.clone(), polymorphic, overflowed, nou64),
 
             TraceIr::BinCmp {
                 kind,
@@ -1163,7 +1181,8 @@ impl TraceIr {
                 ic,
                 polymorphic,
                 fused,
-            } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), fused, polymorphic),
+                nou64,
+            } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), fused, polymorphic, nou64),
 
             TraceIr::ArrayTEq { lhs, rhs } => {
                 format!("{lhs:?} = *{lhs:?} === {rhs:?}")

@@ -30,6 +30,7 @@ impl JitModule {
         let entry_panic = jit.label();
         let exec_gc = jit.label();
         let f64_to_val = jit.label();
+        let u64_to_val = jit.label();
         let stack_overflow = jit.label();
         let write_barrier = jit.label();
         let ivar_ty_observe = jit.label();
@@ -57,6 +58,7 @@ impl JitModule {
             entry_raise,
             exec_gc,
             f64_to_val,
+            u64_to_val,
             vm_stack_overflow: stack_overflow,
             entry_panic,
             write_barrier,
@@ -111,6 +113,9 @@ impl JitModule {
 
         let label = self.f64_to_val.clone();
         self.gen_f64_to_val(label);
+
+        let label = self.u64_to_val.clone();
+        self.gen_u64_to_val(label);
 
         monoasm! { &mut self.jit,
         overflow:
@@ -213,6 +218,85 @@ impl JitModule {
             ret;
         }
     }
+    ///
+    /// Convert a raw u64 to an Integer Value: a fixnum when below 2^62
+    /// (`2n + 1`, inline), else `Value::integer_from_u64_c` (an inline
+    /// Bignum, a heap allocation — every caller-saved register the JIT
+    /// may hold a value in is preserved around it).
+    ///
+    /// ### in
+    /// - xmm0: u64 bits
+    ///
+    /// ### out
+    /// - rax: Value
+    ///
+    /// ### destroy
+    /// - rcx
+    ///
+    pub(in crate::codegen) fn gen_u64_to_val(&mut self, label: DestLabel) {
+        let heap_alloc = self.label();
+        monoasm! {&mut self.jit,
+        label:
+            movq rax, xmm0;
+            movq rcx, rax;
+            shrq rcx, 62;
+            jne  heap_alloc;
+            lea  rax, [rax + rax + 1];
+            ret;
+        heap_alloc:
+            subq rsp, 184;
+            movq [rsp + 176], r11;
+            movq [rsp + 168], r10;
+            movq [rsp + 160], r9;
+            movq [rsp + 152], r8;
+            movq [rsp + 144], rdx;
+            movq [rsp + 136], rsi;
+            movq [rsp + 128], rdi;
+            movq [rsp + 120], xmm15;
+            movq [rsp + 112], xmm14;
+            movq [rsp + 104], xmm13;
+            movq [rsp + 96], xmm12;
+            movq [rsp + 88], xmm11;
+            movq [rsp + 80], xmm10;
+            movq [rsp + 72], xmm9;
+            movq [rsp + 64], xmm8;
+            movq [rsp + 56], xmm7;
+            movq [rsp + 48], xmm6;
+            movq [rsp + 40], xmm5;
+            movq [rsp + 32], xmm4;
+            movq [rsp + 24], xmm3;
+            movq [rsp + 16], xmm2;
+            movq [rsp + 8], xmm1;
+            movq rdi, rax;
+            movq rax, (Value::integer_from_u64_c);
+            call rax;
+            movq xmm1, [rsp + 8];
+            movq xmm2, [rsp + 16];
+            movq xmm3, [rsp + 24];
+            movq xmm4, [rsp + 32];
+            movq xmm5, [rsp + 40];
+            movq xmm6, [rsp + 48];
+            movq xmm7, [rsp + 56];
+            movq xmm8, [rsp + 64];
+            movq xmm9, [rsp + 72];
+            movq xmm10, [rsp + 80];
+            movq xmm11, [rsp + 88];
+            movq xmm12, [rsp + 96];
+            movq xmm13, [rsp + 104];
+            movq xmm14, [rsp + 112];
+            movq xmm15, [rsp + 120];
+            movq rdi, [rsp + 128];
+            movq rsi, [rsp + 136];
+            movq rdx, [rsp + 144];
+            movq r8, [rsp + 152];
+            movq r9, [rsp + 160];
+            movq r10, [rsp + 168];
+            movq r11, [rsp + 176];
+            addq rsp, 184;
+            ret;
+        }
+    }
+
     ///
     /// Convert f64 to Value.
     ///

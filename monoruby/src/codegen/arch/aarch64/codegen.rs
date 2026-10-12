@@ -271,6 +271,55 @@ impl Codegen {
         );
     }
 
+    /// `u64_to_val`: convert the raw u64 in `D0` to an Integer `Value` in
+    /// `X0` — a fixnum (`2n + 1`) when below 2^62, else
+    /// `Value::integer_from_u64_c` (an inline Bignum). Mirrors x86
+    /// `gen_u64_to_val`; the allocating path preserves every caller-saved
+    /// register JIT code may hold a value in (x1-x8, d1-d7).
+    pub(in crate::codegen) fn a64_gen_u64_to_val(&mut self, label: &DestLabel) {
+        let heap = self.jit.label();
+        self.jit.bind_label(label.clone());
+        monoasm_arm64!(&mut self.jit,
+            fmov x0, d0;             // x0 = the u64
+            lsr x9, x0, #(62);
+            cbnz x9, heap;           // >= 2^62 -> Bignum
+            lsl x0, x0, #(1);
+            mov x9, (1);
+            orr x0, x0, x9;          // 2n + 1
+            ret;
+            heap:
+            str x30, [sp, #(-16)]!;
+            sub sp, sp, #(128);
+            stp x1, x2, [sp];
+            stp x3, x4, [sp, #(16)];
+            stp x5, x6, [sp, #(32)];
+            stp x7, x8, [sp, #(48)];
+            str d1, [sp, #(64)];
+            str d2, [sp, #(72)];
+            str d3, [sp, #(80)];
+            str d4, [sp, #(88)];
+            str d5, [sp, #(96)];
+            str d6, [sp, #(104)];
+            str d7, [sp, #(112)];
+            mov x9, (Value::integer_from_u64_c as *const () as u64);
+            blr x9;                  // x0 = Value
+            ldp x1, x2, [sp];
+            ldp x3, x4, [sp, #(16)];
+            ldp x5, x6, [sp, #(32)];
+            ldp x7, x8, [sp, #(48)];
+            ldr d1, [sp, #(64)];
+            ldr d2, [sp, #(72)];
+            ldr d3, [sp, #(80)];
+            ldr d4, [sp, #(88)];
+            ldr d5, [sp, #(96)];
+            ldr d6, [sp, #(104)];
+            ldr d7, [sp, #(112)];
+            add sp, sp, #(128);
+            ldr x30, [sp], #(16);
+            ret;
+        );
+    }
+
     /// VM-side safepoint poll. If any lane of the poll word is set (GC
     /// request, preempt tick, pending signal — see poll_flag.rs), call
     /// `exec_gc`. The hot path is a load and a fall-through `cbz`.

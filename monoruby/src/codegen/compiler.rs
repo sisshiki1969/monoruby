@@ -409,15 +409,27 @@ impl Codegen {
     ///
     /// A guard hoisted onto a loop's entries (`jitgen/merge.rs`) of
     /// *iseq_id* missed often enough to recompile: its loops stop hoisting.
+    /// Likewise a loop-carried raw-u64 adoption whose entry unbox missed:
+    /// its loops keep such slots boxed at the head.
     ///
     fn note_loop_hoist_miss(&mut self, iseq_id: ISeqId, reason: RecompileReason) {
-        if reason == RecompileReason::LoopHoistGuardFailed {
-            std::rc::Rc::make_mut(&mut self.loop_hoist_disabled).insert(iseq_id);
+        match reason {
+            RecompileReason::LoopHoistGuardFailed => {
+                std::rc::Rc::make_mut(&mut self.loop_hoist_disabled).insert(iseq_id);
+            }
+            RecompileReason::LoopU64AdoptFailed => {
+                std::rc::Rc::make_mut(&mut self.loop_u64_disabled).insert(iseq_id);
+            }
+            _ => {}
         }
     }
 
     pub(super) fn loop_hoist_disabled(&self) -> std::rc::Rc<std::collections::HashSet<ISeqId>> {
         self.loop_hoist_disabled.clone()
+    }
+
+    pub(super) fn loop_u64_disabled(&self) -> std::rc::Rc<std::collections::HashSet<ISeqId>> {
+        self.loop_u64_disabled.clone()
     }
 
     fn recompile_method(

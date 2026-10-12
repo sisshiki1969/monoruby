@@ -1080,3 +1080,231 @@ mod tests {
         );
     }
 }
+
+// ---- raw u64 (`LinkMode::U`) lowering --------------------------------------
+//
+// An FP register (pool `xmm` or spill slot) holds the raw 64 bits; every op
+// moves them through rax / rcx (rdx, rsi for the checked `Mul` / `Shl`),
+// computes with the plain integer instructions and moves the result back.
+impl Codegen {
+    /// rax = the u64 in *src*.
+    pub(super) fn u64_to_rax(&mut self, src: FPReg, base: usize) {
+        match PhysMap::new(base).resolve(src) {
+            FPRegLoc::Xmm(p) => monoasm!( &mut self.jit, movq rax, xmm(p); ),
+            FPRegLoc::Spill(off) => monoasm!( &mut self.jit, movq rax, [rbp - (off)]; ),
+        }
+    }
+
+    /// rcx = the u64 operand *rhs*.
+    fn u64_operand_to_rcx(&mut self, rhs: U64Operand, base: usize) {
+        match rhs {
+            U64Operand::Reg(r) => match PhysMap::new(base).resolve(r) {
+                FPRegLoc::Xmm(p) => monoasm!( &mut self.jit, movq rcx, xmm(p); ),
+                FPRegLoc::Spill(off) => monoasm!( &mut self.jit, movq rcx, [rbp - (off)]; ),
+            },
+            U64Operand::Imm(i) => monoasm!( &mut self.jit, movq rcx, (i); ),
+        }
+    }
+
+    /// *dst* = rax.
+    pub(super) fn u64_from_rax(&mut self, dst: FPReg, base: usize) {
+        match PhysMap::new(base).resolve(dst) {
+            FPRegLoc::Xmm(p) => monoasm!( &mut self.jit, movq xmm(p), rax; ),
+            FPRegLoc::Spill(off) => monoasm!( &mut self.jit, movq [rbp - (off)], rax; ),
+        }
+    }
+
+    ///
+    /// Unbox the Integer in *src* to a raw u64 in *dst*: a non-negative
+    /// fixnum (the hot path, falling through), or an inline Bignum
+    /// (`BignumInner::Inline` with `hi == 0`). Anything else goes to *deopt*.
+    ///
+    /// ### destroy
+    /// - rax
+    ///
+    pub(super) fn u64_unbox(&mut self, src: GP, dst: FPReg, deopt: &DestLabel, base: usize) {
+        use crate::value::rvalue::BignumInner;
+        let heap = self.jit.label();
+        let done = self.jit.label();
+        let kind = RVALUE_OFFSET_KIND as i32;
+        let r = src as u64;
+        monoasm!( &mut self.jit,
+            movq rax, R(r);
+            testq rax, 1;
+            jz   heap;
+            sarq rax, 1;
+            js   deopt;
+        done:
+        );
+        self.u64_from_rax(dst, base);
+        let after = self.jit.label();
+        monoasm!( &mut self.jit,
+            jmp  after;
+        heap:
+        );
+        self.guard_rvalue(src, INTEGER_CLASS, deopt);
+        monoasm!( &mut self.jit,
+            cmpq [R(r) + (kind)], (BignumInner::INLINE_TAG as i32);
+            jne  deopt;
+            cmpq [R(r) + (kind + BignumInner::HI_OFFSET as i32)], 0;
+            jne  deopt;
+            movq rax, [R(r) + (kind + BignumInner::LO_OFFSET as i32)];
+            jmp  done;
+        after:
+        );
+    }
+
+    ///
+    /// `dst = lhs <kind> rhs` on raw u64s. With *deopt* the op is checked:
+    /// `Add` / `Sub` / `Mul` leaving [0, 2^64) and a `Shl` losing bits (or
+    /// shifting by 64 or more) exit there; `Shr` by 64 or more is 0.
+    /// Without it the op wraps (a masked result).
+    ///
+    /// ### destroy
+    /// - rax, rcx, rdx, rsi
+    ///
+    pub(super) fn u64_binop(
+        &mut self,
+        kind: BinOpK,
+        lhs: FPReg,
+        rhs: U64Operand,
+        dst: FPReg,
+        deopt: Option<&DestLabel>,
+        base: usize,
+    ) {
+        self.u64_to_rax(lhs, base);
+        match kind {
+            BinOpK::Add => {
+                self.u64_operand_to_rcx(rhs, base);
+                monoasm!( &mut self.jit, addq rax, rcx; );
+                if let Some(deopt) = deopt {
+                    monoasm!( &mut self.jit, jc deopt; );
+                }
+            }
+            BinOpK::Sub => {
+                self.u64_operand_to_rcx(rhs, base);
+                monoasm!( &mut self.jit, subq rax, rcx; );
+                if let Some(deopt) = deopt {
+                    monoasm!( &mut self.jit, jc deopt; );
+                }
+            }
+            BinOpK::Mul => {
+                self.u64_operand_to_rcx(rhs, base);
+                if let Some(deopt) = deopt {
+                    // `mul rcx`: rdx:rax = rax * rcx, CF set iff the high
+                    // half is non-zero. monoasm has no one-operand `mul`,
+                    // so the three bytes (REX.W F7 /4, ModRM 11 100 001)
+                    // are emitted directly.
+                    self.jit.emit(&[0x48, 0xF7, 0xE1]);
+                    monoasm!( &mut self.jit, jc deopt; );
+                } else {
+                    monoasm!( &mut self.jit, imul rax, rcx; );
+                }
+            }
+            BinOpK::BitAnd => {
+                self.u64_operand_to_rcx(rhs, base);
+                monoasm!( &mut self.jit, andq rax, rcx; );
+            }
+            BinOpK::BitOr => {
+                self.u64_operand_to_rcx(rhs, base);
+                monoasm!( &mut self.jit, orq rax, rcx; );
+            }
+            BinOpK::BitXor => {
+                self.u64_operand_to_rcx(rhs, base);
+                monoasm!( &mut self.jit, xorq rax, rcx; );
+            }
+            BinOpK::Shl => match rhs {
+                U64Operand::Imm(k) if k >= 64 => {
+                    if let Some(deopt) = deopt {
+                        monoasm!( &mut self.jit,
+                            testq rax, rax;
+                            jne  deopt;
+                        );
+                    }
+                    monoasm!( &mut self.jit, xorq rax, rax; );
+                }
+                U64Operand::Imm(0) => {}
+                U64Operand::Imm(k) => {
+                    let k = k as i32;
+                    if let Some(deopt) = deopt {
+                        // Shift back and compare: a lost bit shows.
+                        monoasm!( &mut self.jit,
+                            movq rdx, rax;
+                            shlq rax, (k);
+                            movq rcx, rax;
+                            shrq rcx, (k);
+                            cmpq rcx, rdx;
+                            jne  deopt;
+                        );
+                    } else {
+                        monoasm!( &mut self.jit, shlq rax, (k); );
+                    }
+                }
+                U64Operand::Reg(_) => {
+                    self.u64_operand_to_rcx(rhs, base);
+                    let done = self.jit.label();
+                    if let Some(deopt) = deopt {
+                        monoasm!( &mut self.jit,
+                            cmpq rcx, 64;
+                            jae  deopt;
+                            movq rdx, rax;
+                            shlq rax, rcx;
+                            movq rsi, rax;
+                            shrq rsi, rcx;
+                            cmpq rsi, rdx;
+                            jne  deopt;
+                        );
+                    } else {
+                        // A count of 64 or more clears the value (the
+                        // hardware shift takes the count modulo 64).
+                        let shift = self.jit.label();
+                        monoasm!( &mut self.jit,
+                            cmpq rcx, 64;
+                            jb   shift;
+                            xorq rax, rax;
+                            jmp  done;
+                        shift:
+                            shlq rax, rcx;
+                        );
+                    }
+                    self.jit.bind_label(done);
+                }
+            },
+            BinOpK::Shr => match rhs {
+                U64Operand::Imm(k) if k >= 64 => {
+                    monoasm!( &mut self.jit, xorq rax, rax; );
+                }
+                U64Operand::Imm(0) => {}
+                U64Operand::Imm(k) => {
+                    monoasm!( &mut self.jit, shrq rax, (k as i32); );
+                }
+                U64Operand::Reg(_) => {
+                    self.u64_operand_to_rcx(rhs, base);
+                    let shift = self.jit.label();
+                    let done = self.jit.label();
+                    monoasm!( &mut self.jit,
+                        cmpq rcx, 64;
+                        jb   shift;
+                        xorq rax, rax;
+                        jmp  done;
+                    shift:
+                        shrq rax, rcx;
+                    done:
+                    );
+                }
+            },
+            _ => unreachable!("u64_binop {kind:?}"),
+        }
+        self.u64_from_rax(dst, base);
+    }
+
+    /// Flags from the unsigned compare *lhs* - *rhs*.
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    pub(super) fn u64_cmp_flags(&mut self, lhs: FPReg, rhs: U64Operand, base: usize) {
+        self.u64_to_rax(lhs, base);
+        self.u64_operand_to_rcx(rhs, base);
+        monoasm!( &mut self.jit, cmpq rax, rcx; );
+    }
+}

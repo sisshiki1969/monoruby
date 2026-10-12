@@ -30,6 +30,7 @@ fn a64_lreg(r: LReg) -> u32 {
 }
 use monoasm_macro::monoasm_arm64;
 use crate::codegen::jitgen::deopt_log::DeoptCause;
+use crate::bytecode::OPCODE_SUB_POLY;
 use crate::codegen::jitgen::lir::ConstMiss;
 
 mod binary_op;
@@ -67,6 +68,19 @@ fn a64_cond_for_cmp(kind: CmpKind, brkind: BrKind) -> monoasm::Cond {
             Cond::Gt => Cond::Le,
             other => other,
         },
+    }
+}
+
+/// The unsigned condition for a raw-u64 comparison (`TEq` reads as `Eq`).
+fn a64_u64_cond_for_cmp(kind: CmpKind) -> monoasm::Cond {
+    use monoasm::Cond;
+    match kind {
+        CmpKind::Eq | CmpKind::TEq => Cond::Eq,
+        CmpKind::Ne => Cond::Ne,
+        CmpKind::Lt => Cond::Lo,
+        CmpKind::Le => Cond::Ls,
+        CmpKind::Gt => Cond::Hi,
+        CmpKind::Ge => Cond::Hs,
     }
 }
 
@@ -342,6 +356,20 @@ impl Codegen {
             (BytecodePtr, WriteBack, u32, bool),
             (DestLabel, usize),
         > = std::collections::HashMap::new();
+        type RecompileKey = (
+            BytecodePtr,
+            WriteBack,
+            RecompileReason,
+            RecompileTarget,
+            u32,
+            bool,
+        );
+        #[cfg(feature = "deopt")]
+        let mut recompile_table: std::collections::HashMap<RecompileKey, (DestLabel, u32, usize)> =
+            std::collections::HashMap::new();
+        #[cfg(not(feature = "deopt"))]
+        let mut recompile_table: std::collections::HashMap<RecompileKey, (DestLabel, usize)> =
+            std::collections::HashMap::new();
         // Loop-JIT entry sp-bump to undo before any exit resumes the VM.
         let bump = frame.loop_jit_spill_bytes;
         // §9 (9a, first brick): reify the side-exit handler block into a
@@ -367,7 +395,14 @@ impl Codegen {
             let created_at = created_at_iter.next().flatten();
             #[cfg(feature = "deopt")]
             let mut exit_id = u32::MAX;
+            // A `SideExit::Branch` has no handler to thunk.
+            let mut branch = false;
             let label = match side_exit {
+                // No handler: the "exit" is the dispatch's residual arm.
+                SideExit::Branch(label) => {
+                    branch = true;
+                    frame.resolve_label(&mut self.jit, label)
+                }
                 // Eviction falls back to the interpreter like a deopt (the
                 // `__immediate_evict` logging is `cfg(deopt/profile)`-only).
                 SideExit::Evict(Some((pc, wb))) => {
@@ -442,41 +477,61 @@ impl Codegen {
                     }
                 }
                 SideExit::RecompileDeoptimize(pc, wb, reason, target, chain, materialize) => {
-                    let label = self.jit.label();
-                    #[cfg(feature = "deopt")]
-                    {
-                        exit_id = crate::codegen::jitgen::deopt_log::register_exit(
-                            crate::codegen::jitgen::deopt_log::DeoptExit::Recompile { reason, chain },
-                        );
-                    }
-                    lir.push(LInst::SideExit {
-                        kind: if !frame.frameless {
-                            LSideExitKind::RecompileDeopt {
-                                reason,
-                                target,
-                                chain,
-                            }
-                        } else if materialize {
-                            LSideExitKind::Materialize {
-                                recompile: Some((reason, target)),
-                                chain,
-                                error: false,
-                            }
-                        } else {
-                            LSideExitKind::Redo {
-                                recompile: Some((reason, target)),
-                            }
-                        },
-                        pc,
-                        wb,
-                        entry: label.clone(),
-                        loop_jit_spill_bytes: bump,
-                        base: frame.base_stack_offset,
+                    // Deduplicated like `Deoptimize` (see the x86 twin).
+                    let key = (pc, wb, reason, target, chain, materialize);
+                    if let Some(entry) = recompile_table.get(&key) {
                         #[cfg(feature = "deopt")]
-                        exit_id,
-                    });
-                    links.push((pending_base + lir.len() - 1, labels.len()));
-                    label
+                        {
+                            exit_id = entry.1;
+                        }
+                        #[cfg(feature = "deopt")]
+                        let (label, pending_idx) = (entry.0.clone(), entry.2);
+                        #[cfg(not(feature = "deopt"))]
+                        let (label, pending_idx) = entry.clone();
+                        links.push((pending_idx, labels.len()));
+                        label
+                    } else {
+                        let label = self.jit.label();
+                        #[cfg(feature = "deopt")]
+                        {
+                            exit_id = crate::codegen::jitgen::deopt_log::register_exit(
+                                crate::codegen::jitgen::deopt_log::DeoptExit::Recompile { reason, chain },
+                            );
+                        }
+                        lir.push(LInst::SideExit {
+                            kind: if !frame.frameless {
+                                LSideExitKind::RecompileDeopt {
+                                    reason,
+                                    target,
+                                    chain,
+                                }
+                            } else if materialize {
+                                LSideExitKind::Materialize {
+                                    recompile: Some((reason, target)),
+                                    chain,
+                                    error: false,
+                                }
+                            } else {
+                                LSideExitKind::Redo {
+                                    recompile: Some((reason, target)),
+                                }
+                            },
+                            pc: key.0,
+                            wb: key.1.clone(),
+                            entry: label.clone(),
+                            loop_jit_spill_bytes: bump,
+                            base: frame.base_stack_offset,
+                            #[cfg(feature = "deopt")]
+                            exit_id,
+                        });
+                        let pending_idx = pending_base + lir.len() - 1;
+                        #[cfg(feature = "deopt")]
+                        recompile_table.insert(key, (label.clone(), exit_id, pending_idx));
+                        #[cfg(not(feature = "deopt"))]
+                        recompile_table.insert(key, (label.clone(), pending_idx));
+                        links.push((pending_idx, labels.len()));
+                        label
+                    }
                 }
                 SideExit::Error(pc, wb, chain) => {
                     let label = self.jit.label();
@@ -517,7 +572,11 @@ impl Codegen {
             // mirror the pending index onto the labels side too, so
             // `raw_deopt` can note which handler a lowering referenced
             // (the thunk pass binds only those).
-            let (pending_idx, _) = links.last().copied().unwrap();
+            let pending_idx = if branch {
+                usize::MAX
+            } else {
+                links.last().copied().unwrap().0
+            };
             labels.note_pending_idx(pending_idx);
         }
         frame.pending_side_exits.extend(lir.into_insts());
@@ -594,7 +653,23 @@ impl Codegen {
                 monoasm_arm64!(&mut self.jit,
                     mov x9, (poly_byte);
                     ldrb w9, [x9];
-                    cbz w9, redo;
+                    tbz w9, #(OPCODE_SUB_POLY.trailing_zeros()), redo;
+                );
+            }
+            // Stamp the site for the recompile (`compile_binary` 2a); see
+            // the x86 `gen_recompile_hook`.
+            if let Some(bit) = reason.site_stamp() {
+                // x9/x10 are lowering scratch; the bit is set-once, so an `add`
+                // behind a `tbnz` is the `or` (`orr` has no immediate form here).
+                let poly_byte = pc.as_ptr() as u64 + 7;
+                let stamped = self.jit.label();
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (poly_byte);
+                    ldrb w10, [x9];
+                    tbnz w10, #(bit.trailing_zeros()), stamped;
+                    add w10, w10, #(bit as u32);
+                    strb w10, [x9];
+                stamped:
                 );
             }
             self.emit_recompile_deopt(target, &redo, None, reason);
@@ -691,7 +766,23 @@ impl Codegen {
                 monoasm_arm64!(&mut self.jit,
                     mov x9, (poly_byte);
                     ldrb w9, [x9];
-                    cbz w9, cont;
+                    tbz w9, #(OPCODE_SUB_POLY.trailing_zeros()), cont;
+                );
+            }
+            // Stamp the site for the recompile (`compile_binary` 2a); see
+            // the x86 `gen_recompile_hook`.
+            if let Some(bit) = reason.site_stamp() {
+                // x9/x10 are lowering scratch; the bit is set-once, so an `add`
+                // behind a `tbnz` is the `or` (`orr` has no immediate form here).
+                let poly_byte = pc.as_ptr() as u64 + 7;
+                let stamped = self.jit.label();
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (poly_byte);
+                    ldrb w10, [x9];
+                    tbnz w10, #(bit.trailing_zeros()), stamped;
+                    add w10, w10, #(bit as u32);
+                    strb w10, [x9];
+                stamped:
                 );
             }
             self.emit_recompile_deopt(target, &cont, None, reason);
@@ -927,6 +1018,9 @@ impl Codegen {
                 self.emit_fpr_to_stack(*fpr, *slot, base);
             }
         }
+        for (fpr, slots) in &wb.u64 {
+            self.emit_u64_to_stack(*fpr, slots, base);
+        }
         for (v, slot) in &wb.literal {
             self.a64_store_imm_to_slot(v.id(), *slot, lfp);
         }
@@ -1043,6 +1137,30 @@ impl Codegen {
             monoasm_arm64!(&mut self.jit,
                 mov x9, (f64_to_val_addr);
                 blr x9;                        // x0 = Value(f64)
+            );
+            for slot in slots {
+                self.a64_frame_store(0, 25, conv(*slot) as u32);
+            }
+        }
+        let u64_to_val_addr = self.jit.get_label_address(&self.u64_to_val).as_ptr() as u64;
+        for (fpr, slots) in wb.u64_entries() {
+            if slots.is_empty() {
+                continue;
+            }
+            match replay.fpr_save_index(*fpr) {
+                Some(i) => {
+                    let off = 32 + 8 * i as u32;
+                    monoasm_arm64!(&mut self.jit, ldr d0, [x23, #(off)];);
+                }
+                None => {
+                    let off = (base as u32) - 24 + 8 * ((fpr.0 - PHYS_FPR_POOL) as u32);
+                    self.a64_addr_sub(9, 24, off);
+                    monoasm_arm64!(&mut self.jit, ldr d0, [x9];);
+                }
+            }
+            monoasm_arm64!(&mut self.jit,
+                mov x9, (u64_to_val_addr);
+                blr x9;                        // x0 = Value(u64)
             );
             for slot in slots {
                 self.a64_frame_store(0, 25, conv(*slot) as u32);
@@ -1247,6 +1365,23 @@ impl Codegen {
         self.a64_fpr_load(src, 0, base); // value -> d0 (pool fmov or spill load)
         self.a64_far_branch(&f64_to_val, true); // x0 = Value(f64)
         self.a64_frame_store(0, lfp, off);
+    }
+
+    /// Box the raw u64 in `src` (via `u64_to_val`) into every slot of
+    /// `slots`, r14(x22)-relative. Shared by the `U64Box` LIR op and the
+    /// deopt write-back.
+    fn emit_u64_to_stack(&mut self, src: FPReg, slots: &[SlotId], base: usize) {
+        if slots.is_empty() {
+            return;
+        }
+        let lfp = GP::R14.a64().0;
+        let u64_to_val = self.u64_to_val.clone();
+        self.a64_fpr_load(src, 0, base); // bits -> d0
+        self.a64_far_branch(&u64_to_val, true); // x0 = Value
+        for slot in slots {
+            let off = slot.0 as u32 * 8 + LFP_SELF as u32;
+            self.a64_frame_store(0, lfp, off);
+        }
     }
 
     /// Store physical D-register `dreg` into `dst` unconditionally (`fmov` for a
@@ -1579,6 +1714,10 @@ impl Codegen {
                     LCond::Le => monoasm::Cond::Le,
                     LCond::Gt => monoasm::Cond::Gt,
                     LCond::Ge => monoasm::Cond::Ge,
+                    LCond::Lo => monoasm::Cond::Lo,
+                    LCond::Ls => monoasm::Cond::Ls,
+                    LCond::Hi => monoasm::Cond::Hi,
+                    LCond::Hs => monoasm::Cond::Hs,
                 };
                 self.a64_bcond_bb(c, &target);
             }
@@ -2019,6 +2158,43 @@ impl Codegen {
             LInst::FprToStack { src, slot, base } => {
                 self.emit_fpr_to_stack(src, slot, base);
             }
+            // ---- raw u64 family ----------------------------------------------
+            LInst::U64Unbox {
+                src,
+                dst,
+                deopt,
+                base,
+            } => self.a64_u64_unbox(src, dst, &deopt, base),
+            LInst::U64Box { src, slot, base } => self.emit_u64_to_stack(src, &[slot], base),
+            LInst::U64Imm { imm, dst, base } => {
+                monoasm_arm64!(&mut self.jit, mov x9, (imm););
+                self.a64_u64_write(dst, 9, base);
+            }
+            LInst::U64BinOp {
+                kind,
+                lhs,
+                rhs,
+                dst,
+                deopt,
+                base,
+            } => self.a64_u64_binop(kind, lhs, rhs, dst, deopt.as_ref(), base),
+            LInst::U64CmpFlags { lhs, rhs, base } => self.a64_u64_cmp_flags(lhs, rhs, base),
+            LInst::U64Cmp {
+                kind,
+                lhs,
+                rhs,
+                base,
+            } => {
+                self.a64_u64_cmp_flags(lhs, rhs, base);
+                let cond = a64_u64_cond_for_cmp(kind);
+                let rax = GP::Rax.a64();
+                self.jit.cset(rax, cond);
+                monoasm_arm64!(&mut self.jit,
+                    lsl x(rax.0), x(rax.0), #(3u32);
+                    mov x9, (FALSE_VALUE);
+                    orr x(rax.0), x(rax.0), x9;
+                );
+            }
             LInst::FloatRetStore { src, base } => {
                 // d1 is reserved scratch and never aliases a pool register,
                 // so it carries the value across the `ret` to the call site.
@@ -2276,7 +2452,23 @@ impl Codegen {
                         monoasm_arm64!(&mut self.jit,
                             mov x9, (poly_byte);
                             ldrb w9, [x9];
-                            cbz w9, deopt_body;
+                            tbz w9, #(OPCODE_SUB_POLY.trailing_zeros()), deopt_body;
+                        );
+                    }
+                    // Stamp the site for the recompile (`compile_binary` 2a); see
+                    // the x86 `gen_recompile_hook`.
+                    if let Some(bit) = reason.site_stamp() {
+                        // x9/x10 are lowering scratch; the bit is set-once, so an `add`
+                        // behind a `tbnz` is the `or` (`orr` has no immediate form here).
+                        let poly_byte = pc.as_ptr() as u64 + 7;
+                        let stamped = self.jit.label();
+                        monoasm_arm64!(&mut self.jit,
+                            mov x9, (poly_byte);
+                            ldrb w10, [x9];
+                            tbnz w10, #(bit.trailing_zeros()), stamped;
+                            add w10, w10, #(bit as u32);
+                            strb w10, [x9];
+                        stamped:
                         );
                     }
                     self.emit_recompile_deopt(target, &deopt_body, Some(&error_body), reason);

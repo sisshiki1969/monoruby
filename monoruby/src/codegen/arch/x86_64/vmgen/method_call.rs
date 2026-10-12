@@ -3,6 +3,7 @@ use super::*;
 const CALLSITE_ID: i64 = 0 - 16;
 const RET_REG: i64 = 4 - 16;
 const OPCODE_SUB: i64 = 7 - 16;
+use crate::bytecode::OPCODE_SUB_POLY;
 const POS_NUM: i64 = 8 - 16;
 const ARG_REG: i64 = 10 - 16;
 const RECV_REG: i64 = 12 - 16;
@@ -311,7 +312,7 @@ impl Codegen {
             // if receiver class was not cached, go to slow_path2.
             je   slow_path2;
             // if the receiver class was different from cached class
-            movb [r13 + (OPCODE_SUB)], 1;
+            orb  [r13 + (OPCODE_SUB)], (OPCODE_SUB_POLY as i8);
             // version mismatch
         slow_path2:
             subq rsp, 1016;

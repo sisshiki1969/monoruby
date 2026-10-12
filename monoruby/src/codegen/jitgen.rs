@@ -115,6 +115,9 @@ pub(crate) enum CondFlags {
     /// Float flags (`ucomisd` / `fcmp`): the predicate is `kind`, NaN-aware
     /// (an unordered result is false for everything but `!=`).
     Float(CmpKind),
+    /// Flags from an unsigned 64-bit compare (`U64CmpFlags`): the predicate
+    /// is `kind` in unsigned order (`TEq` reads as `Eq`).
+    U64(CmpKind),
 }
 
 ///
@@ -182,6 +185,9 @@ pub(crate) fn rbp_local(reg: SlotId) -> i32 {
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct WriteBack {
     fpr: Vec<(FPReg, Vec<SlotId>)>,
+    /// Raw u64s (`LinkMode::U`) to box into their stack homes, by register,
+    /// through `u64_to_val`.
+    u64: Vec<(FPReg, Vec<SlotId>)>,
     literal: Vec<(Value, SlotId)>,
     void: Vec<SlotId>,
     /// §9 9d-B: slots resident in the allocatable GP pool (x86-64 `r8`–`r11`),
@@ -211,6 +217,12 @@ pub(crate) struct WriteBack {
 impl Hash for WriteBack {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         for (fpr, slots) in &self.fpr {
+            fpr.hash(state);
+            for slot in slots {
+                slot.hash(state);
+            }
+        }
+        for (fpr, slots) in &self.u64 {
             fpr.hash(state);
             for slot in slots {
                 slot.hash(state);
@@ -251,6 +263,12 @@ impl std::fmt::Debug for WriteBack {
                 s.push_str(&format!("{:?}", slot));
             }
         }
+        for (fpr, slots) in &self.u64 {
+            s.push_str(&format!(" {:?}(u64)->", fpr));
+            for slot in slots {
+                s.push_str(&format!("{:?}", slot));
+            }
+        }
         for (val, slot) in &self.literal {
             s.push_str(&format!(" {:?}->{:?}", val, slot));
         }
@@ -280,6 +298,7 @@ impl WriteBack {
     #[cfg(feature = "jit-log")]
     pub(crate) fn is_replay_empty(&self) -> bool {
         self.fpr.is_empty()
+            && self.u64.is_empty()
             && self.literal.is_empty()
             && self.void.is_empty()
             && self.gp.is_empty()
@@ -296,6 +315,10 @@ impl WriteBack {
     /// data the interpreted replay walked.
     pub(crate) fn fpr_entries(&self) -> &[(FPReg, Vec<SlotId>)] {
         &self.fpr
+    }
+
+    pub(crate) fn u64_entries(&self) -> &[(FPReg, Vec<SlotId>)] {
+        &self.u64
     }
 
     pub(crate) fn literal_entries(&self) -> &[(Value, SlotId)] {
@@ -325,6 +348,7 @@ impl WriteBack {
 
     fn new(
         fpr: Vec<(FPReg, Vec<SlotId>)>,
+        u64: Vec<(FPReg, Vec<SlotId>)>,
         literal: Vec<(Value, SlotId)>,
         void: Vec<SlotId>,
         gp: Vec<(GP, SlotId)>,
@@ -333,6 +357,7 @@ impl WriteBack {
     ) -> Self {
         Self {
             fpr,
+            u64,
             literal,
             void,
             gp,
@@ -619,6 +644,7 @@ impl Codegen {
         );
         ctx.loop_seed_input = self.loop_seed_input.take().filter(|_| position.is_some());
         ctx.loop_hoist_disabled = self.loop_hoist_disabled();
+        ctx.loop_u64_disabled = self.loop_u64_disabled();
         let mut frame = ctx.traceir_to_asmir(frame, None)?;
         self.loop_seed_output = std::mem::take(&mut ctx.loop_seeded);
         let specialized_info = SpecializedCodeInfo::from(&frame);
@@ -1379,6 +1405,37 @@ impl JitModule {
         }
     }
 
+    ///
+    /// Box the raw u64 in *fpr* (`u64_to_val`) and store it to every slot
+    /// in *v*: rbp-relative (`lfp_relative == false`, the ordinary
+    /// write-back) or r14-relative (a deopt write-back, where the local
+    /// frame may already be on the heap).
+    ///
+    /// ### destroy
+    /// - rax, rcx
+    ///
+    pub(super) fn u64_to_stack(&mut self, fpr: FPReg, v: &[SlotId], base: usize, lfp_relative: bool) {
+        if v.is_empty() {
+            return;
+        }
+        #[cfg(feature = "jit-debug")]
+        eprintln!("      wb(u64): {:?}->{:?}", fpr, v);
+        self.load_fpr_into_xmm0(fpr, base);
+        let u64_to_val = self.u64_to_val.clone();
+        monoasm!( &mut self.jit,
+            call u64_to_val;
+        );
+        for reg in v {
+            if lfp_relative {
+                monoasm! { &mut self.jit,
+                    movq [r14 - (conv(*reg))], rax;
+                }
+            } else {
+                self.store_rax(*reg);
+            }
+        }
+    }
+
     fn fpr_to_stack2(&mut self, fpr: FPReg, v: &[SlotId], base: usize) {
         if v.is_empty() {
             return;
@@ -1551,6 +1608,9 @@ impl JitModule {
         for (fpr, v) in &wb.fpr {
             self.fpr_to_stack(*fpr, v, base);
         }
+        for (fpr, v) in &wb.u64 {
+            self.u64_to_stack(*fpr, v, base, false);
+        }
         for (v, slot) in &wb.literal {
             self.literal_to_stack(*slot, *v);
         }
@@ -1580,6 +1640,9 @@ impl JitModule {
         }
         for (fpr, v) in &wb.fpr {
             self.fpr_to_stack2(*fpr, v, base);
+        }
+        for (fpr, v) in &wb.u64 {
+            self.u64_to_stack(*fpr, v, base, true);
         }
         for (v, slot) in &wb.literal {
             self.literal_to_stack2(*slot, *v);
@@ -1689,6 +1752,36 @@ impl JitModule {
                 pushq rsi;
                 pushq rdx;
                 call  f64_to_val;
+                popq  rdx;
+                popq  rsi;
+                popq  rdi;
+            }
+            for slot in slots {
+                monoasm! { &mut *self, movq [rdx - (conv(*slot))], rax; }
+            }
+        }
+        // Raw u64s the same way, through `u64_to_val` (which may allocate
+        // an inline Bignum).
+        for (fpr, slots) in wb.u64_entries() {
+            if slots.is_empty() {
+                continue;
+            }
+            match replay.fpr_save_index(*fpr) {
+                Some(i) => {
+                    let off = 32 + 8 * i as i32;
+                    monoasm! { &mut *self, movq xmm0, [rdi + (off)]; }
+                }
+                None => {
+                    let off = (base as i32) - 24 + 8 * ((fpr.0 - PHYS_FPR_POOL) as i32);
+                    monoasm! { &mut *self, movq xmm0, [rsi - (off)]; }
+                }
+            }
+            let u64_to_val = self.u64_to_val.clone();
+            monoasm! { &mut *self,
+                pushq rdi;
+                pushq rsi;
+                pushq rdx;
+                call  u64_to_val;
                 popq  rdx;
                 popq  rsi;
                 popq  rdi;
@@ -1956,12 +2049,22 @@ impl Codegen {
         // the `BIGNUM_CLASS` tag, so a Bignum miss *is* a class change
         // there and heals into the dispatch; the gate still protects
         // the send-side exits, whose ICs class every Integer alike.)
+        let poly_byte = pc.as_ptr() as usize + 7;
         if reason == RecompileReason::BecamePolymorphic {
-            let poly_byte = pc.as_ptr() as usize + 7;
             monoasm!( &mut self.jit,
                 movq rax, (poly_byte);
-                cmpb [rax], 0;
+                testb [rax], (crate::bytecode::OPCODE_SUB_POLY as i8);
                 jeq  skip;
+            );
+        }
+        // The site's own arithmetic exit is the only witness of its
+        // overflow: stamp the site so the recompile compiles it in the
+        // two-arm form (`compile_binary` 2a), and so it is never
+        // converted to this exit again.
+        if let Some(bit) = reason.site_stamp() {
+            monoasm!( &mut self.jit,
+                movq rax, (poly_byte);
+                orb  [rax], (bit as i8);
             );
         }
         monoasm!( &mut self.jit,

@@ -1033,3 +1033,167 @@ impl AbstractState {
         }
     }
 }
+
+// ---- raw u64 (`LinkMode::U`) operations -------------------------------------
+impl AbstractState {
+    /// The constant in *slot* when it is an Integer in [0, 2^64).
+    pub(crate) fn is_u64_literal(&self, slot: SlotId) -> Option<u64> {
+        match self.mode(slot) {
+            LinkMode::C(v) => v.try_u64(),
+            _ => None,
+        }
+    }
+
+    /// Whether *slot* holds a raw u64 (`U` / `Su`).
+    pub(crate) fn is_u64_resident(&self, slot: SlotId) -> bool {
+        matches!(self.mode(slot), LinkMode::U(_) | LinkMode::Su(_))
+    }
+
+    ///
+    /// Bring *slot* into a raw-u64 register. A `U` / `Su` slot is already
+    /// there; a constant is materialized (`U`); a boxed slot is loaded
+    /// and unboxed under the range guard (`S -> Su`, the deopt snapshot
+    /// taken before the transition). The register is **not** pinned.
+    ///
+    /// ### destroy
+    /// - rdi
+    ///
+    pub(crate) fn load_u64(&mut self, ir: &mut AsmIr, slot: SlotId) -> FPReg {
+        self.use_as_value(slot);
+        match self.mode(slot) {
+            LinkMode::U(x) | LinkMode::Su(x) => x,
+            LinkMode::C(v) => {
+                let imm = v.try_u64().unwrap_or_else(|| unreachable!("load_u64 {v:?}"));
+                let x = self.set_new_U(slot);
+                ir.u64_imm(imm, x);
+                x
+            }
+            LinkMode::V | LinkMode::MaybeNone | LinkMode::None => {
+                unreachable!("load_u64() {:?}", self.mode(slot));
+            }
+            _ => {
+                // `S` (or a fixnum with an f64 cache): the boxed Integer is
+                // in the home, or in a GP resident `load` reads.
+                let deopt = ir.new_deopt(self);
+                // The slot becomes `Su`, whose stack home is canonical: a GP
+                // resident (home stale) is flushed first, as the `S -> Sf`
+                // conversion does (`FprFixnumLoad::FromStack`).
+                match self.gp_regfile.reg_of(slot) {
+                    Some(reg) => {
+                        ir.reg2stack(reg, slot);
+                        ir.reg_move(reg, GP::Rdi);
+                    }
+                    None => ir.stack2reg(slot, GP::Rdi),
+                }
+                let x = self.set_new_Su(slot);
+                ir.u64_unbox(GP::Rdi, x, deopt);
+                x
+            }
+        }
+    }
+
+    /// The right operand of a raw-u64 op: an immediate for a constant, else
+    /// the register `load_u64` brings it into.
+    fn u64_operand(&mut self, ir: &mut AsmIr, slot: SlotId) -> U64Operand {
+        match self.is_u64_literal(slot) {
+            Some(imm) => U64Operand::Imm(imm),
+            None => U64Operand::Reg(self.load_u64(ir, slot)),
+        }
+    }
+
+    ///
+    /// `dst = lhs <kind> rhs` on raw u64s (`Add` / `Sub` / `Mul` / the three
+    /// bit ops / `Shl` / `Shr`). *checked*: an out-of-range result exits
+    /// (to the `U64GuardFailed` recompile when one is armed), else the op
+    /// wraps. The result is a fresh `U` (in place only for an unshared `U`
+    /// lhs that is `dst` itself).
+    ///
+    pub(crate) fn binop_u64(
+        &mut self,
+        ir: &mut AsmIr,
+        kind: BinOpK,
+        dst: Option<SlotId>,
+        lhs: SlotId,
+        rhs: SlotId,
+        checked: bool,
+    ) {
+        let l = self.load_u64(ir, lhs);
+        self.pin_fpr(l);
+        let r = if lhs == rhs {
+            U64Operand::Reg(l)
+        } else {
+            self.u64_operand(ir, rhs)
+        };
+        if let U64Operand::Reg(r) = r {
+            self.pin_fpr(r);
+        }
+        let Some(dst) = dst else {
+            // A result nobody reads: the loads above are the whole effect
+            // (a raw-u64 op raises nothing).
+            if let U64Operand::Reg(r) = r {
+                self.unpin_fpr(r);
+            }
+            self.unpin_fpr(l);
+            return;
+        };
+        // The exits re-read the operands from their homes (`Su` keeps the
+        // boxed value there; a `U` operand is boxed by the write-back).
+        let deopt = checked.then(|| ir.new_deopt(self));
+        let d = if dst == lhs && matches!(self.mode(lhs), LinkMode::U(_)) && !self.fpr_shared(l, lhs) {
+            self.def_U_with_fpr(dst, l)
+        } else {
+            self.def_U(dst)
+        };
+        if let U64Operand::Reg(r) = r {
+            self.unpin_fpr(r);
+        }
+        self.unpin_fpr(l);
+        ir.push(AsmInst::U64BinOp {
+            kind,
+            lhs: l,
+            rhs: r,
+            dst: d,
+            deopt,
+        });
+    }
+
+    /// The raw-u64 compare consumed only by the following conditional
+    /// branch: the unsigned twin of `gen_cmp_integer_flags`. A block
+    /// terminator, so the GP residents are flushed before the compare.
+    pub(crate) fn gen_cmp_u64_flags(
+        &mut self,
+        ir: &mut AsmIr,
+        kind: CmpKind,
+        dst: SlotId,
+        lhs: SlotId,
+        rhs: SlotId,
+    ) -> CondFlags {
+        let l = self.load_u64(ir, lhs);
+        self.pin_fpr(l);
+        let r = if lhs == rhs {
+            U64Operand::Reg(l)
+        } else {
+            self.u64_operand(ir, rhs)
+        };
+        self.unpin_fpr(l);
+        self.gp_regfile.invalidate(dst);
+        self.flush_gp(ir);
+        ir.push(AsmInst::U64CmpFlags { lhs: l, rhs: r });
+        self.def_C(dst, Value::nil());
+        CondFlags::U64(kind)
+    }
+
+    /// rax = `Value::bool(lhs <kind> rhs)` on raw u64s; the caller defines
+    /// `dst` from rax.
+    pub(crate) fn gen_cmp_u64(&mut self, ir: &mut AsmIr, kind: CmpKind, lhs: SlotId, rhs: SlotId) {
+        let l = self.load_u64(ir, lhs);
+        self.pin_fpr(l);
+        let r = if lhs == rhs {
+            U64Operand::Reg(l)
+        } else {
+            self.u64_operand(ir, rhs)
+        };
+        self.unpin_fpr(l);
+        ir.push(AsmInst::U64Cmp { kind, lhs: l, rhs: r });
+    }
+}
