@@ -946,6 +946,73 @@ impl SlotState {
     }
 
     ///
+    /// The raw-u64 counterpart of [`Self::keep_backedge_floats`]: a
+    /// loop-carried slot the boxed loop entry left `S` while the back edge
+    /// carries it raw (`U`) or cached (`Su`) re-adopts that placement at
+    /// the head, so the value goes around the loop unboxed instead of being
+    /// boxed at the back edge and unboxed again by the body's first use.
+    /// `adopt(i)` is the back edge's placement (`Some(true)` for `U`,
+    /// `Some(false)` for `Su`); `promotable(i)` gates each slot on every
+    /// forward entry having a `_ -> U` bridge (`S` / `U` / `Su` / a u64
+    /// `C`). Only a free physical fpr is taken (`try_set_new_*`), as for
+    /// the floats. Returns the adopted slots, `true` for `U`.
+    ///
+    pub(in crate::codegen::jitgen) fn keep_backedge_u64(
+        &mut self,
+        adopt: impl Fn(SlotId) -> Option<bool>,
+        promotable: impl Fn(SlotId) -> bool,
+    ) -> Vec<(SlotId, bool)> {
+        let mut adopted = vec![];
+        for i in self.all_regs() {
+            if !matches!(self.mode(i), LinkMode::S(_)) || !promotable(i) {
+                continue;
+            }
+            let Some(to_u) = adopt(i) else {
+                continue;
+            };
+            let taken = if to_u {
+                self.try_set_new_U(i)
+            } else {
+                self.try_set_new_Su(i)
+            };
+            if taken.is_some() {
+                adopted.push((i, to_u));
+            }
+        }
+        adopted
+    }
+
+    ///
+    /// Unbox a boxed (`S`) *slot* on a loop's forward entry into a fresh
+    /// raw-u64 register (`U` when *to_u*, else `Su`) under *deopt*, the
+    /// recompile exit the caller armed before the transition. A GP
+    /// resident is flushed to the home first: `Su` claims the home
+    /// canonical, and the exit re-reads it. The entry bridge then moves
+    /// the register into the head's (`U -> U` / `Su -> Su`).
+    ///
+    pub(in crate::codegen::jitgen) fn unbox_u64_entry(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        to_u: bool,
+        deopt: AsmDeopt,
+    ) {
+        match self.gp_regfile.reg_of(slot) {
+            Some(reg) => {
+                ir.reg2stack(reg, slot);
+                ir.reg_move(reg, GP::Rdi);
+            }
+            None => ir.stack2reg(slot, GP::Rdi),
+        }
+        let x = if to_u {
+            self.set_new_U(slot)
+        } else {
+            self.set_new_Su(slot)
+        };
+        ir.u64_unbox(GP::Rdi, x, deopt);
+    }
+
+    ///
     /// F/Sf -> F
     ///
     #[allow(non_snake_case)]

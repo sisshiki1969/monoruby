@@ -428,3 +428,159 @@ fn exit_inside_a_fused_chain() {
         PRELUDE,
     );
 }
+
+/// A loop-carried value in a `while` loop inside a method: the back edge
+/// carries `x` raw, the head adopts it, and the body never boxes it. The
+/// loop is entered with a fixnum, a Bignum below 2^64 and a constant.
+#[test]
+fn loop_carried_in_a_method() {
+    run_test_with_prelude(
+        r##"
+        def xs(x, n)
+          i = 0
+          while i < n
+            x ^= (x << 13) & M
+            x ^= x >> 7
+            x ^= (x << 17) & M
+            i += 1
+          end
+          x
+        end
+        def fnv(s)
+          h = 0xcbf29ce484222325
+          i = 0
+          while i < s.bytesize
+            h = ((h ^ s.getbyte(i)) * 0x100000001b3) & M
+            i += 1
+          end
+          h
+        end
+        out = []
+        40.times do |i|
+          out << xs(88172645463325252, 20 + i)
+          out << xs(0x9E3779B97F4A7C15 + i, 25)
+          out << fnv("hello world #{i}")
+        end
+        out
+        "##,
+        PRELUDE,
+    );
+}
+
+/// A top-level `while` loop is a loop JIT entered from the interpreter:
+/// the carried value arrives boxed from the VM and is unboxed once at the
+/// entry.
+#[test]
+fn loop_carried_at_top_level() {
+    run_test_with_prelude(
+        r##"
+        x = 0x9E3779B97F4A7C15
+        acc = 0
+        i = 0
+        while i < 200
+          x ^= (x << 13) & M
+          x ^= x >> 7
+          x ^= (x << 17) & M
+          acc = (acc + (x >> 60)) & M
+          i += 1
+        end
+        [x, acc]
+        "##,
+        PRELUDE,
+    );
+}
+
+/// The carried value enters the loop outside [0, 2^64) on some calls — a
+/// negative seed, 2^64 or more — after the head has adopted the raw form:
+/// the entry unbox misses, the unit recompiles with the adoption off, and
+/// every answer is exact.
+#[test]
+fn loop_carried_entry_out_of_range() {
+    run_test_with_prelude(
+        r##"
+        def mix(x, n)
+          i = 0
+          while i < n
+            x = (x * 6364136223846793005 + 1442695040888963407) & M
+            x ^= x >> 29
+            i += 1
+          end
+          x
+        end
+        seeds = [1, 2**63 + 5, 7, -3, 2**64 + 9, 11, -(2**70), 13]
+        out = []
+        40.times do |i|
+          out << mix(seeds[i % seeds.size], 16 + i % 5)
+        end
+        out
+        "##,
+        PRELUDE,
+    );
+}
+
+/// The carried value is also consumed boxed each iteration (pushed into
+/// an Array, passed to a method), so the back edge carries the cached
+/// view (`Su`) rather than the raw one, and the head adopts that.
+#[test]
+fn loop_carried_with_boxed_consumers() {
+    run_test_with_prelude(
+        r##"
+        def note(v, a)
+          a << v if a.size < 3
+          v
+        end
+        def walk(x, n)
+          a = []
+          i = 0
+          while i < n
+            x = (x ^ (x << 7)) & M
+            x = (x ^ (x >> 9)) & M
+            note(x, a)
+            i += 1
+          end
+          [x, a]
+        end
+        out = []
+        40.times do |i|
+          out << walk(0xdeadbeefcafebabe + i, 24)
+        end
+        out
+        "##,
+        PRELUDE,
+    );
+}
+
+/// Nested loops: the inner loop's carried value enters raw from the outer
+/// body (`U -> U`, a register move) and the outer carried value survives
+/// the inner loop.
+#[test]
+fn loop_carried_nested() {
+    run_test_with_prelude(
+        r##"
+        def grid(seed, n, m)
+          x = seed & M
+          acc = 0
+          i = 0
+          while i < n
+            y = x
+            j = 0
+            while j < m
+              y = (y ^ (y << 11)) & M
+              y ^= y >> 5
+              j += 1
+            end
+            x = (x + y * 3) & M
+            acc = (acc ^ (x >> 7)) & M
+            i += 1
+          end
+          [x, acc]
+        end
+        out = []
+        40.times do |i|
+          out << grid(0x1234567887654321 + i, 20, 18)
+        end
+        out
+        "##,
+        PRELUDE,
+    );
+}

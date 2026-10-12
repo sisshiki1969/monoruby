@@ -1075,7 +1075,31 @@ impl<'a> JitContext<'a> {
         // unbox guard (a negative, a non-Integer, 2^64 or more) and a
         // checked result — stamps the site `NOU64` and recompiles, so a
         // site this does not fit falls back to the forms below for good.
-        if !nou64
+        //
+        // The `NOU64` stamp records a failed exit, so it bars nothing at a
+        // site where no exit can fire: both operands already raw (`U` /
+        // `Su`) or u64 literals, so there is no unbox guard, and an op with
+        // no result check — a bit op, `>>`, a compare, or a `+ - * <<` the
+        // mask fusion makes wrapping. Without this a site stamped while its
+        // input was still boxed (the `& M` after a boxed, overflowing `<<`,
+        // before the loop head adopted the carried `x` raw) would box the
+        // raw chain it now sits in, for good.
+        let u64_infallible = nou64 && {
+            let raw = |s| state.is_u64_resident(s) || state.is_u64_literal(s).is_some();
+            raw(lhs)
+                && raw(rhs)
+                && match binop {
+                    BinaryOp::Arith(
+                        BinOpK::BitAnd | BinOpK::BitOr | BinOpK::BitXor | BinOpK::Shr,
+                    ) => true,
+                    BinaryOp::Arith(BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Shl) => {
+                        self.mask_sink_after(state, bc_pos, dst)
+                    }
+                    BinaryOp::Arith(_) => false,
+                    BinaryOp::Cmp(_) => true,
+                }
+        };
+        if (!nou64 || u64_infallible)
             && let Some(u64_form) = self.u64_form(state, binop, lhs, rhs, lhs_class, rhs_class, overflowed)
         {
             let op = IdentId::from(binop);

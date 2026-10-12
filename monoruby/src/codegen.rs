@@ -948,6 +948,10 @@ pub struct Codegen {
     /// a hoisted guard of theirs missed often enough to recompile
     /// (`RecompileReason::LoopHoistGuardFailed`, `jitgen/merge.rs`).
     loop_hoist_disabled: std::rc::Rc<std::collections::HashSet<ISeqId>>,
+    /// Iseqs whose loops no longer adopt a loop-carried raw u64 at the
+    /// head: an entry unbox of theirs missed often enough to recompile
+    /// (`RecompileReason::LoopU64AdoptFailed`, `jitgen/merge.rs`).
+    loop_u64_disabled: std::rc::Rc<std::collections::HashSet<ISeqId>>,
     /// `doc/chain_deopt.md` §5 step 1 / §9.3. Keyed by the return-address
     /// slot of a suspended frame (§3.4), which is all the walk has to go on:
     /// return address of a chain-eligible call -> the entry of that site's
@@ -1434,6 +1438,7 @@ impl Codegen {
             loop_seed_input: None,
             loop_seed_output: Default::default(),
             loop_hoist_disabled: Default::default(),
+            loop_u64_disabled: Default::default(),
             chain_deopt_table: HashMap::default(),
             chain_cont_stub: entry_panic.clone(),
             alloc_cell: entry_panic.clone(),

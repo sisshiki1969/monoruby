@@ -5698,6 +5698,12 @@ pub enum RecompileReason {
     /// (`OPCODE_SUB_NOU64`) and the recompile gives it the Integer forms
     /// of the other reasons (`compile_binary` 2 / 2a). One-shot per site.
     U64GuardFailed = 9,
+    /// A loop head adopted the back edge's raw-u64 placement of a
+    /// loop-carried slot (`jitgen/merge.rs`, the counterpart of the
+    /// loop-entry float adoption), and the unbox on a forward entry found
+    /// the value outside [0, 2^64). The recompile keeps such slots boxed
+    /// at the heads of the iseq that owns the loop.
+    LoopU64AdoptFailed = 10,
 }
 
 impl RecompileReason {
