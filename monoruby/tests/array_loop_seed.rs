@@ -125,3 +125,63 @@ fn loop_array_seed_store_past_end() {
         "#,
     );
 }
+
+// The candidate scan (`loop_reads_elements`) walks the loop's bytecode
+// linearly, and a `rescue` inside the loop puts its handler, whose
+// clause-match opcodes the JIT never visits, inside that range. The walk
+// has to step over them rather than decode them.
+#[test]
+fn loop_array_seed_over_rescue_handler() {
+    run_test(
+        r#"
+        def f(a, n)
+          i = 0
+          s = 0
+          while i < n
+            begin
+              s += a[i & 3]
+              raise "x" if i % 7 == 0
+            rescue RuntimeError
+              s += 1
+            end
+            i += 1
+          end
+          s
+        end
+        r = []
+        30.times { |j| r << f([1, 2, 3, j], 60) }
+        r << f([1, 2.5, 3, 4], 60)
+        r << (f([1, "x", 3, 4], 60) rescue $!.class)
+        r << f(0.step(10).to_a, 200)
+        r
+        "#,
+    );
+}
+
+#[test]
+fn loop_array_seed_over_rescue_splat_handler() {
+    run_test(
+        r#"
+        def g(a, n, errs)
+          i = 0
+          s = 0
+          while i < n
+            begin
+              s += a[i % a.size]
+              raise ArgumentError if i % 5 == 0
+            rescue *errs
+              s += 2
+            end
+            i += 1
+          end
+          s
+        end
+        r = []
+        errs = [ArgumentError, TypeError]
+        30.times { |j| r << g([1, 2, 3, j], 60, errs) }
+        r << g([1.5, 2, 3], 60, errs)
+        r << (g([1, 2, 3], 60, [TypeError]) rescue $!.class)
+        r
+        "#,
+    );
+}

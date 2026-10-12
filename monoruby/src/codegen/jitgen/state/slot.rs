@@ -3398,18 +3398,21 @@ impl AbstractFrame {
                     self.set_F(slot, r);
                     ir.f64_to_fpr(f, r);
                 } else {
-                    unreachable!()
+                    self.const_placement_miss(ir, slot, pc);
+                    self.set_F(slot, r);
                 }
             }
             (LinkMode::C(l), LinkMode::Sf(r, _)) => {
-                self.set_Sf_float(slot, r);
                 let (v, f) = if let Some(f) = l.try_float() {
                     (Value::float(f), f)
                 } else if let Some(i) = l.try_fixnum() {
                     (Value::integer(i), i as f64)
                 } else {
-                    unreachable!()
+                    self.const_placement_miss(ir, slot, pc);
+                    self.set_Sf_float(slot, r);
+                    return;
                 };
+                self.set_Sf_float(slot, r);
                 ir.f64_to_fpr(f, r);
                 ir.lit2stack(v, slot);
             }
@@ -3429,6 +3432,24 @@ impl AbstractFrame {
 }
 
 impl AbstractFrame {
+    ///
+    /// A constant this edge brings in that no value of the target's
+    /// placement can equal: a `Bignum` or `nil` meeting an `F` / `Sf`
+    /// the loop head adopted on the strength of its *other* entries (an
+    /// inlined block's float read of the slot promotes it even when the
+    /// back-edge join is `S(Value)`, see `keep_backedge_floats`). The
+    /// `S -> F` / `S -> Sf` bridges guard such a value and side-exit;
+    /// a known-wrong constant is that guard decided at compile time, so
+    /// the edge exits unconditionally. The exit writes the constant
+    /// back like any other deopt, and the caller binds the dead
+    /// placement so the frame stays consistent with the target.
+    ///
+    fn const_placement_miss(&self, ir: &mut AsmIr, slot: SlotId, pc: BytecodePtr) {
+        debug_assert!(matches!(self.mode(slot), LinkMode::C(_)));
+        let deopt = ir.new_deopt_with_pc(self, pc + 1);
+        ir.push(AsmInst::Deopt(deopt));
+    }
+
     ///
     /// Generate bridge AsmIr from F/Sf(l) to Sf(r).
     ///

@@ -355,6 +355,19 @@ impl BytecodePtr {
     }
 
     ///
+    /// Whether this instruction only ever runs inside an exception
+    /// handler: the `rescue` clause matches (`RescueTEq`, opcode 157, and
+    /// the splatted-clause `ArrayTEq`, opcode 44). The JIT's basic-block
+    /// graph has no edge into handler blocks, so `TraceIr::from_pc`
+    /// refuses them; a *linear* scan over a bytecode range (a loop body,
+    /// an `ensure` body) that may span a handler steps over them with
+    /// this test instead.
+    ///
+    pub(crate) fn is_handler_only(&self) -> bool {
+        matches!(self.opcode(), 44 | 157)
+    }
+
+    ///
     /// The instruction's profile byte (op1 bits 63:56). A bit set:
     /// [`OPCODE_SUB_POLY`] by the interpreter when a site's receiver /
     /// operand class changed, [`OPCODE_SUB_OVERFLOW`] by a JIT side exit

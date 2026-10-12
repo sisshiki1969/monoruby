@@ -1602,6 +1602,7 @@
 4c3cdf6fdb768ce2061972f6724dd416	42	class Foo\n              def initialize(x)\n                @x = x\n  
 4c417c7d5c4ca0cfc5e0182ee4cb0ce0	[true, true, true, true, true, true, true, "[[...]]", "{x: {...}}"]	a = []\n        a << a\n        b = []\n        b << b\n        h = {}\n    
 4c481ad0d74eb5d480ba2f9bcd919877	[:ok, :private]	c = Class.new { def m; :ok; end }\n        o = c.new\n        res = []\n  
+4c61f19a9ce05fecf05e7b3f1a8fbaf2	[99, 114, 129, 144, 159, 174, 189, 204, 219, 234, 249, 264, 279, 294, 309, 324, 339, 354, 369, 384, 399, 414, 429, 444, 459, 474, 489, 504, 519, 534, 166.5, TypeError, 329]	def f(a, n)\n          i = 0\n          s = 0\n          while i < n\n     
 4c6323de719d0ad254c106b3de0e1ff1	99	b = binding\n            b.local_variable_set("bar", 99)\n           
 4c66c29f7a10c99487fbb86f19ded61a	false	File.file?("readme.md")
 4c684689028595f8c43df30bd9585c71	["\\"\\\\a\\"", "\\"hello \\\\u043F\\\\u0440\\\\u0438\\\\u0432\\\\u0435\\\\u0442\\"", "\\"\\\\u{1F600}\\"", "\\"\\\\u{1F600}\\"", "\\"\\\\x{A4A2}\\"", "\\"a\\\\x{82A0}b\\"", "\\"\\\\x{A4A2}\\\\x{A4A4}\\"", "\\"\\\\xC2\\\\xA9\\"", "\\"A\\\\x80B\\"", "\\"\\\\xA9\\"", "\\"\\\\t\\\\xA9z\\"", "[\\"a\\\\x{A4A2}b\\"]", "{k: \\"x\\"}", "ÄÖÜ HELLO", "äöü hello", "ÄöÜ hEllO", "Äöü hello", "UTF-16LE"]	__a = [];__a << ("\\a".encode("UTF-16LE").inspect);__a << ("hello привет".encode(
@@ -3587,6 +3588,7 @@ ae592d84c95871e8234f4dc3442a3db0	[:ok]	class VTest\n          def initialize; @h
 ae63fe71c4d5bee9c9ad35bf73642038	[true, true]	before = GC.count\n            GC.start\n            after = GC.count
 ae67028ed6bd7eea9010e301188d5c70	[-1, 1]	class Foo\n              def coerce(other)\n                [other.to
 ae6f79ff36cec9eed117b8ade45a005a	["L3", "L2", "L2", "L1", "nil"]	log = []\n            begin\n              raise "L1"\n            res
+ae824cfcbde8763f5e09552dd8d534cd	[114, 129, 144, 159, 174, 189, 204, 219, 234, 249, 264, 279, 294, 309, 324, 339, 354, 369, 384, 399, 414, 429, 444, 459, 474, 489, 504, 519, 534, 549, 154.0, ArgumentError]	def g(a, n, errs)\n          i = 0\n          s = 0\n          while i < n
 ae8479eaafd0bffd069c9a8a39e2b8f4	[:a, :b]	def m; a = 1; b = 2; local_variables.sort; end; m
 ae8bb532a5849f5cb7160f3f7ce192d7	[[1, 2], [10, 2], [10, 20], "wrong number of arguments (given 3, expected 1..2)", [1, 9], 3]	$effects = []\n            def g(a = ($effects << :a; 1), b = ($effe
 ae9c21fb0bcca31090458cf615bcd66d	[true, true, true, true]	File.write("/tmp/mr_enc5.txt", "")\n            r = []\n            f

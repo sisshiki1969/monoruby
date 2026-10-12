@@ -2673,7 +2673,15 @@ impl<'a> JitContext<'a> {
         let limit = iseq.sp_table_len().min(ensure_pc.to_usize() + 1024);
         let mut i = ensure_pc;
         while i.to_usize() < limit {
-            match TraceIr::from_pc(iseq.get_pc(i), self.store) {
+            let pc = iseq.get_pc(i);
+            // A `rescue` nested in the body puts its handler, whose
+            // clause-match opcodes `from_pc` refuses, inside the scan;
+            // the nested handler itself is rejected below.
+            if pc.is_handler_only() {
+                i = i + 1;
+                continue;
+            }
+            match TraceIr::from_pc(pc, self.store) {
                 TraceIr::EnsureEnd => {
                     end = Some(i);
                     break;
