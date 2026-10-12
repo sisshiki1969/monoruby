@@ -1188,50 +1188,6 @@ pub(crate) fn default_responds_to(
     }
 }
 
-/// `TypeIc` (op 131) recorder — the VM handler's slow path: record the
-/// class of the observed value into the instruction's own op2 word,
-/// which holds up to two cache classes (0 = empty, `u32::MAX` in the
-/// second slot latches megamorphic). The handler settles the hot shapes
-/// (already-recorded class, megamorphic latch) inline and maintains the
-/// execution counter (op1's low u32, saturating) itself, so this runs
-/// only when the cache may actually change — plus for the class keys
-/// the inline path leaves to this function: `true`/`false`/`Symbol`,
-/// and the heap `Integer` below. Single-threaded under the GVL; plain
-/// u32 stores into the owning instruction.
-pub(super) extern "C" fn vm_record_type_ic(pc: BytecodePtr, val: Value) {
-    const MEGA: u32 = u32::MAX;
-    let bc = *pc;
-    let op2 = bc.op2();
-    let (a, b) = (op2 as u32, (op2 >> 32) as u32);
-    if b == MEGA {
-        return;
-    }
-    // A heap `Integer` (Bignum) classes as `INTEGER`, but the JIT guard
-    // that cache key licenses is a fixnum-tag test — the one value this
-    // IC's class domain cannot describe honestly. Recording it as
-    // `INTEGER` would leave a mono site's compiled guard deopting
-    // forever *without ever moving this word* (the recorded class
-    // already matches), so the `TypeIcMiss` ratchet could never
-    // converge. Latch megamorphic instead.
-    let cached = val.class_for_ic();
-    if cached == CachedClass::INTEGER && !val.is_fixnum() {
-        pc.write2((a as u64) | ((MEGA as u64) << 32));
-        return;
-    }
-    let c = cached.u32();
-    if a == c || b == c {
-        return;
-    }
-    let new = if a == 0 {
-        (c as u64) | ((b as u64) << 32)
-    } else if b == 0 {
-        (a as u64) | ((c as u64) << 32)
-    } else {
-        (a as u64) | ((MEGA as u64) << 32)
-    };
-    pc.write2(new);
-}
-
 pub(super) extern "C" fn empty_hash() -> Value {
     let map = RubyMap::default();
     Value::hash(map)

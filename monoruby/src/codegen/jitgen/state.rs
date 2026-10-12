@@ -1544,7 +1544,7 @@ mod tests {
     /// register, or to its home) before anything else. Exercise every kind
     /// of consumer, a result of each representation, and a class
     /// redefinition after warmup, which fails the version guards the
-    /// `TypeIc` / `CondBr` now leave to their successors.
+    /// `CondBr` now leaves to its successors.
     #[test]
     fn call_result_left_in_rax() {
         crate::tests::run_test(

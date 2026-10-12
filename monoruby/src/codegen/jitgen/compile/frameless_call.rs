@@ -133,8 +133,7 @@ pub(super) fn eligible(
             | TraceIr::Ret(..)
             | TraceIr::Mov(..)
             | TraceIr::InitMethod(..)
-            | TraceIr::InlineCache
-            | TraceIr::TypeIc(..) => true,
+            | TraceIr::InlineCache => true,
             // A call is compiled as whatever the call site resolves to; one
             // that needs a frame or can raise is caught as a violation.
             TraceIr::MethodCall { callid, .. } => {
@@ -228,7 +227,6 @@ fn reads_frame_header(store: &Store, iseq_id: ISeqId) -> bool {
                 | TraceIr::Mov(..)
                 | TraceIr::InitMethod(..)
                 | TraceIr::InlineCache
-                | TraceIr::TypeIc(..)
         )
     })
 }

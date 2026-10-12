@@ -267,11 +267,6 @@ pub(crate) enum TraceIr {
     /// initialize_method
     InitMethod(FnInitInfo),
     InlineCache,
-    /// Register type IC (op 131): the VM records the class of the value in
-    /// the slot into the instruction's own words; the JIT reads the profile
-    /// (and, in later phases, speculates on it). Carries the slot and the
-    /// recorded cache classes.
-    TypeIc(SlotId, Option<CachedClass>, Option<CachedClass>),
     Yield {
         callid: CallSiteId,
     },
@@ -611,7 +606,6 @@ impl TraceIr {
                     }
                 }
                 130 => TraceIr::InlineCache,
-                131 => TraceIr::TypeIc(SlotId::new(op1_w1), pc.classid1(), pc.classid2()),
                 132 => TraceIr::Index {
                     _dst: SlotId::new(op1_w1),
                     base: SlotId::new(op2_w2),
@@ -840,7 +834,6 @@ impl TraceIr {
             | TraceIr::EnsureEnd
             | TraceIr::InitMethod(_)
             | TraceIr::InlineCache
-            | TraceIr::TypeIc(..)
             | TraceIr::MethodDef { .. }
             | TraceIr::UndefMethod { .. }
             | TraceIr::AliasGvar { .. }
@@ -1226,18 +1219,6 @@ impl TraceIr {
                 format!("{} = yield{s}", ret_str(dst))
             }
             TraceIr::InlineCache => return None,
-            TraceIr::TypeIc(reg, a, b) => {
-                // The megamorphic latch is a cache word, not a class — it
-                // must not reach `debug_class_name`'s table lookup.
-                let name = |c: Option<CachedClass>| {
-                    if c == Some(CachedClass::MEGA) {
-                        "MEGA".to_string()
-                    } else {
-                        store.debug_class_name(c.map(CachedClass::id))
-                    }
-                };
-                format!("type_ic {:?} [{}|{}]", reg, name(a), name(b))
-            }
             TraceIr::MethodDef { name, func_id } => {
                 format!("method_def {name}: {:?}", func_id)
             }

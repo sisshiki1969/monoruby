@@ -487,13 +487,13 @@ impl<'a> JitContext<'a> {
     }
 
     /// Does *trace_ir* leave a value cached in rax (see `def_rax2gp`) intact
-    /// up to its use? `InlineCache` / `TypeIc` emit nothing; a `ret` of a
+    /// up to its use? `InlineCache` emits nothing; a `ret` of a
     /// method frame loads its operand into rax and returns. A `ret` of a
     /// specialized frame branches to a return segment through a bridge,
     /// which may use rax.
     fn keeps_rax(&self, trace_ir: &TraceIr) -> bool {
         match trace_ir {
-            TraceIr::InlineCache | TraceIr::TypeIc(..) => true,
+            TraceIr::InlineCache => true,
             TraceIr::Ret(_) => self.caller_pos().is_none(),
             _ => false,
         }
@@ -586,7 +586,6 @@ impl<'a> JitContext<'a> {
             | TraceIr::LoopStart { .. }
             | TraceIr::LoopEnd
             | TraceIr::InlineCache
-            | TraceIr::TypeIc(..)
             | TraceIr::LoadIvar(..)
             | TraceIr::StoreIvar(..)
             | TraceIr::LoadDynVar(..)
@@ -678,29 +677,28 @@ impl<'a> JitContext<'a> {
         // the VM cannot resume there.)
         // Condition flags left for the `CondBr` ahead (or that `CondBr`
         // already emitted by a dispatch) may only be crossed by words that
-        // emit nothing: the call's trailing `InlineCache` / `TypeIc`.
+        // emit nothing: the call's trailing `InlineCache`.
         let flags_live = self.cond_flags_pending() || self.condbr_done_pending();
         debug_assert!(
             !flags_live
                 || matches!(
                     trace_ir,
-                    TraceIr::InlineCache | TraceIr::TypeIc(..) | TraceIr::CondBr(_, _, true, _)
+                    TraceIr::InlineCache | TraceIr::CondBr(_, _, true, _)
                 ),
             "condition flags left for a CondBr crossed {bc_pos:?}"
         );
         // The settling guards would clobber the flags; the branch relies on
         // no class proof, and both of its successors still see the state
         // unsettled and settle at their first instruction.
-        // A `TypeIc` emits nothing and relies on nothing either, and a
-        // `CondBr` relies on no class proof (its successors settle at their
-        // first instruction, as when the flags are live): skipping them keeps
+        // A `CondBr` relies on no class proof (its successors settle at their
+        // first instruction, as when the flags are live): skipping it keeps
         // a call result the previous instruction left in rax there for a
         // `ret` or a truthiness test.
         if state.class_proofs_unsettled()
             && !flags_live
             && !matches!(
                 trace_ir,
-                TraceIr::Ret(_) | TraceIr::InlineCache | TraceIr::TypeIc(..) | TraceIr::CondBr(..)
+                TraceIr::Ret(_) | TraceIr::InlineCache | TraceIr::CondBr(..)
             )
         {
             self.settle_class_proofs(state, ir);
@@ -1219,27 +1217,6 @@ impl<'a> JitContext<'a> {
             TraceIr::InlineCache => {
                 // The operand-carrier word of a two-word instruction: emits
                 // nothing, so the ④-b proofs pass straight through.
-                self.restore_unfrozen(None);
-            }
-            TraceIr::TypeIc(..) => {
-                // Profile-only — the VM records, the JIT emits nothing
-                // (and must not count the slot as used). The proofs pass
-                // through like the InlineCache word's.
-                //
-                // A speculation phase lived here briefly (#1695): mono →
-                // `GuardClass` + typed slot, `{nil, c}` → `GuardClassIn` +
-                // `NilOr(c)`, healed by a counter-gated `TypeIcMiss`
-                // recompile. It was reverted on evidence: wall time moved
-                // nowhere (class guards are free, and the downstream
-                // consumers' own guards already established the same
-                // classes), and the gate-relaxation experiment built on
-                // top of it showed the hot sites' types are carried by
-                // specialization, not by this aggregate per-bytecode
-                // cache (lattice-vs-IC divergence profile: on
-                // activerecord, 53% of exec-weight sat where the lattice
-                // was typed and the IC had gone megamorphic). The IC
-                // itself stays: the census and the divergence profile it
-                // feeds are how that evidence was gathered.
                 self.restore_unfrozen(None);
             }
 
@@ -1852,22 +1829,11 @@ impl<'a> JitContext<'a> {
 
     /// The sink for the call at `bc_pos`, if any: an optimizable `CondBr`
     /// on the call's `dst`, separated from it only by the call's own
-    /// cache word and an optional `TypeIc`. Only the method-call `CondBr`s
-    /// bytecodegen marks optimizable can appear there.
+    /// cache word. Only the method-call `CondBr`s bytecodegen marks
+    /// optimizable can appear there.
     fn cond_sink_after_call(&self, bc_pos: BcIndex, dst: Option<SlotId>) -> Option<CondBrSink> {
-        // +1 is the call's InlineCache word; the branch sits at +2, or at
-        // +3 behind the `TypeIc`.
-        let mut pos: BcIndex = bc_pos + 2;
-        if pos.to_usize() < self.iseq().bytecode().len()
-            && matches!(
-                TraceIr::from_pc(self.iseq().get_pc(pos), self.store),
-                TraceIr::TypeIc(..)
-            )
-            && self.iseq().bb_info.is_bb_head(pos).is_none()
-        {
-            pos = pos + 1;
-        }
-        self.cond_sink_at(pos, dst)
+        // +1 is the call's InlineCache word; the branch sits at +2.
+        self.cond_sink_at(bc_pos + 2, dst)
     }
 
     /// An optimizable `CondBr` at `pos` testing `dst`, as a sink.
