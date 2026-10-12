@@ -3303,6 +3303,7 @@ impl AbstractFrame {
             // the float ones, the conversions are the u64 unbox / box.
             (LinkMode::U(l), LinkMode::U(r)) => {
                 if l != r {
+                    self.vacate_for_shared(ir, slot, l, r);
                     if self.is_fpr_vacant(r) {
                         self.set_U(slot, r);
                         ir.fpr_move(l, r);
@@ -3328,6 +3329,9 @@ impl AbstractFrame {
                 }
             }
             (LinkMode::Su(l), LinkMode::U(r)) => {
+                if l != r {
+                    self.vacate_for_shared(ir, slot, l, r);
+                }
                 if l == r {
                     self.set_U(slot, l);
                 } else if self.is_fpr_vacant(r) {
@@ -3451,6 +3455,7 @@ impl AbstractFrame {
     /// [`Self::to_sf`].
     ///
     fn to_su(&mut self, ir: &mut AsmIr, slot: SlotId, l: FPReg, r: FPReg) {
+        self.vacate_for_shared(ir, slot, l, r);
         let f = if self.is_fpr_vacant(r) {
             self.set_Su(slot, r);
             FpXfer::Move(l, r)
@@ -3460,6 +3465,33 @@ impl AbstractFrame {
             FpXfer::Swap(l, r)
         };
         ir.fp_xfer(f);
+    }
+
+    ///
+    /// A raw-u64 bridge is about to move *slot* from *l* into a *r* that is
+    /// not vacant. When *l* is shared (`y = x` binds both to one register),
+    /// a swap would carry the partners along — and a partner bridged
+    /// earlier in slot order already sits at its target, *l*. So *r* is
+    /// vacated instead and the transfer becomes a move: a cached view
+    /// (`Sf` / `Su`) holding *r* is dropped, its home being current; a raw
+    /// value (`F` / `U`) is boxed into its home, and its own bridge, later
+    /// in the walk, starts from `S`. Holders of *r* never have *r* as their
+    /// target here: the join hands a slot a register that is fresh in the
+    /// target, or the one it already had on every edge.
+    ///
+    fn vacate_for_shared(&mut self, ir: &mut AsmIr, slot: SlotId, l: FPReg, r: FPReg) {
+        if self.is_fpr_vacant(r) || !self.fpr_shared(l, slot) {
+            return;
+        }
+        let holders: Vec<SlotId> = self.fpr_slots(r).collect();
+        for h in holders {
+            match self.mode(h) {
+                LinkMode::Sf(_, g) => self.set_S_with_guard(h, g.into()),
+                LinkMode::Su(_) => self.set_S_with_guard(h, Guarded::Value),
+                LinkMode::F(_) | LinkMode::U(_) => self.write_back(ir, h, Keep::Type),
+                m => unreachable!("vacate_for_shared {m:?}"),
+            }
+        }
     }
 
     ///
