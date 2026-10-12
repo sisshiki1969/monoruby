@@ -278,3 +278,31 @@ fn returned_raw_values() {
         PRELUDE,
     );
 }
+
+/// A raw temp passed straight as an argument: the box call must not land
+/// on the argument window already stored below the stack pointer (a
+/// `1 << 62` argument to `div` crashed this way).
+#[test]
+fn raw_temp_as_argument() {
+    run_test_with_prelude(
+        r##"
+        def div(a, b)
+          i = 0
+          r = nil
+          while i < 30
+            r = a / b
+            i += 1
+          end
+          r
+        end
+        def add3(a, b, c) = a + b + c
+        res = []
+        25.times do |n|
+          [0, 3, 1 << 40].each { |d| res << (div(1 << 62, d) rescue :zero) }
+          res << add3(1 << 63, (n ^ 0x8000_0000_0000_0001) & M, n)
+        end
+        res.uniq
+        "##,
+        PRELUDE,
+    );
+}

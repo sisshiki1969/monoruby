@@ -3396,8 +3396,10 @@ impl AbstractState {
         let pos_num = callsite.pos_num;
         let kw_pos = callsite.kw_pos;
         let kw_num = callsite.kw_len();
-        (args..args + pos_num).any(|reg| matches!(self.mode(reg), LinkMode::F(_)))
-            || (kw_pos..kw_pos + kw_num).any(|reg| matches!(self.mode(reg), LinkMode::F(_)))
+        // A raw u64 (`LinkMode::U`) is boxed through `u64_to_val` the same
+        // way, so it needs the reservation too.
+        let boxed = |reg| matches!(self.mode(reg), LinkMode::F(_) | LinkMode::U(_));
+        (args..args + pos_num).any(boxed) || (kw_pos..kw_pos + kw_num).any(boxed)
     }
 
     ///
