@@ -1543,8 +1543,7 @@ impl JitModule {
     ///
     pub(super) fn gen_write_back(&mut self, wb: &WriteBack, base: usize) {
         // GP residents first: the fpr and literal stores below use rax as
-        // scratch, and rax may itself be a resident (a call result left in
-        // place, `def_rax2gp`).
+        // scratch.
         for (reg, slot) in &wb.gp {
             monoasm! { &mut *self,
                 movq [rbp - (rbp_local(*slot))], R(*reg as _);
@@ -1574,8 +1573,7 @@ impl JitModule {
     ///
     pub(super) fn gen_write_back_for_deopt(&mut self, wb: &WriteBack, base: usize) {
         // GP residents first: the fpr and literal stores below use rax as
-        // scratch, and rax may itself be a resident (a call result left in
-        // place, `def_rax2gp`).
+        // scratch.
         for (reg, slot) in &wb.gp {
             monoasm! { &mut *self,
                 movq [r14 - (conv(*slot))], R(*reg as _);

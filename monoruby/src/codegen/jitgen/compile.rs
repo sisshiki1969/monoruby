@@ -462,12 +462,6 @@ impl<'a> JitContext<'a> {
             latched_self,
             ..
         } = state.settle_class_proofs(self.store);
-        // Everything below may clobber rax: the literal stores use it as
-        // scratch, and a version guard's recovery path calls into the
-        // runtime before resuming here.
-        if !latched_consts.is_empty() || !kept.is_empty() || latched_self.is_some() {
-            state.settle_rax(ir, false);
-        }
         for (slot, v) in latched_consts {
             ir.lit2stack(v, slot);
             state.def_S(slot);
@@ -487,38 +481,6 @@ impl<'a> JitContext<'a> {
         }
     }
 
-    /// Does *trace_ir* leave a value cached in rax (see `def_rax2gp`) intact
-    /// up to its use? `InlineCache` emits nothing; a `ret` of a
-    /// method frame loads its operand into rax and returns. A `ret` of a
-    /// specialized frame branches to a return segment through a bridge,
-    /// which may use rax.
-    fn keeps_rax(&self, trace_ir: &TraceIr) -> bool {
-        match trace_ir {
-            TraceIr::InlineCache => true,
-            TraceIr::Ret(_) => self.caller_pos().is_none(),
-            _ => false,
-        }
-    }
-
-    /// Does the arm for *trace_ir* flush the GP register file before it
-    /// emits anything else? Then rax is settled by spilling it to its home,
-    /// which the flush would do with the pool register it was moved to.
-    fn flushes_first(trace_ir: &TraceIr) -> bool {
-        matches!(
-            trace_ir,
-            TraceIr::Br(_)
-                | TraceIr::CondBr(..)
-                | TraceIr::NilBr(..)
-                | TraceIr::MethodRet(_)
-                | TraceIr::BlockBreak(_)
-                | TraceIr::Raise(_)
-                | TraceIr::EnsureEnd
-                | TraceIr::LoopStart { .. }
-                | TraceIr::LoopEnd
-                | TraceIr::StoreDynVar { .. }
-                | TraceIr::LoadDynVar { .. }
-        )
-    }
 
     ///
     /// Compile one instruction, keeping the state's `Guarded::FixnumArray`
@@ -647,7 +609,6 @@ impl<'a> JitContext<'a> {
         // instruction's work together with its predecessor's.
         if self.fused_skip == Some(bc_pos) {
             self.fused_skip = None;
-            state.settle_rax(ir, false);
             return Ok(CompileResult::Continue);
         }
         let pc = self.get_pc(bc_pos);
@@ -659,16 +620,6 @@ impl<'a> JitContext<'a> {
         ));
         for slot in trace_ir.read_slots(self.store) {
             state.note_read(slot);
-        }
-        // A call/yield result the previous instruction left in rax
-        // (`def_rax2gp`) is used in place only by the words that emit
-        // nothing, and by a method's `ret` of it. Everything else may use rax
-        // as scratch, so it is settled here, ahead of any emission
-        // (including the class-proof guards below): straight to its home for
-        // an instruction that flushes the register file first anyway, into a
-        // pool register otherwise.
-        if !self.keeps_rax(&trace_ir) {
-            state.settle_rax(ir, Self::flushes_first(&trace_ir));
         }
         // Ruby code ran since the last instruction (a call, a yield, a
         // generic operator): re-examine what the state believes about the

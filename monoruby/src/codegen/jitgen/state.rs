@@ -942,59 +942,16 @@ impl AbstractFrame {
         }
     }
 
-    /// Define `dst` from a call/yield result in rax by leaving it there:
-    /// rax becomes `dst`'s (volatile) resident, and nothing is emitted. The
-    /// next instruction either uses it in place (a `ret` of it returns rax as
-    /// is) or settles it first ([`Self::settle_rax`]: into a pool register
-    /// for a GP-aware consumer, or straight to the stack home).
-    ///
-    /// The result is a general `Value` of unknown class (`dst` is set to
-    /// `Guarded::Value`), so the first integer op to consume it re-guards
-    /// (`gp_ensure` keys off `is_fixnum(slot)`). It is bound **dirty**, so a
-    /// deopt write-back re-homes it (`dirty_residents`) and a `flush_gp`
-    /// spills it. Only sound when the frame is *not* capturable — a
-    /// capturing call must use `def_rax2acc_capturing` (LFP-relative store) and
-    /// leaves no register resident.
-    pub(crate) fn def_rax2gp(&mut self, _ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
+    /// Define `dst` from a call/yield result in rax: the result is stored
+    /// to `dst`'s stack home (rbp-relative). It is a general `Value` of
+    /// unknown class (`dst` is set to `Guarded::Value`), so the first integer
+    /// op to consume it re-guards. Only sound when the frame is *not*
+    /// capturable — a capturing call must use `def_rax2acc_capturing`
+    /// (LFP-relative store).
+    pub(crate) fn def_rax2gp(&mut self, ir: &mut AsmIr, dst: impl Into<Option<SlotId>>) {
         if let Some(dst) = dst.into() {
-            self.def_rax2gp_guarded(dst, slot::Guarded::Value);
-        }
-    }
-
-    fn def_rax2gp_guarded(&mut self, dst: SlotId, guarded: slot::Guarded) {
-        self.def_S_guarded(dst, guarded);
-        self.bind_gp_resident(GP::Rax, dst);
-    }
-
-    ///
-    /// Re-home whatever rax caches before code that may clobber it. With
-    /// `spill`, each slot is stored to its stack home (for an instruction
-    /// that flushes the register file first anyway); otherwise the value
-    /// moves into a pool register and stays resident there, which is what a
-    /// GP-aware consumer (an integer op, a call taking it as an operand)
-    /// wants. A no-op when rax caches nothing.
-    ///
-    pub(crate) fn settle_rax(&mut self, ir: &mut AsmIr, spill: bool) {
-        let holders = self.gp_regfile.rax_holders();
-        if holders.is_empty() {
-            return;
-        }
-        self.gp_regfile.clear_rax();
-        if spill {
-            for (slot, dirty) in holders {
-                if dirty {
-                    ir.reg2stack(GP::Rax, slot);
-                }
-            }
-        } else {
-            let (gp, spills) = self.gp_regfile.alloc_reg(&[]);
-            for (reg, slot) in spills {
-                ir.reg2stack(reg, slot);
-            }
-            ir.reg_move(GP::Rax, gp);
-            for (slot, dirty) in holders {
-                self.gp_regfile.bind(gp, slot, dirty);
-            }
+            ir.reg2stack(GP::Rax, dst);
+            self.def_S_guarded(dst, slot::Guarded::Value);
         }
     }
 
@@ -1175,12 +1132,6 @@ impl AbstractFrame {
         guarded: slot::Guarded,
     ) {
         if let Some(dst) = dst.into() {
-            if src == GP::Rax && self.no_capture_guard() {
-                // Leave the result where the callee returned it — see
-                // `def_rax2gp`.
-                self.def_rax2gp_guarded(dst, guarded);
-                return;
-            }
             if self.no_capture_guard() {
                 ir.reg2stack(src, dst);
             } else {
@@ -1252,18 +1203,14 @@ impl AbstractFrame {
     /// GP-aware operations that keep the file live across instructions are the
     /// integer binops (`binop_integer_gp`), the integer compares /
     /// flag-setting compares (`gen_cmp_integer_gp` / `gen_cmp_integer_flags`),
-    /// call/yield-result parking (`def_rax2gp`) and concrete-literal defs
-    /// (`def_lit2gp`); generic slot reads and write-backs consult the residents
+    /// concrete-literal defs (`def_lit2gp`); generic slot reads and write-backs consult the residents
     /// without flushing. A no-op when the file is empty.
     /// Snapshot the `(reg, slot)` pairs currently in the local GP file,
     /// for the call sites' direct-argument-store hints (captured just
     /// before the flush inside `get_using_fpr`; after the spill the
     /// registers still hold their slots' home-equal values). Read-only.
     pub(in crate::codegen::jitgen) fn peek_gp_residents(&self) -> Vec<(GP, SlotId)> {
-        // rax is scratch for the argument stores themselves.
-        let mut residents = self.gp_regfile.residents();
-        residents.retain(|(reg, _)| *reg != GP::Rax);
-        residents
+        self.gp_regfile.residents()
     }
 
     pub(crate) fn flush_gp(&mut self, ir: &mut AsmIr) {
@@ -1527,14 +1474,13 @@ impl Invariants {
 mod tests {
     use super::*;
 
-    /// A call/yield result is left in rax (`def_rax2gp`) and used there by
-    /// a following `ret` or truthiness test, and settled (into a pool
-    /// register, or to its home) before anything else. Exercise every kind
-    /// of consumer, a result of each representation, and a class
-    /// redefinition after warmup, which fails the version guards the
-    /// `CondBr` now leaves to its successors.
+    /// A call/yield result consumed by every kind of consumer (a `ret`, a
+    /// truthiness test, an integer op, an array literal, a loop condition),
+    /// a result of each representation, and a class redefinition after
+    /// warmup, which fails the version guards a `CondBr` leaves to its
+    /// successors.
     #[test]
-    fn call_result_left_in_rax() {
+    fn call_result_consumers() {
         crate::tests::run_test(
             r#"
             class Foo
