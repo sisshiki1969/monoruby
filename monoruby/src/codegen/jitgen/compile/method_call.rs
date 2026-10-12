@@ -1332,7 +1332,6 @@ impl<'a> JitContext<'a> {
                 if recv_class_proven
                     && !self.in_dispatch_arm()
                     && !callee_forwards_block
-                    && !self.store[iseq].has_generic_jit()
                     && self.specialize_level() < SPECIALIZE_DEPTH_LIMIT
                     && frameless_call::eligible(&self.store, func_id, iseq, callid)
                     && let Some(res) =
@@ -1425,10 +1424,6 @@ impl<'a> JitContext<'a> {
                     || iseq_block.is_some())
                     && !self.in_dispatch_arm()
                     && recv_class_proven
-                    // A method gone self-generic is called, not copied:
-                    // one more per-class copy is what the generic body
-                    // exists to stop.
-                    && !self.store[iseq].has_generic_jit()
                     // See `callee_forwards_block` at the entry.
                     && !callee_forwards_block
                 {
@@ -2099,7 +2094,6 @@ impl<'a> JitContext<'a> {
                 if let Some(init_callid) = callsite.class_new_init
                     && !self.in_dispatch_arm()
                     && !self.frameless_rejected.contains(&init_iseq)
-                    && !self.store[init_iseq].has_generic_jit()
                     && self.specialize_level() < SPECIALIZE_DEPTH_LIMIT
                     && frameless_call::eligible(&self.store, init_fid, init_iseq, init_callid) =>
             {
@@ -2342,7 +2336,7 @@ impl<'a> JitContext<'a> {
         let compiled = self.compile_specialized_func(
             state,
             iseq,
-            Some(recv_class.id()),
+            recv_class.id(),
             args_info,
             None,
             callid,
@@ -2555,7 +2549,7 @@ impl<'a> JitContext<'a> {
         iseq_id: ISeqId,
         outer: Option<usize>,
         args_info: JitArgumentInfo,
-        self_class: Option<ClassId>,
+        self_class: ClassId,
     ) -> JitStackFrame {
         let idx = match self.jit_type() {
             JitType::Specialized { idx, .. } => *idx,
@@ -2590,7 +2584,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         iseq_id: ISeqId,
-        self_class: Option<ClassId>,
+        self_class: ClassId,
         args_info: JitArgumentInfo,
         outer: Option<usize>,
         callid: CallSiteId,
@@ -2758,7 +2752,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         state: &mut AbstractState,
         iseq_id: ISeqId,
-        self_class: Option<ClassId>,
+        self_class: ClassId,
         args_info: JitArgumentInfo,
         outer: Option<usize>,
         callid: CallSiteId,

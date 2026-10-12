@@ -1032,7 +1032,7 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
 7. **gc-stress in tests**: `gc-stress` is **opt-in** — `export GC_STRESS=1` before `bin/test` and it applies to **every** phase (nextest *and* the benchmark binary, so optcarrot / ruby-spec are stressed too). Since the true-stress restoration this means a collection at **every safepoint**, so a `GC_STRESS=1` run of the full scope is an hours-scale job. Nothing enables it implicitly, so the automatic CI never pays it; run the manual `gc-stress` workflow instead. Tests whose loop counts exist only to reach the JIT thresholds should shrink them under `cfg!(feature = "gc-stress")` (see `tests/method_call.rs`) — otherwise they blow past nextest's per-test cap.
 8. **Interpreter instance (`src/vm.rs`)**: the allocator (`ALLOC`), the JIT
    (`CODEGEN`), the green-thread scheduler (`SCHEDULER`, `SCHED_RSP`), the
-   preempt timer state and a few caches (weak maps, generic-ivar table,
+   preempt timer state and a few caches (weak maps,
    const epochs, `Regexp.timeout`, JSON's class ids) are fields of one
    `vm::Vm`, reached through `vm::vm()`. Each OS thread carries only a
    pointer to the `Vm` it serves (`vm::CURRENT`); a `Vm` is created lazily

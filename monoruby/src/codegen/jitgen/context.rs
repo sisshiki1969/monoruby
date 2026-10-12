@@ -117,9 +117,9 @@ pub struct JitBlockInfo {
     ///
     pub block_fid: FuncId,
     ///
-    /// `ClassId` of the *self* (`None`: no type information about *self*).
+    /// `ClassId` of the *self*.
     ///
-    pub self_class: Option<ClassId>,
+    pub self_class: ClassId,
     ///
     /// Offset of the outer frame. this must be > 0.
     ///
@@ -127,7 +127,7 @@ pub struct JitBlockInfo {
 }
 
 impl JitBlockInfo {
-    pub(super) fn new(block_fid: FuncId, self_class: Option<ClassId>, outer: usize) -> Self {
+    pub(super) fn new(block_fid: FuncId, self_class: ClassId, outer: usize) -> Self {
         Self {
             block_fid,
             self_class,
@@ -193,10 +193,9 @@ pub(in crate::codegen) struct AsmInfo {
     ///
     pub iseq_id: ISeqId,
     ///
-    /// `ClassId`` of *self*. `None` for a self-generic body, which is
-    /// compiled with no type information about *self*.
+    /// `ClassId`` of *self*.
     ///
-    pub self_class: Option<ClassId>,
+    pub self_class: ClassId,
     ///
     /// Object type of *self*.
     ///
@@ -825,10 +824,10 @@ impl JitStackFrame {
         specialize_level: usize,
         iseq_id: ISeqId,
         outer: Option<usize>,
-        self_class: Option<ClassId>,
+        self_class: ClassId,
         abstract_state: Option<AbstractFrame>,
     ) -> Self {
-        let self_ty = self_class.and_then(|class| store[class].instance_ty());
+        let self_ty = store[self_class].instance_ty();
         let is_not_block = store[store[iseq_id].func_id()].is_not_block();
         let mut basic_block_labels = HashMap::default();
         let mut labels = vec![];
@@ -1543,8 +1542,7 @@ impl<'a> JitContext<'a> {
         self.iseq().func_id()
     }
 
-    /// The class of *self*, `None` in a self-generic body.
-    pub(super) fn self_class(&self) -> Option<ClassId> {
+    pub(super) fn self_class(&self) -> ClassId {
         self.current_frame().self_class
     }
 

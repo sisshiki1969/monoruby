@@ -63,8 +63,6 @@ pub(crate) struct Vm {
     weakmaps: RefCell<Vec<*mut RValue>>,
     /// See [`PROBE_MEMOS`].
     probe_memos: RefCell<Vec<Box<[u64; 2]>>>,
-    /// The generic-ivar inline cache of the JIT runtime.
-    generic_ivar_table: OnceCell<RefCell<Box<[crate::codegen::runtime::GenericIvarEntry]>>>,
     /// Cached `ClassId` of `Enumerator::ArithmeticSequence`.
     as_class_id_cache: Cell<Option<ClassId>>,
     /// `JSON::Ext::Generator::State` / `JSON::Fragment`, once loaded.
@@ -98,7 +96,6 @@ impl Vm {
             preempt: OnceCell::new(),
             weakmaps: RefCell::new(Vec::new()),
             probe_memos: RefCell::new(Vec::new()),
-            generic_ivar_table: OnceCell::new(),
             as_class_id_cache: Cell::new(None),
             json_state_class: Cell::new(None),
             json_fragment_class: Cell::new(None),
@@ -309,12 +306,6 @@ pub(crate) fn zero_probe_memos() {
         }
     });
 }
-
-pub(crate) static GENERIC_IVAR_TABLE: VmField<RefCell<Box<[crate::codegen::runtime::GenericIvarEntry]>>> =
-    VmField::new(|vm| {
-        vm.generic_ivar_table
-            .get_or_init(|| RefCell::new(crate::codegen::runtime::GenericIvarEntry::new_table()))
-    });
 
 pub(crate) static AS_CLASS_ID_CACHE: VmField<Cell<Option<ClassId>>> =
     VmField::new(|vm| &vm.as_class_id_cache);

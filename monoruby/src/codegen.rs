@@ -758,8 +758,8 @@ struct CompilationUnitId(usize);
 struct CompilationUnitInfo {
     /// `ISeqId``.
     iseq_id: ISeqId,
-    /// `ClassId`` of *self* (`None` for a self-generic body).
-    self_class: Option<ClassId>,
+    /// `ClassId`` of *self*.
+    self_class: ClassId,
     /// Bytecode position. (`Some`` for loop compilation, `None`` for method compilation)
     position: Option<BytecodePtr>,
     /// Entry point of the machine code.
@@ -867,7 +867,7 @@ pub(crate) struct SpecializedPatchEntry {
     /// recompile request names the unit to rebuild
     /// (`Codegen::recompile_specialized`), since a specialized body is
     /// never replaced on its own.
-    pub(crate) owner: Option<(ISeqId, Option<ClassId>, Option<BytecodePtr>)>,
+    pub(crate) owner: Option<(ISeqId, ClassId, Option<BytecodePtr>)>,
     /// The class-version word this entry's compiled body actually reads —
     /// the owning root compilation's cell (one `const_i32` per root compile,
     /// shared by the root and all its specialized children). The owner
@@ -918,7 +918,7 @@ pub struct Codegen {
     /// kept and its exhausted budget leaves it deopting plainly. Version
     /// guard failures are not counted (see
     /// `Codegen::recompile_budget_exhausted`).
-    recompile_counts: HashMap<(ISeqId, Option<ClassId>), u32>,
+    recompile_counts: HashMap<(ISeqId, ClassId), u32>,
     /// Loop-entry type seeding, per loop (iseq, loop head): what each
     /// loop's current compile guards and which slots earlier entry-guard
     /// misses vetoed (`jitgen/compile/loop_entry.rs`).
@@ -987,7 +987,7 @@ pub struct Codegen {
         jitgen::context::SpecializedId,
         (
             jitgen::context::AsmInfo,
-            (ISeqId, Option<ClassId>, Option<BytecodePtr>),
+            (ISeqId, ClassId, Option<BytecodePtr>),
         ),
     >,
     /// The `InlineCall`s whose bodies are being emitted, innermost last:
@@ -1545,7 +1545,7 @@ impl Codegen {
     fn add_compilation_unit(
         &mut self,
         iseq_id: ISeqId,
-        self_class: Option<ClassId>,
+        self_class: ClassId,
         position: Option<BytecodePtr>,
         codeptr: CodePtr,
         specialized_info: SpecializedCodeInfo,

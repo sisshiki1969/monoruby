@@ -336,11 +336,9 @@ pub struct ISeqInfo {
     ///
     pub sourceinfo: SourceInfoRef,
     ///
-    /// JIT code info for each class of *self*. The `None` key is the
-    /// self-generic body: compiled with no type information about *self*,
-    /// it runs for any self class the guard chain has no specialization for.
+    /// JIT code info for each class of *self*.
     ///
-    pub(super) jit_entry: HashMap<Option<ClassId>, JitInfo>,
+    pub(super) jit_entry: HashMap<ClassId, JitInfo>,
     ///
     /// Whether this ISeq is already on `Store::jit_iseqs` — the list the GC
     /// walks instead of every ISeq. Set once, when the first compiled unit is
@@ -562,8 +560,7 @@ impl ISeqInfo {
                 * (size_of::<BcIndex>() + size_of::<CallSiteId>() + 1),
             locals: self.locals.capacity()
                 * (size_of::<IdentId>() + size_of::<bytecodegen::BcLocal>() + 1),
-            jit_entry: self.jit_entry.capacity()
-                * (size_of::<Option<ClassId>>() + size_of::<JitInfo>() + 1),
+            jit_entry: self.jit_entry.capacity() * (size_of::<ClassId>() + size_of::<JitInfo>() + 1),
             other: self.exception_map.capacity() * size_of::<ExceptionMapEntry>()
                 + self.replay_spans.capacity()
                     * size_of::<(std::ops::Range<BcIndex>, Vec<u32>)>()
@@ -1057,7 +1054,7 @@ impl ISeqInfo {
 
     pub(crate) fn add_jit_code(
         &mut self,
-        self_class: Option<ClassId>,
+        self_class: ClassId,
         entry: DestLabel,
         class_version_label: DestLabel,
     ) -> Option<JitInfo> {
@@ -1121,7 +1118,7 @@ impl ISeqInfo {
 
     pub(crate) fn get_cache_map(
         &self,
-        self_class: Option<ClassId>,
+        self_class: ClassId,
     ) -> Option<&Vec<InlineCacheEntry>> {
         self.jit_entry
             .get(&self_class)
@@ -1129,7 +1126,7 @@ impl ISeqInfo {
     }
 
     /// The whole-method unit's [`JitInfo::singleton_deps`].
-    pub(crate) fn get_singleton_deps(&self, self_class: Option<ClassId>) -> Option<&[ClassId]> {
+    pub(crate) fn get_singleton_deps(&self, self_class: ClassId) -> Option<&[ClassId]> {
         self.jit_entry
             .get(&self_class)
             .map(|info| info.singleton_deps.as_slice())
@@ -1146,7 +1143,7 @@ impl ISeqInfo {
     /// (The loop twin, `set_loop_jit_info`, has always replaced all three.)
     pub(crate) fn set_salvage_record(
         &mut self,
-        self_class: Option<ClassId>,
+        self_class: ClassId,
         class_version_label: DestLabel,
         cache: Vec<InlineCacheEntry>,
         singleton_deps: Vec<ClassId>,
@@ -1165,7 +1162,7 @@ impl ISeqInfo {
     /// epoch snapshots in place. `None` once invalidated.
     pub(crate) fn get_const_map_mut(
         &mut self,
-        self_class: Option<ClassId>,
+        self_class: ClassId,
     ) -> Option<&mut ConstSalvageMap> {
         if self.jit_invalidated {
             return None;
@@ -1260,35 +1257,12 @@ impl ISeqInfo {
         }
     }
 
-    /// A self-generic whole-method body (the `None` key of `jit_entry`) is
-    /// installed.
-    pub(crate) fn has_generic_jit(&self) -> bool {
-        !self.jit_invalidated && self.jit_entry.contains_key(&None)
-    }
-
-    /// The key of the whole-method unit that runs for a *self* of
-    /// `self_class`: its own specialization when there is one, else the
-    /// self-generic body (`None`) the class-guard chain ends in.
-    pub(crate) fn unit_class(&self, self_class: ClassId) -> Option<ClassId> {
-        if !self.jit_entry.contains_key(&Some(self_class)) && self.has_generic_jit() {
-            None
-        } else {
-            Some(self_class)
-        }
-    }
-
-    /// The number of whole-method bodies (specializations plus a generic
-    /// one, if any) this method has.
-    pub(crate) fn jit_entry_len(&self) -> usize {
-        self.jit_entry.len()
-    }
-
     #[cfg(feature = "jit-log")]
-    pub(crate) fn jit_entry_classes(&self) -> Vec<Option<ClassId>> {
+    pub(crate) fn jit_entry_classes(&self) -> Vec<ClassId> {
         self.jit_entry.keys().copied().collect()
     }
 
-    pub(crate) fn get_jit_entry(&self, self_class: Option<ClassId>) -> Option<DestLabel> {
+    pub(crate) fn get_jit_entry(&self, self_class: ClassId) -> Option<DestLabel> {
         if self.jit_invalidated {
             return None;
         }
@@ -1297,10 +1271,7 @@ impl ISeqInfo {
             .map(|info| info.entry.clone())
     }
 
-    pub(crate) fn get_jit_class_version(
-        &self,
-        self_class: Option<ClassId>,
-    ) -> Option<DestLabel> {
+    pub(crate) fn get_jit_class_version(&self, self_class: ClassId) -> Option<DestLabel> {
         self.jit_entry
             .get(&self_class)
             .map(|info| info.class_version_label.clone())
