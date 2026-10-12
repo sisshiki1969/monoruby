@@ -1895,7 +1895,7 @@ impl<'a> JitContext<'a> {
         // The taken edge leaves from the `CondBr`, whose stack top a
         // dispatch arm (still inside the producer) has not reached yet.
         let sp = self.iseq().get_sp(pos);
-        if let Some(flags) = self.take_cond_flags(cond) {
+        if let Some((flags, narrow)) = self.take_cond_flags(cond) {
             let dest = self.label();
             ir.push(AsmInst::BrFlags {
                 flags,
@@ -1903,6 +1903,17 @@ impl<'a> JitContext<'a> {
                 dest,
             });
             let mut side_state = state.clone();
+            // The producer said what each side of the branch proves about
+            // a slot (the receiver of a class predicate): the taken side
+            // gets the predicate's truth value the branch kind selects.
+            if let Some(narrow) = narrow {
+                let (taken, fallthrough) = match brkind {
+                    BrKind::BrIf => (narrow.when_true, narrow.when_false),
+                    BrKind::BrIfNot => (narrow.when_false, narrow.when_true),
+                };
+                side_state.narrow_S_guarded(narrow.slot, taken);
+                state.narrow_S_guarded(narrow.slot, fallthrough);
+            }
             side_state.set_next_sp(sp);
             self.new_side_branch(pos, dest_bb, side_state, dest);
             return false;

@@ -1193,6 +1193,27 @@ impl SlotState {
         }
     }
 
+    /// What one side of a branch proves about a boxed slot
+    /// (`FlagsNarrow`): replaces the type of a stack-resident slot and, as
+    /// [`refine_S_guarded`](Self::refine_S_guarded) does, of the local it
+    /// was copied from. Unlike `refine_S_guarded` it also narrows a slot
+    /// the state already knows something about — the membership guard
+    /// left `NilOr(c)` or `Value`, and the branch picks one half of it —
+    /// but never touches a register-resident or constant slot, whose
+    /// representation says more than any class set.
+    #[allow(non_snake_case)]
+    pub(in crate::codegen::jitgen) fn narrow_S_guarded(&mut self, slot: SlotId, guarded: Guarded) {
+        if guarded == Guarded::Value || !matches!(self.mode(slot), LinkMode::S(_)) {
+            return;
+        }
+        self.set_mode(slot, LinkMode::S(guarded));
+        if let Some(src) = self.slots[slot.0 as usize].copy_src
+            && matches!(self.mode(src), LinkMode::S(_))
+        {
+            self.set_mode(src, LinkMode::S(guarded));
+        }
+    }
+
     ///
     /// Link *slot* to a new fpr register (may emit a victim spill).
     ///

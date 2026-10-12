@@ -78,6 +78,8 @@ pub(crate) struct Vm {
     owned_fds: RefCell<crate::HashSet<i32>>,
     /// The per-(class, ivar) type states (`ivar_ty::IVAR_TYS`).
     ivar_tys: RefCell<crate::ivar_ty::IvarTyTable>,
+    /// The `is_a?` answers compiled units assumed (`ancestry::ANCESTRY`).
+    ancestry: RefCell<crate::ancestry::AncestryTable>,
 }
 
 impl Vm {
@@ -104,6 +106,7 @@ impl Vm {
             regexp_global_timeout: Cell::new(0),
             owned_fds: RefCell::new(crate::HashSet::default()),
             ivar_tys: RefCell::new(Default::default()),
+            ancestry: RefCell::new(Default::default()),
         }
     }
 }
@@ -365,4 +368,9 @@ mod tests {
 /// Field projection for [`crate::ivar_ty::IVAR_TYS`].
 pub(crate) fn ivar_tys(vm: &Vm) -> &RefCell<crate::ivar_ty::IvarTyTable> {
     &vm.ivar_tys
+}
+
+/// Field projection for [`crate::ancestry::ANCESTRY`].
+pub(crate) fn ancestry(vm: &Vm) -> &RefCell<crate::ancestry::AncestryTable> {
+    &vm.ancestry
 }

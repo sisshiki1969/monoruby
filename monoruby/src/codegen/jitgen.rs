@@ -630,7 +630,9 @@ impl Codegen {
         // into a concrete byte offset before code generation runs.
         ctx.resolve_dyn_var_offsets(&mut frame.asm_info);
 
-        let inline_cache = std::mem::take(&mut ctx.inline_method_cache);
+        let mut inline_cache = std::mem::take(&mut ctx.inline_method_cache);
+        inline_cache.extend(ctx.inline_cache_extra.take());
+        let ancestry_deps = ctx.ancestry_deps.take();
         let singleton_deps = std::mem::take(&mut ctx.singleton_deps);
         let ivar_ty_deps = std::mem::take(&mut ctx.ivar_ty_deps);
         let const_folds = std::mem::take(&mut ctx.const_fold_cache);
@@ -748,6 +750,7 @@ impl Codegen {
         {
             let addr = self.jit.get_label_address(&class_version_label).as_ptr() as u64;
             crate::ivar_ty::register_unit(ivar_ty_deps, &class_version_label, addr);
+            crate::ancestry::register_unit(ancestry_deps, addr);
         }
         self.unit_const_version = None;
         self.unit_recompile_counter = None;

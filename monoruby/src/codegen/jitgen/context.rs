@@ -3,6 +3,7 @@
 //
 
 use super::*;
+use crate::codegen::jitgen::state::Guarded;
 
 ///
 /// Unique identifier for a specialized method / block frame within a
@@ -1003,6 +1004,24 @@ struct PendingFlags {
     slot: SlotId,
     flags: CondFlags,
     depth: usize,
+    /// What the branch on these flags proves about another slot.
+    narrow: Option<FlagsNarrow>,
+}
+
+///
+/// A fact the branch reading pending condition flags establishes about a
+/// slot other than the condition itself: a predicate whose answer is a
+/// function of the receiver's class (`x.is_a?(K)` under a membership
+/// guard) tells the branch which classes `x` can still have on each side.
+/// `emit_cond_branch` applies it to the taken and fall-through states —
+/// state only, no machine code.
+///
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FlagsNarrow {
+    pub(super) slot: SlotId,
+    /// The slot's type where the predicate is true / false.
+    pub(super) when_true: Guarded,
+    pub(super) when_false: Guarded,
 }
 
 ///
@@ -1108,6 +1127,16 @@ pub(crate) struct JitContext<'a> {
     /// refuses.
     ///
     pub(crate) ivar_ty_deps: Vec<crate::ivar_ty::IvarTyDep>,
+    /// The `is_a?` answers this unit folded (`crate::ancestry`), and the
+    /// method resolutions its inline generators folded on top of the call
+    /// sites' own (`respond_to?`'s question about *another* name). Both
+    /// are written by generators that hold a shared `JitContext`, hence
+    /// the cells; the latter joins `inline_method_cache` when the unit is
+    /// finished. A generator that pushed and then declined leaves its
+    /// entry behind: a conservative extra question for the salvage, never
+    /// a wrong answer.
+    pub(crate) ancestry_deps: std::cell::RefCell<Vec<crate::ancestry::AncestryDep>>,
+    pub(crate) inline_cache_extra: std::cell::RefCell<Vec<InlineCacheEntry>>,
 
     ///
     /// Every constant this compilation folded (root body and inlined
@@ -1269,6 +1298,8 @@ impl<'a> JitContext<'a> {
             inline_method_cache: vec![],
             singleton_deps: vec![],
             ivar_ty_deps: vec![],
+            ancestry_deps: Default::default(),
+            inline_cache_extra: Default::default(),
             const_fold_cache: vec![],
             bop_deps: vec![],
             stack_frame,
@@ -1357,6 +1388,8 @@ impl<'a> JitContext<'a> {
             inline_method_cache: vec![],
             singleton_deps: vec![],
             ivar_ty_deps: vec![],
+            ancestry_deps: Default::default(),
+            inline_cache_extra: Default::default(),
             const_fold_cache: vec![],
             bop_deps: vec![],
             stack_frame,
@@ -3523,22 +3556,93 @@ impl<'a> JitContext<'a> {
     /// Report that the condition flags now hold the truth value of `slot`
     /// (which [`wants_cond_flags`](Self::wants_cond_flags) offered).
     pub(crate) fn set_cond_flags(&self, slot: SlotId, flags: CondFlags) {
+        self.set_cond_flags_narrowing(slot, flags, None);
+    }
+
+    /// [`set_cond_flags`](Self::set_cond_flags), plus what the branch on
+    /// the flags proves about another slot (see [`FlagsNarrow`]).
+    pub(crate) fn set_cond_flags_narrowing(
+        &self,
+        slot: SlotId,
+        flags: CondFlags,
+        narrow: Option<FlagsNarrow>,
+    ) {
         debug_assert_eq!(self.wants_cond_flags(Some(slot)), Some(slot));
         self.cond_flags.set(Some(PendingFlags {
             slot,
             flags,
             depth: self.stack_frame_len(),
+            narrow,
         }));
     }
 
-    /// Take the flags left for `slot` in the frame being compiled, if any.
-    pub(super) fn take_cond_flags(&self, slot: SlotId) -> Option<CondFlags> {
+    /// [`set_cond_flags`](Self::set_cond_flags) for a class predicate on
+    /// `recv` lowered under a membership guard: the branch narrows `recv`
+    /// to the join of the classes answering `true` on its true side and of
+    /// those answering `false` on the other.
+    pub(crate) fn set_cond_flags_class_split(
+        &self,
+        slot: SlotId,
+        flags: CondFlags,
+        recv: SlotId,
+        when_true: &[CachedClass],
+        when_false: &[CachedClass],
+    ) {
+        self.set_cond_flags_narrowing(
+            slot,
+            flags,
+            Some(FlagsNarrow {
+                slot: recv,
+                when_true: Guarded::from_cached_set(when_true),
+                when_false: Guarded::from_cached_set(when_false),
+            }),
+        );
+    }
+
+    /// Record that this unit's code assumes `class`'s instances answer
+    /// `is_a?(target)` with `answer` (see `crate::ancestry`).
+    pub(crate) fn assume_ancestry(&self, class: ClassId, target: ClassId, answer: bool) {
+        let dep = crate::ancestry::AncestryDep {
+            class,
+            target,
+            answer,
+        };
+        let mut deps = self.ancestry_deps.borrow_mut();
+        if !deps.contains(&dep) {
+            deps.push(dep);
+        }
+    }
+
+    /// Record that this unit's code assumes `name` resolves to `func_id`
+    /// on `class` (`None`: no such method), a question the class-version
+    /// salvage re-asks like a call site's own resolution.
+    pub(crate) fn assume_resolution(
+        &self,
+        class: CachedClass,
+        name: IdentId,
+        func_id: Option<FuncId>,
+    ) {
+        let entry = InlineCacheEntry {
+            recv_class: class,
+            name: Some(name),
+            refinements: self.refinements(),
+            func_id,
+        };
+        let mut extra = self.inline_cache_extra.borrow_mut();
+        if !extra.contains(&entry) {
+            extra.push(entry);
+        }
+    }
+
+    /// Take the flags left for `slot` in the frame being compiled, if any,
+    /// with the narrowing the branch on them establishes.
+    pub(super) fn take_cond_flags(&self, slot: SlotId) -> Option<(CondFlags, Option<FlagsNarrow>)> {
         let pending = self
             .cond_flags
             .get()
             .filter(|p| p.slot == slot && p.depth == self.stack_frame_len())?;
         self.cond_flags.set(None);
-        Some(pending.flags)
+        Some((pending.flags, pending.narrow))
     }
 
     /// Whether flags are pending in the frame being compiled.

@@ -126,6 +126,7 @@ impl Codegen {
             | AsmInst::FixnumBitNot { .. }
             | AsmInst::GuardArrayTy(..)
             | AsmInst::KindOfConst { .. }
+            | AsmInst::ClassInToBool(..)
             | AsmInst::GuardFrozen { .. }
             | AsmInst::LoadIVarInline { .. }
             | AsmInst::StoreIVarInline { .. }
@@ -724,6 +725,29 @@ impl Codegen {
             }
             LInst::GuardArrayTy { reg, deopt } => self.guard_array_ty(reg, &deopt),
             LInst::KindOfConst { reg, class } => self.kind_of_const(reg, class),
+            // The `GuardClassIn` chain with a boolean in rax instead of a
+            // side exit: a hit on any candidate is `true`, falling off the
+            // end is `false`.
+            LInst::ClassInToBool { reg, classes } => {
+                assert!(!matches!(reg, GP::Rax));
+                let hit = self.jit.label();
+                let exit = self.jit.label();
+                for class in classes.iter() {
+                    let next = self.jit.label();
+                    self.guard_class(reg, *class, &next);
+                    monoasm!( &mut self.jit,
+                        jmp hit;
+                    );
+                    self.jit.bind_label(next);
+                }
+                monoasm!( &mut self.jit,
+                    movq rax, (FALSE_VALUE);
+                    jmp exit;
+                hit:
+                    movq rax, (TRUE_VALUE);
+                exit:
+                );
+            }
             LInst::GuardFrozen { deopt } => self.guard_frozen(&deopt),
             // Constant-load base-class guard: deopt unless the accumulator equals
             // the cached base class.
