@@ -383,7 +383,7 @@ fn wrapping_chains() {
 }
 
 /// Consumers the fusion must not accept: no mask, a negative mask, a mask
-/// at or above 2^64, a Float further down the chain, a local as the
+/// at or above 2^64, a Float operand further down the chain, a local as the
 /// intermediate. Each keeps the checked form and the exact answer.
 #[test]
 fn no_fusion_for_other_consumers() {
@@ -391,7 +391,7 @@ fn no_fusion_for_other_consumers() {
         r##"
         def f(a, b, fl)
           t = a * b
-          [(a << 3) | b, (a + b) & -1, (a * b) & (2**64 + 0xff), (a + b) * 1.5, ((a + b) + fl) & M, t & M,
+          [(a << 3) | b, (a + b) & -1, (a * b) & (2**64 + 0xff), (a + b) * 1.5, ((a + b) + fl), t & M,
            (a * b) + 1 & M, ((a << 10) >> 2) & M, (a - b) & M, (b - a)]
         end
         out = []
