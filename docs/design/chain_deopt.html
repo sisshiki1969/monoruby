@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d7482bfa.js";
+            window.path_to_searchindex_js = "../searchindex-a72d176c.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -189,15 +189,12 @@ was written against — is gone (§10). The <strong>escalation half of step 4</s
 switch that makes every interpreter-resuming side exit run the
 chain-deopt walk, plus the runtime entry it calls — is in place and <strong>on by
 default in every build</strong> (§8.5; the former <code>chain-deopt</code> validation feature
-is gone). <strong>The speculation itself (§5 steps 4–5) is implemented</strong> — see
-§11 for what shipped: qualifying block-passing specialized call sites keep
-pure-<code>F</code> (and Float-literal) locals unboxed across the call, specialized
-blocks in the subtree read/write them in the speculating frame’s FP
-save/spill area (<code>Load/StoreDynVarSpeculatedF</code>), a non-Float store
-compiles to <code>load_fpr</code>’s Float guard whose escalated deopt converts the
-chain <em>before</em> the offending store, and a compile-time-known non-Float
-store (or any capture-capable construct in the subtree) poisons the
-attempt, which recompiles unspeculated. The return-state recovery (§6) is
+is gone). <strong>The speculation itself (§5 steps 4–5) was built and has since been
+removed</strong> — §11 records what shipped; its last residue (the per-frame
+<code>speculated_floats</code> / <code>speculation_poisoned</code> fields and the
+<code>capture_events</code> counter, all written but never read) went in 2026-10.
+What stays is the escalation half, which the return-type flow between
+specialized frames needs on its own. The return-state recovery (§6) is
 not implemented. §9 stays as the record
 of why the original lazy build was wrong.</p>
 <hr>
@@ -767,7 +764,9 @@ or a finalizer run from the poll does the redefinition.</p>
 sees, and it polls nothing until resumed. Regression tests:
 <code>builtins::thread::tests::bop_redefinition_reaches_*</code> (parked, parked in a
 fiber, yielded through <code>Thread.pass</code>, preempted at a poll).</p>
-<h2 id="11-the-speculation-as-shipped-5-steps-45"><a class="header" href="#11-the-speculation-as-shipped-5-steps-45">11. The speculation as shipped (§5 steps 4–5)</a></h2>
+<h2 id="11-the-speculation-as-shipped-5-steps-45--since-removed"><a class="header" href="#11-the-speculation-as-shipped-5-steps-45--since-removed">11. The speculation as shipped (§5 steps 4–5) — since removed</a></h2>
+<p><em>Historical.</em> None of the identifiers below exist in the tree any more;
+the section is kept as the record of the design that was tried.</p>
 <p><strong>Scope</strong> (§7, enforced by <code>float_speculation_qualifies</code> +
 poison hooks): a block-passing call site whose callee is a plain iseq and
 whose literal block is an iseq with no capture surface
