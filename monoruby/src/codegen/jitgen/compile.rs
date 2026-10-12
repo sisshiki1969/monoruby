@@ -78,10 +78,11 @@ impl<'a> JitContext<'a> {
             // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
             let deopt = ir.new_deopt_with_pc(&state, pc + 1);
             ir.self2reg(GP::Rdi);
-            let self_class = self
-                .self_class()
-                .expect("a loop body is compiled for a concrete self class");
-            ir.push(AsmInst::GuardClass(GP::Rdi, CachedClass::from_class(self_class), deopt));
+            ir.push(AsmInst::GuardClass(
+                GP::Rdi,
+                CachedClass::from_class(self.self_class()),
+                deopt,
+            ));
             ir.push(AsmInst::Preparation);
             // Loop JIT runs inside an existing invoker / interpreter
             // frame, so its prologue isn't JIT-emitted. Any
@@ -923,11 +924,7 @@ impl<'a> JitContext<'a> {
                 state.store_constant(ir, src, id);
             }
             TraceIr::LoadIvar(dst, name, cache) => {
-                let Some(self_class) = self.self_class() else {
-                    // Self-generic body: the slot is looked up at run time.
-                    state.jit_load_ivar_generic(ir, name, dst);
-                    return Ok(CompileResult::Continue);
-                };
+                let self_class = self.self_class();
                 if let Some(ivarid) = self.store[self_class].get_ivarid(name) {
                     if let Some((cached_class, cached_ivarid)) = cache
                         && cached_class == self_class
@@ -942,11 +939,7 @@ impl<'a> JitContext<'a> {
                 }
             }
             TraceIr::StoreIvar(src, name, cache) => {
-                let Some(self_class) = self.self_class() else {
-                    state.jit_store_ivar_generic(ir, name, src);
-                    state.unset_side_effect_guard();
-                    return Ok(CompileResult::Continue);
-                };
+                let self_class = self.self_class();
                 if let Some(ivarid) = self.store[self_class].get_ivarid(name) {
                     if let Some((cached_class, cached_ivarid)) = cache
                         && cached_class == self_class

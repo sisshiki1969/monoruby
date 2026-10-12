@@ -117,9 +117,9 @@ pub struct JitBlockInfo {
     ///
     pub block_fid: FuncId,
     ///
-    /// `ClassId` of the *self* (`None`: no type information about *self*).
+    /// `ClassId` of the *self*.
     ///
-    pub self_class: Option<ClassId>,
+    pub self_class: ClassId,
     ///
     /// Offset of the outer frame. this must be > 0.
     ///
@@ -127,7 +127,7 @@ pub struct JitBlockInfo {
 }
 
 impl JitBlockInfo {
-    pub(super) fn new(block_fid: FuncId, self_class: Option<ClassId>, outer: usize) -> Self {
+    pub(super) fn new(block_fid: FuncId, self_class: ClassId, outer: usize) -> Self {
         Self {
             block_fid,
             self_class,
@@ -193,10 +193,9 @@ pub(in crate::codegen) struct AsmInfo {
     ///
     pub iseq_id: ISeqId,
     ///
-    /// `ClassId`` of *self*. `None` for a self-generic body, which is
-    /// compiled with no type information about *self*.
+    /// `ClassId`` of *self*.
     ///
-    pub self_class: Option<ClassId>,
+    pub self_class: ClassId,
     ///
     /// Object type of *self*.
     ///
@@ -746,32 +745,6 @@ pub(super) struct JitStackFrame {
     pub(super) float_return: bool,
 
     ///
-    /// Unboxed-locals speculation (`doc/chain_deopt.md` §5 steps 4–5):
-    /// non-empty exactly while this frame's qualifying block-passing
-    /// call site compiles its specialized subtree. Each entry is a
-    /// pure-`F` local kept unboxed across the call; a specialized block
-    /// in the subtree reads and writes it in this frame's FP save/spill
-    /// area (`Load/StoreDynVarSpeculatedF`) instead of the LFP slot.
-    ///
-    pub(super) speculated_floats: Vec<(SlotId, crate::codegen::FPReg)>,
-    ///
-    /// The site's `UsingFpr` snapshot, taken when the speculation set was
-    /// pinned. Pool-resident speculated floats live in the call's
-    /// cont-mode save area; a pool register's save-slot index is its
-    /// bit's rank in this snapshot (ascending bit order — the layout
-    /// `emit_fpr_save` writes and `ChainReplay` reads).
-    ///
-    pub(super) speculated_using_fpr: UsingFpr,
-    ///
-    /// Set when the speculated subtree compiled something that could
-    /// capture this frame or route a speculated slot onto the boxed
-    /// path (generic block-passing call, generic yield, block-handler
-    /// materialization, a no-capture invalidation reaching this frame).
-    /// The site then discards the subtree and recompiles it without
-    /// speculation.
-    ///
-    pub(super) speculation_poisoned: bool,
-    ///
     /// `ensure` regions of this frame with JIT-spliced non-local exits
     /// (issue #1185), keyed by the region's `EnsureEnd` bc index. Each
     /// half records the *stack position* the exit of that kind unwinds
@@ -851,10 +824,10 @@ impl JitStackFrame {
         specialize_level: usize,
         iseq_id: ISeqId,
         outer: Option<usize>,
-        self_class: Option<ClassId>,
+        self_class: ClassId,
         abstract_state: Option<AbstractFrame>,
     ) -> Self {
-        let self_ty = self_class.and_then(|class| store[class].instance_ty());
+        let self_ty = store[self_class].instance_ty();
         let is_not_block = store[store[iseq_id].func_id()].is_not_block();
         let mut basic_block_labels = HashMap::default();
         let mut labels = vec![];
@@ -919,9 +892,6 @@ impl JitStackFrame {
             needs_rest_array: false,
             has_boxed_return: false,
             float_return: false,
-            speculated_floats: vec![],
-            speculated_using_fpr: UsingFpr::default(),
-            speculation_poisoned: false,
             spliced_ensures: HashMap::default(),
             pending_splice_landing: None,
             landing_sink: false,
@@ -962,9 +932,6 @@ impl JitStackFrame {
             needs_rest_array: self.needs_rest_array,
             has_boxed_return: self.has_boxed_return,
             float_return: self.float_return,
-            speculated_floats: self.speculated_floats.clone(),
-            speculated_using_fpr: self.speculated_using_fpr,
-            speculation_poisoned: self.speculation_poisoned,
             spliced_ensures: self.spliced_ensures.clone(),
             pending_splice_landing: self.pending_splice_landing,
             landing_sink: self.landing_sink,
@@ -1075,12 +1042,6 @@ pub(crate) struct JitContext<'a> {
     /// the arms that know (see `JitContext::compile_instruction`).
     pub(super) elems_kind_keep: bool,
 
-
-    ///
-    /// Monotone count of capture-relevant compile events — see
-    /// [`Self::capture_events`].
-    ///
-    capture_events: usize,
 
     ///
     /// Set while an intra-block dispatch arm is being emitted
@@ -1300,7 +1261,6 @@ impl<'a> JitContext<'a> {
             unfrozen_slots: Vec::new(),
             instr_unfrozen: Vec::new(),
             elems_kind_keep: false,
-            capture_events: 0,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,
             class_version,
@@ -1389,7 +1349,6 @@ impl<'a> JitContext<'a> {
             unfrozen_slots: Vec::new(),
             instr_unfrozen: Vec::new(),
             elems_kind_keep: false,
-            capture_events: 0,
             in_dispatch_arm: false,
             in_set_guarded_arm: false,
             class_version: self.class_version,
@@ -1468,9 +1427,9 @@ impl<'a> JitContext<'a> {
     ///   Type information never crosses a unit boundary, so no caller
     ///   outside this unit can be holding a tag this frame's deopt would
     ///   invalidate.
-    /// * §5 step 5's unboxed-locals speculation. §7 scopes it to
-    ///   specialized `iseq_block` frames, so an unboxed local is only ever
-    ///   read across a frame boundary *inside* the unit.
+    /// * An unboxed local read across a frame boundary. Only a specialized
+    ///   block frame inside the unit can read an outer frame's unboxed
+    ///   `Float` (`doc/trace_chain_joins.md` §5), never a caller outside it.
     ///
     /// A frame at depth 0 is the unit's root: everything above it was
     /// entered through a call this compiler did not compile, holding no
@@ -1583,8 +1542,7 @@ impl<'a> JitContext<'a> {
         self.iseq().func_id()
     }
 
-    /// The class of *self*, `None` in a self-generic body.
-    pub(super) fn self_class(&self) -> Option<ClassId> {
+    pub(super) fn self_class(&self) -> ClassId {
         self.current_frame().self_class
     }
 
@@ -2342,7 +2300,6 @@ impl<'a> JitContext<'a> {
     /// Unset frame capture guard in the outer `JitFrame`s.
     ///
     pub(super) fn unset_outer_no_capture_guard(&mut self) {
-        self.capture_events += 1;
         // Stage-C loop adoption: deliberately *not* a claim barrier. This
         // fires conservatively at every block-literal call site (the
         // callee could heapify), but every such site also emits a runtime
@@ -2362,21 +2319,11 @@ impl<'a> JitContext<'a> {
                     .as_mut()
                     .unwrap()
                     .unset_no_capture_guard();
-                // A possible capture reaching a frame with unboxed
-                // speculated locals kills the speculation: a heapified
-                // copy of the frame would carry stale LFP slots for
-                // them (doc/chain_deopt.md §7).
-                if !frame.speculated_floats.is_empty() {
-                    frame.speculation_poisoned = true;
-                }
             } else {
                 return;
             }
         }
     }
-
-    // ===== Unboxed-locals speculation (doc/chain_deopt.md §5 steps 4–5) =====
-
 
     ///
     /// Whether any *suspended* frame of `[begin..end)` would need the
@@ -2945,12 +2892,9 @@ impl<'a> JitContext<'a> {
             stack_offset,
             base_stack_offset,
             spill_home_watermark,
-            speculation_poisoned,
             had_deopt,
             generic_yield,
             has_boxed_return,
-            speculated_using_fpr,
-            speculated_floats,
             spill_home_ids,
             return_context,
             abstract_state,
@@ -2960,13 +2904,10 @@ impl<'a> JitContext<'a> {
             stack_offset: *stack_offset,
             base_stack_offset: *base_stack_offset,
             spill_home_watermark: *spill_home_watermark,
-            speculation_poisoned: *speculation_poisoned,
             had_deopt: *had_deopt,
             generic_yield: *generic_yield,
             has_boxed_return: *has_boxed_return,
             ivar_heap_accessed: self.stack_frame[pos].ivar_heap_accessed,
-            speculated_using_fpr: *speculated_using_fpr,
-            speculated_floats: speculated_floats.clone(),
             spill_home_ids: spill_home_ids.clone(),
             return_context: return_context.clone(),
             jit_type: self.stack_frame[pos].jit_type.clone(),
@@ -2984,12 +2925,9 @@ impl<'a> JitContext<'a> {
         let spec_memo::FrameState {
             is_not_block: _,
             base_stack_offset: _,
-            speculated_using_fpr: _,
-            speculated_floats: _,
             jit_type: _,
             stack_offset: _,
             spill_home_watermark,
-            speculation_poisoned,
             had_deopt,
             generic_yield,
             has_boxed_return,
@@ -3000,7 +2938,6 @@ impl<'a> JitContext<'a> {
         } = state;
         let frame = &mut self.stack_frame[pos];
         frame.spill_home_watermark = *spill_home_watermark;
-        frame.speculation_poisoned = *speculation_poisoned;
         frame.had_deopt = *had_deopt;
         frame.generic_yield = *generic_yield;
         frame.has_boxed_return = *has_boxed_return;
@@ -3069,12 +3006,9 @@ impl<'a> JitContext<'a> {
             frame.is_not_block.hash(&mut h);
             frame.stack_offset.hash(&mut h);
             frame.base_stack_offset.hash(&mut h);
-            frame.speculated_floats.hash(&mut h);
-            frame.speculated_using_fpr.hash(&mut h);
             spec_memo::hash_parked(&frame.abstract_state, &mut h);
             frame.spill_home_watermark.hash(&mut h);
             frame.spill_home_ids.len().hash(&mut h);
-            frame.speculation_poisoned.hash(&mut h);
             frame.had_deopt.hash(&mut h);
             frame.generic_yield.hash(&mut h);
             frame.ivar_heap_accessed.hash(&mut h);
@@ -3087,7 +3021,6 @@ impl<'a> JitContext<'a> {
         spec_memo::CallMarks {
             widened: self.widened_outer_log.len(),
             kept: self.kept_outer_views.len(),
-            capture_events: self.capture_events,
             claim_barrier: self.outer_claim_barrier,
         }
     }
@@ -3105,7 +3038,6 @@ impl<'a> JitContext<'a> {
             widened: self.widened_outer_log[marks.widened..].to_vec(),
             kept: self.kept_outer_views[marks.kept..].to_vec(),
             claim_barrier: self.outer_claim_barrier && !marks.claim_barrier,
-            capture_events: self.capture_events - marks.capture_events,
             result,
         }
     }
@@ -3144,7 +3076,6 @@ impl<'a> JitContext<'a> {
         if effect.claim_barrier {
             self.outer_claim_barrier = true;
         }
-        self.capture_events += effect.capture_events;
         effect.result.clone()
     }
 

@@ -11,15 +11,12 @@ was written against — is gone (§10). The **escalation half of step 4** — th
 switch that makes every interpreter-resuming side exit run the
 chain-deopt walk, plus the runtime entry it calls — is in place and **on by
 default in every build** (§8.5; the former `chain-deopt` validation feature
-is gone). **The speculation itself (§5 steps 4–5) is implemented** — see
-§11 for what shipped: qualifying block-passing specialized call sites keep
-pure-`F` (and Float-literal) locals unboxed across the call, specialized
-blocks in the subtree read/write them in the speculating frame's FP
-save/spill area (`Load/StoreDynVarSpeculatedF`), a non-Float store
-compiles to `load_fpr`'s Float guard whose escalated deopt converts the
-chain *before* the offending store, and a compile-time-known non-Float
-store (or any capture-capable construct in the subtree) poisons the
-attempt, which recompiles unspeculated. The return-state recovery (§6) is
+is gone). **The speculation itself (§5 steps 4–5) was built and has since been
+removed** — §11 records what shipped; its last residue (the per-frame
+`speculated_floats` / `speculation_poisoned` fields and the
+`capture_events` counter, all written but never read) went in 2026-10.
+What stays is the escalation half, which the return-type flow between
+specialized frames needs on its own. The return-state recovery (§6) is
 not implemented. §9 stays as the record
 of why the original lazy build was wrong.
 
@@ -653,7 +650,10 @@ sees, and it polls nothing until resumed. Regression tests:
 `builtins::thread::tests::bop_redefinition_reaches_*` (parked, parked in a
 fiber, yielded through `Thread.pass`, preempted at a poll).
 
-## 11. The speculation as shipped (§5 steps 4–5)
+## 11. The speculation as shipped (§5 steps 4–5) — since removed
+
+*Historical.* None of the identifiers below exist in the tree any more;
+the section is kept as the record of the design that was tried.
 
 **Scope** (§7, enforced by `float_speculation_qualifies` +
 poison hooks): a block-passing call site whose callee is a plain iseq and

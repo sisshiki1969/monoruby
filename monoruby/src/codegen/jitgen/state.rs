@@ -1400,18 +1400,6 @@ impl ReturnState {
         self.invariants.side_effect_guard = false;
     }
 
-
-    #[allow(dead_code)] // retained for `taint_for_unmodeled_rescue` tests
-    pub(in crate::codegen::jitgen) fn const_folded(&self) -> Option<Value> {
-        if !self.invariants.side_effect_guard {
-            return None;
-        }
-        if let ReturnValue::Const(v) = self.ret {
-            return Some(v);
-        }
-        None
-    }
-
     pub(in crate::codegen::jitgen) fn join(&mut self, other: &Self) {
         self.invariants.join(&other.invariants);
         match (&self.ret, &other.ret) {
@@ -1589,8 +1577,8 @@ mod tests {
 
     /// `taint_for_unmodeled_rescue` must downgrade `Const`/`Class` to
     /// `Value` so `def_rax2acc_return` falls into the `ReturnValue::Value`
-    /// branch and uses `rax`, AND clear `side_effect_guard` so the earlier
-    /// `const_folded()` short-circuit cannot fire either. Both halves are
+    /// branch and uses `rax`, AND clear `side_effect_guard` so no caller
+    /// treats the result as a folded constant. Both halves are
     /// load-bearing for the issue #405 fix.
     #[test]
     fn taint_for_unmodeled_rescue_drops_const_and_side_effect_guard() {
@@ -1605,13 +1593,13 @@ mod tests {
                 ivar_ty_guard: false,
             },
         };
-        // Pre-condition: const-folding would fire.
-        assert!(s.const_folded().is_some());
+        // Pre-condition: a folded constant under an intact guard.
+        assert!(matches!(s.ret, ReturnValue::Const(_)));
+        assert!(s.invariants.side_effect_guard);
         s.taint_for_unmodeled_rescue();
         // Post-condition: ret is `Value` and const-folding is suppressed.
         assert!(matches!(s.ret, ReturnValue::Value));
         assert!(!s.invariants.side_effect_guard);
-        assert!(s.const_folded().is_none());
     }
 
     /// A typed claim is also unsafe — the rescue path may return a
