@@ -2183,6 +2183,36 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_arm_demoting_fixnum_float_cache() {
+        // hexapdf's `float_equal`: `a - b` with a fixnum `a` and a Float `b`
+        // leaves `a` as `Sf(Fixnum)` (its f64 copy cached beside the stack
+        // value), and the `<` behind it is polymorphic (`abs` is an Integer
+        // when both were). Under fpr pressure (`stress-spill-pool`) the
+        // compare's dispatch arm demotes that cache to make room; the merge
+        // target, declared before the arm, still carries it, so the arm's
+        // bridge has to convert the fixnum again (`S -> Sf(Fixnum)`), where
+        // it used to be an unreachable transition.
+        run_test_with_prelude(
+            r##"
+            r = 0
+            [[1.5, 2.5], [3, 2], [3, 2.5], [3.5, 2], [3, 2], [3, 2.5]].each do |a, b|
+              60.times { r += 1 if float_equal(a, b) }
+            end
+            [[3, 2.5], [3, 2], [3, 2.5]].each do |a, b|
+              60.times { r += 1 if float_equal(a, b) }
+            end
+            r
+        "##,
+            r##"
+            EPS = 1e-6
+            def float_equal(a, b)
+              (a - b).abs < EPS
+            end
+        "##,
+        );
+    }
+
+    #[test]
     fn int_div_quotient_overflow() {
         // `FIXNUM_MIN / -1 = 2**62` is the one fixnum quotient outside the
         // fixnum range: the JIT's tagging shift must deopt there so the

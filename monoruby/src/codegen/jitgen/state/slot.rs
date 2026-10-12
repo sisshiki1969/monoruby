@@ -3023,6 +3023,28 @@ impl AbstractFrame {
                     self.gen_fpr_swap(ir, x, tmp);
                 }
             }
+            (LinkMode::S(_), LinkMode::Sf(x, SfGuarded::Fixnum)) => {
+                // S -> Sf(Fixnum): re-materialize a fixnum's f64 cache. A
+                // dispatch arm under fpr pressure demotes an `Sf` it did not
+                // need to `S` (the stack is canonical, so nothing is emitted),
+                // and the merge target, declared from the pre-arm state,
+                // still carries the cache; the bridge converts the fixnum
+                // again. The class is normally already proved (the demote
+                // keeps the guard); a guard with a side exit covers the rest.
+                ir.stack2reg(slot, GP::Rdi);
+                if !self.is_class(slot, INTEGER_CLASS) {
+                    let deopt = ir.new_deopt_with_pc(&self, pc + 1);
+                    ir.push(AsmInst::GuardClass(GP::Rdi, CachedClass::INTEGER, deopt));
+                }
+                if self.is_fpr_vacant(x) {
+                    ir.fixnum2fpr(GP::Rdi, x);
+                    self.set_Sf(slot, x, SfGuarded::Fixnum);
+                } else {
+                    let tmp = self.set_new_Sf(slot, SfGuarded::Fixnum);
+                    ir.fixnum2fpr(GP::Rdi, tmp);
+                    self.gen_fpr_swap(ir, x, tmp);
+                }
+            }
             (LinkMode::S(_), LinkMode::F(x)) => {
                 // S -> F: one-time unbox of a boxed float into a pure-fpr
                 // binding (no boxed cache) — a loop pre-header entry adopting the
