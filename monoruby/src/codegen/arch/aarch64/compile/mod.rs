@@ -4429,26 +4429,22 @@ impl Codegen {
                 monoasm_arm64!(&mut self.jit, b deopt;);
                 self.jit.bind_label(done);
             }
-            // Counter-gated specialized recompile-or-deopt point (mirrors x86
-            // `recompile_and_deopt_specialized`).
+            // Specialized recompile-or-deopt point (mirrors x86
+            // `recompile_and_deopt_specialized`): it rebuilds the root unit,
+            // so it draws on the unit's one shared budget like every main-body
+            // `RecompileDeopt` (see `unit_recompile_budget`).
             AsmInst::RecompileDeoptSpecialized { idx, deopt, reason } => {
-                let global_idx = self.specialized_base + idx;
                 let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("recompile counter (specialized)"));
-                let counter =
-                    Box::into_raw(Box::new(COUNT_DEOPT_RECOMPILE_SPECIALIZED)) as u64;
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (counter);
-                    ldr w11, [x9];
-                    cmp w11, #0;
+                let counter = self
+                    .unit_recompile_counter
+                    .expect("RecompileDeoptSpecialized lowered outside jit_compile");
+                self.emit_recompile_deopt_on(
+                    RecompileTarget::Specialized(idx),
+                    &deopt,
+                    None,
+                    reason,
+                    counter,
                 );
-                self.jit.bcond_label(monoasm::Cond::Le, &deopt); // <= 0 -> deopt
-                monoasm_arm64!(&mut self.jit,
-                    sub w11, w11, #1;
-                    str w11, [x9];
-                    cbnz w11, deopt;                 // not yet exhausted -> deopt
-                );
-                self.a64_call_recompile_specialized(global_idx, reason);
-                monoasm_arm64!(&mut self.jit, b deopt;);
             }
             AsmInst::SetArgumentsForwarded {
                 callid,

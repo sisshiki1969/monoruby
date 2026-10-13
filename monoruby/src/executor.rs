@@ -5669,9 +5669,12 @@ pub enum RecompileReason {
     /// never pass again, so *every* subsequent execution deopts — one
     /// `CONST = ...` anywhere in the program used to poison the body for
     /// good. Recompiling re-reads the constant at the new version and
-    /// bakes that in. Counter-gated (`COUNT_DEOPT_RECOMPILE`) because,
-    /// unlike the class version, the constant version keeps moving in
-    /// programs that assign constants at run time.
+    /// bakes that in. No counter gates it: the guard's miss handler first
+    /// salvages (`Store::salvage_const_unit` — a fold whose names did not
+    /// move, or whose refreshed VM cache still holds the same value, just
+    /// re-stamps the unit's version word), defers at most three times
+    /// while a suspect site's VM cache is still stale, and only recompiles
+    /// when a fold really changed. Block-style roots salvage only.
     ConstVersionGuardFailed = 5,
     /// A loop JIT's entry guard on a slot type predicted from the code
     /// before the loop (`codegen/jitgen/compile/loop_entry.rs`) missed.

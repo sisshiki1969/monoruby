@@ -77,6 +77,13 @@ impl Codegen {
                     self.a64_far_branch(&vm_entry, false);
                 } else {
                     let counter_addr = Box::into_raw(Box::new(COUNT_START_COMPILE)) as u64;
+                    let entry_addr = self.jit.get_label_address(&entry).as_ptr() as u64;
+                    self.jit_stubs.insert(
+                        entry_addr,
+                        JitStub {
+                            counter: counter_addr,
+                        },
+                    );
                     let jit_slot = Box::into_raw(Box::new(0u64)) as u64;
                     let run_jit = self.jit.label();
                     let compile_hot = self.jit.label();

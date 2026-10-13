@@ -110,6 +110,21 @@ const COUNT_DEOPT_RECOMPILE: i32 = 10;
 const MAX_RECOMPILES_PER_METHOD: u32 = 4;
 const COUNT_DEOPT_RECOMPILE_SPECIALIZED: i32 = 50;
 
+/// A wrapper's method-JIT warm-up stub (see `Codegen::jit_stubs`).
+#[derive(Clone)]
+struct JitStub {
+    /// The stub's counting code, right behind the wrapper's patchable entry
+    /// jump (x86: the jump goes there until the method is compiled).
+    #[cfg(target_arch = "x86_64")]
+    cont: DestLabel,
+    /// The warm-up counter word.
+    #[cfg(target_arch = "x86_64")]
+    counter: DestLabel,
+    /// The warm-up counter word (heap-leaked).
+    #[cfg(target_arch = "aarch64")]
+    counter: u64,
+}
+
 /// AsmIr instructions of a unit per `RecompileDeopt` hit its recompile
 /// budget allows (see `unit_recompile_budget`).
 const UNIT_RECOMPILE_INSTS_PER_DEOPT: usize = 32;
@@ -121,7 +136,9 @@ const UNIT_RECOMPILE_INSTS_PER_DEOPT: usize = 32;
 /// unit is recompiled.
 ///
 /// The budget is shared by every such exit of the unit rather than counted
-/// per exit, and it grows with the unit's size. A recompile rebuilds the
+/// per exit — those of the specialized bodies the unit contains as well,
+/// since their recompile rebuilds the same root unit — and it grows with
+/// the unit's size. A recompile rebuilds the
 /// whole unit, so its cost is proportional to the unit's size, while each
 /// deopt costs roughly the same whatever the unit: paying for a recompile
 /// only after the deopts have cost a comparable amount bounds the waste
@@ -925,14 +942,19 @@ pub struct Codegen {
     /// The id is how `AsmInst::ChainExit` — pushed after the call, when the
     /// address itself is no longer at hand — names the site it belongs to.
     asm_return_addr_table: HashMap<AsmEvict, CodePtr>,
-    /// `BecamePolymorphic` whole-method recompiles performed per (iseq,
-    /// self class). A body whose polymorphism keeps changing would
-    /// otherwise recompile forever — each fresh body carries a fresh deopt
-    /// budget — so past `MAX_RECOMPILES_PER_METHOD` the current body is
-    /// kept and its exhausted budget leaves it deopting plainly. Version
-    /// guard failures are not counted (see
-    /// `Codegen::recompile_budget_exhausted`).
-    recompile_counts: HashMap<(ISeqId, ClassId), u32>,
+    /// `BecamePolymorphic` recompiles performed per compilation unit: (iseq,
+    /// self class) for a whole method, plus the loop head for a loop. A
+    /// body whose polymorphism keeps changing would otherwise recompile
+    /// forever — each fresh body carries a fresh deopt budget — so past
+    /// `MAX_RECOMPILES_PER_METHOD` the current body is kept and its
+    /// exhausted budget leaves it deopting plainly. Version guard failures
+    /// are not counted (see `Codegen::recompile_budget_exhausted`).
+    recompile_counts: HashMap<(ISeqId, ClassId, Option<BcIndex>), u32>,
+    /// The method-JIT warm-up stub of each ISeq wrapper, keyed by the
+    /// wrapper's entry address: what `Codegen::rearm_jit_stub` needs to put
+    /// the stub back in front of a method whose compiled code a basic-op
+    /// redefinition evicted, so the method warms up and compiles again.
+    jit_stubs: HashMap<u64, JitStub>,
     /// Loop-entry type seeding, per loop (iseq, loop head): what each
     /// loop's current compile guards and which slots earlier entry-guard
     /// misses vetoed (`jitgen/compile/loop_entry.rs`).
@@ -1433,6 +1455,7 @@ impl Codegen {
             compilation_unit: Vec::new(),
             asm_return_addr_table: HashMap::default(),
             recompile_counts: HashMap::default(),
+            jit_stubs: HashMap::default(),
             loop_seeds: HashMap::default(),
             loop_predictions: HashMap::default(),
             loop_seed_input: None,

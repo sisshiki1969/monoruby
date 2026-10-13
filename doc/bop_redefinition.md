@@ -588,6 +588,13 @@ JIT コードを一方向ラッチ (`jit_invalidated`) で恒久的に捨てて�
    コンパイル不能）と「コードを捨てた」を同じフラグで表していた。前者は
    `invalidate_jit_code`、後者は**回復可能な** `evict_jit_code` とし、捨てた
    本体は次のウォームアップで再コンパイルされる。
+   （実際には長らくそうなっていなかった: x86 は退避したメソッドの entry を
+   `vm_entry` に戻していたが、`vm_entry` はウォームアップ stub を通らないので
+   メソッド JIT が二度と再開せず、aarch64 も stub のカウンタが 0 のまま
+   (以後 -1 から数え下ろす) だった。今は `Codegen::rearm_jit_stub` が
+   wrapper のウォームアップ stub を entry の後ろに戻し、カウンタを
+   `COUNT_START_COMPILE` に再装填する。回帰テストは
+   `evicted_method_recompiles_with_the_redefined_operator`。）
 5. `check_bop_redefine` の**レベルトリガを解消**（§1.3）。`bop_eviction_pending`
    を `set_bop_redefine` が立て、直後の `check_bop_redefine` が消費する。
    従来は sticky フラグを読んでいたため、一度どれかを再定義したプログラムでは

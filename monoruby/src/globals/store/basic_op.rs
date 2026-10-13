@@ -644,6 +644,26 @@ mod tests {
         );
     }
 
+    /// An evicted method warms up and compiles again (its wrapper's warm-up
+    /// stub is re-armed, `Codegen::rearm_jit_stub`), and the fresh body
+    /// must call the redefined operator rather than inline the builtin.
+    #[test]
+    fn evicted_method_recompiles_with_the_redefined_operator() {
+        run_test_once(
+            r#"
+            def sub1(a) = a - 1
+            res = []
+            60.times { |i| res << sub1(i) }
+            class Integer
+              alias __minus -
+              def -(o) = __minus(o) * 10
+            end
+            200.times { |i| res << sub1(i) }
+            res
+        "#,
+        );
+    }
+
     /// The other half: a redefinition of an operator the compiled body never
     /// inlined must leave that body alone. Only observable as behaviour in
     /// that the results stay right, but the property under test is that
