@@ -106,7 +106,9 @@ impl Codegen {
     fn gen_jit_stub(&mut self) {
         let vm_entry = self.vm_entry();
         let entry = self.jit.label();
-        self.gen_compile_patch(&vm_entry, &entry, COUNT_START_COMPILE);
+        let entry_addr = self.jit.get_current_address().as_ptr() as u64;
+        let (cont, counter) = self.gen_compile_patch(&vm_entry, &entry, COUNT_START_COMPILE);
+        self.jit_stubs.insert(entry_addr, JitStub { cont, counter });
     }
 
     fn gen_vm_stub(&mut self) {

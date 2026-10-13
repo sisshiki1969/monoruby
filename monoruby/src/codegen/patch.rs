@@ -228,7 +228,7 @@ impl Codegen {
 
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
-        self.gen_compile_patch(&exit, &failed, COUNT_RECOMPILE_ARECV_CLASS);
+        let _ = self.gen_compile_patch(&exit, &failed, COUNT_RECOMPILE_ARECV_CLASS);
         self.jit.select_page(0);
     }
 }

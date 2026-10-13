@@ -35,7 +35,7 @@ impl Codegen {
         no_compile_exit: &DestLabel,
         entry: &DestLabel,
         counter: i32,
-    ) {
+    ) -> (DestLabel, DestLabel) {
         let counter = self.jit.data_i32(counter);
         let cont = self.jit.label();
         let patch_point_addr = self.jit.get_current_address();
@@ -60,6 +60,38 @@ impl Codegen {
             addq rsp, 4088;
             jmp entry;
         }
+        (cont, counter)
+    }
+
+    ///
+    /// Put the method-JIT warm-up stub back in front of the wrapper whose
+    /// entry is at *entry*, with a full warm-up count, after a basic-op
+    /// redefinition evicted the method's compiled code. The method then
+    /// interprets, warms up and compiles again — now without the redefined
+    /// operator inlined — like a method that was never compiled. Returns
+    /// `false` when the wrapper has no stub (`--no-jit`, a trivial body).
+    ///
+    pub(crate) fn rearm_jit_stub(&mut self, entry: monoasm::CodePtr) -> bool {
+        let Some(stub) = self.jit_stubs.get(&(entry.as_ptr() as u64)).cloned() else {
+            return false;
+        };
+        #[cfg(target_arch = "x86_64")]
+        {
+            let counter = self.jit.get_label_address(&stub.counter).as_ptr() as *mut i32;
+            // SAFETY: the stub's counter is a 4-byte JIT data word the stub
+            // itself decrements in place, alive for the process.
+            unsafe { *counter = COUNT_START_COMPILE };
+            self.jit.apply_jmp_patch_address(entry, &stub.cont);
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            // The wrapper's dispatch slot was zeroed by the eviction
+            // (`ISeqInfo::drop_jit_code`), so the wrapper is counting again.
+            // SAFETY: heap-leaked i32 created by `gen_wrapper`, alive for the
+            // process; written under the GVL like every JIT word.
+            unsafe { *(stub.counter as *mut i32) = COUNT_START_COMPILE };
+        }
+        true
     }
 
     ///
@@ -380,8 +412,9 @@ impl Codegen {
         }
     }
 
-    /// Whether a `BecamePolymorphic` recompile of `(iseq_id, self_class)`
-    /// would exceed `MAX_RECOMPILES_PER_METHOD`. Only that reason is
+    /// Whether a `BecamePolymorphic` recompile of the unit `(iseq_id,
+    /// self_class[, loop])` would exceed `MAX_RECOMPILES_PER_METHOD`
+    /// (`loop` is the loop head of a loop unit, `None` for a method). Only that reason is
     /// budgeted: it is the one a body can request over and over (each fresh
     /// body starts with a fresh `COUNT_DEOPT_RECOMPILE` budget, and a site
     /// that overflowed its PIC misses again just as often in the new body),
@@ -391,12 +424,16 @@ impl Codegen {
         &mut self,
         iseq_id: ISeqId,
         self_class: ClassId,
+        loop_index: Option<BcIndex>,
         reason: RecompileReason,
     ) -> bool {
         if !matches!(reason, RecompileReason::BecamePolymorphic) {
             return false;
         }
-        let n = self.recompile_counts.entry((iseq_id, self_class)).or_insert(0);
+        let n = self
+            .recompile_counts
+            .entry((iseq_id, self_class, loop_index))
+            .or_insert(0);
         *n += 1;
         if *n > MAX_RECOMPILES_PER_METHOD {
             #[cfg(feature = "jit-log")]
@@ -463,7 +500,7 @@ impl Codegen {
             }
             _ => &crate::codegen::jit_stats::RECOMPILE_METHOD_OTHER,
         });
-        if self.recompile_budget_exhausted(iseq_id, self_class, reason) {
+        if self.recompile_budget_exhausted(iseq_id, self_class, None, reason) {
             return None;
         }
         // Bail *before* compiling when there is no patch point to install
@@ -537,7 +574,7 @@ impl Codegen {
         if globals.store[iseq_id].jit_invalidated() {
             return None;
         }
-        if self.recompile_budget_exhausted(iseq_id, self_class, reason) {
+        if self.recompile_budget_exhausted(iseq_id, self_class, None, reason) {
             return None;
         }
         let slot = globals.store[iseq_id].get_jit_slot(self_class)?;
@@ -616,6 +653,12 @@ impl Codegen {
         let class_version = self.jit_class_version();
         let index = globals.store[iseq_id].get_pc_index(Some(pc));
         if let Some(reason) = is_recompile {
+            // The loop twin of the whole-method budget: without it a loop
+            // whose sites keep turning polymorphic recompiled without limit.
+            // Bail before touching anything; the current body stays.
+            if self.recompile_budget_exhausted(iseq_id, self_class, Some(index), reason) {
+                return None;
+            }
             self.note_loop_hoist_miss(iseq_id, reason);
         }
         let record = self.loop_seeds.entry((iseq_id, index)).or_default();
@@ -984,11 +1027,22 @@ pub(in crate::codegen) extern "C" fn jit_profile_patch(
                 .compile_patch(globals, lfp, entry_patch_point);
         });
     } else {
-        // Not hot yet — keep interpreting and sample again later.
+        // Not hot yet — keep interpreting and sample again later, after the
+        // interval the stub was armed with: `COUNT_START_COMPILE` for the
+        // wrapper's stub of a method with no compiled body yet, and
+        // `COUNT_RECOMPILE_ARECV_CLASS` for the stub at the end of a
+        // class-guard chain, i.e. once some self class is compiled (that
+        // stub used to be re-armed with the wrapper's interval too, so a
+        // second class took 5 + 20 calls instead of 5 + 5).
+        let rearm = if !globals.store[iseq_id].has_jit_entry() {
+            COUNT_START_COMPILE
+        } else {
+            COUNT_RECOMPILE_ARECV_CLASS
+        };
         // SAFETY: `counter_addr` is the address of the calling stub's own i32
         // warm-up counter (a heap-leaked word on aarch64, a JIT data slot on
         // x86); the stub passes its own counter's address.
-        unsafe { *counter_addr = COUNT_START_COMPILE };
+        unsafe { *counter_addr = rearm };
     }
 }
 

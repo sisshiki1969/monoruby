@@ -2910,29 +2910,33 @@ impl Store {
             if stale.is_empty() {
                 return;
             }
-            // Revert the evicted methods' entry jumps back to `vm_entry`, so
-            // the next call re-enters the interpreter and re-warms.
-            // x86-only: this uses the x86 `apply_jmp_patch_address` to rewrite
-            // the entry jumps in place. (aarch64 instead zeroes the dispatch
-            // slots, which `evict_jit_code` has already done.)
+            // Put each evicted method's warm-up stub back in front of it, so
+            // the next call interprets, re-warms and compiles it again — now
+            // without the redefined operator inlined. x86 rewrites the entry
+            // jump (left pointing at the dropped class-guard chain); aarch64's
+            // dispatch slots were zeroed by `evict_jit_code`, so only the
+            // counter needs resetting there. A wrapper without a stub falls
+            // back to `vm_entry` on x86 (it interprets for good).
             #[cfg(target_arch = "x86_64")]
-            {
-                let vm_entry = codegen.vm_entry();
-                for func in self.functions.functions() {
-                    if let Some(iseq) = func.is_iseq() {
-                        // Skip trivial methods (a hinted body) — their
-                        // wrappers don't execute bytecode and contain no BOP
-                        // usage, so patching them to vm_entry would break it.
-                        // The wrapper reads the hint only for a method: a
-                        // block's wrapper runs its bytecode whatever the
-                        // hint says, so a hinted block still needs the
-                        // revert.
-                        if (func.is_not_block() && self[iseq].hint != ISeqHint::Normal)
-                            || !stale.contains(&iseq)
-                        {
-                            continue;
-                        }
-                        let entry = codegen.jit.get_label_address(&func.entry_label());
+            let vm_entry = codegen.vm_entry();
+            for func in self.functions.functions() {
+                if let Some(iseq) = func.is_iseq() {
+                    // Skip trivial methods (a hinted body) — their
+                    // wrappers don't execute bytecode and contain no BOP
+                    // usage, so patching their entries would break them.
+                    // The wrapper reads the hint only for a method: a
+                    // block's wrapper runs its bytecode whatever the
+                    // hint says, so a hinted block still needs the
+                    // revert.
+                    if (func.is_not_block() && self[iseq].hint != ISeqHint::Normal)
+                        || !stale.contains(&iseq)
+                    {
+                        continue;
+                    }
+                    let entry = codegen.jit.get_label_address(&func.entry_label());
+                    let _rearmed = codegen.rearm_jit_stub(entry);
+                    #[cfg(target_arch = "x86_64")]
+                    if !_rearmed {
                         codegen.jit.apply_jmp_patch_address(entry, &vm_entry);
                     }
                 }

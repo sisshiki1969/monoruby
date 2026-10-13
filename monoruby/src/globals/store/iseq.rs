@@ -1257,6 +1257,12 @@ impl ISeqInfo {
         }
     }
 
+    /// Does this method have a compiled whole-method body for some self
+    /// class (so its entry runs a class-guard chain)?
+    pub(crate) fn has_jit_entry(&self) -> bool {
+        !self.jit_entry.is_empty()
+    }
+
     #[cfg(feature = "jit-log")]
     pub(crate) fn jit_entry_classes(&self) -> Vec<ClassId> {
         self.jit_entry.keys().copied().collect()

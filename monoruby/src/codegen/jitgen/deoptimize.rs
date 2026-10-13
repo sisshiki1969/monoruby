@@ -25,6 +25,13 @@ impl Codegen {
         eprintln!(" => deopt");
     }
 
+    ///
+    /// A specialized body's recompile point. Its recompile rebuilds the
+    /// whole root unit (`Codegen::recompile_specialized`), so it draws on the
+    /// unit's one shared budget like every main-body `RecompileDeopt`
+    /// (`Codegen::unit_recompile_counter`, see `unit_recompile_budget`)
+    /// rather than on a counter of its own.
+    ///
     pub(super) fn recompile_and_deopt_specialized(
         &mut self,
         deopt: &DestLabel,
@@ -33,8 +40,12 @@ impl Codegen {
     ) {
         let recompile = self.jit.label();
         let dec = self.jit.label();
+        let counter = self
+            .unit_recompile_counter
+            .clone()
+            .expect("RecompileDeoptSpecialized lowered outside jit_compile");
 
-        self.dec_counter(&dec, &recompile, deopt, COUNT_DEOPT_RECOMPILE_SPECIALIZED);
+        self.dec_shared_counter(&dec, &recompile, deopt, &counter);
 
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
@@ -46,17 +57,6 @@ impl Codegen {
         self.jit.select_page(0);
         #[cfg(feature = "jit-debug")]
         eprintln!(" => deopt_specialized");
-    }
-
-    fn dec_counter(
-        &mut self,
-        dec: &DestLabel,
-        recompile: &DestLabel,
-        deopt: &DestLabel,
-        count: i32,
-    ) {
-        let counter = self.jit.data_i32(count);
-        self.dec_shared_counter(dec, recompile, deopt, &counter);
     }
 
     fn dec_shared_counter(
