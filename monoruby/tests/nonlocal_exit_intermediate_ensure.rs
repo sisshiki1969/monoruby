@@ -349,3 +349,35 @@ fn a_degenerate_break_still_raises_local_jump_error() {
         "#,
     );
 }
+
+/// The host's `ensure` body carries a `begin`/`rescue` of its own. Its
+/// handler sits inside the forward scan that pairs the body with its
+/// `EnsureEnd`, and the handler's clause-match opcode is one `from_pc`
+/// refuses to decode — the scan used to panic on it instead of stepping
+/// over it and (as it must, the nested handler breaking the pairing)
+/// declining the splice.
+#[test]
+fn an_intermediate_ensure_with_a_nested_rescue_in_its_body() {
+    run_test(
+        r#"
+        $n = 0
+        def mid(arr)
+          begin
+            arr.each { |y| yield y }
+          ensure
+            begin
+              raise "e" if $n % 3 == 0
+            rescue RuntimeError
+              $n += 10
+            end
+            $n += 1
+          end
+          :fell_through
+        end
+        arr = [1, 2, 3, 4, 5]
+        r = []
+        40.times { |i| r << mid(arr) { |x| break x * 10 if x == 3 } }
+        [r.uniq, $n]
+        "#,
+    );
+}

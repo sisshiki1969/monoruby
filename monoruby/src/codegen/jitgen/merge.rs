@@ -670,11 +670,15 @@ impl<'a> JitContext<'a> {
         let end = iseq.bb_info[loop_end].end;
         let mut pos = begin;
         while pos <= end {
-            if let TraceIr::Index {
-                base,
-                class: Some((base_class, idx_class)),
-                ..
-            } = TraceIr::from_pc(iseq.get_pc(pos), self.store)
+            // The range is scanned linearly and may span a `rescue`
+            // handler, whose clause-match opcodes `from_pc` refuses.
+            let pc = iseq.get_pc(pos);
+            if !pc.is_handler_only()
+                && let TraceIr::Index {
+                    base,
+                    class: Some((base_class, idx_class)),
+                    ..
+                } = TraceIr::from_pc(pc, self.store)
                 && base == slot
                 && base_class.id() == ARRAY_CLASS
                 && idx_class == CachedClass::INTEGER

@@ -725,6 +725,7 @@
 215aa4af8c863ad665773263bec5b5b6	[[true, true, true], "345", "closed stream", "closed stream", "01XY456789", "Errno::ENOTTY", "closed stream"]	path = "/tmp/monoruby_test_iodup_#{Process.pid}_#{rand(100000)}"\n  
 21644521b8885b6a2269e71105c1a8fc	[:in_thread, :in_main, :value_raises]	r = []\n            ready = false\n            t = Thread.new {\n     
 21715255d5b7d1640238dce91ff9244f	1	case 9\n        when 0,4,8\n          0\n        when 1,5,9\n          1\n  
+2196929d7c5f6714a479729f2b4cfe13	[[30], 240]	$n = 0\n        def mid(arr)\n          begin\n            arr.each { |y| 
 21978a61b3437a37e4576edf77547099	1	def nil.foo; 1; end\n            nil.foo\n            
 21c9333fc83d8b5a0cca96f269070205	["1", "2", "3"]	def forward(&b); [1,2,3].map(&b); end\n              forward(&:to_
 21dffe80f4a67a17b59081792a74c142	[[[97, 255, 98], "ASCII-8BIT", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 255, 98, 255, 99], "ASCII-8BIT", true], [[97, 255, 254, 120, 98], "ASCII-8BIT", true], [[97, 255, 45, 98], "ASCII-8BIT", true], [[97, 255, 45, 92, 98], "ASCII-8BIT", true], [[97, 255, 45, 98], "ASCII-8BIT", true], [[97, 255, 45, 98], "ASCII-8BIT", true], [[97, 255, 92, 98], "ASCII-8BIT", true], [[97, 92, 255, 98], "ASCII-8BIT", true], [[97, 195, 169, 98], "ASCII-8BIT", true], [[97, 227, 129, 130, 98], "ASCII-8BIT", true], [[97, 255, 195, 169, 98], "ASCII-8BIT", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 120, 98], "UTF-8", true], [[97, 120, 98], "UTF-8", true], [[97, 255, 98], "Shift_JIS", false], [[97, 195, 169, 98], "Shift_JIS", true], [[97, 195, 169, 98], "Shift_JIS", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 195, 169, 98], "UTF-8", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 195, 169, 98], "UTF-8", true], [[97, 195, 169, 98], "UTF-8", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 255, 98], "ASCII-8BIT", true], [[97, 255, 98], "ASCII-8BIT", true], [5, true], [false, false, "-", "UTF-8"], [[97, 255, 99], "ASCII-8BIT", true], [[97, 255, 99], "ASCII-8BIT", true], [[97, 195, 169, 98, 120], "ASCII-8BIT", true], [[97, 255, 98], "UTF-8", false], [[97, 255, 98], "UTF-8", false], [[97, 255, 98], "UTF-8", false], [[97, 255, 98], "UTF-8", false]]	r = ->(s) { [s.bytes, s.encoding.to_s, s.valid_encoding?] }\n        bin
@@ -1602,6 +1603,7 @@
 4c3cdf6fdb768ce2061972f6724dd416	42	class Foo\n              def initialize(x)\n                @x = x\n  
 4c417c7d5c4ca0cfc5e0182ee4cb0ce0	[true, true, true, true, true, true, true, "[[...]]", "{x: {...}}"]	a = []\n        a << a\n        b = []\n        b << b\n        h = {}\n    
 4c481ad0d74eb5d480ba2f9bcd919877	[:ok, :private]	c = Class.new { def m; :ok; end }\n        o = c.new\n        res = []\n  
+4c61f19a9ce05fecf05e7b3f1a8fbaf2	[99, 114, 129, 144, 159, 174, 189, 204, 219, 234, 249, 264, 279, 294, 309, 324, 339, 354, 369, 384, 399, 414, 429, 444, 459, 474, 489, 504, 519, 534, 166.5, TypeError, 329]	def f(a, n)\n          i = 0\n          s = 0\n          while i < n\n     
 4c6323de719d0ad254c106b3de0e1ff1	99	b = binding\n            b.local_variable_set("bar", 99)\n           
 4c66c29f7a10c99487fbb86f19ded61a	false	File.file?("readme.md")
 4c684689028595f8c43df30bd9585c71	["\\"\\\\a\\"", "\\"hello \\\\u043F\\\\u0440\\\\u0438\\\\u0432\\\\u0435\\\\u0442\\"", "\\"\\\\u{1F600}\\"", "\\"\\\\u{1F600}\\"", "\\"\\\\x{A4A2}\\"", "\\"a\\\\x{82A0}b\\"", "\\"\\\\x{A4A2}\\\\x{A4A4}\\"", "\\"\\\\xC2\\\\xA9\\"", "\\"A\\\\x80B\\"", "\\"\\\\xA9\\"", "\\"\\\\t\\\\xA9z\\"", "[\\"a\\\\x{A4A2}b\\"]", "{k: \\"x\\"}", "ÄÖÜ HELLO", "äöü hello", "ÄöÜ hEllO", "Äöü hello", "UTF-16LE"]	__a = [];__a << ("\\a".encode("UTF-16LE").inspect);__a << ("hello привет".encode(
@@ -1638,6 +1640,7 @@
 4dc3c7705fa44c4b798281aa03f17a9d	[nil, 1, "ObjectSpace::WeakMap"]	kept = ObjectSpace::WeakMap.new\n        anchor = Object.new\n        kep
 4dc4d26946a9b8df8a8ab0edf49e3a8d	["constant", "constant", "constant", nil, nil, "constant"]	module CovM\n              CONST = 1\n              module Inner; DEE
 4dcb81b6869dcf441ba63e6d2c098346	[]	class S\n              def f; end\n            end\n            class 
+4dced38d06dcad776ab5870d1103e310	[NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError]	def g(n)\n          s0 = n * 0.5\n          i = 0\n          acc = 0.0\n   
 4dd5dee528c020148c21e64d9030085e	[2, "nil"]	n = 0\n        begin\n          n += 1\n          raise "b" if n < 2\n     
 4de1d98dbd401bf2cfb9c8d1c02844ba	[3, 3, true]	module Later; end\n        class Integer\n          prepend Later\n       
 4defe7bb5ad979e91a414effdfdd78fb	[true, false, true]	c = Class.new\n            c.class_variable_set(:@@x, 1)\n           
@@ -3587,6 +3590,7 @@ ae592d84c95871e8234f4dc3442a3db0	[:ok]	class VTest\n          def initialize; @h
 ae63fe71c4d5bee9c9ad35bf73642038	[true, true]	before = GC.count\n            GC.start\n            after = GC.count
 ae67028ed6bd7eea9010e301188d5c70	[-1, 1]	class Foo\n              def coerce(other)\n                [other.to
 ae6f79ff36cec9eed117b8ade45a005a	["L3", "L2", "L2", "L1", "nil"]	log = []\n            begin\n              raise "L1"\n            res
+ae824cfcbde8763f5e09552dd8d534cd	[114, 129, 144, 159, 174, 189, 204, 219, 234, 249, 264, 279, 294, 309, 324, 339, 354, 369, 384, 399, 414, 429, 444, 459, 474, 489, 504, 519, 534, 549, 154.0, ArgumentError]	def g(a, n, errs)\n          i = 0\n          s = 0\n          while i < n
 ae8479eaafd0bffd069c9a8a39e2b8f4	[:a, :b]	def m; a = 1; b = 2; local_variables.sort; end; m
 ae8bb532a5849f5cb7160f3f7ce192d7	[[1, 2], [10, 2], [10, 20], "wrong number of arguments (given 3, expected 1..2)", [1, 9], 3]	$effects = []\n            def g(a = ($effects << :a; 1), b = ($effe
 ae9c21fb0bcca31090458cf615bcd66d	[true, true, true, true]	File.write("/tmp/mr_enc5.txt", "")\n            r = []\n            f
@@ -5118,6 +5122,7 @@ f68ec4570fce796ce1f3fb8aef0cb21e	"あabca"	"あ".ljust(5, "abc")
 f692d7c01396875808d70ca97155bd6f	[1, 2, 3, 4, 5, 6, 7, 8]	class C < Array\n          def initialize\n            @a = 1\n           
 f6a4837bc64d4a208c18984a4d9049ff	[false, false, false, true, false, false, false]	__a = [];__a << (File.setuid?("Cargo.toml"));__a << (File.setgid?("Cargo.toml"))
 f6a5ba1237d7cfc8990854f9a869a012	true	Thread.current.equal?(Thread.current)
+f6b0dc2ef83b5d29c522ee9e106e993c	[1.4207523696787714e+115, 1.4207523696787714e+115, 1.4207523696787714e+115, 1.4207523696787714e+115, 1.4207523696787714e+115]	def f(n)\n          s0 = n * 0.5\n          i = 0\n          acc = 0.0\n   
 f6b2f5848e7295cbc532e6f89aae0054	[true, true, true, true, true]	(a=(File.method(:unlink)==File.method(:delete)); b=(File.method(:empty?)==File.m
 f6b8ba5c363ede98f3ac55cfd3ae8594	[[:keyreq, :a], [:keyreq, :b]]	def only_req_kw(a:, b:); end\n            method(:only_req_kw).param
 f6bd187bbf5507071844189b94dc4434	[[false, false, true, true, true], [false, true, false, true, false], [true, true, false, false, true]]	vals = [1, 2.5, 3, 4.5]\n            def lt(a, b) = a < b\n          
