@@ -11,6 +11,7 @@
 #   <out>/lib                 the vendored stdlib + monoruby's own stubs
 #   <out>/stub                the stubs, pinned ahead of $LOAD_PATH
 #   <out>/ext                 the dynamically loaded extensions
+#   <out>/include, <out>/capi the CRuby-compatible C API (ruby.h, capi.c)
 #
 # `globals::install_root` recognises that layout from the executable's own
 # path (the `builtins/` directory is the marker), so the tree runs from
@@ -62,7 +63,7 @@ fi
 rm -rf "$OUT"
 mkdir -p "$OUT/bin"
 cp target/release/monoruby target/release/irm "$OUT/bin/"
-for dir in builtins lib stub ext; do
+for dir in builtins lib stub ext include capi; do
   cp -R "$ROOT/$dir" "$OUT/$dir"
 done
 echo "staged $OUT"
