@@ -24,8 +24,13 @@ fn out_dir(flavor: &str) -> PathBuf {
     dir
 }
 
-/// `capi_hello.so` built against monoruby's headers, in its own directory
-/// (to be put on `$LOAD_PATH`). `None` when there is no C compiler. Built
+/// The extension sources run on both interpreters, each with its
+/// script: the stage 1 surface and the stage 2 one (TypedData, alloc
+/// functions, blocks from C, `rb_call_super`, Struct).
+const FIXTURES: [&str; 2] = ["capi_hello", "capi_data"];
+
+/// The fixtures built against monoruby's headers, in one directory (to
+/// be put on `$LOAD_PATH`). `None` when there is no C compiler. Built
 /// once per test binary: the tests run in parallel.
 fn build_for_monoruby() -> Option<PathBuf> {
     static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
@@ -35,19 +40,21 @@ fn build_for_monoruby() -> Option<PathBuf> {
 fn build_for_monoruby_once() -> Option<PathBuf> {
     let root = manifest_dir().join("..");
     let dir = out_dir("monoruby");
-    let status = Command::new(cc())
-        .args(["-shared", "-fPIC", "-O1", "-Wall", "-Werror"])
-        .arg("-I")
-        .arg(root.join("monoruby_capi/include"))
-        .arg("-I")
-        .arg(root.join("monoruby_ext_sys/include"))
-        .arg("-o")
-        .arg(dir.join("capi_hello.so"))
-        .arg(manifest_dir().join("tests/capi/capi_hello.c"))
-        .arg(root.join("monoruby_capi/src/capi.c"))
-        .status()
-        .ok()?;
-    assert!(status.success(), "building capi_hello.c against monoruby_capi failed");
+    for name in FIXTURES {
+        let status = Command::new(cc())
+            .args(["-shared", "-fPIC", "-O1", "-Wall", "-Werror"])
+            .arg("-I")
+            .arg(root.join("monoruby_capi/include"))
+            .arg("-I")
+            .arg(root.join("monoruby_ext_sys/include"))
+            .arg("-o")
+            .arg(dir.join(format!("{name}.so")))
+            .arg(manifest_dir().join(format!("tests/capi/{name}.c")))
+            .arg(root.join("monoruby_capi/src/capi.c"))
+            .status()
+            .ok()?;
+        assert!(status.success(), "building {name}.c against monoruby_capi failed");
+    }
     Some(dir)
 }
 
@@ -68,22 +75,24 @@ fn build_for_cruby() -> PathBuf {
 fn build_for_cruby_once() -> PathBuf {
     let dir = out_dir("cruby");
     let dlext = ruby_config("DLEXT");
-    let mut cmd = Command::new(cc());
-    cmd.args(["-shared", "-fPIC", "-O1", "-w"])
-        .arg("-I")
-        .arg(ruby_config("rubyhdrdir"))
-        .arg("-I")
-        .arg(ruby_config("rubyarchhdrdir"));
-    if cfg!(target_os = "macos") {
-        cmd.args(["-undefined", "dynamic_lookup"]);
+    for name in FIXTURES {
+        let mut cmd = Command::new(cc());
+        cmd.args(["-shared", "-fPIC", "-O1", "-w"])
+            .arg("-I")
+            .arg(ruby_config("rubyhdrdir"))
+            .arg("-I")
+            .arg(ruby_config("rubyarchhdrdir"));
+        if cfg!(target_os = "macos") {
+            cmd.args(["-undefined", "dynamic_lookup"]);
+        }
+        let status = cmd
+            .arg("-o")
+            .arg(dir.join(format!("{name}.{dlext}")))
+            .arg(manifest_dir().join(format!("tests/capi/{name}.c")))
+            .status()
+            .unwrap();
+        assert!(status.success(), "building {name}.c against CRuby failed");
     }
-    let status = cmd
-        .arg("-o")
-        .arg(dir.join(format!("capi_hello.{dlext}")))
-        .arg(manifest_dir().join("tests/capi/capi_hello.c"))
-        .status()
-        .unwrap();
-    assert!(status.success(), "building capi_hello.c against CRuby failed");
     dir
 }
 
@@ -111,24 +120,26 @@ fn capi_extension_matches_cruby() {
         return;
     };
     let cr_dir = build_for_cruby();
-    let script = manifest_dir().join("tests/capi/capi_hello.rb");
-    let expected = run(Command::new("ruby").arg("-I").arg(&cr_dir).arg(&script));
-    for args in [&[][..], &["--no-jit"][..]] {
-        let actual = run(monoruby(&mr_dir).args(args).arg(&script));
-        if actual != expected {
-            let diff: Vec<String> = expected
-                .lines()
-                .zip(actual.lines())
-                .enumerate()
-                .filter(|(_, (e, a))| e != a)
-                .map(|(i, (e, a))| format!("line {}:\n  cruby:    {e}\n  monoruby: {a}", i + 1))
-                .collect();
-            panic!(
-                "monoruby {args:?} differs from CRuby ({} vs {} lines)\n{}",
-                expected.lines().count(),
-                actual.lines().count(),
-                diff.join("\n")
-            );
+    for name in FIXTURES {
+        let script = manifest_dir().join(format!("tests/capi/{name}.rb"));
+        let expected = run(Command::new("ruby").arg("-I").arg(&cr_dir).arg(&script));
+        for args in [&[][..], &["--no-jit"][..]] {
+            let actual = run(monoruby(&mr_dir).args(args).arg(&script));
+            if actual != expected {
+                let diff: Vec<String> = expected
+                    .lines()
+                    .zip(actual.lines())
+                    .enumerate()
+                    .filter(|(_, (e, a))| e != a)
+                    .map(|(i, (e, a))| format!("line {}:\n  cruby:    {e}\n  monoruby: {a}", i + 1))
+                    .collect();
+                panic!(
+                    "{name}: monoruby {args:?} differs from CRuby ({} vs {} lines)\n{}",
+                    expected.lines().count(),
+                    actual.lines().count(),
+                    diff.join("\n")
+                );
+            }
         }
     }
 }
@@ -222,7 +233,14 @@ p t { E.ary_len(1) }
 p t { E.ary_push([].freeze) }
 p t { E.hash_aset({}.freeze) }
 p t { E.define_on("str") }
-p E.register"#,
+p E.register
+class Str < String; end
+p t { E.alloc_on(Str) }
+p t { E.alloc_on("str") }
+p t { E.undef_alloc_on(1) }
+p t { E.data_ptr("str") }
+p t { E.data_ptr(E::Bad.new) }
+p E.typed?(Object.new), E.typed?(nil)"#,
     ]));
     assert_eq!(
         out,
@@ -235,6 +253,13 @@ p E.register"#,
 [FrozenError, "can't modify frozen Hash: {}"]
 [TypeError, "define_method: class/module expected"]
 "registered"
+[TypeError, "instances of Str cannot carry a native payload"]
+[TypeError, "class_set_alloc: class expected"]
+[TypeError, "class_set_alloc: class expected"]
+[TypeError, "wrong argument type String (expected Data)"]
+[TypeError, "allocator of CapiErrors::Bad did not return a Data object"]
+false
+false
 "#
     );
 }
@@ -244,9 +269,10 @@ p E.register"#,
 /// LoadError (or the initializer's own exception), never a crash.
 #[test]
 fn capi_load_errors() {
-    let cases: [(&str, &[&str], bool); 4] = [
+    let cases: [(&str, &[&str], bool); 5] = [
         ("libcapi_noinit", &["CAPI_NO_INIT"], true),
         ("capi_raises", &["CAPI_INIT_RAISES", "CAPI_INIT=Init_capi_raises"], true),
+        ("capi_super", &["CAPI_INIT_SUPER", "CAPI_INIT=Init_capi_super"], true),
         ("capi_newer", &["CAPI_RC=-2", "CAPI_INIT=Init_capi_newer"], false),
         ("capi_status", &["CAPI_RC=5", "CAPI_INIT=Init_capi_status"], false),
     ];
@@ -267,6 +293,7 @@ fn capi_load_errors() {
         expected.concat(),
         "LoadError: SO is not a Ruby extension: no Init_libcapi_noinit
 RuntimeError: Init failed
+RuntimeError: super called outside of method
 LoadError: SO was built against a newer monoruby C API than this interpreter provides
 LoadError: SO returned 5 from Init_capi_status
 "

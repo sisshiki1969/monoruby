@@ -146,6 +146,70 @@ String 自身のバッファを返す。書き込み可能で、`rb_str_new(NULL
   （TruffleRuby の `Truffle::CExt` と同じ方針）。正しさ優先で、ホットな
   ものから順に ABI 側へ寄せる。
 
+### 3.7 Data / TypedData と alloc 関数（段階 2）
+
+`Data` / `TypedData` のオブジェクトは本体のネイティブオブジェクト
+（`native_new`、種別 `data_ops`）で、ペイロードは層の記録
+`capi_data { data, dmark, dfree, type }`。`ruby.h` の `struct RData` /
+`struct RTypedData` はこの記録のビューなので、`RDATA(obj)->data` /
+`DATA_PTR(obj)` は lvalue として書ける。`data_ops` の mark は
+`type->function.dmark`（型無しなら `dmark`）を、free は `dfree`
+（`RUBY_DEFAULT_FREE` なら `xfree`）を呼んで記録を解放する。
+`dsize` / `dcompact` は読まない（non-moving）。
+
+alloc 関数はコアの `alloc_func`（`fn(ClassId, &mut Globals) -> Value`、
+`Executor` 無し、エラー不可）から直接は呼べないので遅延する:
+
+1. `rb_define_alloc_func(klass, f)` は新しい ABI 項目 `class_set_alloc` で
+   `klass` のインスタンスをネイティブオブジェクトにし（既定の alloc は
+   「ペイロード無しで作る」`ext_alloc_func`）、`f` を層の表に記録する。
+   Ruby で定義したサブクラスはコアの継承でそのまま同じになる。
+2. `new` / `allocate` / `dup` が作った空のインスタンスを、`DATA_PTR` /
+   `TypedData_Get_Struct` / `rb_check_typeddata` / `RTYPEDDATA_P` が最初に
+   見たとき、クラス（と祖先）の alloc 関数を呼び、できたオブジェクトから
+   記録を `native_take`（解放せずに外す）で取り、`native_set` で本物に
+   付ける。CRuby で `allocate` が alloc 関数を呼ぶのと同じ結果になる。
+   `initialize_copy` の中の `TypedData_Get_Struct(copy)` もこれで埋まる。
+3. alloc 関数を登録していないクラスに `Data_Wrap_Struct` したときも
+   その場で `class_set_alloc` する（`klass == 0` の隠しオブジェクトは層の
+   匿名クラス）。インスタンスが既にあるクラスでやると JIT の ivar 配置の
+   前提が崩れるので、拡張の `Init_` で済ませること。
+4. `rb_undef_alloc_func` は `MR_ALLOC_UNDEF`（`new` が
+   「allocator undefined for X」）。
+
+`rb_check_typeddata` のエラー文（「wrong argument type X (expected Y)」、
+nil / true / false / 型無し Data / 別の型名）と `parent` による型の継承は
+CRuby と同じ。
+
+### 3.8 C 関数をブロックにする
+
+`rb_block_call` / `rb_proc_new` / `rb_iterate` は、層の隠しクラス
+（`Class.new(Object)`、ネイティブ）のインスタンスに `{func, arg, block}` を
+持たせ、その `call(*args)` を `Method#to_proc` で Proc にして渡す。
+`call` の入口 `block_dispatch` は `capi_dispatch` と同じフレームを積み、
+そのフレームのブロックを「作った時点のメソッドのブロック」（Proc に
+しておく）にするので、コールバック内の `rb_yield` は CRuby と同じく
+`rb_block_call` を呼んだメソッドのブロックに届く。`rb_block_call` の
+callback が NULL なら自分のブロックをそのまま渡す。
+
+`rb_iter_break` / `rb_iter_break_value` は層の隠し例外クラス
+（`Exception` 直下なので Ruby 側の `rescue` に捕まらず、`ensure` は走る）を
+投げ、`rb_block_call` / `rb_iterate` が受け止めて値を返す。
+
+### 3.9 `rb_call_super` と Struct
+
+`rb_call_super` は新しい ABI 項目 `call_super`: コンテキストのフレーム
+（この C メソッド自身の lfp）の `FuncId` と名前、`self` のクラスから
+`Store::check_super` で次の定義を引き、`invoke_func_named` で呼ぶ。
+ブロックは呼び出し元のものを渡す（CRuby の `rb_call_super` と同じ）。
+メソッドの外（`Init_`）では RuntimeError。
+
+`rb_struct_define` / `rb_struct_define_under` は `Struct.new` に、
+`rb_struct_new` / `aref` / `aset` / `getmember` / `members` / `size` は
+それぞれの Ruby メソッドに委ねる。`rb_obj_call_init` は private の
+`initialize` をブロック付きで、`rb_class_new` / `rb_module_new` は
+`Class.new` / `Module.new`。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -155,6 +219,9 @@ String 自身のバッファを返す。書き込み可能で、`rb_str_new(NULL
 | `str_resize` / `str_cat` | `rb_str_resize` / `rb_str_set_len` / `rb_str_cat`（frozen チェック付き） |
 | `ary_ptr` | `RARRAY_CONST_PTR` / `RARRAY_LEN` |
 | `gc_register_address` / `gc_unregister_address` | `rb_gc_register_address` |
+| `class_set_alloc` | 定義済みクラスをネイティブにする（`rb_define_alloc_func`、`Data_Wrap_Struct`）/ alloc を外す（`rb_undef_alloc_func`） |
+| `native_take` | ペイロードを解放せずに外す（遅延 alloc でできたオブジェクトから本物へ移す） |
+| `call_super` | `rb_call_super` |
 
 あわせて `ary_push` / `hash_set` が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。
@@ -164,28 +231,23 @@ String 自身のバッファを返す。書き込み可能で、`rb_str_new(NULL
 | 段階 | 内容 | 状態 |
 |---|---|---|
 | 1 | ローダ（`monoruby_capi_init` 判別、`$LOAD_PATH` 上の `.so`）、`ruby.h` 互換ヘッダ、`capi.c`: クラス / モジュール / メソッド定義（arity -2〜15）、即値・数値・文字列・シンボル・配列・ハッシュ・Range、`rb_funcall` 系、ブロック（`rb_yield` 系、`rb_block_proc`）、例外（`rb_raise`、`rb_protect` / `rb_ensure` / `rb_rescue2` / `rb_jump_tag`）、`rb_scan_args` / `rb_get_kwargs`、ivar / 定数 / cvar / gvar、GC 登録、`rb_sprintf`（`PRIsVALUE`）、最小限の encoding、`rb_thread_call_without_gvl` | 済（`tests/capi.rs`: 同じ C ソースを CRuby と monoruby で動かし出力一致） |
-| 2 | `Data` / `TypedData`（`TypedData_Make_Struct`、`DATA_PTR` の lvalue、dmark / dfree / dsize）、`rb_define_alloc_func` / `rb_undef_alloc_func`、`rb_block_call` / `rb_iterate`（C 関数をブロックとして渡す）、`rb_call_super`、`rb_struct_*`、`rb_keyword_given_p` を正しく | 未 |
+| 2 | `Data` / `TypedData`（`TypedData_Make_Struct`、`DATA_PTR` の lvalue、dmark / dfree）、`rb_define_alloc_func` / `rb_undef_alloc_func`、`rb_block_call` / `rb_proc_new` / `rb_iterate` / `rb_iter_break`（C 関数をブロックとして渡す）、`rb_call_super`、`rb_struct_*`、`rb_obj_call_init`、`rb_class_new` | 済（§3.7〜3.9、`tests/capi/capi_data.c`）。`rb_keyword_given_p` は未 |
 | 3 | `RbConfig::CONFIG`（`rubyhdrdir` などを install root に）、`mkmf` が monoruby を相手に `Makefile` を作れること、`capi.c` を `libmonoruby_capi.a` として `LIBRUBYARG` に、`gem install` で C 拡張 gem がビルドされ `extensions/<arch>/…` から読めること | 未 |
 | 4 | 実 gem で面積を詰める（`rb_io_*`、`rb_time_*`、`st_*`、`rb_enc_*` の残り、Bignum 系）。小さなものから: `bcrypt`、`strscan` 相当、`json` の C 拡張、`msgpack` | 未 |
 
-### 5.1 段階 2 の要点（alloc 関数）
-
-コアの alloc 関数は `extern "C" fn(ClassId, &mut Globals) -> Value` で、
-エラーを返せず `Executor` も無いので、C の alloc 関数をそのまま呼べない。
-`MR_CLASS_NATIVE` の「ペイロード無しで作り、最初に触った所で埋める」
-（`native_extension_loading.md` §6.2「遅延 payload」）を使い、
-`rb_define_alloc_func` されたクラスはネイティブクラスにして、
-`DATA_PTR` / `TypedData_Get_Struct` が空のペイロードを見たら記録しておいた
-alloc 関数を呼んで作ったオブジェクトからペイロードを移す、を予定している。
-そのためにペイロードを解放せずに取り出す ABI 項目（`native_take`）と、
-定義済みクラスをネイティブにする項目が要る。
-
-## 6. 既知の制約（段階 1）
+## 6. 既知の制約
 
 - `rb_keyword_given_p` は常に 0。`rb_scan_args` の `:` は「末尾の引数が
   Hash ならキーワード」とみなす（`f({a: 1})` と `f(a: 1)` を区別しない）。
 - `rb_protect` は `break` / `throw` などの非例外の大域脱出も例外オブジェクト
   として取り出すので、`rb_jump_tag` で再送すると種類が失われる。
-- `rb_iter_break` は未対応（NotImplementedError）。
+- `rb_iter_break` は隠し例外で実装しているので、`rb_block_call` /
+  `rb_iterate` の外（`rb_funcall` で呼んだメソッドに渡した
+  `rb_proc_new` の Proc の中など）で使うとその例外が外へ出る。
+- `rb_proc_new` の Proc は `Method#to_proc` 由来なので `lambda?` が true
+  （CRuby は false）。arity は同じ -1。
+- alloc 関数は遅延して呼ばれる（§3.7）。`allocate` 直後にペイロードを
+  読まずに `ObjectSpace` 等で観察しても alloc 関数はまだ走っていない。
+- `dsize` / `dcompact` は使わない。`RUBY_TYPED_*` のフラグはすべて無視。
 - `rb_warn` は `Kernel#warn("warning: ...")`（ファイル名・行番号は付かない）。
 - `rb_gv_get` / `rb_gv_set` は `eval` 経由。

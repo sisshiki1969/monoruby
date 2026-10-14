@@ -98,6 +98,8 @@ typedef enum MrErrorKind {
 #define MR_METHOD_SINGLETON 2u
 #define MR_CLASS_NATIVE     1u
 #define MR_ARGC_VARIADIC    (-1)
+#define MR_ALLOC_NATIVE     1u   /* class_set_alloc: instances carry a native payload */
+#define MR_ALLOC_UNDEF      2u   /* class_set_alloc: no allocator */
 
 /* Entries are only ever appended; `size` says how many bytes the running
  * monoruby fills. */
@@ -183,6 +185,9 @@ struct MrApi {
     const MrValue *(*ary_ptr)(MrContext *, MrValue ary, size_t *len);   /* read-only */
     void    (*gc_register_address)(MrContext *, const MrValue *addr);
     void    (*gc_unregister_address)(MrContext *, const MrValue *addr);
+    int     (*class_set_alloc)(MrContext *, MrValue klass, uint32_t flags);   /* MR_ALLOC_* */
+    void   *(*native_take)(MrContext *, MrValue obj);   /* detach the payload, unfreed */
+    MrValue (*call_super)(MrContext *, int argc, const MrValue *argv, MrValue block);
 };
 
 #ifdef __cplusplus

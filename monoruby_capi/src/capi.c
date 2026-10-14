@@ -335,7 +335,7 @@ __attribute__((visibility("default"))) int
 monoruby_capi_init(MrContext *c, void (*init)(void))
 {
     if (c->api->abi_version != MR_ABI_VERSION ||
-        c->api->size < offsetof(MrApi, gc_unregister_address) + sizeof(void *))
+        c->api->size < offsetof(MrApi, call_super) + sizeof(void *))
         return -2;
     api = c->api;
     struct capi_frame fr;
@@ -863,18 +863,6 @@ rb_rescue(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VA
     return vrescue(b_proc, data1, r_proc, data2, &k, 1);
 }
 
-void
-rb_iter_break(void)
-{
-    rb_raise(rb_eNotImpError, "rb_iter_break is not supported by monoruby's C API");
-}
-
-void
-rb_iter_break_value(VALUE val)
-{
-    (void)val;
-    rb_iter_break();
-}
 
 /* ---------------------------------------------------------------------
  * Arguments
@@ -3614,4 +3602,657 @@ int
 ruby_native_thread_p(void)
 {
     return capi_cur != NULL;
+}
+
+/* ---------------------------------------------------------------------
+ * Allocators, Data and TypedData
+ * --------------------------------------------------------------------- */
+
+/*
+ * The payload of every Data / TypedData object; `struct RData` and
+ * `struct RTypedData` in ruby.h are views of it. The object is a native
+ * object of the interpreter's (`native_new`), of kind `data_ops`.
+ */
+struct capi_data {
+    void *data;
+    RUBY_DATA_FUNC dmark;
+    RUBY_DATA_FUNC dfree;
+    const rb_data_type_t *type;
+};
+
+static void
+data_mark(void *p, MrMarker *marker)
+{
+    struct capi_data *d = p;
+    if (!d->data)
+        return;
+    MrMarker *saved = capi_marker;
+    capi_marker = marker;
+    if (d->type) {
+        if (d->type->function.dmark)
+            d->type->function.dmark(d->data);
+    }
+    else if (d->dmark) {
+        d->dmark(d->data);
+    }
+    capi_marker = saved;
+}
+
+static void
+data_free(void *p)
+{
+    struct capi_data *d = p;
+    RUBY_DATA_FUNC dfree = d->type ? d->type->function.dfree : d->dfree;
+    if (d->data) {
+        if (dfree == RUBY_DEFAULT_FREE)
+            xfree(d->data);
+        else if (dfree)
+            dfree(d->data);
+    }
+    free(d);
+}
+
+static const MrNativeOps data_ops = { "Data", data_mark, data_free, NULL };
+
+/*
+ * The classes that allocate through this layer: those given an alloc
+ * function (`rb_define_alloc_func`), those a Data object was wrapped
+ * with, and subclasses of either once an instance of them was filled.
+ * `func` is NULL after `rb_undef_alloc_func`.
+ */
+struct capi_alloc {
+    VALUE klass;
+    rb_alloc_func_t *func;
+    int native;
+};
+
+static struct capi_alloc *alloc_table;
+static size_t alloc_len, alloc_cap;
+
+static struct capi_alloc *
+alloc_entry(VALUE klass)
+{
+    for (size_t i = 0; i < alloc_len; i++)
+        if (alloc_table[i].klass == klass)
+            return &alloc_table[i];
+    return NULL;
+}
+
+static struct capi_alloc *
+alloc_entry_add(VALUE klass)
+{
+    struct capi_alloc *e = alloc_entry(klass);
+    if (e)
+        return e;
+    if (alloc_len == alloc_cap) {
+        alloc_cap = alloc_cap ? alloc_cap * 2 : 16;
+        alloc_table = realloc(alloc_table, alloc_cap * sizeof(*alloc_table));
+        if (!alloc_table)
+            rb_memerror();
+    }
+    e = &alloc_table[alloc_len++];
+    e->klass = klass;
+    e->func = NULL;
+    e->native = 0;
+    api->gc_pin(ctx(), (MrValue)klass);
+    return e;
+}
+
+/* Make `klass`'s instances native objects (once). */
+static void
+ensure_native(VALUE klass)
+{
+    struct capi_alloc *e = alloc_entry_add(klass);
+    if (!e->native) {
+        check_rc(api->class_set_alloc(ctx(), (MrValue)klass, MR_ALLOC_NATIVE));
+        e->native = 1;
+    }
+}
+
+void
+rb_define_alloc_func(VALUE klass, rb_alloc_func_t *func)
+{
+    ensure_native(klass);
+    alloc_entry(klass)->func = func;
+}
+
+void
+rb_undef_alloc_func(VALUE klass)
+{
+    check_rc(api->class_set_alloc(ctx(), (MrValue)klass, MR_ALLOC_UNDEF));
+    alloc_entry_add(klass)->func = NULL;
+}
+
+rb_alloc_func_t *
+rb_get_alloc_func(VALUE klass)
+{
+    for (VALUE c = klass; c != Qnil; c = rb_class_superclass(c)) {
+        struct capi_alloc *e = alloc_entry(c);
+        if (e) {
+            if (c != klass) {
+                /* Remember the inherited one on the subclass itself. */
+                struct capi_alloc *sub = alloc_entry_add(klass);
+                sub->func = e->func;
+            }
+            return e->func;
+        }
+    }
+    return NULL;
+}
+
+/* The class a Data object is made of: `0` is CRuby's hidden object. */
+static VALUE
+data_class(VALUE klass)
+{
+    static VALUE hidden;
+    if (!klass) {
+        if (!hidden) {
+            hidden = rb_class_new(rb_cObject);
+            api->gc_pin(ctx(), (MrValue)hidden);
+        }
+        klass = hidden;
+    }
+    ensure_native(klass);
+    return klass;
+}
+
+static VALUE
+data_wrap(VALUE klass, void *datap, RUBY_DATA_FUNC dmark, RUBY_DATA_FUNC dfree, const rb_data_type_t *type)
+{
+    klass = data_class(klass);
+    struct capi_data *d = malloc(sizeof(*d));
+    if (!d)
+        rb_memerror();
+    d->data = datap;
+    d->dmark = dmark;
+    d->dfree = dfree;
+    d->type = type;
+    MrValue obj = api->native_new(ctx(), (MrValue)klass, d, &data_ops);
+    if (obj == MR_UNDEF) {
+        free(d);
+        capi_unwind();
+    }
+    return root((VALUE)obj);
+}
+
+static const char *
+displaying_class_of(VALUE obj)
+{
+    if (NIL_P(obj)) return "nil";
+    if (obj == Qtrue) return "true";
+    if (obj == Qfalse) return "false";
+    return rb_obj_classname(obj);
+}
+
+/*
+ * The record behind `obj`, or NULL (`raise` = 0) / a TypeError when it
+ * has none. An instance that `new` / `allocate` / `dup` made is
+ * payload-less until something looks at its payload; then the alloc
+ * function its class registered runs, as CRuby's `allocate` would have
+ * run it, and the record it produced is moved onto the instance.
+ */
+static struct capi_data *
+data_of(VALUE obj, int raise)
+{
+    struct capi_data *d = api->native_data(ctx(), (MrValue)obj, &data_ops);
+    if (d)
+        return d;
+    if (api->type_of(ctx(), (MrValue)obj) == MR_T_NATIVE) {
+        VALUE klass = rb_obj_class(obj);
+        rb_alloc_func_t *alloc = rb_get_alloc_func(klass);
+        if (alloc) {
+            VALUE tmp = alloc(klass);
+            d = api->native_data(ctx(), (MrValue)tmp, &data_ops);
+            if (!d)
+                rb_raise(rb_eTypeError, "allocator of %s did not return a Data object", rb_class2name(klass));
+            api->native_take(ctx(), (MrValue)tmp);
+            check_rc(api->native_set(ctx(), (MrValue)obj, d, &data_ops));
+            return d;
+        }
+    }
+    if (raise)
+        rb_raise(rb_eTypeError, "wrong argument type %s (expected Data)", displaying_class_of(obj));
+    return NULL;
+}
+
+VALUE
+rb_data_object_wrap(VALUE klass, void *datap, RUBY_DATA_FUNC dmark, RUBY_DATA_FUNC dfree)
+{
+    return data_wrap(klass, datap, dmark, dfree, NULL);
+}
+
+VALUE
+rb_data_object_zalloc(VALUE klass, size_t size, RUBY_DATA_FUNC dmark, RUBY_DATA_FUNC dfree)
+{
+    return data_wrap(klass, xcalloc(1, size), dmark, dfree, NULL);
+}
+
+VALUE
+rb_data_object_make(VALUE klass, RUBY_DATA_FUNC dmark, RUBY_DATA_FUNC dfree, void **datap, size_t size)
+{
+    void *p = xcalloc(1, size);
+    *datap = p;
+    return data_wrap(klass, p, dmark, dfree, NULL);
+}
+
+void *
+rb_data_object_get(VALUE obj)
+{
+    return data_of(obj, 1)->data;
+}
+
+VALUE
+rb_data_typed_object_wrap(VALUE klass, void *datap, const rb_data_type_t *type)
+{
+    return data_wrap(klass, datap, NULL, NULL, type);
+}
+
+VALUE
+rb_data_typed_object_zalloc(VALUE klass, size_t size, const rb_data_type_t *type)
+{
+    return data_wrap(klass, xcalloc(1, size), NULL, NULL, type);
+}
+
+VALUE
+rb_data_typed_object_make(VALUE klass, const rb_data_type_t *type, void **datap, size_t size)
+{
+    void *p = xcalloc(1, size);
+    *datap = p;
+    return data_wrap(klass, p, NULL, NULL, type);
+}
+
+int
+rb_typeddata_inherited_p(const rb_data_type_t *child, const rb_data_type_t *parent)
+{
+    for (; child; child = child->parent)
+        if (child == parent)
+            return 1;
+    return 0;
+}
+
+int
+rb_typeddata_is_kind_of(VALUE obj, const rb_data_type_t *type)
+{
+    struct capi_data *d = data_of(obj, 0);
+    return d && d->type && rb_typeddata_inherited_p(d->type, type);
+}
+
+void *
+rb_check_typeddata(VALUE obj, const rb_data_type_t *type)
+{
+    struct capi_data *d = data_of(obj, 0);
+    const char *actual;
+    if (!d || !d->type)
+        actual = displaying_class_of(obj);
+    else if (!rb_typeddata_inherited_p(d->type, type))
+        actual = d->type->wrap_struct_name;
+    else
+        return d->data;
+    rb_raise(rb_eTypeError, "wrong argument type %s (expected %s)", actual, type->wrap_struct_name);
+}
+
+void *
+rb_monoruby_rdata(VALUE obj)
+{
+    return data_of(obj, 1);
+}
+
+int
+rb_monoruby_typeddata_p(VALUE obj)
+{
+    struct capi_data *d = data_of(obj, 0);
+    return d && d->type;
+}
+
+void
+rb_obj_call_init(VALUE obj, int argc, const VALUE *argv)
+{
+    funcall_block(obj, rb_intern("initialize"), argc, argv, frame()->block);
+}
+
+void
+rb_obj_call_init_kw(VALUE obj, int argc, const VALUE *argv, int kw_splat)
+{
+    (void)kw_splat;
+    rb_obj_call_init(obj, argc, argv);
+}
+
+VALUE
+rb_class_new(VALUE super)
+{
+    return rb_funcall(rb_cClass, rb_intern("new"), 1, super);
+}
+
+VALUE
+rb_module_new(void)
+{
+    return rb_funcall(rb_cModule, rb_intern("new"), 0);
+}
+
+VALUE
+rb_call_super(int argc, const VALUE *argv)
+{
+    struct capi_frame *saved = frame();
+    MrValue r = api->call_super(saved->ctx, argc, (const MrValue *)argv, saved->block);
+    capi_cur = saved;
+    return check(r);
+}
+
+VALUE
+rb_call_super_kw(int argc, const VALUE *argv, int kw_splat)
+{
+    (void)kw_splat;
+    return rb_call_super(argc, argv);
+}
+
+/* ---------------------------------------------------------------------
+ * Blocks from C
+ * --------------------------------------------------------------------- */
+
+/*
+ * A C function as a block: an instance of a hidden class whose `call`
+ * runs the function, turned into a Proc with `Method#to_proc`. The
+ * function sees the block of the method that created it (`rb_yield`
+ * inside an `rb_block_call` callback yields to the caller's block, as
+ * in CRuby), kept as a Proc so the callback may outlive that call.
+ */
+struct capi_block {
+    rb_block_call_func_t func;
+    VALUE arg;
+    VALUE block;
+};
+
+static void
+block_mark(void *p, MrMarker *marker)
+{
+    struct capi_block *b = p;
+    api->gc_mark(marker, (MrValue)b->arg);
+    api->gc_mark(marker, (MrValue)b->block);
+}
+
+static void
+block_free(void *p)
+{
+    free(p);
+}
+
+static const MrNativeOps block_ops = { "block", block_mark, block_free, NULL };
+
+static VALUE block_class;
+static VALUE break_class;
+static __thread VALUE break_value;
+
+static MrValue
+block_dispatch(MrContext *c, MrValue self, int argc, const MrValue *argv, MrValue block, void *data)
+{
+    (void)data;
+    struct capi_block *b = api->native_data(c, self, &block_ops);
+    struct capi_frame fr;
+    struct capi_frame *volatile fp = &fr;
+    volatile MrValue result = MR_UNDEF;
+    fr.ctx = c;
+    fr.block = NIL_P(b->block) ? MR_UNDEF : (MrValue)b->block;
+    fr.prev = capi_cur;
+    fr.owner = &fr;
+    fr.bufs = NULL;
+    capi_cur = &fr;
+    if (setjmp(fr.jb) == 0) {
+        VALUE blockarg = Qnil;
+        if (block != MR_UNDEF)
+            blockarg = check(api->block_to_proc(c, block));
+        VALUE yielded = argc > 0 ? (VALUE)argv[0] : Qnil;
+        result = (MrValue)b->func(yielded, b->arg, argc, (const VALUE *)argv, blockarg);
+    }
+    free_bufs(fp);
+    capi_cur = fp->prev;
+    return result;
+}
+
+static VALUE
+block_proc_new(rb_block_call_func_t func, VALUE arg, VALUE block)
+{
+    if (!block_class) {
+        block_class = rb_class_new(rb_cObject);
+        api->gc_pin(ctx(), (MrValue)block_class);
+        check_rc(api->class_set_alloc(ctx(), (MrValue)block_class, MR_ALLOC_NATIVE));
+        api->define_method_data(ctx(), (MrValue)block_class, "call", block_dispatch, NULL,
+                                MR_ARGC_VARIADIC, 0);
+        if (api->error_pending(ctx()))
+            capi_unwind();
+    }
+    struct capi_block *b = malloc(sizeof(*b));
+    if (!b)
+        rb_memerror();
+    b->func = func;
+    b->arg = arg;
+    b->block = block;
+    VALUE obj = check(api->native_new(ctx(), (MrValue)block_class, b, &block_ops));
+    VALUE m = rb_funcall(obj, rb_intern("method"), 1, ID2SYM(rb_intern("call")));
+    return rb_funcall(m, rb_intern("to_proc"), 0);
+}
+
+/* The current block as a Proc, or nil. */
+static VALUE
+current_block_proc(void)
+{
+    return rb_block_given_p() ? rb_block_proc() : Qnil;
+}
+
+/*
+ * `rb_iter_break` leaves the iteration through a hidden exception that
+ * `rb_block_call` / `rb_iterate` catch; it is not a StandardError, so a
+ * `rescue` in the iterating method's Ruby code does not see it.
+ */
+static VALUE
+break_exception(void)
+{
+    if (!break_class) {
+        break_class = rb_class_new(rb_eException);
+        api->gc_pin(ctx(), (MrValue)break_class);
+    }
+    return break_class;
+}
+
+void
+rb_iter_break_value(VALUE val)
+{
+    break_value = val;
+    api->gc_pin(ctx(), (MrValue)val);
+    rb_exc_raise(rb_exc_new_cstr(break_exception(), "break"));
+}
+
+void
+rb_iter_break(void)
+{
+    rb_iter_break_value(Qnil);
+}
+
+/* A call that may end by `rb_iter_break`: its value then. */
+static VALUE
+iterate_call(MrValue r)
+{
+    if (r == MR_UNDEF && break_class) {
+        MrValue exc = api->error_take(ctx());
+        if (rb_obj_class((VALUE)exc) == break_class) {
+            VALUE v = break_value;
+            break_value = Qnil;
+            api->gc_unpin(ctx(), (MrValue)v);
+            return root(v);
+        }
+        api->raise_exception(ctx(), exc);
+    }
+    return check(r);
+}
+
+VALUE
+rb_block_call(VALUE obj, ID mid, int argc, const VALUE *argv, rb_block_call_func_t bl_proc, VALUE data2)
+{
+    if (!bl_proc)
+        return rb_funcall_passing_block(obj, mid, argc, argv);
+    VALUE proc = block_proc_new(bl_proc, data2, current_block_proc());
+    struct capi_frame *saved = frame();
+    MrValue r = api->funcall_sym(saved->ctx, (MrValue)obj, (MrSym)mid, argc,
+                                 (const MrValue *)argv, (MrValue)proc);
+    capi_cur = saved;
+    return iterate_call(r);
+}
+
+VALUE
+rb_block_call_kw(VALUE obj, ID mid, int argc, const VALUE *argv, rb_block_call_func_t bl_proc, VALUE data2, int kw_splat)
+{
+    (void)kw_splat;
+    return rb_block_call(obj, mid, argc, argv, bl_proc, data2);
+}
+
+struct iterate_args {
+    VALUE (*it_proc)(VALUE);
+    VALUE data1;
+    MrValue saved_block;
+};
+
+static VALUE
+iterate_body(VALUE a)
+{
+    struct iterate_args *ia = (struct iterate_args *)a;
+    return ia->it_proc(ia->data1);
+}
+
+VALUE
+rb_iterate(VALUE (*it_proc)(VALUE), VALUE data1, rb_block_call_func_t bl_proc, VALUE data2)
+{
+    VALUE proc = block_proc_new(bl_proc, data2, current_block_proc());
+    struct capi_frame *f = frame();
+    struct iterate_args ia = { it_proc, data1, f->block };
+    /* The block of the current frame, which `rb_each` /
+     * `rb_funcall_passing_block` in `it_proc` pass on. */
+    f->block = (MrValue)proc;
+    int state;
+    VALUE r = rb_protect(iterate_body, (VALUE)&ia, &state);
+    f->block = ia.saved_block;
+    if (state) {
+        MrValue exc = (MrValue)rb_errinfo();
+        rb_set_errinfo(Qnil);
+        api->raise_exception(ctx(), exc);
+        return iterate_call(MR_UNDEF);
+    }
+    return r;
+}
+
+VALUE
+rb_each(VALUE obj)
+{
+    return rb_funcall_passing_block(obj, rb_intern("each"), 0, NULL);
+}
+
+VALUE
+rb_proc_new(rb_block_call_func_t func, VALUE callback_arg)
+{
+    return block_proc_new(func, callback_arg, Qnil);
+}
+
+void
+rb_gc_mark_locations(const VALUE *start, const VALUE *end)
+{
+    for (const VALUE *p = start; p < end; p++)
+        rb_gc_mark(*p);
+}
+
+/* ---------------------------------------------------------------------
+ * Struct
+ * --------------------------------------------------------------------- */
+
+static VALUE
+struct_define(VALUE outer, const char *name, va_list ap)
+{
+    VALUE args = rb_ary_new();
+    if (name && outer == Qundef)
+        rb_ary_push(args, rb_str_new_cstr(name));
+    for (const char *m; (m = va_arg(ap, const char *)) != NULL;)
+        rb_ary_push(args, ID2SYM(rb_intern(m)));
+    VALUE klass = rb_apply(rb_cStruct, rb_intern("new"), args);
+    if (name && outer != Qundef)
+        rb_define_const(outer, name, klass);
+    return klass;
+}
+
+VALUE
+rb_struct_define(const char *name, ...)
+{
+    va_list ap;
+    va_start(ap, name);
+    VALUE klass = struct_define(Qundef, name, ap);
+    va_end(ap);
+    return klass;
+}
+
+VALUE
+rb_struct_define_under(VALUE outer, const char *name, ...)
+{
+    va_list ap;
+    va_start(ap, name);
+    VALUE klass = struct_define(outer, name, ap);
+    va_end(ap);
+    return klass;
+}
+
+VALUE
+rb_struct_s_members(VALUE klass)
+{
+    return rb_funcall(klass, rb_intern("members"), 0);
+}
+
+VALUE
+rb_struct_members(VALUE st)
+{
+    return rb_funcall(st, rb_intern("members"), 0);
+}
+
+VALUE
+rb_struct_new(VALUE klass, ...)
+{
+    long n = RARRAY_LEN(rb_struct_s_members(klass));
+    VALUE *argv = ALLOCA_N(VALUE, n > 0 ? n : 1);
+    va_list ap;
+    va_start(ap, klass);
+    for (long i = 0; i < n; i++)
+        argv[i] = va_arg(ap, VALUE);
+    va_end(ap);
+    return rb_class_new_instance((int)n, argv, klass);
+}
+
+VALUE
+rb_struct_alloc(VALUE klass, VALUE values)
+{
+    return rb_apply(klass, rb_intern("new"), values);
+}
+
+VALUE
+rb_struct_initialize(VALUE self, VALUE values)
+{
+    rb_apply(self, rb_intern("initialize"), values);
+    return Qnil;
+}
+
+VALUE
+rb_struct_aref(VALUE st, VALUE idx)
+{
+    return rb_funcall(st, rb_intern("[]"), 1, idx);
+}
+
+VALUE
+rb_struct_aset(VALUE st, VALUE idx, VALUE val)
+{
+    return rb_funcall(st, rb_intern("[]="), 2, idx, val);
+}
+
+VALUE
+rb_struct_getmember(VALUE st, ID id)
+{
+    return rb_struct_aref(st, ID2SYM(id));
+}
+
+VALUE
+rb_struct_size(VALUE st)
+{
+    return rb_funcall(st, rb_intern("size"), 0);
 }

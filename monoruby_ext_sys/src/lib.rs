@@ -196,6 +196,10 @@ pub const MR_CLASS_NATIVE: u32 = 1;
 /// `define_method` argc: any number of arguments; the method sees them
 /// all in `argv`.
 pub const MR_ARGC_VARIADIC: c_int = -1;
+/// `class_set_alloc` flag: instances carry a native payload.
+pub const MR_ALLOC_NATIVE: u32 = 1;
+/// `class_set_alloc` flag: no allocator (`new` raises).
+pub const MR_ALLOC_UNDEF: u32 = 2;
 
 /// The table. `abi_version` and `size` first; the rest in this order,
 /// appended to and never reordered.
@@ -454,4 +458,27 @@ pub struct MrApi {
     /// C global that is assigned after it is registered.
     pub gc_register_address: unsafe extern "C" fn(ctx: *mut MrContext, addr: *const MrValue),
     pub gc_unregister_address: unsafe extern "C" fn(ctx: *mut MrContext, addr: *const MrValue),
+    /// Change how `klass`, an already defined class, allocates:
+    /// [`MR_ALLOC_NATIVE`] makes its instances native objects (created
+    /// payload-less by `new` / `allocate`, as for a class defined with
+    /// [`MR_CLASS_NATIVE`]), [`MR_ALLOC_UNDEF`] removes its allocator
+    /// (`new` raises TypeError). Only before any instance exists. 0 on
+    /// success; -1 with a TypeError pending.
+    pub class_set_alloc: unsafe extern "C" fn(ctx: *mut MrContext, klass: MrValue, flags: u32) -> c_int,
+    /// Detach the payload of a native object without freeing it: the
+    /// object is payload-less afterwards and the caller owns `data`.
+    /// NULL (no error) when `obj` is not a native object or has no
+    /// payload.
+    pub native_take: unsafe extern "C" fn(ctx: *mut MrContext, obj: MrValue) -> *mut c_void,
+    /// `super(*argv, &block)` from the extension method the context
+    /// belongs to: the next definition of that method's name along the
+    /// receiver's ancestor chain, as a `super` in a Ruby method body.
+    /// `MR_UNDEF` with the error pending (NoMethodError when there is
+    /// none, or outside a method call).
+    pub call_super: unsafe extern "C" fn(
+        ctx: *mut MrContext,
+        argc: c_int,
+        argv: *const MrValue,
+        block: MrValue,
+    ) -> MrValue,
 }

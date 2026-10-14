@@ -775,6 +775,13 @@ impl ClassInfo {
         self.alloc_func = Some(f);
     }
 
+    /// Change what instances of this class are (an extension giving an
+    /// already defined class a native allocator). Only sound before any
+    /// instance exists: the JIT lays out instance variables by this.
+    pub(crate) fn set_instance_ty(&mut self, ty: ObjTy) {
+        self.instance_ty = Some(ty);
+    }
+
     pub(crate) fn clear_alloc_func(&mut self) {
         self.alloc_func = None;
     }

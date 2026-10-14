@@ -18,6 +18,12 @@ CAPI_INIT(void)
 }
 #elif defined(CAPI_NO_INIT)
 void Init_something_else(void) {}
+#elif defined(CAPI_INIT_SUPER)
+void
+CAPI_INIT(void)
+{
+    rb_call_super(0, NULL);
+}
 #else
 
 static VALUE slot;
@@ -30,6 +36,11 @@ static VALUE e_ary_push(VALUE self, VALUE v) { return rb_ary_push(v, INT2FIX(1))
 static VALUE e_hash_aset(VALUE self, VALUE v) { return rb_hash_aset(v, INT2FIX(1), INT2FIX(2)); }
 static VALUE e_noop(VALUE self) { return Qnil; }
 static VALUE e_define_on(VALUE self, VALUE v) { rb_define_method(v, "x", e_noop, 0); return Qnil; }
+static VALUE e_alloc(VALUE klass) { return Qnil; }
+static VALUE e_alloc_on(VALUE self, VALUE v) { rb_define_alloc_func(v, e_alloc); return Qnil; }
+static VALUE e_undef_alloc_on(VALUE self, VALUE v) { rb_undef_alloc_func(v); return Qnil; }
+static VALUE e_data_ptr(VALUE self, VALUE v) { return LONG2NUM((long)(DATA_PTR(v) != NULL)); }
+static VALUE e_typed_p(VALUE self, VALUE v) { return RTYPEDDATA_P(v) ? Qtrue : Qfalse; }
 
 static VALUE
 e_register(VALUE self)
@@ -57,5 +68,12 @@ Init_capi_errors(void)
     rb_define_module_function(m, "hash_aset", e_hash_aset, 1);
     rb_define_module_function(m, "define_on", e_define_on, 1);
     rb_define_module_function(m, "register", e_register, 0);
+    rb_define_module_function(m, "alloc_on", e_alloc_on, 1);
+    rb_define_module_function(m, "undef_alloc_on", e_undef_alloc_on, 1);
+    rb_define_module_function(m, "data_ptr", e_data_ptr, 1);
+    rb_define_module_function(m, "typed?", e_typed_p, 1);
+    /* A class whose alloc function does not make a Data object. */
+    VALUE bad = rb_define_class_under(m, "Bad", rb_cObject);
+    rb_define_alloc_func(bad, e_alloc);
 }
 #endif

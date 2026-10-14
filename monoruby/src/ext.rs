@@ -646,6 +646,9 @@ pub(crate) static MR_API: MrApi = MrApi {
     ary_ptr: mr_ary_ptr,
     gc_register_address: mr_gc_register_address,
     gc_unregister_address: mr_gc_unregister_address,
+    class_set_alloc: mr_class_set_alloc,
+    native_take: mr_native_take,
+    call_super: mr_call_super,
 };
 
 // ---- errors ----------------------------------------------------------
@@ -1671,5 +1674,90 @@ unsafe extern "C" fn mr_gc_unregister_address(ctx: *mut MrContext, addr: *const 
     let (_, globals) = unsafe { parts(ctx) };
     if let Some(i) = globals.ext.addresses.iter().position(|a| *a == addr as usize) {
         globals.ext.addresses.swap_remove(i);
+    }
+}
+
+unsafe extern "C" fn mr_class_set_alloc(ctx: *mut MrContext, klass: MrValue, flags: u32) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(class_id) = val(klass).and_then(|v| v.is_class()).map(|m| m.id()) else {
+        set_err(vm, MonorubyErr::typeerr("class_set_alloc: class expected"));
+        return -1;
+    };
+    let info = &mut globals.store[class_id];
+    if flags & MR_ALLOC_UNDEF != 0 {
+        info.clear_alloc_func();
+        return 0;
+    }
+    if flags & MR_ALLOC_NATIVE != 0 {
+        // A class whose instances are plain objects, or already native.
+        // One with another built-in layout (a String subclass, ...)
+        // cannot carry a payload.
+        if !matches!(info.instance_ty(), Some(ObjTy::OBJECT) | Some(ObjTy::NATIVE)) {
+            let name = globals.store.get_class_name(class_id);
+            set_err(
+                vm,
+                MonorubyErr::typeerr(format!("instances of {name} cannot carry a native payload")),
+            );
+            return -1;
+        }
+        info.set_instance_ty(ObjTy::NATIVE);
+        info.set_alloc_func(ext_alloc_func);
+    }
+    0
+}
+
+unsafe extern "C" fn mr_native_take(_: *mut MrContext, obj: MrValue) -> *mut c_void {
+    let Some(mut obj) = val(obj) else {
+        return std::ptr::null_mut();
+    };
+    let Some(rv) = obj.try_rvalue_mut().filter(|rv| rv.ty() == ObjTy::NATIVE) else {
+        return std::ptr::null_mut();
+    };
+    match rv.as_native_mut().as_any_mut().downcast_mut::<ExtNative>() {
+        Some(n) => {
+            let data = n.data;
+            n.data = std::ptr::null_mut();
+            data
+        }
+        None => std::ptr::null_mut(),
+    }
+}
+
+unsafe extern "C" fn mr_call_super(
+    ctx: *mut MrContext,
+    argc: c_int,
+    argv: *const MrValue,
+    block: MrValue,
+) -> MrValue {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    // SAFETY: the context's `frame` is the calling method's, set by the
+    // trampoline; null only inside `Init_`.
+    let frame = unsafe { (*ctx).frame };
+    if frame.is_null() {
+        set_err(vm, MonorubyErr::runtimeerr("super called outside of method"));
+        return MR_UNDEF;
+    }
+    // SAFETY: the reverse of `make_ctx`'s `as_ptr`.
+    let lfp = unsafe { Lfp::new(frame as *mut u8) };
+    let fid = lfp.func_id();
+    let recv = lfp.self_val();
+    let Some(name) = globals[fid].name() else {
+        set_err(vm, MonorubyErr::runtimeerr("super called outside of method"));
+        return MR_UNDEF;
+    };
+    let Some(super_fid) = globals.store.check_super(recv.class(), fid, name) else {
+        set_err(vm, MonorubyErr::super_method_not_found(&globals.store, name, recv));
+        return MR_UNDEF;
+    };
+    // SAFETY: as above.
+    let args = unsafe { args(argv, argc) };
+    match vm.invoke_func_named(globals, super_fid, name, recv, &args, block_handler(block), None) {
+        Ok(v) => v.id(),
+        Err(e) => {
+            set_err(vm, e);
+            MR_UNDEF
+        }
     }
 }

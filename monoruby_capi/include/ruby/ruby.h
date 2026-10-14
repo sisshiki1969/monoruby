@@ -775,6 +775,125 @@ RUBY_EXTERN VALUE rb_eException, rb_eStandardError, rb_eSystemExit,
     rb_eSyntaxError, rb_eLoadError, rb_eMathDomainError;
 RUBY_EXTERN VALUE rb_stdin, rb_stdout, rb_stderr;
 
+/* ---- allocators, Data and TypedData ----------------------------------- */
+
+void rb_define_alloc_func(VALUE klass, rb_alloc_func_t *func);
+void rb_undef_alloc_func(VALUE klass);
+rb_alloc_func_t *rb_get_alloc_func(VALUE klass);
+void rb_obj_call_init(VALUE obj, int argc, const VALUE *argv);
+void rb_obj_call_init_kw(VALUE obj, int argc, const VALUE *argv, int kw_splat);
+VALUE rb_class_new(VALUE super);
+VALUE rb_module_new(void);
+VALUE rb_call_super(int argc, const VALUE *argv);
+VALUE rb_call_super_kw(int argc, const VALUE *argv, int kw_splat);
+
+typedef void (*RUBY_DATA_FUNC)(void *);
+#define RUBY_DEFAULT_FREE ((RUBY_DATA_FUNC)-1)
+#define RUBY_NEVER_FREE ((RUBY_DATA_FUNC)0)
+#define RUBY_UNTYPED_DATA_FUNC(func) func
+#define RUBY_UNTYPED_DATA_WARNING 0
+
+struct rb_data_type_struct {
+    const char *wrap_struct_name;
+    struct {
+        RUBY_DATA_FUNC dmark;
+        RUBY_DATA_FUNC dfree;
+        size_t (*dsize)(const void *);
+        RUBY_DATA_FUNC dcompact;
+        void *reserved[1];
+    } function;
+    const struct rb_data_type_struct *parent;
+    void *data;
+    VALUE flags;
+};
+typedef struct rb_data_type_struct rb_data_type_t;
+
+#define RUBY_TYPED_DEFAULT_FREE RUBY_DEFAULT_FREE
+#define RUBY_TYPED_NEVER_FREE RUBY_NEVER_FREE
+/* All of these are accepted and none changes anything: the collector is
+ * neither generational nor moving, and every payload is freed at sweep. */
+#define RUBY_TYPED_FREE_IMMEDIATELY 1
+#define RUBY_TYPED_WB_PROTECTED 0
+#define RUBY_TYPED_FROZEN_SHAREABLE 0
+#define RUBY_TYPED_EMBEDDABLE 0
+#define RUBY_TYPED_PROMOTED1 0
+
+/* The Data / TypedData payload as the extension sees it: `RDATA(obj)->data`
+ * and `RTYPEDDATA(obj)->type` are the fields CRuby code reads. The
+ * objects themselves have no struct; both are views of the layer's own
+ * record behind the native payload. */
+struct RData {
+    void *data;
+    RUBY_DATA_FUNC dmark;
+    RUBY_DATA_FUNC dfree;
+    const rb_data_type_t *type;
+};
+struct RTypedData {
+    void *data;
+    RUBY_DATA_FUNC dmark;
+    RUBY_DATA_FUNC dfree;
+    const rb_data_type_t *type;
+};
+
+VALUE rb_data_object_wrap(VALUE klass, void *datap, RUBY_DATA_FUNC dmark, RUBY_DATA_FUNC dfree);
+VALUE rb_data_object_zalloc(VALUE klass, size_t size, RUBY_DATA_FUNC dmark, RUBY_DATA_FUNC dfree);
+VALUE rb_data_object_make(VALUE klass, RUBY_DATA_FUNC dmark, RUBY_DATA_FUNC dfree, void **datap, size_t size);
+void *rb_data_object_get(VALUE obj);
+VALUE rb_data_typed_object_wrap(VALUE klass, void *datap, const rb_data_type_t *type);
+VALUE rb_data_typed_object_zalloc(VALUE klass, size_t size, const rb_data_type_t *type);
+VALUE rb_data_typed_object_make(VALUE klass, const rb_data_type_t *type, void **datap, size_t size);
+void *rb_check_typeddata(VALUE obj, const rb_data_type_t *type);
+int rb_typeddata_is_kind_of(VALUE obj, const rb_data_type_t *type);
+int rb_typeddata_inherited_p(const rb_data_type_t *child, const rb_data_type_t *parent);
+void *rb_monoruby_rdata(VALUE obj);
+int rb_monoruby_typeddata_p(VALUE obj);
+#define RDATA(obj) ((struct RData *)rb_monoruby_rdata((VALUE)(obj)))
+#define RTYPEDDATA(obj) ((struct RTypedData *)rb_monoruby_rdata((VALUE)(obj)))
+#define DATA_PTR(obj) (RDATA(obj)->data)
+#define RTYPEDDATA_DATA(obj) (RTYPEDDATA(obj)->data)
+#define RTYPEDDATA_GET_DATA(obj) RTYPEDDATA_DATA(obj)
+#define RTYPEDDATA_TYPE(obj) (RTYPEDDATA(obj)->type)
+#define RTYPEDDATA_P(obj) rb_monoruby_typeddata_p((VALUE)(obj))
+#define RTYPEDDATA_EMBEDDED_P(obj) 0
+#define Data_Wrap_Struct(klass, mark, free, sval) \
+    rb_data_object_wrap((klass), (sval), (RUBY_DATA_FUNC)(mark), (RUBY_DATA_FUNC)(free))
+#define Data_Make_Struct(klass, type, mark, free, sval) \
+    rb_data_object_make((klass), (RUBY_DATA_FUNC)(mark), (RUBY_DATA_FUNC)(free), (void **)&(sval), sizeof(type))
+#define Data_Get_Struct(obj, type, sval) ((sval) = (type *)rb_data_object_get((VALUE)(obj)))
+#define TypedData_Wrap_Struct(klass, data_type, sval) rb_data_typed_object_wrap((klass), (sval), (data_type))
+#define TypedData_Make_Struct(klass, type, data_type, sval) \
+    rb_data_typed_object_make((klass), (data_type), (void **)&(sval), sizeof(type))
+#define TypedData_Get_Struct(obj, type, data_type, sval) \
+    ((sval) = (type *)rb_check_typeddata((VALUE)(obj), (data_type)))
+
+/* ---- blocks from C ----------------------------------------------------- */
+
+typedef VALUE rb_block_call_func(VALUE yielded_arg, VALUE callback_arg, int argc, const VALUE *argv, VALUE blockarg);
+typedef rb_block_call_func *rb_block_call_func_t;
+VALUE rb_block_call(VALUE obj, ID mid, int argc, const VALUE *argv, rb_block_call_func_t bl_proc, VALUE data2);
+VALUE rb_block_call_kw(VALUE obj, ID mid, int argc, const VALUE *argv, rb_block_call_func_t bl_proc, VALUE data2, int kw_splat);
+VALUE rb_iterate(VALUE (*it_proc)(VALUE), VALUE data1, rb_block_call_func_t bl_proc, VALUE data2);
+VALUE rb_each(VALUE obj);
+VALUE rb_proc_new(rb_block_call_func_t func, VALUE callback_arg);
+void rb_gc_mark_locations(const VALUE *start, const VALUE *end);
+
+/* ---- Struct ----------------------------------------------------------- */
+
+VALUE rb_struct_define(const char *name, ...);
+VALUE rb_struct_define_under(VALUE outer, const char *name, ...);
+VALUE rb_struct_new(VALUE klass, ...);
+VALUE rb_struct_alloc(VALUE klass, VALUE values);
+VALUE rb_struct_initialize(VALUE self, VALUE values);
+VALUE rb_struct_aref(VALUE st, VALUE idx);
+VALUE rb_struct_aset(VALUE st, VALUE idx, VALUE val);
+VALUE rb_struct_getmember(VALUE st, ID id);
+VALUE rb_struct_members(VALUE st);
+VALUE rb_struct_s_members(VALUE klass);
+VALUE rb_struct_size(VALUE st);
+#define RSTRUCT_LEN(st) NUM2LONG(rb_struct_size((VALUE)(st)))
+#define RSTRUCT_GET(st, i) rb_struct_aref((VALUE)(st), LONG2NUM(i))
+#define RSTRUCT_SET(st, i, v) rb_struct_aset((VALUE)(st), LONG2NUM(i), (v))
+
 /* ---- interpreter ------------------------------------------------------ */
 
 const char *rb_monoruby_ruby_version(void);
