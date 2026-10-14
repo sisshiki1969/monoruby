@@ -1617,8 +1617,11 @@ define_cfunc(VALUE klass, const char *name, VALUE (*func)(ANYARGS), int argc, ui
     m->arity = argc;
     api->define_method_data(ctx(), (MrValue)klass, name, capi_dispatch, m,
                             argc < 0 ? MR_ARGC_VARIADIC : argc, flags);
-    if (api->error_pending(ctx()))
+    if (api->error_pending(ctx())) {
+        /* Not defined, so nothing refers to it. */
+        free(m);
         capi_unwind();
+    }
 }
 
 void

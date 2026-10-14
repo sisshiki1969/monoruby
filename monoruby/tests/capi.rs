@@ -175,3 +175,100 @@ fn capi_extension_by_path() {
     ]));
     assert_eq!(out, "true\nfalse\n3\n1\n");
 }
+
+/// `tests/capi/capi_errors.c` built as `<dir>/<name>.so`, with `defines`
+/// and, unless `layer` is false, the layer's `capi.c`. `None` when there
+/// is no C compiler.
+fn build_errors(name: &str, defines: &[&str], layer: bool) -> Option<PathBuf> {
+    let root = manifest_dir().join("..");
+    let dir = out_dir(&format!("errors/{name}"));
+    let mut cmd = Command::new(cc());
+    cmd.args(["-shared", "-fPIC", "-O1", "-Wall", "-Werror"])
+        .arg("-I")
+        .arg(root.join("monoruby_capi/include"))
+        .arg("-I")
+        .arg(root.join("monoruby_ext_sys/include"))
+        .args(defines.iter().map(|d| format!("-D{d}")))
+        .arg("-o")
+        .arg(dir.join(format!("{name}.so")))
+        .arg(manifest_dir().join("tests/capi/capi_errors.c"));
+    if layer {
+        cmd.arg(root.join("monoruby_capi/src/capi.c"));
+    }
+    let status = cmd.status().ok()?;
+    assert!(status.success(), "building {name} failed");
+    Some(dir)
+}
+
+/// The API's error paths that CRuby leaves undefined: each one raises
+/// instead of crashing, and a registered address is a GC root until it
+/// is unregistered.
+#[test]
+fn capi_api_errors() {
+    let Some(dir) = build_errors("capi_errors", &[], true) else {
+        eprintln!("skipped: no C compiler");
+        return;
+    };
+    let out = run(monoruby(&dir).args([
+        "-e",
+        r#"require "capi_errors"
+E = CapiErrors
+def t = (yield; :ok) rescue [$!.class, $!.message]
+p t { E.rstring_ptr(1) }
+p t { E.resize(1) }
+p t { E.resize("ab".freeze) }
+p t { E.cat(nil) }
+p t { E.ary_len(1) }
+p t { E.ary_push([].freeze) }
+p t { E.hash_aset({}.freeze) }
+p t { E.define_on("str") }
+p E.register"#,
+    ]));
+    assert_eq!(
+        out,
+        r#"[TypeError, "no implicit conversion of Integer into String"]
+[TypeError, "no implicit conversion of Integer into String"]
+[FrozenError, "can't modify frozen String: \"ab\""]
+[TypeError, "no implicit conversion of nil into String"]
+[TypeError, "Array expected"]
+[FrozenError, "can't modify frozen Array: []"]
+[FrozenError, "can't modify frozen Hash: {}"]
+[TypeError, "define_method: class/module expected"]
+"registered"
+"#
+    );
+}
+
+/// Loader failures: no `Init_<name>`, an `Init_` that raises, and an entry
+/// point reporting a newer layer or an unknown status. Each is a
+/// LoadError (or the initializer's own exception), never a crash.
+#[test]
+fn capi_load_errors() {
+    let cases: [(&str, &[&str], bool); 4] = [
+        ("libcapi_noinit", &["CAPI_NO_INIT"], true),
+        ("capi_raises", &["CAPI_INIT_RAISES", "CAPI_INIT=Init_capi_raises"], true),
+        ("capi_newer", &["CAPI_RC=-2", "CAPI_INIT=Init_capi_newer"], false),
+        ("capi_status", &["CAPI_RC=5", "CAPI_INIT=Init_capi_status"], false),
+    ];
+    let mut expected = vec![];
+    for (name, defines, layer) in cases {
+        let Some(dir) = build_errors(name, defines, layer) else {
+            eprintln!("skipped: no C compiler");
+            return;
+        };
+        let so = dir.join(format!("{name}.so")).display().to_string();
+        let out = run(monoruby(&dir).args([
+            "-e",
+            &format!(r##"begin; require {name:?}; rescue ScriptError, StandardError => e; puts "#{{e.class}}: #{{e.message.sub({so:?}, "SO")}}"; end"##),
+        ]));
+        expected.push(out);
+    }
+    assert_eq!(
+        expected.concat(),
+        "LoadError: SO is not a Ruby extension: no Init_libcapi_noinit
+RuntimeError: Init failed
+LoadError: SO was built against a newer monoruby C API than this interpreter provides
+LoadError: SO returned 5 from Init_capi_status
+"
+    );
+}
