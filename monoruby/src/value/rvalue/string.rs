@@ -3762,6 +3762,30 @@ impl RStringInner {
         self.owned_mut().as_mut_slice()
     }
 
+    /// The buffer as CRuby's `RSTRING_PTR` hands it to a C extension
+    /// (`ext.rs`, `str_cptr`): detached from any shared root, with a NUL
+    /// in the spare capacity right after the last byte (the length is
+    /// unchanged), and the cached code range dropped, since the caller
+    /// may write through the pointer. Returns the pointer and the length.
+    pub(crate) fn c_str_ptr(&mut self) -> (*mut u8, usize) {
+        self.cr.set(CodeRange::Unknown);
+        let buf = self.owned_mut();
+        buf.reserve(1);
+        let len = buf.len();
+        let ptr = buf.as_mut_ptr();
+        // SAFETY: `reserve(1)` made room for one byte past `len`; writing
+        // spare capacity does not change the contents.
+        unsafe { *ptr.add(len) = 0 };
+        (ptr, len)
+    }
+
+    /// Set the length to `len`, truncating or padding with NUL bytes —
+    /// CRuby's `rb_str_resize` / `rb_str_set_len` for a C extension.
+    pub(crate) fn resize_zero_fill(&mut self, len: usize) {
+        self.cr.set(CodeRange::Unknown);
+        self.owned_mut().resize(len, 0);
+    }
+
     /// Detach a shared string from its root in place — `uniquify` for
     /// callers outside this module (the JIT's inline `String#<<` calls
     /// this through `runtime::str_detach` and retries its append on the

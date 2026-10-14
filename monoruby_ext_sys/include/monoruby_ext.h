@@ -62,6 +62,10 @@ typedef struct MrContext {
  * error pending. */
 typedef MrValue (*MrMethodFn)(MrContext *ctx, MrValue self, int argc,
                               const MrValue *argv, MrValue block);
+/* A method registered with define_method_data: MrMethodFn plus the data
+ * pointer given at registration. */
+typedef MrValue (*MrMethodDataFn)(MrContext *ctx, MrValue self, int argc,
+                                  const MrValue *argv, MrValue block, void *data);
 /* Init_<name>: 0 on success. */
 typedef int (*MrInitFn)(MrContext *ctx);
 /* Run by call_blocking on a worker thread; must not touch Ruby. */
@@ -94,6 +98,8 @@ typedef enum MrErrorKind {
 #define MR_METHOD_SINGLETON 2u
 #define MR_CLASS_NATIVE     1u
 #define MR_ARGC_VARIADIC    (-1)
+#define MR_ALLOC_NATIVE     1u   /* class_set_alloc: instances carry a native payload */
+#define MR_ALLOC_UNDEF      2u   /* class_set_alloc: no allocator */
 
 /* Entries are only ever appended; `size` says how many bytes the running
  * monoruby fills. */
@@ -170,6 +176,18 @@ struct MrApi {
     /* appended after the first release */
     MrSym   (*intern)(MrContext *, const uint8_t *ptr, size_t len);
     MrValue (*funcall_sym)(MrContext *, MrValue recv, MrSym sym, int argc, const MrValue *argv, MrValue block);
+
+    /* appended for the CRuby C API layer (monoruby_capi/) */
+    void    (*define_method_data)(MrContext *, MrValue klass, const char *name, MrMethodDataFn f, void *data, int argc, uint32_t flags);
+    uint8_t *(*str_cptr)(MrContext *, MrValue v, size_t *len);   /* own buffer, NUL-terminated, writable */
+    int     (*str_resize)(MrContext *, MrValue v, size_t len);   /* truncate / NUL-pad */
+    int     (*str_cat)(MrContext *, MrValue v, const uint8_t *ptr, size_t len);
+    const MrValue *(*ary_ptr)(MrContext *, MrValue ary, size_t *len);   /* read-only */
+    void    (*gc_register_address)(MrContext *, const MrValue *addr);
+    void    (*gc_unregister_address)(MrContext *, const MrValue *addr);
+    int     (*class_set_alloc)(MrContext *, MrValue klass, uint32_t flags);   /* MR_ALLOC_* */
+    void   *(*native_take)(MrContext *, MrValue obj);   /* detach the payload, unfreed */
+    MrValue (*call_super)(MrContext *, int argc, const MrValue *argv, MrValue block);
 };
 
 #ifdef __cplusplus

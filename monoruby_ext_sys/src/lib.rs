@@ -98,6 +98,19 @@ pub type MrMethodFn = unsafe extern "C" fn(
 /// error) fails the `require` with LoadError.
 pub type MrInitFn = unsafe extern "C" fn(ctx: *mut MrContext) -> c_int;
 
+/// An extension method registered with [`MrApi::define_method_data`]:
+/// [`MrMethodFn`] plus the `data` pointer given at registration, so one
+/// function can serve many methods (the CRuby C API layer dispatches
+/// every `rb_define_method` through one of these).
+pub type MrMethodDataFn = unsafe extern "C" fn(
+    ctx: *mut MrContext,
+    self_: MrValue,
+    argc: c_int,
+    argv: *const MrValue,
+    block: MrValue,
+    data: *mut c_void,
+) -> MrValue;
+
 /// A function `call_blocking` runs on a worker thread. It must not touch
 /// Ruby values or the API.
 pub type MrBlockingFn = unsafe extern "C" fn(arg: *mut c_void) -> i64;
@@ -183,6 +196,10 @@ pub const MR_CLASS_NATIVE: u32 = 1;
 /// `define_method` argc: any number of arguments; the method sees them
 /// all in `argv`.
 pub const MR_ARGC_VARIADIC: c_int = -1;
+/// `class_set_alloc` flag: instances carry a native payload.
+pub const MR_ALLOC_NATIVE: u32 = 1;
+/// `class_set_alloc` flag: no allocator (`new` raises).
+pub const MR_ALLOC_UNDEF: u32 = 2;
 
 /// The table. `abi_version` and `size` first; the rest in this order,
 /// appended to and never reordered.
@@ -401,6 +418,65 @@ pub struct MrApi {
         ctx: *mut MrContext,
         recv: MrValue,
         sym: MrSym,
+        argc: c_int,
+        argv: *const MrValue,
+        block: MrValue,
+    ) -> MrValue,
+
+    // ---- appended for the CRuby C API layer (`monoruby_capi/`) ---------
+    /// [`MrApi::define_method`] with a `data` pointer handed back to `f`
+    /// on every call. `data` must outlive the interpreter (the method is
+    /// never undefined from the extension's side).
+    pub define_method_data: unsafe extern "C" fn(
+        ctx: *mut MrContext,
+        klass: MrValue,
+        name: *const c_char,
+        f: MrMethodDataFn,
+        data: *mut c_void,
+        argc: c_int,
+        flags: u32,
+    ),
+    /// The bytes of a String as CRuby's `RSTRING_PTR` gives them: the
+    /// String's own buffer (detached first if it shares another's), with
+    /// a NUL after the last byte, writable in place at the same length.
+    /// Valid until the String is next resized or collected. NULL with a
+    /// TypeError pending when `v` is not a String.
+    pub str_cptr: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue, len: *mut usize) -> *mut u8,
+    /// Set a String's length, truncating or padding with NUL bytes.
+    /// 0 on success; -1 with an error pending (not a String, frozen).
+    pub str_resize: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue, len: usize) -> c_int,
+    /// Append `ptr[0..len]` to a String, keeping its encoding. 0 on
+    /// success; -1 with an error pending.
+    pub str_cat:
+        unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue, ptr: *const u8, len: usize) -> c_int,
+    /// The elements of an Array, read-only, valid until the Array is next
+    /// changed. NULL with a TypeError pending for a non-Array.
+    pub ary_ptr:
+        unsafe extern "C" fn(ctx: *mut MrContext, ary: MrValue, len: *mut usize) -> *const MrValue,
+    /// Root whatever `*addr` holds at each collection, until
+    /// `gc_unregister_address` — CRuby's `rb_gc_register_address`, for a
+    /// C global that is assigned after it is registered.
+    pub gc_register_address: unsafe extern "C" fn(ctx: *mut MrContext, addr: *const MrValue),
+    pub gc_unregister_address: unsafe extern "C" fn(ctx: *mut MrContext, addr: *const MrValue),
+    /// Change how `klass`, an already defined class, allocates:
+    /// [`MR_ALLOC_NATIVE`] makes its instances native objects (created
+    /// payload-less by `new` / `allocate`, as for a class defined with
+    /// [`MR_CLASS_NATIVE`]), [`MR_ALLOC_UNDEF`] removes its allocator
+    /// (`new` raises TypeError). Only before any instance exists. 0 on
+    /// success; -1 with a TypeError pending.
+    pub class_set_alloc: unsafe extern "C" fn(ctx: *mut MrContext, klass: MrValue, flags: u32) -> c_int,
+    /// Detach the payload of a native object without freeing it: the
+    /// object is payload-less afterwards and the caller owns `data`.
+    /// NULL (no error) when `obj` is not a native object or has no
+    /// payload.
+    pub native_take: unsafe extern "C" fn(ctx: *mut MrContext, obj: MrValue) -> *mut c_void,
+    /// `super(*argv, &block)` from the extension method the context
+    /// belongs to: the next definition of that method's name along the
+    /// receiver's ancestor chain, as a `super` in a Ruby method body.
+    /// `MR_UNDEF` with the error pending (NoMethodError when there is
+    /// none, or outside a method call).
+    pub call_super: unsafe extern "C" fn(
+        ctx: *mut MrContext,
         argc: c_int,
         argv: *const MrValue,
         block: MrValue,

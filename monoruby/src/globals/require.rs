@@ -402,7 +402,9 @@ impl Globals {
         if self.is_feature_loaded(&canonicalized_path) {
             return Ok(RequireLoad::AlreadyLoaded(canonicalized_path));
         }
-        if crate::ext::is_extension_path(&canonicalized_path) {
+        if crate::ext::is_extension_path(&canonicalized_path)
+            || crate::ext::is_capi_extension(&canonicalized_path)
+        {
             self.add_loaded_feature(&canonicalized_path);
             return Ok(RequireLoad::Native(canonicalized_path));
         }
@@ -420,6 +422,18 @@ impl Globals {
                 .unwrap_or_else(|| canonicalized_path.file_name().unwrap().as_ref());
             let mut lib = monoruby_lib.join(relative);
             lib.set_extension("rb");
+            if !lib.exists() {
+                // No stand-in for it, and it is not an extension built
+                // against monoruby's `ruby.h` (`ext::is_capi_extension`
+                // said no above): most likely a library compiled for CRuby.
+                return Err(MonorubyErr::loaderr(
+                    format!(
+                        "cannot load such file -- {} (a C extension must be built against monoruby's C API headers, monoruby_capi/include)",
+                        canonicalized_path.display()
+                    ),
+                    canonicalized_path,
+                ));
+            }
             load_file(&lib)?
         } else {
             load_file(&canonicalized_path)?

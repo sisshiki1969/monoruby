@@ -1,0 +1,11 @@
+/* ruby/version.h — the CRuby release monoruby's C API layer follows. */
+#ifndef MONORUBY_CAPI_RUBY_VERSION_H
+#define MONORUBY_CAPI_RUBY_VERSION_H 1
+
+#define RUBY_API_VERSION_MAJOR 4
+#define RUBY_API_VERSION_MINOR 0
+#define RUBY_API_VERSION_TEENY 0
+#define RUBY_API_VERSION_CODE \
+    (RUBY_API_VERSION_MAJOR * 10000 + RUBY_API_VERSION_MINOR * 100 + RUBY_API_VERSION_TEENY)
+
+#endif

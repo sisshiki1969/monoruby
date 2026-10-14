@@ -29,11 +29,20 @@ use std::path::{Path, PathBuf};
 // Per-interpreter state
 // ---------------------------------------------------------------------
 
+/// The extension's entry point for one method.
+#[derive(Clone, Copy)]
+enum ExtFn {
+    Plain(MrMethodFn),
+    /// `define_method_data`: the function and the pointer handed back
+    /// to it.
+    Data(MrMethodDataFn, *mut c_void),
+}
+
 /// A method an extension defined: found from the trampoline through the
 /// frame's `FuncId`.
 #[derive(Clone, Copy)]
 struct ExtMethod {
-    f: MrMethodFn,
+    f: ExtFn,
     /// `MR_ARGC_VARIADIC` when the builtin was registered with a rest
     /// parameter, whose Array the trampoline flattens into `argv`.
     argc: c_int,
@@ -44,6 +53,8 @@ pub(crate) struct ExtState {
     methods: HashMap<FuncId, ExtMethod>,
     /// `gc_pin` counts, keyed by value bits; marked as roots.
     pins: HashMap<u64, u32>,
+    /// `gc_register_address` slots, read afresh at every collection.
+    addresses: Vec<usize>,
     /// The `dlopen` handles, kept for the life of the process: an
     /// extension is never unloaded (its method pointers live in the
     /// function table).
@@ -54,6 +65,16 @@ impl ExtState {
     pub(crate) fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         for bits in self.pins.keys() {
             Value::from_u64(*bits).mark(alloc);
+        }
+        for addr in &self.addresses {
+            // SAFETY: the extension registered the address of a static
+            // `MrValue` slot and keeps it valid until it unregisters it.
+            let bits = unsafe { std::ptr::read_volatile(*addr as *const MrValue) };
+            if let Some(v) = val(bits)
+                && !v.is_packed_value()
+            {
+                v.mark(alloc);
+            }
         }
     }
 }
@@ -261,13 +282,23 @@ extern "C" fn ext_method_trampoline(
     let mut ctx = make_ctx(vm, globals, Some(lfp), Some(pc));
     // SAFETY: the extension's own function, with the arguments it declared.
     let res = unsafe {
-        (m.f)(
-            &mut ctx,
-            lfp.self_val().id(),
-            argv.len() as c_int,
-            argv.as_ptr(),
-            block,
-        )
+        match m.f {
+            ExtFn::Plain(f) => f(
+                &mut ctx,
+                lfp.self_val().id(),
+                argv.len() as c_int,
+                argv.as_ptr(),
+                block,
+            ),
+            ExtFn::Data(f, data) => f(
+                &mut ctx,
+                lfp.self_val().id(),
+                argv.len() as c_int,
+                argv.as_ptr(),
+                block,
+                data,
+            ),
+        }
     };
     vm.temp_clear(temp_base);
     match val(res) {
@@ -388,6 +419,11 @@ pub(crate) fn load_extension(vm: &mut Executor, globals: &mut Globals, path: &Pa
             path.to_path_buf(),
         ));
     }
+    // SAFETY: as above.
+    let capi_init = unsafe { libc::dlsym(handle, c"monoruby_capi_init".as_ptr()) };
+    if !capi_init.is_null() {
+        return load_capi_extension(vm, globals, path, handle, capi_init);
+    }
     let sym = std::ffi::CString::new(init_symbol(path)).unwrap();
     // SAFETY: as above.
     let init = unsafe { libc::dlsym(handle, sym.as_ptr()) };
@@ -423,6 +459,112 @@ pub(crate) fn load_extension(vm: &mut Executor, globals: &mut Globals, path: &Pa
     }
     globals.ext.handles.push(handle as usize);
     Ok(())
+}
+
+/// The entry point the CRuby C API layer (`monoruby_capi/src/capi.c`)
+/// links into every extension built against its `ruby.h`: binds the
+/// layer to the interpreter and runs the extension's `void Init_<name>(void)`
+/// under its own exception frame. 0 on success; -1 with an error pending;
+/// -2 when the running monoruby's table is older than the layer needs.
+type CapiInitFn = unsafe extern "C" fn(ctx: *mut MrContext, init: *mut c_void) -> c_int;
+
+/// Load an extension written against the CRuby C API (it carries
+/// `monoruby_capi_init`). Its initializer is CRuby's
+/// `Init_<basename>`, the basename taken as it is (a CRuby extension
+/// `libfoo.so` defines `Init_libfoo`), with the `lib`-stripped form of
+/// `init_symbol` as a fallback for one installed as `lib<name>.so`.
+fn load_capi_extension(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    path: &Path,
+    handle: *mut c_void,
+    capi_init: *mut c_void,
+) -> Result<()> {
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut candidates = vec![format!("Init_{stem}")];
+    let stripped = init_symbol(path);
+    if !candidates.contains(&stripped) {
+        candidates.push(stripped);
+    }
+    let Some((sym, init)) = candidates.iter().find_map(|name| {
+        let c = std::ffi::CString::new(name.as_str()).ok()?;
+        // SAFETY: plain libc call with a valid handle and C string.
+        let p = unsafe { libc::dlsym(handle, c.as_ptr()) };
+        (!p.is_null()).then_some((name.clone(), p))
+    }) else {
+        return Err(MonorubyErr::loaderr(
+            format!(
+                "{} is not a Ruby extension: no {}",
+                path.display(),
+                candidates[0]
+            ),
+            path.to_path_buf(),
+        ));
+    };
+    // SAFETY: the layer's entry point, declared with `CapiInitFn`'s type.
+    let capi_init: CapiInitFn =
+        unsafe { std::mem::transmute::<*mut c_void, CapiInitFn>(capi_init) };
+    // Values the initializer creates stay rooted until it returns, as
+    // during any extension call.
+    let temp_base = vm.temp_len();
+    let mut ctx = make_ctx(vm, globals, None, None);
+    // SAFETY: the layer's entry point with a live context and the
+    // extension's `void Init_<name>(void)`.
+    let rc = unsafe { capi_init(&mut ctx, init) };
+    vm.temp_clear(temp_base);
+    if vm.has_error() {
+        return Err(vm.take_error());
+    }
+    match rc {
+        0 => {
+            globals.ext.handles.push(handle as usize);
+            Ok(())
+        }
+        -2 => Err(MonorubyErr::loaderr(
+            format!(
+                "{} was built against a newer monoruby C API than this interpreter provides",
+                path.display()
+            ),
+            path.to_path_buf(),
+        )),
+        rc => Err(MonorubyErr::loaderr(
+            format!("{} returned {rc} from {sym}", path.display()),
+            path.to_path_buf(),
+        )),
+    }
+}
+
+/// Whether the shared library at `path` was built against monoruby's
+/// CRuby-compatible `ruby.h` — the require resolver's cue to load a `.so`
+/// found on `$LOAD_PATH` natively instead of looking for a Ruby stand-in.
+/// A library built for CRuby fails to `dlopen` here (its `rb_*` symbols
+/// are undefined in monoruby, and `RTLD_NOW` resolves them before any of
+/// its code runs), and one that loads but lacks the layer's entry point
+/// is closed again.
+pub(crate) fn is_capi_extension(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    if path.extension().is_none_or(|e| e != "so" && e != DLEXT && e != "bundle") {
+        return false;
+    }
+    let Ok(cpath) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: plain libc calls with valid C strings.
+    unsafe {
+        let handle = libc::dlopen(cpath.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+        if handle.is_null() {
+            // Drain the error so a later `dlerror` reports its own call.
+            libc::dlerror();
+            return false;
+        }
+        let found = !libc::dlsym(handle, c"monoruby_capi_init".as_ptr()).is_null();
+        // The handle is reference-counted: `load_extension` opens it again.
+        libc::dlclose(handle);
+        found
+    }
 }
 
 fn dlerror() -> String {
@@ -497,6 +639,16 @@ pub(crate) static MR_API: MrApi = MrApi {
     ruby_version: mr_ruby_version,
     intern: mr_intern,
     funcall_sym: mr_funcall_sym,
+    define_method_data: mr_define_method_data,
+    str_cptr: mr_str_cptr,
+    str_resize: mr_str_resize,
+    str_cat: mr_str_cat,
+    ary_ptr: mr_ary_ptr,
+    gc_register_address: mr_gc_register_address,
+    gc_unregister_address: mr_gc_unregister_address,
+    class_set_alloc: mr_class_set_alloc,
+    native_take: mr_native_take,
+    call_super: mr_call_super,
 };
 
 // ---- errors ----------------------------------------------------------
@@ -706,6 +858,42 @@ unsafe extern "C" fn mr_define_method(
         );
         return;
     };
+    define_ext_method(globals, class_id, name, ExtFn::Plain(f), argc, flags);
+}
+
+unsafe extern "C" fn mr_define_method_data(
+    ctx: *mut MrContext,
+    klass: MrValue,
+    name: *const c_char,
+    f: MrMethodDataFn,
+    data: *mut c_void,
+    argc: c_int,
+    flags: u32,
+) {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let name = unsafe { cstr(name) };
+    let Some(class_id) = val(klass)
+        .and_then(|v| v.is_class_or_module())
+        .map(|m| m.id())
+    else {
+        set_err(
+            vm,
+            MonorubyErr::typeerr("define_method: class/module expected"),
+        );
+        return;
+    };
+    define_ext_method(globals, class_id, name, ExtFn::Data(f, data), argc, flags);
+}
+
+fn define_ext_method(
+    globals: &mut Globals,
+    class_id: ClassId,
+    name: &str,
+    f: ExtFn,
+    argc: c_int,
+    flags: u32,
+) {
     let t: BuiltinFn = ext_method_trampoline;
     let singleton = flags & MR_METHOD_SINGLETON != 0;
     let private = flags & MR_METHOD_PRIVATE != 0;
@@ -907,11 +1095,15 @@ unsafe extern "C" fn mr_ary_new(_: *mut MrContext) -> MrValue {
 
 unsafe extern "C" fn mr_ary_push(ctx: *mut MrContext, ary: MrValue, v: MrValue) -> c_int {
     // SAFETY: the table's contract.
-    let (vm, _) = unsafe { parts(ctx) };
+    let (vm, globals) = unsafe { parts(ctx) };
     let (Some(ary), Some(v)) = (val(ary), val(v)) else {
         return -1;
     };
     match ary.try_array_ty() {
+        Some(_) if let Err(e) = ary.ensure_not_frozen(&globals.store) => {
+            set_err(vm, e);
+            -1
+        }
         Some(mut a) => {
             a.push(v);
             0
@@ -955,6 +1147,10 @@ unsafe extern "C" fn mr_hash_set(
         set_err(vm, MonorubyErr::typeerr("Hash expected"));
         return -1;
     };
+    if let Err(e) = hash.ensure_not_frozen(&globals.store) {
+        set_err(vm, e);
+        return -1;
+    }
     match h.insert(key, v, vm, globals) {
         Ok(()) => 0,
         Err(e) => {
@@ -1378,4 +1574,190 @@ unsafe extern "C" fn mr_respond_to(ctx: *mut MrContext, v: MrValue, name: *const
         .store
         .check_method_for_class(v.class(), IdentId::get_id(name))
         .is_some() as c_int
+}
+
+// ---- appended for the CRuby C API layer ------------------------------
+
+/// `v` as a String, or a TypeError pending.
+fn string_arg(vm: &mut Executor, globals: &Globals, v: MrValue) -> Option<Value> {
+    let v = val(v)?;
+    if v.try_rvalue().is_some_and(|rv| rv.ty() == ObjTy::STRING) {
+        Some(v)
+    } else {
+        set_err(
+            vm,
+            MonorubyErr::no_implicit_conversion(&globals.store, v, STRING_CLASS),
+        );
+        None
+    }
+}
+
+unsafe extern "C" fn mr_str_cptr(ctx: *mut MrContext, v: MrValue, len: *mut usize) -> *mut u8 {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(mut s) = string_arg(vm, globals, v) else {
+        return std::ptr::null_mut();
+    };
+    let (ptr, n) = s.as_rstring_inner_mut().c_str_ptr();
+    if !len.is_null() {
+        // SAFETY: `len` is the caller's slot.
+        unsafe { *len = n };
+    }
+    ptr
+}
+
+unsafe extern "C" fn mr_str_resize(ctx: *mut MrContext, v: MrValue, len: usize) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(mut s) = string_arg(vm, globals, v) else {
+        return -1;
+    };
+    if let Err(e) = s.ensure_not_frozen(&globals.store) {
+        set_err(vm, e);
+        return -1;
+    }
+    s.as_rstring_inner_mut().resize_zero_fill(len);
+    0
+}
+
+unsafe extern "C" fn mr_str_cat(
+    ctx: *mut MrContext,
+    v: MrValue,
+    ptr: *const u8,
+    len: usize,
+) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(mut s) = string_arg(vm, globals, v) else {
+        return -1;
+    };
+    if let Err(e) = s.ensure_not_frozen(&globals.store) {
+        set_err(vm, e);
+        return -1;
+    }
+    // SAFETY: the table's contract — `len` bytes readable at `ptr`.
+    let bytes = unsafe { slice(ptr, len) };
+    s.as_rstring_inner_mut().extend_from_slice_merge_cr(bytes);
+    0
+}
+
+unsafe extern "C" fn mr_ary_ptr(
+    ctx: *mut MrContext,
+    ary: MrValue,
+    len: *mut usize,
+) -> *const MrValue {
+    // SAFETY: the table's contract.
+    let (vm, _) = unsafe { parts(ctx) };
+    let Some(a) = val(ary).filter(|a| a.try_array_ty().is_some()) else {
+        set_err(vm, MonorubyErr::typeerr("Array expected"));
+        return std::ptr::null();
+    };
+    let elems: &[Value] = a.as_array_inner();
+    if !len.is_null() {
+        // SAFETY: `len` is the caller's slot.
+        unsafe { *len = elems.len() };
+    }
+    // `Value` is a transparent `u64`.
+    elems.as_ptr() as *const MrValue
+}
+
+unsafe extern "C" fn mr_gc_register_address(ctx: *mut MrContext, addr: *const MrValue) {
+    // SAFETY: the table's contract.
+    let (_, globals) = unsafe { parts(ctx) };
+    if !addr.is_null() {
+        globals.ext.addresses.push(addr as usize);
+    }
+}
+
+unsafe extern "C" fn mr_gc_unregister_address(ctx: *mut MrContext, addr: *const MrValue) {
+    // SAFETY: the table's contract.
+    let (_, globals) = unsafe { parts(ctx) };
+    if let Some(i) = globals.ext.addresses.iter().position(|a| *a == addr as usize) {
+        globals.ext.addresses.swap_remove(i);
+    }
+}
+
+unsafe extern "C" fn mr_class_set_alloc(ctx: *mut MrContext, klass: MrValue, flags: u32) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(class_id) = val(klass).and_then(|v| v.is_class()).map(|m| m.id()) else {
+        set_err(vm, MonorubyErr::typeerr("class_set_alloc: class expected"));
+        return -1;
+    };
+    let info = &mut globals.store[class_id];
+    if flags & MR_ALLOC_UNDEF != 0 {
+        info.clear_alloc_func();
+        return 0;
+    }
+    if flags & MR_ALLOC_NATIVE != 0 {
+        // A class whose instances are plain objects, or already native.
+        // One with another built-in layout (a String subclass, ...)
+        // cannot carry a payload.
+        if !matches!(info.instance_ty(), Some(ObjTy::OBJECT) | Some(ObjTy::NATIVE)) {
+            let name = globals.store.get_class_name(class_id);
+            set_err(
+                vm,
+                MonorubyErr::typeerr(format!("instances of {name} cannot carry a native payload")),
+            );
+            return -1;
+        }
+        info.set_instance_ty(ObjTy::NATIVE);
+        info.set_alloc_func(ext_alloc_func);
+    }
+    0
+}
+
+unsafe extern "C" fn mr_native_take(_: *mut MrContext, obj: MrValue) -> *mut c_void {
+    let Some(mut obj) = val(obj) else {
+        return std::ptr::null_mut();
+    };
+    let Some(rv) = obj.try_rvalue_mut().filter(|rv| rv.ty() == ObjTy::NATIVE) else {
+        return std::ptr::null_mut();
+    };
+    match rv.as_native_mut().as_any_mut().downcast_mut::<ExtNative>() {
+        Some(n) => {
+            let data = n.data;
+            n.data = std::ptr::null_mut();
+            data
+        }
+        None => std::ptr::null_mut(),
+    }
+}
+
+unsafe extern "C" fn mr_call_super(
+    ctx: *mut MrContext,
+    argc: c_int,
+    argv: *const MrValue,
+    block: MrValue,
+) -> MrValue {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    // SAFETY: the context's `frame` is the calling method's, set by the
+    // trampoline; null only inside `Init_`.
+    let frame = unsafe { (*ctx).frame };
+    if frame.is_null() {
+        set_err(vm, MonorubyErr::runtimeerr("super called outside of method"));
+        return MR_UNDEF;
+    }
+    // SAFETY: the reverse of `make_ctx`'s `as_ptr`.
+    let lfp = unsafe { Lfp::new(frame as *mut u8) };
+    let fid = lfp.func_id();
+    let recv = lfp.self_val();
+    let Some(name) = globals[fid].name() else {
+        set_err(vm, MonorubyErr::runtimeerr("super called outside of method"));
+        return MR_UNDEF;
+    };
+    let Some(super_fid) = globals.store.check_super(recv.class(), fid, name) else {
+        set_err(vm, MonorubyErr::super_method_not_found(&globals.store, name, recv));
+        return MR_UNDEF;
+    };
+    // SAFETY: as above.
+    let args = unsafe { args(argv, argc) };
+    match vm.invoke_func_named(globals, super_fid, name, recv, &args, block_handler(block), None) {
+        Ok(v) => v.id(),
+        Err(e) => {
+            set_err(vm, e);
+            MR_UNDEF
+        }
+    }
 }

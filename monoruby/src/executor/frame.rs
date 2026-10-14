@@ -386,7 +386,7 @@ impl Lfp {
     ///
     /// This function is extremely dangerous. Programmer must ensure that *ptr* is a valid pointer which points to a local frame.
     ///
-    unsafe fn new(ptr: *mut u8) -> Self {
+    pub(crate) unsafe fn new(ptr: *mut u8) -> Self {
         Self(std::ptr::NonNull::new(ptr).unwrap())
     }
 

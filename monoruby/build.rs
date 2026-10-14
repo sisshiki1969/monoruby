@@ -129,6 +129,13 @@ fn main() {
         (PathBuf::from("gem"), staging_lib.clone()),
         (PathBuf::from("stdlib"), staging_stub.clone()),
         (PathBuf::from("gem"), staging_stub.clone()),
+        // The CRuby-compatible C API: `ruby.h` and friends plus the ABI
+        // header they sit on go to `include/`, the layer's source to
+        // `capi/` — what a C extension is compiled against and with
+        // (`doc/c_api.md`).
+        (PathBuf::from("../monoruby_capi/include"), staging.join("include")),
+        (PathBuf::from("../monoruby_ext_sys/include"), staging.join("include")),
+        (PathBuf::from("../monoruby_capi/src"), staging.join("capi")),
     ];
 
     // Re-run when the installed sources change so edits to the vendored
