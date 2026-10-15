@@ -1,5 +1,17 @@
 begin
-  _result = `ruby -e 'require "rbconfig/sizeof"; p [RbConfig::SIZEOF, RbConfig::LIMITS]'`
+  # The host CRuby answers for this platform. It runs without the Bundler
+  # environment a `Bundler.setup` in this process exported (`RUBYOPT=
+  # -rbundler/setup`, `BUNDLER_SETUP`, and `GEM_HOME` pointing at
+  # monoruby's own gem home): the query needs no gems, and under that
+  # environment the child would set up the bundle against the wrong gem
+  # home and print Bundler's errors.
+  _env = %w[RUBYOPT BUNDLER_SETUP BUNDLE_GEMFILE BUNDLE_BIN_PATH BUNDLER_VERSION GEM_HOME GEM_PATH]
+    .to_h { |k| [k, nil] }
+  _result = IO.popen(
+    _env,
+    ["ruby", "-e", 'require "rbconfig/sizeof"; p [RbConfig::SIZEOF, RbConfig::LIMITS]'],
+    err: File::NULL, &:read
+  )
   _sizeof, _limits = eval(_result)
   raise "failed" unless _sizeof
   RbConfig::SIZEOF = _sizeof

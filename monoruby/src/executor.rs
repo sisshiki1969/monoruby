@@ -1448,6 +1448,7 @@ impl Executor {
                     return Err(err);
                 }
             };
+            self.run_load_hooks(globals, &canonicalized_path)?;
             // monoruby front-loads every installed gem's require path onto
             // `$LOAD_PATH` (see build.rs) and additionally serves its own
             // pure-Ruby stubs for C-extension gems (e.g. `gosu`) from
@@ -1543,6 +1544,35 @@ impl Executor {
             }
             Ok(true)
         }
+    }
+
+    /// After a library monoruby amends has loaded, load the amendment: a
+    /// file under `<install root>/stub/` (source: `monoruby/stdlib/`) that
+    /// reopens what the library just defined. Keyed on the end of the
+    /// loaded file's path, so it applies whichever host Ruby or gem the
+    /// library came from — and works for a file reached through an
+    /// `autoload` with an absolute path, which a same-named stub on
+    /// `$LOAD_PATH` could not intercept.
+    fn run_load_hooks(&mut self, globals: &mut Globals, path: &std::path::Path) -> Result<()> {
+        /// (suffix of the loaded file's path, stub feature to require next)
+        const LOAD_HOOKS: &[(&str, &str)] = &[
+            // Git-sourced gems a host `bundle install` checked out under
+            // the host's gem home (`monoruby_hooks/bundler_source_git.rb`).
+            (
+                "/bundler/source/git.rb",
+                "monoruby_hooks/bundler_source_git.rb",
+            ),
+        ];
+        let Some(p) = path.to_str() else {
+            return Ok(());
+        };
+        for (suffix, feature) in LOAD_HOOKS {
+            if p.ends_with(suffix) {
+                let hook = crate::globals::install_root().join("stub").join(feature);
+                self.require(globals, &hook, false)?;
+            }
+        }
+        Ok(())
     }
 
     /// `Gem.try_activate(feature)` for a `require` that found nothing:
