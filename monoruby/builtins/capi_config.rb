@@ -48,7 +48,11 @@ RbConfig.fire_update!('LIBRUBY_RELATIVE', 'no')
 # which is `/bin/mkdir` on macOS); `make install` runs them, so resolve
 # them on PATH instead.
 RbConfig.fire_update!('MKDIR_P', 'mkdir -p')
+RbConfig.fire_update!('MAKEDIRS', 'mkdir -p')
 RbConfig.fire_update!('INSTALL', 'install -c')
+RbConfig.fire_update!('GREP', 'grep')
+RbConfig.fire_update!('EGREP', 'grep -E')
+RbConfig.fire_update!('SHELL', '/bin/sh')
 
 # The toolchain keys of the snapshot are GNU/Linux's (gcc, GNU ld flags).
 # On macOS CRuby's own rbconfig answers with clang and a `-bundle` link;
