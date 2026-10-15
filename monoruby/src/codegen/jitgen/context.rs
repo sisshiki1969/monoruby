@@ -1979,11 +1979,15 @@ impl<'a> JitContext<'a> {
         self.stack_frame.len()
     }
 
-    /// Whether `iseq_id` is already being compiled as one of the frames on
-    /// the specialization stack, i.e. specializing a call to it now would
-    /// inline a method into itself.
-    pub(super) fn iseq_on_specialization_stack(&self, iseq_id: ISeqId) -> bool {
-        self.stack_frame.iter().any(|f| f.iseq_id == iseq_id)
+    /// Whether a frame on the specialization stack is itself in the middle
+    /// of specializing the callee of *callid*: reaching the same call site
+    /// again below it means the specialization is recursing through that
+    /// site. The site, not the callee: `[1].each { [2].each { .. } }`
+    /// nests the same method under itself through two different sites and
+    /// terminates, while any chain of specializations without end repeats
+    /// a site, the program having finitely many.
+    pub(super) fn callsite_on_specialization_stack(&self, callid: CallSiteId) -> bool {
+        self.stack_frame.iter().any(|f| f.callid == Some(callid))
     }
 
     pub(super) fn caller_pos(&self) -> Option<usize> {
