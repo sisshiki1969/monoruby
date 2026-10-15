@@ -428,7 +428,6 @@ impl<'a> JitContext<'a> {
         // compile clears rather than restores; keep this instruction's.
         let depth = self.stack_frame_len();
         let unfrozen_save = (self.unfrozen_slots.clone(), self.instr_unfrozen.clone());
-        let fused_skip_save = self.fused_skip;
         let (entry, merge) = self.declare_merge(state, ir, &operands, dst);
         let residual = self.label();
         let mut fast = entry.clone();
@@ -451,7 +450,6 @@ impl<'a> JitContext<'a> {
             ir.restore(ir_save);
             *state = state_save;
             (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
-            self.fused_skip = fused_skip_save;
             self.discard_cond_results();
             return Ok(None);
         }

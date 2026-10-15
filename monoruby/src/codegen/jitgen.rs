@@ -212,6 +212,32 @@ pub(crate) struct WriteBack {
     /// straight to the forwarded callee); a side exit rebuilds the Hash
     /// from the caller's kw slots via `correct_rest_kw`.
     forward_kwrest: Vec<(SlotId, Box<[(IdentId, SlotId)]>)>,
+    /// Allocations elided by the escape analysis (`doc/escape_analysis.md`)
+    /// that a side exit has to perform after all: each `(dst, src)` stores
+    /// the object `src` describes into `dst`. Runs last, like
+    /// `forward_rest`, so the frame is GC-consistent across the allocation.
+    virtual_obj: Vec<(SlotId, VirtualSrc)>,
+}
+
+///
+/// What an elided allocation would have produced (`doc/escape_analysis.md`).
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum VirtualSrc {
+    ///
+    /// The Array literal `callid` (no splat), whose `len` elements are still
+    /// in this frame's slots `src .. src + len`.
+    ///
+    Slots {
+        src: SlotId,
+        len: u16,
+        callid: CallSiteId,
+    },
+    ///
+    /// A copy of the literal Array `Value` (whose elements are all
+    /// immediates), i.e. what `TraceIr::Literal` would have deep-copied.
+    ///
+    Literal(Value),
 }
 
 impl Hash for WriteBack {
@@ -251,6 +277,10 @@ impl Hash for WriteBack {
                 slot.hash(state);
             }
         }
+        for (dst, src) in &self.virtual_obj {
+            dst.hash(state);
+            src.hash(state);
+        }
     }
 }
 
@@ -284,6 +314,9 @@ impl std::fmt::Debug for WriteBack {
         for (dst, table) in &self.forward_kwrest {
             s.push_str(&format!(" fwdkwrest[{:?}]->{:?}", table, dst));
         }
+        for (dst, src) in &self.virtual_obj {
+            s.push_str(&format!(" virtual[{:?}]->{:?}", src, dst));
+        }
         write!(f, "WriteBack({})", s)
     }
 }
@@ -304,6 +337,7 @@ impl WriteBack {
             && self.gp.is_empty()
             && self.forward_rest.is_empty()
             && self.forward_kwrest.is_empty()
+            && self.virtual_obj.is_empty()
     }
 
     #[cfg(feature = "jit-log")]
@@ -345,6 +379,10 @@ impl WriteBack {
         &self.forward_kwrest
     }
 
+    pub(crate) fn virtual_obj_entries(&self) -> &[(SlotId, VirtualSrc)] {
+        &self.virtual_obj
+    }
+
 
     fn new(
         fpr: Vec<(FPReg, Vec<SlotId>)>,
@@ -354,6 +392,7 @@ impl WriteBack {
         gp: Vec<(GP, SlotId)>,
         forward_rest: Vec<(SlotId, SlotId, u16)>,
         forward_kwrest: Vec<(SlotId, Box<[(IdentId, SlotId)]>)>,
+        virtual_obj: Vec<(SlotId, VirtualSrc)>,
     ) -> Self {
         Self {
             fpr,
@@ -363,6 +402,7 @@ impl WriteBack {
             gp,
             forward_rest,
             forward_kwrest,
+            virtual_obj,
         }
     }
 }
@@ -1670,6 +1710,37 @@ impl JitModule {
         for (dst, table) in wb.forward_kwrest.clone() {
             self.gen_forward_kwrest_materialize(dst, &table);
         }
+        // Elided allocations last of all: every slot is homed, so the frame
+        // is GC-consistent across each allocating call, and an elided
+        // object's own slot holds the `nil` of its `void` entry until its
+        // turn.
+        for (dst, src) in wb.virtual_obj.clone() {
+            self.gen_virtual_materialize(dst, src);
+        }
+    }
+
+    /// Perform an elided allocation at a side exit (`WriteBack::virtual_obj`).
+    fn gen_virtual_materialize(&mut self, dst: SlotId, src: VirtualSrc) {
+        match src {
+            VirtualSrc::Slots { src, len, .. } => {
+                monoasm! { &mut self.jit,
+                    lea  rdi, [r14 - (conv(src))];
+                    movq rsi, (len as usize);
+                    movq rax, (runtime::create_array);
+                    call rax;
+                }
+            }
+            VirtualSrc::Literal(v) => {
+                monoasm! { &mut self.jit,
+                    movq rdi, (v.id());
+                    movq rax, (Value::value_deep_copy);
+                    call rax;
+                }
+            }
+        }
+        monoasm! { &mut self.jit,
+            movq [r14 - (conv(dst))], rax;
+        }
     }
 
     /// K1: rebuild a deferred `**kwrest` Hash from the caller's kw
@@ -1808,6 +1879,9 @@ impl JitModule {
         // GC-consistent across the allocating helper calls. The source slots
         // live in the caller's *own* caller, reached through the bp it
         // saved — `[rsi]`, matching `gen_forward_rest_materialize`'s `[rbp]`.
+        // An elided allocation never lives across a call
+        // (`AbstractState::virtual_survives`), so no suspended frame owes one.
+        debug_assert!(wb.virtual_obj_entries().is_empty());
         for (dst, src, len) in wb.forward_rest_entries() {
             monoasm! { &mut *self,
                 pushq rdi;

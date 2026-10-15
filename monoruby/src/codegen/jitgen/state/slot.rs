@@ -245,6 +245,11 @@ pub(crate) struct SlotState {
     /// provenance dropped) at the start of the instruction following any
     /// other instruction ([`SlotState::begin_instruction`]).
     copy_window: bool,
+    /// Allocations elided by the escape analysis and not (yet) performed
+    /// (`doc/escape_analysis.md`). Each one's slot is `V` (it physically
+    /// holds a stale but valid `Value`, `nil` at a GC safepoint), and a
+    /// `Slots` one's element slots are pinned (`is_virtual_src`).
+    virtuals: Vec<(SlotId, VirtualSrc)>,
 }
 
 ///
@@ -333,6 +338,7 @@ impl SlotState {
             gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile::new(),
             local_num,
             copy_window: false,
+            virtuals: vec![],
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
@@ -796,6 +802,9 @@ impl SlotState {
     /// Clear slot *reg* and set LinkMode to V.
     ///
     fn clear(&mut self, slot: SlotId) {
+        // Redefining an elided object's slot drops the object: nothing
+        // else refers to it (`doc/escape_analysis.md`).
+        self.virtuals.retain(|(dst, _)| *dst != slot);
         // Redefining a slot drops any GP resident caching its old value (mirrors
         // the fpr file's derivation). The binop that *creates* a resident
         // rebinds it after this `clear`, so the cache stays correct.
@@ -826,6 +835,45 @@ impl SlotState {
             self.slots[slot.0 as usize].dynvar_src = None;
             self.drop_copy_links(slot);
         }
+    }
+
+    ///
+    /// Elide the allocation of the object *src* would produce into *dst*
+    /// (`doc/escape_analysis.md`): *dst* becomes `V` and the object lives
+    /// only in this table until it is materialized
+    /// ([`JitContext::materialize_virtual`]) or dies with its slot.
+    ///
+    pub(in crate::codegen::jitgen) fn def_virtual(&mut self, dst: SlotId, src: VirtualSrc) {
+        self.discard(dst);
+        self.virtuals.push((dst, src));
+    }
+
+    /// The elided object *slot* holds, if any.
+    pub(in crate::codegen::jitgen) fn virtual_at(&self, slot: SlotId) -> Option<VirtualSrc> {
+        self.virtuals
+            .iter()
+            .find_map(|(dst, src)| (*dst == slot).then_some(*src))
+    }
+
+    pub(in crate::codegen::jitgen) fn virtuals(&self) -> &[(SlotId, VirtualSrc)] {
+        &self.virtuals
+    }
+
+    /// Forget the elided object in *slot* (it was materialized or
+    /// consumed); its element slots are no longer pinned.
+    pub(in crate::codegen::jitgen) fn take_virtual(&mut self, slot: SlotId) -> Option<VirtualSrc> {
+        let i = self.virtuals.iter().position(|(dst, _)| *dst == slot)?;
+        Some(self.virtuals.remove(i).1)
+    }
+
+    /// Whether *slot* holds an element of an elided Array literal: it is
+    /// dead in the bytecode (above the stack top) but must keep its value
+    /// until the Array is materialized or consumed.
+    pub(in crate::codegen::jitgen) fn is_virtual_src(&self, slot: SlotId) -> bool {
+        self.virtuals.iter().any(|(_, src)| match src {
+            VirtualSrc::Slots { src, len, .. } => (src.0..src.0 + len).contains(&slot.0),
+            VirtualSrc::Literal(_) => false,
+        })
     }
 
     pub(in crate::codegen::jitgen) fn discard_temps(&mut self) {
@@ -2407,7 +2455,7 @@ impl AbstractFrame {
         // registers themselves survive the collection — `exec_gc` preserves the
         // caller-saved set). Empty without the feature.
         let gp = self.gp_regfile.dirty_residents();
-        WriteBack::new(vec![], vec![], literal, void, gp, vec![], vec![])
+        WriteBack::new(vec![], vec![], literal, void, gp, vec![], vec![], vec![])
     }
 
     pub(crate) fn get_write_back(&self) -> WriteBack {
@@ -2427,6 +2475,7 @@ impl AbstractFrame {
             gp,
             self.wb_forward_rest(),
             self.wb_forward_kwrest(),
+            self.wb_virtual(),
         )
     }
 
@@ -2515,6 +2564,10 @@ impl AbstractFrame {
                 _ => None,
             })
             .collect()
+    }
+
+    fn wb_virtual(&self) -> Vec<(SlotId, VirtualSrc)> {
+        self.virtuals.clone()
     }
 
     pub(super) fn wb_void(&self) -> Vec<SlotId> {

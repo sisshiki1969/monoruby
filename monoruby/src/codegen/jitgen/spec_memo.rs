@@ -186,7 +186,6 @@ pub(super) struct FrameState {
 ///
 #[derive(Clone, PartialEq)]
 pub(super) struct CtxFlags {
-    pub(super) fused_skip: Option<BcIndex>,
     pub(super) in_dispatch_arm: bool,
     pub(super) in_set_guarded_arm: bool,
     pub(super) unfrozen_slots: Vec<SlotId>,

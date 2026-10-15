@@ -885,10 +885,11 @@ impl TraceIr {
             | TraceIr::Index { base: a, idx: b, .. }
             | TraceIr::AliasMethod { new: a, old: b } => vec![*a, *b],
             TraceIr::IndexAssign { base, idx, src, .. } => vec![*base, *idx, *src],
-            TraceIr::Hash { args, len, .. } => range(*args, *len as usize).collect(),
-            TraceIr::HashInsert { hash, args, len } => {
-                std::iter::once(*hash).chain(range(*args, *len as usize)).collect()
-            }
+            // `len` counts key/value pairs.
+            TraceIr::Hash { args, len, .. } => range(*args, *len as usize * 2).collect(),
+            TraceIr::HashInsert { hash, args, len } => std::iter::once(*hash)
+                .chain(range(*args, *len as usize * 2))
+                .collect(),
             TraceIr::ConcatStr(_, args, len) | TraceIr::ConcatRegexp(_, args, len) => {
                 range(*args, *len as usize).collect()
             }

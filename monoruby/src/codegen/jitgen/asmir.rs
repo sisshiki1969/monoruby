@@ -3265,8 +3265,8 @@ pub(super) enum AsmInst {
     ///
     /// - caller save registers
     ///
-    /// `[a, b, …].min` / `.max` fused: compare the literal's elements in
-    /// their slots, no Array allocated. See `try_fuse_array_minmax`.
+    /// `[a, b, …].min` / `.max` with the Array elided: compare the
+    /// literal's elements in their slots. See `doc/escape_analysis.md`.
     ArrayMinMax {
         args: SlotId,
         len: u16,

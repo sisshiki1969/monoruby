@@ -1030,11 +1030,6 @@ pub(crate) struct FlagsNarrow {
 pub(crate) struct JitContext<'a> {
     pub store: &'a Store,
     codegen_mode: bool,
-    /// Set by an instruction-fusing arm (`try_fuse_array_minmax`): the
-    /// bytecode position whose work was already emitted by its
-    /// predecessor, to be skipped by `compile_instruction`.
-    pub(super) fused_skip: Option<BcIndex>,
-
     /// "the object in this slot is proven not frozen on the current path"
     /// (④-b): `SlotId::self_()` after a `StoreIvar` guard, an attr_writer
     /// receiver after its guard. Consumed by the next self-ivar store /
@@ -1281,7 +1276,6 @@ impl<'a> JitContext<'a> {
         Self {
             store,
             codegen_mode,
-            fused_skip: None,
             unfrozen_slots: Vec::new(),
             instr_unfrozen: Vec::new(),
             in_dispatch_arm: false,
@@ -1366,7 +1360,6 @@ impl<'a> JitContext<'a> {
         Self {
             store: self.store,
             codegen_mode: false,
-            fused_skip: None,
             call_site_fpr_saves: HashMap::default(),
             kept_outer_views: vec![],
             outer_claim_barrier: false,
@@ -1666,7 +1659,6 @@ impl<'a> JitContext<'a> {
         self.stack_frame.pop().unwrap();
         self.unfrozen_slots.clear();
         self.instr_unfrozen.clear();
-        self.fused_skip = None;
     }
 
     pub(super) fn pop_frame(&mut self) -> JitStackFrame {
@@ -3031,7 +3023,6 @@ impl<'a> JitContext<'a> {
     pub(super) fn tower(&self, state: &AbstractState) -> spec_memo::Tower {
         spec_memo::Tower {
             flags: spec_memo::CtxFlags {
-                fused_skip: self.fused_skip,
                 in_dispatch_arm: self.in_dispatch_arm,
                 in_set_guarded_arm: self.in_set_guarded_arm,
                 unfrozen_slots: self.unfrozen_slots.clone(),
@@ -3054,7 +3045,6 @@ impl<'a> JitContext<'a> {
     pub(super) fn tower_hash(&self, state: &AbstractState) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = fxhash::FxHasher64::default();
-        self.fused_skip.hash(&mut h);
         self.in_dispatch_arm.hash(&mut h);
         self.in_set_guarded_arm.hash(&mut h);
         self.unfrozen_slots.hash(&mut h);
@@ -3118,13 +3108,11 @@ impl<'a> JitContext<'a> {
             self.restore_frame_state(pos, frame);
         }
         let spec_memo::CtxFlags {
-            fused_skip,
             in_dispatch_arm,
             in_set_guarded_arm,
             unfrozen_slots,
             instr_unfrozen,
         } = returned.flags.clone();
-        self.fused_skip = fused_skip;
         self.in_dispatch_arm = in_dispatch_arm;
         self.in_set_guarded_arm = in_set_guarded_arm;
         self.unfrozen_slots = unfrozen_slots;

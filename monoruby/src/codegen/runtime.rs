@@ -875,7 +875,7 @@ pub(super) extern "C" fn gen_lambda(
 /// `src`, like `gen_hash`'s). The compare loop mirrors the builtin
 /// `Array#min` / `#max` exactly (`best <=> v`, replace on
 /// Greater/Less, ties keep the earlier element, incomparable pairs
-/// raise through `compare_values`), so the fused JIT path and the VM
+/// raise through `compare_values`), so the elided JIT path and the VM
 /// builtin are indistinguishable. An empty literal reads as nil.
 fn opt_array_minmax(
     vm: &mut Executor,

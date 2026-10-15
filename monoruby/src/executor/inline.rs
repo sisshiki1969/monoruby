@@ -38,6 +38,64 @@ impl InlineFuncInfo {
     }
 }
 
+///
+/// How a builtin treats its receiver: the escape summary the JIT consults
+/// before eliding the allocation of an Array literal that flows into it as
+/// the receiver (see `doc/escape_analysis.md`).
+///
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct RecvEscape {
+    ///
+    /// The receiver does not escape: the builtin never mutates it, never
+    /// stores it anywhere, and never returns it (or an Enumerator over it).
+    /// Its elements may flow out, its identity may not. A literal of
+    /// immediates (`[:a, :b].include?(x)`) can then be handed the literal's
+    /// own template Array instead of a fresh copy.
+    ///
+    pub transparent: bool,
+    ///
+    /// An allocation-free lowering of the call (argument-less unless the op
+    /// says otherwise, block-less) over the elements of a literal kept in
+    /// frame slots (`[a, b].max`).
+    ///
+    pub elements: Option<ElementsOp>,
+}
+
+impl RecvEscape {
+    pub(crate) fn transparent() -> Self {
+        Self {
+            transparent: true,
+            elements: None,
+        }
+    }
+
+    pub(crate) fn elements(op: ElementsOp) -> Self {
+        Self {
+            transparent: true,
+            elements: Some(op),
+        }
+    }
+}
+
+///
+/// The element-wise lowerings of [`RecvEscape::elements`].
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ElementsOp {
+    /// `min` — compare the elements in place (`runtime::opt_array_min`).
+    Min,
+    /// `max` — likewise (`runtime::opt_array_max`).
+    Max,
+    /// `size` / `length` — the literal's length, a constant.
+    Size,
+    /// `empty?` — a constant.
+    Empty,
+    /// `first` — the first element (or nil).
+    First,
+    /// `last` — the last element (or nil).
+    Last,
+}
+
 #[derive(Default)]
 pub(crate) struct InlineTable(HashMap<FuncId, InlineFuncInfo>);
 impl InlineTable {
