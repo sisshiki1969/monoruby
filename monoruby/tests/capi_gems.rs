@@ -161,7 +161,22 @@ fn check_gem(name: &str) {
             .unwrap_or(ext_dir);
         let lldb = Command::new("lldb")
             .current_dir(&ext_dir)
-            .args(["--batch", "-o", "run", "-o", "bt 80", "-o", "thread list", "-o", "quit", "--"])
+            // `-k`: run on a crash stop (a plain `-o` after `run` is not,
+            // batch mode drops to the prompt there).
+            .args([
+                "--batch",
+                "-o",
+                "run",
+                "-k",
+                "thread backtrace -c 400",
+                "-k",
+                "register read sp fp",
+                "-k",
+                "image dump sections monoruby",
+                "-k",
+                "quit",
+                "--",
+            ])
             .arg(env!("CARGO_BIN_EXE_monoruby"))
             .arg("-I")
             .arg(root.parent().unwrap().join("lib"))
