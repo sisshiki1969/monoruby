@@ -219,6 +219,9 @@ pub(super) fn init(globals: &mut Globals) {
     // pidfd_open(2) handle for Process.detach's reaper thread (nil when
     // unavailable), CLOEXEC by construction.
     globals.define_builtin_module_func(klass, "__pidfd_open", process_pidfd_open, 1);
+    // The running executable's path (startup.rb points RbConfig's
+    // `bindir` at it where there is no /proc/self/exe), nil if unknown.
+    globals.define_builtin_module_func(klass, "__executable", process_executable, 0);
 
     // Signal module
     let signal = globals.define_toplevel_module("Signal").id();
@@ -2104,6 +2107,14 @@ fn process_getpwnam(
 }
 
 #[monoruby_builtin]
+fn process_executable(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(match std::env::current_exe() {
+        Ok(exe) => Value::string_from_str(&exe.to_string_lossy()),
+        Err(_) => Value::nil(),
+    })
+}
+
+#[monoruby_builtin]
 fn process_getpwuid(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -2148,6 +2159,17 @@ fn process_getgrgid(
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    #[test]
+    fn process_executable_is_the_running_binary() {
+        // monoruby-only: RbConfig's bindir / Gem.ruby are built from it.
+        run_test_no_result_check(
+            r#"
+            exe = Process.__executable
+            raise exe.inspect unless exe.is_a?(String) && File.executable?(exe)
+            "#,
+        );
+    }
 
     #[test]
     fn signal_trap_negative_name() {

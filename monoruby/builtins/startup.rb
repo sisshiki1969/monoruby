@@ -90,11 +90,18 @@ require 'rbconfig'
 #
 # Override the host-specific keys at process startup so they point at
 # the actually-running monoruby executable (resolved via
-# `/proc/self/exe`; monoruby is x86-64 Linux only). User-set
-# `RUBY_EXE` continues to win because consumers read it before
-# falling back to RbConfig.
-if File.exist?('/proc/self/exe')
-  exe = (File.realpath('/proc/self/exe') rescue '/proc/self/exe')
+# `/proc/self/exe` on Linux, the executable path the runtime knows on
+# macOS). `Gem.ruby`, which rubygems runs `extconf.rb` with, is built from
+# these too. User-set `RUBY_EXE` continues to win because consumers read
+# it before falling back to RbConfig.
+__exe =
+  if File.exist?('/proc/self/exe')
+    (File.realpath('/proc/self/exe') rescue '/proc/self/exe')
+  else
+    Process.__executable
+  end
+if __exe
+  exe = __exe
   bindir = File.dirname(exe)
   install_name = File.basename(exe)
   RbConfig::CONFIG['bindir'] = bindir

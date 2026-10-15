@@ -34,6 +34,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+/* CRuby's ruby.h brings in <stdio.h> and <inttypes.h>; extension sources
+ * and mkmf's own conftests (which call printf without including it) rely
+ * on that. */
+#include <stdio.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>

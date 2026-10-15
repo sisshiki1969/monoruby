@@ -24,12 +24,50 @@ fn monoruby() -> Command {
 fn run(cmd: &mut Command) -> String {
     let out = cmd.output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    assert!(
-        out.status.success(),
-        "{cmd:?} failed\n--- stdout\n{stdout}\n--- stderr\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    if !out.status.success() {
+        // mkmf's own log says which compile or link an `extconf.rb` failed
+        // on; the failure message alone ("checking for ... no") does not.
+        let logs: Vec<String> = cmd
+            .get_current_dir()
+            .into_iter()
+            .flat_map(|d| [d.join("mkmf.log"), d.join("home")])
+            .flat_map(|p| {
+                if p.is_file() {
+                    vec![p]
+                } else {
+                    glob_logs(&p)
+                }
+            })
+            .map(|p| format!("--- {}\n{}", p.display(), std::fs::read_to_string(&p).unwrap_or_default()))
+            .collect();
+        panic!(
+            "{cmd:?} failed\n--- stdout\n{stdout}\n--- stderr\n{}\n{}",
+            String::from_utf8_lossy(&out.stderr),
+            logs.join("\n")
+        );
+    }
     stdout
+}
+
+/// Every `mkmf.log` / `gem_make.out` under `dir` (a gem home, after a
+/// failed `gem install`).
+fn glob_logs(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(glob_logs(&path));
+        } else if matches!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("mkmf.log" | "gem_make.out")
+        ) {
+            found.push(path);
+        }
+    }
+    found
 }
 
 fn has(cmd: &str, arg: &str) -> bool {
