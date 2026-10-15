@@ -1981,12 +1981,27 @@ impl<'a> JitContext<'a> {
 
     /// Whether `iseq_id` is already one of the frames of this compilation
     /// unit, i.e. specializing a call to it now would inline a method into
-    /// itself. A method already in the unit is called, never specialized
-    /// again: that bounds the specialization of recursion (a tree walk's
-    /// `children.each { |c| c.traverse { |e| yield e } }`) at one level,
-    /// whatever route the recursion takes back to the method.
+    /// itself. A call without a block to a method already in the unit is
+    /// called, never specialized again: inlining one level of a recursion
+    /// buys nothing. (A block-carrying call is gated on the call site
+    /// instead, see `callsite_on_specialization_stack`.)
     pub(super) fn iseq_on_specialization_stack(&self, iseq_id: ISeqId) -> bool {
         self.stack_frame.iter().any(|f| f.iseq_id == iseq_id)
+    }
+
+    /// Whether a frame on the specialization stack is itself in the middle
+    /// of specializing the callee of *callid*: reaching the same call site
+    /// again below it means the specialization is recursing through that
+    /// site. The site, not the callee: `[1].each { [2].each { .. } }`
+    /// nests the same method under itself through two different sites and
+    /// terminates, while any chain of specializations without end repeats
+    /// a site, the program having finitely many. This is the backstop for
+    /// block-carrying calls, which are allowed to specialize a method that
+    /// is already a frame of the unit (a tree walk's
+    /// `children.each { |c| c.traverse { |e| yield e } }` stops at the
+    /// second `traverse`, whose site is the one it is being compiled at).
+    pub(super) fn callsite_on_specialization_stack(&self, callid: CallSiteId) -> bool {
+        self.stack_frame.iter().any(|f| f.callid == Some(callid))
     }
 
     pub(super) fn caller_pos(&self) -> Option<usize> {

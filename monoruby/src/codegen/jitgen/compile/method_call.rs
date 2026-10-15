@@ -882,16 +882,13 @@ impl<'a> JitContext<'a> {
         // knows whether it inlined every yield and whether it can deopt);
         // the third is the open one.
         if callsite.block_fid.is_some() {
-            // Must agree with the specialization gate below: a callee
-            // that is already a frame of this unit is called, not
-            // specialized (see `block_exempt`), so its block is handed
-            // out, not inlined.
-            let callee_in_unit = self.store[func_id]
-                .is_iseq()
-                .is_some_and(|iseq| self.iseq_on_specialization_stack(iseq));
+            // Must agree with the specialization gate below: a site that
+            // is already being specialized further up the stack is
+            // called, not specialized (see `block_exempt`), so its block
+            // is handed out, not inlined.
             let inlined_block = matches!(self.store[func_id].kind, FuncKind::ISeq(_))
                 && !callee_forwards_block
-                && !callee_in_unit
+                && !self.callsite_on_specialization_stack(callid)
                 && callsite
                     .block_fid
                     .and_then(|fid| self.store[fid].is_iseq())
@@ -1488,13 +1485,26 @@ impl<'a> JitContext<'a> {
                 // would re-enter its own specialization from inside the
                 // block's compilation without end: every level of the
                 // recursion is a new frame with a new block literal.
-                // Refuse the exemption for a callee that is already a
-                // frame of this compilation unit, so the recursive call is
-                // a plain call to the method's own entry. (A nested
-                // `[1].each { [2].each { } }` loses the inner inlining to
-                // this too; the handed-out block then has to reach the
-                // outer frames through the escape path, which it does.)
-                let block_exempt = iseq_block.is_some() && !self.iseq_on_specialization_stack(iseq);
+                // Refuse the exemption at a call site that is already
+                // being specialized further up the stack, so the recursive
+                // call is a plain call to the method's own entry. The
+                // site, not the callee: a block-carrying call is allowed
+                // to specialize a method that is already a frame of the
+                // unit, since `[1].each { [2].each { } }` nests the same
+                // method under itself through two different sites, must
+                // keep inlining both blocks, and terminates; a chain of
+                // specializations without end repeats a site, the program
+                // having finitely many.
+                let block_exempt =
+                    iseq_block.is_some() && !self.callsite_on_specialization_stack(callid);
+
+                // A call without a block has nothing to gain from
+                // re-entering a method that is already a frame of this
+                // unit: that is recursion, and inlining `fib(n - 1)` into
+                // `fib` one level only spends the budget on a copy of
+                // the body that still has to call the method's own entry.
+                // Such a callee is called, not specialized.
+                let callee_in_unit = self.iseq_on_specialization_stack(iseq);
 
                 // Method specialization (inlining a callee iseq) and block-
                 // argument inlining (`iseq_block`, which drives specialized
@@ -1503,6 +1513,7 @@ impl<'a> JitContext<'a> {
                 // cannot back out of a `CompileError`, and a `Cease` return
                 // would leave it with no path to the merge.
                 if (((specializable || forwarded_initialize)
+                    && !callee_in_unit
                     && (forward_exempt || self.specialize_level() < SPECIALIZE_DEPTH_LIMIT))
                     || block_exempt)
                     && !self.in_dispatch_arm()

@@ -15,10 +15,12 @@
 //! real context's parked frames.
 //!
 //! The hand-out needs an inner call the unit cannot specialize: a receiver
-//! whose class is not proven, a `send`, or (under the recursion backstop)
-//! a method that is already a frame of the unit. The floats accumulate
-//! over hundreds of iterations, so a lost store diverges from the CRuby
-//! oracle loudly.
+//! whose class is not proven, or a `send`. (The bug was found with the
+//! recursion backstop of #1744 keyed on the callee, which handed the
+//! inner block of `[1].each { [2].each { } }` out; that shape inlines
+//! again now and stays here as the control.) The floats accumulate over
+//! hundreds of iterations, so a lost store diverges from the CRuby oracle
+//! loudly.
 extern crate monoruby;
 use monoruby::tests::*;
 
@@ -87,10 +89,11 @@ fn a_handed_out_block_writing_a_constant_integer() {
     );
 }
 
-/// The same method nested under itself: the recursion backstop calls the
-/// inner `each` instead of specializing it, so its block leaves the unit.
+/// The same method nested under itself through two sites: both `each`es
+/// specialize and both blocks stay in the unit, so nothing is handed out
+/// here — the control for the three above.
 #[test]
-fn a_handed_out_block_under_the_recursion_backstop() {
+fn the_same_method_nested_through_two_sites_inlines_both() {
     run_test(
         r#"
         def th
