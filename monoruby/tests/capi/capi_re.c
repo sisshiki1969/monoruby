@@ -10,6 +10,11 @@
 #include <ruby/encoding.h>
 #include <string.h>
 
+/* CRuby exports onig_region_memsize (re.c) but declares it in no public
+ * header; strscan declares it itself, so does this fixture. monoruby's
+ * ruby/re.h declares it too, compatibly. */
+extern size_t onig_region_memsize(const struct re_registers *regs);
+
 static VALUE mRe;
 
 struct search_args {
