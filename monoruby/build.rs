@@ -136,6 +136,8 @@ fn main() {
         (PathBuf::from("../monoruby_capi/include"), staging.join("include")),
         (PathBuf::from("../monoruby_ext_sys/include"), staging.join("include")),
         (PathBuf::from("../monoruby_capi/src"), staging.join("capi")),
+        // `bin/gem`: the `gem` command, run as `monoruby <root>/bin/gem`.
+        (PathBuf::from("bin"), staging.join("bin")),
     ];
 
     // Re-run when the installed sources change so edits to the vendored
@@ -243,6 +245,7 @@ fn main() {
     for (src, dst) in &sources {
         copy_dir_all(src, dst).unwrap();
     }
+    build_capi_archive(&staging.join("capi"));
 
     // Content-address the staged tree. When the installed root already
     // holds *identical* content (the common case: rebuilding the same
@@ -380,6 +383,43 @@ fn install_extensions(install_root: &Path) {
         ext.join(".build-stamp"),
         format!("{profile}\n{}", installed.join("\n")),
     );
+}
+
+/// Compile the C API layer (`monoruby_capi/src/capi.c`) into
+/// `<capi dir>/libmonoruby_capi.a`, the archive `RbConfig::CONFIG`'s
+/// `LIBRUBYARG` names, so an `extconf.rb` / `gem install` build links the
+/// layer into the extension the way one links `libruby` on CRuby
+/// (`doc/c_api.md` §3.10; the RbConfig keys are set in
+/// `builtins/capi_config.rb`). It is built for the *target* with the C
+/// compiler `cc` finds (the same one the vendored C libraries use), so a
+/// cross build gets an archive for the target. The archive is never
+/// linked into monoruby itself (`cargo_metadata(false)`); it only ships
+/// in the install root. A failure to compile it is a warning, not a build
+/// failure: the rest of the install stays usable, and the first extension
+/// build reports the missing archive.
+fn build_capi_archive(capi_dir: &Path) {
+    let mut build = cc::Build::new();
+    build
+        .cargo_metadata(false)
+        .cargo_warnings(false)
+        .warnings(false)
+        .opt_level(2)
+        .pic(true)
+        .file("../monoruby_capi/src/capi.c")
+        .include("../monoruby_capi/include")
+        .include("../monoruby_ext_sys/include");
+    match build.try_compile("monoruby_capi") {
+        Ok(()) => {
+            let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap())
+                .join("libmonoruby_capi.a");
+            fs::create_dir_all(capi_dir).unwrap();
+            fs::copy(&out, capi_dir.join("libmonoruby_capi.a")).unwrap();
+        }
+        Err(e) => println!(
+            "cargo:warning=libmonoruby_capi.a not built ({e}); \
+             C extensions cannot be built with mkmf against this install"
+        ),
+    }
 }
 
 /// Is this build producing artifacts for a platform other than the one

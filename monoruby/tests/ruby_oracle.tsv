@@ -1317,6 +1317,7 @@
 3f72b0848d8da9ce1adc72b87da21e56	["2026-09-17", "2026-09-17T01:02:03+09:00", "2026-09-17T01:02:03.500+09:00", (3/8), (1/2), true, "2026-01-02T03:04:05-05:00", "2026-09-17 01:02:03 +0900", 0, true, "#<Date: 2026-09-17 ((2461301j,0s,0n),+0s,-Infj)>", -Infinity, true, 2361222, "2026-10-17"]	require "date"\n        t = Time.new(2026, 9, 17, 1, 2, 3.5r, "+09:00")\n
 3f839e4337603d2011e09f2f712091a4	[:bar, :foo]	class A\n              def foo; end\n              def bar; end\n     
 3f92dae4c5bb5d0850bb428a743f7317	[4, 5]	r = []\n        10.times { |i| r << i if (i == 4)...(i == 5) }\n        r
+3f93411565be2e69cc4d017a88aced92	["/no/such/mrb_feat_zz", "./no_such_mrb_feat_zz", "../no_such_mrb_feat_zz", "no_such_mrb_feat_zz", :tilde, :rel]	res = []\n            ["/no/such/mrb_feat_zz", "./no_such_mrb_feat_z
 3f9bc283176b2ee563ab3a04dc4a637b	[[2], 0]	$n = 0\n        def mid(arr)\n          begin\n            arr.each { |y| 
 3fb8c0c6f9028a8a1d17e01958b4d1f5	[0, true, 2, 0, true, 1, 0, 0, nil]	class Always\n          def ==(o) = true\n        end\n        class Only1
 3fc95be93692b5961ce4a36b01eb20fb	[168, [131072, 83886080, 42949672970, 21990232560640, 11258999071047680, 5764607524376412160, 687194767360, 70368744177664]]	M = 0xffff_ffff_ffff_ffff\n\n\n        NOT_A = 0xfefefefefefefefe\n        NOT_H = 
@@ -1347,6 +1348,7 @@
 410e76b670dd81753a10505bf18e9a4e	[true, ["String", "Comparable", "Object", "Kernel", "BasicObject"], true, false, "b", "c", "c", true, true, true, false, true, false, -1, nil, "b", "a"]	[String.include?(Comparable), String.ancestors.map(&:to_s),\n         "b
 41196e2784709a38db16b2ac20d45c21	[47, 47, 0, 47, 39]	def __f(x)\n          \n        v0 = x\n        v1 = (v0 + 8) & 4095\n     
 411a595975d07c35ede9644e0bbcd2ab	[16600, [0, 1, 0, 0, 1, 1, 0], [false, true, false, true, true, true, false], [true, false, false, false, true, false, true]]	class RA; def evaluate = 1; end\n            class RB; private def e
+411acd20cea05e42c209a78ca533da9d	[true, nil, false, "/home/user/monoruby/monoruby\\n", "", true, 3, true, nil, true, "Command failed with exit 2: sh", Errno::ENOENT, true, true, false, "Command failed with SIGKILL (signal 9): sh"]	__a = [];__a << (system "ls");__a << (system "jkjkjk");__a << (system "*");__a <
 4127f9d58f69e19b5bcf5c3c3cefe969	[true, true, false, :fired]	Thread.handle_interrupt(StandardError => :never) do\n              c
 41308fa046142fe3ed9d2bce06bdeb37	[4, 8, 91, 7, 73, 117, 58, 13, 85, 68, 80, 114, 111, 116, 111, 50, 7, 104, 105, 6, 58, 6, 69, 84, 64, 6]	class UDProto2\n              def initialize(s); @s = s; end\n       
 414fc2c4b9c0682c75f29f05aed5d4d1	[5, 1, 4, 5]	__a = [];__a << ((1..5).max {|a, b| (a - b).to_f });__a << ((1..5).max {|a, b| (
@@ -1800,6 +1802,7 @@
 56af07030ff71ab320bc5fad3b4906c4	[false, false, false, false, false, false, false, false, false, true, true, false, true, false, false, true, false, false, false, false]	require "set"\n        S1 = Struct.new(:x)\n        S2 = Struct.new(:x)\n 
 56b5c62a5f9fa8060e7106fd4ca1b261	[[RegexpError, "too short escaped multibyte character: /\\\\xa4/"], [RegexpError, "too short escaped multibyte character: /a\\\\xa4/"], [RegexpError, "too short escaped multibyte character: /\\\\x81/"], "[92, 120, 97, 52, 92, 120, 97, 50]"]	__a = [];__a << ((Regexp.new("\\\\xa4".dup.force_encoding("EUC-JP")); nil) rescue 
 56b85c950efd2cb0bd3500751c39686e	[2.4676811938123496e+176, -1.8507608953592623e+176]	def f(n)\n          x = 0.0\n          y = 1.0\n          i = 0\n          
+56b9104492db21b2eef3ee1b1391c6c6	["9e107d9d372bb6826bd81d3542a419d6", "d41d8cd98f00b204e9800998ecf8427e", "900150983cd24fb0d6963f7d28e17f72", "a9993e364706816aba3e25717850c26c9cd0d89d", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7", "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f", [true, true, Digest::SHA256], [true, true, "SHA256"], "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "900150983cd24fb0d6963f7d28e17f72", 32, "kAFQmDzST7DWlj99KOF/cg==", 64, 64, "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"]	__a = [];__a << (require 'digest'; Digest::MD5.hexdigest("The quick brown fox ju
 56bcba9795510ae298d1929763e4b300	100	foo = false\n        bar = true\n        quu = false\n        \n        cas
 56be47cd692556e12f7876ff5251e406	[[10, 100, 10, 100, 20, 200, 30, 300], [1, -1, 2, -2]]	r = []\n        c = {}\n        [1, 2, 3].each do |i|\n          begin\n   
 56c66dbccb073aee6589ec1565f0bc4a	[true, true, :from_m]	m = Module.new { def hello; :from_m; end }\n            c = Class.ne
@@ -4375,6 +4378,7 @@ d38a6188952e22ee5c8f4c60ce1a5ac1	true	require "json"\n            original = {"k
 d38e6fd95270224ae4681f1f484197db	[:none, :none, :low, :mid, :low, :mid, :low, :mid, :high, :high, :high, :high, :none, :none]	def bucket(n)\n          case n\n          when 10, 12, 14 then :low\n    
 d399510a407b470931f3ae180fac1764	[[1, 2, 3], [5, 4, 3], "US-ASCII", "US-ASCII"]	__a = [];__a << (res = []; 1.upto(3.5) {|i| res << i}; res);__a << (res = []; 5.
 d39fa313ed32f24b087a14fa4b337962	[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, nil, nil, "s"]	def m(a, n)\n          i = 0\n          last = nil\n          while i < n\n
+d3a345404cc278ad4b79c2b1406de9a6	[true, nil, false, "/home/user/monoruby/monoruby\\n", "", true, 3, true, nil, true, "Command failed with exit 2: sh", Errno::ENOENT]	__a = [];__a << (system "ls");__a << (system "jkjkjk");__a << (system "*");__a <
 d3ac56784ffe5cbdc1948e0af79f64e1	[[299, 299], FrozenError]	class CNFrz\n          def initialize(a, f)\n            @a = a\n         
 d3acb7d398b9ef1fed07541b51646641	[1, :a]	module M2; C = nil; end\n        x = 0\n        (x += 1; M2)::C ||= :a\n  
 d3b6f86401efda2e8d91b23f0ee0fc74	false	m = Module.new do\n              eval "module_function"\n            
@@ -4814,6 +4818,7 @@ e84e2a6f452bc8149fdee15dda638246	4	r = 0\n            20.times do\n             
 e8629d85bee1ecd0620fc7812cf440d4	"myfile.rb:42:"	b = binding\n            begin\n              b.eval("missing_method"
 e8657222505766ebb61f86dfdcc11cb2	["Array", true, true, true, true, true, true, true, true, "Big5-HKSCS", true, true, true]	__a = [];__a << (Encoding.list.class.name);__a << (Encoding.list.all? { |e| e.is
 e8663c97e820ca6aa3b720c87c95f4ff	"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"	r, w = IO.pipe\n            t = Thread.new { r.read }\n            w.
+e8673bc6a9a41b465118cd573abaf4d0	["/no/such/mrb_feat_zz", "./no_such_mrb_feat_zz", "../no_such_mrb_feat_zz", "~/no_such_mrb_feat_zz", "no_such_mrb_feat_zz", :rel]	res = []\n            ["/no/such/mrb_feat_zz", "./no_such_mrb_feat_z
 e86dad34113a8d3e0115c06073ba9c0a	[[Encoding::ConverterNotFoundError, "code converter not found (UTF-8 to bogus)"], 2, 1, [Encoding::ConverterNotFoundError, "code converter not found (UTF-8 to bogus)"], 2, 1, "EUC-JP", 1, 1, [TypeError, "no implicit conversion of Object into String"], [ArgumentError, "string contains null byte"]]	class S\n          def initialize(s) = (@s = s; @n = 0)\n          def to
 e86f1d136bc147bc86fabb026ba5ec24	599	c = Class.new { def m; 1; end }\n        o = c.new\n        s = 0\n       
 e8725aa5299b38b5c143ac96f54115d6	[480, 40, 20]	acc = 0\n        40.times do |i|\n          acc += 1 if i.even?\n         

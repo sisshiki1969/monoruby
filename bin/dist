@@ -6,7 +6,7 @@
 # for the user who built it. This lays the same pieces out *around* the
 # binary instead:
 #
-#   <out>/bin/monoruby        the interpreter (and irm)
+#   <out>/bin/monoruby        the interpreter (and irm), and bin/gem
 #   <out>/builtins            Ruby loaded at interpreter start
 #   <out>/lib                 the vendored stdlib + monoruby's own stubs
 #   <out>/stub                the stubs, pinned ahead of $LOAD_PATH
@@ -66,6 +66,9 @@ cp target/release/monoruby target/release/irm "$OUT/bin/"
 for dir in builtins lib stub ext include capi; do
   cp -R "$ROOT/$dir" "$OUT/$dir"
 done
+# `bin/gem` lands next to the binary, so `bin/gem install …` works in
+# the tree (its shebang finds `monoruby` through PATH).
+cp "$ROOT/bin/gem" "$OUT/bin/gem"
 echo "staged $OUT"
 
 if [ "$TAR" = "1" ]; then

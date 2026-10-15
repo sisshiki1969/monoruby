@@ -50,6 +50,14 @@ pub(crate) struct ExecSpec {
     close_others: bool,
 }
 
+impl ExecSpec {
+    /// The command word as the user wrote it, for messages (CRuby names
+    /// only the program in `Command failed with ...`).
+    pub(crate) fn program_display(&self) -> &str {
+        &self.program_display
+    }
+}
+
 const STAGE_CHDIR: u8 = b'c';
 const STAGE_EXEC: u8 = b'x';
 

@@ -90,11 +90,18 @@ require 'rbconfig'
 #
 # Override the host-specific keys at process startup so they point at
 # the actually-running monoruby executable (resolved via
-# `/proc/self/exe`; monoruby is x86-64 Linux only). User-set
-# `RUBY_EXE` continues to win because consumers read it before
-# falling back to RbConfig.
-if File.exist?('/proc/self/exe')
-  exe = (File.realpath('/proc/self/exe') rescue '/proc/self/exe')
+# `/proc/self/exe` on Linux, the executable path the runtime knows on
+# macOS). `Gem.ruby`, which rubygems runs `extconf.rb` with, is built from
+# these too. User-set `RUBY_EXE` continues to win because consumers read
+# it before falling back to RbConfig.
+__exe =
+  if File.exist?('/proc/self/exe')
+    (File.realpath('/proc/self/exe') rescue '/proc/self/exe')
+  else
+    Process.__executable
+  end
+if __exe
+  exe = __exe
   bindir = File.dirname(exe)
   install_name = File.basename(exe)
   RbConfig::CONFIG['bindir'] = bindir
@@ -282,6 +289,10 @@ if __host_os == 'darwin'
     RbConfig::MAKEFILE_CONFIG['SOEXT'] = 'dylib'
   end
 end
+
+# The keys mkmf builds a C extension with: header directory and the
+# library to link, pointed at monoruby's own C API layer (reads host_os).
+require_relative 'capi_config'
 
 
 # ARGF is implemented in Rust (builtins/argf.rs); only the

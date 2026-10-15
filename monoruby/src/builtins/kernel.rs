@@ -172,16 +172,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         false,
         Effect::EVAL,
     );
-    globals.define_builtin_module_func_with_kw(
-        kernel_class,
-        "system",
-        system,
-        1,
-        1,
-        true,
-        &["exception"],
-        false,
-    );
+    globals.define_builtin_module_func_rest(kernel_class, "system", system);
     globals.define_builtin_module_func_rest(kernel_class, "exec", exec);
     globals.define_builtin_module_func_rest(kernel_class, "spawn", spawn);
     globals.define_builtin_module_func(kernel_class, "`", command, 1);
@@ -3565,26 +3556,93 @@ pub(super) fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
 ///
 /// - system(command, options={}) -> bool | nil
 /// - system(program, *args, options={}) -> bool | nil
-/// - [NOT SUPPORTED] system(env, command, options={}) -> bool | nil
+/// - system(env, command..., options={}) -> bool | nil
+///
+/// A command string or `program, *args` with no env hash and no spawn
+/// option runs through `std::process::Command` here. With an env hash
+/// (`system({"CC" => "gcc"}, "make")`, mkmf's `xsystem`) or spawn options
+/// (`chdir:`, redirects, ...) it is `Process.wait(spawn(...))`:
+/// `builtins::spawn` parses the arguments as `spawn` does, and the child
+/// is reaped with the GVL released.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
 #[monoruby_builtin]
 fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::process::Command;
-    let arg0 = lfp.arg(0);
+    let mut argv: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
+    if argv.is_empty() {
+        return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
+    }
     // `exception: true` turns the nil/false results into raises (CRuby).
     // `system` differs from the conversion methods: a `nil` here is the
-    // default (no exception), not an error.
-    let exception = match lfp.try_arg(2) {
-        Some(v) if !v.is_nil() => bool_expected(&globals.store, "exception", v)?,
-        _ => false,
-    };
+    // default (no exception), not an error. It is `system`'s own option,
+    // so it is taken out before the rest reaches the spawn parser.
+    let mut exception = false;
+    if argv.len() > 1
+        && let Some(h) = argv.last().unwrap().try_hash_ty()
+    {
+        let key = Value::symbol(IdentId::get_id("exception"));
+        if let Some(v) = h.get(key, vm, globals)? {
+            if !v.is_nil() {
+                exception = bool_expected(&globals.store, "exception", v)?;
+            }
+            let mut rest = RubyMap::default();
+            for (k, v) in h.iter() {
+                if k != key {
+                    rest.insert(k, v, vm, globals)?;
+                }
+            }
+            argv.pop();
+            if !rest.is_empty() {
+                argv.push(Value::hash(rest));
+            }
+        }
+    }
+    let simple = argv[0].is_rstring().is_some()
+        && argv[1..].iter().all(|v| v.try_hash_ty().is_none());
+    if !simple {
+        let spec = crate::builtins::spawn::parse_spawn_args(vm, globals, &argv)?;
+        let pid = match crate::builtins::spawn::do_spawn(vm, globals, &spec) {
+            Ok(pid) => pid,
+            // The child could not exec (an `Errno`): `nil`, as for the
+            // simple form, unless `exception: true`.
+            Err(err) if !exception && matches!(err.kind(), MonorubyErrKind::Other(_)) => {
+                return Ok(Value::nil());
+            }
+            Err(err) => return Err(err),
+        };
+        let Some((_, raw, status_obj)) =
+            crate::builtins::process::waitpid_status(vm, globals, pid as i32, 0)?
+        else {
+            return Ok(Value::nil());
+        };
+        crate::scheduler::set_last_status(vm, status_obj);
+        let success = libc::WIFEXITED(raw) && libc::WEXITSTATUS(raw) == 0;
+        if exception && !success {
+            let detail = if libc::WIFEXITED(raw) {
+                format!("exit {}", libc::WEXITSTATUS(raw))
+            } else if libc::WIFSIGNALED(raw) {
+                // CRuby: "SIGKILL (signal 9)".
+                let signo = libc::WTERMSIG(raw);
+                match crate::builtins::process::signal_number_to_name(signo as i64) {
+                    Some(name) => format!("SIG{name} (signal {signo})"),
+                    None => format!("signal {signo}"),
+                }
+            } else {
+                "unknown status".to_string()
+            };
+            return Err(MonorubyErr::runtimeerr(format!(
+                "Command failed with {detail}: {}",
+                spec.program_display()
+            )));
+        }
+        return Ok(Value::bool(success));
+    }
+    let arg0 = argv[0];
     let cmd_str = arg0.coerce_to_str(vm, globals)?;
     let (program, mut args) = prepare_command_arg(&cmd_str);
-    if let Some(arg1) = lfp.try_arg(1) {
-        for v in arg1.as_array().iter() {
-            args.push(v.coerce_to_string(vm, globals)?);
-        }
+    for v in &argv[1..] {
+        args.push(v.coerce_to_string(vm, globals)?);
     }
     // The child inherits our std fds; flush so our own pending output
     // precedes whatever it writes (CRuby orders them this way).
@@ -9309,8 +9367,42 @@ mod tests {
             r#"system "*""#,
             r#"`pwd`"#,
             r#"`*`"#,
+            // env hash / spawn options / exception: go through `spawn`.
+            r#"system({"MONORUBY_SYS_T" => "x"}, "sh", "-c", "test \"$MONORUBY_SYS_T\" = x")"#,
+            r#"system({"MONORUBY_SYS_T" => "1"}, "sh", "-c", "exit 3"); $?.exitstatus"#,
+            r#"system("sh", "-c", "exit 0", chdir: "/")"#,
+            r#"system({"MONORUBY_SYS_T" => "1"}, "no_such_cmd_qq_zz")"#,
+            r#"system("true", exception: true)"#,
+            r#"begin; system({"MONORUBY_SYS_T" => "1"}, "sh", "-c", "exit 2", exception: true); rescue RuntimeError => e; e.message; end"#,
+            r#"begin; system({"MONORUBY_SYS_T" => "1"}, "no_such_cmd_qq_zz", exception: true); rescue SystemCallError => e; e.class; end"#,
+            // `exception: nil` is the default; it may ride with other options.
+            r#"system("true", exception: nil)"#,
+            r#"system("sh", "-c", "exit 0", chdir: "/", exception: true)"#,
+            r#"system("sh", "-c", "exit 5", chdir: "/", exception: false)"#,
+            // A child killed by a signal is reported as such.
+            r#"begin; system("sh", "-c", "kill -9 $$", chdir: "/", exception: true); rescue RuntimeError => e; e.message; end"#,
         ]);
         run_test_error(r#"``"#);
+        run_test_error(r#"system()"#);
+    }
+
+    #[test]
+    fn require_miss_skips_gem_activation() {
+        // A miss on a relative, absolute, `./`, `../` or `~` name is a plain
+        // LoadError without consulting rubygems; only a bare feature name
+        // falls back to `Gem.try_activate`.
+        run_test_once(
+            r#"
+            res = []
+            ["/no/such/mrb_feat_zz", "./no_such_mrb_feat_zz", "../no_such_mrb_feat_zz",
+             "no_such_mrb_feat_zz"].each do |name|
+              res << (begin; require name; rescue LoadError => e; e.path; end)
+            end
+            res << (begin; require "~/no_such_mrb_feat_zz"; rescue LoadError; :tilde; end)
+            res << (begin; require_relative "no_such_mrb_feat_zz"; rescue LoadError; :rel; end)
+            res
+            "#,
+        );
     }
 
     #[test]

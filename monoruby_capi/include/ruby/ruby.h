@@ -34,6 +34,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+/* CRuby's ruby.h brings in <stdio.h> and <inttypes.h>; extension sources
+ * and mkmf's own conftests (which call printf without including it) rely
+ * on that. */
+#include <stdio.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
@@ -46,29 +51,7 @@ extern "C" {
 
 #define MONORUBY_CAPI 1
 
-/* ---- configuration (what CRuby's ruby/config.h answers) --------------- */
-
-#define SIZEOF_INT 4
-#define SIZEOF_LONG 8
-#define SIZEOF_LONG_LONG 8
-#define SIZEOF_VOIDP 8
-#define SIZEOF_SIZE_T 8
-#define SIZEOF_VALUE 8
-#define HAVE_LONG_LONG 1
-#define HAVE_STDARG_PROTOTYPES 1
-#define RUBY_EXTERN extern
-#define RUBY_FUNC_EXPORTED
-#define NORETURN(x) __attribute__((__noreturn__)) x
-#define DEPRECATED(x) x
-#define PRINTF_ARGS(decl, a, b) decl
-#define RUBY_ATTR_NORETURN __attribute__((__noreturn__))
-#define RB_LIKELY(x) (__builtin_expect(!!(x), 1))
-#define RB_UNLIKELY(x) (__builtin_expect(!!(x), 0))
-#define LIKELY(x) RB_LIKELY(x)
-#define UNLIKELY(x) RB_UNLIKELY(x)
-#ifndef RUBY_UNUSED_VAR
-#define RUBY_UNUSED_VAR(x) x __attribute__((__unused__))
-#endif
+#include "ruby/config.h"
 
 /* ---- VALUE and ID ----------------------------------------------------- */
 

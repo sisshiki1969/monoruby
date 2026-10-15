@@ -159,13 +159,9 @@ fn capi_cruby_build_is_refused() {
         r#"begin; require "capi_hello"; rescue LoadError => e; p e.message.include?("monoruby's C API headers"); end
 p defined?(CapiHello)"#,
     ]));
-    if cfg!(target_os = "macos") {
-        // CRuby's DLEXT there is `bundle`, which `require` does not look
-        // for: the plain "cannot load" path, also a LoadError.
-        assert_eq!(out.lines().last(), Some("nil"), "{out}");
-    } else {
-        assert_eq!(out, "true\nnil\n");
-    }
+    // On macOS CRuby's DLEXT is `bundle`; `require` looks for that too
+    // there, and refuses it the same way.
+    assert_eq!(out, "true\nnil\n");
 }
 
 /// Loaded by path, under the name a gem's `require "x/x"` gives, and

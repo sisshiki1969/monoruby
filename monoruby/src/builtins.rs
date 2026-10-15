@@ -38,7 +38,7 @@ mod nil_class;
 mod numeric;
 mod object;
 pub(crate) mod proc;
-mod process;
+pub(crate) mod process;
 mod random;
 mod range;
 mod regexp;

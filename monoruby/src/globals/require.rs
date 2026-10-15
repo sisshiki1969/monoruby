@@ -27,9 +27,16 @@ pub(crate) enum RequireLoad {
 fn require_candidates(path: &std::path::Path) -> Vec<PathBuf> {
     match path.extension().map(|e| e.as_bytes()) {
         Some(b"rb") | Some(b"so") => vec![path.to_path_buf()],
+        Some(b"bundle") if cfg!(target_os = "macos") => vec![path.to_path_buf()],
         _ => {
             let s = path.as_os_str().to_string_lossy();
-            vec![PathBuf::from(format!("{s}.rb")), PathBuf::from(format!("{s}.so"))]
+            let mut cands = vec![PathBuf::from(format!("{s}.rb")), PathBuf::from(format!("{s}.so"))];
+            // CRuby's `DLEXT` on macOS, and so what mkmf names an
+            // extension built there (`RbConfig::CONFIG["DLEXT"]`).
+            if cfg!(target_os = "macos") {
+                cands.push(PathBuf::from(format!("{s}.bundle")));
+            }
+            cands
         }
     }
 }
@@ -66,7 +73,11 @@ fn expand_tilde(path: &std::path::Path) -> PathBuf {
 /// an extensionless request only falls back to its verbatim entry when
 /// resolution fails.
 fn has_loadable_ext(path: &std::path::Path) -> bool {
-    matches!(path.extension().map(|e| e.as_bytes()), Some(b"rb") | Some(b"so"))
+    match path.extension().map(|e| e.as_bytes()) {
+        Some(b"rb") | Some(b"so") => true,
+        Some(b"bundle") => cfg!(target_os = "macos"),
+        _ => false,
+    }
 }
 
 impl Globals {
@@ -408,7 +419,9 @@ impl Globals {
             self.add_loaded_feature(&canonicalized_path);
             return Ok(RequireLoad::Native(canonicalized_path));
         }
-        let (file_body, _resolved) = if let Some(b"so") = canonicalized_path.extension().map(|s| s.as_bytes()) {
+        let (file_body, _resolved) = if let Some(b"so" | b"bundle") =
+            canonicalized_path.extension().map(|s| s.as_bytes())
+        {
             let monoruby_lib = install_root().join("lib");
             let relative = self
                 .load_path
