@@ -295,10 +295,19 @@ impl Globals {
         cand: &std::path::Path,
         entries: &[String],
     ) -> Option<PathBuf> {
-        let native = cand.with_extension(crate::ext::DLEXT);
+        // What mkmf names the extension (`RbConfig::CONFIG["DLEXT"]`,
+        // `startup.rb`): `.so`, and `.bundle` on macOS — not
+        // `ext::DLEXT`, which is the suffix of monoruby's own `dylib`s.
+        let natives: &[&str] = if cfg!(target_os = "macos") {
+            &["bundle", "so"]
+        } else {
+            &["so"]
+        };
         entries.iter().find_map(|lib| {
-            let p = self.probe(std::path::Path::new(lib), &native)?;
-            crate::ext::is_capi_extension(&p).then_some(p)
+            natives.iter().find_map(|ext| {
+                let p = self.probe(std::path::Path::new(lib), &cand.with_extension(ext))?;
+                crate::ext::is_capi_extension(&p).then_some(p)
+            })
         })
     }
 

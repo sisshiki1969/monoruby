@@ -139,7 +139,8 @@ fn check_gem(name: &str) {
     let home = dir.join("home");
     let root = PathBuf::from(run(monoruby().args(["-e", r#"print RbConfig::CONFIG["rubyhdrdir"]"#])));
     let mono_gem = root.parent().unwrap().join("bin/gem");
-    let out = run(monoruby()
+    let mut install = monoruby();
+    install
         .current_dir(&dir)
         .arg(&mono_gem)
         .args(["install", "--local", "--no-document", "--ignore-dependencies"])
@@ -147,7 +148,49 @@ fn check_gem(name: &str) {
         .env("GEM_HOME", &home)
         .env("GEM_PATH", &home)
         .env_remove("RUBYOPT")
-        .env_remove("BUNDLE_GEMFILE"));
+        .env_remove("BUNDLE_GEMFILE");
+    let installed = install.output().unwrap();
+    if !installed.status.success() {
+        // DIAGNOSTIC (temporary): the darwin runner aborts monoruby with a
+        // stack overflow inside msgpack's extconf.rb; rerun it under lldb
+        // for the native backtrace.
+        let ext_dir = home.join(format!("gems/{name}-{version}/ext"));
+        let ext_dir = std::fs::read_dir(&ext_dir)
+            .ok()
+            .and_then(|d| d.flatten().map(|e| e.path()).find(|p| p.join("extconf.rb").is_file()))
+            .unwrap_or(ext_dir);
+        let lldb = Command::new("lldb")
+            .current_dir(&ext_dir)
+            .args(["--batch", "-o", "run", "-o", "bt 80", "-o", "thread list", "-o", "quit", "--"])
+            .arg(env!("CARGO_BIN_EXE_monoruby"))
+            .arg("-I")
+            .arg(root.parent().unwrap().join("lib"))
+            .arg("extconf.rb")
+            .env("GEM_HOME", &home)
+            .env("GEM_PATH", &home)
+            .env_remove("RUBYOPT")
+            .env_remove("BUNDLE_GEMFILE")
+            .output();
+        let lldb = match lldb {
+            Ok(o) => format!(
+                "--- lldb stdout\n{}\n--- lldb stderr\n{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            ),
+            Err(e) => format!("lldb: {e}"),
+        };
+        let logs: Vec<String> = glob_logs(&home)
+            .into_iter()
+            .map(|p| format!("--- {}\n{}", p.display(), std::fs::read_to_string(&p).unwrap_or_default()))
+            .collect();
+        panic!(
+            "{install:?} failed\n--- stdout\n{}\n--- stderr\n{}\n{}\n{lldb}",
+            String::from_utf8_lossy(&installed.stdout),
+            String::from_utf8_lossy(&installed.stderr),
+            logs.join("\n")
+        );
+    }
+    let out = String::from_utf8_lossy(&installed.stdout).into_owned();
     assert!(out.contains("Building native extensions"), "{out}");
     assert!(out.contains("1 gem installed"), "{out}");
     let on_monoruby = run(monoruby()
