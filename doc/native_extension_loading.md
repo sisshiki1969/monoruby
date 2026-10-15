@@ -76,6 +76,10 @@ feature 分割、(E) 別プロセス、(F) WASM、(G) Fiddle 上の Ruby バイ�
 - **require の解決順**: `stub/` が `$LOAD_PATH` より先に pin されており
   （`globals/require.rs:263`）、`.rb` 候補が `.so` 候補より先に探索される。
   gem 自身の `.so` を stand-in が上書きする仕組みはこれで成立している。
+  例外は monoruby 向けにビルドされた `.so`（C API 層経由の `gem install`、
+  `doc/c_api.md` §3.11）: stand-in が当たった feature について `$LOAD_PATH`
+  上に `ext::is_capi_extension` を満たす同名の `.so` があれば、そちらが
+  stand-in に勝つ（`Store::built_extension_on_load_path`）。
 - **例外は戻り値で伝える方針が確定している**: builtin 内の panic は JIT
   フレーム（unwind 情報なし）越しに巻き戻せないので捕捉しない
   （`executor.rs:17` 付近のコメント）。`Option<Value>` + `set_error`。

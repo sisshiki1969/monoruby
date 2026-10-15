@@ -406,6 +406,7 @@ fn build_capi_archive(capi_dir: &Path) {
         .opt_level(2)
         .pic(true)
         .file("../monoruby_capi/src/capi.c")
+        .file("../monoruby_capi/src/st.c")
         .include("../monoruby_capi/include")
         .include("../monoruby_ext_sys/include");
     match build.try_compile("monoruby_capi") {

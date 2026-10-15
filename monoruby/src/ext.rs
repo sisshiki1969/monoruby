@@ -326,7 +326,7 @@ extern "C" fn ext_method_trampoline(
 // Loading
 // ---------------------------------------------------------------------
 
-const DLEXT: &str = if cfg!(target_os = "macos") {
+pub(crate) const DLEXT: &str = if cfg!(target_os = "macos") {
     "dylib"
 } else {
     "so"

@@ -243,7 +243,7 @@ CRuby のヘッダでビルドした（monoruby では読めない）`.so` が�
   は conftest をこのアーカイブとリンクして判定するので、層に無い関数は
   正しく「no」になる。monoruby 本体にはリンクしない。
 - `ruby/config.h`（ruby.h の設定部を分離）、`ruby/backward.h` /
-  `st.h` / `subst.h`（中身は無い）を足した。mkmf は生成する Makefile で
+  `subst.h`（中身は無い; `st.h` は段階 5 で本物になった、§3.12）を足した。mkmf は生成する Makefile で
   これらを全オブジェクトの前提に並べるので、存在しないと `make` が
   止まる。
 - `Kernel#system` が `system(env, *cmd)` と spawn オプションを受けるように
@@ -275,6 +275,114 @@ CRuby のヘッダでビルドした（monoruby では読めない）`.so` が�
   ホスト CRuby の双方にビルド・インストールし、同じスクリプトの出力が
   一致することを見る。
 
+### 3.11 実 gem で面積を詰める（段階 4）
+
+`gem install` でビルドした実 gem を CRuby と比較して足りない API を埋めた。
+`tests/capi_gems.rs` がホスト CRuby の gem cache にある `.gem` を monoruby
+の `bin/gem` で専用 home に入れ、`tests/capi/gems/<gem>.rb` を双方で走らせて
+出力を比べる（1 行目は読み込んだ拡張の名前なので、stand-in でなく C 拡張が
+動いたことも見る）。
+
+| gem | 状態 | 使う面 |
+|---|---|---|
+| bcrypt 3.1.22 | 一致 | `rb_str_new` / `StringValuePtr` / `NUM2INT`、特異メソッド定義 |
+| msgpack 1.8.5 | 一致（Buffer / Packer / Unpacker / Factory / ext 型 / Timestamp / IO 相手 / pool） | TypedData + alloc、`rb_num2ll` / `rb_num2ull` と Bignum、`rb_hash_foreach`、`rb_io_write`、`rb_enc_*`、`rb_ext_ractor_safe`、`-fvisibility=hidden` |
+| json 2.18.0 | ビルドとロードは通るが生成器が動かない（§6） | `RUBY_INTEGER_UNIFICATION`、`SIZEOF_UINT64_T`、`ALLOCV`、`rb_enc_interned_str` の `have_func` 判定 |
+| strscan | 未着手 | `ruby/re.h`（Onigmo の `regex_t` / `OnigRegion` / `onig_search`、`rb_reg_prepare_re`）が要る |
+
+macOS の CI で msgpack の `extconf.rb` が monoruby ごと落ちた（スタック
+オーバーフロー）のは層ではなく JIT の問題だった。mkmf が呼ぶ FileUtils の
+`Entry_#postorder_traverse`（`children.each { |c| c.traverse { |e| yield e } };
+yield self` の形）で、ブロック literal 付きの再帰呼び出しが特殊化の深さ
+制限を素通りして無限に特殊化していた（再帰防止を入れた）。その上で同じ形
+が、特殊化フレームから外に出たブロック（yield する literal / `&b` / `super`
+を汎用呼び出しに渡す）の書き込みを呼び出し元の定数化ローカルが見ない既存
+バグを露わにした。どちらも `tests/given_block_escape.rs` が回帰テストで、
+層とは独立の修正（`codegen/jitgen/compile/method_call.rs` の
+`note_given_block_escape`）。
+
+層に足したもの:
+
+- **可視性**: `RUBY_FUNC_EXPORTED` を `__attribute__((visibility("default")))`
+  に、`RUBY_SYMBOL_EXPORT_BEGIN` / `END` を pragma に。msgpack は
+  `-fvisibility=hidden` でビルドし `Init_msgpack` だけこれで出すので、
+  空マクロだと `Init_` が隠れて「not a Ruby extension」になる。
+- **config.h**: `RUBY_INTEGER_UNIFICATION`（無いと json が `Fixnum` /
+  `Bignum` のジェネレータモジュールを作る）、`SIZEOF_INT64_T` /
+  `SIZEOF_UINT64_T` / `HAVE_(U)INT64_T`。
+- **Bignum 系**: `rb_big2ll` / `rb_big2ull` / `rb_big2long` / `rb_big2ulong`
+  / `rb_big2dbl` / `rb_big2str` / `rb_dbl2big`、`rb_big_cmp` / `eq` / 四則 /
+  ビット演算 / シフト（すべて `rb_funcall` 経由）、`RBIGNUM_SIGN` /
+  `RBIGNUM_POSITIVE_P`、`rb_absint_size`（`abs.bit_length` から）、
+  `rb_absint_singlebit_p`。`rb_num2ll` は Fixnum が 63 bit なので
+  `long long` の端 1/64 が T_BIGNUM になることを踏まえて範囲を判定し、
+  範囲外は CRuby と同じ `'long long'` / `'unsigned long long'` の文言で
+  RangeError にする（`'long'` ではなく）。
+- **ALLOCV**: `rb_alloc_tmp_buffer(_with_count)` / `rb_free_tmp_buffer`、
+  `RB_ALLOCV` / `RB_ALLOCV_N` / `RB_ALLOCV_END`。CRuby は大きいものを
+  String に載せて GC に解放させるが、ここでは `ruby_xmalloc` の
+  ポインタを VALUE スロットに入れて `ALLOCV_END` で `free` する。
+- **encoding.h**: `ENCODING_GET` / `SET`（`_INLINED` 含む）、coderange
+  定数と `ENC_CODERANGE(obj)`（`valid_encoding?` / `ascii_only?` から毎回
+  計算、`SET` / `CLEAR` は no-op）、`rb_enc_check` / `rb_enc_compatible` /
+  `rb_enc_strlen` / `rb_enc_mbclen` / `rb_enc_precise_mbclen` /
+  `rb_enc_codelen` / `rb_enc_codepoint_len` / `rb_enc_mbminlen` /
+  `mbmaxlen` / `unicode_p` / `dummy_p`、`rb_enc_raise`、`rb_intern3`、
+  `MBCLEN_*` マクロ。
+- **ruby/util.h**（新設）: `ruby_strdup` / `ruby_strtoul` / `ruby_strtod` /
+  `ruby_scan_oct` / `ruby_scan_hex` / `ruby_scan_digits` / `ruby_qsort`
+  （比較関数に `void *d` を渡す CRuby 形。マージソートで実装）/
+  `ruby_getcwd`。
+- **ほか**: `rb_ext_ractor_safe`、`rb_proc_arity` / `rb_proc_lambda_p`、
+  `rb_io_write` / `flush` / `puts` / `print` / `gets` / `getbyte` / `close` /
+  `eof` / `binmode` / `addstr` / `printf` / `get_io` / `check_io`、
+  `rb_str_replace`、`rb_str_to_interned_str`、`RB_OBJ_FROZEN_RAW`、
+  `rb_isxxx` / `ISXXX` / `TOLOWER` / `TOUPPER`。`ruby.h` が `<stdio.h>` と
+  `<inttypes.h>` を include する（mkmf の conftest は宣言なしに `printf`
+  を呼ぶ）。
+- **require の優先順**: stand-in（`stub/`）が当たった feature でも、
+  `$LOAD_PATH` 上に monoruby 向けにビルドされた同名の `.so`
+  （`ext::is_capi_extension`）があればそれを読む
+  （`Store::built_extension_on_load_path`、`require.rs`）。monoruby の
+  gem home から activate した gem の `lib/` はそこに入るので、
+  `gem "msgpack"; require "msgpack"` は gem 自身の `msgpack.so` に届く。
+  CRuby でビルドされた `.so` は `dlopen` できないので数えない。
+- 未捕捉例外の報告（`x (MessagePack::UnknownExtTypeError)`）が
+  クラスの完全な名前を出すようになった（以前は `UnknownExtTypeError`
+  のみ。`MonorubyErr::class_name` の `Other` 腕）。
+
+### 3.12 `st_table`（段階 5）
+
+`ruby/st.h` の中身を入れた。実装は CRuby の `st.c`（public domain、
+`ruby_4_0` ブランチ）をそのまま `monoruby_capi/src/st.c` に持ち込んだもので、
+Ruby 内部ヘッダへの依存（`internal/bits.h` の `nlz_intptr`、`RUBY_ASSERT`、
+`NO_SANITIZE`）を冒頭の数行で置き換え、`RHASH` に入り込む
+`rb_hash_bulk_insert_into_st_table` とその裏の rehash 補助、内部用の
+`set_table` を落としただけ。`st.h` も CRuby の宣言と `struct st_table` の
+レイアウトをそのまま持ち、CRuby と同じく全関数は `rb_st_*` で、`st_insert`
+などは `#define` で届く。`ruby.h` が末尾で `ruby/st.h` を include する
+（CRuby と同じく、`<ruby/st.h>` を自分で include しない拡張のため。
+`enum st_retval` はそちらへ移した）。メモリは `ruby_xmalloc` 系
+（GC 圧力に数える）、テーブルが `st_index_t` を越えると RuntimeError
+（オリジナルの `RUBY` 構成どおり）。
+
+同じコードなので、挿入順の走査、`st_hash` / `st_hash_uint` / `st_numhash`
+の値、`st_memsize` まで CRuby と一致する。`tests/capi/capi_st.c` が
+numtable（1000 件の挿入・再挿入・`delete` / `shift` / `foreach` の
+`ST_DELETE` / `ST_STOP`、`update` の 3 経路、`insert2`、`add_direct`、
+`copy` / `clear`、bins の無い小テーブル）、strtable / strcasetable
+（別ポインタ同内容の検索、`st_strcasecmp`）、独自 `st_hash_type`
+（衝突だらけの hash で `foreach_check` / `foreach_with_replace` /
+`keys_check` / `delete_safe` + `cleanup_safe`）、hash 関数群、
+VALUE を鍵と値に持つ TypedData（mark で `st_foreach`）を CRuby と比べる。
+`rb_memhash` は `st_hash(ptr, len, 0)`（CRuby はプロセスごとの seed を
+混ぜるが、同一プロセス内で等しいことだけが契約）。
+
+ホストの gem cache にある C 拡張で `st_table` を使うのは nokogiri だけ
+（monoruby では `ext/nokogiri` が肩代わり）なので、実 gem での検証は無い。
+oj / ruby-prof / stackprof のような `st_table` を使う gem がこれで
+ビルドできる。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -298,7 +406,8 @@ CRuby のヘッダでビルドした（monoruby では読めない）`.so` が�
 | 1 | ローダ（`monoruby_capi_init` 判別、`$LOAD_PATH` 上の `.so`）、`ruby.h` 互換ヘッダ、`capi.c`: クラス / モジュール / メソッド定義（arity -2〜15）、即値・数値・文字列・シンボル・配列・ハッシュ・Range、`rb_funcall` 系、ブロック（`rb_yield` 系、`rb_block_proc`）、例外（`rb_raise`、`rb_protect` / `rb_ensure` / `rb_rescue2` / `rb_jump_tag`）、`rb_scan_args` / `rb_get_kwargs`、ivar / 定数 / cvar / gvar、GC 登録、`rb_sprintf`（`PRIsVALUE`）、最小限の encoding、`rb_thread_call_without_gvl` | 済（`tests/capi.rs`: 同じ C ソースを CRuby と monoruby で動かし出力一致） |
 | 2 | `Data` / `TypedData`（`TypedData_Make_Struct`、`DATA_PTR` の lvalue、dmark / dfree）、`rb_define_alloc_func` / `rb_undef_alloc_func`、`rb_block_call` / `rb_proc_new` / `rb_iterate` / `rb_iter_break`（C 関数をブロックとして渡す）、`rb_call_super`、`rb_struct_*`、`rb_obj_call_init`、`rb_class_new` | 済（§3.7〜3.9、`tests/capi/capi_data.c`）。`rb_keyword_given_p` は未 |
 | 3 | `RbConfig::CONFIG`（`rubyhdrdir` などを install root に）、`mkmf` が monoruby を相手に `Makefile` を作れること、`capi.c` を `libmonoruby_capi.a` として `LIBRUBYARG` に、`gem install` で C 拡張 gem がビルドされ `extensions/<arch>/…` から読めること | 済（§3.10、`tests/mkmf.rs`）。gem home は monoruby 専用 |
-| 4 | 実 gem で面積を詰める（`rb_io_*`、`rb_time_*`、`st_*`、`rb_enc_*` の残り、Bignum 系）。小さなものから: `bcrypt`、`strscan` 相当、`json` の C 拡張、`msgpack` | 未 |
+| 4 | 実 gem で面積を詰める（`rb_io_*`、`rb_enc_*`、Bignum 系、`ALLOCV`、`ruby/util.h`、シンボル可視性）。`bcrypt` と `msgpack` が CRuby と一致 | 済（§3.11、`tests/capi_gems.rs`）。`json` は `Qfalse != 0` に当たる、`strscan` は `ruby/re.h` が未（§6） |
+| 5 | `st_table`（`ruby/st.h` + CRuby の `st.c`） | 済（§3.12、`tests/capi/capi_st.c`） |
 
 ## 6. 既知の制約
 
@@ -316,9 +425,28 @@ CRuby のヘッダでビルドした（monoruby では読めない）`.so` が�
 - `dsize` / `dcompact` は使わない。`RUBY_TYPED_*` のフラグはすべて無視。
 - `rb_warn` は `Kernel#warn("warning: ...")`（ファイル名・行番号は付かない）。
 - `rb_gv_get` / `rb_gv_set` は `eval` 経由。
-- mkmf の `create_header` は使えるが、`$(hdrdir)/ruby/backward/*` や
-  `st.h` の中身（`st_table`）は無い。`RbConfig::CONFIG["CC"]` は Linux では
+- mkmf の `create_header` は使えるが、`$(hdrdir)/ruby/backward/*` の中身は
+  無い。`RbConfig::CONFIG["CC"]` は Linux では
   スナップショットの `gcc` のまま（`CC` 環境変数で上書きできる）。
+- **json 2.18 の C 拡張は動かない。** ビルドとロードは通るが、
+  `fbuffer.h` の `if (fb->io)` と generator.c の `if (!data->vstate)` が
+  `Qfalse == 0` を前提にしていて（§2）、`JSON.generate` が `false` に
+  `write` を呼ぶ / `false` を State として扱う。層側では直せない
+  （`VALUE` の変換を境界に入れると `RARRAY_PTR` 等の生メモリ経路と
+  食い違う）。vendored の stand-in（`gem/json/`、Rust 移植）が従来どおり
+  使われる。`if (v)` で真偽を見る拡張は同じ理由で動かない。
+- **strscan** は Onigmo の内部（`regex_t`、`OnigRegion`、`onig_search`、
+  `rb_reg_prepare_re`、`rb_reg_region_copy`、`rb_memsearch`）を
+  `ruby/re.h` から直接使う。monoruby の正規表現は `onigmo-regex` crate
+  なので、この面は未提供。
+- `rb_enc_mbclen` 系のバイト歩きは UTF-8 だけ多バイトを数え、ほかの
+  エンコーディングは 1 バイト固定。`ENC_CODERANGE` は呼ぶたびに計算する。
+- `ALLOCV` の確保は例外で巻き戻ると解放されない（CRuby は String に
+  載せて GC に任せる）。
+- ホスト CRuby に同じ gem があると、`require "msgpack"` の Ruby 側
+  （`lib/msgpack.rb`）はプローブ結果にあるホストの `lib/` から読まれ、
+  `.so` だけ monoruby の gem home のものになる。`gem "msgpack"` で
+  monoruby 側を先に activate すれば両方そろう。
 - `gem install` は monoruby の gem home に入れる。ホスト CRuby で
   入れた C 拡張 gem の `.so` は monoruby では読めない（stub のあるものは
   stub が読まれる）ので、monoruby で使うには monoruby で入れ直す。

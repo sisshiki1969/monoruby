@@ -59,7 +59,9 @@ typedef uintptr_t VALUE;
 typedef uintptr_t ID;
 typedef intptr_t SIGNED_VALUE;
 typedef uintptr_t st_data_t;
+#define ST_DATA_T_DEFINED
 typedef st_data_t st_index_t;
+#define MONORUBY_CAPI_ST_INDEX_T_DEFINED
 
 #define PRI_VALUE_PREFIX "l"
 #define RUBY_PRI_VALUE_MARK "\v"
@@ -597,6 +599,7 @@ VALUE rb_str_subseq(VALUE str, long beg, long len);
 VALUE rb_str_equal(VALUE a, VALUE b);
 int rb_str_cmp(VALUE a, VALUE b);
 st_index_t rb_str_hash(VALUE str);
+st_index_t rb_memhash(const void *ptr, long len);
 VALUE rb_str_inspect(VALUE str);
 VALUE rb_str_dump(VALUE str);
 VALUE rb_str_split(VALUE str, const char *sep);
@@ -705,7 +708,7 @@ const VALUE *rb_array_const_ptr(VALUE ary);
 
 /* ---- hashes ----------------------------------------------------------- */
 
-enum st_retval { ST_CONTINUE, ST_STOP, ST_DELETE, ST_CHECK, ST_REPLACE };
+/* `enum st_retval` (ST_CONTINUE, ST_STOP, ST_DELETE, ...) comes from ruby/st.h, included below. */
 VALUE rb_hash_new(void);
 VALUE rb_hash_new_capa(long capa);
 VALUE rb_hash_aset(VALUE hash, VALUE key, VALUE val);
@@ -885,9 +888,121 @@ int ruby_native_thread_p(void);
 int rb_during_gc(void);
 VALUE rb_thread_current(void);
 void rb_thread_schedule(void);
+/* monoruby has no Ractors; the declaration is accepted and ignored. */
+void rb_ext_ractor_safe(bool flag);
+
+/* ---- Bignum ----------------------------------------------------------- */
+
+/* The integer API above (`rb_num2ll`, `NUM2ULL`, ...) already takes a
+ * Bignum; these are the names C sources use once they know they hold
+ * one. The sign macros take any Integer. */
+long long rb_big2ll(VALUE big);
+unsigned long long rb_big2ull(VALUE big);
+long rb_big2long(VALUE big);
+unsigned long rb_big2ulong(VALUE big);
+double rb_big2dbl(VALUE big);
+VALUE rb_big2str(VALUE big, int base);
+VALUE rb_dbl2big(double d);
+VALUE rb_big_cmp(VALUE x, VALUE y);
+VALUE rb_big_eq(VALUE x, VALUE y);
+VALUE rb_big_plus(VALUE x, VALUE y);
+VALUE rb_big_minus(VALUE x, VALUE y);
+VALUE rb_big_mul(VALUE x, VALUE y);
+VALUE rb_big_div(VALUE x, VALUE y);
+VALUE rb_big_modulo(VALUE x, VALUE y);
+VALUE rb_big_pow(VALUE x, VALUE y);
+VALUE rb_big_and(VALUE x, VALUE y);
+VALUE rb_big_or(VALUE x, VALUE y);
+VALUE rb_big_xor(VALUE x, VALUE y);
+VALUE rb_big_lshift(VALUE x, VALUE y);
+VALUE rb_big_rshift(VALUE x, VALUE y);
+VALUE rb_big_norm(VALUE x);
+int rb_monoruby_integer_positive_p(VALUE i);
+#define RBIGNUM_POSITIVE_P(b) rb_monoruby_integer_positive_p((VALUE)(b))
+#define RBIGNUM_NEGATIVE_P(b) (!rb_monoruby_integer_positive_p((VALUE)(b)))
+#define RBIGNUM_SIGN(b) RBIGNUM_POSITIVE_P(b)
+#define BIGNUM_POSITIVE_P(b) RBIGNUM_POSITIVE_P(b)
+#define BIGNUM_NEGATIVE_P(b) RBIGNUM_NEGATIVE_P(b)
+/* Bytes needed for |val|; `*nlz_bits_ret` gets the leading zero bits of
+ * its top byte (CRuby's rb_absint_size). */
+size_t rb_absint_size(VALUE val, int *nlz_bits_ret);
+int rb_absint_singlebit_p(VALUE val);
+/* ---- ALLOCV: a temporary buffer the caller frees with ALLOCV_END ------ */
+
+/* CRuby keeps the buffer in a hidden object stored in `v` so the GC
+ * frees it on a longjmp; here it is plain malloc, so a raise between
+ * ALLOCV and ALLOCV_END leaks it. */
+void *rb_alloc_tmp_buffer(volatile VALUE *store, long len);
+void *rb_alloc_tmp_buffer_with_count(volatile VALUE *store, size_t len, size_t count);
+void rb_free_tmp_buffer(volatile VALUE *store);
+#define RB_ALLOCV(v, n) rb_alloc_tmp_buffer(&(v), (long)(n))
+#define RB_ALLOCV_N(type, v, n) ((type *)rb_alloc_tmp_buffer_with_count(&(v), sizeof(type) * (size_t)(n), (size_t)(n)))
+#define RB_ALLOCV_END(v) rb_free_tmp_buffer(&(v))
+#define ALLOCV(v, n) RB_ALLOCV(v, n)
+#define ALLOCV_N(type, v, n) RB_ALLOCV_N(type, v, n)
+#define ALLOCV_END(v) RB_ALLOCV_END(v)
+
+/* ---- Proc / IO -------------------------------------------------------- */
+
+int rb_proc_arity(VALUE proc);
+VALUE rb_proc_lambda_p(VALUE proc);
+VALUE rb_io_write(VALUE io, VALUE str);
+VALUE rb_io_flush(VALUE io);
+VALUE rb_io_puts(int argc, const VALUE *argv, VALUE io);
+VALUE rb_io_print(int argc, const VALUE *argv, VALUE io);
+VALUE rb_io_gets(VALUE io);
+VALUE rb_io_getbyte(VALUE io);
+VALUE rb_io_close(VALUE io);
+VALUE rb_io_eof(VALUE io);
+VALUE rb_io_binmode(VALUE io);
+VALUE rb_io_addstr(VALUE io, VALUE str);
+VALUE rb_io_printf(int argc, const VALUE *argv, VALUE io);
+VALUE rb_io_get_io(VALUE io);
+VALUE rb_io_check_io(VALUE io);
+VALUE rb_io_taint_check(VALUE io);
+VALUE rb_str_replace(VALUE str, VALUE str2);
+VALUE rb_str_to_interned_str(VALUE str);
+#define RB_OBJ_FROZEN_RAW(x) RB_OBJ_FROZEN(x)
+
+/* ---- ctype (ASCII only, as CRuby's rb_is*) ---------------------------- */
+
+static inline int rb_isascii(int c) { return '\0' <= c && c <= '\x7f'; }
+static inline int rb_isupper(int c) { return 'A' <= c && c <= 'Z'; }
+static inline int rb_islower(int c) { return 'a' <= c && c <= 'z'; }
+static inline int rb_isalpha(int c) { return rb_isupper(c) || rb_islower(c); }
+static inline int rb_isdigit(int c) { return '0' <= c && c <= '9'; }
+static inline int rb_isalnum(int c) { return rb_isalpha(c) || rb_isdigit(c); }
+static inline int rb_isxdigit(int c) { return rb_isdigit(c) || ('A' <= c && c <= 'F') || ('a' <= c && c <= 'f'); }
+static inline int rb_isblank(int c) { return c == ' ' || c == '\t'; }
+static inline int rb_isspace(int c) { return c == ' ' || ('\t' <= c && c <= '\r'); }
+static inline int rb_iscntrl(int c) { return ('\0' <= c && c < ' ') || c == '\x7f'; }
+static inline int rb_isprint(int c) { return ' ' <= c && c <= '\x7e'; }
+static inline int rb_ispunct(int c) { return !rb_isalnum(c) && rb_isprint(c) && c != ' '; }
+static inline int rb_isgraph(int c) { return '!' <= c && c <= '\x7e'; }
+static inline int rb_tolower(int c) { return rb_isupper(c) ? (c | 0x20) : c; }
+static inline int rb_toupper(int c) { return rb_islower(c) ? (c & ~0x20) : c; }
+#define ISASCII(c) rb_isascii((unsigned char)(c))
+#define ISUPPER(c) rb_isupper((unsigned char)(c))
+#define ISLOWER(c) rb_islower((unsigned char)(c))
+#define ISALPHA(c) rb_isalpha((unsigned char)(c))
+#define ISDIGIT(c) rb_isdigit((unsigned char)(c))
+#define ISALNUM(c) rb_isalnum((unsigned char)(c))
+#define ISXDIGIT(c) rb_isxdigit((unsigned char)(c))
+#define ISBLANK(c) rb_isblank((unsigned char)(c))
+#define ISSPACE(c) rb_isspace((unsigned char)(c))
+#define ISCNTRL(c) rb_iscntrl((unsigned char)(c))
+#define ISPRINT(c) rb_isprint((unsigned char)(c))
+#define ISPUNCT(c) rb_ispunct((unsigned char)(c))
+#define ISGRAPH(c) rb_isgraph((unsigned char)(c))
+#define TOLOWER(c) rb_tolower((unsigned char)(c))
+#define TOUPPER(c) rb_toupper((unsigned char)(c))
 
 #ifdef __cplusplus
 }
 #endif
+
+/* CRuby's ruby.h brings st.h in; so do the extensions that use an
+ * st_table without including it themselves. */
+#include "ruby/st.h"
 
 #endif /* MONORUBY_CAPI_RUBY_RUBY_H */

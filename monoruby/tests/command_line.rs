@@ -442,3 +442,24 @@ fn argf_filename_global_tracks_walk() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "n1.txt,n2.txt");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The uncaught-exception report names the class by its full path, as
+/// `full_message` does — `(MessagePack::UnpackError)`, not
+/// `(UnpackError)` — for a class defined lexically and for one assigned
+/// to a constant.
+#[test]
+fn uncaught_exception_names_the_class_in_full() {
+    let out = run(monoruby().args([
+        "-e",
+        "module M; class E < StandardError; end; end; M.const_set(:F, Class.new(M::E)); raise M::F, 'boom'",
+    ]));
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("boom (M::F)"), "stderr: {err}");
+    let out = run(monoruby().args([
+        "-e",
+        "module M; class E < StandardError; end; end; raise M::E, 'boom'",
+    ]));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("boom (M::E)"), "stderr: {err}");
+}

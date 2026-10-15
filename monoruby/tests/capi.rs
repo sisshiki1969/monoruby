@@ -27,7 +27,7 @@ fn out_dir(flavor: &str) -> PathBuf {
 /// The extension sources run on both interpreters, each with its
 /// script: the stage 1 surface and the stage 2 one (TypedData, alloc
 /// functions, blocks from C, `rb_call_super`, Struct).
-const FIXTURES: [&str; 2] = ["capi_hello", "capi_data"];
+const FIXTURES: [&str; 3] = ["capi_hello", "capi_data", "capi_st"];
 
 /// The fixtures built against monoruby's headers, in one directory (to
 /// be put on `$LOAD_PATH`). `None` when there is no C compiler. Built
@@ -51,6 +51,7 @@ fn build_for_monoruby_once() -> Option<PathBuf> {
             .arg(dir.join(format!("{name}.so")))
             .arg(manifest_dir().join(format!("tests/capi/{name}.c")))
             .arg(root.join("monoruby_capi/src/capi.c"))
+            .arg(root.join("monoruby_capi/src/st.c"))
             .status()
             .ok()?;
         assert!(status.success(), "building {name}.c against monoruby_capi failed");
@@ -200,7 +201,8 @@ fn build_errors(name: &str, defines: &[&str], layer: bool) -> Option<PathBuf> {
         .arg(dir.join(format!("{name}.so")))
         .arg(manifest_dir().join("tests/capi/capi_errors.c"));
     if layer {
-        cmd.arg(root.join("monoruby_capi/src/capi.c"));
+        cmd.arg(root.join("monoruby_capi/src/capi.c"))
+            .arg(root.join("monoruby_capi/src/st.c"));
     }
     let status = cmd.status().ok()?;
     assert!(status.success(), "building {name} failed");

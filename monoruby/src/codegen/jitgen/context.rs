@@ -1979,6 +1979,17 @@ impl<'a> JitContext<'a> {
         self.stack_frame.len()
     }
 
+    /// Whether a frame on the specialization stack is itself in the middle
+    /// of specializing the callee of *callid*: reaching the same call site
+    /// again below it means the specialization is recursing through that
+    /// site. The site, not the callee: `[1].each { [2].each { .. } }`
+    /// nests the same method under itself through two different sites and
+    /// terminates, while any chain of specializations without end repeats
+    /// a site, the program having finitely many.
+    pub(super) fn callsite_on_specialization_stack(&self, callid: CallSiteId) -> bool {
+        self.stack_frame.iter().any(|f| f.callid == Some(callid))
+    }
+
     pub(super) fn caller_pos(&self) -> Option<usize> {
         self.stack_frame.len().checked_sub(2)
     }

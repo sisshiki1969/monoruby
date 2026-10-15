@@ -914,6 +914,9 @@ impl<'a> JitContext<'a> {
                 {
                     state.def_C(ret, Value::nil());
                 } else if outer == 0 {
+                    // The method's block leaves for code outside the unit
+                    // (see `JitContext::note_block_handler_escape`).
+                    self.note_block_handler_escape(state, ir);
                     state.def_S(ret);
                     ir.block_arg_proxy(ret, outer, slot);
                 } else {
@@ -921,6 +924,7 @@ impl<'a> JitContext<'a> {
                     // frames in between are counted at run time
                     // (`runtime::block_arg_forward`), which may fall back to
                     // materializing the Proc.
+                    self.note_block_handler_escape(state, ir);
                     state.def_S(ret);
                     ir.block_arg(state, ret, outer, pc, true);
                     state.unset_side_effect_guard();
@@ -933,6 +937,9 @@ impl<'a> JitContext<'a> {
                     state.def_C(ret, v);
                     return Ok(CompileResult::Continue);
                 }
+                // The method's block becomes a Proc the unit cannot
+                // follow (see `JitContext::note_block_handler_escape`).
+                self.note_block_handler_escape(state, ir);
                 state.def_S(ret);
                 ir.block_arg(state, ret, outer, pc, false);
                 state.unset_side_effect_guard();
