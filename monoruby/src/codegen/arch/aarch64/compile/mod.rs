@@ -1041,6 +1041,41 @@ impl Codegen {
         for (dst, table) in wb.forward_kwrest.clone() {
             self.a64_gen_forward_kwrest_materialize(dst, &table);
         }
+        // Elided allocations last of all (x86 `gen_virtual_materialize`):
+        // the frame is fully homed, so GC-consistent across each call.
+        for (dst, src) in wb.virtual_obj_entries().to_vec() {
+            self.a64_gen_virtual_materialize(dst, src);
+        }
+    }
+
+    /// Perform an elided allocation at a side exit (`WriteBack::virtual_obj`).
+    /// Twin of x86 `gen_virtual_materialize`.
+    fn a64_gen_virtual_materialize(&mut self, dst: SlotId, src: VirtualSrc) {
+        let lfp = GP::R14.a64().0; // x22
+        match src {
+            VirtualSrc::Slots { src, len, .. } => {
+                let f = runtime::create_array as *const () as u64;
+                self.a64_addr_sub(0, lfp, conv(src) as u32);
+                monoasm_arm64!(&mut self.jit,
+                    mov x1, (len as u64);
+                    str x30, [sp, #-16]!;      // save LR (16-aligned)
+                    mov x9, (f);
+                    blr x9;                    // x0 = create_array(ptr, len)
+                    ldr x30, [sp], #16;        // restore LR
+                );
+            }
+            VirtualSrc::Literal(v) => {
+                let f = Value::value_deep_copy as *const () as u64;
+                monoasm_arm64!(&mut self.jit,
+                    mov x0, (v.id());
+                    str x30, [sp, #-16]!;      // save LR (16-aligned)
+                    mov x9, (f);
+                    blr x9;                    // x0 = deep copy
+                    ldr x30, [sp], #16;        // restore LR
+                );
+            }
+        }
+        self.a64_frame_store(0, lfp, conv(dst) as u32);
     }
 
     /// K1: rebuild a deferred `**kwrest` Hash from the caller's kw slots
@@ -1175,6 +1210,9 @@ impl Codegen {
             self.a64_frame_store(9, 25, conv(*slot) as u32);
         }
         debug_assert!(wb.gp_is_empty());
+        // An elided allocation never lives across a call
+        // (`AbstractState::virtual_survives`), so no suspended frame owes one.
+        debug_assert!(wb.virtual_obj_entries().is_empty());
         for (dst, src, len) in wb.forward_rest_entries() {
             let f = runtime::create_array as *const () as u64;
             monoasm_arm64!(&mut self.jit, ldr x9, [x24];);
@@ -2986,7 +3024,7 @@ impl Codegen {
 
     /// rax <- Hash literal via gen_hash(vm, globals, &slot[args], len).
     /// x0 <- min/max of the `len` values at `args`, computed in place —
-    /// the fused, allocation-free `[a, b, …].min` / `.max`. Same call
+    /// the allocation-free `[a, b, …].min` / `.max` (`doc/escape_analysis.md`). Same call
     /// shape as `emit_new_hash`.
     pub(in crate::codegen::jitgen) fn emit_array_min_max(
         &mut self,

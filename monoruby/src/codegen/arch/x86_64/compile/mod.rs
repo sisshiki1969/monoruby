@@ -1656,7 +1656,7 @@ impl Codegen {
     }
 
     /// rax <- min/max of the `len` values at `args`, computed in place —
-    /// the fused, allocation-free `[a, b, …].min` / `.max`.
+    /// the allocation-free `[a, b, …].min` / `.max` (`doc/escape_analysis.md`).
     pub(in crate::codegen::jitgen) fn emit_array_min_max(
         &mut self,
         args: SlotId,

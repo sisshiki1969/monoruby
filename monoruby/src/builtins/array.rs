@@ -206,6 +206,54 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func_with(ARRAY_CLASS, "insert", insert, 1, 1, true);
     globals.define_builtin_funcs(ARRAY_CLASS, "replace", &["initialize_copy"], replace, 1);
+    init_recv_escape(globals);
+}
+
+///
+/// The receiver escape summaries (`RecvEscape`) of the builtins above,
+/// for the JIT's elision of Array literals used as a receiver
+/// (`doc/escape_analysis.md`). A method listed here must never mutate,
+/// store or return its receiver — nor return an Enumerator over it when
+/// called without a block — in any of its argument forms.
+///
+fn init_recv_escape(globals: &mut Globals) {
+    use crate::executor::inline::{ElementsOp, RecvEscape};
+    let table: &[(&str, RecvEscape)] = &[
+        ("min", RecvEscape::elements(ElementsOp::Min)),
+        ("max", RecvEscape::elements(ElementsOp::Max)),
+        ("size", RecvEscape::elements(ElementsOp::Size)),
+        ("empty?", RecvEscape::elements(ElementsOp::Empty)),
+        ("first", RecvEscape::elements(ElementsOp::First)),
+        ("last", RecvEscape::elements(ElementsOp::Last)),
+        ("include?", RecvEscape::transparent()),
+        ("minmax", RecvEscape::transparent()),
+        ("sum", RecvEscape::transparent()),
+        ("count", RecvEscape::transparent()),
+        ("join", RecvEscape::transparent()),
+        ("pack", RecvEscape::transparent()),
+        ("hash", RecvEscape::transparent()),
+        ("any?", RecvEscape::transparent()),
+        ("all?", RecvEscape::transparent()),
+        ("sort", RecvEscape::transparent()),
+        ("take", RecvEscape::transparent()),
+        ("drop", RecvEscape::transparent()),
+        ("reverse", RecvEscape::transparent()),
+        ("uniq", RecvEscape::transparent()),
+        ("compact", RecvEscape::transparent()),
+        ("+", RecvEscape::transparent()),
+        ("-", RecvEscape::transparent()),
+        ("&", RecvEscape::transparent()),
+        ("|", RecvEscape::transparent()),
+        ("inspect", RecvEscape::transparent()),
+    ];
+    for (name, info) in table {
+        let fid = globals
+            .store
+            .check_method_for_class(ARRAY_CLASS, IdentId::get_id(name))
+            .and_then(|e| e.func_id())
+            .unwrap();
+        globals.store.set_recv_escape(fid, *info);
+    }
 }
 
 /// Allocator for `Array` and its subclasses.
@@ -5981,8 +6029,8 @@ mod tests {
 
     #[test]
     fn array_literal_minmax_fusion() {
-        // The JIT fuses `[a, b].min`/`.max` into an allocation-free
-        // compare (see `try_fuse_array_minmax`); these run hot loops so
+        // The JIT elides the Array of `[a, b].min`/`.max` and compares in
+        // place (`doc/escape_analysis.md`); these run hot loops so
         // the fused code path is what's being compared against CRuby.
         run_test(
             r#"

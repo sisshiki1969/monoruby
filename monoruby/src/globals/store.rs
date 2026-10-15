@@ -189,6 +189,8 @@ pub struct Store {
     optcase_info: Vec<OptCaseInfo>,
     /// inline info.
     pub(crate) inline_info: InlineTable,
+    /// Receiver escape summaries of builtins (`RecvEscape`).
+    recv_escape: HashMap<FuncId, inline::RecvEscape>,
     /// FuncId of the default `BasicObject#!=`, used to recognize that an
     /// unredefined `!=` may be computed as `!(a == b)` without dispatch.
     default_neq: Option<FuncId>,
@@ -843,6 +845,7 @@ impl Store {
             optcase_info: vec![],
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
+            recv_escape: HashMap::default(),
             default_neq: None,
             default_copy_hooks: None,
             method_cache: RefCell::new(GlobalMethodCache::default()),
@@ -1093,6 +1096,14 @@ impl Store {
     /// Whether `fid` is a builtin `send` / `__send__`.
     pub(crate) fn is_object_send(&self, fid: FuncId) -> bool {
         self.object_send_fids.contains(&fid)
+    }
+
+    pub(crate) fn set_recv_escape(&mut self, fid: FuncId, info: inline::RecvEscape) {
+        self.recv_escape.insert(fid, info);
+    }
+
+    pub(crate) fn recv_escape(&self, fid: FuncId) -> Option<inline::RecvEscape> {
+        self.recv_escape.get(&fid).copied()
     }
 
     pub(crate) fn set_array_hash_fid(&mut self, fid: FuncId) {

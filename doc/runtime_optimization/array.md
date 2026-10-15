@@ -315,15 +315,18 @@ aarch64 は `cmov` を `csel` で置き換えた同型で、cold ブロックは
   焼き込める。`emit_deep_copy_lit` は `CellHeader::NewbornOf(template)` で
   ヘッダを `NEWBORN_FLAG_MASK` で落として写す（`Header::newborn` と同じ
   マスクなので乖離しない）。それ以外は `value_deep_copy` 呼び出し。
-- **`[a, b].min` / `.max` の融合**（CRuby の `opt_newarray_send`）:
-  `try_fuse_array_minmax`。消費する呼び出しが同一基本ブロックの**直後の
-  命令**で、レシーバがそのリテラルで、リテラルが**一時スロット**に落ち
-  （ローカルは再読される）、splat / 引数 / ブロック無し、`Array#min` /
-  `#max` が builtin に解決する（`FuncKind::Builtin { abs_address }` を
-  `builtins::array::min/max` と比較）ときだけ。class-version ガードの後
-  `ir.array_min_max` を出し、call 命令を `fused_skip` で飛ばす。実行時の
-  `opt_array_minmax` は要素を**スタックスロット上で**比較し、Array を
-  作らない。同点は先の要素、比較不能は raise、と builtin と同じ。
+- **レシーバとしてだけ使われるリテラルの確保省略**（CRuby の
+  `opt_newarray_send` / `opt_duparray_send` に相当）: エスケープ解析
+  （[`../escape_analysis.md`](../escape_analysis.md)）。一時スロットに落ちる
+  `[a, b]` / 全要素 immediate の `literal[...]` は抽象状態上の「省略された
+  オブジェクト」になり、レシーバとして消費されれば確保されない。何をして
+  よいかは呼び出し先の `RecvEscape`（`init_recv_escape`）が決める:
+  `min` / `max` は要素をスロット上で比較（`opt_array_minmax`、同点は先の
+  要素、比較不能は raise と builtin と同じ）、`size` / `empty?` / `first` /
+  `last` はコンパイル時に答え、`include?` などレシーバを漏らさないメソッドには
+  テンプレートそのものを渡す。それ以外の使い方・要素スロットの上書き・
+  基本ブロック末尾・呼び出しの手前では元のリテラルと同じコードで実体化し、
+  side exit は write back（`WriteBack::virtual_obj`）で実体化する。
 - **`ExpandArray` の高速経路**: `src` が既に `len` 要素以上の Array なら
   `len` 回の移送で済ませる（`respond_to?` / `#to_ary` の dispatch 無し、
   nil 埋め無し、raise 無し）。`rest_pos` あり・`len == 0`・
@@ -474,7 +477,7 @@ rest 引数 `Array` の遅延実体化（D1）は
 | `ArithmeticSequence` 添字 | `rb_ary_aref1` 内で処理 | `aseq.[](self)` に委譲（3 箇所とも）。特異クラス付きの AS（`Range#%` 由来）も `ObjTy` で判定するので届く |
 | `[]=` の Range 開始 | 折り返しても負なら `RangeError` | 同じ。素の負 Integer 添字は `IndexError` |
 | `Array#<=>` | 最初に `0` でなかった要素比較の結果をそのまま返す | 同じ（nil / ±1 / String もそのまま） |
-| リテラル | `duparray` / `newarray`、`opt_newarray_send` | `Literal`（テンプレート deep copy）。要素が全部 immediate で 5 以下なら複製を機械語に焼く。`[a,b].min/max` 融合あり |
+| リテラル | `duparray` / `newarray`、`opt_newarray_send` | `Literal`（テンプレート deep copy）。要素が全部 immediate で 5 以下なら複製を機械語に焼く。レシーバとしてだけ使われるリテラルは確保を省略（エスケープ解析） |
 | `Array.new` の `#to_ary` 探索 | `!FIXNUM_P` で判定。Bignum は探索する | Integer クラスが 1 つなので Bignum も探索を飛ばし、`__init_fill` のサイズ検査が CRuby の `NUM2LONG` + 「array size too big」の順で拒む。`MAX_ARRAY_SIZE = 1 << 30` |
 | `zip` の引き出し | `take_items`（`each` + `break`） | 同じ。`Enumerator#next` の fiber は使わないので、引数の `each` からの `StopIteration` は呼び出し元に届く |
 | 要素格納のバリア | `RARRAY_ASET` が `RB_OBJ_WRITE` | `Array` ラッパが `ArrayInner` の mutator を隠して全経路をバリア。JIT は `emit_write_barrier_rdi` / `_bulk` |

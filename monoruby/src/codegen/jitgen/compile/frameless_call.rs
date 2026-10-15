@@ -168,7 +168,6 @@ impl<'a> JitContext<'a> {
         let state_save = state.clone();
         let depth = self.stack_frame_len();
         let unfrozen_save = (self.unfrozen_slots.clone(), self.instr_unfrozen.clone());
-        let fused_skip_save = self.fused_skip;
         match self.specialized_iseq(
             state, ir, callid, recv_class, func_id, iseq, true, None, true,
         ) {
@@ -182,7 +181,6 @@ impl<'a> JitContext<'a> {
                 ir.restore(ir_save);
                 *state = state_save;
                 (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
-                self.fused_skip = fused_skip_save;
                 self.discard_cond_results();
                 self.frameless_rejected.insert(iseq);
                 None
