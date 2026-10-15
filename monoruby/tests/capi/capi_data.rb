@@ -37,6 +37,8 @@ p [d.x, d.y, d.label, pt.label, d.class]
 c = pt.clone
 p [c.x, c.label, c.frozen?]
 p pt.frozen?
+# rb_define_method makes initialize / initialize_copy private, as def does
+p D::Point.private_instance_methods(false).sort, D::Point.public_instance_methods(false).include?(:initialize)
 
 # a subclass defined in Ruby inherits the allocator
 class D::Point < Object; end

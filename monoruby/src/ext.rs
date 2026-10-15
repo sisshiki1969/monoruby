@@ -653,6 +653,8 @@ pub(crate) static MR_API: MrApi = MrApi {
     regexp_ptr: mr_regexp_ptr,
     onig_api: mr_onig_api,
     enc_precise_mbclen: mr_enc_precise_mbclen,
+    keyword_given: mr_keyword_given,
+    enc_codepoint: mr_enc_codepoint,
 };
 
 // ---- regexp (ruby/re.h) ----------------------------------------------
@@ -790,6 +792,94 @@ unsafe extern "C" fn mr_enc_precise_mbclen(
         PreciseLen::NeedMore => -1 - 1,
         PreciseLen::Invalid => -1,
     }
+}
+
+/// `rb_enc_codepoint_len`: the code point of the character at `p`, its
+/// width through `len`; -1 when none of the named encoding starts there.
+unsafe extern "C" fn mr_enc_codepoint(
+    _: *mut MrContext,
+    name: *const c_char,
+    p: *const u8,
+    e: *const u8,
+    len: *mut c_int,
+) -> i64 {
+    use crate::value::PreciseLen;
+    if p >= e {
+        return -1;
+    }
+    // SAFETY: the table's contract: `name` is a C string, `p..e` a
+    // readable byte range, `len` null or writable.
+    let (name, bytes) = unsafe {
+        (
+            CStr::from_ptr(name).to_string_lossy(),
+            std::slice::from_raw_parts(p, e.offset_from(p) as usize),
+        )
+    };
+    let enc = Encoding::try_from_str(&name).unwrap_or(Encoding::Ascii8);
+    let PreciseLen::Char(n) = crate::value::precise_mbclen(enc, bytes, 0) else {
+        return -1;
+    };
+    let Some(cp) = crate::value::enc_codepoint(enc, &bytes[..n]) else {
+        return -1;
+    };
+    if !len.is_null() {
+        // SAFETY: as above.
+        unsafe { *len = n as c_int };
+    }
+    cp as i64
+}
+
+/// `rb_keyword_given_p`: the running extension method's frame was
+/// entered by a call instruction whose site carries keywords, and the
+/// method received them as a trailing Hash. Entered any other way (from
+/// `Init_`, an extension's `rb_funcall`), the answer is no.
+unsafe extern "C" fn mr_keyword_given(ctx: *mut MrContext) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    // SAFETY: the context's `frame` is the calling method's, set by the
+    // trampoline; null only inside `Init_`.
+    let frame = unsafe { (*ctx).frame };
+    if frame.is_null() {
+        return 0;
+    }
+    // SAFETY: the reverse of `make_ctx`'s `as_ptr`.
+    let lfp = unsafe { Lfp::new(frame as *mut u8) };
+    let Some(m) = globals.ext.methods.get(&lfp.func_id()) else {
+        return 0;
+    };
+    let last = if m.argc == MR_ARGC_VARIADIC {
+        lfp.arg(0).as_array_inner().last().copied()
+    } else if m.argc > 0 {
+        Some(lfp.arg(m.argc as usize - 1))
+    } else {
+        None
+    };
+    if !last.is_some_and(|v| v.try_hash_ty().is_some()) {
+        return 0;
+    }
+    // The call site that entered this frame; through a built-in that
+    // forwards its arguments (`send`, `public_send`, `Method#call`) to
+    // the site that called it, as CRuby's keyword flag travels with the
+    // arguments. A Ruby frame whose pc is not a send (a yield), or a
+    // native caller of any other kind (an extension's `rb_funcall`),
+    // ends the walk with no.
+    let mut cfp = vm.cfp();
+    for _ in 0..8 {
+        match crate::codegen::runtime::entered_by(globals, cfp) {
+            Some((false, callid)) => return globals.store[callid].kw_may_exists() as c_int,
+            Some(_) => return 0,
+            None => {}
+        }
+        let Some(prev) = cfp.prev() else {
+            return 0;
+        };
+        let fid = prev.lfp().func_id();
+        if globals.store[fid].is_iseq().is_some() || globals.ext.methods.contains_key(&fid) {
+            return 0;
+        }
+        cfp = prev;
+    }
+    0
 }
 
 mod onig_shim {
@@ -2043,6 +2133,27 @@ mod tests {
         assert!(!ok.is_null());
         // Cached: the same key answers the same `regex_t`.
         assert_eq!(ok, capi_regex((b"a+".to_vec(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap());
+    }
+
+    #[test]
+    fn enc_codepoint_edges() {
+        let bytes = "\u{3042}".as_bytes();
+        let p = bytes.as_ptr();
+        // SAFETY: `p..p+n` is inside `bytes`; the context is unused.
+        unsafe {
+            let e = p.add(bytes.len());
+            let ctx = std::ptr::null_mut();
+            let mut len = 0;
+            assert_eq!(mr_enc_codepoint(ctx, c"UTF-8".as_ptr(), p, e, &mut len), 0x3042);
+            assert_eq!(len, 3);
+            assert_eq!(mr_enc_codepoint(ctx, c"UTF-8".as_ptr(), p, p, &mut len), -1);
+            assert_eq!(mr_enc_codepoint(ctx, c"UTF-8".as_ptr(), p, p.add(2), &mut len), -1);
+            assert_eq!(mr_enc_codepoint(ctx, c"UTF-8".as_ptr(), p.add(1), e, &mut len), -1);
+            // A byte per character where monoruby has no decoder.
+            assert_eq!(mr_enc_codepoint(ctx, c"NO-SUCH-ENCODING".as_ptr(), p, e, std::ptr::null_mut()), 0xe3);
+            assert_eq!(mr_enc_codepoint(ctx, c"ASCII-8BIT".as_ptr(), p.add(1), e, &mut len), 0x81);
+            assert_eq!(len, 1);
+        }
     }
 
     #[test]

@@ -347,7 +347,7 @@ fn warn_unused_block(vm: &mut Executor, globals: &mut Globals, callid: CallSiteI
 /// Returns `(is_super, callid)`, or `None` when the slot is absent or
 /// garbage (invoker boundary, native caller) or the instruction is not a
 /// send/super (e.g. a yield).
-fn entered_by(globals: &Globals, cfp: executor::Cfp) -> Option<(bool, CallSiteId)> {
+pub(crate) fn entered_by(globals: &Globals, cfp: executor::Cfp) -> Option<(bool, CallSiteId)> {
     let slot = cfp.caller_pc_slot();
     if slot == 0 || slot % 8 != 0 {
         return None;

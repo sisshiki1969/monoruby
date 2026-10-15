@@ -213,3 +213,23 @@ fn msgpack() {
 fn strscan() {
     check_gem("strscan");
 }
+
+/// strptime: the Time API — `rb_time_timespec_new` with the local / UTC
+/// / fixed-offset codes, `rb_time_timespec`, `rb_time_utc_offset`,
+/// `rb_timespec_now` (which its ruby_time.c also defines itself, so the
+/// layer's is weak), `NUM2TIMET`, `OBJ_INIT_COPY`, `UNREACHABLE` and
+/// the `HAVE_*` time answers of config.h.
+#[test]
+fn strptime() {
+    check_gem("strptime");
+}
+
+/// yajl-ruby: a parser and encoder over `rb_io_*`, `rb_funcall` with
+/// blocks, `rb_enc_associate` behind `HAVE_RUBY_ENCODING_H` (which the
+/// top-level ruby.h announces, as CRuby's does), `rb_cInteger` under
+/// `RUBY_INTEGER_UNIFICATION`, and `to_json` methods added to the core
+/// classes.
+#[test]
+fn yajl_ruby() {
+    check_gem("yajl-ruby");
+}

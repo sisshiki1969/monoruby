@@ -451,6 +451,56 @@ RangeError、`rb_enc_precise_mbclen` の `MBCLEN_*` 判定を CRuby と比較。
 CRuby と比較する。残る差は `$LOADED_FEATURES` の順（monoruby は読む前に、
 CRuby は読んだ後に登録する）だけ。
 
+### 3.14 Time API、`rb_keyword_given_p`、UTF-8 以外の `rb_enc_codepoint_len`（段階 7）
+
+strptime（`rb_time_timespec_new` / `rb_time_timespec` /
+`rb_time_utc_offset` / `rb_timespec_now`）と yajl-ruby のための面。
+
+Time の関数は全部 `Time` 自身のメソッド呼び出しで、拡張が作る値は
+`Time.at` が作るものそのもの: `rb_time_nano_new(sec, nsec)` は
+`Time.at(sec, nsec, :nanosecond)`、`rb_time_new(sec, usec)` は
+`:microsecond`、`rb_time_timespec_new(ts, offset)` は CRuby の読み方
+（`INT_MAX` がローカル、`INT_MAX-1` が UTC（`.utc`）、一日未満なら固定
+オフセット（`.localtime(offset)`）、それ以外は `ArgumentError`
+"utc_offset out of range"）、`rb_time_num_new(timev, off)` は
+`Time.at(timev)` に `off` が nil でなければ `.localtime(off)`（秒数、
+"+09:00"、"UTC"）。`rb_time_timespec(v)` / `rb_time_timeval(v)` は Time か
+Numeric（Integer / Float / Rational、`Time.at` を通すので負値は切り下げ）
+を `to_i` / `nsec` で分解し、`rb_time_timespec_interval` /
+`rb_time_interval` はそれに負値の `ArgumentError` と Time の `TypeError`
+を足したもの。`rb_time_utc_offset` は Time でなければ `TypeError`。
+`rb_timespec_now` は `clock_gettime(CLOCK_REALTIME)` で、**weak** 定義:
+strptime の `ruby_time.c` は `HAVE_RB_TIMESPEC_NOW` に関わらず自分でも
+定義するので、libmonoruby_capi.a 側が強いと `.so` のリンクで二重定義に
+なる（CRuby では libruby.so の symbol interposition で済んでいる）。
+`NUM2TIMET` / `TIMET2NUM`、`OBJ_INIT_COPY` + `rb_obj_init_copy`
+（frozen と同クラスの検査）、`UNREACHABLE` / `UNREACHABLE_RETURN`、
+`RUBY_INTEGER_UNIFICATION`、ruby/config.h の `HAVE_SYS_TIME_H` /
+`HAVE_CLOCK_GETTIME` / `HAVE_GMTIME_R` / `HAVE_TIMEGM` / `HAVE_MKTIME` /
+`HAVE_STRUCT_TM_TM_GMTOFF` ほかの時刻系の答え、最上位 `ruby.h` の
+`HAVE_RUBY_ENCODING_H` などヘッダ告知（yajl-ruby は
+`HAVE_RUBY_ENCODING_H` のときだけ `ruby/encoding.h` を include する）も
+足した。
+
+`rb_keyword_given_p` は `MrApi::keyword_given`: 走っている拡張メソッドの
+フレームに入った呼び出し命令（`runtime::entered_by` が caller の pc から
+復元する call site）が `kw_may_exists` で、かつメソッドが末尾の位置引数
+として Hash を受け取っているとき 1。`send` / `public_send` 越しの呼び出し
+はその call site のキーワードを見るので同じ答え、`Method#call` や C からの
+`rb_funcall` は 0。`f({a: 1})` と `f(a: 1)` はこれで区別できる（§6 の
+制約は消えた）。`rb_scan_args` の `:` は従来どおり末尾 Hash で判定する。
+
+`rb_enc_codepoint_len` は `MrApi::enc_codepoint`（`value::precise_mbclen`
++ `value::enc_codepoint`）で、UTF-8 だけだった復号が EUC-JP / Shift_JIS /
+Windows-31J / UTF-16 / UTF-32 / ISO-8859-x など monoruby が持つ全部に
+なった。空なら "empty string"、文字が始まらなければ "invalid byte sequence
+in <enc>" の `ArgumentError`（CRuby と同文）。
+
+検証: `tests/capi/capi_time.c`（`tests/capi.rs` の 5 本目）が上の全部を
+CRuby と比較する。`tests/capi_gems.rs` に `strptime`（0.2.5）と
+`yajl_ruby`（1.4.3）を足した。どちらも CI の `gem install` 対象に既に
+入っている（stand-in の比較テスト用）。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -466,6 +516,8 @@ CRuby は読んだ後に登録する）だけ。
 | `regexp_prepare` / `regexp_ptr` | `rb_reg_prepare_re` / `RREGEXP_PTR`: monoruby が持つ `regex_t`（§3.13） |
 | `onig_api` | `MrOnigApi`: monoruby 内の Onigmo の関数群（`onig_search` ほか） |
 | `enc_precise_mbclen` | `rb_enc_precise_mbclen` を monoruby の encoding 走査で |
+| `keyword_given` | `rb_keyword_given_p`: 入ってきた call site のキーワード有無（§3.14） |
+| `enc_codepoint` | `rb_enc_codepoint_len` を monoruby の復号で（UTF-8 以外も） |
 
 あわせて `ary_push` / `hash_set` が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。
@@ -475,16 +527,18 @@ CRuby は読んだ後に登録する）だけ。
 | 段階 | 内容 | 状態 |
 |---|---|---|
 | 1 | ローダ（`monoruby_capi_init` 判別、`$LOAD_PATH` 上の `.so`）、`ruby.h` 互換ヘッダ、`capi.c`: クラス / モジュール / メソッド定義（arity -2〜15）、即値・数値・文字列・シンボル・配列・ハッシュ・Range、`rb_funcall` 系、ブロック（`rb_yield` 系、`rb_block_proc`）、例外（`rb_raise`、`rb_protect` / `rb_ensure` / `rb_rescue2` / `rb_jump_tag`）、`rb_scan_args` / `rb_get_kwargs`、ivar / 定数 / cvar / gvar、GC 登録、`rb_sprintf`（`PRIsVALUE`）、最小限の encoding、`rb_thread_call_without_gvl` | 済（`tests/capi.rs`: 同じ C ソースを CRuby と monoruby で動かし出力一致） |
-| 2 | `Data` / `TypedData`（`TypedData_Make_Struct`、`DATA_PTR` の lvalue、dmark / dfree）、`rb_define_alloc_func` / `rb_undef_alloc_func`、`rb_block_call` / `rb_proc_new` / `rb_iterate` / `rb_iter_break`（C 関数をブロックとして渡す）、`rb_call_super`、`rb_struct_*`、`rb_obj_call_init`、`rb_class_new` | 済（§3.7〜3.9、`tests/capi/capi_data.c`）。`rb_keyword_given_p` は未 |
+| 2 | `Data` / `TypedData`（`TypedData_Make_Struct`、`DATA_PTR` の lvalue、dmark / dfree）、`rb_define_alloc_func` / `rb_undef_alloc_func`、`rb_block_call` / `rb_proc_new` / `rb_iterate` / `rb_iter_break`（C 関数をブロックとして渡す）、`rb_call_super`、`rb_struct_*`、`rb_obj_call_init`、`rb_class_new` | 済（§3.7〜3.9、`tests/capi/capi_data.c`）。`rb_keyword_given_p` は段階 7 |
 | 3 | `RbConfig::CONFIG`（`rubyhdrdir` などを install root に）、`mkmf` が monoruby を相手に `Makefile` を作れること、`capi.c` を `libmonoruby_capi.a` として `LIBRUBYARG` に、`gem install` で C 拡張 gem がビルドされ `extensions/<arch>/…` から読めること | 済（§3.10、`tests/mkmf.rs`）。gem home は monoruby 専用 |
 | 4 | 実 gem で面積を詰める（`rb_io_*`、`rb_enc_*`、Bignum 系、`ALLOCV`、`ruby/util.h`、シンボル可視性）。`bcrypt` と `msgpack` が CRuby と一致 | 済（§3.11、`tests/capi_gems.rs`）。`json` は `Qfalse != 0` に当たる（§6）、`strscan` は段階 6 |
 | 5 | `st_table`（`ruby/st.h` + CRuby の `st.c`） | 済（§3.12、`tests/capi/capi_st.c`） |
 | 6 | `ruby/re.h`（Onigmo を `MrOnigApi` 経由で、`rb_reg_prepare_re` / `rb_reg_onig_match`、`rb_enc_precise_mbclen` を本物に、`require` の `.so` 解決） | 済（§3.13、`tests/capi/capi_re.c`、`tests/capi_gems.rs` の strscan） |
+| 7 | Time API（`rb_time_*`、`rb_timespec_now`）、`rb_keyword_given_p`、UTF-8 以外の `rb_enc_codepoint_len`、`OBJ_INIT_COPY`、`UNREACHABLE`、config.h の時刻系 `HAVE_*`、`HAVE_RUBY_*_H` | 済（§3.14、`tests/capi/capi_time.c`、`tests/capi_gems.rs` の strptime / yajl-ruby） |
 
 ## 6. 既知の制約
 
-- `rb_keyword_given_p` は常に 0。`rb_scan_args` の `:` は「末尾の引数が
-  Hash ならキーワード」とみなす（`f({a: 1})` と `f(a: 1)` を区別しない）。
+- `rb_scan_args` の `:` は「末尾の引数が Hash ならキーワード」とみなす
+  （`f({a: 1})` と `f(a: 1)` を区別しない。`rb_keyword_given_p` は区別する、
+  §3.14）。
 - `rb_protect` は `break` / `throw` などの非例外の大域脱出も例外オブジェクト
   として取り出すので、`rb_jump_tag` で再送すると種類が失われる。
 - `rb_iter_break` は隠し例外で実装しているので、`rb_block_call` /
