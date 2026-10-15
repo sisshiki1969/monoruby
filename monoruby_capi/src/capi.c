@@ -2699,6 +2699,14 @@ rb_str_hash(VALUE str)
     return (st_index_t)NUM2LONG(rb_hash(str));
 }
 
+/* CRuby seeds this per process; what callers rely on is that equal
+ * bytes hash equal within one process, which st_hash gives. */
+st_index_t
+rb_memhash(const void *ptr, long len)
+{
+    return rb_st_hash(ptr, (size_t)len, 0);
+}
+
 VALUE
 rb_str_inspect(VALUE str)
 {

@@ -59,7 +59,9 @@ typedef uintptr_t VALUE;
 typedef uintptr_t ID;
 typedef intptr_t SIGNED_VALUE;
 typedef uintptr_t st_data_t;
+#define ST_DATA_T_DEFINED
 typedef st_data_t st_index_t;
+#define MONORUBY_CAPI_ST_INDEX_T_DEFINED
 
 #define PRI_VALUE_PREFIX "l"
 #define RUBY_PRI_VALUE_MARK "\v"
@@ -597,6 +599,7 @@ VALUE rb_str_subseq(VALUE str, long beg, long len);
 VALUE rb_str_equal(VALUE a, VALUE b);
 int rb_str_cmp(VALUE a, VALUE b);
 st_index_t rb_str_hash(VALUE str);
+st_index_t rb_memhash(const void *ptr, long len);
 VALUE rb_str_inspect(VALUE str);
 VALUE rb_str_dump(VALUE str);
 VALUE rb_str_split(VALUE str, const char *sep);
@@ -705,7 +708,7 @@ const VALUE *rb_array_const_ptr(VALUE ary);
 
 /* ---- hashes ----------------------------------------------------------- */
 
-enum st_retval { ST_CONTINUE, ST_STOP, ST_DELETE, ST_CHECK, ST_REPLACE };
+/* `enum st_retval` (ST_CONTINUE, ST_STOP, ST_DELETE, ...) comes from ruby/st.h, included below. */
 VALUE rb_hash_new(void);
 VALUE rb_hash_new_capa(long capa);
 VALUE rb_hash_aset(VALUE hash, VALUE key, VALUE val);
@@ -997,5 +1000,9 @@ static inline int rb_toupper(int c) { return rb_islower(c) ? (c & ~0x20) : c; }
 #ifdef __cplusplus
 }
 #endif
+
+/* CRuby's ruby.h brings st.h in; so do the extensions that use an
+ * st_table without including it themselves. */
+#include "ruby/st.h"
 
 #endif /* MONORUBY_CAPI_RUBY_RUBY_H */

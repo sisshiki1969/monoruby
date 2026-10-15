@@ -243,7 +243,7 @@ CRuby のヘッダでビルドした（monoruby では読めない）`.so` が�
   は conftest をこのアーカイブとリンクして判定するので、層に無い関数は
   正しく「no」になる。monoruby 本体にはリンクしない。
 - `ruby/config.h`（ruby.h の設定部を分離）、`ruby/backward.h` /
-  `st.h` / `subst.h`（中身は無い）を足した。mkmf は生成する Makefile で
+  `subst.h`（中身は無い; `st.h` は段階 5 で本物になった、§3.12）を足した。mkmf は生成する Makefile で
   これらを全オブジェクトの前提に並べるので、存在しないと `make` が
   止まる。
 - `Kernel#system` が `system(env, *cmd)` と spawn オプションを受けるように
@@ -351,6 +351,38 @@ yield self` の形）で、ブロック literal 付きの再帰呼び出しが�
   クラスの完全な名前を出すようになった（以前は `UnknownExtTypeError`
   のみ。`MonorubyErr::class_name` の `Other` 腕）。
 
+### 3.12 `st_table`（段階 5）
+
+`ruby/st.h` の中身を入れた。実装は CRuby の `st.c`（public domain、
+`ruby_4_0` ブランチ）をそのまま `monoruby_capi/src/st.c` に持ち込んだもので、
+Ruby 内部ヘッダへの依存（`internal/bits.h` の `nlz_intptr`、`RUBY_ASSERT`、
+`NO_SANITIZE`）を冒頭の数行で置き換え、`RHASH` に入り込む
+`rb_hash_bulk_insert_into_st_table` とその裏の rehash 補助、内部用の
+`set_table` を落としただけ。`st.h` も CRuby の宣言と `struct st_table` の
+レイアウトをそのまま持ち、CRuby と同じく全関数は `rb_st_*` で、`st_insert`
+などは `#define` で届く。`ruby.h` が末尾で `ruby/st.h` を include する
+（CRuby と同じく、`<ruby/st.h>` を自分で include しない拡張のため。
+`enum st_retval` はそちらへ移した）。メモリは `ruby_xmalloc` 系
+（GC 圧力に数える）、テーブルが `st_index_t` を越えると RuntimeError
+（オリジナルの `RUBY` 構成どおり）。
+
+同じコードなので、挿入順の走査、`st_hash` / `st_hash_uint` / `st_numhash`
+の値、`st_memsize` まで CRuby と一致する。`tests/capi/capi_st.c` が
+numtable（1000 件の挿入・再挿入・`delete` / `shift` / `foreach` の
+`ST_DELETE` / `ST_STOP`、`update` の 3 経路、`insert2`、`add_direct`、
+`copy` / `clear`、bins の無い小テーブル）、strtable / strcasetable
+（別ポインタ同内容の検索、`st_strcasecmp`）、独自 `st_hash_type`
+（衝突だらけの hash で `foreach_check` / `foreach_with_replace` /
+`keys_check` / `delete_safe` + `cleanup_safe`）、hash 関数群、
+VALUE を鍵と値に持つ TypedData（mark で `st_foreach`）を CRuby と比べる。
+`rb_memhash` は `st_hash(ptr, len, 0)`（CRuby はプロセスごとの seed を
+混ぜるが、同一プロセス内で等しいことだけが契約）。
+
+ホストの gem cache にある C 拡張で `st_table` を使うのは nokogiri だけ
+（monoruby では `ext/nokogiri` が肩代わり）なので、実 gem での検証は無い。
+oj / ruby-prof / stackprof のような `st_table` を使う gem がこれで
+ビルドできる。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -375,6 +407,7 @@ yield self` の形）で、ブロック literal 付きの再帰呼び出しが�
 | 2 | `Data` / `TypedData`（`TypedData_Make_Struct`、`DATA_PTR` の lvalue、dmark / dfree）、`rb_define_alloc_func` / `rb_undef_alloc_func`、`rb_block_call` / `rb_proc_new` / `rb_iterate` / `rb_iter_break`（C 関数をブロックとして渡す）、`rb_call_super`、`rb_struct_*`、`rb_obj_call_init`、`rb_class_new` | 済（§3.7〜3.9、`tests/capi/capi_data.c`）。`rb_keyword_given_p` は未 |
 | 3 | `RbConfig::CONFIG`（`rubyhdrdir` などを install root に）、`mkmf` が monoruby を相手に `Makefile` を作れること、`capi.c` を `libmonoruby_capi.a` として `LIBRUBYARG` に、`gem install` で C 拡張 gem がビルドされ `extensions/<arch>/…` から読めること | 済（§3.10、`tests/mkmf.rs`）。gem home は monoruby 専用 |
 | 4 | 実 gem で面積を詰める（`rb_io_*`、`rb_enc_*`、Bignum 系、`ALLOCV`、`ruby/util.h`、シンボル可視性）。`bcrypt` と `msgpack` が CRuby と一致 | 済（§3.11、`tests/capi_gems.rs`）。`json` は `Qfalse != 0` に当たる、`strscan` は `ruby/re.h` が未（§6） |
+| 5 | `st_table`（`ruby/st.h` + CRuby の `st.c`） | 済（§3.12、`tests/capi/capi_st.c`） |
 
 ## 6. 既知の制約
 
@@ -392,8 +425,8 @@ yield self` の形）で、ブロック literal 付きの再帰呼び出しが�
 - `dsize` / `dcompact` は使わない。`RUBY_TYPED_*` のフラグはすべて無視。
 - `rb_warn` は `Kernel#warn("warning: ...")`（ファイル名・行番号は付かない）。
 - `rb_gv_get` / `rb_gv_set` は `eval` 経由。
-- mkmf の `create_header` は使えるが、`$(hdrdir)/ruby/backward/*` や
-  `st.h` の中身（`st_table`）は無い。`RbConfig::CONFIG["CC"]` は Linux では
+- mkmf の `create_header` は使えるが、`$(hdrdir)/ruby/backward/*` の中身は
+  無い。`RbConfig::CONFIG["CC"]` は Linux では
   スナップショットの `gcc` のまま（`CC` 環境変数で上書きできる）。
 - **json 2.18 の C 拡張は動かない。** ビルドとロードは通るが、
   `fbuffer.h` の `if (fb->io)` と generator.c の `if (!data->vstate)` が
