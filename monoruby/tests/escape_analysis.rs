@@ -560,3 +560,69 @@ fn chain_deopt_under_a_pending_literal_argument() {
         "#,
     );
 }
+
+#[test]
+fn rest_forwarded_to_a_polymorphic_target() {
+    // `def f(...) = @o.m(...)` where the forward's receiver is one of
+    // several classes: the site is compiled as a class dispatch, which
+    // takes no elided object, so the trampoline's rest is materialized
+    // before the split (rubocop's `Node#each_descendant(...)` forwards
+    // this way).
+    run_test(
+        r#"
+        class A; def m(a, b = 1) = a + b; end
+        class B; def m(*r) = r.sum * 2; end
+        class C; def m(a, b = 0, k: 0) = a - b - k; end
+        class W
+          def initialize(o) = @o = o
+          def f(...) = @o.m(...)
+        end
+        ws = [W.new(A.new), W.new(B.new), W.new(C.new)]
+        res = []
+        60.times { |i| w = ws[i % 3]; res << w.f(i, 2) << w.f(i) }
+        res.last(6)
+        "#,
+    );
+}
+
+#[test]
+fn elided_argument_live_across_a_dispatch_that_branches() {
+    // A literal handed over into a callee whose first use of it is behind
+    // a polymorphic call feeding an `if`: the dispatch emits the branch
+    // per arm, so the object has to be performed before the split, not
+    // left for the branch target to see one copy of and the fall-through
+    // another (psych's `ToRuby#register(node, [])`).
+    run_test(
+        r#"
+        class N; def initialize(a) = @a = a; def anchor = @a; end
+        class M; def initialize(a) = @a = a; def anchor = @a && @a.to_s; end
+        class R
+          def initialize = @st = {}
+          def register(node, object)
+            @st[node.anchor] = object if node.anchor
+            object
+          end
+          def reg_empty(node) = register(node, [])
+          def st = @st
+        end
+        r = R.new
+        nodes = [N.new(1), M.new(2), N.new(nil), M.new(nil)]
+        res = []
+        40.times { |i| res << r.reg_empty(nodes[i % 4]).size }
+        [res.sum, r.st]
+        "#,
+    );
+    // The same with a comparison dispatch (`Integer` / `Float` operands).
+    run_test(
+        r#"
+        def g(x, lst)
+          lst.push(x) if x > 0.5
+          lst.size
+        end
+        def h(x) = g(x, [1])
+        res = 0
+        40.times { |i| res += h(i.odd? ? i : i * 0.3) }
+        res
+        "#,
+    );
+}

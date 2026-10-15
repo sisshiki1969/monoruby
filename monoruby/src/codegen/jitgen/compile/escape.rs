@@ -166,12 +166,28 @@ impl<'a> JitContext<'a> {
         if !self.is_bb_end(bc_pos) {
             return;
         }
+        self.settle_virtuals_before_branch(state, ir, bc_pos);
+    }
+
+    ///
+    /// Perform the elided allocations still live after the instruction at
+    /// *branch_pos* (the block's last one: a branch, or the instruction a
+    /// dispatch's per-arm `CondBr` was sunk into, see
+    /// [`JitContext::declare_merge`]), dropping the dead ones, so that no
+    /// merge ever sees one.
+    ///
+    pub(super) fn settle_virtuals_before_branch(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        branch_pos: BcIndex,
+    ) {
         let next_sp = state.next_sp();
         for (dst, src) in state.virtuals().to_vec() {
             let dead = if self.is_temp(dst) {
                 dst >= next_sp
             } else {
-                !self.local_live_after(bc_pos, dst)
+                !self.local_live_after(branch_pos, dst)
             };
             if dead {
                 state.take_virtual(dst);

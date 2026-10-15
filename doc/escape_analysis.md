@@ -102,6 +102,17 @@ by the instruction is
 `settle_virtuals_at_bb_end` does the same after an instruction that ends
 its block by falling through.
 
+An intra-block dispatch (a class dispatch, a polymorphic call, a generic
+binary operator: `declare_merge`) is a merge of its own, and its arms may
+emit the `CondBr` that follows it (`CondBrSink`), which makes the
+instruction the block's last. So `declare_merge` materializes an elided
+object among the operands (no arm takes one over), and, under a sink,
+settles every live object of the frame as the block's end would
+(`settle_virtuals_before_branch`): a parameter's object would otherwise
+reach the branch target through an arm's side-branch state while the
+fall-through materializes it, and the join of the two would drop it. The
+join asserts (debug) that the innermost frame carries none.
+
 A parameter holding a handed-over object (§6) follows the same rules but
 one: it survives its frame's calls. Its elements are in the caller's frame
 (or are a template), which no callee can reach, and the callee gate

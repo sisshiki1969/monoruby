@@ -91,6 +91,23 @@ impl<'a> JitContext<'a> {
     ) -> (AbstractState, DispatchMerge) {
         let pc = state.pc();
         let sink = self.cond_sink_for(dst);
+        // No arm takes an elided object over (`doc/escape_analysis.md`):
+        // one among the operands is materialized before the split (each
+        // arm reads them from their stack homes). And a dispatch that
+        // branches per arm (a sink) ends the basic block for every live
+        // object of this frame — a parameter's object would otherwise
+        // reach the branch target through the arm's side-branch state
+        // while the fall-through materializes it, and the merge of the
+        // two would drop the object — so those are performed here too,
+        // the dead ones dropped, exactly as at a block's last instruction.
+        for slot in operands {
+            if state.virtual_at(*slot).is_some() {
+                self.materialize_virtual(state, ir, *slot);
+            }
+        }
+        if let Some(sink) = sink {
+            self.settle_virtuals_before_branch(state, ir, sink.pos);
+        }
         state.write_back_slots(ir, operands);
         state.flush_gp(ir);
         let entry = state.clone();
