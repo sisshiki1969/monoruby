@@ -1563,11 +1563,8 @@ impl Executor {
                 "monoruby_hooks/bundler_source_git.rb",
             ),
         ];
-        let Some(p) = path.to_str() else {
-            return Ok(());
-        };
         for (suffix, feature) in LOAD_HOOKS {
-            if p.ends_with(suffix) {
+            if path.to_str().is_some_and(|p| p.ends_with(suffix)) {
                 let hook = crate::globals::install_root().join("stub").join(feature);
                 self.require(globals, &hook, false)?;
             }
