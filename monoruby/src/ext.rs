@@ -718,7 +718,7 @@ unsafe extern "C" fn mr_regexp_prepare(ctx: *mut MrContext, re: MrValue, str: Mr
         return std::ptr::null_mut();
     };
     if re.is_regex().is_none() {
-        set_err(vm, MonorubyErr::typeerr(format!("wrong argument type {} (expected Regexp)", re.get_real_class_name(&globals.store))));
+        set_err(vm, MonorubyErr::wrong_argument_type(&globals.store, re, "Regexp"));
         return std::ptr::null_mut();
     }
     if str.try_rvalue().is_none_or(|rv| rv.ty() != ObjTy::STRING) {
@@ -748,7 +748,7 @@ unsafe extern "C" fn mr_regexp_ptr(ctx: *mut MrContext, re: MrValue) -> *mut c_v
         return std::ptr::null_mut();
     };
     if re.is_regex().is_none() {
-        set_err(vm, MonorubyErr::typeerr(format!("wrong argument type {} (expected Regexp)", re.get_real_class_name(&globals.store))));
+        set_err(vm, MonorubyErr::wrong_argument_type(&globals.store, re, "Regexp"));
         return std::ptr::null_mut();
     }
     match capi_regex(re.as_regexp_inner().capi_engine_key()) {

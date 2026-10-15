@@ -165,6 +165,69 @@ re_region_copy(VALUE self, VALUE re, VALUE str)
     return ret;
 }
 
+/* Re.region_ops -> the rest of the OnigRegion API on a heap region:
+ * onig_region_new / resize / set / clear / free(1), onig_free(NULL),
+ * onig_error_code_to_str. */
+static VALUE
+re_region_ops(VALUE self)
+{
+    OnigRegion *r = onig_region_new();
+    OnigUChar msg[ONIG_MAX_ERROR_MESSAGE_LEN];
+    VALUE ret;
+    int len;
+    (void)self;
+    if (!r) rb_memerror();
+    if (onig_region_resize(r, 3) != 0) rb_memerror();
+    onig_region_set(r, 0, 1, 4);
+    onig_region_set(r, 1, 2, 3);
+    onig_region_set(r, 2, -1, -1);
+    ret = rb_ary_new3(2, INT2FIX(r->num_regs), regs_to_ary(r));
+    onig_region_clear(r);
+    rb_ary_push(ret, INT2FIX(r->num_regs));
+    onig_region_free(r, 1);
+    onig_free(NULL);
+    len = onig_error_code_to_str(msg, ONIGERR_MEMORY);
+    rb_ary_push(ret, rb_str_new((const char *)msg, len));
+    return ret;
+}
+
+/* Re.prepare_errors -> the messages of rb_reg_prepare_re / RREGEXP_PTR on
+ * a non-Regexp and a non-String. CRuby checks neither (its callers do),
+ * so there the expected lines are printed as they are. */
+static VALUE
+prepare_errors_body(VALUE which)
+{
+    switch (FIX2INT(which)) {
+      case 0: rb_reg_prepare_re(rb_str_new_cstr("x"), rb_str_new_cstr("y")); break;
+      case 1: rb_reg_prepare_re(rb_reg_regcomp(rb_str_new_cstr("x")), INT2FIX(1)); break;
+      default: RREGEXP_PTR(Qnil); break;
+    }
+    return Qnil;
+}
+
+static VALUE
+re_prepare_errors(VALUE self)
+{
+    VALUE ret = rb_ary_new();
+    int i;
+    (void)self;
+    for (i = 0; i < 3; i++) {
+#ifdef MONORUBY_CAPI
+        int state = 0;
+        rb_protect(prepare_errors_body, INT2FIX(i), &state);
+        if (!state) rb_raise(rb_eRuntimeError, "no error");
+        rb_ary_push(ret, rb_funcall(rb_errinfo(), rb_intern("message"), 0));
+        rb_set_errinfo(Qnil);
+#else
+        (void)prepare_errors_body;
+        rb_ary_push(ret, rb_str_new_cstr(i == 0 ? "wrong argument type String (expected Regexp)"
+                                         : i == 1 ? "no implicit conversion of Integer into String"
+                                         : "wrong argument type nil (expected Regexp)"));
+#endif
+    }
+    return ret;
+}
+
 /* Re.memsearch(needle, hay) -> rb_memsearch's byte offset */
 static VALUE
 re_memsearch(VALUE self, VALUE needle, VALUE hay)
@@ -232,6 +295,8 @@ Init_capi_re(void)
     rb_define_singleton_method(mRe, "backref", re_backref, 3);
     rb_define_singleton_method(mRe, "region_copy", re_region_copy, 2);
     rb_define_singleton_method(mRe, "memsearch", re_memsearch, 2);
+    rb_define_singleton_method(mRe, "region_ops", re_region_ops, 0);
+    rb_define_singleton_method(mRe, "prepare_errors", re_prepare_errors, 0);
     rb_define_singleton_method(mRe, "misc", re_misc, 1);
     rb_define_singleton_method(mRe, "mbclen", re_mbclen, 1);
     rb_define_singleton_method(mRe, "long2int_overflow", re_long2int_overflow, 0);

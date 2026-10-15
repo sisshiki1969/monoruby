@@ -23,6 +23,8 @@ p CapiRe.names(/(a)(b)/)
 p CapiRe.backref(/(?<a>x)(?<b>y)/, "xy", "b")
 p CapiRe.backref(/(?<a>x)(?<b>y)/, "xy", "zz")
 p CapiRe.region_copy(/(a)(b)?(c)/, "zac")
+p CapiRe.region_ops
+p CapiRe.prepare_errors
 p CapiRe.memsearch("lo", "hello")
 p CapiRe.memsearch("", "hello")
 p CapiRe.memsearch("zz", "hello")
