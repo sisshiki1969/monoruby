@@ -279,7 +279,66 @@ impl<'a> JitContext<'a> {
         callid: CallSiteId,
     ) {
         state.unset_no_capture_guard(self);
+        self.note_given_block_escape(state, ir, callid);
         state.generic_send(ir, self.store, callid);
+    }
+
+    ///
+    /// Before a call that is *not* specialized into this unit: if the
+    /// call may run the enclosing method's block outside the unit, treat
+    /// it as the generic `yield` it amounts to. A `super` passes that
+    /// block on implicitly, and a block literal whose body reaches it
+    /// (`Store::block_reaches_given_block` — a `yield`, an `&b` forward,
+    /// or a nested literal doing either) hands it to whatever the callee
+    /// is. Either way the block runs as a unit of its own, even when the
+    /// method's own `yield` sites inlined it, and its stores land in its
+    /// home frame — the method's caller, further up this chain — where
+    /// the compiler cannot see them.
+    ///
+    /// Two things follow, both what the generic-`yield` lowering does
+    /// (`TraceIr::Yield` in `compile.rs`). The home chain gives up its
+    /// claims *now*, before anything compiled after this point reads
+    /// them: an inlined `yield` later in this body computes with the
+    /// home's constants, and `n = 0; m.traverse { |e| n += 1 }` with
+    /// `traverse` doing `other { |e| yield e }` generically and then
+    /// `yield self` inline read `n` as the constant 0 after the block
+    /// had already counted to 2 out of the unit. And the frame takes the
+    /// `generic_yield` mark, so the caller gives up what it kept across
+    /// this call when the compile returns (the bet confirmation in
+    /// `specialized_send`) and a loop around the call adopts no outer
+    /// homes.
+    ///
+    /// [`Self::note_block_handler_escape`] is the same for an `&b`
+    /// materialization in this frame.
+    ///
+    fn note_given_block_escape(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+    ) {
+        let callsite = &self.store[callid];
+        if callsite.name.is_none()
+            || callsite
+                .block_fid
+                .is_some_and(|fid| self.store.block_reaches_given_block(fid))
+        {
+            self.note_block_handler_escape(state, ir);
+        }
+    }
+
+    ///
+    /// The enclosing method's block leaves this unit here, for code that
+    /// may run it where the compiler cannot see its stores: drop the
+    /// claims on its home chain and mark the frame as having yielded
+    /// generically. See [`Self::note_given_block_escape`].
+    ///
+    pub(super) fn note_block_handler_escape(&mut self, state: &mut AbstractState, ir: &mut AsmIr) {
+        let home = self
+            .current_method_given_block()
+            .and_then(|bi| state.innermost_level().checked_sub(bi.outer));
+        state.unbox_to_S_for_outgoing_block(self, ir, home);
+        self.set_generic_yield();
     }
 
     ///
@@ -823,8 +882,16 @@ impl<'a> JitContext<'a> {
         // knows whether it inlined every yield and whether it can deopt);
         // the third is the open one.
         if callsite.block_fid.is_some() {
+            // Must agree with the specialization gate below: a callee
+            // that is already on the specialization stack is called, not
+            // specialized (see `block_exempt`), so its block is handed
+            // out, not inlined.
+            let callee_on_stack = self.store[func_id]
+                .is_iseq()
+                .is_some_and(|iseq| self.iseq_on_specialization_stack(iseq));
             let inlined_block = matches!(self.store[func_id].kind, FuncKind::ISeq(_))
                 && !callee_forwards_block
+                && !callee_on_stack
                 && callsite
                     .block_fid
                     .and_then(|fid| self.store[fid].is_iseq())
@@ -1413,6 +1480,19 @@ impl<'a> JitContext<'a> {
                 let forward_exempt = (forwarding_callee || forwarded_initialize)
                     && self.specialize_level() < FORWARD_EXEMPT_RECURSION_CAP;
 
+                // A block literal at the call site is exempt from the
+                // budget too, since specialized `yield` needs the callee
+                // frame. That exemption has no depth of its own, so a
+                // method that calls itself with a block (a tree walk's
+                // `children.each { |c| c.traverse { |e| yield e } }`)
+                // would re-enter its own specialization from inside the
+                // block's compilation without end: every level of the
+                // recursion is a new frame with a new block literal.
+                // Refuse the exemption for a callee that is already on
+                // the specialization stack, so the recursive call is a
+                // plain call to the method's own entry.
+                let block_exempt = iseq_block.is_some() && !self.iseq_on_specialization_stack(iseq);
+
                 // Method specialization (inlining a callee iseq) and block-
                 // argument inlining (`iseq_block`, which drives specialized
                 // `yield`) are both lowered on x86 and aarch64 now.
@@ -1421,7 +1501,7 @@ impl<'a> JitContext<'a> {
                 // would leave it with no path to the merge.
                 if (((specializable || forwarded_initialize)
                     && (forward_exempt || self.specialize_level() < SPECIALIZE_DEPTH_LIMIT))
-                    || iseq_block.is_some())
+                    || block_exempt)
                     && !self.in_dispatch_arm()
                     && recv_class_proven
                     // See `callee_forwards_block` at the entry.
@@ -1446,6 +1526,7 @@ impl<'a> JitContext<'a> {
         if block_fid.is_some() || captures_without_block {
             state.unset_no_capture_guard(self);
         }
+        self.note_given_block_escape(state, ir, callid);
 
         // Behind a class-set guard (or a multi-class dispatch arm) the
         // receiver is only narrowed to a set, so the call may not bake in

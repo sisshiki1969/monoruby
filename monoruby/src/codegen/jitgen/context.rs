@@ -1979,6 +1979,13 @@ impl<'a> JitContext<'a> {
         self.stack_frame.len()
     }
 
+    /// Whether `iseq_id` is already being compiled as one of the frames on
+    /// the specialization stack, i.e. specializing a call to it now would
+    /// inline a method into itself.
+    pub(super) fn iseq_on_specialization_stack(&self, iseq_id: ISeqId) -> bool {
+        self.stack_frame.iter().any(|f| f.iseq_id == iseq_id)
+    }
+
     pub(super) fn caller_pos(&self) -> Option<usize> {
         self.stack_frame.len().checked_sub(2)
     }

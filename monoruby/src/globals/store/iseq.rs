@@ -1400,6 +1400,51 @@ impl ISeqInfo {
 }
 
 impl Store {
+    ///
+    /// Whether running the block *fid* (a block literal) can hand the
+    /// enclosing method's block to code the compiler does not see: the
+    /// body, or a block literal nested anywhere inside it, contains a
+    /// `yield`, a `super` (which passes the method's block on
+    /// implicitly), or a `BlockArg` / `BlockArgProxy` (an `&b` forward
+    /// of it).
+    ///
+    /// The JIT asks this about a block literal it hands to a call it
+    /// could not inline: the callee runs out of the unit, and if it (or
+    /// anything it calls) reaches the enclosing method's block through
+    /// this literal, that block — possibly compiled *into* the unit at
+    /// the method's own `yield` sites, with the compiler keeping claims
+    /// about the locals it writes — runs behind the compiler's back and
+    /// stores where no claim can see. A `yield` inside a block literal
+    /// addresses the enclosing method's block, which is why the walk
+    /// descends through nested literals, and why opcodes it meets at
+    /// any depth count the same.
+    ///
+    /// A block whose bytecode is not available answers `true`.
+    ///
+    pub(crate) fn block_reaches_given_block(&self, fid: FuncId) -> bool {
+        let Some(iseq) = self[fid].is_iseq() else {
+            return true;
+        };
+        let Some(bc) = self[iseq].bytecode.as_ref() else {
+            return true;
+        };
+        bc.iter().any(|b| {
+            let op1 = b.op1();
+            match (op1 >> 48) as u8 {
+                // BlockArgProxy / BlockArg, Super, Yield.
+                21 | 23 | 32..=35 => true,
+                // MethodCall: look into the literal it passes, if any.
+                30 | 31 => {
+                    let callid = CallSiteId::from(op1 as u32);
+                    self[callid]
+                        .block_fid
+                        .is_some_and(|fid| self.block_reaches_given_block(fid))
+                }
+                _ => false,
+            }
+        })
+    }
+
     pub(crate) fn outer_locals(&self, iseq: ISeqId) -> ExternalContext {
         if let Some(iseq) = self[iseq].outer {
             self.scoped_locals(iseq)

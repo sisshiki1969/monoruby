@@ -290,6 +290,17 @@ CRuby のヘッダでビルドした（monoruby では読めない）`.so` が�
 | json 2.18.0 | ビルドとロードは通るが生成器が動かない（§6） | `RUBY_INTEGER_UNIFICATION`、`SIZEOF_UINT64_T`、`ALLOCV`、`rb_enc_interned_str` の `have_func` 判定 |
 | strscan | 未着手 | `ruby/re.h`（Onigmo の `regex_t` / `OnigRegion` / `onig_search`、`rb_reg_prepare_re`）が要る |
 
+macOS の CI で msgpack の `extconf.rb` が monoruby ごと落ちた（スタック
+オーバーフロー）のは層ではなく JIT の問題だった。mkmf が呼ぶ FileUtils の
+`Entry_#postorder_traverse`（`children.each { |c| c.traverse { |e| yield e } };
+yield self` の形）で、ブロック literal 付きの再帰呼び出しが特殊化の深さ
+制限を素通りして無限に特殊化していた（再帰防止を入れた）。その上で同じ形
+が、特殊化フレームから外に出たブロック（yield する literal / `&b` / `super`
+を汎用呼び出しに渡す）の書き込みを呼び出し元の定数化ローカルが見ない既存
+バグを露わにした。どちらも `tests/given_block_escape.rs` が回帰テストで、
+層とは独立の修正（`codegen/jitgen/compile/method_call.rs` の
+`note_given_block_escape`）。
+
 層に足したもの:
 
 - **可視性**: `RUBY_FUNC_EXPORTED` を `__attribute__((visibility("default")))`
