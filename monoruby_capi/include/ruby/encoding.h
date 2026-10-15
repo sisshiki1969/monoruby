@@ -117,14 +117,28 @@ void rb_must_asciicompat(VALUE str);
 NORETURN(void rb_enc_raise(rb_encoding *enc, VALUE exc, const char *fmt, ...));
 #define rb_enc_mbc_to_codepoint(p, e, enc) rb_enc_codepoint_len((p), (e), NULL, (enc))
 #define rb_enc_codepoint(p, e, enc) rb_enc_codepoint_len((p), (e), NULL, (enc))
-#define MBCLEN_CHARFOUND_P(ret) ((ret) > 0)
-#define MBCLEN_CHARFOUND_LEN(ret) (ret)
-#define MBCLEN_INVALID_P(ret) ((ret) < 0)
-#define MBCLEN_NEEDMORE_P(ret) ((ret) == 0)
-#define ONIGENC_MBCLEN_CHARFOUND_P MBCLEN_CHARFOUND_P
-#define ONIGENC_MBCLEN_CHARFOUND_LEN MBCLEN_CHARFOUND_LEN
-#define ONIGENC_MBCLEN_INVALID_P MBCLEN_INVALID_P
-#define ONIGENC_MBCLEN_NEEDMORE_P MBCLEN_NEEDMORE_P
+/* `rb_enc_precise_mbclen` answers in Onigmo's encoding, as CRuby's does:
+ * the length when a character is found, -1 for an invalid sequence, and
+ * -1-n when n more bytes are needed. These are `ruby/onigmo.h`'s
+ * definitions, token for token, so including both in either order is
+ * fine. */
+#ifndef ONIGENC_MBCLEN_CHARFOUND_P
+#define ONIGENC_CONSTRUCT_MBCLEN_CHARFOUND(n)   (n)
+#define ONIGENC_MBCLEN_CHARFOUND_P(r)           (0 < (r))
+#define ONIGENC_MBCLEN_CHARFOUND_LEN(r)         (r)
+
+#define ONIGENC_CONSTRUCT_MBCLEN_INVALID()      (-1)
+#define ONIGENC_MBCLEN_INVALID_P(r)             ((r) == -1)
+
+#define ONIGENC_CONSTRUCT_MBCLEN_NEEDMORE(n)    (-1-(n))
+#define ONIGENC_MBCLEN_NEEDMORE_P(r)            ((r) < -1)
+#define ONIGENC_MBCLEN_NEEDMORE_LEN(r)          (-1-(r))
+#endif
+#define MBCLEN_CHARFOUND_P(ret) ONIGENC_MBCLEN_CHARFOUND_P(ret)
+#define MBCLEN_CHARFOUND_LEN(ret) ONIGENC_MBCLEN_CHARFOUND_LEN(ret)
+#define MBCLEN_INVALID_P(ret) ONIGENC_MBCLEN_INVALID_P(ret)
+#define MBCLEN_NEEDMORE_P(ret) ONIGENC_MBCLEN_NEEDMORE_P(ret)
+#define MBCLEN_NEEDMORE_LEN(ret) ONIGENC_MBCLEN_NEEDMORE_LEN(ret)
 #define rb_enc_str_new_lit(s, enc) rb_enc_str_new((s), (long)(sizeof(s) - 1), (enc))
 
 #ifdef __cplusplus

@@ -188,7 +188,34 @@ struct MrApi {
     int     (*class_set_alloc)(MrContext *, MrValue klass, uint32_t flags);   /* MR_ALLOC_* */
     void   *(*native_take)(MrContext *, MrValue obj);   /* detach the payload, unfreed */
     MrValue (*call_super)(MrContext *, int argc, const MrValue *argv, MrValue block);
+
+    /* appended for ruby/re.h: Onigmo through the table (see MrOnigApi) */
+    void   *(*regexp_prepare)(MrContext *, MrValue re, MrValue str);   /* regex_t * for a match on str; monoruby's, never onig_free */
+    void   *(*regexp_ptr)(MrContext *, MrValue re);                    /* regex_t * under re's own codec */
+    const struct MrOnigApi *(*onig_api)(void);
+    int     (*enc_precise_mbclen)(MrContext *, const char *name, const unsigned char *p, const unsigned char *e); /* Onigmo's MBCLEN encoding */
 };
+
+/* Onigmo's entry points as linked into monoruby, types erased: regex_t *
+ * and OnigRegion * are void *, OnigPosition is ptrdiff_t. */
+typedef struct MrOnigApi {
+    ptrdiff_t (*search)(void *reg, const uint8_t *str, const uint8_t *end, const uint8_t *start, const uint8_t *range, void *region, uint32_t option);
+    ptrdiff_t (*match_at)(void *reg, const uint8_t *str, const uint8_t *end, const uint8_t *at, void *region, uint32_t option);
+    void   *(*region_new)(void);
+    void    (*region_init)(void *region);
+    void    (*region_free)(void *region, int free_self);
+    void    (*region_clear)(void *region);
+    void    (*region_copy)(void *to, const void *from);
+    int     (*region_resize)(void *region, int n);
+    int     (*region_set)(void *region, int at, int beg, int end);
+    void    (*free)(void *reg);
+    int     (*name_to_backref_number)(void *reg, const uint8_t *name, const uint8_t *name_end, const void *region);
+    int     (*foreach_name)(void *reg, int (*func)(const uint8_t *, const uint8_t *, int, int *, void *, void *), void *arg);
+    int     (*number_of_names)(const void *reg);
+    int     (*number_of_captures)(const void *reg);
+    int     (*number_of_capture_histories)(const void *reg);
+    int     (*error_code_to_str)(uint8_t *buf, ptrdiff_t code);
+} MrOnigApi;
 
 #ifdef __cplusplus
 }

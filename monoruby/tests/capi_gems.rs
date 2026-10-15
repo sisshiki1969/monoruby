@@ -8,7 +8,7 @@
 //! `gem/`.
 //!
 //! A gem whose `.gem` is not in the host's cache is skipped (CI installs
-//! them; `gem install bcrypt msgpack` does locally).
+//! them; `gem install bcrypt msgpack strscan` does locally).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -200,4 +200,16 @@ fn bcrypt() {
 #[test]
 fn msgpack() {
     check_gem("msgpack");
+}
+
+/// strscan: `ruby/re.h` — `rb_reg_onig_match` / `rb_reg_prepare_re`
+/// driving `onig_search` / `onig_match` on a `struct re_registers` of
+/// the extension's own, `onig_foreach_name`, `rb_memsearch`,
+/// `rb_enc_precise_mbclen` on EUC-JP, and `rb_get_kwargs`. Its
+/// `lib/strscan.rb` requires `strscan.so` and then the gem's Ruby
+/// methods, so the gem's `.rb` must win over both the stand-in in
+/// `stdlib/` and the host CRuby's `strscan.so`.
+#[test]
+fn strscan() {
+    check_gem("strscan");
 }

@@ -379,6 +379,32 @@ impl RegexpInner {
         self.regex.option()
     }
 
+    /// What Onigmo compiles for a match on `subject` — the pattern
+    /// bytes, options and codec that `find_spans` would run under — so
+    /// the C API layer can build the same `regex_t` for an extension
+    /// (`rb_reg_prepare_re`): the raw source under the subject's own
+    /// codec when the subject is matched on its bytes, the UTF-8
+    /// engine's expanded pattern otherwise. Checks the encodings as a
+    /// match does.
+    pub(crate) fn capi_compile_key(
+        &self,
+        store: &Store,
+        subject: &RStringInner,
+    ) -> Result<(Vec<u8>, u32, OnigmoEncoding)> {
+        crate::builtins::check_match_encoding(store, self, subject)?;
+        Ok(match Self::native_codec_for(subject) {
+            Some(enc) => (self.source.to_vec(), self.regex.option(), enc),
+            None => self.capi_engine_key(),
+        })
+    }
+
+    /// [`Self::capi_compile_key`] for the regexp's own engine, with no
+    /// subject in hand (`RREGEXP_PTR`).
+    pub(crate) fn capi_engine_key(&self) -> (Vec<u8>, u32, OnigmoEncoding) {
+        let engine = &self.regex.engine;
+        (engine.as_bytes().to_vec(), engine.option(), engine.encoding())
+    }
+
     pub fn option_string(&self) -> String {
         let mut res = String::new();
         let option = self.option();

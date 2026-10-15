@@ -283,6 +283,14 @@ void rb_gc_writebarrier_unprotect(VALUE obj);
 #define ANYARGS
 #endif
 #define RUBY_METHOD_FUNC(func) ((VALUE (*)(ANYARGS))(func))
+/* CRuby's K&R-to-ANSI transition macros (ruby/backward/2/stdarg.h);
+ * strscan still writes its prototypes with `_((args))`. */
+#ifndef _
+#define _(args) args
+#endif
+#ifndef __
+#define __(args) args
+#endif
 typedef VALUE rb_alloc_func_t(VALUE klass);
 
 VALUE rb_define_class(const char *name, VALUE super);
@@ -323,6 +331,7 @@ VALUE rb_const_get(VALUE klass, ID id);
 VALUE rb_const_get_at(VALUE klass, ID id);
 int rb_const_defined(VALUE klass, ID id);
 int rb_const_defined_at(VALUE klass, ID id);
+void rb_deprecate_constant(VALUE mod, const char *name);
 void rb_const_set(VALUE klass, ID id, VALUE val);
 VALUE rb_path2class(const char *path);
 VALUE rb_path_to_class(VALUE path);
@@ -490,6 +499,12 @@ VALUE rb_uint2big(uintptr_t n);
 long rb_num2long(VALUE v);
 unsigned long rb_num2ulong(VALUE v);
 long rb_num2int(VALUE v);
+int rb_long2int(long n);
+/* re.c: the byte offset of x[0..m] in y[0..n], or -1 (enc is unused:
+ * the search is on bytes, as CRuby's is for every ASCII-compatible
+ * encoding). */
+struct rb_encoding;
+long rb_memsearch(const void *x, long m, const void *y, long n, struct rb_encoding *enc);
 unsigned long rb_num2uint(VALUE v);
 long rb_fix2int(VALUE v);
 unsigned long rb_fix2uint(VALUE v);

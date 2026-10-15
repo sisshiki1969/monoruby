@@ -288,7 +288,7 @@ CRuby のヘッダでビルドした（monoruby では読めない）`.so` が�
 | bcrypt 3.1.22 | 一致 | `rb_str_new` / `StringValuePtr` / `NUM2INT`、特異メソッド定義 |
 | msgpack 1.8.5 | 一致（Buffer / Packer / Unpacker / Factory / ext 型 / Timestamp / IO 相手 / pool） | TypedData + alloc、`rb_num2ll` / `rb_num2ull` と Bignum、`rb_hash_foreach`、`rb_io_write`、`rb_enc_*`、`rb_ext_ractor_safe`、`-fvisibility=hidden` |
 | json 2.18.0 | ビルドとロードは通るが生成器が動かない（§6） | `RUBY_INTEGER_UNIFICATION`、`SIZEOF_UINT64_T`、`ALLOCV`、`rb_enc_interned_str` の `have_func` 判定 |
-| strscan | 未着手 | `ruby/re.h`（Onigmo の `regex_t` / `OnigRegion` / `onig_search`、`rb_reg_prepare_re`）が要る |
+| strscan 3.1.8 | 一致（§3.13） | `ruby/re.h`: `rb_reg_onig_match` / `rb_reg_prepare_re` + `onig_search` / `onig_match`、`struct re_registers` をスタックに置く、`onig_foreach_name`、`rb_memsearch`、`rb_enc_precise_mbclen`（EUC-JP）、`rb_get_kwargs`、`_((args))` |
 
 macOS の CI で msgpack の `extconf.rb` が monoruby ごと落ちた（スタック
 オーバーフロー）のは層ではなく JIT の問題だった。mkmf が呼ぶ FileUtils の
@@ -383,6 +383,74 @@ VALUE を鍵と値に持つ TypedData（mark で `st_foreach`）を CRuby と比
 oj / ruby-prof / stackprof のような `st_table` を使う gem がこれで
 ビルドできる。
 
+### 3.13 `ruby/re.h`（段階 6）
+
+strscan のように Onigmo を自分で回す拡張のための面。`ruby/onigmo.h` は
+monoruby がリンクしている `onigmo-regex` crate の `onigmo/onigmo.h`
+そのもの（Onigmo 6.2）で、`OnigRegion` / `struct re_registers` は本物の
+構造体なので `regs->beg[i]` の読み書きは CRuby と同じ。ただし crate の
+Onigmo は `RUBY` を定義せずにビルドされていて `OnigRegion` が
+`history_root` を持つ（32 バイト、CRuby は 24）ため、ヘッダの先頭で
+`USE_CAPTURE_HISTORY` を強制し、拡張がスタックに置く構造体をライブラリと
+そろえる（そろえないと `onig_region_init` がスタックを壊す）。
+
+拡張の `.so` は monoruby のバイナリのシンボルを解決できないので、
+`onig_search` / `onig_match` / `onig_region_*` / `onig_free` /
+`onig_name_to_backref_number` / `onig_foreach_name` /
+`onig_number_of_*` / `onig_error_code_to_str` は capi.c の薄い関数で、
+`MrApi::onig_api()` が返す `MrOnigApi` テーブル（`void *` で型を消した
+関数ポインタ）経由で monoruby 内の Onigmo を呼ぶ。`onig_new` と
+エンコーディング / 構文のテーブル（データシンボル）は出さない。
+パターンは Regexp を作って得る（`rb_reg_regcomp`）。
+
+`regex_t` は monoruby のもの。`rb_reg_prepare_re(re, str)` は
+`Regexp#match` が `str` を相手に使う codec（`RegexpInner::capi_compile_key`:
+`check_match_encoding` で互換性を検査し、ネイティブ codec なら素のパターン
+バイト列とその encoding、さもなくば engine が持つ変換済みパターン）で
+`onig_new` したバッファを `(pattern, option, encoding)` 鍵のキャッシュから
+返す（`ext::capi_regex`、プロセスの寿命まで解放しない）。`RREGEXP_PTR(re)`
+（`rb_reg_ptr`）は Regexp 自身の codec のもので、`onig_foreach_name` などの
+パターン側の問い合わせ用。CRuby の `struct RRegexp` は無いので
+`RREGEXP(re)->ptr` は書けず、`RREGEXP_PTR` / `RREGEXP_SRC` は呼び出し。
+どちらの `regex_t` も `onig_free` してはいけない。
+
+`rb_reg_onig_match(re, str, match_fn, args, regs)` は CRuby 3.3 の形
+（`ONIG_MISMATCH` を返す、`ONIGERR_TIMEOUT` は `Regexp::TimeoutError`、
+ほかの負値は `RegexpError`）、`rb_reg_region_copy` は `onig_region_copy`
+に失敗時の `rb_memerror`、`onig_region_memsize` は CRuby の計算。
+`rb_memsearch` はバイト検索（`enc` は使わない。ASCII 互換 encoding では
+CRuby も同じ）。`rb_long2int`、`rb_deprecate_constant`、`_((args))` /
+`__((args))`（`ruby/backward/2/stdarg.h` の K&R 移行マクロ、strscan が
+まだ使う）も足した。
+
+`rb_enc_precise_mbclen` は monoruby 自身の走査（`value::precise_mbclen`:
+UTF-8、EUC-JP / Shift_JIS 系、UTF-16 / 32、それ以外は 1 バイト）を
+`MrApi::enc_precise_mbclen` で呼び、答えは CRuby と同じ Onigmo の符号化
+（見つかれば長さ、`-1` が不正、`-1-n` が n バイト不足）。`ruby/encoding.h`
+の `MBCLEN_*` は CRuby どおり `ONIGENC_MBCLEN_*` の別名で、後者は
+`onigmo.h` とトークン単位で同じ定義を `#ifndef` で持つ（両方をどの順で
+include してもよい）。`rb_enc_mbclen` / `rb_enc_strlen` / `rb_enc_codepoint_len`
+はその上に乗る（strscan の `charpos` が EUC-JP で合うのはこれ）。
+
+`require` の解決も二つ変えた。(1) stand-in（`stub/strscan.rb`）が当たり、
+`$LOAD_PATH` 上に monoruby でビルドした `.so` があるとき、同じディレクトリ
+に gem 自身の `.rb`（strscan の `lib/strscan.rb`: `require "strscan.so"`
+の後に Ruby 側のメソッドを足す）があればそちらを返す。(2) `.so` /
+`.bundle` 候補の `$LOAD_PATH` 走査で、monoruby が読めないもの（プローブ
+結果に入るホスト CRuby の `x86_64-linux/strscan.so`）は飛ばして先を見る。
+読めるものが無ければ最初のそれを返して従来の LoadError を出す。
+
+検証: `tests/capi/capi_re.c`（`tests/capi.rs` の 4 本目）が `onig_search` /
+`onig_match`（UTF-8 / バイナリ / Shift_JIS / EUC-JP の対象、
+`Encoding::CompatibilityError`、不正バイト列の `ArgumentError`）、
+名前付き捕獲、`rb_reg_region_copy`、`rb_memsearch`、`rb_reg_regcomp` /
+`rb_reg_quote` / `rb_reg_options` / `rb_reg_nth_match`、`rb_long2int` の
+RangeError、`rb_enc_precise_mbclen` の `MBCLEN_*` 判定を CRuby と比較。
+`tests/capi_gems.rs` の `strscan`（3.1.8、CI は `gem install strscan`）が
+`StringScanner` のほぼ全メソッド（`scan_integer` の Ruby 側含む）を
+CRuby と比較する。残る差は `$LOADED_FEATURES` の順（monoruby は読む前に、
+CRuby は読んだ後に登録する）だけ。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -395,6 +463,9 @@ oj / ruby-prof / stackprof のような `st_table` を使う gem がこれで
 | `class_set_alloc` | 定義済みクラスをネイティブにする（`rb_define_alloc_func`、`Data_Wrap_Struct`）/ alloc を外す（`rb_undef_alloc_func`） |
 | `native_take` | ペイロードを解放せずに外す（遅延 alloc でできたオブジェクトから本物へ移す） |
 | `call_super` | `rb_call_super` |
+| `regexp_prepare` / `regexp_ptr` | `rb_reg_prepare_re` / `RREGEXP_PTR`: monoruby が持つ `regex_t`（§3.13） |
+| `onig_api` | `MrOnigApi`: monoruby 内の Onigmo の関数群（`onig_search` ほか） |
+| `enc_precise_mbclen` | `rb_enc_precise_mbclen` を monoruby の encoding 走査で |
 
 あわせて `ary_push` / `hash_set` が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。
@@ -406,8 +477,9 @@ oj / ruby-prof / stackprof のような `st_table` を使う gem がこれで
 | 1 | ローダ（`monoruby_capi_init` 判別、`$LOAD_PATH` 上の `.so`）、`ruby.h` 互換ヘッダ、`capi.c`: クラス / モジュール / メソッド定義（arity -2〜15）、即値・数値・文字列・シンボル・配列・ハッシュ・Range、`rb_funcall` 系、ブロック（`rb_yield` 系、`rb_block_proc`）、例外（`rb_raise`、`rb_protect` / `rb_ensure` / `rb_rescue2` / `rb_jump_tag`）、`rb_scan_args` / `rb_get_kwargs`、ivar / 定数 / cvar / gvar、GC 登録、`rb_sprintf`（`PRIsVALUE`）、最小限の encoding、`rb_thread_call_without_gvl` | 済（`tests/capi.rs`: 同じ C ソースを CRuby と monoruby で動かし出力一致） |
 | 2 | `Data` / `TypedData`（`TypedData_Make_Struct`、`DATA_PTR` の lvalue、dmark / dfree）、`rb_define_alloc_func` / `rb_undef_alloc_func`、`rb_block_call` / `rb_proc_new` / `rb_iterate` / `rb_iter_break`（C 関数をブロックとして渡す）、`rb_call_super`、`rb_struct_*`、`rb_obj_call_init`、`rb_class_new` | 済（§3.7〜3.9、`tests/capi/capi_data.c`）。`rb_keyword_given_p` は未 |
 | 3 | `RbConfig::CONFIG`（`rubyhdrdir` などを install root に）、`mkmf` が monoruby を相手に `Makefile` を作れること、`capi.c` を `libmonoruby_capi.a` として `LIBRUBYARG` に、`gem install` で C 拡張 gem がビルドされ `extensions/<arch>/…` から読めること | 済（§3.10、`tests/mkmf.rs`）。gem home は monoruby 専用 |
-| 4 | 実 gem で面積を詰める（`rb_io_*`、`rb_enc_*`、Bignum 系、`ALLOCV`、`ruby/util.h`、シンボル可視性）。`bcrypt` と `msgpack` が CRuby と一致 | 済（§3.11、`tests/capi_gems.rs`）。`json` は `Qfalse != 0` に当たる、`strscan` は `ruby/re.h` が未（§6） |
+| 4 | 実 gem で面積を詰める（`rb_io_*`、`rb_enc_*`、Bignum 系、`ALLOCV`、`ruby/util.h`、シンボル可視性）。`bcrypt` と `msgpack` が CRuby と一致 | 済（§3.11、`tests/capi_gems.rs`）。`json` は `Qfalse != 0` に当たる（§6）、`strscan` は段階 6 |
 | 5 | `st_table`（`ruby/st.h` + CRuby の `st.c`） | 済（§3.12、`tests/capi/capi_st.c`） |
+| 6 | `ruby/re.h`（Onigmo を `MrOnigApi` 経由で、`rb_reg_prepare_re` / `rb_reg_onig_match`、`rb_enc_precise_mbclen` を本物に、`require` の `.so` 解決） | 済（§3.13、`tests/capi/capi_re.c`、`tests/capi_gems.rs` の strscan） |
 
 ## 6. 既知の制約
 
@@ -435,12 +507,12 @@ oj / ruby-prof / stackprof のような `st_table` を使う gem がこれで
   （`VALUE` の変換を境界に入れると `RARRAY_PTR` 等の生メモリ経路と
   食い違う）。vendored の stand-in（`gem/json/`、Rust 移植）が従来どおり
   使われる。`if (v)` で真偽を見る拡張は同じ理由で動かない。
-- **strscan** は Onigmo の内部（`regex_t`、`OnigRegion`、`onig_search`、
-  `rb_reg_prepare_re`、`rb_reg_region_copy`、`rb_memsearch`）を
-  `ruby/re.h` から直接使う。monoruby の正規表現は `onigmo-regex` crate
-  なので、この面は未提供。
-- `rb_enc_mbclen` 系のバイト歩きは UTF-8 だけ多バイトを数え、ほかの
-  エンコーディングは 1 バイト固定。`ENC_CODERANGE` は呼ぶたびに計算する。
+- `ruby/re.h` は `onig_new` と Onigmo のテーブル群を出さない（§3.13）。
+  `OnigRegion` は CRuby より 8 バイト大きい（`history_root`）。
+  `rb_reg_prepare_re` のバッファは解放されない。
+- `rb_enc_codepoint_len` が符号位置を組み立てるのは UTF-8 だけ（ほかの
+  多バイト encoding では先頭バイトを返す）。`ENC_CODERANGE` は呼ぶたびに
+  計算する。
 - `ALLOCV` の確保は例外で巻き戻ると解放されない（CRuby は String に
   載せて GC に任せる）。
 - ホスト CRuby に同じ gem があると、`require "msgpack"` の Ruby 側

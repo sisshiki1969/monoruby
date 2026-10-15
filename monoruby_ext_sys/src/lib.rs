@@ -481,4 +481,89 @@ pub struct MrApi {
         argv: *const MrValue,
         block: MrValue,
     ) -> MrValue,
+
+    // ---- regexp (appended for `ruby/re.h`) ------------------------------
+    /// `rb_reg_prepare_re`: the Onigmo `regex_t` of the Regexp `re`,
+    /// compiled for a match on the String `str` — under the codec
+    /// monoruby itself would match `str`'s bytes with, so the extension
+    /// can run `onig_search` / `onig_match` on `str`'s raw bytes with
+    /// it. NULL with the error pending when `re` is not a Regexp, `str`
+    /// not a String, or the two encodings are incompatible (what
+    /// `Regexp#match` raises). The buffer belongs to monoruby (one per
+    /// (pattern, options, codec), kept for the life of the process):
+    /// never `onig_free` it.
+    pub regexp_prepare: unsafe extern "C" fn(ctx: *mut MrContext, re: MrValue, str: MrValue) -> *mut c_void,
+    /// `RREGEXP_PTR`: the `regex_t` of `re` under its own codec, for the
+    /// pattern-level queries (`onig_foreach_name`,
+    /// `onig_number_of_captures`, …). Owned by monoruby as above.
+    pub regexp_ptr: unsafe extern "C" fn(ctx: *mut MrContext, re: MrValue) -> *mut c_void,
+    /// The Onigmo entry points linked into monoruby, for the layer's
+    /// `ruby/onigmo.h` wrappers (an extension's `.so` cannot resolve
+    /// them against the binary).
+    pub onig_api: unsafe extern "C" fn() -> *const MrOnigApi,
+    /// `rb_enc_precise_mbclen`: the width of the character of the
+    /// encoding named `name` (a canonical `Encoding#name`) that starts
+    /// at `p`, bounded by `e`, in Onigmo's convention: the byte length
+    /// when a character is found, -1 for an invalid sequence, -1-n when
+    /// n more bytes are needed. An unknown name is a byte per character.
+    pub enc_precise_mbclen: unsafe extern "C" fn(
+        ctx: *mut MrContext,
+        name: *const c_char,
+        p: *const u8,
+        e: *const u8,
+    ) -> c_int,
 }
+
+/// Onigmo's own functions, with the types of `onigmo.h` erased to
+/// `c_void` (`regex_t *`, `OnigRegion *`) — the header the extension
+/// compiles against declares the real ones, and the layer's wrappers
+/// cast. Signatures are Onigmo 6.2's; `OnigPosition` is `isize`.
+#[repr(C)]
+pub struct MrOnigApi {
+    pub search: unsafe extern "C" fn(
+        reg: *mut c_void,
+        str: *const u8,
+        end: *const u8,
+        start: *const u8,
+        range: *const u8,
+        region: *mut c_void,
+        option: u32,
+    ) -> isize,
+    pub match_at: unsafe extern "C" fn(
+        reg: *mut c_void,
+        str: *const u8,
+        end: *const u8,
+        at: *const u8,
+        region: *mut c_void,
+        option: u32,
+    ) -> isize,
+    pub region_new: unsafe extern "C" fn() -> *mut c_void,
+    pub region_init: unsafe extern "C" fn(region: *mut c_void),
+    pub region_free: unsafe extern "C" fn(region: *mut c_void, free_self: c_int),
+    pub region_clear: unsafe extern "C" fn(region: *mut c_void),
+    pub region_copy: unsafe extern "C" fn(to: *mut c_void, from: *const c_void),
+    pub region_resize: unsafe extern "C" fn(region: *mut c_void, n: c_int) -> c_int,
+    pub region_set: unsafe extern "C" fn(region: *mut c_void, at: c_int, beg: c_int, end: c_int) -> c_int,
+    pub free: unsafe extern "C" fn(reg: *mut c_void),
+    pub name_to_backref_number: unsafe extern "C" fn(
+        reg: *mut c_void,
+        name: *const u8,
+        name_end: *const u8,
+        region: *const c_void,
+    ) -> c_int,
+    /// `func(name, name_end, ngroups, group_nums, reg, arg)`.
+    pub foreach_name: unsafe extern "C" fn(
+        reg: *mut c_void,
+        func: unsafe extern "C" fn(*const u8, *const u8, c_int, *mut c_int, *mut c_void, *mut c_void) -> c_int,
+        arg: *mut c_void,
+    ) -> c_int,
+    pub number_of_names: unsafe extern "C" fn(reg: *const c_void) -> c_int,
+    pub number_of_captures: unsafe extern "C" fn(reg: *const c_void) -> c_int,
+    pub number_of_capture_histories: unsafe extern "C" fn(reg: *const c_void) -> c_int,
+    /// `onig_error_code_to_str(buf, code)` without the optional
+    /// `OnigErrorInfo` (only `onig_new` produces one, and the extension
+    /// never compiles a pattern of its own through this table).
+    pub error_code_to_str: unsafe extern "C" fn(buf: *mut u8, code: isize) -> c_int,
+}
+
+unsafe impl Sync for MrOnigApi {}
