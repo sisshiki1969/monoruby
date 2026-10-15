@@ -420,7 +420,9 @@ impl MonorubyErr {
             MonorubyErrKind::Fiber => "FiberError",
             MonorubyErrKind::StopIteration => "StopIteration",
             MonorubyErrKind::SystemExit(..) => "SystemExit",
-            MonorubyErrKind::Other(class_id) => return class_id.get_name(store),
+            // The full path (`MessagePack::UnpackError`), as the rescued
+            // form prints it; `get_name` alone is the bare lexical name.
+            MonorubyErrKind::Other(class_id) => return store.get_class_name(*class_id),
             MonorubyErrKind::MethodReturn(..) => "MethodReturn",
             MonorubyErrKind::BlockBreak(..) => "BlockBreak",
             MonorubyErrKind::Throw(..) => "UncaughtThrowError",

@@ -28,6 +28,7 @@
 #include "ruby.h"
 #include "ruby/encoding.h"
 #include "ruby/thread.h"
+#include "ruby/util.h"
 #include "monoruby_ext.h"
 
 #include <errno.h>
@@ -2307,9 +2308,21 @@ rb_num2long(VALUE v)
     return (long)i;
 }
 
+/* CRuby names the C type in the range error, so a `long long` ask on a
+ * value `long` cannot hold says 'long long', not 'long'. */
 long long
 rb_num2ll(VALUE v)
 {
+    /* A Fixnum is 63-bit here, so the outer sixty-fourth of `long long`'s
+     * range is T_BIGNUM; `rb_num2long` takes those, and what it rejects
+     * is reported in `long long`'s name. */
+    if (RB_TYPE_P(v, T_BIGNUM)) {
+        VALUE two63 = rb_funcall(INT2FIX(1), rb_intern("<<"), 1, INT2FIX(63));
+        VALUE min = rb_funcall(two63, rb_intern("-@"), 0);
+        if (RTEST(rb_funcall(v, rb_intern("<"), 1, min)) ||
+            !RTEST(rb_funcall(v, rb_intern("<"), 1, two63)))
+            rb_raise(rb_eRangeError, "bignum too big to convert into 'long long'");
+    }
     return rb_num2long(v);
 }
 
@@ -2341,7 +2354,12 @@ rb_num2ulong(VALUE v)
 unsigned long long
 rb_num2ull(VALUE v)
 {
-    return rb_num2ulong(v);
+    uint64_t u;
+    if (num2u64_big(v, &u))
+        return u;
+    if (RB_TYPE_P(v, T_BIGNUM))
+        rb_raise(rb_eRangeError, "bignum too big to convert into 'unsigned long long'");
+    return (unsigned long long)rb_num2long(v);
 }
 
 static void
@@ -4255,4 +4273,580 @@ VALUE
 rb_struct_size(VALUE st)
 {
     return rb_funcall(st, rb_intern("size"), 0);
+}
+
+/* ---- stage 4: what bcrypt, msgpack and json asked for ------------------ */
+
+void
+rb_ext_ractor_safe(bool flag)
+{
+    (void)flag;
+}
+
+/* ---- Bignum ----------------------------------------------------------- */
+
+long long
+rb_big2ll(VALUE big)
+{
+    return rb_num2ll(big);
+}
+
+unsigned long long
+rb_big2ull(VALUE big)
+{
+    return rb_num2ull(big);
+}
+
+long
+rb_big2long(VALUE big)
+{
+    return rb_num2long(big);
+}
+
+unsigned long
+rb_big2ulong(VALUE big)
+{
+    return rb_num2ulong(big);
+}
+
+double
+rb_big2dbl(VALUE big)
+{
+    return rb_num2dbl(big);
+}
+
+VALUE
+rb_big2str(VALUE big, int base)
+{
+    return rb_funcall(big, rb_intern("to_s"), 1, INT2FIX(base));
+}
+
+VALUE
+rb_dbl2big(double d)
+{
+    return rb_funcall(rb_float_new(d), rb_intern("to_i"), 0);
+}
+
+#define BIG_BINOP(name, op) \
+    VALUE name(VALUE x, VALUE y) { return rb_funcall(x, rb_intern(op), 1, y); }
+BIG_BINOP(rb_big_cmp, "<=>")
+BIG_BINOP(rb_big_eq, "==")
+BIG_BINOP(rb_big_plus, "+")
+BIG_BINOP(rb_big_minus, "-")
+BIG_BINOP(rb_big_mul, "*")
+BIG_BINOP(rb_big_div, "/")
+BIG_BINOP(rb_big_modulo, "%")
+BIG_BINOP(rb_big_pow, "**")
+BIG_BINOP(rb_big_and, "&")
+BIG_BINOP(rb_big_or, "|")
+BIG_BINOP(rb_big_xor, "^")
+BIG_BINOP(rb_big_lshift, "<<")
+BIG_BINOP(rb_big_rshift, ">>")
+#undef BIG_BINOP
+
+VALUE
+rb_big_norm(VALUE x)
+{
+    return x;
+}
+
+int
+rb_monoruby_integer_positive_p(VALUE i)
+{
+    if (FIXNUM_P(i))
+        return FIX2LONG(i) >= 0;
+    return !RTEST(rb_funcall(i, rb_intern("negative?"), 0));
+}
+
+size_t
+rb_absint_size(VALUE val, int *nlz_bits_ret)
+{
+    VALUE abs = rb_funcall(val, rb_intern("abs"), 0);
+    long bits = NUM2LONG(rb_funcall(abs, rb_intern("bit_length"), 0));
+    size_t size = (size_t)((bits + 7) / 8);
+    if (nlz_bits_ret)
+        *nlz_bits_ret = (int)(size * 8 - (size_t)bits);
+    return size;
+}
+
+int
+rb_absint_singlebit_p(VALUE val)
+{
+    VALUE abs = rb_funcall(val, rb_intern("abs"), 0);
+    if (!RTEST(rb_funcall(abs, rb_intern(">"), 1, INT2FIX(0))))
+        return 0;
+    VALUE below = rb_funcall(abs, rb_intern("-"), 1, INT2FIX(1));
+    VALUE and = rb_funcall(abs, rb_intern("&"), 1, below);
+    return RTEST(rb_funcall(and, rb_intern("=="), 1, INT2FIX(0)));
+}
+
+/* ---- Proc / IO -------------------------------------------------------- */
+
+int
+rb_proc_arity(VALUE proc)
+{
+    return NUM2INT(rb_funcall(proc, rb_intern("arity"), 0));
+}
+
+VALUE
+rb_proc_lambda_p(VALUE proc)
+{
+    return rb_funcall(proc, rb_intern("lambda?"), 0);
+}
+
+VALUE
+rb_io_write(VALUE io, VALUE str)
+{
+    return rb_funcall(io, rb_intern("write"), 1, str);
+}
+
+VALUE
+rb_io_flush(VALUE io)
+{
+    return rb_funcall(io, rb_intern("flush"), 0);
+}
+
+VALUE
+rb_io_puts(int argc, const VALUE *argv, VALUE io)
+{
+    return rb_funcallv(io, rb_intern("puts"), argc, argv);
+}
+
+VALUE
+rb_io_print(int argc, const VALUE *argv, VALUE io)
+{
+    return rb_funcallv(io, rb_intern("print"), argc, argv);
+}
+
+VALUE
+rb_io_printf(int argc, const VALUE *argv, VALUE io)
+{
+    return rb_funcallv(io, rb_intern("printf"), argc, argv);
+}
+
+VALUE
+rb_io_gets(VALUE io)
+{
+    return rb_funcall(io, rb_intern("gets"), 0);
+}
+
+VALUE
+rb_io_getbyte(VALUE io)
+{
+    return rb_funcall(io, rb_intern("getbyte"), 0);
+}
+
+VALUE
+rb_io_close(VALUE io)
+{
+    return rb_funcall(io, rb_intern("close"), 0);
+}
+
+VALUE
+rb_io_eof(VALUE io)
+{
+    return rb_funcall(io, rb_intern("eof?"), 0);
+}
+
+VALUE
+rb_io_binmode(VALUE io)
+{
+    return rb_funcall(io, rb_intern("binmode"), 0);
+}
+
+VALUE
+rb_io_addstr(VALUE io, VALUE str)
+{
+    rb_io_write(io, str);
+    return io;
+}
+
+VALUE
+rb_io_get_io(VALUE io)
+{
+    return rb_convert_type(io, T_FILE, "IO", "to_io");
+}
+
+VALUE
+rb_io_check_io(VALUE io)
+{
+    return rb_check_convert_type(io, T_FILE, "IO", "to_io");
+}
+
+VALUE
+rb_io_taint_check(VALUE io)
+{
+    return io;
+}
+
+VALUE
+rb_str_replace(VALUE str, VALUE str2)
+{
+    return rb_funcall(str, rb_intern("replace"), 1, str2);
+}
+
+/* CRuby's fstring table deduplicates; `String#-@` is monoruby's
+ * equivalent (a frozen, deduplicated copy). */
+VALUE
+rb_str_to_interned_str(VALUE str)
+{
+    return rb_funcall(str, rb_intern("-@"), 0);
+}
+
+/* ---- encoding --------------------------------------------------------- */
+
+int
+rb_enc_str_coderange(VALUE str)
+{
+    if (!RTEST(rb_funcall(str, rb_intern("valid_encoding?"), 0)))
+        return ENC_CODERANGE_BROKEN;
+    if (RTEST(rb_funcall(str, rb_intern("ascii_only?"), 0)))
+        return ENC_CODERANGE_7BIT;
+    return ENC_CODERANGE_VALID;
+}
+
+ID
+rb_intern3(const char *name, long len, rb_encoding *enc)
+{
+    (void)enc;
+    return rb_intern2(name, len);
+}
+
+VALUE
+rb_enc_interned_str(const char *ptr, long len, rb_encoding *enc)
+{
+    return rb_str_to_interned_str(rb_enc_str_new(ptr, len, enc));
+}
+
+VALUE
+rb_enc_interned_str_cstr(const char *ptr, rb_encoding *enc)
+{
+    return rb_enc_interned_str(ptr, (long)strlen(ptr), enc);
+}
+
+rb_encoding *
+rb_enc_compatible(VALUE str1, VALUE str2)
+{
+    VALUE e = rb_funcall(rb_cEncoding, rb_intern("compatible?"), 2, str1, str2);
+    return NIL_P(e) ? NULL : rb_to_encoding(e);
+}
+
+rb_encoding *
+rb_enc_check(VALUE str1, VALUE str2)
+{
+    rb_encoding *enc = rb_enc_compatible(str1, str2);
+    if (!enc) {
+        rb_encoding *e1 = rb_enc_get(str1), *e2 = rb_enc_get(str2);
+        rb_raise(rb_eEncCompatError, "incompatible character encodings: %s and %s",
+                 e1 ? rb_enc_name(e1) : "?", e2 ? rb_enc_name(e2) : "?");
+    }
+    return enc;
+}
+
+/* The byte walks below know UTF-8 (index 1) and treat every other
+ * encoding as single-byte, which is right for ASCII-8BIT / US-ASCII and
+ * the ISO-8859 family; a multibyte legacy encoding (EUC-JP, Shift_JIS,
+ * UTF-16) would need the interpreter's tables. */
+static int
+enc_is_utf8(rb_encoding *enc)
+{
+    return enc && enc->index == rb_utf8_encindex();
+}
+
+/* The length of the UTF-8 character at `p`: >0 its byte length, 0 when
+ * `e` cuts it short, <0 when the bytes are not a character. */
+static int
+utf8_mbclen(const unsigned char *p, const unsigned char *e)
+{
+    if (p >= e)
+        return 0;
+    unsigned char c = *p;
+    int n;
+    if (c < 0x80)
+        return 1;
+    else if (c < 0xc2)
+        return -1;
+    else if (c < 0xe0)
+        n = 2;
+    else if (c < 0xf0)
+        n = 3;
+    else if (c < 0xf5)
+        n = 4;
+    else
+        return -1;
+    for (int i = 1; i < n; i++) {
+        if (p + i >= e)
+            return 0;
+        unsigned char d = p[i];
+        if ((d & 0xc0) != 0x80)
+            return -1;
+        if (i == 1) {
+            if ((c == 0xe0 && d < 0xa0) || (c == 0xed && d > 0x9f) ||
+                (c == 0xf0 && d < 0x90) || (c == 0xf4 && d > 0x8f))
+                return -1;
+        }
+    }
+    return n;
+}
+
+int
+rb_enc_precise_mbclen(const char *p, const char *e, rb_encoding *enc)
+{
+    if (p >= e)
+        return 0;
+    if (!enc_is_utf8(enc))
+        return 1;
+    return utf8_mbclen((const unsigned char *)p, (const unsigned char *)e);
+}
+
+int
+rb_enc_mbclen(const char *p, const char *e, rb_encoding *enc)
+{
+    int n = rb_enc_precise_mbclen(p, e, enc);
+    if (n > 0 && p + n <= e)
+        return n;
+    /* CRuby: an invalid or truncated character counts as one byte. */
+    return 1;
+}
+
+long
+rb_enc_strlen(const char *p, const char *e, rb_encoding *enc)
+{
+    long n = 0;
+    while (p < e) {
+        p += rb_enc_mbclen(p, e, enc);
+        n++;
+    }
+    return n;
+}
+
+int
+rb_enc_codelen(int code, rb_encoding *enc)
+{
+    if (!enc_is_utf8(enc))
+        return 1;
+    if (code < 0x80)
+        return 1;
+    if (code < 0x800)
+        return 2;
+    if (code < 0x10000)
+        return 3;
+    return 4;
+}
+
+unsigned int
+rb_enc_codepoint_len(const char *p, const char *e, int *len_p, rb_encoding *enc)
+{
+    if (p >= e)
+        rb_raise(rb_eArgError, "empty string");
+    int n = rb_enc_precise_mbclen(p, e, enc);
+    if (n <= 0)
+        rb_raise(rb_eArgError, "invalid byte sequence in %s", enc ? rb_enc_name(enc) : "?");
+    if (len_p)
+        *len_p = n;
+    const unsigned char *u = (const unsigned char *)p;
+    if (n == 1)
+        return u[0];
+    unsigned int cp = u[0] & (0xff >> (n + 1));
+    for (int i = 1; i < n; i++)
+        cp = (cp << 6) | (u[i] & 0x3f);
+    return cp;
+}
+
+int
+rb_enc_mbminlen(rb_encoding *enc)
+{
+    (void)enc;
+    return 1;
+}
+
+int
+rb_enc_mbmaxlen(rb_encoding *enc)
+{
+    return enc_is_utf8(enc) ? 4 : 1;
+}
+
+int
+rb_enc_unicode_p(rb_encoding *enc)
+{
+    return enc_is_utf8(enc);
+}
+
+int
+rb_enc_dummy_p(rb_encoding *enc)
+{
+    return enc && RTEST(rb_funcall(rb_enc_from_encoding(enc), rb_intern("dummy?"), 0));
+}
+
+void
+rb_must_asciicompat(VALUE str)
+{
+    rb_encoding *enc = rb_enc_get(str);
+    if (enc && !rb_enc_asciicompat(enc))
+        rb_raise(rb_eEncCompatError, "ASCII incompatible encoding: %s", rb_enc_name(enc));
+}
+
+void
+rb_enc_raise(rb_encoding *enc, VALUE exc, const char *fmt, ...)
+{
+    (void)enc;
+    va_list ap;
+    va_start(ap, fmt);
+    VALUE msg = rb_vsprintf(fmt, ap);
+    va_end(ap);
+    rb_exc_raise(rb_exc_new_str(exc, msg));
+}
+
+/* ---- ruby/util.h ------------------------------------------------------ */
+
+char *
+ruby_strdup(const char *str)
+{
+    size_t len = strlen(str) + 1;
+    char *p = ruby_xmalloc(len);
+    memcpy(p, str, len);
+    return p;
+}
+
+unsigned long
+ruby_strtoul(const char *str, char **endptr, int base)
+{
+    return strtoul(str, endptr, base);
+}
+
+double
+ruby_strtod(const char *str, char **endptr)
+{
+    return strtod(str, endptr);
+}
+
+unsigned long
+ruby_scan_digits(const char *str, ssize_t len, int base, size_t *retlen, int *overflow)
+{
+    const char *start = str;
+    unsigned long ret = 0, mul_overflow = (~(unsigned long)0) / (unsigned long)base;
+    *overflow = 0;
+    if (!len)
+        len = -1;
+    while (len < 0 || len-- > 0) {
+        int c = (unsigned char)*str;
+        int d;
+        if (rb_isdigit(c))
+            d = c - '0';
+        else if (rb_isalpha(c))
+            d = rb_tolower(c) - 'a' + 10;
+        else
+            break;
+        if (d >= base)
+            break;
+        if (mul_overflow < ret)
+            *overflow = 1;
+        ret *= (unsigned long)base;
+        {
+            unsigned long x = ret;
+            ret += (unsigned long)d;
+            if (ret < x)
+                *overflow = 1;
+        }
+        str++;
+    }
+    *retlen = (size_t)(str - start);
+    return ret;
+}
+
+unsigned long
+ruby_scan_oct(const char *start, size_t len, size_t *retlen)
+{
+    const char *s = start;
+    unsigned long v = 0;
+    while (len-- && *s >= '0' && *s <= '7')
+        v = (v << 3) | (unsigned long)(*s++ - '0');
+    *retlen = (size_t)(s - start);
+    return v;
+}
+
+unsigned long
+ruby_scan_hex(const char *start, size_t len, size_t *retlen)
+{
+    const char *s = start;
+    unsigned long v = 0;
+    while (len-- && rb_isxdigit((unsigned char)*s)) {
+        int c = (unsigned char)*s++;
+        v = (v << 4) | (unsigned long)(rb_isdigit(c) ? c - '0' : rb_tolower(c) - 'a' + 10);
+    }
+    *retlen = (size_t)(s - start);
+    return v;
+}
+
+/* A merge sort, so the comparator's third argument needs no thread-local
+ * trampoline into qsort(3). */
+static void
+qsort_merge(char *base, char *tmp, size_t lo, size_t hi, size_t size,
+            int (*cmp)(const void *, const void *, void *), void *d)
+{
+    if (hi - lo < 2)
+        return;
+    size_t mid = lo + (hi - lo) / 2;
+    qsort_merge(base, tmp, lo, mid, size, cmp, d);
+    qsort_merge(base, tmp, mid, hi, size, cmp, d);
+    size_t i = lo, j = mid, k = lo;
+    while (i < mid && j < hi) {
+        if (cmp(base + i * size, base + j * size, d) <= 0)
+            memcpy(tmp + (k++) * size, base + (i++) * size, size);
+        else
+            memcpy(tmp + (k++) * size, base + (j++) * size, size);
+    }
+    while (i < mid)
+        memcpy(tmp + (k++) * size, base + (i++) * size, size);
+    while (j < hi)
+        memcpy(tmp + (k++) * size, base + (j++) * size, size);
+    memcpy(base + lo * size, tmp + lo * size, (hi - lo) * size);
+}
+
+void
+ruby_qsort(void *base, const size_t nel, const size_t size,
+           int (*cmp)(const void *, const void *, void *), void *d)
+{
+    if (nel < 2)
+        return;
+    char *tmp = ruby_xmalloc(nel * size);
+    qsort_merge(base, tmp, 0, nel, size, cmp, d);
+    ruby_xfree(tmp);
+}
+
+char *
+ruby_getcwd(void)
+{
+    VALUE cwd = rb_funcall(rb_path2class("Dir"), rb_intern("pwd"), 0);
+    return ruby_strdup(StringValueCStr(cwd));
+}
+
+/* ---- ALLOCV ----------------------------------------------------------- */
+
+void *
+rb_alloc_tmp_buffer_with_count(volatile VALUE *store, size_t len, size_t count)
+{
+    (void)count;
+    void *p = ruby_xmalloc(len);
+    /* A pointer-sized integer the GC never looks at; ALLOCV_END reads
+     * it back, and Qfalse means "nothing allocated". */
+    *store = (VALUE)(uintptr_t)p;
+    return p;
+}
+
+void *
+rb_alloc_tmp_buffer(volatile VALUE *store, long len)
+{
+    if (len < 0)
+        rb_raise(rb_eArgError, "negative buffer size (or size too big)");
+    return rb_alloc_tmp_buffer_with_count(store, (size_t)len, (size_t)len);
+}
+
+void
+rb_free_tmp_buffer(volatile VALUE *store)
+{
+    VALUE v = *store;
+    *store = Qfalse;
+    if (v != Qfalse && v != 0)
+        ruby_xfree((void *)(uintptr_t)v);
 }

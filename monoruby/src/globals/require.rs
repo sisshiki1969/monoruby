@@ -284,6 +284,24 @@ impl Globals {
         None
     }
 
+    /// `<dir>/<cand with the native extension suffix>` for the first
+    /// `$LOAD_PATH` entry that has one built against monoruby's C API
+    /// layer (`ext::is_capi_extension`: it `dlopen`s, so a CRuby `.so`
+    /// of the same name, which fails to load, does not count). Only
+    /// consulted when a stand-in matched, so the walk costs a `stat` per
+    /// entry for a few dozen requires per process.
+    fn built_extension_on_load_path(
+        &self,
+        cand: &std::path::Path,
+        entries: &[String],
+    ) -> Option<PathBuf> {
+        let native = cand.with_extension(crate::ext::DLEXT);
+        entries.iter().find_map(|lib| {
+            let p = self.probe(std::path::Path::new(lib), &native)?;
+            crate::ext::is_capi_extension(&p).then_some(p)
+        })
+    }
+
     /// Search one concrete candidate (`x.rb` / `x.so` form) through the
     /// stub pin, the host-bundler override, and `$LOAD_PATH`. The
     /// returned path joins the *canonicalized* directory with the
@@ -321,6 +339,15 @@ impl Globals {
         let stub_root = install_root().join("stub");
         for dir in [stub_root.clone(), stub_root.join(ruby_platform())] {
             if let Some(p) = self.probe(&dir, cand) {
+                // The stand-in replaces a C extension monoruby could not
+                // load. One built *for* monoruby (`gem install` through
+                // monoruby's C API layer, `doc/c_api.md` §3.10) can be,
+                // and a gem whose extension dir is on `$LOAD_PATH` — an
+                // activated gem from monoruby's own gem home — asked for
+                // that one, so it wins over the stand-in.
+                if let Some(ext) = self.built_extension_on_load_path(cand, entries) {
+                    return Some(ext);
+                }
                 return Some(p);
             }
         }

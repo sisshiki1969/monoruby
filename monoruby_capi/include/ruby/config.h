@@ -16,9 +16,13 @@
 #define SIZEOF_SIZE_T 8
 #define SIZEOF_VALUE 8
 #define HAVE_LONG_LONG 1
+#define RUBY_INTEGER_UNIFICATION 1
 #define HAVE_STDARG_PROTOTYPES 1
 #define RUBY_EXTERN extern
-#define RUBY_FUNC_EXPORTED
+#define RUBY_FUNC_EXPORTED __attribute__((__visibility__("default"))) extern
+#define RUBY_SYMBOL_EXPORT_BEGIN _Pragma("GCC visibility push(default)")
+#define RUBY_SYMBOL_EXPORT_END _Pragma("GCC visibility pop")
+#define RUBY_FUNC_NONNULL(n, x) x
 #define NORETURN(x) __attribute__((__noreturn__)) x
 #define DEPRECATED(x) x
 #define PRINTF_ARGS(decl, a, b) decl
@@ -46,6 +50,10 @@
 #define SIZEOF_INTPTR_T 8
 #define SIZEOF_UINTPTR_T 8
 #define SIZEOF_PTRDIFF_T 8
+#define SIZEOF_INT64_T 8
+#define SIZEOF_UINT64_T 8
+#define HAVE_INT64_T 1
+#define HAVE_UINT64_T 1
 #define RUBY_PLATFORM_CPU_64BIT 1
 
 #endif /* MONORUBY_CAPI_RUBY_CONFIG_H */
