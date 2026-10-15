@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-529bfc42.js";
+            window.path_to_searchindex_js = "../searchindex-7acc0ec4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -290,14 +290,14 @@ the walk remains available as belt-and-braces, but is not needed to start.</p>
 literal: Vec&lt;(Value, SlotId)&gt;,
 void: Vec&lt;SlotId&gt;,
 gp: Vec&lt;(GP, SlotId)&gt;,                                     // empty in shipping builds
-forward_rest: Vec&lt;(SlotId, SlotId, u16)&gt;,                  // D1: build the rest Array
 forward_kwrest: Vec&lt;(SlotId, Box&lt;[(IdentId, SlotId)]&gt;)&gt;,   // K1: build the kwrest Hash
+virtual_obj: Vec&lt;(SlotId, VirtualSrc)&gt;,                    // elided objects to allocate
 <span class="boring">}</span></code></pre>
 <p>To replay one from Rust the walker needs the <code>WriteBack</code> <strong>and the frame’s
 spill base</strong> (<code>base</code>, today only a compile-time argument to
-<code>gen_write_back_for_deopt</code>). <code>forward_rest</code> / <code>forward_kwrest</code> additionally
-need <code>create_array</code> / <code>correct_rest_kw</code> calls, so this is not a pure memory
-shuffle.</p>
+<code>gen_write_back_for_deopt</code>). <code>virtual_obj</code> / <code>forward_kwrest</code> additionally
+need <code>create_array</code> (or <code>value_deep_copy</code>) / <code>correct_rest_kw</code> calls, so
+this is not a pure memory shuffle.</p>
 <p>Why replaying from Rust is possible at all: xmm is caller-saved, so
 <code>FprSave</code> has already spilled every live float of a <strong>suspended</strong> frame into
 that frame’s own spill area. Only the innermost frame still has live values
@@ -442,10 +442,11 @@ shared by both arches).</li>
 redirected when a frame is promoted to the heap, exactly like the <code>r14</code>
 the emitted deopt write-back uses.</li>
 </ul>
-<p><code>forward_rest</code> / <code>forward_kwrest</code> emit calls to <code>runtime::create_array</code> /
-<code>runtime::correct_rest_kw</code> against the dynamic caller’s frame reached through
-the saved bp — the same helpers and the same addressing the deopt path’s
-<code>gen_forward_rest_materialize</code> / <code>gen_forward_kwrest_materialize</code> use, which
+<p><code>virtual_obj</code> / <code>forward_kwrest</code> emit calls to <code>runtime::create_array</code> (or
+<code>value_deep_copy</code> for a literal template) / <code>runtime::correct_rest_kw</code>
+against the dynamic caller’s frame reached through the saved bp — the same
+helpers and the same addressing the deopt path’s
+<code>gen_virtual_materialize</code> / <code>gen_forward_kwrest_materialize</code> use, which
 is why the stub form needs no Rust-side equivalents of its own. They run
 after the fpr/literal/void stores, so every deferred <code>dst</code> slot already holds
 its <code>nil</code> and the frame stays GC-consistent across the allocating helper
@@ -671,7 +672,7 @@ walk stored in the cont-frame pad slot.</li>
 spill <code>base</code>, and the site’s <code>UsingFpr</code> save-area layout.</del> Done —
 <code>ChainReplay</code> carries exactly that (plus <code>dst</code> and the site pc for the
 stub’s continuation word); the layout facts are restated, verified, in
-§8.1. <code>forward_rest</code> / <code>forward_kwrest</code> call <code>runtime::create_array</code> /
+§8.1. <code>virtual_obj</code> / <code>forward_kwrest</code> call <code>runtime::create_array</code> /
 <code>runtime::correct_rest_kw</code> — GC-safe because every source value is
 in a scanned frame slot.</li>
 <li><del>Remove the per-site chain-exit handlers and the <code>DestLabel</code> table —

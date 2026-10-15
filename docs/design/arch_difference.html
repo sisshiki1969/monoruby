@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-529bfc42.js";
+            window.path_to_searchindex_js = "../searchindex-7acc0ec4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -296,10 +296,10 @@ lowered (the old port handled only <code>Add|Sub|Mul|Div</code> / <code>Neg|Pos<
 save/restore the live xmm pool (<code>emit_fpr_save</code> / <code>emit_fpr_restore</code>) around
 the call, so they no longer bail on a live pool register.</li>
 <li><strong>Deopt write-back &amp; forwarded arguments</strong> — the side-exit generator
-reconstructs live frame state for all shapes; the single unported shape (the
-deferred-source <code>...</code>-forwarding deferral, <code>g(*rest, **kw, &amp;blk)</code>) is
-prevented upstream by <code>forward_rest_deferral</code>, so it never reaches the
-backend.</li>
+reconstructs live frame state for all shapes, the elided objects of the
+escape analysis included (<code>a64_gen_virtual_materialize</code>), and the
+source-routed <code>...</code> forward (<code>g(*rest, **kw, &amp;blk)</code> with the rest an
+elided object) is lowered by <code>a64_set_arguments_forwarded_deferred</code>.</li>
 </ul>
 <hr>
 <h2 id="3-former-3-aarch64-bail-conditions--removed"><a class="header" href="#3-former-3-aarch64-bail-conditions--removed">3. (former §3 “aarch64 bail conditions” — removed)</a></h2>
