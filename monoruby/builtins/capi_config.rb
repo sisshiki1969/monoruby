@@ -44,6 +44,11 @@ RbConfig.fire_update!('LIBRUBYARG_STATIC', __capi_arg)
 RbConfig.fire_update!('LIBRUBYARG', __capi_arg)
 # A `.so` with no `libruby` to find: nothing to put in an rpath.
 RbConfig.fire_update!('LIBRUBY_RELATIVE', 'no')
+# The snapshot names its host's tools by absolute path (`/usr/bin/mkdir`,
+# which is `/bin/mkdir` on macOS); `make install` runs them, so resolve
+# them on PATH instead.
+RbConfig.fire_update!('MKDIR_P', 'mkdir -p')
+RbConfig.fire_update!('INSTALL', 'install -c')
 
 # The toolchain keys of the snapshot are GNU/Linux's (gcc, GNU ld flags).
 # On macOS CRuby's own rbconfig answers with clang and a `-bundle` link;
