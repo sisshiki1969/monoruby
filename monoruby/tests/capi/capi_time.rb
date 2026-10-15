@@ -43,6 +43,11 @@ h = {k: 1}
 p CapiTime.kw(**h), CapiTime.kw(1, **h), CapiTime.kw(**{})
 p CapiTime.kw2(1, a: 1), CapiTime.kw2(1, {a: 1}), CapiTime.kw2(1, 2)
 p CapiTime.kw(*[1, 2], **h), CapiTime.send(:kw, a: 1), CapiTime.method(:kw).call(a: 1), CapiTime.public_send(:kw, {a: 1})
+p CapiTime::KW_AT_INIT, CapiTime.kw0, CapiTime.kw_funcall({a: 1}), CapiTime.send(:send, :send, :kw, a: 1)
+class CapiTimeSub < CapiTime::Base
+  def kw(*args, **kw) = [super(*args), super(**kw), super(1, {a: 1}), super(a: 1), super(1)]
+end
+p CapiTimeSub.new.kw(1), CapiTimeSub.new.kw(a: 1), CapiTimeSub.new.kw({a: 1})
 # rb_enc_codepoint_len across encodings
 p CapiTime.codepoint("a"), CapiTime.codepoint("あい"), CapiTime.codepoint("\xff".b), CapiTime.codepoint("€".encode("ISO-8859-15"))
 p CapiTime.codepoint("あ".encode("EUC-JP")), CapiTime.codepoint("あ".encode("Shift_JIS")), CapiTime.codepoint("ｱ".encode("Shift_JIS"))

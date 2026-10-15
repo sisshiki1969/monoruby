@@ -132,6 +132,30 @@ t_kw2(VALUE self, VALUE a, VALUE b)
     return rb_keyword_given_p() ? Qtrue : Qfalse;
 }
 
+/* T.kw0 -> rb_keyword_given_p for a method that takes nothing */
+static VALUE
+t_kw0(VALUE self)
+{
+    (void)self;
+    return rb_keyword_given_p() ? Qtrue : Qfalse;
+}
+
+/* T.kw_funcall(h) -> T.kw(h) through rb_funcall, which passes no
+ * keywords */
+static VALUE
+t_kw_funcall(VALUE self, VALUE h)
+{
+    return rb_funcall(self, rb_intern("kw"), 1, h);
+}
+
+/* CapiTime::Base#kw(*args), the same as T.kw as an instance method, so
+ * a Ruby subclass can reach it with super */
+static VALUE
+t_base_kw(int argc, VALUE *argv, VALUE self)
+{
+    return t_kw(argc, argv, self);
+}
+
 /* T.codepoint(str) -> [code point, byte length] of str's first character */
 static VALUE
 t_codepoint(VALUE self, VALUE str)
@@ -191,6 +215,11 @@ Init_capi_time(void)
     rb_define_singleton_method(mT, "now_plausible", t_now_plausible, 0);
     rb_define_singleton_method(mT, "kw", t_kw, -1);
     rb_define_singleton_method(mT, "kw2", t_kw2, 2);
+    rb_define_singleton_method(mT, "kw0", t_kw0, 0);
+    rb_define_singleton_method(mT, "kw_funcall", t_kw_funcall, 1);
+    rb_define_method(rb_define_class_under(mT, "Base", rb_cObject), "kw", t_base_kw, -1);
+    /* Outside any method call there are no keywords. */
+    rb_define_const(mT, "KW_AT_INIT", rb_keyword_given_p() ? Qtrue : Qfalse);
     rb_define_singleton_method(mT, "codepoint", t_codepoint, 1);
     rb_define_singleton_method(mT, "init_copy", t_init_copy, 2);
     rb_define_singleton_method(mT, "classify", t_classify, 1);

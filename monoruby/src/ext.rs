@@ -816,10 +816,11 @@ unsafe extern "C" fn mr_enc_codepoint(
         )
     };
     let enc = Encoding::try_from_str(&name).unwrap_or(Encoding::Ascii8);
-    let PreciseLen::Char(n) = crate::value::precise_mbclen(enc, bytes, 0) else {
-        return -1;
+    let (n, cp) = match crate::value::precise_mbclen(enc, bytes, 0) {
+        PreciseLen::Char(n) => (n, crate::value::enc_codepoint(enc, &bytes[..n])),
+        _ => (0, None),
     };
-    let Some(cp) = crate::value::enc_codepoint(enc, &bytes[..n]) else {
+    let Some(cp) = cp else {
         return -1;
     };
     if !len.is_null() {
@@ -844,42 +845,35 @@ unsafe extern "C" fn mr_keyword_given(ctx: *mut MrContext) -> c_int {
     }
     // SAFETY: the reverse of `make_ctx`'s `as_ptr`.
     let lfp = unsafe { Lfp::new(frame as *mut u8) };
-    let Some(m) = globals.ext.methods.get(&lfp.func_id()) else {
-        return 0;
-    };
-    let last = if m.argc == MR_ARGC_VARIADIC {
-        lfp.arg(0).as_array_inner().last().copied()
-    } else if m.argc > 0 {
-        Some(lfp.arg(m.argc as usize - 1))
-    } else {
-        None
-    };
+    let last = globals.ext.methods.get(&lfp.func_id()).and_then(|m| match m.argc {
+        MR_ARGC_VARIADIC => lfp.arg(0).as_array_inner().last().copied(),
+        0 => None,
+        argc => Some(lfp.arg(argc as usize - 1)),
+    });
     if !last.is_some_and(|v| v.try_hash_ty().is_some()) {
         return 0;
     }
-    // The call site that entered this frame; through a built-in that
-    // forwards its arguments (`send`, `public_send`, `Method#call`) to
-    // the site that called it, as CRuby's keyword flag travels with the
-    // arguments. A Ruby frame whose pc is not a send (a yield), or a
-    // native caller of any other kind (an extension's `rb_funcall`),
-    // ends the walk with no.
+    keyword_given(vm, globals).unwrap_or(false) as c_int
+}
+
+/// Whether the call site that entered the running frame carries
+/// keywords; through a built-in that forwards its arguments (`send`,
+/// `public_send`, `Method#call`) to the site that called it, as CRuby's
+/// keyword flag travels with the arguments. A Ruby frame whose pc is not
+/// a send (a yield), a native caller of any other kind (an extension's
+/// `rb_funcall`), or the bottom of the stack ends the walk with `None`.
+fn keyword_given(vm: &Executor, globals: &Globals) -> Option<bool> {
     let mut cfp = vm.cfp();
-    for _ in 0..8 {
-        match crate::codegen::runtime::entered_by(globals, cfp) {
-            Some((false, callid)) => return globals.store[callid].kw_may_exists() as c_int,
-            Some(_) => return 0,
-            None => {}
+    loop {
+        if let Some((_, callid)) = crate::codegen::runtime::entered_by(globals, cfp) {
+            return Some(globals.store[callid].kw_may_exists());
         }
-        let Some(prev) = cfp.prev() else {
-            return 0;
-        };
-        let fid = prev.lfp().func_id();
+        cfp = cfp.prev()?;
+        let fid = cfp.lfp().func_id();
         if globals.store[fid].is_iseq().is_some() || globals.ext.methods.contains_key(&fid) {
-            return 0;
+            return None;
         }
-        cfp = prev;
     }
-    0
 }
 
 mod onig_shim {

@@ -485,10 +485,14 @@ strptime の `ruby_time.c` は `HAVE_RB_TIMESPEC_NOW` に関わらず自分で�
 `rb_keyword_given_p` は `MrApi::keyword_given`: 走っている拡張メソッドの
 フレームに入った呼び出し命令（`runtime::entered_by` が caller の pc から
 復元する call site）が `kw_may_exists` で、かつメソッドが末尾の位置引数
-として Hash を受け取っているとき 1。`send` / `public_send` 越しの呼び出し
-はその call site のキーワードを見るので同じ答え、`Method#call` や C からの
-`rb_funcall` は 0。`f({a: 1})` と `f(a: 1)` はこれで区別できる（§6 の
-制約は消えた）。`rb_scan_args` の `:` は従来どおり末尾 Hash で判定する。
+として Hash を受け取っているとき 1。`send` / `public_send` / `Method#call`
+のように引数をそのまま渡す組み込み越しの呼び出しは、その組み込みを呼んだ
+call site まで遡って見るので同じ答え（CRuby でもキーワードフラグは引数と
+一緒に運ばれる）。`super(a: 1)` も call site を持つので同じ。C からの
+`rb_funcall` や `Init_` の中は 0。`f({a: 1})` と `f(a: 1)` はこれで区別
+できる（§6 の制約は消えた）。残る曖昧さは `f(h, **empty)` だけ: call site
+に `**` があり末尾に Hash が来ているので 1 になる（CRuby は空の `**` を
+渡さないので 0）。`rb_scan_args` の `:` は従来どおり末尾 Hash で判定する。
 
 `rb_enc_codepoint_len` は `MrApi::enc_codepoint`（`value::precise_mbclen`
 + `value::enc_codepoint`）で、UTF-8 だけだった復号が EUC-JP / Shift_JIS /
