@@ -2026,3 +2026,42 @@ unsafe extern "C" fn mr_call_super(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The compile failure of `capi_regex`: unreachable from an
+    /// extension (the pattern was compiled by monoruby before it is
+    /// re-targeted at a codec `check_match_encoding` allowed), so the
+    /// message path is exercised here.
+    #[test]
+    fn capi_regex_reports_onig_new_failure() {
+        let err = capi_regex((b"(".to_vec(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap_err();
+        assert_eq!(err.message(), "end pattern with unmatched parenthesis");
+        let ok = capi_regex((b"a+".to_vec(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap();
+        assert!(!ok.is_null());
+        // Cached: the same key answers the same `regex_t`.
+        assert_eq!(ok, capi_regex((b"a+".to_vec(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap());
+    }
+
+    #[test]
+    fn enc_precise_mbclen_edges() {
+        let bytes = "\u{3042}".as_bytes();
+        let p = bytes.as_ptr();
+        // SAFETY: `p..p+n` is inside `bytes`; the context is unused.
+        unsafe {
+            let e = p.add(bytes.len());
+            let ctx = std::ptr::null_mut();
+            assert_eq!(mr_enc_precise_mbclen(ctx, c"UTF-8".as_ptr(), p, e), 3);
+            // A truncated character wants more bytes; an empty range too.
+            assert_eq!(mr_enc_precise_mbclen(ctx, c"UTF-8".as_ptr(), p, p.add(1)), -2);
+            assert_eq!(mr_enc_precise_mbclen(ctx, c"UTF-8".as_ptr(), p, p), -2);
+            // A high byte alone is invalid in UTF-8 and one character in BINARY.
+            assert_eq!(mr_enc_precise_mbclen(ctx, c"UTF-8".as_ptr(), p.add(1), e), -1);
+            assert_eq!(mr_enc_precise_mbclen(ctx, c"ASCII-8BIT".as_ptr(), p.add(1), e), 1);
+            // An encoding name monoruby does not know counts bytes.
+            assert_eq!(mr_enc_precise_mbclen(ctx, c"NO-SUCH-ENCODING".as_ptr(), p, e), 1);
+        }
+    }
+}

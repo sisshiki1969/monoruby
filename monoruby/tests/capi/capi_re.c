@@ -107,7 +107,9 @@ name_i(const UChar *name, const UChar *name_end, int ngroups, int *groups, regex
     return 0;
 }
 
-/* Re.names(re) -> [[name, [group numbers]], ...], captures count */
+/* Re.names(re) -> [[name, [group numbers]], ...], names count, captures
+ * count, capture-history count (0 without `(?@...)` groups, on both: CRuby's
+ * Onigmo is built without capture history, monoruby's with it). */
 static VALUE
 re_names(VALUE self, VALUE re)
 {
@@ -115,7 +117,8 @@ re_names(VALUE self, VALUE re)
     regex_t *reg = RREGEXP_PTR(re);
     (void)self;
     onig_foreach_name(reg, name_i, (void *)ary);
-    return rb_ary_new3(3, ary, INT2FIX(onig_number_of_names(reg)), INT2FIX(onig_number_of_captures(reg)));
+    return rb_ary_new3(4, ary, INT2FIX(onig_number_of_names(reg)), INT2FIX(onig_number_of_captures(reg)),
+                       INT2FIX(onig_number_of_capture_histories(reg)));
 }
 
 /* Re.backref(re, str, name) -> the group number `name` refers to after
