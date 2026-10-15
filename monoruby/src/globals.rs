@@ -854,6 +854,21 @@ impl Globals {
             }
         }
 
+        // The gem path monoruby starts with is kept under a name of its
+        // own too: `Gem.default_path` (stdlib/rubygems/defaults/
+        // operating_system.rb) appends it, so the host CRuby's gem
+        // directories stay readable when a program clears `GEM_PATH`
+        // itself. ruby-bench's harness does exactly that before it shells
+        // out to the host's `bundle install`, which puts the gems there;
+        // with `Gem.default_dir` now monoruby's own gem home, `Bundler.setup`
+        // would otherwise find none of them.
+        if let Ok(gp) = std::env::var("GEM_PATH")
+            && !gp.is_empty()
+        {
+            // SAFETY: as above — single-threaded main-thread init.
+            unsafe { std::env::set_var("MONORUBY_HOST_GEM_PATH", &gp) };
+        }
+
         // Derive the host CRuby's `rubylibprefix` / `ruby_api_version`
         // from GEM_PATH and stash them in env vars for `startup.rb` to
         // pick up. Done in Rust (not Ruby) so the substring slicing

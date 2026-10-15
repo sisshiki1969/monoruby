@@ -148,3 +148,77 @@ fn disable_gems_leaves_gem_undefined() {
     );
     assert_eq!(got, "[nil, nil, false]");
 }
+
+/// A host gem directory monoruby started with stays on `Gem.path` after
+/// the program clears `GEM_PATH` itself. ruby-bench's harness does that
+/// before it has the host's `bundle install` put gems there; since
+/// `Gem.default_dir` is monoruby's own gem home, the fallback `Gem.path`
+/// has to bring the host directories along (`MONORUBY_HOST_GEM_PATH`,
+/// `rubygems/defaults/operating_system.rb`).
+#[test]
+fn clearing_gem_path_keeps_the_host_gem_dirs() {
+    let root =
+        std::env::temp_dir().join(format!("monoruby-gem-path-fallback-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let host = root.join("hostgems");
+    let home = root.join("home");
+    std::fs::create_dir_all(host.join("specifications")).unwrap();
+    std::fs::create_dir_all(host.join("gems/mrbfake-1.0/lib")).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        host.join("specifications/mrbfake-1.0.gemspec"),
+        r#"Gem::Specification.new do |s|
+  s.name = "mrbfake"
+  s.version = "1.0"
+  s.summary = "fixture"
+  s.authors = ["monoruby"]
+  s.files = ["lib/mrbfake.rb"]
+  s.require_paths = ["lib"]
+end
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        host.join("gems/mrbfake-1.0/lib/mrbfake.rb"),
+        "MRBFAKE = :loaded\n",
+    )
+    .unwrap();
+    // rubygems realpaths every `Gem.path` entry (`Gem::PathSupport#expand`),
+    // and macOS's temp dir sits behind the `/var` -> `/private/var` symlink.
+    let host = host.canonicalize().unwrap();
+    let host_s = host.to_str().unwrap();
+    let cases = [
+        // Cleared before rubygems boots, as the harness does.
+        r#"ENV.merge!("GEM_HOME" => nil, "GEM_PATH" => nil)
+           gem "mrbfake"; require "mrbfake"
+           p [MRBFAKE, Gem.path.include?(HOST)]"#,
+        // Cleared after it booted, then the paths recomputed.
+        r#"Gem::VERSION
+           ENV["GEM_PATH"] = nil; Gem.clear_paths
+           require "mrbfake"
+           p [MRBFAKE, Gem.path.include?(HOST)]"#,
+    ];
+    for code in cases {
+        let out = monoruby()
+            .env("HOME", &home)
+            .env("GEM_PATH", host_s)
+            .env_remove("GEM_HOME")
+            .env_remove("MONORUBY_GEM_PATH")
+            .env_remove("MONORUBY_HOST_GEM_PATH")
+            .arg("-e")
+            .arg(code.replace("HOST", &format!("{host_s:?}")))
+            .output()
+            .expect("failed to spawn monoruby");
+        assert!(
+            out.status.success(),
+            "monoruby exited with {:?}\nstderr: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "[:loaded, true]"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
