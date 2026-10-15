@@ -1310,7 +1310,7 @@ fn signal_list(
 /// or None if the number does not correspond to a known signal. When
 /// multiple aliases share a number, the value returned is what CRuby uses
 /// (e.g. 6 -> "ABRT", 17 -> "CHLD", 29 -> "IO").
-fn signal_number_to_name(num: i64) -> Option<&'static str> {
+pub(super) fn signal_number_to_name(num: i64) -> Option<&'static str> {
     if num < 0 || num > i32::MAX as i64 {
         return None;
     }

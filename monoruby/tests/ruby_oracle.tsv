@@ -1317,6 +1317,7 @@
 3f72b0848d8da9ce1adc72b87da21e56	["2026-09-17", "2026-09-17T01:02:03+09:00", "2026-09-17T01:02:03.500+09:00", (3/8), (1/2), true, "2026-01-02T03:04:05-05:00", "2026-09-17 01:02:03 +0900", 0, true, "#<Date: 2026-09-17 ((2461301j,0s,0n),+0s,-Infj)>", -Infinity, true, 2361222, "2026-10-17"]	require "date"\n        t = Time.new(2026, 9, 17, 1, 2, 3.5r, "+09:00")\n
 3f839e4337603d2011e09f2f712091a4	[:bar, :foo]	class A\n              def foo; end\n              def bar; end\n     
 3f92dae4c5bb5d0850bb428a743f7317	[4, 5]	r = []\n        10.times { |i| r << i if (i == 4)...(i == 5) }\n        r
+3f93411565be2e69cc4d017a88aced92	["/no/such/mrb_feat_zz", "./no_such_mrb_feat_zz", "../no_such_mrb_feat_zz", "no_such_mrb_feat_zz", :tilde, :rel]	res = []\n            ["/no/such/mrb_feat_zz", "./no_such_mrb_feat_z
 3f9bc283176b2ee563ab3a04dc4a637b	[[2], 0]	$n = 0\n        def mid(arr)\n          begin\n            arr.each { |y| 
 3fb8c0c6f9028a8a1d17e01958b4d1f5	[0, true, 2, 0, true, 1, 0, 0, nil]	class Always\n          def ==(o) = true\n        end\n        class Only1
 3fc95be93692b5961ce4a36b01eb20fb	[168, [131072, 83886080, 42949672970, 21990232560640, 11258999071047680, 5764607524376412160, 687194767360, 70368744177664]]	M = 0xffff_ffff_ffff_ffff\n\n\n        NOT_A = 0xfefefefefefefefe\n        NOT_H = 
@@ -1347,6 +1348,7 @@
 410e76b670dd81753a10505bf18e9a4e	[true, ["String", "Comparable", "Object", "Kernel", "BasicObject"], true, false, "b", "c", "c", true, true, true, false, true, false, -1, nil, "b", "a"]	[String.include?(Comparable), String.ancestors.map(&:to_s),\n         "b
 41196e2784709a38db16b2ac20d45c21	[47, 47, 0, 47, 39]	def __f(x)\n          \n        v0 = x\n        v1 = (v0 + 8) & 4095\n     
 411a595975d07c35ede9644e0bbcd2ab	[16600, [0, 1, 0, 0, 1, 1, 0], [false, true, false, true, true, true, false], [true, false, false, false, true, false, true]]	class RA; def evaluate = 1; end\n            class RB; private def e
+411acd20cea05e42c209a78ca533da9d	[true, nil, false, "/home/user/monoruby/monoruby\\n", "", true, 3, true, nil, true, "Command failed with exit 2: sh", Errno::ENOENT, true, true, false, "Command failed with SIGKILL (signal 9): sh"]	__a = [];__a << (system "ls");__a << (system "jkjkjk");__a << (system "*");__a <
 4127f9d58f69e19b5bcf5c3c3cefe969	[true, true, false, :fired]	Thread.handle_interrupt(StandardError => :never) do\n              c
 41308fa046142fe3ed9d2bce06bdeb37	[4, 8, 91, 7, 73, 117, 58, 13, 85, 68, 80, 114, 111, 116, 111, 50, 7, 104, 105, 6, 58, 6, 69, 84, 64, 6]	class UDProto2\n              def initialize(s); @s = s; end\n       
 414fc2c4b9c0682c75f29f05aed5d4d1	[5, 1, 4, 5]	__a = [];__a << ((1..5).max {|a, b| (a - b).to_f });__a << ((1..5).max {|a, b| (
@@ -4816,6 +4818,7 @@ e84e2a6f452bc8149fdee15dda638246	4	r = 0\n            20.times do\n             
 e8629d85bee1ecd0620fc7812cf440d4	"myfile.rb:42:"	b = binding\n            begin\n              b.eval("missing_method"
 e8657222505766ebb61f86dfdcc11cb2	["Array", true, true, true, true, true, true, true, true, "Big5-HKSCS", true, true, true]	__a = [];__a << (Encoding.list.class.name);__a << (Encoding.list.all? { |e| e.is
 e8663c97e820ca6aa3b720c87c95f4ff	"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"	r, w = IO.pipe\n            t = Thread.new { r.read }\n            w.
+e8673bc6a9a41b465118cd573abaf4d0	["/no/such/mrb_feat_zz", "./no_such_mrb_feat_zz", "../no_such_mrb_feat_zz", "~/no_such_mrb_feat_zz", "no_such_mrb_feat_zz", :rel]	res = []\n            ["/no/such/mrb_feat_zz", "./no_such_mrb_feat_z
 e86dad34113a8d3e0115c06073ba9c0a	[[Encoding::ConverterNotFoundError, "code converter not found (UTF-8 to bogus)"], 2, 1, [Encoding::ConverterNotFoundError, "code converter not found (UTF-8 to bogus)"], 2, 1, "EUC-JP", 1, 1, [TypeError, "no implicit conversion of Object into String"], [ArgumentError, "string contains null byte"]]	class S\n          def initialize(s) = (@s = s; @n = 0)\n          def to
 e86f1d136bc147bc86fabb026ba5ec24	599	c = Class.new { def m; 1; end }\n        o = c.new\n        s = 0\n       
 e8725aa5299b38b5c143ac96f54115d6	[480, 40, 20]	acc = 0\n        40.times do |i|\n          acc += 1 if i.even?\n         

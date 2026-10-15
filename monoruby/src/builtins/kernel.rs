@@ -3622,7 +3622,12 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             let detail = if libc::WIFEXITED(raw) {
                 format!("exit {}", libc::WEXITSTATUS(raw))
             } else if libc::WIFSIGNALED(raw) {
-                format!("signal {}", libc::WTERMSIG(raw))
+                // CRuby: "SIGKILL (signal 9)".
+                let signo = libc::WTERMSIG(raw);
+                match crate::builtins::process::signal_number_to_name(signo as i64) {
+                    Some(name) => format!("SIG{name} (signal {signo})"),
+                    None => format!("signal {signo}"),
+                }
             } else {
                 "unknown status".to_string()
             };
@@ -9370,8 +9375,34 @@ mod tests {
             r#"system("true", exception: true)"#,
             r#"begin; system({"MONORUBY_SYS_T" => "1"}, "sh", "-c", "exit 2", exception: true); rescue RuntimeError => e; e.message; end"#,
             r#"begin; system({"MONORUBY_SYS_T" => "1"}, "no_such_cmd_qq_zz", exception: true); rescue SystemCallError => e; e.class; end"#,
+            // `exception: nil` is the default; it may ride with other options.
+            r#"system("true", exception: nil)"#,
+            r#"system("sh", "-c", "exit 0", chdir: "/", exception: true)"#,
+            r#"system("sh", "-c", "exit 5", chdir: "/", exception: false)"#,
+            // A child killed by a signal is reported as such.
+            r#"begin; system("sh", "-c", "kill -9 $$", chdir: "/", exception: true); rescue RuntimeError => e; e.message; end"#,
         ]);
         run_test_error(r#"``"#);
+        run_test_error(r#"system()"#);
+    }
+
+    #[test]
+    fn require_miss_skips_gem_activation() {
+        // A miss on a relative, absolute, `./`, `../` or `~` name is a plain
+        // LoadError without consulting rubygems; only a bare feature name
+        // falls back to `Gem.try_activate`.
+        run_test_once(
+            r#"
+            res = []
+            ["/no/such/mrb_feat_zz", "./no_such_mrb_feat_zz", "../no_such_mrb_feat_zz",
+             "no_such_mrb_feat_zz"].each do |name|
+              res << (begin; require name; rescue LoadError => e; e.path; end)
+            end
+            res << (begin; require "~/no_such_mrb_feat_zz"; rescue LoadError; :tilde; end)
+            res << (begin; require_relative "no_such_mrb_feat_zz"; rescue LoadError; :rel; end)
+            res
+            "#,
+        );
     }
 
     #[test]
