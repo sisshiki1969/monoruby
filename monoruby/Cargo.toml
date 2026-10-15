@@ -167,6 +167,9 @@ libffi = { version = "5.1.0", features = ["system"] }
 
 [build-dependencies]
 dirs = "6.0.0"
+# Compiles the C API layer into the `libmonoruby_capi.a` an `extconf.rb`
+# build links (build.rs `build_capi_archive`).
+cc = "1.0"
 
 # The five dynamically loaded extensions, as *artifact* dependencies
 # (`-Z bindeps`, enabled in .cargo/config.toml). Cargo builds each cdylib

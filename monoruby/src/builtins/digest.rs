@@ -161,6 +161,9 @@ mod tests {
             r#"require 'digest/sha2'; Digest::SHA256.hexdigest("abc")"#,
             r#"require 'digest/sha2'; Digest::SHA384.hexdigest("abc")"#,
             r#"require 'digest/sha2'; Digest::SHA512.hexdigest("abc")"#,
+            // Digest::Instance#new: a fresh digest of the same kind.
+            r#"require 'digest/sha2'; d = Digest::SHA256.new; d << "abc"; [d.new.hexdigest == Digest::SHA256.hexdigest(""), d.hexdigest == Digest::SHA256.hexdigest("abc"), d.new.class]"#,
+            r#"require 'openssl'; d = OpenSSL::Digest.new("SHA256"); d << "abc"; [d.new.hexdigest == OpenSSL::Digest::SHA256.hexdigest(""), d.hexdigest == OpenSSL::Digest::SHA256.hexdigest("abc"), d.new.name]"#,
             // const_missing autoload (SHA256 referenced via Digest:: only)
             r#"require 'digest'; Digest.const_get(:SHA256).hexdigest("abc")"#,
             // streaming via update / <<

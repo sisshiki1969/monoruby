@@ -283,6 +283,10 @@ if __host_os == 'darwin'
   end
 end
 
+# The keys mkmf builds a C extension with: header directory and the
+# library to link, pointed at monoruby's own C API layer (reads host_os).
+require_relative 'capi_config'
+
 
 # ARGF is implemented in Rust (builtins/argf.rs); only the
 # Enumerable mix-in has to wait until the module exists.

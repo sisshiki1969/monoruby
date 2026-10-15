@@ -1282,7 +1282,20 @@ impl Executor {
         // `require`s run after this point and are direct ones.
         let from_autoload = std::mem::take(&mut self.autoload_require);
         let (file_body, canonicalized_path) = loop {
-            match globals.require_lib(self, file_name, is_relative)? {
+            let found = match globals.require_lib(self, file_name, is_relative) {
+                // Not on `$LOAD_PATH` nor in a host gem: an installed gem
+                // rubygems knows (one `gem install` put in monoruby's
+                // own gem home) may provide it. Activating it splices
+                // its require paths into `$LOAD_PATH`; then look again.
+                Err(err)
+                    if matches!(err.kind(), MonorubyErrKind::Load(_))
+                        && self.activate_gem_for(globals, file_name, is_relative) =>
+                {
+                    globals.require_lib(self, file_name, is_relative)?
+                }
+                found => found?,
+            };
+            match found {
                 crate::globals::RequireLoad::Load(body, path) => break (body, path),
                 crate::globals::RequireLoad::Native(path) => {
                     // `Init_` defines classes and methods and returns; it
@@ -1530,6 +1543,66 @@ impl Executor {
             }
             Ok(true)
         }
+    }
+
+    /// `Gem.try_activate(feature)` for a `require` that found nothing:
+    /// what rubygems' own `Kernel#require` does on a `LoadError`. True
+    /// when a gem was activated (its require paths are now on
+    /// `$LOAD_PATH`, so the lookup is worth repeating).
+    ///
+    /// Only for a feature *name* (not a relative or absolute path), only
+    /// once startup is over, not under `--disable-gems`, and never
+    /// re-entered: the rubygems boot this may trigger, and the
+    /// activation itself, `require` files of their own, whose misses
+    /// (`rubygems/defaults/ruby`, optional dependencies) must stay plain
+    /// misses. Errors from rubygems are swallowed; the caller then
+    /// reports the original `LoadError`.
+    fn activate_gem_for(
+        &mut self,
+        globals: &mut Globals,
+        file_name: &std::path::Path,
+        is_relative: bool,
+    ) -> bool {
+        thread_local! {
+            static ACTIVATING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        if is_relative || globals.no_gems {
+            return false;
+        }
+        let Some(name) = file_name.to_str() else {
+            return false;
+        };
+        if name.starts_with('/')
+            || name.starts_with("./")
+            || name.starts_with("../")
+            || name.starts_with('~')
+            || !CODEGEN.with(|codegen| codegen.borrow().startup_flag)
+        {
+            return false;
+        }
+        if ACTIVATING.with(|f| f.replace(true)) {
+            return false;
+        }
+        let activated = (|| {
+            let gem = self
+                .get_constant(globals, OBJECT_CLASS, IdentId::get_id("Gem"))
+                .ok()
+                .flatten()?;
+            let feature = Value::string_from_str(name);
+            self.invoke_method_if_exists(
+                globals,
+                IdentId::get_id("try_activate"),
+                gem,
+                &[feature],
+                None,
+                None,
+            )
+            .ok()
+            .flatten()
+            .map(|v| v.as_bool())
+        })();
+        ACTIVATING.with(|f| f.set(false));
+        activated.unwrap_or(false)
     }
 
     ///

@@ -1080,6 +1080,7 @@ dependencies = [
  "bcrypt",
  "bitvec",
  "cbc",
+ "cc",
  "chrono",
  "clap",
  "comrak",

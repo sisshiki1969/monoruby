@@ -1,0 +1,19 @@
+#!/usr/bin/env monoruby
+# The `gem` command, for monoruby. Installed as `<install root>/bin/gem`
+# (and `bin/gem` next to the binary in a bin/dist tree); run it as
+# `monoruby <install root>/bin/gem install <gem>`. It is CRuby's own
+# `bin/gem`: rubygems is the vendored one, and `gem install` of a gem
+# with a C extension builds it against monoruby's C API (doc/c_api.md
+# §3.10) into monoruby's own gem home (`Gem.default_dir`).
+
+require "rubygems"
+require "rubygems/gem_runner"
+require "rubygems/exceptions"
+
+args = ARGV.clone
+
+begin
+  Gem::GemRunner.new.run args
+rescue Gem::SystemExitException => e
+  exit e.exit_code
+end

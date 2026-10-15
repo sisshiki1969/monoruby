@@ -24,7 +24,16 @@ monoruby -I . -e 'require "foo"; ...'
 - CRuby 用にビルド済みの `.so` は読めない（§2）。読もうとすると
   `LoadError`（「monoruby's C API headers でビルドせよ」）になる。
 
-`extconf.rb` / `mkmf` / `gem install` からのビルドはまだ通らない（§5 段階 3）。
+`extconf.rb` のある拡張は CRuby と同じ手順でビルドできる（§3.10）:
+
+```sh
+monoruby extconf.rb && make          # RbConfig が $root/include と
+                                     # $root/capi/libmonoruby_capi.a を指す
+monoruby "$root/bin/gem" install foo # C 拡張付き gem も同じ経路でビルド
+```
+
+`gem install` したものは monoruby 専用の gem home
+（`~/.monoruby/gems/<api version>`、`Gem.default_dir`）に入る。
 
 ## 2. 互換の範囲: API 互換、ABI 非互換
 
@@ -210,6 +219,62 @@ callback が NULL なら自分のブロックをそのまま渡す。
 `initialize` をブロック付きで、`rb_class_new` / `rb_module_new` は
 `Class.new` / `Module.new`。
 
+### 3.10 mkmf / `gem install`（段階 3）
+
+CRuby の `extconf.rb` は `mkmf` が `RbConfig` から得る値だけでビルドを
+組み立てる: ヘッダの場所（`rubyhdrdir` / `rubyarchhdrdir`）、コンパイラと
+フラグ、そして拡張がリンクする「`libruby`」（`LIBRUBYARG`）。vendored の
+`rbconfig.rb` はスナップショット元の CRuby の値を答えるので、そのままでは
+CRuby のヘッダでビルドした（monoruby では読めない）`.so` ができる。
+`builtins/capi_config.rb`（startup.rb の最後に読む）が
+`RbConfig.fire_update!` でこれらを monoruby のものに差し替える:
+
+| キー | 値 |
+|---|---|
+| `rubyhdrdir` / `rubyarchhdrdir` / `topdir` | `<install root>/include` |
+| `LIBRUBYARG` / `LIBRUBYARG_SHARED` / `LIBRUBYARG_STATIC` | `-L<install root>/capi -lmonoruby_capi` |
+| `LIBRUBY` / `LIBRUBY_A` / `LIBRUBY_SO` | `libmonoruby_capi.a` |
+| macOS のみ: `CC` / `LDSHARED` / `DLDFLAGS` / `warnflags` … | clang と `-bundle` リンク（CRuby の macOS 版 rbconfig 相当）。`DLEXT` は startup.rb が `bundle` にしている |
+
+- **`libmonoruby_capi.a`** は `build.rs`（`build_capi_archive`）が `cc`
+  crate で `capi.c` をコンパイルして `<install root>/capi/` に置く
+  アーカイブ。§3.1 の「拡張ごとに静的リンク」を、mkmf の `$(LIBS)` に
+  `-lmonoruby_capi` が入ることで実現する。mkmf の `have_func("rb_...")`
+  は conftest をこのアーカイブとリンクして判定するので、層に無い関数は
+  正しく「no」になる。monoruby 本体にはリンクしない。
+- `ruby/config.h`（ruby.h の設定部を分離）、`ruby/backward.h` /
+  `st.h` / `subst.h`（中身は無い）を足した。mkmf は生成する Makefile で
+  これらを全オブジェクトの前提に並べるので、存在しないと `make` が
+  止まる。
+- `Kernel#system` が `system(env, *cmd)` と spawn オプションを受けるように
+  なった（mkmf の `xsystem` が環境ハッシュ付きで呼ぶ）。env ハッシュか
+  オプションがあるときは `builtins::spawn` で `spawn` + `waitpid`。
+- **`gem install`**: rubygems の `ExtConfBuilder` は `Gem.ruby`（= 今の
+  monoruby）で `extconf.rb` を走らせ `make` するだけなので、上の RbConfig
+  でそのまま通る。`.gem` の作成（`gem build`）に必要だった
+  `Digest::Instance#new` を足した。
+- **gem home は monoruby 専用**（`stdlib/rubygems/defaults/operating_system.rb`、
+  rubygems が `$LOAD_PATH` から読む packager 向けフック）。`Gem.default_dir`
+  は `~/.monoruby/gems/<api version>`、`Gem.user_dir` は
+  `~/.local/share/gem/monoruby/<api version>`。rubygems はビルド済み拡張を
+  `extensions/<platform>/<api version>/<gem>` だけで区別するので、ホスト
+  CRuby の gem home に入れると同じ gem の CRuby ビルドと上書きし合う。
+  ホストの gem ディレクトリは従来どおり `GEM_PATH`（`Gem.path`）に残り、
+  default gem の spec（`Gem.default_specifications_dir`）もホストのまま。
+- **`require` の gem フォールバック**: monoruby の `require` はホストの
+  gem の `lib/` をプローブ結果から知っているが、monoruby 自身の gem home
+  に入った gem は知らない。`$LOAD_PATH` にもそこにも無いときに
+  `Gem.try_activate(feature)`（rubygems の `Kernel#require` が LoadError
+  で行うこと）を呼び、activate されたら探し直す
+  （`Executor::activate_gem_for`）。rubygems の起動中・相対 / 絶対パス・
+  `--disable-gems` では呼ばない。
+- `<install root>/bin/gem`（`bin/dist` では `bin/gem`）は CRuby の
+  `bin/gem` そのもの。`monoruby "$root/bin/gem" install foo` で使う。
+- `tests/mkmf.rs`: `tests/capi/capi_gem/`（`extconf.rb` 付きの gem）を
+  `extconf.rb` + `make` で、また `gem build` + `gem install` で monoruby と
+  ホスト CRuby の双方にビルド・インストールし、同じスクリプトの出力が
+  一致することを見る。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -232,7 +297,7 @@ callback が NULL なら自分のブロックをそのまま渡す。
 |---|---|---|
 | 1 | ローダ（`monoruby_capi_init` 判別、`$LOAD_PATH` 上の `.so`）、`ruby.h` 互換ヘッダ、`capi.c`: クラス / モジュール / メソッド定義（arity -2〜15）、即値・数値・文字列・シンボル・配列・ハッシュ・Range、`rb_funcall` 系、ブロック（`rb_yield` 系、`rb_block_proc`）、例外（`rb_raise`、`rb_protect` / `rb_ensure` / `rb_rescue2` / `rb_jump_tag`）、`rb_scan_args` / `rb_get_kwargs`、ivar / 定数 / cvar / gvar、GC 登録、`rb_sprintf`（`PRIsVALUE`）、最小限の encoding、`rb_thread_call_without_gvl` | 済（`tests/capi.rs`: 同じ C ソースを CRuby と monoruby で動かし出力一致） |
 | 2 | `Data` / `TypedData`（`TypedData_Make_Struct`、`DATA_PTR` の lvalue、dmark / dfree）、`rb_define_alloc_func` / `rb_undef_alloc_func`、`rb_block_call` / `rb_proc_new` / `rb_iterate` / `rb_iter_break`（C 関数をブロックとして渡す）、`rb_call_super`、`rb_struct_*`、`rb_obj_call_init`、`rb_class_new` | 済（§3.7〜3.9、`tests/capi/capi_data.c`）。`rb_keyword_given_p` は未 |
-| 3 | `RbConfig::CONFIG`（`rubyhdrdir` などを install root に）、`mkmf` が monoruby を相手に `Makefile` を作れること、`capi.c` を `libmonoruby_capi.a` として `LIBRUBYARG` に、`gem install` で C 拡張 gem がビルドされ `extensions/<arch>/…` から読めること | 未 |
+| 3 | `RbConfig::CONFIG`（`rubyhdrdir` などを install root に）、`mkmf` が monoruby を相手に `Makefile` を作れること、`capi.c` を `libmonoruby_capi.a` として `LIBRUBYARG` に、`gem install` で C 拡張 gem がビルドされ `extensions/<arch>/…` から読めること | 済（§3.10、`tests/mkmf.rs`）。gem home は monoruby 専用 |
 | 4 | 実 gem で面積を詰める（`rb_io_*`、`rb_time_*`、`st_*`、`rb_enc_*` の残り、Bignum 系）。小さなものから: `bcrypt`、`strscan` 相当、`json` の C 拡張、`msgpack` | 未 |
 
 ## 6. 既知の制約
@@ -251,3 +316,9 @@ callback が NULL なら自分のブロックをそのまま渡す。
 - `dsize` / `dcompact` は使わない。`RUBY_TYPED_*` のフラグはすべて無視。
 - `rb_warn` は `Kernel#warn("warning: ...")`（ファイル名・行番号は付かない）。
 - `rb_gv_get` / `rb_gv_set` は `eval` 経由。
+- mkmf の `create_header` は使えるが、`$(hdrdir)/ruby/backward/*` や
+  `st.h` の中身（`st_table`）は無い。`RbConfig::CONFIG["CC"]` は Linux では
+  スナップショットの `gcc` のまま（`CC` 環境変数で上書きできる）。
+- `gem install` は monoruby の gem home に入れる。ホスト CRuby で
+  入れた C 拡張 gem の `.so` は monoruby では読めない（stub のあるものは
+  stub が読まれる）ので、monoruby で使うには monoruby で入れ直す。

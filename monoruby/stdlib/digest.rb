@@ -63,6 +63,12 @@ module Digest
       self
     end
 
+    # A new, initialized digest of the same kind (`clone.reset`); what
+    # rubygems calls on the `OpenSSL::Digest` it writes checksums with.
+    def new
+      clone.reset
+    end
+
     # The raw digest of the accumulated data, computed natively.
     def finish
       String.__digest(self.class::ALGORITHM, @buffer)

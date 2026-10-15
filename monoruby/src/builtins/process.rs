@@ -947,6 +947,19 @@ fn do_waitpid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Opti
     } else {
         0
     };
+    waitpid_status(vm, globals, pid, flags).map(|r| r.map(|(pid, _, status)| (pid, status)))
+}
+
+/// `waitpid(2)` with the GVL released, retried across `EINTR` after the
+/// VM poll point ran: the reaped pid, the raw wait status and it as a
+/// `Process::Status`, or `None` under `WNOHANG` with nothing to reap.
+/// `Process.wait` and `Kernel#system` (its spawn path) share it.
+pub(super) fn waitpid_status(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    pid: i32,
+    flags: i32,
+) -> Result<Option<(i32, i32, Value)>> {
     let mut status: i32 = 0;
     let ret = loop {
         // SAFETY: waitpid is a POSIX system call; `status` is a stack
@@ -996,7 +1009,7 @@ fn do_waitpid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Opti
         None,
         None,
     )?;
-    Ok(Some((ret, status_obj)))
+    Ok(Some((ret, status, status_obj)))
 }
 
 ///
