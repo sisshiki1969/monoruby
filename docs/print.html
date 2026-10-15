@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a483e5b8.js";
+            window.path_to_searchindex_js = "searchindex-529bfc42.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -13876,15 +13876,18 @@ Float / Range と<strong>証明された</strong>スロットだけ断る）と�
 焼き込める。<code>emit_deep_copy_lit</code> は <code>CellHeader::NewbornOf(template)</code> で
 ヘッダを <code>NEWBORN_FLAG_MASK</code> で落として写す（<code>Header::newborn</code> と同じ
 マスクなので乖離しない）。それ以外は <code>value_deep_copy</code> 呼び出し。</li>
-<li><strong><code>[a, b].min</code> / <code>.max</code> の融合</strong>（CRuby の <code>opt_newarray_send</code>）:
-<code>try_fuse_array_minmax</code>。消費する呼び出しが同一基本ブロックの<strong>直後の
-命令</strong>で、レシーバがそのリテラルで、リテラルが<strong>一時スロット</strong>に落ち
-（ローカルは再読される）、splat / 引数 / ブロック無し、<code>Array#min</code> /
-<code>#max</code> が builtin に解決する（<code>FuncKind::Builtin { abs_address }</code> を
-<code>builtins::array::min/max</code> と比較）ときだけ。class-version ガードの後
-<code>ir.array_min_max</code> を出し、call 命令を <code>fused_skip</code> で飛ばす。実行時の
-<code>opt_array_minmax</code> は要素を<strong>スタックスロット上で</strong>比較し、Array を
-作らない。同点は先の要素、比較不能は raise、と builtin と同じ。</li>
+<li><strong>レシーバとしてだけ使われるリテラルの確保省略</strong>（CRuby の
+<code>opt_newarray_send</code> / <code>opt_duparray_send</code> に相当）: エスケープ解析
+（<a href="design/escape_analysis.html"><code>../escape_analysis.md</code></a>）。一時スロットに落ちる
+<code>[a, b]</code> / 全要素 immediate の <code>literal[...]</code> は抽象状態上の「省略された
+オブジェクト」になり、レシーバとして消費されれば確保されない。何をして
+よいかは呼び出し先の <code>RecvEscape</code>（<code>init_recv_escape</code>）が決める:
+<code>min</code> / <code>max</code> は要素をスロット上で比較（<code>opt_array_minmax</code>、同点は先の
+要素、比較不能は raise と builtin と同じ）、<code>size</code> / <code>empty?</code> / <code>first</code> /
+<code>last</code> はコンパイル時に答え、<code>include?</code> などレシーバを漏らさないメソッドには
+テンプレートそのものを渡す。それ以外の使い方・要素スロットの上書き・
+基本ブロック末尾・呼び出しの手前では元のリテラルと同じコードで実体化し、
+side exit は write back（<code>WriteBack::virtual_obj</code>）で実体化する。</li>
 <li><strong><code>ExpandArray</code> の高速経路</strong>: <code>src</code> が既に <code>len</code> 要素以上の Array なら
 <code>len</code> 回の移送で済ませる（<code>respond_to?</code> / <code>#to_ary</code> の dispatch 無し、
 nil 埋め無し、raise 無し）。<code>rest_pos</code> あり・<code>len == 0</code>・
@@ -14022,7 +14025,7 @@ gc-stress の optcarrot が落ちた事例が <a href="#monoruby-の-gc--機構�
 <tr><td><code>ArithmeticSequence</code> 添字</td><td><code>rb_ary_aref1</code> 内で処理</td><td><code>aseq.[](self)</code> に委譲（3 箇所とも）。特異クラス付きの AS（<code>Range#%</code> 由来）も <code>ObjTy</code> で判定するので届く</td></tr>
 <tr><td><code>[]=</code> の Range 開始</td><td>折り返しても負なら <code>RangeError</code></td><td>同じ。素の負 Integer 添字は <code>IndexError</code></td></tr>
 <tr><td><code>Array#&lt;=&gt;</code></td><td>最初に <code>0</code> でなかった要素比較の結果をそのまま返す</td><td>同じ（nil / ±1 / String もそのまま）</td></tr>
-<tr><td>リテラル</td><td><code>duparray</code> / <code>newarray</code>、<code>opt_newarray_send</code></td><td><code>Literal</code>（テンプレート deep copy）。要素が全部 immediate で 5 以下なら複製を機械語に焼く。<code>[a,b].min/max</code> 融合あり</td></tr>
+<tr><td>リテラル</td><td><code>duparray</code> / <code>newarray</code>、<code>opt_newarray_send</code></td><td><code>Literal</code>（テンプレート deep copy）。要素が全部 immediate で 5 以下なら複製を機械語に焼く。レシーバとしてだけ使われるリテラルは確保を省略（エスケープ解析）</td></tr>
 <tr><td><code>Array.new</code> の <code>#to_ary</code> 探索</td><td><code>!FIXNUM_P</code> で判定。Bignum は探索する</td><td>Integer クラスが 1 つなので Bignum も探索を飛ばし、<code>__init_fill</code> のサイズ検査が CRuby の <code>NUM2LONG</code> + 「array size too big」の順で拒む。<code>MAX_ARRAY_SIZE = 1 &lt;&lt; 30</code></td></tr>
 <tr><td><code>zip</code> の引き出し</td><td><code>take_items</code>（<code>each</code> + <code>break</code>）</td><td>同じ。<code>Enumerator#next</code> の fiber は使わないので、引数の <code>each</code> からの <code>StopIteration</code> は呼び出し元に届く</td></tr>
 <tr><td>要素格納のバリア</td><td><code>RARRAY_ASET</code> が <code>RB_OBJ_WRITE</code></td><td><code>Array</code> ラッパが <code>ArrayInner</code> の mutator を隠して全経路をバリア。JIT は <code>emit_write_barrier_rdi</code> / <code>_bulk</code></td></tr>
