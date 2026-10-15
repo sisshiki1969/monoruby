@@ -26,7 +26,15 @@ pub(crate) enum RequireLoad {
 /// variant (which monoruby serves from its stub tree).
 fn require_candidates(path: &std::path::Path) -> Vec<PathBuf> {
     match path.extension().map(|e| e.as_bytes()) {
-        Some(b"rb") | Some(b"so") => vec![path.to_path_buf()],
+        Some(b"rb") => vec![path.to_path_buf()],
+        // `require "x.so"` names the native extension whatever the
+        // platform calls it: on macOS CRuby loads `x.bundle` for it, and
+        // that is what mkmf built there (strscan's `lib/strscan.rb` asks
+        // for `strscan.so`).
+        Some(b"so") if cfg!(target_os = "macos") => {
+            vec![path.to_path_buf(), path.with_extension("bundle")]
+        }
+        Some(b"so") => vec![path.to_path_buf()],
         Some(b"bundle") if cfg!(target_os = "macos") => vec![path.to_path_buf()],
         _ => {
             let s = path.as_os_str().to_string_lossy();
