@@ -1550,6 +1550,7 @@
 49b9e961dee972428a74220cd5bea924	[["EUC-KR", 8836, 610], ["CP949", 22428, 5380], ["GB18030", 23940, 0]]	%w[EUC-KR CP949 GB18030].map do |e|\n                cells = 0\n   
 49beb012f234aa90122664ef49b7040e	["abc", "abd", "abe"]	other = Object.new\n                def other.to_str; "abe"; end
 49cda40144833b11efa2c118b273671a	[[:lje, "break from proc-closure"], [:lje2, "break from proc-closure"], [:lje3, "break from proc-closure"], :local]	def cap(&b); b; end\n        res = []\n        def use_call\n          b =
+49d3036f077898ab1f23c94c0526d726	[700.012271, 2.699313]	def te\n          a = 2.0\n          s = 0.0\n          i = 0\n          wh
 49e75a728c86edcf8a947d85a34a5f24	["foo", "bar", "baz"]	class Foo\n            def foo() "foo" end\n            def bar() "bar" e
 49ed29647c7ff556ed4301a4bae46a92	[[:U8, 1], [:S8, 1], [:u16, 513], [:U16, 258], [:s16, 513], [:S16, 258], [:u32, 67305985], [:U32, 16909060], [:s32, 67305985], [:S32, 16909060], [:u64, 9801809732607083009], [:U64, 72623859790382984], [:s64, -8644934341102468607], [:S64, 72623859790382984], [:f32, 1.539989614439558e-36], [:F32, 2.387939260590663e-38], [:f64, -5.447603722011605e-270], [:F64, 8.207880399132047e-304], [ArgumentError, "Type extends beyond end of buffer! (offset=100 > size=8)"], [ArgumentError, "Invalid type name!"], 2, [1, 2], 4, [2, 1], 5, [255], 8, 1.5, 8, -2.25, [ArgumentError, "Type extends beyond end of buffer! (offset=100 > size=8)"], [[0, 1], [1, 2], [2, 3]], [[2, 1027], [4, 1541]], [[2, 3], [3, 4]], 8, [1, 2, 3, 4], [2282161669], [1, 2, 3], 8]	r = []\n            b = IO::Buffer.for("\\x01\\x02\\x03\\x04\\x05\\x06\\x07
 49ed5a0fe73fd1b796e7a9a4e4845e10	true	$".class == Array\n            
@@ -1920,6 +1921,7 @@
 5c9a399e6be0e655dcde007dc7ece9b8	true	r, w = IO.pipe\n            t = Thread.new { sleep 0.2 }\n           
 5c9bd2b9dbdb63097f4a4accca2a9df4	nil	def f(&p)\n            p.call\n        end\n        \n\n        f{}\n        
 5ca3799c684286b467f40e7d55944357	["unterminated dumped string", "invalid hex escape", "invalid Unicode escape", "string contains null byte", "non-ASCII character detected"]	__a = [];__a << (begin; '"foo'.undump; rescue RuntimeError => e; e.message; end)
+5ce76cea976d0749aea686fc1ed8c9ce	[45150, 300]	def tg\n          n = 0\n          s = 0\n          i = 0\n          while 
 5cf8b4b25dfa508bb3bf9235dab8f152	[true, true, true, true, true, false, :ccc, :bbb, :bbb]	__a = [];__a << (:abc < :abd);__a << (:abd > :abc);__a << (:abc >= :abc);__a << 
 5d03329e8ce3ae472df7fb2691c658f9	[3, :redefined]	a, b = 3, 9\n            r = []\n            50.times { r << [a, b].m
 5d04703a221875b0b4d2a0813111741a	nil	class CSrcLocMissing; end\n            CSrcLocMissing.const_source_l
@@ -4358,6 +4360,7 @@ d241f6cfa000d985ad83831917fcd9ab	15	def f(x)\n          yield *x\n        end\n 
 d248c4c75d6d6152979eacdd22264ac7	[true, "3.2", "OS"]	T = Struct.new(:version, :platform)\n            \n\n            pos =
 d249a352e7a0516aae9724b52c800e6e	3	require "forwardable"\n        class Module\n          def delegate(*name
 d251e356957ab6fc062c3f28a863a7d8	[[TypeError, "wrong element type Integer (expected array)"], [ArgumentError, "element has wrong array length (expected 2, was 3)"], [ArgumentError, "element has wrong array length (expected 2, was 1)"]]	h = { a: 1 }\n            [\n              (begin; h.to_h { |k, v| 5 
+d2668890d083526fa3ea3f8c935f341c	[700.012271, 2.699313]	def th\n          a = 2.0\n          s = 0.0\n          i = 0\n          wh
 d272f2ff2820056b8a2325de44c7f0f2	["..10110", "..110110", "..11110110", "..11110110", "..10110   ", "0b..110110", "..766", "..777766", "..766", "..ff6", "..fffff6", "0x..ffff01", "..F01", "-1010", "-a", "..101111111111111111111111111111111111111111111111111111111111111011", "..75777777777777777777773", "..f0000000000000000000000000", "..F0000000000000000000000000", "..11101111111111111111111111111111111111111111111111111111111111111011", "-10000000000000005", "0x00000000001.874p+7", "0x00000000001.874p+7", "0x1.874p+7          ", "-0x1.4p+1", "ét", "héllo", "\\"ab", "[[]", "      -Inf", "       Inf", "       Inf", "      -Inf", "       NaN", :arg_error, :arg_error]	__a = [];__a << ("%b" % -10);__a << ("%.8b" % -10);__a << ("%.10b" % -10);__a <<
 d286bd42cf71e8b8229d8052792a331f	[3.0, nil, nil, [7.0, nil, 2.0], [nil, 2.0, 5.0], ["abc", 0, "/abc/", nil], 1, 1, [nil, 1.0, 0.5, nil, 18446744073.709553, 18446744073.709553], [4.0, nil], [6.0, nil], [[], nil]]	__a = [];__a << (Regexp.new("abc", timeout: 3).timeout);__a << (Regexp.new("abc"
 d28ba746b6e9c87f48b3e3e7b6c1a0f5	[["x", "y"], false, false]	base = "/tmp/monoruby_dir_instchildren_#{Process.pid}_#{rand(100000
@@ -4959,6 +4962,7 @@ ee30ce31ba98f69ce2f87b6e3dee696e	Hash	GC.stat.class
 ee43c89f3fd8c1689768af1466ea40b9	"HELL world"	s = "hello world"; s.bytesplice(0..4, "HELLO WORLD", 0...-7); s
 ee4468681c7b58ee75906f6a92294651	true	class Float; alias __orig :<; def <(o); __orig(o); end; end; 3.0 < 4.0
 ee461b5aefb0a2b555b7827830b043dc	[[0, 6], [0, 3], [3, 6], [nil, nil]]	__a = [];__a << (/(foo)(bar)/.match("foobar").offset(0));__a << (/(foo)(bar)/.ma
+ee4c6dfe09877efbefcf09ad4f885a30	[700.012271, 2.699313]	def tf\n          a = 2.0\n          s = 0.0\n          i = 0\n          wh
 ee506f7a4e17e46a218f4c08e690d77c	[:bar, true]	class Foo\n              def bar; 1; end\n            end\n           
 ee62bb9cc0c6e09de70aa7d1eb0c840b	[["UTF-8", 6, true], ["UTF-8", "abcx", true]]	def mism()\n          s = String.new(encoding: Encoding::BINARY)\n       
 ee7fd51256850720ca8f1ead78be9653	["line1\\nline2", "tab\\there", "back\\\\slash", "quote\\"here", "slash/ok", "bs\\b", "ff\\f", "cr\\r", true, true, true]	__a = [];__a << (require "json"; JSON.parse("\\"line1\\\\nline2\\""));__a << (requir

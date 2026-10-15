@@ -20,10 +20,11 @@
 //! call also exposed that the block-literal exemption from the
 //! specialization budget had no recursion backstop: specializing
 //! `traverse` compiled the block, which specialized `traverse`, without
-//! end, until the compiler overflowed its native stack. A call site that is
-//! already being specialized further up the stack is now called, not
-//! specialized — the site, not the callee, since `[1].each { [2].each { } }`
-//! nests the same method through two sites and must keep inlining both.
+//! end, until the compiler overflowed its native stack. A method that is
+//! already a frame of the compilation unit is now called, not specialized
+//! again, whatever route the recursion takes back to it. That also stops
+//! the inlining of the inner `each` of `[1].each { [2].each { } }`: its
+//! block is handed out instead, and must still reach the outer frames.
 extern crate monoruby;
 use monoruby::tests::*;
 
@@ -194,10 +195,13 @@ fn recursion_with_a_block_literal_that_is_never_yielded_to() {
 }
 
 /// The same method nested under itself through two different sites, with a
-/// float stored two outer levels up — the shape the recursion backstop
-/// must keep inlining.
+/// float stored two outer levels up. The inner `each` is a frame of the
+/// unit already, so it is called rather than specialized and its block is
+/// handed out of the unit: the store it makes two levels up has to land
+/// in the loop's frame, and the loop has to read it back (see
+/// `tests/loop_analysis_outer_widen.rs` for the bug this found).
 #[test]
-fn the_same_method_nested_through_two_sites_keeps_inlining() {
+fn the_same_method_nested_through_two_sites_hands_the_inner_block_out() {
     run_test(
         r#"
         def t2
