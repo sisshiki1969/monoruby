@@ -26,7 +26,15 @@ pub(crate) enum RequireLoad {
 /// variant (which monoruby serves from its stub tree).
 fn require_candidates(path: &std::path::Path) -> Vec<PathBuf> {
     match path.extension().map(|e| e.as_bytes()) {
-        Some(b"rb") | Some(b"so") => vec![path.to_path_buf()],
+        Some(b"rb") => vec![path.to_path_buf()],
+        // `require "x.so"` names the native extension whatever the
+        // platform calls it: on macOS CRuby loads `x.bundle` for it, and
+        // that is what mkmf built there (strscan's `lib/strscan.rb` asks
+        // for `strscan.so`).
+        Some(b"so") if cfg!(target_os = "macos") => {
+            vec![path.to_path_buf(), path.with_extension("bundle")]
+        }
+        Some(b"so") => vec![path.to_path_buf()],
         Some(b"bundle") if cfg!(target_os = "macos") => vec![path.to_path_buf()],
         _ => {
             let s = path.as_os_str().to_string_lossy();
@@ -355,6 +363,17 @@ impl Globals {
                 // activated gem from monoruby's own gem home — asked for
                 // that one, so it wins over the stand-in.
                 if let Some(ext) = self.built_extension_on_load_path(cand, entries) {
+                    // The gem's own Ruby half next to the extension, when
+                    // the request was for the `.rb` form: strscan's
+                    // `lib/strscan.rb` requires `strscan.so` and then the
+                    // Ruby methods (`scan_integer`) on top of it, so it is
+                    // what `require "strscan"` resolves to on CRuby too.
+                    if cand.extension().map(|e| e.as_bytes()) == Some(b"rb")
+                        && let Some(dir) = ext.parent()
+                        && let Some(rb) = self.probe(dir, cand)
+                    {
+                        return Some(rb);
+                    }
                     return Some(ext);
                 }
                 return Some(p);
@@ -403,10 +422,29 @@ impl Globals {
             }
         }
 
+        // A native candidate that is not loadable by monoruby — a host
+        // CRuby's `strscan.so` in its `x86_64-linux` dir, which the probe
+        // cache puts on `$LOAD_PATH` — does not stop the walk: the gem
+        // monoruby built (`gem install` through its C API layer) may sit
+        // further along, and its `lib/strscan.rb` asks for `strscan.so`
+        // by that bare name. The first unloadable hit is still the answer
+        // when nothing loadable follows, so the LoadError names it.
+        let native = matches!(cand.extension().map(|e| e.as_bytes()), Some(b"so" | b"bundle"));
+        let mut unloadable = None;
         for lib in entries {
             if let Some(p) = self.probe(std::path::Path::new(lib), cand) {
+                if native
+                    && !crate::ext::is_extension_path(&p)
+                    && !crate::ext::is_capi_extension(&p)
+                {
+                    unloadable.get_or_insert(p);
+                    continue;
+                }
                 return Some(p);
             }
+        }
+        if let Some(p) = unloadable {
+            return Some(p);
         }
 
         // Installed-gem fallback (what rubygems' `require` does through

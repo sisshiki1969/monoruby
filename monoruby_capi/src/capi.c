@@ -4561,50 +4561,16 @@ enc_is_utf8(rb_encoding *enc)
     return enc && enc->index == rb_utf8_encindex();
 }
 
-/* The length of the UTF-8 character at `p`: >0 its byte length, 0 when
- * `e` cuts it short, <0 when the bytes are not a character. */
-static int
-utf8_mbclen(const unsigned char *p, const unsigned char *e)
-{
-    if (p >= e)
-        return 0;
-    unsigned char c = *p;
-    int n;
-    if (c < 0x80)
-        return 1;
-    else if (c < 0xc2)
-        return -1;
-    else if (c < 0xe0)
-        n = 2;
-    else if (c < 0xf0)
-        n = 3;
-    else if (c < 0xf5)
-        n = 4;
-    else
-        return -1;
-    for (int i = 1; i < n; i++) {
-        if (p + i >= e)
-            return 0;
-        unsigned char d = p[i];
-        if ((d & 0xc0) != 0x80)
-            return -1;
-        if (i == 1) {
-            if ((c == 0xe0 && d < 0xa0) || (c == 0xed && d > 0x9f) ||
-                (c == 0xf0 && d < 0x90) || (c == 0xf4 && d > 0x8f))
-                return -1;
-        }
-    }
-    return n;
-}
-
 int
 rb_enc_precise_mbclen(const char *p, const char *e, rb_encoding *enc)
 {
     if (p >= e)
-        return 0;
-    if (!enc_is_utf8(enc))
-        return 1;
-    return utf8_mbclen((const unsigned char *)p, (const unsigned char *)e);
+        return ONIGENC_CONSTRUCT_MBCLEN_NEEDMORE(1);
+    /* monoruby's own walkers (UTF-8, the CJK multibyte sets, the wide
+     * forms), answering in Onigmo's encoding; a byte per character for
+     * everything else, as on CRuby. */
+    return api->enc_precise_mbclen(ctx(), enc ? enc->name : "ASCII-8BIT",
+                                   (const unsigned char *)p, (const unsigned char *)e);
 }
 
 int
@@ -4857,4 +4823,306 @@ rb_free_tmp_buffer(volatile VALUE *store)
     *store = Qfalse;
     if (v != Qfalse && v != 0)
         ruby_xfree((void *)(uintptr_t)v);
+}
+
+/* ---------------------------------------------------------------------
+ * ruby/re.h — Onigmo through the table, and the regexp helpers strscan
+ * needs. The onig_* wrappers carry onigmo.h's signatures; the table's
+ * are the same with regex_t / OnigRegion erased to void.
+ * --------------------------------------------------------------------- */
+
+#include "ruby/re.h"
+
+static const MrOnigApi *
+onig(void)
+{
+    static const MrOnigApi *t;
+    if (!t)
+        t = api->onig_api();
+    return t;
+}
+
+OnigPosition
+onig_search(OnigRegex reg, const OnigUChar *str, const OnigUChar *end,
+            const OnigUChar *start, const OnigUChar *range, OnigRegion *region,
+            OnigOptionType option)
+{
+    return onig()->search(reg, str, end, start, range, region, option);
+}
+
+OnigPosition
+onig_match(OnigRegex reg, const OnigUChar *str, const OnigUChar *end,
+           const OnigUChar *at, OnigRegion *region, OnigOptionType option)
+{
+    return onig()->match_at(reg, str, end, at, region, option);
+}
+
+OnigRegion *
+onig_region_new(void)
+{
+    return onig()->region_new();
+}
+
+void
+onig_region_init(OnigRegion *region)
+{
+    onig()->region_init(region);
+}
+
+void
+onig_region_free(OnigRegion *region, int free_self)
+{
+    onig()->region_free(region, free_self);
+}
+
+void
+onig_region_copy(OnigRegion *to, const OnigRegion *from)
+{
+    onig()->region_copy(to, from);
+}
+
+void
+onig_region_clear(OnigRegion *region)
+{
+    onig()->region_clear(region);
+}
+
+int
+onig_region_resize(OnigRegion *region, int n)
+{
+    return onig()->region_resize(region, n);
+}
+
+int
+onig_region_set(OnigRegion *region, int at, int beg, int end)
+{
+    return onig()->region_set(region, at, beg, end);
+}
+
+void
+onig_free(OnigRegex reg)
+{
+    onig()->free(reg);
+}
+
+int
+onig_name_to_backref_number(OnigRegex reg, const OnigUChar *name,
+                            const OnigUChar *name_end, const OnigRegion *region)
+{
+    return onig()->name_to_backref_number(reg, name, name_end, region);
+}
+
+int
+onig_foreach_name(OnigRegex reg,
+                  int (*func)(const OnigUChar *, const OnigUChar *, int, int *, OnigRegex, void *),
+                  void *arg)
+{
+    return onig()->foreach_name(reg, (int (*)(const uint8_t *, const uint8_t *, int, int *, void *, void *))func, arg);
+}
+
+int
+onig_number_of_names(const OnigRegexType *reg)
+{
+    return onig()->number_of_names(reg);
+}
+
+int
+onig_number_of_captures(const OnigRegexType *reg)
+{
+    return onig()->number_of_captures(reg);
+}
+
+int
+onig_number_of_capture_histories(const OnigRegexType *reg)
+{
+    return onig()->number_of_capture_histories(reg);
+}
+
+/* The optional OnigErrorInfo is ignored: only onig_new produces one, and
+ * an extension never compiles through this layer. */
+int
+onig_error_code_to_str(OnigUChar *s, OnigPosition err_code, ...)
+{
+    return onig()->error_code_to_str(s, err_code);
+}
+
+size_t
+onig_region_memsize(const OnigRegion *regs)
+{
+    size_t size = sizeof(*regs);
+    if (!regs->allocated)
+        return size;
+    size += regs->allocated * (sizeof(regs->beg[0]) + sizeof(regs->end[0]));
+    return size;
+}
+
+static regex_t *
+check_reg(void *p)
+{
+    if (!p)
+        capi_unwind();
+    return (regex_t *)p;
+}
+
+regex_t *
+rb_reg_ptr(VALUE re)
+{
+    return check_reg(api->regexp_ptr(ctx(), (MrValue)re));
+}
+
+VALUE
+rb_reg_source(VALUE re)
+{
+    return rb_funcall(re, rb_intern("source"), 0);
+}
+
+regex_t *
+rb_reg_prepare_re(VALUE re, VALUE str)
+{
+    return check_reg(api->regexp_prepare(ctx(), (MrValue)re, (MrValue)str));
+}
+
+OnigPosition
+rb_reg_onig_match(VALUE re, VALUE str,
+                  OnigPosition (*match)(regex_t *reg, VALUE str, struct re_registers *regs, void *args),
+                  void *args, struct re_registers *regs)
+{
+    regex_t *reg = rb_reg_prepare_re(re, str);
+    OnigPosition result = match(reg, str, regs, args);
+    if (result < 0) {
+        onig_region_free(regs, 0);
+        switch (result) {
+          case ONIG_MISMATCH:
+            break;
+          case ONIGERR_TIMEOUT:
+            rb_raise(rb_const_get(rb_cRegexp, rb_intern("TimeoutError")), "regexp match timeout");
+          default: {
+            OnigUChar err[ONIG_MAX_ERROR_MESSAGE_LEN] = "";
+            onig_error_code_to_str(err, result);
+            rb_raise(rb_eRegexpError, "%s: %s", (const char *)err, RSTRING_PTR(rb_funcall(re, rb_intern("source"), 0)));
+          }
+        }
+    }
+    return result;
+}
+
+int
+rb_reg_region_copy(struct re_registers *to, const struct re_registers *from)
+{
+    onig_region_copy(to, from);
+    if (to->allocated)
+        return 0;
+    rb_gc();
+    onig_region_copy(to, from);
+    if (to->allocated)
+        return 0;
+    return ONIGERR_MEMORY;
+}
+
+long
+rb_memsearch(const void *x0, long m, const void *y0, long n, struct rb_encoding *enc)
+{
+    const unsigned char *x = x0, *y = y0;
+    (void)enc;
+    if (m > n)
+        return -1;
+    if (m == n)
+        return memcmp(x0, y0, m) == 0 ? 0 : -1;
+    if (m < 1)
+        return 0;
+    if (m == 1) {
+        const unsigned char *ys = memchr(y, *x, n);
+        return ys ? ys - y : -1;
+    }
+    for (long i = 0; i + m <= n; i++) {
+        if (y[i] == x[0] && memcmp(y + i, x, m) == 0)
+            return i;
+    }
+    return -1;
+}
+
+VALUE
+rb_reg_regcomp(VALUE str)
+{
+    return rb_funcall(rb_cRegexp, rb_intern("new"), 1, str);
+}
+
+VALUE
+rb_reg_new_str(VALUE src, int options)
+{
+    return rb_funcall(rb_cRegexp, rb_intern("new"), 2, src, INT2FIX(options));
+}
+
+VALUE
+rb_reg_new(const char *src, long len, int options)
+{
+    return rb_reg_new_str(rb_str_new(src, len), options);
+}
+
+VALUE
+rb_reg_quote(VALUE str)
+{
+    return rb_funcall(rb_cRegexp, rb_intern("escape"), 1, str);
+}
+
+VALUE
+rb_reg_match(VALUE re, VALUE str)
+{
+    return rb_funcall(re, rb_intern("=~"), 1, str);
+}
+
+VALUE
+rb_reg_nth_match(int n, VALUE md)
+{
+    if (NIL_P(md))
+        return Qnil;
+    return rb_funcall(md, rb_intern("[]"), 1, INT2FIX(n));
+}
+
+VALUE
+rb_reg_last_match(VALUE md)
+{
+    return rb_reg_nth_match(0, md);
+}
+
+VALUE
+rb_reg_match_pre(VALUE md)
+{
+    if (NIL_P(md))
+        return Qnil;
+    return rb_funcall(md, rb_intern("pre_match"), 0);
+}
+
+VALUE
+rb_reg_match_post(VALUE md)
+{
+    if (NIL_P(md))
+        return Qnil;
+    return rb_funcall(md, rb_intern("post_match"), 0);
+}
+
+int
+rb_reg_options(VALUE re)
+{
+    return (int)NUM2INT(rb_funcall(re, rb_intern("options"), 0));
+}
+
+void
+rb_match_busy(VALUE md)
+{
+    (void)md;
+}
+
+int
+rb_long2int(long n)
+{
+    if ((long)(int)n != n)
+        rb_raise(rb_eRangeError, "integer %ld too big to convert to 'int'", n);
+    return (int)n;
+}
+
+void
+rb_deprecate_constant(VALUE mod, const char *name)
+{
+    rb_funcall(mod, rb_intern("deprecate_constant"), 1, ID2SYM(rb_intern(name)));
 }

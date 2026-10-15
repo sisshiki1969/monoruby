@@ -649,7 +649,272 @@ pub(crate) static MR_API: MrApi = MrApi {
     class_set_alloc: mr_class_set_alloc,
     native_take: mr_native_take,
     call_super: mr_call_super,
+    regexp_prepare: mr_regexp_prepare,
+    regexp_ptr: mr_regexp_ptr,
+    onig_api: mr_onig_api,
+    enc_precise_mbclen: mr_enc_precise_mbclen,
 };
+
+// ---- regexp (ruby/re.h) ----------------------------------------------
+
+/// The `regex_t`s handed to extensions, one per (pattern, options,
+/// codec), compiled by `onig_new` exactly as the engine behind the
+/// Regexp was and kept for the life of the process: an extension holds
+/// the pointer across calls (strscan keeps it with the scanner), and
+/// freeing one while a Regexp that produced it is collected would need
+/// a count the C side cannot keep. A process has few distinct patterns
+/// that reach a C extension.
+struct CapiRegex(*mut onigmo_regex::regex_t);
+// SAFETY: the pointer is only ever handed to Onigmo, which is thread
+// agnostic for a compiled pattern, and to extensions running under the
+// GVL.
+unsafe impl Send for CapiRegex {}
+unsafe impl Sync for CapiRegex {}
+
+static CAPI_REGEX_CACHE: std::sync::Mutex<
+    Option<HashMap<(Vec<u8>, u32, onigmo_regex::OnigmoEncoding), CapiRegex>>,
+> = std::sync::Mutex::new(None);
+
+/// The cached `regex_t` for `key`, compiled on first use.
+fn capi_regex(key: (Vec<u8>, u32, onigmo_regex::OnigmoEncoding)) -> Result<*mut c_void> {
+    let mut guard = CAPI_REGEX_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = guard.get_or_insert_with(HashMap::new);
+    if let Some(re) = cache.get(&key) {
+        return Ok(re.0 as *mut c_void);
+    }
+    let (pattern, option, enc) = &key;
+    let mut raw: *mut onigmo_regex::regex_t = std::ptr::null_mut();
+    let mut einfo = std::mem::MaybeUninit::<onigmo_regex::OnigErrorInfo>::uninit();
+    // SAFETY: the pattern bytes outlive the call; `raw` and `einfo` are
+    // out-parameters Onigmo fills; the syntax table is a static.
+    let r = unsafe {
+        onigmo_regex::onig_new(
+            &mut raw,
+            pattern.as_ptr(),
+            pattern.as_ptr().add(pattern.len()),
+            *option,
+            enc.as_type(),
+            &raw const onigmo_regex::OnigSyntaxRuby,
+            einfo.as_mut_ptr(),
+        )
+    };
+    if r != onigmo_regex::ONIG_NORMAL as c_int {
+        let mut buf = [0u8; onigmo_regex::ONIG_MAX_ERROR_MESSAGE_LEN as usize];
+        // SAFETY: `buf` is the length Onigmo documents for the message.
+        let len = unsafe {
+            onigmo_regex::onig_error_code_to_str(buf.as_mut_ptr(), r as isize, einfo.as_mut_ptr())
+        } as usize;
+        let msg = String::from_utf8_lossy(&buf[..len.min(buf.len())]).into_owned();
+        return Err(MonorubyErr::regexerr(msg));
+    }
+    cache.insert(key, CapiRegex(raw));
+    Ok(raw as *mut c_void)
+}
+
+unsafe extern "C" fn mr_regexp_prepare(ctx: *mut MrContext, re: MrValue, str: MrValue) -> *mut c_void {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let (Some(re), Some(str)) = (val(re), val(str)) else {
+        return std::ptr::null_mut();
+    };
+    if re.is_regex().is_none() {
+        set_err(vm, MonorubyErr::wrong_argument_type(&globals.store, re, "Regexp"));
+        return std::ptr::null_mut();
+    }
+    if str.try_rvalue().is_none_or(|rv| rv.ty() != ObjTy::STRING) {
+        set_err(vm, MonorubyErr::no_implicit_conversion(&globals.store, str, STRING_CLASS));
+        return std::ptr::null_mut();
+    }
+    let key = match re.as_regexp_inner().capi_compile_key(&globals.store, str.as_rstring_inner()) {
+        Ok(key) => key,
+        Err(err) => {
+            set_err(vm, err);
+            return std::ptr::null_mut();
+        }
+    };
+    match capi_regex(key) {
+        Ok(p) => p,
+        Err(err) => {
+            set_err(vm, err);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+unsafe extern "C" fn mr_regexp_ptr(ctx: *mut MrContext, re: MrValue) -> *mut c_void {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(re) = val(re) else {
+        return std::ptr::null_mut();
+    };
+    if re.is_regex().is_none() {
+        set_err(vm, MonorubyErr::wrong_argument_type(&globals.store, re, "Regexp"));
+        return std::ptr::null_mut();
+    }
+    match capi_regex(re.as_regexp_inner().capi_engine_key()) {
+        Ok(p) => p,
+        Err(err) => {
+            set_err(vm, err);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+// The Onigmo entry points with their types erased to what the table
+// declares. Each is a cast and a call.
+/// `rb_enc_precise_mbclen` over monoruby's own encoding walkers, in
+/// Onigmo's answer encoding (`ONIGENC_MBCLEN_*`).
+unsafe extern "C" fn mr_enc_precise_mbclen(
+    _: *mut MrContext,
+    name: *const c_char,
+    p: *const u8,
+    e: *const u8,
+) -> c_int {
+    use crate::value::PreciseLen;
+    if p >= e {
+        return -1 - 1;
+    }
+    // SAFETY: the table's contract: `name` is a C string, `p..e` a
+    // readable byte range.
+    let (name, bytes) = unsafe {
+        (
+            CStr::from_ptr(name).to_string_lossy(),
+            std::slice::from_raw_parts(p, e.offset_from(p) as usize),
+        )
+    };
+    let Ok(enc) = Encoding::try_from_str(&name) else {
+        return 1;
+    };
+    match crate::value::precise_mbclen(enc, bytes, 0) {
+        PreciseLen::Char(n) => n as c_int,
+        PreciseLen::NeedMore => -1 - 1,
+        PreciseLen::Invalid => -1,
+    }
+}
+
+mod onig_shim {
+    use super::*;
+    use onigmo_regex as o;
+    type Reg = *mut o::regex_t;
+    type Region = *mut o::OnigRegion;
+
+    pub(super) unsafe extern "C" fn search(
+        reg: *mut c_void,
+        str: *const u8,
+        end: *const u8,
+        start: *const u8,
+        range: *const u8,
+        region: *mut c_void,
+        option: u32,
+    ) -> isize {
+        // SAFETY: the extension's contract, as for a direct Onigmo call.
+        unsafe { o::onig_search(reg as Reg, str, end, start, range, region as Region, option) }
+    }
+    pub(super) unsafe extern "C" fn match_at(
+        reg: *mut c_void,
+        str: *const u8,
+        end: *const u8,
+        at: *const u8,
+        region: *mut c_void,
+        option: u32,
+    ) -> isize {
+        // SAFETY: as above.
+        unsafe { o::onig_match(reg as Reg, str, end, at, region as Region, option) }
+    }
+    pub(super) unsafe extern "C" fn region_new() -> *mut c_void {
+        // SAFETY: as above.
+        unsafe { o::onig_region_new() as *mut c_void }
+    }
+    pub(super) unsafe extern "C" fn region_init(region: *mut c_void) {
+        // SAFETY: as above.
+        unsafe { o::onig_region_init(region as Region) }
+    }
+    pub(super) unsafe extern "C" fn region_free(region: *mut c_void, free_self: c_int) {
+        // SAFETY: as above.
+        unsafe { o::onig_region_free(region as Region, free_self) }
+    }
+    pub(super) unsafe extern "C" fn region_clear(region: *mut c_void) {
+        // SAFETY: as above.
+        unsafe { o::onig_region_clear(region as Region) }
+    }
+    pub(super) unsafe extern "C" fn region_copy(to: *mut c_void, from: *const c_void) {
+        // SAFETY: as above.
+        unsafe { o::onig_region_copy(to as Region, from as *const o::OnigRegion) }
+    }
+    pub(super) unsafe extern "C" fn region_resize(region: *mut c_void, n: c_int) -> c_int {
+        // SAFETY: as above.
+        unsafe { o::onig_region_resize(region as Region, n) }
+    }
+    pub(super) unsafe extern "C" fn region_set(region: *mut c_void, at: c_int, beg: c_int, end: c_int) -> c_int {
+        // SAFETY: as above.
+        unsafe { o::onig_region_set(region as Region, at, beg, end) }
+    }
+    pub(super) unsafe extern "C" fn free(reg: *mut c_void) {
+        // SAFETY: as above.
+        unsafe { o::onig_free(reg as Reg) }
+    }
+    pub(super) unsafe extern "C" fn name_to_backref_number(
+        reg: *mut c_void,
+        name: *const u8,
+        name_end: *const u8,
+        region: *const c_void,
+    ) -> c_int {
+        // SAFETY: as above.
+        unsafe { o::onig_name_to_backref_number(reg as Reg, name, name_end, region as *const o::OnigRegion) }
+    }
+    pub(super) unsafe extern "C" fn foreach_name(
+        reg: *mut c_void,
+        func: unsafe extern "C" fn(*const u8, *const u8, c_int, *mut c_int, *mut c_void, *mut c_void) -> c_int,
+        arg: *mut c_void,
+    ) -> c_int {
+        // SAFETY: the callback's fifth argument is the `regex_t *` in
+        // both signatures; only the pointee type differs.
+        let func: unsafe extern "C" fn(*const u8, *const u8, c_int, *mut c_int, Reg, *mut c_void) -> c_int =
+            unsafe { std::mem::transmute(func) };
+        // SAFETY: as above.
+        unsafe { o::onig_foreach_name(reg as Reg, Some(func), arg) }
+    }
+    pub(super) unsafe extern "C" fn number_of_names(reg: *const c_void) -> c_int {
+        // SAFETY: as above.
+        unsafe { o::onig_number_of_names(reg as *const o::regex_t) }
+    }
+    pub(super) unsafe extern "C" fn number_of_captures(reg: *const c_void) -> c_int {
+        // SAFETY: as above.
+        unsafe { o::onig_number_of_captures(reg as *const o::regex_t) }
+    }
+    pub(super) unsafe extern "C" fn number_of_capture_histories(reg: *const c_void) -> c_int {
+        // SAFETY: as above.
+        unsafe { o::onig_number_of_capture_histories(reg as *const o::regex_t) }
+    }
+    pub(super) unsafe extern "C" fn error_code_to_str(buf: *mut u8, code: isize) -> c_int {
+        // SAFETY: `buf` is ONIG_MAX_ERROR_MESSAGE_LEN bytes by the
+        // extension's contract; no `OnigErrorInfo` follows.
+        unsafe { o::onig_error_code_to_str(buf, code) }
+    }
+}
+
+static MR_ONIG_API: MrOnigApi = MrOnigApi {
+    search: onig_shim::search,
+    match_at: onig_shim::match_at,
+    region_new: onig_shim::region_new,
+    region_init: onig_shim::region_init,
+    region_free: onig_shim::region_free,
+    region_clear: onig_shim::region_clear,
+    region_copy: onig_shim::region_copy,
+    region_resize: onig_shim::region_resize,
+    region_set: onig_shim::region_set,
+    free: onig_shim::free,
+    name_to_backref_number: onig_shim::name_to_backref_number,
+    foreach_name: onig_shim::foreach_name,
+    number_of_names: onig_shim::number_of_names,
+    number_of_captures: onig_shim::number_of_captures,
+    number_of_capture_histories: onig_shim::number_of_capture_histories,
+    error_code_to_str: onig_shim::error_code_to_str,
+};
+
+unsafe extern "C" fn mr_onig_api() -> *const MrOnigApi {
+    &MR_ONIG_API
+}
 
 // ---- errors ----------------------------------------------------------
 
@@ -1758,6 +2023,45 @@ unsafe extern "C" fn mr_call_super(
         Err(e) => {
             set_err(vm, e);
             MR_UNDEF
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The compile failure of `capi_regex`: unreachable from an
+    /// extension (the pattern was compiled by monoruby before it is
+    /// re-targeted at a codec `check_match_encoding` allowed), so the
+    /// message path is exercised here.
+    #[test]
+    fn capi_regex_reports_onig_new_failure() {
+        let err = capi_regex((b"(".to_vec(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap_err();
+        assert_eq!(err.message(), "end pattern with unmatched parenthesis");
+        let ok = capi_regex((b"a+".to_vec(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap();
+        assert!(!ok.is_null());
+        // Cached: the same key answers the same `regex_t`.
+        assert_eq!(ok, capi_regex((b"a+".to_vec(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap());
+    }
+
+    #[test]
+    fn enc_precise_mbclen_edges() {
+        let bytes = "\u{3042}".as_bytes();
+        let p = bytes.as_ptr();
+        // SAFETY: `p..p+n` is inside `bytes`; the context is unused.
+        unsafe {
+            let e = p.add(bytes.len());
+            let ctx = std::ptr::null_mut();
+            assert_eq!(mr_enc_precise_mbclen(ctx, c"UTF-8".as_ptr(), p, e), 3);
+            // A truncated character wants more bytes; an empty range too.
+            assert_eq!(mr_enc_precise_mbclen(ctx, c"UTF-8".as_ptr(), p, p.add(1)), -2);
+            assert_eq!(mr_enc_precise_mbclen(ctx, c"UTF-8".as_ptr(), p, p), -2);
+            // A high byte alone is invalid in UTF-8 and one character in BINARY.
+            assert_eq!(mr_enc_precise_mbclen(ctx, c"UTF-8".as_ptr(), p.add(1), e), -1);
+            assert_eq!(mr_enc_precise_mbclen(ctx, c"ASCII-8BIT".as_ptr(), p.add(1), e), 1);
+            // An encoding name monoruby does not know counts bytes.
+            assert_eq!(mr_enc_precise_mbclen(ctx, c"NO-SUCH-ENCODING".as_ptr(), p, e), 1);
         }
     }
 }
