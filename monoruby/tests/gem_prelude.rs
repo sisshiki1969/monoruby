@@ -183,6 +183,9 @@ end
         "MRBFAKE = :loaded\n",
     )
     .unwrap();
+    // rubygems realpaths every `Gem.path` entry (`Gem::PathSupport#expand`),
+    // and macOS's temp dir sits behind the `/var` -> `/private/var` symlink.
+    let host = host.canonicalize().unwrap();
     let host_s = host.to_str().unwrap();
     let cases = [
         // Cleared before rubygems boots, as the harness does.
