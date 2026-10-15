@@ -626,3 +626,306 @@ fn elided_argument_live_across_a_dispatch_that_branches() {
         "#,
     );
 }
+
+// ---- Hash literals (`doc/escape_analysis.md` §7) ----
+
+#[test]
+fn hash_template_folds_and_transparent_callees() {
+    // A Hash literal of immediates is a template: a lookup by a constant
+    // key it holds is folded, `size` / `empty?` / `key?` by a constant key
+    // are constants, and every other use that lets no receiver escape runs
+    // on the template itself.
+    run_test(
+        r#"
+        def f(m, x)
+          [{a: 1, b: 2}[:a], {a: 1, b: 2}[:zz], {a: 1, b: 2}.fetch(:b),
+           {a: 1, b: 2}.fetch(:zz, x), {a: 1}.fetch(:a, x), {a: 1, b: 2}.key?(:a),
+           {a: 1}.key?(:zz), {a: 1, b: 2}.size, {a: 1, b: 2, a: 3}.length,
+           {a: 1}.empty?, {}.empty?, {}.size, {1 => :one, 2.5 => :f}[1],
+           {1 => :one, 2.5 => :f}[2.5], {nil => 0, true => 1}[true],
+           {get: 1, head: 2}[m], {get: 1, head: 2}.key?(m), {get: 1, head: 2}.fetch(m, 0),
+           {get: 1, head: 2}.include?(m), {get: 1, head: 2}.has_key?(:get),
+           {get: 1, head: 2}.member?(:post), {a: 1, b: 2}.dig(m),
+           {a: 1, b: 2}.values_at(m, :a), {a: 1, b: 2}.merge({c: 3}),
+           {a: 1, b: 2}.keys, {a: 1, b: 2}.values, {a: 1, b: 2}.invert,
+           {b: 1, a: 2}.sort, {a: 1, b: 2}.inspect, {a: 1}.to_s, {a: 1} == {a: 1},
+           {a: 1}.eql?({a: 1}), {a: 1}.hash == {a: 1}.hash, {a: 1, b: 2}.key(2),
+           {a: 1, b: 2}.assoc(:b), {a: 1, b: 2}.rassoc(1), {a: 1, b: 2}.any?,
+           {}.any?, {a: 1, b: 2}.all?, {a: 1, b: 2}.count, {a: 1, b: nil}.compact,
+           {a: 1, b: 2}.slice(:a), {a: 1, b: 2}.except(:a), {a: 1, b: 2}.fetch_values(:a),
+           {a: 1, b: 2}.has_value?(x), {a: 1, b: 2}.value?(2), {a: {b: 2}}.dig(:a, :b),
+           {a: 1, b: 2}.flatten, {a: 1} < {a: 1, b: 2}, {a: 1, b: 2} >= {a: 1}]
+        end
+        r = nil
+        20.times { |i| r = f(i.odd? ? :get : :head, i) }
+        r + f(:post, 1) + f(:a, 2)
+        "#,
+    );
+}
+
+#[test]
+fn hash_template_results_do_not_share_the_template() {
+    // What a transparent callee returns is fresh, and a use the summary
+    // does not cover (a mutation, an identity, an iteration, a local) sees
+    // a fresh copy of the literal every time — the template itself is
+    // never mutated.
+    run_test(
+        r#"
+        def f(i)
+          a = {a: 1, b: 2}.merge({c: i})
+          a[:d] = i
+          b = {a: 1, b: 2}.keys
+          b << :z
+          c = {a: 1, b: 2}
+          c[:x] = i
+          d = {a: 1, b: 2}.delete(:a)
+          e = {a: 1}.merge!({b: i})
+          g = {a: 1}.equal?({a: 1})
+          h = {a: 1, b: 2}.each { |k, v| }
+          j = {a: 1, b: 2}.to_a
+          k = {a: 1}.freeze.frozen?
+          l = {a: 1, b: 2}.map { |k, v| v }
+          m = {a: 1, b: 2}.select { |k, v| v > 1 }
+          n = {a: 1}.each_with_object([]) { |kv, acc| acc << kv }
+          [a, b, c, d, e, g, h, j, k, l, m, n, {a: 1, b: 2}.size]
+        end
+        r = nil
+        20.times { |i| r = f(i) }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn hash_template_with_strings_or_heap_values_is_copied() {
+    // Keys or values that are not immediates (a String key, an Array
+    // value) take the literal off the template path: a mutation through
+    // the value must not reach the next evaluation.
+    run_test(
+        r#"
+        def f(i)
+          v = {a: [1, 2]}[:a]
+          v << i
+          w = {"k" => 1, :s => 2}.size
+          x = {"k" => i}["k"]
+          y = {a: "str"}.fetch(:a)
+          y << "!"
+          [v, w, x, y]
+        end
+        r = nil
+        20.times { |i| r = f(i) }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn hash_redefinition_after_compile_allocates_again() {
+    // The folds and the template hand-over are guarded by the class
+    // version: once `Hash#[]` / `#key?` / `#size` are redefined, each call
+    // sees a real, fresh Hash — which the redefinitions return and mutate.
+    run_test_once(
+        r#"
+        def f(i)
+          v = {a: 1, b: 2}[:a]
+          v[:n] = i if v.is_a?(Hash)
+          w = {a: 1}.key?(:a)
+          w[:m] = i if w.is_a?(Hash)
+          x = {a: 1, b: 2}.size
+          [v, w, x]
+        end
+        res = []
+        40.times do |i|
+          if i == 30
+            class Hash
+              def [](k) = self
+              def key?(k) = self
+              def size = 99
+            end
+          end
+          res << f(i)
+        end
+        res.last(12) + [{a: 1}[:a], {b: 1}.key?(:b)]
+        "#,
+    );
+}
+
+#[test]
+fn side_exit_with_an_elided_hash_pending() {
+    // A type guard between the literal and its use deopts with the
+    // template still elided; the side exit has to copy it.
+    run_test_once(
+        r#"
+        def f(a, m)
+          {a: 1, b: 2}[:a] + a * 2 + {get: 1, head: 2}.fetch(m, 0)
+        end
+        res = []
+        30.times { |i| res << f(i, :get) }
+        res << f(2.5, :head)
+        res << f("z".size, :post)
+        res
+        "#,
+    );
+}
+
+#[test]
+fn hash_template_handed_into_a_specialized_callee() {
+    // A template passed as an argument stays elided in the callee, whose
+    // folds and transparent uses apply there too.
+    run_test(
+        r#"
+        def lookup(h, k) = h[k]
+        def has(h) = h.key?(:x)
+        def sz(h) = h.size + (h.empty? ? 10 : 0)
+        def esc(h) = h
+        def f(i)
+          [lookup({x: 1, y: 2}, :y), lookup({x: 1, y: 2}, i.odd? ? :x : :zz),
+           has({x: 1}), has({z: 1}), sz({x: 1, y: 2}), sz({}), esc({x: i}).size]
+        end
+        r = nil
+        20.times { |i| r = f(i) }
+        r
+        "#,
+    );
+}
+
+// ---- `**kwrest` handed over (`doc/escape_analysis.md` §7) ----
+
+#[test]
+fn kwrest_elided_in_specialized_callee() {
+    // The literal keywords a specialized callee declares no parameter for
+    // stay in the caller's kw window: the callee's `**kwrest` is an elided
+    // object, and a lookup by a constant key reads the caller's slot.
+    run_test(
+        r#"
+        def f(a, **opts) = a + opts[:x] + opts.fetch(:y, 10) + (opts.key?(:z) ? 100 : 0) + opts.size * 1000
+        def g(**opts) = opts.empty? ? -1 : opts.fetch(:k)
+        def h(a, x: 1, **opts) = a + x + opts[:z]
+        def w(i)
+          [f(i, x: 1), f(i, x: 2, y: 3), f(i, z: 0, x: 4), f(i, y: 1, x: 2, z: 3),
+           g, g(k: i), h(i, z: 5), h(i, x: 7, z: 5), f(i, x: i, y: i * 2.5)]
+        end
+        r = nil
+        20.times { |i| r = w(i) }
+        r + w(1.5)
+        "#,
+    );
+}
+
+#[test]
+fn kwrest_escaping_uses_see_a_real_hash() {
+    // Every use the folds do not cover materializes the Hash — once — and
+    // the caller's window is left alone.
+    run_test(
+        r#"
+        def ret(**opts) = opts
+        def merge(**opts) = opts.merge(y: 2)
+        def each(**opts) = opts.map { |k, v| [k, v] }
+        def pass(**opts) = inner(opts)
+        def inner(h) = h[:x]
+        def splat(**opts) = inner2(**opts)
+        def inner2(x: 0, **rest) = x + rest.size
+        def fold_then_escape(**opts)
+          v = opts[:x]
+          [v, opts]
+        end
+        def mutate(**opts)
+          opts[:added] = 1
+          opts
+        end
+        def var_key(k, **opts) = opts[k]
+        def w(i)
+          [ret(x: i), ret, merge(x: i), each(x: i, z: 2), pass(x: i), splat(x: i, q: 1),
+           fold_then_escape(x: i, y: 1), mutate(x: i), var_key(:a, a: i, b: 2),
+           var_key(:c, a: i, b: 2)]
+        end
+        r = nil
+        20.times { |i| r = w(i) }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn kwrest_duplicate_keys_and_heap_values() {
+    // A key written twice holds the later value; heap values survive a
+    // GC run while the Hash is still elided (they are in the caller's
+    // spilled window).
+    run_test(
+        r#"
+        def f(**opts)
+          GC.start
+          opts[:x] + opts.fetch(:y).size
+        end
+        def w(i) = f(x: i, y: "a" * i, x: i + 1)
+        r = nil
+        20.times { |i| r = w(i) }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn deopt_inside_a_callee_with_an_elided_kwrest_pending() {
+    // A class-version guard fails inside `f` while its `**kwrest` is still
+    // elided: the side exit rebuilds the Hash from the caller's window and
+    // the interpreter resumes with it. Then a chain deopt: `f` suspended in
+    // a framed callee that deopts, its `**kwrest` pending.
+    run_test_once(
+        r#"
+        def helper(x) = x + 1
+        def f(a, **opts)
+          y = helper(a)
+          opts[:x] + opts.size + y
+        end
+        res = []
+        30.times { |i| res << f(i, x: 2) }
+        def helper(x) = x + 100
+        res << f(1, x: 2)
+        30.times { |i| res << f(i, x: 2, y: 1) }
+        res.last(4)
+        "#,
+    );
+    run_test_once(
+        r#"
+        def helper(x) = x.to_s.size + x
+        def t(a, **opts)
+          y = helper(a)
+          opts[:x] + y
+        end
+        def w(i) = t(i, x: 3)
+        res = []
+        30.times { |i| res << w(i) }
+        res << w(1.5)
+        30.times { |i| res << w(i) }
+        res.last(3)
+        "#,
+    );
+}
+
+#[test]
+fn kwrest_with_a_splat_or_block_is_built() {
+    // A `**hash` splat at the call site and a forwarding trampoline (whose
+    // keywords K1 routes) take the ordinary path; a callee that captures
+    // its frame (`binding`, `eval`) materializes the object before the
+    // capturing call, the `*rest` kind included.
+    run_test(
+        r#"
+        def f(**opts) = opts[:x].to_s + opts.size.to_s
+        def cap(**opts) = binding.local_variable_get(:opts)[:x]
+        def cap_rest(*args) = binding.local_variable_get(:args).size
+        def ev(**opts) = eval("opts")[:x]
+        def blk(**opts) = [1].map { |v| v + opts[:x] }
+        def fwd(...) = tgt(...)
+        def tgt(a, x: 0, **rest) = a + x + rest.size
+        def w(i)
+          h = {x: i, q: 1}
+          [f(**h), f(x: i, **h), cap(x: i), cap_rest(i, 2), ev(x: i), blk(x: i),
+           fwd(i, x: 1, z: 2), fwd(i)]
+        end
+        r = nil
+        20.times { |i| r = w(i) }
+        r
+        "#,
+    );
+}

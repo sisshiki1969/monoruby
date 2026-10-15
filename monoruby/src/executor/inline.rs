@@ -56,7 +56,7 @@ pub(crate) struct RecvEscape {
     ///
     /// An allocation-free lowering of the call (argument-less unless the op
     /// says otherwise, block-less) over the elements of a literal kept in
-    /// frame slots (`[a, b].max`).
+    /// frame slots (`[a, b].max`) or of a literal template (`{a: 1}.size`).
     ///
     pub elements: Option<ElementsOp>,
 }
@@ -86,7 +86,8 @@ pub(crate) enum ElementsOp {
     Min,
     /// `max` — likewise (`runtime::opt_array_max`).
     Max,
-    /// `size` / `length` — the literal's length, a constant.
+    /// `size` / `length` — the literal's length (a Hash's distinct keys),
+    /// a constant.
     Size,
     /// `empty?` — a constant.
     Empty,
@@ -94,6 +95,15 @@ pub(crate) enum ElementsOp {
     First,
     /// `last` — the last element (or nil).
     Last,
+    /// `Hash#[]` — the value of a compile-time constant key, when the
+    /// key is present; absent, the call is not folded (`default` would
+    /// be dispatched).
+    HashIndex,
+    /// `Hash#fetch` — likewise, for the one-argument form on a present
+    /// key.
+    HashFetch,
+    /// `Hash#key?` and its aliases — a constant, for a constant key.
+    HashHasKey,
 }
 
 #[derive(Default)]

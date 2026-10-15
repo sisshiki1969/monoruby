@@ -1448,12 +1448,32 @@ impl Codegen {
     /// constant area sits behind the whole unit, so a call site early in a
     /// large one could not name its own table (`Codegen::far_branch_mode` is
     /// the same reach, for branches). An absolute address has no range.
-    pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, table: DestLabel) {
+    pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, table: DestLabel, base: SlotBase) {
         let data = self.jit.get_label_address(&table).as_ptr() as u64;
         let f = runtime::correct_rest_kw as *const () as u64;
+        // x1 = the lfp of the frame `base` names (the caller's
+        // `fp - RBP_LOCAL_FRAME` for a handed-over `**kwrest`,
+        // `VirtualSrc::CallerKw`).
+        match base {
+            SlotBase::Own => {
+                monoasm_arm64!(&mut self.jit, mov x1, x22;);
+            }
+            SlotBase::SavedFp => {
+                monoasm_arm64!(&mut self.jit,
+                    ldr x1, [x29];
+                    mov x9, (RBP_LOCAL_FRAME as u64);
+                    sub x1, x1, x9;
+                );
+            }
+            SlotBase::Window(delta) => {
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, (delta as u64);
+                    add x1, x22, x9;
+                );
+            }
+        }
         monoasm_arm64!(&mut self.jit,
             mov x0, (data);        // &table
-            mov x1, x22;           // lfp (R14)
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;                // x0 = kwrest Hash

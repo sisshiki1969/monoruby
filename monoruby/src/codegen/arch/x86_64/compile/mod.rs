@@ -312,11 +312,30 @@ impl Codegen {
     }
 
     /// `**kwrest` fixup: build a const table of (name, slot) pairs and call
-    /// `correct_rest_kw(&table, lfp) -> kwrest Hash`.
-    pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, table: DestLabel) {
+    /// `correct_rest_kw(&table, lfp) -> kwrest Hash`, `lfp` being the frame
+    /// `base` names (the caller's `lfp == rbp - RBP_LOCAL_FRAME` for a
+    /// handed-over `**kwrest`, `VirtualSrc::CallerKw`).
+    pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, table: DestLabel, base: SlotBase) {
+        match base {
+            SlotBase::Own => {
+                monoasm!( &mut self.jit,
+                    movq rsi, r14;
+                );
+            }
+            SlotBase::SavedFp => {
+                monoasm!( &mut self.jit,
+                    movq rsi, [rbp];
+                    subq rsi, (RBP_LOCAL_FRAME);
+                );
+            }
+            SlotBase::Window(delta) => {
+                monoasm!( &mut self.jit,
+                    lea  rsi, [r14 + (delta)];
+                );
+            }
+        }
         monoasm!( &mut self.jit,
             lea  rdi, [rip + table];
-            movq rsi, r14;
             movq rax, (runtime::correct_rest_kw);
             call rax;
         );

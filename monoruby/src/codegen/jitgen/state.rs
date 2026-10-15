@@ -594,6 +594,12 @@ pub(crate) struct AbstractFrame {
     /// rest `Array` is an elided object, `VirtualSrc::CallerSlots`, in
     /// the slot state.)
     deferred_forward: Option<DeferredForward>,
+    /// The `**kwrest` table of a specialized callee
+    /// (`JitContext::caller_kw_table`), fixed for the compile unit like
+    /// `deferred_forward`. Meaningful while the kwrest parameter holds
+    /// an elided object (`VirtualSrc::CallerKw`): what its folds read,
+    /// and what a side exit's `forward_kwrest` entry rebuilds from.
+    caller_kw: Option<(SlotId, Box<[(IdentId, SlotId)]>)>,
     /// Chain-relative distance to this frame's *lexical* parent within
     /// the state chain (`None` for a method / the chain root) — the
     /// state-side twin of `JitStackFrame::outer`, set when the frame
@@ -676,6 +682,7 @@ impl AbstractFrame {
                     next_sp,
                     invariants: Invariants::new_entry(cc),
                     deferred_forward: cc.forward_kw_deferral(),
+                    caller_kw: cc.caller_kw_table(),
                     lexical_outer: None,
                 }
             }
@@ -685,6 +692,7 @@ impl AbstractFrame {
                 next_sp,
                 invariants: Invariants::new_loop(),
                 deferred_forward: None,
+                caller_kw: None,
                 lexical_outer: None,
             },
             JitType::Specialized { .. } => {
@@ -695,6 +703,7 @@ impl AbstractFrame {
                     next_sp,
                     invariants: Invariants::new_specialized(cc),
                     deferred_forward: cc.forward_kw_deferral(),
+                    caller_kw: cc.caller_kw_table(),
                     lexical_outer: None,
                 }
             }
@@ -716,6 +725,7 @@ impl AbstractFrame {
             && self.next_sp == other.next_sp
             && self.invariants == other.invariants
             && self.deferred_forward == other.deferred_forward
+            && self.caller_kw == other.caller_kw
             && self.lexical_outer == other.lexical_outer
             && self.slot_state.memo_eq(&other.slot_state)
     }
@@ -744,6 +754,14 @@ impl AbstractFrame {
     /// skip (`set_kw_vetoed`).
     pub(in crate::codegen::jitgen) fn deferred_forward_info(&self) -> Option<&DeferredForward> {
         self.deferred_forward.as_ref()
+    }
+
+    /// The `**kwrest` table of this specialized callee
+    /// (`JitContext::caller_kw_table`).
+    pub(in crate::codegen::jitgen) fn caller_kw_table(
+        &self,
+    ) -> Option<&(SlotId, Box<[(IdentId, SlotId)]>)> {
+        self.caller_kw.as_ref()
     }
 
     pub(super) fn set_lexical_outer(&mut self, link: Option<usize>) {

@@ -1327,6 +1327,7 @@ pub(in crate::codegen) enum LInst {
     Unreachable,
     RestKw {
         table: DestLabel,
+        base: SlotBase,
     },
     GuardClassVersion {
         class_version: DestLabel,

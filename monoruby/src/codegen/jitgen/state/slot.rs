@@ -889,9 +889,9 @@ impl SlotState {
     /// dead in the bytecode (above the stack top) but must keep its value
     /// until the Array is materialized or consumed.
     pub(in crate::codegen::jitgen) fn is_virtual_src(&self, slot: SlotId) -> bool {
-        self.virtuals.iter().any(|(_, src)| match src {
-            VirtualSrc::Slots { src, len, .. } => (src.0..src.0 + len).contains(&slot.0),
-            VirtualSrc::Literal(_) | VirtualSrc::CallerSlots { .. } => false,
+        self.virtuals.iter().any(|(_, src)| match src.own_elements() {
+            Some((src, len)) => (src.0..src.0 + len).contains(&slot.0),
+            None => false,
         })
     }
 
@@ -1484,7 +1484,7 @@ impl SlotState {
         self.is_used_mut(slot).read();
     }
 
-    pub(super) fn use_as_value(&mut self, slot: SlotId) {
+    pub(in crate::codegen::jitgen) fn use_as_value(&mut self, slot: SlotId) {
         self.is_used_mut(slot).use_as_non_float();
     }
 
@@ -2439,7 +2439,8 @@ impl AbstractFrame {
     /// K1: the deferred `**kwrest` materialization entries —
     /// `(f's kwrest local, [(name, caller slot)])`.
     fn wb_forward_kwrest(&self) -> Vec<(SlotId, Box<[(IdentId, SlotId)]>)> {
-        self.deferred_forward
+        let mut entries: Vec<_> = self
+            .deferred_forward
             .iter()
             .filter_map(|df| {
                 let (dst, kw_pos, names) = df.kw.as_ref()?;
@@ -2450,7 +2451,16 @@ impl AbstractFrame {
                     .collect();
                 Some((*dst, table))
             })
-            .collect()
+            .collect();
+        // A `**kwrest` parameter handed over elided (`VirtualSrc::CallerKw`,
+        // `doc/escape_analysis.md`) is rebuilt the same way, from the
+        // frame's table.
+        if let Some((dst, table)) = &self.caller_kw
+            && matches!(self.virtual_at(*dst), Some(VirtualSrc::CallerKw { .. }))
+        {
+            entries.push((*dst, table.clone()));
+        }
+        entries
     }
 
     pub(super) fn get_gc_write_back(&self) -> WriteBack {
@@ -2579,7 +2589,13 @@ impl AbstractFrame {
     }
 
     fn wb_virtual(&self) -> Vec<(SlotId, VirtualSrc)> {
-        self.virtuals.clone()
+        // A handed-over `**kwrest` goes as a `forward_kwrest` entry
+        // (`AbstractFrame::wb_forward_kwrest`).
+        self.virtuals
+            .iter()
+            .filter(|(_, src)| !matches!(src, VirtualSrc::CallerKw { .. }))
+            .copied()
+            .collect()
     }
 
     pub(super) fn wb_void(&self) -> Vec<SlotId> {
@@ -2843,10 +2859,11 @@ impl LinkMode {
         callid: CallSiteId,
         state: &AbstractState,
         handover: Option<SlotBase>,
+        kwrest_elided: bool,
     ) -> (Vec<Self>, Vec<(SlotId, VirtualSrc)>) {
         let CallSiteInfo { recv, .. } = &store[callid];
         let recv = state.mode(*recv);
-        Self::from_caller_inner(store, fid, callid, state, recv, handover)
+        Self::from_caller_inner(store, fid, callid, state, recv, handover, kwrest_elided)
     }
 
     pub(in crate::codegen::jitgen) fn from_caller_yield(
@@ -2857,7 +2874,7 @@ impl LinkMode {
         self_class: ClassId,
     ) -> Vec<Self> {
         let recv = LinkMode::S(Guarded::Class(self_class));
-        Self::from_caller_inner(store, fid, callid, state, recv, None).0
+        Self::from_caller_inner(store, fid, callid, state, recv, None, false).0
     }
 
     fn from_caller_inner(
@@ -2867,6 +2884,10 @@ impl LinkMode {
         state: &AbstractState,
         recv: LinkMode,
         handover: Option<SlotBase>,
+        // The callee's `**kwrest` is handed over elided too
+        // (`VirtualSrc::CallerKw`): its Hash is not built, the caller's kw
+        // window stays where it is.
+        kwrest_elided: bool,
     ) -> (Vec<Self>, Vec<(SlotId, VirtualSrc)>) {
         let kw_args = store[callid].kw_args();
         let CallSiteInfo {
@@ -2892,7 +2913,7 @@ impl LinkMode {
                             VirtualSrc::CallerSlots { src, len, base }
                         }
                         VirtualSrc::Literal(v) => VirtualSrc::Literal(v),
-                        VirtualSrc::CallerSlots { .. } => {
+                        VirtualSrc::CallerSlots { .. } | VirtualSrc::CallerKw { .. } => {
                             unreachable!("an object of the caller's caller is never handed over")
                         }
                     };
@@ -2951,7 +2972,18 @@ impl LinkMode {
             }
         }
         if info.kw_rest().is_some() {
-            slots.push(Self::S(Guarded::Class(HASH_CLASS)));
+            if kwrest_elided {
+                let Some(base) = handover else {
+                    unreachable!("elided kwrest handed over without a base")
+                };
+                virtuals.push((
+                    SlotId(slots.len() as u16),
+                    VirtualSrc::CallerKw { callid, base },
+                ));
+                slots.push(Self::V);
+            } else {
+                slots.push(Self::S(Guarded::Class(HASH_CLASS)));
+            }
         }
         (slots, virtuals)
     }

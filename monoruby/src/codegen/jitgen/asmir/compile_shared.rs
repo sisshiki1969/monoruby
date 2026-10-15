@@ -1871,8 +1871,9 @@ impl Codegen {
             // `**kwrest` fixup: call `correct_rest_kw(&table, lfp)`, which
             // answers the Hash. The (name, slot) table was laid down before
             // this unit's code (`Codegen::resolve_rest_kw_tables`).
-            AsmInst::RestKw { table, .. } => self.encode_linst(LInst::RestKw {
+            AsmInst::RestKw { table, base, .. } => self.encode_linst(LInst::RestKw {
                 table: table.expect("kwrest table laid down before codegen"),
+                base,
             }),
             // Not a shared instruction: hand off to the per-arch backend.
             other => {
@@ -2405,8 +2406,8 @@ impl Codegen {
             LInst::Unreachable => {
                 self.emit_unreachable();
             }
-            LInst::RestKw { table } => {
-                self.emit_rest_kw(table);
+            LInst::RestKw { table, base } => {
+                self.emit_rest_kw(table, base);
             }
             LInst::GuardClassVersion {
                 class_version,

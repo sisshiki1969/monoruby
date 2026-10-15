@@ -1382,6 +1382,19 @@ impl AsmIr {
         self.push(AsmInst::RestKw {
             rest_kw,
             table: None,
+            base: SlotBase::Own,
+        });
+    }
+
+    /// rax <- the `**kwrest` Hash of the listed `(slot, name)` pairs, the
+    /// slots addressed in the frame `base` names (the materialization of a
+    /// `**kwrest` handed over elided, whose values are in the caller's kw
+    /// window; `doc/escape_analysis.md`).
+    pub(super) fn kw_rest_from(&mut self, base: SlotBase, rest_kw: Vec<(SlotId, IdentId)>) {
+        self.push(AsmInst::RestKw {
+            rest_kw,
+            table: None,
+            base,
         });
     }
 
@@ -3785,6 +3798,9 @@ pub(super) enum AsmInst {
     RestKw {
         rest_kw: Vec<(SlotId, IdentId)>,
         table: Option<DestLabel>,
+        /// The frame the slots are addressed in: this one, or the caller's
+        /// for a handed-over `**kwrest` (`VirtualSrc::CallerKw`).
+        base: SlotBase,
     },
 
     UndefMethod {

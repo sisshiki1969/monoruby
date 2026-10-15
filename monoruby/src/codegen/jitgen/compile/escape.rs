@@ -1,9 +1,10 @@
 //!
-//! Escape analysis: allocation elision for Array literals whose only use is
-//! the method call they are the receiver of (`[a, b].max`,
-//! `[:x, :y].include?(v)`). See `doc/escape_analysis.md`.
+//! Escape analysis: allocation elision for Array and Hash literals whose
+//! only use is the method call they are the receiver of (`[a, b].max`,
+//! `[:x, :y].include?(v)`, `{a: x}[:a]`, `{get: 1, head: 2}.key?(m)`). See
+//! `doc/escape_analysis.md`.
 //!
-//! An Array literal into a temporary is not allocated when it is compiled.
+//! A literal into a temporary is not allocated when it is compiled.
 //! The abstract state records it as an elided object instead
 //! (`SlotState::def_virtual`), and the object is either *consumed* by a
 //! use that needs no real Array, or *materialized* — allocated after all,
@@ -60,10 +61,10 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Elide the deep copy of a literal Array `dst = literal[..]` whose
-    /// elements are all immediates: the copy is indistinguishable from the
-    /// template to any use that does not let its receiver escape, so such a
-    /// use is handed the template itself.
+    /// Elide the deep copy of a literal Array or Hash `dst = literal[..]`
+    /// whose elements (keys and values) are all immediates: the copy is
+    /// indistinguishable from the template to any use that does not let
+    /// its receiver escape, so such a use is handed the template itself.
     ///
     pub(super) fn try_elide_literal(
         &mut self,
@@ -71,13 +72,22 @@ impl<'a> JitContext<'a> {
         dst: SlotId,
         val: Value,
     ) -> bool {
-        if !self.is_temp(dst) || val.class() != ARRAY_CLASS {
+        if !self.is_temp(dst) {
             return false;
         }
-        let Some(ary) = val.try_array_ty() else {
-            return false;
+        let all_immediates = if val.class() == ARRAY_CLASS
+            && let Some(ary) = val.try_array_ty()
+        {
+            ary.iter().all(|v| v.is_packed_value())
+        } else if val.class() == HASH_CLASS
+            && let Some(h) = val.try_hash_ty()
+        {
+            h.iter()
+                .all(|(k, v)| k.is_packed_value() && v.is_packed_value())
+        } else {
+            false
         };
-        if !ary.iter().all(|v| v.is_packed_value()) {
+        if !all_immediates {
             return false;
         }
         state.def_virtual(dst, VirtualSrc::Literal(val));
@@ -126,11 +136,16 @@ impl<'a> JitContext<'a> {
         let next_sp = state.next_sp();
         let bb_end = self.is_bb_end(bc_pos);
         let survives = virtual_survives(trace_ir);
+        // A call to `binding` / `eval` reads every local of this frame
+        // through the frame it captures (`unbox_to_S_for_outgoing_block`),
+        // a parameter holding an elided object included.
+        let captures = matches!(trace_ir, TraceIr::MethodCall { cache: MethodCache::Cached(e), .. }
+            if self.store[e.func_id].possibly_capture_without_block());
         for (dst, src) in state.virtuals().to_vec() {
             if self.may_consume_virtual(trace_ir, dst, src) {
                 continue;
             }
-            let read = reads.contains(&dst);
+            let read = reads.contains(&dst) || captures;
             let dead = if self.is_temp(dst) {
                 dst >= next_sp
             } else {
@@ -330,6 +345,16 @@ impl<'a> JitContext<'a> {
     /// it cannot).
     ///
     fn may_consume_virtual(&self, trace_ir: &TraceIr, slot: SlotId, src: VirtualSrc) -> bool {
+        // `h[k]` on an elided Hash ([`Self::consume_virtual_index`]).
+        if let TraceIr::Index { base, idx, .. } = trace_ir {
+            return *base == slot && *idx != slot;
+        }
+        // The prologue's "`nil` means an empty Hash" check of a `**kwrest`
+        // handed over elided: nothing to do, the object stands for the
+        // Hash (its slot does hold `nil`).
+        if let TraceIr::CheckKwRest(local) = trace_ir {
+            return *local == slot && matches!(src, VirtualSrc::CallerKw { .. });
+        }
         let TraceIr::MethodCall { callid, cache, .. } = trace_ir else {
             return false;
         };
@@ -351,7 +376,7 @@ impl<'a> JitContext<'a> {
                 base: SlotBase::SavedFp,
                 ..
             } => Self::forwarded_rest_slot(cs) == Some(slot),
-            VirtualSrc::CallerSlots { .. } => false,
+            VirtualSrc::CallerSlots { .. } | VirtualSrc::CallerKw { .. } => false,
             VirtualSrc::Slots { .. } | VirtualSrc::Literal(_) => {
                 cs.splat_pos().is_empty()
                     && cs.block_fid.is_none()
@@ -397,6 +422,9 @@ impl<'a> JitContext<'a> {
                 ir.create_array_from(using_fpr, base, src, len);
                 state.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
+            VirtualSrc::CallerKw { base, .. } => {
+                state.materialize_caller_kw(ir, dst, base);
+            }
         }
         state.discard_dead_elements(src);
     }
@@ -421,11 +449,16 @@ impl<'a> JitContext<'a> {
         let cs = &self.store[callid];
         let recv = cs.recv;
         let src = state.virtual_at(recv).unwrap();
-        let array = CachedClass::from_class(ARRAY_CLASS);
+        let class = CachedClass::from_class(src.class_id());
+        let elements = match src {
+            VirtualSrc::Slots { src, len, .. } => Some((SlotBase::Own, src, len)),
+            VirtualSrc::CallerSlots { src, len, base } => Some((base, src, len)),
+            VirtualSrc::Literal(_) | VirtualSrc::CallerKw { .. } => None,
+        };
         // Resolved as the call itself would be (refinements in scope
         // included), and a private method stays the interpreter's to reject.
         let resolved = cs.name.and_then(|name| {
-            let (fid, visibility) = self.jit_check_method(array, name)?;
+            let (fid, visibility) = self.jit_check_method(class, name)?;
             (!self.jit_visibility_blocks(callid, visibility)).then_some((name, fid))
         });
         let summary = resolved.and_then(|(_, fid)| self.store.recv_escape(fid));
@@ -433,29 +466,36 @@ impl<'a> JitContext<'a> {
             && cs.hash_splat_pos().is_empty()
             && cs.block_arg.is_none();
         let block_less = plain && cs.block_fid.is_none();
-        let (pos_num, call_dst) = (cs.pos_num, cs.dst);
+        let (pos_num, call_dst, args) = (cs.pos_num, cs.dst, cs.args);
         // The receiver slot must be dead after the call: whatever the call
         // leaves there is never read again.
         let recv_dead = Some(recv) == call_dst || self.dead_after(bc_pos, recv);
-        let elements = match src {
-            VirtualSrc::Slots { src, len, .. } => Some((SlotBase::Own, src, len)),
-            VirtualSrc::CallerSlots { src, len, base } => Some((base, src, len)),
-            VirtualSrc::Literal(_) => None,
+        // What the elements lowering would do, decided before anything is
+        // emitted: an Array's elements are in frame slots, a Hash's pairs
+        // are in its template or in the caller's kw window.
+        let plan = match summary {
+            Some(RecvEscape {
+                elements: Some(op), ..
+            }) if block_less => match (elements, Self::hash_pairs(state, src)) {
+                (Some((base, src, len)), _) if pos_num == 0 => {
+                    Some(ElementsPlan::Array(base, src, len))
+                }
+                (None, Some(pairs)) => self
+                    .plan_hash_op(state, op, &pairs, args, pos_num)
+                    .map(ElementsPlan::Hash),
+                _ => None,
+            },
+            _ => None,
         };
-        match (elements, summary) {
-            (
-                Some((base, src, len)),
-                Some(RecvEscape {
-                    elements: Some(op), ..
-                }),
-            ) if block_less && pos_num == 0 => {
+        match (plan, summary) {
+            (Some(plan), _) => {
                 // The resolution is this unit's assumption: recorded, so the
                 // class-version salvage re-asks it, and guarded while the
                 // object is still registered, so a redefinition deopts with
                 // it materialized.
                 let (name, fid) = resolved.unwrap();
                 self.inline_method_cache.push(InlineCacheEntry {
-                    recv_class: array,
+                    recv_class: class,
                     name: Some(name),
                     refinements: self.refinements(),
                     func_id: Some(fid),
@@ -467,7 +507,18 @@ impl<'a> JitContext<'a> {
                 if recv_dead {
                     state.take_virtual(recv);
                 }
-                self.emit_elements_op(state, ir, op, base, src, len, call_dst);
+                match plan {
+                    ElementsPlan::Array(base, src, len) => {
+                        let RecvEscape {
+                            elements: Some(op), ..
+                        } = summary.unwrap()
+                        else {
+                            unreachable!()
+                        };
+                        self.emit_elements_op(state, ir, op, base, src, len, call_dst);
+                    }
+                    ElementsPlan::Hash(fold) => self.emit_hash_fold(state, ir, fold, call_dst),
+                }
                 Some(CompileResult::Continue)
             }
             (
@@ -475,7 +526,7 @@ impl<'a> JitContext<'a> {
                 Some(RecvEscape {
                     transparent: true, ..
                 }),
-            ) if plain && recv_dead => {
+            ) if plain && recv_dead && matches!(src, VirtualSrc::Literal(_)) => {
                 let VirtualSrc::Literal(val) = src else {
                     unreachable!()
                 };
@@ -490,6 +541,167 @@ impl<'a> JitContext<'a> {
             _ => {
                 self.materialize_virtual(state, ir, recv);
                 None
+            }
+        }
+    }
+
+    ///
+    /// The pairs of an elided Hash, in order: a template's keys and
+    /// values, or a handed-over `**kwrest`'s names and the caller's slots
+    /// of their values (the frame's table, [`AbstractFrame::caller_kw_table`]).
+    ///
+    fn hash_pairs(state: &AbstractState, src: VirtualSrc) -> Option<Vec<(Value, HashElem)>> {
+        match src {
+            VirtualSrc::Literal(val) => {
+                let h = val.try_hash_ty()?;
+                Some(h.iter().map(|(k, v)| (k, HashElem::Const(v))).collect())
+            }
+            VirtualSrc::CallerKw { base, .. } => {
+                let (_, table) = state.caller_kw_table()?;
+                Some(
+                    table
+                        .iter()
+                        .map(|(name, slot)| (Value::symbol(*name), HashElem::Caller(base, *slot)))
+                        .collect(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    ///
+    /// `dst = base[idx]` (`TraceIr::Index`) with an elided Hash in *base*
+    /// ([`Self::may_consume_virtual`]): a template's `[]` by a constant
+    /// key it holds is the value, and by any other key runs on the
+    /// template, as [`Self::consume_virtual`] has it for a method call.
+    /// Otherwise the object is materialized. Returns whether the
+    /// instruction was lowered here.
+    ///
+    pub(super) fn consume_virtual_index(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        base: SlotId,
+        idx: SlotId,
+        dst: SlotId,
+        bc_pos: BcIndex,
+    ) -> bool {
+        let src = state.virtual_at(base).unwrap();
+        let class = CachedClass::from_class(src.class_id());
+        let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
+        let resolved = self.jit_check_method(class, IdentId::_INDEX).and_then(|(fid, visibility)| {
+            (!self.jit_visibility_blocks(callid, visibility)).then_some(fid)
+        });
+        let summary = resolved.and_then(|fid| self.store.recv_escape(fid));
+        let recv_dead = base == dst || self.dead_after(bc_pos, base);
+        let plan = match summary {
+            Some(RecvEscape {
+                elements: Some(op), ..
+            }) => Self::hash_pairs(state, src)
+                .and_then(|pairs| self.plan_hash_op(state, op, &pairs, idx, 1)),
+            _ => None,
+        };
+        match (plan, summary) {
+            (Some(fold), _) => {
+                self.inline_method_cache.push(InlineCacheEntry {
+                    recv_class: class,
+                    name: Some(IdentId::_INDEX),
+                    refinements: self.refinements(),
+                    func_id: resolved,
+                });
+                self.guard_class_version(state, ir, true);
+                if recv_dead {
+                    state.take_virtual(base);
+                }
+                self.emit_hash_fold(state, ir, fold, Some(dst));
+                true
+            }
+            (
+                None,
+                Some(RecvEscape {
+                    transparent: true, ..
+                }),
+            ) if recv_dead && matches!(src, VirtualSrc::Literal(_)) => {
+                let VirtualSrc::Literal(val) = src else {
+                    unreachable!()
+                };
+                self.guard_class_version(state, ir, true);
+                state.take_virtual(base);
+                state.def_C(base, val);
+                false
+            }
+            _ => {
+                self.materialize_virtual(state, ir, base);
+                false
+            }
+        }
+    }
+
+    ///
+    /// Decide the Hash elements lowering *op* over *pairs* for a call with
+    /// *pos_num* arguments at *args*: a lookup is folded only for a key
+    /// that is a compile-time packed immediate — for which `eql?` is bit
+    /// equality and no `hash` is dispatched — and, for `[]` / `fetch`,
+    /// only when it is present (a miss would dispatch `default` or raise).
+    ///
+    fn plan_hash_op(
+        &self,
+        state: &AbstractState,
+        op: ElementsOp,
+        pairs: &[(Value, HashElem)],
+        args: SlotId,
+        pos_num: usize,
+    ) -> Option<HashFold> {
+        let const_key = |slot: SlotId| match state.mode(slot) {
+            LinkMode::C(k) if k.is_packed_value() => Some(k),
+            _ => None,
+        };
+        let lookup = |k: Value| pairs.iter().find(|(k0, _)| k0.id() == k.id()).map(|(_, v)| *v);
+        let found = |v: HashElem| match v {
+            HashElem::Const(v) => HashFold::Const(v),
+            HashElem::Caller(base, slot) => HashFold::Caller(base, slot),
+        };
+        match op {
+            ElementsOp::Size if pos_num == 0 => {
+                Some(HashFold::Const(Value::integer(pairs.len() as i64)))
+            }
+            ElementsOp::Empty if pos_num == 0 => Some(HashFold::Const(Value::bool(pairs.is_empty()))),
+            ElementsOp::HashIndex if pos_num == 1 => lookup(const_key(args)?).map(found),
+            ElementsOp::HashFetch if pos_num == 1 => lookup(const_key(args)?).map(found),
+            // `fetch(key, default)`: the default is the answer on a miss.
+            ElementsOp::HashFetch if pos_num == 2 => Some(match lookup(const_key(args)?) {
+                Some(v) => found(v),
+                None => HashFold::Own(args + 1usize),
+            }),
+            ElementsOp::HashHasKey if pos_num == 1 => {
+                let k = const_key(args)?;
+                Some(HashFold::Const(Value::bool(lookup(k).is_some())))
+            }
+            _ => None,
+        }
+    }
+
+    /// Emit a folded Hash elements lowering ([`Self::plan_hash_op`]).
+    fn emit_hash_fold(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        fold: HashFold,
+        dst: Option<SlotId>,
+    ) {
+        match (fold, dst) {
+            (_, None) => {}
+            (HashFold::Const(v), Some(dst)) => state.def_C(dst, v),
+            (HashFold::Own(slot), Some(dst)) => {
+                if !matches!(state.mode(slot), LinkMode::S(_) | LinkMode::C(_)) {
+                    state.flush_gp(ir);
+                }
+                state.copy_slot(ir, slot, dst);
+            }
+            (HashFold::Caller(base, slot), Some(dst)) => {
+                state.flush_gp(ir);
+                ir.load_caller_slot(base, slot);
+                state.def_rax2acc(ir, dst);
             }
         }
     }
@@ -545,8 +757,39 @@ impl<'a> JitContext<'a> {
                     }
                 }
             },
+            ElementsOp::HashIndex | ElementsOp::HashFetch | ElementsOp::HashHasKey => {
+                unreachable!("a Hash lowering on an Array's elements")
+            }
         }
     }
+}
+
+/// How [`JitContext::consume_virtual`] lowers an elements op.
+enum ElementsPlan {
+    /// Over the `len` element slots at the slot, in the frame the base names.
+    Array(SlotBase, SlotId, u16),
+    /// A folded Hash lookup.
+    Hash(HashFold),
+}
+
+/// Where an elided Hash's value is.
+#[derive(Clone, Copy)]
+enum HashElem {
+    /// In the template (a `Literal` object).
+    Const(Value),
+    /// In the caller's slot, in the frame the base names (a `CallerKw`
+    /// object).
+    Caller(SlotBase, SlotId),
+}
+
+/// The answer of a folded Hash elements lowering.
+#[derive(Clone, Copy)]
+enum HashFold {
+    Const(Value),
+    /// A copy of this frame's slot (the default of `fetch(k, default)`).
+    Own(SlotId),
+    /// The caller's slot, in the frame the base names.
+    Caller(SlotBase, SlotId),
 }
 
 impl AbstractState {
@@ -582,9 +825,32 @@ impl AbstractState {
                     ir.create_array_from(using_fpr, base, src, len);
                     self.def_reg2acc_class(ir, GP::Rax, slot, ARRAY_CLASS);
                 }
+                VirtualSrc::CallerKw { base, .. } => self.materialize_caller_kw(ir, slot, base),
             }
             self.discard_dead_elements(src);
         }
+    }
+
+    ///
+    /// Build the `**kwrest` Hash a handed-over object stands for
+    /// (`VirtualSrc::CallerKw`) into *dst*, from the frame's table
+    /// ([`AbstractFrame::caller_kw_table`]) over the caller's kw window.
+    /// Symbol keys only: no Ruby code runs, so the FP pool needs no save.
+    ///
+    pub(in crate::codegen::jitgen) fn materialize_caller_kw(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: SlotId,
+        base: SlotBase,
+    ) {
+        let (kwrest, table) = self
+            .caller_kw_table()
+            .expect("a handed-over kwrest has its table");
+        debug_assert_eq!(*kwrest, dst);
+        let rest_kw = table.iter().map(|(name, slot)| (*slot, *name)).collect();
+        self.flush_gp(ir);
+        ir.kw_rest_from(base, rest_kw);
+        self.def_reg2acc_class(ir, GP::Rax, dst, HASH_CLASS);
     }
 }
 

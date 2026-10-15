@@ -1437,13 +1437,15 @@ impl<'a> JitContext<'a> {
                 // most: a computed float is neither an immediate constant
                 // nor a forwarded argument, so float-heavy call sites
                 // never specialized at all.
-                // A `*rest` callee, and an elided object among the
-                // arguments, are the other things worth specializing for:
-                // the callee's entry takes the object over without its
-                // `Array` being built (`doc/escape_analysis.md`).
+                // A `*rest` or `**kwrest` callee, and an elided object
+                // among the arguments, are the other things worth
+                // specializing for: the callee's entry takes the object
+                // over without its `Array` / `Hash` being built
+                // (`doc/escape_analysis.md`).
                 let specializable = self.store.is_simple_call(func_id, callid)
                     && (forwarding_callee
                         || self.store[func_id].is_rest()
+                        || self.store[func_id].kw_rest().is_some()
                         || state.is_C_immediate(callsite.recv)
                         || (pos_num != 0
                             && (args..args + pos_num).any(|i| {
@@ -1761,7 +1763,7 @@ impl<'a> JitContext<'a> {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: state.pc().as_ptr() as u64,
         });
-        state.set_arguments(&self.store, ir, callid, callee_fid, false, false, &arg_hints, &[]);
+        state.set_arguments(&self.store, ir, callid, callee_fid, false, false, false, &arg_hints, &[]);
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
@@ -2451,8 +2453,19 @@ impl<'a> JitContext<'a> {
             self.settle_virtual_args(state, ir, callid);
             None
         };
+        // The callee's `**kwrest` goes over elided too
+        // (`VirtualSrc::CallerKw`): a framed callee (a frameless one takes
+        // no `**kwrest`), filled by the simple path from literal keywords
+        // only (a `**hash` splat is dynamic), and not a forwarding
+        // trampoline, whose keywords K1 routes (`forward_kw_deferral`).
+        let kwrest_elided = handover == Some(SlotBase::SavedFp)
+            && self.store[fid].kw_rest().is_some()
+            && self.store.is_simple_call(fid, callid)
+            && self.store[callid].hash_splat_pos().is_empty()
+            && self.store.forwarding_trampoline_rest(fid).is_none();
         let mut args_info = if specializable {
-            let (modes, virtuals) = LinkMode::from_caller(&self.store, fid, callid, state, handover);
+            let (modes, virtuals) =
+                LinkMode::from_caller(&self.store, fid, callid, state, handover, kwrest_elided);
             JitArgumentInfo::new(modes, virtuals)
         } else {
             JitArgumentInfo::default()
@@ -2604,6 +2617,7 @@ impl<'a> JitContext<'a> {
             evict,
             rest_elided,
             kw_routed && !kw_vetoed,
+            kwrest_elided,
             bmethod_outer,
             using_fpr,
             &arg_hints,
@@ -3230,7 +3244,7 @@ impl AbstractState {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
         });
-        self.set_arguments(store, ir, callid, callee_fid, false, false, &arg_hints, &[]);
+        self.set_arguments(store, ir, callid, callee_fid, false, false, false, &arg_hints, &[]);
         self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -3340,6 +3354,9 @@ impl AbstractState {
         // straight from this frame, and nothing vetoed it: no `**kwrest`
         // Hash is built.
         defer_kw: bool,
+        // The callee takes its `**kwrest` over as an elided object
+        // (`VirtualSrc::CallerKw`): no Hash is built, the kw window stays.
+        kwrest_elided: bool,
         bmethod_outer: Option<Option<Lfp>>,
         // The caller-computed `get_using_fpr` snapshot, taken there so it
         // can also be recorded for the resolve pass (stage 1' — the
@@ -3368,6 +3385,7 @@ impl AbstractState {
             callee_fid,
             rest_elided,
             defer_kw,
+            kwrest_elided,
             arg_hints,
             float_args,
         );
@@ -3617,6 +3635,7 @@ impl AbstractState {
         callee_fid: FuncId,
         rest_elided: bool,
         defer_kw: bool,
+        kwrest_elided: bool,
         arg_hints: &[(GP, SlotId)],
         // The parameters handed over in a register
         // (`JitContext::plan_float_args`), by callee parameter slot.
@@ -3806,7 +3825,19 @@ impl AbstractState {
             // fill kw rest param.
             if let Some(kw_rest) = callee.kw_rest() {
                 let ofs = stack_offset - (LFP_SELF + kw_rest.0 as i32 * 8);
-                if defer_kw && !rest_kw.is_empty() {
+                if kwrest_elided {
+                    // The callee holds the Hash as an elided object over
+                    // our kw window (`VirtualSrc::CallerKw`): the leftover
+                    // keywords' slots are spilled for it to read through
+                    // its saved frame pointer (and for a side exit's
+                    // rebuild), and the slot gets the GC-safe `nil` an
+                    // elided rest gets.
+                    for (slot, _) in &rest_kw {
+                        self.use_as_value(*slot);
+                        self.write_back(ir, *slot, Keep::All);
+                    }
+                    ir.u64torsp_offset(NIL_VALUE, ofs);
+                } else if defer_kw && !rest_kw.is_empty() {
                     // K1: the specialized trampoline body source-routed
                     // these literal keywords straight from our slots;
                     // store the same GC-safe `nil` the elided rest

@@ -1085,6 +1085,9 @@ impl Codegen {
                     ldr x30, [sp], #16;        // restore LR
                 );
             }
+            VirtualSrc::CallerKw { .. } => {
+                unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
+            }
         }
         self.a64_frame_store(0, lfp, conv(dst) as u32);
     }
@@ -1276,6 +1279,9 @@ impl Codegen {
                 }
                 VirtualSrc::Slots { .. } => {
                     unreachable!("an elided literal in a temporary never lives across a call")
+                }
+                VirtualSrc::CallerKw { .. } => {
+                    unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
                 }
             }
             self.a64_frame_store(0, 25, conv(*dst) as u32);

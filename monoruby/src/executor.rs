@@ -660,6 +660,8 @@ impl Executor {
             // `Class#new` exists only once class.rb has run; the JIT needs
             // its FuncId to recognise a `Foo.new` site.
             globals.store.record_class_new_fid();
+            // Likewise, the `Hash` methods hash.rb defines exist only now.
+            crate::builtins::hash::init_recv_escape_ruby(globals);
         }
         // TOPLEVEL_BINDING: registered as a *lazy* constant — defined
         // (it lists in `Object.constants` and answers `const_defined?`)
