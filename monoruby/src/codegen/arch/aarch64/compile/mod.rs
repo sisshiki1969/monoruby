@@ -3,9 +3,10 @@
 //! The arch-neutral front-end builds `AsmIr`; this drives the lowering on
 //! aarch64. Every `AsmInst` and side exit is lowered: large frame/field/sp
 //! offsets are materialized through scratch registers rather than bailing, and
-//! the `...`-forwarding deferral (D1) is now lowered here too — the
+//! the `...`-forwarding source routing (D1) is lowered here too — the
 //! source-routed `SetArgumentsForwarded` copy (`a64_set_arguments_forwarded_deferred`)
-//! and the deopt-time rest-array rebuild (`a64_gen_forward_rest_materialize`).
+//! and the deopt-time rebuild of an elided object whose elements are in the
+//! caller's frame (`a64_gen_virtual_materialize`, `VirtualSrc::CallerSlots`).
 //! So aarch64 never bails out of JIT compilation; `compile_asmir`'s `bool` is
 //! vestigial. See `doc/aarch64-jitgen-plan.md`.
 
@@ -1001,8 +1002,8 @@ impl Codegen {
 
     /// Write back live values to LFP slots for a side exit, r14(x22)-relative
     /// (the local frame may be on the heap after a call returns). Mirrors x86
-    /// `gen_write_back_for_deopt`, including the D1 deferred forwarding-rest
-    /// materialization, which runs last (see `a64_gen_forward_rest_materialize`).
+    /// `gen_write_back_for_deopt`, including the elided objects'
+    /// materialization, which runs last (see `a64_gen_virtual_materialize`).
     fn a64_gen_write_back_for_deopt(&mut self, wb: &WriteBack, base: usize) {
         // GP residents first: the fpr and literal stores below may use the
         // rax register as scratch.
@@ -1027,17 +1028,10 @@ impl Codegen {
         for slot in &wb.void {
             self.a64_store_imm_to_slot(NIL_VALUE as u64, *slot, lfp);
         }
-        // D1: materialize deferred forwarding-rest arrays. Runs last so the
-        // literal loop above has already written the `dst` slot (mode `C(nil)`),
-        // keeping the frame GC-consistent during the `create_array` call (which
-        // may itself allocate).
-        for (dst, src, len) in wb.forward_rest.clone() {
-            self.a64_gen_forward_rest_materialize(dst, src, len);
-        }
-        // K1: materialize deferred `**kwrest` Hashes after the rest
-        // arrays (each helper call may allocate; every not-yet-written
-        // deferred slot still physically holds the `nil` the caller
-        // stored, so the frame stays GC-consistent throughout).
+        // K1: materialize deferred `**kwrest` Hashes (each helper call
+        // may allocate; every not-yet-written deferred slot still
+        // physically holds the `nil` the caller stored, so the frame
+        // stays GC-consistent throughout).
         for (dst, table) in wb.forward_kwrest.clone() {
             self.a64_gen_forward_kwrest_materialize(dst, &table);
         }
@@ -1064,6 +1058,23 @@ impl Codegen {
                     ldr x30, [sp], #16;        // restore LR
                 );
             }
+            // The elements are in the caller's frame, which has not
+            // returned (this frame is still running), reached through the
+            // frame pointer this frame saved or the window offset
+            // (`a64_caller_slot_addr`). The caller spilled them before the
+            // call, and its frame is on the control-frame chain, so the
+            // allocation is GC-safe.
+            VirtualSrc::CallerSlots { src, len, base } => {
+                let f = runtime::create_array as *const () as u64;
+                self.a64_caller_slot_addr(base, src, 0);
+                monoasm_arm64!(&mut self.jit,
+                    mov x1, (len as u64);
+                    str x30, [sp, #-16]!;      // save LR (16-aligned)
+                    mov x9, (f);
+                    blr x9;                    // x0 = create_array(ptr, len)
+                    ldr x30, [sp], #16;        // restore LR
+                );
+            }
             VirtualSrc::Literal(v) => {
                 let f = Value::value_deep_copy as *const () as u64;
                 monoasm_arm64!(&mut self.jit,
@@ -1076,6 +1087,45 @@ impl Codegen {
             }
         }
         self.a64_frame_store(0, lfp, conv(dst) as u32);
+    }
+
+    /// `x(addr) <- &slot`, *slot* addressed in the frame *base* names
+    /// (twin of x86 `caller_slot_addr`). Uses x9 as scratch, so `addr`
+    /// must not be x9.
+    fn a64_caller_slot_addr(&mut self, base: SlotBase, slot: SlotId, addr: u32) {
+        debug_assert_ne!(addr, 9);
+        let lfp = GP::R14.a64().0; // x22
+        match base {
+            SlotBase::Own => self.a64_addr_sub(addr, lfp, conv(slot) as u32),
+            // This frame established its own frame pointer, so the
+            // caller's is the value saved at `[x29]`, and the caller's
+            // slot is at `[caller_fp - rbp_local(slot)]`.
+            SlotBase::SavedFp => {
+                monoasm_arm64!(&mut self.jit, ldr x9, [x29];);
+                self.a64_addr_sub(addr, 9, rbp_local(slot) as u32);
+            }
+            // A frameless callee's lfp is the caller's shifted down by
+            // `delta` (`inline_frame_shift`), so the caller's slot is
+            // `delta` above.
+            SlotBase::Window(delta) => {
+                self.a64_addr_add(addr, lfp, (delta - conv(slot)) as u32);
+            }
+        }
+    }
+
+    /// Emit `addr <- base + off`; the `add` immediate caps a direct add at
+    /// `off <= 4095`, above which the offset goes through `addr` first
+    /// (so `addr` must differ from `base`).
+    fn a64_addr_add(&mut self, addr: u32, base: u32, off: u32) {
+        debug_assert_ne!(addr, base, "a64_addr_add: addr must differ from base");
+        if off <= 4095 {
+            monoasm_arm64!(&mut self.jit, add x(addr), x(base), #(off););
+        } else {
+            monoasm_arm64!(&mut self.jit,
+                mov x(addr), (off as u64);
+                add x(addr), x(base), x(addr);
+            );
+        }
     }
 
     /// K1: rebuild a deferred `**kwrest` Hash from the caller's kw slots
@@ -1107,27 +1157,6 @@ impl Codegen {
         self.a64_frame_store(12, lfp, conv(dst) as u32);
     }
 
-    /// Rebuild a deferred `...` rest `Array` for an interpreter resuming inside
-    /// the trampoline frame `f`. Twin of x86 `gen_forward_rest_materialize`.
-    /// The positional source lives in the *caller* (outermost, non-specialized)
-    /// frame — `f` saved the caller's frame pointer at `[x29]` — so the array is
-    /// built from `[caller_fp - rbp_local(src)]` and stored into `f`'s rest
-    /// local `dst` (`x22`/LFP-relative). `create_array(ptr = &caller[src], len)`.
-    /// x9/x10 are lowering scratch here (x10 is used internally by
-    /// `a64_addr_sub`/`a64_frame_store` for large offsets).
-    ///
-    /// aarch64 counterpart of `JitModule::gen_chain_replay_stub`: emit this
-    /// call site's chain-deopt conversion once, at compile time.
-    ///
-    /// ### calling convention
-    /// - `x0` — the callee frame's fp (the suspended call's own frame)
-    /// - `x1` — the caller frame's fp (the frame being converted)
-    /// - `x2` — the caller frame's `Lfp`
-    ///
-    /// The three are parked in `x23`-`x25` across the helper calls — not
-    /// `x19`-`x22`, which are the JIT's global registers — and the stub
-    /// saves and restores those three itself along with LR.
-    ///
     pub(in crate::codegen) fn a64_gen_chain_replay_stub(
         &mut self,
         replay: &ChainReplay,
@@ -1210,18 +1239,45 @@ impl Codegen {
             self.a64_frame_store(9, 25, conv(*slot) as u32);
         }
         debug_assert!(wb.gp_is_empty());
-        // An elided allocation never lives across a call
-        // (`AbstractState::virtual_survives`), so no suspended frame owes one.
-        debug_assert!(wb.virtual_obj_entries().is_empty());
-        for (dst, src, len) in wb.forward_rest_entries() {
-            let f = runtime::create_array as *const () as u64;
-            monoasm_arm64!(&mut self.jit, ldr x9, [x24];);
-            self.a64_addr_sub(0, 9, rbp_local(*src) as u32);
-            monoasm_arm64!(&mut self.jit,
-                mov x1, (*len as u64);
-                mov x9, (f);
-                blr x9;
-            );
+        // The elided objects this frame owes: only ones whose elements
+        // are in its caller's frame can be live across a call
+        // (`doc/escape_analysis.md`). Here x24 is the frame's own bp, so
+        // its saved caller fp is `[x24]` (what `a64_caller_slot_addr`
+        // reads at `[x29]`), and x25 its lfp. An object with elements in
+        // the frame itself never lives across a call.
+        for (dst, src) in wb.virtual_obj_entries() {
+            match *src {
+                VirtualSrc::CallerSlots { src, len, base } => {
+                    let f = runtime::create_array as *const () as u64;
+                    match base {
+                        SlotBase::SavedFp => {
+                            monoasm_arm64!(&mut self.jit, ldr x9, [x24];);
+                            self.a64_addr_sub(0, 9, rbp_local(src) as u32);
+                        }
+                        SlotBase::Window(delta) => {
+                            self.a64_addr_add(0, 25, (delta - conv(src)) as u32);
+                        }
+                        SlotBase::Own => unreachable!(),
+                    }
+                    monoasm_arm64!(&mut self.jit,
+                        mov x1, (len as u64);
+                        mov x9, (f);
+                        blr x9;
+                    );
+                }
+                // A literal handed over by the caller into a parameter.
+                VirtualSrc::Literal(v) => {
+                    let f = Value::value_deep_copy as *const () as u64;
+                    monoasm_arm64!(&mut self.jit,
+                        mov x0, (v.id());
+                        mov x9, (f);
+                        blr x9;
+                    );
+                }
+                VirtualSrc::Slots { .. } => {
+                    unreachable!("an elided literal in a temporary never lives across a call")
+                }
+            }
             self.a64_frame_store(0, 25, conv(*dst) as u32);
         }
         for (dst, table) in wb.forward_kwrest_entries() {
@@ -1236,7 +1292,7 @@ impl Codegen {
             // Load the caller's fp into a scratch and subtract *out of* it:
             // `a64_addr_sub` materializes an offset over 4095 into `addr`,
             // so `addr` doubling as `base` would destroy the base before it
-            // is read. The `forward_rest` loop above has this right; this
+            // is read. The `virtual_obj` loop above has this right; this
             // one did not, and the debug assertion caught it on a macOS
             // arm64 run (`forwarded_struct_rest_native`).
             monoasm_arm64!(&mut self.jit, ldr x9, [x24];);
@@ -1264,22 +1320,6 @@ impl Codegen {
             ret;
         );
         entry
-    }
-
-    fn a64_gen_forward_rest_materialize(&mut self, dst: SlotId, src: SlotId, len: u16) {
-        let lfp = GP::R14.a64().0; // x22
-        let f = runtime::create_array as *const () as u64;
-        // x9 = caller fp (the value `f` saved at `[x29]`); x0 = &caller[src].
-        monoasm_arm64!(&mut self.jit, ldr x9, [x29];);
-        self.a64_addr_sub(0, 9, rbp_local(src) as u32);
-        monoasm_arm64!(&mut self.jit,
-            mov x1, (len as u64);
-            str x30, [sp, #-16]!;              // save LR (16-aligned)
-            mov x9, (f);
-            blr x9;                            // x0 = create_array(ptr, len)
-            ldr x30, [sp], #16;                // restore LR
-        );
-        self.a64_frame_store(0, lfp, conv(dst) as u32);
     }
 
     /// `[sp - off] <- x9`. The callee frame is built at negative offsets from
@@ -3028,13 +3068,12 @@ impl Codegen {
     /// shape as `emit_new_hash`.
     pub(in crate::codegen::jitgen) fn emit_array_min_max(
         &mut self,
+        base: SlotBase,
         args: SlotId,
         len: u16,
         min: bool,
         using_fpr: UsingFpr,
     ) -> bool {
-        let lfp = GP::R14.a64().0;
-        let off = args.0 as u32 * 8 + LFP_SELF as u32;
         let f = if min {
             runtime::opt_array_min as *const () as u64
         } else {
@@ -3045,7 +3084,7 @@ impl Codegen {
             mov x0, x19;              // vm
             mov x1, x20;              // globals
         );
-        self.a64_addr_sub(2, lfp, off); // x2 = &slot[args]
+        self.a64_caller_slot_addr(base, args, 2); // x2 = &slot[args]
         monoasm_arm64!(&mut self.jit,
             mov x3, (len as u64);
             str x30, [sp, #-16]!;
@@ -3054,6 +3093,41 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
+        true
+    }
+
+    /// x0 <- Array of the `len` slots at `src`, addressed in the frame
+    /// `base` names (`AsmInst::CreateArrayFrom`).
+    pub(in crate::codegen::jitgen) fn emit_create_array_from(
+        &mut self,
+        base: SlotBase,
+        src: SlotId,
+        len: u16,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        let f = runtime::create_array as *const () as u64;
+        self.emit_fpr_save(using_fpr, false);
+        self.a64_caller_slot_addr(base, src, 0); // x0 = &slot[src]
+        monoasm_arm64!(&mut self.jit,
+            mov x1, (len as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                   // result in x0
+            ldr x30, [sp], #16;
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        true
+    }
+
+    /// x0 <- the value of `slot`, addressed in the frame `base` names
+    /// (`AsmInst::LoadCallerSlot`).
+    pub(in crate::codegen::jitgen) fn emit_load_caller_slot(
+        &mut self,
+        base: SlotBase,
+        slot: SlotId,
+    ) -> bool {
+        self.a64_caller_slot_addr(base, slot, 0);
+        monoasm_arm64!(&mut self.jit, ldr x0, [x0];);
         true
     }
 

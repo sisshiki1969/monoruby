@@ -128,10 +128,10 @@ handled, not declined:
   save/restore the live xmm pool (`emit_fpr_save` / `emit_fpr_restore`) around
   the call, so they no longer bail on a live pool register.
 - **Deopt write-back & forwarded arguments** — the side-exit generator
-  reconstructs live frame state for all shapes; the single unported shape (the
-  deferred-source `...`-forwarding deferral, `g(*rest, **kw, &blk)`) is
-  prevented upstream by `forward_rest_deferral`, so it never reaches the
-  backend.
+  reconstructs live frame state for all shapes, the elided objects of the
+  escape analysis included (`a64_gen_virtual_materialize`), and the
+  source-routed `...` forward (`g(*rest, **kw, &blk)` with the rest an
+  elided object) is lowered by `a64_set_arguments_forwarded_deferred`.
 
 ---
 

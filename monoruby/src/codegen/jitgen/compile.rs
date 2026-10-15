@@ -1478,9 +1478,9 @@ impl<'a> JitContext<'a> {
             }
             TraceIr::CheckKwRest(local) => {
                 state.flush_gp(ir);
-                // D1 kwrest deferral: in a specialized pure forwarding
-                // trampoline (`def f(...) = g(...)`) whose `...` rest is
-                // source-routed (see `forward_rest_deferral`), skip
+                // K1 kwrest deferral: in a specialized pure forwarding
+                // trampoline (`def f(...) = g(...)`) entered through a
+                // simple call site (see `forward_kw_deferral`), skip
                 // materializing an empty `Hash` for the forwarding
                 // `**kwrest`. A nil `**kwrest` forwards as "no keyword
                 // arguments" on every consume path (the deferred fast
@@ -1489,7 +1489,7 @@ impl<'a> JitContext<'a> {
                 // hash-splat — see `set_callee_frame_arguments` /
                 // `hash_splat_and_kw_rest`), so leaving it nil is
                 // universally safe and avoids a per-call `empty_hash`.
-                if self.forward_rest_deferral().is_none() {
+                if self.forward_kw_deferral().is_none() {
                     ir.push(AsmInst::CheckKwRest(local));
                 }
             }

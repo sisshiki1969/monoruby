@@ -220,3 +220,343 @@ fn refined_callee_is_not_elided() {
         "#,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Elided objects inside specialized callees (`doc/escape_analysis.md` §6):
+// a `*rest` parameter whose Array is never built, and an elided literal
+// handed over as an argument. Each callee is called enough to specialize.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rest_parameter_elided_in_specialized_callee() {
+    run_test(
+        r#"
+        def f(*args)
+          [args.size, args.length, args.empty?, args.first, args.last, args.max, args.min]
+        end
+        def g(a, *rest, k: 1)
+          [a, rest.size, rest.first, rest.last, k]
+        end
+        def h(a, b = 2, *rest)
+          [a, b, rest.size, rest.max]
+        end
+        res = []
+        30.times do |i|
+          res << f(i, 2, 3) << f(i) << f << g(i, 5, 6) << g(i, k: 2) << h(i) << h(i, 3) << h(i, 3, 9, 1)
+        end
+        res.last(8)
+        "#,
+    );
+}
+
+#[test]
+fn rest_read_again_after_an_elements_op_and_across_branches() {
+    // `args.size` consumes the elements, not the object: the parameter is
+    // read again, in another basic block, and at the end of the method.
+    run_test(
+        r#"
+        def f(*args)
+          if args.size > 2
+            args.first + args.last
+          else
+            args.max
+          end
+        end
+        def g(*args)
+          n = args.size
+          y = helper(n)
+          args.first + y
+        end
+        def helper(x) = x + 1
+        def h(*args)
+          args.size
+          args
+        end
+        res = []
+        30.times { |i| res << f(i, 1, 2) << f(i, 100) << g(i, 2, 3) << h(i, 7) }
+        res.last(4)
+        "#,
+    );
+}
+
+#[test]
+fn rest_escaping_uses_see_a_real_array() {
+    // A use the summary does not cover (`each`, a local, an ivar, `<<`,
+    // `[]`, a non-forwarding splat) materializes the rest Array inside the
+    // callee, and the result is a fresh, correct Array every call.
+    run_test(
+        r#"
+        def each_sum(*args)
+          s = 0
+          args.each { |x| s += x }
+          s
+        end
+        def to_local(*args)
+          x = args
+          x << 1
+          x
+        end
+        def to_ivar(*args)
+          @a = args
+          @a.size
+        end
+        def index(*args) = args[1]
+        def splat(*args) = tgt(*args)
+        def tgt(a, b, c = 9) = a + b + c
+        def ret(*args) = args
+        res = []
+        30.times do |i|
+          res << each_sum(i, 1) << to_local(i, 2) << to_ivar(i, 2, 3) << index(i, 8) << splat(i, 2) << splat(i, 2, 3)
+          r = ret(i, 1)
+          r << 5
+          res << r
+        end
+        res.last(7)
+        "#,
+    );
+}
+
+#[test]
+fn rest_forwarded_through_a_trampoline() {
+    // `def f(...) = g(...)`: the rest window is routed straight into `g`'s
+    // frame, with and without literal keywords.
+    run_test(
+        r#"
+        def f(...) = g(...)
+        def g(a, b = 2, k: 3) = a + b + k
+        def h(...) = i(...)
+        def i(*rest) = rest.sum
+        res = []
+        30.times { |n| res << f(n) << f(n, 1) << f(n, k: 5) << f(n, 1, k: 7) << h(n, 1, 2) << h }
+        res.last(6)
+        "#,
+    );
+}
+
+#[test]
+fn elided_literal_argument_into_specialized_callees() {
+    // `f([a, b])` hands the literal over elided: a frameless callee (reads
+    // it through its window), a framed one (through its saved frame
+    // pointer, forced by the optional parameter), and a literal of
+    // immediates kept as a template for a transparent callee.
+    run_test(
+        r#"
+        def frameless(a) = a.max + a.size
+        def framed(a, b = 1) = a.max + a.size + b
+        def first_last(a, b = 0) = a.first + a.last + b
+        def inc(a, x) = a.include?(x)
+        def two(a, b) = a.size + b.size
+        res = []
+        30.times do |i|
+          res << frameless([i, 3]) << framed([i, 3]) << framed([i, 3], 2) << first_last([i, 4, 5])
+          res << inc([:x, :y], :y) << inc([:x, :y], i) << two([i], [i, i, i])
+        end
+        res.last(7)
+        "#,
+    );
+}
+
+#[test]
+fn elided_argument_escaping_in_the_callee() {
+    // The callee stores, returns, copies or iterates the argument: it is
+    // materialized there, and the caller never sees a shared object.
+    run_test(
+        r#"
+        def keep(a) = (@k = a)
+        def ret(a) = a
+        def copy(a)
+          b = a
+          b.size
+        end
+        def each(a)
+          s = 0
+          a.each { |x| s += x }
+          s
+        end
+        def sizes(a, b = 0) = a.size + b
+        res = []
+        30.times do |i|
+          r = ret([i, 1])
+          r << 2
+          k = keep([i, 3])
+          k << 4
+          res << r << k << @k << copy([i, 5]) << each([i, 6]) << sizes([i, [i, 7].max])
+        end
+        res.last(6)
+        "#,
+    );
+}
+
+#[test]
+fn elided_argument_with_a_block_or_splat_is_materialized() {
+    run_test(
+        r#"
+        def with_block(a)
+          a.map { |x| yield x }
+        end
+        def with_rest(*a) = a.size
+        def two(a, b) = a.size + b.size
+        res = []
+        30.times do |i|
+          res << with_block([i, 1]) { |x| x + 1 } << with_rest(*[i, 2]) << two(*[[i], [i, 3]])
+        end
+        res.last(3)
+        "#,
+    );
+}
+
+#[test]
+fn deopt_inside_a_callee_with_an_elided_rest_pending() {
+    // A class-version guard fails inside `f` while its rest is still
+    // elided: the side exit builds the Array from the caller's window and
+    // the interpreter resumes with it. Then the same for an elided literal
+    // handed over as an argument.
+    run_test_once(
+        r#"
+        def helper(x) = x + 1
+        def f(*args)
+          y = helper(args.size)
+          args.first + args.last + y
+        end
+        def g(a, b = 1)
+          y = helper(b)
+          a.max + a.size + y
+        end
+        res = []
+        30.times { |i| res << f(i, 2) << g([i, 9]) }
+        def helper(x) = x + 100
+        res << f(1, 2) << g([3, 4])
+        30.times { |i| res << f(i, 2) << g([i, 9]) }
+        res.last(4)
+        "#,
+    );
+}
+
+#[test]
+fn exception_and_gc_inside_a_callee_with_an_elided_rest() {
+    run_test_once(
+        r#"
+        def f(*args)
+          raise ArgumentError, "too many" if args.size > 3
+          args.first
+        end
+        def g(*args)
+          GC.start
+          args.first + args.last
+        end
+        def h(*args)
+          args.max
+        rescue => e
+          e.class
+        end
+        res = []
+        30.times { |i| res << f(i, 2) << g(i, 1) << h(i, 2) }
+        res << (begin f(1, 2, 3, 4) rescue $!.message end)
+        res << h(1, "a")
+        res.last(5)
+        "#,
+    );
+}
+
+#[test]
+fn binding_in_the_callee_sees_the_rest() {
+    run_test(
+        r#"
+        def f(*args)
+          b = binding
+          b.local_variable_get(:args).size + args.size
+        end
+        def g(*args)
+          eval("args").size
+        end
+        res = []
+        30.times { |i| res << f(i, 2) << g(i) }
+        res.last(2)
+        "#,
+    );
+}
+
+#[test]
+fn rest_in_a_loop_and_a_recursive_callee() {
+    run_test(
+        r#"
+        def f(*args)
+          s = 0
+          i = 0
+          while i < args.size
+            s += args.first
+            i += 1
+          end
+          s
+        end
+        def rec(n, *args)
+          return args.size if n == 0
+          rec(n - 1, *args) + args.first
+        end
+        res = []
+        30.times { |i| res << f(i, 2, 3) << rec(3, i, 1) }
+        res.last(2)
+        "#,
+    );
+}
+
+#[test]
+fn side_exits_under_a_routed_forward() {
+    // `def f(...) = g(...)` with the rest routed straight into `g`'s frame
+    // (never built): a class-version guard failing inside `g`, an
+    // exception raised there, a `binding` taken there, and the forwarded
+    // `initialize` of `Class#new` all see the real arguments.
+    run_test_once(
+        r##"
+        def helper(x) = x + 1
+        def g(a, b = 1) = a + b + helper(a)
+        def f(...) = g(...)
+        def r(a, b)
+          raise(ArgumentError, "#{a}-#{b}") if b > 25
+          a
+        end
+        def fr(...) = r(...)
+        def bd(a, b = 7) = binding.local_variable_get(:b) + a
+        def fb(...) = bd(...)
+        class Pt
+          attr_reader :x, :y
+          def initialize(x, y = 0) = (@x, @y = x, y)
+        end
+        res = []
+        30.times do |i|
+          res << f(i, 2) << f(i) << fb(i) << fb(i, 2) << Pt.new(i, 1).y << Pt.new(i).x
+          begin
+            fr(i, i)
+          rescue ArgumentError => e
+            res << e.message
+          end
+        end
+        def helper(x) = x + 100
+        res << f(1, 2)
+        res.last(10)
+        "##,
+    );
+}
+
+#[test]
+fn chain_deopt_under_a_pending_literal_argument() {
+    // A literal of immediates handed over elided into `t`'s parameter,
+    // still pending while `t` is suspended in a framed callee that deopts:
+    // the chain conversion of `t`'s frame copies the template into the
+    // slot.
+    run_test_once(
+        r#"
+        def helper(x) = x.to_s.size + x
+        def t(a, b)
+          y = helper(b)
+          a.max + y
+        end
+        def w(i) = t([1, 2], i)
+        res = []
+        30.times { |i| res << w(i) }
+        res << w(1.5)
+        30.times { |i| res << w(i) }
+        res.last(3)
+        "#,
+    );
+}

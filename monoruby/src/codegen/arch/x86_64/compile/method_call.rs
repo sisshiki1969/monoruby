@@ -1101,7 +1101,7 @@ impl Codegen {
     ) {
         if let Some((src, _len)) = deferred_src {
             let layout = layout.expect("a source-routed forward always carries its layout");
-            // D1: the `...` rest `Array` was deferred. `recv` and the
+            // D1: the `...` rest `Array` is an elided object. `recv` and the
             // `lead_num` leading args are `f`'s own slots (`f`'s rbp).
             // The forwarded positionals come from the *caller* frame:
             // `f` established its own rbp (`init_func`), so the caller's
@@ -1125,7 +1125,7 @@ impl Codegen {
             // callee frame for the duration (as `jit_set_arguments`
             // does), and nothing of the frame exists yet anyway. It is
             // GC-safe for the same reason the side-exit materialization
-            // (`gen_forward_rest_materialize`) is: every element is
+            // (`gen_virtual_materialize`) is: every element is
             // still live in the caller's frame slots, which are on the
             // control-frame chain and scanned.
             if let Some(rest) = layout.rest {

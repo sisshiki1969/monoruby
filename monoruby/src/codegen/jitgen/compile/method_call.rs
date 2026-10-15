@@ -1291,6 +1291,9 @@ impl<'a> JitContext<'a> {
                             // reading `nil` from the real frame.
                             ISeqHint::ArgReturn(n) if callsite.pos_num > n => {
                                 if let Some(dst) = dst {
+                                    if state.virtual_at(callsite.args + n).is_some() {
+                                        self.materialize_virtual(state, ir, callsite.args + n);
+                                    }
                                     state.copy_slot(ir, callsite.args + n, dst);
                                 }
                                 return Ok(CompileResult::Continue);
@@ -1336,9 +1339,9 @@ impl<'a> JitContext<'a> {
                 // `o.__builtin_initialize__(...)` inside the Ruby
                 // `Class#new` — i.e. the overwhelmingly common
                 // `def initialize(x); end`. When the frame's forwarded `...`
-                // rest was deferred (D1) the argument shape is a
-                // compile-time constant, which is all the fold needs; see
-                // `forwarded_trivial_pos_num`.
+                // rest is an elided object (`VirtualSrc::CallerSlots`) the
+                // argument shape is a compile-time constant, which is all
+                // the fold needs; see `forwarded_trivial_pos_num`.
                 let forwarded_fold = !simple_fold
                     && self
                         .forwarded_trivial_pos_num(state, callsite)
@@ -1365,6 +1368,10 @@ impl<'a> JitContext<'a> {
                         // positionals live in the caller's frame, not here.
                         ISeqHint::ArgReturn(n) if simple_fold && callsite.pos_num > n => {
                             if let Some(dst) = dst {
+                                // An elided argument is observed by the copy.
+                                if state.virtual_at(callsite.args + n).is_some() {
+                                    self.materialize_virtual(state, ir, callsite.args + n);
+                                }
                                 state.copy_slot(ir, callsite.args + n, dst);
                             }
                             true
@@ -1375,13 +1382,12 @@ impl<'a> JitContext<'a> {
                         // Call elided — the kept-unboxed locals were never
                         if forwarded_fold {
                             // Eliding the call *is* the forwarding consume:
-                            // no one reads the rest `Array`, so keep the
-                            // caller-side `create_array` skip on (without
-                            // this the producer would materialize an Array
-                            // nothing ever looks at). Deopt side exits still
-                            // rebuild it from the frame's D1 annotation,
-                            // which is left in place.
-                            ir.set_deferred_rest();
+                            // no one reads the rest `Array` (an elided
+                            // object, dropped once the frame's reads of it
+                            // are behind) nor the `**kwrest` Hash, so keep
+                            // the caller-side kw skip on (K1). Deopt side
+                            // exits still rebuild both.
+                            ir.set_kw_routed();
                         }
                         return Ok(CompileResult::Continue);
                     }
@@ -1431,12 +1437,20 @@ impl<'a> JitContext<'a> {
                 // most: a computed float is neither an immediate constant
                 // nor a forwarded argument, so float-heavy call sites
                 // never specialized at all.
+                // A `*rest` callee, and an elided object among the
+                // arguments, are the other things worth specializing for:
+                // the callee's entry takes the object over without its
+                // `Array` being built (`doc/escape_analysis.md`).
                 let specializable = self.store.is_simple_call(func_id, callid)
                     && (forwarding_callee
+                        || self.store[func_id].is_rest()
                         || state.is_C_immediate(callsite.recv)
                         || (pos_num != 0
-                            && (args..args + pos_num)
-                                .any(|i| state.is_C_immediate(i) || state.is_fpr_resident(i))));
+                            && (args..args + pos_num).any(|i| {
+                                state.is_C_immediate(i)
+                                    || state.is_fpr_resident(i)
+                                    || state.virtual_at(i).is_some()
+                            })));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
                 // The forwarded `initialize` inside the Ruby `Class#new`
                 // (the privileged `recv.__builtin_initialize__(...)`
@@ -1446,8 +1460,9 @@ impl<'a> JitContext<'a> {
                 // non-simple. Argument link-modes are NOT propagated
                 // (`specializable` stays false, so `specialized_iseq`
                 // uses `JitArgumentInfo::default()`); the arguments flow
-                // through the same forwarded `set_arguments` (D1
-                // source-routed when the trampoline's rest is deferred).
+                // through the same forwarded `set_arguments` (source-routed
+                // from the caller's window when the trampoline's rest is an
+                // elided object, `doc/escape_analysis.md` §6).
                 // This turns construction into
                 // allocate + direct `SpecializedCall` into an
                 // initialize compiled for exactly that class.
@@ -1460,9 +1475,9 @@ impl<'a> JitContext<'a> {
                 // trampoline is the case where *not* inlining costs more:
                 // its body is a single call, so it adds almost no code,
                 // while leaving it out means the caller builds the rest
-                // `Array` its `(...)` binds — `send` passes
-                // `defer_rest: false` unconditionally, so only a
-                // specialized frame can carry D1's elision. `Class#new` is
+                // `Array` its `(...)` binds — only a specialized callee
+                // takes it over elided (`LinkMode::from_caller`), a
+                // generic `send` builds it. `Class#new` is
                 // the case that matters: every `Foo.new` deeper in a call
                 // tree than the budget reaches paid one `Array` per
                 // construction, purely because of where it sat.
@@ -1545,6 +1560,8 @@ impl<'a> JitContext<'a> {
         // `recv_class`'s JIT body — hand `None` so the lowering dispatches
         // through the callee's wrapper (see `AsmInst::Call::recv_class`).
         let proven_recv_class = (!same_target_set_guarded).then_some(recv_class);
+        // The generic call takes no elided argument (`doc/escape_analysis.md`).
+        self.settle_virtual_args(state, ir, callid);
         state.send(
             ir,
             &self.store,
@@ -1577,14 +1594,16 @@ impl<'a> JitContext<'a> {
     /// call site, or `None` when the shape is not a compile-time constant.
     ///
     /// This is the trivial-method fold's (`ISeqHint`) entry for forwarding
-    /// call sites, which `is_simple_call` rejects out of hand. It leans
-    /// entirely on the D1 deferral annotation: `forward_rest_deferral` only
-    /// annotates a *pure forwarding trampoline* (`def f(...) = g(...)`,
-    /// single basic block) whose own caller passes no keywords and no `&blk`
-    /// through a simple (splat-free) call site. So for an annotated frame:
+    /// call sites, which `is_simple_call` rejects out of hand. It leans on
+    /// the rest `Array` being an elided object (`VirtualSrc::CallerSlots`
+    /// over the caller's positional window, which only a *pure forwarding
+    /// trampoline* `def f(...) = g(...)` entered through a simple,
+    /// splat-free call site gets — `LinkMode::from_caller`) and on the K1
+    /// annotation (`forward_kw_deferral`), which only such a trampoline
+    /// whose own caller passes no keywords and no `&blk` gets. So:
     ///
     /// * the forwarded positional count is exactly the caller's `pos_num`
-    ///   (`len` below), and
+    ///   (the object's `len` below), and
     /// * `f`'s `**kwrest` local is statically nil — the `...` forward's
     ///   hash-splat contributes no keywords, which is what lets the fold
     ///   ignore `kw_may_exists` (true here only because of that nil splat).
@@ -1610,7 +1629,11 @@ impl<'a> JitContext<'a> {
             return None;
         }
         let lead_num = callsite.pos_num - 1;
-        let (_, len) = state.deferred_rest_src(callsite.args + lead_num)?;
+        state.deferred_forward_info()?;
+        let Some(VirtualSrc::CallerSlots { len, .. }) = state.virtual_at(callsite.args + lead_num)
+        else {
+            return None;
+        };
         Some(lead_num + len as usize)
     }
 
@@ -1668,13 +1691,10 @@ impl<'a> JitContext<'a> {
         } = block.add(1);
         let simple = self.store.is_simple_call(callee_fid, callid);
         let args_info = if simple {
-            JitArgumentInfo::new(LinkMode::from_caller_yield(
-                &self.store,
-                callee_fid,
-                callid,
-                state,
-                self_class,
-            ))
+            JitArgumentInfo::new(
+                LinkMode::from_caller_yield(&self.store, callee_fid, callid, state, self_class),
+                vec![],
+            )
         } else {
             JitArgumentInfo::default()
         };
@@ -1696,8 +1716,8 @@ impl<'a> JitContext<'a> {
         let SpecializedCompileResult {
             entry,
             return_state,
-            deferred_rest: _,
-            needs_rest_array: _,
+            kw_routed: _,
+            kw_vetoed: _,
             had_deopt: _,
             generic_yield: _,
             spec_id,
@@ -1741,7 +1761,7 @@ impl<'a> JitContext<'a> {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: state.pc().as_ptr() as u64,
         });
-        state.set_arguments(&self.store, ir, callid, callee_fid, false, &arg_hints, &[]);
+        state.set_arguments(&self.store, ir, callid, callee_fid, false, false, &arg_hints, &[]);
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
@@ -2024,8 +2044,9 @@ impl<'a> JitContext<'a> {
     ///
     /// The trampoline also costs an `Array` per construction. Its `(...)`
     /// binds the arguments into a rest parameter, and that rest `Array` is
-    /// elided only when the forward is proved to go straight back out
-    /// again (D1) — which needs the trampoline *inlined* into this
+    /// elided only when the trampoline is specialized for the call and the
+    /// forward routes it straight back out again — which needs the
+    /// trampoline *inlined* into this
     /// compilation unit, i.e. a specialization-depth budget a deeply
     /// nested caller has already spent. So the very same construction loop
     /// allocated one empty `Array` per object, or none, depending on how
@@ -2402,8 +2423,37 @@ impl<'a> JitContext<'a> {
         frameless: bool,
     ) -> JitResult<CompileResult> {
         let dst = self.store[callid].dst;
+        // The elided objects among the arguments go over with the call
+        // (`doc/escape_analysis.md`): the callee's `*rest` parameter is one
+        // (over the rest window, whose own elided members are materialized
+        // first — they are elements, not parameters), and so is every
+        // elided literal in a parameter position. The callee reads their
+        // elements through its saved frame pointer, or through its window
+        // offset when it is frameless. A callee that cannot take them
+        // (`caller_slots_ok`), or a call that is not specialized on its
+        // arguments at all, gets them materialized here.
+        let handover = if specializable && self.caller_slots_ok(fid) {
+            let callee = &self.store[fid];
+            let cs = &self.store[callid];
+            let (_, filled_opt, _, rest_len) = callee.apply_args(cs.pos_num);
+            let rest_window = cs.args + (callee.req_num() + filled_opt.len());
+            for slot in rest_window..rest_window + rest_len {
+                if state.virtual_at(slot).is_some() {
+                    self.materialize_virtual(state, ir, slot);
+                }
+            }
+            Some(if frameless {
+                SlotBase::Window(self.inline_window_delta())
+            } else {
+                SlotBase::SavedFp
+            })
+        } else {
+            self.settle_virtual_args(state, ir, callid);
+            None
+        };
         let mut args_info = if specializable {
-            JitArgumentInfo::new(LinkMode::from_caller(&self.store, fid, callid, state))
+            let (modes, virtuals) = LinkMode::from_caller(&self.store, fid, callid, state, handover);
+            JitArgumentInfo::new(modes, virtuals)
         } else {
             JitArgumentInfo::default()
         };
@@ -2456,14 +2506,15 @@ impl<'a> JitContext<'a> {
         let SpecializedCompileResult {
             entry,
             return_state,
-            deferred_rest,
-            needs_rest_array,
+            kw_routed,
+            kw_vetoed,
             had_deopt,
             generic_yield,
             spec_id,
             using_fpr: frozen_using_fpr,
             float_return,
         } = compiled;
+        let rest_elided = handover.is_some();
         // The call site passes a block literal: if the callee heapifies
         // its *own* frame during the call (`Proc.new` / `lambda` /
         // `binding`), `materialize_escaped_block_handlers` turns the
@@ -2551,8 +2602,8 @@ impl<'a> JitContext<'a> {
             fid,
             entry,
             evict,
-            deferred_rest,
-            needs_rest_array,
+            rest_elided,
+            kw_routed && !kw_vetoed,
             bmethod_outer,
             using_fpr,
             &arg_hints,
@@ -2573,12 +2624,13 @@ impl<'a> JitContext<'a> {
 pub(super) struct SpecializedCompileResult {
     pub entry: JitLabel,
     pub return_state: Option<ReturnState>,
-    /// D1: the trampoline body's forwarding consumer elided `f`'s rest
-    /// `Array` (routed straight from the caller source); the caller-side
-    /// `set_arguments` must skip the `create_array`.
-    pub deferred_rest: bool,
-    /// D1 veto: some forwarding consume needs the real rest `Array`.
-    pub needs_rest_array: bool,
+    /// K1: the trampoline body's forwarding consumer elided `f`'s
+    /// `**kwrest` Hash (routed the caller's literal keywords straight from
+    /// the caller's kw window); the caller-side `set_arguments` may skip
+    /// building it.
+    pub kw_routed: bool,
+    /// K1 veto: some forwarding consume needs the real `**kwrest` Hash.
+    pub kw_vetoed: bool,
     /// The compiled subtree contains a deopt-able side exit.
     pub had_deopt: bool,
     /// The compiled callee instance, keying its call site's recorded FP
@@ -2601,8 +2653,8 @@ impl SpecializedCompileResult {
     fn to_memo(&self) -> spec_memo::SpecializedCompileResultMemo {
         spec_memo::SpecializedCompileResultMemo {
             return_state: self.return_state.clone(),
-            deferred_rest: self.deferred_rest,
-            needs_rest_array: self.needs_rest_array,
+            kw_routed: self.kw_routed,
+            kw_vetoed: self.kw_vetoed,
             had_deopt: self.had_deopt,
             generic_yield: self.generic_yield,
             spec_id: self.spec_id,
@@ -2614,8 +2666,8 @@ impl SpecializedCompileResult {
     fn from_memo(entry: JitLabel, memo: spec_memo::SpecializedCompileResultMemo) -> Self {
         let spec_memo::SpecializedCompileResultMemo {
             return_state,
-            deferred_rest,
-            needs_rest_array,
+            kw_routed,
+            kw_vetoed,
             had_deopt,
             generic_yield,
             spec_id,
@@ -2625,8 +2677,8 @@ impl SpecializedCompileResult {
         Self {
             entry,
             return_state,
-            deferred_rest,
-            needs_rest_array,
+            kw_routed,
+            kw_vetoed,
             had_deopt,
             generic_yield,
             spec_id,
@@ -2796,7 +2848,7 @@ impl<'a> JitContext<'a> {
             || callee.opt_num() != 0
             || callee.post_num() != 0
             || cs.pos_num != callee.req_num()
-            || self.forward_rest_deferral().is_some()
+            || self.forward_kw_deferral().is_some()
         {
             return vec![];
         }
@@ -2892,8 +2944,8 @@ impl<'a> JitContext<'a> {
         let spec_id = frame.asm_info.specialized_id;
         let frame_using_fpr = frame.call_site_using_fpr;
         let frame_had_deopt = frame.had_deopt;
-        let frame_deferred_rest = frame.deferred_rest;
-        let frame_needs_rest_array = frame.needs_rest_array;
+        let frame_kw_routed = frame.kw_routed;
+        let frame_kw_vetoed = frame.kw_vetoed;
         let frame_generic_yield = frame.generic_yield;
         let frame_float_return = frame.float_return;
         let frame_has_boxed_return = frame.has_boxed_return;
@@ -2988,8 +3040,8 @@ impl<'a> JitContext<'a> {
         Ok(SpecializedCompileResult {
             entry,
             return_state,
-            deferred_rest: frame_deferred_rest,
-            needs_rest_array: frame_needs_rest_array,
+            kw_routed: frame_kw_routed,
+            kw_vetoed: frame_kw_vetoed,
             had_deopt: frame_had_deopt,
             generic_yield: frame_generic_yield,
             spec_id,
@@ -3123,8 +3175,8 @@ const SPECIALIZE_DEPTH_LIMIT: usize = 3;
 /// it never acts as a budget: a chain cut half way is *worse* than one not
 /// entered at all, because each forwarding frame that lands beyond the cut
 /// is emitted as a generic call, and a generic call to a forwarding
-/// trampoline materializes the rest `Array` that D1 exists to elide
-/// (`send` passes `defer_rest: false` unconditionally).
+/// trampoline materializes the rest `Array` that the hand-over of elided
+/// objects exists to elide (a generic `send` takes none).
 const FORWARD_EXEMPT_RECURSION_CAP: usize = 32;
 
 impl AbstractState {
@@ -3178,7 +3230,7 @@ impl AbstractState {
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
         });
-        self.set_arguments(store, ir, callid, callee_fid, false, &arg_hints, &[]);
+        self.set_arguments(store, ir, callid, callee_fid, false, false, &arg_hints, &[]);
         self.discard(dst);
         self.clear_above_next_sp();
         let error = ir.new_error(self);
@@ -3281,8 +3333,13 @@ impl AbstractState {
         callee_fid: FuncId,
         inlined_entry: JitLabel,
         evict: AsmEvict,
-        deferred_rest: bool,
-        needs_rest_array: bool,
+        // The callee takes its `*rest` over as an elided object
+        // (`LinkMode::from_caller` with a base): no `Array` is built.
+        rest_elided: bool,
+        // K1: the callee's forwarding consume routed the literal keywords
+        // straight from this frame, and nothing vetoed it: no `**kwrest`
+        // Hash is built.
+        defer_kw: bool,
         bmethod_outer: Option<Option<Lfp>>,
         // The caller-computed `get_using_fpr` snapshot, taken there so it
         // can also be recorded for the resolve pass (stage 1' — the
@@ -3295,10 +3352,6 @@ impl AbstractState {
         // (`JitContext::plan_float_args`), by callee parameter slot.
         float_args: &[(SlotId, FPReg)],
     ) {
-        // D1: skip the caller-side `create_array` only when at least
-        // one forwarding consume was source-routed AND no forwarding
-        // consume needs the real rest `Array`.
-        let defer_rest = deferred_rest && !needs_rest_array;
         // Stack check only: the specialized callee body compiles its own
         // `InitMethod` entry poll.
         self.check_stack(ir);
@@ -3309,7 +3362,14 @@ impl AbstractState {
             call_site_pc: self.pc().as_ptr() as u64,
         });
         self.set_arguments(
-            store, ir, callid, callee_fid, defer_rest, arg_hints, float_args,
+            store,
+            ir,
+            callid,
+            callee_fid,
+            rest_elided,
+            defer_kw,
+            arg_hints,
+            float_args,
         );
         self.discard(store[callid].dst);
         self.clear_above_next_sp();
@@ -3540,13 +3600,23 @@ impl AbstractState {
         Some(route)
     }
 
+    ///
+    /// Fill the callee's frame with the call site's arguments. An elided
+    /// object among them (`doc/escape_analysis.md`) is handed over as the
+    /// `nil` its `V` parameter slot physically holds (the callee's entry
+    /// state knows the object; a specialized callee only, through
+    /// `LinkMode::from_caller` — every other path materialized them
+    /// beforehand), and the same for the whole `*rest` when
+    /// `rest_elided`. The elements stay in this frame, spilled.
+    ///
     pub(super) fn set_arguments(
         &mut self,
         store: &Store,
         ir: &mut AsmIr,
         callid: CallSiteId,
         callee_fid: FuncId,
-        defer_rest: bool,
+        rest_elided: bool,
+        defer_kw: bool,
         arg_hints: &[(GP, SlotId)],
         // The parameters handed over in a register
         // (`JitContext::plan_float_args`), by callee parameter slot.
@@ -3621,10 +3691,10 @@ impl AbstractState {
                 // address in this frame, and the frame is scannable from
                 // the moment it is linked, so leaving it would hand the
                 // collector whatever the previous frame left there. Same
-                // reasoning as the deferred rest below, and just as cheap
+                // reasoning as the elided rest below, and just as cheap
                 // — an immediate store, no boxing call.
                 let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
-                self.fetch_for_callee(ir, args + i, ofs);
+                self.fetch_arg_for_callee(ir, args + i, ofs);
             }
             if req != callee.req_num() {
                 for i in req..callee.req_num() {
@@ -3637,7 +3707,7 @@ impl AbstractState {
             for i in filled_opt {
                 let reg = args + req + (i - callee.req_num());
                 let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
-                self.fetch_for_callee(ir, reg, ofs);
+                self.fetch_arg_for_callee(ir, reg, ofs);
             }
             if opt != callee.opt_num() {
                 for i in callee.req_num() + opt..callee.reqopt_num() {
@@ -3649,14 +3719,14 @@ impl AbstractState {
             // fill a rest param.
             if callee.is_rest() {
                 let ofs = stack_offset - (LFP_ARG0 + (8 * (callee.reqopt_num())) as i32);
-                if defer_rest {
-                    // D1: the trampoline body's forwarding consumer
-                    // copied straight from these source slots, so no
-                    // `Array` is built here. Spill the source range so
-                    // it is memory-resident for the deopt-time
-                    // materialization, and store a real `nil` into the
-                    // rest slot (matches its `C(nil)` LinkMode, keeps
-                    // the frame GC-safe).
+                if rest_elided {
+                    // The callee's entry holds the rest as an elided
+                    // object over these source slots
+                    // (`VirtualSrc::CallerSlots`), so no `Array` is built
+                    // here. Spill the source range so it is
+                    // memory-resident for the callee's reads and its
+                    // deopt-time materialization, and store a real `nil`
+                    // into the rest slot (keeps the frame GC-safe).
                     self.write_back_range(ir, args + req + opt, rest_len as u16);
                     ir.u64torsp_offset(NIL_VALUE, ofs);
                 } else {
@@ -3669,7 +3739,17 @@ impl AbstractState {
             for i in filled_post {
                 let reg = args + (pos_num - post) + (i - start);
                 let ofs = stack_offset - (LFP_ARG0 + (8 * i) as i32);
-                self.fetch_for_callee(ir, reg, ofs);
+                self.fetch_arg_for_callee(ir, reg, ofs);
+            }
+            // The elided arguments are the callee's now: their element
+            // slots stay spilled where they are for the call's duration
+            // (above this frame's stack top, out of the way of anything
+            // this frame does before the call returns), and the argument
+            // slots are dead once it does.
+            for slot in args..args + pos_num {
+                if let Some(src) = self.take_virtual(slot) {
+                    self.discard_dead_elements(src);
+                }
             }
             if post != callee.post_num() {
                 for i in start + post..start + callee.post_num() {
@@ -3726,14 +3806,14 @@ impl AbstractState {
             // fill kw rest param.
             if let Some(kw_rest) = callee.kw_rest() {
                 let ofs = stack_offset - (LFP_SELF + kw_rest.0 as i32 * 8);
-                if defer_rest && !rest_kw.is_empty() {
+                if defer_kw && !rest_kw.is_empty() {
                     // K1: the specialized trampoline body source-routed
                     // these literal keywords straight from our slots;
-                    // store the same GC-safe `nil` the deferred rest
+                    // store the same GC-safe `nil` the elided rest
                     // gets. Spill the kw window first so it is
                     // memory-resident for the routed reads and for a
                     // deopt-time Hash rebuild (`forward_kwrest`
-                    // write-back), exactly as the deferred rest spills
+                    // write-back), exactly as the elided rest spills
                     // its positional window.
                     self.write_back_range(ir, kw_pos, kw_num as u16);
                     ir.u64torsp_offset(NIL_VALUE, ofs);
@@ -3838,7 +3918,8 @@ impl AbstractState {
                     kw_route.is_some() && kwrest_guard == Some(*kwrest_local)
                 }
             };
-            // D1: if `f`'s `...` rest array was deferred at frame entry,
+            // D1: if `f`'s `...` rest `Array` is still an elided object
+            // (handed over by `f`'s caller, `VirtualSrc::CallerSlots`),
             // route the copy straight from the caller's source slots.
             // Only when the forwarded arity statically binds to `g`'s
             // positional params — `req <= lead+len`, no post, and the
@@ -3850,32 +3931,50 @@ impl AbstractState {
             // remains. Also only for the `g(*rest, **kwrest, &blk)`
             // trampoline shape (`kwrest_guard.is_some()`; the structural
             // gate guarantees no kw reaches `f`, so the forwarded
-            // `**kwrest` is nil). `ir.set_deferred_rest` makes the
+            // `**kwrest` is nil). `ir.set_kw_routed` makes the
             // caller skip `create_array`. The annotation is NOT cleared:
             // the window's and the `g` call's own side exits must still
             // rebuild the array for an interpreter resuming inside `f`.
-            let deferred_src = match self.deferred_rest_src(args + lead_num) {
-                Some((src, len))
-                    if {
-                        let n = lead_num + len as usize;
-                        callee.req_num() <= n && (callee.is_rest() || n <= callee.reqopt_num())
-                    } && kwrest_guard.is_some()
-                        && deferred_kw_ok =>
+            let deferred_src = match self.virtual_at(args + lead_num) {
+                Some(VirtualSrc::CallerSlots {
+                    src,
+                    len,
+                    base: SlotBase::SavedFp,
+                }) if {
+                    let n = lead_num + len as usize;
+                    callee.req_num() <= n && (callee.is_rest() || n <= callee.reqopt_num())
+                } && kwrest_guard.is_some()
+                    && deferred_kw_ok =>
                 {
-                    ir.set_deferred_rest();
+                    ir.set_kw_routed();
                     Some((src, len))
                 }
                 _ => {
                     // Not source-routed (slot/arity/kwrest mismatch):
                     // this forwarding consume reads `f`'s rest slot as a
-                    // real `Array`, so veto the caller-side skip.
+                    // real `Array` (built here if it is still elided),
+                    // so veto the caller-side kw skip.
                     if self.deferred_forward_info().is_some() {
-                        ir.set_needs_rest_array();
+                        ir.set_kw_vetoed();
                     }
+                    self.materialize_virtual_args(ir, callsite);
                     None
                 }
             };
-            self.write_back_recv_and_callargs(ir, callsite);
+            if deferred_src.is_some() {
+                // The rest slot stays elided (`LinkMode::V`): the routed
+                // fill reads the caller's window, never that slot, and a
+                // side exit under the call rebuilds the `Array` from the
+                // same window (`WriteBack::virtual_obj`).
+                self.write_back(ir, recv, Keep::All);
+                self.write_back_range(ir, args, lead_num as u16);
+                self.write_back_range(ir, callsite.kw_pos, callsite.kw_len() as u16);
+                if let Some(block_arg) = callsite.block_arg {
+                    self.write_back(ir, block_arg, Keep::All);
+                }
+            } else {
+                self.write_back_recv_and_callargs(ir, callsite);
+            }
             if deferred_src.is_some() {
                 // D1/K1 cannot fail: the gate proved the fill layout is a
                 // compile-time constant, so the lowering has no length
@@ -3961,10 +4060,12 @@ impl AbstractState {
             // delegating block's `target(*args, **kwargs)` — must keep
             // taking the generic path.
             // Array-path forwarding consume (callee with opt/post/rest):
-            // it reads `f`'s rest slot as a real `Array`.
+            // it reads `f`'s rest slot as a real `Array`, and its
+            // `**kwrest` as a real `Hash`.
             if self.deferred_forward_info().is_some() {
-                ir.set_needs_rest_array();
+                ir.set_kw_vetoed();
             }
+            self.materialize_virtual_args(ir, callsite);
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArgumentsForwardedHelper { callid, callee_fid });
@@ -3992,7 +4093,8 @@ impl AbstractState {
             // `no_keyword`), so no kw-rest guard is needed, and without
             // keyword syntax at the call site no ruby2_keywords promotion
             // can apply. A non-forwarding splat operand is an ordinary
-            // evaluated slot, so no deferred-rest handling applies either.
+            // evaluated slot, so no source routing applies either.
+            self.materialize_virtual_args(ir, callsite);
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArgumentsForwarded {
@@ -4013,8 +4115,9 @@ impl AbstractState {
             // `f`'s rest slot as a real `Array` via the runtime
             // `jit_generic_set_arguments`, so veto the skip.
             if callsite.forwarding && self.deferred_forward_info().is_some() {
-                ir.set_needs_rest_array();
+                ir.set_kw_vetoed();
             }
+            self.materialize_virtual_args(ir, callsite);
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArguments { callid, callee_fid });
@@ -4027,7 +4130,7 @@ impl AbstractState {
 mod tests {
     use crate::tests::*;
 
-    /// D1 forwarding-rest deferral into an *optional*-parameter callee:
+    /// Source-routed forward of an elided rest into an *optional*-parameter callee:
     /// the forwarded count is statically known per specialization, so the
     /// fill layout (copied slots + None-filled optionals running their
     /// defaults) is a compile-time constant. Cover under-, exactly-, and
@@ -4295,7 +4398,7 @@ mod tests {
     /// Trivial-method (`ISeqHint`) fold through a `...` forward. The Ruby
     /// `Class#new` reaches `initialize` via `o.__builtin_initialize__(...)`,
     /// a forwarding call site `is_simple_call` always rejects — so the fold
-    /// applies only once the D1 deferral makes the forwarded argument shape
+    /// applies only once the elided rest makes the forwarded argument shape
     /// a compile-time constant. Covers what the fold must NOT swallow:
     /// arity and keyword errors still raise, an impure default still runs,
     /// and a real `initialize` still executes.
@@ -4507,16 +4610,17 @@ mod tests {
         );
     }
 
-    /// A JIT-specialized *deferred* construction that deopts mid-run. The
-    /// Ruby `Class#new` trampoline defers `Foo.new`'s `...` rest (D1), so the
+    /// A JIT-specialized construction with an elided rest that deopts
+    /// mid-run. The Ruby `Class#new` trampoline takes `Foo.new`'s `...` rest
+    /// over as an elided object (`VirtualSrc::CallerSlots`), so the
     /// forwarded ctor args are source-routed straight from the caller frame
     /// and no rest array is built on the fast path. A class-version bump then
     /// invalidates the compiled construction, so the interpreter resumes
     /// inside `new` and must rebuild the forwarded `...` array via the
-    /// `forward_rest` side-exit materialize (`gen_forward_rest_materialize` /
-    /// `a64_gen_forward_rest_materialize`). Exercises both the deferred
-    /// source-routing and the deopt materialization on both backends; the
-    /// ctor takes both req-only and optional shapes.
+    /// side-exit materialize (`gen_virtual_materialize` /
+    /// `a64_gen_virtual_materialize`). Exercises both the source-routing
+    /// and the deopt materialization on both backends; the ctor takes both
+    /// req-only and optional shapes.
     #[test]
     fn deferred_construction_deopt() {
         run_test(
@@ -4550,7 +4654,7 @@ mod tests {
         );
     }
 
-    /// D1 forwarding-rest deferral into a `*rest` / bare-`**kwrest`
+    /// Source-routed forward of an elided rest into a `*rest` / bare-`**kwrest`
     /// callee: the rest `Array` is built directly from the caller's
     /// slots (single `create_array`, no intermediate) and the kwrest
     /// slot is nil-initialized. Cover empty/short/long binds, leading

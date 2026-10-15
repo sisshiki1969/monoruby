@@ -366,25 +366,36 @@ impl SlotState {
         }
 
         if let JitType::Specialized {
-            args_info: JitArgumentInfo(Some(args), float_args),
+            args_info: JitArgumentInfo(Some(args), float_args, virtuals),
             ..
         } = cc.jit_type()
         {
-            // D1/K1: a forwarding trampoline's `...` rest and its
-            // `**kwrest` may be deferred, in which case `set_arguments`
-            // stores a real `nil` into the slot and the consumer routes
-            // from the caller's window. The `S(Array)` / `S(Hash)` that
-            // `LinkMode::from_caller` synthesizes for those parameters
-            // describes the objects that were *not* built, so it must
-            // not become a claim here.
-            let deferred = cc.forward_rest_deferral();
+            // K1: a forwarding trampoline's `**kwrest` may be deferred,
+            // in which case `set_arguments` stores a real `nil` into the
+            // slot and the consumer routes from the caller's kw window.
+            // The `S(Hash)` that `LinkMode::from_caller` synthesizes for
+            // that parameter describes the object that was *not* built,
+            // so it must not become a claim here.
+            let deferred = cc.forward_kw_deferral();
             let is_deferred = |slot: SlotId| {
-                deferred.as_ref().is_some_and(|df| {
-                    df.rest_local == slot || df.kw.as_ref().is_some_and(|(kw, ..)| *kw == slot)
-                })
+                deferred
+                    .as_ref()
+                    .is_some_and(|df| df.kw.as_ref().is_some_and(|(kw, ..)| *kw == slot))
             };
+            // The parameters handed over as elided objects: `*rest`
+            // whose `Array` the caller did not build, and the literals
+            // it passed elided (`doc/escape_analysis.md`). The slot
+            // physically holds the `nil` the caller stored (a frameless
+            // window's is unwritten, and never read).
+            for (slot, src) in virtuals {
+                ctx.def_virtual(*slot, *src);
+            }
             for (i, arg) in args.iter().enumerate() {
                 let slot = SlotId(i as u16);
+                if ctx.virtual_at(slot).is_some() {
+                    debug_assert_eq!(*arg, LinkMode::V);
+                    continue;
+                }
                 // Also handed over raw in `fpr`
                 // (`JitContext::plan_float_args`). `Sf`, not `F`: the
                 // boxed copy `set_arguments` stored stays canonical, so
@@ -483,6 +494,7 @@ impl SlotState {
             || self.fpr_alloc != other.fpr_alloc
             || self.gp_regfile != other.gp_regfile
             || self.copy_window != other.copy_window
+            || self.virtuals != other.virtuals
         {
             return false;
         }
@@ -505,6 +517,7 @@ impl SlotState {
         self.fpr_alloc.hash(state);
         self.gp_regfile.hash(state);
         self.copy_window.hash(state);
+        self.virtuals.hash(state);
         for i in self.all_regs() {
             let s = &self.slots[i.0 as usize];
             s.mode.hash(state);
@@ -828,6 +841,12 @@ impl SlotState {
             if slot.is_self() {
                 panic!("{self:?}")
             }
+            // A redefinition of the slot ends the elided object it held:
+            // nothing can observe it any more, so its allocation is simply
+            // gone (`doc/escape_analysis.md`).
+            if let Some(i) = self.virtuals.iter().position(|(dst, _)| *dst == slot) {
+                self.virtuals.remove(i);
+            }
             self.clear(slot);
             self.is_used_mut(slot).kill();
             // A redefinition ends the dynvar provenance — the new value did
@@ -872,7 +891,7 @@ impl SlotState {
     pub(in crate::codegen::jitgen) fn is_virtual_src(&self, slot: SlotId) -> bool {
         self.virtuals.iter().any(|(_, src)| match src {
             VirtualSrc::Slots { src, len, .. } => (src.0..src.0 + len).contains(&slot.0),
-            VirtualSrc::Literal(_) => false,
+            VirtualSrc::Literal(_) | VirtualSrc::CallerSlots { .. } => false,
         })
     }
 
@@ -2417,13 +2436,6 @@ impl AbstractFrame {
         b
     }
 
-    fn wb_forward_rest(&self) -> Vec<(SlotId, SlotId, u16)> {
-        self.deferred_forward
-            .iter()
-            .map(|df| (df.rest_local, df.src, df.len))
-            .collect()
-    }
-
     /// K1: the deferred `**kwrest` materialization entries —
     /// `(f's kwrest local, [(name, caller slot)])`.
     fn wb_forward_kwrest(&self) -> Vec<(SlotId, Box<[(IdentId, SlotId)]>)> {
@@ -2442,20 +2454,21 @@ impl AbstractFrame {
     }
 
     pub(super) fn get_gc_write_back(&self) -> WriteBack {
-        // A deferred rest slot always physically holds a valid `Value`
-        // at any GC safepoint: when the deferral activated the
+        // A deferred `**kwrest` slot always physically holds a valid
+        // `Value` at any GC safepoint: when the deferral activated the
         // caller-side `set_arguments` stored a real `nil` there; when it
-        // did not it holds the normally-built array. So GC scanning is
+        // did not it holds the normally-built Hash. So GC scanning is
         // safe without materializing, and the trampoline gate (single
         // forwarding call, no eval/binding) guarantees the frame is not
-        // capturable, so no heap snapshot observes it pre-consume.
+        // capturable, so no heap snapshot observes it pre-consume. The
+        // slot of an elided object (`V`) gets a `nil` (`void`).
         let literal = self.wb_literal(|_| true);
         let void = self.wb_void();
         // spill dirty GP residents so the GC marks them (the
         // registers themselves survive the collection — `exec_gc` preserves the
         // caller-saved set). Empty without the feature.
         let gp = self.gp_regfile.dirty_residents();
-        WriteBack::new(vec![], vec![], literal, void, gp, vec![], vec![], vec![])
+        WriteBack::new(vec![], vec![], literal, void, gp, vec![], vec![])
     }
 
     pub(crate) fn get_write_back(&self) -> WriteBack {
@@ -2473,7 +2486,6 @@ impl AbstractFrame {
             literal,
             vec![],
             gp,
-            self.wb_forward_rest(),
             self.wb_forward_kwrest(),
             self.wb_virtual(),
         )
@@ -2813,15 +2825,28 @@ impl LinkMode {
         }
     }
 
+    ///
+    /// The entry state of a specialized callee as the call site *callid*
+    /// hands it over: a `LinkMode` per parameter, plus the parameters
+    /// handed over as elided objects (`doc/escape_analysis.md`) when
+    /// *handover* names the frame base the callee reads this frame's
+    /// slots through — the callee's `*rest` (its `Array` is not built:
+    /// `VirtualSrc::CallerSlots` over the rest window), and every
+    /// positional argument that is an elided object here (a `Slots`
+    /// literal becomes `CallerSlots` over its element slots, a `Literal`
+    /// stays one). With `None`, the rest `Array` is built and no argument
+    /// may be elided (the caller materialized them beforehand).
+    ///
     pub(in crate::codegen::jitgen) fn from_caller(
         store: &Store,
         fid: FuncId,
         callid: CallSiteId,
         state: &AbstractState,
-    ) -> Vec<Self> {
+        handover: Option<SlotBase>,
+    ) -> (Vec<Self>, Vec<(SlotId, VirtualSrc)>) {
         let CallSiteInfo { recv, .. } = &store[callid];
         let recv = state.mode(*recv);
-        Self::from_caller_inner(store, fid, callid, state, recv)
+        Self::from_caller_inner(store, fid, callid, state, recv, handover)
     }
 
     pub(in crate::codegen::jitgen) fn from_caller_yield(
@@ -2832,7 +2857,7 @@ impl LinkMode {
         self_class: ClassId,
     ) -> Vec<Self> {
         let recv = LinkMode::S(Guarded::Class(self_class));
-        Self::from_caller_inner(store, fid, callid, state, recv)
+        Self::from_caller_inner(store, fid, callid, state, recv, None).0
     }
 
     fn from_caller_inner(
@@ -2841,7 +2866,8 @@ impl LinkMode {
         callid: CallSiteId,
         state: &AbstractState,
         recv: LinkMode,
-    ) -> Vec<Self> {
+        handover: Option<SlotBase>,
+    ) -> (Vec<Self>, Vec<(SlotId, VirtualSrc)>) {
         let kw_args = store[callid].kw_args();
         let CallSiteInfo {
             args,
@@ -2851,29 +2877,66 @@ impl LinkMode {
         } = &store[callid];
         let info = &store[fid];
         let mut slots = vec![];
+        let mut virtuals = vec![];
         slots.push(recv);
+        // A positional argument that is an elided object: `V` in the
+        // callee, the object re-based onto this frame.
+        let push_arg = |slots: &mut Vec<Self>, virtuals: &mut Vec<(SlotId, VirtualSrc)>, arg| {
+            match state.virtual_at(arg) {
+                Some(src) => {
+                    let Some(base) = handover else {
+                        unreachable!("elided argument {arg:?} handed over without a base")
+                    };
+                    let src = match src {
+                        VirtualSrc::Slots { src, len, .. } => {
+                            VirtualSrc::CallerSlots { src, len, base }
+                        }
+                        VirtualSrc::Literal(v) => VirtualSrc::Literal(v),
+                        VirtualSrc::CallerSlots { .. } => {
+                            unreachable!("an object of the caller's caller is never handed over")
+                        }
+                    };
+                    virtuals.push((SlotId(slots.len() as u16), src));
+                    slots.push(Self::V);
+                }
+                None => slots.push(state.mode(arg)),
+            }
+        };
         let (filled_req, filled_opt, filled_post, rest_len) = info.apply_args(*pos_num);
         let req_len = filled_req.len();
         let opt_len = filled_opt.len();
         let post_len = filled_post.len();
         for i in filled_req {
-            slots.push(state.mode(*args + i));
+            push_arg(&mut slots, &mut virtuals, *args + i);
         }
         for _ in req_len..info.req_num() {
             slots.push(Self::nil());
         }
         for i in req_len..req_len + opt_len {
-            slots.push(state.mode(*args + i));
+            push_arg(&mut slots, &mut virtuals, *args + i);
         }
         for _ in opt_len..info.opt_num() {
             slots.push(Self::none());
         }
         if info.is_rest() {
-            slots.push(Self::S(Guarded::Class(ARRAY_CLASS)));
+            match handover {
+                Some(base) => {
+                    virtuals.push((
+                        SlotId(slots.len() as u16),
+                        VirtualSrc::CallerSlots {
+                            src: *args + (req_len + opt_len),
+                            len: rest_len as u16,
+                            base,
+                        },
+                    ));
+                    slots.push(Self::V);
+                }
+                None => slots.push(Self::S(Guarded::Class(ARRAY_CLASS))),
+            }
         }
         let start = req_len + opt_len + rest_len;
         for i in start..start + post_len {
-            slots.push(state.mode(*args + i));
+            push_arg(&mut slots, &mut virtuals, *args + i);
         }
         for _ in post_len..info.post_num() {
             slots.push(Self::nil());
@@ -2890,7 +2953,7 @@ impl LinkMode {
         if info.kw_rest().is_some() {
             slots.push(Self::S(Guarded::Class(HASH_CLASS)));
         }
-        slots
+        (slots, virtuals)
     }
 }
 

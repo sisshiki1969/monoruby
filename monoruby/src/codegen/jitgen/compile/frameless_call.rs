@@ -355,8 +355,19 @@ impl AbstractState {
             // side exits hand the whole call back to this frame, whose
             // own state has the constant. Nothing is stored.
             let constant = matches!(self.mode(args + i), LinkMode::C(_));
-            if !direct_filled.contains(&i) && !in_register && !constant {
+            // An elided object (`doc/escape_analysis.md`) is the same: the
+            // callee's entry state holds it over this frame's slots, and
+            // its window slot is never read (the collector does not see
+            // the window either).
+            let elided = self.virtual_at(args + i).is_some();
+            if !direct_filled.contains(&i) && !in_register && !constant && !elided {
                 self.fetch_to_slot(ir, args + i, window(1 + i as i32));
+            }
+        }
+        // The elided arguments are the callee's now (see `set_arguments`).
+        for slot in args..args + req {
+            if let Some(src) = self.take_virtual(slot) {
+                self.discard_dead_elements(src);
             }
         }
         // Last: a boxing above can call out, and a call takes the whole
