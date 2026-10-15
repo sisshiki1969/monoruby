@@ -32,6 +32,7 @@
 #include "monoruby_ext.h"
 
 #include <errno.h>
+#include <math.h>
 #include <setjmp.h>
 #include <stdio.h>
 
@@ -872,7 +873,7 @@ rb_rescue(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VA
 int
 rb_keyword_given_p(void)
 {
-    return 0;
+    return api->keyword_given(ctx());
 }
 
 /*
@@ -1604,6 +1605,12 @@ define_cfunc(VALUE klass, const char *name, VALUE (*func)(ANYARGS), int argc, ui
         rb_memerror();
     m->func = func;
     m->arity = argc;
+    /* `rb_add_method` makes these private whatever the caller asked. */
+    if (!(flags & MR_METHOD_SINGLETON) &&
+        (strcmp(name, "initialize") == 0 || strcmp(name, "initialize_copy") == 0 ||
+         strcmp(name, "initialize_clone") == 0 || strcmp(name, "initialize_dup") == 0 ||
+         strcmp(name, "respond_to_missing?") == 0))
+        flags |= MR_METHOD_PRIVATE;
     api->define_method_data(ctx(), (MrValue)klass, name, capi_dispatch, m,
                             argc < 0 ? MR_ARGC_VARIADIC : argc, flags);
     if (api->error_pending(ctx())) {
@@ -1911,6 +1918,19 @@ rb_check_frozen(VALUE obj)
                                               rb_obj_class(obj), obj));
         rb_exc_raise(exc);
     }
+}
+
+/* OBJ_INIT_COPY's callee: the checks `Object#initialize_copy` makes
+ * before an extension copies its own state. */
+VALUE
+rb_obj_init_copy(VALUE obj, VALUE orig)
+{
+    if (obj == orig)
+        return obj;
+    rb_check_frozen(obj);
+    if (rb_obj_class(obj) != rb_obj_class(orig))
+        rb_raise(rb_eTypeError, "initialize_copy should take same class object");
+    return obj;
 }
 
 VALUE
@@ -2225,7 +2245,7 @@ rb_convert_type(VALUE v, int type, const char *tname, const char *method)
     if (NIL_P(r)) {
         const char *special = implicit_name(v);
         if (special)
-            rb_raise(rb_eTypeError, "no implicit conversion from %s to %s", special, tname);
+            rb_raise(rb_eTypeError, "no implicit conversion of %s into %s", special, tname);
         rb_raise(rb_eTypeError, "no implicit conversion of %s into %s", rb_obj_classname(v), tname);
     }
     return r;
@@ -4611,20 +4631,18 @@ rb_enc_codelen(int code, rb_encoding *enc)
 unsigned int
 rb_enc_codepoint_len(const char *p, const char *e, int *len_p, rb_encoding *enc)
 {
+    int len = 0;
+    int64_t cp;
     if (p >= e)
         rb_raise(rb_eArgError, "empty string");
-    int n = rb_enc_precise_mbclen(p, e, enc);
-    if (n <= 0)
-        rb_raise(rb_eArgError, "invalid byte sequence in %s", enc ? rb_enc_name(enc) : "?");
+    /* monoruby's own decoders, for every encoding it walks. */
+    cp = api->enc_codepoint(ctx(), enc ? enc->name : "ASCII-8BIT",
+                            (const unsigned char *)p, (const unsigned char *)e, &len);
+    if (cp < 0)
+        rb_raise(rb_eArgError, "invalid byte sequence in %s", enc ? rb_enc_name(enc) : "ASCII-8BIT");
     if (len_p)
-        *len_p = n;
-    const unsigned char *u = (const unsigned char *)p;
-    if (n == 1)
-        return u[0];
-    unsigned int cp = u[0] & (0xff >> (n + 1));
-    for (int i = 1; i < n; i++)
-        cp = (cp << 6) | (u[i] & 0x3f);
-    return cp;
+        *len_p = len;
+    return (unsigned int)cp;
 }
 
 int
@@ -4954,6 +4972,153 @@ onig_region_memsize(const OnigRegion *regs)
         return size;
     size += regs->allocated * (sizeof(regs->beg[0]) + sizeof(regs->end[0]));
     return size;
+}
+
+/* ---------------------------------------------------------------------
+ * Time (ruby/intern.h): each is a call into Time's own methods, so a
+ * value an extension builds is exactly what `Time.at` would make.
+ * --------------------------------------------------------------------- */
+
+static VALUE
+check_time(VALUE t)
+{
+    if (!RTEST(rb_obj_is_kind_of(t, rb_cTime)))
+        rb_raise(rb_eTypeError, "wrong argument type %s (expected time)", displaying_class_of(t));
+    return t;
+}
+
+VALUE
+rb_time_new(time_t sec, long usec)
+{
+    return rb_funcall(rb_cTime, rb_intern("at"), 3, TIMET2NUM(sec), LONG2NUM(usec),
+                      ID2SYM(rb_intern("microsecond")));
+}
+
+VALUE
+rb_time_nano_new(time_t sec, long nsec)
+{
+    return rb_funcall(rb_cTime, rb_intern("at"), 3, TIMET2NUM(sec), LONG2NUM(nsec),
+                      ID2SYM(rb_intern("nanosecond")));
+}
+
+/* `offset` as CRuby reads it: INT_MAX is the local zone, INT_MAX-1 UTC,
+ * anything within a day a fixed offset in seconds. */
+VALUE
+rb_time_timespec_new(const struct timespec *ts, int offset)
+{
+    VALUE t = rb_time_nano_new(ts->tv_sec, ts->tv_nsec);
+    if (offset == INT_MAX)
+        return t;
+    if (offset == INT_MAX - 1)
+        return rb_funcall(t, rb_intern("utc"), 0);
+    if (-86400 < offset && offset < 86400)
+        return rb_funcall(t, rb_intern("localtime"), 1, INT2FIX(offset));
+    rb_raise(rb_eArgError, "utc_offset out of range");
+}
+
+/* `off` is nil for the local zone, else what `Time#localtime` takes (an
+ * offset in seconds, "+09:00", "UTC"). */
+VALUE
+rb_time_num_new(VALUE timev, VALUE off)
+{
+    VALUE t = rb_funcall(rb_cTime, rb_intern("at"), 1, timev);
+    if (NIL_P(off) || off == Qundef)
+        return t;
+    return rb_funcall(t, rb_intern("localtime"), 1, off);
+}
+
+static struct timespec
+num_to_timespec(VALUE num, int interval)
+{
+    const char *tstr = interval ? "time interval" : "time";
+    struct timespec ts;
+    VALUE t;
+    if (RTEST(rb_obj_is_kind_of(num, rb_cTime))) {
+        if (interval)
+            rb_raise(rb_eTypeError, "can't convert Time into %s", tstr);
+        t = num;
+    }
+    else if (RB_FLOAT_TYPE_P(num)) {
+        /* CRuby rounds a Float to the nearest nanosecond rather than
+         * keeping its exact binary value as `Time.at` does. */
+        double f, d = modf(NUM2DBL(num), &f);
+        long nsec;
+        if (interval && (f < 0 || d < 0))
+            rb_raise(rb_eArgError, "%s must not be negative", tstr);
+        if (d >= 0) {
+            nsec = (long)(d * 1e9 + 0.5);
+            if (nsec >= 1000000000L) {
+                nsec -= 1000000000L;
+                f += 1;
+            }
+        }
+        else if ((nsec = (long)(-d * 1e9 + 0.5)) > 0) {
+            nsec = 1000000000L - nsec;
+            f -= 1;
+        }
+        ts.tv_sec = NUM2TIMET(rb_funcall(rb_float_new(f), rb_intern("to_i"), 0));
+        ts.tv_nsec = nsec;
+        return ts;
+    }
+    else if (RB_INTEGER_TYPE_P(num) || RTEST(rb_obj_is_kind_of(num, rb_cRational))) {
+        if (interval && RTEST(rb_funcall(num, rb_intern("<"), 1, INT2FIX(0))))
+            rb_raise(rb_eArgError, "%s must not be negative", tstr);
+        t = rb_funcall(rb_cTime, rb_intern("at"), 1, num);
+    }
+    else {
+        rb_raise(rb_eTypeError, "can't convert %" PRIsVALUE " into %s", rb_obj_class(num), tstr);
+    }
+    ts.tv_sec = NUM2TIMET(rb_funcall(t, rb_intern("to_i"), 0));
+    ts.tv_nsec = NUM2LONG(rb_funcall(t, rb_intern("nsec"), 0));
+    return ts;
+}
+
+struct timespec
+rb_time_timespec(VALUE time)
+{
+    return num_to_timespec(time, 0);
+}
+
+struct timespec
+rb_time_timespec_interval(VALUE num)
+{
+    return num_to_timespec(num, 1);
+}
+
+static struct timeval
+timespec_to_timeval(struct timespec ts)
+{
+    struct timeval tv;
+    tv.tv_sec = ts.tv_sec;
+    tv.tv_usec = (suseconds_t)(ts.tv_nsec / 1000);
+    return tv;
+}
+
+struct timeval
+rb_time_timeval(VALUE time)
+{
+    return timespec_to_timeval(num_to_timespec(time, 0));
+}
+
+struct timeval
+rb_time_interval(VALUE num)
+{
+    return timespec_to_timeval(num_to_timespec(num, 1));
+}
+
+VALUE
+rb_time_utc_offset(VALUE time)
+{
+    return rb_funcall(check_time(time), rb_intern("utc_offset"), 0);
+}
+
+/* Weak: strptime's ruby_time.c carries a definition of its own, which
+ * links against the archive only when this one yields. */
+__attribute__((weak)) void
+rb_timespec_now(struct timespec *ts)
+{
+    if (clock_gettime(CLOCK_REALTIME, ts) == -1)
+        rb_sys_fail("clock_gettime");
 }
 
 static regex_t *

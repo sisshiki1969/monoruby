@@ -194,6 +194,8 @@ struct MrApi {
     void   *(*regexp_ptr)(MrContext *, MrValue re);                    /* regex_t * under re's own codec */
     const struct MrOnigApi *(*onig_api)(void);
     int     (*enc_precise_mbclen)(MrContext *, const char *name, const unsigned char *p, const unsigned char *e); /* Onigmo's MBCLEN encoding */
+    int     (*keyword_given)(MrContext *);                              /* the entering call passed keywords (rb_keyword_given_p) */
+    int64_t (*enc_codepoint)(MrContext *, const char *name, const unsigned char *p, const unsigned char *e, int *len); /* code point at p, or -1 */
 };
 
 /* Onigmo's entry points as linked into monoruby, types erased: regex_t *

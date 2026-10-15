@@ -24,6 +24,12 @@
 #define RUBY_SYMBOL_EXPORT_END _Pragma("GCC visibility pop")
 #define RUBY_FUNC_NONNULL(n, x) x
 #define NORETURN(x) __attribute__((__noreturn__)) x
+#ifndef UNREACHABLE
+#define UNREACHABLE __builtin_unreachable()
+#endif
+#ifndef UNREACHABLE_RETURN
+#define UNREACHABLE_RETURN(_) __builtin_unreachable()
+#endif
 #define DEPRECATED(x) x
 #define PRINTF_ARGS(decl, a, b) decl
 #define RUBY_ATTR_NORETURN __attribute__((__noreturn__))
@@ -42,6 +48,17 @@
 #define HAVE_SYS_TYPES_H 1
 #define HAVE_STRING_H 1
 #define HAVE_STDLIB_H 1
+#define HAVE_TIME_H 1
+#define HAVE_SYS_TIME_H 1
+#define HAVE_CLOCK_GETTIME 1
+#define HAVE_GMTIME_R 1
+#define HAVE_LOCALTIME_R 1
+#define HAVE_MKTIME 1
+#define HAVE_TIMEGM 1
+#define HAVE_STRUCT_TM_TM_GMTOFF 1
+#define HAVE_STRUCT_TM_TM_ZONE 1
+#define HAVE_STRUCT_TIMESPEC 1
+#define HAVE_STRUCT_TIMEVAL 1
 #define SIZEOF_SHORT 2
 #define SIZEOF_FLOAT 4
 #define SIZEOF_DOUBLE 8

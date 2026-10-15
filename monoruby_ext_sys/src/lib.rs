@@ -512,6 +512,23 @@ pub struct MrApi {
         p: *const u8,
         e: *const u8,
     ) -> c_int,
+    /// `rb_keyword_given_p`: whether the call that entered the running
+    /// extension method passed keyword arguments (which the method
+    /// received as its last positional Hash). 0 when the method was not
+    /// entered by a call instruction (`Init_`, a call from C).
+    pub keyword_given: unsafe extern "C" fn(ctx: *mut MrContext) -> c_int,
+    /// `rb_enc_codepoint_len`: the code point of the character of the
+    /// encoding named `name` that starts at `p`, bounded by `e`, its
+    /// byte length stored through `len`; -1 when no character of that
+    /// encoding starts there (an empty range included). An unknown name
+    /// is a byte per character.
+    pub enc_codepoint: unsafe extern "C" fn(
+        ctx: *mut MrContext,
+        name: *const c_char,
+        p: *const u8,
+        e: *const u8,
+        len: *mut c_int,
+    ) -> i64,
 }
 
 /// Onigmo's own functions, with the types of `onigmo.h` erased to

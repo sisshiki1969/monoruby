@@ -42,6 +42,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <time.h>
+#include <sys/time.h>
 
 #include "ruby/version.h"
 
@@ -216,6 +218,7 @@ rb_type(VALUE obj)
 #define RB_BUILTIN_TYPE(x) TYPE(x)
 #define RB_FLOAT_TYPE_P(obj) (RB_FLONUM_P(obj) || RB_TYPE_P(obj, T_FLOAT))
 #define RB_INTEGER_TYPE_P(obj) (RB_FIXNUM_P(obj) || RB_TYPE_P(obj, T_BIGNUM))
+#define RUBY_INTEGER_UNIFICATION 1
 #define RB_BIGNUM_TYPE_P(obj) RB_TYPE_P(obj, T_BIGNUM)
 #define RB_SYMBOL_TYPE_P(obj) RB_SYMBOL_P(obj)
 
@@ -363,6 +366,8 @@ int rb_obj_respond_to(VALUE obj, ID id, int priv);
 VALUE rb_obj_freeze(VALUE obj);
 VALUE rb_obj_frozen_p(VALUE obj);
 void rb_check_frozen(VALUE obj);
+VALUE rb_obj_init_copy(VALUE obj, VALUE orig);
+#define OBJ_INIT_COPY(obj, orig) ((obj) != (orig) && (rb_obj_init_copy((obj), (orig)), 1))
 #define rb_check_frozen_inline(obj) rb_check_frozen(obj)
 #define OBJ_FROZEN(obj) RTEST(rb_obj_frozen_p((VALUE)(obj)))
 #define RB_OBJ_FROZEN(obj) OBJ_FROZEN(obj)
@@ -432,6 +437,18 @@ VALUE rb_block_lambda(void);
 VALUE rb_proc_call(VALUE proc, VALUE args);
 VALUE rb_proc_call_with_block(VALUE proc, int argc, const VALUE *argv, VALUE passed_proc);
 int rb_keyword_given_p(void);
+
+/* Time */
+VALUE rb_time_new(time_t sec, long usec);
+VALUE rb_time_nano_new(time_t sec, long nsec);
+VALUE rb_time_timespec_new(const struct timespec *ts, int offset);
+VALUE rb_time_num_new(VALUE timev, VALUE off);
+struct timeval rb_time_interval(VALUE num);
+struct timeval rb_time_timeval(VALUE time);
+struct timespec rb_time_timespec(VALUE time);
+struct timespec rb_time_timespec_interval(VALUE num);
+VALUE rb_time_utc_offset(VALUE time);
+void rb_timespec_now(struct timespec *ts);
 #define RB_BLOCK_CALL_FUNC_ARGLIST(yielded_arg, callback_arg) \
     VALUE yielded_arg, VALUE callback_arg, int argc, const VALUE *argv, VALUE blockarg
 
@@ -541,6 +558,8 @@ rb_num2long_inline(VALUE v)
 #define LL2NUM(v) rb_ll2inum(v)
 #define ULL2NUM(v) rb_ull2inum(v)
 #define SIZET2NUM(v) ULONG2NUM(v)
+#define TIMET2NUM(v) LONG2NUM(v)
+#define NUM2TIMET(v) NUM2LONG(v)
 #define SSIZET2NUM(v) LONG2NUM(v)
 #define OFFT2NUM(v) LL2NUM(v)
 #define CHR2FIX(x) RB_INT2FIX((long)((x) & 0xff))
