@@ -56,6 +56,22 @@ impl<'a> JitContext<'a> {
             #[cfg(feature = "jit-debug")]
             eprintln!("########## analyse iteration[{x}]");
             let walk = self.analyse_loop(loop_start, loop_end, &heads, state.clone())?;
+            // The walk ran on a throwaway clone, so every widen it
+            // reported reached the *clone's* parked outer frames: a
+            // block handed out of the unit inside the loop body
+            // (`unbox_to_S_for_outgoing_block`) widens a suspended
+            // caller's slot in the live chain and in the parked copy the
+            // caller resumes from. The chain's widening survives in the
+            // back-edge join the real compile starts from, so when the
+            // real compile reaches the same hand-out the slot is already
+            // `S` and nothing is reported again — and the caller would
+            // resume from an un-widened parked copy, believing its
+            // register still held a value the block overwrote. Replay the
+            // walk's log on our own parked frames (the clone starts with
+            // an empty log, so this is exactly the walk's delta).
+            for (pos, slot) in walk.vetoes.1.clone() {
+                self.widen_outer_at_pos(pos, slot);
+            }
             // Stage-C loop adoption: park the walk's vetoes for the
             // loop-entry merge (overwritten per iteration). The float-read
             // marks themselves ride the analysed states and are read off
