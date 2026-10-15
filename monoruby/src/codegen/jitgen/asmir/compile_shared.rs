@@ -279,16 +279,32 @@ impl Codegen {
                 using_fpr,
             }),
             AsmInst::ArrayMinMax {
+                base,
                 args,
                 len,
                 min,
                 using_fpr,
             } => self.encode_linst(LInst::ArrayMinMax {
+                base,
                 args,
                 len,
                 min,
                 using_fpr,
             }),
+            AsmInst::CreateArrayFrom {
+                base,
+                src,
+                len,
+                using_fpr,
+            } => self.encode_linst(LInst::CreateArrayFrom {
+                base,
+                src,
+                len,
+                using_fpr,
+            }),
+            AsmInst::LoadCallerSlot { base, slot } => {
+                self.encode_linst(LInst::LoadCallerSlot { base, slot })
+            }
             AsmInst::NewHash(args, len, using_fpr) => self.encode_linst(LInst::NewHash {
                 args,
                 len,
@@ -2045,12 +2061,24 @@ impl Codegen {
                 self.emit_new_array(callid, inline, using_fpr);
             }
             LInst::ArrayMinMax {
+                base,
                 args,
                 len,
                 min,
                 using_fpr,
             } => {
-                self.emit_array_min_max(args, len, min, using_fpr);
+                self.emit_array_min_max(base, args, len, min, using_fpr);
+            }
+            LInst::CreateArrayFrom {
+                base,
+                src,
+                len,
+                using_fpr,
+            } => {
+                self.emit_create_array_from(base, src, len, using_fpr);
+            }
+            LInst::LoadCallerSlot { base, slot } => {
+                self.emit_load_caller_slot(base, slot);
             }
             LInst::NewHash {
                 args,

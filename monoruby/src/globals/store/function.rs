@@ -1694,7 +1694,8 @@ impl Store {
     }
 
     ///
-    /// Structural gate for D1 forwarding-rest deferral.
+    /// Structural gate for the K1 keyword deferral and the forwarding
+    /// trivial-method fold (`forward_kw_deferral`, `forwarded_trivial_pos_num`).
     ///
     /// Returns the rest-parameter local `SlotId` iff `fid` is a *pure
     /// forwarding trampoline*: `def f(...) = g(...)` — i.e. a method
@@ -1704,12 +1705,14 @@ impl Store {
     /// is the rest slot). For such an `f` the synthetic rest `Array`
     /// built at the caller boundary is consumed once, by that single
     /// forwarding call, with no intervening basic-block join — the
-    /// precondition for deferring its materialization.
+    /// precondition for deferring the keywords' Hash. (The rest `Array`
+    /// itself needs no such gate: it is an elided object the caller hands
+    /// over, with its own lifetime rules — `doc/escape_analysis.md` §6.)
     ///
     /// This is the *structural* half of the gate only; the call-site
-    /// half (caller is the outermost non-specialized JIT frame, source
-    /// args spillable, monomorphic inner callee, no forwarded kw/block)
-    /// is checked where the deferral is actually produced.
+    /// half (the frame is specialized through a simple call site, no
+    /// forwarded `**hash` / block arg) is checked where the deferral is
+    /// actually produced.
     ///
     /// Conservative: may reject a valid trampoline, never accepts an
     /// unsound shape.
@@ -1725,14 +1728,13 @@ impl Store {
         }
         let rest_idx = info.params().is_rest()?;
         let iseq = &self[iseq_id];
-        // Single basic block ⇒ no join can observe the deferred slot
-        // (the annotation is a frame-entry side note on the rest slot;
-        // with no join it never needs merge handling). The number of
-        // forwarding calls is unrestricted: each forwarding consume is
-        // either source-routed (sets the defer flag) or vetoes the
-        // caller-side skip (`needs_rest_array`), so any number / mix is
-        // safe — the caller builds the real `Array` unless *every*
-        // forwarding consume was source-routed.
+        // Single basic block ⇒ no join can observe the deferred kwrest
+        // slot (the annotation is a frame-entry side note on it; with no
+        // join it never needs merge handling). The number of forwarding
+        // calls is unrestricted: each forwarding consume either routes
+        // the keywords (`kw_routed`) or vetoes the caller-side skip
+        // (`kw_vetoed`), so any number / mix is safe — the caller builds
+        // the real `Hash` unless *every* forwarding consume routed.
         if iseq.bb_info.len() != 1 {
             return None;
         }

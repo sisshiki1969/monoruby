@@ -579,18 +579,20 @@ pub(crate) struct AbstractFrame {
     next_sp: SlotId,
     /// assumptions
     invariants: Invariants,
-    /// D1/K1 forwarding deferral: the forwarding-trampoline rest / kwrest
-    /// slots whose materialization is deferred to the consumer. Fixed for
-    /// the compile unit (set once at frame creation), so it lives here
-    /// next to the other per-frame constants rather than in the per-path
-    /// slot state. The slots' `LinkMode`s stay at their baseline (`S`):
-    /// when the deferral activates the caller-side `set_arguments`
-    /// physically stores a real `nil` there (GC-safe) and the consumer
-    /// routes from the caller source; deopts rebuild the array via
-    /// `forward_rest`. When it does *not* activate the caller builds the
-    /// array normally and the (still-`S`) slot holds it — no spurious
-    /// `C(nil)` write-back can clobber that array. The annotation only
-    /// routes the consumer and adds the deopt materialization while live.
+    /// K1 keyword deferral: the forwarding-trampoline `**kwrest` slot
+    /// whose materialization is deferred to the consumer. Fixed for the
+    /// compile unit (set once at frame creation), so it lives here next
+    /// to the other per-frame constants rather than in the per-path slot
+    /// state. The slot's `LinkMode` stays at its baseline (`S`): when
+    /// the deferral activates the caller-side `set_arguments` physically
+    /// stores a real `nil` there (GC-safe) and the consumer routes from
+    /// the caller's kw window; deopts rebuild the Hash via
+    /// `forward_kwrest`. When it does *not* activate the caller builds
+    /// the Hash normally and the (still-`S`) slot holds it — no spurious
+    /// `C(nil)` write-back can clobber it. The annotation only routes
+    /// the consumer and adds the deopt materialization while live. (The
+    /// rest `Array` is an elided object, `VirtualSrc::CallerSlots`, in
+    /// the slot state.)
     deferred_forward: Option<DeferredForward>,
     /// Chain-relative distance to this frame's *lexical* parent within
     /// the state chain (`None` for a method / the chain root) — the
@@ -673,7 +675,7 @@ impl AbstractFrame {
                     slot_state: SlotState::new_method(cc),
                     next_sp,
                     invariants: Invariants::new_entry(cc),
-                    deferred_forward: cc.forward_rest_deferral(),
+                    deferred_forward: cc.forward_kw_deferral(),
                     lexical_outer: None,
                 }
             }
@@ -692,7 +694,7 @@ impl AbstractFrame {
                     slot_state: SlotState::new_method(cc),
                     next_sp,
                     invariants: Invariants::new_specialized(cc),
-                    deferred_forward: cc.forward_rest_deferral(),
+                    deferred_forward: cc.forward_kw_deferral(),
                     lexical_outer: None,
                 }
             }
@@ -737,21 +739,9 @@ impl AbstractFrame {
         self.lexical_outer
     }
 
-    /// D1: if `slot` is the deferred forwarding-rest slot, return its
-    /// `(src, len)` caller source range.
-    pub(in crate::codegen::jitgen) fn deferred_rest_src(
-        &self,
-        slot: SlotId,
-    ) -> Option<(SlotId, u16)> {
-        match &self.deferred_forward {
-            Some(df) if df.rest_local == slot => Some((df.src, df.len)),
-            _ => None,
-        }
-    }
-
-    /// D1/K1: the frame's deferral annotation, if any. Used by
+    /// K1: the frame's keyword-deferral annotation, if any. Used by
     /// forwarding consumers to source-route or to veto the caller-side
-    /// skip (`set_needs_rest_array`).
+    /// skip (`set_kw_vetoed`).
     pub(in crate::codegen::jitgen) fn deferred_forward_info(&self) -> Option<&DeferredForward> {
         self.deferred_forward.as_ref()
     }
@@ -1165,7 +1155,7 @@ impl AbstractFrame {
     /// The element slots of an elided Array that is gone (materialized or
     /// dead) are dead too where they lie above the stack top.
     pub(in crate::codegen::jitgen) fn discard_dead_elements(&mut self, src: VirtualSrc) {
-        if let VirtualSrc::Slots { src, len, .. } = src {
+        if let Some((src, len)) = src.own_elements() {
             for i in src.0..src.0 + len {
                 let slot = SlotId(i);
                 if slot >= self.next_sp && !self.is_virtual_src(slot) {

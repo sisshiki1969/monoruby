@@ -22,20 +22,15 @@ pub(crate) struct SpecializedId(pub(super) usize);
 /// difference is what the Loop-JIT-side rsp bump consumes.
 ///
 ///
-/// D1/K1 forwarding-deferral record for a specialized pure trampoline
-/// frame (`def f(...) = g(...)`): the caller's positional window that
-/// backs `f`'s un-materialized `...` rest `Array`, plus — when the
-/// caller passes literal keywords — the caller's kw window that backs
-/// `f`'s un-materialized `**kwrest` Hash (K1).
+/// K1 keyword-deferral record for a specialized pure trampoline frame
+/// (`def f(...) = g(...)`) whose caller passes literal keywords: the
+/// caller's kw window that backs `f`'s un-materialized `**kwrest` Hash.
+/// (The positional half of the forward — `f`'s rest `Array` — is an
+/// elided object, `VirtualSrc::CallerSlots`, and needs no record here;
+/// see `doc/escape_analysis.md`.)
 ///
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct DeferredForward {
-    /// `f`'s synthetic rest local slot.
-    pub rest_local: SlotId,
-    /// Caller-frame base of the positional source window.
-    pub src: SlotId,
-    /// Positional source count.
-    pub len: u16,
     /// K1: `(f's **kwrest local, caller kw base, names in slot order)` —
     /// `names[i]`'s value lives at caller slot `kw_pos + i`.
     pub kw: Option<(SlotId, SlotId, Box<[IdentId]>)>,
@@ -155,11 +150,20 @@ pub(super) struct JitArgumentInfo(
     /// it is the callee's entry state that binds them.
     ///
     pub Vec<(SlotId, FPReg)>,
+    ///
+    /// The parameters this call hands over as elided objects
+    /// (`doc/escape_analysis.md`): the callee's `*rest` parameter, whose
+    /// `Array` is not built, and the elided literals the caller passes as
+    /// arguments. Each one's slot is `V` in the callee's entry state, the
+    /// object registered under it (`SlotState::new_method`). Part of the
+    /// callee's identity like the register-passed floats.
+    ///
+    pub Vec<(SlotId, VirtualSrc)>,
 );
 
 impl JitArgumentInfo {
-    pub(super) fn new(slot: Vec<LinkMode>) -> Self {
-        Self(Some(slot), vec![])
+    pub(super) fn new(slot: Vec<LinkMode>, virtuals: Vec<(SlotId, VirtualSrc)>) -> Self {
+        Self(Some(slot), vec![], virtuals)
     }
 }
 
@@ -715,16 +719,16 @@ pub(super) struct JitStackFrame {
     /// must save exactly this set. Filled by `specialized_compile`.
     ///
     pub(super) call_site_using_fpr: UsingFpr,
-    /// D1: set when the trampoline forwarding consumer routed `g(...)`
-    /// straight from the caller source (elided `f`'s rest Array).
-    /// Aggregated from `AsmIr::deferred_rest()` like `had_deopt`,
-    /// surfaced via `compile_specialized_func`.
-    pub(super) deferred_rest: bool,
-    /// D1 veto (see `AsmIr::needs_rest_array`): some forwarding consume
-    /// of the deferred rest needs the real `Array`. Aggregated like
-    /// `deferred_rest`; producer skips `create_array` only when
-    /// `deferred_rest && !needs_rest_array`.
-    pub(super) needs_rest_array: bool,
+    /// K1: set when a trampoline forwarding consumer routed the caller's
+    /// literal keywords straight from the caller's kw window (elided
+    /// `f`'s `**kwrest` Hash). Aggregated from `AsmIr::kw_routed()` like
+    /// `had_deopt`, surfaced via `compile_specialized_func`.
+    pub(super) kw_routed: bool,
+    /// K1 veto (see `AsmIr::kw_vetoed`): some forwarding consume needs
+    /// the real `**kwrest` Hash. Aggregated like `kw_routed`; the
+    /// producer skips building the Hash only when
+    /// `kw_routed && !kw_vetoed`.
+    pub(super) kw_vetoed: bool,
 
     ///
     /// Some path returns out of this frame with a boxed `rax` that no
@@ -889,8 +893,8 @@ impl JitStackFrame {
             had_deopt: false,
             generic_yield: false,
             call_site_using_fpr: UsingFpr::default(),
-            deferred_rest: false,
-            needs_rest_array: false,
+            kw_routed: false,
+            kw_vetoed: false,
             has_boxed_return: false,
             float_return: false,
             spliced_ensures: HashMap::default(),
@@ -929,8 +933,8 @@ impl JitStackFrame {
             had_deopt: self.had_deopt,
             generic_yield: self.generic_yield,
             call_site_using_fpr: self.call_site_using_fpr,
-            deferred_rest: self.deferred_rest,
-            needs_rest_array: self.needs_rest_array,
+            kw_routed: self.kw_routed,
+            kw_vetoed: self.kw_vetoed,
             has_boxed_return: self.has_boxed_return,
             float_return: self.float_return,
             spliced_ensures: self.spliced_ensures.clone(),
@@ -2932,8 +2936,8 @@ impl<'a> JitContext<'a> {
             spliced_ensures: _,
             pending_splice_landing: _,
             landing_sink: _,
-            deferred_rest: _,
-            needs_rest_array: _,
+            kw_routed: _,
+            kw_vetoed: _,
             // Set once, in `build_return_segments`, on the frame whose
             // segments are being built — never on a suspended outer
             // frame, so a nested call cannot move it.
@@ -3707,50 +3711,37 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// D1 forwarding-rest deferral decision for the *current* frame.
+    /// K1: the keyword-deferral record of this frame, if it is a
+    /// specialized pure forwarding trampoline (`def f(...) = g(...)`,
+    /// `Store::forwarding_trampoline_rest`) entered through a simple,
+    /// splat-free call site. The caller's literal keywords are then not
+    /// built into `f`'s `**kwrest` Hash when every forwarding consume of
+    /// the frame routes them straight from the caller's kw window
+    /// (`kw_forward_route`); the record names that window. `src` is the
+    /// caller call site's kw base in the caller's register numbering,
+    /// read via the saved caller frame pointer.
     ///
-    /// `Some((rest_local, src, len))` iff the current frame is a
-    /// specialized pure forwarding trampoline `def f(...) = g(...)`.
-    /// The specialization depth does not matter: every frame (root or
-    /// specialized) runs the standard prologue (`pushq rbp; movq rbp,
-    /// rsp`), so `f`'s *direct physical caller* frame is always the
-    /// value `f` saved at `[rbp]` — and for a method trampoline
-    /// `method_caller_callsite` is exactly that direct caller's call
-    /// site (`current_method_frame` resolves `f` itself at offset 0).
-    /// The caller spilled that site's args to its frame slots
-    /// (`write_back_recv_and_callargs`) before the call, and a
-    /// trampoline-into-trampoline chain cannot defer through a deferred
-    /// source: the parent's own forwarding call site has a splat, which
-    /// fails the `is_simple_call` gate below. `src` is the caller call
-    /// site's positional args base (caller register numbering, read via
-    /// that saved caller `rbp`), `len` its positional count,
-    /// `rest_local` `f`'s synthetic rest local slot.
+    /// The positional half (`f`'s rest `Array`) takes no record: it is
+    /// an elided object handed over by `LinkMode::from_caller`
+    /// (`VirtualSrc::CallerSlots`), consumed or materialized by `f`'s
+    /// own body.
     ///
-    pub(super) fn forward_rest_deferral(&self) -> Option<DeferredForward> {
-        // D1 deferred-rest is lowered on both backends now: the side-exit
-        // `forward_rest` materialize (`gen_forward_rest_materialize` /
-        // `a64_gen_forward_rest_materialize`) and the `SetArgumentsForwarded`
-        // inline source-routing (`jit_set_arguments_forwarded` /
-        // `a64_set_arguments_forwarded_deferred`). The caller-slot addressing is
-        // arch-neutral (`[fp - rbp_local(slot)]`, since
-        // `RBP_LOCAL_FRAME == (BP_CFP + CFP_LFP) + 8` on both arches), so the
-        // whole deferral is enabled uniformly here.
+    pub(super) fn forward_kw_deferral(&self) -> Option<DeferredForward> {
         if !self.is_specialized() {
             return None;
         }
         let fid = self.func_id();
-        let rest_local = self.store.forwarding_trampoline_rest(fid)?;
+        self.store.forwarding_trampoline_rest(fid)?;
         let cid = self.method_caller_callsite()?;
         if !self.store.is_simple_call(fid, cid) {
             return None;
         }
         let cs = &self.store[cid];
-        // K1: literal keywords at the caller defer alongside the rest —
-        // recorded here as (f's `**kwrest` local, the caller's kw base,
-        // the names in slot order) and either source-routed into the
-        // forwarded callee's declared kw params by the consume or vetoed
-        // as a whole (`needs_rest_array`). A `**hash` splat stays on the
-        // generic path: its keys are dynamic.
+        // Literal keywords at the caller are recorded as (f's `**kwrest`
+        // local, the caller's kw base, the names in slot order) and
+        // either source-routed into the forwarded callee's declared kw
+        // params by the consume or vetoed as a whole (`kw_vetoed`). A
+        // `**hash` splat stays on the generic path: its keys are dynamic.
         if !cs.hash_splat_pos().is_empty() || cs.block_arg.is_some() {
             return None;
         }
@@ -3772,16 +3763,7 @@ impl<'a> JitContext<'a> {
             }
             Some((kwrest_local, cs.kw_pos, names.into_boxed_slice()))
         };
-        // `pos_num == 0` (e.g. `NoArg.new` through the Ruby `Class#new`)
-        // defers to an *empty* source range: the consume copies nothing
-        // and the side-exit materialization (`create_array` with len 0)
-        // rebuilds `[]` without touching the source pointer.
-        Some(DeferredForward {
-            rest_local,
-            src: cs.args,
-            len: cs.pos_num as u16,
-            kw,
-        })
+        Some(DeferredForward { kw })
     }
 
     pub(super) fn position(&self) -> Option<BytecodePtr> {
@@ -4301,8 +4283,8 @@ impl<'a> JitContext<'a> {
     pub(super) fn push_ir(&mut self, bb: Option<BasicBlockId>, ir: AsmIr) {
         let frame = self.current_frame_mut();
         frame.had_deopt |= ir.had_deopt();
-        frame.deferred_rest |= ir.deferred_rest();
-        frame.needs_rest_array |= ir.needs_rest_array();
+        frame.kw_routed |= ir.kw_routed();
+        frame.kw_vetoed |= ir.kw_vetoed();
         frame.ir.push((bb, ir));
     }
 
@@ -4314,16 +4296,16 @@ impl<'a> JitContext<'a> {
     ) {
         let frame = self.current_frame_mut();
         frame.had_deopt |= ir.had_deopt();
-        frame.deferred_rest |= ir.deferred_rest();
-        frame.needs_rest_array |= ir.needs_rest_array();
+        frame.kw_routed |= ir.kw_routed();
+        frame.kw_vetoed |= ir.kw_vetoed();
         frame.inline_bridges.insert(src_bb, (ir, dest_bb));
     }
 
     pub(super) fn add_outline_bridge(&mut self, ir: AsmIr, dest: JitLabel, bbid: BasicBlockId) {
         let frame = self.current_frame_mut();
         frame.had_deopt |= ir.had_deopt();
-        frame.deferred_rest |= ir.deferred_rest();
-        frame.needs_rest_array |= ir.needs_rest_array();
+        frame.kw_routed |= ir.kw_routed();
+        frame.kw_vetoed |= ir.kw_vetoed();
         frame.outline_bridges.push((ir, dest, bbid));
     }
 }

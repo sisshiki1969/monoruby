@@ -129,15 +129,15 @@ fpr: Vec<(FPReg, Vec<SlotId>)>,                            // float -> one or mo
 literal: Vec<(Value, SlotId)>,
 void: Vec<SlotId>,
 gp: Vec<(GP, SlotId)>,                                     // empty in shipping builds
-forward_rest: Vec<(SlotId, SlotId, u16)>,                  // D1: build the rest Array
 forward_kwrest: Vec<(SlotId, Box<[(IdentId, SlotId)]>)>,   // K1: build the kwrest Hash
+virtual_obj: Vec<(SlotId, VirtualSrc)>,                    // elided objects to allocate
 ```
 
 To replay one from Rust the walker needs the `WriteBack` **and the frame's
 spill base** (`base`, today only a compile-time argument to
-`gen_write_back_for_deopt`). `forward_rest` / `forward_kwrest` additionally
-need `create_array` / `correct_rest_kw` calls, so this is not a pure memory
-shuffle.
+`gen_write_back_for_deopt`). `virtual_obj` / `forward_kwrest` additionally
+need `create_array` (or `value_deep_copy`) / `correct_rest_kw` calls, so
+this is not a pure memory shuffle.
 
 Why replaying from Rust is possible at all: xmm is caller-saved, so
 `FprSave` has already spilled every live float of a **suspended** frame into
@@ -304,10 +304,11 @@ code; they are load-bearing now):
   redirected when a frame is promoted to the heap, exactly like the `r14`
   the emitted deopt write-back uses.
 
-`forward_rest` / `forward_kwrest` emit calls to `runtime::create_array` /
-`runtime::correct_rest_kw` against the dynamic caller's frame reached through
-the saved bp — the same helpers and the same addressing the deopt path's
-`gen_forward_rest_materialize` / `gen_forward_kwrest_materialize` use, which
+`virtual_obj` / `forward_kwrest` emit calls to `runtime::create_array` (or
+`value_deep_copy` for a literal template) / `runtime::correct_rest_kw`
+against the dynamic caller's frame reached through the saved bp — the same
+helpers and the same addressing the deopt path's
+`gen_virtual_materialize` / `gen_forward_kwrest_materialize` use, which
 is why the stub form needs no Rust-side equivalents of its own. They run
 after the fpr/literal/void stores, so every deferred `dst` slot already holds
 its `nil` and the frame stays GC-consistent across the allocating helper
@@ -546,7 +547,7 @@ state, unwind interaction — not evidence that lazy write-back was sound.
    spill `base`, and the site's `UsingFpr` save-area layout.~~ Done —
    `ChainReplay` carries exactly that (plus `dst` and the site pc for the
    stub's continuation word); the layout facts are restated, verified, in
-   §8.1. `forward_rest` / `forward_kwrest` call `runtime::create_array` /
+   §8.1. `virtual_obj` / `forward_kwrest` call `runtime::create_array` /
    `runtime::correct_rest_kw` — GC-safe because every source value is
    in a scanned frame slot.
 3. ~~Remove the per-site chain-exit handlers and the `DestLabel` table —

@@ -980,10 +980,22 @@ pub(in crate::codegen) enum LInst {
         using_fpr: UsingFpr,
     },
     ArrayMinMax {
+        base: SlotBase,
         args: SlotId,
         len: u16,
         min: bool,
         using_fpr: UsingFpr,
+    },
+    CreateArrayFrom {
+        base: SlotBase,
+        src: SlotId,
+        len: u16,
+        using_fpr: UsingFpr,
+    },
+    /// rax <- the value of `slot` in the frame `base` names.
+    LoadCallerSlot {
+        base: SlotBase,
+        slot: SlotId,
     },
     NewHash {
         args: SlotId,

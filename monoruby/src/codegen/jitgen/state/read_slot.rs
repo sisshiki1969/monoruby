@@ -632,6 +632,26 @@ impl AbstractFrame {
         ir.reg2rsp_offset(GP::Rax, ofs);
     }
 
+    ///
+    /// [`Self::fetch_for_callee`] for a positional argument of a
+    /// specialized call: an elided object (`doc/escape_analysis.md`) is
+    /// handed over as a real `nil` in the callee's parameter slot — the
+    /// callee's entry state holds the object, and the slot must hold a
+    /// valid `Value` for the collector from the moment the frame is linked.
+    ///
+    pub(in crate::codegen::jitgen) fn fetch_arg_for_callee(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        ofs: i32,
+    ) {
+        if self.virtual_at(slot).is_some() {
+            ir.u64torsp_offset(NIL_VALUE, ofs);
+        } else {
+            self.fetch_for_callee(ir, slot, ofs);
+        }
+    }
+
     pub(in crate::codegen::jitgen) fn fetch_rest_for_callee(
         &mut self,
         ir: &mut AsmIr,

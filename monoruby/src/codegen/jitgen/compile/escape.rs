@@ -16,6 +16,16 @@
 //! callee's receiver escape summary (`RecvEscape`), declared next to the
 //! builtin's definition.
 //!
+//! An elided object also crosses into a specialized callee: a `*rest`
+//! parameter's `Array` is never built, and an elided literal passed as an
+//! argument stays elided in the callee (`VirtualSrc::CallerSlots`, a window
+//! of the caller's slots the callee reads through its saved frame pointer
+//! or its inline-window offset). Such an object lives in a parameter slot,
+//! so its lifetime is a local's: it may survive the callee's own calls (a
+//! chain deopt materializes it), is dropped when the parameter is dead, and
+//! is materialized when the parameter is read by anything that cannot
+//! consume it, or at a basic-block boundary.
+//!
 
 use crate::executor::inline::{ElementsOp, RecvEscape};
 
@@ -84,16 +94,23 @@ impl<'a> JitContext<'a> {
     ///
     /// An elided object survives an instruction only when
     /// - the instruction may consume it (a method call with it as the
-    ///   receiver, which decides for itself — [`Self::consume_virtual`]); or
+    ///   receiver or as an argument handed over elided, which decides for
+    ///   itself — [`Self::consume_virtual`], `LinkMode::from_caller`); or
     /// - it is dead after the instruction, which does not read it (dropped);
     ///   or
-    /// - the instruction neither reads it, nor can run Ruby code or reach
-    ///   a call ([`virtual_survives`]), nor can overwrite one of its
-    ///   element slots (a push at or above them), nor ends the basic block.
+    /// - the instruction neither reads it, nor can overwrite one of its
+    ///   element slots (a push at or above them), nor ends the basic
+    ///   block, nor — for an object in a temporary — can run Ruby code or
+    ///   reach a call ([`virtual_survives`]).
     ///
-    /// So an elided object never lives across a call (no suspended frame
-    /// owes one, and dispatch arms never see one) or across a block
-    /// boundary (no merge has to reconcile one).
+    /// So an elided object in a temporary never lives across a call (no
+    /// suspended frame owes one, and dispatch arms never see one), and no
+    /// elided object lives across a block boundary (no merge has to
+    /// reconcile one). An object in a parameter slot (`CallerSlots`, or a
+    /// literal handed over by the caller) does live across the frame's
+    /// own calls — its elements are in the caller's frame, out of this
+    /// frame's way, and a chain deopt materializes it — in a body that
+    /// can neither capture its locals nor rescue (`caller_slots_ok`).
     ///
     pub(super) fn settle_virtuals(
         &mut self,
@@ -110,21 +127,26 @@ impl<'a> JitContext<'a> {
         let bb_end = self.is_bb_end(bc_pos);
         let survives = virtual_survives(trace_ir);
         for (dst, src) in state.virtuals().to_vec() {
-            if self.may_consume_virtual(trace_ir, dst) {
+            if self.may_consume_virtual(trace_ir, dst, src) {
                 continue;
             }
             let read = reads.contains(&dst);
-            if !read && dst >= next_sp {
+            let dead = if self.is_temp(dst) {
+                dst >= next_sp
+            } else {
+                !self.local_live_after(bc_pos, dst)
+            };
+            if !read && dead {
                 // Dead, and never observed: the allocation is simply gone.
                 state.take_virtual(dst);
                 state.discard_dead_elements(src);
                 continue;
             }
-            let overwrites = match src {
-                VirtualSrc::Slots { src, len, .. } => len != 0 && next_sp >= src,
-                VirtualSrc::Literal(_) => false,
+            let overwrites = match src.own_elements() {
+                Some((src, len)) => len != 0 && next_sp >= src,
+                None => false,
             };
-            if read || bb_end || overwrites || !survives {
+            if read || bb_end || overwrites || (self.is_temp(dst) && !survives) {
                 self.materialize_virtual(state, ir, dst);
             }
         }
@@ -144,15 +166,148 @@ impl<'a> JitContext<'a> {
         if !self.is_bb_end(bc_pos) {
             return;
         }
+        self.settle_virtuals_before_branch(state, ir, bc_pos);
+    }
+
+    ///
+    /// Perform the elided allocations still live after the instruction at
+    /// *branch_pos* (the block's last one: a branch, or the instruction a
+    /// dispatch's per-arm `CondBr` was sunk into, see
+    /// [`JitContext::declare_merge`]), dropping the dead ones, so that no
+    /// merge ever sees one.
+    ///
+    pub(super) fn settle_virtuals_before_branch(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        branch_pos: BcIndex,
+    ) {
         let next_sp = state.next_sp();
         for (dst, src) in state.virtuals().to_vec() {
-            if dst >= next_sp {
+            let dead = if self.is_temp(dst) {
+                dst >= next_sp
+            } else {
+                !self.local_live_after(branch_pos, dst)
+            };
+            if dead {
                 state.take_virtual(dst);
                 state.discard_dead_elements(src);
             } else {
                 self.materialize_virtual(state, ir, dst);
             }
         }
+    }
+
+    ///
+    /// Whether the local *slot* may be read after the instruction at
+    /// *bc_pos*: by the rest of its basic block, or by any block control
+    /// can reach from there. Conservative — a write before the read does
+    /// not make it dead — and always true in a body with an exception
+    /// handler, where the handler may read anything.
+    ///
+    fn local_live_after(&self, bc_pos: BcIndex, slot: SlotId) -> bool {
+        let iseq = self.iseq();
+        if iseq.has_exception_handler() {
+            return true;
+        }
+        let reads_in = |from: BcIndex, to: BcIndex| {
+            (from.to_usize()..=to.to_usize()).any(|i| {
+                TraceIr::from_pc(iseq.get_pc(BcIndex::from(i)), self.store)
+                    .read_slots(self.store)
+                    .contains(&slot)
+            })
+        };
+        let bb_info = &iseq.bb_info;
+        let bb = bb_info.get_bb_id(bc_pos);
+        let end = bb_info[bb].end;
+        if bc_pos < end && reads_in(bc_pos + 1usize, end) {
+            return true;
+        }
+        let mut visited = vec![false; bb_info.len()];
+        let mut stack: Vec<BasicBlockId> = bb_info.succ(bb).to_vec();
+        while let Some(b) = stack.pop() {
+            if std::mem::replace(&mut visited[b.index()], true) {
+                continue;
+            }
+            let entry = &bb_info[b];
+            if reads_in(entry.begin, entry.end) {
+                return true;
+            }
+            stack.extend_from_slice(bb_info.succ(b));
+        }
+        false
+    }
+
+    ///
+    /// Whether the slot is dead once the instruction at *bc_pos* is done:
+    /// a temporary above the instruction's stack top, or a local nothing
+    /// reads afterwards.
+    ///
+    fn dead_after(&self, bc_pos: BcIndex, slot: SlotId) -> bool {
+        if self.is_temp(slot) {
+            slot >= self.iseq().get_sp(bc_pos)
+        } else {
+            !self.local_live_after(bc_pos, slot)
+        }
+    }
+
+    ///
+    /// Whether a specialized callee *fid* may receive elided objects in
+    /// its parameters (`VirtualSrc::CallerSlots`, `doc/escape_analysis.md`):
+    /// an iseq whose locals nothing can capture (no `binding` / `eval`,
+    /// no block literal, no `super`, no `yield`:
+    /// `ISeqInfo::forwarding_no_escape`) and that rescues nothing — so a
+    /// parameter whose reads are all behind it is dead for good, and an
+    /// object the body did not materialize is never seen by anyone.
+    ///
+    pub(super) fn caller_slots_ok(&self, fid: FuncId) -> bool {
+        let info = &self.store[fid];
+        let Some(iseq_id) = info.is_iseq() else {
+            return false;
+        };
+        let iseq = &self.store[iseq_id];
+        !info.possibly_capture_without_block()
+            && !iseq.has_exception_handler()
+            && iseq.forwarding_no_escape
+    }
+
+    ///
+    /// Materialize every elided object among the positional arguments of
+    /// the call site *callid*: the call is lowered by a path that does not
+    /// hand them over elided (a generic `send`, a native callee, a trivial
+    /// fold that reads them).
+    ///
+    pub(super) fn settle_virtual_args(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+    ) {
+        let cs = &self.store[callid];
+        for slot in cs.args..cs.args + cs.pos_num {
+            match state.virtual_at(slot) {
+                None => {}
+                // The trampoline's own rest, forwarded on: the fill
+                // (`set_arguments`' forwarding arm) routes the caller's
+                // window straight into the callee frame, or materializes
+                // it itself when it cannot (`materialize_virtual_args`).
+                Some(VirtualSrc::CallerSlots {
+                    base: SlotBase::SavedFp,
+                    ..
+                }) if Self::forwarded_rest_slot(cs) == Some(slot) => {}
+                Some(_) => self.materialize_virtual(state, ir, slot),
+            }
+        }
+    }
+
+    ///
+    /// The slot of the trailing `...` splat of a forwarding call
+    /// `g(x.., ...)`, the shape whose fill can take the trampoline's elided
+    /// rest without an `Array` (`set_arguments`' forwarding arm).
+    ///
+    fn forwarded_rest_slot(cs: &CallSiteInfo) -> Option<SlotId> {
+        (cs.forwarding && cs.pos_num >= 1 && cs.splat_pos() == [cs.pos_num - 1])
+            .then(|| cs.args + (cs.pos_num - 1))
     }
 
     fn is_bb_end(&self, bc_pos: BcIndex) -> bool {
@@ -162,18 +317,51 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Whether *trace_ir* is a use that may consume the elided object in
-    /// *slot* without allocating it: a method call with it as the receiver
-    /// and nowhere else.
+    /// Whether *trace_ir* is a use that may consume the elided object
+    /// *src* in *slot* without allocating it: a method call with it as the
+    /// receiver and nowhere else ([`Self::consume_virtual`]); a method
+    /// call with it as one positional argument whose callee is a known
+    /// iseq that the call will be specialized for with the object handed
+    /// over (`LinkMode::from_caller`; the paths that end up not
+    /// specializing materialize it, [`Self::settle_virtual_args`]); or,
+    /// for the rest `Array` of a forwarding trampoline, the `g(...)`
+    /// forward that routes the caller's window straight into `g`'s frame
+    /// (`SetArgumentsForwarded::deferred_src`, which materializes it when
+    /// it cannot).
     ///
-    fn may_consume_virtual(&self, trace_ir: &TraceIr, slot: SlotId) -> bool {
-        let TraceIr::MethodCall { callid, .. } = trace_ir else {
+    fn may_consume_virtual(&self, trace_ir: &TraceIr, slot: SlotId, src: VirtualSrc) -> bool {
+        let TraceIr::MethodCall { callid, cache, .. } = trace_ir else {
             return false;
         };
         let cs = &self.store[*callid];
-        cs.recv == slot
-            && cs.splat_pos().is_empty()
-            && !trace_ir.read_slots(self.store)[1..].contains(&slot)
+        let reads = trace_ir.read_slots(self.store);
+        if cs.recv == slot {
+            return cs.splat_pos().is_empty() && !reads[1..].contains(&slot);
+        }
+        if !(cs.args..cs.args + cs.pos_num).contains(&slot)
+            || reads.iter().filter(|s| **s == slot).count() != 1
+        {
+            return false;
+        }
+        match src {
+            // The rest `Array` of `def f(...)`: `g(x.., ...)` with the
+            // trailing `...` splat being this object, in a framed callee
+            // (the only kind with a `*rest`).
+            VirtualSrc::CallerSlots {
+                base: SlotBase::SavedFp,
+                ..
+            } => Self::forwarded_rest_slot(cs) == Some(slot),
+            VirtualSrc::CallerSlots { .. } => false,
+            VirtualSrc::Slots { .. } | VirtualSrc::Literal(_) => {
+                cs.splat_pos().is_empty()
+                    && cs.block_fid.is_none()
+                    && cs.block_arg.is_none()
+                    && !self.in_dispatch_arm()
+                    && matches!(cache, MethodCache::Cached(e)
+                        if self.store.is_simple_call(e.func_id, *callid)
+                            && self.caller_slots_ok(e.func_id))
+            }
+        }
     }
 
     ///
@@ -203,6 +391,11 @@ impl<'a> JitContext<'a> {
                 let using_fpr = state.get_using_fpr(ir);
                 ir.deep_copy_lit(using_fpr, val);
                 state.def_reg2acc_concrete_value(ir, GP::Rax, dst, val);
+            }
+            VirtualSrc::CallerSlots { src, len, base } => {
+                let using_fpr = state.get_using_fpr(ir);
+                ir.create_array_from(using_fpr, base, src, len);
+                state.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
         }
         state.discard_dead_elements(src);
@@ -243,10 +436,15 @@ impl<'a> JitContext<'a> {
         let (pos_num, call_dst) = (cs.pos_num, cs.dst);
         // The receiver slot must be dead after the call: whatever the call
         // leaves there is never read again.
-        let recv_dead = Some(recv) == call_dst || recv >= self.iseq().get_sp(bc_pos);
-        match (src, summary) {
+        let recv_dead = Some(recv) == call_dst || self.dead_after(bc_pos, recv);
+        let elements = match src {
+            VirtualSrc::Slots { src, len, .. } => Some((SlotBase::Own, src, len)),
+            VirtualSrc::CallerSlots { src, len, base } => Some((base, src, len)),
+            VirtualSrc::Literal(_) => None,
+        };
+        match (elements, summary) {
             (
-                VirtualSrc::Slots { src, len, .. },
+                Some((base, src, len)),
                 Some(RecvEscape {
                     elements: Some(op), ..
                 }),
@@ -263,16 +461,24 @@ impl<'a> JitContext<'a> {
                     func_id: Some(fid),
                 });
                 self.guard_class_version(state, ir, true);
-                state.take_virtual(recv);
-                self.emit_elements_op(state, ir, op, src, len, call_dst);
+                // The operation observes the elements, not the object: a
+                // receiver still live afterwards (a parameter read again
+                // later) stays elided for its next use.
+                if recv_dead {
+                    state.take_virtual(recv);
+                }
+                self.emit_elements_op(state, ir, op, base, src, len, call_dst);
                 Some(CompileResult::Continue)
             }
             (
-                VirtualSrc::Literal(val),
+                None,
                 Some(RecvEscape {
                     transparent: true, ..
                 }),
             ) if plain && recv_dead => {
+                let VirtualSrc::Literal(val) = src else {
+                    unreachable!()
+                };
                 // The ordinary lowering that follows records and guards the
                 // same resolution; the guard here comes first, while the
                 // object is still registered.
@@ -288,11 +494,15 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    /// The elements are the `len` slots at *src* in the frame *base*
+    /// names: this one (an elided literal), or the caller's (an object
+    /// handed over in a parameter).
     fn emit_elements_op(
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
         op: ElementsOp,
+        base: SlotBase,
         src: SlotId,
         len: u16,
         dst: Option<SlotId>,
@@ -301,11 +511,13 @@ impl<'a> JitContext<'a> {
             ElementsOp::Min | ElementsOp::Max => {
                 // The compare can dispatch a user `<=>` (a side effect) and
                 // raise. The elements stay in their slots throughout.
-                state.write_back_range(ir, src, len);
+                if base == SlotBase::Own {
+                    state.write_back_range(ir, src, len);
+                }
                 state.discard(dst);
                 let using_fpr = state.get_using_fpr(ir);
                 let error = ir.new_error(state);
-                ir.array_min_max(using_fpr, src, len, op == ElementsOp::Min);
+                ir.array_min_max(using_fpr, base, src, len, op == ElementsOp::Min);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
                 state.unset_side_effect_guard();
@@ -321,12 +533,57 @@ impl<'a> JitContext<'a> {
                     } else {
                         src + (len - 1)
                     };
-                    if !matches!(state.mode(elem), LinkMode::S(_) | LinkMode::C(_)) {
+                    if base == SlotBase::Own {
+                        if !matches!(state.mode(elem), LinkMode::S(_) | LinkMode::C(_)) {
+                            state.flush_gp(ir);
+                        }
+                        state.copy_slot(ir, elem, dst);
+                    } else {
                         state.flush_gp(ir);
+                        ir.load_caller_slot(base, elem);
+                        state.def_rax2acc(ir, dst);
                     }
-                    state.copy_slot(ir, elem, dst);
                 }
             },
+        }
+    }
+}
+
+impl AbstractState {
+    ///
+    /// Materialize, inside an argument fill, every elided object among the
+    /// positional arguments of *callsite* that the fill cannot hand over
+    /// (a non-specialized callee, a forward it cannot route). The FP pool
+    /// is already saved at this point (`fpr_save_cont`), so the
+    /// allocation saves nothing.
+    ///
+    pub(in crate::codegen::jitgen) fn materialize_virtual_args(
+        &mut self,
+        ir: &mut AsmIr,
+        callsite: &CallSiteInfo,
+    ) {
+        for slot in callsite.args..callsite.args + callsite.pos_num {
+            let Some(src) = self.take_virtual(slot) else {
+                continue;
+            };
+            let using_fpr = UsingFpr::new();
+            match src {
+                VirtualSrc::Slots { src, len, callid } => {
+                    self.write_back_range(ir, src, len);
+                    let inline = (len as usize <= ARRAY_INLINE_CAPA).then_some((src, len));
+                    ir.new_array(using_fpr, callid, inline);
+                    self.def_reg2acc_class(ir, GP::Rax, slot, ARRAY_CLASS);
+                }
+                VirtualSrc::Literal(val) => {
+                    ir.deep_copy_lit(using_fpr, val);
+                    self.def_reg2acc_concrete_value(ir, GP::Rax, slot, val);
+                }
+                VirtualSrc::CallerSlots { src, len, base } => {
+                    ir.create_array_from(using_fpr, base, src, len);
+                    self.def_reg2acc_class(ir, GP::Rax, slot, ARRAY_CLASS);
+                }
+            }
+            self.discard_dead_elements(src);
         }
     }
 }

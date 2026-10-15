@@ -318,11 +318,11 @@ aarch64 は本体の後ろへ島として outline する）ので、ホットパ
 | `literal` | コンパイル時定数として持っていたスロット |
 | `void` | 未定義スロット（`nil` で埋める） |
 | `gp` | GP プール（x86-64 の `r8`–`r11`）に載っているスロット |
-| `forward_rest` | D1: 未実体化の `...` rest Array（呼び出し元のスロット窓から `create_array`） |
 | `forward_kwrest` | K1: 未実体化の `**kwrest` Hash（`correct_rest_kw`） |
+| `virtual_obj` | エスケープ解析が省略した未確保オブジェクト（`doc/escape_analysis.md`）: 自フレームの要素スロットからの `create_array`、呼び出し元のスロット窓からの `create_array`（`VirtualSrc::CallerSlots`、未実体化の `...` rest Array を含む）、またはリテラル雛形の `value_deep_copy` |
 
-順序に意味がある。`literal` を先に書いてから `forward_rest` /
-`forward_kwrest` を実体化する — 後者は確保を伴う呼び出しであり、その時点で
+順序に意味がある。`literal` を先に書いてから `forward_kwrest` /
+`virtual_obj` を実体化する — 後者は確保を伴う呼び出しであり、その時点で
 フレームが GC 整合でなければならないからである（未書き込みの遅延スロットは
 呼び出し元が入れた物理的な `nil` を保持している）。
 

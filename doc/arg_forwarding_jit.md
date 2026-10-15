@@ -141,51 +141,83 @@ rest 付き `g`（`def g(a,*r)` 等）は `*rest` 配列の新規確保が CRuby
 ### 3.4 Increment 3 — D1/K1: `f` 側 rest Array / kw Hash の確保省略
 
 当初計画で「最大の利得かつ最大のリスク」としていた遅延実体化。現行実装は
-新しい `LinkMode` を導入せず、**抽象状態の注釈（`DeferredForward`）+ 生成側
-の拒否権**という形に落ちている。
+二つの仕組みに分かれている。
+
+- **D1（rest Array）** — エスケープ解析の **elided object**
+  （`doc/escape_analysis.md` §6）。specialize された `f` の `*rest` 仮引数は
+  フレーム入口で `VirtualSrc::CallerSlots { src, len, base: SavedFp }`
+  （呼び出し元の引数スロット窓）として登録され、スロットは `LinkMode::V`。
+  `f` の本体がそれを消費するか実体化するかを決める。転送呼び出し
+  `g(*rest, **kwrest, &blk)` はその消費の一つ（source routing）。
+  転送トランポリンに限らず、`def f(*args) = args.size` のような任意の
+  `*rest` callee に同じ仕組みが適用される。
+- **K1（kw Hash）** — 従来どおり**抽象状態の注釈（`DeferredForward { kw }`）+
+  生成側の拒否権**。
 
 #### ゲート
 
-**構造ゲート** — `Store::forwarding_trampoline_rest`（`store/function.rs`）:
-`f` が*純転送トランポリン*（`def f(...) = g(...)`）であること。すなわち
-req/opt/post が 0、rest あり、`params().forwarding()`、かつ**本体が単一基本
-ブロック**（join が遅延スロットを観測し得ない）。転送呼び出しの個数は無制限
-— 各 consume が source-route するか拒否権を行使するかのどちらかなので、
-任意個数・混在でも安全。
+**D1** — 呼び出し側は `specialized_iseq` の `handover`: 呼び出しが引数で
+specialize されること（`specializable`; `*rest` callee は常に対象）、かつ
+callee が `caller_slots_ok` を通ること（`binding`/`eval` でローカルを
+捕捉し得ない、ブロックリテラル・`super`・`yield` が無い
+= `ISeqInfo::forwarding_no_escape`、例外ハンドラが無い）。トランポリン
+構造や単一基本ブロックの条件は不要になった — rest が基本ブロック境界を
+越えて生きていれば `settle_virtuals_at_bb_end` が実体化する。
 
-**呼び出し側ゲート** — `JitContext::forward_rest_deferral`（`jitgen/context.rs`）:
+**K1** — **構造ゲート** `Store::forwarding_trampoline_rest`
+（`store/function.rs`）: `f` が*純転送トランポリン*（`def f(...) = g(...)`）
+であること。すなわち req/opt/post が 0、rest あり、`params().forwarding()`、
+かつ**本体が単一基本ブロック**（join が遅延 kwrest スロットを観測し得ない）。
+**呼び出し側ゲート** `JitContext::forward_kw_deferral`（`jitgen/context.rs`）:
 自フレームが specialize 済みであること、mother の callsite が
-`is_simple_call`、`hash_splat_pos` と `block_arg` が無いこと。リテラル
-keyword があれば K1 として rest と**一括で**遅延する。結果は
+`is_simple_call`、`hash_splat_pos` と `block_arg` が無いこと。結果は
 
 ```rust
-DeferredForward { rest_local, src, len, kw }
+DeferredForward { kw: Option<(kwrest_local, kw_pos, names)> }
 ```
 
-で、`src`/`len` は**呼び出し元フレームの引数スロット窓**（caller の
+で、`kw_pos` は**呼び出し元フレームの keyword スロット窓**（caller の
 レジスタ番号）。`f` は自前の rbp を確立している（`init_func` の
 `pushq rbp; movq rbp, rsp`）ので、直接の物理呼び出し元の rbp は `f` が
-`[rbp]` に退避した値であり、source は `[caller_rbp - rbp_local(src + i)]`
-に居る。トランポリンの入れ子で「遅延済み source をさらに遅延する」ことは
+`[rbp]` に退避した値であり、source は `[caller_rbp - rbp_local(slot)]` に
+居る（rest 窓の `CallerSlots::SavedFp` も同じアドレッシング）。
+トランポリンの入れ子で「呼び出し元の呼び出し元の窓をさらに手渡す」ことは
 起きない — 親自身の転送 callsite は splat を持つため `is_simple_call` に
-落ちるからである。
+落ちるからである（`CallerSlots` は再度手渡されない）。
 
-#### 注釈 — LinkMode は変えない
+#### 注釈 — kwrest の LinkMode は変えない
 
-`AbstractState`（`jitgen/state/slot.rs`）はフレーム入口で `deferred_forward`
-を置くだけで、rest スロットの `LinkMode` は baseline の `S` のまま残す。
-遅延が発火すれば caller 側の `set_arguments` が実 `nil` を物理的に書き
-（GC 安全）、発火しなければ caller が普通に Array を作ってそのスロットに
-入る。`C(nil)` にしないので、後者で書き戻しが実 Array を壊すことがない。
+K1 はフレーム入口で `deferred_forward` を置くだけで、kwrest スロットの
+`LinkMode` は baseline の `S` のまま残す。遅延が発火すれば caller 側の
+`set_arguments` が実 `nil` を物理的に書き（GC 安全）、発火しなければ caller
+が普通に Hash を作ってそのスロットに入る。`C(nil)` にしないので、後者で
+書き戻しが実 Hash を壊すことがない。
+
+rest スロットは対照的に `V` であり、caller は常に `nil` を書いて
+`create_array` を省く（発火しない、という状態が無い: 手渡された時点で
+省略は確定し、以後は `f` 側の責任）。
 
 #### consumer（`f` 内の各転送）
 
-`set_arguments` の A 段が `AbstractState::deferred_rest_src()` を引き、
-`req <= lead+len`、post 無し、余剰は明示 `*rest` が吸収、転送 `**kwrest` は
-nil、という条件で**充填レイアウトがコンパイル時定数**と示せたときだけ
-`ir.set_deferred_rest()` を立てて caller 窓から直接読む。示せない場合は
-`ir.set_needs_rest_array()` で**拒否権**を行使する（配列パス／ヘルパ／
-汎用／native callee のすべてが拒否権を行使する）。
+`set_arguments` の A 段が `state.virtual_at(args + lead_num)` を引き、
+rest スロットが `CallerSlots { base: SavedFp }` のまま、`req <= lead+len`、
+post 無し、余剰は明示 `*rest` が吸収、転送 `**kwrest` は nil、という条件で
+**充填レイアウトがコンパイル時定数**と示せたときだけ
+`SetArgumentsForwarded::deferred_src` に窓を渡して caller 窓から直接読む
+（`ir.set_kw_routed()` は K1 側の発火）。示せない場合は
+`materialize_virtual_args` で rest を実 Array にし（配列パス／ヘルパ／
+汎用／native callee のすべて）、K1 には `ir.set_kw_vetoed()` で**拒否権**を
+行使する。
+
+routed の場合、rest スロットは呼び出しを跨いで `V` のまま: 書き戻し
+（`write_back_recv_and_callargs`）は rest スロットを飛ばし、`g` 呼び出し
+配下の side exit は `WriteBack::virtual_obj` で同じ窓から Array を作る。
+
+`settle_virtual_args`（汎用 `send` や specialize しない呼び出しの前に
+引数の elided object を実体化する）は、転送 callsite の末尾 `...` splat
+だけは A 段に委ねる — 転送消費は callee を specialize しなくても成立する
+唯一の `CallerSlots` 消費であり、`Class#new` の
+`__builtin_initialize__(...)` もここを通る。
 
 callee フレームの静的レイアウトは
 `FuncInfo::forwarded_deferred_layout` → `ForwardedLayout { from_src,
@@ -197,48 +229,51 @@ none_fill, rest, kw_rest }`。先頭引数は必ず req/opt に消費される
 
 #### producer（caller 側）
 
-`send_specialized` が `defer_rest = deferred_rest && !needs_rest_array` を
-計算する。すなわち**1 つ以上の consume が source-route され、かつどの
-consume も実 Array を要求しない**ときだけ `set_arguments` の rest 充填が
-`create_array` を省略し、代わりに
+`specialized_iseq` が `rest_elided = handover.is_some()` を、
+`send_specialized` が `defer_kw = kw_routed && !kw_vetoed` を計算する。
+`set_arguments` は前者なら rest 充填の `create_array` を省略して
 
 - rest スロットへ実 `nil` を格納（GC 安全）、
 - `write_back_range` で **source 窓をスピルしてメモリ常駐化**
   （routed read と deopt 実体化の両方がメモリを読むため）
 
-を行う。`**kwrest` 側は `TraceIr::CheckKwRest` の空 Hash 生成
-（`jitgen/compile.rs`）も省略され nil のまま。nil の hash-splat は全ての
-consume 経路で「keyword なし」として扱われるので普遍的に安全。
+を行い、後者なら `**kwrest` 側の `TraceIr::CheckKwRest` の空 Hash 生成
+（`jitgen/compile.rs`）も省略して nil のままにする。nil の hash-splat は
+全ての consume 経路で「keyword なし」として扱われるので普遍的に安全。
+kw は**1 つ以上の consume が route し、かつどの consume も実 Hash を
+要求しない**ときだけ省略される。
 
-#### K1 — リテラル keyword の同時遅延
+#### K1 — リテラル keyword の遅延
 
 `X.new(a, k: 1)` のように mother が**リテラル keyword** を渡す場合、
-`DeferredForward::kw = (kwrest_local, kw_pos, names)` として kw も遅延する。
+`DeferredForward::kw = (kwrest_local, kw_pos, names)` として kw を遅延する。
 `kw_forward_route`（`compile/method_call.rs`）が callee の宣言 keyword と
 静的に突き合わせ、`route[i]` = callee kw パラメータ `i` を満たす caller
 スロット（省略可能 keyword が無ければ `None` → 0 埋めで既定値が走る）を返す。
 必須 keyword が埋まらない、`**kwrest` を持つ callee、名前が合わない、と
-いった場合は route 不成立で汎用へ。rest と kw は**一括で**遅延するか一括で
-諦めるかのどちらかである（caller 側のスキップは 1 つのフラグが両方を覆う
-ため）。
+いった場合は route 不成立で汎用へ。kw の routing は rest の routing と
+同じ consume で起きる（`deferred_kw_ok`）: routed read は caller 窓を
+直接読むため、caller 側の kw スキップが有効な間だけ健全であり、rest を
+実体化した consume は kw も veto する。
 
 #### deopt 安全性
 
-- **(D1) `f` 内 deopt**: `WriteBack` に `forward_rest` / `forward_kwrest`
-  エントリが載り、`gen_write_back_for_deopt` がリテラル書き戻しの**後**に
-  `gen_forward_rest_materialize`（`create_array`）と
+- **(D1) `f` 内 deopt**: `WriteBack` に `virtual_obj` エントリが載り、
+  `gen_write_back_for_deopt` がリテラル書き戻しの**後**に
+  `gen_virtual_materialize`（`create_array`）と
   `gen_forward_kwrest_materialize`（`runtime::correct_rest_kw`）を走らせて
   実体をスロットへ書く。呼び出し元 rbp は `[rbp]` から復元。順序を後ろに
   置くことで、確保を伴う呼び出しの最中もフレームが GC 整合を保つ
   （未書き込みの遅延スロットは caller が入れた `nil` を保持している）。
-  aarch64 版は `arch/aarch64/compile/mod.rs::a64_gen_forward_rest_materialize`。
+  `g` 呼び出しの配下で deopt が起きて `f` のフレームが chain 変換される
+  場合も同じ（`gen_chain_replay_stub`）。
+  aarch64 版は `arch/aarch64/compile/mod.rs::a64_gen_virtual_materialize`。
 - **(D2) 呼出ガード失敗**: A 段は「レイアウトが定数」というゲートを通って
   いるので長さガードもフォールバックも持たない（失敗し得ない）。B 段の
   ガードはすべて callee フレーム書込み前にあり、ミスは無ロールバックで
   汎用へ。
-- **(D3) 多重転送**: 注釈は最初の転送で消さない。すべての consume と
-  side exit が同じ注釈を参照する（拒否権も注釈が生きている間だけ意味を
-  持つ）。
+- **(D3) 多重転送**: rest は最初の転送で消えない（仮引数の elided object は
+  読む限り生きている）。すべての consume と side exit が同じ窓を参照する。
 
 `*rest` の意味論（毎回新しい Array）とも整合する — 実体化は常に新規確保。
 
@@ -358,14 +393,15 @@ specialization 深度上限を使い切った深い呼び出し位置では成�
 | `bytecodegen/method_call/arguments.rs` | `handle_forward` / `handle_super_forward` |
 | `bytecodegen/encode.rs::forwarding_no_escape` | lazy 規約の本体側ゲート（前計算） |
 | `globals/store/function.rs` | `is_simple_call` / `forwarding_trampoline_rest` / `lazy_forwarding_rest` / `forwarded_deferred_layout` |
-| `codegen/jitgen/context.rs::forward_rest_deferral` | D1/K1 の呼び出し側ゲート、`DeferredForward` |
-| `codegen/jitgen/state/slot.rs` | 遅延注釈と `deferred_rest_src` |
+| `codegen/jitgen/context.rs::forward_kw_deferral` | K1 の呼び出し側ゲート、`DeferredForward` |
+| `codegen/jitgen/compile/escape.rs::caller_slots_ok` / `settle_virtual_args` | D1 の callee ゲート、転送 splat の委譲 |
+| `codegen/jitgen/state/slot.rs::from_caller` | rest 窓の `CallerSlots` 手渡し |
 | `codegen/jitgen/compile/method_call.rs::set_arguments` | 4 段の分岐、`kw_forward_route`、拒否権 |
-| `codegen/jitgen/compile/method_call.rs::send_specialized` | `defer_rest` の確定（producer） |
+| `codegen/jitgen/compile/method_call.rs::specialized_iseq` / `send_specialized` | `rest_elided` / `defer_kw` の確定（producer） |
 | `codegen/jitgen/compile.rs`（`CheckKwRest`） | 空 Hash 生成の省略 |
 | `codegen/jitgen/asmir.rs` | `SetArgumentsForwarded` / `…Helper` |
 | `arch/{x86_64,aarch64}/compile/…` | 上記の lowering、deopt 実体化 |
-| `codegen/jitgen.rs::gen_write_back_for_deopt` | `forward_rest` / `forward_kwrest` の実体化 |
+| `codegen/jitgen.rs::gen_write_back_for_deopt` | `virtual_obj` / `forward_kwrest` の実体化 |
 | `codegen/runtime/args.rs` | 専用ヘルパ、lazy 規約（マーカー / 解決 / 実体化）、`SmallVec` 化 |
 | `globals.rs`（eval）・`builtins/kernel.rs`（binding） | マーカーの強制実体化 |
 

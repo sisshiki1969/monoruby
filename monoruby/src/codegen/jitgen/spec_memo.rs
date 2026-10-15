@@ -227,8 +227,8 @@ pub(super) struct CallMarks {
 #[derive(Clone)]
 pub(super) struct SpecializedCompileResultMemo {
     pub(super) return_state: Option<ReturnState>,
-    pub(super) deferred_rest: bool,
-    pub(super) needs_rest_array: bool,
+    pub(super) kw_routed: bool,
+    pub(super) kw_vetoed: bool,
     pub(super) had_deopt: bool,
     pub(super) generic_yield: bool,
     pub(super) spec_id: SpecializedId,

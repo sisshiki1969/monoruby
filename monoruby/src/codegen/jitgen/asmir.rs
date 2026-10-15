@@ -216,14 +216,16 @@ pub(crate) struct AsmIr {
     /// otherwise propagate to its caller — see
     /// `JitStackFrame::had_deopt`.
     had_deopt: bool,
-    /// D1: set by the forwarding consumer when it routed the
-    /// trampoline's `g(...)` straight from the caller source.
-    deferred_rest: bool,
-    /// D1 veto: a forwarding consume of the deferred rest that is NOT
-    /// source-routed (needs the real `Array`: 989-array-path / helper /
-    /// generic / native callee). Producer skips `create_array` only
-    /// when `deferred_rest && !needs_rest_array`.
-    needs_rest_array: bool,
+    /// K1: set by the forwarding consumer when it routed the
+    /// trampoline's deferred literal keywords straight from the caller's
+    /// kw window (`kw_forward_route`).
+    kw_routed: bool,
+    /// K1 veto: a forwarding consume in a keyword-deferring trampoline
+    /// frame that is NOT source-routed (it reads `f`'s `**kwrest` as a
+    /// real `Hash`: array-path / helper / generic / native callee). The
+    /// producer skips building the Hash only when
+    /// `kw_routed && !kw_vetoed`.
+    kw_vetoed: bool,
     /// How many suspended frames every interpreter-resuming side exit built
     /// through this IR converts after its write-back (`doc/chain_deopt.md`
     /// §5 step 4 / §6); `0` = no escalation. It is this frame's depth in the
@@ -406,8 +408,8 @@ impl AsmIr {
             #[cfg(feature = "deopt")]
             created_at: vec![],
             had_deopt: false,
-            deferred_rest: false,
-            needs_rest_array: false,
+            kw_routed: false,
+            kw_vetoed: false,
             chain_frames: ctx.chain_deopt_frames(),
             frameless: ctx.in_frameless_frame(),
             frameless_violation: false,
@@ -566,20 +568,20 @@ impl AsmIr {
         self.had_deopt = true;
     }
 
-    pub(super) fn deferred_rest(&self) -> bool {
-        self.deferred_rest
+    pub(super) fn kw_routed(&self) -> bool {
+        self.kw_routed
     }
 
-    pub(super) fn set_deferred_rest(&mut self) {
-        self.deferred_rest = true;
+    pub(super) fn set_kw_routed(&mut self) {
+        self.kw_routed = true;
     }
 
-    pub(super) fn needs_rest_array(&self) -> bool {
-        self.needs_rest_array
+    pub(super) fn kw_vetoed(&self) -> bool {
+        self.kw_vetoed
     }
 
-    pub(super) fn set_needs_rest_array(&mut self) {
-        self.needs_rest_array = true;
+    pub(super) fn set_kw_vetoed(&mut self) {
+        self.kw_vetoed = true;
     }
 
     pub(super) fn push(&mut self, inst: AsmInst) {
@@ -793,14 +795,14 @@ impl AsmIr {
             self.side_exit.len(),
             self.codegen_mode,
             self.had_deopt,
-            self.deferred_rest,
-            self.needs_rest_array,
+            self.kw_routed,
+            self.kw_vetoed,
         )
     }
 
     pub(super) fn restore(
         &mut self,
-        (inst, side_exit, codegen_mode, had_deopt, deferred_rest, needs_rest_array): (
+        (inst, side_exit, codegen_mode, had_deopt, kw_routed, kw_vetoed): (
             usize,
             usize,
             bool,
@@ -817,8 +819,8 @@ impl AsmIr {
         self.created_at.truncate(side_exit);
         self.codegen_mode = codegen_mode;
         self.had_deopt = had_deopt;
-        self.deferred_rest = deferred_rest;
-        self.needs_rest_array = needs_rest_array;
+        self.kw_routed = kw_routed;
+        self.kw_vetoed = kw_vetoed;
     }
 
     pub(crate) fn new_evict(&mut self) -> AsmEvict {
@@ -1611,13 +1613,44 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn array_min_max(&mut self, using_fpr: UsingFpr, args: SlotId, len: u16, min: bool) {
+    pub(super) fn array_min_max(
+        &mut self,
+        using_fpr: UsingFpr,
+        base: SlotBase,
+        args: SlotId,
+        len: u16,
+        min: bool,
+    ) {
         self.push(AsmInst::ArrayMinMax {
+            base,
             args,
             len,
             min,
             using_fpr,
         });
+    }
+
+    /// rax <- Array of the `len` slots at `src`, addressed in the frame
+    /// `base` names (the materialization of an elided object whose
+    /// elements are in the caller's frame; `doc/escape_analysis.md`).
+    pub(super) fn create_array_from(
+        &mut self,
+        using_fpr: UsingFpr,
+        base: SlotBase,
+        src: SlotId,
+        len: u16,
+    ) {
+        self.push(AsmInst::CreateArrayFrom {
+            base,
+            src,
+            len,
+            using_fpr,
+        });
+    }
+
+    /// rax <- the value of `slot`, addressed in the frame `base` names.
+    pub(super) fn load_caller_slot(&mut self, base: SlotBase, slot: SlotId) {
+        self.push(AsmInst::LoadCallerSlot { base, slot });
     }
 
     pub(super) fn new_hash(&mut self, using_fpr: UsingFpr, args: SlotId, len: usize) {
@@ -2618,7 +2651,8 @@ pub(super) enum AsmInst {
         lead_num: usize,
         kwrest_guard: Option<SlotId>,
         /// D1: when `Some((src, len))` the trampoline's `...` rest array
-        /// was deferred — copy the `len` forwarded positionals straight
+        /// is an elided object (`VirtualSrc::CallerSlots` over the caller's
+        /// window) — copy the `len` forwarded positionals straight
         /// from the caller source slots `src..src+len` (read via the
         /// caller `rbp` saved at `[rbp]`) instead of loading/length-
         /// guarding `f`'s rest `Array`. No fallback (the structural gate
@@ -3268,10 +3302,34 @@ pub(super) enum AsmInst {
     /// `[a, b, …].min` / `.max` with the Array elided: compare the
     /// literal's elements in their slots. See `doc/escape_analysis.md`.
     ArrayMinMax {
+        /// The frame the `len` slots at `args` are addressed in: this
+        /// one, or the caller's for an elided object handed over as an
+        /// argument (`VirtualSrc::CallerSlots`).
+        base: SlotBase,
         args: SlotId,
         len: u16,
         min: bool,
         using_fpr: UsingFpr,
+    },
+    ///
+    /// rax <- Array of the `len` slots at `src`, addressed in the frame
+    /// `base` names: an elided object materialized in the body (its
+    /// elements are in the caller's frame, `VirtualSrc::CallerSlots`).
+    /// Saves/restores `using_fpr` around the allocation.
+    ///
+    CreateArrayFrom {
+        base: SlotBase,
+        src: SlotId,
+        len: u16,
+        using_fpr: UsingFpr,
+    },
+    ///
+    /// rax <- the value of `slot`, addressed in the frame `base` names
+    /// (an element of an elided object handed over by the caller).
+    ///
+    LoadCallerSlot {
+        base: SlotBase,
+        slot: SlotId,
     },
     NewArray {
         callid: CallSiteId,

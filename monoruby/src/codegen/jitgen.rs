@@ -196,15 +196,6 @@ pub(crate) struct WriteBack {
     /// the GP allocator places a pool slot, so shipping
     /// builds carry an always-empty vec and emit byte-identical code.
     gp: Vec<(GP, SlotId)>,
-    /// Deferred forwarding-rest materialization (D1). Each entry
-    /// `(dst, src, len)`: the rest-parameter slot `dst` of a
-    /// forwarding-trampoline frame was *not* materialized as an `Array`
-    /// on the fast path; its positional source args live at
-    /// `src .. src + len`. On any side-exit / GC safepoint / frame
-    /// capture inside the deferral window the interpreter (or the heap
-    /// frame copy) reads the rest local, so the array must be built
-    /// here from the source slots and stored into `dst`.
-    forward_rest: Vec<(SlotId, SlotId, u16)>,
     /// Deferred forwarding-kwrest materialization (K1). Each entry
     /// `(dst, [(name, caller slot)])`: the `**kwrest` slot `dst` of a
     /// forwarding-trampoline frame was *not* materialized as a Hash on
@@ -215,7 +206,10 @@ pub(crate) struct WriteBack {
     /// Allocations elided by the escape analysis (`doc/escape_analysis.md`)
     /// that a side exit has to perform after all: each `(dst, src)` stores
     /// the object `src` describes into `dst`. Runs last, like
-    /// `forward_rest`, so the frame is GC-consistent across the allocation.
+    /// `forward_kwrest`, so the frame is GC-consistent across the
+    /// allocation. A `CallerSlots` entry is the un-built rest `Array` (or
+    /// an argument's elided literal) of a specialized callee, whose
+    /// elements sit in the caller's frame.
     virtual_obj: Vec<(SlotId, VirtualSrc)>,
 }
 
@@ -238,6 +232,44 @@ pub(crate) enum VirtualSrc {
     /// immediates), i.e. what `TraceIr::Literal` would have deep-copied.
     ///
     Literal(Value),
+    ///
+    /// An Array whose `len` elements are in the *caller's* frame, at the
+    /// caller's slots `src .. src + len`, reached through `base`: the rest
+    /// `Array` a specialized callee's `*rest` parameter would hold, or an
+    /// elided literal the caller passed as an argument.
+    ///
+    CallerSlots {
+        src: SlotId,
+        len: u16,
+        base: SlotBase,
+    },
+}
+
+impl VirtualSrc {
+    /// The slots of *this* frame that hold the object's elements, if any.
+    pub(crate) fn own_elements(&self) -> Option<(SlotId, u16)> {
+        match self {
+            VirtualSrc::Slots { src, len, .. } => Some((*src, *len)),
+            VirtualSrc::Literal(_) | VirtualSrc::CallerSlots { .. } => None,
+        }
+    }
+}
+
+///
+/// Which frame a slot range is addressed in.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum SlotBase {
+    /// This frame: `[lfp - conv(slot)]`.
+    Own,
+    /// The frame of this frame's direct caller, through the frame pointer
+    /// this frame saved on entry: `[[fp] - rbp_local(slot)]`. A framed
+    /// specialized callee.
+    SavedFp,
+    /// The frame of this frame's direct caller, which holds this frameless
+    /// callee's window `delta` bytes under its own lfp
+    /// (`AsmInst::InlineCall::delta`): `[lfp + delta - conv(slot)]`.
+    Window(i32),
 }
 
 impl Hash for WriteBack {
@@ -264,11 +296,6 @@ impl Hash for WriteBack {
         for (reg, slot) in &self.gp {
             reg.hash(state);
             slot.hash(state);
-        }
-        for (dst, src, len) in &self.forward_rest {
-            dst.hash(state);
-            src.hash(state);
-            len.hash(state);
         }
         for (dst, table) in &self.forward_kwrest {
             dst.hash(state);
@@ -308,9 +335,6 @@ impl std::fmt::Debug for WriteBack {
         for (reg, slot) in &self.gp {
             s.push_str(&format!(" {:?}->{:?}", reg, slot));
         }
-        for (dst, src, len) in &self.forward_rest {
-            s.push_str(&format!(" fwdrest[{:?};{}]->{:?}", src, len, dst));
-        }
         for (dst, table) in &self.forward_kwrest {
             s.push_str(&format!(" fwdkwrest[{:?}]->{:?}", table, dst));
         }
@@ -335,7 +359,6 @@ impl WriteBack {
             && self.literal.is_empty()
             && self.void.is_empty()
             && self.gp.is_empty()
-            && self.forward_rest.is_empty()
             && self.forward_kwrest.is_empty()
             && self.virtual_obj.is_empty()
     }
@@ -371,10 +394,6 @@ impl WriteBack {
         self.void = void;
     }
 
-    pub(crate) fn forward_rest_entries(&self) -> &[(SlotId, SlotId, u16)] {
-        &self.forward_rest
-    }
-
     pub(crate) fn forward_kwrest_entries(&self) -> &[(SlotId, Box<[(IdentId, SlotId)]>)] {
         &self.forward_kwrest
     }
@@ -390,7 +409,6 @@ impl WriteBack {
         literal: Vec<(Value, SlotId)>,
         void: Vec<SlotId>,
         gp: Vec<(GP, SlotId)>,
-        forward_rest: Vec<(SlotId, SlotId, u16)>,
         forward_kwrest: Vec<(SlotId, Box<[(IdentId, SlotId)]>)>,
         virtual_obj: Vec<(SlotId, VirtualSrc)>,
     ) -> Self {
@@ -400,7 +418,6 @@ impl WriteBack {
             literal,
             void,
             gp,
-            forward_rest,
             forward_kwrest,
             virtual_obj,
         }
@@ -1690,23 +1707,10 @@ impl JitModule {
         for slot in &wb.void {
             self.literal_to_stack2(*slot, Value::nil());
         }
-        // D1: materialize deferred forwarding-rest arrays. Runs last so
-        // the literal loop above has already written the `dst` slot
-        // (mode `C(nil)`) — keeping the frame GC-consistent during the
-        // `create_array` call (which may itself allocate). The source
-        // positional args live in the *caller* (outermost, non-
-        // specialized) JIT frame, so they are addressed `rbp`-relative
-        // (rbp is the stable outermost frame pointer, valid until the
-        // JIT method returns — and at an in-window side-exit neither the
-        // caller nor `f` has returned). `dst` is `f`'s rest local,
-        // addressed `r14`-relative like every other deopt restore.
-        for (dst, src, len) in wb.forward_rest.clone() {
-            self.gen_forward_rest_materialize(dst, src, len);
-        }
-        // K1: materialize deferred `**kwrest` Hashes after the rest
-        // arrays (each helper call may allocate; every not-yet-written
-        // deferred slot still physically holds the `nil` the caller
-        // stored, so the frame stays GC-consistent throughout).
+        // K1: materialize deferred `**kwrest` Hashes (each helper call
+        // may allocate; every not-yet-written deferred slot still
+        // physically holds the `nil` the caller stored, so the frame
+        // stays GC-consistent throughout).
         for (dst, table) in wb.forward_kwrest.clone() {
             self.gen_forward_kwrest_materialize(dst, &table);
         }
@@ -1730,6 +1734,19 @@ impl JitModule {
                     call rax;
                 }
             }
+            // The elements are in the caller's frame, which has not
+            // returned (this frame is still running), reached through the
+            // frame pointer this frame saved or the window offset. The
+            // caller spilled them before the call, and its frame is on the
+            // control-frame chain, so the allocation is GC-safe.
+            VirtualSrc::CallerSlots { src, len, base } => {
+                self.caller_slot_addr(base, src, GP::Rdi);
+                monoasm! { &mut self.jit,
+                    movq rsi, (len as usize);
+                    movq rax, (runtime::create_array);
+                    call rax;
+                }
+            }
             VirtualSrc::Literal(v) => {
                 monoasm! { &mut self.jit,
                     movq rdi, (v.id());
@@ -1745,7 +1762,7 @@ impl JitModule {
 
     /// K1: rebuild a deferred `**kwrest` Hash from the caller's kw
     /// slots and store it into `dst` (the trampoline's kwrest local).
-    /// Same caller addressing as `gen_forward_rest_materialize`; the
+    /// Same caller addressing as `caller_slot_addr` (`SavedFp`); the
     /// caller `Lfp` handed to `correct_rest_kw` is derived from the
     /// saved caller rbp (`lfp == rbp - RBP_LOCAL_FRAME` in every JIT
     /// frame).
@@ -1874,24 +1891,56 @@ impl JitModule {
             }
         }
         debug_assert!(wb.gp_is_empty());
-        // Deferred rest / kwrest last, so the literal stores above have
-        // already homed each deferred `dst` and the frame stays
-        // GC-consistent across the allocating helper calls. The source slots
-        // live in the caller's *own* caller, reached through the bp it
-        // saved — `[rsi]`, matching `gen_forward_rest_materialize`'s `[rbp]`.
-        // An elided allocation never lives across a call
-        // (`AbstractState::virtual_survives`), so no suspended frame owes one.
-        debug_assert!(wb.virtual_obj_entries().is_empty());
-        for (dst, src, len) in wb.forward_rest_entries() {
+        // Elided allocations and deferred kwrest last, so the literal
+        // stores above have already homed each `dst` and the frame stays
+        // GC-consistent across the allocating calls. An elided object in a
+        // suspended frame is one a specialized callee was handed in a
+        // parameter (`doc/escape_analysis.md` §6): its un-built rest
+        // `Array` or an elided literal with elements in the frame's *own*
+        // caller (`VirtualSrc::CallerSlots`, reached through the bp it
+        // saved — `[rsi]`, matching `caller_slot_addr`'s `[rbp]`), or a
+        // literal template (`VirtualSrc::Literal`). An object with elements
+        // in the frame itself never lives across a call (`virtual_survives`).
+        for (dst, src) in wb.virtual_obj_entries() {
             monoasm! { &mut *self,
                 pushq rdi;
                 pushq rsi;
                 pushq rdx;
-                movq  rcx, [rsi];
-                lea   rdi, [rcx - (rbp_local(*src))];
-                movq  rsi, (*len as usize);
-                movq  rax, (runtime::create_array);
-                call  rax;
+            }
+            match *src {
+                VirtualSrc::CallerSlots { src, len, base } => {
+                    match base {
+                        SlotBase::SavedFp => {
+                            monoasm! { &mut *self,
+                                movq  rcx, [rsi];
+                                lea   rdi, [rcx - (rbp_local(src))];
+                            }
+                        }
+                        SlotBase::Window(delta) => {
+                            monoasm! { &mut *self,
+                                lea   rdi, [rdx + (delta - conv(src))];
+                            }
+                        }
+                        SlotBase::Own => unreachable!(),
+                    }
+                    monoasm! { &mut *self,
+                        movq  rsi, (len as usize);
+                        movq  rax, (runtime::create_array);
+                        call  rax;
+                    }
+                }
+                VirtualSrc::Literal(v) => {
+                    monoasm! { &mut *self,
+                        movq  rdi, (v.id());
+                        movq  rax, (Value::value_deep_copy);
+                        call  rax;
+                    }
+                }
+                VirtualSrc::Slots { .. } => {
+                    unreachable!("an elided literal in a temporary never lives across a call")
+                }
+            }
+            monoasm! { &mut *self,
                 popq  rdx;
                 popq  rsi;
                 popq  rdi;
@@ -1939,22 +1988,31 @@ impl JitModule {
         entry
     }
 
-    fn gen_forward_rest_materialize(&mut self, dst: SlotId, src: SlotId, len: u16) {
-        // The deferred trampoline frame `f` established its own `rbp`
-        // (`init_func`'s `pushq rbp; movq rbp, rsp`), so the dynamic
-        // caller's `rbp` is the value `f` saved at `[rbp]`. The
-        // structural gate guarantees the caller is exactly one
-        // (outermost, non-specialized) level up, so the positional
-        // source slots live at `[caller_rbp - rbp_local(src + i)]`.
-        // `dst` (f's rest local) is r14-relative like every other deopt
-        // restore.
-        monoasm! { self,
-            movq rcx, [rbp];
-            lea  rdi, [rcx - (rbp_local(src))];
-            movq rsi, (len as usize);
-            movq rax, (runtime::create_array);
-            call rax;
-            movq [r14 - (conv(dst))], rax;
+    /// `reg <- &slot`, *slot* addressed in the frame *base* names.
+    pub(super) fn caller_slot_addr(&mut self, base: SlotBase, slot: SlotId, reg: GP) {
+        match base {
+            SlotBase::Own => {
+                monoasm! { &mut self.jit,
+                    lea  R(reg as _), [r14 - (conv(slot))];
+                }
+            }
+            // This frame established its own `rbp` (`init_func`'s
+            // `pushq rbp; movq rbp, rsp`), so the caller's `rbp` is the
+            // value saved at `[rbp]`, and the caller's slot is at
+            // `[caller_rbp - rbp_local(slot)]`.
+            SlotBase::SavedFp => {
+                monoasm! { &mut self.jit,
+                    movq R(reg as _), [rbp];
+                    lea  R(reg as _), [R(reg as _) - (rbp_local(slot))];
+                }
+            }
+            // A frameless callee's lfp is the caller's shifted down by
+            // `delta`, so the caller's slot is `delta` above.
+            SlotBase::Window(delta) => {
+                monoasm! { &mut self.jit,
+                    lea  R(reg as _), [r14 + (delta - conv(slot))];
+                }
+            }
         }
     }
 }

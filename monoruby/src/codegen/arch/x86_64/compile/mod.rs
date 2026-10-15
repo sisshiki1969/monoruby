@@ -78,6 +78,8 @@ impl Codegen {
             | AsmInst::CreateArray { .. }
             | AsmInst::NewArray { .. }
             | AsmInst::ArrayMinMax { .. }
+            | AsmInst::CreateArrayFrom { .. }
+            | AsmInst::LoadCallerSlot { .. }
             | AsmInst::NewHash(..)
             | AsmInst::HashInsert { .. }
             | AsmInst::ArrayConcat { .. }
@@ -1655,10 +1657,12 @@ impl Codegen {
         }
     }
 
-    /// rax <- min/max of the `len` values at `args`, computed in place —
-    /// the allocation-free `[a, b, …].min` / `.max` (`doc/escape_analysis.md`).
+    /// rax <- min/max of the `len` values at `args` (addressed in the
+    /// frame `base` names), computed in place — the allocation-free
+    /// `[a, b, …].min` / `.max` (`doc/escape_analysis.md`).
     pub(in crate::codegen::jitgen) fn emit_array_min_max(
         &mut self,
+        base: SlotBase,
         args: SlotId,
         len: u16,
         min: bool,
@@ -1670,15 +1674,49 @@ impl Codegen {
             runtime::opt_array_max as *const () as usize
         };
         self.fpr_save(using_fpr);
+        self.caller_slot_addr(base, args, GP::Rdx);
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            lea  rdx, [rbp - (rbp_local(args))];
             movq rcx, (len as usize);
             movq rax, (f);
             call rax;
         );
         self.fpr_restore(using_fpr);
+        true
+    }
+
+    /// rax <- Array of the `len` slots at `src`, addressed in the frame
+    /// `base` names (`AsmInst::CreateArrayFrom`).
+    pub(in crate::codegen::jitgen) fn emit_create_array_from(
+        &mut self,
+        base: SlotBase,
+        src: SlotId,
+        len: u16,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        self.fpr_save(using_fpr);
+        self.caller_slot_addr(base, src, GP::Rdi);
+        monoasm!( &mut self.jit,
+            movq rsi, (len as usize);
+            movq rax, (runtime::create_array);
+            call rax;
+        );
+        self.fpr_restore(using_fpr);
+        true
+    }
+
+    /// rax <- the value of `slot`, addressed in the frame `base` names
+    /// (`AsmInst::LoadCallerSlot`).
+    pub(in crate::codegen::jitgen) fn emit_load_caller_slot(
+        &mut self,
+        base: SlotBase,
+        slot: SlotId,
+    ) -> bool {
+        self.caller_slot_addr(base, slot, GP::Rax);
+        monoasm!( &mut self.jit,
+            movq rax, [rax];
+        );
         true
     }
 
