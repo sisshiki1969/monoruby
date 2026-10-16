@@ -662,6 +662,7 @@ impl Executor {
             globals.store.record_class_new_fid();
             // Likewise, the `Hash` methods hash.rb defines exist only now.
             crate::builtins::hash::init_recv_escape_ruby(globals);
+            crate::builtins::range::init_recv_escape_ruby(globals);
         }
         // TOPLEVEL_BINDING: registered as a *lazy* constant — defined
         // (it lists in `Object.constants` and answers `const_defined?`)

@@ -662,6 +662,9 @@ impl<'a> JitContext<'a> {
                 end,
                 exclude_end,
             } => {
+                if self.try_elide_range(state, ir, dst, start, end, exclude_end) {
+                    return Ok(CompileResult::Continue);
+                }
                 state.write_back_slots(ir, &[start, end]);
                 state.discard(dst);
                 let error = ir.new_error(state);
@@ -909,6 +912,14 @@ impl<'a> JitContext<'a> {
                 fused,
                 nou64,
             } => {
+                // `case v when lo..hi` with the Range elided: the compare
+                // in place (`doc/escape_analysis.md`).
+                if matches!(kind, CmpKind::TEq)
+                    && state.virtual_at(lhs).is_some()
+                    && self.consume_virtual_teq(state, ir, dst, lhs, rhs, bc_pos, fused)
+                {
+                    return Ok(CompileResult::Continue);
+                }
                 // A comparison whose boolean only the following `CondBr`
                 // reads: install that branch as the sink, so the inline
                 // generator may leave its answer in the condition flags

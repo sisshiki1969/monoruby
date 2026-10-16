@@ -885,14 +885,12 @@ impl SlotState {
         Some(self.virtuals.remove(i).1)
     }
 
-    /// Whether *slot* holds an element of an elided Array literal: it is
-    /// dead in the bytecode (above the stack top) but must keep its value
-    /// until the Array is materialized or consumed.
+    /// Whether *slot* holds an element of an elided Array literal (or an
+    /// endpoint of an elided Range): it is dead in the bytecode (above the
+    /// stack top) but must keep its value until the object is materialized
+    /// or consumed.
     pub(in crate::codegen::jitgen) fn is_virtual_src(&self, slot: SlotId) -> bool {
-        self.virtuals.iter().any(|(_, src)| match src.own_elements() {
-            Some((src, len)) => (src.0..src.0 + len).contains(&slot.0),
-            None => false,
-        })
+        self.virtuals.iter().any(|(_, src)| src.owns_slot(slot))
     }
 
     pub(in crate::codegen::jitgen) fn discard_temps(&mut self) {
@@ -2915,6 +2913,9 @@ impl LinkMode {
                         VirtualSrc::Literal(v) => VirtualSrc::Literal(v),
                         VirtualSrc::CallerSlots { .. } | VirtualSrc::CallerKw { .. } => {
                             unreachable!("an object of the caller's caller is never handed over")
+                        }
+                        VirtualSrc::Range { .. } => {
+                            unreachable!("an elided Range is never handed over")
                         }
                     };
                     virtuals.push((SlotId(slots.len() as u16), src));

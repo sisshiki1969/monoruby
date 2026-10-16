@@ -84,6 +84,9 @@ impl Codegen {
             | AsmInst::HashInsert { .. }
             | AsmInst::ArrayConcat { .. }
             | AsmInst::NewRange { .. }
+            | AsmInst::CreateRange { .. }
+            | AsmInst::RangeCover { .. }
+            | AsmInst::RangeOp { .. }
             | AsmInst::ConcatStr { .. }
             | AsmInst::ToA { .. }
             | AsmInst::DeepCopyLit(..)
@@ -1794,6 +1797,138 @@ impl Codegen {
         self.load_rdi(start);
         self.load_rsi(end);
         self.new_range(exclude_end, using_fpr);
+        true
+    }
+
+    /// rax <- Range(start, end, exclude_end) of an elided object
+    /// (`AsmInst::CreateRange`): no compare, nothing can fail.
+    pub(in crate::codegen::jitgen) fn emit_create_range(
+        &mut self,
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        self.fpr_save(using_fpr);
+        self.load_range_end(GP::Rdi, start);
+        self.load_range_end(GP::Rsi, end);
+        monoasm! { &mut self.jit,
+            movl rdx, (exclude_end as u32);
+            movq rax, (runtime::create_range);
+            call rax;
+        };
+        self.fpr_restore(using_fpr);
+        true
+    }
+
+    /// `cmpq rdi, endpoint` — a Fixnum endpoint compares as a tagged word
+    /// (the tag is the same constant bit on both sides, so the order is
+    /// the integers'); `None` for a nil endpoint, which bounds nothing.
+    fn cmp_range_end(&mut self, end: RangeEnd) -> bool {
+        match end {
+            RangeEnd::Const(v) if v.is_nil() => false,
+            RangeEnd::Const(v) => {
+                monoasm! { &mut self.jit,
+                    movq rax, (v.id());
+                    cmpq rdi, rax;
+                }
+                true
+            }
+            RangeEnd::Slot(slot) => {
+                monoasm! { &mut self.jit,
+                    cmpq rdi, [r14 - (conv(slot))];
+                }
+                true
+            }
+        }
+    }
+
+    /// rax <- `Value::bool((start..end).include?(arg))` on an elided Range
+    /// (`AsmInst::RangeCover`): `start <= arg && arg <(=) end` inline for a
+    /// Fixnum `arg` when `inline`, `runtime::range_cover` otherwise.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::codegen::jitgen) fn emit_range_cover(
+        &mut self,
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+        arg: SlotId,
+        fid: FuncId,
+        inline: bool,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        let slow = self.jit.label();
+        let no = self.jit.label();
+        let exit = self.jit.label();
+        if inline {
+            monoasm! { &mut self.jit,
+                movq rdi, [r14 - (conv(arg))];
+                testq rdi, 0b001;
+                jz   slow;
+            }
+            if self.cmp_range_end(start) {
+                monoasm! { &mut self.jit,
+                    jlt  no;
+                }
+            }
+            if self.cmp_range_end(end) {
+                if exclude_end {
+                    monoasm! { &mut self.jit,
+                        jge  no;
+                    }
+                } else {
+                    monoasm! { &mut self.jit,
+                        jgt  no;
+                    }
+                }
+            }
+            monoasm! { &mut self.jit,
+                movq rax, (TRUE_VALUE);
+                jmp  exit;
+            no:
+                movq rax, (FALSE_VALUE);
+                jmp  exit;
+            }
+        }
+        self.jit.bind_label(slow);
+        self.fpr_save(using_fpr);
+        self.load_range_end(GP::Rdx, start);
+        self.load_range_end(GP::Rcx, end);
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq r8, [r14 - (conv(arg))];
+            movq r9, (runtime::range_op_info(fid, exclude_end));
+            movq rax, (runtime::range_cover);
+            call rax;
+        };
+        self.fpr_restore(using_fpr);
+        self.jit.bind_label(exit);
+        true
+    }
+
+    /// rax <- `(start..end).op` on an elided Range through the helper
+    /// `runtime::range_op_fn(op)` (`AsmInst::RangeOp`).
+    pub(in crate::codegen::jitgen) fn emit_range_op(
+        &mut self,
+        op: ElementsOp,
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+        fid: FuncId,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        self.fpr_save(using_fpr);
+        self.load_range_end(GP::Rdx, start);
+        self.load_range_end(GP::Rcx, end);
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq r8, (runtime::range_op_info(fid, exclude_end));
+            movq rax, (runtime::range_op_fn(op));
+            call rax;
+        };
+        self.fpr_restore(using_fpr);
         true
     }
 

@@ -929,3 +929,254 @@ fn kwrest_with_a_splat_or_block_is_built() {
         "#,
     );
 }
+
+#[test]
+fn range_element_ops_on_dynamic_endpoints() {
+    // `lo..hi` with Fixnum (or nil) endpoints is elided; the receiver
+    // escape summaries of `Range#include?` and friends answer from the
+    // endpoints in place, and a non-numeric argument or an endpoint the
+    // method rejects goes through the real method on a Range built after
+    // all.
+    run_test(
+        r#"
+        def cover(a, b, x)
+          [(a..b).include?(x), (a...b).include?(x), (a..b).cover?(x), (a..b).member?(x),
+           (a..b) === x, (a..nil).include?(x), (nil..b).include?(x), (a..b).include?(x.to_f),
+           (a...b).include?(x + 0.5), (a..b).include?("s"), (a..b).include?(nil),
+           (a..b).include?(2**70), (a..).cover?(x), (..b).cover?(x)]
+        end
+        def ops(a, b)
+          [(a..b).size, (a...b).size, (a..b).count, (a...b).count, (a..b).sum, (a...b).sum,
+           (a..b).min, (a..b).max, (a...b).max, (a...b).min, (a..b).first, (a..b).last,
+           (a..b).begin, (a...b).end, (a...b).exclude_end?, (a..b).exclude_end?,
+           (a..nil).size, (a..nil).count, (nil..b).count, (a..nil).min, (nil..b).max,
+           (a..b) == (a..b), (a..b).hash == (a...b).hash]
+        end
+        def walks(a, b)
+          [(a..b).to_a, (a..b).minmax, (a..b).map { |v| v * 2 }, (a..b).reject(&:even?),
+           (a..b).all? { |v| v > 0 }]
+        end
+        res = []
+        30.times do |i|
+          res << cover(1, 5, i) << ops(i, i + 3) << ops(5, 2) << ops(i, i) << walks(i, i + 3)
+        end
+        res << cover(1, 5, 2.5) << ops(-(2**62), 2**62 - 1) << ops(0, 2**40) << walks(5, 2)
+        res
+        "#,
+    );
+}
+
+#[test]
+fn range_endpoint_errors_and_fallbacks() {
+    // A nil endpoint the method rejects raises from the real method.
+    run_test(
+        r#"
+        def probe(a)
+          r = []
+          [-> { (nil..a).first }, -> { (a..nil).last }, -> { (nil..a).size },
+           -> { (nil..a).min }, -> { (a..nil).max }, -> { (nil...a).max },
+           -> { (nil..a).sum }].each do |f|
+            r << begin
+              f.call
+            rescue => e
+              e.class
+            end
+          end
+          r
+        end
+        res = []
+        25.times { |i| res << probe(i) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn range_literal_templates_and_case_when() {
+    // A `lo..hi` literal with immediate endpoints is a template; the
+    // endpoint compare of `case … when lo..hi` is inline, and the
+    // argument-less ops are folded at compile time.
+    run_test(
+        r#"
+        def lit(x)
+          r = case x
+              when 1..5 then :low
+              when 6...10 then :mid
+              when 10.. then :high
+              when ..-5 then :verylow
+              else :neg
+              end
+          [r, (1..3).include?(x), (1..3).size, (1...3).sum, (1..3).min, (1..3).max,
+           (1...1).min, (1..3).first, (1..3).last, (1..3).begin, (1...3).end,
+           (1...3).exclude_end?, (1..3).to_a, (1..3).count, (..3).count, (1..).size,
+           (1.0..3.0).include?(x), ("a".."c").include?("b"), (1..3) === x, (1..3) === "x",
+           (1..3) == (1..3), (1..3).eql?(1...3), (1..3).hash == (1..3).hash,
+           (1..3).include?(x.to_f), (1..10).sum, (1..(2**62)).sum, (3..1).sum, (3..1).max,
+           (1..3).to_set.size, (1..5).overlap?(4..9), (1..100).bsearch { |v| v >= x.to_i },
+           (:a..:c).include?(:b), (nil..nil).include?(x.to_i)]
+        end
+        res = []
+        30.times { |i| res << lit(i - 8) }
+        res << lit(2.5) << lit("s") << lit(nil)
+        res
+        "#,
+    );
+}
+
+#[test]
+fn range_escaping_uses_see_a_real_range() {
+    // Every use the summaries do not cover — a local, an argument, `each`
+    // (which returns self), `step`, identity — sees a real Range.
+    run_test(
+        r#"
+        def f(a, b, x)
+          r = a..b
+          s = (a...b)
+          t = r.each { |v| }
+          u = (a..b).step(2).to_a
+          v = (a..b).each_with_index.to_a
+          [r, s, t.equal?(r), u, v, (a..b).frozen?, (a..b).equal?(a..b), (a..b).dup,
+           (a..b).instance_of?(Range), (a..b).to_s, (a..b).inspect, [a..b].first,
+           (a..b).tap { |z| }, g(a..b), (a..b).then { |z| z.size }]
+        end
+        def g(r) = r
+        res = []
+        25.times { |i| res << f(i, i + 2, i) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn range_endpoint_slot_overwritten_before_the_use() {
+    // An endpoint local written while the Range is elided, and an
+    // endpoint temporary clobbered by a later push: the object is built
+    // before the write, with the old endpoint.
+    run_test(
+        r#"
+        def f(a, b, x)
+          r = (a..b).include?(x)
+          b = 100
+          s = (a..b).include?(x)
+          y = (a...b.size).sum
+          z = (a..b.to_s.size).include?(x)
+          w = (a..b).include?(x.to_s.size)
+          [r, s, y, z, w, b]
+        end
+        res = []
+        25.times { |i| res << f(i, i + 5, i + 1) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn range_redefinition_after_compile_allocates_again() {
+    // The consuming lowerings are guarded by the class version: once
+    // `Range#include?` / `#size` are redefined, the call must see a real,
+    // fresh Range each time.
+    run_test_once(
+        r#"
+        def f(a, b, x)
+          v = (a..b).include?(x)
+          w = (a...b).size
+          u = case x when a..b then :in else :out end
+          [v, w, u]
+        end
+        res = []
+        40.times do |i|
+          if i == 30
+            class Range
+              def include?(x) = self
+              def size = self
+              def ===(x) = self
+            end
+          end
+          res << f(1, i, 3)
+        end
+        res.last(12) + [(1..2).include?(1), (5..6).size]
+        "#,
+    );
+}
+
+#[test]
+fn range_cover_with_redefined_integer_cmp() {
+    // The inline Fixnum compare stands in for `Integer#<=>`; once that is
+    // redefined, the real method answers.
+    run_test_once(
+        r#"
+        def f(a, b, x) = [(a..b).include?(x), (1..5) === x, (a..b).cover?(x), (a..b).min]
+        res = []
+        40.times do |i|
+          if i == 30
+            class Integer
+              def <=>(o) = 0
+            end
+          end
+          res << f(1, 5, i)
+        end
+        res.last(12)
+        "#,
+    );
+}
+
+#[test]
+fn range_template_handed_into_a_specialized_callee() {
+    // A literal Range passed as an argument stays elided in the callee,
+    // where its endpoints are constants; a use that needs the object
+    // builds it there.
+    run_test(
+        r#"
+        def g(r, x) = [r.include?(x), r.size, r.first, r.min, r.sum, r === x]
+        def h(r, x) = [r.include?(x), r.include?(x.to_s), r]
+        def f(x)
+          [g(1..5, x), g(1...5, x), h(2..4, x)]
+        end
+        res = []
+        30.times { |i| res << f(i) }
+        res << f(2.5) << f("q")
+        res
+        "#,
+    );
+}
+
+#[test]
+fn range_with_non_fixnum_endpoints_is_built() {
+    // Only Fixnum / nil endpoints are elided: a Float, Bignum, String or
+    // unknown-class endpoint builds the Range as before (and `lo..hi`
+    // with `hi < lo` is still a Range).
+    run_test(
+        r#"
+        def f(a, b, x)
+          [(a.to_f..b).include?(x), (a..b.to_f).include?(x), ((2**70)..(2**71)).include?(2**70 + 1),
+           (a.to_s..b.to_s).include?(x.to_s), (a..b).include?(x), (b..a).to_a, (b...a).size,
+           (a..b).step(2).size]
+        end
+        res = []
+        25.times { |i| res << f(i, i + 4, i + 2) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn range_element_ops_result_unused_and_in_conditions() {
+    run_test(
+        r#"
+        def f(a, b, x)
+          (a..b).include?(x)
+          (a..b).size
+          n = 0
+          n += 1 if (a..b).include?(x)
+          n += 10 unless (a...b).cover?(x)
+          n += 100 if (a..b).size > 3
+          n += (a..b).sum if x > 1
+          n += 1000 if (1..3) === x
+          n
+        end
+        res = []
+        25.times { |i| res << f(i, i + 3, i + 1) }
+        res
+        "#,
+    );
+}

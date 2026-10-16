@@ -62,6 +62,58 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 ///
+/// The receiver escape summaries of `Range`'s methods, for the escape
+/// analysis (`doc/escape_analysis.md`): a Range is immutable, so a method
+/// of its own that returns neither `self` nor an object holding it
+/// (`each`, `step`, `%` do) is transparent, and the ones below are
+/// answered from the endpoints in place. Run once startup.rb has loaded
+/// builtins/range.rb, which defines most of them (over the builtins
+/// here), so the summaries land on the resolved methods.
+///
+pub(crate) fn init_recv_escape_ruby(globals: &mut Globals) {
+    use crate::executor::inline::{ElementsOp, RecvEscape};
+    let table: &[(&str, RecvEscape)] = &[
+        ("include?", RecvEscape::elements(ElementsOp::RangeCover)),
+        ("member?", RecvEscape::elements(ElementsOp::RangeCover)),
+        ("cover?", RecvEscape::elements(ElementsOp::RangeCover)),
+        ("===", RecvEscape::elements(ElementsOp::RangeCover)),
+        ("size", RecvEscape::elements(ElementsOp::RangeSize)),
+        ("count", RecvEscape::elements(ElementsOp::RangeCount)),
+        ("sum", RecvEscape::elements(ElementsOp::RangeSum)),
+        ("min", RecvEscape::elements(ElementsOp::Min)),
+        ("max", RecvEscape::elements(ElementsOp::Max)),
+        ("first", RecvEscape::elements(ElementsOp::First)),
+        ("last", RecvEscape::elements(ElementsOp::Last)),
+        ("begin", RecvEscape::elements(ElementsOp::RangeBegin)),
+        ("end", RecvEscape::elements(ElementsOp::RangeEndpoint)),
+        ("exclude_end?", RecvEscape::elements(ElementsOp::RangeExcludeEnd)),
+        ("to_a", RecvEscape::transparent()),
+        ("entries", RecvEscape::transparent()),
+        ("==", RecvEscape::transparent()),
+        ("eql?", RecvEscape::transparent()),
+        ("hash", RecvEscape::transparent()),
+        ("map", RecvEscape::transparent()),
+        ("collect", RecvEscape::transparent()),
+        ("flat_map", RecvEscape::transparent()),
+        ("collect_concat", RecvEscape::transparent()),
+        ("reject", RecvEscape::transparent()),
+        ("minmax", RecvEscape::transparent()),
+        ("to_set", RecvEscape::transparent()),
+        ("overlap?", RecvEscape::transparent()),
+        ("bsearch", RecvEscape::transparent()),
+        ("all?", RecvEscape::transparent()),
+    ];
+    for (name, info) in table {
+        let fid = globals
+            .store
+            .check_method_for_class(RANGE_CLASS, IdentId::get_id(name))
+            .and_then(|e| e.func_id())
+            .unwrap_or_else(|| panic!("Range#{name} is not defined"));
+        globals.store.set_recv_escape(fid, *info);
+    }
+}
+
+///
 /// ### Range#initialize
 ///
 /// - initialize(first, last, exclude_end = false) -> self
@@ -372,7 +424,7 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// - String ranges use lexicographic comparison.
 /// - Beginless/endless ranges with non-numeric, non-nil endpoints raise TypeError.
 /// - All other combinations return `false`.
-fn range_include_impl(start: Value, end: Value, val: Value, excl: bool) -> Result<bool> {
+pub(crate) fn range_include_impl(start: Value, end: Value, val: Value, excl: bool) -> Result<bool> {
     /// Convert a Value to f64 if it is numeric; return None otherwise.
     #[inline]
     fn to_f64(v: Value) -> Option<f64> {
@@ -1007,10 +1059,14 @@ fn count(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         if start.is_nil() || end.is_nil() {
             return Ok(Value::float(f64::INFINITY));
         }
-        // For integer ranges, calculate directly
+        // For integer ranges, calculate directly (in i128: the span of
+        // two Fixnums does not fit an i64).
         if let Some((s, e)) = range.try_fixnum() {
-            let count = if e > s { e - s } else { 0 };
-            Ok(Value::integer(count))
+            let count = (e as i128 - s as i128).max(0);
+            Ok(match i64::try_from(count) {
+                Ok(i) => Value::integer(i),
+                Err(_) => Value::bigint(BigInt::from(count)),
+            })
         } else {
             // For non-integer finite ranges, fall back to iteration
             Err(MonorubyErr::runtimeerr("not supported"))

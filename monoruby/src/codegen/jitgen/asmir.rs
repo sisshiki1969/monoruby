@@ -1,4 +1,5 @@
 use crate::bytecodegen::BinOpK;
+use crate::executor::inline::ElementsOp;
 use crate::codegen::jitgen::lir::{LInst, LSideExitKind, Lir};
 pub(crate) use crate::codegen::jitgen::lir::U64Operand;
 
@@ -1689,6 +1690,69 @@ impl AsmIr {
         self.push(AsmInst::ArrayConcat {
             dst,
             src,
+            using_fpr,
+        });
+    }
+
+    /// rax <- the Range `start..end` of an elided object materialized in
+    /// the body (`VirtualSrc::Range`): no compare, nothing can fail.
+    pub(super) fn create_range(
+        &mut self,
+        using_fpr: UsingFpr,
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+    ) {
+        self.push(AsmInst::CreateRange {
+            start,
+            end,
+            exclude_end,
+            using_fpr,
+        });
+    }
+
+    /// rax <- `Value::bool((start..end).include?(arg))` on an elided Range
+    /// (`doc/escape_analysis.md`); `Option<Value>` as the generic helpers
+    /// leave it, followed by a `HandleError`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn range_cover(
+        &mut self,
+        using_fpr: UsingFpr,
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+        arg: SlotId,
+        fid: FuncId,
+        inline: bool,
+    ) {
+        self.push(AsmInst::RangeCover {
+            start,
+            end,
+            exclude_end,
+            arg,
+            fid,
+            inline,
+            using_fpr,
+        });
+    }
+
+    /// rax <- `(start..end).op` on an elided Range, through the runtime
+    /// helper `runtime::range_op_fn(op)`; `Option<Value>`.
+    pub(super) fn range_op(
+        &mut self,
+        using_fpr: UsingFpr,
+        op: ElementsOp,
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+        fid: FuncId,
+    ) {
+        self.push(AsmInst::RangeOp {
+            op,
+            start,
+            end,
+            exclude_end,
+            fid,
             using_fpr,
         });
     }
@@ -3387,6 +3451,59 @@ pub(super) enum AsmInst {
         start: SlotId,
         end: SlotId,
         exclude_end: bool,
+        using_fpr: UsingFpr,
+    },
+    ///
+    /// rax <- the Range of an elided object materialized in the body
+    /// (`VirtualSrc::Range`): each endpoint a constant or a frame slot,
+    /// no compare (`runtime::create_range`). Saves/restores `using_fpr`.
+    ///
+    CreateRange {
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+        using_fpr: UsingFpr,
+    },
+    ///
+    /// ### destroy
+    ///
+    /// - caller save registers
+    ///
+    /// rax <- `Value::bool((start..end).include?(arg))` on an elided Range
+    /// (`doc/escape_analysis.md`). With `inline`, a Fixnum `arg` is
+    /// answered by two tagged compares against the endpoints (the Fixnum /
+    /// nil endpoints compare as tagged words); everything else — and
+    /// everything, without `inline` — goes through `runtime::range_cover`,
+    /// which dispatches the resolved method `fid` on a Range built after
+    /// all when the numeric answer does not apply. `Option<Value>`,
+    /// followed by a `HandleError`.
+    ///
+    RangeCover {
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+        arg: SlotId,
+        fid: FuncId,
+        inline: bool,
+        using_fpr: UsingFpr,
+    },
+    ///
+    /// ### destroy
+    ///
+    /// - caller save registers
+    ///
+    /// rax <- `(start..end).op` on an elided Range: `size`, `count`, `sum`,
+    /// `min`, `max`, `first`, `last` through `runtime::range_op_fn(op)`,
+    /// which folds Fixnum endpoints in place and dispatches `fid` on a
+    /// Range built after all otherwise. `Option<Value>`, followed by a
+    /// `HandleError`.
+    ///
+    RangeOp {
+        op: ElementsOp,
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+        fid: FuncId,
         using_fpr: UsingFpr,
     },
     ToA {

@@ -341,6 +341,49 @@ impl Codegen {
                 exclude_end,
                 using_fpr,
             }),
+            AsmInst::CreateRange {
+                start,
+                end,
+                exclude_end,
+                using_fpr,
+            } => self.encode_linst(LInst::CreateRange {
+                start,
+                end,
+                exclude_end,
+                using_fpr,
+            }),
+            AsmInst::RangeCover {
+                start,
+                end,
+                exclude_end,
+                arg,
+                fid,
+                inline,
+                using_fpr,
+            } => self.encode_linst(LInst::RangeCover {
+                start,
+                end,
+                exclude_end,
+                arg,
+                fid,
+                inline,
+                using_fpr,
+            }),
+            AsmInst::RangeOp {
+                op,
+                start,
+                end,
+                exclude_end,
+                fid,
+                using_fpr,
+            } => self.encode_linst(LInst::RangeOp {
+                op,
+                start,
+                end,
+                exclude_end,
+                fid,
+                using_fpr,
+            }),
             AsmInst::ConcatStr {
                 arg,
                 len,
@@ -2110,6 +2153,35 @@ impl Codegen {
                 using_fpr,
             } => {
                 self.emit_new_range(start, end, exclude_end, using_fpr);
+            }
+            LInst::CreateRange {
+                start,
+                end,
+                exclude_end,
+                using_fpr,
+            } => {
+                self.emit_create_range(start, end, exclude_end, using_fpr);
+            }
+            LInst::RangeCover {
+                start,
+                end,
+                exclude_end,
+                arg,
+                fid,
+                inline,
+                using_fpr,
+            } => {
+                self.emit_range_cover(start, end, exclude_end, arg, fid, inline, using_fpr);
+            }
+            LInst::RangeOp {
+                op,
+                start,
+                end,
+                exclude_end,
+                fid,
+                using_fpr,
+            } => {
+                self.emit_range_op(op, start, end, exclude_end, fid, using_fpr);
             }
             LInst::ConcatStr {
                 arg,

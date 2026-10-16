@@ -104,6 +104,21 @@ pub(crate) enum ElementsOp {
     HashFetch,
     /// `Hash#key?` and its aliases — a constant, for a constant key.
     HashHasKey,
+    /// `Range#include?` / `member?` / `cover?` / `===` — the endpoint
+    /// compare in place (`AsmInst::RangeCover`, `runtime::range_cover`).
+    RangeCover,
+    /// `Range#size` — closed form (`runtime::range_fold`).
+    RangeSize,
+    /// `Range#count` with no argument — likewise.
+    RangeCount,
+    /// `Range#sum` with no argument — likewise.
+    RangeSum,
+    /// `Range#begin` — the start endpoint.
+    RangeBegin,
+    /// `Range#end` — the end endpoint.
+    RangeEndpoint,
+    /// `Range#exclude_end?` — a constant.
+    RangeExcludeEnd,
 }
 
 #[derive(Default)]
