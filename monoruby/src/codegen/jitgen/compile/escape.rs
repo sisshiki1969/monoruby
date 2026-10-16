@@ -213,16 +213,16 @@ impl<'a> JitContext<'a> {
             if !read && dead {
                 // Dead, and never observed: the allocation is simply gone.
                 state.take_virtual(dst);
-                state.discard_dead_elements(src);
+                state.discard_dead_elements(src, dst);
                 continue;
             }
-            // A push at or above an element slot, or a store into one
-            // (a local endpoint of an elided Range). The object's own slot
-            // doubling as an endpoint (`a..b` built where `a` was) is not
-            // written while the object is elided.
-            let overwrites = src
-                .own_slots()
-                .any(|s| s != dst && ((self.is_temp(s) && s <= next_sp) || written == Some(s)));
+            // A store into an element slot: a push onto one (an argument
+            // of the use pushed over an element, `[a, b].include?(x)`), or
+            // a store into a local endpoint of an elided Range. The
+            // object's own slot doubling as an element (`a..b` built where
+            // `a` was; the first element of an Array returned elided) is
+            // not written while the object is elided.
+            let overwrites = src.own_slots().any(|s| s != dst && written == Some(s));
             let carried = carries && !self.is_temp(dst);
             if read || (bb_end && !carried) || overwrites || (self.is_temp(dst) && !survives) {
                 self.materialize_virtual(state, ir, dst);
@@ -272,7 +272,7 @@ impl<'a> JitContext<'a> {
             };
             if dead {
                 state.take_virtual(dst);
-                state.discard_dead_elements(src);
+                state.discard_dead_elements(src, dst);
             } else if !(carries && !self.is_temp(dst)) {
                 self.materialize_virtual(state, ir, dst);
             }
@@ -478,6 +478,20 @@ impl<'a> JitContext<'a> {
         if let TraceIr::Index { base, idx, .. } = trace_ir {
             return *base == slot && *idx != slot;
         }
+        // A plain `return` of the object out of a specialized method, into
+        // a call site that takes it elided (`doc/escape_analysis.md` §9).
+        if let TraceIr::Ret(ret) = trace_ir {
+            return *ret == slot && self.return_virtual_in_caller(src).is_some();
+        }
+        // `a, b = ary` ([`Self::consume_virtual_expand`]): the elements go
+        // straight to their targets.
+        if let TraceIr::ExpandArray {
+            src: ary,
+            dst: (_, _, rest_pos),
+        } = trace_ir
+        {
+            return *ary == slot && rest_pos.is_none() && src.class_id() == ARRAY_CLASS;
+        }
         // The prologue's "`nil` means an empty Hash" check of a `**kwrest`
         // handed over elided: nothing to do, the object stands for the
         // Hash (its slot does hold `nil`).
@@ -560,6 +574,9 @@ impl<'a> JitContext<'a> {
                 state.def_reg2acc_concrete_value(ir, GP::Rax, dst, val);
             }
             VirtualSrc::CallerSlots { src, len, base } => {
+                if base == SlotBase::Own {
+                    state.write_back_elements(ir, src, len);
+                }
                 let using_fpr = state.get_using_fpr(ir);
                 ir.create_array_from(using_fpr, base, src, len);
                 state.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
@@ -577,7 +594,7 @@ impl<'a> JitContext<'a> {
                 state.def_reg2acc_class(ir, GP::Rax, dst, RANGE_CLASS);
             }
         }
-        state.discard_dead_elements(src);
+        state.discard_dead_elements(src, dst);
     }
 
     ///
@@ -700,6 +717,106 @@ impl<'a> JitContext<'a> {
             _ => {
                 self.materialize_virtual(state, ir, recv);
                 None
+            }
+        }
+    }
+
+    ///
+    /// `dst.., = src` (`TraceIr::ExpandArray` without a rest target) with an
+    /// elided Array in *src* ([`Self::may_consume_virtual`]): each target
+    /// takes its element — a template's constant, a copy of the slot
+    /// holding it (this frame's, or the caller's through the base) — or
+    /// `nil` past the end, exactly as the expansion of the built Array
+    /// would, and the object is gone.
+    ///
+    pub(super) fn consume_virtual_expand(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        src: SlotId,
+        dst: SlotId,
+        len: u16,
+    ) {
+        let virt = state.take_virtual(src).unwrap();
+        // The targets may overlap the element slots (`a, b = f(x, y)`
+        // expands into the temporaries right above the result, which hold
+        // the elements of an Array returned elided): copy from the far
+        // end first, as a `memmove` does, so no element is overwritten
+        // before it is read.
+        let own = match virt {
+            VirtualSrc::Slots { src, .. }
+            | VirtualSrc::CallerSlots {
+                src,
+                base: SlotBase::Own,
+                ..
+            } => Some(src),
+            _ => None,
+        };
+        let order: Vec<u16> = if own.is_some_and(|elems| dst > elems) {
+            (0..len).rev().collect()
+        } else {
+            (0..len).collect()
+        };
+        for i in order {
+            let target = dst + i;
+            match virt {
+                VirtualSrc::Literal(val) => {
+                    let elem = val.as_array().get(i as usize).copied().unwrap_or_default();
+                    state.def_C(target, elem);
+                }
+                VirtualSrc::Slots { src, len: n, .. }
+                | VirtualSrc::CallerSlots {
+                    src,
+                    len: n,
+                    base: SlotBase::Own,
+                } => {
+                    if i < n {
+                        self.copy_element(state, ir, src + i, target);
+                    } else {
+                        state.def_C(target, Value::nil());
+                    }
+                }
+                VirtualSrc::CallerSlots { src, len: n, base } => {
+                    if i < n {
+                        state.flush_gp(ir);
+                        ir.load_caller_slot(base, src + i);
+                        state.def_rax2acc(ir, target);
+                    } else {
+                        state.def_C(target, Value::nil());
+                    }
+                }
+                VirtualSrc::CallerKw { .. } | VirtualSrc::Range { .. } => {
+                    unreachable!("an Array expansion of a Hash or Range")
+                }
+            }
+        }
+        // The object and the elements no target took are gone.
+        let is_target = |s: SlotId| (dst.0..dst.0 + len).contains(&s.0);
+        let next_sp = state.next_sp();
+        for s in std::iter::once(src).chain(virt.own_slots()) {
+            if !is_target(s) && (s == src || s >= next_sp) && !state.is_virtual_src(s) {
+                state.discard(s);
+            }
+        }
+    }
+
+    ///
+    /// `dst = elem`, an element of an elided Array in this frame's slot
+    /// *elem*: a slot copy, unless the element is in the object's own slot
+    /// (the first element of an Array returned elided, `V`), which is read
+    /// from the stack.
+    ///
+    fn copy_element(&self, state: &mut AbstractState, ir: &mut AsmIr, elem: SlotId, dst: SlotId) {
+        match state.mode(elem) {
+            LinkMode::V => {
+                state.flush_gp(ir);
+                ir.load_caller_slot(SlotBase::Own, elem);
+                state.def_rax2acc(ir, dst);
+            }
+            LinkMode::S(_) | LinkMode::C(_) => state.copy_slot(ir, elem, dst),
+            _ => {
+                state.flush_gp(ir);
+                state.copy_slot(ir, elem, dst);
             }
         }
     }
@@ -1103,7 +1220,7 @@ impl<'a> JitContext<'a> {
                 // The compare can dispatch a user `<=>` (a side effect) and
                 // raise. The elements stay in their slots throughout.
                 if base == SlotBase::Own {
-                    state.write_back_range(ir, src, len);
+                    state.write_back_elements(ir, src, len);
                 }
                 state.discard(dst);
                 let using_fpr = state.get_using_fpr(ir);
@@ -1125,10 +1242,7 @@ impl<'a> JitContext<'a> {
                         src + (len - 1)
                     };
                     if base == SlotBase::Own {
-                        if !matches!(state.mode(elem), LinkMode::S(_) | LinkMode::C(_)) {
-                            state.flush_gp(ir);
-                        }
-                        state.copy_slot(ir, elem, dst);
+                        self.copy_element(state, ir, elem, dst);
                     } else {
                         state.flush_gp(ir);
                         ir.load_caller_slot(base, elem);
@@ -1196,7 +1310,7 @@ enum HashFold {
     Caller(SlotBase, SlotId),
 }
 
-impl AbstractState {
+impl AbstractFrame {
     ///
     /// Materialize, inside an argument fill, every elided object among the
     /// positional arguments of *callsite* that the fill cannot hand over
@@ -1210,37 +1324,55 @@ impl AbstractState {
         callsite: &CallSiteInfo,
     ) {
         for slot in callsite.args..callsite.args + callsite.pos_num {
-            let Some(src) = self.take_virtual(slot) else {
-                continue;
-            };
-            let using_fpr = UsingFpr::new();
-            match src {
-                VirtualSrc::Slots { src, len, callid } => {
-                    self.write_back_range(ir, src, len);
-                    let inline = (len as usize <= ARRAY_INLINE_CAPA).then_some((src, len));
-                    ir.new_array(using_fpr, callid, inline);
-                    self.def_reg2acc_class(ir, GP::Rax, slot, ARRAY_CLASS);
-                }
-                VirtualSrc::Literal(val) => {
-                    ir.deep_copy_lit(using_fpr, val);
-                    self.def_reg2acc_concrete_value(ir, GP::Rax, slot, val);
-                }
-                VirtualSrc::CallerSlots { src, len, base } => {
-                    ir.create_array_from(using_fpr, base, src, len);
-                    self.def_reg2acc_class(ir, GP::Rax, slot, ARRAY_CLASS);
-                }
-                VirtualSrc::CallerKw { base, .. } => self.materialize_caller_kw(ir, slot, base),
-                VirtualSrc::Range {
-                    start,
-                    end,
-                    exclude_end,
-                } => {
-                    ir.create_range(using_fpr, start, end, exclude_end);
-                    self.def_reg2acc_class(ir, GP::Rax, slot, RANGE_CLASS);
-                }
+            if self.virtual_at(slot).is_some() {
+                self.materialize_virtual_at(ir, slot, UsingFpr::new());
             }
-            self.discard_dead_elements(src);
         }
+    }
+
+    ///
+    /// Perform the allocation of the elided object in *slot* of this frame
+    /// alone, with *using_fpr* saved around it: the frame-level half of
+    /// [`JitContext::materialize_virtual`], for the places that hold no
+    /// `AbstractState` — an argument fill, a return segment
+    /// (`doc/escape_analysis.md` §9).
+    ///
+    pub(in crate::codegen::jitgen) fn materialize_virtual_at(
+        &mut self,
+        ir: &mut AsmIr,
+        slot: SlotId,
+        using_fpr: UsingFpr,
+    ) {
+        let src = self.take_virtual(slot).unwrap();
+        match src {
+            VirtualSrc::Slots { src, len, callid } => {
+                self.write_back_range(ir, src, len);
+                let inline = (len as usize <= ARRAY_INLINE_CAPA).then_some((src, len));
+                ir.new_array(using_fpr, callid, inline);
+                self.def_reg2acc_class(ir, GP::Rax, slot, ARRAY_CLASS);
+            }
+            VirtualSrc::Literal(val) => {
+                ir.deep_copy_lit(using_fpr, val);
+                self.def_reg2acc_concrete_value(ir, GP::Rax, slot, val);
+            }
+            VirtualSrc::CallerSlots { src, len, base } => {
+                if base == SlotBase::Own {
+                    self.write_back_elements(ir, src, len);
+                }
+                ir.create_array_from(using_fpr, base, src, len);
+                self.def_reg2acc_class(ir, GP::Rax, slot, ARRAY_CLASS);
+            }
+            VirtualSrc::CallerKw { base, .. } => self.materialize_caller_kw(ir, slot, base),
+            VirtualSrc::Range {
+                start,
+                end,
+                exclude_end,
+            } => {
+                ir.create_range(using_fpr, start, end, exclude_end);
+                self.def_reg2acc_class(ir, GP::Rax, slot, RANGE_CLASS);
+            }
+        }
+        self.discard_dead_elements(src, slot);
     }
 
     ///

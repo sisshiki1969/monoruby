@@ -367,7 +367,7 @@ impl AbstractState {
         // The elided arguments are the callee's now (see `set_arguments`).
         for slot in args..args + req {
             if let Some(src) = self.take_virtual(slot) {
-                self.discard_dead_elements(src);
+                self.discard_dead_elements(src, slot);
             }
         }
         // Last: a boxing above can call out, and a call takes the whole

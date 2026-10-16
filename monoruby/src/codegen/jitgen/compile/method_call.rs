@@ -1725,6 +1725,9 @@ impl<'a> JitContext<'a> {
             spec_id,
             using_fpr: frozen_using_fpr,
             float_return,
+            // A block's plain return never hands an object over
+            // (`return_virtual_in_caller`).
+            return_virtual: _,
         } = {
             self.current_frame_mut().landing_sink = true;
             let compiled = self.compile_specialized_func(
@@ -2526,6 +2529,7 @@ impl<'a> JitContext<'a> {
             spec_id,
             using_fpr: frozen_using_fpr,
             float_return,
+            return_virtual,
         } = compiled;
         let rest_elided = handover.is_some();
         // The call site passes a block literal: if the callee heapifies
@@ -2594,7 +2598,8 @@ impl<'a> JitContext<'a> {
                 &float_args,
                 redo,
             );
-            let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
+            let res =
+                def_specialized_result(state, ir, dst, return_state, float_return, return_virtual);
             state.capture_guard_after_call(ir, &self.store, dst);
             return Ok(res);
         }
@@ -2624,7 +2629,7 @@ impl<'a> JitContext<'a> {
             &float_args,
         );
         self.emit_spliced_landing(ir, state, callid, splice_widen_mark);
-        let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
+        let res = def_specialized_result(state, ir, dst, return_state, float_return, return_virtual);
         state.immediate_evict(ir, &self.store, evict, dst);
         return Ok(res);
     }
@@ -2661,6 +2666,10 @@ pub(super) struct SpecializedCompileResult {
     /// float-return register, not boxed in rax — see
     /// [`JitStackFrame::float_return`]. Binding on this call site.
     pub float_return: bool,
+    /// The compiled body hands its return value over as an elided object
+    /// instead of a value in rax — see [`JitStackFrame::return_virtual`].
+    /// Binding on this call site.
+    pub return_virtual: Option<VirtualSrc>,
 }
 
 impl SpecializedCompileResult {
@@ -2674,6 +2683,7 @@ impl SpecializedCompileResult {
             spec_id: self.spec_id,
             using_fpr: self.using_fpr,
             float_return: self.float_return,
+            return_virtual: self.return_virtual,
         }
     }
 
@@ -2687,6 +2697,7 @@ impl SpecializedCompileResult {
             spec_id,
             using_fpr,
             float_return,
+            return_virtual,
         } = memo;
         Self {
             entry,
@@ -2698,7 +2709,28 @@ impl SpecializedCompileResult {
             spec_id,
             using_fpr,
             float_return,
+            return_virtual,
         }
+    }
+}
+
+///
+/// Define the call's destination from a specialized callee's result: the
+/// elided object its return segments handed over
+/// (`doc/escape_analysis.md` §9), or else the value in rax (or the
+/// float-return register).
+///
+fn def_specialized_result(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    dst: Option<SlotId>,
+    return_state: Option<ReturnState>,
+    float_return: bool,
+    return_virtual: Option<VirtualSrc>,
+) -> CompileResult {
+    match (return_virtual, dst) {
+        (Some(src), Some(dst)) => state.def_virtual_return(dst, return_state, src),
+        _ => state.def_rax2acc_return(ir, dst, return_state, float_return),
     }
 }
 
@@ -2962,6 +2994,7 @@ impl<'a> JitContext<'a> {
         let frame_kw_vetoed = frame.kw_vetoed;
         let frame_generic_yield = frame.generic_yield;
         let frame_float_return = frame.float_return;
+        let frame_return_virtual = frame.return_virtual;
         let frame_has_boxed_return = frame.has_boxed_return;
         // `has_exception_handler` taints the return state so the caller
         // doesn't propagate a speculative `Const` past us: the BB graph
@@ -3061,6 +3094,7 @@ impl<'a> JitContext<'a> {
             spec_id,
             using_fpr: frame_using_fpr,
             float_return: frame_float_return,
+            return_virtual: frame_return_virtual,
         })
     }
 
@@ -3767,7 +3801,7 @@ impl AbstractState {
             // slots are dead once it does.
             for slot in args..args + pos_num {
                 if let Some(src) = self.take_virtual(slot) {
-                    self.discard_dead_elements(src);
+                    self.discard_dead_elements(src, slot);
                 }
             }
             if post != callee.post_num() {

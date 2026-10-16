@@ -234,6 +234,7 @@ pub(super) struct SpecializedCompileResultMemo {
     pub(super) spec_id: SpecializedId,
     pub(super) using_fpr: UsingFpr,
     pub(super) float_return: bool,
+    pub(super) return_virtual: Option<VirtualSrc>,
 }
 
 /// How often the memo answered a call site and how often it could not,

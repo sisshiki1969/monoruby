@@ -3182,6 +3182,21 @@ impl Codegen {
         true
     }
 
+    /// `slot`, addressed in the frame `base` names, <- `src`
+    /// (`AsmInst::StoreCallerSlot`).
+    pub(in crate::codegen::jitgen) fn emit_store_caller_slot(
+        &mut self,
+        base: SlotBase,
+        slot: SlotId,
+        src: GP,
+    ) -> bool {
+        let src = src.a64().0;
+        debug_assert!(src != 9 && src != 10);
+        self.a64_caller_slot_addr(base, slot, 10);
+        monoasm_arm64!(&mut self.jit, str x(src), [x10];);
+        true
+    }
+
     /// x0 <- Hash literal from the `len` key/value slots at `args`.
     pub(in crate::codegen::jitgen) fn emit_new_hash(
         &mut self,

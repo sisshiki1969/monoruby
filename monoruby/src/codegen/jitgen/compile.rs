@@ -1095,6 +1095,10 @@ impl<'a> JitContext<'a> {
                 src,
                 dst: (dst, len, rest_pos),
             } => {
+                if state.virtual_at(src).is_some() {
+                    self.consume_virtual_expand(state, ir, src, dst, len);
+                    return Ok(CompileResult::Continue);
+                }
                 state.flush_gp(ir);
                 // `expand_array` may dispatch `#to_ary` and raise, so guard it.
                 state.load(ir, src, GP::Rdx);
@@ -1270,13 +1274,27 @@ impl<'a> JitContext<'a> {
                 // (`build_return_segments`).
                 let bbid = self.iseq().bb_info.get_bb_id(bc_pos);
                 let seg = self.label();
-                if self.record_return_edge(seg, state, ret, bbid) {
+                // An elided object still in the returned slot is one the
+                // call site may take elided (`settle_virtuals` let it
+                // through, `return_virtual_in_caller`): the edge keeps it,
+                // and the segment hands it over or allocates it, once every
+                // return path is known (`doc/escape_analysis.md` §9).
+                let virt = state.virtual_at(ret);
+                if self.record_return_edge(seg, state, ret, bbid, virt) {
                     ir.push(AsmInst::Br(seg));
                 } else {
+                    debug_assert!(virt.is_none());
                     state.load(ir, ret, GP::Rax);
                     ir.push(AsmInst::Ret);
                 }
-                let result = state.as_return(ret);
+                let result = match virt {
+                    Some(virt) => {
+                        state.take_virtual(ret);
+                        state.discard_dead_elements(virt, ret);
+                        state.as_return_virtual(virt)
+                    }
+                    None => state.as_return(ret),
+                };
                 state.discard_temps();
                 return Ok(CompileResult::Return(result));
             }

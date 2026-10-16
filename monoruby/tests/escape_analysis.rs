@@ -1415,3 +1415,202 @@ fn range_endpoint_copies_and_helper_errors() {
         "#,
     );
 }
+
+#[test]
+fn elided_object_returned_from_a_callee() {
+    // A specialized callee's plain `return` of an elided Array / template /
+    // Range hands the object over to the call site elided
+    // (`doc/escape_analysis.md` §9): the caller's consuming use computes
+    // what the builtin computes, with the elements copied into the
+    // caller's slots (a self-call's result slot is its first argument
+    // slot, so the copies overlap the callee's arguments).
+    run_test(
+        r#"
+        def pair(a, b) = [a, b]
+        def rest(*a) = a
+        def tmpl = [1, 2, 3]
+        def rng(a, b) = (a..b)
+        def xrng(a, b) = (a...b)
+        def crng = (1..5)
+        def with_ivar(a, b)
+          @n = (@n || 0) + 1
+          [b, a]
+        end
+        def f(x, y)
+          [pair(x, y).max, pair(y, x).min, pair(x, y).first, pair(x, y).last, pair(x, y).size,
+           rest(x, y).min, rest(x, y, 7).max, rest.size, rest(x).first, rest(x, y).empty?,
+           tmpl.size, tmpl.first, tmpl.last, tmpl.max, tmpl.include?(x),
+           rng(x, x + 10).include?(5), rng(1, x + 10).cover?(7), xrng(x, x + 2).include?(x + 2),
+           rng(x, x + 3).size, rng(x, x + 3).sum, rng(x + 1, x + 3).min, rng(x, x + 3).last,
+           crng.cover?(x), crng.size, with_ivar(x, y).max, with_ivar(x, y).first]
+        end
+        @n = 0
+        r = nil
+        20.times { |i| r = f(i, 3) }
+        [r, f(2, 1), f("ab".size, 10), @n]
+        "#,
+    );
+}
+
+#[test]
+fn returned_object_destructured() {
+    // `a, b = f(x, y)` expands an Array returned elided straight into
+    // its targets, which overlap the element slots (the expansion's
+    // temporaries sit right above the result): fewer elements than
+    // targets gives `nil`, more are dropped, and a template's constants
+    // and a `*rest` handed back are expanded the same way.
+    run_test(
+        r#"
+        def pair(a, b) = [a, b]
+        def rest(*a) = a
+        def tmpl = [1, 2, 3]
+        def two(x, y)
+          a, b = pair(x, y)
+          a + b
+        end
+        def two_rev(x, y)
+          a, b = pair(y, x)
+          [a, b]
+        end
+        def three(x, y)
+          a, b, c = rest(x, y)
+          [a, b, c, c.nil?]
+        end
+        def one(x, y)
+          a, = pair(x, y)
+          a
+        end
+        def lit
+          a, b, c = tmpl
+          a + b * c
+        end
+        def shorter(x)
+          a, b = rest(x, x + 1, x + 2)
+          [a, b]
+        end
+        def nested(x, y)
+          a, b = pair(x, y)
+          c, d = pair(b, a)
+          [a, b, c, d]
+        end
+        res = []
+        20.times { |i| res << two(i, 2) << two_rev(i, 2) << three(i, 3) << one(i, 4) << lit << shorter(i) << nested(i, 5) }
+        res.last(7)
+        "#,
+    );
+}
+
+#[test]
+fn return_paths_agree_or_materialize() {
+    // Every return path must hand over the same object for the call site
+    // to take it elided: two literals of the same length agree (whatever
+    // their elements), a path returning an element (not an object) or a
+    // literal of another length makes every path allocate, and an
+    // elided object the caller itself goes on to return reaches the
+    // caller's caller as a real Array.
+    run_test(
+        r#"
+        def two_paths(a, b, flag)
+          if flag
+            [a, b]
+          else
+            [b, a]
+          end
+        end
+        def mixed(a, b, flag)
+          return a if flag
+          [a, b]
+        end
+        def lengths(a, b, flag)
+          flag ? [a, b] : [a, b, a + b]
+        end
+        def early(a, b)
+          return [b, a] if a > b
+          [a, b]
+        end
+        def f(x, y)
+          [two_paths(x, y, x > 5).max, two_paths(x, y, x > 5).first,
+           mixed(x, y, x > 5), mixed(x, y, x <= 5), mixed(x, y, false).max,
+           lengths(x, y, x > 5).size, lengths(x, y, x <= 5).last,
+           early(x, y).first, early(y, x).last]
+        end
+        def up(x, y) = two_paths(x, y, true)
+        def up2(x, y)
+          r = up(x, y)
+          r << 1
+          r
+        end
+        res = []
+        20.times { |i| res << f(i, 7) << up2(i, 2) }
+        res.last(2)
+        "#,
+    );
+}
+
+#[test]
+fn returned_object_not_carried() {
+    // The hand-over is declined where the callee's frame may be observed
+    // or the object has escaped before the `return`: a callee with an
+    // exception handler, one passing a block, one that captures its
+    // binding, a `**kwrest` returned, an object stored before being
+    // returned, and a `return` from inside a block. Each still sees a
+    // real, fresh Array.
+    run_test(
+        r#"
+        def with_rescue(a, b)
+          [a, b]
+        rescue
+          nil
+        end
+        def with_block(a, b) = [a, b].tap { |x| x }
+        def with_binding(a, b)
+          c = [a, b]
+          binding
+          c
+        end
+        def kwr(**o) = o
+        def stored(a, b)
+          @keep = [a, b]
+          @keep
+        end
+        def from_block(a, b)
+          [1].each { |_| return [a, b] }
+        end
+        def f(x, y)
+          r1 = with_rescue(x, y); r1 << x
+          r2 = with_block(x, y); r2 << y
+          r3 = with_binding(x, y); r3 << 1
+          r5 = stored(x, y); r5 << 2
+          r6 = from_block(x, y); r6 << 3
+          [r1, r2, r3, kwr(a: x)[:a], kwr(a: x).size, r5, r6, @keep]
+        end
+        res = []
+        20.times { |i| res << f(i, 2) }
+        res.last
+        "#,
+    );
+}
+
+#[test]
+fn errors_and_heap_elements_through_an_elided_return() {
+    // The consuming use after the hand-over can raise (`max` over
+    // incomparable elements) and can see heap elements; a returned
+    // object whose consuming use is a type-guarded op after a deopt
+    // still computes the right value.
+    run_test_once(
+        r#"
+        def pair(a, b) = [a, b]
+        def mx(x, y) = pair(x, y).max
+        def sum(x, y)
+          a, b = pair(x, y)
+          a + b
+        end
+        res = []
+        20.times { |i| res << mx(i, 2) << mx("a#{i}", "b") << sum(i, 1) }
+        res << (mx(1, "x") rescue $!.class) << sum(1.5, 2) << sum("a", "b") << mx(2, 1)
+        def pair(a, b) = [b, a, a]
+        res << mx(3, 9) << sum(3, 9)
+        res.last(7)
+        "#,
+    );
+}

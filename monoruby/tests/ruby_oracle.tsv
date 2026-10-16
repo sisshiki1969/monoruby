@@ -1505,6 +1505,7 @@
 476a5f416c682927379126dfcc407162	true	h = { a: 1, b: 2 }.compare_by_identity\n            h.select { true 
 477fbd091c8156e68df3747549c994b4	true	dirs = %w[c C s S v n i I l L V N q Q j J e f F g E d D G]\n        strs
 4784ac427bd8bf76dea560ab5a1ede1a	"cba"	"abc".reverse
+479b02b3037b0df8614e58a02899a27b	[21, [2, 19], [19, 3, nil, true], 19, 7, [19, 20], [19, 5, 5, 19]]	def pair(a, b) = [a, b]\n        def rest(*a) = a\n        def tmpl = [1,
 479ed4b42eeae923683180f667f2d367	[[:alias2, :alias1]]	class SFAR_A\n          def name\n            [:alias1]\n          end\n   
 47a11b86ca006326ad5ae52e13d5c484	["Encoding::Converter", "Encoding::Converter", "Encoding::Converter"]	__a = [];__a << (Encoding::Converter.new("UTF-8", "UTF-32BE").class.name);__a <<
 47a466639c2c1b1719397c1a7d85ddbb	"MIT License\\n\\nCopyright (c) 2022 monochrome\\n\\nPermission is hereby granted, free of charge, to any person obtaining a copy\\nof this software and associated documentation files (the \\"Software\\"), to deal\\nin the Software without restriction, including without limitation the rights\\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\\ncopies of the Software, and to permit persons to whom the Software is\\nfurnished to do so, subject to the following conditions:\\n\\nThe above copyright notice and this permission notice shall be included in all\\ncopies or substantial portions of the Software.\\n\\nTHE SOFTWARE IS PROVIDED \\"AS IS\\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\\nSOFTWARE.\\n"	File.read("../LICENSE-MIT")
@@ -1716,6 +1717,7 @@
 50e56f29f8ebc08b8b02e38b008171cc	[[["US-ASCII", "US-ASCII"], ["U+00E9 from UTF-8 to US-ASCII", "U+00E9 from UTF-8 to US-ASCII"], ["US-ASCII", "US-ASCII"]], [[[164, 162], [164, 162]], "EUC-JP"], ["EUC-JP", "EUC-JP", "EUC-JP"]]	Encoding.default_external = Encoding::US_ASCII\n              a = 
 50f041c0fa4c04805e8f32314f15d47d	[[ArgumentError, "invalid encoding name (NUL byte)"], [ArgumentError, "invalid encoding name (NUL byte)"], [ArgumentError, "invalid encoding name (NUL byte)"], [ArgumentError, "invalid encoding name (NUL byte)"]]	__a = [];__a << (("x".dup.force_encoding("null byte") rescue [$!.class, $!.messa
 50f4442f2df797a6034190cc99650473	["file", "directory", "characterSpecial"]	__a = [];__a << (File.ftype("Cargo.toml"));__a << (File.ftype("."));__a << (File
+50f66eb9e88cc34d045dd5aaf20255d7	[[19, 3, 19, 3, 2, 3, 19, 0, 19, false, 3, 1, 3, 3, false, false, true, false, 4, 82, 20, 22, false, 5, 19, 3], [2, 1, 2, 1, 2, 1, 7, 0, 2, false, 3, 1, 3, 3, true, true, true, false, 4, 14, 3, 5, true, 5, 2, 1], [10, 2, 2, 10, 2, 2, 10, 0, 2, false, 3, 1, 3, 3, true, true, true, false, 4, 14, 3, 5, true, 5, 10, 10], 44]	def pair(a, b) = [a, b]\n        def rest(*a) = a\n        def tmpl = [1,
 50f9e525cff9a725780f19b016aaa8f9	[-2.0, -2.0, 8.0, 999]	$flag = false\n        def fmaybe\n          Integer.class_eval("def +(o)
 5103d830753ac483d2d4c39e44bc03b5	[0, 0, nil]	["‌" =~ /[[:word:]]/, "‍" =~ /[[:word:]]/, "‌" =~ /\\w/]
 5108b5f484fcabb116eb954839b43e5f	[[1167088121787636990], [18364758544493064720], [18446744073709551615], [18446744073709551615], [-1]]	__a = [];__a << ("\\xFE\\xDC\\xBA\\x98\\x76\\x54\\x32\\x10".unpack("Q<"));__a << ("\\xFE\\
@@ -2405,6 +2407,7 @@
 72adb4f9d1509cf9e728948040205592	[0, true]	class String; def ==(o) = true; end\n        [["a", "b"].index("z"), ["a
 72b5f101ace1b78c66426773dd56c232	["2023-11-14T22:13:20+0000", "22:13:20.123456789 123 Nov 23|14", "2023-11-15T07:13:20+0900", "-0100", "-1000", "2000", "2068", "2069", "2023-11-14 22:13:20 +0000", "2023-11-14 22:13:20.249 249999872", "2023-11-14 22:13:20.250 250000000", ["literal %Y no", "UTF-8", "US-ASCII"], ["", "plain text"], [ArgumentError, "invalid format"], [ArgumentError, "invalid format"], [ArgumentError, "invalid format"], [ArgumentError, "invalid format"], [ArgumentError, "invalid format"], [ArgumentError, "invalid format"], [ArgumentError, "invalid format"], [ArgumentError, "invalid format"], [ArgumentError, "invalid format"], [ArgumentError, "invalid format"], [ArgumentError, "invalid format"], [ArgumentError, "invalid format"], [ArgumentError, "invalid format"], [TypeError, "can't convert String into time"], [TypeError, "wrong argument type Integer (expected time)"], [TypeError, "can't convert NilClass into time"], [TypeError, "no implicit conversion of Integer into String"]]	require "rubygems"\n        require "strptime"\n        t = ->(&b) { begi
 72c671a8d35d91c187dcae14e7d6acfa	true	"abc".force_encoding("ISO-8859-15").encoding == Encoding::ISO_8859_15
+72d881f3cdbb60979fadaf63ca663949	[[19, 19, 19, [19, 7], 19, 2, 26, 7, 19], [19, 2, 1]]	def two_paths(a, b, flag)\n          if flag\n            [a, b]\n        
 72e5566a1bbca4743ca6172eaaed27c4	["hello", nil]	ENV["MONORUBY_ENV_TEST_BASIC"] = "hello"\n            v = ENV["MONOR
 72ed1391d48a3d059db19c8a184bcce7	[[[104, 233, 108, 108, 111], "ISO-8859-1", true], [[255], "ASCII-8BIT"], ["é", "UTF-8"]]	__a = [];__a << (l = "h\\xE9llo".dup.force_encoding("ISO-8859-1"); u = l.dump.und
 72f2a3b4b542af05e8ddd39460142cfe	"through"	r, w = IO.pipe\n            w.write("through")\n            res = r.r
@@ -2683,6 +2686,7 @@
 8069191a22d0b6b29811cbab5a50dd8e	[:@@a, :@@b]	c = Class.new\n            c.class_variable_set(:@@a, 1)\n           
 80694153577b5ef2bfce1ce46a269f70	45.13752031683784	def w2(arr, f)\n          t = 0.0\n          60.times do\n            arr.
 8069cff228e347eb16350965579ef835	[[10, 30], [10, 30], [], [10, 500]]	__a = [];__a << ([10, 20, 30].fetch_values(0, 2));__a << ([10, 20, 30].fetch_val
+808c4a2ab39a6110472cee187ce1e7a7	[20, ArgumentError, 3.5, "ab", 2, 9, 12]	def pair(a, b) = [a, b]\n        def mx(x, y) = pair(x, y).max\n        d
 809281e76b95d635f181be9aa9c1cf05	[1, [], true]	S = Struct.new(:x) do\n              FLAGS = { foo: 1 }\n            
 8098133adc30ffe32c8d9dbe5ae12a78	[1, 2, [3, 4, 5, 6], 7]	def f(x,y,*z,a)\n            [x,y,z,a]\n        end\n        \n\n        f(1
 809e1887ea0a0ffe2ec0dba6151008b2	["UTF-7", "\\"\\\\x61\\\\x62\\\\x63\\\\x64\\"", "\\"\\\\x61\\\\x62\\\\x63\\\\x64\\"", "CP50221", "\\"\\\\x61\\\\x22\\\\x62\\"", "UTF-7", "CP50220", ":\\"\\\\x61\\\\x62\\\\x63\\"", "UTF-7", true, "nil", "\\"abcd\\"", "\\"abcd\\""]	__a = [];__a << ("abcd".dup.force_encoding("UTF-7").encoding.name);__a << ("abcd
@@ -3369,6 +3373,7 @@ a2359d988b1e9852b116a4aa588e8ad7	99	module M; class N; CONST = 99; end; end\n   
 a249ec32f6d93a75cfac3be0d217bf1d	[49, 50, 51]	s = +""\n            s.append_as_bytes(0x131, 0x232, 0x333)\n        
 a2748c8fb6484710144b4a02733f485a	105.0	def cap(n)\n          acc = 0.0\n          saved = nil\n          n.times 
 a283f7c1c01ed5e8343b5c0c337ff2cc	[[1, 5, 6, nil, nil], [1, 5, 6, 2, nil], [1, 5, 6, 2, 3], [1, 2, 6, 3, 4], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5], [1, 2, 3, [4], 5, 6], [1, 5, 6, [], 2, 3]]	def t(a) yield a end\n        \n\n        [\n          t([1])             {
+a293bbb31f54943f9fcd9e1e06a62c1f	[[19, 2, 19], [19, 2, 2], [19, 2, 1], 19, 1, [19, 2, 2], [19, 2, 3], [19, 2, 2]]	def with_rescue(a, b)\n          [a, b]\n        rescue\n          nil\n   
 a295425f2386f7b487cea440a10accb4	99	class C\n              def initialize(&blk)\n                @v = blk
 a2a0991ecb4019b7303f2bad37c2c02f	[true, true, 7]	c = Class.new { attr :foo, true }\n            i = c.new\n           
 a2d359f2c679ed0c41cd0e8c0e78b3b5	"Xhello"	s = "hello"; s.bytesplice(0...-7, "X"); s

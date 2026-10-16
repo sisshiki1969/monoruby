@@ -998,6 +998,12 @@ pub(in crate::codegen) enum LInst {
         base: SlotBase,
         slot: SlotId,
     },
+    /// the value of `slot` in the frame `base` names <- `src`.
+    StoreCallerSlot {
+        base: SlotBase,
+        slot: SlotId,
+        src: GP,
+    },
     NewHash {
         args: SlotId,
         len: usize,
