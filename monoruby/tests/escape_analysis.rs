@@ -1614,3 +1614,32 @@ fn errors_and_heap_elements_through_an_elided_return() {
         "#,
     );
 }
+
+#[test]
+fn elided_return_into_a_polymorphic_call_site() {
+    // The call site dispatches on the receiver's class: each arm's callee
+    // may hand its object back elided, and the arms' merge takes the
+    // destination as a value, so the object is allocated at the end of
+    // the arm (whether the use after the merge consumes it or not).
+    run_test(
+        r#"
+        class Base
+          def pair(v) = [v, v + 1]
+          def m(v) = pair(v).max
+        end
+        class A < Base; end
+        class B < Base
+          def pair(v) = [v + 2, v]
+        end
+        class C < Base; end
+        def f(o, i)
+          a, b = o.pair(i)
+          [o.pair(i).max, o.m(i), a + b, o.pair(i)]
+        end
+        objs = [A.new, B.new, C.new]
+        res = []
+        30.times { |i| res << f(objs[i % 3], i) }
+        res.last(3)
+        "#,
+    );
+}
