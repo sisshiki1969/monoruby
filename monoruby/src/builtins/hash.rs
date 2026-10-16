@@ -212,6 +212,7 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.define_builtin_func_rest(HASH_CLASS, "values_at", values_at);
     globals.define_builtin_func(HASH_CLASS, "to_h", to_h, 0);
+    init_recv_escape(globals);
 
     let mut env_map = RubyMap::default();
     let mut vm = Executor::default();
@@ -285,6 +286,77 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_singleton_func(env, "reject", env_reject, 0);
     globals.define_builtin_singleton_func_with(env, "values_at", env_values_at, 0, 0, true);
     globals.define_builtin_singleton_func_with(env, "slice", env_slice, 0, 0, true);
+}
+
+///
+/// The receiver escape summaries (`RecvEscape`) of the builtins above,
+/// for the JIT's elision of Hash literals used as a receiver
+/// (`doc/escape_analysis.md`). A method listed here must never mutate,
+/// store or return its receiver — nor return an Enumerator over it when
+/// called without a block — in any of its argument forms. The ones
+/// written in Ruby (builtins/hash.rb) are listed by
+/// [`init_recv_escape_ruby`] once that file has run.
+///
+fn init_recv_escape(globals: &mut Globals) {
+    use crate::executor::inline::{ElementsOp, RecvEscape};
+    let table: &[(&str, RecvEscape)] = &[
+        ("size", RecvEscape::elements(ElementsOp::Size)),
+        ("empty?", RecvEscape::elements(ElementsOp::Empty)),
+        ("[]", RecvEscape::elements(ElementsOp::HashIndex)),
+        ("fetch", RecvEscape::elements(ElementsOp::HashFetch)),
+        ("include?", RecvEscape::elements(ElementsOp::HashHasKey)),
+        ("keys", RecvEscape::transparent()),
+        ("values", RecvEscape::transparent()),
+        ("values_at", RecvEscape::transparent()),
+        ("key", RecvEscape::transparent()),
+        ("assoc", RecvEscape::transparent()),
+        ("rassoc", RecvEscape::transparent()),
+        ("invert", RecvEscape::transparent()),
+        ("merge", RecvEscape::transparent()),
+        ("sort", RecvEscape::transparent()),
+        ("inspect", RecvEscape::transparent()),
+        ("hash", RecvEscape::transparent()),
+        ("==", RecvEscape::transparent()),
+        ("eql?", RecvEscape::transparent()),
+        ("<", RecvEscape::transparent()),
+        ("<=", RecvEscape::transparent()),
+        (">", RecvEscape::transparent()),
+        (">=", RecvEscape::transparent()),
+    ];
+    set_recv_escape(globals, table);
+}
+
+///
+/// The summaries of the `Hash` methods builtins/hash.rb defines: each
+/// reads its receiver (through `each`, `[]`, `key?`, `dup`) and returns
+/// something else. Run once startup.rb has loaded that file.
+///
+pub(crate) fn init_recv_escape_ruby(globals: &mut Globals) {
+    use crate::executor::inline::RecvEscape;
+    let table: &[(&str, RecvEscape)] = &[
+        ("dig", RecvEscape::transparent()),
+        ("slice", RecvEscape::transparent()),
+        ("except", RecvEscape::transparent()),
+        ("fetch_values", RecvEscape::transparent()),
+        ("has_value?", RecvEscape::transparent()),
+        ("any?", RecvEscape::transparent()),
+        ("all?", RecvEscape::transparent()),
+        ("count", RecvEscape::transparent()),
+        ("compact", RecvEscape::transparent()),
+        ("flatten", RecvEscape::transparent()),
+    ];
+    set_recv_escape(globals, table);
+}
+
+fn set_recv_escape(globals: &mut Globals, table: &[(&str, crate::executor::inline::RecvEscape)]) {
+    for (name, info) in table {
+        let fid = globals
+            .store
+            .check_method_for_class(HASH_CLASS, IdentId::get_id(name))
+            .and_then(|e| e.func_id())
+            .unwrap_or_else(|| panic!("Hash#{name} is not defined"));
+        globals.store.set_recv_escape(fid, *info);
+    }
 }
 
 ///

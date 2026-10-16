@@ -1085,6 +1085,9 @@ impl Codegen {
                     ldr x30, [sp], #16;        // restore LR
                 );
             }
+            VirtualSrc::CallerKw { .. } => {
+                unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
+            }
         }
         self.a64_frame_store(0, lfp, conv(dst) as u32);
     }
@@ -1128,6 +1131,32 @@ impl Codegen {
         }
     }
 
+    /// Lay a `correct_rest_kw` table — (name, slot) pairs of `i32`,
+    /// terminated by (0, 0) — down in the instruction stream, branched
+    /// over, and return its label, so that the `adr` that takes its
+    /// address always reaches it. A side-exit write-back is emitted before
+    /// the unit's constant area exists, and that area sits behind the whole
+    /// unit: a table put there would be past `adr`'s ±1 MiB reach from an
+    /// exit early in a large unit (`a_kwrest_call_in_a_far_frame`, now that
+    /// a `**kwrest` hand-over gives an ordinary callee's exits such a
+    /// table). `emit_rest_kw` reads the resolved address of its table
+    /// instead, which it can since the tables of the body are laid down
+    /// first.
+    fn a64_inline_rest_kw_table(&mut self, table: &[(IdentId, SlotId)]) -> DestLabel {
+        let data = self.jit.label();
+        let skip = self.jit.label();
+        monoasm_arm64!(&mut self.jit, b skip;);
+        self.jit.bind_label(data.clone());
+        for (name, slot) in table {
+            self.jit.emitl(name.get() as u32);
+            self.jit.emitl(slot.0 as u32);
+        }
+        self.jit.emitl(0);
+        self.jit.emitl(0);
+        self.jit.bind_label(skip);
+        data
+    }
+
     /// K1: rebuild a deferred `**kwrest` Hash from the caller's kw slots
     /// for an interpreter resuming inside the trampoline frame. Twin of
     /// x86 `gen_forward_kwrest_materialize`: the caller `Lfp` handed to
@@ -1135,13 +1164,7 @@ impl Codegen {
     /// at `[x29]` (`lfp == fp - RBP_LOCAL_FRAME` in every JIT frame).
     fn a64_gen_forward_kwrest_materialize(&mut self, dst: SlotId, table: &[(IdentId, SlotId)]) {
         let lfp = GP::R14.a64().0; // x22
-        let data = self.jit.const_align8();
-        for (name, slot) in table {
-            self.jit.const_i32(name.get() as i32);
-            self.jit.const_i32(slot.0 as i32);
-        }
-        self.jit.const_i32(0);
-        self.jit.const_i32(0);
+        let data = self.a64_inline_rest_kw_table(table);
         let f = runtime::correct_rest_kw as *const () as u64;
         monoasm_arm64!(&mut self.jit,
             ldr x1, [x29];                     // caller fp
@@ -1277,17 +1300,14 @@ impl Codegen {
                 VirtualSrc::Slots { .. } => {
                     unreachable!("an elided literal in a temporary never lives across a call")
                 }
+                VirtualSrc::CallerKw { .. } => {
+                    unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
+                }
             }
             self.a64_frame_store(0, 25, conv(*dst) as u32);
         }
         for (dst, table) in wb.forward_kwrest_entries() {
-            let data = self.jit.const_align8();
-            for (name, slot) in table.iter() {
-                self.jit.const_i32(name.get() as i32);
-                self.jit.const_i32(slot.0 as i32);
-            }
-            self.jit.const_i32(0);
-            self.jit.const_i32(0);
+            let data = self.a64_inline_rest_kw_table(table);
             let f = runtime::correct_rest_kw as *const () as u64;
             // Load the caller's fp into a scratch and subtract *out of* it:
             // `a64_addr_sub` materializes an offset over 4095 into `addr`,

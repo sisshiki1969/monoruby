@@ -1489,7 +1489,11 @@ impl<'a> JitContext<'a> {
                 // hash-splat — see `set_callee_frame_arguments` /
                 // `hash_splat_and_kw_rest`), so leaving it nil is
                 // universally safe and avoids a per-call `empty_hash`.
-                if self.forward_kw_deferral().is_none() {
+                // Likewise for a `**kwrest` handed over elided
+                // (`VirtualSrc::CallerKw`, `doc/escape_analysis.md`): the
+                // slot holds the `nil` the caller stored, and the object
+                // stands for the Hash.
+                if self.forward_kw_deferral().is_none() && state.virtual_at(local).is_none() {
                     ir.push(AsmInst::CheckKwRest(local));
                 }
             }

@@ -3726,6 +3726,37 @@ impl<'a> JitContext<'a> {
     /// (`VirtualSrc::CallerSlots`), consumed or materialized by `f`'s
     /// own body.
     ///
+    ///
+    /// The `**kwrest` table of this frame, if it is a specialized callee
+    /// with a `**kwrest` parameter entered through a call site whose
+    /// keywords are all literal: `(the kwrest local, [(name, the caller's
+    /// slot of its value)])` for the keywords the callee declares no
+    /// parameter for, in source order. What the parameter holds when it
+    /// is handed over elided (`VirtualSrc::CallerKw`,
+    /// `doc/escape_analysis.md`): read by the folds and the
+    /// materializations, and by a side exit's `forward_kwrest` rebuild.
+    ///
+    pub(super) fn caller_kw_table(&self) -> Option<(SlotId, Box<[(IdentId, SlotId)]>)> {
+        if !self.is_specialized() {
+            return None;
+        }
+        let fid = self.func_id();
+        let kwrest = self.store[fid].kw_rest()?;
+        let cid = self.method_caller_callsite()?;
+        let cs = &self.store[cid];
+        if !cs.hash_splat_pos().is_empty() {
+            return None;
+        }
+        let names = self.store[fid].kw_names();
+        let table = cs
+            .kw_args()
+            .iter()
+            .filter(|(name, _)| !names.contains(name))
+            .map(|(name, offset)| (*name, cs.kw_pos + *offset))
+            .collect();
+        Some((kwrest, table))
+    }
+
     pub(super) fn forward_kw_deferral(&self) -> Option<DeferredForward> {
         if !self.is_specialized() {
             return None;

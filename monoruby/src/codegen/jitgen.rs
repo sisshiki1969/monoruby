@@ -243,6 +243,15 @@ pub(crate) enum VirtualSrc {
         len: u16,
         base: SlotBase,
     },
+    ///
+    /// The `**kwrest` Hash a specialized callee's parameter would hold: the
+    /// literal keywords of the caller's call site `callid` that the callee
+    /// declares no parameter for, whose values are still in the caller's
+    /// kw window, reached through `base`. The names and slots are the
+    /// frame's `AbstractFrame::caller_kw` table; a side exit rebuilds the
+    /// Hash as a `WriteBack::forward_kwrest` entry.
+    ///
+    CallerKw { callid: CallSiteId, base: SlotBase },
 }
 
 impl VirtualSrc {
@@ -250,7 +259,18 @@ impl VirtualSrc {
     pub(crate) fn own_elements(&self) -> Option<(SlotId, u16)> {
         match self {
             VirtualSrc::Slots { src, len, .. } => Some((*src, *len)),
-            VirtualSrc::Literal(_) | VirtualSrc::CallerSlots { .. } => None,
+            VirtualSrc::Literal(_) | VirtualSrc::CallerSlots { .. } | VirtualSrc::CallerKw { .. } => {
+                None
+            }
+        }
+    }
+
+    /// The class of the object the allocation would have produced.
+    pub(crate) fn class_id(&self) -> ClassId {
+        match self {
+            VirtualSrc::Slots { .. } | VirtualSrc::CallerSlots { .. } => ARRAY_CLASS,
+            VirtualSrc::CallerKw { .. } => HASH_CLASS,
+            VirtualSrc::Literal(v) => v.class(),
         }
     }
 }
@@ -892,7 +912,7 @@ impl Codegen {
 
     fn build_rest_kw_table_in(&mut self, ir: &mut AsmIr) {
         for inst in ir.inst_iter_mut() {
-            if let AsmInst::RestKw { rest_kw, table } = inst {
+            if let AsmInst::RestKw { rest_kw, table, .. } = inst {
                 let data = self.jit.const_align8();
                 for (slot, name) in rest_kw.iter() {
                     self.jit.const_i32(name.get() as i32);
@@ -1754,6 +1774,9 @@ impl JitModule {
                     call rax;
                 }
             }
+            VirtualSrc::CallerKw { .. } => {
+                unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
+            }
         }
         monoasm! { &mut self.jit,
             movq [r14 - (conv(dst))], rax;
@@ -1938,6 +1961,9 @@ impl JitModule {
                 }
                 VirtualSrc::Slots { .. } => {
                     unreachable!("an elided literal in a temporary never lives across a call")
+                }
+                VirtualSrc::CallerKw { .. } => {
+                    unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
                 }
             }
             monoasm! { &mut *self,

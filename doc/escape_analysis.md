@@ -1,13 +1,14 @@
-# Escape analysis: eliding Array literals and rest arrays
+# Escape analysis: eliding Array and Hash literals, `*rest` and `**kwrest`
 
-`[a, b].max`, `[:get, :head].include?(verb)`, `[x, y].first`: an Array
-literal that is built only to be the receiver of one call, and is dead
-right after it. The JIT does not allocate such a literal when it is
-compiled. It records it in the abstract state as an **elided object** and
-decides at its use whether the Array is needed at all. The same object can
-be handed, still elided, into a specialized callee's parameter — as the
-literal argument of `size([a, b])`, or as the `*rest` parameter the callee
-binds `f(a, b)` into (§6).
+`[a, b].max`, `[:get, :head].include?(verb)`, `[x, y].first`,
+`{a: 1, b: 2}[k]`: an Array or Hash literal that is built only to be the
+receiver of one call, and is dead right after it. The JIT does not
+allocate such a literal when it is compiled. It records it in the abstract
+state as an **elided object** and decides at its use whether the object is
+needed at all. The same object can be handed, still elided, into a
+specialized callee's parameter — as the literal argument of `size([a, b])`,
+as the `*rest` parameter the callee binds `f(a, b)` into (§6), or as the
+`**opts` parameter the callee binds `f(x: 1, y: 2)` into (§7).
 
 This replaced `try_fuse_array_minmax`, a peephole that recognized exactly
 `array` + `min`/`max` on the next instruction. The pattern-specific part is
@@ -18,8 +19,9 @@ Source: `codegen/jitgen/compile/escape.rs`; the state half in
 `state/slot.rs` (`SlotState::virtuals`, `LinkMode::from_caller`) and
 `state.rs`; the side-exit half in `WriteBack::virtual_obj`
 (`codegen/jitgen.rs`, and `a64_gen_virtual_materialize` on aarch64); the
-summaries in `builtins/array.rs` (`init_recv_escape`) and
-`executor/inline.rs` (`RecvEscape`, `ElementsOp`).
+summaries in `builtins/array.rs` and `builtins/hash.rs`
+(`init_recv_escape`, `init_recv_escape_ruby`) and `executor/inline.rs`
+(`RecvEscape`, `ElementsOp`).
 
 ## 1. The elided object
 
@@ -28,8 +30,9 @@ Two instructions and a method entry can produce one:
 | Where | `VirtualSrc` | Condition |
 |---|---|---|
 | `%d = array[%s..%s+n]` | `Slots { src, len, callid }` | no splat; `%d` and the elements are temporaries, the elements dead once the literal is built (at or above the stack top) |
-| `%d = literal[...]` | `Literal(template)` | the template is a plain `Array` whose elements are all immediates |
+| `%d = literal[...]` | `Literal(template)` | the template is a plain `Array` whose elements are all immediates, or a plain `Hash` whose keys and values are all immediates |
 | a specialized callee's parameter | `CallerSlots { src, len, base }`, or the caller's `Literal` | the caller handed the object over (§6) |
+| a specialized callee's `**kwrest` parameter | `CallerKw { callid, base }` | the caller handed its leftover keyword arguments over (§7) |
 
 The slot `%d` becomes `LinkMode::V` and the object lives only in
 `SlotState::virtuals`. A `Slots` object's element slots are *pinned*:
@@ -46,24 +49,38 @@ The object ends in one of four ways.
   being read; or it is a parameter nothing reads any more. Nothing ever saw
   it.
 - **Materialized**: allocated after all, by exactly the code the literal
-  would have run (`NewArray` / `DeepCopyLit`, or `CreateArrayFrom` over the
-  caller's window), at the point where something could first observe it.
+  would have run (`NewArray` / `DeepCopyLit`, `CreateArrayFrom` over the
+  caller's window, or `RestKw` over the caller's keyword slots), at the
+  point where something could first observe it.
 
 ## 2. Consuming uses
 
 A use that may consume the object is a method call with it as the
 receiver, and nowhere else in the call's operands
-(`may_consume_virtual`). The call resolves the method on `Array` under the
-class-version guard and reads the callee's `RecvEscape`:
+(`may_consume_virtual`); for a Hash also the `%d = %base[%idx]` index
+instruction (`consume_virtual_index`), which is `Hash#[]` resolved the same
+way. The call resolves the method on the object's class
+(`VirtualSrc::class_id`) under the class-version guard and reads the
+callee's `RecvEscape`:
 
 - `elements: Some(op)` — an allocation-free lowering over the object's
   elements, for a `Slots` or `CallerSlots` object and an argument-less,
   block-less call. `Min` / `Max` compare the elements in their slots
   (`ArrayMinMax`, over the frame's own slots or the caller's window);
   `Size`, `Empty` are answered at compile time; `First`, `Last` are a copy
-  of one element slot (`LoadCallerSlot` for a handed-over object). A
-  parameter stays elided after such a use if it is still live (the next
-  `args.size` is free too); a temporary is done.
+  of one element slot (`LoadCallerSlot` for a handed-over object). Over
+  the pairs of an elided Hash (a template's, or a `CallerKw` object's
+  names and caller slots), `Size` / `Empty` are constants, and
+  `HashIndex` (`[]`), `HashFetch` (`fetch`) and `HashHasKey` (`include?`
+  and its aliases) are folded when the key is a compile-time packed
+  immediate — a symbol or a fixnum, for which `eql?` is bit equality and
+  no `hash` is dispatched — and, for `[]` / `fetch` with one argument,
+  present (a miss would dispatch `default` or raise). `fetch(k, d)` on a
+  miss is `d`'s own slot. A found value is the template's constant or a
+  `LoadCallerSlot` of the caller's keyword slot (`plan_hash_op`,
+  `emit_hash_fold`). A parameter stays elided after such a use if it is
+  still live (the next `args.size` or `opts[:y]` is free too); a temporary
+  is done.
 - `transparent: true` — the callee never mutates, stores or returns its
   receiver, nor returns an Enumerator over it, in any argument form. A
   `Literal` object's copy is then indistinguishable from the template to
@@ -82,7 +99,13 @@ Array.
 Adding a consumer is a summary entry. An entry is a promise about every
 argument form of the method; `take` qualifies (`take(n)` larger than the
 size returns a `dup`), `each` does not (it returns `self`), `index` does
-not (blockless, argument-less it returns an Enumerator over `self`).
+not (blockless, argument-less it returns an Enumerator over `self`). The
+Hash table is in two halves: the builtins in `builtins/hash.rs`
+(`init_recv_escape`, with `[]`, `fetch`, `include?`, `size`, `empty?` as
+elements lowerings and `keys`, `values`, `merge`, `==`, `inspect`, … as
+transparent) and the methods `builtins/hash.rb` defines in Ruby (`dig`,
+`slice`, `except`, `any?`, `count`, …), registered after that file is
+loaded (`init_recv_escape_ruby`, from `Executor::new`).
 
 ## 3. When an object is materialized
 
@@ -171,13 +194,20 @@ in the caller's frame, which the caller spilled before the call
   no Array to hand a transparent callee; only the `elements` lowerings apply.
 - **Merges.** A handed-over object is materialized when its block ends
   while it is still live, so a callee whose prologue branches before the
-  use — an optional parameter (`def f(a, b = 0) = a.max + b`), a guard
-  clause — allocates it after all. Letting identical objects survive a
-  join is the natural next step.
+  use — an optional parameter (`def f(a, b = 0) = a.max + b`,
+  `def g(x: 1, **opts) = opts[:y]`), a guard clause — allocates it after
+  all. Letting identical objects survive a join is the natural next step.
 - **Return values.** An elided object returned from a callee (`[x, y]`
   destructured by the caller) is materialized at the `ret`.
-- **Other classes.** `Hash` literals, `Range`, and objects whose
-  `initialize` the JIT inlines are the natural next `VirtualSrc` kinds.
+- **Hash lookups by a non-constant key, or by a missing one.** `h[k]`
+  with `k` a variable needs `k.hash` and `eql?`, and `h[:zz]` on a
+  template without `:zz` needs `default`; both run on the template (a
+  `Literal`) or materialize (a `CallerKw`). A Hash literal with a dynamic
+  value (`{a: x}`) is not elided at all: its value is evaluated into the
+  slot a later literal key argument lands on, so the lookup would
+  materialize it anyway.
+- **Other classes.** `Range`, and objects whose `initialize` the JIT
+  inlines are the natural next `VirtualSrc` kinds.
 
 ## 6. Into callees: `VirtualSrc::CallerSlots`
 
@@ -221,7 +251,11 @@ locals without a block (`possibly_capture_without_block`: no `binding`,
 `eval`, `local_variables`, …), has no block literal, `super` or `yield`
 (`ISeqInfo::forwarding_no_escape`), and rescues nothing. Then a parameter
 whose reads are all behind it is dead for good, and nothing in the body can
-observe the slot except through the compiler.
+observe the slot except through the compiler. The gate reads the callee's
+own iseq; a call *it* makes to a capturing method (`binding`, `eval`)
+resolves through the inline cache and counts as a read of every object of
+the frame in `settle_virtuals` (`captures`), so the parameter is
+materialized before the call.
 
 **Lifetime in the callee.** A parameter's object follows §3 with one
 difference: it survives the frame's own calls, since its elements are not
@@ -259,3 +293,58 @@ suspended in a call (through `[rsi]` / `[x24]` for the saved bp, `rdx` /
 `def size(a) = a.size`-style callees without the literal. The mechanism
 replaced the former deferred-rest annotation (D1): the kw half (K1) keeps
 its annotation (`DeferredForward { kw }`), the rest half is this.
+
+## 7. Hash literals and `**kwrest`: `VirtualSrc::CallerKw`
+
+A Hash is an elided object in two forms.
+
+**A literal of immediates** (`{a: 1, b: 2}`, `{200 => :ok}`) is a
+`Literal(template)` like an Array's, and ends the same ways: consumed by a
+folded lookup (`[]`, `fetch`, `include?`, `size`, `empty?` with a constant
+key, §2), handed to a transparent callee as the template, dropped, or
+copied by `DeepCopyLit`. A specialized callee receives it in a parameter
+as it is. There is no `Slots` form: a Hash literal with a non-immediate
+value is built as before (§5).
+
+**A `**kwrest` parameter.** The kwrest of a specialized callee —
+`def f(a, **opts)` called as `f(x, y: 1, z: 2)` — would be a fresh Hash of
+the caller's keyword arguments that the callee's own parameters do not
+name. Instead it starts as `VirtualSrc::CallerKw { callid, base }`: the
+caller's call site, and the base through which the caller's frame is
+reached (`SavedFp` only; a frameless callee is never specialized with a
+kwrest). Its pairs are a compile-time table, `AbstractFrame::caller_kw`
+(`JitContext::caller_kw_table`): the call site's keyword names, minus the
+callee's `kw_names`, each with the caller slot its value was evaluated
+into (`kw_pos + offset`). Keys are symbols, so every lookup by a constant
+symbol is folded to a `LoadCallerSlot` of that slot, or to a miss.
+
+**The hand-over** (`specialized_iseq`, `set_arguments`'s kwrest fill): the
+caller elides the kwrest when the call is specialized on its arguments,
+the callee's body passes §6's gate, the call site has no `**splat`, the
+callee is not a forwarding trampoline (its kw half keeps `DeferredForward
+{ kw }`), and the bind is a simple call. Then the caller spills the
+leftover keyword slots (`use_as_value` + `write_back`) so the callee and
+any side exit find them in memory, stores `nil` into the kwrest slot of
+the callee frame, and `from_caller` registers the `CallerKw` object with
+the parameter in `LinkMode::V`. The callee skips its `CheckKwRest`
+(nothing to check: the object has no duplicate keys by construction — a
+duplicate at the call site is already resolved by the caller's layout).
+A call site to a `**kwrest` method is now a reason to specialize at all
+(`specializable`), as a `*rest` method is.
+
+**Materialization** is `AsmInst::RestKw { rest_kw, table, base }`
+(`AsmIr::kw_rest_from`), the same `correct_rest_kw` runtime call the
+callee's prologue uses, pointed at the caller's frame through `base`
+(`emit_rest_kw` on both arches: `[rbp]` / `[x29]` minus
+`RBP_LOCAL_FRAME` for `SavedFp`). A side exit while the object is pending
+writes it back as `WriteBack::forward_kwrest` (`wb_forward_kwrest`), the
+entry that already rebuilt a deferred forwarding kwrest, so the deopt
+exits and the chain-deopt stub need no new case; `WriteBack::virtual_obj`
+never carries a `CallerKw`.
+
+**What it buys.** `def f(**opts)`-style helpers that only read their
+options (`opts[:x]`, `opts.fetch(:x, 0)`, `opts.key?(:x)`, `opts.empty?`,
+`opts.size`) run without the kwrest Hash; `{a: 1, b: 2}[k]`-style literal
+tables and `{...}.include?(k)` without the literal's copy. An optional
+keyword parameter next to the kwrest (`def f(x: 1, **opts)`) still
+allocates: its prologue branch ends the basic block before the use (§5).
