@@ -480,8 +480,10 @@ impl<'a> JitContext<'a> {
         }
         // A plain `return` of the object out of a specialized method, into
         // a call site that takes it elided (`doc/escape_analysis.md` §9).
+        // A call site that discards the result drops the object instead.
         if let TraceIr::Ret(ret) = trace_ir {
-            return *ret == slot && self.return_virtual_in_caller(src).is_some();
+            return *ret == slot
+                && (self.return_virtual_in_caller(src).is_some() || self.return_discarded());
         }
         // `a, b = ary` ([`Self::consume_virtual_expand`]): the elements go
         // straight to their targets.

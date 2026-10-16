@@ -515,8 +515,19 @@ The targets are the temporaries right above the result, overlapping the
 element slots, so the copies run far end first (a `memmove`) when the
 targets lie above the elements.
 
+**A discarded result** (`return_discarded`): a call site with no
+destination (`pair(x, y)` as a statement, a setter body's last
+expression) has nothing to resume with, so the same gate minus the
+destination (`handover_site_of`) lets the `Ret` keep the object, and the
+segment drops it: it loads `nil` into the return register (which must
+carry a non-zero value, zero being the error return) and the allocation
+never happens. The decision is per edge — a path returning a bare value
+loads it as before, and `return_virtual` stays `None`.
+
 **Not carried**: a `return` reached through a block (`new_method_return`
 boxes it), the hand-over of an object the caller then returns again to a
-non-specialized frame (materialized at that `Ret`, as any escape), and a
-Range whose consuming use evaluates an argument into its slot after the
-return (`rng(x, x + 10).include?(x + 3)`, the §5 clobbering).
+non-specialized frame (materialized at that `Ret`, as any escape: the
+unit's callers are unknown code that needs a real `Value` in the return
+register), and a Range whose consuming use evaluates an argument into its
+slot after the return (`rng(x, x + 10).include?(x + 3)`, the §5
+clobbering).

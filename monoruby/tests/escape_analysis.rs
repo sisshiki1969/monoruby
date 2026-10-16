@@ -1643,3 +1643,76 @@ fn elided_return_into_a_polymorphic_call_site() {
         "#,
     );
 }
+
+#[test]
+fn discarded_return_never_built() {
+    // A call site that discards the result: the specialized callee's
+    // `Ret` drops the object instead of building it, while everything
+    // the callee did on the way still happens.
+    run_test(
+        r#"
+        class C
+          attr_reader :log
+          def initialize = @log = []
+          def pair(a, b)
+            @log << a
+            [a, b]
+          end
+          def rest(*a) = a
+          def tmpl = [1, 2, 3]
+          def rng(a, b) = (a..b)
+          def mixed(a, b, flag)
+            return a if flag
+            [a, b]
+          end
+          def nested(a, b) = pair(a, b)
+          def setter_like(a, b)
+            @last = pair(b, a)
+            pair(a, b)
+          end
+          def f(x, y)
+            pair(x, y)
+            rest(x, y)
+            tmpl
+            rng(x + 1, x + 10)
+            mixed(x, y, x.odd?)
+            nested(x, y)
+            setter_like(x, y)
+            x + y
+          end
+        end
+        c = C.new
+        res = []
+        20.times { |i| res << c.f(i, i * 2) }
+        [res, c.log.size, c.log.last(3), c.instance_variable_get(:@last)]
+        "#,
+    );
+    // A callee the gate declines (a rescue, a block at the call site) or
+    // whose object escapes before the return allocates as before.
+    run_test(
+        r#"
+        def guarded(a, b)
+          [a, b]
+        rescue
+          nil
+        end
+        def with_block(a, b)
+          yield
+          [a, b]
+        end
+        def kept(a, b)
+          $kept = [a, b]
+          $kept
+        end
+        def f(x, y)
+          guarded(x, y)
+          with_block(x, y) { }
+          kept(x, y)
+          $kept.sum
+        end
+        res = []
+        20.times { |i| res << f(i, i + 1) }
+        res
+        "#,
+    );
+}
