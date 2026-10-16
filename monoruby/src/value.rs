@@ -951,6 +951,13 @@ impl Value {
     }
 
     pub(crate) extern "C" fn value_deep_copy(mut val: Value) -> Self {
+        // A literal of an always-frozen class (a Range, a Regexp, a
+        // Bignum) is the object itself at every evaluation, as the
+        // `FrozenLiteral` instruction loads it; a copy would only differ
+        // in identity.
+        if val.class().is_always_frozen() {
+            return val;
+        }
         // A big string literal's template converts (once) into a CoW
         // sharer of a hidden frozen root; each per-execution copy below
         // is then an O(1) view clone inheriting the cached code range,

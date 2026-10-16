@@ -414,7 +414,13 @@ A `Range` literal with constant endpoints (`1..5`) is a template
 (`VirtualSrc::Literal`), as an Array or Hash of immediates is, and its
 element ops are the same lowerings over `Const` endpoints: `(1..3).sum` is
 folded at compile time, `when 1..5` is the inline compare against two
-immediates. The fold and the inline compare stand in for `Integer#<=>`
+immediates. A Range is always frozen, so the bytecode loads such a literal
+with `FrozenLiteral` (no per-execution copy), and the `FrozenLiteral`
+lowering routes a Range through `try_elide_literal` like a `Literal`;
+materializing the template — in the body, handed into a callee, at a side
+exit — yields the literal object itself (`value_deep_copy` returns a value
+of an always-frozen class unchanged), as the instruction would have.
+The fold and the inline compare stand in for `Integer#<=>`
 (and `Float#<=>`), so they are taken under the basic-op license
 (`basic_op_assumable`, `record_bop_dep`) and the unit is evicted by a
 redefinition; the helpers re-check `cmp_redefined` at run time and

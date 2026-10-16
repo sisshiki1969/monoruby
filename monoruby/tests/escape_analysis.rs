@@ -1180,3 +1180,129 @@ fn range_element_ops_result_unused_and_in_conditions() {
         "#,
     );
 }
+
+#[test]
+fn range_fallbacks_from_method_bodies() {
+    // Dynamic endpoints inside method bodies (where they are proven
+    // Fixnum): the ops the summaries do not plan (`first(n)`, `max(n)`),
+    // the errors the helpers raise through the real method, and the
+    // spans that overflow i64 at compile time and in the helper.
+    run_test(
+        r#"
+        def firsts(a, b) = [(a..b).first(2), (a..b).max(2), (a...b).min(2), (a..b).last(2)]
+        def huge(a, b) = [(a..b).size, (a...b).count, (a..b).sum, (a..b).min, (a..b).max]
+        def huge_lit = [(-4611686018427387904..4611686018427387903).size,
+                        (0..4611686018427387903).sum, (0...4611686018427387903).count]
+        res = []
+        25.times do |i|
+          res << firsts(i + 1, 100) << huge(-4611686018427387904 + i, 4611686018427387903) << huge_lit
+        end
+        res.last(3)
+        "#,
+    );
+}
+
+#[test]
+fn case_when_on_array_and_hash_literals_and_a_private_teq() {
+    // `when [1, 2]` / `when {a: 1}` dispatch `===` (an alias of `==`,
+    // transparent) on a literal of immediates: the template is the
+    // receiver, nothing is allocated. A private `Range#===` is still
+    // reachable from case/when (funcall semantics) but not from a plain
+    // `(a..b) === x`, which raises.
+    run_test(
+        r#"
+        def lit(x)
+          case x
+          when [1, 2] then :arr
+          when {a: 1} then :hash
+          when 1..5 then :range
+          else :none
+          end
+        end
+        res = []
+        30.times { |i| res << lit([1, 2]) << lit({a: 1}) << lit(i) << lit(:s) }
+        res.last(4)
+        "#,
+    );
+    run_test(
+        r#"
+        class Range
+          private :===
+        end
+        def kase(a, b, x)
+          case x
+          when a..b then :in
+          else :out
+          end
+        end
+        def plain(a, b, x) = (a..b) === x
+        res = []
+        30.times do |i|
+          res << kase(1, 5, i)
+          res << begin
+            plain(1, 5, i)
+          rescue NoMethodError => e
+            e.class
+          end
+        end
+        res.last(4)
+        "#,
+    );
+}
+
+#[test]
+fn constant_range_literal_is_a_template() {
+    // `lo..hi` with literal endpoints is a frozen literal: the template is
+    // answered from inline (case/when, `include?`, the folds) or handed
+    // into a specialized callee, and a use that needs the object gets the
+    // literal itself — the same object every time, never a copy.
+    run_test(
+        r#"
+        def inc(r, x) = r.include?(x)
+        def folds(r) = [r.size, r.sum, r.min, r.max, r.first, r.last, r.begin, r.end, r.exclude_end?]
+        def endless(r) = [r.size, r.min, r.first, r.begin, r.end, r.exclude_end?]
+        def keep(r) = r
+        def uses(x)
+          [(1..3).frozen?, (1..3).step(2).to_a, (1...9).each_slice(4).to_a, (1..3).equal?(keep(1..3)),
+           (1..5).include?(x), (1..5) === x, (1..5).first(2), (-4611686018427387904..4611686018427387903).size]
+        end
+        res = []
+        30.times do |i|
+          res << inc(1..5, i) << inc(1...5, i) << inc(1..5, i.to_f) << folds(1...4) << endless(1..nil)
+          res << keep(1..3).equal?(keep(1..3)) << uses(i)
+        end
+        res.last(7)
+        "#,
+    );
+}
+
+#[test]
+fn range_endpoint_copies_and_helper_errors() {
+    // `first` / `last` / `begin` / `end` on dynamic endpoints copy the
+    // endpoint slot, and a nil endpoint the fold cannot answer raises
+    // from the real method, called by the helper on a Range built then.
+    // (A parameter is proven Fixnum only in a callee specialized for a
+    // call site with a literal argument, or by arithmetic on it — `a - 1`
+    // — so the shapes here use one or the other.)
+    run_test(
+        r#"
+        def fl(a, b) = [(a..b).first, (a..b).last, (a..b).begin, (a...b).end, (a..b).exclude_end?,
+                        (a..nil).first, (nil..b).last, (nil..b).end]
+        def sz_nil(a) = (nil..a - 1).size
+        def min_nil(a) = (nil..a - 1).min
+        def max_nil(a) = (a + 1..nil).max
+        def max_nil_excl(a) = (nil...a - 1).max
+        def first_nil(a) = (nil..a - 1).first
+        def last_nil(a) = (a + 1..nil).last
+        def sum_nil(a) = (nil..a - 1).sum
+        res = []
+        25.times do |i|
+          res << fl(i + 1, 100)
+          res << (sz_nil(i) rescue $!.class) << (min_nil(i) rescue $!.class) << (max_nil(i) rescue $!.class)
+          res << (max_nil_excl(i) rescue $!.class) << (first_nil(i) rescue $!.class)
+          res << (last_nil(i) rescue $!.class) << (sum_nil(i) rescue $!.class)
+        end
+        res.last(8)
+        "#,
+    );
+}

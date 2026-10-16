@@ -555,6 +555,13 @@ impl<'a> JitContext<'a> {
             TraceIr::FrozenLiteral(dst, val) => {
                 if let Some(imm) = val.is_immediate() {
                     state.def_C(dst, imm);
+                } else if val.class() == RANGE_CLASS && self.try_elide_literal(state, dst, val) {
+                    // A `lo..hi` literal with immediate endpoints is a
+                    // template the escape analysis answers from
+                    // (`doc/escape_analysis.md` §8); a use that needs the
+                    // object gets the literal itself, uncopied.
+                    self.restore_unfrozen(Some(dst));
+                    return Ok(CompileResult::Continue);
                 } else if matches!(val.unpack(), RV::BigInt(_)) {
                     // A bignum literal (`x >= 0x8000_0000_0000_0000`, the
                     // dewasm sign-test idiom) folds as `LinkMode::C` like a
