@@ -1059,7 +1059,7 @@ impl<'a> JitContext<'a> {
                 // (`doc/escape_analysis.md` §10; `settle_virtuals` has
                 // materialized any the move may not take).
                 if state.virtual_at(src).is_some() {
-                    self.consume_virtual_mov(state, ir, dst, src);
+                    self.consume_virtual_mov(state, ir, dst, src, bc_pos);
                     self.restore_unfrozen(Some(dst));
                     return Ok(CompileResult::Continue);
                 }

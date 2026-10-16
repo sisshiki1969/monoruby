@@ -605,7 +605,25 @@ hands the object to `y` instead of building it — into a temporary as it
 is, into a local by copying its own-frame elements into `y`'s window
 (`mov_target_ok`: the window must be wide enough; a template or a
 handed-over object needs none; a `**kwrest` object is tied to its
-parameter's table and is built instead). Liveness is kill-aware
+parameter's table and is built instead). The bytecode compiler gives a
+local assigned from another local a window as wide as that local's, so
+the move has somewhere to go.
+
+**A temporary's view** (`alias_consumed_by_call`): `x.include?(a + 1)`
+evaluates its receiver into a temporary *before* its argument, so the
+`Mov` copies a still-live local. When the first reader of that
+temporary in the block is a call that only reads the elements of its
+receiver (a method with a `RecvEscape::elements` summary, block-less,
+with plain arguments) and the instructions between write nothing but a
+plain destination, the temporary takes a second view of the same
+object — the same `VirtualSrc`, sharing the window — which the call
+consumes while the local keeps its own. The two views are never told
+apart: such a method neither mutates nor lets out its receiver, so
+even a lowering that builds the temporary's copy after all answers the
+same. An object in a temporary likewise outlives the instructions that
+write a plain destination (`defined_slot`: the operator computing the
+argument), not only the `Mov` / literal family; a call is still a
+boundary for it. Liveness is kill-aware
 (`local_live_after`, `defined_slot`): a write to the local before any
 read ends its life on that path, so `x = [a, b]; n = x.max; x = 1` and a
 literal rebuilt at the top of a loop body do not keep the previous
@@ -627,8 +645,13 @@ specialized callee's `return x` hands the local's object back as §9
 describes, its elements copied out of the window.
 
 **Not carried**: through a loop head (the body is analysed from a head
-without objects); an alias that keeps both names live; an object
+without objects); an alias that keeps both names live beyond a
+temporary's view; a Range whose endpoints are not proven Fixnum or
+`nil` where it is built (as for a temporary's Range); an object
 returned into a local of the caller (`x = pair(a, b)` needs the slots
 above the destination, §9); a transparent callee on a literal of
 immediates that stays live (`opts.key?(:a)` twice: the first call
-builds the Hash); a local of a frameless callee.
+builds the Hash); a local of a frameless callee (its registers are a
+window in the caller's frame, with no scratch of its own — so
+`x = [a, b]; x.size` as the whole of a tiny method, inlined frameless,
+still builds the Array, while `[a, b].size` does not).

@@ -1576,6 +1576,15 @@ impl<'a> BytecodeGen<'a> {
 
     fn emit_mov(&mut self, dst: BcReg, src: BcReg) {
         if dst != src {
+            // `y = x` with `x` holding a literal's object: the object can
+            // move into `y` (`doc/escape_analysis.md` §10), which needs a
+            // window as wide as `x`'s.
+            if let (BcReg::Local(to), BcReg::Local(from)) = (dst, src)
+                && let Some(len) = self.local_scratch.get(&from).copied()
+            {
+                let need = self.local_scratch.entry(to).or_insert(0);
+                *need = (*need).max(len);
+            }
             self.emit(BytecodeInst::Mov(dst, src), Loc::default());
         }
     }

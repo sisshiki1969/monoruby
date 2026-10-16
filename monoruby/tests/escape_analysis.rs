@@ -2030,3 +2030,26 @@ fn local_object_with_a_rescuing_block() {
         "##,
     );
 }
+
+#[test]
+fn receiver_moved_to_a_temporary_while_the_argument_is_computed() {
+    // `r.include?(a + 1)`: the receiver is copied into a temporary and the
+    // argument computed after it. The object survives the operator (which
+    // writes a plain destination) and is consumed by the call.
+    run_test_once(
+        r##"
+        def f(a, b)
+          a + b
+          r = (a..b)
+          x = [a, b]
+          n = 0
+          n += 1 if r.include?(a + 1)
+          n += 2 if x.include?(b - 1)
+          [r.include?(a + 1), r.cover?(b - 1), x.include?(a * 2), x.max + (a - 1), n, r.size, x.size]
+        end
+        res = []
+        40.times { |i| res << f(i, i + 3) }
+        res
+        "##,
+    );
+}
