@@ -236,7 +236,10 @@ pub(crate) enum VirtualSrc {
     /// An Array whose `len` elements are in the *caller's* frame, at the
     /// caller's slots `src .. src + len`, reached through `base`: the rest
     /// `Array` a specialized callee's `*rest` parameter would hold, or an
-    /// elided literal the caller passed as an argument.
+    /// elided literal the caller passed as an argument. With `base` this
+    /// frame (`SlotBase::Own`), an Array a specialized callee returned
+    /// elided, whose elements its return segments copied into this frame's
+    /// slots (`doc/escape_analysis.md` §7).
     ///
     CallerSlots {
         src: SlotId,
@@ -289,10 +292,17 @@ impl RangeEnd {
 
 impl VirtualSrc {
     /// Every slot of *this* frame the object's materialization reads: an
-    /// Array literal's element slots, an elided Range's endpoint slots.
+    /// Array literal's element slots (or those of an Array returned elided
+    /// into this frame, `CallerSlots` over this frame), an elided Range's
+    /// endpoint slots.
     pub(crate) fn own_slots(&self) -> impl Iterator<Item = SlotId> + '_ {
         let (range, ends) = match self {
-            VirtualSrc::Slots { src, len, .. } => (src.0..src.0 + len, [None, None]),
+            VirtualSrc::Slots { src, len, .. }
+            | VirtualSrc::CallerSlots {
+                src,
+                len,
+                base: SlotBase::Own,
+            } => (src.0..src.0 + len, [None, None]),
             VirtualSrc::Range { start, end, .. } => (0..0, [start.slot(), end.slot()]),
             VirtualSrc::Literal(_) | VirtualSrc::CallerSlots { .. } | VirtualSrc::CallerKw { .. } => {
                 (0..0, [None, None])

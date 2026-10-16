@@ -536,6 +536,26 @@ pub(super) enum SpliceHop {
 ///
 /// Virtual Stack frame for specialized compilation.
 ///
+///
+/// One plain `Ret` of a specialized frame, recorded as an incoming edge
+/// of its call site's continuation (`JitStackFrame::return_edges`).
+///
+pub(super) struct ReturnEdge {
+    /// The segment label the `Ret` branched to.
+    seg: JitLabel,
+    /// The chain prefix (every frame through the caller) at the return.
+    chain: Vec<FrameRef>,
+    /// The returning frame's own state at the return.
+    inner: AbstractFrame,
+    /// The returned slot.
+    ret_slot: SlotId,
+    /// The return's basic block.
+    bbid: BasicBlockId,
+    /// The elided object the returned slot holds, left in place for the
+    /// segment to hand over or allocate (`doc/escape_analysis.md` §9).
+    virt: Option<VirtualSrc>,
+}
+
 pub(super) struct JitStackFrame {
     pub asm_info: AsmInfo,
 
@@ -591,15 +611,10 @@ pub(super) struct JitStackFrame {
     /// bridge that reconciles it with the join — including the deferred
     /// literal writes a surrendered `C` claim owes. `(segment label,
     /// chain prefix at the return, the returning frame's own state, the
-    /// returned slot, the return's basic block)`.
+    /// returned slot, the return's basic block, the elided object the
+    /// returned slot holds)`.
     ///
-    return_edges: Vec<(
-        JitLabel,
-        Vec<FrameRef>,
-        AbstractFrame,
-        SlotId,
-        BasicBlockId,
-    )>,
+    return_edges: Vec<ReturnEdge>,
     ///
     /// The frame-global ledger of persistent spill-home ids: one past the
     /// highest id ever issued as a raw-f64 *home* in this frame's file
@@ -750,6 +765,18 @@ pub(super) struct JitStackFrame {
     pub(super) float_return: bool,
 
     ///
+    /// This frame's compiled return segments hand the call site an elided
+    /// object instead of a value in rax (`doc/escape_analysis.md` §9): what
+    /// the call's destination holds afterwards, in the caller's own terms
+    /// (`VirtualSrc::CallerSlots { base: Own }` over the caller's dead
+    /// argument window, into which every segment copied the elements, a
+    /// `Range` over the same slots, or a literal template). Decided once,
+    /// in `build_return_segments`, like `float_return`, and binding on the
+    /// call site: rax carries nothing.
+    ///
+    pub(super) return_virtual: Option<VirtualSrc>,
+
+    ///
     /// `ensure` regions of this frame with JIT-spliced non-local exits
     /// (issue #1185), keyed by the region's `EnsureEnd` bc index. Each
     /// half records the *stack position* the exit of that kind unwinds
@@ -897,6 +924,7 @@ impl JitStackFrame {
             kw_vetoed: false,
             has_boxed_return: false,
             float_return: false,
+            return_virtual: None,
             spliced_ensures: HashMap::default(),
             pending_splice_landing: None,
             landing_sink: false,
@@ -937,6 +965,7 @@ impl JitStackFrame {
             kw_vetoed: self.kw_vetoed,
             has_boxed_return: self.has_boxed_return,
             float_return: self.float_return,
+            return_virtual: self.return_virtual,
             spliced_ensures: self.spliced_ensures.clone(),
             pending_splice_landing: self.pending_splice_landing,
             landing_sink: self.landing_sink,
@@ -2942,6 +2971,7 @@ impl<'a> JitContext<'a> {
             // segments are being built — never on a suspended outer
             // frame, so a nested call cannot move it.
             float_return: _,
+            return_virtual: _,
             // The tower itself.
             is_not_block,
             stack_offset,
@@ -4111,22 +4141,206 @@ impl<'a> JitContext<'a> {
     ///   the parked-deferral check (see `emit_ret`), whose call clobbers
     ///   the register the value travels in.
     ///
-    fn float_return_ok(
-        &self,
-        frame: &JitStackFrame,
-        edges: &[(
-            JitLabel,
-            Vec<FrameRef>,
-            AbstractFrame,
-            SlotId,
-            BasicBlockId,
-        )],
-    ) -> bool {
+    fn float_return_ok(&self, frame: &JitStackFrame, edges: &[ReturnEdge]) -> bool {
         !frame.has_boxed_return
             && !self.store[frame.iseq_id].has_exception_handler()
             && edges
                 .iter()
-                .all(|(_, _, inner, ret_slot, _)| float_ret_src(inner.mode(*ret_slot)).is_some())
+                .all(|e| float_ret_src(e.inner.mode(e.ret_slot)).is_some())
+    }
+
+    ///
+    /// The elided object the call site resumes with when every plain
+    /// return of *frame* returns one of the same shape
+    /// (`doc/escape_analysis.md` §9): the caller-side object the edges
+    /// agree on. `None` when some path returns a value in rax — an edge
+    /// without an object, or a non-local return or `break` out of the
+    /// subtree (`has_boxed_return`), which the call site cannot tell
+    /// apart from a plain one.
+    ///
+    /// Runs with *frame* popped: the frame being compiled is its caller.
+    ///
+    fn return_virtual_ok(&self, frame: &JitStackFrame, edges: &[ReturnEdge]) -> Option<VirtualSrc> {
+        if frame.has_boxed_return {
+            return None;
+        }
+        let pos = self.current_frame_pos();
+        let mut carried = None;
+        for e in edges {
+            let v = self.return_virtual_in_caller_of(frame, pos, e.virt?)?;
+            match carried {
+                None => carried = Some(v),
+                Some(c) if c == v => {}
+                Some(_) => return None,
+            }
+        }
+        carried
+    }
+
+    ///
+    /// The object the call site resumes with when the frame being compiled
+    /// returns the elided object *src* from a plain `Ret`, in the caller's
+    /// terms — or `None` when the object cannot be handed over elided and
+    /// the `Ret` allocates it as it always did (`doc/escape_analysis.md`
+    /// §9). The frame is a method's (a block's return resumes a `yield`),
+    /// rescues nothing (the return context would be tainted), cannot
+    /// capture the frames (`binding`), and the call site passes no block
+    /// (which could capture the caller's frame, moving it off the stack
+    /// the segments store into), still holds the no-capture invariant,
+    /// and puts the result in a temporary — with the caller's slots above
+    /// it, its dead argument window, holding the elements: an Array's `len`
+    /// of them, an elided Range's endpoint slots. A literal template
+    /// travels as it is, and an object the caller handed in through a
+    /// parameter goes back as the caller's own slots.
+    ///
+    pub(super) fn return_virtual_in_caller(&self, src: VirtualSrc) -> Option<VirtualSrc> {
+        let pos = self.caller_pos()?;
+        self.return_virtual_in_caller_of(self.current_frame(), pos, src)
+    }
+
+    ///
+    /// [`Self::return_virtual_in_caller`] for the frame *callee* returning
+    /// into the frame at stack position *pos* — which is the frame being
+    /// compiled and its caller while the body compiles, and the popped
+    /// frame and the frame being compiled once its return segments are
+    /// built.
+    ///
+    fn return_virtual_in_caller_of(
+        &self,
+        callee: &JitStackFrame,
+        pos: usize,
+        src: VirtualSrc,
+    ) -> Option<VirtualSrc> {
+        if callee.outer.is_some() {
+            return None;
+        }
+        let iseq = &self.store[callee.iseq_id];
+        if iseq.has_exception_handler()
+            || self.store[iseq.func_id()].possibly_capture_without_block()
+        {
+            return None;
+        }
+        let caller = &self.stack_frame[pos];
+        let cs = &self.store[caller.callid?];
+        if cs.block_fid.is_some() || cs.block_arg.is_some() {
+            return None;
+        }
+        let dst = cs.dst?;
+        let ciseq = &self.store[caller.iseq_id];
+        if dst.0 as usize <= ciseq.local_num() || !caller.abstract_state.as_ref()?.no_capture_guard()
+        {
+            return None;
+        }
+        // The elements go into the slots from the destination up: the
+        // destination is the object's own slot and holds its first element
+        // (a self-call's first argument slot is its result slot, with the
+        // frame ending right after the arguments), as an elided Range's
+        // own slot may be an endpoint. The write-backs know not to
+        // `nil`-fill such a slot (`SlotState::wb_void`).
+        let fits = |n: usize| dst.0 as usize + n <= ciseq.total_reg_num();
+        match src {
+            VirtualSrc::Literal(v) => Some(VirtualSrc::Literal(v)),
+            VirtualSrc::Slots { len, .. } | VirtualSrc::CallerSlots { len, .. } => fits(len as usize)
+                .then_some(VirtualSrc::CallerSlots {
+                    src: dst,
+                    len,
+                    base: SlotBase::Own,
+                }),
+            VirtualSrc::Range {
+                start,
+                end,
+                exclude_end,
+            } => {
+                let mut next = dst;
+                let mut relocate = |e: RangeEnd| match e {
+                    RangeEnd::Const(v) => RangeEnd::Const(v),
+                    RangeEnd::Slot(_) => {
+                        let slot = next;
+                        next = next + 1u16;
+                        RangeEnd::Slot(slot)
+                    }
+                };
+                let (start, end) = (relocate(start), relocate(end));
+                fits((next.0 - dst.0) as usize).then_some(VirtualSrc::Range {
+                    start,
+                    end,
+                    exclude_end,
+                })
+            }
+            VirtualSrc::CallerKw { .. } => None,
+        }
+    }
+
+    ///
+    /// Emit, on a return segment, the copies an elided object returned
+    /// elided owes the caller (`doc/escape_analysis.md` §9): each element
+    /// (or Range endpoint) goes into the caller's slot the caller-side
+    /// object names ([`Self::return_virtual_in_caller`]) — the call's
+    /// destination and the caller's dead argument window above it, so
+    /// nothing of the caller's is overwritten — addressed as the callee reads an
+    /// object handed to it: through the frame pointer it saved, or its
+    /// window offset when it is frameless. An element in the returning
+    /// frame's own slot is loaded from there; one the caller handed in
+    /// (`CallerSlots`) is already in the caller's frame and moves within
+    /// it, in the order that reads every slot before it is overwritten,
+    /// and not at all when it is where it has to be.
+    ///
+    /// Runs with the callee popped: the frame being compiled is the
+    /// caller the segments return into.
+    ///
+    fn emit_return_virtual_copies(
+        &self,
+        ir: &mut AsmIr,
+        frame: &JitStackFrame,
+        inner: &mut AbstractFrame,
+        virt: VirtualSrc,
+    ) {
+        let pos = self.current_frame_pos();
+        let Some(dst) = self.stack_frame[pos]
+            .callid
+            .and_then(|callid| self.store[callid].dst)
+        else {
+            unreachable!("a return segment handing an object over has a destination");
+        };
+        let base = if frame.frameless {
+            SlotBase::Window(self.inline_window_delta())
+        } else {
+            SlotBase::SavedFp
+        };
+        match virt {
+            VirtualSrc::CallerSlots {
+                src,
+                len,
+                base: handed,
+            } if handed != SlotBase::Own => {
+                debug_assert_eq!(handed, base);
+                let mut pairs: Vec<(SlotId, SlotId)> = (0..len)
+                    .map(|i| (src + i, dst + i))
+                    .filter(|(s, d)| s != d)
+                    .collect();
+                if src < dst {
+                    pairs.reverse();
+                }
+                for (s, d) in pairs {
+                    ir.load_caller_slot(base, s);
+                    ir.store_caller_slot(base, d, GP::Rax);
+                }
+            }
+            VirtualSrc::Literal(_) | VirtualSrc::CallerKw { .. } => {}
+            _ => {
+                for (i, s) in virt.own_slots().enumerate() {
+                    // A `V` element is the object's own slot doubling as
+                    // its first element (an object returned elided from a
+                    // callee of this one): its value is on the stack.
+                    if matches!(inner.mode(s), LinkMode::V) {
+                        ir.load_caller_slot(SlotBase::Own, s);
+                    } else {
+                        inner.load(ir, s, GP::Rax);
+                    }
+                    ir.store_caller_slot(base, dst + i, GP::Rax);
+                }
+            }
+        }
     }
 
     fn build_return_segments(&mut self, frame: &mut JitStackFrame) -> Option<Vec<FrameRef>> {
@@ -4135,8 +4349,9 @@ impl<'a> JitContext<'a> {
             return None;
         }
         frame.float_return = self.float_return_ok(frame, &edges);
-        let mut target: Vec<FrameRef> = edges[0].1.clone();
-        for (_, chain, ..) in edges.iter().skip(1) {
+        frame.return_virtual = self.return_virtual_ok(frame, &edges);
+        let mut target: Vec<FrameRef> = edges[0].chain.clone();
+        for ReturnEdge { chain, .. } in edges.iter().skip(1) {
             debug_assert_eq!(target.len(), chain.len());
             for (t, e) in target.iter_mut().zip(chain.iter()) {
                 // Identity fast path: the frame no path has touched joins
@@ -4147,7 +4362,15 @@ impl<'a> JitContext<'a> {
                 FrameRef::make_mut(t).join_no_alloc(e);
             }
         }
-        for (seg, chain, mut inner, ret_slot, bbid) in edges {
+        for ReturnEdge {
+            seg,
+            chain,
+            mut inner,
+            ret_slot,
+            bbid,
+            virt,
+        } in edges
+        {
             let mut ir = AsmIr::new(self);
             for (lvl, (ef, tf)) in chain.iter().zip(target.iter()).enumerate() {
                 let mut ids_extra: Option<(Vec<SpecializedId>, usize)> = None;
@@ -4225,7 +4448,19 @@ impl<'a> JitContext<'a> {
                 let src = float_ret_src(inner.mode(ret_slot))
                     .expect("float_return edge carries no raw f64");
                 ir.float_ret_store(src);
+            } else if let Some(virt) = virt
+                && frame.return_virtual.is_some()
+            {
+                // Returned elided: the caller resumes with the object, so
+                // only its elements travel (`doc/escape_analysis.md` §9).
+                self.emit_return_virtual_copies(&mut ir, frame, &mut inner, virt);
             } else {
+                if virt.is_some() {
+                    // This path's object is not what every path returns:
+                    // perform its allocation here, as the `ret` would have.
+                    let using_fpr = inner.get_using_fpr(&mut ir);
+                    inner.materialize_virtual_at(&mut ir, ret_slot, using_fpr);
+                }
                 inner.load(&mut ir, ret_slot, GP::Rax);
             }
             ir.push(AsmInst::Ret);
@@ -4247,15 +4482,21 @@ impl<'a> JitContext<'a> {
         state: &AbstractState,
         ret_slot: SlotId,
         bbid: BasicBlockId,
+        virt: Option<VirtualSrc>,
     ) -> bool {
         let Some(pos) = self.caller_pos() else {
             return false;
         };
         let chain = state.chain_prefix(pos);
         let inner = state.innermost_clone();
-        self.current_frame_mut()
-            .return_edges
-            .push((seg, chain, inner, ret_slot, bbid));
+        self.current_frame_mut().return_edges.push(ReturnEdge {
+            seg,
+            chain,
+            inner,
+            ret_slot,
+            bbid,
+            virt,
+        });
         true
     }
 

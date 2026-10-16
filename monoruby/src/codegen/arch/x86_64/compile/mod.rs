@@ -80,6 +80,7 @@ impl Codegen {
             | AsmInst::ArrayMinMax { .. }
             | AsmInst::CreateArrayFrom { .. }
             | AsmInst::LoadCallerSlot { .. }
+            | AsmInst::StoreCallerSlot { .. }
             | AsmInst::NewHash(..)
             | AsmInst::HashInsert { .. }
             | AsmInst::ArrayConcat { .. }
@@ -1738,6 +1739,22 @@ impl Codegen {
         self.caller_slot_addr(base, slot, GP::Rax);
         monoasm!( &mut self.jit,
             movq rax, [rax];
+        );
+        true
+    }
+
+    /// `slot`, addressed in the frame `base` names, <- `src`
+    /// (`AsmInst::StoreCallerSlot`).
+    pub(in crate::codegen::jitgen) fn emit_store_caller_slot(
+        &mut self,
+        base: SlotBase,
+        slot: SlotId,
+        src: GP,
+    ) -> bool {
+        debug_assert_ne!(src, GP::Rcx);
+        self.caller_slot_addr(base, slot, GP::Rcx);
+        monoasm!( &mut self.jit,
+            movq [rcx], R(src as _);
         );
         true
     }

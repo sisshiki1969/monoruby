@@ -2596,10 +2596,15 @@ impl AbstractFrame {
             .collect()
     }
 
+    /// The slots to `nil`-fill: void, and not holding an element of an
+    /// elided object (an elided Range's own slot can be its start, an
+    /// Array returned elided has its first element in its own slot,
+    /// `doc/escape_analysis.md` §9) — such a slot holds a valid value the
+    /// object's materialization reads, and is overwritten by it.
     pub(super) fn wb_void(&self) -> Vec<SlotId> {
         self.all_regs()
             .filter_map(|idx| match self.mode(idx) {
-                LinkMode::V => Some(idx),
+                LinkMode::V if !self.is_virtual_src(idx) => Some(idx),
                 _ => None,
             })
             .collect()

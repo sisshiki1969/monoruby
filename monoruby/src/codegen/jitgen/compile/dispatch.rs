@@ -71,6 +71,9 @@ pub(super) struct DispatchMerge {
     /// The conditional branch consuming the dispatch's `dst`, emitted at the
     /// end of every arm (see the module docs).
     sink: Option<CondBrSink>,
+    /// The dispatch's destination, which the merge takes as a value in its
+    /// slot.
+    dst: Option<SlotId>,
 }
 
 impl<'a> JitContext<'a> {
@@ -137,6 +140,7 @@ impl<'a> JitContext<'a> {
                 merge,
                 pc,
                 sink,
+                dst,
             },
         )
     }
@@ -159,6 +163,14 @@ impl<'a> JitContext<'a> {
         m: &DispatchMerge,
         jump: bool,
     ) {
+        // An object a specialized callee handed back elided
+        // (`doc/escape_analysis.md` §9) is allocated here: the merge takes
+        // the destination as a value, and a sunk branch reads it.
+        if let Some(dst) = m.dst
+            && arm.virtual_at(dst).is_some()
+        {
+            self.materialize_virtual(&mut arm, ir, dst);
+        }
         // The GP-pool residency is a layer *below* the link modes, and
         // the bridge does not see it: a slot both states call `S` bridges to
         // nothing even when this arm's only copy of its value is parked in a

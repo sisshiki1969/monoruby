@@ -1667,6 +1667,11 @@ impl AsmIr {
         self.push(AsmInst::LoadCallerSlot { base, slot });
     }
 
+    /// the value of `slot`, addressed in the frame `base` names <- `src`.
+    pub(super) fn store_caller_slot(&mut self, base: SlotBase, slot: SlotId, src: GP) {
+        self.push(AsmInst::StoreCallerSlot { base, slot, src });
+    }
+
     pub(super) fn new_hash(&mut self, using_fpr: UsingFpr, args: SlotId, len: usize) {
         self.push(AsmInst::NewHash(args, len, using_fpr));
     }
@@ -3407,6 +3412,19 @@ pub(super) enum AsmInst {
     LoadCallerSlot {
         base: SlotBase,
         slot: SlotId,
+    },
+    ///
+    /// `slot`, addressed in the frame `base` names, <- `src` (an element
+    /// of an elided object a return segment hands to the caller,
+    /// `doc/escape_analysis.md` §9).
+    ///
+    /// ### destroy
+    /// - rcx (x86-64) / x9, x10 (aarch64)
+    ///
+    StoreCallerSlot {
+        base: SlotBase,
+        slot: SlotId,
+        src: GP,
     },
     NewArray {
         callid: CallSiteId,

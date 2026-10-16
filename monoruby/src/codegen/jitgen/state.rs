@@ -876,6 +876,18 @@ impl AbstractFrame {
         }
     }
 
+    /// The return state of a plain `return` of an elided object
+    /// (`doc/escape_analysis.md` §9): what the value is when a return
+    /// segment allocates it after all — an instance of the object's
+    /// class — under this state's invariants. A call site that takes the
+    /// object elided ignores the value claim.
+    pub(super) fn as_return_virtual(&self, src: VirtualSrc) -> ReturnState {
+        ReturnState {
+            ret: ReturnValue::from_guarded(Guarded::from_class(src.class_id())),
+            invariants: self.invariants.clone(),
+        }
+    }
+
     /// A return state with no compile-time claim about the value.
     pub(super) fn as_return_any(&self) -> ReturnState {
         ReturnState {
@@ -1102,6 +1114,43 @@ impl AbstractFrame {
         }
     }
 
+    ///
+    /// Define *dst* as the elided object *src* a specialized callee's
+    /// return segments handed over instead of a value in rax
+    /// (`JitStackFrame::return_virtual`, `doc/escape_analysis.md` §9). The
+    /// object's elements, where it has any, were copied into the slots it
+    /// names — *dst* and this frame's dead argument window above it, which
+    /// the segments wrote directly and the state knows nothing of — so
+    /// those slots are stack-homed again, pinned by the object as a
+    /// literal's elements are; *dst* itself stays the object's slot (`V`),
+    /// holding the first element until the object is consumed or built.
+    /// The callee's invariants are adopted as for a value.
+    ///
+    pub(in crate::codegen::jitgen) fn def_virtual_return(
+        &mut self,
+        dst: SlotId,
+        return_state: Option<ReturnState>,
+        src: VirtualSrc,
+    ) -> CompileResult {
+        let Some(return_state) = return_state else {
+            unreachable!("an elided return comes from a compiled return path");
+        };
+        self.invariants.join(&return_state.invariants);
+        // The segments stored through the chain, rbp-relative: the frame
+        // must still be the stack one (`return_virtual_in_caller` asks).
+        debug_assert!(self.no_capture_guard());
+        let fixnum = matches!(src, VirtualSrc::Range { .. });
+        self.def_virtual(dst, src);
+        for slot in src.own_slots() {
+            if slot == dst {
+                continue;
+            }
+            let guarded = if fixnum { Guarded::Fixnum } else { Guarded::Value };
+            self.def_S_guarded(slot, guarded);
+        }
+        CompileResult::Continue
+    }
+
     /// Store a specialized-call / specialized-yield result from `src`.
     /// On the fast path (`no_capture_guard` holds) this is the ordinary
     /// rbp-relative slot store. When the invariant is broken — the callee
@@ -1170,12 +1219,27 @@ impl AbstractFrame {
     ///
     /// Discard slots above *next_sp*.
     ///
-    /// The element slots of an elided Array that is gone (materialized or
-    /// dead) are dead too where they lie above the stack top.
-    pub(in crate::codegen::jitgen) fn discard_dead_elements(&mut self, src: VirtualSrc) {
+    /// The element slots of an elided object that is gone (materialized or
+    /// dead) are dead too where they lie above the stack top — except the
+    /// object's own slot *obj*, which may double as an element (the first
+    /// element of an Array returned elided, the start of a Range built
+    /// where it was) and now holds whatever replaced the object.
+    pub(in crate::codegen::jitgen) fn discard_dead_elements(&mut self, src: VirtualSrc, obj: SlotId) {
         for slot in src.own_slots() {
-            if slot >= self.next_sp && !self.is_virtual_src(slot) {
+            if slot != obj && slot >= self.next_sp && !self.is_virtual_src(slot) {
                 self.discard(slot);
+            }
+        }
+    }
+
+    /// Write back the element slots `src..src+len` of an elided object in
+    /// this frame, leaving a `V` one alone: that is the object's own slot
+    /// doubling as its first element, whose value is on the stack already.
+    pub(in crate::codegen::jitgen) fn write_back_elements(&mut self, ir: &mut AsmIr, src: SlotId, len: u16) {
+        for reg in src.0..src.0 + len {
+            let slot = SlotId::new(reg);
+            if !matches!(self.mode(slot), LinkMode::V) {
+                self.write_back(ir, slot, Keep::All);
             }
         }
     }

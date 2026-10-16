@@ -305,6 +305,9 @@ impl Codegen {
             AsmInst::LoadCallerSlot { base, slot } => {
                 self.encode_linst(LInst::LoadCallerSlot { base, slot })
             }
+            AsmInst::StoreCallerSlot { base, slot, src } => {
+                self.encode_linst(LInst::StoreCallerSlot { base, slot, src })
+            }
             AsmInst::NewHash(args, len, using_fpr) => self.encode_linst(LInst::NewHash {
                 args,
                 len,
@@ -2123,6 +2126,9 @@ impl Codegen {
             }
             LInst::LoadCallerSlot { base, slot } => {
                 self.emit_load_caller_slot(base, slot);
+            }
+            LInst::StoreCallerSlot { base, slot, src } => {
+                self.emit_store_caller_slot(base, slot, src);
             }
             LInst::NewHash {
                 args,

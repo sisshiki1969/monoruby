@@ -246,8 +246,10 @@ in the caller's frame, which the caller spilled before the call
   (`def f(*a); 3.times { }; a.max; end`), even when the loop body cannot
   touch it; carrying one through a loop's fixpoint would need the body
   analysed with it in place.
-- **Return values.** An elided object returned from a callee (`[x, y]`
-  destructured by the caller) is materialized at the `ret`.
+- **Return values that escape the callee's frame first.** A plain `return`
+  of an elided object from a specialized callee hands it over elided (§9);
+  a `return` from inside a block, from a callee with a handler, with a
+  block or a binding in flight, or of a `**kwrest`, builds it at the `ret`.
 - **Hash lookups by a non-constant key, or by a missing one.** `h[k]`
   with `k` a variable needs `k.hash` and `eql?`, and `h[:zz]` on a
   template without `:zz` needs `default`; both run on the template (a
@@ -446,3 +448,75 @@ of an always-frozen class unchanged), as the instruction would have. The fold an
 redefinition; the helpers re-check `cmp_redefined` at run time and
 dispatch the real method then.
 
+
+## 9. Return values: an elided object handed back to the call site
+
+`def pair(a, b) = [a, b]` followed by `pair(x, y).max`, `a, b = pair(x, y)`,
+`def rest(*a) = a` / `rest(x, y).min`, `def rng(a, b) = (a..b)` /
+`rng(x, x + 10).include?(5)`: the callee's last act is to return an
+object it never let out. The `Ret` of a specialized callee is one edge of
+the caller's continuation merge (`record_return_edge`,
+`build_return_segments`); an elided object still in the returned slot
+there is left elided on the edge (`may_consume_virtual`'s `Ret` arm, when
+`return_virtual_in_caller` accepts it) instead of being built, and the
+decision is made once every return path is known.
+
+**The gate** (`return_virtual_in_caller_of`): the callee is a method (no
+`outer`), has no exception handler and never captures its frame without
+a block (`possibly_capture_without_block`); the call site passes no
+block, has a destination above the caller's locals, and the caller's
+frame is proven on the stack (`no_capture_guard`); and the object maps
+into the caller: a `Literal` as it is, an Array (`Slots`, or a
+`CallerSlots` handed *in*) as `CallerSlots { src: dst, len, base: Own }`,
+a `Range` with its slot endpoints relocated to `dst, dst + 1` — all
+provided the slots fit in the caller's frame (`dst + n <= total_reg_num`).
+A `CallerKw` is not handed back (its table belongs to the callee).
+
+**The decision** (`return_virtual_ok`, in `build_return_segments`): every
+edge carries an object, they all map to the same caller-side
+`VirtualSrc`, and the callee has no boxed return (a non-local `return`
+from a block, a `break`). `JitStackFrame::return_virtual` records it,
+next to `float_return`, and travels with the compile result
+(`SpecializedCompileResult::return_virtual`, memoized).
+
+**The copies** (`emit_return_virtual_copies`): on each edge, after the
+chain bridge, the elements are stored into the caller's slots
+`dst..dst+len` through `AsmInst::StoreCallerSlot` (the twin of
+`LoadCallerSlot`: `SavedFp` from a framed callee, `Window(delta)` from a
+frameless one — `DynVarOffset::Hint` chain addressing is not usable from
+a frameless callee, whose frame totals include the window). A `Slots`
+object's elements are loaded from the callee's state (a `V` element —
+the object's own slot doubling as its first element, see below — from
+the stack); a `CallerSlots` handed in from the same caller is moved
+slot by slot, far end first where the windows overlap. No value is
+loaded into the return register: the caller does not read it. An edge
+whose object did not pass (another path returned a bare value) is
+materialized on its own segment, as before.
+
+**The call site** (`def_specialized_result` → `def_virtual_return`): the
+destination becomes the object's slot (`def_virtual`, `V`), the slots
+above it `S` (proven `Fixnum` for a Range's endpoints, `Value`
+otherwise). The destination itself is **element 0**: for a self-call the
+result slot is the first argument slot and the frame ends right after the
+arguments, so there is no room above; the element's value sits on the
+stack under a `V` link, which the write-backs no longer `nil`-fill
+(`SlotState::wb_void` skips the own slot of an elided object), the
+element lowerings read from memory (`copy_element`,
+`write_back_elements`), and `discard_dead_elements` leaves alone when the
+object is gone, since the slot then holds whatever replaced it. The
+caller's `InlineCache` pseudo-instruction after the call writes nothing,
+so it no longer counts as overwriting element 1 (`settle_virtuals` asks
+for the slot an instruction actually writes).
+
+**Destructuring** (`consume_virtual_expand`): `a, b = f(x, y)` expands
+the object straight into its targets — a template's constants, copies of
+the element slots, `nil` past the end — with the object gone afterwards.
+The targets are the temporaries right above the result, overlapping the
+element slots, so the copies run far end first (a `memmove`) when the
+targets lie above the elements.
+
+**Not carried**: a `return` reached through a block (`new_method_return`
+boxes it), the hand-over of an object the caller then returns again to a
+non-specialized frame (materialized at that `Ret`, as any escape), and a
+Range whose consuming use evaluates an argument into its slot after the
+return (`rng(x, x + 10).include?(x + 3)`, the §5 clobbering).
