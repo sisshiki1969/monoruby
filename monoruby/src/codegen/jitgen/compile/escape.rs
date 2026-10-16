@@ -1,8 +1,8 @@
 //!
-//! Escape analysis: allocation elision for Array and Hash literals whose
-//! only use is the method call they are the receiver of (`[a, b].max`,
-//! `[:x, :y].include?(v)`, `{a: x}[:a]`, `{get: 1, head: 2}.key?(m)`). See
-//! `doc/escape_analysis.md`.
+//! Escape analysis: allocation elision for Array, Hash and Range literals
+//! whose only use is the method call they are the receiver of (`[a, b].max`,
+//! `[:x, :y].include?(v)`, `{a: x}[:a]`, `{get: 1, head: 2}.key?(m)`,
+//! `(lo..hi).include?(v)`, `when lo...hi`). See `doc/escape_analysis.md`.
 //!
 //! A literal into a temporary is not allocated when it is compiled.
 //! The abstract state records it as an elided object instead
@@ -84,6 +84,10 @@ impl<'a> JitContext<'a> {
         {
             h.iter()
                 .all(|(k, v)| k.is_packed_value() && v.is_packed_value())
+        } else if val.class() == RANGE_CLASS
+            && let Some(r) = val.is_range()
+        {
+            r.start().is_packed_value() && r.end().is_packed_value()
         } else {
             false
         };
@@ -91,6 +95,55 @@ impl<'a> JitContext<'a> {
             return false;
         }
         state.def_virtual(dst, VirtualSrc::Literal(val));
+        true
+    }
+
+    ///
+    /// Elide the allocation of the Range `dst = start..end` (`TraceIr::Range`)
+    /// if it qualifies: into a temporary, with each endpoint a compile-time
+    /// Fixnum or `nil`, or a slot proven to hold a Fixnum — so that building
+    /// it later can neither dispatch `<=>` nor fail — and no endpoint
+    /// temporary other than `dst`'s own slot below the stack top (such a
+    /// slot is pinned until the object is materialized or consumed, like an
+    /// Array literal's elements).
+    ///
+    pub(super) fn try_elide_range(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        dst: SlotId,
+        start: SlotId,
+        end: SlotId,
+        exclude_end: bool,
+    ) -> bool {
+        if !self.is_temp(dst) {
+            return false;
+        }
+        let next_sp = state.next_sp();
+        let endpoint = |state: &AbstractState, slot: SlotId| -> Option<RangeEnd> {
+            if let LinkMode::C(v) = state.mode(slot)
+                && (v.is_fixnum() || v.is_nil())
+            {
+                return Some(RangeEnd::Const(v));
+            }
+            if !state.is_fixnum(slot) || (self.is_temp(slot) && slot != dst && slot < next_sp) {
+                return None;
+            }
+            Some(RangeEnd::Slot(slot))
+        };
+        let (Some(start), Some(end)) = (endpoint(state, start), endpoint(state, end)) else {
+            return false;
+        };
+        let slots: Vec<SlotId> = [start.slot(), end.slot()].into_iter().flatten().collect();
+        state.write_back_slots(ir, &slots);
+        state.def_virtual(
+            dst,
+            VirtualSrc::Range {
+                start,
+                end,
+                exclude_end,
+            },
+        );
         true
     }
 
@@ -109,18 +162,22 @@ impl<'a> JitContext<'a> {
     /// - it is dead after the instruction, which does not read it (dropped);
     ///   or
     /// - the instruction neither reads it, nor can overwrite one of its
-    ///   element slots (a push at or above them), nor ends the basic
-    ///   block, nor — for an object in a temporary — can run Ruby code or
-    ///   reach a call ([`virtual_survives`]).
+    ///   element slots (a push at or above them, or a store into a local
+    ///   that is an elided Range's endpoint), nor ends the basic block,
+    ///   nor — for an object in a temporary — can run Ruby code or reach a
+    ///   call ([`virtual_survives`]).
     ///
     /// So an elided object in a temporary never lives across a call (no
-    /// suspended frame owes one, and dispatch arms never see one), and no
-    /// elided object lives across a block boundary (no merge has to
-    /// reconcile one). An object in a parameter slot (`CallerSlots`, or a
-    /// literal handed over by the caller) does live across the frame's
-    /// own calls — its elements are in the caller's frame, out of this
-    /// frame's way, and a chain deopt materializes it — in a body that
-    /// can neither capture its locals nor rescue (`caller_slots_ok`).
+    /// suspended frame owes one, and dispatch arms never see one) nor
+    /// across a block boundary. An object in a parameter slot
+    /// (`CallerSlots`, or a literal handed over by the caller) does live
+    /// across the frame's own calls — its elements are in the caller's
+    /// frame, out of this frame's way, and a chain deopt materializes it —
+    /// in a body that can neither capture its locals nor rescue
+    /// (`caller_slots_ok`); and it lives across a forward block boundary
+    /// into a merge ([`Self::merge_carries_virtuals`]), where the merge
+    /// keeps it if every path brings the same object and the other paths
+    /// materialize theirs on their bridges (`JitContext::settle_entries`).
     ///
     pub(super) fn settle_virtuals(
         &mut self,
@@ -135,7 +192,9 @@ impl<'a> JitContext<'a> {
         let reads = trace_ir.read_slots(self.store);
         let next_sp = state.next_sp();
         let bb_end = self.is_bb_end(bc_pos);
+        let carries = bb_end && self.merge_carries_virtuals(bc_pos);
         let survives = virtual_survives(trace_ir);
+        let written = survives.then(|| written_slot(trace_ir)).flatten();
         // A call to `binding` / `eval` reads every local of this frame
         // through the frame it captures (`unbox_to_S_for_outgoing_block`),
         // a parameter holding an elided object included.
@@ -157,11 +216,15 @@ impl<'a> JitContext<'a> {
                 state.discard_dead_elements(src);
                 continue;
             }
-            let overwrites = match src.own_elements() {
-                Some((src, len)) => len != 0 && next_sp >= src,
-                None => false,
-            };
-            if read || bb_end || overwrites || (self.is_temp(dst) && !survives) {
+            // A push at or above an element slot, or a store into one
+            // (a local endpoint of an elided Range). The object's own slot
+            // doubling as an endpoint (`a..b` built where `a` was) is not
+            // written while the object is elided.
+            let overwrites = src
+                .own_slots()
+                .any(|s| s != dst && ((self.is_temp(s) && s <= next_sp) || written == Some(s)));
+            let carried = carries && !self.is_temp(dst);
+            if read || (bb_end && !carried) || overwrites || (self.is_temp(dst) && !survives) {
                 self.materialize_virtual(state, ir, dst);
             }
         }
@@ -170,7 +233,7 @@ impl<'a> JitContext<'a> {
     ///
     /// Run after an instruction that falls through: if it ends its basic
     /// block, perform the elided allocations still live (dropping the dead
-    /// ones), so that no merge ever sees one.
+    /// ones), except for a parameter's object a merge may carry.
     ///
     pub(super) fn settle_virtuals_at_bb_end(
         &mut self,
@@ -181,21 +244,24 @@ impl<'a> JitContext<'a> {
         if !self.is_bb_end(bc_pos) {
             return;
         }
-        self.settle_virtuals_before_branch(state, ir, bc_pos);
+        let carries = self.merge_carries_virtuals(bc_pos);
+        self.settle_virtuals_before_branch(state, ir, bc_pos, carries);
     }
 
     ///
     /// Perform the elided allocations still live after the instruction at
     /// *branch_pos* (the block's last one: a branch, or the instruction a
     /// dispatch's per-arm `CondBr` was sunk into, see
-    /// [`JitContext::declare_merge`]), dropping the dead ones, so that no
-    /// merge ever sees one.
+    /// [`JitContext::declare_merge`]), dropping the dead ones. With
+    /// *carries*, a parameter's object is left for the merge
+    /// ([`Self::merge_carries_virtuals`]).
     ///
     pub(super) fn settle_virtuals_before_branch(
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
         branch_pos: BcIndex,
+        carries: bool,
     ) {
         let next_sp = state.next_sp();
         for (dst, src) in state.virtuals().to_vec() {
@@ -207,10 +273,73 @@ impl<'a> JitContext<'a> {
             if dead {
                 state.take_virtual(dst);
                 state.discard_dead_elements(src);
-            } else {
+            } else if !(carries && !self.is_temp(dst)) {
                 self.materialize_virtual(state, ir, dst);
             }
         }
+    }
+
+    ///
+    /// Whether the merges the block ending at *bc_pos* branches into may
+    /// carry an elided object in a parameter slot (`doc/escape_analysis.md`
+    /// §3): a forward merge, compiled from the states of its branches
+    /// ([`JitContext::settle_entries`] reconciles them). A loop head is
+    /// not one: its back edge is a fixpoint over the body, and the body
+    /// is analysed from a head without objects, so every entry of a loop
+    /// materializes before branching. Nor is a dispatch arm, whose
+    /// per-arm branch merges with the fall-through (`declare_merge`).
+    ///
+    fn merge_carries_virtuals(&self, bc_pos: BcIndex) -> bool {
+        if self.in_dispatch_arm() {
+            return false;
+        }
+        let bb_info = &self.iseq().bb_info;
+        let bb = bb_info.get_bb_id(bc_pos);
+        bb_info
+            .succ(bb)
+            .iter()
+            .all(|s| bb_info.is_loop_begin(*s).is_none())
+    }
+
+    ///
+    /// Reconcile the elided objects the branch *entries* of a merge bring
+    /// in, before their states are joined: an object every entry carries
+    /// identically (same slot, same `VirtualSrc`) stays elided through the
+    /// merge; any other is materialized on its entry's bridge, in the
+    /// returned per-entry `AsmIr` the bridge is prepended with. At a loop
+    /// head every object is materialized (none is expected: the entries
+    /// settle before branching into one).
+    ///
+    pub(in crate::codegen::jitgen) fn settle_entries(
+        &mut self,
+        entries: &mut [BranchEntry],
+        loop_head: bool,
+    ) -> Vec<AsmIr> {
+        let common: Vec<(SlotId, VirtualSrc)> = if loop_head || entries.is_empty() {
+            vec![]
+        } else {
+            entries[0]
+                .state
+                .virtuals()
+                .iter()
+                .filter(|v| entries.iter().all(|e| e.state.virtuals().contains(v)))
+                .copied()
+                .collect()
+        };
+        entries
+            .iter_mut()
+            .map(|entry| {
+                let mut ir = AsmIr::new(self);
+                for (dst, _) in entry.state.virtuals().to_vec() {
+                    if common.iter().any(|(d, _)| *d == dst) {
+                        continue;
+                    }
+                    debug_assert!(!loop_head, "an elided object reached a loop head");
+                    self.materialize_virtual(&mut entry.state, &mut ir, dst);
+                }
+                ir
+            })
+            .collect()
     }
 
     ///
@@ -355,6 +484,16 @@ impl<'a> JitContext<'a> {
         if let TraceIr::CheckKwRest(local) = trace_ir {
             return *local == slot && matches!(src, VirtualSrc::CallerKw { .. });
         }
+        // `range === v` — `case v when lo..hi` ([`Self::consume_virtual_teq`]).
+        if let TraceIr::BinCmp {
+            kind: CmpKind::TEq,
+            lhs,
+            rhs,
+            ..
+        } = trace_ir
+        {
+            return *lhs == slot && *rhs != slot && Self::range_ends(src).is_some();
+        }
         let TraceIr::MethodCall { callid, cache, .. } = trace_ir else {
             return false;
         };
@@ -377,6 +516,9 @@ impl<'a> JitContext<'a> {
                 ..
             } => Self::forwarded_rest_slot(cs) == Some(slot),
             VirtualSrc::CallerSlots { .. } | VirtualSrc::CallerKw { .. } => false,
+            // An elided Range's endpoints are this frame's slots, which
+            // the callee cannot be handed.
+            VirtualSrc::Range { .. } => false,
             VirtualSrc::Slots { .. } | VirtualSrc::Literal(_) => {
                 cs.splat_pos().is_empty()
                     && cs.block_fid.is_none()
@@ -393,7 +535,7 @@ impl<'a> JitContext<'a> {
     /// Perform the allocation of the elided object in *dst* after all,
     /// exactly as its literal would have.
     ///
-    pub(super) fn materialize_virtual(
+    pub(in crate::codegen::jitgen) fn materialize_virtual(
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
@@ -425,6 +567,15 @@ impl<'a> JitContext<'a> {
             VirtualSrc::CallerKw { base, .. } => {
                 state.materialize_caller_kw(ir, dst, base);
             }
+            VirtualSrc::Range {
+                start,
+                end,
+                exclude_end,
+            } => {
+                let using_fpr = state.get_using_fpr(ir);
+                ir.create_range(using_fpr, start, end, exclude_end);
+                state.def_reg2acc_class(ir, GP::Rax, dst, RANGE_CLASS);
+            }
         }
         state.discard_dead_elements(src);
     }
@@ -453,7 +604,7 @@ impl<'a> JitContext<'a> {
         let elements = match src {
             VirtualSrc::Slots { src, len, .. } => Some((SlotBase::Own, src, len)),
             VirtualSrc::CallerSlots { src, len, base } => Some((base, src, len)),
-            VirtualSrc::Literal(_) | VirtualSrc::CallerKw { .. } => None,
+            VirtualSrc::Literal(_) | VirtualSrc::CallerKw { .. } | VirtualSrc::Range { .. } => None,
         };
         // Resolved as the call itself would be (refinements in scope
         // included), and a private method stays the interpreter's to reject.
@@ -472,17 +623,22 @@ impl<'a> JitContext<'a> {
         let recv_dead = Some(recv) == call_dst || self.dead_after(bc_pos, recv);
         // What the elements lowering would do, decided before anything is
         // emitted: an Array's elements are in frame slots, a Hash's pairs
-        // are in its template or in the caller's kw window.
+        // are in its template or in the caller's kw window, a Range's
+        // endpoints are constants or frame slots.
         let plan = match summary {
             Some(RecvEscape {
                 elements: Some(op), ..
-            }) if block_less => match (elements, Self::hash_pairs(state, src)) {
-                (Some((base, src, len)), _) if pos_num == 0 => {
+            }) if block_less => match (elements, Self::hash_pairs(state, src), Self::range_ends(src))
+            {
+                (Some((base, src, len)), _, _) if pos_num == 0 => {
                     Some(ElementsPlan::Array(base, src, len))
                 }
-                (None, Some(pairs)) => self
+                (None, Some(pairs), _) => self
                     .plan_hash_op(state, op, &pairs, args, pos_num)
                     .map(ElementsPlan::Hash),
+                (None, None, Some(ends)) => self
+                    .plan_range_op(op, ends, args, pos_num)
+                    .map(ElementsPlan::Range),
                 _ => None,
             },
             _ => None,
@@ -518,6 +674,9 @@ impl<'a> JitContext<'a> {
                         self.emit_elements_op(state, ir, op, base, src, len, call_dst);
                     }
                     ElementsPlan::Hash(fold) => self.emit_hash_fold(state, ir, fold, call_dst),
+                    ElementsPlan::Range(plan) => {
+                        self.emit_range_plan(state, ir, plan, fid, call_dst)
+                    }
                 }
                 Some(CompileResult::Continue)
             }
@@ -567,6 +726,226 @@ impl<'a> JitContext<'a> {
             }
             _ => None,
         }
+    }
+
+    ///
+    /// The endpoints of an elided Range, each a compile-time constant or a
+    /// slot of this frame holding a Fixnum: of a `VirtualSrc::Range`, or
+    /// of a literal template whose endpoints are Fixnum or `nil`. `None`
+    /// for any other object (a `'a'..'z'` template included: its element
+    /// ops are not modelled, though a transparent callee still takes it).
+    ///
+    fn range_ends(src: VirtualSrc) -> Option<(RangeEnd, RangeEnd, bool)> {
+        match src {
+            VirtualSrc::Range {
+                start,
+                end,
+                exclude_end,
+            } => Some((start, end, exclude_end)),
+            VirtualSrc::Literal(val) => {
+                let r = val.is_range()?;
+                let fix_or_nil = |v: Value| v.is_fixnum() || v.is_nil();
+                (fix_or_nil(r.start()) && fix_or_nil(r.end())).then(|| {
+                    (
+                        RangeEnd::Const(r.start()),
+                        RangeEnd::Const(r.end()),
+                        r.exclude_end(),
+                    )
+                })
+            }
+            _ => None,
+        }
+    }
+
+    ///
+    /// `dst = lhs === rhs` (`TraceIr::BinCmp`, `case rhs when lo..hi` or an
+    /// explicit `(lo..hi) === v`) with an elided Range in *lhs*
+    /// ([`Self::may_consume_virtual`]): `Range#===` consumed as a method
+    /// call with the object as its receiver would be ([`Self::consume_virtual`]),
+    /// with the endpoint compare in place. Otherwise the object is
+    /// materialized. Returns whether the instruction was lowered here.
+    ///
+    pub(super) fn consume_virtual_teq(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        dst: Option<SlotId>,
+        lhs: SlotId,
+        rhs: SlotId,
+        bc_pos: BcIndex,
+        // case/when (and rescue) matching dispatches `===` with funcall
+        // semantics; a plain `a === b` is a public-only call.
+        fused: bool,
+    ) -> bool {
+        let src = state.virtual_at(lhs).unwrap();
+        let class = CachedClass::from_class(src.class_id());
+        let resolved = self
+            .jit_check_method(class, IdentId::_TEQ)
+            .and_then(|(fid, visibility)| {
+                let blocked = visibility == Visibility::Private
+                    && !fused
+                    && !self
+                        .store
+                        .get_callsite_id(self.iseq_id(), bc_pos)
+                        .is_some_and(|c| self.store[c].is_func_call());
+                (!blocked).then_some(fid)
+            });
+        let summary = resolved.and_then(|fid| self.store.recv_escape(fid));
+        let recv_dead = Some(lhs) == dst || self.dead_after(bc_pos, lhs);
+        let plan = match summary {
+            Some(RecvEscape {
+                elements: Some(op), ..
+            }) => Self::range_ends(src).and_then(|ends| self.plan_range_op(op, ends, rhs, 1)),
+            _ => None,
+        };
+        match (plan, summary) {
+            (Some(plan), _) => {
+                self.inline_method_cache.push(InlineCacheEntry {
+                    recv_class: class,
+                    name: Some(IdentId::_TEQ),
+                    refinements: self.refinements(),
+                    func_id: resolved,
+                });
+                self.guard_class_version(state, ir, true);
+                if recv_dead {
+                    state.take_virtual(lhs);
+                }
+                self.emit_range_plan(state, ir, plan, resolved.unwrap(), dst);
+                true
+            }
+            (
+                None,
+                Some(RecvEscape {
+                    transparent: true, ..
+                }),
+            ) if recv_dead && matches!(src, VirtualSrc::Literal(_)) => {
+                let VirtualSrc::Literal(val) = src else {
+                    unreachable!()
+                };
+                self.guard_class_version(state, ir, true);
+                state.take_virtual(lhs);
+                state.def_C(lhs, val);
+                false
+            }
+            _ => {
+                self.materialize_virtual(state, ir, lhs);
+                false
+            }
+        }
+    }
+
+    ///
+    /// Decide the Range elements lowering *op* over the endpoints *ends*
+    /// for a call with *pos_num* arguments at *args*: the compare of
+    /// `include?` and friends in place; `size` / `count` / `sum` / `min` /
+    /// `max` / `first` / `last` folded at compile time when both endpoints
+    /// are constants and the closed form applies (`runtime::range_fold`,
+    /// under the `Integer#<=>` basic-op license), else through the runtime
+    /// helper; `begin` / `end` / `exclude_end?` as the endpoint itself.
+    ///
+    fn plan_range_op(
+        &self,
+        op: ElementsOp,
+        ends: (RangeEnd, RangeEnd, bool),
+        args: SlotId,
+        pos_num: usize,
+    ) -> Option<RangePlan> {
+        let (start, end, exclude_end) = ends;
+        let endpoint = |e: RangeEnd| match e {
+            RangeEnd::Const(v) => RangePlan::Const(v),
+            RangeEnd::Slot(s) => RangePlan::Own(s),
+        };
+        match (op, pos_num) {
+            (ElementsOp::RangeCover, 1) => Some(RangePlan::Cover(start, end, exclude_end, args)),
+            (
+                ElementsOp::RangeSize
+                | ElementsOp::RangeCount
+                | ElementsOp::RangeSum
+                | ElementsOp::Min
+                | ElementsOp::Max
+                | ElementsOp::First
+                | ElementsOp::Last,
+                0,
+            ) => {
+                if let (RangeEnd::Const(s), RangeEnd::Const(e)) = (start, end)
+                    && self.basic_op_assumable(CachedClass::INTEGER, IdentId::_CMP)
+                    && let Some(v) = runtime::range_fold(op, s, e, exclude_end)
+                {
+                    return Some(RangePlan::Fold(v));
+                }
+                Some(RangePlan::Op(op, start, end, exclude_end))
+            }
+            (ElementsOp::RangeBegin, 0) => Some(endpoint(start)),
+            (ElementsOp::RangeEndpoint, 0) => Some(endpoint(end)),
+            (ElementsOp::RangeExcludeEnd, 0) => Some(RangePlan::Const(Value::bool(exclude_end))),
+            _ => None,
+        }
+    }
+
+    /// Emit a Range elements lowering ([`Self::plan_range_op`]); *fid* is
+    /// the resolved callee, which the helpers dispatch on a Range built
+    /// after all when the in-place answer does not apply.
+    fn emit_range_plan(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        plan: RangePlan,
+        fid: FuncId,
+        dst: Option<SlotId>,
+    ) {
+        match plan {
+            RangePlan::Const(v) => state.def_C(dst, v),
+            RangePlan::Fold(v) => {
+                self.record_bop_dep(CachedClass::INTEGER, IdentId::_CMP);
+                state.def_C(dst, v);
+            }
+            RangePlan::Own(slot) => {
+                if let Some(dst) = dst {
+                    if !matches!(state.mode(slot), LinkMode::S(_) | LinkMode::C(_)) {
+                        state.flush_gp(ir);
+                    }
+                    state.copy_slot(ir, slot, dst);
+                }
+            }
+            RangePlan::Cover(start, end, exclude_end, arg) => {
+                // The inline Fixnum compare stands in for `Integer#<=>` /
+                // `Float#<=>` (what `__cover_num_q` requires intact); the
+                // helper re-checks at run time.
+                let inline = self.basic_op_assumable(CachedClass::INTEGER, IdentId::_CMP)
+                    && self.basic_op_assumable(CachedClass::FLOAT, IdentId::_CMP);
+                if inline {
+                    self.record_bop_dep(CachedClass::INTEGER, IdentId::_CMP);
+                    self.record_bop_dep(CachedClass::FLOAT, IdentId::_CMP);
+                }
+                state.write_back_slots(ir, &[arg]);
+                state.discard(dst);
+                let using_fpr = state.get_using_fpr(ir);
+                let error = ir.new_error(state);
+                ir.range_cover(using_fpr, start, end, exclude_end, arg, fid, inline);
+                ir.handle_error(error);
+                state.def_rax2acc(ir, dst);
+                self.after_range_helper(state);
+            }
+            RangePlan::Op(op, start, end, exclude_end) => {
+                state.discard(dst);
+                let using_fpr = state.get_using_fpr(ir);
+                let error = ir.new_error(state);
+                ir.range_op(using_fpr, op, start, end, exclude_end, fid);
+                ir.handle_error(error);
+                state.def_rax2acc(ir, dst);
+                self.after_range_helper(state);
+            }
+        }
+    }
+
+    /// The Range helpers may dispatch the resolved method on a Range built
+    /// after all (a non-numeric argument, a `nil` endpoint the method
+    /// rejects): arbitrary Ruby, so the cached guards are re-established
+    /// afterwards.
+    fn after_range_helper(&mut self, state: &mut AbstractState) {
+        state.unset_class_version_guard();
+        state.unset_const_version_guard();
+        state.unset_side_effect_guard();
     }
 
     ///
@@ -760,6 +1139,15 @@ impl<'a> JitContext<'a> {
             ElementsOp::HashIndex | ElementsOp::HashFetch | ElementsOp::HashHasKey => {
                 unreachable!("a Hash lowering on an Array's elements")
             }
+            ElementsOp::RangeCover
+            | ElementsOp::RangeSize
+            | ElementsOp::RangeCount
+            | ElementsOp::RangeSum
+            | ElementsOp::RangeBegin
+            | ElementsOp::RangeEndpoint
+            | ElementsOp::RangeExcludeEnd => {
+                unreachable!("a Range lowering on an Array's elements")
+            }
         }
     }
 }
@@ -770,6 +1158,22 @@ enum ElementsPlan {
     Array(SlotBase, SlotId, u16),
     /// A folded Hash lookup.
     Hash(HashFold),
+    /// Over an elided Range's endpoints.
+    Range(RangePlan),
+}
+
+/// The answer of a Range elements lowering ([`JitContext::plan_range_op`]).
+#[derive(Clone, Copy)]
+enum RangePlan {
+    Const(Value),
+    /// A constant folded under the `Integer#<=>` basic-op license.
+    Fold(Value),
+    /// A copy of this frame's slot (an endpoint).
+    Own(SlotId),
+    /// `include?` and friends: the endpoints, and the argument slot.
+    Cover(RangeEnd, RangeEnd, bool, SlotId),
+    /// Through the runtime helper of the op.
+    Op(ElementsOp, RangeEnd, RangeEnd, bool),
 }
 
 /// Where an elided Hash's value is.
@@ -826,6 +1230,14 @@ impl AbstractState {
                     self.def_reg2acc_class(ir, GP::Rax, slot, ARRAY_CLASS);
                 }
                 VirtualSrc::CallerKw { base, .. } => self.materialize_caller_kw(ir, slot, base),
+                VirtualSrc::Range {
+                    start,
+                    end,
+                    exclude_end,
+                } => {
+                    ir.create_range(using_fpr, start, end, exclude_end);
+                    self.def_reg2acc_class(ir, GP::Rax, slot, RANGE_CLASS);
+                }
             }
             self.discard_dead_elements(src);
         }
@@ -860,6 +1272,17 @@ impl AbstractState {
 /// frame is suspended with the object owed, and no dispatch arm splits the
 /// state).
 ///
+/// The slot an instruction [`virtual_survives`] accepts writes.
+fn written_slot(trace_ir: &TraceIr) -> Option<SlotId> {
+    match trace_ir {
+        TraceIr::Mov(dst, _)
+        | TraceIr::Literal(dst, _)
+        | TraceIr::FrozenLiteral(dst, _)
+        | TraceIr::Array { dst, .. } => Some(*dst),
+        _ => None,
+    }
+}
+
 fn virtual_survives(trace_ir: &TraceIr) -> bool {
     matches!(
         trace_ir,

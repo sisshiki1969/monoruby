@@ -40,7 +40,7 @@ mod object;
 pub(crate) mod proc;
 pub(crate) mod process;
 mod random;
-mod range;
+pub(crate) mod range;
 mod regexp;
 pub(crate) use module::autoload_pending;
 pub(crate) use regexp::{

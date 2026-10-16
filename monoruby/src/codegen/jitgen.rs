@@ -252,17 +252,58 @@ pub(crate) enum VirtualSrc {
     /// Hash as a `WriteBack::forward_kwrest` entry.
     ///
     CallerKw { callid: CallSiteId, base: SlotBase },
+    ///
+    /// The Range `start..end` / `start...end` of a `TraceIr::Range` whose
+    /// endpoints were proven Fixnum or `nil` when it was compiled (so
+    /// building it can neither dispatch `<=>` nor fail). An endpoint is a
+    /// compile-time constant or a slot of this frame that still holds it
+    /// — the literal's own temporaries (pinned like an Array's elements)
+    /// or a local (materialized before anything writes it).
+    ///
+    Range {
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+    },
+}
+
+///
+/// An endpoint of an elided Range (`VirtualSrc::Range`).
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum RangeEnd {
+    /// A Fixnum or `nil` known at compile time.
+    Const(Value),
+    /// A slot of this frame holding a Fixnum.
+    Slot(SlotId),
+}
+
+impl RangeEnd {
+    pub(crate) fn slot(&self) -> Option<SlotId> {
+        match self {
+            RangeEnd::Const(_) => None,
+            RangeEnd::Slot(s) => Some(*s),
+        }
+    }
 }
 
 impl VirtualSrc {
-    /// The slots of *this* frame that hold the object's elements, if any.
-    pub(crate) fn own_elements(&self) -> Option<(SlotId, u16)> {
-        match self {
-            VirtualSrc::Slots { src, len, .. } => Some((*src, *len)),
+    /// Every slot of *this* frame the object's materialization reads: an
+    /// Array literal's element slots, an elided Range's endpoint slots.
+    pub(crate) fn own_slots(&self) -> impl Iterator<Item = SlotId> + '_ {
+        let (range, ends) = match self {
+            VirtualSrc::Slots { src, len, .. } => (src.0..src.0 + len, [None, None]),
+            VirtualSrc::Range { start, end, .. } => (0..0, [start.slot(), end.slot()]),
             VirtualSrc::Literal(_) | VirtualSrc::CallerSlots { .. } | VirtualSrc::CallerKw { .. } => {
-                None
+                (0..0, [None, None])
             }
-        }
+        };
+        range.map(SlotId).chain(ends.into_iter().flatten())
+    }
+
+    /// Whether *slot* is one of [`Self::own_slots`].
+    pub(crate) fn owns_slot(&self, slot: SlotId) -> bool {
+        self.own_slots().any(|s| s == slot)
     }
 
     /// The class of the object the allocation would have produced.
@@ -270,6 +311,7 @@ impl VirtualSrc {
         match self {
             VirtualSrc::Slots { .. } | VirtualSrc::CallerSlots { .. } => ARRAY_CLASS,
             VirtualSrc::CallerKw { .. } => HASH_CLASS,
+            VirtualSrc::Range { .. } => RANGE_CLASS,
             VirtualSrc::Literal(v) => v.class(),
         }
     }
@@ -1777,9 +1819,38 @@ impl JitModule {
             VirtualSrc::CallerKw { .. } => {
                 unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
             }
+            VirtualSrc::Range {
+                start,
+                end,
+                exclude_end,
+            } => {
+                self.load_range_end(GP::Rdi, start);
+                self.load_range_end(GP::Rsi, end);
+                monoasm! { &mut self.jit,
+                    movl rdx, (exclude_end as u32);
+                    movq rax, (runtime::create_range);
+                    call rax;
+                }
+            }
         }
         monoasm! { &mut self.jit,
             movq [r14 - (conv(dst))], rax;
+        }
+    }
+
+    /// `reg <- the endpoint`: its constant, or the frame slot holding it.
+    pub(crate) fn load_range_end(&mut self, reg: GP, end: RangeEnd) {
+        match end {
+            RangeEnd::Const(v) => {
+                monoasm! { &mut self.jit,
+                    movq R(reg as _), (v.id());
+                }
+            }
+            RangeEnd::Slot(slot) => {
+                monoasm! { &mut self.jit,
+                    movq R(reg as _), [r14 - (conv(slot))];
+                }
+            }
         }
     }
 
@@ -1964,6 +2035,9 @@ impl JitModule {
                 }
                 VirtualSrc::CallerKw { .. } => {
                     unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
+                }
+                VirtualSrc::Range { .. } => {
+                    unreachable!("an elided Range in a temporary never lives across a call")
                 }
             }
             monoasm! { &mut *self,

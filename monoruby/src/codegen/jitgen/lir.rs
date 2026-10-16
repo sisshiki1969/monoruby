@@ -57,6 +57,7 @@
 #![allow(private_interfaces)]
 
 use super::*;
+use crate::executor::inline::ElementsOp;
 use crate::ast::CmpKind;
 use crate::bytecodegen::{BinOpK, UnOpK};
 
@@ -1017,6 +1018,29 @@ pub(in crate::codegen) enum LInst {
         start: SlotId,
         end: SlotId,
         exclude_end: bool,
+        using_fpr: UsingFpr,
+    },
+    CreateRange {
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+        using_fpr: UsingFpr,
+    },
+    RangeCover {
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+        arg: SlotId,
+        fid: FuncId,
+        inline: bool,
+        using_fpr: UsingFpr,
+    },
+    RangeOp {
+        op: ElementsOp,
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+        fid: FuncId,
         using_fpr: UsingFpr,
     },
     ConcatStr {

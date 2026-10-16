@@ -1088,8 +1088,36 @@ impl Codegen {
             VirtualSrc::CallerKw { .. } => {
                 unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
             }
+            VirtualSrc::Range {
+                start,
+                end,
+                exclude_end,
+            } => {
+                let f = runtime::create_range as *const () as u64;
+                self.a64_load_range_end(0, start);
+                self.a64_load_range_end(1, end);
+                monoasm_arm64!(&mut self.jit,
+                    mov x2, (exclude_end as u64);
+                    str x30, [sp, #-16]!;      // save LR (16-aligned)
+                    mov x9, (f);
+                    blr x9;                    // x0 = create_range(start, end, excl)
+                    ldr x30, [sp], #16;        // restore LR
+                );
+            }
         }
         self.a64_frame_store(0, lfp, conv(dst) as u32);
+    }
+
+    /// `x(dst) <- the endpoint`: its constant, or the frame slot holding
+    /// it (twin of x86 `load_range_end`).
+    fn a64_load_range_end(&mut self, dst: u32, end: RangeEnd) {
+        let lfp = GP::R14.a64().0; // x22
+        match end {
+            RangeEnd::Const(v) => {
+                monoasm_arm64!(&mut self.jit, mov x(dst), (v.id()););
+            }
+            RangeEnd::Slot(slot) => self.a64_frame_load(dst, lfp, conv(slot) as u32),
+        }
     }
 
     /// `x(addr) <- &slot`, *slot* addressed in the frame *base* names
@@ -1302,6 +1330,9 @@ impl Codegen {
                 }
                 VirtualSrc::CallerKw { .. } => {
                     unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
+                }
+                VirtualSrc::Range { .. } => {
+                    unreachable!("an elided Range in a temporary never lives across a call")
                 }
             }
             self.a64_frame_store(0, 25, conv(*dst) as u32);
@@ -3344,6 +3375,130 @@ impl Codegen {
             mov x2, x19;              // vm
             mov x3, x20;              // globals
             mov x4, (exclude_end as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        true
+    }
+
+    /// x0 <- Range(start, end, exclude_end) of an elided object
+    /// (`AsmInst::CreateRange`); twin of x86 `emit_create_range`.
+    pub(in crate::codegen::jitgen) fn emit_create_range(
+        &mut self,
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        let f = runtime::create_range as *const () as u64;
+        self.emit_fpr_save(using_fpr, false);
+        self.a64_load_range_end(0, start);
+        self.a64_load_range_end(1, end);
+        monoasm_arm64!(&mut self.jit,
+            mov x2, (exclude_end as u64);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        true
+    }
+
+    /// `cmp x0, endpoint` through x9 (twin of x86 `cmp_range_end`): false
+    /// for a nil endpoint, which bounds nothing.
+    fn a64_cmp_range_end(&mut self, end: RangeEnd) -> bool {
+        match end {
+            RangeEnd::Const(v) if v.is_nil() => false,
+            end => {
+                self.a64_load_range_end(9, end);
+                monoasm_arm64!(&mut self.jit, cmp x0, x9;);
+                true
+            }
+        }
+    }
+
+    /// x0 <- `Value::bool((start..end).include?(arg))` on an elided Range
+    /// (`AsmInst::RangeCover`); twin of x86 `emit_range_cover`.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::codegen::jitgen) fn emit_range_cover(
+        &mut self,
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+        arg: SlotId,
+        fid: FuncId,
+        inline: bool,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        let lfp = GP::R14.a64().0;
+        let f = runtime::range_cover as *const () as u64;
+        let slow = self.jit.label();
+        let no = self.jit.label();
+        let exit = self.jit.label();
+        if inline {
+            self.a64_frame_load(0, lfp, conv(arg) as u32);
+            monoasm_arm64!(&mut self.jit, tbz x0, #(0), slow;);
+            if self.a64_cmp_range_end(start) {
+                self.jit.bcond_label(monoasm::Cond::Lt, &no);
+            }
+            if self.a64_cmp_range_end(end) {
+                let cond = if exclude_end {
+                    monoasm::Cond::Ge
+                } else {
+                    monoasm::Cond::Gt
+                };
+                self.jit.bcond_label(cond, &no);
+            }
+            monoasm_arm64!(&mut self.jit,
+                mov x0, (TRUE_VALUE);
+                b exit;
+            no:
+                mov x0, (FALSE_VALUE);
+                b exit;
+            );
+        }
+        self.jit.bind_label(slow);
+        self.emit_fpr_save(using_fpr, false);
+        self.a64_load_range_end(2, start);
+        self.a64_load_range_end(3, end);
+        self.a64_frame_load(4, lfp, conv(arg) as u32);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;              // vm
+            mov x1, x20;              // globals
+            mov x5, (runtime::range_op_info(fid, exclude_end));
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        self.jit.bind_label(exit);
+        true
+    }
+
+    /// x0 <- `(start..end).op` on an elided Range through
+    /// `runtime::range_op_fn(op)` (`AsmInst::RangeOp`).
+    pub(in crate::codegen::jitgen) fn emit_range_op(
+        &mut self,
+        op: ElementsOp,
+        start: RangeEnd,
+        end: RangeEnd,
+        exclude_end: bool,
+        fid: FuncId,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        let f = runtime::range_op_fn(op) as u64;
+        self.emit_fpr_save(using_fpr, false);
+        self.a64_load_range_end(2, start);
+        self.a64_load_range_end(3, end);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;              // vm
+            mov x1, x20;              // globals
+            mov x4, (runtime::range_op_info(fid, exclude_end));
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;

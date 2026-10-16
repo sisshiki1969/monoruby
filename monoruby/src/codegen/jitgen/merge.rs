@@ -23,6 +23,8 @@ impl<'a> JitContext<'a> {
                 #[cfg(feature = "jit-debug")]
                 eprintln!("    {mode:?} src:{src_bb:?}");
 
+                // No elided object reaches a loop head (`merge_carries_virtuals`).
+                debug_assert!(state.virtuals().is_empty());
                 let mut ir = AsmIr::new(self);
                 state.gen_bridge_all(&mut ir, &target, pc, &self.chain_surrender_table());
                 match mode {
@@ -64,15 +66,20 @@ impl<'a> JitContext<'a> {
         bbid: BasicBlockId,
         no_calc_backedge: bool,
     ) -> JitResult<Option<AbstractState>> {
-        let entries = if let Some(entries) = self.remove_branch(bbid) {
+        let mut entries = if let Some(entries) = self.remove_branch(bbid) {
             entries
         } else {
             return Ok(None);
         };
         let iseq = self.iseq();
         let pc = iseq.get_bb_pc(bbid);
+        let loop_head = iseq.bb_info.is_loop_begin(bbid);
+        // The elided objects the entries carry (`doc/escape_analysis.md`
+        // §3): kept where every entry brings the same one, materialized on
+        // the other entries' bridges.
+        let pre_bridges = self.settle_entries(&mut entries, loop_head.is_some());
 
-        let res = if let Some((loop_start, loop_end)) = iseq.bb_info.is_loop_begin(bbid) {
+        let res = if let Some((loop_start, loop_end)) = loop_head {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge loop: {bbid:?}");
 
@@ -344,6 +351,7 @@ impl<'a> JitContext<'a> {
             self.gen_bridges_for_branches(
                 &target,
                 entries,
+                pre_bridges,
                 bbid,
                 pc,
                 &outer_inits,
@@ -359,7 +367,17 @@ impl<'a> JitContext<'a> {
             eprintln!("\n===gen_merge {bbid:?}");
 
             let target = AbstractState::join_entries(&entries);
-            self.gen_bridges_for_branches(&target, entries, bbid, pc, &[], false, &[], &[]);
+            self.gen_bridges_for_branches(
+                &target,
+                entries,
+                pre_bridges,
+                bbid,
+                pc,
+                &[],
+                false,
+                &[],
+                &[],
+            );
 
             Some(target)
         };
@@ -372,10 +390,14 @@ impl<'a> JitContext<'a> {
     ///
     /// Generate bridge AsmIr for branches(*entries*) flowing into the basic block(*bbid*).
     ///
+    #[allow(clippy::too_many_arguments)]
     fn gen_bridges_for_branches(
         &mut self,
         target: &AbstractState,
         entries: Vec<BranchEntry>,
+        // Per entry, the materialization of the elided objects the merge
+        // does not carry (`settle_entries`), which the bridge starts with.
+        pre_bridges: Vec<AsmIr>,
         bbid: BasicBlockId,
         pc: BytecodePtr,
         outer_inits: &[(Vec<SpecializedId>, usize, SlotId, OuterFprHome)],
@@ -386,17 +408,19 @@ impl<'a> JitContext<'a> {
         let target = target.frames_cloned();
         #[cfg(feature = "jit-debug")]
         eprintln!("  bridge to:{bbid:?} target:{target:?}");
-        for BranchEntry {
-            src_bb,
-            mut state,
-            mode,
-            ..
-        } in entries
+        for (
+            BranchEntry {
+                src_bb,
+                mut state,
+                mode,
+                ..
+            },
+            mut ir,
+        ) in entries.into_iter().zip(pre_bridges)
         {
             #[cfg(feature = "jit-debug")]
             eprintln!("    {mode:?} src:{src_bb:?}");
 
-            let mut ir = AsmIr::new(self);
             // Loop-invariant guard hoisting (see `incoming_context`): a
             // miss resumes at the loop head's first body instruction with
             // this entry's write-back, and after a few misses recompiles

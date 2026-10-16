@@ -1173,12 +1173,9 @@ impl AbstractFrame {
     /// The element slots of an elided Array that is gone (materialized or
     /// dead) are dead too where they lie above the stack top.
     pub(in crate::codegen::jitgen) fn discard_dead_elements(&mut self, src: VirtualSrc) {
-        if let Some((src, len)) = src.own_elements() {
-            for i in src.0..src.0 + len {
-                let slot = SlotId(i);
-                if slot >= self.next_sp && !self.is_virtual_src(slot) {
-                    self.discard(slot);
-                }
+        for slot in src.own_slots() {
+            if slot >= self.next_sp && !self.is_virtual_src(slot) {
+                self.discard(slot);
             }
         }
     }

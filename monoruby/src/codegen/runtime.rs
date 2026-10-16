@@ -1,4 +1,5 @@
 use super::*;
+use crate::executor::inline::ElementsOp;
 
 mod args;
 pub(crate) use args::*;
@@ -1528,6 +1529,197 @@ pub(super) extern "C" fn expand_array(
         }
     }
     Some(Value::nil())
+}
+
+///
+/// The materialization of an elided Range (`VirtualSrc::Range`,
+/// `doc/escape_analysis.md`): its endpoints were proven Fixnum or `nil`
+/// when it was elided, so no `<=>` has to run and nothing can fail.
+///
+pub(crate) extern "C" fn create_range(start: Value, end: Value, exclude_end: bool) -> Value {
+    Value::range(start, end, exclude_end)
+}
+
+/// The `info` word of the elided-Range helpers: the resolved callee's
+/// `FuncId` in the low 32 bits, `exclude_end` in bit 32.
+pub(crate) fn range_op_info(fid: FuncId, exclude_end: bool) -> u64 {
+    fid.get() as u64 | ((exclude_end as u64) << 32)
+}
+
+fn unpack_range_op_info(info: u64) -> (FuncId, bool) {
+    (FuncId::new(info as u32), info & (1 << 32) != 0)
+}
+
+///
+/// `(start..end).include?(arg)` (`member?`, `cover?`, `===`) on an elided
+/// Range: the numeric answer in place for a Fixnum / Float argument when
+/// `Integer#<=>` and `Float#<=>` are intact (what `__cover_num_q` does for
+/// the Ruby-level methods), and the resolved method `fid` on a Range built
+/// after all for anything else — exactly the dispatch the call would have
+/// made. The JIT's inline fast path (`AsmInst::RangeCover`) answers the
+/// Fixnum case before this is reached.
+///
+pub(super) extern "C" fn range_cover(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    start: Value,
+    end: Value,
+    arg: Value,
+    info: u64,
+) -> Option<Value> {
+    use crate::executor::op::cmp_redefined;
+    let (fid, exclude_end) = unpack_range_op_info(info);
+    let fix_or_nil = |v: Value| v.is_nil() || v.is_fixnum();
+    if (arg.is_fixnum() || arg.is_float())
+        && fix_or_nil(start)
+        && fix_or_nil(end)
+        && !cmp_redefined(globals, INTEGER_CLASS)
+        && !cmp_redefined(globals, FLOAT_CLASS)
+    {
+        return match crate::builtins::range::range_include_impl(start, end, arg, exclude_end) {
+            Ok(b) => Some(Value::bool(b)),
+            Err(err) => {
+                vm.set_error(err);
+                None
+            }
+        };
+    }
+    let range = Value::range(start, end, exclude_end);
+    vm.invoke_func(globals, fid, range, &[arg], None, None)
+}
+
+///
+/// The argument-less element ops on an elided Range (`ElementsOp::RangeSize`
+/// and friends): [`range_fold`] in place when it applies, else the
+/// resolved method `fid` on a Range built after all.
+///
+fn range_op(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    op: ElementsOp,
+    start: Value,
+    end: Value,
+    info: u64,
+) -> Option<Value> {
+    let (fid, exclude_end) = unpack_range_op_info(info);
+    if !crate::executor::op::cmp_redefined(globals, INTEGER_CLASS)
+        && let Some(v) = range_fold(op, start, end, exclude_end)
+    {
+        return Some(v);
+    }
+    let range = Value::range(start, end, exclude_end);
+    vm.invoke_func(globals, fid, range, &[], None, None)
+}
+
+macro_rules! range_op_fn {
+    ($name:ident, $op:expr) => {
+        pub(super) extern "C" fn $name(
+            vm: &mut Executor,
+            globals: &mut Globals,
+            start: Value,
+            end: Value,
+            info: u64,
+        ) -> Option<Value> {
+            range_op(vm, globals, $op, start, end, info)
+        }
+    };
+}
+range_op_fn!(range_size, ElementsOp::RangeSize);
+range_op_fn!(range_count, ElementsOp::RangeCount);
+range_op_fn!(range_sum, ElementsOp::RangeSum);
+range_op_fn!(range_min, ElementsOp::Min);
+range_op_fn!(range_max, ElementsOp::Max);
+range_op_fn!(range_first, ElementsOp::First);
+range_op_fn!(range_last, ElementsOp::Last);
+
+/// The helper `AsmInst::RangeOp` calls for *op*.
+pub(crate) fn range_op_fn(op: ElementsOp) -> usize {
+    let f: extern "C" fn(&mut Executor, &mut Globals, Value, Value, u64) -> Option<Value> = match op
+    {
+        ElementsOp::RangeSize => range_size,
+        ElementsOp::RangeCount => range_count,
+        ElementsOp::RangeSum => range_sum,
+        ElementsOp::Min => range_min,
+        ElementsOp::Max => range_max,
+        ElementsOp::First => range_first,
+        ElementsOp::Last => range_last,
+        _ => unreachable!("{op:?} is not a Range helper op"),
+    };
+    f as usize
+}
+
+///
+/// What `(start..end).op` answers without running any Ruby, for Fixnum
+/// (or, where the method accepts one, `nil`) endpoints — `None` where the
+/// method would dispatch, raise, or need an Integer `<=>` this does not
+/// model (a Float or Bignum endpoint). Shared by the JIT's compile-time
+/// fold of a literal Range and the runtime helpers, so both agree with
+/// `builtins/range.rs` / `builtins/range.rb`.
+///
+pub(crate) fn range_fold(op: ElementsOp, start: Value, end: Value, exclude_end: bool) -> Option<Value> {
+    let (s, e) = (start.try_fixnum(), end.try_fixnum());
+    let (s_nil, e_nil) = (start.is_nil(), end.is_nil());
+    // The number of elements of a Fixnum range, excl. end folded in (in
+    // i128: the span of two Fixnums does not fit an i64).
+    let len = |s: i64, e: i64| -> Value {
+        let e = if exclude_end { e as i128 } else { e as i128 + 1 };
+        let n = (e - s as i128).max(0);
+        match i64::try_from(n) {
+            Ok(i) => Value::integer(i),
+            Err(_) => Value::bigint(num::BigInt::from(n)),
+        }
+    };
+    let empty = |s: i64, e: i64| s > e || (exclude_end && s == e);
+    Some(match op {
+        // `size`: Integer endpoints only (a nil begin raises, a nil end is
+        // infinite).
+        ElementsOp::RangeSize => match (s, e) {
+            (Some(s), Some(e)) => len(s, e),
+            (Some(_), None) if e_nil => Value::float(f64::INFINITY),
+            _ => return None,
+        },
+        // `count` with no argument and no block: a nil endpoint is
+        // infinite either way.
+        ElementsOp::RangeCount => match (s, e) {
+            (Some(s), Some(e)) => len(s, e),
+            _ if s_nil || e_nil => Value::float(f64::INFINITY),
+            _ => return None,
+        },
+        // `sum` with `init` 0: the closed form (`Range#__builtin_sum`).
+        ElementsOp::RangeSum => {
+            let (s, e) = (s?, e?);
+            let (s, mut e) = (s as i128, e as i128);
+            if exclude_end {
+                e -= 1;
+            }
+            if e < s {
+                return Some(Value::integer(0));
+            }
+            let sum = (s + e) * (e - s + 1) / 2;
+            match i64::try_from(sum) {
+                Ok(i) => Value::integer(i),
+                Err(_) => Value::bigint(num::BigInt::from(sum)),
+            }
+        }
+        ElementsOp::Min => match (s, e) {
+            (Some(s), Some(e)) if empty(s, e) => Value::nil(),
+            (Some(_), Some(_)) => start,
+            (Some(_), None) if e_nil => start,
+            _ => return None,
+        },
+        ElementsOp::Max => match (s, e) {
+            (Some(s), Some(e)) if empty(s, e) => Value::nil(),
+            (Some(_), Some(e)) if exclude_end => Value::integer(e - 1),
+            (Some(_), Some(_)) => end,
+            (None, Some(_)) if s_nil && !exclude_end => end,
+            _ => return None,
+        },
+        // `first` / `last` with no argument: the endpoint, which must not
+        // be nil (the method raises).
+        ElementsOp::First => (!s_nil).then_some(start)?,
+        ElementsOp::Last => (!e_nil).then_some(end)?,
+        _ => return None,
+    })
 }
 
 pub(crate) extern "C" fn create_array(src: *mut Value, len: usize) -> Value {

@@ -1,8 +1,9 @@
-# Escape analysis: eliding Array and Hash literals, `*rest` and `**kwrest`
+# Escape analysis: eliding Array, Hash and Range literals, `*rest` and `**kwrest`
 
 `[a, b].max`, `[:get, :head].include?(verb)`, `[x, y].first`,
-`{a: 1, b: 2}[k]`: an Array or Hash literal that is built only to be the
-receiver of one call, and is dead right after it. The JIT does not
+`{a: 1, b: 2}[k]`, `(lo..hi).include?(v)`, `case v when 1..5`: an Array,
+Hash or Range literal that is built only to be the receiver of one call,
+and is dead right after it. The JIT does not
 allocate such a literal when it is compiled. It records it in the abstract
 state as an **elided object** and decides at its use whether the object is
 needed at all. The same object can be handed, still elided, into a
@@ -19,23 +20,27 @@ Source: `codegen/jitgen/compile/escape.rs`; the state half in
 `state/slot.rs` (`SlotState::virtuals`, `LinkMode::from_caller`) and
 `state.rs`; the side-exit half in `WriteBack::virtual_obj`
 (`codegen/jitgen.rs`, and `a64_gen_virtual_materialize` on aarch64); the
-summaries in `builtins/array.rs` and `builtins/hash.rs`
-(`init_recv_escape`, `init_recv_escape_ruby`) and `executor/inline.rs`
-(`RecvEscape`, `ElementsOp`).
+summaries in `builtins/array.rs`, `builtins/hash.rs` and
+`builtins/range.rs` (`init_recv_escape`, `init_recv_escape_ruby`) and
+`executor/inline.rs` (`RecvEscape`, `ElementsOp`); the Range runtime
+helpers in `codegen/runtime.rs` (`create_range`, `range_cover`,
+`range_fold`).
 
 ## 1. The elided object
 
-Two instructions and a method entry can produce one:
+Three instructions and a method entry can produce one:
 
 | Where | `VirtualSrc` | Condition |
 |---|---|---|
 | `%d = array[%s..%s+n]` | `Slots { src, len, callid }` | no splat; `%d` and the elements are temporaries, the elements dead once the literal is built (at or above the stack top) |
-| `%d = literal[...]` | `Literal(template)` | the template is a plain `Array` whose elements are all immediates, or a plain `Hash` whose keys and values are all immediates |
+| `%d = literal[...]` | `Literal(template)` | the template is a plain `Array` whose elements are all immediates, a plain `Hash` whose keys and values are all immediates, or a `Range` whose endpoints are immediates |
+| `%d = %s..%e` / `%s...%e` | `Range { start, end, exclude_end }` | `%d` is a temporary; each endpoint is a compile-time Fixnum or `nil` (`RangeEnd::Const`) or a slot proven to hold a Fixnum (`RangeEnd::Slot`), so building the Range later can neither dispatch `<=>` nor fail (§8) |
 | a specialized callee's parameter | `CallerSlots { src, len, base }`, or the caller's `Literal` | the caller handed the object over (§6) |
 | a specialized callee's `**kwrest` parameter | `CallerKw { callid, base }` | the caller handed its leftover keyword arguments over (§7) |
 
 The slot `%d` becomes `LinkMode::V` and the object lives only in
-`SlotState::virtuals`. A `Slots` object's element slots are *pinned*:
+`SlotState::virtuals`. A `Slots` object's element slots, and a `Range`
+object's endpoint temporaries, are *pinned* (`VirtualSrc::own_slots`):
 `clear_above_next_sp` leaves them alone although the bytecode considers them
 dead, because they are the object's contents. A `Literal` object needs no
 storage: its contents are the template's.
@@ -50,8 +55,9 @@ The object ends in one of four ways.
   it.
 - **Materialized**: allocated after all, by exactly the code the literal
   would have run (`NewArray` / `DeepCopyLit`, `CreateArrayFrom` over the
-  caller's window, or `RestKw` over the caller's keyword slots), at the
-  point where something could first observe it.
+  caller's window, `RestKw` over the caller's keyword slots, or
+  `CreateRange` from the endpoints), at the point where something could
+  first observe it.
 
 ## 2. Consuming uses
 
@@ -59,7 +65,9 @@ A use that may consume the object is a method call with it as the
 receiver, and nowhere else in the call's operands
 (`may_consume_virtual`); for a Hash also the `%d = %base[%idx]` index
 instruction (`consume_virtual_index`), which is `Hash#[]` resolved the same
-way. The call resolves the method on the object's class
+way; for a Range also the `===` comparison with it on the left
+(`consume_virtual_teq`: the `case … when lo..hi` opcode and the explicit
+`(lo..hi) === v`), which is `Range#===` resolved the same way. The call resolves the method on the object's class
 (`VirtualSrc::class_id`) under the class-version guard and reads the
 callee's `RecvEscape`:
 
@@ -78,9 +86,21 @@ callee's `RecvEscape`:
   present (a miss would dispatch `default` or raise). `fetch(k, d)` on a
   miss is `d`'s own slot. A found value is the template's constant or a
   `LoadCallerSlot` of the caller's keyword slot (`plan_hash_op`,
-  `emit_hash_fold`). A parameter stays elided after such a use if it is
-  still live (the next `args.size` or `opts[:y]` is free too); a temporary
-  is done.
+  `emit_hash_fold`). Over the endpoints of an elided Range (`Const` or
+  `Slot`), `RangeCover` (`include?`, `member?`, `cover?`, `===`) is two
+  tagged compares inline for a Fixnum argument — the tag bit is the same
+  on both sides, so Fixnums order as tagged words, and a `nil` endpoint
+  bounds nothing — with `runtime::range_cover` behind it for any other
+  argument; `RangeSize`, `RangeCount`, `RangeSum`, `Min`, `Max`, `First`,
+  `Last` are folded at compile time for constant endpoints
+  (`runtime::range_fold`) and go through a helper otherwise; `RangeBegin`,
+  `RangeEndpoint`, `RangeExcludeEnd` are the endpoint itself
+  (`plan_range_op`, `emit_range_plan`). Where the in-place answer does
+  not apply — a non-numeric argument, a `nil` endpoint the method rejects,
+  a redefined `Integer#<=>` — the helper builds the Range and dispatches
+  the resolved method on it, exactly the call that would have been made.
+  A parameter stays elided after such a use if it is still live (the next
+  `args.size` or `opts[:y]` is free too); a temporary is done.
 - `transparent: true` — the callee never mutates, stores or returns its
   receiver, nor returns an Enumerator over it, in any argument form. A
   `Literal` object's copy is then indistinguishable from the template to
@@ -105,7 +125,13 @@ Hash table is in two halves: the builtins in `builtins/hash.rs`
 elements lowerings and `keys`, `values`, `merge`, `==`, `inspect`, … as
 transparent) and the methods `builtins/hash.rb` defines in Ruby (`dig`,
 `slice`, `except`, `any?`, `count`, …), registered after that file is
-loaded (`init_recv_escape_ruby`, from `Executor::new`).
+loaded (`init_recv_escape_ruby`, from `Executor::new`). The Range table
+(`builtins/range.rs`, `init_recv_escape_ruby`) is registered the same way,
+on the resolved methods, since `builtins/range.rb` defines most of them
+(`===`, `include?`, `cover?`, `size`, `sum`, `min`, `max`, …) over the
+builtins; a Range is immutable, so every method of its own that returns
+neither `self` nor an object holding it (`each`, `step`, `%` do) is
+transparent.
 
 ## 3. When an object is materialized
 
@@ -116,8 +142,10 @@ by the instruction is
 - otherwise materialized if any of these hold:
   - the instruction reads it (a `Mov`, an argument, a `ret`, an index base);
   - the instruction could overwrite an element slot (its stack top reaches
-    the elements: bytecode temporaries are only written by pushes);
-  - the instruction ends the basic block;
+    the elements: bytecode temporaries are only written by pushes), or
+    writes a local that is an elided Range's endpoint (`written_slot`);
+  - the instruction ends the basic block (a parameter's object may be
+    carried into a forward merge instead, below);
   - the instruction can run Ruby code or reach a call — only `Mov`,
     `Literal`, `FrozenLiteral`, `Array` and the `InlineCache` word are
     survivable (`virtual_survives`).
@@ -133,21 +161,42 @@ object among the operands (no arm takes one over), and, under a sink,
 settles every live object of the frame as the block's end would
 (`settle_virtuals_before_branch`): a parameter's object would otherwise
 reach the branch target through an arm's side-branch state while the
-fall-through materializes it, and the join of the two would drop it. The
-join asserts (debug) that the innermost frame carries none.
+fall-through materializes it, and the join of the two would not keep
+both.
 
 A parameter holding a handed-over object (§6) follows the same rules but
-one: it survives its frame's calls. Its elements are in the caller's frame
-(or are a template), which no callee can reach, and the callee gate
-guarantees that nothing in the body can observe the parameter slot behind
-the compiler's back. It is dropped once nothing can read it any more
-(`local_live_after`: the rest of its block and every block reachable from
-there).
+two: it survives its frame's calls, and it survives a forward block
+boundary. Its elements are in the caller's frame (or are a template),
+which no callee can reach, and the callee gate guarantees that nothing in
+the body can observe the parameter slot behind the compiler's back. It is
+dropped once nothing can read it any more (`local_live_after`: the rest
+of its block and every block reachable from there).
+
+**Merges.** A block whose successors are all forward merges — none is a
+loop head, and the block is not a dispatch arm (`merge_carries_virtuals`)
+— leaves a live parameter's object elided in the state its branch entry
+carries. When the merge is compiled (`incoming_context`), the entries are
+reconciled first (`settle_entries`): an object every entry brings
+identically (same slot, same `VirtualSrc`) stays elided through the
+join, and any other is materialized on its entry's bridge, in a per-entry
+`AsmIr` the bridge is prepended with (`gen_bridges_for_branches`). The
+join itself then only ever meets equal tables (it asserts so, debug), and
+the merged state inherits them. This is what lets an optional parameter's
+prologue (`def f(a, b = 0) = a.max + b`, `def g(x: 1, **opts) = opts[:y]`),
+a guard clause (`return 0 if a.empty?`) or a `?:` before the use keep the
+object elided. A loop head is not such a merge: its back edge is a
+fixpoint over the body and the body is analysed from a head without
+objects, so every entry of a loop — the fall-through into it and its back
+edges — materializes before branching (`backedge_branches` asserts none
+arrives). A temporary's object never crosses a block boundary: it is
+materialized or dropped where its block ends, as before.
 
 The consequences are what keep the mechanism small:
 
-- **No merge sees an elided object.** Every block ends with none, so joins,
-  loop-head fixpoints and the branch bridges never have to reconcile one.
+- **A merge only ever sees equal elided objects.** A temporary's object
+  never reaches one, and a parameter's reaches it on every path or on
+  none, so joins and the branch bridges reconcile nothing; loop-head
+  fixpoints see no object at all.
 - **A suspended frame owes only handed-over objects.** An object with
   elements in the frame itself never lives across a call, so the
   chain-deopt replay stub (`gen_chain_replay_stub`) materializes exactly
@@ -165,7 +214,8 @@ A side exit while an object is pending performs the allocation in its
 write back: `WriteBack::virtual_obj` holds `(dst, VirtualSrc)` and runs
 last, after every other slot is homed, so the frame is GC-consistent across
 the allocating call (`create_array` over the element slots or the caller's
-window, or `value_deep_copy` of the template). Both
+window, `value_deep_copy` of the template, or `create_range` from the
+endpoints). Both
 `gen_write_back_for_deopt` (x86-64) and `a64_gen_write_back_for_deopt` do
 this, and the chain-deopt conversion of a frame suspended in a call does
 the same for its handed-over objects.
@@ -192,11 +242,10 @@ in the caller's frame, which the caller spilled before the call
   immediates (`Literal`) has no element slots and is not affected.
 - **`Slots` objects and transparent callees.** Without a template there is
   no Array to hand a transparent callee; only the `elements` lowerings apply.
-- **Merges.** A handed-over object is materialized when its block ends
-  while it is still live, so a callee whose prologue branches before the
-  use — an optional parameter (`def f(a, b = 0) = a.max + b`,
-  `def g(x: 1, **opts) = opts[:y]`), a guard clause — allocates it after
-  all. Letting identical objects survive a join is the natural next step.
+- **Loops.** A handed-over object is materialized before a loop head
+  (`def f(*a); 3.times { }; a.max; end`), even when the loop body cannot
+  touch it; carrying one through a loop's fixpoint would need the body
+  analysed with it in place.
 - **Return values.** An elided object returned from a callee (`[x, y]`
   destructured by the caller) is materialized at the `ret`.
 - **Hash lookups by a non-constant key, or by a missing one.** `h[k]`
@@ -206,8 +255,13 @@ in the caller's frame, which the caller spilled before the call
   value (`{a: x}`) is not elided at all: its value is evaluated into the
   slot a later literal key argument lands on, so the lookup would
   materialize it anyway.
-- **Other classes.** `Range`, and objects whose `initialize` the JIT
-  inlines are the natural next `VirtualSrc` kinds.
+- **Range endpoints of unknown class.** `(a..b.size).sum` builds the Range:
+  the end is a call's result, not proven Fixnum at the `Range`
+  instruction. A Float, Bignum or String endpoint builds it too, and so does
+  a Range into a local. The endpoint temporary of `(a..f(b)).include?(x)`
+  is clobbered by the argument push, as an Array's elements are.
+- **Other classes.** Objects whose `initialize` the JIT inlines are the
+  natural next `VirtualSrc` kind.
 
 ## 6. Into callees: `VirtualSrc::CallerSlots`
 
@@ -348,3 +402,47 @@ options (`opts[:x]`, `opts.fetch(:x, 0)`, `opts.key?(:x)`, `opts.empty?`,
 tables and `{...}.include?(k)` without the literal's copy. An optional
 keyword parameter next to the kwrest (`def f(x: 1, **opts)`) still
 allocates: its prologue branch ends the basic block before the use (§5).
+
+## 8. Range literals: `VirtualSrc::Range`
+
+`(lo..hi).include?(v)`, `(0...n).sum`, `case v when lo..hi` — the
+`Range` instruction builds a Range from two slots (`gen_range`), which
+compares the endpoints with `<=>` (a dispatch, which may raise) unless
+one is `nil`. The object is elided only where that compare is known to be
+free: each endpoint is a compile-time Fixnum or `nil` (`RangeEnd::Const`),
+or a slot the abstract state has proven Fixnum (`RangeEnd::Slot`, after
+`write_back_slots`, so the frame holds it). The destination must be a
+temporary, as for an Array literal.
+
+An endpoint slot is pinned like an Array's element slots, with one twist:
+the Range is usually built *into* its first endpoint's slot (the
+bytecode evaluates `lo` into the temporary the Range then occupies), and
+that slot is never written while the object is elided — `V` slots are not
+written — so it is excluded from the overwrite check. An endpoint that is
+a local (`a..b` with locals, the common shape) is not pinned; the object is
+materialized before any survivable instruction that writes the local
+(`written_slot`).
+
+Materialization is `CreateRange` (`runtime::create_range`: `Value::range`
+with no compare) in the body, in an argument fill, and at a side exit
+(`gen_virtual_materialize` / `a64_gen_virtual_materialize` load each
+endpoint as a constant or from its slot). A Range is never handed into a
+callee (its endpoints are this frame's slots) and lives only in a
+temporary, so no suspended frame owes one and the chain replay asserts the
+kind away.
+
+A `Range` literal with constant endpoints (`1..5`) is a template
+(`VirtualSrc::Literal`), as an Array or Hash of immediates is, and its
+element ops are the same lowerings over `Const` endpoints: `(1..3).sum` is
+folded at compile time, `when 1..5` is the inline compare against two
+immediates. A Range is always frozen, so the bytecode loads such a literal
+with `FrozenLiteral` (no per-execution copy), and the `FrozenLiteral`
+lowering routes a Range through `try_elide_literal` like a `Literal`;
+materializing the template — in the body, handed into a callee, at a side
+exit — yields the literal object itself (`value_deep_copy` returns a value
+of an always-frozen class unchanged), as the instruction would have. The fold and the inline compare stand in for `Integer#<=>`
+(and `Float#<=>`), so they are taken under the basic-op license
+(`basic_op_assumable`, `record_bop_dep`) and the unit is evicted by a
+redefinition; the helpers re-check `cmp_redefined` at run time and
+dispatch the real method then.
+

@@ -555,6 +555,13 @@ impl<'a> JitContext<'a> {
             TraceIr::FrozenLiteral(dst, val) => {
                 if let Some(imm) = val.is_immediate() {
                     state.def_C(dst, imm);
+                } else if val.class() == RANGE_CLASS && self.try_elide_literal(state, dst, val) {
+                    // A `lo..hi` literal with immediate endpoints is a
+                    // template the escape analysis answers from
+                    // (`doc/escape_analysis.md` §8); a use that needs the
+                    // object gets the literal itself, uncopied.
+                    self.restore_unfrozen(Some(dst));
+                    return Ok(CompileResult::Continue);
                 } else if matches!(val.unpack(), RV::BigInt(_)) {
                     // A bignum literal (`x >= 0x8000_0000_0000_0000`, the
                     // dewasm sign-test idiom) folds as `LinkMode::C` like a
@@ -662,6 +669,9 @@ impl<'a> JitContext<'a> {
                 end,
                 exclude_end,
             } => {
+                if self.try_elide_range(state, ir, dst, start, end, exclude_end) {
+                    return Ok(CompileResult::Continue);
+                }
                 state.write_back_slots(ir, &[start, end]);
                 state.discard(dst);
                 let error = ir.new_error(state);
@@ -909,6 +919,14 @@ impl<'a> JitContext<'a> {
                 fused,
                 nou64,
             } => {
+                // `case v when lo..hi` with the Range elided: the compare
+                // in place (`doc/escape_analysis.md`).
+                if matches!(kind, CmpKind::TEq)
+                    && state.virtual_at(lhs).is_some()
+                    && self.consume_virtual_teq(state, ir, dst, lhs, rhs, bc_pos, fused)
+                {
+                    return Ok(CompileResult::Continue);
+                }
                 // A comparison whose boolean only the following `CondBr`
                 // reads: install that branch as the sink, so the inline
                 // generator may leave its answer in the condition flags
