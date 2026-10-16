@@ -4211,21 +4211,8 @@ impl<'a> JitContext<'a> {
         pos: usize,
         src: VirtualSrc,
     ) -> Option<VirtualSrc> {
-        if callee.outer.is_some() {
-            return None;
-        }
-        let iseq = &self.store[callee.iseq_id];
-        if iseq.has_exception_handler()
-            || self.store[iseq.func_id()].possibly_capture_without_block()
-        {
-            return None;
-        }
+        let dst = self.handover_site_of(callee, pos)??;
         let caller = &self.stack_frame[pos];
-        let cs = &self.store[caller.callid?];
-        if cs.block_fid.is_some() || cs.block_arg.is_some() {
-            return None;
-        }
-        let dst = cs.dst?;
         let ciseq = &self.store[caller.iseq_id];
         if dst.0 as usize <= ciseq.local_num() || !caller.abstract_state.as_ref()?.no_capture_guard()
         {
@@ -4269,6 +4256,49 @@ impl<'a> JitContext<'a> {
             }
             VirtualSrc::CallerKw { .. } => None,
         }
+    }
+
+    ///
+    /// The destination of the call site a plain `Ret` of *callee* resumes,
+    /// when the object it returns may stay elided across the return
+    /// (`doc/escape_analysis.md` §9): the frame is a method's (a block's
+    /// return resumes a `yield`), rescues nothing (the return context
+    /// would be tainted), cannot capture the frames (`binding`), and the
+    /// call site passes no block (which could capture the caller's frame,
+    /// moving it off the stack the segments store into). `Some(None)` is a
+    /// call site that discards the result: nothing is handed over, and
+    /// the object is never built.
+    ///
+    fn handover_site_of(&self, callee: &JitStackFrame, pos: usize) -> Option<Option<SlotId>> {
+        if callee.outer.is_some() {
+            return None;
+        }
+        let iseq = &self.store[callee.iseq_id];
+        if iseq.has_exception_handler()
+            || self.store[iseq.func_id()].possibly_capture_without_block()
+        {
+            return None;
+        }
+        let cs = &self.store[self.stack_frame[pos].callid?];
+        if cs.block_fid.is_some() || cs.block_arg.is_some() {
+            return None;
+        }
+        Some(cs.dst)
+    }
+
+    ///
+    /// Does the call site the frame being compiled returns to discard the
+    /// result? Then a plain `Ret` of an elided object drops it: the
+    /// segment returns `nil` in its place, and the allocation never
+    /// happens (`doc/escape_analysis.md` §9).
+    ///
+    pub(super) fn return_discarded(&self) -> bool {
+        self.caller_pos()
+            .is_some_and(|pos| self.return_discarded_of(self.current_frame(), pos))
+    }
+
+    fn return_discarded_of(&self, callee: &JitStackFrame, pos: usize) -> bool {
+        matches!(self.handover_site_of(callee, pos), Some(None))
     }
 
     ///
@@ -4350,6 +4380,7 @@ impl<'a> JitContext<'a> {
         }
         frame.float_return = self.float_return_ok(frame, &edges);
         frame.return_virtual = self.return_virtual_ok(frame, &edges);
+        let discarded = self.return_discarded_of(frame, self.current_frame_pos());
         let mut target: Vec<FrameRef> = edges[0].chain.clone();
         for ReturnEdge { chain, .. } in edges.iter().skip(1) {
             debug_assert_eq!(target.len(), chain.len());
@@ -4454,6 +4485,11 @@ impl<'a> JitContext<'a> {
                 // Returned elided: the caller resumes with the object, so
                 // only its elements travel (`doc/escape_analysis.md` §9).
                 self.emit_return_virtual_copies(&mut ir, frame, &mut inner, virt);
+            } else if virt.is_some() && discarded {
+                // The call site discards the result: the object is never
+                // built. The return register still has to carry a value
+                // (zero is the error return).
+                ir.lit2reg(Value::nil(), GP::Rax);
             } else {
                 if virt.is_some() {
                     // This path's object is not what every path returns:

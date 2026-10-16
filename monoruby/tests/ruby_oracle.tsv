@@ -2665,6 +2665,7 @@
 7f747f780d48143c0ab242713c240386	["Foo", "Bar", "Foo"]	$a = []\n            class Foo\n                CONST = 'Foo'\n       
 7f859e89e1379a7cf00760b56af97285	"あ"	class HiroChar\n                  def to_int; 0x3042; end\n      
 7f983c97ff2d7632ca2566839b2d0aa5	true	rng = Random.new(42)\n        a = rng.rand(1.5)\n        a.is_a?(Float) &
+7f9de09761ed4f31f66268b4a5af3f11	[[0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57], 80, [19, 38, 19], [38, 19]]	class C\n          attr_reader :log\n          def initialize = @log = []
 7f9f876eb22b2bc16a64bd780036a90b	:ok	using Math; :ok
 7fbef115b72649d4c93632808a3c7664	200	superclass = Class.new\n            200.times.map { Class.new(superc
 7fd970408fef4686f9a03d7219e2c592	[false, :arg_error, :arg_error, :arg_error, :arg_error]	class N\n            include Comparable\n            attr_accessor :x\n 
@@ -4908,6 +4909,7 @@ e8f73c5ee545fe5b71d1c667d8bec38b	[3, [:gt, :gt]]	class Gt\n              attr_re
 e8f7c47b26a50223b7bea94c5ffbe7e6	[1, "sleep"]	done = Thread.new { 1 }\n            done.join\n            t = Threa
 e8fff433024d62ecc658476201cd2358	[0.0, 750.0]	def call_block\n          yield\n        end\n        def d4(n)\n          
 e90638f8f74350ab109848abe99b3ee9	:from_emit	def emit(tag); throw tag, :from_emit; end\n            catch(:x) { e
+e912e59556f3d6291ffde63e403822bd	[1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39]	def guarded(a, b)\n          [a, b]\n        rescue\n          nil\n       
 e914ade5f0d260b48213150bbe2de79e	[[true, false], ["bar", "foo", "oof"], true, true, {"a" => 2}]	__a = [];__a << (s = "x"; h = { s => 1 }; [h.keys.first.frozen?, h.keys.first.eq
 e91805240377d957120dfbead874cd96	[[255], [255], "b", [255], [255], nil, nil, "ASCII-8BIT", [[97, 89, 98], "ASCII-8BIT"], [97, 255, 90], [IndexError, "regexp not matched"], [[255], [97, 98], "ASCII-8BIT"], ["b", [97, 255]], [nil, [97, 255, 98]], true, false, true, [97, 255], 2, nil, 3, 3, 1, 1, nil, 5, 5, true, [[97], [255], [98]]]	s = "a\\xffb".b\n        res = []\n        res << s.slice(/[^a-z]/n).bytes
 e92e53331a50834e55564b7d31927ca8	[6.4031242374328485, 6.4031242374328485, [4, 5], [4.7, 1.5], true, true, true, false, false, false, false, false, false, false, false, false]	__a = [];__a << (Complex(4, 5).abs);__a << (Complex(4, 5).magnitude);__a << (Com
