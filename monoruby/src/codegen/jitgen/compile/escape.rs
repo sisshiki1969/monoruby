@@ -503,13 +503,20 @@ impl<'a> JitContext<'a> {
     /// of it at the block's depth (a write replaces the elided object
     /// behind the compiler's back, so it has to be real by then), or — since a `binding` or `eval` inside the block captures
     /// the whole frame — a call in the block resolved to a capturing
-    /// callee or to nothing the compiler can name, or a lambda literal
-    /// (whose body is not reachable from here).
+    /// callee or to nothing the compiler can name, a lambda literal
+    /// (whose body is not reachable from here), or a handler in the
+    /// block (whose instructions the JIT does not decode).
     ///
     fn touched_by_blocks(&self, slot: SlotId) -> bool {
         let mut stack: Vec<(ISeqId, usize)> = vec![(self.iseq_id(), 0)];
         while let Some((iseq_id, depth)) = stack.pop() {
             let iseq = &self.store[iseq_id];
+            // A block with a handler: its handler blocks are not
+            // decodable as TraceIr (and could read anything), so the
+            // local counts as touched.
+            if depth > 0 && iseq.has_exception_handler() {
+                return true;
+            }
             for i in 0..iseq.bytecode().len() {
                 match TraceIr::from_pc(iseq.get_pc(BcIndex::from(i)), self.store) {
                     TraceIr::LoadDynVar(_, DynVar { reg, outer })

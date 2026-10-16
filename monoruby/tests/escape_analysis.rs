@@ -2007,3 +2007,26 @@ fn local_object_written_by_a_block_or_replaced() {
         "##,
     );
 }
+
+#[test]
+fn local_object_with_a_rescuing_block() {
+    // A block literal with a `rescue` of its own: its handler blocks are
+    // not decoded, so the local counts as touched and the object is real
+    // before the call.
+    run_test_once(
+        r##"
+        def each3
+          yield 1; yield 2; yield 3
+        end
+        def f(n)
+          x = [n, n + 1]
+          s = 0
+          each3 { |i| begin; s += Integer("#{i}"); rescue ArgumentError; s += 100; end }
+          s + x.max
+        end
+        res = []
+        40.times { |i| res << f(i) }
+        res
+        "##,
+    );
+}
