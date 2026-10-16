@@ -14,25 +14,21 @@ impl AbstractState {
             if FrameRef::ptr_eq(lhs, rhs) {
                 continue;
             }
-            // No elided allocation crosses a merge of the frame being
-            // compiled (`doc/escape_analysis.md`): the meet has no way to
-            // reconcile one (`V` against anything keeps `V`, and a
-            // `Discard` would silently drop the object), so every path
-            // settles its elided objects before branching
-            // (`JitContext::settle_virtuals_before_branch`). A suspended
-            // outer frame's parameter may hold one across the callee being
-            // compiled; nothing in the callee touches it, so both sides
-            // carry the same table.
+            // The two sides of a merge carry the same elided objects
+            // (`doc/escape_analysis.md` §3): the meet has no way to
+            // reconcile a difference (`V` against anything keeps `V`, and a
+            // `Discard` would silently drop the object), so the entries of
+            // a merge are settled first — an object every path brings
+            // identically stays, any other is materialized on its path's
+            // bridge (`JitContext::settle_entries`) — and a suspended outer
+            // frame's parameter is untouched by the callee being compiled.
             debug_assert!(
-                if level == innermost {
-                    lhs.virtuals().is_empty() && rhs.virtuals().is_empty()
-                } else {
-                    lhs.virtuals() == rhs.virtuals()
-                },
-                "an elided object reached a merge at level {level}: {:?} / {:?}",
+                lhs.virtuals() == rhs.virtuals(),
+                "elided objects differ at a merge at level {level}: {:?} / {:?}",
                 lhs.virtuals(),
                 rhs.virtuals()
             );
+            let _ = innermost;
             // Only the innermost frame owns fp registers today: a call that
             // hands out a block spills every live one, so an outer frame
             // holds nothing unboxed and the merge must not hand it one

@@ -1182,6 +1182,115 @@ fn range_element_ops_result_unused_and_in_conditions() {
 }
 
 #[test]
+fn elided_parameter_carried_through_a_merge() {
+    // The elided object in a parameter slot survives a forward merge when
+    // every path brings it: an optional parameter's prologue (`b = 0`),
+    // an optional keyword next to `**kwrest`, a guard clause, and a
+    // `?:` before the use. A loop head is not such a merge: the object is
+    // built before the loop.
+    run_test(
+        r#"
+        def opt(a, b = 0) = a.max + b
+        def kwo(x: 1, **opts) = opts[:y].to_s + x.to_s + opts.size.to_s
+        def guard(*a)
+          return 0 if a.empty?
+          a.max
+        end
+        def after_merge(*a, flag)
+          n = flag ? 1 : 2
+          a.max + n
+        end
+        def in_loop(*a)
+          s = 0
+          3.times { |i| s += i }
+          a.max + s
+        end
+        def chain(*a, flag)
+          return a.size if flag.nil?
+          n = flag ? 10 : 20
+          m = n > 15 ? 1 : 2
+          a.first + a.last + m
+        end
+        res = []
+        30.times do |i|
+          res << opt([i, 2]) << opt([i, 2], 7) << kwo(x: 2, y: i) << kwo(y: i)
+          res << guard(i, 2) << guard << after_merge(i, 4, true) << after_merge(i, 4, false)
+          res << in_loop(i, 5) << chain(i, 1, true) << chain(i, 1, false) << chain(i, 1, nil)
+        end
+        res.last(12)
+        "#,
+    );
+}
+
+#[test]
+fn elided_parameter_materialized_on_one_path_of_a_merge() {
+    // One path escapes the object (reads the parameter itself, hands it
+    // on, stores it) and the other consumes it: the merge sees a real
+    // object on the first path's bridge and none on the other, and every
+    // use after the merge is right on both.
+    run_test(
+        r#"
+        def one_path(*a)
+          if a.size > 1
+            a
+          else
+            a.max
+          end
+        end
+        def stores(*a, flag)
+          @keep = a if flag
+          a.max
+        end
+        def hands_on(*a, flag)
+          x = flag ? a.dup.size : 0
+          a.max + x
+        end
+        def kw_one(x: 1, **opts)
+          h = x > 1 ? opts : {}
+          [opts[:y], h.size]
+        end
+        res = []
+        30.times do |i|
+          res << one_path(i, 2) << one_path(i) << stores(i, 2, true) << stores(i, 2, false)
+          res << hands_on(i, 3, true) << hands_on(i, 3, false) << kw_one(x: 2, y: i) << kw_one(y: i)
+        end
+        res << @keep
+        res.last(9)
+        "#,
+    );
+}
+
+#[test]
+fn side_exit_after_a_carried_merge() {
+    // A type guard fails after the merge the elided parameter was carried
+    // through: the side exit allocates it, and a chain deopt in a callee
+    // called after the merge finds it pending.
+    run_test_once(
+        r#"
+        def helper(x) = x + 1
+        def f(*a, flag)
+          n = flag ? 1 : 2
+          y = helper(n)
+          a.max + y
+        end
+        def g(x, b = 0)
+          n = b + 1
+          x.max + n
+        end
+        def w(i, flag) = g([i, 1], flag ? 2 : 3)
+        res = []
+        30.times { |i| res << f(i, 2, true) << w(i, true) }
+        res << f(2.5, 1, false) << f("ab".size, 1, true)
+        res << w(1.5, false) << w("x".size, true)
+        def helper(x) = x + 100
+        res << f(3, 4, true)
+        30.times { |i| res << f(i, 2, false) }
+        res.last(8)
+        "#,
+    );
+}
+
+#[test]
 fn range_fallbacks_from_method_bodies() {
     // Dynamic endpoints inside method bodies (where they are proven
     // Fixnum): the ops the summaries do not plan (`first(n)`, `max(n)`),

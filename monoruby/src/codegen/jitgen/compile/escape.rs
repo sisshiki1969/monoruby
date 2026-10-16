@@ -168,13 +168,16 @@ impl<'a> JitContext<'a> {
     ///   call ([`virtual_survives`]).
     ///
     /// So an elided object in a temporary never lives across a call (no
-    /// suspended frame owes one, and dispatch arms never see one), and no
-    /// elided object lives across a block boundary (no merge has to
-    /// reconcile one). An object in a parameter slot (`CallerSlots`, or a
-    /// literal handed over by the caller) does live across the frame's
-    /// own calls — its elements are in the caller's frame, out of this
-    /// frame's way, and a chain deopt materializes it — in a body that
-    /// can neither capture its locals nor rescue (`caller_slots_ok`).
+    /// suspended frame owes one, and dispatch arms never see one) nor
+    /// across a block boundary. An object in a parameter slot
+    /// (`CallerSlots`, or a literal handed over by the caller) does live
+    /// across the frame's own calls — its elements are in the caller's
+    /// frame, out of this frame's way, and a chain deopt materializes it —
+    /// in a body that can neither capture its locals nor rescue
+    /// (`caller_slots_ok`); and it lives across a forward block boundary
+    /// into a merge ([`Self::merge_carries_virtuals`]), where the merge
+    /// keeps it if every path brings the same object and the other paths
+    /// materialize theirs on their bridges (`JitContext::settle_entries`).
     ///
     pub(super) fn settle_virtuals(
         &mut self,
@@ -189,6 +192,7 @@ impl<'a> JitContext<'a> {
         let reads = trace_ir.read_slots(self.store);
         let next_sp = state.next_sp();
         let bb_end = self.is_bb_end(bc_pos);
+        let carries = bb_end && self.merge_carries_virtuals(bc_pos);
         let survives = virtual_survives(trace_ir);
         let written = survives.then(|| written_slot(trace_ir)).flatten();
         // A call to `binding` / `eval` reads every local of this frame
@@ -219,7 +223,8 @@ impl<'a> JitContext<'a> {
             let overwrites = src
                 .own_slots()
                 .any(|s| s != dst && ((self.is_temp(s) && s <= next_sp) || written == Some(s)));
-            if read || bb_end || overwrites || (self.is_temp(dst) && !survives) {
+            let carried = carries && !self.is_temp(dst);
+            if read || (bb_end && !carried) || overwrites || (self.is_temp(dst) && !survives) {
                 self.materialize_virtual(state, ir, dst);
             }
         }
@@ -228,7 +233,7 @@ impl<'a> JitContext<'a> {
     ///
     /// Run after an instruction that falls through: if it ends its basic
     /// block, perform the elided allocations still live (dropping the dead
-    /// ones), so that no merge ever sees one.
+    /// ones), except for a parameter's object a merge may carry.
     ///
     pub(super) fn settle_virtuals_at_bb_end(
         &mut self,
@@ -239,21 +244,24 @@ impl<'a> JitContext<'a> {
         if !self.is_bb_end(bc_pos) {
             return;
         }
-        self.settle_virtuals_before_branch(state, ir, bc_pos);
+        let carries = self.merge_carries_virtuals(bc_pos);
+        self.settle_virtuals_before_branch(state, ir, bc_pos, carries);
     }
 
     ///
     /// Perform the elided allocations still live after the instruction at
     /// *branch_pos* (the block's last one: a branch, or the instruction a
     /// dispatch's per-arm `CondBr` was sunk into, see
-    /// [`JitContext::declare_merge`]), dropping the dead ones, so that no
-    /// merge ever sees one.
+    /// [`JitContext::declare_merge`]), dropping the dead ones. With
+    /// *carries*, a parameter's object is left for the merge
+    /// ([`Self::merge_carries_virtuals`]).
     ///
     pub(super) fn settle_virtuals_before_branch(
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
         branch_pos: BcIndex,
+        carries: bool,
     ) {
         let next_sp = state.next_sp();
         for (dst, src) in state.virtuals().to_vec() {
@@ -265,10 +273,73 @@ impl<'a> JitContext<'a> {
             if dead {
                 state.take_virtual(dst);
                 state.discard_dead_elements(src);
-            } else {
+            } else if !(carries && !self.is_temp(dst)) {
                 self.materialize_virtual(state, ir, dst);
             }
         }
+    }
+
+    ///
+    /// Whether the merges the block ending at *bc_pos* branches into may
+    /// carry an elided object in a parameter slot (`doc/escape_analysis.md`
+    /// §3): a forward merge, compiled from the states of its branches
+    /// ([`JitContext::settle_entries`] reconciles them). A loop head is
+    /// not one: its back edge is a fixpoint over the body, and the body
+    /// is analysed from a head without objects, so every entry of a loop
+    /// materializes before branching. Nor is a dispatch arm, whose
+    /// per-arm branch merges with the fall-through (`declare_merge`).
+    ///
+    fn merge_carries_virtuals(&self, bc_pos: BcIndex) -> bool {
+        if self.in_dispatch_arm() {
+            return false;
+        }
+        let bb_info = &self.iseq().bb_info;
+        let bb = bb_info.get_bb_id(bc_pos);
+        bb_info
+            .succ(bb)
+            .iter()
+            .all(|s| bb_info.is_loop_begin(*s).is_none())
+    }
+
+    ///
+    /// Reconcile the elided objects the branch *entries* of a merge bring
+    /// in, before their states are joined: an object every entry carries
+    /// identically (same slot, same `VirtualSrc`) stays elided through the
+    /// merge; any other is materialized on its entry's bridge, in the
+    /// returned per-entry `AsmIr` the bridge is prepended with. At a loop
+    /// head every object is materialized (none is expected: the entries
+    /// settle before branching into one).
+    ///
+    pub(in crate::codegen::jitgen) fn settle_entries(
+        &mut self,
+        entries: &mut [BranchEntry],
+        loop_head: bool,
+    ) -> Vec<AsmIr> {
+        let common: Vec<(SlotId, VirtualSrc)> = if loop_head || entries.is_empty() {
+            vec![]
+        } else {
+            entries[0]
+                .state
+                .virtuals()
+                .iter()
+                .filter(|v| entries.iter().all(|e| e.state.virtuals().contains(v)))
+                .copied()
+                .collect()
+        };
+        entries
+            .iter_mut()
+            .map(|entry| {
+                let mut ir = AsmIr::new(self);
+                for (dst, _) in entry.state.virtuals().to_vec() {
+                    if common.iter().any(|(d, _)| *d == dst) {
+                        continue;
+                    }
+                    debug_assert!(!loop_head, "an elided object reached a loop head");
+                    self.materialize_virtual(&mut entry.state, &mut ir, dst);
+                }
+                ir
+            })
+            .collect()
     }
 
     ///
@@ -464,7 +535,7 @@ impl<'a> JitContext<'a> {
     /// Perform the allocation of the elided object in *dst* after all,
     /// exactly as its literal would have.
     ///
-    pub(super) fn materialize_virtual(
+    pub(in crate::codegen::jitgen) fn materialize_virtual(
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,

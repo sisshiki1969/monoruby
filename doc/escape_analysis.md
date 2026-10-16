@@ -144,7 +144,8 @@ by the instruction is
   - the instruction could overwrite an element slot (its stack top reaches
     the elements: bytecode temporaries are only written by pushes), or
     writes a local that is an elided Range's endpoint (`written_slot`);
-  - the instruction ends the basic block;
+  - the instruction ends the basic block (a parameter's object may be
+    carried into a forward merge instead, below);
   - the instruction can run Ruby code or reach a call — only `Mov`,
     `Literal`, `FrozenLiteral`, `Array` and the `InlineCache` word are
     survivable (`virtual_survives`).
@@ -160,21 +161,42 @@ object among the operands (no arm takes one over), and, under a sink,
 settles every live object of the frame as the block's end would
 (`settle_virtuals_before_branch`): a parameter's object would otherwise
 reach the branch target through an arm's side-branch state while the
-fall-through materializes it, and the join of the two would drop it. The
-join asserts (debug) that the innermost frame carries none.
+fall-through materializes it, and the join of the two would not keep
+both.
 
 A parameter holding a handed-over object (§6) follows the same rules but
-one: it survives its frame's calls. Its elements are in the caller's frame
-(or are a template), which no callee can reach, and the callee gate
-guarantees that nothing in the body can observe the parameter slot behind
-the compiler's back. It is dropped once nothing can read it any more
-(`local_live_after`: the rest of its block and every block reachable from
-there).
+two: it survives its frame's calls, and it survives a forward block
+boundary. Its elements are in the caller's frame (or are a template),
+which no callee can reach, and the callee gate guarantees that nothing in
+the body can observe the parameter slot behind the compiler's back. It is
+dropped once nothing can read it any more (`local_live_after`: the rest
+of its block and every block reachable from there).
+
+**Merges.** A block whose successors are all forward merges — none is a
+loop head, and the block is not a dispatch arm (`merge_carries_virtuals`)
+— leaves a live parameter's object elided in the state its branch entry
+carries. When the merge is compiled (`incoming_context`), the entries are
+reconciled first (`settle_entries`): an object every entry brings
+identically (same slot, same `VirtualSrc`) stays elided through the
+join, and any other is materialized on its entry's bridge, in a per-entry
+`AsmIr` the bridge is prepended with (`gen_bridges_for_branches`). The
+join itself then only ever meets equal tables (it asserts so, debug), and
+the merged state inherits them. This is what lets an optional parameter's
+prologue (`def f(a, b = 0) = a.max + b`, `def g(x: 1, **opts) = opts[:y]`),
+a guard clause (`return 0 if a.empty?`) or a `?:` before the use keep the
+object elided. A loop head is not such a merge: its back edge is a
+fixpoint over the body and the body is analysed from a head without
+objects, so every entry of a loop — the fall-through into it and its back
+edges — materializes before branching (`backedge_branches` asserts none
+arrives). A temporary's object never crosses a block boundary: it is
+materialized or dropped where its block ends, as before.
 
 The consequences are what keep the mechanism small:
 
-- **No merge sees an elided object.** Every block ends with none, so joins,
-  loop-head fixpoints and the branch bridges never have to reconcile one.
+- **A merge only ever sees equal elided objects.** A temporary's object
+  never reaches one, and a parameter's reaches it on every path or on
+  none, so joins and the branch bridges reconcile nothing; loop-head
+  fixpoints see no object at all.
 - **A suspended frame owes only handed-over objects.** An object with
   elements in the frame itself never lives across a call, so the
   chain-deopt replay stub (`gen_chain_replay_stub`) materializes exactly
@@ -220,11 +242,10 @@ in the caller's frame, which the caller spilled before the call
   immediates (`Literal`) has no element slots and is not affected.
 - **`Slots` objects and transparent callees.** Without a template there is
   no Array to hand a transparent callee; only the `elements` lowerings apply.
-- **Merges.** A handed-over object is materialized when its block ends
-  while it is still live, so a callee whose prologue branches before the
-  use — an optional parameter (`def f(a, b = 0) = a.max + b`,
-  `def g(x: 1, **opts) = opts[:y]`), a guard clause — allocates it after
-  all. Letting identical objects survive a join is the natural next step.
+- **Loops.** A handed-over object is materialized before a loop head
+  (`def f(*a); 3.times { }; a.max; end`), even when the loop body cannot
+  touch it; carrying one through a loop's fixpoint would need the body
+  analysed with it in place.
 - **Return values.** An elided object returned from a callee (`[x, y]`
   destructured by the caller) is materialized at the `ret`.
 - **Hash lookups by a non-constant key, or by a missing one.** `h[k]`
@@ -419,8 +440,7 @@ with `FrozenLiteral` (no per-execution copy), and the `FrozenLiteral`
 lowering routes a Range through `try_elide_literal` like a `Literal`;
 materializing the template — in the body, handed into a callee, at a side
 exit — yields the literal object itself (`value_deep_copy` returns a value
-of an always-frozen class unchanged), as the instruction would have.
-The fold and the inline compare stand in for `Integer#<=>`
+of an always-frozen class unchanged), as the instruction would have. The fold and the inline compare stand in for `Integer#<=>`
 (and `Float#<=>`), so they are taken under the basic-op license
 (`basic_op_assumable`, `record_bop_dep`) and the unit is evicted by a
 redefinition; the helpers re-check `cmp_redefined` at run time and
