@@ -197,11 +197,13 @@ The consequences are what keep the mechanism small:
   never reaches one, and a parameter's reaches it on every path or on
   none, so joins and the branch bridges reconcile nothing; loop-head
   fixpoints see no object at all.
-- **A suspended frame owes only handed-over objects.** An object with
-  elements in the frame itself never lives across a call, so the
-  chain-deopt replay stub (`gen_chain_replay_stub`) materializes exactly
-  `CallerSlots` (through the frame's saved bp or its window offset) and
-  `Literal` entries, and asserts the rest.
+- **A suspended frame owes only objects whose elements are safe.** A
+  temporary's object never lives across a call; a handed-over object's
+  elements are in the caller's frame, and a local's (§10) in the frame's
+  own scratch slots, so the chain-deopt replay stub
+  (`gen_chain_replay_stub`) materializes `CallerSlots` (through the
+  frame's saved bp or its window offset), `Literal`, and `Slots` /
+  `Range` entries (through the frame's lfp).
 - **Liveness comes from the stack top.** The bytecode's own per-instruction
   stack top says when a temporary's object is dead and when its elements
   can be clobbered; a parameter's reads are counted off the basic-block
@@ -228,10 +230,10 @@ in the caller's frame, which the caller spilled before the call
 
 ## 5. What is not covered (yet)
 
-- **Locals.** `x = [a, b]; x.max` is not elided: a local is readable from a
-  block or a binding, and lives across calls and blocks. (A parameter
-  holding a handed-over object is the exception, under the callee gate of
-  §6.)
+- **Locals** hold an object under the rules of §10: not in a body that
+  rescues or runs frameless, not while the frame may be captured, not
+  through a loop head, and an alias (`y = x` with `x` read again) builds
+  it.
 - **Elements overwritten before the use.** `[a, b].include?(c + 1)`
   evaluates `c + 1` into the first element's slot, so the object is
   materialized there. A local or literal argument (`include?(x)`) is passed
@@ -531,3 +533,102 @@ unit's callers are unknown code that needs a real `Value` in the return
 register), and a Range whose consuming use evaluates an argument into its
 slot after the return (`rng(x, x + 10).include?(x + 3)`, the §5
 clobbering).
+
+## 10. Locals: an object kept in a local variable, across calls
+
+`x = [a, b]; … x.max`, `r = (lo..hi); … r.include?(v)`, `opts = {a: 1};
+… opts[:a]`: the literal is assigned to a local, used later — after
+other statements, after calls — and never let out of the frame. The
+object is elided into the local and stays elided until something could
+observe it; the rules of §3 apply, with a local's lifetime (it survives
+the frame's calls, is dropped when nothing reads it any more, and
+crosses a forward merge) and the escape points below.
+
+**Scratch windows.** A temporary's elements stay in the temporaries the
+literal was built from, which the next push overwrites — so a local's
+object cannot keep its elements there across the statements that follow.
+The bytecode compiler reserves, for every local an Array literal (no
+splat, at most 8 elements) or a Range literal is assigned to, a *scratch
+window* as wide as the widest such literal: hidden temporaries above
+every temporary the bytecode uses (`BytecodeGen::local_scratch`,
+`ISeqInfo::local_scratch`, counted in `temp_num` and so nil-filled at
+entry like every register, at most 16 slots per iseq). The interpreter
+never reads them. When the JIT elides `x = [a, b]`, it copies the
+elements into `x`'s window and homes them there (`copy_to_scratch`); the
+object is `Slots { src: window, len }`, and every consuming lowering,
+side-exit write back and GC safepoint reads the window exactly as it
+would read a temporary's pinned elements. A Range's slot endpoints move
+into the window the same way (`RangeEnd::Slot(window + i)`), so a later
+write to the local the endpoint came from (`a = f(a)`, which
+`written_slot` would not see in a call) cannot change the Range. A
+literal of immediates needs no window.
+
+**The local gate** (`local_elision_ok`): the frame is proven on the stack
+and uncaptured (`no_capture_guard`), framed (a frameless window has no
+scratch of its own to address), and rescues nothing (a handler could
+read any local). Once a capture drops the invariant, no further object
+goes into a local until a capture guard re-proves it.
+
+**Escape points.** `settle_virtuals` materializes a local's object
+before
+
+- any instruction that reads the local without consuming it: a store
+  into an ivar, gvar, cvar or constant, an index store, an argument to a
+  call that is not specialized with the object handed over, a `ret` of
+  the root unit, a `Mov` that aliases it (`y = x` with `x` read again);
+- a call that could read the frame's locals behind the compiler's back
+  (`capture_point`): one resolved to a callee that captures its caller's
+  frame (`binding`, `eval`, `local_variables`) or resolved to nothing
+  the compiler can name (a generic `send`, which could be any of these)
+  materializes every object; one passing a block literal materializes
+  the objects of the locals the block, or a block nested in it, touches
+  (`touched_by_blocks`: a `LoadDynVar` / `StoreDynVar` of the local at
+  the block's depth — a store replaces the object behind the compiler's
+  back — a lambda literal, or a capturing or unresolved call inside the
+  block, which could reach the whole frame). The same check covers a
+  parameter's handed-over object;
+- a block boundary into a loop head, as any object (a forward merge
+  carries it, §3).
+
+Everything else — the frame's own calls to known callees, operators,
+instance-variable loads, loads of other locals — leaves the object in
+place: its elements are in the window, which nothing but the next
+literal into the same local writes. That write is the one way a window
+is refilled, and an object that moved out of the local into a temporary
+(`t = x` with `x` dead) still has its elements there, so
+`settle_virtuals` treats the window of a `Mov` / `Array` / `Range`
+destination as written and materializes any *other* object whose
+elements lie in it.
+
+**Moves** (`consume_virtual_mov`): `y = x` with `x` dead after the copy
+hands the object to `y` instead of building it — into a temporary as it
+is, into a local by copying its own-frame elements into `y`'s window
+(`mov_target_ok`: the window must be wide enough; a template or a
+handed-over object needs none; a `**kwrest` object is tied to its
+parameter's table and is built instead). Liveness is kill-aware
+(`local_live_after`, `defined_slot`): a write to the local before any
+read ends its life on that path, so `x = [a, b]; n = x.max; x = 1` and a
+literal rebuilt at the top of a loop body do not keep the previous
+object alive. An instruction that redefines the local without reading
+it (`x = 1..n`, `x = f(y)` over an elided `x`) drops the object the same
+way (`settle_virtuals`, `redefined`) instead of building it first.
+
+**Across calls.** The local's slot is `V` (the GC write back and any
+side exit `nil`-fill or build it), the window is homed, and the frame is
+on the chain. A chain deopt that converts the frame while it is
+suspended in a call builds the object from the window through the
+frame's lfp (`gen_chain_replay_stub`, `a64_gen_chain_replay_stub`:
+`Slots` and `Range` entries next to `CallerSlots` and `Literal`); a
+side exit in the frame itself does what it did for a temporary. An
+in-line build of a window-based `Slots` object uses `CreateArrayFrom`
+rather than the call site's `NewArray`, whose cold path reads the
+literal's original argument temporaries, long since overwritten. A
+specialized callee's `return x` hands the local's object back as §9
+describes, its elements copied out of the window.
+
+**Not carried**: through a loop head (the body is analysed from a head
+without objects); an alias that keeps both names live; an object
+returned into a local of the caller (`x = pair(a, b)` needs the slots
+above the destination, §9); a transparent callee on a literal of
+immediates that stays live (`opts.key?(:a)` twice: the first call
+builds the Hash); a local of a frameless callee.

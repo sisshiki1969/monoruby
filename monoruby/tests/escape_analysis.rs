@@ -1716,3 +1716,294 @@ fn discarded_return_never_built() {
         "#,
     );
 }
+
+#[test]
+fn local_holds_an_elided_object_across_uses_and_calls() {
+    // `x = [a, b]`: the object lives in the local, its elements in the
+    // local's scratch window, through several uses and across calls the
+    // compiler knows cannot see the frame.
+    run_test(
+        r#"
+        def g(i) = i + 1
+        def f(a, b)
+          x = [a, b]
+          n = x.max
+          n += g(a)
+          n += x.first + x.last
+          n += x.size
+          r = (a..b)
+          n += g(b)
+          n += 1 if r.include?(a + 1)
+          n += r.size
+          h = {k: 1, v: 2}
+          n += g(n)
+          n += h[:k] + h.size
+          e = []
+          n += g(1)
+          n + e.size
+        end
+        res = []
+        20.times { |i| res << f(i, i + 3) }
+        res << f(1, 1.5.floor)
+        res
+        "#,
+    );
+}
+
+#[test]
+fn local_object_moved_and_reassigned() {
+    // `y = x` with `x` dead moves the object; `y = x` with `x` still read
+    // (an alias) builds it, and both see the same Array. A local
+    // reassigned with another literal reuses its window.
+    run_test(
+        r#"
+        def f(a, b)
+          t = [a, b]
+          x = t
+          n = x.max
+          x = [b, a, n]
+          n += x.last
+          y = x
+          y << 1
+          n += x.size + y.size
+          r = (a...b)
+          s = r
+          n + (s.include?(a) ? 10 : 0)
+        end
+        res = []
+        20.times { |i| res << f(i, i + 2) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn local_object_escaping_uses_see_a_real_object() {
+    // Every store that lets a local's object out of the frame builds it
+    // first: an ivar, a gvar, a constant, a class variable, an index
+    // store, an argument to a native callee, a return from the root.
+    run_test(
+        r#"
+        class C
+          @@cv = nil
+          def f(a, b)
+            x = [a, b]
+            @iv = x
+            n = x.max
+            y = [b, a]
+            $gv = y
+            z = [a, a]
+            @@cv = z
+            w = [b, b]
+            w[0] = n
+            u = [a, n]
+            Kernel.send(:format, "%d", u.size)
+            v = (a..b)
+            $rg = v
+            [n, @iv.sum, $gv.sum, @@cv.sum, w.sum, u.sum, $rg.sum]
+          end
+        end
+        res = []
+        c = C.new
+        20.times { |i| res << c.f(i, i + 3) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn local_object_materialized_before_a_capture() {
+    // A block literal, a `binding`, an `eval` and a generic `send` can
+    // all reach the frame's locals, so an object a local holds is built
+    // before any of them, and what they see is the real Array.
+    run_test(
+        r#"
+        def f(a, b)
+          x = [a, b]
+          n = x.max
+          s = 0
+          2.times { |i| s += x.size + i }
+          y = [b, a]
+          bd = binding
+          n += bd.local_variable_get(:y).first
+          z = [a, a, b]
+          n += eval("z.size")
+          w = [b, b]
+          bd2 = send(:binding)
+          n += bd2.local_variable_get(:w).sum
+          v = (a..b)
+          3.times { |i| s += v.include?(i) ? 1 : 0 }
+          n + s + y.max
+        end
+        res = []
+        20.times { |i| res << f(i, i + 2) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn local_object_around_loops_and_branches() {
+    // Built before a loop head; kept through a forward merge; a literal
+    // inside a loop body is consumed in the body.
+    run_test(
+        r#"
+        def f(a, b)
+          x = [a, b]
+          i = 0
+          while i < 3
+            i += 1
+          end
+          n = x.max + i
+          y = a > 3 ? [a, 1] : [b, 2]
+          n += y.first
+          z = [a, b]
+          n += z.size if a > 1
+          n += z.max
+          i = 0
+          while i < 4
+            p = [i, a]
+            n += p.max
+            i += 1
+          end
+          r = (a..b)
+          n += r.sum if b > a
+          n
+        end
+        res = []
+        20.times { |i| res << f(i, i + 3) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn side_exit_and_chain_deopt_with_a_local_object_pending() {
+    // A type guard deopts while a local still holds its object (the
+    // side exit allocates it); a basic-op redefinition inside a callee
+    // converts the suspended caller frame by chain, which has to build
+    // the object from the frame's own scratch slots.
+    run_test_once(
+        r#"
+        def f(a, c)
+          x = [a, 1]
+          r = (a..a + 2)
+          d = c + 1
+          x.max + d + (r.include?(d) ? 1 : 0)
+        end
+        res = []
+        30.times { |i| res << f(i, i) }
+        res << f(2, 2.5)
+        res << f("z".size, 1)
+        res
+        "#,
+    );
+    run_test_once(
+        r#"
+        $redef = proc do
+          class Integer
+            def +(o) = 1000
+          end
+        end
+        def g(i)
+          $redef.call if i == 25
+          i
+        end
+        def f(a)
+          x = [a, 7]
+          r = (a..a + 2)
+          g(a)
+          x.max + r.sum
+        end
+        res = []
+        40.times { |i| res << f(i) }
+        res.last(20)
+        "#,
+    );
+}
+
+#[test]
+fn local_object_in_blocks_and_returned_from_a_callee() {
+    // A block's own local holds an object; a specialized callee returns
+    // the object its local holds, elided, into the call site.
+    run_test(
+        r#"
+        def pair(a, b)
+          x = [a, b]
+          x
+        end
+        def rng(a, b)
+          r = (a..b)
+          r
+        end
+        def f(a, b)
+          s = 0
+          3.times { |i| x = [i, a]; s += x.max }
+          s += pair(a, b).max
+          c, d = pair(b, a)
+          s += c - d
+          s += rng(a, b).size
+          s
+        end
+        res = []
+        20.times { |i| res << f(i, i + 2) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn local_object_with_a_handler_or_a_frameless_body() {
+    // A body that rescues keeps allocating (the handler could read any
+    // local); the result is the same either way.
+    run_test(
+        r#"
+        def f(a, b)
+          x = [a, b]
+          y = x.max
+          raise "boom" if a == 5
+          y + x.size
+        rescue
+          x.sum
+        end
+        def small(a, b)
+          x = [a, b]
+          x.max
+        end
+        res = []
+        20.times { |i| res << f(i, i + 1) << small(i, 3) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn local_object_written_by_a_block_or_replaced() {
+    // A block literal that assigns the local replaces the object behind
+    // the compiler's back: it is real by the time the block runs. A local
+    // redefined without being read drops its elided object instead.
+    run_test_once(
+        r##"
+        def each3
+          yield 1; yield 2; yield 3
+        end
+        def f(n)
+          x = [n, n + 1]
+          each3 { |i| x = [i, i] if i == 2 }
+          y = 1..n
+          y = [n, n, n]
+          [x.sum, y.size]
+        end
+        def g(n)
+          r = n..n + 9
+          r = [n]
+          s = [n, n + 1]
+          s = (s.first..s.last)
+          [r.size, s.size]
+        end
+        res = []
+        40.times { |i| res << f(i) << g(i) }
+        res
+        "##,
+    );
+}

@@ -2002,9 +2002,10 @@ impl JitModule {
         // parameter (`doc/escape_analysis.md` §6): its un-built rest
         // `Array` or an elided literal with elements in the frame's *own*
         // caller (`VirtualSrc::CallerSlots`, reached through the bp it
-        // saved — `[rsi]`, matching `caller_slot_addr`'s `[rbp]`), or a
-        // literal template (`VirtualSrc::Literal`). An object with elements
-        // in the frame itself never lives across a call (`virtual_survives`).
+        // saved — `[rsi]`, matching `caller_slot_addr`'s `[rbp]`), a
+        // literal template (`VirtualSrc::Literal`), or one a local holds
+        // with its elements in the frame's own scratch slots (`Slots`,
+        // `Range`; reached through `rdx`, the frame's lfp — §10).
         for (dst, src) in wb.virtual_obj_entries() {
             monoasm! { &mut *self,
                 pushq rdi;
@@ -2040,14 +2041,44 @@ impl JitModule {
                         call  rax;
                     }
                 }
-                VirtualSrc::Slots { .. } => {
-                    unreachable!("an elided literal in a temporary never lives across a call")
+                // An object a local holds (`doc/escape_analysis.md` §10):
+                // its elements, or its Range's endpoints, are in the
+                // frame's own scratch slots, reached through its lfp.
+                VirtualSrc::Slots { src, len, .. } => {
+                    monoasm! { &mut *self,
+                        lea   rdi, [rdx - (conv(src))];
+                        movq  rsi, (len as usize);
+                        movq  rax, (runtime::create_array);
+                        call  rax;
+                    }
+                }
+                VirtualSrc::Range {
+                    start,
+                    end,
+                    exclude_end,
+                } => {
+                    for (reg, end) in [(GP::Rdi, start), (GP::Rsi, end)] {
+                        match end {
+                            RangeEnd::Const(v) => {
+                                monoasm! { &mut *self,
+                                    movq R(reg as _), (v.id());
+                                }
+                            }
+                            RangeEnd::Slot(slot) => {
+                                monoasm! { &mut *self,
+                                    movq R(reg as _), [rdx - (conv(slot))];
+                                }
+                            }
+                        }
+                    }
+                    monoasm! { &mut *self,
+                        movl  rdx, (exclude_end as u32);
+                        movq  rax, (runtime::create_range);
+                        call  rax;
+                    }
                 }
                 VirtualSrc::CallerKw { .. } => {
                     unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
-                }
-                VirtualSrc::Range { .. } => {
-                    unreachable!("an elided Range in a temporary never lives across a call")
                 }
             }
             monoasm! { &mut *self,

@@ -1055,6 +1055,14 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
             }
             TraceIr::Mov(dst, src) => {
+                // An elided object moving into `dst`
+                // (`doc/escape_analysis.md` §10; `settle_virtuals` has
+                // materialized any the move may not take).
+                if state.virtual_at(src).is_some() {
+                    self.consume_virtual_mov(state, ir, dst, src);
+                    self.restore_unfrozen(Some(dst));
+                    return Ok(CompileResult::Continue);
+                }
                 // GP-aware for a stack-homed or constant `src`: the copy
                 // becomes a shared GP register (see `copy_slot`), so the
                 // residents stay live across it. The fpr forms read `src`'s
