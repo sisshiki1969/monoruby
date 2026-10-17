@@ -4,8 +4,8 @@
 //!
 //! **Layer A — [`SlotAnalysis`]**: what the bytecode alone decides. The
 //! slots each instruction reads and the one it defines, the basic blocks'
-//! live-in / live-out sets with no capture counted, and what the block
-//! literals of the frame can do to its locals. Built once per iseq, the
+//! use and def sets, and what the block literals of the frame can do to
+//! its locals. Built once per iseq, the
 //! first time the JIT needs it, and kept in `ISeqInfo::slot_analysis`:
 //! the bytecode is never rewritten after it is installed (the inline
 //! caches patch operand words, never the shape of an instruction), so the
@@ -16,14 +16,11 @@
 //! capture point ([`JitContext::capture_point`], a `MethodCache` verdict)
 //! and whether the calls inside the frame's blocks are all resolved. Built
 //! per compilation unit per iseq from Layer A's summaries, with one
-//! dataflow pass that counts a capture point as a read of every local it
-//! may reach.
+//! backward liveness dataflow over the basic blocks that counts a capture
+//! point as a read of every local it may reach.
 //!
-//! Both layers answer the same questions the forward scans of
-//! `compile/escape.rs` answer by re-decoding the bytecode on every call
-//! (`local_live_after`, `dead_after`, `touched_by_blocks`,
-//! `alias_consumed_by_call`); for now the scans stay the live answer and
-//! the tables are checked against them (`debug_assert`).
+//! `local_live_after`, `touched_by_blocks` and `alias_consumed_by_call`
+//! in `compile/escape.rs` are lookups in these tables.
 //!
 
 use super::compile::escape::Capture;
@@ -68,10 +65,6 @@ impl SlotSet {
         }
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.words.iter().all(|w| *w == 0)
-    }
-
     /// `self |= other`; whether anything changed.
     pub(crate) fn union_with(&mut self, other: &SlotSet) -> bool {
         let mut changed = false;
@@ -90,6 +83,7 @@ impl SlotSet {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn iter(&self) -> impl Iterator<Item = SlotId> + '_ {
         self.words.iter().enumerate().flat_map(|(wi, w)| {
             (0..64)
@@ -143,8 +137,6 @@ pub(crate) struct SlotAnalysis {
     bb_use: Vec<SlotSet>,
     /// Per basic block: the slots it writes (`InstSummary::def`).
     bb_def: Vec<SlotSet>,
-    /// Per basic block: live at its exit, counting no capture.
-    live_out: Vec<SlotSet>,
     /// The locals a block literal of this frame (or a block nested in one)
     /// reads or writes through the outer chain (`LoadDynVar` /
     /// `StoreDynVar` at the block's depth).
@@ -175,7 +167,6 @@ impl SlotAnalysis {
                 insts: vec![],
                 bb_use: vec![],
                 bb_def: vec![],
-                live_out: vec![],
                 block_touched: SlotSet::empty(total_reg_num),
                 block_opaque: false,
                 block_calls: vec![],
@@ -219,8 +210,6 @@ impl SlotAnalysis {
                 }
             }
         }
-        let live_out = Self::dataflow(bb_info, &bb_use, &bb_def, total_reg_num);
-
         // The blocks of this frame: what they touch through the outer
         // chain, and the calls in them.
         let mut block_touched = SlotSet::empty(total_reg_num);
@@ -269,7 +258,6 @@ impl SlotAnalysis {
             insts,
             bb_use,
             bb_def,
-            live_out,
             block_touched,
             block_opaque,
             block_calls,
@@ -500,7 +488,6 @@ mod tests {
     #[test]
     fn slot_set_ops() {
         let mut a = SlotSet::empty(70);
-        assert!(a.is_empty());
         a.insert(SlotId(3));
         a.insert(SlotId(69));
         a.insert(SlotId(200)); // beyond the frame: ignored

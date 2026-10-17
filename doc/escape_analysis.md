@@ -669,8 +669,7 @@ answered by forward scans that re-decode the bytecode on every call
 instruction, the slots it reads (`TraceIr::read_slots`) and the one it
 defines without reading (`TraceIr::defined_slot`; an instruction whose
 destination is not plain is neither a read nor a kill). Per basic block,
-the use and def sets and the live-out set of a backward dataflow over
-`BasicBlockInfo::succ` that counts no capture. And what the frame's
+the use and def sets. And what the frame's
 block literals (and blocks nested in them) do to its locals: the slots
 they reach through the outer chain (`LoadDynVar` / `StoreDynVar` at the
 block's depth), whether one of them is opaque (a handler, whose
@@ -693,7 +692,8 @@ caller. Per compilation unit and per iseq, Layer B reads those verdicts
 once, forms the set of locals the blocks may touch (Layer A's set, or
 every slot when a block is opaque or holds an unresolved call), adds a
 capture point's reads (every slot for `Frame`, the touched set for
-`Block`) to the use sets, and runs the same dataflow again. The
+`Block`) to the use sets, and runs a backward liveness dataflow over
+`BasicBlockInfo::succ` for the blocks' live-out sets. The
 compilation sees one state of the caches throughout (it runs no Ruby
 code), so the table is built when first asked for and shared with the
 analysis clones (`JitContext::unit_liveness`).
@@ -705,7 +705,7 @@ temporary's view may be consumed by is `SlotAnalysis::alias_stop`; the
 call-site and receiver-class conditions of `alias_consumed_by_call` are
 checked on it as before.
 
-For now the scans are still the live answer and the tables are checked
-against them on every call in a debug build (`debug_assert_eq!` in
-`local_live_after`, `touched_by_blocks`, `alias_consumed_by_call`); the
-next step replaces the scans with the tables.
+`local_live_after`, `touched_by_blocks` and `alias_consumed_by_call`
+are table lookups; the forward scans they replaced were checked against
+the tables, call for call, on the whole test suite, ruby/spec core and
+optcarrot before being removed.
