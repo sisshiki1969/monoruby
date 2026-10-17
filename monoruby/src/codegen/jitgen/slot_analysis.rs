@@ -5,11 +5,13 @@
 //! **Layer A — [`SlotAnalysis`]**: what the bytecode alone decides. The
 //! slots each instruction reads and the one it defines, the basic blocks'
 //! use and def sets, and what the block literals of the frame can do to
-//! its locals. Built once per iseq, the
-//! first time the JIT needs it, and kept in `ISeqInfo::slot_analysis`:
-//! the bytecode is never rewritten after it is installed (the inline
-//! caches patch operand words, never the shape of an instruction), so the
-//! table is never invalidated.
+//! its locals. Built once per iseq, the first time the JIT needs it, and
+//! kept in `ISeqInfo::slot_analysis`: the bytecode is never rewritten
+//! after it is installed (the inline caches patch operand words, never
+//! the shape of an instruction), so the table is never invalidated. It
+//! is kept small, since it lives as long as the iseq: a summary is 16
+//! bytes, the reads of all instructions share one vector, and the
+//! per-block sets share one bit matrix.
 //!
 //! **Layer B — [`UnitLiveness`]**: what the inline caches decide, which
 //! may differ from one compilation to the next: whether a call is a
@@ -51,36 +53,22 @@ impl SlotSet {
     }
 
     pub(crate) fn contains(&self, slot: SlotId) -> bool {
-        let i = slot.0 as usize;
-        self.words
-            .get(i / 64)
-            .is_some_and(|w| w & (1u64 << (i % 64)) != 0)
+        word_contains(&self.words, slot)
     }
 
     /// Insert *slot*; a slot beyond the frame is ignored.
     pub(crate) fn insert(&mut self, slot: SlotId) {
-        let i = slot.0 as usize;
-        if let Some(w) = self.words.get_mut(i / 64) {
-            *w |= 1u64 << (i % 64);
-        }
+        word_insert(&mut self.words, slot);
     }
 
     /// `self |= other`; whether anything changed.
     pub(crate) fn union_with(&mut self, other: &SlotSet) -> bool {
-        let mut changed = false;
-        for (a, b) in self.words.iter_mut().zip(other.words.iter()) {
-            let n = *a | *b;
-            changed |= n != *a;
-            *a = n;
-        }
-        changed
+        word_union(&mut self.words, &other.words)
     }
 
     /// `self -= other`.
     pub(crate) fn difference_with(&mut self, other: &SlotSet) {
-        for (a, b) in self.words.iter_mut().zip(other.words.iter()) {
-            *a &= !*b;
-        }
+        word_difference(&mut self.words, &other.words);
     }
 
     #[cfg(test)]
@@ -93,30 +81,107 @@ impl SlotSet {
     }
 }
 
-///
-/// What one instruction does to this frame's slots.
-///
-#[derive(Clone, Debug, Default)]
-pub(crate) struct InstSummary {
-    /// The slots it reads (`TraceIr::read_slots`), with repetitions: a
-    /// call reading its receiver and the same slot as an argument lists
-    /// it twice.
-    pub(crate) reads: smallvec::SmallVec<[SlotId; 6]>,
-    /// The slot it defines without reading (`TraceIr::defined_slot`):
-    /// `None` for an instruction whose destination is not plain, which is
-    /// neither a read nor a kill.
-    pub(crate) def: Option<SlotId>,
-    /// The call site, for a method call.
-    pub(crate) call: Option<CallSiteId>,
+fn word_contains(words: &[u64], slot: SlotId) -> bool {
+    let i = slot.0 as usize;
+    words
+        .get(i / 64)
+        .is_some_and(|w| w & (1u64 << (i % 64)) != 0)
 }
 
-impl InstSummary {
-    pub(crate) fn reads(&self, slot: SlotId) -> bool {
-        self.reads.contains(&slot)
+fn word_insert(words: &mut [u64], slot: SlotId) {
+    let i = slot.0 as usize;
+    if let Some(w) = words.get_mut(i / 64) {
+        *w |= 1u64 << (i % 64);
+    }
+}
+
+fn word_union(words: &mut [u64], other: &[u64]) -> bool {
+    let mut changed = false;
+    for (a, b) in words.iter_mut().zip(other) {
+        let n = *a | *b;
+        changed |= n != *a;
+        *a = n;
+    }
+    changed
+}
+
+fn word_difference(words: &mut [u64], other: &[u64]) {
+    for (a, b) in words.iter_mut().zip(other) {
+        *a &= !*b;
+    }
+}
+
+///
+/// One slot set per basic block, in one allocation.
+///
+#[derive(Clone, Debug)]
+pub(crate) struct SlotSets {
+    per_set: usize,
+    words: Box<[u64]>,
+}
+
+impl SlotSets {
+    fn empty(sets: usize, total_reg_num: usize) -> Self {
+        let per_set = total_reg_num.div_ceil(64);
+        Self {
+            per_set,
+            words: vec![0; sets * per_set].into_boxed_slice(),
+        }
     }
 
-    pub(crate) fn read_count(&self, slot: SlotId) -> usize {
-        self.reads.iter().filter(|s| **s == slot).count()
+    fn len(&self) -> usize {
+        if self.per_set == 0 {
+            0
+        } else {
+            self.words.len() / self.per_set
+        }
+    }
+
+    fn row(&self, b: usize) -> &[u64] {
+        &self.words[b * self.per_set..(b + 1) * self.per_set]
+    }
+
+    fn row_mut(&mut self, b: usize) -> &mut [u64] {
+        &mut self.words[b * self.per_set..(b + 1) * self.per_set]
+    }
+
+    pub(crate) fn contains(&self, b: usize, slot: SlotId) -> bool {
+        word_contains(self.row(b), slot)
+    }
+
+    fn insert(&mut self, b: usize, slot: SlotId) {
+        word_insert(self.row_mut(b), slot);
+    }
+}
+
+///
+/// What one instruction does to this frame's slots. 16 bytes: its reads
+/// are a window of [`SlotAnalysis::reads`].
+///
+#[derive(Clone, Copy, Debug)]
+struct InstSummary {
+    reads_start: u32,
+    reads_len: u16,
+    /// The slot it defines without reading (`TraceIr::defined_slot`), or
+    /// `NO_SLOT` for an instruction whose destination is not plain, which
+    /// is neither a read nor a kill.
+    def: u16,
+    /// The call site, for a method call.
+    call: Option<CallSiteId>,
+}
+
+const NO_SLOT: u16 = u16::MAX;
+
+impl InstSummary {
+    const EMPTY: Self = Self {
+        reads_start: 0,
+        reads_len: 0,
+        def: NO_SLOT,
+        call: None,
+    };
+
+    fn def(&self) -> Option<SlotId> {
+        (self.def != NO_SLOT).then_some(SlotId(self.def))
     }
 }
 
@@ -128,15 +193,20 @@ impl InstSummary {
 pub(crate) struct SlotAnalysis {
     total_reg_num: usize,
     /// Every local may be read at any point: the iseq rescues, and a
-    /// handler block (whose instructions the JIT cannot decode) could
-    /// read anything. The other tables are empty then.
+    /// handler block could read anything. The tables are still built
+    /// (the handler-only instructions as empty summaries) for the
+    /// questions that stay local to a basic block.
     all_live: bool,
     /// Per instruction, by `BcIndex`.
-    insts: Vec<InstSummary>,
+    insts: Box<[InstSummary]>,
+    /// The slots every instruction reads (`TraceIr::read_slots`), with
+    /// repetitions: a call reading its receiver and the same slot as an
+    /// argument lists it twice.
+    reads: Box<[SlotId]>,
     /// Per basic block: the slots read before being written in it.
-    bb_use: Vec<SlotSet>,
+    bb_use: SlotSets,
     /// Per basic block: the slots it writes (`InstSummary::def`).
-    bb_def: Vec<SlotSet>,
+    bb_def: SlotSets,
     /// The locals a block literal of this frame (or a block nested in one)
     /// reads or writes through the outer chain (`LoadDynVar` /
     /// `StoreDynVar` at the block's depth).
@@ -149,7 +219,7 @@ pub(crate) struct SlotAnalysis {
     /// The method calls inside the frame's blocks, by the block's iseq and
     /// position. Whether each is resolved to a callee that cannot capture
     /// its caller is an inline-cache verdict, left to Layer B.
-    block_calls: Vec<(ISeqId, BcIndex)>,
+    block_calls: Box<[(ISeqId, BcIndex)]>,
 }
 
 impl SlotAnalysis {
@@ -160,53 +230,48 @@ impl SlotAnalysis {
     pub(crate) fn new(store: &Store, iseq_id: ISeqId) -> Self {
         let iseq = &store[iseq_id];
         let total_reg_num = iseq.total_reg_num();
-        if iseq.has_exception_handler() {
-            return Self {
-                total_reg_num,
-                all_live: true,
-                insts: vec![],
-                bb_use: vec![],
-                bb_def: vec![],
-                block_touched: SlotSet::empty(total_reg_num),
-                block_opaque: false,
-                block_calls: vec![],
-            };
-        }
         let len = iseq.bytecode().len();
         let mut insts = Vec::with_capacity(len);
+        let mut reads: Vec<SlotId> = vec![];
         for i in 0..len {
-            let ir = TraceIr::from_pc(iseq.get_pc(BcIndex::from(i)), store);
+            let pc = iseq.get_pc(BcIndex::from(i));
+            if TraceIr::is_handler_only(pc) {
+                // Not decodable, and in a handler block the JIT never
+                // reaches: neither a read nor a kill of anything.
+                insts.push(InstSummary::EMPTY);
+                continue;
+            }
+            let ir = TraceIr::from_pc(pc, store);
             let call = match &ir {
                 TraceIr::MethodCall { callid, .. } => Some(*callid),
                 _ => None,
             };
+            let reads_start = reads.len() as u32;
+            reads.extend(ir.read_slots(store));
             insts.push(InstSummary {
-                reads: ir.read_slots(store).into_iter().collect(),
-                def: ir.defined_slot(store),
+                reads_start,
+                reads_len: (reads.len() - reads_start as usize) as u16,
+                def: ir.defined_slot(store).map_or(NO_SLOT, |s| s.0),
                 call,
             });
         }
 
-        // Per-block use / def, then the backward dataflow:
-        //   live_in(b)  = use(b) ∪ (live_out(b) − def(b))
-        //   live_out(b) = ∪ live_in(s) over the successors s of b.
-        // Blocks are in source order, so sweeping them backwards
-        // converges in a few passes.
+        // Per-block use / def.
         let bb_info = &iseq.bb_info;
         let nbb = bb_info.len();
-        let mut bb_use = vec![SlotSet::empty(total_reg_num); nbb];
-        let mut bb_def = vec![SlotSet::empty(total_reg_num); nbb];
+        let mut bb_use = SlotSets::empty(nbb, total_reg_num);
+        let mut bb_def = SlotSets::empty(nbb, total_reg_num);
         for b in 0..nbb {
             let entry = &bb_info[BasicBlockId(b as u32)];
             for i in entry.begin.to_usize()..=entry.end.to_usize() {
                 let inst = &insts[i];
-                for r in inst.reads.iter() {
-                    if !bb_def[b].contains(*r) {
-                        bb_use[b].insert(*r);
+                for r in &reads[inst.reads_start as usize..][..inst.reads_len as usize] {
+                    if !bb_def.contains(b, *r) {
+                        bb_use.insert(b, *r);
                     }
                 }
-                if let Some(d) = inst.def {
-                    bb_def[b].insert(d);
+                if let Some(d) = inst.def() {
+                    bb_def.insert(b, d);
                 }
             }
         }
@@ -223,7 +288,11 @@ impl SlotAnalysis {
                 break 'walk;
             }
             for i in 0..block.bytecode().len() {
-                match TraceIr::from_pc(block.get_pc(BcIndex::from(i)), store) {
+                let pc = block.get_pc(BcIndex::from(i));
+                if TraceIr::is_handler_only(pc) {
+                    continue;
+                }
+                match TraceIr::from_pc(pc, store) {
                     TraceIr::LoadDynVar(_, DynVar { reg, outer })
                     | TraceIr::StoreDynVar(DynVar { reg, outer }, _)
                         if depth > 0 && outer == depth =>
@@ -254,37 +323,44 @@ impl SlotAnalysis {
 
         Self {
             total_reg_num,
-            all_live: false,
-            insts,
+            all_live: iseq.has_exception_handler(),
+            insts: insts.into_boxed_slice(),
+            reads: reads.into_boxed_slice(),
             bb_use,
             bb_def,
             block_touched,
             block_opaque,
-            block_calls,
+            block_calls: block_calls.into_boxed_slice(),
         }
     }
 
-    fn dataflow(
-        bb_info: &BasicBlockInfo,
-        bb_use: &[SlotSet],
-        bb_def: &[SlotSet],
-        total_reg_num: usize,
-    ) -> Vec<SlotSet> {
+    ///
+    /// The backward dataflow
+    ///   live_in(b)  = use(b) ∪ (live_out(b) − def(b))
+    ///   live_out(b) = ∪ live_in(s) over the successors s of b,
+    /// to a fixpoint. Blocks are in source order, so sweeping them
+    /// backwards converges in a few passes.
+    ///
+    fn dataflow(bb_info: &BasicBlockInfo, bb_use: &SlotSets, bb_def: &SlotSets) -> SlotSets {
         let nbb = bb_use.len();
-        let mut live_in = vec![SlotSet::empty(total_reg_num); nbb];
-        let mut live_out = vec![SlotSet::empty(total_reg_num); nbb];
+        let per_set = bb_use.per_set;
+        let mut live_in = bb_use.clone();
+        live_in.words.fill(0);
+        let mut live_out = live_in.clone();
+        let mut out = vec![0u64; per_set];
+        let mut inp = vec![0u64; per_set];
         loop {
             let mut changed = false;
             for b in (0..nbb).rev() {
-                let mut out = SlotSet::empty(total_reg_num);
+                out.fill(0);
                 for s in bb_info.succ(BasicBlockId(b as u32)) {
-                    out.union_with(&live_in[s.index()]);
+                    word_union(&mut out, live_in.row(s.index()));
                 }
-                let mut inp = out.clone();
-                inp.difference_with(&bb_def[b]);
-                inp.union_with(&bb_use[b]);
-                changed |= live_out[b].union_with(&out);
-                changed |= live_in[b].union_with(&inp);
+                inp.copy_from_slice(&out);
+                word_difference(&mut inp, bb_def.row(b));
+                word_union(&mut inp, bb_use.row(b));
+                changed |= word_union(live_out.row_mut(b), &out);
+                changed |= word_union(live_in.row_mut(b), &inp);
             }
             if !changed {
                 break;
@@ -301,8 +377,20 @@ impl SlotAnalysis {
         self.all_live
     }
 
-    pub(crate) fn inst(&self, pos: BcIndex) -> &InstSummary {
-        &self.insts[pos.to_usize()]
+    /// The slots the instruction at *pos* reads, with repetitions.
+    pub(crate) fn reads(&self, pos: BcIndex) -> &[SlotId] {
+        let inst = &self.insts[pos.to_usize()];
+        &self.reads[inst.reads_start as usize..][..inst.reads_len as usize]
+    }
+
+    /// The slot the instruction at *pos* defines without reading.
+    pub(crate) fn def(&self, pos: BcIndex) -> Option<SlotId> {
+        self.insts[pos.to_usize()].def()
+    }
+
+    /// The call site of the instruction at *pos*, for a method call.
+    pub(crate) fn call(&self, pos: BcIndex) -> Option<CallSiteId> {
+        self.insts[pos.to_usize()].call
     }
 
     ///
@@ -321,11 +409,11 @@ impl SlotAnalysis {
     ) -> Option<BcIndex> {
         let end = bb_info[bb_info.get_bb_id(pos)].end;
         for i in pos.to_usize() + 1..=end.to_usize() {
-            let inst = &self.insts[i];
-            if inst.call.is_some() {
-                return Some(BcIndex::from(i));
+            let i = BcIndex::from(i);
+            if self.call(i).is_some() {
+                return Some(i);
             }
-            if inst.reads(dst) || !inst.def.is_some_and(|d| d != dst) {
+            if self.reads(i).contains(&dst) || !self.def(i).is_some_and(|d| d != dst) {
                 return None;
             }
         }
@@ -345,7 +433,7 @@ pub(crate) struct UnitLiveness {
     /// call this compilation cannot resolve to a non-capturing callee.
     touched: SlotSet,
     /// Per basic block: live at its exit, the capture reads counted.
-    live_out: Vec<SlotSet>,
+    live_out: SlotSets,
 }
 
 impl<'a> JitContext<'a> {
@@ -379,7 +467,7 @@ impl<'a> JitContext<'a> {
             let ir = TraceIr::from_pc(self.store[*bid].get_pc(*pos), self.store);
             !self.call_resolved_non_capturing(&ir)
         });
-        let touched = if a.all_live() || a.block_opaque || unresolved {
+        let touched = if a.block_opaque || unresolved {
             SlotSet::full(n)
         } else {
             a.block_touched.clone()
@@ -390,35 +478,35 @@ impl<'a> JitContext<'a> {
         let bb_info = &iseq.bb_info;
         let mut captures = vec![None; a.insts.len()];
         let mut bb_use = a.bb_use.clone();
+        let full = SlotSet::full(n);
+        let mut defined = SlotSet::empty(n);
+        let mut extra = SlotSet::empty(n);
         for b in 0..bb_use.len() {
             let entry = &bb_info[BasicBlockId(b as u32)];
             // Slots written so far in the block: a capture read of one of
             // them is not a use of the block's live-in value.
-            let mut defined = SlotSet::empty(n);
+            defined.words.fill(0);
             for i in entry.begin.to_usize()..=entry.end.to_usize() {
-                let inst = &a.insts[i];
-                if inst.call.is_some() {
-                    let ir = TraceIr::from_pc(iseq.get_pc(BcIndex::from(i)), self.store);
+                let pos = BcIndex::from(i);
+                if a.call(pos).is_some() {
+                    let ir = TraceIr::from_pc(iseq.get_pc(pos), self.store);
                     let capture = self.capture_point(&ir);
                     captures[i] = capture;
-                    let read: Option<&SlotSet> = match capture {
-                        Some(Capture::Frame) => None,
-                        Some(Capture::Block) => Some(&touched),
+                    let read = match capture {
+                        Some(Capture::Frame) => &full,
+                        Some(Capture::Block) => &touched,
                         None => continue,
                     };
-                    let mut extra = match read {
-                        Some(set) => set.clone(),
-                        None => SlotSet::full(n),
-                    };
+                    extra.words.copy_from_slice(&read.words);
                     extra.difference_with(&defined);
-                    bb_use[b].union_with(&extra);
+                    word_union(bb_use.row_mut(b), &extra.words);
                 }
-                if let Some(d) = inst.def {
+                if let Some(d) = a.def(pos) {
                     defined.insert(d);
                 }
             }
         }
-        let live_out = SlotAnalysis::dataflow(bb_info, &bb_use, &a.bb_def, n);
+        let live_out = SlotAnalysis::dataflow(bb_info, &bb_use, &a.bb_def);
         UnitLiveness {
             captures,
             touched,
@@ -456,20 +544,20 @@ impl<'a> JitContext<'a> {
         let bb = bb_info.get_bb_id(bc_pos);
         let end = bb_info[bb].end;
         for i in bc_pos.to_usize() + 1..=end.to_usize() {
-            let inst = a.inst(BcIndex::from(i));
+            let pos = BcIndex::from(i);
             let captured = match u.captures[i] {
                 Some(Capture::Frame) => true,
                 Some(Capture::Block) => u.touched.contains(slot),
                 None => false,
             };
-            if captured || inst.reads(slot) {
+            if captured || a.reads(pos).contains(&slot) {
                 return true;
             }
-            if inst.def == Some(slot) {
+            if a.def(pos) == Some(slot) {
                 return false;
             }
         }
-        u.live_out[bb.index()].contains(slot)
+        u.live_out.contains(bb.index(), slot)
     }
 
     ///
@@ -504,5 +592,6 @@ mod tests {
         let full = SlotSet::full(70);
         assert_eq!(full.iter().count(), 70);
         assert!(!full.contains(SlotId(70)));
+        assert_eq!(size_of::<InstSummary>(), 16);
     }
 }

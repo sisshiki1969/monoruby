@@ -803,6 +803,16 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
 
 impl TraceIr {
     ///
+    /// Whether the instruction at *pc* only ever executes inside an
+    /// exception handler (the rescue-clause matches, opcodes 44 and 157):
+    /// `from_pc` refuses to decode one, since the JIT never visits a
+    /// handler block, so a table over a whole iseq skips it.
+    ///
+    pub(crate) fn is_handler_only(pc: BytecodePtr) -> bool {
+        matches!(pc.opcode(), 44 | 157)
+    }
+
+    ///
     /// The slot this instruction defines (writes without reading), for
     /// the instructions whose destination is plain; `None` for the rest,
     /// which the liveness scans treat as neither a read nor a kill

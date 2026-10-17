@@ -767,14 +767,10 @@ impl<'a> JitContext<'a> {
             return false;
         }
         let a = self.slot_analysis(self.iseq_id());
-        if a.all_live() {
-            return false;
-        }
         let Some(pos) = a.alias_stop(&self.iseq().bb_info, bc_pos, dst) else {
             return false;
         };
-        let inst = a.inst(pos);
-        let callid = inst.call.unwrap();
+        let callid = a.call(pos).unwrap();
         let cs = &self.store[callid];
         let class = CachedClass::from_class(src.class_id());
         cs.recv == dst
@@ -783,7 +779,7 @@ impl<'a> JitContext<'a> {
             && cs.kw_args().is_empty()
             && cs.hash_splat_pos().is_empty()
             && cs.splat_pos().is_empty()
-            && inst.read_count(dst) == 1
+            && a.reads(pos).iter().filter(|s| **s == dst).count() == 1
             && cs
                 .name
                 .and_then(|name| self.jit_check_method(class, name))

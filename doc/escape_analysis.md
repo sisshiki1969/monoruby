@@ -679,8 +679,14 @@ It is built once per iseq, the first time a compilation needs it, and
 kept in `ISeqInfo::slot_analysis` for good: the bytecode is never
 rewritten after it is installed (the inline caches patch operand words,
 never the shape of an instruction), so nothing invalidates it. An iseq
-with an exception handler gets an `all_live` table, as the scans treat
-it: a handler block could read anything.
+with an exception handler is marked `all_live`, as the scans treat it (a
+handler block could read anything); its tables are still built, with
+the handler-only instructions (the rescue-clause matches, which the JIT
+never visits and `TraceIr::from_pc` refuses) as empty summaries, for
+the questions that stay inside a basic block. The tables are kept
+small, since they live as long as the iseq: a 16-byte summary per
+instruction, the reads of every instruction in one shared vector, the
+per-block sets in one bit matrix.
 
 **Layer B, `UnitLiveness`** — what the inline caches decide, which may
 differ from one compilation to the next. Whether a call is a capture
