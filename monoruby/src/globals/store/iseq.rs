@@ -14,9 +14,9 @@ struct ExceptionMapEntry {
     /// regions a replayed `ensure` body runs *outside* of from the ones it
     /// is still inside.
     region_id: u32,
-    rescue_pc: Option<BcIndex>,      // rescue destination pc
-    ensure_pc: Option<BcIndex>,      // ensure destination pc
-    error_slot: Option<SlotId>,      // a slot where an error object is assigned
+    rescue_pc: Option<BcIndex>, // rescue destination pc
+    ensure_pc: Option<BcIndex>, // ensure destination pc
+    error_slot: Option<SlotId>, // a slot where an error object is assigned
     // The region's rescue-clause span (matching code + clause bodies).
     // A frame suspended in it has `$!` set to the caught exception; a
     // non-local exit (block `return` / `break`) unwinding this frame
@@ -412,6 +412,14 @@ pub struct ISeqInfo {
     ///
     pub(crate) bb_info: BasicBlockInfo,
     ///
+    /// Def-use and liveness facts of this iseq that its bytecode alone
+    /// decides (`jitgen::slot_analysis`, Layer A). Built by the JIT on
+    /// first use; never invalidated, since the bytecode is never rewritten
+    /// once installed (the inline caches patch operand words only).
+    ///
+    pub(crate) slot_analysis:
+        std::cell::OnceCell<Box<crate::codegen::jitgen::slot_analysis::SlotAnalysis>>,
+    ///
     /// Map for BcIndex to CallsiteId.
     ///
     pub(super) callsite_map: HashMap<BcIndex, CallSiteId>,
@@ -568,10 +576,10 @@ impl ISeqInfo {
                 * (size_of::<BcIndex>() + size_of::<CallSiteId>() + 1),
             locals: self.locals.capacity()
                 * (size_of::<IdentId>() + size_of::<bytecodegen::BcLocal>() + 1),
-            jit_entry: self.jit_entry.capacity() * (size_of::<ClassId>() + size_of::<JitInfo>() + 1),
+            jit_entry: self.jit_entry.capacity()
+                * (size_of::<ClassId>() + size_of::<JitInfo>() + 1),
             other: self.exception_map.capacity() * size_of::<ExceptionMapEntry>()
-                + self.replay_spans.capacity()
-                    * size_of::<(std::ops::Range<BcIndex>, Vec<u32>)>()
+                + self.replay_spans.capacity() * size_of::<(std::ops::Range<BcIndex>, Vec<u32>)>()
                 + self.lexical_context.capacity() * size_of::<ClassId>()
                 + self.jit_class_profile.capacity() * size_of::<(ClassId, u32)>()
                 + self.bop_deps.capacity() * size_of::<(ClassId, IdentId)>()
@@ -621,6 +629,7 @@ impl ISeqInfo {
             bop_deps: Vec::new(),
             bop_evictions: 0,
             bb_info: BasicBlockInfo::default(),
+            slot_analysis: Default::default(),
             callsite_map: HashMap::default(),
             hint: ISeqHint::Normal,
             uses_block: false,
@@ -958,7 +967,9 @@ impl ISeqInfo {
         self.exception_map.iter().any(|entry| {
             range.contains(&entry.range.start)
                 || entry.rescue_pc.is_some_and(|p| range.contains(&p))
-                || entry.ensure_pc.is_some_and(|p| range.contains(&p) && p != range.start)
+                || entry
+                    .ensure_pc
+                    .is_some_and(|p| range.contains(&p) && p != range.start)
         })
     }
 
@@ -1135,10 +1146,7 @@ impl ISeqInfo {
         self.jit_guard_free_slot.get(&self_class).copied()
     }
 
-    pub(crate) fn get_cache_map(
-        &self,
-        self_class: ClassId,
-    ) -> Option<&Vec<InlineCacheEntry>> {
+    pub(crate) fn get_cache_map(&self, self_class: ClassId) -> Option<&Vec<InlineCacheEntry>> {
         self.jit_entry
             .get(&self_class)
             .map(|info| &info.inline_cache_map)
@@ -1776,10 +1784,7 @@ impl ParamsInfo {
     ///
     pub(crate) fn kw_rest_name(&self) -> Option<IdentId> {
         let slot = self.kw_rest?;
-        self.args_names
-            .get(slot.0 as usize - 1)
-            .copied()
-            .flatten()
+        self.args_names.get(slot.0 as usize - 1).copied().flatten()
     }
 
     ///

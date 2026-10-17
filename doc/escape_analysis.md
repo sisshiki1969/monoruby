@@ -655,3 +655,57 @@ builds the Hash); a local of a frameless callee (its registers are a
 window in the caller's frame, with no scratch of its own — so
 `x = [a, b]; x.size` as the whole of a tiny method, inlined frameless,
 still builds the Array, while `[a, b].size` does not).
+
+## 11. The def-use and liveness tables (`jitgen/slot_analysis.rs`)
+
+The questions §3 and §10 ask of the bytecode — is this local read again
+after this instruction, may a block of the frame touch it, is the next
+instruction the one call a temporary's view may be consumed by — were
+answered by forward scans that re-decode the bytecode on every call
+(`local_live_after`, `touched_by_blocks`, `alias_consumed_by_call`).
+`slot_analysis.rs` answers them from two tables instead.
+
+**Layer A, `SlotAnalysis`** — what the bytecode alone decides. Per
+instruction, the slots it reads (`TraceIr::read_slots`) and the one it
+defines without reading (`TraceIr::defined_slot`; an instruction whose
+destination is not plain is neither a read nor a kill). Per basic block,
+the use and def sets and the live-out set of a backward dataflow over
+`BasicBlockInfo::succ` that counts no capture. And what the frame's
+block literals (and blocks nested in them) do to its locals: the slots
+they reach through the outer chain (`LoadDynVar` / `StoreDynVar` at the
+block's depth), whether one of them is opaque (a handler, whose
+instructions the JIT cannot decode, or a lambda literal, whose body is
+not reachable from here), and the positions of the calls inside them.
+It is built once per iseq, the first time a compilation needs it, and
+kept in `ISeqInfo::slot_analysis` for good: the bytecode is never
+rewritten after it is installed (the inline caches patch operand words,
+never the shape of an instruction), so nothing invalidates it. An iseq
+with an exception handler gets an `all_live` table, as the scans treat
+it: a handler block could read anything.
+
+**Layer B, `UnitLiveness`** — what the inline caches decide, which may
+differ from one compilation to the next. Whether a call is a capture
+point (`capture_point`: `Frame` for a callee that may `binding` / `eval`
+or a call the compiler cannot name, `Block` for a call passed a block
+literal) is a `MethodCache` verdict, and so is whether every call inside
+the frame's blocks is resolved to a callee that cannot capture its
+caller. Per compilation unit and per iseq, Layer B reads those verdicts
+once, forms the set of locals the blocks may touch (Layer A's set, or
+every slot when a block is opaque or holds an unresolved call), adds a
+capture point's reads (every slot for `Frame`, the touched set for
+`Block`) to the use sets, and runs the same dataflow again. The
+compilation sees one state of the caches throughout (it runs no Ruby
+code), so the table is built when first asked for and shared with the
+analysis clones (`JitContext::unit_liveness`).
+
+A query is then a scan of the rest of the instruction's basic block
+over Layer A's summaries, with Layer B's capture verdicts, and the
+block's live-out set past it (`table_live_after`). The one instruction a
+temporary's view may be consumed by is `SlotAnalysis::alias_stop`; the
+call-site and receiver-class conditions of `alias_consumed_by_call` are
+checked on it as before.
+
+For now the scans are still the live answer and the tables are checked
+against them on every call in a debug build (`debug_assert_eq!` in
+`local_live_after`, `touched_by_blocks`, `alias_consumed_by_call`); the
+next step replaces the scans with the tables.

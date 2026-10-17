@@ -492,7 +492,7 @@ impl<'a> JitContext<'a> {
     /// body reads the frame's locals through the outer chain (and may
     /// capture the frame from inside); `None` otherwise.
     ///
-    fn capture_point(&self, trace_ir: &TraceIr) -> Option<Capture> {
+    pub(in crate::codegen::jitgen) fn capture_point(&self, trace_ir: &TraceIr) -> Option<Capture> {
         let TraceIr::MethodCall { callid, cache, .. } = trace_ir else {
             return None;
         };
@@ -518,6 +518,17 @@ impl<'a> JitContext<'a> {
     /// block (whose instructions the JIT does not decode).
     ///
     fn touched_by_blocks(&self, slot: SlotId) -> bool {
+        let touched = self.touched_by_blocks_scan(slot);
+        debug_assert_eq!(
+            touched,
+            self.table_touched_by_blocks(slot),
+            "touched_by_blocks({slot:?}) disagrees with the table in {:?}",
+            self.iseq_id()
+        );
+        touched
+    }
+
+    fn touched_by_blocks_scan(&self, slot: SlotId) -> bool {
         let mut stack: Vec<(ISeqId, usize)> = vec![(self.iseq_id(), 0)];
         while let Some((iseq_id, depth)) = stack.pop() {
             let iseq = &self.store[iseq_id];
@@ -568,6 +579,17 @@ impl<'a> JitContext<'a> {
     /// the handler may read anything.
     ///
     fn local_live_after(&self, bc_pos: BcIndex, slot: SlotId) -> bool {
+        let live = self.local_live_after_scan(bc_pos, slot);
+        debug_assert_eq!(
+            live,
+            self.table_live_after(bc_pos, slot),
+            "local_live_after({bc_pos:?}, {slot:?}) disagrees with the table in {:?}",
+            self.iseq_id()
+        );
+        live
+    }
+
+    fn local_live_after_scan(&self, bc_pos: BcIndex, slot: SlotId) -> bool {
         let iseq = self.iseq();
         if iseq.has_exception_handler() {
             return true;
@@ -846,6 +868,52 @@ impl<'a> JitContext<'a> {
     /// in the same basic block.
     ///
     fn alias_consumed_by_call(&self, dst: SlotId, src: VirtualSrc, bc_pos: BcIndex) -> bool {
+        let consumed = self.alias_consumed_by_call_scan(dst, src, bc_pos);
+        debug_assert_eq!(
+            consumed,
+            self.alias_consumed_by_call_table(dst, src, bc_pos),
+            "alias_consumed_by_call({dst:?}, {bc_pos:?}) disagrees with the table in {:?}",
+            self.iseq_id()
+        );
+        consumed
+    }
+
+    ///
+    /// [`Self::alias_consumed_by_call`] by the tables: Layer A names the
+    /// one instruction the view may be consumed by
+    /// (`SlotAnalysis::alias_stop`), and the call-site and receiver-class
+    /// conditions are checked on it.
+    ///
+    fn alias_consumed_by_call_table(&self, dst: SlotId, src: VirtualSrc, bc_pos: BcIndex) -> bool {
+        if !self.is_temp(dst) || matches!(src, VirtualSrc::CallerKw { .. }) {
+            return false;
+        }
+        let a = self.slot_analysis(self.iseq_id());
+        if a.all_live() {
+            return false;
+        }
+        let Some(pos) = a.alias_stop(&self.iseq().bb_info, bc_pos, dst) else {
+            return false;
+        };
+        let inst = a.inst(pos);
+        let callid = inst.call.unwrap();
+        let cs = &self.store[callid];
+        let class = CachedClass::from_class(src.class_id());
+        cs.recv == dst
+            && cs.block_fid.is_none()
+            && cs.block_arg.is_none()
+            && cs.kw_args().is_empty()
+            && cs.hash_splat_pos().is_empty()
+            && cs.splat_pos().is_empty()
+            && inst.read_count(dst) == 1
+            && cs
+                .name
+                .and_then(|name| self.jit_check_method(class, name))
+                .and_then(|(fid, _)| self.store.recv_escape(fid))
+                .is_some_and(|e| e.elements.is_some())
+    }
+
+    fn alias_consumed_by_call_scan(&self, dst: SlotId, src: VirtualSrc, bc_pos: BcIndex) -> bool {
         if !self.is_temp(dst) || matches!(src, VirtualSrc::CallerKw { .. }) {
             return false;
         }
@@ -871,9 +939,7 @@ impl<'a> JitContext<'a> {
                         .and_then(|(fid, _)| self.store.recv_escape(fid))
                         .is_some_and(|e| e.elements.is_some());
             }
-            if reads.contains(&dst)
-                || !defined_slot(&ir, self.store).is_some_and(|d| d != dst)
-            {
+            if reads.contains(&dst) || !defined_slot(&ir, self.store).is_some_and(|d| d != dst) {
                 return false;
             }
         }
@@ -1035,9 +1101,8 @@ impl<'a> JitContext<'a> {
             (!self.jit_visibility_blocks(callid, visibility)).then_some((name, fid))
         });
         let summary = resolved.and_then(|(_, fid)| self.store.recv_escape(fid));
-        let plain = cs.kw_args().is_empty()
-            && cs.hash_splat_pos().is_empty()
-            && cs.block_arg.is_none();
+        let plain =
+            cs.kw_args().is_empty() && cs.hash_splat_pos().is_empty() && cs.block_arg.is_none();
         let block_less = plain && cs.block_fid.is_none();
         let (pos_num, call_dst, args) = (cs.pos_num, cs.dst, cs.args);
         // The receiver slot must be dead after the call: whatever the call
@@ -1050,8 +1115,11 @@ impl<'a> JitContext<'a> {
         let plan = match summary {
             Some(RecvEscape {
                 elements: Some(op), ..
-            }) if block_less => match (elements, Self::hash_pairs(state, src), Self::range_ends(src))
-            {
+            }) if block_less => match (
+                elements,
+                Self::hash_pairs(state, src),
+                Self::range_ends(src),
+            ) {
                 (Some((base, src, len)), _, _) if pos_num == 0 => {
                     Some(ElementsPlan::Array(base, src, len))
                 }
@@ -1490,9 +1558,11 @@ impl<'a> JitContext<'a> {
         let src = state.virtual_at(base).unwrap();
         let class = CachedClass::from_class(src.class_id());
         let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
-        let resolved = self.jit_check_method(class, IdentId::_INDEX).and_then(|(fid, visibility)| {
-            (!self.jit_visibility_blocks(callid, visibility)).then_some(fid)
-        });
+        let resolved =
+            self.jit_check_method(class, IdentId::_INDEX)
+                .and_then(|(fid, visibility)| {
+                    (!self.jit_visibility_blocks(callid, visibility)).then_some(fid)
+                });
         let summary = resolved.and_then(|fid| self.store.recv_escape(fid));
         let recv_dead = base == dst || self.dead_after(bc_pos, base);
         let plan = match summary {
@@ -1557,7 +1627,12 @@ impl<'a> JitContext<'a> {
             LinkMode::C(k) if k.is_packed_value() => Some(k),
             _ => None,
         };
-        let lookup = |k: Value| pairs.iter().find(|(k0, _)| k0.id() == k.id()).map(|(_, v)| *v);
+        let lookup = |k: Value| {
+            pairs
+                .iter()
+                .find(|(k0, _)| k0.id() == k.id())
+                .map(|(_, v)| *v)
+        };
         let found = |v: HashElem| match v {
             HashElem::Const(v) => HashFold::Const(v),
             HashElem::Caller(base, slot) => HashFold::Caller(base, slot),
@@ -1566,7 +1641,9 @@ impl<'a> JitContext<'a> {
             ElementsOp::Size if pos_num == 0 => {
                 Some(HashFold::Const(Value::integer(pairs.len() as i64)))
             }
-            ElementsOp::Empty if pos_num == 0 => Some(HashFold::Const(Value::bool(pairs.is_empty()))),
+            ElementsOp::Empty if pos_num == 0 => {
+                Some(HashFold::Const(Value::bool(pairs.is_empty())))
+            }
             ElementsOp::HashIndex if pos_num == 1 => lookup(const_key(args)?).map(found),
             ElementsOp::HashFetch if pos_num == 1 => lookup(const_key(args)?).map(found),
             // `fetch(key, default)`: the default is the answer on a miss.
@@ -1810,40 +1887,14 @@ impl AbstractFrame {
         self.def_reg2acc_class(ir, GP::Rax, dst, HASH_CLASS);
     }
 }
-///
-/// The slot *trace_ir* defines (writes without reading), for the
-/// instructions whose destination is plain; `None` for the rest, which
-/// [`JitContext::local_live_after`] then treats as neither a read nor a
-/// kill (conservative: the slot stays live past them).
-///
+/// The slot *trace_ir* defines without reading ([`TraceIr::defined_slot`]).
 fn defined_slot(trace_ir: &TraceIr, store: &Store) -> Option<SlotId> {
-    match trace_ir {
-        TraceIr::Mov(dst, _)
-        | TraceIr::Literal(dst, _)
-        | TraceIr::FrozenLiteral(dst, _)
-        | TraceIr::StringFreeze(dst, _)
-        | TraceIr::Array { dst, .. }
-        | TraceIr::Hash { dst, .. }
-        | TraceIr::Range { dst, .. }
-        | TraceIr::LoadConst(dst, _)
-        | TraceIr::LoadDynVar(dst, _)
-        | TraceIr::LoadIvar(dst, ..)
-        | TraceIr::LoadGvar { dst, .. }
-        | TraceIr::LoadCvar { dst, .. }
-        | TraceIr::UnOp { _dst: dst, .. }
-        | TraceIr::Index { _dst: dst, .. }
-        | TraceIr::BlockArgProxy(dst, ..)
-        | TraceIr::BlockArg(dst, ..) => Some(*dst),
-        TraceIr::BinOp { dst, .. } | TraceIr::BinCmp { dst, .. } => *dst,
-        TraceIr::ConcatStr(dst, ..) => *dst,
-        TraceIr::MethodCall { callid, .. } => store[*callid].dst,
-        _ => None,
-    }
+    trace_ir.defined_slot(store)
 }
 
 /// What a call may capture of this frame ([`JitContext::capture_point`]).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Capture {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::codegen::jitgen) enum Capture {
     /// The whole frame, through a `binding` / `eval` (or a call the
     /// compiler cannot name).
     Frame,
