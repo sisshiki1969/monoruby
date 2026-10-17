@@ -537,6 +537,13 @@ fn load_capi_extension(
     }
 }
 
+/// Whether `path` carries a shared-library suffix (`.so`, `.bundle`, or
+/// monoruby's own `DLEXT`) — the only files `is_capi_extension` opens.
+pub(crate) fn has_native_lib_ext(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e == "so" || e == DLEXT || e == "bundle")
+}
+
 /// Whether the shared library at `path` was built against monoruby's
 /// CRuby-compatible `ruby.h` — the require resolver's cue to load a `.so`
 /// found on `$LOAD_PATH` natively instead of looking for a Ruby stand-in.
@@ -546,7 +553,7 @@ fn load_capi_extension(
 /// is closed again.
 pub(crate) fn is_capi_extension(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
-    if path.extension().is_none_or(|e| e != "so" && e != DLEXT && e != "bundle") {
+    if !has_native_lib_ext(path) {
         return false;
     }
     let Ok(cpath) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
