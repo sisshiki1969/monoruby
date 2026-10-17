@@ -453,6 +453,16 @@ pub struct Globals {
     /// caches its expanded load path for the same reason, and expands
     /// purely lexically on top of that.
     canonical_dirs: std::cell::RefCell<std::collections::HashMap<PathBuf, PathBuf>>,
+    /// Memoized `ext::is_capi_extension` verdicts, keyed by path, each
+    /// with the modification time and length it was reached for. The
+    /// question is answered by `dlopen`ing the library, and a host
+    /// CRuby's `.so` drags its `libruby` (~26 MB) in and out of the
+    /// address space with it; the resolver asks it of every same-named
+    /// `.so` on `$LOAD_PATH` whenever a stand-in matches. A file rebuilt
+    /// in place (a `gem install` over it) has a new stamp and is asked
+    /// again.
+    capi_extensions:
+        std::cell::RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, u64, bool)>>,
     /// Features whose `require` body is currently executing, keyed by
     /// the canonical path registered in `$LOADED_FEATURES`, with the
     /// loading green thread's object id. A second thread requiring the
@@ -960,6 +970,7 @@ impl Globals {
             loaded_features,
             loaded_features_index: std::cell::RefCell::new(LoadedFeatureIndex::default()),
             canonical_dirs: std::cell::RefCell::new(std::collections::HashMap::new()),
+            capi_extensions: std::cell::RefCell::new(std::collections::HashMap::new()),
             loading_features: std::collections::HashMap::default(),
             ext: crate::ext::ExtState::default(),
             gvar_traces: std::collections::HashMap::default(),

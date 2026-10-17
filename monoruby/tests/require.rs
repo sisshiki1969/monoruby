@@ -400,3 +400,62 @@ fn unloadable_program_file_prints_loaderror() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(stderr.trim(), "monoruby: Is a directory -- /etc (LoadError)");
 }
+
+// A stand-in from the stub pin (`etc` here) answers a repeat `require`
+// from `$LOADED_FEATURES` without walking `$LOAD_PATH`. The stub
+// directory is not on `$LOAD_PATH`, so the feature-index check used to
+// miss it and every repeat re-ran the search — which, for a stand-in,
+// `dlopen`s each same-named host CRuby `.so` it finds on the way (mail's
+// `Socket.gethostname` requires `etc` once per message).
+#[test]
+fn a_stub_feature_is_not_searched_for_again() {
+    run_test_once(
+        r#"
+        first = require "etc"
+        [first, require("etc"),
+         $LOADED_FEATURES.count { _1.end_with?("/etc.rb") || _1.end_with?("/etc.so") }]
+        "#,
+    );
+}
+
+// A `.so` on `$LOAD_PATH` that monoruby cannot load — here not a shared
+// library at all — is `dlopen`ed once per file stamp rather than once per
+// `require` (`Globals::is_capi_extension`); a rewritten file is asked
+// again. Either way every attempt ends in the same LoadError.
+#[test]
+fn an_unloadable_native_candidate_keeps_failing_the_same_way() {
+    let dir = std::env::temp_dir().join(format!("monoruby-capi-probe-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("mrbjunk.so"), "not a library").unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_monoruby"))
+        .arg("--disable=gems")
+        .arg("-I")
+        .arg(&dir)
+        .arg("-e")
+        .arg(
+            r#"
+            def try
+              require "mrbjunk"
+              :loaded
+            rescue LoadError => e
+              e.message.include?("mrbjunk.so") ? :load_error : e.message
+            end
+            seen = 3.times.map { try }
+            File.write(File.join($:[0], "mrbjunk.so"), "still not a library, only longer")
+            p seen << try
+            "#,
+        )
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "[:load_error, :load_error, :load_error, :load_error]"
+    );
+}

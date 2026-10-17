@@ -88,6 +88,14 @@ fn has_loadable_ext(path: &std::path::Path) -> bool {
     }
 }
 
+/// The stub pin: monoruby's own stand-ins, searched ahead of `$LOAD_PATH`
+/// (see `Globals::search_candidate`).
+fn stub_dirs() -> [PathBuf; 2] {
+    let stub_root = install_root().join("stub");
+    let platform = stub_root.join(ruby_platform());
+    [stub_root, platform]
+}
+
 impl Globals {
     /// `dir/cand`, if it exists, as the *canonicalized* directory
     /// joined with the candidate as given: CRuby resolves symlinks in
@@ -116,6 +124,33 @@ impl Globals {
             .borrow_mut()
             .insert(dir.to_path_buf(), canon.clone());
         canon
+    }
+
+    /// `ext::is_capi_extension`, memoized in `capi_extensions` — see that
+    /// field for why. Only a native-library path is ever `dlopen`ed, so
+    /// any other answers `false` without touching the filesystem.
+    fn is_capi_extension(&self, path: &std::path::Path) -> bool {
+        if !crate::ext::has_native_lib_ext(path) {
+            return false;
+        }
+        let Some(stamp) = std::fs::metadata(path)
+            .ok()
+            .and_then(|m| Some((m.modified().ok()?, m.len())))
+        else {
+            return false;
+        };
+        if let Some(&(mtime, len, found)) = self.capi_extensions.borrow().get(path)
+            && (mtime, len) == stamp
+        {
+            return found;
+        }
+        // Asked outside the borrow: `dlopen` runs the library's
+        // constructors.
+        let found = crate::ext::is_capi_extension(path);
+        self.capi_extensions
+            .borrow_mut()
+            .insert(path.to_path_buf(), (stamp.0, stamp.1, found));
+        found
     }
 
     ///
@@ -212,6 +247,19 @@ impl Globals {
                 // re-loading through another.
                 if let Some(hit) = self.feature_suffix_loaded(&cand, &canon_dirs) {
                     return Ok(RequireLoad::AlreadyLoaded(hit));
+                }
+                // A stand-in from the stub pin, which sits outside
+                // `$LOAD_PATH` and so is not in `canon_dirs`. Without
+                // this the walk below ran on every repeat — and its stub
+                // hit `dlopen`s each same-named host `.so` on
+                // `$LOAD_PATH` (`built_extension_on_load_path`): mail's
+                // `Socket.gethostname`, which requires `etc` per call,
+                // paid ~0.6 ms each time.
+                for dir in stub_dirs() {
+                    let p = self.canonical_dir_of_path(&dir).join(&cand);
+                    if self.is_feature_loaded(&p) {
+                        return Ok(RequireLoad::AlreadyLoaded(p));
+                    }
                 }
             }
             for cand in require_candidates(file_name) {
@@ -314,7 +362,7 @@ impl Globals {
         entries.iter().find_map(|lib| {
             natives.iter().find_map(|ext| {
                 let p = self.probe(std::path::Path::new(lib), &cand.with_extension(ext))?;
-                crate::ext::is_capi_extension(&p).then_some(p)
+                self.is_capi_extension(&p).then_some(p)
             })
         })
     }
@@ -353,8 +401,7 @@ impl Globals {
         // the host spec stays activated, splitting the two. So the
         // vendored snapshot keeps resolving through `$LOAD_PATH` (where it
         // is merely first), letting host activation shadow it consistently.
-        let stub_root = install_root().join("stub");
-        for dir in [stub_root.clone(), stub_root.join(ruby_platform())] {
+        for dir in stub_dirs() {
             if let Some(p) = self.probe(&dir, cand) {
                 // The stand-in replaces a C extension monoruby could not
                 // load. One built *for* monoruby (`gem install` through
@@ -433,10 +480,7 @@ impl Globals {
         let mut unloadable = None;
         for lib in entries {
             if let Some(p) = self.probe(std::path::Path::new(lib), cand) {
-                if native
-                    && !crate::ext::is_extension_path(&p)
-                    && !crate::ext::is_capi_extension(&p)
-                {
+                if native && !crate::ext::is_extension_path(&p) && !self.is_capi_extension(&p) {
                     unloadable.get_or_insert(p);
                     continue;
                 }
@@ -488,7 +532,7 @@ impl Globals {
             return Ok(RequireLoad::AlreadyLoaded(canonicalized_path));
         }
         if crate::ext::is_extension_path(&canonicalized_path)
-            || crate::ext::is_capi_extension(&canonicalized_path)
+            || self.is_capi_extension(&canonicalized_path)
         {
             self.add_loaded_feature(&canonicalized_path);
             return Ok(RequireLoad::Native(canonicalized_path));
