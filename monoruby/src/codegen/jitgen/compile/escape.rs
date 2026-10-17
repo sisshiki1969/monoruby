@@ -518,53 +518,7 @@ impl<'a> JitContext<'a> {
     /// block (whose instructions the JIT does not decode).
     ///
     fn touched_by_blocks(&self, slot: SlotId) -> bool {
-        let touched = self.touched_by_blocks_scan(slot);
-        debug_assert_eq!(
-            touched,
-            self.table_touched_by_blocks(slot),
-            "touched_by_blocks({slot:?}) disagrees with the table in {:?}",
-            self.iseq_id()
-        );
-        touched
-    }
-
-    fn touched_by_blocks_scan(&self, slot: SlotId) -> bool {
-        let mut stack: Vec<(ISeqId, usize)> = vec![(self.iseq_id(), 0)];
-        while let Some((iseq_id, depth)) = stack.pop() {
-            let iseq = &self.store[iseq_id];
-            // A block with a handler: its handler blocks are not
-            // decodable as TraceIr (and could read anything), so the
-            // local counts as touched.
-            if depth > 0 && iseq.has_exception_handler() {
-                return true;
-            }
-            for i in 0..iseq.bytecode().len() {
-                match TraceIr::from_pc(iseq.get_pc(BcIndex::from(i)), self.store) {
-                    TraceIr::LoadDynVar(_, DynVar { reg, outer })
-                    | TraceIr::StoreDynVar(DynVar { reg, outer }, _)
-                        if depth > 0 && outer == depth && reg == slot =>
-                    {
-                        return true;
-                    }
-                    TraceIr::Lambda if depth > 0 => return true,
-                    TraceIr::MethodCall { callid, cache, .. } => {
-                        if depth > 0
-                            && !matches!(cache, MethodCache::Cached(e)
-                                if !self.store[e.func_id].possibly_capture_without_block())
-                        {
-                            return true;
-                        }
-                        if let Some(fid) = self.store[callid].block_fid
-                            && let Some(block) = self.store[fid].is_iseq()
-                        {
-                            stack.push((block, depth + 1));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        false
+        self.table_touched_by_blocks(slot)
     }
 
     ///
@@ -576,70 +530,11 @@ impl<'a> JitContext<'a> {
     /// any read ends the slot's life on that path (`defined_slot`); the
     /// instructions whose destination is not plain are neither a read
     /// nor a kill. Always true in a body with an exception handler, where
-    /// the handler may read anything.
+    /// the handler may read anything. Answered from the liveness tables
+    /// (`slot_analysis::UnitLiveness`).
     ///
     fn local_live_after(&self, bc_pos: BcIndex, slot: SlotId) -> bool {
-        let live = self.local_live_after_scan(bc_pos, slot);
-        debug_assert_eq!(
-            live,
-            self.table_live_after(bc_pos, slot),
-            "local_live_after({bc_pos:?}, {slot:?}) disagrees with the table in {:?}",
-            self.iseq_id()
-        );
-        live
-    }
-
-    fn local_live_after_scan(&self, bc_pos: BcIndex, slot: SlotId) -> bool {
-        let iseq = self.iseq();
-        if iseq.has_exception_handler() {
-            return true;
-        }
-        let mut by_blocks = None;
-        let mut touched_by_blocks =
-            || *by_blocks.get_or_insert_with(|| self.touched_by_blocks(slot));
-        // Scan `from ..= to` in order: `Some(true)` at the first read of
-        // the slot, `Some(false)` at a write that comes before any read
-        // (the path is dead for the slot from there), `None` if neither.
-        let mut scan = |from: BcIndex, to: BcIndex| -> Option<bool> {
-            (from.to_usize()..=to.to_usize()).find_map(|i| {
-                let ir = TraceIr::from_pc(iseq.get_pc(BcIndex::from(i)), self.store);
-                let captured = match self.capture_point(&ir) {
-                    Some(Capture::Frame) => true,
-                    Some(Capture::Block) => touched_by_blocks(),
-                    None => false,
-                };
-                if captured || ir.read_slots(self.store).contains(&slot) {
-                    Some(true)
-                } else if defined_slot(&ir, self.store) == Some(slot) {
-                    Some(false)
-                } else {
-                    None
-                }
-            })
-        };
-        let bb_info = &iseq.bb_info;
-        let bb = bb_info.get_bb_id(bc_pos);
-        let end = bb_info[bb].end;
-        if bc_pos < end {
-            match scan(bc_pos + 1usize, end) {
-                Some(live) => return live,
-                None => {}
-            }
-        }
-        let mut visited = vec![false; bb_info.len()];
-        let mut stack: Vec<BasicBlockId> = bb_info.succ(bb).to_vec();
-        while let Some(b) = stack.pop() {
-            if std::mem::replace(&mut visited[b.index()], true) {
-                continue;
-            }
-            let entry = &bb_info[b];
-            match scan(entry.begin, entry.end) {
-                Some(true) => return true,
-                Some(false) => continue,
-                None => stack.extend_from_slice(bb_info.succ(b)),
-            }
-        }
-        false
+        self.table_live_after(bc_pos, slot)
     }
 
     ///
@@ -868,35 +763,14 @@ impl<'a> JitContext<'a> {
     /// in the same basic block.
     ///
     fn alias_consumed_by_call(&self, dst: SlotId, src: VirtualSrc, bc_pos: BcIndex) -> bool {
-        let consumed = self.alias_consumed_by_call_scan(dst, src, bc_pos);
-        debug_assert_eq!(
-            consumed,
-            self.alias_consumed_by_call_table(dst, src, bc_pos),
-            "alias_consumed_by_call({dst:?}, {bc_pos:?}) disagrees with the table in {:?}",
-            self.iseq_id()
-        );
-        consumed
-    }
-
-    ///
-    /// [`Self::alias_consumed_by_call`] by the tables: Layer A names the
-    /// one instruction the view may be consumed by
-    /// (`SlotAnalysis::alias_stop`), and the call-site and receiver-class
-    /// conditions are checked on it.
-    ///
-    fn alias_consumed_by_call_table(&self, dst: SlotId, src: VirtualSrc, bc_pos: BcIndex) -> bool {
         if !self.is_temp(dst) || matches!(src, VirtualSrc::CallerKw { .. }) {
             return false;
         }
         let a = self.slot_analysis(self.iseq_id());
-        if a.all_live() {
-            return false;
-        }
         let Some(pos) = a.alias_stop(&self.iseq().bb_info, bc_pos, dst) else {
             return false;
         };
-        let inst = a.inst(pos);
-        let callid = inst.call.unwrap();
+        let callid = a.call(pos).unwrap();
         let cs = &self.store[callid];
         let class = CachedClass::from_class(src.class_id());
         cs.recv == dst
@@ -905,45 +779,12 @@ impl<'a> JitContext<'a> {
             && cs.kw_args().is_empty()
             && cs.hash_splat_pos().is_empty()
             && cs.splat_pos().is_empty()
-            && inst.read_count(dst) == 1
+            && a.reads(pos).iter().filter(|s| **s == dst).count() == 1
             && cs
                 .name
                 .and_then(|name| self.jit_check_method(class, name))
                 .and_then(|(fid, _)| self.store.recv_escape(fid))
                 .is_some_and(|e| e.elements.is_some())
-    }
-
-    fn alias_consumed_by_call_scan(&self, dst: SlotId, src: VirtualSrc, bc_pos: BcIndex) -> bool {
-        if !self.is_temp(dst) || matches!(src, VirtualSrc::CallerKw { .. }) {
-            return false;
-        }
-        let iseq = self.iseq();
-        let bb_info = &iseq.bb_info;
-        let end = bb_info[bb_info.get_bb_id(bc_pos)].end;
-        let class = CachedClass::from_class(src.class_id());
-        for i in bc_pos.to_usize() + 1..=end.to_usize() {
-            let ir = TraceIr::from_pc(iseq.get_pc(BcIndex::from(i)), self.store);
-            let reads = ir.read_slots(self.store);
-            if let TraceIr::MethodCall { callid, .. } = &ir {
-                let cs = &self.store[*callid];
-                return cs.recv == dst
-                    && cs.block_fid.is_none()
-                    && cs.block_arg.is_none()
-                    && cs.kw_args().is_empty()
-                    && cs.hash_splat_pos().is_empty()
-                    && cs.splat_pos().is_empty()
-                    && reads.iter().filter(|s| **s == dst).count() == 1
-                    && cs
-                        .name
-                        .and_then(|name| self.jit_check_method(class, name))
-                        .and_then(|(fid, _)| self.store.recv_escape(fid))
-                        .is_some_and(|e| e.elements.is_some());
-            }
-            if reads.contains(&dst) || !defined_slot(&ir, self.store).is_some_and(|d| d != dst) {
-                return false;
-            }
-        }
-        false
     }
 
     ///
