@@ -564,9 +564,18 @@ write to the local the endpoint came from (`a = f(a)`, which
 literal of immediates needs no window.
 
 **The local gate** (`local_elision_ok`): the frame is proven on the stack
-and uncaptured (`no_capture_guard`), framed (a frameless window has no
-scratch of its own to address), and rescues nothing (a handler could
-read any local). Once a capture drops the invariant, no further object
+and uncaptured (`no_capture_guard`) and rescues nothing (a handler could
+read any local). A frameless callee (`frameless_call.rs`) passes it: its
+window is its whole frame as its own prologue would have laid it out,
+scratch windows included, and its body addresses them through the
+shifted LFP like any slot of its own; a redo exit hands the whole call
+back to the caller, whose state never saw the callee's object, and a
+materializing exit builds the object from the window into the frame it
+makes (`get_write_back_with_void`: the `nil` fill first, the build
+last), as a framed side exit does. So `x = [a, b]; x.size` as the whole
+of a tiny method, inlined frameless, allocates nothing, and the object
+returned from such a callee is copied out of the window through
+`Window(delta)` (§9). Once a capture drops the invariant, no further object
 goes into a local until a capture guard re-proves it.
 
 **Escape points.** `settle_virtuals` materializes a local's object
@@ -651,10 +660,8 @@ temporary's view; a Range whose endpoints are not proven Fixnum or
 returned into a local of the caller (`x = pair(a, b)` needs the slots
 above the destination, §9); a transparent callee on a literal of
 immediates that stays live (`opts.key?(:a)` twice: the first call
-builds the Hash); a local of a frameless callee (its registers are a
-window in the caller's frame, with no scratch of its own — so
-`x = [a, b]; x.size` as the whole of a tiny method, inlined frameless,
-still builds the Array, while `[a, b].size` does not).
+builds the Hash); an Array index on a local's object (`x[0]`: only a
+Hash literal's `[]` is folded, `consume_virtual_index`).
 
 ## 11. The def-use and liveness tables (`jitgen/slot_analysis.rs`)
 
