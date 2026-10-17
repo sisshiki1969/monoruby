@@ -575,3 +575,65 @@ fn frameless_materialize_recompile_exit() {
         "#,
     );
 }
+
+#[test]
+fn frameless_local_objects() {
+    // An Array or Range literal assigned to a local of a frameless callee
+    // is elided like a framed callee's (`doc/escape_analysis.md` §10): its
+    // elements live in the callee's scratch window inside the caller's
+    // frame. A type miss after the body's first side effect takes a
+    // materializing exit, which builds the object from the window into
+    // the frame it makes; an error exit does the same; a returned local
+    // is copied out of the window; a Range local answers `include?`
+    // from its endpoints.
+    run_test(
+        r#"
+        class C
+          attr_reader :log
+          def initialize; @log = []; end
+          def m1(a, b)
+            x = [a, b]
+            @log << a
+            x.max
+          end
+          def m2(a, b)
+            x = [a, b]
+            @log << b
+            x.max
+          end
+          def m3(a, b)
+            x = [a, b]
+            x
+          end
+          def m4(lo, hi, v)
+            r = (lo..hi)
+            @log << v
+            r.include?(v)
+          end
+          def m5(a, b)
+            x = [a, b]
+            y = x.size
+            x.first + y
+          end
+          def m6(a, b)
+            x = [a, b]
+            x.size + x.max
+          end
+        end
+        c = C.new
+        res = []
+        60.times do |i|
+          a = i < 50 ? i : (i.even? ? i.to_f : "s#{i}")
+          res << (c.m1(a, 3) rescue $!.class)
+          res << (c.m2(3, a) rescue $!.class)
+          res << c.m3(i, a)
+          res << (c.m4(i, i + 2, a) rescue $!.class)
+          res << (c.m5(a, 1) rescue $!.class)
+          res << (c.m6(a, 2) rescue $!.class)
+        end
+        res << c.log.size << c.log.last(5)
+        res
+        "#,
+    );
+}
+
