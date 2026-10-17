@@ -33,15 +33,9 @@ use crate::basic_block::BasicBlockInfo;
 ///
 /// A set of this frame's slots, as a bitset over `0..total_reg_num`.
 ///
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SlotSet {
     words: Box<[u64]>,
-}
-
-impl std::fmt::Debug for SlotSet {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_set().entries(self.iter()).finish()
-    }
 }
 
 impl SlotSet {
@@ -102,10 +96,6 @@ impl SlotSet {
                 .filter(move |b| w & (1u64 << b) != 0)
                 .map(move |b| SlotId((wi * 64 + b) as u16))
         })
-    }
-
-    pub(crate) fn heap_size(&self) -> usize {
-        self.words.len() * size_of::<u64>()
     }
 }
 
@@ -292,7 +282,7 @@ impl SlotAnalysis {
         bb_def: &[SlotSet],
         total_reg_num: usize,
     ) -> Vec<SlotSet> {
-        let nbb = bb_info.len();
+        let nbb = bb_use.len();
         let mut live_in = vec![SlotSet::empty(total_reg_num); nbb];
         let mut live_out = vec![SlotSet::empty(total_reg_num); nbb];
         loop {
@@ -353,31 +343,13 @@ impl SlotAnalysis {
         }
         None
     }
-
-    /// Bytes this owns outside itself.
-    pub(crate) fn heap_size(&self) -> usize {
-        self.insts.capacity() * size_of::<InstSummary>()
-            + self
-                .insts
-                .iter()
-                .filter(|i| i.reads.spilled())
-                .map(|i| i.reads.capacity() * size_of::<SlotId>())
-                .sum::<usize>()
-            + (self.bb_use.iter().chain(&self.bb_def).chain(&self.live_out))
-                .map(|s| s.heap_size())
-                .sum::<usize>()
-            + self.block_touched.heap_size()
-            + self.block_calls.capacity() * size_of::<(ISeqId, BcIndex)>()
-    }
 }
 
 ///
 /// Layer B: Layer A's liveness with the capture points of one compilation
 /// counted as reads. See the module documentation.
 ///
-#[derive(Debug)]
 pub(crate) struct UnitLiveness {
-    iseq_id: ISeqId,
     /// Per instruction: the capture verdict of the call there, if any.
     captures: Vec<Option<Capture>>,
     /// The locals a block literal of the frame may read or write: Layer
@@ -414,20 +386,12 @@ impl<'a> JitContext<'a> {
         let a = self.slot_analysis(iseq_id);
         let iseq = &self.store[iseq_id];
         let n = a.total_reg_num();
-        if a.all_live() {
-            return UnitLiveness {
-                iseq_id,
-                captures: vec![],
-                touched: SlotSet::full(n),
-                live_out: vec![],
-            };
-        }
         // What the blocks may touch, for this compilation.
         let unresolved = a.block_calls.iter().any(|(bid, pos)| {
             let ir = TraceIr::from_pc(self.store[*bid].get_pc(*pos), self.store);
             !self.call_resolved_non_capturing(&ir)
         });
-        let touched = if a.block_opaque || unresolved {
+        let touched = if a.all_live() || a.block_opaque || unresolved {
             SlotSet::full(n)
         } else {
             a.block_touched.clone()
@@ -438,7 +402,7 @@ impl<'a> JitContext<'a> {
         let bb_info = &iseq.bb_info;
         let mut captures = vec![None; a.insts.len()];
         let mut bb_use = a.bb_use.clone();
-        for b in 0..bb_info.len() {
+        for b in 0..bb_use.len() {
             let entry = &bb_info[BasicBlockId(b as u32)];
             // Slots written so far in the block: a capture read of one of
             // them is not a use of the block's live-in value.
@@ -468,7 +432,6 @@ impl<'a> JitContext<'a> {
         }
         let live_out = SlotAnalysis::dataflow(bb_info, &bb_use, &a.bb_def, n);
         UnitLiveness {
-            iseq_id,
             captures,
             touched,
             live_out,
@@ -527,12 +490,6 @@ impl<'a> JitContext<'a> {
     ///
     pub(in crate::codegen::jitgen) fn table_touched_by_blocks(&self, slot: SlotId) -> bool {
         self.unit_liveness(self.iseq_id()).touched.contains(slot)
-    }
-}
-
-impl UnitLiveness {
-    pub(crate) fn iseq_id(&self) -> ISeqId {
-        self.iseq_id
     }
 }
 

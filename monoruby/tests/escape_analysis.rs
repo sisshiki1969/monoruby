@@ -2032,6 +2032,37 @@ fn local_object_with_a_rescuing_block() {
 }
 
 #[test]
+fn local_object_with_a_lambda_or_an_unresolved_call_in_a_block() {
+    // A lambda literal inside a block (its body is not reachable from the
+    // frame), and a block whose call the compiler cannot resolve (never
+    // executed, so its cache is empty): either makes every local count as
+    // touched by the block, so the object is real before the call.
+    run_test_once(
+        r##"
+        def each3
+          yield 1; yield 2; yield 3
+        end
+        def g(i) = i
+        def lam(n)
+          x = [n, n + 1]
+          s = 0
+          each3 { |i| l = -> { i * 2 }; s += l.call }
+          s + x.max
+        end
+        def unresolved(n)
+          x = [n, n + 1]
+          s = 0
+          each3 { |i| s += i; g(i) if s > 1000 }
+          s + x.max
+        end
+        res = []
+        40.times { |i| res << lam(i) << unresolved(i) }
+        res
+        "##,
+    );
+}
+
+#[test]
 fn receiver_moved_to_a_temporary_while_the_argument_is_computed() {
     // `r.include?(a + 1)`: the receiver is copied into a temporary and the
     // argument computed after it. The object survives the operator (which
