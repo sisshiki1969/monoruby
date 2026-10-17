@@ -4022,7 +4022,7 @@ impl AbstractState {
                     if self.deferred_forward_info().is_some() {
                         ir.set_kw_vetoed();
                     }
-                    self.materialize_virtual_args(ir, callsite);
+                    self.materialize_virtual_args(store, ir, callsite);
                     None
                 }
             };
@@ -4130,7 +4130,7 @@ impl AbstractState {
             if self.deferred_forward_info().is_some() {
                 ir.set_kw_vetoed();
             }
-            self.materialize_virtual_args(ir, callsite);
+            self.materialize_virtual_args(store, ir, callsite);
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArgumentsForwardedHelper { callid, callee_fid });
@@ -4159,7 +4159,7 @@ impl AbstractState {
             // keyword syntax at the call site no ruby2_keywords promotion
             // can apply. A non-forwarding splat operand is an ordinary
             // evaluated slot, so no source routing applies either.
-            self.materialize_virtual_args(ir, callsite);
+            self.materialize_virtual_args(store, ir, callsite);
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArgumentsForwarded {
@@ -4182,7 +4182,7 @@ impl AbstractState {
             if callsite.forwarding && self.deferred_forward_info().is_some() {
                 ir.set_kw_vetoed();
             }
-            self.materialize_virtual_args(ir, callsite);
+            self.materialize_virtual_args(store, ir, callsite);
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArguments { callid, callee_fid });

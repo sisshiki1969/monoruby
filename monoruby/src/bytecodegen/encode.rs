@@ -57,8 +57,9 @@ impl<'a> BytecodeGen<'a> {
                 }
             }
         }
-        let temp_num = self.temp_num;
         let non_temp_num = self.labels.non_temp_num;
+        let temp_num = self.temp_num;
+        let local_scratch = std::mem::take(&mut self.local_scratch_layout);
 
         self.ir_to_bc()?;
 
@@ -106,6 +107,7 @@ impl<'a> BytecodeGen<'a> {
         info.set_replay_spans(spans);
         info.temp_num = temp_num;
         info.non_temp_num = non_temp_num;
+        info.local_scratch = local_scratch;
         info.sp = sp;
         self.store.set_func_data(func_id);
         // Precompute the lazy `(...)`-forwarding gate (consulted on every

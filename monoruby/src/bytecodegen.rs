@@ -682,6 +682,17 @@ struct BytecodeGen<'a> {
     temp: u16,
     /// The number of temporary registers.
     temp_num: u16,
+    ///
+    /// The locals an Array or Range literal is assigned to, with the
+    /// widest such literal's element count: each gets a window of hidden
+    /// temporaries above `temp_num` where the JIT keeps the elements of an
+    /// object it did not allocate (`doc/escape_analysis.md` §10). Laid
+    /// out by `encode` into `ISeqInfo::local_scratch`.
+    ///
+    local_scratch: indexmap::IndexMap<BcLocal, u16>,
+    /// The windows laid out from `local_scratch` (`layout_local_scratch`):
+    /// `(local, window base, window length)`, for `ISeqInfo::local_scratch`.
+    local_scratch_layout: Vec<(SlotId, SlotId, u16)>,
 
     /// Source info.
     sourceinfo: SourceInfoRef,
@@ -749,6 +760,8 @@ impl<'a> BytecodeGen<'a> {
             retry_labels: vec![],
             temp: 0,
             temp_num: 0,
+            local_scratch: indexmap::IndexMap::default(),
+            local_scratch_layout: vec![],
             sourceinfo,
 
             exception_table: vec![],
@@ -912,6 +925,7 @@ impl<'a> BytecodeGen<'a> {
         }
         self.apply_label(self.redo_label);
         self.gen_expr(ast, UseMode2::Ret)?;
+        self.layout_local_scratch();
         self.replace_init(&info.params);
         self.iseq_mut().loc = info.loc;
         self.into_bytecode()
@@ -1150,10 +1164,50 @@ impl<'a> BytecodeGen<'a> {
     }
 }
 
+///
+/// The longest Array literal assigned to a local that gets a scratch
+/// window for its elements, and the most scratch slots one iseq reserves
+/// (`BytecodeGen::local_scratch`).
+///
+const LOCAL_SCRATCH_MAX_LEN: usize = 8;
+const LOCAL_SCRATCH_BUDGET: u16 = 16;
+
 //
 // temporary registers handling.
 //
 impl<'a> BytecodeGen<'a> {
+    ///
+    /// Note that an Array (of *len* elements) or Range literal is assigned
+    /// to *dst*: a local gets a scratch window at least that wide.
+    ///
+    fn note_local_scratch(&mut self, dst: BcReg, len: u16) {
+        if let BcReg::Local(local) = dst {
+            let need = self.local_scratch.entry(local).or_insert(0);
+            *need = (*need).max(len);
+        }
+    }
+
+    ///
+    /// Lay out the scratch windows of the locals an Array or Range literal
+    /// is assigned to (`doc/escape_analysis.md` §10): hidden temporaries
+    /// above every temporary the bytecode uses, counted in `temp_num`
+    /// before the prologue's register count is fixed (`replace_init`), so
+    /// they are nil-filled at entry and inside the frame like any
+    /// register, and never read by the interpreter.
+    ///
+    fn layout_local_scratch(&mut self) {
+        let budget = self.temp_num + LOCAL_SCRATCH_BUDGET;
+        for (local, len) in std::mem::take(&mut self.local_scratch) {
+            if self.temp_num + len > budget {
+                break;
+            }
+            let base = self.slot_id(&BcReg::Temp(BcTemp(self.temp_num)));
+            self.local_scratch_layout
+                .push((self.slot_id(&BcReg::Local(local)), base, len));
+            self.temp_num += len;
+        }
+    }
+
     /// get a number of registers.
     fn total_reg_num(&self) -> usize {
         1 + (self.labels.non_temp_num + self.temp_num) as usize
@@ -1522,6 +1576,15 @@ impl<'a> BytecodeGen<'a> {
 
     fn emit_mov(&mut self, dst: BcReg, src: BcReg) {
         if dst != src {
+            // `y = x` with `x` holding a literal's object: the object can
+            // move into `y` (`doc/escape_analysis.md` §10), which needs a
+            // window as wide as `x`'s.
+            if let (BcReg::Local(to), BcReg::Local(from)) = (dst, src)
+                && let Some(len) = self.local_scratch.get(&from).copied()
+            {
+                let need = self.local_scratch.entry(to).or_insert(0);
+                *need = (*need).max(len);
+            }
             self.emit(BytecodeInst::Mov(dst, src), Loc::default());
         }
     }
@@ -1756,6 +1819,9 @@ impl<'a> BytecodeGen<'a> {
     }
 
     fn emit_array(&mut self, dst: BcReg, src: BcReg, len: usize, splat: Vec<usize>, loc: Loc) {
+        if splat.is_empty() && len <= LOCAL_SCRATCH_MAX_LEN {
+            self.note_local_scratch(dst, len as u16);
+        }
         let calsite = CallSite::new(
             None,
             len,

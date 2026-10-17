@@ -52,12 +52,94 @@ impl<'a> JitContext<'a> {
             return false;
         }
         let (src, len) = (cs.args, cs.pos_num as u16);
-        if !self.is_temp(dst) || (len != 0 && (!self.is_temp(src) || src < state.next_sp())) {
+        if self.is_temp(dst) {
+            if len != 0 && (!self.is_temp(src) || src < state.next_sp()) {
+                return false;
+            }
+            state.write_back_range(ir, src, len);
+            state.def_virtual(dst, VirtualSrc::Slots { src, len, callid });
+            return true;
+        }
+        // Into a local (`doc/escape_analysis.md` §10): the elements move
+        // into the local's scratch window, where no push can reach them.
+        let Some((base, cap)) = self.local_scratch(state, dst) else {
+            return false;
+        };
+        if len > cap {
             return false;
         }
-        state.write_back_range(ir, src, len);
-        state.def_virtual(dst, VirtualSrc::Slots { src, len, callid });
+        self.copy_to_scratch(state, ir, src, base, len);
+        state.def_virtual(
+            dst,
+            VirtualSrc::Slots {
+                src: base,
+                len,
+                callid,
+            },
+        );
         true
+    }
+
+    ///
+    /// Whether an elided object may be kept in the local *dst*
+    /// (`doc/escape_analysis.md` §10): the frame is proven on the stack
+    /// and uncaptured (`no_capture_guard`: nothing can read the local
+    /// behind the compiler's back, and every way to capture it from here
+    /// on materializes the object first, [`Self::settle_virtuals`]), is
+    /// framed (a frameless window has no scratch of its own to address),
+    /// and rescues nothing (a handler could read any local).
+    ///
+    fn local_elision_ok(&self, state: &AbstractState, dst: SlotId) -> bool {
+        !self.is_temp(dst)
+            && state.no_capture_guard()
+            && !self.in_frameless_frame()
+            && !self.iseq().has_exception_handler()
+    }
+
+    ///
+    /// The scratch window `(base, len)` of the local *dst*, when an object
+    /// may be kept in it ([`Self::local_elision_ok`]) and the bytecode
+    /// reserved one (`ISeqInfo::local_scratch`: an Array or Range literal
+    /// is assigned to the local).
+    ///
+    fn local_scratch(&self, state: &AbstractState, dst: SlotId) -> Option<(SlotId, u16)> {
+        if !self.local_elision_ok(state, dst) {
+            return None;
+        }
+        self.iseq().local_scratch(dst)
+    }
+
+    ///
+    /// Copy the slots `src .. src + len` into the scratch slots
+    /// `base .. base + len` and home them there, so that the elements of
+    /// an object a local holds are in memory for a side exit, a chain
+    /// deopt and the collector.
+    ///
+    fn copy_to_scratch(
+        &self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        src: SlotId,
+        base: SlotId,
+        len: u16,
+    ) {
+        // A plain stack-to-stack copy: the window slot is homed and holds
+        // no register (a `copy_slot` would leave it sharing a resident,
+        // whose later re-use could write back over the element), and keeps
+        // only the Fixnum proof an elided Range's endpoint relies on.
+        state.flush_gp(ir);
+        for i in 0..len {
+            let (from, to) = (src + i, base + i);
+            let guarded = if state.is_fixnum(from) {
+                Guarded::Fixnum
+            } else {
+                Guarded::Value
+            };
+            state.write_back_slots(ir, &[from]);
+            ir.stack2reg(from, GP::Rax);
+            ir.reg2stack(GP::Rax, to);
+            state.def_S_guarded(to, guarded);
+        }
     }
 
     ///
@@ -72,7 +154,7 @@ impl<'a> JitContext<'a> {
         dst: SlotId,
         val: Value,
     ) -> bool {
-        if !self.is_temp(dst) {
+        if !self.is_temp(dst) && !self.local_elision_ok(state, dst) {
             return false;
         }
         let all_immediates = if val.class() == ARRAY_CLASS
@@ -116,9 +198,17 @@ impl<'a> JitContext<'a> {
         end: SlotId,
         exclude_end: bool,
     ) -> bool {
-        if !self.is_temp(dst) {
-            return false;
-        }
+        // Into a local (`doc/escape_analysis.md` §10): the slot endpoints
+        // move into the local's scratch window, out of the way of every
+        // later write to a local or a push.
+        let scratch = if self.is_temp(dst) {
+            None
+        } else {
+            match self.local_scratch(state, dst) {
+                Some((base, cap)) if cap >= 2 => Some(base),
+                _ => return false,
+            }
+        };
         let next_sp = state.next_sp();
         let endpoint = |state: &AbstractState, slot: SlotId| -> Option<RangeEnd> {
             if let LinkMode::C(v) = state.mode(slot)
@@ -126,14 +216,25 @@ impl<'a> JitContext<'a> {
             {
                 return Some(RangeEnd::Const(v));
             }
-            if !state.is_fixnum(slot) || (self.is_temp(slot) && slot != dst && slot < next_sp) {
+            if !state.is_fixnum(slot)
+                || (scratch.is_none() && self.is_temp(slot) && slot != dst && slot < next_sp)
+            {
                 return None;
             }
             Some(RangeEnd::Slot(slot))
         };
-        let (Some(start), Some(end)) = (endpoint(state, start), endpoint(state, end)) else {
+        let (Some(mut start), Some(mut end)) = (endpoint(state, start), endpoint(state, end))
+        else {
             return false;
         };
+        if let Some(base) = scratch {
+            for (i, e) in [&mut start, &mut end].into_iter().enumerate() {
+                if let RangeEnd::Slot(slot) = *e {
+                    self.copy_to_scratch(state, ir, slot, base + i as u16, 1);
+                    *e = RangeEnd::Slot(base + i as u16);
+                }
+            }
+        }
         let slots: Vec<SlotId> = [start.slot(), end.slot()].into_iter().flatten().collect();
         state.write_back_slots(ir, &slots);
         state.def_virtual(
@@ -193,36 +294,74 @@ impl<'a> JitContext<'a> {
         let next_sp = state.next_sp();
         let bb_end = self.is_bb_end(bc_pos);
         let carries = bb_end && self.merge_carries_virtuals(bc_pos);
-        let survives = virtual_survives(trace_ir);
-        let written = survives.then(|| written_slot(trace_ir)).flatten();
-        // A call to `binding` / `eval` reads every local of this frame
-        // through the frame it captures (`unbox_to_S_for_outgoing_block`),
-        // a parameter holding an elided object included.
-        let captures = matches!(trace_ir, TraceIr::MethodCall { cache: MethodCache::Cached(e), .. }
-            if self.store[e.func_id].possibly_capture_without_block());
+        // An object in a temporary outlives the instructions that write
+        // nothing but a plain destination (`defined_slot`): the receiver
+        // of `r.include?(a + 1)`, moved into a temporary while the
+        // argument is computed. A call is not among them (its arguments
+        // are pushed over the temporaries), nor is anything whose writes
+        // `defined_slot` cannot name.
+        let survives = virtual_survives(trace_ir)
+            || (!matches!(trace_ir, TraceIr::MethodCall { .. })
+                && defined_slot(trace_ir, self.store).is_some());
+        let written = survives
+            .then(|| defined_slot(trace_ir, self.store))
+            .flatten();
+        // The scratch window the instruction may fill: an Array or Range
+        // literal into a local, or an object moved into one
+        // ([`Self::consume_virtual_mov`]), copies its elements there.
+        let window = match trace_ir {
+            TraceIr::Array { dst, .. } | TraceIr::Range { dst, .. } | TraceIr::Mov(dst, _) => {
+                self.iseq().local_scratch(*dst)
+            }
+            _ => None,
+        };
+        // A call that may read every local of this frame behind the
+        // compiler's back (`doc/escape_analysis.md` §10): a block literal
+        // (its body reads the frame's locals through the outer chain, and
+        // a `binding` in it captures the frame), a callee that captures
+        // its caller's frame (`binding` / `eval`,
+        // `unbox_to_S_for_outgoing_block`), or a call resolved by neither
+        // (a generic `send` could be any of these).
+        let capture = self.capture_point(trace_ir);
         for (dst, src) in state.virtuals().to_vec() {
-            if self.may_consume_virtual(trace_ir, dst, src) {
+            if self.may_consume_virtual(state, trace_ir, dst, src, bc_pos) {
                 continue;
             }
-            let read = reads.contains(&dst) || captures;
+            let captured = match capture {
+                Some(Capture::Frame) => true,
+                Some(Capture::Block) => !self.is_temp(dst) && self.touched_by_blocks(dst),
+                None => false,
+            };
+            let read = reads.contains(&dst) || captured;
             let dead = if self.is_temp(dst) {
                 dst >= next_sp
             } else {
                 !self.local_live_after(bc_pos, dst)
             };
-            if !read && dead {
+            // An instruction that redefines the slot without reading it
+            // (`x = 1..n` over an elided `x`) ends the object as a dead
+            // one does: nothing can observe it any more.
+            let redefined = defined_slot(trace_ir, self.store) == Some(dst);
+            if !read && (dead || redefined) {
                 // Dead, and never observed: the allocation is simply gone.
                 state.take_virtual(dst);
                 state.discard_dead_elements(src, dst);
                 continue;
             }
             // A store into an element slot: a push onto one (an argument
-            // of the use pushed over an element, `[a, b].include?(x)`), or
-            // a store into a local endpoint of an elided Range. The
-            // object's own slot doubling as an element (`a..b` built where
-            // `a` was; the first element of an Array returned elided) is
-            // not written while the object is elided.
-            let overwrites = src.own_slots().any(|s| s != dst && written == Some(s));
+            // of the use pushed over an element, `[a, b].include?(x)`), a
+            // store into a local endpoint of an elided Range, or a fill of
+            // the scratch window holding the elements. The object's own
+            // slot doubling as an element (`a..b` built where `a` was; the
+            // first element of an Array returned elided) is not written
+            // while the object is elided, and an object the instruction
+            // redefines is dropped by the definition, whatever else it
+            // writes.
+            let in_window =
+                |s: SlotId| window.is_some_and(|(base, len)| base <= s && s < base + len);
+            let overwrites = src
+                .own_slots()
+                .any(|s| s != dst && (written == Some(s) || in_window(s)));
             let carried = carries && !self.is_temp(dst);
             if read || (bb_end && !carried) || overwrites || (self.is_temp(dst) && !survives) {
                 self.materialize_virtual(state, ir, dst);
@@ -343,29 +482,127 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Whether *trace_ir* is a call that may read every local of this
+    /// frame behind the compiler's back (`doc/escape_analysis.md` §10):
+    /// `Some(Capture::Frame)` for a call resolved to a callee that
+    /// captures its caller's frame (`binding` / `eval`,
+    /// `unbox_to_S_for_outgoing_block`) or resolved to nothing the
+    /// compiler can name (a generic `send` could be any of these);
+    /// `Some(Capture::Block)` for a call passing a block literal, whose
+    /// body reads the frame's locals through the outer chain (and may
+    /// capture the frame from inside); `None` otherwise.
+    ///
+    fn capture_point(&self, trace_ir: &TraceIr) -> Option<Capture> {
+        let TraceIr::MethodCall { callid, cache, .. } = trace_ir else {
+            return None;
+        };
+        let known = matches!(cache, MethodCache::Cached(e)
+            if !self.store[e.func_id].possibly_capture_without_block());
+        if !known {
+            Some(Capture::Frame)
+        } else if self.store[*callid].block_fid.is_some() {
+            Some(Capture::Block)
+        } else {
+            None
+        }
+    }
+
+    ///
+    /// Whether a block literal of this frame (or a block nested in one)
+    /// may read or write the local *slot*: a `LoadDynVar` / `StoreDynVar`
+    /// of it at the block's depth (a write replaces the elided object
+    /// behind the compiler's back, so it has to be real by then), or — since a `binding` or `eval` inside the block captures
+    /// the whole frame — a call in the block resolved to a capturing
+    /// callee or to nothing the compiler can name, a lambda literal
+    /// (whose body is not reachable from here), or a handler in the
+    /// block (whose instructions the JIT does not decode).
+    ///
+    fn touched_by_blocks(&self, slot: SlotId) -> bool {
+        let mut stack: Vec<(ISeqId, usize)> = vec![(self.iseq_id(), 0)];
+        while let Some((iseq_id, depth)) = stack.pop() {
+            let iseq = &self.store[iseq_id];
+            // A block with a handler: its handler blocks are not
+            // decodable as TraceIr (and could read anything), so the
+            // local counts as touched.
+            if depth > 0 && iseq.has_exception_handler() {
+                return true;
+            }
+            for i in 0..iseq.bytecode().len() {
+                match TraceIr::from_pc(iseq.get_pc(BcIndex::from(i)), self.store) {
+                    TraceIr::LoadDynVar(_, DynVar { reg, outer })
+                    | TraceIr::StoreDynVar(DynVar { reg, outer }, _)
+                        if depth > 0 && outer == depth && reg == slot =>
+                    {
+                        return true;
+                    }
+                    TraceIr::Lambda if depth > 0 => return true,
+                    TraceIr::MethodCall { callid, cache, .. } => {
+                        if depth > 0
+                            && !matches!(cache, MethodCache::Cached(e)
+                                if !self.store[e.func_id].possibly_capture_without_block())
+                        {
+                            return true;
+                        }
+                        if let Some(fid) = self.store[callid].block_fid
+                            && let Some(block) = self.store[fid].is_iseq()
+                        {
+                            stack.push((block, depth + 1));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        false
+    }
+
+    ///
     /// Whether the local *slot* may be read after the instruction at
     /// *bc_pos*: by the rest of its basic block, or by any block control
-    /// can reach from there. Conservative — a write before the read does
-    /// not make it dead — and always true in a body with an exception
-    /// handler, where the handler may read anything.
+    /// can reach from there, counting a capture point
+    /// ([`Self::capture_point`]) as a read of every local a block or a
+    /// `binding` could reach ([`Self::touched_by_blocks`]). A write before
+    /// any read ends the slot's life on that path (`defined_slot`); the
+    /// instructions whose destination is not plain are neither a read
+    /// nor a kill. Always true in a body with an exception handler, where
+    /// the handler may read anything.
     ///
     fn local_live_after(&self, bc_pos: BcIndex, slot: SlotId) -> bool {
         let iseq = self.iseq();
         if iseq.has_exception_handler() {
             return true;
         }
-        let reads_in = |from: BcIndex, to: BcIndex| {
-            (from.to_usize()..=to.to_usize()).any(|i| {
-                TraceIr::from_pc(iseq.get_pc(BcIndex::from(i)), self.store)
-                    .read_slots(self.store)
-                    .contains(&slot)
+        let mut by_blocks = None;
+        let mut touched_by_blocks =
+            || *by_blocks.get_or_insert_with(|| self.touched_by_blocks(slot));
+        // Scan `from ..= to` in order: `Some(true)` at the first read of
+        // the slot, `Some(false)` at a write that comes before any read
+        // (the path is dead for the slot from there), `None` if neither.
+        let mut scan = |from: BcIndex, to: BcIndex| -> Option<bool> {
+            (from.to_usize()..=to.to_usize()).find_map(|i| {
+                let ir = TraceIr::from_pc(iseq.get_pc(BcIndex::from(i)), self.store);
+                let captured = match self.capture_point(&ir) {
+                    Some(Capture::Frame) => true,
+                    Some(Capture::Block) => touched_by_blocks(),
+                    None => false,
+                };
+                if captured || ir.read_slots(self.store).contains(&slot) {
+                    Some(true)
+                } else if defined_slot(&ir, self.store) == Some(slot) {
+                    Some(false)
+                } else {
+                    None
+                }
             })
         };
         let bb_info = &iseq.bb_info;
         let bb = bb_info.get_bb_id(bc_pos);
         let end = bb_info[bb].end;
-        if bc_pos < end && reads_in(bc_pos + 1usize, end) {
-            return true;
+        if bc_pos < end {
+            match scan(bc_pos + 1usize, end) {
+                Some(live) => return live,
+                None => {}
+            }
         }
         let mut visited = vec![false; bb_info.len()];
         let mut stack: Vec<BasicBlockId> = bb_info.succ(bb).to_vec();
@@ -374,10 +611,11 @@ impl<'a> JitContext<'a> {
                 continue;
             }
             let entry = &bb_info[b];
-            if reads_in(entry.begin, entry.end) {
-                return true;
+            match scan(entry.begin, entry.end) {
+                Some(true) => return true,
+                Some(false) => continue,
+                None => stack.extend_from_slice(bb_info.succ(b)),
             }
-            stack.extend_from_slice(bb_info.succ(b));
         }
         false
     }
@@ -473,10 +711,28 @@ impl<'a> JitContext<'a> {
     /// (`SetArgumentsForwarded::deferred_src`, which materializes it when
     /// it cannot).
     ///
-    fn may_consume_virtual(&self, trace_ir: &TraceIr, slot: SlotId, src: VirtualSrc) -> bool {
+    fn may_consume_virtual(
+        &self,
+        state: &AbstractState,
+        trace_ir: &TraceIr,
+        slot: SlotId,
+        src: VirtualSrc,
+        bc_pos: BcIndex,
+    ) -> bool {
         // `h[k]` on an elided Hash ([`Self::consume_virtual_index`]).
         if let TraceIr::Index { base, idx, .. } = trace_ir {
             return *base == slot && *idx != slot;
+        }
+        // `y = x` with `x` dead afterwards: the object moves to `y`
+        // ([`Self::consume_virtual_mov`]).
+        // Or `x` still live: a temporary's second view of the object,
+        // for a call that only reads its elements
+        // ([`Self::alias_consumed_by_call`]).
+        if let TraceIr::Mov(dst, from) = trace_ir {
+            return *from == slot
+                && *dst != slot
+                && ((self.dead_after(bc_pos, slot) && self.mov_target_ok(state, *dst, src))
+                    || self.alias_consumed_by_call(*dst, src, bc_pos));
         }
         // A plain `return` of the object out of a specialized method, into
         // a call site that takes it elided (`doc/escape_analysis.md` §9).
@@ -548,6 +804,145 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Whether the elided object *src* may move into *dst* by a `Mov`
+    /// (`doc/escape_analysis.md` §10): into a temporary as it is (its
+    /// elements stay where they are, pinned or in a local's window);
+    /// into a local under the local gate, with its own-frame elements
+    /// copied into the local's window — so a `Slots` or slot-endpoint
+    /// `Range` needs a window wide enough, while a handed-over object or
+    /// a template needs none. A `**kwrest` object is tied to its
+    /// parameter slot (the frame's `caller_kw` table) and does not move.
+    ///
+    fn mov_target_ok(&self, state: &AbstractState, dst: SlotId, src: VirtualSrc) -> bool {
+        if matches!(src, VirtualSrc::CallerKw { .. }) {
+            return false;
+        }
+        if self.is_temp(dst) {
+            return true;
+        }
+        if !self.local_elision_ok(state, dst) {
+            return false;
+        }
+        let need = src.own_slots().count() as u16;
+        need == 0
+            || self
+                .iseq()
+                .local_scratch(dst)
+                .is_some_and(|(_, cap)| need <= cap)
+    }
+
+    ///
+    /// Whether `tmp = x` (*dst* a temporary, *src* the object a still-live
+    /// local holds) copies the object into a temporary for a call that
+    /// reads its elements and nothing else: `x.include?(a + 1)` evaluates
+    /// its receiver into a temporary before its argument. The temporary
+    /// then takes a second view of the same object, which that call
+    /// consumes, while the local keeps its own. The two views are never
+    /// told apart: the call's method reads the elements and neither
+    /// mutates nor lets out the receiver (`RecvEscape::elements`), so
+    /// even a lowering that builds the temporary's copy after all gives
+    /// the same answer. Between the copy and the call only instructions
+    /// writing a plain destination that is not the temporary may come,
+    /// in the same basic block.
+    ///
+    fn alias_consumed_by_call(&self, dst: SlotId, src: VirtualSrc, bc_pos: BcIndex) -> bool {
+        if !self.is_temp(dst) || matches!(src, VirtualSrc::CallerKw { .. }) {
+            return false;
+        }
+        let iseq = self.iseq();
+        let bb_info = &iseq.bb_info;
+        let end = bb_info[bb_info.get_bb_id(bc_pos)].end;
+        let class = CachedClass::from_class(src.class_id());
+        for i in bc_pos.to_usize() + 1..=end.to_usize() {
+            let ir = TraceIr::from_pc(iseq.get_pc(BcIndex::from(i)), self.store);
+            let reads = ir.read_slots(self.store);
+            if let TraceIr::MethodCall { callid, .. } = &ir {
+                let cs = &self.store[*callid];
+                return cs.recv == dst
+                    && cs.block_fid.is_none()
+                    && cs.block_arg.is_none()
+                    && cs.kw_args().is_empty()
+                    && cs.hash_splat_pos().is_empty()
+                    && cs.splat_pos().is_empty()
+                    && reads.iter().filter(|s| **s == dst).count() == 1
+                    && cs
+                        .name
+                        .and_then(|name| self.jit_check_method(class, name))
+                        .and_then(|(fid, _)| self.store.recv_escape(fid))
+                        .is_some_and(|e| e.elements.is_some());
+            }
+            if reads.contains(&dst)
+                || !defined_slot(&ir, self.store).is_some_and(|d| d != dst)
+            {
+                return false;
+            }
+        }
+        false
+    }
+
+    ///
+    /// `dst = src` with an elided object in *src*: dead afterwards
+    /// ([`Self::mov_target_ok`]), the object is now *dst*'s — into a
+    /// local, the elements in this frame's slots are copied into the
+    /// local's scratch window first. Still live, *dst* takes a second
+    /// view of the object ([`Self::alias_consumed_by_call`]).
+    ///
+    pub(super) fn consume_virtual_mov(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        dst: SlotId,
+        src: SlotId,
+        bc_pos: BcIndex,
+    ) {
+        if !self.dead_after(bc_pos, src) {
+            let obj = state.virtual_at(src).unwrap();
+            state.def_virtual(dst, obj);
+            return;
+        }
+        let obj = state.take_virtual(src).unwrap();
+        let moved = if self.is_temp(dst) {
+            obj
+        } else {
+            let base = self.iseq().local_scratch(dst).map(|(base, _)| base);
+            match obj {
+                VirtualSrc::Slots { src, len, callid } => {
+                    let base = base.unwrap();
+                    self.copy_to_scratch(state, ir, src, base, len);
+                    VirtualSrc::Slots {
+                        src: base,
+                        len,
+                        callid,
+                    }
+                }
+                VirtualSrc::Range {
+                    mut start,
+                    mut end,
+                    exclude_end,
+                } => {
+                    for (i, e) in [&mut start, &mut end].into_iter().enumerate() {
+                        if let RangeEnd::Slot(slot) = *e {
+                            let to = base.unwrap() + i as u16;
+                            self.copy_to_scratch(state, ir, slot, to, 1);
+                            *e = RangeEnd::Slot(to);
+                        }
+                    }
+                    VirtualSrc::Range {
+                        start,
+                        end,
+                        exclude_end,
+                    }
+                }
+                VirtualSrc::Literal(_) | VirtualSrc::CallerSlots { .. } => obj,
+                VirtualSrc::CallerKw { .. } => unreachable!(),
+            }
+        };
+        state.def_virtual(dst, moved);
+        // The elements left behind by a copy are dead with `src`.
+        state.discard_dead_elements(obj, src);
+    }
+
+    ///
     /// Perform the allocation of the elided object in *dst* after all,
     /// exactly as its literal would have.
     ///
@@ -562,12 +957,20 @@ impl<'a> JitContext<'a> {
             VirtualSrc::Slots { src, len, callid } => {
                 state.write_back_range(ir, src, len);
                 let using_fpr = state.get_using_fpr(ir);
-                let inline = if len as usize <= ARRAY_INLINE_CAPA {
-                    Some((src, len))
+                if src != self.store[callid].args {
+                    // The elements moved into a local's scratch window
+                    // (§10): built over the window, which the literal's
+                    // own allocation (whose cold path reads the call
+                    // site's argument slots) would not read.
+                    ir.create_array_from(using_fpr, SlotBase::Own, src, len);
                 } else {
-                    None
-                };
-                ir.new_array(using_fpr, callid, inline);
+                    let inline = if len as usize <= ARRAY_INLINE_CAPA {
+                        Some((src, len))
+                    } else {
+                        None
+                    };
+                    ir.new_array(using_fpr, callid, inline);
+                }
                 state.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
             VirtualSrc::Literal(val) => {
@@ -1322,12 +1725,13 @@ impl AbstractFrame {
     ///
     pub(in crate::codegen::jitgen) fn materialize_virtual_args(
         &mut self,
+        store: &Store,
         ir: &mut AsmIr,
         callsite: &CallSiteInfo,
     ) {
         for slot in callsite.args..callsite.args + callsite.pos_num {
             if self.virtual_at(slot).is_some() {
-                self.materialize_virtual_at(ir, slot, UsingFpr::new());
+                self.materialize_virtual_at(store, ir, slot, UsingFpr::new());
             }
         }
     }
@@ -1341,6 +1745,7 @@ impl AbstractFrame {
     ///
     pub(in crate::codegen::jitgen) fn materialize_virtual_at(
         &mut self,
+        store: &Store,
         ir: &mut AsmIr,
         slot: SlotId,
         using_fpr: UsingFpr,
@@ -1349,8 +1754,14 @@ impl AbstractFrame {
         match src {
             VirtualSrc::Slots { src, len, callid } => {
                 self.write_back_range(ir, src, len);
-                let inline = (len as usize <= ARRAY_INLINE_CAPA).then_some((src, len));
-                ir.new_array(using_fpr, callid, inline);
+                if src != store[callid].args {
+                    // Elements in a local's scratch window (§10), as in
+                    // `JitContext::materialize_virtual`.
+                    ir.create_array_from(using_fpr, SlotBase::Own, src, len);
+                } else {
+                    let inline = (len as usize <= ARRAY_INLINE_CAPA).then_some((src, len));
+                    ir.new_array(using_fpr, callid, inline);
+                }
                 self.def_reg2acc_class(ir, GP::Rax, slot, ARRAY_CLASS);
             }
             VirtualSrc::Literal(val) => {
@@ -1399,22 +1810,45 @@ impl AbstractFrame {
         self.def_reg2acc_class(ir, GP::Rax, dst, HASH_CLASS);
     }
 }
-
 ///
-/// Whether an elided object not involved in *trace_ir* may stay elided
-/// across it: the instruction runs no Ruby code and reaches no call (so no
-/// frame is suspended with the object owed, and no dispatch arm splits the
-/// state).
+/// The slot *trace_ir* defines (writes without reading), for the
+/// instructions whose destination is plain; `None` for the rest, which
+/// [`JitContext::local_live_after`] then treats as neither a read nor a
+/// kill (conservative: the slot stays live past them).
 ///
-/// The slot an instruction [`virtual_survives`] accepts writes.
-fn written_slot(trace_ir: &TraceIr) -> Option<SlotId> {
+fn defined_slot(trace_ir: &TraceIr, store: &Store) -> Option<SlotId> {
     match trace_ir {
         TraceIr::Mov(dst, _)
         | TraceIr::Literal(dst, _)
         | TraceIr::FrozenLiteral(dst, _)
-        | TraceIr::Array { dst, .. } => Some(*dst),
+        | TraceIr::StringFreeze(dst, _)
+        | TraceIr::Array { dst, .. }
+        | TraceIr::Hash { dst, .. }
+        | TraceIr::Range { dst, .. }
+        | TraceIr::LoadConst(dst, _)
+        | TraceIr::LoadDynVar(dst, _)
+        | TraceIr::LoadIvar(dst, ..)
+        | TraceIr::LoadGvar { dst, .. }
+        | TraceIr::LoadCvar { dst, .. }
+        | TraceIr::UnOp { _dst: dst, .. }
+        | TraceIr::Index { _dst: dst, .. }
+        | TraceIr::BlockArgProxy(dst, ..)
+        | TraceIr::BlockArg(dst, ..) => Some(*dst),
+        TraceIr::BinOp { dst, .. } | TraceIr::BinCmp { dst, .. } => *dst,
+        TraceIr::ConcatStr(dst, ..) => *dst,
+        TraceIr::MethodCall { callid, .. } => store[*callid].dst,
         _ => None,
     }
+}
+
+/// What a call may capture of this frame ([`JitContext::capture_point`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Capture {
+    /// The whole frame, through a `binding` / `eval` (or a call the
+    /// compiler cannot name).
+    Frame,
+    /// The locals a block literal passed to the call reads.
+    Block,
 }
 
 fn virtual_survives(trace_ir: &TraceIr) -> bool {

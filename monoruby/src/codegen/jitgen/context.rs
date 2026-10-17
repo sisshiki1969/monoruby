@@ -4495,7 +4495,7 @@ impl<'a> JitContext<'a> {
                     // This path's object is not what every path returns:
                     // perform its allocation here, as the `ret` would have.
                     let using_fpr = inner.get_using_fpr(&mut ir);
-                    inner.materialize_virtual_at(&mut ir, ret_slot, using_fpr);
+                    inner.materialize_virtual_at(self.store, &mut ir, ret_slot, using_fpr);
                 }
                 inner.load(&mut ir, ret_slot, GP::Rax);
             }

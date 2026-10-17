@@ -328,6 +328,14 @@ pub struct ISeqInfo {
     ///
     pub temp_num: u16,
     ///
+    /// The scratch windows of the locals an Array or Range literal is
+    /// assigned to: `(local, window base, window length)`, the window being
+    /// hidden temporaries (counted in `temp_num`) where the JIT keeps the
+    /// elements of an object it did not allocate while the local holds it
+    /// (`doc/escape_analysis.md` §10).
+    ///
+    pub(crate) local_scratch: Vec<(SlotId, SlotId, u16)>,
+    ///
     /// Lexical module stack of this method.
     ///
     pub lexical_context: Vec<ClassId>,
@@ -598,6 +606,7 @@ impl ISeqInfo {
             locals: Default::default(),
             non_temp_num: 0,
             temp_num: 0,
+            local_scratch: vec![],
             lexical_context: vec![],
             sourceinfo,
             jit_entry: HashMap::default(),
@@ -1029,6 +1038,16 @@ impl ISeqInfo {
 
     pub(crate) fn has_exception_handler(&self) -> bool {
         !self.exception_map.is_empty()
+    }
+
+    ///
+    /// The scratch window `(base, len)` of the local *slot*, if an Array
+    /// or Range literal is assigned to it (`Self::local_scratch`).
+    ///
+    pub(crate) fn local_scratch(&self, slot: SlotId) -> Option<(SlotId, u16)> {
+        self.local_scratch
+            .iter()
+            .find_map(|(local, base, len)| (*local == slot).then_some((*base, *len)))
     }
 
     #[cfg(feature = "emit-bc")]
