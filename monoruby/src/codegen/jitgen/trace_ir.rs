@@ -803,6 +803,37 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
 
 impl TraceIr {
     ///
+    /// The slot this instruction defines (writes without reading), for
+    /// the instructions whose destination is plain; `None` for the rest,
+    /// which the liveness scans treat as neither a read nor a kill
+    /// (conservative: the slot stays live past them).
+    ///
+    pub(crate) fn defined_slot(&self, store: &Store) -> Option<SlotId> {
+        match self {
+            TraceIr::Mov(dst, _)
+            | TraceIr::Literal(dst, _)
+            | TraceIr::FrozenLiteral(dst, _)
+            | TraceIr::StringFreeze(dst, _)
+            | TraceIr::Array { dst, .. }
+            | TraceIr::Hash { dst, .. }
+            | TraceIr::Range { dst, .. }
+            | TraceIr::LoadConst(dst, _)
+            | TraceIr::LoadDynVar(dst, _)
+            | TraceIr::LoadIvar(dst, ..)
+            | TraceIr::LoadGvar { dst, .. }
+            | TraceIr::LoadCvar { dst, .. }
+            | TraceIr::UnOp { _dst: dst, .. }
+            | TraceIr::Index { _dst: dst, .. }
+            | TraceIr::BlockArgProxy(dst, ..)
+            | TraceIr::BlockArg(dst, ..) => Some(*dst),
+            TraceIr::BinOp { dst, .. } | TraceIr::BinCmp { dst, .. } => *dst,
+            TraceIr::ConcatStr(dst, ..) => *dst,
+            TraceIr::MethodCall { callid, .. } => store[*callid].dst,
+            _ => None,
+        }
+    }
+
+    ///
     /// The slots of the current frame this instruction reads, for the
     /// loop liveness (`Liveness`). Exhaustive by construction: a new
     /// instruction has to say what it reads. Reads through the frame
@@ -878,11 +909,15 @@ impl TraceIr {
             | TraceIr::ExpandArray { src: slot, .. }
             | TraceIr::DefinedMethod { recv: slot, .. } => vec![*slot],
             TraceIr::ArrayConcat { dst: a, src: b }
-            | TraceIr::Range { start: a, end: b, .. }
+            | TraceIr::Range {
+                start: a, end: b, ..
+            }
             | TraceIr::BinOp { lhs: a, rhs: b, .. }
             | TraceIr::BinCmp { lhs: a, rhs: b, .. }
             | TraceIr::ArrayTEq { lhs: a, rhs: b }
-            | TraceIr::Index { base: a, idx: b, .. }
+            | TraceIr::Index {
+                base: a, idx: b, ..
+            }
             | TraceIr::AliasMethod { new: a, old: b } => vec![*a, *b],
             TraceIr::IndexAssign { base, idx, src, .. } => vec![*base, *idx, *src],
             // `len` counts key/value pairs.
@@ -1172,7 +1207,17 @@ impl TraceIr {
                 polymorphic,
                 overflowed,
                 nou64,
-            } => binop_fmt(store, kind, dst, lhs, rhs, ic.clone(), polymorphic, overflowed, nou64),
+            } => binop_fmt(
+                store,
+                kind,
+                dst,
+                lhs,
+                rhs,
+                ic.clone(),
+                polymorphic,
+                overflowed,
+                nou64,
+            ),
 
             TraceIr::BinCmp {
                 kind,
@@ -1183,7 +1228,17 @@ impl TraceIr {
                 polymorphic,
                 fused,
                 nou64,
-            } => cmp_fmt(store, kind, dst, lhs, rhs, ic.clone(), fused, polymorphic, nou64),
+            } => cmp_fmt(
+                store,
+                kind,
+                dst,
+                lhs,
+                rhs,
+                ic.clone(),
+                fused,
+                polymorphic,
+                nou64,
+            ),
 
             TraceIr::ArrayTEq { lhs, rhs } => {
                 format!("{lhs:?} = *{lhs:?} === {rhs:?}")

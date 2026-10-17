@@ -1063,6 +1063,14 @@ pub(crate) struct FlagsNarrow {
 pub(crate) struct JitContext<'a> {
     pub store: &'a Store,
     codegen_mode: bool,
+    ///
+    /// Layer B of the slot liveness tables, per iseq of this compilation
+    /// (`slot_analysis::UnitLiveness`): the capture verdicts of the
+    /// inline caches as they stand now, applied to the iseq's structural
+    /// table. Shared with the analysis clones, which see the same caches.
+    ///
+    pub(super) unit_liveness:
+        std::cell::RefCell<HashMap<ISeqId, std::rc::Rc<slot_analysis::UnitLiveness>>>,
     /// "the object in this slot is proven not frozen on the current path"
     /// (④-b): `SlotId::self_()` after a `StoreIvar` guard, an attr_writer
     /// receiver after its guard. Consumed by the next self-ivar store /
@@ -1083,7 +1091,6 @@ pub(crate) struct JitContext<'a> {
     /// compiled (see [`Self::unfrozen_slots`]). Read via
     /// `instr_unfrozen_contains`, published back via `restore_unfrozen`.
     pub(super) instr_unfrozen: Vec<SlotId>,
-
 
     ///
     /// Set while an intra-block dispatch arm is being emitted
@@ -1309,6 +1316,7 @@ impl<'a> JitContext<'a> {
         Self {
             store,
             codegen_mode,
+            unit_liveness: Default::default(),
             unfrozen_slots: Vec::new(),
             instr_unfrozen: Vec::new(),
             in_dispatch_arm: false,
@@ -1393,6 +1401,7 @@ impl<'a> JitContext<'a> {
         Self {
             store: self.store,
             codegen_mode: false,
+            unit_liveness: self.unit_liveness.clone(),
             call_site_fpr_saves: HashMap::default(),
             kept_outer_views: vec![],
             outer_claim_barrier: false,
@@ -4214,7 +4223,8 @@ impl<'a> JitContext<'a> {
         let dst = self.handover_site_of(callee, pos)??;
         let caller = &self.stack_frame[pos];
         let ciseq = &self.store[caller.iseq_id];
-        if dst.0 as usize <= ciseq.local_num() || !caller.abstract_state.as_ref()?.no_capture_guard()
+        if dst.0 as usize <= ciseq.local_num()
+            || !caller.abstract_state.as_ref()?.no_capture_guard()
         {
             return None;
         }
@@ -4227,12 +4237,13 @@ impl<'a> JitContext<'a> {
         let fits = |n: usize| dst.0 as usize + n <= ciseq.total_reg_num();
         match src {
             VirtualSrc::Literal(v) => Some(VirtualSrc::Literal(v)),
-            VirtualSrc::Slots { len, .. } | VirtualSrc::CallerSlots { len, .. } => fits(len as usize)
-                .then_some(VirtualSrc::CallerSlots {
+            VirtualSrc::Slots { len, .. } | VirtualSrc::CallerSlots { len, .. } => {
+                fits(len as usize).then_some(VirtualSrc::CallerSlots {
                     src: dst,
                     len,
                     base: SlotBase::Own,
-                }),
+                })
+            }
             VirtualSrc::Range {
                 start,
                 end,

@@ -49,6 +49,7 @@ mod guard;
 // Unified low-level IR (Phase-1 Stage 1: data model only, not yet wired in).
 pub(in crate::codegen) mod lir;
 mod merge;
+pub(crate) mod slot_analysis;
 mod spec_memo;
 mod state;
 pub mod trace_ir;
