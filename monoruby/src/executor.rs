@@ -1364,6 +1364,12 @@ impl Executor {
                 }
             }
         };
+        // A host gem's file: activate its gem *before* running it, as
+        // rubygems' own `require` does, so the gem's dependency
+        // constraints are in force when the file's own requires resolve
+        // (rubocop pins `json ~> 2.3`; its `require "json"` must not
+        // activate a newer json installed next to it).
+        self.activate_host_gem(globals, file_name, is_relative, &canonicalized_path);
         {
             let loader = crate::scheduler::current_thread(self).id();
             globals
@@ -1523,9 +1529,8 @@ impl Executor {
                     .to_str()
                     .is_some_and(|s| s.contains("/gems/"))
                 {
-                    self.get_constant(globals, OBJECT_CLASS, gem_id)
-                        .ok()
-                        .flatten()
+                    // Done before the load (`activate_host_gem`).
+                    None
                 } else if canonicalized_path.starts_with(install_root().join("stub"))
                     && !self.is_loading_path(&install_root().join("lib").join("rubygems.rb"))
                 {
@@ -1573,6 +1578,50 @@ impl Executor {
             }
         }
         Ok(())
+    }
+
+    /// `Gem.try_activate(feature)` before a host gem's file
+    /// (`/gems/` in its path) is run, for a gem's entry require (a bare
+    /// feature name): what rubygems' `require` does ahead of the load,
+    /// so the gem's spec is in `Gem.loaded_specs` and its dependency
+    /// constraints bind the requires the file itself makes. A host gem's
+    /// file is proof the program uses host gems, so this boots rubygems
+    /// through the `Gem` autoload if nothing has yet. Best-effort: any
+    /// error (a version conflict, the boot) is swallowed and the load
+    /// goes ahead as it would have.
+    fn activate_host_gem(
+        &mut self,
+        globals: &mut Globals,
+        file_name: &std::path::Path,
+        is_relative: bool,
+        canonicalized_path: &std::path::Path,
+    ) {
+        if is_relative
+            || globals.no_gems
+            || !CODEGEN.with(|codegen| codegen.borrow().startup_flag)
+            || !file_name.to_str().is_some_and(|s| !s.contains('/'))
+            || !canonicalized_path
+                .to_str()
+                .is_some_and(|s| s.contains("/gems/"))
+        {
+            return;
+        }
+        let Some(gem) = self
+            .get_constant(globals, OBJECT_CLASS, IdentId::get_id("Gem"))
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+        let feature = Value::string_from_str(&file_name.to_string_lossy());
+        let _ = self.invoke_method_if_exists(
+            globals,
+            IdentId::get_id("try_activate"),
+            gem,
+            &[feature],
+            None,
+            None,
+        );
     }
 
     /// `Gem.try_activate(feature)` for a `require` that found nothing:
