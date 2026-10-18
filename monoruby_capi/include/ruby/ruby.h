@@ -6,16 +6,22 @@
  * the `rb_*` functions over monoruby's extension ABI, monoruby_ext.h).
  * The result loads with a plain `require` from $LOAD_PATH.
  *
- * This is *API* compatibility, not ABI compatibility: a VALUE carries
- * monoruby's bit layout (Qnil is 0x04, Qfalse 0x14, Qundef 0), so a
- * library compiled against CRuby's headers cannot be loaded and has to
- * be rebuilt. The object layout macros (RSTRING_PTR, RARRAY_LEN, ...)
- * are functions here. What is not provided yet is listed in
- * doc/c_api.md; using it is a compile or link error, never a silent
- * misbehaviour.
+ * This is *API* compatibility, not ABI compatibility: a library
+ * compiled against CRuby's headers cannot be loaded and has to be
+ * rebuilt. The object layout macros (RSTRING_PTR, RARRAY_LEN, ...) are
+ * functions here. What is not provided yet is listed in doc/c_api.md;
+ * using it is a compile or link error, never a silent misbehaviour.
+ *
+ * A VALUE has CRuby's bit layout (64-bit, flonum): Qfalse is 0, Qnil
+ * 0x04, Qtrue 0x14, Qundef 0x24, a Fixnum is `n << 1 | 1`, a flonum has
+ * its low two bits `10`, a static Symbol is `id << 8 | 0x0c`, and
+ * anything else is a pointer. Code that tests `if (v)` for Qfalse, keeps
+ * Qnil/Qfalse apart with `v & ~Qnil`, or reads `SYM2ID` by shifting
+ * therefore behaves as on CRuby. The layer (capi.c) converts to and from
+ * the interpreter's own encoding at every call across the ABI; nothing
+ * in an extension sees the interpreter's bits.
  *
  * Differences an extension can observe:
- *   - Qfalse is not 0. Test with RTEST / NIL_P, never `if (v)`.
  *   - Every VALUE the extension receives during a method call stays
  *     alive until that call returns (the collector is precise, so this
  *     stands in for CRuby's conservative stack scan). A VALUE kept in a
@@ -73,11 +79,11 @@ typedef st_data_t st_index_t;
 #define PRIxVALUE PRI_VALUE_PREFIX "x"
 #define PRIsVALUE PRI_VALUE_PREFIX "i" RUBY_PRI_VALUE_MARK
 
-/* monoruby's immediates (value.rs). */
-#define RUBY_Qfalse ((VALUE)0x14)
-#define RUBY_Qtrue ((VALUE)0x1c)
+/* CRuby's special constants (USE_FLONUM, 64-bit). */
+#define RUBY_Qfalse ((VALUE)0x00)
+#define RUBY_Qtrue ((VALUE)0x14)
 #define RUBY_Qnil ((VALUE)0x04)
-#define RUBY_Qundef ((VALUE)0)
+#define RUBY_Qundef ((VALUE)0x24)
 #define Qfalse RUBY_Qfalse
 #define Qtrue RUBY_Qtrue
 #define Qnil RUBY_Qnil
@@ -88,8 +94,10 @@ typedef st_data_t st_index_t;
 #define RUBY_FLONUM_MASK 0x03
 #define RUBY_FLONUM_FLAG 0x02
 #define RUBY_SYMBOL_FLAG 0x0c
+#define RUBY_IMMEDIATE_MASK 0x07
+#define RUBY_SPECIAL_SHIFT 8
 
-#define RB_TEST(v) (((VALUE)(v) != Qfalse) && ((VALUE)(v) != Qnil))
+#define RB_TEST(v) (((VALUE)(v) & (VALUE)~RUBY_Qnil) != 0)
 #define RTEST(v) RB_TEST(v)
 #define RB_NIL_P(v) ((VALUE)(v) == Qnil)
 #define NIL_P(v) RB_NIL_P(v)
@@ -107,13 +115,12 @@ typedef st_data_t st_index_t;
 #define DYNAMIC_SYM_P(v) 0
 #define RB_SYMBOL_P(v) RB_STATIC_SYM_P(v)
 #define SYMBOL_P(v) RB_SYMBOL_P(v)
-/* Not a pointer to an object: an immediate, or Qundef. */
-#define RB_SPECIAL_CONST_P(v) (((((VALUE)(v)) & 7) != 0) || ((VALUE)(v) == 0))
-#define SPECIAL_CONST_P(v) RB_SPECIAL_CONST_P(v)
-/* CRuby's IMMEDIATE_P is false for nil and false. */
-#define RB_IMMEDIATE_P(v) \
-    (((((VALUE)(v)) & 7) != 0) && ((VALUE)(v) != Qnil) && ((VALUE)(v) != Qfalse))
+/* CRuby's IMMEDIATE_P: true for nil (0x04), false for false (0). */
+#define RB_IMMEDIATE_P(v) ((((VALUE)(v)) & RUBY_IMMEDIATE_MASK) != 0)
 #define IMMEDIATE_P(v) RB_IMMEDIATE_P(v)
+/* Not a pointer to an object: an immediate (nil and Qundef included) or false. */
+#define RB_SPECIAL_CONST_P(v) (RB_IMMEDIATE_P(v) || !RB_TEST(v))
+#define SPECIAL_CONST_P(v) RB_SPECIAL_CONST_P(v)
 
 #define RUBY_FIXNUM_MAX (LONG_MAX >> 1)
 #define RUBY_FIXNUM_MIN (LONG_MIN >> 1)
@@ -134,8 +141,8 @@ typedef st_data_t st_index_t;
 #define FIX2LONG(x) RB_FIX2LONG(x)
 #define FIX2ULONG(x) ((unsigned long)RB_FIX2LONG(x))
 
-#define RB_ID2SYM(id) ((VALUE)((((VALUE)(id)) << 32) | RUBY_SYMBOL_FLAG))
-#define RB_SYM2ID(s) ((ID)(((VALUE)(s)) >> 32))
+#define RB_ID2SYM(id) ((VALUE)((((VALUE)(id)) << RUBY_SPECIAL_SHIFT) | RUBY_SYMBOL_FLAG))
+#define RB_SYM2ID(s) ((ID)(((VALUE)(s)) >> RUBY_SPECIAL_SHIFT))
 #define ID2SYM(id) RB_ID2SYM(id)
 #define SYM2ID(s) RB_SYM2ID(s)
 

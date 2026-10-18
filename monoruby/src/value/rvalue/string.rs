@@ -3779,11 +3779,25 @@ impl RStringInner {
         (ptr, len)
     }
 
-    /// Set the length to `len`, truncating or padding with NUL bytes —
-    /// CRuby's `rb_str_resize` / `rb_str_set_len` for a C extension.
-    pub(crate) fn resize_zero_fill(&mut self, len: usize) {
+    /// Set the length to `len` — CRuby's `rb_str_resize` /
+    /// `rb_str_set_len` for a C extension. Truncating keeps the buffer;
+    /// growing within the buffer's capacity keeps the bytes already there
+    /// (the extension wrote them through `c_str_ptr`: json's parser fills
+    /// an `rb_str_buf_new` buffer and then `rb_str_set_len`s it); growing
+    /// past the capacity pads with NUL bytes.
+    pub(crate) fn resize_keep_capacity(&mut self, len: usize) {
         self.cr.set(CodeRange::Unknown);
-        self.owned_mut().resize(len, 0);
+        let buf = self.owned_mut();
+        if len <= buf.capacity() {
+            // SAFETY: `len` is within the allocation. The bytes between
+            // the old and the new length were written by the extension
+            // or belonged to the string before a truncation (the C API
+            // layer's `rb_str_buf_new` zero-fills its capacity first),
+            // and `u8` has no invalid bit pattern.
+            unsafe { buf.set_len(len) };
+        } else {
+            buf.resize(len, 0);
+        }
     }
 
     /// Detach a shared string from its root in place — `uniquify` for

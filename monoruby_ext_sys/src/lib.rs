@@ -442,8 +442,11 @@ pub struct MrApi {
     /// Valid until the String is next resized or collected. NULL with a
     /// TypeError pending when `v` is not a String.
     pub str_cptr: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue, len: *mut usize) -> *mut u8,
-    /// Set a String's length, truncating or padding with NUL bytes.
-    /// 0 on success; -1 with an error pending (not a String, frozen).
+    /// Set a String's length. Truncating keeps the buffer; growing
+    /// within the buffer's capacity keeps the bytes there (what the
+    /// extension wrote through `str_cptr` after an earlier, longer
+    /// `str_resize`); growing past it pads with NUL bytes. 0 on success;
+    /// -1 with an error pending (not a String, frozen).
     pub str_resize: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue, len: usize) -> c_int,
     /// Append `ptr[0..len]` to a String, keeping its encoding. 0 on
     /// success; -1 with an error pending.

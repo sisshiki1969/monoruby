@@ -93,9 +93,10 @@ gem install --no-document --conservative \
     bigdecimal bcrypt msgpack yajl-ruby strptime cool.io zstd-ruby:1.5.7.0 \
     markly nokogiri erubi hexapdf chunky_png \
     rubocop:1.79.1 rubocop-performance:1.25.0 rubocop-rails:2.32.0
-# strscan is a default gem, which satisfies --conservative without ever
-# putting a .gem in the cache; tests/capi_gems.rs needs the file there.
-gem install --no-document strscan
+# strscan and json are default gems, which satisfy --conservative without
+# ever putting a .gem in the cache; tests/capi_gems.rs needs the files
+# there (json at the version the stand-in in gem/json tracks).
+gem install --no-document strscan json:2.18.0
 
 # monoruby caches the probed host Ruby and its gem paths; drop the cache so the
 # next run re-probes instead of describing a Ruby this script just replaced.

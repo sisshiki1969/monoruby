@@ -233,3 +233,13 @@ fn strptime() {
 fn yajl_ruby() {
     check_gem("yajl-ruby");
 }
+
+/// json 2.18.0's parser.so and generator.so: the extension that relies on
+/// CRuby's VALUE layout (`Qfalse == 0` in fbuffer.h and the generator),
+/// which the layer now provides. Also `rb_global_variable` on C globals
+/// holding nil / false, `rb_hash_foreach`, `rb_hash_bulk_insert`,
+/// `rb_enc_interned_str`, `rb_ext_ractor_safe`, `RB_OBJ_WRITE`.
+#[test]
+fn json() {
+    check_gem("json");
+}

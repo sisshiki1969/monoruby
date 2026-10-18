@@ -1972,7 +1972,7 @@ unsafe extern "C" fn mr_str_resize(ctx: *mut MrContext, v: MrValue, len: usize) 
         set_err(vm, e);
         return -1;
     }
-    s.as_rstring_inner_mut().resize_zero_fill(len);
+    s.as_rstring_inner_mut().resize_keep_capacity(len);
     0
 }
 

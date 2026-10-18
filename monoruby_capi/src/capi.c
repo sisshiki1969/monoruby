@@ -24,6 +24,17 @@
  *     interpreter's temp stack, which the interpreter truncates when the
  *     extension method returns. That keeps alive whatever C holds in
  *     locals — CRuby gets the same from scanning the C stack.
+ *
+ * And one representation rule: a VALUE in C has CRuby's bit layout
+ * (ruby/ruby.h), an MrValue the interpreter's. The two agree on Fixnums,
+ * flonums and heap pointers and differ on nil / true / false / undef and
+ * on static Symbols, so every value crossing the ABI goes through `M()`
+ * (to the interpreter) or `R()` (from it): the arguments and results of
+ * every `api->` call, the arguments and result of every C function the
+ * interpreter calls (`capi_dispatch`, `block_dispatch`, the native
+ * `mark`s), and the elements behind `RARRAY_CONST_PTR`, which are a
+ * converted copy owned by the current Ruby call. Only MrValues the layer
+ * never shows to C (block handles, native-object ids) stay as they are.
  */
 #include "ruby.h"
 #include "ruby/encoding.h"
@@ -34,6 +45,7 @@
 #include <errno.h>
 #include <math.h>
 #include <setjmp.h>
+#include <string.h>
 #include <stdio.h>
 
 /* The header's convenience macros would rename the definitions below. */
@@ -60,15 +72,31 @@ struct capi_buf {
     char data[];
 };
 
+/*
+ * The elements of an Array as VALUEs, for RARRAY_CONST_PTR: a converted
+ * copy, refreshed on every request and owned by the Ruby call. A call
+ * holds up to CAPI_ARY_SLOTS such copies at once (one per distinct
+ * Array, least recently taken replaced), so pointers into a few Arrays
+ * can be live together, as they are in CRuby.
+ */
+#define CAPI_ARY_SLOTS 8
+struct capi_ary_slot {
+    MrValue ary;
+    VALUE *buf;
+    size_t cap;
+};
+
 struct capi_frame {
     MrContext *ctx;
     MrValue block;
     struct capi_frame *prev;
     /* The frame of the Ruby call this one belongs to (itself for a
-     * dispatch frame); it owns the C strings handed out during the
-     * call. */
+     * dispatch frame); it owns the C strings and the Array copies
+     * handed out during the call. */
     struct capi_frame *owner;
     struct capi_buf *bufs;
+    struct capi_ary_slot ary[CAPI_ARY_SLOTS];
+    unsigned ary_next;
     jmp_buf jb;
 };
 
@@ -99,12 +127,56 @@ capi_unwind(void)
     longjmp(frame()->jb, 1);
 }
 
+/*
+ * VALUE <-> MrValue. The interpreter's immediates (value.rs): nil 0x04,
+ * false 0x14, true 0x1c, undef 0, a Symbol `id << 32 | 0x0c`; CRuby's
+ * (ruby/ruby.h): false 0, nil 0x04, true 0x14, undef 0x24, a Symbol
+ * `id << 8 | 0x0c`. So nil is the same bits on both sides, CRuby's true
+ * is the interpreter's false, and the rest is a table. Fixnums
+ * (`n << 1 | 1`), flonums (the same rotation, low bits `10`) and heap
+ * pointers (8-aligned, nonzero) are identical. Neither side's heap
+ * pointer can look like the other's Symbol: 0x0c in the low byte is not
+ * 8-aligned.
+ */
+#define MR_Qnil ((MrValue)0x04)
+#define MR_Qfalse ((MrValue)0x14)
+#define MR_Qtrue ((MrValue)0x1c)
+#define MR_SYMBOL_FLAG ((MrValue)0x0c)
+
+static inline MrValue
+M(VALUE v)
+{
+    switch (v) {
+    case Qfalse: return MR_Qfalse;
+    case Qnil: return MR_Qnil;
+    case Qtrue: return MR_Qtrue;
+    case Qundef: return MR_UNDEF;
+    }
+    if ((v & 0xff) == RUBY_SYMBOL_FLAG)
+        return ((MrValue)(v >> RUBY_SPECIAL_SHIFT) << 32) | MR_SYMBOL_FLAG;
+    return (MrValue)v;
+}
+
+static inline VALUE
+R(MrValue v)
+{
+    switch (v) {
+    case MR_Qfalse: return Qfalse;
+    case MR_Qnil: return Qnil;
+    case MR_Qtrue: return Qtrue;
+    case MR_UNDEF: return Qundef;
+    }
+    if ((v & 0xffffffffu) == MR_SYMBOL_FLAG)
+        return ((VALUE)(v >> 32) << RUBY_SPECIAL_SHIFT) | RUBY_SYMBOL_FLAG;
+    return (VALUE)v;
+}
+
 /* Keep `v` alive until the current Ruby call returns. */
 static VALUE
 root(VALUE v)
 {
     if (!RB_SPECIAL_CONST_P(v))
-        api->temp_push(ctx(), (MrValue)v);
+        api->temp_push(ctx(), M(v));
     return v;
 }
 
@@ -114,7 +186,36 @@ check(MrValue v)
 {
     if (v == MR_UNDEF)
         capi_unwind();
-    return root((VALUE)v);
+    return root(R(v));
+}
+
+/* Up to this many arguments are converted on the stack. */
+#define CAPI_SMALL_ARGS 16
+
+static char *frame_buf(size_t len);
+
+/* `argv` as MrValues, in `small` or in a buffer of the current call. */
+static const MrValue *
+mr_args(int argc, const VALUE *argv, MrValue *small)
+{
+    if (argc <= 0)
+        return NULL;
+    MrValue *out = argc <= CAPI_SMALL_ARGS ? small
+                                           : (MrValue *)frame_buf((size_t)argc * sizeof(MrValue));
+    for (int i = 0; i < argc; i++)
+        out[i] = M(argv[i]);
+    return out;
+}
+
+/* `argv` as VALUEs, likewise. */
+static VALUE *
+rb_args(int argc, const MrValue *argv, VALUE *small)
+{
+    VALUE *out = argc <= CAPI_SMALL_ARGS ? small
+                                         : (VALUE *)frame_buf((size_t)argc * sizeof(VALUE));
+    for (int i = 0; i < argc; i++)
+        out[i] = R(argv[i]);
+    return out;
 }
 
 static void
@@ -146,6 +247,10 @@ free_bufs(struct capi_frame *f)
         b = next;
     }
     f->bufs = NULL;
+    for (unsigned i = 0; i < CAPI_ARY_SLOTS; i++) {
+        free(f->ary[i].buf);
+        f->ary[i].buf = NULL;
+    }
 }
 
 /* ---------------------------------------------------------------------
@@ -225,7 +330,7 @@ static const struct {
 static VALUE
 lookup_path(const char *path)
 {
-    VALUE cur = (VALUE)MR_UNDEF;
+    VALUE cur = Qundef;
     char part[128];
     const char *p = path;
     for (;;) {
@@ -235,10 +340,10 @@ lookup_path(const char *path)
             return Qnil;
         memcpy(part, p, n);
         part[n] = 0;
-        MrValue v = api->const_get(ctx(), (MrValue)cur, part);
+        MrValue v = api->const_get(ctx(), M(cur), part);
         if (v == MR_UNDEF)
             return Qnil;
-        cur = (VALUE)v;
+        cur = R(v);
         if (!sep)
             return cur;
         p = sep + 2;
@@ -321,9 +426,14 @@ capi_dispatch(MrContext *c, MrValue self, int argc, const MrValue *argv, MrValue
     fr.prev = capi_cur;
     fr.owner = &fr;
     fr.bufs = NULL;
+    memset(fr.ary, 0, sizeof(fr.ary));
+    fr.ary_next = 0;
     capi_cur = &fr;
-    if (setjmp(fr.jb) == 0)
-        result = (MrValue)call_cfunc((const struct capi_method *)data, (VALUE)self, argc, (VALUE *)argv);
+    if (setjmp(fr.jb) == 0) {
+        VALUE small[CAPI_SMALL_ARGS];
+        VALUE *a = rb_args(argc, argv, small);
+        result = M(call_cfunc((const struct capi_method *)data, R(self), argc, a));
+    }
     free_bufs(fp);
     capi_cur = fp->prev;
     return result;
@@ -348,6 +458,8 @@ monoruby_capi_init(MrContext *c, void (*init)(void))
     fr.prev = capi_cur;
     fr.owner = &fr;
     fr.bufs = NULL;
+    memset(fr.ary, 0, sizeof(fr.ary));
+    fr.ary_next = 0;
     capi_cur = &fr;
     if (setjmp(fr.jb) == 0) {
         init_globals();
@@ -615,7 +727,7 @@ rb_str_format(int argc, const VALUE *argv, VALUE fmt)
 void
 rb_exc_raise(VALUE exc)
 {
-    api->raise_exception(ctx(), (MrValue)exc);
+    api->raise_exception(ctx(), M(exc));
     capi_unwind();
 }
 
@@ -627,7 +739,7 @@ rb_raise(VALUE klass, const char *fmt, ...)
     va_start(ap, fmt);
     const char *msg = vformat_buf(fmt, ap, &len);
     va_end(ap);
-    api->raise(ctx(), (MrValue)klass, msg, len);
+    api->raise(ctx(), M(klass), msg, len);
     capi_unwind();
 }
 
@@ -769,6 +881,8 @@ rb_protect(VALUE (*func)(VALUE), VALUE arg, int *state)
     fr.prev = outer;
     fr.owner = outer->owner;
     fr.bufs = NULL;
+    memset(fr.ary, 0, sizeof(fr.ary));
+    fr.ary_next = 0;
     capi_cur = &fr;
     if (setjmp(fr.jb) == 0) {
         result = func(arg);
@@ -778,9 +892,8 @@ rb_protect(VALUE (*func)(VALUE), VALUE arg, int *state)
         return result;
     }
     capi_cur = outer;
-    capi_errinfo = root((VALUE)api->error_take(outer->ctx));
-    if (capi_errinfo == (VALUE)MR_UNDEF)
-        capi_errinfo = Qnil;
+    MrValue err = api->error_take(outer->ctx);
+    capi_errinfo = err == MR_UNDEF ? Qnil : root(R(err));
     if (state)
         *state = TAG_RAISE;
     return Qnil;
@@ -833,7 +946,7 @@ vrescue(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALU
         return result;
     VALUE exc = capi_errinfo;
     for (int i = 0; i < nclasses; i++) {
-        if (api->is_kind_of(ctx(), (MrValue)exc, (MrValue)classes[i])) {
+        if (api->is_kind_of(ctx(), M(exc), M(classes[i]))) {
             capi_errinfo = Qnil;
             return r_proc ? r_proc(data2, exc) : Qnil;
         }
@@ -908,8 +1021,11 @@ rb_scan_args(int argc, const VALUE *argv, const char *fmt, ...)
     if (*p)
         rb_raise(rb_eArgError, "bad scan arg format: %s", fmt);
 
+    /* As CRuby's rb_scan_args_kw(RB_SCAN_ARGS_PASS_CALLED_KEYWORDS): the
+     * trailing Hash is the keywords only when the call passed keywords;
+     * a Hash passed positionally stays an argument. */
     VALUE hash = Qnil;
-    if (f_hash && argc > n_lead + n_trail && RB_TYPE_P(argv[argc - 1], T_HASH)) {
+    if (f_hash && argc > 0 && RB_TYPE_P(argv[argc - 1], T_HASH) && rb_keyword_given_p()) {
         hash = argv[argc - 1];
         argc--;
     }
@@ -1019,8 +1135,9 @@ static VALUE
 funcall_block(VALUE recv, ID mid, int argc, const VALUE *argv, MrValue block)
 {
     struct capi_frame *saved = frame();
-    MrValue r = api->funcall_sym(saved->ctx, (MrValue)recv, (MrSym)mid, argc,
-                                 (const MrValue *)argv, block);
+    MrValue small[CAPI_SMALL_ARGS];
+    MrValue r = api->funcall_sym(saved->ctx, M(recv), (MrSym)mid, argc,
+                                 mr_args(argc, argv, small), block);
     capi_cur = saved;
     return check(r);
 }
@@ -1074,7 +1191,7 @@ rb_funcall_passing_block(VALUE recv, ID mid, int argc, const VALUE *argv)
 VALUE
 rb_funcall_with_block(VALUE recv, ID mid, int argc, const VALUE *argv, VALUE procval)
 {
-    return funcall_block(recv, mid, argc, argv, NIL_P(procval) ? MR_UNDEF : (MrValue)procval);
+    return funcall_block(recv, mid, argc, argv, NIL_P(procval) ? MR_UNDEF : M(procval));
 }
 
 VALUE
@@ -1087,7 +1204,8 @@ VALUE
 rb_yield_values2(int argc, const VALUE *argv)
 {
     struct capi_frame *saved = frame();
-    MrValue r = api->yield_block(saved->ctx, saved->block, argc, (const MrValue *)argv);
+    MrValue small[CAPI_SMALL_ARGS];
+    MrValue r = api->yield_block(saved->ctx, saved->block, argc, mr_args(argc, argv, small));
     capi_cur = saved;
     return check(r);
 }
@@ -1154,11 +1272,7 @@ rb_block_lambda(void)
 VALUE
 rb_proc_call(VALUE proc, VALUE args)
 {
-    struct capi_frame *saved = frame();
-    MrValue r = api->proc_call(saved->ctx, (MrValue)proc, (int)RARRAY_LEN(args),
-                               (const MrValue *)RARRAY_CONST_PTR(args));
-    capi_cur = saved;
-    return check(r);
+    return rb_proc_call_with_block(proc, (int)RARRAY_LEN(args), RARRAY_CONST_PTR(args), Qnil);
 }
 
 VALUE
@@ -1167,7 +1281,8 @@ rb_proc_call_with_block(VALUE proc, int argc, const VALUE *argv, VALUE passed_pr
     if (!NIL_P(passed_proc))
         return rb_funcall_with_block(proc, rb_intern("call"), argc, argv, passed_proc);
     struct capi_frame *saved = frame();
-    MrValue r = api->proc_call(saved->ctx, (MrValue)proc, argc, (const MrValue *)argv);
+    MrValue small[CAPI_SMALL_ARGS];
+    MrValue r = api->proc_call(saved->ctx, M(proc), argc, mr_args(argc, argv, small));
     capi_cur = saved;
     return check(r);
 }
@@ -1191,7 +1306,7 @@ rb_obj_is_method(VALUE obj)
 int
 rb_monoruby_heap_type(VALUE obj)
 {
-    switch (api->type_of(ctx(), (MrValue)obj)) {
+    switch (api->type_of(ctx(), M(obj))) {
     case MR_T_UNDEF: return T_UNDEF;
     case MR_T_NIL: return T_NIL;
     case MR_T_TRUE: return T_TRUE;
@@ -1220,7 +1335,7 @@ rb_monoruby_heap_type(VALUE obj)
     };
     for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
         VALUE k = *kinds[i].klass;
-        if (!NIL_P(k) && api->is_kind_of(ctx(), (MrValue)obj, (MrValue)k))
+        if (!NIL_P(k) && api->is_kind_of(ctx(), M(obj), M(k)))
             return kinds[i].type;
     }
     return T_OBJECT;
@@ -1326,16 +1441,64 @@ ruby_xfree(void *ptr)
     free(ptr);
 }
 
+/*
+ * The C globals registered with rb_gc_register_address hold VALUEs in
+ * CRuby's layout, so the interpreter cannot read them itself: the layer
+ * keeps the list and reports them, converted, from the `mark` of one
+ * pinned native object.
+ */
+static VALUE **capi_roots;
+static size_t capi_nroots, capi_roots_cap;
+static int capi_roots_made;
+
+static void
+roots_mark(void *p, MrMarker *marker)
+{
+    (void)p;
+    for (size_t i = 0; i < capi_nroots; i++) {
+        VALUE v = *capi_roots[i];
+        if (!RB_SPECIAL_CONST_P(v))
+            api->gc_mark(marker, M(v));
+    }
+}
+
+static const MrNativeOps roots_ops = { "roots", roots_mark, NULL, NULL };
+
 void
 rb_gc_register_address(VALUE *addr)
 {
-    api->gc_register_address(ctx(), (const MrValue *)addr);
+    if (!addr)
+        return;
+    if (!capi_roots_made) {
+        VALUE klass = rb_class_new(rb_cObject);
+        api->gc_pin(ctx(), M(klass));
+        check_rc(api->class_set_alloc(ctx(), M(klass), MR_ALLOC_NATIVE));
+        MrValue obj = api->native_new(ctx(), M(klass), &capi_roots, &roots_ops);
+        if (obj == MR_UNDEF)
+            capi_unwind();
+        api->gc_pin(ctx(), obj);
+        capi_roots_made = 1;
+    }
+    if (capi_nroots == capi_roots_cap) {
+        size_t cap = capi_roots_cap ? capi_roots_cap * 2 : 16;
+        VALUE **n = realloc(capi_roots, cap * sizeof(*n));
+        if (!n)
+            rb_memerror();
+        capi_roots = n;
+        capi_roots_cap = cap;
+    }
+    capi_roots[capi_nroots++] = addr;
 }
 
 void
 rb_gc_unregister_address(VALUE *addr)
 {
-    api->gc_unregister_address(ctx(), (const MrValue *)addr);
+    for (size_t i = 0; i < capi_nroots; i++) {
+        if (capi_roots[i] == addr) {
+            capi_roots[i] = capi_roots[--capi_nroots];
+            return;
+        }
+    }
 }
 
 void
@@ -1348,14 +1511,14 @@ void
 rb_gc_register_mark_object(VALUE obj)
 {
     if (!RB_SPECIAL_CONST_P(obj))
-        api->gc_pin(ctx(), (MrValue)obj);
+        api->gc_pin(ctx(), M(obj));
 }
 
 void
 rb_gc_mark(VALUE obj)
 {
     if (capi_marker && !RB_SPECIAL_CONST_P(obj))
-        api->gc_mark(capi_marker, (MrValue)obj);
+        api->gc_mark(capi_marker, M(obj));
 }
 
 void
@@ -1515,7 +1678,7 @@ rb_sym2id(VALUE sym)
 VALUE
 rb_sym2str(VALUE sym)
 {
-    return check(api->sym_to_str(ctx(), (MrValue)sym));
+    return check(api->sym_to_str(ctx(), M(sym)));
 }
 
 VALUE
@@ -1567,19 +1730,19 @@ rb_check_id(volatile VALUE *namep)
 VALUE
 rb_define_class_under(VALUE outer, const char *name, VALUE super)
 {
-    return check(api->define_class(ctx(), (MrValue)outer, name, (MrValue)super, 0));
+    return check(api->define_class(ctx(), M(outer), name, M(super), 0));
 }
 
 VALUE
 rb_define_class(const char *name, VALUE super)
 {
-    return check(api->define_class(ctx(), MR_UNDEF, name, (MrValue)super, 0));
+    return check(api->define_class(ctx(), MR_UNDEF, name, M(super), 0));
 }
 
 VALUE
 rb_define_module_under(VALUE outer, const char *name)
 {
-    return check(api->define_module(ctx(), (MrValue)outer, name));
+    return check(api->define_module(ctx(), M(outer), name));
 }
 
 VALUE
@@ -1611,7 +1774,7 @@ define_cfunc(VALUE klass, const char *name, VALUE (*func)(ANYARGS), int argc, ui
          strcmp(name, "initialize_clone") == 0 || strcmp(name, "initialize_dup") == 0 ||
          strcmp(name, "respond_to_missing?") == 0))
         flags |= MR_METHOD_PRIVATE;
-    api->define_method_data(ctx(), (MrValue)klass, name, capi_dispatch, m,
+    api->define_method_data(ctx(), M(klass), name, capi_dispatch, m,
                             argc < 0 ? MR_ARGC_VARIADIC : argc, flags);
     if (api->error_pending(ctx())) {
         /* Not defined, so nothing refers to it. */
@@ -1712,7 +1875,7 @@ rb_define_attr(VALUE klass, const char *name, int read, int write)
 void
 rb_define_const(VALUE klass, const char *name, VALUE val)
 {
-    api->const_set(ctx(), (MrValue)klass, name, (MrValue)val);
+    api->const_set(ctx(), M(klass), name, M(val));
     if (api->error_pending(ctx()))
         capi_unwind();
 }
@@ -1852,7 +2015,7 @@ rb_singleton_class(VALUE obj)
 VALUE
 rb_class_of(VALUE obj)
 {
-    return check(api->class_of(ctx(), (MrValue)obj));
+    return check(api->class_of(ctx(), M(obj)));
 }
 
 VALUE
@@ -1866,7 +2029,7 @@ rb_obj_is_kind_of(VALUE obj, VALUE klass)
 {
     if (!is_module(klass))
         rb_raise(rb_eTypeError, "class or module required");
-    return api->is_kind_of(ctx(), (MrValue)obj, (MrValue)klass) ? Qtrue : Qfalse;
+    return api->is_kind_of(ctx(), M(obj), M(klass)) ? Qtrue : Qfalse;
 }
 
 VALUE
@@ -1897,16 +2060,35 @@ rb_obj_respond_to(VALUE obj, ID id, int priv)
  * Objects
  * --------------------------------------------------------------------- */
 
+/* `Object#name` as an UnboundMethod, kept for the process. */
+static VALUE
+object_method(const char *name, VALUE *cache)
+{
+    if (!*cache) {
+        *cache = rb_funcall(rb_cObject, rb_intern("instance_method"), 1, ID2SYM(rb_intern(name)));
+        rb_gc_register_mark_object(*cache);
+    }
+    return *cache;
+}
+
+/*
+ * The primitives, not the methods: an extension that defines its own
+ * `freeze` (msgpack's Factory) calls rb_obj_freeze from it, as CRuby's
+ * sets the flag directly.
+ */
 VALUE
 rb_obj_freeze(VALUE obj)
 {
-    return rb_funcall(obj, rb_intern("freeze"), 0);
+    static VALUE um;
+    rb_funcall(object_method("freeze", &um), rb_intern("bind_call"), 1, obj);
+    return obj;
 }
 
 VALUE
 rb_obj_frozen_p(VALUE obj)
 {
-    return rb_funcall(obj, rb_intern("frozen?"), 0);
+    static VALUE um;
+    return rb_funcall(object_method("frozen?", &um), rb_intern("bind_call"), 1, obj);
 }
 
 void
@@ -2055,13 +2237,13 @@ rb_obj_instance_variables(VALUE obj)
 VALUE
 rb_iv_get(VALUE obj, const char *name)
 {
-    return check(api->ivar_get(ctx(), (MrValue)obj, name));
+    return check(api->ivar_get(ctx(), M(obj), name));
 }
 
 VALUE
 rb_iv_set(VALUE obj, const char *name, VALUE val)
 {
-    check_rc(api->ivar_set(ctx(), (MrValue)obj, name, (MrValue)val));
+    check_rc(api->ivar_set(ctx(), M(obj), name, M(val)));
     return val;
 }
 
@@ -2187,7 +2369,7 @@ rb_to_int(VALUE v)
     if (RB_INTEGER_TYPE_P(v))
         return v;
     int64_t i;
-    if (!api->int_get(ctx(), (MrValue)v, &i))
+    if (!api->int_get(ctx(), M(v), &i))
         capi_unwind();
     return LONG2NUM(i);
 }
@@ -2277,7 +2459,7 @@ rb_int2inum(intptr_t n)
 {
     if (RB_FIXABLE(n))
         return INT2FIX(n);
-    return root((VALUE)api->int_new((int64_t)n));
+    return root(R(api->int_new((int64_t)n)));
 }
 
 VALUE
@@ -2323,7 +2505,7 @@ rb_num2long(VALUE v)
     if (NIL_P(v))
         rb_raise(rb_eTypeError, "no implicit conversion from nil to integer");
     int64_t i;
-    if (!api->int_get(ctx(), (MrValue)v, &i))
+    if (!api->int_get(ctx(), M(v), &i))
         capi_unwind();
     return (long)i;
 }
@@ -2440,7 +2622,7 @@ double
 rb_num2dbl(VALUE v)
 {
     double d;
-    if (!api->float_get(ctx(), (MrValue)v, &d))
+    if (!api->float_get(ctx(), M(v), &d))
         capi_unwind();
     return d;
 }
@@ -2448,7 +2630,7 @@ rb_num2dbl(VALUE v)
 VALUE
 rb_float_new(double d)
 {
-    return root((VALUE)api->float_new(d));
+    return root(R(api->float_new(d)));
 }
 
 VALUE
@@ -2479,7 +2661,7 @@ char *
 rb_monoruby_rstring_ptr(VALUE str)
 {
     size_t len;
-    uint8_t *p = api->str_cptr(ctx(), (MrValue)str, &len);
+    uint8_t *p = api->str_cptr(ctx(), M(str), &len);
     if (!p)
         capi_unwind();
     return (char *)p;
@@ -2489,7 +2671,7 @@ long
 rb_monoruby_rstring_len(VALUE str)
 {
     size_t len;
-    if (!api->str_ptr(ctx(), (MrValue)str, &len))
+    if (!api->str_ptr(ctx(), M(str), &len))
         capi_unwind();
     return (long)len;
 }
@@ -2508,7 +2690,7 @@ rb_str_new(const char *ptr, long len)
         rb_raise(rb_eArgError, "negative string size (or size too big)");
     if (!ptr && len > 0) {
         VALUE s = check(api->bytes_new(ctx(), (const uint8_t *)"", 0));
-        check_rc(api->str_resize(ctx(), (MrValue)s, (size_t)len));
+        check_rc(api->str_resize(ctx(), M(s), (size_t)len));
         return s;
     }
     return check(api->bytes_new(ctx(), (const uint8_t *)ptr, (size_t)len));
@@ -2550,8 +2732,15 @@ rb_str_new_with_class(VALUE obj, const char *ptr, long len)
 VALUE
 rb_str_buf_new(long capa)
 {
-    (void)capa;
-    return rb_str_new("", 0);
+    /* An empty String whose buffer already holds `capa` (zeroed) bytes:
+     * C fills it through RSTRING_PTR and then rb_str_set_len, which
+     * keeps what was written (the ABI's `str_resize` contract). */
+    VALUE s = rb_str_new("", 0);
+    if (capa > 0) {
+        rb_str_resize(s, capa);
+        rb_str_set_len(s, 0);
+    }
+    return s;
 }
 
 VALUE
@@ -2617,7 +2806,7 @@ rb_str_cat(VALUE str, const char *ptr, long len)
 {
     if (len < 0)
         rb_raise(rb_eArgError, "negative string size (or size too big)");
-    check_rc(api->str_cat(ctx(), (MrValue)str, (const uint8_t *)ptr, (size_t)len));
+    check_rc(api->str_cat(ctx(), M(str), (const uint8_t *)ptr, (size_t)len));
     return str;
 }
 
@@ -2797,7 +2986,7 @@ rb_str_resize(VALUE str, long len)
 {
     if (len < 0)
         rb_raise(rb_eArgError, "negative string size (or size too big)");
-    check_rc(api->str_resize(ctx(), (MrValue)str, (size_t)len));
+    check_rc(api->str_resize(ctx(), M(str), (size_t)len));
     return str;
 }
 
@@ -2887,7 +3076,7 @@ rb_ary_new_from_values(long n, const VALUE *elts)
 {
     VALUE ary = rb_ary_new();
     for (long i = 0; i < n; i++)
-        check_rc(api->ary_push(ctx(), (MrValue)ary, (MrValue)elts[i]));
+        check_rc(api->ary_push(ctx(), M(ary), M(elts[i])));
     return ary;
 }
 
@@ -2898,7 +3087,7 @@ rb_ary_new_from_args(long n, ...)
     va_list ap;
     va_start(ap, n);
     for (long i = 0; i < n; i++)
-        check_rc(api->ary_push(ctx(), (MrValue)ary, (MrValue)va_arg(ap, VALUE)));
+        check_rc(api->ary_push(ctx(), M(ary), M(va_arg(ap, VALUE))));
     va_end(ap);
     return ary;
 }
@@ -2906,7 +3095,7 @@ rb_ary_new_from_args(long n, ...)
 VALUE
 rb_ary_push(VALUE ary, VALUE item)
 {
-    check_rc(api->ary_push(ctx(), (MrValue)ary, (MrValue)item));
+    check_rc(api->ary_push(ctx(), M(ary), M(item)));
     return ary;
 }
 
@@ -2946,7 +3135,7 @@ long
 rb_array_len(VALUE ary)
 {
     size_t len;
-    if (!api->ary_ptr(ctx(), (MrValue)ary, &len))
+    if (!api->ary_ptr(ctx(), M(ary), &len))
         capi_unwind();
     return (long)len;
 }
@@ -2955,24 +3144,48 @@ const VALUE *
 rb_array_const_ptr(VALUE ary)
 {
     size_t len;
-    const MrValue *p = api->ary_ptr(ctx(), (MrValue)ary, &len);
+    MrValue a = M(ary);
+    const MrValue *p = api->ary_ptr(ctx(), a, &len);
     if (!p)
         capi_unwind();
-    return (const VALUE *)p;
+    struct capi_frame *owner = frame()->owner;
+    struct capi_ary_slot *slot = NULL;
+    for (unsigned i = 0; i < CAPI_ARY_SLOTS; i++) {
+        if (owner->ary[i].buf && owner->ary[i].ary == a) {
+            slot = &owner->ary[i];
+            break;
+        }
+    }
+    if (!slot) {
+        slot = &owner->ary[owner->ary_next];
+        owner->ary_next = (owner->ary_next + 1) % CAPI_ARY_SLOTS;
+    }
+    if (!slot->buf || slot->cap < len) {
+        size_t cap = len ? len : 1;
+        VALUE *buf = realloc(slot->buf, cap * sizeof(VALUE));
+        if (!buf)
+            rb_memerror();
+        slot->buf = buf;
+        slot->cap = cap;
+    }
+    slot->ary = a;
+    for (size_t i = 0; i < len; i++)
+        slot->buf[i] = R(p[i]);
+    return slot->buf;
 }
 
 VALUE
 rb_ary_entry(VALUE ary, long offset)
 {
     size_t len;
-    const MrValue *p = api->ary_ptr(ctx(), (MrValue)ary, &len);
+    const MrValue *p = api->ary_ptr(ctx(), M(ary), &len);
     if (!p)
         capi_unwind();
     if (offset < 0)
         offset += (long)len;
     if (offset < 0 || (size_t)offset >= len)
         return Qnil;
-    return (VALUE)p[offset];
+    return R(p[offset]);
 }
 
 VALUE
@@ -3121,7 +3334,7 @@ rb_hash_aset(VALUE hash, VALUE key, VALUE val)
     if (RB_TYPE_P(key, T_STRING))
         rb_funcall(hash, rb_intern("[]="), 2, key, val);
     else
-        check_rc(api->hash_set(ctx(), (MrValue)hash, (MrValue)key, (MrValue)val));
+        check_rc(api->hash_set(ctx(), M(hash), M(key), M(val)));
     return val;
 }
 
@@ -3134,13 +3347,13 @@ rb_hash_aref(VALUE hash, VALUE key)
 VALUE
 rb_hash_lookup2(VALUE hash, VALUE key, VALUE def)
 {
-    MrValue v = api->hash_get(ctx(), (MrValue)hash, (MrValue)key);
+    MrValue v = api->hash_get(ctx(), M(hash), M(key));
     if (v == MR_UNDEF) {
         if (api->error_pending(ctx()))
             capi_unwind();
         return def;
     }
-    return root((VALUE)v);
+    return root(R(v));
 }
 
 VALUE
@@ -3229,13 +3442,13 @@ rb_hash_foreach(VALUE hash, int (*func)(VALUE, VALUE, VALUE), VALUE arg)
     long n = RARRAY_LEN(keys);
     for (long i = 0; i < n; i++) {
         VALUE key = rb_ary_entry(keys, i);
-        MrValue v = api->hash_get(ctx(), (MrValue)hash, (MrValue)key);
+        MrValue v = api->hash_get(ctx(), M(hash), M(key));
         if (v == MR_UNDEF) {
             if (api->error_pending(ctx()))
                 capi_unwind();
             continue;
         }
-        int r = func(key, root((VALUE)v), arg);
+        int r = func(key, root(R(v)), arg);
         if (r == ST_STOP)
             break;
         if (r == ST_DELETE)
@@ -3383,7 +3596,7 @@ rb_encoding *
 rb_enc_get(VALUE obj)
 {
     if (RB_TYPE_P(obj, T_STRING))
-        return enc_of_name(check(api->str_encoding(ctx(), (MrValue)obj)));
+        return enc_of_name(check(api->str_encoding(ctx(), M(obj))));
     if (RTEST(rb_obj_is_kind_of(obj, rb_cEncoding)))
         return rb_to_encoding(obj);
     if (!rb_respond_to(obj, rb_intern("encoding")))
@@ -3740,7 +3953,7 @@ alloc_entry_add(VALUE klass)
     e->klass = klass;
     e->func = NULL;
     e->native = 0;
-    api->gc_pin(ctx(), (MrValue)klass);
+    api->gc_pin(ctx(), M(klass));
     return e;
 }
 
@@ -3750,7 +3963,7 @@ ensure_native(VALUE klass)
 {
     struct capi_alloc *e = alloc_entry_add(klass);
     if (!e->native) {
-        check_rc(api->class_set_alloc(ctx(), (MrValue)klass, MR_ALLOC_NATIVE));
+        check_rc(api->class_set_alloc(ctx(), M(klass), MR_ALLOC_NATIVE));
         e->native = 1;
     }
 }
@@ -3765,7 +3978,7 @@ rb_define_alloc_func(VALUE klass, rb_alloc_func_t *func)
 void
 rb_undef_alloc_func(VALUE klass)
 {
-    check_rc(api->class_set_alloc(ctx(), (MrValue)klass, MR_ALLOC_UNDEF));
+    check_rc(api->class_set_alloc(ctx(), M(klass), MR_ALLOC_UNDEF));
     alloc_entry_add(klass)->func = NULL;
 }
 
@@ -3794,7 +4007,7 @@ data_class(VALUE klass)
     if (!klass) {
         if (!hidden) {
             hidden = rb_class_new(rb_cObject);
-            api->gc_pin(ctx(), (MrValue)hidden);
+            api->gc_pin(ctx(), M(hidden));
         }
         klass = hidden;
     }
@@ -3813,12 +4026,12 @@ data_wrap(VALUE klass, void *datap, RUBY_DATA_FUNC dmark, RUBY_DATA_FUNC dfree, 
     d->dmark = dmark;
     d->dfree = dfree;
     d->type = type;
-    MrValue obj = api->native_new(ctx(), (MrValue)klass, d, &data_ops);
+    MrValue obj = api->native_new(ctx(), M(klass), d, &data_ops);
     if (obj == MR_UNDEF) {
         free(d);
         capi_unwind();
     }
-    return root((VALUE)obj);
+    return root(R(obj));
 }
 
 static const char *
@@ -3840,19 +4053,19 @@ displaying_class_of(VALUE obj)
 static struct capi_data *
 data_of(VALUE obj, int raise)
 {
-    struct capi_data *d = api->native_data(ctx(), (MrValue)obj, &data_ops);
+    struct capi_data *d = api->native_data(ctx(), M(obj), &data_ops);
     if (d)
         return d;
-    if (api->type_of(ctx(), (MrValue)obj) == MR_T_NATIVE) {
+    if (api->type_of(ctx(), M(obj)) == MR_T_NATIVE) {
         VALUE klass = rb_obj_class(obj);
         rb_alloc_func_t *alloc = rb_get_alloc_func(klass);
         if (alloc) {
             VALUE tmp = alloc(klass);
-            d = api->native_data(ctx(), (MrValue)tmp, &data_ops);
+            d = api->native_data(ctx(), M(tmp), &data_ops);
             if (!d)
                 rb_raise(rb_eTypeError, "allocator of %s did not return a Data object", rb_class2name(klass));
-            api->native_take(ctx(), (MrValue)tmp);
-            check_rc(api->native_set(ctx(), (MrValue)obj, d, &data_ops));
+            api->native_take(ctx(), M(tmp));
+            check_rc(api->native_set(ctx(), M(obj), d, &data_ops));
             return d;
         }
     }
@@ -3979,7 +4192,8 @@ VALUE
 rb_call_super(int argc, const VALUE *argv)
 {
     struct capi_frame *saved = frame();
-    MrValue r = api->call_super(saved->ctx, argc, (const MrValue *)argv, saved->block);
+    MrValue small[CAPI_SMALL_ARGS];
+    MrValue r = api->call_super(saved->ctx, argc, mr_args(argc, argv, small), saved->block);
     capi_cur = saved;
     return check(r);
 }
@@ -4012,8 +4226,8 @@ static void
 block_mark(void *p, MrMarker *marker)
 {
     struct capi_block *b = p;
-    api->gc_mark(marker, (MrValue)b->arg);
-    api->gc_mark(marker, (MrValue)b->block);
+    api->gc_mark(marker, M(b->arg));
+    api->gc_mark(marker, M(b->block));
 }
 
 static void
@@ -4037,17 +4251,21 @@ block_dispatch(MrContext *c, MrValue self, int argc, const MrValue *argv, MrValu
     struct capi_frame *volatile fp = &fr;
     volatile MrValue result = MR_UNDEF;
     fr.ctx = c;
-    fr.block = NIL_P(b->block) ? MR_UNDEF : (MrValue)b->block;
+    fr.block = NIL_P(b->block) ? MR_UNDEF : M(b->block);
     fr.prev = capi_cur;
     fr.owner = &fr;
     fr.bufs = NULL;
+    memset(fr.ary, 0, sizeof(fr.ary));
+    fr.ary_next = 0;
     capi_cur = &fr;
     if (setjmp(fr.jb) == 0) {
         VALUE blockarg = Qnil;
         if (block != MR_UNDEF)
             blockarg = check(api->block_to_proc(c, block));
-        VALUE yielded = argc > 0 ? (VALUE)argv[0] : Qnil;
-        result = (MrValue)b->func(yielded, b->arg, argc, (const VALUE *)argv, blockarg);
+        VALUE small[CAPI_SMALL_ARGS];
+        VALUE *a = rb_args(argc, argv, small);
+        VALUE yielded = argc > 0 ? a[0] : Qnil;
+        result = M(b->func(yielded, b->arg, argc, a, blockarg));
     }
     free_bufs(fp);
     capi_cur = fp->prev;
@@ -4059,9 +4277,9 @@ block_proc_new(rb_block_call_func_t func, VALUE arg, VALUE block)
 {
     if (!block_class) {
         block_class = rb_class_new(rb_cObject);
-        api->gc_pin(ctx(), (MrValue)block_class);
-        check_rc(api->class_set_alloc(ctx(), (MrValue)block_class, MR_ALLOC_NATIVE));
-        api->define_method_data(ctx(), (MrValue)block_class, "call", block_dispatch, NULL,
+        api->gc_pin(ctx(), M(block_class));
+        check_rc(api->class_set_alloc(ctx(), M(block_class), MR_ALLOC_NATIVE));
+        api->define_method_data(ctx(), M(block_class), "call", block_dispatch, NULL,
                                 MR_ARGC_VARIADIC, 0);
         if (api->error_pending(ctx()))
             capi_unwind();
@@ -4072,7 +4290,7 @@ block_proc_new(rb_block_call_func_t func, VALUE arg, VALUE block)
     b->func = func;
     b->arg = arg;
     b->block = block;
-    VALUE obj = check(api->native_new(ctx(), (MrValue)block_class, b, &block_ops));
+    VALUE obj = check(api->native_new(ctx(), M(block_class), b, &block_ops));
     VALUE m = rb_funcall(obj, rb_intern("method"), 1, ID2SYM(rb_intern("call")));
     return rb_funcall(m, rb_intern("to_proc"), 0);
 }
@@ -4094,7 +4312,7 @@ break_exception(void)
 {
     if (!break_class) {
         break_class = rb_class_new(rb_eException);
-        api->gc_pin(ctx(), (MrValue)break_class);
+        api->gc_pin(ctx(), M(break_class));
     }
     return break_class;
 }
@@ -4103,7 +4321,7 @@ void
 rb_iter_break_value(VALUE val)
 {
     break_value = val;
-    api->gc_pin(ctx(), (MrValue)val);
+    api->gc_pin(ctx(), M(val));
     rb_exc_raise(rb_exc_new_cstr(break_exception(), "break"));
 }
 
@@ -4119,10 +4337,10 @@ iterate_call(MrValue r)
 {
     if (r == MR_UNDEF && break_class) {
         MrValue exc = api->error_take(ctx());
-        if (rb_obj_class((VALUE)exc) == break_class) {
+        if (rb_obj_class(R(exc)) == break_class) {
             VALUE v = break_value;
             break_value = Qnil;
-            api->gc_unpin(ctx(), (MrValue)v);
+            api->gc_unpin(ctx(), M(v));
             return root(v);
         }
         api->raise_exception(ctx(), exc);
@@ -4137,8 +4355,9 @@ rb_block_call(VALUE obj, ID mid, int argc, const VALUE *argv, rb_block_call_func
         return rb_funcall_passing_block(obj, mid, argc, argv);
     VALUE proc = block_proc_new(bl_proc, data2, current_block_proc());
     struct capi_frame *saved = frame();
-    MrValue r = api->funcall_sym(saved->ctx, (MrValue)obj, (MrSym)mid, argc,
-                                 (const MrValue *)argv, (MrValue)proc);
+    MrValue small[CAPI_SMALL_ARGS];
+    MrValue r = api->funcall_sym(saved->ctx, M(obj), (MrSym)mid, argc,
+                                 mr_args(argc, argv, small), M(proc));
     capi_cur = saved;
     return iterate_call(r);
 }
@@ -4171,12 +4390,12 @@ rb_iterate(VALUE (*it_proc)(VALUE), VALUE data1, rb_block_call_func_t bl_proc, V
     struct iterate_args ia = { it_proc, data1, f->block };
     /* The block of the current frame, which `rb_each` /
      * `rb_funcall_passing_block` in `it_proc` pass on. */
-    f->block = (MrValue)proc;
+    f->block = M(proc);
     int state;
     VALUE r = rb_protect(iterate_body, (VALUE)&ia, &state);
     f->block = ia.saved_block;
     if (state) {
-        MrValue exc = (MrValue)rb_errinfo();
+        MrValue exc = M(rb_errinfo());
         rb_set_errinfo(Qnil);
         api->raise_exception(ctx(), exc);
         return iterate_call(MR_UNDEF);
@@ -5132,7 +5351,7 @@ check_reg(void *p)
 regex_t *
 rb_reg_ptr(VALUE re)
 {
-    return check_reg(api->regexp_ptr(ctx(), (MrValue)re));
+    return check_reg(api->regexp_ptr(ctx(), M(re)));
 }
 
 VALUE
@@ -5144,7 +5363,7 @@ rb_reg_source(VALUE re)
 regex_t *
 rb_reg_prepare_re(VALUE re, VALUE str)
 {
-    return check_reg(api->regexp_prepare(ctx(), (MrValue)re, (MrValue)str));
+    return check_reg(api->regexp_prepare(ctx(), M(re), M(str)));
 }
 
 OnigPosition
