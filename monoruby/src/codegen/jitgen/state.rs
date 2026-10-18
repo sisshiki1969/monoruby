@@ -420,6 +420,52 @@ impl AbstractState {
         }
     }
 
+    ///
+    /// Before a specialized `break`: box every stage-1'' deferred home in
+    /// the frames the break resumes — the iter caller (chain position
+    /// *landing*) and its lexical ancestors, the only frames the block's
+    /// stores can reach — into its slot.
+    ///
+    /// `BlockBreakSpecialized` returns straight into the iter caller's
+    /// call-site continuation, past every return segment, so none of the
+    /// surrender writes a return join emits runs on this path. That
+    /// continuation resumes from the join of the callee's *normal* return
+    /// paths (with none, from the entry chain re-widened by the callee's
+    /// stores), which can say plain `S` for a slot whose current value
+    /// this path wrote only to the home: `y = 1.0; my_once { y += 1.0;
+    /// break }; y` read the stale slot. Boxing here makes the slot
+    /// current while the home stays current too, so whichever the
+    /// continuation reads is right. The modes are left alone: this path
+    /// ends at the break.
+    ///
+    pub(super) fn box_deferred_homes_before_break(
+        &self,
+        jitctx: &JitContext,
+        ir: &mut AsmIr,
+        landing: usize,
+    ) {
+        let mut level = landing;
+        loop {
+            for i in self.frames[level].locals() {
+                if let LinkMode::F(fpr) = self.frames[level].mode(i)
+                    && fpr.0 >= crate::codegen::PHYS_FPR_POOL
+                    && let Some(home) = jitctx.outer_fpr_home_hint_at_pos(level, fpr)
+                {
+                    let (ids, extra) = jitctx.specialized_ids_at_pos(level);
+                    ir.push(crate::codegen::jitgen::asmir::AsmInst::BoxOuterHomeToDynVar {
+                        home,
+                        offset: crate::codegen::jitgen::DynVarOffset::Hint { ids, extra },
+                        reg: i,
+                    });
+                }
+            }
+            match self.frames[level].lexical_outer() {
+                Some(o) if level >= o && o > 0 => level -= o,
+                _ => break,
+            }
+        }
+    }
+
     /// Chain position of the innermost (current) frame.
     pub(super) fn innermost_level(&self) -> usize {
         self.frames.len() - 1

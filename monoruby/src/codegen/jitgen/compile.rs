@@ -1370,6 +1370,13 @@ impl<'a> JitContext<'a> {
             TraceIr::BlockBreak(ret) => {
                 state.flush_gp(ir);
                 assert!(state.no_capture_guard());
+                // Every exit below lands in the iter caller's call-site
+                // continuation without passing a return segment's
+                // surrender writes, so the deferred homes of the frames
+                // it resumes are boxed into their slots first.
+                if let Some(landing) = self.iter_caller_pos() {
+                    state.box_deferred_homes_before_break(self, ir, landing);
+                }
                 // Splice first — see `MethodRet` above (#1185).
                 let claim = state.as_return_or_any(ret);
                 if let Some(plan) = self.try_splice_exit(bc_pos, SplicedExitKind::Break, claim) {

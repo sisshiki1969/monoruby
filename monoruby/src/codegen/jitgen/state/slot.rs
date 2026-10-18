@@ -3788,6 +3788,47 @@ mod tests {
         );
     }
 
+    /// A float local whose boxing was deferred to a spill home (stage 1'':
+    /// the slot is stale, the home current) and that a specialized block
+    /// then leaves with `break`. The break returns straight into the iter
+    /// caller's continuation, past the return segments whose surrender
+    /// writes would have boxed it, while that continuation resumes from
+    /// the callee's *normal* return paths (or, with none, the re-widened
+    /// entry chain) and reads the slot — which was still nil. The earlier
+    /// block call is what homes the local to a spill slot.
+    #[test]
+    fn test_deferred_float_home_boxed_before_break() {
+        run_test(
+            r###"
+        def once
+          yield
+        end
+        def twice
+          yield 1
+          yield 2
+          :normal
+        end
+        def forever
+          while true
+            yield
+          end
+        end
+        def f(a)
+          [1].each {}
+          y = a * 0.5
+          z = a * 2.0
+          once { y += 1.0; break }
+          twice { |i| z += 1.0; break if i == 2 }
+          i = 0
+          forever { i += 1; y += 0.5; break if i == 3 }
+          [1].each { once { z -= 0.25; break } }
+          [y, z]
+        end
+        f(1.5)
+        "###,
+        );
+    }
+
     /// §15.5: a loop-carried float enters a loop JIT from the VM as a boxed
     /// `S(Value)`, but the back-edge fixpoint proves it is a `Float`. The
     /// loop-entry specialization re-adopts `F` (the `S -> F` bridge unboxes the

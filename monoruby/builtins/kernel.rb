@@ -201,6 +201,25 @@ end
 module Kernel
   module_function
 
+  # Ruby, as CRuby's own `Kernel#loop` is (kernel.rb). A `break` or a
+  # `return` out of the block is then an exit from this frame's `while`,
+  # which the JIT compiles with the block inlined, instead of a
+  # control-flow error unwinding through a native frame — which also
+  # attached a backtrace entry on every exit (`push_builtin_trace`):
+  # 3 iterations and a `break` cost ~350 ns as a builtin, ~80 ns here.
+  # StopIteration (and any subclass) ends the loop with its `#result`;
+  # everything else propagates.
+  def loop
+    return to_enum(:loop) { Float::INFINITY } unless block_given?
+    begin
+      while true
+        yield
+      end
+    rescue StopIteration => e
+      e.result
+    end
+  end
+
   def puts(*args)
     $stdout.puts(*args)
     nil
