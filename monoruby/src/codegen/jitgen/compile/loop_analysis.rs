@@ -151,6 +151,12 @@ impl<'a> JitContext<'a> {
             .collect();
 
         if let Some(backedge) = self.loop_backedge(loop_start) {
+            // An elided object the entry carries but the recorded back
+            // edge does not is one the body materializes: analyse the
+            // body from a head with it materialized, as the real compile's
+            // entries will leave it (`incoming_context`).
+            let mut scratch = AsmIr::new(&ctx);
+            ctx.materialize_except(&mut state, &mut scratch, backedge.virtuals());
             state.join(backedge);
         };
         // The liveness is the loop's own: what was read or overwritten
@@ -171,9 +177,28 @@ impl<'a> JitContext<'a> {
             if let Some(branches) = ctx.remove_branch(*head) {
                 let liveness = liveness.get_mut(head).unwrap();
                 let backedge = backedge.get_mut(head).unwrap();
-                for BranchEntry { src_bb, state, .. } in branches {
+                let mut states: Vec<AbstractState> = branches
+                    .into_iter()
+                    .map(|BranchEntry { src_bb, state, .. }| {
+                        assert!(src_bb.unwrap() >= *head);
+                        state
+                    })
+                    .collect();
+                // The back edges agree on the elided objects they carry
+                // (`doc/escape_analysis.md` §3): one not on every back
+                // edge is materialized on the others.
+                let common: Vec<(SlotId, VirtualSrc)> = states[0]
+                    .virtuals()
+                    .iter()
+                    .filter(|v| states.iter().all(|s| s.virtuals().contains(v)))
+                    .copied()
+                    .collect();
+                let mut scratch = AsmIr::new(&ctx);
+                for state in &mut states {
+                    ctx.materialize_except(state, &mut scratch, &common);
+                }
+                for state in states {
                     liveness.join(&state);
-                    assert!(src_bb.unwrap() >= *head);
                     if let Some(backedge) = backedge {
                         backedge.join(&state);
                     } else {

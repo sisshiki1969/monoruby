@@ -2084,3 +2084,220 @@ fn receiver_moved_to_a_temporary_while_the_argument_is_computed() {
         "##,
     );
 }
+
+#[test]
+fn local_object_carried_through_a_loop_head() {
+    // An object a local holds stays elided across a loop head when the
+    // loop neither writes the local nor captures it: its element
+    // operations in the body fold every iteration, and nothing is built.
+    run_test(
+        r#"
+        def rng(lo, hi, n)
+          r = (lo..hi)
+          i = 0
+          c = 0
+          while i < n
+            c += 1 if r.include?(i)
+            c += 2 if r.cover?(i + 1)
+            c += 4 if r === i - 1
+            i += 1
+          end
+          c + r.size + r.first + r.last
+        end
+        def ary(a, b, n)
+          x = [a, b, 7]
+          i = 0
+          c = 0
+          while i < n
+            c += 1 if x.include?(i)
+            c += x.size + x.first
+            i += 1
+          end
+          c + x.max
+        end
+        def nested(lo, hi, n)
+          r = (lo..hi)
+          i = 0
+          c = 0
+          while i < n
+            j = 0
+            while j < 6
+              c += 1 if r.include?(i + j)
+              j += 1
+            end
+            i += 1
+          end
+          c
+        end
+        def exits(lo, hi, n)
+          r = (lo..hi)
+          i = 0
+          c = 0
+          while true
+            i += 1
+            next if i == 2
+            break if i > n
+            c += 1 if r.include?(i)
+          end
+          c + (r.include?(n) ? 10 : 0)
+        end
+        def rest(*args)
+          s = 0
+          i = 0
+          while i < args.size
+            s += args.first + args.last
+            i += 1
+          end
+          s
+        end
+        res = []
+        30.times do |i|
+          res << rng(i, i + 5, 12) << ary(i, i + 1, 10) << nested(2, i + 3, 5)
+          res << exits(1, i, 8) << rest(i, 2, 3)
+        end
+        res.last(10)
+        "#,
+    );
+}
+
+#[test]
+fn local_object_not_carried_through_a_loop_head() {
+    // The loop writes the local (the object is dropped or rebuilt), or
+    // reads it in a way that is not folded (an Array index), or a block
+    // in the body reads it (a capture point): the object is built on the
+    // loop's entries, as before, and the result is unchanged.
+    run_test(
+        r#"
+        def rewritten(lo, n)
+          r = (lo..lo + 3)
+          i = 0
+          c = 0
+          while i < n
+            c += 1 if r.include?(i)
+            r = (i..i + 3) if i % 4 == 0
+            i += 1
+          end
+          c + r.first
+        end
+        def endpoint_written(lo, n)
+          hi = lo + 3
+          r = (lo..hi)
+          i = 0
+          c = 0
+          while i < n
+            c += 1 if r.include?(i)
+            hi += 1
+            i += 1
+          end
+          c + hi + r.last
+        end
+        def indexed(a, b, n)
+          x = [a, b, 9]
+          i = 0
+          c = 0
+          while i < n
+            c += x[i % 3]
+            c += 1 if x.include?(i)
+            i += 1
+          end
+          c
+        end
+        def captured(a, b, n)
+          x = [a, b]
+          i = 0
+          c = 0
+          while i < n
+            [1].each { |k| c += x.max + k }
+            c += 1 if x.include?(i)
+            i += 1
+          end
+          c
+        end
+        def untouched(a, b, n)
+          x = [a, b]
+          i = 0
+          c = 0
+          while i < n
+            [1].each { |k| c += k }
+            c += 1 if x.include?(i)
+            i += 1
+          end
+          c
+        end
+        def escaped(a, b, n)
+          x = [a, b]
+          i = 0
+          c = 0
+          while i < n
+            c += 1 if x.include?(i)
+            $last = x if i == 3
+            i += 1
+          end
+          c + $last.size
+        end
+        res = []
+        30.times do |i|
+          res << rewritten(i, 9) << endpoint_written(i, 6) << indexed(i, 2, 7)
+          res << captured(i, 1, 4) << untouched(i, 1, 4) << escaped(i, 4, 6)
+        end
+        res.last(12)
+        "#,
+    );
+}
+
+#[test]
+fn side_exits_inside_a_loop_with_a_local_object_pending() {
+    // A type guard deopts in the loop body while the local's object is
+    // still elided across the head (the side exit builds it from the
+    // scratch window); a basic-op redefinition in a callee called from
+    // the body converts the frame by chain.
+    run_test_once(
+        r#"
+        def f(lo, hi, xs)
+          r = (lo..hi)
+          i = 0
+          c = 0
+          while i < xs.size
+            v = xs[i]
+            c += v + 1
+            c += 10 if r.include?(i)
+            i += 1
+          end
+          c + r.size
+        end
+        res = []
+        30.times { |i| res << f(i, i + 4, [1, 2, 3, 4, 5, 6]) }
+        res << f(1, 3, [1, 2, 3.5, 4, 5, 6])
+        res << f(1, 3, [1, 2, "ab".size, 4, 5, 6])
+        res
+        "#,
+    );
+    run_test_once(
+        r#"
+        $redef = proc do
+          class Integer
+            def +(o) = 1000
+          end
+        end
+        def g(i)
+          $redef.call if i == 125
+          i
+        end
+        def f(lo, k)
+          r = (lo..lo + 3)
+          x = [lo, 7]
+          i = 0
+          c = 0
+          while i < 5
+            g(k + i)
+            c += 1 if r.include?(i) || x.include?(i)
+            i += 1
+          end
+          c + x.max + r.sum
+        end
+        res = []
+        40.times { |i| res << f(i, i * 5) }
+        res.last(20)
+        "#,
+    );
+}
