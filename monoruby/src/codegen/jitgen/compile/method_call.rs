@@ -2181,6 +2181,11 @@ impl<'a> JitContext<'a> {
             /// The constructor compiled as a frameless callee of this site,
             /// through its `initialize` twin (`CallSiteInfo::class_new_init`).
             Frameless(CallSiteId, ISeqId),
+            /// The native `Struct#initialize` of a positional struct: the
+            /// arguments are stored straight into the first slots (the
+            /// allocation already set every slot to nil). `true` when the
+            /// slots are inline in the object.
+            StructSlots(bool),
         }
 
         // Both legs consume the body itself, so they need an `initialize`
@@ -2190,7 +2195,21 @@ impl<'a> JitContext<'a> {
         let frameless_shape = callee.no_keyword()
             && !callee.single_arg_expand()
             && callee.positional_arity_ok(pos_num);
+        // A class made by `Struct.new(:a, :b)` whose `initialize` is still
+        // the native one, called with positionals only: that `initialize`
+        // assigns the arguments to the leading members in order and leaves
+        // the rest nil, which is exactly a store per argument into the
+        // fresh object. Excluded: `keyword_init: true` (the arguments are a
+        // Hash to unpack) and more arguments than members (ArgumentError,
+        // left to the native code). Both are fixed when `Struct.new`
+        // returns, and the `initialize` resolution is recorded below.
+        let struct_len = crate::struct_members_len(&self.store, class_id);
+        let struct_slots = self.store.struct_initialize_fid() == Some(init_fid)
+            && std::ptr::fn_addr_eq(alloc_func, crate::struct_alloc_func as AllocFunc)
+            && !crate::builtins::struct_class::struct_keyword_init(&self.store, self_module)
+            && pos_num <= struct_len;
         let plan = match self.store[init_fid].is_iseq().filter(|_| frameless_shape) {
+            _ if struct_slots => InitPlan::StructSlots(struct_len <= STRUCT_INLINE_SLOTS),
             // `SelfReturn` is `def initialize = self`, which returns the
             // new object — and `new` discards the return value either way.
             Some(init_iseq)
@@ -2258,6 +2277,16 @@ impl<'a> JitContext<'a> {
             func_id: Some(init_fid),
         });
 
+        // The slot stores read the arguments as values: an argument the
+        // escape analysis kept elided (an Array literal handed to `new`)
+        // is built now.
+        if matches!(plan, InitPlan::StructSlots(_)) {
+            for slot in args..args + pos_num {
+                if state.virtual_at(slot).is_some() {
+                    self.materialize_virtual(state, ir, slot);
+                }
+            }
+        }
         // Runtime identity guard, for the same reason `Class#allocate`
         // needs one: the dispatch class is not injective over receivers —
         // for `o` an instance of `Foo`, both `Foo` and `o.singleton_class`
@@ -2299,6 +2328,28 @@ impl<'a> JitContext<'a> {
 
         match plan {
             InitPlan::Fold => {}
+            InitPlan::StructSlots(inline) => {
+                // `dst` holds the object (checked above not to be one of
+                // the argument slots). The stores reload it each time:
+                // the heap form repoints rdi at the slot buffer.
+                let dst = dst.unwrap();
+                for i in 0..pos_num {
+                    state.load(ir, dst, GP::Rdi);
+                    state.load(ir, args + i, GP::Rax);
+                    let slot_index = i as u16;
+                    if inline {
+                        ir.push(AsmInst::StoreStructSlotInline {
+                            src: GP::Rax,
+                            slot_index,
+                        });
+                    } else {
+                        ir.push(AsmInst::StoreStructSlotHeap {
+                            src: GP::Rax,
+                            slot_index,
+                        });
+                    }
+                }
+            }
             InitPlan::Frameless(init_callid, init_iseq) => {
                 // The object is fresh: the body's ivar stores need no
                 // frozen guard on `self` (`AsmInfo::self_fresh`).

@@ -395,6 +395,7 @@
 10bc618bd43a284b45b0e5ee5b514a75	["h", "", "日", "\\u{77082}"]	__a = [];__a << ("hello".chr);__a << ("".chr);__a << ("日本語".chr);__a << ("\\u{770
 10bf6df051bcd35070adae7d4ebbbb02	[:initialize, :initialize_copy, :respond_to_missing?]	class DefLifecycle\n              def initialize; end\n              
 10c958573363b28c1ec4edd19f99e265	[2, 2, 3, :not_leaked, [:a], [:a, :b]]	def m\n              binding\n            end\n            bind1 = m\n 
+10f932db757baf805e176d72fd6fd6e6	[true, true, true, false, true, false, true, false, true, false, true, false, true, true, true, false, :v]	S = Struct.new(:a, :b)\n            \n\n            n = Float::NAN\n   
 110dc3bc5a5a12d9ae27433881a737dd	[nil, nil, nil, nil]	__a = [];__a << (warn("woo"));__a << (warn("woo", :boo, 100));__a << (warn(100, 
 111968a050c98ee7659b9300078a5a27	"ModuleSpecsP1::Inner"	module ModuleSpecsP1; end\n            module ModuleSpecsP2; end\n   
 111d2cc60323b00c5de55434a4832b0d	[["Encoding::UndefinedConversionError", "U+3042 from UTF-8 to ASCII-8BIT"], ["Encoding::UndefinedConversionError", "U+00E9 from UTF-8 to ASCII-8BIT"], ["Encoding::UndefinedConversionError", "U+3042 to ASCII-8BIT in conversion from EUC-JP to UTF-8 to ASCII-8BIT"], ["Encoding::UndefinedConversionError", "U+3042 to ASCII-8BIT in conversion from Shift_JIS to UTF-8 to ASCII-8BIT"], ["Encoding::UndefinedConversionError", "U+00E9 to ASCII-8BIT in conversion from ISO-8859-1 to UTF-8 to ASCII-8BIT"], ["Encoding::UndefinedConversionError", "U+3042 to ASCII-8BIT in conversion from UTF-16LE to UTF-8 to ASCII-8BIT"], ["Encoding::UndefinedConversionError", "U+3042 to ASCII-8BIT in conversion from UTF-32BE to UTF-8 to ASCII-8BIT"], [[97, 98, 99], "ASCII-8BIT"], [[97, 98, 99], "ASCII-8BIT"], [[97, 98], "ASCII-8BIT"], [[255, 254], "ASCII-8BIT"], [[63], "ASCII-8BIT"], [[99, 97, 102, 63, 63], "ASCII-8BIT"], [[63], "ASCII-8BIT"], [[33], "ASCII-8BIT"], [[38, 35, 120, 51, 48, 52, 50, 59], "ASCII-8BIT"], [[63], "ASCII-8BIT"]]	(f=->(&b){ begin; v=b.call; [v.bytes, v.encoding.name]; rescue => e; [e.class.to
@@ -442,6 +443,7 @@
 13323a8d5c81e35bcd4ad9f525e2542e	[true, 2, 9, 0]	h = Signal.list\n            [h.is_a?(Hash), h["INT"], h["KILL"], h[
 1340e16389e2c65e0ffbc654eeb867be	["no", "no", "no", "no", "no", "TA", "TB", "no", 1550, [false, true, false, false, false, true, true, false], [2, 1, 2, 2, 2, 2, 2, 2], [true, false, false, false, false, false, false, false]]	module Tag; end\n            class TA; end\n            class TB < TA
 136d5b53ff9c773153c7fac5ff0b733b	[200, [:sym, "s", :sym, "s"], "strx!", 8, ["ac", "ab"], 3, [false, true]]	def push(a, x) = a << x\n            a = []\n            200.times { 
+13859d8e91be8045a754d56646482b58	[false, true, false]	S = Struct.new(:a, :b)\n            r = [S.new(1, 2) == S.new(1, 3)]
 138e62ffcfc71d0338a5247a729e81fb	[true, true]	[$:.equal?($LOAD_PATH), $:.equal?($-I)]\n        
 139488b66d8d23e3507bc325fe2402e7	[[["e0", true, "ArgumentError"], ["e1", true, "ArgumentError"], ["e2", true, "ArgumentError"]], "nil"]	def inner(n)\n          begin\n            raise ArgumentError, "e#{n}"\n 
 13ad4da7c9b738e48c91a58c2101c684	[false, true, false, false, true]	r, w = IO.pipe\n            res = [$stdout.sync, $stderr.sync, $stdi
@@ -2707,6 +2709,7 @@
 7f983c97ff2d7632ca2566839b2d0aa5	true	rng = Random.new(42)\n        a = rng.rand(1.5)\n        a.is_a?(Float) &
 7f9de09761ed4f31f66268b4a5af3f11	[[0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57], 80, [19, 38, 19], [38, 19]]	class C\n          attr_reader :log\n          def initialize = @log = []
 7f9f876eb22b2bc16a64bd780036a90b	:ok	using Math; :ok
+7fadfa35a012b353190f3f5ea702058b	[[299, "a", [299]], [299, nil, nil], [nil, nil, nil], [299, :q, nil], [299, 2, nil], CNSSub, [1, 2, 3, 4, 5, 6, 299], [299, nil, :c, nil, nil, nil, nil], [[299, 299, nil], 299], "struct size differs", [299, nil], [nil, 299, nil]]	CNS = Struct.new(:x, :y, :z) unless defined?(CNS)\n        CNS7 = Struct
 7fbef115b72649d4c93632808a3c7664	200	superclass = Class.new\n            200.times.map { Class.new(superc
 7fd970408fef4686f9a03d7219e2c592	[false, :arg_error, :arg_error, :arg_error, :arg_error]	class N\n            include Comparable\n            attr_accessor :x\n 
 7fde780ffabe4bf9d5cdf993a4ba165d	["main", "main", true, true, "main", true, false]	c = self.clone\n            [\n              to_s, inspect,\n         
@@ -2741,6 +2744,7 @@
 8102d033b6a3823b4f48b0cf3c51ecae	[7, 8]	o = Object.new\n            def o.respond_to?(name, *) = true\n      
 81082351e5bcbfcbc72b563bb853343b	[[[88, 130, 98], [89]], [[88], [89]], [[97, 130, 160], [98]], "Encoding::CompatibilityError", "Encoding::CompatibilityError", "Encoding::CompatibilityError", [[97, 227, 129, 130, 98]]]	def sj(s) = s.dup.force_encoding("Shift_JIS")\n              r = s
 8110d22075f243bed0d15dd6cffd0ea2	[false, true, true, 0, 1, 2, 0, 1, 2, [[:req, :x], [:req, :y]], [[:req, :x], [:opt, :y]], [[:req, :x], [:rest, :rest]], [[:req, :x], [:block, :blk]], [[:req, :x], [:opt, :y], [:rest, :rest], [:block, :blk]], [[:opt, :x], [:opt, :y]], [[:opt, :x], [:rest, :rest]], [], [], true, 6, 6, 6, 3, [1, 2, 3], true, false, true, true, false, [[:rest]], nil, -1, ArgumentError, ArgumentError, ArgumentError, 6, ArgumentError, true, false, true, true, false, [[:opt]], [[:req]], [[:opt, :it]], true, [[1, "Integer"], [2, "Integer"], [3, "Integer"]], "hi"]	__a = [];__a << (Proc.new {}.lambda?);__a << (lambda {}.lambda?);__a << (->(x) {
+81174d6d4f349b44a2d763f9528768c1	[[299, 300], [300, 299], [2990, nil], 900]	CNSR = Struct.new(:x, :y)\n        def cns_mk(i) = CNSR.new(i, i + 1).to
 812c40542c17a0b548a32baae3a41bd3	[0, 0, true, true, "root", "root", true, 0, true, true]	require "etc"\n            pw = Etc.getpwnam("root")\n            gr 
 81371fe30cb669fe8f93af5e539a0a50	["ZeroDivisionError", "user"]	begin\n              raise "user"\n            rescue\n              b
 813c1561f0a475d62542217c3b16d990	["boom", true]	t = Thread.new { Thread.current.abort_on_exception = true; sleep 0.
@@ -3317,6 +3321,7 @@
 9dad3fcfbb4f15771bbac751e3869047	42	module A\n          module B\n            module C\n              VAL = 42
 9dbc194b1b0f6de59813ff04a2e9663a	[20, 20, 100, 2, 2]	Bar = 100\n            class Foo\n              autoload :Bar, "./c"\n
 9dbef04511724f84642f3b1be7361af9	[:get_raised, :set_raised]	class D\n              def initialize() @a = {k: 1} end\n            
+9dc1c672a425a28f0030ceb3ebee4acc	[[:a, :b], [:a, :b], 2, 2, [1, 2], {a: 1, b: 2}, 2, [[:a, 1], [:b, 2]]]	S = Struct.new(:a, :b)\n            \n\n            s = S.new(1, 2)\n  
 9dc570781d3034551d04772d71561543	:OVERRIDDEN	class Float; def ==(o); :OVERRIDDEN; end; end; 3.0 == 4.0
 9dc5774ad943cc34faf646d0a15fb961	[255, 15, 240, 255, 15, 240, 255, 15, 240, 244837815148286, 304366200, 244837510782086, 244837815148286, 304366200, 244837510782086, -1, 15, -16, -1, 5, -6, 244837814094590, -244837814094591, 42, 0, 42, 42, -43, 42, 42, 0, 100000000000000000255, 0, 100000000000000000255, 1024, 243, 1, 1, -32, 16, 4611686018427387904, 1267650600228229401496703205376, 100000000000000000000, (1/8), (-1/8), 1, -1, -1, 8.0, 0.25]	__a = [];__a << (a = 0xFF; a | 0x0F);__a << (a = 0xFF; a & 0x0F);__a << (a = 0xF
 9dc5dada6517c93364e4657584df6b8b	[:done, [:inner, "caught:E", :outer]]	$log = []\n        def f\n          begin\n            begin\n             

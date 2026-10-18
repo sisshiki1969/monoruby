@@ -20,7 +20,7 @@ pub(crate) fn init(globals: &mut Globals) {
     // calls like `T.new(a: 1, b: 2)` are distinguishable from a literal
     // positional Hash `T.new({a: 1, b: 2})` — the former unpacks into
     // members, the latter is a single positional argument.
-    globals.define_private_builtin_func_with_kw(
+    let init_fid = globals.define_private_builtin_func_with_kw(
         STRUCT_CLASS,
         "initialize",
         initialize,
@@ -30,6 +30,7 @@ pub(crate) fn init(globals: &mut Globals) {
         &[],
         true,
     );
+    globals.store.record_struct_initialize_fid(init_fid);
 
     globals.define_builtin_func(STRUCT_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(STRUCT_CLASS, "to_s", inspect, 0);
@@ -43,6 +44,8 @@ pub(crate) fn init(globals: &mut Globals) {
     // (`RSTRUCT_GET`), never through the member accessors, so a
     // subclass overriding `name` still gets its stored `name` from
     // `to_h` (Rails' `ParamsWrapper::Options` relies on that).
+    globals.define_builtin_funcs(STRUCT_CLASS, "size", &["length"], size, 0);
+    globals.define_private_builtin_func(STRUCT_CLASS, "__members", members_raw, 0);
     globals.define_private_builtin_func(STRUCT_CLASS, "__slot_get", slot_get, 1);
     globals.define_private_builtin_func(STRUCT_CLASS, "__slot_set", slot_set, 2);
 }
@@ -280,7 +283,15 @@ pub(super) fn struct_members(
     // `Class.new(SomeStruct)` stores `/members` on its ancestor, so walk
     // the superclass chain rather than assuming the ivar is local.
     let members = get_members(&globals.store, lfp.self_val().as_class())?;
-    Ok(members.into())
+    Ok(members_copy(members))
+}
+
+/// A fresh Array of the member names. `/members` itself is the class's
+/// own record (the allocator, `size` and the slot accessors all read it),
+/// so handing it out would let `s.members << :z` change the class's shape;
+/// CRuby's `rb_struct_s_members_m` likewise returns a copy.
+fn members_copy(members: Array) -> Value {
+    Value::array_from_iter(members.iter().cloned())
 }
 
 pub(super) fn get_members(store: &Store, mut class: Module) -> Result<Array> {
@@ -445,10 +456,14 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// Returns whether *class_obj* (a Struct subclass) was created with
 /// `keyword_init: true` (any truthy value, matching `keyword_init?`).
 fn is_keyword_init(globals: &Globals, class_obj: Module) -> bool {
-    let v = match globals
-        .store
-        .get_ivar(class_obj.as_val(), IdentId::_KEYWORD_INIT)
-    {
+    struct_keyword_init(&globals.store, class_obj)
+}
+
+/// Whether instances of `class_obj` are built by keyword (`Struct.new(...,
+/// keyword_init: true)`). Fixed once `Struct.new` returns, so the JIT may
+/// bake it (`inline_class_new`).
+pub(crate) fn struct_keyword_init(store: &Store, class_obj: Module) -> bool {
+    let v = match store.get_ivar(class_obj.as_val(), IdentId::_KEYWORD_INIT) {
         Some(v) => v,
         None => return false,
     };
@@ -555,6 +570,24 @@ pub(super) fn qualified_real_class_name(store: &Store, class_id: ClassId) -> Opt
     }
 }
 
+/// Whether member-wise `==` of `lhs` and `rhs` can skip the recursion
+/// guard: every pair is two immediates that `==` settles without a method
+/// call (the same immediate, two Integers, two flonums), and no basic
+/// operator has been redefined. Such a comparison never re-enters Ruby, so
+/// it cannot reach this pair of structs again, and the guard's insert and
+/// remove are most of the cost of comparing a small struct.
+fn eq_needs_no_guard(globals: &Globals, lhs: &StructInner, rhs: &StructInner) -> bool {
+    !globals.store.basic_op_redefined()
+        && (0..lhs.len()).all(|i| {
+            let (l, r) = (lhs.get(i), rhs.get(i));
+            l.is_packed_value()
+                && r.is_packed_value()
+                && (l.id() == r.id()
+                    || (l.is_fixnum() && r.is_fixnum())
+                    || (l.is_flonum() && r.is_flonum()))
+        })
+}
+
 ///
 /// Struct#==
 /// - self == other -> bool
@@ -598,22 +631,27 @@ pub(super) fn eq(
         return Ok(Value::bool(false));
     }
     let len = lhs_struct.len();
+    let body = |vm: &mut Executor, globals: &mut Globals| {
+        let lhs_struct = self_val.try_struct().unwrap();
+        let rhs_struct = other.try_struct().unwrap();
+        for i in 0..len {
+            let lhs = lhs_struct.get(i);
+            let rhs = rhs_struct.get(i);
+            // `rb_equal`: identical members are equal without a call,
+            // otherwise the member's own `==`, never `!=`.
+            if lhs.id() != rhs.id() && !vm.eq_values_bool(globals, lhs, rhs)? {
+                return Ok(Value::bool(false));
+            }
+        }
+        Ok(Value::bool(true))
+    };
+    if eq_needs_no_guard(globals, lhs_struct, rhs_struct) {
+        return body(vm, globals);
+    }
     crate::value::exec_recursive_paired(
         self_val.id(),
         other.id(),
-        || {
-            let lhs_struct = self_val.try_struct().unwrap();
-            let rhs_struct = other.try_struct().unwrap();
-            for i in 0..len {
-                let lhs = lhs_struct.get(i);
-                let rhs = rhs_struct.get(i);
-                // `rb_equal`: the member's own `==`, never `!=`.
-                if !vm.eq_values_bool(globals, lhs, rhs)? {
-                    return Ok(Value::bool(false));
-                }
-            }
-            Ok(Value::bool(true))
-        },
+        || body(vm, globals),
         Value::bool(true),
     )
 }
@@ -658,21 +696,28 @@ pub(super) fn eql(
         return Ok(Value::bool(false));
     }
     let len = lhs_struct.len();
+    let body = |vm: &mut Executor, globals: &mut Globals| {
+        let lhs_struct = self_val.try_struct().unwrap();
+        let rhs_struct = other.try_struct().unwrap();
+        for i in 0..len {
+            let lhs = lhs_struct.get(i);
+            let rhs = rhs_struct.get(i);
+            if !lhs.eql(&rhs, vm, globals)? {
+                return Ok(Value::bool(false));
+            }
+        }
+        Ok(Value::bool(true))
+    };
+    // `eql?` of two immediates is a bit comparison (`Value::eql`), so an
+    // all-immediate pair never re-enters Ruby; see `eq_needs_no_guard`.
+    if (0..len).all(|i| lhs_struct.get(i).is_packed_value() && rhs_struct.get(i).is_packed_value())
+    {
+        return body(vm, globals);
+    }
     crate::value::exec_recursive_paired(
         self_val.id(),
         other.id(),
-        || {
-            let lhs_struct = self_val.try_struct().unwrap();
-            let rhs_struct = other.try_struct().unwrap();
-            for i in 0..len {
-                let lhs = lhs_struct.get(i);
-                let rhs = rhs_struct.get(i);
-                if !lhs.eql(&rhs, vm, globals)? {
-                    return Ok(Value::bool(false));
-                }
-            }
-            Ok(Value::bool(true))
-        },
+        || body(vm, globals),
         Value::bool(true),
     )
 }
@@ -708,25 +753,28 @@ pub(super) fn ne(
         return Ok(Value::bool(true));
     }
     let len = lhs_struct.len();
-    let result = crate::value::exec_recursive_paired(
+    let body = |vm: &mut Executor, globals: &mut Globals| {
+        let lhs_struct = self_val.try_struct().unwrap();
+        let rhs_struct = other.try_struct().unwrap();
+        for i in 0..len {
+            let lhs = lhs_struct.get(i);
+            let rhs = rhs_struct.get(i);
+            // The negation of `Struct#==`, which asks `rb_equal`.
+            if lhs.id() != rhs.id() && !vm.eq_values_bool(globals, lhs, rhs)? {
+                return Ok(Value::bool(true));
+            }
+        }
+        Ok(Value::bool(false))
+    };
+    if eq_needs_no_guard(globals, lhs_struct, rhs_struct) {
+        return body(vm, globals);
+    }
+    crate::value::exec_recursive_paired(
         self_val.id(),
         other.id(),
-        || {
-            let lhs_struct = self_val.try_struct().unwrap();
-            let rhs_struct = other.try_struct().unwrap();
-            for i in 0..len {
-                let lhs = lhs_struct.get(i);
-                let rhs = rhs_struct.get(i);
-                // The negation of `Struct#==`, which asks `==`.
-                if !vm.eq_values_bool(globals, lhs, rhs)? {
-                    return Ok(Value::bool(true));
-                }
-            }
-            Ok(Value::bool(false))
-        },
+        || body(vm, globals),
         Value::bool(false),
-    )?;
-    Ok(result)
+    )
 }
 
 ///
@@ -749,20 +797,28 @@ pub(super) fn hash(
     // `extend`ed struct (whose own class is a singleton).
     let class_hash =
         (self_val.real_class(&globals.store).id().u32() as u64).wrapping_mul(0x100000001b3);
+    let body = |vm: &mut Executor, globals: &mut Globals| {
+        let mut hasher = crate::value::seeded_hasher();
+        hasher.write_u64(class_hash);
+        if let Some(s) = self_val.try_struct() {
+            for i in 0..s.len() {
+                let v = s.get(i);
+                let h = v.calculate_hash(vm, globals)?;
+                hasher.write_u64(h);
+            }
+        }
+        Ok(Value::from_hash_digest(hasher.finish()))
+    };
+    // An immediate hashes without calling Ruby (`ruby_hash_packed`), so a
+    // struct of immediates cannot recur into itself: skip the guard.
+    if let Some(s) = self_val.try_struct()
+        && (0..s.len()).all(|i| s.get(i).is_packed_value())
+    {
+        return body(vm, globals);
+    }
     crate::value::exec_recursive_outer(
         id,
-        || {
-            let mut hasher = crate::value::seeded_hasher();
-            hasher.write_u64(class_hash);
-            if let Some(s) = self_val.try_struct() {
-                for i in 0..s.len() {
-                    let v = s.get(i);
-                    let h = v.calculate_hash(vm, globals)?;
-                    hasher.write_u64(h);
-                }
-            }
-            Ok(Value::from_hash_digest(hasher.finish()))
-        },
+        || body(vm, globals),
         // On any recursion at any depth, the outer call returns this
         // sentinel, so two structs that cycle at different depths still
         // hash to the same value.
@@ -781,7 +837,27 @@ pub(super) fn members(
     // subclass has `/members` defined on the ancestor, not its own class.
     let class_obj = lfp.self_val().get_class_obj(globals);
     let members = get_members(&globals.store, class_obj)?;
-    Ok(members.into())
+    Ok(members_copy(members))
+}
+
+/// `Struct#__members`: the class's own `/members` Array, uncopied, for
+/// `builtins/struct.rb`'s read-only lookups (`members.index(sym)`), which
+/// would otherwise allocate a copy per call.
+#[monoruby_builtin]
+fn members_raw(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_obj = lfp.self_val().get_class_obj(globals);
+    Ok(get_members(&globals.store, class_obj)?.into())
+}
+
+/// `Struct#size` / `#length`: the slot count, which is the member count.
+#[monoruby_builtin]
+fn size(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::integer(lfp.self_val().as_struct().len() as i64))
 }
 
 ///
@@ -2061,6 +2137,70 @@ mod tests {
             ]
             "#,
             prelude,
+        );
+    }
+    #[test]
+    fn struct_members_returns_a_copy() {
+        // `members` hands out a copy: mutating it changes neither the
+        // class's members nor the size of its instances.
+        run_test_with_prelude(
+            r#"
+            s = S.new(1, 2)
+            m = s.members
+            m << :z
+            c = S.members
+            c << :w
+            [S.members, s.members, s.size, s.length, s.to_a, s.to_h, s[:b], s.each_pair.to_a]
+            "#,
+            r#"
+            S = Struct.new(:a, :b)
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_eq_hash_immediate_members() {
+        // All-immediate members take the unguarded path of `==` / `!=` /
+        // `eql?` / `hash`; mixed and self-referencing ones keep the guard.
+        run_test_with_prelude(
+            r#"
+            n = Float::NAN
+            a = S.new(1, nil); a.b = a
+            b = S.new(1, nil); b.b = b
+            o = Object.new
+            def o.==(x) = false
+            [
+              S.new(1, :a) == S.new(1, :a), S.new(1, :a) != S.new(1, :b),
+              S.new(1, 2) == S.new(1, 2.0), S.new(1, 2).eql?(S.new(1, 2.0)),
+              S.new(1.5, nil).eql?(S.new(1.5, nil)), S.new(1, 2) == S.new(1, :x),
+              S.new(n, 1) == S.new(n, 1), S.new(n, 1) != S.new(n, 1),
+              S.new(o, 1) == S.new(o, 1), S.new(o, 1) != S.new(o, 1),
+              a == b, a != b, a.eql?(b), a.hash == b.hash,
+              S.new(:k, true).hash == S.new(:k, true).hash,
+              S.new(1, 2).hash == S.new(2, 1).hash,
+              { S.new(1, 2) => :v }[S.new(1, 2)],
+            ]
+            "#,
+            r#"
+            S = Struct.new(:a, :b)
+            "#,
+        );
+    }
+
+    #[test]
+    fn struct_eq_redefined_integer_eq() {
+        // With a basic operator redefined the guarded path runs and the
+        // redefinition is honoured.
+        run_test_once(
+            r#"
+            S = Struct.new(:a, :b)
+            r = [S.new(1, 2) == S.new(1, 3)]
+            class Integer
+              def ==(o) = true
+            end
+            r << (S.new(1, 2) == S.new(1, 3)) << (S.new(1, 2) != S.new(1, 3))
+            r
+            "#,
         );
     }
 }

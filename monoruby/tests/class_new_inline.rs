@@ -358,3 +358,58 @@ fn class_new_frameless_initialize_discarded_result() {
         "#
     ));
 }
+
+#[test]
+fn class_new_struct_slots() {
+    // A `Struct.new` class whose `initialize` is still the native one:
+    // the positional arguments are stored straight into the new object's
+    // slots. Covered: fewer arguments than members (the rest stay nil),
+    // none at all, `[]`, a subclass, a struct whose slots spill to the
+    // heap (more than 5 members), an argument that is the object being
+    // overwritten, and the shapes that decline — too many arguments
+    // (ArgumentError from the native code), `keyword_init: true`, and an
+    // implicit-keyword call.
+    run_test(&format!(
+        r#"
+        CNS = Struct.new(:x, :y, :z) unless defined?(CNS)
+        CNS7 = Struct.new(:a, :b, :c, :d, :e, :f, :g) unless defined?(CNS7)
+        CNSK = Struct.new(:x, :y, keyword_init: true) unless defined?(CNSK)
+        class CNSSub < CNS; end
+        r = []
+        {LOOP}.times do |i|
+          s = CNS.new(i, i)
+          s = CNS.new(s, s.x)
+          err = begin; CNS.new(1, 2, 3, 4); rescue ArgumentError => e; e.message; end
+          r = [
+            CNS.new(i, "a", [i]).to_a, CNS.new(i).to_a, CNS.new.to_a, CNS[i, :q].to_a,
+            CNSSub.new(i, 2).to_a, CNSSub.new(1).class,
+            CNS7.new(1, 2, 3, 4, 5, 6, i).to_a, CNS7.new(i, nil, :c).to_a,
+            [s.x.to_a, s.y], err, CNSK.new(x: i).to_a, CNS.new(y: i).to_a,
+          ]
+        end
+        r
+        "#
+    ));
+}
+
+#[test]
+fn class_new_struct_redefined_initialize() {
+    // One hot call site, then `initialize` defined on the struct class
+    // (over the inherited native one) and redefined again: the slot
+    // stores baked into the compiled site must give way each time.
+    run_test_once(&format!(
+        r#"
+        CNSR = Struct.new(:x, :y)
+        def cns_mk(i) = CNSR.new(i, i + 1).to_a
+        r = []
+        {LOOP}.times {{ |i| r << cns_mk(i) }}
+        before = r.last
+        CNSR.class_eval {{ def initialize(a, b) = super(b, a) }}
+        {LOOP}.times {{ |i| r << cns_mk(i) }}
+        mid = r.last
+        CNSR.class_eval {{ def initialize(a, b) = super(a * 10) }}
+        {LOOP}.times {{ |i| r << cns_mk(i) }}
+        [before, mid, r.last, r.size]
+        "#
+    ));
+}

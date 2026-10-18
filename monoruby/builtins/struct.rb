@@ -7,12 +7,6 @@
 class Struct
   include Enumerable
 
-  # Number of attributes.
-  def size
-    members.size
-  end
-  alias length size
-
   # Yield each value.
   # Returns self when a block is given, an Enumerator (sized to size)
   # otherwise.
@@ -32,9 +26,9 @@ class Struct
     # `s.each_pair.map { |pair| pair }` both behave correctly — the
     # latter reaches here through Enumerable's internal `|*vs|` block.
     if blk.arity > 1
-      members.each_with_index { |m, i| yield m, __slot_get(i) }
+      __members.each_with_index { |m, i| yield m, __slot_get(i) }
     else
-      members.each_with_index { |m, i| yield [m, __slot_get(i)] }
+      __members.each_with_index { |m, i| yield [m, __slot_get(i)] }
     end
     self
   end
@@ -71,7 +65,7 @@ class Struct
       __slot_get(i)
     elsif key.is_a?(Symbol) || key.is_a?(String)
       sym = key.to_sym
-      i = members.index(sym)
+      i = __members.index(sym)
       raise NameError, "no member '#{key}' in struct" unless i
       __slot_get(i)
     else
@@ -89,7 +83,7 @@ class Struct
       __slot_set(i, value)
     elsif key.is_a?(Symbol) || key.is_a?(String)
       sym = key.to_sym
-      i = members.index(sym)
+      i = __members.index(sym)
       raise NameError, "no member '#{key}' in struct" unless i
       __slot_set(i, value)
     else
@@ -147,7 +141,7 @@ class Struct
           __slot_get(idx)
         end
       elsif key.is_a?(Symbol) || key.is_a?(String)
-        idx = members.index(key.to_sym)
+        idx = __members.index(key.to_sym)
         idx ? __slot_get(idx) : nil
       else
         # Mirror Struct#[] coercion path; unsupported types raise TypeError.
@@ -167,7 +161,7 @@ class Struct
     h = {}
     keys.each do |k|
       if k.is_a?(Symbol) || k.is_a?(String)
-        idx = members.index(k.to_sym)
+        idx = __members.index(k.to_sym)
         return h unless idx
         # Preserve the caller-supplied key (Symbol stays Symbol, String
         # stays String) per CRuby `rb_struct_deconstruct_keys`.
