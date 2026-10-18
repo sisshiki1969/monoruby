@@ -89,7 +89,7 @@ fn work_dir(name: &str) -> PathBuf {
 /// The newest `<name>-<version>.gem` in the host CRuby's gem caches,
 /// with its version — the gem the host installed, so the same version
 /// runs on both sides.
-fn cached_gem(name: &str) -> Option<(PathBuf, String)> {
+fn cached_gem(name: &str, want: Option<&str>) -> Option<(PathBuf, String)> {
     let paths = Command::new("ruby")
         .args(["-e", "puts Gem.path"])
         .output()
@@ -111,6 +111,9 @@ fn cached_gem(name: &str) -> Option<(PathBuf, String)> {
             if version.is_empty() || !version.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
                 continue;
             }
+            if want.is_some_and(|w| w != version) {
+                continue;
+            }
             let key: Vec<u64> = version.split('.').map(|p| p.parse().unwrap_or(0)).collect();
             found.push((key, version.to_string(), entry.path()));
         }
@@ -122,6 +125,12 @@ fn cached_gem(name: &str) -> Option<(PathBuf, String)> {
 /// Installs the cached `.gem` with monoruby's `gem` into a home of its
 /// own, runs the gem's script there and on the host CRuby, and compares.
 fn check_gem(name: &str) {
+    check_gem_version(name, None);
+}
+
+/// `check_gem` pinned to one version of the gem (`None`: the newest in
+/// the cache), so that two lines of a gem can be compared side by side.
+fn check_gem_version(name: &str, want: Option<&str>) {
     if !have_build_tools() {
         eprintln!("skipped: no C compiler or make");
         return;
@@ -130,12 +139,14 @@ fn check_gem(name: &str) {
         eprintln!("skipped: no host ruby");
         return;
     }
-    let Some((gem_file, version)) = cached_gem(name) else {
-        eprintln!("skipped: {name}-*.gem is not in the host's gem cache");
+    let Some((gem_file, version)) = cached_gem(name, want) else {
+        eprintln!("skipped: {name}-{}.gem is not in the host's gem cache", want.unwrap_or("*"));
         return;
     };
     let script = manifest_dir().join(format!("tests/capi/gems/{name}.rb"));
-    let dir = work_dir(name);
+    // One work dir per test: `json` and `json_2_18` run concurrently, and
+    // `work_dir` starts by removing it.
+    let dir = work_dir(&format!("{name}-{}", want.unwrap_or("latest")));
     let home = dir.join("home");
     let root = PathBuf::from(run(monoruby().args(["-e", r#"print RbConfig::CONFIG["rubyhdrdir"]"#])));
     let mono_gem = root.parent().unwrap().join("bin/gem");
@@ -232,4 +243,25 @@ fn strptime() {
 #[test]
 fn yajl_ruby() {
     check_gem("yajl-ruby");
+}
+
+/// json 2.18.0's parser.so and generator.so: the extension that relies on
+/// CRuby's VALUE layout (`Qfalse == 0` in fbuffer.h and the generator),
+/// which the layer now provides. Also `rb_global_variable` on C globals
+/// holding nil / false, `rb_hash_foreach`, `rb_hash_bulk_insert`,
+/// `rb_enc_interned_str`, `rb_ext_ractor_safe`, `RB_OBJ_WRITE`.
+#[test]
+fn json() {
+    check_gem("json");
+}
+
+/// json 2.18.0, Ruby 4.0.6's default gem: `fbuffer.h` tests a VALUE with
+/// C truth (`Qfalse == 0`), `rb_str_buf_new` + `RSTRING_PTR` writes,
+/// `rb_global_variable`, `rb_hash_lookup2` with `Qundef`. The newest
+/// cached json (3.x: `rb_scan_args_kw`, `rb_catch_obj` / `rb_throw_obj`
+/// for the resumable parser, `rb_check_funcall`, `rb_str_tmp_new`) runs
+/// as `json` above.
+#[test]
+fn json_2_18() {
+    check_gem_version("json", Some("2.18.0"));
 }

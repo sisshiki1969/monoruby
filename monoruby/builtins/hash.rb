@@ -395,8 +395,11 @@ class Hash
   def flat_map
     return to_enum(__callee__) unless block_given?
     res = []
+    # The pair goes whole to a block that does not split it (a Symbol proc,
+    # `{ |pair| }`), as in `map` above; rubygems' `flat_map(&:last)` needs it.
+    split = __block_splits_pair?
     each { |k, v|
-      r = yield(k, v)
+      r = split ? yield(k, v) : yield([k, v])
       if r.is_a?(Array)
         res.concat(r)
       else

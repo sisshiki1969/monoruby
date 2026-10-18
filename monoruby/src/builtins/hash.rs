@@ -6786,6 +6786,18 @@ mod tests {
     }
 
     #[test]
+    fn hash_flat_map_pair_split_rules() {
+        run_tests(&[
+            r#"h = {"a" => [1, 2], "b" => [3]}; h.flat_map(&:last)"#,
+            r#"h = {"a" => [1, 2], "b" => [3]}; h.flat_map { |pair| pair }"#,
+            r#"h = {"a" => [1, 2], "b" => [3]}; h.flat_map { |k, v| [k] + v }"#,
+            r#"h = {"a" => [1, 2], "b" => [3]}; h.flat_map { |*a| a }"#,
+            r#"h = {"a" => [1, 2], "b" => [3]}; h.flat_map(&->(a, *b) { [a, b] })"#,
+            r#"h = {"a" => [1, 2], "b" => [3]}; h.flat_map { |k, v| v.size }"#,
+        ]);
+    }
+
+    #[test]
     fn hash_map_pair_split_rules() {
         run_tests(&[
             r#"h = {a: 1, b: 2}; h.map { |*a| a }"#,

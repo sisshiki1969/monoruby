@@ -37,27 +37,28 @@ monoruby "$root/bin/gem" install foo # C 拡張付き gem も同じ経路でビ�
 
 ## 2. 互換の範囲: API 互換、ABI 非互換
 
-`VALUE` は monoruby の `Value` のビット列そのもの（`value.rs`）。
+拡張の中の `VALUE` は **CRuby のビット列**（64-bit、flonum あり）で、
+monoruby の `Value`（`value.rs`）とは層（`capi.c`）が境界で相互変換する
+（段階 8、§3.15）。
 
-| | CRuby | monoruby |
-|---|---|---|
-| `Qnil` / `Qfalse` / `Qtrue` / `Qundef` | 0x08 / 0x00 / 0x14 / 0x24 | 0x04 / 0x14 / 0x1c / 0x00 |
-| Fixnum | `(i << 1) \| 1` | 同じ |
-| Flonum | 下位 2 bit = `10` | 同じタグ（回転は別。マクロは関数経由） |
-| Static Symbol | `(id << 8) \| 0x0c` | `(id << 32) \| 0x0c` |
-| `ID` | `uintptr_t` | `uintptr_t`（中身は `IdentId`） |
+| | CRuby = 拡張内の `VALUE` | monoruby の `Value` | 変換 |
+|---|---|---|---|
+| `Qfalse` / `Qnil` / `Qtrue` / `Qundef` | 0x00 / 0x04 / 0x14 / 0x24 | 0x14 / 0x04 / 0x1c / 0x00 | 表引き（nil は同じビット、CRuby の true が monoruby の false） |
+| Fixnum | `(i << 1) \| 1` | 同じ | なし |
+| Flonum | `rotl(bits, 3) & ~1 \| 2`、下位 2 bit = `10` | 同じ（回転も同じ） | なし |
+| Static Symbol | `(id << 8) \| 0x0c` | `(id << 32) \| 0x0c` | シフト |
+| ヒープ | 8 バイト境界のポインタ | 同じ | なし |
+| `ID` | `uintptr_t` | `uintptr_t`（中身は `IdentId`） | なし |
 
 即値はヘッダのマクロに焼き込まれるので、CRuby のヘッダでビルドした
-`.so` は原理的に動かない。必ず再コンパイルする。境界で値を変換する案
-（TruffleRuby の handle 方式）は、monoruby の GC が precise / non-moving で
-あることから不要と判断した: 生の `Value` を C に渡し、生存は §3.3 で保証する。
+`.so` はそれでも動かない（`rb_*` の実体が libruby ではなく層だから）。
+必ず再コンパイルする。
 
 拡張から見える CRuby との差:
 
-- **`Qfalse != 0`。** `if (v)` で真偽を見るコードは誤動作する（`RTEST` /
-  `NIL_P` を使っていれば問題ない）。
 - オブジェクトレイアウトのマクロ（`RSTRING_PTR`、`RARRAY_LEN`、`RBASIC`
-  …）は関数。`RBasic` / `RString` 構造体は無い。`RARRAY_PTR` は読み取り
+  …）は関数。`RBasic` / `RString` 構造体は無い。`RARRAY_PTR` /
+  `RARRAY_CONST_PTR` は要素を変換した**コピー**を指し（§3.15）、読み取り
   専用（書くときは `rb_ary_store` / `RARRAY_ASET`）。
 - 世代別 GC が無いので write barrier（`RB_OBJ_WRITE` 等）は代入だけ。
 
@@ -287,7 +288,7 @@ CRuby のヘッダでビルドした（monoruby では読めない）`.so` が�
 |---|---|---|
 | bcrypt 3.1.22 | 一致 | `rb_str_new` / `StringValuePtr` / `NUM2INT`、特異メソッド定義 |
 | msgpack 1.8.5 | 一致（Buffer / Packer / Unpacker / Factory / ext 型 / Timestamp / IO 相手 / pool） | TypedData + alloc、`rb_num2ll` / `rb_num2ull` と Bignum、`rb_hash_foreach`、`rb_io_write`、`rb_enc_*`、`rb_ext_ractor_safe`、`-fvisibility=hidden` |
-| json 2.18.0 | ビルドとロードは通るが生成器が動かない（§6） | `RUBY_INTEGER_UNIFICATION`、`SIZEOF_UINT64_T`、`ALLOCV`、`rb_enc_interned_str` の `have_func` 判定 |
+| json 2.18.0 / 3.1.0 | 一致（§3.15。段階 7 までは `Qfalse != 0` のため生成器が動かなかった。3.x は `rb_scan_args_kw` / `rb_catch_obj` / `rb_throw_obj` / `rb_check_funcall` / `rb_str_tmp_new` も使う） | `RUBY_INTEGER_UNIFICATION`、`SIZEOF_UINT64_T`、`ALLOCV`、`rb_enc_interned_str` の `have_func` 判定、`rb_str_buf_new` + `RSTRING_PTR` 直書き、`rb_global_variable`、`rb_hash_lookup2` の `Qundef` |
 | strscan 3.1.8 | 一致（§3.13） | `ruby/re.h`: `rb_reg_onig_match` / `rb_reg_prepare_re` + `onig_search` / `onig_match`、`struct re_registers` をスタックに置く、`onig_foreach_name`、`rb_memsearch`、`rb_enc_precise_mbclen`（EUC-JP）、`rb_get_kwargs`、`_((args))` |
 
 macOS の CI で msgpack の `extconf.rb` が monoruby ごと落ちた（スタック
@@ -505,6 +506,92 @@ CRuby と比較する。`tests/capi_gems.rs` に `strptime`（0.2.5）と
 `yajl_ruby`（1.4.3）を足した。どちらも CI の `gem install` 対象に既に
 入っている（stand-in の比較テスト用）。
 
+### 3.15 拡張内の `VALUE` を CRuby のビット列に（段階 8）
+
+段階 7 までは `VALUE` が monoruby の `Value` そのものだった。`Qfalse` が 0
+でないので、`if (fb->io)` のように C の真偽で `VALUE` を見る json 2.18 の
+拡張（`fbuffer.h`、generator.c の `if (!data->vstate)`）が動かず、
+`RTEST` を使っていない拡張は同じ目に遭う。そこで拡張の中では CRuby の
+ビット列を使い（§2 の表）、層が境界で変換することにした。
+
+**変換は 2 関数** `M(VALUE) -> MrValue` と `R(MrValue) -> VALUE`
+（`capi.c` 冒頭）。nil / true / false / undef は表引き、Symbol は
+シフト幅の付け替え、それ以外は恒等。Fixnum と flonum（回転も同じ）と
+ヒープポインタは両者でビットが同じなので、変換は分岐 4 つと `& 0xff`
+だけで済む。どちら側のヒープポインタも相手側の Symbol に見えることは
+ない（下位バイト 0x0c は 8 の倍数でない）。
+
+**境界**（どれも `capi.c` の中で閉じていて、ABI は変わらない）:
+
+- `api->` 呼び出し全部: 引数は `M()`、戻りは `check()` / `R()`。
+  `argv` 配列は `mr_args()` で変換したものを渡す（16 個までスタック、
+  それ以上は呼び出し単位のバッファ）。
+- Ruby → C の入口 `capi_dispatch` / `block_dispatch`: `self` と `argv`
+  を `R()` し、結果を `M()` して返す。
+- `rb_gc_register_address` / `rb_global_variable`: C グローバルには
+  CRuby の値が入っているのでコアには読ませない。層が番地リストを持ち、
+  pin した隠しネイティブオブジェクト 1 個の `mark` から変換して報告する
+  （json は `rb_global_variable` を 5 箇所で使う）。
+- `RARRAY_CONST_PTR` / `RARRAY_PTR`: 要素を変換したコピーを返す。
+  コピーは現在の Ruby 呼び出し（`capi_frame` の owner）が持ち、呼び出し
+  が戻るとき解放する。1 呼び出しにつき 8 スロット（Array ごとに 1 つ、
+  同じ Array はスロットを再利用して要素を取り直す）なので、CRuby と同じ
+  ように複数の Array のポインタを同時に持てる。`RARRAY_AREF` は
+  `rb_ary_entry`（変換あり）。
+- TypedData の `dmark` / ブロックの `mark`: `rb_gc_mark(VALUE)` が
+  `M()` してコアに渡す。
+- `rb_protect` の `rb_errinfo`、`rb_hash_foreach` のコールバック、
+  `rb_iter_break` の値、など VALUE を保持する層内の構造体はすべて
+  CRuby 側の値で持ち、コアに渡す瞬間だけ変換する。
+
+ヘッダ（`ruby/ruby.h`）は CRuby の定義そのもの: `RTEST(v)` は
+`(v & ~Qnil) != 0`、`IMMEDIATE_P` は `v & 7`、`SPECIAL_CONST_P` は
+`IMMEDIATE_P || !RTEST`、`ID2SYM` / `SYM2ID` は 8 ビットシフト。
+
+CRuby と違う点で残るのは「C に渡したポインタ先の要素が生のオブジェクト
+メモリではない」ことだけ: `RARRAY_CONST_PTR` に書き込んでも Array は
+変わらない（`RARRAY_PTR` は前から読み取り専用）。
+
+検証: `tests/capi/capi_value.c`（`tests/capi.rs` の 6 本目）が定数の
+数値、`RTEST` 等のビット判定、Symbol の往復、flonum / heap float、
+`rb_global_variable` した C グローバル（nil / false / String を入れて
+`GC.start`）、`RARRAY_CONST_PTR` を 2 本同時、`rb_ary_new_from_values`、
+`Qundef` を返す API、`rb_scan_args` の省略引数、`rb_yield` / `rb_block_call`
+/ `rb_protect` / `rb_ensure` / `rb_hash_foreach` / `rb_funcall` を通る
+nil / false、`dmark` で mark される VALUE を CRuby と比較する。
+`tests/capi_gems.rs` に json 2.18.0 が加わり、gem の parser.so /
+generator.so（stand-in `gem/json/ext/*.rb` より `.so` が勝つ）で
+`JSON.generate` / `parse` / `pretty_generate` / `State` / `Coder` /
+エラーメッセージが CRuby と一致する。既存の 5 フィクスチャと bcrypt /
+msgpack / strscan / strptime / yajl-ruby も変わらず一致。
+
+**json 3.1.0（最新系）も一致する。** 3.x の parser.c / generator.c が新たに
+使う 5 つ — `rb_scan_args_kw`（`RB_SCAN_ARGS_LAST_HASH_KEYWORDS` など 4 つ
+のフラグ。`rb_scan_args` は `PASS_CALLED_KEYWORDS` の特殊形として同じ
+`scan_args_v` に乗せた）、`rb_check_funcall`（応答しなければ `Qundef`、
+private も数える）、`rb_str_tmp_new`（CRuby では hidden な作業用 String、
+ここでは普通の String）、再開可能パーサ（`ResumableParser`）が使う
+`rb_catch_obj` / `rb_throw_obj`（`Kernel#catch` / `#throw` そのもの。
+`throw` は interpreter の throw 例外として C フレームを巻き戻し、タグの
+合う `catch` が値を返す。C ↔ Ruby のどちらで catch / throw しても対応する）
+— を層に足した。`tests/capi/capi_value.c` の `scan_kw` / `check_call` /
+`tmp_fill` / `catch_` / `throw_` が CRuby と比較する。
+
+json はコアの default gem なので、Ruby 側の半分（`json.rb`、`json/common.rb`
+…）が stand-in ツリーに 2.18.0 で入っている。`gem "json", "3.1.0"` で
+活性化した gem の `.so` が stand-in の `json/ext/generator.rb` に勝っても、
+`json.rb` 自体は stand-in（2.18.0 の Ruby）に解決されていて
+`JSON::Ext::Generator::GeneratorMethods` の `NameError` になっていた。
+`require.rs` の `built_gem_file_on_load_path`: stand-in に当たった候補が、
+**monoruby がビルドした拡張を持つ gem**（`<home>/gems/<name-ver>/lib` と、
+C API 層の拡張を含む `<home>/extensions/<platform>/<api>/<name-ver>` が
+ともに `$LOAD_PATH` にある）の lib にもあれば、そちらを返す。stand-in に
+勝つのは活性化後だけで、素の `require "json"` は従来どおり stand-in。
+`tests/capi_gems.rs` は `json`（キャッシュ中の最新、CI では 3.1.0）と
+`json_2_18`（2.18.0 固定）の両方を比較する。ついでに rubygems の
+`generate_plugins` が踏む `Hash#flat_map(&:last)`（ペアを分割しないブロック
+にはペアを丸ごと渡す）を `builtins/hash.rb` で直した。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -533,10 +620,11 @@ CRuby と比較する。`tests/capi_gems.rs` に `strptime`（0.2.5）と
 | 1 | ローダ（`monoruby_capi_init` 判別、`$LOAD_PATH` 上の `.so`）、`ruby.h` 互換ヘッダ、`capi.c`: クラス / モジュール / メソッド定義（arity -2〜15）、即値・数値・文字列・シンボル・配列・ハッシュ・Range、`rb_funcall` 系、ブロック（`rb_yield` 系、`rb_block_proc`）、例外（`rb_raise`、`rb_protect` / `rb_ensure` / `rb_rescue2` / `rb_jump_tag`）、`rb_scan_args` / `rb_get_kwargs`、ivar / 定数 / cvar / gvar、GC 登録、`rb_sprintf`（`PRIsVALUE`）、最小限の encoding、`rb_thread_call_without_gvl` | 済（`tests/capi.rs`: 同じ C ソースを CRuby と monoruby で動かし出力一致） |
 | 2 | `Data` / `TypedData`（`TypedData_Make_Struct`、`DATA_PTR` の lvalue、dmark / dfree）、`rb_define_alloc_func` / `rb_undef_alloc_func`、`rb_block_call` / `rb_proc_new` / `rb_iterate` / `rb_iter_break`（C 関数をブロックとして渡す）、`rb_call_super`、`rb_struct_*`、`rb_obj_call_init`、`rb_class_new` | 済（§3.7〜3.9、`tests/capi/capi_data.c`）。`rb_keyword_given_p` は段階 7 |
 | 3 | `RbConfig::CONFIG`（`rubyhdrdir` などを install root に）、`mkmf` が monoruby を相手に `Makefile` を作れること、`capi.c` を `libmonoruby_capi.a` として `LIBRUBYARG` に、`gem install` で C 拡張 gem がビルドされ `extensions/<arch>/…` から読めること | 済（§3.10、`tests/mkmf.rs`）。gem home は monoruby 専用 |
-| 4 | 実 gem で面積を詰める（`rb_io_*`、`rb_enc_*`、Bignum 系、`ALLOCV`、`ruby/util.h`、シンボル可視性）。`bcrypt` と `msgpack` が CRuby と一致 | 済（§3.11、`tests/capi_gems.rs`）。`json` は `Qfalse != 0` に当たる（§6）、`strscan` は段階 6 |
+| 4 | 実 gem で面積を詰める（`rb_io_*`、`rb_enc_*`、Bignum 系、`ALLOCV`、`ruby/util.h`、シンボル可視性）。`bcrypt` と `msgpack` が CRuby と一致 | 済（§3.11、`tests/capi_gems.rs`）。`json` は段階 8、`strscan` は段階 6 |
 | 5 | `st_table`（`ruby/st.h` + CRuby の `st.c`） | 済（§3.12、`tests/capi/capi_st.c`） |
 | 6 | `ruby/re.h`（Onigmo を `MrOnigApi` 経由で、`rb_reg_prepare_re` / `rb_reg_onig_match`、`rb_enc_precise_mbclen` を本物に、`require` の `.so` 解決） | 済（§3.13、`tests/capi/capi_re.c`、`tests/capi_gems.rs` の strscan） |
 | 7 | Time API（`rb_time_*`、`rb_timespec_now`）、`rb_keyword_given_p`、UTF-8 以外の `rb_enc_codepoint_len`、`OBJ_INIT_COPY`、`UNREACHABLE`、config.h の時刻系 `HAVE_*`、`HAVE_RUBY_*_H` | 済（§3.14、`tests/capi/capi_time.c`、`tests/capi_gems.rs` の strptime / yajl-ruby） |
+| 8 | 拡張内の `VALUE` を CRuby のビット列に（`Qfalse == 0`）、層が境界で変換 | 済（§3.15、`tests/capi/capi_value.c`、`tests/capi_gems.rs` の json 2.18.0 と 3.1.0） |
 
 ## 6. 既知の制約
 
@@ -558,13 +646,9 @@ CRuby と比較する。`tests/capi_gems.rs` に `strptime`（0.2.5）と
 - mkmf の `create_header` は使えるが、`$(hdrdir)/ruby/backward/*` の中身は
   無い。`RbConfig::CONFIG["CC"]` は Linux では
   スナップショットの `gcc` のまま（`CC` 環境変数で上書きできる）。
-- **json 2.18 の C 拡張は動かない。** ビルドとロードは通るが、
-  `fbuffer.h` の `if (fb->io)` と generator.c の `if (!data->vstate)` が
-  `Qfalse == 0` を前提にしていて（§2）、`JSON.generate` が `false` に
-  `write` を呼ぶ / `false` を State として扱う。層側では直せない
-  （`VALUE` の変換を境界に入れると `RARRAY_PTR` 等の生メモリ経路と
-  食い違う）。vendored の stand-in（`gem/json/`、Rust 移植）が従来どおり
-  使われる。`if (v)` で真偽を見る拡張は同じ理由で動かない。
+- `RARRAY_CONST_PTR` / `RARRAY_PTR` が指すのは要素のコピー（§3.15）。
+  書き込みは Array に届かず、1 回の Ruby 呼び出しの中で 9 本目の Array の
+  ポインタを取ると最初のものが使い回される。
 - `ruby/re.h` は `onig_new` と Onigmo のテーブル群を出さない（§3.13）。
   `OnigRegion` は CRuby より 8 バイト大きい（`history_root`）。
   `rb_reg_prepare_re` のバッファは解放されない。

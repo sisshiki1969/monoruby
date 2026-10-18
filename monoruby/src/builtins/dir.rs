@@ -598,17 +598,22 @@ fn process_glob_pattern(
         return Ok(());
     }
 
+    // A relative pattern needs the working directory, which may have
+    // been removed under the process (another process cleaning a shared
+    // scratch dir): nothing matches then, rather than a panic.
+    let cwd = || std::env::current_dir().ok();
     let root = if absolute {
         PathPair::new(PathBuf::from("/"), "/".to_string())
     } else if let Some(base) = base {
-        let mut p = std::env::current_dir().unwrap();
+        let Some(mut p) = cwd() else { return Ok(()) };
         p.push(base);
         match p.canonicalize() {
             Ok(p) => PathPair::new(p, String::new()),
             Err(_) => return Ok(()),
         }
     } else {
-        PathPair::new(std::env::current_dir().unwrap(), String::new())
+        let Some(p) = cwd() else { return Ok(()) };
+        PathPair::new(p, String::new())
     };
 
     let mut components: Vec<PathComponent> = vec![];
