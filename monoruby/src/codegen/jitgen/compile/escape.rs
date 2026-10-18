@@ -748,8 +748,13 @@ impl<'a> JitContext<'a> {
         if cs.recv == slot {
             return cs.splat_pos().is_empty() && !reads[1..].contains(&slot);
         }
+        // The argument slot is the callee's once handed over (`set_arguments`
+        // and `fill_window` take the object): a local passed in its own
+        // slot (`get(x)`) hands it over only when nothing reads the local
+        // afterwards.
         if !(cs.args..cs.args + cs.pos_num).contains(&slot)
             || reads.iter().filter(|s| **s == slot).count() != 1
+            || !self.dead_after(bc_pos, slot)
         {
             return false;
         }
@@ -916,6 +921,12 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         dst: SlotId,
     ) {
+        // The object is observed here (whatever reads the slot next
+        // reads it): a read of the slot's value for the loop liveness,
+        // which the redefinition below would otherwise record as a kill
+        // — and a loop-entry seed (`predict_loop_entries`) only types a
+        // slot the loop reads.
+        state.note_read(dst);
         let src = state.take_virtual(dst).unwrap();
         match src {
             VirtualSrc::Slots { src, len, callid } => {

@@ -4695,6 +4695,7 @@ dcdc64e812e6b2b68439869689239acd	[:nil, 1180591620717411303425, :nil, 1180591620
 dce9ecd5cb55866eac9f8003fbb5343b	"UTF-8"	/#{"あ"}/.encoding.to_s
 dcf8f9800ca36fc1d761f06b3e651f75	[true, false, true, 0, false, false, false, false]	[["abc".b].include?("abc"),\n         ["あ".encode("UTF-8")].include?("あ"
 dcfeee4a0f36c226b961d97eee897e9b	true	(require "stringio"; old=$VERBOSE; $VERBOSE=true; s1=StringIO.new; $stderr=s1; f
+dd0cfa4c207b14542bb30cc931bcd4f5	[149, 153, 157, 161, 165]	def get(a) = a[0]\n        def sum(a, b) = a.size + b\n        def drive(
 dd2b361456941a89426a35f2ba5e5ada	[{a: 1, c: 3}, {}, {a: 1, b: nil}, [{a: 1}, true], nil]	__a = [];__a << ({a: 1, b: nil, c: 3}.compact);__a << ({a: nil, b: nil}.compact)
 dd3c071c4a6f6953708de611a7d532e1	true	d = Dir.new("/tmp")\n            begin\n              fd = d.fileno\n 
 dd59ae7dd4e6777883a269edec790eb4	[[195], 2]	s = "\\303\\251\\303".dup.force_encoding(Encoding::Windows_31J)\n               m = 

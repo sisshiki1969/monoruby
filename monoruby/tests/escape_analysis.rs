@@ -2301,3 +2301,27 @@ fn side_exits_inside_a_loop_with_a_local_object_pending() {
         "#,
     );
 }
+
+#[test]
+fn local_object_passed_in_its_own_slot_and_read_again() {
+    // A local's object passed directly as an argument (`get(x)`: the
+    // local is the argument slot) is handed over only when the local is
+    // dead afterwards; read again, it is materialized for the call.
+    run_test(
+        r#"
+        def get(a) = a[0]
+        def sum(a, b) = a.size + b
+        def drive(k)
+          x = [k, 2, 3]
+          s = get(x)
+          s += x.max
+          y = (k..k + 2)
+          t = sum(x, 1) + y.size
+          s + t + x.first + y.last
+        end
+        res = []
+        40.times { |i| res << drive(i) }
+        res.last(5)
+        "#,
+    );
+}
