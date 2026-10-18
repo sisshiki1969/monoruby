@@ -63,9 +63,9 @@ The object ends in one of four ways.
 
 A use that may consume the object is a method call with it as the
 receiver, and nowhere else in the call's operands
-(`may_consume_virtual`); for a Hash also the `%d = %base[%idx]` index
-instruction (`consume_virtual_index`), which is `Hash#[]` resolved the same
-way; for a Range also the `===` comparison with it on the left
+(`may_consume_virtual`); for a Hash or an Array also the `%d = %base[%idx]`
+index instruction (`consume_virtual_index`), which is `Hash#[]` / `Array#[]`
+resolved the same way; for a Range also the `===` comparison with it on the left
 (`consume_virtual_teq`: the `case … when lo..hi` opcode and the explicit
 `(lo..hi) === v`), which is `Range#===` resolved the same way. The call resolves the method on the object's class
 (`VirtualSrc::class_id`) under the class-version guard and reads the
@@ -76,7 +76,15 @@ callee's `RecvEscape`:
   block-less call. `Min` / `Max` compare the elements in their slots
   (`ArrayMinMax`, over the frame's own slots or the caller's window);
   `Size`, `Empty` are answered at compile time; `First`, `Last` are a copy
-  of one element slot (`LoadCallerSlot` for a handed-over object). Over
+  of one element slot (`LoadCallerSlot` for a handed-over object);
+  `ArrayIndex` (`%d = %base[%idx]`) is that same copy for a compile-time
+  Integer index (counting from the end when negative, `nil` out of
+  range), and for any other index proven or cached Fixnum an in-place
+  read of the element slots with the bounds check (`ElidedArrayIndex`;
+  the Fixnum guard deopts with the object still registered). A Range or
+  non-Integer index materializes. The object stays elided afterwards
+  (the read observes an element, not the Array), which is what lets a
+  loop body read a local's Array by index without building it (§10). Over
   the pairs of an elided Hash (a template's, or a `CallerKw` object's
   names and caller slots), `Size` / `Empty` are constants, and
   `HashIndex` (`[]`), `HashFetch` (`fetch`) and `HashHasKey` (`include?`
@@ -263,9 +271,10 @@ in the caller's frame, which the caller spilled before the call
   no Array to hand a transparent callee; only the `elements` lowerings apply.
 - **Loops that read the object unfoldably.** An object carried through a
   loop head (§3) is materialized on the loop's entries as soon as the
-  body reads it in a way that is not folded — an Array index (`a[i]`),
-  or a `Range` use that is not one of §8's — so the per-iteration fold is
-  only as wide as the consuming uses are.
+  body reads it in a way that is not folded — an Array slice (`a[i, n]`,
+  `a[lo..hi]`), a transparent-only callee on a `Slots` object
+  (`a.include?(x)`), or a `Range` use that is not one of §8's — so the
+  per-iteration fold is only as wide as the consuming uses are.
 - **Return values that escape the callee's frame first.** A plain `return`
   of an elided object from a specialized callee hands it over elided (§9);
   a `return` from inside a block, from a callee with a handler, with a
@@ -638,12 +647,13 @@ local assigned from another local a window as wide as that local's, so
 the move has somewhere to go.
 
 **A temporary's view** (`alias_consumed_by_call`): `x.include?(a + 1)`
-evaluates its receiver into a temporary *before* its argument, so the
-`Mov` copies a still-live local. When the first reader of that
-temporary in the block is a call that only reads the elements of its
-receiver (a method with a `RecvEscape::elements` summary, block-less,
-with plain arguments) and the instructions between write nothing but a
-plain destination, the temporary takes a second view of the same
+evaluates its receiver into a temporary *before* its argument, and so
+does `x[i % 3]`, so the `Mov` copies a still-live local. When the first
+reader of that temporary in the block is a call that only reads the
+elements of its receiver (a method with a `RecvEscape::elements`
+summary, block-less, with plain arguments; the index instruction counts
+as `[]`) and the instructions between write nothing but a plain
+destination, the temporary takes a second view of the same
 object — the same `VirtualSrc`, sharing the window — which the call
 consumes while the local keeps its own. The two views are never told
 apart: such a method neither mutates nor lets out its receiver, so
@@ -679,8 +689,8 @@ names live beyond a temporary's view; a Range whose endpoints are not proven Fix
 returned into a local of the caller (`x = pair(a, b)` needs the slots
 above the destination, §9); a transparent callee on a literal of
 immediates that stays live (`opts.key?(:a)` twice: the first call
-builds the Hash); an Array index on a local's object (`x[0]`: only a
-Hash literal's `[]` is folded, `consume_virtual_index`).
+builds the Hash); an Array slice on a local's object (`x[1, 2]`,
+`x[1..]`: only `[]` by an Integer is folded, `consume_virtual_index`).
 
 ## 11. The def-use and liveness tables (`jitgen/slot_analysis.rs`)
 

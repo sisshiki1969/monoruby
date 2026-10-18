@@ -1729,6 +1729,16 @@ impl Codegen {
                     },
                 );
             }
+            AsmInst::ElidedArrayIndex { base, src, len } => {
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.gen_elided_array_index(base, src, len);
+                    },
+                );
+            }
             AsmInst::ArrayIndexAssign {
                 kind,
                 using_fpr,

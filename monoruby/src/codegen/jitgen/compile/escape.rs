@@ -814,15 +814,16 @@ impl<'a> JitContext<'a> {
     /// Whether `tmp = x` (*dst* a temporary, *src* the object a still-live
     /// local holds) copies the object into a temporary for a call that
     /// reads its elements and nothing else: `x.include?(a + 1)` evaluates
-    /// its receiver into a temporary before its argument. The temporary
-    /// then takes a second view of the same object, which that call
-    /// consumes, while the local keeps its own. The two views are never
-    /// told apart: the call's method reads the elements and neither
-    /// mutates nor lets out the receiver (`RecvEscape::elements`), so
-    /// even a lowering that builds the temporary's copy after all gives
-    /// the same answer. Between the copy and the call only instructions
-    /// writing a plain destination that is not the temporary may come,
-    /// in the same basic block.
+    /// its receiver into a temporary before its argument, and so does
+    /// `x[i % 3]` (the `%d = %base[%idx]` index instruction, which is
+    /// `[]` on the object's class). The temporary then takes a second
+    /// view of the same object, which that call consumes, while the local
+    /// keeps its own. The two views are never told apart: the call's
+    /// method reads the elements and neither mutates nor lets out the
+    /// receiver (`RecvEscape::elements`), so even a lowering that builds
+    /// the temporary's copy after all gives the same answer. Between the
+    /// copy and the call only instructions writing a plain destination
+    /// that is not the temporary may come, in the same basic block.
     ///
     fn alias_consumed_by_call(&self, dst: SlotId, src: VirtualSrc, bc_pos: BcIndex) -> bool {
         if !self.is_temp(dst) || matches!(src, VirtualSrc::CallerKw { .. }) {
@@ -832,21 +833,31 @@ impl<'a> JitContext<'a> {
         let Some(pos) = a.alias_stop(&self.iseq().bb_info, bc_pos, dst) else {
             return false;
         };
-        let callid = a.call(pos).unwrap();
-        let cs = &self.store[callid];
         let class = CachedClass::from_class(src.class_id());
+        let elements = |name: IdentId| {
+            self.jit_check_method(class, name)
+                .and_then(|(fid, _)| self.store.recv_escape(fid))
+                .is_some_and(|e| e.elements.is_some())
+        };
+        if a.reads(pos).iter().filter(|s| **s == dst).count() != 1 {
+            return false;
+        }
+        let Some(callid) = a.call(pos) else {
+            let TraceIr::Index { base, idx, .. } =
+                TraceIr::from_pc(self.iseq().get_pc(pos), self.store)
+            else {
+                return false;
+            };
+            return base == dst && idx != dst && elements(IdentId::_INDEX);
+        };
+        let cs = &self.store[callid];
         cs.recv == dst
             && cs.block_fid.is_none()
             && cs.block_arg.is_none()
             && cs.kw_args().is_empty()
             && cs.hash_splat_pos().is_empty()
             && cs.splat_pos().is_empty()
-            && a.reads(pos).iter().filter(|s| **s == dst).count() == 1
-            && cs
-                .name
-                .and_then(|name| self.jit_check_method(class, name))
-                .and_then(|(fid, _)| self.store.recv_escape(fid))
-                .is_some_and(|e| e.elements.is_some())
+            && cs.name.is_some_and(elements)
     }
 
     ///
@@ -1448,12 +1459,16 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// `dst = base[idx]` (`TraceIr::Index`) with an elided Hash in *base*
-    /// ([`Self::may_consume_virtual`]): a template's `[]` by a constant
-    /// key it holds is the value, and by any other key runs on the
-    /// template, as [`Self::consume_virtual`] has it for a method call.
-    /// Otherwise the object is materialized. Returns whether the
-    /// instruction was lowered here.
+    /// `dst = base[idx]` (`TraceIr::Index`) with an elided object in *base*
+    /// ([`Self::may_consume_virtual`]). An elided Hash: a template's `[]`
+    /// by a constant key it holds is the value, and by any other key runs
+    /// on the template, as [`Self::consume_virtual`] has it for a method
+    /// call. An elided Array whose elements are in frame slots: `[]` by a
+    /// constant Integer is the element's slot (or nil), and by a Fixnum
+    /// (proven, or guarded on the site's cached index class *ic*) reads
+    /// the slot in place (`AsmInst::ElidedArrayIndex`); either way the
+    /// object stays elided for its next use. Otherwise the object is
+    /// materialized. Returns whether the instruction was lowered here.
     ///
     pub(super) fn consume_virtual_index(
         &mut self,
@@ -1462,6 +1477,7 @@ impl<'a> JitContext<'a> {
         base: SlotId,
         idx: SlotId,
         dst: SlotId,
+        ic: Option<(CachedClass, CachedClass)>,
         bc_pos: BcIndex,
     ) -> bool {
         let src = state.virtual_at(base).unwrap();
@@ -1474,15 +1490,37 @@ impl<'a> JitContext<'a> {
                 });
         let summary = resolved.and_then(|fid| self.store.recv_escape(fid));
         let recv_dead = base == dst || self.dead_after(bc_pos, base);
-        let plan = match summary {
-            Some(RecvEscape {
-                elements: Some(op), ..
-            }) => Self::hash_pairs(state, src)
-                .and_then(|pairs| self.plan_hash_op(state, op, &pairs, idx, 1)),
+        let elements = match src {
+            VirtualSrc::Slots { src, len, .. } => Some((SlotBase::Own, src, len)),
+            VirtualSrc::CallerSlots { src, len, base } => Some((base, src, len)),
+            VirtualSrc::Literal(_) | VirtualSrc::CallerKw { .. } | VirtualSrc::Range { .. } => None,
+        };
+        let plan = match (summary, elements) {
+            (
+                Some(RecvEscape {
+                    elements: Some(ElementsOp::ArrayIndex),
+                    ..
+                }),
+                Some((base, src, len)),
+            ) => {
+                let idx_class = state
+                    .class(idx)
+                    .map(CachedClass::from_class)
+                    .or(ic.map(|(_, class)| class));
+                Self::plan_array_index(state, base, src, len, idx, idx_class).map(IndexPlan::Array)
+            }
+            (
+                Some(RecvEscape {
+                    elements: Some(op), ..
+                }),
+                None,
+            ) => Self::hash_pairs(state, src)
+                .and_then(|pairs| self.plan_hash_op(state, op, &pairs, idx, 1))
+                .map(IndexPlan::Hash),
             _ => None,
         };
         match (plan, summary) {
-            (Some(fold), _) => {
+            (Some(plan), _) => {
                 self.inline_method_cache.push(InlineCacheEntry {
                     recv_class: class,
                     name: Some(IdentId::_INDEX),
@@ -1490,10 +1528,49 @@ impl<'a> JitContext<'a> {
                     func_id: resolved,
                 });
                 self.guard_class_version(state, ir, true);
-                if recv_dead {
-                    state.take_virtual(base);
+                match plan {
+                    IndexPlan::Hash(fold) => {
+                        if recv_dead {
+                            state.take_virtual(base);
+                        }
+                        self.emit_hash_fold(state, ir, fold, Some(dst));
+                    }
+                    IndexPlan::Array(ArrayIndexPlan::Nil) => {
+                        if recv_dead {
+                            state.take_virtual(base);
+                        }
+                        state.def_C(dst, Value::nil());
+                    }
+                    IndexPlan::Array(ArrayIndexPlan::Elem(SlotBase::Own, elem)) => {
+                        if recv_dead {
+                            state.take_virtual(base);
+                        }
+                        self.copy_element(state, ir, elem, dst);
+                    }
+                    IndexPlan::Array(ArrayIndexPlan::Elem(elem_base, elem)) => {
+                        if recv_dead {
+                            state.take_virtual(base);
+                        }
+                        state.flush_gp(ir);
+                        ir.load_caller_slot(elem_base, elem);
+                        state.def_rax2acc(ir, dst);
+                    }
+                    IndexPlan::Array(ArrayIndexPlan::Dynamic(elem_base, src, len)) => {
+                        // The read is in place: the elements stay in their
+                        // slots, so this frame's are written back first. The
+                        // index guard deopts with the object still registered
+                        // (the side exit builds it).
+                        if elem_base == SlotBase::Own {
+                            state.write_back_elements(ir, src, len);
+                        }
+                        state.load_fixnum(ir, idx, GP::Rsi);
+                        if recv_dead {
+                            state.take_virtual(base);
+                        }
+                        ir.elided_array_index(elem_base, src, len);
+                        state.def_rax2acc(ir, dst);
+                    }
                 }
-                self.emit_hash_fold(state, ir, fold, Some(dst));
                 true
             }
             (
@@ -1515,6 +1592,34 @@ impl<'a> JitContext<'a> {
                 false
             }
         }
+    }
+
+    ///
+    /// Decide `[]` by *idx* on an elided Array whose `len` elements are the
+    /// slots at *src* in the frame *base* names: a compile-time Integer
+    /// index names its element's slot (counting from the end when
+    /// negative) or is out of range, and a Fixnum index (*idx_class*) is
+    /// read in place. Any other index (a Range, a non-Integer) is not
+    /// lowered here.
+    ///
+    fn plan_array_index(
+        state: &AbstractState,
+        base: SlotBase,
+        src: SlotId,
+        len: u16,
+        idx: SlotId,
+        idx_class: Option<CachedClass>,
+    ) -> Option<ArrayIndexPlan> {
+        if let LinkMode::C(v) = state.mode(idx) {
+            let i = v.try_fixnum()?;
+            let i = if i < 0 { i + len as i64 } else { i };
+            return Some(if (0..len as i64).contains(&i) {
+                ArrayIndexPlan::Elem(base, src + i as u16)
+            } else {
+                ArrayIndexPlan::Nil
+            });
+        }
+        (idx_class == Some(CachedClass::INTEGER)).then_some(ArrayIndexPlan::Dynamic(base, src, len))
     }
 
     ///
@@ -1641,6 +1746,9 @@ impl<'a> JitContext<'a> {
                     }
                 }
             },
+            // `[]` with an argument is `TraceIr::Index`, lowered by
+            // `consume_virtual_index`; as a method call it has no plan.
+            ElementsOp::ArrayIndex => unreachable!("Array#[] as an argument-less call"),
             ElementsOp::HashIndex | ElementsOp::HashFetch | ElementsOp::HashHasKey => {
                 unreachable!("a Hash lowering on an Array's elements")
             }
@@ -1689,6 +1797,27 @@ enum HashElem {
     /// In the caller's slot, in the frame the base names (a `CallerKw`
     /// object).
     Caller(SlotBase, SlotId),
+}
+
+/// How [`JitContext::consume_virtual_index`] lowers `base[idx]`.
+enum IndexPlan {
+    /// A folded Hash lookup.
+    Hash(HashFold),
+    /// An elided Array's element.
+    Array(ArrayIndexPlan),
+}
+
+/// The answer of `[]` by an Integer on an elided Array
+/// ([`JitContext::plan_array_index`]).
+#[derive(Clone, Copy)]
+enum ArrayIndexPlan {
+    /// A constant index out of range.
+    Nil,
+    /// The element's slot, in the frame the base names.
+    Elem(SlotBase, SlotId),
+    /// A Fixnum index, read in place over the `len` slots at the slot, in
+    /// the frame the base names (`AsmInst::ElidedArrayIndex`).
+    Dynamic(SlotBase, SlotId, u16),
 }
 
 /// The answer of a folded Hash elements lowering.

@@ -95,6 +95,11 @@ pub(crate) enum ElementsOp {
     First,
     /// `last` — the last element (or nil).
     Last,
+    /// `Array#[]` with one Integer argument (`TraceIr::Index`) — the
+    /// element at the index (or nil), read from its slot: statically for
+    /// a compile-time constant index, in place for a Fixnum
+    /// (`AsmInst::ElidedArrayIndex`).
+    ArrayIndex,
     /// `Hash#[]` — the value of a compile-time constant key, when the
     /// key is present; absent, the call is not folded (`default` would
     /// be dispatched).

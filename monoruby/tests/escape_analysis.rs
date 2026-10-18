@@ -2325,3 +2325,107 @@ fn local_object_passed_in_its_own_slot_and_read_again() {
         "#,
     );
 }
+
+#[test]
+fn array_index_on_elided_literals() {
+    // `[]` by an Integer on an elided Array reads the element's slot: a
+    // constant index (negative counting from the end, `nil` out of
+    // range) at compile time, a Fixnum index in place with the bounds
+    // check; a non-Integer index, a slice, and a Bignum build the Array.
+    run_test(
+        r#"
+        def f(a, b, i)
+          x = [a, b, a + b]
+          [x[0], x[1], x[2], x[3], x[-1], x[-3], x[-4], x[i], x[-i], x[i + 5],
+           x[i - 5], x[1..], x[0, 2], x[1.0], x.size]
+        end
+        def g(a, b, i) = [a, b][i]
+        def h(a, i)
+          x = [a, 1, 2]
+          x[i] + x[i - 1].to_i + x[-i].to_i
+        end
+        r = []
+        30.times { |i| r << f(i, 2, i % 4) << g(i, 3, i % 3) << h(i, i % 3) }
+        r.last(8) + [g(1, 2, -1), h(5, 1)]
+        "#,
+    );
+}
+
+#[test]
+fn array_index_on_handed_over_objects() {
+    // `[]` on an elided Array in a parameter — a `*rest` and a literal
+    // passed as an argument — reads the caller's slots through the base,
+    // whether the callee is framed or frameless.
+    run_test(
+        r#"
+        def rest(*args)
+          args[0].to_i + args[-1].to_i + args[args.size - 1].to_i + args[10].to_i + args[1].to_i
+        end
+        def take(a, i) = a[i]
+        def take2(a) = a[1] + a[-1]
+        def framed(a, i)
+          yield
+          a[i] + a[0]
+        end
+        r = []
+        30.times do |i|
+          r << rest(i, 2, 3) << rest << rest(i) << take([i, 2], i % 3) << take2([i, 5, 6])
+          r << framed([i, 7], i % 2) { }
+        end
+        r.last(12)
+        "#,
+    );
+}
+
+#[test]
+fn array_index_in_a_loop_keeps_the_local_object() {
+    // A loop body reading a local's Array by index does not build it: the
+    // index read is a consuming use, so the object is carried through the
+    // loop head (§10) and every iteration reads a slot.
+    run_test(
+        r#"
+        def f(a, b, n)
+          res = [a, b, a + b]
+          i = 0
+          s = 0
+          while i < n
+            s += res[i % 3] + res[0] + res[-1] + res[i - 7].to_i
+            i += 1
+          end
+          s + res.size
+        end
+        def g(n)
+          tbl = [3, 1, 4, 1, 5]
+          i = 0
+          s = 0
+          while i < n
+            s += tbl[i % 5] * i
+            i += 1
+          end
+          s
+        end
+        r = []
+        30.times { |i| r << f(i, 2, 10) << g(i) }
+        r.last(6) + [f(1.5, 2, 10)]
+        "#,
+    );
+}
+
+#[test]
+fn array_index_deopt_on_a_non_fixnum_index() {
+    // The in-place read guards the index Fixnum: an index of another
+    // class after the compile deopts with the object built by the side
+    // exit, and the read is the generic one.
+    run_test(
+        r#"
+        def f(a, i)
+          x = [a, a + 1, a + 2]
+          x[i]
+        end
+        r = []
+        30.times { |i| r << f(i, i % 3) }
+        r << f(1, 1.0) << f(1, nil.to_i) << f(1, -1) << f(1, 1..2)
+        r.last(8)
+        "#,
+    );
+}

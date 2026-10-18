@@ -189,6 +189,51 @@ impl Codegen {
     }
 
     ///
+    /// `AsmInst::ElidedArrayIndex` (aarch64): index an elided Array whose
+    /// `len` elements are the slots `src .. src + len` of the frame *base*
+    /// names (element `i` is `i` slots below the slot's address). The
+    /// cold blocks are laid out inline, as in `array_index`.
+    ///
+    /// ### in
+    /// - x3: index Fixnum
+    ///
+    /// ### out
+    /// - x0: the element, or nil out of range
+    ///
+    /// ### destroy
+    /// - x3, x4, x9
+    ///
+    pub(crate) fn gen_elided_array_index(&mut self, base: SlotBase, src: SlotId, len: u16) {
+        let checked = self.jit.label();
+        let out_range = self.jit.label();
+        let exit = self.jit.label();
+        self.a64_caller_slot_addr(base, src, 4); // x4 = &slot[src]
+        monoasm_arm64! { &mut self.jit,
+            asr x3, x3, #1;         // untag index
+            cmp x3, #0;
+            b.pl checked;           // non-negative -> use as-is
+            mov x9, (len as u64);
+            adds x3, x3, x9;        // index += len, set flags
+            b.mi out_range;         // past the start -> out of range
+        }
+        self.jit.bind_label(checked);
+        monoasm_arm64! { &mut self.jit,
+            mov x9, (len as u64);
+            cmp x3, x9;
+            b.ge out_range;         // index >= len -> out of range
+            lsl x9, x3, #3;
+            sub x9, x4, x9;
+            ldr x0, [x9];
+            b exit;
+        }
+        self.jit.bind_label(out_range);
+        monoasm_arm64! { &mut self.jit,
+            mov x0, #(NIL_VALUE as u32);
+        }
+        self.jit.bind_label(exit);
+    }
+
+    ///
     /// §20 (B): emit an array integer-index **assign** for
     /// `AsmInst::ArrayIndexAssign` (aarch64).
     ///

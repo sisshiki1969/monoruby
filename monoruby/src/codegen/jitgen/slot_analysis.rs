@@ -409,8 +409,8 @@ impl SlotAnalysis {
     /// method call, reads *dst*, or does not define a plain slot other
     /// than *dst*: the only instruction a temporary's view of an elided
     /// object may be consumed by (`JitContext::alias_consumed_by_call`),
-    /// when it is a call. `None` when the block ends first, or the
-    /// stopping instruction is not a call.
+    /// when it is a call or a read of *dst* (an index instruction). `None`
+    /// when the block ends first, or the stopping instruction is neither.
     ///
     pub(crate) fn alias_stop(
         &self,
@@ -421,10 +421,10 @@ impl SlotAnalysis {
         let end = bb_info[bb_info.get_bb_id(pos)].end;
         for i in pos.to_usize() + 1..=end.to_usize() {
             let i = BcIndex::from(i);
-            if self.call(i).is_some() {
+            if self.call(i).is_some() || self.reads(i).contains(&dst) {
                 return Some(i);
             }
-            if self.reads(i).contains(&dst) || !self.def(i).is_some_and(|d| d != dst) {
+            if !self.def(i).is_some_and(|d| d != dst) {
                 return None;
             }
         }

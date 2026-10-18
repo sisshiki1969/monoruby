@@ -225,6 +225,7 @@ fn init_recv_escape(globals: &mut Globals) {
         ("empty?", RecvEscape::elements(ElementsOp::Empty)),
         ("first", RecvEscape::elements(ElementsOp::First)),
         ("last", RecvEscape::elements(ElementsOp::Last)),
+        ("[]", RecvEscape::elements(ElementsOp::ArrayIndex)),
         ("include?", RecvEscape::transparent()),
         ("minmax", RecvEscape::transparent()),
         ("sum", RecvEscape::transparent()),
