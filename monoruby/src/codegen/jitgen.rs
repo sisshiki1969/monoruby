@@ -1700,7 +1700,7 @@ impl JitModule {
         self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
           movq rdi, (v.id());
-          movq rax, (Value::value_deep_copy);
+          movq rax, (v.literal_copy_fn() as u64);
           call rax;
         );
         self.fpr_restore(using_fpr);

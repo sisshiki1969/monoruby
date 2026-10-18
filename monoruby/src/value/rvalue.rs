@@ -1555,6 +1555,59 @@ impl RValue {
     }
 
     ///
+    /// An all-immediate Array literal template too long for the inline
+    /// buffer (`[0, 1, …, 9]`): its per-evaluation copy is the header and
+    /// one exact-size copy of the element words, with none of the generic
+    /// deep copy's per-element dispatch ([`Self::copy_immediate_array`]).
+    ///
+    pub(crate) fn heap_copyable_array(&self) -> bool {
+        if self.ty() != ObjTy::ARRAY || self.var_table.is_some() {
+            return false;
+        }
+        // SAFETY: the type check above proves the `array` variant is active.
+        let ary = unsafe { &self.kind.array };
+        ary.len() > ARRAY_INLINE_CAPA && ary.iter().all(|e| e.try_rvalue().is_none())
+    }
+
+    ///
+    /// The copy [`Self::heap_copyable_array`] admits: what `deep_copy`
+    /// makes of such a template (a newborn header, no ivars, the same
+    /// immediates), built in one step.
+    ///
+    pub(crate) fn copy_immediate_array(&self) -> Self {
+        debug_assert!(self.heap_copyable_array());
+        RValue {
+            header: self.header.newborn(),
+            var_table: None,
+            // SAFETY: `heap_copyable_array` (the caller's precondition)
+            // proves the `array` variant is active.
+            kind: ObjKind::array(ArrayInner::from_slice(unsafe { &self.kind.array })),
+        }
+    }
+
+    ///
+    /// [`Self::copy_immediate_array`] into a cell the JIT has just
+    /// allocated and given the template's newborn header: the ivar table
+    /// and the array, whose exact-size buffer is the one allocation left.
+    ///
+    /// # Safety
+    /// `cell` is a freshly allocated cell whose header the caller wrote
+    /// and whose body nothing has read; `self` is `heap_copyable_array`.
+    /// No safepoint lies between the allocation and this call, so the
+    /// collector never sees the body uninitialized.
+    ///
+    pub(crate) unsafe fn init_immediate_array_copy(&self, cell: *mut RValue) {
+        debug_assert!(self.heap_copyable_array());
+        // SAFETY: per the contract above; the fields are written in place
+        // without reading (or dropping) the cell's stale contents.
+        unsafe {
+            std::ptr::addr_of_mut!((*cell).var_table).write(None);
+            std::ptr::addr_of_mut!((*cell).kind)
+                .write(ObjKind::array(ArrayInner::from_slice(&self.kind.array)));
+        }
+    }
+
+    ///
     /// A String literal template the JIT may instantiate without the
     /// generic deep copy: see [`RStringInner::inline_copyable`]. A
     /// frozen template is excluded because copying it is

@@ -1986,6 +1986,9 @@ impl Codegen {
         if self.emit_inline_string_lit(v, using_fpr) {
             return true;
         }
+        if self.emit_heap_array_lit(v, using_fpr) {
+            return true;
+        }
         let Some(elems) = v
             .inline_copyable_array()
             .filter(|_| !self.alloc_free_head_addr.is_null())
@@ -2007,6 +2010,43 @@ impl Codegen {
                 movq [rax + (off)], rcx;
             }
         }
+        monoasm! { &mut self.jit,
+            jmp  cont;
+        slow:
+        }
+        self.deepcopy_literal(v, using_fpr);
+        monoasm! { &mut self.jit,
+        cont:
+        }
+        true
+    }
+
+    ///
+    /// An all-immediate Array literal too long for the inline buffer
+    /// (`[0, 1, …, 9]`, `Value::heap_copyable_array`): allocate the cell
+    /// and its header inline, as for a short one, and leave the body —
+    /// the exact-size element buffer, the one malloc that remains — to
+    /// `Value::fill_immediate_array_cell`. Through `value_deep_copy`
+    /// this cost a generic dispatch per element and a second trip
+    /// through the allocator for the cell (`RValue::pack`).
+    ///
+    /// Returns false when the shape does not qualify.
+    ///
+    fn emit_heap_array_lit(&mut self, v: Value, using_fpr: UsingFpr) -> bool {
+        if self.alloc_free_head_addr.is_null() || !v.heap_copyable_array() {
+            return false;
+        }
+        let slow = self.jit.label();
+        let cont = self.jit.label();
+        self.emit_alloc_cell(CellHeader::NewbornOf(v.id()), &slow);
+        self.fpr_save(using_fpr);
+        monoasm! { &mut self.jit,
+            movq rdi, rax;
+            movq rsi, (v.id());
+            movq rax, (Value::fill_immediate_array_cell as u64);
+            call rax;
+        }
+        self.fpr_restore(using_fpr);
         monoasm! { &mut self.jit,
             jmp  cont;
         slow:

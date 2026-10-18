@@ -270,6 +270,37 @@ fn literal_regexp_format() {
 }
 
 #[test]
+fn long_immediate_array_literal() {
+    // An all-immediate Array literal past the inline capacity (5) is
+    // copied by `Value::fill_immediate_array_cell` / `immediate_array_
+    // literal_copy` into an exact-size heap buffer. Every evaluation is a
+    // fresh, unfrozen, independent Array: growing, mutating or freezing
+    // one leaks into neither the template nor the next copy, at every
+    // boundary length and element kind (nil/true/false, Symbol, flonum,
+    // negative Fixnum).
+    run_test(
+        r#"
+        def six = [1, 2, 3, 4, 5, 6]
+        def ten = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        def mixed = [nil, true, false, :sym, 1.5, -7, 0.0, :b]
+        def long = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]
+        r = []
+        a = six; b = six
+        r << a.equal?(b) << (a == b) << a.frozen? << a.size
+        a << 7; a[0] = :x; b.pop
+        r << a << b << six
+        c = ten; c.map! { _1 * 2 }; c.concat([1] * 10)
+        r << c << ten << c.size
+        d = mixed; d.reverse!; d.freeze
+        r << d << mixed << mixed.frozen? << d.frozen?
+        e = long; e.shift(30)
+        r << e << long.sum << long.size
+        r
+        "#,
+    );
+}
+
+#[test]
 fn empty_array_literal() {
     // `[]` is inline-allocated by the JIT (no runtime call) like other
     // small no-splat literals. Every evaluation must yield a fresh,
