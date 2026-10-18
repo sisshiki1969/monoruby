@@ -2048,7 +2048,7 @@ impl<'a> JitContext<'a> {
         len.checked_sub(1)?.checked_sub(offset)
     }
 
-    fn iter_caller_pos(&self) -> Option<usize> {
+    pub(super) fn iter_caller_pos(&self) -> Option<usize> {
         // `break` exits the method the current block was *passed to* (the
         // "iter method"); the iter caller is that method's caller, which is
         // exactly the block's immediate lexical-outer frame. Derive it from
