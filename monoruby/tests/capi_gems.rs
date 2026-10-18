@@ -144,7 +144,9 @@ fn check_gem_version(name: &str, want: Option<&str>) {
         return;
     };
     let script = manifest_dir().join(format!("tests/capi/gems/{name}.rb"));
-    let dir = work_dir(name);
+    // One work dir per test: `json` and `json_2_18` run concurrently, and
+    // `work_dir` starts by removing it.
+    let dir = work_dir(&format!("{name}-{}", want.unwrap_or("latest")));
     let home = dir.join("home");
     let root = PathBuf::from(run(monoruby().args(["-e", r#"print RbConfig::CONFIG["rubyhdrdir"]"#])));
     let mono_gem = root.parent().unwrap().join("bin/gem");
