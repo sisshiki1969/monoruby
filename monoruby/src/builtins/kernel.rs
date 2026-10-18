@@ -80,7 +80,6 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         false,
         Effect::CAPTURE,
     );
-    globals.define_builtin_module_func(kernel_class, "loop", loop_, 0);
     globals.define_builtin_module_func_with_kw(
         kernel_class,
         "raise",
@@ -929,54 +928,6 @@ fn local_variables(
         None => vec![],
     };
     Ok(Value::array_from_vec(v))
-}
-
-///
-/// ### Kernel.#loop
-///
-/// - loop { ... } -> object | nil
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/loop.html]
-#[monoruby_builtin]
-fn loop_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let Some(bh) = lfp.block() else {
-        // No block: return an infinite Enumerator (size == Float::INFINITY).
-        let method = IdentId::get_id("loop");
-        let size = Value::float(f64::INFINITY);
-        return vm.generate_enumerator_with_size(method, lfp.self_val(), vec![], pc, Some(size));
-    };
-    let data = vm.get_block_data(globals, bh)?;
-    loop {
-        match vm.invoke_block(globals, &data, &[]) {
-            // No explicit safepoint needed: the block body's entry poll
-            // (`vm_init` / JIT `InitMethod`) fires on every iteration, so
-            // signals, GC, and timeslice preemption are all serviced even
-            // for an empty `loop {}` body.
-            Ok(_) => {}
-            Err(err) => {
-                // `loop` swallows StopIteration and any user subclass of it
-                // — evaluating to the iterator's return value
-                // (`StopIteration#result`) — and re-raises everything else
-                // (including control-flow signals).
-                return if err.is_stop_iteration(&globals.store) {
-                    let result = err
-                        .payload
-                        .as_ref()
-                        .filter(|(_, key)| *key == "result")
-                        .map(|(v, _)| *v)
-                        .or_else(|| {
-                            err.original.and_then(|obj| {
-                                globals.store.get_ivar(obj, IdentId::get_id("/result"))
-                            })
-                        })
-                        .unwrap_or_default();
-                    Ok(result)
-                } else {
-                    Err(err)
-                };
-            }
-        }
-    }
 }
 
 ///
