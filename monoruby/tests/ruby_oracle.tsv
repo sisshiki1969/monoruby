@@ -1274,6 +1274,7 @@
 3b830bbd119e21f188caa438b8908635	[["1", "2", "3"], ["A", "B", "C"]]	__a = [];__a << ([1, 2, 3].map(&:to_s));__a << (["a", "b", "c"].map(&:upcase));_
 3b8b9967df243db673eead48df27af73	true	r, w = IO.pipe\n            Process.wait Process.spawn("ps -o pgid= 
 3ba3513c4e0478ac885cbf78cee7b5f7	[true, true]	f = File.open("Cargo.toml")\n            begin\n              [f.to_i
+3bb217bd1cff6fddefd61f6d845e32ce	[[1, 2, 3], ["a", [1, 2], "b", [3]], ["a", 1, 2, "b", 3], [["a", [1, 2]], ["b", [3]]], [["a", [1, 2]], [], ["b", [3]], []], [2, 1]]	__a = [];__a << (h = {"a" => [1, 2], "b" => [3]}; h.flat_map(&:last));__a << (h 
 3bbb4a698df56e60cf3137d064545e5a	["boom", 999]	$flag = false\n        def raiser\n          if $flag\n            Integer
 3bc7d9857d044df621b8aa29939fbb5a	[true, {a: 1, b: 2}, {}]	h = { a: 1, b: 2 }\n            [h.to_h.equal?(h), h.to_h, {}.to_h]\n
 3bcb429ddcf2c13f3b1284650ceddfa9	"0+1i"	class C; def to_c; Complex(0, 1); end; end; o = C.new\nComplex(o).to_s

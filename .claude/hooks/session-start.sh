@@ -96,7 +96,7 @@ gem install --no-document --conservative \
 # strscan and json are default gems, which satisfy --conservative without
 # ever putting a .gem in the cache; tests/capi_gems.rs needs the files
 # there (json at the version the stand-in in gem/json tracks).
-gem install --no-document strscan json:2.18.0
+gem install --no-document strscan json:2.18.0 json:3.1.0
 
 # monoruby caches the probed host Ruby and its gem paths; drop the cache so the
 # next run re-probes instead of describing a Ruby this script just replaced.

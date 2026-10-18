@@ -35,5 +35,6 @@ class WithToJson; def to_json(*a) = { "custom" => true }.to_json(*a); end
 p JSON.generate([WithToJson.new]), JSON.pretty_generate([WithToJson.new, { "n" => {} }, []])
 big = { "list" => (1..200).map { |i| { "i" => i, "f" => i / 3.0, "s" => "v#{i}" } } }
 p JSON.parse(JSON.generate(big)) == big, JSON.generate(big).bytesize
-p JSON.parse('{"a":1,"a":2}'), try { JSON.parse('{"a":1,"a":2}', allow_duplicate_key: false) }
+# json 2.x keeps the last duplicate key (and warns from 2.13); 3.x raises
+p try { JSON.parse('{"a":1,"a":2}') }, try { JSON.parse('{"a":1,"a":2}', allow_duplicate_key: false) }, try { JSON.parse('{"a":1,"a":2}', allow_duplicate_key: true) }
 p JSON.generate("x" => 1.0 / 3), JSON.generate(0.1 + 0.2), JSON.generate(100.0), JSON.generate(1e100), JSON.generate(-1.5e-9), JSON.generate(123456789.123456789)

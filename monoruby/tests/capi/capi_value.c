@@ -6,6 +6,7 @@
  * CRuby and monoruby by tests/capi.rs; the output must be identical.
  */
 #include <ruby.h>
+#include <string.h>
 #include <ruby/encoding.h>
 
 static VALUE mV;
@@ -305,6 +306,58 @@ holder_get(VALUE self)
     return h->v;
 }
 
+/* rb_scan_args_kw: the flag decides whether a trailing Hash is keywords. */
+static VALUE
+v_scan_kw(int argc, VALUE *argv, VALUE self)
+{
+    VALUE flag = argv[0];
+    VALUE a = Qundef, opts = Qundef;
+    int n = rb_scan_args_kw(NUM2INT(flag), argc - 1, argv + 1, "01:", &a, &opts);
+    return rb_ary_new_from_args(3, INT2NUM(n), a == Qundef ? ID2SYM(rb_intern("undef")) : a,
+                                opts == Qundef ? ID2SYM(rb_intern("undef")) : opts);
+}
+
+/* rb_check_funcall: the call, or Qundef when the object does not respond. */
+static VALUE
+v_check_call(VALUE self, VALUE obj, VALUE name)
+{
+    VALUE r = rb_check_funcall(obj, rb_to_id(name), 0, NULL);
+    return r == Qundef ? ID2SYM(rb_intern("undef")) : r;
+}
+
+/* rb_str_tmp_new: a String of `len` writable bytes. */
+static VALUE
+v_tmp_fill(VALUE self, VALUE len, VALUE ch)
+{
+    long n = NUM2LONG(len);
+    VALUE s = rb_str_tmp_new(n);
+    memset(RSTRING_PTR(s), NUM2INT(ch), (size_t)n);
+    /* The tmp String is hidden on CRuby: hand back a copy of its bytes. */
+    return rb_ary_new_from_args(2, LONG2NUM(RSTRING_LEN(s)), rb_str_new(RSTRING_PTR(s), n));
+}
+
+/* rb_catch_obj / rb_throw_obj: a throw from C, caught by C or by Ruby. */
+static VALUE
+v_throw_cb(VALUE tag, VALUE data, int argc, const VALUE *argv, VALUE blockarg)
+{
+    if (RTEST(data))
+        rb_throw_obj(tag, data);
+    return ID2SYM(rb_intern("ran"));
+}
+
+static VALUE
+v_catch_(VALUE self, VALUE tag, VALUE thrown)
+{
+    return rb_catch_obj(tag, v_throw_cb, thrown);
+}
+
+static VALUE
+v_throw_(VALUE self, VALUE tag, VALUE val)
+{
+    rb_throw_obj(tag, val);
+    return Qnil; /* not reached */
+}
+
 void
 Init_capi_value(void)
 {
@@ -326,6 +379,11 @@ Init_capi_value(void)
     rb_define_singleton_method(mV, "yield_all", v_yield_all, 0);
     rb_define_singleton_method(mV, "block_call", v_block_call, 2);
     rb_define_singleton_method(mV, "protect", v_protect, 2);
+    rb_define_singleton_method(mV, "scan_kw", v_scan_kw, -1);
+    rb_define_singleton_method(mV, "check_call", v_check_call, 2);
+    rb_define_singleton_method(mV, "tmp_fill", v_tmp_fill, 2);
+    rb_define_singleton_method(mV, "catch_", v_catch_, 2);
+    rb_define_singleton_method(mV, "throw_", v_throw_, 2);
     rb_define_singleton_method(mV, "ensure", v_ensure, 1);
     rb_define_singleton_method(mV, "pairs", v_pairs, 1);
     rb_define_singleton_method(mV, "call_back", v_call_back, 2);

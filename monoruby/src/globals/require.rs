@@ -367,6 +367,58 @@ impl Globals {
         })
     }
 
+    /// `<dir>/<cand>` for the first `$LOAD_PATH` entry that is a lib dir
+    /// of a gem whose extensions were built against monoruby's C API
+    /// layer: `<home>/gems/<name-ver>/lib`, with that gem's extension dir
+    /// `<home>/extensions/<platform>/<api>/<name-ver>` also on `$LOAD_PATH`
+    /// (rubygems puts it first among the gem's require paths) and holding
+    /// a loadable extension. Only consulted when a stand-in matched.
+    fn built_gem_file_on_load_path(
+        &self,
+        cand: &std::path::Path,
+        entries: &[String],
+    ) -> Option<PathBuf> {
+        entries.iter().find_map(|lib| {
+            let lib_path = std::path::Path::new(lib);
+            let rb = self.probe(lib_path, cand)?;
+            // `.../gems/<name-ver>/lib` → (`...`, `<name-ver>`).
+            let mut comps = lib_path.components().collect::<Vec<_>>();
+            comps.pop()?; // lib (or whatever require path)
+            let gem_dir = comps.pop()?.as_os_str().to_owned();
+            if comps.pop()?.as_os_str() != "gems" {
+                return None;
+            }
+            let home: PathBuf = comps.iter().collect();
+            let ext_root = home.join("extensions");
+            let built = entries.iter().any(|e| {
+                let e = std::path::Path::new(e);
+                e.starts_with(&ext_root)
+                    && e.file_name() == Some(gem_dir.as_os_str())
+                    && self.dir_has_capi_extension(e, 3)
+            });
+            built.then_some(rb)
+        })
+    }
+
+    /// Whether `dir` (searched `depth` levels down) holds an extension
+    /// built against monoruby's C API layer.
+    fn dir_has_capi_extension(&self, dir: &std::path::Path, depth: usize) -> bool {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return false;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                if depth > 0 && self.dir_has_capi_extension(&p, depth - 1) {
+                    return true;
+                }
+            } else if self.is_capi_extension(&p) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Search one concrete candidate (`x.rb` / `x.so` form) through the
     /// stub pin, the host-bundler override, and `$LOAD_PATH`. The
     /// returned path joins the *canonicalized* directory with the
@@ -422,6 +474,15 @@ impl Globals {
                         return Some(rb);
                     }
                     return Some(ext);
+                }
+                // The same for a Ruby file of such a gem that has no
+                // extension of its own name: json's `lib/json.rb` and
+                // `lib/json/common.rb` must come from the gem whose
+                // `parser.so` / `generator.so` monoruby built, not from
+                // the stand-in tree (another version's Ruby half), once
+                // that gem is activated.
+                if let Some(rb) = self.built_gem_file_on_load_path(cand, entries) {
+                    return Some(rb);
                 }
                 return Some(p);
             }

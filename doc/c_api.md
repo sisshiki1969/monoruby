@@ -288,7 +288,7 @@ CRuby のヘッダでビルドした（monoruby では読めない）`.so` が�
 |---|---|---|
 | bcrypt 3.1.22 | 一致 | `rb_str_new` / `StringValuePtr` / `NUM2INT`、特異メソッド定義 |
 | msgpack 1.8.5 | 一致（Buffer / Packer / Unpacker / Factory / ext 型 / Timestamp / IO 相手 / pool） | TypedData + alloc、`rb_num2ll` / `rb_num2ull` と Bignum、`rb_hash_foreach`、`rb_io_write`、`rb_enc_*`、`rb_ext_ractor_safe`、`-fvisibility=hidden` |
-| json 2.18.0 | 一致（§3.15。段階 7 までは `Qfalse != 0` のため生成器が動かなかった） | `RUBY_INTEGER_UNIFICATION`、`SIZEOF_UINT64_T`、`ALLOCV`、`rb_enc_interned_str` の `have_func` 判定、`rb_str_buf_new` + `RSTRING_PTR` 直書き、`rb_global_variable`、`rb_hash_lookup2` の `Qundef` |
+| json 2.18.0 / 3.1.0 | 一致（§3.15。段階 7 までは `Qfalse != 0` のため生成器が動かなかった。3.x は `rb_scan_args_kw` / `rb_catch_obj` / `rb_throw_obj` / `rb_check_funcall` / `rb_str_tmp_new` も使う） | `RUBY_INTEGER_UNIFICATION`、`SIZEOF_UINT64_T`、`ALLOCV`、`rb_enc_interned_str` の `have_func` 判定、`rb_str_buf_new` + `RSTRING_PTR` 直書き、`rb_global_variable`、`rb_hash_lookup2` の `Qundef` |
 | strscan 3.1.8 | 一致（§3.13） | `ruby/re.h`: `rb_reg_onig_match` / `rb_reg_prepare_re` + `onig_search` / `onig_match`、`struct re_registers` をスタックに置く、`onig_foreach_name`、`rb_memsearch`、`rb_enc_precise_mbclen`（EUC-JP）、`rb_get_kwargs`、`_((args))` |
 
 macOS の CI で msgpack の `extconf.rb` が monoruby ごと落ちた（スタック
@@ -565,6 +565,33 @@ generator.so（stand-in `gem/json/ext/*.rb` より `.so` が勝つ）で
 エラーメッセージが CRuby と一致する。既存の 5 フィクスチャと bcrypt /
 msgpack / strscan / strptime / yajl-ruby も変わらず一致。
 
+**json 3.1.0（最新系）も一致する。** 3.x の parser.c / generator.c が新たに
+使う 5 つ — `rb_scan_args_kw`（`RB_SCAN_ARGS_LAST_HASH_KEYWORDS` など 4 つ
+のフラグ。`rb_scan_args` は `PASS_CALLED_KEYWORDS` の特殊形として同じ
+`scan_args_v` に乗せた）、`rb_check_funcall`（応答しなければ `Qundef`、
+private も数える）、`rb_str_tmp_new`（CRuby では hidden な作業用 String、
+ここでは普通の String）、再開可能パーサ（`ResumableParser`）が使う
+`rb_catch_obj` / `rb_throw_obj`（`Kernel#catch` / `#throw` そのもの。
+`throw` は interpreter の throw 例外として C フレームを巻き戻し、タグの
+合う `catch` が値を返す。C ↔ Ruby のどちらで catch / throw しても対応する）
+— を層に足した。`tests/capi/capi_value.c` の `scan_kw` / `check_call` /
+`tmp_fill` / `catch_` / `throw_` が CRuby と比較する。
+
+json はコアの default gem なので、Ruby 側の半分（`json.rb`、`json/common.rb`
+…）が stand-in ツリーに 2.18.0 で入っている。`gem "json", "3.1.0"` で
+活性化した gem の `.so` が stand-in の `json/ext/generator.rb` に勝っても、
+`json.rb` 自体は stand-in（2.18.0 の Ruby）に解決されていて
+`JSON::Ext::Generator::GeneratorMethods` の `NameError` になっていた。
+`require.rs` の `built_gem_file_on_load_path`: stand-in に当たった候補が、
+**monoruby がビルドした拡張を持つ gem**（`<home>/gems/<name-ver>/lib` と、
+C API 層の拡張を含む `<home>/extensions/<platform>/<api>/<name-ver>` が
+ともに `$LOAD_PATH` にある）の lib にもあれば、そちらを返す。stand-in に
+勝つのは活性化後だけで、素の `require "json"` は従来どおり stand-in。
+`tests/capi_gems.rs` は `json`（キャッシュ中の最新、CI では 3.1.0）と
+`json_2_18`（2.18.0 固定）の両方を比較する。ついでに rubygems の
+`generate_plugins` が踏む `Hash#flat_map(&:last)`（ペアを分割しないブロック
+にはペアを丸ごと渡す）を `builtins/hash.rb` で直した。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -597,7 +624,7 @@ msgpack / strscan / strptime / yajl-ruby も変わらず一致。
 | 5 | `st_table`（`ruby/st.h` + CRuby の `st.c`） | 済（§3.12、`tests/capi/capi_st.c`） |
 | 6 | `ruby/re.h`（Onigmo を `MrOnigApi` 経由で、`rb_reg_prepare_re` / `rb_reg_onig_match`、`rb_enc_precise_mbclen` を本物に、`require` の `.so` 解決） | 済（§3.13、`tests/capi/capi_re.c`、`tests/capi_gems.rs` の strscan） |
 | 7 | Time API（`rb_time_*`、`rb_timespec_now`）、`rb_keyword_given_p`、UTF-8 以外の `rb_enc_codepoint_len`、`OBJ_INIT_COPY`、`UNREACHABLE`、config.h の時刻系 `HAVE_*`、`HAVE_RUBY_*_H` | 済（§3.14、`tests/capi/capi_time.c`、`tests/capi_gems.rs` の strptime / yajl-ruby） |
-| 8 | 拡張内の `VALUE` を CRuby のビット列に（`Qfalse == 0`）、層が境界で変換 | 済（§3.15、`tests/capi/capi_value.c`、`tests/capi_gems.rs` の json 2.18.0） |
+| 8 | 拡張内の `VALUE` を CRuby のビット列に（`Qfalse == 0`）、層が境界で変換 | 済（§3.15、`tests/capi/capi_value.c`、`tests/capi_gems.rs` の json 2.18.0 と 3.1.0） |
 
 ## 6. 既知の制約
 

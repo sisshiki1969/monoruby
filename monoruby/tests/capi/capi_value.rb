@@ -45,3 +45,22 @@ hold = V::Holder.new
   p hold.get
 end
 p V::FALSE_CONST, V::NIL_CONST, V::SYM_CONST
+# rb_scan_args_kw: 0 asks the call site, 1 always takes the Hash,
+# 2 never, 3 takes a Hash in last position
+h = { k: 1 }
+def sk = (yield rescue [$!.class, $!.message])
+[0, 1, 2, 3].each do |f|
+  p [f, sk { V.scan_kw(f, h) }, sk { V.scan_kw(f, k: 1) }, sk { V.scan_kw(f, 2, h) }, sk { V.scan_kw(f, 2, **h) }, sk { V.scan_kw(f) }]
+end
+# rb_check_funcall: Qundef when the receiver does not respond (private counts)
+class Quiet; private def secret = :s; def respond_to_missing?(n, p = false) = n == :ghost; def method_missing(n, *) = n == :ghost ? :boo : super; end
+p V.check_call(1, :to_s), V.check_call(Quiet.new, :secret), V.check_call(Quiet.new, :ghost), V.check_call(Object.new, :nope)
+# rb_str_tmp_new: a String of n writable bytes
+p V.tmp_fill(5, "x".ord), V.tmp_fill(0, 0)
+# rb_catch_obj / rb_throw_obj with Kernel#catch / #throw on either side
+t = Object.new
+p V.catch_(t, nil), V.catch_(t, :thrown), V.catch_(:sym, [1, 2])
+p catch(:outer) { V.throw_(:outer, :from_c); :not_here }
+p catch { |tag| V.catch_(tag, nil); V.throw_(tag, 42) }
+p((V.throw_(:nobody, 1) rescue [$!.class, $!.message]))
+p((V.catch_(:a, nil) { }).inspect, catch(:b) { V.catch_(:c, :inner) ; throw :b, :ruby })

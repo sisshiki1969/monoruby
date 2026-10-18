@@ -431,6 +431,8 @@ VALUE rb_funcallv_public(VALUE recv, ID mid, int argc, const VALUE *argv);
 VALUE rb_funcall2(VALUE recv, ID mid, int argc, const VALUE *argv);
 VALUE rb_funcall3(VALUE recv, ID mid, int argc, const VALUE *argv);
 VALUE rb_funcall_passing_block(VALUE recv, ID mid, int argc, const VALUE *argv);
+/* Qundef when `recv` does not respond to `mid` (private methods included). */
+VALUE rb_check_funcall(VALUE recv, ID mid, int argc, const VALUE *argv);
 VALUE rb_funcall_with_block(VALUE recv, ID mid, int argc, const VALUE *argv, VALUE procval);
 VALUE rb_apply(VALUE recv, ID mid, VALUE args);
 VALUE rb_yield(VALUE val);
@@ -509,6 +511,14 @@ rb_check_arity(int argc, int min, int max)
 #define rb_check_arity rb_check_arity
 
 int rb_scan_args(int argc, const VALUE *argv, const char *fmt, ...);
+/* rb_scan_args_kw: how the trailing Hash is read. PASS_CALLED_KEYWORDS
+ * asks the call site (rb_keyword_given_p), KEYWORDS always takes it,
+ * EMPTY_KEYWORDS never, LAST_HASH_KEYWORDS takes a Hash in last position. */
+#define RB_SCAN_ARGS_PASS_CALLED_KEYWORDS 0
+#define RB_SCAN_ARGS_KEYWORDS 1
+#define RB_SCAN_ARGS_EMPTY_KEYWORDS 2
+#define RB_SCAN_ARGS_LAST_HASH_KEYWORDS 3
+int rb_scan_args_kw(int kw_flag, int argc, const VALUE *argv, const char *fmt, ...);
 int rb_get_kwargs(VALUE keyword_hash, const ID *table, int required, int optional, VALUE *values);
 VALUE rb_extract_keywords(VALUE *orighash);
 
@@ -593,6 +603,7 @@ rb_num2long_inline(VALUE v)
 /* ---- strings ---------------------------------------------------------- */
 
 VALUE rb_str_new(const char *ptr, long len);
+VALUE rb_str_tmp_new(long len);
 VALUE rb_str_new_cstr(const char *ptr);
 VALUE rb_str_new_static(const char *ptr, long len);
 VALUE rb_str_new_frozen(VALUE str);
@@ -902,6 +913,10 @@ VALUE rb_block_call_kw(VALUE obj, ID mid, int argc, const VALUE *argv, rb_block_
 VALUE rb_iterate(VALUE (*it_proc)(VALUE), VALUE data1, rb_block_call_func_t bl_proc, VALUE data2);
 VALUE rb_each(VALUE obj);
 VALUE rb_proc_new(rb_block_call_func_t func, VALUE callback_arg);
+VALUE rb_catch_obj(VALUE tag, rb_block_call_func_t func, VALUE data);
+VALUE rb_catch(const char *tag, rb_block_call_func_t func, VALUE data);
+NORETURN(void rb_throw_obj(VALUE tag, VALUE val));
+NORETURN(void rb_throw(const char *tag, VALUE val));
 void rb_gc_mark_locations(const VALUE *start, const VALUE *end);
 
 /* ---- Struct ----------------------------------------------------------- */

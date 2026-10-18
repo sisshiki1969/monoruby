@@ -994,8 +994,8 @@ rb_keyword_given_p(void)
  * them — the interpreter hands an extension method its keywords as a
  * last positional Hash.
  */
-int
-rb_scan_args(int argc, const VALUE *argv, const char *fmt, ...)
+static int
+scan_args_v(int kw_flag, int argc, const VALUE *argv, const char *fmt, va_list ap)
 {
     const char *p = fmt;
     int n_lead = 0, n_opt = 0, n_trail = 0, f_var = 0, f_hash = 0, f_block = 0;
@@ -1021,20 +1021,33 @@ rb_scan_args(int argc, const VALUE *argv, const char *fmt, ...)
     if (*p)
         rb_raise(rb_eArgError, "bad scan arg format: %s", fmt);
 
-    /* As CRuby's rb_scan_args_kw(RB_SCAN_ARGS_PASS_CALLED_KEYWORDS): the
+    /* Under RB_SCAN_ARGS_PASS_CALLED_KEYWORDS (plain rb_scan_args) the
      * trailing Hash is the keywords only when the call passed keywords;
      * a Hash passed positionally stays an argument. */
     VALUE hash = Qnil;
-    if (f_hash && argc > 0 && RB_TYPE_P(argv[argc - 1], T_HASH) && rb_keyword_given_p()) {
-        hash = argv[argc - 1];
-        argc--;
+    if (f_hash && argc > 0 && RB_TYPE_P(argv[argc - 1], T_HASH)) {
+        int take;
+        switch (kw_flag) {
+        case RB_SCAN_ARGS_KEYWORDS:
+        case RB_SCAN_ARGS_LAST_HASH_KEYWORDS:
+            take = 1;
+            break;
+        case RB_SCAN_ARGS_EMPTY_KEYWORDS:
+            take = 0;
+            break;
+        default:
+            take = rb_keyword_given_p();
+            break;
+        }
+        if (take) {
+            hash = argv[argc - 1];
+            argc--;
+        }
     }
     int n_mand = n_lead + n_trail;
     if (argc < n_mand || (!f_var && argc > n_mand + n_opt))
         rb_error_arity(argc, n_mand, f_var ? UNLIMITED_ARGUMENTS : n_mand + n_opt);
 
-    va_list ap;
-    va_start(ap, fmt);
     int i = 0;
     for (int j = 0; j < n_lead; j++) {
         VALUE *v = va_arg(ap, VALUE *);
@@ -1071,8 +1084,27 @@ rb_scan_args(int argc, const VALUE *argv, const char *fmt, ...)
         VALUE *v = va_arg(ap, VALUE *);
         if (v) *v = rb_block_proc();
     }
-    va_end(ap);
     return argc;
+}
+
+int
+rb_scan_args(int argc, const VALUE *argv, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int n = scan_args_v(RB_SCAN_ARGS_PASS_CALLED_KEYWORDS, argc, argv, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+int
+rb_scan_args_kw(int kw_flag, int argc, const VALUE *argv, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int n = scan_args_v(kw_flag, argc, argv, fmt, ap);
+    va_end(ap);
+    return n;
 }
 
 static void
@@ -2056,6 +2088,14 @@ rb_obj_respond_to(VALUE obj, ID id, int priv)
     return RTEST(rb_funcall(obj, rb_intern("respond_to?"), 2, ID2SYM(id), priv ? Qtrue : Qfalse));
 }
 
+VALUE
+rb_check_funcall(VALUE recv, ID mid, int argc, const VALUE *argv)
+{
+    if (!rb_obj_respond_to(recv, mid, 1))
+        return Qundef;
+    return rb_funcallv(recv, mid, argc, argv);
+}
+
 /* ---------------------------------------------------------------------
  * Objects
  * --------------------------------------------------------------------- */
@@ -2694,6 +2734,13 @@ rb_str_new(const char *ptr, long len)
         return s;
     }
     return check(api->bytes_new(ctx(), (const uint8_t *)ptr, (size_t)len));
+}
+
+/* A hidden-in-CRuby scratch String; here an ordinary one of `len` zero bytes. */
+VALUE
+rb_str_tmp_new(long len)
+{
+    return rb_str_new(NULL, len);
 }
 
 VALUE
@@ -4367,6 +4414,36 @@ rb_block_call_kw(VALUE obj, ID mid, int argc, const VALUE *argv, rb_block_call_f
 {
     (void)kw_splat;
     return rb_block_call(obj, mid, argc, argv, bl_proc, data2);
+}
+
+/*
+ * catch / throw are Kernel's own: `throw` raises the interpreter's throw
+ * error, which unwinds through the C frames like any exception, and
+ * `catch` with a matching tag swallows it and returns the thrown value.
+ */
+VALUE
+rb_catch_obj(VALUE tag, rb_block_call_func_t func, VALUE data)
+{
+    return rb_block_call(rb_mKernel, rb_intern("catch"), 1, &tag, func, data);
+}
+
+VALUE
+rb_catch(const char *tag, rb_block_call_func_t func, VALUE data)
+{
+    return rb_catch_obj(ID2SYM(rb_intern(tag)), func, data);
+}
+
+void
+rb_throw_obj(VALUE tag, VALUE val)
+{
+    rb_funcall(rb_mKernel, rb_intern("throw"), 2, tag, val);
+    rb_bug("rb_throw_obj: throw returned");
+}
+
+void
+rb_throw(const char *tag, VALUE val)
+{
+    rb_throw_obj(ID2SYM(rb_intern(tag)), val);
 }
 
 struct iterate_args {
