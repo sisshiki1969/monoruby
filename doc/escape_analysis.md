@@ -173,7 +173,7 @@ dropped once nothing can read it any more (`local_live_after`: the rest
 of its block and every block reachable from there).
 
 **Merges.** A block whose successors are all forward merges — none is a
-loop head, and the block is not a dispatch arm (`merge_carries_virtuals`)
+loop head, and the block is not a dispatch arm (`merge_carries_virtual`)
 — leaves a live parameter's object elided in the state its branch entry
 carries. When the merge is compiled (`incoming_context`), the entries are
 reconciled first (`settle_entries`): an object every entry brings
@@ -184,19 +184,37 @@ join itself then only ever meets equal tables (it asserts so, debug), and
 the merged state inherits them. This is what lets an optional parameter's
 prologue (`def f(a, b = 0) = a.max + b`, `def g(x: 1, **opts) = opts[:y]`),
 a guard clause (`return 0 if a.empty?`) or a `?:` before the use keep the
-object elided. A loop head is not such a merge: its back edge is a
-fixpoint over the body and the body is analysed from a head without
-objects, so every entry of a loop — the fall-through into it and its back
-edges — materializes before branching (`backedge_branches` asserts none
-arrives). A temporary's object never crosses a block boundary: it is
+object elided. A temporary's object never crosses a block boundary: it is
 materialized or dropped where its block ends, as before.
+
+**Loop heads.** A loop head is a merge whose back edge is a fixpoint over
+the body, so an object reaches it only when the tables (§11) say the loop
+can keep it (`loop_keeps_virtual`): no block of the loop writes the local
+(`bb_def` over the loop's blocks; nor a local among the object's element
+slots — the others are the scratch window, which only a literal into the
+local writes), and no capture point in the loop reaches it. The forward
+entries and the back edges then branch with the object in place, the
+entries are reconciled as at any merge (`settle_entries` also drops
+whatever a back edge already recorded for the head does not carry), and
+the fixpoint walks the body from a head *with* the object
+(`analyse_backedge_fixpoint`). The body may still read the object in a
+way the compiler cannot fold (an Array index, §10), materializing it; the
+back edge then arrives without it, every later walk of the fixpoint
+starts from a head with it materialized (`analyse_loop`), and the loop's
+forward entries materialize it once, on their bridges, as every entry did
+before. The real back edge materializes what the head does not carry
+(`backedge_branches`) and, since creating an object is defining its
+local, never brings one the head lacks. So `r = (lo..hi); while ...;
+r.include?(i)` folds the test every iteration and allocates nothing;
+`def f(*a); while ...; a.first; end` keeps its rest Array elided through
+the loop.
 
 The consequences are what keep the mechanism small:
 
 - **A merge only ever sees equal elided objects.** A temporary's object
   never reaches one, and a parameter's reaches it on every path or on
-  none, so joins and the branch bridges reconcile nothing; loop-head
-  fixpoints see no object at all.
+  none, so joins and the branch bridges reconcile nothing; a loop-head
+  fixpoint sees only an object its loop can neither write nor capture.
 - **A suspended frame owes only objects whose elements are safe.** A
   temporary's object never lives across a call; a handed-over object's
   elements are in the caller's frame, and a local's (§10) in the frame's
@@ -231,9 +249,8 @@ in the caller's frame, which the caller spilled before the call
 ## 5. What is not covered (yet)
 
 - **Locals** hold an object under the rules of §10: not in a body that
-  rescues or runs frameless, not while the frame may be captured, not
-  through a loop head, and an alias (`y = x` with `x` read again) builds
-  it.
+  rescues, not while the frame may be captured, and an alias (`y = x`
+  with `x` read again) builds it.
 - **Elements overwritten before the use.** `[a, b].include?(c + 1)`
   evaluates `c + 1` into the first element's slot, so the object is
   materialized there. A local or literal argument (`include?(x)`) is passed
@@ -244,10 +261,11 @@ in the caller's frame, which the caller spilled before the call
   immediates (`Literal`) has no element slots and is not affected.
 - **`Slots` objects and transparent callees.** Without a template there is
   no Array to hand a transparent callee; only the `elements` lowerings apply.
-- **Loops.** A handed-over object is materialized before a loop head
-  (`def f(*a); 3.times { }; a.max; end`), even when the loop body cannot
-  touch it; carrying one through a loop's fixpoint would need the body
-  analysed with it in place.
+- **Loops that read the object unfoldably.** An object carried through a
+  loop head (§3) is materialized on the loop's entries as soon as the
+  body reads it in a way that is not folded — an Array index (`a[i]`),
+  or a `Range` use that is not one of §8's — so the per-iteration fold is
+  only as wide as the consuming uses are.
 - **Return values that escape the callee's frame first.** A plain `return`
   of an elided object from a specialized callee hands it over elided (§9);
   a `return` from inside a block, from a callee with a handler, with a
@@ -596,8 +614,9 @@ before
   back — a lambda literal, or a capturing or unresolved call inside the
   block, which could reach the whole frame). The same check covers a
   parameter's handed-over object;
-- a block boundary into a loop head, as any object (a forward merge
-  carries it, §3).
+- a block boundary into a loop head whose loop writes the local or holds
+  a capture point reaching it (a forward merge, or a loop that does
+  neither, carries it, §3).
 
 Everything else — the frame's own calls to known callees, operators,
 instance-variable loads, loads of other locals — leaves the object in
@@ -653,9 +672,9 @@ literal's original argument temporaries, long since overwritten. A
 specialized callee's `return x` hands the local's object back as §9
 describes, its elements copied out of the window.
 
-**Not carried**: through a loop head (the body is analysed from a head
-without objects); an alias that keeps both names live beyond a
-temporary's view; a Range whose endpoints are not proven Fixnum or
+**Not carried**: through a loop head whose body writes or captures the
+local, or reads the object unfoldably (§3); an alias that keeps both
+names live beyond a temporary's view; a Range whose endpoints are not proven Fixnum or
 `nil` where it is built (as for a temporary's Range); an object
 returned into a local of the caller (`x = pair(a, b)` needs the slots
 above the destination, §9); a transparent callee on a literal of

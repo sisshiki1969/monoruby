@@ -246,10 +246,15 @@ impl<'a> JitContext<'a> {
                 break;
             }
             if self.iseq().bb_info.is_loop_begin(bbid).is_some()
-                && let Some(entries) = ctx.branch_entries(bbid)
+                && let Some(entries) = ctx.branch_entries(bbid).cloned()
                 && !entries.is_empty()
             {
-                let joined = AbstractState::join_entries(entries);
+                // The entries may carry different elided objects into the
+                // head (`doc/escape_analysis.md` §3): reconciled on a copy
+                // before the join, as the merge itself does.
+                let mut entries = entries;
+                ctx.settle_entries(&mut entries, None);
+                let joined = AbstractState::join_entries(&entries);
                 let typed = (1..=self.local_num())
                     .map(|i| SlotId(i as u16))
                     .filter(|slot| Some(*slot) != block_param)
@@ -259,6 +264,12 @@ impl<'a> JitContext<'a> {
                             LinkMode::F(_) => Guarded::Float,
                             LinkMode::Sf(_, sf) => sf.into(),
                             LinkMode::C(v) => Guarded::from_concrete_value(v),
+                            // An elided object carried into the head: the
+                            // loop JIT's entry from the interpreter holds
+                            // the real one, of the class the literal makes.
+                            LinkMode::V if let Some(src) = joined.virtual_at(slot) => {
+                                Guarded::Class(src.class_id())
+                            }
                             LinkMode::V
                             | LinkMode::None
                             | LinkMode::MaybeNone

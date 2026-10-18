@@ -393,6 +393,17 @@ impl SlotAnalysis {
         self.insts[pos.to_usize()].call
     }
 
+    /// Whether a basic block in `start..=end` writes *slot* (a plain
+    /// definition, `InstSummary::def`).
+    pub(crate) fn defined_in_blocks(
+        &self,
+        start: BasicBlockId,
+        end: BasicBlockId,
+        slot: SlotId,
+    ) -> bool {
+        (start..=end).any(|b| self.bb_def.contains(b.index(), slot))
+    }
+
     ///
     /// The first instruction after *pos* in its basic block that is a
     /// method call, reads *dst*, or does not define a plain slot other
@@ -434,6 +445,18 @@ pub(crate) struct UnitLiveness {
     touched: SlotSet,
     /// Per basic block: live at its exit, the capture reads counted.
     live_out: SlotSets,
+}
+
+impl UnitLiveness {
+    /// Whether a capture point in `begin..=end` may read the local
+    /// *slot*.
+    pub(crate) fn captured_in(&self, begin: BcIndex, end: BcIndex, slot: SlotId) -> bool {
+        (begin.to_usize()..=end.to_usize()).any(|i| match self.captures[i] {
+            Some(Capture::Frame) => true,
+            Some(Capture::Block) => self.touched.contains(slot),
+            None => false,
+        })
+    }
 }
 
 impl<'a> JitContext<'a> {

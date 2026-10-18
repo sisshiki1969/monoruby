@@ -278,9 +278,11 @@ impl<'a> JitContext<'a> {
     /// frame, out of this frame's way, and a chain deopt materializes it —
     /// in a body that can neither capture its locals nor rescue
     /// (`caller_slots_ok`); and it lives across a forward block boundary
-    /// into a merge ([`Self::merge_carries_virtuals`]), where the merge
+    /// into a merge ([`Self::merge_carries_virtual`]), where the merge
     /// keeps it if every path brings the same object and the other paths
-    /// materialize theirs on their bridges (`JitContext::settle_entries`).
+    /// materialize theirs on their bridges (`JitContext::settle_entries`)
+    /// — a loop head included, when its loop neither writes the local nor
+    /// captures it ([`Self::loop_keeps_virtual`]).
     ///
     pub(super) fn settle_virtuals(
         &mut self,
@@ -295,7 +297,6 @@ impl<'a> JitContext<'a> {
         let reads = trace_ir.read_slots(self.store);
         let next_sp = state.next_sp();
         let bb_end = self.is_bb_end(bc_pos);
-        let carries = bb_end && self.merge_carries_virtuals(bc_pos);
         // An object in a temporary outlives the instructions that write
         // nothing but a plain destination (`defined_slot`): the receiver
         // of `r.include?(a + 1)`, moved into a temporary while the
@@ -364,7 +365,7 @@ impl<'a> JitContext<'a> {
             let overwrites = src
                 .own_slots()
                 .any(|s| s != dst && (written == Some(s) || in_window(s)));
-            let carried = carries && !self.is_temp(dst);
+            let carried = bb_end && self.merge_carries_virtual(bc_pos, dst, src);
             if read || (bb_end && !carried) || overwrites || (self.is_temp(dst) && !survives) {
                 self.materialize_virtual(state, ir, dst);
             }
@@ -385,8 +386,7 @@ impl<'a> JitContext<'a> {
         if !self.is_bb_end(bc_pos) {
             return;
         }
-        let carries = self.merge_carries_virtuals(bc_pos);
-        self.settle_virtuals_before_branch(state, ir, bc_pos, carries);
+        self.settle_virtuals_before_branch(state, ir, bc_pos, true);
     }
 
     ///
@@ -394,8 +394,8 @@ impl<'a> JitContext<'a> {
     /// *branch_pos* (the block's last one: a branch, or the instruction a
     /// dispatch's per-arm `CondBr` was sunk into, see
     /// [`JitContext::declare_merge`]), dropping the dead ones. With
-    /// *carries*, a parameter's object is left for the merge
-    /// ([`Self::merge_carries_virtuals`]).
+    /// *carries*, a local's object is left for the merges that may carry
+    /// it ([`Self::merge_carries_virtual`]).
     ///
     pub(super) fn settle_virtuals_before_branch(
         &mut self,
@@ -414,24 +414,24 @@ impl<'a> JitContext<'a> {
             if dead {
                 state.take_virtual(dst);
                 state.discard_dead_elements(src, dst);
-            } else if !(carries && !self.is_temp(dst)) {
+            } else if !(carries && self.merge_carries_virtual(branch_pos, dst, src)) {
                 self.materialize_virtual(state, ir, dst);
             }
         }
     }
 
     ///
-    /// Whether the merges the block ending at *bc_pos* branches into may
-    /// carry an elided object in a parameter slot (`doc/escape_analysis.md`
-    /// §3): a forward merge, compiled from the states of its branches
-    /// ([`JitContext::settle_entries`] reconciles them). A loop head is
-    /// not one: its back edge is a fixpoint over the body, and the body
-    /// is analysed from a head without objects, so every entry of a loop
-    /// materializes before branching. Nor is a dispatch arm, whose
-    /// per-arm branch merges with the fall-through (`declare_merge`).
+    /// Whether every merge the block ending at *bc_pos* branches into may
+    /// carry the elided object *src* in the local *dst*
+    /// (`doc/escape_analysis.md` §3): a forward merge, compiled from the
+    /// states of its branches ([`JitContext::settle_entries`] reconciles
+    /// them), or a loop head whose loop can keep the object
+    /// ([`Self::loop_keeps_virtual`]). An object in a temporary is never
+    /// carried, nor is anything out of a dispatch arm, whose per-arm
+    /// branch merges with the fall-through (`declare_merge`).
     ///
-    fn merge_carries_virtuals(&self, bc_pos: BcIndex) -> bool {
-        if self.in_dispatch_arm() {
+    fn merge_carries_virtual(&self, bc_pos: BcIndex, dst: SlotId, src: VirtualSrc) -> bool {
+        if self.is_temp(dst) || self.in_dispatch_arm() {
             return false;
         }
         let bb_info = &self.iseq().bb_info;
@@ -439,24 +439,67 @@ impl<'a> JitContext<'a> {
         bb_info
             .succ(bb)
             .iter()
-            .all(|s| bb_info.is_loop_begin(*s).is_none())
+            .all(|s| match bb_info.is_loop_begin(*s) {
+                None => true,
+                Some((start, end)) => self.loop_keeps_virtual(start, end, dst, src),
+            })
+    }
+
+    ///
+    /// Whether the loop `loop_start..=loop_end` can keep the elided object
+    /// *src* in the local *dst* across its head (`doc/escape_analysis.md`
+    /// §3): by the tables, no block of the loop writes the local (nor a
+    /// local among the object's element slots; the others are the local's
+    /// scratch window, which only a literal into the local writes), and no
+    /// capture point in the loop reaches it. The body may still read the
+    /// object in a way that materializes it; the back-edge fixpoint then
+    /// says so, and the loop's entries materialize it instead
+    /// ([`JitContext::settle_entries`]).
+    ///
+    fn loop_keeps_virtual(
+        &self,
+        loop_start: BasicBlockId,
+        loop_end: BasicBlockId,
+        dst: SlotId,
+        src: VirtualSrc,
+    ) -> bool {
+        let iseq_id = self.iseq_id();
+        let a = self.slot_analysis(iseq_id);
+        if a.all_live() {
+            return false;
+        }
+        let iseq = self.iseq();
+        let window = iseq.local_scratch(dst);
+        let in_window = |s: SlotId| window.is_some_and(|(base, len)| base <= s && s < base + len);
+        let locals = std::iter::once(dst).chain(src.own_slots().filter(|s| !self.is_temp(*s)));
+        if src.own_slots().any(|s| self.is_temp(s) && !in_window(s)) {
+            return false;
+        }
+        let (begin, end) = (iseq.bb_info[loop_start].begin, iseq.bb_info[loop_end].end);
+        let u = self.unit_liveness(iseq_id);
+        for slot in locals {
+            if a.defined_in_blocks(loop_start, loop_end, slot) || u.captured_in(begin, end, slot) {
+                return false;
+            }
+        }
+        true
     }
 
     ///
     /// Reconcile the elided objects the branch *entries* of a merge bring
     /// in, before their states are joined: an object every entry carries
-    /// identically (same slot, same `VirtualSrc`) stays elided through the
-    /// merge; any other is materialized on its entry's bridge, in the
-    /// returned per-entry `AsmIr` the bridge is prepended with. At a loop
-    /// head every object is materialized (none is expected: the entries
-    /// settle before branching into one).
+    /// identically (same slot, same `VirtualSrc`) — and, at a loop head
+    /// whose back edge *backedge* is recorded, one the back edge carries
+    /// too — stays elided through the merge; any other is materialized on
+    /// its entry's bridge, in the returned per-entry `AsmIr` the bridge is
+    /// prepended with.
     ///
     pub(in crate::codegen::jitgen) fn settle_entries(
         &mut self,
         entries: &mut [BranchEntry],
-        loop_head: bool,
+        backedge: Option<&[(SlotId, VirtualSrc)]>,
     ) -> Vec<AsmIr> {
-        let common: Vec<(SlotId, VirtualSrc)> = if loop_head || entries.is_empty() {
+        let common: Vec<(SlotId, VirtualSrc)> = if entries.is_empty() {
             vec![]
         } else {
             entries[0]
@@ -464,6 +507,7 @@ impl<'a> JitContext<'a> {
                 .virtuals()
                 .iter()
                 .filter(|v| entries.iter().all(|e| e.state.virtuals().contains(v)))
+                .filter(|v| backedge.is_none_or(|be| be.contains(v)))
                 .copied()
                 .collect()
         };
@@ -471,16 +515,27 @@ impl<'a> JitContext<'a> {
             .iter_mut()
             .map(|entry| {
                 let mut ir = AsmIr::new(self);
-                for (dst, _) in entry.state.virtuals().to_vec() {
-                    if common.iter().any(|(d, _)| *d == dst) {
-                        continue;
-                    }
-                    debug_assert!(!loop_head, "an elided object reached a loop head");
-                    self.materialize_virtual(&mut entry.state, &mut ir, dst);
-                }
+                self.materialize_except(&mut entry.state, &mut ir, &common);
                 ir
             })
             .collect()
+    }
+
+    ///
+    /// Materialize every elided object of *state* but those in *keep*
+    /// (same slot, same `VirtualSrc`).
+    ///
+    pub(in crate::codegen::jitgen) fn materialize_except(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        keep: &[(SlotId, VirtualSrc)],
+    ) {
+        for v in state.virtuals().to_vec() {
+            if !keep.contains(&v) {
+                self.materialize_virtual(state, ir, v.0);
+            }
+        }
     }
 
     ///
@@ -693,8 +748,13 @@ impl<'a> JitContext<'a> {
         if cs.recv == slot {
             return cs.splat_pos().is_empty() && !reads[1..].contains(&slot);
         }
+        // The argument slot is the callee's once handed over (`set_arguments`
+        // and `fill_window` take the object): a local passed in its own
+        // slot (`get(x)`) hands it over only when nothing reads the local
+        // afterwards.
         if !(cs.args..cs.args + cs.pos_num).contains(&slot)
             || reads.iter().filter(|s| **s == slot).count() != 1
+            || !self.dead_after(bc_pos, slot)
         {
             return false;
         }
@@ -861,6 +921,12 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         dst: SlotId,
     ) {
+        // The object is observed here (whatever reads the slot next
+        // reads it): a read of the slot's value for the loop liveness,
+        // which the redefinition below would otherwise record as a kill
+        // — and a loop-entry seed (`predict_loop_entries`) only types a
+        // slot the loop reads.
+        state.note_read(dst);
         let src = state.take_virtual(dst).unwrap();
         match src {
             VirtualSrc::Slots { src, len, callid } => {
