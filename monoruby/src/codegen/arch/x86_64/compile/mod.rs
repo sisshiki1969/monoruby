@@ -212,6 +212,7 @@ impl Codegen {
             | AsmInst::StoreDynVarSpecialized { .. }
             | AsmInst::Inline(..)
             | AsmInst::ArrayIndex { .. }
+            | AsmInst::ElidedArrayIndex { .. }
             | AsmInst::ArrayIndexAssign { .. }
             | AsmInst::LoadFieldToReg { .. }
             | AsmInst::BoolFieldToReg { .. }

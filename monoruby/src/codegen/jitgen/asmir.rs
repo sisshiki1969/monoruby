@@ -1644,6 +1644,12 @@ impl AsmIr {
         });
     }
 
+    /// rax <- the element of an elided Array at the Fixnum index in the
+    /// index register (`AsmInst::ElidedArrayIndex`).
+    pub(super) fn elided_array_index(&mut self, base: SlotBase, src: SlotId, len: u16) {
+        self.push(AsmInst::ElidedArrayIndex { base, src, len });
+    }
+
     /// rax <- Array of the `len` slots at `src`, addressed in the frame
     /// `base` names (the materialization of an elided object whose
     /// elements are in the caller's frame; `doc/escape_analysis.md`).
@@ -3381,6 +3387,17 @@ pub(super) enum AsmInst {
     ///
     /// - caller save registers
     ///
+    /// `[a, b, …][i]` with the Array elided and a Fixnum index already
+    /// loaded into the index register (Rsi / x3): rax <- the element at
+    /// the index (negative counts from the end) among the `len` slots at
+    /// `src`, or nil out of range. See `doc/escape_analysis.md`.
+    ElidedArrayIndex {
+        /// The frame the `len` slots at `src` are addressed in (as
+        /// `ArrayMinMax`).
+        base: SlotBase,
+        src: SlotId,
+        len: u16,
+    },
     /// `[a, b, …].min` / `.max` with the Array elided: compare the
     /// literal's elements in their slots. See `doc/escape_analysis.md`.
     ArrayMinMax {

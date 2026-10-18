@@ -235,11 +235,12 @@ impl<'a> JitContext<'a> {
         polymorphic: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
-        // An elided Hash literal as the receiver (`doc/escape_analysis.md`):
-        // folded, or run on its template, or allocated after all.
+        // An elided Hash or Array as the receiver (`doc/escape_analysis.md`):
+        // folded or read in place, or run on its template, or allocated
+        // after all.
         if state.virtual_at(base).is_some() {
             let dst = self.store[self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap()].dst;
-            if self.consume_virtual_index(state, ir, base, idx, dst.unwrap_or(base), bc_pos) {
+            if self.consume_virtual_index(state, ir, base, idx, dst.unwrap_or(base), ic, bc_pos) {
                 return Ok(CompileResult::Continue);
             }
         }

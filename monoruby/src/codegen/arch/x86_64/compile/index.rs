@@ -167,6 +167,50 @@ impl Codegen {
     }
 
     ///
+    /// `AsmInst::ElidedArrayIndex`: index an elided Array whose `len`
+    /// elements are the slots `src .. src + len` of the frame *base* names
+    /// (element `i` is `i` slots below the slot's address).
+    ///
+    /// ### in
+    /// - rsi: index Fixnum
+    ///
+    /// ### out
+    /// - rax: the element, or nil out of range
+    ///
+    /// ### destroy
+    /// - rdi, rsi
+    ///
+    pub(crate) fn gen_elided_array_index(&mut self, base: SlotBase, src: SlotId, len: u16) {
+        let checked = self.jit.label();
+        let negative = self.jit.label();
+        let out_range = self.jit.label();
+        let exit = self.jit.label();
+        self.caller_slot_addr(base, src, GP::Rdi);
+        monoasm! { &mut self.jit,
+            sarq  rsi, 1;
+            testq rsi, rsi;
+            js    negative;
+        checked:
+            cmpq  rsi, (len as i64);
+            jge   out_range;
+            shlq  rsi, 3;
+            subq  rdi, rsi;
+            movq  rax, [rdi];
+        exit:
+        }
+        self.jit.select_page(1);
+        monoasm! { &mut self.jit,
+        negative:
+            addq  rsi, (len as i64);
+            jns   checked;
+        out_range:
+            movl  rax, (NIL_VALUE);
+            jmp   exit;
+        }
+        self.jit.select_page(0);
+    }
+
+    ///
     /// §20 (B): emit an array integer-index **assign** for
     /// `AsmInst::ArrayIndexAssign`.
     ///

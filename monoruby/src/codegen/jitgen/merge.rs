@@ -133,18 +133,13 @@ impl<'a> JitContext<'a> {
             // Everything the loop-entry merge does spans the chain — the
             // fixpoint's back edge is a whole `AbstractState`, `join` and
             // `equiv` walk every frame, and `gen_bridge_all` bridges every
-            // frame. The three calls below are the exception, and they stay
-            // innermost-only for two different reasons.
+            // frame. The float calls below are the exception, and they
+            // stay innermost-only.
             //
-            // `liveness_analysis`'s `kill_unused` is innermost *by nature*.
-            // It discards the slots this loop does not touch, which is
-            // sound at a merge inside the frame that owns the loop and
-            // nowhere else: an outer frame's local that the loop never
-            // reads is still live in that frame's own continuation.
-            //
-            // The float half — `loop_used_as_float` feeding `use_float`,
-            // and `keep_backedge_floats` — is innermost only until an fpr
-            // can be allocated across frames. `FprAllocator` is per
+            // `loop_used_as_float` feeding `use_float` (all
+            // `liveness_analysis` does), and `keep_backedge_floats`, are
+            // innermost only until an fpr can be allocated across frames.
+            // `FprAllocator` is per
             // `SlotState` and its ids are positional (`FPReg(id)` is
             // `xmm{id+2}` below `PHYS_FPR_POOL`), so two frames each
             // promoting a slot would both take `FPReg(0)` and both write

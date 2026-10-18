@@ -66,19 +66,6 @@ impl Liveness {
     }
 
     ///
-    /// Collect killed (and not used) slots.
-    ///
-    pub(super) fn killed(&self) -> impl Iterator<Item = SlotId> {
-        self.0.iter().enumerate().filter_map(|(i, is_used)| {
-            if is_used == &IsUsed::Killed {
-                Some(SlotId(i as u16))
-            } else {
-                None
-            }
-        })
-    }
-
-    ///
     /// Extract a set of registers which will be used as Float in this loop,
     /// *and* fpr-linked on the back-edge.
     ///
@@ -153,11 +140,12 @@ impl IsUsed {
 
     ///
     /// Everything the compiler can observe about this record: whether
-    /// it is the `Killed` variant, which is the kill set
-    /// ([`Liveness::killed`]), and the float verdict, which is the
-    /// loop-entry float adoption ([`Liveness::loop_used_as_float`]).
-    /// Those two are the record's only readers, so two records that
-    /// agree here are interchangeable to both.
+    /// it is the `Killed` variant (a slot the loop overwrites before any
+    /// read; nothing acts on it today, but it is part of the record), and
+    /// the float verdict, which is the loop-entry float adoption
+    /// ([`Liveness::loop_used_as_float`]). Those are the record's only
+    /// observable facts, so two records that agree here are
+    /// interchangeable to every reader.
     ///
     /// Not preserved by [`Self::join`]: `Used(NonFloat)` and `ND` agree
     /// here, yet joining each with `Used(Float)` gives `Both` and

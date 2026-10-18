@@ -535,9 +535,7 @@ impl SlotState {
     }
 
     pub(in crate::codegen::jitgen) fn liveness_analysis(&mut self, liveness: &Liveness) {
-        let (used_as_float, killed) = (liveness.loop_used_as_float(), liveness.killed());
-        self.use_float(used_as_float);
-        self.kill_unused(killed);
+        self.use_float(liveness.loop_used_as_float());
     }
 
     fn use_float(&mut self, used_as_float: impl Iterator<Item = (SlotId, bool)>) {
@@ -564,12 +562,6 @@ impl SlotState {
                     unreachable!("use_float {:?}", self.mode(slot));
                 }
             };
-        }
-    }
-
-    fn kill_unused(&mut self, unused: impl Iterator<Item = SlotId>) {
-        for slot in unused {
-            self.discard(slot);
         }
     }
 
