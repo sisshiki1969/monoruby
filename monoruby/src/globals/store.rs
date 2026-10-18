@@ -118,6 +118,11 @@ pub struct Store {
     /// skipped (`MONORUBY_SKIP_STARTUP`), which simply disables that
     /// specialization.
     class_new_fid: Option<FuncId>,
+    /// `FuncId` of the native `Struct#initialize`, recorded at
+    /// registration. `inline_class_new` recognises a struct whose
+    /// constructor is still this one and writes the arguments straight
+    /// into the new object's slots.
+    struct_initialize_fid: Option<FuncId>,
     /// `FuncId`s of the builtin `send` / `__send__` (one on `Kernel`, one
     /// on `BasicObject`), recorded at registration. A call site that
     /// resolves to one of them and whose method-name argument is a literal
@@ -827,6 +832,7 @@ impl Store {
             kernel_hash_fid: None,
             kernel_binding_fid: None,
             class_new_fid: None,
+            struct_initialize_fid: None,
             object_send_fids: vec![],
             array_hash_fid: None,
             respond_to_fid: None,
@@ -1085,6 +1091,16 @@ impl Store {
     /// The Ruby `Class#new` trampoline's `FuncId`, if the bootstrap ran.
     pub(crate) fn class_new_fid(&self) -> Option<FuncId> {
         self.class_new_fid
+    }
+
+    /// Record the native `Struct#initialize`. Called at its registration.
+    pub(crate) fn record_struct_initialize_fid(&mut self, fid: FuncId) {
+        self.struct_initialize_fid = Some(fid);
+    }
+
+    /// The native `Struct#initialize`'s `FuncId`.
+    pub(crate) fn struct_initialize_fid(&self) -> Option<FuncId> {
+        self.struct_initialize_fid
     }
 
     /// Record a builtin `send` / `__send__`. Called at registration

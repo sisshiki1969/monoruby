@@ -217,10 +217,15 @@ impl GC<RValue> for Value {
     }
 }
 
+// The recursion guards hash object ids, which an attacker does not choose,
+// so they use the crate's FxHash rather than std's SipHash: every `==`,
+// `eql?`, `hash` and `inspect` of an Array / Hash / Struct goes through one
+// insert and one remove here, and SipHash made that the larger part of a
+// small Struct's `==`.
 thread_local! {
-    static HASH_RECURSION_GUARD: std::cell::RefCell<HashSet<u64>> = std::cell::RefCell::new(HashSet::new());
-    static INSPECT_RECURSION_GUARD: std::cell::RefCell<HashSet<u64>> = std::cell::RefCell::new(HashSet::new());
-    static COMPARE_RECURSION_GUARD: std::cell::RefCell<HashSet<(u64, u64)>> = std::cell::RefCell::new(HashSet::new());
+    static HASH_RECURSION_GUARD: std::cell::RefCell<fxhash::FxHashSet<u64>> = std::cell::RefCell::new(fxhash::FxHashSet::default());
+    static INSPECT_RECURSION_GUARD: std::cell::RefCell<fxhash::FxHashSet<u64>> = std::cell::RefCell::new(fxhash::FxHashSet::default());
+    static COMPARE_RECURSION_GUARD: std::cell::RefCell<fxhash::FxHashSet<(u64, u64)>> = std::cell::RefCell::new(fxhash::FxHashSet::default());
 }
 
 /// Execute `f` with recursion protection for inspect/to_s.
@@ -2614,7 +2619,7 @@ impl Value {
     ///
     /// Check if `self` is a flonum.
     ///
-    fn is_flonum(&self) -> bool {
+    pub(crate) fn is_flonum(&self) -> bool {
         self.0.get() & 0b11 == 2
     }
 
