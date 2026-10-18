@@ -85,14 +85,16 @@ impl<'a> JitContext<'a> {
     /// (`doc/escape_analysis.md` §10): the frame is proven on the stack
     /// and uncaptured (`no_capture_guard`: nothing can read the local
     /// behind the compiler's back, and every way to capture it from here
-    /// on materializes the object first, [`Self::settle_virtuals`]), is
-    /// framed (a frameless window has no scratch of its own to address),
-    /// and rescues nothing (a handler could read any local).
+    /// on materializes the object first, [`Self::settle_virtuals`]), and
+    /// rescues nothing (a handler could read any local). A frameless
+    /// callee qualifies: its window is its whole frame, scratch windows
+    /// included, addressed through the shifted LFP like any slot of its
+    /// own, and its materializing exit builds the object from the window
+    /// as a framed side exit does.
     ///
     fn local_elision_ok(&self, state: &AbstractState, dst: SlotId) -> bool {
         !self.is_temp(dst)
             && state.no_capture_guard()
-            && !self.in_frameless_frame()
             && !self.iseq().has_exception_handler()
     }
 
