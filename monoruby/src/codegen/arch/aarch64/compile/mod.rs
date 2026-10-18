@@ -3624,6 +3624,9 @@ impl Codegen {
         if self.emit_inline_string_lit(v, using_fpr) {
             return true;
         }
+        if self.emit_heap_array_lit(v, using_fpr) {
+            return true;
+        }
         if let Some(elems) = v
             .inline_copyable_array()
             .filter(|_| !self.alloc_free_head_addr.is_null())
@@ -3652,6 +3655,37 @@ impl Codegen {
             return true;
         }
         self.deep_copy_lit_call(v, using_fpr);
+        true
+    }
+
+    ///
+    /// aarch64 twin of the x86 `emit_heap_array_lit`: an all-immediate
+    /// Array literal too long for the inline buffer gets its cell and
+    /// header inline and its body (the exact-size element buffer) from
+    /// `Value::fill_immediate_array_cell`, instead of `value_deep_copy`.
+    ///
+    fn emit_heap_array_lit(&mut self, v: Value, using_fpr: UsingFpr) -> bool {
+        if self.alloc_free_head_addr.is_null() || !v.heap_copyable_array() {
+            return false;
+        }
+        let slow = self.jit.label();
+        let cont = self.jit.label();
+        // x0 (= rax) <- the fresh cell, which is the call's first argument.
+        self.emit_alloc_cell(CellHeader::NewbornOf(v.id()), &slow);
+        let f = Value::fill_immediate_array_cell as *const () as u64;
+        self.emit_fpr_save(using_fpr, false);
+        monoasm_arm64!(&mut self.jit,
+            mov x1, (v.id());
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;            // result (the cell) in x0 (= rax)
+            ldr x30, [sp], #16;
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        monoasm_arm64!(&mut self.jit, b cont;);
+        self.jit.bind_label(slow);
+        self.deep_copy_lit_call(v, using_fpr);
+        self.jit.bind_label(cont);
         true
     }
 
@@ -3707,7 +3741,7 @@ impl Codegen {
 
     fn deep_copy_lit_call(&mut self, v: Value, using_fpr: UsingFpr) {
         let imm = v.id();
-        let f = Value::value_deep_copy as *const () as u64;
+        let f = v.literal_copy_fn() as *const () as u64;
         self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, (imm);

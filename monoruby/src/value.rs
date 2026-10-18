@@ -2780,6 +2780,53 @@ impl Value {
         self.try_rvalue()?.inline_copyable_array()
     }
 
+    ///
+    /// The runtime function a compiled literal instantiates this template
+    /// with: [`Self::immediate_array_literal_copy`] for an all-immediate
+    /// Array too long for the inline buffer, [`Self::value_deep_copy`]
+    /// for everything else.
+    ///
+    pub(crate) fn literal_copy_fn(&self) -> extern "C" fn(Value) -> Value {
+        if self.heap_copyable_array() {
+            Self::immediate_array_literal_copy
+        } else {
+            Self::value_deep_copy
+        }
+    }
+
+    ///
+    /// The per-evaluation copy of an all-immediate Array literal past the
+    /// inline capacity (`RValue::heap_copyable_array`, checked when the
+    /// code was compiled). `value_deep_copy` would get the same object:
+    /// an Array is not of an always-frozen class, neither the String CoW
+    /// conversion nor the chilled mark applies to it, and each element's
+    /// deep copy is the element itself — paid here as one exact-size copy
+    /// of the element words instead of a dispatch per element.
+    ///
+    pub(crate) extern "C" fn immediate_array_literal_copy(val: Value) -> Self {
+        val.rvalue().copy_immediate_array().pack()
+    }
+
+    /// Whether [`Self::immediate_array_literal_copy`] /
+    /// [`Self::fill_immediate_array_cell`] apply to this literal template.
+    pub(crate) fn heap_copyable_array(&self) -> bool {
+        self.try_rvalue().is_some_and(|rv| rv.heap_copyable_array())
+    }
+
+    ///
+    /// The JIT's form of [`Self::immediate_array_literal_copy`]: it has
+    /// already allocated `cell` inline (header written, as for a short
+    /// literal) and leaves only the body — the ivar table and the
+    /// exact-size element buffer — to this call, which returns the cell.
+    ///
+    pub(crate) extern "C" fn fill_immediate_array_cell(cell: *mut RValue, template: Value) -> Self {
+        // SAFETY: the compiled caller allocated `cell` immediately before
+        // this call, wrote its header and nothing else, and compiled the
+        // call only for a `heap_copyable_array` template.
+        unsafe { template.rvalue().init_immediate_array_copy(cell) };
+        Value::from_ptr(cell)
+    }
+
     pub(crate) fn inline_copyable_string(&self) -> Option<(Vec<u8>, Encoding, u8)> {
         self.try_rvalue()?.inline_copyable_string()
     }
