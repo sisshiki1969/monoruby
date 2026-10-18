@@ -437,9 +437,19 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
     /// *without* checking whether it already exists.
     fn push_entry(&mut self, hash: HashValue, key: K, value: V) {
         if self.entries.len() == self.entries.capacity() {
-            // Reserve our own capacity synced to the indices,
-            // rather than letting `Vec::push` just double it.
-            self.borrow_mut().reserve_entries(1);
+            if self.linear {
+                // A linear map has no indices capacity to sync to, so
+                // `reserve_entries` would grow it by exactly one entry —
+                // a reallocation on every insert up to `AR_MAX`. Size it
+                // for the whole linear range at once instead (CRuby's
+                // ar_table is always `AR_MAX` wide).
+                let additional = AR_MAX.saturating_sub(self.entries.len()).max(1);
+                self.entries.reserve_exact(additional);
+            } else {
+                // Reserve our own capacity synced to the indices,
+                // rather than letting `Vec::push` just double it.
+                self.borrow_mut().reserve_entries(1);
+            }
         }
         self.entries.push(Bucket { hash, key, value });
     }

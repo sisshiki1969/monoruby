@@ -1595,6 +1595,22 @@ fn linear_mode_small_maps() {
     large.insert(1, 1, &mut e, &mut g).unwrap();
     assert_eq!(large.get(&1, &mut e, &mut g).unwrap(), Some(&1));
 
+    // A growing linear map is sized for the whole linear range (AR_MAX =
+    // 8) by its first insert, not one entry per insert, and keeps that
+    // capacity until the ninth insert indexes it.
+    let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
+    map.insert(0, 0, &mut e, &mut g).unwrap();
+    assert_eq!(map.capacity(), 8);
+    for i in 1..8 {
+        map.insert(i, i, &mut e, &mut g).unwrap();
+    }
+    assert_eq!(map.capacity(), 8);
+    map.insert(8, 8, &mut e, &mut g).unwrap();
+    assert!(map.capacity() >= 9);
+    for i in 0..9 {
+        assert_eq!(map.get(&i, &mut e, &mut g).unwrap(), Some(&i));
+    }
+
     // clone of a linear map stays consistent.
     let mut map: RubyMap<i32, i32, E, G, ()> = RubyMap::new();
     map.insert(1, 10, &mut e, &mut g).unwrap();
