@@ -453,6 +453,19 @@ impl IdentId {
     }
 
     ///
+    /// `f` on the name, if it is UTF-8 with no recorded source encoding
+    /// (so its `Symbol#to_s` is US-ASCII or UTF-8), under one read of the
+    /// table and with no copy.
+    ///
+    pub(crate) fn with_utf8_name<R>(self, f: impl FnOnce(&str) -> R) -> Option<R> {
+        let table = ID.read().unwrap();
+        if table.enc_map.contains_key(&self) {
+            return None;
+        }
+        table.get_ident_name(self).as_str().map(f)
+    }
+
+    ///
     /// The recorded source encoding for this symbol, if any.
     ///
     pub(crate) fn symbol_encoding(self) -> Option<crate::value::Encoding> {

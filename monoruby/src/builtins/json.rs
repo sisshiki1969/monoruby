@@ -2156,8 +2156,15 @@ impl Generator {
                 "source sequence is illegal/malformed utf-8",
             ));
         }
-        let bytes = obj.as_rstring_inner().as_bytes();
         self.buf.push(b'"');
+        self.escaped(obj.as_rstring_inner().as_bytes());
+        self.buf.push(b'"');
+        Ok(())
+    }
+
+    /// UTF-8 `bytes` as the inside of a JSON string, escaped as the
+    /// config asks.
+    fn escaped(&mut self, bytes: &[u8]) {
         if self.config.ascii_only {
             convert_utf8_to_ascii_only_json(&mut self.buf, bytes, self.config.script_safe);
         } else if self.config.script_safe {
@@ -2165,8 +2172,19 @@ impl Generator {
         } else {
             convert_utf8_to_json(&mut self.buf, bytes);
         }
-        self.buf.push(b'"');
-        Ok(())
+    }
+
+    /// A Symbol key whose name is UTF-8 (the `rb_sym2str` String would
+    /// be US-ASCII or UTF-8, so valid as it is), written straight from
+    /// the symbol table; `false` for any other, which goes through its
+    /// String.
+    fn symbol_key(&mut self, sym: IdentId) -> bool {
+        sym.with_utf8_name(|name| {
+            self.buf.push(b'"');
+            self.escaped(name.as_bytes());
+            self.buf.push(b'"');
+        })
+        .is_some()
     }
 
     /// Once per Hash, at a String or Symbol key after a first key of
@@ -2231,8 +2249,10 @@ impl Generator {
         // and the pairs stay reachable if a `to_json` deletes one.
         let _iter_guard = hash.iter_guard();
         let pairs: Vec<(Value, Value)> = hash.iter().collect();
-        let roots: Vec<Value> = pairs.iter().flat_map(|(k, v)| [*k, *v]).collect();
-        vm.temp_push(Value::array_from_vec(roots));
+        for &(k, v) in &pairs {
+            vm.temp_push(k);
+            vm.temp_push(v);
+        }
 
         let mut first_key_type = None;
         let mut mixed_keys_encountered = false;
@@ -2261,21 +2281,24 @@ impl Generator {
                         if first_key_type != KeyType::String {
                             self.mixed_keys(vm, globals, obj, &mut mixed_keys_encountered)?;
                         }
-                        break if key.class() == STRING_CLASS {
+                        break Some(if key.class() == STRING_CLASS {
                             key
                         } else {
                             Self::key_to_s(vm, globals, key)?
-                        };
+                        });
                     }
                     KeyType::Symbol => {
                         if first_key_type != KeyType::Symbol {
                             self.mixed_keys(vm, globals, obj, &mut mixed_keys_encountered)?;
                         }
+                        if self.symbol_key(key.as_symbol()) {
+                            break None;
+                        }
                         let name = Value::string_from_inner(super::symbol::symbol_string_inner(
                             key.as_symbol(),
                         ));
                         vm.temp_push(name);
-                        break name;
+                        break Some(name);
                     }
                     KeyType::Other => {
                         if self.config.strict {
@@ -2293,18 +2316,20 @@ impl Generator {
                                 format!("{class} not allowed as object key in JSON"),
                             ));
                         }
-                        break Self::key_to_s(vm, globals, key)?;
+                        break Some(Self::key_to_s(vm, globals, key)?);
                     }
                 }
             };
 
-            let key_to_s =
-                self.ensure_valid_encoding(vm, globals, key_to_s, as_json_called, true)?;
+            if let Some(key_to_s) = key_to_s {
+                let key_to_s =
+                    self.ensure_valid_encoding(vm, globals, key_to_s, as_json_called, true)?;
 
-            if key_to_s.is_rstring_inner().is_some() && key_to_s.class() == STRING_CLASS {
-                self.raw_string(vm, globals, key_to_s)?;
-            } else {
-                self.generate(vm, globals, key_to_s)?;
+                if key_to_s.is_rstring_inner().is_some() && key_to_s.class() == STRING_CLASS {
+                    self.raw_string(vm, globals, key_to_s)?;
+                } else {
+                    self.generate(vm, globals, key_to_s)?;
+                }
             }
             self.append_opt(self.config.space_before);
             self.buf.push(b':');
@@ -2803,7 +2828,8 @@ fn state_allow_duplicate_key(
 // JSON::Ext::Generator::GeneratorMethods
 // ---------------------------------------------------------------------------
 
-/// `cState_partial_generate(cState_from_state_s(state), obj, func)`.
+/// `cState_partial_generate(cState_from_state_s(state), obj, func)`,
+/// without the State when there is none to read.
 fn to_json_with(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -2815,9 +2841,17 @@ fn to_json_with(
         // `obj` may be a `to_s` nothing else holds, and the State one
         // made here.
         vm.temp_push(obj);
-        let state = from_state(vm, globals, lfp.try_arg(0).unwrap_or_default())?;
-        vm.temp_push(state);
-        let config = GenConfig::read(&globals.store, state);
+        let opts = lfp.try_arg(0).unwrap_or_default();
+        let config = if opts.is_nil() {
+            // No State to read: generate with `state_init`'s config, as
+            // json 3's `to_json` does. A State is still made (from this
+            // config) if a user `to_json` down the tree asks for one.
+            GenConfig::default()
+        } else {
+            let state = from_state(vm, globals, opts)?;
+            vm.temp_push(state);
+            GenConfig::read(&globals.store, state)
+        };
         partial_generate(vm, globals, config, obj, func, None)
     })
 }

@@ -120,6 +120,29 @@ fn the_generator_calls_to_json_and_to_s() {
     "##);
 }
 
+/// `to_json` with no State generates with the default config and makes
+/// a State only for a user `to_json` down the tree; a Symbol key is
+/// written from its name, escaped as the options ask, and one with a
+/// non-UTF-8 name goes through its String.
+#[test]
+fn to_json_without_a_state_and_symbol_keys() {
+    run(r##"
+        class Baz; def to_json(state = :none) = [state.class.name, state.depth, state.indent].to_json; end
+        h = { hello: "w\u00f6rld", "s" => 1, :"\u00fc\u2028<" => [1, {a: nil}], :"q\"\\" => 2.5 }
+        res = []
+        res << t.() { [h.to_json, h.to_json(nil), JSON.generate(h), JSON.generate(h, ascii_only: true), JSON.generate(h, script_safe: true)] }
+        res << t.() { [h.to_json(indent: " "), JSON.pretty_generate(h)] }
+        res << t.() { [{x: Baz.new}.to_json, [[Baz.new]].to_json, {x: [Baz.new]}.to_json(nil)] }
+        res << t.() { JSON.generate({"k".encode("UTF-16LE").to_sym => 1}) }
+        res << t.() { JSON.generate({"k".b.to_sym => 1, "\xff".b.to_sym => 2}) }
+        res << t.() { [{1 => 2, a: 3, "a" => 4}.to_json, {a: 1, "b" => 2}.to_json] }
+        class SubStr < String; end
+        class K; def to_s = SubStr.new("k\u00e9"); end
+        res << t.() { [JSON.generate({K.new => 1}), {K.new => [2]}.to_json] }
+        res
+    "##);
+}
+
 /// A Float the way json's `fpconv_dtoa` writes it — Grisu2 digits,
 /// `1e+20`, `0.00001` — and NaN or an infinity only under `allow_nan:`.
 #[test]
