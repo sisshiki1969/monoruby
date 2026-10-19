@@ -136,6 +136,9 @@ fn to_json_without_a_state_and_symbol_keys() {
         res << t.() { JSON.generate({"k".encode("UTF-16LE").to_sym => 1}) }
         res << t.() { JSON.generate({"k".b.to_sym => 1, "\xff".b.to_sym => 2}) }
         res << t.() { [{1 => 2, a: 3, "a" => 4}.to_json, {a: 1, "b" => 2}.to_json] }
+        class SubStr < String; end
+        class K; def to_s = SubStr.new("k\u00e9"); end
+        res << t.() { [JSON.generate({K.new => 1}), {K.new => [2]}.to_json] }
         res
     "##);
 }
