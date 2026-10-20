@@ -131,7 +131,6 @@ impl JitModule {
         let entry_panic = jit.label();
         let exec_gc = jit.label();
         let f64_to_val = jit.label();
-        let u64_to_val = jit.label();
         let stack_overflow = jit.label();
         let write_barrier = jit.label();
         let ivar_ty_observe = jit.label();
@@ -157,7 +156,6 @@ impl JitModule {
             entry_raise,
             exec_gc,
             f64_to_val,
-            u64_to_val,
             vm_stack_overflow: stack_overflow,
             entry_panic,
             write_barrier,

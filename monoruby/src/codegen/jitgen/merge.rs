@@ -150,7 +150,6 @@ impl<'a> JitContext<'a> {
             let mut target = incoming;
             let mut hoist_version_guard = false;
             let mut hoisted_guards = vec![];
-            let mut adopted_u64 = vec![];
             if let Some((liveness, backedge)) = self.loop_info(bbid) {
                 let backedge_for_floats = backedge.as_ref().map(|b| b.slot_state().clone());
                 if let Some(backedge) = backedge {
@@ -324,50 +323,6 @@ impl<'a> JitContext<'a> {
                         target.keep_backedge_floats(adopt, adopt_sf, adopt_deferred, promotable);
                     }
                 }
-
-                // The raw-u64 counterpart (U64 mode, stage 2 / PR 3): a
-                // loop-carried local the back-edge fixpoint carries raw
-                // (`U` / `Su`) re-adopts that placement at the head, so
-                // `x ^= (x << 13) & M` keeps `x` unboxed around the loop
-                // instead of boxing it at the back edge and unboxing it at
-                // the body's first use (and, with the head boxed, leaving
-                // the `<<` on the boxed, overflowing form). The forward
-                // entries unbox once (`gen_bridges_for_branches`), under a
-                // counter-gated recompile exit that switches the adoption
-                // off in this iseq when the entry value is outside
-                // [0, 2^64). Placement is the whole signal, as for the
-                // fixpoint's `F` arm above; inline entries only, like the
-                // hoisted guards.
-                if !self.loop_u64_disabled.contains(&self.iseq_id())
-                    && entries
-                        .iter()
-                        .all(|e| !matches!(e.mode, BranchMode::Side { .. }))
-                    && let Some(be) = &backedge_for_floats
-                {
-                    let block_param = self.iseq().block_param_slot();
-                    let local_num = self.local_num();
-                    let adopt = |i: SlotId| {
-                        if i.0 == 0
-                            || i.0 as usize > local_num
-                            || Some(i) == block_param
-                            || !liveness.is_used(i)
-                        {
-                            return None;
-                        }
-                        match be.mode(i) {
-                            LinkMode::U(_) => Some(true),
-                            LinkMode::Su(_) => Some(false),
-                            _ => None,
-                        }
-                    };
-                    let u64_bridgeable = |m: LinkMode| {
-                        matches!(m, LinkMode::S(_) | LinkMode::U(_) | LinkMode::Su(_))
-                            || matches!(m, LinkMode::C(v) if v.try_u64().is_some())
-                    };
-                    let promotable =
-                        |i| entries.iter().all(|e| u64_bridgeable(e.state.mode(i)));
-                    adopted_u64 = target.keep_backedge_u64(adopt, promotable);
-                }
             }
             #[cfg(feature = "jit-debug")]
             eprintln!("  target:  {:?}\n", target.slot_state());
@@ -402,7 +357,6 @@ impl<'a> JitContext<'a> {
                 &outer_inits,
                 hoist_version_guard,
                 &hoisted_guards,
-                &adopted_u64,
             );
             self.new_backedge(target.frames_cloned(), bbid);
 
@@ -420,7 +374,6 @@ impl<'a> JitContext<'a> {
                 pc,
                 &[],
                 false,
-                &[],
                 &[],
             );
 
@@ -448,7 +401,6 @@ impl<'a> JitContext<'a> {
         outer_inits: &[(Vec<SpecializedId>, usize, SlotId, OuterFprHome)],
         hoist_version_guard: bool,
         hoisted_guards: &[(SlotId, Guarded)],
-        adopted_u64: &[(SlotId, bool)],
     ) {
         let target = target.frames_cloned();
         #[cfg(feature = "jit-debug")]
@@ -482,25 +434,6 @@ impl<'a> JitContext<'a> {
                 );
                 state.load(&mut ir, slot, GP::Rdi);
                 state.guard_class(&mut ir, slot, GP::Rdi, hoist_cached_class(g), deopt);
-            }
-            // Loop-carried raw-u64 adoption (`keep_backedge_u64`): a boxed
-            // entry value is unboxed once, here, under the range guard. A
-            // miss resumes at the loop head's first body instruction with
-            // this entry's write-back and, after a few, recompiles the unit
-            // with the adoption off in this iseq. A raw or constant entry
-            // needs nothing: `gen_bridge_all` moves it into the head's
-            // register.
-            for &(slot, to_u) in adopted_u64 {
-                if !matches!(state.mode(slot), LinkMode::S(_)) {
-                    continue;
-                }
-                let deopt = ir.new_recompile_deopt_with_pc(
-                    &state,
-                    pc + 1,
-                    RecompileReason::LoopU64AdoptFailed,
-                    self.loop_hoist_recompile_target(),
-                );
-                state.unbox_u64_entry(&mut ir, slot, to_u, deopt);
             }
             // Stage-C loop adoption: establish each adopted outer view on
             // this entry edge — load the owner's boxed slot through the

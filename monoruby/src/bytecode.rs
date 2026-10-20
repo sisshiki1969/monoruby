@@ -304,11 +304,6 @@ pub const OPCODE_SUB_POLY: u8 = 1;
 /// `opcode_sub` bit: a fixnum-compiled Integer arithmetic site took its
 /// arithmetic exit (set by the `IntegerOverflow` recompile exit).
 pub const OPCODE_SUB_OVERFLOW: u8 = 2;
-/// `opcode_sub` bit: a site compiled in the JIT's unboxed u64 form
-/// (`LinkMode::U`) left through its unbox or range guard (set by the
-/// `U64GuardFailed` recompile exit). The recompile never adopts the u64
-/// form here again.
-pub const OPCODE_SUB_NOU64: u8 = 4;
 
 impl std::ops::Sub<isize> for BytecodePtr {
     type Output = BytecodePtr;
@@ -386,12 +381,6 @@ impl BytecodePtr {
     /// arithmetic exit (see `RecompileReason::IntegerOverflow`).
     pub fn integer_overflowed(&self) -> bool {
         self.opcode_sub() & OPCODE_SUB_OVERFLOW != 0
-    }
-
-    /// A u64-compiled Integer site here left through its unbox or range
-    /// guard (see `RecompileReason::U64GuardFailed`).
-    pub fn integer_nou64(&self) -> bool {
-        self.opcode_sub() & OPCODE_SUB_NOU64 != 0
     }
 
     pub fn as_ptr(&self) -> *mut Bytecode {

@@ -295,185 +295,6 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// The raw-u64 form to compile this site in, if any (see
-    /// `compile_binary` step 1): the operator must be one the u64 ops cover
-    /// (`+ - * & | ^ << >>` and the comparisons), both operands must be
-    /// Integers as far as anyone knows (a raw u64, a constant in
-    /// [0, 2^64), or a slot the state or the profile classes `Integer` /
-    /// `BIGNUM`), and one of them must give the form a reason: a raw
-    /// operand, a constant at or above 2^62, a `BIGNUM` in the profile, or
-    /// the site's overflow stamp.
-    ///
-    fn u64_form(
-        &self,
-        state: &AbstractState,
-        binop: BinaryOp,
-        lhs: SlotId,
-        rhs: SlotId,
-        lhs_class: Option<CachedClass>,
-        rhs_class: Option<CachedClass>,
-        overflowed: bool,
-    ) -> Option<BinaryOp> {
-        match binop {
-            BinaryOp::Arith(
-                BinOpK::Add
-                | BinOpK::Sub
-                | BinOpK::Mul
-                | BinOpK::BitAnd
-                | BinOpK::BitOr
-                | BinOpK::BitXor
-                | BinOpK::Shl
-                | BinOpK::Shr,
-            )
-            | BinaryOp::Cmp(_) => {}
-            BinaryOp::Arith(_) => return None,
-        }
-        let integer_like = |slot: SlotId, class: Option<CachedClass>| {
-            if state.is_u64_resident(slot) {
-                return true;
-            }
-            if let LinkMode::C(v) = state.mode(slot) {
-                return v.try_u64().is_some();
-            }
-            class.is_some_and(|c| c == CachedClass::INTEGER || c.is(BIGNUM_CLASS))
-        };
-        if !integer_like(lhs, lhs_class) || !integer_like(rhs, rhs_class) {
-            return None;
-        }
-        let wide_literal = |slot: SlotId| state.is_u64_literal(slot).is_some_and(|v| v >= 1 << 62);
-        let reason = state.is_u64_resident(lhs)
-            || state.is_u64_resident(rhs)
-            || wide_literal(lhs)
-            || wide_literal(rhs)
-            || lhs_class.is_some_and(|c| c.is(BIGNUM_CLASS))
-            || rhs_class.is_some_and(|c| c.is(BIGNUM_CLASS))
-            || (overflowed && matches!(binop, BinaryOp::Arith(_)));
-        reason.then_some(binop)
-    }
-
-    ///
-    /// Does the raw-u64 result the arithmetic at *bc_pos* writes to *dst*
-    /// flow only into an `&` with a mask in [0, 2^64)? Then the arithmetic
-    /// may wrap: reduction mod 2^64 is a ring homomorphism and the bit ops
-    /// are bitwise, so `(X op Y) & c == ((X op Y) mod 2^64) & c` for every
-    /// chain of `+ - * << & | ^` whose other operands are Integers, and the
-    /// mask keeps only those low 64 bits. The walk follows the value through
-    /// such a chain (the design doc's §2.7, one or more stages) to the `&`,
-    /// within the basic block.
-    ///
-    /// What makes this sound at an exit in between: every chain operand
-    /// must be an Integer at run time, or the interpreter, resuming on the
-    /// wrapped intermediate, would observe it through a Float conversion.
-    /// So an operand qualifies only when it is proven: a literal or folded
-    /// constant in [0, 2^64), or a `U` / `Su` resident (whose unbox guard
-    /// already passed), untouched up to its use. And the intermediates must
-    /// be temps nothing else reads, which bytecodegen's expression temps
-    /// are: each is consumed once, by the next operator in the chain.
-    ///
-    fn mask_sink_after(&self, state: &AbstractState, bc_pos: BcIndex, dst: Option<SlotId>) -> bool {
-        let Some(mut cur) = dst else {
-            return false;
-        };
-        let is_temp = |slot: SlotId| slot.0 as usize > self.local_num();
-        if !is_temp(cur) {
-            return false;
-        }
-        let iseq = self.iseq();
-        let len = iseq.bytecode().len();
-        // Slots proven in [0, 2^64) by a literal / folded constant seen on
-        // the walk, and slots written on the walk (a resident's proof no
-        // longer holds for them).
-        let mut proven: Vec<SlotId> = vec![];
-        let mut written: Vec<SlotId> = vec![];
-        let mut pos: BcIndex = bc_pos + 1;
-        for _ in 0..8 {
-            if pos.to_usize() >= len || iseq.bb_info.is_bb_head(pos).is_some() {
-                return false;
-            }
-            match TraceIr::from_pc(iseq.get_pc(pos), self.store) {
-                TraceIr::Literal(slot, v) => {
-                    if slot == cur {
-                        return false;
-                    }
-                    proven.retain(|s| *s != slot);
-                    written.push(slot);
-                    if v.try_u64().is_some() {
-                        proven.push(slot);
-                    }
-                }
-                TraceIr::LoadConst(slot, id) => {
-                    if slot == cur {
-                        return false;
-                    }
-                    proven.retain(|s| *s != slot);
-                    written.push(slot);
-                    // Folded only at the compile-time const version (see
-                    // `load_constant`; anything else recompiles, discarding
-                    // this code with it).
-                    if self.store[id].cache.as_ref().is_some_and(|c| {
-                        c.version as u64 == self.const_version() && c.value.try_u64().is_some()
-                    }) {
-                        proven.push(slot);
-                    }
-                }
-                TraceIr::BinOp {
-                    kind,
-                    dst: d,
-                    lhs,
-                    rhs,
-                    ..
-                } => {
-                    if lhs != cur && rhs != cur {
-                        if let Some(d) = d {
-                            proven.retain(|s| *s != d);
-                            written.push(d);
-                        }
-                    } else {
-                        let other = if lhs == cur { rhs } else { lhs };
-                        let other_ok = other == cur
-                            || proven.contains(&other)
-                            || (state.is_u64_resident(other) && !written.contains(&other));
-                        if !other_ok || !self.basic_op_assumable(CachedClass::INTEGER, kind.into()) {
-                            return false;
-                        }
-                        match kind {
-                            BinOpK::BitAnd => return true,
-                            BinOpK::Add
-                            | BinOpK::Sub
-                            | BinOpK::Mul
-                            | BinOpK::BitOr
-                            | BinOpK::BitXor => {}
-                            // The low bits of a left shift depend only on
-                            // the low bits of the value; a count does not.
-                            BinOpK::Shl if lhs == cur => {}
-                            _ => return false,
-                        }
-                        let Some(d) = d else {
-                            return false;
-                        };
-                        if !is_temp(d) {
-                            return false;
-                        }
-                        proven.retain(|s| *s != d);
-                        written.push(d);
-                        cur = d;
-                    }
-                }
-                other => {
-                    if other.read_slots(self.store).contains(&cur) {
-                        return false;
-                    }
-                    // Anything else may write a slot the proofs rely on:
-                    // stop here.
-                    return false;
-                }
-            }
-            pos = pos + 1;
-        }
-        false
-    }
-
-    ///
     /// May [`AsmIr::opt_eq_cmp`]'s inline fast path be emitted for *kind*?
     ///
     /// That fast path answers **bit equality** whenever neither operand is a
@@ -1017,9 +838,6 @@ impl<'a> JitContext<'a> {
         // exit (`RecompileReason::IntegerOverflow`): give it the two-arm
         // form whatever the profile says. Arithmetic sites only.
         overflowed: bool,
-        // The site left a u64-compiled body through its guard
-        // (`RecompileReason::U64GuardFailed`): the u64 form is barred.
-        nou64: bool,
         bc_pos: BcIndex,
         // The fused comparison (opcodes 150–156, followed by the `CondBr`
         // that consumes it).
@@ -1065,75 +883,6 @@ impl<'a> JitContext<'a> {
         }
 
         let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
-
-        // ---- 1. The raw-u64 form (`LinkMode::U`): an Integer site that
-        // works in [0, 2^64) — a bit board, a hash, a mask — computes on
-        // unboxed u64s with no fixnum / Bignum boundary to cross. Adopted
-        // only where the evidence says the values leave the fixnum range:
-        // an operand already raw, a bignum literal, a `BIGNUM` in the
-        // profile, or the overflow stamp. Every exit of the form — the
-        // unbox guard (a negative, a non-Integer, 2^64 or more) and a
-        // checked result — stamps the site `NOU64` and recompiles, so a
-        // site this does not fit falls back to the forms below for good.
-        //
-        // The `NOU64` stamp records a failed exit, so it bars nothing at a
-        // site where no exit can fire: both operands already raw (`U` /
-        // `Su`) or u64 literals, so there is no unbox guard, and an op with
-        // no result check — a bit op, `>>`, a compare, or a `+ - * <<` the
-        // mask fusion makes wrapping. Without this a site stamped while its
-        // input was still boxed (the `& M` after a boxed, overflowing `<<`,
-        // before the loop head adopted the carried `x` raw) would box the
-        // raw chain it now sits in, for good.
-        let u64_infallible = nou64 && {
-            let raw = |s| state.is_u64_resident(s) || state.is_u64_literal(s).is_some();
-            raw(lhs)
-                && raw(rhs)
-                && match binop {
-                    BinaryOp::Arith(
-                        BinOpK::BitAnd | BinOpK::BitOr | BinOpK::BitXor | BinOpK::Shr,
-                    ) => true,
-                    BinaryOp::Arith(BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Shl) => {
-                        self.mask_sink_after(state, bc_pos, dst)
-                    }
-                    BinaryOp::Arith(_) => false,
-                    BinaryOp::Cmp(_) => true,
-                }
-        };
-        if (!nou64 || u64_infallible)
-            && let Some(u64_form) = self.u64_form(state, binop, lhs, rhs, lhs_class, rhs_class, overflowed)
-        {
-            let op = IdentId::from(binop);
-            if self.basic_op_assumable(CachedClass::INTEGER, op) {
-                self.record_bop_dep(CachedClass::INTEGER, op);
-                if let Some(target) = self.recv_miss_recompile_target() {
-                    ir.recompile_deopts(RecompileReason::U64GuardFailed, target);
-                }
-                match u64_form {
-                    BinaryOp::Arith(kind) => {
-                        // `(x op y) & c`: a result consumed only by a mask
-                        // in [0, 2^64) needs no range check (`mask_sink_after`).
-                        let checked = !(matches!(
-                            kind,
-                            BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Shl
-                        ) && self.mask_sink_after(state, bc_pos, dst));
-                        state.binop_u64(ir, kind, dst, lhs, rhs, checked)
-                    }
-                    BinaryOp::Cmp(kind) => {
-                        if let Some(slot) = self.wants_cond_flags(dst) {
-                            let flags = state.gen_cmp_u64_flags(ir, kind, slot, lhs, rhs);
-                            self.set_cond_flags(slot, flags);
-                        } else {
-                            state.gen_cmp_u64(ir, kind, lhs, rhs);
-                            state.def_rax2acc(ir, dst);
-                        }
-                    }
-                }
-                ir.end_deopt_recompile();
-                // Pure arithmetic, as the Integer inline lowerings (4).
-                self.restore_unfrozen(dst);
-                return Ok(BinaryLowering::Emitted);
-            }
-        }
 
         // ---- 2. A site the VM saw comparing more than one lhs class, whose
         // lhs the abstract state cannot pin down: dispatch instead of
@@ -1535,7 +1284,6 @@ impl<'a> JitContext<'a> {
         ic: Option<(CachedClass, CachedClass)>,
         polymorphic: bool,
         overflowed: bool,
-        nou64: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         match self.compile_binary(
@@ -1548,7 +1296,6 @@ impl<'a> JitContext<'a> {
             ic,
             polymorphic,
             overflowed,
-            nou64,
             bc_pos,
             false,
         )? {
@@ -1575,7 +1322,6 @@ impl<'a> JitContext<'a> {
         // case/when semantics for `===`, and the inline compare may answer
         // in the condition flags.
         fused: bool,
-        nou64: bool,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
         match self.compile_binary(
@@ -1588,7 +1334,6 @@ impl<'a> JitContext<'a> {
             ic,
             polymorphic,
             false,
-            nou64,
             bc_pos,
             fused,
         )? {

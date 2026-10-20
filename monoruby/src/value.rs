@@ -1110,19 +1110,6 @@ impl Value {
         Self::from_i128(num as i128)
     }
 
-    /// The Integer as a `u64`: a non-negative fixnum or a Bignum in
-    /// [2^62, 2^64). `None` otherwise — the range the JIT's raw-u64 mode
-    /// (`LinkMode::U`) holds.
-    pub fn try_u64(&self) -> Option<u64> {
-        u64::try_from(self.as_i128()?).ok()
-    }
-
-    /// `integer_from_u64` for the JIT's `u64_to_val` box stub, which only
-    /// reaches it for a value at or above 2^62 (a fixnum is built inline).
-    pub extern "C" fn integer_from_u64_c(num: u64) -> Value {
-        Self::from_i128(num as i128)
-    }
-
     ///
     /// The Integer *num*: a fixnum when it fits, else a Bignum holding the
     /// `i128` inline (no `BigInt` is built — see `rvalue::BignumInner`).
