@@ -3,7 +3,6 @@ use crate::codegen::jitgen::state::{Guarded, LinkMode};
 use super::*;
 
 pub(in crate::codegen) use method_call::RecvMissMode;
-pub(in crate::codegen) use loop_entry::{LiveTypes, LoopPredictions, LoopSeedInput, LoopSeedRecord, LoopSeeded};
 
 mod binary_op;
 mod dispatch;
@@ -14,7 +13,6 @@ pub(in crate::codegen::jitgen) mod escape;
 mod frameless_call;
 mod index;
 mod loop_analysis;
-mod loop_entry;
 mod method_call;
 mod pic;
 mod variables;
@@ -57,7 +55,7 @@ impl<'a> JitContext<'a> {
         // turned the specialized dynvar addressing — and with it the
         // home-read machinery — back into generic chain walks, +22% on
         // the times-loop shapes until the restoration).
-        let mut state = match entry_chain {
+        let state = match entry_chain {
             Some(chain) => AbstractState::with_chain(&self, chain),
             None => AbstractState::new(&self),
         };
@@ -95,35 +93,6 @@ impl<'a> JitContext<'a> {
             // `stack_offset - base_stack_offset`.
             ir.loop_jit_rsp_bump(LoopRspOffset::Hint(self.current_frame_id()));
 
-            // Loop-entry type seeding (`compile/loop_entry.rs`): guard the
-            // slot types the method's code before the loop predicts, so the
-            // loop head starts from them instead of `S(Value)`. A miss
-            // resumes after the `LoopStart`, like the `self` guard above,
-            // and recompiles without the slots that missed.
-            let (seeds, predictions) = self.loop_entry_seeds(bb_begin);
-            #[cfg(feature = "jit-log")]
-            if !seeds.is_empty() {
-                eprintln!("    loop entry seeds: {seeds:?}");
-            }
-            if !seeds.is_empty() {
-                let deopt = ir.new_recompile_deopt_with_pc(
-                    &state,
-                    pc + 1,
-                    RecompileReason::LoopEntryGuardFailed,
-                    RecompileTarget::Whole(Some(pc)),
-                );
-                for &(slot, g) in &seeds {
-                    let class = match g {
-                        Guarded::Fixnum => CachedClass::INTEGER,
-                        Guarded::Float => CachedClass::FLOAT,
-                        Guarded::Class(class) => CachedClass::from_class(class),
-                        Guarded::Value | Guarded::NilOr(_) => unreachable!(),
-                    };
-                    ir.stack2reg(slot, GP::Rdi);
-                    state.guard_class(&mut ir, slot, GP::Rdi, class, deopt);
-                }
-            }
-            self.loop_seeded = LoopSeeded { seeds, predictions };
         };
 
         //assert!(self.ir.is_empty());

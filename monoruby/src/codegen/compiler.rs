@@ -634,10 +634,7 @@ impl Codegen {
         let self_class = lfp.self_val().class();
         let func_id = lfp.func_id();
         let iseq_id = globals.store[func_id].as_iseq();
-        // The frame is entering the loop right now: what it holds is what
-        // the entry guards will see (`jitgen/compile/loop_entry.rs`).
-        let live = jitgen::LiveTypes::new(lfp, globals.store[iseq_id].local_num() + 1);
-        self.compile_partial_by_id(globals, iseq_id, self_class, pc, is_recompile, Some(live))
+        self.compile_partial_by_id(globals, iseq_id, self_class, pc, is_recompile)
     }
 
     fn compile_partial_by_id(
@@ -647,7 +644,6 @@ impl Codegen {
         self_class: ClassId,
         pc: BytecodePtr,
         is_recompile: Option<RecompileReason>,
-        live: Option<jitgen::LiveTypes>,
     ) -> Option<()> {
         let entry_label = self.jit.label();
         let class_version = self.jit_class_version();
@@ -661,12 +657,6 @@ impl Codegen {
             }
             self.note_loop_hoist_miss(iseq_id, reason);
         }
-        let record = self.loop_seeds.entry((iseq_id, index)).or_default();
-        if is_recompile == Some(RecompileReason::LoopEntryGuardFailed) {
-            record.note_entry_miss(live.as_ref());
-        }
-        let predictions = self.loop_predictions.get(&(iseq_id, self_class)).cloned();
-        self.loop_seed_input = Some(record.input(live, predictions));
         #[cfg(feature = "jit-log")]
         if let Some(reason) = is_recompile {
             crate::codegen::jit_stats::bump(match reason {
@@ -691,13 +681,6 @@ impl Codegen {
         ) {
             let codeptr = self.jit.get_label_address(&entry_label);
             pc.write2(codeptr.as_ptr() as u64);
-            let mut seeded = std::mem::take(&mut self.loop_seed_output);
-            if let Some(predictions) = seeded.take_predictions() {
-                self.loop_predictions.insert((iseq_id, self_class), predictions);
-            }
-            if let Some(record) = self.loop_seeds.get_mut(&(iseq_id, index)) {
-                record.set_seeded(seeded);
-            }
             // Record the unit's salvage info so a later class-version guard
             // failure can re-validate and patch instead of recompiling.
             globals.store.note_jit_iseq(iseq_id);
@@ -746,7 +729,7 @@ impl Codegen {
             // Loop root: recompile from the loop head and re-point the
             // loop-entry word at it, exactly as a plain loop recompile does.
             Some(pc) => {
-                self.compile_partial_by_id(globals, iseq_id, self_class, pc, Some(reason), None)
+                self.compile_partial_by_id(globals, iseq_id, self_class, pc, Some(reason))
             }
         }
     }
