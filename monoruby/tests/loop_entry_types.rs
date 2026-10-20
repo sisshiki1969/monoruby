@@ -1,11 +1,11 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// Loop-entry type seeding (`codegen/jitgen/compile/loop_entry.rs`): a loop
-// JIT guards the slot types the method's code before the loop predicts.
-// These pin the predictions that hold, the ones that miss (the entry guard
-// resumes the interpreter, and the recompile drops the slot), and the
-// shapes the prefix walk has to get through, against CRuby.
+// Loop JIT entries over typed and retyped locals: the types the method's
+// code before a loop gave its locals, ones that change between entries, and
+// the shapes (nested loops, blocks, optional and keyword arguments, the top
+// level) a loop compile has to get through, against CRuby. Kept from the
+// removed loop-entry type seeding (#1720), whose guards they exercised.
 
 #[test]
 fn loop_entry_seed_typed_locals() {

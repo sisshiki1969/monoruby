@@ -955,17 +955,6 @@ pub struct Codegen {
     /// the stub back in front of a method whose compiled code a basic-op
     /// redefinition evicted, so the method warms up and compiles again.
     jit_stubs: HashMap<u64, JitStub>,
-    /// Loop-entry type seeding, per loop (iseq, loop head): what each
-    /// loop's current compile guards and which slots earlier entry-guard
-    /// misses vetoed (`jitgen/compile/loop_entry.rs`).
-    loop_seeds: HashMap<(ISeqId, BcIndex), jitgen::LoopSeedRecord>,
-    /// The loop-entry predictions of each iseq, per `self` class: one
-    /// walk serves every loop of the method.
-    loop_predictions: HashMap<(ISeqId, ClassId), std::rc::Rc<jitgen::LoopPredictions>>,
-    /// Handed from `compile_partial_by_id` to the loop compile it starts.
-    loop_seed_input: Option<jitgen::LoopSeedInput>,
-    /// Handed back by that compile: the slots it guarded.
-    loop_seed_output: jitgen::LoopSeeded,
     /// Iseqs whose loops no longer hoist type guards onto their entries:
     /// a hoisted guard of theirs missed often enough to recompile
     /// (`RecompileReason::LoopHoistGuardFailed`, `jitgen/merge.rs`).
@@ -1456,10 +1445,6 @@ impl Codegen {
             asm_return_addr_table: HashMap::default(),
             recompile_counts: HashMap::default(),
             jit_stubs: HashMap::default(),
-            loop_seeds: HashMap::default(),
-            loop_predictions: HashMap::default(),
-            loop_seed_input: None,
-            loop_seed_output: Default::default(),
             loop_hoist_disabled: Default::default(),
             loop_u64_disabled: Default::default(),
             chain_deopt_table: HashMap::default(),

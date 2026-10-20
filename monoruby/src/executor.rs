@@ -5828,10 +5828,6 @@ pub enum RecompileReason {
     /// while a suspect site's VM cache is still stale, and only recompiles
     /// when a fold really changed. Block-style roots salvage only.
     ConstVersionGuardFailed = 5,
-    /// A loop JIT's entry guard on a slot type predicted from the code
-    /// before the loop (`codegen/jitgen/compile/loop_entry.rs`) missed.
-    /// The recompile drops the slots that missed from the seeding.
-    LoopEntryGuardFailed = 6,
     /// A type guard hoisted out of a loop onto the loop's forward entries
     /// (`codegen/jitgen/merge.rs`, loop-invariant guard hoisting) missed.
     /// The recompile stops hoisting in the iseq that owns the loop.
