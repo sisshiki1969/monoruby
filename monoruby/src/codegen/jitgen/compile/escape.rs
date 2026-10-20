@@ -959,6 +959,12 @@ impl<'a> JitContext<'a> {
                 }
                 state.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
+            VirtualSrc::Literal(val) if val.class().is_always_frozen() => {
+                // A `lo..hi` literal (`FrozenLiteral`) is the object itself
+                // at every evaluation (`value_deep_copy` returns it as is):
+                // load it as the plain literal is, with no helper call.
+                state.def_lit2gp(ir, dst, val);
+            }
             VirtualSrc::Literal(val) => {
                 let using_fpr = state.get_using_fpr(ir);
                 ir.deep_copy_lit(using_fpr, val);

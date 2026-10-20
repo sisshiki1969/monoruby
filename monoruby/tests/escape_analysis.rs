@@ -2429,3 +2429,23 @@ fn array_index_deopt_on_a_non_fixnum_index() {
         "#,
     );
 }
+
+#[test]
+fn range_literal_handed_to_a_non_consuming_callee() {
+    // A constant `lo..hi` literal passed where nothing consumes it elided
+    // (`Array#[]=`, `Array#[]`, a Hash key) is loaded as the literal
+    // itself, the one object every evaluation of the site yields.
+    run_test(
+        r#"
+        def f(q, p)
+          q[0..-1] = p
+          h = {}
+          h[1..3] = q[1..2]
+          [q, h, (1..3).equal?(h.keys[0])]
+        end
+        r = []
+        30.times { |i| r << f([0, 1, 2], [i, i + 1, i + 2]) }
+        r.last(2)
+        "#,
+    );
+}
