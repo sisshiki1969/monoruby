@@ -2449,3 +2449,39 @@ fn range_literal_handed_to_a_non_consuming_callee() {
         "#,
     );
 }
+
+#[test]
+fn expand_of_an_array_the_method_returns() {
+    // The value of a multiple assignment is its right-hand side, so an
+    // `ExpandArray` that ends a method reads the Array the method then
+    // returns: it may not consume the elided literal (this panicked in
+    // `LinkMode::as_return`). The statement form still expands it elided.
+    run_test_with_prelude(
+        r#"
+        r = []
+        30.times { |i| r << [f1(i, 2), f2(i, 3), f3(i, 4), f4(i, 5), o.set(i, 6)] }
+        r.last(2)
+        "#,
+        r#"
+        def f1(a, b)
+          x, y, = a, b
+        end
+        def f2(a, b)
+          @a, @b = [a, b]
+        end
+        def f3(a, b)
+          @a, @b, = a, b
+        end
+        def f4(a, b)
+          x, y, = a, b
+          x + y
+        end
+        class C
+          def set(a, b)
+            @a, @b, = a, b
+          end
+        end
+        def o = (@o ||= C.new)
+        "#,
+    );
+}

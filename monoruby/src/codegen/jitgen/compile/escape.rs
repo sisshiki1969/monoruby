@@ -716,13 +716,19 @@ impl<'a> JitContext<'a> {
                 && (self.return_virtual_in_caller(src).is_some() || self.return_discarded());
         }
         // `a, b = ary` ([`Self::consume_virtual_expand`]): the elements go
-        // straight to their targets.
+        // straight to their targets. Only when nothing reads the Array
+        // afterwards: the value of a multiple assignment is its right-hand
+        // side, so `@a, @b = a, b` as a method's last expression returns
+        // the very slot the expansion reads.
         if let TraceIr::ExpandArray {
             src: ary,
             dst: (_, _, rest_pos),
         } = trace_ir
         {
-            return *ary == slot && rest_pos.is_none() && src.class_id() == ARRAY_CLASS;
+            return *ary == slot
+                && rest_pos.is_none()
+                && src.class_id() == ARRAY_CLASS
+                && self.dead_after(bc_pos, slot);
         }
         // The prologue's "`nil` means an empty Hash" check of a `**kwrest`
         // handed over elided: nothing to do, the object stands for the

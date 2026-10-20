@@ -4117,6 +4117,7 @@ c0ddaa891fb7a63e6690683fe1ec0f3d	[["a"], ["abc"], ["1"]]	[/\\p{Word}/.match("a")
 c0f28d6a8eec92ebb24ada71d093ae08	[:from_proc, :nope]	class FwdH\n          def check = block_given? ? yield : :nope\n        e
 c0f4d9f562f9dd0bd39e836e62a9886e	[:rescued]	def boom; raise "no"; end\n            def test; [1].map { begin; bo
 c0fa4dd933e73be538acef4681119d8c	[[nil, true], [nil, true], [nil, true], [nil, true], [nil, true], [nil, true], [1, "b"], [1, "b"], [nil, "seed"], [nil, "seed"], [nil, "seed"], [nil, nil, nil], [0, 0, 0], [0, 0, 0]]	__a = [];__a << ("seed" =~ /see(d)/; ["abc".index(/b/, -9), $~.nil?]);__a << ("s
+c0fc5c9d36ed7b1d3ff8613fea6eecd0	[[[28, 2], [28, 3], [28, 4], 33, [28, 6]], [[29, 2], [29, 3], [29, 4], 34, [29, 6]]]	def f1(a, b)\n          x, y, = a, b\n        end\n        def f2(a, b)\n  
 c1115c20142acf811917f45366cfe9fe	[:intercepted, true]	module PcMiss\n              X = 1\n              private_constant :X
 c156933e6602c868faaa2ed9b64aa3db	"4.0nil"	def f\n          if $a\n            a = 1.0\n            b = 1.0\n         
 c163debad94d714f7738a102065dddc5	[{a: 1}]	def f(*x)\n            x\n        end\n        \n\n            f(**{a:1})\n  
