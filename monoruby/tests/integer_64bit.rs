@@ -1,6 +1,9 @@
-//! The JIT's raw-u64 form (`LinkMode::U`): Integer sites that work in
-//! [0, 2^64) compute on unboxed u64s. Each case warms the JIT (the test
-//! thresholds are 5 calls / 15 loop iterations) and compares with CRuby.
+//! 64-bit Integer arithmetic around the fixnum / Bignum boundary: masks,
+//! hashes, bit boards and shifts whose values live in [0, 2^64). Written
+//! for the JIT's former raw-u64 form, kept as result checks for the
+//! two-arm dispatch and the inline Bignums. Each case warms the JIT (the
+//! test thresholds are 5 calls / 15 loop iterations) and compares with
+//! CRuby.
 
 extern crate monoruby;
 use monoruby::tests::*;
@@ -9,9 +12,7 @@ const PRELUDE: &str = r##"
 M = 0xffff_ffff_ffff_ffff
 "##;
 
-/// A masked xorshift: `<<` over the u64 width leaves through the checked
-/// shift, stamps the site and recompiles it into the boxed forms, while
-/// `&`, `^` and `>>` keep the raw form.
+/// A masked xorshift: `<<` overflows the fixnum range every iteration.
 #[test]
 fn masked_xorshift() {
     run_test_with_prelude(
@@ -85,8 +86,7 @@ fn unsigned_compare() {
     );
 }
 
-/// A raw operand compared with a negative constant: the unbox guard misses
-/// on the constant, the site is stamped and recompiled.
+/// A value above 2^63 compared with a negative constant.
 #[test]
 fn compare_with_negative() {
     run_test_with_prelude(
@@ -103,8 +103,8 @@ fn compare_with_negative() {
     );
 }
 
-/// Checked arithmetic: an `Add` / `Mul` leaving [0, 2^64) and a `Sub`
-/// going negative each leave through the exit and get the Bignum answer.
+/// Arithmetic leaving [0, 2^64): an `Add` / `Mul` past 2^64 and a `Sub`
+/// going negative each get the exact Bignum answer.
 #[test]
 fn checked_add_sub_mul() {
     run_test_with_prelude(
@@ -121,8 +121,8 @@ fn checked_add_sub_mul() {
     );
 }
 
-/// A raw value consumed as a Value (a method call, interpolation, a Float
-/// operation) is boxed back; the register stays as a cache.
+/// A 64-bit value consumed as a Value (a method call, interpolation, a
+/// Float operation).
 #[test]
 fn boxed_consumers() {
     run_test_with_prelude(
@@ -139,8 +139,7 @@ fn boxed_consumers() {
     );
 }
 
-/// A loop-carried hash (FNV-1a): the raw value crosses the loop back
-/// edge and the `*` leaves through its exit (the product wraps).
+/// A loop-carried hash (FNV-1a): the `*` overflows and is masked.
 #[test]
 fn fnv1a_loop_carried() {
     run_test_with_prelude(
@@ -160,8 +159,8 @@ fn fnv1a_loop_carried() {
     );
 }
 
-/// Operands outside the form: a value at or above 2^64, a negative value,
-/// a wide Bignum. Each misses the unbox guard and the site falls back.
+/// Operands outside [0, 2^64): a value at or above 2^64, a negative
+/// value, a wide Bignum.
 #[test]
 fn out_of_range_operands() {
     run_test_with_prelude(
@@ -197,7 +196,7 @@ fn register_shift_counts() {
     );
 }
 
-/// The same raw local on both sides and a copied raw local (`y = x`).
+/// The same local on both sides and a copied local (`y = x`).
 #[test]
 fn shared_and_copied_operands() {
     run_test_with_prelude(
@@ -217,7 +216,7 @@ fn shared_and_copied_operands() {
     );
 }
 
-/// A raw value live across a GC safepoint and a block call.
+/// A 64-bit value live across a GC safepoint and a block call.
 #[test]
 fn across_gc_and_calls() {
     run_test_with_prelude(
@@ -254,8 +253,7 @@ fn address_arithmetic() {
     );
 }
 
-/// `&`-masked results through a method that returns them (the raw value
-/// is boxed on return).
+/// `&`-masked results through a method that returns them.
 #[test]
 fn returned_raw_values() {
     run_test_with_prelude(
@@ -279,9 +277,7 @@ fn returned_raw_values() {
     );
 }
 
-/// A raw temp passed straight as an argument: the box call must not land
-/// on the argument window already stored below the stack pointer (a
-/// `1 << 62` argument to `div` crashed this way).
+/// A 64-bit temp passed straight as an argument (`1 << 62` to `div`).
 #[test]
 fn raw_temp_as_argument() {
     run_test_with_prelude(
@@ -307,9 +303,8 @@ fn raw_temp_as_argument() {
     );
 }
 
-/// An operand still in a GP register (its stack home stale) when it
-/// reaches a raw-u64 site: the conversion must flush it first, since the
-/// exit re-reads the home (`c` read back as nil after the `*` overflowed).
+/// An operand still in a GP register when it reaches an overflowing
+/// site (`c` read back as nil after the `*` overflowed).
 #[test]
 fn gp_resident_operand_before_exit() {
     run_test_with_prelude(
@@ -330,9 +325,8 @@ fn gp_resident_operand_before_exit() {
     );
 }
 
-/// The wrapping forms at the boundaries of [0, 2^64): a result consumed
-/// only by `& c` wraps instead of exiting, and must agree with the exact
-/// Bignum result masked.
+/// Results at the boundaries of [0, 2^64), masked with `& c`: they must
+/// agree with the exact Bignum result masked.
 #[test]
 fn wrapping_boundaries() {
     run_test_with_prelude(
@@ -356,7 +350,7 @@ fn wrapping_boundaries() {
     );
 }
 
-/// Chains of wrap-safe operators between the arithmetic and the mask.
+/// Chains of operators between the arithmetic and the mask.
 #[test]
 fn wrapping_chains() {
     run_test_with_prelude(
@@ -382,9 +376,9 @@ fn wrapping_chains() {
     );
 }
 
-/// Consumers the fusion must not accept: no mask, a negative mask, a mask
-/// at or above 2^64, a Float operand further down the chain, a local as the
-/// intermediate. Each keeps the checked form and the exact answer.
+/// Chains without a usable mask: no mask, a negative mask, a mask at or
+/// above 2^64, a Float operand further down the chain, a local as the
+/// intermediate.
 #[test]
 fn no_fusion_for_other_consumers() {
     run_test_with_prelude(
@@ -406,10 +400,7 @@ fn no_fusion_for_other_consumers() {
     );
 }
 
-/// A chain operand proven by an earlier unbox (`z = y & M` makes `y` a
-/// resident): the fusion relies on that proof, and a `y` that fails the
-/// guard (a negative, 2^64 or more) must exit there, before any wrapped
-/// arithmetic, and recompile the site into the boxed forms.
+/// A chain operand that turns negative or reaches 2^64 on some calls.
 #[test]
 fn exit_inside_a_fused_chain() {
     run_test_with_prelude(
@@ -429,9 +420,8 @@ fn exit_inside_a_fused_chain() {
     );
 }
 
-/// A loop-carried value in a `while` loop inside a method: the back edge
-/// carries `x` raw, the head adopts it, and the body never boxes it. The
-/// loop is entered with a fixnum, a Bignum below 2^64 and a constant.
+/// A loop-carried value in a `while` loop inside a method, entered with
+/// a fixnum, a Bignum below 2^64 and a constant.
 #[test]
 fn loop_carried_in_a_method() {
     run_test_with_prelude(
@@ -467,9 +457,8 @@ fn loop_carried_in_a_method() {
     );
 }
 
-/// A top-level `while` loop is a loop JIT entered from the interpreter:
-/// the carried value arrives boxed from the VM and is unboxed once at the
-/// entry.
+/// A top-level `while` loop (a loop JIT entered from the interpreter)
+/// carrying a 64-bit value.
 #[test]
 fn loop_carried_at_top_level() {
     run_test_with_prelude(
@@ -490,10 +479,8 @@ fn loop_carried_at_top_level() {
     );
 }
 
-/// The carried value enters the loop outside [0, 2^64) on some calls — a
-/// negative seed, 2^64 or more — after the head has adopted the raw form:
-/// the entry unbox misses, the unit recompiles with the adoption off, and
-/// every answer is exact.
+/// The carried value enters the loop outside [0, 2^64) on some calls: a
+/// negative seed, 2^64 or more.
 #[test]
 fn loop_carried_entry_out_of_range() {
     run_test_with_prelude(
@@ -519,8 +506,7 @@ fn loop_carried_entry_out_of_range() {
 }
 
 /// The carried value is also consumed boxed each iteration (pushed into
-/// an Array, passed to a method), so the back edge carries the cached
-/// view (`Su`) rather than the raw one, and the head adopts that.
+/// an Array, passed to a method).
 #[test]
 fn loop_carried_with_boxed_consumers() {
     run_test_with_prelude(
@@ -550,9 +536,7 @@ fn loop_carried_with_boxed_consumers() {
     );
 }
 
-/// Nested loops: the inner loop's carried value enters raw from the outer
-/// body (`U -> U`, a register move) and the outer carried value survives
-/// the inner loop.
+/// Nested loops, each carrying a 64-bit value.
 #[test]
 fn loop_carried_nested() {
     run_test_with_prelude(

@@ -862,7 +862,6 @@ impl<'a> JitContext<'a> {
                 ic,
                 polymorphic,
                 overflowed,
-                nou64,
             } => {
                 return self.binary_op(
                     state,
@@ -874,7 +873,6 @@ impl<'a> JitContext<'a> {
                     ic,
                     polymorphic,
                     overflowed,
-                    nou64,
                     bc_pos,
                 );
             }
@@ -886,7 +884,6 @@ impl<'a> JitContext<'a> {
                 ic,
                 polymorphic,
                 fused,
-                nou64,
             } => {
                 // `case v when lo..hi` with the Range elided: the compare
                 // in place (`doc/escape_analysis.md`).
@@ -912,7 +909,6 @@ impl<'a> JitContext<'a> {
                         ic,
                         polymorphic,
                         fused,
-                        nou64,
                         bc_pos,
                     )
                 });

@@ -1286,9 +1286,6 @@ pub(crate) struct JitContext<'a> {
     /// Iseqs whose loops do not hoist type guards onto their entries
     /// (`merge.rs`): a hoisted guard of theirs kept missing.
     pub(in crate::codegen) loop_hoist_disabled: std::rc::Rc<std::collections::HashSet<ISeqId>>,
-    /// Iseqs whose loops do not adopt a loop-carried raw u64 at the head
-    /// (`merge.rs`): an entry unbox of theirs kept missing.
-    pub(in crate::codegen) loop_u64_disabled: std::rc::Rc<std::collections::HashSet<ISeqId>>,
 }
 
 ///
@@ -1342,7 +1339,6 @@ impl<'a> JitContext<'a> {
             widened_outer_log: vec![],
             spec_memo: Default::default(),
             loop_hoist_disabled: Default::default(),
-            loop_u64_disabled: Default::default(),
         }
     }
 
@@ -1417,7 +1413,6 @@ impl<'a> JitContext<'a> {
             pending_fresh_self: false,
             pending_class_new_redo: None,
             loop_hoist_disabled: self.loop_hoist_disabled.clone(),
-            loop_u64_disabled: self.loop_u64_disabled.clone(),
         }
     }
 
@@ -4437,14 +4432,6 @@ impl<'a> JitContext<'a> {
                             debug_assert!(
                                 matches!(tfm, LinkMode::F(r) if l == r),
                                 "return-edge F diverged: lvl{lvl} {slot:?} {l:?} vs {tfm:?}"
-                            );
-                        }
-                        // A suspended raw u64 is path-invariant for the same
-                        // reason as a pool `F`.
-                        (LinkMode::U(l), tfm) => {
-                            debug_assert!(
-                                matches!(tfm, LinkMode::U(r) if l == r),
-                                "return-edge U diverged: lvl{lvl} {slot:?} {l:?} vs {tfm:?}"
                             );
                         }
                         // Everything else is a pure state demotion (the
