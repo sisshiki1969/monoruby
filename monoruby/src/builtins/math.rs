@@ -18,6 +18,17 @@ unsafe extern "C" {
     fn c_frexp(x: f64, exp: *mut c_int) -> f64;
     #[link_name = "expm1"]
     fn c_expm1(x: f64) -> f64;
+    // The inverse hyperbolic functions go to the C library on purpose:
+    // Rust's `f64::asinh` / `acosh` / `atanh` are formulas over `ln_1p`,
+    // and their last bit can differ from libm's (glibc 2.43's correctly
+    // rounded `atanh(0.5)` is one ulp above the formula), while CRuby
+    // calls libm. The same library gives the same bits.
+    #[link_name = "asinh"]
+    fn c_asinh(x: f64) -> f64;
+    #[link_name = "acosh"]
+    fn c_acosh(x: f64) -> f64;
+    #[link_name = "atanh"]
+    fn c_atanh(x: f64) -> f64;
 }
 
 extern "C" fn extern_cos(f: f64) -> f64 {
@@ -402,7 +413,8 @@ fn tanh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn asinh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let f = coerce_to_f64(vm, globals, lfp.arg(0))?;
-    Ok(Value::float(f.asinh()))
+    // SAFETY: asinh is a standard C math function with no safety concerns.
+    Ok(Value::float(unsafe { c_asinh(f) }))
 }
 
 /// ### Math.#acosh
@@ -418,7 +430,8 @@ fn acosh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     if f < 1.0 {
         return Err(numerical_argument_out_of_domain_err(globals, "acosh"));
     }
-    Ok(Value::float(f.acosh()))
+    // SAFETY: acosh is a standard C math function with no safety concerns.
+    Ok(Value::float(unsafe { c_acosh(f) }))
 }
 
 /// ### Math.#atanh
@@ -434,12 +447,14 @@ fn atanh(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     if f <= -1.0 || f >= 1.0 {
         if f == -1.0 || f == 1.0 {
             // Returns -Infinity or Infinity
-            Ok(Value::float(f.atanh()))
+            // SAFETY: atanh is a standard C math function with no safety concerns.
+            Ok(Value::float(unsafe { c_atanh(f) }))
         } else {
             return Err(numerical_argument_out_of_domain_err(globals, "atanh"));
         }
     } else {
-        Ok(Value::float(f.atanh()))
+        // SAFETY: atanh is a standard C math function with no safety concerns.
+        Ok(Value::float(unsafe { c_atanh(f) }))
     }
 }
 
@@ -875,6 +890,14 @@ mod tests {
             "Math.lgamma(0)[0].infinite?",
             "Math.lgamma(-0.0)[0].infinite?",
         ]);
+    }
+
+    #[test]
+    fn math_atanh_poles() {
+        // `atanh(±1)` is the one in-domain input the domain check routes
+        // separately: libm answers ±Infinity rather than raising.
+        run_test("[Math.atanh(1.0), Math.atanh(-1.0), Math.atanh(1), Math.atanh(-1)]");
+        run_test_error("Math.atanh(1.0000001)");
     }
 
     #[test]

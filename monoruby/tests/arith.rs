@@ -1875,3 +1875,65 @@ fn op_assign_target_kinds() {
         "#,
     );
 }
+
+#[test]
+fn dispatch_arm_reading_a_constant_local_as_float() {
+    // A binary dispatch (polymorphic `r + m`: `r` is Float or Integer) whose
+    // other operand is a *local* folded to a constant — here from a callee
+    // specialized on literal arguments, so `s` / `v` / `c` / `m` are all
+    // `LinkMode::C`. The Float arm loads `m` into an fpr (`C -> F`), and the
+    // merge, declared from the pre-arm state, still holds the `C`; the arm's
+    // bridge has to take the `F -> C` edge back (it used to be
+    // `unreachable!`, which the DOOM automap palette hit).
+    run_test(
+        r#"
+        def f(h, s, v)
+          c = v * s
+          m = v - c
+          r = if h.to_i % 2 == 0 then c else 0 end
+          ((r + m) * 255).to_i
+        end
+        res = 0
+        300.times { |i| res += f(i * 0.7 % 3, 0.6, 0.85) }
+        res
+        "#,
+    );
+    // The same with a Fixnum constant local: the Float arm loads it as
+    // `Sf(Fixnum)`, and the bridge is `Sf -> C`.
+    run_test(
+        r#"
+        def g(h, k)
+          m = k + 1
+          r = if h.to_i % 2 == 0 then h else 0 end
+          ((r + m) * 255).to_i
+        end
+        res = 0
+        300.times { |i| res += g(i * 0.7 % 3, 2) }
+        res
+        "#,
+    );
+    // The full DOOM shape: a `case` over six float/integer triples, masgn,
+    // then three polymorphic `x + m` on the constant `m`.
+    run_test(
+        r#"
+        def hsv(h, s, v)
+          c = v * s
+          x = c * (1 - ((h / 60.0) % 2 - 1).abs)
+          m = v - c
+          r, g, b = case (h / 60).to_i % 6
+                    when 0 then [c, x, 0]
+                    when 1 then [x, c, 0]
+                    when 2 then [0, c, x]
+                    when 3 then [0, x, c]
+                    when 4 then [x, 0, c]
+                    when 5 then [c, 0, x]
+                    end
+          [((r + m) * 255).to_i, ((g + m) * 255).to_i, ((b + m) * 255).to_i]
+        end
+        phi = (1 + Math.sqrt(5)) / 2.0
+        res = []
+        120.times { |i| res << hsv((i * phi * 360) % 360, 0.6, 0.85) }
+        res
+        "#,
+    );
+}

@@ -180,10 +180,11 @@ Dir["#{psych_dir}/*.yaml"].sort.each do |path|
 end
 
 # ---------- blurhash ----------
-# Strip the harness wiring so the bench file just defines the module.
+# Strip the harness wiring so the bench file just defines the module
+# (ruby-bench moved the loader from harness/ to lib/harness/ in 2026-10).
 blurhash_path = "#{RUBY_BENCH}/benchmarks/blurhash/benchmark.rb"
 src = File.read(blurhash_path)
-if (cut = src.index('require_relative "../../harness/loader"'))
+if (cut = src.index(%r{require_relative "\.\./\.\./(lib/)?harness/loader"}))
   src = src[0, cut]
 end
 eval src

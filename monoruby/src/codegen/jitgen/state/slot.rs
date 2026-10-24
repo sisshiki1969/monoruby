@@ -3235,6 +3235,20 @@ impl AbstractFrame {
                 }
             }
             (LinkMode::C(l), LinkMode::C(r)) if l == r => {}
+            (LinkMode::F(_) | LinkMode::Sf(_, _), LinkMode::C(v)) => {
+                // F / Sf -> C: an arm of an intra-block dispatch read a
+                // `C` operand as a float (`load_fpr_from_C_state` rebinds
+                // the slot to the fpr it loaded the literal into) and now
+                // bridges back to the merge, which was declared from the
+                // pre-arm state and still holds the literal. A `C` target
+                // is reached only that way: a joined target is `C` only
+                // when every incoming state is the same `C`, and an arm
+                // cannot redefine an operand (`dst` is `S` at the merge).
+                // So the fpr holds exactly *v*, the stack home holds it too
+                // (`declare_merge` wrote the operands back), and dropping
+                // the fpr view is pure state.
+                self.set_mode(slot, LinkMode::C(v));
+            }
             (LinkMode::C(l), LinkMode::F(r)) => {
                 if let Some(f) = l.try_float() {
                     self.set_F(slot, r);
