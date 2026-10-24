@@ -221,7 +221,11 @@ fn blurhash_encodes_like_cruby() {
         &[],
         r##"
 src = File.read("benchmark.rb")
-src = src[0, src.index('require_relative "../../harness/loader"')] if src.include?('require_relative "../../harness/loader"')
+# Strip the harness wiring so the bench file just defines the module
+# (ruby-bench moved the loader from harness/ to lib/harness/ in 2026-10).
+if (cut = src.index(%r{require_relative "\.\./\.\./(lib/)?harness/loader"}))
+  src = src[0, cut]
+end
 eval src
 pixels = File.binread("test.bin").bytes
 p [pixels.size, Blurhash.encode_rb(204, 204, pixels), Blurhash.encode_rb(204, 204, pixels, x_comp: 3, y_comp: 3)]
