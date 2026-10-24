@@ -893,6 +893,14 @@ mod tests {
     }
 
     #[test]
+    fn math_atanh_poles() {
+        // `atanh(±1)` is the one in-domain input the domain check routes
+        // separately: libm answers ±Infinity rather than raising.
+        run_test("[Math.atanh(1.0), Math.atanh(-1.0), Math.atanh(1), Math.atanh(-1)]");
+        run_test_error("Math.atanh(1.0000001)");
+    }
+
+    #[test]
     fn math_acosh_domain() {
         run_test("Math.acosh(1)");
         run_test_error("Math.acosh(0)");
