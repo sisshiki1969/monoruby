@@ -2274,16 +2274,34 @@ rb_obj_instance_variables(VALUE obj)
     return rb_funcall(obj, rb_intern("instance_variables"), 0);
 }
 
+/* A name without '@' is CRuby's hidden instance variable (sqlite3's
+ * "-aggregators"): monoruby keeps those under a '/' prefix, which
+ * #instance_variables, Marshal and inspect leave out. */
+static const char *
+ivar_name(const char *name, char buf[256])
+{
+    if (name[0] == '@' || name[0] == '/')
+        return name;
+    size_t len = strlen(name);
+    if (len > 254)
+        rb_raise(rb_eNameError, "hidden instance variable name too long");
+    buf[0] = '/';
+    memcpy(buf + 1, name, len + 1);
+    return buf;
+}
+
 VALUE
 rb_iv_get(VALUE obj, const char *name)
 {
-    return check(api->ivar_get(ctx(), M(obj), name));
+    char buf[256];
+    return check(api->ivar_get(ctx(), M(obj), ivar_name(name, buf)));
 }
 
 VALUE
 rb_iv_set(VALUE obj, const char *name, VALUE val)
 {
-    check_rc(api->ivar_set(ctx(), M(obj), name, M(val)));
+    char buf[256];
+    check_rc(api->ivar_set(ctx(), M(obj), ivar_name(name, buf), M(val)));
     return val;
 }
 
@@ -2302,9 +2320,8 @@ rb_ivar_set(VALUE obj, ID id, VALUE val)
 VALUE
 rb_ivar_defined(VALUE obj, ID id)
 {
-    /* A name without '@' is a hidden ivar (CRuby's "-aggregators" style),
-     * which instance_variable_defined? rejects; the table has no "defined"
-     * query, so a hidden one set to nil reads as undefined. */
+    /* instance_variable_defined? rejects a hidden name; the table has no
+     * "defined" query, so a hidden one set to nil reads as undefined. */
     const char *name = rb_id2name(id);
     if (name[0] != '@')
         return NIL_P(rb_iv_get(obj, name)) ? Qfalse : Qtrue;

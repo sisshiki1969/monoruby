@@ -98,6 +98,13 @@ monoruby の `Value`（`value.rs`）とは層（`capi.c`）が境界で相互変
   例外になる。
 - `rb_protect` はエラーを `error_take` で例外オブジェクトとして取り出し
   `rb_errinfo` に置く。`rb_jump_tag` / `rb_ensure` / `rb_rescue2` はこの上。
+  block からの `return` / `break` / `throw` などクラスを持たない大域脱出は、
+  `error_take` が種類ごと `Exception` のオブジェクトに包んで返し、
+  `raise_exception`（`rb_jump_tag`）がそれを元の脱出に戻す
+  （psych の `Psych.parse` が block 内の `return` で抜ける）。
+- `@` で始まらない名前の ivar（`rb_iv_set(obj, "-aggregators", ...)`、
+  CRuby の隠し ivar）は `/` を前に付けたコア側の隠し ivar になり、
+  `#instance_variables` や inspect には出ない。
 - Ruby を呼ぶ API（`rb_funcall`、`rb_yield`、`rb_proc_call`、
   `rb_thread_call_without_gvl`）は戻ったあと `capi_cur` を呼ぶ前の値に戻す。
   green thread の切り替えは LIFO でないので、呼び出し中に別スレッドが同じ
@@ -631,8 +638,12 @@ C API 層の拡張を含む `<home>/extensions/<platform>/<api>/<name-ver>` が
 - `rb_scan_args` の `:` は「末尾の引数が Hash ならキーワード」とみなす
   （`f({a: 1})` と `f(a: 1)` を区別しない。`rb_keyword_given_p` は区別する、
   §3.14）。
-- `rb_protect` は `break` / `throw` などの非例外の大域脱出も例外オブジェクト
-  として取り出すので、`rb_jump_tag` で再送すると種類が失われる。
+- `rb_protect` で捕まえた大域脱出（§5）は、`rb_errinfo` で取り出すと
+  クラス `Exception` のオブジェクトに見える（`rb_jump_tag` で再送すれば
+  元の脱出に戻る）。
+- GC 中に走る `dfree` / mark 関数から C API の関数を呼ぶと止まる
+  （markly の `RTYPEDDATA_DATA(self) = NULL`、sqlite3 の aggregate の
+  finalize）。`rb_gc_mark` 系だけが使える。
 - `rb_iter_break` は隠し例外で実装しているので、`rb_block_call` /
   `rb_iterate` の外（`rb_funcall` で呼んだメソッドに渡した
   `rb_proc_new` の Proc の中など）で使うとその例外が外へ出る。
