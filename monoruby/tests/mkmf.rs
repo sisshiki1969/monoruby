@@ -119,6 +119,29 @@ fn install_root() -> PathBuf {
     PathBuf::from(config("rubyhdrdir")).parent().unwrap().to_path_buf()
 }
 
+/// `libdirname` names the key of the directory that holds LIBRUBY, and
+/// that directory is where the archive is: ruby/spec's C API helper
+/// stats `CONFIG[CONFIG['libdirname']]/LIBRUBY`, and mkmf puts
+/// `-L$(<libdirname>)` on every link line, so both must reach capi/
+/// while `libdir` (and the gem dirs derived from it) stay in lib/.
+#[test]
+fn rbconfig_libdirname_locates_the_archive() {
+    let root = install_root();
+    let out = run(monoruby().args([
+        "-e",
+        r#"c = RbConfig::CONFIG
+puts c["libdirname"], c[c["libdirname"]], File.file?(File.join(c[c["libdirname"]], c["LIBRUBY"])), c["libdir"]
+puts RbConfig::MAKEFILE_CONFIG["capidir"]"#,
+    ]));
+    let lines: Vec<&str> = out.lines().collect();
+    let capi = root.join("capi");
+    assert_eq!(lines[0], "capidir", "{out}");
+    assert_eq!(lines[1], capi.to_str().unwrap(), "{out}");
+    assert_eq!(lines[2], "true", "{out}");
+    assert_eq!(lines[3], root.join("lib").to_str().unwrap(), "{out}");
+    assert_eq!(lines[4], capi.to_str().unwrap(), "{out}");
+}
+
 /// `RbConfig` names the layer: its headers, its archive, and a gem home
 /// that is monoruby's own.
 #[test]

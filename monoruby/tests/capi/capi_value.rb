@@ -64,3 +64,5 @@ p catch(:outer) { V.throw_(:outer, :from_c); :not_here }
 p catch { |tag| V.catch_(tag, nil); V.throw_(tag, 42) }
 p((V.throw_(:nobody, 1) rescue [$!.class, $!.message]))
 p((V.catch_(:a, nil) { }).inspect, catch(:b) { V.catch_(:c, :inner) ; throw :b, :ruby })
+# rb_id2str / rb_id2name of the null ID
+p V.null_id

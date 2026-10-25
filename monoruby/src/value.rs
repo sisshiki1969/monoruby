@@ -2710,7 +2710,10 @@ impl Value {
 
     pub fn try_symbol(&self) -> Option<IdentId> {
         if self.is_symbol() {
-            Some(IdentId::from((self.id() >> 32) as u32))
+            // The interpreter never builds a symbol with id 0; the C API
+            // layer can hand one in (`ID2SYM((ID)0)`), and it must come
+            // out as "not a Symbol" rather than a panic in `IdentId::from`.
+            IdentId::try_from_u32((self.id() >> 32) as u32)
         } else {
             None
         }

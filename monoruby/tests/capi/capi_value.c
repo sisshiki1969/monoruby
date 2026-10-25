@@ -358,6 +358,17 @@ v_throw_(VALUE self, VALUE tag, VALUE val)
     return Qnil; /* not reached */
 }
 
+/* The null ID: rb_id2str answers 0 (= Qfalse), rb_id2name answers NULL,
+ * neither touches the symbol table. */
+static VALUE
+v_null_id(VALUE self)
+{
+    (void)self;
+    VALUE str = rb_id2str((ID)0);
+    const char *name = rb_id2name((ID)0);
+    return rb_ary_new_from_args(2, str, name == NULL ? Qnil : rb_str_new_cstr(name));
+}
+
 void
 Init_capi_value(void)
 {
@@ -389,6 +400,7 @@ Init_capi_value(void)
     rb_define_singleton_method(mV, "call_back", v_call_back, 2);
     rb_define_singleton_method(mV, "buf_build", v_buf_build, 1);
     rb_define_singleton_method(mV, "freeze_", v_freeze, 1);
+    rb_define_singleton_method(mV, "null_id", v_null_id, 0);
     VALUE cHolder = rb_define_class_under(mV, "Holder", rb_cObject);
     rb_define_alloc_func(cHolder, holder_alloc);
     rb_define_method(cHolder, "set", holder_set, 1);

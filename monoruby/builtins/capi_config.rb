@@ -42,6 +42,17 @@ RbConfig.fire_update!('LIBRUBY', 'libmonoruby_capi.a')
 RbConfig.fire_update!('LIBRUBYARG_SHARED', __capi_arg)
 RbConfig.fire_update!('LIBRUBYARG_STATIC', __capi_arg)
 RbConfig.fire_update!('LIBRUBYARG', __capi_arg)
+# `libdirname` names the CONFIG key of the directory that holds LIBRUBY
+# (CRuby: 'libdir', or 'archlibdir' on some platforms). Consumers that
+# locate the library through it -- ruby/spec's C API helper stats
+# `CONFIG[CONFIG['libdirname']]/LIBRUBY` to decide whether to rebuild, and
+# mkmf puts `-L$(<libdirname>)` on every link line -- must land in capi/,
+# where libmonoruby_capi.a is, not in lib/. A key of its own keeps
+# `libdir` (and everything derived from it: rubylibprefix, the gem dirs)
+# where it is; mkmf writes every `*dir` key into the Makefile, so
+# `$(capidir)` resolves there.
+RbConfig.fire_update!('capidir', __capi_lib)
+RbConfig.fire_update!('libdirname', 'capidir')
 # A `.so` with no `libruby` to find: nothing to put in an rpath.
 RbConfig.fire_update!('LIBRUBY_RELATIVE', 'no')
 # The snapshot names its host's tools by absolute path (`/usr/bin/mkdir`,
