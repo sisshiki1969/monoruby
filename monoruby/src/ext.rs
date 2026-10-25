@@ -1074,7 +1074,19 @@ unsafe extern "C" fn mr_error_take(ctx: *mut MrContext) -> MrValue {
     // SAFETY: the table's contract.
     let (vm, _) = unsafe { parts(ctx) };
     if vm.has_error() {
-        Value::new_exception(vm.take_error()).id()
+        let err = vm.take_error();
+        match err.kind {
+            // A non-local exit (`return` / `break` out of a block, `throw`,
+            // ...) leaving through the extension's frames has no class;
+            // box it unchanged so `raise_exception` resumes the jump.
+            MonorubyErrKind::MethodReturn(..)
+            | MonorubyErrKind::BlockBreak(..)
+            | MonorubyErrKind::Throw(..)
+            | MonorubyErrKind::FiberKill
+            | MonorubyErrKind::Retry
+            | MonorubyErrKind::Redo => Value::new_exception_boxed(err, EXCEPTION_CLASS).id(),
+            _ => Value::new_exception(err).id(),
+        }
     } else {
         MR_UNDEF
     }

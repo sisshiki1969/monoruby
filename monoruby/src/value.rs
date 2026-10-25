@@ -1635,6 +1635,13 @@ impl Value {
         RValue::new_exception_with_class(err, obj_class_id).pack()
     }
 
+    /// `err` boxed as-is in an exception object of `class_id`, kind
+    /// included, for an error that has no class of its own (a non-local
+    /// exit) to travel as a value.
+    pub(crate) fn new_exception_boxed(err: MonorubyErr, class_id: ClassId) -> Self {
+        RValue::new_exception_with_class(err, class_id).pack()
+    }
+
     ///
     /// An exception object of `class_id` with no message yet: `#message`
     /// reports the class's name, rendered on demand.

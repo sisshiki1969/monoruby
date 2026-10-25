@@ -49,6 +49,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <time.h>
+#include <unistd.h>
 #include <sys/time.h>
 
 #include "ruby/version.h"
@@ -68,6 +69,11 @@ typedef uintptr_t ID;
 typedef intptr_t SIGNED_VALUE;
 typedef uintptr_t st_data_t;
 #define ST_DATA_T_DEFINED
+typedef pid_t rb_pid_t;
+
+/* ruby/defines.h's stringification helpers. */
+#define STRINGIZE(expr) STRINGIZE0(expr)
+#define STRINGIZE0(expr) #expr
 typedef st_data_t st_index_t;
 #define MONORUBY_CAPI_ST_INDEX_T_DEFINED
 
@@ -612,6 +618,7 @@ VALUE rb_usascii_str_new(const char *ptr, long len);
 VALUE rb_usascii_str_new_cstr(const char *ptr);
 VALUE rb_utf8_str_new(const char *ptr, long len);
 VALUE rb_utf8_str_new_cstr(const char *ptr);
+VALUE rb_utf8_str_new_static(const char *ptr, long len);
 VALUE rb_external_str_new(const char *ptr, long len);
 VALUE rb_external_str_new_cstr(const char *ptr);
 VALUE rb_locale_str_new(const char *ptr, long len);
@@ -789,6 +796,7 @@ void rb_hash_foreach(VALUE hash, int (*func)(VALUE key, VALUE val, VALUE arg), V
 
 VALUE rb_range_new(VALUE beg, VALUE end, int exclude_end);
 int rb_range_values(VALUE range, VALUE *begp, VALUE *endp, int *exclp);
+VALUE rb_range_beg_len(VALUE range, long *begp, long *lenp, long len, int err);
 
 /* ---- global classes, filled in when the extension is loaded ------------ */
 
@@ -966,6 +974,20 @@ VALUE rb_big_minus(VALUE x, VALUE y);
 VALUE rb_big_mul(VALUE x, VALUE y);
 VALUE rb_big_div(VALUE x, VALUE y);
 VALUE rb_big_modulo(VALUE x, VALUE y);
+
+/* bignum.c's word packing. Only nails == 0 is supported. */
+#define INTEGER_PACK_MSWORD_FIRST 0x01
+#define INTEGER_PACK_LSWORD_FIRST 0x02
+#define INTEGER_PACK_MSBYTE_FIRST 0x10
+#define INTEGER_PACK_LSBYTE_FIRST 0x20
+#define INTEGER_PACK_NATIVE_BYTE_ORDER 0x40
+#define INTEGER_PACK_2COMP 0x80
+#define INTEGER_PACK_FORCE_BIGNUM 0x100
+#define INTEGER_PACK_NEGATIVE 0x200
+#define INTEGER_PACK_FORCE_GENERIC_IMPLEMENTATION 0x400
+#define INTEGER_PACK_BIG_ENDIAN (INTEGER_PACK_MSWORD_FIRST | INTEGER_PACK_MSBYTE_FIRST)
+#define INTEGER_PACK_LITTLE_ENDIAN (INTEGER_PACK_LSWORD_FIRST | INTEGER_PACK_LSBYTE_FIRST)
+int rb_integer_pack(VALUE val, void *words, size_t numwords, size_t wordsize, size_t nails, int flags);
 VALUE rb_big_pow(VALUE x, VALUE y);
 VALUE rb_big_and(VALUE x, VALUE y);
 VALUE rb_big_or(VALUE x, VALUE y);
