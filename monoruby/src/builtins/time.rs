@@ -3119,13 +3119,10 @@ fn localtime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             *self_val.as_time_mut() = TimeInner::Utc(instant);
             return Ok(self_val);
         }
-        // Already in the requested zone? No-op (matches CRuby's
-        // short-circuit before the frozen check).
-        if let TimeInner::Local(t, _) = self_val.as_time() {
-            if t.offset() == &target {
-                return Ok(self_val);
-            }
-        }
+        // No short-circuit for an offset the receiver already has: CRuby
+        // always re-zones to a fixed offset (`time_set_utc_offset`, which
+        // checks frozenness first), so a system-zone time whose offset
+        // happens to match loses its zone name (`#zone` becomes nil).
         self_val.ensure_not_frozen(&globals.store)?;
         self_val.as_time_mut().shift_to_offset(target);
         return Ok(self_val);
