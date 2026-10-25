@@ -74,7 +74,7 @@ if [ -n "$SYSTEM_LIBS" ]; then
 fi
 
 # One command: `cargo install` builds the binary *and*, through the
-# artifact dependencies in monoruby/Cargo.toml, the five extensions —
+# artifact dependencies in monoruby/Cargo.toml, the extensions —
 # which `build.rs` puts in the install root's `ext/`, where the installed
 # binary looks for them.
 cargo install --path monoruby "${INSTALL_ARGS[@]}" "${FEATURE_ARGS[@]}"

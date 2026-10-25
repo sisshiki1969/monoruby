@@ -9,11 +9,12 @@
 # The node tree lives here, as `Markly::Node` objects linked the way
 # cmark's are (parent / first_child / last_child / next / previous), so the
 # gem's in-place editing (`insert_after`, `delete`, `replace`, …) is plain
-# pointer surgery. Parsing and rendering are native
-# (`src/builtins/markly.rs`, on the comrak crate): `String.__markly_parse`
+# pointer surgery. Parsing and rendering are native (the `ext/markly`
+# extension, libmarkly_native.so, required just below, on the comrak
+# crate): `String.__markly_parse`
 # answers the document as a nested Array, one row per node, and each
 # `_render_*` hands the same shape back. The row layout is documented at
-# the top of that file.
+# the top of `ext/markly/src/lib.rs`.
 #
 # `markly/flags.rb` is loaded after this file, so the flag constants are
 # looked up lazily here.
@@ -22,6 +23,8 @@
 # and 0.19.x (`_dup`, `code_info`, `fence`, the `:front_matter` node and
 # the `FRONT_MATTER` flag). `INLINE_CODE_INFO` and `HTML_BLOCK_BLANK_LINES`
 # (0.19) have no comrak counterpart and are ignored.
+
+require "markly_native.so"
 
 module Markly
   class Error < StandardError; end

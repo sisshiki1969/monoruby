@@ -83,7 +83,7 @@ emit-cfg = ["dump-bc", "dump-traceir", "dep:html-escape"]
 dump-require = []
 
 # Which C library each extension that carries one is built against.
-# `build.rs` installs the five extensions from Cargo's own artifact
+# `build.rs` installs the extensions from Cargo's own artifact
 # dependencies (below), so this is where the choice `bin/install`'s
 # MONORUBY_SYSTEM_LIBS used to make per `cargo build -p` invocation now
 # lives. Cargo features only ever add, so `bundled` and `system` are a
@@ -142,20 +142,9 @@ unicode-general-category = "1.0.0"
 unicode-normalization = "0.1.25"
 unicode-segmentation = "1.13.2"
 libffi = "5.1.0"
-# Digest builtins (`builtins/digest.rs`) — used on every platform, so these
-# must stay in the cross-platform `[dependencies]`, not a target block.
-# `hmac` / `pbkdf2` back `OpenSSL::HMAC` and `OpenSSL::PKCS5.pbkdf2_hmac`,
-# whose per-iteration work would otherwise run as Ruby.
-md-5 = "0.10"
-sha1 = "0.10"
+# The test harness keys its CRuby oracle on a SHA-256 of the code
+# (`tests::oracle::key_of`). `Digest` itself is the `ext/digest` extension.
 sha2 = "0.10"
-hmac = { version = "0.12", default-features = false }
-pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
-aes-gcm = "0.10"
-aes = "0.8"
-cbc = { version = "0.1", features = ["alloc"] }
-bcrypt = "0.19"
-comrak = { version = "0.55", default-features = false }
 
 # macOS aarch64 (Apple Silicon): the bundled libffi-sys 4.1.0 fails to
 # link `_ffi_prep_cif_machdep` (the arm64 assembly piece doesn't build
@@ -171,7 +160,7 @@ dirs = "6.0.0"
 # build links (build.rs `build_capi_archive`).
 cc = "1.0"
 
-# The five dynamically loaded extensions, as *artifact* dependencies
+# The dynamically loaded extensions, as *artifact* dependencies
 # (`-Z bindeps`, enabled in .cargo/config.toml). Cargo builds each cdylib
 # and hands `build.rs` its path in `CARGO_CDYLIB_FILE_<NAME>`, which is
 # what lets the build script install them into the same root as the
@@ -186,6 +175,10 @@ zlib_native = { path = "../ext/zlib", artifact = "cdylib", lib = false, target =
 zstd_native = { path = "../ext/zstd", artifact = "cdylib", lib = false, target = "target", default-features = false }
 psych_native = { path = "../ext/psych", artifact = "cdylib", lib = false, target = "target" }
 nokogiri_native = { path = "../ext/nokogiri", artifact = "cdylib", lib = false, target = "target" }
+markly_native = { path = "../ext/markly", artifact = "cdylib", lib = false, target = "target" }
+bcrypt_native = { path = "../ext/bcrypt", artifact = "cdylib", lib = false, target = "target" }
+digest_native = { path = "../ext/digest", artifact = "cdylib", lib = false, target = "target" }
+openssl_native = { path = "../ext/openssl", artifact = "cdylib", lib = false, target = "target" }
 
 [dev-dependencies]
 # For the integration tests that only spawn processes: importing these

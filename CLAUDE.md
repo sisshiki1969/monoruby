@@ -463,7 +463,7 @@ Registration happens in `builtins/builtins.rs` → `init_builtins()`.
 
 ## Workspace Crates
 
-Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys`, `monoruby_ext`, `ext/sqlite3`, `ext/zlib`, `ext/zstd`, `ext/psych`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
+Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys`, `monoruby_ext`, `ext/sqlite3`, `ext/zlib`, `ext/zstd`, `ext/psych`, `ext/nokogiri`, `ext/markly`, `ext/bcrypt`, `ext/digest`, `ext/openssl`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
 
 | Crate           | Purpose                                                  |
 | --------------- | -------------------------------------------------------- |
@@ -478,6 +478,10 @@ Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys
 | `ext/zstd` | The zstd-ruby gem's native half (`libzstd_native.so`, crate `zstd_native`) over the bundled libzstd (`zstd-sys`) |
 | `ext/psych` | Psych's native half (`libpsych_native.so`, crate `psych_native`): libyaml's parser as `Psych::Parser`'s event source and its emitter as `Psych::Emitter`'s sink, over `libyaml-safer` |
 | `ext/nokogiri` | Nokogiri's native half (`libnokogiri_native.so`, crate `nokogiri_native`): what the gem's nokogiri.so provides, over `libxml2-src` — the last stand-in moved out of the core, and the one with the most involved object lifetimes (see `doc/nokogiri.md`) |
+| `ext/markly` | The markly gem's native half (`libmarkly_native.so`, crate `markly_native`) over `comrak`, required by `gem/markly/markly.rb` |
+| `ext/bcrypt` | The bcrypt gem's native half (`libbcrypt_native.so`, crate `bcrypt_native`) over the `bcrypt` crate, required by `gem/bcrypt_ext.rb` |
+| `ext/digest` | `Digest`'s one-shot hashing plus `OpenSSL::HMAC` / `PKCS5`'s HMAC and PBKDF2 (`libdigest_native.so`, crate `digest_native`) over RustCrypto's md-5 / sha1 / sha2 / hmac / pbkdf2, required by `stdlib/digest.rb`. rubygems hashes `.gem` files with it, so like `ext/zlib` it is part of every install |
+| `ext/openssl` | `OpenSSL::Cipher`'s AES-GCM / AES-CBC (`libopenssl_native.so`, crate `openssl_native`) over RustCrypto's aes-gcm / aes / cbc, required by `stdlib/openssl.rb` |
 | `rubymap`       | Order-preserving Ruby-compatible HashMap/Set             |
 | `hashbrown`     | Vendored hash table (local fork)                         |
 | `ruby_traits`   | Shared trait definitions                                 |
@@ -490,11 +494,13 @@ External crates (fetched from git):
 - `onigmo-regex` — Onigmo regular expression engine
 - `ruby-prism` — prism parser bindings (pinned `monoruby-vendored` branch; see below)
 - `smallvec` — local fork with `const_generics` (pinned via git, not vendored in-tree)
-- `aes-gcm` / `aes` / `cbc` (RustCrypto) — the native half of `OpenSSL::Cipher`
-  (`src/builtins/cipher.rs`: `String.__aes_gcm` / `__aes_cbc`, one-shot over
-  the message `stdlib/openssl.rb` buffers). `OpenSSL::Digest` / `HMAC` /
-  `PKCS5` / `KDF` in the same file are pure Ruby over `Digest`
-  (`src/builtins/digest.rs`, sha2 / md-5). Rails' cookie encryption and key
+- `aes-gcm` / `aes` / `cbc` (RustCrypto) — the native half of `OpenSSL::Cipher`,
+  **in the `ext/openssl` extension** (`libopenssl_native.so`:
+  `String.__aes_gcm` / `__aes_cbc`, one-shot over the message
+  `stdlib/openssl.rb` buffers). `OpenSSL::Digest` / `HMAC` / `PKCS5` /
+  `KDF` in the same file are Ruby over `Digest`, whose hashing, HMAC and
+  PBKDF2 are **the `ext/digest` extension** (`libdigest_native.so`,
+  md-5 / sha1 / sha2 / hmac / pbkdf2). Rails' cookie encryption and key
   derivation run on these with CRuby-identical output. The rest of
   `openssl.rb` (PKey, X509, SSL) is still a load-only stub.
 - `libyaml-safer` — a port of libyaml 0.2.5; the parser and emitter behind
@@ -575,15 +581,16 @@ External crates (fetched from git):
   database into `:memory:` with it) wraps `sqlite3_backup_*` the same
   way. A `collation` with a real comparator is still unsupported.
 - `bcrypt` (crypt_blowfish-compatible) — the native half of the bcrypt
-  gem: `String.__bcrypt_salt` / `__bcrypt_crypt` (`src/builtins/bcrypt.rs`)
-  behind `gem/bcrypt_ext.rb`, which stands in for `bcrypt_ext.so` and
+  gem: `String.__bcrypt_salt` / `__bcrypt_crypt` (**the `ext/bcrypt`
+  extension**, `libbcrypt_native.so`) behind `gem/bcrypt_ext.rb`, which stands in for `bcrypt_ext.so` and
   forwards `BCrypt::Engine.__bc_salt` / `__bc_crypt`. Same salt in, same
   60-byte hash out as the C extension, as BINARY strings.
 - `comrak` (`default-features = false`) — cmark-gfm's parser and renderers
   behind the markly gem: `gem/markly/markly.rb` stands in for `markly.so`
   with `Markly::Parser`, `Markly::Node` (a Ruby-side doubly linked tree
   the gem edits in place, with cmark's `can_contain` rules) and
-  `Markly::Error`; `src/builtins/markly.rs` parses to and renders from a
+  `Markly::Error`; **the `ext/markly` extension** (`libmarkly_native.so`,
+  required by `markly.rb`) parses to and renders from a
   nested-Array snapshot of that tree (`String.__markly_parse` /
   `__markly_render_{html,commonmark,plaintext}`). HTML output matches
   cmark-gfm's; `to_commonmark` is comrak's own serialization style (list
@@ -712,7 +719,7 @@ bin/irm
 ### Installing and distributing
 
 An installed monoruby is two things: the binary, and the tree it loads
-(vendored stdlib, `builtins/`, stubs, and the five dynamically loaded
+(vendored stdlib, `builtins/`, stubs, and the dynamically loaded
 extensions). Both are produced by one build:
 
 ```sh

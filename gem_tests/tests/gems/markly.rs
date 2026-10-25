@@ -2,7 +2,7 @@ extern crate monoruby;
 use monoruby::tests::*;
 
 // The markly gem over monoruby's stand-in for markly.so
-// (gem/markly/markly.rb + src/builtins/markly.rs on the comrak crate).
+// (gem/markly/markly.rb + the `ext/markly` extension on the comrak crate).
 // Every case is compared against the host CRuby, which runs the gem's real
 // C extension over cmark-gfm — so these pin the stand-in to what markly
 // actually does: the HTML it renders, the tree it exposes, the errors it
@@ -22,6 +22,7 @@ use monoruby::tests::*;
 /// both line-break kinds — as HTML, with and without `UNSAFE`.
 #[test]
 fn markly_render_html() {
+    ensure_extension("markly_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -91,6 +92,7 @@ fn markly_render_html() {
 /// `tasklist_item_checked?`) and the `Markly::Error` the others raise.
 #[test]
 fn markly_tree_and_attributes() {
+    ensure_extension("markly_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -159,6 +161,7 @@ fn markly_tree_and_attributes() {
 /// `extract_children`, `replace_section`, `dup`, and the setters.
 #[test]
 fn markly_tree_edits() {
+    ensure_extension("markly_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -271,6 +274,7 @@ fn markly_tree_edits() {
 /// alignment row, task markers, footnotes) with the default width of 0.
 #[test]
 fn markly_plaintext() {
+    ensure_extension("markly_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -332,6 +336,7 @@ fn markly_plaintext() {
 /// same tree and calls back into the node's escapers.
 #[test]
 fn markly_ruby_renderer() {
+    ensure_extension("markly_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -357,6 +362,7 @@ fn markly_ruby_renderer() {
 /// comparison holds on a host with 0.15 as well.
 #[test]
 fn markly_0_19_api() {
+    ensure_extension("markly_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -403,7 +409,7 @@ fn markly_0_19_api() {
 /// and a verbatim meta, and no attribute cmark-gfm does not emit.
 ///
 /// comrak differs from cmark-gfm in three ways here, and
-/// `src/builtins/markly.rs` takes the whole `NodeValue::CodeBlock`
+/// `ext/markly` takes the whole `NodeValue::CodeBlock`
 /// rendering over to undo all of them:
 ///
 /// * it collects the attributes in a `HashMap` and writes them in its
@@ -420,6 +426,7 @@ fn markly_0_19_api() {
 /// the gem's.
 #[test]
 fn markly_code_block_attribute_order() {
+    ensure_extension("markly_native");
     run_test_once(
         r##"
         require "rubygems"

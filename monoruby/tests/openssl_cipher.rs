@@ -1,7 +1,7 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// `OpenSSL::Cipher` (stdlib/openssl.rb over src/builtins/cipher.rs): AES
+// `OpenSSL::Cipher` (stdlib/openssl.rb over the `ext/openssl` extension): AES
 // GCM / CBC for 128 / 192 / 256-bit keys, byte-identical to openssl,
 // with openssl's class shape (`AES256.new(:GCM)`, `CipherError`,
 // `AuthTagError` on a tag mismatch). Rails' cookie jar
@@ -9,6 +9,8 @@ use monoruby::tests::*;
 
 #[test]
 fn openssl_cipher_aes_matches_cruby() {
+    ensure_extension("openssl_native");
+    ensure_extension("digest_native");
     run_test_once(
         r##"
         require "openssl"
@@ -79,6 +81,8 @@ fn openssl_cipher_aes_matches_cruby() {
 
 #[test]
 fn message_encryptor_round_trip_like_rails() {
+    ensure_extension("openssl_native");
+    ensure_extension("digest_native");
     // The exact shape of ActiveSupport::MessageEncryptor's aes-256-gcm
     // path: PBKDF2-derived key, random iv, empty aad, 16-byte tag,
     // and a decrypt that must reproduce the message.
@@ -109,11 +113,14 @@ fn message_encryptor_round_trip_like_rails() {
 
 #[test]
 fn aes_builtins_reject_bad_lengths() {
+    ensure_extension("openssl_native");
+    ensure_extension("digest_native");
     // The native half's own argument checks (the Ruby layer validates
     // key and iv lengths before calling, so only a direct call reaches
     // them); not oracle-checked, CRuby has no such builtins.
     let v = run_test_no_result_check(
         r##"
+        require "openssl"
         r = []
         r << (begin; String.__aes_gcm(true, "k" * 32, "i" * 5, "", "x", ""); rescue RuntimeError => e; e.message; end)
         r << (begin; String.__aes_gcm(false, "k" * 32, "i" * 12, "", "x", "t" * 3); rescue RuntimeError => e; e.message; end)

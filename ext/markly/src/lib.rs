@@ -26,8 +26,10 @@
 //! `renderer.c` line discipline (prefix, `CR`, `BLANKLINE`, tight lists)
 //! without the width-based wrapping, which the gem does not enable by
 //! default (`to_plaintext(width: 0)`).
-
-use super::*;
+//!
+//! This is `src/builtins/markly.rs` moved out of the interpreter into a
+//! dynamically loaded extension (`markly_native.so`, required by
+//! `gem/markly/markly.rb`; doc/native_extension_loading.md, step 3).
 use comrak::arena_tree::Node as ArenaNode;
 use comrak::nodes::{
     Ast, AstNode, LineColumn, ListDelimType, ListType, NodeCode, NodeCodeBlock,
@@ -35,22 +37,40 @@ use comrak::nodes::{
     NodeTable, NodeTaskItem, NodeValue, Sourcepos, TableAlignment,
 };
 use comrak::{Arena, Options};
+use monoruby_ext::*;
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::ffi::c_int;
 use std::fmt::Write as _;
 
-pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_func(STRING_CLASS, "__markly_parse", markly_parse, 3);
-    globals.define_builtin_class_func(STRING_CLASS, "__markly_render_html", render_html, 3);
-    globals.define_builtin_class_func(
-        STRING_CLASS,
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Init_markly_native(ctx: *mut MrContext) -> c_int {
+    // SAFETY: the interpreter's contract for `Init_`.
+    unsafe { init(ctx, init_markly) }
+}
+
+fn init_markly(ctx: &mut Ctx) -> Result<()> {
+    let string = ctx.const_get(Value::UNDEF, "String").ok_or(Error)?;
+    let s = MR_METHOD_SINGLETON;
+    ctx.define_method(string, "__markly_parse", method!(markly_parse), 3, s);
+    ctx.define_method(string, "__markly_render_html", method!(render_html), 3, s);
+    ctx.define_method(
+        string,
         "__markly_render_commonmark",
-        render_commonmark,
+        method!(render_commonmark),
         3,
+        s,
     );
-    globals.define_builtin_class_func(STRING_CLASS, "__markly_render_plaintext", render_plaintext, 3);
-    globals.define_builtin_class_func(STRING_CLASS, "__markly_escape_href", escape_href, 1);
-    globals.define_builtin_class_func(STRING_CLASS, "__markly_escape_html", escape_html, 1);
+    ctx.define_method(
+        string,
+        "__markly_render_plaintext",
+        method!(render_plaintext),
+        3,
+        s,
+    );
+    ctx.define_method(string, "__markly_escape_href", method!(escape_href), 1, s);
+    ctx.define_method(string, "__markly_escape_html", method!(escape_html), 1, s);
+    Ok(())
 }
 
 // The gem's flag bits (`markly/flags.rb`, cmark-gfm's `CMARK_OPT_*`).
@@ -86,8 +106,36 @@ const T_SOURCEPOS: usize = 15;
 const T_CHILDREN: usize = 16;
 const T_LEN: usize = 17;
 
-fn sym(name: &str) -> Value {
-    Value::symbol(IdentId::get_id(name))
+/// The elements of `v` if it is an Array.
+fn try_ary(ctx: &Ctx, v: Value) -> Option<Vec<Value>> {
+    if ctx.type_of(v) != MrType::Array {
+        return None;
+    }
+    Some((0..ctx.ary_len(v)).filter_map(|i| ctx.ary_get(v, i)).collect())
+}
+
+/// The elements of `v`; a TypeError if it is not an Array.
+fn expect_ary(ctx: &mut Ctx, v: Value) -> Result<Vec<Value>> {
+    match try_ary(ctx, v) {
+        Some(a) => Ok(a),
+        None => {
+            let class = ctx.class_name(v);
+            Err(ctx.type_error(format!("no implicit conversion of {class} into Array")))
+        }
+    }
+}
+
+/// The name of `v` if it is a Symbol.
+fn try_sym(ctx: &mut Ctx, v: Value) -> Option<String> {
+    if ctx.type_of(v) != MrType::Symbol {
+        return None;
+    }
+    ctx.sym_name(v).ok()
+}
+
+/// The bytes of a String, as UTF-8 (lossily).
+fn lossy(ctx: &Ctx, v: Value) -> Result<String> {
+    ctx.str_string(v)
 }
 
 /// The comrak options a flag word and an extension list select.
@@ -120,15 +168,17 @@ fn options(flags: i64, extensions: &[String], width: usize) -> Options<'static> 
     o
 }
 
-fn extension_names(globals: &Globals, v: Value) -> Result<Vec<String>> {
-    let ary = v.expect_array_ty(&globals.store)?;
-    ary.iter()
-        .map(|e| match e.try_symbol() {
-            Some(id) => Ok(id.get_name()),
-            None => Err(MonorubyErr::typeerr(format!(
-                "extension names should be Symbols; got a {}",
-                globals.store.get_class_name(e.class())
-            ))),
+fn extension_names(ctx: &mut Ctx, v: Value) -> Result<Vec<String>> {
+    let ary = expect_ary(ctx, v)?;
+    ary.into_iter()
+        .map(|e| match try_sym(ctx, e) {
+            Some(name) => Ok(name),
+            None => {
+                let class = ctx.class_name(e);
+                Err(ctx.type_error(format!(
+                    "extension names should be Symbols; got a {class}"
+                )))
+            }
         })
         .collect()
 }
@@ -139,27 +189,25 @@ fn extension_names(globals: &Globals, v: Value) -> Result<Vec<String>> {
 /// Parses `text` (any bytes; invalid UTF-8 is replaced, as the gem's
 /// `VALIDATE_UTF8` does) and answers the document's tuple.
 ///
-#[monoruby_builtin]
-fn markly_parse(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let text = lfp.arg(0);
-    let text = String::from_utf8_lossy(text.expect_bytes(&globals.store)?).into_owned();
-    let flags = lfp.arg(1).expect_integer(&globals.store)?;
-    let extensions = extension_names(globals, lfp.arg(2))?;
+fn markly_parse(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
+    let text = lossy(ctx, args[0])?;
+    let flags = ctx.int(args[1])?;
+    let extensions = extension_names(ctx, args[2])?;
     let opts = options(flags, &extensions, 0);
     let arena = Arena::new();
     let root = comrak::parse_document(&arena, &text, &opts);
-    Ok(to_tuple(root))
+    Ok(to_tuple(ctx, root))
 }
 
 fn render_with(
-    globals: &mut Globals,
-    lfp: Lfp,
+    ctx: &mut Ctx,
+    args: &[Value],
     width: usize,
     f: impl for<'a> FnOnce(&'a AstNode<'a>, &Options<'_>) -> String,
 ) -> Result<Value> {
-    let flags = lfp.arg(1).expect_integer(&globals.store)?;
-    let extensions = if lfp.arg(2).is_array_ty() {
-        extension_names(globals, lfp.arg(2))?
+    let flags = ctx.int(args[1])?;
+    let extensions = if ctx.type_of(args[2]) == MrType::Array {
+        extension_names(ctx, args[2])?
     } else {
         vec![]
     };
@@ -172,9 +220,9 @@ fn render_with(
     opts.extension.tasklist = true;
     opts.extension.autolink = true;
     let arena = Arena::new();
-    let (root, unwrap_paragraph) = from_tuple(globals, &arena, lfp.arg(0))?;
+    let (root, unwrap_paragraph) = from_tuple(ctx, &arena, args[0])?;
     if let Err(e) = root.validate() {
-        return Err(MonorubyErr::runtimeerr(format!(
+        return Err(ctx.runtime_error(format!(
             "could not render: ill-formed node tree: {e:?}"
         )));
     }
@@ -184,14 +232,14 @@ fn render_with(
         // that is not theirs (see `from_tuple`).
         out = out[3..out.len() - 5].to_string();
     }
-    Ok(Value::string(out))
+    Ok(ctx.str(out))
 }
 
-fn width_arg(globals: &Globals, v: Value) -> Result<usize> {
+fn width_arg(ctx: &mut Ctx, v: Value) -> Result<usize> {
     if v.is_nil() {
         Ok(120)
     } else {
-        Ok(v.expect_integer(&globals.store)?.max(0) as usize)
+        Ok(ctx.int(v)?.max(0) as usize)
     }
 }
 
@@ -281,9 +329,8 @@ comrak::create_formatter!(MarklyHtmlFormatter, {
 ///
 /// ### String.__markly_render_html(tuple, flags, extensions)
 ///
-#[monoruby_builtin]
-fn render_html(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    render_with(globals, lfp, 0, |root, opts| {
+fn render_html(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
+    render_with(ctx, args, 0, |root, opts| {
         let mut out = String::new();
         let _ = MarklyHtmlFormatter::format_document(root, opts, &mut out);
         out
@@ -293,10 +340,9 @@ fn render_html(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
 ///
 /// ### String.__markly_render_commonmark(tuple, flags, width)
 ///
-#[monoruby_builtin]
-fn render_commonmark(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let width = width_arg(globals, lfp.arg(2))?;
-    render_with(globals, lfp, width, |root, opts| {
+fn render_commonmark(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
+    let width = width_arg(ctx, args[2])?;
+    render_with(ctx, args, width, |root, opts| {
         let mut out = String::new();
         let _ = comrak::format_commonmark(root, opts, &mut out);
         out
@@ -306,11 +352,10 @@ fn render_commonmark(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byt
 ///
 /// ### String.__markly_render_plaintext(tuple, flags, width)
 ///
-#[monoruby_builtin]
-fn render_plaintext(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let width = width_arg(globals, lfp.arg(2))?;
-    let flags = lfp.arg(1).expect_integer(&globals.store)?;
-    render_with(globals, lfp, width, |root, _| {
+fn render_plaintext(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
+    let width = width_arg(ctx, args[2])?;
+    let flags = ctx.int(args[1])?;
+    render_with(ctx, args, width, |root, _| {
         let mut r = Plain::new(flags, width);
         r.render(root);
         r.finish()
@@ -320,32 +365,34 @@ fn render_plaintext(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byte
 ///
 /// ### String.__markly_escape_href(str)
 ///
-#[monoruby_builtin]
-fn escape_href(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = lfp.arg(0);
-    let s = s.expect_str(&globals.store)?;
+fn escape_href(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
+    let s = ctx.str_bytes(args[0])?;
+    let Ok(s) = std::str::from_utf8(s) else {
+        return Err(ctx.argument_error("invalid byte sequence in UTF-8"));
+    };
     let mut out = String::new();
     let _ = comrak::html::escape_href(&mut out, s, false);
-    Ok(Value::string(out))
+    Ok(ctx.str(out))
 }
 
 ///
 /// ### String.__markly_escape_html(str)
 ///
-#[monoruby_builtin]
-fn escape_html(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = lfp.arg(0);
-    let s = s.expect_str(&globals.store)?;
+fn escape_html(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
+    let s = ctx.str_bytes(args[0])?;
+    let Ok(s) = std::str::from_utf8(s) else {
+        return Err(ctx.argument_error("invalid byte sequence in UTF-8"));
+    };
     let mut out = String::new();
     let _ = comrak::html::escape(&mut out, s);
-    Ok(Value::string(out))
+    Ok(ctx.str(out))
 }
 
 // ---------------------------------------------------------------------------
 // comrak tree → tuple
 // ---------------------------------------------------------------------------
 
-fn to_tuple<'a>(node: &'a AstNode<'a>) -> Value {
+fn to_tuple<'a>(ctx: &Ctx, node: &'a AstNode<'a>) -> Value {
     let ast = node.data();
     let mut t = vec![Value::nil(); T_LEN];
     // cmark leaves the two break kinds unpositioned.
@@ -353,17 +400,17 @@ fn to_tuple<'a>(node: &'a AstNode<'a>) -> Value {
         NodeValue::SoftBreak | NodeValue::LineBreak => Sourcepos::from((0, 0, 0, 0)),
         _ => ast.sourcepos,
     };
-    t[T_SOURCEPOS] = Value::array_from_vec(vec![
-        Value::integer(sp.start.line as i64),
-        Value::integer(sp.start.column as i64),
-        Value::integer(sp.end.line as i64),
-        Value::integer(sp.end.column as i64),
+    t[T_SOURCEPOS] = ctx.ary_from(&vec![
+        Value::int(sp.start.line as i64),
+        Value::int(sp.start.column as i64),
+        Value::int(sp.end.line as i64),
+        Value::int(sp.end.column as i64),
     ]);
     let ty = match &ast.value {
         NodeValue::Document => "document",
         NodeValue::BlockQuote | NodeValue::MultilineBlockQuote(_) => "blockquote",
         NodeValue::List(l) => {
-            list_fields(&mut t, l);
+            list_fields(ctx, &mut t, l);
             "list"
         }
         NodeValue::Item(_) => "list_item",
@@ -372,13 +419,13 @@ fn to_tuple<'a>(node: &'a AstNode<'a>) -> Value {
             "list_item"
         }
         NodeValue::CodeBlock(cb) => {
-            t[T_CONTENT] = Value::string_from_str(&cb.literal);
-            t[T_FENCE_INFO] = Value::string_from_str(&cb.info);
+            t[T_CONTENT] = ctx.str(&cb.literal);
+            t[T_FENCE_INFO] = ctx.str(&cb.info);
             t[T_FENCED] = Value::bool(cb.fenced);
-            t[T_EXTRA] = Value::array_from_vec(vec![
-                Value::string((cb.fence_char as char).to_string()),
-                Value::integer(cb.fence_length as i64),
-                Value::integer(cb.fence_offset as i64),
+            t[T_EXTRA] = ctx.ary_from(&vec![
+                ctx.str((cb.fence_char as char).to_string()),
+                Value::int(cb.fence_length as i64),
+                Value::int(cb.fence_offset as i64),
             ]);
             "code_block"
         }
@@ -396,35 +443,35 @@ fn to_tuple<'a>(node: &'a AstNode<'a>) -> Value {
             if !lines.is_empty() {
                 inner.push('\n');
             }
-            t[T_CONTENT] = Value::string(inner);
+            t[T_CONTENT] = ctx.str(inner);
             "front_matter"
         }
         NodeValue::HtmlBlock(hb) => {
-            t[T_CONTENT] = Value::string_from_str(&hb.literal);
+            t[T_CONTENT] = ctx.str(&hb.literal);
             "html"
         }
         NodeValue::Paragraph => "paragraph",
         NodeValue::Heading(h) => {
-            t[T_LEVEL] = Value::integer(h.level as i64);
+            t[T_LEVEL] = Value::int(h.level as i64);
             "header"
         }
         NodeValue::ThematicBreak => "hrule",
         NodeValue::FootnoteDefinition(fd) => {
-            t[T_CONTENT] = Value::string_from_str(&fd.name);
-            t[T_EXTRA] = Value::integer(fd.total_references as i64);
+            t[T_CONTENT] = ctx.str(&fd.name);
+            t[T_EXTRA] = Value::int(fd.total_references as i64);
             "footnote_definition"
         }
         NodeValue::Table(tb) => {
-            t[T_ALIGNMENTS] = Value::array_from_vec(
+            t[T_ALIGNMENTS] = ctx.ary_from(&
                 tb.alignments
                     .iter()
                     .map(|a| match a {
                         TableAlignment::None => Value::nil(),
-                        TableAlignment::Left => sym("left"),
-                        TableAlignment::Center => sym("center"),
-                        TableAlignment::Right => sym("right"),
+                        TableAlignment::Left => ctx.sym("left"),
+                        TableAlignment::Center => ctx.sym("center"),
+                        TableAlignment::Right => ctx.sym("right"),
                     })
-                    .collect(),
+                    .collect::<Vec<_>>(),
             );
             "table"
         }
@@ -434,34 +481,34 @@ fn to_tuple<'a>(node: &'a AstNode<'a>) -> Value {
         }
         NodeValue::TableCell => "table_cell",
         NodeValue::Text(s) => {
-            t[T_CONTENT] = Value::string_from_str(s);
+            t[T_CONTENT] = ctx.str(s.as_bytes());
             "text"
         }
         NodeValue::SoftBreak => "softbreak",
         NodeValue::LineBreak => "linebreak",
         NodeValue::Code(c) => {
-            t[T_CONTENT] = Value::string_from_str(&c.literal);
+            t[T_CONTENT] = ctx.str(&c.literal);
             "code"
         }
         NodeValue::HtmlInline(s) => {
-            t[T_CONTENT] = Value::string_from_str(s);
+            t[T_CONTENT] = ctx.str(s);
             "inline_html"
         }
         NodeValue::Raw(s) => {
-            t[T_CONTENT] = Value::string_from_str(s);
+            t[T_CONTENT] = ctx.str(s);
             "inline_html"
         }
         NodeValue::Emph => "emph",
         NodeValue::Strong => "strong",
         NodeValue::Strikethrough => "strikethrough",
         NodeValue::Link(l) => {
-            t[T_URL] = Value::string_from_str(&l.url);
-            t[T_TITLE] = Value::string_from_str(&l.title);
+            t[T_URL] = ctx.str(&l.url);
+            t[T_TITLE] = ctx.str(&l.title);
             "link"
         }
         NodeValue::Image(l) => {
-            t[T_URL] = Value::string_from_str(&l.url);
-            t[T_TITLE] = Value::string_from_str(&l.title);
+            t[T_URL] = ctx.str(&l.url);
+            t[T_TITLE] = ctx.str(&l.title);
             "image"
         }
         NodeValue::FootnoteReference(fr) => {
@@ -469,11 +516,11 @@ fn to_tuple<'a>(node: &'a AstNode<'a>) -> Value {
             // index once the definitions are resolved; the label lives
             // on the definition (and in `extra` here, so the Ruby side
             // can find the definition for `parent_footnote_def`).
-            t[T_CONTENT] = Value::string(fr.ix.to_string());
-            t[T_EXTRA] = Value::array_from_vec(vec![
-                Value::integer(fr.ref_num as i64),
-                Value::integer(fr.ix as i64),
-                Value::string_from_str(&fr.name),
+            t[T_CONTENT] = ctx.str(fr.ix.to_string());
+            t[T_EXTRA] = ctx.ary_from(&vec![
+                Value::int(fr.ref_num as i64),
+                Value::int(fr.ix as i64),
+                ctx.str(&fr.name),
             ]);
             "footnote_reference"
         }
@@ -485,19 +532,19 @@ fn to_tuple<'a>(node: &'a AstNode<'a>) -> Value {
             }
         }
     };
-    t[T_TYPE] = sym(ty);
-    t[T_CHILDREN] = Value::array_from_vec(node.children().map(to_tuple).collect());
-    Value::array_from_vec(t)
+    t[T_TYPE] = ctx.sym(ty);
+    t[T_CHILDREN] = ctx.ary_from(&node.children().map(|c| to_tuple(ctx, c)).collect::<Vec<_>>());
+    ctx.ary_from(&t)
 }
 
-fn list_fields(t: &mut [Value], l: &NodeList) {
-    t[T_LIST_TYPE] = sym(match l.list_type {
+fn list_fields(ctx: &Ctx, t: &mut [Value], l: &NodeList) {
+    t[T_LIST_TYPE] = ctx.sym(match l.list_type {
         ListType::Bullet => "bullet_list",
         ListType::Ordered => "ordered_list",
     });
-    t[T_LIST_START] = Value::integer(l.start as i64);
+    t[T_LIST_START] = Value::int(l.start as i64);
     t[T_LIST_TIGHT] = Value::bool(l.tight);
-    t[T_LIST_DELIM] = sym(match l.delimiter {
+    t[T_LIST_DELIM] = ctx.sym(match l.delimiter {
         ListDelimType::Period => "period",
         ListDelimType::Paren => "paren",
     });
@@ -509,60 +556,49 @@ fn list_fields(t: &mut [Value], l: &NodeList) {
 
 struct Row {
     ty: String,
-    t: Array,
+    t: Vec<Value>,
 }
 
 impl Row {
-    fn new(globals: &Globals, v: Value) -> Result<Row> {
-        let t = v.expect_array_ty(&globals.store)?;
+    fn new(ctx: &mut Ctx, v: Value) -> Result<Row> {
+        let t = expect_ary(ctx, v)?;
         if t.len() != T_LEN {
-            return Err(MonorubyErr::argumenterr("malformed Markly node tuple"));
+            return Err(ctx.argument_error("malformed Markly node tuple"));
         }
-        let ty = t[T_TYPE]
-            .try_symbol()
-            .ok_or_else(|| {
-                MonorubyErr::no_implicit_conversion(&globals.store, t[T_TYPE], SYMBOL_CLASS)
-            })?
-            .get_name();
+        let Some(ty) = try_sym(ctx, t[T_TYPE]) else {
+            let class = ctx.class_name(t[T_TYPE]);
+            return Err(ctx.type_error(format!("no implicit conversion of {class} into Symbol")));
+        };
         Ok(Row { ty, t })
     }
 
-    fn str(&self, globals: &Globals, i: usize) -> Result<String> {
+    fn str(&self, ctx: &mut Ctx, i: usize) -> Result<String> {
         let v = self.t[i];
         if v.is_nil() {
             Ok(String::new())
         } else {
-            Ok(String::from_utf8_lossy(v.expect_bytes(&globals.store)?).into_owned())
+            lossy(ctx, v)
         }
     }
 
-    fn int(&self, globals: &Globals, i: usize, default: i64) -> Result<i64> {
+    fn int(&self, ctx: &mut Ctx, i: usize, default: i64) -> Result<i64> {
         let v = self.t[i];
-        if v.is_nil() {
-            Ok(default)
-        } else {
-            v.expect_integer(&globals.store)
-        }
+        if v.is_nil() { Ok(default) } else { ctx.int(v) }
     }
 
     fn truthy(&self, i: usize) -> bool {
-        self.t[i].as_bool()
+        self.t[i].truthy()
     }
 
-    fn sym_is(&self, i: usize, name: &str) -> bool {
-        self.t[i]
-            .try_symbol()
-            .map_or(false, |id| id.get_name() == name)
+    fn sym_is(&self, ctx: &mut Ctx, i: usize, name: &str) -> bool {
+        try_sym(ctx, self.t[i]).is_some_and(|s| s == name)
     }
 
-    fn sourcepos(&self, globals: &Globals) -> Result<Sourcepos> {
-        let v = self.t[T_SOURCEPOS];
-        if let Some(a) = v.try_array_ty()
+    fn sourcepos(&self, ctx: &mut Ctx) -> Result<Sourcepos> {
+        if let Some(a) = try_ary(ctx, self.t[T_SOURCEPOS])
             && a.len() == 4
         {
-            let n = |i: usize| -> Result<usize> {
-                Ok(a[i].expect_integer(&globals.store)?.max(0) as usize)
-            };
+            let mut n = |i: usize| -> Result<usize> { Ok(ctx.int(a[i])?.max(0) as usize) };
             return Ok(Sourcepos {
                 start: LineColumn {
                     line: n(0)?,
@@ -578,17 +614,17 @@ impl Row {
     }
 }
 
-fn list_data(globals: &Globals, row: &Row, inherited: Option<NodeList>) -> Result<NodeList> {
+fn list_data(ctx: &mut Ctx, row: &Row, inherited: Option<NodeList>) -> Result<NodeList> {
     let mut l = inherited.unwrap_or_default();
     if row.ty == "list" {
-        l.list_type = if row.sym_is(T_LIST_TYPE, "ordered_list") {
+        l.list_type = if row.sym_is(ctx, T_LIST_TYPE, "ordered_list") {
             ListType::Ordered
         } else {
             ListType::Bullet
         };
-        l.start = row.int(globals, T_LIST_START, 1)?.max(0) as usize;
+        l.start = row.int(ctx, T_LIST_START, 1)?.max(0) as usize;
         l.tight = row.truthy(T_LIST_TIGHT);
-        l.delimiter = if row.sym_is(T_LIST_DELIM, "paren") {
+        l.delimiter = if row.sym_is(ctx, T_LIST_DELIM, "paren") {
             ListDelimType::Paren
         } else {
             ListDelimType::Period
@@ -621,17 +657,17 @@ const INLINE_TYPES: &[&str] = &[
 /// (comrak refuses inlines directly under a document) — the second
 /// answer says the paragraph's own tags are to be stripped.
 fn from_tuple<'a>(
-    globals: &Globals,
+    ctx: &mut Ctx,
     arena: &'a Arena<'a>,
     v: Value,
 ) -> Result<(&'a AstNode<'a>, bool)> {
-    let row = Row::new(globals, v)?;
+    let row = Row::new(ctx, v)?;
     if row.ty == "custom_block" || row.ty == "custom_inline" {
-        let inline = match row.t[T_CHILDREN].try_array_ty() {
-            Some(children) => children.iter().all(|c| {
-                c.try_array_ty()
-                    .and_then(|r| r.first().and_then(|t| t.try_symbol()))
-                    .is_some_and(|id| INLINE_TYPES.contains(&id.get_name().as_str()))
+        let inline = match try_ary(ctx, row.t[T_CHILDREN]) {
+            Some(children) => children.into_iter().all(|c| {
+                try_ary(ctx, c)
+                    .and_then(|r| r.first().and_then(|&t| try_sym(ctx, t)))
+                    .is_some_and(|ty| INLINE_TYPES.contains(&ty.as_str()))
             }),
             None => false,
         };
@@ -642,12 +678,12 @@ fn from_tuple<'a>(
         };
         let holder = arena.alloc(ArenaNode::new(RefCell::new(Ast::new_with_sourcepos(
             value,
-            row.sourcepos(globals)?,
+            row.sourcepos(ctx)?,
         ))));
-        append_children(globals, arena, holder, &row, None)?;
+        append_children(ctx, arena, holder, &row, None)?;
         return Ok((holder, inline));
     }
-    let root = build(globals, arena, &row, None)?;
+    let root = build(ctx, arena, &row, None)?;
     // comrak's renderers read a list item's or a table cell's ancestors;
     // a detached one (the gem's `dup` of an item) gets a synthetic parent
     // to render under, as cmark tolerates the missing one.
@@ -684,7 +720,7 @@ fn from_tuple<'a>(
 }
 
 fn build<'a>(
-    globals: &Globals,
+    ctx: &mut Ctx,
     arena: &'a Arena<'a>,
     row: &Row,
     parent_list: Option<NodeList>,
@@ -694,28 +730,28 @@ fn build<'a>(
         "document" => NodeValue::Document,
         "blockquote" | "block_quote" => NodeValue::BlockQuote,
         "list" => {
-            let l = list_data(globals, row, None)?;
+            let l = list_data(ctx, row, None)?;
             list = Some(l);
             NodeValue::List(l)
         }
         "list_item" | "item" => {
             let checked = row.t[T_CHECKED];
             if checked.is_nil() {
-                NodeValue::Item(list_data(globals, row, parent_list)?)
+                NodeValue::Item(list_data(ctx, row, parent_list)?)
             } else {
                 NodeValue::TaskItem(NodeTaskItem {
-                    symbol: if checked.as_bool() { Some('x') } else { None },
+                    symbol: if checked.truthy() { Some('x') } else { None },
                     symbol_sourcepos: (0, 0, 0, 0).into(),
                 })
             }
         }
         "code_block" => {
             let fenced = row.t[T_FENCED].is_nil() || row.truthy(T_FENCED);
-            let (fence_char, fence_length, fence_offset) = match row.t[T_EXTRA].try_array_ty() {
+            let (fence_char, fence_length, fence_offset) = match try_ary(ctx, row.t[T_EXTRA]) {
                 Some(a) if a.len() == 3 => (
-                    a[0].expect_bytes(&globals.store)?.first().copied().unwrap_or(b'`'),
-                    a[1].expect_integer(&globals.store)?.max(0) as usize,
-                    a[2].expect_integer(&globals.store)?.max(0) as usize,
+                    ctx.str_bytes(a[0])?.first().copied().unwrap_or(b'`'),
+                    ctx.int(a[1])?.max(0) as usize,
+                    ctx.int(a[2])?.max(0) as usize,
                 ),
                 _ => (b'`', 3, 0),
             };
@@ -724,32 +760,32 @@ fn build<'a>(
                 fence_char,
                 fence_length,
                 fence_offset,
-                info: row.str(globals, T_FENCE_INFO)?,
-                literal: row.str(globals, T_CONTENT)?,
+                info: row.str(ctx, T_FENCE_INFO)?,
+                literal: row.str(ctx, T_CONTENT)?,
                 closed: true,
             }))
         }
-        "front_matter" => NodeValue::FrontMatter(row.str(globals, T_CONTENT)?),
+        "front_matter" => NodeValue::FrontMatter(row.str(ctx, T_CONTENT)?),
         "html" | "html_block" => NodeValue::HtmlBlock(NodeHtmlBlock {
             block_type: 6,
-            literal: row.str(globals, T_CONTENT)?,
+            literal: row.str(ctx, T_CONTENT)?,
         }),
         "paragraph" => NodeValue::Paragraph,
         "header" | "heading" => NodeValue::Heading(NodeHeading {
-            level: row.int(globals, T_LEVEL, 1)?.clamp(1, 6) as u8,
+            level: row.int(ctx, T_LEVEL, 1)?.clamp(1, 6) as u8,
             setext: false,
             closed: true,
         }),
         "hrule" | "thematic_break" => NodeValue::ThematicBreak,
         "footnote_definition" => NodeValue::FootnoteDefinition(NodeFootnoteDefinition {
-            name: row.str(globals, T_CONTENT)?,
-            total_references: row.int(globals, T_EXTRA, 1)?.max(0) as u32,
+            name: row.str(ctx, T_CONTENT)?,
+            total_references: row.int(ctx, T_EXTRA, 1)?.max(0) as u32,
         }),
         "table" => {
-            let alignments: Vec<TableAlignment> = match row.t[T_ALIGNMENTS].try_array_ty() {
+            let alignments: Vec<TableAlignment> = match try_ary(ctx, row.t[T_ALIGNMENTS]) {
                 Some(a) => a
-                    .iter()
-                    .map(|v| match v.try_symbol().map(|id| id.get_name()).as_deref() {
+                    .into_iter()
+                    .map(|v| match try_sym(ctx, v).as_deref() {
                         Some("left") => TableAlignment::Left,
                         Some("center") => TableAlignment::Center,
                         Some("right") => TableAlignment::Right,
@@ -768,33 +804,33 @@ fn build<'a>(
         "table_header" => NodeValue::TableRow(true),
         "table_row" => NodeValue::TableRow(row.truthy(T_TABLE_HEADER)),
         "table_cell" => NodeValue::TableCell,
-        "text" => NodeValue::Text(row.str(globals, T_CONTENT)?.into()),
+        "text" => NodeValue::Text(row.str(ctx, T_CONTENT)?.into()),
         "softbreak" => NodeValue::SoftBreak,
         "linebreak" => NodeValue::LineBreak,
         "code" => NodeValue::Code(NodeCode {
             num_backticks: 1,
-            literal: row.str(globals, T_CONTENT)?,
+            literal: row.str(ctx, T_CONTENT)?,
         }),
-        "inline_html" | "html_inline" => NodeValue::HtmlInline(row.str(globals, T_CONTENT)?),
+        "inline_html" | "html_inline" => NodeValue::HtmlInline(row.str(ctx, T_CONTENT)?),
         "emph" => NodeValue::Emph,
         "strong" => NodeValue::Strong,
         "strikethrough" => NodeValue::Strikethrough,
         "link" => NodeValue::Link(Box::new(NodeLink {
-            url: row.str(globals, T_URL)?,
-            title: row.str(globals, T_TITLE)?,
+            url: row.str(ctx, T_URL)?,
+            title: row.str(ctx, T_TITLE)?,
         })),
         "image" => NodeValue::Image(Box::new(NodeLink {
-            url: row.str(globals, T_URL)?,
-            title: row.str(globals, T_TITLE)?,
+            url: row.str(ctx, T_URL)?,
+            title: row.str(ctx, T_TITLE)?,
         })),
         "footnote_reference" => {
-            let (ref_num, ix, name) = match row.t[T_EXTRA].try_array_ty() {
+            let (ref_num, ix, name) = match try_ary(ctx, row.t[T_EXTRA]) {
                 Some(a) if a.len() == 3 => (
-                    a[0].expect_integer(&globals.store)?.max(0) as u32,
-                    a[1].expect_integer(&globals.store)?.max(0) as u32,
-                    String::from_utf8_lossy(a[2].expect_bytes(&globals.store)?).into_owned(),
+                    ctx.int(a[0])?.max(0) as u32,
+                    ctx.int(a[1])?.max(0) as u32,
+                    lossy(ctx, a[2])?,
                 ),
-                _ => (1, 1, row.str(globals, T_CONTENT)?),
+                _ => (1, 1, row.str(ctx, T_CONTENT)?),
             };
             NodeValue::FootnoteReference(Box::new(NodeFootnoteReference {
                 name,
@@ -809,41 +845,41 @@ fn build<'a>(
             // parent instead of allocating a node.
             let holder = arena.alloc(ArenaNode::new(RefCell::new(Ast::new_with_sourcepos(
                 NodeValue::Document,
-                row.sourcepos(globals)?,
+                row.sourcepos(ctx)?,
             ))));
-            append_children(globals, arena, holder, row, parent_list)?;
+            append_children(ctx, arena, holder, row, parent_list)?;
             return Ok(holder);
         }
     };
     let node = arena.alloc(ArenaNode::new(RefCell::new(Ast::new_with_sourcepos(
         value,
-        row.sourcepos(globals)?,
+        row.sourcepos(ctx)?,
     ))));
-    append_children(globals, arena, node, row, list)?;
+    append_children(ctx, arena, node, row, list)?;
     Ok(node)
 }
 
 fn append_children<'a>(
-    globals: &Globals,
+    ctx: &mut Ctx,
     arena: &'a Arena<'a>,
     node: &'a AstNode<'a>,
     row: &Row,
     list: Option<NodeList>,
 ) -> Result<()> {
-    let Some(children) = row.t[T_CHILDREN].try_array_ty() else {
+    let Some(children) = try_ary(ctx, row.t[T_CHILDREN]) else {
         return Ok(());
     };
-    for c in children.iter() {
-        let child_row = Row::new(globals, *c)?;
+    for c in children {
+        let child_row = Row::new(ctx, c)?;
         if child_row.ty == "custom_block" || child_row.ty == "custom_inline" {
             // Transparent: its children become ours.
-            let holder = build(globals, arena, &child_row, list)?;
+            let holder = build(ctx, arena, &child_row, list)?;
             while let Some(grandchild) = holder.first_child() {
                 grandchild.detach();
                 node.append(grandchild);
             }
         } else {
-            node.append(build(globals, arena, &child_row, list)?);
+            node.append(build(ctx, arena, &child_row, list)?);
         }
     }
     Ok(())

@@ -10,6 +10,7 @@
 # tokens keeps working.
 
 require "digest"
+require "openssl_native.so"
 
 module OpenSSL
   VERSION = "3.0.0"
@@ -36,7 +37,7 @@ module OpenSSL
 
   # Digests, HMAC and PBKDF2 are real: they run on monoruby's native
   # backends (`String.__digest` / `__hmac` / `__pbkdf2_hmac`,
-  # src/builtins/digest.rs), so cookie signing,
+  # the `ext/digest` extension), so cookie signing,
   # `ActiveSupport::KeyGenerator` and ETags produce the same bytes as
   # CRuby's openssl. `OpenSSL::Digest` has openssl's class shape
   # (`< ::Digest::Class`, algorithm subclasses, `new("sha256")`).
@@ -161,7 +162,7 @@ module OpenSSL
 
   module PKCS5
     # PBKDF2 (RFC 8018 §5.2) over `HMAC`, derived natively
-    # (`String.__pbkdf2_hmac`, src/builtins/digest.rs). Rails asks for
+    # (`String.__pbkdf2_hmac`, the `ext/digest` extension). Rails asks for
     # `2**16` iterations per key, which is 65,536 HMACs — the one place
     # where the Ruby-level loop was worth replacing outright.
     def self.pbkdf2_hmac(pass, salt, iter, keylen, digest)
@@ -202,8 +203,8 @@ module OpenSSL
     end
   end
 
-  # AES, for real: `String.__aes_gcm` / `__aes_cbc` (src/builtins/cipher.rs,
-  # the RustCrypto crates) do the work at `final`, over the whole message
+  # AES, for real: `String.__aes_gcm` / `__aes_cbc` (the `ext/openssl`
+  # extension on the RustCrypto crates) do the work at `final`, over the whole message
   # buffered by `update`. The modes Rails uses are covered: `aes-*-gcm`
   # (cookies, ActiveRecord encryption) and `aes-*-cbc` (the legacy
   # fallback), for 128 / 192 / 256-bit keys, PKCS#7 padding.

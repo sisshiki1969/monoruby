@@ -137,6 +137,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bcrypt_native"
+version = "0.1.0"
+dependencies = [
+ "bcrypt",
+ "monoruby-ext",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.71.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -498,6 +506,18 @@ dependencies = [
  "block-buffer",
  "crypto-common 0.1.7",
  "subtle",
+]
+
+[[package]]
+name = "digest_native"
+version = "0.1.0"
+dependencies = [
+ "hmac",
+ "md-5",
+ "monoruby-ext",
+ "pbkdf2",
+ "sha1",
+ "sha2",
 ]
 
 [[package]]
@@ -1017,6 +1037,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "markly_native"
+version = "0.1.0"
+dependencies = [
+ "comrak",
+ "monoruby-ext",
+]
+
+[[package]]
 name = "md-5"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1075,28 +1103,24 @@ dependencies = [
 name = "monoruby"
 version = "0.3.0"
 dependencies = [
- "aes",
- "aes-gcm",
- "bcrypt",
+ "bcrypt_native",
  "bitvec",
- "cbc",
  "cc",
  "chrono",
  "clap",
- "comrak",
  "console",
+ "digest_native",
  "dirs",
  "dtoa",
  "encoding_rs",
  "fxhash",
  "getrandom 0.3.4",
  "hex",
- "hmac",
  "html-escape",
  "indexmap",
  "libc",
  "libffi",
- "md-5",
+ "markly_native",
  "memchr",
  "mimalloc",
  "monoasm",
@@ -1107,13 +1131,12 @@ dependencies = [
  "nokogiri_native",
  "num",
  "onigmo-regex",
+ "openssl_native",
  "paste",
- "pbkdf2",
  "psych_native",
  "ruby-prism",
  "rubymap",
  "rustyline",
- "sha1",
  "sha2",
  "smallvec 1.10.0",
  "sqlite3_native",
@@ -1312,6 +1335,16 @@ name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+
+[[package]]
+name = "openssl_native"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "cbc",
+ "monoruby-ext",
+]
 
 [[package]]
 name = "option-ext"

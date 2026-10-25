@@ -39,7 +39,7 @@ NAME="monoruby-$VERSION"
 OUT="${OUT:-target/dist/$NAME}"
 
 # One build produces both halves: the binaries, and — through the artifact
-# dependencies in monoruby/Cargo.toml — the five extensions.
+# dependencies in monoruby/Cargo.toml — the extensions.
 cargo build --release
 ROOT="${MONORUBY_INSTALL_ROOT:-$HOME/.monoruby/v$VERSION}"
 if [ ! -d "$ROOT/builtins" ]; then

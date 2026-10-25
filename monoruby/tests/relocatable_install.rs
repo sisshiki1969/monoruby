@@ -88,7 +88,7 @@ fn run(dir: &Path, code: &str) -> String {
     run2(dir, code).0
 }
 
-/// The five extensions `build.rs` installs are all loadable from the
+/// The extensions `build.rs` installs are all loadable from the
 /// install root, with nothing on `MONORUBY_EXT_PATH`.
 #[test]
 fn the_installed_extensions_load() {
@@ -102,6 +102,10 @@ fn the_installed_extensions_load() {
         "zstd_native",
         "sqlite3_native",
         "nokogiri_native",
+        "markly_native",
+        "bcrypt_native",
+        "digest_native",
+        "openssl_native",
     ] {
         let dylib = if cfg!(target_os = "macos") {
             format!("lib{name}.dylib")
