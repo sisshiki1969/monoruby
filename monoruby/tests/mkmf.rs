@@ -138,7 +138,10 @@ puts RbConfig::MAKEFILE_CONFIG["capidir"]"#,
     assert_eq!(lines[0], "capidir", "{out}");
     assert_eq!(lines[1], capi.to_str().unwrap(), "{out}");
     assert_eq!(lines[2], "true", "{out}");
-    assert_eq!(lines[3], root.join("lib").to_str().unwrap(), "{out}");
+    // `libdir` is the snapshot host's (whatever that was); it is not
+    // redirected, only `libdirname` points elsewhere.
+    assert_ne!(lines[3], capi.to_str().unwrap(), "{out}");
+    assert!(lines[3].ends_with("/lib"), "{out}");
     assert_eq!(lines[4], capi.to_str().unwrap(), "{out}");
 }
 
