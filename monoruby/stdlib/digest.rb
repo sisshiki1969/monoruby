@@ -2,11 +2,14 @@
 #
 # Digest implementation for monoruby.
 #
-# The hashing itself is performed natively by `String.__digest`
-# (see src/builtins/digest.rs). Each algorithm class buffers the input
-# it receives and finalizes by calling that one-shot helper — hashing the
-# concatenation of all updates is equivalent to streaming, so no native
-# per-instance state is needed.
+# The hashing itself is performed natively by `String.__digest`, which
+# the `ext/digest` extension (libdigest_native.so, required just below)
+# defines. Each algorithm class buffers the input it receives and
+# finalizes by calling that one-shot helper — hashing the concatenation of
+# all updates is equivalent to streaming, so no native per-instance state
+# is needed.
+
+require "digest_native.so"
 
 module Digest
   VERSION = '3.2.0'

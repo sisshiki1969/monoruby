@@ -1,11 +1,11 @@
 [workspace]
-members = ["monoruby", "monoruby_attr", "monoruby_test_support", "gem_tests", "monoruby_ext_sys", "monoruby_ext", "ext/sqlite3", "ext/zlib", "ext/zstd", "ext/psych", "ext/nokogiri", "rubymap", "hashbrown", "ruby_traits", "libxml2-src", "libsqlite3-src"]
+members = ["monoruby", "monoruby_attr", "monoruby_test_support", "gem_tests", "monoruby_ext_sys", "monoruby_ext", "ext/sqlite3", "ext/zlib", "ext/zstd", "ext/psych", "ext/nokogiri", "ext/markly", "ext/bcrypt", "ext/digest", "ext/openssl", "rubymap", "hashbrown", "ruby_traits", "libxml2-src", "libsqlite3-src"]
 resolver = "2"
 
 [profile.dev]
 opt-level = 1
 
-# The five dynamically loaded extensions are *artifact* dependencies of
+# The dynamically loaded extensions are *artifact* dependencies of
 # `monoruby`, declared under its `[build-dependencies]` so that build.rs
 # is handed their paths and can install them. That puts them in Cargo's
 # build graph, where `build-override` decides the profile — and its

@@ -1,0 +1,17 @@
+[package]
+name = "openssl_native"
+version = "0.1.0"
+edition = "2024"
+description = "The native half of monoruby's OpenSSL::Cipher (AES-GCM / AES-CBC), as a dynamically loaded extension over the RustCrypto crates"
+license = "MIT"
+publish = false
+
+[lib]
+name = "openssl_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+monoruby-ext = { path = "../../monoruby_ext" }
+aes-gcm = "0.10"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }

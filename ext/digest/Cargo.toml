@@ -1,0 +1,19 @@
+[package]
+name = "digest_native"
+version = "0.1.0"
+edition = "2024"
+description = "Digest's native half for monoruby (one-shot MD5 / SHA-1 / SHA-2, HMAC, PBKDF2), as a dynamically loaded extension over the RustCrypto crates"
+license = "MIT"
+publish = false
+
+[lib]
+name = "digest_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+monoruby-ext = { path = "../../monoruby_ext" }
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+hmac = { version = "0.12", default-features = false }
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }

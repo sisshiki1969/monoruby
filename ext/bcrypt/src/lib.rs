@@ -1,24 +1,39 @@
-//! The native half of the `bcrypt` gem (`bcrypt_ext.so`): the two entry
-//! points its `BCrypt::Engine` calls, `__bc_salt` and `__bc_crypt`, on
-//! the `bcrypt` crate. The gem's Ruby half is the installed gem's own;
-//! `gem/bcrypt_ext.rb` stands in for the extension and forwards here.
+//! The native half of the `bcrypt` gem (`bcrypt_ext.so`) as a monoruby
+//! extension (`bcrypt_native.so`): the two entry points its
+//! `BCrypt::Engine` calls, `__bc_salt` and `__bc_crypt`, on the `bcrypt`
+//! crate. The gem's Ruby half is the installed gem's own;
+//! `gem/bcrypt_ext.rb` stands in for the extension, requires this library
+//! and forwards here.
 //!
 //! The extension is crypt_blowfish, whose output the crate reproduces
 //! byte for byte: a `$2a$` / `$2b$` / `$2x$` / `$2y$` prefix, the
 //! two-digit cost, the 22-character salt (re-encoded from its 128 bits,
 //! so its last character is normalized as crypt_blowfish normalizes
 //! it) and the 31-character hash, in bcrypt's own base64 alphabet.
+//!
+//! This is `src/builtins/bcrypt.rs` moved out of the interpreter
+//! (doc/native_extension_loading.md, step 3).
 
-use super::*;
+use monoruby_ext::*;
+use std::ffi::c_int;
 
-pub(super) fn init(globals: &mut Globals) {
-    globals.define_builtin_class_func(STRING_CLASS, "__bcrypt_salt", bcrypt_salt, 3);
-    globals.define_builtin_class_func(STRING_CLASS, "__bcrypt_crypt", bcrypt_crypt, 2);
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Init_bcrypt_native(ctx: *mut MrContext) -> c_int {
+    // SAFETY: the interpreter's contract for `Init_`.
+    unsafe { init(ctx, init_bcrypt) }
+}
+
+fn init_bcrypt(ctx: &mut Ctx) -> Result<()> {
+    let string = ctx.const_get(Value::UNDEF, "String").ok_or(Error)?;
+    let s = MR_METHOD_SINGLETON;
+    ctx.define_method(string, "__bcrypt_salt", method!(bcrypt_salt), 3, s);
+    ctx.define_method(string, "__bcrypt_crypt", method!(bcrypt_crypt), 2, s);
+    Ok(())
 }
 
 /// The extension's strings are `rb_str_new` results: BINARY.
-fn binary(s: String) -> Value {
-    Value::string_from_inner(RStringInner::from_encoding(s.as_bytes(), Encoding::Ascii8))
+fn binary(ctx: &Ctx, s: String) -> Value {
+    ctx.bytes(s)
 }
 
 const ALPHABET: &[u8; 64] =
@@ -97,19 +112,18 @@ fn decode_salt(s: &[u8]) -> Option<[u8; 16]> {
 /// `random_bytes`, or `nil` when the arguments are not usable (the gem
 /// raises on `nil`).
 ///
-#[monoruby_builtin]
-fn bcrypt_salt(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let (a0, a2) = (lfp.arg(0), lfp.arg(2));
-    let prefix = a0.expect_str(&globals.store)?;
-    let cost = lfp.arg(1).expect_integer(&globals.store)?;
-    let bytes = a2.expect_bytes(&globals.store)?;
-    if prefix.contains('\0') {
-        return Err(MonorubyErr::argumenterr("string contains null byte"));
+fn bcrypt_salt(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
+    let prefix = ctx.str_vec(args[0])?;
+    let cost = ctx.int(args[1])?;
+    let bytes = ctx.str_vec(args[2])?;
+    if prefix.contains(&0) {
+        return Err(ctx.argument_error("string contains null byte"));
     }
-    if !matches!(prefix, "$2a$" | "$2b$" | "$2x$" | "$2y$") || !(4..=31).contains(&cost) || bytes.len() < 16 {
+    let prefix = String::from_utf8_lossy(&prefix);
+    if !matches!(&*prefix, "$2a$" | "$2b$" | "$2x$" | "$2y$") || !(4..=31).contains(&cost) || bytes.len() < 16 {
         return Ok(Value::nil());
     }
-    Ok(binary(format!("{prefix}{cost:02}${}", encode(&bytes[..16]))))
+    Ok(binary(ctx, format!("{prefix}{cost:02}${}", encode(&bytes[..16]))))
 }
 
 ///
@@ -124,21 +138,19 @@ fn bcrypt_salt(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// `ArgumentError`. The secret is read as crypt_blowfish reads it: at
 /// most 72 bytes.
 ///
-#[monoruby_builtin]
-fn bcrypt_crypt(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let (a0, a1) = (lfp.arg(0), lfp.arg(1));
-    let secret = a0.expect_bytes(&globals.store)?;
-    let salt = a1.expect_bytes(&globals.store)?;
+fn bcrypt_crypt(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
+    let secret = ctx.str_vec(args[0])?;
+    let salt = ctx.str_vec(args[1])?;
     if secret.contains(&0) || salt.contains(&0) {
-        return Err(MonorubyErr::argumenterr("string contains null byte"));
+        return Err(ctx.argument_error("string contains null byte"));
     }
-    let Some(parsed) = parse_salt(salt) else {
+    let Some(parsed) = parse_salt(&salt) else {
         return Ok(Value::nil());
     };
     let (version, cost, salt16) = parsed;
     let end = secret.len().min(72);
     match ::bcrypt::hash_with_salt(&secret[..end], cost, salt16) {
-        Ok(parts) => Ok(binary(parts.format_for_version(version))),
+        Ok(parts) => Ok(binary(ctx, parts.format_for_version(version))),
         Err(_) => Ok(Value::nil()),
     }
 }

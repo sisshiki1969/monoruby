@@ -2,7 +2,7 @@ extern crate monoruby;
 use monoruby::tests::*;
 
 // The bcrypt gem over monoruby's stand-in for bcrypt_ext.so
-// (gem/bcrypt_ext.rb + src/builtins/bcrypt.rs on the bcrypt crate). Every
+// (gem/bcrypt_ext.rb + the `ext/bcrypt` extension on the bcrypt crate). Every
 // case is compared against the host CRuby, which runs the gem's real C
 // extension (crypt_blowfish), so these pin the stand-in's output byte for
 // byte: same salt in, same hash out.
@@ -16,6 +16,7 @@ use monoruby::tests::*;
 /// the result's encoding. Plus what the gem raises for bad salts.
 #[test]
 fn bcrypt_hash_secret() {
+    ensure_extension("bcrypt_native");
     run_test_once(
         r##"
         require "rubygems"
@@ -56,6 +57,7 @@ fn bcrypt_hash_secret() {
 /// `InvalidHash` / `InvalidCost` errors.
 #[test]
 fn bcrypt_password() {
+    ensure_extension("bcrypt_native");
     run_test_once(
         r##"
         require "rubygems"

@@ -8,6 +8,7 @@ use monoruby::tests::*;
 
 #[test]
 fn openssl_digest_hmac_and_kdf_match_cruby() {
+    ensure_extension("digest_native");
     run_test_once(
         r##"
         require "openssl"
@@ -46,6 +47,7 @@ fn openssl_digest_hmac_and_kdf_match_cruby() {
 // one, which used to be done in Ruby and is now the crate's job.
 #[test]
 fn openssl_hmac_key_lengths_match_cruby() {
+    ensure_extension("digest_native");
     run_test_once(
         r##"
         require "openssl"
@@ -69,6 +71,7 @@ fn openssl_hmac_key_lengths_match_cruby() {
 // PBKDF2 against the RFC 6070 vectors plus the shapes Rails asks for.
 #[test]
 fn openssl_pbkdf2_matches_cruby() {
+    ensure_extension("digest_native");
     run_test_once(
         r##"
         require "openssl"
@@ -100,7 +103,39 @@ fn openssl_pbkdf2_matches_cruby() {
 // than hashing with the wrong one.
 #[test]
 fn native_hmac_pbkdf2_reject_unknown_algorithm() {
-    run_test_error(r#"String.__hmac("bogus", "k", "d")"#);
-    run_test_error(r#"String.__pbkdf2_hmac("bogus", "p", "s", 1, 16)"#);
-    run_test_error(r#"String.__pbkdf2_hmac("sha256", "p", "s", 1, -1)"#);
+    ensure_extension("digest_native");
+    run_test_error(r#"require "digest"; String.__digest("bogus", "data")"#);
+    run_test_error(r#"require "digest"; String.__hmac("bogus", "k", "d")"#);
+    run_test_error(r#"require "digest"; String.__pbkdf2_hmac("bogus", "p", "s", 1, 16)"#);
+    run_test_error(r#"require "digest"; String.__pbkdf2_hmac("sha256", "p", "s", 1, -1)"#);
+}
+
+// `Digest` itself (stdlib/digest*.rb over the extension's `String.__digest`).
+#[test]
+fn digest_matches_cruby() {
+    ensure_extension("digest_native");
+    run_tests(&[
+        r#"require 'digest'; Digest::MD5.hexdigest("The quick brown fox jumps over the lazy dog")"#,
+        r#"require 'digest'; Digest::MD5.hexdigest("")"#,
+        r#"require 'digest/md5'; Digest::MD5.hexdigest("abc")"#,
+        r#"require 'digest/sha1'; Digest::SHA1.hexdigest("abc")"#,
+        r#"require 'digest/sha2'; Digest::SHA256.hexdigest("abc")"#,
+        r#"require 'digest/sha2'; Digest::SHA384.hexdigest("abc")"#,
+        r#"require 'digest/sha2'; Digest::SHA512.hexdigest("abc")"#,
+        // Digest::Instance#new: a fresh digest of the same kind.
+        r#"require 'digest/sha2'; d = Digest::SHA256.new; d << "abc"; [d.new.hexdigest == Digest::SHA256.hexdigest(""), d.hexdigest == Digest::SHA256.hexdigest("abc"), d.new.class]"#,
+        r#"require 'openssl'; d = OpenSSL::Digest.new("SHA256"); d << "abc"; [d.new.hexdigest == OpenSSL::Digest::SHA256.hexdigest(""), d.hexdigest == OpenSSL::Digest::SHA256.hexdigest("abc"), d.new.name]"#,
+        // const_missing autoload (SHA256 referenced via Digest:: only)
+        r#"require 'digest'; Digest.const_get(:SHA256).hexdigest("abc")"#,
+        // streaming via update / <<
+        r#"require 'digest'; Digest::SHA256.new.update("ab").update("c").hexdigest"#,
+        r#"require 'digest'; d = Digest::MD5.new; d << "a"; d << "bc"; d.hexdigest"#,
+        // binary digest length, base64, metadata
+        r#"require 'digest'; Digest::SHA256.digest("abc").length"#,
+        r#"require 'digest'; Digest::MD5.base64digest("abc")"#,
+        r#"require 'digest'; Digest::SHA512.new.digest_length"#,
+        r#"require 'digest'; Digest::SHA1.new.block_length"#,
+        // SHA2 bit-length wrapper
+        r#"require 'digest/sha2'; Digest::SHA2.new(512).update("abc").hexdigest"#,
+    ]);
 }

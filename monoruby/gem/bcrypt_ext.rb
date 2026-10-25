@@ -1,8 +1,10 @@
 # Stand-in for the bcrypt gem's C extension (`bcrypt_ext.so`): the two
-# entry points `BCrypt::Engine` calls, on the native `bcrypt` in
-# `src/builtins/bcrypt.rs` (the `bcrypt` crate, whose output is
+# entry points `BCrypt::Engine` calls, on the `ext/bcrypt` extension
+# (libbcrypt_native.so, over the `bcrypt` crate, whose output is
 # crypt_blowfish's byte for byte). The gem's Ruby half (`bcrypt/engine`,
 # `bcrypt/password`) is the installed gem's own and makes both private.
+require "bcrypt_native.so"
+
 module BCrypt
   class Engine
     def self.__bc_salt(prefix, cost, random_bytes)
