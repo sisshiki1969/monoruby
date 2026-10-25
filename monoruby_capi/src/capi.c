@@ -1716,6 +1716,9 @@ rb_sym2str(VALUE sym)
 VALUE
 rb_id2str(ID id)
 {
+    /* CRuby answers 0 (= Qfalse) for the null ID, as `rb_id2name` answers NULL. */
+    if (id == 0)
+        return Qfalse;
     return rb_sym2str(ID2SYM(id));
 }
 

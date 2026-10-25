@@ -365,6 +365,13 @@ impl IdentId {
 
 impl IdentId {
     ///
+    /// The id for a raw u32, or `None` for 0 (never a valid id).
+    ///
+    pub(crate) fn try_from_u32(id: u32) -> Option<Self> {
+        NonZeroU32::new(id).map(IdentId)
+    }
+
+    ///
     /// Get an inner id as u32.
     ///
     pub(crate) fn get(&self) -> u32 {
