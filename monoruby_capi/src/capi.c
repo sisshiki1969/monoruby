@@ -2302,6 +2302,12 @@ rb_ivar_set(VALUE obj, ID id, VALUE val)
 VALUE
 rb_ivar_defined(VALUE obj, ID id)
 {
+    /* A name without '@' is a hidden ivar (CRuby's "-aggregators" style),
+     * which instance_variable_defined? rejects; the table has no "defined"
+     * query, so a hidden one set to nil reads as undefined. */
+    const char *name = rb_id2name(id);
+    if (name[0] != '@')
+        return NIL_P(rb_iv_get(obj, name)) ? Qfalse : Qtrue;
     return rb_funcall(obj, rb_intern("instance_variable_defined?"), 1, ID2SYM(id));
 }
 
@@ -2816,6 +2822,12 @@ rb_utf8_str_new(const char *ptr, long len)
     if (!ptr)
         return force_encoding(rb_str_new(NULL, len), "UTF-8");
     return check(api->str_new(ctx(), (const uint8_t *)ptr, (size_t)len));
+}
+
+VALUE
+rb_utf8_str_new_static(const char *ptr, long len)
+{
+    return rb_utf8_str_new(ptr, len);
 }
 
 VALUE
@@ -3527,6 +3539,48 @@ rb_range_values(VALUE range, VALUE *begp, VALUE *endp, int *exclp)
     return 1;
 }
 
+/* CRuby's range.c: `range` as (begin, length) over a sequence of `len`
+ * elements. Qfalse for a non-range; Qnil (err 0) or RangeError (err 1)
+ * when out of range; err 2 clamps like err 0 but raises. */
+VALUE
+rb_range_beg_len(VALUE range, long *begp, long *lenp, long len, int err)
+{
+    VALUE b, e;
+    int excl;
+    if (!rb_range_values(range, &b, &e, &excl))
+        return Qfalse;
+    long beg = NIL_P(b) ? 0 : NUM2LONG(b);
+    long end = NIL_P(e) ? -1 : NUM2LONG(e);
+    if (NIL_P(e))
+        excl = 0;
+    long origbeg = beg, origend = end;
+    if (beg < 0) {
+        beg += len;
+        if (beg < 0)
+            goto out_of_range;
+    }
+    if (end < 0)
+        end += len;
+    if (!excl)
+        end++;
+    if (err == 0 || err == 2) {
+        if (beg > len)
+            goto out_of_range;
+        if (end > len)
+            end = len;
+    }
+    len = end - beg;
+    if (len < 0)
+        len = 0;
+    *begp = beg;
+    *lenp = len;
+    return Qtrue;
+out_of_range:
+    if (err)
+        rb_raise(rb_eRangeError, "%ld..%s%ld out of range", origbeg, excl ? "." : "", origend);
+    return Qnil;
+}
+
 /* ---------------------------------------------------------------------
  * Encodings
  * --------------------------------------------------------------------- */
@@ -3744,6 +3798,13 @@ VALUE
 rb_enc_str_new(const char *ptr, long len, rb_encoding *enc)
 {
     return rb_enc_associate(rb_str_new(ptr, len), enc);
+}
+
+/* `ptr` taken as `enc` and appended with String#<<'s encoding rules. */
+VALUE
+rb_enc_str_buf_cat(VALUE str, const char *ptr, long len, rb_encoding *enc)
+{
+    return rb_str_buf_append(str, rb_enc_str_new(ptr, len, enc));
 }
 
 VALUE
@@ -4693,6 +4754,41 @@ rb_absint_size(VALUE val, int *nlz_bits_ret)
     return size;
 }
 
+/* bignum.c's rb_integer_pack: the low numwords * wordsize bytes of val
+ * (two's complement with INTEGER_PACK_2COMP, the absolute value
+ * otherwise) in the requested word and byte order. Returns val's sign,
+ * doubled when its absolute value does not fit. */
+int
+rb_integer_pack(VALUE val, void *words, size_t numwords, size_t wordsize, size_t nails, int flags)
+{
+    if (nails != 0)
+        rb_raise(rb_eNotImpError, "rb_integer_pack: nails are not supported");
+    val = rb_to_int(val);
+    size_t n = numwords * wordsize;
+    int sign = FIXNUM_P(val) ? (FIX2LONG(val) > 0) - (FIX2LONG(val) < 0)
+                             : NUM2INT(rb_funcall(val, rb_intern("<=>"), 1, INT2FIX(0)));
+    VALUE abs = rb_funcall(val, rb_intern("abs"), 0);
+    VALUE limit = rb_funcall(INT2FIX(1), rb_intern("<<"), 1, SIZET2NUM(n * 8));
+    int cmp = NUM2INT(rb_funcall(abs, rb_intern("<=>"), 1, limit));
+    int overflow = cmp > 0 || (cmp == 0 && !(sign < 0 && (flags & INTEGER_PACK_2COMP)));
+    VALUE src = (flags & INTEGER_PACK_2COMP) ? val : abs;
+    VALUE mask = rb_funcall(limit, rb_intern("-"), 1, INT2FIX(1));
+    VALUE bytes = rb_funcall(rb_funcall(src, rb_intern("&"), 1, mask), rb_intern("digits"), 1, INT2FIX(256));
+    long have = RARRAY_LEN(bytes);
+    unsigned char *out = (unsigned char *)words;
+    int msword = flags & INTEGER_PACK_MSWORD_FIRST;
+    int msbyte = (flags & INTEGER_PACK_MSBYTE_FIRST)
+        || ((flags & INTEGER_PACK_NATIVE_BYTE_ORDER) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__);
+    for (size_t i = 0; i < n; i++) {
+        size_t w = i / wordsize, b = i % wordsize;
+        unsigned char byte = (long)i < have ? (unsigned char)NUM2INT(rb_ary_entry(bytes, (long)i)) : 0;
+        size_t wi = msword ? numwords - 1 - w : w;
+        size_t bi = msbyte ? wordsize - 1 - b : b;
+        out[wi * wordsize + bi] = byte;
+    }
+    return overflow ? sign * 2 : sign;
+}
+
 int
 rb_absint_singlebit_p(VALUE val)
 {
@@ -4801,6 +4897,37 @@ VALUE
 rb_io_taint_check(VALUE io)
 {
     return io;
+}
+
+/* io.c's rb_io_extract_encoding_option over the opts hash's
+ * :external_encoding / :internal_encoding / :encoding ("ext:int"). As in
+ * rb_io_ext_int_to_encs, a pair whose halves differ leaves the internal
+ * encoding in *enc_p and the external one in *enc2_p. */
+int
+rb_io_extract_encoding_option(VALUE opt, rb_encoding **enc_p, rb_encoding **enc2_p, int *fmode_p)
+{
+    (void)fmode_p;
+    if (NIL_P(opt)) return 0;
+    VALUE ext = rb_hash_aref(opt, ID2SYM(rb_intern("external_encoding")));
+    VALUE intern = rb_hash_aref(opt, ID2SYM(rb_intern("internal_encoding")));
+    VALUE both = rb_hash_aref(opt, ID2SYM(rb_intern("encoding")));
+    if (NIL_P(ext) && NIL_P(intern) && !NIL_P(both)) {
+        VALUE parts = rb_funcall(rb_String(both), rb_intern("split"), 2,
+                                 rb_str_new_cstr(":"), INT2FIX(2));
+        ext = rb_ary_entry(parts, 0);
+        intern = rb_ary_entry(parts, 1);
+    }
+    if (NIL_P(ext) && NIL_P(intern)) return 0;
+    rb_encoding *e = NIL_P(ext) ? rb_default_external_encoding() : rb_to_encoding(ext);
+    rb_encoding *i = NIL_P(intern) ? NULL : rb_to_encoding(intern);
+    if (i == NULL || i == e) {
+        *enc_p = e;
+        *enc2_p = NULL;
+    } else {
+        *enc_p = i;
+        *enc2_p = e;
+    }
+    return 1;
 }
 
 VALUE

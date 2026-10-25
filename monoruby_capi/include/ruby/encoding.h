@@ -90,6 +90,7 @@ void rb_enc_copy(VALUE dst, VALUE src);
 VALUE rb_enc_str_new(const char *ptr, long len, rb_encoding *enc);
 VALUE rb_enc_str_new_cstr(const char *ptr, rb_encoding *enc);
 VALUE rb_enc_str_new_static(const char *ptr, long len, rb_encoding *enc);
+VALUE rb_enc_str_buf_cat(VALUE str, const char *ptr, long len, rb_encoding *enc);
 VALUE rb_external_str_new_with_enc(const char *ptr, long len, rb_encoding *enc);
 VALUE rb_str_export_to_enc(VALUE str, rb_encoding *enc);
 VALUE rb_str_conv_enc(VALUE str, rb_encoding *from, rb_encoding *to);
