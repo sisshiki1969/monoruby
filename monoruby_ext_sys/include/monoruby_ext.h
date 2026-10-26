@@ -196,6 +196,10 @@ struct MrApi {
     int     (*enc_precise_mbclen)(MrContext *, const char *name, const unsigned char *p, const unsigned char *e); /* Onigmo's MBCLEN encoding */
     int     (*keyword_given)(MrContext *);                              /* the entering call passed keywords (rb_keyword_given_p) */
     int64_t (*enc_codepoint)(MrContext *, const char *name, const unsigned char *p, const unsigned char *e, int *len); /* code point at p, or -1 */
+
+    /* appended for rb_backref_get / rb_backref_set: `$~` of the Ruby frame the running extension method was called from */
+    MrValue (*backref_get)(MrContext *);
+    void    (*backref_set)(MrContext *, MrValue md);
 };
 
 /* Onigmo's entry points as linked into monoruby, types erased: regex_t *

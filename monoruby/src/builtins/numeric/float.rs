@@ -494,6 +494,43 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         }
         (Some(lhs), RV::Float(rhs)) => lhs.partial_cmp(&rhs),
         (Some(lhs_f), _) => {
+            // An infinite self asks the other side `infinite?` before any
+            // coercion, as CRuby's flo_cmp does: an object that answers
+            // (Date::Infinity, whose `coerce` would say otherwise) is
+            // ordered by that answer -- equal when it is infinite the same
+            // way, otherwise by self's sign.
+            if lhs_f.is_infinite() {
+                let inf_id = IdentId::get_id("infinite?");
+                if let Some(other_inf) =
+                    vm.invoke_method_if_exists(globals, inf_id, rhs, &[], None, None)?
+                {
+                    let self_inf = lhs_f > 0.0;
+                    let ord = if other_inf.as_bool() {
+                        let other_sign = if let Some(i) = other_inf.try_fixnum() {
+                            i.signum()
+                        } else {
+                            let zero = Value::integer(0);
+                            let gt = vm.invoke_method_inner(globals, IdentId::_GT, other_inf, &[zero], None, None)?;
+                            if gt.as_bool() {
+                                1
+                            } else {
+                                let lt = vm.invoke_method_inner(globals, IdentId::_LT, other_inf, &[zero], None, None)?;
+                                if lt.as_bool() { -1 } else { 0 }
+                            }
+                        };
+                        match (self_inf, other_sign) {
+                            (true, 1) | (false, -1) => 0,
+                            (true, _) => 1,
+                            (false, _) => -1,
+                        }
+                    } else if self_inf {
+                        1
+                    } else {
+                        -1
+                    };
+                    return Ok(Value::integer(ord));
+                }
+            }
             // Try coerce protocol for non-numeric types
             let coerce_id = IdentId::get_id("coerce");
             if let Some(result) =
@@ -509,21 +546,6 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 }
                 // coerce returned something other than a 2-element array
                 return Err(MonorubyErr::typeerr("coerce must return [x, y]"));
-            }
-            // If self is infinite, check if other responds to infinite?
-            if lhs_f.is_infinite() {
-                let inf_id = IdentId::get_id("infinite?");
-                if let Some(other_inf) =
-                    vm.invoke_method_if_exists(globals, inf_id, rhs, &[], None, None)?
-                {
-                    let self_inf = if lhs_f > 0.0 { 1i64 } else { -1i64 };
-                    if let Some(other_inf_i) = other_inf.try_fixnum() {
-                        return Ok(Value::from_ord(self_inf.cmp(&other_inf_i)));
-                    } else if other_inf.is_nil() {
-                        // other is finite — Infinity > finite, -Infinity < finite
-                        return Ok(Value::from_ord(self_inf.cmp(&0)));
-                    }
-                }
             }
             None
         }
@@ -1663,6 +1685,34 @@ mod tests {
             obj = Object.new
             def obj.infinite?; nil; end
             Float::INFINITY <=> obj
+            "#,
+        );
+    }
+
+    // `infinite?` answered with something other than an Integer or nil:
+    // its sign through `>` / `<` (CRuby's rb_cmpint), false as "finite",
+    // and an object that also has `coerce` (Date::Infinity) is still
+    // ordered by `infinite?`, which comes first.
+    #[test]
+    fn float_cmp_infinite_other_answers() {
+        run_test(
+            r#"
+            def inf(v) = Object.new.tap { |o| o.define_singleton_method(:infinite?) { v } }
+            [1.0, -2.5, 0.0, false, true].map { |v|
+              [(Float::INFINITY <=> inf(v) rescue $!.class), (-Float::INFINITY <=> inf(v) rescue $!.class)]
+            }
+            "#,
+        );
+        run_test(
+            r#"
+            class Inf
+              def initialize(d) = @d = d
+              def infinite? = @d
+              def coerce(other) = [-@d, @d]
+            end
+            [Float::INFINITY <=> Inf.new(1), Float::INFINITY <=> Inf.new(-1),
+             -Float::INFINITY <=> Inf.new(1), -Float::INFINITY <=> Inf.new(-1),
+             1.5 <=> Inf.new(1)]
             "#,
         );
     }
