@@ -662,6 +662,8 @@ pub(crate) static MR_API: MrApi = MrApi {
     enc_precise_mbclen: mr_enc_precise_mbclen,
     keyword_given: mr_keyword_given,
     enc_codepoint: mr_enc_codepoint,
+    backref_get: mr_backref_get,
+    backref_set: mr_backref_set,
 };
 
 // ---- regexp (ruby/re.h) ----------------------------------------------
@@ -835,6 +837,25 @@ unsafe extern "C" fn mr_enc_codepoint(
         unsafe { *len = n as c_int };
     }
     cp as i64
+}
+
+/// `rb_backref_get`: `$~` as the Ruby code that called the extension
+/// method sees it. A native call pushes no frame of its own for `$~`,
+/// so the extension's matching (`rb_reg_match`, `rb_funcall(re, "match")`)
+/// lands in the caller's slot, as CRuby's does -- which is why
+/// `rb_backref_set` exists: an extension saves it first and puts it
+/// back (date's parsers do).
+unsafe extern "C" fn mr_backref_get(ctx: *mut MrContext) -> MrValue {
+    // SAFETY: the table's contract.
+    let (vm, _) = unsafe { parts(ctx) };
+    vm.get_last_matchdata().id()
+}
+
+/// `rb_backref_set`: see `mr_backref_get`.
+unsafe extern "C" fn mr_backref_set(ctx: *mut MrContext, md: MrValue) {
+    // SAFETY: the table's contract.
+    let (vm, _) = unsafe { parts(ctx) };
+    vm.set_backref(Value::from_u64(md));
 }
 
 /// `rb_keyword_given_p`: the running extension method's frame was

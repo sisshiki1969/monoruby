@@ -85,6 +85,33 @@ typedef st_data_t st_index_t;
 #define PRIxVALUE PRI_VALUE_PREFIX "x"
 #define PRIsVALUE PRI_VALUE_PREFIX "i" RUBY_PRI_VALUE_MARK
 
+/* The other printf prefixes of ruby/defines.h and the decimal-width
+ * helpers, for the LP64 targets monoruby builds on. */
+#define LONG_LONG long long
+#define PRI_INT_PREFIX ""
+#define PRI_LONG_PREFIX "l"
+#define PRI_LL_PREFIX "ll"
+#define PRI_64_PREFIX PRI_LONG_PREFIX
+#define PRI_SIZE_PREFIX "l"
+#define PRI_PTRDIFF_PREFIX "l"
+#define PRI_TIMET_PREFIX "l"
+#define PRI_OFFT_PREFIX "l"
+#define PRIdSIZE PRI_SIZE_PREFIX "d"
+#define PRIiSIZE PRI_SIZE_PREFIX "i"
+#define PRIoSIZE PRI_SIZE_PREFIX "o"
+#define PRIuSIZE PRI_SIZE_PREFIX "u"
+#define PRIxSIZE PRI_SIZE_PREFIX "x"
+#define PRIXSIZE PRI_SIZE_PREFIX "X"
+#define PRIdPTRDIFF PRI_PTRDIFF_PREFIX "d"
+#define PRIiPTRDIFF PRI_PTRDIFF_PREFIX "i"
+#define PRIuPTRDIFF PRI_PTRDIFF_PREFIX "u"
+#define PRIxPTRDIFF PRI_PTRDIFF_PREFIX "x"
+#define DECIMAL_SIZE_OF_BITS(n) (((n) * 3010 + 9998) / 9999)
+#define DECIMAL_SIZE_OF_BYTES(n) DECIMAL_SIZE_OF_BITS((n) * CHAR_BIT)
+#define DECIMAL_SIZE_OF(expr) DECIMAL_SIZE_OF_BYTES(sizeof(expr))
+/* The length of a string literal, at compile time. */
+#define rb_strlen_lit(str) ((sizeof(str "") / sizeof(str ""[0])) - 1)
+
 /* CRuby's special constants (USE_FLONUM, 64-bit). */
 #define RUBY_Qfalse ((VALUE)0x00)
 #define RUBY_Qtrue ((VALUE)0x14)
@@ -436,6 +463,29 @@ VALUE rb_rational_new(VALUE num, VALUE den);
 #define rb_Rational2(x, y) rb_Rational((x), (y))
 #define rb_rational_new1(x) rb_rational_new((x), INT2FIX(1))
 #define rb_rational_new2(x, y) rb_rational_new((x), (y))
+/* "raw" is the same constructor here: the value is reduced as
+ * Kernel#Rational does. */
+VALUE rb_rational_raw(VALUE num, VALUE den);
+#define rb_rational_raw1(x) rb_rational_raw((x), INT2FIX(1))
+#define rb_rational_raw2(x, y) rb_rational_raw((x), (y))
+VALUE rb_rational_num(VALUE rat);
+VALUE rb_rational_den(VALUE rat);
+/* The coerce protocol: `y.coerce(x)`, then `x' <func> y'`. `_bin` raises
+ * TypeError when `y` cannot be coerced, `_cmp` answers nil, `_relop`
+ * raises ArgumentError ("comparison of X with Y failed"). */
+VALUE rb_num_coerce_bin(VALUE x, VALUE y, ID func);
+VALUE rb_num_coerce_cmp(VALUE x, VALUE y, ID func);
+VALUE rb_num_coerce_relop(VALUE x, VALUE y, ID func);
+VALUE rb_cstr_to_inum(const char *str, int base, int badcheck);
+VALUE rb_int_positive_pow(long x, unsigned long y);
+VALUE rb_marshal_dump(VALUE obj, VALUE port);
+VALUE rb_marshal_load(VALUE port);
+/* `$~` of the Ruby frame the running method was called from, which the
+ * method's own matching shares (so an extension saves and restores it). */
+VALUE rb_backref_get(void);
+void rb_backref_set(VALUE md);
+/* Copy `obj`'s instance variables onto `clone`. */
+void rb_copy_generic_ivar(VALUE clone, VALUE obj);
 /* File.path-style coercion of a path argument, in place. */
 VALUE rb_get_path(VALUE obj);
 #define FilePathValue(v) (RB_GC_GUARD(v) = rb_get_path(v))
@@ -473,6 +523,31 @@ VALUE rb_block_lambda(void);
 VALUE rb_proc_call(VALUE proc, VALUE args);
 VALUE rb_proc_call_with_block(VALUE proc, int argc, const VALUE *argv, VALUE passed_proc);
 int rb_keyword_given_p(void);
+/* The method the running C function was defined as (0 outside one). */
+ID rb_frame_this_func(void);
+ID rb_frame_callee(void);
+/* `obj.to_enum(meth, *argv)`; the size function is accepted and not
+ * used (the enumerator's `size` is nil). */
+typedef VALUE rb_enumerator_size_func(VALUE, VALUE, VALUE);
+VALUE rb_enumeratorize(VALUE obj, VALUE meth, int argc, const VALUE *argv);
+VALUE rb_enumeratorize_with_size(VALUE obj, VALUE meth, int argc, const VALUE *argv,
+                                 rb_enumerator_size_func *size_fn);
+VALUE rb_enumeratorize_with_size_kw(VALUE obj, VALUE meth, int argc, const VALUE *argv,
+                                    rb_enumerator_size_func *size_fn, int kw_splat);
+#define SIZED_ENUMERATOR(obj, argc, argv, size_fn) \
+    rb_enumeratorize_with_size((obj), ID2SYM(rb_frame_this_func()), (argc), (argv), (size_fn))
+#define SIZED_ENUMERATOR_KW(obj, argc, argv, size_fn, kw_splat) \
+    rb_enumeratorize_with_size_kw((obj), ID2SYM(rb_frame_this_func()), (argc), (argv), (size_fn), (kw_splat))
+#define RETURN_SIZED_ENUMERATOR(obj, argc, argv, size_fn) do { \
+        if (!rb_block_given_p()) \
+            return SIZED_ENUMERATOR(obj, argc, argv, size_fn); \
+    } while (0)
+#define RETURN_SIZED_ENUMERATOR_KW(obj, argc, argv, size_fn, kw_splat) do { \
+        if (!rb_block_given_p()) \
+            return SIZED_ENUMERATOR_KW(obj, argc, argv, size_fn, kw_splat); \
+    } while (0)
+#define RETURN_ENUMERATOR(obj, argc, argv) RETURN_SIZED_ENUMERATOR(obj, argc, argv, 0)
+#define RETURN_ENUMERATOR_KW(obj, argc, argv, kw_splat) RETURN_SIZED_ENUMERATOR_KW(obj, argc, argv, 0, kw_splat)
 
 /* Time */
 VALUE rb_time_new(time_t sec, long usec);
@@ -975,6 +1050,7 @@ VALUE rb_thread_current(void);
 void rb_thread_schedule(void);
 /* monoruby has no Ractors; the declaration is accepted and ignored. */
 void rb_ext_ractor_safe(bool flag);
+#define RB_EXT_RACTOR_SAFE(f) rb_ext_ractor_safe(f)
 
 /* ---- Bignum ----------------------------------------------------------- */
 
@@ -1095,6 +1171,13 @@ static inline int rb_toupper(int c) { return rb_islower(c) ? (c & ~0x20) : c; }
 #define ISGRAPH(c) rb_isgraph((unsigned char)(c))
 #define TOLOWER(c) rb_tolower((unsigned char)(c))
 #define TOUPPER(c) rb_toupper((unsigned char)(c))
+/* ruby/internal/ctype.h's locale-independent string helpers. */
+int st_locale_insensitive_strcasecmp(const char *s1, const char *s2);
+int st_locale_insensitive_strncasecmp(const char *s1, const char *s2, size_t n);
+unsigned long ruby_strtoul(const char *str, char **endptr, int base);
+#define STRCASECMP st_locale_insensitive_strcasecmp
+#define STRNCASECMP st_locale_insensitive_strncasecmp
+#define STRTOUL ruby_strtoul
 
 #ifdef __cplusplus
 }

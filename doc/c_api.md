@@ -623,6 +623,79 @@ weak なスタブを生成し `capi/libmonoruby_capi_stubs.a` に入れる。
 - ヘッダに宣言の無い関数は C としては暗黙宣言になる（GCC 14 以降は
   エラー）。宣言はこれまでどおり実装したときに足す。
 
+### 3.17 標準ライブラリの C 拡張を層でビルドして同梱する: date（段階 9）
+
+`require "date"` は長らく `stdlib/date_core.rb`（最小限の Ruby 実装）で
+しのいでいたが、`date.rb` が無く `require "date"` 自体が LoadError で、
+`time`（`Time.parse`）と `psych`（YAML）と rubygems の `gem build` が
+道連れだった。CRuby の `ext/date`（date gem 3.5.1）をそのまま層でビルドして
+同梱する。
+
+- **ソース**: `monoruby_capi/ext/date/`（`date_core.c` / `date_parse.c` /
+  `date_strftime.c` / `date_strptime.c` / `date_tmx.h` / `zonetab.h`、
+  CRuby 4.0.6 のまま。ライセンスは同ディレクトリの `BSDL` / `COPYING`）。
+  Ruby 側の `date.rb`（CRuby の `ext/date/lib/date.rb`）は
+  `monoruby/stdlib/date.rb`。`stdlib/date_core.rb` は削除した。
+- **ビルド**: `build.rs` の `build_capi_extensions` が `cc` crate で
+  オブジェクトをコンパイルし（`extconf.rb` のプローブの代わりに
+  `HAVE_STRUCT_TM_TM_GMTOFF` を define）、同じコンパイラで
+  `-shared`（macOS は `-dynamiclib`）に層のアーカイブ 2 本をリンクして
+  `OUT_DIR/capi_ext/date_core.so` を作る。`install_extensions` が Rust 製
+  拡張（`CARGO_CDYLIB_FILE_*`）と一緒に `<install root>/ext/` へ置くので、
+  `require "date_core"` は `ext::find_extension` で見つかる。失敗しても
+  警告だけで、その場合 `date` が無いだけの monoruby になる。
+  クロスビルドでは他の拡張と同じく install しない。
+- **mkmf `depend` ファイルのための CRuby ヘッダ名**: CRuby の `ext/` 由来の
+  gem はみな `depend` を持ち、mkmf はそこに並ぶ
+  `$(hdrdir)/ruby/internal/...` を各オブジェクトの前提に書く。存在しない
+  前提で `make` は止まるので、monoruby に無い CRuby 4.0 の公開ヘッダ名
+  177 個（`monoruby_capi/include/cruby_headers.txt`）を、`ruby/ruby.h` を
+  include するだけの 1 行ヘッダとして `include/` に生成する
+  （`install_cruby_header_names`）。直接 include されても API 全体に
+  解決する。
+- **date が要求して層に足したもの**: `rb_rational_raw` / `rb_rational_num` /
+  `rb_rational_den`、`rb_num_coerce_bin` / `_cmp` / `_relop`（coerce
+  プロトコル）、`rb_cstr_to_inum`、`rb_int_positive_pow`、
+  `rb_marshal_dump` / `rb_marshal_load`、`rb_copy_generic_ivar`、
+  `rb_enumeratorize` / `_with_size` / `_with_size_kw`（`to_enum`; size 関数は
+  受けるだけ）、`rb_frame_this_func` / `rb_frame_callee`（`capi_frame` が
+  実行中の `capi_method` を持つ）、`RETURN_ENUMERATOR` 系マクロ、
+  `rb_backref_get` / `rb_backref_set`（§4 の ABI 追加 `backref_get` /
+  `backref_set`）、`LONG_LONG`、`PRI_SIZE_PREFIX` / `PRIdSIZE` 系、
+  `DECIMAL_SIZE_OF_BITS` / `DECIMAL_SIZE_OF`、`rb_strlen_lit`、
+  `RB_EXT_RACTOR_SAFE`、`STRCASECMP` / `STRNCASECMP` / `STRTOUL`、
+  `rb_enc_str_asciicompat_p`。
+- **1 文字演算子の ID**: CRuby では `rb_intern("+") == '+'` で、C 拡張は
+  `rb_funcall(x, '+', 1, y)` と書く（date_core.c の `f_add` ほか）。
+  monoruby の `IdentId` は 1 から順に振っていて 43（`'+'`）は
+  `millisecond` だったので、これが `x.millisecond(y)` になっていた。
+  `IdentId` の予約番号を変え、1 文字演算子（`+ - * / % < > & | ^ ~ ! \``）
+  は ASCII コードを id に、他の予約名は 128 以降にした
+  （`id_table.rs`; ASCII 範囲の残りは名前の無いスロットで、
+  `Symbol.all_symbols` は飛ばす）。層は ID を `IdentId` のまま渡すので
+  それだけで一致する。
+- **同じ C 関数を 2 つの名前で定義したら 1 つのメソッド**: CRuby の
+  `Method#==` は cfunc の同一性で見るので `Date#mday == Date#day`。層の
+  `define_cfunc` は (関数, クラス, arity, 可視性) を覚えていて、2 度目は
+  `alias_method`（特異メソッドなら特異クラスの）にする。
+- **`$~`**: C メソッドが `rb_funcall(re, "match", str)` した結果は呼び出し元
+  Ruby フレームの `$~` に入る（CRuby と同じ、ネイティブ呼び出しは自分の
+  フレームを持たない）。date のパーサは `rb_backref_get` で退避して
+  `rb_backref_set` で戻すので、ABI に `backref_get` / `backref_set` を
+  足した（`Executor::get_last_matchdata` / `set_backref`）。
+- **`Float#<=>`**: 無限大の self は coerce より先に相手の `infinite?` を
+  聞く（CRuby の `flo_cmp`）。`Date::JULIAN <=> Date::Infinity.new` が
+  `coerce` 経由で -1 になっていた。
+- **結果** (ruby/spec `mspec ci`): `library/date` 297 例 0 失敗、
+  `library/datetime` 177 例 0 失敗、`library/time` 7 例 0 失敗（以前は
+  3 つとも `require "date"` の LoadError で全滅）。`optional/capi` は
+  演算子 ID の修正で 825 → 906 例が走るようになった。
+  `tests/date.rs` が Date / DateTime / Time / YAML / JSON の挙動を
+  CRuby と比較し、`tests/capi/capi_ids.c` が演算子 ID・`RETURN_ENUMERATOR`・
+  エイリアス・coerce・`$~` の退避復元を CRuby と比較する。
+  `tests/mkmf.rs` の `gem install` テストは rubygems が `date` を要求する
+  ので、これで通るようになった。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -640,6 +713,7 @@ weak なスタブを生成し `capi/libmonoruby_capi_stubs.a` に入れる。
 | `enc_precise_mbclen` | `rb_enc_precise_mbclen` を monoruby の encoding 走査で |
 | `keyword_given` | `rb_keyword_given_p`: 入ってきた call site のキーワード有無（§3.14） |
 | `enc_codepoint` | `rb_enc_codepoint_len` を monoruby の復号で（UTF-8 以外も） |
+| `backref_get` / `backref_set` | `rb_backref_get` / `rb_backref_set`: 呼び出し元 Ruby フレームの `$~`（C メソッド内の照合はそこに入るので、拡張が退避・復元する。date のパーサが行う） |
 
 あわせて `ary_push` / `hash_set` が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。
@@ -656,6 +730,7 @@ weak なスタブを生成し `capi/libmonoruby_capi_stubs.a` に入れる。
 | 6 | `ruby/re.h`（Onigmo を `MrOnigApi` 経由で、`rb_reg_prepare_re` / `rb_reg_onig_match`、`rb_enc_precise_mbclen` を本物に、`require` の `.so` 解決） | 済（§3.13、`tests/capi/capi_re.c`、`tests/capi_gems.rs` の strscan） |
 | 7 | Time API（`rb_time_*`、`rb_timespec_now`）、`rb_keyword_given_p`、UTF-8 以外の `rb_enc_codepoint_len`、`OBJ_INIT_COPY`、`UNREACHABLE`、config.h の時刻系 `HAVE_*`、`HAVE_RUBY_*_H` | 済（§3.14、`tests/capi/capi_time.c`、`tests/capi_gems.rs` の strptime / yajl-ruby） |
 | 8 | 拡張内の `VALUE` を CRuby のビット列に（`Qfalse == 0`）、層が境界で変換 | 済（§3.15、`tests/capi/capi_value.c`、`tests/capi_gems.rs` の json 2.18.0 と 3.1.0） |
+| 9 | 層に無い API への参照はロードを通し呼ばれたら NotImplementedError（スタブアーカイブ）、CRuby の `ext/date` を層でビルドして同梱（`require "date"` / `time` / YAML）、1 文字演算子 ID、`RETURN_ENUMERATOR`、`$~` の退避復元 ABI、mkmf `depend` 用の CRuby ヘッダ名 | 済（§3.16〜3.17、`tests/capi/capi_ids.c`、`tests/date.rs`、ruby/spec `library/date` / `datetime` 全通過） |
 
 ## 6. 既知の制約
 

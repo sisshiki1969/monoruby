@@ -117,7 +117,7 @@ ActiveSupport は Ruby コアクラスに多数のメソッドを追加 (monkey-
 
 ActiveRecord の日付カラム処理に必須。monoruby は `Time` のみ部分実装済み。
 
-- [~] `Date` クラス (stdlib/date_core.rb にスタブレベル実装)
+- [x] `Date` クラス (CRuby の ext/date を C API 層でビルドして同梱、doc/c_api.md §3.17)
   - コンストラクタ・parse の一部
   - `#year/#month/#day/#wday/#yday`、算術演算、`#strftime` 等は未実装
 - [ ] `DateTime` クラス (Date のサブクラス)

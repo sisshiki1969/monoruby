@@ -1,9 +1,10 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// `Date._parse` (stdlib/date_core.rb) is a transcription of CRuby's
-// date_parse.c sub-parsers; `DateTime.parse` / `Date.parse` / `Time.parse`
-// are built on it. Inputs that depend on today's date are avoided.
+// `Date._parse` is CRuby's date_parse.c itself, built against the C API
+// layer (monoruby_capi/ext/date); `DateTime.parse` / `Date.parse` /
+// `Time.parse` are built on it. Inputs that depend on today's date are
+// avoided.
 
 #[test]
 fn date_underscore_parse_matches_cruby() {
