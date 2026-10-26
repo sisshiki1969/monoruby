@@ -829,6 +829,16 @@ rb_notimplement(void)
     rb_raise(rb_eNotImpError, "function is unimplemented on this machine");
 }
 
+/* The body of every generated stub in libmonoruby_capi_stubs.a (build.rs
+ * `build_capi_stubs_archive`): a CRuby API function the layer does not
+ * implement resolves to a stub that raises here when called, so an
+ * extension that merely references it still loads. */
+void
+capi_unimplemented(const char *name)
+{
+    rb_raise(rb_eNotImpError, "%s() is not implemented in monoruby's C API", name);
+}
+
 void
 rb_error_arity(int argc, int min, int max)
 {
@@ -2415,6 +2425,38 @@ VALUE
 rb_String(VALUE v)
 {
     return rb_funcall(rb_mKernel, rb_intern("String"), 1, v);
+}
+
+VALUE
+rb_Complex(VALUE real, VALUE imag)
+{
+    return rb_funcall(rb_mKernel, rb_intern("Complex"), 2, real, imag);
+}
+
+VALUE
+rb_complex_new(VALUE real, VALUE imag)
+{
+    return rb_Complex(real, imag);
+}
+
+VALUE
+rb_Rational(VALUE num, VALUE den)
+{
+    return rb_funcall(rb_mKernel, rb_intern("Rational"), 2, num, den);
+}
+
+VALUE
+rb_rational_new(VALUE num, VALUE den)
+{
+    return rb_Rational(num, den);
+}
+
+/* File.path(obj): `to_path` when the object responds to it, then a
+ * String, as CRuby's FilePathValue coerces a path argument. */
+VALUE
+rb_get_path(VALUE obj)
+{
+    return rb_funcall(rb_cFile, rb_intern("path"), 1, obj);
 }
 
 VALUE

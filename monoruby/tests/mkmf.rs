@@ -119,6 +119,91 @@ fn install_root() -> PathBuf {
     PathBuf::from(config("rubyhdrdir")).parent().unwrap().to_path_buf()
 }
 
+/// A CRuby API function the layer does not implement: the extension that
+/// references it still builds and loads (the stubs archive on the
+/// extension's link line, via EXTDLDFLAGS, defines it), calling it raises
+/// NotImplementedError naming the function, and `have_func` -- whose
+/// conftest links the layer's archive alone -- still answers "no", so an
+/// extension's `#ifdef HAVE_RB_FOO` fallbacks stay in force.
+#[test]
+fn unimplemented_api_loads_and_raises_not_implemented() {
+    if !have_build_tools() {
+        eprintln!("skipped: no C compiler or make");
+        return;
+    }
+    // The first name of the API list the layer neither defines (found the
+    // way build.rs finds it: the name at column 0, then `(`) nor declares
+    // in its headers -- the test source declares it itself -- so the test
+    // follows the layer as it grows.
+    let capi = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../monoruby_capi");
+    let defined: std::collections::HashSet<String> = ["src/capi.c", "src/st.c"]
+        .iter()
+        .flat_map(|f| std::fs::read_to_string(capi.join(f)).unwrap().lines().map(String::from).collect::<Vec<_>>())
+        .filter_map(|l| {
+            let (name, _) = l.split_once('(')?;
+            (!name.is_empty()
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && !name.starts_with(|c: char| c.is_ascii_digit()))
+            .then(|| name.to_string())
+        })
+        .collect();
+    let mut headers = String::new();
+    let mut dirs = vec![capi.join("include")];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                dirs.push(p);
+            } else {
+                headers.push_str(&std::fs::read_to_string(p).unwrap());
+            }
+        }
+    }
+    let list = std::fs::read_to_string(capi.join("src/cruby_api.txt")).unwrap();
+    let missing = list
+        .lines()
+        .map(str::trim)
+        .find(|n| n.starts_with("rb_") && !defined.contains(*n) && !headers.contains(*n))
+        .expect("the layer implements and declares the whole API list?");
+    let dir = work_dir("unimplemented");
+    let c_src = r#"#include <ruby.h>
+void NAME(void);
+static VALUE call_it(VALUE self) { (void)self; NAME(); return Qnil; }
+void Init_unimpl(void) {
+    VALUE m = rb_define_module("Unimpl");
+    rb_define_singleton_method(m, "call_it", call_it, 0);
+}
+"#;
+    std::fs::write(dir.join("unimpl.c"), c_src.replace("NAME", missing)).unwrap();
+    std::fs::write(
+        dir.join("extconf.rb"),
+        format!(
+            "require 'mkmf'
+             have_func('rb_str_new_cstr')
+             have_func('{missing}')
+             create_makefile('unimpl')
+"
+        ),
+    )
+    .unwrap();
+    run(monoruby().current_dir(&dir).arg("extconf.rb"));
+    let log = std::fs::read_to_string(dir.join("mkmf.log")).unwrap();
+    assert!(log.contains("checking for rb_str_new_cstr()... -------------------- yes"), "{log}");
+    assert!(log.contains(&format!("checking for {missing}()... -------------------- no")), "{log}");
+    let makefile = std::fs::read_to_string(dir.join("Makefile")).unwrap();
+    assert!(makefile.contains("-lmonoruby_capi_stubs"), "{makefile}");
+    run(Command::new("make").current_dir(&dir));
+    let so = dir.join(format!("unimpl.{}", config("DLEXT")));
+    assert!(so.is_file(), "{} was not built", so.display());
+    let out = run(monoruby().args([
+        "-e",
+        &format!(
+            r#"require {so:?}; begin; Unimpl.call_it; rescue NotImplementedError => e; puts e.message; end"#
+        ),
+    ]));
+    assert_eq!(out.trim(), format!("{missing}() is not implemented in monoruby's C API"), "{out}");
+}
+
 /// `libdirname` names the key of the directory that holds LIBRUBY, and
 /// that directory is where the archive is: ruby/spec's C API helper
 /// stats `CONFIG[CONFIG['libdirname']]/LIBRUBY`, and mkmf puts

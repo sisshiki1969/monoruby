@@ -36,9 +36,9 @@ RbConfig.fire_update!('RUBY_SO_NAME', 'monoruby_capi')
 RbConfig.fire_update!('LIBRUBY_SO', 'libmonoruby_capi.a')
 RbConfig.fire_update!('LIBRUBY_A', 'libmonoruby_capi.a')
 RbConfig.fire_update!('LIBRUBY', 'libmonoruby_capi.a')
-# mkmf links a conftest executable with LIBRUBYARG_STATIC and the
-# extension with LIBRUBYARG (= LIBRUBYARG_SHARED); both are the archive,
-# so `have_func("rb_...")` answers for the layer.
+# mkmf links its conftest executables (`have_func`, `have_library`, ...)
+# and the extension with LIBRUBYARG; both are the archive, so
+# `have_func("rb_...")` answers for the layer.
 RbConfig.fire_update!('LIBRUBYARG_SHARED', __capi_arg)
 RbConfig.fire_update!('LIBRUBYARG_STATIC', __capi_arg)
 RbConfig.fire_update!('LIBRUBYARG', __capi_arg)
@@ -98,3 +98,12 @@ if RbConfig::CONFIG['host_os'] == 'darwin'
     'RPATHFLAG' => '',
   }.each { |k, v| RbConfig.fire_update!(k, v) }
 end
+
+# The extension's own link line -- and only that; mkmf's conftests do not
+# use EXTDLDFLAGS -- also gets the stubs archive build.rs generates: one
+# NotImplementedError-raising stub per CRuby API function the layer lacks
+# (doc/c_api.md §3.16). An extension that references such a function
+# still builds and loads, and only its call fails; `have_func` keeps
+# answering "no" for it, so the extension's `#ifdef HAVE_RB_FOO`
+# fallbacks stay in force.
+RbConfig.fire_update!('EXTDLDFLAGS', "#{RbConfig::CONFIG['EXTDLDFLAGS']} -L#{__capi_lib} -lmonoruby_capi_stubs".strip)
