@@ -1689,6 +1689,34 @@ mod tests {
         );
     }
 
+    // `infinite?` answered with something other than an Integer or nil:
+    // its sign through `>` / `<` (CRuby's rb_cmpint), false as "finite",
+    // and an object that also has `coerce` (Date::Infinity) is still
+    // ordered by `infinite?`, which comes first.
+    #[test]
+    fn float_cmp_infinite_other_answers() {
+        run_test(
+            r#"
+            def inf(v) = Object.new.tap { |o| o.define_singleton_method(:infinite?) { v } }
+            [1.0, -2.5, 0.0, false, true].map { |v|
+              [(Float::INFINITY <=> inf(v) rescue $!.class), (-Float::INFINITY <=> inf(v) rescue $!.class)]
+            }
+            "#,
+        );
+        run_test(
+            r#"
+            class Inf
+              def initialize(d) = @d = d
+              def infinite? = @d
+              def coerce(other) = [-@d, @d]
+            end
+            [Float::INFINITY <=> Inf.new(1), Float::INFINITY <=> Inf.new(-1),
+             -Float::INFINITY <=> Inf.new(1), -Float::INFINITY <=> Inf.new(-1),
+             1.5 <=> Inf.new(1)]
+            "#,
+        );
+    }
+
     // Fix 4: Float#<=> raises TypeError when coerce misbehaves
     #[test]
     fn float_cmp_coerce_typeerror() {
