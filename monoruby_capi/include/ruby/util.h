@@ -20,7 +20,6 @@ unsigned long ruby_scan_digits(const char *str, ssize_t len, int base, size_t *r
 void ruby_qsort(void *base, const size_t nel, const size_t size,
                 int (*cmp)(const void *, const void *, void *), void *d);
 char *ruby_getcwd(void);
-#define STRTOUL(str, endptr, base) ruby_strtoul((str), (endptr), (base))
 
 #ifdef __cplusplus
 }

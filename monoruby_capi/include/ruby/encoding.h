@@ -97,6 +97,7 @@ VALUE rb_str_conv_enc(VALUE str, rb_encoding *from, rb_encoding *to);
 VALUE rb_str_encode(VALUE str, VALUE to, int ecflags, VALUE ecopts);
 int rb_enc_asciicompat(rb_encoding *enc);
 int rb_enc_str_asciionly_p(VALUE str);
+#define rb_enc_str_asciicompat_p(str) rb_enc_asciicompat(rb_enc_get(str))
 VALUE rb_enc_sprintf(rb_encoding *enc, const char *fmt, ...);
 ID rb_intern3(const char *name, long len, rb_encoding *enc);
 VALUE rb_enc_interned_str(const char *ptr, long len, rb_encoding *enc);

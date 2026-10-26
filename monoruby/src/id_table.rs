@@ -194,113 +194,120 @@ macro_rules! id {
 }
 
 impl IdentId {
-    pub const INITIALIZE: IdentId = id!(1);
-    pub const OBJECT: IdentId = id!(2);
-    pub const NEW: IdentId = id!(3);
-    pub const NAME: IdentId = id!(4);
-    pub const _ADD: IdentId = id!(5);
-    pub const _SUB: IdentId = id!(6);
-    pub const _MUL: IdentId = id!(7);
-    pub const _DIV: IdentId = id!(8);
-    pub const _REM: IdentId = id!(9);
-    pub const _POW: IdentId = id!(10);
-    pub const _SHL: IdentId = id!(11);
-    pub const _SHR: IdentId = id!(12);
-    pub const _BOR: IdentId = id!(13);
-    pub const _BAND: IdentId = id!(14);
-    pub const _BXOR: IdentId = id!(15);
-    pub const _BNOT: IdentId = id!(16);
-    pub const _UMINUS: IdentId = id!(17);
-    pub const _UPLUS: IdentId = id!(18);
-    pub const _EQ: IdentId = id!(19);
-    pub const _NEQ: IdentId = id!(20);
-    pub const _GT: IdentId = id!(21);
-    pub const _GE: IdentId = id!(22);
-    pub const _LT: IdentId = id!(23);
-    pub const _LE: IdentId = id!(24);
-    pub const _CMP: IdentId = id!(25);
-    pub const _TEQ: IdentId = id!(26);
-    pub const _MATCH: IdentId = id!(27);
-    pub const _INDEX: IdentId = id!(28);
-    pub const _INDEX_ASSIGN: IdentId = id!(29);
-    pub const _DOT3: IdentId = id!(30);
+    // The one-character operators take their ASCII code as their id, as
+    // in CRuby, where `rb_intern("+") == '+'` and a C extension writes
+    // `rb_funcall(x, '+', 1, y)`; the C API layer hands its `ID`s out as
+    // these ids, so the same code works against monoruby. Everything
+    // else predefined starts above the ASCII range (`PREDEFINED_FIRST`).
+    pub const PREDEFINED_FIRST: u32 = 128;
+    pub const INITIALIZE: IdentId = id!(128);
+    pub const OBJECT: IdentId = id!(129);
+    pub const NEW: IdentId = id!(130);
+    pub const NAME: IdentId = id!(131);
+    pub const _ADD: IdentId = id!(43);
+    pub const _SUB: IdentId = id!(45);
+    pub const _MUL: IdentId = id!(42);
+    pub const _DIV: IdentId = id!(47);
+    pub const _REM: IdentId = id!(37);
+    pub const _POW: IdentId = id!(132);
+    pub const _SHL: IdentId = id!(133);
+    pub const _SHR: IdentId = id!(134);
+    pub const _BOR: IdentId = id!(124);
+    pub const _BAND: IdentId = id!(38);
+    pub const _BXOR: IdentId = id!(94);
+    pub const _BNOT: IdentId = id!(126);
+    pub const _UMINUS: IdentId = id!(135);
+    pub const _UPLUS: IdentId = id!(136);
+    pub const _EQ: IdentId = id!(137);
+    pub const _NEQ: IdentId = id!(138);
+    pub const _GT: IdentId = id!(62);
+    pub const _GE: IdentId = id!(139);
+    pub const _LT: IdentId = id!(60);
+    pub const _LE: IdentId = id!(140);
+    pub const _CMP: IdentId = id!(141);
+    pub const _TEQ: IdentId = id!(142);
+    pub const _MATCH: IdentId = id!(143);
+    pub const _INDEX: IdentId = id!(144);
+    pub const _INDEX_ASSIGN: IdentId = id!(145);
+    pub const _DOT3: IdentId = id!(146);
 
-    pub const TO_S: IdentId = id!(31);
-    pub const TO_PROC: IdentId = id!(32);
-    pub const METHOD_MISSING: IdentId = id!(33);
-    pub const EACH: IdentId = id!(34);
-    pub const MAP: IdentId = id!(35);
-    pub const _ALIAS_METHOD: IdentId = id!(36);
-    pub const _ENUM_FUNC: IdentId = id!(37);
-    pub const _NAME: IdentId = id!(38);
-    pub const _MAIN: IdentId = id!(39);
+    pub const TO_S: IdentId = id!(147);
+    pub const TO_PROC: IdentId = id!(148);
+    pub const METHOD_MISSING: IdentId = id!(149);
+    pub const EACH: IdentId = id!(150);
+    pub const MAP: IdentId = id!(151);
+    pub const _ALIAS_METHOD: IdentId = id!(152);
+    pub const _ENUM_FUNC: IdentId = id!(153);
+    pub const _NAME: IdentId = id!(154);
+    pub const _MAIN: IdentId = id!(155);
 
-    pub const FLOAT_SECOND: IdentId = id!(40);
-    pub const SECOND: IdentId = id!(41);
-    pub const FLOAT_MILLISECOND: IdentId = id!(42);
-    pub const MILLISECOND: IdentId = id!(43);
-    pub const FLOAT_MICROSECOND: IdentId = id!(44);
-    pub const MICROSECOND: IdentId = id!(45);
-    pub const NANOSECOND: IdentId = id!(46);
+    pub const FLOAT_SECOND: IdentId = id!(156);
+    pub const SECOND: IdentId = id!(157);
+    pub const FLOAT_MILLISECOND: IdentId = id!(158);
+    pub const MILLISECOND: IdentId = id!(159);
+    pub const FLOAT_MICROSECOND: IdentId = id!(160);
+    pub const MICROSECOND: IdentId = id!(161);
+    pub const NANOSECOND: IdentId = id!(162);
 
-    pub const ENCODING: IdentId = id!(47);
-    pub const UTF_8: IdentId = id!(48);
-    pub const ASCII_8BIT: IdentId = id!(49);
-    pub const _ENCODING: IdentId = id!(50);
-    pub const TO_ARY: IdentId = id!(51);
-    pub const TO_A: IdentId = id!(52);
-    pub const ALLOCATE: IdentId = id!(53);
-    pub const METHOD_ADDED: IdentId = id!(54);
-    pub const HASH: IdentId = id!(55);
-    pub const EQL_: IdentId = id!(56);
-    pub const TO_STR: IdentId = id!(57);
-    pub const TO_PATH: IdentId = id!(58);
-    pub const SINGLETON_METHOD_ADDED: IdentId = id!(59);
-    pub const METHOD_REMOVED: IdentId = id!(60);
-    pub const METHOD_UNDEFINED: IdentId = id!(61);
-    pub const CONST_ADDED: IdentId = id!(62);
-    pub const INHERITED: IdentId = id!(63);
-    pub const APPEND_FEATURES: IdentId = id!(64);
-    pub const EXTEND_OBJECT: IdentId = id!(65);
-    pub const EXTENDED: IdentId = id!(66);
-    pub const INCLUDED: IdentId = id!(67);
-    pub const PREPENDED: IdentId = id!(68);
-    pub const _UNMATCH: IdentId = id!(69);
-    pub const _NOT: IdentId = id!(70);
-    pub const INSPECT: IdentId = id!(71);
-    pub const SINGLETON_METHOD_REMOVED: IdentId = id!(72);
-    pub const SINGLETON_METHOD_UNDEFINED: IdentId = id!(73);
-    pub const TO_INT: IdentId = id!(74);
-    pub const TO_F: IdentId = id!(75);
-    pub const INITIALIZE_COPY: IdentId = id!(76);
-    pub const INITIALIZE_CLONE: IdentId = id!(77);
-    pub const INITIALIZE_DUP: IdentId = id!(78);
-    pub const RESPOND_TO_MISSING_: IdentId = id!(79);
+    pub const ENCODING: IdentId = id!(163);
+    pub const UTF_8: IdentId = id!(164);
+    pub const ASCII_8BIT: IdentId = id!(165);
+    pub const _ENCODING: IdentId = id!(166);
+    pub const TO_ARY: IdentId = id!(167);
+    pub const TO_A: IdentId = id!(168);
+    pub const ALLOCATE: IdentId = id!(169);
+    pub const METHOD_ADDED: IdentId = id!(170);
+    pub const HASH: IdentId = id!(171);
+    pub const EQL_: IdentId = id!(172);
+    pub const TO_STR: IdentId = id!(173);
+    pub const TO_PATH: IdentId = id!(174);
+    pub const SINGLETON_METHOD_ADDED: IdentId = id!(175);
+    pub const METHOD_REMOVED: IdentId = id!(176);
+    pub const METHOD_UNDEFINED: IdentId = id!(177);
+    pub const CONST_ADDED: IdentId = id!(178);
+    pub const INHERITED: IdentId = id!(179);
+    pub const APPEND_FEATURES: IdentId = id!(180);
+    pub const EXTEND_OBJECT: IdentId = id!(181);
+    pub const EXTENDED: IdentId = id!(182);
+    pub const INCLUDED: IdentId = id!(183);
+    pub const PREPENDED: IdentId = id!(184);
+    pub const _UNMATCH: IdentId = id!(185);
+    pub const _NOT: IdentId = id!(33);
+    pub const _BACKTICK: IdentId = id!(96);
+    pub const INSPECT: IdentId = id!(186);
+    pub const SINGLETON_METHOD_REMOVED: IdentId = id!(187);
+    pub const SINGLETON_METHOD_UNDEFINED: IdentId = id!(188);
+    pub const TO_INT: IdentId = id!(189);
+    pub const TO_F: IdentId = id!(190);
+    pub const INITIALIZE_COPY: IdentId = id!(191);
+    pub const INITIALIZE_CLONE: IdentId = id!(192);
+    pub const INITIALIZE_DUP: IdentId = id!(193);
+    pub const RESPOND_TO_MISSING_: IdentId = id!(194);
     /// The hidden ivar `Integer#chr` hangs a mock encoding object on
     /// (`/encoding_override`). `String#encoding` probes it on every call,
     /// so it is interned up front rather than by name each time.
-    pub const _ENCODING_OVERRIDE: IdentId = id!(96);
+    pub const _ENCODING_OVERRIDE: IdentId = id!(195);
     /// `freeze`: the `StringFreeze` opcode (`"lit".freeze`) asks the
     /// basic-op table about `String#freeze` on every interpreted execution.
-    pub const FREEZE: IdentId = id!(97);
+    pub const FREEZE: IdentId = id!(196);
     /// The hidden ivars a `Struct` / `Data` subclass carries: the member
     /// list and `keyword_init:`. Every instance creation reads both
     /// (`get_members`, `is_keyword_init`), so interning them by name on
     /// each `Struct.new` cost two `RwLock` reads and two string hashes
     /// per object.
-    pub const _MEMBERS: IdentId = id!(98);
-    pub const _KEYWORD_INIT: IdentId = id!(99);
+    pub const _MEMBERS: IdentId = id!(197);
+    pub const _KEYWORD_INIT: IdentId = id!(198);
     /// `$(errinfo)` — the internal name bytecodegen uses for the
     /// region-entry `$!` save of a protected region. Pre-interned so the
     /// JIT can recognize it with an integer compare rather than a lock and
     /// a string hash (`jit_load_gvar`'s fast path).
-    pub const GVAR_ERRINFO_INTERNAL: IdentId = id!(100);
+    pub const GVAR_ERRINFO_INTERNAL: IdentId = id!(199);
     /// `default`: what `Hash#[]` runs on a miss (CRuby's
     /// `rb_funcall(hash, id_default, 1, key)`), asked for on every miss;
     /// and what `gsub(regex, Hash)` checks is still the builtin before it
     /// probes the map directly instead of calling `Hash#[]`.
-    pub const DEFAULT: IdentId = id!(101);
-    pub const RESPOND_TO_: IdentId = id!(102);
+    pub const DEFAULT: IdentId = id!(200);
+    pub const RESPOND_TO_: IdentId = id!(201);
 
     // The special global variables whose assignment `write_special_check`
     // (globals/gvar.rs) validates or coerces. Deliberately a *consecutive*
@@ -308,22 +315,22 @@ impl IdentId {
     // with the block contiguous that is a single range check
     // ([`IdentId::is_special_gvar`]) instead of a name lookup — no String
     // is ever materialized for the ordinary-global fast path.
-    pub const GVAR_CHILD_STATUS: IdentId = id!(80); // $?
-    pub const GVAR_ARGF: IdentId = id!(81); // $<
-    pub const GVAR_FILENAME: IdentId = id!(82); // $FILENAME
-    pub const GVAR_IRS: IdentId = id!(83); // $/
-    pub const GVAR_IRS_ALIAS: IdentId = id!(84); // $-0
-    pub const GVAR_ORS: IdentId = id!(85); // $\
-    pub const GVAR_OFS: IdentId = id!(86); // $,
-    pub const GVAR_FS: IdentId = id!(87); // $;
-    pub const GVAR_LINENO: IdentId = id!(88); // $.
-    pub const GVAR_STDOUT: IdentId = id!(89); // $stdout
-    pub const GVAR_STDERR: IdentId = id!(90); // $stderr
-    pub const GVAR_VERBOSE: IdentId = id!(91); // $VERBOSE
-    pub const GVAR_VERBOSE_V: IdentId = id!(92); // $-v
-    pub const GVAR_VERBOSE_W: IdentId = id!(93); // $-w
-    pub const GVAR_PROGRAM_NAME0: IdentId = id!(94); // $0
-    pub const GVAR_PROGRAM_NAME: IdentId = id!(95); // $PROGRAM_NAME
+    pub const GVAR_CHILD_STATUS: IdentId = id!(202); // $?
+    pub const GVAR_ARGF: IdentId = id!(203); // $<
+    pub const GVAR_FILENAME: IdentId = id!(204); // $FILENAME
+    pub const GVAR_IRS: IdentId = id!(205); // $/
+    pub const GVAR_IRS_ALIAS: IdentId = id!(206); // $-0
+    pub const GVAR_ORS: IdentId = id!(207); // $\
+    pub const GVAR_OFS: IdentId = id!(208); // $,
+    pub const GVAR_FS: IdentId = id!(209); // $;
+    pub const GVAR_LINENO: IdentId = id!(210); // $.
+    pub const GVAR_STDOUT: IdentId = id!(211); // $stdout
+    pub const GVAR_STDERR: IdentId = id!(212); // $stderr
+    pub const GVAR_VERBOSE: IdentId = id!(213); // $VERBOSE
+    pub const GVAR_VERBOSE_V: IdentId = id!(214); // $-v
+    pub const GVAR_VERBOSE_W: IdentId = id!(215); // $-w
+    pub const GVAR_PROGRAM_NAME0: IdentId = id!(216); // $0
+    pub const GVAR_PROGRAM_NAME: IdentId = id!(217); // $PROGRAM_NAME
 
     /// Name ↔ id pairing for the block above — the single source of truth:
     /// `IdentifierTable::new` interns from it, and [`Self::special_gvar_name`]
@@ -515,8 +522,11 @@ impl IdentId {
     ///
     pub(crate) fn all_symbols() -> Vec<IdentId> {
         let id = ID.read().unwrap();
+        // The ASCII range holds only the operators; the other slots
+        // there are unnamed (see `IdentifierTable::new`).
         (1..=id.table.len() as u32)
             .map(IdentId::from)
+            .filter(|i| !id.table[i.to_usize() - 1].as_bytes().is_empty())
             .collect()
     }
 }
@@ -540,11 +550,16 @@ pub struct IdentifierTable {
 }
 
 impl IdentifierTable {
+    /// Slots the predefined ids occupy; new names are numbered after
+    /// them. The ASCII range below `IdentId::PREDEFINED_FIRST` holds only
+    /// the operators, the other slots there stay unnamed.
+    const PREDEFINED_LEN: usize = 217;
+
     pub(crate) fn new() -> Self {
         let mut table = IdentifierTable {
             rev_table: HashMap::default(),
             rev_table_bytes: HashMap::default(),
-            table: vec![IdentName::Utf8(String::new()); 102],
+            table: vec![IdentName::Utf8(String::new()); Self::PREDEFINED_LEN],
             enc_map: HashMap::default(),
         };
         table.set_id("initialize", IdentId::INITIALIZE);
@@ -619,6 +634,7 @@ impl IdentifierTable {
         table.set_id("prepended", IdentId::PREPENDED);
         table.set_id("!~", IdentId::_UNMATCH);
         table.set_id("!", IdentId::_NOT);
+        table.set_id("`", IdentId::_BACKTICK);
         table.set_id("inspect", IdentId::INSPECT);
         table.set_id("singleton_method_removed", IdentId::SINGLETON_METHOD_REMOVED);
         table.set_id("singleton_method_undefined", IdentId::SINGLETON_METHOD_UNDEFINED);

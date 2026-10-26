@@ -27,7 +27,7 @@ fn out_dir(flavor: &str) -> PathBuf {
 /// The extension sources run on both interpreters, each with its
 /// script: the stage 1 surface and the stage 2 one (TypedData, alloc
 /// functions, blocks from C, `rb_call_super`, Struct).
-const FIXTURES: [&str; 7] = [
+const FIXTURES: [&str; 8] = [
     "capi_hello",
     "capi_data",
     "capi_st",
@@ -35,6 +35,7 @@ const FIXTURES: [&str; 7] = [
     "capi_time",
     "capi_value",
     "capi_gaps",
+    "capi_ids",
 ];
 
 /// The fixtures built against monoruby's headers, in one directory (to

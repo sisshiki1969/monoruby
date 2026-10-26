@@ -532,6 +532,13 @@ pub struct MrApi {
         e: *const u8,
         len: *mut c_int,
     ) -> i64,
+    /// `rb_backref_get`: `$~` of the Ruby frame the running extension
+    /// method was called from (nil when none), the frame CRuby's
+    /// `rb_backref_get` reads too, since a C method shares its caller's.
+    pub backref_get: unsafe extern "C" fn(ctx: *mut MrContext) -> MrValue,
+    /// `rb_backref_set`: set that frame's `$~` (a MatchData or nil), as
+    /// an extension does to restore what its own matching clobbered.
+    pub backref_set: unsafe extern "C" fn(ctx: *mut MrContext, md: MrValue),
 }
 
 /// Onigmo's own functions, with the types of `onigmo.h` erased to

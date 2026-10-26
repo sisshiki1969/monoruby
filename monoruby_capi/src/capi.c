@@ -86,10 +86,15 @@ struct capi_ary_slot {
     size_t cap;
 };
 
+struct capi_method;
+
 struct capi_frame {
     MrContext *ctx;
     MrValue block;
     struct capi_frame *prev;
+    /* The method a dispatch frame runs (`rb_frame_this_func`); NULL for
+     * the other frames. */
+    const struct capi_method *method;
     /* The frame of the Ruby call this one belongs to (itself for a
      * dispatch frame); it owns the C strings and the Array copies
      * handed out during the call. */
@@ -365,9 +370,12 @@ init_globals(void)
  * Entry from Ruby
  * --------------------------------------------------------------------- */
 
+static void func_names_reset(void);
+
 struct capi_method {
     VALUE (*func)(ANYARGS);
     int arity;
+    ID mid;
 };
 
 typedef VALUE (*cf0)(VALUE);
@@ -425,6 +433,7 @@ capi_dispatch(MrContext *c, MrValue self, int argc, const MrValue *argv, MrValue
     fr.block = block;
     fr.prev = capi_cur;
     fr.owner = &fr;
+    fr.method = (const struct capi_method *)data;
     fr.bufs = NULL;
     memset(fr.ary, 0, sizeof(fr.ary));
     fr.ary_next = 0;
@@ -450,6 +459,7 @@ monoruby_capi_init(MrContext *c, void (*init)(void))
         c->api->size < offsetof(MrApi, call_super) + sizeof(void *))
         return -2;
     api = c->api;
+    func_names_reset();
     struct capi_frame fr;
     struct capi_frame *volatile fp = &fr;
     volatile int rc = -1;
@@ -457,6 +467,7 @@ monoruby_capi_init(MrContext *c, void (*init)(void))
     fr.block = MR_UNDEF;
     fr.prev = capi_cur;
     fr.owner = &fr;
+    fr.method = NULL;
     fr.bufs = NULL;
     memset(fr.ary, 0, sizeof(fr.ary));
     fr.ary_next = 0;
@@ -647,10 +658,38 @@ capi_vformat(struct sbuf *b, const char *fmt, va_list ap)
         case 'p': EMIT(void *); break;
         case 'f': case 'F': case 'e': case 'E':
         case 'g': case 'G': case 'a': case 'A':
-            if (len == LEN_BIG_L)
+            if (len == LEN_BIG_L) {
                 EMIT(long double);
-            else
-                EMIT(double);
+            }
+            else {
+                double x = va_arg(ap, double);
+                if (isinf(x) || isnan(x)) {
+                    /* CRuby's spellings (BSD vfprintf), not libc's
+                     * "inf" / "nan"; a width in the spec pads on the left. */
+                    char t[8];
+                    snprintf(t, sizeof(t), "%s%s", isnan(x) ? "" : x < 0 ? "-" : plus ? "+" : "",
+                             isnan(x) ? "NaN" : "Inf");
+                    const char *q = start + 1;
+                    while (*q && strchr("+- #0", *q))
+                        q++;
+                    int width = 0;
+                    if (*q == '*')
+                        width = nstar ? w[0] : 0;
+                    else
+                        while (*q >= '0' && *q <= '9')
+                            width = width * 10 + (*q++ - '0');
+                    sb_printf(b, "%*s", width, t);
+                }
+                else if (nstar == 0) {
+                    sb_printf(b, spec, x);
+                }
+                else if (nstar == 1) {
+                    sb_printf(b, spec, w[0], x);
+                }
+                else {
+                    sb_printf(b, spec, w[0], w[1], x);
+                }
+            }
             break;
         case 'n': (void)va_arg(ap, void *); break;
         default:
@@ -890,6 +929,7 @@ rb_protect(VALUE (*func)(VALUE), VALUE arg, int *state)
     fr.block = outer->block;
     fr.prev = outer;
     fr.owner = outer->owner;
+    fr.method = NULL;
     fr.bufs = NULL;
     memset(fr.ary, 0, sizeof(fr.ary));
     fr.ary_next = 0;
@@ -1803,16 +1843,111 @@ is_module(VALUE v)
     return t == T_CLASS || t == T_MODULE;
 }
 
+/* The C functions defined as methods so far, keyed by (function, class,
+ * arity): the visibility and name of their first definition
+ * (`define_cfunc`). Names live as long as the methods do; the table is
+ * per load (`monoruby_capi_init` empties it). */
+static struct {
+    VALUE (*func)(ANYARGS);
+    VALUE klass;
+    int arity;
+    uint32_t flags;
+    ID mid;
+} *func_names;
+static size_t func_names_cap, func_names_len;
+
+static size_t
+func_names_slot(VALUE (*func)(ANYARGS), VALUE klass, int arity)
+{
+    size_t i = (((uintptr_t)func >> 4) ^ ((uintptr_t)klass >> 3) ^ (size_t)arity) & (func_names_cap - 1);
+    while (func_names[i].func &&
+           !(func_names[i].func == func && func_names[i].klass == klass && func_names[i].arity == arity))
+        i = (i + 1) & (func_names_cap - 1);
+    return i;
+}
+
+/* The first definition of `func` on `klass` with this arity, if there
+ * was one; `*flags` gets its visibility. Otherwise this definition is
+ * recorded (with `mid` 0 until `record_func_name`) and 0 returned. */
+static ID
+defined_func_name(VALUE klass, VALUE (*func)(ANYARGS), int arity, uint32_t *flags)
+{
+    if (!func_names_cap || (func_names_len + 1) * 2 > func_names_cap) {
+        size_t cap = func_names_cap ? func_names_cap * 2 : 256;
+        void *table = calloc(cap, sizeof(*func_names));
+        if (!table)
+            rb_memerror();
+        __typeof__(func_names) old = func_names;
+        size_t old_cap = func_names_cap;
+        func_names = table;
+        func_names_cap = cap;
+        for (size_t i = 0; i < old_cap; i++)
+            if (old[i].func)
+                func_names[func_names_slot(old[i].func, old[i].klass, old[i].arity)] = old[i];
+        free(old);
+    }
+    size_t i = func_names_slot(func, klass, arity);
+    if (func_names[i].func) {
+        if (func_names[i].mid)
+            *flags = func_names[i].flags;
+        return func_names[i].mid;
+    }
+    func_names[i].func = func;
+    func_names[i].klass = klass;
+    func_names[i].arity = arity;
+    func_names[i].flags = *flags;
+    func_names[i].mid = 0;
+    func_names_len++;
+    return 0;
+}
+
+/* The table is per load (`monoruby_capi_init`): a function defined in
+ * another extension's Init_ is another function, and a class VALUE from
+ * before this load may be stale. */
+static void
+func_names_reset(void)
+{
+    free(func_names);
+    func_names = NULL;
+    func_names_cap = func_names_len = 0;
+}
+
+static void
+record_func_name(VALUE klass, VALUE (*func)(ANYARGS), int arity, uint32_t flags, ID mid)
+{
+    size_t i = func_names_slot(func, klass, arity);
+    if (func_names[i].func && !func_names[i].mid) {
+        func_names[i].flags = flags;
+        func_names[i].mid = mid;
+    }
+}
+
 static void
 define_cfunc(VALUE klass, const char *name, VALUE (*func)(ANYARGS), int argc, uint32_t flags)
 {
     if (argc < -2 || argc > 15)
         rb_raise(rb_eArgError, "arity out of range: %d for -2..15", argc);
+    /* The same function defined again on the same class with the same
+     * arity becomes an alias of the first definition, with the visibility
+     * asked for now: in CRuby both names denote one method
+     * (`Date#mday == Date#day`), and an alias is how monoruby expresses
+     * that. */
+    ID mid = rb_intern(name);
+    uint32_t first_flags = flags;
+    ID first = defined_func_name(klass, func, argc, &first_flags);
+    if (first && first != mid) {
+        VALUE owner = (flags & MR_METHOD_SINGLETON) ? rb_singleton_class(klass) : klass;
+        rb_funcall(owner, rb_intern("alias_method"), 2, ID2SYM(mid), ID2SYM(first));
+        if ((flags ^ first_flags) & MR_METHOD_PRIVATE)
+            rb_funcall(owner, rb_intern((flags & MR_METHOD_PRIVATE) ? "private" : "public"), 1, ID2SYM(mid));
+        return;
+    }
     struct capi_method *m = malloc(sizeof(*m));
     if (!m)
         rb_memerror();
     m->func = func;
     m->arity = argc;
+    m->mid = mid;
     /* `rb_add_method` makes these private whatever the caller asked. */
     if (!(flags & MR_METHOD_SINGLETON) &&
         (strcmp(name, "initialize") == 0 || strcmp(name, "initialize_copy") == 0 ||
@@ -1826,6 +1961,7 @@ define_cfunc(VALUE klass, const char *name, VALUE (*func)(ANYARGS), int argc, ui
         free(m);
         capi_unwind();
     }
+    record_func_name(klass, func, argc, flags, mid);
 }
 
 void
@@ -2457,6 +2593,182 @@ VALUE
 rb_get_path(VALUE obj)
 {
     return rb_funcall(rb_cFile, rb_intern("path"), 1, obj);
+}
+
+VALUE
+rb_rational_raw(VALUE num, VALUE den)
+{
+    return rb_Rational(num, den);
+}
+
+VALUE
+rb_rational_num(VALUE rat)
+{
+    return rb_funcall(rat, rb_intern("numerator"), 0);
+}
+
+VALUE
+rb_rational_den(VALUE rat)
+{
+    return rb_funcall(rat, rb_intern("denominator"), 0);
+}
+
+/* What CRuby names in a failed coercion / comparison: special constants
+ * and Floats by value, everything else by class. */
+static VALUE
+coerce_desc(VALUE y)
+{
+    if (RB_SPECIAL_CONST_P(y) || RB_FLOAT_TYPE_P(y))
+        return rb_inspect(y);
+    return rb_obj_class(y);
+}
+
+/* `y.coerce(x)` into `*x`, `*y`; 0 (or TypeError, with `err`) when `y`
+ * has no `coerce` or it does not answer a pair. */
+static int
+num_coerce(VALUE *x, VALUE *y, int err)
+{
+    VALUE ary = rb_check_funcall(*y, rb_intern("coerce"), 1, x);
+    if (ary == Qundef) {
+        if (err)
+            rb_raise(rb_eTypeError, "%" PRIsVALUE " can't be coerced into %" PRIsVALUE,
+                     coerce_desc(*y), rb_obj_class(*x));
+        return 0;
+    }
+    if (!RB_TYPE_P(ary, T_ARRAY) || RARRAY_LEN(ary) != 2) {
+        if (err)
+            rb_raise(rb_eTypeError, "coerce must return [x, y]");
+        return 0;
+    }
+    *x = rb_ary_entry(ary, 0);
+    *y = rb_ary_entry(ary, 1);
+    return 1;
+}
+
+VALUE
+rb_num_coerce_bin(VALUE x, VALUE y, ID func)
+{
+    num_coerce(&x, &y, 1);
+    return rb_funcall(x, func, 1, y);
+}
+
+VALUE
+rb_num_coerce_cmp(VALUE x, VALUE y, ID func)
+{
+    if (!num_coerce(&x, &y, 0))
+        return Qnil;
+    return rb_funcall(x, func, 1, y);
+}
+
+VALUE
+rb_num_coerce_relop(VALUE x, VALUE y, ID func)
+{
+    VALUE x0 = x, y0 = y, c;
+    if (!num_coerce(&x, &y, 0) || NIL_P(c = rb_funcall(x, func, 1, y)))
+        rb_raise(rb_eArgError, "comparison of %" PRIsVALUE " with %" PRIsVALUE " failed",
+                 rb_obj_class(x0), coerce_desc(y0));
+    return c;
+}
+
+VALUE
+rb_cstr_to_inum(const char *str, int base, int badcheck)
+{
+    return rb_str_to_inum(rb_str_new_cstr(str), base, badcheck);
+}
+
+VALUE
+rb_int_positive_pow(long x, unsigned long y)
+{
+    return rb_funcall(LONG2NUM(x), rb_intern("**"), 1, ULONG2NUM(y));
+}
+
+VALUE
+rb_marshal_dump(VALUE obj, VALUE port)
+{
+    VALUE marshal = rb_const_get(rb_cObject, rb_intern("Marshal"));
+    if (NIL_P(port))
+        return rb_funcall(marshal, rb_intern("dump"), 1, obj);
+    return rb_funcall(marshal, rb_intern("dump"), 2, obj, port);
+}
+
+VALUE
+rb_marshal_load(VALUE port)
+{
+    return rb_funcall(rb_const_get(rb_cObject, rb_intern("Marshal")), rb_intern("load"), 1, port);
+}
+
+/* Whether the running monoruby fills the appended table entry `member`
+ * (entries are only ever appended; `size` says how far the table goes). */
+#define HAVE_API(member) (api->size >= offsetof(MrApi, member) + sizeof(api->member))
+
+VALUE
+rb_backref_get(void)
+{
+    if (HAVE_API(backref_get))
+        return R(api->backref_get(ctx()));
+    return rb_funcall(rb_cRegexp, rb_intern("last_match"), 0);
+}
+
+void
+rb_backref_set(VALUE md)
+{
+    if (HAVE_API(backref_set))
+        api->backref_set(ctx(), M(md));
+}
+
+/* CRuby copies the *generic* instance variables -- those of an object
+ * with no ivar slots of its own (T_DATA, T_STRING, ...); a T_OBJECT's
+ * are not generic and are left alone. */
+void
+rb_copy_generic_ivar(VALUE clone, VALUE obj)
+{
+    if (RB_SPECIAL_CONST_P(obj) || RB_TYPE_P(obj, T_OBJECT))
+        return;
+    VALUE names = rb_obj_instance_variables(obj);
+    long i, n = RARRAY_LEN(names);
+    for (i = 0; i < n; i++) {
+        ID id = rb_to_id(rb_ary_entry(names, i));
+        rb_ivar_set(clone, id, rb_ivar_get(obj, id));
+    }
+}
+
+VALUE
+rb_enumeratorize_with_size_kw(VALUE obj, VALUE meth, int argc, const VALUE *argv,
+                              rb_enumerator_size_func *size_fn, int kw_splat)
+{
+    VALUE *args = ALLOCA_N(VALUE, argc + 1);
+    (void)size_fn;
+    (void)kw_splat;
+    args[0] = meth;
+    if (argc > 0)
+        memcpy(args + 1, argv, sizeof(VALUE) * argc);
+    return rb_funcallv(obj, rb_intern("to_enum"), argc + 1, args);
+}
+
+VALUE
+rb_enumeratorize_with_size(VALUE obj, VALUE meth, int argc, const VALUE *argv,
+                           rb_enumerator_size_func *size_fn)
+{
+    return rb_enumeratorize_with_size_kw(obj, meth, argc, argv, size_fn, 0);
+}
+
+VALUE
+rb_enumeratorize(VALUE obj, VALUE meth, int argc, const VALUE *argv)
+{
+    return rb_enumeratorize_with_size_kw(obj, meth, argc, argv, NULL, 0);
+}
+
+ID
+rb_frame_this_func(void)
+{
+    const struct capi_method *m = frame()->owner->method;
+    return m ? m->mid : 0;
+}
+
+ID
+rb_frame_callee(void)
+{
+    return rb_frame_this_func();
 }
 
 VALUE
@@ -4424,6 +4736,7 @@ block_dispatch(MrContext *c, MrValue self, int argc, const MrValue *argv, MrValu
     fr.block = NIL_P(b->block) ? MR_UNDEF : M(b->block);
     fr.prev = capi_cur;
     fr.owner = &fr;
+    fr.method = NULL;
     fr.bufs = NULL;
     memset(fr.ary, 0, sizeof(fr.ary));
     fr.ary_next = 0;

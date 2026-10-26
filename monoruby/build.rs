@@ -245,8 +245,10 @@ fn main() {
     for (src, dst) in &sources {
         copy_dir_all(src, dst).unwrap();
     }
+    install_cruby_header_names(&staging.join("include"));
     build_capi_archive(&staging.join("capi"));
     build_capi_stubs_archive(&staging.join("capi"));
+    build_capi_extensions(&staging.join("capi"));
 
     // Content-address the staged tree. When the installed root already
     // holds *identical* content (the common case: rebuilding the same
@@ -347,6 +349,11 @@ fn install_extensions(install_root: &Path) {
         .filter(|(key, _)| key.starts_with("CARGO_CDYLIB_FILE_"))
         .map(|(_, path)| PathBuf::from(path))
         .collect();
+    // The C extensions built against the C API layer
+    // (`build_capi_extensions`) ship the same way.
+    if let Ok(dir) = fs::read_dir(capi_extensions_dir()) {
+        sources.extend(dir.flatten().map(|e| e.path()));
+    }
     sources.sort();
     sources.dedup();
 
@@ -421,6 +428,121 @@ fn build_capi_archive(capi_dir: &Path) {
             "cargo:warning=libmonoruby_capi.a not built ({e}); \
              C extensions cannot be built with mkmf against this install"
         ),
+    }
+}
+
+/// Lay the CRuby public header *names* monoruby has no header of its own
+/// for (`monoruby_capi/include/cruby_headers.txt`) into the install's
+/// `include/`, each a one-line header that includes `ruby/ruby.h`. An
+/// extension's mkmf `depend` file (every gem derived from a CRuby `ext/`
+/// ships one) lists them as prerequisites of its objects, and `make`
+/// stops on a prerequisite that does not exist. Included directly, each
+/// resolves to the whole API, which is where monoruby keeps it.
+fn install_cruby_header_names(include_dir: &Path) {
+    let list = "../monoruby_capi/include/cruby_headers.txt";
+    println!("cargo:rerun-if-changed={list}");
+    for name in fs::read_to_string(list).unwrap().lines().map(str::trim) {
+        if name.is_empty() || name.starts_with('#') {
+            continue;
+        }
+        let path = include_dir.join(name);
+        if path.exists() {
+            continue;
+        }
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                "/* CRuby's {name}: monoruby's C API is all in ruby/ruby.h (doc/c_api.md §3.17). */\n\
+                 #include \"ruby/ruby.h\"\n"
+            ),
+        )
+        .unwrap();
+    }
+}
+
+/// Where `build_capi_extensions` leaves the extensions it links, for
+/// `install_extensions` to ship.
+fn capi_extensions_dir() -> PathBuf {
+    PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("capi_ext")
+}
+
+/// Standard-library C extensions taken from CRuby (`monoruby_capi/ext/`,
+/// see the README there) and built against the layer the way mkmf would
+/// build them -- objects compiled against `monoruby_capi/include`, then
+/// linked into a shared object with the layer's archives -- so monoruby
+/// ships them as `<install root>/ext/<name>.<DLEXT>`, where `require
+/// "<name>"` looks (`ext::find_extension`). Today: `date_core`
+/// (`require "date"`, and so `time`, `psych` and rubygems' `gem build`).
+/// `doc/c_api.md` §3.17.
+///
+/// The `#define`s stand in for the extension's `extconf.rb` probes, for
+/// the targets monoruby builds on. Like the layer's archive, a failure to
+/// build one is a warning: monoruby stays usable, only that library is
+/// missing.
+fn build_capi_extensions(capi_dir: &Path) {
+    struct Ext {
+        name: &'static str,
+        dir: &'static str,
+        files: &'static [&'static str],
+        defines: &'static [&'static str],
+    }
+    const EXTENSIONS: &[Ext] = &[Ext {
+        name: "date_core",
+        dir: "date",
+        files: &["date_core.c", "date_parse.c", "date_strftime.c", "date_strptime.c"],
+        // `tm_gmtoff` is in every target's `struct tm`.
+        defines: &["HAVE_STRUCT_TM_TM_GMTOFF"],
+    }];
+    let dest = capi_extensions_dir();
+    let _ = fs::remove_dir_all(&dest);
+    fs::create_dir_all(&dest).unwrap();
+    let macos = std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "macos");
+    // `ext::DLEXT`: the suffix `find_extension` looks for.
+    let dlext = if macos { "dylib" } else { "so" };
+    for ext in EXTENSIONS {
+        let src_dir = PathBuf::from("../monoruby_capi/ext").join(ext.dir);
+        println!("cargo:rerun-if-changed={}", src_dir.display());
+        let mut build = cc::Build::new();
+        build
+            .cargo_metadata(false)
+            .cargo_warnings(false)
+            .warnings(false)
+            .opt_level(2)
+            .pic(true)
+            .include("../monoruby_capi/include")
+            .include("../monoruby_ext_sys/include")
+            .include(&src_dir);
+        for d in ext.defines {
+            build.define(d, None);
+        }
+        for f in ext.files {
+            build.file(src_dir.join(f));
+        }
+        let objects = match build.try_compile_intermediates() {
+            Ok(objects) => objects,
+            Err(e) => {
+                println!("cargo:warning={} not built ({e}); its library is unavailable", ext.name);
+                continue;
+            }
+        };
+        let so = dest.join(format!("{}.{dlext}", ext.name));
+        let mut link = build.get_compiler().to_command();
+        if macos {
+            link.args(["-dynamiclib", "-Wl,-undefined,dynamic_lookup"]);
+        } else {
+            link.arg("-shared");
+        }
+        link.arg("-o")
+            .arg(&so)
+            .args(&objects)
+            .arg(format!("-L{}", capi_dir.display()))
+            .args(["-lmonoruby_capi", "-lmonoruby_capi_stubs", "-lm"]);
+        match link.status() {
+            Ok(status) if status.success() => {}
+            Ok(status) => println!("cargo:warning={} not linked ({status}); its library is unavailable", ext.name),
+            Err(e) => println!("cargo:warning={} not linked ({e}); its library is unavailable", ext.name),
+        }
     }
 }
 
