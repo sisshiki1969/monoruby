@@ -142,6 +142,10 @@ typedef st_data_t st_index_t;
 #define RB_INT2FIX(i) ((VALUE)((((VALUE)(long)(i)) << 1) | RUBY_FIXNUM_FLAG))
 #define INT2FIX(i) RB_INT2FIX(i)
 #define LONG2FIX(i) RB_INT2FIX(i)
+/* An st_index_t (a hash) as a Fixnum: the value is truncated to Fixnum
+ * range, as CRuby's does. */
+#define RB_ST2FIX(h) RB_INT2FIX((long)(((h) << 1) >> 1))
+#define ST2FIX(h) RB_ST2FIX(h)
 #define rb_fix_new(i) RB_INT2FIX(i)
 #define RB_FIX2LONG(x) ((long)(((SIGNED_VALUE)(x)) >> 1))
 #define FIX2LONG(x) RB_FIX2LONG(x)
@@ -418,6 +422,23 @@ VALUE rb_gv_set(const char *name, VALUE val);
 VALUE rb_Integer(VALUE v);
 VALUE rb_Float(VALUE v);
 VALUE rb_String(VALUE v);
+/* Kernel#Complex / Kernel#Rational and the constructors; in CRuby the
+ * numbered forms are macros over the two-argument ones. */
+VALUE rb_Complex(VALUE real, VALUE imag);
+VALUE rb_complex_new(VALUE real, VALUE imag);
+VALUE rb_Rational(VALUE num, VALUE den);
+VALUE rb_rational_new(VALUE num, VALUE den);
+#define rb_Complex1(x) rb_Complex((x), INT2FIX(0))
+#define rb_Complex2(x, y) rb_Complex((x), (y))
+#define rb_complex_new1(x) rb_complex_new((x), INT2FIX(0))
+#define rb_complex_new2(x, y) rb_complex_new((x), (y))
+#define rb_Rational1(x) rb_Rational((x), INT2FIX(1))
+#define rb_Rational2(x, y) rb_Rational((x), (y))
+#define rb_rational_new1(x) rb_rational_new((x), INT2FIX(1))
+#define rb_rational_new2(x, y) rb_rational_new((x), (y))
+/* File.path-style coercion of a path argument, in place. */
+VALUE rb_get_path(VALUE obj);
+#define FilePathValue(v) (RB_GC_GUARD(v) = rb_get_path(v))
 VALUE rb_Array(VALUE v);
 VALUE rb_Hash(VALUE v);
 VALUE rb_to_int(VALUE v);

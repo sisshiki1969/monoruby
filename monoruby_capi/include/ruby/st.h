@@ -162,6 +162,11 @@ st_index_t rb_st_hash_end(st_index_t h);
 #define st_hash_end rb_st_hash_end
 st_index_t rb_st_hash_start(st_index_t h);
 #define st_hash_start(h) ((st_index_t)(h))
+/* The rb_hash_* spellings of the incremental hash API. */
+#define rb_hash_start(h) st_hash_start(h)
+#define rb_hash_uint32(h, i) st_hash_uint32((h), (i))
+#define rb_hash_uint(h, i) st_hash_uint((h), (i))
+#define rb_hash_end(h) st_hash_end(h)
 
 RUBY_SYMBOL_EXPORT_END
 

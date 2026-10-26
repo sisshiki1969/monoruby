@@ -599,6 +599,30 @@ C API 層の拡張を含む `<home>/extensions/<platform>/<api>/<name-ver>` が
 `generate_plugins` が踏む `Hash#flat_map(&:last)`（ペアを分割しないブロック
 にはペアを丸ごと渡す）を `builtins/hash.rb` で直した。
 
+### 3.16 未実装 API はロードを通し、呼ばれたら NotImplementedError
+
+CRuby の公開 C API（`monoruby_capi/src/cruby_api.txt`、CRuby 4.0 の
+`include/ruby/**` の宣言と libruby の export から採った関数名）のうち層が
+定義していないものについて、`build.rs` が `capi_unimplemented(name)` を呼ぶ
+weak なスタブを生成し `capi/libmonoruby_capi_stubs.a` に入れる。
+`RbConfig` の `EXTDLDFLAGS`（拡張の `.so` のリンク行にだけ入る）が
+`-lmonoruby_capi_stubs` を足すので、拡張にはスタブもリンクされる。
+
+- 未実装の `rb_*` を**参照するだけ**の拡張もロードでき、その関数を**呼んだ
+  とき**に `NotImplementedError`（`rb_foo() is not implemented in
+  monoruby's C API`）になる。以前は `dlopen`（`RTLD_NOW`）が未解決シンボルで
+  失敗し、拡張全体が `LoadError` だった（ruby/spec の `optional/capi` では
+  47 ファイル中 22 ファイルがこれで丸ごと落ちていた）。
+- `have_func` は従来どおり「無い」と答える。mkmf の conftest は
+  `EXTDLDFLAGS` を使わず `LIBRUBYARG`（層のアーカイブだけ）でリンクするので、
+  拡張の `#ifdef HAVE_RB_FOO` は層に無いものについてフォールバック側を選び
+  続ける。
+- スタブを出すのは、ビルドした層のアーカイブに（`nm` で見て）無いシンボル
+  だけ（`st_hash_end` のようにヘッダのリネームで別名になるものも正しく除外
+  される）。スタブは weak でもあるので、層が定義する関数は常に層のものが勝つ。
+- ヘッダに宣言の無い関数は C としては暗黙宣言になる（GCC 14 以降は
+  エラー）。宣言はこれまでどおり実装したときに足す。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
