@@ -5426,7 +5426,7 @@ fn io_wait(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 
     if args.is_empty() {
         if let Some(res) = scheduler_io_wait(vm, globals, self_val, 1, None)? {
-            return Ok(scheduler_wait_result(self_val, 1, res));
+            return scheduler_wait_result(globals, self_val, 1, res);
         }
         let revents = wait_single_fd_events(vm, globals, self_val, libc::POLLIN as i16, -1)?;
         return if revents == 0 {
@@ -5485,11 +5485,11 @@ fn io_wait(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     if let Some(res) = scheduler_io_wait(vm, globals, self_val, events, timeout)? {
         // The symbol form answers the IO or nil; the mask form the
         // scheduler's mask itself.
-        return Ok(if has_symbol {
-            scheduler_wait_result(self_val, events, res)
+        return if has_symbol {
+            scheduler_wait_result(globals, self_val, events, res)
         } else {
-            res
-        });
+            Ok(res)
+        };
     }
     let timeout_ms = parse_wait_timeout(vm, globals, timeout)?;
 
@@ -5574,15 +5574,21 @@ fn scheduler_io_wait(
 
 /// `IO#wait_readable` and friends on a scheduler's answer (ext/io/wait's
 /// io_wait_event): nil for a falsy answer, the IO when the answered mask
-/// has the event, false otherwise.
-fn scheduler_wait_result(io: Value, events: i64, res: Value) -> Value {
+/// has the event, false otherwise; an answer that is no Integer is the
+/// TypeError RB_NUM2INT raises.
+fn scheduler_wait_result(globals: &Globals, io: Value, events: i64, res: Value) -> Result<Value> {
     if !res.as_bool() {
-        return Value::nil();
+        return Ok(Value::nil());
     }
     match res.try_fixnum() {
-        Some(mask) if mask & events != 0 => io,
-        Some(_) => Value::bool(false),
-        None => io,
+        Some(mask) if mask & events != 0 => Ok(io),
+        Some(_) => Ok(Value::bool(false)),
+        // RB_NUM2INT on the answer, as ext/io/wait does.
+        None => Err(MonorubyErr::no_implicit_conversion(
+            &globals.store,
+            res,
+            INTEGER_CLASS,
+        )),
     }
 }
 
@@ -5595,7 +5601,7 @@ fn io_wait_readable(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     if let Some(res) = scheduler_io_wait(vm, globals, self_val, 1, lfp.try_arg(0))? {
-        return Ok(scheduler_wait_result(self_val, 1, res));
+        return scheduler_wait_result(globals, self_val, 1, res);
     }
     let timeout_ms = parse_wait_timeout(vm, globals, lfp.try_arg(0))?;
     let revents = wait_single_fd_events(vm, globals, self_val, libc::POLLIN as i16, timeout_ms)?;
@@ -5619,7 +5625,7 @@ fn io_wait_writable(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     if let Some(res) = scheduler_io_wait(vm, globals, self_val, 4, lfp.try_arg(0))? {
-        return Ok(scheduler_wait_result(self_val, 4, res));
+        return scheduler_wait_result(globals, self_val, 4, res);
     }
     let timeout_ms = parse_wait_timeout(vm, globals, lfp.try_arg(0))?;
     let revents = wait_single_fd_events(vm, globals, self_val, libc::POLLOUT as i16, timeout_ms)?;
@@ -5643,7 +5649,7 @@ fn io_wait_priority(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     if let Some(res) = scheduler_io_wait(vm, globals, self_val, 2, lfp.try_arg(0))? {
-        return Ok(scheduler_wait_result(self_val, 2, res));
+        return scheduler_wait_result(globals, self_val, 2, res);
     }
     let timeout_ms = parse_wait_timeout(vm, globals, lfp.try_arg(0))?;
     let revents = wait_single_fd_events(vm, globals, self_val, libc::POLLPRI as i16, timeout_ms)?;
@@ -9357,9 +9363,16 @@ mod tests {
             fibers << Fiber.new(blocking: false) { res << r.wait(:read, 2).equal?(r) }
             fibers << Fiber.new(blocking: false) { res << r.wait(IO::READABLE | IO::WRITABLE, 3).inspect }
             fibers << Fiber.new(blocking: true) { res << r.wait_readable(0).inspect }
+            fibers << Fiber.new(blocking: false) { res << r.wait_priority(4).inspect }
+            fibers << Fiber.new(blocking: false) { res << r.wait.equal?(r) }
             fibers.each(&:resume)
             sched.answer = IO::READABLE
             fibers.each { |f| f.resume while f.alive? }
+            # A truthy answer that is not a mask is RB_NUM2INT's TypeError.
+            sched.answer = true
+            g = Fiber.new(blocking: false) { res << (begin; w.wait_writable; rescue TypeError => e; e.message; end) }
+            g.resume
+            g.resume while g.alive?
             Fiber.set_scheduler(nil)
             r.close
             w.close
