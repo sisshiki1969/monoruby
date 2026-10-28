@@ -278,6 +278,7 @@
 0b7ee82ff88a267033144fce83d01888	[LocalJumpError, 42, :return]	def m\n          proc { return 42 }\n        end\n        begin\n          
 0b867e98052ada5dace0aa91d09d9e98	[true, 0, 1000000, "nil", true, false, true, true, 600, 1000]	class A\n          def flag; true; end\n          def zero; 0; end\n      
 0b897273d98e1e69054efed30d8f0fba	-3	class Integer; alias __orig :-@; def -@; __orig; end; end; -(3)
+0b8b52841c6bac9d80e5bd93c6702f37	[[[1, nil], [4, 1], [1, 2], [5, 3], [2, 4], [1, nil], [4, nil]], ["nil", true, false, true, "1", "false", true, "no implicit conversion of true into Integer"]]	require "io/wait"\n            class Sched\n              attr_reader
 0ba27141d5913d3fcc8fa69294a2eb77	:OVERRIDDEN	class Float; def +(o); :OVERRIDDEN; end; end; 3.0 + 4.0
 0ba62bc6f73f4679b163d6f86e8d40ee	[250, 50]	$nlr_log2 = 0\n        def nlr_y2\n          yield\n        end\n        de
 0bbca425b3e73560421915e1f2150d24	[[2, 8, [2, 8]], [[1, 2, 3], 1, 2, 3], [7, 7, 7]]	__a = [];__a << (a=8; b=2; c = (a,b=b,a); [a,b,c]);__a << (e = (a,b,c=1,2,3); [e
@@ -644,6 +645,7 @@
 1c4c2d6d15f9c496df0430ac01991d10	0	255[..-2]
 1c537b7c32499c04f051cb2dc27d4611	[(1/4), (1/2), (3/2), (7329/2), Rational, (1/2), (3/2), (3602879701896397/36028797018963968), 3601, 3601, 3601, 900, Integer, "+0000 +00:00:01", "+0000 +00:00:02", "+0101 +01:01:05", "2020-03-01 00:00:00 +0000", 0]	__a = [];__a << (Time.new(2020, 3, 1, 0, 0, 0, Rational(1, 4)).utc_offset);__a <
 1c55df1a2ab9f2b7ce881cce3520b3da	["File::Stat", 8, true, false, true, true, true, true, true, "file", false, 8, true, true, true, true, true]	path = "/tmp/monoruby_test_stat_#{Process.pid}_#{rand(100000)}"\n   
+1c644a48d13c6b93216c194d84f9ef5a	["a\\n", 1, 0, "b", "\\n", nil, [[:gets, [], {}], [:gets, ["\\n", 1], {:chomp=>true}], [:gets, [], {}], [:gets, [], {}]], "a", "\\n", "b\\n", [[:readline, ["\\n", 1], {:chomp=>true}], [:readline, [], {}], [:readline, [], {}]], ["a", "", "b", ""], [[:readlines, ["\\n", 1], {:chomp=>true}]], ["a", "", "b", ""], [[:each_line, ["\\n", 1], {:chomp=>true}]], ["a", "b"], ["a", "", "b", ""], [[:each_line, ["\\n", 1], {:chomp=>true}]], "k1\\n", "k1\\n", "k2\\n", nil, [[:gets, [], {}], [:gets, [], {}], [:gets, [], {}]], NoMethodError, NoMethodError, NoMethodError]	require "stringio"\n            class Stdin\n              attr_reade
 1c6601fbcbfe95bd56ee09a82ee2e8ab	[[[213, 1, 97, 98], [[1, Symbol]], true, true], [213, 1, 97, 98], [["\\x01"], 1, false, "\\x01", 0, true], [nil, [145, 1]], true, [1, [1], 0], [146, 1, 129, 161, 97, 192], [[192, 195, 194, 5, 203, 63, 240, 0, 0, 0, 0, 0, 0, 161, 97, 161, 98, 196, 1, 99, 144, 128, 196, 1]]]	require "rubygems"\n        require "msgpack"\n        require "stringio"
 1c6926fa6e1462140ee74bc77342fcc8	[nil, :nme, true]	module PrivC\n              class Sec; end\n              private_con
 1c6d7d2ee7c5c48ff5b7040293a055f2	[42, 42, 2]	module BopPlus\n              refine(Integer) { def +(o); 42; end }\n
@@ -1376,6 +1378,7 @@
 408248739cf54741f93cd264fd5e6e69	[["BasicObject", nil], ["BasicObject", nil]]	__a = [];__a << (\n        o = BasicObject.new\n        a, b = o\n        [Object.i
 4086c6059363125acb8e46416f91d20f	"FiberError"	begin\n              Enumerator.new { |y| Fiber.yield; y << 1 }.each
 40871a574065d49f2b0ca7045d6f6391	{life: 42}	f = Fiber.new(storage: {life: 42}) { Fiber.current.storage }\n      
+4092e95ef37e43fb48298720c68d8b1e	[[[1, nil], [4, 1], [1, 2], [5, 3], [2, 4], [1, nil], [4, nil], [1, nil], [1, nil]], ["nil", true, false, true, "1", "false", true, "no implicit conversion of true into Integer", "nil", "nil"]]	require "io/wait"\n            class Sched\n              attr_reader
 4098362919565939287f7ffe08a158db	"0.314e1"	require "rubygems"\n        require "bigdecimal"\n        BigDecimal("3.1
 40b3f88b68876a80e1adabd27a506a98	["data", [100, 0], [0, 100], [100, 0, 0, 0], [0, 0, 0, 100], "plain", "xy", [100, 0], [0, 100], [100, 0, 0, 0], [0, 0, 0, 100], "nobom"]	path = "/tmp/monoruby_test_iobom_#{Process.pid}_#{rand(100000)}"\n  
 40cecdcb446e63551e2fcd36919c57d0	true	Data.define.is_a?(Class)

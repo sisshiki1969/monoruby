@@ -375,17 +375,11 @@ pub(crate) fn argf_getline_raw(
             return Ok(None);
         };
         if stream.ty() != Some(ObjTy::IO) {
-            // `$stdin` reassigned to a non-IO: its public `gets`, with
-            // the read's arguments rebuilt, until it answers nil.
-            let mut args = vec![match sep {
-                Some(sep) => Value::bytes_from_slice(sep),
-                None => Value::nil(),
-            }];
-            if let Some(limit) = limit {
-                args.push(Value::integer(limit as i64));
-            }
-            let kw = chomp.then(|| (IdentId::get_id("chomp"), Value::bool(true)));
-            let line = forward_to_stdin(vm, globals, argf, stream, "gets", &args, kw)?;
+            // `$stdin` reassigned to a non-IO: its public `gets`, until it
+            // answers nil. The ARGF methods forward their own arguments
+            // before reaching here; what arrives is `Kernel#gets`, which
+            // takes none, and CRuby forwards its (empty) argument list.
+            let line = forward_to_stdin(vm, globals, argf, stream, "gets", &[], None)?;
             if line.is_nil() {
                 finish_stream(vm, globals, argf)?;
                 continue;
@@ -1530,6 +1524,10 @@ mod tests {
               r << lines << $stdin.calls
               $stdin = Stdin.new("a\nb\n")
               r << ARGF.class.new.each_line(chomp: true).to_a
+              $stdin = Stdin.new("a\nb\n")
+              r << ARGF.class.new.each_line("\n", 1, chomp: true).to_a << $stdin.calls
+              $stdin = Stdin.new("k1\nk2\n")
+              r << Kernel.gets << $_ << gets << gets << $stdin.calls
               only_gets = Object.new
               def only_gets.gets(*) = "line\n"
               $stdin = only_gets
