@@ -456,8 +456,18 @@ impl JitModule {
             mov x7, (0);  // thread bodies carry no keyword args
         );
         self.a64_invoker_args_and_call(true);
-        // body completed: mark terminated, switch back to the scheduler.
+        // Body completed (x0 = result, or 0 with an error pending on the
+        // executor): the exit hook runs here, still in the thread's own
+        // context (it releases the thread's mutexes, answers the fibers
+        // that joined it through a scheduler, and may park like the
+        // body), and hands the result word back in x0. Then mark
+        // terminated and switch back to the scheduler.
         monoasm_arm64!(&mut self.jit,
+            mov x2, x0;
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x9, (crate::scheduler::thread_body_exit as *const () as u64);
+            blr x9;       // x0 = the result word again
             mov x10, (u64::MAX);  // -1 = terminated
             str x10, [x(EXEC.0), #(EXECUTOR_RSP_SAVE as u32)];
             mov x10, (sched_rsp);

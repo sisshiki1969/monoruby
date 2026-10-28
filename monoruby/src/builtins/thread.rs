@@ -618,6 +618,88 @@ fn join_timeout(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Op
     }
 }
 
+/// `Thread#join` / `#value`: in a non-blocking fiber with a fiber
+/// scheduler installed the wait goes through the scheduler (CRuby's
+/// `thread_join_sleep`); otherwise the thread parks natively.
+fn join(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    target: Value,
+    timeout: Option<std::time::Duration>,
+) -> Result<bool> {
+    if !vm.is_fiber_blocking()
+        && let Some(scheduler) = globals.fiber_scheduler
+    {
+        return join_through_scheduler(vm, globals, target, scheduler, timeout);
+    }
+    scheduler::join(vm, globals, target, timeout)
+}
+
+/// The joining fiber registers on the target (`ThreadInner::fiber_joiners`)
+/// and parks with `scheduler.block(target, time left)`, the time left as
+/// a Float (CRuby 4.0); the target's exit hook takes the registration and
+/// answers it with `unblock(this thread, fiber)`. A registration still in
+/// place when `block` returns is a wake from elsewhere: the fiber parks
+/// again. One taken means the target is on its way out: the native join
+/// waits out that moment — in the 1:1 model the fiber can run before the
+/// exiting thread is marked dead.
+fn join_through_scheduler(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    target: Value,
+    scheduler: Value,
+    timeout: Option<std::time::Duration>,
+) -> Result<bool> {
+    let cur = scheduler::current_thread(vm);
+    if target == cur {
+        return Err(MonorubyErr::threaderr(
+            &globals.store,
+            "Target thread must not be current thread",
+        ));
+    }
+    let fiber = super::fiber::current_fiber_obj(vm, globals)?;
+    let deadline = timeout.map(|d| std::time::Instant::now() + d);
+    loop {
+        if target.as_thread_inner().is_dead() {
+            return Ok(true);
+        }
+        let left = match deadline {
+            None => Value::nil(),
+            Some(dl) => {
+                let left = dl.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
+                    return Ok(false);
+                }
+                Value::float(left.as_secs_f64())
+            }
+        };
+        {
+            let mut target = target;
+            target.as_thread_inner_mut().fiber_joiners.push((cur, fiber));
+        }
+        let res = vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("block"),
+            scheduler,
+            &[target, left],
+            None,
+            None,
+        );
+        let taken = {
+            let mut target = target;
+            let joiners = &mut target.as_thread_inner_mut().fiber_joiners;
+            let before = joiners.len();
+            joiners.retain(|(_, f)| *f != fiber);
+            before == joiners.len()
+        };
+        res?;
+        if taken {
+            scheduler::join(vm, globals, target, None)?;
+            return Ok(true);
+        }
+    }
+}
+
 ///
 /// ### Thread#join
 ///
@@ -629,7 +711,7 @@ fn join_timeout(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Op
 fn thread_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let timeout = join_timeout(vm, globals, lfp)?;
-    let dead = scheduler::join(vm, globals, self_, timeout)?;
+    let dead = join(vm, globals, self_, timeout)?;
     if !dead {
         return Ok(Value::nil());
     }
@@ -651,7 +733,7 @@ fn thread_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 #[monoruby_builtin]
 fn thread_value(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    scheduler::join(vm, globals, self_, None)?;
+    join(vm, globals, self_, None)?;
     let inner = self_.as_thread_inner();
     if let Some(err) = inner.exception.clone() {
         return Err(err);
@@ -2940,6 +3022,203 @@ mod tests {
             end
             $stop = true
             t.value
+            "#,
+        );
+    }
+
+    /// The fiber scheduler's `block` / `unblock` on the synchronization
+    /// primitives, in the shape of ruby/spec's examples: `Queue#pop` on
+    /// an empty queue and `SizedQueue#push` on a full one park the
+    /// non-blocking fiber with `block(queue, nil)` (counted by
+    /// `num_waiting`), the push / pop that makes room answers it with
+    /// `unblock(queue, fiber)`, and a `close` while parked ends the push
+    /// with ClosedQueueError. The scheduler's `unblock` yields, as the
+    /// spec fixture's does, so the fibers are driven to the end by hand.
+    #[test]
+    fn queues_block_through_the_fiber_scheduler() {
+        run_test_once(
+            r#"
+            class Sched
+              attr_reader :events
+              def initialize = @events = []
+              def block(blocker, timeout = nil)
+                @events << [:block, Fiber.current, blocker, timeout]
+                Fiber.yield
+              end
+              def unblock(blocker, fiber)
+                @events << [:unblock, Fiber.current, blocker, fiber]
+                Fiber.yield
+              end
+              def kernel_sleep(*) = Fiber.yield
+              def io_wait(*) = Fiber.yield
+              def fiber(&b) = Fiber.new(blocking: false, &b).tap(&:resume)
+            end
+            sched = Sched.new
+            Fiber.set_scheduler(sched)
+            res = []
+            q = Queue.new
+            result = nil
+            popper = Fiber.schedule { result = q.pop }
+            res << (sched.events.last == [:block, popper, q, nil]) << q.num_waiting
+            pusher = Fiber.schedule { q << 42 }
+            res << (sched.events.last == [:unblock, pusher, q, popper])
+            [pusher, popper].each { |f| f.resume while f.alive? }
+            res << result << q.num_waiting
+            sq = SizedQueue.new(1)
+            sq << 1
+            pusher = Fiber.schedule { sq << 2 }
+            res << (sched.events.last == [:block, pusher, sq, nil]) << sq.num_waiting
+            popper = Fiber.schedule { res << sq.pop }
+            res << (sched.events.last == [:unblock, popper, sq, pusher])
+            [popper, pusher].each { |f| f.resume while f.alive? }
+            res << sq.pop
+            sq = SizedQueue.new(1)
+            sq << 1
+            error = nil
+            pusher = Fiber.schedule { begin; sq << 2; rescue ClosedQueueError => e; error = e.class; end }
+            closer = Fiber.schedule { sq.close }
+            [closer, pusher].each { |f| f.resume while f.alive? }
+            res << error
+            Fiber.set_scheduler(nil)
+            res
+            "#,
+        );
+    }
+
+    /// `ConditionVariable#wait` in a non-blocking fiber: the mutex is
+    /// released and the fiber parked through `Mutex#sleep`, which is the
+    /// scheduler's `kernel_sleep(timeout)`; `#signal` answers it with
+    /// `unblock(mutex, fiber)`, and the woken fiber holds the mutex again
+    /// before `wait` returns.
+    #[test]
+    fn condition_variable_waits_through_the_fiber_scheduler() {
+        run_test_once(
+            r#"
+            class Sched
+              attr_reader :events
+              def initialize = @events = []
+              def block(*a) = (@events << [:block, a]; Fiber.yield)
+              def unblock(*a) = @events << [:unblock, a]
+              def kernel_sleep(*a) = (@events << [:kernel_sleep, a]; Fiber.yield)
+              def io_wait(*) = Fiber.yield
+            end
+            sched = Sched.new
+            Fiber.set_scheduler(sched)
+            res = []
+            m = Mutex.new
+            cv = ConditionVariable.new
+            waiter = Fiber.new(blocking: false) { m.synchronize { cv.wait(m, 5); [m.owned?, :woken] } }
+            res << waiter.resume << (sched.events.last == [:kernel_sleep, [5]]) << m.locked?
+            signaler = Fiber.new(blocking: false) { m.synchronize { cv.signal } }
+            signaler.resume
+            res << (sched.events.last == [:unblock, [m, waiter]]) << m.locked?
+            res << waiter.resume << m.locked?
+            Fiber.set_scheduler(nil)
+            res
+            "#,
+        );
+    }
+
+    /// `Mutex#lock` held by another thread parks the non-blocking fiber
+    /// with `block(mutex, nil)`. A thread releases the mutexes it still
+    /// holds when it ends (CRuby's rb_threadptr_unlock_all_locking_mutexes),
+    /// and that release answers the fiber with `unblock(mutex, fiber)` from
+    /// the dying thread — also when the scheduler's `unblock` locks a mutex
+    /// of its own there, and every lock of the thread is released. A
+    /// thread parked on the mutex is woken by the same release.
+    #[test]
+    fn a_dying_thread_releases_its_mutexes_and_unblocks_the_waiting_fiber() {
+        run_test_once(
+            r#"
+            class Sched
+              attr_reader :unblocked
+              def initialize = @unblocked = Thread::Queue.new
+              def block(blocker, timeout = nil) = Fiber.yield
+              def unblock(blocker, fiber) = @unblocked << [blocker, fiber]
+              def kernel_sleep(*) = Fiber.yield
+              def io_wait(*) = Fiber.yield
+            end
+            res = []
+            m = Mutex.new
+            locked = Queue.new
+            finish = Queue.new
+            holder = Thread.new { m.lock; locked << true; finish.pop }
+            locked.pop
+            sched = Sched.new
+            Fiber.set_scheduler(sched)
+            waiter = Fiber.new(blocking: false) { m.lock; :locked }
+            res << waiter.resume << m.locked?
+            finish << true
+            holder.join
+            res << m.locked? << (sched.unblocked.pop == [m, waiter]) << waiter.resume << m.locked?
+            Fiber.set_scheduler(nil)
+            # unblock locks a mutex of its own, in the dying thread
+            sched = Sched.new
+            scheduler_lock = Mutex.new
+            sched.define_singleton_method(:unblock) { |blocker, fiber| scheduler_lock.synchronize { super(blocker, fiber) } }
+            m1 = Mutex.new
+            m2 = Mutex.new
+            holder = Thread.new { m1.lock; m2.lock; locked << true; finish.pop }
+            locked.pop
+            Fiber.set_scheduler(sched)
+            waiter = Fiber.new(blocking: false) { m1.lock; :locked }
+            waiter.resume
+            finish << true
+            holder.join
+            res << m2.locked? << scheduler_lock.locked? << (sched.unblocked.pop == [m1, waiter]) << waiter.resume
+            Fiber.set_scheduler(nil)
+            # a thread waiter
+            m = Mutex.new
+            holder = Thread.new { m.lock; locked << true; finish.pop }
+            locked.pop
+            t = Thread.new { m.lock; m.owned? }
+            Thread.pass until t.stop?
+            finish << true
+            res << t.value
+            res
+            "#,
+        );
+    }
+
+    /// `Thread#join` in a non-blocking fiber parks it with `block(thread,
+    /// time left)` — nil without a limit, the seconds left otherwise —
+    /// and the ending thread answers with `unblock(joining thread, fiber)`:
+    /// the *joining* thread as the blocker, as CRuby passes it. The
+    /// spec's `unblock` runs in the ending thread and must not yield.
+    #[test]
+    fn thread_join_blocks_through_the_fiber_scheduler() {
+        run_test_once(
+            r#"
+            class Sched
+              attr_reader :events
+              def initialize = @events = []
+              def block(*a) = (@events << [:block, Fiber.current, a]; Fiber.yield)
+              def unblock(*a) = @events << [:unblock, Thread.current, a]
+              def kernel_sleep(*) = Fiber.yield
+              def io_wait(*) = Fiber.yield
+            end
+            res = []
+            q = Queue.new
+            t = Thread.new { q.pop }
+            Thread.pass until t.stop?
+            sched = Sched.new
+            Fiber.set_scheduler(sched)
+            joiner = Fiber.new(blocking: false) { t.join }
+            res << joiner.resume << (sched.events == [[:block, joiner, [t, nil]]])
+            q << :done
+            Thread.pass until sched.events.size == 2
+            res << (sched.events.last == [:unblock, t, [Thread.current, joiner]])
+            res << joiner.resume.equal?(t) << t.alive?
+            t = Thread.new { q.pop }
+            Thread.pass until t.stop?
+            joiner = Fiber.new(blocking: false) { t.join(10) }
+            joiner.resume
+            ev = sched.events.last
+            res << ev[0] << ev[2][0].equal?(t) << (ev[2][1].is_a?(Numeric) && ev[2][1] <= 10)
+            q << :done
+            t.join
+            Fiber.set_scheduler(nil)
+            res
             "#,
         );
     }

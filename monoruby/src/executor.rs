@@ -2019,6 +2019,11 @@ impl Executor {
         std::mem::take(&mut self.exception).unwrap()
     }
 
+    /// The pending error, if any, leaving none.
+    pub(crate) fn take_pending_error(&mut self) -> Option<MonorubyErr> {
+        self.exception.take()
+    }
+
     pub(crate) fn discard_error(&mut self) {
         self.exception = None
     }
