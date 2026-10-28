@@ -9090,10 +9090,17 @@ mod tests {
     }
 
     #[test]
+    /// On a file of its own, not `Cargo.toml`: CRuby's pushback has to fit
+    /// in the room its 8 KiB read buffer has left, and once the manifest
+    /// outgrew the buffer, pushing three bytes back after one read was
+    /// "ungetbyte failed" there.
     fn io_ungetbyte() {
         run_test(
             r#"
-            File.open("Cargo.toml") do |f|
+            require "tempfile"
+            t = Tempfile.new("mrb_ungetbyte")
+            File.write(t.path, "package\n")
+            File.open(t.path) do |f|
               f.getbyte
               r = f.ungetbyte("cat")
               [r, f.getbyte, f.getbyte, f.getbyte, f.getbyte]
@@ -9102,7 +9109,10 @@ mod tests {
         );
         run_test(
             r#"
-            File.open("Cargo.toml") do |f|
+            require "tempfile"
+            t = Tempfile.new("mrb_ungetbyte")
+            File.write(t.path, "package\n")
+            File.open(t.path) do |f|
               [f.ungetbyte(nil), f.ungetbyte(4095), f.getbyte,
                f.ungetbyte(0x4f7574206f6620636861722072616e67ff), f.getbyte]
             end
