@@ -123,14 +123,13 @@ pub(super) fn init(globals: &mut Globals) {
 }
 
 #[monoruby_builtin]
-fn argf_new(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn argf_new(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
+    // The arguments are the new object's ARGV (CRuby's argf_initialize);
+    // none means no files, so it reads `$stdin`. Only the global ARGF is
+    // bound to the process's ARGV.
     let args = lfp.arg(0).as_array();
-    let queue = if args.is_empty() {
-        globals.argv()
-    } else {
-        Value::array_from_iter(args.iter().cloned())
-    };
+    let queue = Value::array_from_iter(args.iter().cloned());
     Ok(Value::new_argf(class_id, ArgfInner::new(queue)))
 }
 
@@ -375,6 +374,24 @@ pub(crate) fn argf_getline_raw(
             vm.set_last_read_line(Value::nil());
             return Ok(None);
         };
+        if stream.ty() != Some(ObjTy::IO) {
+            // `$stdin` reassigned to a non-IO: its public `gets`, with
+            // the read's arguments rebuilt, until it answers nil.
+            let mut args = vec![match sep {
+                Some(sep) => Value::bytes_from_slice(sep),
+                None => Value::nil(),
+            }];
+            if let Some(limit) = limit {
+                args.push(Value::integer(limit as i64));
+            }
+            let kw = chomp.then(|| (IdentId::get_id("chomp"), Value::bool(true)));
+            let line = forward_to_stdin(vm, globals, argf, stream, "gets", &args, kw)?;
+            if line.is_nil() {
+                finish_stream(vm, globals, argf)?;
+                continue;
+            }
+            return Ok(Some(line));
+        }
         let (ext, intl) = match expect_inner(argf)?.cur_encs {
             Some(pair) => pair,
             None => {
@@ -417,21 +434,96 @@ fn getline_from_lfp(
     argf_getline_raw(vm, globals, lfp.self_val(), sep.as_deref(), limit, chomp)
 }
 
+/// The current stream when it is `$stdin` reassigned to something that
+/// is not an IO (a StringIO, a mock): ARGF then forwards the read to that
+/// object's public `gets` / `readline` instead of reading an fd.
+fn foreign_stdin(vm: &mut Executor, globals: &mut Globals, argf: Value) -> Result<Option<Value>> {
+    Ok(force_stream(vm, globals, argf)?.filter(|s| s.ty() != Some(ObjTy::IO)))
+}
+
+/// `$stdin.<method>(*args, **kw)` through a public call (a private
+/// `gets` is NoMethodError, as CRuby's rb_funcallv_public), then the
+/// bookkeeping a read line gets: `$_`, and `ARGF.lineno` for a line
+/// that was read.
+fn forward_to_stdin(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    argf: Value,
+    stdin: Value,
+    method: &str,
+    args: &[Value],
+    kw: Option<(IdentId, Value)>,
+) -> Result<Value> {
+    let line = forward_call_to_stdin(vm, globals, stdin, method, args, kw, None)?;
+    vm.set_last_read_line(line);
+    if !line.is_nil() {
+        // `ARGF.lineno` counts it; `$.` stays the object's own.
+        expect_inner(argf)?.lineno += 1;
+    }
+    Ok(line)
+}
+
+/// `$stdin.<method>(*args, **kw, &block)` through a public call.
+fn forward_call_to_stdin(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    stdin: Value,
+    method: &str,
+    args: &[Value],
+    kw: Option<(IdentId, Value)>,
+    bh: Option<BlockHandler>,
+) -> Result<Value> {
+    let kw_args = match kw {
+        Some((k, v)) => {
+            let mut map = RubyMap::default();
+            map.insert(Value::symbol(k), v, vm, globals)?;
+            Some(Hashmap::new(Value::hash(map)))
+        }
+        None => None,
+    };
+    vm.invoke_method_inner_vis(globals, IdentId::get_id(method), stdin, args, bh, kw_args, false)
+}
+
+/// The call's own arguments, as given, for forwarding: the positional
+/// ones and `chomp:` when it was passed.
+fn forwarded_args(lfp: Lfp) -> (Vec<Value>, Option<(IdentId, Value)>) {
+    let args: Vec<Value> = [lfp.try_arg(0), lfp.try_arg(1)].into_iter().flatten().collect();
+    let kw = lfp.try_arg(2).map(|v| (IdentId::get_id("chomp"), v));
+    (args, kw)
+}
+
 #[monoruby_builtin]
 fn gets(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let argf = lfp.self_val();
+    if let Some(stdin) = foreign_stdin(vm, globals, argf)? {
+        let (args, kw) = forwarded_args(lfp);
+        return forward_to_stdin(vm, globals, argf, stdin, "gets", &args, kw);
+    }
     Ok(getline_from_lfp(vm, globals, lfp)?.unwrap_or_default())
 }
 
 #[monoruby_builtin]
 fn readline(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let argf = lfp.self_val();
+    if let Some(stdin) = foreign_stdin(vm, globals, argf)? {
+        // `readline`, not `gets`: an object with only a `gets` is
+        // NoMethodError here (CRuby 4.0), and the object raises its own
+        // EOFError.
+        let (args, kw) = forwarded_args(lfp);
+        return forward_to_stdin(vm, globals, argf, stdin, "readline", &args, kw);
+    }
     getline_from_lfp(vm, globals, lfp)?
         .ok_or_else(|| MonorubyErr::eoferr(&globals.store, "end of file reached"))
 }
 
 #[monoruby_builtin]
 fn readlines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let (sep, limit, chomp) = super::io::getline_args(vm, globals, lfp, 2)?;
     let argf = lfp.self_val();
+    if let Some(stdin) = foreign_stdin(vm, globals, argf)? {
+        let (args, kw) = forwarded_args(lfp);
+        return forward_call_to_stdin(vm, globals, stdin, "readlines", &args, kw, None);
+    }
+    let (sep, limit, chomp) = super::io::getline_args(vm, globals, lfp, 2)?;
     let mut lines = vec![];
     while let Some(line) = argf_getline_raw(vm, globals, argf, sep.as_deref(), limit, chomp)? {
         lines.push(line);
@@ -443,15 +535,23 @@ fn readlines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let argf = lfp.self_val();
     let Some(bh) = lfp.block() else {
-        let mut args = vec![];
-        if let Some(a) = lfp.try_arg(0) {
-            args.push(a);
-        }
-        if let Some(a) = lfp.try_arg(1) {
-            args.push(a);
-        }
-        return vm.generate_enumerator(IdentId::get_id("each_line"), argf, args, pc);
+        // The Enumerator replays the call as made, `chomp:` included.
+        let (args, kw) = forwarded_args(lfp);
+        let kw_args = match kw {
+            Some((k, v)) => {
+                let mut map = RubyMap::default();
+                map.insert(Value::symbol(k), v, vm, globals)?;
+                Some(Hashmap::new(Value::hash(map)))
+            }
+            None => None,
+        };
+        return vm.generate_enumerator_kw(IdentId::get_id("each_line"), argf, args, kw_args, pc);
     };
+    if let Some(stdin) = foreign_stdin(vm, globals, argf)? {
+        let (args, kw) = forwarded_args(lfp);
+        forward_call_to_stdin(vm, globals, stdin, "each_line", &args, kw, Some(bh))?;
+        return Ok(argf);
+    }
     let (sep, limit, chomp) = super::io::getline_args(vm, globals, lfp, 2)?;
     let data = vm.get_block_data(globals, bh)?;
     while let Some(line) = argf_getline_raw(vm, globals, argf, sep.as_deref(), limit, chomp)? {
@@ -1394,4 +1494,70 @@ mod tests {
             "#,
         );
     }
+    /// `$stdin` reassigned to something that is not an IO: ARGF forwards
+    /// the read to it, through its public `gets` / `readline` /
+    /// `readlines` / `each_line` with the arguments as given (CRuby 4.0),
+    /// and `ARGF.class.new` with no arguments reads `$stdin` rather than
+    /// the process's ARGV.
+    #[test]
+    fn argf_forwards_to_a_non_io_stdin() {
+        run_test_once(
+            r#"
+            require "stringio"
+            class Stdin
+              attr_reader :calls
+              def initialize(s) = (@io = StringIO.new(s); @calls = [])
+              def gets(*a, **kw) = (@calls << [:gets, a, kw]; @io.gets(*a, **kw))
+              def readline(*a, **kw) = (@calls << [:readline, a, kw]; @io.readline(*a, **kw))
+              def readlines(*a, **kw) = (@calls << [:readlines, a, kw]; @io.readlines(*a, **kw))
+              def each_line(*a, **kw, &b) = (@calls << [:each_line, a, kw]; @io.each_line(*a, **kw, &b); self)
+              private def secret = nil
+            end
+            saved = $stdin
+            r = []
+            begin
+              $stdin = Stdin.new("a\nb\n")
+              argf = ARGF.class.new
+              r << argf.gets << argf.lineno << $. << argf.gets("\n", 1, chomp: true) << argf.gets << argf.gets << $stdin.calls
+              $stdin = Stdin.new("a\nb\n")
+              argf = ARGF.class.new
+              r << argf.readline("\n", 1, chomp: true) << argf.readline << (begin; argf.readline; rescue EOFError => e; e.class; end) << $stdin.calls
+              $stdin = Stdin.new("a\nb\n")
+              r << ARGF.class.new.readlines("\n", 1, chomp: true) << $stdin.calls
+              $stdin = Stdin.new("a\nb\n")
+              lines = []
+              ARGF.class.new.each_line("\n", 1, chomp: true) { |l| lines << l }
+              r << lines << $stdin.calls
+              $stdin = Stdin.new("a\nb\n")
+              r << ARGF.class.new.each_line(chomp: true).to_a
+              only_gets = Object.new
+              def only_gets.gets(*) = "line\n"
+              $stdin = only_gets
+              r << (begin; ARGF.class.new.readline; rescue NoMethodError => e; e.class; end)
+              r << (begin; ARGF.class.new.readlines; rescue NoMethodError => e; e.class; end)
+              $stdin = Object.new
+              r << (begin; ARGF.class.new.gets; rescue NoMethodError => e; e.class; end)
+            ensure
+              $stdin = saved
+            end
+            r
+            "#,
+        );
+    }
+
+    /// `StringIO#gets` and friends take `chomp:`.
+    #[test]
+    fn stringio_chomp_keyword() {
+        run_test_once(
+            r#"
+            require "stringio"
+            s = StringIO.new("a\r\nbb\n\ncc")
+            [s.gets(chomp: true), s.gets("", chomp: true), s.gets(chomp: true), s.gets(chomp: true),
+             StringIO.new("a\nb\n").readlines(chomp: true), StringIO.new("abc\nde\n").readlines("\n", 2, chomp: true),
+             StringIO.new("a\nb\n").each_line(chomp: true).to_a, StringIO.new("a\nb\n").readline(chomp: true),
+             StringIO.new("a\nb").gets(nil, chomp: true)]
+            "#,
+        );
+    }
+
 }

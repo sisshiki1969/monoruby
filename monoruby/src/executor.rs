@@ -5076,6 +5076,19 @@ impl Executor {
         self.generate_enumerator_inner(ENUMERATOR_CLASS, method, obj, args, None, pc, None)
     }
 
+    /// [`generate_enumerator`](Self::generate_enumerator) with keyword
+    /// arguments the method was given (`each_line(chomp: true)`).
+    pub(crate) fn generate_enumerator_kw(
+        &mut self,
+        method: IdentId,
+        obj: Value,
+        args: Vec<Value>,
+        kw_args: Option<Hashmap>,
+        pc: BytecodePtr,
+    ) -> Result<Value> {
+        self.generate_enumerator_inner(ENUMERATOR_CLASS, method, obj, args, kw_args, pc, None)
+    }
+
     pub(crate) fn generate_enumerator_with_size(
         &mut self,
         method: IdentId,

@@ -1524,6 +1524,51 @@ fn errnoify(globals: &Globals, err: MonorubyErr) -> MonorubyErr {
     err
 }
 
+/// A would-block wait handed to the fiber scheduler: in a non-blocking
+/// fiber with a scheduler installed, `scheduler.io_wait(io, events, nil)`
+/// (CRuby's rb_io_maybe_wait) parks the fiber instead of the thread.
+/// `Ok(true)`: the scheduler says the fd is ready, retry the operation;
+/// `Ok(false)`: no scheduler to ask, the caller waits itself; a falsy
+/// answer from the scheduler is `IO::TimeoutError`.
+pub(crate) fn scheduler_wait_fd(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    io: Value,
+    events: i16,
+) -> Result<bool> {
+    if vm.is_fiber_blocking() {
+        return Ok(false);
+    }
+    let Some(scheduler) = globals.fiber_scheduler else {
+        return Ok(false);
+    };
+    let mut mask: i64 = 0;
+    if events & libc::POLLIN as i16 != 0 {
+        mask |= 1;
+    }
+    if events & libc::POLLPRI as i16 != 0 {
+        mask |= 2;
+    }
+    if events & libc::POLLOUT as i16 != 0 {
+        mask |= 4;
+    }
+    let args = [io, Value::integer(mask), Value::nil()];
+    let res = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("io_wait"),
+        scheduler,
+        &args,
+        None,
+        None,
+    )?;
+    if res.as_bool() {
+        return Ok(true);
+    }
+    let cid = io_wait_class(globals, "TimeoutError")
+        .ok_or_else(|| MonorubyErr::ioerr("IO::TimeoutError not defined"))?;
+    Err(MonorubyErr::new(MonorubyErrKind::Other(cid), "IO timeout".to_string()))
+}
+
 pub(crate) fn blocking_io_region<T>(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1587,6 +1632,9 @@ pub(crate) fn blocking_io_region<T>(
             }
             Err(err) if err.is_would_block_interrupt() => {
                 let fd = io.as_io_inner().wait_fd_for(events)?;
+                if scheduler_wait_fd(vm, globals, io, events)? {
+                    continue;
+                }
                 if crate::scheduler::has_other_live_threads() {
                     crate::scheduler::wait_fd(vm, globals, fd, events, None)?;
                 } else {
@@ -5377,6 +5425,9 @@ fn io_wait(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let args = lfp.arg(0).as_array();
 
     if args.is_empty() {
+        if let Some(res) = scheduler_io_wait(vm, globals, self_val, 1, None)? {
+            return Ok(scheduler_wait_result(self_val, 1, res));
+        }
         let revents = wait_single_fd_events(vm, globals, self_val, libc::POLLIN as i16, -1)?;
         return if revents == 0 {
             Ok(Value::nil())
@@ -5431,20 +5482,18 @@ fn io_wait(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         }
     }
 
+    if let Some(res) = scheduler_io_wait(vm, globals, self_val, events, timeout)? {
+        // The symbol form answers the IO or nil; the mask form the
+        // scheduler's mask itself.
+        return Ok(if has_symbol {
+            scheduler_wait_result(self_val, events, res)
+        } else {
+            res
+        });
+    }
     let timeout_ms = parse_wait_timeout(vm, globals, timeout)?;
 
-    let mut poll_events: i16 = 0;
-    if events & 1 != 0 {
-        poll_events |= libc::POLLIN as i16;
-    }
-    if events & 2 != 0 {
-        poll_events |= libc::POLLPRI as i16;
-    }
-    if events & 4 != 0 {
-        poll_events |= libc::POLLOUT as i16;
-    }
-
-    let revents = wait_single_fd_events(vm, globals, self_val, poll_events, timeout_ms)?;
+    let revents = wait_single_fd_events(vm, globals, self_val, poll_events_of(events), timeout_ms)?;
 
     if has_symbol {
         let ready = (revents & libc::POLLIN as i16) != 0
@@ -5478,6 +5527,65 @@ fn io_wait(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// - wait_readable(timeout = nil) -> self or nil
 ///
+/// `IO::READABLE` / `WRITABLE` / `PRIORITY` bits of `events` as poll(2)
+/// flags.
+fn poll_events_of(events: i64) -> i16 {
+    let mut poll_events: i16 = 0;
+    if events & 1 != 0 {
+        poll_events |= libc::POLLIN as i16;
+    }
+    if events & 2 != 0 {
+        poll_events |= libc::POLLPRI as i16;
+    }
+    if events & 4 != 0 {
+        poll_events |= libc::POLLOUT as i16;
+    }
+    poll_events
+}
+
+/// In a non-blocking fiber with a fiber scheduler installed, the wait is
+/// the scheduler's: `scheduler.io_wait(io, events, timeout)` (CRuby's
+/// rb_io_wait), with the timeout as the caller gave it. `None` when
+/// there is no scheduler to ask, or the fiber is blocking.
+fn scheduler_io_wait(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    io: Value,
+    events: i64,
+    timeout: Option<Value>,
+) -> Result<Option<Value>> {
+    if vm.is_fiber_blocking() {
+        return Ok(None);
+    }
+    let Some(scheduler) = globals.fiber_scheduler else {
+        return Ok(None);
+    };
+    let args = [io, Value::integer(events), timeout.unwrap_or_default()];
+    let res = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("io_wait"),
+        scheduler,
+        &args,
+        None,
+        None,
+    )?;
+    Ok(Some(res))
+}
+
+/// `IO#wait_readable` and friends on a scheduler's answer (ext/io/wait's
+/// io_wait_event): nil for a falsy answer, the IO when the answered mask
+/// has the event, false otherwise.
+fn scheduler_wait_result(io: Value, events: i64, res: Value) -> Value {
+    if !res.as_bool() {
+        return Value::nil();
+    }
+    match res.try_fixnum() {
+        Some(mask) if mask & events != 0 => io,
+        Some(_) => Value::bool(false),
+        None => io,
+    }
+}
+
 #[monoruby_builtin]
 fn io_wait_readable(
     vm: &mut Executor,
@@ -5486,6 +5594,9 @@ fn io_wait_readable(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
+    if let Some(res) = scheduler_io_wait(vm, globals, self_val, 1, lfp.try_arg(0))? {
+        return Ok(scheduler_wait_result(self_val, 1, res));
+    }
     let timeout_ms = parse_wait_timeout(vm, globals, lfp.try_arg(0))?;
     let revents = wait_single_fd_events(vm, globals, self_val, libc::POLLIN as i16, timeout_ms)?;
     if revents == 0 {
@@ -5507,6 +5618,9 @@ fn io_wait_writable(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
+    if let Some(res) = scheduler_io_wait(vm, globals, self_val, 4, lfp.try_arg(0))? {
+        return Ok(scheduler_wait_result(self_val, 4, res));
+    }
     let timeout_ms = parse_wait_timeout(vm, globals, lfp.try_arg(0))?;
     let revents = wait_single_fd_events(vm, globals, self_val, libc::POLLOUT as i16, timeout_ms)?;
     if revents == 0 {
@@ -5528,6 +5642,9 @@ fn io_wait_priority(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
+    if let Some(res) = scheduler_io_wait(vm, globals, self_val, 2, lfp.try_arg(0))? {
+        return Ok(scheduler_wait_result(self_val, 2, res));
+    }
     let timeout_ms = parse_wait_timeout(vm, globals, lfp.try_arg(0))?;
     let revents = wait_single_fd_events(vm, globals, self_val, libc::POLLPRI as i16, timeout_ms)?;
     if revents == 0 {
@@ -9207,6 +9324,95 @@ mod tests {
         );
     }
 
+
+    /// In a non-blocking fiber with a scheduler installed, `IO#wait*`
+    /// asks the scheduler's `io_wait(io, events, timeout)` instead of
+    /// polling (the fiber scheduler protocol); a blocking fiber polls.
+    #[test]
+    fn io_wait_asks_the_fiber_scheduler() {
+        run_test_once(
+            r#"
+            require "io/wait"
+            class Sched
+              attr_reader :events
+              def initialize = @events = []
+              def block(*) = Fiber.yield
+              def unblock(*) = nil
+              def kernel_sleep(*) = Fiber.yield
+              def close = nil
+              def io_wait(io, events, timeout)
+                @events << [events, timeout]
+                Fiber.yield
+                @answer
+              end
+              attr_writer :answer
+            end
+            r, w = IO.pipe
+            sched = Sched.new
+            Fiber.set_scheduler(sched)
+            res = []
+            fibers = []
+            fibers << Fiber.new(blocking: false) { res << r.wait_readable.equal?(r) }
+            fibers << Fiber.new(blocking: false) { res << w.wait_writable(1).equal?(w) }
+            fibers << Fiber.new(blocking: false) { res << r.wait(:read, 2).equal?(r) }
+            fibers << Fiber.new(blocking: false) { res << r.wait(IO::READABLE | IO::WRITABLE, 3).inspect }
+            fibers << Fiber.new(blocking: true) { res << r.wait_readable(0).inspect }
+            fibers.each(&:resume)
+            sched.answer = IO::READABLE
+            fibers.each { |f| f.resume while f.alive? }
+            Fiber.set_scheduler(nil)
+            r.close
+            w.close
+            [sched.events, res]
+            "#,
+        );
+    }
+
+    /// A write that would block in a non-blocking fiber waits through the
+    /// scheduler's `io_wait` (IO::WRITABLE, no timeout) and completes
+    /// once resumed; a scheduler answering false is IO::TimeoutError.
+    #[test]
+    fn io_write_waits_through_the_fiber_scheduler() {
+        run_test_once(
+            r#"
+            require "io/nonblock"
+            class Sched
+              attr_reader :events
+              attr_accessor :answer
+              def initialize = (@events = []; @answer = true)
+              def block(*) = Fiber.yield
+              def unblock(*) = nil
+              def kernel_sleep(*) = Fiber.yield
+              def close = nil
+              def io_wait(io, events, timeout)
+                @events << [io.fileno == $w.fileno, events, timeout]
+                Fiber.yield
+                @answer
+              end
+            end
+            r, $w = IO.pipe
+            $w.nonblock = true
+            nil until $w.write_nonblock("x" * 65536, exception: false) == :wait_writable
+            sched = Sched.new
+            Fiber.set_scheduler(sched)
+            res = []
+            f = Fiber.new(blocking: false) { res << $w.write("y") }
+            f.resume
+            res << sched.events.dup << f.alive?
+            nil until r.read_nonblock(65536, exception: false) == :wait_readable
+            f.resume while f.alive?
+            nil until $w.write_nonblock("x" * 65536, exception: false) == :wait_writable
+            sched.answer = false
+            g = Fiber.new(blocking: false) { $w.write("z") }
+            g.resume
+            res << (begin; g.resume; rescue IO::TimeoutError => e; e.class; end)
+            Fiber.set_scheduler(nil)
+            r.close
+            $w.close
+            res
+            "#,
+        );
+    }
 
     #[test]
     fn io_puts_to_ary_protocol() {
