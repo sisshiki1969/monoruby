@@ -637,11 +637,13 @@ fn join(
 
 /// The joining fiber registers on the target (`ThreadInner::fiber_joiners`)
 /// and parks with `scheduler.block(target, time left)`, the time left as
-/// a Float (CRuby 4.0); the target's exit hook takes the registration and
-/// answers it with `unblock(this thread, fiber)`. A registration still in
-/// place when `block` returns is a wake from elsewhere: the fiber parks
-/// again. One taken means the target is on its way out: the native join
-/// waits out that moment — in the 1:1 model the fiber can run before the
+/// a Float (CRuby 4.0; a limit already spent joins nothing and asks
+/// nothing); the target's exit hook takes the registration and answers it
+/// with `unblock(this thread, fiber)`. A registration still in place when
+/// `block` returns is a wake from elsewhere: the fiber parks again, with
+/// the time left recomputed (CRuby's thread_join_sleep does the same).
+/// One taken means the target is on its way out: the native join waits
+/// out that moment — in the 1:1 model the fiber can run before the
 /// exiting thread is marked dead.
 fn join_through_scheduler(
     vm: &mut Executor,
@@ -3218,6 +3220,91 @@ mod tests {
             q << :done
             t.join
             Fiber.set_scheduler(nil)
+            res
+            "#,
+        );
+    }
+
+    /// The edges of `Thread#join` through the scheduler: the current
+    /// thread is refused, a dead target joins without asking the
+    /// scheduler, a spent limit (0) answers nil without asking either, and
+    /// a `block` that returns with the target still alive is a spurious
+    /// wake, with or without a limit: the fiber parks again.
+    #[test]
+    fn thread_join_through_the_fiber_scheduler_edges() {
+        run_test_once(
+            r#"
+            class Sched
+              attr_reader :events
+              def initialize = @events = []
+              def block(*a) = (@events << [:block, a[0]]; Fiber.yield)
+              def unblock(*a) = @events << [:unblock, a[1]]
+              def kernel_sleep(*) = Fiber.yield
+              def io_wait(*) = Fiber.yield
+            end
+            sched = Sched.new
+            Fiber.set_scheduler(sched)
+            res = []
+            res << Fiber.new(blocking: false) { begin; Thread.current.join; rescue ThreadError => e; e.message; end }.resume
+            d = Thread.new {}
+            d.join
+            res << Fiber.new(blocking: false) { d.join.equal?(d) }.resume << sched.events.size
+            q = Queue.new
+            t = Thread.new { q.pop }
+            Thread.pass until t.stop?
+            res << Fiber.new(blocking: false) { t.join(0) }.resume << sched.events.size
+            f = Fiber.new(blocking: false) { t.join }
+            f.resume
+            res << f.resume << f.alive? << sched.events.map(&:first)
+            g = Fiber.new(blocking: false) { t.join(10) }
+            g.resume
+            res << g.resume << g.alive? << sched.events.map(&:first)
+            q << :done
+            t.join
+            res << f.resume.equal?(t)
+            Fiber.set_scheduler(nil)
+            res
+            "#,
+        );
+    }
+
+    /// Scheduler joiners of a thread that ends without running its exit
+    /// hook: killed before its body ran (in the green model it has not
+    /// been dispatched yet), they are answered at the next safepoint in a
+    /// normal context instead, and a GC in between keeps them alive. With
+    /// the scheduler gone by then there is nobody to tell and the fiber
+    /// stays parked.
+    #[test]
+    fn scheduler_joiners_of_a_thread_killed_before_it_ran() {
+        run_test_once(
+            r#"
+            class Sched
+              attr_reader :events
+              def initialize = @events = []
+              def block(*a) = (@events << :block; Fiber.yield)
+              def unblock(*a) = (GC.start; @events << :unblock)
+              def kernel_sleep(*) = Fiber.yield
+              def io_wait(*) = Fiber.yield
+            end
+            sched = Sched.new
+            Fiber.set_scheduler(sched)
+            res = []
+            t = Thread.new { sleep }
+            f1 = Fiber.new(blocking: false) { t.join }
+            f2 = Fiber.new(blocking: false) { t.join }
+            f1.resume
+            f2.resume
+            GC.start
+            t.kill
+            Thread.pass until sched.events.size == 4
+            res << sched.events << f1.resume.equal?(t) << f2.resume.equal?(t) << t.alive?
+            t2 = Thread.new { sleep }
+            g = Fiber.new(blocking: false) { t2.join }
+            g.resume
+            Fiber.set_scheduler(nil)
+            t2.kill
+            Thread.pass while t2.alive?
+            res << g.alive? << sched.events.size
             res
             "#,
         );
