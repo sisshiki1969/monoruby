@@ -1378,6 +1378,7 @@
 408248739cf54741f93cd264fd5e6e69	[["BasicObject", nil], ["BasicObject", nil]]	__a = [];__a << (\n        o = BasicObject.new\n        a, b = o\n        [Object.i
 4086c6059363125acb8e46416f91d20f	"FiberError"	begin\n              Enumerator.new { |y| Fiber.yield; y << 1 }.each
 40871a574065d49f2b0ca7045d6f6391	{life: 42}	f = Fiber.new(storage: {life: 42}) { Fiber.current.storage }\n      
+4092e95ef37e43fb48298720c68d8b1e	[[[1, nil], [4, 1], [1, 2], [5, 3], [2, 4], [1, nil], [4, nil], [1, nil], [1, nil]], ["nil", true, false, true, "1", "false", true, "no implicit conversion of true into Integer", "nil", "nil"]]	require "io/wait"\n            class Sched\n              attr_reader
 4098362919565939287f7ffe08a158db	"0.314e1"	require "rubygems"\n        require "bigdecimal"\n        BigDecimal("3.1
 40b3f88b68876a80e1adabd27a506a98	["data", [100, 0], [0, 100], [100, 0, 0, 0], [0, 0, 0, 100], "plain", "xy", [100, 0], [0, 100], [100, 0, 0, 0], [0, 0, 0, 100], "nobom"]	path = "/tmp/monoruby_test_iobom_#{Process.pid}_#{rand(100000)}"\n  
 40cecdcb446e63551e2fcd36919c57d0	true	Data.define.is_a?(Class)

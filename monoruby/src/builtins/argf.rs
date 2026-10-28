@@ -377,21 +377,9 @@ pub(crate) fn argf_getline_raw(
         if stream.ty() != Some(ObjTy::IO) {
             // `$stdin` reassigned to a non-IO: its public `gets`, until it
             // answers nil. The ARGF methods forward their own arguments
-            // before reaching here; what arrives is `Kernel#gets`, whose
-            // defaults are forwarded as no arguments, as CRuby does.
-            let defaults = limit.is_none() && !chomp && sep == globals.rs_bytes().as_deref();
-            let mut args = vec![];
-            if !defaults {
-                args.push(match sep {
-                    Some(sep) => Value::bytes_from_slice(sep),
-                    None => Value::nil(),
-                });
-                if let Some(limit) = limit {
-                    args.push(Value::integer(limit as i64));
-                }
-            }
-            let kw = chomp.then(|| (IdentId::get_id("chomp"), Value::bool(true)));
-            let line = forward_to_stdin(vm, globals, argf, stream, "gets", &args, kw)?;
+            // before reaching here; what arrives is `Kernel#gets`, which
+            // takes none, and CRuby forwards its (empty) argument list.
+            let line = forward_to_stdin(vm, globals, argf, stream, "gets", &[], None)?;
             if line.is_nil() {
                 finish_stream(vm, globals, argf)?;
                 continue;

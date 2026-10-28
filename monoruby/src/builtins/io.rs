@@ -9373,6 +9373,11 @@ mod tests {
             g = Fiber.new(blocking: false) { res << (begin; w.wait_writable; rescue TypeError => e; e.message; end) }
             g.resume
             g.resume while g.alive?
+            # A falsy answer is a timeout: nil.
+            sched.answer = nil
+            h = Fiber.new(blocking: false) { res << r.wait_readable.inspect << r.wait(:read).inspect }
+            h.resume
+            h.resume while h.alive?
             Fiber.set_scheduler(nil)
             r.close
             w.close
