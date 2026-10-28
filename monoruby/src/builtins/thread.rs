@@ -3268,14 +3268,16 @@ mod tests {
         );
     }
 
-    /// Scheduler joiners of a thread that ends without running its exit
-    /// hook: killed before its body ran (in the green model it has not
-    /// been dispatched yet), they are answered at the next safepoint in a
-    /// normal context instead, and a GC in between keeps them alive. With
-    /// the scheduler gone by then there is nobody to tell and the fiber
-    /// stays parked.
+    /// Scheduler joiners of a thread that is killed: a GC while they are
+    /// registered keeps them alive (`ThreadInner::mark`), the kill unwinds
+    /// the thread and its exit hook answers every one of them (two fibers
+    /// here), and with the scheduler gone by the time the thread ends
+    /// there is nobody to tell, so the fiber stays parked. (`Thread.new`
+    /// lets the new thread run up to its first park, in both models, so
+    /// the kill never finds it unstarted: the safepoint-deferred answer
+    /// for a thread finalized without its hook has no deterministic test.)
     #[test]
-    fn scheduler_joiners_of_a_thread_killed_before_it_ran() {
+    fn scheduler_joiners_of_a_killed_thread() {
         run_test_once(
             r#"
             class Sched
