@@ -980,11 +980,9 @@ fn locked_block(
         .ok_or_else(|| MonorubyErr::localjumperr("no block given (yield)"))?;
     buf.locked = true;
     let result = vm.invoke_block_once(globals, bh, &[buf.into()]);
-    // CRuby only unlocks on a normal return: an exception raised inside
-    // the block leaves the buffer locked.
-    if result.is_ok() {
-        buf.locked = false;
-    }
+    // Unlocked however the block ends (CRuby 4.0; up to 3.4 an exception
+    // raised inside the block left the buffer locked).
+    buf.locked = false;
     result
 }
 
@@ -2344,7 +2342,7 @@ mod tests {
             er = ->(&blk) { begin; blk.call; :no_raise; rescue => e; [e.class, e.message]; end }
             lb = IO::Buffer.new(4)
             lb.locked { r << lb.locked?; r << er.call { lb.locked {} } }
-            # an exception raised inside #locked leaves the buffer locked
+            # unlocked again after the block, raised out of or not (4.0)
             r << lb.locked?
             l2 = IO::Buffer.new(4)
             r << er.call { l2.locked { l2.resize(8) } } << l2.locked?
