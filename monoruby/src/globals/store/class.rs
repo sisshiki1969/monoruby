@@ -1140,7 +1140,7 @@ impl ClassInfoTable {
         }
         let mut cur = class;
         while let Some(parent) = self[cur].parent {
-            if parent == OBJECT_CLASS || self[parent].name.is_some() {
+            if parent == OBJECT_CLASS || parent == class || self[parent].name.is_some() {
                 // A named ancestor terminates the walk: everything below
                 // it renders through that name.
                 return false;
@@ -1154,13 +1154,32 @@ impl ClassInfoTable {
     }
 
     pub(crate) fn get_parents(&self, mut class: ClassId) -> Vec<String> {
+        let start = class;
         let mut parents = vec![self[class].name.clone().unwrap()];
         while let Some(parent) = self[class].parent {
             if parent == OBJECT_CLASS {
                 break;
             }
+            // A module nested under one of its own descendants
+            // (`m::N::Back = m`) closes the chain: where it would come
+            // round, the module whose name this is renders as the
+            // anonymous module it was when the path was made, as CRuby
+            // does.
+            if parent == start {
+                let obj = self[parent].get_module().as_val();
+                let kind = if obj.ty() == Some(ObjTy::MODULE) { "Module" } else { "Class" };
+                parents.push(format!("#<{kind}:0x{:016x}>", obj.id()));
+                break;
+            }
             match self[parent].name.as_ref() {
-                Some(name) => parents.push(name.to_string()),
+                Some(name) => {
+                    parents.push(name.to_string());
+                    // A temporary name set by `set_temporary_name` is
+                    // the whole prefix: nothing above it is rendered.
+                    if self[parent].is_name_explicit_temporary() {
+                        break;
+                    }
+                }
                 None => {
                     // Anonymous ancestor: render its inspect form so the
                     // child still has a non-nil, qualifying name (e.g.

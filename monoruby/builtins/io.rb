@@ -13,6 +13,10 @@ class IO
   # `rescue IO::WaitReadable` / `rescue IO::WaitWritable` work.
   module WaitReadable; end
   module WaitWritable; end
+  # Raised when a wait bounded by a timeout (an IO's `timeout`, or a
+  # fiber scheduler's `io_wait` answering false) runs out.
+  class TimeoutError < IOError; end
+
   class EAGAINWaitReadable < Errno::EAGAIN
     include IO::WaitReadable
   end

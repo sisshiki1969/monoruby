@@ -613,6 +613,7 @@ impl ClassInfoTable {
         // table is acceptable because re-binding is rare; this avoids
         // maintaining a child-list per `ClassInfo`.
         let mut stack = vec![root];
+        let mut seen = std::collections::HashSet::from([root]);
         let mut to_promote: Vec<(ClassId, ClassId)> = Vec::new();
         while let Some(parent) = stack.pop() {
             // The class table is `ClassId`-indexed, so `table[idx]`
@@ -620,10 +621,13 @@ impl ClassInfoTable {
             // (`ClassId` is `NonZeroU32`).
             for idx in 1..self.classinfo_len() {
                 let id = ClassId::new(idx as u32);
-                if id == root {
+                // Modules can nest in a cycle (`m::N::Back = m`); each
+                // is visited once.
+                if !seen.insert(id) {
                     continue;
                 }
                 if self[id].parent_id() != Some(parent) {
+                    seen.remove(&id);
                     continue;
                 }
                 if self[id].get_name().is_none() {
@@ -668,13 +672,11 @@ impl ClassInfoTable {
     /// `set_temporary_name` on `root`.
     pub(crate) fn invalidate_descendant_name_caches(&mut self, root: ClassId) {
         let mut stack = vec![root];
+        let mut seen = std::collections::HashSet::from([root]);
         while let Some(parent) = stack.pop() {
             for idx in 1..self.classinfo_len() {
                 let id = ClassId::new(idx as u32);
-                if id == root {
-                    continue;
-                }
-                if self[id].parent_id() != Some(parent) {
+                if self[id].parent_id() != Some(parent) || !seen.insert(id) {
                     continue;
                 }
                 self[id].invalidate_cached_name_value();

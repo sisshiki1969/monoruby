@@ -107,3 +107,10 @@ end
 # answering "no" for it, so the extension's `#ifdef HAVE_RB_FOO`
 # fallbacks stay in force.
 RbConfig.fire_update!('EXTDLDFLAGS', "#{RbConfig::CONFIG['EXTDLDFLAGS']} -L#{__capi_lib} -lmonoruby_capi_stubs".strip)
+
+# GCC 14 and clang 16 make a call to an undeclared function an error (C99
+# and later); it was a warning before. An extension that calls a CRuby
+# API function the layer's headers do not declare (one the stubs archive
+# answers for, doc/c_api.md §3.16) must still compile, as it did with the
+# older compilers, so the error goes back to being a warning.
+RbConfig.fire_update!('warnflags', "#{RbConfig::CONFIG['warnflags']} -Wno-error=implicit-function-declaration")

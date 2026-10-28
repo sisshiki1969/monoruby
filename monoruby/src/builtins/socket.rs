@@ -455,10 +455,18 @@ fn set_blocking(fd: i32) {
 fn park_on_fd(
     vm: &mut Executor,
     globals: &mut Globals,
+    io: Option<Value>,
     fd: i32,
     events: i16,
     deadline: Option<std::time::Instant>,
 ) -> Result<()> {
+    // A fiber scheduler's wait, when the socket exists as an IO yet (a
+    // connect in progress on a bare fd waits here).
+    if let Some(io) = io
+        && super::io::scheduler_wait_fd(vm, globals, io, events)?
+    {
+        return Ok(());
+    }
     if crate::scheduler::has_other_live_threads() {
         crate::scheduler::wait_fd(vm, globals, fd, events, deadline)
     } else if deadline.is_some() {
@@ -608,7 +616,7 @@ fn tcp_server_accept(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byte
                 }
                 if errno == libc::EAGAIN {
                     parked = true;
-                    park_on_fd(vm, globals, fd, libc::POLLIN, None)?;
+                    park_on_fd(vm, globals, Some(self_), fd, libc::POLLIN, None)?;
                 }
             }
             _ => return Err(errno_err(&globals.store, errno, "accept(2)")),
@@ -705,7 +713,7 @@ fn tcp_socket_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         }
         let deadline = timeout.map(|t| std::time::Instant::now() + t);
         loop {
-            if let Err(e) = park_on_fd(vm, globals, fd, libc::POLLOUT, deadline) {
+            if let Err(e) = park_on_fd(vm, globals, None, fd, libc::POLLOUT, deadline) {
                 // SAFETY: closing the fd we own.
                 unsafe { libc::close(fd) };
                 return Err(e);
@@ -1086,7 +1094,7 @@ fn park_retry<T>(
                     }
                     if errno == libc::EAGAIN {
                         parked = true;
-                        park_on_fd(vm, globals, fd, events, None)?;
+                        park_on_fd(vm, globals, Some(io), fd, events, None)?;
                     }
                 }
                 _ => return Err(errno_err(&globals.store, errno, ctx)),
@@ -1616,12 +1624,13 @@ fn socket_bind(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 fn wait_connect_settled(
     vm: &mut Executor,
     globals: &mut Globals,
+    io: Option<Value>,
     fd: i32,
     deadline: Option<std::time::Instant>,
     ctx: &str,
 ) -> Result<()> {
     loop {
-        park_on_fd(vm, globals, fd, libc::POLLOUT, deadline)?;
+        park_on_fd(vm, globals, io, fd, libc::POLLOUT, deadline)?;
         let mut soerr: i32 = 0;
         let mut len = std::mem::size_of::<i32>() as libc::socklen_t;
         // SAFETY: getsockopt out-params sized to an i32.
@@ -1679,7 +1688,7 @@ fn socket_connect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         let errno = last_errno();
         match errno {
             libc::EINPROGRESS | libc::EINTR | libc::EAGAIN => {
-                wait_connect_settled(vm, globals, fd, deadline, "connect(2)")?;
+                wait_connect_settled(vm, globals, Some(lfp.self_val()), fd, deadline, "connect(2)")?;
             }
             _ => {
                 set_blocking(fd);
@@ -2165,7 +2174,7 @@ fn unix_socket_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
         let errno = last_errno();
         match errno {
             libc::EINPROGRESS => {
-                if let Err(e) = wait_connect_settled(vm, globals, fd, None, "connect(2)") {
+                if let Err(e) = wait_connect_settled(vm, globals, None, fd, None, "connect(2)") {
                     // SAFETY: closing the fd we own.
                     unsafe { libc::close(fd) };
                     return Err(e);
@@ -2181,7 +2190,7 @@ fn unix_socket_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
                 }
                 if errno == libc::EAGAIN {
                     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
-                    if let Err(e) = park_on_fd(vm, globals, fd, libc::POLLOUT, Some(deadline)) {
+                    if let Err(e) = park_on_fd(vm, globals, None, fd, libc::POLLOUT, Some(deadline)) {
                         // SAFETY: closing the fd we own.
                         unsafe { libc::close(fd) };
                         return Err(e);

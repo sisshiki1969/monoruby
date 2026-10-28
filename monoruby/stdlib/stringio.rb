@@ -227,7 +227,7 @@ class StringIO
     nil
   end
 
-  def gets(sep = "\n", limit = nil)
+  def gets(sep = "\n", limit = nil, chomp: false)
     _check_readable
     # CRuby's StringIO#gets publishes the line it read (or nil at EOF)
     # as the caller's `$_`, like Kernel#gets.
@@ -237,6 +237,8 @@ class StringIO
       limit = sep
       sep = "\n"
     end
+    # A negative limit is no limit (CRuby).
+    limit = nil if limit && limit < 0
 
     if sep.nil?
       line = @string[@pos..-1]
@@ -272,34 +274,41 @@ class StringIO
     end
 
     if limit && line && line.length > limit
+      # The rest of the line stays unread.
+      @pos -= line.length - limit
       line = line[0, limit]
-      @pos = @pos - (line.length - limit) if sep
     end
+    # `chomp: true` drops the separator the line ended with, as
+    # String#chomp(sep) does (nil: nothing to drop; "": the paragraph's
+    # trailing newlines).
+    line = line.chomp(sep) if chomp && line && sep
 
     @lineno += 1
     __set_lastline_in_caller(line)
   end
 
-  def readline(*args)
-    line = gets(*args)
+  def readline(*args, **kw)
+    line = gets(*args, **kw)
     # `gets` set `$_` in *this* frame; re-publish it to our caller.
     __set_lastline_in_caller(line)
     raise EOFError, "end of file reached" if line.nil?
     line
   end
 
-  def readlines(sep = "\n", limit = nil)
+  def readlines(sep = "\n", limit = nil, chomp: false)
     _check_readable
+    raise ArgumentError, "invalid limit: 0 for readlines" if (sep.is_a?(Integer) ? sep : limit) == 0
     lines = []
-    while (line = gets(sep, limit))
+    while (line = gets(sep, limit, chomp: chomp))
       lines << line
     end
     lines
   end
 
-  def each(sep = "\n", limit = nil, &block)
-    return to_enum(:each, sep, limit) unless block
-    while (line = gets(sep, limit))
+  def each(sep = "\n", limit = nil, chomp: false, &block)
+    return to_enum(:each, sep, limit, chomp: chomp) unless block
+    raise ArgumentError, "invalid limit: 0 for each_line" if (sep.is_a?(Integer) ? sep : limit) == 0
+    while (line = gets(sep, limit, chomp: chomp))
       block.call(line)
     end
     self

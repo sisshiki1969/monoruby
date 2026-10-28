@@ -1,0 +1,2 @@
+critical(hangs: the fiber scheduler's block/unblock hooks are not called yet, so the fiber parks the thread instead):Mutex#lock with a Fiber scheduler unblocks a waiting fiber when the thread holding the lock dies
+critical(hangs: the fiber scheduler's block/unblock hooks are not called yet, so the fiber parks the thread instead):Mutex#lock with a Fiber scheduler releases every lock of a dying thread when the scheduler locks a mutex in unblock

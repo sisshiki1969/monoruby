@@ -8465,4 +8465,33 @@ mod tests {
             r#"c = Class.new { def orig; 9; end }; c.send(:define_method, :m, c.instance_method(:orig)); c.new.m"#,
         ]);
     }
+    /// Modules nested in a cycle (`m::N::Back = m`): naming walks stop
+    /// where the chain comes round, and a temporary name is the whole
+    /// prefix of what nests under it.
+    #[test]
+    fn module_names_through_a_nesting_cycle() {
+        run_test_once(
+            r#"
+            # (Anonymous prefixes carry addresses, and CRuby before 4.0
+            # renders them where 4.0 passes a temporary name down: only
+            # the leaf is compared.)
+            leaf = ->(mod) { mod.name&.sub(/\A.*::/, "") }
+            m = Module.new
+            m::N = Module.new
+            m::N::Back = m
+            r = [leaf.(m::N), leaf.(m::N::Back)]
+            m.set_temporary_name "m"
+            r << leaf.(m::N) << m::N::Back.name
+            a = Module.new
+            b = Module.new
+            a::B = b
+            b::A = a
+            r << leaf.(a) << leaf.(b) << leaf.(a::B) << leaf.(b::A)
+            Outer = a
+            r << a.name << b.name << a::B.name << b::A.name
+            r
+            "#,
+        );
+    }
+
 }
