@@ -1685,6 +1685,16 @@ impl<'a> JitContext<'a> {
         block: &JitBlockInfo,
         iseq: ISeqId,
     ) -> JitResult<CompileResult> {
+        // A small loop-free block that never reaches its outer frame runs
+        // without a frame of its own (`compile/frameless_call.rs`), as a
+        // method callee of that shape does; the compile rolls back and
+        // falls through to the framed yield when the body turns out to
+        // need one.
+        if frameless_call::yield_eligible(&self.store, block.block_fid, iseq, callid)
+            && let Some(res) = self.try_frameless_yield(state, ir, callid, block, iseq)
+        {
+            return Ok(res);
+        }
         let dst = self.store[callid].dst;
         let JitBlockInfo {
             block_fid: callee_fid,
@@ -2822,7 +2832,7 @@ impl<'a> JitContext<'a> {
     /// real: its output is the emitted code, which a replay does not
     /// produce.
     ///
-    fn compile_specialized_func(
+    pub(super) fn compile_specialized_func(
         &mut self,
         state: &mut AbstractState,
         iseq_id: ISeqId,

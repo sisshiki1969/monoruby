@@ -1635,6 +1635,16 @@ impl Codegen {
                     },
                 );
             }
+            AsmInst::YieldOuterLfp { outer } => {
+                self.lower_via_inline(
+                    store,
+                    labels,
+                    frame.base_stack_offset,
+                    move |cg, _, _, _| {
+                        cg.yield_outer_lfp(outer);
+                    },
+                );
+            }
             AsmInst::SpecializedYield { entry, evict } => {
                 let entry_label = frame.resolve_label(&mut self.jit, entry);
                 self.lower_via_inline(

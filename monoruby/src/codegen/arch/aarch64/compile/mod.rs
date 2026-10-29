@@ -689,24 +689,31 @@ impl Codegen {
         self.jit.bind_label(entry);
         self.a64_gen_write_back_for_deopt(wb, base);
         let cont_stub = self.jit.get_label_address(&self.chain_cont_stub).as_ptr() as u64;
-        let levels: Vec<(i32, UsingFpr, ChainReplay, u64)> = self
+        let levels: Vec<(i32, UsingFpr, ChainReplay, u64, bool)> = self
             .inline_ctx
             .iter()
             .rev()
-            .map(|ctx| (ctx.delta, ctx.using_fpr, ctx.replay.clone(), ctx.meta))
+            .map(|ctx| (ctx.delta, ctx.using_fpr, ctx.replay.clone(), ctx.meta, ctx.block))
             .collect();
         assert!(!levels.is_empty(), "frameless materialize outside an inline body");
         let lfp = GP::R14.a64().0; // x22
         let mut total_delta = 0;
-        for (i, (delta, using_fpr, replay, meta)) in levels.into_iter().enumerate() {
+        for (i, (delta, using_fpr, replay, meta, block)) in levels.into_iter().enumerate() {
             debug_assert!(replay.write_back_all().gp_is_empty());
             let site_pc = replay.pc().as_ptr() as u64;
             let cont_data = replay.cont_data();
-            // LFP header: outer 0, meta, svar 0, block 0.
+            // LFP header: outer 0 (a block's outer is already in the window,
+            // `InlineCtx::block`), meta, svar 0, block 0.
             monoasm_arm64!(&mut self.jit,
                 mov x10, (0u64);
                 mov x9, (meta);
-                stur x10, [x(lfp), #(-LFP_OUTER)];
+            );
+            if !block {
+                monoasm_arm64!(&mut self.jit,
+                    stur x10, [x(lfp), #(-LFP_OUTER)];
+                );
+            }
+            monoasm_arm64!(&mut self.jit,
                 stur x9, [x(lfp), #(-LFP_META)];
                 stur x10, [x(lfp), #(-LFP_SVAR)];
                 stur x10, [x(lfp), #(-LFP_BLOCK)];

@@ -318,6 +318,26 @@ impl Codegen {
         };
     }
 
+    /// `YieldOuterLfp`: rax <- the LFP of the frame `outer` control-frame
+    /// hops up (the home of the block a frameless `yield` runs), rdi <- its
+    /// `self`. The same walk `setup_yield_frame` makes, with the result left
+    /// in registers for the yield site to store into the block's window
+    /// (`AbstractState::fill_yield_window`).
+    pub(in crate::codegen::jitgen) fn yield_outer_lfp(&mut self, outer: usize) {
+        monoasm! { &mut self.jit,
+            movq rax, [rbx + (EXECUTOR_CFP)];
+        }
+        for _ in 0..outer {
+            monoasm! { &mut self.jit,
+                movq rax, [rax];
+            }
+        }
+        monoasm! { &mut self.jit,
+            movq rax, [rax - (CFP_LFP)];
+            movq rdi, [rax - (LFP_SELF)];
+        }
+    }
+
     /// The call itself: enter the callee and record the return address under
     /// `evict`, so the following `ChainExit` can register this site for chain
     /// deopt. Store/frame-dependent target info is pre-resolved

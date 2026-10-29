@@ -2706,6 +2706,21 @@ pub(super) enum AsmInst {
         meta: Meta,
         outer: usize,
     },
+    ///
+    /// The home of the block a frameless `yield` runs
+    /// (`compile/frameless_call.rs`): rax <- the LFP of the frame `outer`
+    /// control-frame hops above the current one (the frame that owns the
+    /// block literal), rdi <- its `self`. The yield site stores them into
+    /// the block's window — the LFP as the window's `LFP_OUTER` header word,
+    /// which a materializing exit of the block keeps, and `self` as its
+    /// slot 0.
+    ///
+    /// ### destroy
+    /// - rax, rdi
+    ///
+    YieldOuterLfp {
+        outer: usize,
+    },
 
     ///
     /// Call method
