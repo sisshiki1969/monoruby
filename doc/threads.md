@@ -136,8 +136,13 @@ flushing_reports: flush_pending_reports の再入ラッチ
 - **green thread が park するとき**: 起床条件を登録してから、プロセス(正確には OS
   スレッド)グローバルなスロット `SCHED_RSP` に保存されたスケジューラ・コンテキストへ
   switch する。つまり制御はループ中の pending な dispatch 呼び出しから「返って」くる。
-- **本体が終了したとき**: `thread_invoker` のエピローグが `rsp_save = -1`(Terminated)を
-  マークして同じくスケジューラへ switch し、ループが finalize する。
+- **本体が終了したとき**: `thread_invoker` のエピローグがまずスレッド自身のコンテキストで
+  終了フック(`scheduler::thread_body_exit`)を走らせ — 握ったままの Mutex を解放し
+  (`Thread#__unlock_on_exit`)、fiber scheduler 経由で `#join` している fiber に
+  `unblock` を送る(CRuby の `thread_start_func_2` 末尾に相当。Ruby を実行するので
+  park もありうる)— それから `rsp_save = -1`(Terminated)をマークして同じく
+  スケジューラへ switch し、ループが finalize する。1:1 モデルでは `native::run_body` が
+  同じフックを本体の戻り直後に呼ぶ。
 
 ループが制御を手放す直前に必ず自分のコンテキストを `SCHED_RSP` へ保存するので、
 スロットは 1 個で足りる(green thread は `scheduler_run` を呼ばないため、
@@ -154,7 +159,7 @@ flushing_reports: flush_pending_reports の再入ラッチ
 
 | スタブ | 役割 |
 |---|---|
-| `thread_invoker` | 初回起動。スケジューラ・コンテキストを `SCHED_RSP` に保存 → 新スタックへ切替 → フレーム構築 → 本体実行。終了時は `rsp_save=-1` をマークして `SCHED_RSP` へ復帰 |
+| `thread_invoker` | 初回起動。スケジューラ・コンテキストを `SCHED_RSP` に保存 → 新スタックへ切替 → フレーム構築 → 本体実行。終了時は終了フック `thread_body_exit` を呼んでから `rsp_save=-1` をマークして `SCHED_RSP` へ復帰 |
 | `switch_to_scheduler(cur, val)` | park。現コンテキストを `cur.rsp_save` へ保存し `SCHED_RSP` へ switch。`val` はスケジューラ側の resume 呼び出しの戻り値になる |
 | `scheduler_resume(exec, val)` | 再開。ループのコンテキストを `SCHED_RSP` へ保存し `exec.rsp_save` へ switch。`val`(u64)は park 側の戻り値。**0 を渡すとエラー再開**(§6) |
 
@@ -255,8 +260,23 @@ Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実�
   unpark は上記 `#wakeup` / `#__wakeup_permit` を使う。
 - `Mutex#sleep` / `ConditionVariable#wait` は unlock → park → **ensure で re-lock**。
   `#kill` / `#raise` が park 中に配送されても(§6 の unwind は ensure を実行するので)
-  mutex は正しく再取得・解放される。終了スレッドが握ったまま放置したロックは
-  次の取得者側で回収される(#966)。`Mutex#owned?` は **Fiber 単位**の所有で判定する(#967)。
+  mutex は正しく再取得・解放される。スレッドが握ったまま終了したロックは
+  終了フック(§3、`Thread#__unlock_on_exit`)が解放して waiter を起こす
+  (CRuby の `rb_threadptr_unlock_all_locking_mutexes`)。そのためにスレッドは保持中の
+  Mutex を `Mutex#__held_next` で連結したリスト(`Thread#__held`、CRuby の
+  `keeping_mutexes`)として持ち、`try_lock` / `unlock` が push / pop する(属性アクセサだけで
+  済ませ、ホットパスに呼び出しを増やさない)。かつての「次の取得者側で回収」(#966)は
+  起動前に kill されたスレッド等のための保険として残る。`Mutex#owned?` は
+  **Fiber 単位**の所有で判定する(#967)。
+- **fiber scheduler**(`Fiber.set_scheduler`)が入っていて現在の fiber が non-blocking なら、
+  park はスケジューラ経由になる(CRuby の fiber scheduler プロトコル): `Mutex#lock` は
+  `block(mutex, nil)`、Queue / SizedQueue の待ちは `block(queue, timeout)`、
+  `Mutex#sleep`(= `ConditionVariable#wait`)は `kernel_sleep(timeout)`。waiter 配列には
+  Thread の代わりに `Thread::SchedulerWaiter`(fiber + blocker)が入り、`#__wakeup_permit`
+  を受けるとスケジューラの `unblock(blocker, fiber)` に変換する(`Mutex#unlock` /
+  `ConditionVariable#signal` 側は変更なし)。`Thread#join` も同様に `block(thread, 残り秒)`
+  で待ち、対象スレッドの終了フックが `unblock(join 側のスレッド, fiber)` で答える
+  (`ThreadInner::fiber_joiners`)。
 - Queue / SizedQueue は Mutex + ConditionVariable の上に載る(CRuby thread_sync.c と同じ構造)。
   すべての check-and-take をキューの mutex 下で行うことで、かつての
   `@items.empty?` / `@items.shift` のセーフポイント窓(2 つの pop が競合し片方が幻の nil を

@@ -256,7 +256,17 @@ impl JitModule {
         self.invoker_frame_setup(true, false);
         self.invoker_args_setup(&error_exit, true);
         self.call_invoker();
+        // The body returned (rax: its result, or 0 with an error pending
+        // on the executor). The exit hook runs here, still in the
+        // thread's own context — it releases the mutexes the thread holds
+        // and answers the fibers that joined it through a scheduler, and
+        // may park like the body — and hands the result word back in rax.
         monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, rax;
+            movq rax, (crate::scheduler::thread_body_exit as *const () as u64);
+            call rax;
             movq [rbx + (EXECUTOR_RSP_SAVE)], (-1); // mark terminated
             movq rcx, (sched_rsp);
             movq rsp, [rcx];                        // back to the scheduler context

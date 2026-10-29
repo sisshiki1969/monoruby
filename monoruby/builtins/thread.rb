@@ -30,6 +30,76 @@ class Thread
 
   attr_reader :name
 
+  # The mutexes this thread holds, as a list threaded through the mutexes
+  # themselves (`Mutex#__held_next`), most recently locked first — CRuby's
+  # `keeping_mutexes`. `Mutex#try_lock` pushes, `Mutex#unlock` pops (or,
+  # unlocking out of order, unlinks with #__unhold), and whatever is left
+  # when the thread ends is released by the exit hook
+  # (`scheduler::thread_body_exit`), as CRuby's
+  # `rb_threadptr_unlock_all_locking_mutexes` does. Accessors rather than
+  # methods with bodies: the lock and unlock paths are hot, and these the
+  # JIT inlines.
+  attr_accessor :__held
+
+  # Unlink `mutex` from the held list wherever it is (an unlock in other
+  # than locking order; the common case is handled inline in Mutex#unlock).
+  def __unhold(mutex)
+    prev = nil
+    m = @__held
+    while m
+      nxt = m.__held_next
+      if m.equal?(mutex)
+        if prev
+          prev.__held_next = nxt
+        else
+          @__held = nxt
+        end
+        return
+      end
+      prev = m
+      m = nxt
+    end
+    nil
+  end
+
+  # The exit hook's Ruby half, run in this thread as its last act: release
+  # every mutex still held, waking their waiters — a fiber scheduler's
+  # through `unblock`. Last locked, first released, as CRuby. A waiter's
+  # `unblock` runs in this thread and may lock and unlock mutexes of its
+  # own; they come and go on this same list, hence the re-read each round.
+  def __unlock_on_exit
+    while (m = @__held)
+      @__held = m.__held_next
+      m.__unlock_abandoned
+    end
+    nil
+  end
+
+  # A fiber parked through the fiber scheduler, standing in a Mutex's or
+  # a ConditionVariable's waiter list where a Thread otherwise stands: it
+  # was parked by `scheduler.block(blocker, timeout)` (or `kernel_sleep`),
+  # and the wake a Thread waiter gets as `__wakeup_permit` reaches it as
+  # the scheduler's `unblock(blocker, fiber)` — the thread's scheduler at
+  # that moment, as CRuby's wakeup_one; none installed any more, nothing
+  # to tell.
+  class SchedulerWaiter
+    attr_reader :fiber
+
+    def initialize(blocker)
+      @fiber = Fiber.current
+      @blocker = blocker
+    end
+
+    def alive?
+      @fiber.alive?
+    end
+
+    def __wakeup_permit
+      scheduler = Fiber.scheduler
+      scheduler.unblock(@blocker, @fiber) if scheduler
+    end
+  end
+
   # CRuby coerces the name with #to_str (TypeError otherwise), rejects
   # embedded NULs, and allows nil to clear the name.
   def name=(name)
@@ -429,9 +499,14 @@ class Thread
       else
         @owner = cur
         @owner_fiber = cur_fiber
+        @__held_next = cur.__held
+        cur.__held = self
         true
       end
     end
+
+    # The next mutex in the owner thread's held list (Thread#__held).
+    attr_accessor :__held_next
 
     def lock
       # Deadlock detection is per-Thread, not per-Fiber: a mutex already held
@@ -439,7 +514,15 @@ class Thread
       # trying to acquire it again — recursively or from a sibling fiber —
       # would park the one thread that could release it. Raise rather than
       # hang. (Ownership *reported* by #owned? is still per-Fiber.)
-      raise ThreadError, "deadlock; recursive locking" if @owner == Thread.current
+      if @owner == Thread.current
+        # With a fiber scheduler, another fiber of this thread may hold it
+        # and can run and release it while this fiber is parked through the
+        # scheduler (CRuby's check is per fiber); without one nothing could,
+        # and raising is the only way out.
+        if @owner_fiber == Fiber.current || !Fiber.current_scheduler
+          raise ThreadError, "deadlock; recursive locking"
+        end
+      end
       until try_lock
         # Reclaim a lock abandoned by a terminated owner (a dead thread
         # never unlocks or wakes waiters, so a contender must take it over
@@ -451,11 +534,23 @@ class Thread
           @owner = nil
           next
         end
-        (@waiters ||= []) << Thread.current
-        begin
-          Thread.__stop
-        ensure
-          @waiters.delete(Thread.current)
+        if (scheduler = Fiber.current_scheduler)
+          # Park through the scheduler (CRuby's do_mutex_lock): `block(mutex,
+          # nil)`, answered by `unblock(mutex, fiber)` from #unlock.
+          w = SchedulerWaiter.new(self)
+          (@waiters ||= []) << w
+          begin
+            scheduler.block(self, nil)
+          ensure
+            @waiters.delete(w)
+          end
+        else
+          (@waiters ||= []) << Thread.current
+          begin
+            Thread.__stop
+          ensure
+            @waiters.delete(Thread.current)
+          end
         end
       end
       self
@@ -468,24 +563,43 @@ class Thread
       # Thread-level check (not the per-Fiber #owned?): keeps the hot unlock
       # path free of the extra Fiber.current safepoint, and every unlock spec
       # exercises the cross-thread case anyway.
-      unless @owner == Thread.current
+      cur = Thread.current
+      unless @owner == cur
         raise ThreadError, "Attempt to unlock a mutex which is locked by another thread"
       end
       @owner = nil
-      # Hand the next waiter a chance; it re-contends in its lock loop.
-      if @waiters
-        while (w = @waiters.shift)
-          if w.alive?
-            # Permit-arming wake: unlike the public Thread#wakeup, a wake
-            # racing the waiter's park in Mutex#lock (preempted between
-            # registering and parking) is not lost — the next park returns
-            # immediately and the lock loop re-contends.
-            w.__wakeup_permit
-            break
-          end
+      if cur.__held.equal?(self)
+        cur.__held = @__held_next
+      else
+        cur.__unhold(self)
+      end
+      __wake_waiter if @waiters
+      self
+    end
+
+    # Hand the next live waiter a chance; it re-contends in its lock loop.
+    def __wake_waiter
+      while (w = @waiters.shift)
+        if w.alive?
+          # Permit-arming wake: unlike the public Thread#wakeup, a wake
+          # racing the waiter's park in Mutex#lock (preempted between
+          # registering and parking) is not lost — the next park returns
+          # immediately and the lock loop re-contends. A SchedulerWaiter
+          # takes it as the scheduler's `unblock`.
+          w.__wakeup_permit
+          break
         end
       end
-      self
+    end
+    private :__wake_waiter
+
+    # The owner thread is ending with the mutex still locked
+    # (Thread#__unlock_on_exit): release it and wake a waiter.
+    def __unlock_abandoned
+      @owner = nil
+      @owner_fiber = nil
+      __wake_waiter if @waiters
+      nil
     end
 
     def synchronize
@@ -531,7 +645,14 @@ class Thread
       start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       unlock
       begin
-        timeout ? Kernel.sleep(timeout) : Thread.__stop
+        if (scheduler = Fiber.current_scheduler)
+          # CRuby's rb_mutex_sleep: the scheduler's `kernel_sleep(timeout)`,
+          # nil included; a ConditionVariable#signal wakes the fiber with
+          # `unblock(mutex, fiber)`.
+          scheduler.kernel_sleep(timeout)
+        else
+          timeout ? Kernel.sleep(timeout) : Thread.__stop
+        end
       ensure
         # The re-acquire must complete even when a kill / Thread#raise
         # arrives while parked waiting for the lock (CRuby re-acquires
@@ -646,9 +767,9 @@ class Thread
           if deadline
             remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
             return nil if remaining <= 0
-            @cv_pop.wait(@mutex, remaining)
+            @cv_pop.__wait(@mutex, remaining, self)
           else
-            @cv_pop.wait(@mutex)
+            @cv_pop.__wait(@mutex, nil, self)
           end
         end
       end
@@ -754,9 +875,9 @@ class Thread
           if deadline
             remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
             return nil if remaining <= 0
-            @cv_push.wait(@mutex, remaining)
+            @cv_push.__wait(@mutex, remaining, self)
           else
-            @cv_push.wait(@mutex)
+            @cv_push.__wait(@mutex, nil, self)
           end
         end
       end
@@ -809,14 +930,43 @@ class Thread
     # elapses), then re-acquire `mutex` before returning — also on an
     # exception raised into the waiter.
     def wait(mutex, timeout = nil)
-      @waiters << Thread.current
-      begin
-        # Delegate to Mutex#sleep so the mutex is atomically released,
-        # the caller parks, and the mutex is re-acquired on wake — exactly
-        # as CRuby does (which is why `#wait` calls `#sleep` on its arg).
-        mutex.sleep(timeout)
-      ensure
-        @waiters.delete(Thread.current)
+      __wait(mutex, timeout, nil)
+    end
+
+    # Park on this variable: `mutex` is released for the wait and held
+    # again after, also on an exception raised into the waiter. A Thread
+    # parks through Mutex#sleep, which does exactly that (and is why
+    # CRuby's `#wait` calls `#sleep` on its argument). A non-blocking
+    # fiber with a fiber scheduler parks through the scheduler instead: a
+    # Queue's wait names the queue as `blocker` and goes through
+    # `block(queue, timeout)` (CRuby's queue_sleep), a plain #wait through
+    # Mutex#sleep's `kernel_sleep`; #signal wakes either with
+    # `unblock(blocker or mutex, fiber)`.
+    def __wait(mutex, timeout, blocker)
+      if (scheduler = Fiber.current_scheduler)
+        w = SchedulerWaiter.new(blocker || mutex)
+        @waiters << w
+        begin
+          if blocker
+            mutex.unlock
+            begin
+              scheduler.block(blocker, timeout)
+            ensure
+              Thread.__uninterruptible(true) { mutex.lock }
+            end
+          else
+            mutex.sleep(timeout)
+          end
+        ensure
+          @waiters.delete(w)
+        end
+      else
+        @waiters << Thread.current
+        begin
+          mutex.sleep(timeout)
+        ensure
+          @waiters.delete(Thread.current)
+        end
       end
       self
     end

@@ -1,2 +1,0 @@
-critical(hangs: the fiber scheduler's block/unblock hooks are not called yet, so the fiber parks the thread instead):SizedQueue#push with Fiber scheduler blocks through the scheduler while the queue is full
-critical(hangs: the fiber scheduler's block/unblock hooks are not called yet, so the fiber parks the thread instead):SizedQueue#push with Fiber scheduler raises ClosedQueueError when the queue is closed while it blocks

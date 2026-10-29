@@ -112,6 +112,11 @@ pub(crate) struct Scheduler {
     /// forbidden), delivered through the Ruby-level `$stderr` at the next
     /// safepoint in a normal context (`flush_pending_reports`).
     pending_reports: Vec<String>,
+    /// Scheduler joiners (`ThreadInner::fiber_joiners`) of dead threads
+    /// that the exit hook did not answer, as (joining thread, fiber);
+    /// answered with the scheduler's `unblock` at the next safepoint in a
+    /// normal context (`flush_pending_reports`), like the reports.
+    pending_unblocks: Vec<(Value, Value)>,
     /// Re-entrancy latch for `flush_pending_reports`: the `$stderr.write`
     /// invoke can itself park (full pipe), and the park entry is a flush
     /// point.
@@ -140,6 +145,7 @@ impl Scheduler {
             in_scheduler: false,
             machinery: false,
             pending_reports: vec![],
+            pending_unblocks: vec![],
             flushing_reports: false,
             native_joins: vec![],
             ignore_deadlock: false,
@@ -163,6 +169,10 @@ impl Scheduler {
         }
         for (_, t) in &self.sleepers {
             t.mark(alloc);
+        }
+        for (t, f) in &self.pending_unblocks {
+            t.mark(alloc);
+            f.mark(alloc);
         }
         for (_, _, t) in &self.io_waiters {
             t.mark(alloc);
@@ -1798,6 +1808,12 @@ fn finalize_common(globals: &mut Globals, mut thread: Value) {
                 }
             }
         }
+        // Scheduler joiners the exit hook did not take (the body never
+        // ran, or they registered after it had taken the list): answered
+        // at the next normal-context safepoint — not here, where no Ruby
+        // may run.
+        let left = std::mem::take(&mut inner.fiber_joiners);
+        s.pending_unblocks.extend(left);
         s.threads.retain(|t| *t != thread);
     });
     notify_thread_count();
@@ -1906,7 +1922,13 @@ fn queue_exception_report(globals: &mut Globals, thread: Value) {
 /// from normal (non-machinery) contexts only: the write invokes Ruby and
 /// may legitimately park. Errors are swallowed — a report must never
 /// alter the program's outcome.
+///
+/// The scheduler joiners dead threads left unanswered (`pending_unblocks`)
+/// are delivered here too, each as the installed scheduler's
+/// `unblock(joining thread, fiber)`; without a scheduler there is no one
+/// to tell, and they are dropped.
 pub(crate) fn flush_pending_reports(vm: &mut Executor, globals: &mut Globals) {
+    flush_pending_unblocks(vm, globals);
     loop {
         let Some(text) = SCHEDULER.with(|s| {
             let mut s = s.borrow_mut();
@@ -1932,6 +1954,77 @@ pub(crate) fn flush_pending_reports(vm: &mut Executor, globals: &mut Globals) {
         );
         SCHEDULER.with(|s| s.borrow_mut().flushing_reports = false);
     }
+}
+
+fn flush_pending_unblocks(vm: &mut Executor, globals: &mut Globals) {
+    loop {
+        let Some((joiner, fiber)) = SCHEDULER.with(|s| s.borrow_mut().pending_unblocks.pop()) else {
+            return;
+        };
+        let Some(scheduler) = globals.fiber_scheduler else {
+            SCHEDULER.with(|s| s.borrow_mut().pending_unblocks.clear());
+            return;
+        };
+        let _ = vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("unblock"),
+            scheduler,
+            &[joiner, fiber],
+            None,
+            None,
+        );
+    }
+}
+
+/// The exit hook of a thread body: runs in the thread's own context right
+/// after the body returned — normally or by unwinding — and before the
+/// thread is marked terminated, from `thread_invoker`'s epilogue in the
+/// green model and `native::run_body` in the 1:1 model. It is CRuby's end
+/// of `thread_start_func_2`: the mutexes the thread still holds are
+/// released (`Thread#__unlock_on_exit`, which wakes their waiters, a
+/// fiber scheduler's through `unblock`), then the fibers that joined this
+/// thread through a scheduler are answered with `unblock(joining thread,
+/// fiber)` — the joining thread as the blocker, as CRuby passes it.
+/// Ruby runs here as it does in the body, so a hook may park.
+///
+/// `ret` is the body's result word, handed back untouched. An error the
+/// body left pending on the executor is held aside while the hooks run
+/// and restored after; an error a hook raises is dropped.
+pub(crate) extern "C" fn thread_body_exit(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    ret: u64,
+) -> u64 {
+    let pending = vm.take_pending_error();
+    let thread = current_thread(vm);
+    let _ = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("__unlock_on_exit"),
+        thread,
+        &[],
+        None,
+        None,
+    );
+    let joiners = {
+        let mut thread = thread;
+        std::mem::take(&mut thread.as_thread_inner_mut().fiber_joiners)
+    };
+    if let Some(scheduler) = globals.fiber_scheduler {
+        for (joiner, fiber) in joiners {
+            let _ = vm.invoke_method_inner(
+                globals,
+                IdentId::get_id("unblock"),
+                scheduler,
+                &[joiner, fiber],
+                None,
+                None,
+            );
+        }
+    }
+    if let Some(err) = pending {
+        vm.set_error(err);
+    }
+    ret
 }
 
 /// Queue a dead thread's terminating exception as a pending interrupt on

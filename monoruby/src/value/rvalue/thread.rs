@@ -59,6 +59,14 @@ pub struct ThreadInner {
     pub(crate) exception: Option<MonorubyErr>,
     /// Threads parked in `#join` on this thread.
     pub(crate) joiners: Vec<Value>,
+    /// Fibers parked in `#join` on this thread through a fiber scheduler,
+    /// as (the joining thread, the fiber). The thread's exit hook
+    /// (`scheduler::thread_body_exit`) takes them and answers each with
+    /// the scheduler's `unblock(joining thread, fiber)` — CRuby's
+    /// `rb_threadptr_join_list_wakeup`, blocker included; what it did not
+    /// take is answered at the next normal-context safepoint
+    /// (`scheduler::flush_pending_reports`).
+    pub(crate) fiber_joiners: Vec<(Value, Value)>,
     /// Queued asynchronous interrupts (`#kill` / `#raise`), delivered
     /// FIFO at delivery points (CRuby's `pending_interrupt_queue`). A
     /// queue, not a slot: `t.raise e; t.kill` must deliver the raise
@@ -186,6 +194,10 @@ impl alloc::GC<RValue> for ThreadInner {
         for v in &self.joiners {
             v.mark(alloc);
         }
+        for (t, f) in &self.fiber_joiners {
+            t.mark(alloc);
+            f.mark(alloc);
+        }
         for int in &self.pending {
             if let PendingInterrupt::Raise(err) = int {
                 err.mark(alloc);
@@ -215,6 +227,7 @@ impl ThreadInner {
             result: None,
             exception: None,
             joiners: vec![],
+            fiber_joiners: vec![],
             pending: Default::default(),
             killed: false,
             masks: vec![],
@@ -253,6 +266,7 @@ impl ThreadInner {
             result: None,
             exception: None,
             joiners: vec![],
+            fiber_joiners: vec![],
             pending: Default::default(),
             killed: false,
             masks: vec![],
@@ -283,6 +297,7 @@ impl ThreadInner {
             result: None,
             exception: None,
             joiners: vec![],
+            fiber_joiners: vec![],
             pending: Default::default(),
             killed: false,
             masks: vec![],

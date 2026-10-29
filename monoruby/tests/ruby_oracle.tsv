@@ -752,6 +752,7 @@
 215aa4af8c863ad665773263bec5b5b6	[[true, true, true], "345", "closed stream", "closed stream", "01XY456789", "Errno::ENOTTY", "closed stream"]	path = "/tmp/monoruby_test_iodup_#{Process.pid}_#{rand(100000)}"\n  
 21644521b8885b6a2269e71105c1a8fc	[:in_thread, :in_main, :value_raises]	r = []\n            ready = false\n            t = Thread.new {\n     
 21715255d5b7d1640238dce91ff9244f	1	case 9\n        when 0,4,8\n          0\n        when 1,5,9\n          1\n  
+217172eb64c9c81027072c608f4d73f4	[true, 1, true, 42, 0, true, 1, true, 1, 2, ClosedQueueError]	class Sched\n              attr_reader :events\n              def ini
 2196929d7c5f6714a479729f2b4cfe13	[[30], 240]	$n = 0\n        def mid(arr)\n          begin\n            arr.each { |y| 
 21978a61b3437a37e4576edf77547099	1	def nil.foo; 1; end\n            nil.foo\n            
 21a515700802e21baff61d5c0a2bda4c	[[3, 3, 0], [4, 5, 2], [5, 7, 4], [6, 9, 6], [7, 11, 8], [8, 13, 10], [9, 15, 12], [10, 17, 14], [11, 19, 16], [12, 21, 18], [13, 23, 20], [14, 25, 22], [15, 27, 24], [16, 29, 26], [17, 31, 28], [18, 33, 30], [19, 35, 32], [20, 37, 34], [21, 39, 36], [22, 41, 38]]	class C\n          @@cv = nil\n          def f(a, b)\n            x = [a, 
@@ -930,6 +931,7 @@
 2a2b86ebb2efff59c7eaeba003dc98fc	["abc", "XYZ", "def"]	"abcXYZdef" =~ /XYZ/\n            [$`, $&, $']\n            
 2a2c02a8e1eb184cff179aa37a7afd2c	[[1, 2, 5, 4], A]	class A < Array\n        end\n        \n\n        a = A.new([1,2,3])\n      
 2a2cecca7ae69941c6256b13bc8f0f0a	[2.0, 4.0, 6.0, 3.0, 5.0, 7.0]	def kill_int(n)\n          acc = 0.0\n          hits = []\n          n.tim
+2a2e3f7646226607bf5550ea71aa49c2	[nil, true, false, true, :locked, true, false, false, true, :locked, true]	class Sched\n              attr_reader :unblocked\n              def 
 2a331dfdc06006cb6c2d9fb1b276af51	[false, false, true, true, true, true]	[Kernel.private_instance_methods(false).include?(:chop),\n          
 2a376993740826c6b46bfb27a3b3ac1e	[[:destination_buffer_full, [[0, 99], [164, 162, 97]], :finished, [], [164, 162, 97, 98, 99]], [:finished, [[], [164, 162, 97, 98, 99]], :finished, [], [164, 162, 97, 98, 99]], [:destination_buffer_full, [[98, 0, 0, 0, 99, 0, 0, 0], [164, 162]], :finished, [], [164, 162, 97, 98, 99]], [:finished, [[], [164, 162, 97, 98, 99]], :finished, [], [164, 162, 97, 98, 99]]]	[["UTF-16BE", 3], ["UTF-16BE", 5], ["UTF-32LE", 2], ["UTF-32LE", 6]
 2a3b6d6cde6de424c3cabfd8e7cb7183	true	dirs = %w[c C s S v n i I l L V N q Q j J e f F g E d D G]\n        def 
@@ -1090,6 +1092,7 @@
 325d6af981ae818023ea01c0c4183602	[[1, true], [1, 2], [1, [1, 2]], [1, true], [4, 5]]	__a = [];__a << (bo = BasicObject.new; [bo].flatten.equal?(nil); [[bo].flatten.s
 3264d96fa4dfb35b3aea4883fe7dbebb	[0, 30, 60, 90, 120]	Object.const_set(:LCS_K3, 0)\n        def lcs_hot3\n          s = 0\n     
 326ba84b6531ca4f29cb4fd7a5de5ebf	[(2.0+0.0i), (2.0+0.0i), (1+0i), (1+2i), (1+2i)]	__a = [];__a << (Complex.polar(2.0));__a << (Complex.polar(2.0, 0));__a << (Comp
+3277402512a10f20ff61271ce888952d	["Target thread must not be current thread", true, 0, nil, 0, nil, true, [:block, :block], nil, true, [:block, :block, :block, :block], true]	class Sched\n              attr_reader :events\n              def ini
 3279027e38a42e302879e0467940338a	[[1, 100], [3, 100], [4, 100], [:attr, 150], [:plain, 150]]	class Ra\n              attr_reader :tag\n              def initializ
 3285c4fda20a8f8870e882093119ec6c	[1, 10, 20, 30]	def f(p, x:, y:, z:)\n          [p, x, y, z]\n        end\n        \n\n     
 3291610771d6911f90caa81ad7642975	[[[65393], "Encoding::UndefinedConversionError"], [[65377], "Encoding::UndefinedConversionError"], [[8470], "Encoding::UndefinedConversionError"], [[165], "Encoding::UndefinedConversionError"], [[8254], "Encoding::UndefinedConversionError"], [27, 36, 66, 48, 108, 36, 34, 27, 40, 66]]	r = []\n            ["\\u{FF71}", "\\u{FF61}", "\\u{2116}", "\\u{00A5}",
@@ -2952,6 +2955,7 @@
 8a608d11c3f657ca379bad311ef65e13	294	class C\n          def f\n            x = 0\n            7.times { x += yi
 8a6b94b64e2a0b0af3908b52f147185f	true	class S\n        end\n        class C < S\n        end\n        S === C.new
 8a7650d64512f44fb51f061b3ebb7a33	["UTF-8", "US-ASCII", true, "UTF-8", "UTF-8", 3, [ArgumentError, "wrong number of arguments (given 2, expected 0..1)"], [4, 8, 73, 117, 58, 13, 69, 110, 99, 111, 100, 105, 110, 103, 10, 85, 84, 70, 45, 56, 6, 58, 6, 69, 70], true, ["UTF-8", "ASCII-8BIT", "ISO-2022-JP", "Windows-31J"], [["UTF-8", "x"]], [ArgumentError, "unknown encoding name - nope"], "UTF-8", "EUC-JP"]	e = Encoding::UTF_8\n            r = [e._dump(-1), e._dump(-1).encod
+8a7a2003e2b8f02739808a7e001b3a59	[[:block, :block, :unblock, :unblock, :block], true, true, false, true, 5]	class Sched\n              attr_reader :events\n              def ini
 8a806116e8db9855524e6f7e79e47938	[nil, 2, 9999999999999999999999999999999]	[[].max, [1,2,-42].max, [-42.4242, 100, 999999999999999999999999999
 8a99c6f57fed0c44942c468c98ece0d9	[["TypeError", "allocator undefined for Enumerator::ArithmeticSequence"], ["TypeError", "allocator undefined for Enumerator::ArithmeticSequence"], ["TypeError", "allocator undefined for Enumerator::ArithmeticSequence"], ["TypeError", "allocator undefined for Enumerator::ArithmeticSequence"], ["TypeError", "allocator undefined for Enumerator::ArithmeticSequence"], ["TypeError", "allocator undefined for Enumerator::ArithmeticSequence"], ["TypeError", "allocator undefined for Enumerator::ArithmeticSequence"], ["TypeError", "allocator undefined for Enumerator::ArithmeticSequence"], ["TypeError", "allocator undefined for Enumerator::ArithmeticSequence"], ["TypeError", "allocator undefined for Enumerator::ArithmeticSequence"], ["TypeError", "allocator undefined for Enumerator::ArithmeticSequence"], ["NoMethodError", "undefined method 'new' for class Enumerator::ArithmeticSequence"], [[1, 4, 7, 10], 4, [1, 4]]]	t = ->(&b) { begin; b.call; rescue Exception => e; [e.class.to_s, e.message.g
 8ab7255cc645f88bcc12b9b985e76688	[[:protected_foo, :public_foo], [:protected_foo, :public_foo], [:private_foo], [:private_foo]]	class Foo\n          private;   def private_foo()   end\n          protec
@@ -3737,6 +3741,7 @@ af9329fd1ed54bd186796d91961a9856	[0, 1, 1, 1, 1, 2, 2, 6, 3, 24, 5, 120, 8, 720,
 af9c50b606859e165d88610397042afd	[true, ArgumentError]	(class KC; def initialize_clone(orig, **kw); $rec=kw; super(orig); end; end; obj
 afbcad07e617b095dc96d973a2845197	[:bar, [1, 2, 3]]	class Foo\n              def method_missing(name, *args)\n           
 afc664b3664dbfb2235fee8c114e24dc	["a\\n", "b\\n", "c"]	path = "/tmp/monoruby_io_classreadlines_#{Process.pid}_#{rand(10000
+afcae928828c909ce780f00638d00bf7	[nil, true, true, true, false, :block, true, true]	class Sched\n              attr_reader :events\n              def ini
 afd6879be7df6cb4045a8a84f5160f4c	[{}, {}, {a: 1, b: 2}, {a: 1}, true, :te, :te, {z: 9}]	__a = [];__a << ({**nil});__a << (x = nil; {**x});__a << ({a: 1, **nil, b: 2});_
 afe017e12ee32ba781bc419214f2db54	"e\\n\\nCopyright (c) 202"	File.binread("../LICENSE-MIT", 20, 10)
 afe97e4333816e214787422aa7ddfd1e	["ASCII-8BIT", "UTF-8", nil, "UTF-8", nil, "UTF-7", nil, nil, "ASCII-8BIT", nil]	[[Encoding::US_ASCII, Encoding::BINARY], [Encoding::US_ASCII, Encod
@@ -3936,6 +3941,7 @@ b8b5815c80c9b41df4ebb850776696ed	[100, 100, [49, :tagged]]	def push(a, x) = a <<
 b8be20b44f219b0cd1885866433a3766	[[239, 191, 189], [210, 187, 63, 176, 161], [210, 187, 63, 176, 161], [:undefined_conversion, [228, 184, 129], [164, 64]], [:destination_buffer_full, [210, 187, 182], []]]	r = []\n            r << ([0xA2, 0xA1].pack("C*").force_encoding("GB
 b8d3738377245420bc2378da58f5f7d9	100	p = Proc.new { 100 }\n            define_method(:foo, p)\n           
 b8d68ef10028da6842a236893e45d2cb	:local_jump	begin\n              Thread.new { return }.value\n              :no_e
+b8e042104a61b9b3890855a79a10e5ea	[nil, true, false, true, false, [true, :woken], false]	class Sched\n              attr_reader :events\n              def ini
 b8e73ca465704ccb728ac104f9385e74	["str", 8]	def call_block\n      yield\n    end\n    def call_block_twice\n      yield\n   
 b8f9b7e0c887de183753b70b690960ec	[["Windows-1250", 159, [156, 156]], ["Windows-1250", 161, [162]], ["Windows-1252", 136, [137]], ["Windows-1254", 136, [137]], ["Windows-1253", 182, [184]], ["Windows-1255", 250, [224, 224]], ["Windows-1256", 218, [193, 193]], ["Windows-1256", 242, [224, 224]], ["Windows-1258", 214, [215]], ["Windows-1258", 246, [247]], ["Windows-1258", 253, [254]], ["KOI8-U", 174, [175]], ["KOI8-U", 190, [191]], ["ISO-8859-2", 182, [181, 181]], ["ISO-8859-2", 183, [184]], ["ISO-8859-4", 182, [181, 181]], ["ISO-8859-4", 183, [184]], ["ISO-8859-11", 238, [239]], ["ISO-8859-11", 251, [223, 223]]]	rows = [\n                ["Windows-1250", 0x9f], ["Windows-1250",
 b8fdb4f51c8e75670a1418eb17bac041	:ok	pat = "ア".encode(Encoding::EUC_JP)\n            begin\n              
