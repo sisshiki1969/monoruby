@@ -1293,11 +1293,22 @@ impl Codegen {
             .remove(&spec_id)
             .unwrap_or_else(|| panic!("inline body {spec_id:?} was not parked"));
         debug_assert!(info.frameless);
-        let meta = store[store[info.iseq_id].func_id()].meta().get();
+        let func = &store[store[info.iseq_id].func_id()];
+        let meta = func.meta().get();
+        let block = func.is_block_style();
         let done = self.jit.label();
         let redo = self.jit.label();
         let cont = self.jit.label();
         let level = self.inline_ctx.len() + 1;
+        #[cfg(feature = "jit-log")]
+        if self.startup_flag {
+            eprintln!(
+                "  {}>>> frameless {} <{}> delta:{delta}",
+                " ".repeat(level * 3),
+                if block { "yield" } else { "call" },
+                store.func_description(store[info.iseq_id].func_id()),
+            );
+        }
         self.inline_frame_shift(delta);
         self.inline_ctx.push(InlineCtx {
             done: done.clone(),
@@ -1306,6 +1317,7 @@ impl Codegen {
             using_fpr,
             replay,
             meta,
+            block,
         });
         let entry = self.jit.label();
         self.gen_machine_code(info, store, entry, level, class_version, root);
@@ -2312,7 +2324,9 @@ impl Codegen {
     /// 1. the callee's write-back, like any deopt's (the frame pointer and
     ///    the LFP are still the callee's);
     /// 2. for every inline level, innermost first: the LFP header (outer
-    ///    `0`, the callee's meta, svar `0`, block `0`), the control words
+    ///    `0` — or, for a block run by a frameless `yield`, the home LFP
+    ///    the yield site already stored —, the callee's meta, svar `0`,
+    ///    block `0`), the control words
     ///    (prev cfp = the enclosing frame's, the lfp slot, the saved frame
     ///    pointer, the return address = the VM continuation stub, the
     ///    call-site pc, the continuation word with the result slot and the
@@ -2351,23 +2365,28 @@ impl Codegen {
         self.jit.bind_label(entry);
         self.gen_write_back_for_deopt(wb, base);
         let cont_stub = self.jit.get_label_address(&self.chain_cont_stub).as_ptr() as u64;
-        let levels: Vec<(i32, UsingFpr, ChainReplay, u64)> = self
+        let levels: Vec<(i32, UsingFpr, ChainReplay, u64, bool)> = self
             .inline_ctx
             .iter()
             .rev()
-            .map(|ctx| (ctx.delta, ctx.using_fpr, ctx.replay.clone(), ctx.meta))
+            .map(|ctx| (ctx.delta, ctx.using_fpr, ctx.replay.clone(), ctx.meta, ctx.block))
             .collect();
         assert!(!levels.is_empty(), "frameless materialize outside an inline body");
         let mut total_delta = 0;
-        for (i, (delta, using_fpr, replay, meta)) in levels.into_iter().enumerate() {
+        for (i, (delta, using_fpr, replay, meta, block)) in levels.into_iter().enumerate() {
             // The caller's residents were flushed before the window was
             // filled; the body has clobbered every register since.
             debug_assert!(replay.write_back_all().gp_is_empty());
             let site_pc = replay.pc().as_ptr() as u64;
             let cont_data = replay.cont_data();
+            // LFP header. A block's outer is already in the window
+            // (`InlineCtx::block`).
+            if !block {
+                monoasm! { &mut self.jit,
+                    movq [r14 - (LFP_OUTER)], 0;
+                }
+            }
             monoasm! { &mut self.jit,
-                // LFP header.
-                movq [r14 - (LFP_OUTER)], 0;
                 movq rax, (meta);
                 movq [r14 - (LFP_META)], rax;
                 movq [r14 - (LFP_SVAR)], 0;

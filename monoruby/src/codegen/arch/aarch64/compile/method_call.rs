@@ -1438,6 +1438,23 @@ impl Codegen {
         );
     }
 
+    /// `YieldOuterLfp`: x0 (rax) <- the LFP of the frame `outer`
+    /// control-frame hops up (the home of the block a frameless `yield`
+    /// runs), x4 (rdi) <- its `self`. The same walk `setup_yield_frame`
+    /// makes, with the result left in registers for the yield site to store
+    /// into the block's window (`AbstractState::fill_yield_window`).
+    pub(in crate::codegen::jitgen) fn yield_outer_lfp(&mut self, outer: usize) {
+        let (rax, rdi) = (GP::Rax.a64().0, GP::Rdi.a64().0);
+        monoasm_arm64!(&mut self.jit, ldr x(rax), [x19, #(EXECUTOR_CFP as u32)];);
+        for _ in 0..outer {
+            monoasm_arm64!(&mut self.jit, ldr x(rax), [x(rax)];);
+        }
+        monoasm_arm64!(&mut self.jit,
+            ldur x(rax), [x(rax), #(-(CFP_LFP as i32))];   // the home's LFP
+            ldur x(rdi), [x(rax), #(-(LFP_SELF as i32))];  // its self
+        );
+    }
+
     /// `RestKw`: call `correct_rest_kw(&table, lfp)`, which reads the slots
     /// the table lists and returns the `**kwrest` Hash in x0. The table of
     /// (name: i32, slot-id: i32) pairs, terminated by (0, 0), was laid down

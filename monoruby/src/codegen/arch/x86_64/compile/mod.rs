@@ -194,6 +194,7 @@ impl Codegen {
             | AsmInst::BlockBreakSpecialized { .. }
             | AsmInst::YieldArrayExpand { .. }
             | AsmInst::SetupYieldFrame { .. }
+            | AsmInst::YieldOuterLfp { .. }
             | AsmInst::SpecializedCall { .. }
             | AsmInst::InlineCall { .. }
             | AsmInst::U64ToStack(..)

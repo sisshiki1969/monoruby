@@ -864,6 +864,11 @@ pub(in crate::codegen) struct InlineCtx {
     pub(in crate::codegen) replay: jitgen::ChainReplay,
     /// The callee's `Meta`, the word a frame of it carries at `LFP_META`.
     pub(in crate::codegen) meta: u64,
+    /// The callee is a block run by a frameless `yield`: the window's
+    /// `LFP_OUTER` word was written by the yield site
+    /// (`AbstractState::fill_yield_window`), so a materializing exit keeps
+    /// it instead of writing the `0` of a method frame.
+    pub(in crate::codegen) block: bool,
 }
 
 ///

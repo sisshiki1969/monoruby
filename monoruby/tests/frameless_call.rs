@@ -637,3 +637,178 @@ fn frameless_local_objects() {
     );
 }
 
+
+// ---- `yield` ----------------------------------------------------------------
+//
+// A specialized `yield` runs a block of the same shape frameless too
+// (`frameless_call::yield_eligible`): the block's `self` and its home's LFP
+// go into the window, and a materializing exit keeps the latter as the
+// frame's outer.
+
+#[test]
+fn frameless_yield_ivar_counter() {
+    // `100.times { @a += 1 }`: loads, stores and arithmetic on `self`, in a
+    // window of the yielding frame. Once from a method body, once from a
+    // loop at the top level.
+    run_test(
+        r#"
+        def run
+          @b = 0
+          200.times { @b += 2 }
+          @b
+        end
+        @a = 0
+        i = 0
+        while i < 30
+          100.times { @a += 1 }
+          i += 1
+        end
+        r = []
+        30.times { r << run }
+        r << @a
+        "#,
+    );
+}
+
+#[test]
+fn frameless_yield_parameters() {
+    // A block drops the arguments it has no parameter for and binds `nil`
+    // to the ones it is not given.
+    run_test(
+        r#"
+        def each3; i = 0; while i < 3; yield i, i * 2; i += 1; end; end
+        def each0; i = 0; while i < 3; yield; i += 1; end; end
+        class C
+          def initialize; @s = 0; @log = []; end
+          def go
+            40.times { |i| @s += i }
+            each3 { |x| @s += x }
+            each0 { |x| @log << x }
+            5.upto(9) { |i| @s = @s * 2 + i }
+            [@s, @log]
+          end
+        end
+        r = nil
+        30.times { r = C.new.go }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn frameless_yield_home_two_frames_up() {
+    // Through a `(...)` forwarder the block's home is two specialized
+    // frames above the yield: `YieldOuterLfp` hops that far.
+    run_test(
+        r#"
+        def each_n(n); i = 0; while i < n; yield i; i += 1; end; end
+        def fwd(...) = each_n(...)
+        def two
+          @t = 0
+          fwd(30) { |i| @t += i }
+          @t
+        end
+        r = []
+        30.times { r << two }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn frameless_yield_raise_reports_the_block() {
+    // The division guard materializes the window: ZeroDivisionError is
+    // raised from a real frame of the block.
+    run_test(
+        r#"
+        def div_all
+          @acc = 0
+          30.times { |i| @acc += 100 / (5 - i % 6) }
+          @acc
+        rescue ZeroDivisionError => e
+          [e.message, e.backtrace_locations.map(&:label).include?("block in Object#div_all")]
+        end
+        r = []
+        30.times { r << div_all }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn frameless_yield_redo_on_type_change() {
+    // The guards were compiled for Integer: a Float and a String take a
+    // redo, and the interpreter performs the yield.
+    run_test(
+        r#"
+        def sum(arr)
+          @sum = 0
+          arr.each { |x| @sum += x }
+          @sum
+        end
+        r = []
+        30.times { r << sum([1, 2, 3]) }
+        r << sum([1, 2.5, 3])
+        r << (sum(["a", "b"]) rescue $!.class)
+        r << sum([2**62, 2**62])
+        r
+        "#,
+    );
+}
+
+#[test]
+fn frameless_yield_nested_frameless_call() {
+    // A frameless method call inside a frameless block: two inline
+    // levels, the block's the outer one.
+    run_test(
+        r#"
+        def sq(x) = x * x
+        def nested
+          @n = 0
+          30.times { |i| @n += sq(i) }
+          @n
+        end
+        r = []
+        30.times { r << nested }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn frameless_yield_float_body() {
+    run_test(
+        r#"
+        def flt(k)
+          @f = 0.0
+          50.times { |i| @f += i * k }
+          @f
+        end
+        r = []
+        30.times { |i| r << flt(0.5) << flt(i) }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn frameless_yield_block_reaching_its_home_stays_framed() {
+    // Outer locals, `break`, `next` and a non-local `return` reach the
+    // block's home: these take the framed yield.
+    run_test(
+        r#"
+        def ctl
+          t = 0
+          r = 50.times { |i| next if i.odd?; break i if i > 20; t += i }
+          [t, r]
+        end
+        def early
+          @e = 0
+          100.times { |i| @e += i; return @e if i == 10 }
+        end
+        r = []
+        30.times { r << ctl << early }
+        r
+        "#,
+    );
+}
