@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-7acc0ec4.js";
+            window.path_to_searchindex_js = "searchindex-e9a1afd8.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -9857,8 +9857,13 @@ flushing_reports: flush_pending_reports の再入ラッチ
 <li><strong>green thread が park するとき</strong>: 起床条件を登録してから、プロセス(正確には OS
 スレッド)グローバルなスロット <code>SCHED_RSP</code> に保存されたスケジューラ・コンテキストへ
 switch する。つまり制御はループ中の pending な dispatch 呼び出しから「返って」くる。</li>
-<li><strong>本体が終了したとき</strong>: <code>thread_invoker</code> のエピローグが <code>rsp_save = -1</code>(Terminated)を
-マークして同じくスケジューラへ switch し、ループが finalize する。</li>
+<li><strong>本体が終了したとき</strong>: <code>thread_invoker</code> のエピローグがまずスレッド自身のコンテキストで
+終了フック(<code>scheduler::thread_body_exit</code>)を走らせ — 握ったままの Mutex を解放し
+(<code>Thread#__unlock_on_exit</code>)、fiber scheduler 経由で <code>#join</code> している fiber に
+<code>unblock</code> を送る(CRuby の <code>thread_start_func_2</code> 末尾に相当。Ruby を実行するので
+park もありうる)— それから <code>rsp_save = -1</code>(Terminated)をマークして同じく
+スケジューラへ switch し、ループが finalize する。1:1 モデルでは <code>native::run_body</code> が
+同じフックを本体の戻り直後に呼ぶ。</li>
 </ul>
 <p>ループが制御を手放す直前に必ず自分のコンテキストを <code>SCHED_RSP</code> へ保存するので、
 スロットは 1 個で足りる(green thread は <code>scheduler_run</code> を呼ばないため、
@@ -9875,7 +9880,7 @@ switch する。つまり制御はループ中の pending な dispatch 呼び出
 <tr><th>スタブ</th><th>役割</th></tr>
 </thead>
 <tbody>
-<tr><td><code>thread_invoker</code></td><td>初回起動。スケジューラ・コンテキストを <code>SCHED_RSP</code> に保存 → 新スタックへ切替 → フレーム構築 → 本体実行。終了時は <code>rsp_save=-1</code> をマークして <code>SCHED_RSP</code> へ復帰</td></tr>
+<tr><td><code>thread_invoker</code></td><td>初回起動。スケジューラ・コンテキストを <code>SCHED_RSP</code> に保存 → 新スタックへ切替 → フレーム構築 → 本体実行。終了時は終了フック <code>thread_body_exit</code> を呼んでから <code>rsp_save=-1</code> をマークして <code>SCHED_RSP</code> へ復帰</td></tr>
 <tr><td><code>switch_to_scheduler(cur, val)</code></td><td>park。現コンテキストを <code>cur.rsp_save</code> へ保存し <code>SCHED_RSP</code> へ switch。<code>val</code> はスケジューラ側の resume 呼び出しの戻り値になる</td></tr>
 <tr><td><code>scheduler_resume(exec, val)</code></td><td>再開。ループのコンテキストを <code>SCHED_RSP</code> へ保存し <code>exec.rsp_save</code> へ switch。<code>val</code>(u64)は park 側の戻り値。<strong>0 を渡すとエラー再開</strong>(§6)</td></tr>
 </tbody>
@@ -9973,8 +9978,23 @@ running を起こしても no-op という CRuby 意味論に一致)。</li>
 unpark は上記 <code>#wakeup</code> / <code>#__wakeup_permit</code> を使う。</li>
 <li><code>Mutex#sleep</code> / <code>ConditionVariable#wait</code> は unlock → park → <strong>ensure で re-lock</strong>。
 <code>#kill</code> / <code>#raise</code> が park 中に配送されても(§6 の unwind は ensure を実行するので)
-mutex は正しく再取得・解放される。終了スレッドが握ったまま放置したロックは
-次の取得者側で回収される(#966)。<code>Mutex#owned?</code> は <strong>Fiber 単位</strong>の所有で判定する(#967)。</li>
+mutex は正しく再取得・解放される。スレッドが握ったまま終了したロックは
+終了フック(§3、<code>Thread#__unlock_on_exit</code>)が解放して waiter を起こす
+(CRuby の <code>rb_threadptr_unlock_all_locking_mutexes</code>)。そのためにスレッドは保持中の
+Mutex を <code>Mutex#__held_next</code> で連結したリスト(<code>Thread#__held</code>、CRuby の
+<code>keeping_mutexes</code>)として持ち、<code>try_lock</code> / <code>unlock</code> が push / pop する(属性アクセサだけで
+済ませ、ホットパスに呼び出しを増やさない)。かつての「次の取得者側で回収」(#966)は
+起動前に kill されたスレッド等のための保険として残る。<code>Mutex#owned?</code> は
+<strong>Fiber 単位</strong>の所有で判定する(#967)。</li>
+<li><strong>fiber scheduler</strong>(<code>Fiber.set_scheduler</code>)が入っていて現在の fiber が non-blocking なら、
+park はスケジューラ経由になる(CRuby の fiber scheduler プロトコル): <code>Mutex#lock</code> は
+<code>block(mutex, nil)</code>、Queue / SizedQueue の待ちは <code>block(queue, timeout)</code>、
+<code>Mutex#sleep</code>(= <code>ConditionVariable#wait</code>)は <code>kernel_sleep(timeout)</code>。waiter 配列には
+Thread の代わりに <code>Thread::SchedulerWaiter</code>(fiber + blocker)が入り、<code>#__wakeup_permit</code>
+を受けるとスケジューラの <code>unblock(blocker, fiber)</code> に変換する(<code>Mutex#unlock</code> /
+<code>ConditionVariable#signal</code> 側は変更なし)。<code>Thread#join</code> も同様に <code>block(thread, 残り秒)</code>
+で待ち、対象スレッドの終了フックが <code>unblock(join 側のスレッド, fiber)</code> で答える
+(<code>ThreadInner::fiber_joiners</code>)。</li>
 <li>Queue / SizedQueue は Mutex + ConditionVariable の上に載る(CRuby thread_sync.c と同じ構造)。
 すべての check-and-take をキューの mutex 下で行うことで、かつての
 <code>@items.empty?</code> / <code>@items.shift</code> のセーフポイント窓(2 つの pop が競合し片方が幻の nil を
