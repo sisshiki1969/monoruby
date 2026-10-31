@@ -434,6 +434,15 @@ pub(in crate::codegen) enum LInst {
         dst: GP,
         src: GP,
     },
+    /// `dst <- lhs <kind> !!rhs` on a Ruby bool `lhs` (`BitAnd` / `BitOr` /
+    /// `BitXor`); `^` ORs `FALSE_VALUE` back in. Destroys `rhs`; the three
+    /// registers are distinct. x9 scratch on aarch64.
+    BoolBinOp {
+        kind: BinOpK,
+        dst: GP,
+        lhs: GP,
+        rhs: GP,
+    },
     /// `[mem] <- src`.
     Store {
         src: GP,

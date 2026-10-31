@@ -1652,6 +1652,30 @@ impl Codegen {
                     csel x(d), x(d), x(sc), eq;
                 );
             }
+            // dst <- lhs <kind> !!rhs, lhs a Ruby bool. Destroys rhs;
+            // dst, lhs, rhs distinct. x9 scratch.
+            LInst::BoolBinOp { kind, dst, lhs, rhs } => {
+                let (d, l, r) = (dst.a64().0, lhs.a64().0, rhs.a64().0);
+                // nil / false are the only words with `w | 0x10 == 0x14`.
+                monoasm_arm64!(&mut self.jit,
+                    mov  x9, #(0x10);
+                    orr  x(r), x(r), x9;
+                    mov  x(d), #(FALSE_VALUE);
+                    mov  x9, #(TRUE_VALUE);
+                    cmp  x(r), #(FALSE_VALUE);
+                    csel x(r), x(d), x9, eq;
+                );
+                match kind {
+                    BinOpK::BitAnd => monoasm_arm64!(&mut self.jit, and x(d), x(l), x(r); ),
+                    BinOpK::BitOr => monoasm_arm64!(&mut self.jit, orr x(d), x(l), x(r); ),
+                    BinOpK::BitXor => monoasm_arm64!(&mut self.jit,
+                        eor x(d), x(l), x(r);
+                        mov x9, #(FALSE_VALUE);
+                        orr x(d), x(d), x9;
+                    ),
+                    _ => unreachable!("BoolBinOp {kind:?}"),
+                }
+            }
             // Math.sqrt: fcmp vs 0.0; NaN (unordered, Vs) -> sqrt, negative (Mi) -> deopt.
             LInst::MathSqrt {
                 fsrc,

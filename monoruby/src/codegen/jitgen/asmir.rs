@@ -338,6 +338,7 @@ fn keeps_self_ivar_base(inst: &AsmInst) -> bool {
             | AsmInst::FloatCmpFlags { .. }
             | AsmInst::FixnumNeg { .. }
             | AsmInst::FixnumBitNot { .. }
+            | AsmInst::BoolBinOp { .. }
     )
 }
 
@@ -1883,6 +1884,12 @@ impl AsmIr {
         self.inst.push(AsmInst::NotToBool { dst, src });
     }
 
+    /// Emit `dst <- lhs <kind> !!rhs` on a Ruby bool `lhs`; see
+    /// [`AsmInst::BoolBinOp`].
+    pub(crate) fn bool_binop(&mut self, kind: BinOpK, dst: GP, lhs: GP, rhs: GP) {
+        self.inst.push(AsmInst::BoolBinOp { kind, dst, lhs, rhs });
+    }
+
     /// Emit `Math.sqrt`: `fret <- sqrt(fsrc)`, deopting on a negative argument.
     /// Typed alternative to `inline`.
     pub(crate) fn math_sqrt(&mut self, fsrc: FPReg, fret: Option<FPReg>, deopt: AsmDeopt) {
@@ -3020,6 +3027,20 @@ pub(super) enum AsmInst {
     NotToBool {
         dst: GP,
         src: GP,
+    },
+    /// `dst <- lhs <kind> !!rhs` for `TrueClass#&` / `#|` / `#^` and their
+    /// `FalseClass` twins: `lhs` is a Ruby bool (`true` / `false`), `rhs` any
+    /// value, first reduced in place to its truthiness bool. `kind` is
+    /// `BitAnd`, `BitOr` or `BitXor`. `TRUE_VALUE` and `FALSE_VALUE` differ in
+    /// one bit, so `&` / `|` on the raw words are already the right bool;
+    /// `^` clears the shared bits and ORs `FALSE_VALUE` back in. Destroys
+    /// `rhs`; the three registers must be distinct. Lowers to
+    /// `LInst::BoolBinOp`.
+    BoolBinOp {
+        kind: BinOpK,
+        dst: GP,
+        lhs: GP,
+        rhs: GP,
     },
     /// `Math.sqrt`: `fret <- sqrt(fsrc)`, guarding the domain. NaN passes through
     /// (`sqrt(NaN) = NaN`); a negative argument branches to `deopt` (the

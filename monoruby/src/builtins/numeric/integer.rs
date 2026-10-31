@@ -1123,8 +1123,22 @@ fn integer_index(
     nth_class: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
-    // `self[nth, len]` / `self[range]` keep the generic path.
-    if !callsite.is_simple() || callsite.pos_num != 1 || nth_class != Some(CachedClass::INTEGER) {
+    if !callsite.is_simple() || callsite.pos_num != 1 {
+        return false;
+    }
+    // `self[lo..hi]` with a literal range (`@nr50[4..6]`): a bit field.
+    if let Some((shift, mask)) = state
+        .is_range_literal(callsite.args)
+        .and_then(|range| bit_field_of(&range))
+    {
+        let CallSiteInfo { dst, recv, .. } = *callsite;
+        state.load(ir, recv, GP::Rdi);
+        ir.inline(move |r#gen, _, _, _| r#gen.gen_bit_field_imm(shift, mask));
+        state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
+        return true;
+    }
+    // `self[nth, len]` / other `self[range]` keep the generic path.
+    if nth_class != Some(CachedClass::INTEGER) {
         return false;
     }
     let CallSiteInfo {
@@ -1160,6 +1174,30 @@ fn integer_index(
     ir.inline(move |r#gen, _, _, _| r#gen.gen_bit_index_imm(nth));
     state.def_reg2acc_fixnum(ir, GP::Rdi, dst);
     true
+}
+
+///
+/// The `(shift, mask)` of `self[lo..hi]` / `self[lo...hi]` as
+/// `(self >> shift) & mask`, for a literal range of fixnum ends with
+/// `0 <= lo <= hi` (non-empty) and a field narrow enough that the tagged
+/// mask fits an `i32` immediate. An empty, negative, endless or wider range
+/// keeps the generic path, whose answers for those are irregular
+/// (`0xff[4..1]` is `0xff >> 4`).
+///
+fn bit_field_of(range: &RangeInner) -> Option<(u8, u32)> {
+    let lo = range.start().try_fixnum()?;
+    let mut hi = range.end().try_fixnum()?;
+    if range.exclude_end() {
+        hi -= 1;
+    }
+    if lo < 0 || hi < lo || lo > 62 {
+        return None;
+    }
+    let width = hi - lo + 1;
+    if width > 30 {
+        return None;
+    }
+    Some((lo as u8, (1u32 << width) - 1))
 }
 
 ///
@@ -2578,6 +2616,26 @@ mod tests {
           res << bits(n) << var(n, 3) << two(n) << splat(n, [4])
         end
         res << folded
+        res
+        "##,
+        );
+    }
+
+    /// `n[lo..hi]` with a literal fixnum range is a shift and a mask in
+    /// JIT code; any other range shape keeps calling `Integer#[]`.
+    #[test]
+    fn integer_index_range_literal_jit_inline() {
+        run_test(
+            r##"
+        def bits(n) = [n[4..6], n[0..2], n[0...3], n[1..1], n[62..62], n[2..31], n[3...3], n[5..2]]
+        # Not inlined: open-ended, negative, too wide, too high.
+        def other(n) = [n[3..], n[-2..1], n[0..40], n[63..64], n[1..-1]]
+        50.times { bits(0); other(0) }
+        res = []
+        [0, 1, 0x7f, 0xff, -1, -0x55, 12345, 4611686018427387903,
+         -4611686018427387904, 2 ** 100, -(2 ** 100)].each do |n|
+          res << bits(n) << other(n)
+        end
         res
         "##,
         );

@@ -1808,6 +1808,9 @@ impl Codegen {
             // Typed bool predicates (replace `emit_kernel_nil` / `emit_object_not`).
             AsmInst::IsNilToBool { dst, src } => self.encode_linst(LInst::IsNilToBool { dst, src }),
             AsmInst::NotToBool { dst, src } => self.encode_linst(LInst::NotToBool { dst, src }),
+            AsmInst::BoolBinOp { kind, dst, lhs, rhs } => {
+                self.encode_linst(LInst::BoolBinOp { kind, dst, lhs, rhs })
+            }
             // `Math.sqrt` (replaces the `emit_math_sqrt` closure). Resolve the
             // deopt label and pass the frame base, like the guard family.
             AsmInst::MathSqrt { fsrc, fret, deopt } => {

@@ -221,6 +221,7 @@ impl Codegen {
             | AsmInst::HashDefault { .. }
             | AsmInst::IsNilToBool { .. }
             | AsmInst::NotToBool { .. }
+            | AsmInst::BoolBinOp { .. }
             | AsmInst::MathSqrt { .. }
             | AsmInst::IntegerSucc { .. }
             | AsmInst::BlockGiven { .. }
@@ -450,6 +451,30 @@ impl Codegen {
                     cmpq R(s), (FALSE_VALUE);
                     cmovneq R(d), R(sc);
                 );
+            }
+            // dst <- lhs <kind> !!rhs, lhs a Ruby bool. Destroys rhs;
+            // dst, lhs, rhs distinct.
+            LInst::BoolBinOp { kind, dst, lhs, rhs } => {
+                let (d, l, r) = (dst as u64, lhs as u64, rhs as u64);
+                debug_assert!(d != l && d != r && l != r);
+                // nil / false are the only words with `w | 0x10 == 0x14`.
+                monoasm!( &mut self.jit,
+                    orq  R(r), (0x10);
+                    movq R(d), (FALSE_VALUE);
+                    cmpq R(r), (FALSE_VALUE);
+                    movq R(r), (TRUE_VALUE);
+                    cmoveqq R(r), R(d);
+                    movq R(d), R(l);
+                );
+                match kind {
+                    BinOpK::BitAnd => monoasm!( &mut self.jit, andq R(d), R(r); ),
+                    BinOpK::BitOr => monoasm!( &mut self.jit, orq R(d), R(r); ),
+                    BinOpK::BitXor => monoasm!( &mut self.jit,
+                        xorq R(d), R(r);
+                        orq  R(d), (FALSE_VALUE);
+                    ),
+                    _ => unreachable!("BoolBinOp {kind:?}"),
+                }
             }
             // Math.sqrt: ucomisd sets PF for NaN and CF for val < 0. NaN -> sqrt,
             // negative -> deopt.

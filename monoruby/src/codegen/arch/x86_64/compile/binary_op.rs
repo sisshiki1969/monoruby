@@ -775,6 +775,29 @@ impl Codegen {
     }
 
     ///
+    /// Inlined `Integer#[lo..hi]` for a literal range: `(self >> shift) &
+    /// mask` on the tagged word. Fixnum bit *k* sits at tagged bit *k + 1*,
+    /// so an arithmetic shift by `shift` and a mask of `mask << 1` leave the
+    /// field in tagged position; OR-ing the tag finishes it. `mask << 1`
+    /// fits an i32 immediate (`bit_field_of` keeps the field at most 30
+    /// bits wide).
+    ///
+    /// ### in
+    /// - rdi: self:Value (fixnum)
+    ///
+    /// ### out
+    /// - rdi: result:Value (fixnum)
+    ///
+    pub(crate) fn gen_bit_field_imm(&mut self, shift: u8, mask: u32) {
+        let mask = (mask << 1) as i32;
+        monoasm! { &mut self.jit,
+            sarq rdi, (shift);
+            andq rdi, (mask);
+            orq  rdi, 1;
+        }
+    }
+
+    ///
     /// Inlined `Integer#[nth]` (single-bit extraction) for a constant,
     /// non-negative `nth`. Operand `2n+1` in rdi, result `2*bit+1` in rdi.
     ///

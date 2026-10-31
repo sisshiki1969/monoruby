@@ -1,4 +1,5 @@
 use super::*;
+use jitgen::{AbstractState, JitContext};
 
 //
 // Symbol class
@@ -9,8 +10,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.store[SYMBOL_CLASS].clear_alloc_func();
     globals.define_builtin_class_func(SYMBOL_CLASS, "all_symbols", all_symbols, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "<=>", cmp, 1);
-    globals.define_builtin_func(SYMBOL_CLASS, "===", eq, 1);
-    globals.define_builtin_func(SYMBOL_CLASS, "==", eq, 1);
+    globals.define_builtin_inline_func(SYMBOL_CLASS, "===", eq, inline_gen2!(symbol_eq), 1);
+    globals.define_builtin_inline_func(SYMBOL_CLASS, "==", eq, inline_gen2!(symbol_eq), 1);
     globals.define_builtin_func(SYMBOL_CLASS, "!=", ne, 1);
     globals.define_builtin_func(SYMBOL_CLASS, "to_s", sym_to_s, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "name", sym_name, 0);
@@ -302,6 +303,43 @@ fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Val
     }
 }
 
+///
+/// JIT-inline `Symbol#==` / `#===`. A Symbol is an immediate and equal only
+/// to itself, so the answer is a compare of the raw words, whatever the
+/// argument is. `case sym when :a ...` tests each `when` this way; the
+/// compare feeds the branch directly.
+///
+fn symbol_eq(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    ctx: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 1 {
+        return false;
+    }
+    let CallSiteInfo {
+        dst, recv, args, ..
+    } = *callsite;
+    if let (Some(lhs), Some(rhs)) = (state.is_symbol_literal(recv), state.is_symbol_literal(args)) {
+        if let Some(dst) = dst {
+            state.def_C(dst, Immediate::bool(lhs == rhs));
+        }
+        return true;
+    }
+    if let Some(dst) = ctx.wants_cond_flags(dst) {
+        let flags = state.gen_identity_eq_flags(ir, dst, recv, args);
+        ctx.set_cond_flags(dst, flags);
+        return true;
+    }
+    state.gen_identity_eq(ir, dst, recv, args);
+    true
+}
+
 #[monoruby_builtin]
 fn ne(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
@@ -321,6 +359,53 @@ mod tests {
             &[":aaa", ":xxx", ":妖精"],
             &["<=>", "===", "==", "!="],
             &[":aaa", ":xxx", "nil", "3"],
+        );
+    }
+
+    /// `Symbol#==` / `#===` are an identity compare in JIT code, fused
+    /// into the branch of a `case` / `if`.
+    #[test]
+    fn symbol_eq_jit_inline() {
+        run_test(
+            r##"
+        def kind(x)
+          case x
+          when :a then 1
+          when :b then 2
+          else 3
+          end
+        end
+        def eq(x, y) = [x == y, x === y, x == :a, :a == x, (x == y) ? 1 : 0]
+        res = []
+        30.times do
+          res << [kind(:a), kind(:b), kind(:c), kind(1), kind(nil), kind("a")]
+          res << eq(:a, :a) + eq(:a, :b) + eq(:a, 1) + eq(:a, nil)
+        end
+        res
+        "##,
+        );
+    }
+
+    #[test]
+    fn symbol_eq_redefined_after_jit() {
+        run_test_once(
+            r##"
+        def kind(x)
+          case x
+          when :a then 1
+          else 2
+          end
+        end
+        def eq(x) = x == :b
+        res = []
+        30.times { res << kind(:a) << kind(:z) << eq(:b) << eq(:c) }
+        class Symbol
+          def ===(other) = true
+          def ==(other) = :redefined
+        end
+        res << kind(:a) << kind(:z) << eq(:b) << eq(:c)
+        res
+        "##,
         );
     }
 

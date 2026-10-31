@@ -128,6 +128,19 @@ impl Codegen {
         }
     }
 
+    /// Inlined `Integer#[lo..hi]` for a literal range; aarch64 twin of the
+    /// x86 `gen_bit_field_imm`. self in Rdi (x4), result in Rdi; x9 scratch.
+    pub(crate) fn gen_bit_field_imm(&mut self, shift: u8, mask: u32) {
+        let rdi = GP::Rdi.a64().0; // x4
+        monoasm_arm64!(&mut self.jit,
+            asr x(rdi), x(rdi), #(shift as u32);
+            mov x9, #(mask << 1);
+            and x(rdi), x(rdi), x9;
+            mov x9, #(1);
+            orr x(rdi), x(rdi), x9;
+        );
+    }
+
     /// Inlined `Integer#[nth]` (single-bit extraction) for a constant,
     /// non-negative `nth`. Operand `2n+1` in Rdi (x4), result `2*bit+1`.
     /// aarch64 twin of x86 `gen_bit_index_imm`: bit `nth` of `n` is bit
