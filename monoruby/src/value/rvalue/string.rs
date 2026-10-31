@@ -2765,6 +2765,25 @@ struct SharedContent {
 /// `RStringInner::from_buf_cr`, so short results never allocate.
 pub(crate) type StringBuf = SmallVec<[u8; STRING_INLINE_CAP]>;
 
+/// Append `bytes` at the end of `buf`.
+///
+/// `SmallVec::extend_from_slice` is `insert_from_slice(len, ..)`, which
+/// shifts the (empty) tail with a `memmove` before the `memcpy` and keeps
+/// the whole general insert in an out-of-line call. Appending is the
+/// common case by far — `<<`, `"#{}"`, the `gsub` builders — so it gets
+/// the direct form: one reserve and one copy.
+#[inline]
+pub(crate) fn buf_append(buf: &mut StringBuf, bytes: &[u8]) {
+    let len = buf.len();
+    buf.reserve(bytes.len());
+    // SAFETY: `reserve` made room for `bytes.len()` more bytes past `len`,
+    // and `bytes` cannot alias `buf`'s spare capacity.
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.as_mut_ptr().add(len), bytes.len());
+        buf.set_len(len + bytes.len());
+    }
+}
+
 /// A string being built by appending pieces of various encodings, the
 /// way CRuby's `rb_enc_cr_str_buf_cat` builds the result of `gsub`
 /// (`str_gsub`) and the expansion of a replacement template
@@ -2842,7 +2861,7 @@ impl EncBuf {
             }
         }
         self.seven_bit &= piece_7bit;
-        self.buf.extend_from_slice(piece);
+        buf_append(&mut self.buf, piece);
         Ok(())
     }
 
@@ -4725,7 +4744,7 @@ impl RStringInner {
             // piece is Broken -- fall back to lazy re-classify.
             _ => CodeRange::Unknown,
         };
-        self.owned_mut().extend_from_slice(other.as_bytes());
+        buf_append(self.owned_mut(), other.as_bytes());
         self.ty = result_enc;
         self.cr.set(new_cr);
         Ok(())
@@ -4758,7 +4777,7 @@ impl RStringInner {
             }
             _ => CodeRange::Unknown,
         };
-        self.owned_mut().extend_from_slice(slice);
+        buf_append(self.owned_mut(), slice);
         self.cr.set(new_cr);
         Ok(())
     }

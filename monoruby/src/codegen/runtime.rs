@@ -1189,6 +1189,20 @@ fn concatenate_string_inner(
                 continue;
             }
         }
+        // A String operand is its own `to_s` unless `to_s` is refined:
+        // take its bytes directly rather than going through `invoke_tos`.
+        if !refined && let Some(inner) = v.is_rstring_inner() {
+            append_piece(
+                globals,
+                &mut bytes,
+                &mut enc,
+                &mut cr,
+                inner.as_bytes(),
+                inner.encoding(),
+                inner.code_range(),
+            )?;
+            continue;
+        }
         let s_val = vm.invoke_tos(globals, v)?;
         if let Some(inner) = s_val.is_rstring_inner() {
             append_piece(
@@ -1277,7 +1291,7 @@ fn append_piece(
         ) => CodeRange::Valid,
         _ => CodeRange::Unknown,
     };
-    bytes.extend_from_slice(piece);
+    crate::value::rvalue::buf_append(bytes, piece);
     Ok(())
 }
 

@@ -60,8 +60,8 @@ pub use string::{
     map_bytes_to_utf8,
 };
 pub(crate) use string::{
-    STRING_SHARED_TAG, StringBuf, check_string_not_modified, share_string_buffer, string_snapshot,
-    string_substring,
+    STRING_SHARED_TAG, StringBuf, buf_append, check_string_not_modified, share_string_buffer,
+    string_snapshot, string_substring,
 };
 pub use struct_inner::{STRUCT_INLINE_SLOTS, StructInner};
 pub use thread::*;
