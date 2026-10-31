@@ -181,13 +181,17 @@ mod tests {
             r##"
         def ops(a, b) = [a & b, a | b, a ^ b]
         res = []
-        30.times { res << ops(true, false) << ops(false, true) }
+        30.times { res << ops(true, false) << ops(false, true) << ops(false, nil) }
         class TrueClass
           def &(other) = :t_and
         end
         res << ops(true, false) << ops(false, true)
         class FalseClass
           def ^(other) = :f_xor
+        end
+        res << ops(true, false) << ops(false, true)
+        class FalseClass
+          def |(other) = :f_or
         end
         res << ops(true, false) << ops(false, true)
         res
