@@ -18214,6 +18214,32 @@ mod tests {
     }
 
     #[test]
+    fn string_interpolation_never_calls_to_s_on_a_string() {
+        // CRuby's `objtostring` returns a `T_STRING` operand as it is,
+        // so neither a refined `String#to_s` nor a subclass override is
+        // called for the literal pieces or for a String value, while a
+        // refined `Integer#to_s` still is.
+        run_test(
+            r##"
+            module StrTos
+              refine String do
+                def to_s; "R"; end
+              end
+              refine Integer do
+                def to_s; "I"; end
+              end
+            end
+            using StrTos
+            class SubStr < String
+              def to_s; "SUB"; end
+            end
+            s = "abc"
+            ["#{s}", "<#{s}>", "#{1}#{s}", "#{SubStr.new("q")}", "#{:sym}#{nil}"]
+            "##,
+        );
+    }
+
+    #[test]
     fn string_interpolation_falls_back_when_to_s_returns_non_string() {
         // Exercises `concatenate_string_inner`'s else branch:
         // `invoke_tos` returns the user-defined `to_s` result
