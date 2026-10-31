@@ -734,6 +734,53 @@ impl AbstractState {
         Some(CondFlags::Int(kind))
     }
 
+    ///
+    /// `lhs == rhs` decided by the raw words alone, for receivers whose
+    /// equality is identity on an immediate (`Symbol#==` / `#===`): no
+    /// guards. Leaves the answer in the condition flags for the
+    /// following branch; `dst` is the branch's temp.
+    ///
+    pub(crate) fn gen_identity_eq_flags(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: SlotId,
+        lhs: SlotId,
+        rhs: SlotId,
+    ) -> CondFlags {
+        let (lhs_gp, _) = self.gp_ensure(ir, lhs, &[]);
+        let (rhs_gp, _) = self.gp_ensure(ir, rhs, &[lhs_gp]);
+        // Block terminator, as in `gen_cmp_integer_flags`.
+        self.gp_regfile.invalidate(dst);
+        self.flush_gp(ir);
+        ir.cmp_flags(lhs_gp, rhs_gp);
+        self.def_C(dst, Value::nil());
+        CondFlags::Int(CmpKind::Eq)
+    }
+
+    ///
+    /// `dst = lhs == rhs` as a bool, decided by the raw words alone; see
+    /// [`Self::gen_identity_eq_flags`].
+    ///
+    pub(crate) fn gen_identity_eq(
+        &mut self,
+        ir: &mut AsmIr,
+        dst: Option<SlotId>,
+        lhs: SlotId,
+        rhs: SlotId,
+    ) {
+        let (lhs_gp, _) = self.gp_ensure(ir, lhs, &[]);
+        let (rhs_gp, _) = self.gp_ensure(ir, rhs, &[lhs_gp]);
+        if let Some(dst) = dst {
+            self.gp_regfile.invalidate(dst);
+        }
+        let next_sp = self.next_sp();
+        self.gp_regfile.free_above_sp(next_sp);
+        ir.integer_cmp_reg(CmpKind::Eq, dst, lhs_gp, rhs_gp);
+        if let Some(dst) = dst {
+            self.def_S(dst);
+        }
+    }
+
     pub(in crate::codegen::jitgen) fn load_binary_fpr(&mut self, ir: &mut AsmIr, info: FBinOpInfo) -> (FPReg, FPReg) {
         let FBinOpInfo {
             lhs,

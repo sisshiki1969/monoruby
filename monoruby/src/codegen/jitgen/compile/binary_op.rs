@@ -141,6 +141,12 @@ impl<'a> JitContext<'a> {
     /// [`record_bop_dep`](Self::record_bop_dep). A generator that declines
     /// leaves no spurious dependency behind.
     pub(super) fn basic_op_assumable(&self, class: CachedClass, op: IdentId) -> bool {
+        // The IC tag `BOOL_CLASS` stands for both TrueClass and FalseClass:
+        // the inline may be assumed only while it holds for each of them.
+        if class == CachedClass::BOOL {
+            return self.basic_op_assumable(CachedClass::from_class(TRUE_CLASS), op)
+                && self.basic_op_assumable(CachedClass::from_class(FALSE_CLASS), op);
+        }
         // Only a pair the redefinition machinery tracks may be assumed: an
         // untracked pair is never marked redefined, so a guard-free inline of
         // it would outlive its own redefinition. Every pair the numeric
@@ -183,6 +189,11 @@ impl<'a> JitContext<'a> {
     /// `set_bop_redefine` reads the recorded set back to find exactly the
     /// bodies a later redefinition invalidates.
     pub(super) fn record_bop_dep(&mut self, class: CachedClass, op: IdentId) {
+        if class == CachedClass::BOOL {
+            self.record_bop_dep(CachedClass::from_class(TRUE_CLASS), op);
+            self.record_bop_dep(CachedClass::from_class(FALSE_CLASS), op);
+            return;
+        }
         if !self.bop_deps.contains(&(class.id(), op)) {
             self.bop_deps.push((class.id(), op));
         }

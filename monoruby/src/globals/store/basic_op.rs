@@ -82,6 +82,15 @@ pub(crate) const BASIC_OP_DEFS: &[(ClassId, &str)] = &[
     (TRUE_CLASS, "==="),
     (FALSE_CLASS, "=="),
     (FALSE_CLASS, "==="),
+    // ---- boolean logic: `TrueClass#& | ^` / `FalseClass#& | ^` are inlined
+    // guard-free by the JIT (`builtins/bool_class.rs`, `bool_binop`) on a
+    // `BOOL_CLASS`-tagged receiver, which stands for both classes.
+    (TRUE_CLASS, "&"),
+    (TRUE_CLASS, "|"),
+    (TRUE_CLASS, "^"),
+    (FALSE_CLASS, "&"),
+    (FALSE_CLASS, "|"),
+    (FALSE_CLASS, "^"),
     // ---- ordering: `Executor::compare_values_inner` (executor/op.rs)
     // answers `<=>` for these classes without a lookup — the numeric arms
     // compare through `RV`, and `Array#sort` / `#max` / `#min` and every
@@ -478,6 +487,12 @@ mod tests {
             ("FalseClass", "==(o)", "false == false"),
             ("FalseClass", "===(o)", "false === false"),
             ("FalseClass", "!", "!(false)"),
+            ("TrueClass", "&(o)", "true & false"),
+            ("TrueClass", "|(o)", "true | false"),
+            ("TrueClass", "^(o)", "true ^ false"),
+            ("FalseClass", "&(o)", "false & true"),
+            ("FalseClass", "|(o)", "false | true"),
+            ("FalseClass", "^(o)", "false ^ true"),
             ("Complex", "+(o)", "Complex(1,2) + Complex(3,4)"),
             ("Complex", "-(o)", "Complex(1,2) - Complex(3,4)"),
             ("Complex", "*(o)", "Complex(1,2) * Complex(3,4)"),

@@ -1,4 +1,6 @@
 use super::*;
+use crate::bytecodegen::BinOpK;
+use crate::executor::inline::InlineFuncInfo;
 
 //
 // Boolean methods (internal): `BOOL_CLASS` is *not* a Ruby-visible class.
@@ -16,9 +18,59 @@ use super::*;
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    define_bool_method(globals, "&", and_, 1, 1, false);
-    define_bool_method(globals, "|", or_, 1, 1, false);
-    define_bool_method(globals, "^", xor_, 1, 1, false);
+    let and_fid = define_bool_method(globals, "&", and_, 1, 1, false);
+    let or_fid = define_bool_method(globals, "|", or_, 1, 1, false);
+    let xor_fid = define_bool_method(globals, "^", xor_, 1, 1, false);
+    for (fid, kind) in [
+        (and_fid, BinOpK::BitAnd),
+        (or_fid, BinOpK::BitOr),
+        (xor_fid, BinOpK::BitXor),
+    ] {
+        globals
+            .store
+            .inline_info
+            .add_inline(fid, InlineFuncInfo::new_inline_gen(bool_binop(kind)));
+    }
+}
+
+///
+/// JIT-inline `TrueClass#&` / `#|` / `#^` (shared with `FalseClass`). The
+/// call site's guard has proven the receiver a bool; the argument is
+/// reduced to its truthiness (`!!arg`) and combined with the receiver on
+/// the raw words (see `AsmInst::BoolBinOp`). Emulator flag updates
+/// (`@halted &= cond`) run this per instruction.
+///
+fn bool_binop(kind: BinOpK) -> Box<InlineGen> {
+    Box::new(move |state, ir, _, store, callid, _, _| {
+        let callsite = &store[callid];
+        if !callsite.is_simple() || callsite.pos_num != 1 {
+            return false;
+        }
+        let CallSiteInfo {
+            dst, recv, args, ..
+        } = *callsite;
+        // No side effects: an unused result needs no code.
+        let Some(dst) = dst else {
+            return true;
+        };
+        // A receiver that alone decides the answer: `false & x`, `true | x`.
+        match kind {
+            BinOpK::BitAnd if state.is_falsy(recv) => {
+                state.def_C(dst, Immediate::bool(false));
+                return true;
+            }
+            BinOpK::BitOr if state.is_truthy(recv) => {
+                state.def_C(dst, Immediate::bool(true));
+                return true;
+            }
+            _ => {}
+        }
+        state.load(ir, args, GP::Rdi);
+        state.load(ir, recv, GP::Rsi);
+        ir.bool_binop(kind, GP::Rax, GP::Rsi, GP::Rdi);
+        state.def_reg2acc_class(ir, GP::Rax, dst, BOOL_CLASS);
+        true
+    })
 }
 
 /// Register `address` once and add it as `name` to both `TRUE_CLASS` and
@@ -30,7 +82,7 @@ fn define_bool_method(
     min: usize,
     max: usize,
     rest: bool,
-) {
+) -> FuncId {
     let func_id = globals
         .store
         .new_builtin_func(name, address, min, max, rest, &[], false);
@@ -42,6 +94,7 @@ fn define_bool_method(
     globals
         .store
         .add_method(FALSE_CLASS, method_name, func_id, Visibility::Public);
+    func_id
 }
 
 ///
@@ -84,5 +137,61 @@ fn xor_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         Ok(Value::bool(!other))
     } else {
         Ok(Value::bool(other))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::*;
+
+    /// `true` / `false` `&`, `|`, `^` in JIT code, against every kind of
+    /// argument (the argument is reduced to its truthiness), and the
+    /// accumulator idiom `flag &= cond`.
+    #[test]
+    fn bool_binop_jit_inline() {
+        run_test(
+            r##"
+        def ops(a, b) = [a & b, a | b, a ^ b]
+        def lit(b) = [true & b, false & b, true | b, false | b, true ^ b, false ^ b]
+        def acc(xs)
+          h = true
+          xs.each { |x| h &= x == 0 }
+          h
+        end
+        def acc_or(xs)
+          h = false
+          xs.each { |x| h |= x.nil? }
+          h
+        end
+        res = []
+        30.times do
+          [true, false, nil, 0, 1, :x, "s", []].each do |b|
+            res << ops(true, b) + ops(false, b) + lit(b)
+          end
+          res << acc([0, 0]) << acc([0, 1, 0]) << acc_or([1, 2]) << acc_or([1, nil])
+        end
+        res
+        "##,
+        );
+    }
+
+    #[test]
+    fn bool_binop_redefined_after_jit() {
+        run_test_once(
+            r##"
+        def ops(a, b) = [a & b, a | b, a ^ b]
+        res = []
+        30.times { res << ops(true, false) << ops(false, true) }
+        class TrueClass
+          def &(other) = :t_and
+        end
+        res << ops(true, false) << ops(false, true)
+        class FalseClass
+          def ^(other) = :f_xor
+        end
+        res << ops(true, false) << ops(false, true)
+        res
+        "##,
+        );
     }
 }
