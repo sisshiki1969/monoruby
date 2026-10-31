@@ -157,7 +157,7 @@ fn unpack1_single_numeric(packed: &[u8], template: &str) -> Option<Value> {
 /// which is exactly why `packed.dup.unpack("P5")` works and
 /// `packed.to_sym.to_s.unpack("P5")` raises.
 pub(crate) fn associated_ivar() -> IdentId {
-    IdentId::get_id("/packed_pointers")
+    IdentId::_PACKED_POINTERS
 }
 
 pub(crate) fn unpack(

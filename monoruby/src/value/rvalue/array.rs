@@ -565,6 +565,13 @@ impl ArrayInner {
         match val.try_array_ty() {
             Some(ary) => {
                 let is_self = std::ptr::eq((*ary).as_ptr(), self.as_ptr());
+                // `a[i, n] = b` with `b.size == n` inside the array
+                // (`q[0..-1] = p`): the elements are overwritten in
+                // place, nothing moves and nothing is resized.
+                if !is_self && ary.len() == length && index + length <= len {
+                    self[index..index + length].copy_from_slice(&ary[..]);
+                    return Ok(val);
+                }
                 let ary_data = if is_self {
                     ary.to_vec()
                 } else {

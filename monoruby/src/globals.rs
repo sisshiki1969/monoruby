@@ -2189,6 +2189,9 @@ impl Globals {
     /// without touching its name.
     #[inline]
     pub(crate) fn encoding_of_object(&self, obj: Value) -> Option<crate::value::rvalue::Encoding> {
+        if obj.is_packed_value() {
+            return None;
+        }
         self.encoding_of_object.get(&obj.id()).copied()
     }
 

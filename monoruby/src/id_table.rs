@@ -331,6 +331,10 @@ impl IdentId {
     pub const GVAR_VERBOSE_W: IdentId = id!(215); // $-w
     pub const GVAR_PROGRAM_NAME0: IdentId = id!(216); // $0
     pub const GVAR_PROGRAM_NAME: IdentId = id!(217); // $PROGRAM_NAME
+    /// The hidden ivar `pack('p')` hangs the pointed-to objects on
+    /// (`/packed_pointers`). `String#unpack` / `unpack1` look it up on
+    /// every call, so it is interned up front rather than by name each time.
+    pub const _PACKED_POINTERS: IdentId = id!(218);
 
     /// Name ↔ id pairing for the block above — the single source of truth:
     /// `IdentifierTable::new` interns from it, and [`Self::special_gvar_name`]
@@ -553,7 +557,7 @@ impl IdentifierTable {
     /// Slots the predefined ids occupy; new names are numbered after
     /// them. The ASCII range below `IdentId::PREDEFINED_FIRST` holds only
     /// the operators, the other slots there stay unnamed.
-    const PREDEFINED_LEN: usize = 217;
+    const PREDEFINED_LEN: usize = 218;
 
     pub(crate) fn new() -> Self {
         let mut table = IdentifierTable {
@@ -657,6 +661,7 @@ impl IdentifierTable {
             IdentId::GVAR_ERRINFO_INTERNAL,
         );
         table.set_id("default", IdentId::DEFAULT);
+        table.set_id("/packed_pointers", IdentId::_PACKED_POINTERS);
         table
     }
 

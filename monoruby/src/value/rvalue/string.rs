@@ -3170,6 +3170,16 @@ impl std::cmp::Ord for RStringInner {
 
 impl RStringInner {
     pub fn to_str(&self) -> Result<std::borrow::Cow<'_, str>> {
+        // All-ASCII bytes read the same under every encoding, so a
+        // BINARY / ISO-8859 / UTF-16 string holding only ASCII (a
+        // `pack` template under `# encoding: ascii-8bit`, say) is
+        // borrowed as it is rather than re-rendered byte by byte.
+        if !self.ty.is_utf8_compatible() && self.as_bytes().is_ascii() {
+            // SAFETY: every byte is < 0x80, hence valid UTF-8.
+            return Ok(std::borrow::Cow::Borrowed(unsafe {
+                std::str::from_utf8_unchecked(self.as_bytes())
+            }));
+        }
         if self.ty.is_utf8_compatible() {
             match std::str::from_utf8(self) {
                 Ok(s) => Ok(std::borrow::Cow::Borrowed(s)),
@@ -4430,10 +4440,14 @@ impl RStringInner {
                 // but Valid means "well-formed *and* has a high byte",
                 // and the parent's high byte need not be in this
                 // range. `"\xff abc"[1..]` is SevenBit.
-                Encoding::Ascii8
-                | Encoding::Iso8859(_)
-                | Encoding::Other(_)
-                | Encoding::NamedByte(_) => {
+                // BINARY: `classify` on demand is the very same
+                // high-byte scan, so a view of a Valid BINARY parent
+                // is left Unknown and classified only if something
+                // asks (`byteslice` results are mostly re-tagged with
+                // `force_encoding` or consumed as bytes, and never
+                // ask).
+                Encoding::Ascii8 => CodeRange::Unknown,
+                Encoding::Iso8859(_) | Encoding::Other(_) | Encoding::NamedByte(_) => {
                     Self::valid_or_seven_bit(parent.encoding(), &parent.as_bytes()[start..end])
                 }
                 // UTF-8: the cut points must land on character
@@ -7999,7 +8013,24 @@ mod encoding_tests {
         // Valid means well-formed *with* a high byte somewhere in the
         // parent; a range that has none is SevenBit, which is what
         // `ascii_only?` and every compatibility decision read.
+        // A BINARY view is left Unknown (classifying it on demand is
+        // the same scan), and the demand gives the same answers.
         let parent = RStringInner::from_encoding(b"\xffab", Encoding::Ascii8);
+        assert_eq!(parent.code_range(), CodeRange::Valid);
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 1, 3),
+            CodeRange::Unknown
+        );
+        assert_eq!(
+            RStringInner::from_substring(&parent, 1, 3).code_range(),
+            CodeRange::SevenBit
+        );
+        assert_eq!(
+            RStringInner::from_substring(&parent, 0, 2).code_range(),
+            CodeRange::Valid
+        );
+        // ISO-8859-1 propagates eagerly.
+        let parent = RStringInner::from_encoding(b"\xffab", Encoding::Iso8859(1));
         assert_eq!(parent.code_range(), CodeRange::Valid);
         assert_eq!(
             RStringInner::propagated_cr(&parent, 1, 3),
@@ -8035,11 +8066,17 @@ mod encoding_tests {
     fn propagated_cr_valid_single_byte_encodings_propagate_unconditionally() {
         // ASCII-8BIT: every byte position is a character boundary, so
         // a Valid parent always yields a Valid child for any non-empty
-        // sub-range.
+        // sub-range with a high byte; the view is classified lazily.
         let parent = RStringInner::from_encoding(&[0xff, 0x80, 0x81], Encoding::Ascii8);
         assert_eq!(parent.code_range(), CodeRange::Valid);
-        assert_eq!(RStringInner::propagated_cr(&parent, 0, 3), CodeRange::Valid);
-        assert_eq!(RStringInner::propagated_cr(&parent, 1, 2), CodeRange::Valid);
+        assert_eq!(
+            RStringInner::propagated_cr(&parent, 0, 3),
+            CodeRange::Unknown
+        );
+        assert_eq!(
+            RStringInner::from_substring(&parent, 1, 2).code_range(),
+            CodeRange::Valid
+        );
 
         // ISO-8859-1: same — every byte represents a glyph, so any
         // cut respects character boundaries.
