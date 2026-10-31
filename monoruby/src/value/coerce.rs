@@ -114,6 +114,7 @@ impl Value {
     /// - if `self` responds to `to_int`, call it and try conversion on the result.
     /// - otherwise, return TypeError.
     ///
+    #[inline]
     pub(crate) fn coerce_to_int_i64(
         &self,
         vm: &mut Executor,
@@ -122,6 +123,11 @@ impl Value {
         if let Some(i) = self.try_fixnum() {
             return Ok(i);
         }
+        self.coerce_to_int_i64_slow(vm, globals)
+    }
+
+    #[inline(never)]
+    fn coerce_to_int_i64_slow(&self, vm: &mut Executor, globals: &mut Globals) -> Result<i64> {
         let res = match self.unpack() {
             RV::Fixnum(_) | RV::BigInt(_) => *self,
             _ => self.coerce_to_int(vm, globals)?,

@@ -4979,7 +4979,11 @@ fn insert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if nth >= ary.len() {
         ary.resize(nth, Value::nil());
     }
-    ary.insert_many(nth, val.iter().cloned());
+    if val.len() == 1 {
+        ary.insert(nth, val[0]);
+    } else {
+        ary.insert_many(nth, val.iter().cloned());
+    }
     Ok(lfp.self_val())
 }
 

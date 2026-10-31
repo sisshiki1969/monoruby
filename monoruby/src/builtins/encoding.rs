@@ -1620,6 +1620,12 @@ pub(super) fn value_to_encoding(
     globals: &mut Globals,
     arg0: Value,
 ) -> Result<Encoding> {
+    // An `Encoding::<NAME>` constant object is by far the most common
+    // operand (`force_encoding(Encoding::UTF_8)`): one table read, no
+    // name is read or parsed.
+    if let Some(enc) = globals.encoding_of_object(arg0) {
+        return Ok(enc);
+    }
     if let Some(s) = arg0.is_str() {
         if let Some(enc) = special_encoding_name(globals, s) {
             return Ok(enc);
@@ -1635,10 +1641,6 @@ pub(super) fn value_to_encoding(
         let canonical = known_encoding_name(globals, s)
             .ok_or_else(|| MonorubyErr::argumenterr(format!("unknown encoding name - {}", s)))?;
         Encoding::try_from_str(&canonical)
-    } else if let Some(enc) = globals.encoding_of_object(arg0) {
-        // An `Encoding::<NAME>` constant object: its `Encoding` was
-        // recorded at init, so no name is read or parsed.
-        Ok(enc)
     } else if is_encoding_object(globals, arg0) {
         let s = globals.store.get_ivar(arg0, IdentId::_ENCODING).unwrap();
         Encoding::try_from_str(s.as_str())

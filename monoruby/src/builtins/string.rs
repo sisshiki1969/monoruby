@@ -12331,7 +12331,13 @@ fn unpack(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // The whole string goes in, with `offset` as the starting position:
     // `@n` seeks to an absolute byte position (before the offset too)
     // and `X` backs up into the bytes ahead of it, as in CRuby.
-    let associated = globals.store.get_ivar(self_, rvalue::associated_ivar());
+    // Only `'p'` / `'P'` read the pointed-to objects `pack` hung on the
+    // string; every other template skips the ivar table walk.
+    let associated = if template.bytes().any(|b| b == b'p' || b == b'P') {
+        globals.store.get_ivar(self_, rvalue::associated_ivar())
+    } else {
+        None
+    };
     rvalue::unpack(
         self_.as_rstring_inner().as_bytes(),
         &template,
@@ -12354,7 +12360,13 @@ fn unpack1(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let offset = unpack_offset(vm, globals, lfp, self_.as_rstring_inner().len())?;
     let template = lfp.arg(0).coerce_to_rstring(vm, globals)?;
     let template = template.to_str()?;
-    let associated = globals.store.get_ivar(self_, rvalue::associated_ivar());
+    // Only `'p'` / `'P'` read the pointed-to objects `pack` hung on the
+    // string; every other template skips the ivar table walk.
+    let associated = if template.bytes().any(|b| b == b'p' || b == b'P') {
+        globals.store.get_ivar(self_, rvalue::associated_ivar())
+    } else {
+        None
+    };
     rvalue::unpack(
         self_.as_rstring_inner().as_bytes(),
         &template,
