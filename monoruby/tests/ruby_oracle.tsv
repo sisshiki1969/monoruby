@@ -3076,6 +3076,7 @@
 9006441655005bee578f09ff6b233e92	[[true, true, false, false, true, false, true, false, false]]	class S < String\n          def ==(o)\n            super(o.to_s.upcase)\n 
 902387b3c0de9d9a4afa973ab843e89f	[3, 5]	__a = [];__a << (Y_KEEP = 3; Y_KEEP ||= 9; Y_KEEP);__a << (Z_NIL = nil; Z_NIL ||
 90275e3f8c29d550454ae4bb1ee91949	[[1, 120000], [3, 120001], [5, 120002], [7, 120003], [9, 120004], [11, 120005], [13, 120006], [15, 120007], [17, 120008], [19, 120009], [21, 120010], [23, 120011], [25, 120012], [27, 120013], [29, 120014], [31, 120015], [33, 120016], [35, 120017], [37, 120018], [39, 120019], [41, 120020], [43, 120021], [45, 120022], [47, 120023], [49, 120024], [51, 120025], [53, 120026], [55, 120027], [57, 120028], [59, 120029]]	def g(*r) = r.sum\n        def k(a, b, *r) = a * 1000 + b * 100 + r.sum\n
+902937011b12d5247883231d16a7f887	["abc", "<abc>", "Iabc", "q", "sym"]	module StrTos\n              refine String do\n                def to
 9032a4e8e61373965d123f3119082f9f	"ok"	path = "/tmp/monoruby_test_modekw_#{Process.pid}_#{rand(100000)}"\n 
 9035f52710e5eeab346817dcbe49d72e	[:foo, :bar]	$res = []\n            obj = Object.new\n            def obj.singleto
 90462680540563a848d4f44db273be17	42	m = Module.new do\n          def foo; 42; end\n        end\n        Class.

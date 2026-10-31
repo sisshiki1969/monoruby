@@ -1189,9 +1189,13 @@ fn concatenate_string_inner(
                 continue;
             }
         }
-        // A String operand is its own `to_s` unless `to_s` is refined:
-        // take its bytes directly rather than going through `invoke_tos`.
-        if !refined && let Some(inner) = v.is_rstring_inner() {
+        // A String operand is taken as it is, even while `to_s` is
+        // refined: CRuby's `objtostring` never calls `to_s` on a String
+        // (`rb_obj_as_string` returns a `T_STRING` receiver, a subclass
+        // with its own `to_s` included), so neither a refinement nor an
+        // override is consulted for the literal pieces or for a String
+        // value.
+        if let Some(inner) = v.is_rstring_inner() {
             append_piece(
                 globals,
                 &mut bytes,
