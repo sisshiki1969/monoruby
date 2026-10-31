@@ -181,15 +181,24 @@ mod tests {
             r##"
         def ops(a, b) = [a & b, a | b, a ^ b]
         res = []
-        30.times { res << ops(true, false) << ops(false, true) }
+        30.times { res << ops(true, false) << ops(false, true) << ops(false, nil) }
+        # Each stage runs enough calls for the body to recompile under the
+        # redefinition.
         class TrueClass
           def &(other) = :t_and
         end
-        res << ops(true, false) << ops(false, true)
+        10.times { res << ops(true, false) << ops(false, true) }
         class FalseClass
           def ^(other) = :f_xor
         end
-        res << ops(true, false) << ops(false, true)
+        10.times { res << ops(true, false) << ops(false, true) }
+        class FalseClass
+          def |(other) = :f_or
+        end
+        10.times { res << ops(true, false) << ops(false, true) }
+        # An operator neither boolean class has: no inline target at all.
+        def no_op(a, b) = (a - b rescue :no_method)
+        10.times { res << no_op(true, false) << no_op(false, true) }
         res
         "##,
         );

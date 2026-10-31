@@ -254,7 +254,7 @@ impl<'a> JitContext<'a> {
         if lhs_class.is(BIGNUM_CLASS) {
             return None;
         }
-        let (fid, _visibility) = self.resolve_basic_op(lhs_class, op)?;
+        let (fid, _visibility) = self.resolve_binary_inline_target(lhs_class, op)?;
         let inline = self.store.inline_info.get_inline(fid)?;
         if !matches!(
             inline,
@@ -303,6 +303,28 @@ impl<'a> JitContext<'a> {
                 Some(outcome)
             }
         }
+    }
+
+    ///
+    /// The method whose inline generator `lhs_class#op` fires at a binop
+    /// site: its ordinary resolution, except for a `BOOL_CLASS` receiver of
+    /// `|`. boolean.rb aliases `FalseClass#|` to `FalseClass#^` (ruby/spec
+    /// checks the two are one method entry), so the two classes resolve `|`
+    /// to different builtins and the unified `BOOL_CLASS` lookup fails. For
+    /// a `false` receiver both answer `!!other`, so `TrueClass#|`'s
+    /// generator is right for either receiver — while both pairs are still
+    /// the builtins, which `basic_op_assumable(BOOL, |)` checks (and
+    /// `record_bop_dep` records) for TrueClass and FalseClass alike before
+    /// anything is emitted.
+    ///
+    fn resolve_binary_inline_target(&self, lhs_class: CachedClass, op: IdentId) -> Option<(FuncId, Visibility)> {
+        if let Some(resolved) = self.resolve_basic_op(lhs_class, op) {
+            return Some(resolved);
+        }
+        if lhs_class == CachedClass::BOOL && op == IdentId::_BOR {
+            return self.resolve_basic_op(CachedClass::from_class(TRUE_CLASS), op);
+        }
+        None
     }
 
     ///
@@ -1233,8 +1255,10 @@ impl<'a> JitContext<'a> {
             return Ok(BinaryLowering::Generic);
         }
         // A BOOL_CLASS receiver whose operator has no unified resolution
-        // (TrueClass and FalseClass diverge on it — `|` after boolean.rb's
-        // alias, or a user redefinition on one class) has nothing to guard:
+        // (TrueClass and FalseClass diverge on it — a user redefinition on
+        // one class; the builtin `|`, which diverges only by boolean.rb's
+        // alias, inlines through `resolve_binary_inline_target`) has
+        // nothing to guard:
         // the profile tags every boolean BOOL_CLASS, so a recompile re-asks
         // the same unanswerable question and the site deopts forever.
         // Dispatch through the generic helper instead.
@@ -1242,6 +1266,8 @@ impl<'a> JitContext<'a> {
             && self
                 .jit_check_method(lhs_class, IdentId::from(binop))
                 .is_none()
+            && !(IdentId::from(binop) == IdentId::_BOR
+                && self.basic_op_assumable(lhs_class, IdentId::_BOR))
         {
             state.flush_gp(ir);
             let is_func_call = self
