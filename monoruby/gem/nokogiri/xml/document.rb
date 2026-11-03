@@ -85,8 +85,9 @@ module Nokogiri
             read_memory(string_or_io, url, encoding, options.to_i)
           end
 
-          # do xinclude processing
-          doc.do_xinclude(options) if options.xinclude?
+          # do xinclude processing; the document is freshly parsed and unexposed to Ruby, so the
+          # defensive copy is unnecessary
+          doc.do_xinclude(options, safe_copy: false) if options.xinclude?
 
           doc
         end
@@ -433,6 +434,7 @@ module Nokogiri
       undef_method :swap, :parent, :namespace, :default_namespace=
       undef_method :add_namespace_definition, :attributes
       undef_method :namespace_definitions, :line, :add_namespace
+      undef_method :line= if method_defined?(:line=)
 
       def add_child(node_or_tags)
         raise "A document may not have multiple root nodes." if (root && root.name != "nokogiri_text_wrapper") && !(node_or_tags.comment? || node_or_tags.processing_instruction?)

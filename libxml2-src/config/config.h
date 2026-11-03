@@ -1,4 +1,4 @@
-/* config.h for the vendored libxml2 (2.13.8) on unix (Linux glibc / musl,
+/* config.h for the vendored libxml2 (2.13.9) on unix (Linux glibc / musl,
  * macOS): what `configure` would produce for the feature set in build.rs,
  * written by hand so the build needs neither autotools nor cmake. */
 #ifndef LIBXML2_MONORUBY_CONFIG_H
@@ -28,7 +28,7 @@
 #define HAVE_SYS_TIME_H 1
 #define HAVE_UNISTD_H 1
 #define SUPPORT_IP6 1
-#define VERSION "2.13.8"
+#define VERSION "2.13.9"
 #define XML_SOCKLEN_T socklen_t
 #define XML_THREAD_LOCAL _Thread_local
 

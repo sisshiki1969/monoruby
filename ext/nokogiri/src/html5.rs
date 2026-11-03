@@ -28,7 +28,7 @@ pub(crate) fn init(ctx: &mut Ctx, c: &Classes) {
         c.node,
         "html_standard_serialize",
         method!(html_standard_serialize),
-        1,
+        2,
         MR_METHOD_PRIVATE,
     );
     ctx.define_method(
@@ -574,9 +574,10 @@ fn output_escaped(out: &mut Vec<u8>, s: &[u8], attr: bool) {
             (b"&nbsp;", 2)
         } else if attr && ch == b'"' {
             (b"&quot;", 1)
-        } else if !attr && ch == b'<' {
+        } else if ch == b'<' {
+            // Escaped in attribute values too (whatwg/html#6362, nokogiri 1.19.5).
             (b"&lt;", 1)
-        } else if !attr && ch == b'>' {
+        } else if ch == b'>' {
             (b"&gt;", 1)
         } else {
             out.push(ch);
@@ -617,14 +618,18 @@ const UNESCAPED_TEXT_ELEMENTS: &[&[u8]] = &[
     b"noembed",
     b"noframes",
     b"plaintext",
-    b"noscript",
 ];
+
+/// Raw text only when the document was parsed with scripting enabled
+/// (`parse_noscript_content_as_text: true`), as nokogiri 1.19.5 does.
+const NOSCRIPT_ELEMENT: &[&[u8]] = &[b"noscript"];
 
 unsafe fn output_node(
     ctx: &mut Ctx,
     out: &mut Vec<u8>,
     node: *mut xml::xmlNode,
     preserve_newline: bool,
+    scripting_enabled: bool,
 ) -> Result<()> {
     // SAFETY: a live node of a live document.
     unsafe {
@@ -635,7 +640,13 @@ unsafe fn output_node(
                 let mut attr = (*node).properties;
                 while !attr.is_null() {
                     out.push(b' ');
-                    output_node(ctx, out, attr as *mut xml::xmlNode, preserve_newline)?;
+                    output_node(
+                        ctx,
+                        out,
+                        attr as *mut xml::xmlNode,
+                        preserve_newline,
+                        scripting_enabled,
+                    )?;
                     attr = (*attr).next;
                 }
                 out.push(b'>');
@@ -645,7 +656,7 @@ unsafe fn output_node(
                     }
                     let mut child = (*node).children;
                     while !child.is_null() {
-                        output_node(ctx, out, child, preserve_newline)?;
+                        output_node(ctx, out, child, preserve_newline, scripting_enabled)?;
                         child = (*child).next;
                     }
                     out.extend_from_slice(b"</");
@@ -670,7 +681,10 @@ unsafe fn output_node(
             }
             xml::XML_TEXT_NODE => {
                 let parent = (*node).parent;
-                if !parent.is_null() && is_one_of(parent, UNESCAPED_TEXT_ELEMENTS) {
+                if !parent.is_null()
+                    && (is_one_of(parent, UNESCAPED_TEXT_ELEMENTS)
+                        || (scripting_enabled && is_one_of(parent, NOSCRIPT_ELEMENT)))
+                {
                     out.extend_from_slice(c_str((*node).content));
                 } else {
                     output_escaped(out, c_str((*node).content), false);
@@ -699,7 +713,7 @@ unsafe fn output_node(
             xml::XML_DOCUMENT_NODE | xml::XML_DOCUMENT_FRAG_NODE | xml::XML_HTML_DOCUMENT_NODE => {
                 let mut child = (*node).children;
                 while !child.is_null() {
-                    output_node(ctx, out, child, preserve_newline)?;
+                    output_node(ctx, out, child, preserve_newline, scripting_enabled)?;
                     child = (*child).next;
                 }
             }
@@ -713,7 +727,7 @@ unsafe fn output_node(
     }
 }
 
-/// Node#html_standard_serialize(preserve_newline) -> String
+/// Node#html_standard_serialize(preserve_newline, scripting_enabled) -> String
 fn html_standard_serialize(
     ctx: &mut Ctx,
     this: Value,
@@ -723,7 +737,7 @@ fn html_standard_serialize(
     let node = node_ptr(ctx, this)?;
     let mut out = Vec::with_capacity(4096);
     // SAFETY: a live node.
-    unsafe { output_node(ctx, &mut out, node, args[0].truthy())? };
+    unsafe { output_node(ctx, &mut out, node, args[0].truthy(), args[1].truthy())? };
     Ok(utf8(ctx, &out))
 }
 
