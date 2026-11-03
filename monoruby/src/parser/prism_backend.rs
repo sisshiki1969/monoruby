@@ -1210,6 +1210,8 @@ impl<'pr> Lowerer<'pr> {
                     kind: NodeKind::RegExp(parts, flags, false),
                     loc,
                 };
+                // No `regex_once` here: CRuby re-interpolates a
+                // `/#{...}/o` conditional on every evaluation.
                 match_last_line(regex, loc)
             }
             prism::Node::MatchWriteNode { .. } => {
@@ -4443,10 +4445,11 @@ impl<'pr> Lowerer<'pr> {
         let loc = location_to_loc(&node.location());
         let parts = self.lower_interp_parts(node.parts())?;
         let flags = regex_flags_from_closing(&node.closing_loc());
-        Ok(Node {
+        let regex = Node {
             kind: NodeKind::RegExp(parts, flags, false),
             loc,
-        })
+        };
+        Ok(regex_once(regex, &node.closing_loc(), loc))
     }
 
     /// Build the value carried by a `return` / `break` / `next`.
@@ -5628,6 +5631,37 @@ fn regex_flags_from_closing(closing: &Location<'_>) -> String {
         .filter(|b| matches!(b, b'i' | b'm' | b'x' | b'n' | b'u' | b'e' | b's'))
         .map(|b| b as char)
         .collect()
+}
+
+/// `/#{...}/o` interpolates and compiles once per site: every later
+/// evaluation yields the Regexp the first one built. Lowered to
+///
+/// ```text
+/// $__regexp_once_N || ($__regexp_once_N = /#{...}/)
+/// ```
+///
+/// with a fresh hidden global per site (as `END { }` and flip-flops
+/// keep their per-site state; `global_variables` hides `$__` names).
+/// A Regexp is always truthy, so the gate is the cached value itself.
+/// Without `o` the node is returned unchanged.
+fn regex_once(regex: Node, closing: &Location<'_>, loc: Loc) -> Node {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static NEXT_REGEXP_ONCE_ID: AtomicUsize = AtomicUsize::new(0);
+    let bytes = closing.as_slice();
+    if bytes.len() < 2 || !bytes[1..].contains(&b'o') {
+        return regex;
+    }
+    let cache = format!(
+        "$__regexp_once_{}",
+        NEXT_REGEXP_ONCE_ID.fetch_add(1, Ordering::Relaxed)
+    );
+    let cache_var = || Node::new_global_var(cache.clone(), loc);
+    Node::new_if(
+        cache_var(),
+        cache_var(),
+        Node::new_mul_assign(vec![cache_var()], vec![regex]),
+        loc,
+    )
 }
 
 /// Wrap a regexp-literal node as `<regex> =~ $_` — the implicit
