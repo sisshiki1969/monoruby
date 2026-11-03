@@ -128,7 +128,7 @@ fn read_io(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<V
     let enc = opt_cstr(args[2], ctx)?;
     let options = ctx.int(args[3])? as c_int;
     let mut errors: Vec<ErrorRecord> = vec![];
-    let mut ioctx = IoCtx::new(ctx, io);
+    let mut ioctx = IoCtx::new_protected(ctx, io);
     // SAFETY: as `read_memory`; the IO context lives across the call.
     let doc = unsafe {
         let ctxt = xml::xmlNewParserCtxt();
@@ -146,6 +146,13 @@ fn read_io(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<V
         xml::xmlFreeParserCtxt(ctxt);
         doc
     };
+    if ioctx.pending.is_some() {
+        if !doc.is_null() {
+            // SAFETY: a document nobody else holds.
+            unsafe { xml::xmlFreeDoc(doc) };
+        }
+        ioctx.take_exception(ctx)?;
+    }
     finish_parse(ctx, class, doc, &errors)
 }
 
@@ -237,7 +244,7 @@ fn html_read_io(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Res
     let enc = opt_cstr(args[2], ctx)?;
     let options = ctx.int(args[3])? as c_int;
     let mut errors: Vec<ErrorRecord> = vec![];
-    let mut ioctx = IoCtx::new(ctx, io);
+    let mut ioctx = IoCtx::new_protected(ctx, io);
     // SAFETY: as `read_io`, with the HTML parser.
     let doc = unsafe {
         let ctxt = xml::htmlNewParserCtxt();
@@ -255,6 +262,13 @@ fn html_read_io(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Res
         xml::xmlFreeParserCtxt(ctxt);
         doc
     };
+    if ioctx.pending.is_some() {
+        if !doc.is_null() {
+            // SAFETY: a document nobody else holds.
+            unsafe { xml::xmlFreeDoc(doc) };
+        }
+        ioctx.take_exception(ctx)?;
+    }
     // An `EncodingReader` wrapping the IO may have found the document's
     // encoding mid-way and asks for a re-parse (`encoding_found`).
     let encoding_found = "encoding_found";
@@ -311,11 +325,6 @@ fn set_root(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<
     let new_root = args[0];
     // SAFETY: live nodes of live documents.
     unsafe {
-        let current = xml::xmlDocGetRootElement(doc);
-        if !current.is_null() {
-            xml::xmlUnlinkNode(current);
-            pin_node(ctx, current);
-        }
         let mut c_new_root = std::ptr::null_mut();
         if !new_root.is_nil() {
             if !is_node(ctx, new_root) {
@@ -325,11 +334,20 @@ fn set_root(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<
                 )));
             }
             c_new_root = node_ptr(ctx, new_root)?;
-            if (*c_new_root).doc != doc {
-                c_new_root = xml::xmlDocCopyNode(c_new_root, doc, 1);
-                if c_new_root.is_null() {
-                    return Err(ctx.runtime_error("Could not reparent node (xmlDocCopyNode)"));
-                }
+            // Checked before the current root is unlinked (nokogiri 1.19.4).
+            if (*c_new_root).type_ != xml::XML_ELEMENT_NODE {
+                return Err(ctx.type_error("root must be a Nokogiri::XML::Element"));
+            }
+        }
+        let current = xml::xmlDocGetRootElement(doc);
+        if !current.is_null() {
+            xml::xmlUnlinkNode(current);
+            pin_node(ctx, current);
+        }
+        if !c_new_root.is_null() && (*c_new_root).doc != doc {
+            c_new_root = xml::xmlDocCopyNode(c_new_root, doc, 1);
+            if c_new_root.is_null() {
+                return Err(ctx.runtime_error("Could not reparent node (xmlDocCopyNode)"));
             }
         }
         xml::xmlDocSetRootElement(doc, c_new_root);

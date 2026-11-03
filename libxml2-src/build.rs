@@ -1,4 +1,4 @@
-//! Build the vendored libxml2 (2.13.8 + nokogiri's patches, see
+//! Build the vendored libxml2 (2.13.9 + nokogiri's patches, see
 //! `vendor/libxml2/NOKOGIRI-PATCHES`), nokogiri's gumbo-parser (the HTML5
 //! parser, `vendor/gumbo-parser`) and libxslt / libexslt (1.1.43,
 //! `vendor/libxslt`) with `cc`, without autotools or cmake: the `config.h`s
@@ -99,8 +99,8 @@ fn main() {
     // xmlversion.h from the template.
     let template = fs::read_to_string(vendor.join("include/libxml/xmlversion.h.in")).unwrap();
     let mut version_h = template
-        .replace("@VERSION@", "2.13.8")
-        .replace("@LIBXML_VERSION_NUMBER@", "21308")
+        .replace("@VERSION@", "2.13.9")
+        .replace("@LIBXML_VERSION_NUMBER@", "21309")
         .replace("@LIBXML_VERSION_EXTRA@", "-nokogiri")
         .replace("@MODULE_EXTENSION@", ".so");
     for (name, on) in FEATURES {
