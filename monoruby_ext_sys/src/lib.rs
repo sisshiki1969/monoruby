@@ -539,7 +539,28 @@ pub struct MrApi {
     /// `rb_backref_set`: set that frame's `$~` (a MatchData or nil), as
     /// an extension does to restore what its own matching clobbered.
     pub backref_set: unsafe extern "C" fn(ctx: *mut MrContext, md: MrValue),
+    /// [`MrApi::call_blocking`] with an unblock function: CRuby's
+    /// `rb_thread_call_without_gvl`. An interrupt aimed at the calling
+    /// thread while `f` runs — `Thread#wakeup`, `#raise`, `#kill`, or on
+    /// the main thread a trapped signal — calls `ubf(ubf_arg)` once, with
+    /// the interpreter's lock held, from the interrupting thread; it must
+    /// make `f` return and must not touch the interpreter. `ubf` NULL
+    /// registers none; [`MR_UBF_IO`] (`RUBY_UBF_IO`) registers no
+    /// function but lets the interrupt's signal cut a blocking syscall
+    /// in `f` short with `EINTR` (1:1 thread model).
+    pub call_blocking_ubf: unsafe extern "C" fn(
+        ctx: *mut MrContext,
+        f: MrBlockingFn,
+        arg: *mut c_void,
+        ubf: *mut c_void,
+        ubf_arg: *mut c_void,
+        out: *mut i64,
+    ) -> c_int,
 }
+
+/// [`MrApi::call_blocking_ubf`]'s `ubf` for "no function, interrupt the
+/// syscall" — the value of CRuby's `RUBY_UBF_IO` / `RUBY_UBF_PROCESS`.
+pub const MR_UBF_IO: usize = usize::MAX;
 
 /// Onigmo's own functions, with the types of `onigmo.h` erased to
 /// `c_void` (`regex_t *`, `OnigRegion *`) — the header the extension

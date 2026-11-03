@@ -246,6 +246,10 @@ pub(super) fn interrupt_blocking(thread: Value) -> bool {
             // clears `blocking_tid` (under the GVL, which we hold) before
             // it can exit — and the signal has a no-op handler.
             unsafe { libc::pthread_kill(tid, UBF_SIGNAL) };
+            // An extension call's own unblock function, if it gave one
+            // (the signal alone does not end a C loop that retries on
+            // `EINTR`).
+            super::run_ubf(thread);
             true
         }
         None => false,

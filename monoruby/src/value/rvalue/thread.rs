@@ -127,6 +127,13 @@ pub struct ThreadInner {
     /// region's duration; an interrupt sends the unblocking signal
     /// there (`native::interrupt_blocking`).
     pub(crate) blocking_tid: Option<libc::pthread_t>,
+    /// The unblock function of the C extension call this thread is
+    /// blocked in (`rb_thread_call_without_gvl`'s `ubf` / `data2`, via
+    /// `MrApi::call_blocking_ubf`). An interrupt or `Thread#wakeup`
+    /// aimed at the thread runs it once (`scheduler::run_ubf`), as
+    /// CRuby's `rb_threadptr_interrupt` does. `Some` only for the
+    /// call's duration.
+    pub(crate) blocking_ubf: Option<crate::scheduler::Ubf>,
     /// 1:1 model: the id of the kernel thread this thread runs on
     /// (`Thread#native_thread_id`), recorded when the body is
     /// dispatched and refreshed in a fork child. The main thread's is
@@ -240,6 +247,7 @@ impl ThreadInner {
             park_indefinite: false,
             park_fds: vec![],
             blocking_tid: None,
+            blocking_ubf: None,
             native_tid: None,
         }
     }
@@ -279,6 +287,7 @@ impl ThreadInner {
             park_indefinite: false,
             park_fds: vec![],
             blocking_tid: None,
+            blocking_ubf: None,
             native_tid: Some(crate::scheduler::current_kernel_tid()),
         }
     }
@@ -310,6 +319,7 @@ impl ThreadInner {
             park_indefinite: false,
             park_fds: vec![],
             blocking_tid: None,
+            blocking_ubf: None,
             native_tid: None,
         }
     }

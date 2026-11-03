@@ -4287,13 +4287,15 @@ nogvl_trampoline(void *arg)
 void *
 rb_nogvl(void *(*func)(void *), void *data1, rb_unblock_function_t *ubf, void *data2, int flags)
 {
-    (void)ubf;
-    (void)data2;
     (void)flags;
     struct capi_frame *saved = frame();
     struct nogvl_call c = {func, data1, NULL};
     int64_t out;
-    int rc = api->call_blocking(saved->ctx, nogvl_trampoline, &c, &out);
+    /* RUBY_UBF_IO / RUBY_UBF_PROCESS are (void *)-1, the ABI's own spelling of "no function,
+       interrupt the syscall"; an older monoruby without the entry drops the ubf. */
+    int rc = (ubf && HAVE_API(call_blocking_ubf))
+        ? api->call_blocking_ubf(saved->ctx, nogvl_trampoline, &c, (void *)ubf, data2, &out)
+        : api->call_blocking(saved->ctx, nogvl_trampoline, &c, &out);
     capi_cur = saved;
     if (rc != 0)
         capi_unwind();
