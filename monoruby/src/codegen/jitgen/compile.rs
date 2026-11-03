@@ -413,7 +413,7 @@ impl<'a> JitContext<'a> {
         // first instruction, as when the flags are live): skipping it keeps
         // a call result the previous instruction left in rax there for a
         // `ret` or a truthiness test.
-        if state.class_proofs_unsettled()
+        if !state.class_proofs_settled()
             && !flags_live
             && !matches!(
                 trace_ir,

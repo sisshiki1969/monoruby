@@ -844,12 +844,12 @@ impl AbstractFrame {
         self.invariants.no_capture_guard = false;
     }
 
-    pub(super) fn class_proofs_unsettled(&self) -> bool {
-        self.invariants.class_proofs_unsettled
+    pub(super) fn class_proofs_settled(&self) -> bool {
+        self.invariants.class_proofs_settled
     }
 
     pub(super) fn set_class_proofs_settled(&mut self) {
-        self.invariants.class_proofs_unsettled = false;
+        self.invariants.class_proofs_settled = true;
     }
 
     pub(super) fn class_version_guard(&self) -> bool {
@@ -863,7 +863,7 @@ impl AbstractFrame {
 
     pub(crate) fn unset_class_version_guard(&mut self) {
         self.invariants.class_version_guard = false;
-        self.invariants.class_proofs_unsettled = true;
+        self.invariants.class_proofs_settled = false;
         self.invariants.ivar_ty_guard = false;
     }
 
@@ -1428,7 +1428,7 @@ impl ReturnState {
                 class_version_guard: true,
                 const_version_guard: true,
                 side_effect_guard: false,
-                class_proofs_unsettled: false,
+                class_proofs_settled: true,
                 ivar_ty_guard: false,
                 no_capture_guard: true,
             },
@@ -1491,7 +1491,7 @@ impl ReturnState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Invariants {
     /// guard for class version. true if guaranteed the class version is not changed.
     class_version_guard: bool,
@@ -1512,12 +1512,12 @@ struct Invariants {
     /// 3) no method calls that may have side effects.
     /// 4) no ensure clauses
     side_effect_guard: bool,
-    /// Ruby code may have run since the class proofs of heap objects were
-    /// last settled — see `JitContext::settle_class_proofs`. Set together
-    /// with every `unset_class_version_guard`, cleared by the settle at the
-    /// head of the next instruction. Joined by OR: one unsettled path makes
-    /// the merge unsettled.
-    class_proofs_unsettled: bool,
+    /// guard for class proofs. true if guaranteed no Ruby code has run since
+    /// the class proofs of heap objects were last settled — see
+    /// `JitContext::settle_class_proofs`. Unset together with every
+    /// `unset_class_version_guard`, set again by the settle at the head of
+    /// the next instruction.
+    class_proofs_settled: bool,
     /// The class version has been checked since the last point where an
     /// ivar type state could have changed (`crate::ivar_ty`): a call, a
     /// safepoint poll (another thread may run), or an inline store whose
@@ -1526,6 +1526,19 @@ struct Invariants {
     /// frame already running such a unit stop before the stale load.
     /// Implied by every class-version guard emitted.
     ivar_ty_guard: bool,
+}
+
+impl Default for Invariants {
+    fn default() -> Self {
+        Self {
+            class_version_guard: false,
+            const_version_guard: false,
+            no_capture_guard: false,
+            side_effect_guard: false,
+            class_proofs_settled: true,
+            ivar_ty_guard: false,
+        }
+    }
 }
 
 impl Invariants {
@@ -1542,7 +1555,7 @@ impl Invariants {
             const_version_guard: false,
             no_capture_guard: true,
             side_effect_guard,
-            class_proofs_unsettled: false,
+            class_proofs_settled: true,
             ivar_ty_guard: false,
         }
     }
@@ -1554,7 +1567,7 @@ impl Invariants {
             // loop compilation is started only if the current local frame is not captured.
             no_capture_guard: true,
             side_effect_guard: false,
-            class_proofs_unsettled: false,
+            class_proofs_settled: true,
             ivar_ty_guard: false,
         }
     }
@@ -1569,7 +1582,7 @@ impl Invariants {
             // specialized methods and blocks are always guarded frame capture.
             no_capture_guard: true,
             side_effect_guard,
-            class_proofs_unsettled: false,
+            class_proofs_settled: true,
             ivar_ty_guard: false,
         }
     }
@@ -1579,7 +1592,7 @@ impl Invariants {
         self.const_version_guard &= other.const_version_guard;
         self.no_capture_guard &= other.no_capture_guard;
         self.side_effect_guard &= other.side_effect_guard;
-        self.class_proofs_unsettled |= other.class_proofs_unsettled;
+        self.class_proofs_settled &= other.class_proofs_settled;
         self.ivar_ty_guard &= other.ivar_ty_guard;
     }
 }
@@ -1649,7 +1662,7 @@ mod tests {
                 const_version_guard: false,
                 no_capture_guard: true,
                 side_effect_guard: true,
-                class_proofs_unsettled: false,
+                class_proofs_settled: true,
                 ivar_ty_guard: false,
             },
         };
@@ -1673,7 +1686,7 @@ mod tests {
                 const_version_guard: false,
                 no_capture_guard: true,
                 side_effect_guard: true,
-                class_proofs_unsettled: false,
+                class_proofs_settled: true,
                 ivar_ty_guard: false,
             },
         };
@@ -1692,7 +1705,7 @@ mod tests {
                 const_version_guard: false,
                 no_capture_guard: true,
                 side_effect_guard: false,
-                class_proofs_unsettled: false,
+                class_proofs_settled: true,
                 ivar_ty_guard: false,
             },
         };
