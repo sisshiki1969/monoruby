@@ -157,8 +157,15 @@ String 自身のバッファを返す。書き込み可能で、`rb_str_new(NULL
   （`native_extension_loading.md` §6.2）。
 - `rb_encoding` は名前ごとの小さな記録。添字 0/1/2 は CRuby と同じく
   ASCII-8BIT / UTF-8 / US-ASCII。
-- `rb_thread_call_without_gvl` は `call_blocking`（別スレッドで実行、呼んだ
-  Ruby スレッドは待つ）。ubf は呼ばない。
+- `rb_thread_call_without_gvl` は `call_blocking_ubf`（1:1 モデルでは GVL を
+  外して呼んだカーネルスレッド上で、green では native pool のワーカーで実行）。
+  ubf は呼び出しの間 `ThreadInner::blocking_ubf` に記録され、そのスレッドへの
+  `Thread#wakeup` / `#raise` / `#kill`（`interrupt_blocking`）と、main が
+  ブロック中のシグナル（ポーリング点でそれを見たスレッドが呼ぶ）で 1 回だけ
+  GVL を持ったまま呼ばれる（CRuby の `rb_threadptr_interrupt` と同じ）。
+  `RUBY_UBF_IO` は関数なしで、割り込みの `SIGVTALRM` がシステムコールを
+  `EINTR` で切る（1:1 モデルのみ。green ではワーカーに送るシグナルがなく未対応）。
+  fixture は `tests/capi/capi_nogvl.c`。
 - 多くの関数は Ruby のメソッドを `rb_funcall` で呼ぶだけの薄い実装
   （TruffleRuby の `Truffle::CExt` と同じ方針）。正しさ優先で、ホットな
   ものから順に ABI 側へ寄せる。
