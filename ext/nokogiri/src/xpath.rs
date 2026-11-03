@@ -137,6 +137,12 @@ unsafe extern "C" fn xpath_local_name_is(ctxt: *mut xml::xmlXPathParserContext, 
 /// XPathContext.new(node) -> XPathContext
 fn new(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value> {
     let class = this;
+    if !is_node(ctx, args[0]) {
+        return Err(ctx.type_error(format!(
+            "expected a Nokogiri::XML::Node, received {}",
+            ctx.class_name(args[0])
+        )));
+    }
     let node = node_ptr(ctx, args[0])?;
     // SAFETY: a live node of a live document; the context is ours.
     let (xctx, document) = unsafe {
@@ -173,6 +179,12 @@ fn new(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value
 
 /// XPathContext#node=(node)
 fn set_node(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value> {
+    if !is_node(ctx, args[0]) {
+        return Err(ctx.type_error(format!(
+            "expected a Nokogiri::XML::Node, received {}",
+            ctx.class_name(args[0])
+        )));
+    }
     let xctx = recv(ctx, this)?;
     let node = node_ptr(ctx, args[0])?;
     // SAFETY: a live context and node.

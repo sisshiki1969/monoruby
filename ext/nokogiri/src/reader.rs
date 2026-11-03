@@ -88,6 +88,15 @@ fn recv(ctx: &mut Ctx, this: Value) -> Result<*mut xml::xmlTextReader> {
     Ok(r.reader)
 }
 
+/// Re-raise an exception the IO callback kept during the last library
+/// call (`noko_io_read_take_exception`): one that is not a `StandardError`.
+fn io_exception(ctx: &mut Ctx, this: Value) -> Result<()> {
+    match ctx.native::<XmlReader>(this).and_then(|r| r.io.as_mut()) {
+        Some(io) => io.take_exception(ctx),
+        None => Ok(()),
+    }
+}
+
 /// `reader.errors` (the Ruby array the parse errors go to).
 fn errors_of(ctx: &mut Ctx, reader: Value) -> Result<Value> {
     ctx.funcall(reader, "errors", &[], None)
@@ -176,6 +185,25 @@ fn from_memory(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Resu
         args,
         "string",
         |ctx, source, url, enc, options| {
+            // `StringValue`: a non-String is converted with `to_str`
+            // (nokogiri 1.19.5). The bytes are copied, so a later change to
+            // the caller's String does not reach the reader.
+            let source = if ctx.is_string(source) {
+                source
+            } else {
+                let s = if ctx.respond_to(source, "to_str") {
+                    ctx.funcall(source, "to_str", &[], None)?
+                } else {
+                    Value::nil()
+                };
+                if !ctx.is_string(s) {
+                    return Err(ctx.type_error(format!(
+                        "no implicit conversion of {} into String",
+                        ctx.class_name(source)
+                    )));
+                }
+                s
+            };
             let buffer = ctx.str_vec(source)?;
             // SAFETY: the buffer moves into the payload, outliving the reader.
             let reader = unsafe {
@@ -197,7 +225,7 @@ fn from_io(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<V
     construct(ctx, this, args, "io", |ctx, source, url, enc, options| {
         // SAFETY: the executor outlives the call; the IO context lives in
         // the payload, its pointers refreshed at each native call.
-        let mut io = Box::new(IoCtx::new(ctx, source));
+        let mut io = Box::new(IoCtx::new_protected(ctx, source));
         let reader = unsafe {
             xml::xmlReaderForIO(
                 Some(io_read),
@@ -208,6 +236,13 @@ fn from_io(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<V
                 options,
             )
         };
+        if io.pending.is_some() {
+            if !reader.is_null() {
+                // SAFETY: a reader nobody else holds.
+                unsafe { xml::xmlFreeTextReader(reader) };
+            }
+            io.take_exception(ctx)?;
+        }
         Ok((reader, Some(io), vec![]))
     })
 }
@@ -224,6 +259,7 @@ fn read(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Valu
         xml::xmlSetStructuredErrorFunc(std::ptr::null_mut(), None);
         status
     };
+    io_exception(ctx, this)?;
     let rb_errors = push_errors(ctx, this, &errors)?;
     // SAFETY: the document, if any, is live (and now preserved).
     unsafe {
@@ -282,6 +318,7 @@ fn expand(
         xml::xmlSetStructuredErrorFunc(std::ptr::null_mut(), None);
         node
     };
+    io_exception(ctx, this)?;
     let rb_errors = push_errors(ctx, this, &errors)?;
     if node.is_null() {
         let first = ctx.funcall(rb_errors, "first", &[], None)?;
@@ -457,18 +494,60 @@ fn encoding(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<
     Ok(if enc.truthy() { enc } else { Value::nil() })
 }
 
-/// Reader#inner_xml -> String | nil
+/// Reader#inner_xml -> String | nil: parse errors go to `errors`.
 fn inner_xml(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value> {
     let reader = recv(ctx, this)?;
-    // SAFETY: a live reader; the string is ours to free.
-    Ok(unsafe { xml_str_owned(ctx, xml::xmlTextReaderReadInnerXml(reader)) })
+    let mut errors: Vec<ErrorRecord> = vec![];
+    // SAFETY: a live reader; the handler is registered for the call.
+    let value = unsafe {
+        xml::xmlSetStructuredErrorFunc(&mut errors as *mut _ as *mut c_void, Some(collect_error));
+        let value = xml::xmlTextReaderReadInnerXml(reader);
+        xml::xmlSetStructuredErrorFunc(std::ptr::null_mut(), None);
+        value
+    };
+    if let Err(e) = io_exception(ctx, this) {
+        // SAFETY: the string is ours to free.
+        unsafe { xml::xml_free()(value as *mut c_void) };
+        return Err(e);
+    }
+    let pushed = push_errors(ctx, this, &errors);
+    // SAFETY: the string is ours to free.
+    let str = unsafe { xml_str_owned(ctx, value) };
+    pushed?;
+    Ok(str)
 }
 
-/// Reader#outer_xml -> String | nil
+/// Reader#outer_xml -> String | nil: parse errors go to `errors`, and a
+/// failed read raises their aggregate (nokogiri 1.19.5).
 fn outer_xml(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value> {
     let reader = recv(ctx, this)?;
-    // SAFETY: a live reader; the string is ours to free.
-    Ok(unsafe { xml_str_owned(ctx, xml::xmlTextReaderReadOuterXml(reader)) })
+    let mut errors: Vec<ErrorRecord> = vec![];
+    // SAFETY: a live reader; the handler is registered for the call.
+    let value = unsafe {
+        xml::xmlSetStructuredErrorFunc(&mut errors as *mut _ as *mut c_void, Some(collect_error));
+        let value = xml::xmlTextReaderReadOuterXml(reader);
+        xml::xmlSetStructuredErrorFunc(std::ptr::null_mut(), None);
+        value
+    };
+    if let Err(e) = io_exception(ctx, this) {
+        // SAFETY: the string is ours to free.
+        unsafe { xml::xml_free()(value as *mut c_void) };
+        return Err(e);
+    }
+    if value.is_null() {
+        let rb_errors = push_errors(ctx, this, &errors)?;
+        let klass = classes().xml_syntax_error;
+        let ex = ctx.funcall(klass, "aggregate", &[rb_errors], None)?;
+        if ex.truthy() {
+            return Err(raise(ctx, ex));
+        }
+        return Ok(Value::nil());
+    }
+    let pushed = push_errors(ctx, this, &errors);
+    // SAFETY: the string is ours to free.
+    let str = unsafe { xml_str_owned(ctx, value) };
+    pushed?;
+    Ok(str)
 }
 
 /// Reader#base_uri -> String | nil

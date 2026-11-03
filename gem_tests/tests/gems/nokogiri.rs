@@ -1553,3 +1553,180 @@ fn nokogiri_node_identity_across_gc() {
         "##,
     );
 }
+
+/// The behaviour nokogiri 1.19.5 changed in its C extension: the HTML5
+/// serializer escapes `<` / `>` in attribute values and escapes `noscript`
+/// text unless parsed with scripting, `Node#[]=` resolves a QName as
+/// `xmlSetProp` does, `#lang=` / `Attr#value=` keep wrapped children alive,
+/// `#namespace=` declares an unbound prefix, reparenting drops a prefix the
+/// new parent binds to the same URI, and `Document#root=` rejects a
+/// non-element before unlinking the old root.
+#[test]
+fn nokogiri_1_19_tree_and_html5_changes() {
+    compare(
+        r##"
+        # HTML5: noscript serialization, < > in attributes
+        d = Nokogiri::HTML5("<p a='<x>'>t</p><noscript><b>&lt;i&gt;</b> 1 &lt; 2</noscript>")
+        puts d.to_html
+        d2 = Nokogiri::HTML5("<noscript><b>x</b> 1 &lt; 2</noscript>", parse_noscript_content_as_text: true)
+        puts d2.to_html
+        p d2.parse_noscript_content_as_text, d.parse_noscript_content_as_text
+        f = Nokogiri::HTML5.fragment("<noscript>a &lt; b</noscript>")
+        puts f.to_html
+        begin
+          Nokogiri::HTML5::DocumentFragment.new(d2, "<noscript>x</noscript>", parse_noscript_content_as_text: false)
+        rescue => e
+          p [e.class, e.message]
+        end
+        f2 = d2.fragment("<noscript><i>y</i> &lt;</noscript>")
+        puts f2.to_html
+        # many attributes, duplicates
+        puts Nokogiri::HTML5("<div a=1 b=2 a=3 id=x c='&quot;'></div>").to_html
+        p Nokogiri::HTML5("<div id=x></div>").at_css("#x")&.name
+        doc = Nokogiri::XML(%{<root xmlns:p="http://p" xmlns:q="http://q"><a p:k="pk" k="plain" xml:lang="en">x</a></root>})
+        a = doc.at("a")
+        t = a.attribute_with_ns("k", "http://p").children.first
+        a["p:k"] = "new"
+        p [t.to_s, a.to_xml]
+        a["q:k"] = "qq"
+        a["z:k"] = "zz"
+        a["k"] = "changed"
+        p a.to_xml
+        l = a.attribute_with_ns("lang", "http://www.w3.org/XML/1998/namespace").children.first
+        a.lang = "fr"
+        p [l.to_s, a.lang, a.to_xml]
+        # Attr#value=
+        at = a.attribute("k")
+        tc = at.children.first
+        at.value = "v2"
+        p [tc.to_s, at.value, a.to_xml]
+        at.value = ""
+        p a.to_xml
+        at.value = nil
+        p a.to_xml
+        at.value = "a & b <c>"
+        p [at.value, a.to_xml]
+        # namespace= declares
+        d = Nokogiri::XML("<r xmlns:p='http://p'><c/></r>")
+        c = d.at("c")
+        ns = d.root.namespace_definitions.first
+        other = Nokogiri::XML::Node.new("o", d)
+        other.namespace = ns
+        p other.to_xml
+        other2 = Nokogiri::XML::Node.new("o2", d)
+        d.root << other2
+        other2.namespace = ns
+        p [other2.to_xml, other2.namespace_definitions.map(&:prefix)]
+        begin; other2.namespace = false; rescue => e; p [e.class, e.message]; end
+        # reparent: relink namespace by prefix
+        src = Nokogiri::XML("<x xmlns:p='http://p'><p:y xmlns:p='http://p'/><p:z xmlns:p='http://other'/></x>")
+        dst = Nokogiri::XML("<w xmlns:p='http://p'/>")
+        src.root.children.each { |n| dst.root << n }
+        p dst.root.to_xml
+        # root=
+        d3 = Nokogiri::XML("<a/>")
+        begin; d3.root = Nokogiri::XML::Text.new("t", d3); rescue => e; p [e.class, e.message]; end
+        p d3.root&.name
+        begin; d3.root = 1; rescue => e; p [e.class, e.message]; end
+        # initialize_copy_with_args, line=
+        begin; Nokogiri::XML::Text.new("t", d3).line = 3; p :ok; rescue => e; p [e.class]; end
+        [d3, d3.create_internal_subset("a", nil, "x.dtd")].each do |n|
+          begin; n.line = 3; p :noerr; rescue NoMethodError => e; p [e.class]; end
+        end
+        begin; d3.root.attribute_nodes; d3.root["x"]="1"; d3.root.attribute("x").line = 2; p :noerr; rescue NoMethodError => e; p [:nme]; end
+        "##,
+    );
+}
+
+/// The rest of 1.19.4 / 1.19.5: `Reader.from_memory` takes a `to_str`
+/// object and copies it, `outer_xml` raises the reader's errors,
+/// `XPathContext` type-checks its node, an IO `read` that raises something
+/// other than a `StandardError` propagates (a `StandardError` is still a
+/// parse error), the Builder's namespace binding, the CSS selector fixes
+/// (Ruby half), XSLT params converted with `to_str`, `NodeSet#[]` with a
+/// large negative index, and wrappers made by `allocate`.
+#[test]
+fn nokogiri_1_19_reader_xpath_io_changes() {
+    compare(
+        r##"
+        class S; def initialize(s); @s = s; end; def to_str; @s; end; end
+        r = Nokogiri::XML::Reader.from_memory(S.new("<a><b>1</b></a>"))
+        p r.map(&:name)
+        src = +"<a><b>2</b></a>"
+        r = Nokogiri::XML::Reader(src)
+        src.replace("<zzz/>")
+        p r.map(&:name)
+        r = Nokogiri::XML::Reader("<a><b>1</b><c></a>")
+        out = []
+        begin
+          r.each { |n| out << [n.name, (n.outer_xml rescue [$!.class, $!.message]), n.inner_xml] }
+        rescue => e
+          out << [e.class, e.message]
+        end
+        p out
+        p r.errors.map(&:to_s)
+        begin; Nokogiri::XML::Reader.from_memory(1); rescue => e; p [e.class, e.message]; end
+        # XPathContext
+        begin; Nokogiri::XML::XPathContext.new(1); rescue => e; p [e.class, e.message]; end
+        doc = Nokogiri::XML("<a><b/><b/></a>")
+        x = Nokogiri::XML::XPathContext.new(doc)
+        begin; x.node = "s"; rescue => e; p [e.class, e.message]; end
+        h = Class.new { attr_reader :n; def initialize; @n = 0; end; def boom(ns); @n += 1; raise "boom #{@n}"; end }.new
+        begin; doc.xpath("//b[nokogiri:boom(.)]", nil, h); rescue => e; p [e.class, e.message, h.n]; end
+        # IO exceptions
+        class Bad; def initialize(e); @e = e; end; def read(*); raise @e; end; end
+        [RuntimeError.new("x"), Interrupt.new].each do |ex|
+          [-> { Nokogiri::XML::Document.read_io(Bad.new(ex), nil, nil, 0).root },
+           -> { Nokogiri::HTML4::Document.read_io(Bad.new(ex), nil, nil, 0).root&.name },
+           -> { Nokogiri::XML::Reader(Bad.new(ex)).map(&:name) },
+           -> { Nokogiri::XML(Bad.new(ex)).errors.map(&:to_s) }].each do |f|
+            begin
+              p f.call
+            rescue Exception => e
+              p [:raised, e.class]
+            end
+          end
+        end
+        r = catch(:t) { Nokogiri::XML(Class.new { def read(*); throw :t, :thrown; end }.new); :not }
+        p r
+        # Builder namespaces
+        b = Nokogiri::XML::Builder.new do |xml|
+          xml.root("xmlns:a" => "http://a") do
+            xml[:a].child("xmlns:a" => "http://b") { xml[:a].gc }
+            xml.n { xml[:a].deep }
+          end
+        end
+        puts b.to_xml
+        begin; Nokogiri::XML::Builder.new { |xml| xml.r { xml[:nope].x } }; rescue => e; p [e.class, e.message]; end
+        # CSS
+        d = Nokogiri::HTML("<ul><li id=\"it's\">1</li><li class='a-b'>2</li><li>3</li><li>it's</li></ul>")
+        p d.css("li:nth-child(0n+3)").map(&:text), d.css("li:nth-child(-n+0)").size, d.css("li:nth-child(0n-1)").size
+        p d.css("#it\\'s").map(&:text), d.css("li:contains('it\\'s')").map(&:text), d.css(".a\\-b").map(&:text)
+        p d.css("[class=a\\-b]").size
+        begin; d.css("a\\!b"); rescue => e; p e.class; end
+        h = Class.new { attr_reader :n; def initialize; @n = 0; end; def boom(ns); @n += 1; raise "boom #{@n}"; end }.new
+        doc = Nokogiri::XML("<a><b/><b/><b/></a>")
+        begin; doc.xpath("//b[nokogiri:boom(.)]", h); rescue => e; p [e.class, e.message, h.n]; end
+        begin; doc.xpath("//b[nokogiri:boom(.)]", Class.new { def boom(ns); throw :x; end }.new); rescue Exception => e; p e.class; end
+        p catch(:x) { doc.xpath("//b[nokogiri:boom(.)]", Class.new { def boom(ns); throw :x, :caught; end }.new); :no }
+        # xslt extension raising
+        xsl = Nokogiri::XSLT(<<~X, "http://e" => Class.new { attr_reader :n; def f(*) = (@n = (@n||0)+1; raise "xf"); })
+          <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:e="http://e">
+          <xsl:template match="/"><o><xsl:for-each select="//b"><xsl:value-of select="e:f(.)"/></xsl:for-each></o></xsl:template>
+          </xsl:stylesheet>
+        X
+        begin; xsl.transform(doc); rescue => e; p [e.class, e.message]; end
+        # params with to_str raising
+        xsl2 = Nokogiri::XSLT(%{<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"><xsl:param name="p"/><xsl:template match="/"><o><xsl:value-of select="$p"/></o></xsl:template></xsl:stylesheet>})
+        p xsl2.transform(doc, ["p", "'v'"]).to_s
+        begin; xsl2.transform(doc, ["p", Class.new { def to_str = raise("ts") }.new]); rescue => e; p [e.class, e.message]; end
+        # NodeSet negative index
+        s = doc.css("b")
+        p [s[-3]&.name, s[-4], s[-100000000000]]
+        # uninitialized
+        begin; Nokogiri::XML::Node.allocate.name; rescue => e; p [e.class, e.message]; end
+        begin; Nokogiri::XML::Document.allocate.root; rescue => e; p [e.class, e.message]; end
+        p Nokogiri::XML::Node.allocate.data_ptr?
+        "##,
+    );
+}

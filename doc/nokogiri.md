@@ -233,12 +233,12 @@ B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の
 
 ## 6. 実装状況（XSLT 以外の全段階、2026-09）
 
-`libxml2-src/`（libxml2 2.13.8 + nokogiri 1.18.9 の patches、`cc` でビルド、
+`libxml2-src/`（libxml2 2.13.9 + nokogiri 1.19.7 の patches、`cc` でビルド、
 `config.h` は手書き、`xmlversion.h` は build.rs が生成）、
 `ext/nokogiri/`（Rust 側、monoruby 拡張 `nokogiri_native`。もとは
 `monoruby/src/builtins/nokogiri/` で、`doc/native_extension_loading.md` の
 手順 3 で `monoruby_ext` の `Ctx` 越しに書き直してコアの外に出した）、
-`monoruby/gem/nokogiri/`（gem 1.19.1 の Ruby 半分をそのまま +
+`monoruby/gem/nokogiri/`（gem 1.19.7 の Ruby 半分をそのまま +
 `nokogiri/nokogiri.rb` のスタブ、拡張を `require` する）。
 `tests/nokogiri.rs` が CRuby の nokogiri gem と同じスクリプトを走らせて出力を
 突き合わせる（gem が無ければ skip、CI は入れる）。
