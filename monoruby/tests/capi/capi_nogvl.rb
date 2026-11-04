@@ -6,6 +6,8 @@ $phase = "start"
 Thread.new do
   sleep 60
   $stderr.puts "capi_nogvl: hung in #{$phase}"
+  # What each side was doing, for a hang only CI reproduces.
+  $stderr.puts "  #{$diag.call.inspect}" if $diag
   exit!(1)
 end
 
@@ -58,6 +60,7 @@ interrupter = Thread.new do
     Signal.trap(:HUP, prev)
   end
 end
+$diag = -> { [done, main.status, interrupter.status, interrupter.backtrace] }
 going = true
 p CapiNogvl.with_ubf
 interrupter.join
@@ -80,6 +83,7 @@ $phase = "signal, early"
       Signal.trap(:HUP, prev)
     end
   end
+  $diag = -> { [done, main.status, interrupter.status, interrupter.backtrace] }
   going = true
   r = CapiNogvl.with_ubf
   interrupter.join
