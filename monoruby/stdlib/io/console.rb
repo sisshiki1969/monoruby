@@ -407,3 +407,28 @@ class IO
     raise NotImplementedError, "check_winsize_changed() function is unimplemented on this machine"
   end
 end
+
+# console.c also gives StringIO's readers (IO::generic_readable) `getch`
+# and `getpass`: plain `getc`, and the prompt / gets / newline of
+# IO#getpass without the terminal modes.
+IO.__generic_readable.module_eval do
+  def getch(*args)
+    getc(*args)
+  end
+
+  def getpass(prompt = nil)
+    unless prompt.nil?
+      raise TypeError, "no implicit conversion of #{prompt.class} into String" unless prompt.is_a?(String)
+      raise ArgumentError, "string contains null byte" if prompt.include?("\0")
+      write(prompt)
+    end
+    flush if respond_to?(:flush)
+    begin
+      str = gets
+    ensure
+      puts
+    end
+    str&.chomp!
+    str
+  end
+end

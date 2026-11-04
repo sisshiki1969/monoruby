@@ -823,6 +823,10 @@ impl RValue {
                 // stringifies to the address form; only `IO#inspect`
                 // names the descriptor.
                 ObjTy::IO => self.object_tos(store),
+                // An extension's Data / TypedData object (or a native
+                // payload object): `Kernel#to_s`'s address form, as for
+                // CRuby's T_DATA.
+                ObjTy::NATIVE => self.object_tos(store),
                 _ => self.debug(store),
             }
         }
@@ -832,7 +836,7 @@ impl RValue {
         // SAFETY: Type checking via ty() ensures we access only the correct union variant.
         unsafe {
             match self.ty() {
-                ObjTy::OBJECT => self.object_inspect(store, set),
+                ObjTy::OBJECT | ObjTy::NATIVE => self.object_inspect(store, set),
                 ObjTy::EXCEPTION => {
                     let class_name = store.get_class_name(self.class());
                     let msg = self.as_exception().message();
@@ -3123,6 +3127,20 @@ struct Metadata {
     ty_flags: u8,
     class: Option<ClassId>,
 }
+
+// The C API layer's `rb_type` reads a cell's kind straight from this
+// header (`monoruby_capi/include/ruby/ruby.h`, `RB_MONORUBY_CELL_*`).
+const _: () = {
+    assert!(std::mem::offset_of!(RValue, header) == 0);
+    assert!(std::mem::offset_of!(Metadata, ty) == 2);
+    assert!(ObjTy::BIGNUM.0.get() == 4);
+    assert!(ObjTy::FLOAT.0.get() == 5);
+    assert!(ObjTy::STRING.0.get() == 6);
+    assert!(ObjTy::ARRAY.0.get() == 8);
+    assert!(ObjTy::HASH.0.get() == 12);
+    assert!(ObjTy::REGEXP.0.get() == 13);
+    assert!(ObjTy::MATCHDATA.0.get() == 22);
+};
 
 impl Header {
     fn new(class: ClassId, ty: ObjTy) -> Self {

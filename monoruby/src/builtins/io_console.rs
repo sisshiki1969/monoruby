@@ -21,6 +21,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "__winsize", io_winsize, 0);
     globals.define_builtin_func(IO_CLASS, "__set_winsize", io_set_winsize, 4);
     globals.define_builtin_func(IO_CLASS, "__ttyname", io_ttyname, 0);
+    globals.define_builtin_class_func(IO_CLASS, "__generic_readable", generic_readable, 0);
     globals.define_builtin_class_func(IO_CLASS, "__termios_raw", termios_raw, 4);
     globals.define_builtin_class_func(IO_CLASS, "__termios_cooked", termios_cooked, 1);
     globals.define_builtin_class_func(IO_CLASS, "__termios_echo", termios_echo, 2);
@@ -188,6 +189,22 @@ fn io_set_winsize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
         return Err(sys_fail(&globals.store, io, true));
     }
     Ok(Value::nil())
+}
+
+///
+/// ### IO.__generic_readable -> Module
+///
+/// `IO::generic_readable`, the module StringIO's readers live in,
+/// defined if it does not exist yet. console.c puts `getch` / `getpass`
+/// on it with `rb_define_module_under`, which can name a module no Ruby
+/// constant syntax can; this is that call for `stdlib/io/console.rb`.
+#[monoruby_builtin]
+fn generic_readable(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let name = IdentId::get_id("generic_readable");
+    if let Some(m) = globals.store.get_constant_noautoload(IO_CLASS, name) {
+        return Ok(m);
+    }
+    Ok(globals.store.define_module_with_identid(name, IO_CLASS).as_val())
 }
 
 ///

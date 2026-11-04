@@ -1688,7 +1688,10 @@ pub(crate) fn precise_mbclen(enc: Encoding, bytes: &[u8], pos: usize) -> Precise
         }
         return PreciseLen::Char(1);
     }
-    let rest = &bytes[pos..];
+    // One character is at most four bytes: validating the whole tail
+    // would make a walk over a string quadratic (a C extension's
+    // `rb_enc_mbclen(p, RSTRING_END(str), enc)` per character).
+    let rest = &bytes[pos..bytes.len().min(pos.saturating_add(4))];
     match std::str::from_utf8(rest) {
         Ok(s) => match s.chars().next() {
             Some(c) => PreciseLen::Char(c.len_utf8()),
@@ -3798,6 +3801,22 @@ impl RStringInner {
     /// may write through the pointer. Returns the pointer and the length.
     pub(crate) fn c_str_ptr(&mut self) -> (*mut u8, usize) {
         self.cr.set(CodeRange::Unknown);
+        self.c_str_ptr_read()
+    }
+
+    /// [`Self::c_str_ptr`] for a reader (`RSTRING_PTR`): the same
+    /// NUL-terminated owned buffer, but the cached code range stands,
+    /// since the bytes do not change. A C extension that writes through
+    /// the pointer calls `rb_str_modify` (`c_str_ptr`) first, as CRuby
+    /// requires — clearing the code range on every read would rescan
+    /// the whole string at the next regexp match (strscan).
+    /// The capacity of the owned buffer (`rb_str_capacity`); a shared
+    /// view is detached first.
+    pub(crate) fn owned_capacity(&mut self) -> usize {
+        self.owned_mut().capacity()
+    }
+
+    pub(crate) fn c_str_ptr_read(&mut self) -> (*mut u8, usize) {
         let buf = self.owned_mut();
         buf.reserve(1);
         let len = buf.len();

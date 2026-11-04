@@ -141,6 +141,63 @@ NORETURN(void rb_enc_raise(rb_encoding *enc, VALUE exc, const char *fmt, ...));
 #define MBCLEN_INVALID_P(ret) ONIGENC_MBCLEN_INVALID_P(ret)
 #define MBCLEN_NEEDMORE_P(ret) ONIGENC_MBCLEN_NEEDMORE_P(ret)
 #define MBCLEN_NEEDMORE_LEN(ret) ONIGENC_MBCLEN_NEEDMORE_LEN(ret)
+/* Encoding::Converter's option bits (transcode.c), CRuby's values. Only
+ * `rb_econv_prepare_options` and `rb_str_encode` read them here. */
+#define ECONV_ERROR_HANDLER_MASK                0x000000ff
+#define ECONV_INVALID_MASK                      0x0000000f
+#define ECONV_INVALID_REPLACE                   0x00000002
+#define ECONV_UNDEF_MASK                        0x000000f0
+#define ECONV_UNDEF_REPLACE                     0x00000020
+#define ECONV_UNDEF_HEX_CHARREF                 0x00000030
+#define ECONV_DECORATOR_MASK                    0x0001ff00
+#define ECONV_NEWLINE_DECORATOR_MASK            0x00007f00
+#define ECONV_NEWLINE_DECORATOR_READ_MASK       0x00000f00
+#define ECONV_NEWLINE_DECORATOR_WRITE_MASK      0x00007000
+#define ECONV_UNIVERSAL_NEWLINE_DECORATOR       0x00000100
+#define ECONV_CRLF_NEWLINE_DECORATOR            0x00001000
+#define ECONV_CR_NEWLINE_DECORATOR              0x00002000
+#define ECONV_LF_NEWLINE_DECORATOR              0x00004000
+#define ECONV_XML_TEXT_DECORATOR                0x00008000
+#define ECONV_XML_ATTR_CONTENT_DECORATOR        0x00010000
+#define ECONV_STATEFUL_DECORATOR_MASK           0x00f00000
+#define ECONV_XML_ATTR_QUOTE_DECORATOR          0x00100000
+#define ECONV_DEFAULT_NEWLINE_DECORATOR         0
+#define ECONV_PARTIAL_INPUT                     0x00020000
+#define ECONV_AFTER_OUTPUT                      0x00040000
+int rb_econv_prepare_options(VALUE opthash, VALUE *ecopts, int ecflags);
+int rb_econv_prepare_opts(VALUE opthash, VALUE *ecopts);
+
+/* transcode.h's converter, over an `Encoding::Converter`. */
+typedef enum {
+    econv_invalid_byte_sequence,
+    econv_undefined_conversion,
+    econv_destination_buffer_full,
+    econv_source_buffer_empty,
+    econv_finished,
+    econv_after_output,
+    econv_incomplete_input
+} rb_econv_result_t;
+typedef struct rb_econv_t rb_econv_t;
+rb_econv_t *rb_econv_open(const char *source_encoding, const char *destination_encoding, int ecflags);
+rb_econv_t *rb_econv_open_opts(const char *source_encoding, const char *destination_encoding, int ecflags, VALUE ecopts);
+void rb_econv_close(rb_econv_t *ec);
+rb_econv_result_t rb_econv_convert(rb_econv_t *ec,
+                                   const unsigned char **source_buffer_ptr, const unsigned char *source_buffer_end,
+                                   unsigned char **destination_buffer_ptr, unsigned char *destination_buffer_end,
+                                   int flags);
+VALUE rb_econv_str_convert(rb_econv_t *ec, VALUE src, int flags);
+void rb_econv_check_error(rb_econv_t *ec);
+VALUE rb_econv_open_exc(const char *senc, const char *denc, int ecflags);
+VALUE rb_str_conv_enc_opts(VALUE str, rb_encoding *from, rb_encoding *to, int ecflags, VALUE ecopts);
+#define rb_is_ascii8bit_enc(enc) ((enc) == rb_ascii8bit_encoding())
+void rb_enc_warn(rb_encoding *enc, const char *fmt, ...);
+VALUE rb_enc_uint_chr(unsigned int code, rb_encoding *enc);
+int rb_monoruby_enc_mbcput(unsigned int c, void *buf, rb_encoding *enc);
+#define rb_enc_mbcput(c, buf, enc) rb_monoruby_enc_mbcput((unsigned int)(c), (buf), (enc))
+rb_encoding *rb_find_encoding(VALUE enc);
+char *rb_enc_left_char_head(const char *s, const char *p, const char *e, rb_encoding *enc);
+char *rb_enc_right_char_head(const char *s, const char *p, const char *e, rb_encoding *enc);
+char *rb_enc_prev_char(const char *s, const char *p, const char *e, rb_encoding *enc);
 #define rb_enc_str_new_lit(s, enc) rb_enc_str_new((s), (long)(sizeof(s) - 1), (enc))
 
 #ifdef __cplusplus

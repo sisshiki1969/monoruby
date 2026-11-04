@@ -1,4 +1,4 @@
-use monoruby_test_support::{build_extension as ensure_extension, ruby_path};
+use monoruby_test_support::ruby_path;
 use std::process::Command;
 
 // hexapdf (a pure-Ruby PDF library) compresses every content stream with
@@ -68,7 +68,6 @@ fn hexapdf_document_bytes_match_cruby() {
     ruby.args(["-E", "UTF-8", "-e", SCRIPT]);
     let expected = run(ruby);
     let mut mono = Command::new(env!("CARGO_BIN_FILE_MONORUBY_monoruby"));
-    mono.env("MONORUBY_EXT_PATH", ensure_extension("zlib_native"));
     mono.args(["-e", SCRIPT]);
     let got = run(mono);
     eprintln!("ruby:     {expected}\nmonoruby: {got}");

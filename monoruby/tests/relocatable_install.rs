@@ -98,7 +98,6 @@ fn the_installed_extensions_load() {
     let ext = root.join("ext");
     for name in [
         "psych_native",
-        "zlib_native",
         "zstd_native",
         "sqlite3_native",
         "nokogiri_native",
@@ -111,6 +110,20 @@ fn the_installed_extensions_load() {
             format!("lib{name}.dylib")
         } else {
             format!("lib{name}.so")
+        };
+        assert!(
+            ext.join(&dylib).is_file(),
+            "{dylib} is missing from {}",
+            ext.display()
+        );
+    }
+    // CRuby's own C extensions, built against the C API layer, are named
+    // as their `require` does.
+    for name in ["date_core", "strscan", "stringio", "zlib"] {
+        let dylib = if cfg!(target_os = "macos") {
+            format!("{name}.dylib")
+        } else {
+            format!("{name}.so")
         };
         assert!(
             ext.join(&dylib).is_file(),

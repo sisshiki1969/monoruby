@@ -18,7 +18,7 @@
 //! item in a railsbench request.
 //!
 //! rubygems hashes `.gem` contents with `Digest::SHA256`, so like
-//! `zlib_native` this library is part of every install.
+//! `zlib.so` this library is part of every install.
 //!
 //! This is `src/builtins/digest.rs` moved out of the interpreter
 //! (doc/native_extension_loading.md, step 3).

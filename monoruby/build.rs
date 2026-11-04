@@ -284,7 +284,7 @@ fn main() {
     // extensions there after `cargo install` (see `ext::search_dirs`). Carry
     // it over into the new tree, or every reinstall of the Ruby sources
     // would leave the installed binary without `psych_native.so`,
-    // `zlib_native.so`, … It is moved in only after the tree was hashed, so
+    // `sqlite3_native.so`, … It is moved in only after the tree was hashed, so
     // it never takes part in the stamp.
     let ext = install_root.join("ext");
     if ext.is_dir() {
@@ -334,6 +334,16 @@ fn main() {
 /// finds them next to itself in `target/<triple>/<profile>/` instead.
 fn install_extensions(install_root: &Path) {
     if cross_compiling() {
+        // The C extensions linked here have no artifact of their own for
+        // Cargo to place: put them next to the cross binary, where the
+        // Rust ones land (`<target dir>/<triple>/<profile>/`, three levels
+        // above OUT_DIR), so that binary finds them too.
+        let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+        if let (Some(dir), Ok(entries)) = (out.ancestors().nth(3), fs::read_dir(capi_extensions_dir())) {
+            for e in entries.flatten() {
+                let _ = fs::copy(e.path(), dir.join(e.file_name()));
+            }
+        }
         return;
     }
     let ext = install_root.join("ext");
@@ -417,6 +427,16 @@ fn build_capi_archive(capi_dir: &Path) {
         .file("../monoruby_capi/src/st.c")
         .include("../monoruby_capi/include")
         .include("../monoruby_ext_sys/include");
+    // Every API call reads the layer's thread-local frame pointer, and in
+    // a dlopen'ed object the default dialect makes that a __tls_get_addr
+    // call each time. TLS descriptors resolve to a static-TLS offset when
+    // there is room (the usual case) and keep the dynamic fallback when
+    // there is not. aarch64 uses descriptors already.
+    if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("x86_64")
+        && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
+    {
+        build.flag_if_supported("-mtls-dialect=gnu2");
+    }
     match build.try_compile("monoruby_capi") {
         Ok(()) => {
             let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap())
@@ -473,8 +493,9 @@ fn capi_extensions_dir() -> PathBuf {
 /// linked into a shared object with the layer's archives -- so monoruby
 /// ships them as `<install root>/ext/<name>.<DLEXT>`, where `require
 /// "<name>"` looks (`ext::find_extension`). Today: `date_core`
-/// (`require "date"`, and so `time`, `psych` and rubygems' `gem build`).
-/// `doc/c_api.md` §3.17.
+/// (`require "date"`, and so `time`, `psych` and rubygems' `gem build`),
+/// `strscan`, `stringio` and `zlib` (which rubygems needs to read a
+/// `.gem`). `doc/c_api.md` §3.17.
 ///
 /// The `#define`s stand in for the extension's `extconf.rb` probes, for
 /// the targets monoruby builds on. Like the layer's archive, a failure to
@@ -486,14 +507,49 @@ fn build_capi_extensions(capi_dir: &Path) {
         dir: &'static str,
         files: &'static [&'static str],
         defines: &'static [&'static str],
+        /// Links zlib (`zlib_link`).
+        zlib: bool,
     }
-    const EXTENSIONS: &[Ext] = &[Ext {
-        name: "date_core",
-        dir: "date",
-        files: &["date_core.c", "date_parse.c", "date_strftime.c", "date_strptime.c"],
-        // `tm_gmtoff` is in every target's `struct tm`.
-        defines: &["HAVE_STRUCT_TM_TM_GMTOFF"],
-    }];
+    const EXTENSIONS: &[Ext] = &[
+        Ext {
+            name: "date_core",
+            dir: "date",
+            files: &["date_core.c", "date_parse.c", "date_strftime.c", "date_strptime.c"],
+            // `tm_gmtoff` is in every target's `struct tm`.
+            defines: &["HAVE_STRUCT_TM_TM_GMTOFF"],
+            zlib: false,
+        },
+        Ext {
+            name: "strscan",
+            dir: "strscan",
+            files: &["strscan.c"],
+            // The layer has both (`ruby/re.h`, capi.c).
+            defines: &["HAVE_ONIG_REGION_MEMSIZE", "HAVE_RB_REG_ONIG_MATCH", "HAVE_RB_DEPRECATE_CONSTANT"],
+            zlib: false,
+        },
+        Ext {
+            name: "stringio",
+            dir: "stringio",
+            files: &["stringio.c"],
+            defines: &[],
+            zlib: false,
+        },
+        Ext {
+            name: "zlib",
+            dir: "zlib",
+            files: &["zlib.c"],
+            // What extconf.rb finds in every zlib monoruby links (1.2.9+).
+            defines: &[
+                "OS_CODE=OS_UNIX",
+                "HAVE_CRC32_COMBINE",
+                "HAVE_ADLER32_COMBINE",
+                "HAVE_TYPE_Z_CRC_T",
+                "HAVE_ZLIB_SIZE_T_FUNCS",
+            ],
+            zlib: true,
+        },
+    ];
+    let zlib = zlib_link();
     let dest = capi_extensions_dir();
     let _ = fs::remove_dir_all(&dest);
     fs::create_dir_all(&dest).unwrap();
@@ -514,7 +570,15 @@ fn build_capi_extensions(capi_dir: &Path) {
             .include("../monoruby_ext_sys/include")
             .include(&src_dir);
         for d in ext.defines {
-            build.define(d, None);
+            match d.split_once('=') {
+                Some((k, v)) => build.define(k, v),
+                None => build.define(d, None),
+            };
+        }
+        if ext.zlib
+            && let Some(inc) = &zlib.include
+        {
+            build.include(inc);
         }
         for f in ext.files {
             build.file(src_dir.join(f));
@@ -537,12 +601,46 @@ fn build_capi_extensions(capi_dir: &Path) {
             .arg(&so)
             .args(&objects)
             .arg(format!("-L{}", capi_dir.display()))
-            .args(["-lmonoruby_capi", "-lmonoruby_capi_stubs", "-lm"]);
+            .args(["-lmonoruby_capi", "-lmonoruby_capi_stubs"]);
+        if ext.zlib {
+            link.args(&zlib.link);
+        }
+        link.arg("-lm");
         match link.status() {
             Ok(status) if status.success() => {}
             Ok(status) => println!("cargo:warning={} not linked ({status}); its library is unavailable", ext.name),
             Err(e) => println!("cargo:warning={} not linked ({e}); its library is unavailable", ext.name),
         }
+    }
+}
+
+/// How `zlib.so` gets zlib: the copy libz-sys compiled (`bundled-zlib`,
+/// the default: libz-sys's build script leaves `lib/libz.a` and
+/// `include/` under the `DEP_Z_ROOT` it hands this script, built with
+/// `-fPIC`), linked in statically, or else the platform's (`system-zlib`,
+/// or libz-sys found one through pkg-config): `-lz` and its headers.
+struct ZlibLink {
+    include: Option<PathBuf>,
+    link: Vec<std::ffi::OsString>,
+}
+
+fn zlib_link() -> ZlibLink {
+    println!("cargo:rerun-if-env-changed=DEP_Z_ROOT");
+    if let Some(root) = std::env::var_os("DEP_Z_ROOT").map(PathBuf::from) {
+        let archive = root.join("lib").join("libz.a");
+        if archive.is_file() {
+            let include = std::env::var_os("DEP_Z_INCLUDE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| root.join("include"));
+            return ZlibLink {
+                include: Some(include),
+                link: vec![archive.into_os_string()],
+            };
+        }
+    }
+    ZlibLink {
+        include: std::env::var_os("DEP_Z_INCLUDE").map(PathBuf::from),
+        link: vec!["-lz".into()],
     }
 }
 

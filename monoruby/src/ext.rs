@@ -50,18 +50,147 @@ struct ExtMethod {
 
 #[derive(Default)]
 pub(crate) struct ExtState {
-    methods: HashMap<FuncId, ExtMethod>,
+    methods: fxhash::FxHashMap<FuncId, ExtMethod>,
     /// `gc_pin` counts, keyed by value bits; marked as roots.
-    pins: HashMap<u64, u32>,
+    pins: fxhash::FxHashMap<u64, u32>,
     /// `gc_register_address` slots, read afresh at every collection.
     addresses: Vec<usize>,
     /// The `dlopen` handles, kept for the life of the process: an
     /// extension is never unloaded (its method pointers live in the
     /// function table).
     handles: Vec<usize>,
+    /// Set by `Executor::invoke_func` when it enters an extension method
+    /// with keywords (from Rust: an Enumerator replaying `each_line(chomp:
+    /// true)`, `send`, an extension's `rb_funcallv_kw`), and taken by the
+    /// trampoline the invoker reaches next. No Ruby runs in between.
+    kw_pending: bool,
+    /// The frames (local frame addresses) of the extension methods so
+    /// entered and still running: their `rb_keyword_given_p` is yes.
+    kw_frames: Vec<usize>,
+    /// Names this interpreter's C-API extension mappings; see
+    /// `CAPI_INSTANCES`.
+    owner: CapiOwner,
+}
+
+/// Identifies one interpreter's C-API extension instances.
+struct CapiOwner(u64);
+
+impl Default for CapiOwner {
+    fn default() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        CapiOwner(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+/// One `dlopen`ed mapping of a C-API extension, and the interpreter it
+/// was initialized for.
+struct CapiInstance {
+    handle: usize,
+    owner: u64,
+}
+
+/// Every C-API extension mapping in the process, by the path it was
+/// required from.
+///
+/// An extension written for CRuby keeps its state in C statics (its
+/// classes, cached IDs and VALUEs, and the layer's own binding to the
+/// interpreter and its cached method objects), which CRuby, with one VM
+/// per process, initializes once. A monoruby process can run several
+/// interpreters — the test harness runs one per test thread — and
+/// `dlopen` hands every one of them the same mapping, so a second
+/// `Init_` would overwrite the first interpreter's statics under it, and
+/// statics an `Init_` does not reassign (the layer's lazily filled
+/// caches) would point into another interpreter's heap. Each interpreter
+/// therefore gets a mapping of its own: the first one the original file,
+/// every later one a private copy, which the dynamic loader maps afresh
+/// because it is another inode. A mapping is never reused or unloaded —
+/// the statics of an interpreter that ended describe a heap that is
+/// gone — so a process that keeps starting interpreters keeps one
+/// mapping per interpreter that loaded the extension.
+static CAPI_INSTANCES: std::sync::Mutex<Option<HashMap<PathBuf, Vec<CapiInstance>>>> =
+    std::sync::Mutex::new(None);
+
+/// The handle of the mapping of the C-API extension at `path` that the
+/// interpreter `owner` is to initialize; `handle` is the original's,
+/// just opened (and that reference dropped again when another mapping
+/// is used). See `CAPI_INSTANCES`.
+fn claim_capi_instance(path: &Path, handle: *mut c_void, owner: u64) -> Result<*mut c_void> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut map = CAPI_INSTANCES.lock().unwrap_or_else(|e| e.into_inner());
+    let list = map
+        .get_or_insert_with(HashMap::default)
+        .entry(path.to_path_buf())
+        .or_default();
+    if let Some(inst) = list.iter().find(|i| i.owner == owner) {
+        let h = inst.handle as *mut c_void;
+        if h != handle {
+            // SAFETY: drops the reference `load_extension` just took; the
+            // original stays mapped for the instance that holds it.
+            unsafe { libc::dlclose(handle) };
+        }
+        return Ok(h);
+    }
+    if list.is_empty() {
+        list.push(CapiInstance {
+            handle: handle as usize,
+            owner,
+        });
+        return Ok(handle);
+    }
+    // Another interpreter holds the original: map a private copy. The copy keeps the
+    // file name (`Init_` is looked up by it) in a directory of its own,
+    // and is removed once mapped.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "monoruby-capi-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let err = |e: std::io::Error| {
+        MonorubyErr::loaderr(
+            format!("cannot copy {}: {e}", path.display()),
+            path.to_path_buf(),
+        )
+    };
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let copy = dir.join(path.file_name().unwrap_or_default());
+    let res = std::fs::copy(path, &copy).map_err(err).and_then(|_| {
+        let cpath = std::ffi::CString::new(copy.as_os_str().as_bytes()).unwrap();
+        // SAFETY: plain libc call with a valid C string.
+        let h = unsafe { libc::dlopen(cpath.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+        if h.is_null() {
+            Err(MonorubyErr::loaderr(
+                format!("{} -- {}", dlerror(), copy.display()),
+                path.to_path_buf(),
+            ))
+        } else {
+            Ok(h)
+        }
+    });
+    let _ = std::fs::remove_file(&copy);
+    let _ = std::fs::remove_dir(&dir);
+    let h = res?;
+    // SAFETY: as above; the original stays mapped for its holder.
+    unsafe { libc::dlclose(handle) };
+    list.push(CapiInstance {
+        handle: h as usize,
+        owner,
+    });
+    Ok(h)
 }
 
 impl ExtState {
+    /// See `kw_pending`.
+    pub(crate) fn note_kw_entry(&mut self, func_id: FuncId) -> bool {
+        let ext = self.methods.get(&func_id).is_some_and(|m| m.argc == MR_ARGC_VARIADIC);
+        self.kw_pending |= ext;
+        ext
+    }
+
+    pub(crate) fn clear_kw_entry(&mut self) {
+        self.kw_pending = false;
+    }
+
     pub(crate) fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         for bits in self.pins.keys() {
             Value::from_u64(*bits).mark(alloc);
@@ -278,6 +407,10 @@ extern "C" fn ext_method_trampoline(
         argv.extend((0..m.argc as usize).map(|i| lfp.arg(i).id()));
     }
     let block = lfp.block().map_or(MR_UNDEF, |bh| bh.get().id());
+    let kw_frame = std::mem::take(&mut globals.ext.kw_pending).then(|| lfp.as_ptr() as usize);
+    if let Some(frame) = kw_frame {
+        globals.ext.kw_frames.push(frame);
+    }
     let temp_base = vm.temp_len();
     let mut ctx = make_ctx(vm, globals, Some(lfp), Some(pc));
     // SAFETY: the extension's own function, with the arguments it declared.
@@ -301,6 +434,11 @@ extern "C" fn ext_method_trampoline(
         }
     };
     vm.temp_clear(temp_base);
+    if let Some(frame) = kw_frame
+        && let Some(i) = globals.ext.kw_frames.iter().rposition(|f| *f == frame)
+    {
+        globals.ext.kw_frames.remove(i);
+    }
     match val(res) {
         Some(v) if !vm.has_error() => Some(v),
         Some(_) => None,
@@ -422,6 +560,9 @@ pub(crate) fn load_extension(vm: &mut Executor, globals: &mut Globals, path: &Pa
     // SAFETY: as above.
     let capi_init = unsafe { libc::dlsym(handle, c"monoruby_capi_init".as_ptr()) };
     if !capi_init.is_null() {
+        let handle = claim_capi_instance(path, handle, globals.ext.owner.0)?;
+        // SAFETY: as above, on the claimed instance.
+        let capi_init = unsafe { libc::dlsym(handle, c"monoruby_capi_init".as_ptr()) };
         return load_capi_extension(vm, globals, path, handle, capi_init);
     }
     let sym = std::ffi::CString::new(init_symbol(path)).unwrap();
@@ -665,6 +806,19 @@ pub(crate) static MR_API: MrApi = MrApi {
     backref_get: mr_backref_get,
     backref_set: mr_backref_set,
     call_blocking_ubf: mr_call_blocking_ubf,
+    lastline_get: mr_lastline_get,
+    lastline_set: mr_lastline_set,
+    obj_frozen: mr_obj_frozen,
+    gvar_get: mr_gvar_get,
+    gvar_set: mr_gvar_set,
+    funcall_kw: mr_funcall_kw,
+    str_rptr: mr_str_rptr,
+    str_subseq: mr_str_subseq,
+    str_enc_name: mr_str_enc_name,
+    str_set_enc: mr_str_set_enc,
+    str_coderange: mr_str_coderange,
+    str_dup: mr_str_dup,
+    str_capacity: mr_str_capacity,
 };
 
 // ---- regexp (ruby/re.h) ----------------------------------------------
@@ -687,8 +841,37 @@ static CAPI_REGEX_CACHE: std::sync::Mutex<
     Option<HashMap<(Vec<u8>, u32, onigmo_regex::OnigmoEncoding), CapiRegex>>,
 > = std::sync::Mutex::new(None);
 
-/// The cached `regex_t` for `key`, compiled on first use.
-fn capi_regex(key: (Vec<u8>, u32, onigmo_regex::OnigmoEncoding)) -> Result<*mut c_void> {
+/// The cached `regex_t` for `key`, compiled on first use. A thread's
+/// recent lookups are answered by the address of the pattern bytes,
+/// checked against the bytes themselves (a freed Regexp's buffer can be
+/// reused), ahead of the shared table: strscan prepares its pattern on
+/// every scan, and hashing the source under the lock dominated a scan.
+fn capi_regex(key: (&[u8], u32, onigmo_regex::OnigmoEncoding)) -> Result<*mut c_void> {
+    type Recent = fxhash::FxHashMap<(usize, u32, onigmo_regex::OnigmoEncoding), (Box<[u8]>, usize)>;
+    thread_local! {
+        static RECENT: std::cell::RefCell<Recent> = Default::default();
+    }
+    let (src, option, enc) = key;
+    let addr = (src.as_ptr() as usize, option, enc);
+    if let Some(p) = RECENT.with(|r| {
+        r.borrow()
+            .get(&addr)
+            .and_then(|(bytes, p)| (**bytes == *src).then_some(*p))
+    }) {
+        return Ok(p as *mut c_void);
+    }
+    let p = capi_regex_shared((src.to_vec(), option, enc))?;
+    RECENT.with(|r| {
+        let mut r = r.borrow_mut();
+        if r.len() >= 256 {
+            r.clear();
+        }
+        r.insert(addr, (src.into(), p as usize));
+    });
+    Ok(p)
+}
+
+fn capi_regex_shared(key: (Vec<u8>, u32, onigmo_regex::OnigmoEncoding)) -> Result<*mut c_void> {
     let mut guard = CAPI_REGEX_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     let cache = guard.get_or_insert_with(HashMap::new);
     if let Some(re) = cache.get(&key) {
@@ -788,13 +971,8 @@ unsafe extern "C" fn mr_enc_precise_mbclen(
     }
     // SAFETY: the table's contract: `name` is a C string, `p..e` a
     // readable byte range.
-    let (name, bytes) = unsafe {
-        (
-            CStr::from_ptr(name).to_string_lossy(),
-            std::slice::from_raw_parts(p, e.offset_from(p) as usize),
-        )
-    };
-    let Ok(enc) = Encoding::try_from_str(&name) else {
+    let bytes = unsafe { std::slice::from_raw_parts(p, e.offset_from(p) as usize) };
+    let Some(enc) = enc_of_cname(name) else {
         return 1;
     };
     match crate::value::precise_mbclen(enc, bytes, 0) {
@@ -859,6 +1037,52 @@ unsafe extern "C" fn mr_backref_set(ctx: *mut MrContext, md: MrValue) {
     vm.set_backref(Value::from_u64(md));
 }
 
+/// `rb_lastline_get`: `$_` of the Ruby code that called the extension
+/// method, read past the method's native frame as `$~` is
+/// (`mr_backref_get`).
+unsafe extern "C" fn mr_lastline_get(ctx: *mut MrContext) -> MrValue {
+    // SAFETY: the table's contract.
+    let (vm, _) = unsafe { parts(ctx) };
+    vm.get_last_read_line().id()
+}
+
+/// `rb_lastline_set`: see `mr_lastline_get`.
+unsafe extern "C" fn mr_lastline_set(ctx: *mut MrContext, v: MrValue) {
+    // SAFETY: the table's contract.
+    let (vm, _) = unsafe { parts(ctx) };
+    vm.set_last_read_line(Value::from_u64(v));
+}
+
+/// `OBJ_FROZEN`: what `Kernel#frozen?` answers, without the call.
+unsafe extern "C" fn mr_obj_frozen(_ctx: *mut MrContext, v: MrValue) -> c_int {
+    Value::from_u64(v).is_frozen() as c_int
+}
+
+/// `rb_gv_get`: the global `name` (with its `$`), through its hook as a
+/// Ruby read would be (`$/`, `$;`, `$~`, ...).
+unsafe extern "C" fn mr_gvar_get(ctx: *mut MrContext, name: *const c_char) -> MrValue {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let name = unsafe { cstr(name) };
+    crate::globals::GvarTable::get(vm, globals, IdentId::get_id(name)).id()
+}
+
+/// `rb_gv_set`: assign the global `name`, running its setter's checks;
+/// -1 with the error pending when it refuses.
+unsafe extern "C" fn mr_gvar_set(ctx: *mut MrContext, name: *const c_char, v: MrValue) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let name = unsafe { cstr(name) };
+    let Some(v) = val(v) else { return -1 };
+    match crate::globals::GvarTable::set(vm, globals, IdentId::get_id(name), v) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_err(vm, e);
+            -1
+        }
+    }
+}
+
 /// `rb_keyword_given_p`: the running extension method's frame was
 /// entered by a call instruction whose site carries keywords, and the
 /// method received them as a trailing Hash. Entered any other way (from
@@ -881,6 +1105,9 @@ unsafe extern "C" fn mr_keyword_given(ctx: *mut MrContext) -> c_int {
     });
     if !last.is_some_and(|v| v.try_hash_ty().is_some()) {
         return 0;
+    }
+    if globals.ext.kw_frames.contains(&(frame as usize)) {
+        return 1;
     }
     keyword_given(vm, globals).unwrap_or(false) as c_int
 }
@@ -1804,9 +2031,58 @@ unsafe fn funcall_id(
     let Some(recv) = val(recv) else {
         return MR_UNDEF;
     };
-    // SAFETY: as above.
-    let args = unsafe { args(argv, argc) };
+    let n = argc.max(0) as usize;
+    let args: smallvec::SmallVec<[Value; 8]> = (0..n)
+        // SAFETY: as above — `argv` points at `argc` values.
+        .map(|i| unsafe { *argv.add(i) })
+        .filter_map(val)
+        .collect();
     match vm.invoke_method_inner(globals, method, recv, &args, block_handler(block), None) {
+        Ok(v) => v.id(),
+        Err(e) => {
+            set_err(vm, e);
+            MR_UNDEF
+        }
+    }
+}
+
+/// `rb_funcallv_kw`: `funcall_sym`, with the last of `argv` passed as
+/// keywords when `kw_splat` is set and it is a Hash. A callee written in
+/// Ruby binds them as keywords; one in an extension sees them as its
+/// trailing Hash with `rb_keyword_given_p` true (`ExtState::kw_pending`),
+/// as from a Ruby call site that passed keywords.
+unsafe extern "C" fn mr_funcall_kw(
+    ctx: *mut MrContext,
+    recv: MrValue,
+    sym: MrSym,
+    argc: c_int,
+    argv: *const MrValue,
+    block: MrValue,
+    kw_splat: c_int,
+) -> MrValue {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    if sym == MR_NO_SYM {
+        set_err(vm, MonorubyErr::argumenterr("funcall_kw was given MR_NO_SYM"));
+        return MR_UNDEF;
+    }
+    let Some(recv) = val(recv) else {
+        return MR_UNDEF;
+    };
+    // SAFETY: as above.
+    let mut args = unsafe { args(argv, argc) };
+    let kw = match args.last() {
+        Some(h) if kw_splat != 0 && h.try_hash_ty().is_some() => Some(Hashmap::new(*h)),
+        _ => None,
+    };
+    if kw.is_none() {
+        // SAFETY: as above.
+        return unsafe { funcall_id(ctx, recv.id(), IdentId::from(sym), argc, argv, block) };
+    }
+    args.pop();
+    // `**{}` passes nothing at all.
+    let kw = kw.filter(|h| !h.is_empty());
+    match vm.invoke_method_inner(globals, IdentId::from(sym), recv, &args, block_handler(block), kw) {
         Ok(v) => v.id(),
         Err(e) => {
             set_err(vm, e);
@@ -2033,6 +2309,167 @@ unsafe extern "C" fn mr_str_cptr(ctx: *mut MrContext, v: MrValue, len: *mut usiz
     ptr
 }
 
+/// `RSTRING_PTR`: a String's own NUL-terminated buffer (`str_cptr`)
+/// unless it is a view into a shared buffer (a slice of a longer string
+/// shares it, and so does the string it was taken from), whose bytes are
+/// handed out in place: detaching it here would move the bytes on every
+/// call and break the pointer arithmetic C code does across calls
+/// (stringio's `ptr->pos = e - RSTRING_PTR(str)`). As in CRuby, writing
+/// through it needs `rb_str_modify` (`str_cptr`) first, which is also
+/// what drops the cached code range: a read keeps it.
+unsafe extern "C" fn mr_str_rptr(ctx: *mut MrContext, v: MrValue, len: *mut usize) -> *mut u8 {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(mut s) = string_arg(vm, globals, v) else {
+        return std::ptr::null_mut();
+    };
+    let inner = s.as_rstring_inner_mut();
+    let (ptr, n) = if inner.is_shared() {
+        let bytes = inner.as_bytes();
+        (bytes.as_ptr() as *mut u8, bytes.len())
+    } else {
+        inner.c_str_ptr_read()
+    };
+    if !len.is_null() {
+        // SAFETY: `len` is the caller's slot.
+        unsafe { *len = n };
+    }
+    ptr
+}
+
+/// `rb_str_subseq`: bytes `beg..beg+len` of a String (clamped to it) as
+/// a new String of the same encoding, sharing the buffer when it is long
+/// enough, as `byteslice` does — without the method call.
+unsafe extern "C" fn mr_str_subseq(ctx: *mut MrContext, v: MrValue, beg: i64, len: i64) -> MrValue {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(s) = string_arg(vm, globals, v) else {
+        return MR_UNDEF;
+    };
+    let n = s.as_rstring_inner().len();
+    let beg = (beg.max(0) as usize).min(n);
+    let end = beg.saturating_add(len.max(0) as usize).min(n);
+    crate::value::string_substring(s, beg, end).id()
+}
+
+/// The name of a String's encoding as a NUL-terminated C string that
+/// lives for the process: one pointer per encoding, so the caller can
+/// cache by it (`rb_enc_get`).
+unsafe extern "C" fn mr_str_enc_name(ctx: *mut MrContext, v: MrValue) -> *const c_char {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(s) = string_arg(vm, globals, v) else {
+        return std::ptr::null();
+    };
+    static_enc_name(s.as_rstring_inner().encoding())
+}
+
+fn static_enc_name(enc: Encoding) -> *const c_char {
+    use std::sync::{Mutex, OnceLock};
+    // The common three without the shared table's lock (always these
+    // pointers: the table never sees them).
+    match enc {
+        Encoding::Utf8(0) => return c"UTF-8".as_ptr(),
+        Encoding::Ascii8 => return c"ASCII-8BIT".as_ptr(),
+        Encoding::UsAscii => return c"US-ASCII".as_ptr(),
+        _ => {}
+    }
+    static NAMES: OnceLock<Mutex<HashMap<Encoding, &'static CStr>>> = OnceLock::new();
+    let mut names = NAMES.get_or_init(Default::default).lock().unwrap();
+    let p = names
+        .entry(enc)
+        .or_insert_with(|| {
+            let c = std::ffi::CString::new(enc.name()).unwrap_or_default();
+            Box::leak(c.into_boxed_c_str())
+        })
+        .as_ptr();
+    p
+}
+
+/// The Encoding a C string names, cached by the pointer: the layer hands
+/// the same `rb_encoding` name pointer in again and again. A cached entry
+/// is checked against the bytes, so a reused buffer is never misread.
+fn enc_of_cname(name: *const c_char) -> Option<Encoding> {
+    thread_local! {
+        static CACHE: std::cell::RefCell<fxhash::FxHashMap<usize, Encoding>> = Default::default();
+    }
+    // SAFETY: the caller's contract: `name` is a C string.
+    let bytes = unsafe { CStr::from_ptr(name) }.to_bytes();
+    let key = name as usize;
+    if let Some(enc) = CACHE.with(|c| c.borrow().get(&key).copied())
+        && enc.name().as_bytes() == bytes
+    {
+        return Some(enc);
+    }
+    let enc = Encoding::try_from_str(std::str::from_utf8(bytes).ok()?).ok()?;
+    if enc.name().as_bytes() == bytes {
+        CACHE.with(|c| c.borrow_mut().insert(key, enc));
+    }
+    Some(enc)
+}
+
+/// `rb_enc_associate`: `force_encoding(name)` without the method call. 0
+/// done; -1 with an error pending (not a String, frozen); -2 when `name`
+/// is not one this resolves (the caller falls back to `force_encoding`).
+unsafe extern "C" fn mr_str_set_enc(ctx: *mut MrContext, v: MrValue, name: *const c_char) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(mut s) = string_arg(vm, globals, v) else {
+        return -1;
+    };
+    let Some(enc) = enc_of_cname(name) else {
+        return -2;
+    };
+    if let Err(e) = s.ensure_string_mutable(vm, globals) {
+        set_err(vm, e);
+        return -1;
+    }
+    s.as_rstring_inner_mut().set_encoding(enc);
+    0
+}
+
+unsafe extern "C" fn mr_str_coderange(ctx: *mut MrContext, v: MrValue) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(s) = string_arg(vm, globals, v) else {
+        return -1;
+    };
+    match s.as_rstring_inner().code_range() {
+        crate::value::CodeRange::SevenBit | crate::value::CodeRange::Unknown => 1,
+        crate::value::CodeRange::Valid => 2,
+        crate::value::CodeRange::Broken => 3,
+    }
+}
+
+unsafe extern "C" fn mr_str_capacity(ctx: *mut MrContext, v: MrValue) -> i64 {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(mut s) = string_arg(vm, globals, v) else {
+        return -1;
+    };
+    let inner = s.as_rstring_inner_mut();
+    if inner.is_shared() {
+        return inner.len() as i64;
+    }
+    // The buffer `str_rptr` hands out (it makes room for the NUL first).
+    inner.c_str_ptr_read();
+    inner.owned_capacity().saturating_sub(1) as i64
+}
+
+unsafe extern "C" fn mr_str_dup(ctx: *mut MrContext, v: MrValue) -> MrValue {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(s) = string_arg(vm, globals, v) else {
+        return MR_UNDEF;
+    };
+    if s.class() == STRING_CLASS {
+        let len = s.as_rstring_inner().len();
+        return crate::value::string_substring(s, 0, len).id();
+    }
+    // SAFETY: no arguments.
+    unsafe { funcall_id(ctx, v, IdentId::get_id("dup"), 0, std::ptr::null(), MR_UNDEF) }
+}
+
 unsafe extern "C" fn mr_str_resize(ctx: *mut MrContext, v: MrValue, len: usize) -> c_int {
     // SAFETY: the table's contract.
     let (vm, globals) = unsafe { parts(ctx) };
@@ -2058,7 +2495,7 @@ unsafe extern "C" fn mr_str_cat(
     let Some(mut s) = string_arg(vm, globals, v) else {
         return -1;
     };
-    if let Err(e) = s.ensure_not_frozen(&globals.store) {
+    if let Err(e) = s.ensure_string_mutable(vm, globals) {
         set_err(vm, e);
         return -1;
     }
@@ -2199,12 +2636,12 @@ mod tests {
     /// message path is exercised here.
     #[test]
     fn capi_regex_reports_onig_new_failure() {
-        let err = capi_regex((b"(".to_vec(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap_err();
+        let err = capi_regex((b"(".as_slice(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap_err();
         assert_eq!(err.message(), "end pattern with unmatched parenthesis");
-        let ok = capi_regex((b"a+".to_vec(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap();
+        let ok = capi_regex((b"a+".as_slice(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap();
         assert!(!ok.is_null());
         // Cached: the same key answers the same `regex_t`.
-        assert_eq!(ok, capi_regex((b"a+".to_vec(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap());
+        assert_eq!(ok, capi_regex((b"a+".as_slice(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap());
     }
 
     #[test]
