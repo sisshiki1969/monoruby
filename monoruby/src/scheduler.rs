@@ -590,8 +590,101 @@ pub(crate) fn spawn(vm: &mut Executor, globals: &mut Globals, thread: Value) -> 
 
 /// Wake a thread parked in `sleep` (`Thread#wakeup` / `#run`). Returns
 /// false if the thread is dead.
+///
+/// A thread blocked in a C extension call that registered an unblock
+/// function (`rb_thread_call_without_gvl`) is woken through it, as
+/// CRuby's `rb_thread_wakeup` interrupts a blocking region.
 pub(crate) fn wakeup(thread: Value) -> bool {
+    if thread.as_thread_inner().blocking_ubf.is_some() && !thread.as_thread_inner().is_dead() {
+        unblock(thread);
+        return true;
+    }
     wakeup_inner(thread, false)
+}
+
+/// An extension's unblock function and its argument: CRuby's
+/// `rb_unblock_function_t` / `data2` of `rb_thread_call_without_gvl`.
+/// `func == None` is `RUBY_UBF_IO`: nothing to call, the blocked
+/// syscall is cut short by the unblocking signal instead (1:1 model).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Ubf {
+    pub(crate) func: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
+    pub(crate) arg: usize,
+    /// `RUBY_UBF_IO` only: an interrupt has asked for the call to end.
+    /// Its signal can land before the call's syscall starts and be
+    /// lost, so a joiner keeps re-sending it while this is set and the
+    /// thread is still blocked (`native::join`), as CRuby's timer
+    /// thread re-runs `ubf_select`.
+    pub(crate) requested: bool,
+}
+
+/// Interrupt `thread`, which is blocked in an extension call with an
+/// unblock function: in the 1:1 model through `interrupt_blocking`
+/// (the unblocking signal, then the function), in the green one by
+/// calling the function, which makes the worker's call return.
+fn unblock(thread: Value) {
+    if !native::enabled() || !native::interrupt_blocking(thread) {
+        // Green, or not inside the GVL-less region yet: the function
+        // alone (it makes the call return whenever it starts).
+        run_ubf(thread);
+    }
+}
+
+/// A signal is pending and the current thread, not main, is running
+/// (holding the GVL, in the 1:1 model). If main is blocked in an extension call with an
+/// unblock function, run it so main can come back and convert the
+/// signal: the kernel's `EINTR` alone is retried by a C loop that
+/// waits for its own wakeup (CRuby interrupts main the same way when a
+/// signal arrives, `rb_threadptr_interrupt`).
+pub(crate) fn unblock_main_for_signal() {
+    let main = SCHEDULER.with(|s| s.borrow().main);
+    if let Some(main) = main
+        && main.as_thread_inner().blocking_ubf.is_some()
+    {
+        unblock(main);
+    }
+}
+
+/// Run `thread`'s unblock function, at most once per blocking call
+/// (a second call could write to an fd the first one closed, as
+/// ruby/spec's own `unblock_gvl_func` does). Called with the GVL held,
+/// as CRuby calls it; the function must not touch the interpreter.
+pub(crate) fn run_ubf(mut thread: Value) {
+    let ubf = &mut thread.as_thread_inner_mut().blocking_ubf;
+    match ubf {
+        Some(Ubf {
+            func: Some(func),
+            arg,
+            ..
+        }) => {
+            let (func, arg) = (*func, *arg);
+            *ubf = None;
+            // SAFETY: the extension's own unblock function with its own
+            // argument, registered for exactly this blocking call.
+            unsafe { func(arg as *mut std::ffi::c_void) };
+        }
+        // RUBY_UBF_IO: the signal is the whole unblocking; remember that
+        // it was asked for, so it can be re-sent.
+        Some(Ubf {
+            func: None,
+            requested,
+            ..
+        }) => *requested = true,
+        None => {}
+    }
+}
+
+/// `thread` is blocked in an extension call whose `RUBY_UBF_IO`
+/// unblocking was asked for and has not taken effect yet.
+pub(crate) fn ubf_io_requested(thread: Value) -> bool {
+    matches!(
+        thread.as_thread_inner().blocking_ubf,
+        Some(Ubf {
+            func: None,
+            requested: true,
+            ..
+        })
+    )
 }
 
 /// Internal wake used by the Ruby-level synchronization primitives

@@ -664,6 +664,7 @@ pub(crate) static MR_API: MrApi = MrApi {
     enc_codepoint: mr_enc_codepoint,
     backref_get: mr_backref_get,
     backref_set: mr_backref_set,
+    call_blocking_ubf: mr_call_blocking_ubf,
 };
 
 // ---- regexp (ruby/re.h) ----------------------------------------------
@@ -1932,6 +1933,43 @@ unsafe extern "C" fn mr_call_blocking(
             -1
         }
     }
+}
+
+unsafe extern "C" fn mr_call_blocking_ubf(
+    ctx: *mut MrContext,
+    f: MrBlockingFn,
+    arg: *mut c_void,
+    ubf: *mut c_void,
+    ubf_arg: *mut c_void,
+    out: *mut i64,
+) -> c_int {
+    if ubf.is_null() {
+        // SAFETY: the table's contract, forwarded.
+        return unsafe { mr_call_blocking(ctx, f, arg, out) };
+    }
+    let func = if ubf as usize == monoruby_ext_sys::MR_UBF_IO {
+        None
+    } else {
+        // SAFETY: the extension passed its `rb_unblock_function_t`.
+        Some(unsafe { std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void)>(ubf) })
+    };
+    let mut thread = {
+        // SAFETY: the table's contract.
+        let (vm, _) = unsafe { parts(ctx) };
+        crate::scheduler::current_thread(vm)
+    };
+    let saved = thread
+        .as_thread_inner_mut()
+        .blocking_ubf
+        .replace(crate::scheduler::Ubf {
+            func,
+            arg: ubf_arg as usize,
+            requested: false,
+        });
+    // SAFETY: the table's contract, forwarded.
+    let rc = unsafe { mr_call_blocking(ctx, f, arg, out) };
+    thread.as_thread_inner_mut().blocking_ubf = saved;
+    rc
 }
 
 // ---- misc ------------------------------------------------------------

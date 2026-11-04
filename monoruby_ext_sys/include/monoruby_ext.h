@@ -200,6 +200,11 @@ struct MrApi {
     /* appended for rb_backref_get / rb_backref_set: `$~` of the Ruby frame the running extension method was called from */
     MrValue (*backref_get)(MrContext *);
     void    (*backref_set)(MrContext *, MrValue md);
+
+    /* appended for rb_thread_call_without_gvl's unblock function: call_blocking whose
+       interrupt (Thread#wakeup / raise / kill, a signal on main) runs ubf(ubf_arg) once.
+       ubf NULL = none, (void *)-1 = RUBY_UBF_IO (the interrupt's signal gives EINTR) */
+    int     (*call_blocking_ubf)(MrContext *, MrBlockingFn f, void *arg, void *ubf, void *ubf_arg, int64_t *out);
 };
 
 /* Onigmo's entry points as linked into monoruby, types erased: regex_t *

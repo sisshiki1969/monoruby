@@ -125,11 +125,16 @@ ctx(void)
     return frame()->ctx;
 }
 
-/* Leave for the innermost frame; the error is pending in the interpreter. */
+/* Leave for the innermost frame; the error is pending in the interpreter.
+   _setjmp / _longjmp throughout, never setjmp / longjmp: on macOS the
+   latter save and restore the signal mask, and an unwind could leave the
+   main thread with the asynchronous signals blocked, as every other Ruby
+   thread has them, so a trapped signal was never delivered again (CRuby
+   avoids the mask-saving variants too). */
 static CAPI_NORETURN void
 capi_unwind(void)
 {
-    longjmp(frame()->jb, 1);
+    _longjmp(frame()->jb, 1);
 }
 
 /*
@@ -438,7 +443,7 @@ capi_dispatch(MrContext *c, MrValue self, int argc, const MrValue *argv, MrValue
     memset(fr.ary, 0, sizeof(fr.ary));
     fr.ary_next = 0;
     capi_cur = &fr;
-    if (setjmp(fr.jb) == 0) {
+    if (_setjmp(fr.jb) == 0) {
         VALUE small[CAPI_SMALL_ARGS];
         VALUE *a = rb_args(argc, argv, small);
         result = M(call_cfunc((const struct capi_method *)data, R(self), argc, a));
@@ -472,7 +477,7 @@ monoruby_capi_init(MrContext *c, void (*init)(void))
     memset(fr.ary, 0, sizeof(fr.ary));
     fr.ary_next = 0;
     capi_cur = &fr;
-    if (setjmp(fr.jb) == 0) {
+    if (_setjmp(fr.jb) == 0) {
         init_globals();
         init();
         rc = 0;
@@ -934,7 +939,7 @@ rb_protect(VALUE (*func)(VALUE), VALUE arg, int *state)
     memset(fr.ary, 0, sizeof(fr.ary));
     fr.ary_next = 0;
     capi_cur = &fr;
-    if (setjmp(fr.jb) == 0) {
+    if (_setjmp(fr.jb) == 0) {
         result = func(arg);
         capi_cur = outer;
         if (state)
@@ -4287,13 +4292,15 @@ nogvl_trampoline(void *arg)
 void *
 rb_nogvl(void *(*func)(void *), void *data1, rb_unblock_function_t *ubf, void *data2, int flags)
 {
-    (void)ubf;
-    (void)data2;
     (void)flags;
     struct capi_frame *saved = frame();
     struct nogvl_call c = {func, data1, NULL};
     int64_t out;
-    int rc = api->call_blocking(saved->ctx, nogvl_trampoline, &c, &out);
+    /* RUBY_UBF_IO / RUBY_UBF_PROCESS are (void *)-1, the ABI's own spelling of "no function,
+       interrupt the syscall"; an older monoruby without the entry drops the ubf. */
+    int rc = (ubf && HAVE_API(call_blocking_ubf))
+        ? api->call_blocking_ubf(saved->ctx, nogvl_trampoline, &c, (void *)ubf, data2, &out)
+        : api->call_blocking(saved->ctx, nogvl_trampoline, &c, &out);
     capi_cur = saved;
     if (rc != 0)
         capi_unwind();
@@ -4741,7 +4748,7 @@ block_dispatch(MrContext *c, MrValue self, int argc, const MrValue *argv, MrValu
     memset(fr.ary, 0, sizeof(fr.ary));
     fr.ary_next = 0;
     capi_cur = &fr;
-    if (setjmp(fr.jb) == 0) {
+    if (_setjmp(fr.jb) == 0) {
         VALUE blockarg = Qnil;
         if (block != MR_UNDEF)
             blockarg = check(api->block_to_proc(c, block));

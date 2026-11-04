@@ -54,6 +54,37 @@ fn trap_handler_runs_on_self_signal() {
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "true");
 }
 
+/// A signal blocked in the mask monoruby inherited through exec is
+/// still delivered once trapped: the interpreter starts from an empty
+/// mask, as CRuby does. (A blocked SIGHUP, inherited from the CI
+/// runner, left `capi_nogvl`'s trapped signal pending forever.)
+#[test]
+fn inherited_blocked_signal_is_unblocked() {
+    use std::os::unix::process::CommandExt;
+    let mut cmd = monoruby();
+    cmd.args([
+        "-e",
+        r#"Thread.new { sleep 20; puts "hung"; exit!(1) }
+           $ran = false
+           Signal.trap("HUP") { $ran = true }
+           Process.kill("HUP", Process.pid)
+           sleep 0.01 until $ran
+           puts $ran"#,
+    ]);
+    // SAFETY: only async-signal-safe calls between fork and exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            libc::sigaddset(&mut set, libc::SIGHUP);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+            Ok(())
+        });
+    }
+    let output = cmd.output().expect("failed to spawn monoruby");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "true");
+}
+
 /// The handler is passed the signal number (SIGUSR1 == 10 on Linux).
 #[test]
 fn trap_handler_receives_signo() {

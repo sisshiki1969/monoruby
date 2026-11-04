@@ -5987,10 +5987,13 @@ pub(crate) extern "C" fn execute_gc(
         // the GVL, or about to be. Hand the lock over now rather than
         // at the next timeslice tick: the handler runs as soon as main
         // holds the lock.
-        if crate::scheduler::native_enabled()
-            && crate::codegen::signal_table::has_pending_signals()
-        {
-            preempt = true;
+        if crate::codegen::signal_table::has_pending_signals() {
+            if crate::scheduler::native_enabled() {
+                preempt = true;
+            }
+            // Main blocked in an extension call (either model) comes
+            // back through the call's unblock function.
+            crate::scheduler::unblock_main_for_signal();
         }
         0
     };

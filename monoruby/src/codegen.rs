@@ -1493,6 +1493,21 @@ impl Codegen {
             }
         }
 
+        // A signal mask inherited through exec(2) — a parent that ran us
+        // with, say, SIGHUP blocked — would leave a trapped signal
+        // pending forever: the interpreter thread is the one the kernel
+        // has to deliver to, every Ruby thread it spawns blocks the
+        // asynchronous signals (`scheduler::native`), and a mask
+        // survives exec. CRuby starts from an empty mask
+        // (`rb_enable_interrupt`); so do we.
+        // SAFETY: plain sigset construction and a mask change on the
+        // calling thread only.
+        unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            libc::pthread_sigmask(libc::SIG_SETMASK, &set, std::ptr::null_mut());
+        }
+
         // CRuby ignores SIGPIPE at startup so a write(2) to a closed pipe
         // surfaces as `Errno::EPIPE` instead of killing the process. The
         // recorded disposition (globals.rs) is `Ignore { from_nil: true }`,

@@ -246,6 +246,10 @@ pub(super) fn interrupt_blocking(thread: Value) -> bool {
             // clears `blocking_tid` (under the GVL, which we hold) before
             // it can exit — and the signal has a no-op handler.
             unsafe { libc::pthread_kill(tid, UBF_SIGNAL) };
+            // An extension call's own unblock function, if it gave one
+            // (the signal alone does not end a C loop that retries on
+            // `EINTR`).
+            super::run_ubf(thread);
             true
         }
         None => false,
@@ -594,11 +598,22 @@ fn park(
             .min(i32::MAX as u128) as i32,
         None => -1,
     };
-    release();
-    // SAFETY: pfds is a valid array of pollfd for the duration of the call.
-    let ret = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as _, timeout_ms) };
-    let err = (ret < 0).then(std::io::Error::last_os_error);
-    acquire(cur);
+    // Main with a signal already pending does not park on it: the signal
+    // reached main's kernel thread while it was not parked (inside a
+    // GVL-less region whose callee retried the `EINTR`, as an extension
+    // waiting for its unblock function does), so no `EINTR` is coming to
+    // end this poll, and a trap handler another thread waits on would
+    // never run. Take the `EINTR` path below at once.
+    let err = if is_main && crate::codegen::signal_table::has_pending_signals() {
+        Some(std::io::Error::from_raw_os_error(libc::EINTR))
+    } else {
+        release();
+        // SAFETY: pfds is a valid array of pollfd for the duration of the call.
+        let ret = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as _, timeout_ms) };
+        let err = (ret < 0).then(std::io::Error::last_os_error);
+        acquire(cur);
+        err
+    };
     // Under the GVL again: no waker can write to the pipe now, so a
     // drain leaves it empty for the next park.
     cur.as_thread_inner_mut().parker.as_ref().unwrap().drain();
@@ -765,7 +780,7 @@ pub(super) fn join(
         // on a short deadline so the retry is periodic rather than
         // one-shot.
         let park_deadline = if target.as_thread_inner().state() == ThreadState::Blocking
-            && super::wake_worthy(&globals.store, target)
+            && (super::wake_worthy(&globals.store, target) || super::ubf_io_requested(target))
         {
             interrupt_blocking(target);
             let retry = Instant::now() + UBF_RETRY_TICK;
