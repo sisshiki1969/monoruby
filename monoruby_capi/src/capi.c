@@ -129,7 +129,7 @@ ctx(void)
 static CAPI_NORETURN void
 capi_unwind(void)
 {
-    longjmp(frame()->jb, 1);
+    _longjmp(frame()->jb, 1);
 }
 
 /*
@@ -438,7 +438,7 @@ capi_dispatch(MrContext *c, MrValue self, int argc, const MrValue *argv, MrValue
     memset(fr.ary, 0, sizeof(fr.ary));
     fr.ary_next = 0;
     capi_cur = &fr;
-    if (setjmp(fr.jb) == 0) {
+    if (_setjmp(fr.jb) == 0) {
         VALUE small[CAPI_SMALL_ARGS];
         VALUE *a = rb_args(argc, argv, small);
         result = M(call_cfunc((const struct capi_method *)data, R(self), argc, a));
@@ -472,7 +472,7 @@ monoruby_capi_init(MrContext *c, void (*init)(void))
     memset(fr.ary, 0, sizeof(fr.ary));
     fr.ary_next = 0;
     capi_cur = &fr;
-    if (setjmp(fr.jb) == 0) {
+    if (_setjmp(fr.jb) == 0) {
         init_globals();
         init();
         rc = 0;
@@ -934,7 +934,7 @@ rb_protect(VALUE (*func)(VALUE), VALUE arg, int *state)
     memset(fr.ary, 0, sizeof(fr.ary));
     fr.ary_next = 0;
     capi_cur = &fr;
-    if (setjmp(fr.jb) == 0) {
+    if (_setjmp(fr.jb) == 0) {
         result = func(arg);
         capi_cur = outer;
         if (state)
@@ -4743,7 +4743,7 @@ block_dispatch(MrContext *c, MrValue self, int argc, const MrValue *argv, MrValu
     memset(fr.ary, 0, sizeof(fr.ary));
     fr.ary_next = 0;
     capi_cur = &fr;
-    if (setjmp(fr.jb) == 0) {
+    if (_setjmp(fr.jb) == 0) {
         VALUE blockarg = Qnil;
         if (block != MR_UNDEF)
             blockarg = check(api->block_to_proc(c, block));

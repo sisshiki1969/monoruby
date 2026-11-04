@@ -793,7 +793,9 @@ pub(super) fn join(
             deadline
         };
         target.as_thread_inner_mut().joiners.push(cur);
+        super::ubf_trace(format_args!("join: park"));
         let res = park(vm, globals, cur, ThreadState::Joining, &[], park_deadline);
+        super::ubf_trace(format_args!("join: unpark"));
         // Finalization takes the joiners it wakes; a timeout or a signal
         // leaves ours behind.
         target.as_thread_inner_mut().joiners.retain(|j| *j != cur);
