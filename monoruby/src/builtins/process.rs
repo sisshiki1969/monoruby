@@ -1272,10 +1272,21 @@ fn process_kill(
         } else {
             None
         };
-        crate::scheduler::ubf_trace(format_args!(
-            "kill: pid={pid} self={self_pid} to_main={}",
-            main.is_some()
-        ));
+        {
+            // SAFETY: TEMPORARY trace; sigaction queries only.
+            let (hup, usr1) = unsafe {
+                let mut a: libc::sigaction = std::mem::zeroed();
+                libc::sigaction(libc::SIGHUP, std::ptr::null(), &mut a);
+                let mut b: libc::sigaction = std::mem::zeroed();
+                libc::sigaction(libc::SIGUSR1, std::ptr::null(), &mut b);
+                (a.sa_sigaction, b.sa_sigaction)
+            };
+            let ours = crate::codegen::signal_table::signal_handler as *const () as usize;
+            crate::scheduler::ubf_trace(format_args!(
+                "kill: pid={pid} sig={signum} self={self_pid} to_main={} hup_handler={hup:#x} usr1_handler={usr1:#x} ours={ours:#x}",
+                main.is_some()
+            ));
+        }
         if let Some(main) = main {
             // SAFETY: main's pthread is alive while the process runs:
             // its exit ends the process.

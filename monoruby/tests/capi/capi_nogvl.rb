@@ -52,12 +52,12 @@ main = Thread.current
 interrupter = Thread.new do
   Thread.pass until going && main.stop?
   sleep 0.1
-  prev = Signal.trap(:HUP) { done = true }
+  prev = Signal.trap(:USR1) { done = true }
   begin
-    Process.kill(:HUP, Process.pid)
+    Process.kill(:USR1, Process.pid)
     sleep 0.001 until done
   ensure
-    Signal.trap(:HUP, prev)
+    Signal.trap(:USR1, prev)
   end
 end
 $diag = -> { [done, main.status, interrupter.status, interrupter.backtrace] }
@@ -75,12 +75,12 @@ $phase = "signal, early"
   done = false
   interrupter = Thread.new do
     Thread.pass until going && main.stop?
-    prev = Signal.trap(:HUP) { done = true }
+    prev = Signal.trap(:USR1) { done = true }
     begin
-      Process.kill(:HUP, Process.pid)
+      Process.kill(:USR1, Process.pid)
       sleep 0.001 until done
     ensure
-      Signal.trap(:HUP, prev)
+      Signal.trap(:USR1, prev)
     end
   end
   $diag = -> { [done, main.status, interrupter.status, interrupter.backtrace] }
