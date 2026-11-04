@@ -5957,6 +5957,18 @@ pub(crate) extern "C" fn execute_gc(
     // collection, a timeslice switch, or both is decided lane by lane —
     // a pure preempt tick never runs a spurious full GC. See
     // poll_flag.rs for the lane protocol.
+    if crate::scheduler::is_current_main() {
+        static MASKED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+        let m = crate::scheduler::usr1_masked();
+        if MASKED.swap(m, std::sync::atomic::Ordering::Relaxed) != m {
+            crate::scheduler::ubf_trace(format_args!(
+                "main poll: usr1 masked={m} at {:?}",
+                executor
+                    .try_cfp()
+                    .map(|cfp| globals.store.func_description(cfp.lfp().func_id()))
+            ));
+        }
+    }
     {
         static POLLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = POLLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

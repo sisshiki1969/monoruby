@@ -582,7 +582,7 @@ fn ensure_main(vm: &mut Executor) {
     let _ = vm;
 }
 
-fn is_current_main() -> bool {
+pub(crate) fn is_current_main() -> bool {
     SCHEDULER.with(|s| {
         let s = s.borrow();
         s.current.is_some() && s.current == s.main
@@ -639,6 +639,16 @@ pub(crate) struct Ubf {
 /// unblock function: in the 1:1 model through `interrupt_blocking`
 /// (the unblocking signal, then the function), in the green one by
 /// calling the function, which makes the worker's call return.
+/// TEMPORARY: is SIGUSR1 blocked on the calling kernel thread?
+pub(crate) fn usr1_masked() -> i32 {
+    // SAFETY: reads this thread's mask.
+    unsafe {
+        let mut cur: libc::sigset_t = std::mem::zeroed();
+        libc::pthread_sigmask(libc::SIG_BLOCK, std::ptr::null(), &mut cur);
+        libc::sigismember(&cur, libc::SIGUSR1)
+    }
+}
+
 /// TEMPORARY darwin CI trace (capi_nogvl hang); at most 40 lines.
 pub(crate) fn ubf_trace(args: std::fmt::Arguments) {
     static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
