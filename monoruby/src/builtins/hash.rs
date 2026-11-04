@@ -2668,13 +2668,16 @@ fn env_read_string(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result
         && let Some(target) = super::io::enc_obj_to_enum(globals, int)
         && target != inner.encoding()
     {
-        let bytes = crate::value::transcode::transcode_for_env(
+        // `rb_str_conv_enc`: a string that does not convert is handed
+        // out unchanged, in its locale encoding, rather than raising.
+        if let Ok(bytes) = crate::value::transcode::transcode_for_env(
             &globals.store,
             inner.as_bytes(),
             inner.encoding(),
             target,
-        )?;
-        out = Value::string_from_inner(RStringInner::from_encoding_scanned(&bytes, target));
+        ) {
+            out = Value::string_from_inner(RStringInner::from_encoding_scanned(&bytes, target));
+        }
     }
     let _ = vm;
     out.set_frozen();
@@ -3671,10 +3674,10 @@ fn env_merge_bang(
 ///
 /// - replace(other_hash) -> ENV
 ///
-/// Replaces the contents of ENV with *other_hash*. Every name / value
-/// pair is validated up front (`TypeError` for non-coercible objects,
-/// `Errno::EINVAL` for empty names or names containing `'='`), so an
-/// invalid pair leaves ENV untouched. Returns ENV.
+/// Replaces the contents of ENV with *other_hash*. Pairs are stored in
+/// order; a non-coercible one (`TypeError`) or a bad name
+/// (`Errno::EINVAL`) stops the walk with the earlier pairs applied and
+/// nothing removed yet, as in CRuby. Returns ENV.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/replace.html]
 #[monoruby_builtin]
@@ -3687,33 +3690,26 @@ fn env_replace(
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let other = lfp.arg(0).coerce_to_hash(vm, globals)?;
 
-    // Phase 1: validate everything up front.
-    let mut new_pairs: Vec<(String, String)> = Vec::new();
-    for (k, v) in other.iter() {
-        let key = coerce_env_string(k, vm, globals)?;
-        check_env_key_for_set(&key, &globals.store)?;
-        let value = coerce_env_string(v, vm, globals)?;
-        new_pairs.push((key, value));
-    }
-
-    // Phase 2: drop every current variable from libc + the hash.
-    let cur_keys: Vec<String> = lfp
+    // CRuby (`env_replace`): each pair is stored as it is reached, so
+    // an invalid pair leaves the ones before it in place (and the
+    // variables not yet replaced untouched); only after every pair is
+    // in are the variables the Hash did not name removed.
+    let mut stale: Vec<String> = lfp
         .self_val()
         .as_hash()
         .iter()
         .filter_map(|(k, _)| k.is_str().map(|s| s.to_string()))
         .collect();
-    for k in &cur_keys {
-        env_unset_one(lfp.self_val(), k, vm, globals)?;
-    }
-    // The `iter()` snapshot above is keyed by string content; a hash
-    // entry whose key happens not to be a String (in theory unreachable
-    // for ENV, but defensive) would be left behind without this clear.
-    lfp.self_val().as_hash().clear()?;
-
-    // Phase 3: insert the validated pairs.
-    for (key, value) in new_pairs {
+    let pairs: Vec<(Value, Value)> = other.iter().collect();
+    for (k, v) in pairs {
+        let key = coerce_env_string(k, vm, globals)?;
+        check_env_key_for_set(&key, &globals.store)?;
+        let value = coerce_env_string(v, vm, globals)?;
         env_set_one(lfp.self_val(), &key, &value, vm, globals)?;
+        stale.retain(|s| *s != key);
+    }
+    for k in &stale {
+        env_unset_one(lfp.self_val(), k, vm, globals)?;
     }
     Ok(lfp.self_val())
 }
@@ -7338,6 +7334,21 @@ mod tests {
             else
               [:range, :range, :type]
             end
+            "##,
+        );
+    }
+
+    #[test]
+    fn env_replace_applies_pairs_before_an_error() {
+        let _g = env_lock();
+        run_test_once(
+            r##"
+            saved = ENV.to_hash
+            ENV["MONORUBY_ENV_REPL_KEEP"] = "keep"
+            e = (ENV.replace("MONORUBY_ENV_REPL_A" => "1", Object.new => Object.new) rescue $!.class)
+            r = [e, ENV["MONORUBY_ENV_REPL_A"], ENV["MONORUBY_ENV_REPL_KEEP"]]
+            ENV.replace(saved)
+            r << ENV.key?("MONORUBY_ENV_REPL_A")
             "##,
         );
     }

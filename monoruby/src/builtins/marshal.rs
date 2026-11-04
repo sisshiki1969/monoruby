@@ -283,6 +283,13 @@ struct MarshalReader<'a> {
     /// resolves to one of these (a self-reference into an in-progress
     /// object) does not fire the load proc, matching CRuby.
     building: std::collections::HashSet<u64>,
+    /// Modules named by the `'e'` (TYPE_EXTENDED) wrappers around the
+    /// object being read, outermost first (CRuby's `extmod`). They are
+    /// constants, so they need no rooting here.
+    extmod: Vec<Value>,
+    /// The next object read is the target of the `'e'` wrappers in
+    /// `extmod` (CRuby passes `extmod` only to that one `r_object0`).
+    extmod_armed: bool,
 }
 
 impl<'a> MarshalReader<'a> {
@@ -298,6 +305,8 @@ impl<'a> MarshalReader<'a> {
             last_link_slot: usize::MAX,
             proc: None,
             building: std::collections::HashSet::new(),
+            extmod: Vec::new(),
+            extmod_armed: false,
         }
     }
 
@@ -460,6 +469,9 @@ impl<'a> MarshalReader<'a> {
 
     fn read_value_inner(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let tag = self.read_byte()?;
+        // Only the object an `'e'` wrapper directly encloses sees its
+        // modules; anything nested inside that object does not.
+        let extended = std::mem::replace(&mut self.extmod_armed, false);
         match tag {
             b'0' => Ok(Value::nil()),
             b'T' => Ok(Value::bool(true)),
@@ -506,7 +518,7 @@ impl<'a> MarshalReader<'a> {
             // `marshal_load`. Format: symbol(class) + inner value.
             // On load, allocate a fresh instance of the class and
             // drive `instance.marshal_load(value)`.
-            b'U' => self.read_usr_marshal(vm, globals),
+            b'U' => self.read_usr_marshal(vm, globals, extended),
             // 'd' (TYPE_DATA): a wrapped C-data object whose class
             // defines `_load_data`. Format: symbol(class) + inner
             // value. On load, allocate an instance and drive
@@ -1112,7 +1124,12 @@ impl<'a> MarshalReader<'a> {
     /// On load CRuby allocates a fresh instance of the class and
     /// then drives `instance.marshal_load(value)` — `instance` is
     /// returned (the `marshal_load` return value is ignored).
-    fn read_usr_marshal(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+    fn read_usr_marshal(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        extended: bool,
+    ) -> Result<Value> {
         let class_sym = self.read_symbol(vm, globals)?;
         let class_name = class_sym.get_name();
         let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
@@ -1146,6 +1163,12 @@ impl<'a> MarshalReader<'a> {
         // mirrors the dump side, which reserves the slot first).
         self.user_protocol_slots.insert(self.objects.len());
         self.objects.push(instance);
+        // CRuby (`append_extmod`): the enclosing `'e'` modules are
+        // applied before the payload is read and `marshal_load` runs, so
+        // `marshal_load` already sees them.
+        if extended {
+            self.apply_extmod(vm, globals, instance, 0)?;
+        }
         let value = self.read_value(vm, globals)?;
         // Drive `instance.marshal_load(value)`. The return value is
         // discarded; the spec checks the receiver's resulting state.
@@ -1274,21 +1297,62 @@ impl<'a> MarshalReader<'a> {
     /// inner's singleton-class ancestor chain.
     fn read_extended(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let module_sym = self.read_symbol(vm, globals)?;
+        let module_name = module_sym.get_name();
+        let module = resolve_class_path(globals, &module_name).ok_or_else(|| {
+            MonorubyErr::argumenterr(format!("undefined class/module {}", module_name))
+        })?;
+        if module.as_val().is_class().is_some() {
+            // CRuby: a Class here records a module prepended to the
+            // object's own class; it must name that very class.
+            let inner = self.read_value_inner(vm, globals)?;
+            let class = inner.real_class(&globals.store);
+            if class.id() != module.id() {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "prepended class {} differs from class {}",
+                    module_name,
+                    class.id().get_name(&globals.store)
+                )));
+            }
+            return Ok(inner);
+        }
         // Read without freezing so `extend` can still modify the singleton
         // class; the outer `read_value` freezes the final result.
-        let inner = self.read_value_inner(vm, globals)?;
-        let module_name = module_sym.get_name();
-        let module_val = resolve_class_path(globals, &module_name)
-            .map(|m| m.as_val())
-            .ok_or_else(|| {
-                MonorubyErr::argumenterr(format!("undefined module {}", module_name))
-            })?;
-        // Drive Kernel#extend so the singleton-class plumbing matches a
-        // hand-coded `inner.extend(Mod)` exactly (Module#extended hook,
-        // ancestor placement, etc.). The return value is the receiver.
-        let extend_id = IdentId::get_id("extend");
-        vm.invoke_method_inner(globals, extend_id, inner, &[module_val], None, None)?;
+        let base = self.extmod.len();
+        self.extmod.push(module.as_val());
+        self.extmod_armed = true;
+        let inner = self.read_value_inner(vm, globals);
+        self.extmod_armed = false;
+        let inner = match inner {
+            Ok(v) => v,
+            Err(e) => {
+                self.extmod.truncate(base);
+                return Err(e);
+            }
+        };
+        // Whatever a `'U'` object did not already take is applied now,
+        // innermost module first.
+        self.apply_extmod(vm, globals, inner, base)?;
         Ok(inner)
+    }
+
+    /// Extend `obj` with the pending `'e'` modules above `base`,
+    /// innermost first (CRuby pops `extmod`).
+    fn apply_extmod(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        obj: Value,
+        base: usize,
+    ) -> Result<()> {
+        // Drive Kernel#extend so the singleton-class plumbing matches a
+        // hand-coded `obj.extend(Mod)` exactly (Module#extended hook,
+        // ancestor placement, etc.).
+        let extend_id = IdentId::get_id("extend");
+        while self.extmod.len() > base {
+            let m = self.extmod.pop().unwrap();
+            vm.invoke_method_inner(globals, extend_id, obj, &[m], None, None)?;
+        }
+        Ok(())
     }
 
     /// Read a Struct subclass instance ('S' tag, TYPE_STRUCT).
@@ -2023,6 +2087,10 @@ fn marshal_try_user_protocol(
                 buf.push(b'"');
                 marshal_write_fixnum(buf, bytes.len() as i32);
                 buf.extend_from_slice(&bytes);
+                // It is still an object in the stream: it takes a link
+                // slot (no live object shares it, so it is never linked
+                // to), or every later `'@'` would be off by one.
+                objects.push(0);
             }
             if !is_utc {
                 marshal_write_symbol(buf, IdentId::get_id("offset"), symbols);
@@ -2251,8 +2319,9 @@ fn marshal_dump_value(
                         let class_name = globals.get_class_name(class_id);
                         if class_name.starts_with("#<") {
                             return Err(MonorubyErr::typeerr(format!(
-                                "can't dump anonymous {}",
-                                if is_module { "module" } else { "class" }
+                                "can't dump anonymous {} {}",
+                                if is_module { "module" } else { "class" },
+                                class_name
                             )));
                         }
                         let tag = if is_module { b'm' } else { b'c' };
@@ -4364,6 +4433,33 @@ mod tests {
               r << [l.class.name, l.message, l.cause.class.name, l.cause.message, l.cause.cause]
             end
             r << Marshal.load(Marshal.dump(Exception.new("foo"))).cause
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn marshal_extended_and_links() {
+        run_test_once(
+            r##"
+            module MarshalExtMod; def ext_m = 1; end
+            class MarshalExtUser
+              attr_reader :seen
+              def marshal_dump = :data
+              def marshal_load(d) = (@seen = respond_to?(:ext_m))
+            end
+            r = []
+            o = Marshal.load("\x04\be:\x12MarshalExtModU:\x13MarshalExtUser:\tdata")
+            r << o.seen << o.is_a?(MarshalExtMod)
+            t = Time.at(1_700_000_000, 123_456_789, :nsec)
+            t1, t2 = Marshal.load(Marshal.dump([t, t]))
+            r << t1.equal?(t2) << (t1 == t)
+            r << (Marshal.load("\x04\be:\x16NonExistentModuleo:\vObject\x00") rescue [$!.class, $!.message])
+            r << (Marshal.load("\x04\be:\vStringo:\vObject\x00") rescue [$!.class, $!.message])
+            m = Module.new
+            module m::N; end
+            r << (Marshal.dump(m::N) rescue $!.message.sub(/0x\h+/, "X"))
+            r << (Marshal.dump(Class.new) rescue $!.message.sub(/0x\h+/, "X"))
             r
             "##,
         );

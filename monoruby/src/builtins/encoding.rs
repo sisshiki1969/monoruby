@@ -1626,6 +1626,7 @@ pub(super) fn value_to_encoding(
     if let Some(enc) = globals.encoding_of_object(arg0) {
         return Ok(enc);
     }
+    check_ascii_compatible_name(arg0)?;
     if let Some(s) = arg0.is_str() {
         if let Some(enc) = special_encoding_name(globals, s) {
             return Ok(enc);
@@ -4274,6 +4275,20 @@ fn enc_list(_vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr
     ))
 }
 
+/// `str_find_encindex_0`: an encoding name held in a String of a
+/// non-ASCII-compatible encoding (UTF-16, UTF-32) is rejected before it
+/// is read as a C string.
+fn check_ascii_compatible_name(arg: Value) -> Result<()> {
+    if let Some(inner) = arg.is_rstring_inner()
+        && !inner.encoding().is_ascii_compatible()
+    {
+        return Err(MonorubyErr::argumenterr(
+            "invalid encoding name (non ASCII)",
+        ));
+    }
+    Ok(())
+}
+
 ///
 /// ### Encoding.find
 /// - find(name) -> Encoding
@@ -4289,6 +4304,7 @@ fn enc_find(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     if is_encoding_object(globals, arg0) {
         return Ok(arg0);
     }
+    check_ascii_compatible_name(arg0)?;
     let name = arg0.coerce_to_string(vm, globals)?;
     // Special names resolved at query time: the locale encoding follows
     // the locale charmap, the filesystem/external ones follow
@@ -10780,6 +10796,16 @@ mod tests {
                 [drain("UTF-8", "abcd", "UTF-16BE", 3),
                  "abcd".encode("UTF-16BE").bytes],
               ]
+            "#,
+        );
+    }
+
+    #[test]
+    fn encoding_find_non_ascii_compatible_name() {
+        run_test_once(
+            r#"
+            [(Encoding.find("utf-8".encode("utf-16be")) rescue $!.message),
+             ("x".force_encoding("utf-8".encode("utf-32le")) rescue $!.message)]
             "#,
         );
     }

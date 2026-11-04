@@ -28,8 +28,8 @@ class Data
       # `new` / `[]` accept positional *or* keyword arguments; positional
       # ones are zipped onto the members, then `initialize` (possibly
       # user-overridden) is dispatched with keywords.
-      def self.new(*args, **kw)
-        ::Data.__data_alloc_init(self, args, kw)
+      def self.new(*args, **kw, &block)
+        ::Data.__data_alloc_init(self, args, kw, &block)
       end
       class << self
         alias_method :[], :new
@@ -109,7 +109,7 @@ class Data
     result
   end
 
-  def self.__data_alloc_init(klass, args, kw)
+  def self.__data_alloc_init(klass, args, kw, &block)
     ms = klass.members
     unless args.empty?
       raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)" unless kw.empty?
@@ -119,7 +119,8 @@ class Data
       kw = ::Hash[ms.zip(args)]
     end
     obj = klass.allocate
-    obj.send(:initialize, **kw)
+    # The block given to `new` / `[]` reaches a user `initialize`.
+    obj.send(:initialize, **kw, &block)
     obj
   end
 

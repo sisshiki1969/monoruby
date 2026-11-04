@@ -1630,7 +1630,10 @@ impl IoInner {
                 Some(e) if e == libc::EAGAIN || e == libc::EWOULDBLOCK => {
                     Ok(NonblockWrite::WouldBlock)
                 }
-                _ => Err(MonorubyErr::from_io_err(store, &err, "write_nonblock".to_string())),
+                // CRuby (`rb_syserr_fail_path` with the IO's path): a
+                // pipe or socket has none, so the message is the bare
+                // description ("Broken pipe").
+                _ => Err(MonorubyErr::errno_plain(store, &err)),
             }
         }
     }

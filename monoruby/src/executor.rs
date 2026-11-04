@@ -391,6 +391,10 @@ pub struct Executor {
     /// "registering an autoload whose feature is the file currently
     /// being loaded" and treat it as a no-op (matches CRuby).
     loading_paths: Vec<std::path::PathBuf>,
+    /// The wrap module of the `load(path, wrap)` whose top level is
+    /// running (CRuby's `th->top_wrapper`); `None` outside one and in a
+    /// plain `require` / `load` nested in it.
+    top_wrapper: Option<Module>,
     /// Identity (`Value::id`) of every `catch` tag whose block is
     /// currently on the stack. `throw` consults this so an
     /// unmatched tag raises a rescuable `UncaughtThrowError`
@@ -448,9 +452,6 @@ pub struct Executor {
     /// This fiber is suspended in `Fiber.yield` (CRuby's `yielding` flag).
     /// A yielding fiber can be resumed but not transferred to.
     yielding: bool,
-    /// This fiber has been the target of `Fiber#transfer` at least once;
-    /// such a fiber can never be `#resume`d again (CRuby).
-    transferred: bool,
     /// The `blocking:` flag of this fiber (`Fiber#blocking?`). Root
     /// executors (threads) are blocking; `Fiber.new` defaults to
     /// non-blocking, matching CRuby 3.x.
@@ -497,6 +498,7 @@ impl std::default::Default for Executor {
             invoked_as: None,
             require_level: 0,
             loading_paths: vec![],
+            top_wrapper: None,
             catch_tags: vec![],
             exception: None,
             errinfo: Value::nil(),
@@ -506,7 +508,6 @@ impl std::default::Default for Executor {
             resuming_fiber: None,
             return_to: None,
             yielding: false,
-            transferred: false,
             fiber_blocking: true,
             killed: false,
             thread_root: None,
@@ -1724,7 +1725,9 @@ impl Executor {
             self.push_wrap_class_context(wrap.id());
         }
         self.loading_paths.push(path.to_path_buf());
+        let saved_wrapper = std::mem::replace(&mut self.top_wrapper, wrap);
         let res = self.exec_script_with_wrap(globals, file_body, path, wrap);
+        self.top_wrapper = saved_wrapper;
         self.loading_paths.pop();
         self.exit_class_context();
 
@@ -1765,6 +1768,11 @@ impl Executor {
     /// wrap)`), whose top-level `def`s become private instance methods
     /// of the wrap module — the same default a top-level `def` gets on
     /// `Object`.
+    /// The wrap module of the wrapped `load` whose top level is running.
+    pub(crate) fn top_wrapper(&self) -> Option<Module> {
+        self.top_wrapper
+    }
+
     pub(crate) fn push_wrap_class_context(&mut self, class_id: ClassId) {
         self.lexical_class.last_mut().unwrap().push(Cref::new(
             class_id,
@@ -2576,14 +2584,6 @@ impl Executor {
 
     pub(crate) fn set_yielding(&mut self, b: bool) {
         self.yielding = b;
-    }
-
-    pub(crate) fn is_transferred(&self) -> bool {
-        self.transferred
-    }
-
-    pub(crate) fn set_transferred(&mut self) {
-        self.transferred = true;
     }
 
     pub(crate) fn is_fiber_blocking(&self) -> bool {

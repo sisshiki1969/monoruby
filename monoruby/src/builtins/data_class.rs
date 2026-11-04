@@ -349,4 +349,19 @@ mod tests {
         run_test_error(r#"Data.define(:a, :a)"#);
         run_test_error(r#"Data.define(1)"#);
     }
+
+    #[test]
+    fn data_new_passes_block_to_initialize() {
+        run_test_once(
+            r#"
+            k = Data.define(:amount) do
+              def initialize(amount:, &block)
+                super(amount: block ? block.call(amount) : amount)
+              end
+            end
+            [k.new(1) { _1 * 2 }.amount, k.new(amount: 1) { _1 * 3 }.amount,
+             k[1] { _1 * 4 }.amount, k[amount: 1] { _1 * 5 }.amount, k.new(7).amount]
+            "#,
+        );
+    }
 }

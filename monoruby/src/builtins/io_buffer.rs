@@ -1748,6 +1748,18 @@ macro_rules! bitwise_inplace {
             // CRuby validates the mask (type, then emptiness) before the
             // writability of the receiver.
             let mask = mask_arg(globals, &arg0)?;
+            // CRuby (`io_buffer_check_overlaps`): a mask sharing memory
+            // with the receiver would be read while it is overwritten.
+            let dst = self_.as_iobuffer_inner().read_bytes()?;
+            let (d0, m0) = (dst.as_ptr() as usize, mask.as_ptr() as usize);
+            let (d1, m1) = (d0 + dst.len(), m0 + mask.len());
+            if !dst.is_empty() && d0 < m1 && m0 < d1 {
+                return Err(buffer_err(
+                    globals,
+                    "MaskError",
+                    "Mask overlaps source buffer!",
+                ));
+            }
             check_writable(globals, self_.as_iobuffer_inner())?;
             let bytes = self_.as_iobuffer_inner().read_bytes()?;
             let out = bitwise_bytes(&bytes, &mask, $op);
@@ -2400,5 +2412,31 @@ mod tests {
             "##,
         );
         assert_eq!(res, crate::Value::bool(true));
+    }
+
+    #[test]
+    fn io_buffer_write_and_mask_overlap() {
+        run_test_once(
+            r##"
+            Warning[:experimental] = false
+            r = []
+            path = "/tmp/monoruby_iobuf_write_#{$$}"
+            File.open(path, "wb+") do |f|
+              b = IO::Buffer.new(5)
+              b.set_string("Hello")
+              r << b.write(f) << b.write(f, 2, 3) << b.write(f, 0, 1) << b.write(f, nil, 4)
+              r << (b.write(f, 6) rescue $!.message) << (b.write("x") rescue $!.class)
+              f.rewind
+              r << f.read
+            end
+            File.delete(path)
+            buf = IO::Buffer.new(8)
+            buf.set_string("abcdefgh")
+            [[[0, 4], [2, 4]], [[2, 2], [1, 6]], [[0, 4], [4, 4]]].each do |d, m|
+              r << (buf.slice(*d).xor!(buf.slice(*m)) && :ok rescue [$!.class, $!.message])
+            end
+            r
+            "##,
+        );
     }
 }
