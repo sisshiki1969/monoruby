@@ -3896,6 +3896,24 @@ pub fn locale_source_encoding_name() -> Option<&'static str> {
         .map(|enc| enc.name())
 }
 
+/// A program argument (an `ARGV` element) as CRuby builds it with
+/// `rb_external_str_new_cstr`: the raw bytes, tagged with the default
+/// external encoding the process starts with — `external` when `-E` /
+/// `-K` named one, else the locale's. Under a US-ASCII external, an
+/// argument that is not 7-bit clean becomes ASCII-8BIT instead.
+pub fn program_argument_string(bytes: &[u8], external: Option<&str>) -> Value {
+    let enc = external
+        .and_then(|name| crate::value::Encoding::try_from_str(name).ok())
+        .or_else(|| crate::value::Encoding::try_from_str(locale_charmap_str()).ok())
+        .unwrap_or(crate::value::Encoding::UTF8);
+    let enc = if enc == crate::value::Encoding::UsAscii && !bytes.is_ascii() {
+        crate::value::Encoding::Ascii8
+    } else {
+        enc
+    };
+    Value::string_from_inner(RStringInner::from_encoding(bytes, enc))
+}
+
 /// The encoding `Encoding.find("locale")` answers with: the locale
 /// charmap's encoding when we recognise it, else UTF-8.
 fn locale_encoding_value(globals: &Globals) -> Value {

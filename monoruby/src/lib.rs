@@ -72,7 +72,7 @@ mod watchdog;
 
 pub(crate) use crate::codegen::runtime::ProcData;
 pub(crate) use bytecode::*;
-pub use builtins::encoding::locale_source_encoding_name;
+pub use builtins::encoding::{locale_source_encoding_name, program_argument_string};
 pub use builtins::kernel::define_loop_mode_builtins;
 pub use bytecodegen::bytecode_compile_script;
 #[cfg(target_arch = "x86_64")]

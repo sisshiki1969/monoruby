@@ -942,10 +942,6 @@ impl MonorubyErr {
         MonorubyErr::typeerr(format!("{name} is not a class"))
     }
 
-    pub(crate) fn is_not_module(name: String) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("{name} is not a module"))
-    }
-
     pub(crate) fn superclass_mismatch(name: IdentId) -> MonorubyErr {
         MonorubyErr::typeerr(format!("superclass mismatch for class {name}"))
     }

@@ -904,6 +904,49 @@ impl ISeqInfo {
     }
 
     ///
+    /// The exception destination for a `break` / non-local `return` at
+    /// *pc* that turned out to be invalid — a LocalJumpError raised by
+    /// the exit instruction itself (a proc whose home frame is gone or on
+    /// another thread).
+    ///
+    /// Bytecodegen replays the frame's regions ahead of an exit and the
+    /// replay spans switch them all off at the exit instruction, so
+    /// [`Self::get_exception_dest`] finds nothing there. CRuby raises at
+    /// the exit, *inside* those regions, so a `rescue LocalJumpError`
+    /// around it catches the error. Answer as if the replay had not
+    /// happened, for the innermost region with a `rescue` clause — but
+    /// only while neither it nor any region around it had an `ensure`
+    /// body replayed: resuming inside such a region would run that body
+    /// a second time when control leaves it, so then `None`. Ensure
+    /// bodies *inside* the rescuing region have run already, which is
+    /// what CRuby's unwind to the rescue does too.
+    ///
+    pub(crate) fn invalid_exit_dest(
+        &self,
+        pc: BcIndex,
+    ) -> Option<(Option<BcIndex>, Option<BcIndex>, Option<SlotId>)> {
+        // Innermost first, as `active_entries` sees them.
+        let covering: Vec<_> = self
+            .exception_map
+            .iter()
+            .filter(|entry| entry.range.contains(&pc))
+            .collect();
+        // A region with `rescue` clauses (an ensure-only region's
+        // `rescue_pc` is just the trampoline that runs its body).
+        let idx = covering
+            .iter()
+            .position(|entry| entry.rescue_range.is_some())?;
+        if covering[idx..]
+            .iter()
+            .any(|entry| entry.ensure_pc.is_some() && self.is_replayed_at(pc, entry.region_id))
+        {
+            return None;
+        }
+        let entry = covering[idx];
+        Some((entry.rescue_pc, entry.ensure_pc, entry.error_slot))
+    }
+
+    ///
     /// The `ensure` a non-local exit (`break` / non-local `return`, and the
     /// `Throw` family) must run when it leaves a frame stopped at *pc*:
     /// the **innermost** covering entry that *has* one.
