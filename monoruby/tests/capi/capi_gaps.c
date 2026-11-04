@@ -123,6 +123,15 @@ g_misc(VALUE self)
     return rb_ary_new_from_args(2, rb_str_new_cstr(STRINGIZE(1.2.3)), pid > 0 ? Qtrue : Qfalse);
 }
 
+/* $_ of the calling Ruby frame, and a global set and read back. */
+static VALUE
+g_lastline(VALUE self)
+{
+    (void)self;
+    rb_gv_set("capi_gaps_gv", INT2FIX(3));
+    return rb_ary_new_from_args(2, rb_lastline_get(), rb_gv_get("$capi_gaps_gv"));
+}
+
 void
 Init_capi_gaps(void)
 {
@@ -136,4 +145,5 @@ Init_capi_gaps(void)
     rb_define_singleton_method(m, "extract", g_extract, 1);
     rb_define_singleton_method(m, "hidden", g_hidden, 1);
     rb_define_singleton_method(m, "misc", g_misc, 0);
+    rb_define_singleton_method(m, "lastline", g_lastline, 0);
 }

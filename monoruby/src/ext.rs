@@ -2644,6 +2644,116 @@ mod tests {
         assert_eq!(ok, capi_regex((b"a+".as_slice(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap());
     }
 
+    /// The thread-local front of `capi_regex` empties itself once it
+    /// holds 256 patterns, and still answers afterwards.
+    #[test]
+    fn capi_regex_recent_cache_wraps() {
+        let pats: Vec<Vec<u8>> = (0..300).map(|i| format!("p{i}x+").into_bytes()).collect();
+        for p in &pats {
+            assert!(!capi_regex((p.as_slice(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap().is_null());
+        }
+        let first = capi_regex((pats[0].as_slice(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap();
+        assert_eq!(first, capi_regex((pats[0].as_slice(), 0, onigmo_regex::OnigmoEncoding::UTF8)).unwrap());
+    }
+
+    /// One interpreter claiming the same C-API extension twice gets the
+    /// same mapping (and the extra `dlopen` reference is dropped); another
+    /// interpreter gets a mapping of its own.
+    #[test]
+    fn capi_instances_per_owner() {
+        use std::os::unix::ffi::OsStrExt;
+        let Some(path) = find_extension("strscan") else {
+            eprintln!("skipped: strscan.so is not installed");
+            return;
+        };
+        let open = || {
+            let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+            // SAFETY: plain libc call with a valid C string.
+            let h = unsafe { libc::dlopen(c.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+            assert!(!h.is_null(), "{}", dlerror());
+            h
+        };
+        let (me, other) = (u64::MAX - 1, u64::MAX - 2);
+        let a = claim_capi_instance(&path, open(), me).unwrap();
+        let b = claim_capi_instance(&path, open(), me).unwrap();
+        assert_eq!(a, b);
+        let c = claim_capi_instance(&path, open(), other).unwrap();
+        assert_ne!(a, c);
+        assert_eq!(c, claim_capi_instance(&path, open(), other).unwrap());
+    }
+
+    /// The table's String / call / global entries on the inputs the
+    /// layer screens out before calling them (a non-String, an unknown
+    /// encoding name, a frozen receiver, `MR_NO_SYM`, keywords that are
+    /// not a Hash), and the subclass / shared-buffer cases.
+    #[test]
+    fn abi_entry_edges() {
+        let mut globals = Globals::new_test();
+        let res = globals
+            .run(
+                r#"class CapiStr < String; end
+                   $capi_keep = [CapiStr.new("ab"), "x" * 100, :sym, "fz".freeze,
+                                 ->(*a, **k) { raise "boom" if k[:boom]; [a, k] }, { boom: true }]"#,
+                std::path::Path::new("."),
+            )
+            .unwrap();
+        let mut vm = Executor::init(&mut globals, "abi_entry_edges").unwrap();
+        let items: Vec<Value> = res.as_array_inner().iter().copied().collect();
+        let (sub, long, sym, frozen, lam, boom) = (items[0], items[1], items[2], items[3], items[4], items[5]);
+        let mut ctx = make_ctx(&mut vm, &mut globals, None, None);
+        let ctx = &mut ctx as *mut MrContext;
+        // SAFETY: a live context over this test's interpreter; every
+        // value is rooted by `$capi_keep`.
+        unsafe {
+            let failed = |ctx: *mut MrContext| {
+                let (vm, _) = parts(ctx);
+                assert!(vm.has_error());
+                vm.take_error();
+            };
+            assert_eq!(mr_str_coderange(ctx, sym.id()), -1);
+            failed(ctx);
+            assert_eq!(mr_str_capacity(ctx, sym.id()), -1);
+            failed(ctx);
+            assert!(mr_str_enc_name(ctx, sym.id()).is_null());
+            failed(ctx);
+            assert_eq!(mr_str_subseq(ctx, sym.id(), 0, 1), MR_UNDEF);
+            failed(ctx);
+            assert_eq!(mr_str_dup(ctx, sym.id()), MR_UNDEF);
+            failed(ctx);
+            assert_eq!(mr_str_set_enc(ctx, sym.id(), c"UTF-8".as_ptr()), -1);
+            failed(ctx);
+            assert_eq!(mr_str_set_enc(ctx, long.id(), c"NO-SUCH-ENCODING".as_ptr()), -2);
+            assert_eq!(mr_str_set_enc(ctx, frozen.id(), c"US-ASCII".as_ptr()), -1);
+            failed(ctx);
+            // A subclass instance goes through `dup`, keeping its class.
+            let d = Value::from_u64(mr_str_dup(ctx, sub.id()));
+            assert_eq!(d.class(), sub.class());
+            assert_eq!(d.as_rstring_inner().to_str().unwrap(), "ab");
+            // A slice viewing the long string's buffer holds its own length.
+            let slice = mr_str_subseq(ctx, long.id(), 1, 90);
+            assert!(mr_str_capacity(ctx, slice) >= 90);
+            assert!(mr_str_capacity(ctx, long.id()) >= 100);
+            // funcall_kw
+            let call = IdentId::get_id("call").get() as MrSym;
+            assert_eq!(mr_funcall_kw(ctx, lam.id(), MR_NO_SYM, 0, std::ptr::null(), MR_UNDEF, 1), MR_UNDEF);
+            failed(ctx);
+            assert_eq!(mr_funcall_kw(ctx, MR_UNDEF, call, 0, std::ptr::null(), MR_UNDEF, 1), MR_UNDEF);
+            // Keywords asked for, but the last argument is not a Hash.
+            let one = [Value::i32(1).id()];
+            let r = Value::from_u64(mr_funcall_kw(ctx, lam.id(), call, 1, one.as_ptr(), MR_UNDEF, 1));
+            assert_eq!(r.as_array_inner().len(), 2);
+            let args = [Value::i32(1).id(), boom.id()];
+            assert_eq!(mr_funcall_kw(ctx, lam.id(), call, 2, args.as_ptr(), MR_UNDEF, 1), MR_UNDEF);
+            failed(ctx);
+            // Globals: a plain one, and one whose setter refuses.
+            assert_eq!(mr_gvar_set(ctx, c"$capi_abi_gv".as_ptr(), Value::i32(5).id()), 0);
+            assert_eq!(Value::from_u64(mr_gvar_get(ctx, c"$capi_abi_gv".as_ptr())).try_fixnum(), Some(5));
+            assert_eq!(mr_gvar_set(ctx, c"$$".as_ptr(), Value::i32(5).id()), -1);
+            failed(ctx);
+            assert_eq!(mr_gvar_set(ctx, c"$capi_abi_gv".as_ptr(), MR_UNDEF), -1);
+        }
+    }
+
     #[test]
     fn enc_codepoint_edges() {
         let bytes = "\u{3042}".as_bytes();

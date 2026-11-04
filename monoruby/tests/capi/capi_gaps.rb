@@ -34,3 +34,5 @@ o = Object.new
 o.instance_variable_set(:@a, 1)
 p G.hidden(o)
 p G.misc
+$_ = "line"
+p G.lastline
