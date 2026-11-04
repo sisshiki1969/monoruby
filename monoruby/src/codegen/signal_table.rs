@@ -39,7 +39,11 @@ pub(crate) static PENDING_SIGNALS: AtomicU32 = AtomicU32::new(0);
 /// race the preempt timer's `fetch_or` on the same word and lose one of
 /// the two updates — and which turned into a call into freed JIT memory
 /// if a signal arrived after the installing `Codegen` was dropped.
+/// TEMPORARY darwin CI trace: handler invocations.
+pub(crate) static HANDLED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 pub(crate) extern "C" fn signal_handler(signo: i32) {
+    HANDLED.fetch_add(1, Ordering::Relaxed);
     if (1..=32).contains(&signo) {
         PENDING_SIGNALS.fetch_or(1 << (signo - 1) as u32, Ordering::Relaxed);
     }

@@ -1966,8 +1966,10 @@ unsafe extern "C" fn mr_call_blocking_ubf(
             arg: ubf_arg as usize,
             requested: false,
         });
+    crate::scheduler::ubf_trace(format_args!("call_blocking_ubf: enter thread={:?}", thread.id()));
     // SAFETY: the table's contract, forwarded.
     let rc = unsafe { mr_call_blocking(ctx, f, arg, out) };
+    crate::scheduler::ubf_trace(format_args!("call_blocking_ubf: leave thread={:?}", thread.id()));
     thread.as_thread_inner_mut().blocking_ubf = saved;
     rc
 }

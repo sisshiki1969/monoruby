@@ -1272,6 +1272,11 @@ fn process_kill(
         signaled_self |= pid == self_pid || pid <= 0;
         count += 1;
     }
+    crate::scheduler::ubf_trace(format_args!(
+        "kill: sig={signum} handled={} pending={}",
+        crate::codegen::signal_table::HANDLED.load(std::sync::atomic::Ordering::Relaxed),
+        crate::codegen::signal_table::has_pending_signals()
+    ));
     if signaled_self {
         // A signal sent to ourselves is delivered before kill(2) returns
         // (single-threaded process, handler installed), so its pending bit
