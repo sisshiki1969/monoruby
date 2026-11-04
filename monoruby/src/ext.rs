@@ -1964,6 +1964,7 @@ unsafe extern "C" fn mr_call_blocking_ubf(
         .replace(crate::scheduler::Ubf {
             func,
             arg: ubf_arg as usize,
+            requested: false,
         });
     // SAFETY: the table's contract, forwarded.
     let rc = unsafe { mr_call_blocking(ctx, f, arg, out) };

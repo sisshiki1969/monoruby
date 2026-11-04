@@ -610,6 +610,12 @@ pub(crate) fn wakeup(thread: Value) -> bool {
 pub(crate) struct Ubf {
     pub(crate) func: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
     pub(crate) arg: usize,
+    /// `RUBY_UBF_IO` only: an interrupt has asked for the call to end.
+    /// Its signal can land before the call's syscall starts and be
+    /// lost, so a joiner keeps re-sending it while this is set and the
+    /// thread is still blocked (`native::join`), as CRuby's timer
+    /// thread re-runs `ubf_select`.
+    pub(crate) requested: bool,
 }
 
 /// Interrupt `thread`, which is blocked in an extension call with an
@@ -644,15 +650,41 @@ pub(crate) fn unblock_main_for_signal() {
 /// ruby/spec's own `unblock_gvl_func` does). Called with the GVL held,
 /// as CRuby calls it; the function must not touch the interpreter.
 pub(crate) fn run_ubf(mut thread: Value) {
-    if let Some(Ubf {
-        func: Some(func),
-        arg,
-    }) = thread.as_thread_inner_mut().blocking_ubf.take()
-    {
-        // SAFETY: the extension's own unblock function with its own
-        // argument, registered for exactly this blocking call.
-        unsafe { func(arg as *mut std::ffi::c_void) };
+    let ubf = &mut thread.as_thread_inner_mut().blocking_ubf;
+    match ubf {
+        Some(Ubf {
+            func: Some(func),
+            arg,
+            ..
+        }) => {
+            let (func, arg) = (*func, *arg);
+            *ubf = None;
+            // SAFETY: the extension's own unblock function with its own
+            // argument, registered for exactly this blocking call.
+            unsafe { func(arg as *mut std::ffi::c_void) };
+        }
+        // RUBY_UBF_IO: the signal is the whole unblocking; remember that
+        // it was asked for, so it can be re-sent.
+        Some(Ubf {
+            func: None,
+            requested,
+            ..
+        }) => *requested = true,
+        None => {}
     }
+}
+
+/// `thread` is blocked in an extension call whose `RUBY_UBF_IO`
+/// unblocking was asked for and has not taken effect yet.
+pub(crate) fn ubf_io_requested(thread: Value) -> bool {
+    matches!(
+        thread.as_thread_inner().blocking_ubf,
+        Some(Ubf {
+            func: None,
+            requested: true,
+            ..
+        })
+    )
 }
 
 /// Internal wake used by the Ruby-level synchronization primitives
