@@ -309,10 +309,13 @@ fn capi_cruby_build_is_not_opened() {
     } else {
         cmd.arg("-Wl,-z,nodelete");
     }
+    // `LIBRUBYARG_SHARED` names the library; where it is comes from
+    // `libdir` (macOS's `-lruby.4.0` has no `-L` of its own).
     let status = cmd
         .arg("-o")
         .arg(dir.join(format!("capi_hello.{}", ruby_config("DLEXT"))))
         .arg(manifest_dir().join("tests/capi/capi_hello.c"))
+        .arg(format!("-L{}", ruby_config("libdir")))
         .args(libruby.split_whitespace())
         .status()
         .unwrap();
