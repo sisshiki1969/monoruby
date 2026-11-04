@@ -1272,6 +1272,10 @@ fn process_kill(
         } else {
             None
         };
+        crate::scheduler::ubf_trace(format_args!(
+            "kill: pid={pid} self={self_pid} to_main={}",
+            main.is_some()
+        ));
         if let Some(main) = main {
             // SAFETY: main's pthread is alive while the process runs:
             // its exit ends the process.

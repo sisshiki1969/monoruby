@@ -5957,6 +5957,24 @@ pub(crate) extern "C" fn execute_gc(
     // collection, a timeslice switch, or both is decided lane by lane —
     // a pure preempt tick never runs a spurious full GC. See
     // poll_flag.rs for the lane protocol.
+    {
+        static POLLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = POLLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if n % 200 == 199 {
+            // SAFETY: TEMPORARY trace; plain sigpending into a local set.
+            let hup_pending = unsafe {
+                let mut set: libc::sigset_t = std::mem::zeroed();
+                libc::sigpending(&mut set);
+                libc::sigismember(&set, libc::SIGHUP)
+            };
+            crate::scheduler::ubf_trace(format_args!(
+                "poll#{n}: handled={} pending={} sigpending(HUP)={hup_pending} main_ok={}",
+                crate::codegen::signal_table::HANDLED.load(std::sync::atomic::Ordering::Relaxed),
+                crate::codegen::signal_table::has_pending_signals(),
+                crate::scheduler::signal_delivery_ok(),
+            ));
+        }
+    }
     let mut preempt = crate::poll_flag::consume_preempt() || crate::preempt::stress();
     let current_exec = executor as *mut Executor;
     // Drain the pending-signal bitmap. The lowest-numbered pending signal
