@@ -760,7 +760,8 @@ dewasm の DOOM（gosu のウィンドウに描く）が動作確認の相手。
   2.35（Ubuntu 22.04）では `require "date"` が `undefined symbol: strlcpy`
   で落ち、psych 経由で `gem install` も落ちていた。層が weak で定義し
   （持つ libc ではそちらが勝つ）、`config.h` が `HAVE_STRLCPY` /
-  `HAVE_STRLCAT` を答える。
+  `HAVE_STRLCAT` を答える。Apple の libc は fortify のマクロとして持って
+  いて関数宣言が書き換えられてしまうので、そこでは宣言も定義もしない。
 - **`is_capi_extension` は dlopen しない**: 従来は `RTLD_NOW` で試し開きし
   「CRuby 用の `.so` は `rb_*` が未解決で失敗する」としていたが、ホストの
   CRuby が `--enable-shared` なら拡張は `libruby.so` をリンクしていて普通に

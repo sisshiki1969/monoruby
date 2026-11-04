@@ -402,7 +402,9 @@ p t { E.alloc_on("str") }
 p t { E.undef_alloc_on(1) }
 p t { E.data_ptr("str") }
 p t { E.data_ptr(E::Bad.new) }
-p E.typed?(Object.new), E.typed?(nil)"#,
+p E.typed?(Object.new), E.typed?(nil)
+p $e_raising, defined?($e_raising)
+p t { $e_raising = 1 }"#,
     ]));
     assert_eq!(
         out,
@@ -422,6 +424,9 @@ p E.typed?(Object.new), E.typed?(nil)"#,
 [TypeError, "allocator of CapiErrors::Bad did not return a Data object"]
 false
 false
+nil
+"global-variable"
+[NameError, "$e_raising is a read-only variable"]
 "#
     );
 }

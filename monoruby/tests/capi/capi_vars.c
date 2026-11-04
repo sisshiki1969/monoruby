@@ -194,6 +194,10 @@ Init_capi_vars(void)
     rb_define_readonly_variable("$v_fixed", &fixed);
     rb_define_virtual_variable("$v_counter", counter_get, counter_set);
     rb_define_virtual_variable("$v_readonly_virtual", counter_get, NULL);
+    /* No getter and the undef setter: reads as false (CRuby's val getter
+     * of a NULL data) until the first assignment turns it into a plain
+     * variable holding the value. */
+    rb_define_virtual_variable("$v_undef", NULL, rb_gvar_undef_setter);
     rb_define_hooked_variable("$v_hooked", &hooked_store, hooked_get, hooked_set);
     fixed = rb_str_new_cstr("fixed");
 

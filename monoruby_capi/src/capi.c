@@ -5804,8 +5804,10 @@ ruby_strdup(const char *str)
 /*
  * CRuby's libruby carries these for the C libraries without them (glibc
  * before 2.38), and the extensions taken from CRuby call them (date's
- * strftime). Weak: a libc that has them keeps its own.
+ * strftime). Weak: a libc that has them keeps its own. Apple's has them
+ * as fortification macros (ruby.h), so there they are not defined.
  */
+#ifndef __APPLE__
 __attribute__((weak)) size_t
 strlcpy(char *dst, const char *src, size_t size)
 {
@@ -5826,6 +5828,7 @@ strlcat(char *dst, const char *src, size_t size)
         return size + strlen(src);
     return dlen + strlcpy(dst + dlen, src, size - dlen);
 }
+#endif
 
 unsigned long
 ruby_strtoul(const char *str, char **endptr, int base)

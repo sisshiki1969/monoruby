@@ -1209,15 +1209,18 @@ unsigned long ruby_strtoul(const char *str, char **endptr, int base);
 #define STRTOUL ruby_strtoul
 
 /* ruby/missing.h: the layer defines these for a C library without them
- * (glibc before 2.38). A library that has them declares them with its
- * exception specification (glibc's __THROW), which a redeclaration in
- * C++ has to repeat. */
+ * (glibc before 2.38). A glibc that has them declares them with its
+ * exception specification (__THROW), which a redeclaration in C++ has
+ * to repeat. Apple's C library has them as fortification macros, which
+ * would rewrite a declaration, so there nothing is declared. */
+#ifndef __APPLE__
 #ifdef __THROW
 size_t strlcpy(char *dst, const char *src, size_t size) __THROW;
 size_t strlcat(char *dst, const char *src, size_t size) __THROW;
 #else
 size_t strlcpy(char *dst, const char *src, size_t size);
 size_t strlcat(char *dst, const char *src, size_t size);
+#endif
 #endif
 
 #ifdef __cplusplus

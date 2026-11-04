@@ -88,6 +88,16 @@ p cs.each_with_index.all? { |x, i| x.tag == "tag#{i}" }
 s = 0
 1000.times { |i| s += Hello.add(i, 1) }
 p s
+p [$hello_count, $hello_count, defined?($hello_count), $hello_count]
+$hello_count = 10
+p $hello_count
+p (begin; $hello_count = "x"; rescue TypeError => e; e.class; end)
+p [$hello_ro, (begin; $hello_ro = 1; rescue NameError => e; e.message; end)]
+p [$hello_silent, ($hello_silent = 3), $hello_silent]
+p (begin; $hello_fail = 1; rescue RuntimeError => e; e.message; end)
+p $hello_bad
+p (begin; Hello.hook_no_sym; rescue ArgumentError => e; e.message; end)
+p global_variables.include?(:$hello_count)
 p (begin; require "nosuch.so"; rescue LoadError => e; e.message; end)
 "#;
     let expected = r#"true
@@ -122,6 +132,15 @@ true
 :fine
 true
 500500
+[0, 1, "global-variable", 2]
+10
+TypeError
+["read-only", "$hello_ro is a read-only variable"]
+[nil, 3, nil]
+"the setter of $hello_fail failed without raising"
+nil
+"gvar_hook was given MR_NO_SYM"
+true
 "cannot load such file -- nosuch.so"
 "#;
     let expected = if cfg!(target_os = "macos") {

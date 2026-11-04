@@ -28,6 +28,12 @@ p $v_counter, V.counter
 p defined?($v_counter)
 p t { $v_readonly_virtual = 1 }
 p $v_readonly_virtual
+p $v_undef, defined?($v_undef)
+$v_undef = [1, 2]
+GC.start
+p $v_undef
+$v_undef = :again
+p $v_undef
 
 # rb_define_hooked_variable: the hooks wrap the storage
 p $v_hooked
