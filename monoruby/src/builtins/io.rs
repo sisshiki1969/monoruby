@@ -10226,7 +10226,7 @@ mod tests {
               buf = +"existing"
               r << (f.pread(1, 10, buf) rescue $!.class) << buf
               buf = +""
-              r << f.ioctl(0x541B, buf) << buf.bytesize << buf.unpack1("I")
+              r << f.ioctl(RUBY_PLATFORM.include?("darwin") ? 0x4004667f : 0x541B, buf) << buf.bytesize << buf.unpack1("I")
             end
             File.delete(path)
             rd, wr = IO.pipe
