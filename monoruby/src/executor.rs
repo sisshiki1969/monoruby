@@ -5988,7 +5988,6 @@ pub(crate) extern "C" fn execute_gc(
         // at the next timeslice tick: the handler runs as soon as main
         // holds the lock.
         if crate::codegen::signal_table::has_pending_signals() {
-            crate::scheduler::ubf_trace(format_args!("poll: non-main sees a pending signal"));
             if crate::scheduler::native_enabled() {
                 preempt = true;
             }
