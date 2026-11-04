@@ -1,6 +1,6 @@
 //! Nokogiri's native half (`nokogiri_native.so`) as a monoruby extension:
 //! what the gem's `ext/nokogiri` (nokogiri.so) provides, written over the
-//! bundled libxml2 (`libxml2-src`, 2.13.8 with nokogiri's patches, plus
+//! bundled libxml2 (`libxml2-src`, 2.13.9 with nokogiri's patches, plus
 //! libxslt and gumbo). The gem's Ruby half is vendored unchanged under
 //! `gem/nokogiri/`; `gem/nokogiri/nokogiri.rb` stands in for the C
 //! extension and requires this library, whose `Init_nokogiri_native`
@@ -367,12 +367,14 @@ fn nokogiri_init(ctx: &mut Ctx) -> Result<()> {
     let loaded = unsafe { CStr::from_ptr(xml::xmlParserVersion) }
         .to_bytes()
         .to_vec();
-    let v = ctx.str("2.13.8");
+    let v = ctx.str("2.13.9");
     ctx.const_set(nokogiri, "LIBXML_COMPILED_VERSION", v);
     let v = ctx.str(loaded);
     ctx.const_set(nokogiri, "LIBXML_LOADED_VERSION", v);
     ctx.const_set(nokogiri, "LIBXML_ICONV_ENABLED", Value::bool(true));
     ctx.const_set(nokogiri, "LIBXML_ZLIB_ENABLED", Value::bool(false));
+    // libxml2 is built without its HTTP client (`WITH_HTTP` 0).
+    ctx.const_set(nokogiri, "LIBXML_HTTP_ENABLED", Value::bool(false));
     let v = ctx.str("default");
     ctx.const_set(nokogiri, "LIBXML_MEMORY_MANAGEMENT", v);
     ctx.const_set(nokogiri, "PACKAGED_LIBRARIES", Value::bool(true));
@@ -384,10 +386,6 @@ fn nokogiri_init(ctx: &mut Ctx) -> Result<()> {
         "0010-update-config.guess-and-config.sub-for-libxml2.patch",
         "0011-rip-out-libxml2-s-libc_single_threaded-support.patch",
         "0019-xpath-Use-separate-static-hash-table-for-standard-fu.patch",
-        "0020-CVE-2025-6021-tree-Fix-integer-overflow-in-xmlBuildQ.patch",
-        "0021-CVE-2025-6170-Fix-potential-buffer-overflows-of-inte.patch",
-        "0022-CVE-2025-49795-schematron-Fix-null-pointer-dereferen.patch",
-        "0023-CVE-2025-49794-CVE-2025-49796-schematron-Fix-xmlSche.patch",
     ];
     let list: Vec<Value> = patches.iter().map(|p| ctx.str(p)).collect();
     let v = ctx.ary_from(&list);
@@ -455,6 +453,19 @@ pub(crate) fn builtin_type_name(ctx: &Ctx, v: Value) -> String {
 
 /// The bytes of a String argument as a C string (`StringValueCStr`).
 pub(crate) fn cstr(v: Value, ctx: &mut Ctx) -> Result<CString> {
+    // `StringValue` converts an object that responds to `to_str`.
+    let v = if !ctx.is_string(v) && ctx.respond_to(v, "to_str") {
+        let s = ctx.funcall(v, "to_str", &[], None)?;
+        if !ctx.is_string(s) {
+            let (from, to) = (ctx.class_name(v), ctx.class_name(s));
+            return Err(ctx.type_error(format!(
+                "can't convert {from} to String ({from}#to_str gives {to})"
+            )));
+        }
+        s
+    } else {
+        v
+    };
     let bytes = ctx.str_vec(v)?;
     CString::new(bytes).map_err(|_| ctx.argument_error("string contains null byte"))
 }
@@ -572,8 +583,16 @@ pub(crate) unsafe fn pin_namespace(ctx: &Ctx, ns: *mut xml::xmlNs, doc: *mut xml
 pub(crate) fn doc_ptr(ctx: &mut Ctx, v: Value) -> Result<*mut xml::xmlDoc> {
     match ctx.native::<XmlDocument>(v) {
         Some(d) => Ok(d.doc),
+        None if ctx.is_kind_of(v, classes().document) => Err(uninitialized(ctx, v)),
         None => Err(ctx.argument_error("expected a Nokogiri::XML::Document")),
     }
+}
+
+/// An object of a wrapper class made by `allocate`, with no libxml2
+/// struct behind it (`_noko_data_ptr`, nokogiri 1.19.4).
+fn uninitialized(ctx: &mut Ctx, v: Value) -> Error {
+    let name = ctx.class_name(v);
+    ctx.runtime_error(format!("Uninitialized {name} struct (null data pointer)"))
 }
 
 /// Wrap a freshly created `xmlDoc` into a Ruby `Document` of `class`,
@@ -635,6 +654,9 @@ pub(crate) fn node_ptr(ctx: &mut Ctx, v: Value) -> Result<*mut xml::xmlNode> {
     }
     if let Some(d) = ctx.native::<XmlDocument>(v) {
         return Ok(d.doc as *mut xml::xmlNode);
+    }
+    if ctx.is_kind_of(v, classes().node) {
+        return Err(uninitialized(ctx, v));
     }
     Err(ctx.argument_error("node must be a Nokogiri::XML::Node"))
 }
@@ -769,6 +791,7 @@ pub(crate) fn wrap_namespace(
 pub(crate) fn namespace_ptr(ctx: &mut Ctx, v: Value) -> Result<*mut xml::xmlNs> {
     match ctx.native::<XmlNamespace>(v) {
         Some(n) => Ok(n.ns),
+        None if ctx.is_kind_of(v, classes().namespace) => Err(uninitialized(ctx, v)),
         None => Err(ctx.argument_error("expected a Nokogiri::XML::Namespace")),
     }
 }
@@ -934,11 +957,41 @@ pub(crate) struct IoCtx {
     /// refreshed by each native method before it hands the IO to libxml2.
     pub ctx: *mut MrContext,
     pub io: Value,
+    /// Whether an exception that is not a `StandardError` (`Interrupt`,
+    /// `Timeout::ExitException`, a `throw`) is kept for the caller to
+    /// re-raise once libxml2 has returned, rather than swallowed with the
+    /// rest (`noko_io_read_protected`, nokogiri 1.19.5).
+    pub protected: bool,
+    /// That exception, rooted on the temp stack until re-raised.
+    pub pending: Option<Value>,
 }
 
 impl IoCtx {
     pub fn new(ctx: &mut Ctx, io: Value) -> Self {
-        IoCtx { ctx: ctx.raw(), io }
+        IoCtx {
+            ctx: ctx.raw(),
+            io,
+            protected: false,
+            pending: None,
+        }
+    }
+
+    /// An `IoCtx` whose read callback keeps a non-`StandardError`
+    /// exception for [`IoCtx::take_exception`].
+    pub fn new_protected(ctx: &mut Ctx, io: Value) -> Self {
+        IoCtx {
+            protected: true,
+            ..IoCtx::new(ctx, io)
+        }
+    }
+
+    /// Re-raise the exception the read callback kept, if any
+    /// (`noko_io_read_take_exception` + `noko_io_read_raise_exception`).
+    pub fn take_exception(&mut self, ctx: &mut Ctx) -> Result<()> {
+        match self.pending.take() {
+            Some(ex) => Err(raise(ctx, ex)),
+            None => Ok(()),
+        }
     }
 }
 
@@ -954,8 +1007,18 @@ pub(crate) unsafe extern "C" fn io_read(
     unsafe {
         let c = &mut *(ctx as *mut IoCtx);
         let mut cx = Ctx::from_raw(c.ctx);
+        if c.pending.is_some() {
+            return -1;
+        }
         let Ok(v) = cx.funcall(c.io, "read", &[Value::int(len as i64)], None) else {
-            let _ = cx.error_take();
+            let ex = cx.error_take();
+            if c.protected
+                && let Some(ex) = ex
+                && !cx.is_kind_of(ex, standard_error(&cx))
+            {
+                cx.temp_push(ex);
+                c.pending = Some(ex);
+            }
             return -1;
         };
         if v.is_nil() {
@@ -968,6 +1031,11 @@ pub(crate) unsafe extern "C" fn io_read(
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer as *mut u8, n);
         n as c_int
     }
+}
+
+fn standard_error(ctx: &Ctx) -> Value {
+    ctx.const_get(ctx.object_class(), "StandardError")
+        .expect("StandardError is defined")
 }
 
 /// `noko_io_write`: `io.write(chunk)`, the chunk tagged with the IO's

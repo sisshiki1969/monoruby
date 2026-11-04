@@ -367,33 +367,39 @@ fn attr_new(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<
 fn attr_set_value(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value> {
     let attr = recv(ctx, this)? as *mut xml::xmlAttr;
     let content = args[0];
+    let c = if content.is_nil() {
+        None
+    } else {
+        Some(cstr(content, ctx)?)
+    };
     // SAFETY: a live attribute of a live document.
     unsafe {
-        if !(*attr).children.is_null() {
-            xml::xmlFreeNodeList((*attr).children);
-        }
-        (*attr).children = std::ptr::null_mut();
-        (*attr).last = std::ptr::null_mut();
-        if content.is_nil() {
-            return Ok(content);
-        }
-        let c = cstr(content, ctx)?;
-        let value = xml::xmlEncodeEntitiesReentrant((*attr).doc, c.as_ptr() as *const xml::xmlChar);
-        if xml::xmlStrlen(value) == 0 {
-            (*attr).children = xml::xmlNewDocText((*attr).doc, value);
-        } else {
-            (*attr).children = xml::xmlStringGetNodeList((*attr).doc, value);
-        }
-        xml::xml_free()(value as *mut c_void);
+        // Keep the old value's wrapped text nodes alive (nokogiri 1.19.4).
         let mut cur = (*attr).children;
         while !cur.is_null() {
-            (*cur).parent = attr as *mut xml::xmlNode;
-            (*cur).doc = (*attr).doc;
-            if (*cur).next.is_null() {
-                (*attr).last = cur;
+            let next = (*cur).next;
+            if !(*cur)._private.is_null() {
+                xml::xmlUnlinkNode(cur);
+                pin_node(ctx, cur);
             }
-            cur = (*cur).next;
+            cur = next;
         }
+        let Some(c) = c else {
+            xml::xmlNodeSetContent(attr as *mut xml::xmlNode, std::ptr::null());
+            return Ok(content);
+        };
+        let value = xml::xmlEncodeEntitiesReentrant((*attr).doc, c.as_ptr() as *const xml::xmlChar);
+        if xml::xmlStrlen(value) == 0 {
+            xml::xmlNodeSetContent(attr as *mut xml::xmlNode, std::ptr::null());
+            // An empty string stays `foo=""`, not the boolean `foo`.
+            let text = xml::xmlNewDocText((*attr).doc, value);
+            (*attr).children = text;
+            (*attr).last = text;
+            (*text).parent = attr as *mut xml::xmlNode;
+        } else {
+            xml::xmlNodeSetContent(attr as *mut xml::xmlNode, value);
+        }
+        xml::xml_free()(value as *mut c_void);
     }
     Ok(content)
 }
@@ -630,10 +636,9 @@ fn pointer_id(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Resul
     Ok(Value::int(node as usize as i64))
 }
 
-/// Node#data_ptr? -> true
+/// Node#data_ptr? -> bool: false for an object made by `allocate`.
 fn data_ptr(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value> {
-    let node = recv(ctx, this)?;
-    Ok(Value::bool(!node.is_null()))
+    Ok(Value::bool(is_node(ctx, this)))
 }
 
 /// Node#lang -> String | nil
@@ -648,7 +653,17 @@ fn set_lang(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<
     let node = recv(ctx, this)?;
     let lang = cstr(args[0], ctx)?;
     // SAFETY: a live node.
-    unsafe { xml::xmlNodeSetLang(node, lang.as_ptr() as *const xml::xmlChar) };
+    unsafe {
+        unlink_wrapped_attr_children(
+            ctx,
+            xml::xmlHasNsProp(
+                node,
+                c"lang".as_ptr() as *const xml::xmlChar,
+                c"http://www.w3.org/XML/1998/namespace".as_ptr() as *const xml::xmlChar,
+            ),
+        );
+        xml::xmlNodeSetLang(node, lang.as_ptr() as *const xml::xmlChar);
+    }
     Ok(Value::nil())
 }
 
@@ -761,6 +776,41 @@ fn get(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value
     Ok(unsafe { xml_str_owned(ctx, value) })
 }
 
+/// If a matching attribute already exists, `xmlSetNsProp` /
+/// `xmlNodeSetLang` free its children; the ones a Ruby object wraps are
+/// unlinked and pinned to the document first, so the wrappers stay valid
+/// (`unlink_wrapped_attr_children`).
+unsafe fn unlink_wrapped_attr_children(ctx: &mut Ctx, attr: *mut xml::xmlAttr) {
+    // SAFETY: a live attribute (or null) of a live document.
+    unsafe {
+        if attr.is_null() || (*attr).type_ != xml::XML_ATTRIBUTE_NODE {
+            return;
+        }
+        let mut cur = (*attr).children;
+        while !cur.is_null() {
+            let next = (*cur).next;
+            if !(*cur)._private.is_null() {
+                pin_node(ctx, cur);
+                xml::xmlUnlinkNode(cur);
+            }
+            cur = next;
+        }
+    }
+}
+
+/// `xmlSplitQName3`: the prefix length and local part of `prefix:local`,
+/// or `None` for an unprefixed name (or one with an empty half).
+fn split_qname(name: &[u8]) -> Option<(usize, usize)> {
+    if name.first() == Some(&b':') {
+        return None;
+    }
+    let colon = name.iter().position(|&b| b == b':')?;
+    if colon + 1 >= name.len() {
+        return None;
+    }
+    Some((colon, colon + 1))
+}
+
 /// Node#set(name, value) -> value
 fn set(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value> {
     let node = recv(ctx, this)?;
@@ -772,24 +822,25 @@ fn set(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Value
         }
         let name = cstr(args[0], ctx)?;
         let val = cstr(value, ctx)?;
-        let prop = xml::xmlHasProp(node, name.as_ptr() as *const xml::xmlChar);
-        if !prop.is_null() && !(*prop).children.is_null() {
-            // The old value's text nodes may have Ruby objects: keep them.
-            let mut cur = (*prop).children;
-            while !cur.is_null() {
-                let next = (*cur).next;
-                if !(*cur)._private.is_null() {
-                    pin_node(ctx, cur);
-                    xml::xmlUnlinkNode(cur);
-                }
-                cur = next;
+        // Resolve a QName the way `xmlSetProp` does, so that the attribute
+        // found is the one it would replace (nokogiri 1.19.5).
+        let bytes = name.as_bytes();
+        let mut ns: *mut xml::xmlNs = std::ptr::null_mut();
+        let mut local = name.as_ptr() as *const xml::xmlChar;
+        if let Some((prefix_len, local_start)) = split_qname(bytes) {
+            let prefix = std::ffi::CString::new(&bytes[..prefix_len]).unwrap();
+            ns = xml::xmlSearchNs((*node).doc, node, prefix.as_ptr() as *const xml::xmlChar);
+            if !ns.is_null() {
+                local = name.as_ptr().add(local_start) as *const xml::xmlChar;
             }
         }
-        xml::xmlSetProp(
-            node,
-            name.as_ptr() as *const xml::xmlChar,
-            val.as_ptr() as *const xml::xmlChar,
-        );
+        let href = if ns.is_null() {
+            std::ptr::null()
+        } else {
+            (*ns).href
+        };
+        unlink_wrapped_attr_children(ctx, xml::xmlHasNsProp(node, local, href));
+        xml::xmlSetNsProp(node, ns, local, val.as_ptr() as *const xml::xmlChar);
     }
     Ok(value)
 }
@@ -887,7 +938,20 @@ fn set_namespace(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Re
         namespace_ptr(ctx, arg)?
     };
     // SAFETY: a live node.
-    unsafe { xml::xmlSetNs(node, ns) };
+    unsafe {
+        xml::xmlSetNs(node, ns);
+        // Declare the namespace on the node when no declaration of its
+        // prefix is in scope there (nokogiri 1.19.5).
+        if !ns.is_null()
+            && (*node).type_ == xml::XML_ELEMENT_NODE
+            && xml::xmlSearchNs((*node).doc, node, (*ns).prefix).is_null()
+        {
+            let definition = xml::xmlNewNs(node, (*ns).href, (*ns).prefix);
+            if !definition.is_null() {
+                xml::xmlSetNs(node, definition);
+            }
+        }
+    }
     Ok(this)
 }
 
@@ -952,6 +1016,9 @@ fn initialize_copy_with_args(
     block: Block,
 ) -> Result<Value> {
     let self_val = this;
+    if !is_node(ctx, args[0]) {
+        return Err(ctx.type_error("argument must be a kind of Nokogiri::XML::Node"));
+    }
     let other = node_ptr(ctx, args[0])?;
     let level = ctx.int(args[1])? as c_int;
     let new_doc_val = args[2];
@@ -1089,11 +1156,10 @@ unsafe fn relink_namespace(ctx: &Ctx, reparented: *mut xml::xmlNode) {
             let mut curr = (*reparented).nsDef;
             let mut prev: *mut xml::xmlNs = std::ptr::null_mut();
             while !curr.is_null() {
-                let ns = xml::xmlSearchNsByHref(doc, (*reparented).parent, (*curr).href);
-                if !ns.is_null()
-                    && ns != curr
-                    && xml::xmlStrEqual((*ns).prefix, (*curr).prefix) != 0
-                {
+                // If the parent already binds this prefix to the same
+                // href, the declaration is redundant (nokogiri 1.19.5).
+                let ns = xml::xmlSearchNs(doc, (*reparented).parent, (*curr).prefix);
+                if !ns.is_null() && ns != curr && xml::xmlStrEqual((*ns).href, (*curr).href) != 0 {
                     if !prev.is_null() {
                         (*prev).next = (*curr).next;
                     } else {

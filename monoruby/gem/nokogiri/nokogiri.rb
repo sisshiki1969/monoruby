@@ -3,7 +3,7 @@
 #
 # The extension's classes and native methods are provided by the
 # monoruby extension `nokogiri_native` (ext/nokogiri, a cdylib over the
-# bundled libxml2 — libxml2-src, 2.13.8 with nokogiri's patches — plus
+# bundled libxml2 — libxml2-src, 2.13.9 with nokogiri's patches — plus
 # libxslt and gumbo): its `Init_nokogiri_native` builds the class tree
 # (`Nokogiri::XML::Node` and its subclasses, `NodeSet`, `Namespace`,
 # `XPathContext`, the `SyntaxError`s) and registers the methods, so the
