@@ -287,23 +287,6 @@ pub(crate) fn preempt_ok() -> bool {
 }
 
 /// Whether the 1:1 model is selected (the default; see `native::enabled`).
-/// 1:1 model, called from a thread other than main: main's pthread,
-/// for a signal this process sends itself. `None` on main, in the
-/// green model, or before the thread machinery knows its main thread.
-pub(crate) fn main_pthread_if_other() -> Option<libc::pthread_t> {
-    if !native::enabled() {
-        return None;
-    }
-    SCHEDULER.with(|s| {
-        let s = s.borrow();
-        let (cur, main) = (s.current?, s.main?);
-        if cur.id() == main.id() {
-            return None;
-        }
-        main.as_thread_inner().pthread
-    })
-}
-
 pub(crate) fn native_enabled() -> bool {
     native::enabled()
 }
@@ -582,7 +565,7 @@ fn ensure_main(vm: &mut Executor) {
     let _ = vm;
 }
 
-pub(crate) fn is_current_main() -> bool {
+fn is_current_main() -> bool {
     SCHEDULER.with(|s| {
         let s = s.borrow();
         s.current.is_some() && s.current == s.main
@@ -639,24 +622,6 @@ pub(crate) struct Ubf {
 /// unblock function: in the 1:1 model through `interrupt_blocking`
 /// (the unblocking signal, then the function), in the green one by
 /// calling the function, which makes the worker's call return.
-/// TEMPORARY: is SIGUSR1 blocked on the calling kernel thread?
-pub(crate) fn usr1_masked() -> i32 {
-    // SAFETY: reads this thread's mask.
-    unsafe {
-        let mut cur: libc::sigset_t = std::mem::zeroed();
-        libc::pthread_sigmask(libc::SIG_BLOCK, std::ptr::null(), &mut cur);
-        libc::sigismember(&cur, libc::SIGUSR1)
-    }
-}
-
-/// TEMPORARY darwin CI trace (capi_nogvl hang); at most 40 lines.
-pub(crate) fn ubf_trace(args: std::fmt::Arguments) {
-    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 100 {
-        eprintln!("[ubf-trace m={}] {args}", usr1_masked());
-    }
-}
-
 fn unblock(thread: Value) {
     if !native::enabled() || !native::interrupt_blocking(thread) {
         // Green, or not inside the GVL-less region yet: the function
@@ -673,11 +638,6 @@ fn unblock(thread: Value) {
 /// signal arrives, `rb_threadptr_interrupt`).
 pub(crate) fn unblock_main_for_signal() {
     let main = SCHEDULER.with(|s| s.borrow().main);
-    ubf_trace(format_args!(
-        "unblock_main_for_signal: main={:?} ubf={}",
-        main.map(|m| m.id()),
-        main.is_some_and(|m| m.as_thread_inner().blocking_ubf.is_some())
-    ));
     if let Some(main) = main
         && main.as_thread_inner().blocking_ubf.is_some()
     {
@@ -690,11 +650,6 @@ pub(crate) fn unblock_main_for_signal() {
 /// ruby/spec's own `unblock_gvl_func` does). Called with the GVL held,
 /// as CRuby calls it; the function must not touch the interpreter.
 pub(crate) fn run_ubf(mut thread: Value) {
-    ubf_trace(format_args!(
-        "run_ubf: thread={:?} ubf={:?}",
-        thread.id(),
-        thread.as_thread_inner().blocking_ubf.as_ref().map(|u| (u.func.is_some(), u.requested))
-    ));
     let ubf = &mut thread.as_thread_inner_mut().blocking_ubf;
     match ubf {
         Some(Ubf {

@@ -395,12 +395,10 @@ pub(super) fn spawn(vm: &mut Executor, globals: &mut Globals, mut thread: Value)
         thread,
         gvl_thread: gvl_thread.clone(),
     };
-    super::ubf_trace(format_args!("spawn: before"));
     let handle = std::thread::Builder::new()
         .name(format!("ruby-thread-{:x}", thread.id()))
         .stack_size(NATIVE_STACK_SIZE)
         .spawn(move || thread_main(start));
-    super::ubf_trace(format_args!("spawn: after"));
     let handle = match handle {
         Ok(h) => h,
         Err(e) => {
@@ -504,8 +502,6 @@ fn run_body(globals: &mut Globals, mut thread: Value) {
         let inner = thread.as_thread_inner_mut();
         debug_assert_eq!(inner.state(), ThreadState::Created);
         inner.native_tid = Some(super::current_kernel_tid());
-        // SAFETY: pthread_self has no preconditions.
-        inner.pthread = Some(unsafe { libc::pthread_self() });
         // Killed / raised into before the body ran: dies unstarted, the
         // first queued interrupt deciding how (FIFO, as `dispatch`).
         match inner.pending.pop_front() {
@@ -793,9 +789,7 @@ pub(super) fn join(
             deadline
         };
         target.as_thread_inner_mut().joiners.push(cur);
-        super::ubf_trace(format_args!("join: park"));
         let res = park(vm, globals, cur, ThreadState::Joining, &[], park_deadline);
-        super::ubf_trace(format_args!("join: unpark"));
         // Finalization takes the joiners it wakes; a timeout or a signal
         // leaves ours behind.
         target.as_thread_inner_mut().joiners.retain(|j| *j != cur);
@@ -925,8 +919,6 @@ pub(super) fn fork_child_reset_threads(cur: Option<Value>) {
         }
         // A new process, so a new kernel thread id.
         inner.native_tid = Some(super::current_kernel_tid());
-        // SAFETY: pthread_self has no preconditions.
-        inner.pthread = Some(unsafe { libc::pthread_self() });
     }
     // The GVL itself was reset through the guard `crate::fork::prepare`
     // took (`GvlForkGuard::reset_child`), before this runs.

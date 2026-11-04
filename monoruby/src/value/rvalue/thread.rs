@@ -139,10 +139,6 @@ pub struct ThreadInner {
     /// dispatched and refreshed in a fork child. The main thread's is
     /// the creating kernel thread's.
     pub(crate) native_tid: Option<i64>,
-    /// 1:1 model: the pthread this thread runs on, as `native_tid`.
-    /// `Process.kill` of our own pid from another thread aims the
-    /// signal at the main thread's (`process_kill`).
-    pub(crate) pthread: Option<libc::pthread_t>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,7 +249,6 @@ impl ThreadInner {
             blocking_tid: None,
             blocking_ubf: None,
             native_tid: None,
-            pthread: None,
         }
     }
 
@@ -294,8 +289,6 @@ impl ThreadInner {
             blocking_tid: None,
             blocking_ubf: None,
             native_tid: Some(crate::scheduler::current_kernel_tid()),
-            // SAFETY: pthread_self has no preconditions.
-            pthread: Some(unsafe { libc::pthread_self() }),
         }
     }
 
@@ -328,7 +321,6 @@ impl ThreadInner {
             blocking_tid: None,
             blocking_ubf: None,
             native_tid: None,
-            pthread: None,
         }
     }
 

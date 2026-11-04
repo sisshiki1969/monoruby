@@ -125,7 +125,12 @@ ctx(void)
     return frame()->ctx;
 }
 
-/* Leave for the innermost frame; the error is pending in the interpreter. */
+/* Leave for the innermost frame; the error is pending in the interpreter.
+   _setjmp / _longjmp throughout, never setjmp / longjmp: on macOS the
+   latter save and restore the signal mask, and an unwind could leave the
+   main thread with the asynchronous signals blocked, as every other Ruby
+   thread has them, so a trapped signal was never delivered again (CRuby
+   avoids the mask-saving variants too). */
 static CAPI_NORETURN void
 capi_unwind(void)
 {

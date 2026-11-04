@@ -1261,58 +1261,17 @@ fn process_kill(
         if to_group {
             pid = -pid;
         }
-        // A signal to ourselves sent from a thread other than main is
-        // aimed at main's kernel thread, the only one that takes the
-        // asynchronous signals (the others block them). Sent to the
-        // process instead, macOS can leave it pending on the sending
-        // thread — which blocks it — for as long as that thread lives,
-        // so a trap handler never runs while the sender waits for it.
-        let main = if pid == self_pid && signum != 0 {
-            crate::scheduler::main_pthread_if_other()
-        } else {
-            None
-        };
-        {
-            // SAFETY: TEMPORARY trace; sigaction queries only.
-            let (hup, usr1) = unsafe {
-                let mut a: libc::sigaction = std::mem::zeroed();
-                libc::sigaction(libc::SIGHUP, std::ptr::null(), &mut a);
-                let mut b: libc::sigaction = std::mem::zeroed();
-                libc::sigaction(libc::SIGUSR1, std::ptr::null(), &mut b);
-                (a.sa_sigaction, b.sa_sigaction)
-            };
-            let ours = crate::codegen::signal_table::signal_handler as *const () as usize;
-            crate::scheduler::ubf_trace(format_args!(
-                "kill: pid={pid} sig={signum} self={self_pid} to_main={} hup_handler={hup:#x} usr1_handler={usr1:#x} ours={ours:#x}",
-                main.is_some()
-            ));
-        }
-        if let Some(main) = main {
-            // SAFETY: main's pthread is alive while the process runs:
-            // its exit ends the process.
-            let r = unsafe { libc::pthread_kill(main, signum) };
-            if r != 0 {
-                let err = std::io::Error::from_raw_os_error(r);
-                return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "kill"));
-            }
-        } else {
-            // SAFETY: libc::kill is an OS syscall with no Rust aliasing concerns.
-            let r = unsafe { libc::kill(pid, signum) };
-            if r == -1 {
-                let err = std::io::Error::last_os_error();
-                return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "kill"));
-            }
+        // SAFETY: libc::kill is an OS syscall with no Rust aliasing concerns.
+        let r = unsafe { libc::kill(pid, signum) };
+        if r == -1 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "kill"));
         }
         // pid 0 signals our whole process group, negative pids a group that
         // may include us; treat those as self-directed too.
         signaled_self |= pid == self_pid || pid <= 0;
         count += 1;
     }
-    crate::scheduler::ubf_trace(format_args!(
-        "kill: sig={signum} handled={} pending={}",
-        crate::codegen::signal_table::HANDLED.load(std::sync::atomic::Ordering::Relaxed),
-        crate::codegen::signal_table::has_pending_signals()
-    ));
     if signaled_self {
         // A signal sent to ourselves is delivered before kill(2) returns
         // (single-threaded process, handler installed), so its pending bit

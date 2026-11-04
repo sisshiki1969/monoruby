@@ -5957,36 +5957,6 @@ pub(crate) extern "C" fn execute_gc(
     // collection, a timeslice switch, or both is decided lane by lane —
     // a pure preempt tick never runs a spurious full GC. See
     // poll_flag.rs for the lane protocol.
-    if crate::scheduler::is_current_main() {
-        static MASKED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
-        let m = crate::scheduler::usr1_masked();
-        if MASKED.swap(m, std::sync::atomic::Ordering::Relaxed) != m {
-            crate::scheduler::ubf_trace(format_args!(
-                "main poll: usr1 masked={m} at {:?}",
-                executor
-                    .try_cfp()
-                    .map(|cfp| globals.store.func_description(cfp.lfp().func_id()))
-            ));
-        }
-    }
-    {
-        static POLLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let n = POLLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if n % 200 == 199 {
-            // SAFETY: TEMPORARY trace; plain sigpending into a local set.
-            let hup_pending = unsafe {
-                let mut set: libc::sigset_t = std::mem::zeroed();
-                libc::sigpending(&mut set);
-                libc::sigismember(&set, libc::SIGHUP)
-            };
-            crate::scheduler::ubf_trace(format_args!(
-                "poll#{n}: handled={} pending={} sigpending(HUP)={hup_pending} main_ok={}",
-                crate::codegen::signal_table::HANDLED.load(std::sync::atomic::Ordering::Relaxed),
-                crate::codegen::signal_table::has_pending_signals(),
-                crate::scheduler::signal_delivery_ok(),
-            ));
-        }
-    }
     let mut preempt = crate::poll_flag::consume_preempt() || crate::preempt::stress();
     let current_exec = executor as *mut Executor;
     // Drain the pending-signal bitmap. The lowest-numbered pending signal
@@ -6018,7 +5988,6 @@ pub(crate) extern "C" fn execute_gc(
         // at the next timeslice tick: the handler runs as soon as main
         // holds the lock.
         if crate::codegen::signal_table::has_pending_signals() {
-            crate::scheduler::ubf_trace(format_args!("poll: non-main sees a pending signal"));
             if crate::scheduler::native_enabled() {
                 preempt = true;
             }
