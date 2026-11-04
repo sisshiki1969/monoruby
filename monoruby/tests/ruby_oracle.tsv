@@ -88,6 +88,7 @@
 035d992920dc2f7cc38dee107378052b	true	'he[[o'.gsub('[', ']'); $~.regexp == /\\[/
 0365d874d3091255ffafa6a537178e6a	nil	a=Object.new; a.instance_variable_get(:@i)
 0366a74fdcc076e9a2a06c94bbd26362	[nil, "a", ".", 2, 4, "b.", 2, "a.", "c a+b", "b.", nil, "c a+", "c a+", 8, "+", "a.b.c a", 1, 1, true, nil, false, "", 0, "", "a.b", IndexError]	require "strscan"\n        s = StringScanner.new("a.b.c a+b")\n        r 
+036cb38d33df75bdc8fadda269e84057	["a1", "a1", "b3", "b4"]	def f(x) = /a#{x}/o\n        def g(x) = /b#{x}/\n        \n\n        [f(1),
 0379b90699980103ce98cdf1fd4b6457	[42, false, true]	class Foo\n          def !\n            42\n          end\n        end\n    
 038bad72ec81fa1b5fedd28192667a85	[true, false, true, false]	__a = [];__a << (5.instance_of?(Integer));__a << (5.instance_of?(Float));__a << 
 03916ea188fcdfb6d76a7e9ac03adb5c	[ArgumentError, ArgumentError, [1, 2]]	def fd_two(a, b) = [a, b]\n        def fd_fwd(...) = fd_two(...)\n       
@@ -1258,6 +1259,7 @@
 3a01dc8fffbde1143e30f29445a348d4	[42, "z", 99]	out = nil\n        50.times do\n          a = []\n          a << (class C7
 3a1578fbb1f141d15ac646838c329d4b	["9e107d9d372bb6826bd81d3542a419d6", "d41d8cd98f00b204e9800998ecf8427e", "900150983cd24fb0d6963f7d28e17f72", "a9993e364706816aba3e25717850c26c9cd0d89d", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7", "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "900150983cd24fb0d6963f7d28e17f72", 32, "kAFQmDzST7DWlj99KOF/cg==", 64, 64, "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"]	__a = [];__a << (require 'digest'; Digest::MD5.hexdigest("The quick brown fox ju
 3a19a4b42a902a2326b2eab0711379ad	[1, nil, 2, 1, nil, 3, nil]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
+3a2e2950e8cc82392b8bb7937141f86d	["0", "0", "0"]	r = []\n        3.times { |i| r << /#{i}/o }\n        r.map(&:source)\n   
 3a319d3cfdb21a4802f64f67da78477f	"US-ASCII"	s = "Hello".encode("US-ASCII")\n              s.swapcase!\n        
 3a3ea224e66a902c9412e5a9bc4f8e3d	[[:A, [7], {}], [:A, [1, 2], {x: 9}], [:A, [], {}], [:A, [3, 4], {}], [:t, [1, 2], {z: 3}], [:t, [], {}]]	class A\n              def m(*a, **k); [:A, a, k]; end\n            e
 3a4a3fd8d76c29f29774b570dd11adcd	[true, :ok, 42, 42, :called]	res = []\n        class DMNest\n          define_method(:dm) { def dm_nes
@@ -4232,6 +4234,7 @@ c4b504be0aa78d82542782cdc563f766	[-1, 1, 0, nil, nil]	__a = [];__a << (o = Objec
 c4bd1413a0e0e43d5ccb56e00501ef61	[[[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1, 3], [:b, 2, 3]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [["Proc", true], ["Proc", true]]]	h = {a: 1, b: 2}\n            def two(k, v) = [k, v]\n            def
 c4e325df801035515c6f86e521c0aa56	[625, nil]	x = nil\n        s = 0\n        50.times do |i|\n          s += x ? x : 0\n
 c4e38ed79537ada9eadcd340f523d963	[100, 200, 200]	__a = [];__a << (\n            begin\n              100\n            rescue\n       
+c4f2a5648620cd3032ec212ef851fb8f	["2", "2", "2"]	r = []\n        5.times { |i| r << /#{i}/o if i >= 2 }\n        r.map(&:s
 c4fa1f4439527b6121366eb0ec25c19d	[[69], [69], [69], "UTF-8", [0], [127], [161], [223], [129, 64], [252, 75]]	__a = [];__a << (0x0045.chr("utf-8").bytes.to_a);__a << (0x0045.chr("UTF-8").byt
 c4fb9d6d0b8cb71bc469ab02254fcf8d	[["#<Enumerator::Lazy: #<Enumerator::Lazy: [1, 2, 3]>:map>", "#<Enumerator::Lazy: #<Enumerator::Lazy: [1, 2, 3]>:collect>", "#<Enumerator::Lazy: #<Enumerator::Lazy: [1, 2, 3]>:select>", "#<Enumerator::Lazy: #<Enumerator::Lazy: [1, 2, 3]>:filter>", "#<Enumerator::Lazy: #<Enumerator::Lazy: [1, 2, 3]>:find_all>", "#<Enumerator::Lazy: #<Enumerator::Lazy: [1, 2, 3]>:flat_map>", "#<Enumerator::Lazy: #<Enumerator::Lazy: [1, 2, 3]>:collect_concat>", "#<Enumerator::Lazy: #<Enumerator::Lazy: [1, 2, 3]>:reject>"], [[2, 4, 6], [2, 3], [1, -1, 2, -2]]]	__a = [];__a << (\n            l = [1, 2, 3].lazy\n            [l.map { |x| x }, l
 c51225ee87f97b086e047aa65f80937b	[[110571088621585052544249, -322446848291190297224960, -1001188972230828920441142, -399425032787849412950359], [-3307042248427229959, 9423106023066854165, 18446744073709551617], [nil, nil, 1208925819614629174706176], [2.6837327667145233e+23, 1.0526507638786083e+24, 2.4990812281374197e+23], [1304701316955288235721609, 1604425715901403704479873, 2114668109323917873031917, 1784988062616386166291737], [2361884165778502777778060, -4609576059358362743, 18446744073709551616, 21882638524000116290], [-792504667608089776188500995000, 1.3827827754757364e+20, 5577051506714156677], "invalid argument - 2417851639229258349412352..1208925819614629174706176", [5, 2125531969892234666153539, 5681832686530518411], "invalid argument - 1208925819614629174706176...1208925819614629174706176"]	__a = [];__a << ((srand(3); 4.times.map { rand(-(2**80)..2**80) }));__a << ((sra
@@ -4334,6 +4337,7 @@ c8ff2e0bd488186fea065275bd8a264c	[true, true]	a = [1,2,3]\n            id = a.ob
 c8ffe864d471dc51f814e35c9a7e01c6	[30, 10]	S = Struct.new(:a, :b, :c)\n        s = S.new(10, 20, 30)\n        \n[s[-1
 c912b6b05ac5bdaaf8efd791f9455329	[2, nil, "negative level (-1)", "negative size (-1)", true, true]	def lvl2\n              [\n                caller(1, nil).size,\n     
 c91801e4ce439788cd99f4e3ce3955b9	["HCbi", true]	class HCbi < Hash; end\n            h = HCbi.new\n            h[:a] =
+c91f59d9c6f3c25a80fb3d74809d4a41	[0]	r = []\n        $_ = "a1"\n        3.times { |i| r << i if /a#{i + 1}/o }
 c920c837a40fe8db1cc70a621e714dba	false	binding.local_variable_defined?(:_0)
 c921f6a9c5e6eeda528ca1e442fc5581	[[1, 2, {}], [7, nil, {x: 5}], "wrong number of arguments (given 1, expected 2)", [1, 2]]	class Foo\n              attr_reader :a, :b, :k\n              def in
 c92be7c8455335ce95725c16875fb8ea	[[1, 2], [1, nil], 5, "struct size differs"]	S = Struct.new(:a, :b)\n            K = Struct.new(:x, keyword_init:
@@ -4368,6 +4372,7 @@ ca9a7fe5197626d693b7a2d84780366f	[["a", "cc", "bbb", "dddd"], ["a", "bbb", "cc",
 caa35f5143e2b89a7fe599049292d004	[[true, true, true, true, true], true]	__a = [];__a << ([(2**70).frozen?, (1+2i).frozen?, Rational(1,3).frozen?, 0.1.fr
 caa5a428511c21ba4721bdcbbcf8f21e	true	Random.srand(42)\n        a = Random.rand\n        a.is_a?(Float) && a >=
 caa6054931d8471b6f123da9d9ddaf33	[["ello", "UTF-8"], ["FrozenError", "can't modify frozen String: \\"hello\\""], ["FrozenError", "can't modify frozen String: \\"hello\\""], ["String", "US-ASCII"], ["String", "US-ASCII"], ["hi", "UTF-8"]]	(o=Object.new; def o.to_str; "h"; end; c=Class.new(String); f=->(&b){ begin; v=b
+cab1b255e6aad989879acc01affe0630	[1, "x"]	$calls = 0\n        o = Object.new\n        def o.to_s\n          $calls +
 cacaf13ae02371850924314a3901d3fb	[[9]]	class C\n                 def initialize; @log = []; end\n                 def []=
 cae47d49ae46af5b3807106c9e781864	"BYE"	s = "hello world"; s.bytesplice(0..-1, "BYE"); s
 cafe7d2e3b4bb9071dab9b0b71c4dc48	[[48, 51, 48, 51, false, 48, 51, 51], TypeError, RangeError, RangeError, 47, RangeError, RangeError, TypeError]	def fl(a, b) = [(a..b).first, (a..b).last, (a..b).begin, (a...b).end, (
