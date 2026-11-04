@@ -653,7 +653,7 @@ pub(crate) fn usr1_masked() -> i32 {
 pub(crate) fn ubf_trace(args: std::fmt::Arguments) {
     static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 100 {
-        eprintln!("[ubf-trace] {args}");
+        eprintln!("[ubf-trace m={}] {args}", usr1_masked());
     }
 }
 

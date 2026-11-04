@@ -395,10 +395,12 @@ pub(super) fn spawn(vm: &mut Executor, globals: &mut Globals, mut thread: Value)
         thread,
         gvl_thread: gvl_thread.clone(),
     };
+    super::ubf_trace(format_args!("spawn: before"));
     let handle = std::thread::Builder::new()
         .name(format!("ruby-thread-{:x}", thread.id()))
         .stack_size(NATIVE_STACK_SIZE)
         .spawn(move || thread_main(start));
+    super::ubf_trace(format_args!("spawn: after"));
     let handle = match handle {
         Ok(h) => h,
         Err(e) => {
