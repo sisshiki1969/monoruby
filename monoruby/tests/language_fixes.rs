@@ -1184,3 +1184,34 @@ fn invalid_break_and_return_are_rescued_at_the_exit() {
         "#,
     );
 }
+
+#[test]
+fn defined_method_one_parameter_respond_to_warns() {
+    // The deprecated one-parameter `respond_to?`: warned about (naming
+    // `Class#` or, for a singleton method, the receiver's `to_s` + `.`)
+    // only under Warning[:deprecated]; a raising `respond_to?` makes the
+    // method undefined.
+    run_test_once(
+        r#"
+        require "stringio"
+        def cap; $stderr = StringIO.new; yield; s = $stderr.string; $stderr = STDERR; s; end
+        class DRTOneW
+          def respond_to?(name) = false
+        end
+        class DRTRaise
+          def respond_to?(name, all = false) = raise("boom")
+        end
+        o = Object.new
+        def o.to_s = "OBJ"
+        def o.respond_to?(name) = false
+        r = []
+        Warning[:deprecated] = true
+        r << cap { r << defined?(DRTOneW.new.x) }.lines.map { |l| l.sub(/\A.*?warning: /, "") }
+        r << cap { r << defined?(o.x) }.lines.map { |l| l.sub(/\A.*?warning: /, "") }
+        Warning[:deprecated] = false
+        r << cap { r << defined?(DRTOneW.new.x) }
+        r << defined?(DRTRaise.new.x)
+        r
+        "#,
+    );
+}

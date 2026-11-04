@@ -77,16 +77,12 @@ impl<'a> BytecodeGen<'a> {
         }
     }
 
+    /// (Only single-target forms reach here: prism rejects a multiple
+    /// assignment inside `defined?`.)
     fn declare_assignment_target(&mut self, lhs: &Node) {
         match &lhs.kind {
             NodeKind::LocalVar(0, name) | NodeKind::Ident(name) => {
                 self.assign_local(IdentId::get_id(name));
-            }
-            NodeKind::Splat(deref!(n)) => self.declare_assignment_target(n),
-            NodeKind::MulAssignNested(v) => {
-                for n in v {
-                    self.declare_assignment_target(n);
-                }
             }
             _ => {}
         }

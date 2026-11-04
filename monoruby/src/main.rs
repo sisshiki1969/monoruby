@@ -189,6 +189,18 @@ fn take_value(
     }
 }
 
+/// The encoding a `-K<code>` switch names; unknown codes are ignored,
+/// like CRuby.
+fn kcode_encoding(k: char) -> Option<&'static str> {
+    match k {
+        'e' | 'E' => Some("EUC-JP"),
+        'u' | 'U' => Some("UTF-8"),
+        's' | 'S' => Some("Windows-31J"),
+        'a' | 'A' | 'n' | 'N' => Some("ASCII-8BIT"),
+        _ => None,
+    }
+}
+
 fn lossy(s: &OsStr) -> String {
     s.to_string_lossy().into_owned()
 }
@@ -883,13 +895,7 @@ fn main() {
     // prelude below, so it wins here too).
     let argv_external = opts
         .kcode
-        .and_then(|k| match k {
-            'e' | 'E' => Some("EUC-JP"),
-            'u' | 'U' => Some("UTF-8"),
-            's' | 'S' => Some("Windows-31J"),
-            'a' | 'A' | 'n' | 'N' => Some("ASCII-8BIT"),
-            _ => None,
-        })
+        .and_then(kcode_encoding)
         .or(opts.external_enc.as_deref());
     globals.set_argv(Value::array_from_iter(prog_args.iter().map(|s| {
         monoruby::program_argument_string(s.as_encoded_bytes(), argv_external)
@@ -976,14 +982,7 @@ fn main() {
         ));
     }
     if let Some(k) = opts.kcode {
-        let enc = match k {
-            'e' | 'E' => Some("EUC-JP"),
-            'u' | 'U' => Some("UTF-8"),
-            's' | 'S' => Some("Windows-31J"),
-            'a' | 'A' | 'n' | 'N' => Some("ASCII-8BIT"),
-            _ => None, // unknown codes are ignored, like CRuby
-        };
-        if let Some(enc) = enc {
+        if let Some(enc) = kcode_encoding(k) {
             prelude.push_str(&format!(
                 "Encoding.default_external = {}\n",
                 ruby_str_lit(enc)
