@@ -499,6 +499,14 @@ impl Globals {
             && let Some(stem) = cand.file_stem()
             && let Some(p) = crate::ext::find_extension(&stem.to_string_lossy())
         {
+            // An extension of the same name that a gem built against
+            // the C API layer, on `$LOAD_PATH` because the gem is
+            // activated, wins over the one monoruby ships — as an
+            // activated gem's `strscan.so` wins over CRuby's archdir copy:
+            // strscan 3.1.8's `lib/strscan.rb` asks for `strscan.so`.
+            if let Some(built) = self.built_extension_on_load_path(cand, entries) {
+                return Some(built);
+            }
             return Some(p);
         }
 
