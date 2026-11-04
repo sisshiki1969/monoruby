@@ -1,4 +1,4 @@
-//! Hand-written FFI for the vendored libxml2 (2.13.8): the structs
+//! Hand-written FFI for the vendored libxml2 (2.13.9): the structs
 //! monoruby's Nokogiri reads (the tree, node sets, XPath objects, errors)
 //! and the entry points it calls. Layouts follow `include/libxml/*.h` of
 //! that exact version; the C library is built and linked by `build.rs`.

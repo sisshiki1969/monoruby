@@ -992,7 +992,7 @@ dependencies = [
 
 [[package]]
 name = "libxml2-src"
-version = "2.13.8"
+version = "2.13.9"
 dependencies = [
  "cc",
 ]

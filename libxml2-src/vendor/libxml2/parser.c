@@ -421,7 +421,7 @@ xmlSaturatedAdd(unsigned long *dst, unsigned long val) {
 }
 
 static void
-xmlSaturatedAddSizeT(unsigned long *dst, unsigned long val) {
+xmlSaturatedAddSizeT(unsigned long *dst, size_t val) {
     if (val > ULONG_MAX - *dst)
         *dst = ULONG_MAX;
     else
@@ -2671,14 +2671,13 @@ xmlParseCharRef(xmlParserCtxtPtr ctxt) {
         xmlFatalErrMsgInt(ctxt, XML_ERR_INVALID_CHAR,
                 "xmlParseCharRef: character reference out of bounds\n",
 	        val);
-    } else if (IS_CHAR(val)) {
-        return(val);
-    } else {
+        val = 0xFFFD;
+    } else if (!IS_CHAR(val)) {
         xmlFatalErrMsgInt(ctxt, XML_ERR_INVALID_CHAR,
                           "xmlParseCharRef: invalid xmlChar value %d\n",
 	                  val);
     }
-    return(0);
+    return(val);
 }
 
 /**

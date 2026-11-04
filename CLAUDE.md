@@ -510,7 +510,7 @@ External crates (fetched from git):
   `Psych::Handler`, `__yaml_emitter_new` / `__yaml_emit` /
   `__yaml_emitter_free` hold one emitter per `Psych::Emitter`). The gem's
   Ruby half is vendored under `gem/psych/`.
-- `libxml2-src` (workspace crate) — libxml2 2.13.8 with nokogiri's patches,
+- `libxml2-src` (workspace crate) — libxml2 2.13.9 with nokogiri's patches,
   vendored under `libxml2-src/vendor/` and built with `cc` (hand-written
   `config.h`, generated `xmlversion.h`; no autotools / cmake), with a
   hand-written FFI plus small C glue files (`libxml2-src/glue/`) for the

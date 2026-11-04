@@ -73,8 +73,9 @@ is itself a singleton class (its only instance already has it).
 ## 3. Compile time: settling the proofs
 
 Every place that lets Ruby run unsets the frame's class-version guard. It
-now also marks the frame's class proofs *unsettled* (an `Invariants` bit,
-joined by OR). At the head of the next instruction —
+now also clears the frame's `class_proofs_settled` bit (an `Invariants`
+guard, joined by AND like the others: one unsettled path makes the merge
+unsettled). At the head of the next instruction —
 `JitContext::settle_class_proofs`, called from `compile_instruction` —
 the state is walked (every frame of the specialization chain) and each
 proof about an object whose class may break is sorted:
