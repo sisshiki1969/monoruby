@@ -1966,7 +1966,22 @@ unsafe extern "C" fn mr_call_blocking_ubf(
             arg: ubf_arg as usize,
             requested: false,
         });
-    crate::scheduler::ubf_trace(format_args!("call_blocking_ubf: enter thread={:?}", thread.id()));
+    {
+        // SAFETY: TEMPORARY trace; reads this thread's mask.
+        let (usr1, hup, vt) = unsafe {
+            let mut cur: libc::sigset_t = std::mem::zeroed();
+            libc::pthread_sigmask(libc::SIG_BLOCK, std::ptr::null(), &mut cur);
+            (
+                libc::sigismember(&cur, libc::SIGUSR1),
+                libc::sigismember(&cur, libc::SIGHUP),
+                libc::sigismember(&cur, libc::SIGVTALRM),
+            )
+        };
+        crate::scheduler::ubf_trace(format_args!(
+            "call_blocking_ubf: enter thread={:?} masked usr1={usr1} hup={hup} vtalrm={vt}",
+            thread.id()
+        ));
+    }
     // SAFETY: the table's contract, forwarded.
     let rc = unsafe { mr_call_blocking(ctx, f, arg, out) };
     crate::scheduler::ubf_trace(format_args!("call_blocking_ubf: leave thread={:?}", thread.id()));
