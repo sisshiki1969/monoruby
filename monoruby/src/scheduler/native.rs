@@ -502,6 +502,8 @@ fn run_body(globals: &mut Globals, mut thread: Value) {
         let inner = thread.as_thread_inner_mut();
         debug_assert_eq!(inner.state(), ThreadState::Created);
         inner.native_tid = Some(super::current_kernel_tid());
+        // SAFETY: pthread_self has no preconditions.
+        inner.pthread = Some(unsafe { libc::pthread_self() });
         // Killed / raised into before the body ran: dies unstarted, the
         // first queued interrupt deciding how (FIFO, as `dispatch`).
         match inner.pending.pop_front() {
@@ -919,6 +921,8 @@ pub(super) fn fork_child_reset_threads(cur: Option<Value>) {
         }
         // A new process, so a new kernel thread id.
         inner.native_tid = Some(super::current_kernel_tid());
+        // SAFETY: pthread_self has no preconditions.
+        inner.pthread = Some(unsafe { libc::pthread_self() });
     }
     // The GVL itself was reset through the guard `crate::fork::prepare`
     // took (`GvlForkGuard::reset_child`), before this runs.

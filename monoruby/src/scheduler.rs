@@ -287,6 +287,23 @@ pub(crate) fn preempt_ok() -> bool {
 }
 
 /// Whether the 1:1 model is selected (the default; see `native::enabled`).
+/// 1:1 model, called from a thread other than main: main's pthread,
+/// for a signal this process sends itself. `None` on main, in the
+/// green model, or before the thread machinery knows its main thread.
+pub(crate) fn main_pthread_if_other() -> Option<libc::pthread_t> {
+    if !native::enabled() {
+        return None;
+    }
+    SCHEDULER.with(|s| {
+        let s = s.borrow();
+        let (cur, main) = (s.current?, s.main?);
+        if cur.id() == main.id() {
+            return None;
+        }
+        main.as_thread_inner().pthread
+    })
+}
+
 pub(crate) fn native_enabled() -> bool {
     native::enabled()
 }

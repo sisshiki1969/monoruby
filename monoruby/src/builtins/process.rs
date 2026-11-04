@@ -1261,11 +1261,32 @@ fn process_kill(
         if to_group {
             pid = -pid;
         }
-        // SAFETY: libc::kill is an OS syscall with no Rust aliasing concerns.
-        let r = unsafe { libc::kill(pid, signum) };
-        if r == -1 {
-            let err = std::io::Error::last_os_error();
-            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "kill"));
+        // A signal to ourselves sent from a thread other than main is
+        // aimed at main's kernel thread, the only one that takes the
+        // asynchronous signals (the others block them). Sent to the
+        // process instead, macOS can leave it pending on the sending
+        // thread — which blocks it — for as long as that thread lives,
+        // so a trap handler never runs while the sender waits for it.
+        let main = if pid == self_pid && signum != 0 {
+            crate::scheduler::main_pthread_if_other()
+        } else {
+            None
+        };
+        if let Some(main) = main {
+            // SAFETY: main's pthread is alive while the process runs:
+            // its exit ends the process.
+            let r = unsafe { libc::pthread_kill(main, signum) };
+            if r != 0 {
+                let err = std::io::Error::from_raw_os_error(r);
+                return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "kill"));
+            }
+        } else {
+            // SAFETY: libc::kill is an OS syscall with no Rust aliasing concerns.
+            let r = unsafe { libc::kill(pid, signum) };
+            if r == -1 {
+                let err = std::io::Error::last_os_error();
+                return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "kill"));
+            }
         }
         // pid 0 signals our whole process group, negative pids a group that
         // may include us; treat those as self-directed too.
