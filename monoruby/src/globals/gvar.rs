@@ -51,6 +51,26 @@ pub type GvarGetter =
 pub type GvarSetter =
     fn(vm: &mut Executor, globals: &mut Globals, name: IdentId, val: Value) -> Result<()>;
 
+/// A global variable hooked by a dynamically loaded extension through
+/// `MrApi::gvar_hook` (CRuby's `rb_define_hooked_variable` family): reads
+/// and writes go to C functions with the `data` given at registration.
+/// The entry holds no `Value` of its own; whatever the hooks keep alive
+/// is registered with the collector by the extension.
+#[derive(Clone, Copy)]
+pub struct NativeGvar {
+    pub data: *mut std::ffi::c_void,
+    /// `None` reads as nil.
+    pub getter: Option<monoruby_ext_sys::MrGvarGetFn>,
+    /// `None` makes the variable read-only.
+    pub setter: Option<monoruby_ext_sys::MrGvarSetFn>,
+}
+
+// SAFETY: the hooks run only from the interpreter's own global-variable
+// access, under the GVL like every other extension call; the table never
+// dereferences `data` itself.
+unsafe impl Send for NativeGvar {}
+unsafe impl Sync for NativeGvar {}
+
 /// A single entry in the global variable table.
 pub enum GvarEntry {
     /// Plain global variable — value is stored in place.
@@ -62,6 +82,8 @@ pub enum GvarEntry {
         getter: GvarGetter,
         setter: Option<GvarSetter>,
     },
+    /// Hooked by a native extension's C functions.
+    Native(NativeGvar),
 }
 
 /// The globals that are read on every line of IO or every `String#split`
@@ -296,6 +318,10 @@ impl GvarTable {
                 let getter = *getter;
                 getter(vm, globals, name)
             }
+            GvarEntry::Native(hook) => {
+                let hook = *hook;
+                Some(crate::ext::gvar_native_get(vm, globals, name, hook))
+            }
         }
     }
 
@@ -308,12 +334,20 @@ impl GvarTable {
     /// `$LOAD_PATH`, `$LOADED_FEATURES`) return `Some` even when their
     /// underlying value is nil, while hooks for derived match variables
     /// (`$&`, `$'`, `` $` ``, `$1`..`$N`) return `None` until `$~` is set,
-    /// mirroring CRuby's BACK_REF / NTH_REF semantics.
+    /// mirroring CRuby's BACK_REF / NTH_REF semantics. A `Native` entry is
+    /// defined by being registered, without its getter running (what
+    /// CRuby answers for a hooked variable).
     pub fn defined_runtime(
         vm: &mut Executor,
         globals: &mut Globals,
         name: IdentId,
     ) -> bool {
+        if let Some(id) = globals.gvars.index.get(&name).copied() {
+            let id = globals.gvars.resolve(id);
+            if matches!(globals.gvars.entries[id.index()], GvarEntry::Native(_)) {
+                return true;
+            }
+        }
         Self::lookup(vm, globals, name).is_some()
     }
 
@@ -345,6 +379,10 @@ impl GvarTable {
                     )));
                 }
             },
+            GvarEntry::Native(hook) => {
+                let hook = *hook;
+                crate::ext::gvar_native_set(vm, globals, name, hook, val)?;
+            }
         }
         // `Kernel#trace_var` hooks fire after the store, newest first
         // (CRuby prepends each registration): a Proc command is called
@@ -414,7 +452,7 @@ impl GvarTable {
         match &mut self.entries[id.index()] {
             GvarEntry::Simple(slot) => *slot = val,
             GvarEntry::Alias(_) => unreachable!("resolve() follows aliases"),
-            GvarEntry::Hooked { .. } => panic!(
+            GvarEntry::Hooked { .. } | GvarEntry::Native(_) => panic!(
                 "set_simple called on hooked global variable {name}; \
                  use set_gvar through the hook API instead"
             ),
@@ -432,6 +470,13 @@ impl GvarTable {
     ) {
         let id = self.entry_id(name);
         self.entries[id.index()] = GvarEntry::Hooked { getter, setter };
+    }
+
+    /// Install an extension's hooks for `name`, replacing whatever entry
+    /// the name had, as [`Self::define_hook`] does.
+    pub fn define_native_hook(&mut self, name: IdentId, hook: NativeGvar) {
+        let id = self.entry_id(name);
+        self.entries[id.index()] = GvarEntry::Native(hook);
     }
 
     /// Install an alias: reading or writing `new_name` is redirected to

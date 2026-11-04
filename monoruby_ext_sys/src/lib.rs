@@ -115,6 +115,15 @@ pub type MrMethodDataFn = unsafe extern "C" fn(
 /// Ruby values or the API.
 pub type MrBlockingFn = unsafe extern "C" fn(arg: *mut c_void) -> i64;
 
+/// The getter of a global variable hooked with [`MrApi::gvar_hook`]:
+/// called with the `data` given at registration, it returns the
+/// variable's value, or `MR_UNDEF` with an error pending.
+pub type MrGvarGetFn = unsafe extern "C" fn(ctx: *mut MrContext, data: *mut c_void) -> MrValue;
+
+/// The setter of such a variable: returns 0, or -1 with an error pending.
+pub type MrGvarSetFn =
+    unsafe extern "C" fn(ctx: *mut MrContext, data: *mut c_void, val: MrValue) -> c_int;
+
 /// The collector's cursor, handed to a native object's `mark`; only
 /// `gc_mark` takes it.
 #[repr(C)]
@@ -556,6 +565,21 @@ pub struct MrApi {
         ubf_arg: *mut c_void,
         out: *mut i64,
     ) -> c_int,
+    /// `rb_define_hooked_variable` and its relatives: from now on a read
+    /// of the global variable `name` (its `$`-prefixed name, from
+    /// `intern`) calls `getter(ctx, data)` and an assignment calls
+    /// `setter(ctx, data, val)`; `setter` NULL makes the variable
+    /// read-only (assignment raises NameError), `getter` NULL reads as
+    /// nil. Whatever entry the name had is replaced. The hooks hold no
+    /// value the collector sees: one they keep stays alive through
+    /// `gc_register_address` or `gc_pin`, like any C global.
+    pub gvar_hook: unsafe extern "C" fn(
+        ctx: *mut MrContext,
+        name: MrSym,
+        data: *mut c_void,
+        getter: Option<MrGvarGetFn>,
+        setter: Option<MrGvarSetFn>,
+    ),
 }
 
 /// [`MrApi::call_blocking_ubf`]'s `ubf` for "no function, interrupt the

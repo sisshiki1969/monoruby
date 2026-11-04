@@ -125,6 +125,23 @@ ctx(void)
     return frame()->ctx;
 }
 
+/* A frame about to be pushed, under the current one. `owner` NULL makes
+ * it its own (a Ruby call entering C); a frame opened inside a call
+ * (rb_protect) passes that call's. */
+static void
+frame_init(struct capi_frame *fr, MrContext *c, MrValue block,
+           const struct capi_method *method, struct capi_frame *owner)
+{
+    fr->ctx = c;
+    fr->block = block;
+    fr->prev = capi_cur;
+    fr->owner = owner ? owner : fr;
+    fr->method = method;
+    fr->bufs = NULL;
+    memset(fr->ary, 0, sizeof(fr->ary));
+    fr->ary_next = 0;
+}
+
 /* Leave for the innermost frame; the error is pending in the interpreter.
    _setjmp / _longjmp throughout, never setjmp / longjmp: on macOS the
    latter save and restore the signal mask, and an unwind could leave the
@@ -427,6 +444,8 @@ call_cfunc(const struct capi_method *m, VALUE self, int argc, VALUE *a)
     rb_raise(rb_eArgError, "unsupported arity %d", m->arity);
 }
 
+static void materialize_payload(VALUE self);
+
 /* The MrMethodDataFn of every method defined through this layer. */
 static MrValue
 capi_dispatch(MrContext *c, MrValue self, int argc, const MrValue *argv, MrValue block, void *data)
@@ -434,19 +453,14 @@ capi_dispatch(MrContext *c, MrValue self, int argc, const MrValue *argv, MrValue
     struct capi_frame fr;
     struct capi_frame *volatile fp = &fr;
     volatile MrValue result = MR_UNDEF;
-    fr.ctx = c;
-    fr.block = block;
-    fr.prev = capi_cur;
-    fr.owner = &fr;
-    fr.method = (const struct capi_method *)data;
-    fr.bufs = NULL;
-    memset(fr.ary, 0, sizeof(fr.ary));
-    fr.ary_next = 0;
+    frame_init(&fr, c, block, (const struct capi_method *)data, NULL);
     capi_cur = &fr;
     if (_setjmp(fr.jb) == 0) {
         VALUE small[CAPI_SMALL_ARGS];
         VALUE *a = rb_args(argc, argv, small);
-        result = M(call_cfunc((const struct capi_method *)data, R(self), argc, a));
+        VALUE recv = R(self);
+        materialize_payload(recv);
+        result = M(call_cfunc((const struct capi_method *)data, recv, argc, a));
     }
     free_bufs(fp);
     capi_cur = fp->prev;
@@ -461,21 +475,14 @@ __attribute__((visibility("default"))) int
 monoruby_capi_init(MrContext *c, void (*init)(void))
 {
     if (c->api->abi_version != MR_ABI_VERSION ||
-        c->api->size < offsetof(MrApi, call_super) + sizeof(void *))
+        c->api->size < offsetof(MrApi, gvar_hook) + sizeof(void *))
         return -2;
     api = c->api;
     func_names_reset();
     struct capi_frame fr;
     struct capi_frame *volatile fp = &fr;
     volatile int rc = -1;
-    fr.ctx = c;
-    fr.block = MR_UNDEF;
-    fr.prev = capi_cur;
-    fr.owner = &fr;
-    fr.method = NULL;
-    fr.bufs = NULL;
-    memset(fr.ary, 0, sizeof(fr.ary));
-    fr.ary_next = 0;
+    frame_init(&fr, c, MR_UNDEF, NULL, NULL);
     capi_cur = &fr;
     if (_setjmp(fr.jb) == 0) {
         init_globals();
@@ -930,14 +937,7 @@ rb_protect(VALUE (*func)(VALUE), VALUE arg, int *state)
     struct capi_frame *outer = frame();
     struct capi_frame fr;
     volatile VALUE result = Qnil;
-    fr.ctx = outer->ctx;
-    fr.block = outer->block;
-    fr.prev = outer;
-    fr.owner = outer->owner;
-    fr.method = NULL;
-    fr.bufs = NULL;
-    memset(fr.ary, 0, sizeof(fr.ary));
-    fr.ary_next = 0;
+    frame_init(&fr, outer->ctx, outer->block, NULL, outer->owner);
     capi_cur = &fr;
     if (_setjmp(fr.jb) == 0) {
         result = func(arg);
@@ -1010,20 +1010,27 @@ vrescue(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALU
 }
 
 VALUE
-rb_rescue2(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALUE data2, ...)
+rb_vrescue2(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALUE data2, va_list ap)
 {
     VALUE classes[16];
     int n = 0;
-    va_list ap;
-    va_start(ap, data2);
     for (;;) {
         VALUE k = va_arg(ap, VALUE);
         if (k == 0 || n == 16)
             break;
         classes[n++] = k;
     }
-    va_end(ap);
     return vrescue(b_proc, data1, r_proc, data2, classes, n);
+}
+
+VALUE
+rb_rescue2(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALUE data2, ...)
+{
+    va_list ap;
+    va_start(ap, data2);
+    VALUE result = rb_vrescue2(b_proc, data1, r_proc, data2, ap);
+    va_end(ap);
+    return result;
 }
 
 VALUE
@@ -2428,6 +2435,48 @@ rb_obj_instance_variables(VALUE obj)
     return rb_funcall(obj, rb_intern("instance_variables"), 0);
 }
 
+/* The instance variables #instance_variables lists: the hidden ones
+ * (ivar_name below) are not among them. */
+void
+rb_ivar_foreach(VALUE obj, int (*func)(ID, VALUE, st_data_t), st_data_t arg)
+{
+    VALUE names = rb_obj_instance_variables(obj);
+    long n = RARRAY_LEN(names);
+    for (long i = 0; i < n; i++) {
+        ID id = SYM2ID(rb_ary_entry(names, i));
+        if (func(id, rb_ivar_get(obj, id), arg) == ST_STOP)
+            break;
+    }
+}
+
+/* The block form takes the block of the running C method, as CRuby's
+ * does. */
+VALUE
+rb_obj_instance_eval(int argc, const VALUE *argv, VALUE self)
+{
+    return funcall_block(self, rb_intern("instance_eval"), argc, argv,
+                         argc == 0 ? frame()->block : MR_UNDEF);
+}
+
+VALUE
+rb_obj_instance_exec(int argc, const VALUE *argv, VALUE self)
+{
+    return funcall_block(self, rb_intern("instance_exec"), argc, argv, frame()->block);
+}
+
+VALUE
+rb_mod_module_eval(int argc, const VALUE *argv, VALUE mod)
+{
+    return funcall_block(mod, rb_intern("module_eval"), argc, argv,
+                         argc == 0 ? frame()->block : MR_UNDEF);
+}
+
+VALUE
+rb_mod_module_exec(int argc, const VALUE *argv, VALUE mod)
+{
+    return funcall_block(mod, rb_intern("module_exec"), argc, argv, frame()->block);
+}
+
 /* A name without '@' is CRuby's hidden instance variable (sqlite3's
  * "-aggregators"): monoruby keeps those under a '/' prefix, which
  * #instance_variables, Marshal and inspect leave out. */
@@ -2548,6 +2597,231 @@ rb_gv_set(const char *name, VALUE val)
     char gv[256], code[300];
     snprintf(code, sizeof(code), "->(v) { %s = v }", gvar_name(name, gv, sizeof(gv)));
     return rb_funcall(rb_eval_string(code), rb_intern("call"), 1, val);
+}
+
+/* ---------------------------------------------------------------------
+ * Hooked global variables (rb_define_variable and its relatives)
+ * --------------------------------------------------------------------- */
+
+/*
+ * One per name handed to the interpreter's `gvar_hook`: the interpreter
+ * calls the two dispatchers below with the record, and they call the
+ * extension's getter and setter with CRuby's arguments. `var` is what
+ * CRuby keeps as the entry's data: the extension's VALUE slot for
+ * rb_define_variable / rb_define_hooked_variable, NULL for a virtual
+ * variable, and the value itself (cast) once rb_gvar_undef_setter made
+ * the variable a plain one. The marker keeps what `var` reaches alive
+ * from one pinned native object.
+ */
+struct capi_gvar {
+    ID id;
+    VALUE *var;
+    rb_gvar_getter_t *getter;
+    rb_gvar_setter_t *setter;
+    rb_gvar_marker_t *marker;
+    struct capi_gvar *next;
+};
+
+static struct capi_gvar *capi_gvars;
+static int capi_gvars_rooted;
+
+static struct capi_gvar *
+gvar_record(ID id)
+{
+    for (struct capi_gvar *g = capi_gvars; g; g = g->next)
+        if (g->id == id)
+            return g;
+    return NULL;
+}
+
+static void
+gvars_mark(void *p, MrMarker *marker)
+{
+    (void)p;
+    MrMarker *saved = capi_marker;
+    capi_marker = marker;
+    for (struct capi_gvar *g = capi_gvars; g; g = g->next)
+        g->marker(g->var);
+    capi_marker = saved;
+}
+
+static const MrNativeOps gvars_ops = { "gvars", gvars_mark, NULL, NULL };
+
+/* The hooks run under a frame of their own, as a method does: a raise
+ * inside one lands here and is left pending for the interpreter. */
+static MrValue
+gvar_get_dispatch(MrContext *c, void *data)
+{
+    struct capi_gvar *g = data;
+    struct capi_frame fr;
+    struct capi_frame *volatile fp = &fr;
+    volatile MrValue result = MR_UNDEF;
+    frame_init(&fr, c, MR_UNDEF, NULL, NULL);
+    capi_cur = &fr;
+    if (_setjmp(fr.jb) == 0)
+        result = M(g->getter(g->id, g->var));
+    free_bufs(fp);
+    capi_cur = fp->prev;
+    return result;
+}
+
+static int
+gvar_set_dispatch(MrContext *c, void *data, MrValue val)
+{
+    struct capi_gvar *g = data;
+    struct capi_frame fr;
+    struct capi_frame *volatile fp = &fr;
+    volatile int rc = -1;
+    frame_init(&fr, c, MR_UNDEF, NULL, NULL);
+    capi_cur = &fr;
+    if (_setjmp(fr.jb) == 0) {
+        g->setter(R(val), g->id, g->var);
+        rc = 0;
+    }
+    free_bufs(fp);
+    capi_cur = fp->prev;
+    return rc;
+}
+
+VALUE
+rb_gvar_undef_getter(ID id, VALUE *data)
+{
+    (void)data;
+    rb_warning("global variable '%s' not initialized", rb_id2name(id));
+    return Qnil;
+}
+
+/* The first assignment to a virtual variable without a setter of its
+ * own makes it a plain one holding the value, as in CRuby. */
+void
+rb_gvar_undef_setter(VALUE val, ID id, VALUE *data)
+{
+    (void)data;
+    struct capi_gvar *g = gvar_record(id);
+    if (!g)
+        rb_raise(rb_eNameError, "%s is not a hooked global variable", rb_id2name(id));
+    g->getter = rb_gvar_val_getter;
+    g->setter = rb_gvar_val_setter;
+    g->marker = rb_gvar_val_marker;
+    g->var = (VALUE *)val;
+}
+
+void
+rb_gvar_undef_marker(VALUE *var)
+{
+    (void)var;
+}
+
+/* A plain variable keeps its value in the data pointer itself. */
+VALUE
+rb_gvar_val_getter(ID id, VALUE *data)
+{
+    (void)id;
+    return (VALUE)data;
+}
+
+void
+rb_gvar_val_setter(VALUE val, ID id, VALUE *data)
+{
+    (void)data;
+    struct capi_gvar *g = gvar_record(id);
+    if (!g)
+        rb_raise(rb_eNameError, "%s is not a hooked global variable", rb_id2name(id));
+    g->var = (VALUE *)val;
+}
+
+void
+rb_gvar_val_marker(VALUE *var)
+{
+    VALUE v = (VALUE)var;
+    if (v)
+        rb_gc_mark_maybe(v);
+}
+
+VALUE
+rb_gvar_var_getter(ID id, VALUE *var)
+{
+    (void)id;
+    return var ? *var : Qnil;
+}
+
+void
+rb_gvar_var_setter(VALUE val, ID id, VALUE *var)
+{
+    (void)id;
+    *var = val;
+}
+
+void
+rb_gvar_var_marker(VALUE *var)
+{
+    if (var)
+        rb_gc_mark_maybe(*var);
+}
+
+void
+rb_gvar_readonly_setter(VALUE val, ID id, VALUE *var)
+{
+    (void)val;
+    (void)var;
+    rb_raise(rb_eNameError, "%s is a read-only variable", rb_id2name(id));
+}
+
+/*
+ * The one registration behind the four `rb_define_*_variable`: as in
+ * CRuby, a missing getter reads `*var`, a missing setter writes it. The
+ * read-only setter is left to the interpreter, whose NameError is the
+ * same.
+ */
+void
+rb_define_hooked_variable(const char *name, VALUE *var, rb_gvar_getter_t *getter, rb_gvar_setter_t *setter)
+{
+    char buf[256];
+    ID id = rb_intern(gvar_name(name, buf, sizeof(buf)));
+    if (!capi_gvars_rooted) {
+        VALUE klass = rb_class_new(rb_cObject);
+        api->gc_pin(ctx(), M(klass));
+        check_rc(api->class_set_alloc(ctx(), M(klass), MR_ALLOC_NATIVE));
+        MrValue obj = api->native_new(ctx(), M(klass), &capi_gvars, &gvars_ops);
+        if (obj == MR_UNDEF)
+            capi_unwind();
+        api->gc_pin(ctx(), obj);
+        capi_gvars_rooted = 1;
+    }
+    struct capi_gvar *g = gvar_record(id);
+    if (!g) {
+        g = malloc(sizeof(*g));
+        if (!g)
+            rb_memerror();
+        g->id = id;
+        g->next = capi_gvars;
+        capi_gvars = g;
+    }
+    g->var = var;
+    g->getter = getter ? getter : rb_gvar_var_getter;
+    g->setter = setter ? setter : rb_gvar_var_setter;
+    g->marker = rb_gvar_var_marker;
+    api->gvar_hook(ctx(), (MrSym)id, g, gvar_get_dispatch,
+                   g->setter == rb_gvar_readonly_setter ? NULL : gvar_set_dispatch);
+}
+
+void
+rb_define_virtual_variable(const char *name, rb_gvar_getter_t *getter, rb_gvar_setter_t *setter)
+{
+    rb_define_hooked_variable(name, NULL, getter ? getter : rb_gvar_val_getter,
+                              setter ? setter : rb_gvar_readonly_setter);
+}
+
+void
+rb_define_variable(const char *name, VALUE *var)
+{
+    rb_define_hooked_variable(name, var, NULL, NULL);
+}
+
+void
+rb_define_readonly_variable(const char *name, const VALUE *var)
+{
+    rb_define_hooked_variable(name, (VALUE *)var, NULL, rb_gvar_readonly_setter);
 }
 
 VALUE
@@ -4532,6 +4806,13 @@ displaying_class_of(VALUE obj)
     return rb_obj_classname(obj);
 }
 
+static int
+copy_ivar(ID id, VALUE val, st_data_t to)
+{
+    rb_ivar_set((VALUE)to, id, val);
+    return ST_CONTINUE;
+}
+
 /*
  * The record behind `obj`, or NULL (`raise` = 0) / a TypeError when it
  * has none. An instance that `new` / `allocate` / `dup` made is
@@ -4555,12 +4836,32 @@ data_of(VALUE obj, int raise)
                 rb_raise(rb_eTypeError, "allocator of %s did not return a Data object", rb_class2name(klass));
             api->native_take(ctx(), M(tmp));
             check_rc(api->native_set(ctx(), M(obj), d, &data_ops));
+            /* What else the alloc function did to its object (SWIG sets
+             * the @__swigtype__ its type checks read) moves over too. */
+            rb_ivar_foreach(tmp, copy_ivar, (st_data_t)obj);
             return d;
         }
     }
     if (raise)
         rb_raise(rb_eTypeError, "wrong argument type %s (expected Data)", displaying_class_of(obj));
     return NULL;
+}
+
+/*
+ * A C method's receiver as CRuby's `allocate` would have left it: an
+ * instance of a class with an alloc function that nothing has looked at
+ * yet gets its payload, and the instance variables the alloc function
+ * set, before the method runs, so a C `initialize` finds what the alloc
+ * function prepared. Until a C method runs on it the instance stays as
+ * `new` / `allocate` made it (doc/c_api.md §6).
+ */
+static void
+materialize_payload(VALUE self)
+{
+    if (RB_SPECIAL_CONST_P(self) || api->native_data(ctx(), M(self), &data_ops))
+        return;
+    if (api->type_of(ctx(), M(self)) == MR_T_NATIVE)
+        data_of(self, 0);
 }
 
 VALUE
@@ -4739,14 +5040,7 @@ block_dispatch(MrContext *c, MrValue self, int argc, const MrValue *argv, MrValu
     struct capi_frame fr;
     struct capi_frame *volatile fp = &fr;
     volatile MrValue result = MR_UNDEF;
-    fr.ctx = c;
-    fr.block = NIL_P(b->block) ? MR_UNDEF : M(b->block);
-    fr.prev = capi_cur;
-    fr.owner = &fr;
-    fr.method = NULL;
-    fr.bufs = NULL;
-    memset(fr.ary, 0, sizeof(fr.ary));
-    fr.ary_next = 0;
+    frame_init(&fr, c, NIL_P(b->block) ? MR_UNDEF : M(b->block), NULL, NULL);
     capi_cur = &fr;
     if (_setjmp(fr.jb) == 0) {
         VALUE blockarg = Qnil;
@@ -5503,6 +5797,34 @@ ruby_strdup(const char *str)
     char *p = ruby_xmalloc(len);
     memcpy(p, str, len);
     return p;
+}
+
+/* ---- ruby/missing.h --------------------------------------------------- */
+
+/*
+ * CRuby's libruby carries these for the C libraries without them (glibc
+ * before 2.38), and the extensions taken from CRuby call them (date's
+ * strftime). Weak: a libc that has them keeps its own.
+ */
+__attribute__((weak)) size_t
+strlcpy(char *dst, const char *src, size_t size)
+{
+    size_t len = strlen(src);
+    if (size) {
+        size_t n = len < size - 1 ? len : size - 1;
+        memcpy(dst, src, n);
+        dst[n] = '\0';
+    }
+    return len;
+}
+
+__attribute__((weak)) size_t
+strlcat(char *dst, const char *src, size_t size)
+{
+    size_t dlen = strnlen(dst, size);
+    if (dlen == size)
+        return size + strlen(src);
+    return dlen + strlcpy(dst + dlen, src, size - dlen);
 }
 
 unsigned long
