@@ -246,6 +246,7 @@ struct MrApi {
     int     (*io_update)(MrContext *, MrValue io, int fd, int mode, size_t rbuf_consumed);  /* write it back, -1 error */
     int     (*str_modify)(MrContext *, MrValue v);  /* rb_str_modify, keeps bytes past len; -1 error */
     MrValue (*obj_class)(MrContext *, MrValue v);  /* rb_obj_class: past a singleton class */
+    MrSym   (*intern_check)(MrContext *, const uint8_t *ptr, size_t len);  /* the name's MrSym if already interned, else MR_NO_SYM */
 };
 
 /* Onigmo's entry points as linked into monoruby, types erased: regex_t *

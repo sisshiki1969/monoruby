@@ -1077,6 +1077,7 @@ impl<'a> JitContext<'a> {
                     name: Some(name),
                     refinements: self.refinements(),
                     func_id: Some(fid),
+                    super_of: None,
                 });
                 self.guard_class_version(state, ir, true);
                 // The operation observes the elements, not the object: a
@@ -1327,6 +1328,7 @@ impl<'a> JitContext<'a> {
                     name: Some(IdentId::_TEQ),
                     refinements: self.refinements(),
                     func_id: resolved,
+                    super_of: None,
                 });
                 self.guard_class_version(state, ir, true);
                 if recv_dead {
@@ -1538,6 +1540,7 @@ impl<'a> JitContext<'a> {
                     name: Some(IdentId::_INDEX),
                     refinements: self.refinements(),
                     func_id: resolved,
+                    super_of: None,
                 });
                 self.guard_class_version(state, ir, true);
                 match plan {

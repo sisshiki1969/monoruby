@@ -2146,6 +2146,7 @@ impl RegexpInner {
             }
             let spans = spans_of(&region);
             let (start, end) = spans[0].unwrap();
+            vm.set_match_regex(re.backref_regexp(re_val));
             save_spans(vm, subject, &spans, owner);
             let matched = subject.chunk(None, start..end);
             let before = subject.as_bytes().to_vec();
@@ -2243,8 +2244,21 @@ impl RegexpInner {
             // it — in the receiver's encoding — rather than copied out
             // of the view as UTF-8.
             vm.set_match_haystack(snapshot);
-            let res =
-                re.replace_all_block_inner(vm, globals, snapshot, recv, bh, first, regexp_pattern);
+            // Every `$~` the walk saves names this Regexp (`$~.names`,
+            // `$~[:name]` inside the block), so it is made once and
+            // rooted with the snapshot.
+            let re_obj = re.backref_regexp(re_val);
+            vm.temp_push(re_obj);
+            let res = re.replace_all_block_inner(
+                vm,
+                globals,
+                snapshot,
+                recv,
+                bh,
+                first,
+                regexp_pattern,
+                re_obj,
+            );
             vm.temp_clear(tmp);
             res
         })
@@ -2259,6 +2273,7 @@ impl RegexpInner {
         bh: BlockHandler,
         first: usize,
         regexp_pattern: bool,
+        re_obj: Value,
     ) -> Result<(RStringInner, bool)> {
         // `snapshot` is frozen and temp-rooted by the caller, so the
         // subject and the matched views stay valid across `invoke_block`.
@@ -2311,6 +2326,7 @@ impl RegexpInner {
             last_match_end = Some(end);
 
             let matched = subject.chunk(Some(snapshot), start..end);
+            vm.set_match_regex(re_obj);
             save_spans(vm, &subject, &spans, snapshot);
             last_spans = Some(spans);
             let result = vm.invoke_block(globals, &data, &[matched])?;
@@ -2325,6 +2341,7 @@ impl RegexpInner {
         // is over, so a block that matched something of its own does not
         // leave that behind as the caller's backref.
         if let Some(spans) = &last_spans {
+            vm.set_match_regex(re_obj);
             save_spans(vm, &subject, spans, snapshot);
         }
 

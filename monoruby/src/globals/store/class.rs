@@ -2293,7 +2293,14 @@ impl ClassInfoTable {
         let constants = org_info.constants.clone();
         let constant_locations = org_info.constant_locations.clone();
         let class_variables = org_info.class_variables.clone();
+        // The copy's instance variables are the original's slots verbatim,
+        // laid out by the original singleton's table — which holds the
+        // names set after the singleton class was made, past the ones it
+        // took over from the real class. The fresh singleton copied the
+        // real class's table instead; give it the layout the slots have.
+        let ivar_names = org_info.ivar_names.clone();
         let new_info = &mut self[new_sc.id()];
+        new_info.ivar_names = ivar_names;
         new_info.methods = methods;
         new_info.constants = constants;
         new_info.constant_locations = constant_locations;
@@ -3005,6 +3012,7 @@ impl Store {
         lfp: Option<Lfp>,
         recv_class: ClassId,
         name: Option<IdentId>,
+        super_of: Option<FuncId>,
         refinements: RefinementSetId,
     ) -> Option<FuncId> {
         if let Some(method_name) = name {
@@ -3015,6 +3023,12 @@ impl Store {
             self.check_method_with_refinements(recv_class, method_name, refinements)
                 .map(|entry| entry.func_id())
                 .flatten()
+        } else if let Some(func_id) = super_of {
+            // The question the compiler asked (`jit_check_super`): the JIT
+            // compiles a `super` only where its answer does not depend on
+            // the frame, so it can be asked again without one.
+            let name = self[func_id].name()?;
+            self.check_super(recv_class, func_id, name)
         } else {
             // A `super` site re-resolves relative to the *executing frame of
             // the owning unit*. Without that frame (a salvage triggered from
@@ -3090,8 +3104,13 @@ impl Store {
             return None;
         };
         for entry in cache_map {
-            let func_id =
-                self.check_method_for_name(lfp, entry.recv_class.id(), entry.name, entry.refinements);
+            let func_id = self.check_method_for_name(
+                lfp,
+                entry.recv_class.id(),
+                entry.name,
+                entry.super_of,
+                entry.refinements,
+            );
             if func_id != entry.func_id {
                 #[cfg(feature = "jit-log")]
                 crate::codegen::jit_stats::bump(
@@ -3264,8 +3283,13 @@ impl Store {
             .unwrap()
             .inline_cache_map;
         for entry in cache_map {
-            let func_id =
-                self.check_method_for_name(lfp, entry.recv_class.id(), entry.name, entry.refinements);
+            let func_id = self.check_method_for_name(
+                lfp,
+                entry.recv_class.id(),
+                entry.name,
+                entry.super_of,
+                entry.refinements,
+            );
             if func_id != entry.func_id {
                 #[cfg(feature = "jit-log")]
                 crate::codegen::jit_stats::bump(

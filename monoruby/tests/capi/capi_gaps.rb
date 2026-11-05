@@ -51,3 +51,13 @@ th.run; th.join
 s = Object.new
 def s.foo; end
 p G.freeze(s)
+# liquid-c / rbs (ruby-bench): snprintf for the length, rb_str_capacity of
+# a fresh or empty string, rb_check_symbol_cstr, an alloc function's self
+p G.append_num(+"", 42), G.append_num(String.new, -7), G.append_num(+"x" * 30, 123456789)
+p G.append_num("".dup, 0)
+p G.symbols("puts"), G.symbols("capi_gaps_never_interned_#{rand(1 << 30)}")[0]
+r = G::SelfRef.new
+p r.check
+r.freeze
+p r.check
+p G::SelfRef.allocate.check

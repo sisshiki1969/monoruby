@@ -176,5 +176,4 @@ ruby/memory_view.h
 ruby/ractor.h
 ruby/random.h
 ruby/regex.h
-ruby/vm.h
 ruby/win32.h

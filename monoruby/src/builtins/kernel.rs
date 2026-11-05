@@ -208,6 +208,14 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     // nearest non-internal Ruby caller's "file:line: " (internal
     // `builtins/` frames are transparent, like CRuby's C frames).
     globals.define_private_builtin_func(kernel_class, "__warn_caller", warn_caller, 1);
+    // Called by `monoruby_hooks/bundler_runtime.rb` once `Bundler.setup`
+    // has run: the bundle is now the only set of gems `require` sees.
+    globals.define_private_builtin_func(
+        kernel_class,
+        "__disable_host_gem_fallback",
+        disable_host_gem_fallback,
+        0,
+    );
     globals.define_builtin_module_func_with_kw(
         kernel_class,
         "warn",
@@ -5146,6 +5154,7 @@ fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let real = self_val.real_class(&globals.store).id();
     if copy.class() != real {
         copy.change_class_fresh(real);
+        globals.store.relayout_ivars(copy, self_val.class());
     }
     copy_finalizers(globals, self_val, copy);
     // When the class uses the default (no-op) copy hooks, skip the hook
@@ -5400,6 +5409,21 @@ fn unregister_finalizer(
 fn warn_caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let msg = lfp.arg(0).expect_string(&globals.store)?;
     vm.ruby_warn_caller(globals, &msg)?;
+    Ok(Value::nil())
+}
+
+/// Drop `require`'s installed-gem fallback (`Globals::gem_lib_dirs`):
+/// under Bundler, CRuby's `require` sees only the bundle's gems, so a
+/// gem outside it (`require "rubocop"` guarded by `rescue LoadError`, as
+/// ruby-lsp does) must not be found.
+#[monoruby_builtin]
+fn disable_host_gem_fallback(
+    _: &mut Executor,
+    globals: &mut Globals,
+    _: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    globals.disable_host_gem_fallback();
     Ok(Value::nil())
 }
 

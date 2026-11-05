@@ -446,3 +446,84 @@ fn build_and_install(flavor: &str, gem_cmd: &dyn Fn(&Path) -> (Command, Vec<Stri
         .env_remove("RUBYOPT")
         .env_remove("BUNDLE_GEMFILE"))
 }
+
+/// A gem the *host* CRuby installed — its extension built against
+/// CRuby's headers, as ruby-bench's host `bundle install` leaves every
+/// benchmark's bundle — loads on monoruby all the same: `require` finds
+/// the CRuby-built library, cannot load it, and rebuilds the gem's
+/// sources against the C API layer once, into monoruby's own gem home
+/// (`stdlib/monoruby_hooks/host_extension.rb`). The host gem's tree is
+/// left as it was; a second run loads the cached build.
+#[test]
+fn host_installed_gem_extension_is_rebuilt() {
+    if !have_build_tools() || !have_cruby() {
+        eprintln!("skipped: no C compiler, make or host ruby/gem");
+        return;
+    }
+    let cruby = |dir: &Path| {
+        let mut c = Command::new("ruby");
+        c.current_dir(dir);
+        (c, vec!["-S".to_string(), "gem".to_string()])
+    };
+    let on_cruby = build_and_install("host", &cruby);
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("mkmf/gem/host");
+    let home = dir.join("home");
+    // monoruby's gem home is `~/.monoruby/gems/<api>`: a HOME of the
+    // test's own keeps the rebuild out of the real one.
+    let user_home = dir.join("user_home");
+    std::fs::create_dir_all(&user_home).unwrap();
+    let mut host_so: Vec<PathBuf> = glob_files(&home, "capi_gem.so");
+    host_so.extend(glob_files(&home, "capi_gem.bundle"));
+    assert!(!host_so.is_empty());
+    let stamp = |p: &PathBuf| std::fs::metadata(p).unwrap().modified().unwrap();
+    let before: Vec<_> = host_so.iter().map(stamp).collect();
+    let run_mono = || {
+        run(monoruby()
+            .current_dir(&dir)
+            .arg(fixture().join("run.rb"))
+            .env("GEM_HOME", &home)
+            .env("GEM_PATH", &home)
+            .env("HOME", &user_home)
+            .env_remove("RUBYOPT")
+            .env_remove("BUNDLE_GEMFILE"))
+    };
+    assert_eq!(run_mono(), on_cruby);
+    let built = glob_files(&user_home.join(".monoruby"), "gem.build_complete");
+    assert_eq!(built.len(), 1, "{built:?}");
+    assert!(built[0].to_str().unwrap().contains("host_extensions"), "{built:?}");
+    let built_at = stamp(&built[0]);
+    assert_eq!(run_mono(), on_cruby);
+    assert_eq!(stamp(&built[0]), built_at, "the cached build was not reused");
+    // The host's `.so` required again by its own path is the rebuild
+    // already loaded, not a second copy.
+    for so in &host_so {
+        let again = run(monoruby()
+            .current_dir(&dir)
+            .args(["-e", "require 'capi_gem'; p require(ARGV[0])"])
+            .arg(so)
+            .env("GEM_HOME", &home)
+            .env("GEM_PATH", &home)
+            .env("HOME", &user_home)
+            .env_remove("RUBYOPT")
+            .env_remove("BUNDLE_GEMFILE"));
+        assert_eq!(again.trim(), "false", "{so:?}");
+    }
+    assert_eq!(host_so.iter().map(stamp).collect::<Vec<_>>(), before);
+}
+
+/// Every file named `name` under `dir`.
+fn glob_files(dir: &Path, name: &str) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(glob_files(&path, name));
+        } else if path.file_name().and_then(|n| n.to_str()) == Some(name) {
+            found.push(path);
+        }
+    }
+    found
+}

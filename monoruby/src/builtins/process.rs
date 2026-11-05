@@ -27,6 +27,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(klass, "_fork", process_fork, 0);
     globals.define_builtin_module_func_with(klass, "daemon", process_daemon, 0, 2, false);
     globals.define_builtin_module_func(klass, "times", times, 0);
+    // The pseudo-terminal pair behind `PTY.open` / `PTY.spawn`
+    // (stdlib/pty.rb).
+    globals.define_builtin_module_func(klass, "__pty_open", pty_open, 0);
     globals.define_builtin_module_func_with(klass, "clock_gettime", clock_gettime, 1, 2, false);
     globals.define_builtin_module_func_with(klass, "exit!", process_exit_bang, 0, 1, false);
     globals.define_builtin_module_func(klass, "euid", euid, 0);
@@ -3523,5 +3526,61 @@ mod new_api_tests {
             end
             "#,
         );
+    }
+}
+
+/// `Process.__pty_open` -> [master_fd, slave_fd, slave_name]
+///
+/// A new pseudo-terminal, as CRuby's ext/pty `getDevice` opens one:
+/// `posix_openpt` + `grantpt` + `unlockpt`, then the slave by name. Both
+/// descriptors are close-on-exec and neither becomes this process's
+/// controlling terminal. stdlib/pty.rb wraps them in IO objects.
+#[monoruby_builtin]
+fn pty_open(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    // SAFETY: plain libc calls on descriptors `open_pty` owns.
+    match unsafe { open_pty() } {
+        Ok((master, slave, name)) => Ok(Value::array_from_vec(vec![
+            Value::integer(master as i64),
+            Value::integer(slave as i64),
+            Value::string_from_str(&name.to_string_lossy()),
+        ])),
+        Err((what, err)) => Err(MonorubyErr::errno_with_msg(&globals.store, &err, what)),
+    }
+}
+
+/// Master fd, slave fd and the slave's device name.
+type PtyPair = (i32, i32, std::ffi::CString);
+
+/// The pty pair behind `Process.__pty_open`, or the call that failed with
+/// its errno (taken before the master is closed again).
+///
+/// # Safety
+/// Only libc calls; the name `ptsname` returns is copied out at once (the
+/// GVL is held, so no other Ruby thread calls it meanwhile).
+unsafe fn open_pty() -> std::result::Result<PtyPair, (&'static str, std::io::Error)> {
+    let check = |ok: bool, what| {
+        ok.then_some(())
+            .ok_or_else(|| (what, std::io::Error::last_os_error()))
+    };
+    unsafe {
+        let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        check(master >= 0, "posix_openpt()")?;
+        libc::fcntl(master, libc::F_SETFD, libc::FD_CLOEXEC);
+        let slave = (|| {
+            check(
+                libc::grantpt(master) == 0 && libc::unlockpt(master) == 0,
+                "grantpt()",
+            )?;
+            let name = libc::ptsname(master);
+            check(!name.is_null(), "ptsname()")?;
+            let name = std::ffi::CStr::from_ptr(name).to_owned();
+            let slave = libc::open(
+                name.as_ptr(),
+                libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+            );
+            check(slave >= 0, "open()")?;
+            Ok((master, slave, name))
+        })();
+        slave.inspect_err(|_| _ = libc::close(master))
     }
 }

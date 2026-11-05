@@ -385,7 +385,7 @@ fn super_run(
     vm: &Executor,
     globals: &Globals,
     method_fid: FuncId,
-) -> (usize, Option<CallSiteId>, bool) {
+) -> (usize, Option<(CallSiteId, Lfp)>, bool) {
     // `super` in a block resolves against the enclosing method: locate
     // the frame executing the method body (the outermost lfp, stopping
     // at a proc-method boundary, mirroring `method_func_id`).
@@ -418,7 +418,10 @@ fn super_run(
                 // recoverable from this link.
                 return (k, None, true);
             }
-            Some((false, callid)) => return (k, Some(callid), true),
+            Some((false, callid)) => {
+                let caller = cfp.prev().unwrap().lfp();
+                return (k, Some((callid, caller)), true);
+            }
             None => return (k, None, false),
         }
     }
@@ -446,7 +449,7 @@ fn super_resolution(
 ) -> (IdentId, Option<usize>) {
     let (k, entry_callid, exact) = super_run(vm, globals, func_id);
     let func_name = entry_callid
-        .and_then(|callid| globals.store[callid].name)
+        .and_then(|(callid, caller)| called_name(globals, callid, caller))
         // No callsite PC to read the name from: the frame was entered
         // through an invoker (`send`, `Method#call`, a Rust-side
         // dispatch), which records the name it called instead.
@@ -465,6 +468,39 @@ fn super_resolution(
         })
         .unwrap_or_else(|| globals.store[func_id].name().unwrap());
     (func_name, exact.then_some(k))
+}
+
+/// The name the frame entered from *callid* (a plain method call in
+/// the frame *caller*) was called under: the callsite's own name, or —
+/// when JIT code turned `send(:name, ...)` / `__send__` into a call of
+/// the target itself, so the callee was entered from the `send`
+/// callsite — the name sent. For `send(:lit, ...)` the JIT compiles
+/// the call through the site's twin (`send_direct`, the literal
+/// bytecodegen read off); otherwise `object_send_inline` looks the
+/// name up at run time from the arguments it wrote back, so it is read
+/// back from the caller's first argument register (`send(*args)`
+/// passes them as one Array). `send` reaches the method only with a
+/// Symbol or a String there; anything else answers `None`, and the
+/// frame's own method name is used.
+fn called_name(globals: &Globals, callid: CallSiteId, caller: Lfp) -> Option<IdentId> {
+    let callsite = &globals.store[callid];
+    let name = callsite.name?;
+    if name != IdentId::get_id("send") && name != IdentId::get_id("__send__") {
+        return Some(name);
+    }
+    if let Some(direct) = callsite.send_direct {
+        return globals.store[direct].name;
+    }
+    let mut first = caller.register(callsite.args)?;
+    if callsite.object_send_single_splat() {
+        first = first.try_array_ty()?.first().copied()?;
+    }
+    match first.try_symbol() {
+        Some(sym) => Some(sym),
+        None => Some(IdentId::get_id(
+            first.is_rstring_inner()?.to_str().ok()?.as_ref(),
+        )),
+    }
 }
 
 /// Resolve a `super` dispatch from the current frame. The second element

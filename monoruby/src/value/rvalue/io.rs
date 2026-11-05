@@ -389,6 +389,7 @@ fn read_partial_chunk<T: Read>(
     reader: &mut IoReader<T>,
     need: usize,
     no_block: bool,
+    store: &Store,
 ) -> Result<Vec<u8>> {
     let avail: &[u8] = if no_block {
         reader.buffer()
@@ -403,6 +404,11 @@ fn read_partial_chunk<T: Read>(
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     return Err(MonorubyErr::would_block_interrupt());
+                }
+                // The read(2) failed: `Errno::*`, as CRuby raises (a pty's
+                // master reads EIO once the slave side has closed).
+                Err(e) if e.raw_os_error().is_some() => {
+                    return Err(MonorubyErr::errno_plain(store, &e));
                 }
                 Err(e) => return Err(MonorubyErr::ioerr(e.to_string())),
             }
@@ -1690,7 +1696,7 @@ impl IoInner {
     /// `sysread` this reads *through* the `BufReader` (so already-
     /// buffered bytes are returned) and unlike `read` it never blocks
     /// to fill the whole `maxlen`. An empty result signals EOF.
-    pub fn readpartial(&mut self, maxlen: usize) -> Result<Vec<u8>> {
+    pub fn readpartial(&mut self, maxlen: usize, store: &Store) -> Result<Vec<u8>> {
         self.flush_wbuf_before_read()?;
         // Drain ungetc pushback first. When pushback supplied any
         // bytes, we must not block for more — only append bytes that
@@ -1712,7 +1718,7 @@ impl IoInner {
             }
             IoKind::Stdin => {
                 if !had_pushback {
-                    let chunk = read_partial_chunk(&mut stdin_buf(), need, false)?;
+                    let chunk = read_partial_chunk(&mut stdin_buf(), need, false, store)?;
                     out.extend(chunk);
                 }
             }
@@ -1721,7 +1727,7 @@ impl IoInner {
                     return Err(MonorubyErr::ioerr("not opened for reading"));
                 }
                 let reader = &mut *Rc::get_mut(file).unwrap().reader;
-                let chunk = read_partial_chunk(reader, need, had_pushback)?;
+                let chunk = read_partial_chunk(reader, need, had_pushback, store)?;
                 out.extend(chunk);
             }
             IoKind::Popen(popen) => {
@@ -1730,7 +1736,7 @@ impl IoInner {
                     .reader
                     .as_mut()
                     .ok_or_else(|| MonorubyErr::ioerr("not opened for reading"))?;
-                let chunk = read_partial_chunk(reader, need, had_pushback)?;
+                let chunk = read_partial_chunk(reader, need, had_pushback, store)?;
                 out.extend(chunk);
             }
         }
@@ -2064,7 +2070,11 @@ impl IoInner {
             IoKind::Stdin => stdin_buf().get_ref().is_terminal(),
             IoKind::Stdout => stdout_buf().get_ref().is_terminal(),
             IoKind::Stderr => stderr_buf().get_ref().is_terminal(),
-            IoKind::File(_) | IoKind::Popen(_) | IoKind::Closed(..) => false,
+            // isatty(3) on the descriptor: a File may be a terminal
+            // device (`File.open("/dev/tty")`, PTY's slave).
+            // SAFETY: isatty only inspects the descriptor.
+            IoKind::File(_) => self.fileno().is_ok_and(|fd| unsafe { libc::isatty(fd) } == 1),
+            IoKind::Popen(_) | IoKind::Closed(..) => false,
         }
     }
 

@@ -903,6 +903,7 @@ impl<'a> JitContext<'a> {
                 name: Some(IdentId::_TEQ),
                 refinements: self.refinements(),
                 func_id: Some(func_id),
+                super_of: None,
             });
             self.guard_class_version(state, ir, true);
             state.load(ir, rhs, GP::Rdi);

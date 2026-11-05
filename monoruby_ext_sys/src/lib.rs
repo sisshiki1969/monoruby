@@ -658,6 +658,11 @@ pub struct MrApi {
     /// `rb_obj_class`: the class of `v`, past a singleton class (and an
     /// include class), as `Kernel#class` answers without dispatching.
     pub obj_class: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue) -> MrValue,
+    /// `rb_check_symbol_cstr` / `rb_check_id_cstr`: the name's symbol if
+    /// it is already interned, without interning it; [`MR_NO_SYM`]
+    /// otherwise (and for a name that is not UTF-8).
+    pub intern_check:
+        unsafe extern "C" fn(ctx: *mut MrContext, ptr: *const u8, len: usize) -> MrSym,
 }
 
 /// [`MrApi::io_state`]'s result. `mode` holds CRuby's FMODE_* bits.

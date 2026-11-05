@@ -4376,8 +4376,8 @@ fn io_readpartial(
             None => Value::string_from_vec(vec![]),
         });
     }
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
-        lfp.self_val().as_io_inner_mut().readpartial(maxlen as usize)
+    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |store| {
+        lfp.self_val().as_io_inner_mut().readpartial(maxlen as usize, store)
     })?;
     if buf.is_empty() {
         if let Some(mut v) = buffer {
@@ -6031,8 +6031,8 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
                         break;
                     }
                     let mut vv = *v;
-                    let chunk = blocking_io_region(vm, globals, vv, libc::POLLIN, |_store| {
-                        vv.as_io_inner_mut().readpartial(want)
+                    let chunk = blocking_io_region(vm, globals, vv, libc::POLLIN, |store| {
+                        vv.as_io_inner_mut().readpartial(want, store)
                     })?;
                     if chunk.is_empty() {
                         break;

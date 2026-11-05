@@ -17,6 +17,25 @@ pub(crate) enum RequireLoad {
     /// path to consult the loading registry and block until the first
     /// loader finishes (CRuby's per-feature load lock).
     AlreadyLoaded(std::path::PathBuf),
+    /// A shared library that is not an extension monoruby can load —
+    /// most likely one compiled for CRuby, such as a host gem's — and
+    /// has no Ruby stand-in. Not registered. `Executor::require` asks
+    /// the host-extension hook to rebuild it against the C API layer
+    /// and otherwise raises `foreign_extension_error`.
+    Foreign(std::path::PathBuf),
+}
+
+/// The `LoadError` for a `.so` monoruby cannot load
+/// (`RequireLoad::Foreign`). The file exists, so `LoadError#path` is
+/// nil, as for CRuby's failed `dlopen`.
+pub(crate) fn foreign_extension_error(path: &std::path::Path) -> MonorubyErr {
+    MonorubyErr::loaderr(
+        format!(
+            "cannot load such file -- {} (a C extension must be built against monoruby's C API headers, monoruby_capi/include)",
+            path.display()
+        ),
+        PathBuf::new(),
+    )
 }
 
 /// The candidate feature paths `require` may load for *path*, in
@@ -645,15 +664,7 @@ impl Globals {
                 // No stand-in for it, and it is not an extension built
                 // against monoruby's `ruby.h` (`ext::is_capi_extension`
                 // said no above): most likely a library compiled for CRuby.
-                // The file exists, so `LoadError#path` is nil, as for
-                // CRuby's failed `dlopen`.
-                return Err(MonorubyErr::loaderr(
-                    format!(
-                        "cannot load such file -- {} (a C extension must be built against monoruby's C API headers, monoruby_capi/include)",
-                        canonicalized_path.display()
-                    ),
-                    PathBuf::new(),
-                ));
+                return Ok(RequireLoad::Foreign(canonicalized_path));
             }
             load_file(&lib)?
         } else {
@@ -743,7 +754,7 @@ impl Globals {
 /// while still leaving symlinks untouched (so the macOS
 /// `/tmp`→`/private/tmp` `$LOADED_FEATURES` removal stays consistent).
 ///
-fn lexically_normalize(path: &std::path::Path) -> std::path::PathBuf {
+pub(crate) fn lexically_normalize(path: &std::path::Path) -> std::path::PathBuf {
     use std::path::Component;
     let mut out = std::path::PathBuf::new();
     for comp in path.components() {

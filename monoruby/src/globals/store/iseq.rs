@@ -88,6 +88,13 @@ pub struct InlineCacheEntry {
     pub recv_class: CachedClass,
     /// `None` for a `super` call site.
     pub name: Option<IdentId>,
+    /// For a `super` site, the method body whose `super` the compiler
+    /// resolved (`JitContext::jit_check_super`'s `mother`) — the site's
+    /// own iseq's, which for a specialized callee is not the unit's root.
+    /// The JIT compiles only frame-independent `super` sites (one
+    /// occurrence of the body in the ancestry, not a `define_method`
+    /// body), so the salvage can re-ask the question from this alone.
+    pub super_of: Option<FuncId>,
     pub refinements: RefinementSetId,
     /// The resolution the code was compiled against — `None` for a site
     /// compiled as the `method_missing` dispatch because the class had

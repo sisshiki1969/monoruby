@@ -18,7 +18,7 @@ pub(crate) use dump::log_deoptimize;
 pub use error::*;
 pub use gvar::*;
 use prng::*;
-pub(crate) use require::RequireLoad;
+pub(crate) use require::{RequireLoad, foreign_extension_error, lexically_normalize};
 pub use require::{load_file, read_source_file};
 pub use store::*;
 
@@ -1974,6 +1974,11 @@ impl Globals {
 
     /// Append `path` to `$LOADED_FEATURES` if it isn't already
     /// present. Returns `true` if the path was newly added.
+    /// See `Kernel#__disable_host_gem_fallback`.
+    pub(crate) fn disable_host_gem_fallback(&mut self) {
+        self.gem_lib_dirs.clear();
+    }
+
     pub(crate) fn add_loaded_feature(&mut self, path: &std::path::Path) -> bool {
         if self.is_feature_loaded(path) {
             return false;

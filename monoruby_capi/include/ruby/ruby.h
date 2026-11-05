@@ -57,6 +57,10 @@
 /* glibc's <pthread.h> pulls <signal.h> in and macOS's does not; ext/socket's
  * raddrinfo.c calls sigemptyset() relying on the former. */
 #include <signal.h>
+#if defined(__GNUC__) || defined(__clang__)
+/* CRuby's ruby.h makes alloca() available (ruby/internal/memory.h). */
+#include <alloca.h>
+#endif
 
 #include "ruby/version.h"
 
@@ -868,6 +872,11 @@ rb_num2long_inline(VALUE v)
 #define RB_NUM2UINT(x) NUM2UINT(x)
 #define RB_NUM2LONG(x) NUM2LONG(x)
 #define RB_NUM2ULONG(x) NUM2ULONG(x)
+#define RB_NUM2LL(x) NUM2LL(x)
+#define RB_NUM2ULL(x) NUM2ULL(x)
+#define RB_LL2NUM(v) LL2NUM(v)
+#define RB_ULL2NUM(v) ULL2NUM(v)
+#define RB_NUM2DBL(x) NUM2DBL(x)
 #ifndef PIDT2NUM
 #define PIDT2NUM(v) INT2NUM(v)
 #define NUM2PIDT(v) NUM2INT(v)
@@ -920,6 +929,7 @@ VALUE rb_locale_str_new_cstr(const char *ptr);
 #define rb_str_new2 rb_str_new_cstr
 #define rb_str_new3 rb_str_new_shared
 #define rb_str_new4 rb_str_new_frozen
+#define rb_str_dup_frozen rb_str_new_frozen
 #define rb_str_new5 rb_str_new_with_class
 #define rb_str_buf_new2 rb_str_buf_new_cstr
 #define rb_usascii_str_new2 rb_usascii_str_new_cstr
@@ -927,6 +937,7 @@ VALUE rb_locale_str_new_cstr(const char *ptr);
 #define rb_str_new_literal(s) rb_str_new_lit(s)
 #define rb_usascii_str_new_lit(s) rb_usascii_str_new((s), (long)(sizeof(s) - 1))
 #define rb_utf8_str_new_lit(s) rb_utf8_str_new((s), (long)(sizeof(s) - 1))
+#define rb_utf8_str_new_literal(s) rb_utf8_str_new_lit(s)
 VALUE rb_str_new_shared(VALUE str);
 VALUE rb_str_new_with_class(VALUE obj, const char *ptr, long len);
 VALUE rb_str_buf_new_cstr(const char *ptr);
@@ -1083,6 +1094,7 @@ VALUE rb_sym2str(VALUE sym);
 ID rb_to_id(VALUE name);
 VALUE rb_to_symbol(VALUE name);
 ID rb_check_id(volatile VALUE *namep);
+VALUE rb_check_symbol(volatile VALUE *namep);
 VALUE rb_sym_to_s(VALUE sym);
 #define rb_intern_const(str) rb_intern(str)
 #define CONST_ID(var, str) \
