@@ -634,7 +634,14 @@ impl Globals {
                 .unwrap_or_else(|| canonicalized_path.file_name().unwrap().as_ref());
             let mut lib = monoruby_lib.join(relative);
             lib.set_extension("rb");
-            if !lib.exists() {
+            let mut stub = install_root().join("stub").join(relative);
+            stub.set_extension("rb");
+            // The stand-in is the very file asking for this extension
+            // (`stdlib/socket.rb`'s `require "socket.so"`, when monoruby's
+            // own socket extension was not built): running it again under
+            // the host library's name would only fail further in.
+            let reentrant = self.is_feature_loaded(&lib) || self.is_feature_loaded(&stub);
+            if reentrant || !lib.exists() {
                 // No stand-in for it, and it is not an extension built
                 // against monoruby's `ruby.h` (`ext::is_capi_extension`
                 // said no above): most likely a library compiled for CRuby.

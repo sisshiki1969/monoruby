@@ -678,6 +678,7 @@ fn build_capi_extensions(capi_dir: &Path) {
             Ok(objects) => objects,
             Err(e) => {
                 println!("cargo:warning={} not built ({e}); its library is unavailable", ext.name);
+                report_compile_errors(&build, &src_dir, ext.files);
                 continue;
             }
         };
@@ -710,11 +711,47 @@ fn build_capi_extensions(capi_dir: &Path) {
     }
 }
 
+/// After `try_compile_intermediates` failed: compile the extension's
+/// files one at a time and print the compiler's error lines as cargo
+/// warnings. A successful build script hides the compiler's own output,
+/// so without this a platform-only failure (a CI runner the developer
+/// cannot reproduce on) shows nothing but the failing command line.
+fn report_compile_errors(build: &cc::Build, src_dir: &Path, files: &[&str]) {
+    let Ok(compiler) = build.try_get_compiler() else {
+        return;
+    };
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("capi_ext_probe.o");
+    let mut shown = 0;
+    for f in files {
+        let Ok(res) = compiler
+            .to_command()
+            .arg("-c")
+            .arg(src_dir.join(f))
+            .arg("-o")
+            .arg(&out)
+            .output()
+        else {
+            return;
+        };
+        if res.status.success() {
+            continue;
+        }
+        for line in String::from_utf8_lossy(&res.stderr).lines().filter(|l| l.contains("error")) {
+            println!("cargo:warning=  {line}");
+            shown += 1;
+            if shown >= 20 {
+                return;
+            }
+        }
+    }
+}
+
 /// Where `openssl.so` finds the system OpenSSL (headers and `-lssl
 /// -lcrypto`), in openssl-sys's order: `OPENSSL_DIR` (`<dir>/include`,
 /// `<dir>/lib`), then `pkg-config openssl`, then Homebrew's keg-only
 /// `openssl@3` (not on pkg-config's default path), then the compiler's
-/// own search path. `None` when no `openssl/ssl.h` is found: the
+/// own search path, preferring the first OpenSSL 3.x among the last
+/// three. `None` when no `openssl/ssl.h` is found: the
 /// extension is then not built.
 struct OpensslLink {
     include: Vec<PathBuf>,
@@ -745,26 +782,41 @@ fn openssl_link() -> Option<OpensslLink> {
             .success()
             .then(|| String::from_utf8_lossy(&out.stdout).split_whitespace().map(str::to_string).collect())
     };
+    let mut found: Vec<OpensslLink> = vec![];
     if let (Some(cflags), Some(libs)) = (pkg_config(&["--cflags-only-I"]), pkg_config(&["--libs"])) {
         let include: Vec<PathBuf> = cflags.iter().filter_map(|f| f.strip_prefix("-I")).map(PathBuf::from).collect();
-        let found = include.iter().any(|i| i.join("openssl/ssl.h").is_file())
-            || Path::new("/usr/include/openssl/ssl.h").is_file();
-        if found {
-            return Some(OpensslLink {
+        if include.iter().any(|i| i.join("openssl/ssl.h").is_file()) || Path::new("/usr/include/openssl/ssl.h").is_file() {
+            found.push(OpensslLink {
                 include,
                 link: libs.into_iter().map(Into::into).collect(),
             });
         }
     }
     for dir in ["/opt/homebrew/opt/openssl@3", "/usr/local/opt/openssl@3"] {
-        if let Some(link) = from_dir(Path::new(dir)) {
-            return Some(link);
-        }
+        found.extend(from_dir(Path::new(dir)));
     }
-    Path::new("/usr/include/openssl/ssl.h").is_file().then(|| OpensslLink {
-        include: vec![],
-        link: ssl_libs(),
-    })
+    if Path::new("/usr/include/openssl/ssl.h").is_file() {
+        found.push(OpensslLink {
+            include: vec![],
+            link: ssl_libs(),
+        });
+    }
+    // CRuby 4.0.6's ext/openssl (the openssl gem 4.0.2) and its
+    // `extconf.h` are the OpenSSL 3.x build, so a 3.x install wins over a
+    // newer one found first: Homebrew's plain `openssl` (what pkg-config
+    // finds there) is OpenSSL 4 now, with `openssl@3` installed beside it.
+    let major = |l: &OpensslLink| {
+        let dirs = l.include.iter().cloned().chain(std::iter::once(PathBuf::from("/usr/include")));
+        dirs.map(|d| d.join("openssl/opensslv.h")).find(|h| h.is_file()).and_then(|h| {
+            let text = fs::read_to_string(h).ok()?;
+            text.lines().find_map(|l| {
+                let rest = l.trim_start_matches('#').trim_start().strip_prefix("define OPENSSL_VERSION_MAJOR")?;
+                rest.trim().parse::<u32>().ok()
+            })
+        })
+    };
+    let pick = found.iter().position(|l| major(l) == Some(3)).unwrap_or(0);
+    (pick < found.len()).then(|| found.swap_remove(pick))
 }
 
 /// How `zlib.so` gets zlib: the copy libz-sys compiled (`bundled-zlib`,
