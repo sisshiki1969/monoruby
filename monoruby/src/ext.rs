@@ -2567,42 +2567,32 @@ unsafe extern "C" fn mr_thread_current(ctx: *mut MrContext) -> MrValue {
 unsafe extern "C" fn mr_thread_local_aref(ctx: *mut MrContext, thread: MrValue, sym: MrSym) -> MrValue {
     // SAFETY: the table's contract.
     let (vm, globals) = unsafe { parts(ctx) };
-    let Some(th) = val(thread) else {
-        return Value::nil().id();
-    };
+    let th = Value::from_u64(thread);
     let key = Value::symbol(IdentId::from(sym));
-    let mut fast = || -> Option<Result<Value>> {
+    // Another thread's locals are its current fiber's, which only the
+    // method knows; so is anything shaped unexpectedly (`None`).
+    let mut fast = || -> Option<Value> {
+        if th.id() != crate::scheduler::current_thread(vm).id() {
+            return None;
+        }
         static FIBER_LOCALS: std::sync::OnceLock<IdentId> = std::sync::OnceLock::new();
         static ROOT: std::sync::OnceLock<IdentId> = std::sync::OnceLock::new();
-        let root = Value::symbol(*ROOT.get_or_init(|| IdentId::get_id("root")));
         let ivar = *FIBER_LOCALS.get_or_init(|| IdentId::get_id("@fiber_locals"));
-        let all = globals.store.get_ivar(th, ivar);
-        let Some(all) = all else {
-            return Some(Ok(Value::nil()));
+        // No locals yet: nil.
+        let Some(all) = globals.store.get_ivar(th, ivar).filter(|v| !v.is_nil()) else {
+            return Some(Value::nil());
         };
-        if all.is_nil() {
-            return Some(Ok(Value::nil()));
-        }
-        let all = all.try_hash_ty()?;
-        let fk = if th.id() == crate::scheduler::current_thread(vm).id() {
-            vm.current_fiber().unwrap_or(root)
-        } else {
-            root
+        let root = Value::symbol(*ROOT.get_or_init(|| IdentId::get_id("root")));
+        let fk = vm.current_fiber().unwrap_or(root);
+        // Fiber and Symbol keys hash by identity: neither lookup can raise.
+        let table = all.try_hash_ty()?.get(fk, vm, globals).ok()?;
+        let Some(table) = table else {
+            return Some(Value::nil());
         };
-        let table = match all.get(fk, vm, globals) {
-            Ok(Some(t)) => t,
-            Ok(None) => return Some(Ok(Value::nil())),
-            Err(e) => return Some(Err(e)),
-        };
-        let table = table.try_hash_ty()?;
-        Some(table.get(key, vm, globals).map(|v| v.unwrap_or_default()))
+        Some(table.try_hash_ty()?.get(key, vm, globals).ok()?.unwrap_or_default())
     };
     match fast() {
-        Some(Ok(v)) => v.id(),
-        Some(Err(e)) => {
-            set_err(vm, e);
-            MR_UNDEF
-        }
+        Some(v) => v.id(),
         // SAFETY: one argument, `key`, alive on this frame.
         None => unsafe { funcall_id(ctx, thread, IdentId::get_id("[]"), 1, &key.id(), MR_UNDEF) },
     }

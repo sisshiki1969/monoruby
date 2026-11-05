@@ -36,3 +36,18 @@ p G.hidden(o)
 p G.misc
 $_ = "line"
 p G.lastline
+
+# rb_thread_local_aref: none yet, the root fiber's, another fiber's, another thread's
+p G.local(Thread.current, :capi_gaps_k)
+Thread.current[:capi_gaps_k] = 1
+p G.local(Thread.current, :capi_gaps_k)
+p Fiber.new { Thread.current[:capi_gaps_k] = 2; G.local(Thread.current, :capi_gaps_k) }.resume
+p G.local(Thread.current, :capi_gaps_k), G.local(Thread.current, :capi_gaps_other)
+th = Thread.new { Thread.current[:capi_gaps_k] = 3; Thread.stop; 0 }
+Thread.pass until th.status == "sleep"
+p G.local(th, :capi_gaps_k)
+th.run; th.join
+# rb_obj_freeze with a singleton class
+s = Object.new
+def s.foo; end
+p G.freeze(s)

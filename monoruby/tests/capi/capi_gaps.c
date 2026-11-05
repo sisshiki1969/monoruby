@@ -132,6 +132,24 @@ g_lastline(VALUE self)
     return rb_ary_new_from_args(2, rb_lastline_get(), rb_gv_get("$capi_gaps_gv"));
 }
 
+/* rb_thread_local_aref (fiber-local, as Thread#[]), and rb_obj_freeze
+ * freezing an existing singleton class with the object. */
+static VALUE
+g_local(VALUE self, VALUE thread, VALUE key)
+{
+    (void)self;
+    return rb_thread_local_aref(thread, SYM2ID(key));
+}
+
+static VALUE
+g_freeze(VALUE self, VALUE obj)
+{
+    (void)self;
+    rb_obj_freeze(obj);
+    return rb_ary_new_from_args(2, OBJ_FROZEN(obj) ? Qtrue : Qfalse,
+                                rb_funcall(rb_singleton_class(obj), rb_intern("frozen?"), 0));
+}
+
 void
 Init_capi_gaps(void)
 {
@@ -146,4 +164,6 @@ Init_capi_gaps(void)
     rb_define_singleton_method(m, "hidden", g_hidden, 1);
     rb_define_singleton_method(m, "misc", g_misc, 0);
     rb_define_singleton_method(m, "lastline", g_lastline, 0);
+    rb_define_singleton_method(m, "local", g_local, 2);
+    rb_define_singleton_method(m, "freeze", g_freeze, 1);
 }
