@@ -3124,4 +3124,64 @@ mod tests {
             assert_eq!(mr_enc_precise_mbclen(ctx, c"NO-SUCH-ENCODING".as_ptr(), p, e), 1);
         }
     }
+
+    /// The `rb_io_t` / `rb_str_modify` / `rb_obj_class` entries on what
+    /// the layer screens out (a non-IO, a non-String, `MR_UNDEF`), and
+    /// `io_update` on a closed IO with no descriptor and with
+    /// `FMODE_BINMODE` set by the extension.
+    #[test]
+    fn abi_io_entry_edges() {
+        let mut globals = Globals::new_test();
+        let res = globals
+            .run(
+                r#"r, w = IO.pipe
+                   c, _ = IO.pipe
+                   c.close
+                   $capi_io_keep = [r, w, c, :sym]"#,
+                std::path::Path::new("."),
+            )
+            .unwrap();
+        let mut vm = Executor::init(&mut globals, "abi_io_entry_edges").unwrap();
+        let items: Vec<Value> = res.as_array_inner().iter().copied().collect();
+        let (r, w, closed, sym) = (items[0], items[1], items[2], items[3]);
+        let mut ctx = make_ctx(&mut vm, &mut globals, None, None);
+        let ctx = &mut ctx as *mut MrContext;
+        // SAFETY: a live context over this test's interpreter; every
+        // value is rooted by `$capi_io_keep`.
+        unsafe {
+            let failed = |ctx: *mut MrContext| {
+                let (vm, _) = parts(ctx);
+                assert!(vm.has_error());
+                vm.take_error();
+            };
+            let mut st = MrIoState {
+                fd: 0,
+                mode: 0,
+                rbuf: std::ptr::null(),
+                rbuf_len: 0,
+            };
+            assert_eq!(mr_io_state(ctx, sym.id(), &mut st), -1);
+            failed(ctx);
+            assert_eq!(mr_io_update(ctx, sym.id(), 3, FMODE_READABLE, 0), -1);
+            failed(ctx);
+            assert_eq!(mr_str_modify(ctx, sym.id()), -1);
+            failed(ctx);
+            assert_eq!(mr_obj_class(ctx, MR_UNDEF), MR_UNDEF);
+            // The read end: readable, not yet binmode.
+            assert_eq!(mr_io_state(ctx, r.id(), &mut st), 0);
+            assert!(st.fd >= 0);
+            assert_eq!(st.mode & (FMODE_READABLE | FMODE_WRITABLE | FMODE_BINMODE), FMODE_READABLE);
+            // `fptr->mode |= FMODE_BINMODE` reaches the IO.
+            assert_eq!(mr_io_update(ctx, r.id(), st.fd, st.mode | FMODE_BINMODE, 0), 0);
+            assert!(r.as_io_inner().binmode());
+            assert_eq!(mr_io_state(ctx, w.id(), &mut st), 0);
+            assert_eq!(st.mode & (FMODE_READABLE | FMODE_WRITABLE), FMODE_WRITABLE);
+            // A closed IO stays closed when the extension sets no fd.
+            assert_eq!(mr_io_state(ctx, closed.id(), &mut st), 0);
+            assert_eq!(st.fd, -1);
+            assert_eq!(mr_io_update(ctx, closed.id(), -1, 0, 0), 0);
+            assert!(closed.as_io_inner().is_closed());
+            assert_eq!(Value::from_u64(mr_obj_class(ctx, r.id())).as_class_id(), IO_CLASS);
+        }
+    }
 }
