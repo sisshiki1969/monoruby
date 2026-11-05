@@ -38,12 +38,9 @@ impl Codegen {
         } else {
             monoasm! { &mut self.jit, xorq rcx, rcx; }
         }
-        // r8 <- is_module
-        if is_module {
-            monoasm! { &mut self.jit, movl r8, 1; }
-        } else {
-            monoasm! { &mut self.jit, xorq r8, r8; }
-        }
+        // r8 <- func_id << 1 | is_module (see `runtime::define_class`)
+        let body_and_kind = (func_id.get() as u64) << 1 | is_module as u64;
+        monoasm! { &mut self.jit, movq r8, (body_and_kind); }
         monoasm! { &mut self.jit,
             movl rdx, (name.get());  // rdx <- name
             movq rdi, rbx;  // &mut Interp

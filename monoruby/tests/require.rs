@@ -459,3 +459,80 @@ fn an_unloadable_native_candidate_keeps_failing_the_same_way() {
         "[:load_error, :load_error, :load_error, :load_error]"
     );
 }
+
+// A direct `require` of a file an autoload is registered for keeps the
+// constant the file defined before it raised: the assignment replaced
+// the registration, so a later reference does not load the file again.
+#[test]
+fn direct_require_raising_keeps_a_defined_autoload_constant() {
+    run_test_once(
+        r#"
+        require "tmpdir"
+        dir = Dir.mktmpdir("monoruby_autoload_direct")
+        path = File.join(dir, "sat.rb")
+        File.write(path, "$sat_loads = ($sat_loads || 0) + 1\nmodule SatNs; class SatRaise; end; end\nraise 'after define'\n")
+        module SatNs; end
+        SatNs.autoload :SatRaise, path
+        r = []
+        r << (begin; require path; rescue RuntimeError => e; e.message; end)
+        r << SatNs.autoload?(:SatRaise) << SatNs.const_defined?(:SatRaise)
+        r << SatNs::SatRaise.name << $sat_loads
+        File.delete(path)
+        Dir.rmdir(dir)
+        r
+        "#,
+    );
+}
+
+// `pathname.so` is listed from the start, as in CRuby, while a bare
+// `require "pathname"` still loads the Ruby half on top.
+#[test]
+fn pathname_is_a_boot_feature_with_a_ruby_half() {
+    run_test_once(
+        r#"
+        [$LOADED_FEATURES.include?("pathname.so"), require("pathname.so"),
+         require("pathname"), Pathname.method_defined?(:find), require("pathname")]
+        "#,
+    );
+}
+
+// The `$LOADED_FEATURES` index notices a `replace` back to a saved copy
+// followed by a push of a different path (same length as before).
+#[test]
+fn loaded_features_index_survives_replace_and_push() {
+    run_test_once(
+        r#"
+        saved = $LOADED_FEATURES.dup
+        $LOADED_FEATURES << "monoruby_feature_a.rb"
+        r = [require("monoruby_feature_a.rb")]
+        $LOADED_FEATURES.replace(saved)
+        $LOADED_FEATURES << "monoruby_feature_b.rb"
+        r << require("monoruby_feature_b.rb")
+        $LOADED_FEATURES.replace(saved)
+        r
+        "#,
+    );
+}
+
+// An extension file that exists but fails to load leaves
+// `LoadError#path` nil. (Linux: the native suffix CRuby searches is
+// `.bundle` on macOS.)
+#[cfg(target_os = "linux")]
+#[test]
+fn failed_extension_load_has_no_load_error_path() {
+    run_test_once(
+        r#"
+        require "tmpdir"
+        dir = Dir.mktmpdir("monoruby_bad_so")
+        File.write(File.join(dir, "bad_ext.so"), "x")
+        r = begin
+          require File.join(dir, "bad_ext")
+        rescue LoadError => e
+          [e.class, e.path]
+        end
+        File.delete(File.join(dir, "bad_ext.so"))
+        Dir.rmdir(dir)
+        r
+        "#,
+    );
+}

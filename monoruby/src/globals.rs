@@ -587,13 +587,27 @@ impl std::ops::DerefMut for Globals {
 
 
 /// Membership mirror of `$LOADED_FEATURES` — see the field's comment on
-/// `Globals`. `len` is the array length this set was last reconciled
-/// with; a disagreement means Ruby changed the array and the set has to
-/// be re-derived.
+/// `Globals`. `len` and `last` (the identity of the last element) are
+/// what the array looked like when this set was last reconciled with it;
+/// a disagreement means Ruby changed the array and the set has to be
+/// re-derived. The length alone misses a `replace` back to a saved copy
+/// followed by a push of a different path (ruby/spec's `require` specs
+/// do exactly that around every example).
 #[derive(Default)]
 struct LoadedFeatureIndex {
     set: std::collections::HashSet<Box<[u8]>>,
     len: usize,
+    last: u64,
+}
+
+impl LoadedFeatureIndex {
+    fn shape_of(array: &Array) -> (usize, u64) {
+        (array.len(), array.last().map_or(0, |v| v.id()))
+    }
+
+    fn reconciled(&mut self, array: &Array) {
+        (self.len, self.last) = Self::shape_of(array);
+    }
 }
 
 impl Globals {
@@ -917,10 +931,12 @@ impl Globals {
 
         // CRuby's built-in features: `require` of any of these answers
         // `false` without a load (`ruby --disable-gems -e 'p $LOADED_FEATURES'`
-        // on 4.0.2, minus the encoding tables and `pathname.so`, whose
-        // Ruby half monoruby loads from the vendored stdlib). `set.rb`
-        // and `fiber.rb` in `stdlib/` are no-op stand-ins that this list
-        // now answers ahead of.
+        // on 4.0.2, minus the encoding tables). `pathname.so` stands for
+        // the boot-time `Pathname` (`builtins/pathname_builtins.rb`); a
+        // bare `require "pathname"` still loads the vendored
+        // `pathname.rb` on top, as CRuby does. `set.rb` and `fiber.rb`
+        // in `stdlib/` are no-op stand-ins that this list now answers
+        // ahead of.
         let loaded_features = Value::array_from_iter(
             [
                 "enumerator.so",
@@ -928,6 +944,7 @@ impl Globals {
                 "fiber.so",
                 "rational.so",
                 "complex.so",
+                "pathname.so",
                 "ruby2_keywords.rb",
                 "set.rb",
             ]
@@ -1935,7 +1952,7 @@ impl Globals {
     pub(crate) fn is_feature_loaded(&self, path: &std::path::Path) -> bool {
         let array = self.loaded_features.as_array();
         let mut index = self.loaded_features_index.borrow_mut();
-        if index.len != array.len() {
+        if (index.len, index.last) != LoadedFeatureIndex::shape_of(&array) {
             // Ruby moved the array out from under us (or this is the
             // first question asked). Re-derive the whole thing; our own
             // appends keep `len` in step, so this is not the common case.
@@ -1950,7 +1967,7 @@ impl Globals {
                     index.set.insert(s.as_bytes().into());
                 }
             }
-            index.len = array.len();
+            index.reconciled(&array);
         }
         index.set.contains(path.as_os_str().as_bytes())
     }
@@ -1969,7 +1986,7 @@ impl Globals {
         // append would be the quadratic walk this index replaces.
         let mut index = self.loaded_features_index.borrow_mut();
         index.set.insert(path.as_os_str().as_bytes().into());
-        index.len = array.len();
+        index.reconciled(&array);
         true
     }
 
@@ -1997,7 +2014,7 @@ impl Globals {
                 {
                     index.set.remove(target);
                 }
-                index.len = array.len();
+                index.reconciled(&array);
                 true
             }
             None => false,

@@ -114,7 +114,7 @@ impl Codegen {
             mov x0, x19;
             mov x1, x20;
             mov x2, (name.get() as u64);
-            mov x4, (is_module as u64);
+            mov x4, ((func_id.get() as u64) << 1 | is_module as u64);
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;                                        // x0 = Option<Value> self

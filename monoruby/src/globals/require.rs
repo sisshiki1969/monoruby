@@ -53,6 +53,18 @@ fn require_candidates(path: &std::path::Path) -> Vec<PathBuf> {
 /// falling back to its lexically-normalized absolute form when the
 /// directory doesn't exist. Uncached — callers go through
 /// `Globals::canonical_dir_of_path`, which memoizes this.
+/// Whether `cand` is a boot-time native feature whose Ruby half a bare
+/// request still loads. CRuby lists `pathname.so` in `$LOADED_FEATURES`
+/// from the start, yet `require "pathname"` loads `pathname.rb` (the
+/// `find` / `rmtree` / `mktmpdir` methods) on top: an extensionless
+/// request is only satisfied by a `.so` entry when no `.rb` is found.
+/// monoruby's `stdlib/fiber.rb`-style stand-ins would be found by that
+/// search, so the rule is kept to the features that have a real Ruby
+/// half.
+fn is_boot_native_with_rb_half(cand: &std::path::Path, request: &std::path::Path) -> bool {
+    request.extension().is_none() && cand.as_os_str() == "pathname.so"
+}
+
 fn canonicalize_dir(dir: &std::path::Path) -> PathBuf {
     std::fs::canonicalize(dir).unwrap_or_else(|_| {
         lexically_normalize(&std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf()))
@@ -236,7 +248,7 @@ impl Globals {
             // `fiber.so` pre-listed must answer `false`, not load a
             // `fiber.rb` that a load-path dir happens to hold.
             for cand in require_candidates(file_name) {
-                if self.is_feature_loaded(&cand) {
+                if self.is_feature_loaded(&cand) && !is_boot_native_with_rb_half(&cand, file_name) {
                     return Ok(RequireLoad::AlreadyLoaded(cand));
                 }
                 // CRuby's feature index: an entry ending in
@@ -618,12 +630,14 @@ impl Globals {
                 // No stand-in for it, and it is not an extension built
                 // against monoruby's `ruby.h` (`ext::is_capi_extension`
                 // said no above): most likely a library compiled for CRuby.
+                // The file exists, so `LoadError#path` is nil, as for
+                // CRuby's failed `dlopen`.
                 return Err(MonorubyErr::loaderr(
                     format!(
                         "cannot load such file -- {} (a C extension must be built against monoruby's C API headers, monoruby_capi/include)",
                         canonicalized_path.display()
                     ),
-                    canonicalized_path,
+                    PathBuf::new(),
                 ));
             }
             load_file(&lib)?

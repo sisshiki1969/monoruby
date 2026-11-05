@@ -1357,11 +1357,7 @@ fn caller_frames(
                     .or_else(|| {
                         hook_site
                             .take()
-                            .filter(|(source, _)| {
-                                crate::globals::display_path(source)
-                                    == crate::globals::display_path(&info.sourceinfo)
-                            })
-                            .map(|(source, loc)| source.get_line(&loc))
+                            .and_then(|site| site.line_in(&info.sourceinfo))
                     })
                     .unwrap_or_else(|| info.sourceinfo.get_line(&info.loc));
                 Some((info.sourceinfo.clone(), line))
@@ -7894,6 +7890,52 @@ mod tests {
         [begin; z; rescue SyntaxError; :syntax; end,
          begin; d(1); rescue SyntaxError; :syntax; end]
         "##,
+        );
+    }
+
+    #[test]
+    fn eval_return_through_a_proc_at_top_level() {
+        // `return` eval'ed in a block may not leave the top level through
+        // it (LocalJumpError), but returns from an enclosing method or
+        // lambda as usual.
+        run_test_once(
+            r#"
+            r = []
+            begin
+              Proc.new { eval("return 1") }.call
+            rescue LocalJumpError => e
+              r << e.message << e.reason << e.exit_value
+            end
+            def eval_ret_m; Proc.new { eval("return 2") }.call; 3; end
+            def eval_ret_m2; [1].each { eval("return 4") }; 5; end
+            r << eval_ret_m << eval_ret_m2
+            r << lambda { Proc.new { eval("return 6") }.call; 7 }.call
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn parse_warnings_go_through_warning_warn() {
+        run_test_once(
+            r#"
+            msgs = []
+            Warning.singleton_class.alias_method(:__orig_warn, :warn)
+            Warning.define_singleton_method(:warn) { |m, **| msgs << m; nil }
+            begin
+              verbose = $VERBOSE
+              $VERBOSE = false
+              eval("{ key: :value, key: :value2 }", nil, "w.rb", 1)
+              eval("x = 1 if (a = 1)", nil, "w.rb", 2)
+              eval("x = 1\n# frozen_string_literal: true\n", nil, "w.rb", 3)
+              $VERBOSE = true
+              eval("x = 1\n# frozen_string_literal: true\n", nil, "w.rb", 5)
+            ensure
+              $VERBOSE = verbose
+              Warning.singleton_class.alias_method(:warn, :__orig_warn)
+            end
+            msgs
+            "#,
         );
     }
 

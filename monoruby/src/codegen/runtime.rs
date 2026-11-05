@@ -2612,15 +2612,31 @@ pub(super) extern "C" fn alias_global_var(
     globals.alias_global_variable(new_name, old_name);
 }
 
+///
+/// `body_and_kind` is `func_id << 1 | is_module`: the class body's
+/// `FuncId` rides along so `const_added` can report the line of the
+/// `class` / `module` keyword (the body's own location).
+///
 pub(super) extern "C" fn define_class(
     vm: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
     superclass: Option<Value>,
-    is_module: u32,
+    body_and_kind: u64,
     base: Option<Value>,
 ) -> Option<Value> {
-    match vm.define_class(globals, base, name, superclass, is_module == 1) {
+    let is_module = body_and_kind & 1 == 1;
+    let body = u32::try_from(body_and_kind >> 1)
+        .ok()
+        .filter(|&id| id != 0)
+        .map(FuncId::new);
+    let site = body
+        .and_then(|func_id| globals.store[func_id].is_iseq())
+        .map(|iseq| {
+            let info = &globals.store[iseq];
+            HookSite::Loc(info.sourceinfo.clone(), info.loc)
+        });
+    match vm.define_class(globals, base, name, superclass, is_module, site) {
         Ok(val) => Some(val),
         Err(err) => {
             vm.set_error(err);
@@ -3142,11 +3158,44 @@ pub(super) extern "C" fn err_method_return(vm: &mut Executor, globals: &mut Glob
                 None => break,
             }
         }
+        // A `return` eval'ed inside a block may not leave the top level
+        // through that block (CRuby `vm_throw_start`: an eval body whose
+        // parent is not the top-level iseq clears `toplevel`), although
+        // the same `return` written in the block, or eval'ed directly at
+        // the top level, ends the script.
+        if globals[target.func_id()].is_toplevel() && eval_inside_block(globals, cfp.lfp(), target)
+        {
+            vm.set_error(MonorubyErr::localjumperr_with_val("unexpected return", val));
+            return;
+        }
         target
     } else {
         cfp.lfp()
     };
     vm.set_error(MonorubyErr::method_return(val, target_lfp));
+}
+
+/// Whether the lexical chain from `lfp` up to `target` holds an eval body
+/// whose nearest non-eval parent is a block rather than `target` itself.
+fn eval_inside_block(globals: &Globals, mut lfp: Lfp, target: Lfp) -> bool {
+    let is_eval = |lfp: Lfp| {
+        globals[lfp.func_id()]
+            .is_iseq()
+            .is_some_and(|iseq| globals.store[iseq].is_eval)
+    };
+    let mut after_eval = false;
+    while lfp != target {
+        let eval = is_eval(lfp);
+        if after_eval && !eval {
+            return true;
+        }
+        after_eval = eval;
+        match lfp.outer() {
+            Some(outer) => lfp = outer,
+            None => return false,
+        }
+    }
+    false
 }
 
 /// Whether `target` is on the current stack, without crossing the

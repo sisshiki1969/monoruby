@@ -219,6 +219,30 @@ pub(crate) enum MethodMissingStyle {
     Super,
 }
 
+/// Where a definition hook (`method_added`, `const_added`, ...) was
+/// triggered from, for `caller_locations` inside the hook: an unresolved
+/// source location, or a file and line already known at compile time.
+#[derive(Clone, Debug)]
+pub(crate) enum HookSite {
+    Loc(SourceInfoRef, Loc),
+    Line(String, u32),
+}
+
+impl HookSite {
+    /// The site's line, when it lies in `source` (the frame the backtrace
+    /// walk could not resolve).
+    pub(crate) fn line_in(&self, source: &SourceInfoRef) -> Option<i64> {
+        match self {
+            HookSite::Loc(site, loc) => (crate::globals::display_path(site)
+                == crate::globals::display_path(source))
+            .then(|| site.get_line(loc)),
+            HookSite::Line(file, line) => {
+                (*file == source.file_name()).then_some(*line as i64)
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 #[repr(C)]
 pub struct Executor {
@@ -361,7 +385,7 @@ pub struct Executor {
     /// *every* `def` executed but is only ever read by
     /// `caller_locations`, so resolving it eagerly charged the file/line
     /// lookup to every definition in the program.
-    hook_sites: Vec<(SourceInfoRef, Loc)>,
+    hook_sites: Vec<HookSite>,
     temp_stack: Vec<Value>,
     /// How the method_missing dispatch currently being set up was
     /// called. Consumed (read-and-cleared) by the default
@@ -1216,10 +1240,21 @@ impl Executor {
         let verbose = globals
             .get_gvar(IdentId::get_id("$VERBOSE"))
             .is_some_and(|v| v.as_bool());
-        let stderr = globals
-            .get_gvar(IdentId::get_id("$stderr"))
-            .unwrap_or_default();
-        let write_id = IdentId::get_id("write");
+        // Like CRuby's `rb_warn`, the message goes through `Warning.warn`
+        // (which a program may override); `$stderr.write` only before the
+        // module exists.
+        let warning = globals
+            .store
+            .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Warning"));
+        let (recv, method) = match warning {
+            Some(warning) => (warning, IdentId::get_id("warn")),
+            None => (
+                globals
+                    .get_gvar(IdentId::get_id("$stderr"))
+                    .unwrap_or_default(),
+                IdentId::get_id("write"),
+            ),
+        };
         for (m, verbose_only) in msgs {
             if !enabled || (verbose_only && !verbose) {
                 continue;
@@ -1227,7 +1262,7 @@ impl Executor {
             let msg_val = Value::string(format!("{m}\n"));
             // Ignore errors (e.g. a nil / broken `$stderr` during early
             // bootstrap): a warning must never mask the program's result.
-            let _ = self.invoke_method_inner(globals, write_id, stderr, &[msg_val], None, None);
+            let _ = self.invoke_method_inner(globals, method, recv, &[msg_val], None, None);
         }
     }
 
@@ -1447,17 +1482,22 @@ impl Executor {
                     }
                 }
                 Err(err) => {
-                    // require raised. Revert each still-Autoload slot
-                    // back to `Idle` so a future reference may try
-                    // again, matching CRuby's "preserve the
-                    // registration across a failed load" behaviour
-                    // (per `does not remove the constant from
+                    // require raised. A constant the file had already
+                    // assigned stays defined: this is a direct require,
+                    // not the autoload, so the assignment simply replaced
+                    // the registration (CRuby keeps it, and a later
+                    // reference does not load the file again). Every
+                    // other still-Autoload slot goes back to `Idle` so a
+                    // future reference may try again, matching CRuby's
+                    // "preserve the registration across a failed load"
+                    // behaviour (per `does not remove the constant from
                     // Module#constants if load raises ...` specs).
                     for (class_id, name) in &matching {
-                        globals.store.discard_autoload_value(*class_id, *name);
-                        globals
-                            .store
-                            .set_autoload_state(*class_id, *name, AutoloadState::Idle);
+                        if globals.store.publish_autoload(*class_id, *name).is_none() {
+                            globals
+                                .store
+                                .set_autoload_state(*class_id, *name, AutoloadState::Idle);
+                        }
                     }
                     globals.remove_loaded_feature(&canonicalized_path);
                     return Err(err);
@@ -2267,7 +2307,13 @@ impl Executor {
         }
         let v = match err.kind() {
             MonorubyErrKind::Load(path) => {
-                let path = Value::string_from_str(&path.as_os_str().to_string_lossy());
+                // An empty path is a file that was found but failed to
+                // load (CRuby leaves `LoadError#path` nil there).
+                let path = if path.as_os_str().is_empty() {
+                    Value::nil()
+                } else {
+                    Value::string_from_str(&path.as_os_str().to_string_lossy())
+                };
                 let v = Value::new_exception(err);
                 globals
                     .store
@@ -2882,18 +2928,40 @@ impl Executor {
         // matcher catches both code-paths.
         self.warn_already_initialized_constant(globals, parent, name);
         globals.set_constant(parent, name, val);
-        if let Some((file, line)) = source_loc {
-            globals.store[parent].record_constant_location(name, file, line);
+        if let Some((file, line)) = &source_loc {
+            globals.store[parent].record_constant_location(name, file.clone(), *line);
         }
         let receiver = globals.store[parent].get_module().into();
-        self.invoke_method_inner(
+        let site = source_loc.map(|(file, line)| HookSite::Line(file, line));
+        self.invoke_const_added(globals, receiver, name, site)
+    }
+
+    /// Run `receiver.const_added(name)`, with `site` (the definition's
+    /// location) visible to `caller_locations` inside the hook — see
+    /// `hook_sites`.
+    pub(crate) fn invoke_const_added(
+        &mut self,
+        globals: &mut Globals,
+        receiver: Value,
+        name: IdentId,
+        site: Option<HookSite>,
+    ) -> Result<()> {
+        let pushed = site.is_some_and(|site| {
+            self.hook_sites.push(site);
+            true
+        });
+        let res = self.invoke_method_inner(
             globals,
             IdentId::CONST_ADDED,
             receiver,
             &[Value::symbol(name)],
             None,
             None,
-        )?;
+        );
+        if pushed {
+            self.hook_sites.pop();
+        }
+        res?;
         Ok(())
     }
 
@@ -3006,7 +3074,7 @@ impl Executor {
             .and_then(|func_id| globals.store[func_id].is_iseq())
             .map(|iseq| {
                 let info = &globals.store[iseq];
-                (info.sourceinfo.clone(), info.loc)
+                HookSite::Loc(info.sourceinfo.clone(), info.loc)
             });
         let pushed = pushed.is_some_and(|site| {
             self.hook_sites.push(site);
@@ -3282,7 +3350,7 @@ impl Executor {
     /// currently running, if any. Unresolved: the caller turns it into a
     /// file and a line only if the backtrace walk actually needs it. See
     /// [`Self::hook_sites`].
-    pub(crate) fn hook_site(&self) -> Option<&(SourceInfoRef, Loc)> {
+    pub(crate) fn hook_site(&self) -> Option<&HookSite> {
         self.hook_sites.last()
     }
 
@@ -4711,6 +4779,7 @@ impl Executor {
         name: IdentId,
         superclass: Option<Value>,
         is_module: bool,
+        site: Option<HookSite>,
     ) -> Result<Value> {
         let parent = match base {
             Some(base) => base.expect_namespace(&globals.store)?.id(),
@@ -4782,14 +4851,7 @@ impl Executor {
                     // CRuby invokes `const_added` BEFORE `inherited` when a
                     // new class is created via the `class` keyword.
                     let parent_val = globals.store[parent].get_module().into();
-                    self.invoke_method_inner(
-                        globals,
-                        IdentId::CONST_ADDED,
-                        parent_val,
-                        &[Value::symbol(name)],
-                        None,
-                        None,
-                    )?;
+                    self.invoke_const_added(globals, parent_val, name, site)?;
                     self.invoke_method_inner(
                         globals,
                         IdentId::INHERITED,
@@ -4810,14 +4872,7 @@ impl Executor {
         if is_new {
             // Module case: const_added without inherited.
             let parent_val = globals.store[parent].get_module().into();
-            self.invoke_method_inner(
-                globals,
-                IdentId::CONST_ADDED,
-                parent_val,
-                &[Value::symbol(name)],
-                None,
-                None,
-            )?;
+            self.invoke_const_added(globals, parent_val, name, site)?;
             self.pending_const_loc = Some((parent, name));
         }
         self.push_class_context(self_val.id());
