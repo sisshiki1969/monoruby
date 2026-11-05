@@ -1751,43 +1751,64 @@ fn base64_decode_strict(data: &[u8]) -> Result<Vec<u8>> {
     Ok(result)
 }
 
+/// CRuby's lenient `unpack("m")` (pack.c): bytes outside the alphabet
+/// are skipped, a `=` ends the stream once two sextets of a group have
+/// been read, and a trailing partial group yields the bytes its sextets
+/// complete (so missing padding decodes like present padding).
 fn base64_decode(data: &[u8]) -> Vec<u8> {
-    let mut result = Vec::new();
-    let mut buf = [0u8; 4];
-    let mut buf_len = 0;
-    let mut pad_count = 0;
-
-    for &byte in data {
-        if byte == b'=' {
-            buf[buf_len] = 0;
-            buf_len += 1;
-            pad_count += 1;
-        } else if let Some(val) = base64_decode_char(byte) {
-            buf[buf_len] = val;
-            buf_len += 1;
-            pad_count = 0;
-        } else {
-            // skip whitespace and other chars
-            continue;
+    let mut result = Vec::with_capacity(data.len() / 4 * 3 + 2);
+    let len = data.len();
+    let at = |i: usize| -> Option<u8> { data.get(i).and_then(|&c| base64_decode_char(c)) };
+    let is_pad = |i: usize| data.get(i) == Some(&b'=');
+    let mut s = 0;
+    let (mut a, mut b, mut c): (Option<u8>, Option<u8>, Option<u8>);
+    loop {
+        a = None;
+        b = None;
+        c = None;
+        while s < len && at(s).is_none() {
+            s += 1;
         }
-
-        if buf_len == 4 {
-            let triple = (buf[0] as u32) << 18
-                | (buf[1] as u32) << 12
-                | (buf[2] as u32) << 6
-                | buf[3] as u32;
-            result.push((triple >> 16) as u8);
-            if pad_count < 2 {
-                result.push((triple >> 8) as u8);
-            }
-            if pad_count < 1 {
-                result.push(triple as u8);
-            }
-            buf_len = 0;
-            pad_count = 0;
+        if s >= len {
+            break;
+        }
+        a = at(s);
+        s += 1;
+        while s < len && at(s).is_none() {
+            s += 1;
+        }
+        if s >= len {
+            break;
+        }
+        b = at(s);
+        s += 1;
+        while s < len && at(s).is_none() && !is_pad(s) {
+            s += 1;
+        }
+        if s >= len || is_pad(s) {
+            break;
+        }
+        c = at(s);
+        s += 1;
+        while s < len && at(s).is_none() && !is_pad(s) {
+            s += 1;
+        }
+        if s >= len || is_pad(s) {
+            break;
+        }
+        let d = at(s).unwrap();
+        s += 1;
+        let (a, b, c) = (a.unwrap(), b.unwrap(), c.unwrap());
+        result.push(a << 2 | b >> 4);
+        result.push(b << 4 | c >> 2);
+        result.push(c << 6 | d);
+    }
+    if let (Some(a), Some(b)) = (a, b) {
+        result.push(a << 2 | b >> 4);
+        if let Some(c) = c {
+            result.push(b << 4 | c >> 2);
         }
     }
-
     result
 }
 

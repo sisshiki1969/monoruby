@@ -865,6 +865,34 @@ ruby/spec の `library/stringscanner` / `stringio` / `zlib` で計 300 件余り
   トランポリンという分散したディスパッチ費用）。詳細は
   `/mnt/project-files/reports/stdlib_cext_2026-11-04.md` を参照。
 
+### 3.20 bigdecimal も gem の C 拡張に（段階 12）
+
+`gem/bigdecimal.rb` は monoruby 専用の Ruby 実装（整数の係数と指数）で、
+ruby/spec の `library/bigdecimal` で 73F+42E 落ちていた。CRuby 4.0.6 が同梱する
+bigdecimal gem 4.0.1 の `ext/bigdecimal` をそのまま層でビルドして同梱する。
+
+- **ソース**: `monoruby_capi/ext/bigdecimal/`（gem の `bigdecimal.c` /
+  `missing.c` / `missing/dtoa.c` とヘッダ、`LICENSE`）。gem の `lib/` は
+  `monoruby/gem/bigdecimal.rb` と `gem/bigdecimal/`（`require 'bigdecimal.so'`）。
+- **ビルド**: `EXTENSIONS` 表に追加。extconf.rb のプローブの代わりに
+  `HAVE_BUILTIN___BUILTIN_CLZ(L|LL)` と `HAVE_{FLOAT,MATH,STDBOOL,STDLIB}_H`。
+- **層に足したもの**: `PUREFUNC` / `CONSTFUNC`、`rb_special_const_p`、
+  `rb_thread_local_aref` / `aset`、`ruby/subst.h` の
+  `snprintf` → `ruby_snprintf` 置き換え（C のみ。`%d` `%u` `%s` `%c` と
+  l / ll / z だけの書式は stdio を通さずに整形し、それ以外は libc へ）。
+- **速度**: bigdecimal は演算のたびにスレッドローカルの例外モード / 精度上限 /
+  丸めモードを `rb_thread_local_aref(rb_thread_current(), ...)` で読み、結果を
+  `rb_obj_freeze` する。どれも `funcall` だった（`aref` 1 回 ≈ 1,900 Ir、
+  `freeze` は `bind_call` 経由で ≈ 2,500 Ir）ので、ABI に `thread_current` /
+  `thread_local_aref`（`builtins/thread.rb` のファイバーローカル表をディスパッチ
+  なしで読む）/ `obj_freeze` を足した。`to_s` / `to_f` は数字 1 桁ごとに
+  `snprintf("%lu")` を呼ぶ（glibc で ≈ 1,000 Ir）ので上の置き換えで半分以下に。
+  `rb_usascii_str_new` も `str_set_enc` で `force_encoding` の funcall を避ける。
+  旧 Ruby 実装比で、文字列からの生成は約 5 倍、多倍長の除算 / 平方根は数十倍
+  速い。小さい値の `+ 1` / `to_s` は旧実装（JIT がまとめてインライン化する）より
+  遅く、CRuby 比で `+ 1` が約 1.5 倍。
+- **結果**: ruby/spec `library/bigdecimal` 370 例すべて通過。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -892,6 +920,8 @@ ruby/spec の `library/stringscanner` / `stringio` / `zlib` で計 300 件余り
 | `str_rptr` | `RSTRING_PTR` の読み取り専用版: 共有バッファの String をコピーせずに読む |
 | `str_subseq` / `str_dup` / `str_capacity` | `rb_str_subseq` / `rb_str_dup` / `rb_str_capacity` |
 | `str_enc_name` / `str_set_enc` / `str_coderange` | `rb_enc_get`（プロセス寿命の名前ポインタ）/ `rb_enc_associate` / `rb_enc_str_coderange`（キャッシュ付き） |
+| `thread_current` / `thread_local_aref` | `rb_thread_current` / `rb_thread_local_aref` をディスパッチなしで（§3.20） |
+| `obj_freeze` | `rb_obj_freeze` を `Kernel#freeze` の呼び出しなしで |
 
 あわせて `ary_push` / `hash_set` が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。
@@ -911,6 +941,7 @@ ruby/spec の `library/stringscanner` / `stringio` / `zlib` で計 300 件余り
 | 9 | 層に無い API への参照はロードを通し呼ばれたら NotImplementedError（スタブアーカイブ）、CRuby の `ext/date` を層でビルドして同梱（`require "date"` / `time` / YAML）、1 文字演算子 ID、`RETURN_ENUMERATOR`、`$~` の退避復元 ABI、mkmf `depend` 用の CRuby ヘッダ名 | 済（§3.16〜3.17、`tests/capi/capi_ids.c`、`tests/date.rs`、ruby/spec `library/date` / `datetime` 全通過） |
 | 10 | C で裏打ちされたグローバル変数（`rb_define_*_variable`、ABI `gvar_hook`）、C++ の ANYARGS overload（`ruby/backward/cxxanyargs.hpp`）、`HAVE_RB_DEFINE_ALLOC_FUNC`、alloc 関数が置いた ivar の引き継ぎ、`rb_obj_instance_eval` 系、`strlcpy`、`.so` の判別を dlopen からシンボル表へ。gosu（SWIG の C++ ラッパー）がビルドでき dewasm の DOOM が動く | 済（§3.18、`tests/capi/capi_vars.c`、`tests/capi/capi_cxx.cpp`） |
 | 11 | CRuby の `ext/strscan` / `ext/stringio` / `ext/zlib` を層でビルドして同梱（monoruby 専用実装と `ext/zlib` を削除）、IO / encoding / econv / mutex の API、GVL 再取得の直列化省略、1 プロセス複数インタプリタでの拡張マッピング分離 | 済（§3.19、ruby/spec `library/zlib` / `stringio` / `stringscanner` 全通過） |
+| 12 | bigdecimal gem 4.0.1 の C 拡張を層でビルドして同梱（Ruby 実装を削除）、`ruby_snprintf`、スレッドローカル / freeze の ABI | 済（§3.20、ruby/spec `library/bigdecimal` 全通過） |
 
 ## 6. 既知の制約
 

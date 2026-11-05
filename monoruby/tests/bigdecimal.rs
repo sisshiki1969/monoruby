@@ -370,3 +370,33 @@ fn bigdecimal_reads_a_string_strictly() {
         "#,
     );
 }
+
+/// bigdecimal keeps its modes in fiber-locals and reads them on every
+/// operation (`rb_thread_local_aref`, which the C API layer serves without
+/// a method call): each thread and fiber sees its own.
+#[test]
+fn bigdecimal_thread_local_modes() {
+    run_test_once(
+        r#"
+        require "rubygems"
+        require "bigdecimal"
+        res = []
+        BigDecimal.limit(5)
+        res << (BigDecimal("1.23456789") + 0).to_s
+        t = Thread.new { BigDecimal.limit(3); (BigDecimal("1.23456789") + 0).to_s }
+        res << t.value
+        res << (BigDecimal("1.23456789") + 0).to_s
+        f = Fiber.new { BigDecimal.limit(2); (BigDecimal("1.23456789") + 0).to_s }
+        res << f.resume
+        res << (BigDecimal("1.23456789") + 0).to_s
+        BigDecimal.save_rounding_mode do
+          BigDecimal.mode(BigDecimal::ROUND_MODE, :down)
+          res << BigDecimal("1.99999").round(2).to_s
+        end
+        res << BigDecimal("1.99999").round(2).to_s
+        res << BigDecimal("1").frozen?
+        BigDecimal.limit(0)
+        res
+        "#,
+    );
+}
