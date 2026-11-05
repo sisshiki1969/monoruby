@@ -2942,6 +2942,28 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             cbz x(rax), slow;
         );
+        self.emit_cell_header(header);
+    }
+
+    /// `emit_alloc_cell` with the cell acquisition laid out at the site
+    /// instead of called: no `bl`/`ret`, no x30 spill around it, and the
+    /// stub's "0 = take the slow path" result test folds into the
+    /// acquisition's own branch. Used by the object constructors
+    /// (`Class#allocate`, `Foo.new`), whose sites are few and hot; the far
+    /// more numerous literal sites keep the shared stub for code size.
+    ///
+    /// #### out
+    /// - x0 (Rax): the fresh cell, header already stored
+    ///
+    /// #### destroy
+    /// - x9, x11, x12
+    pub(crate) fn emit_alloc_cell_inline(&mut self, header: CellHeader, slow: &DestLabel) {
+        self.emit_cell_acquire(slow);
+        self.emit_cell_header(header);
+    }
+
+    fn emit_cell_header(&mut self, header: CellHeader) {
+        let rax = GP::Rax.a64().0; // x0 (result)
         match header {
             CellHeader::Imm(h) => monoasm_arm64!(&mut self.jit,
                 mov x11, (h);
@@ -2962,51 +2984,47 @@ impl Codegen {
         );
     }
 
-    /// Bind the shared `alloc_cell` stub (see the field doc in
-    /// `codegen.rs`): `Allocator::alloc`'s two fast paths — free-list pop,
-    /// else bump — returning the fresh cell in x0, or 0 when the runtime
-    /// must take over. No inner call, so the `bl`-written x30 carries the
-    /// return address to `ret`. Emitted at the end of `Codegen::new`, after
-    /// the allocator addresses are captured. aarch64 twin of the x86_64
-    /// stub.
-    pub(in crate::codegen) fn gen_alloc_cell_stub(&mut self) {
+    /// `Allocator::alloc`'s two fast paths: pop a recycled cell from the
+    /// free list, else bump-allocate out of the current page. Leaves the
+    /// fresh cell (header still the free link / garbage) in x0, or
+    /// branches to `fail` where the runtime must take over
+    /// (`BUMP_INLINE_LIMIT`: alloc-flag / new-page territory) with the
+    /// allocator state untouched. Every field is addressed off one base
+    /// (`AllocFastState`), so the only 64-bit immediate is that base.
+    /// aarch64 twin of the x86_64 `emit_cell_acquire`.
+    ///
+    /// #### destroy
+    /// - x9, x11, x12
+    fn emit_cell_acquire(&mut self, fail: &DestLabel) {
         let rax = GP::Rax.a64().0; // x0 (result)
-        let label = self.alloc_cell.clone();
-        let free_head = self.alloc_free_head_addr as u64;
-        let free_count = self.alloc_free_count_addr as u64;
-        let total = self.alloc_total_addr as u64;
-        let used = self.alloc_used_addr as u64;
-        let page = self.alloc_page_addr as u64;
+        let st = self.alloc_fast;
+        let (free, count, total, used, page) =
+            (st.free, st.free_count, st.total, st.used, st.page);
         let bump = self.jit.label();
-        let fail = self.jit.label();
         let done = self.jit.label();
-        self.jit.bind_label(label);
         monoasm_arm64!(&mut self.jit,
-            mov x9, (free_head);
-            ldr x(rax), [x9];          // rax = free-list head (cell ptr, or 0 = None)
+            mov x9, (st.base);
+            ldr x(rax), [x9, #(free)];  // rax = free-list head (cell ptr, or 0 = None)
             cbz x(rax), bump;
-            ldr x12, [x(rax)];         // x12 = (*cell).header.next (free link @ offset 0)
-            str x12, [x9];             // free = next
-            mov x9, (free_count);
-            ldr x12, [x9];
+            ldr x12, [x(rax)];          // x12 = (*cell).header.next (free link @ offset 0)
+            str x12, [x9, #(free)];     // free = next
+            ldr x12, [x9, #(count)];
             sub x12, x12, #1;
-            str x12, [x9];
+            str x12, [x9, #(count)];
             b done;
         );
         self.jit.bind_label(bump.clone());
         monoasm_arm64!(&mut self.jit,
-            mov x9, (used);
-            ldr x12, [x9];             // x12 = used_in_current
-            mov x11, (BUMP_INLINE_LIMIT as u64);
-            cmp x12, x11;
+            ldr x12, [x9, #(used)];     // x12 = used_in_current
+            cmp x12, #(BUMP_INLINE_LIMIT as u32);
         );
         // alloc-flag / new-page territory: hand back to the runtime.
-        self.jit.bcond_label(monoasm::Cond::Hs, &fail);
+        self.jit.bcond_label(monoasm::Cond::Hs, fail);
         monoasm_arm64!(&mut self.jit,
-            mov x11, (page);
-            ldr x(rax), [x11];         // rax = current page
-            lsl x11, x12, #(CELL_SIZE_SHIFT);
-            add x(rax), x(rax), x11;   // + used_in_current * CELL_SIZE
+            add x11, x12, #1;
+            str x11, [x9, #(used)];     // used_in_current += 1
+            ldr x(rax), [x9, #(page)];  // rax = current page
+            add x(rax), x(rax), x12, lsl #(CELL_SIZE_SHIFT); // + used_in_current * CELL_SIZE
         );
         if PAGE_DATA_OFFSET != 0 {
             monoasm_arm64!(&mut self.jit,
@@ -3014,16 +3032,27 @@ impl Codegen {
                 add x(rax), x(rax), x11;
             );
         }
-        monoasm_arm64!(&mut self.jit,
-            add x12, x12, #1;
-            str x12, [x9];             // used_in_current += 1
-        );
         self.jit.bind_label(done.clone());
         monoasm_arm64!(&mut self.jit,
-            mov x9, (total);
-            ldr x12, [x9];
+            ldr x12, [x9, #(total)];
             add x12, x12, #1;
-            str x12, [x9];
+            str x12, [x9, #(total)];
+        );
+    }
+
+    /// Bind the shared `alloc_cell` stub (see the field doc in
+    /// `codegen.rs`): `emit_cell_acquire`, returning the fresh cell in x0,
+    /// or 0 when the runtime must take over. No inner call, so the
+    /// `bl`-written x30 carries the return address to `ret`. Emitted at
+    /// the end of `Codegen::new`, after the allocator addresses are
+    /// captured. aarch64 twin of the x86_64 stub.
+    pub(in crate::codegen) fn gen_alloc_cell_stub(&mut self) {
+        let rax = GP::Rax.a64().0; // x0 (result)
+        let label = self.alloc_cell.clone();
+        let fail = self.jit.label();
+        self.jit.bind_label(label);
+        self.emit_cell_acquire(&fail);
+        monoasm_arm64!(&mut self.jit,
             ret;
         );
         self.jit.bind_label(fail);

@@ -2303,9 +2303,14 @@ impl<'a> JitContext<'a> {
         // dispatch as `#<Class:Foo>`, and `o.singleton_class.new` must
         // raise TypeError rather than allocate a `Foo`. Deopt on mismatch
         // and let the interpreter do the raising.
-        state.load(ir, recv, GP::Rax);
-        let deopt = ir.new_deopt(state);
-        ir.guard_value_identity(self_module.as_val(), deopt);
+        // A receiver the abstract state already holds as that very class
+        // object (a folded constant `Foo`, guarded by the const version)
+        // needs no runtime comparison.
+        if state.concrete_value(recv).map(|v| v.id()) != Some(self_module.as_val().id()) {
+            state.load(ir, recv, GP::Rax);
+            let deopt = ir.new_deopt(state);
+            ir.guard_value_identity(self_module.as_val(), deopt);
+        }
         let using_fpr = state.get_using_fpr(ir);
         if let InitPlan::Frameless(init_callid, _) = plan {
             // The receiver is now known to be exactly that class object;
@@ -2327,11 +2332,16 @@ impl<'a> JitContext<'a> {
             // the interpreter the new object as the receiver of `new`.
             self.pending_class_new_redo = Some((init_callid, ir.new_deopt(state)));
         }
-        ir.fpr_save(using_fpr);
+        // The live fprs are saved only around the runtime fallback inside
+        // the emitted code: the inline fast path touches no float register.
         ir.inline(move |r#gen, _, _, _| {
-            r#gen.emit_class_allocate(class_id.u32(), alloc_func as *const () as u64, inline_alloc)
+            r#gen.emit_class_allocate(
+                class_id.u32(),
+                alloc_func as *const () as u64,
+                inline_alloc,
+                using_fpr,
+            )
         });
-        ir.fpr_restore(using_fpr);
         // Stores the object to `dst`'s home, which is both what the store
         // leg below reads it back from and what roots it.
         state.def_reg2acc_class(ir, GP::Rax, dst, class_id);
@@ -2341,7 +2351,10 @@ impl<'a> JitContext<'a> {
             InitPlan::StructSlots(inline) => {
                 // `dst` holds the object (checked above not to be one of
                 // the argument slots). The stores reload it each time:
-                // the heap form repoints rdi at the slot buffer.
+                // the heap form repoints rdi at the slot buffer. The
+                // struct was allocated just above and nothing between
+                // can reach a safepoint, so it has seen no collection —
+                // it is young, and a young parent needs no write barrier.
                 let dst = dst.unwrap();
                 for i in 0..pos_num {
                     state.load(ir, dst, GP::Rdi);
@@ -2351,11 +2364,13 @@ impl<'a> JitContext<'a> {
                         ir.push(AsmInst::StoreStructSlotInline {
                             src: GP::Rax,
                             slot_index,
+                            wb: false,
                         });
                     } else {
                         ir.push(AsmInst::StoreStructSlotHeap {
                             src: GP::Rax,
                             slot_index,
+                            wb: false,
                         });
                     }
                 }
@@ -2457,12 +2472,14 @@ impl<'a> JitContext<'a> {
         state.load(ir, recv, GP::Rdi);
         let deopt = ir.new_deopt(state);
         ir.guard_frozen(deopt);
+        // A provably-immediate stored value needs no GC write barrier.
+        let wb = !state.is_guarded_immediate(args);
         state.load(ir, args, GP::Rax);
         let src = GP::Rax;
         if inline {
-            ir.push(AsmInst::StoreStructSlotInline { src, slot_index });
+            ir.push(AsmInst::StoreStructSlotInline { src, slot_index, wb });
         } else {
-            ir.push(AsmInst::StoreStructSlotHeap { src, slot_index });
+            ir.push(AsmInst::StoreStructSlotHeap { src, slot_index, wb });
         }
         state.def_rax2acc(ir, dst);
         state.unset_side_effect_guard();

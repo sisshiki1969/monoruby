@@ -132,14 +132,32 @@ mark-external 方式なので、生存中のオブジェクト内容を汚さな
 
 ### JIT インライン高速パス
 
-フリーリストからの pop は JIT がインライン展開できるよう、アロケータが
-生アドレスを公開している:
+上の 1・2(フリーリスト pop とバンプ割り当て)は JIT が機械語で行えるよう、
+アロケータがフィールドのアドレスを公開している:
 
-- `free_list_head_addr()`(`self.free`) — `alloc.rs:658`
+- `free_list_head_addr()`(`self.free`)
 - `free_list_count_addr()` / `total_allocated_addr()` — 統計の同期用
+- `used_in_current_addr()` / `current_page_addr()` — バンプ割り当て
+
+`Codegen::new` はこれらを `AllocFastState`(`Allocator` 自身のアドレス +
+各フィールドの変位)として一度だけ取り込み、セル取得コード
+(`emit_cell_acquire`、各 backend)は基底アドレスを 1 回だけ組み立てて
+`[base + off]` で全フィールドを読み書きする。バンプ位置が `BUMP_INLINE_LIMIT`
+(= `THRESHOLD`)に達したとき(GC 要求・ページ切り替え)だけ Rust の
+`alloc_func` に落ちる。
+
+- リテラル(Array / Hash / 深いコピー)のサイトは共有スタブ `alloc_cell` を call する
+  (`emit_alloc_cell`、コードサイズ優先)
+- `Class#allocate` / `Foo.new` のサイトは同じ本体をサイトに展開する
+  (`emit_alloc_cell_inline`、call/ret と aarch64 の x30 退避がない)
 
 JIT コードはセーフポイント外でのみこれらを触る(Rust 側が `ALLOC` を借用中や
 `gc()` 実行中は触らない)ため、単一スレッド前提でエイリアスは生じない。
+
+割り当てた直後のオブジェクトは、セーフポイントを通るまで一度も収集を経験して
+いないので若い。そのため `Foo.new` の展開(`StructSlots` のスロットストア、
+frameless な `initialize` のうち `self_fresh` が保たれている間の ivar ストア)は
+ライトバリアを出さない。
 
 ---
 

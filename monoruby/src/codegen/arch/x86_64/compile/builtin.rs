@@ -1378,9 +1378,10 @@ impl Codegen {
         class_id: u32,
         alloc_func: u64,
         inline: Option<InlineAlloc>,
+        using_fpr: UsingFpr,
     ) {
         let Some(inline) = inline.filter(|_| !self.alloc_free_head_addr.is_null()) else {
-            self.class_allocate_call(class_id, alloc_func);
+            self.class_allocate_call(class_id, alloc_func, using_fpr);
             return;
         };
         let slow = self.jit.label();
@@ -1391,7 +1392,7 @@ impl Codegen {
             InlineAlloc::Struct(_) => ObjTy::STRUCT,
         };
         let header: u64 = ((class_id as u64) << 32) | ((ty.get() as u64) << 16) | 1;
-        self.emit_alloc_cell(CellHeader::Imm(header), &slow);
+        self.emit_alloc_cell_inline(CellHeader::Imm(header), &slow);
         monoasm! { &mut self.jit,
             movq [rax + (RVALUE_OFFSET_VAR)], 0;  // var_table = None
         }
@@ -1423,23 +1424,34 @@ impl Codegen {
                 }
             }
         }
+        // The runtime fallback is out of line: the fast path above is a
+        // straight run of stores.
+        self.jit.select_page(1);
         monoasm! { &mut self.jit,
-            jmp  cont;
         slow:
         }
-        self.class_allocate_call(class_id, alloc_func);
+        self.class_allocate_call(class_id, alloc_func, using_fpr);
+        monoasm! { &mut self.jit,
+            jmp  cont;
+        }
+        self.jit.select_page(0);
         monoasm! { &mut self.jit,
         cont:
         }
     }
 
-    fn class_allocate_call(&mut self, class_id: u32, alloc_func: u64) {
+    /// `alloc_func(class_id, globals)` → rax. Only this call clobbers the
+    /// float pool, so the live fprs are saved around it alone: the inline
+    /// fast path touches no xmm register.
+    fn class_allocate_call(&mut self, class_id: u32, alloc_func: u64, using_fpr: UsingFpr) {
+        self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movl rdi, (class_id);
             movq rsi, r12;
             movq rax, (alloc_func);
             call rax;
         }
+        self.fpr_restore(using_fpr);
     }
 
 
