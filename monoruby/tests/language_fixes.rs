@@ -1070,3 +1070,148 @@ fn safe_navigation_with_an_explicit_index_call() {
         "#,
     );
 }
+
+#[test]
+fn block_local_variable_assigned_in_nested_block() {
+    // A block-local (`|;g|`) the block itself never touches before a
+    // nested block assigns it still has a slot in the block's frame
+    // (ruby/spec language/block_spec.rb failed to load on this).
+    run_test(
+        r#"
+        r = []
+        [1].each {|;g| [2].each { r << defined?(g); g = 1 }; r << g }
+        f = ->(a; g) { [1].each { g = a }; g }
+        r << f.(3)
+        r << [1].map {|; x, y| [x, y] }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn defined_assignment_declares_its_local() {
+    // `defined?(x = 1)` does not assign, but declares `x`; a block that
+    // assigns it afterwards must find the slot.
+    run_test(
+        r#"
+        defined?(x = 1)
+        defined?(y ||= 1)
+        z = defined?(w += 1)
+        [1].each { x = 2; y = 3; w = 4 }
+        [x, y, z, w]
+        "#,
+    );
+}
+
+#[test]
+fn class_reopen_type_errors_name_the_previous_definition() {
+    run_test_once(
+        r#"
+        CRNum = 1
+        module CRMod; end
+        class CRCls; end
+        r = []
+        [-> { class CRNum; end }, -> { class CRMod; end }, -> { module CRCls; end },
+         -> { class nil::Foo; end }, -> { class 1::Foo; end }, -> { nil::Foo }].each do |l|
+          l.call
+        rescue TypeError => e
+          first, second = e.message.lines
+          r << [first.chomp, second&.sub(/\A.*?:\d+: /, "")]
+        end
+        r
+        "#,
+    );
+}
+
+#[test]
+fn single_pattern_missing_key_raises_key_error() {
+    run_test(
+        r#"
+        r = []
+        [-> { case {a: 1}; in {b: 2}; end },
+         -> { {a: 1} => {b:} },
+         -> { {a: {b: 1}} => {a: {c:}} },
+         -> { case {a: 1}; in {b:} if true; end },
+         -> { case {a: 1}; in {b: 2}; in {c: 3}; end },
+         -> { {a: 1} => {a: 2} }].each do |l|
+          l.call
+        rescue NoMatchingPatternError => e
+          r << e.class
+          r << [e.key, e.matchee, e.message] if e.is_a?(NoMatchingPatternKeyError)
+        end
+        r
+        "#,
+    );
+}
+
+#[test]
+fn defined_method_asks_a_redefined_respond_to() {
+    // `defined?(obj.m)` reaches `respond_to_missing?` through
+    // `rb_check_funcall`: a redefined `respond_to?` is asked first.
+    run_test_once(
+        r#"
+        $log = []
+        class DRTFalse
+          def respond_to?(name, all = false) = false
+          def respond_to_missing?(name, all) = ($log << :rtm; true)
+        end
+        class DRTTrue
+          def respond_to?(name, all = false) = ($log << [name, all]; true)
+          def respond_to_missing?(name, all) = ($log << [:rtm, name, all]; true)
+        end
+        class DRTOne
+          def respond_to?(name) = ($log << name; false)
+        end
+        Warning[:deprecated] = false
+        [defined?(DRTFalse.new.x), defined?(DRTTrue.new.x), defined?(DRTOne.new.x), $log]
+        "#,
+    );
+}
+
+#[test]
+fn invalid_break_and_return_are_rescued_at_the_exit() {
+    // A `break` / `return` that cannot reach its target raises
+    // LocalJumpError at the exit, inside the regions around it.
+    run_test(
+        r#"
+        def lj_b; proc { begin; break 1; rescue LocalJumpError => e; e.message; end }; end
+        def lj_r; proc { begin; return 1; rescue LocalJumpError => e; [e.message, $!.class]; end }; end
+        def lj_e; proc { begin; begin; break 1; ensure; $lj << :ens; end; rescue LocalJumpError; :r; end }; end
+        $lj = []
+        t1 = Thread.new { begin; break :x; rescue LocalJumpError => e; e.message; end }
+        t2 = Thread.new { begin; return; rescue LocalJumpError => e; e.message; end }
+        [lj_b.call, lj_r.call, lj_e.call, $lj, t1.value, t2.value]
+        "#,
+    );
+}
+
+#[test]
+fn defined_method_one_parameter_respond_to_warns() {
+    // The deprecated one-parameter `respond_to?`: warned about (naming
+    // `Class#` or, for a singleton method, the receiver's `to_s` + `.`)
+    // only under Warning[:deprecated]; a raising `respond_to?` makes the
+    // method undefined.
+    run_test_once(
+        r#"
+        require "stringio"
+        def cap; $stderr = StringIO.new; yield; s = $stderr.string; $stderr = STDERR; s; end
+        class DRTOneW
+          def respond_to?(name) = false
+        end
+        class DRTRaise
+          def respond_to?(name, all = false) = raise("boom")
+        end
+        o = Object.new
+        def o.to_s = "OBJ"
+        def o.respond_to?(name) = false
+        r = []
+        Warning[:deprecated] = true
+        r << cap { r << defined?(DRTOneW.new.x) }.lines.map { |l| l.sub(/\A.*?warning: /, "") }
+        r << cap { r << defined?(o.x) }.lines.map { |l| l.sub(/\A.*?warning: /, "") }
+        Warning[:deprecated] = false
+        r << cap { r << defined?(DRTOneW.new.x) }
+        r << defined?(DRTRaise.new.x)
+        r
+        "#,
+    );
+}

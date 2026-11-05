@@ -5,7 +5,7 @@
 `monoruby/build.rs` (`build_capi_extensions`) compiles it against
 `monoruby_capi/include`, links the layer's archives in, and installs the
 result as `<install root>/ext/stringio.so` (`.dylib` on macOS), which
-`monoruby/stdlib/stringio.rb` requires. See `doc/c_api.md` §3.18.
+`monoruby/stdlib/stringio.rb` requires. See `doc/c_api.md` §3.19.
 
 To update: copy the same file from a newer CRuby and run the specs
 (`spec/ruby/library/stringio`) and `cargo test --test stringio_encoding`.

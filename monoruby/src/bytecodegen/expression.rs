@@ -388,7 +388,7 @@ impl<'a> BytecodeGen<'a> {
             }
             NodeKind::Return(deref!(val)) => {
                 if self.return_escapes() {
-                    return self.gen_method_return(val, UseMode2::Store(dst));
+                    return self.gen_method_return(val, UseMode2::Store(dst), loc);
                 } else {
                     return self.gen_return(val, UseMode2::Store(dst));
                 }
@@ -851,7 +851,7 @@ impl<'a> BytecodeGen<'a> {
                     Some(data) => data.clone(),
                     None => {
                         if self.is_escaping_block() {
-                            self.gen_block_break(val, use_mode)?;
+                            self.gen_block_break(val, use_mode, loc)?;
                             return Ok(());
                         } else if self.outer.is_some() {
                             // `break` in a lambda exits the lambda with the
@@ -980,7 +980,7 @@ impl<'a> BytecodeGen<'a> {
             }
             NodeKind::Return(deref!(val)) => {
                 if self.return_escapes() {
-                    self.gen_method_return(val, use_mode)?;
+                    self.gen_method_return(val, use_mode, loc)?;
                 } else {
                     self.gen_return(val, use_mode)?;
                 }
@@ -1181,7 +1181,9 @@ impl<'a> BytecodeGen<'a> {
                 // `defined?` in a void (statement) context evaluates nothing:
                 // CRuby elides the whole expression, so the operand's
                 // receiver side effects never fire. In a value context the
-                // operand is still probed by `gen_defined`.
+                // operand is still probed by `gen_defined`. Either way an
+                // assignment operand still declares its local targets.
+                self.declare_assignment_targets(&node);
                 if use_mode == UseMode2::NotUse {
                     return Ok(());
                 }
@@ -2502,10 +2504,10 @@ impl<'a> BytecodeGen<'a> {
         Ok(())
     }
 
-    fn gen_method_return(&mut self, val: Node, use_mode: UseMode2) -> Result<()> {
+    fn gen_method_return(&mut self, val: Node, use_mode: UseMode2, loc: Loc) -> Result<()> {
         if let Some(local) = self.is_refer_local(&val) {
             let mark = self.replay_ensures_for_nonlocal_exit()?;
-            self.emit_nonlocal_exit(mark, BytecodeInst::MethodRet(local), Loc::default());
+            self.emit_nonlocal_exit(mark, BytecodeInst::MethodRet(local), loc);
         } else {
             // The value stays pushed across the replay so the `ensure`
             // bodies take their temps above it (as `emit_ret` does for a
@@ -2515,7 +2517,7 @@ impl<'a> BytecodeGen<'a> {
             let ret = self.peek().into();
             let mark = self.replay_ensures_for_nonlocal_exit()?;
             self.pop();
-            self.emit_nonlocal_exit(mark, BytecodeInst::MethodRet(ret), Loc::default());
+            self.emit_nonlocal_exit(mark, BytecodeInst::MethodRet(ret), loc);
         }
         if use_mode == UseMode2::Push {
             self.push();
@@ -2523,17 +2525,17 @@ impl<'a> BytecodeGen<'a> {
         Ok(())
     }
 
-    fn gen_block_break(&mut self, val: Node, use_mode: UseMode2) -> Result<()> {
+    fn gen_block_break(&mut self, val: Node, use_mode: UseMode2, loc: Loc) -> Result<()> {
         if let Some(local) = self.is_refer_local(&val) {
             let mark = self.replay_ensures_for_nonlocal_exit()?;
-            self.emit_nonlocal_exit(mark, BytecodeInst::BlockBreak(local), Loc::default());
+            self.emit_nonlocal_exit(mark, BytecodeInst::BlockBreak(local), loc);
         } else {
             // See `gen_method_return` for the push/replay/pop order.
             self.gen_expr(val, UseMode2::Push)?;
             let ret = self.peek().into();
             let mark = self.replay_ensures_for_nonlocal_exit()?;
             self.pop();
-            self.emit_nonlocal_exit(mark, BytecodeInst::BlockBreak(ret), Loc::default());
+            self.emit_nonlocal_exit(mark, BytecodeInst::BlockBreak(ret), loc);
         }
         if use_mode == UseMode2::Push {
             self.push();

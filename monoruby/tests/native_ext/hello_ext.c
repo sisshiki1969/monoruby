@@ -140,9 +140,43 @@ static MrValue hello_stash(MrContext *ctx, MrValue self, int argc, const MrValue
     return MR_UNDEF;
 }
 
+/* ---- global variables backed by C (gvar_hook) ---- */
+/* $hello_count: the getter counts its reads, the setter resets the count
+ * (a TypeError when the value is not an Integer). The data pointer is
+ * the count itself: nothing here holds a heap value. */
+static int64_t gcount;
+static MrValue count_get(MrContext *ctx, void *data) { return api->int_new((*(int64_t*)data)++); }
+static int count_set(MrContext *ctx, void *data, MrValue val) {
+    int64_t n; if (!api->int_get(ctx, val, &n)) return -1;
+    *(int64_t*)data = n; return 0;
+}
+/* $hello_ro: no setter, so an assignment is a NameError. */
+static MrValue ro_get(MrContext *ctx, void *data) { return api->str_new(ctx, (const uint8_t*)"read-only", 9); }
+/* $hello_silent: no getter (reads as nil) and a setter that takes anything. */
+static int silent_set(MrContext *ctx, void *data, MrValue val) { return 0; }
+/* $hello_fail: a setter that fails without raising. */
+static int fail_set(MrContext *ctx, void *data, MrValue val) { return -1; }
+/* $hello_bad: a getter that raises. */
+static MrValue bad_get(MrContext *ctx, void *data) { api->raise_kind(ctx, MR_E_RUNTIME, "getter boom", 11); return MR_UNDEF; }
+
+/* Hello.hook_no_sym -> gvar_hook given MR_NO_SYM: an ArgumentError. */
+static MrValue hello_hook_no_sym(MrContext *ctx, MrValue self, int argc, const MrValue *argv, MrValue block) {
+    api->gvar_hook(ctx, MR_NO_SYM, NULL, NULL, NULL);
+    return MR_UNDEF;
+}
+
+static void hook_gvar(MrContext *ctx, const char *name, void *data, MrGvarGetFn getter, MrGvarSetFn setter) {
+    api->gvar_hook(ctx, api->intern(ctx, (const uint8_t*)name, strlen(name)), data, getter, setter);
+}
+
 int Init_hello_ext(MrContext *ctx) {
     api = ctx->api;
     if (api->abi_version != MR_ABI_VERSION) return 1;
+    hook_gvar(ctx, "$hello_count", &gcount, count_get, count_set);
+    hook_gvar(ctx, "$hello_ro", NULL, ro_get, NULL);
+    hook_gvar(ctx, "$hello_silent", NULL, NULL, silent_set);
+    hook_gvar(ctx, "$hello_fail", NULL, NULL, fail_set);
+    hook_gvar(ctx, "$hello_bad", NULL, bad_get, NULL);
     MrValue hello = api->define_module(ctx, MR_UNDEF, "Hello");
     MrValue std_err = api->const_get(ctx, MR_UNDEF, "StandardError");
     api->define_class(ctx, hello, "Error", std_err, 0);
@@ -157,6 +191,7 @@ int Init_hello_ext(MrContext *ctx) {
     api->define_method(ctx, hello, "intern_twice", hello_intern_twice, 1, MR_METHOD_SINGLETON);
     api->define_method(ctx, hello, "blocking", hello_blocking, 1, MR_METHOD_SINGLETON);
     api->define_method(ctx, hello, "stash", hello_stash, 0, MR_METHOD_SINGLETON);
+    api->define_method(ctx, hello, "hook_no_sym", hello_hook_no_sym, 0, MR_METHOD_SINGLETON);
     MrValue counter = api->define_class(ctx, hello, "Counter", MR_UNDEF, MR_CLASS_NATIVE);
     api->define_method(ctx, counter, "initialize", counter_initialize, MR_ARGC_VARIADIC, MR_METHOD_PRIVATE);
     api->define_method(ctx, counter, "incr", counter_incr, 0, 0);

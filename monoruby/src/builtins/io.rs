@@ -2995,8 +2995,8 @@ fn fcntl_waits(cmd: i32) -> bool {
 /// ### IO#ioctl
 /// - ioctl(cmd, arg = 0) -> Integer
 ///
-/// Thin wrapper over ioctl(2) with an integer argument (the
-/// memory-backed String forms are not supported). Raises `IOError` on a
+/// Thin wrapper over ioctl(2) with an integer argument, or a String
+/// used as the in/out buffer. Raises `IOError` on a
 /// closed stream and the matching `Errno::*` (e.g. `Errno::ENOTTY`) on
 /// syscall failure.
 ///
@@ -3006,9 +3006,47 @@ fn io_ioctl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let self_ = lfp.self_val();
     let fd = self_.as_io_inner().fileno()?;
     let cmd = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    // A String argument is a buffer the kernel reads and writes (CRuby
+    // `setup_narg`): it is grown to the command's payload size plus a
+    // sentinel byte that must survive the call.
+    if let Some(mut arg) = lfp.try_arg(1)
+        && arg.is_rstring_inner().is_some()
+    {
+        arg.ensure_not_frozen(&globals.store)?;
+        let len = ioctl_narg_len(cmd as u64);
+        let mut bytes = arg.as_rstring_inner().as_bytes().to_vec();
+        if bytes.len() < len + 1 {
+            bytes.resize(len + 1, 0);
+        }
+        let last = bytes.len() - 1;
+        bytes[last] = IOCTL_NARG_SENTINEL;
+        // SAFETY: `bytes` is a live buffer of at least `len + 1` bytes,
+        // the most the command writes (its encoded payload size, or the
+        // 256-byte default for an unstructured request).
+        let ret = unsafe {
+            libc::ioctl(
+                fd,
+                cmd as libc::c_ulong,
+                bytes.as_mut_ptr() as *mut libc::c_void,
+            )
+        };
+        if ret == -1 {
+            let err = std::io::Error::last_os_error();
+            return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "ioctl"));
+        }
+        if bytes[last] != IOCTL_NARG_SENTINEL {
+            return Err(MonorubyErr::argumenterr("return value overflowed string"));
+        }
+        bytes[last] = 0;
+        let enc = arg.as_rstring_inner().encoding();
+        *arg.as_rstring_inner_mut() = RStringInner::from_encoding(&bytes, enc);
+        return Ok(Value::integer(ret as i64));
+    }
     let arg = match lfp.try_arg(1) {
-        Some(v) if !v.is_nil() => v.coerce_to_int_i64(vm, globals)?,
-        _ => 0,
+        Some(v) if v.is_nil() || v == Value::bool(false) => 0,
+        Some(v) if v == Value::bool(true) => 1,
+        Some(v) => v.coerce_to_int_i64(vm, globals)?,
+        None => 0,
     };
     // SAFETY: ioctl(2) with an integer third argument; no memory is
     // passed, so there are no aliasing concerns.
@@ -3018,6 +3056,22 @@ fn io_ioctl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "ioctl"));
     }
     Ok(Value::integer(ret as i64))
+}
+
+/// CRuby's `NARG_SENTINEL`, written past the end of an `ioctl` buffer to
+/// catch a kernel write that overran it.
+const IOCTL_NARG_SENTINEL: u8 = 17;
+
+/// The payload size of an `ioctl` request (CRuby `ioctl_narg_len`): the
+/// size field of a structured Linux request number, at least 256 bytes;
+/// 256 for anything else.
+fn ioctl_narg_len(cmd: u64) -> usize {
+    const DEFAULT_IOCTL_NARG_LEN: usize = 256;
+    if cfg!(target_os = "linux") && cmd & 0xFFFF_0000 != 0 {
+        (((cmd >> 16) & 0x3fff) as usize).max(DEFAULT_IOCTL_NARG_LEN)
+    } else {
+        DEFAULT_IOCTL_NARG_LEN
+    }
 }
 
 ///
@@ -4172,6 +4226,12 @@ fn io_pread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pread"));
     }
     if n == 0 {
+        // CRuby empties the caller's buffer before raising at EOF.
+        if let Some(mut v) = buffer {
+            v.ensure_not_frozen(&globals.store)?;
+            let enc = v.as_rstring_inner().encoding();
+            *v.as_rstring_inner_mut() = RStringInner::from_encoding(&[], enc);
+        }
         return Err(MonorubyErr::eoferr(&globals.store, "end of file reached"));
     }
     buf.truncate(n as usize);
@@ -4988,6 +5048,19 @@ fn validate_newline_option(
     opts: Option<crate::value::Hashmap>,
 ) -> Result<()> {
     let Some(h) = opts else { return Ok(()) };
+    // The boolean spellings of a decorator (`universal_newline: true`,
+    // `crlf_newline:`, `cr_newline:`) are newline decorators too.
+    if io.as_io_inner().binmode() {
+        for key in ["universal_newline", "crlf_newline", "cr_newline"] {
+            if h.get(Value::symbol(IdentId::get_id(key)), vm, globals)?
+                .is_some_and(|v| v.as_bool())
+            {
+                return Err(MonorubyErr::argumenterr(
+                    "newline decorator with binary mode",
+                ));
+            }
+        }
+    }
     let Some(v) = h
         .get(Value::symbol(IdentId::get_id("newline")), vm, globals)?
         .filter(|v| !v.is_nil())
@@ -10138,6 +10211,35 @@ mod tests {
             ensure
               File.unlink(path) rescue nil
             end
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_pread_ioctl_write_nonblock() {
+        run_test_once(
+            r##"
+            r = []
+            path = "/tmp/monoruby_pread_eof_#{$$}"
+            File.write(path, "abc")
+            File.open(path) do |f|
+              buf = +"existing"
+              r << (f.pread(1, 10, buf) rescue $!.class) << buf
+              buf = +""
+              r << f.ioctl(RUBY_PLATFORM.include?("darwin") ? 0x4004667f : 0x541B, buf) << buf.bytesize << buf.unpack1("I")
+            end
+            File.delete(path)
+            rd, wr = IO.pipe
+            rd.close
+            r << (wr.write_nonblock("x") rescue [$!.class, $!.message])
+            wr.close
+            io = File.open(path, "w")
+            io.binmode
+            r << (io.set_encoding("utf-8", universal_newline: true) rescue $!.message)
+            r << (io.set_encoding("utf-8", crlf_newline: true) rescue $!.message)
+            io.close
+            File.delete(path)
+            r
             "##,
         );
     }

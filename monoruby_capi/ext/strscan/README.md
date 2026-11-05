@@ -6,7 +6,7 @@ against `monoruby_capi/include`, links the layer's archives in, and
 installs the result as `<install root>/ext/strscan.so` (`.dylib` on
 macOS). `monoruby/stdlib/strscan.rb` requires it and then
 `strscan/strscan.rb` (CRuby's `ext/strscan/lib/strscan/strscan.rb`).
-See `doc/c_api.md` §3.18.
+See `doc/c_api.md` §3.19.
 
 To update: copy the same files from a newer CRuby and run the specs
 (`spec/ruby/library/stringscanner`) and `cargo test --test strscan`.

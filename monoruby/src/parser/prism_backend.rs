@@ -677,6 +677,12 @@ struct Lowerer<'pr> {
     /// matching desugar (`%pm<n>` — `%` is not spellable, so they never
     /// surface in `local_variables`).
     pm_temp: usize,
+    /// While lowering the pattern of a *single-pattern* match (`expr =>
+    /// pat`, or a `case/in` with one `in` and no `else`), the hidden
+    /// local a hash pattern records `[hash, key]` in when a key is
+    /// missing, so the exhaustion raise can be CRuby's
+    /// `NoMatchingPatternKeyError` instead of the plain error.
+    pm_key_error: Option<String>,
     /// `-n` / `-p` command-line switches: wrap the program body in an
     /// implicit `while gets ... end` (see `lower_program`).
     cli_loop_wrap: Option<super::CliLoopWrap>,
@@ -714,6 +720,7 @@ impl<'pr> Lowerer<'pr> {
             warnings: Vec::new(),
             eval_parse: ctx.eval_parse,
             pm_temp: 0,
+            pm_key_error: None,
             cli_loop_wrap: None,
             ctx: ctx.clone(),
             defer_bodies: true,
@@ -964,18 +971,50 @@ impl<'pr> Lowerer<'pr> {
     /// Register block-local shadow variables (`{ |x; a, b| ... }`).
     /// They are fresh locals scoped to the block body, so adding them
     /// to the block's (already fresh) lvar table gives the correct
-    /// shadowing behaviour.
+    /// shadowing behaviour. Returns the names, so the caller can make
+    /// the block's frame own their slots up front
+    /// ([`Self::declare_block_locals`]).
     fn collect_block_local_shadows(
         &mut self,
         locals: &prism::NodeList<'pr>,
-    ) -> Result<(), MonorubyErr> {
+    ) -> Result<Vec<String>, MonorubyErr> {
+        let mut names = vec![];
         for n in locals.iter() {
             if let Some(blv) = n.as_block_local_variable_node() {
                 let name = constant_name(&blv.name())?;
                 self.lvars.insert(&name);
+                names.push(name.to_string());
             }
         }
-        Ok(())
+        Ok(names)
+    }
+
+    /// Prefix a block body with a void read of each block-local variable.
+    ///
+    /// Bytecodegen allocates a local's slot lazily, at the first
+    /// reference it compiles, and a nested block is compiled at the point
+    /// it is reached. A block-local that the block itself never touches
+    /// before a nested block assigns it (`{|;g| [1].each { g = 1 }; g }`)
+    /// would therefore have no slot in the outer frame when the nested
+    /// block resolves `g`. A read in void context compiles to no
+    /// instruction but claims the slot, and the frame's nil-fill gives
+    /// the variable its initial `nil`.
+    fn declare_block_locals(names: Vec<String>, body: Node, loc: Loc) -> Node {
+        if names.is_empty() {
+            return body;
+        }
+        let mut stmts: Vec<Node> = names
+            .into_iter()
+            .map(|name| Node {
+                kind: NodeKind::LocalVar(0, name),
+                loc,
+            })
+            .collect();
+        stmts.push(body);
+        Node {
+            kind: NodeKind::CompStmt(stmts),
+            loc,
+        }
     }
 
     fn lower_statements_into_vec(
@@ -1964,14 +2003,20 @@ impl<'pr> Lowerer<'pr> {
                     self.lower_node(&n.value())?,
                 );
                 let subject = pm_lvar(&subj_name, loc);
-                let matched = self.lower_pattern(&n.pattern(), &subject, None)?;
+                let key_error = self.pm_temp_name();
+                let saved_key_error =
+                    std::mem::replace(&mut self.pm_key_error, Some(key_error.clone()));
+                let matched = self.lower_pattern(&n.pattern(), &subject, None);
+                self.pm_key_error = saved_key_error;
+                let matched = matched?;
                 Node::new_comp_stmt(
                     vec![
                         subj_assign,
+                        pm_assign(pm_lvar(&key_error, loc), Node::new_nil(loc)),
                         Node::new_if(
                             matched,
                             Node::new_nil(loc),
-                            pm_raise_no_matching_pattern(&subject, loc),
+                            pm_raise_no_matching_pattern(&subject, Some(&key_error), loc),
                             loc,
                         ),
                         Node::new_nil(loc),
@@ -3550,14 +3595,39 @@ impl<'pr> Lowerer<'pr> {
         // Reset the per-case `deconstruct` cache: the hidden local
         // survives across executions of an enclosing loop.
         let cache_reset = pm_assign(pm_lvar(&cache_name, loc), Node::new_nil(loc));
+        let conditions: Vec<_> = n.conditions().iter().collect();
+        // A single `in` with no `else` is a single-pattern match: CRuby
+        // reports a missing hash key as `NoMatchingPatternKeyError`.
+        let key_error =
+            (conditions.len() == 1 && n.else_clause().is_none()).then(|| self.pm_temp_name());
         let mut chain = match n.else_clause() {
             Some(e) => {
                 let stmts = e.statements();
                 self.lower_optional_statements(stmts.as_ref(), location_to_loc(&e.location()))?
             }
-            None => pm_raise_no_matching_pattern(&subject, loc),
+            None => pm_raise_no_matching_pattern(&subject, key_error.as_deref(), loc),
         };
-        let conditions: Vec<_> = n.conditions().iter().collect();
+        let saved_key_error = std::mem::replace(&mut self.pm_key_error, key_error.clone());
+        let result = self.lower_case_match_branches(conditions, &subject, &cache_name, chain);
+        self.pm_key_error = saved_key_error;
+        chain = result?;
+        let mut stmts = vec![subj_assign, cache_reset];
+        if let Some(ke) = &key_error {
+            stmts.push(pm_assign(pm_lvar(ke, loc), Node::new_nil(loc)));
+        }
+        stmts.push(chain);
+        Ok(Node::new_comp_stmt(stmts, loc))
+    }
+
+    fn lower_case_match_branches(
+        &mut self,
+        conditions: Vec<prism::Node<'pr>>,
+        subject: &Node,
+        cache_name: &str,
+        mut chain: Node,
+    ) -> Result<Node, MonorubyErr> {
+        let subject = subject.clone();
+        let cache_name = cache_name.to_string();
         for c in conditions.into_iter().rev() {
             let in_node = match &c {
                 prism::Node::InNode { .. } => c.as_in_node().unwrap(),
@@ -3582,10 +3652,7 @@ impl<'pr> Lowerer<'pr> {
             };
             chain = Node::new_if(cond, body, chain, branch_loc);
         }
-        Ok(Node::new_comp_stmt(
-            vec![subj_assign, cache_reset, chain],
-            loc,
-        ))
+        Ok(chain)
     }
 
     /// Lower an `in` clause's pattern, skipping over a guard wrapper
@@ -3977,13 +4044,35 @@ impl<'pr> Lowerer<'pr> {
             loc,
         ));
         for (name, value) in &pairs {
-            checks.push(Node::new_mcall(
+            let has_key = Node::new_mcall(
                 h(loc),
                 "key?".to_string(),
                 crate::ast::ArgList::from_args(vec![Node::new_symbol(name.clone(), loc)]),
                 false,
                 loc,
-            ));
+            );
+            // Single-pattern match: a missing key records `[hash, key]`
+            // for the `NoMatchingPatternKeyError` raise.
+            let has_key = match &self.pm_key_error {
+                Some(ke) => pm_or(
+                    has_key,
+                    Node::new_comp_stmt(
+                        vec![
+                            pm_assign(
+                                pm_lvar(ke, loc),
+                                Node::new_array(
+                                    vec![h(loc), Node::new_symbol(name.clone(), loc)],
+                                    loc,
+                                ),
+                            ),
+                            Node::new_bool(false, loc),
+                        ],
+                        loc,
+                    ),
+                ),
+                None => has_key,
+            };
+            checks.push(has_key);
             if let Some(v) = value {
                 let elem = Node::new_array_member(
                     h(loc),
@@ -4654,6 +4743,7 @@ impl<'pr> Lowerer<'pr> {
         let saved = self.enter_prism_scope();
         let result =
             (|this: &mut Self| -> Result<(Vec<crate::ast::FormalParam>, Node), MonorubyErr> {
+                let mut block_locals = vec![];
                 let params = match node.parameters() {
                     None => Vec::new(),
                     Some(p) => match p {
@@ -4663,7 +4753,7 @@ impl<'pr> Lowerer<'pr> {
                                 Some(pn) => this.lower_parameters(&pn)?,
                                 None => Vec::new(),
                             };
-                            this.collect_block_local_shadows(&bp.locals())?;
+                            block_locals = this.collect_block_local_shadows(&bp.locals())?;
                             params
                         }
                         // `->(a, b) { ... }` with full ParametersNode
@@ -4719,7 +4809,7 @@ impl<'pr> Lowerer<'pr> {
                         loc,
                     },
                 };
-                Ok((params, body))
+                Ok((params, Self::declare_block_locals(block_locals, body, loc)))
             })(self);
 
         match result {
@@ -4754,6 +4844,7 @@ impl<'pr> Lowerer<'pr> {
             (|this: &mut Self| -> Result<(Vec<crate::ast::FormalParam>, Node), MonorubyErr> {
                 // Parameters first (see comment on the def-node lowerer for
                 // why), then top up the rest from `node.locals()`.
+                let mut block_locals = vec![];
                 let params = match node.parameters() {
                     None => Vec::new(),
                     Some(p) => match p {
@@ -4763,7 +4854,7 @@ impl<'pr> Lowerer<'pr> {
                                 Some(pn) => this.lower_parameters(&pn)?,
                                 None => Vec::new(),
                             };
-                            this.collect_block_local_shadows(&bp.locals())?;
+                            block_locals = this.collect_block_local_shadows(&bp.locals())?;
                             params
                         }
                         prism::Node::NumberedParametersNode { .. } => {
@@ -4822,7 +4913,7 @@ impl<'pr> Lowerer<'pr> {
                         loc,
                     },
                 };
-                Ok((params, body))
+                Ok((params, Self::declare_block_locals(block_locals, body, loc)))
             })(self);
 
         match result {
@@ -5736,14 +5827,54 @@ fn pm_respond_to(subject: &Node, method: &str, loc: Loc) -> Node {
     )
 }
 
-fn pm_raise_no_matching_pattern(subject: &Node, loc: Loc) -> Node {
+/// The exhaustion raise. With `key_error` (a single-pattern match), a
+/// missing hash key recorded there as `[hash, key]` raises
+/// `NoMatchingPatternKeyError.new("<subject>: key not found: <key>",
+/// matchee: hash, key: key)` instead, as CRuby does.
+fn pm_raise_no_matching_pattern(subject: &Node, key_error: Option<&str>, loc: Loc) -> Node {
     let msg = Node::new_mcall_noarg(subject.clone(), "inspect".to_string(), false, loc);
-    Node::new_fcall(
+    let plain = Node::new_fcall(
         "raise".to_string(),
-        crate::ast::ArgList::from_args(vec![pm_const("NoMatchingPatternError", loc), msg]),
+        crate::ast::ArgList::from_args(vec![pm_const("NoMatchingPatternError", loc), msg.clone()]),
         false,
         loc,
-    )
+    );
+    let Some(ke) = key_error else {
+        return plain;
+    };
+    let part =
+        |i: i64| Node::new_array_member(pm_lvar(ke, loc), vec![Node::new_integer(i, loc)], loc);
+    let key_msg = Node::new_binop(
+        BinOp::Add,
+        Node::new_binop(
+            BinOp::Add,
+            msg,
+            Node {
+                kind: NodeKind::String(": key not found: ".to_string()),
+                loc,
+            },
+        ),
+        Node::new_mcall_noarg(part(1), "inspect".to_string(), false, loc),
+    );
+    let mut args = crate::ast::ArgList::from_args(vec![key_msg]);
+    args.kw_args = vec![
+        ("matchee".to_string(), part(0)),
+        ("key".to_string(), part(1)),
+    ];
+    let exc = Node::new_mcall(
+        pm_const("NoMatchingPatternKeyError", loc),
+        "new".to_string(),
+        args,
+        false,
+        loc,
+    );
+    let key_raise = Node::new_fcall(
+        "raise".to_string(),
+        crate::ast::ArgList::from_args(vec![exc]),
+        false,
+        loc,
+    );
+    Node::new_if(pm_lvar(ke, loc), key_raise, plain, loc)
 }
 
 fn pm_raise_type_error(msg: &str, loc: Loc) -> Node {

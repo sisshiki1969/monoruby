@@ -240,9 +240,13 @@ impl Fiber {
                 "attempt to resume a resuming fiber".to_string(),
             ));
         }
-        if self.executor().is_transferred() {
+        // CRuby 3.1+: what matters is how the fiber is *suspended*, not
+        // whether it was ever transferred to. One parked in a `transfer`
+        // cannot be resumed; one that came back by transfer and then
+        // stopped in `Fiber.yield` can.
+        if self.state() == FiberState::Suspended && !self.executor().is_yielding() {
             return Err(MonorubyErr::fibererr(
-                "cannot resume transferred Fiber".to_string(),
+                "attempt to resume a transferring fiber".to_string(),
             ));
         }
         Ok(())
@@ -278,7 +282,6 @@ impl Fiber {
         if self.state() == FiberState::Terminated {
             return Err(MonorubyErr::fibererr("dead fiber called".to_string()));
         }
-        self.executor_mut().set_transferred();
         if self.executor_ptr() == (vm as *mut Executor) {
             // Transferring to the currently running fiber: continue in
             // place, the call evaluating to its own arguments.

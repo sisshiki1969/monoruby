@@ -396,13 +396,19 @@ impl Value {
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<IdentId> {
-        if let Some(id) = self.try_symbol_or_string() {
+        if let Some(id) = self.try_symbol() {
             return Ok(id);
+        }
+        // A String is interned as `String#to_sym` would (`rb_to_id` →
+        // `rb_str_intern`): bytes invalid in its encoding are an
+        // EncodingError, not a name.
+        if let Some(inner) = self.is_rstring_inner() {
+            return crate::builtins::string::intern_string(&globals.store, inner);
         }
         if let Some(func_id) = globals.check_method(*self, IdentId::TO_STR) {
             let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
-            if let Some(s) = result.is_str() {
-                return Ok(IdentId::get_id(s));
+            if let Some(inner) = result.is_rstring_inner() {
+                return crate::builtins::string::intern_string(&globals.store, inner);
             }
             // `#to_str` returned a non-String value -> TypeError, matching
             // CRuby's "can't convert X to String (X#to_str gives Y)".
@@ -623,6 +629,19 @@ pub(crate) fn check_funcall(
     recv: Value,
     name: IdentId,
 ) -> Result<Option<Value>> {
+    check_funcall_args(vm, globals, recv, name, &[])
+}
+
+/// [`check_funcall`] with arguments (`rb_check_funcall(recv, name, argc,
+/// argv)`), e.g. the `coerce` probe of a numeric comparison. The caller
+/// roots `args`.
+pub(crate) fn check_funcall_args(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+    name: IdentId,
+    args: &[Value],
+) -> Result<Option<Value>> {
     let respond_to = IdentId::get_id("respond_to?");
     let default_fid = |globals: &Globals, class: ClassId, name: IdentId| {
         globals
@@ -650,7 +669,9 @@ pub(crate) fn check_funcall(
     }
     // 2. A defined method is simply called.
     if let Some(fid) = globals.check_method(recv, name) {
-        return Ok(Some(vm.invoke_func_inner(globals, fid, recv, &[], None, None)?));
+        return Ok(Some(
+            vm.invoke_func_inner(globals, fid, recv, args, None, None)?,
+        ));
     }
     // 3. Default respond_to?: a user-defined respond_to_missing? gates
     //    the missing-dispatch.
@@ -671,12 +692,15 @@ pub(crate) fn check_funcall(
             // Claimed to respond but only the default method_missing
             // exists: dispatch for real so the NoMethodError propagates.
             return Ok(Some(
-                vm.invoke_method_inner(globals, name, recv, &[], None, None)?,
+                vm.invoke_method_inner(globals, name, recv, args, None, None)?,
             ));
         }
         return Ok(None);
     };
-    match vm.invoke_func_inner(globals, fid, recv, &[Value::symbol(name)], None, None) {
+    let mm_args: Vec<Value> = std::iter::once(Value::symbol(name))
+        .chain(args.iter().copied())
+        .collect();
+    match vm.invoke_func_inner(globals, fid, recv, &mm_args, None, None) {
         Ok(result) => Ok(Some(result)),
         Err(err)
             if respond < 0

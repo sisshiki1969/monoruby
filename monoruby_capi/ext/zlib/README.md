@@ -7,7 +7,7 @@ into `<install root>/ext/zlib.so` (`.dylib` on macOS), which
 `monoruby/stdlib/zlib.rb` requires. zlib is the one `libz-sys` builds
 from its bundled source (`bundled-zlib`, the default; linked statically
 from `DEP_Z_ROOT/lib/libz.a`), or the platform's `-lz` under
-`system-zlib`. See `doc/c_api.md` §3.18.
+`system-zlib`. See `doc/c_api.md` §3.19.
 
 To update: copy the same file from a newer CRuby and run the specs
 (`spec/ruby/library/zlib`) and `cargo test --test zlib_deflate --test

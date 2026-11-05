@@ -157,8 +157,7 @@ pub(crate) fn parse_spawn_args(
                             chdir = Some((c, display));
                         }
                         "umask" => {
-                            umask =
-                                Some(v.coerce_to_int_i64(vm, globals)? as libc::mode_t);
+                            umask = Some(num2uint(vm, globals, v)? as libc::mode_t);
                         }
                         "pgroup" => {
                             if v.is_nil() || v == Value::bool(false) {
@@ -724,6 +723,57 @@ pub(crate) fn do_exec(globals: &mut Globals, spec: &ExecSpec) -> MonorubyErr {
     stage_error(globals, spec, stage, e)
 }
 
+/// CRuby's `NUM2UINT` (what `NUM2MODET` is on Linux): a Float is
+/// truncated (NaN / Infinity are a RangeError), and an Integer must fit
+/// the combined `int` / `unsigned int` window, with CRuby's messages for
+/// each way out of it.
+fn num2uint(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<u32> {
+    let i: i128 = if let Some(f) = v.try_float() {
+        if f.is_nan() || f.is_infinite() {
+            let s = if f.is_nan() {
+                "NaN"
+            } else if f > 0.0 {
+                "Inf"
+            } else {
+                "-Inf"
+            };
+            return Err(MonorubyErr::rangeerr(format!(
+                "float {s} out of range of integer"
+            )));
+        }
+        f.trunc() as i128
+    } else {
+        let int = v.coerce_to_int(vm, globals)?;
+        match int.unpack() {
+            RV::Fixnum(i) => i as i128,
+            RV::BigInt(b) => b
+                .to_i128()
+                .unwrap_or(if b.sign() == num::bigint::Sign::Minus {
+                    i128::MIN
+                } else {
+                    i128::MAX
+                }),
+            _ => unreachable!(),
+        }
+    };
+    if (-(1i128 << 31)..(1i128 << 32)).contains(&i) {
+        Ok(i as u32)
+    } else if (-(1i128 << 63)..(1i128 << 64)).contains(&i) {
+        let side = if i > 0 { "big" } else { "small" };
+        Err(MonorubyErr::rangeerr(format!(
+            "integer {i} too {side} to convert to 'unsigned int'"
+        )))
+    } else if i < 0 {
+        Err(MonorubyErr::rangeerr(
+            "bignum out of range of unsigned long",
+        ))
+    } else {
+        Err(MonorubyErr::rangeerr(
+            "bignum too big to convert into 'unsigned long'",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -1064,5 +1114,20 @@ mod tests {
         // Errno classification happens without replacing the caller.
         run_test_error(r#"Process.exec("no-such-cmd-xyzzy")"#);
         run_test_error(r#"Process.exec("./")"#);
+    }
+
+    #[test]
+    fn spawn_umask_range() {
+        run_test_once(
+            r##"
+            [Float::NAN, Float::INFINITY, 2**32, 2**64 - 1, 2**64, -2**63 - 1, -2**31 - 1].map do |m|
+              begin
+                Process.spawn("should_raise_before_and_not_run", umask: m)
+              rescue RangeError => e
+                [e.class, e.message]
+              end
+            end
+            "##,
+        );
     }
 }

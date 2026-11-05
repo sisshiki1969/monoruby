@@ -466,9 +466,11 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             None => return Ok(Value::nil()),
         },
         _ => {
-            // Try coerce protocol: call rhs.coerce(lhs), propagate exceptions
+            // Try coerce protocol: call rhs.coerce(lhs), propagate
+            // exceptions. CRuby's `do_coerce` probes with
+            // `rb_check_funcall`, so a redefined `respond_to?` is asked.
             let coerce_id = IdentId::get_id("coerce");
-            match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
+            match crate::value::coerce::check_funcall_args(vm, globals, rhs, coerce_id, &[lhs]) {
                 Ok(Some(result)) => {
                     if let Some(ary) = result.try_array_ty() {
                         if ary.len() == 2 {

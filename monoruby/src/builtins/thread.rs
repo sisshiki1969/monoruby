@@ -3311,4 +3311,17 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn thread_aset_nil_removes_key() {
+        run_test_once(
+            r#"
+            t = Thread.current
+            t[:monoruby_tl_nil] = 1
+            a = t.key?(:monoruby_tl_nil)
+            t[:monoruby_tl_nil] = nil
+            [a, t.key?(:monoruby_tl_nil), t.keys.include?(:monoruby_tl_nil)]
+            "#,
+        );
+    }
 }

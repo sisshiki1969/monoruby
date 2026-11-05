@@ -189,6 +189,18 @@ fn take_value(
     }
 }
 
+/// The encoding a `-K<code>` switch names; unknown codes are ignored,
+/// like CRuby.
+fn kcode_encoding(k: char) -> Option<&'static str> {
+    match k {
+        'e' | 'E' => Some("EUC-JP"),
+        'u' | 'U' => Some("UTF-8"),
+        's' | 'S' => Some("Windows-31J"),
+        'a' | 'A' | 'n' | 'N' => Some("ASCII-8BIT"),
+        _ => None,
+    }
+}
+
 fn lossy(s: &OsStr) -> String {
     s.to_string_lossy().into_owned()
 }
@@ -878,9 +890,16 @@ fn main() {
 
     // Installs the array as `ARGV`; `$*` and the ARGF file queue read
     // the same object straight off `Globals`.
-    globals.set_argv(Value::array_from_iter(
-        prog_args.iter().map(|s| Value::string(lossy(s))),
-    ));
+    // Each argument keeps its bytes and is tagged with the external
+    // encoding the process starts with (`-K` is applied after `-E` in the
+    // prelude below, so it wins here too).
+    let argv_external = opts
+        .kcode
+        .and_then(kcode_encoding)
+        .or(opts.external_enc.as_deref());
+    globals.set_argv(Value::array_from_iter(prog_args.iter().map(|s| {
+        monoruby::program_argument_string(s.as_encoded_bytes(), argv_external)
+    })));
     if let Some(ext) = opts.inplace.clone() {
         globals.set_argf_inplace(ext);
     }
@@ -934,6 +953,13 @@ fn main() {
         if let Some(enc) = monoruby::locale_source_encoding_name() {
             parser::set_cli_source_encoding(path.clone(), enc.to_string());
         }
+    } else if path.as_os_str() == "-" {
+        // So is a script read from stdin (CRuby: `ruby < script.rb`
+        // under a `C` locale has `__ENCODING__` US-ASCII); a magic
+        // comment and `-K` still win, as for `-e`.
+        if let Some(enc) = monoruby::locale_source_encoding_name() {
+            parser::set_cli_source_encoding(path.clone(), enc.to_string());
+        }
     }
 
     // Ruby prelude synthesized from the remaining switches; runs inside
@@ -956,14 +982,7 @@ fn main() {
         ));
     }
     if let Some(k) = opts.kcode {
-        let enc = match k {
-            'e' | 'E' => Some("EUC-JP"),
-            'u' | 'U' => Some("UTF-8"),
-            's' | 'S' => Some("Windows-31J"),
-            'a' | 'A' | 'n' | 'N' => Some("ASCII-8BIT"),
-            _ => None, // unknown codes are ignored, like CRuby
-        };
-        if let Some(enc) = enc {
+        if let Some(enc) = kcode_encoding(k) {
             prelude.push_str(&format!(
                 "Encoding.default_external = {}\n",
                 ruby_str_lit(enc)

@@ -70,6 +70,11 @@ typedef MrValue (*MrMethodDataFn)(MrContext *ctx, MrValue self, int argc,
 typedef int (*MrInitFn)(MrContext *ctx);
 /* Run by call_blocking on a worker thread; must not touch Ruby. */
 typedef int64_t (*MrBlockingFn)(void *arg);
+/* The hooks of a global variable registered with gvar_hook: the getter
+ * returns the value (MR_UNDEF with an error pending), the setter 0 (-1
+ * with an error pending). */
+typedef MrValue (*MrGvarGetFn)(MrContext *ctx, void *data);
+typedef int (*MrGvarSetFn)(MrContext *ctx, void *data, MrValue val);
 
 typedef struct MrMarker MrMarker; /* opaque; only gc_mark takes it */
 
@@ -206,6 +211,11 @@ struct MrApi {
        ubf NULL = none, (void *)-1 = RUBY_UBF_IO (the interrupt's signal gives EINTR) */
     int     (*call_blocking_ubf)(MrContext *, MrBlockingFn f, void *arg, void *ubf, void *ubf_arg, int64_t *out);
 
+    /* appended for rb_define_hooked_variable and its relatives: reads of the global
+       `name` call getter(ctx, data), assignments setter(ctx, data, val); setter NULL
+       makes it read-only, getter NULL reads as nil. The hooks' own values are theirs
+       to keep alive (gc_register_address / gc_pin). */
+    void    (*gvar_hook)(MrContext *, MrSym name, void *data, MrGvarGetFn getter, MrGvarSetFn setter);
     /* appended for rb_lastline_get / rb_lastline_set (`$_` of the calling Ruby frame) and OBJ_FROZEN */
     MrValue (*lastline_get)(MrContext *);
     void    (*lastline_set)(MrContext *, MrValue v);

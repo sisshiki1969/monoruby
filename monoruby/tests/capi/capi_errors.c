@@ -42,6 +42,15 @@ static VALUE e_undef_alloc_on(VALUE self, VALUE v) { rb_undef_alloc_func(v); ret
 static VALUE e_data_ptr(VALUE self, VALUE v) { return LONG2NUM((long)(DATA_PTR(v) != NULL)); }
 static VALUE e_typed_p(VALUE self, VALUE v) { return RTYPEDDATA_P(v) ? Qtrue : Qfalse; }
 
+/* A getter that raises: a global variable read cannot, so the read warns
+ * and is nil. */
+static VALUE
+e_raising_get(ID id, VALUE *data)
+{
+    (void)data;
+    rb_raise(rb_eRuntimeError, "%s raised", rb_id2name(id));
+}
+
 static VALUE
 e_register(VALUE self)
 {
@@ -75,5 +84,6 @@ Init_capi_errors(void)
     /* A class whose alloc function does not make a Data object. */
     VALUE bad = rb_define_class_under(m, "Bad", rb_cObject);
     rb_define_alloc_func(bad, e_alloc);
+    rb_define_virtual_variable("$e_raising", e_raising_get, NULL);
 }
 #endif

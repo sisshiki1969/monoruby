@@ -455,12 +455,10 @@ pub struct Globals {
     canonical_dirs: std::cell::RefCell<std::collections::HashMap<PathBuf, PathBuf>>,
     /// Memoized `ext::is_capi_extension` verdicts, keyed by path, each
     /// with the modification time and length it was reached for. The
-    /// question is answered by `dlopen`ing the library, and a host
-    /// CRuby's `.so` drags its `libruby` (~26 MB) in and out of the
-    /// address space with it; the resolver asks it of every same-named
-    /// `.so` on `$LOAD_PATH` whenever a stand-in matches. A file rebuilt
-    /// in place (a `gem install` over it) has a new stamp and is asked
-    /// again.
+    /// question is answered by reading the library's symbol table off
+    /// the file, and the resolver asks it of every same-named `.so` on
+    /// `$LOAD_PATH` whenever a stand-in matches. A file rebuilt in place
+    /// (a `gem install` over it) has a new stamp and is asked again.
     capi_extensions:
         std::cell::RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, u64, bool)>>,
     /// Features whose `require` body is currently executing, keyed by
@@ -1817,6 +1815,12 @@ impl Globals {
         setter: Option<GvarSetter>,
     ) {
         self.gvars.define_hook(name, getter, setter);
+    }
+
+    /// Hand a global variable name to a native extension's getter and
+    /// setter (`MrApi::gvar_hook`).
+    pub fn define_native_gvar(&mut self, name: IdentId, hook: NativeGvar) {
+        self.gvars.define_native_hook(name, hook);
     }
 
     /// Alias `new_name` to `old_name`. Subsequent reads and writes of

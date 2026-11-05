@@ -181,6 +181,17 @@ module Kernel
   end
   module_function :__warn_deprecated
 
+  # Internal: a deprecation warning attributed to the Ruby frame the Rust
+  # runtime was running when it raised it (CRuby's `rb_category_warn`
+  # prefix), with an optional second line already carrying its own
+  # `file:line: warning:` prefix.
+  def __warn_deprecated_here(msg, detail = nil)
+    msg = "#{caller(1, 1)&.first&.sub(/:in .*\z/, "")}: warning: #{msg}"
+    msg += "\n#{detail}" if detail
+    warn(msg, category: :deprecated)
+  end
+  module_function :__warn_deprecated_here
+
   # Internal: `rb_category_warn(RB_WARN_CATEGORY_PERFORMANCE, ...)`.
   # Silent unless `Warning[:performance]` is on; not gated on $VERBOSE.
   def __warn_performance(msg)

@@ -270,7 +270,17 @@ pub(super) extern "C" fn handle_error(
                 vm.discard_deferred_unwind(lfp);
                 return ErrorReturn::return_err();
             }
-            if let Some((Some(rescue), _, err_reg)) = info.get_exception_dest(pc) {
+            // A `break` / non-local `return` that raised LocalJumpError at
+            // the exit instruction itself is rescued by the regions around
+            // it (see `ISeqInfo::invalid_exit_dest`).
+            let invalid_exit = matches!(vm.exception().unwrap().kind(), MonorubyErrKind::LocalJump)
+                && matches!(info.get_pc(pc).opcode(), 81 | 82);
+            let dest = if invalid_exit {
+                info.invalid_exit_dest(pc)
+            } else {
+                info.get_exception_dest(pc)
+            };
+            if let Some((Some(rescue), _, err_reg)) = dest {
                 // Fill in the callers of this rescuing frame so the
                 // backtrace matches CRuby's raise-time stack even when
                 // the exception is raised and rescued in the same

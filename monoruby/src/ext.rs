@@ -25,6 +25,8 @@ use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::path::{Path, PathBuf};
 
+mod dynsym;
+
 // ---------------------------------------------------------------------
 // Per-interpreter state
 // ---------------------------------------------------------------------
@@ -688,14 +690,21 @@ pub(crate) fn has_native_lib_ext(path: &Path) -> bool {
 /// Whether the shared library at `path` was built against monoruby's
 /// CRuby-compatible `ruby.h` — the require resolver's cue to load a `.so`
 /// found on `$LOAD_PATH` natively instead of looking for a Ruby stand-in.
-/// A library built for CRuby fails to `dlopen` here (its `rb_*` symbols
-/// are undefined in monoruby, and `RTLD_NOW` resolves them before any of
-/// its code runs), and one that loads but lacks the layer's entry point
-/// is closed again.
+/// The answer is whether the file exports the layer's entry point,
+/// read from its symbol table (`dynsym`): the library is never opened
+/// for the question. A `dlopen` would run its constructors and map its
+/// dependencies, and a host CRuby's extension linked against a shared
+/// `libruby` loads that way without an error, bringing `libruby` and its
+/// own copies of the libraries it uses into the process for good
+/// (`dlclose` unloads neither). Only a file whose format the reader does
+/// not know is still opened, as before.
 pub(crate) fn is_capi_extension(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
     if !has_native_lib_ext(path) {
         return false;
+    }
+    if let Some(found) = dynsym::exports(path, "monoruby_capi_init") {
+        return found;
     }
     let Ok(cpath) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
         return false;
@@ -806,6 +815,7 @@ pub(crate) static MR_API: MrApi = MrApi {
     backref_get: mr_backref_get,
     backref_set: mr_backref_set,
     call_blocking_ubf: mr_call_blocking_ubf,
+    gvar_hook: mr_gvar_hook,
     lastline_get: mr_lastline_get,
     lastline_set: mr_lastline_set,
     obj_frozen: mr_obj_frozen,
@@ -1081,6 +1091,91 @@ unsafe extern "C" fn mr_gvar_set(ctx: *mut MrContext, name: *const c_char, v: Mr
             -1
         }
     }
+}
+
+/// `rb_define_hooked_variable` and its relatives: hand the global
+/// variable `name` to the extension's getter and setter.
+unsafe extern "C" fn mr_gvar_hook(
+    ctx: *mut MrContext,
+    name: MrSym,
+    data: *mut c_void,
+    getter: Option<MrGvarGetFn>,
+    setter: Option<MrGvarSetFn>,
+) {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    if name == MR_NO_SYM {
+        set_err(vm, MonorubyErr::argumenterr("gvar_hook was given MR_NO_SYM"));
+        return;
+    }
+    globals.define_native_gvar(
+        IdentId::from(name),
+        NativeGvar {
+            data,
+            getter,
+            setter,
+        },
+    );
+}
+
+/// A read of the global variable `name`, hooked by an extension: its
+/// getter's answer. A read has no error path through the VM and the JIT
+/// (`get_global_var` returns a bare `Value`), so a getter that raised
+/// is reported as a warning and the read is nil.
+pub(crate) fn gvar_native_get(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name: IdentId,
+    hook: NativeGvar,
+) -> Value {
+    let Some(getter) = hook.getter else {
+        return Value::nil();
+    };
+    let temp_base = vm.temp_len();
+    let mut ctx = make_ctx(vm, globals, None, None);
+    // SAFETY: the extension's own function, with the data it registered.
+    let res = unsafe { getter(&mut ctx, hook.data) };
+    vm.temp_clear(temp_base);
+    if vm.has_error() {
+        let err = vm.take_error();
+        let msg = format!(
+            "warning: the getter of {name} raised, and a global variable read cannot: {}",
+            err.get_error_message(&globals.store)
+        );
+        let _ = vm.ruby_warn(globals, &msg);
+        return Value::nil();
+    }
+    val(res).unwrap_or(Value::nil())
+}
+
+/// An assignment to the global variable `name`, hooked by an extension:
+/// its setter runs, or NameError when it has none.
+pub(crate) fn gvar_native_set(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name: IdentId,
+    hook: NativeGvar,
+    val: Value,
+) -> Result<()> {
+    let Some(setter) = hook.setter else {
+        return Err(MonorubyErr::nameerr(format!(
+            "{name} is a read-only variable"
+        )));
+    };
+    let temp_base = vm.temp_len();
+    let mut ctx = make_ctx(vm, globals, None, None);
+    // SAFETY: as in `gvar_native_get`.
+    let rc = unsafe { setter(&mut ctx, hook.data, val.id()) };
+    vm.temp_clear(temp_base);
+    if vm.has_error() {
+        return Err(vm.take_error());
+    }
+    if rc != 0 {
+        return Err(MonorubyErr::runtimeerr(format!(
+            "the setter of {name} failed without raising"
+        )));
+    }
+    Ok(())
 }
 
 /// `rb_keyword_given_p`: the running extension method's frame was

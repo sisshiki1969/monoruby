@@ -1248,8 +1248,18 @@ fn time_build(
     if lfp.arg(0).is_str().is_some() && (1..6).all(|i| lfp.try_arg(i).is_none()) {
         // The `precision:` keyword truncates the sub-second part.
         let precision = precision_keyword(vm, globals, lfp.try_arg(8))?;
-        let time_info = parse_time_string(vm, globals, lfp.arg(0), in_arg, precision)?;
-        return Ok(Value::new_time_with_class(time_info, cls));
+        let mut subnano = None;
+        let time_info =
+            parse_time_string(vm, globals, lfp.arg(0), in_arg, precision, &mut subnano)?;
+        let time = Value::new_time_with_class(time_info, cls);
+        // Digits past the nanosecond that `precision:` keeps ride on the
+        // object as the exact fraction.
+        if let Some(digits) = subnano {
+            let den = num::BigInt::from(10).pow(digits.len() as u32);
+            let num: num::BigInt = digits.parse().unwrap();
+            store_exact_subsec(globals, time, num, den)?;
+        }
+        return Ok(time);
     }
     // Build via the shared `from_args` path. `Time.new`'s 7th arg is
     // `utc_offset`, so we pre-extract it before calling `from_args`
@@ -2209,8 +2219,8 @@ fn parse_utc_offset_string(s: &str) -> Result<FixedOffset> {
     FixedOffset::east_opt(total).ok_or_else(|| MonorubyErr::argumenterr("utc_offset out of range"))
 }
 
-/// Coerce the `precision:` keyword of `Time.new(string, …)`. `nil` (and an
-/// absent keyword) mean "no truncation"; an Integer / Float / Rational /
+/// Coerce the `precision:` keyword of `Time.new(string, …)`. An absent
+/// keyword means nine digits, `nil` means "no truncation"; an Integer / Float / Rational /
 /// `#to_int` object gives the number of sub-second digits to keep; a String
 /// (or anything else) raises `TypeError: no implicit conversion of X into
 /// Integer`.
@@ -2219,7 +2229,8 @@ fn precision_keyword(
     globals: &mut Globals,
     v: Option<Value>,
 ) -> Result<Option<i64>> {
-    let Some(v) = v else { return Ok(None) };
+    // CRuby's default is nine digits; an explicit nil keeps them all.
+    let Some(v) = v else { return Ok(Some(9)) };
     if v.is_nil() {
         return Ok(None);
     }
@@ -2269,6 +2280,7 @@ fn parse_time_string(
     arg: Value,
     in_arg: Option<Value>,
     precision: Option<i64>,
+    subnano: &mut Option<String>,
 ) -> Result<TimeInner> {
     // The time string must be in an ASCII-compatible encoding.
     if let Some(inner) = arg.is_rstring_inner()
@@ -2368,6 +2380,16 @@ fn parse_time_string(
         if frac.is_empty() {
             // A dot must be followed by sub-second digits.
             return Err(cant());
+        }
+        // More than nine digits are kept (as an exact fraction) when the
+        // precision allows them: nil / negative keeps all, `p` keeps `p`.
+        let keep = match precision {
+            None => frac.len(),
+            Some(p) if p < 0 => frac.len(),
+            Some(p) => frac.len().min(p as usize),
+        };
+        if keep > 9 && frac[9..keep].bytes().any(|c| c != b'0') {
+            *subnano = Some(frac[..keep].to_string());
         }
         let mut f = frac.to_string();
         f.truncate(9);
@@ -6126,5 +6148,29 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 19_000, "only {checked} cases compared");
+    }
+
+    #[test]
+    fn time_new_string_precision_beyond_nanoseconds() {
+        run_test_once(
+            r##"
+            s = "2021-12-25 00:00:00.123456789876 +09:00"
+            [Time.new(s).subsec, Time.new(s, precision: nil).subsec,
+             Time.new(s, precision: -1).subsec, Time.new(s, precision: 10).subsec,
+             Time.new(s, precision: 3).subsec]
+            "##,
+        );
+    }
+
+    #[test]
+    fn time_cmp_integer_probes_coerce() {
+        run_test_once(
+            r##"
+            t = Time.at(1)
+            probes = []
+            t.define_singleton_method(:respond_to?) { |*a| probes << a; false }
+            [t <=> 2, 2 <=> t, probes]
+            "##,
+        );
     }
 }

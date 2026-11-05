@@ -51,6 +51,9 @@
 #define HAVE_UNISTD_H 1
 #define HAVE_SYS_TYPES_H 1
 #define HAVE_STRING_H 1
+/* The layer defines them where the C library does not (ruby.h). */
+#define HAVE_STRLCPY 1
+#define HAVE_STRLCAT 1
 #define HAVE_STDLIB_H 1
 #define HAVE_TIME_H 1
 #define HAVE_SYS_TIME_H 1

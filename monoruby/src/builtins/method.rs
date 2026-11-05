@@ -482,7 +482,7 @@ fn iseq_source_location(store: &Store, func_id: FuncId) -> Option<Value> {
 /// none. Shared by `#source_location` and the trailing `file:line` of
 /// `#inspect`, which CRuby takes from the same place — so the two can
 /// never disagree (#1517).
-fn source_path_line(store: &Store, func_id: FuncId) -> Option<(String, i64)> {
+pub(crate) fn source_path_line(store: &Store, func_id: FuncId) -> Option<(String, i64)> {
     // An attribute method has no iseq; the `attr_*` call site it was
     // defined at stands in, as CRuby's does.
     let (sourceinfo, loc) = match store.resolve_iseq(func_id) {
