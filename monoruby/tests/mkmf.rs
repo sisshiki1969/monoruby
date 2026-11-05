@@ -494,6 +494,20 @@ fn host_installed_gem_extension_is_rebuilt() {
     let built_at = stamp(&built[0]);
     assert_eq!(run_mono(), on_cruby);
     assert_eq!(stamp(&built[0]), built_at, "the cached build was not reused");
+    // The host's `.so` required again by its own path is the rebuild
+    // already loaded, not a second copy.
+    for so in &host_so {
+        let again = run(monoruby()
+            .current_dir(&dir)
+            .args(["-e", "require 'capi_gem'; p require(ARGV[0])"])
+            .arg(so)
+            .env("GEM_HOME", &home)
+            .env("GEM_PATH", &home)
+            .env("HOME", &user_home)
+            .env_remove("RUBYOPT")
+            .env_remove("BUNDLE_GEMFILE"));
+        assert_eq!(again.trim(), "false", "{so:?}");
+    }
     assert_eq!(host_so.iter().map(stamp).collect::<Vec<_>>(), before);
 }
 

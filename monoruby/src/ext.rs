@@ -2171,10 +2171,10 @@ unsafe extern "C" fn mr_intern(_: *mut MrContext, ptr: *const u8, len: usize) ->
 unsafe extern "C" fn mr_intern_check(_: *mut MrContext, ptr: *const u8, len: usize) -> MrSym {
     // SAFETY: the table's contract — `len` bytes readable at `ptr`.
     let bytes = unsafe { slice(ptr, len) };
-    match std::str::from_utf8(bytes) {
-        Ok(s) => IdentId::try_get_id(s).map_or(MR_NO_SYM, |id| id.get()),
-        Err(_) => MR_NO_SYM,
-    }
+    std::str::from_utf8(bytes)
+        .ok()
+        .and_then(IdentId::try_get_id)
+        .map_or(MR_NO_SYM, |id| id.get())
 }
 
 unsafe extern "C" fn mr_funcall_sym(

@@ -1316,6 +1316,23 @@ impl Executor {
         res.ok_or_else(|| self.take_error())
     }
 
+    /// Load the extension at *path*, already registered as a loaded
+    /// feature, and unregister it again if its `Init_` fails.
+    fn load_native_feature(
+        &mut self,
+        globals: &mut Globals,
+        path: &std::path::Path,
+    ) -> Result<bool> {
+        // `Init_` defines classes and methods and returns; it runs no Ruby
+        // that could park, so the per-feature load lock the Ruby path of
+        // `require` takes is not needed.
+        if let Err(err) = crate::ext::load_extension(self, globals, path) {
+            globals.remove_loaded_feature(path);
+            return Err(err);
+        }
+        Ok(true)
+    }
+
     pub fn require(
         &mut self,
         globals: &mut Globals,
@@ -1342,33 +1359,20 @@ impl Executor {
             match found {
                 crate::globals::RequireLoad::Load(body, path) => break (body, path),
                 crate::globals::RequireLoad::Native(path) => {
-                    // `Init_` defines classes and methods and returns; it
-                    // runs no Ruby that could park, so the per-feature
-                    // load lock the Ruby path takes below is not needed.
-                    if let Err(err) = crate::ext::load_extension(self, globals, &path) {
-                        globals.remove_loaded_feature(&path);
-                        return Err(err);
-                    }
-                    return Ok(true);
+                    return self.load_native_feature(globals, &path);
                 }
                 crate::globals::RequireLoad::Foreign(path) => {
                     // A CRuby build of a host gem's extension: rebuild it
                     // against the C API layer and load that instead.
-                    let Some(built) = self.build_host_extension(globals, &path) else {
-                        return Err(crate::globals::foreign_extension_error(&path));
-                    };
+                    let built = self
+                        .build_host_extension(globals, &path)
+                        .filter(|built| crate::ext::is_capi_extension(built))
+                        .ok_or_else(|| crate::globals::foreign_extension_error(&path))?;
                     if globals.is_feature_loaded(&built) {
                         return Ok(false);
                     }
-                    if !crate::ext::is_capi_extension(&built) {
-                        return Err(crate::globals::foreign_extension_error(&built));
-                    }
                     globals.add_loaded_feature(&built);
-                    if let Err(err) = crate::ext::load_extension(self, globals, &built) {
-                        globals.remove_loaded_feature(&built);
-                        return Err(err);
-                    }
-                    return Ok(true);
+                    return self.load_native_feature(globals, &built);
                 }
                 crate::globals::RequireLoad::AlreadyLoaded(path) => {
                     // The feature is registered — but its body may still
@@ -1660,13 +1664,13 @@ impl Executor {
         globals: &mut Globals,
         path: &std::path::Path,
     ) -> Option<std::path::PathBuf> {
-        if globals.no_gems || !CODEGEN.with(|codegen| codegen.borrow().startup_flag) {
-            return None;
-        }
         let hook = crate::globals::install_root()
             .join("stub")
             .join("monoruby_hooks/host_extension.rb");
-        if !hook.exists() {
+        if globals.no_gems
+            || !CODEGEN.with(|codegen| codegen.borrow().startup_flag)
+            || !hook.exists()
+        {
             return None;
         }
         let temp_base = self.temp_len();
@@ -1701,9 +1705,9 @@ impl Executor {
             Some(crate::globals::lexically_normalize(std::path::Path::new(&s)))
         })();
         self.temp_clear(temp_base);
-        if built.is_none() && self.has_error() {
-            let _ = self.take_error();
-        }
+        // A failed build keeps the original LoadError: drop whatever the
+        // hook raised (nothing is pending after a successful one).
+        self.discard_error();
         built
     }
 

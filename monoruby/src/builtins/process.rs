@@ -3537,44 +3537,50 @@ mod new_api_tests {
 /// controlling terminal. stdlib/pty.rb wraps them in IO objects.
 #[monoruby_builtin]
 fn pty_open(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
-    let fail = |globals: &Globals, what: &str| {
-        let err = std::io::Error::last_os_error();
-        MonorubyErr::errno_with_msg(&globals.store, &err, what)
-    };
-    // SAFETY: plain libc calls on descriptors this function owns; the
-    // name `ptsname` returns is copied out before anything else runs
-    // (the GVL is held, so no other Ruby thread calls it meanwhile).
-    unsafe {
-        let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
-        if master < 0 {
-            return Err(fail(globals, "posix_openpt()"));
-        }
-        libc::fcntl(master, libc::F_SETFD, libc::FD_CLOEXEC);
-        if libc::grantpt(master) != 0 || libc::unlockpt(master) != 0 {
-            let err = fail(globals, "grantpt()");
-            libc::close(master);
-            return Err(err);
-        }
-        let name = libc::ptsname(master);
-        if name.is_null() {
-            let err = fail(globals, "ptsname()");
-            libc::close(master);
-            return Err(err);
-        }
-        let name = std::ffi::CStr::from_ptr(name).to_owned();
-        let slave = libc::open(
-            name.as_ptr(),
-            libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
-        );
-        if slave < 0 {
-            let err = fail(globals, "open()");
-            libc::close(master);
-            return Err(err);
-        }
-        Ok(Value::array_from_vec(vec![
+    // SAFETY: plain libc calls on descriptors `open_pty` owns.
+    match unsafe { open_pty() } {
+        Ok((master, slave, name)) => Ok(Value::array_from_vec(vec![
             Value::integer(master as i64),
             Value::integer(slave as i64),
             Value::string_from_str(&name.to_string_lossy()),
-        ]))
+        ])),
+        Err((what, err)) => Err(MonorubyErr::errno_with_msg(&globals.store, &err, what)),
+    }
+}
+
+/// Master fd, slave fd and the slave's device name.
+type PtyPair = (i32, i32, std::ffi::CString);
+
+/// The pty pair behind `Process.__pty_open`, or the call that failed with
+/// its errno (taken before the master is closed again).
+///
+/// # Safety
+/// Only libc calls; the name `ptsname` returns is copied out at once (the
+/// GVL is held, so no other Ruby thread calls it meanwhile).
+unsafe fn open_pty() -> std::result::Result<PtyPair, (&'static str, std::io::Error)> {
+    let check = |ok: bool, what| {
+        ok.then_some(())
+            .ok_or_else(|| (what, std::io::Error::last_os_error()))
+    };
+    unsafe {
+        let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        check(master >= 0, "posix_openpt()")?;
+        libc::fcntl(master, libc::F_SETFD, libc::FD_CLOEXEC);
+        let slave = (|| {
+            check(
+                libc::grantpt(master) == 0 && libc::unlockpt(master) == 0,
+                "grantpt()",
+            )?;
+            let name = libc::ptsname(master);
+            check(!name.is_null(), "ptsname()")?;
+            let name = std::ffi::CStr::from_ptr(name).to_owned();
+            let slave = libc::open(
+                name.as_ptr(),
+                libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+            );
+            check(slave >= 0, "open()")?;
+            Ok((master, slave, name))
+        })();
+        slave.inspect_err(|_| _ = libc::close(master))
     }
 }

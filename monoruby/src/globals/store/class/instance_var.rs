@@ -84,12 +84,10 @@ impl Store {
     /// and may have given those slots to other names since.
     pub(crate) fn relayout_ivars(&mut self, mut copy: Value, from: ClassId) {
         let to = copy.class();
-        if to == from {
-            return;
-        }
-        let Some(rval) = copy.try_rvalue_mut() else {
-            return;
-        };
+        debug_assert_ne!(to, from);
+        let rval = copy
+            .try_rvalue_mut()
+            .expect("an object whose class changed is a heap object");
         let moved: Vec<(IdentId, IvarId, Value)> = self.classes[from]
             .ivar_names
             .iter()

@@ -479,8 +479,9 @@ fn super_resolution(
 /// bytecodegen read off); otherwise `object_send_inline` looks the
 /// name up at run time from the arguments it wrote back, so it is read
 /// back from the caller's first argument register (`send(*args)`
-/// passes them as one Array). A value that is neither a Symbol nor a
-/// String leaves `send`, which the caller's dispatch check rejects.
+/// passes them as one Array). `send` reaches the method only with a
+/// Symbol or a String there; anything else answers `None`, and the
+/// frame's own method name is used.
 fn called_name(globals: &Globals, callid: CallSiteId, caller: Lfp) -> Option<IdentId> {
     let callsite = &globals.store[callid];
     let name = callsite.name?;
@@ -494,12 +495,11 @@ fn called_name(globals: &Globals, callid: CallSiteId, caller: Lfp) -> Option<Ide
     if callsite.object_send_single_splat() {
         first = first.try_array_ty()?.first().copied()?;
     }
-    if let Some(sym) = first.try_symbol() {
-        Some(sym)
-    } else if let Some(s) = first.is_rstring_inner() {
-        Some(IdentId::get_id(s.to_str().ok()?.as_ref()))
-    } else {
-        Some(name)
+    match first.try_symbol() {
+        Some(sym) => Some(sym),
+        None => Some(IdentId::get_id(
+            first.is_rstring_inner()?.to_str().ok()?.as_ref(),
+        )),
     }
 }
 

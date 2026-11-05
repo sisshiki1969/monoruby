@@ -58,7 +58,8 @@ fn string_subclass_to_str_is_a_plain_string() {
 /// `super` in a `define_method` body searches under the name the body
 /// was called as, also when JIT code turned `send(:name, ...)` into a
 /// direct call of the target (the body was entered from the `send` call
-/// site). active_model_serializers defines `_render_option_json` and
+/// site), or looked a Symbol, String or splatted name up at run time.
+/// active_model_serializers defines `_render_option_json` and
 /// `_render_with_renderer_json` from one block; Rails calls the second
 /// through `send`.
 #[test]
@@ -67,8 +68,11 @@ fn define_method_super_through_inlined_send() {
         r#"
         module SupBase
           def sup_b(x, o) = [:base_b, x]
-          def sup_go(o) = [send(:sup_b, o[:j], o), __send__(o[:m], 3, o),
-                           send(*[:sup_b, 5, o]), send("sup_b", 7, o)]
+          def sup_go(o)
+            a = [o[:m], 5, o]
+            [send(:sup_b, o[:j], o), __send__(o[:m], 3, o), send(*a), send(o[:s], 7, o),
+             send(*[o[:s], 9, o])]
+          end
         end
         module SupSer
           def sup_build(r) = r.odd? ? nil : r
@@ -85,7 +89,7 @@ fn define_method_super_through_inlined_send() {
         end
         c = SupC.new
         res = nil
-        50.times { |i| res = [c.sup_go({j: i, m: :sup_b}), c.sup_b(i, {})] }
+        50.times { |i| res = [c.sup_go({j: i, m: :sup_b, s: "sup_b"}), c.sup_b(i, {})] }
         res
         "#,
     );
@@ -181,6 +185,27 @@ fn pty_spawn_and_open() {
           sh = s
         }
         [ret, out, err, status, r.tty?, w.tty?, ttys, sh, PTY::ChildExited.ancestors.include?(RuntimeError)]
+        "#,
+    );
+}
+
+/// `tty?` asks isatty(3) for a File (a pty's slave is one, `/dev/null`
+/// is not) and answers false for a pipe; `readpartial` on a pipe returns
+/// what is there and raises EOFError at its end.
+#[test]
+fn io_tty_and_readpartial_on_files_and_pipes() {
+    run_test_once(
+        r#"
+        io = IO.popen(["echo", "hi"])
+        r = [io.tty?, io.readpartial(10)]
+        begin
+          io.readpartial(10)
+        rescue EOFError => e
+          r << e.class
+        end
+        io.close
+        File.open("/dev/null") { |f| r << f.tty? }
+        r
         "#,
     );
 }
