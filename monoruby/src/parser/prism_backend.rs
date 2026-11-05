@@ -548,11 +548,13 @@ fn try_prism_inner(
                 return None;
             }
             let verbose_only = if msg == "END in method; use at_exit"
+                || msg == "found '= literal' in conditional, should be =="
                 || msg == "integer literal in flip-flop"
                 || msg == "regex literal in condition"
             {
                 false
             } else if msg == "possibly useless use of defined? in void context"
+                || msg == "'frozen_string_literal' is ignored after any tokens"
                 || (msg.starts_with("'when' clause on line ")
                     && msg.ends_with(" and is ignored"))
             {

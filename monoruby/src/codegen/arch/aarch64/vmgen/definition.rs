@@ -62,7 +62,10 @@ impl Codegen {
             mov x5, (0);
             base_done:
             ldr w2, [x(PC.0), #(8)];  // name
-            mov x4, (if is_module { 1 } else { 0 });
+            // x4 <- func_id << 1 | is_module (see `runtime::define_class`)
+            ldr w4, [x(PC.0), #(12)];
+            lsl x4, x4, #(1);
+            add x4, x4, #(if is_module { 1 } else { 0 });
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
             mov x9, (runtime::define_class as *const () as u64);

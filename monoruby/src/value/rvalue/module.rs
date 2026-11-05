@@ -51,6 +51,10 @@ impl Module {
         if self.check_cyclic(module) {
             return Err(MonorubyErr::argumenterr("cyclic include detected"));
         }
+        // Every iclass of `module` anywhere descends from one of these
+        // direct mix-ins, so the flag tells `Store::propagate_include`
+        // whether a later `module.include(other)` has anyone to reach.
+        module.mixed_in = true;
         Globals::class_version_inc();
         // The newly-inserted iclass exposes `module`'s constants to
         // anything that previously resolved unqualified constants
@@ -81,11 +85,21 @@ impl Module {
         // `Integer.prepend M` followed by `Integer.include N` puts N
         // ahead of both M and Integer (CRuby: `[M, Integer, N, …]`).
         // `prepend` is the case that does insert at the head.
-        let mut base = if for_prepend {
+        let base = if for_prepend {
             *self
         } else {
             self.origin().unwrap_or(*self)
         };
+        self.splice_module_chain(base, module, for_prepend);
+        Ok(())
+    }
+
+    ///
+    /// Splice iclasses for `module` and the modules it includes into
+    /// `self`'s chain right below `base` (`self` itself, its origin, or
+    /// one of its iclasses), skipping each one `self` already has.
+    ///
+    fn splice_module_chain(&mut self, mut base: Module, mut module: Module, for_prepend: bool) {
         loop {
             // For prepend: only treat the module as already-an-ancestor
             // if it's in the prepend region (between head and origin).
@@ -109,7 +123,36 @@ impl Module {
                 break;
             }
         }
-        Ok(())
+    }
+
+    ///
+    /// After `include_module` (a module) was included into the module
+    /// `base`, splice it into every class or module that had already
+    /// mixed `base` in: below each iclass of `base` in `self`'s chain,
+    /// as CRuby (3.0+) does for the includers of a module.
+    ///
+    /// Returns whether anything was inserted.
+    ///
+    pub(crate) fn propagate_include(&mut self, base: Module, mut include_module: Module) -> bool {
+        if include_module.has_origin() {
+            match include_module.superclass() {
+                Some(superclass) if superclass.is_iclass() => include_module = superclass,
+                _ => return false,
+            }
+        }
+        let mut changed = false;
+        let mut cur = *self;
+        while let Some(next) = cur.superclass() {
+            if next.is_iclass() && next.id() == base.id() && !include_module.is_ancestor_of(next) {
+                let at = next;
+                self.splice_module_chain(at, include_module, false);
+                changed = true;
+                cur = at;
+            } else {
+                cur = next;
+            }
+        }
+        changed
     }
 
     /// Like `is_ancestor_of`, but only checks the prepend region of
@@ -277,6 +320,9 @@ pub struct ModuleInner {
     origin: Option<Module>,
     /// the type of this module/class
     class_type: ModuleType,
+    /// Whether this module has ever been included, prepended or
+    /// extended into anything (so iclasses of it may exist).
+    mixed_in: bool,
 }
 
 impl GC<RValue> for ModuleInner {
@@ -322,6 +368,7 @@ impl ModuleInner {
             singleton,
             origin: None,
             class_type,
+            mixed_in: false,
         }
     }
 
@@ -359,6 +406,10 @@ impl ModuleInner {
 
     pub fn has_origin(&self) -> bool {
         self.origin.is_some()
+    }
+
+    pub fn is_mixed_in(&self) -> bool {
+        self.mixed_in
     }
 
     pub fn origin(&self) -> Option<Module> {

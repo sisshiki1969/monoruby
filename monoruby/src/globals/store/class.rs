@@ -1741,6 +1741,36 @@ impl ClassInfoTable {
         result
     }
 
+    /// After `base.include_module(include_module)` runs on a module
+    /// `base`, splice `include_module` into every class or module that
+    /// had already mixed `base` in (CRuby 3.0+ `rb_include_module`'s
+    /// walk over the module's subclasses): `c.include(m1); m1.include(m2)`
+    /// makes `m2`'s methods visible on `c`'s instances, and a module that
+    /// did `extend self` sees the new module's methods on itself.
+    ///
+    /// Only a module that has been mixed in somewhere can have iclasses,
+    /// so the scan over the class table is skipped for the common case of
+    /// a module including others in its own body before it is used.
+    pub(crate) fn propagate_include_to_includers(&mut self, base: Module, include_module: Module) {
+        if !base.is_module() || !base.is_mixed_in() {
+            return;
+        }
+        let candidates: Vec<Module> = self
+            .table
+            .iter()
+            .filter_map(|info| info.object)
+            .filter(|m| !m.is_iclass() && m.id() != base.id())
+            .collect();
+        let mut changed = false;
+        for mut module in candidates {
+            changed |= module.propagate_include(base, include_module);
+        }
+        if changed {
+            Globals::class_version_inc();
+            Globals::const_version_inc();
+        }
+    }
+
     /// After `base.prepend_module(prepend_module)` runs (modifying
     /// `base`'s own chain), splice an iclass for `prepend_module` into
     /// every other class/module whose chain already contains an iclass

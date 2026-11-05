@@ -2089,6 +2089,9 @@ fn append_features(
     base.as_val().ensure_not_frozen(&globals.store)?;
     let include_module = lfp.self_val().expect_module(globals)?;
     base.include_module(include_module)?;
+    globals
+        .store
+        .propagate_include_to_includers(base, include_module);
     // The module may already carry a basic operation (`module M; def
     // +(o); end; end` and only then `Integer.include M`), which no
     // definition will run to mark.
@@ -4993,6 +4996,53 @@ mod tests {
             child.new.foo(ary)
             ary
             "##,
+        );
+    }
+
+    #[test]
+    fn include_reaches_existing_includers() {
+        // A module included into one that is already mixed in reaches
+        // every includer (CRuby 3.0+): classes, modules, and a module's
+        // own singleton class after `extend self`.
+        run_test_once(
+            r#"
+            m1 = Module.new
+            m2 = Module.new { def m2; :m2; end }
+            m3 = Module.new { def m3; :m3; end }
+            m4 = Module.new { def m4; :m4; end }
+            c = Class.new
+            c.include(m1); m1.include(m2); m2.include(m3); m3.include(m4)
+            r = [c.new.m2, c.new.m3, c.new.m4, c.ancestors.size]
+            a = Module.new { extend self }
+            b = Module.new { def foo; :foo; end }
+            a.include b
+            r << a.foo
+            n1 = Module.new; n2 = Module.new; n3 = Module.new { include n2 }
+            n2.include n1
+            r << (n3.ancestors == [n3, n2, n1])
+            # Already an ancestor of the includer: no second copy.
+            d = Class.new { include n1; include n3 }
+            n2.include n1
+            r << d.ancestors.count(n1)
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn const_added_reports_the_definition_line() {
+        run_test_once(
+            r#"
+            lines = []
+            mod = Module.new do
+              define_singleton_method(:const_added) do |name|
+                lines << [name, caller_locations(1, 1)[0].lineno]
+              end
+            end
+            mod.module_eval("TEST = 1\n\nmodule Sub\nend\n\nclass SubC\nend\n", "x.rb", 10)
+            mod.const_set(:SET, 1)
+            lines.map(&:first) + lines.take(3).map(&:last)
+            "#,
         );
     }
 

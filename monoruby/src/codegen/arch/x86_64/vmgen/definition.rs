@@ -18,13 +18,14 @@ impl Codegen {
     pub(super) fn vm_class_def(&mut self, is_module: bool) -> CodePtr {
         let label = self.jit.get_current_address();
         self.fetch3();
+        // r8 <- func_id << 1 | is_module (see `runtime::define_class`)
+        monoasm! { &mut self.jit,
+            movl r8, [r13 - 4];
+            shlq r8, 1;
+        }
         if is_module {
             monoasm! { &mut self.jit,
-                movl r8, 1;
-            }
-        } else {
-            monoasm! { &mut self.jit,
-                xorq r8, r8;
+                orq r8, 1;
             }
         }
         self.vm_get_slot_value_if_nonzero(GP::Rdi);

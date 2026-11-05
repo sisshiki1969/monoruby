@@ -1202,6 +1202,11 @@ impl FuncInfo {
         self.ext.ty == FuncType::Method
     }
 
+    /// Whether this function is a top-level (a script or `require`d file body).
+    pub(crate) fn is_toplevel(&self) -> bool {
+        self.ext.ty == FuncType::TopLevel
+    }
+
     /// Whether this function is a class/module definition body.
     pub(crate) fn is_classdef(&self) -> bool {
         self.ext.ty == FuncType::ClassDef
