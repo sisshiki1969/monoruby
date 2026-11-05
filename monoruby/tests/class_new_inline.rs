@@ -413,3 +413,99 @@ fn class_new_struct_redefined_initialize() {
         "#
     ));
 }
+
+#[test]
+fn class_new_inline_float_live() {
+    // Float locals live across the inline allocation: the fast path keeps
+    // them in their registers (only the runtime fallback saves them), so
+    // the loop runs well past a page's bump limit to take that fallback
+    // too, both for a plain object and for a struct.
+    let n = if cfg!(feature = "gc-stress") { 300 } else { 9000 };
+    run_test(&format!(
+        r#"
+        class CNFV
+          def initialize(x, y); @x = x; @y = y; end
+          def sum = @x + @y
+        end
+        CNFS = Struct.new(:x, :y) unless defined?(CNFS)
+        def cnf_run(n)
+          a = 1.5
+          b = 0.25
+          acc = 0.0
+          v = nil
+          s = nil
+          i = 0
+          while i < n
+            v = CNFV.new(a * 2.0, b + 1.0)
+            s = CNFS.new(a - b, a * b)
+            acc += a * 3.0 + b
+            a += 0.5
+            b *= 1.0001
+            i += 1
+          end
+          [acc, a, b, v.sum, s.x, s.y]
+        end
+        cnf_run({n})
+        "#
+    ));
+}
+
+#[test]
+fn class_new_inline_constant_receiver_rebound() {
+    // `K.new` on a folded constant needs no runtime identity guard: the
+    // constant's own version guard stands behind it, so rebinding `K` to
+    // another class must still be picked up by the compiled site.
+    run_test_once(&format!(
+        r#"
+        class CNKA; def initialize(v); @v = v; end; def tag = [:a, @v]; end
+        class CNKB; def initialize(v); @v = v; end; def tag = [:b, @v]; end
+        CNK = CNKA
+        def cnk_mk(i) = CNK.new(i)
+        r = []
+        {LOOP}.times {{ |i| r[0] = cnk_mk(i).tag }}
+        Object.send(:remove_const, :CNK)
+        CNK = CNKB
+        {LOOP}.times {{ |i| r[1] = cnk_mk(i).tag }}
+        r << (begin; CNKA.new(1).singleton_class.new; rescue TypeError => e; e.class; end)
+        r
+        "#
+    ));
+}
+
+#[test]
+fn class_new_fresh_object_barrier() {
+    // The constructor's stores into the object it just allocated carry no
+    // write barrier (the object has seen no collection, so it is young).
+    // The objects are then kept from an old-generation container across
+    // many collections: every heap child stored without a barrier must
+    // still be reachable and intact.
+    let n = if cfg!(feature = "gc-stress") { 50 } else { 3000 };
+    run_test_once(&format!(
+        r#"
+        class CNWB
+          def initialize(a, b); @a = a; @b = b; end
+          def to_a = [@a, @b]
+        end
+        CNWS = Struct.new(:a, :b) unless defined?(CNWS)
+        HOLD = []
+        GC.start
+        GC.start
+        GC.start
+        def cnwb_fill(n)
+          i = 0
+          while i < n
+            HOLD << CNWB.new("s#{{i}}", [i, i.to_s])
+            HOLD << CNWS.new("t#{{i}}", {{k: i.to_s}})
+            GC.start if i % 500 == 0
+            i += 1
+          end
+        end
+        cnwb_fill({n})
+        4.times {{ GC.start }}
+        ok = HOLD.each_slice(2).with_index.all? do |(o, s), i|
+          o.to_a == ["s#{{i}}", [i, i.to_s]] && s.a == "t#{{i}}" && s.b == {{k: i.to_s}}
+        end
+        [HOLD.size, ok, HOLD[-2].to_a, HOLD[-1].to_a]
+        "#
+    ));
+}

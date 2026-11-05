@@ -679,7 +679,12 @@ impl<'a> JitContext<'a> {
                         assert_eq!(ivarid, cached_ivarid);
                     }
                     let frozen_checked = self.instr_unfrozen_contains(SlotId::self_());
-                    self.store_ivar(state, ir, src, self_class, ivarid, frozen_checked);
+                    // Still fresh at this instruction (`AsmInfo::self_fresh`):
+                    // no instruction since the caller's allocation could reach
+                    // a safepoint, so `self` has seen no collection and is
+                    // young — a store into it needs no write barrier.
+                    let self_young = frozen_checked && self.current_frame().self_fresh;
+                    self.store_ivar(state, ir, src, self_class, ivarid, frozen_checked, self_young);
                     // The store itself runs no Ruby code (the heap-table
                     // grow path is a Rust call), so the other proofs
                     // survive; the guard (or the carried proof) just

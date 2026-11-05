@@ -3699,6 +3699,10 @@ pub(super) enum AsmInst {
     StoreStructSlotInline {
         src: GP,
         slot_index: u16,
+        /// Emit the GC write barrier. `false` when the stored value is
+        /// proven immediate, or the struct is young by construction (just
+        /// allocated, no safepoint since).
+        wb: bool,
     },
     ///
     /// Store *src* into the heap-allocated slot `slot_index` of the
@@ -3716,6 +3720,8 @@ pub(super) enum AsmInst {
     StoreStructSlotHeap {
         src: GP,
         slot_index: u16,
+        /// As for `StoreStructSlotInline`.
+        wb: bool,
     },
     ///
     /// Guard that the object in *rdi* is not frozen.

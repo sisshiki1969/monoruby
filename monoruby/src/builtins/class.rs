@@ -66,9 +66,15 @@ pub(super) fn gen_class_allocate_inline(
     // the code compiled for `Foo.new` and allocate a `Foo` instead of
     // raising TypeError. Deopt on mismatch: the interpreter's native
     // `allocate` then does the raising.
-    state.load(ir, recv, GP::Rax);
-    let deopt = ir.new_deopt(state);
-    ir.guard_value_identity(self_module.as_val(), deopt);
+    //
+    // A receiver the abstract state already holds as that very class
+    // object (`Foo.allocate` on a folded constant `Foo`, guarded by the
+    // const version) needs no runtime comparison.
+    if state.concrete_value(recv).map(|v| v.id()) != Some(self_module.as_val().id()) {
+        state.load(ir, recv, GP::Rax);
+        let deopt = ir.new_deopt(state);
+        ir.guard_value_identity(self_module.as_val(), deopt);
+    }
 
     // Both stock allocators produce a payload small enough to write with
     // a few stores, so for them the call is replaced by an inline
@@ -99,12 +105,17 @@ pub(super) fn gen_class_allocate_inline(
         None
     };
 
+    // The live fprs are saved only around the runtime fallback inside the
+    // emitted code: the inline fast path touches no float register.
     let using_fpr = state.get_using_fpr(ir);
-    ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| {
-        r#gen.emit_class_allocate(class_id.u32(), alloc_func as *const () as u64, inline_alloc)
+        r#gen.emit_class_allocate(
+            class_id.u32(),
+            alloc_func as *const () as u64,
+            inline_alloc,
+            using_fpr,
+        )
     });
-    ir.fpr_restore(using_fpr);
     // The allocator produces an instance of exactly `class_id`. Record
     // that class in the abstract state so the trailing
     // `o.__builtin_initialize__(...)` resolves to a single, statically

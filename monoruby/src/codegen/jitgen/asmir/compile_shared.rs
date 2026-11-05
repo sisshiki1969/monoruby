@@ -923,7 +923,7 @@ impl Codegen {
             }
             // Inline struct-member store: field store + write barrier, with the
             // stored value also returned in the accumulator (rax).
-            AsmInst::StoreStructSlotInline { src, slot_index } => {
+            AsmInst::StoreStructSlotInline { src, slot_index, wb } => {
                 let disp = slot_index as i32 * 8 + RVALUE_OFFSET_INLINE as i32;
                 self.encode_linst(LInst::Store {
                     src,
@@ -932,10 +932,12 @@ impl Codegen {
                         disp,
                     },
                 });
-                self.encode_linst(LInst::WriteBarrier {
-                    parent: GP::Rdi,
-                    value: src,
-                });
+                if wb {
+                    self.encode_linst(LInst::WriteBarrier {
+                        parent: GP::Rdi,
+                        value: src,
+                    });
+                }
                 self.encode_linst(LInst::Mov {
                     dst: GP::Rax.into(),
                     src: src.into(),
@@ -959,13 +961,15 @@ impl Codegen {
                     },
                 });
             }
-            AsmInst::StoreStructSlotHeap { src, slot_index } => {
+            AsmInst::StoreStructSlotHeap { src, slot_index, wb } => {
                 // Barrier first: it needs rdi = the struct (parent), before the
                 // deref repoints rdi at the heap buffer.
-                self.encode_linst(LInst::WriteBarrier {
-                    parent: GP::Rdi,
-                    value: src,
-                });
+                if wb {
+                    self.encode_linst(LInst::WriteBarrier {
+                        parent: GP::Rdi,
+                        value: src,
+                    });
+                }
                 self.encode_linst(LInst::Load {
                     dst: GP::Rdi.into(),
                     mem: LMem::Field {
