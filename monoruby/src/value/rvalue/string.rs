@@ -3023,6 +3023,38 @@ pub const STRING_CR_OFFSET: usize =
 pub const STRING_TY_OFFSET: usize =
     super::RVALUE_OFFSET_KIND + std::mem::offset_of!(RStringInner, ty);
 
+// The C API layer reads a String cell's length and bytes, and its
+// encoding tag, straight from the cell (`monoruby_capi/include/ruby/ruby.h`,
+// `RB_MONORUBY_STR_*`; `capi.c`, `RB_MONORUBY_STR_ENC_OFFSET`).
+const _: () = {
+    assert!(super::RVALUE_OFFSET_KIND == 16);
+    assert!(std::mem::offset_of!(RStringInner, content) == 0);
+    assert!(STRING_INLINE_CAP == 32);
+    assert!(STRING_SHARED_TAG == isize::MAX as usize);
+    assert!(smallvec::OFFSET_CAPA == 0);
+    assert!(smallvec::OFFSET_INLINE == 8);
+    assert!(smallvec::OFFSET_HEAP_PTR == 8);
+    assert!(smallvec::OFFSET_HEAP_LEN == 16);
+    assert!(std::mem::offset_of!(SharedContent, tag) == 0);
+    assert!(std::mem::offset_of!(SharedContent, ptr) == 8);
+    assert!(std::mem::offset_of!(SharedContent, len) == 16);
+    assert!(STRING_TY_OFFSET == 56);
+    // RB_MONORUBY_ENC_PAYLOAD_TAGS: the variants that carry a payload.
+    assert!(Encoding::Ascii8.tag() == 0);
+    assert!(Encoding::UTF8.tag() == 1);
+    assert!(Encoding::UsAscii.tag() == 2);
+    assert!(Encoding::Utf16Le.tag() == 3);
+    assert!(Encoding::Utf16Be.tag() == 4);
+    assert!(Encoding::Utf32Le.tag() == 5);
+    assert!(Encoding::Utf32Be.tag() == 6);
+    assert!(Encoding::Iso8859(0).tag() == 7);
+    assert!(Encoding::EucJp(0).tag() == 8);
+    assert!(Encoding::Sjis(0).tag() == 9);
+    assert!(Encoding::Iso2022Jp.tag() == 10);
+    assert!(Encoding::Other(0).tag() == 11);
+    assert!(Encoding::NamedByte(0).tag() == 12);
+};
+
 /// Byte offset of the encoding's payload — the variant index of an
 /// `Encoding` variant that carries one, padding for one that does not.
 ///

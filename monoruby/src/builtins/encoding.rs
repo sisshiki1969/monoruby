@@ -4988,7 +4988,13 @@ fn compute_encoding_compatibility(globals: &Globals, a: Value, b: Value) -> Opti
 /// `Encoding`, which CRuby treats as "objects whose encoding is the
 /// same as the contents" (the non-String branches).
 struct EncodedOperand {
+    /// The contents of a non-String operand. A String's are read in
+    /// place through `string`, so its cached code range is used and a
+    /// long String is neither copied nor rescanned on every call
+    /// (StringScanner checks its whole subject against each String
+    /// pattern).
     bytes: Vec<u8>,
+    string: Option<Value>,
     encoding: Encoding,
     is_string: bool,
 }
@@ -4999,14 +5005,19 @@ impl EncodedOperand {
     /// are never "ASCII only" even for `"abc"`.
     fn ascii_only(&self) -> bool {
         self.encoding.is_ascii_compatible()
-            && matches!(
-                RStringInner::from_encoding_scanned(&self.bytes, self.encoding).code_range(),
-                crate::value::CodeRange::SevenBit
-            )
+            && matches!(self.code_range(), crate::value::CodeRange::SevenBit)
     }
 
     fn code_range(&self) -> crate::value::CodeRange {
-        RStringInner::from_encoding_scanned(&self.bytes, self.encoding).code_range()
+        match self.string {
+            Some(v) => v.as_rstring_inner().code_range(),
+            None => RStringInner::from_encoding_scanned(&self.bytes, self.encoding).code_range(),
+        }
+    }
+
+    /// Only asked of a String operand.
+    fn is_empty(&self) -> bool {
+        self.string.unwrap().as_rstring_inner().len() == 0
     }
 }
 
@@ -5023,13 +5034,13 @@ fn rb_enc_compatible(a: &EncodedOperand, b: &EncodedOperand) -> Option<Encoding>
     }
     // An empty *String* second operand yields to the first
     // unconditionally (even when enc1 is dummy / non-ASCII-compat).
-    if b.is_string && b.bytes.is_empty() {
+    if b.is_string && b.is_empty() {
         return Some(enc1);
     }
     // An empty *String* first operand: the second wins, unless the
     // first's encoding is ASCII-compatible and the second is ASCII
     // only (then the first's encoding is kept).
-    if a.is_string && a.bytes.is_empty() {
+    if a.is_string && a.is_empty() {
         return Some(if enc1.is_ascii_compatible() && b.ascii_only() {
             enc1
         } else {
@@ -5080,7 +5091,8 @@ fn rb_enc_compatible(a: &EncodedOperand, b: &EncodedOperand) -> Option<Encoding>
 fn encoded_operand(globals: &Globals, v: Value) -> Option<EncodedOperand> {
     if let Some(s) = v.is_rstring_inner() {
         return Some(EncodedOperand {
-            bytes: s.as_bytes().to_vec(),
+            bytes: Vec::new(),
+            string: Some(v),
             encoding: s.encoding(),
             is_string: true,
         });
@@ -5103,6 +5115,7 @@ fn encoded_operand(globals: &Globals, v: Value) -> Option<EncodedOperand> {
             // the per-(bytes, encoding) interner). Without this, a
             // `force_encoding("euc-jp").to_sym` symbol would report
             // ASCII-8BIT and mis-negotiate against ASCII-only sides.
+            string: None,
             encoding: sym.symbol_encoding().unwrap_or(default_enc),
             is_string: false,
         });
@@ -5116,6 +5129,7 @@ fn encoded_operand(globals: &Globals, v: Value) -> Option<EncodedOperand> {
         let src = re.as_str().as_bytes().to_vec();
         return Some(EncodedOperand {
             bytes: src,
+            string: None,
             encoding: re.declared_encoding(),
             is_string: false,
         });
@@ -5126,6 +5140,7 @@ fn encoded_operand(globals: &Globals, v: Value) -> Option<EncodedOperand> {
         if let Some(enc) = pure_encoding_value(globals, v) {
             return Some(EncodedOperand {
                 bytes: Vec::new(),
+                string: None,
                 encoding: enc,
                 is_string: false,
             });

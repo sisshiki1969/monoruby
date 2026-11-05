@@ -50,9 +50,33 @@ struct ExtMethod {
     argc: c_int,
 }
 
+/// The extension methods, indexed by `FuncId`: the trampoline looks one
+/// up on every call.
+#[derive(Default)]
+struct ExtMethods(Vec<Option<ExtMethod>>);
+
+impl ExtMethods {
+    #[inline]
+    fn get(&self, fid: &FuncId) -> Option<&ExtMethod> {
+        self.0.get(fid.get() as usize).and_then(|m| m.as_ref())
+    }
+
+    fn contains_key(&self, fid: &FuncId) -> bool {
+        self.get(fid).is_some()
+    }
+
+    fn insert(&mut self, fid: FuncId, m: ExtMethod) {
+        let i = fid.get() as usize;
+        if self.0.len() <= i {
+            self.0.resize(i + 1, None);
+        }
+        self.0[i] = Some(m);
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct ExtState {
-    methods: fxhash::FxHashMap<FuncId, ExtMethod>,
+    methods: ExtMethods,
     /// `gc_pin` counts, keyed by value bits; marked as roots.
     pins: fxhash::FxHashMap<u64, u32>,
     /// `gc_register_address` slots, read afresh at every collection.
@@ -388,6 +412,12 @@ unsafe fn args(argv: *const MrValue, argc: c_int) -> Vec<Value> {
         .collect()
 }
 
+/// Arguments the trampoline hands over without a heap buffer: every
+/// fixed arity (`rb_define_method` takes at most 15) and the fixed
+/// slots of a variadic method.
+const VARIADIC_SMALL: usize = 16;
+const _: () = assert!(crate::executor::frame::VARIADIC_CAP <= VARIADIC_SMALL);
+
 /// The `BuiltinFn` of every extension method.
 extern "C" fn ext_method_trampoline(
     vm: &mut Executor,
@@ -402,12 +432,37 @@ extern "C" fn ext_method_trampoline(
         ));
         return None;
     };
-    let mut argv: smallvec::SmallVec<[MrValue; 8]> = smallvec::SmallVec::new();
-    if m.argc == MR_ARGC_VARIADIC {
-        argv.extend(lfp.arg(0).as_array_inner().iter().map(|v| v.id()));
+    // The arguments as one array: a fixed method's from its slots, a
+    // variadic one's from the fixed slots and the overflow Array behind
+    // them (`Lfp::variadic_args`).
+    let mut small = [0 as MrValue; VARIADIC_SMALL];
+    let mut big: Vec<MrValue> = Vec::new();
+    let argv: &[MrValue] = if m.argc == MR_ARGC_VARIADIC {
+        let mut n = 0;
+        while n < crate::executor::frame::VARIADIC_CAP {
+            match lfp.try_arg(n) {
+                Some(v) => small[n] = v.id(),
+                None => break,
+            }
+            n += 1;
+        }
+        match lfp.try_arg(crate::executor::frame::VARIADIC_CAP) {
+            Some(rest) if n == crate::executor::frame::VARIADIC_CAP => {
+                big.extend_from_slice(&small[..n]);
+                big.extend(rest.as_array_inner().iter().map(|v| v.id()));
+                &big
+            }
+            _ => &small[..n],
+        }
     } else {
-        argv.extend((0..m.argc as usize).map(|i| lfp.arg(i).id()));
-    }
+        // `define_ext_method` refuses an arity past 15.
+        let n = m.argc as usize;
+        let buf = &mut small[..n];
+        for (i, slot) in buf.iter_mut().enumerate() {
+            *slot = lfp.arg(i).id();
+        }
+        buf
+    };
     let block = lfp.block().map_or(MR_UNDEF, |bh| bh.get().id());
     let kw_frame = std::mem::take(&mut globals.ext.kw_pending).then(|| lfp.as_ptr() as usize);
     if let Some(frame) = kw_frame {
@@ -1197,7 +1252,7 @@ unsafe extern "C" fn mr_keyword_given(ctx: *mut MrContext) -> c_int {
     // SAFETY: the reverse of `make_ctx`'s `as_ptr`.
     let lfp = unsafe { Lfp::new(frame as *mut u8) };
     let last = globals.ext.methods.get(&lfp.func_id()).and_then(|m| match m.argc {
-        MR_ARGC_VARIADIC => lfp.arg(0).as_array_inner().last().copied(),
+        MR_ARGC_VARIADIC => lfp.variadic_args().last().copied(),
         0 => None,
         argc => Some(lfp.arg(argc as usize - 1)),
     });
@@ -1609,19 +1664,32 @@ fn define_ext_method(
     argc: c_int,
     flags: u32,
 ) {
+    // The trampoline hands a fixed arity over in a stack array.
+    assert!(
+        argc == MR_ARGC_VARIADIC || (0..=15).contains(&argc),
+        "extension method `{name}`: arity {argc} out of range"
+    );
     let t: BuiltinFn = ext_method_trampoline;
     let singleton = flags & MR_METHOD_SINGLETON != 0;
     let private = flags & MR_METHOD_PRIVATE != 0;
+    // A variadic method takes its arguments in fixed slots, with only an
+    // overflow boxed (`Lfp::variadic_args`), so a call allocates no Array.
+    let cap = crate::executor::frame::VARIADIC_CAP;
     let fid = match (argc == MR_ARGC_VARIADIC, singleton, private) {
         (false, false, false) => globals.define_builtin_func(class_id, name, t, argc as usize),
         (false, false, true) => {
             globals.define_private_builtin_func(class_id, name, t, argc as usize)
         }
         (false, true, _) => globals.define_builtin_class_func(class_id, name, t, argc as usize),
-        (true, false, false) => globals.define_builtin_func_rest(class_id, name, t),
-        (true, false, true) => globals.define_private_builtin_func_rest(class_id, name, t),
-        (true, true, _) => globals.define_builtin_class_func_rest(class_id, name, t),
+        (true, false, false) => globals.define_builtin_func_with(class_id, name, t, 0, cap, true),
+        (true, false, true) => {
+            globals.define_private_builtin_func_with(class_id, name, t, 0, cap, true)
+        }
+        (true, true, _) => globals.define_builtin_class_func_with(class_id, name, t, 0, cap, true),
     };
+    if argc == MR_ARGC_VARIADIC {
+        globals.store[fid].set_native_variadic();
+    }
     globals.ext.methods.insert(fid, ExtMethod { f, argc });
 }
 
@@ -2817,8 +2885,8 @@ mod tests {
     #[test]
     fn capi_instances_per_owner() {
         use std::os::unix::ffi::OsStrExt;
-        let Some(path) = find_extension("strscan") else {
-            eprintln!("skipped: strscan.so is not installed");
+        let Some(path) = find_extension("stringio") else {
+            eprintln!("skipped: stringio.so is not installed");
             return;
         };
         let open = || {

@@ -7,6 +7,8 @@ p H::VERSION, H::VERSION.frozen?
 p H.add(2, 40), H.add(2**40, 2**40)
 p H.zero
 p H.count, H.count(1, "a", :b)
+# Past the eight fixed slots a variadic native takes its arguments in.
+p H.count(*1..8), H.count(*1..9), H.count(*1..20), H.count(*1..9, &nil)
 p H.args_ary(1, 2, 3)
 p H.six(1, 2, 3, 4, 5, 6)
 p (begin; H.add(1); rescue ArgumentError => e; e.message; end)
