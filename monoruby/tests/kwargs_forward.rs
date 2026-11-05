@@ -167,3 +167,43 @@ fn new_kwargs_heap_values_gc() {
         "#,
     );
 }
+
+// A `def f(...)` with more than one basic block is no K1 trampoline: its
+// `**kwrest` holds the caller's keywords (handed over elided, or built
+// at the first read), and the forwarding fill that source-routes `f`'s
+// rest window must not take it for empty.
+#[test]
+fn forward_from_multi_block_body_keeps_kwargs() {
+    run_test(
+        r#"
+        class Fw
+          def self.a(...)
+            if $fw_c
+              m(...)
+            end
+          end
+          def self.b(...) = $fw_c ? m(...) : 0
+          def self.c(...)
+            x = $fw_c ? 1 : 2
+            q(...)
+          end
+          def self.d(...)
+            return 0 unless $fw_c
+            o(1, ...)
+          end
+          def self.m(*a, **kw) = [a, kw]
+          def self.q(a, **kw) = [a, kw]
+          def self.o(x, y = 2, *r, z, **kw) = [x, y, r, z, kw]
+        end
+        $fw_c = true
+        r = []
+        i = 0
+        while i < 40
+          r << [Fw.a(1, path: "X"), Fw.b(1, k: i), Fw.c(2, path: "Y"),
+                Fw.d(1, 3, 4, z: 5), Fw.a(1), Fw.c(3)]
+          i += 1
+        end
+        r.uniq
+        "#,
+    );
+}

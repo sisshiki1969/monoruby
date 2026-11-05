@@ -4055,6 +4055,19 @@ impl AbstractState {
             // caller skip `create_array`. The annotation is NOT cleared:
             // the window's and the `g` call's own side exits must still
             // rebuild the array for an interpreter resuming inside `f`.
+            // The routed fill has no `**kwrest` guard, so the forwarded
+            // `**kwrest` must be statically empty or K1-routed: a K1
+            // trampoline's (`deferred_kw_ok` above), or `f`'s own when
+            // `f`'s caller passed no keyword it leaves to it (the frame's
+            // `caller_kw` table). Otherwise — `f` has more than one basic
+            // block, so no K1 deferral, and was called with keywords —
+            // the slot holds them (elided as `VirtualSrc::CallerKw`, or
+            // already built), and the eager fill below forwards them.
+            let kwrest_empty = self.deferred_forward_info().is_some()
+                || kwrest_guard.is_some_and(|k| {
+                    self.caller_kw_table()
+                        .is_some_and(|(local, table)| *local == k && table.is_empty())
+                });
             let deferred_src = match self.virtual_at(args + lead_num) {
                 Some(VirtualSrc::CallerSlots {
                     src,
@@ -4064,6 +4077,7 @@ impl AbstractState {
                     let n = lead_num + len as usize;
                     callee.req_num() <= n && (callee.is_rest() || n <= callee.reqopt_num())
                 } && kwrest_guard.is_some()
+                    && kwrest_empty
                     && deferred_kw_ok =>
                 {
                     ir.set_kw_routed();
@@ -4078,6 +4092,14 @@ impl AbstractState {
                         ir.set_kw_vetoed();
                     }
                     self.materialize_virtual_args(store, ir, callsite);
+                    // The eager fill reads the `**kwrest` slot as a real
+                    // `Hash` (or `nil` for none): an elided one is built
+                    // now, or its keywords would be lost.
+                    if let Some(k) = kwrest_guard
+                        && self.virtual_at(k).is_some()
+                    {
+                        self.materialize_virtual_at(store, ir, k, UsingFpr::new());
+                    }
                     None
                 }
             };
@@ -4186,6 +4208,11 @@ impl AbstractState {
                 ir.set_kw_vetoed();
             }
             self.materialize_virtual_args(store, ir, callsite);
+            for &k in callsite.hash_splat_pos() {
+                if self.virtual_at(k).is_some() {
+                    self.materialize_virtual_at(store, ir, k, UsingFpr::new());
+                }
+            }
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArgumentsForwardedHelper { callid, callee_fid });
