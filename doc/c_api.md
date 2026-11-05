@@ -785,6 +785,8 @@ ivar を CRuby と比較する。`tests/capi/capi_cxx.cpp` は SWIG の形の C+
 
 ### 3.19 strscan / stringio / zlib も CRuby の C 拡張に（段階 11）
 
+> strscan は段階 12（§3.21）で Ruby 実装に戻した。以下は段階 11 時点の記録。
+
 この 3 つは monoruby 専用の Ruby 実装（`stdlib/strscan.rb` /
 `stdlib/stringio.rb` と、`ext/zlib` の上の `stdlib/zlib.rb`）だったが、
 ruby/spec の `library/stringscanner` / `stringio` / `zlib` で計 300 件余り
@@ -865,6 +867,68 @@ ruby/spec の `library/stringscanner` / `stringio` / `zlib` で計 300 件余り
   トランポリンという分散したディスパッチ費用）。詳細は
   `/mnt/project-files/reports/stdlib_cext_2026-11-04.md` を参照。
 
+### 3.21 strscan を Ruby 実装に戻し、層の入口を速く（段階 12）
+
+段階 11 の後、ruby-bench の StringScanner を回すベンチが大きく遅くなった
+（#1800 前 → 後: ruby-json 175 → 1535 ms、tinygql 172 → 353、
+liquid-compile 26 → 38、graphql 18 → 38）。原因は二つ。
+
+1. **二乗のエンコーディング検査**: strscan は String パターンの照合ごとに
+   `rb_enc_check(p->str, pattern)` を呼ぶ。層はこれを
+   `Encoding.compatible?` の funcall で済ませていて、core の
+   `encoded_operand` が subject 全体をコピーして走査し直していた。トークン
+   ごとに入力全体の長さだけ働くので ruby-json は二乗になる。
+2. **呼び出しごとの固定費**: JIT → ネイティブラッパー →
+   `ext_method_trampoline` → `capi_dispatch`（`_setjmp`）→ cfunc で 1 回
+   約 470 Ir。JIT がインライン化する Ruby のメソッドならほぼ 0 で、
+   tinygql は 1 回の実行で StringScanner を約 980 万回呼ぶ。
+
+1 は直し（下記）、2 は層では消せないので **strscan だけ Ruby 実装に戻した**。
+stringio / zlib は C 拡張のまま。
+
+- **strscan**: `stdlib/strscan.rb` は #1800 前の実装（照合はバイト位置の
+  suffix に対する `String#__strscan_match` 1 回、MatchData を作らず `$~`
+  にも触れない）。`monoruby_capi/ext/strscan/` と
+  `stdlib/strscan/strscan.rb` は削除し、`String#__strscan_match` /
+  `RegexpInner::strscan_match(_bytes)` を戻した。ruby/spec
+  `library/stringscanner` の 7F+58E は Ruby 側で直した: `fixed_anchor:`
+  （と `fixed_anchor?`）、`scan_full` / `search_full`、`scan_byte` /
+  `peek_byte`、`scan_integer(base: 10 | 16)`（strscan 3.1.3 以降の
+  `0x` の扱い）、`named_captures`（失敗した照合のパターンも覚える）、
+  `must_C_version`、`StringValue`（`to_str`）での `initialize` /
+  `string=` / `concat`、負の `pos=`、負の `peek` の ArgumentError、
+  CRuby と同じ `inspect`（前後 5 バイトをバイナリとして `dump`）。
+  `fixed_anchor: true` のスキャナだけが特異モジュールから全体照合版の
+  マッチャを受け取るので、ふつうのスキャナは照合ごとのフラグ判定も
+  7 つ目の ivar（inline 枠は 6）も持たない。`initialize(str, options = nil)`
+  は CRuby の `rb_scan_args("11")` の形で、`fixed_anchor:` は Hash の位置
+  引数として届く（キーワードを受けるより安い）。
+- **層の高速化**（stringio / zlib と、ほかの C 拡張にも効く）:
+  - `rb_enc_compatible` / `rb_enc_check` は両方が String なら C で
+    `enc_compatible_latter` を辿る。コードレンジは String のキャッシュを
+    読む。core の `EncodedOperand` も String をコピーせずに持ち、キャッシュ
+    済みのコードレンジを使う（`Encoding.compatible?` 自体も速くなった）。
+  - `RSTRING_PTR` / `RSTRING_LEN` はヘッダの static inline で String セルを
+    直接読む（inline / heap / 共有の 3 形、それ以外は関数に落ちる）。
+    レイアウトは `string.rs` の const assert で固定。`rb_enc_get` は
+    String のエンコーディングタグ（+ ペイロード）をキーにした 64 要素の
+    表を引く。
+  - `rb_reg_prepare_re`: 7 ビットの subject には core の `engine_for` /
+    CRuby の `rb_reg_prepare_enc` と同じく US-ASCII のエンジンを渡す
+    （`RegexpInner::ascii_eligible`）。
+  - `ext.rs`: メソッド表を `Vec<Option<ExtMethod>>` に、トランポリンは
+    引数を 16 要素のスタック配列にコピーし、可変長引数のメソッドは
+    固定 8 スロット + あふれた分の Array（`set_native_variadic`）で受ける
+    （引数ごとの Array 確保をやめた）。
+- **結果**（release、ruby-bench の反復の中央値）: #1800 前 → この段階で
+  ruby-json 172 → 170 ms、tinygql 172 → 172、liquid-compile 25 → 26、
+  graphql 18 → 18。liquid-compile の残り（+0.7% Ir）は
+  `initialize` の省略可能引数で `StringScanner.new` が JIT の inline
+  構築（frameless の `initialize`）から外れる分。C 拡張のままの層の
+  効果は段階 11 比で `StringIO#write` のループ −13% Ir、`gets` −8%。
+  ruby/spec `library/stringscanner` 240 / `stringio` 703 / `zlib` 148 例
+  すべて通過。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -911,6 +975,7 @@ ruby/spec の `library/stringscanner` / `stringio` / `zlib` で計 300 件余り
 | 9 | 層に無い API への参照はロードを通し呼ばれたら NotImplementedError（スタブアーカイブ）、CRuby の `ext/date` を層でビルドして同梱（`require "date"` / `time` / YAML）、1 文字演算子 ID、`RETURN_ENUMERATOR`、`$~` の退避復元 ABI、mkmf `depend` 用の CRuby ヘッダ名 | 済（§3.16〜3.17、`tests/capi/capi_ids.c`、`tests/date.rs`、ruby/spec `library/date` / `datetime` 全通過） |
 | 10 | C で裏打ちされたグローバル変数（`rb_define_*_variable`、ABI `gvar_hook`）、C++ の ANYARGS overload（`ruby/backward/cxxanyargs.hpp`）、`HAVE_RB_DEFINE_ALLOC_FUNC`、alloc 関数が置いた ivar の引き継ぎ、`rb_obj_instance_eval` 系、`strlcpy`、`.so` の判別を dlopen からシンボル表へ。gosu（SWIG の C++ ラッパー）がビルドでき dewasm の DOOM が動く | 済（§3.18、`tests/capi/capi_vars.c`、`tests/capi/capi_cxx.cpp`） |
 | 11 | CRuby の `ext/strscan` / `ext/stringio` / `ext/zlib` を層でビルドして同梱（monoruby 専用実装と `ext/zlib` を削除）、IO / encoding / econv / mutex の API、GVL 再取得の直列化省略、1 プロセス複数インタプリタでの拡張マッピング分離 | 済（§3.19、ruby/spec `library/zlib` / `stringio` / `stringscanner` 全通過） |
+| 12 | strscan を Ruby 実装に戻す（呼び出しごとの層の固定費がトークナイザで支配的）、`rb_enc_check` の二乗コスト除去、`RSTRING_PTR` / `LEN` の inline 化、トランポリンの引数受け渡し | 済（§3.21、ruby-bench の StringScanner 系 4 本が #1800 前の速度に、`library/stringscanner` 全通過） |
 
 ## 6. 既知の制約
 

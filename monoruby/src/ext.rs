@@ -2821,8 +2821,8 @@ mod tests {
     #[test]
     fn capi_instances_per_owner() {
         use std::os::unix::ffi::OsStrExt;
-        let Some(path) = find_extension("strscan") else {
-            eprintln!("skipped: strscan.so is not installed");
+        let Some(path) = find_extension("stringio") else {
+            eprintln!("skipped: stringio.so is not installed");
             return;
         };
         let open = || {

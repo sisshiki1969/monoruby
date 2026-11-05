@@ -1,8 +1,8 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// monoruby's StringScanner is CRuby's ext/strscan/strscan.c built against the
-// C API layer (monoruby_capi/ext/strscan); CRuby's is the same C
+// monoruby's StringScanner is implemented in Ruby (stdlib/strscan.rb) on
+// top of the `String#__strscan_match` zero-copy primitive; CRuby's is a C
 // extension. Comparing outputs exercises the whole scanning surface.
 
 #[test]
@@ -215,6 +215,52 @@ fn strscan_register_state_across_calls() {
         r << s.get_byte << s.matched << s.unscan.pos << s.matched?
         r << (begin; s.unscan; rescue => e; e.class.to_s; end)
         r << s.scan(/\d+/) << s.unscan.pos << s.scan(/(\d)(\d)/) << s.captures << s.eos?
+        r
+        "#,
+    );
+}
+
+/// The strscan 3.1.x surface past scan/check/skip: fixed-anchor mode,
+/// the `_full` forms, the byte readers, `scan_integer`, named captures
+/// (also after a failed attempt), StringValue conversions and CRuby's
+/// `inspect`.
+#[test]
+fn strscan_extended_api() {
+    run_test_once(
+        r#"
+        require "strscan"
+        t = ->(&blk) { begin; blk.call; rescue => e; [e.class, e.message]; end }
+        r = []
+        f = StringScanner.new("ab\ncd\nef", fixed_anchor: true)
+        r << f.fixed_anchor? << StringScanner.new("x").fixed_anchor? << StringScanner.new("x", true).fixed_anchor?
+        r << f.scan(/\Aa/) << f.scan(/\Ab/) << f.scan(/b\n/) << f.scan(/^c/) << f.pre_match << f.post_match
+        r << f.scan_until(/^e/) << f.pre_match << f.matched << f.dup.fixed_anchor?
+        n = StringScanner.new("ab\ncd")
+        n.pos = 3
+        r << n.scan(/\Ac/) << n.scan(/^d/)
+        s = StringScanner.new("abcdef")
+        r << s.scan_full(/ab/, false, true) << s.pos << s.scan_full(/ab/, true, false) << s.pos
+        r << s.search_full(/e/, false, true) << s.search_full(/e/, true, false) << s.pos << s.pre_match
+        r << s.peek_byte << s.scan_byte << s.matched << s.pos << s.scan_byte << s.peek_byte << s.matched?
+        r << t.call { s.pos = -2; s[:x] }
+        i = StringScanner.new("-12x 0x1Fz +0x!")
+        r << i.scan_integer << i.matched << i.pre_match << i.post_match << i.scan_integer << i.matched?
+        i.skip(/x /)
+        r << i.scan_integer(base: 16) << i.matched << i.skip(/z /) << i.scan_integer(base: 16) << i.pos
+        r << t.call { i.scan_integer(base: 8) } << t.call { i[:a] }
+        r << t.call { StringScanner.new("1".encode("UTF-16LE")).scan_integer }
+        d = StringScanner.new("Fri Dec 12")
+        r << d.named_captures << d.exist?(/(?<w>\w+) (?<m>\w+) (?<d>\s)?/) << d.named_captures
+        r << d.match?(/(?<q>zz)/) << d.named_captures << d.match?("Fri") << d.named_captures
+        o = Object.new
+        def o.to_str = "conv"
+        r << StringScanner.new(o).string << (d.string = o).equal?(o) << d.string << (d << o).string
+        r << t.call { d << 1 } << t.call { StringScanner.new(nil) } << t.call { d.peek(-1) }
+        r << t.call { StringScanner.new("x", fixed_anchor: true, bogus: 1) }
+        r << StringScanner.must_C_version
+        u = StringScanner.new("あいうえおかきくけこ")
+        r << u.inspect << (u.getch; u.getch; u.inspect) << (u.terminate; u.inspect)
+        r << StringScanner.new("\xff\xfeabcdefgh".b).tap { |x| x.pos = 7 }.inspect
         r
         "#,
     );
