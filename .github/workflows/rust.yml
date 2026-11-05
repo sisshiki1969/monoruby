@@ -61,6 +61,20 @@ jobs:
         # when its gem is absent, so keep them installed here to make the
         # tests count. The rubocop versions are ruby-bench's Gemfile.lock.
         run: gem install hexapdf chunky_png rubocop:1.79.1 rubocop-performance:1.25.0 rubocop-rails:2.32.0 nokogiri msgpack strptime cool.io zstd-ruby:1.5.7.0 yajl-ruby bcrypt markly strscan json:2.18.0 json:3.1.0 --no-document
+      - name: Free disk space
+        # The coverage build links ~90 instrumented test binaries (over
+        # 10 GB in target/llvm-cov-target), which leaves almost nothing of
+        # the runner's free space; how much the image leaves free moves from
+        # one image release to the next, and on 2026-11-05 two master runs
+        # died with ENOSPC (ld: "Bus error", rustc: "No space left on
+        # device") on a tree whose PR run had passed. Drop the preinstalled
+        # SDKs nothing here uses (.NET, Android, Haskell, CodeQL, Swift);
+        # the hosted tool cache that holds Ruby stays.
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift
+          df -h /
       - name: Test
         run: bin/test
 
