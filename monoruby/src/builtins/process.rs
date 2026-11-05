@@ -27,6 +27,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(klass, "_fork", process_fork, 0);
     globals.define_builtin_module_func_with(klass, "daemon", process_daemon, 0, 2, false);
     globals.define_builtin_module_func(klass, "times", times, 0);
+    // The pseudo-terminal pair behind `PTY.open` / `PTY.spawn`
+    // (stdlib/pty.rb).
+    globals.define_builtin_module_func(klass, "__pty_open", pty_open, 0);
     globals.define_builtin_module_func_with(klass, "clock_gettime", clock_gettime, 1, 2, false);
     globals.define_builtin_module_func_with(klass, "exit!", process_exit_bang, 0, 1, false);
     globals.define_builtin_module_func(klass, "euid", euid, 0);
@@ -3523,5 +3526,55 @@ mod new_api_tests {
             end
             "#,
         );
+    }
+}
+
+/// `Process.__pty_open` -> [master_fd, slave_fd, slave_name]
+///
+/// A new pseudo-terminal, as CRuby's ext/pty `getDevice` opens one:
+/// `posix_openpt` + `grantpt` + `unlockpt`, then the slave by name. Both
+/// descriptors are close-on-exec and neither becomes this process's
+/// controlling terminal. stdlib/pty.rb wraps them in IO objects.
+#[monoruby_builtin]
+fn pty_open(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    let fail = |globals: &Globals, what: &str| {
+        let err = std::io::Error::last_os_error();
+        MonorubyErr::errno_with_msg(&globals.store, &err, what)
+    };
+    // SAFETY: plain libc calls on descriptors this function owns; the
+    // name `ptsname` returns is copied out before anything else runs
+    // (the GVL is held, so no other Ruby thread calls it meanwhile).
+    unsafe {
+        let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        if master < 0 {
+            return Err(fail(globals, "posix_openpt()"));
+        }
+        libc::fcntl(master, libc::F_SETFD, libc::FD_CLOEXEC);
+        if libc::grantpt(master) != 0 || libc::unlockpt(master) != 0 {
+            let err = fail(globals, "grantpt()");
+            libc::close(master);
+            return Err(err);
+        }
+        let name = libc::ptsname(master);
+        if name.is_null() {
+            let err = fail(globals, "ptsname()");
+            libc::close(master);
+            return Err(err);
+        }
+        let name = std::ffi::CStr::from_ptr(name).to_owned();
+        let slave = libc::open(
+            name.as_ptr(),
+            libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+        );
+        if slave < 0 {
+            let err = fail(globals, "open()");
+            libc::close(master);
+            return Err(err);
+        }
+        Ok(Value::array_from_vec(vec![
+            Value::integer(master as i64),
+            Value::integer(slave as i64),
+            Value::string_from_str(&name.to_string_lossy()),
+        ]))
     }
 }

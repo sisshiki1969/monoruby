@@ -9,7 +9,7 @@ class String
   # `rb_str_to_s`: a String is its own `to_s`, but a *subclass*
   # instance converts to a plain String.
   def to_s
-    instance_of?(String) ? self : self[0, length]
+    instance_of?(String) ? self : String.new(self)
   end
   alias to_str to_s
 

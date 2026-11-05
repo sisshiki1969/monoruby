@@ -100,6 +100,9 @@ int rb_enc_str_asciionly_p(VALUE str);
 #define rb_enc_str_asciicompat_p(str) rb_enc_asciicompat(rb_enc_get(str))
 VALUE rb_enc_sprintf(rb_encoding *enc, const char *fmt, ...);
 ID rb_intern3(const char *name, long len, rb_encoding *enc);
+ID rb_check_id_cstr(const char *ptr, long len, rb_encoding *enc);
+VALUE rb_check_symbol_cstr(const char *ptr, long len, rb_encoding *enc);
+VALUE rb_obj_encoding(VALUE obj);
 VALUE rb_enc_interned_str(const char *ptr, long len, rb_encoding *enc);
 VALUE rb_enc_interned_str_cstr(const char *ptr, rb_encoding *enc);
 /* The common encoding of two strings (the first's when both are ASCII

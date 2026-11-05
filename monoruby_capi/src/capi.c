@@ -43,6 +43,7 @@
 #include "ruby/io.h"
 #include "ruby/thread.h"
 #include "ruby/util.h"
+#include "ruby/vm.h"
 #include "monoruby_ext.h"
 
 #include <errno.h>
@@ -1898,6 +1899,33 @@ rb_check_id(volatile VALUE *namep)
     if (RB_TYPE_P(name, T_STRING))
         return rb_intern_str(name);
     return 0;
+}
+
+VALUE
+rb_check_symbol(volatile VALUE *namep)
+{
+    ID id = rb_check_id(namep);
+    return id ? ID2SYM(id) : Qnil;
+}
+
+/* The ID of a name that is already a symbol, 0 if it is not one yet: the
+   name is not interned (CRuby's rb_check_id_cstr). Without the ABI entry
+   every name counts as new. */
+ID
+rb_check_id_cstr(const char *ptr, long len, rb_encoding *enc)
+{
+    (void)enc;
+    if (!HAVE_API(intern_check))
+        return 0;
+    MrSym s = api->intern_check(ctx(), (const uint8_t *)ptr, (size_t)len);
+    return s == MR_NO_SYM ? 0 : (ID)s;
+}
+
+VALUE
+rb_check_symbol_cstr(const char *ptr, long len, rb_encoding *enc)
+{
+    ID id = rb_check_id_cstr(ptr, len, enc);
+    return id ? ID2SYM(id) : Qnil;
 }
 
 /* ---------------------------------------------------------------------
@@ -4570,6 +4598,12 @@ str_enc_fast(VALUE str)
     return enc;
 }
 
+VALUE
+rb_obj_encoding(VALUE obj)
+{
+    return rb_funcall(obj, rb_intern("encoding"), 0);
+}
+
 rb_encoding *
 rb_enc_get(VALUE obj)
 {
@@ -5076,10 +5110,43 @@ data_class(VALUE klass)
     return klass;
 }
 
+/*
+ * The instance whose payload an alloc function is making (data_of): its
+ * first Data object of the instance's class is the instance itself, not a
+ * fresh one the payload is then moved off. An alloc function that keeps a
+ * reference to its object in the payload (liquid-c's `body->self = obj`,
+ * which later reads the instance's frozen flag through it) must see the
+ * object `allocate` returns. Keyed on the capi frame the alloc function
+ * runs in, so a stale entry (the alloc function raised) is not taken by
+ * another call.
+ */
+static struct {
+    VALUE obj, klass;
+    struct capi_frame *frame;
+} pending_alloc;
+
 static VALUE
 data_wrap(VALUE klass, void *datap, RUBY_DATA_FUNC dmark, RUBY_DATA_FUNC dfree, const rb_data_type_t *type)
 {
     klass = data_class(klass);
+    if (pending_alloc.obj && klass == pending_alloc.klass && pending_alloc.frame == frame()) {
+        VALUE obj = pending_alloc.obj;
+        pending_alloc.obj = 0;
+        struct capi_data *d = malloc(sizeof(*d));
+        if (!d)
+            rb_memerror();
+        d->data = datap;
+        d->dmark = dmark;
+        d->dfree = dfree;
+        d->type = type;
+        d->basic.flags = 0;
+        d->basic.klass = 0;
+        if (api->native_set(ctx(), M(obj), d, &data_ops) != 0) {
+            free(d);
+            capi_unwind();
+        }
+        return obj;
+    }
     struct capi_data *d = malloc(sizeof(*d));
     if (!d)
         rb_memerror();
@@ -5136,8 +5203,14 @@ data_of(VALUE obj, int raise)
         VALUE klass = rb_obj_class(obj);
         rb_alloc_func_t *alloc = rb_get_alloc_func(klass);
         if (alloc) {
+            pending_alloc.obj = obj;
+            pending_alloc.klass = klass;
+            pending_alloc.frame = frame();
             VALUE tmp = alloc(klass);
+            pending_alloc.obj = 0;
             d = api->native_data(ctx(), M(tmp), &data_ops);
+            if (d && tmp == obj)
+                return d;
             if (!d)
                 rb_raise(rb_eTypeError, "allocator of %s did not return a Data object", rb_class2name(klass));
             api->native_take(ctx(), M(tmp));
@@ -8010,7 +8083,9 @@ ruby_vsnprintf(char *str, size_t n, const char *fmt, va_list ap)
     if (!subst_simple_format(fmt))
         return vsnprintf(str, n, fmt, ap);
     size_t len = 0;
-#define SUBST_PUT(ch) do { if (len + 1 < n) str[len] = (ch); len++; } while (0)
+    /* `ch` is evaluated exactly once, whether or not it fits: the
+       arguments below have side effects (va_arg, --nd). */
+#define SUBST_PUT(ch) do { char subst_c_ = (ch); if (len + 1 < n) str[len] = subst_c_; len++; } while (0)
     for (const char *p = fmt; *p; p++) {
         if (*p != '%') {
             SUBST_PUT(*p);
@@ -8980,4 +9055,31 @@ rb_thread_call_with_gvl(void *(*func)(void *), void *data1)
     if (capi_in_nogvl || !capi_cur)
         return NULL;
     return func(data1);
+}
+
+/* ---------------------------------------------------------------------
+ * ruby/vm.h
+ * --------------------------------------------------------------------- */
+
+/* CRuby runs these when the VM is destructed, after the at_exit handlers;
+   here, when the process exits (libc atexit, which runs after monoruby's
+   exit sequence), last registered first. They get no VM: a NULL handle. */
+static void (*vm_at_exit_fns[32])(ruby_vm_t *);
+static int vm_at_exit_len;
+
+static void
+run_vm_at_exit(void)
+{
+    while (vm_at_exit_len > 0)
+        vm_at_exit_fns[--vm_at_exit_len](NULL);
+}
+
+void
+ruby_vm_at_exit(void (*func)(ruby_vm_t *))
+{
+    if (vm_at_exit_len == (int)(sizeof(vm_at_exit_fns) / sizeof(vm_at_exit_fns[0])))
+        return;
+    if (vm_at_exit_len == 0)
+        atexit(run_vm_at_exit);
+    vm_at_exit_fns[vm_at_exit_len++] = func;
 }

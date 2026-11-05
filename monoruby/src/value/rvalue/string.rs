@@ -3836,16 +3836,25 @@ impl RStringInner {
         self.c_str_ptr_read()
     }
 
-    /// [`Self::c_str_ptr`] for a reader (`RSTRING_PTR`): the same
-    /// NUL-terminated owned buffer, but the cached code range stands,
-    /// since the bytes do not change. A C extension that writes through
-    /// the pointer calls `rb_str_modify` (`c_str_ptr`) first, as CRuby
-    /// requires — clearing the code range on every read would rescan
-    /// the whole string at the next regexp match (strscan).
-    /// The capacity of the owned buffer (`rb_str_capacity`); a shared
-    /// view is detached first.
-    pub(crate) fn owned_capacity(&mut self) -> usize {
-        self.owned_mut().capacity()
+    /// `rb_str_capacity` for a C extension: the bytes `c_str_ptr_read`'s
+    /// buffer holds before the NUL, never less than CRuby's embedded
+    /// capacity (23 on 64-bit). CRuby keeps every short string embedded
+    /// with that much room, and extensions rely on it being positive:
+    /// liquid-c grows its output by doubling `rb_str_capacity` until it
+    /// fits, which never ends from 0. A long shared view answers its
+    /// length, as CRuby's shared strings do; a short one is detached.
+    pub(crate) fn c_capacity(&mut self) -> usize {
+        const EMBED_CAPA: usize = 23;
+        if self.content.is_shared() && self.content.as_slice().len() > EMBED_CAPA {
+            return self.content.as_slice().len();
+        }
+        let buf = self.owned_mut();
+        let need = buf.len().max(EMBED_CAPA) + 1;
+        if buf.capacity() < need {
+            buf.reserve(need - buf.len());
+        }
+        self.c_str_ptr_read();
+        self.owned_mut().capacity() - 1
     }
 
     /// `rb_str_modify`: the bytes become this string's own and the code
@@ -3856,6 +3865,12 @@ impl RStringInner {
         self.owned_mut();
     }
 
+    /// [`Self::c_str_ptr`] for a reader (`RSTRING_PTR`): the same
+    /// NUL-terminated owned buffer, but the cached code range stands,
+    /// since the bytes do not change. A C extension that writes through
+    /// the pointer calls `rb_str_modify` (`c_str_ptr`) first, as CRuby
+    /// requires — clearing the code range on every read would rescan
+    /// the whole string at the next regexp match (strscan).
     pub(crate) fn c_str_ptr_read(&mut self) -> (*mut u8, usize) {
         let buf = self.owned_mut();
         buf.reserve(1);

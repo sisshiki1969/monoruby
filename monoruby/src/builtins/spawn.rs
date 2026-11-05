@@ -48,6 +48,11 @@ pub(crate) struct ExecSpec {
     pgroup: Option<i32>,
     redirects: Vec<Redirect>,
     close_others: bool,
+    /// `__pty_session: true` (stdlib/pty.rb's `PTY.spawn`, not a CRuby
+    /// option): the child starts a new session and takes the terminal on
+    /// its stdin, which the redirects have made a pty's slave, as its
+    /// controlling terminal.
+    pty_session: bool,
 }
 
 impl ExecSpec {
@@ -139,6 +144,7 @@ pub(crate) fn parse_spawn_args(
     let mut pgroup: Option<i32> = None;
     let mut unsetenv_others = false;
     let mut close_others = false;
+    let mut pty_session = false;
     let mut redirects: Vec<Redirect> = vec![];
     if items.len() > 1 || (have_env && items.len() == 1) {
         if let Some(last) = items.last().copied()
@@ -196,6 +202,7 @@ pub(crate) fn parse_spawn_args(
                                 close_others = flag;
                             }
                         }
+                        "__pty_session" => pty_session = v.as_bool(),
                         "in" => redirects.push(parse_redirect(vm, globals, vec![0], v)?),
                         "out" => redirects.push(parse_redirect(vm, globals, vec![1], v)?),
                         "err" => redirects.push(parse_redirect(vm, globals, vec![2], v)?),
@@ -342,6 +349,7 @@ pub(crate) fn parse_spawn_args(
         pgroup,
         redirects,
         close_others,
+        pty_session,
     })
 }
 
@@ -532,6 +540,12 @@ unsafe fn child_exec(spec: &ExecSpec) -> (u8, i32) {
                         }
                     }
                 }
+            }
+        }
+        if spec.pty_session {
+            libc::setsid();
+            if libc::ioctl(0, libc::TIOCSCTTY as _, 0) != 0 {
+                return (STAGE_EXEC, errno());
             }
         }
         if spec.close_others {

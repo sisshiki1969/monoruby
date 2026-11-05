@@ -1912,6 +1912,18 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// The `InlineCacheEntry::super_of` of a call site named *name*: for a
+    /// `super` site (`None`), the method body `jit_check_super` resolves
+    /// against.
+    ///
+    pub(super) fn super_of(&self, name: Option<IdentId>) -> Option<FuncId> {
+        match name {
+            Some(_) => None,
+            None => Some(self.store[self.iseq().mother().0].func_id()),
+        }
+    }
+
+    ///
     /// Check whether `super` of class *class_id* exists in compile time.
     ///
     fn jit_check_super(&mut self, recv_class: CachedClass) -> Option<FuncId> {

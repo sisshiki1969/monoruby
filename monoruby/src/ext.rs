@@ -891,6 +891,7 @@ pub(crate) static MR_API: MrApi = MrApi {
     io_update: mr_io_update,
     str_modify: mr_str_modify,
     obj_class: mr_obj_class,
+    intern_check: mr_intern_check,
 };
 
 // ---- regexp (ruby/re.h) ----------------------------------------------
@@ -2167,6 +2168,15 @@ unsafe extern "C" fn mr_intern(_: *mut MrContext, ptr: *const u8, len: usize) ->
     }
 }
 
+unsafe extern "C" fn mr_intern_check(_: *mut MrContext, ptr: *const u8, len: usize) -> MrSym {
+    // SAFETY: the table's contract — `len` bytes readable at `ptr`.
+    let bytes = unsafe { slice(ptr, len) };
+    match std::str::from_utf8(bytes) {
+        Ok(s) => IdentId::try_get_id(s).map_or(MR_NO_SYM, |id| id.get()),
+        Err(_) => MR_NO_SYM,
+    }
+}
+
 unsafe extern "C" fn mr_funcall_sym(
     ctx: *mut MrContext,
     recv: MrValue,
@@ -2634,13 +2644,7 @@ unsafe extern "C" fn mr_str_capacity(ctx: *mut MrContext, v: MrValue) -> i64 {
     let Some(mut s) = string_arg(vm, globals, v) else {
         return -1;
     };
-    let inner = s.as_rstring_inner_mut();
-    if inner.is_shared() {
-        return inner.len() as i64;
-    }
-    // The buffer `str_rptr` hands out (it makes room for the NUL first).
-    inner.c_str_ptr_read();
-    inner.owned_capacity().saturating_sub(1) as i64
+    s.as_rstring_inner_mut().c_capacity() as i64
 }
 
 unsafe extern "C" fn mr_thread_current(ctx: *mut MrContext) -> MrValue {

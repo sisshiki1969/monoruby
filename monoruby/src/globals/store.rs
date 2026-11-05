@@ -609,7 +609,12 @@ impl Store {
             // so a block's `super` is filed under every name.
             let name = match entry.name {
                 Some(name) => Some(name),
-                None => self.jit_unit_method_name(unit.0),
+                // The body the site's `super` was resolved for: the root's
+                // name is a specialized callee's only by accident.
+                None => match entry.super_of.and_then(|fid| self[fid].name()) {
+                    Some(name) => Some(name),
+                    None => self.jit_unit_method_name(unit.0),
+                },
             };
             match name {
                 Some(name) => {

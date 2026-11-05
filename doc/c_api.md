@@ -1044,6 +1044,50 @@ CRuby 4.0.6 の `ext/openssl` をそのまま層でビルドし、システム�
 - **結果**: ruby/spec `library/openssl` 173 例 / `library/net-ftp` 461 例とも
   0F 0E。
 
+### 3.24 ホストの CRuby が入れた gem の C 拡張を monoruby 向けに建て直す（段階 16）
+
+ruby-bench のハーネスはホストの CRuby で `bundle install` し、monoruby は
+そのバンドルを `Bundler.setup` で使う。gem の `.so` は CRuby のヘッダで
+ビルドされているので読めない（§2）。graphql-native（graphql-c_parser）と
+liquid-c はこれで止まっていた。
+
+- **再ビルド**: `require` が CRuby 向けの `.so` に当たると
+  （`RequireLoad::Foreign`、判別はこれまでどおりシンボル表）、
+  `Executor::build_host_extension` が `stdlib/monoruby_hooks/host_extension.rb`
+  の `Gem::MonorubyHostExtension.build` を呼ぶ。`.so` を含む gem を
+  `Gem.loaded_specs` から（なければ全 spec から）探し、拡張がすべて
+  `extconf.rb` のときだけ、gem のツリーを一時ディレクトリに写して
+  （ホストのツリーは読むだけ）ホストのビルド残り（`*.o` / `*.so`）を消し、
+  `Gem::Ext::ExtConfBuilder` で層に対してビルドする。置き場所は monoruby の
+  gem home の `host_extensions/<platform>/<gem>-<version>/`（gem の
+  `extension_dir` と同じ並び）で、`$LOAD_PATH` の先頭に足すので、同じ gem の
+  ほかの拡張ファイルはそのまま見つかる。`gem.build_complete` に gem のパスと
+  `libmonoruby_capi.a` の大きさ・mtime を書き、層が変われば建て直す。
+  並行実行は flock で 1 回に絞る。失敗はログ（`<gem>.gem_make.out`）を残して
+  1 度だけ警告し、元の LoadError を返す。extconf と make は
+  `Bundler.with_unbundled_env` の中で走る（子の monoruby が
+  `-rbundler/setup` でベンチのバンドルを立ち上げないように）。
+  `tests/mkmf.rs` の `host_installed_gem_extension_is_rebuilt`。
+- **alloc 関数が self を覚える**（liquid-c の `body->self`）: 遅延 alloc
+  （§3.7）は一時オブジェクトに alloc 関数を走らせて記録を本物に移すので、
+  記録の中に保存された `self` が一時オブジェクトを指していた。alloc 関数の
+  実行中は「いま埋めている本物」（`pending_alloc`）を覚え、同じクラスの
+  `Data_Wrap_Struct` / `TypedData_Wrap_Struct` はその本物を返す。
+- **`rb_str_capacity`**: 空の String や共有バッファの String に 0 を返して
+  いたので、「容量が足りなければ倍にする」ループ（liquid-c の
+  `c_buffer`）が止まらなかった。CRuby の埋め込み容量 23 を下限に、共有なら
+  長さを答える（`RStringInner::c_capacity`）。
+- **`ruby_vsnprintf` の無限ループ**: `SUBST_PUT(ch)` がバッファに空きがある
+  ときしか引数を評価せず、`digits[--nd]` の副作用が飛んで `%lld` の桁が
+  尽きなかった（`snprintf(NULL, 0, ...)` で必ず起きる）。引数は 1 度だけ
+  評価する。
+- **足した API**: `rb_check_symbol` / `rb_check_symbol_cstr` /
+  `rb_check_id_cstr`（ABI `intern_check`: 既に intern されていれば返し、
+  なければ intern しない）、`rb_obj_encoding`、`rb_str_dup_frozen`、
+  `rb_utf8_str_new_literal`、`RB_NUM2LL` 系マクロ、`<alloca.h>`、
+  `ruby/vm.h` の `ruby_vm_at_exit`（プロセス終了時に逆順で呼ぶ）。
+  `tests/capi/capi_gaps.c`。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -1076,6 +1120,7 @@ CRuby 4.0.6 の `ext/openssl` をそのまま層でビルドし、システム�
 | `io_state` / `io_update` | 層の `struct rb_io` と IO オブジェクトの同期（§3.22） |
 | `str_modify` | `rb_str_modify`: 長さより後ろのバイトに触れない（§3.22） |
 | `obj_class` | `rb_obj_class`: 特異クラスを飛ばした本当のクラス（§3.23） |
+| `intern_check` | `rb_check_symbol_cstr` / `rb_check_id_cstr`: intern 済みの名前だけを返す（§3.24） |
 
 あわせて `ary_push` / `hash_set` が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。
@@ -1099,6 +1144,7 @@ CRuby 4.0.6 の `ext/openssl` をそのまま層でビルドし、システム�
 | 13 | strscan を Ruby 実装に戻す（呼び出しごとの層の固定費がトークナイザで支配的）、`rb_enc_check` の二乗コスト除去、`RSTRING_PTR` / `LEN` の inline 化、トランポリンの引数受け渡し | 済（§3.21、ruby-bench の StringScanner 系 4 本が #1800 前の速度に、`library/stringscanner` 全通過） |
 | 14 | CRuby の `ext/socket` を層でビルドして同梱（`src/builtins/socket.rs` を削除）、`rb_io_t`、待ちと fd 集合の API、`IO#timeout` | 済（§3.22、ruby/spec `library/socket` 1463 例で 1F） |
 | 15 | CRuby の `ext/openssl` を層でビルドしシステムの OpenSSL にリンク（`ext/openssl` crate と Ruby 実装を削除）、`rb_attr`、`ruby_verbose`、`rb_obj_class` の ABI | 済（§3.23、ruby/spec `library/openssl` / `net-ftp` 全通過） |
+| 16 | ホストの CRuby が入れた gem の C 拡張を層で建て直して読む、alloc 関数の self、`rb_str_capacity` の下限、`ruby_vsnprintf` の無限ループ、`rb_check_symbol` 系 | 済（§3.24、ruby-bench の graphql-native / liquid-c が完走、liquid-c の出力は CRuby と一致） |
 
 ## 6. 既知の制約
 

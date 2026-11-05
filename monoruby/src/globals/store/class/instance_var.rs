@@ -76,6 +76,40 @@ impl Store {
         )))
     }
 
+    /// Re-key the instance variables of `copy` — a shallow copy whose
+    /// slots were laid out by `from`'s table — for the class it has now.
+    /// `dup` of an object with a singleton class gives the copy the real
+    /// class, whose table lacks the names set after the singleton class
+    /// was made (their slots sit past the ones the singleton took over),
+    /// and may have given those slots to other names since.
+    pub(crate) fn relayout_ivars(&mut self, mut copy: Value, from: ClassId) {
+        let to = copy.class();
+        if to == from {
+            return;
+        }
+        let Some(rval) = copy.try_rvalue_mut() else {
+            return;
+        };
+        let moved: Vec<(IdentId, IvarId, Value)> = self.classes[from]
+            .ivar_names
+            .iter()
+            .filter_map(|(name, id)| rval.get_ivar_by_ivarid(*id).map(|v| (*name, *id, v)))
+            .collect();
+        if moved
+            .iter()
+            .all(|(name, id, _)| self.classes[to].get_ivarid(*name) == Some(*id))
+        {
+            return;
+        }
+        for (_, id, _) in &moved {
+            rval.remove_ivar_by_ivarid(*id);
+        }
+        for (name, _, v) in moved {
+            let id = self.get_ivar_id(to, name);
+            rval.set_ivar_by_ivarid(id, v);
+        }
+    }
+
     pub(crate) fn get_ivar_id(&mut self, class_id: ClassId, ivar_name: IdentId) -> IvarId {
         let table = &mut self.classes[class_id].ivar_names;
         match table.get(&ivar_name) {

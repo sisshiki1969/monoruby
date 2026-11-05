@@ -1351,6 +1351,25 @@ impl Executor {
                     }
                     return Ok(true);
                 }
+                crate::globals::RequireLoad::Foreign(path) => {
+                    // A CRuby build of a host gem's extension: rebuild it
+                    // against the C API layer and load that instead.
+                    let Some(built) = self.build_host_extension(globals, &path) else {
+                        return Err(crate::globals::foreign_extension_error(&path));
+                    };
+                    if globals.is_feature_loaded(&built) {
+                        return Ok(false);
+                    }
+                    if !crate::ext::is_capi_extension(&built) {
+                        return Err(crate::globals::foreign_extension_error(&built));
+                    }
+                    globals.add_loaded_feature(&built);
+                    if let Err(err) = crate::ext::load_extension(self, globals, &built) {
+                        globals.remove_loaded_feature(&built);
+                        return Err(err);
+                    }
+                    return Ok(true);
+                }
                 crate::globals::RequireLoad::AlreadyLoaded(path) => {
                     // The feature is registered — but its body may still
                     // be running on another thread (features register
@@ -1616,6 +1635,8 @@ impl Executor {
                 "/bundler/source/git.rb",
                 "monoruby_hooks/bundler_source_git.rb",
             ),
+            // `Bundler.setup` ends `require`'s installed-gem fallback.
+            ("/bundler/runtime.rb", "monoruby_hooks/bundler_runtime.rb"),
         ];
         for (suffix, feature) in LOAD_HOOKS {
             if path.to_str().is_some_and(|p| p.ends_with(suffix)) {
@@ -1624,6 +1645,66 @@ impl Executor {
             }
         }
         Ok(())
+    }
+
+    /// The library monoruby built from the sources of the host gem
+    /// whose CRuby-built extension is at `path`
+    /// (`stub/monoruby_hooks/host_extension.rb`, which builds it once per
+    /// gem version into monoruby's gem home and puts that directory on
+    /// `$LOAD_PATH`). None when `path` belongs to no installed gem with
+    /// an `extconf.rb`, when the build failed (the hook warns), under
+    /// `--disable-gems`, or while startup.rb runs. Any error the hook
+    /// raises is swallowed: the caller reports the original `LoadError`.
+    fn build_host_extension(
+        &mut self,
+        globals: &mut Globals,
+        path: &std::path::Path,
+    ) -> Option<std::path::PathBuf> {
+        if globals.no_gems || !CODEGEN.with(|codegen| codegen.borrow().startup_flag) {
+            return None;
+        }
+        let hook = crate::globals::install_root()
+            .join("stub")
+            .join("monoruby_hooks/host_extension.rb");
+        if !hook.exists() {
+            return None;
+        }
+        let temp_base = self.temp_len();
+        let built = (|| {
+            self.require(globals, &hook, false).ok()?;
+            let gem = self
+                .get_constant(globals, OBJECT_CLASS, IdentId::get_id("Gem"))
+                .ok()
+                .flatten()?;
+            let module = self
+                .get_constant(
+                    globals,
+                    gem.as_class_id(),
+                    IdentId::get_id("MonorubyHostExtension"),
+                )
+                .ok()
+                .flatten()?;
+            let arg = Value::string_from_str(&path.to_string_lossy());
+            self.temp_push(arg);
+            let res = self
+                .invoke_method_if_exists(
+                    globals,
+                    IdentId::get_id("build"),
+                    module,
+                    &[arg],
+                    None,
+                    None,
+                )
+                .ok()
+                .flatten()?;
+            let s = res.is_str()?.to_string();
+            Some(crate::globals::lexically_normalize(std::path::Path::new(&s)))
+        })();
+        self.temp_clear(temp_base);
+        if built.is_none() && self.has_error() {
+            let _ = self.take_error();
+        }
+        built
     }
 
     /// `Gem.try_activate(feature)` before a host gem's file

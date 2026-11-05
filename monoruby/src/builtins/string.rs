@@ -1207,6 +1207,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         // Enable zero-copy $~ haystack snapshots (CoW), which also
         // propagate the subject's encoding to $&/$`/$'/$1..$N.
         vm.set_match_haystack(self_val);
+        vm.set_match_regex(other);
         let res = match regex.find_one(vm, given)? {
             Some(r) => {
                 let char_idx = given
@@ -5846,7 +5847,7 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 self_,
                 subject_val,
                 block,
-                arg0.is_regex().is_some(),
+                arg0,
             )?;
             Ok(lfp.self_val())
         }
@@ -5860,8 +5861,9 @@ fn scan_with_block(
     recv: Value,
     subject: Value,
     block: BlockHandler,
-    regexp_pattern: bool,
+    pattern: Value,
 ) -> Result<()> {
+    let regexp_pattern = pattern.is_regex().is_some();
     let data = vm.get_block_data(globals, block)?;
     vm.clear_capture_special_variables();
     // Root the snapshot across block invocations (which may GC) so the
@@ -5869,7 +5871,14 @@ fn scan_with_block(
     // block drops every reference to the receiver.
     let temp_len = vm.temp_len();
     vm.temp_push(subject);
-    let res = scan_block_loop(vm, globals, re, recv, subject, &data, regexp_pattern);
+    // The Regexp every saved `$~` names (`$~.names`, `$~[:name]` in the
+    // block), rooted alongside.
+    let re_obj = match pattern.is_regex() {
+        Some(_) => pattern,
+        None => Value::regexp(re.clone()),
+    };
+    vm.temp_push(re_obj);
+    let res = scan_block_loop(vm, globals, re, recv, subject, &data, regexp_pattern, re_obj);
     vm.temp_clear(temp_len);
     res
 }
@@ -5882,6 +5891,7 @@ fn scan_block_loop(
     subject_val: Value,
     data: &ProcData,
     regexp_pattern: bool,
+    re_obj: Value,
 ) -> Result<()> {
     // `subject_val` is frozen (stable buffer) and temp-rooted by the
     // caller, so this borrow stays valid across `invoke_block`. Matching
@@ -5915,6 +5925,7 @@ fn scan_block_loop(
         }
         let spans = spans_of(&region);
         let (start, end) = spans[0].unwrap();
+        vm.set_match_regex(re_obj);
         save_spans(vm, &subject, &spans, subject_val);
         match spans.len() {
             0 => unreachable!(),
@@ -5948,7 +5959,10 @@ fn scan_block_loop(
         };
     }
     match last {
-        Some(spans) => save_spans(vm, &subject, &spans, subject_val),
+        Some(spans) => {
+            vm.set_match_regex(re_obj);
+            save_spans(vm, &subject, &spans, subject_val)
+        }
         None => vm.clear_capture_special_variables(),
     }
     Ok(())

@@ -3653,6 +3653,7 @@ impl<'a> JitContext<'a> {
             name: Some(name),
             refinements: self.refinements(),
             func_id,
+            super_of: None,
         };
         let mut extra = self.inline_cache_extra.borrow_mut();
         if !extra.contains(&entry) {

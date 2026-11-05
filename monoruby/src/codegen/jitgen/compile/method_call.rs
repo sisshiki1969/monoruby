@@ -685,6 +685,7 @@ impl<'a> JitContext<'a> {
             name: callsite.name,
             refinements: self.refinements(),
             func_id: None,
+            super_of: self.super_of(callsite.name),
         });
 
         self.guard_class_version(state, ir, true);
@@ -736,6 +737,7 @@ impl<'a> JitContext<'a> {
             name: callsite.name,
             refinements: self.refinements(),
             func_id: Some(func_id),
+            super_of: self.super_of(callsite.name),
         });
 
         // `recv.send(:foo, ...)` with a literal method name: resolve the
@@ -970,6 +972,7 @@ impl<'a> JitContext<'a> {
                             name: callsite.name,
                             refinements: self.refinements(),
                             func_id: Some(func_id),
+                            super_of: self.super_of(callsite.name),
                         });
                     }
                 }
@@ -2285,6 +2288,7 @@ impl<'a> JitContext<'a> {
             name: Some(IdentId::INITIALIZE),
             refinements: self.refinements(),
             func_id: Some(init_fid),
+            super_of: None,
         });
 
         // The slot stores read the arguments as values: an argument the

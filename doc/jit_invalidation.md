@@ -124,11 +124,20 @@ Two details that are easy to get wrong:
 - **The refinement set is part of the question.** Re-asking the *unrefined*
   question after a `using` moved the version would confirm an answer the
   code is no longer allowed to give (`refinements.md` §3.4).
-- **`super` sites need the executing frame.** `check_method_for_name` takes
-  `Option<Lfp>`; a `super` entry (`name: None`) resolves relative to the
-  owning frame. A salvage triggered from an inlined child has no such
-  frame, passes `None`, and conservatively fails — so a unit containing a
-  cached `super` site recompiles rather than guessing.
+- **`super` sites are re-asked about the body they were compiled for.**
+  A `super` entry (`name: None`) carries `super_of`, the method body the
+  compiler resolved the `super` against (`jit_check_super`'s `mother` —
+  the site's own iseq's, which for a specialized callee is not the unit's
+  root), and the salvage asks `check_super(class, super_of, name)` again.
+  That needs no frame because the JIT compiles only frame-independent
+  `super` sites: not a `define_method` body (its `super` follows the
+  called name) and not a body that occupies several positions in the
+  ancestry (`compile/method_call.rs` deopts both). The method-name index
+  files the entry under that body's name. Before this the salvage needed
+  the executing frame and failed without it, so every unit with a
+  specialized `initialize` that calls `super` (`Class#new` inlining one)
+  recompiled on *every* class-version move: shipit, whose Loofah
+  `extend`s each node it scrubs, filled the 1 GiB code page that way.
 
 **Specialized children salvage their owner.** A child's guard reads the
 owner's word, and the owner's cache map covers the child's call sites, so
