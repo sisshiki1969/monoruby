@@ -4472,14 +4472,49 @@ enc_of_static_name(const char *name)
     return enc;
 }
 
+/*
+ * A String cell's encoding (string.rs `Encoding`, `repr(u8)`) is its tag
+ * byte at RB_MONORUBY_STR_ENC_OFFSET, and for the variants that carry one
+ * (RB_MONORUBY_ENC_PAYLOAD_TAGS) the payload byte after it; the payload
+ * byte of the others is padding. string.rs asserts the numbers. The
+ * rb_encoding an encoding names is cached by those bytes.
+ */
+#define RB_MONORUBY_STR_ENC_OFFSET 56
+#define RB_MONORUBY_ENC_PAYLOAD_TAGS \
+    ((1u << 1) | (1u << 7) | (1u << 8) | (1u << 9) | (1u << 11) | (1u << 12))
+static struct {
+    unsigned key; /* tag | payload << 8, plus one; 0 = empty */
+    rb_encoding *enc;
+} enc_tag_cache[64];
+
+static rb_encoding *enc_of_static_name(const char *name);
+
+static rb_encoding *
+str_enc_fast(VALUE str)
+{
+    const unsigned char *e = (const unsigned char *)str + RB_MONORUBY_STR_ENC_OFFSET;
+    unsigned tag = e[0];
+    unsigned key = tag < 32 && (RB_MONORUBY_ENC_PAYLOAD_TAGS >> tag & 1) ? tag | (unsigned)e[1] << 8 : tag;
+    unsigned h = (key ^ key >> 6) & 63;
+    if (enc_tag_cache[h].key == key + 1)
+        return enc_tag_cache[h].enc;
+    const char *name = api->str_enc_name(ctx(), M(str));
+    if (!name)
+        return NULL;
+    rb_encoding *enc = enc_of_static_name(name);
+    enc_tag_cache[h].key = key + 1;
+    enc_tag_cache[h].enc = enc;
+    return enc;
+}
+
 rb_encoding *
 rb_enc_get(VALUE obj)
 {
     if (RB_TYPE_P(obj, T_STRING)) {
         if (HAVE_API(str_enc_name)) {
-            const char *name = api->str_enc_name(ctx(), M(obj));
-            if (name)
-                return enc_of_static_name(name);
+            rb_encoding *enc = str_enc_fast(obj);
+            if (enc)
+                return enc;
         }
         return enc_of_name(check(api->str_encoding(ctx(), M(obj))));
     }
@@ -5033,9 +5068,18 @@ data_of(VALUE obj, int raise)
 static void
 materialize_payload(VALUE self)
 {
-    if (RB_SPECIAL_CONST_P(self) || api->native_data(ctx(), M(self), &data_ops))
+    if (RB_SPECIAL_CONST_P(self))
         return;
-    if (api->type_of(ctx(), M(self)) == MR_T_NATIVE)
+    struct capi_frame *f = frame();
+    struct capi_data *d = api->native_data(f->ctx, M(self), &data_ops);
+    if (d) {
+        /* What data_of would look up again for the method's own
+         * GetTypedData / DATA_PTR. */
+        if (self == f->owner->self_val)
+            f->owner->self_data = d;
+        return;
+    }
+    if (api->type_of(f->ctx, M(self)) == MR_T_NATIVE)
         data_of(self, 0);
 }
 
@@ -6567,6 +6611,33 @@ rb_enc_interned_str_cstr(const char *ptr, rb_encoding *enc)
 rb_encoding *
 rb_enc_compatible(VALUE str1, VALUE str2)
 {
+    /* Two Strings: encoding.c's enc_compatible_latter, on the encodings
+     * and the cached code ranges, without a call into Ruby. strscan
+     * checks its whole subject against every String pattern this way,
+     * so this must not cost anything proportional to the subject. */
+    if (RB_TYPE_P(str1, T_STRING) && RB_TYPE_P(str2, T_STRING)) {
+        rb_encoding *enc1 = rb_enc_get(str1), *enc2 = rb_enc_get(str2);
+        if (enc1 && enc2) {
+            if (enc1 == enc2)
+                return enc1;
+            if (RSTRING_LEN(str2) == 0)
+                return enc1;
+            if (RSTRING_LEN(str1) == 0)
+                return rb_enc_asciicompat(enc1) && rb_enc_str_coderange(str2) == ENC_CODERANGE_7BIT ? enc1 : enc2;
+            if (!rb_enc_asciicompat(enc1) || !rb_enc_asciicompat(enc2))
+                return NULL;
+            int cr1 = rb_enc_str_coderange(str1), cr2 = rb_enc_str_coderange(str2);
+            if (cr1 != cr2) {
+                if (cr1 == ENC_CODERANGE_7BIT)
+                    return enc2;
+                if (cr2 == ENC_CODERANGE_7BIT)
+                    return enc1;
+            }
+            if (cr2 == ENC_CODERANGE_7BIT)
+                return enc1;
+            return NULL;
+        }
+    }
     VALUE e = rb_funcall(rb_cEncoding, rb_intern("compatible?"), 2, str1, str2);
     return NIL_P(e) ? NULL : rb_to_encoding(e);
 }

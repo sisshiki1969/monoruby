@@ -953,8 +953,66 @@ VALUE rb_f_sprintf(int argc, const VALUE *argv);
 
 char *rb_monoruby_rstring_ptr(VALUE str);
 long rb_monoruby_rstring_len(VALUE str);
-#define RSTRING_PTR(str) rb_monoruby_rstring_ptr((VALUE)(str))
-#define RSTRING_LEN(str) rb_monoruby_rstring_len((VALUE)(str))
+
+/*
+ * A String cell's bytes (string.rs `StringContent`, at the cell's
+ * `kind`): word 0 is the SmallVec capacity, which is the length while
+ * the bytes are inline (at word 1, up to RB_MONORUBY_STR_INLINE_CAP of
+ * them); past that the bytes are on the heap, pointer at word 1 and
+ * length at word 2. A shared view keeps its pointer and length in the
+ * same two words and RB_MONORUBY_STR_SHARED_TAG in word 0. ext.rs
+ * asserts the numbers. Anything that is not a String cell, and the
+ * cases that need the interpreter (a buffer with no room for the
+ * terminating NUL), go through the functions.
+ */
+#define RB_MONORUBY_CELL_KIND_OFFSET 16
+#define RB_MONORUBY_STR_INLINE_CAP 32
+#define RB_MONORUBY_STR_SHARED_TAG ((uintptr_t)INTPTR_MAX)
+
+static inline const uintptr_t *
+rb_monoruby_str_words(VALUE str)
+{
+    if (RB_SPECIAL_CONST_P(str) ||
+        ((const unsigned char *)str)[RB_MONORUBY_CELL_TYPE_OFFSET] != RB_MONORUBY_CELL_STRING)
+        return 0;
+    return (const uintptr_t *)((const char *)str + RB_MONORUBY_CELL_KIND_OFFSET);
+}
+
+static inline long
+rb_monoruby_rstring_len_fast(VALUE str)
+{
+    const uintptr_t *w = rb_monoruby_str_words(str);
+    if (!w)
+        return rb_monoruby_rstring_len(str);
+    return (long)(w[0] <= RB_MONORUBY_STR_INLINE_CAP ? w[0] : w[2]);
+}
+
+/* NUL-terminated as the interpreter's `c_str_ptr_read` leaves it: the
+ * byte past the end is written when the buffer has room for it. */
+static inline char *
+rb_monoruby_rstring_ptr_fast(VALUE str)
+{
+    uintptr_t *w = (uintptr_t *)rb_monoruby_str_words(str);
+    if (w) {
+        uintptr_t cap = w[0];
+        if (cap == RB_MONORUBY_STR_SHARED_TAG)
+            return (char *)w[1];
+        if (cap < RB_MONORUBY_STR_INLINE_CAP) {
+            char *p = (char *)(w + 1);
+            p[cap] = 0;
+            return p;
+        }
+        if (cap > RB_MONORUBY_STR_INLINE_CAP && w[2] < cap) {
+            char *p = (char *)w[1];
+            p[w[2]] = 0;
+            return p;
+        }
+    }
+    return rb_monoruby_rstring_ptr(str);
+}
+
+#define RSTRING_PTR(str) rb_monoruby_rstring_ptr_fast((VALUE)(str))
+#define RSTRING_LEN(str) rb_monoruby_rstring_len_fast((VALUE)(str))
 #define RSTRING_END(str) (RSTRING_PTR(str) + RSTRING_LEN(str))
 #define RSTRING_LENINT(str) ((int)RSTRING_LEN(str))
 #define RSTRING_GETMEM(str, ptrvar, lenvar) \
