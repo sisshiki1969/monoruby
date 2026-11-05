@@ -56,6 +56,16 @@ class Rational
       [other, to_f]
     elsif other.is_a?(Rational)
       [other, self]
+    elsif other.is_a?(Complex)
+      # CRuby's nurat_coerce: a Complex with an exact-zero imaginary part
+      # coerces to a Rational of its real part, anything else to Complex.
+      imag = other.imaginary
+      if imag.is_a?(Integer) && imag == 0 || imag.is_a?(Rational) && imag == 0
+        real = other.real
+        [real.is_a?(Float) ? real.to_r : Rational(real), self]
+      else
+        [other, Complex(self, 0)]
+      end
     else
       raise TypeError, "#{other.class} can't be coerced into Rational"
     end

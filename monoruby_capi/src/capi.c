@@ -36,6 +36,8 @@
  * converted copy owned by the current Ruby call. Only MrValues the layer
  * never shows to C (block handles, native-object ids) stay as they are.
  */
+/* This file calls libc's snprintf / vsnprintf itself (ruby/subst.h). */
+#define RUBY_DONT_SUBST 1
 #include "ruby.h"
 #include "ruby/encoding.h"
 #include "ruby/io.h"
@@ -67,6 +69,10 @@
  * --------------------------------------------------------------------- */
 
 static const MrApi *api;
+
+/* Whether the running monoruby fills the appended table entry `member`
+ * (entries are only ever appended; `size` says how far the table goes). */
+#define HAVE_API(member) (api->size >= offsetof(MrApi, member) + sizeof(api->member))
 
 struct capi_buf {
     struct capi_buf *next;
@@ -2338,6 +2344,10 @@ object_method(const char *name, VALUE *cache)
 VALUE
 rb_obj_freeze(VALUE obj)
 {
+    if (HAVE_API(obj_freeze)) {
+        api->obj_freeze(ctx(), M(obj));
+        return obj;
+    }
     static VALUE um;
     rb_funcall(object_method("freeze", &um), rb_intern("bind_call"), 1, obj);
     return obj;
@@ -3049,9 +3059,6 @@ rb_marshal_load(VALUE port)
     return rb_funcall(rb_const_get(rb_cObject, rb_intern("Marshal")), rb_intern("load"), 1, port);
 }
 
-/* Whether the running monoruby fills the appended table entry `member`
- * (entries are only ever appended; `size` says how far the table goes). */
-#define HAVE_API(member) (api->size >= offsetof(MrApi, member) + sizeof(api->member))
 
 VALUE
 rb_backref_get(void)
@@ -3532,7 +3539,15 @@ rb_str_buf_new_cstr(const char *ptr)
 VALUE
 rb_usascii_str_new(const char *ptr, long len)
 {
-    return force_encoding(rb_str_new(ptr, len), "US-ASCII");
+    VALUE str = rb_str_new(ptr, len);
+    if (HAVE_API(str_set_enc)) {
+        int rc = api->str_set_enc(ctx(), M(str), "US-ASCII");
+        if (rc == 0)
+            return str;
+        if (rc == -1)
+            capi_unwind();
+    }
+    return force_encoding(str, "US-ASCII");
 }
 
 VALUE
@@ -4795,7 +4810,30 @@ rb_thread_call_without_gvl2(void *(*func)(void *), void *data1, rb_unblock_funct
 VALUE
 rb_thread_current(void)
 {
+    if (HAVE_API(thread_current))
+        return check(api->thread_current(ctx()));
     return rb_funcall(rb_cThread, rb_intern("current"), 0);
+}
+
+/* `Thread#[]` / `#[]=`: fiber-local, as CRuby's are. The read skips the
+ * method call (bigdecimal reads its modes on every operation). */
+VALUE
+rb_thread_local_aref(VALUE thread, ID key)
+{
+    if (HAVE_API(thread_local_aref)) {
+        /* The fallback inside may run Ruby, as rb_funcall's does. */
+        struct capi_frame *saved = frame();
+        MrValue r = api->thread_local_aref(saved->ctx, M(thread), (MrSym)key);
+        capi_cur = saved;
+        return check(r);
+    }
+    return rb_funcall(thread, rb_intern("[]"), 1, ID2SYM(key));
+}
+
+VALUE
+rb_thread_local_aset(VALUE thread, ID key, VALUE val)
+{
+    return rb_funcall(thread, rb_intern("[]="), 2, ID2SYM(key), val);
 }
 
 void
@@ -7876,5 +7914,124 @@ rb_str_conv_enc_opts(VALUE str, rb_encoding *from, rb_encoding *to, int ecflags,
         rb_set_errinfo(Qnil);
         return str;
     }
+    return r;
+}
+
+/* ---------------------------------------------------------------------
+ * ruby_snprintf / ruby_vsnprintf (ruby/subst.h)
+ * --------------------------------------------------------------------- */
+
+/* Whether every conversion in `fmt` is one the fast path formats: %%,
+ * %c, %s and d/i/u with an optional l, ll or z, without flags, width or
+ * precision. */
+static int
+subst_simple_format(const char *fmt)
+{
+    for (const char *p = fmt; *p; p++) {
+        if (*p != '%')
+            continue;
+        p++;
+        if (*p == '%' || *p == 'c' || *p == 's')
+            continue;
+        if (*p == 'z')
+            p++;
+        else if (*p == 'l') {
+            p++;
+            if (*p == 'l')
+                p++;
+        }
+        if (*p != 'd' && *p != 'i' && *p != 'u')
+            return 0;
+    }
+    return 1;
+}
+
+int
+ruby_vsnprintf(char *str, size_t n, const char *fmt, va_list ap)
+{
+    if (!subst_simple_format(fmt))
+        return vsnprintf(str, n, fmt, ap);
+    size_t len = 0;
+#define SUBST_PUT(ch) do { if (len + 1 < n) str[len] = (ch); len++; } while (0)
+    for (const char *p = fmt; *p; p++) {
+        if (*p != '%') {
+            SUBST_PUT(*p);
+            continue;
+        }
+        p++;
+        if (*p == '%') {
+            SUBST_PUT('%');
+            continue;
+        }
+        if (*p == 'c') {
+            SUBST_PUT((char)va_arg(ap, int));
+            continue;
+        }
+        if (*p == 's') {
+            const char *s = va_arg(ap, const char *);
+            if (!s)
+                s = "(null)";
+            for (; *s; s++)
+                SUBST_PUT(*s);
+            continue;
+        }
+        int size = 0; /* 0 int, 1 long, 2 long long, 3 size_t */
+        if (*p == 'z') {
+            size = 3;
+            p++;
+        }
+        else if (*p == 'l') {
+            size = 1;
+            p++;
+            if (*p == 'l') {
+                size = 2;
+                p++;
+            }
+        }
+        unsigned long long u;
+        int neg = 0;
+        if (*p == 'u') {
+            switch (size) {
+              case 0: u = va_arg(ap, unsigned int); break;
+              case 1: u = va_arg(ap, unsigned long); break;
+              case 2: u = va_arg(ap, unsigned long long); break;
+              default: u = va_arg(ap, size_t); break;
+            }
+        }
+        else {
+            long long v;
+            switch (size) {
+              case 0: v = va_arg(ap, int); break;
+              case 1: v = va_arg(ap, long); break;
+              case 2: v = va_arg(ap, long long); break;
+              default: v = (long long)va_arg(ap, ssize_t); break;
+            }
+            neg = v < 0;
+            u = neg ? 0ULL - (unsigned long long)v : (unsigned long long)v;
+        }
+        char digits[24];
+        int nd = 0;
+        do {
+            digits[nd++] = (char)('0' + u % 10);
+            u /= 10;
+        } while (u);
+        if (neg)
+            SUBST_PUT('-');
+        while (nd)
+            SUBST_PUT(digits[--nd]);
+    }
+#undef SUBST_PUT
+    if (n)
+        str[len < n ? len : n - 1] = '\0';
+    return (int)len;
+}
+
+int
+ruby_snprintf(char *str, size_t n, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int r = ruby_vsnprintf(str, n, fmt, ap);
+    va_end(ap);
     return r;
 }

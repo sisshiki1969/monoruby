@@ -35,6 +35,13 @@
 #define UNREACHABLE_RETURN(_) __builtin_unreachable()
 #endif
 #define DEPRECATED(x) x
+/* CRuby's ruby/backward/2/attributes.h. */
+#ifndef PUREFUNC
+#define PUREFUNC(x) __attribute__((__pure__)) x
+#endif
+#ifndef CONSTFUNC
+#define CONSTFUNC(x) __attribute__((__const__)) x
+#endif
 #define PRINTF_ARGS(decl, a, b) decl
 #define RUBY_ATTR_NORETURN __attribute__((__noreturn__))
 #define RB_LIKELY(x) (__builtin_expect(!!(x), 1))

@@ -13,6 +13,7 @@
  * as the `RUBY` configuration of the original does.
  */
 #define RUBY 1
+#define RUBY_DONT_SUBST 1
 #include "ruby/ruby.h"
 #include "ruby/st.h"
 #include <assert.h>

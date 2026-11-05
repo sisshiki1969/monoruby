@@ -230,6 +230,9 @@ struct MrApi {
     int     (*str_coderange)(MrContext *, MrValue v);  /* 1 7bit, 2 valid, 3 broken, -1 error */
     MrValue (*str_dup)(MrContext *, MrValue v);  /* rb_str_dup */
     int64_t (*str_capacity)(MrContext *, MrValue v);  /* rb_str_capacity, -1 error */
+    MrValue (*thread_current)(MrContext *);  /* rb_thread_current */
+    MrValue (*thread_local_aref)(MrContext *, MrValue thread, MrSym sym);  /* thread[sym], no dispatch */
+    void    (*obj_freeze)(MrContext *, MrValue v);  /* Kernel#freeze, no dispatch */
 };
 
 /* Onigmo's entry points as linked into monoruby, types erased: regex_t *

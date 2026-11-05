@@ -884,6 +884,9 @@ pub(crate) static MR_API: MrApi = MrApi {
     str_coderange: mr_str_coderange,
     str_dup: mr_str_dup,
     str_capacity: mr_str_capacity,
+    thread_current: mr_thread_current,
+    thread_local_aref: mr_thread_local_aref,
+    obj_freeze: mr_obj_freeze,
 };
 
 // ---- regexp (ruby/re.h) ----------------------------------------------
@@ -2617,6 +2620,63 @@ unsafe extern "C" fn mr_str_capacity(ctx: *mut MrContext, v: MrValue) -> i64 {
     // The buffer `str_rptr` hands out (it makes room for the NUL first).
     inner.c_str_ptr_read();
     inner.owned_capacity().saturating_sub(1) as i64
+}
+
+unsafe extern "C" fn mr_thread_current(ctx: *mut MrContext) -> MrValue {
+    // SAFETY: the table's contract.
+    let (vm, _) = unsafe { parts(ctx) };
+    crate::scheduler::current_thread(vm).id()
+}
+
+/// `Thread#[]` for a Symbol key, the way builtins/thread.rb keeps the
+/// fiber-locals (`@fiber_locals`: fiber, or `:root`, => { key => value })
+/// but without dispatching: bigdecimal reads its modes this way on every
+/// operation. Anything unexpected falls back to calling `[]`.
+unsafe extern "C" fn mr_thread_local_aref(ctx: *mut MrContext, thread: MrValue, sym: MrSym) -> MrValue {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let th = Value::from_u64(thread);
+    let key = Value::symbol(IdentId::from(sym));
+    // Another thread's locals are its current fiber's, which only the
+    // method knows; so is anything shaped unexpectedly (`None`).
+    let mut fast = || -> Option<Value> {
+        if th.id() != crate::scheduler::current_thread(vm).id() {
+            return None;
+        }
+        static FIBER_LOCALS: std::sync::OnceLock<IdentId> = std::sync::OnceLock::new();
+        static ROOT: std::sync::OnceLock<IdentId> = std::sync::OnceLock::new();
+        let ivar = *FIBER_LOCALS.get_or_init(|| IdentId::get_id("@fiber_locals"));
+        // No locals yet: nil.
+        let Some(all) = globals.store.get_ivar(th, ivar).filter(|v| !v.is_nil()) else {
+            return Some(Value::nil());
+        };
+        let root = Value::symbol(*ROOT.get_or_init(|| IdentId::get_id("root")));
+        let fk = vm.current_fiber().unwrap_or(root);
+        // Fiber and Symbol keys hash by identity: neither lookup can raise.
+        let table = all.try_hash_ty()?.get(fk, vm, globals).ok()?;
+        let Some(table) = table else {
+            return Some(Value::nil());
+        };
+        Some(table.try_hash_ty()?.get(key, vm, globals).ok()?.unwrap_or_default())
+    };
+    match fast() {
+        Some(v) => v.id(),
+        // SAFETY: one argument, `key`, alive on this frame.
+        None => unsafe { funcall_id(ctx, thread, IdentId::get_id("[]"), 1, &key.id(), MR_UNDEF) },
+    }
+}
+
+unsafe extern "C" fn mr_obj_freeze(ctx: *mut MrContext, v: MrValue) {
+    // SAFETY: the table's contract.
+    let (_, globals) = unsafe { parts(ctx) };
+    let mut v = Value::from_u64(v);
+    if !v.is_packed_value() {
+        v.set_frozen();
+        // As Object#freeze: an existing singleton class freezes too.
+        if let Some(singleton) = globals.store.has_singleton(v) {
+            singleton.as_val().set_frozen();
+        }
+    }
 }
 
 unsafe extern "C" fn mr_str_dup(ctx: *mut MrContext, v: MrValue) -> MrValue {

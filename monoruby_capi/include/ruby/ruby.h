@@ -156,6 +156,11 @@ typedef st_data_t st_index_t;
 /* Not a pointer to an object: an immediate (nil and Qundef included) or false. */
 #define RB_SPECIAL_CONST_P(v) (RB_IMMEDIATE_P(v) || !RB_TEST(v))
 #define SPECIAL_CONST_P(v) RB_SPECIAL_CONST_P(v)
+static inline VALUE
+rb_special_const_p(VALUE obj)
+{
+    return RB_SPECIAL_CONST_P(obj) ? RUBY_Qtrue : RUBY_Qfalse;
+}
 
 #define RUBY_FIXNUM_MAX (LONG_MAX >> 1)
 #define RUBY_FIXNUM_MIN (LONG_MIN >> 1)
@@ -1288,6 +1293,8 @@ void ruby_init(void);
 int ruby_native_thread_p(void);
 int rb_during_gc(void);
 VALUE rb_thread_current(void);
+VALUE rb_thread_local_aref(VALUE thread, ID key);
+VALUE rb_thread_local_aset(VALUE thread, ID key, VALUE val);
 void rb_thread_schedule(void);
 /* monoruby has no Ractors; the declaration is accepted and ignored. */
 void rb_ext_ractor_safe(bool flag);
@@ -1470,5 +1477,7 @@ void rb_ivar_foreach(VALUE obj, int (*func)(ID name, VALUE val, st_data_t arg), 
 #ifdef __cplusplus
 #include "ruby/backward/cxxanyargs.hpp"
 #endif
+
+#include "ruby/subst.h"
 
 #endif /* MONORUBY_CAPI_RUBY_RUBY_H */
