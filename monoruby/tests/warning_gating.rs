@@ -2,9 +2,10 @@ extern crate monoruby;
 use monoruby::tests::*;
 
 // Onigmo's compile-time diagnostics ("character class has duplicated
-// range", "nested repeat operator") go through CRuby's `rb_warning`, so
-// they print only when `$VERBOSE` is `true` (`-w`); a plain run and
-// `-W0` stay silent. They are flushed through the current `$stderr`.
+// range", "without escape") are gated on `RTEST(ruby_verbose)` inside
+// Onigmo, so they print only when `$VERBOSE` is `true` (`-w`); a plain
+// run and `-W0` stay silent. They are flushed through the current
+// `$stderr`.
 
 #[test]
 fn onigmo_warnings_are_verbose_only() {
@@ -42,6 +43,25 @@ fn constant_reinitialization_warning_is_silent_under_verbose_nil() {
         r << cap { v = $VERBOSE; $VERBOSE = true; A.const_set(:X, 5); $VERBOSE = v }.sub(/\A.*?warning/, "warning").lines.first
         r << cap { v = $VERBOSE; $VERBOSE = nil; eval("h = {a: 1, a: 2}"); $VERBOSE = v }
         r << A::X
+        r
+        "#,
+    );
+}
+
+// The nested-repeat diagnostics are not gated in Onigmo: CRuby's
+// `rb_warn` prints them unless `$VERBOSE` is nil (ruby/spec
+// language/regexp/repetition_spec.rb).
+
+#[test]
+fn onigmo_nested_repeat_warning_prints_by_default() {
+    run_test_once(
+        r#"
+        require "stringio"
+        def cap; $stderr = StringIO.new; yield; s = $stderr.string; $stderr = STDERR; s; end
+        r = []
+        r << cap { v = $VERBOSE; $VERBOSE = false; Regexp.new("foo(A{0,1}+)Abar"); $VERBOSE = v }.sub(/\A.*?warning/, "warning")
+        r << cap { v = $VERBOSE; $VERBOSE = false; Regexp.new("b**"); $VERBOSE = v }.sub(/\A.*?warning/, "warning")
+        r << cap { v = $VERBOSE; $VERBOSE = nil; Regexp.new("c**"); $VERBOSE = v }
         r
         "#,
     );

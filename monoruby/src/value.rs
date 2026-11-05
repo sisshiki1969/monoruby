@@ -3095,6 +3095,16 @@ impl Value {
         }
     }
 
+    /// The namespace check of a qualified constant path (`X::Y`,
+    /// `class X::Y`, `X::Y = v`): CRuby's `vm_check_if_namespace`, which
+    /// words its TypeError differently from the generic class-or-module
+    /// checks.
+    pub(crate) fn expect_namespace(&self, store: &Store) -> Result<Module> {
+        self.is_class_or_module().ok_or_else(|| {
+            MonorubyErr::typeerr(format!("{} is not a class/module", self.inspect(store)))
+        })
+    }
+
     /*pub(crate) fn expect_class_or_module_rescue(&self) -> Result<ClassId> {
         match self.is_class_or_module() {
             Some(class) => Ok(class),

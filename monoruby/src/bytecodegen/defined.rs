@@ -58,6 +58,36 @@ impl<'a> BytecodeGen<'a> {
         Ok(())
     }
 
+    /// `defined?(x = 1)` never runs the assignment, but it still declares
+    /// `x` for the rest of the scope (the parser already resolved later
+    /// references to it as a local). Locals get their slot at the first
+    /// reference compiled, so claim the slots of the local targets here:
+    /// otherwise a block that assigns `x` later
+    /// (`defined?(x = 1); [1].each { x = 2 }`) finds no `x` in this frame.
+    pub(super) fn declare_assignment_targets(&mut self, node: &Node) {
+        match &node.kind {
+            NodeKind::MulAssign(lhs, _) => {
+                for lhs in lhs {
+                    self.declare_assignment_target(lhs);
+                }
+            }
+            NodeKind::AssignOp(_, lhs, _) => self.declare_assignment_target(lhs),
+            NodeKind::BinOp(BinOp::LAnd | BinOp::LOr, _, r) => self.declare_assignment_targets(r),
+            _ => {}
+        }
+    }
+
+    /// (Only single-target forms reach here: prism rejects a multiple
+    /// assignment inside `defined?`.)
+    fn declare_assignment_target(&mut self, lhs: &Node) {
+        match &lhs.kind {
+            NodeKind::LocalVar(0, name) | NodeKind::Ident(name) => {
+                self.assign_local(IdentId::get_id(name));
+            }
+            _ => {}
+        }
+    }
+
     fn check_defined(&mut self, node: Node, nil_label: Label, ret: BcReg, top: bool) -> Result<()> {
         match node.kind {
             NodeKind::MulAssign(lhs, rhs) => {

@@ -1194,15 +1194,20 @@ impl Executor {
         // with ...") are queued on a thread-local by `RegexpInner`
         // (regexps also compile during bytecodegen, where no `Executor`
         // is in reach) and join the same flush. CRuby routes them
-        // through `rb_warning` (onig_syntax_warn -> rb_warn only when
-        // `RTEST(ruby_verbose)`), so they are verbose-only: `-w` /
-        // `$VERBOSE = true` shows them, the default does not.
+        // through `rb_warn`, but Onigmo itself gates most of them on
+        // `RTEST(ruby_verbose)` (the duplicated range, "without escape"
+        // and unknown-escape ones), so those are verbose-only: `-w` /
+        // `$VERBOSE = true` shows them, the default does not. The
+        // nested-repeat diagnostics are not gated and print by default.
         let regexp_warnings = crate::value::rvalue::RegexpInner::drain_pending_warnings();
         if globals.store.compile_warnings.is_empty() && regexp_warnings.is_empty() {
             return;
         }
         let mut msgs = std::mem::take(&mut globals.store.compile_warnings);
-        msgs.extend(regexp_warnings.into_iter().map(|m| (m, true)));
+        msgs.extend(regexp_warnings.into_iter().map(|m| {
+            let verbose_only = !m.contains("nested repeat operator");
+            (m, verbose_only)
+        }));
         // `rb_warn`-level warnings print unless `$VERBOSE` is nil;
         // verbose-level ones (CRuby's `rb_warning`) only when `$VERBOSE`
         // is exactly `true` at flush time.
@@ -2746,7 +2751,7 @@ impl Executor {
         let base = base.map(|base| unsafe { self.get_slot(base) }.unwrap());
         let current_func = self.method_func_id();
         let mut parent = if let Some(base) = base {
-            base.expect_class_or_module(&globals.store)?.id()
+            base.expect_namespace(&globals.store)?.id()
         } else if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
@@ -2765,7 +2770,7 @@ impl Executor {
         } else {
             let parent = prefix.remove(0);
             self.search_constant_checked(globals, parent, current_func)?
-                .expect_class_or_module(&globals.store)?
+                .expect_namespace(&globals.store)?
                 .id()
         };
         for constant in prefix {
@@ -2784,7 +2789,7 @@ impl Executor {
                 check_constant_visibility(globals, defining, constant)?;
             }
             let val = self.get_qualified_constant_with_missing(globals, module, constant)?;
-            parent = val.expect_class_or_module(&globals.store)?.id();
+            parent = val.expect_namespace(&globals.store)?.id();
         }
         let module = globals[parent].get_module();
         if !final_missing {
@@ -2844,7 +2849,7 @@ impl Executor {
             // SAFETY: get_slot is safe to call here because we're accessing a valid slot
             // that was previously set by the bytecode compiler.
             let base = unsafe { self.get_slot(base) }.unwrap();
-            base.expect_class_or_module(&globals.store)?.id()
+            base.expect_namespace(&globals.store)?.id()
         } else if toplevel {
             OBJECT_CLASS
         } else if prefix.is_empty() {
@@ -2862,13 +2867,13 @@ impl Executor {
             let parent = prefix.remove(0);
             let current_func = self.method_func_id();
             self.search_constant_checked(globals, parent, current_func)?
-                .expect_class_or_module(&globals.store)?
+                .expect_namespace(&globals.store)?
                 .id()
         };
         for constant in prefix {
             parent = self
                 .get_constant_checked(globals, parent, constant)?
-                .expect_class_or_module(&globals.store)?
+                .expect_namespace(&globals.store)?
                 .id();
         }
         // Re-initialization warning, matching CRuby's
@@ -4708,7 +4713,7 @@ impl Executor {
         is_module: bool,
     ) -> Result<Value> {
         let parent = match base {
-            Some(base) => base.expect_class_or_module(&globals.store)?.id(),
+            Some(base) => base.expect_namespace(&globals.store)?.id(),
             // Use the lexical parent, not the runtime class-context
             // stack. The two diverge inside `class_eval` /
             // `module_eval` / `class_exec` / `instance_exec` blocks:
@@ -4732,12 +4737,25 @@ impl Executor {
                 // a Class, `module X` a Module. CRuby names the *constant*
                 // (`X is not a class`), not the current value, and rejects
                 // reopening a Module as a Class (and vice versa).
+                // CRuby appends where the constant was defined
+                // (`X is not a class\nfile:line: previous definition of
+                // X was here`); a constant with no recorded location
+                // (defined natively) leaves both fields empty there.
+                let mismatch = |globals: &Globals, kind: &str| {
+                    let (file, line) = [parent, OBJECT_CLASS]
+                        .into_iter()
+                        .find_map(|class| globals.store[class].get_constant_location(name))
+                        .map_or((String::new(), String::new()), |(file, line)| {
+                            (file.to_string(), line.to_string())
+                        });
+                    MonorubyErr::typeerr(format!(
+                        "{name} is not a {kind}\n{file}:{line}: previous definition of {name} was here"
+                    ))
+                };
                 let val = if is_module {
-                    val.is_module()
-                        .ok_or_else(|| MonorubyErr::is_not_module(name.to_string()))?
+                    val.is_module().ok_or_else(|| mismatch(globals, "module"))?
                 } else {
-                    val.is_class()
-                        .ok_or_else(|| MonorubyErr::is_not_class(name.to_string()))?
+                    val.is_class().ok_or_else(|| mismatch(globals, "class"))?
                 };
                 if let Some(superclass) = superclass {
                     assert!(!is_module);

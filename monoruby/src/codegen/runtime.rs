@@ -2918,6 +2918,35 @@ pub(super) extern "C" fn defined_method(
             }
         }
     }
+    // CRuby reaches `respond_to_missing?` through `rb_check_funcall`,
+    // which first asks a user-redefined `respond_to?` whether
+    // `respond_to_missing?` itself may be called: a falsy answer (or an
+    // exception) makes the method undefined without consulting it.
+    if let Some(rt_fid) = globals.check_method(recv, IdentId::RESPOND_TO_)
+        && Some(rt_fid) != globals.store.respond_to_fid()
+    {
+        let rtm = Value::symbol(IdentId::RESPOND_TO_MISSING_);
+        // A one-parameter `respond_to?` is the deprecated signature: it
+        // is asked without `include_all`, after a warning.
+        let one_param = !globals.store[rt_fid].positional_arity_ok(2);
+        if one_param {
+            warn_one_param_respond_to(vm, globals, recv, rt_fid);
+        }
+        let args = [rtm, Value::bool(true)];
+        let args = if one_param { &args[..1] } else { &args[..] };
+        match vm.invoke_func_inner(globals, rt_fid, recv, args, None, None) {
+            Ok(v) if v.as_bool() => {}
+            Ok(_) => {
+                unsafe { *reg = Value::nil() }
+                return;
+            }
+            Err(_) => {
+                vm.discard_error();
+                unsafe { *reg = Value::nil() }
+                return;
+            }
+        }
+    }
     // CRuby's `defined?(recv.meth)` also consults `respond_to_missing?`
     // (with `include_private` = the func-call form). A truthy result
     // reports the call as "method".
@@ -2943,6 +2972,62 @@ pub(super) extern "C" fn defined_method(
         }
     }
     unsafe { *reg = Value::nil() }
+}
+
+/// CRuby's deprecation warning for a `respond_to?` that takes one
+/// parameter, raised when `rb_check_funcall` has to ask it: it names the
+/// receiver (`obj.` for a singleton method — through `to_s` — else
+/// `Class#`), and a second line points at the definition. Nothing is
+/// built, and so no `to_s` is called, unless `Warning[:deprecated]` is on.
+fn warn_one_param_respond_to(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+    rt_fid: FuncId,
+) {
+    use crate::globals::WarningCategory;
+    if !globals.warning_category_enabled(WarningCategory::Deprecated) {
+        return;
+    }
+    let owner = globals
+        .store
+        .check_method_for_class(recv.class(), IdentId::RESPOND_TO_)
+        .map(|entry| entry.owner());
+    let desc = match owner {
+        Some(owner) if globals.store[owner].get_module().is_singleton().is_some() => {
+            match vm.invoke_method_inner(globals, IdentId::TO_S, recv, &[], None, None) {
+                Ok(s) => format!("{}.", s.to_s(&globals.store)),
+                Err(_) => {
+                    vm.discard_error();
+                    return;
+                }
+            }
+        }
+        _ => format!("{}#", recv.class().get_name(&globals.store)),
+    };
+    let msg = format!(
+        "{desc}respond_to?(:respond_to_missing?) uses the deprecated method signature, which takes one parameter"
+    );
+    let detail = crate::builtins::method_source_path_line(&globals.store, rt_fid)
+        .map(|(path, line)| format!("{path}:{line}: warning: respond_to? is defined here"));
+    let main = globals.main_object;
+    let mut args = vec![Value::string(msg)];
+    if let Some(detail) = detail {
+        args.push(Value::string(detail));
+    }
+    if vm
+        .invoke_method_inner(
+            globals,
+            IdentId::get_id("__warn_deprecated_here"),
+            main,
+            &args,
+            None,
+            None,
+        )
+        .is_err()
+    {
+        vm.discard_error();
+    }
 }
 
 ///

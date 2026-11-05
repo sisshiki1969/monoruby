@@ -392,3 +392,61 @@ show Zあ.singleton_class.inspect
         assert_eq!(expected, actual, "under {label}");
     }
 }
+
+/// `ARGV` elements are tagged with the external encoding the process
+/// starts with (the locale's, or `-E` / `-K`'s), keeping their bytes —
+/// a non-ASCII argument under a US-ASCII locale is ASCII-8BIT — and a
+/// script read from stdin is read in the locale's encoding, as a `-e`
+/// one is (ruby/spec `language/predefined_spec.rb` "ARGV" and
+/// `language/magic_comment_spec.rb` "in stdin").
+#[test]
+fn argv_and_stdin_script_follow_the_locale() {
+    use std::io::Write;
+    let path = write_script(
+        "mr_enc_locale_argv.rb",
+        "p ARGV.map { |a| [a.encoding, a.bytes] }\n",
+    );
+    let stdin_script = |mut cmd: Command| {
+        let mut child = cmd
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("failed to spawn");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"p __ENCODING__\np ARGV.map(&:encoding)\n")
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    for (label, env) in LOCALES {
+        for switches in [&[][..], &["-E", "ISO-8859-1"][..], &["-Ku"][..]] {
+            let argv = |mut cmd: Command| {
+                let out = cmd
+                    .args(switches)
+                    .arg(&path)
+                    .args(["a", "\u{3042}"])
+                    .output()
+                    .expect("failed to spawn");
+                String::from_utf8_lossy(&out.stdout).into_owned()
+            };
+            assert_eq!(
+                argv(monoruby(env)),
+                argv(cruby(env)),
+                "ARGV under {label} {switches:?}"
+            );
+            let from_stdin = |mut cmd: Command| {
+                cmd.args(switches).arg("-").arg("x");
+                stdin_script(cmd)
+            };
+            assert_eq!(
+                from_stdin(monoruby(env)),
+                from_stdin(cruby(env)),
+                "stdin script under {label} {switches:?}"
+            );
+        }
+    }
+}

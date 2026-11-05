@@ -24,3 +24,28 @@ require "prism/translation/ripper/sexp"
 require "prism/translation/ripper/lexer"
 
 Ripper = Prism::Translation::Ripper
+
+class Prism::Translation::Ripper
+  # CRuby's Ripper reports parse.y's wording, which differs from prism's
+  # for some diagnostics; `on_parse_error` receives the parse.y text for
+  # the error types listed here (keyed by prism's error type).
+  PARSE_Y_ERROR_MESSAGES = {
+    def_endless_setter: "setter method cannot be defined in an endless method definition",
+  }.freeze
+
+  module ParseYErrorMessages # :nodoc:
+    def result
+      @result ||= begin
+        result = super
+        result.errors.map! do |error|
+          message = PARSE_Y_ERROR_MESSAGES[error.type]
+          next error unless message
+          Prism::ParseError.new(error.type, message, error.location, error.level)
+        end
+        result
+      end
+    end
+    private :result
+  end
+  prepend ParseYErrorMessages
+end
