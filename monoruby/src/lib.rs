@@ -44,6 +44,11 @@ macro_rules! inline_gen2 {
     };
 }
 
+// Not linked into the interpreter: the dependency exists so that
+// build.rs gets libz-sys's `DEP_Z_ROOT` and links its libz.a into the
+// zlib.so it builds from CRuby's ext/zlib (`doc/c_api.md` §3.19).
+use libz_sys as _;
+
 mod alloc;
 mod ancestry;
 pub mod ast;

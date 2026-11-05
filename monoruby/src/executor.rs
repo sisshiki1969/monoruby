@@ -4537,7 +4537,8 @@ impl Executor {
             }
         }
         let bh = bh.map(|bh| bh.delegate());
-        (globals.invokers.method)(
+        let kw_ext = kw_args.is_some() && globals.ext.note_kw_entry(func_id);
+        let res = (globals.invokers.method)(
             self,
             globals,
             func_id,
@@ -4546,7 +4547,13 @@ impl Executor {
             args.len(),
             bh,
             kw_args,
-        )
+        );
+        if kw_ext {
+            // Taken by the trampoline on entry; dropped here should the
+            // invoker have failed before reaching it.
+            globals.ext.clear_kw_entry();
+        }
+        res
     }
 
     pub(crate) fn invoke_func_inner(
@@ -5478,42 +5485,6 @@ impl Executor {
         if let Some(c) = self.svar_container_create() {
             c.as_array()[SVAR_LASTLINE] = val;
         }
-    }
-
-    /// `$_` writer targeting the *caller of the calling Ruby method*.
-    ///
-    /// Ruby-implemented IO-like stubs (e.g. `stdlib/stringio.rb`) must set
-    /// `$_` in the scope that invoked their `gets`, the way CRuby's
-    /// C-implemented readers do via `rb_lastline_set`. A plain `$_ = line`
-    /// inside the stub would land on the stub's own method frame and be
-    /// lost on return, so the stub calls the `__set_lastline_in_caller`
-    /// intrinsic, which resolves frames as: skip the intrinsic's native
-    /// frame, pop out of the stub method (including any of its blocks),
-    /// then write to the method scope of the frame that called the stub.
-    pub(crate) fn set_last_read_line_in_caller(&mut self, val: Value) {
-        let Some(mut cfp) = self.cfp else { return };
-        // Skip the intrinsic's own native frame (and any native wrappers).
-        while cfp.lfp().meta().is_native() {
-            let Some(prev) = cfp.prev() else { return };
-            cfp = prev;
-        }
-        // The stub may call the intrinsic from inside one of its own
-        // blocks; unwind to the stub's method frame first.
-        let stub_mfp = cfp.lfp().mfp();
-        while cfp.lfp() != stub_mfp {
-            let Some(prev) = cfp.prev() else { return };
-            cfp = prev;
-        }
-        // Step out of the stub method, skipping natives (`Method#call`,
-        // `send`, ... trampolines), to the frame that invoked it.
-        let Some(mut cfp) = cfp.prev() else { return };
-        while cfp.lfp().meta().is_native() {
-            let Some(prev) = cfp.prev() else { return };
-            cfp = prev;
-        }
-        let mfp = cfp.lfp().mfp();
-        let c = self.svar_container_of_create(mfp);
-        c.as_array()[SVAR_LASTLINE] = val;
     }
 
     /// `MatchData#[]` semantics for `$n` access (0 = full match,

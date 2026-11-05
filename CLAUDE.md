@@ -463,7 +463,7 @@ Registration happens in `builtins/builtins.rs` → `init_builtins()`.
 
 ## Workspace Crates
 
-Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys`, `monoruby_ext`, `ext/sqlite3`, `ext/zlib`, `ext/zstd`, `ext/psych`, `ext/nokogiri`, `ext/markly`, `ext/bcrypt`, `ext/digest`, `ext/openssl`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
+Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys`, `monoruby_ext`, `ext/sqlite3`, `ext/zstd`, `ext/psych`, `ext/nokogiri`, `ext/markly`, `ext/bcrypt`, `ext/digest`, `ext/openssl`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
 
 | Crate           | Purpose                                                  |
 | --------------- | -------------------------------------------------------- |
@@ -473,15 +473,14 @@ Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys
 | `monoruby_ext` | Safe Rust over `monoruby_ext_sys` for writing an extension in Rust (`Ctx`, `Value`, the `method!` / `native!` macros) |
 | `monoruby_capi/` (C, not a crate) | The CRuby-compatible C API on top of `monoruby_ext_sys`: `include/ruby.h` and friends, and `src/capi.c` (the `rb_*` functions) plus `src/st.c` (CRuby's own public-domain st.c behind a CRuby-identical `ruby/st.h`), which every such extension links statically. A C extension written for CRuby is rebuilt against these headers (API- not ABI-compatible) and loaded by a plain `require` from `$LOAD_PATH`; inside the extension a `VALUE` has CRuby's bit layout (`Qfalse == 0`, `Qnil == 4`, `Qtrue == 0x14`, Symbols `id << 8 | 0x0c`), and capi.c converts to and from monoruby's `Value` at every ABI crossing (`M()` / `R()`; `RARRAY_CONST_PTR` hands out a converted per-call copy, registered C globals are marked by the layer); `build.rs` installs both into `<install root>/{include,capi}`, plus `capi/libmonoruby_capi.a` (capi.c compiled with the `cc` crate) and `bin/gem`. `RbConfig` points `rubyhdrdir` at `<root>/include` and `LIBRUBYARG` at that archive (`builtins/capi_config.rb`), so `extconf.rb` + `make` and `gem install` (`monoruby <root>/bin/gem install foo`) build an extension for monoruby; gems go to monoruby's own home `~/.monoruby/gems/<api>` (`stdlib/rubygems/defaults/operating_system.rb`), and a `require` that misses everywhere else asks `Gem.try_activate` (`Executor::activate_gem_for`). TypedData / Data objects use the core's native payloads, with the C alloc function run lazily the first time a payload is read or a C method runs on the instance (the core's allocator has no `Executor`), the instance variables it set carried over; C functions become blocks through a hidden class's `Method#to_proc`; C-backed globals (`rb_define_variable` and its relatives) are `GvarEntry::Native` entries of the core's gvar table through the ABI's `gvar_hook`; `ruby/backward/cxxanyargs.hpp` gives C++ extensions (SWIG's wrappers, gosu) the ANYARGS overloads CRuby's header of that name gives them. `ruby/re.h` is there too: the `onig_*` functions reach the interpreter's Onigmo through a sub-table of the ABI (`MrOnigApi`), `rb_reg_prepare_re` hands out a `regex_t` monoruby compiled and caches for the string's codec, and `ruby/onigmo.h` is the crate's own header with `USE_CAPTURE_HISTORY` forced on (the linked library's `OnigRegion` carries it). The Time API (`rb_time_*`, `rb_timespec_now`) is `Time`'s own methods under the hood, `rb_keyword_given_p` reads the call site that entered the method (`runtime::entered_by`, through `send` / `Method#call`), and `rb_enc_codepoint_len` decodes every encoding monoruby walks. `tests/capi.rs` runs ten C sources (API basics, TypedData, st_table, re.h, Time / keywords / codepoints, the VALUE layout, gaps real gems hit, operator IDs / enumerators / aliases / `$~`, `rb_thread_call_without_gvl`, C-backed globals / `instance_eval` from C / an alloc function's ivars) and one C++ source in SWIG's shape on CRuby and monoruby and compares; `tests/mkmf.rs` builds and `gem install`s a fixture gem on both. `tests/capi_gems.rs` installs real gems (bcrypt, msgpack, strscan, strptime, yajl-ruby, json 2.18.0 and 3.1.0) from the host's gem cache through monoruby's `gem` and compares a script on both; a monoruby-built `.so` on `$LOAD_PATH` wins over the stand-in in `gem/` / `stdlib/` for the same feature (the gem's own `.rb` next to it first, when there is one), the Ruby files of an activated gem whose extensions monoruby built win over the stand-in tree too (json 3.x's `json.rb` over the vendored 2.18.0 one), and a host CRuby's `.so` on `$LOAD_PATH` is skipped, told apart by its symbol table (`ext/dynsym.rs`) rather than by a `dlopen`, which would keep a `libruby`-linked one and its dependencies in the process. See `doc/c_api.md` |
 | `ext/sqlite3` | The sqlite3 gem's native half as a dynamically loaded extension (`libsqlite3_native.so`, crate `sqlite3_native`) over `libsqlite3-src` — the first stand-in moved out of the core |
-| | Each of `ext/sqlite3`, `ext/zlib` and `ext/zstd` builds its C library from the vendored source by default (`bundled`) and links the platform's shared one with `system`. Because they are artifact dependencies of `monoruby`, that choice is made through `monoruby`'s own `bundled-<ext>` / `system-<ext>` features, which forward to them; `bin/install` takes `MONORUBY_SYSTEM_LIBS="zlib zstd"` (or `all`) and spells out the whole set against `--no-default-features`. `ext/psych` has no C library to replace and `ext/nokogiri` needs its patched libxml2, so neither offers it — see `doc/native_extension_loading.md` §6.3 |
-| `ext/zlib` | `Zlib`'s native half (`libzlib_native.so`, crate `zlib_native`): the `String.__zstream_*` streams over the bundled zlib (`libz-sys`) and the `__crc32` / `__adler32` byte walks |
+| | Each of `ext/sqlite3` and `ext/zstd`, and `zlib.so` (CRuby's `ext/zlib`, below), builds its C library from the vendored source by default (`bundled`) and links the platform's shared one with `system`. Because the two crates are artifact dependencies of `monoruby`, that choice is made through `monoruby`'s own `bundled-<ext>` / `system-<ext>` features, which forward to them (for zlib, to `monoruby`'s own `libz-sys` dependency, whose `DEP_Z_ROOT` `build.rs` links `zlib.so` against); `bin/install` takes `MONORUBY_SYSTEM_LIBS="zlib zstd"` (or `all`) and spells out the whole set against `--no-default-features`. `ext/psych` has no C library to replace and `ext/nokogiri` needs its patched libxml2, so neither offers it — see `doc/native_extension_loading.md` §6.3 |
 | `ext/zstd` | The zstd-ruby gem's native half (`libzstd_native.so`, crate `zstd_native`) over the bundled libzstd (`zstd-sys`) |
 | `ext/psych` | Psych's native half (`libpsych_native.so`, crate `psych_native`): libyaml's parser as `Psych::Parser`'s event source and its emitter as `Psych::Emitter`'s sink, over `libyaml-safer` |
 | `ext/nokogiri` | Nokogiri's native half (`libnokogiri_native.so`, crate `nokogiri_native`): what the gem's nokogiri.so provides, over `libxml2-src` — the last stand-in moved out of the core, and the one with the most involved object lifetimes (see `doc/nokogiri.md`) |
 | `ext/markly` | The markly gem's native half (`libmarkly_native.so`, crate `markly_native`) over `comrak`, required by `gem/markly/markly.rb` |
 | `ext/bcrypt` | The bcrypt gem's native half (`libbcrypt_native.so`, crate `bcrypt_native`) over the `bcrypt` crate, required by `gem/bcrypt_ext.rb` |
-| `monoruby_capi/ext/` | Standard-library C extensions taken from CRuby unmodified and built against the layer by `build.rs` (`build_capi_extensions`, objects via the `cc` crate, then linked `-shared` with the layer's archives) into `<install root>/ext/<name>.so`, where `require` finds them like the Rust extensions. Today `date/` (CRuby 4.0.6's `ext/date`, the date gem 3.5.1): `require "date"` (`stdlib/date.rb` is CRuby's `ext/date/lib/date.rb`, which requires `date_core`), and with it `time`, `psych`/YAML and rubygems' `gem build`. See `doc/c_api.md` §3.17 |
-| `ext/digest` | `Digest`'s one-shot hashing plus `OpenSSL::HMAC` / `PKCS5`'s HMAC and PBKDF2 (`libdigest_native.so`, crate `digest_native`) over RustCrypto's md-5 / sha1 / sha2 / hmac / pbkdf2, required by `stdlib/digest.rb`. rubygems hashes `.gem` files with it, so like `ext/zlib` it is part of every install |
+| `monoruby_capi/ext/` | Standard-library C extensions taken from CRuby unmodified and built against the layer by `build.rs` (`build_capi_extensions`, objects via the `cc` crate, then linked `-shared` with the layer's archives) into `<install root>/ext/<name>.so`, where `require` finds them like the Rust extensions. Today `date/` (CRuby 4.0.6's `ext/date`, the date gem 3.5.1): `require "date"` (`stdlib/date.rb` is CRuby's `ext/date/lib/date.rb`, which requires `date_core`), and with it `time`, `psych`/YAML and rubygems' `gem build`; and `strscan/`, `stringio/`, `zlib/` (CRuby 4.0.6's, unmodified), loaded by the stub-tree `stdlib/{strscan,stringio,zlib}.rb` (`require "strscan.so"` etc., so they win over a host gem without booting rubygems). `zlib.so` links the bundled libz statically (`libz-sys`'s archive; `-lz` under `system-zlib`). A process running several interpreters (the test harness) gives each its own mapping of a C-API extension — the first the file, later ones a private copy — since an extension's C statics belong to one interpreter (`ext::CAPI_INSTANCES`). See `doc/c_api.md` §3.17 and §3.19 |
+| `ext/digest` | `Digest`'s one-shot hashing plus `OpenSSL::HMAC` / `PKCS5`'s HMAC and PBKDF2 (`libdigest_native.so`, crate `digest_native`) over RustCrypto's md-5 / sha1 / sha2 / hmac / pbkdf2, required by `stdlib/digest.rb`. rubygems hashes `.gem` files with it, so like `zlib.so` it is part of every install |
 | `ext/openssl` | `OpenSSL::Cipher`'s AES-GCM / AES-CBC (`libopenssl_native.so`, crate `openssl_native`) over RustCrypto's aes-gcm / aes / cbc, required by `stdlib/openssl.rb` |
 | `rubymap`       | Order-preserving Ruby-compatible HashMap/Set             |
 | `hashbrown`     | Vendored hash table (local fork)                         |
@@ -532,15 +531,15 @@ External crates (fetched from git):
   functions, IO) reach Ruby through the `Ctx` of the native method that
   is running; an exception they raise is stashed (`error_take`) and
   re-raised once the library call returns. See `doc/nokogiri.md`.
-- `libz-sys` — zlib built from its bundled C source and linked statically
-  **into the `ext/zlib` extension** (`libzlib_native.so`, required by
-  `stdlib/zlib.rb`); its `String.__zstream_*` primitives expose one
-  `z_stream` per `Zlib::Deflate` / `Zlib::Inflate` object, `__crc32` /
-  `__adler32` are the checksum byte walks, and everything else in `Zlib`
-  (the class API, gzip framing, `GzipReader` / `GzipWriter`) is Ruby.
-  Compression is byte-identical to CRuby's zlib.so. rubygems needs `zlib`
-  for `.gem` files, so an installed monoruby needs this extension:
-  `build.rs` puts it (with the others) in the install root's `ext/`.
+- `libz-sys` — zlib built from its bundled C source (`bundled-zlib`, the
+  default). `monoruby` depends on it only so that `build.rs` sees its
+  `DEP_Z_ROOT` and links `libz.a` statically **into `zlib.so`**, CRuby
+  4.0.6's own `ext/zlib/zlib.c` built against the C API layer
+  (`monoruby_capi/ext/zlib/`); `stdlib/zlib.rb` just requires it, so the
+  whole of `Zlib` — streams, gzip framing, `GzipReader` / `GzipWriter` —
+  is CRuby's C. rubygems needs `zlib` for `.gem` files, so an installed
+  monoruby needs this extension: `build.rs` puts it (with the others) in
+  the install root's `ext/`.
 - `zstd-safe` / `zstd-sys` — libzstd 1.5.7 built from source and linked
   statically **into the `ext/zstd` extension** (`libzstd_native.so`, required
   by `gem/zstd-ruby/zstdruby.rb`), behind the zstd-ruby gem: `String.__zstd_*`
@@ -1074,8 +1073,11 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
    GVL-less region returns `EINTR`, and a non-main holder that sees the
    pending signal at its poll point hands the GVL over at once
    (§12.8). `Thread.ignore_deadlock` switches the deadlock detector off
-   in both models. JIT code is written only under the GVL; every acquire
-   serializes the instruction stream (`Gvl::on_acquired`), a new kernel
+   in both models. JIT code is written only under the GVL; an acquire by
+   another thread than the last holder serializes the instruction stream
+   (`Gvl::on_acquired`'s `cpuid`, skipped on a same-thread reacquire,
+   which is costly under virtualization and frequent around C-extension
+   calls), a new kernel
    thread starts with the `MAP_JIT` pages executable, and a basic-op
    redefinition converts the compiled frames of *every* thread — the
    callers by the chain walk, the frame stopped at a safepoint poll by the

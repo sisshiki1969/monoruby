@@ -95,12 +95,21 @@ dump-require = []
 default = ["bundled-sqlite3", "bundled-zlib", "bundled-zstd"]
 bundled-sqlite3 = ["sqlite3_native/bundled"]
 system-sqlite3 = ["sqlite3_native/system"]
-bundled-zlib = ["zlib_native/bundled"]
-system-zlib = ["zlib_native/system"]
+bundled-zlib = ["libz-sys/static"]
+system-zlib = []
 bundled-zstd = ["zstd_native/bundled"]
 system-zstd = ["zstd_native/system"]
 
 [dependencies]
+# zlib itself, for CRuby's ext/zlib/zlib.c (monoruby_capi/ext/zlib), which
+# build.rs links into `<install root>/ext/zlib.so`. A normal dependency
+# only so that its build script hands build.rs `DEP_Z_ROOT`: nothing in
+# the interpreter calls it, so none of it is linked into the binary.
+# `bundled-zlib` (the default) compiles the copy libz-sys carries, which
+# keeps compressed output byte-identical to the CRuby the tests compare
+# against; `system-zlib` links the platform's shared zlib.
+libz-sys = { version = "1.1", default-features = false, features = ["libc"] }
+
 # Phase-1 locality experiment: size-class-segregated backend for the global
 # allocator (see the `mimalloc` feature below). Optional; default builds
 # keep the system allocator.
@@ -171,7 +180,6 @@ cc = "1.0"
 # built for the target platform, not the build host, so a cross build
 # produces extensions its own binary can load.
 sqlite3_native = { path = "../ext/sqlite3", artifact = "cdylib", lib = false, target = "target", default-features = false }
-zlib_native = { path = "../ext/zlib", artifact = "cdylib", lib = false, target = "target", default-features = false }
 zstd_native = { path = "../ext/zstd", artifact = "cdylib", lib = false, target = "target", default-features = false }
 psych_native = { path = "../ext/psych", artifact = "cdylib", lib = false, target = "target" }
 nokogiri_native = { path = "../ext/nokogiri", artifact = "cdylib", lib = false, target = "target" }

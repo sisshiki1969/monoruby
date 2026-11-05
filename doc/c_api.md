@@ -783,6 +783,88 @@ ivar を CRuby と比較する。`tests/capi/capi_cxx.cpp` は SWIG の形の C+
 を `$LOAD_PATH` に置き、LoadError の後に `/proc/self/maps` に `libruby` が
 無いことを見る（以前の実装では残った）。
 
+### 3.19 strscan / stringio / zlib も CRuby の C 拡張に（段階 11）
+
+この 3 つは monoruby 専用の Ruby 実装（`stdlib/strscan.rb` /
+`stdlib/stringio.rb` と、`ext/zlib` の上の `stdlib/zlib.rb`）だったが、
+ruby/spec の `library/stringscanner` / `stringio` / `zlib` で計 300 件余り
+落ちていた。§3.17 の date と同じく、CRuby 4.0.6 の `ext/strscan` /
+`ext/stringio` / `ext/zlib` をそのまま層でビルドして同梱する。
+
+- **ソース**: `monoruby_capi/ext/{strscan,stringio,zlib}/`（CRuby 4.0.6 の
+  `.c` のまま、`BSDL` / `COPYING` 同梱）。strscan の Ruby 半分
+  `lib/strscan/strscan.rb` は `monoruby/stdlib/strscan/strscan.rb`。
+- **ローダ**: `stdlib/{strscan,stringio,zlib}.rb` は `require "x.so"`
+  （strscan はさらに `require_relative "strscan/strscan"`）だけ。stub 木に
+  あるので `$LOAD_PATH` 上のホスト gem（strscan 3.1.8 など）より先に当たり、
+  rubygems も起動しない（ホスト gem に行くと `Gem` の起動で ~6 億 Ir）。
+  `ext/zlib`（`zlib_native`）と `String#__strscan_match` /
+  `Kernel#__set_lastline_in_caller` は削除した。
+- **ビルド**: `build.rs` の `EXTENSIONS` 表に 3 つを足した。extconf.rb の
+  プローブの代わりに strscan は `HAVE_ONIG_REGION_MEMSIZE` /
+  `HAVE_RB_REG_ONIG_MATCH` / `HAVE_RB_DEPRECATE_CONSTANT`、zlib は
+  `OS_CODE=OS_UNIX` / `HAVE_CRC32_COMBINE` / `HAVE_ADLER32_COMBINE` /
+  `HAVE_TYPE_Z_CRC_T` / `HAVE_ZLIB_SIZE_T_FUNCS` を define。libz は
+  `monoruby` の `libz-sys` 依存（`bundled-zlib` 既定、`static`）が出す
+  `DEP_Z_ROOT/lib/libz.a` をオブジェクトの後ろに静的リンクする
+  （`system-zlib` では `-lz`）。x86-64 Linux では層のアーカイブを
+  `-mtls-dialect=gnu2` でコンパイルする（`.so` 内の TLS 参照が
+  `__tls_get_addr` を呼ばない）。
+- **層に足したもの**: IO まわり（`rb_io_puts` / `print` / `printf`、
+  `rb_io_extract_modeenc` / `rb_io_extract_encoding_option` /
+  `rb_io_modestr_fmode` / `oflags`、`FMODE_*`、`rb_eof_error`、
+  `rb_file_open(_str)`、`$/` `$,` `$;` と `rb_default_rs`、`rb_lastline_get` /
+  `set`）、encoding（`rb_enc_compatible` / `check`、`rb_enc_mbclen` /
+  `strlen` / `codelen` / `uint_chr` / `left_char_head` ほか、
+  `rb_enc_interned_str`、`rb_intern3`、`rb_find_encoding`、`rb_enc_warn`）、
+  変換器（`rb_econv_t` を `Encoding::Converter` で包む `rb_econv_open(_opts)` /
+  `convert` / `close` / `check_error`、`rb_econv_prepare_opts`、
+  `rb_str_conv_enc_opts`）、`rb_mutex_*`（`Thread::Mutex`）、
+  `rb_str_capacity` / `locktmp` / `replace` / `to_interned_str`、
+  `rb_funcallv_kw` 系と `rb_class_new_instance_kw`、`rb_f_sprintf`、
+  `rb_f_notimplement`、`FL_TEST` / `FL_SET`。`rb_rescue` の rescue 関数の
+  中では `rb_errinfo` がその例外を返す（zlib の `GzipReader` が読む）。
+- **速度**: 最初に動いた版は strscan のループで 44 秒（stub 0.22 秒）、
+  `StringIO#read` で 150 秒かかった。効いた順に:
+  1. **GVL 再取得の `cpuid`**: `Gvl::on_acquired` は取得のたびに
+     命令ストリームを直列化していたが、仮想化環境では `cpuid` が VM exit
+     になり 1 回数十 µs かかる。C 拡張が `rb_thread_call_without_gvl` /
+     `rb_mutex_*` で GVL を頻繁に出入りすると支配的になる（valgrind は
+     `cpuid` のコストをモデル化しないので Ir では見えず、gdb のサンプリングで
+     見つけた）。直前の持ち主が同じスレッドなら直列化は不要なので省く
+     （`State::last`）。zlib の小さい入力の繰り返しで 1.56 → 0.27 秒。
+  2. **ABI 追加で `funcall` を避ける**: `str_coderange` / `str_dup` /
+     `str_capacity` / `str_subseq` / `str_enc_name` / `str_set_enc` /
+     `str_rptr` / `obj_frozen` / `gvar_get` / `gvar_set`（§4）。`rb_enc_get`
+     は名前ポインタをキーにキャッシュ、`rb_type` は RValue ヘッダの `ty`
+     バイトを直接読む（`RB_MONORUBY_CELL_TYPE_OFFSET`、`rvalue.rs` の
+     const assert で固定）。`rb_intern("...")` は GNU C の文ブロックで
+     呼び出し箇所ごとに ID をキャッシュする。
+  3. **`rb_reg_prepare_re` のキャッシュ**: スレッドローカルな
+     (ソースポインタ, オプション, encoding) → `regex_t` の表を Mutex の
+     共有表の前に置いた。
+  4. `capi_frame` の配列スロットを使った分だけ初期化（memset をやめる）、
+     `data_of` がメソッドの self の記録をフレームに持つ、`ExtState` の表を
+     FxHashMap に。
+- **1 プロセスに複数インタプリタ**: CRuby の拡張は状態を C の static に
+  持つ（クラス、キャッシュした ID / VALUE、層自身の `api` や遅延キャッシュ）。
+  テストハーネスはテストスレッドごとにインタプリタを立てるので、同じ
+  マッピングで `Init_` が 2 度走ると前のインタプリタの static を
+  上書きし、`Init_` が書き直さない遅延キャッシュは死んだヒープを指す。
+  `ext::CAPI_INSTANCES` がパスごとにマッピングと持ち主を覚え、2 つ目以降の
+  インタプリタには `.so` を一時ディレクトリにコピーしてから `dlopen` する
+  （別 inode なので動的ローダが別にマップする。コピーはマップ後に消す）。
+  マッピングは再利用も解放もしない。ふつうの monoruby プロセスは
+  インタプリタ 1 つなので常に元ファイルを開くだけ。
+- **結果** (ruby/spec、release ビルド): `library/zlib` 148 例、
+  `library/stringio` 703 例、`library/stringscanner` 240 例、すべて
+  0 失敗 0 エラー（以前は zlib 35F+6E、stringio 122F+77E、strscan 7F+58E）。
+  速度は stub 比で zlib はほぼ同等〜速い、`StringIO#gets` / `read(n)` は
+  同等、strscan のループと `StringIO#write` は約 2〜3 倍遅い（CRuby 比でも
+  遅い。`rb_io_addstr` → `write` の funcall → 可変長引数の配列 →
+  トランポリンという分散したディスパッチ費用）。詳細は
+  `/mnt/project-files/reports/stdlib_cext_2026-11-04.md` を参照。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -803,6 +885,14 @@ ivar を CRuby と比較する。`tests/capi/capi_cxx.cpp` は SWIG の形の C+
 | `backref_get` / `backref_set` | `rb_backref_get` / `rb_backref_set`: 呼び出し元 Ruby フレームの `$~`（C メソッド内の照合はそこに入るので、拡張が退避・復元する。date のパーサが行う） |
 | `gvar_hook` | `rb_define_hooked_variable` 系: グローバル変数の読み書きを data ポインタ付きの C 関数に委ねる（setter NULL で読み取り専用、§3.18） |
 
+| `lastline_get` / `lastline_set` | `rb_lastline_get` / `set`: 呼び出し元 Ruby フレームの `$_`（`StringIO#gets`） |
+| `obj_frozen` | `OBJ_FROZEN` を `frozen?` の呼び出しなしで |
+| `gvar_get` / `gvar_set` | `rb_gv_get` / `rb_gv_set`（フック込み、`$/` など） |
+| `funcall_kw` | `rb_funcallv_kw` 系 |
+| `str_rptr` | `RSTRING_PTR` の読み取り専用版: 共有バッファの String をコピーせずに読む |
+| `str_subseq` / `str_dup` / `str_capacity` | `rb_str_subseq` / `rb_str_dup` / `rb_str_capacity` |
+| `str_enc_name` / `str_set_enc` / `str_coderange` | `rb_enc_get`（プロセス寿命の名前ポインタ）/ `rb_enc_associate` / `rb_enc_str_coderange`（キャッシュ付き） |
+
 あわせて `ary_push` / `hash_set` が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。
 
@@ -820,6 +910,7 @@ ivar を CRuby と比較する。`tests/capi/capi_cxx.cpp` は SWIG の形の C+
 | 8 | 拡張内の `VALUE` を CRuby のビット列に（`Qfalse == 0`）、層が境界で変換 | 済（§3.15、`tests/capi/capi_value.c`、`tests/capi_gems.rs` の json 2.18.0 と 3.1.0） |
 | 9 | 層に無い API への参照はロードを通し呼ばれたら NotImplementedError（スタブアーカイブ）、CRuby の `ext/date` を層でビルドして同梱（`require "date"` / `time` / YAML）、1 文字演算子 ID、`RETURN_ENUMERATOR`、`$~` の退避復元 ABI、mkmf `depend` 用の CRuby ヘッダ名 | 済（§3.16〜3.17、`tests/capi/capi_ids.c`、`tests/date.rs`、ruby/spec `library/date` / `datetime` 全通過） |
 | 10 | C で裏打ちされたグローバル変数（`rb_define_*_variable`、ABI `gvar_hook`）、C++ の ANYARGS overload（`ruby/backward/cxxanyargs.hpp`）、`HAVE_RB_DEFINE_ALLOC_FUNC`、alloc 関数が置いた ivar の引き継ぎ、`rb_obj_instance_eval` 系、`strlcpy`、`.so` の判別を dlopen からシンボル表へ。gosu（SWIG の C++ ラッパー）がビルドでき dewasm の DOOM が動く | 済（§3.18、`tests/capi/capi_vars.c`、`tests/capi/capi_cxx.cpp`） |
+| 11 | CRuby の `ext/strscan` / `ext/stringio` / `ext/zlib` を層でビルドして同梱（monoruby 専用実装と `ext/zlib` を削除）、IO / encoding / econv / mutex の API、GVL 再取得の直列化省略、1 プロセス複数インタプリタでの拡張マッピング分離 | 済（§3.19、ruby/spec `library/zlib` / `stringio` / `stringscanner` 全通過） |
 
 ## 6. 既知の制約
 

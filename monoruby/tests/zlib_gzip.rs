@@ -1,7 +1,7 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// gzip framing in stdlib/zlib.rb: `Zlib.gzip` / `Zlib.gunzip`, the
+// gzip framing in CRuby's zlib.c (monoruby_capi/ext/zlib): `Zlib.gzip` / `Zlib.gunzip`, the
 // GzipReader / GzipWriter objects (header fields, trailer checks, the
 // line-oriented reader API) and the `window_bits` framing selection of
 // the streaming Deflate / Inflate objects. `real` is a stream produced by
@@ -10,7 +10,6 @@ use monoruby::tests::*;
 
 #[test]
 fn gzip_round_trips_and_reader_writer_api() {
-    ensure_extension("zlib_native");
     run_test_once(
         r#"
 require "zlib"

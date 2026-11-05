@@ -90,10 +90,10 @@ fn compare(bench: &str, gems: &[&str], script: &str) {
     ruby.args(["-E", "UTF-8", "-e", script]);
     let expected = run(ruby, &cwd);
     let mut mono = Command::new(env!("CARGO_BIN_FILE_MONORUBY_monoruby"));
-    // Every fingerprint here is a `Zlib.crc32`, so the zlib extension must
-    // be reachable from the spawned binary.
-    ensure_extension("psych_native");
-    mono.env("MONORUBY_EXT_PATH", ensure_extension("zlib_native"));
+    // The Rust extensions the programs load (psych) come from the test
+    // build; zlib (every fingerprint here is a `Zlib.crc32`) is CRuby's
+    // zlib.c, installed with the binary's own root.
+    mono.env("MONORUBY_EXT_PATH", ensure_extension("psych_native"));
     mono.args(["-e", script]);
     let got = run(mono, &cwd);
     eprintln!("ruby:\n{expected}\nmonoruby:\n{got}");

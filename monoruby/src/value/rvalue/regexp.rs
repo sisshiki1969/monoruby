@@ -390,19 +390,19 @@ impl RegexpInner {
         &self,
         store: &Store,
         subject: &RStringInner,
-    ) -> Result<(Vec<u8>, u32, OnigmoEncoding)> {
+    ) -> Result<(&[u8], u32, OnigmoEncoding)> {
         crate::builtins::check_match_encoding(store, self, subject)?;
         Ok(match Self::native_codec_for(subject) {
-            Some(enc) => (self.source.to_vec(), self.regex.option(), enc),
+            Some(enc) => (&self.source, self.regex.option(), enc),
             None => self.capi_engine_key(),
         })
     }
 
     /// [`Self::capi_compile_key`] for the regexp's own engine, with no
     /// subject in hand (`RREGEXP_PTR`).
-    pub(crate) fn capi_engine_key(&self) -> (Vec<u8>, u32, OnigmoEncoding) {
+    pub(crate) fn capi_engine_key(&self) -> (&[u8], u32, OnigmoEncoding) {
         let engine = &self.regex.engine;
-        (engine.as_bytes().to_vec(), engine.option(), engine.encoding())
+        (engine.as_bytes(), engine.option(), engine.encoding())
     }
 
     pub fn option_string(&self) -> String {
@@ -2647,53 +2647,6 @@ impl RegexpInner {
                 }
             }
         }
-    }
-
-    /// `StringScanner` primitive: match `sub` (the byte suffix at the scan
-    /// position, already a valid engine view) either anchored at its start
-    /// (`onig_match`) or as a forward search (`onig_search`), recording the
-    /// registers into the caller's reusable `region`. Returns whether it
-    /// matched; the caller reads the offsets (relative to `sub`) from the
-    /// region. Never touches `$~`. `ascii` is the subject's cached code
-    /// range (7-bit or not) — the scanner calls this once per token on
-    /// an ever-shorter suffix, so it must not be probed here.
-    pub(crate) fn strscan_match(
-        &self,
-        sub: &str,
-        anchored: bool,
-        ascii: bool,
-        region: &mut onigmo_regex::Region,
-    ) -> Result<bool> {
-        let engine = self.engine_for(sub, Some(ascii));
-        let _deadline = self.deadline();
-        let r = if anchored {
-            engine.match_at_with_region(sub.as_bytes(), 0, region)
-        } else {
-            engine.search_with_region(sub.as_bytes(), 0, region)
-        };
-        r.map(|r| r.is_some()).map_err(capture_failed)
-    }
-
-    /// [`strscan_match`](Self::strscan_match) for a non-UTF-8 subject
-    /// with a native Onigmo codec (`enc`, from `onigmo_encoding_for`):
-    /// `sub` is the raw byte suffix at the scan position, matched by the
-    /// source bytes compiled under that codec, so the registers are raw
-    /// byte offsets into `sub`.
-    pub(crate) fn strscan_match_bytes(
-        &self,
-        sub: &[u8],
-        anchored: bool,
-        enc: OnigmoEncoding,
-        region: &mut onigmo_regex::Region,
-    ) -> Result<bool> {
-        let native = self.native_regex(enc)?;
-        let _deadline = self.deadline();
-        let r = if anchored {
-            native.match_at_with_region(sub, 0, region)
-        } else {
-            native.search_with_region(sub, 0, region)
-        };
-        r.map(|r| r.is_some()).map_err(capture_failed)
     }
 
     /// Byte-oriented twin of [`match_pred`](Self::match_pred): whether the

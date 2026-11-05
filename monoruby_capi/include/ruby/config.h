@@ -27,6 +27,10 @@
 #ifndef UNREACHABLE
 #define UNREACHABLE __builtin_unreachable()
 #endif
+#ifndef ASSUME
+/* CRuby's ruby/backward/2/assume.h: a hint, never a check. */
+#define ASSUME(x) (RB_LIKELY(!!(x)) ? (void)0 : UNREACHABLE)
+#endif
 #ifndef UNREACHABLE_RETURN
 #define UNREACHABLE_RETURN(_) __builtin_unreachable()
 #endif

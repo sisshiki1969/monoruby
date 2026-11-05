@@ -50,6 +50,8 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <sys/time.h>
 
 #include "ruby/version.h"
@@ -240,6 +242,16 @@ enum ruby_value_type {
 #define T_UNDEF RUBY_T_UNDEF
 #define T_MASK RUBY_T_MASK
 
+/* The cell header's kind byte (rvalue.rs `Metadata::ty`, an `ObjTy`). */
+#define RB_MONORUBY_CELL_TYPE_OFFSET 2
+#define RB_MONORUBY_CELL_BIGNUM 4
+#define RB_MONORUBY_CELL_FLOAT 5
+#define RB_MONORUBY_CELL_STRING 6
+#define RB_MONORUBY_CELL_ARRAY 8
+#define RB_MONORUBY_CELL_HASH 12
+#define RB_MONORUBY_CELL_REGEXP 13
+#define RB_MONORUBY_CELL_MATCH 22
+
 /* The type of a heap object (a VALUE that is not SPECIAL_CONST_P). */
 int rb_monoruby_heap_type(VALUE obj);
 
@@ -253,6 +265,19 @@ rb_type(VALUE obj)
     if (RB_FIXNUM_P(obj)) return RUBY_T_FIXNUM;
     if (RB_FLONUM_P(obj)) return RUBY_T_FLOAT;
     if (RB_STATIC_SYM_P(obj)) return RUBY_T_SYMBOL;
+    /* A heap VALUE is the interpreter's own cell pointer, and the cell's
+     * kind is the byte at RB_MONORUBY_CELL_TYPE_OFFSET (the JIT reads it
+     * the same way; ext.rs asserts the numbers). The kinds that map one
+     * to one are read here; the rest ask the interpreter. */
+    switch (((const unsigned char *)obj)[RB_MONORUBY_CELL_TYPE_OFFSET]) {
+    case RB_MONORUBY_CELL_STRING: return RUBY_T_STRING;
+    case RB_MONORUBY_CELL_ARRAY: return RUBY_T_ARRAY;
+    case RB_MONORUBY_CELL_HASH: return RUBY_T_HASH;
+    case RB_MONORUBY_CELL_FLOAT: return RUBY_T_FLOAT;
+    case RB_MONORUBY_CELL_BIGNUM: return RUBY_T_BIGNUM;
+    case RB_MONORUBY_CELL_REGEXP: return RUBY_T_REGEXP;
+    case RB_MONORUBY_CELL_MATCH: return RUBY_T_MATCH;
+    }
     return (enum ruby_value_type)rb_monoruby_heap_type(obj);
 }
 
@@ -417,6 +442,90 @@ VALUE rb_obj_init_copy(VALUE obj, VALUE orig);
 #define RB_OBJ_FROZEN(obj) OBJ_FROZEN(obj)
 #define OBJ_FREEZE(obj) ((void)rb_obj_freeze((VALUE)(obj)))
 #define RB_OBJ_FREEZE(obj) OBJ_FREEZE(obj)
+
+/* Object flags (rb_monoruby_rbasic in capi.c). monoruby keeps no CRuby
+ * flag word: on a Data / TypedData object, RBASIC(obj)->flags holds the
+ * FL_USER* bits the extension itself set; on any other object it is a
+ * read-only scratch copy. FL_FREEZE reads (and FL_SET writes) the frozen
+ * state everywhere; every other bit of a non-Data object reads as 0. */
+#define RUBY_FL_FREEZE ((VALUE)1 << 11)
+#define RUBY_FL_USHIFT 12
+#define RUBY_FL_USER_N(n) ((VALUE)1 << (RUBY_FL_USHIFT + (n)))
+#define RUBY_FL_USER0 RUBY_FL_USER_N(0)
+#define RUBY_FL_USER1 RUBY_FL_USER_N(1)
+#define RUBY_FL_USER2 RUBY_FL_USER_N(2)
+#define RUBY_FL_USER3 RUBY_FL_USER_N(3)
+#define RUBY_FL_USER4 RUBY_FL_USER_N(4)
+#define RUBY_FL_USER5 RUBY_FL_USER_N(5)
+#define RUBY_FL_USER6 RUBY_FL_USER_N(6)
+#define RUBY_FL_USER7 RUBY_FL_USER_N(7)
+#define RUBY_FL_USER8 RUBY_FL_USER_N(8)
+#define RUBY_FL_USER9 RUBY_FL_USER_N(9)
+#define RUBY_FL_USER10 RUBY_FL_USER_N(10)
+#define RUBY_FL_USER11 RUBY_FL_USER_N(11)
+#define RUBY_FL_USER12 RUBY_FL_USER_N(12)
+#define RUBY_FL_USER13 RUBY_FL_USER_N(13)
+#define RUBY_FL_USER14 RUBY_FL_USER_N(14)
+#define RUBY_FL_USER15 RUBY_FL_USER_N(15)
+#define RUBY_FL_USER16 RUBY_FL_USER_N(16)
+#define RUBY_FL_USER17 RUBY_FL_USER_N(17)
+#define RUBY_FL_USER18 RUBY_FL_USER_N(18)
+#define RUBY_FL_USER19 RUBY_FL_USER_N(19)
+#define FL_FREEZE RUBY_FL_FREEZE
+#define FL_USHIFT RUBY_FL_USHIFT
+#define FL_USER0 RUBY_FL_USER0
+#define FL_USER1 RUBY_FL_USER1
+#define FL_USER2 RUBY_FL_USER2
+#define FL_USER3 RUBY_FL_USER3
+#define FL_USER4 RUBY_FL_USER4
+#define FL_USER5 RUBY_FL_USER5
+#define FL_USER6 RUBY_FL_USER6
+#define FL_USER7 RUBY_FL_USER7
+#define FL_USER8 RUBY_FL_USER8
+#define FL_USER9 RUBY_FL_USER9
+#define FL_USER10 RUBY_FL_USER10
+#define FL_USER11 RUBY_FL_USER11
+#define FL_USER12 RUBY_FL_USER12
+#define FL_USER13 RUBY_FL_USER13
+#define FL_USER14 RUBY_FL_USER14
+#define FL_USER15 RUBY_FL_USER15
+#define FL_USER16 RUBY_FL_USER16
+#define FL_USER17 RUBY_FL_USER17
+#define FL_USER18 RUBY_FL_USER18
+#define FL_USER19 RUBY_FL_USER19
+struct RBasic {
+    VALUE flags;
+    VALUE klass;
+};
+struct RBasic *rb_monoruby_rbasic(VALUE obj);
+VALUE rb_monoruby_fl_test(VALUE obj, VALUE flags);
+void rb_monoruby_fl_set(VALUE obj, VALUE flags);
+void rb_monoruby_fl_unset(VALUE obj, VALUE flags);
+#define RBASIC(obj) (rb_monoruby_rbasic((VALUE)(obj)))
+#define RB_FL_ABLE(x) (!RB_SPECIAL_CONST_P(x))
+#define FL_ABLE(x) RB_FL_ABLE(x)
+#define RB_FL_TEST(x, f) rb_monoruby_fl_test((VALUE)(x), (VALUE)(f))
+#define RB_FL_TEST_RAW(x, f) RB_FL_TEST(x, f)
+#define RB_FL_ANY(x, f) (RB_FL_TEST(x, f) != 0)
+#define RB_FL_ANY_RAW(x, f) RB_FL_ANY(x, f)
+#define RB_FL_ALL(x, f) (RB_FL_TEST(x, f) == (VALUE)(f))
+#define RB_FL_ALL_RAW(x, f) RB_FL_ALL(x, f)
+#define RB_FL_SET(x, f) rb_monoruby_fl_set((VALUE)(x), (VALUE)(f))
+#define RB_FL_SET_RAW(x, f) RB_FL_SET(x, f)
+#define RB_FL_UNSET(x, f) rb_monoruby_fl_unset((VALUE)(x), (VALUE)(f))
+#define RB_FL_UNSET_RAW(x, f) RB_FL_UNSET(x, f)
+#define FL_TEST(x, f) RB_FL_TEST(x, f)
+#define FL_TEST_RAW(x, f) RB_FL_TEST_RAW(x, f)
+#define FL_ANY(x, f) RB_FL_ANY(x, f)
+#define FL_ANY_RAW(x, f) RB_FL_ANY_RAW(x, f)
+#define FL_ALL(x, f) RB_FL_ALL(x, f)
+#define FL_ALL_RAW(x, f) RB_FL_ALL_RAW(x, f)
+#define FL_SET(x, f) RB_FL_SET(x, f)
+#define FL_SET_RAW(x, f) RB_FL_SET_RAW(x, f)
+#define FL_UNSET(x, f) RB_FL_UNSET(x, f)
+#define FL_UNSET_RAW(x, f) RB_FL_UNSET_RAW(x, f)
+#define OBJ_FROZEN_RAW(x) OBJ_FROZEN(x)
+
 VALUE rb_obj_dup(VALUE obj);
 VALUE rb_obj_clone(VALUE obj);
 VALUE rb_obj_id(VALUE obj);
@@ -559,7 +668,7 @@ VALUE rb_enumeratorize_with_size(VALUE obj, VALUE meth, int argc, const VALUE *a
 VALUE rb_enumeratorize_with_size_kw(VALUE obj, VALUE meth, int argc, const VALUE *argv,
                                     rb_enumerator_size_func *size_fn, int kw_splat);
 #define SIZED_ENUMERATOR(obj, argc, argv, size_fn) \
-    rb_enumeratorize_with_size((obj), ID2SYM(rb_frame_this_func()), (argc), (argv), (size_fn))
+    rb_enumeratorize_with_size_kw((obj), ID2SYM(rb_frame_this_func()), (argc), (argv), (size_fn), rb_keyword_given_p())
 #define SIZED_ENUMERATOR_KW(obj, argc, argv, size_fn, kw_splat) \
     rb_enumeratorize_with_size_kw((obj), ID2SYM(rb_frame_this_func()), (argc), (argv), (size_fn), (kw_splat))
 #define RETURN_SIZED_ENUMERATOR(obj, argc, argv, size_fn) do { \
@@ -607,6 +716,21 @@ NORETURN(void rb_sys_fail_str(VALUE msg));
 NORETURN(void rb_syserr_fail(int err, const char *msg));
 NORETURN(void rb_syserr_fail_str(int err, VALUE msg));
 NORETURN(void rb_notimplement(void));
+/* A method defined with this body raises NotImplementedError. */
+VALUE rb_f_notimplement(int argc, const VALUE *argv, VALUE obj, VALUE marker);
+
+/* Thread::Mutex. */
+VALUE rb_mutex_new(void);
+VALUE rb_mutex_locked_p(VALUE mutex);
+VALUE rb_mutex_trylock(VALUE mutex);
+VALUE rb_mutex_lock(VALUE mutex);
+VALUE rb_mutex_unlock(VALUE mutex);
+VALUE rb_mutex_sleep(VALUE mutex, VALUE timeout);
+VALUE rb_mutex_synchronize(VALUE mutex, VALUE (*func)(VALUE arg), VALUE arg);
+
+/* File.open(fname, modestr). */
+VALUE rb_file_open(const char *fname, const char *modestr);
+VALUE rb_file_open_str(VALUE fname, const char *modestr);
 NORETURN(void rb_error_arity(int argc, int min, int max));
 NORETURN(void rb_jump_tag(int state));
 NORETURN(void rb_iter_break(void));
@@ -636,6 +760,17 @@ rb_check_arity(int argc, int min, int max)
     return argc;
 }
 #define rb_check_arity rb_check_arity
+
+/* The `kw_splat` argument of the *_kw calls: whether the last argument
+ * is passed as keywords. */
+#define RB_NO_KEYWORDS 0
+#define RB_PASS_KEYWORDS 1
+#define RB_PASS_CALLED_KEYWORDS rb_keyword_given_p()
+VALUE rb_funcallv_kw(VALUE recv, ID mid, int argc, const VALUE *argv, int kw_splat);
+VALUE rb_funcall_passing_block_kw(VALUE recv, ID mid, int argc, const VALUE *argv, int kw_splat);
+VALUE rb_funcall_with_block_kw(VALUE recv, ID mid, int argc, const VALUE *argv, VALUE procval, int kw_splat);
+VALUE rb_class_new_instance_kw(int argc, const VALUE *argv, VALUE klass, int kw_splat);
+VALUE rb_class_new_instance_pass_kw(int argc, const VALUE *argv, VALUE klass);
 
 int rb_scan_args(int argc, const VALUE *argv, const char *fmt, ...);
 /* rb_scan_args_kw: how the trailing Hash is read. PASS_CALLED_KEYWORDS
@@ -793,6 +928,11 @@ VALUE rb_str_resize(VALUE str, long len);
 void rb_str_set_len(VALUE str, long len);
 void rb_str_modify(VALUE str);
 void rb_str_modify_expand(VALUE str, long expand);
+size_t rb_str_capacity(VALUE str);
+/* CRuby forbids changing a locked String's buffer; the layer hands the
+ * buffer out as it is and checks nothing. */
+VALUE rb_str_locktmp(VALUE str);
+VALUE rb_str_unlocktmp(VALUE str);
 VALUE rb_str_to_inum(VALUE str, int base, int badcheck);
 VALUE rb_cstr2inum(const char *str, int base);
 VALUE rb_str2inum(VALUE str, int base);
@@ -803,6 +943,7 @@ VALUE rb_vsprintf(const char *fmt, va_list ap);
 VALUE rb_str_catf(VALUE str, const char *fmt, ...);
 VALUE rb_str_vcatf(VALUE str, const char *fmt, va_list ap);
 VALUE rb_str_format(int argc, const VALUE *argv, VALUE fmt);
+VALUE rb_f_sprintf(int argc, const VALUE *argv);
 
 #define StringValue(v) rb_string_value(&(v))
 #define StringValuePtr(v) rb_string_value_ptr(&(v))
@@ -822,6 +963,19 @@ long rb_monoruby_rstring_len(VALUE str);
 /* ---- symbols and IDs -------------------------------------------------- */
 
 ID rb_intern(const char *name);
+/* As CRuby's own header does: a literal name is interned once per call
+ * site (IDs are process-wide, so the cache never goes stale). */
+#if defined(__GNUC__) && !defined(__cplusplus)
+#define rb_intern(str) \
+    (__builtin_constant_p(str) \
+         ? __extension__({ \
+               static ID rb_intern_id_cache; \
+               if (!rb_intern_id_cache) \
+                   rb_intern_id_cache = rb_intern2((str), (long)strlen(str)); \
+               rb_intern_id_cache; \
+           }) \
+         : (rb_intern)(str))
+#endif
 ID rb_intern2(const char *name, long len);
 ID rb_intern_str(VALUE str);
 const char *rb_id2name(ID id);
@@ -1164,6 +1318,18 @@ VALUE rb_io_printf(int argc, const VALUE *argv, VALUE io);
 VALUE rb_io_get_io(VALUE io);
 VALUE rb_io_check_io(VALUE io);
 VALUE rb_io_taint_check(VALUE io);
+NORETURN(void rb_eof_error(void));
+VALUE rb_lastline_get(void);
+void rb_lastline_set(VALUE val);
+/* CRuby's variables; read from `$/`, `$\`, `$;` at each use here. */
+VALUE rb_monoruby_rs(void);
+VALUE rb_monoruby_output_rs(void);
+VALUE rb_monoruby_fs(void);
+VALUE rb_monoruby_default_rs(void);
+#define rb_rs (rb_monoruby_rs())
+#define rb_output_rs (rb_monoruby_output_rs())
+#define rb_fs (rb_monoruby_fs())
+#define rb_default_rs (rb_monoruby_default_rs())
 VALUE rb_str_replace(VALUE str, VALUE str2);
 VALUE rb_str_to_interned_str(VALUE str);
 #define RB_OBJ_FROZEN_RAW(x) RB_OBJ_FROZEN(x)

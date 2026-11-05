@@ -216,6 +216,20 @@ struct MrApi {
        makes it read-only, getter NULL reads as nil. The hooks' own values are theirs
        to keep alive (gc_register_address / gc_pin). */
     void    (*gvar_hook)(MrContext *, MrSym name, void *data, MrGvarGetFn getter, MrGvarSetFn setter);
+    /* appended for rb_lastline_get / rb_lastline_set (`$_` of the calling Ruby frame) and OBJ_FROZEN */
+    MrValue (*lastline_get)(MrContext *);
+    void    (*lastline_set)(MrContext *, MrValue v);
+    int     (*obj_frozen)(MrContext *, MrValue v);                       /* v.frozen? without a method call */
+    MrValue (*gvar_get)(MrContext *, const char *name);                  /* rb_gv_get: `$name` with its hook */
+    int     (*gvar_set)(MrContext *, const char *name, MrValue v);       /* rb_gv_set: -1 with an error pending */
+    MrValue (*funcall_kw)(MrContext *, MrValue recv, MrSym sym, int argc, const MrValue *argv, MrValue block, int kw_splat); /* last of argv as keywords */
+    uint8_t *(*str_rptr)(MrContext *, MrValue v, size_t *len);   /* RSTRING_PTR: str_cptr, or a shared view's bytes in place */
+    MrValue (*str_subseq)(MrContext *, MrValue v, int64_t beg, int64_t len); /* rb_str_subseq (clamped) */
+    const char *(*str_enc_name)(MrContext *, MrValue v);             /* encoding name, one static pointer per encoding */
+    int     (*str_set_enc)(MrContext *, MrValue v, const char *name);  /* force_encoding: 0, -1 error, -2 unresolved */
+    int     (*str_coderange)(MrContext *, MrValue v);  /* 1 7bit, 2 valid, 3 broken, -1 error */
+    MrValue (*str_dup)(MrContext *, MrValue v);  /* rb_str_dup */
+    int64_t (*str_capacity)(MrContext *, MrValue v);  /* rb_str_capacity, -1 error */
 };
 
 /* Onigmo's entry points as linked into monoruby, types erased: regex_t *

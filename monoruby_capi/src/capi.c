@@ -38,6 +38,7 @@
  */
 #include "ruby.h"
 #include "ruby/encoding.h"
+#include "ruby/io.h"
 #include "ruby/thread.h"
 #include "ruby/util.h"
 #include "monoruby_ext.h"
@@ -99,8 +100,16 @@ struct capi_frame {
      * dispatch frame); it owns the C strings and the Array copies
      * handed out during the call. */
     struct capi_frame *owner;
+    /* A dispatch frame's receiver and its Data record, once data_of has
+     * looked it up: self is alive for the whole call, so the record
+     * cannot change under it. */
+    VALUE self_val;
+    struct capi_data *self_data;
     struct capi_buf *bufs;
+    /* Only ary[0 .. ary_init) is initialized: most calls hand out no
+     * Array pointer, and the frame is set up on every dispatch. */
     struct capi_ary_slot ary[CAPI_ARY_SLOTS];
+    unsigned ary_init;
     unsigned ary_next;
     jmp_buf jb;
 };
@@ -138,7 +147,9 @@ frame_init(struct capi_frame *fr, MrContext *c, MrValue block,
     fr->owner = owner ? owner : fr;
     fr->method = method;
     fr->bufs = NULL;
-    memset(fr->ary, 0, sizeof(fr->ary));
+    fr->self_val = Qundef;
+    fr->self_data = NULL;
+    fr->ary_init = 0;
     fr->ary_next = 0;
 }
 
@@ -274,10 +285,9 @@ free_bufs(struct capi_frame *f)
         b = next;
     }
     f->bufs = NULL;
-    for (unsigned i = 0; i < CAPI_ARY_SLOTS; i++) {
+    for (unsigned i = 0; i < f->ary_init; i++)
         free(f->ary[i].buf);
-        f->ary[i].buf = NULL;
-    }
+    f->ary_init = 0;
 }
 
 /* ---------------------------------------------------------------------
@@ -454,6 +464,7 @@ capi_dispatch(MrContext *c, MrValue self, int argc, const MrValue *argv, MrValue
     struct capi_frame *volatile fp = &fr;
     volatile MrValue result = MR_UNDEF;
     frame_init(&fr, c, block, (const struct capi_method *)data, NULL);
+    fr.self_val = R(self);
     capi_cur = &fr;
     if (_setjmp(fr.jb) == 0) {
         VALUE small[CAPI_SMALL_ARGS];
@@ -1002,8 +1013,16 @@ vrescue(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALU
     VALUE exc = capi_errinfo;
     for (int i = 0; i < nclasses; i++) {
         if (api->is_kind_of(ctx(), M(exc), M(classes[i]))) {
+            /* `$!` is the exception while the rescue function runs, as in
+             * CRuby (zlib's read fallback asks rb_errinfo which it was),
+             * and is cleared once it returns. */
+            if (!r_proc) {
+                capi_errinfo = Qnil;
+                return Qnil;
+            }
+            VALUE r = r_proc(data2, exc);
             capi_errinfo = Qnil;
-            return r_proc ? r_proc(data2, exc) : Qnil;
+            return r;
         }
     }
     rb_jump_tag(state);
@@ -1234,6 +1253,40 @@ funcall_block(VALUE recv, ID mid, int argc, const VALUE *argv, MrValue block)
                                  mr_args(argc, argv, small), block);
     capi_cur = saved;
     return check(r);
+}
+
+/* funcall_block, with the last argument passed as keywords when
+ * `kw_splat` is set (and it is a Hash). */
+static VALUE
+funcall_block_kw(VALUE recv, ID mid, int argc, const VALUE *argv, MrValue block, int kw_splat)
+{
+    if (!kw_splat || argc == 0 || !RB_TYPE_P(argv[argc - 1], T_HASH) ||
+        api->size < offsetof(MrApi, funcall_kw) + sizeof(api->funcall_kw))
+        return funcall_block(recv, mid, argc, argv, block);
+    struct capi_frame *saved = frame();
+    MrValue small[CAPI_SMALL_ARGS];
+    MrValue r = api->funcall_kw(saved->ctx, M(recv), (MrSym)mid, argc,
+                                mr_args(argc, argv, small), block, 1);
+    capi_cur = saved;
+    return check(r);
+}
+
+VALUE
+rb_funcallv_kw(VALUE recv, ID mid, int argc, const VALUE *argv, int kw_splat)
+{
+    return funcall_block_kw(recv, mid, argc, argv, MR_UNDEF, kw_splat);
+}
+
+VALUE
+rb_funcall_passing_block_kw(VALUE recv, ID mid, int argc, const VALUE *argv, int kw_splat)
+{
+    return funcall_block_kw(recv, mid, argc, argv, frame()->block, kw_splat);
+}
+
+VALUE
+rb_funcall_with_block_kw(VALUE recv, ID mid, int argc, const VALUE *argv, VALUE procval, int kw_splat)
+{
+    return funcall_block_kw(recv, mid, argc, argv, NIL_P(procval) ? MR_UNDEF : M(procval), kw_splat);
 }
 
 VALUE
@@ -1690,7 +1743,7 @@ rb_intern2(const char *name, long len)
 }
 
 ID
-rb_intern(const char *name)
+(rb_intern)(const char *name)
 {
     return rb_intern2(name, (long)strlen(name));
 }
@@ -2142,7 +2195,12 @@ rb_prepend_module(VALUE klass, VALUE module)
 VALUE
 rb_class_new_instance(int argc, const VALUE *argv, VALUE klass)
 {
-    return rb_funcallv(klass, rb_intern("new"), argc, argv);
+    /* allocate + initialize, as CRuby's does: not `klass.new`, which an
+     * extension's own `new` (StringIO.new) calls this to implement. The
+     * calling method's block goes on to initialize. */
+    VALUE obj = rb_obj_alloc(klass);
+    rb_obj_call_init(obj, argc, argv);
+    return obj;
 }
 
 VALUE
@@ -2288,6 +2346,8 @@ rb_obj_freeze(VALUE obj)
 VALUE
 rb_obj_frozen_p(VALUE obj)
 {
+    if (api->size >= offsetof(MrApi, obj_frozen) + sizeof(api->obj_frozen))
+        return api->obj_frozen(ctx(), M(obj)) ? Qtrue : Qfalse;
     static VALUE um;
     return rb_funcall(object_method("frozen?", &um), rb_intern("bind_call"), 1, obj);
 }
@@ -2389,7 +2449,10 @@ rb_obj_as_string(VALUE obj)
 VALUE
 rb_any_to_s(VALUE obj)
 {
-    return rb_sprintf("#<%" PRIsVALUE ">", rb_obj_class(obj));
+    /* Kernel#to_s's own "#<Class:0x...>" for the real class, as object.c's
+     * rb_any_to_s builds it. */
+    static VALUE um;
+    return rb_funcall(object_method("to_s", &um), rb_intern("bind_call"), 1, obj);
 }
 
 void
@@ -2588,12 +2651,22 @@ VALUE
 rb_gv_get(const char *name)
 {
     char buf[256];
+    if (api->size >= offsetof(MrApi, gvar_get) + sizeof(api->gvar_get)) {
+        snprintf(buf, sizeof(buf), "%s%s", name[0] == '$' ? "" : "$", name);
+        return R(api->gvar_get(ctx(), buf));
+    }
     return rb_eval_string(gvar_name(name, buf, sizeof(buf)));
 }
 
 VALUE
 rb_gv_set(const char *name, VALUE val)
 {
+    if (api->size >= offsetof(MrApi, gvar_set) + sizeof(api->gvar_set)) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "%s%s", name[0] == '$' ? "" : "$", name);
+        check_rc(api->gvar_set(ctx(), buf, M(val)));
+        return val;
+    }
     char gv[256], code[300];
     snprintf(code, sizeof(code), "->(v) { %s = v }", gvar_name(name, gv, sizeof(gv)));
     return rb_funcall(rb_eval_string(code), rb_intern("call"), 1, val);
@@ -3017,11 +3090,10 @@ rb_enumeratorize_with_size_kw(VALUE obj, VALUE meth, int argc, const VALUE *argv
 {
     VALUE *args = ALLOCA_N(VALUE, argc + 1);
     (void)size_fn;
-    (void)kw_splat;
     args[0] = meth;
     if (argc > 0)
         memcpy(args + 1, argv, sizeof(VALUE) * argc);
-    return rb_funcallv(obj, rb_intern("to_enum"), argc + 1, args);
+    return rb_funcallv_kw(obj, rb_intern("to_enum"), argc + 1, args, kw_splat);
 }
 
 VALUE
@@ -3360,7 +3432,9 @@ char *
 rb_monoruby_rstring_ptr(VALUE str)
 {
     size_t len;
-    uint8_t *p = api->str_cptr(ctx(), M(str), &len);
+    uint8_t *p = api->size >= offsetof(MrApi, str_rptr) + sizeof(api->str_rptr)
+                     ? api->str_rptr(ctx(), M(str), &len)
+                     : api->str_cptr(ctx(), M(str), &len);
     if (!p)
         capi_unwind();
     return (char *)p;
@@ -3532,6 +3606,20 @@ VALUE
 rb_str_buf_append(VALUE str, VALUE str2)
 {
     StringValue(str2);
+    /* The cases string.c appends without a change of encoding: the same
+     * encoding, or ASCII-only text onto an ASCII-compatible string. */
+    if (HAVE_API(str_cat) && HAVE_API(str_rptr) && str != str2 && RB_TYPE_P(str, T_STRING)) {
+        rb_encoding *e1 = rb_enc_get(str), *e2 = rb_enc_get(str2);
+        if (e1 == e2 ||
+            (rb_enc_asciicompat(e1) && rb_enc_str_coderange(str2) == ENC_CODERANGE_7BIT)) {
+            size_t len;
+            const uint8_t *p = api->str_rptr(ctx(), M(str2), &len);
+            if (!p)
+                capi_unwind();
+            check_rc(api->str_cat(ctx(), M(str), p, len));
+            return str;
+        }
+    }
     return rb_funcall(str, rb_intern("<<"), 1, str2);
 }
 
@@ -3563,6 +3651,8 @@ rb_str_times(VALUE str, VALUE times)
 VALUE
 rb_str_dup(VALUE str)
 {
+    if (HAVE_API(str_dup) && RB_TYPE_P(str, T_STRING))
+        return check(api->str_dup(ctx(), M(str)));
     return rb_funcall(str, rb_intern("dup"), 0);
 }
 
@@ -3599,6 +3689,8 @@ rb_str_substr(VALUE str, long beg, long len)
 VALUE
 rb_str_subseq(VALUE str, long beg, long len)
 {
+    if (HAVE_API(str_subseq) && RB_TYPE_P(str, T_STRING))
+        return check(api->str_subseq(ctx(), M(str), (int64_t)beg, (int64_t)len));
     return rb_funcall(str, rb_intern("byteslice"), 2, LONG2NUM(beg), LONG2NUM(len));
 }
 
@@ -3680,8 +3772,12 @@ char *
 rb_string_value_cstr(volatile VALUE *ptr)
 {
     VALUE s = rb_string_value(ptr);
-    char *p = RSTRING_PTR(s);
-    long len = RSTRING_LEN(s);
+    /* The NUL-terminated buffer: a shared view is detached first. */
+    size_t n;
+    char *p = (char *)api->str_cptr(ctx(), M(s), &n);
+    if (!p)
+        capi_unwind();
+    long len = (long)n;
     if (memchr(p, 0, (size_t)len))
         rb_raise(rb_eArgError, "string contains null byte");
     return p;
@@ -3712,7 +3808,12 @@ void
 rb_str_modify(VALUE str)
 {
     rb_check_frozen(str);
-    (void)RSTRING_PTR(str);
+    /* Detach a shared buffer (RSTRING_PTR hands a shared view's bytes out
+     * in place), so the bytes RSTRING_PTR gives from here on are this
+     * string's own to write. */
+    size_t len;
+    if (!api->str_cptr(ctx(), M(str), &len))
+        capi_unwind();
 }
 
 void
@@ -3862,13 +3963,18 @@ rb_array_const_ptr(VALUE ary)
         capi_unwind();
     struct capi_frame *owner = frame()->owner;
     struct capi_ary_slot *slot = NULL;
-    for (unsigned i = 0; i < CAPI_ARY_SLOTS; i++) {
+    for (unsigned i = 0; i < owner->ary_init; i++) {
         if (owner->ary[i].buf && owner->ary[i].ary == a) {
             slot = &owner->ary[i];
             break;
         }
     }
-    if (!slot) {
+    if (!slot && owner->ary_init < CAPI_ARY_SLOTS) {
+        slot = &owner->ary[owner->ary_init++];
+        slot->buf = NULL;
+        slot->cap = 0;
+    }
+    else if (!slot) {
         slot = &owner->ary[owner->ary_next];
         owner->ary_next = (owner->ary_next + 1) % CAPI_ARY_SLOTS;
     }
@@ -4346,11 +4452,37 @@ rb_usascii_encindex(void)
     return 2;
 }
 
+/* `api->str_enc_name` hands out one pointer per encoding for the life of
+ * the process, so the rb_encoding it names is cached by that pointer. */
+static struct {
+    const char *name;
+    rb_encoding *enc;
+} enc_name_cache[64];
+
+static rb_encoding *
+enc_of_static_name(const char *name)
+{
+    size_t h = ((uintptr_t)name >> 4) % 64;
+    if (enc_name_cache[h].name == name)
+        return enc_name_cache[h].enc;
+    enc_init();
+    rb_encoding *enc = enc_register(strcmp(name, "BINARY") == 0 ? "ASCII-8BIT" : name);
+    enc_name_cache[h].name = name;
+    enc_name_cache[h].enc = enc;
+    return enc;
+}
+
 rb_encoding *
 rb_enc_get(VALUE obj)
 {
-    if (RB_TYPE_P(obj, T_STRING))
+    if (RB_TYPE_P(obj, T_STRING)) {
+        if (HAVE_API(str_enc_name)) {
+            const char *name = api->str_enc_name(ctx(), M(obj));
+            if (name)
+                return enc_of_static_name(name);
+        }
         return enc_of_name(check(api->str_encoding(ctx(), M(obj))));
+    }
     if (RTEST(rb_obj_is_kind_of(obj, rb_cEncoding)))
         return rb_to_encoding(obj);
     if (!rb_respond_to(obj, rb_intern("encoding")))
@@ -4432,7 +4564,15 @@ rb_to_encoding_index(VALUE enc)
 VALUE
 rb_enc_associate(VALUE obj, rb_encoding *enc)
 {
-    return force_encoding(obj, enc ? enc->name : "ASCII-8BIT");
+    const char *name = enc ? enc->name : "ASCII-8BIT";
+    if (HAVE_API(str_set_enc) && RB_TYPE_P(obj, T_STRING)) {
+        int rc = api->str_set_enc(ctx(), M(obj), name);
+        if (rc == 0)
+            return obj;
+        if (rc == -1)
+            capi_unwind();
+    }
+    return force_encoding(obj, name);
 }
 
 VALUE
@@ -4504,6 +4644,18 @@ rb_str_conv_enc(VALUE str, rb_encoding *from, rb_encoding *to)
         from = rb_enc_get(str);
     if (from == to)
         return str;
+    /* string.c's rb_str_conv_enc_opts: ASCII-only text needs no
+     * conversion into an ASCII-compatible encoding (nor anything into
+     * ASCII-8BIT), only a relabelled copy. */
+    if ((rb_enc_asciicompat(to) && rb_enc_asciicompat(from) &&
+         rb_enc_str_coderange(str) == ENC_CODERANGE_7BIT) ||
+        to->index == 0) {
+        if (rb_enc_get(str) != to) {
+            str = rb_str_dup(str);
+            rb_enc_associate(str, to);
+        }
+        return str;
+    }
     struct conv_args a = {str, rb_str_new_cstr(to->name), rb_str_new_cstr(from->name)};
     int state;
     VALUE r = rb_protect(conv_body, (VALUE)&a, &state);
@@ -4523,15 +4675,27 @@ rb_str_encode(VALUE str, VALUE to, int ecflags, VALUE ecopts)
     return rb_funcall(str, rb_intern("encode"), 2, to, ecopts);
 }
 
+/* Per encoding index: 0 not asked yet, 1 ASCII-compatible, 2 not. */
+static signed char enc_asciicompat_cache[256];
+
 int
 rb_enc_asciicompat(rb_encoding *enc)
 {
-    return RTEST(rb_funcall(rb_enc_from_encoding(enc), rb_intern("ascii_compatible?"), 0));
+    if (!enc)
+        return 0;
+    if (enc->index >= 0 && enc->index < 256 && enc_asciicompat_cache[enc->index])
+        return enc_asciicompat_cache[enc->index] == 1;
+    int r = RTEST(rb_funcall(rb_enc_from_encoding(enc), rb_intern("ascii_compatible?"), 0));
+    if (enc->index >= 0 && enc->index < 256)
+        enc_asciicompat_cache[enc->index] = r ? 1 : 2;
+    return r;
 }
 
 int
 rb_enc_str_asciionly_p(VALUE str)
 {
+    if (HAVE_API(str_coderange) && RB_TYPE_P(str, T_STRING))
+        return rb_enc_str_coderange(str) == ENC_CODERANGE_7BIT;
     return RTEST(rb_funcall(str, rb_intern("ascii_only?"), 0));
 }
 
@@ -4640,6 +4804,9 @@ struct capi_data {
     RUBY_DATA_FUNC dmark;
     RUBY_DATA_FUNC dfree;
     const rb_data_type_t *type;
+    /* What `RBASIC(obj)` hands out: the object's FL_USER* bits, which
+     * only this layer reads (`rb_monoruby_rbasic`). */
+    struct RBasic basic;
 };
 
 static void
@@ -4789,6 +4956,8 @@ data_wrap(VALUE klass, void *datap, RUBY_DATA_FUNC dmark, RUBY_DATA_FUNC dfree, 
     d->dmark = dmark;
     d->dfree = dfree;
     d->type = type;
+    d->basic.flags = 0;
+    d->basic.klass = 0;
     MrValue obj = api->native_new(ctx(), M(klass), d, &data_ops);
     if (obj == MR_UNDEF) {
         free(d);
@@ -4823,9 +4992,15 @@ copy_ivar(ID id, VALUE val, st_data_t to)
 static struct capi_data *
 data_of(VALUE obj, int raise)
 {
-    struct capi_data *d = api->native_data(ctx(), M(obj), &data_ops);
-    if (d)
+    struct capi_frame *f = frame(), *owner = f->owner;
+    if (obj == owner->self_val && owner->self_data)
+        return owner->self_data;
+    struct capi_data *d = api->native_data(f->ctx, M(obj), &data_ops);
+    if (d) {
+        if (obj == owner->self_val)
+            owner->self_data = d;
         return d;
+    }
     if (api->type_of(ctx(), M(obj)) == MR_T_NATIVE) {
         VALUE klass = rb_obj_class(obj);
         rb_alloc_func_t *alloc = rb_get_alloc_func(klass);
@@ -4946,6 +5121,68 @@ rb_monoruby_rdata(VALUE obj)
     return data_of(obj, 1);
 }
 
+/*
+ * Object flags. monoruby keeps none of CRuby's flag word, so `RBASIC(obj)`
+ * is a view the layer makes up: on a Data / TypedData object it is the
+ * record's own `struct RBasic`, whose FL_USER* bits an extension may set
+ * and read back (stringio keeps its open-for-read / -write state there);
+ * on anything else it is a zeroed scratch copy whose writes go nowhere.
+ * Neither carries FL_FREEZE (FL_TEST / OBJ_FROZEN read the frozen state),
+ * and `klass` is 0: read the class with `rb_obj_class` / `RBASIC_CLASS`.
+ * It is on every StringIO operation's path, so it is one payload lookup.
+ */
+struct RBasic *
+rb_monoruby_rbasic(VALUE obj)
+{
+    static struct RBasic scratch;
+    struct capi_data *d = SPECIAL_CONST_P(obj) ? NULL : data_of(obj, 0);
+    if (d)
+        return &d->basic;
+    scratch.flags = 0;
+    scratch.klass = 0;
+    return &scratch;
+}
+
+VALUE
+rb_monoruby_fl_test(VALUE obj, VALUE flags)
+{
+    if (SPECIAL_CONST_P(obj))
+        return 0;
+    VALUE f = 0;
+    if (flags & ~(VALUE)RUBY_FL_FREEZE) {
+        struct capi_data *d = data_of(obj, 0);
+        if (d)
+            f = d->basic.flags;
+    }
+    if ((flags & RUBY_FL_FREEZE) && OBJ_FROZEN(obj))
+        f |= RUBY_FL_FREEZE;
+    return f & flags;
+}
+
+void
+rb_monoruby_fl_set(VALUE obj, VALUE flags)
+{
+    if (SPECIAL_CONST_P(obj))
+        return;
+    if (flags & ~(VALUE)RUBY_FL_FREEZE) {
+        struct capi_data *d = data_of(obj, 0);
+        if (d)
+            d->basic.flags |= flags & ~(VALUE)RUBY_FL_FREEZE;
+    }
+    if (flags & RUBY_FL_FREEZE)
+        rb_obj_freeze(obj);
+}
+
+void
+rb_monoruby_fl_unset(VALUE obj, VALUE flags)
+{
+    if (SPECIAL_CONST_P(obj))
+        return;
+    struct capi_data *d = data_of(obj, 0);
+    if (d)
+        d->basic.flags &= ~flags;
+}
+
 int
 rb_monoruby_typeddata_p(VALUE obj)
 {
@@ -4962,8 +5199,21 @@ rb_obj_call_init(VALUE obj, int argc, const VALUE *argv)
 void
 rb_obj_call_init_kw(VALUE obj, int argc, const VALUE *argv, int kw_splat)
 {
-    (void)kw_splat;
-    rb_obj_call_init(obj, argc, argv);
+    funcall_block_kw(obj, rb_intern("initialize"), argc, argv, frame()->block, kw_splat);
+}
+
+VALUE
+rb_class_new_instance_kw(int argc, const VALUE *argv, VALUE klass, int kw_splat)
+{
+    VALUE obj = rb_obj_alloc(klass);
+    rb_obj_call_init_kw(obj, argc, argv, kw_splat);
+    return obj;
+}
+
+VALUE
+rb_class_new_instance_pass_kw(int argc, const VALUE *argv, VALUE klass)
+{
+    return rb_class_new_instance_kw(argc, argv, klass, rb_keyword_given_p());
 }
 
 VALUE
@@ -5502,22 +5752,119 @@ rb_io_flush(VALUE io)
     return rb_funcall(io, rb_intern("flush"), 0);
 }
 
-VALUE
-rb_io_puts(int argc, const VALUE *argv, VALUE io)
+/* io.c's rb_io_puts / rb_io_print / rb_io_printf: written over `write`
+ * alone, so they serve any object that has one, as CRuby's do. An
+ * extension's own `puts` (StringIO's, through IO::generic_writable) is
+ * this function, so forwarding to `io.puts` would recurse. */
+static VALUE
+io_puts_ary(VALUE ary, VALUE out, int recur)
 {
-    return rb_funcallv(io, rb_intern("puts"), argc, argv);
+    if (recur) {
+        VALUE s = rb_str_new_cstr("[...]");
+        return rb_io_puts(1, &s, out);
+    }
+    for (long i = 0; i < RARRAY_LEN(ary); i++) {
+        VALUE e = rb_ary_entry(ary, i);
+        rb_io_puts(1, &e, out);
+    }
+    return Qtrue;
+}
+
+static VALUE
+io_puts_ary_protected(VALUE argp)
+{
+    VALUE *args = (VALUE *)argp;
+    return io_puts_ary(args[0], args[1], 0);
+}
+
+static int
+io_puts_on_stack(VALUE ary, VALUE *stack, int depth)
+{
+    for (int i = 0; i < depth; i++)
+        if (stack[i] == ary)
+            return 1;
+    return 0;
+}
+
+/* The arrays being printed, innermost last: a nested reference to one of
+ * them prints as "[...]" (rb_exec_recursive's protocol for io_puts_ary). */
+static VALUE io_puts_stack[64];
+static int io_puts_depth;
+
+VALUE
+rb_io_puts(int argc, const VALUE *argv, VALUE out)
+{
+    if (argc == 0) {
+        rb_io_write(out, rb_default_rs);
+        return Qnil;
+    }
+    for (int i = 0; i < argc; i++) {
+        VALUE line = rb_check_array_type(argv[i]);
+        if (!NIL_P(line)) {
+            if (io_puts_on_stack(line, io_puts_stack, io_puts_depth)) {
+                io_puts_ary(line, out, 1);
+            }
+            else if (io_puts_depth < (int)(sizeof(io_puts_stack) / sizeof(io_puts_stack[0]))) {
+                int state = 0;
+                io_puts_stack[io_puts_depth++] = line;
+                VALUE args[2] = {line, out};
+                rb_protect(io_puts_ary_protected, (VALUE)args, &state);
+                io_puts_depth--;
+                if (state)
+                    rb_jump_tag(state);
+            }
+            else {
+                io_puts_ary(line, out, 0);
+            }
+            continue;
+        }
+        line = rb_obj_as_string(argv[i]);
+        long len = RSTRING_LEN(line);
+        if (len == 0 || RSTRING_PTR(line)[len - 1] != '\n') {
+            VALUE args[2] = {line, rb_default_rs};
+            rb_funcallv(out, rb_intern("write"), 2, args);
+        }
+        else {
+            rb_io_write(out, line);
+        }
+    }
+    return Qnil;
 }
 
 VALUE
-rb_io_print(int argc, const VALUE *argv, VALUE io)
+rb_io_print(int argc, const VALUE *argv, VALUE out)
 {
-    return rb_funcallv(io, rb_intern("print"), argc, argv);
+    VALUE line;
+    if (argc == 0) {
+        argc = 1;
+        line = rb_lastline_get();
+        argv = &line;
+    }
+    VALUE ofs = rb_gv_get("$,");
+    VALUE ors = rb_output_rs;
+    if (argc > 1 && !NIL_P(ofs))
+        rb_warn("$, is set to non-nil value");
+    for (int i = 0; i < argc; i++) {
+        if (!NIL_P(ofs) && i > 0)
+            rb_io_write(out, ofs);
+        rb_io_write(out, argv[i]);
+    }
+    if (argc > 0 && !NIL_P(ors))
+        rb_io_write(out, ors);
+    return Qnil;
 }
 
 VALUE
-rb_io_printf(int argc, const VALUE *argv, VALUE io)
+rb_f_sprintf(int argc, const VALUE *argv)
 {
-    return rb_funcallv(io, rb_intern("printf"), argc, argv);
+    return rb_funcallv(rb_mKernel, rb_intern("format"), argc, argv);
+}
+
+VALUE
+rb_io_printf(int argc, const VALUE *argv, VALUE out)
+{
+    rb_io_write(out, rb_f_sprintf(argc, argv));
+    return Qnil;
 }
 
 VALUE
@@ -5572,38 +5919,598 @@ rb_io_check_io(VALUE io)
 VALUE
 rb_io_taint_check(VALUE io)
 {
+    rb_check_frozen(io);
     return io;
 }
 
-/* io.c's rb_io_extract_encoding_option over the opts hash's
- * :external_encoding / :internal_encoding / :encoding ("ext:int"). As in
- * rb_io_ext_int_to_encs, a pair whose halves differ leaves the internal
- * encoding in *enc_p and the external one in *enc2_p. */
+/* ---- io.c's mode and encoding parsing -----------------------------------
+ * Ports of io.c's rb_io_modestr_fmode, rb_io_oflags_fmode,
+ * rb_io_extract_encoding_option and rb_io_extract_modeenc (with their
+ * helpers), so an extension that opens a stream of its own (stringio)
+ * takes a mode string, `mode:` / `flags:` / `binmode:` / `textmode:` and
+ * the encoding options exactly as IO.new does. */
+
+static const char bom_prefix[] = "bom|";
+static const char utf_prefix[] = "utf-";
+enum { bom_prefix_len = (int)sizeof(bom_prefix) - 1 };
+enum { utf_prefix_len = (int)sizeof(utf_prefix) - 1 };
+
+static int
+io_encname_bom_p(const char *name, long len)
+{
+    return len > bom_prefix_len && strncasecmp(name, bom_prefix, bom_prefix_len) == 0;
+}
+
+int
+rb_io_modestr_fmode(const char *modestr)
+{
+    int fmode = 0;
+    const char *m = modestr, *p = NULL;
+
+    switch (*m++) {
+      case 'r':
+        fmode |= FMODE_READABLE;
+        break;
+      case 'w':
+        fmode |= FMODE_WRITABLE | FMODE_TRUNC | FMODE_CREATE;
+        break;
+      case 'a':
+        fmode |= FMODE_WRITABLE | FMODE_APPEND | FMODE_CREATE;
+        break;
+      default:
+        goto error;
+    }
+
+    while (*m) {
+        switch (*m++) {
+          case 'b':
+            fmode |= FMODE_BINMODE;
+            break;
+          case 't':
+            fmode |= FMODE_TEXTMODE;
+            break;
+          case '+':
+            fmode |= FMODE_READWRITE;
+            break;
+          case 'x':
+            if (modestr[0] != 'w')
+                goto error;
+            fmode |= FMODE_EXCL;
+            break;
+          default:
+            goto error;
+          case ':':
+            p = strchr(m, ':');
+            if (io_encname_bom_p(m, p ? (long)(p - m) : (long)strlen(m)))
+                fmode |= FMODE_SETENC_BY_BOM;
+            goto finished;
+        }
+    }
+
+  finished:
+    if ((fmode & FMODE_BINMODE) && (fmode & FMODE_TEXTMODE))
+        goto error;
+
+    return fmode;
+
+  error:
+    rb_raise(rb_eArgError, "invalid access mode %s", modestr);
+}
+
+int
+rb_io_oflags_fmode(int oflags)
+{
+    int fmode = 0;
+
+    switch (oflags & O_ACCMODE) {
+      case O_RDONLY:
+        fmode = FMODE_READABLE;
+        break;
+      case O_WRONLY:
+        fmode = FMODE_WRITABLE;
+        break;
+      case O_RDWR:
+        fmode = FMODE_READWRITE;
+        break;
+    }
+    if (oflags & O_APPEND)
+        fmode |= FMODE_APPEND;
+    if (oflags & O_TRUNC)
+        fmode |= FMODE_TRUNC;
+    if (oflags & O_CREAT)
+        fmode |= FMODE_CREATE;
+    if (oflags & O_EXCL)
+        fmode |= FMODE_EXCL;
+    return fmode;
+}
+
+static int
+io_fmode_oflags(int fmode)
+{
+    int oflags = 0;
+
+    switch (fmode & FMODE_READWRITE) {
+      case FMODE_READABLE:
+        oflags |= O_RDONLY;
+        break;
+      case FMODE_WRITABLE:
+        oflags |= O_WRONLY;
+        break;
+      case FMODE_READWRITE:
+        oflags |= O_RDWR;
+        break;
+    }
+    if (fmode & FMODE_APPEND)
+        oflags |= O_APPEND;
+    if (fmode & FMODE_TRUNC)
+        oflags |= O_TRUNC;
+    if (fmode & FMODE_CREATE)
+        oflags |= O_CREAT;
+    if (fmode & FMODE_EXCL)
+        oflags |= O_EXCL;
+    return oflags;
+}
+
+int
+rb_io_modestr_oflags(const char *modestr)
+{
+    return io_fmode_oflags(rb_io_modestr_fmode(modestr));
+}
+
+/* NULL => the default encoding; Qnil => none given (internal only). */
+static void
+io_ext_int_to_encs(rb_encoding *ext, rb_encoding *intern, rb_encoding **enc, rb_encoding **enc2, int fmode)
+{
+    int default_ext = 0;
+
+    if (ext == NULL) {
+        ext = rb_default_external_encoding();
+        default_ext = 1;
+    }
+    if (rb_is_ascii8bit_enc(ext)) {
+        intern = NULL;
+    }
+    else if (intern == NULL) {
+        intern = rb_default_internal_encoding();
+    }
+    if (intern == NULL || intern == (rb_encoding *)Qnil ||
+        (!(fmode & FMODE_SETENC_BY_BOM) && (intern == ext))) {
+        *enc = (default_ext && intern != ext) ? NULL : ext;
+        *enc2 = NULL;
+    }
+    else {
+        *enc = intern;
+        *enc2 = ext;
+    }
+}
+
+static void
+unsupported_encoding(const char *name, rb_encoding *enc)
+{
+    rb_enc_warn(enc, "Unsupported encoding %s ignored", name);
+}
+
+static void
+parse_mode_enc(const char *estr, rb_encoding *estr_enc,
+               rb_encoding **enc_p, rb_encoding **enc2_p, int *fmode_p)
+{
+    const char *p;
+    char encname[ENCODING_MAXNAMELEN + 1];
+    int idx, idx2;
+    int fmode = fmode_p ? *fmode_p : 0;
+    rb_encoding *ext_enc, *int_enc;
+    long len;
+
+    p = strrchr(estr, ':');
+    len = p ? (p++ - estr) : (long)strlen(estr);
+    if ((fmode & FMODE_SETENC_BY_BOM) || io_encname_bom_p(estr, len)) {
+        estr += bom_prefix_len;
+        len -= bom_prefix_len;
+        if (!strncasecmp(estr, utf_prefix, utf_prefix_len)) {
+            fmode |= FMODE_SETENC_BY_BOM;
+        }
+        else {
+            rb_enc_warn(estr_enc, "BOM with non-UTF encoding %s is nonsense", estr);
+            fmode &= ~FMODE_SETENC_BY_BOM;
+        }
+    }
+    if (len == 0 || len > ENCODING_MAXNAMELEN) {
+        idx = -1;
+    }
+    else {
+        if (p) {
+            memcpy(encname, estr, len);
+            encname[len] = '\0';
+            estr = encname;
+        }
+        idx = rb_enc_find_index(estr);
+    }
+    if (fmode_p)
+        *fmode_p = fmode;
+
+    if (idx >= 0) {
+        ext_enc = rb_enc_from_index(idx);
+    }
+    else {
+        if (idx != -2)
+            unsupported_encoding(estr, estr_enc);
+        ext_enc = NULL;
+    }
+
+    int_enc = NULL;
+    if (p) {
+        if (*p == '-' && *(p + 1) == '\0') {
+            int_enc = (rb_encoding *)Qnil;
+        }
+        else {
+            idx2 = rb_enc_find_index(p);
+            if (idx2 < 0)
+                unsupported_encoding(p, estr_enc);
+            else if (!(fmode & FMODE_SETENC_BY_BOM) && (idx2 == idx))
+                int_enc = (rb_encoding *)Qnil;
+            else
+                int_enc = rb_enc_from_index(idx2);
+        }
+    }
+
+    io_ext_int_to_encs(ext_enc, int_enc, enc_p, enc2_p, fmode);
+}
+
 int
 rb_io_extract_encoding_option(VALUE opt, rb_encoding **enc_p, rb_encoding **enc2_p, int *fmode_p)
 {
-    (void)fmode_p;
-    if (NIL_P(opt)) return 0;
-    VALUE ext = rb_hash_aref(opt, ID2SYM(rb_intern("external_encoding")));
-    VALUE intern = rb_hash_aref(opt, ID2SYM(rb_intern("internal_encoding")));
-    VALUE both = rb_hash_aref(opt, ID2SYM(rb_intern("encoding")));
-    if (NIL_P(ext) && NIL_P(intern) && !NIL_P(both)) {
-        VALUE parts = rb_funcall(rb_String(both), rb_intern("split"), 2,
-                                 rb_str_new_cstr(":"), INT2FIX(2));
-        ext = rb_ary_entry(parts, 0);
-        intern = rb_ary_entry(parts, 1);
+    VALUE encoding = Qnil, extenc = Qundef, intenc = Qundef, tmp;
+    int extracted = 0;
+    rb_encoding *extencoding = NULL;
+    rb_encoding *intencoding = NULL;
+
+    if (!NIL_P(opt)) {
+        VALUE v;
+        v = rb_hash_lookup2(opt, ID2SYM(rb_intern("encoding")), Qnil);
+        if (v != Qnil) encoding = v;
+        v = rb_hash_lookup2(opt, ID2SYM(rb_intern("external_encoding")), Qundef);
+        if (v != Qnil) extenc = v;
+        v = rb_hash_lookup2(opt, ID2SYM(rb_intern("internal_encoding")), Qundef);
+        if (!UNDEF_P(v)) intenc = v;
     }
-    if (NIL_P(ext) && NIL_P(intern)) return 0;
-    rb_encoding *e = NIL_P(ext) ? rb_default_external_encoding() : rb_to_encoding(ext);
-    rb_encoding *i = NIL_P(intern) ? NULL : rb_to_encoding(intern);
-    if (i == NULL || i == e) {
-        *enc_p = e;
-        *enc2_p = NULL;
-    } else {
-        *enc_p = i;
-        *enc2_p = e;
+    if ((!UNDEF_P(extenc) || !UNDEF_P(intenc)) && !NIL_P(encoding)) {
+        if (!NIL_P(rb_gv_get("$VERBOSE"))) {
+            int idx = rb_to_encoding_index(encoding);
+            if (idx >= 0) encoding = rb_enc_from_encoding(rb_enc_from_index(idx));
+            rb_warn("Ignoring encoding parameter '%"PRIsVALUE"': %s_encoding is used",
+                    encoding, UNDEF_P(extenc) ? "internal" : "external");
+        }
+        encoding = Qnil;
     }
-    return 1;
+    if (!UNDEF_P(extenc) && !NIL_P(extenc)) {
+        extencoding = rb_to_encoding(extenc);
+    }
+    if (!UNDEF_P(intenc)) {
+        if (NIL_P(intenc)) {
+            intencoding = (rb_encoding *)Qnil;
+        }
+        else if (!NIL_P(tmp = rb_check_string_type(intenc))) {
+            char *p = StringValueCStr(tmp);
+            if (*p == '-' && *(p + 1) == '\0')
+                intencoding = (rb_encoding *)Qnil;
+            else
+                intencoding = rb_to_encoding(intenc);
+        }
+        else {
+            intencoding = rb_to_encoding(intenc);
+        }
+        if (extencoding == intencoding)
+            intencoding = (rb_encoding *)Qnil;
+    }
+    if (!NIL_P(encoding)) {
+        extracted = 1;
+        if (!NIL_P(tmp = rb_check_string_type(encoding)))
+            parse_mode_enc(StringValueCStr(tmp), rb_enc_get(tmp), enc_p, enc2_p, fmode_p);
+        else
+            io_ext_int_to_encs(rb_to_encoding(encoding), NULL, enc_p, enc2_p, 0);
+    }
+    else if (!UNDEF_P(extenc) || !UNDEF_P(intenc)) {
+        extracted = 1;
+        io_ext_int_to_encs(extencoding, intencoding, enc_p, enc2_p, 0);
+    }
+    return extracted;
+}
+
+static void
+validate_enc_binmode(int *fmode_p, int ecflags, rb_encoding *enc, rb_encoding *enc2)
+{
+    int fmode = *fmode_p;
+
+    if ((fmode & FMODE_READABLE) && !enc2 && !(fmode & FMODE_BINMODE) &&
+        !rb_enc_asciicompat(enc ? enc : rb_default_external_encoding()))
+        rb_raise(rb_eArgError, "ASCII incompatible encoding needs binmode");
+
+    if ((fmode & FMODE_BINMODE) && (ecflags & ECONV_NEWLINE_DECORATOR_MASK))
+        rb_raise(rb_eArgError, "newline decorator with binary mode");
+    if (!(fmode & FMODE_BINMODE) && (ecflags & ECONV_NEWLINE_DECORATOR_MASK)) {
+        fmode |= FMODE_TEXTMODE;
+        *fmode_p = fmode;
+    }
+    else if (!(ecflags & ECONV_NEWLINE_DECORATOR_MASK)) {
+        fmode &= ~FMODE_TEXTMODE;
+        *fmode_p = fmode;
+    }
+}
+
+static void
+extract_binmode(VALUE opthash, int *fmode)
+{
+    if (!NIL_P(opthash)) {
+        VALUE v;
+        v = rb_hash_aref(opthash, ID2SYM(rb_intern("textmode")));
+        if (!NIL_P(v)) {
+            if (*fmode & FMODE_TEXTMODE)
+                rb_raise(rb_eArgError, "textmode specified twice");
+            if (*fmode & FMODE_BINMODE)
+                rb_raise(rb_eArgError, "both textmode and binmode specified");
+            if (RTEST(v))
+                *fmode |= FMODE_TEXTMODE;
+        }
+        v = rb_hash_aref(opthash, ID2SYM(rb_intern("binmode")));
+        if (!NIL_P(v)) {
+            if (*fmode & FMODE_BINMODE)
+                rb_raise(rb_eArgError, "binmode specified twice");
+            if (*fmode & FMODE_TEXTMODE)
+                rb_raise(rb_eArgError, "both textmode and binmode specified");
+            if (RTEST(v))
+                *fmode |= FMODE_BINMODE;
+        }
+        if ((*fmode & FMODE_BINMODE) && (*fmode & FMODE_TEXTMODE))
+            rb_raise(rb_eArgError, "both textmode and binmode specified");
+    }
+}
+
+void
+rb_io_extract_modeenc(VALUE *vmode_p, VALUE *vperm_p, VALUE opthash,
+                      int *oflags_p, int *fmode_p, struct rb_io_encoding *convconfig_p)
+{
+    VALUE vmode;
+    int oflags;
+    int fmode;
+    rb_encoding *enc, *enc2;
+    int ecflags;
+    VALUE ecopts;
+    int has_enc = 0, has_vmode = 0;
+    VALUE intmode;
+
+    vmode = *vmode_p;
+
+    io_ext_int_to_encs(NULL, NULL, &enc, &enc2, 0);
+
+  vmode_handle:
+    if (NIL_P(vmode)) {
+        fmode = FMODE_READABLE;
+        oflags = O_RDONLY;
+    }
+    else if (!NIL_P(intmode = rb_check_to_integer(vmode, "to_int"))) {
+        vmode = intmode;
+        oflags = NUM2INT(intmode);
+        fmode = rb_io_oflags_fmode(oflags);
+    }
+    else {
+        const char *p;
+
+        StringValue(vmode);
+        p = StringValueCStr(vmode);
+        fmode = rb_io_modestr_fmode(p);
+        oflags = io_fmode_oflags(fmode);
+        p = strchr(p, ':');
+        if (p) {
+            has_enc = 1;
+            parse_mode_enc(p + 1, rb_enc_get(vmode), &enc, &enc2, &fmode);
+        }
+        else {
+            rb_encoding *e = (fmode & FMODE_BINMODE) ? rb_ascii8bit_encoding() : NULL;
+            io_ext_int_to_encs(e, NULL, &enc, &enc2, fmode);
+        }
+    }
+
+    if (NIL_P(opthash)) {
+        ecflags = 0;
+        if (enc2 && (fmode & FMODE_READABLE) && !(fmode & FMODE_BINMODE))
+            ; /* SET_UNIVERSAL_NEWLINE_DECORATOR_IF_ENC2: Windows only */
+        ecopts = Qnil;
+        if (fmode & FMODE_BINMODE) {
+            if (!has_enc)
+                io_ext_int_to_encs(rb_ascii8bit_encoding(), NULL, &enc, &enc2, fmode);
+        }
+    }
+    else {
+        VALUE v;
+        if (!has_vmode) {
+            v = rb_hash_aref(opthash, ID2SYM(rb_intern("mode")));
+            if (!NIL_P(v)) {
+                if (!NIL_P(vmode))
+                    rb_raise(rb_eArgError, "mode specified twice");
+                has_vmode = 1;
+                vmode = v;
+                goto vmode_handle;
+            }
+        }
+        v = rb_hash_aref(opthash, ID2SYM(rb_intern("flags")));
+        if (!NIL_P(v)) {
+            v = rb_to_int(v);
+            oflags |= NUM2INT(v);
+            vmode = INT2NUM(oflags);
+            fmode = rb_io_oflags_fmode(oflags);
+        }
+        extract_binmode(opthash, &fmode);
+        if (fmode & FMODE_BINMODE) {
+            if (!has_enc)
+                io_ext_int_to_encs(rb_ascii8bit_encoding(), NULL, &enc, &enc2, fmode);
+        }
+        v = rb_hash_aref(opthash, ID2SYM(rb_intern("perm")));
+        if (!NIL_P(v)) {
+            if (vperm_p) {
+                if (!NIL_P(*vperm_p))
+                    rb_raise(rb_eArgError, "perm specified twice");
+                *vperm_p = v;
+            }
+        }
+        ecflags = 0;
+        if (rb_io_extract_encoding_option(opthash, &enc, &enc2, &fmode)) {
+            if (has_enc)
+                rb_raise(rb_eArgError, "encoding specified twice");
+        }
+        ecflags = rb_econv_prepare_options(opthash, &ecopts, ecflags);
+    }
+
+    validate_enc_binmode(&fmode, ecflags, enc, enc2);
+
+    *vmode_p = vmode;
+    *oflags_p = oflags;
+    *fmode_p = fmode;
+    convconfig_p->enc = enc;
+    convconfig_p->enc2 = enc2;
+    convconfig_p->ecflags = ecflags;
+    convconfig_p->ecopts = ecopts;
+}
+
+/* transcode.c's econv_opts + rb_econv_prepare_options: the converter
+ * option keys as flags, and the `replace:` / `fallback:` values as a
+ * frozen hash (Qnil when there are none). */
+static int
+econv_opts(VALUE opt, int ecflags)
+{
+    VALUE v;
+    int newlineflag = 0;
+    VALUE sym_replace = ID2SYM(rb_intern("replace"));
+
+    v = rb_hash_aref(opt, ID2SYM(rb_intern("invalid")));
+    if (NIL_P(v))
+        ;
+    else if (v == sym_replace)
+        ecflags |= ECONV_INVALID_REPLACE;
+    else
+        rb_raise(rb_eArgError, "unknown value for invalid character option");
+
+    v = rb_hash_aref(opt, ID2SYM(rb_intern("undef")));
+    if (NIL_P(v))
+        ;
+    else if (v == sym_replace)
+        ecflags |= ECONV_UNDEF_REPLACE;
+    else
+        rb_raise(rb_eArgError, "unknown value for undefined character option");
+
+    v = rb_hash_aref(opt, sym_replace);
+    if (!NIL_P(v) && !(ecflags & ECONV_INVALID_REPLACE))
+        ecflags |= ECONV_UNDEF_REPLACE;
+
+    v = rb_hash_aref(opt, ID2SYM(rb_intern("xml")));
+    if (!NIL_P(v)) {
+        if (v == ID2SYM(rb_intern("text")))
+            ecflags |= ECONV_XML_TEXT_DECORATOR | ECONV_UNDEF_HEX_CHARREF;
+        else if (v == ID2SYM(rb_intern("attr")))
+            ecflags |= ECONV_XML_ATTR_CONTENT_DECORATOR | ECONV_XML_ATTR_QUOTE_DECORATOR | ECONV_UNDEF_HEX_CHARREF;
+        else if (SYMBOL_P(v))
+            rb_raise(rb_eArgError, "unexpected value for xml option: %"PRIsVALUE, rb_sym2str(v));
+        else
+            rb_raise(rb_eArgError, "unexpected value for xml option");
+    }
+
+    v = rb_hash_aref(opt, ID2SYM(rb_intern("newline")));
+    if (!NIL_P(v)) {
+        newlineflag = 2;
+        ecflags &= ~ECONV_NEWLINE_DECORATOR_MASK;
+        if (v == ID2SYM(rb_intern("universal")))
+            ecflags |= ECONV_UNIVERSAL_NEWLINE_DECORATOR;
+        else if (v == ID2SYM(rb_intern("crlf")))
+            ecflags |= ECONV_CRLF_NEWLINE_DECORATOR;
+        else if (v == ID2SYM(rb_intern("cr")))
+            ecflags |= ECONV_CR_NEWLINE_DECORATOR;
+        else if (v == ID2SYM(rb_intern("lf")))
+            ecflags |= ECONV_LF_NEWLINE_DECORATOR;
+        else if (SYMBOL_P(v))
+            rb_raise(rb_eArgError, "unexpected value for newline option: %"PRIsVALUE, rb_sym2str(v));
+        else
+            rb_raise(rb_eArgError, "unexpected value for newline option");
+    }
+    {
+        int setflags = 0;
+        static const struct { const char *key; int flag; } keys[] = {
+            {"universal_newline", ECONV_UNIVERSAL_NEWLINE_DECORATOR},
+            {"crlf_newline", ECONV_CRLF_NEWLINE_DECORATOR},
+            {"cr_newline", ECONV_CR_NEWLINE_DECORATOR},
+            {"lf_newline", ECONV_LF_NEWLINE_DECORATOR},
+        };
+        for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+            v = rb_hash_aref(opt, ID2SYM(rb_intern(keys[i].key)));
+            if (RTEST(v))
+                setflags |= keys[i].flag;
+            newlineflag |= !NIL_P(v);
+        }
+        switch (newlineflag) {
+          case 1:
+            ecflags &= ~ECONV_NEWLINE_DECORATOR_MASK;
+            ecflags |= setflags;
+            break;
+          case 3:
+            rb_warning(":newline option precedes other newline options");
+            break;
+        }
+    }
+    return ecflags;
+}
+
+int
+rb_econv_prepare_options(VALUE opthash, VALUE *opts, int ecflags)
+{
+    VALUE newhash = Qnil;
+    VALUE v;
+
+    if (NIL_P(opthash)) {
+        *opts = Qnil;
+        return ecflags;
+    }
+    ecflags = econv_opts(opthash, ecflags);
+
+    v = rb_hash_aref(opthash, ID2SYM(rb_intern("replace")));
+    if (!NIL_P(v)) {
+        StringValue(v);
+        if (!RTEST(rb_funcall(v, rb_intern("valid_encoding?"), 0))) {
+            VALUE dumped = rb_funcall(v, rb_intern("dump"), 0);
+            rb_raise(rb_eArgError, "replacement string is broken: %s as %s",
+                     StringValueCStr(dumped), rb_enc_name(rb_enc_get(v)));
+        }
+        v = rb_str_new_frozen(v);
+        newhash = rb_hash_new();
+        rb_hash_aset(newhash, ID2SYM(rb_intern("replace")), v);
+    }
+    v = rb_hash_aref(opthash, ID2SYM(rb_intern("fallback")));
+    if (!NIL_P(v)) {
+        VALUE h = rb_check_hash_type(v);
+        if (NIL_P(h) ? (RTEST(rb_obj_is_proc(v)) || RTEST(rb_obj_is_method(v)) || rb_respond_to(v, rb_intern("[]")))
+                     : (v = h, 1)) {
+            if (NIL_P(newhash))
+                newhash = rb_hash_new();
+            rb_hash_aset(newhash, ID2SYM(rb_intern("fallback")), v);
+        }
+    }
+    if (!NIL_P(newhash))
+        rb_hash_freeze(newhash);
+    *opts = newhash;
+    return ecflags;
+}
+
+int
+rb_econv_prepare_opts(VALUE opthash, VALUE *opts)
+{
+    return rb_econv_prepare_options(opthash, opts, 0);
+}
+
+void
+rb_enc_warn(rb_encoding *enc, const char *fmt, ...)
+{
+    (void)enc;
+    va_list ap;
+    va_start(ap, fmt);
+    vwarn(fmt, ap);
+    va_end(ap);
 }
 
 VALUE
@@ -5625,6 +6532,12 @@ rb_str_to_interned_str(VALUE str)
 int
 rb_enc_str_coderange(VALUE str)
 {
+    if (HAVE_API(str_coderange) && RB_TYPE_P(str, T_STRING)) {
+        int cr = api->str_coderange(ctx(), M(str));
+        if (cr < 0)
+            capi_unwind();
+        return cr == 1 ? ENC_CODERANGE_7BIT : cr == 2 ? ENC_CODERANGE_VALID : ENC_CODERANGE_BROKEN;
+    }
     if (!RTEST(rb_funcall(str, rb_intern("valid_encoding?"), 0)))
         return ENC_CODERANGE_BROKEN;
     if (RTEST(rb_funcall(str, rb_intern("ascii_only?"), 0)))
@@ -5747,14 +6660,39 @@ rb_enc_codepoint_len(const char *p, const char *e, int *len_p, rb_encoding *enc)
 int
 rb_enc_mbminlen(rb_encoding *enc)
 {
-    (void)enc;
+    if (!enc)
+        return 1;
+    if (!strncasecmp(enc->name, "UTF-16", 6))
+        return 2;
+    if (!strncasecmp(enc->name, "UTF-32", 6))
+        return 4;
     return 1;
 }
 
 int
 rb_enc_mbmaxlen(rb_encoding *enc)
 {
-    return enc_is_utf8(enc) ? 4 : 1;
+    /* Onigmo's max_enc_len of the multibyte encodings; 1 for the rest. */
+    static const struct { const char *name; int len; } multibyte[] = {
+        {"UTF-8", 4}, {"UTF8-MAC", 4}, {"UTF8-DoCoMo", 4}, {"UTF8-KDDI", 4},
+        {"UTF8-SoftBank", 4}, {"CESU-8", 6}, {"UTF-16BE", 4}, {"UTF-16LE", 4},
+        {"UTF-32BE", 4}, {"UTF-32LE", 4}, {"UTF-16", 4}, {"UTF-32", 4},
+        {"EUC-JP", 3}, {"eucJP-ms", 3}, {"CP51932", 3}, {"EUC-JIS-2004", 3},
+        {"stateless-ISO-2022-JP", 3}, {"stateless-ISO-2022-JP-KDDI", 3},
+        {"Shift_JIS", 2}, {"Windows-31J", 2}, {"SJIS-DoCoMo", 2}, {"SJIS-KDDI", 2},
+        {"SJIS-SoftBank", 2}, {"MacJapanese", 2}, {"EUC-KR", 2}, {"CP949", 2},
+        {"Big5", 2}, {"Big5-HKSCS", 2}, {"Big5-UAO", 2}, {"CP950", 2}, {"CP951", 2},
+        {"GBK", 2}, {"GB2312", 2}, {"GB12345", 2}, {"GB18030", 4}, {"EUC-TW", 4},
+        {"Emacs-Mule", 4},
+    };
+    if (!enc)
+        return 1;
+    if (enc_is_utf8(enc))
+        return 4;
+    for (size_t i = 0; i < sizeof(multibyte) / sizeof(multibyte[0]); i++)
+        if (strcasecmp(enc->name, multibyte[i].name) == 0)
+            return multibyte[i].len;
+    return 1;
 }
 
 int
@@ -6017,10 +6955,18 @@ onig_region_init(OnigRegion *region)
     onig()->region_init(region);
 }
 
+/* CRuby's Onigmo clears a region it frees in place (`memset` to zero), so
+ * a later onig_region_clear / onig_region_set on it starts from nothing.
+ * The library monoruby links is older: it frees `beg` / `end` and zeroes
+ * `allocated` but leaves `num_regs` and the dangling pointers, and the
+ * next onig_region_clear writes through them (strscan's getch after a
+ * failed scan, where rb_reg_onig_match freed the registers). */
 void
 onig_region_free(OnigRegion *region, int free_self)
 {
     onig()->region_free(region, free_self);
+    if (region && !free_self)
+        memset(region, 0, sizeof(*region));
 }
 
 void
@@ -6420,4 +7366,444 @@ void
 rb_deprecate_constant(VALUE mod, const char *name)
 {
     rb_funcall(mod, rb_intern("deprecate_constant"), 1, ID2SYM(rb_intern(name)));
+}
+
+/* ---- characters (encoding.h) ------------------------------------------ */
+
+VALUE
+rb_enc_uint_chr(unsigned int code, rb_encoding *enc)
+{
+    return rb_funcall(UINT2NUM(code), rb_intern("chr"), 1, rb_enc_from_encoding(enc));
+}
+
+int
+rb_monoruby_enc_mbcput(unsigned int c, void *buf, rb_encoding *enc)
+{
+    VALUE s = rb_enc_uint_chr(c, enc);
+    long len = RSTRING_LEN(s);
+    memcpy(buf, RSTRING_PTR(s), len);
+    return (int)len;
+}
+
+rb_encoding *
+rb_find_encoding(VALUE enc)
+{
+    if (RTEST(rb_obj_is_kind_of(enc, rb_cEncoding)))
+        return rb_to_encoding(enc);
+    VALUE name = rb_check_string_type(enc);
+    if (NIL_P(name))
+        return rb_to_encoding(enc);
+    int idx = rb_enc_find_index(StringValueCStr(name));
+    return idx < 0 ? NULL : rb_enc_from_index(idx);
+}
+
+/* The head of the character `p` is in, for `s <= p < e`. A UTF-8 lead is
+ * found by stepping back over continuation bytes; any other multibyte
+ * encoding walks forward from `s`, as Onigmo's left_adjust_char_head does
+ * for the encodings without a backward scan. */
+char *
+rb_enc_left_char_head(const char *s, const char *p, const char *e, rb_encoding *enc)
+{
+    if (p <= s)
+        return (char *)p;
+    if (enc_is_utf8(enc)) {
+        const char *q = p;
+        while (q > s && ((unsigned char)*q & 0xc0) == 0x80 && p - q < 3)
+            q--;
+        return (char *)q;
+    }
+    if (enc == NULL || rb_enc_mbmaxlen(enc) == 1)
+        return (char *)p;
+    const char *q = s;
+    while (q < p) {
+        int n = rb_enc_mbclen(q, e, enc);
+        if (q + n > p)
+            return (char *)q;
+        q += n;
+    }
+    return (char *)q;
+}
+
+char *
+rb_enc_right_char_head(const char *s, const char *p, const char *e, rb_encoding *enc)
+{
+    char *q = rb_enc_left_char_head(s, p, e, enc);
+    if (q == p)
+        return q;
+    return q + rb_enc_mbclen(q, e, enc);
+}
+
+char *
+rb_enc_prev_char(const char *s, const char *p, const char *e, rb_encoding *enc)
+{
+    if (p <= s)
+        return NULL;
+    return rb_enc_left_char_head(s, p - 1, e, enc);
+}
+
+/* ---- io helpers -------------------------------------------------------- */
+
+void
+rb_eof_error(void)
+{
+    rb_raise(rb_eEOFError, "end of file reached");
+}
+
+/* `$/`, `$\`, `$;` and the default record separator: CRuby exposes the
+ * variables' storage (rb_rs, ...); here they are read from the globals
+ * when used. */
+VALUE
+rb_monoruby_rs(void)
+{
+    return rb_gv_get("$/");
+}
+
+VALUE
+rb_monoruby_output_rs(void)
+{
+    return rb_gv_get("$\\");
+}
+
+VALUE
+rb_monoruby_fs(void)
+{
+    return rb_gv_get("$;");
+}
+
+VALUE
+rb_monoruby_default_rs(void)
+{
+    static VALUE rs;
+    if (!rs) {
+        rs = rb_str_new_frozen(rb_str_new_cstr("\n"));
+        api->gc_pin(ctx(), M(rs));
+    }
+    return rs;
+}
+
+/* `$_` of the Ruby frame the running extension method was called from,
+ * as a C method shares its caller's in CRuby. */
+VALUE
+rb_lastline_get(void)
+{
+    if (HAVE_API(lastline_get))
+        return R(api->lastline_get(ctx()));
+    return Qnil;
+}
+
+void
+rb_lastline_set(VALUE val)
+{
+    if (HAVE_API(lastline_set))
+        api->lastline_set(ctx(), M(val));
+}
+
+/* ---------------------------------------------------------------------
+ * What zlib.c needs beyond the rest: buffer capacity, Thread::Mutex,
+ * File.open, and transcode.h's converter.
+ * --------------------------------------------------------------------- */
+
+size_t
+rb_str_capacity(VALUE str)
+{
+    if (HAVE_API(str_capacity)) {
+        int64_t c = api->str_capacity(ctx(), M(str));
+        if (c < 0)
+            capi_unwind();
+        return (size_t)c;
+    }
+    return (size_t)RSTRING_LEN(str);
+}
+
+VALUE
+rb_str_locktmp(VALUE str)
+{
+    StringValue(str);
+    return str;
+}
+
+VALUE
+rb_str_unlocktmp(VALUE str)
+{
+    StringValue(str);
+    return str;
+}
+
+VALUE
+rb_f_notimplement(int argc, const VALUE *argv, VALUE obj, VALUE marker)
+{
+    (void)argc;
+    (void)argv;
+    (void)obj;
+    (void)marker;
+    rb_notimplement();
+}
+
+static VALUE
+mutex_class(void)
+{
+    static VALUE klass;
+    if (!klass) {
+        klass = rb_path2class("Thread::Mutex");
+        rb_gc_register_address(&klass);
+    }
+    return klass;
+}
+
+VALUE
+rb_mutex_new(void)
+{
+    return rb_funcall(mutex_class(), rb_intern("new"), 0);
+}
+
+VALUE
+rb_mutex_locked_p(VALUE mutex)
+{
+    return rb_funcall(mutex, rb_intern("locked?"), 0);
+}
+
+VALUE
+rb_mutex_trylock(VALUE mutex)
+{
+    return rb_funcall(mutex, rb_intern("try_lock"), 0);
+}
+
+VALUE
+rb_mutex_lock(VALUE mutex)
+{
+    return rb_funcall(mutex, rb_intern("lock"), 0);
+}
+
+VALUE
+rb_mutex_unlock(VALUE mutex)
+{
+    return rb_funcall(mutex, rb_intern("unlock"), 0);
+}
+
+VALUE
+rb_mutex_sleep(VALUE mutex, VALUE timeout)
+{
+    return rb_funcall(mutex, rb_intern("sleep"), 1, timeout);
+}
+
+VALUE
+rb_mutex_synchronize(VALUE mutex, VALUE (*func)(VALUE arg), VALUE arg)
+{
+    rb_mutex_lock(mutex);
+    return rb_ensure(func, arg, rb_mutex_unlock, mutex);
+}
+
+VALUE
+rb_file_open_str(VALUE fname, const char *modestr)
+{
+    FilePathValue(fname);
+    return rb_funcall(rb_cFile, rb_intern("open"), 2, fname, rb_str_new_cstr(modestr));
+}
+
+VALUE
+rb_file_open(const char *fname, const char *modestr)
+{
+    return rb_file_open_str(rb_str_new_cstr(fname), modestr);
+}
+
+/* The keyword arguments `String#encode` and `Encoding::Converter.new`
+ * take for `ecflags` and the `ecopts` hash rb_econv_prepare_options made. */
+static VALUE
+econv_kwargs(int ecflags, VALUE ecopts)
+{
+    VALUE h = rb_hash_new();
+    VALUE replace = ID2SYM(rb_intern("replace"));
+    if ((ecflags & ECONV_INVALID_MASK) == ECONV_INVALID_REPLACE)
+        rb_hash_aset(h, ID2SYM(rb_intern("invalid")), replace);
+    switch (ecflags & ECONV_UNDEF_MASK) {
+    case ECONV_UNDEF_REPLACE:
+        rb_hash_aset(h, ID2SYM(rb_intern("undef")), replace);
+        break;
+    case ECONV_UNDEF_HEX_CHARREF:
+        rb_hash_aset(h, ID2SYM(rb_intern("xml")), ID2SYM(rb_intern("text")));
+        break;
+    }
+    static const struct { int flag; const char *key; } newlines[] = {
+        {ECONV_UNIVERSAL_NEWLINE_DECORATOR, "universal_newline"},
+        {ECONV_CRLF_NEWLINE_DECORATOR, "crlf_newline"},
+        {ECONV_CR_NEWLINE_DECORATOR, "cr_newline"},
+        {ECONV_LF_NEWLINE_DECORATOR, "lf_newline"},
+    };
+    for (size_t i = 0; i < sizeof(newlines) / sizeof(newlines[0]); i++) {
+        if (ecflags & newlines[i].flag)
+            rb_hash_aset(h, ID2SYM(rb_intern(newlines[i].key)), Qtrue);
+    }
+    if (ecflags & ECONV_XML_TEXT_DECORATOR)
+        rb_hash_aset(h, ID2SYM(rb_intern("xml")), ID2SYM(rb_intern("text")));
+    if (ecflags & ECONV_XML_ATTR_CONTENT_DECORATOR)
+        rb_hash_aset(h, ID2SYM(rb_intern("xml")), ID2SYM(rb_intern("attr")));
+    if (RB_TYPE_P(ecopts, T_HASH)) {
+        VALUE v = rb_hash_aref(ecopts, replace);
+        if (!NIL_P(v))
+            rb_hash_aset(h, replace, v);
+        v = rb_hash_aref(ecopts, ID2SYM(rb_intern("fallback")));
+        if (!NIL_P(v))
+            rb_hash_aset(h, ID2SYM(rb_intern("fallback")), v);
+    }
+    return h;
+}
+
+struct rb_econv_t {
+    /* The Encoding::Converter, rooted while the struct lives. */
+    VALUE conv;
+    /* What the last rb_econv_convert ended with, for check_error. */
+    rb_econv_result_t last;
+};
+
+static VALUE
+econv_new_body(VALUE argp)
+{
+    VALUE *a = (VALUE *)argp;
+    return rb_funcallv_kw(rb_path2class("Encoding::Converter"), rb_intern("new"), 3, a, RB_PASS_KEYWORDS);
+}
+
+rb_econv_t *
+rb_econv_open_opts(const char *senc, const char *denc, int ecflags, VALUE ecopts)
+{
+    VALUE a[3] = {rb_str_new_cstr(senc), rb_str_new_cstr(denc), econv_kwargs(ecflags, ecopts)};
+    int state;
+    VALUE conv = rb_protect(econv_new_body, (VALUE)a, &state);
+    if (state) {
+        rb_set_errinfo(Qnil);
+        return NULL;
+    }
+    rb_econv_t *ec = malloc(sizeof(*ec));
+    if (!ec)
+        rb_memerror();
+    ec->conv = conv;
+    ec->last = econv_source_buffer_empty;
+    rb_gc_register_address(&ec->conv);
+    return ec;
+}
+
+rb_econv_t *
+rb_econv_open(const char *senc, const char *denc, int ecflags)
+{
+    return rb_econv_open_opts(senc, denc, ecflags, Qnil);
+}
+
+VALUE
+rb_econv_open_exc(const char *senc, const char *denc, int ecflags)
+{
+    (void)ecflags;
+    return rb_exc_new_str(rb_path2class("Encoding::ConverterNotFoundError"),
+                          rb_sprintf("code converter not found (%s to %s)", senc, denc));
+}
+
+void
+rb_econv_close(rb_econv_t *ec)
+{
+    if (!ec)
+        return;
+    rb_gc_unregister_address(&ec->conv);
+    free(ec);
+}
+
+static const struct {
+    const char *name;
+    rb_econv_result_t res;
+} econv_results[] = {
+    {"invalid_byte_sequence", econv_invalid_byte_sequence},
+    {"undefined_conversion", econv_undefined_conversion},
+    {"destination_buffer_full", econv_destination_buffer_full},
+    {"source_buffer_empty", econv_source_buffer_empty},
+    {"finished", econv_finished},
+    {"after_output", econv_after_output},
+    {"incomplete_input", econv_incomplete_input},
+};
+
+rb_econv_result_t
+rb_econv_convert(rb_econv_t *ec, const unsigned char **sp, const unsigned char *se,
+                 unsigned char **dp, unsigned char *de, int flags)
+{
+    VALUE src = sp ? rb_str_new((const char *)*sp, se - *sp) : Qnil;
+    VALUE dst = rb_str_new(0, 0);
+    VALUE opts = rb_hash_new();
+    if (flags & ECONV_PARTIAL_INPUT)
+        rb_hash_aset(opts, ID2SYM(rb_intern("partial_input")), Qtrue);
+    if (flags & ECONV_AFTER_OUTPUT)
+        rb_hash_aset(opts, ID2SYM(rb_intern("after_output")), Qtrue);
+    VALUE args[5] = {src, dst, Qnil, LONG2NUM(de - *dp), opts};
+    VALUE r = rb_funcallv_kw(ec->conv, rb_intern("primitive_convert"), 5, args, RB_PASS_KEYWORDS);
+    long out = RSTRING_LEN(dst);
+    if (out > de - *dp)
+        out = de - *dp;
+    memcpy(*dp, RSTRING_PTR(dst), out);
+    *dp += out;
+    if (sp)
+        *sp = se - RSTRING_LEN(src);
+    ec->last = econv_source_buffer_empty;
+    const char *name = rb_id2name(SYM2ID(r));
+    for (size_t i = 0; i < sizeof(econv_results) / sizeof(econv_results[0]); i++) {
+        if (strcmp(econv_results[i].name, name) == 0)
+            ec->last = econv_results[i].res;
+    }
+    return ec->last;
+}
+
+VALUE
+rb_econv_str_convert(rb_econv_t *ec, VALUE src, int flags)
+{
+    VALUE r = rb_funcall(ec->conv, rb_intern("convert"), 1, src);
+    if (!(flags & ECONV_PARTIAL_INPUT))
+        rb_str_buf_append(r, rb_funcall(ec->conv, rb_intern("finish"), 0));
+    ec->last = econv_finished;
+    return r;
+}
+
+void
+rb_econv_check_error(rb_econv_t *ec)
+{
+    if (ec->last == econv_invalid_byte_sequence || ec->last == econv_undefined_conversion ||
+        ec->last == econv_incomplete_input) {
+        VALUE err = rb_funcall(ec->conv, rb_intern("last_error"), 0);
+        if (!NIL_P(err))
+            rb_exc_raise(err);
+    }
+}
+
+struct conv_opts_args {
+    VALUE str, to, from, kw;
+};
+
+static VALUE
+conv_opts_body(VALUE argp)
+{
+    struct conv_opts_args *a = (struct conv_opts_args *)argp;
+    VALUE args[3] = {a->to, a->from, a->kw};
+    return rb_funcallv_kw(a->str, rb_intern("encode"), 3, args, RB_PASS_KEYWORDS);
+}
+
+VALUE
+rb_str_conv_enc_opts(VALUE str, rb_encoding *from, rb_encoding *to, int ecflags, VALUE ecopts)
+{
+    if (!to)
+        return str;
+    if (!from)
+        from = rb_enc_get(str);
+    if (from == to)
+        return str;
+    if ((rb_enc_asciicompat(to) && rb_enc_asciicompat(from) &&
+         rb_enc_str_coderange(str) == ENC_CODERANGE_7BIT) ||
+        to->index == 0) {
+        if (rb_enc_get(str) != to) {
+            str = rb_str_dup(str);
+            rb_enc_associate(str, to);
+        }
+        return str;
+    }
+    struct conv_opts_args a = {str, rb_str_new_cstr(to->name), rb_str_new_cstr(from->name),
+                               econv_kwargs(ecflags, ecopts)};
+    int state;
+    VALUE r = rb_protect(conv_opts_body, (VALUE)&a, &state);
+    if (state) {
+        rb_set_errinfo(Qnil);
+        return str;
+    }
+    return r;
 }

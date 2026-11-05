@@ -1,7 +1,7 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// `Zlib::Deflate` / `Zlib::Inflate` run on the bundled zlib (libz-sys), so
+// `Zlib::Deflate` / `Zlib::Inflate` are CRuby's zlib.c over the bundled zlib (libz-sys), so
 // the compressed bytes must be exactly what CRuby's zlib.so produces for the
 // same level / strategy / window (the oracle holds CRuby's answer). The
 // streams are summarised as [bytesize, crc32, leading bytes] to keep the
@@ -9,7 +9,6 @@ use monoruby::tests::*;
 
 #[test]
 fn deflate_bytes_match_zlib_for_every_level_and_strategy() {
-    ensure_extension("zlib_native");
     run_test_once(
         r#"
         require "zlib"
@@ -59,7 +58,6 @@ fn deflate_bytes_match_zlib_for_every_level_and_strategy() {
 
 #[test]
 fn inflate_streaming_and_errors() {
-    ensure_extension("zlib_native");
     run_test_once(
         r#"
         require "zlib"
@@ -105,7 +103,6 @@ fn deflate_params_reset_dictionary_and_stream_state() {
     // bytes flushed by the old settings, then the rest), `reset` reusing a
     // Deflate and an Inflate, `set_dictionary` on the inflate side after
     // NeedDict, and the counters / flags around them.
-    ensure_extension("zlib_native");
     run_test_once(
         r#"
         require "zlib"
@@ -162,7 +159,6 @@ fn deflate_params_reset_dictionary_and_stream_state() {
 
 #[test]
 fn zlib_checksums() {
-    ensure_extension("zlib_native");
     run_tests(&[
         r#"require "zlib"; [Zlib.crc32, Zlib.adler32, Zlib.crc32(nil), Zlib.crc32(nil, 5), Zlib.adler32(nil, 5), Zlib.crc32("", 5), Zlib.adler32("", 5)]"#,
         r#"require "zlib"; [Zlib.crc32("abc"), Zlib.adler32("abc"), Zlib.crc32("abc", 2**32 - 1), Zlib.crc32("abc", 2**32), Zlib.crc32("abc", 2**40 + 7), Zlib.crc32("abc", -1), Zlib.crc32("abc", 1.5)]"#,
@@ -185,7 +181,6 @@ fn zlib_checksums() {
 
 #[test]
 fn zlib_deflate_stored() {
-    ensure_extension("zlib_native");
     // Up to one stored block the NO_COMPRESSION output is
     // byte-identical to CRuby's. Past that the split point moved
     // between zlib 1.3 and 1.3.1 (`deflate_stored` keeps a few more
@@ -213,7 +208,6 @@ fn zlib_deflate_stored() {
 
 #[test]
 fn zlib_inflate() {
-    ensure_extension("zlib_native");
     // Streams a real zlib produced: a fixed-Huffman block, a
     // dynamic-Huffman block, and stored blocks with a multi-block
     // split. Each is decoded and compared with its plaintext.

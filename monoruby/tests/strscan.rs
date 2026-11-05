@@ -1,8 +1,8 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// monoruby's StringScanner is implemented in Ruby (stdlib/strscan.rb) on
-// top of the `String#__strscan_match` zero-copy primitive; CRuby's is a C
+// monoruby's StringScanner is CRuby's ext/strscan/strscan.c built against the
+// C API layer (monoruby_capi/ext/strscan); CRuby's is the same C
 // extension. Comparing outputs exercises the whole scanning surface.
 
 #[test]

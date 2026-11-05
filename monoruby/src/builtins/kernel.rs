@@ -230,12 +230,6 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "__dump", dump, 0);
     globals.define_builtin_func(kernel_class, "__check_stack", check_stack, 0);
     globals.define_builtin_func(kernel_class, "__instance_ty", instance_ty, 0);
-    globals.define_builtin_func(
-        kernel_class,
-        "__set_lastline_in_caller",
-        set_lastline_in_caller,
-        1,
-    );
     globals.define_builtin_func(kernel_class, "__backtrace_limit", backtrace_limit, 0);
     globals.define_builtin_func(kernel_class, "__caller_frames", caller_frames, 1);
     // `chomp` / `chop` are only defined under `-n` / `-p`
@@ -780,26 +774,6 @@ fn backtrace_limit(
         Some(n) => Value::integer(n as i64),
         None => Value::nil(),
     })
-}
-
-///
-/// ### Kernel.#__set_lastline_in_caller (monoruby intrinsic)
-///
-/// Sets `$_` in the method scope of the frame that called the invoking
-/// Ruby method. Used by Ruby-implemented IO-like stubs (`stringio.rb`)
-/// whose `gets`/`readline` must publish `$_` to their caller the way
-/// CRuby's C readers do via `rb_lastline_set`. Returns its argument.
-///
-#[monoruby_builtin]
-fn set_lastline_in_caller(
-    vm: &mut Executor,
-    _globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let val = lfp.arg(0);
-    vm.set_last_read_line_in_caller(val);
-    Ok(val)
 }
 
 ///

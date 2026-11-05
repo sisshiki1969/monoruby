@@ -55,6 +55,15 @@ struct State {
     /// Threads registered on this lock (the "live" count that decides
     /// whether releasing is worth anything).
     registered: usize,
+    /// The thread that held the lock last (kept alive here, so a later
+    /// thread's slot can never be mistaken for it). A thread that takes
+    /// the lock back with nobody having held it in between skips the
+    /// instruction-stream serialization: no other thread can have
+    /// written JIT code meanwhile, since that is only done under the
+    /// lock. `cpuid` exits to the hypervisor in a VM, and a C extension
+    /// that releases the lock around every short library call (zlib's
+    /// `rb_nogvl` per deflate step) would otherwise pay that each time.
+    last: Option<Arc<Slot>>,
 }
 
 pub(crate) struct Gvl {
@@ -84,6 +93,7 @@ impl GvlForkGuard {
         state.held = true;
         state.waiters.clear();
         state.registered = 1;
+        state.last = None;
         *survivor.granted.lock().unwrap_or_else(|e| e.into_inner()) = false;
     }
 }
@@ -97,6 +107,7 @@ impl Gvl {
                 held: true,
                 waiters: VecDeque::new(),
                 registered: 1,
+                last: None,
             }),
         };
         let main = GvlThread {
@@ -162,8 +173,14 @@ impl Gvl {
             let mut st = self.state.lock().unwrap();
             if !st.held && st.waiters.is_empty() {
                 st.held = true;
+                let same = st.last.as_ref().is_some_and(|l| Arc::ptr_eq(l, &th.slot));
+                if !same {
+                    st.last = Some(th.slot.clone());
+                }
                 drop(st);
-                self.on_acquired(th);
+                if !same {
+                    self.on_acquired(th);
+                }
                 return;
             }
             *th.slot.granted.lock().unwrap() = false;
@@ -185,6 +202,7 @@ impl Gvl {
         debug_assert!(st.held);
         match st.waiters.pop_front() {
             Some(next) => {
+                st.last = Some(next.clone());
                 drop(st);
                 *next.granted.lock().unwrap() = true;
                 next.wake.notify_one();
@@ -212,6 +230,7 @@ impl Gvl {
             let Some(next) = st.waiters.pop_front() else {
                 return;
             };
+            st.last = Some(next.clone());
             *th.slot.granted.lock().unwrap() = false;
             st.waiters.push_back(th.slot.clone());
             next
@@ -246,10 +265,11 @@ impl Gvl {
     /// (a compile, an entry jump reverted by a basic-op redefinition, a
     /// version word re-stamped by a salvage); it flushed on its side.
     /// This side serializes before it can execute any of it. Every
-    /// acquire pays the one instruction rather than tracking which
-    /// releases followed a write: the handoff itself is a futex wake,
-    /// next to which a `cpuid` / `isb` is noise, and there is no list of
-    /// code-writing sites to keep complete.
+    /// acquire that follows another thread's hold pays the one
+    /// instruction rather than tracking which releases followed a write:
+    /// that handoff is a futex wake, and there is no list of
+    /// code-writing sites to keep complete. Re-taking the lock nobody
+    /// else held in between skips it (`State::last`).
     fn on_acquired(&self, _th: &GvlThread) {
         serialize_instruction_stream();
     }

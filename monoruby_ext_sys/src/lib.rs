@@ -580,6 +580,57 @@ pub struct MrApi {
         getter: Option<MrGvarGetFn>,
         setter: Option<MrGvarSetFn>,
     ),
+    /// `rb_lastline_get`: `$_` of the Ruby frame the running extension
+    /// method was called from (nil when none), the frame whose `$~`
+    /// [`MrApi::backref_get`] reads.
+    pub lastline_get: unsafe extern "C" fn(ctx: *mut MrContext) -> MrValue,
+    /// `rb_lastline_set`: set that frame's `$_`, as `IO#gets` does.
+    pub lastline_set: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue),
+    /// Whether `v` is frozen (`OBJ_FROZEN`), without calling `frozen?`.
+    pub obj_frozen: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue) -> c_int,
+    /// `rb_gv_get`: the global variable `name` (`"$/"`, with the `$`),
+    /// read as Ruby code reads it, hooks included.
+    pub gvar_get: unsafe extern "C" fn(ctx: *mut MrContext, name: *const c_char) -> MrValue,
+    /// `rb_gv_set`: assign it, through its setter; -1 with the error
+    /// pending when the setter refuses (a read-only or type-checked one).
+    pub gvar_set:
+        unsafe extern "C" fn(ctx: *mut MrContext, name: *const c_char, v: MrValue) -> c_int,
+    /// `rb_funcallv_kw`: [`MrApi::funcall_sym`], passing the last of
+    /// `argv` as keywords when `kw_splat` is non-zero and it is a Hash.
+    pub funcall_kw: unsafe extern "C" fn(
+        ctx: *mut MrContext,
+        recv: MrValue,
+        sym: MrSym,
+        argc: c_int,
+        argv: *const MrValue,
+        block: MrValue,
+        kw_splat: c_int,
+    ) -> MrValue,
+    /// `RSTRING_PTR`: [`MrApi::str_cptr`] for a String with a buffer of
+    /// its own; for one viewing a shared buffer, the bytes in place
+    /// (stable across calls, not NUL-terminated, not to be written
+    /// before a `str_cptr`).
+    pub str_rptr: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue, len: *mut usize) -> *mut u8,
+    /// `rb_str_subseq`: bytes `beg..beg + len` (clamped) as a new String
+    /// of the same encoding.
+    pub str_subseq: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue, beg: i64, len: i64) -> MrValue,
+    /// The name of a String's encoding, NUL-terminated and living for the
+    /// process, one pointer per encoding; NULL with a TypeError pending
+    /// for a non-String.
+    pub str_enc_name: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue) -> *const c_char,
+    /// `force_encoding(name)`: 0; -1 with an error pending (frozen, not a
+    /// String); -2 when `name` is not resolved here (ask Ruby instead).
+    pub str_set_enc: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue, name: *const c_char) -> c_int,
+    /// A String's code range, computed and cached: 1 7-bit, 2 valid,
+    /// 3 broken; -1 with a TypeError pending for a non-String.
+    pub str_coderange: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue) -> c_int,
+    /// `rb_str_dup`: an unfrozen copy (sharing the buffer copy-on-write)
+    /// with the same encoding; a subclass instance goes through `dup`.
+    pub str_dup: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue) -> MrValue,
+    /// `rb_str_capacity`: the bytes the buffer `str_rptr` hands out can
+    /// hold before a resize moves it (one is kept back for the NUL);
+    /// -1 with a TypeError pending for a non-String.
+    pub str_capacity: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue) -> i64,
 }
 
 /// [`MrApi::call_blocking_ubf`]'s `ubf` for "no function, interrupt the
