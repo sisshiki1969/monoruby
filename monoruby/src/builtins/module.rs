@@ -8494,4 +8494,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn alias_method_invalid_symbol_name() {
+        run_test_once(
+            r#"
+            c = Class.new { def m = 1 }
+            bad = (+"\xFF").force_encoding(Encoding::UTF_8)
+            o = Object.new
+            o.define_singleton_method(:to_str) { bad }
+            [(c.send(:alias_method, bad, :m) rescue [$!.class, $!.message]),
+             (c.send(:alias_method, o, :m) rescue [$!.class, $!.message])]
+            "#,
+        );
+    }
 }

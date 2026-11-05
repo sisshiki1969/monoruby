@@ -1025,7 +1025,7 @@ mod tests {
             f.transfer
             "##,
         );
-        // A transferred fiber cannot be resumed.
+        // A fiber parked in a transfer cannot be resumed.
         run_test_error(
             r##"
             root = Fiber.current
@@ -1047,6 +1047,20 @@ mod tests {
             a = fiber2.resume
             b = fiber2.resume
             [a, b]
+            "##,
+        );
+        // Transferred away and back before its first `Fiber.yield`: the
+        // fiber is yielding, so it can be resumed again.
+        run_test_once(
+            r##"
+            other = nil
+            fiber = Fiber.new do
+              other.transfer
+              Fiber.yield :yielded
+              :done
+            end
+            other = Fiber.new { fiber.transfer }
+            [fiber.resume, fiber.resume]
             "##,
         );
     }

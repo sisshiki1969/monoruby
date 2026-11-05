@@ -251,6 +251,13 @@ class Thread
   def []=(key, value)
     Kernel.raise FrozenError, "can't modify frozen thread locals" if frozen?
     k = __thread_key(key)
+    if value.nil?
+      # CRuby: assigning nil removes the fiber-local (`key?` / `keys`
+      # stop listing it).
+      t = __fiber_local_table(false)
+      t.delete(k) if t
+      return value
+    end
     __fiber_local_table(true)[k] = value
   end
 

@@ -776,22 +776,129 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2d.html]
 #[monoruby_builtin]
 fn sub(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs_v = lfp.self_val();
+    let lhs = lfp.self_val().as_array();
     vm.with_temp_scope(|vm| {
         let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
         vm.temp_push(rhs.into());
-        // O(n + m): hash rhs once, then membership-check each lhs element.
-        let mut rhs_set = RubySet::default();
-        for v in rhs.iter() {
-            rhs_set.insert(*v, vm, globals)?;
-        }
-        let mut v = vec![];
-        for lhs in lhs_v.as_array().iter() {
-            if !rhs_set.contains(lhs, vm, globals)? {
-                v.push(*lhs);
+        let mut res = Array::new_empty();
+        vm.temp_push(res.into());
+        // CRuby (`rb_ary_diff`): when either side is small, a linear
+        // `eql?` scan of `other` — no `#hash` is sent. Otherwise hash
+        // `other` once and look each element up.
+        if lhs.len() <= SMALL_ARRAY_LEN || rhs.len() <= SMALL_ARRAY_LEN {
+            let mut i = 0;
+            while i < lhs.len() {
+                let elt = lhs[i];
+                i += 1;
+                if !ary_includes_by_eql(rhs, elt, vm, globals)? {
+                    res.push(elt);
+                }
+            }
+        } else {
+            let rhs_set = ary_make_set(rhs, vm, globals)?;
+            let mut i = 0;
+            while i < lhs.len() {
+                let elt = lhs[i];
+                i += 1;
+                if !rhs_set.contains(&elt, vm, globals)? {
+                    res.push(elt);
+                }
             }
         }
-        Ok(Value::array_from_vec(v))
+        Ok(res.into())
+    })
+}
+
+/// CRuby's `SMALL_ARRAY_LEN`: up to this many elements the set
+/// operations (`&`, `|`, `-` and their multi-argument forms) compare by
+/// a linear `eql?` scan and never send `#hash`.
+const SMALL_ARRAY_LEN: usize = 16;
+
+/// `rb_ary_includes_by_eql`: whether `item.eql?(e)` (identity first) for
+/// some element `e` of `ary`. The length is re-read on every step, as
+/// `eql?` may mutate `ary`.
+fn ary_includes_by_eql(
+    ary: Array,
+    item: Value,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<bool> {
+    let mut i = 0;
+    while i < ary.len() {
+        let e = ary[i];
+        i += 1;
+        if item.eql(&e, vm, globals)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// `rb_ary_union`: append each element of `ary` to `union` unless an
+/// `eql?` one is already there.
+fn ary_union_linear(
+    mut union: Array,
+    ary: Array,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<()> {
+    let mut i = 0;
+    while i < ary.len() {
+        let elt = ary[i];
+        i += 1;
+        if !ary_includes_by_eql(union, elt, vm, globals)? {
+            union.push(elt);
+        }
+    }
+    Ok(())
+}
+
+/// Hash every element of `ary` into a fresh set (`ary_make_hash`).
+fn ary_make_set(ary: Array, vm: &mut Executor, globals: &mut Globals) -> Result<RubySet<Value>> {
+    let mut set = RubySet::default();
+    let mut i = 0;
+    while i < ary.len() {
+        let e = ary[i];
+        i += 1;
+        set.insert(e, vm, globals)?;
+    }
+    Ok(set)
+}
+
+/// `rb_ary_and`: the elements of `lhs` that are also in `rhs`, without
+/// duplicates, in `lhs` order. The caller roots both arrays.
+fn ary_and(lhs: Array, rhs: Array, vm: &mut Executor, globals: &mut Globals) -> Result<Array> {
+    let mut res = Array::new_empty();
+    if lhs.len() == 0 || rhs.len() == 0 {
+        return Ok(res);
+    }
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(res.into());
+        if lhs.len() <= SMALL_ARRAY_LEN && rhs.len() <= SMALL_ARRAY_LEN {
+            let mut i = 0;
+            while i < lhs.len() {
+                let v = lhs[i];
+                i += 1;
+                if !ary_includes_by_eql(rhs, v, vm, globals)? {
+                    continue;
+                }
+                if ary_includes_by_eql(res, v, vm, globals)? {
+                    continue;
+                }
+                res.push(v);
+            }
+        } else {
+            let mut rhs_set = ary_make_set(rhs, vm, globals)?;
+            let mut i = 0;
+            while i < lhs.len() {
+                let v = lhs[i];
+                i += 1;
+                if rhs_set.swap_remove(&v, vm, globals)? {
+                    res.push(v);
+                }
+            }
+        }
+        Ok(res)
     })
 }
 
@@ -881,19 +988,11 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=26.html]
 #[monoruby_builtin]
 fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut lhs = Array::new_from_vec(lfp.self_val().as_array().to_vec());
+    let lhs = lfp.self_val().as_array();
     vm.with_temp_scope(|vm| {
-        vm.temp_push(lhs.into());
         let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
         vm.temp_push(rhs.into());
-        lhs.uniq(vm, globals)?;
-        // O(n + m): hash rhs once, then membership-check each lhs element.
-        let mut rhs_set = RubySet::default();
-        for v in rhs.iter() {
-            rhs_set.insert(*v, vm, globals)?;
-        }
-        lhs.retain(|v| rhs_set.contains(v, vm, globals))?;
-        Ok(lhs.as_val())
+        Ok(ary_and(lhs, rhs, vm, globals)?.into())
     })
 }
 
@@ -905,15 +1004,40 @@ fn and(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=7c.html]
 #[monoruby_builtin]
 fn or(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut lhs = Array::new_from_vec(lfp.self_val().as_array().to_vec());
-    // Root the fresh copy across `#to_ary` and `uniq`'s Ruby
-    // `hash`/`eql?` dispatches, like `Array#&` above.
+    let lhs = lfp.self_val().as_array();
     vm.with_temp_scope(|vm| {
-        vm.temp_push(lhs.into());
         let rhs = lfp.arg(0).coerce_to_array(vm, globals)?;
-        lhs.extend(rhs.iter().cloned());
-        lhs.uniq(vm, globals)?;
-        Ok(lhs.as_val())
+        vm.temp_push(rhs.into());
+        ary_union_multi(lhs, &[rhs], vm, globals)
+    })
+}
+
+/// `rb_ary_union_multi`: a linear `eql?` merge while the combined size
+/// is small, otherwise a hash-based `uniq` of the concatenation. The
+/// caller roots `others`.
+fn ary_union_multi(
+    lhs: Array,
+    others: &[Array],
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<Value> {
+    let sum = lhs.len() + others.iter().map(|a| a.len()).sum::<usize>();
+    let mut res = Array::new_empty();
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(res.into());
+        if sum <= SMALL_ARRAY_LEN {
+            ary_union_linear(res, lhs, vm, globals)?;
+            for other in others {
+                ary_union_linear(res, *other, vm, globals)?;
+            }
+        } else {
+            res.extend(lhs.iter().cloned());
+            for other in others {
+                res.extend(other.iter().cloned());
+            }
+            res.uniq(vm, globals)?;
+        }
+        Ok(res.into())
     })
 }
 
@@ -4021,18 +4145,29 @@ fn product_inner(lhs: Array, rhs: Vec<Array>) -> impl Iterator<Item = Value> {
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/union.html]
 #[monoruby_builtin]
 fn union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
-    // Root the accumulator across `#to_ary` and `uniq`'s Ruby
-    // `hash`/`eql?` dispatches, like `Array#intersection`.
+    let lhs = lfp.self_val().as_array();
+    // `#to_ary` may hand back fresh Arrays referenced only by this Rust
+    // Vec; root each across the later coercions and `eql?` dispatches.
     vm.with_temp_scope(|vm| {
-        vm.temp_push(ary.into());
-        for rhs in lfp.arg(0).as_array().into_iter() {
-            let rhs = rhs.coerce_to_array(vm, globals)?;
-            ary.extend(rhs.into_iter().cloned());
-        }
-        ary.uniq(vm, globals)?;
-        Ok(ary.into())
+        let others = coerce_args_to_arrays(lfp.arg(0).as_array(), vm, globals)?;
+        ary_union_multi(lhs, &others, vm, globals)
     })
+}
+
+/// `to_ary` every argument, rooting each result in the current temp
+/// scope.
+fn coerce_args_to_arrays(
+    args: Array,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<Vec<Array>> {
+    args.iter()
+        .map(|v| {
+            let a = v.coerce_to_array(vm, globals)?;
+            vm.temp_push(a.into());
+            Ok(a)
+        })
+        .collect()
 }
 
 ///
@@ -4043,32 +4178,40 @@ fn union(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/difference.html]
 #[monoruby_builtin]
 fn difference(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs_v = lfp.self_val();
-    // `#to_ary` may hand back fresh Arrays referenced only by this Rust
-    // Vec; root each across the later coercions and `eql?` dispatches.
+    let lhs = lfp.self_val().as_array();
     vm.with_temp_scope(|vm| {
-        let others: Vec<_> = lfp
-            .arg(0)
-            .as_array()
-            .iter()
-            .map(|v| {
-                let a = v.coerce_to_array(vm, globals)?;
-                vm.temp_push(a.into());
-                Ok(a)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let mut v = vec![];
-        'outer: for lhs in lhs_v.as_array().iter() {
-            for other in &others {
-                for rhs in other.iter() {
-                    if lhs.eql(rhs, vm, globals)? {
-                        continue 'outer;
-                    }
+        let others = coerce_args_to_arrays(lfp.arg(0).as_array(), vm, globals)?;
+        // CRuby (`rb_ary_difference_multi`): an argument is hashed only
+        // when both it and the receiver exceed the small-array limit;
+        // the rest are scanned with `eql?`.
+        let mut sets = Vec::with_capacity(others.len());
+        for other in &others {
+            sets.push(
+                if lhs.len() > SMALL_ARRAY_LEN && other.len() > SMALL_ARRAY_LEN {
+                    Some(ary_make_set(*other, vm, globals)?)
+                } else {
+                    None
+                },
+            );
+        }
+        let mut res = Array::new_empty();
+        vm.temp_push(res.into());
+        let mut i = 0;
+        'outer: while i < lhs.len() {
+            let elt = lhs[i];
+            i += 1;
+            for (other, set) in others.iter().zip(&sets) {
+                let found = match set {
+                    Some(set) => set.contains(&elt, vm, globals)?,
+                    None => ary_includes_by_eql(*other, elt, vm, globals)?,
+                };
+                if found {
+                    continue 'outer;
                 }
             }
-            v.push(*lhs);
+            res.push(elt);
         }
-        Ok(Value::array_from_vec(v))
+        Ok(res.into())
     })
 }
 
@@ -4085,33 +4228,18 @@ fn intersection(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let src = lfp.self_val().as_array();
-    // Build a unique copy as a plain Array
-    let mut ary = Value::array_from_vec(src.to_vec()).as_array();
+    // CRuby (`rb_ary_intersection_multi`): a copy of the receiver folded
+    // through `&` with each argument (so no argument means no `uniq`).
+    let mut res = Array::new_from_vec(lfp.self_val().as_array().to_vec());
     vm.with_temp_scope(|vm| {
-        vm.temp_push(ary.into());
-        ary.uniq(vm, globals)?;
-        // Build one hash set per `other` arg so each membership check is O(1).
-        let mut other_sets: Vec<RubySet<Value>> =
-            Vec::with_capacity(lfp.arg(0).as_array().len());
+        vm.temp_push(res.into());
         for arg in lfp.arg(0).as_array().iter() {
             let other = arg.coerce_to_array(vm, globals)?;
             vm.temp_push(other.into());
-            let mut set = RubySet::default();
-            for elem in other.iter() {
-                set.insert(*elem, vm, globals)?;
-            }
-            other_sets.push(set);
+            res = ary_and(res, other, vm, globals)?;
+            vm.temp_push(res.into());
         }
-        ary.retain(|lhs| {
-            for set in &other_sets {
-                if !set.contains(lhs, vm, globals)? {
-                    return Ok(false);
-                }
-            }
-            Ok(true)
-        })?;
-        Ok(ary.as_val())
+        Ok(res.into())
     })
 }
 
@@ -8351,6 +8479,35 @@ mod tests {
             g = ->(m) { begin; a.send(m) { |x, y| "z" }; rescue => e; [e.class, e.message]; end }
             [:sort, :min, :max, :minmax].map { |m| [f.(m), g.(m)] }
             "#,
+        );
+    }
+
+    #[test]
+    fn set_ops_small_arrays_skip_hash() {
+        // CRuby's SMALL_ARRAY_LEN rules: up to 16 elements the set
+        // operations compare with `eql?` and never send `#hash`.
+        run_test_once(
+            r##"
+            poison = Object.new
+            def poison.hash = raise("#hash called")
+            a = Object.new
+            r = []
+            r << ([a, poison] - [poison]).size
+            r << ([a, poison] & [poison]).size
+            r << ([a, poison] | [poison]).size
+            r << [a, poison].union([poison], [a]).size
+            r << [a, poison].difference([poison], [a]).size
+            r << [a, poison].intersection([poison], [poison]).size
+            r << (Array.new(16) { Object.new } & Array.new(16, poison)).size
+            r << (Array.new(17) { Object.new } - Array.new(16, poison)).size
+            r << ((Array.new(17) { Object.new } & Array.new(16, poison)) rescue $!.message)
+            r << ((Array.new(17) { Object.new } - Array.new(17, poison)) rescue $!.message)
+            r << ((Array.new(16) { Object.new } | [poison]) rescue $!.message)
+            r << (Array.new(17) { Object.new }.difference(Array.new(17, poison)) rescue $!.message)
+            r << [1, 1].intersection << [1, 1, 2].intersection([2, 1, 1])
+            r << ([1, 1.0, 1] | [1.0]) << ([1, 2, 2, 3] & [2, 3, 3])
+            r
+            "##,
         );
     }
 }
