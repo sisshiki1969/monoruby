@@ -118,7 +118,7 @@ fn the_installed_extensions_load() {
     }
     // CRuby's own C extensions, built against the C API layer, are named
     // as their `require` does.
-    for name in ["date_core", "strscan", "stringio", "zlib", "bigdecimal", "socket"] {
+    for name in ["date_core", "stringio", "zlib", "bigdecimal", "socket"] {
         let dylib = if cfg!(target_os = "macos") {
             format!("{name}.dylib")
         } else {

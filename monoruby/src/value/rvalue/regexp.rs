@@ -394,6 +394,13 @@ impl RegexpInner {
         crate::builtins::check_match_encoding(store, self, subject)?;
         Ok(match Self::native_codec_for(subject) {
             Some(enc) => (&self.source, self.regex.option(), enc),
+            // A 7-bit subject is matched under US-ASCII when the pattern
+            // allows it, as `find_spans` does (`engine_for`) and as CRuby's
+            // `rb_reg_prepare_enc` does for a 7-bit string: the
+            // single-byte codec is much cheaper per character.
+            None if subject.is_ascii_only() && self.ascii_eligible() => {
+                (&self.source, self.regex.option(), OnigmoEncoding::ASCII)
+            }
             None => self.capi_engine_key(),
         })
     }
@@ -1257,7 +1264,7 @@ impl RegexpInner {
         }
     }
 
-    /// The US-ASCII compile of this pattern, when it can stand in for
+    /// Whether the US-ASCII compile of this pattern can stand in for
     /// the UTF-8 one on a 7-bit subject. Eligible: a 7-bit source whose
     /// encoding is not pinned, with no `\p{…}` / `\P{…}` (CRuby pins
     /// those to UTF-8, and Onigmo's US-ASCII codec knows only the POSIX
@@ -1265,10 +1272,10 @@ impl RegexpInner {
     /// form, not the source). Decided once per regexp; a compile
     /// failure — anything else the US-ASCII codec rejects — settles on
     /// "no" as well.
-    fn ascii_engine(&self) -> Option<&Regex> {
+    fn ascii_eligible(&self) -> bool {
         match self.ascii_state.get() {
-            1 => {}
-            2 => return None,
+            1 => true,
+            2 => false,
             _ => {
                 let eligible = self.encoding == OnigmoEncoding::UTF8
                     && !self.fixed_encoding
@@ -1276,10 +1283,16 @@ impl RegexpInner {
                     && !has_escape(&self.source, b"pPu")
                     && self.native_regex(OnigmoEncoding::ASCII).is_ok();
                 self.ascii_state.set(if eligible { 1 } else { 2 });
-                if !eligible {
-                    return None;
-                }
+                eligible
             }
+        }
+    }
+
+    /// The US-ASCII compile of this pattern, when
+    /// [`ascii_eligible`](Self::ascii_eligible).
+    fn ascii_engine(&self) -> Option<&Regex> {
+        if !self.ascii_eligible() {
+            return None;
         }
         // The slot holds another codec if the regexp met that one first;
         // the UTF-8 engine is still correct, so take it rather than a
@@ -2647,6 +2660,53 @@ impl RegexpInner {
                 }
             }
         }
+    }
+
+    /// `StringScanner` primitive: match `sub` (the byte suffix at the scan
+    /// position, already a valid engine view) either anchored at its start
+    /// (`onig_match`) or as a forward search (`onig_search`), recording the
+    /// registers into the caller's reusable `region`. Returns whether it
+    /// matched; the caller reads the offsets (relative to `sub`) from the
+    /// region. Never touches `$~`. `ascii` is the subject's cached code
+    /// range (7-bit or not) — the scanner calls this once per token on
+    /// an ever-shorter suffix, so it must not be probed here.
+    pub(crate) fn strscan_match(
+        &self,
+        sub: &str,
+        anchored: bool,
+        ascii: bool,
+        region: &mut onigmo_regex::Region,
+    ) -> Result<bool> {
+        let engine = self.engine_for(sub, Some(ascii));
+        let _deadline = self.deadline();
+        let r = if anchored {
+            engine.match_at_with_region(sub.as_bytes(), 0, region)
+        } else {
+            engine.search_with_region(sub.as_bytes(), 0, region)
+        };
+        r.map(|r| r.is_some()).map_err(capture_failed)
+    }
+
+    /// [`strscan_match`](Self::strscan_match) for a non-UTF-8 subject
+    /// with a native Onigmo codec (`enc`, from `onigmo_encoding_for`):
+    /// `sub` is the raw byte suffix at the scan position, matched by the
+    /// source bytes compiled under that codec, so the registers are raw
+    /// byte offsets into `sub`.
+    pub(crate) fn strscan_match_bytes(
+        &self,
+        sub: &[u8],
+        anchored: bool,
+        enc: OnigmoEncoding,
+        region: &mut onigmo_regex::Region,
+    ) -> Result<bool> {
+        let native = self.native_regex(enc)?;
+        let _deadline = self.deadline();
+        let r = if anchored {
+            native.match_at_with_region(sub, 0, region)
+        } else {
+            native.search_with_region(sub, 0, region)
+        };
+        r.map(|r| r.is_some()).map_err(capture_failed)
     }
 
     /// Byte-oriented twin of [`match_pred`](Self::match_pred): whether the

@@ -259,8 +259,9 @@ pub struct MrApi {
     /// As `define_class`, for a module.
     pub define_module:
         unsafe extern "C" fn(ctx: *mut MrContext, outer: MrValue, name: *const c_char) -> MrValue,
-    /// Define `name` on `klass`: `argc` positional arguments
-    /// (`MR_ARGC_VARIADIC` for any number), `MR_METHOD_*` flags.
+    /// Define `name` on `klass`: `argc` positional arguments, at most 15
+    /// as in CRuby (`MR_ARGC_VARIADIC` for any number), `MR_METHOD_*`
+    /// flags.
     pub define_method: unsafe extern "C" fn(
         ctx: *mut MrContext,
         klass: MrValue,

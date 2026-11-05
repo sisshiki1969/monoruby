@@ -494,8 +494,7 @@ fn capi_extensions_dir() -> PathBuf {
 /// ships them as `<install root>/ext/<name>.<DLEXT>`, where `require
 /// "<name>"` looks (`ext::find_extension`). Today: `date_core`
 /// (`require "date"`, and so `time`, `psych` and rubygems' `gem build`),
-/// `strscan`, `stringio` and `zlib` (which rubygems needs to read a
-/// `.gem`). `doc/c_api.md` §3.17.
+/// `stringio` and `zlib` (which rubygems needs to read a `.gem`). `doc/c_api.md` §3.17.
 ///
 /// The `#define`s stand in for the extension's `extconf.rb` probes, for
 /// the targets monoruby builds on. Like the layer's archive, a failure to
@@ -523,17 +522,6 @@ fn build_capi_extensions(capi_dir: &Path) {
             files: &["date_core.c", "date_parse.c", "date_strftime.c", "date_strptime.c"],
             // `tm_gmtoff` is in every target's `struct tm`.
             defines: &["HAVE_STRUCT_TM_TM_GMTOFF"],
-            zlib: false,
-            openssl: false,
-            linux: &[],
-            macos: &[],
-        },
-        Ext {
-            name: "strscan",
-            dir: "strscan",
-            files: &["strscan.c"],
-            // The layer has both (`ruby/re.h`, capi.c).
-            defines: &["HAVE_ONIG_REGION_MEMSIZE", "HAVE_RB_REG_ONIG_MATCH", "HAVE_RB_DEPRECATE_CONSTANT"],
             zlib: false,
             openssl: false,
             linux: &[],
