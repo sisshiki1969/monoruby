@@ -54,6 +54,9 @@
 #include <fcntl.h>
 #include <sys/time.h>
 #include <sys/select.h>
+/* glibc's <pthread.h> pulls <signal.h> in and macOS's does not; ext/socket's
+ * raddrinfo.c calls sigemptyset() relying on the former. */
+#include <signal.h>
 
 #include "ruby/version.h"
 
