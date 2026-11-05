@@ -16,6 +16,7 @@ extern "C" {
 #endif
 
 typedef void rb_unblock_function_t(void *);
+typedef VALUE rb_blocking_function_t(void *);
 #define RUBY_UBF_IO ((rb_unblock_function_t *)-1)
 #define RUBY_UBF_PROCESS ((rb_unblock_function_t *)-1)
 
@@ -25,6 +26,9 @@ void *rb_thread_call_without_gvl2(void *(*func)(void *), void *data1,
                                   rb_unblock_function_t *ubf, void *data2);
 void *rb_nogvl(void *(*func)(void *), void *data1, rb_unblock_function_t *ubf,
                void *data2, int flags);
+/* Re-take the interpreter inside a `rb_thread_call_without_gvl` callback
+ * to run `func(data1)`. */
+void *rb_thread_call_with_gvl(void *(*func)(void *), void *data1);
 #define RB_NOGVL_INTR_FAIL 0x1
 #define RB_NOGVL_UBF_ASYNC_SAFE 0x2
 

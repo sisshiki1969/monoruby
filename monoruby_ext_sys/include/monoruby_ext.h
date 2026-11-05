@@ -108,6 +108,15 @@ typedef enum MrErrorKind {
 
 /* Entries are only ever appended; `size` says how many bytes the running
  * monoruby fills. */
+/* MrApi::io_state's result; `mode` holds CRuby's FMODE_* bits, `rbuf` the
+ * bytes read from the descriptor and not yet consumed. */
+typedef struct MrIoState {
+    int fd;
+    int mode;
+    const uint8_t *rbuf;
+    size_t rbuf_len;
+} MrIoState;
+
 struct MrApi {
     uint32_t abi_version;
     uint32_t size;
@@ -233,6 +242,9 @@ struct MrApi {
     MrValue (*thread_current)(MrContext *);  /* rb_thread_current */
     MrValue (*thread_local_aref)(MrContext *, MrValue thread, MrSym sym);  /* thread[sym], no dispatch */
     void    (*obj_freeze)(MrContext *, MrValue v);  /* Kernel#freeze, no dispatch */
+    int     (*io_state)(MrContext *, MrValue io, MrIoState *out);  /* struct rb_io view, -1 error */
+    int     (*io_update)(MrContext *, MrValue io, int fd, int mode, size_t rbuf_consumed);  /* write it back, -1 error */
+    int     (*str_modify)(MrContext *, MrValue v);  /* rb_str_modify, keeps bytes past len; -1 error */
 };
 
 /* Onigmo's entry points as linked into monoruby, types erased: regex_t *

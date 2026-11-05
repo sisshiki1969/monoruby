@@ -128,6 +128,11 @@ impl<T> IoReader<T> {
         &self.inner
     }
 
+    /// Drop `n` buffered bytes (at most what is buffered), as if read.
+    pub(crate) fn consume_buffered(&mut self, n: usize) {
+        self.pos = (self.pos + n).min(self.cap);
+    }
+
     pub(crate) fn get_mut(&mut self) -> &mut T {
         &mut self.inner
     }

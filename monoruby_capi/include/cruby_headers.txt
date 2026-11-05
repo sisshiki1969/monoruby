@@ -17,7 +17,6 @@ ruby/backward/2/rmodule.h
 ruby/backward/2/stdalign.h
 ruby/backward/2/stdarg.h
 ruby/debug.h
-ruby/fiber/scheduler.h
 ruby/internal/abi.h
 ruby/internal/anyargs.h
 ruby/internal/arithmetic.h
@@ -177,6 +176,5 @@ ruby/memory_view.h
 ruby/ractor.h
 ruby/random.h
 ruby/regex.h
-ruby/thread_native.h
 ruby/vm.h
 ruby/win32.h

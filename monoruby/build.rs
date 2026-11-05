@@ -509,6 +509,10 @@ fn build_capi_extensions(capi_dir: &Path) {
         defines: &'static [&'static str],
         /// Links zlib (`zlib_link`).
         zlib: bool,
+        /// Added to `defines` on Linux / macOS: what `extconf.rb` finds
+        /// there, for an extension whose configuration is per platform.
+        linux: &'static [&'static str],
+        macos: &'static [&'static str],
     }
     const EXTENSIONS: &[Ext] = &[
         Ext {
@@ -518,6 +522,8 @@ fn build_capi_extensions(capi_dir: &Path) {
             // `tm_gmtoff` is in every target's `struct tm`.
             defines: &["HAVE_STRUCT_TM_TM_GMTOFF"],
             zlib: false,
+            linux: &[],
+            macos: &[],
         },
         Ext {
             name: "strscan",
@@ -526,6 +532,8 @@ fn build_capi_extensions(capi_dir: &Path) {
             // The layer has both (`ruby/re.h`, capi.c).
             defines: &["HAVE_ONIG_REGION_MEMSIZE", "HAVE_RB_REG_ONIG_MATCH", "HAVE_RB_DEPRECATE_CONSTANT"],
             zlib: false,
+            linux: &[],
+            macos: &[],
         },
         Ext {
             name: "bigdecimal",
@@ -543,6 +551,8 @@ fn build_capi_extensions(capi_dir: &Path) {
                 "HAVE_STDLIB_H",
             ],
             zlib: false,
+            linux: &[],
+            macos: &[],
         },
         Ext {
             name: "stringio",
@@ -550,6 +560,8 @@ fn build_capi_extensions(capi_dir: &Path) {
             files: &["stringio.c"],
             defines: &[],
             zlib: false,
+            linux: &[],
+            macos: &[],
         },
         Ext {
             name: "zlib",
@@ -564,6 +576,23 @@ fn build_capi_extensions(capi_dir: &Path) {
                 "HAVE_ZLIB_SIZE_T_FUNCS",
             ],
             zlib: true,
+            linux: &[],
+            macos: &[],
+        },
+        Ext {
+            name: "socket",
+            dir: "socket",
+            files: &[
+                "init.c", "constants.c", "basicsocket.c", "socket.c", "ipsocket.c", "tcpsocket.c",
+                "tcpserver.c", "sockssocket.c", "udpsocket.c", "unixsocket.c", "unixserver.c",
+                "option.c", "ancdata.c", "raddrinfo.c", "ifaddr.c",
+            ],
+            defines: &[],
+            zlib: false,
+            // `extconf.h` (next to the sources) is what CRuby 4.0.6's
+            // extconf.rb finds on Linux (glibc) and on macOS.
+            linux: &["_GNU_SOURCE", "RUBY_EXTCONF_H=\"extconf.h\""],
+            macos: &["__APPLE_USE_RFC_3542", "RUBY_EXTCONF_H=\"extconf.h\""],
         },
     ];
     let zlib = zlib_link();
@@ -586,7 +615,8 @@ fn build_capi_extensions(capi_dir: &Path) {
             .include("../monoruby_capi/include")
             .include("../monoruby_ext_sys/include")
             .include(&src_dir);
-        for d in ext.defines {
+        let os_defines = if macos { ext.macos } else { ext.linux };
+        for d in ext.defines.iter().chain(os_defines) {
             match d.split_once('=') {
                 Some((k, v)) => build.define(k, v),
                 None => build.define(d, None),

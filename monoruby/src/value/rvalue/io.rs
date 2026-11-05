@@ -589,6 +589,11 @@ pub struct IoInner {
     binmode: bool,
     /// The `newline:` write decorator the stream was opened with.
     newline: NewlineMode,
+    /// The FMODE bits a C extension keeps in `fptr->mode` that this
+    /// struct does not model itself (`FMODE_DUPLEX`, the socket
+    /// extension's `FMODE_NOREVLOOKUP` / `FMODE_UNIX` …); ext.rs's
+    /// `io_state` / `io_update`.
+    capi_fmode: i32,
 }
 
 /// The `newline:` open option's write side: what a `"\n"` in the data
@@ -696,7 +701,16 @@ impl IoInner {
             ext_state: ExtEnc::Unset,
             binmode: false,
             newline: NewlineMode::None,
+            capi_fmode: 0,
         }
+    }
+
+    pub(crate) fn capi_fmode(&self) -> i32 {
+        self.capi_fmode
+    }
+
+    pub(crate) fn set_capi_fmode(&mut self, mode: i32) {
+        self.capi_fmode = mode;
     }
 
     pub fn kind(&self) -> &IoKind {
@@ -1012,25 +1026,58 @@ impl IoInner {
         })))
     }
 
-    /// Wrap a socket fd (connected stream or listener). Like [`Self::file`]
-    /// but with no filesystem path (`IO#path` is nil for sockets) and
-    /// always opened read/write; `name` only feeds `Display`/inspect.
-    pub(super) fn socket(file: std::fs::File, name: String) -> Self {
-        register_owned_fd(file.as_raw_fd());
+    /// What the C API layer's `struct rb_io` shows of this stream: the
+    /// descriptor (-1 once closed), readable / writable, and the bytes
+    /// read from the fd but not yet consumed.
+    pub(crate) fn capi_view(&self) -> (i32, bool, bool, &[u8]) {
+        let fd = if self.is_closed() { -1 } else { self.fileno().unwrap_or(-1) };
+        let rbuf: &[u8] = match &self.kind {
+            IoKind::File(f) => f.reader.buffer(),
+            _ => &[],
+        };
+        (fd, self.is_readable(), self.is_writable(), rbuf)
+    }
+
+    /// An extension's `fptr->mode &= ~FMODE_READABLE` (`BasicSocket#close_read`)
+    /// and friends: the stream stops accepting reads / writes.
+    pub(crate) fn capi_set_access(&mut self, readable: bool, writable: bool) {
+        if let IoKind::File(f) = &mut self.kind
+            && let Some(f) = Rc::get_mut(f)
+        {
+            f.readable &= readable;
+            f.writable &= writable;
+        }
+    }
+
+    /// The extension took `n` bytes out of `fptr->rbuf`.
+    pub(crate) fn capi_consume_rbuf(&mut self, n: usize) {
+        if let IoKind::File(f) = &mut self.kind
+            && let Some(f) = Rc::get_mut(f)
+        {
+            f.reader.consume_buffered(n);
+        }
+    }
+
+    /// `MakeOpenFile` followed by `fptr->fd = fd`: a closed (freshly
+    /// allocated) IO object takes ownership of `fd`. The per-object state
+    /// stays as it is.
+    pub(crate) fn capi_attach(&mut self, fd: i32, readable: bool, writable: bool, sync: bool) {
+        // SAFETY: the extension hands the descriptor over to this object,
+        // as CRuby's `fptr->fd = fd` does.
+        let file = unsafe { std::fs::File::from_raw_fd(fd) };
+        register_owned_fd(fd);
         let is_tty = file.is_terminal();
-        // CRuby marks sockets synchronized (`rb_io_synchronized`).
-        let sync = true;
-        Self::with_kind(IoKind::File(Rc::new(FileDescriptor {
+        self.kind = IoKind::File(Rc::new(FileDescriptor {
             reader: ManuallyDrop::new(IoReader::new(file)),
-            name,
+            name: format!("fd {fd}"),
             path_raw: None,
             has_path: false,
-            readable: true,
-            writable: true,
+            readable,
+            writable,
             autoclose: Cell::new(true),
             pushback: RefCell::new(Vec::new()),
             wbuf: RefCell::new(WriteBuf::new(sync, is_tty)),
-        })))
+        }));
     }
 
     pub(crate) fn popen(mut child: std::process::Child) -> Self {

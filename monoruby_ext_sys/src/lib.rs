@@ -638,6 +638,34 @@ pub struct MrApi {
     pub thread_local_aref: unsafe extern "C" fn(ctx: *mut MrContext, thread: MrValue, sym: MrSym) -> MrValue,
     /// `rb_obj_freeze`: what `Kernel#freeze` does, without dispatching.
     pub obj_freeze: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue),
+    /// The C API layer's `struct rb_io` view of an IO object: 0 with `out`
+    /// filled; -1 with a TypeError pending for anything but an IO.
+    pub io_state: unsafe extern "C" fn(ctx: *mut MrContext, io: MrValue, out: *mut MrIoState) -> c_int,
+    /// Write an extension's changes to that view back: a closed IO given a
+    /// descriptor takes it over (`MakeOpenFile`, then `fptr->fd = fd`);
+    /// `mode` dropping FMODE_READABLE / FMODE_WRITABLE closes that side
+    /// for the interpreter; the other mode bits are kept for the next
+    /// `io_state`; `rbuf_consumed` buffered bytes are dropped. 0, or -1
+    /// with a TypeError pending.
+    pub io_update: unsafe extern "C" fn(ctx: *mut MrContext, io: MrValue, fd: c_int, mode: c_int, rbuf_consumed: usize) -> c_int,
+    /// `rb_str_modify`: the String's bytes become its own to write (a
+    /// shared view is detached) and its cached code range is dropped. The
+    /// buffer past the length is left alone: an extension may have written
+    /// there (after `rb_str_modify_expand`) before `rb_str_set_len`. 0, or
+    /// -1 with an error pending.
+    pub str_modify: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue) -> c_int,
+}
+
+/// [`MrApi::io_state`]'s result. `mode` holds CRuby's FMODE_* bits.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct MrIoState {
+    pub fd: c_int,
+    pub mode: c_int,
+    /// Bytes read from the descriptor and not yet consumed; valid until
+    /// the interpreter next runs.
+    pub rbuf: *const u8,
+    pub rbuf_len: usize,
 }
 
 /// [`MrApi::call_blocking_ubf`]'s `ubf` for "no function, interrupt the

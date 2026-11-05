@@ -121,6 +121,13 @@ struct capi_frame {
 };
 
 static __thread struct capi_frame *capi_cur;
+/* The `struct rb_io`s handed out by GetOpenFile / MakeOpenFile and not
+ * yet written back (capi.c, "rb_io_t"). */
+struct capi_io;
+static __thread struct capi_io *capi_ios;
+static void io_out_all(void);
+static void io_in_all(void);
+static void io_release(struct capi_frame *f);
 static __thread VALUE capi_errinfo = Qnil;
 static __thread MrMarker *capi_marker;
 
@@ -291,6 +298,8 @@ free_bufs(struct capi_frame *f)
         b = next;
     }
     f->bufs = NULL;
+    if (capi_ios)
+        io_release(f);
     for (unsigned i = 0; i < f->ary_init; i++)
         free(f->ary[i].buf);
     f->ary_init = 0;
@@ -319,7 +328,8 @@ VALUE rb_eException, rb_eStandardError, rb_eSystemExit, rb_eInterrupt,
     rb_eRegexpError, rb_eEncodingError, rb_eEncCompatError,
     rb_eNoMatchingPatternError, rb_eNoMatchingPatternKeyError,
     rb_eScriptError, rb_eNameError, rb_eSyntaxError, rb_eLoadError,
-    rb_eMathDomainError;
+    rb_eMathDomainError, rb_eIOTimeoutError;
+VALUE rb_mWaitReadable, rb_mWaitWritable;
 VALUE rb_stdin, rb_stdout, rb_stderr;
 
 static const struct {
@@ -367,6 +377,9 @@ static const struct {
     {&rb_eScriptError, "ScriptError"}, {&rb_eNameError, "NameError"},
     {&rb_eSyntaxError, "SyntaxError"}, {&rb_eLoadError, "LoadError"},
     {&rb_eMathDomainError, "Math::DomainError"},
+    {&rb_eIOTimeoutError, "IO::TimeoutError"},
+    {&rb_mWaitReadable, "IO::WaitReadable"},
+    {&rb_mWaitWritable, "IO::WaitWritable"},
 };
 
 /* `A::B::C` by constant lookup alone; nil when any part is missing. */
@@ -1255,9 +1268,13 @@ funcall_block(VALUE recv, ID mid, int argc, const VALUE *argv, MrValue block)
 {
     struct capi_frame *saved = frame();
     MrValue small[CAPI_SMALL_ARGS];
+    if (capi_ios)
+        io_out_all();
     MrValue r = api->funcall_sym(saved->ctx, M(recv), (MrSym)mid, argc,
                                  mr_args(argc, argv, small), block);
     capi_cur = saved;
+    if (capi_ios)
+        io_in_all();
     return check(r);
 }
 
@@ -1271,9 +1288,13 @@ funcall_block_kw(VALUE recv, ID mid, int argc, const VALUE *argv, MrValue block,
         return funcall_block(recv, mid, argc, argv, block);
     struct capi_frame *saved = frame();
     MrValue small[CAPI_SMALL_ARGS];
+    if (capi_ios)
+        io_out_all();
     MrValue r = api->funcall_kw(saved->ctx, M(recv), (MrSym)mid, argc,
                                 mr_args(argc, argv, small), block, 1);
     capi_cur = saved;
+    if (capi_ios)
+        io_in_all();
     return check(r);
 }
 
@@ -3176,6 +3197,12 @@ rb_check_convert_type(VALUE v, int type, const char *tname, const char *method)
 {
     if (TYPE(v) == type)
         return v;
+    /* An immediate (an Integer port, a Symbol family, nil) without the
+     * method is answered by method lookup alone: that is the common case
+     * (the socket extension asks every argument for `to_str`), and a
+     * `respond_to?` call costs a dispatch. */
+    if (RB_SPECIAL_CONST_P(v) && !api->respond_to(ctx(), M(v), method))
+        return Qnil;
     if (!rb_respond_to(v, rb_intern(method)))
         return Qnil;
     VALUE r = rb_funcall(v, rb_intern(method), 0);
@@ -3469,6 +3496,15 @@ rb_str_new(const char *ptr, long len)
     if (len < 0)
         rb_raise(rb_eArgError, "negative string size (or size too big)");
     if (!ptr && len > 0) {
+        /* `len` zero bytes, with room for the terminator RSTRING_PTR
+         * writes: made from a zeroed buffer at once when it is small, which
+         * spares growing the String twice (recv buffers). */
+        static const uint8_t zeros[1024];
+        if ((size_t)len < sizeof(zeros)) {
+            VALUE s = check(api->bytes_new(ctx(), zeros, (size_t)len + 1));
+            check_rc(api->str_resize(ctx(), M(s), (size_t)len));
+            return s;
+        }
         VALUE s = check(api->bytes_new(ctx(), (const uint8_t *)"", 0));
         check_rc(api->str_resize(ctx(), M(s), (size_t)len));
         return s;
@@ -3825,7 +3861,15 @@ rb_str_modify(VALUE str)
     rb_check_frozen(str);
     /* Detach a shared buffer (RSTRING_PTR hands a shared view's bytes out
      * in place), so the bytes RSTRING_PTR gives from here on are this
-     * string's own to write. */
+     * string's own to write. `str_modify` writes no terminator, which
+     * would land on a byte the extension wrote past the length (recv into
+     * an `rb_str_modify_expand`ed buffer, then rb_str_modify +
+     * rb_str_set_len). */
+    if (HAVE_API(str_modify)) {
+        if (api->str_modify(ctx(), M(str)) != 0)
+            capi_unwind();
+        return;
+    }
     size_t len;
     if (!api->str_cptr(ctx(), M(str), &len))
         capi_unwind();
@@ -4732,6 +4776,7 @@ struct nogvl_call {
     void *(*func)(void *);
     void *data;
     void *result;
+    int err;
 };
 
 static int64_t
@@ -4739,6 +4784,7 @@ nogvl_trampoline(void *arg)
 {
     struct nogvl_call *c = arg;
     c->result = c->func(c->data);
+    c->err = errno;
     return 0;
 }
 
@@ -4747,7 +4793,7 @@ rb_nogvl(void *(*func)(void *), void *data1, rb_unblock_function_t *ubf, void *d
 {
     (void)flags;
     struct capi_frame *saved = frame();
-    struct nogvl_call c = {func, data1, NULL};
+    struct nogvl_call c = {func, data1, NULL, 0};
     int64_t out;
     /* RUBY_UBF_IO / RUBY_UBF_PROCESS are (void *)-1, the ABI's own spelling of "no function,
        interrupt the syscall"; an older monoruby without the entry drops the ubf. */
@@ -4757,6 +4803,8 @@ rb_nogvl(void *(*func)(void *), void *data1, rb_unblock_function_t *ubf, void *d
     capi_cur = saved;
     if (rc != 0)
         capi_unwind();
+    /* As CRuby's: the caller reads errno of a failed syscall in func. */
+    errno = c.err;
     return c.result;
 }
 
@@ -7963,4 +8011,845 @@ ruby_snprintf(char *str, size_t n, const char *fmt, ...)
     int r = ruby_vsnprintf(str, n, fmt, ap);
     va_end(ap);
     return r;
+}
+
+/* ---------------------------------------------------------------------
+ * rb_io_t
+ *
+ * monoruby's IO has no `struct rb_io` an extension could point into, so
+ * `GetOpenFile` / `MakeOpenFile` hand out one the layer keeps for the
+ * Ruby call that asked (its owner frame): filled from the object through
+ * `io_state` (descriptor, the FMODE bits, the buffered input), and
+ * written back through `io_update` -- a descriptor stored into a fresh
+ * object's `fd`, the mode bits an extension changed (`close_read` clears
+ * FMODE_READABLE; FMODE bits the interpreter has no use for are kept for
+ * it), the buffered bytes it consumed. The write-back happens
+ * before any call into Ruby and when the owner frame ends; after a call
+ * into Ruby the struct is refreshed, so a close the Ruby code did shows
+ * as `fd == -1`, as it does in CRuby.
+ * --------------------------------------------------------------------- */
+
+#include "ruby/fiber/scheduler.h"
+
+struct capi_io {
+    struct capi_io *next;
+    struct capi_frame *owner;
+    VALUE obj;
+    rb_io_t fptr;
+    /* What the object said at the last sync. */
+    int fd0, mode0, rlen0;
+};
+
+static void
+io_fill(struct capi_io *e, const MrIoState *st)
+{
+    e->fptr.fd = st->fd;
+    e->fptr.mode = st->mode;
+    e->fptr.rbuf.ptr = (char *)st->rbuf;
+    e->fptr.rbuf.off = 0;
+    e->fptr.rbuf.len = (int)st->rbuf_len;
+    e->fptr.rbuf.capa = (int)st->rbuf_len;
+    e->fd0 = st->fd;
+    e->mode0 = st->mode;
+    e->rlen0 = (int)st->rbuf_len;
+}
+
+static int
+io_sync_in(struct capi_io *e)
+{
+    MrIoState st;
+    if (api->io_state(ctx(), M(e->obj), &st) != 0)
+        return -1;
+    io_fill(e, &st);
+    return 0;
+}
+
+/* Write `e` back if the extension changed it; nonzero on failure (the
+ * error is pending). */
+static int
+io_sync_out(struct capi_io *e)
+{
+    int consumed = e->rlen0 - e->fptr.rbuf.len;
+    if (consumed < 0)
+        consumed = 0;
+    if (e->fptr.fd == e->fd0 && e->fptr.mode == e->mode0 && consumed == 0)
+        return 0;
+    if (api->io_update(ctx(), M(e->obj), e->fptr.fd, e->fptr.mode, (size_t)consumed) != 0)
+        return -1;
+    return io_sync_in(e);
+}
+
+static void
+io_out_all(void)
+{
+    for (struct capi_io *e = capi_ios; e; e = e->next)
+        io_sync_out(e);
+}
+
+static void
+io_in_all(void)
+{
+    for (struct capi_io *e = capi_ios; e; e = e->next)
+        io_sync_in(e);
+}
+
+static void io_free_entry(struct capi_io *e);
+
+/* The frame `f` ends: write back and drop the structs it owns. Inner
+ * frames end first, so they are the newest entries. */
+static void
+io_release(struct capi_frame *f)
+{
+    struct capi_frame *saved = capi_cur;
+    capi_cur = f;
+    struct capi_io **pp = &capi_ios;
+    while (*pp) {
+        struct capi_io *e = *pp;
+        if (e->owner == f) {
+            io_sync_out(e);
+            *pp = e->next;
+            io_free_entry(e);
+        } else {
+            pp = &e->next;
+        }
+    }
+    capi_cur = saved;
+}
+
+/* Freed entries are kept for the next GetOpenFile (one per C method call
+ * on a socket): a few, per thread. */
+#define CAPI_IO_SPARE 4
+static __thread struct capi_io *io_spare[CAPI_IO_SPARE];
+static __thread int io_nspare;
+
+static void
+io_free_entry(struct capi_io *e)
+{
+    if (io_nspare < CAPI_IO_SPARE)
+        io_spare[io_nspare++] = e;
+    else
+        free(e);
+}
+
+static struct capi_io *
+io_find(VALUE obj)
+{
+    for (struct capi_io *e = capi_ios; e; e = e->next)
+        if (e->obj == obj)
+            return e;
+    return NULL;
+}
+
+static struct capi_io *
+io_entry(VALUE obj)
+{
+    struct capi_io *e = io_find(obj);
+    if (e)
+        return e;
+    if (!HAVE_API(io_update))
+        rb_raise(rb_eNotImpError, "rb_io_t needs a newer monoruby");
+    MrIoState st;
+    if (api->io_state(ctx(), M(obj), &st) != 0)
+        capi_unwind();
+    if (io_nspare > 0) {
+        e = io_spare[--io_nspare];
+        memset(e, 0, sizeof(*e));
+    } else if (!(e = calloc(1, sizeof(*e)))) {
+        rb_memerror();
+    }
+    e->obj = obj;
+    e->owner = frame()->owner;
+    e->fptr.self = obj;
+    e->fptr.pathv = Qnil;
+    e->fptr.tied_io_for_writing = Qfalse;
+    e->fptr.timeout = Qnil;
+    e->fptr.encs.ecopts = Qnil;
+    e->fptr.writeconv_asciicompat = Qnil;
+    e->fptr.writeconv_pre_ecopts = Qnil;
+    e->fptr.write_lock = Qnil;
+    e->fptr.pid = 0;
+    io_fill(e, &st);
+    e->next = capi_ios;
+    capi_ios = e;
+    return e;
+}
+
+rb_io_t *
+rb_io_get_fptr(VALUE io)
+{
+    return &io_entry(io)->fptr;
+}
+
+struct RFile *
+rb_monoruby_rfile(VALUE io)
+{
+    /* Only `->fptr` is meant to be read; the struct lives with the
+     * entry, which lives as long as the frame. */
+    struct capi_io *e = io_entry(io);
+    static __thread struct RFile rfile;
+    rfile.basic.flags = T_FILE;
+    rfile.basic.klass = rb_obj_class(io);
+    rfile.fptr = &e->fptr;
+    return &rfile;
+}
+
+rb_io_t *
+rb_io_make_open_file(VALUE obj)
+{
+    struct capi_io *e = io_entry(obj);
+    if (e->fptr.fd >= 0) {
+        /* CRuby closes what the object had open first. */
+        rb_io_close(obj);
+        io_sync_in(e);
+    }
+    e->fptr.mode = 0;
+    e->mode0 = 0;
+    e->fptr.rbuf.len = e->rlen0 = 0;
+    return &e->fptr;
+}
+
+void
+rb_io_check_initialized(rb_io_t *fptr)
+{
+    if (!fptr)
+        rb_raise(rb_eIOError, "uninitialized stream");
+}
+
+void
+rb_io_check_closed(rb_io_t *fptr)
+{
+    rb_io_check_initialized(fptr);
+    if (fptr->fd < 0)
+        rb_raise(rb_eIOError, "closed stream");
+}
+
+void
+rb_io_check_readable(rb_io_t *fptr)
+{
+    rb_io_check_closed(fptr);
+    if (!(fptr->mode & FMODE_READABLE))
+        rb_raise(rb_eIOError, "not opened for reading");
+}
+
+void
+rb_io_check_char_readable(rb_io_t *fptr)
+{
+    rb_io_check_readable(fptr);
+}
+
+void
+rb_io_check_byte_readable(rb_io_t *fptr)
+{
+    rb_io_check_readable(fptr);
+}
+
+void
+rb_io_check_writable(rb_io_t *fptr)
+{
+    rb_io_check_closed(fptr);
+    if (!(fptr->mode & FMODE_WRITABLE))
+        rb_raise(rb_eIOError, "not opened for writing");
+}
+
+void
+rb_io_synchronized(rb_io_t *fptr)
+{
+    fptr->mode |= FMODE_SYNC;
+}
+
+void
+rb_io_set_nonblock(rb_io_t *fptr)
+{
+    int flags = fcntl(fptr->fd, F_GETFL);
+    if (flags == -1)
+        rb_sys_fail("fcntl(F_GETFL)");
+    if ((flags & O_NONBLOCK) == 0 && fcntl(fptr->fd, F_SETFL, flags | O_NONBLOCK) == -1)
+        rb_sys_fail("fcntl(F_SETFL)");
+}
+
+int
+rb_io_read_pending(rb_io_t *fptr)
+{
+    return fptr->rbuf.len > 0;
+}
+
+void
+rb_io_read_check(rb_io_t *fptr)
+{
+    if (!rb_io_read_pending(fptr))
+        rb_thread_wait_fd(fptr->fd);
+}
+
+int
+rb_io_descriptor(VALUE io)
+{
+    rb_io_t *fptr;
+    GetOpenFile(rb_io_get_io(io), fptr);
+    return fptr->fd;
+}
+
+int
+rb_io_mode(VALUE io)
+{
+    rb_io_t *fptr;
+    GetOpenFile(rb_io_get_io(io), fptr);
+    return fptr->mode;
+}
+
+VALUE
+rb_io_get_write_io(VALUE io)
+{
+    return io;
+}
+
+VALUE
+rb_io_ascii8bit_binmode(VALUE io)
+{
+    rb_funcall(io, rb_intern("binmode"), 0);
+    return io;
+}
+
+VALUE
+rb_io_fdopen(int fd, int flags, const char *path)
+{
+    (void)path;
+    return rb_funcall(rb_cIO, rb_intern("new"), 2, INT2FIX(fd), INT2FIX(flags));
+}
+
+/* io.c's: a fiber scheduler answers for itself (nil, false or the
+ * events); otherwise IO#wait, bounded by the IO's own timeout when the
+ * caller gives none, and false once that runs out. */
+VALUE
+rb_io_wait(VALUE io, VALUE events, VALUE timeout)
+{
+    VALUE scheduler = rb_fiber_scheduler_current();
+    if (!NIL_P(scheduler))
+        return rb_fiber_scheduler_io_wait(scheduler, io, events, timeout);
+    if (NIL_P(timeout) && rb_obj_respond_to(io, rb_intern("timeout"), 0))
+        timeout = rb_funcall(io, rb_intern("timeout"), 0);
+    VALUE r = rb_funcall(io, rb_intern("wait"), 2, events, timeout);
+    if (NIL_P(r) || r == Qfalse)
+        return Qfalse;
+    if (FIXNUM_P(r))
+        return r;
+    return events;
+}
+
+VALUE
+rb_io_maybe_wait(int error, VALUE io, VALUE events, VALUE timeout)
+{
+    switch (error) {
+    case EINTR:
+#ifdef ERESTART
+    case ERESTART:
+#endif
+        rb_thread_check_ints();
+        return events;
+    case EAGAIN:
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+    case EWOULDBLOCK:
+#endif
+        return rb_io_wait(io, events, timeout);
+    default:
+        /* No event is ready. */
+        return Qnil;
+    }
+}
+
+int
+rb_io_maybe_wait_readable(int error, VALUE io, VALUE timeout)
+{
+    VALUE r = rb_io_maybe_wait(error, io, INT2FIX(RUBY_IO_READABLE), timeout);
+    if (RTEST(r))
+        return NUM2INT(r);
+    if (r == Qfalse)
+        rb_raise(rb_eIOTimeoutError, "Timed out waiting for IO to become readable!");
+    return 0;
+}
+
+int
+rb_io_maybe_wait_writable(int error, VALUE io, VALUE timeout)
+{
+    VALUE r = rb_io_maybe_wait(error, io, INT2FIX(RUBY_IO_WRITABLE), timeout);
+    if (RTEST(r))
+        return NUM2INT(r);
+    if (r == Qfalse)
+        rb_raise(rb_eIOTimeoutError, "Timed out waiting for IO to become writable!");
+    return 0;
+}
+
+#include <poll.h>
+
+struct poll_call {
+    struct pollfd pfd;
+    int timeout_ms;
+    int result;
+    int err;
+};
+
+static void *
+poll_nogvl(void *arg)
+{
+    struct poll_call *c = arg;
+    c->result = poll(&c->pfd, 1, c->timeout_ms);
+    c->err = errno;
+    return NULL;
+}
+
+/* poll(2) on one descriptor with the interpreter released; EINTR is an
+ * interrupt (delivered on the way back) or a retry. */
+static int
+poll_fd(int fd, short events, int timeout_ms)
+{
+    struct poll_call c;
+    for (;;) {
+        c.pfd.fd = fd;
+        c.pfd.events = events;
+        c.pfd.revents = 0;
+        c.timeout_ms = timeout_ms;
+        rb_thread_call_without_gvl(poll_nogvl, &c, RUBY_UBF_IO, NULL);
+        if (c.result >= 0 || c.err != EINTR)
+            break;
+        rb_thread_check_ints();
+    }
+    if (c.result < 0) {
+        errno = c.err;
+        return -1;
+    }
+    return c.result == 0 ? 0 : c.pfd.revents;
+}
+
+int
+rb_wait_for_single_fd(int fd, int events, struct timeval *tv)
+{
+    short pev = 0;
+    if (events & RB_WAITFD_IN)
+        pev |= POLLIN;
+    if (events & RB_WAITFD_PRI)
+        pev |= POLLPRI;
+    if (events & RB_WAITFD_OUT)
+        pev |= POLLOUT;
+    int ms = tv ? (int)(tv->tv_sec * 1000 + tv->tv_usec / 1000) : -1;
+    int r = poll_fd(fd, pev, ms);
+    if (r <= 0)
+        return r;
+    int out = 0;
+    if (r & (POLLIN | POLLHUP | POLLERR))
+        out |= RB_WAITFD_IN & events;
+    if (r & POLLPRI)
+        out |= RB_WAITFD_PRI;
+    if (r & (POLLOUT | POLLERR))
+        out |= RB_WAITFD_OUT & events;
+    return out;
+}
+
+int
+rb_thread_wait_fd(int fd)
+{
+    return rb_wait_for_single_fd(fd, RB_WAITFD_IN, NULL);
+}
+
+int
+rb_thread_fd_writable(int fd)
+{
+    return rb_wait_for_single_fd(fd, RB_WAITFD_OUT, NULL);
+}
+
+int
+rb_io_wait_readable(int fd)
+{
+    rb_thread_check_ints();
+    switch (errno) {
+    case EINTR:
+#ifdef ERESTART
+    case ERESTART:
+#endif
+        return 1;
+    case EAGAIN:
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+    case EWOULDBLOCK:
+#endif
+        rb_thread_wait_fd(fd);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+int
+rb_io_wait_writable(int fd)
+{
+    rb_thread_check_ints();
+    switch (errno) {
+    case EINTR:
+#ifdef ERESTART
+    case ERESTART:
+#endif
+        return 1;
+    case EAGAIN:
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+    case EWOULDBLOCK:
+#endif
+        rb_thread_fd_writable(fd);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+struct io_blocking_call {
+    VALUE (*func)(void *);
+    void *arg;
+    VALUE result;
+    int err;
+};
+
+static void *
+io_blocking_trampoline(void *p)
+{
+    struct io_blocking_call *c = p;
+    c->result = c->func(c->arg);
+    c->err = errno;
+    return NULL;
+}
+
+/* On a non-blocking descriptor (every socket the extension makes) the
+ * call returns at once, EAGAIN sending the caller to rb_io_wait, so it
+ * runs with the interpreter held: that saves the release and re-acquire
+ * on every recv / send, and `func` may read a String (RSTRING_PTR, an
+ * ABI call here) as CRuby lets it. A blocking descriptor's call runs
+ * released. The caller reads errno after a failed syscall in `func`, so
+ * it is carried across re-entering the interpreter. */
+VALUE
+rb_io_blocking_region(rb_io_t *fptr, VALUE (*func)(void *), void *arg)
+{
+    int fl = fptr ? fcntl(fptr->fd, F_GETFL) : -1;
+    if (fl != -1 && (fl & O_NONBLOCK))
+        return func(arg);
+    struct io_blocking_call c = {func, arg, 0, 0};
+    rb_thread_call_without_gvl(io_blocking_trampoline, &c, RUBY_UBF_IO, NULL);
+    errno = c.err;
+    return c.result;
+}
+
+static int64_t
+check_ints_noop(void *arg)
+{
+    (void)arg;
+    return 0;
+}
+
+/* Leaving and re-entering the interpreter is where it delivers what is
+ * pending for the thread (Thread#raise / #kill, a trapped signal). */
+void
+rb_thread_check_ints(void)
+{
+    struct capi_frame *saved = frame();
+    int64_t out;
+    int e = errno;
+    int rc = api->call_blocking(saved->ctx, check_ints_noop, NULL, &out);
+    capi_cur = saved;
+    errno = e;
+    if (rc != 0)
+        capi_unwind();
+}
+
+void *
+rb_thread_prevent_fork(void *(*func)(void *), void *arg)
+{
+    return func(arg);
+}
+
+/* ---- rb_fdset_t ------------------------------------------------------ */
+
+static size_t
+fdset_bytes(int maxfd)
+{
+    size_t words = ((size_t)maxfd + NFDBITS) / NFDBITS;
+    size_t n = words * sizeof(fd_mask);
+    return n < sizeof(fd_set) ? sizeof(fd_set) : n;
+}
+
+void
+rb_fd_init(rb_fdset_t *fds)
+{
+    fds->maxfd = 0;
+    fds->fdset = calloc(1, sizeof(fd_set));
+    if (!fds->fdset)
+        rb_memerror();
+}
+
+void
+rb_fd_term(rb_fdset_t *fds)
+{
+    free(fds->fdset);
+    fds->fdset = NULL;
+    fds->maxfd = 0;
+}
+
+void
+rb_fd_zero(rb_fdset_t *fds)
+{
+    if (fds->fdset)
+        memset(fds->fdset, 0, fdset_bytes(fds->maxfd));
+}
+
+static void
+fdset_resize(int n, rb_fdset_t *fds)
+{
+    size_t m = fdset_bytes(n);
+    size_t o = fdset_bytes(fds->maxfd);
+    if (m > o) {
+        fd_set *p = realloc(fds->fdset, m);
+        if (!p)
+            rb_memerror();
+        memset((char *)p + o, 0, m - o);
+        fds->fdset = p;
+    }
+    if (n >= fds->maxfd)
+        fds->maxfd = n + 1;
+}
+
+void
+rb_fd_set(int fd, rb_fdset_t *fds)
+{
+    fdset_resize(fd, fds);
+    ((fd_mask *)fds->fdset)[fd / NFDBITS] |= (fd_mask)1 << (fd % NFDBITS);
+}
+
+void
+rb_fd_clr(int fd, rb_fdset_t *fds)
+{
+    if (fd < fds->maxfd)
+        ((fd_mask *)fds->fdset)[fd / NFDBITS] &= ~((fd_mask)1 << (fd % NFDBITS));
+}
+
+int
+rb_fd_isset(int fd, const rb_fdset_t *fds)
+{
+    if (fd < 0 || fd >= fds->maxfd)
+        return 0;
+    return (((const fd_mask *)fds->fdset)[fd / NFDBITS] >> (fd % NFDBITS)) & 1;
+}
+
+void
+rb_fd_copy(rb_fdset_t *dst, const fd_set *src, int max)
+{
+    size_t n = fdset_bytes(max);
+    fd_set *p = realloc(dst->fdset, n);
+    if (!p)
+        rb_memerror();
+    memset(p, 0, n);
+    memcpy(p, src, n < sizeof(fd_set) ? n : sizeof(fd_set));
+    dst->fdset = p;
+    dst->maxfd = max;
+}
+
+void
+rb_fd_dup(rb_fdset_t *dst, const rb_fdset_t *src)
+{
+    size_t n = fdset_bytes(src->maxfd);
+    fd_set *p = realloc(dst->fdset, n);
+    if (!p)
+        rb_memerror();
+    memcpy(p, src->fdset, n);
+    dst->fdset = p;
+    dst->maxfd = src->maxfd;
+}
+
+struct select_call {
+    int n;
+    fd_set *r, *w, *e;
+    struct timeval *tv;
+    int result;
+    int err;
+};
+
+static void *
+select_nogvl(void *arg)
+{
+    struct select_call *c = arg;
+    c->result = select(c->n, c->r, c->w, c->e, c->tv);
+    c->err = errno;
+    return NULL;
+}
+
+int
+rb_thread_fd_select(int max, rb_fdset_t *read, rb_fdset_t *write, rb_fdset_t *except, struct timeval *timeout)
+{
+    if (read)
+        fdset_resize(max - 1, read);
+    if (write)
+        fdset_resize(max - 1, write);
+    if (except)
+        fdset_resize(max - 1, except);
+    size_t n = fdset_bytes(max);
+    fd_set *r0 = NULL, *w0 = NULL, *e0 = NULL;
+    if (read && (r0 = malloc(n)))
+        memcpy(r0, read->fdset, n);
+    if (write && (w0 = malloc(n)))
+        memcpy(w0, write->fdset, n);
+    if (except && (e0 = malloc(n)))
+        memcpy(e0, except->fdset, n);
+    struct timeval tv, *tvp = NULL;
+    if (timeout) {
+        tv = *timeout;
+        tvp = &tv;
+    }
+    struct select_call c;
+    for (;;) {
+        c.n = max;
+        c.r = read ? read->fdset : NULL;
+        c.w = write ? write->fdset : NULL;
+        c.e = except ? except->fdset : NULL;
+        c.tv = tvp;
+        rb_thread_call_without_gvl(select_nogvl, &c, RUBY_UBF_IO, NULL);
+        if (c.result >= 0 || c.err != EINTR)
+            break;
+        /* Linux leaves the time left in tv; elsewhere it is a retry with
+         * the whole timeout, as a spurious wakeup would be. */
+        if (r0)
+            memcpy(read->fdset, r0, n);
+        if (w0)
+            memcpy(write->fdset, w0, n);
+        if (e0)
+            memcpy(except->fdset, e0, n);
+        free(r0); free(w0); free(e0);
+        r0 = w0 = e0 = NULL;
+        rb_thread_check_ints();
+        if (read && (r0 = malloc(n)))
+            memcpy(r0, read->fdset, n);
+        if (write && (w0 = malloc(n)))
+            memcpy(w0, write->fdset, n);
+        if (except && (e0 = malloc(n)))
+            memcpy(e0, except->fdset, n);
+    }
+    free(r0); free(w0); free(e0);
+    if (c.result < 0)
+        errno = c.err;
+    return c.result;
+}
+
+/* ---- descriptors and errors io.c / internal headers give ext/socket -- */
+
+void
+rb_update_max_fd(int fd)
+{
+    (void)fd;
+}
+
+void
+rb_maygvl_fd_fix_cloexec(int fd)
+{
+    if (fd <= 2)
+        return;
+    int flags = fcntl(fd, F_GETFD);
+    if (flags != -1 && !(flags & FD_CLOEXEC))
+        fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+}
+
+void
+rb_fd_fix_cloexec(int fd)
+{
+    rb_maygvl_fd_fix_cloexec(fd);
+}
+
+int
+rb_reserved_fd_p(int fd)
+{
+    (void)fd;
+    return 0;
+}
+
+/* Out of descriptors or memory: collect, which may close some. */
+int
+rb_gc_for_fd(int err)
+{
+    if (err == EMFILE || err == ENFILE || err == ENOMEM) {
+        rb_gc();
+        return 1;
+    }
+    return 0;
+}
+
+void
+rb_syserr_fail_path(int err, VALUE path)
+{
+    if (NIL_P(path))
+        rb_syserr_fail(err, NULL);
+    rb_syserr_fail_str(err, path);
+}
+
+void
+rb_readwrite_syserr_fail(enum rb_io_wait_readwrite waiting, int n, const char *mesg)
+{
+    const char *name = NULL;
+    if (n == EAGAIN || n == EWOULDBLOCK)
+        name = waiting == RB_IO_WAIT_READABLE ? "EAGAINWaitReadable" : "EAGAINWaitWritable";
+    else if (n == EINPROGRESS)
+        name = waiting == RB_IO_WAIT_READABLE ? "EINPROGRESSWaitReadable" : "EINPROGRESSWaitWritable";
+    if (name && rb_const_defined(rb_cIO, rb_intern(name))) {
+        VALUE klass = rb_const_get(rb_cIO, rb_intern(name));
+        VALUE m = mesg ? rb_str_new_cstr(mesg) : Qnil;
+        rb_exc_raise(rb_class_new_instance(1, &m, klass));
+    }
+    rb_syserr_fail(n, mesg);
+}
+
+void
+rb_readwrite_sys_fail(enum rb_io_wait_readwrite waiting, const char *mesg)
+{
+    rb_readwrite_syserr_fail(waiting, errno, mesg);
+}
+
+VALUE
+rb_str_tmp_frozen_acquire(VALUE str)
+{
+    return rb_str_new_frozen(str);
+}
+
+void
+rb_str_tmp_frozen_release(VALUE orig, VALUE tmp)
+{
+    (void)orig;
+    (void)tmp;
+}
+
+/* ---- the fiber scheduler -------------------------------------------- */
+
+VALUE
+rb_fiber_scheduler_get(void)
+{
+    VALUE fiber = rb_const_get(rb_cObject, rb_intern("Fiber"));
+    return rb_funcall(fiber, rb_intern("scheduler"), 0);
+}
+
+VALUE
+rb_fiber_scheduler_current(void)
+{
+    VALUE s = rb_fiber_scheduler_get();
+    if (NIL_P(s))
+        return Qnil;
+    VALUE fiber = rb_const_get(rb_cObject, rb_intern("Fiber"));
+    if (RTEST(rb_funcall(fiber, rb_intern("blocking?"), 0)))
+        return Qnil;
+    return s;
+}
+
+VALUE
+rb_fiber_scheduler_address_resolve(VALUE scheduler, VALUE hostname)
+{
+    return rb_check_funcall(scheduler, rb_intern("address_resolve"), 1, &hostname);
+}
+
+VALUE
+rb_fiber_scheduler_io_wait(VALUE scheduler, VALUE io, VALUE events, VALUE timeout)
+{
+    return rb_funcall(scheduler, rb_intern("io_wait"), 3, io, events, timeout);
+}
+
+VALUE
+rb_fiber_scheduler_kernel_sleep(VALUE scheduler, VALUE duration)
+{
+    return rb_funcall(scheduler, rb_intern("kernel_sleep"), 1, duration);
 }

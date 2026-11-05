@@ -53,6 +53,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/time.h>
+#include <sys/select.h>
 
 #include "ruby/version.h"
 
@@ -845,6 +846,26 @@ rb_num2long_inline(VALUE v)
 #define TIMET2NUM(v) LONG2NUM(v)
 #define NUM2TIMET(v) NUM2LONG(v)
 #define SSIZET2NUM(v) LONG2NUM(v)
+#define RB_SSIZE2NUM(v) SSIZET2NUM(v)
+#define RB_SIZE2NUM(v) SIZET2NUM(v)
+#define RB_INT2NUM(v) INT2NUM(v)
+#define RB_UINT2NUM(v) UINT2NUM(v)
+#define RB_LONG2NUM(v) LONG2NUM(v)
+#define RB_ULONG2NUM(v) ULONG2NUM(v)
+#define RB_NUM2INT(x) NUM2INT(x)
+#define RB_NUM2UINT(x) NUM2UINT(x)
+#define RB_NUM2LONG(x) NUM2LONG(x)
+#define RB_NUM2ULONG(x) NUM2ULONG(x)
+#ifndef PIDT2NUM
+#define PIDT2NUM(v) INT2NUM(v)
+#define NUM2PIDT(v) NUM2INT(v)
+#endif
+#ifndef UIDT2NUM
+#define UIDT2NUM(v) UINT2NUM(v)
+#define NUM2UIDT(v) NUM2UINT(v)
+#define GIDT2NUM(v) UINT2NUM(v)
+#define NUM2GIDT(v) NUM2UINT(v)
+#endif
 #define OFFT2NUM(v) LL2NUM(v)
 #define CHR2FIX(x) RB_INT2FIX((long)((x) & 0xff))
 #define NUM2LONG(x) rb_num2long_inline((VALUE)(x))
@@ -1235,6 +1256,28 @@ void ruby_init(void);
 int ruby_native_thread_p(void);
 int rb_during_gc(void);
 VALUE rb_thread_current(void);
+/* Deliver pending interrupts (Thread#raise, Thread#kill, signal traps). */
+void rb_thread_check_ints(void);
+/* `func(arg)` with fork(2) held off; nothing to hold off here. */
+void *rb_thread_prevent_fork(void *(*func)(void *), void *arg);
+
+/* CRuby's resizable fd_set (`rb_fd_*`), and select(2) with the interpreter
+ * released. */
+typedef struct {
+    int maxfd;
+    fd_set *fdset;
+} rb_fdset_t;
+void rb_fd_init(rb_fdset_t *fds);
+void rb_fd_term(rb_fdset_t *fds);
+void rb_fd_zero(rb_fdset_t *fds);
+void rb_fd_set(int fd, rb_fdset_t *fds);
+void rb_fd_clr(int fd, rb_fdset_t *fds);
+int rb_fd_isset(int fd, const rb_fdset_t *fds);
+void rb_fd_copy(rb_fdset_t *dst, const fd_set *src, int max);
+void rb_fd_dup(rb_fdset_t *dst, const rb_fdset_t *src);
+#define rb_fd_ptr(f) ((f)->fdset)
+#define rb_fd_max(f) ((f)->maxfd)
+int rb_thread_fd_select(int max, rb_fdset_t *read, rb_fdset_t *write, rb_fdset_t *except, struct timeval *timeout);
 VALUE rb_thread_local_aref(VALUE thread, ID key);
 VALUE rb_thread_local_aset(VALUE thread, ID key, VALUE val);
 void rb_thread_schedule(void);

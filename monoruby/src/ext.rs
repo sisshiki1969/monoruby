@@ -832,6 +832,9 @@ pub(crate) static MR_API: MrApi = MrApi {
     thread_current: mr_thread_current,
     thread_local_aref: mr_thread_local_aref,
     obj_freeze: mr_obj_freeze,
+    io_state: mr_io_state,
+    io_update: mr_io_update,
+    str_modify: mr_str_modify,
 };
 
 // ---- regexp (ruby/re.h) ----------------------------------------------
@@ -2407,6 +2410,16 @@ unsafe extern "C" fn mr_str_cptr(ctx: *mut MrContext, v: MrValue, len: *mut usiz
     ptr
 }
 
+unsafe extern "C" fn mr_str_modify(ctx: *mut MrContext, v: MrValue) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(mut s) = string_arg(vm, globals, v) else {
+        return -1;
+    };
+    s.as_rstring_inner_mut().c_modify();
+    0
+}
+
 /// `RSTRING_PTR`: a String's own NUL-terminated buffer (`str_cptr`)
 /// unless it is a view into a shared buffer (a slice of a longer string
 /// shares it, and so does the string it was taken from), whose bytes are
@@ -2609,6 +2622,92 @@ unsafe extern "C" fn mr_obj_freeze(ctx: *mut MrContext, v: MrValue) {
             singleton.as_val().set_frozen();
         }
     }
+}
+
+// CRuby's FMODE_* bits the interpreter's IO keeps itself; the others an
+// extension sets on `fptr->mode` are kept for it (`IoInner::capi_fmode`).
+const FMODE_READABLE: c_int = 0x1;
+const FMODE_WRITABLE: c_int = 0x2;
+const FMODE_BINMODE: c_int = 0x4;
+const FMODE_SYNC: c_int = 0x8;
+const FMODE_OWN: c_int = FMODE_READABLE | FMODE_WRITABLE | FMODE_BINMODE | FMODE_SYNC;
+
+fn io_arg(vm: &mut Executor, globals: &Globals, io: MrValue) -> Option<Value> {
+    let v = Value::from_u64(io);
+    if v.try_rvalue().is_some_and(|rv| rv.ty() == ObjTy::IO) {
+        Some(v)
+    } else {
+        set_err(
+            vm,
+            MonorubyErr::typeerr(format!("{} is not an IO", v.get_real_class_name(&globals.store))),
+        );
+        None
+    }
+}
+
+unsafe extern "C" fn mr_io_state(ctx: *mut MrContext, io: MrValue, out: *mut MrIoState) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(v) = io_arg(vm, globals, io) else {
+        return -1;
+    };
+    let inner = v.as_io_inner();
+    let extra = inner.capi_fmode() & !FMODE_OWN;
+    let (fd, readable, writable, rbuf) = inner.capi_view();
+    let mut mode = extra;
+    if readable {
+        mode |= FMODE_READABLE;
+    }
+    if writable {
+        mode |= FMODE_WRITABLE;
+    }
+    if inner.binmode() {
+        mode |= FMODE_BINMODE;
+    }
+    if fd >= 0 && inner.sync() {
+        mode |= FMODE_SYNC;
+    }
+    // SAFETY: the caller's out-parameter.
+    unsafe {
+        *out = MrIoState {
+            fd,
+            mode,
+            rbuf: rbuf.as_ptr(),
+            rbuf_len: rbuf.len(),
+        };
+    }
+    0
+}
+
+unsafe extern "C" fn mr_io_update(ctx: *mut MrContext, io: MrValue, fd: c_int, mode: c_int, rbuf_consumed: usize) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(mut v) = io_arg(vm, globals, io) else {
+        return -1;
+    };
+    let readable = mode & FMODE_READABLE != 0;
+    let writable = mode & FMODE_WRITABLE != 0;
+    {
+        let inner = v.as_io_inner_mut();
+        if inner.is_closed() {
+            if fd >= 0 {
+                inner.capi_attach(fd, readable, writable, mode & FMODE_SYNC != 0);
+            }
+        } else {
+            inner.capi_set_access(readable, writable);
+            if mode & FMODE_SYNC != 0 && !inner.sync() {
+                inner.set_sync(true);
+            }
+            if rbuf_consumed > 0 {
+                inner.capi_consume_rbuf(rbuf_consumed);
+            }
+        }
+        if mode & FMODE_BINMODE != 0 && !inner.binmode() {
+            inner.set_binmode();
+        }
+        inner.set_capi_fmode(mode & !FMODE_OWN);
+    }
+    0
 }
 
 unsafe extern "C" fn mr_str_dup(ctx: *mut MrContext, v: MrValue) -> MrValue {

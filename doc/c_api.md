@@ -893,6 +893,58 @@ bigdecimal gem 4.0.1 の `ext/bigdecimal` をそのまま層でビルドして�
   遅く、CRuby 比で `+ 1` が約 1.5 倍。
 - **結果**: ruby/spec `library/bigdecimal` 370 例すべて通過。
 
+### 3.22 socket も CRuby の C 拡張に（段階 13）
+
+`src/builtins/socket.rs`（2,900 行のネイティブ実装）と `stdlib/socket.rb` の
+上乗せは、ruby/spec の `library/socket` で 1169 例中 139F+557E 落ちていた
+（CRuby は 1463 例）。CRuby 4.0.6 の `ext/socket` をそのまま層でビルドし、
+`stdlib/socket.rb` は CRuby の `ext/socket/lib/socket.rb`（`require 'socket.so'`）
+にした。
+
+- **ソース**: `monoruby_capi/ext/socket/`（`.c` / `.h`、生成済みの
+  `constdefs.c` / `constdefs.h`）。CRuby の内部ヘッダ（`internal.h`、
+  `internal/*.h`）は使う数関数だけを宣言する代役を同じ場所に置いた。
+  `extconf.h` は extconf.rb の検査結果: Linux（glibc、x86-64 / aarch64）は
+  実行した記録、macOS は同じ検査からの導出（BSD の `sa_len` 類、
+  `getpeereid`、`struct tcp_info` なし）。Linux は `_GNU_SOURCE`、macOS は
+  `__APPLE_USE_RFC_3542` を足す（Ext の `linux` / `macos` 欄）。
+- **`rb_io_t`**: monoruby の IO に `struct rb_io` は無い。`GetOpenFile` /
+  `MakeOpenFile` / `RFILE(io)->fptr` は層が持つ `struct rb_io` を、それを求めた
+  Ruby 呼び出し（owner フレーム）の間だけ渡す。中身は ABI `io_state` で
+  オブジェクトから埋め（fd、FMODE ビット、読み込み済みバッファ）、
+  `io_update` で書き戻す: 新しいオブジェクトの `fd` に入れた記述子はその IO が
+  引き取り、`close_read` が落とした `FMODE_READABLE` はその向きを閉じ、
+  インタプリタが使わない FMODE ビット（`FMODE_NOREVLOOKUP`、`FMODE_UNIX` …）は
+  `IoInner` の欄に残り、消費した `rbuf` は捨てる。書き戻しは Ruby を呼ぶ前
+  （`funcall` の入口）とフレームの終わり、呼んだ後は読み直すので、Ruby 側の
+  `close` は CRuby と同じく `fd == -1` に見える。
+- **待ち**: `rb_io_wait` はファイバースケジューラがあればその `io_wait` の答えを
+  そのまま、無ければ `IO#wait`（`IO#timeout` を既定に。`IO#timeout` /
+  `timeout=` は今回足した。インタプリタ自身の read / write は見ない）、
+  時間切れは `false`。`rb_io_maybe_wait*`、`rb_wait_for_single_fd`、
+  `rb_thread_fd_select`（`rb_fdset_t`）は GVL を外した `poll` / `select`。
+  `rb_io_blocking_region` は記述子が非ブロッキングなら GVL を持ったまま呼ぶ
+  （拡張のソケットは全部 `SOCK_NONBLOCK` で、EAGAIN は `rb_io_wait` へ行くので
+  すぐ返る。recv ごとの GVL の手放しと取り直しが無くなり、関数内の
+  `RSTRING_PTR` も安全）。ブロッキングなら GVL を外す。
+- **他に層に足したもの**: `rb_thread_check_ints`（GVL を一度手放して保留の
+  割り込みを受ける）、`rb_thread_prevent_fork`、`rb_readwrite_syserr_fail`
+  （`IO::EAGAINWaitReadable` など）、`rb_fiber_scheduler_*`、
+  `rb_eIOTimeoutError` / `rb_mWaitReadable` / `rb_mWaitWritable`、`RB_INT2NUM` 類、
+  `UIDT2NUM` / `GIDT2NUM`、`rb_nogvl` での `errno` の持ち越し（CRuby と同じく
+  呼び出し側が失敗した syscall の `errno` を読む）。
+- **`rb_str_modify` がバッファを潰していた**: `str_cptr` は長さの位置に NUL を
+  書くので、`rb_str_modify_expand` した容量に recv してから `rb_str_modify` +
+  `rb_str_set_len` する形（`read_nonblock` / `recv` の出力バッファ）で先頭バイトが
+  0 になった。ABI `str_modify` は共有の切り離しとコードレンジの破棄だけをする。
+- **IO のサブクラスの `new`**: `IO.new` はネイティブで `initialize` を通らずに
+  ストリームを作っていた。`initialize` を自前で持つサブクラス（ソケットの
+  クラス）は Class#new と同じ allocate + initialize に回す（`builtins/io.rb`）。
+- **結果**: ruby/spec `library/socket` 1463 例で 1F（IO#close が待っている
+  ファイバーをスケジューラの `fiber_interrupt` で起こす、コア側の 4.0 の機能）、
+  `library/net-ftp` 461 例で 4E（すべて OpenSSL::SSL の定数）。両スレッド
+  モデルで同じ。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -922,6 +974,8 @@ bigdecimal gem 4.0.1 の `ext/bigdecimal` をそのまま層でビルドして�
 | `str_enc_name` / `str_set_enc` / `str_coderange` | `rb_enc_get`（プロセス寿命の名前ポインタ）/ `rb_enc_associate` / `rb_enc_str_coderange`（キャッシュ付き） |
 | `thread_current` / `thread_local_aref` | `rb_thread_current` / `rb_thread_local_aref` をディスパッチなしで（§3.20） |
 | `obj_freeze` | `rb_obj_freeze` を `Kernel#freeze` の呼び出しなしで |
+| `io_state` / `io_update` | 層の `struct rb_io` と IO オブジェクトの同期（§3.22） |
+| `str_modify` | `rb_str_modify`: 長さより後ろのバイトに触れない（§3.22） |
 
 あわせて `ary_push` / `hash_set` が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。
@@ -942,6 +996,7 @@ bigdecimal gem 4.0.1 の `ext/bigdecimal` をそのまま層でビルドして�
 | 10 | C で裏打ちされたグローバル変数（`rb_define_*_variable`、ABI `gvar_hook`）、C++ の ANYARGS overload（`ruby/backward/cxxanyargs.hpp`）、`HAVE_RB_DEFINE_ALLOC_FUNC`、alloc 関数が置いた ivar の引き継ぎ、`rb_obj_instance_eval` 系、`strlcpy`、`.so` の判別を dlopen からシンボル表へ。gosu（SWIG の C++ ラッパー）がビルドでき dewasm の DOOM が動く | 済（§3.18、`tests/capi/capi_vars.c`、`tests/capi/capi_cxx.cpp`） |
 | 11 | CRuby の `ext/strscan` / `ext/stringio` / `ext/zlib` を層でビルドして同梱（monoruby 専用実装と `ext/zlib` を削除）、IO / encoding / econv / mutex の API、GVL 再取得の直列化省略、1 プロセス複数インタプリタでの拡張マッピング分離 | 済（§3.19、ruby/spec `library/zlib` / `stringio` / `stringscanner` 全通過） |
 | 12 | bigdecimal gem 4.0.1 の C 拡張を層でビルドして同梱（Ruby 実装を削除）、`ruby_snprintf`、スレッドローカル / freeze の ABI | 済（§3.20、ruby/spec `library/bigdecimal` 全通過） |
+| 13 | CRuby の `ext/socket` を層でビルドして同梱（`src/builtins/socket.rs` を削除）、`rb_io_t`、待ちと fd 集合の API、`IO#timeout` | 済（§3.22、ruby/spec `library/socket` 1463 例で 1F） |
 
 ## 6. 既知の制約
 
