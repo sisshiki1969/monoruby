@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2e734717.js";
+            window.path_to_searchindex_js = "searchindex-072fee3a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a4c8fb9.js"></script>
@@ -9203,14 +9203,31 @@ old ビットマップを 0 初期化(マイナー GC のシード整合性の�
 </li>
 </ol>
 <h3 id="jit-インライン高速パス"><a class="header" href="#jit-インライン高速パス">JIT インライン高速パス</a></h3>
-<p>フリーリストからの pop は JIT がインライン展開できるよう、アロケータが
-生アドレスを公開している:</p>
+<p>上の 1・2(フリーリスト pop とバンプ割り当て)は JIT が機械語で行えるよう、
+アロケータがフィールドのアドレスを公開している:</p>
 <ul>
-<li><code>free_list_head_addr()</code>(<code>self.free</code>) — <code>alloc.rs:658</code></li>
+<li><code>free_list_head_addr()</code>(<code>self.free</code>)</li>
 <li><code>free_list_count_addr()</code> / <code>total_allocated_addr()</code> — 統計の同期用</li>
+<li><code>used_in_current_addr()</code> / <code>current_page_addr()</code> — バンプ割り当て</li>
+</ul>
+<p><code>Codegen::new</code> はこれらを <code>AllocFastState</code>(<code>Allocator</code> 自身のアドレス +
+各フィールドの変位)として一度だけ取り込み、セル取得コード
+(<code>emit_cell_acquire</code>、各 backend)は基底アドレスを 1 回だけ組み立てて
+<code>[base + off]</code> で全フィールドを読み書きする。バンプ位置が <code>BUMP_INLINE_LIMIT</code>
+(= <code>THRESHOLD</code>)に達したとき(GC 要求・ページ切り替え)だけ Rust の
+<code>alloc_func</code> に落ちる。</p>
+<ul>
+<li>リテラル(Array / Hash / 深いコピー)のサイトは共有スタブ <code>alloc_cell</code> を call する
+(<code>emit_alloc_cell</code>、コードサイズ優先)</li>
+<li><code>Class#allocate</code> / <code>Foo.new</code> のサイトは同じ本体をサイトに展開する
+(<code>emit_alloc_cell_inline</code>、call/ret と aarch64 の x30 退避がない)</li>
 </ul>
 <p>JIT コードはセーフポイント外でのみこれらを触る(Rust 側が <code>ALLOC</code> を借用中や
 <code>gc()</code> 実行中は触らない)ため、単一スレッド前提でエイリアスは生じない。</p>
+<p>割り当てた直後のオブジェクトは、セーフポイントを通るまで一度も収集を経験して
+いないので若い。そのため <code>Foo.new</code> の展開(<code>StructSlots</code> のスロットストア、
+frameless な <code>initialize</code> のうち <code>self_fresh</code> が保たれている間の ivar ストア)は
+ライトバリアを出さない。</p>
 <hr>
 <h2 id="4-gc-のトリガとセーフポイント"><a class="header" href="#4-gc-のトリガとセーフポイント">4. GC のトリガとセーフポイント</a></h2>
 <p>GC は「アロケーションの延長で即実行」はしない。JIT の生きたレジスタが未退避の
