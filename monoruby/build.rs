@@ -528,6 +528,23 @@ fn build_capi_extensions(capi_dir: &Path) {
             zlib: false,
         },
         Ext {
+            name: "bigdecimal",
+            dir: "bigdecimal",
+            // `missing.c` includes `missing/dtoa.c`.
+            files: &["bigdecimal.c", "missing.c"],
+            // What extconf.rb finds on every target monoruby builds for.
+            defines: &[
+                "HAVE_BUILTIN___BUILTIN_CLZ",
+                "HAVE_BUILTIN___BUILTIN_CLZL",
+                "HAVE_BUILTIN___BUILTIN_CLZLL",
+                "HAVE_FLOAT_H",
+                "HAVE_MATH_H",
+                "HAVE_STDBOOL_H",
+                "HAVE_STDLIB_H",
+            ],
+            zlib: false,
+        },
+        Ext {
             name: "stringio",
             dir: "stringio",
             files: &["stringio.c"],

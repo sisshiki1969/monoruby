@@ -640,6 +640,16 @@ mod tests {
     }
 
     #[test]
+    fn rational_coerce_complex() {
+        run_tests(&[
+            "Rational(3, 4).coerce(Complex(5)).inspect",
+            "Rational(3, 4).coerce(Complex(2.5, 0)).inspect",
+            "Rational(12, 4).coerce(Complex(5, 1)).inspect",
+            "Rational(1, 2).coerce(Complex(1, 0.0)).inspect",
+        ]);
+    }
+
+    #[test]
     fn rational_power_extended() {
         // Rational ** Rational (integer denominator)
         run_tests(&[

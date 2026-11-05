@@ -19066,6 +19066,14 @@ mod tests {
             r#"begin; "dGVzdA".unpack("m0"); rescue => e; e.class.to_s; end"#,
             r#"begin; "dGVzdA==\n".unpack("m0"); rescue => e; e.class.to_s; end"#,
             r#""".unpack("m0")"#,
+            // Lenient 'm' (pack.c): a stray byte is skipped, a short final
+            // group still yields its bytes, and '=' ends the stream.
+            r#""%3D".unpack("m")"#,
+            r#""eyJrZXkiOnsibiI6InR0dCJ9fQ".unpack("m")"#,
+            r#""XU2VuZCByZWluZm9yY2VtZW50cw===".unpack("m")"#,
+            r#""YQ=Zm9v".unpack("m")"#,
+            r#""Y".unpack("m")"#,
+            r#""YW\nJj".unpack("m")"#,
             // 'w' decodes a BER integer of any width.
             r#""\x84\x80\x80\x80\x80\x80\x80\x80\x80\x00".unpack("w")"#,
             r#""\x00\xce\x0f\x84\x80\x80\x80\x80\x80\x80\x80\x80\x00\x01\x00".unpack("w*")"#,

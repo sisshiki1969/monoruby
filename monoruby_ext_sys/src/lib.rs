@@ -631,6 +631,13 @@ pub struct MrApi {
     /// hold before a resize moves it (one is kept back for the NUL);
     /// -1 with a TypeError pending for a non-String.
     pub str_capacity: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue) -> i64,
+    /// `rb_thread_current`: the running Thread.
+    pub thread_current: unsafe extern "C" fn(ctx: *mut MrContext) -> MrValue,
+    /// `rb_thread_local_aref`: `thread[sym]` (the fiber-local), read
+    /// without a method call; nil when unset.
+    pub thread_local_aref: unsafe extern "C" fn(ctx: *mut MrContext, thread: MrValue, sym: MrSym) -> MrValue,
+    /// `rb_obj_freeze`: what `Kernel#freeze` does, without dispatching.
+    pub obj_freeze: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue),
 }
 
 /// [`MrApi::call_blocking_ubf`]'s `ubf` for "no function, interrupt the
