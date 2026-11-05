@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-072fee3a.js";
+            window.path_to_searchindex_js = "../searchindex-b0bcc219.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a4c8fb9.js"></script>
@@ -304,11 +304,20 @@ salvage refuses once one has — see
 <li><strong>The refinement set is part of the question.</strong> Re-asking the <em>unrefined</em>
 question after a <code>using</code> moved the version would confirm an answer the
 code is no longer allowed to give (<code>refinements.md</code> §3.4).</li>
-<li><strong><code>super</code> sites need the executing frame.</strong> <code>check_method_for_name</code> takes
-<code>Option&lt;Lfp&gt;</code>; a <code>super</code> entry (<code>name: None</code>) resolves relative to the
-owning frame. A salvage triggered from an inlined child has no such
-frame, passes <code>None</code>, and conservatively fails — so a unit containing a
-cached <code>super</code> site recompiles rather than guessing.</li>
+<li><strong><code>super</code> sites are re-asked about the body they were compiled for.</strong>
+A <code>super</code> entry (<code>name: None</code>) carries <code>super_of</code>, the method body the
+compiler resolved the <code>super</code> against (<code>jit_check_super</code>’s <code>mother</code> —
+the site’s own iseq’s, which for a specialized callee is not the unit’s
+root), and the salvage asks <code>check_super(class, super_of, name)</code> again.
+That needs no frame because the JIT compiles only frame-independent
+<code>super</code> sites: not a <code>define_method</code> body (its <code>super</code> follows the
+called name) and not a body that occupies several positions in the
+ancestry (<code>compile/method_call.rs</code> deopts both). The method-name index
+files the entry under that body’s name. Before this the salvage needed
+the executing frame and failed without it, so every unit with a
+specialized <code>initialize</code> that calls <code>super</code> (<code>Class#new</code> inlining one)
+recompiled on <em>every</em> class-version move: shipit, whose Loofah
+<code>extend</code>s each node it scrubs, filled the 1 GiB code page that way.</li>
 </ul>
 <p><strong>Specialized children salvage their owner.</strong> A child’s guard reads the
 owner’s word, and the owner’s cache map covers the child’s call sites, so
