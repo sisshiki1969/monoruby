@@ -1434,6 +1434,27 @@ impl Codegen {
             testq rax, rax;
             jz   slow;                // alloc-flag / new-page territory
         }
+        self.emit_cell_header(header);
+    }
+
+    /// `emit_alloc_cell` with the cell acquisition laid out at the site
+    /// instead of called: no call/ret, and the stub's "0 = take the slow
+    /// path" result test folds into the acquisition's own branch. Used by
+    /// the object constructors (`Class#allocate`, `Foo.new`), whose sites
+    /// are few and hot; the far more numerous literal sites keep the
+    /// shared stub for code size.
+    ///
+    /// #### out
+    /// - rax: the fresh cell, header already stored
+    ///
+    /// #### destroy
+    /// - rdi, rcx
+    pub(crate) fn emit_alloc_cell_inline(&mut self, header: CellHeader, slow: &DestLabel) {
+        self.emit_cell_acquire(slow);
+        self.emit_cell_header(header);
+    }
+
+    fn emit_cell_header(&mut self, header: CellHeader) {
         match header {
             CellHeader::Imm(h) => monoasm! { &mut self.jit,
                 movq rdi, (h);
@@ -1454,41 +1475,44 @@ impl Codegen {
         }
     }
 
-    /// Bind the shared `alloc_cell` stub (see the field doc in
-    /// `codegen.rs`): `Allocator::alloc`'s two fast paths — free-list pop,
-    /// else bump — returning the fresh cell in rax, or 0 when the runtime
-    /// must take over. Emitted at the end of `Codegen::new`, after the
-    /// allocator addresses are captured.
-    pub(in crate::codegen) fn gen_alloc_cell_stub(&mut self) {
-        let label = self.alloc_cell.clone();
-        let free_head = self.alloc_free_head_addr as u64;
-        let free_count = self.alloc_free_count_addr as u64;
-        let total = self.alloc_total_addr as u64;
-        let used = self.alloc_used_addr as u64;
-        let page = self.alloc_page_addr as u64;
+    /// `Allocator::alloc`'s two fast paths: pop a recycled cell from the
+    /// free list, else bump-allocate out of the current page. Leaves the
+    /// fresh cell (its header still the free link / garbage) in rax, or
+    /// jumps to `fail` where the runtime must take over
+    /// (`BUMP_INLINE_LIMIT`: alloc-flag / new-page territory) with the
+    /// allocator state untouched. Every field is addressed off one base
+    /// (`AllocFastState`).
+    ///
+    /// #### destroy
+    /// - rdi, rcx
+    fn emit_cell_acquire(&mut self, fail: &DestLabel) {
+        let st = self.alloc_fast;
+        let (free, count, total, used, page) = (
+            st.free as i32,
+            st.free_count as i32,
+            st.total as i32,
+            st.used as i32,
+            st.page as i32,
+        );
         let bump = self.jit.label();
-        let fail = self.jit.label();
         let done = self.jit.label();
         monoasm! { &mut self.jit,
-        label:
-            movq rdi, (free_head);
-            movq rax, [rdi];          // rax = free-list head (cell ptr, or 0 = None)
+            movq rdi, (st.base);
+            movq rax, [rdi + (free)];   // rax = free-list head (cell ptr, or 0 = None)
             testq rax, rax;
             jz   bump;
-            movq rcx, [rax];          // rcx = (*cell).header.next (free link @ offset 0)
-            movq [rdi], rcx;          // free = next
-            movq rdi, (free_count);
-            subq [rdi], 1;
+            movq rcx, [rax];            // rcx = (*cell).header.next (free link @ offset 0)
+            movq [rdi + (free)], rcx;   // free = next
+            subq [rdi + (count)], 1;
             jmp  done;
         bump:
-            movq rdi, (used);
-            movq rcx, [rdi];          // rcx = used_in_current
+            movq rcx, [rdi + (used)];   // rcx = used_in_current
             cmpq rcx, (BUMP_INLINE_LIMIT);
-            jae  fail;                // alloc-flag / new-page territory
-            movq rax, (page);
-            movq rax, [rax];          // rax = current page
+            jae  fail;                  // alloc-flag / new-page territory
+            addq [rdi + (used)], 1;     // used_in_current += 1
             shlq rcx, (CELL_SIZE_SHIFT);
-            addq rax, rcx;            // + used_in_current * CELL_SIZE
+            movq rax, [rdi + (page)];   // rax = current page
+            addq rax, rcx;              // + used_in_current * CELL_SIZE
         }
         if PAGE_DATA_OFFSET != 0 {
             monoasm! { &mut self.jit,
@@ -1496,10 +1520,21 @@ impl Codegen {
             }
         }
         monoasm! { &mut self.jit,
-            addq [rdi], 1;            // used_in_current += 1
         done:
-            movq rdi, (total);
-            addq [rdi], 1;
+            addq [rdi + (total)], 1;
+        }
+    }
+
+    /// Bind the shared `alloc_cell` stub (see the field doc in
+    /// `codegen.rs`): `emit_cell_acquire`, returning the fresh cell in
+    /// rax, or 0 when the runtime must take over. Emitted at the end of
+    /// `Codegen::new`, after the allocator addresses are captured.
+    pub(in crate::codegen) fn gen_alloc_cell_stub(&mut self) {
+        let label = self.alloc_cell.clone();
+        let fail = self.jit.label();
+        self.jit.bind_label(label);
+        self.emit_cell_acquire(&fail);
+        monoasm! { &mut self.jit,
             ret;
         fail:
             xorq rax, rax;

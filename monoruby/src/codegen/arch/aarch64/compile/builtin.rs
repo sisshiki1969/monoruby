@@ -1287,9 +1287,10 @@ impl Codegen {
         class_id: u32,
         alloc_func: u64,
         inline: Option<InlineAlloc>,
+        using_fpr: UsingFpr,
     ) {
         let Some(inline) = inline.filter(|_| !self.alloc_free_head_addr.is_null()) else {
-            self.class_allocate_call(class_id, alloc_func);
+            self.class_allocate_call(class_id, alloc_func, using_fpr);
             return;
         };
         let rax = GP::Rax.a64().0; // x0 (result)
@@ -1301,21 +1302,28 @@ impl Codegen {
             InlineAlloc::Struct(_) => ObjTy::STRUCT,
         };
         let header: u64 = ((class_id as u64) << 32) | ((ty.get() as u64) << 16) | 1;
-        self.emit_alloc_cell(CellHeader::Imm(header), &slow);
+        self.emit_alloc_cell_inline(CellHeader::Imm(header), &slow);
         monoasm_arm64!(&mut self.jit,
-            mov x12, #0;
-            str x12, [x(rax), #(RVALUE_OFFSET_VAR as u32)]; // var_table = None
+            str xzr, [x(rax), #(RVALUE_OFFSET_VAR as u32)]; // var_table = None
         );
         match inline {
             // `ObjKind::object()` == `[None; OBJECT_INLINE_IVAR]` at the
             // head of the `kind` union (the same `RVALUE_OFFSET_KIND +
             // ivarid * 8` addressing the ivar emitters use), and `None`
-            // for `Option<Value>` is a zero word.
+            // for `Option<Value>` is a zero word. Zeroed a pair at a time.
             InlineAlloc::Object => {
-                for k in 0..OBJECT_INLINE_IVAR {
+                let mut k = 0;
+                while k + 1 < OBJECT_INLINE_IVAR {
+                    let off = RVALUE_OFFSET_KIND as i32 + (k as i32) * 8;
+                    monoasm_arm64!(&mut self.jit,
+                        stp xzr, xzr, [x(rax), #(off)];
+                    );
+                    k += 2;
+                }
+                if k < OBJECT_INLINE_IVAR {
                     let off = RVALUE_OFFSET_KIND as u32 + (k as u32) * 8;
                     monoasm_arm64!(&mut self.jit,
-                        str x12, [x(rax), #(off)];
+                        str xzr, [x(rax), #(off)];
                     );
                 }
             }
@@ -1328,7 +1336,15 @@ impl Codegen {
                     str x12, [x(rax), #(RVALUE_OFFSET_ARY_CAPA as u32)];
                     mov x12, (NIL_VALUE);
                 );
-                for k in 0..len {
+                let mut k = 0;
+                while k + 1 < len {
+                    let off = RVALUE_OFFSET_INLINE as i32 + (k as i32) * 8;
+                    monoasm_arm64!(&mut self.jit,
+                        stp x12, x12, [x(rax), #(off)];
+                    );
+                    k += 2;
+                }
+                if k < len {
                     let off = RVALUE_OFFSET_INLINE as u32 + (k as u32) * 8;
                     monoasm_arm64!(&mut self.jit,
                         str x12, [x(rax), #(off)];
@@ -1338,11 +1354,15 @@ impl Codegen {
         }
         monoasm_arm64!(&mut self.jit, b cont;);
         self.jit.bind_label(slow);
-        self.class_allocate_call(class_id, alloc_func);
+        self.class_allocate_call(class_id, alloc_func, using_fpr);
         self.jit.bind_label(cont);
     }
 
-    fn class_allocate_call(&mut self, class_id: u32, alloc_func: u64) {
+    /// `alloc_func(class_id, globals)` → x0. Only this call clobbers the
+    /// float pool, so the live fprs are saved around it alone: the inline
+    /// fast path touches no FP register.
+    fn class_allocate_call(&mut self, class_id: u32, alloc_func: u64, using_fpr: UsingFpr) {
+        self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, (class_id as u64); // class_id -> arg0 (low 32 bits read)
             mov x1, x20;               // globals -> arg1
@@ -1351,6 +1371,7 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.emit_fpr_restore(using_fpr, false);
     }
 
     /// Inlined `Array#clone`: `array_clone_extern(recv)`. recv (Rdi/x4) -> arg0.

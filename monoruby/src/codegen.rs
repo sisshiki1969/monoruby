@@ -904,6 +904,57 @@ pub(crate) struct SpecializedPatchEntry {
 }
 
 ///
+/// The allocator's inline-allocation state as the JIT addresses it: the
+/// address of the `Allocator` itself and the byte displacement of each
+/// field the cell-acquisition fast path reads or writes
+/// (`emit_cell_acquire` on each backend). All fields live in the one
+/// struct, so the displacements are small and non-negative.
+///
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct AllocFastState {
+    pub(crate) base: u64,
+    /// `free` (the free-list head, `0` = empty).
+    pub(crate) free: u32,
+    /// `free_list_count`.
+    pub(crate) free_count: u32,
+    /// `total_allocated_objects`.
+    pub(crate) total: u32,
+    /// `used_in_current` (the bump index).
+    pub(crate) used: u32,
+    /// `current_page`.
+    pub(crate) page: u32,
+}
+
+impl AllocFastState {
+    fn new(
+        base: usize,
+        free: *mut usize,
+        free_count: *mut usize,
+        total: *mut usize,
+        used: *mut usize,
+        page: *mut usize,
+    ) -> Self {
+        let off = |p: *mut usize| {
+            let d = (p as usize)
+                .checked_sub(base)
+                .expect("allocator field below the allocator");
+            // aarch64 addresses each field with a scaled unsigned 12-bit
+            // immediate (`ldr x, [base, #imm]`, imm <= 32760).
+            assert!(d % 8 == 0 && d <= 32760, "allocator field displacement {d}");
+            d as u32
+        };
+        Self {
+            base: base as u64,
+            free: off(free),
+            free_count: off(free_count),
+            total: off(total),
+            used: off(used),
+            page: off(page),
+        }
+    }
+}
+
+///
 /// Machine code generator
 ///
 pub struct Codegen {
@@ -918,13 +969,15 @@ pub struct Codegen {
     /// allocated inline from the free list without a runtime call. See
     /// `Allocator::free_list_head_addr`.
     alloc_free_head_addr: *mut usize,
-    alloc_free_count_addr: *mut usize,
-    alloc_total_addr: *mut usize,
-    /// Bump-allocation state (`current_page` / `used_in_current`), so the
+    /// The same allocator state as one base address plus field
+    /// displacements, which is how the cell-acquisition code addresses it:
+    /// the free-list head and count, the allocation total, and the
+    /// bump-allocation state (`current_page` / `used_in_current`, so the
     /// inline path also covers a heap that is still growing — where the
-    /// free list stays empty and every allocation would otherwise call out.
-    alloc_used_addr: *mut usize,
-    alloc_page_addr: *mut usize,
+    /// free list stays empty and every allocation would otherwise call
+    /// out). One materialized address instead of five matters most on
+    /// aarch64, where each 64-bit immediate is a `mov`/`movk` chain.
+    alloc_fast: AllocFastState,
 
     compilation_unit: Vec<CompilationUnitInfo>,
 
@@ -1424,10 +1477,7 @@ impl Codegen {
             jit_class_version_addr,
             const_version_addr,
             alloc_free_head_addr: std::ptr::null_mut(),
-            alloc_free_count_addr: std::ptr::null_mut(),
-            alloc_total_addr: std::ptr::null_mut(),
-            alloc_used_addr: std::ptr::null_mut(),
-            alloc_page_addr: std::ptr::null_mut(),
+            alloc_fast: AllocFastState::default(),
             compilation_unit: Vec::new(),
             asm_return_addr_table: HashMap::default(),
             recompile_counts: HashMap::default(),
@@ -1534,10 +1584,14 @@ impl Codegen {
             // inline-allocation fast path (stable thread-local; see the
             // Codegen field docs).
             codegen.alloc_free_head_addr = alloc.free_list_head_addr();
-            codegen.alloc_free_count_addr = alloc.free_list_count_addr();
-            codegen.alloc_total_addr = alloc.total_allocated_addr();
-            codegen.alloc_used_addr = alloc.used_in_current_addr();
-            codegen.alloc_page_addr = alloc.current_page_addr();
+            codegen.alloc_fast = AllocFastState::new(
+                &*alloc as *const _ as usize,
+                alloc.free_list_head_addr(),
+                alloc.free_list_count_addr(),
+                alloc.total_allocated_addr(),
+                alloc.used_in_current_addr(),
+                alloc.current_page_addr(),
+            );
         });
         // The shared cell-allocation stub bakes those addresses in, so it
         // can only be emitted now.

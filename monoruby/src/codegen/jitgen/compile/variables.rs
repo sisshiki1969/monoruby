@@ -62,6 +62,10 @@ impl<'a> JitContext<'a> {
     /// already guarded self's frozen bit and nothing since could have frozen
     /// it (see `compile_instruction`'s ④-b whitelist), so the guard here is
     /// redundant and skipped.
+    ///
+    /// `self_young`: `self` is an object the caller allocated with no
+    /// safepoint since (a fresh `initialize` receiver), so the store needs
+    /// no write barrier.
     pub(super) fn store_ivar(
         &mut self,
         state: &mut AbstractState,
@@ -70,10 +74,13 @@ impl<'a> JitContext<'a> {
         self_class: ClassId,
         ivarid: IvarId,
         frozen_checked: bool,
+        self_young: bool,
     ) {
         assert!(!self_class.is_always_frozen());
-        // A provably-immediate stored value needs no GC write barrier.
-        let wb = !state.is_guarded_immediate(src);
+        // A provably-immediate stored value needs no GC write barrier, and
+        // neither does any store into a `self` proven young (the barrier
+        // records old → young edges only).
+        let wb = !self_young && !state.is_guarded_immediate(src);
         state.load(ir, src, GP::Rax);
         let slot = src;
         let src = GP::Rax;
