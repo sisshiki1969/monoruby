@@ -3848,6 +3848,14 @@ impl RStringInner {
         self.owned_mut().capacity()
     }
 
+    /// `rb_str_modify`: the bytes become this string's own and the code
+    /// range is dropped, with no terminator written, so bytes an extension
+    /// put past the length (to `rb_str_set_len` over next) survive.
+    pub(crate) fn c_modify(&mut self) {
+        self.cr.set(CodeRange::Unknown);
+        self.owned_mut();
+    }
+
     pub(crate) fn c_str_ptr_read(&mut self) -> (*mut u8, usize) {
         let buf = self.owned_mut();
         buf.reserve(1);

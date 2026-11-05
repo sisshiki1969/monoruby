@@ -956,6 +956,93 @@ stringio / zlib は C 拡張のまま。
   効果は段階 11 比で `StringIO#write` のループ −13% Ir、`gets` −8%。
   ruby/spec `library/stringscanner` 240 / `stringio` 703 / `zlib` 148 例
   すべて通過。
+### 3.22 socket も CRuby の C 拡張に（段階 14）
+
+`src/builtins/socket.rs`（2,900 行のネイティブ実装）と `stdlib/socket.rb` の
+上乗せは、ruby/spec の `library/socket` で 1169 例中 139F+557E 落ちていた
+（CRuby は 1463 例）。CRuby 4.0.6 の `ext/socket` をそのまま層でビルドし、
+`stdlib/socket.rb` は CRuby の `ext/socket/lib/socket.rb`（`require 'socket.so'`）
+にした。
+
+- **ソース**: `monoruby_capi/ext/socket/`（`.c` / `.h`、生成済みの
+  `constdefs.c` / `constdefs.h`）。CRuby の内部ヘッダ（`internal.h`、
+  `internal/*.h`）は使う数関数だけを宣言する代役を同じ場所に置いた。
+  `extconf.h` は extconf.rb の検査結果: Linux（glibc、x86-64 / aarch64）は
+  実行した記録、macOS は同じ検査からの導出（BSD の `sa_len` 類、
+  `getpeereid`、`struct tcp_info` なし）。Linux は `_GNU_SOURCE`、macOS は
+  `__APPLE_USE_RFC_3542` を足す（Ext の `linux` / `macos` 欄）。
+- **`rb_io_t`**: monoruby の IO に `struct rb_io` は無い。`GetOpenFile` /
+  `MakeOpenFile` / `RFILE(io)->fptr` は層が持つ `struct rb_io` を、それを求めた
+  Ruby 呼び出し（owner フレーム）の間だけ渡す。中身は ABI `io_state` で
+  オブジェクトから埋め（fd、FMODE ビット、読み込み済みバッファ）、
+  `io_update` で書き戻す: 新しいオブジェクトの `fd` に入れた記述子はその IO が
+  引き取り、`close_read` が落とした `FMODE_READABLE` はその向きを閉じ、
+  インタプリタが使わない FMODE ビット（`FMODE_NOREVLOOKUP`、`FMODE_UNIX` …）は
+  `IoInner` の欄に残り、消費した `rbuf` は捨てる。書き戻しは Ruby を呼ぶ前
+  （`funcall` の入口）とフレームの終わり、呼んだ後は読み直すので、Ruby 側の
+  `close` は CRuby と同じく `fd == -1` に見える。
+- **待ち**: `rb_io_wait` はファイバースケジューラがあればその `io_wait` の答えを
+  そのまま、無ければ `IO#wait`（`IO#timeout` を既定に。`IO#timeout` /
+  `timeout=` は今回足した。インタプリタ自身の read / write は見ない）、
+  時間切れは `false`。`rb_io_maybe_wait*`、`rb_wait_for_single_fd`、
+  `rb_thread_fd_select`（`rb_fdset_t`）は GVL を外した `poll` / `select`。
+  `rb_io_blocking_region` は記述子が非ブロッキングなら GVL を持ったまま呼ぶ
+  （拡張のソケットは全部 `SOCK_NONBLOCK` で、EAGAIN は `rb_io_wait` へ行くので
+  すぐ返る。recv ごとの GVL の手放しと取り直しが無くなり、関数内の
+  `RSTRING_PTR` も安全）。ブロッキングなら GVL を外す。
+- **他に層に足したもの**: `rb_thread_check_ints`（GVL を一度手放して保留の
+  割り込みを受ける）、`rb_thread_prevent_fork`、`rb_readwrite_syserr_fail`
+  （`IO::EAGAINWaitReadable` など）、`rb_fiber_scheduler_*`、
+  `rb_eIOTimeoutError` / `rb_mWaitReadable` / `rb_mWaitWritable`、`RB_INT2NUM` 類、
+  `UIDT2NUM` / `GIDT2NUM`、`rb_nogvl` での `errno` の持ち越し（CRuby と同じく
+  呼び出し側が失敗した syscall の `errno` を読む）。
+- **`rb_str_modify` がバッファを潰していた**: `str_cptr` は長さの位置に NUL を
+  書くので、`rb_str_modify_expand` した容量に recv してから `rb_str_modify` +
+  `rb_str_set_len` する形（`read_nonblock` / `recv` の出力バッファ）で先頭バイトが
+  0 になった。ABI `str_modify` は共有の切り離しとコードレンジの破棄だけをする。
+- **IO のサブクラスの `new`**: `IO.new` はネイティブで `initialize` を通らずに
+  ストリームを作っていた。`initialize` を自前で持つサブクラス（ソケットの
+  クラス）は Class#new と同じ allocate + initialize に回す（`builtins/io.rb`）。
+- **結果**: ruby/spec `library/socket` 1463 例で 1F（IO#close が待っている
+  ファイバーをスケジューラの `fiber_interrupt` で起こす、コア側の 4.0 の機能）、
+  `library/net-ftp` 461 例で 4E（すべて OpenSSL::SSL の定数。§3.23 で 0E）。
+  両スレッドモデルで同じ。
+
+### 3.23 openssl も CRuby の C 拡張に（段階 15）
+
+`stdlib/openssl.rb` は Digest / HMAC / PBKDF2 / KDF を `ext/digest` の上に、
+Cipher の AES-GCM / CBC を `ext/openssl`（RustCrypto）の上に Ruby で書き、
+PKey / X509 / SSL は読み込めるだけの空の殻だった（ruby/spec `library/openssl`
+171 例中 21F+66E、`library/net-ftp` は `OpenSSL::SSL` の定数で落ちる）。
+CRuby 4.0.6 の `ext/openssl` をそのまま層でビルドし、システムの OpenSSL
+（Linux は libssl-dev、macOS は Homebrew の openssl@3）に動的リンクする。
+`stdlib/openssl.rb` と `stdlib/openssl/*.rb` は CRuby の `ext/openssl/lib/`
+（`require 'openssl.so'`）。`ext/openssl` crate は削除した。
+
+- **OpenSSL の見つけ方**（`build.rs` `openssl_link`）: openssl-sys と同じ順で
+  `OPENSSL_DIR`（`<dir>/include`、`<dir>/lib`）、`pkg-config openssl`、
+  Homebrew の keg-only な `openssl@3`（pkg-config の既定の探索路に無い）、
+  コンパイラ自身の探索路。`openssl/ssl.h` が見つからなければ拡張は作らず
+  警告だけ出す（`require "openssl"` が LoadError になる。monoruby 自体は動く）。
+  `extconf.h` は OpenSSL 3.x に対する extconf.rb の検査結果。
+- **層に足したもの**: `rb_attr`（`rb_define_attr` と同じく常に public。
+  C から `attr_reader` を呼ぶと拡張を require した場所の可視性、トップレベルの
+  private になる）、`rb_str_drop_bytes`、`ruby_verbose` / `ruby_debug`
+  （`rb_ruby_verbose_ptr`: 呼ぶたびにグローバルから読み直すポインタ）、
+  `rb_thread_call_with_gvl`（GVL を外した区間の中からは呼ばない: 鍵生成の
+  割り込み確認だけが使い、区間が返ってから届く）、`RHASH_SET_IFNONE`、
+  `ruby/assert.h`（`RUBY_DEBUG` なしの CRuby と同じく検査しない）。
+- **`rb_obj_class`**: `rb_class_of` を返していたので、クラスオブジェクトには
+  そのメタクラスが返り、`StringValue(klass)` の TypeError が
+  `#<Class:OpenSSL::Digest::SHA1>` になった。ABI `obj_class` で特異クラスを
+  飛ばした本当のクラスを返す。
+- **`Digest::Class`**（monoruby の Ruby 実装 `stdlib/digest.rb`）: CRuby の
+  digest.c と同じく `hexdigest(*args)` は `digest(*args)` を通る
+  （`OpenSSL::Digest.digest(name, data)` が引数の順を入れ替えて再定義する）。
+  引数なしの `Instance#digest` は複製の `finish`（OpenSSL::Digest の `finish`
+  は読んだ状態を消費する）。
+- **結果**: ruby/spec `library/openssl` 173 例 / `library/net-ftp` 461 例とも
+  0F 0E。
 
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
@@ -986,6 +1073,9 @@ stringio / zlib は C 拡張のまま。
 | `str_enc_name` / `str_set_enc` / `str_coderange` | `rb_enc_get`（プロセス寿命の名前ポインタ）/ `rb_enc_associate` / `rb_enc_str_coderange`（キャッシュ付き） |
 | `thread_current` / `thread_local_aref` | `rb_thread_current` / `rb_thread_local_aref` をディスパッチなしで（§3.20） |
 | `obj_freeze` | `rb_obj_freeze` を `Kernel#freeze` の呼び出しなしで |
+| `io_state` / `io_update` | 層の `struct rb_io` と IO オブジェクトの同期（§3.22） |
+| `str_modify` | `rb_str_modify`: 長さより後ろのバイトに触れない（§3.22） |
+| `obj_class` | `rb_obj_class`: 特異クラスを飛ばした本当のクラス（§3.23） |
 
 あわせて `ary_push` / `hash_set` が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。
@@ -1007,6 +1097,8 @@ stringio / zlib は C 拡張のまま。
 | 11 | CRuby の `ext/strscan` / `ext/stringio` / `ext/zlib` を層でビルドして同梱（monoruby 専用実装と `ext/zlib` を削除）、IO / encoding / econv / mutex の API、GVL 再取得の直列化省略、1 プロセス複数インタプリタでの拡張マッピング分離 | 済（§3.19、ruby/spec `library/zlib` / `stringio` / `stringscanner` 全通過） |
 | 12 | bigdecimal gem 4.0.1 の C 拡張を層でビルドして同梱（Ruby 実装を削除）、`ruby_snprintf`、スレッドローカル / freeze の ABI | 済（§3.20、ruby/spec `library/bigdecimal` 全通過） |
 | 13 | strscan を Ruby 実装に戻す（呼び出しごとの層の固定費がトークナイザで支配的）、`rb_enc_check` の二乗コスト除去、`RSTRING_PTR` / `LEN` の inline 化、トランポリンの引数受け渡し | 済（§3.21、ruby-bench の StringScanner 系 4 本が #1800 前の速度に、`library/stringscanner` 全通過） |
+| 14 | CRuby の `ext/socket` を層でビルドして同梱（`src/builtins/socket.rs` を削除）、`rb_io_t`、待ちと fd 集合の API、`IO#timeout` | 済（§3.22、ruby/spec `library/socket` 1463 例で 1F） |
+| 15 | CRuby の `ext/openssl` を層でビルドしシステムの OpenSSL にリンク（`ext/openssl` crate と Ruby 実装を削除）、`rb_attr`、`ruby_verbose`、`rb_obj_class` の ABI | 済（§3.23、ruby/spec `library/openssl` / `net-ftp` 全通過） |
 
 ## 6. 既知の制約
 

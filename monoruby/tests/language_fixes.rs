@@ -798,7 +798,7 @@ fn random_formatter_wiring() {
         res
         "#,
     );
-    // OpenSSL stub: the Cipher error class ActiveRecord::Encryption rescues.
+    // The Cipher error class ActiveRecord::Encryption rescues.
     run_test_once(
         r#"
         require "openssl"

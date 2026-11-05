@@ -887,6 +887,10 @@ pub(crate) static MR_API: MrApi = MrApi {
     thread_current: mr_thread_current,
     thread_local_aref: mr_thread_local_aref,
     obj_freeze: mr_obj_freeze,
+    io_state: mr_io_state,
+    io_update: mr_io_update,
+    str_modify: mr_str_modify,
+    obj_class: mr_obj_class,
 };
 
 // ---- regexp (ruby/re.h) ----------------------------------------------
@@ -1772,6 +1776,13 @@ unsafe extern "C" fn mr_class_of(ctx: *mut MrContext, v: MrValue) -> MrValue {
     v.get_class_obj(&globals.store).as_val().id()
 }
 
+unsafe extern "C" fn mr_obj_class(ctx: *mut MrContext, v: MrValue) -> MrValue {
+    // SAFETY: the table's contract.
+    let (_, globals) = unsafe { parts(ctx) };
+    let Some(v) = val(v) else { return MR_UNDEF };
+    v.real_class(&globals.store).as_val().id()
+}
+
 unsafe extern "C" fn mr_is_kind_of(ctx: *mut MrContext, v: MrValue, klass: MrValue) -> c_int {
     // SAFETY: the table's contract.
     let (_, globals) = unsafe { parts(ctx) };
@@ -2475,6 +2486,16 @@ unsafe extern "C" fn mr_str_cptr(ctx: *mut MrContext, v: MrValue, len: *mut usiz
     ptr
 }
 
+unsafe extern "C" fn mr_str_modify(ctx: *mut MrContext, v: MrValue) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(mut s) = string_arg(vm, globals, v) else {
+        return -1;
+    };
+    s.as_rstring_inner_mut().c_modify();
+    0
+}
+
 /// `RSTRING_PTR`: a String's own NUL-terminated buffer (`str_cptr`)
 /// unless it is a view into a shared buffer (a slice of a longer string
 /// shares it, and so does the string it was taken from), whose bytes are
@@ -2677,6 +2698,92 @@ unsafe extern "C" fn mr_obj_freeze(ctx: *mut MrContext, v: MrValue) {
             singleton.as_val().set_frozen();
         }
     }
+}
+
+// CRuby's FMODE_* bits the interpreter's IO keeps itself; the others an
+// extension sets on `fptr->mode` are kept for it (`IoInner::capi_fmode`).
+const FMODE_READABLE: c_int = 0x1;
+const FMODE_WRITABLE: c_int = 0x2;
+const FMODE_BINMODE: c_int = 0x4;
+const FMODE_SYNC: c_int = 0x8;
+const FMODE_OWN: c_int = FMODE_READABLE | FMODE_WRITABLE | FMODE_BINMODE | FMODE_SYNC;
+
+fn io_arg(vm: &mut Executor, globals: &Globals, io: MrValue) -> Option<Value> {
+    let v = Value::from_u64(io);
+    if v.try_rvalue().is_some_and(|rv| rv.ty() == ObjTy::IO) {
+        Some(v)
+    } else {
+        set_err(
+            vm,
+            MonorubyErr::typeerr(format!("{} is not an IO", v.get_real_class_name(&globals.store))),
+        );
+        None
+    }
+}
+
+unsafe extern "C" fn mr_io_state(ctx: *mut MrContext, io: MrValue, out: *mut MrIoState) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(v) = io_arg(vm, globals, io) else {
+        return -1;
+    };
+    let inner = v.as_io_inner();
+    let extra = inner.capi_fmode() & !FMODE_OWN;
+    let (fd, readable, writable, rbuf) = inner.capi_view();
+    let mut mode = extra;
+    if readable {
+        mode |= FMODE_READABLE;
+    }
+    if writable {
+        mode |= FMODE_WRITABLE;
+    }
+    if inner.binmode() {
+        mode |= FMODE_BINMODE;
+    }
+    if fd >= 0 && inner.sync() {
+        mode |= FMODE_SYNC;
+    }
+    // SAFETY: the caller's out-parameter.
+    unsafe {
+        *out = MrIoState {
+            fd,
+            mode,
+            rbuf: rbuf.as_ptr(),
+            rbuf_len: rbuf.len(),
+        };
+    }
+    0
+}
+
+unsafe extern "C" fn mr_io_update(ctx: *mut MrContext, io: MrValue, fd: c_int, mode: c_int, rbuf_consumed: usize) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(mut v) = io_arg(vm, globals, io) else {
+        return -1;
+    };
+    let readable = mode & FMODE_READABLE != 0;
+    let writable = mode & FMODE_WRITABLE != 0;
+    {
+        let inner = v.as_io_inner_mut();
+        if inner.is_closed() {
+            if fd >= 0 {
+                inner.capi_attach(fd, readable, writable, mode & FMODE_SYNC != 0);
+            }
+        } else {
+            inner.capi_set_access(readable, writable);
+            if mode & FMODE_SYNC != 0 && !inner.sync() {
+                inner.set_sync(true);
+            }
+            if rbuf_consumed > 0 {
+                inner.capi_consume_rbuf(rbuf_consumed);
+            }
+        }
+        if mode & FMODE_BINMODE != 0 && !inner.binmode() {
+            inner.set_binmode();
+        }
+        inner.set_capi_fmode(mode & !FMODE_OWN);
+    }
+    0
 }
 
 unsafe extern "C" fn mr_str_dup(ctx: *mut MrContext, v: MrValue) -> MrValue {
@@ -3015,6 +3122,66 @@ mod tests {
             assert_eq!(mr_enc_precise_mbclen(ctx, c"ASCII-8BIT".as_ptr(), p.add(1), e), 1);
             // An encoding name monoruby does not know counts bytes.
             assert_eq!(mr_enc_precise_mbclen(ctx, c"NO-SUCH-ENCODING".as_ptr(), p, e), 1);
+        }
+    }
+
+    /// The `rb_io_t` / `rb_str_modify` / `rb_obj_class` entries on what
+    /// the layer screens out (a non-IO, a non-String, `MR_UNDEF`), and
+    /// `io_update` on a closed IO with no descriptor and with
+    /// `FMODE_BINMODE` set by the extension.
+    #[test]
+    fn abi_io_entry_edges() {
+        let mut globals = Globals::new_test();
+        let res = globals
+            .run(
+                r#"r, w = IO.pipe
+                   c, _ = IO.pipe
+                   c.close
+                   $capi_io_keep = [r, w, c, :sym]"#,
+                std::path::Path::new("."),
+            )
+            .unwrap();
+        let mut vm = Executor::init(&mut globals, "abi_io_entry_edges").unwrap();
+        let items: Vec<Value> = res.as_array_inner().iter().copied().collect();
+        let (r, w, closed, sym) = (items[0], items[1], items[2], items[3]);
+        let mut ctx = make_ctx(&mut vm, &mut globals, None, None);
+        let ctx = &mut ctx as *mut MrContext;
+        // SAFETY: a live context over this test's interpreter; every
+        // value is rooted by `$capi_io_keep`.
+        unsafe {
+            let failed = |ctx: *mut MrContext| {
+                let (vm, _) = parts(ctx);
+                assert!(vm.has_error());
+                vm.take_error();
+            };
+            let mut st = MrIoState {
+                fd: 0,
+                mode: 0,
+                rbuf: std::ptr::null(),
+                rbuf_len: 0,
+            };
+            assert_eq!(mr_io_state(ctx, sym.id(), &mut st), -1);
+            failed(ctx);
+            assert_eq!(mr_io_update(ctx, sym.id(), 3, FMODE_READABLE, 0), -1);
+            failed(ctx);
+            assert_eq!(mr_str_modify(ctx, sym.id()), -1);
+            failed(ctx);
+            assert_eq!(mr_obj_class(ctx, MR_UNDEF), MR_UNDEF);
+            // The read end: readable, not yet binmode.
+            assert_eq!(mr_io_state(ctx, r.id(), &mut st), 0);
+            assert!(st.fd >= 0);
+            assert_eq!(st.mode & (FMODE_READABLE | FMODE_WRITABLE | FMODE_BINMODE), FMODE_READABLE);
+            // `fptr->mode |= FMODE_BINMODE` reaches the IO.
+            assert_eq!(mr_io_update(ctx, r.id(), st.fd, st.mode | FMODE_BINMODE, 0), 0);
+            assert!(r.as_io_inner().binmode());
+            assert_eq!(mr_io_state(ctx, w.id(), &mut st), 0);
+            assert_eq!(st.mode & (FMODE_READABLE | FMODE_WRITABLE), FMODE_WRITABLE);
+            // A closed IO stays closed when the extension sets no fd.
+            assert_eq!(mr_io_state(ctx, closed.id(), &mut st), 0);
+            assert_eq!(st.fd, -1);
+            assert_eq!(mr_io_update(ctx, closed.id(), -1, 0, 0), 0);
+            assert!(closed.as_io_inner().is_closed());
+            assert_eq!(Value::from_u64(mr_obj_class(ctx, r.id())).as_class_id(), IO_CLASS);
         }
     }
 }

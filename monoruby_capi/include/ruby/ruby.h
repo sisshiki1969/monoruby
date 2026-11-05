@@ -53,6 +53,10 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/time.h>
+#include <sys/select.h>
+/* glibc's <pthread.h> pulls <signal.h> in and macOS's does not; ext/socket's
+ * raddrinfo.c calls sigemptyset() relying on the former. */
+#include <signal.h>
 
 #include "ruby/version.h"
 
@@ -63,6 +67,7 @@ extern "C" {
 #define MONORUBY_CAPI 1
 
 #include "ruby/config.h"
+#include "ruby/assert.h"
 
 /* ---- VALUE and ID ----------------------------------------------------- */
 
@@ -559,6 +564,7 @@ VALUE rb_ivar_defined(VALUE obj, ID id);
 VALUE rb_iv_get(VALUE obj, const char *name);
 VALUE rb_iv_set(VALUE obj, const char *name, VALUE val);
 VALUE rb_attr_get(VALUE obj, ID id);
+void rb_attr(VALUE klass, ID name, int need_reader, int need_writer, int honour_visibility);
 VALUE rb_cvar_get(VALUE klass, ID id);
 void rb_cvar_set(VALUE klass, ID id, VALUE val);
 VALUE rb_cv_get(VALUE klass, const char *name);
@@ -748,6 +754,13 @@ VALUE rb_exc_new_str(VALUE klass, VALUE str);
 VALUE rb_syserr_new(int err, const char *msg);
 void rb_warn(const char *fmt, ...);
 void rb_warning(const char *fmt, ...);
+/* `$VERBOSE` / `$DEBUG`, read through a pointer as CRuby's are. The
+ * pointee is refreshed from the global on every call, and a store
+ * through it does not reach the global. */
+VALUE *rb_ruby_verbose_ptr(void);
+VALUE *rb_ruby_debug_ptr(void);
+#define ruby_verbose (*rb_ruby_verbose_ptr())
+#define ruby_debug   (*rb_ruby_debug_ptr())
 VALUE rb_protect(VALUE (*func)(VALUE), VALUE arg, int *state);
 VALUE rb_ensure(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*e_proc)(VALUE), VALUE data2);
 VALUE rb_rescue(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALUE data2);
@@ -845,6 +858,26 @@ rb_num2long_inline(VALUE v)
 #define TIMET2NUM(v) LONG2NUM(v)
 #define NUM2TIMET(v) NUM2LONG(v)
 #define SSIZET2NUM(v) LONG2NUM(v)
+#define RB_SSIZE2NUM(v) SSIZET2NUM(v)
+#define RB_SIZE2NUM(v) SIZET2NUM(v)
+#define RB_INT2NUM(v) INT2NUM(v)
+#define RB_UINT2NUM(v) UINT2NUM(v)
+#define RB_LONG2NUM(v) LONG2NUM(v)
+#define RB_ULONG2NUM(v) ULONG2NUM(v)
+#define RB_NUM2INT(x) NUM2INT(x)
+#define RB_NUM2UINT(x) NUM2UINT(x)
+#define RB_NUM2LONG(x) NUM2LONG(x)
+#define RB_NUM2ULONG(x) NUM2ULONG(x)
+#ifndef PIDT2NUM
+#define PIDT2NUM(v) INT2NUM(v)
+#define NUM2PIDT(v) NUM2INT(v)
+#endif
+#ifndef UIDT2NUM
+#define UIDT2NUM(v) UINT2NUM(v)
+#define NUM2UIDT(v) NUM2UINT(v)
+#define GIDT2NUM(v) UINT2NUM(v)
+#define NUM2GIDT(v) NUM2UINT(v)
+#endif
 #define OFFT2NUM(v) LL2NUM(v)
 #define CHR2FIX(x) RB_INT2FIX((long)((x) & 0xff))
 #define NUM2LONG(x) rb_num2long_inline((VALUE)(x))
@@ -930,6 +963,7 @@ char *rb_string_value_ptr(volatile VALUE *ptr);
 char *rb_string_value_cstr(volatile VALUE *ptr);
 VALUE rb_check_string_type(VALUE obj);
 VALUE rb_str_resize(VALUE str, long len);
+VALUE rb_str_drop_bytes(VALUE str, long len);
 void rb_str_set_len(VALUE str, long len);
 void rb_str_modify(VALUE str);
 void rb_str_modify_expand(VALUE str, long expand);
@@ -1123,6 +1157,7 @@ VALUE rb_hash_keys(VALUE hash);
 VALUE rb_hash_values(VALUE hash);
 VALUE rb_hash_has_key(VALUE hash, VALUE key);
 VALUE rb_hash_set_ifnone(VALUE hash, VALUE ifnone);
+#define RHASH_SET_IFNONE(h, ifnone) rb_hash_set_ifnone((VALUE)(h), (ifnone))
 VALUE rb_check_hash_type(VALUE obj);
 void rb_hash_foreach(VALUE hash, int (*func)(VALUE key, VALUE val, VALUE arg), VALUE arg);
 #define rb_hash_foreach(hash, func, arg) \
@@ -1293,6 +1328,28 @@ void ruby_init(void);
 int ruby_native_thread_p(void);
 int rb_during_gc(void);
 VALUE rb_thread_current(void);
+/* Deliver pending interrupts (Thread#raise, Thread#kill, signal traps). */
+void rb_thread_check_ints(void);
+/* `func(arg)` with fork(2) held off; nothing to hold off here. */
+void *rb_thread_prevent_fork(void *(*func)(void *), void *arg);
+
+/* CRuby's resizable fd_set (`rb_fd_*`), and select(2) with the interpreter
+ * released. */
+typedef struct {
+    int maxfd;
+    fd_set *fdset;
+} rb_fdset_t;
+void rb_fd_init(rb_fdset_t *fds);
+void rb_fd_term(rb_fdset_t *fds);
+void rb_fd_zero(rb_fdset_t *fds);
+void rb_fd_set(int fd, rb_fdset_t *fds);
+void rb_fd_clr(int fd, rb_fdset_t *fds);
+int rb_fd_isset(int fd, const rb_fdset_t *fds);
+void rb_fd_copy(rb_fdset_t *dst, const fd_set *src, int max);
+void rb_fd_dup(rb_fdset_t *dst, const rb_fdset_t *src);
+#define rb_fd_ptr(f) ((f)->fdset)
+#define rb_fd_max(f) ((f)->maxfd)
+int rb_thread_fd_select(int max, rb_fdset_t *read, rb_fdset_t *write, rb_fdset_t *except, struct timeval *timeout);
 VALUE rb_thread_local_aref(VALUE thread, ID key);
 VALUE rb_thread_local_aset(VALUE thread, ID key, VALUE val);
 void rb_thread_schedule(void);

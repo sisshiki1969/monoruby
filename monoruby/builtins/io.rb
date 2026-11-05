@@ -31,6 +31,24 @@ class IO
     include IO::WaitWritable
   end
 
+  # CRuby's rb_io_s_new is Class#new plus a warning for a block. The
+  # stream itself is built by one native call (`__io_new`) when the class
+  # initializes as IO does; a subclass with an `initialize` of its own (the
+  # socket extension's classes) is allocated and initialized as Class#new
+  # does it.
+  def self.new(...)
+    if block_given?
+      warn("#{self}::new() does not take block; use #{self}::open() instead", uplevel: 1)
+    end
+    if instance_method(:initialize).owner.equal?(IO)
+      __io_new(...)
+    else
+      o = __builtin_allocate__
+      o.__builtin_initialize__(...)
+      o
+    end
+  end
+
   # CRuby's IO#putc: a String argument writes its first character, any
   # other argument is converted with #to_int and the low byte is written.
   def putc(ch)

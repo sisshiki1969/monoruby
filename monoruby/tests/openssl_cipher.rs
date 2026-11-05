@@ -1,15 +1,14 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// `OpenSSL::Cipher` (stdlib/openssl.rb over the `ext/openssl` extension): AES
-// GCM / CBC for 128 / 192 / 256-bit keys, byte-identical to openssl,
-// with openssl's class shape (`AES256.new(:GCM)`, `CipherError`,
-// `AuthTagError` on a tag mismatch). Rails' cookie jar
-// (`ActiveSupport::MessageEncryptor`, aes-256-gcm) runs on this.
+// `OpenSSL::Cipher` (CRuby's ext/openssl over the system OpenSSL, built on
+// the C API layer): AES GCM / CBC for 128 / 192 / 256-bit keys, the class
+// shape (`AES256.new(:GCM)`, `CipherError`, `AuthTagError` on a tag
+// mismatch). Rails' cookie jar (`ActiveSupport::MessageEncryptor`,
+// aes-256-gcm) runs on this.
 
 #[test]
 fn openssl_cipher_aes_matches_cruby() {
-    ensure_extension("openssl_native");
     ensure_extension("digest_native");
     run_test_once(
         r##"
@@ -81,7 +80,6 @@ fn openssl_cipher_aes_matches_cruby() {
 
 #[test]
 fn message_encryptor_round_trip_like_rails() {
-    ensure_extension("openssl_native");
     ensure_extension("digest_native");
     // The exact shape of ActiveSupport::MessageEncryptor's aes-256-gcm
     // path: PBKDF2-derived key, random iv, empty aad, 16-byte tag,
@@ -109,29 +107,4 @@ fn message_encryptor_round_trip_like_rails() {
         [secret.unpack1("H*"), iv.bytesize, tag.bytesize, data.bytesize, out]
         "##,
     );
-}
-
-#[test]
-fn aes_builtins_reject_bad_lengths() {
-    ensure_extension("openssl_native");
-    ensure_extension("digest_native");
-    // The native half's own argument checks (the Ruby layer validates
-    // key and iv lengths before calling, so only a direct call reaches
-    // them); not oracle-checked, CRuby has no such builtins.
-    let v = run_test_no_result_check(
-        r##"
-        require "openssl"
-        r = []
-        r << (begin; String.__aes_gcm(true, "k" * 32, "i" * 5, "", "x", ""); rescue RuntimeError => e; e.message; end)
-        r << (begin; String.__aes_gcm(false, "k" * 32, "i" * 12, "", "x", "t" * 3); rescue RuntimeError => e; e.message; end)
-        r << (begin; String.__aes_gcm(true, "k" * 5, "i" * 12, "", "x", ""); rescue RuntimeError => e; e.message; end)
-        r << (begin; String.__aes_cbc(true, "k" * 32, "i" * 5, "x"); rescue RuntimeError => e; e.message; end)
-        r << (begin; String.__aes_cbc(true, "k" * 5, "i" * 16, "x"); rescue RuntimeError => e; e.message; end)
-        r << String.__aes_gcm(true, "k" * 24, "i" * 12, "", "", "").map(&:bytesize)
-        expected = ["__cipher__:iv must be 12 bytes", "__cipher__:auth_tag must be 16 bytes", "__cipher__:key must be 16, 24 or 32 bytes", "__cipher__:iv must be 16 bytes", "__cipher__:key must be 16, 24 or 32 bytes", [0, 16]]
-        raise "got #{r.inspect}" unless r == expected
-        r.size
-        "##,
-    );
-    assert_eq!(v.try_fixnum(), Some(6));
 }

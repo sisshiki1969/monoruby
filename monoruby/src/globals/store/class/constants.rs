@@ -592,11 +592,13 @@ impl ClassInfoTable {
                 self[target].set_name(name.to_string());
                 self[target].set_name_permanent(true);
             }
-            // Whenever the target's permanence may have flipped, walk
-            // its descendants and promote any of *their* non-permanent
-            // names too — `module m::N; end; M = m` must promote both
-            // `m` and `m::N`.
-            if self[target].is_name_permanent() {
+            // When the target's permanence flipped, walk its descendants
+            // and promote any of *their* non-permanent names too —
+            // `module m::N; end; M = m` must promote both `m` and `m::N`.
+            // A target that was permanent already had its descendants
+            // promoted when it became so (the walk covers the whole class
+            // table, so every class definition paying it was costly).
+            if target_was_non_permanent && self[target].is_name_permanent() {
                 self.propagate_permanent_name(target);
             }
         }

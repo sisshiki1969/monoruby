@@ -10,7 +10,10 @@ use std::process::{Command, Stdio};
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("IO", IO_CLASS, ObjTy::IO);
-    globals.define_builtin_class_func_with_kw(IO_CLASS, "new", io_new, 1, 2, false, &[], true);
+    // `IO.new` itself is Ruby (builtins/io.rb): `__io_new` for IO's own
+    // `initialize`, Class#new's allocate + initialize for a subclass with
+    // one of its own (the socket classes).
+    globals.define_builtin_class_func_with_kw(IO_CLASS, "__io_new", io_new, 1, 2, false, &[], true);
     globals.define_private_builtin_func_with_kw(
         IO_CLASS,
         "initialize",
@@ -140,6 +143,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "external_encoding", external_encoding, 0);
     globals.define_builtin_func(IO_CLASS, "internal_encoding", internal_encoding, 0);
     globals.define_builtin_func_rest(IO_CLASS, "wait", io_wait);
+    globals.define_builtin_func(IO_CLASS, "timeout", io_timeout, 0);
+    globals.define_builtin_func(IO_CLASS, "timeout=", io_set_timeout, 1);
     globals.define_builtin_func_with(IO_CLASS, "wait_readable", io_wait_readable, 0, 1, false);
     globals.define_builtin_func_with(IO_CLASS, "wait_writable", io_wait_writable, 0, 1, false);
     globals.define_builtin_func_with(IO_CLASS, "wait_priority", io_wait_priority, 0, 1, false);
@@ -196,17 +201,8 @@ fn io_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // Ruby while it lives only in this Rust local.
     vm.with_temp_scope(|vm| {
         vm.temp_push(obj);
+        // A block draws `IO.new`'s warning in builtins/io.rb.
         io_init_from_fd(vm, globals, lfp, obj)?;
-        if lfp.block().is_some() {
-            // CRuby warns through rb_warn; route via Kernel#warn so the
-            // Ruby-level $stderr (which specs capture) receives it.
-            let msg = Value::string_from_str(
-                "warning: IO::new() does not take block; use IO::open() instead",
-            );
-            let main = globals.main_object;
-            let _ =
-                vm.invoke_method_inner(globals, IdentId::get_id("warn"), main, &[msg], None, None);
-        }
         Ok(obj)
     })
 }
@@ -5380,6 +5376,43 @@ fn parse_wait_timeout(
         ms as i32
     };
     Ok(capped)
+}
+
+fn io_timeout_ivar() -> IdentId {
+    IdentId::get_id("/timeout")
+}
+
+///
+/// ### IO#timeout
+///
+/// - timeout -> duration or nil
+///
+/// The bound on a wait for the stream, honored where a C extension waits
+/// with the IO's own timeout (`rb_io_wait` with `RUBY_IO_TIMEOUT_DEFAULT`:
+/// the socket extension's accept / connect / recv); the interpreter's own
+/// reads and writes do not consult it.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/IO/i/timeout.html]
+#[monoruby_builtin]
+fn io_timeout(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(globals
+        .store
+        .get_ivar(lfp.self_val(), io_timeout_ivar())
+        .unwrap_or_default())
+}
+
+///
+/// ### IO#timeout=
+///
+/// - timeout = duration or nil
+#[monoruby_builtin]
+fn io_set_timeout(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let t = lfp.arg(0);
+    if !t.is_nil() {
+        parse_wait_timeout(vm, globals, Some(t))?;
+    }
+    globals.store.set_ivar(lfp.self_val(), io_timeout_ivar(), t)?;
+    Ok(t)
 }
 
 /// Raise `IOError: closed stream` if the receiver IO is closed.

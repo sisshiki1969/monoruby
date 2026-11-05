@@ -186,7 +186,6 @@ nokogiri_native = { path = "../ext/nokogiri", artifact = "cdylib", lib = false, 
 markly_native = { path = "../ext/markly", artifact = "cdylib", lib = false, target = "target" }
 bcrypt_native = { path = "../ext/bcrypt", artifact = "cdylib", lib = false, target = "target" }
 digest_native = { path = "../ext/digest", artifact = "cdylib", lib = false, target = "target" }
-openssl_native = { path = "../ext/openssl", artifact = "cdylib", lib = false, target = "target" }
 
 [dev-dependencies]
 # For the integration tests that only spawn processes: importing these

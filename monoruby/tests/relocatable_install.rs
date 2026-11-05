@@ -104,7 +104,6 @@ fn the_installed_extensions_load() {
         "markly_native",
         "bcrypt_native",
         "digest_native",
-        "openssl_native",
     ] {
         let dylib = if cfg!(target_os = "macos") {
             format!("lib{name}.dylib")
@@ -119,7 +118,7 @@ fn the_installed_extensions_load() {
     }
     // CRuby's own C extensions, built against the C API layer, are named
     // as their `require` does.
-    for name in ["date_core", "stringio", "zlib"] {
+    for name in ["date_core", "stringio", "zlib", "bigdecimal", "socket"] {
         let dylib = if cfg!(target_os = "macos") {
             format!("{name}.dylib")
         } else {

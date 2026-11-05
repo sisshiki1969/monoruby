@@ -44,7 +44,6 @@ pub(crate) use regexp::{
     regexp_inner_from_string,
 };
 mod set;
-mod socket;
 pub(crate) mod spawn;
 pub(crate) mod string;
 pub(crate) mod struct_class;
@@ -136,7 +135,6 @@ pub(crate) fn init_builtins(globals: &mut Globals) {
     data_class::init(globals);
     file::init(globals);
     argf::init(globals);
-    socket::init(globals);
     fiddle::init(globals);
     marshal::init(globals);
     math::init(globals);
