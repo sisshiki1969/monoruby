@@ -80,8 +80,10 @@ monoruby の `Value`（`value.rs`）とは層（`capi.c`）が境界で相互変
 - 判別: ローダは `dlsym(handle, "monoruby_capi_init")` があれば C API 拡張
   とみなし、`monoruby_capi_init(ctx, Init_foo)` を呼ぶ（`ext.rs`
   `load_capi_extension`）。`$LOAD_PATH` 上で見つかった `.so` は
-  `ext::is_capi_extension` が `RTLD_NOW` で試し開きして判定する。CRuby 用の
-  `.so` は `rb_*` が未解決で `dlopen` 自体が失敗する（初期化コードは走らない）。
+  `ext::is_capi_extension` がファイルのシンボル表（ELF の `.dynsym`、
+  Mach-O の `LC_SYMTAB`）に `monoruby_capi_init` があるかで判定し、開かない
+  （§3.18。`dlopen` で試すと、`libruby.so` をリンクした CRuby 用の `.so` は
+  開けてしまい、その依存ライブラリがプロセスに残る）。
 
 ### 3.2 フレームと例外
 
@@ -361,7 +363,8 @@ yield self` の形）で、ブロック literal 付きの再帰呼び出しが�
   （`Store::built_extension_on_load_path`、`require.rs`）。monoruby の
   gem home から activate した gem の `lib/` はそこに入るので、
   `gem "msgpack"; require "msgpack"` は gem 自身の `msgpack.so` に届く。
-  CRuby でビルドされた `.so` は `dlopen` できないので数えない。
+  CRuby でビルドされた `.so` はシンボル表に `monoruby_capi_init` が無いので
+  数えない（§3.18）。
 - 未捕捉例外の報告（`x (MessagePack::UnknownExtTypeError)`）が
   クラスの完全な名前を出すようになった（以前は `UnknownExtTypeError`
   のみ。`MonorubyErr::class_name` の `Other` 腕）。
@@ -703,6 +706,83 @@ weak なスタブを生成し `capi/libmonoruby_capi_stubs.a` に入れる。
   `tests/mkmf.rs` の `gem install` テストは rubygems が `date` を要求する
   ので、これで通るようになった。
 
+### 3.18 C で裏打ちされたグローバル変数、C++ の ANYARGS、alloc 関数の副作用（段階 10）
+
+gosu 1.4.6（SWIG が生成した C++ ラッパー `RubyGosu.cxx` + C++ 本体）を
+`monoruby bin/gem install` でそのままビルドして動かすために足した面。
+dewasm の DOOM（gosu のウィンドウに描く）が動作確認の相手。
+
+- **`rb_define_variable` / `rb_define_readonly_variable` /
+  `rb_define_virtual_variable` / `rb_define_hooked_variable`**（`rb_gvar_*`
+  の getter / setter / marker を含む）: 新しい ABI 項目 `gvar_hook` が、コア
+  の gvar テーブルに `GvarEntry::Native`（data ポインタ付きの C の getter /
+  setter）を置く。層は名前ごとの記録 `capi_gvar`（ID、`var`、getter、
+  setter、marker）を持ち、`gvar_get_dispatch` / `gvar_set_dispatch` が
+  `capi_dispatch` と同じフレームを積んで拡張の関数を CRuby の引数で呼ぶ。
+  setter が `rb_gvar_readonly_setter` なら setter 無しで登録し、コアが
+  CRuby と同文の NameError（`$x is a read-only variable`）を出す。`var` の
+  先の値は記録の marker（`rb_gvar_var_marker` は `*var`、
+  `rb_gvar_val_marker` は `(VALUE)var`）が、pin した 1 つのネイティブ
+  オブジェクトの mark から辿る。`defined?($x)` は getter を呼ばずに
+  `"global-variable"`（CRuby と同じ）。alias / `trace_var` / `rb_gv_get`
+  はコアの既存の経路がそのまま効く。
+- **getter の例外**: gvar の読み出しは VM / JIT に例外経路が無い
+  （`get_global_var` は素の `Value` を返す）ので、getter が raise すると
+  警告を出して nil を読む（§6）。setter の例外は普通に伝播する。
+- **`ruby/backward/cxxanyargs.hpp`**: C++ としてコンパイルされるとき
+  `ruby.h` が末尾で include する。CRuby の同名ヘッダと同じく、
+  `VALUE (*)(...)` / `void (*)(...)` / `int (*)(...)` にキャストした関数
+  ポインタを受ける overload（`rb_define_virtual_variable` /
+  `rb_define_hooked_variable`（nullptr 版含む）、`rb_rescue` /
+  `rb_rescue2` / `rb_ensure`、`rb_iterate` / `rb_block_call` / `rb_catch` /
+  `rb_catch_obj` / `rb_proc_new`、`st_foreach` / `st_foreach_check` /
+  `rb_ivar_foreach`）を提供する。SWIG は `VALUEFUNC(f)` 等でこの形に揃えて
+  渡す。`rb_define_method` 系はマクロのキャストで足りるので CRuby の
+  template dispatcher は持たない。`rb_rescue2` の overload のために
+  `rb_vrescue2` を足した。
+- **`HAVE_RB_DEFINE_ALLOC_FUNC`**: CRuby の `ruby/internal/intern/vm.h` が
+  定義する告知。無いと SWIG は Ruby 1.6 向けの `new`（特異メソッド +
+  `rb_obj_call_init`）を生成し、キーワード引数が `initialize` に届かない
+  （`Gosu::Window.new(w, h, fullscreen: ...)` が ArgumentError）。
+- **alloc 関数が置いた ivar**: 遅延 alloc（§3.7）でペイロードを本物の
+  インスタンスへ移すとき、一時オブジェクトの ivar も `rb_ivar_foreach` で
+  写す（SWIG の alloc は `@__swigtype__` を置き、全メソッドの型検査が
+  それを読む）。さらに `capi_dispatch` は C メソッドのレシーバがペイロード
+  無しのネイティブオブジェクトなら先に alloc を走らせる
+  （`materialize_payload`）ので、C の `initialize` は CRuby の `allocate`
+  直後と同じ状態を見る。
+- **`rb_obj_instance_eval` / `rb_obj_instance_exec` / `rb_mod_module_eval`
+  / `rb_mod_module_exec`**: 対応する Ruby メソッドの呼び出し。argc == 0 の
+  eval と exec は走っている C メソッドのブロックを渡す。`rb_ivar_foreach`
+  も足した（`#instance_variables` に出るものだけ）。
+- **`strlcpy` / `strlcat`**: CRuby の libruby が glibc 2.38 より前の C
+  ライブラリのために持っているもの。`date_strftime.c` が呼ぶので、glibc
+  2.35（Ubuntu 22.04）では `require "date"` が `undefined symbol: strlcpy`
+  で落ち、psych 経由で `gem install` も落ちていた。層が weak で定義し
+  （持つ libc ではそちらが勝つ）、`config.h` が `HAVE_STRLCPY` /
+  `HAVE_STRLCAT` を答える。Apple の libc は fortify のマクロとして持って
+  いて関数宣言が書き換えられてしまうので、そこでは宣言も定義もしない。
+- **`is_capi_extension` は dlopen しない**: 従来は `RTLD_NOW` で試し開きし
+  「CRuby 用の `.so` は `rb_*` が未解決で失敗する」としていたが、ホストの
+  CRuby が `--enable-shared` なら拡張は `libruby.so` をリンクしていて普通に
+  開ける。gosu の `.so`（C++）は `dlclose` で降りず、`libruby` とそれが使う
+  SDL 2.33 がプロセスに残り、stand-in（`stub/gosu`）が FFI で開いた SDL
+  2.0.18 と同居して segfault した（`bundle exec monoruby` では vendor/bundle
+  の CRuby 用 `.so` が `$LOAD_PATH` にある）。いまは `ext/dynsym.rs` が
+  ファイルから ELF の `.dynsym` / Mach-O の `LC_SYMTAB` を読んで
+  `monoruby_capi_init` の有無を答え、読めない形式のときだけ従来の dlopen に
+  落ちる。
+
+検証: `tests/capi/capi_vars.c`（`tests/capi.rs` の 10 本目）が 4 種の定義
+関数、alias / `trace_var` / `rb_gv_get`、`instance_eval` 系、alloc 関数の
+ivar を CRuby と比較する。`tests/capi/capi_cxx.cpp` は SWIG の形の C++ 拡張
+（`VALUEFUNC` キャスト、`rb_define_alloc_func` 経由の `new` とキーワード、
+`$SWIG_TRACKINGS_COUNT` 相当の virtual 変数、readonly 変数）で、C++
+コンパイラがあれば双方でビルドして比較する。`capi_cruby_build_is_not_opened`
+は `libruby` をリンクし `-z nodelete` で降りないようにした CRuby 用 `.so`
+を `$LOAD_PATH` に置き、LoadError の後に `/proc/self/maps` に `libruby` が
+無いことを見る（以前の実装では残った）。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -721,6 +801,7 @@ weak なスタブを生成し `capi/libmonoruby_capi_stubs.a` に入れる。
 | `keyword_given` | `rb_keyword_given_p`: 入ってきた call site のキーワード有無（§3.14） |
 | `enc_codepoint` | `rb_enc_codepoint_len` を monoruby の復号で（UTF-8 以外も） |
 | `backref_get` / `backref_set` | `rb_backref_get` / `rb_backref_set`: 呼び出し元 Ruby フレームの `$~`（C メソッド内の照合はそこに入るので、拡張が退避・復元する。date のパーサが行う） |
+| `gvar_hook` | `rb_define_hooked_variable` 系: グローバル変数の読み書きを data ポインタ付きの C 関数に委ねる（setter NULL で読み取り専用、§3.18） |
 
 あわせて `ary_push` / `hash_set` が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。
@@ -738,6 +819,7 @@ weak なスタブを生成し `capi/libmonoruby_capi_stubs.a` に入れる。
 | 7 | Time API（`rb_time_*`、`rb_timespec_now`）、`rb_keyword_given_p`、UTF-8 以外の `rb_enc_codepoint_len`、`OBJ_INIT_COPY`、`UNREACHABLE`、config.h の時刻系 `HAVE_*`、`HAVE_RUBY_*_H` | 済（§3.14、`tests/capi/capi_time.c`、`tests/capi_gems.rs` の strptime / yajl-ruby） |
 | 8 | 拡張内の `VALUE` を CRuby のビット列に（`Qfalse == 0`）、層が境界で変換 | 済（§3.15、`tests/capi/capi_value.c`、`tests/capi_gems.rs` の json 2.18.0 と 3.1.0） |
 | 9 | 層に無い API への参照はロードを通し呼ばれたら NotImplementedError（スタブアーカイブ）、CRuby の `ext/date` を層でビルドして同梱（`require "date"` / `time` / YAML）、1 文字演算子 ID、`RETURN_ENUMERATOR`、`$~` の退避復元 ABI、mkmf `depend` 用の CRuby ヘッダ名 | 済（§3.16〜3.17、`tests/capi/capi_ids.c`、`tests/date.rs`、ruby/spec `library/date` / `datetime` 全通過） |
+| 10 | C で裏打ちされたグローバル変数（`rb_define_*_variable`、ABI `gvar_hook`）、C++ の ANYARGS overload（`ruby/backward/cxxanyargs.hpp`）、`HAVE_RB_DEFINE_ALLOC_FUNC`、alloc 関数が置いた ivar の引き継ぎ、`rb_obj_instance_eval` 系、`strlcpy`、`.so` の判別を dlopen からシンボル表へ。gosu（SWIG の C++ ラッパー）がビルドでき dewasm の DOOM が動く | 済（§3.18、`tests/capi/capi_vars.c`、`tests/capi/capi_cxx.cpp`） |
 
 ## 6. 既知の制約
 
@@ -755,13 +837,21 @@ weak なスタブを生成し `capi/libmonoruby_capi_stubs.a` に入れる。
   `rb_proc_new` の Proc の中など）で使うとその例外が外へ出る。
 - `rb_proc_new` の Proc は `Method#to_proc` 由来なので `lambda?` が true
   （CRuby は false）。arity は同じ -1。
-- alloc 関数は遅延して呼ばれる（§3.7）。`allocate` 直後にペイロードを
-  読まずに `ObjectSpace` 等で観察しても alloc 関数はまだ走っていない。
+- alloc 関数は遅延して呼ばれる（§3.7）。ペイロードが読まれるか、その
+  インスタンスで C のメソッドが走るまでは alloc 関数はまだ走っておらず、
+  alloc 関数が置く ivar も無い（§3.18）。写すのは `#instance_variables` に
+  出る ivar だけで、隠し ivar は写らない。
+- C で裏打ちされたグローバル変数の getter が raise しても、読み出しは
+  警告を出して nil になる（VM / JIT の gvar 読み出しに例外経路が無い）。
+  setter の例外は伝播する。
+- `cxxanyargs.hpp` は `rb_define_method` 系の template dispatcher と、
+  `rb_hash_foreach` / `rb_fiber_new` / `rb_thread_create` の overload を
+  持たない（前二者はマクロが受ける、後二者は層に無い）。
 - `dsize` / `dcompact` は使わない。`RUBY_TYPED_*` のフラグはすべて無視。
 - `rb_warn` は `Kernel#warn("warning: ...")`（ファイル名・行番号は付かない）。
 - `rb_gv_get` / `rb_gv_set` は `eval` 経由。
-- mkmf の `create_header` は使えるが、`$(hdrdir)/ruby/backward/*` の中身は
-  無い。`RbConfig::CONFIG["CC"]` は Linux では
+- mkmf の `create_header` は使えるが、`$(hdrdir)/ruby/backward/2/*` の中身
+  は無い。`RbConfig::CONFIG["CC"]` は Linux では
   スナップショットの `gcc` のまま（`CC` 環境変数で上書きできる）。
 - `RARRAY_CONST_PTR` / `RARRAY_PTR` が指すのは要素のコピー（§3.15）。
   書き込みは Array に届かず、1 回の Ruby 呼び出しの中で 9 本目の Array の

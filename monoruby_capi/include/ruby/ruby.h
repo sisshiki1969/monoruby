@@ -434,6 +434,11 @@ VALUE rb_eval_string_protect(const char *str, int *state);
 VALUE rb_require(const char *feature);
 VALUE rb_f_require(VALUE self, VALUE feature);
 VALUE rb_obj_instance_variables(VALUE obj);
+/* argc == 0 is the block form, with the running C method's block. */
+VALUE rb_obj_instance_eval(int argc, const VALUE *argv, VALUE self);
+VALUE rb_obj_instance_exec(int argc, const VALUE *argv, VALUE self);
+VALUE rb_mod_module_eval(int argc, const VALUE *argv, VALUE mod);
+VALUE rb_mod_module_exec(int argc, const VALUE *argv, VALUE mod);
 VALUE rb_ivar_get(VALUE obj, ID id);
 VALUE rb_ivar_set(VALUE obj, ID id, VALUE val);
 VALUE rb_ivar_defined(VALUE obj, ID id);
@@ -446,6 +451,25 @@ VALUE rb_cv_get(VALUE klass, const char *name);
 void rb_cv_set(VALUE klass, const char *name, VALUE val);
 VALUE rb_gv_get(const char *name);
 VALUE rb_gv_set(const char *name, VALUE val);
+/* Global variables backed by C: the getter and setter get the ID and the
+ * `var` given at definition (CRuby's ruby/internal/variable.h). */
+typedef VALUE rb_gvar_getter_t(ID id, VALUE *data);
+typedef void rb_gvar_setter_t(VALUE val, ID id, VALUE *data);
+typedef void rb_gvar_marker_t(VALUE *var);
+rb_gvar_getter_t rb_gvar_undef_getter;
+rb_gvar_setter_t rb_gvar_undef_setter;
+rb_gvar_marker_t rb_gvar_undef_marker;
+rb_gvar_getter_t rb_gvar_val_getter;
+rb_gvar_setter_t rb_gvar_val_setter;
+rb_gvar_marker_t rb_gvar_val_marker;
+rb_gvar_getter_t rb_gvar_var_getter;
+rb_gvar_setter_t rb_gvar_var_setter;
+rb_gvar_marker_t rb_gvar_var_marker;
+NORETURN(rb_gvar_setter_t rb_gvar_readonly_setter);
+void rb_define_variable(const char *name, VALUE *var);
+void rb_define_virtual_variable(const char *name, rb_gvar_getter_t *getter, rb_gvar_setter_t *setter);
+void rb_define_hooked_variable(const char *name, VALUE *var, rb_gvar_getter_t *getter, rb_gvar_setter_t *setter);
+void rb_define_readonly_variable(const char *name, const VALUE *var);
 VALUE rb_Integer(VALUE v);
 VALUE rb_Float(VALUE v);
 VALUE rb_String(VALUE v);
@@ -599,6 +623,7 @@ VALUE rb_protect(VALUE (*func)(VALUE), VALUE arg, int *state);
 VALUE rb_ensure(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*e_proc)(VALUE), VALUE data2);
 VALUE rb_rescue(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALUE data2);
 VALUE rb_rescue2(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALUE data2, ...);
+VALUE rb_vrescue2(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALUE data2, va_list args);
 VALUE rb_errinfo(void);
 void rb_set_errinfo(VALUE err);
 
@@ -919,6 +944,10 @@ RUBY_EXTERN VALUE rb_stdin, rb_stdout, rb_stderr;
 
 /* ---- allocators, Data and TypedData ----------------------------------- */
 
+/* Announced as CRuby's headers announce it: SWIG-generated wrappers
+ * define `new` by hand (dropping keyword arguments on the way to
+ * `initialize`) unless they see it. */
+#define HAVE_RB_DEFINE_ALLOC_FUNC 1
 void rb_define_alloc_func(VALUE klass, rb_alloc_func_t *func);
 void rb_undef_alloc_func(VALUE klass);
 rb_alloc_func_t *rb_get_alloc_func(VALUE klass);
@@ -1179,6 +1208,21 @@ unsigned long ruby_strtoul(const char *str, char **endptr, int base);
 #define STRNCASECMP st_locale_insensitive_strncasecmp
 #define STRTOUL ruby_strtoul
 
+/* ruby/missing.h: the layer defines these for a C library without them
+ * (glibc before 2.38). A glibc that has them declares them with its
+ * exception specification (__THROW), which a redeclaration in C++ has
+ * to repeat. Apple's C library has them as fortification macros, which
+ * would rewrite a declaration, so there nothing is declared. */
+#ifndef __APPLE__
+#ifdef __THROW
+size_t strlcpy(char *dst, const char *src, size_t size) __THROW;
+size_t strlcat(char *dst, const char *src, size_t size) __THROW;
+#else
+size_t strlcpy(char *dst, const char *src, size_t size);
+size_t strlcat(char *dst, const char *src, size_t size);
+#endif
+#endif
+
 #ifdef __cplusplus
 }
 #endif
@@ -1186,5 +1230,21 @@ unsigned long ruby_strtoul(const char *str, char **endptr, int base);
 /* CRuby's ruby.h brings st.h in; so do the extensions that use an
  * st_table without including it themselves. */
 #include "ruby/st.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+/* The instance variables #instance_variables lists, each handed to
+ * `func` with `arg` until it returns ST_STOP. */
+void rb_ivar_foreach(VALUE obj, int (*func)(ID name, VALUE val, st_data_t arg), st_data_t arg);
+#ifdef __cplusplus
+}
+#endif
+
+/* The overloads a C++ extension needs to pass function pointers cast to
+ * CRuby's ANYARGS types, as CRuby's ruby.h provides them. */
+#ifdef __cplusplus
+#include "ruby/backward/cxxanyargs.hpp"
+#endif
 
 #endif /* MONORUBY_CAPI_RUBY_RUBY_H */
