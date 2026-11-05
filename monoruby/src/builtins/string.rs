@@ -6182,9 +6182,19 @@ fn string_strscan_match(
         return Ok(Value::bool(false));
     };
     let bytes = s.as_bytes();
-    if byte_pos > bytes.len() || (utf8_view && !s.check_utf8()?.is_char_boundary(byte_pos)) {
+    if byte_pos > bytes.len() {
         return Ok(Value::nil());
     }
+    // A position inside a UTF-8 character (`pos=` is a byte offset) has
+    // no `&str` view: match the raw suffix under the UTF-8 codec, which
+    // is what CRuby's `onig_match` from that pointer does (`/./` takes
+    // the lone continuation byte).
+    let native_enc = if utf8_view && !ascii && !s.check_utf8()?.is_char_boundary(byte_pos) {
+        super::regexp::check_match_encoding(&globals.store, &re, &s)?;
+        Some(onigmo_regex::OnigmoEncoding::UTF8)
+    } else {
+        native_enc
+    };
     let sub = &bytes[byte_pos..];
     STRSCAN_REGION.with(|region| {
         let mut region = region.borrow_mut();

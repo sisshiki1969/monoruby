@@ -615,6 +615,7 @@
 1ae742d4bea8541ce1070f62d646bf08	[10, 20]	class A\n          X = 10\n        end\n        class B\n          X = 20\n 
 1afceb56e5db6cb2bda8b45085df354a	[4, 5]	r = []\n        10.times { |i| r << i if (i == 4)..(i == 5) }\n        r\n
 1b00cea00812640df424fa48eaa39320	5	def f(k: ($x = 5)); true; end\n        f\n        $x\n        
+1b0a72764ff9663478006794f8919022	[nil, nil, nil, nil, false, "\\x81", "\\x82いう", true, "\\x82", 3, "い", "あ", "い", "う", 5, "い", nil, ["い", nil], Encoding::CompatibilityError]	require "strscan"\n        r = []\n        s = StringScanner.new("abcdef"
 1b0c4b3fc3652f480467aee5b851c3c0	"nil"	m = Module.new\n        defined?(m::NOPE).inspect\n        
 1b0f62c23aa971c48a14dc18be913e2c	false	(0x8000_0000_0000_0000 + 39) <= (0x8000_0000_0000_0000 + 39 + 0.0)
 1b3392078081351841956733d919bed4	[true, false, true, true, false]	class S\n              S1 = 100\n            end\n            class C 

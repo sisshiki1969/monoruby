@@ -42,6 +42,7 @@ p CapiTime.kw, CapiTime.kw(1), CapiTime.kw(1, a: 2), CapiTime.kw(a: 2), CapiTime
 h = {k: 1}
 p CapiTime.kw(**h), CapiTime.kw(1, **h), CapiTime.kw(**{})
 p CapiTime.kw2(1, a: 1), CapiTime.kw2(1, {a: 1}), CapiTime.kw2(1, 2)
+p CapiTime.kw(*1..9, a: 1), CapiTime.kw(*1..12, {a: 1}), CapiTime.kw(*1..8, a: 1)
 p CapiTime.kw(*[1, 2], **h), CapiTime.send(:kw, a: 1), CapiTime.method(:kw).call(a: 1), CapiTime.public_send(:kw, {a: 1})
 p CapiTime::KW_AT_INIT, CapiTime.kw0, CapiTime.kw_funcall({a: 1}), CapiTime.send(:send, :send, :kw, a: 1)
 class CapiTimeSub < CapiTime::Base

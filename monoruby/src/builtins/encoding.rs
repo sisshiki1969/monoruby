@@ -5009,23 +5009,15 @@ impl EncodedOperand {
     }
 
     fn code_range(&self) -> crate::value::CodeRange {
-        match self
-            .string
-            .and_then(|v| v.is_rstring_inner().map(|s| s.code_range()))
-        {
-            Some(cr) => cr,
+        match self.string {
+            Some(v) => v.as_rstring_inner().code_range(),
             None => RStringInner::from_encoding_scanned(&self.bytes, self.encoding).code_range(),
         }
     }
 
+    /// Only asked of a String operand.
     fn is_empty(&self) -> bool {
-        match self
-            .string
-            .and_then(|v| v.is_rstring_inner().map(|s| s.len() == 0))
-        {
-            Some(empty) => empty,
-            None => self.bytes.is_empty(),
-        }
+        self.string.unwrap().as_rstring_inner().len() == 0
     }
 }
 

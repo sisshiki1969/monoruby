@@ -412,8 +412,11 @@ unsafe fn args(argv: *const MrValue, argc: c_int) -> Vec<Value> {
         .collect()
 }
 
-/// Arguments the trampoline hands over without a heap buffer.
+/// Arguments the trampoline hands over without a heap buffer: every
+/// fixed arity (`rb_define_method` takes at most 15) and the fixed
+/// slots of a variadic method.
 const VARIADIC_SMALL: usize = 16;
+const _: () = assert!(crate::executor::frame::VARIADIC_CAP <= VARIADIC_SMALL);
 
 /// The `BuiltinFn` of every extension method.
 extern "C" fn ext_method_trampoline(
@@ -452,13 +455,9 @@ extern "C" fn ext_method_trampoline(
             _ => &small[..n],
         }
     } else {
+        // `define_ext_method` refuses an arity past 15.
         let n = m.argc as usize;
-        let buf = if n <= VARIADIC_SMALL {
-            &mut small[..n]
-        } else {
-            big.resize(n, 0);
-            &mut big[..]
-        };
+        let buf = &mut small[..n];
         for (i, slot) in buf.iter_mut().enumerate() {
             *slot = lfp.arg(i).id();
         }
@@ -1662,6 +1661,11 @@ fn define_ext_method(
     argc: c_int,
     flags: u32,
 ) {
+    // The trampoline hands a fixed arity over in a stack array.
+    assert!(
+        argc == MR_ARGC_VARIADIC || (0..=15).contains(&argc),
+        "extension method `{name}`: arity {argc} out of range"
+    );
     let t: BuiltinFn = ext_method_trampoline;
     let singleton = flags & MR_METHOD_SINGLETON != 0;
     let private = flags & MR_METHOD_PRIVATE != 0;

@@ -266,6 +266,32 @@ fn strscan_extended_api() {
     );
 }
 
+/// A scan position past the end (the subject shrank under the scanner)
+/// matches nothing, for both pattern kinds; one inside a UTF-8 character
+/// matches the raw suffix as CRuby's `onig_match` does.
+#[test]
+fn strscan_position_out_of_subject() {
+    run_test_once(
+        r#"
+        require "strscan"
+        r = []
+        s = StringScanner.new("abcdef")
+        s.pos = 5
+        s.string.replace("ab")
+        r << s.scan(/a/) << s.scan("a") << s.scan_until(/b/) << s.check_until("b") << s.matched?
+        u = StringScanner.new("あいう")
+        u.pos = 1
+        r << u.scan(/./) << u.check_until(/う/) << u.matched?
+        u.pos = 2
+        r << u.scan(/./) << u.pos << u.scan(/い/) << u.pre_match << u.matched << u.check_until("う")
+        u.pos = 1
+        r << u.skip_until(/(い)(x)?/) << u[1] << u[2] << u.captures
+        r << (u.pos = 1; u.scan(/\x81/n) rescue $!.class)
+        r
+        "#,
+    );
+}
+
 #[test]
 fn strscan_fallback_subjects_and_pattern_types() {
     // A BINARY subject with 8-bit content is matched in place on its raw
