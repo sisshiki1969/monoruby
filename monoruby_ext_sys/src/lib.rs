@@ -654,6 +654,9 @@ pub struct MrApi {
     /// there (after `rb_str_modify_expand`) before `rb_str_set_len`. 0, or
     /// -1 with an error pending.
     pub str_modify: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue) -> c_int,
+    /// `rb_obj_class`: the class of `v`, past a singleton class (and an
+    /// include class), as `Kernel#class` answers without dispatching.
+    pub obj_class: unsafe extern "C" fn(ctx: *mut MrContext, v: MrValue) -> MrValue,
 }
 
 /// [`MrApi::io_state`]'s result. `mode` holds CRuby's FMODE_* bits.

@@ -509,6 +509,8 @@ fn build_capi_extensions(capi_dir: &Path) {
         defines: &'static [&'static str],
         /// Links zlib (`zlib_link`).
         zlib: bool,
+        /// Links the system OpenSSL (`openssl_link`); not built without one.
+        openssl: bool,
         /// Added to `defines` on Linux / macOS: what `extconf.rb` finds
         /// there, for an extension whose configuration is per platform.
         linux: &'static [&'static str],
@@ -522,6 +524,7 @@ fn build_capi_extensions(capi_dir: &Path) {
             // `tm_gmtoff` is in every target's `struct tm`.
             defines: &["HAVE_STRUCT_TM_TM_GMTOFF"],
             zlib: false,
+            openssl: false,
             linux: &[],
             macos: &[],
         },
@@ -532,6 +535,7 @@ fn build_capi_extensions(capi_dir: &Path) {
             // The layer has both (`ruby/re.h`, capi.c).
             defines: &["HAVE_ONIG_REGION_MEMSIZE", "HAVE_RB_REG_ONIG_MATCH", "HAVE_RB_DEPRECATE_CONSTANT"],
             zlib: false,
+            openssl: false,
             linux: &[],
             macos: &[],
         },
@@ -551,6 +555,7 @@ fn build_capi_extensions(capi_dir: &Path) {
                 "HAVE_STDLIB_H",
             ],
             zlib: false,
+            openssl: false,
             linux: &[],
             macos: &[],
         },
@@ -560,6 +565,7 @@ fn build_capi_extensions(capi_dir: &Path) {
             files: &["stringio.c"],
             defines: &[],
             zlib: false,
+            openssl: false,
             linux: &[],
             macos: &[],
         },
@@ -576,6 +582,7 @@ fn build_capi_extensions(capi_dir: &Path) {
                 "HAVE_ZLIB_SIZE_T_FUNCS",
             ],
             zlib: true,
+            openssl: false,
             linux: &[],
             macos: &[],
         },
@@ -589,13 +596,36 @@ fn build_capi_extensions(capi_dir: &Path) {
             ],
             defines: &[],
             zlib: false,
+            openssl: false,
             // `extconf.h` (next to the sources) is what CRuby 4.0.6's
             // extconf.rb finds on Linux (glibc) and on macOS.
             linux: &["_GNU_SOURCE", "RUBY_EXTCONF_H=\"extconf.h\""],
             macos: &["__APPLE_USE_RFC_3542", "RUBY_EXTCONF_H=\"extconf.h\""],
         },
+        Ext {
+            name: "openssl",
+            dir: "openssl",
+            files: &[
+                "ossl.c", "ossl_asn1.c", "ossl_bio.c", "ossl_bn.c", "ossl_cipher.c",
+                "ossl_config.c", "ossl_digest.c", "ossl_engine.c", "ossl_hmac.c", "ossl_kdf.c",
+                "ossl_ns_spki.c", "ossl_ocsp.c", "ossl_pkcs12.c", "ossl_pkcs7.c", "ossl_pkey.c",
+                "ossl_pkey_dh.c", "ossl_pkey_dsa.c", "ossl_pkey_ec.c", "ossl_pkey_rsa.c",
+                "ossl_provider.c", "ossl_rand.c", "ossl_ssl.c", "ossl_ssl_session.c", "ossl_ts.c",
+                "ossl_x509.c", "ossl_x509attr.c", "ossl_x509cert.c", "ossl_x509crl.c",
+                "ossl_x509ext.c", "ossl_x509name.c", "ossl_x509req.c", "ossl_x509revoked.c",
+                "ossl_x509store.c",
+            ],
+            // `extconf.h` (next to the sources): what CRuby 4.0.6's
+            // extconf.rb finds against OpenSSL 3.x.
+            defines: &["RUBY_EXTCONF_H=\"extconf.h\""],
+            zlib: false,
+            openssl: true,
+            linux: &[],
+            macos: &[],
+        },
     ];
     let zlib = zlib_link();
+    let openssl = openssl_link();
     let dest = capi_extensions_dir();
     let _ = fs::remove_dir_all(&dest);
     fs::create_dir_all(&dest).unwrap();
@@ -603,6 +633,13 @@ fn build_capi_extensions(capi_dir: &Path) {
     // `ext::DLEXT`: the suffix `find_extension` looks for.
     let dlext = if macos { "dylib" } else { "so" };
     for ext in EXTENSIONS {
+        if ext.openssl && openssl.is_none() {
+            println!(
+                "cargo:warning={} not built (no OpenSSL found: install libssl-dev / openssl@3, or set OPENSSL_DIR); its library is unavailable",
+                ext.name
+            );
+            continue;
+        }
         let src_dir = PathBuf::from("../monoruby_capi/ext").join(ext.dir);
         println!("cargo:rerun-if-changed={}", src_dir.display());
         let mut build = cc::Build::new();
@@ -626,6 +663,13 @@ fn build_capi_extensions(capi_dir: &Path) {
             && let Some(inc) = &zlib.include
         {
             build.include(inc);
+        }
+        if ext.openssl
+            && let Some(ssl) = &openssl
+        {
+            for inc in &ssl.include {
+                build.include(inc);
+            }
         }
         for f in ext.files {
             build.file(src_dir.join(f));
@@ -652,6 +696,11 @@ fn build_capi_extensions(capi_dir: &Path) {
         if ext.zlib {
             link.args(&zlib.link);
         }
+        if ext.openssl
+            && let Some(ssl) = &openssl
+        {
+            link.args(&ssl.link);
+        }
         link.arg("-lm");
         match link.status() {
             Ok(status) if status.success() => {}
@@ -659,6 +708,63 @@ fn build_capi_extensions(capi_dir: &Path) {
             Err(e) => println!("cargo:warning={} not linked ({e}); its library is unavailable", ext.name),
         }
     }
+}
+
+/// Where `openssl.so` finds the system OpenSSL (headers and `-lssl
+/// -lcrypto`), in openssl-sys's order: `OPENSSL_DIR` (`<dir>/include`,
+/// `<dir>/lib`), then `pkg-config openssl`, then Homebrew's keg-only
+/// `openssl@3` (not on pkg-config's default path), then the compiler's
+/// own search path. `None` when no `openssl/ssl.h` is found: the
+/// extension is then not built.
+struct OpensslLink {
+    include: Vec<PathBuf>,
+    link: Vec<std::ffi::OsString>,
+}
+
+fn openssl_link() -> Option<OpensslLink> {
+    println!("cargo:rerun-if-env-changed=OPENSSL_DIR");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    let ssl_libs = || vec!["-lssl".into(), "-lcrypto".into()];
+    let from_dir = |dir: &Path| {
+        let include = dir.join("include");
+        include.join("openssl/ssl.h").is_file().then(|| {
+            let mut link: Vec<std::ffi::OsString> = vec![format!("-L{}", dir.join("lib").display()).into()];
+            link.extend(ssl_libs());
+            OpensslLink {
+                include: vec![include],
+                link,
+            }
+        })
+    };
+    if let Some(dir) = std::env::var_os("OPENSSL_DIR") {
+        return from_dir(Path::new(&dir));
+    }
+    let pkg_config = |args: &[&str]| -> Option<Vec<String>> {
+        let out = std::process::Command::new("pkg-config").args(args).arg("openssl").output().ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).split_whitespace().map(str::to_string).collect())
+    };
+    if let (Some(cflags), Some(libs)) = (pkg_config(&["--cflags-only-I"]), pkg_config(&["--libs"])) {
+        let include: Vec<PathBuf> = cflags.iter().filter_map(|f| f.strip_prefix("-I")).map(PathBuf::from).collect();
+        let found = include.iter().any(|i| i.join("openssl/ssl.h").is_file())
+            || Path::new("/usr/include/openssl/ssl.h").is_file();
+        if found {
+            return Some(OpensslLink {
+                include,
+                link: libs.into_iter().map(Into::into).collect(),
+            });
+        }
+    }
+    for dir in ["/opt/homebrew/opt/openssl@3", "/usr/local/opt/openssl@3"] {
+        if let Some(link) = from_dir(Path::new(dir)) {
+            return Some(link);
+        }
+    }
+    Path::new("/usr/include/openssl/ssl.h").is_file().then(|| OpensslLink {
+        include: vec![],
+        link: ssl_libs(),
+    })
 }
 
 /// How `zlib.so` gets zlib: the copy libz-sys compiled (`bundled-zlib`,

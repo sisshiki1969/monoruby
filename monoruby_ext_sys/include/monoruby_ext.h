@@ -245,6 +245,7 @@ struct MrApi {
     int     (*io_state)(MrContext *, MrValue io, MrIoState *out);  /* struct rb_io view, -1 error */
     int     (*io_update)(MrContext *, MrValue io, int fd, int mode, size_t rbuf_consumed);  /* write it back, -1 error */
     int     (*str_modify)(MrContext *, MrValue v);  /* rb_str_modify, keeps bytes past len; -1 error */
+    MrValue (*obj_class)(MrContext *, MrValue v);  /* rb_obj_class: past a singleton class */
 };
 
 /* Onigmo's entry points as linked into monoruby, types erased: regex_t *

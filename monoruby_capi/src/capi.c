@@ -2299,6 +2299,10 @@ rb_class_of(VALUE obj)
 VALUE
 rb_obj_class(VALUE obj)
 {
+    /* CRuby's rb_class_real(CLASS_OF(obj)): a class's own class is
+       Class, not its metaclass (`no implicit conversion of Class`). */
+    if (HAVE_API(obj_class))
+        return check(api->obj_class(ctx(), M(obj)));
     return rb_class_of(obj);
 }
 
@@ -4779,12 +4783,18 @@ struct nogvl_call {
     int err;
 };
 
+/* Inside a blocking region's function on this kernel thread
+ * (`rb_thread_call_with_gvl`). */
+static __thread int capi_in_nogvl;
+
 static int64_t
 nogvl_trampoline(void *arg)
 {
     struct nogvl_call *c = arg;
+    capi_in_nogvl++;
     c->result = c->func(c->data);
     c->err = errno;
+    capi_in_nogvl--;
     return 0;
 }
 
@@ -8852,4 +8862,51 @@ VALUE
 rb_fiber_scheduler_kernel_sleep(VALUE scheduler, VALUE duration)
 {
     return rb_funcall(scheduler, rb_intern("kernel_sleep"), 1, duration);
+}
+
+/* ------------------------------------------------------------------ */
+/* What CRuby's ext/openssl needs besides the above.                   */
+
+void
+rb_attr(VALUE klass, ID id, int need_reader, int need_writer, int honour_visibility)
+{
+    /* Called from an Init function, where CRuby's visibility in scope is
+       public: both spellings define public accessors (rb_define_attr). */
+    (void)honour_visibility;
+    rb_define_attr(klass, rb_id2name(id), need_reader, need_writer);
+}
+
+VALUE
+rb_str_drop_bytes(VALUE str, long len)
+{
+    rb_funcall(str, rb_intern("bytesplice"), 3, LONG2NUM(0), LONG2NUM(len), rb_str_new(NULL, 0));
+    return str;
+}
+
+static __thread VALUE capi_verbose, capi_debug;
+
+VALUE *
+rb_ruby_verbose_ptr(void)
+{
+    capi_verbose = rb_gv_get("$VERBOSE");
+    return &capi_verbose;
+}
+
+VALUE *
+rb_ruby_debug_ptr(void)
+{
+    capi_debug = rb_gv_get("$DEBUG");
+    return &capi_debug;
+}
+
+/* Re-entering Ruby from inside a blocking region is not supported: the
+ * region's function runs with no Ruby call to return to (on a pool thread
+ * under the green scheduler). openssl's key generation asks for pending
+ * interrupts this way; skipping it delivers them once the region returns. */
+void *
+rb_thread_call_with_gvl(void *(*func)(void *), void *data1)
+{
+    if (capi_in_nogvl || !capi_cur)
+        return NULL;
+    return func(data1);
 }

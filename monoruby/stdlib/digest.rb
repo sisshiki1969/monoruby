@@ -35,12 +35,18 @@ module Digest
   # `Digest::Class` includes `Digest::Instance` (so `OpenSSL::Digest`,
   # which subclasses it, has the instance API and the same ancestry).
   class Class
-    def self.digest(str, *args)
-      new(*args).update(str).digest!
+    # As CRuby's digest.c: the instance is created with the remaining
+    # arguments, and `hexdigest` goes through `digest`, which a subclass
+    # may redefine with its arguments in another order
+    # (`OpenSSL::Digest.digest(name, data)`).
+    def self.digest(*args)
+      raise ArgumentError, "no data given" if args.empty?
+      str = args.shift
+      new(*args).digest(String.try_convert(str) || raise(TypeError, "no implicit conversion of #{str.class} into String"))
     end
 
-    def self.hexdigest(str, *args)
-      new(*args).update(str).hexdigest!
+    def self.hexdigest(*args)
+      digest(*args).unpack1('H*')
     end
 
     def self.base64digest(str, *args)
@@ -78,8 +84,10 @@ module Digest
     end
     private :finish
 
+    # Without an argument, the digest of a copy (`finish` may consume the
+    # state it reads: `OpenSSL::Digest`'s does).
     def digest(str = nil)
-      return finish if str.nil?
+      return clone.__send__(:finish) if str.nil?
       reset
       update(str)
       value = finish

@@ -1,10 +1,11 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// `stdlib/openssl.rb`: `OpenSSL::Digest`, `OpenSSL::HMAC`,
-// `OpenSSL::PKCS5.pbkdf2_hmac` and `OpenSSL::KDF` are real, computed on
-// monoruby's native `Digest`, and answer byte for byte what CRuby's
-// openssl does (Rails signs cookies and derives keys through them).
+// `OpenSSL::Digest`, `OpenSSL::HMAC`, `OpenSSL::PKCS5.pbkdf2_hmac` and
+// `OpenSSL::KDF` (CRuby's ext/openssl over the system OpenSSL, with
+// `OpenSSL::Digest` under monoruby's own `Digest::Class`) answer byte for
+// byte what CRuby's openssl does (Rails signs cookies and derives keys
+// through them).
 
 #[test]
 fn openssl_digest_hmac_and_kdf_match_cruby() {

@@ -20,6 +20,7 @@
 #include <limits.h>
 #include <stdint.h>
 
+#undef RUBY_ASSERT
 #define RUBY_ASSERT(expr) assert(expr)
 #define NO_SANITIZE(x, y) y
 #ifndef PUREFUNC

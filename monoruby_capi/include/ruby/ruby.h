@@ -64,6 +64,7 @@ extern "C" {
 #define MONORUBY_CAPI 1
 
 #include "ruby/config.h"
+#include "ruby/assert.h"
 
 /* ---- VALUE and ID ----------------------------------------------------- */
 
@@ -560,6 +561,7 @@ VALUE rb_ivar_defined(VALUE obj, ID id);
 VALUE rb_iv_get(VALUE obj, const char *name);
 VALUE rb_iv_set(VALUE obj, const char *name, VALUE val);
 VALUE rb_attr_get(VALUE obj, ID id);
+void rb_attr(VALUE klass, ID name, int need_reader, int need_writer, int honour_visibility);
 VALUE rb_cvar_get(VALUE klass, ID id);
 void rb_cvar_set(VALUE klass, ID id, VALUE val);
 VALUE rb_cv_get(VALUE klass, const char *name);
@@ -749,6 +751,13 @@ VALUE rb_exc_new_str(VALUE klass, VALUE str);
 VALUE rb_syserr_new(int err, const char *msg);
 void rb_warn(const char *fmt, ...);
 void rb_warning(const char *fmt, ...);
+/* `$VERBOSE` / `$DEBUG`, read through a pointer as CRuby's are. The
+ * pointee is refreshed from the global on every call, and a store
+ * through it does not reach the global. */
+VALUE *rb_ruby_verbose_ptr(void);
+VALUE *rb_ruby_debug_ptr(void);
+#define ruby_verbose (*rb_ruby_verbose_ptr())
+#define ruby_debug   (*rb_ruby_debug_ptr())
 VALUE rb_protect(VALUE (*func)(VALUE), VALUE arg, int *state);
 VALUE rb_ensure(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*e_proc)(VALUE), VALUE data2);
 VALUE rb_rescue(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALUE data2);
@@ -951,6 +960,7 @@ char *rb_string_value_ptr(volatile VALUE *ptr);
 char *rb_string_value_cstr(volatile VALUE *ptr);
 VALUE rb_check_string_type(VALUE obj);
 VALUE rb_str_resize(VALUE str, long len);
+VALUE rb_str_drop_bytes(VALUE str, long len);
 void rb_str_set_len(VALUE str, long len);
 void rb_str_modify(VALUE str);
 void rb_str_modify_expand(VALUE str, long expand);
@@ -1086,6 +1096,7 @@ VALUE rb_hash_keys(VALUE hash);
 VALUE rb_hash_values(VALUE hash);
 VALUE rb_hash_has_key(VALUE hash, VALUE key);
 VALUE rb_hash_set_ifnone(VALUE hash, VALUE ifnone);
+#define RHASH_SET_IFNONE(h, ifnone) rb_hash_set_ifnone((VALUE)(h), (ifnone))
 VALUE rb_check_hash_type(VALUE obj);
 void rb_hash_foreach(VALUE hash, int (*func)(VALUE key, VALUE val, VALUE arg), VALUE arg);
 #define rb_hash_foreach(hash, func, arg) \

@@ -835,6 +835,7 @@ pub(crate) static MR_API: MrApi = MrApi {
     io_state: mr_io_state,
     io_update: mr_io_update,
     str_modify: mr_str_modify,
+    obj_class: mr_obj_class,
 };
 
 // ---- regexp (ruby/re.h) ----------------------------------------------
@@ -1705,6 +1706,13 @@ unsafe extern "C" fn mr_class_of(ctx: *mut MrContext, v: MrValue) -> MrValue {
     let (_, globals) = unsafe { parts(ctx) };
     let Some(v) = val(v) else { return MR_UNDEF };
     v.get_class_obj(&globals.store).as_val().id()
+}
+
+unsafe extern "C" fn mr_obj_class(ctx: *mut MrContext, v: MrValue) -> MrValue {
+    // SAFETY: the table's contract.
+    let (_, globals) = unsafe { parts(ctx) };
+    let Some(v) = val(v) else { return MR_UNDEF };
+    v.real_class(&globals.store).as_val().id()
 }
 
 unsafe extern "C" fn mr_is_kind_of(ctx: *mut MrContext, v: MrValue, klass: MrValue) -> c_int {

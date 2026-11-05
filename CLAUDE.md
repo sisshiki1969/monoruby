@@ -463,7 +463,7 @@ Registration happens in `builtins/builtins.rs` → `init_builtins()`.
 
 ## Workspace Crates
 
-Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys`, `monoruby_ext`, `ext/sqlite3`, `ext/zstd`, `ext/psych`, `ext/nokogiri`, `ext/markly`, `ext/bcrypt`, `ext/digest`, `ext/openssl`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
+Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys`, `monoruby_ext`, `ext/sqlite3`, `ext/zstd`, `ext/psych`, `ext/nokogiri`, `ext/markly`, `ext/bcrypt`, `ext/digest`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
 
 | Crate           | Purpose                                                  |
 | --------------- | -------------------------------------------------------- |
@@ -479,9 +479,8 @@ Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys
 | `ext/nokogiri` | Nokogiri's native half (`libnokogiri_native.so`, crate `nokogiri_native`): what the gem's nokogiri.so provides, over `libxml2-src` — the last stand-in moved out of the core, and the one with the most involved object lifetimes (see `doc/nokogiri.md`) |
 | `ext/markly` | The markly gem's native half (`libmarkly_native.so`, crate `markly_native`) over `comrak`, required by `gem/markly/markly.rb` |
 | `ext/bcrypt` | The bcrypt gem's native half (`libbcrypt_native.so`, crate `bcrypt_native`) over the `bcrypt` crate, required by `gem/bcrypt_ext.rb` |
-| `monoruby_capi/ext/` | Standard-library C extensions taken from CRuby unmodified and built against the layer by `build.rs` (`build_capi_extensions`, objects via the `cc` crate, then linked `-shared` with the layer's archives) into `<install root>/ext/<name>.so`, where `require` finds them like the Rust extensions. Today `date/` (CRuby 4.0.6's `ext/date`, the date gem 3.5.1): `require "date"` (`stdlib/date.rb` is CRuby's `ext/date/lib/date.rb`, which requires `date_core`), and with it `time`, `psych`/YAML and rubygems' `gem build`; and `strscan/`, `stringio/`, `zlib/` (CRuby 4.0.6's, unmodified), loaded by the stub-tree `stdlib/{strscan,stringio,zlib}.rb` (`require "strscan.so"` etc., so they win over a host gem without booting rubygems). `bigdecimal/` is the bigdecimal gem 4.0.1's `ext/bigdecimal` (the version CRuby 4.0.6 bundles), loaded by the gem's own `lib/` vendored as `gem/bigdecimal.rb` + `gem/bigdecimal/`. `socket/` is CRuby 4.0.6's `ext/socket` (with stand-ins for the internal headers it includes and an `extconf.h` per OS), loaded by `stdlib/socket.rb`, CRuby's own `ext/socket/lib/socket.rb`; the layer hands it a `struct rb_io` per Ruby call, synced with the IO object through the ABI's `io_state` / `io_update` (`GetOpenFile`, `MakeOpenFile` then `fptr->fd = fd`, `fptr->mode` bits), and `IO.new` on a subclass with its own `initialize` runs allocate + initialize (`builtins/io.rb`). `zlib.so` links the bundled libz statically (`libz-sys`'s archive; `-lz` under `system-zlib`). A process running several interpreters (the test harness) gives each its own mapping of a C-API extension — the first the file, later ones a private copy — since an extension's C statics belong to one interpreter (`ext::CAPI_INSTANCES`). See `doc/c_api.md` §3.17 and §3.19 |
-| `ext/digest` | `Digest`'s one-shot hashing plus `OpenSSL::HMAC` / `PKCS5`'s HMAC and PBKDF2 (`libdigest_native.so`, crate `digest_native`) over RustCrypto's md-5 / sha1 / sha2 / hmac / pbkdf2, required by `stdlib/digest.rb`. rubygems hashes `.gem` files with it, so like `zlib.so` it is part of every install |
-| `ext/openssl` | `OpenSSL::Cipher`'s AES-GCM / AES-CBC (`libopenssl_native.so`, crate `openssl_native`) over RustCrypto's aes-gcm / aes / cbc, required by `stdlib/openssl.rb` |
+| `monoruby_capi/ext/` | Standard-library C extensions taken from CRuby unmodified and built against the layer by `build.rs` (`build_capi_extensions`, objects via the `cc` crate, then linked `-shared` with the layer's archives) into `<install root>/ext/<name>.so`, where `require` finds them like the Rust extensions. Today `date/` (CRuby 4.0.6's `ext/date`, the date gem 3.5.1): `require "date"` (`stdlib/date.rb` is CRuby's `ext/date/lib/date.rb`, which requires `date_core`), and with it `time`, `psych`/YAML and rubygems' `gem build`; and `strscan/`, `stringio/`, `zlib/` (CRuby 4.0.6's, unmodified), loaded by the stub-tree `stdlib/{strscan,stringio,zlib}.rb` (`require "strscan.so"` etc., so they win over a host gem without booting rubygems). `bigdecimal/` is the bigdecimal gem 4.0.1's `ext/bigdecimal` (the version CRuby 4.0.6 bundles), loaded by the gem's own `lib/` vendored as `gem/bigdecimal.rb` + `gem/bigdecimal/`. `socket/` is CRuby 4.0.6's `ext/socket` (with stand-ins for the internal headers it includes and an `extconf.h` per OS), loaded by `stdlib/socket.rb`, CRuby's own `ext/socket/lib/socket.rb`; the layer hands it a `struct rb_io` per Ruby call, synced with the IO object through the ABI's `io_state` / `io_update` (`GetOpenFile`, `MakeOpenFile` then `fptr->fd = fd`, `fptr->mode` bits), and `IO.new` on a subclass with its own `initialize` runs allocate + initialize (`builtins/io.rb`). `openssl/` is CRuby 4.0.6's `ext/openssl`, linked against the system OpenSSL (`openssl_link`; skipped with a warning when none is found), loaded by `stdlib/openssl.rb`, CRuby's `ext/openssl/lib/openssl.rb`. `zlib.so` links the bundled libz statically (`libz-sys`'s archive; `-lz` under `system-zlib`). A process running several interpreters (the test harness) gives each its own mapping of a C-API extension — the first the file, later ones a private copy — since an extension's C statics belong to one interpreter (`ext::CAPI_INSTANCES`). See `doc/c_api.md` §3.17, §3.19, §3.22 and §3.23 |
+| `ext/digest` | `Digest`'s one-shot hashing (plus HMAC and PBKDF2 natives `String.__hmac` / `__pbkdf2_hmac`) (`libdigest_native.so`, crate `digest_native`) over RustCrypto's md-5 / sha1 / sha2 / hmac / pbkdf2, required by `stdlib/digest.rb`. rubygems hashes `.gem` files with it, so like `zlib.so` it is part of every install |
 | `rubymap`       | Order-preserving Ruby-compatible HashMap/Set             |
 | `hashbrown`     | Vendored hash table (local fork)                         |
 | `ruby_traits`   | Shared trait definitions                                 |
@@ -494,15 +493,15 @@ External crates (fetched from git):
 - `onigmo-regex` — Onigmo regular expression engine
 - `ruby-prism` — prism parser bindings (pinned `monoruby-vendored` branch; see below)
 - `smallvec` — local fork with `const_generics` (pinned via git, not vendored in-tree)
-- `aes-gcm` / `aes` / `cbc` (RustCrypto) — the native half of `OpenSSL::Cipher`,
-  **in the `ext/openssl` extension** (`libopenssl_native.so`:
-  `String.__aes_gcm` / `__aes_cbc`, one-shot over the message
-  `stdlib/openssl.rb` buffers). `OpenSSL::Digest` / `HMAC` / `PKCS5` /
-  `KDF` in the same file are Ruby over `Digest`, whose hashing, HMAC and
-  PBKDF2 are **the `ext/digest` extension** (`libdigest_native.so`,
-  md-5 / sha1 / sha2 / hmac / pbkdf2). Rails' cookie encryption and key
-  derivation run on these with CRuby-identical output. The rest of
-  `openssl.rb` (PKey, X509, SSL) is still a load-only stub.
+- The **system OpenSSL** (libssl-dev on Linux, Homebrew's `openssl@3` on
+  macOS; `OPENSSL_DIR` overrides, see `build.rs` `openssl_link`) — linked
+  dynamically into `openssl.so`, CRuby 4.0.6's `ext/openssl` built on the
+  C API layer (`monoruby_capi/ext/openssl/`); `stdlib/openssl.rb` +
+  `stdlib/openssl/` are CRuby's `ext/openssl/lib/`. Without one the
+  extension is not built and `require "openssl"` raises LoadError.
+  `OpenSSL::Digest` subclasses `Digest::Class` of monoruby's own
+  `stdlib/digest.rb` (over **the `ext/digest` extension**,
+  `libdigest_native.so`, md-5 / sha1 / sha2).
 - `libyaml-safer` — a port of libyaml 0.2.5; the parser and emitter behind
   `Psych`, **in the `ext/psych` extension** (`libpsych_native.so`, required
   by `gem/psych/psych.rb`: `String.__yaml_parse` dispatches the events to a

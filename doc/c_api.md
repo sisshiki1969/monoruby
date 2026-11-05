@@ -942,8 +942,44 @@ bigdecimal gem 4.0.1 の `ext/bigdecimal` をそのまま層でビルドして�
   クラス）は Class#new と同じ allocate + initialize に回す（`builtins/io.rb`）。
 - **結果**: ruby/spec `library/socket` 1463 例で 1F（IO#close が待っている
   ファイバーをスケジューラの `fiber_interrupt` で起こす、コア側の 4.0 の機能）、
-  `library/net-ftp` 461 例で 4E（すべて OpenSSL::SSL の定数）。両スレッド
-  モデルで同じ。
+  `library/net-ftp` 461 例で 4E（すべて OpenSSL::SSL の定数。§3.23 で 0E）。
+  両スレッドモデルで同じ。
+
+### 3.23 openssl も CRuby の C 拡張に（段階 14）
+
+`stdlib/openssl.rb` は Digest / HMAC / PBKDF2 / KDF を `ext/digest` の上に、
+Cipher の AES-GCM / CBC を `ext/openssl`（RustCrypto）の上に Ruby で書き、
+PKey / X509 / SSL は読み込めるだけの空の殻だった（ruby/spec `library/openssl`
+171 例中 21F+66E、`library/net-ftp` は `OpenSSL::SSL` の定数で落ちる）。
+CRuby 4.0.6 の `ext/openssl` をそのまま層でビルドし、システムの OpenSSL
+（Linux は libssl-dev、macOS は Homebrew の openssl@3）に動的リンクする。
+`stdlib/openssl.rb` と `stdlib/openssl/*.rb` は CRuby の `ext/openssl/lib/`
+（`require 'openssl.so'`）。`ext/openssl` crate は削除した。
+
+- **OpenSSL の見つけ方**（`build.rs` `openssl_link`）: openssl-sys と同じ順で
+  `OPENSSL_DIR`（`<dir>/include`、`<dir>/lib`）、`pkg-config openssl`、
+  Homebrew の keg-only な `openssl@3`（pkg-config の既定の探索路に無い）、
+  コンパイラ自身の探索路。`openssl/ssl.h` が見つからなければ拡張は作らず
+  警告だけ出す（`require "openssl"` が LoadError になる。monoruby 自体は動く）。
+  `extconf.h` は OpenSSL 3.x に対する extconf.rb の検査結果。
+- **層に足したもの**: `rb_attr`（`rb_define_attr` と同じく常に public。
+  C から `attr_reader` を呼ぶと拡張を require した場所の可視性、トップレベルの
+  private になる）、`rb_str_drop_bytes`、`ruby_verbose` / `ruby_debug`
+  （`rb_ruby_verbose_ptr`: 呼ぶたびにグローバルから読み直すポインタ）、
+  `rb_thread_call_with_gvl`（GVL を外した区間の中からは呼ばない: 鍵生成の
+  割り込み確認だけが使い、区間が返ってから届く）、`RHASH_SET_IFNONE`、
+  `ruby/assert.h`（`RUBY_DEBUG` なしの CRuby と同じく検査しない）。
+- **`rb_obj_class`**: `rb_class_of` を返していたので、クラスオブジェクトには
+  そのメタクラスが返り、`StringValue(klass)` の TypeError が
+  `#<Class:OpenSSL::Digest::SHA1>` になった。ABI `obj_class` で特異クラスを
+  飛ばした本当のクラスを返す。
+- **`Digest::Class`**（monoruby の Ruby 実装 `stdlib/digest.rb`）: CRuby の
+  digest.c と同じく `hexdigest(*args)` は `digest(*args)` を通る
+  （`OpenSSL::Digest.digest(name, data)` が引数の順を入れ替えて再定義する）。
+  引数なしの `Instance#digest` は複製の `finish`（OpenSSL::Digest の `finish`
+  は読んだ状態を消費する）。
+- **結果**: ruby/spec `library/openssl` 173 例 / `library/net-ftp` 461 例とも
+  0F 0E。
 
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
@@ -976,6 +1012,7 @@ bigdecimal gem 4.0.1 の `ext/bigdecimal` をそのまま層でビルドして�
 | `obj_freeze` | `rb_obj_freeze` を `Kernel#freeze` の呼び出しなしで |
 | `io_state` / `io_update` | 層の `struct rb_io` と IO オブジェクトの同期（§3.22） |
 | `str_modify` | `rb_str_modify`: 長さより後ろのバイトに触れない（§3.22） |
+| `obj_class` | `rb_obj_class`: 特異クラスを飛ばした本当のクラス（§3.23） |
 
 あわせて `ary_push` / `hash_set` が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。
@@ -997,6 +1034,7 @@ bigdecimal gem 4.0.1 の `ext/bigdecimal` をそのまま層でビルドして�
 | 11 | CRuby の `ext/strscan` / `ext/stringio` / `ext/zlib` を層でビルドして同梱（monoruby 専用実装と `ext/zlib` を削除）、IO / encoding / econv / mutex の API、GVL 再取得の直列化省略、1 プロセス複数インタプリタでの拡張マッピング分離 | 済（§3.19、ruby/spec `library/zlib` / `stringio` / `stringscanner` 全通過） |
 | 12 | bigdecimal gem 4.0.1 の C 拡張を層でビルドして同梱（Ruby 実装を削除）、`ruby_snprintf`、スレッドローカル / freeze の ABI | 済（§3.20、ruby/spec `library/bigdecimal` 全通過） |
 | 13 | CRuby の `ext/socket` を層でビルドして同梱（`src/builtins/socket.rs` を削除）、`rb_io_t`、待ちと fd 集合の API、`IO#timeout` | 済（§3.22、ruby/spec `library/socket` 1463 例で 1F） |
+| 14 | CRuby の `ext/openssl` を層でビルドしシステムの OpenSSL にリンク（`ext/openssl` crate と Ruby 実装を削除）、`rb_attr`、`ruby_verbose`、`rb_obj_class` の ABI | 済（§3.23、ruby/spec `library/openssl` / `net-ftp` 全通過） |
 
 ## 6. 既知の制約
 
