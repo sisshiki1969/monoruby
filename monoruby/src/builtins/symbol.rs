@@ -62,22 +62,25 @@ fn sym_to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resu
 /// The String content of `Symbol#to_s`, without the object: the name's
 /// bytes under the symbol's encoding.
 pub(crate) fn symbol_string_inner(sym: IdentId) -> RStringInner {
-    let ident_name = sym.get_ident_name_clone();
-    let (bytes, default_enc) = match &ident_name {
-        IdentName::Utf8(s) => {
-            let enc = if s.is_ascii() {
-                Encoding::UsAscii
-            } else {
-                Encoding::UTF8
-            };
-            (s.as_bytes(), enc)
-        }
-        IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
-    };
-    // A recorded source encoding (set by `String#to_sym` for
-    // UTF-16/32 etc.) overrides the byte-derived default.
-    let enc = sym.symbol_encoding().unwrap_or(default_enc);
-    RStringInner::from_encoding(bytes, enc)
+    // Borrow the name in place: cloning it cost a `String` malloc + free
+    // on every `Symbol#to_s` on top of the result's own buffer.
+    sym.with_ident_name(|ident_name, recorded| {
+        let (bytes, default_enc) = match ident_name {
+            IdentName::Utf8(s) => {
+                let enc = if s.is_ascii() {
+                    Encoding::UsAscii
+                } else {
+                    Encoding::UTF8
+                };
+                (s.as_bytes(), enc)
+            }
+            IdentName::Bytes(b) => (b.as_slice(), Encoding::Ascii8),
+        };
+        // A recorded source encoding (set by `String#to_sym` for
+        // UTF-16/32 etc.) overrides the byte-derived default.
+        let enc = recorded.unwrap_or(default_enc);
+        RStringInner::from_encoding(bytes, enc)
+    })
 }
 
 ///

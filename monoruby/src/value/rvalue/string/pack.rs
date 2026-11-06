@@ -288,7 +288,16 @@ pub(crate) fn unpack(
                 }
             }
             Template::Hex => {
-                let mut s = String::new();
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                // Write the digits straight into one pre-sized buffer: a
+                // `format!` per byte made a temporary String (and grew `s`)
+                // for every input byte — `unpack1("H*")` of a 32-byte digest
+                // was 64 mallocs.
+                let avail = b.remaining().len() * 2;
+                let mut s: Vec<u8> = Vec::with_capacity(match repeat {
+                    Some(r) => r.min(avail),
+                    None => avail,
+                });
                 if let Some(mut repeat) = repeat {
                     while repeat > 0 {
                         if let Some(chunk) = b.next() {
@@ -298,10 +307,11 @@ pub(crate) fn unpack(
                                 chunk << 4 | chunk >> 4
                             };
                             if repeat >= 2 {
-                                s.push_str(&format!("{:02x}", u));
+                                s.push(HEX[(u >> 4) as usize]);
+                                s.push(HEX[(u & 0xf) as usize]);
                                 repeat -= 2;
                             } else if repeat == 1 {
-                                s.push_str(&format!("{:x}", u >> 4));
+                                s.push(HEX[(u >> 4) as usize]);
                                 repeat -= 1;
                             }
                         } else {
@@ -315,12 +325,13 @@ pub(crate) fn unpack(
                         } else {
                             chunk << 4 | chunk >> 4
                         };
-                        s.push_str(&format!("{:02x}", u));
+                        s.push(HEX[(u >> 4) as usize]);
+                        s.push(HEX[(u & 0xf) as usize]);
                     }
                 }
                 ary.push(Value::string_from_inner(
                     crate::value::rvalue::string::RStringInner::from_encoding_scanned(
-                        s.as_bytes(),
+                        &s,
                         crate::value::Encoding::UsAscii,
                     ),
                 ));
@@ -1660,7 +1671,6 @@ fn get_pack_string_for_m(
 const BASE64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn base64_encode(data: &[u8], line_len: usize) -> String {
-    let mut result = String::new();
     let mut col = 0;
     // line_len is the number of input bytes per line (default 45 -> 60 output chars)
     let chars_per_line = if line_len == 0 {
@@ -1668,6 +1678,15 @@ fn base64_encode(data: &[u8], line_len: usize) -> String {
     } else {
         (line_len / 3) * 4 + if line_len % 3 != 0 { 4 } else { 0 }
     };
+    // Size the output once (4 chars per 3 bytes, plus the line breaks)
+    // instead of growing it by doubling from empty.
+    let quads = data.len().div_ceil(3) * 4;
+    let newlines = if chars_per_line > 0 {
+        quads.div_ceil(chars_per_line)
+    } else {
+        0
+    };
+    let mut result = String::with_capacity(quads + newlines);
 
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;

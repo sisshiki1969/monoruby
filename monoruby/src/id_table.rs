@@ -463,6 +463,16 @@ impl IdentId {
         ID.read().unwrap().get_ident_name(*self).to_string_lossy()
     }
 
+    /// Whether the name begins with `prefix`, without copying it out of
+    /// the table.
+    pub fn name_starts_with(&self, prefix: &[u8]) -> bool {
+        ID.read()
+            .unwrap()
+            .get_ident_name(*self)
+            .as_bytes()
+            .starts_with(prefix)
+    }
+
     ///
     /// Get the IdentName from *self*.
     ///
@@ -481,6 +491,20 @@ impl IdentId {
             return None;
         }
         table.get_ident_name(self).as_str().map(f)
+    }
+
+    ///
+    /// `f` on the name and its recorded source encoding (if any), under one
+    /// read of the table and without copying the name — `get_ident_name_clone`
+    /// allocates a fresh `String` / `Vec` for every call.
+    ///
+    pub(crate) fn with_ident_name<R>(
+        self,
+        f: impl FnOnce(&IdentName, Option<crate::value::Encoding>) -> R,
+    ) -> R {
+        let table = ID.read().unwrap();
+        let enc = table.enc_map.get(&self).copied();
+        f(table.get_ident_name(self), enc)
     }
 
     ///

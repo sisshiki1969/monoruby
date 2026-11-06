@@ -700,6 +700,15 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             None => return Ok(Value::nil()),
         };
         Ok(slice_match_data(&m, start, slice_len))
+    } else if let Some(sym) = lfp.arg(0).try_symbol()
+        && let Some(r) = m.regexp()
+        && let Some(members) =
+            sym.with_ident_name(|name, _| name.as_str().map(|n| r.get_group_members(n)))
+        && !members.is_empty()
+    {
+        // `m[:name]`, the common form: look the name up in place rather
+        // than copying it out of the identifier table first.
+        Ok(last_matched_member(&m, members))
     } else if let Some(sym) = group_name_of(lfp.arg(0)) {
         let members = m
             .regexp()
@@ -710,21 +719,25 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 "undefined group name reference: {sym}"
             )));
         }
-        // Among groups sharing this name, return the last one that
-        // actually matched (CRuby semantics); nil if none matched.
-        let mut result = Value::nil();
-        for i in members {
-            if let Some(s) = m.at_value(i as usize) {
-                result = s;
-            }
-        }
-        Ok(result)
+        Ok(last_matched_member(&m, members))
     } else {
         Err(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into Integer",
             lfp.arg(0).builtin_class_name(globals)
         )))
     }
+}
+
+/// Among groups sharing a name, the last one that actually matched (CRuby
+/// semantics); nil if none matched.
+fn last_matched_member(m: &crate::value::rvalue::MatchDataInner, members: Vec<i32>) -> Value {
+    let mut result = Value::nil();
+    for i in members {
+        if let Some(s) = m.at_value(i as usize) {
+            result = s;
+        }
+    }
+    result
 }
 
 /// Slice `[start, length]` semantics over a MatchData. `start` may be

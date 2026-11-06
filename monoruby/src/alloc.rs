@@ -1,7 +1,7 @@
 use crate::RValue;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 
 pub struct RurubyAlloc;
 
@@ -14,18 +14,19 @@ unsafe impl GlobalAlloc for RurubyAlloc {
         // catch in time) trips it. Costs one relaxed load when disabled.
         let limit = malloc_hard_limit();
         if limit != 0 && !MALLOC_ABORTING.load(Ordering::Relaxed) {
-            let projected = MALLOC_AMOUNT.load(Ordering::Relaxed) + layout.size();
+            let projected = malloc_amount_relaxed() + layout.size();
             if projected > limit {
                 malloc_hard_limit_abort(layout.size(), projected, limit);
             }
         }
         // Only object-scale buffers count toward the malloc-driven GC trigger;
         // huge one-shot reservations are skipped (see `MALLOC_TRACK_LIMIT`).
-        // The same size test gates `dealloc`, so accounting stays symmetric
-        // and `MALLOC_AMOUNT` never underflows.
+        // The same size test gates `dealloc`, so the accounting stays
+        // symmetric.
         if layout.size() < MALLOC_TRACK_LIMIT {
-            let total = MALLOC_AMOUNT.fetch_add(layout.size(), Ordering::SeqCst) + layout.size();
-            request_gc_if_malloc_over(total);
+            if let Some(total) = malloc_account(layout.size() as isize) {
+                request_gc_if_malloc_over(total);
+            }
         }
         #[cfg(feature = "gc-log")]
         malloc_stats::record_alloc(layout.size());
@@ -41,7 +42,7 @@ unsafe impl GlobalAlloc for RurubyAlloc {
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         if layout.size() < MALLOC_TRACK_LIMIT {
-            MALLOC_AMOUNT.fetch_sub(layout.size(), Ordering::SeqCst);
+            malloc_account(-(layout.size() as isize));
         }
         #[cfg(feature = "gc-log")]
         malloc_stats::record_dealloc(layout.size());
@@ -226,7 +227,7 @@ pub(crate) mod malloc_stats {
 /// threshold near a gigabyte, so real String/Array/Hash growth would never
 /// trip a collection. No legitimate single Ruby object buffer approaches this
 /// size, and the cap gates `dealloc` identically, so a buffer is always
-/// tracked or skipped consistently and `MALLOC_AMOUNT` cannot underflow.
+/// tracked or skipped consistently and the accounting stays balanced.
 const MALLOC_TRACK_LIMIT: usize = 64 * 1024 * 1024;
 
 /// Net live bytes handed out through the global allocator for object-scale
@@ -234,7 +235,61 @@ const MALLOC_TRACK_LIMIT: usize = 64 * 1024 * 1024;
 /// triggered by external-buffer growth (large Strings/Arrays/Hashes), not
 /// only by GC-arena (`RValue`) pressure — a `String#<<` loop allocates almost
 /// no `RValue`s yet can balloon malloc memory unboundedly.
-pub static MALLOC_AMOUNT: AtomicUsize = AtomicUsize::new(0);
+///
+/// Signed, because each thread batches its own changes (see
+/// [`malloc_account`]): bytes one thread allocated but has not flushed yet
+/// can be freed, and flushed, by another, so the shared sum may dip below
+/// zero for a moment. Readers clamp it ([`malloc_amount`]).
+pub static MALLOC_AMOUNT: AtomicIsize = AtomicIsize::new(0);
+
+/// How far a thread's unflushed malloc delta may drift before it is added
+/// to `MALLOC_AMOUNT`. A locked read-modify-write on every `malloc` and
+/// `free` costs ~20 cycles apiece, and a Rails request makes ~2000 of
+/// them; batching makes it one per 32 KiB of net growth or shrinkage. The
+/// GC trigger is at least `MALLOC_THRESHOLD` (far larger), so it moves by
+/// at most this much per thread.
+const MALLOC_FLUSH: isize = 32 * 1024;
+
+thread_local! {
+    /// This thread's malloc delta not yet in `MALLOC_AMOUNT`. Const-initialized
+    /// and without a destructor, so the global allocator can touch it at any
+    /// point of the thread's life (including its own teardown).
+    static MALLOC_DELTA: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+}
+
+/// Record `delta` bytes of tracked malloc growth (negative: shrinkage).
+/// Returns the new shared total when this call flushed a batch of growth,
+/// which is the only time the GC trigger needs checking.
+#[inline]
+fn malloc_account(delta: isize) -> Option<usize> {
+    match MALLOC_DELTA.try_with(|d| {
+        let v = d.get() + delta;
+        if v.abs() < MALLOC_FLUSH {
+            d.set(v);
+            None
+        } else {
+            d.set(0);
+            Some(v)
+        }
+    }) {
+        Ok(None) => None,
+        Ok(Some(v)) => flush_malloc_delta(v),
+        // The thread-local is gone (cannot happen for a const-initialized
+        // `Cell`, but stay correct): account directly.
+        Err(_) => flush_malloc_delta(delta),
+    }
+}
+
+#[cold]
+fn flush_malloc_delta(v: isize) -> Option<usize> {
+    let total = MALLOC_AMOUNT.fetch_add(v, Ordering::Relaxed) + v;
+    (v > 0).then_some(total.max(0) as usize)
+}
+
+/// `MALLOC_AMOUNT` as a byte count, without flushing this thread's batch.
+fn malloc_amount_relaxed() -> usize {
+    MALLOC_AMOUNT.load(Ordering::Relaxed).max(0) as usize
+}
 
 /// Optional hard ceiling on malloc'd memory, set via the
 /// `MONORUBY_MALLOC_HARD_LIMIT` environment variable (bytes, with an
@@ -291,7 +346,7 @@ fn malloc_hard_limit() -> usize {
 /// guard working, since by then the process really is near the ceiling.
 pub(crate) fn would_exceed_malloc_hard_limit(size: usize) -> bool {
     let limit = malloc_hard_limit();
-    limit != 0 && MALLOC_AMOUNT.load(Ordering::Relaxed).saturating_add(size) > limit
+    limit != 0 && malloc_amount_relaxed().saturating_add(size) > limit
 }
 
 /// `"123"`, `"512K"`, `"64M"`, `"3G"` → bytes. Anything else → None.
@@ -376,7 +431,12 @@ use crate::vm::GC_FORCE_MAJOR;
 /// Live bytes in tracked `malloc` buffers (`GC.stat`'s
 /// `malloc_increase_bytes`).
 pub(crate) fn malloc_amount() -> usize {
-    MALLOC_AMOUNT.load(Ordering::Relaxed)
+    // Fold in this thread's pending batch first, so a thread reading the
+    // amount around its own allocations sees them exactly.
+    if let Ok(v) = MALLOC_DELTA.try_with(|d| d.replace(0)) {
+        MALLOC_AMOUNT.fetch_add(v, Ordering::Relaxed);
+    }
+    malloc_amount_relaxed()
 }
 
 /// The `malloc_amount` ceiling that triggers the next collection
@@ -1829,7 +1889,7 @@ impl<T: GCBox> Allocator<T> {
         if self.stress {
             crate::poll_flag::set_gc();
         }
-        let malloced = MALLOC_AMOUNT.load(std::sync::atomic::Ordering::SeqCst);
+        let malloced = malloc_amount();
         // Allow malloc to grow by half the live amount (at least
         // MALLOC_THRESHOLD) before the next GC. Additive-only growth would
         // GC every 256 KB even on a multi-GB heap; the multiplicative term

@@ -5271,12 +5271,18 @@ fn enc_ascii_compatible_p(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
-    let name = globals
-        .store
-        .get_ivar(self_, IdentId::_ENCODING)
-        .and_then(|v| v.is_str().map(|s| s.to_string()))
-        .unwrap_or_default();
-    Ok(Value::bool(is_ascii_compatible_encoding(&name)))
+    // Compare the name in place (no `String` copy): `cgi/escape` asks this
+    // for every escaped string.
+    let compatible = match globals.store.get_ivar(self_, IdentId::_ENCODING) {
+        Some(v) => match v.is_str() {
+            Some(s) => {
+                is_ascii_compatible_encoding(std::str::from_utf8(s.as_bytes()).unwrap_or(""))
+            }
+            None => is_ascii_compatible_encoding(""),
+        },
+        None => is_ascii_compatible_encoding(""),
+    };
+    Ok(Value::bool(compatible))
 }
 
 ///

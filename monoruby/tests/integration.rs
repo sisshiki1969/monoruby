@@ -165,6 +165,7 @@ mod residual_arm_rollback;
 mod retry_errinfo;
 mod return_state;
 mod ruby2_keywords;
+mod runtime_malloc_trim;
 mod scrub_block_and_replacement;
 mod self_ivar_base;
 mod set;
