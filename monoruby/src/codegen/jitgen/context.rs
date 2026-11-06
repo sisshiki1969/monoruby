@@ -3477,6 +3477,19 @@ impl<'a> JitContext<'a> {
     /// and the current frame. Returns `(ids, extra)` — see
     /// [`Self::method_caller_specialized_ids`].
     ///
+    ///
+    /// Whether the frame a `MethodRet` / `BlockBreak` of the current frame
+    /// exits to is part of this compilation unit — and so certainly on the
+    /// stack while this code runs, making the exit valid (`CheckExit`,
+    /// issue #1801).
+    ///
+    pub(super) fn nonlocal_exit_target_in_unit(&self, kind: NonlocalExitKind) -> bool {
+        match kind {
+            NonlocalExitKind::MethodRet => self.current_method_frame().is_some(),
+            NonlocalExitKind::BlockBreak => self.iter_caller_pos().is_some(),
+        }
+    }
+
     pub(super) fn iter_caller_specialized_ids(&self) -> Option<(Vec<SpecializedId>, usize)> {
         // Block inlining is lowered on aarch64 now, so `break` out of an inlined
         // block can encode its caller chain for `BlockBreakSpecialized` too.

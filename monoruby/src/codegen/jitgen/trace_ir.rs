@@ -253,6 +253,12 @@ pub(crate) enum TraceIr {
     ///
     /// break(%src)
     BlockBreak(SlotId),
+    ///
+    /// Raise LocalJumpError if the `MethodRet` / `BlockBreak` that follows
+    /// its replayed `ensure` bodies would be invalid (issue #1801).
+    ///
+    /// check_exit(kind, %val)
+    CheckExit(NonlocalExitKind, SlotId),
     /// raise(%src)
     Raise(SlotId),
     /// retry
@@ -585,6 +591,7 @@ impl TraceIr {
                 81 => TraceIr::MethodRet(SlotId::new(op1_w1)),
                 82 => TraceIr::BlockBreak(SlotId::new(op1_w1)),
                 83 => TraceIr::Raise(SlotId::new(op1_w1)),
+                89 => TraceIr::CheckExit(NonlocalExitKind::from(op2_w2), SlotId::new(op1_w1)),
                 84 => TraceIr::Retry,
                 85 => TraceIr::EnsureEnd,
                 87 => TraceIr::Redo,
@@ -903,6 +910,7 @@ impl TraceIr {
             | TraceIr::MethodRet(slot)
             | TraceIr::BlockBreak(slot)
             | TraceIr::Raise(slot)
+            | TraceIr::CheckExit(_, slot)
             | TraceIr::ToA { src: slot, .. }
             | TraceIr::Mov(_, slot)
             | TraceIr::SingletonMethodDef { obj: slot, .. }
@@ -1245,6 +1253,7 @@ impl TraceIr {
             TraceIr::MethodRet(reg) => format!("method_ret {:?}", reg),
             TraceIr::BlockBreak(reg) => format!("break {:?}", reg),
             TraceIr::Raise(reg) => format!("raise {:?}", reg),
+            TraceIr::CheckExit(kind, reg) => format!("check_exit {kind:?} {reg:?}"),
             TraceIr::Retry => format!("retry"),
             TraceIr::Redo => format!("redo"),
             TraceIr::EnsureEnd => format!("ensure_end"),

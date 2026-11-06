@@ -137,6 +137,7 @@ impl Codegen {
         let retry_op = self.a64_op_err1(runtime::err_retry as *const () as u64, false);
         let redo_op = self.a64_op_err1(runtime::err_redo as *const () as u64, false);
         let ensure_end = self.a64_op_ensure_end();
+        let check_exit = self.a64_op_check_exit();
 
         let class_def = self.a64_op_class_def(false);
         let module_def = self.a64_op_class_def(true);
@@ -271,6 +272,7 @@ impl Codegen {
             ensure_end,
             concat_regexp,
             redo: redo_op,
+            check_exit,
             defined_cvar,
             pos,
             neg,
@@ -1099,6 +1101,28 @@ impl Codegen {
             blr x9;
             b raise;
         );
+        p
+    }
+
+    /// op 89 `CheckExit`: check_nonlocal_exit(vm, globals, kind `[pc+2]`,
+    /// val `[pc+4]`); enter entry_raise on LocalJumpError, else continue.
+    pub(in crate::codegen) fn a64_op_check_exit(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
+        monoasm_arm64!(&mut self.jit,
+            ldrh x3, [x(PC.0), #(4)];
+        );
+        self.a64_slot_value(X3); // val
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            ldrh x2, [x(PC.0), #(2)];  // kind
+            mov x9, (runtime::check_nonlocal_exit as *const () as u64);
+            blr x9;
+            cbz x0, raise;
+            add x(PC.0), x(PC.0), #(16);
+        );
+        self.a64_fetch_and_dispatch();
         p
     }
 

@@ -1186,6 +1186,42 @@ fn invalid_break_and_return_are_rescued_at_the_exit() {
 }
 
 #[test]
+fn invalid_break_and_return_are_rescued_inside_an_ensure_region() {
+    // Issue #1801: the regions around an invalid exit rescue its
+    // LocalJumpError even when they have an `ensure`, and each body runs
+    // once (`CheckExit` raises ahead of the replay). `exit_value` /
+    // `reason` are CRuby's for both exits.
+    run_test(
+        r#"
+        $lj = []
+        def lj_b; proc { begin; break 7; rescue LocalJumpError => e; [e.message, e.reason, e.exit_value]; ensure; $lj << :b; end }; end
+        def lj_r; proc { x = 8; begin; return x; rescue LocalJumpError => e; [e.message, e.reason, e.exit_value]; ensure; $lj << :r; end }; end
+        def lj_n; proc { begin; begin; break :v; ensure; $lj << :in; end; rescue LocalJumpError => e; [:out, e.exit_value]; ensure; $lj << :out; end }; end
+        def lj_o; proc { begin; return 9; ensure; $lj << :o; end }; end
+        def lj_t; proc { n = 0; begin; n += 1; break n if n < 3; n; rescue LocalJumpError; retry; ensure; $lj << n; end }; end
+        o = begin; lj_o.call; rescue LocalJumpError => e; [e.class, e.exit_value]; end
+        t1 = Thread.new { begin; break 1; rescue LocalJumpError => e; e.message; ensure; $lj << :t1; end }
+        t2 = Thread.new { begin; return 2; rescue LocalJumpError => e; e.message; ensure; $lj << :t2; end }
+        res = [lj_b.call, lj_r.call, lj_n.call, o, lj_t.call, t1.value, t2.value, $lj.map(&:to_s).sort]
+        $lj = []
+        res
+        "#,
+    );
+    // Valid exits out of an `ensure` region are untouched.
+    run_test(
+        r#"
+        $lj = []
+        def vb; [1, 2, 3].each { |x| begin; break x * 10 if x == 2; ensure; $lj << x; end }; end
+        def vr; [1, 2, 3].each { |x| begin; return x * 100 if x == 3; rescue LocalJumpError; return :bad; ensure; $lj << -x; end }; end
+        l = lambda { begin; break 5; ensure; $lj << :l; end }
+        res = [vb, vr, l.call, $lj]
+        $lj = []
+        res
+        "#,
+    );
+}
+
+#[test]
 fn defined_method_one_parameter_respond_to_warns() {
     // The deprecated one-parameter `respond_to?`: warned about (naming
     // `Class#` or, for a singleton method, the receiver's `to_s` + `.`)

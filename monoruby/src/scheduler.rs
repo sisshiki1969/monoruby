@@ -1851,11 +1851,11 @@ fn finalize(globals: &mut Globals, mut thread: Value, ret: Option<Value>) {
                     // no enclosing frame on the thread's own stack:
                     // LocalJumpError (CRuby).
                     let err = match err.kind() {
-                        MonorubyErrKind::MethodReturn(..) => {
-                            MonorubyErr::localjumperr("unexpected return")
+                        MonorubyErrKind::MethodReturn(val, _) => {
+                            MonorubyErr::localjumperr_with_val("unexpected return", *val)
                         }
-                        MonorubyErrKind::BlockBreak(..) => {
-                            MonorubyErr::localjumperr("break from proc-closure")
+                        MonorubyErrKind::BlockBreak(val, ..) => {
+                            MonorubyErr::break_from_proc_closure(*val)
                         }
                         _ => err,
                     };

@@ -1449,6 +1449,17 @@ impl AsmIr {
         self.handle_error(error);
     }
 
+    pub(super) fn check_exit(&mut self, state: &AbstractFrame, kind: NonlocalExitKind, val: SlotId) {
+        let using_fpr = state.using_fpr_offset();
+        let error = self.new_error(state);
+        self.push(AsmInst::CheckExit {
+            kind,
+            val,
+            using_fpr,
+        });
+        self.handle_error(error);
+    }
+
     pub(super) fn alias_method(&mut self, state: &AbstractFrame, new: SlotId, old: SlotId) {
         let using_fpr = state.using_fpr_offset();
         let error = self.new_error(state);
@@ -3911,6 +3922,13 @@ pub(super) enum AsmInst {
 
     UndefMethod {
         undef: IdentId,
+        using_fpr: UsingFpr,
+    },
+    /// `CheckExit`: `check_nonlocal_exit(vm, globals, kind, val)`; the
+    /// trailing HandleError takes the LocalJumpError (issue #1801).
+    CheckExit {
+        kind: NonlocalExitKind,
+        val: SlotId,
         using_fpr: UsingFpr,
     },
     AliasMethod {

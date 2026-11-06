@@ -928,6 +928,11 @@ impl ISeqInfo {
     /// bodies *inside* the rescuing region have run already, which is
     /// what CRuby's unwind to the rescue does too.
     ///
+    /// An exit that replays an `ensure` body is preceded by a `CheckExit`
+    /// (issue #1801), which raises the same LocalJumpError before the
+    /// replay, where [`Self::get_exception_dest`] handles it; so the exit
+    /// itself only raises here when it replays no `ensure`.
+    ///
     pub(crate) fn invalid_exit_dest(
         &self,
         pc: BcIndex,
