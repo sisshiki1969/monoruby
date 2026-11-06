@@ -222,6 +222,7 @@ fn regexp_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         // Inherited `Regexp#initialize`: build the data directly into the
         // freshly-allocated instance.
         let inner = build_regexp_inner(vm, globals, lfp)?;
+        vm.flush_compile_warnings(globals);
         *obj.as_regexp_inner_mut() = inner;
         store_regexp_timeout(globals, obj, nanos)?;
     }

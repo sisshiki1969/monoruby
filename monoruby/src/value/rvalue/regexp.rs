@@ -43,9 +43,10 @@ thread_local! {
     /// Compile-time diagnostics Onigmo reported for regexps built
     /// since the last [`RegexpInner::drain_pending_warnings`] call.
     /// Compilation can happen with no `Executor` in reach (bytecodegen
-    /// compiles literals), so constructors queue here and the callers
-    /// that do own a vm (`Regexp.new`, the `eval` family) drain and
-    /// emit through the Ruby warning mechanism.
+    /// compiles literals), so constructors queue here: a literal moves
+    /// its own into `Store::compile_warnings` with its location, and the
+    /// run-time builders (`Regexp.new`, an interpolated literal) emit
+    /// theirs through the Ruby warning mechanism at once.
     static PENDING_REGEXP_WARNINGS: std::cell::RefCell<Vec<String>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -967,14 +968,40 @@ fn utf8_char_len(b: u8) -> usize {
 
 impl RegexpInner {
 
-    /// Create `RegexpInfo` from `escaped_str` escaping all meta characters.
     /// Take (and clear) the compile-time diagnostics queued by regexp
-    /// constructions on this thread. Callers with an `Executor` should
-    /// forward each entry to `ruby_warn`.
-    pub fn drain_pending_warnings() -> Vec<String> {
-        PENDING_REGEXP_WARNINGS.with(|w| std::mem::take(&mut *w.borrow_mut()))
+    /// constructions on this thread, each prefixed with *location*
+    /// (`"file:line"`: the literal, or the `Regexp.new` call) as CRuby's
+    /// `rb_reg_warn` prefixes it, and paired with whether it is
+    /// verbose-only.
+    ///
+    /// CRuby routes them through `rb_warn`, but Onigmo itself gates
+    /// most of them on `RTEST(ruby_verbose)` (the duplicated range,
+    /// "without escape" and unknown-escape ones), so those are
+    /// verbose-only: `-w` / `$VERBOSE = true` shows them, the default
+    /// does not. The nested-repeat diagnostics are not gated and print
+    /// by default.
+    pub fn drain_pending_warnings(location: Option<&str>) -> Vec<(String, bool)> {
+        PENDING_REGEXP_WARNINGS
+            .with(|w| std::mem::take(&mut *w.borrow_mut()))
+            .into_iter()
+            .map(|m| {
+                let verbose_only = !m.contains("nested repeat operator");
+                let m = match location {
+                    Some(loc) => format!("{loc}: {m}"),
+                    None => m,
+                };
+                (m, verbose_only)
+            })
+            .collect()
     }
 
+    /// Whether a regexp construction on this thread queued a diagnostic
+    /// that has not been drained yet.
+    pub fn has_pending_warnings() -> bool {
+        PENDING_REGEXP_WARNINGS.with(|w| !w.borrow().is_empty())
+    }
+
+    /// Create `RegexpInfo` from `escaped_str` escaping all meta characters.
     pub fn from_escaped(text: &str) -> Result<Self> {
         RegexpInner::with_option_and_encoding(Self::escape(text), 0, OnigmoEncoding::UTF8)
     }
