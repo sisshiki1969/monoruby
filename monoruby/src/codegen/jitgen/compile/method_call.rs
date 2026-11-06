@@ -1455,7 +1455,16 @@ impl<'a> JitContext<'a> {
                                 state.is_C_immediate(i)
                                     || state.is_fpr_resident(i)
                                     || state.virtual_at(i).is_some()
-                            })));
+                            }))
+                        // Literal keywords are parameters like any other
+                        // (`LinkMode::from_caller` binds each one's mode
+                        // into the callee's keyword slot): a constant or
+                        // an unboxed float among them is as much worth
+                        // specializing for as a positional one.
+                        || (callsite.kw_len() != 0
+                            && (callsite.kw_pos..callsite.kw_pos + callsite.kw_len()).any(
+                                |i| state.is_C_immediate(i) || state.is_fpr_resident(i),
+                            )));
                 let iseq_block = block_fid.map(|fid| self.store[fid].is_iseq()).flatten();
                 // The forwarded `initialize` inside the Ruby `Class#new`
                 // (the privileged `recv.__builtin_initialize__(...)`
