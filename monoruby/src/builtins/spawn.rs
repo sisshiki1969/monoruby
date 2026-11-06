@@ -91,15 +91,12 @@ impl ExecSpec {
 /// `fd` must be an fd this process owns.
 unsafe fn release_pty_slave(fd: i32) {
     // SAFETY: plain fd syscalls; `fd` is ours (caller's contract) and
-    // `null` is a fresh descriptor closed again below.
+    // `null` is a fresh descriptor closed again below. Should the open
+    // fail, `dup2` / `close` of -1 are harmless EBADFs and the slave
+    // stays as it was.
     unsafe {
         let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR | libc::O_CLOEXEC);
-        if null < 0 {
-            return;
-        }
-        if libc::dup2(null, fd) >= 0 {
-            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
-        }
+        libc::dup2(null, fd);
         libc::close(null);
     }
 }
