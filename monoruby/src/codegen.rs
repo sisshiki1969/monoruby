@@ -636,6 +636,22 @@ impl JitModule {
         (ptr0, ptr1)
     }
 
+    /// `(base, bytes written so far)` of each of the two code pages, for
+    /// `fork::JitInheritance`. Only reads the cursors: no write mode is
+    /// entered (the forking thread returns into code in these pages).
+    pub(crate) fn code_page_extents(&mut self) -> [(usize, usize); 2] {
+        let cur = self.jit.get_page();
+        let mut extents = [(0, 0); 2];
+        for (page, extent) in extents.iter_mut().enumerate() {
+            self.jit.select_page(page);
+            let base = self.jit.as_slice().as_ptr() as usize;
+            let pos = self.jit.get_current_address().as_ptr() as usize;
+            *extent = (base, pos - base);
+        }
+        self.jit.select_page(cur);
+        extents
+    }
+
     pub(crate) fn get_wrapper_info(
         &mut self,
         pair: (CodePtr, CodePtr),

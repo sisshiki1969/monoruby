@@ -1553,7 +1553,7 @@ fn process_fork(
     // Hold every process-global lock across the fork, so the child
     // cannot inherit one another OS thread was holding, and snapshot
     // what the child has to reset (`crate::fork`).
-    let guards = crate::fork::prepare();
+    let guards = crate::fork::prepare(crate::fork::ForkKind::Continue);
     // SAFETY: fork() in a green-thread (single OS thread) process.
     let pid = unsafe { libc::fork() };
     if pid < 0 {
@@ -1611,7 +1611,7 @@ fn process_daemon(
     // SAFETY: fork/setsid/chdir/open/dup2 on our own process; green
     // threads mean the child is single-threaded.
     unsafe {
-        let guards = crate::fork::prepare();
+        let guards = crate::fork::prepare(crate::fork::ForkKind::Continue);
         let pid = libc::fork();
         if pid < 0 {
             let err = std::io::Error::last_os_error();
@@ -2210,6 +2210,45 @@ mod tests {
             r#"
             pid = Process.fork { exit 0 }
             pid.is_a?(Integer)
+            "#,
+        );
+    }
+
+    /// A forked child inherits only the JIT code written so far (the rest
+    /// of the code pages is left out of the fork, `fork::JitInheritance`)
+    /// and maps a fresh tail at the same place: each child here compiles
+    /// a hundred new methods and runs them, the parent compiles more
+    /// between the forks, and a spawned child (which inherits no code
+    /// pages at all) still runs.
+    #[test]
+    fn fork_child_compiles_past_the_code_it_inherited() {
+        run_test_once(
+            r#"
+            res = 4.times.map do |r|
+              rd, wr = IO.pipe
+              pid = fork do
+                rd.close
+                100.times do |m|
+                  Object.define_method(:"fork_child_#{r}_#{m}") { |x| s = 0; i = 0; while i < x; s += i * m; i += 1; end; s }
+                end
+                tot = 0
+                100.times { |m| 30.times { tot += send(:"fork_child_#{r}_#{m}", 200) } }
+                wr.write tot.to_s
+                wr.close
+                exit!(0)
+              end
+              wr.close
+              v = rd.read
+              rd.close
+              Process.wait(pid)
+              ok = $?.success?
+              Object.define_method(:"fork_parent_#{r}") { |x| s = 0; i = 0; while i < x; s += i; i += 1; end; s }
+              30.times { send(:"fork_parent_#{r}", 300) }
+              [v.to_i, ok]
+            end
+            pid = spawn("true")
+            Process.wait(pid)
+            [res, $?.success?]
             "#,
         );
     }

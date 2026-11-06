@@ -3250,6 +3250,7 @@
 974291e66576b4792c6134bc16187092	{amount: 42, unit: "km"}	M = Data.define(:amount, :unit)\nM.new(42, "km").to_h
 975f29740a52c016b0753267cdbbe847	["r", "", "r", "r", "r", "", nil, nil]	str0 = "bar"\n[str0[2,1], str0[2,0], str0[2,100], str0[-1,1], str0[-1,2], str0[3,
 975fffd01b63122a02d7d00979c459c3	[4, 2]	module CslOuter\n              class CslInner\n              end\n    
+97600d2b5d51273e078647941a8eb177	[[[2955150000, true], [2955150000, true], [2955150000, true], [2955150000, true]], true]	res = 4.times.map do |r|\n              rd, wr = IO.pipe\n           
 976da7daee8c2f0938d825147f77be58	["Encoding::CompatibilityError", "Encoding::CompatibilityError", "Encoding::CompatibilityError", "Encoding::CompatibilityError", "Encoding::CompatibilityError"]	["UTF-16BE", "UTF-16LE", "UTF-32BE", "ISO-2022-JP", "UTF-7"].map do
 9773dbdaacb92270250c514bf12ac49f	[-1, [:anything, [1, 2]]]	class D\n              def respond_to_missing?(name, priv = false); 
 977723f01dd4af9bcf43bc2fb00646d8	nil	o = Object.new; o.extend(GC); o.garbage_collect
