@@ -3281,18 +3281,7 @@ fn eval_inside_block(globals: &Globals, mut lfp: Lfp, target: Lfp) -> bool {
 /// Whether `target` is on the current stack, without crossing the
 /// innermost break barrier (a synchronous thread-body boundary).
 fn lfp_reachable_within_barrier(vm: &Executor, target: Lfp) -> bool {
-    let barrier = vm.break_barrier();
-    let mut cfp = Some(vm.cfp());
-    while let Some(f) = cfp {
-        if Some(f) == barrier {
-            return false;
-        }
-        if f.lfp() == target {
-            return true;
-        }
-        cfp = f.prev();
-    }
-    false
+    callee_of_within_barrier(vm, target).is_some()
 }
 
 pub(super) extern "C" fn err_block_break(vm: &mut Executor, globals: &mut Globals, val: Value) {
@@ -3339,17 +3328,17 @@ fn block_break_outer(vm: &Executor, globals: &Globals) -> Option<Lfp> {
     Some(outer)
 }
 
-/// Like [`lfp_reachable_within_barrier`], also handing back the frame the
-/// frame of `target` is calling into: `None` when `target` is not
-/// reachable, `Some(None)` when it is the current frame itself.
+/// Finds `target` on the current stack, without crossing the innermost
+/// break barrier, and hands back the frame the frame of `target` is
+/// calling into: `None` when `target` is not reachable, `Some(None)` when
+/// it is the current frame itself.
 fn callee_of_within_barrier(vm: &Executor, target: Lfp) -> Option<Option<executor::Cfp>> {
     let barrier = vm.break_barrier();
     let mut callee = None;
     let mut cfp = Some(vm.cfp());
-    while let Some(f) = cfp {
-        if Some(f) == barrier {
-            return None;
-        }
+    while let Some(f) = cfp
+        && Some(f) != barrier
+    {
         if f.lfp() == target {
             return Some(callee);
         }
@@ -3376,29 +3365,23 @@ fn callee_of_within_barrier(vm: &Executor, target: Lfp) -> Option<Option<executo
 /// `false`, and the unwinder decides at the defining frame as before.
 ///
 fn left_receiving_call(globals: &Globals, callee: executor::Cfp, block_fid: FuncId) -> bool {
-    let slot = callee.caller_pc_slot();
-    if slot == 0 || slot % 8 != 0 {
-        return false;
-    }
-    let Some(caller) = callee.prev() else {
-        return false;
-    };
-    let Some(iseq) = globals.store[caller.lfp().func_id()].is_iseq() else {
-        return false;
-    };
-    // SAFETY: validated against the caller's bytecode span below.
-    let Some(pc) = (unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _) }) else {
-        return false;
-    };
-    if !globals.store[iseq].contains_pc(pc) {
-        return false;
-    }
     // Send-family opcodes (bytecodegen/encode.rs): 30/31 = method call,
     // 32/33 = super; op1's low 32 bits carry the CallSiteId.
-    match pc.opcode() {
+    suspended_pc(globals, callee).is_some_and(|pc| match pc.opcode() {
         30..=33 => globals.store[CallSiteId(pc.op1() as u32)].block_fid != Some(block_fid),
         _ => true,
-    }
+    })
+}
+
+/// The pc `callee`'s caller is suspended at, when `callee`'s cont-frame
+/// slot holds a pc of the caller's own bytecode.
+fn suspended_pc(globals: &Globals, callee: executor::Cfp) -> Option<crate::bytecode::BytecodePtr> {
+    let slot = callee.caller_pc_slot();
+    (slot != 0 && slot % 8 == 0).then_some(())?;
+    let iseq = globals.store[callee.prev()?.lfp().func_id()].is_iseq()?;
+    // SAFETY: validated against the caller's bytecode span below.
+    let pc = unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _) }?;
+    globals.store[iseq].contains_pc(pc).then_some(pc)
 }
 
 pub(super) extern "C" fn err_retry(vm: &mut Executor) {

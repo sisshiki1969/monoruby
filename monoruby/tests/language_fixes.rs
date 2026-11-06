@@ -1238,6 +1238,22 @@ fn break_from_a_proc_called_in_its_defining_frame_is_rescued_in_the_block() {
         res
         "#,
     );
+    // The defining frame is suspended at something other than a send
+    // carrying the block: a `yield`, or an operator / index call into a
+    // Ruby-defined method.
+    run_test(
+        r#"
+        class BrkOp; def +(pr) = pr.call; def [](pr) = pr.call; end
+        def ljy; pr = proc { break 1 }; yield(pr); rescue LocalJumpError; :outer; end
+        def ljo; pr = proc { break 2 }; BrkOp.new + pr; rescue LocalJumpError => e; [:op, e.reason, e.exit_value]; end
+        def lji; pr = proc { break 3 }; BrkOp.new[pr]; rescue LocalJumpError => e; [:idx, e.reason, e.exit_value]; end
+        [
+          ljy { |pr| begin; pr.call; rescue LocalJumpError => e; [:inner, e.reason, e.exit_value]; end },
+          ljo,
+          lji,
+        ]
+        "#,
+    );
     // Breaks out of the call that received the block stay valid, however
     // the block reaches its caller.
     run_test(
