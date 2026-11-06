@@ -3156,9 +3156,8 @@ pub(super) extern "C" fn err_method_return(vm: &mut Executor, globals: &mut Glob
 /// invalid; otherwise nothing happens and the replay and the exit follow.
 ///
 /// The `break` case checks what `err_block_break` checks: that the
-/// block's defining frame is on this stack. A defining frame that is
-/// there but no longer running the call that received the block is only
-/// found out by the unwinder, as before.
+/// block's defining frame is on this stack and still in the call that
+/// received the block ([`block_break_outer`]).
 ///
 pub(super) extern "C" fn check_nonlocal_exit(
     vm: &mut Executor,
@@ -3175,7 +3174,7 @@ pub(super) extern "C" fn check_nonlocal_exit(
         }
         NonlocalExitKind::BlockBreak => {
             if block_break_is_local(globals, vm.cfp().lfp()).is_none()
-                && block_break_outer(vm).is_none()
+                && block_break_outer(vm, globals).is_none()
             {
                 vm.set_error(MonorubyErr::break_from_proc_closure(val));
                 return None;
@@ -3298,18 +3297,7 @@ fn eval_inside_block(globals: &Globals, mut lfp: Lfp, target: Lfp) -> bool {
 /// Whether `target` is on the current stack, without crossing the
 /// innermost break barrier (a synchronous thread-body boundary).
 fn lfp_reachable_within_barrier(vm: &Executor, target: Lfp) -> bool {
-    let barrier = vm.break_barrier();
-    let mut cfp = Some(vm.cfp());
-    while let Some(f) = cfp {
-        if Some(f) == barrier {
-            return false;
-        }
-        if f.lfp() == target {
-            return true;
-        }
-        cfp = f.prev();
-    }
-    false
+    callee_of_within_barrier(vm, target).is_some()
 }
 
 pub(super) extern "C" fn err_block_break(vm: &mut Executor, globals: &mut Globals, val: Value) {
@@ -3319,7 +3307,7 @@ pub(super) extern "C" fn err_block_break(vm: &mut Executor, globals: &mut Global
         return;
     }
     let block_fid = lfp.func_id();
-    if let Some(outer) = block_break_outer(vm) {
+    if let Some(outer) = block_break_outer(vm, globals) {
         vm.set_error(MonorubyErr::block_break(val, block_fid, outer));
     } else {
         vm.set_error(MonorubyErr::break_from_proc_closure(val));
@@ -3338,12 +3326,78 @@ fn block_break_is_local(globals: &Globals, lfp: Lfp) -> Option<Lfp> {
 /// stops at the block's *defining* frame and resumes it only when its
 /// in-progress call site is the one carrying this block; any other route
 /// (a materialized Proc invoked later, a re-yield of a captured proc) is
-/// a LocalJumpError. Pre-check that the defining frame is on this stack
-/// at all, so a proc whose creation scope has returned (or lives on
-/// another thread/fiber stack) fails fast: `None` then.
-fn block_break_outer(vm: &Executor) -> Option<Lfp> {
-    let outer = vm.cfp().lfp().outer()?;
-    lfp_reachable_within_barrier(vm, outer).then_some(outer)
+/// a LocalJumpError. Decide that here, at the `break`, wherever the stack
+/// shows it, so the LocalJumpError is raised inside the block, where
+/// CRuby raises it (issue #1816): `None` when the defining frame is not
+/// on this stack (a proc whose creation scope has returned, or one on
+/// another thread/fiber stack), or when it is but has left the call that
+/// received this block (`pr = proc { break }; pr.call`).
+fn block_break_outer(vm: &Executor, globals: &Globals) -> Option<Lfp> {
+    let lfp = vm.cfp().lfp();
+    let outer = lfp.outer()?;
+    let callee = callee_of_within_barrier(vm, outer)?;
+    if let Some(callee) = callee
+        && left_receiving_call(globals, callee, lfp.func_id())
+    {
+        return None;
+    }
+    Some(outer)
+}
+
+/// Finds `target` on the current stack, without crossing the innermost
+/// break barrier, and hands back the frame the frame of `target` is
+/// calling into: `None` when `target` is not reachable, `Some(None)` when
+/// it is the current frame itself.
+fn callee_of_within_barrier(vm: &Executor, target: Lfp) -> Option<Option<executor::Cfp>> {
+    let barrier = vm.break_barrier();
+    let mut callee = None;
+    let mut cfp = Some(vm.cfp());
+    while let Some(f) = cfp
+        && Some(f) != barrier
+    {
+        if f.lfp() == target {
+            return Some(callee);
+        }
+        callee = Some(f);
+        cfp = f.prev();
+    }
+    None
+}
+
+///
+/// Whether the defining frame of the block `block_fid` — the caller of
+/// `callee` — is known to be stopped somewhere other than the call that
+/// received this block literal, which makes a `break` out of the block a
+/// LocalJumpError.
+///
+/// Read off `callee`'s cont-frame slot, the caller's suspended pc
+/// ([`executor::Cfp::caller_pc_slot`]). Every send and super that can
+/// carry a block literal writes it, in the VM and in the JIT, so a
+/// receiving call is always seen as one. A pc that is no such send — a
+/// different call, a `yield`, a class body, an operator that called into
+/// Ruby, or a stale value left by one of the latter, which do not all
+/// write the slot — is not a receiving call either, so it answers `true`
+/// too. A slot that does not hold a pc of the caller's bytecode answers
+/// `false`, and the unwinder decides at the defining frame as before.
+///
+fn left_receiving_call(globals: &Globals, callee: executor::Cfp, block_fid: FuncId) -> bool {
+    // Send-family opcodes (bytecodegen/encode.rs): 30/31 = method call,
+    // 32/33 = super; op1's low 32 bits carry the CallSiteId.
+    suspended_pc(globals, callee).is_some_and(|pc| match pc.opcode() {
+        30..=33 => globals.store[CallSiteId(pc.op1() as u32)].block_fid != Some(block_fid),
+        _ => true,
+    })
+}
+
+/// The pc `callee`'s caller is suspended at, when `callee`'s cont-frame
+/// slot holds a pc of the caller's own bytecode.
+fn suspended_pc(globals: &Globals, callee: executor::Cfp) -> Option<crate::bytecode::BytecodePtr> {
+    let slot = callee.caller_pc_slot();
+    (slot != 0 && slot % 8 == 0).then_some(())?;
+    let iseq = globals.store[callee.prev()?.lfp().func_id()].is_iseq()?;
+    // SAFETY: validated against the caller's bytecode span below.
+    let pc = unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _) }?;
+    globals.store[iseq].contains_pc(pc).then_some(pc)
 }
 
 pub(super) extern "C" fn err_retry(vm: &mut Executor) {
