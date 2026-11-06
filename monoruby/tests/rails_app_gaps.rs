@@ -189,6 +189,25 @@ fn pty_spawn_and_open() {
     );
 }
 
+/// `PTY.spawn` takes spawn's redirects too, and one listed ahead of the
+/// pty's own (`3 => w` here) leaves the slave on the child's stdin,
+/// stdout and stderr: the child reaches both the pty and the pipe.
+#[test]
+fn pty_spawn_with_an_extra_redirect() {
+    run_test_once_live(
+        r#"
+        require "pty"
+        r, w = IO.pipe
+        rr, ww, pid = PTY.spawn("sh", "-c", "echo pty; echo fd3 >&3", 3 => w)
+        w.close
+        out = +""
+        begin; loop { out << rr.readpartial(100) }; rescue Errno::EIO, EOFError; end
+        Process.wait(pid)
+        [out, r.read, $?.exitstatus]
+        "#,
+    );
+}
+
 /// `tty?` asks isatty(3) for a File (a pty's slave is one, `/dev/null`
 /// is not) and answers false for a pipe; `readpartial` on a pipe returns
 /// what is there and raises EOFError at its end.
