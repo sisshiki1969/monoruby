@@ -4097,14 +4097,14 @@ impl Executor {
             let func_id = self.method_func_id();
             globals.store[func_id].name().unwrap()
         };
-        let (mut args, kw) = match self.callsite_args(globals, lfp, callsite) {
-            Ok(args) => args,
-            Err(err) => {
-                self.set_error(err);
-                return None;
-            }
-        };
-        args.insert(0, Value::symbol(method_name));
+        let (args, kw) =
+            match self.callsite_args(globals, lfp, callsite, Some(Value::symbol(method_name))) {
+                Ok(args) => args,
+                Err(err) => {
+                    self.set_error(err);
+                    return None;
+                }
+            };
         // method_missing should always be callable regardless of visibility.
         // In Ruby, method_missing is conventionally private, but the VM must
         // still dispatch to it when a method is not found.
@@ -4143,42 +4143,43 @@ impl Executor {
         globals: &mut Globals,
         lfp: Lfp,
         callsite: CallSiteId,
+        lead: Option<Value>,
     ) -> Result<(Vec<Value>, Option<Hashmap>)> {
-        // Extract all needed fields from callsite before we mutably borrow self/globals.
         let cs = &globals.store[callsite];
         let cs_args = cs.args;
         let cs_pos_num = cs.pos_num;
-        let cs_splat_pos = cs.splat_pos().to_vec();
         let cs_kw_pos = cs.kw_pos;
         let cs_kw_len = cs.kw_len();
+        // `lead` (method_missing's method name) goes first; reserving room
+        // for it and the positionals up front makes this one allocation in
+        // the common no-splat case.
+        let mut args = Vec::with_capacity(lead.is_some() as usize + cs_pos_num);
+        args.extend(lead);
+        // Splat arguments: positions listed in splat_pos hold Array values
+        // that are flattened into the argument list.
+        let splat_pos = cs.splat_pos();
+        for i in 0..cs_pos_num {
+            let v = lfp.register(cs_args + i).unwrap();
+            if splat_pos.contains(&i)
+                && let Some(ary) = v.try_array_ty()
+            {
+                args.extend_from_slice(&ary);
+            } else {
+                args.push(v);
+            }
+        }
         // The keyword window register by register, in source order — the
         // shape the rebuilt keyword Hash has to be filled in (#1407) —
         // and the registers a statically folded duplicate drops.
-        let cs_kw_order = cs.kw_order().to_vec();
-        let cs_kw_dedup_at: Vec<usize> = (0..cs_kw_order.len())
-            .filter(|i| cs.kw_overwritten_literal(*i))
-            .collect();
-
-        // SAFETY: args_to_vec safely accesses the arguments stored in the local frame pointer.
-        // The callsite.args and callsite.pos_num are valid and within bounds.
-        let mut args = unsafe { lfp.args_to_vec(cs_args, cs_pos_num) };
-        // Expand splat arguments: positions listed in splat_pos hold Array values
-        // that must be flattened into the argument list.
-        if !cs_splat_pos.is_empty() {
-            let mut expanded = Vec::new();
-            for (i, v) in args.into_iter().enumerate() {
-                if cs_splat_pos.contains(&i) {
-                    if let Some(ary) = v.try_array_ty() {
-                        expanded.extend_from_slice(&ary);
-                    } else {
-                        expanded.push(v);
-                    }
-                } else {
-                    expanded.push(v);
-                }
-            }
-            args = expanded;
-        }
+        let (cs_kw_order, cs_kw_dedup_at): (Vec<KwElem>, Vec<usize>) = if cs_kw_len == 0 {
+            (vec![], vec![])
+        } else {
+            let order = cs.kw_order().to_vec();
+            let dedup = (0..order.len())
+                .filter(|i| cs.kw_overwritten_literal(*i))
+                .collect();
+            (order, dedup)
+        };
         let kw = if cs_kw_len == 0 {
             None
         } else {

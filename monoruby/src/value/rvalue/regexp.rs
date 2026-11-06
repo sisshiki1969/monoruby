@@ -1976,6 +1976,62 @@ impl<'a> Subject<'a> {
     }
 }
 
+/// An Onigmo register set borrowed from a small per-thread pool and
+/// returned to it on drop. A fresh `Region` costs three mallocs (the
+/// struct, then `beg` / `end` on the first match) and three frees per
+/// `sub` / `gsub` / `split` / `scan` call; a pooled one has already grown
+/// to the patterns it has seen, and `onig_search` resizes and clears it
+/// itself, so a match allocates nothing. A walk that re-enters (a block
+/// running another `gsub`) simply takes a second one.
+pub(crate) struct ScratchRegion(std::mem::ManuallyDrop<onigmo_regex::Region>);
+
+thread_local! {
+    static REGION_POOL: std::cell::RefCell<Vec<onigmo_regex::Region>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl ScratchRegion {
+    /// Regions kept per thread: enough for a few levels of nesting.
+    const POOL_MAX: usize = 4;
+
+    pub(crate) fn take() -> Self {
+        let pooled = REGION_POOL
+            .try_with(|p| p.borrow_mut().pop())
+            .ok()
+            .flatten();
+        Self(std::mem::ManuallyDrop::new(
+            pooled.unwrap_or_else(onigmo_regex::Region::new),
+        ))
+    }
+}
+
+impl Drop for ScratchRegion {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` is taken exactly once, here.
+        let region = unsafe { std::mem::ManuallyDrop::take(&mut self.0) };
+        let _ = REGION_POOL.try_with(|p| {
+            if let Ok(mut pool) = p.try_borrow_mut()
+                && pool.len() < Self::POOL_MAX
+            {
+                pool.push(region);
+            }
+        });
+    }
+}
+
+impl std::ops::Deref for ScratchRegion {
+    type Target = onigmo_regex::Region;
+    fn deref(&self) -> &onigmo_regex::Region {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ScratchRegion {
+    fn deref_mut(&mut self) -> &mut onigmo_regex::Region {
+        &mut self.0
+    }
+}
+
 /// The group spans in `region` after a successful search.
 pub(crate) fn spans_of(region: &onigmo_regex::Region) -> Spans {
     (0..region.len()).map(|i| region.pos(i)).collect()
@@ -2166,7 +2222,7 @@ impl RegexpInner {
         bang: bool,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
-            let mut region = onigmo_regex::Region::new();
+            let mut region = ScratchRegion::take();
             if !re.find_spans(subject, 0, &mut region)? {
                 vm.clear_capture_special_variables();
                 return Ok((subject.to_inner(), false));
@@ -2254,7 +2310,7 @@ impl RegexpInner {
                         Subject::text(&view, inner.encoding(), inner.needs_byte_mapping())
                     }
                 };
-                let mut region = onigmo_regex::Region::new();
+                let mut region = ScratchRegion::take();
                 if !re.find_spans(&subject, 0, &mut region)? {
                     // What `splice_all` with no replacements would build.
                     return Ok((subject.to_inner(), false));
@@ -2335,7 +2391,7 @@ impl RegexpInner {
         // (the caller's probe found nothing before it): an empty match
         // right where the previous match ended is skipped by one
         // character rather than looping forever.
-        let mut region = onigmo_regex::Region::new();
+        let mut region = ScratchRegion::take();
         let mut pos = first;
         let mut last_match_end: Option<usize> = None;
         let mut last_spans: Option<Spans> = None;
@@ -2391,7 +2447,7 @@ impl RegexpInner {
         hash_val: Value,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
-            let mut region = onigmo_regex::Region::new();
+            let mut region = ScratchRegion::take();
             if !re.find_spans(subject, 0, &mut region)? {
                 vm.clear_capture_special_variables();
                 return Ok((subject.to_inner(), false));
@@ -2553,7 +2609,7 @@ impl RegexpInner {
         // so the zero-width matches CRuby yields are all seen.
         let engine = self.engine_for(given, Some(given.is_ascii()));
         let _deadline = self.deadline();
-        let mut region = onigmo_regex::Region::new();
+        let mut region = ScratchRegion::take();
         let mut pos = 0usize;
         while pos <= given.len() {
             let found = engine
@@ -2636,7 +2692,7 @@ impl RegexpInner {
         let mut is_empty = true;
 
         vm.clear_capture_special_variables();
-        let mut region = onigmo_regex::Region::new();
+        let mut region = ScratchRegion::take();
         let mut pos = 0usize;
         let mut last_match_end: Option<usize> = None;
         while pos <= subject.len() {
@@ -2819,7 +2875,7 @@ impl RegexpInner {
         // `"foo".scan(/(?~foo)/) == ["fo", "o", ""]`). Same loop as
         // `replace_repeat`: advance past a non-empty match, and by one
         // character past an empty one (past EOS to terminate).
-        let mut region = onigmo_regex::Region::new();
+        let mut region = ScratchRegion::take();
         let mut pos = 0usize;
         while pos <= subject.len() {
             if !self.find_spans(subject, pos, &mut region)? {
@@ -2887,7 +2943,7 @@ impl RegexpInner {
         let mut copied = 0usize;
         vm.clear_capture_special_variables();
         let mut last: Option<Spans> = None;
-        let mut region = onigmo_regex::Region::new();
+        let mut region = ScratchRegion::take();
         let mut pos = 0usize;
         while pos <= subject.len() {
             if !self.find_spans(subject, pos, &mut region)? {
@@ -3171,7 +3227,7 @@ impl RegexpInner {
         owner: Value,
         replace: &RStringInner,
     ) -> Result<(RStringInner, bool)> {
-        let mut region = onigmo_regex::Region::new();
+        let mut region = ScratchRegion::take();
         if !self.find_spans(subject, 0, &mut region)? {
             vm.clear_capture_special_variables();
             return Ok((subject.to_inner(), false));

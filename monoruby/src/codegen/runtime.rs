@@ -723,7 +723,7 @@ pub(super) extern "C" fn yield_symbol_proc(
             vm.dispatch_symbol_proc_kw(globals, symbol, recv, &rest, None, None)
         }
     } else {
-        vm.callsite_args(globals, lfp, callid)
+        vm.callsite_args(globals, lfp, callid, None)
             .and_then(|(args, kw)| match (args.split_first(), kw) {
                 (Some((recv, rest)), kw) => {
                     vm.dispatch_symbol_proc_kw(globals, symbol, *recv, rest, None, kw)

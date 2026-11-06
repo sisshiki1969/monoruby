@@ -25,6 +25,10 @@ pub(crate) static FRAME_LEAK_BYTES: std::sync::atomic::AtomicU64 =
 /// borrowed — promotion never runs during a GC cycle, so this is
 /// purely defensive.
 #[inline]
+///
+/// `contents` should have room for one more word: the back-pointer slot is
+/// pushed here, and a full Vec would be reallocated (and the boxed slice
+/// shrunk again) on every promotion.
 fn wrap_promoted_frame(mut contents: Vec<u64>) -> Lfp {
     use std::sync::atomic::Ordering::Relaxed;
     FRAME_PROMOTIONS.fetch_add(1, Relaxed);
@@ -652,7 +656,9 @@ impl Lfp {
             let n = len / 8;
             let src =
                 std::slice::from_raw_parts((self.0.as_ptr() as usize + 8 - len) as *const u64, n);
-            let mut heap_lfp = wrap_promoted_frame(src.to_vec());
+            let mut v = Vec::with_capacity(n + 1);
+            v.extend_from_slice(src);
+            let mut heap_lfp = wrap_promoted_frame(v);
             heap_lfp.meta_mut().set_on_heap();
             cfp.set_lfp(heap_lfp);
             // Mark the stack slot as a tombstone so any future reader
@@ -672,7 +678,9 @@ impl Lfp {
     pub fn heap_frame(self_val: Value, mut meta: Meta) -> Self {
         let local_len = meta.reg_num() as usize - 1;
         meta.set_on_heap();
-        let mut v = vec![Value::nil().id(); local_len];
+        // + the 5 header words below + the wrapper back-pointer slot.
+        let mut v = Vec::with_capacity(local_len + 6);
+        v.resize(local_len, Value::nil().id());
         // The heap-allocated frame must mirror the stack layout
         // exactly: lfp_addr (= base + len - 8) points at LFP_OUTER,
         // and each LFP_xxx offset reads memory at lfp_addr - LFP_xxx.
@@ -695,7 +703,8 @@ impl Lfp {
         // svar, meta, outer) with zero locals. Over-allocated with
         // padding so the LFP layout stays self-consistent with the
         // header size (LFP_SELF).
-        let v: Vec<u64> = vec![
+        let mut v: Vec<u64> = Vec::with_capacity(8);
+        v.extend_from_slice(&[
             0,             // padding (matches the historical extra slot)
             0,             // padding
             self_val.id(), // LFP_SELF
@@ -703,7 +712,7 @@ impl Lfp {
             0,             // LFP_SVAR
             0,             // LFP_META — set via `set_reg_num` below
             0,             // LFP_OUTER
-        ];
+        ]);
         let mut heap_lfp = wrap_promoted_frame(v);
         heap_lfp.meta_mut().set_on_heap();
         heap_lfp.meta_mut().set_reg_num(1);

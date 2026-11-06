@@ -1768,6 +1768,19 @@ fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     } else {
         10
     };
+    use crate::value::rvalue::{Encoding, RStringInner};
+    if base == 10
+        && let RV::Fixnum(i) = lfp.self_val().unpack()
+    {
+        // The common case, rendered on the stack: `format!` would
+        // allocate a String only to copy it into the new object.
+        let mut buf = [0u8; 20];
+        let digits = fixnum_decimal(i, &mut buf);
+        return Ok(Value::string_from_inner(RStringInner::from_encoding(
+            digits,
+            Encoding::UsAscii,
+        )));
+    }
     let s = match lfp.self_val().unpack() {
         RV::Fixnum(i) => {
             if base == 10 {
@@ -1796,11 +1809,30 @@ fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
         _ => unreachable!(),
     };
-    use crate::value::rvalue::{Encoding, RStringInner};
     Ok(Value::string_from_inner(RStringInner::from_encoding(
         s.as_bytes(),
         Encoding::UsAscii,
     )))
+}
+
+/// `i` in decimal, written right-aligned into `buf`; returns the digits.
+/// A Fixnum is an i63, so 19 digits and a sign always fit.
+fn fixnum_decimal(i: i64, buf: &mut [u8; 20]) -> &[u8] {
+    let mut n = i.unsigned_abs();
+    let mut at = buf.len();
+    loop {
+        at -= 1;
+        buf[at] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    if i < 0 {
+        at -= 1;
+        buf[at] = b'-';
+    }
+    &buf[at..]
 }
 
 fn format_integer_base(mut n: u128, base: u32) -> String {

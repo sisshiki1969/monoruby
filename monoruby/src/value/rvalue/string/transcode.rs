@@ -8815,20 +8815,31 @@ pub(crate) fn jis_family_chain(
 /// `Encoding#dummy?` and `Encoding#inspect` we use this narrower
 /// match to match CRuby observed behaviour.
 pub(crate) fn is_cruby_dummy_name(name: &str) -> bool {
-    let normalized = name.to_uppercase().replace('-', "_");
     // CRuby's actual dummy-encoding set (Emacs-Mule / CESU-8 /
     // stateless-ISO-2022-JP are *not* dummy in CRuby — they are
-    // ASCII-compatible).
-    matches!(
-        normalized.as_str(),
-        "UTF_7"
-            | "UTF_16"
-            | "UTF_32"
-            | "CP50220"
-            | "CP50221"
-            | "ISO_2022_JP"
-            | "ISO_2022_JP_2"
-            | "ISO_2022_JP_KDDI"
-            | "IBM037"
-    )
+    // ASCII-compatible). Matched case-insensitively with `-` and `_`
+    // equivalent, without building a normalized copy: this runs on every
+    // case-mapping call (`casemap_mustnot_broken`).
+    const DUMMY: [&str; 9] = [
+        "UTF_7",
+        "UTF_16",
+        "UTF_32",
+        "CP50220",
+        "CP50221",
+        "ISO_2022_JP",
+        "ISO_2022_JP_2",
+        "ISO_2022_JP_KDDI",
+        "IBM037",
+    ];
+    fn norm(b: u8) -> u8 {
+        if b == b'-' {
+            b'_'
+        } else {
+            b.to_ascii_uppercase()
+        }
+    }
+    let name = name.as_bytes();
+    DUMMY
+        .iter()
+        .any(|d| d.len() == name.len() && d.bytes().zip(name.iter()).all(|(d, &n)| d == norm(n)))
 }

@@ -405,7 +405,7 @@ fn file_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             check_path_encoding(globals, &rs)?;
         }
     }
-    let mut parts = vec![];
+    let mut parts = Vec::with_capacity(lfp.arg(0).as_array().len());
     let mut seen = vec![];
     for v in lfp.arg(0).as_array().iter().cloned() {
         flatten(vm, globals, &mut parts, v, &mut seen)?;
@@ -415,7 +415,9 @@ fn file_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     // separators and drops the left part's trailing ones ("usr//" + "/bin" ->
     // "usr/bin", "usr/" + "//bin" -> "usr//bin"); when exactly one side has one
     // it is reused; when neither does a "/" is inserted.
-    let mut path: Vec<u8> = Vec::new();
+    // Room for every component plus a separator between each pair.
+    let mut path: Vec<u8> =
+        Vec::with_capacity(parts.iter().map(|(p, _)| p.len() + 1).sum::<usize>());
     // CRuby's `rb_file_join` starts from a fresh buffer (BINARY — hence
     // `File.join()` and `File.join([])` are ASCII-8BIT), copies the first
     // component's encoding onto it, and `rb_str_buf_append`s the rest, so

@@ -66,6 +66,9 @@ const IDENT_BIT: u8 = 0b0100_0000;
 /// Max pairs held inline: the full 48-byte payload.
 pub(crate) const INLINE_CAP: usize = 3;
 
+/// Capacity of the map an inline hash is promoted to (see `promote`).
+const PROMOTED_CAP: usize = 8;
+
 //
 // ## Layout constants for JIT-generated code
 //
@@ -1406,14 +1409,17 @@ impl<'a> HashRefMut<'a> {
         debug_assert!(self.is_inline());
         let flags = self.flags();
         let iter_depth = ((flags & ITER_MASK) >> ITER_SHIFT) as u32;
+        // Pre-size for the pair that caused the promotion and some room to
+        // grow: an empty map would allocate its entry vector and index
+        // table on the first insert and reallocate both by the fourth.
         let content = if ident {
-            let mut map = RubyMap::default();
+            let mut map = RubyMap::with_capacity(PROMOTED_CAP);
             for (k, v) in self.as_ref().inline_pairs() {
                 map.insert(Some(IdentKey(*k)), *v, vm, globals)?;
             }
             HashContent::IdentMap(Box::new(map))
         } else {
-            let mut map = RubyMap::default();
+            let mut map = RubyMap::with_capacity(PROMOTED_CAP);
             for (k, v) in self.as_ref().inline_pairs() {
                 map.insert(Some(*k), *v, vm, globals)?;
             }

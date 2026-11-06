@@ -1519,7 +1519,7 @@ fn partition_main(
     vm.set_match_haystack(self_val);
     let mut view = None;
     let subject = slice_subject(globals, inner, &re, true, &mut view)?;
-    let mut region = onigmo_regex::Region::new();
+    let mut region = crate::value::rvalue::regexp::ScratchRegion::take();
     // `rpartition` wants the match with the greatest begin, which the
     // forward walk finds by restarting one character past each hit.
     let mut found: Option<Spans> = None;
@@ -1590,7 +1590,7 @@ fn string_match_index(
 ) -> Result<Value> {
     let mut view = None;
     let subject = slice_subject(globals, s, re, true, &mut view)?;
-    let mut region = onigmo_regex::Region::new();
+    let mut region = crate::value::rvalue::regexp::ScratchRegion::take();
     if !re.find_spans(&subject, 0, &mut region)? {
         vm.clear_capture_special_variables();
         return Ok(Value::nil());
@@ -1628,7 +1628,7 @@ fn string_match_named(
     }
     let mut view = None;
     let subject = slice_subject(globals, s, re, true, &mut view)?;
-    let mut region = onigmo_regex::Region::new();
+    let mut region = crate::value::rvalue::regexp::ScratchRegion::take();
     if !re.find_spans(&subject, 0, &mut region)? {
         vm.clear_capture_special_variables();
         return Ok(Value::nil());
@@ -1998,7 +1998,7 @@ fn locate_regex_match(
             Subject::text(text, inner.encoding(), false)
         }
     };
-    let mut region = onigmo_regex::Region::new();
+    let mut region = crate::value::rvalue::regexp::ScratchRegion::take();
     if !re.find_spans(&subject, 0, &mut region)? {
         vm.clear_capture_special_variables();
         return Err(MonorubyErr::indexerr("regexp not matched"));
@@ -2749,7 +2749,7 @@ pub(crate) fn string_start_with(
                     Subject::text(text, self_enc, false)
                 }
             };
-            let mut region = onigmo_regex::Region::new();
+            let mut region = crate::value::rvalue::regexp::ScratchRegion::take();
             if re.find_spans(&subject, 0, &mut region)? {
                 let spans = spans_of(&region);
                 save_spans(vm, &subject, &spans, owner);
@@ -3787,7 +3787,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     &view_subject
                 }
             };
-            let mut region = onigmo_regex::Region::new();
+            let mut region = crate::value::rvalue::regexp::ScratchRegion::take();
             let mut start = 0usize;
             let mut last_null = false;
             loop {
@@ -3946,7 +3946,7 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             0
         };
         vm.set_match_haystack(self_);
-        let mut region = onigmo_regex::Region::new();
+        let mut region = crate::value::rvalue::regexp::ScratchRegion::take();
         if !re.find_spans(&subject, 0, &mut region)? {
             vm.clear_capture_special_variables();
             return Ok(Value::nil());
@@ -5917,7 +5917,7 @@ fn scan_block_loop(
     // the loop: the block body may clobber it, but CRuby leaves `$~` set
     // to the scan's final match (nil if there was none).
     let mut last: Option<Spans> = None;
-    let mut region = onigmo_regex::Region::new();
+    let mut region = crate::value::rvalue::regexp::ScratchRegion::take();
     let mut pos = 0usize;
     while pos <= subject.len() {
         if !re.find_spans(&subject, pos, &mut region)? {
@@ -6390,7 +6390,7 @@ fn string_index(
         &mut view,
     )?;
     let byte_pos = subject.byte_offset(char_pos);
-    let mut region = onigmo_regex::Region::new();
+    let mut region = crate::value::rvalue::regexp::ScratchRegion::take();
     if !re.find_spans(&subject, byte_pos, &mut region)? {
         vm.clear_capture_special_variables();
         return Ok(Value::nil());
@@ -6819,7 +6819,7 @@ fn string_rindex(
     let gpos = bounds.get(max_char_pos).copied().unwrap_or(len);
     // The start of the leftmost match at or after `pos`, without
     // touching `$~`.
-    let mut region = onigmo_regex::Region::new();
+    let mut region = crate::value::rvalue::regexp::ScratchRegion::take();
     let mut search = |pos: usize| -> Result<Option<usize>> {
         Ok(if re.find_spans_gpos(&subject, gpos, pos, &mut region)? {
             Some(region.pos(0).unwrap().0)
@@ -6830,7 +6830,7 @@ fn string_rindex(
     // The answer, with `$~` set to the match at it (CRuby behaviour) or
     // cleared for nil.
     let finish = |vm: &mut Executor, last_char_pos: Option<usize>| -> Result<Value> {
-        let mut region = onigmo_regex::Region::new();
+        let mut region = crate::value::rvalue::regexp::ScratchRegion::take();
         match last_char_pos {
             Some(cp) => {
                 let bp = bounds.get(cp).copied().unwrap_or(len);
@@ -10903,7 +10903,7 @@ fn expand_tr_repl(spec: &str) -> Result<Vec<char>> {
 }
 
 fn expand_tr_spec_with(spec: &str, source: bool) -> Result<(Vec<char>, bool)> {
-    let mut chars: Vec<char> = Vec::new();
+    let mut chars: Vec<char> = Vec::with_capacity(spec.len());
     let mut iter = spec.chars().peekable();
     let negated = if source && iter.peek() == Some(&'^') && spec.chars().count() > 1 {
         iter.next();
