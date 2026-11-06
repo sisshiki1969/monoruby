@@ -61,6 +61,47 @@ impl ExecSpec {
     pub(crate) fn program_display(&self) -> &str {
         &self.program_display
     }
+
+    /// The parent's fd the child's stdin is taken from, for a
+    /// `__pty_session` spawn: the pty's slave.
+    fn pty_slave(&self) -> Option<i32> {
+        if !self.pty_session {
+            return None;
+        }
+        self.redirects.iter().find_map(|r| match r.target {
+            RedirectTarget::Fd(fd) if r.child_fds.contains(&0) => Some(fd),
+            _ => None,
+        })
+    }
+}
+
+/// Drop the parent's reference to a pty's slave as soon as the child is
+/// forked, as CRuby's ext/pty closes its copy right after its fork.
+///
+/// The last close of a slave waits for the output to drain and then
+/// flushes what the master has not read (macOS), so the slave must be
+/// the child's to close last: a parent that still held it when a quick
+/// child (`PTY.spawn("printf", ...)`) had exited would close it last
+/// and lose the child's output. `stdlib/pty.rb` still owns the fd
+/// number and closes it afterwards, so it is pointed at `/dev/null`
+/// rather than closed here.
+///
+/// # Safety
+///
+/// `fd` must be an fd this process owns.
+unsafe fn release_pty_slave(fd: i32) {
+    // SAFETY: plain fd syscalls; `fd` is ours (caller's contract) and
+    // `null` is a fresh descriptor closed again below.
+    unsafe {
+        let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR | libc::O_CLOEXEC);
+        if null < 0 {
+            return;
+        }
+        if libc::dup2(null, fd) >= 0 {
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+        libc::close(null);
+    }
 }
 
 const STAGE_CHDIR: u8 = b'c';
@@ -691,6 +732,9 @@ pub(crate) fn do_spawn(
     // SAFETY: plain fd syscalls on fds owned here.
     unsafe {
         libc::close(wfd);
+        if let Some(slave) = spec.pty_slave() {
+            release_pty_slave(slave);
+        }
     }
     let mut buf = [0u8; 5];
     let n = loop {
