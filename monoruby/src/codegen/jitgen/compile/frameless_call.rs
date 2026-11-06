@@ -107,8 +107,8 @@ pub(super) fn eligible(
     let func = &store[func_id];
     let cs = &store[callid];
     iseq.outer.is_none()
-        && callee_shape_ok(store, func_id, iseq_id)
-        && call_site_ok(store, func_id, callid)
+        && callee_shape_ok(store, func_id, iseq_id, true)
+        && call_site_ok(store, func_id, callid, true)
         && cs.pos_num == func.req_num()
         && body_ok(store, iseq_id)
 }
@@ -128,37 +128,47 @@ pub(super) fn yield_eligible(
     iseq_id: ISeqId,
     callid: CallSiteId,
 ) -> bool {
-    callee_shape_ok(store, block_fid, iseq_id)
-        && call_site_ok(store, block_fid, callid)
+    callee_shape_ok(store, block_fid, iseq_id, false)
+        && call_site_ok(store, block_fid, callid, false)
         && body_ok(store, iseq_id)
 }
 
 /// The callee's parameter list and body shape: no block parameter,
 /// required positionals only, no exception handler, no loop, small.
-fn callee_shape_ok(store: &Store, func_id: FuncId, iseq_id: ISeqId) -> bool {
+///
+/// With *keywords*, named keyword parameters (required or with a
+/// default) are allowed too: the call site binds them from its literal
+/// keywords as plain slot stores (`fill_window`), and the specialized
+/// entry knows statically which ones were given (`LinkMode::from_caller`
+/// binds a missing one `None`), so the body's `CheckLocal` prologue is a
+/// static branch. A `**kwrest` would need a `Hash`, and stays framed.
+fn callee_shape_ok(store: &Store, func_id: FuncId, iseq_id: ISeqId, keywords: bool) -> bool {
     let iseq = &store[iseq_id];
     let func = &store[func_id];
     !(iseq.block_param().is_some()
-        || !func.meta().is_simple()
+        || (!keywords && !func.meta().is_simple())
         || func.opt_num() != 0
         || func.post_num() != 0
         || func.is_rest()
         || func.kw_rest().is_some()
-        || !func.kw_names().is_empty()
+        || (!keywords && !func.kw_names().is_empty())
         || iseq.has_exception_handler()
         || iseq.bb_info.has_loop()
         || iseq.bytecode().len() > FRAMELESS_MAX_BYTECODES)
 }
 
-/// The call site: plain positionals, no block, no splat, no keywords.
-fn call_site_ok(store: &Store, func_id: FuncId, callid: CallSiteId) -> bool {
+/// The call site: plain positionals, no block, no splat, no `**hash`.
+/// Literal keywords only with *keywords*, and only those
+/// `is_simple_call` accepts: every required keyword given, none the
+/// callee has no parameter for.
+fn call_site_ok(store: &Store, func_id: FuncId, callid: CallSiteId, keywords: bool) -> bool {
     let cs = &store[callid];
     !(cs.block_fid.is_some()
         || cs.block_arg.is_some()
         || cs.forwarding
         || !cs.splat_pos().is_empty()
         || !cs.hash_splat_pos().is_empty()
-        || cs.kw_may_exists()
+        || (!keywords && cs.kw_may_exists())
         || !store.is_simple_call(func_id, callid))
 }
 
@@ -189,6 +199,11 @@ fn body_ok(store: &Store, iseq_id: ISeqId) -> bool {
             | TraceIr::Ret(..)
             | TraceIr::Mov(..)
             | TraceIr::InitMethod(..)
+            // The keyword-default prologue. Its operand is a keyword
+            // parameter whose presence the specialized entry knows, so
+            // it compiles to a static branch (or a test of the slot the
+            // window filled).
+            | TraceIr::CheckLocal(..)
             | TraceIr::InlineCache => true,
             // A call is compiled as whatever the call site resolves to; one
             // that needs a frame or can raise is caught as a violation.
@@ -403,6 +418,7 @@ fn reads_frame_header(store: &Store, iseq_id: ISeqId) -> bool {
                 | TraceIr::Ret(..)
                 | TraceIr::Mov(..)
                 | TraceIr::InitMethod(..)
+                | TraceIr::CheckLocal(..)
                 | TraceIr::InlineCache
         )
     })
@@ -547,6 +563,27 @@ impl AbstractState {
         for slot in args..args + req {
             if let Some(src) = self.take_virtual(slot) {
                 self.discard_dead_elements(src, slot);
+            }
+        }
+        // The keyword parameters, from the call site's literal keywords
+        // (`set_arguments`'s keyword fill). A constant is not stored, as
+        // for a positional above; a keyword the call site does not give
+        // gets the `None` (0) its default prologue tests for — bound
+        // `None` in the callee's entry too, so the prologue is static,
+        // but a materializing exit before the default is assigned must
+        // find the frame the interpreter would have built.
+        let kw_args = callsite.kw_args();
+        let kw_reg = callee.kw_reg_pos();
+        for (i, name) in callee.kw_names().iter().enumerate() {
+            let dst = window((kw_reg + i).0 as i32);
+            match kw_args.get(name) {
+                Some(p) => {
+                    let src = callsite.kw_pos + *p;
+                    if !matches!(self.mode(src), LinkMode::C(_)) {
+                        self.fetch_to_slot(ir, src, dst);
+                    }
+                }
+                None => ir.push(AsmInst::U64ToStack(0, dst)),
             }
         }
         // Last: a boxing above can call out, and a call takes the whole

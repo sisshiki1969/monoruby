@@ -812,3 +812,91 @@ fn frameless_yield_block_reaching_its_home_stays_framed() {
         "#,
     );
 }
+
+#[test]
+fn frameless_keyword_bodies() {
+    // Literal keywords bind the callee's keyword slots in the window: given
+    // ones from the call site (constants not even stored), missing optional
+    // ones `None`, so the default prologue is a static branch. Required,
+    // optional, reordered, mixed with positionals, defaults that read an
+    // earlier parameter or build an object.
+    run_test(
+        r#"
+        def add(left:, right:) = left + right
+        def opt(x:, y: 10) = x + y
+        def dflt(x: 1, y: [x]) = y
+        def mixed(p, x:, y: p * 2) = p + x + y
+        def len(x:) = x.size
+        def fl(x: 1.5, y:) = x * y
+        res = []
+        40.times do |i|
+          res << add(left: 1, right: i) << add(right: i, left: i * 2)
+          res << opt(x: i) << opt(x: i, y: 2) << opt(y: 3, x: i)
+          res << dflt << dflt(x: i) << dflt(y: i)
+          res << mixed(i, x: 1) << mixed(i, y: 5, x: 1)
+          res << len(x: [1, 2, i]) << len(x: "ab" * (i % 3))
+          res << fl(y: i.to_f) << fl(x: 2, y: 2.5) << fl(x: i * 0.5, y: i)
+        end
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_keyword_redo_and_errors() {
+    // A keyword argument whose type changes takes the redo; a raise from
+    // the callee reports its frame; a missing or unknown keyword is never
+    // compiled frameless (the generic path raises).
+    run_test(
+        r#"
+        def add(left:, right:) = left + right
+        def div(a:, b: 3) = a / b
+        res = []
+        60.times do |i|
+          x = case i % 4
+              when 0 then i
+              when 1 then i * 0.5
+              when 2 then "s#{i}"
+              else [i]
+              end
+          res << add(left: x, right: x)
+          begin
+            res << div(a: 100, b: i % 5) << div(a: i)
+          rescue ZeroDivisionError => e
+            res << e.backtrace_locations.map(&:label).include?("Object#div")
+          end
+        end
+        begin; add(left: 1); rescue ArgumentError => e; res << e.message; end
+        begin; add(left: 1, right: 2, up: 3); rescue ArgumentError => e; res << e.message; end
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_keyword_materialize() {
+    // The deopt comes after the ivar store (the `+` overflows once), so the
+    // window becomes a real frame — keyword slots included, a missing `y`
+    // already holding its default — and the callee finishes in the
+    // interpreter. Frame readers see a well-formed header.
+    run_test(
+        r#"
+        class C
+          def initialize = (@n = 0; @k = 0)
+          attr_reader :n, :k
+          def acc(x:) = (@n += 1; @k = x + 1)
+          def acc2(x:, y: 1) = (@n += 1; @k = x + y)
+          def name(x:) = x > 0 ? __method__ : block_given?
+        end
+        c = C.new
+        res = []
+        80.times do |i|
+          x = i == 70 ? 2**62 : i
+          res << c.acc(x: x) << c.acc2(x: x) << c.acc2(y: 2, x: x)
+          res << c.name(x: i - 40)
+          GC.start if i == 71
+        end
+        res << c.n << c.k
+        "#,
+    );
+}
