@@ -1466,7 +1466,8 @@ fn const_set(
     let val = lfp.arg(1);
     // Warn when overwriting an existing same-name constant on the
     // receiver, matching CRuby's redefinition warning.
-    vm.warn_already_initialized_constant(globals, module, name);
+    let location = vm.nearest_caller_location(&globals.store);
+    vm.warn_already_initialized_constant(globals, module, name, location);
     globals.set_constant(module, name, val);
     // Record the call-site as the constant's source location so
     // `Module#const_source_location(:Foo)` returns `[__FILE__,

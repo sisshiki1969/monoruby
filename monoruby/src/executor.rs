@@ -1180,16 +1180,23 @@ impl Executor {
 
     /// The "already initialized constant Foo::Bar" warning (an `rb_warn`,
     /// so silent under `$VERBOSE = nil`) when `parent::name` is already
-    /// defined, written through the current `$stderr` so mspec's
-    /// `complain` matcher captures it. Shared by constant assignment,
+    /// defined, delivered through `Warning.warn` (whose default writes
+    /// the current `$stderr`, so mspec's `complain` matcher captures it). Shared by constant assignment,
     /// `Module#const_set` and `Struct.new("Name")`. The qualified name
     /// uses the full path (`Foo::Bar::Leaf`; anonymous parents render as
     /// `#<Module:0x..>::Leaf`, `Object` bare).
+    ///
+    /// Like CRuby's `const_tbl_update`, the message is prefixed with
+    /// *location* (the `"file:line"` of the assignment, when known) and
+    /// followed by a "previous definition of Leaf was here" line at the
+    /// old constant's recorded location. A constant without one (defined
+    /// natively, like CRuby's C-defined constants) gets no second line.
     pub(crate) fn warn_already_initialized_constant(
         &mut self,
         globals: &mut Globals,
         parent: ClassId,
         name: IdentId,
+        location: Option<String>,
     ) {
         if globals
             .store
@@ -1205,34 +1212,68 @@ impl Executor {
         } else {
             format!("{parent_name}::{}", name.get_name())
         };
-        let msg = format!("warning: already initialized constant {qual}\n");
-        let stderr = globals
-            .get_gvar(IdentId::get_id("$stderr"))
-            .unwrap_or(Value::nil());
-        let write_id = IdentId::get_id("write");
-        let _ = self.invoke_method_inner(globals, write_id, stderr, &[Value::string(msg)], None, None);
+        let prefix = location.map_or(String::new(), |loc| format!("{loc}: "));
+        let mut msgs = vec![format!(
+            "{prefix}warning: already initialized constant {qual}\n"
+        )];
+        if let Some((file, line)) = globals.store[parent].get_constant_location(name) {
+            msgs.push(format!(
+                "{file}:{line}: warning: previous definition of {name} was here\n"
+            ));
+        }
+        for msg in msgs {
+            self.write_warning(globals, msg);
+        }
+    }
+
+    /// `Struct.new("Name")` over an existing `Struct::Name`: CRuby's
+    /// struct.c warns "redefining constant Struct::Name" (an `rb_warn`,
+    /// at the caller's location) instead of the generic reassignment
+    /// pair, since it removes the old constant before defining the new
+    /// class.
+    pub(crate) fn warn_redefining_struct_constant(
+        &mut self,
+        globals: &mut Globals,
+        parent: ClassId,
+        name: IdentId,
+    ) {
+        if globals
+            .store
+            .get_constant_noautoload(parent, name)
+            .is_none()
+            || !Self::warnings_enabled(globals)
+        {
+            return;
+        }
+        let parent_name = globals.store.qualified_name(parent);
+        let prefix = self
+            .nearest_caller_location(&globals.store)
+            .map_or(String::new(), |loc| format!("{loc}: "));
+        self.write_warning(
+            globals,
+            format!("{prefix}warning: redefining constant {parent_name}::{name}\n"),
+        );
     }
 
     pub(crate) fn flush_compile_warnings(&mut self, globals: &mut Globals) {
         // Onigmo compile-time diagnostics ("character class has
         // duplicated range", "nested repeat operator ... was replaced
-        // with ...") are queued on a thread-local by `RegexpInner`
-        // (regexps also compile during bytecodegen, where no `Executor`
-        // is in reach) and join the same flush. CRuby routes them
-        // through `rb_warn`, but Onigmo itself gates most of them on
-        // `RTEST(ruby_verbose)` (the duplicated range, "without escape"
-        // and unknown-escape ones), so those are verbose-only: `-w` /
-        // `$VERBOSE = true` shows them, the default does not. The
-        // nested-repeat diagnostics are not gated and print by default.
-        let regexp_warnings = crate::value::rvalue::RegexpInner::drain_pending_warnings();
+        // with ...") are queued on a thread-local by `RegexpInner` and
+        // join the same flush. A regexp *literal* drains its own at
+        // compile time, prefixed with its location (`const_regexp`);
+        // what is left here was built at run time (`Regexp.new`), which
+        // CRuby reports at the location of the Ruby code that called it.
+        let regexp_warnings = if crate::value::rvalue::RegexpInner::has_pending_warnings() {
+            let location = self.nearest_caller_location(&globals.store);
+            crate::value::rvalue::RegexpInner::drain_pending_warnings(location.as_deref())
+        } else {
+            vec![]
+        };
         if globals.store.compile_warnings.is_empty() && regexp_warnings.is_empty() {
             return;
         }
         let mut msgs = std::mem::take(&mut globals.store.compile_warnings);
-        msgs.extend(regexp_warnings.into_iter().map(|m| {
-            let verbose_only = !m.contains("nested repeat operator");
-            (m, verbose_only)
-        }));
+        msgs.extend(regexp_warnings);
         // `rb_warn`-level warnings print unless `$VERBOSE` is nil;
         // verbose-level ones (CRuby's `rb_warning`) only when `$VERBOSE`
         // is exactly `true` at flush time.
@@ -1240,9 +1281,20 @@ impl Executor {
         let verbose = globals
             .get_gvar(IdentId::get_id("$VERBOSE"))
             .is_some_and(|v| v.as_bool());
-        // Like CRuby's `rb_warn`, the message goes through `Warning.warn`
-        // (which a program may override); `$stderr.write` only before the
-        // module exists.
+        for (m, verbose_only) in msgs {
+            if !enabled || (verbose_only && !verbose) {
+                continue;
+            }
+            self.write_warning(globals, format!("{m}\n"));
+        }
+    }
+
+    /// Deliver one complete warning line (*msg* ends with `\n`) the way
+    /// CRuby's `rb_warn` does: through `Warning.warn`, which a program
+    /// may override, or `$stderr.write` before the module exists. Errors
+    /// are ignored (e.g. a nil / broken `$stderr` during early
+    /// bootstrap): a warning must never mask the program's result.
+    fn write_warning(&mut self, globals: &mut Globals, msg: String) {
         let warning = globals
             .store
             .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Warning"));
@@ -1255,15 +1307,8 @@ impl Executor {
                 IdentId::get_id("write"),
             ),
         };
-        for (m, verbose_only) in msgs {
-            if !enabled || (verbose_only && !verbose) {
-                continue;
-            }
-            let msg_val = Value::string(format!("{m}\n"));
-            // Ignore errors (e.g. a nil / broken `$stderr` during early
-            // bootstrap): a warning must never mask the program's result.
-            let _ = self.invoke_method_inner(globals, method, recv, &[msg_val], None, None);
-        }
+        let msg_val = Value::string(msg);
+        let _ = self.invoke_method_inner(globals, method, recv, &[msg_val], None, None);
     }
 
     ///
@@ -3011,7 +3056,10 @@ impl Executor {
         // `rb_const_set_visibility`: the same wording (and same `$stderr`
         // delivery) used by `Module#const_set` so mspec's `complain`
         // matcher catches both code-paths.
-        self.warn_already_initialized_constant(globals, parent, name);
+        let location = source_loc
+            .as_ref()
+            .map(|(file, line)| format!("{file}:{line}"));
+        self.warn_already_initialized_constant(globals, parent, name, location);
         globals.set_constant(parent, name, val);
         if let Some((file, line)) = &source_loc {
             globals.store[parent].record_constant_location(name, file.clone(), *line);

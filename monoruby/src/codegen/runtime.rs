@@ -1370,7 +1370,10 @@ pub(super) extern "C" fn concatenate_regexp(
     // (`concatenate_string_inner` walks `arg.sub(i)`), so operand 0 is at
     // `*arg` and the source fragments start one slot below.
     // SAFETY: `arg` points at operand 0 of `len` (>= 1) operand `Value`s.
-    let option = unsafe { (*arg).try_fixnum().unwrap_or(0) } as u32;
+    // Its upper 32 bits carry the literal's line, for the location of
+    // Onigmo's diagnostics.
+    let option_word = unsafe { (*arg).try_fixnum().unwrap_or(0) };
+    let option = option_word as u32;
     let arg = unsafe { arg.sub(1) };
     let len = len - 1;
     // Build the interpolated source as a String first, so each operand's
@@ -1435,6 +1438,19 @@ pub(super) extern "C" fn concatenate_regexp(
             return None;
         }
     };
+    if RegexpInner::has_pending_warnings() {
+        // CRuby reports them at the literal: the running frame's file
+        // and the line `gen_regexp` packed into the option word. Flushed
+        // before the Regexp is allocated, since `Warning.warn` may GC.
+        let line = option_word >> 32;
+        let fid = vm.cfp().lfp().func_id();
+        let location = globals.store[fid]
+            .is_iseq()
+            .map(|iseq| format!("{}:{line}", globals.store[iseq].sourceinfo.file_name()));
+        let warnings = RegexpInner::drain_pending_warnings(location.as_deref());
+        globals.store.compile_warnings.extend(warnings);
+        vm.flush_compile_warnings(globals);
+    }
     Some(Value::regexp(inner))
 }
 

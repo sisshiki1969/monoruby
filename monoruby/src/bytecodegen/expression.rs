@@ -2219,6 +2219,9 @@ impl<'a> BytecodeGen<'a> {
         // Encoding selector honours "last wins" (`regexp_encoding_bits`).
         let enc_bits = regexp_encoding_bits(&option);
         opt |= enc_bits as i64;
+        // The upper 32 bits carry the literal's line: Onigmo's
+        // diagnostics for the assembled source are reported there.
+        opt |= (self.sourceinfo.get_line(&loc) as i64) << 32;
         // The literal fragments' `\xHH` escapes are checked now, in the
         // encoding the literal is read in, so `/\xff#{x}/` is the
         // SyntaxError CRuby raises rather than a RegexpError later.
@@ -2293,7 +2296,7 @@ impl<'a> BytecodeGen<'a> {
         Ok(())
     }
 
-    fn const_regexp(&self, nodes: Vec<Node>, option: String, loc: Loc) -> Result<Value> {
+    fn const_regexp(&mut self, nodes: Vec<Node>, option: String, loc: Loc) -> Result<Value> {
         let enc_bits = regexp_encoding_bits(&option);
         // Decode the literal-syntax modifier letters into the
         // standard Onigmo bits *plus* monoruby's internal
@@ -2341,6 +2344,19 @@ impl<'a> BytecodeGen<'a> {
             Ok(re) => re,
             Err(err) => return Err(self.syntax_error(err.message(), loc)),
         };
+        // Onigmo's diagnostics for the literal carry its location, as
+        // CRuby's parse-time `rb_reg_warn` does; they are flushed with
+        // the rest of the compile warnings before the code runs.
+        if crate::value::rvalue::RegexpInner::has_pending_warnings() {
+            let location = format!(
+                "{}:{}",
+                self.sourceinfo.file_name(),
+                self.sourceinfo.get_line(&loc)
+            );
+            let warnings =
+                crate::value::rvalue::RegexpInner::drain_pending_warnings(Some(&location));
+            self.store.compile_warnings.extend(warnings);
+        }
         // Regexp literals are frozen in CRuby; the spec battery
         // checks that `//.frozen?` is true and that
         // `//.send(:initialize, "")` raises `FrozenError`.

@@ -154,7 +154,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // matching CRuby's `Struct.new('Person', ...)` behaviour.
     if let Some(n) = name {
         let parent_class = lfp.self_val().as_class().id();
-        vm.warn_already_initialized_constant(globals, parent_class, n);
+        vm.warn_redefining_struct_constant(globals, parent_class, n);
     }
 
     let new_struct = globals
