@@ -2254,6 +2254,7 @@
 67d9779ae7baebb23fd2e1f34232d6e2	0	$c = 0\n            def bump; $c += 1; self; end\n            defined
 67d9f8b69f6a016eade0a68a270498d3	" world"	s = "hello world"; s.bytesplice(0..4, "ABCDE", 0..-100); s
 681e3c0d02b02a91a999281604e81c60	"Ruby"	"ruby".send(:sub, /./, "R")\n        
+681edfa207a4866583a4aa448e38ae18	[4, [:it2, 1], :mm, [:super, 1], :send, :fwd, [:iexec, 5], :outer, :slice]	class BrkFoo\n          def it; yield 1; :no; end\n          def it2(&b) 
 681fd3ccba5816796a6f87e5163660da	["US-ASCII", "US-ASCII", "US-ASCII"]	s = "abc".dup.force_encoding("US-ASCII")\n              s.rpartiti
 68297ce8819d266f9baca2a8ca466b2e	{"params" => [[123, 2185739281], true, 5800, true, true], "params_closed" => "stream is not ready", "deflate_reset" => [true, true, 5800], "inflate_reset" => [true, true, true, 5800], "inflate_dict" => [true, true, "data error"], "state" => [true, 0, true, false, true, String, String], "after_finish" => [true, 100, false], "version" => [true, true], "crc" => [0, 891568578, 891568578, 1, 38600999, 38600999, 891568578, 256]}	require "zlib"\n        data = (("the quick brown fox jumps over the laz
 6839f3122ab8ae190cc820a18f88f323	[[1, 2, 3], [1, 2, 99, 4, 5], [:a, :b, 4, 5], [1, 2, 3, 4, :x, :y, :z], [:a, 1, 2, 3]]	__a = [];__a << (a = [1,2,3,4,5]; a[-2, 2] = []; a);__a << (a = [1,2,3,4,5]; a[-
@@ -3790,6 +3791,7 @@ af72bf1cbfaf29e4742210fc2dccd3a1	["hELLO", "hELLO"]	s = "Hello".dup\n           
 af7a6ed6ef159ceccb5bdfda9f0b7f8a	[3104, 11, 7]	class C\n          def a = 7\n          def b = 11\n          def pick(fla
 af85aa1d9776eeee1edae5e7a4558782	[[1, 2, 3], {1 => :a}, Palette, true, 2, 0, "wrong number of arguments (given 3, expected 1..2)", [10, 20]]	class Palette < Set\n          attr_reader :map\n          def initialize
 af9329fd1ed54bd186796d91961a9856	[0, 1, 1, 1, 1, 2, 2, 6, 3, 24, 5, 120, 8, 720, 13, 5040, 21, 40320, 34, 362880, 55, 3628800, 89, 39916800, 144, 479001600, 233, 6227020800, 377, 87178291200, 0, 1307674368000, 1, 20922789888000, 1, 355687428096000, 2, 6402373705728000, 3, 121645100408832000, 5, 2432902008176640000, 8, 51090942171709440000, 13, 1124000727777607680000, 21, 25852016738884976640000, 34, 620448401733239439360000]	def fib(n) = n < 2 ? n : fib(n - 1) + fib(n - 2)\n        def fact(n) = 
+af998de8ad7064157317cde849be47c8	[[[:blk, "break from proc-closure", 1], :after], [1], [:in_m, 3], :blk, [2]]	$lj = []\n        def lj1; pr = proc { begin; break 1; rescue LocalJumpE
 af9c50b606859e165d88610397042afd	[true, ArgumentError]	(class KC; def initialize_clone(orig, **kw); $rec=kw; super(orig); end; end; obj
 afbcad07e617b095dc96d973a2845197	[:bar, [1, 2, 3]]	class Foo\n              def method_missing(name, *args)\n           
 afc664b3664dbfb2235fee8c114e24dc	["a\\n", "b\\n", "c"]	path = "/tmp/monoruby_io_classreadlines_#{Process.pid}_#{rand(10000

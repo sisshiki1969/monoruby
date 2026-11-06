@@ -1222,6 +1222,52 @@ fn invalid_break_and_return_are_rescued_inside_an_ensure_region() {
 }
 
 #[test]
+fn break_from_a_proc_called_in_its_defining_frame_is_rescued_in_the_block() {
+    // Issue #1816: the defining frame is on the stack but has left the
+    // call that received the block, so the `break` raises LocalJumpError
+    // at the `break`, where the block's own `rescue` sees it.
+    run_test(
+        r#"
+        $lj = []
+        def lj1; pr = proc { begin; break 1; rescue LocalJumpError => e; [:blk, e.message, e.exit_value]; end }; [pr.call, :after]; rescue LocalJumpError; :in_m; end
+        def lj2; pr = proc { begin; break 2; rescue LocalJumpError; :blk; ensure; $lj << 2; end }; [1].each(&pr); rescue LocalJumpError; :in_m; end
+        def lj3; pr = proc { break 3 }; pr.call; rescue LocalJumpError => e; [:in_m, e.exit_value]; end
+        def lj4; pr = proc { begin; break 4; rescue LocalJumpError; :blk; end }; pr.yield; end
+        res = [lj1, lj2, lj3, lj4, $lj]
+        $lj = []
+        res
+        "#,
+    );
+    // Breaks out of the call that received the block stay valid, however
+    // the block reaches its caller.
+    run_test(
+        r#"
+        class BrkFoo
+          def it; yield 1; :no; end
+          def it2(&b) = it(&b)
+          def method_missing(n, *a) = yield
+          def respond_to_missing?(*) = true
+        end
+        class BrkBar < BrkFoo
+          def it; super { |x| break [:super, x] }; end
+        end
+        def brk_fwd(&) = BrkFoo.new.it2(&)
+        [
+          [1, 2, 3].each { |v| break v * 2 if v == 2 },
+          BrkFoo.new.it2 { |v| break [:it2, v] },
+          BrkFoo.new.zzz { break :mm },
+          BrkBar.new.it,
+          BrkFoo.new.send(:it) { break :send },
+          brk_fwd { break :fwd },
+          Object.new.instance_exec(5) { |q| break [:iexec, q] },
+          [[1, 2]].each { |a, b| [3].each { break [:inner, a, b] }; break :outer },
+          [1, 2].each_slice(1) { break :slice },
+        ]
+        "#,
+    );
+}
+
+#[test]
 fn defined_method_one_parameter_respond_to_warns() {
     // The deprecated one-parameter `respond_to?`: warned about (naming
     // `Class#` or, for a singleton method, the receiver's `to_s` + `.`)
