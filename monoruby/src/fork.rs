@@ -41,6 +41,20 @@
 //! (the streams', the pool's) is pthread's on Apple and a futex on
 //! Linux; its owner unlocking it in the child is an ordinary unlock
 //! that wakes nobody, so those guards are simply dropped.
+//!
+//! The JIT's code pages are the other thing a fork has to think about
+//! ([`JitInheritance`]). They are one 2 GiB mapping (two 1 GiB pages,
+//! monoasm's `PAGE_SIZE`) of which a process uses a few MiB, and on
+//! macOS that mapping is `MAP_JIT` — whose `fork(2)` cost grows with its
+//! *virtual* size, touched or not: ~45 ms for the whole region on an
+//! Apple M1, against 0.3 ms for a plain anonymous mapping of the same
+//! size. ruby-bench's knucleotide forks seven workers per iteration and
+//! spent ~250 ms of its ~310 ms there. So the unused tail of each code
+//! page is left out of the child (`minherit(VM_INHERIT_NONE)`; Linux's
+//! `MADV_DONTFORK` the same way), the parent puts it back as soon as the
+//! fork returns, and a child that goes on running Ruby maps a fresh tail
+//! at the same address. A child that only `execve`s gets none of the
+//! code pages at all.
 
 use crate::rvalue::{io, regexp};
 use crate::{id_table, native_pool, preempt};
@@ -139,6 +153,216 @@ pub(crate) struct ForkGuards {
     regexps: regexp::ForkLocks,
     _streams: io::ForkLocks,
     preempt: preempt::ForkState,
+    jit: JitInheritance,
+}
+
+/// What the child of a `fork(2)` goes on to do, which decides how much
+/// of the JIT's code pages it inherits ([`JitInheritance`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ForkKind {
+    /// The child keeps running Ruby (`Process._fork`, `Process.daemon`):
+    /// it inherits the code written so far and gets a fresh, empty tail.
+    Continue,
+    /// The child only `execve`s or `_exit`s (`Process.spawn` and
+    /// everything built on it): it runs no JIT code, so it inherits none.
+    Exec,
+}
+
+/// The ranges of the forking interpreter's JIT code pages that were
+/// marked not to be inherited for one `fork(2)`. Dropping it (the
+/// parent, right after the fork) marks them inheritable again, so a
+/// fork that does not come through [`prepare`] — one a C extension
+/// makes — still hands its child the whole region.
+pub(crate) struct JitInheritance {
+    /// `(start, len)`, page-aligned; `len == 0` for an unused slot.
+    ranges: [(usize, usize); 2],
+    kind: ForkKind,
+}
+
+impl JitInheritance {
+    fn none(kind: ForkKind) -> Self {
+        JitInheritance {
+            ranges: [(0, 0); 2],
+            kind,
+        }
+    }
+
+    /// Mark what the child of this fork will not inherit. The extents
+    /// come from the forking thread's own interpreter; another
+    /// interpreter in the process (the test harness runs one per thread)
+    /// keeps its region inherited whole, which costs time but nothing
+    /// else, since its threads do not exist in the child.
+    fn prepare(kind: ForkKind) -> Self {
+        let mut this = Self::none(kind);
+        let Some(Some(pages)) = crate::codegen::CODEGEN
+            .try_with(|c| c.try_borrow_mut().ok().map(|mut c| c.code_page_extents()))
+        else {
+            return this;
+        };
+        let os_page = os_page_size();
+        let [(base0, used0), (base1, used1)] = pages;
+        // monoasm lays the two code pages out back to back.
+        let page_len = base1 - base0;
+        let wanted = match kind {
+            ForkKind::Exec => [(base0, 2 * page_len), (0, 0)],
+            ForkKind::Continue => [
+                tail(base0, used0, page_len, os_page),
+                tail(base1, used1, page_len, os_page),
+            ],
+        };
+        for (slot, (start, len)) in wanted.into_iter().enumerate() {
+            // SAFETY: a range inside this interpreter's own code mapping;
+            // only its inheritance attribute changes, never its contents
+            // or protection.
+            if len > 0 && unsafe { set_inherit(start, len, false) } {
+                this.ranges[slot] = (start, len);
+            }
+        }
+        this
+    }
+
+    /// The child's side: a child that runs Ruby needs the tails back
+    /// before it emits code into them, at the very addresses the code
+    /// already written refers to.
+    fn reset_child(&self) {
+        if self.kind == ForkKind::Exec {
+            return;
+        }
+        for &(start, len) in &self.ranges {
+            // SAFETY: `[start, start + len)` is the hole the fork left
+            // where the tail was; nothing else in this single-threaded
+            // child has mapped anything since.
+            if len > 0 && !unsafe { map_tail(start, len) } {
+                tail_lost(start, len);
+            }
+        }
+    }
+}
+
+impl Drop for JitInheritance {
+    fn drop(&mut self) {
+        for &(start, len) in &self.ranges {
+            if len > 0 {
+                // SAFETY: as in `prepare`. A failure leaves the range
+                // out of later forks that bypass `prepare`; there is
+                // nothing better to do with it here.
+                unsafe { set_inherit(start, len, true) };
+            }
+        }
+    }
+}
+
+/// The part of the code page at `base` (`page_len` bytes) past the
+/// `used` bytes written so far, rounded out to whole OS pages.
+fn tail(base: usize, used: usize, page_len: usize, os_page: usize) -> (usize, usize) {
+    let start = (base + used + os_page - 1) & !(os_page - 1);
+    let end = base + page_len;
+    if start < end {
+        (start, end - start)
+    } else {
+        (end, 0)
+    }
+}
+
+fn os_page_size() -> usize {
+    // SAFETY: sysconf has no preconditions.
+    let p = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if p > 0 { p as usize } else { 4096 }
+}
+
+#[cfg(target_os = "macos")]
+mod vm_inherit {
+    // <mach/vm_inherit.h>; the libc crate does not bind minherit(2).
+    pub(super) const VM_INHERIT_COPY: libc::c_int = 1;
+    pub(super) const VM_INHERIT_NONE: libc::c_int = 2;
+    unsafe extern "C" {
+        pub(super) fn minherit(
+            addr: *mut libc::c_void,
+            len: libc::size_t,
+            inherit: libc::c_int,
+        ) -> libc::c_int;
+    }
+}
+
+/// Whether the child of a later `fork(2)` gets `[start, start + len)`.
+/// `false` if the platform cannot say.
+///
+/// # Safety
+///
+/// The range must be page-aligned and mapped.
+unsafe fn set_inherit(start: usize, len: usize, inherit: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use vm_inherit::*;
+        let how = if inherit {
+            VM_INHERIT_COPY
+        } else {
+            VM_INHERIT_NONE
+        };
+        // SAFETY: the caller's contract.
+        unsafe { minherit(start as *mut libc::c_void, len, how) == 0 }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let how = if inherit {
+            libc::MADV_DOFORK
+        } else {
+            libc::MADV_DONTFORK
+        };
+        // SAFETY: the caller's contract.
+        unsafe { libc::madvise(start as *mut libc::c_void, len, how) == 0 }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (start, len, inherit);
+        false
+    }
+}
+
+/// Map an empty code-page tail at exactly `start`, with the protection
+/// and kind the JIT's code pages have; `false` if the kernel put it
+/// anywhere else (it is then unmapped again).
+///
+/// # Safety
+///
+/// `[start, start + len)` must be unmapped.
+unsafe fn map_tail(start: usize, len: usize) -> bool {
+    let prot = libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC;
+    // macOS refuses `MAP_FIXED | MAP_JIT`, so the address is a hint
+    // there; the hole the fork left is free, and the kernel takes the
+    // hint. Linux can be told not to settle for anything else.
+    #[cfg(target_os = "macos")]
+    let flags = libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_JIT;
+    #[cfg(target_os = "linux")]
+    let flags =
+        libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE | libc::MAP_FIXED_NOREPLACE;
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let flags = libc::MAP_PRIVATE | libc::MAP_ANON;
+    // SAFETY: an anonymous mapping over a range the caller says is free.
+    let p = unsafe { libc::mmap(start as *mut libc::c_void, len, prot, flags, -1, 0) };
+    if p == start as *mut libc::c_void {
+        return true;
+    }
+    if p != libc::MAP_FAILED {
+        // SAFETY: the mapping just made, elsewhere.
+        unsafe { libc::munmap(p, len) };
+    }
+    false
+}
+
+/// The child could not get its code-page tail back. Code already
+/// written points into the region, so the JIT cannot move; the child
+/// would fault the first time it emitted code past what it inherited.
+/// Say so and stop, rather than crash somewhere later.
+#[cold]
+#[coverage(off)] // needs the kernel to refuse a free address
+fn tail_lost(start: usize, len: usize) -> ! {
+    eprintln!(
+        "monoruby: fork: could not map the JIT code region back at {start:#x} ({len} bytes) in the child: {}",
+        std::io::Error::last_os_error()
+    );
+    // SAFETY: terminating the child, which is all that is left to do.
+    unsafe { libc::_exit(1) }
 }
 
 /// Quiesce the process for a `fork(2)` — see the module doc. Call it
@@ -163,7 +387,7 @@ pub(crate) fn flush_coverage_profile() {
     }
 }
 
-pub(crate) fn prepare() -> ForkGuards {
+pub(crate) fn prepare(kind: ForkKind) -> ForkGuards {
     // The GVL's state: in the 1:1 model another kernel thread may be
     // inside `acquire` / `release` (it holds nothing else there), and
     // the child must not inherit that lock held by a thread it does not
@@ -178,6 +402,8 @@ pub(crate) fn prepare() -> ForkGuards {
     // Not a lock: the timer thread is not quiesced, it just ticks, so
     // the child abandons its lock instead (`preempt::ForkState`).
     let preempt = preempt::prepare_fork();
+    // Last: nothing above runs JIT code or touches the code pages.
+    let jit = JitInheritance::prepare(kind);
     ForkGuards {
         gvl,
         pool,
@@ -185,6 +411,7 @@ pub(crate) fn prepare() -> ForkGuards {
         regexps,
         _streams: streams,
         preempt,
+        jit,
     }
 }
 
@@ -200,7 +427,10 @@ impl ForkGuards {
             regexps,
             _streams,
             preempt,
+            jit,
         } = self;
+        // First: everything after this may emit code.
+        jit.reset_child();
         gvl.reset_child();
         pool.reset_child();
         preempt.reset_child();
@@ -273,6 +503,24 @@ mod tests {
         }
     }
 
+    /// The tail left out of a fork starts at the first whole OS page past
+    /// what was written, and is empty when the page is full.
+    #[test]
+    fn the_tail_starts_past_the_written_bytes() {
+        let page = 1 << 30;
+        assert_eq!(tail(0x1000_0000, 0, page, 4096), (0x1000_0000, page));
+        assert_eq!(tail(0x1000_0000, 1, page, 4096), (0x1000_1000, page - 4096));
+        assert_eq!(
+            tail(0x1000_0000, 4096, page, 4096),
+            (0x1000_1000, page - 4096)
+        );
+        assert_eq!(
+            tail(0x1000_0000, 4097, page, 16384),
+            (0x1000_4000, page - 16384)
+        );
+        assert_eq!(tail(0x1000_0000, page, page, 4096), (0x1000_0000 + page, 0));
+    }
+
     /// The parent's view: dropping what `prepare` took releases every
     /// lock in the set, on the thread that took them. (The child's view,
     /// `reset_child`, is only ever run in a forked child — in this
@@ -281,14 +529,14 @@ mod tests {
     /// `ForkableRwLock` test above.)
     #[test]
     fn dropping_the_guards_releases_every_lock() {
-        drop(prepare());
+        drop(prepare(ForkKind::Continue));
         assert_eq!(IdentId::get_id("fork_reset_probe"), IdentId::get_id("fork_reset_probe"));
         assert!(
             crate::rvalue::RegexpInner::with_option("fork_reset_probe", 0).is_ok(),
             "the regexp caches are still locked"
         );
         io::flush_std_streams();
-        drop(prepare());
+        drop(prepare(ForkKind::Continue));
     }
 
     /// The hazard itself: another OS thread interning names without
@@ -326,7 +574,7 @@ mod tests {
         let _stop = StopOnDrop(stop.clone());
         let deadline = std::time::Duration::from_secs(10);
         for round in 0..200 {
-            let guards = prepare();
+            let guards = prepare(ForkKind::Continue);
             // SAFETY: fork(2); the child only interns one name and
             // `_exit`s, the parent waits for it.
             let pid = unsafe { libc::fork() };

@@ -699,7 +699,7 @@ pub(crate) fn do_spawn(
     // takes these locks itself — holding them here keeps the invariant
     // uniform across every `fork(2)` in the tree, so anything added
     // between the fork and the exec cannot reintroduce the hazard.
-    let guards = crate::fork::prepare();
+    let guards = crate::fork::prepare(crate::fork::ForkKind::Exec);
     // SAFETY: monoruby's threads are green (single OS thread), so the
     // child is single-threaded and consistent; everything it touches was
     // prepared pre-fork.
