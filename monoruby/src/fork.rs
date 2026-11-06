@@ -521,6 +521,40 @@ mod tests {
         assert_eq!(tail(0x1000_0000, page, page, 4096), (0x1000_0000 + page, 0));
     }
 
+    /// The paths of [`JitInheritance`] a forked child never reaches in
+    /// a test: an interpreter whose JIT is busy (already borrowed) leaves
+    /// its code pages inherited whole, an exec-only child maps nothing
+    /// back, and a tail that cannot be placed at its own address is
+    /// reported as lost rather than mapped somewhere else.
+    #[test]
+    fn jit_inheritance_edge_cases() {
+        crate::codegen::CODEGEN.with(|c| {
+            let _busy = c.borrow_mut();
+            let j = JitInheritance::prepare(ForkKind::Continue);
+            assert_eq!(j.ranges, [(0, 0); 2]);
+        });
+        JitInheritance::none(ForkKind::Exec).reset_child();
+        let len = os_page_size();
+        // SAFETY: an anonymous mapping owned by this test, unmapped below.
+        let p = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(p, libc::MAP_FAILED);
+        // SAFETY: the range is mapped, so `map_tail` must refuse it
+        // (Linux: MAP_FIXED_NOREPLACE fails; elsewhere the kernel moves
+        // the mapping and `map_tail` unmaps its own copy).
+        assert!(!unsafe { map_tail(p as usize, len) });
+        // SAFETY: the mapping made above.
+        unsafe { libc::munmap(p, len) };
+    }
+
     /// The parent's view: dropping what `prepare` took releases every
     /// lock in the set, on the thread that took them. (The child's view,
     /// `reset_child`, is only ever run in a forked child — in this
