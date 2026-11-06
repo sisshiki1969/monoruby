@@ -62,9 +62,9 @@ jobs:
         # tests count. The rubocop versions are ruby-bench's Gemfile.lock.
         run: gem install hexapdf chunky_png rubocop:1.79.1 rubocop-performance:1.25.0 rubocop-rails:2.32.0 nokogiri msgpack strptime cool.io zstd-ruby:1.5.7.0 yajl-ruby bcrypt markly strscan json:2.18.0 json:3.1.0 --no-document
       - name: Free disk space
-        # The coverage build links ~90 instrumented test binaries (over
-        # 10 GB in target/llvm-cov-target), which leaves almost nothing of
-        # the runner's free space; how much the image leaves free moves from
+        # The coverage build (target/llvm-cov-target) and one .profraw per
+        # test process (~2.5 MB each, ~5,000 processes) leave little of the
+        # runner's free space; how much the image leaves free moves from
         # one image release to the next, and on 2026-11-05 two master runs
         # died with ENOSPC (ld: "Bus error", rustc: "No space left on
         # device") on a tree whose PR run had passed. Drop the preinstalled

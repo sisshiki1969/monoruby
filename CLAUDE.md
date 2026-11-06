@@ -766,7 +766,18 @@ cargo test
 
 # Run the full CI test suite (also runs benchmarks + coverage)
 bin/test
+
+# Run one integration-test file (they are all one binary, see below)
+cargo test --test integration array_initialize::
 ```
+
+**Integration tests are one binary.** `monoruby/Cargo.toml` sets
+`autotests = false`, and `tests/integration.rs` declares every other
+`tests/*.rs` file as a module, so the interpreter is linked into one test
+executable rather than one per file (~190 files at ~125 MB each under the
+coverage instrumentation used to cost the CI runner ~24 GB of disk and a
+link step apiece). A new test file must get a `mod <name>;` line there;
+the `every_test_file_is_a_module` test fails otherwise.
 
 `bin/test` does:
 

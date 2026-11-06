@@ -8,12 +8,19 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 default-run = "monoruby"
 build = "build.rs"
+# The integration tests are one binary, `tests/integration.rs`, which
+# declares every other `tests/*.rs` file as a module (see its header).
+autotests = false
 
 [[bin]]
 name = "monoruby"
 
 [[bin]]
 name = "irm"
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

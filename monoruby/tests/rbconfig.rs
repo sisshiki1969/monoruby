@@ -15,8 +15,18 @@ fn rbconfig_prefix_falls_back_to_install_root() {
     // (every other integration test passes `--disable=gems`): the
     // regression is about what rubygems resolves `RbConfig`'s prefix to,
     // so booting it is the point.
+    //
+    // An interpreter started in *this* process (any `run_test` in the same
+    // test binary) derives the host's prefix and leaves it in the process
+    // environment (`Globals::new` sets `GEM_PATH` and the
+    // `MONORUBY_HOST_*` variables), and the child would inherit it and
+    // take the host path after all. Clear them for the child.
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_monoruby"))
         .env("MONORUBY_GEM_PATH", "")
+        .env_remove("GEM_PATH")
+        .env_remove("MONORUBY_HOST_GEM_PATH")
+        .env_remove("MONORUBY_HOST_RUBYLIBPREFIX")
+        .env_remove("MONORUBY_HOST_RUBY_API_VERSION")
         .arg("-e")
         .arg(r#"print RbConfig::CONFIG["rubylibprefix"]"#)
         .output()
