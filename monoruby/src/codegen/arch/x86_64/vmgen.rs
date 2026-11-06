@@ -262,6 +262,24 @@ impl Codegen {
         };
         self.block_break();
 
+        //BcOp::CheckExit
+        //
+        // +---+---+---+---++---+---+---+---+
+        // | op|val|knd|   ||       |       |
+        // +---+---+---+---++---+---+---+---+
+        let check_exit = self.jit.get_current_address();
+        self.fetch_val_r15();
+        monoasm! { &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movzxw rdx, [r13 - 14];  // rdx <- :2 (NonlocalExitKind)
+            movq rcx, r15;
+            movq rax, (runtime::check_nonlocal_exit);
+            call rax;
+        };
+        self.vm_handle_error();
+        self.fetch_and_dispatch();
+
         //BcOp::Raise
         let raise_err = self.jit.get_current_address();
         let raise = self.entry_raise();
@@ -418,6 +436,7 @@ impl Codegen {
             retry,
             ensure_end,
             redo,
+            check_exit,
             concat_regexp: self.vm_concat_regexp(),
             pos: self.vm_pos(),
             neg: self.vm_neg(),

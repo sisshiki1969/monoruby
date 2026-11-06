@@ -159,6 +159,7 @@ impl Codegen {
             | AsmInst::StoreIVarHeap { .. }
             | AsmInst::LoadIVarHeap { .. }
             | AsmInst::UndefMethod { .. }
+            | AsmInst::CheckExit { .. }
             | AsmInst::AliasGvar { .. }
             | AsmInst::CheckCVar { .. }
             | AsmInst::StoreCVar { .. }
@@ -2771,6 +2772,28 @@ impl Codegen {
             movq rsi, r12;
             movl rdx, (undef.get());
             movq rax, (runtime::undef_method);
+            call rax;
+        );
+        self.fpr_restore(using_fpr);
+        true
+    }
+
+    /// `CheckExit`: runtime::check_nonlocal_exit(vm, globals, kind, val). The
+    /// Option<Value> result (None == error) is checked by the trailing
+    /// HandleError.
+    pub(in crate::codegen::jitgen) fn emit_check_exit(
+        &mut self,
+        kind: NonlocalExitKind,
+        val: SlotId,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        self.fpr_save(using_fpr);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movl rdx, (kind as u32);
+            movq rcx, [r14 - (conv(val))];
+            movq rax, (runtime::check_nonlocal_exit);
             call rax;
         );
         self.fpr_restore(using_fpr);

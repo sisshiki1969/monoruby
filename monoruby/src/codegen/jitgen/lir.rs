@@ -988,6 +988,11 @@ pub(in crate::codegen) enum LInst {
         undef: IdentId,
         using_fpr: UsingFpr,
     },
+    CheckExit {
+        kind: NonlocalExitKind,
+        val: SlotId,
+        using_fpr: UsingFpr,
+    },
     AliasGvar {
         new: IdentId,
         old: IdentId,

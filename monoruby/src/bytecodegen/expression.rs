@@ -2506,6 +2506,7 @@ impl<'a> BytecodeGen<'a> {
 
     fn gen_method_return(&mut self, val: Node, use_mode: UseMode2, loc: Loc) -> Result<()> {
         if let Some(local) = self.is_refer_local(&val) {
+            self.emit_exit_check(NonlocalExitKind::MethodRet, local, loc);
             let mark = self.replay_ensures_for_nonlocal_exit()?;
             self.emit_nonlocal_exit(mark, BytecodeInst::MethodRet(local), loc);
         } else {
@@ -2515,6 +2516,7 @@ impl<'a> BytecodeGen<'a> {
             // the instruction's recorded `sp` is what it always was.
             self.gen_expr(val, UseMode2::Push)?;
             let ret = self.peek().into();
+            self.emit_exit_check(NonlocalExitKind::MethodRet, ret, loc);
             let mark = self.replay_ensures_for_nonlocal_exit()?;
             self.pop();
             self.emit_nonlocal_exit(mark, BytecodeInst::MethodRet(ret), loc);
@@ -2527,12 +2529,14 @@ impl<'a> BytecodeGen<'a> {
 
     fn gen_block_break(&mut self, val: Node, use_mode: UseMode2, loc: Loc) -> Result<()> {
         if let Some(local) = self.is_refer_local(&val) {
+            self.emit_exit_check(NonlocalExitKind::BlockBreak, local, loc);
             let mark = self.replay_ensures_for_nonlocal_exit()?;
             self.emit_nonlocal_exit(mark, BytecodeInst::BlockBreak(local), loc);
         } else {
             // See `gen_method_return` for the push/replay/pop order.
             self.gen_expr(val, UseMode2::Push)?;
             let ret = self.peek().into();
+            self.emit_exit_check(NonlocalExitKind::BlockBreak, ret, loc);
             let mark = self.replay_ensures_for_nonlocal_exit()?;
             self.pop();
             self.emit_nonlocal_exit(mark, BytecodeInst::BlockBreak(ret), loc);

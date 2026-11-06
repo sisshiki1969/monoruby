@@ -1492,6 +1492,14 @@ impl MonorubyErr {
         err.payload = Some((val, "return"));
         err
     }
+
+    /// LocalJumpError "break from proc-closure", carrying the break value
+    /// (`#exit_value`) and `#reason` `:break` as CRuby's does.
+    pub(crate) fn break_from_proc_closure(val: Value) -> MonorubyErr {
+        let mut err = MonorubyErr::new(MonorubyErrKind::LocalJump, "break from proc-closure");
+        err.payload = Some((val, "break"));
+        err
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

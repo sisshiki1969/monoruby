@@ -282,6 +282,11 @@ impl<'a> BytecodeGen<'a> {
                 // terminal inst.
                 Bytecode::from(enc_w(82, op1.0))
             }
+            BytecodeInst::CheckExit(kind, reg) => {
+                // 89
+                let op1 = self.slot_id(&reg);
+                Bytecode::from(enc_ww(89, op1.0, kind as u16))
+            }
             BytecodeInst::Raise(reg) => {
                 // 83
                 let op1 = self.slot_id(&reg);

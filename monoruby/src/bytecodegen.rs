@@ -1465,6 +1465,29 @@ impl<'a> BytecodeGen<'a> {
     }
 
     ///
+    /// Validate a non-local exit before its `ensure` bodies are replayed
+    /// (issue #1801).
+    ///
+    /// Whether a `break` / non-local `return` is valid — its target frame
+    /// still on this stack — is only known at run time, and the exit
+    /// instruction finds out after the replay has run the bodies and
+    /// switched their regions off. A LocalJumpError raised there can no
+    /// longer be rescued by a region whose `ensure` already ran, so
+    /// `ISeqInfo::invalid_exit_dest` gives up on it. `CheckExit` raises
+    /// the same error *here*, inside every region, where the ordinary
+    /// exception table rescues it and runs each `ensure` exactly once.
+    ///
+    /// Emitted only when there is an `ensure` body to replay: without one
+    /// the exit's own LocalJumpError is rescued in place by
+    /// `invalid_exit_dest`, and the exit stays a single instruction.
+    ///
+    fn emit_exit_check(&mut self, kind: NonlocalExitKind, val: BcReg, loc: Loc) {
+        if self.ensure.iter().any(|(body, _, _)| body.is_some()) {
+            self.emit(BytecodeInst::CheckExit(kind, val), loc);
+        }
+    }
+
+    ///
     /// Emit a non-local exit, extending the replay spans
     /// [`Self::replay_ensures_for_nonlocal_exit`] just recorded (those
     /// from *mark* on) over the instruction itself.

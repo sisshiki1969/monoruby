@@ -176,6 +176,35 @@ impl Codegen {
         true
     }
 
+    /// `CheckExit`: runtime::check_nonlocal_exit(vm, globals, kind, val). The
+    /// Option<Value> result (None == error) is checked by the trailing
+    /// HandleError.
+    pub(in crate::codegen::jitgen) fn emit_check_exit(
+        &mut self,
+        kind: NonlocalExitKind,
+        val: SlotId,
+        using_fpr: UsingFpr,
+    ) -> bool {
+        let lfp = GP::R14.a64().0; // x22
+        let off_val = val.0 as u32 * 8 + LFP_SELF as u32;
+        let f = runtime::check_nonlocal_exit as *const () as u64;
+        self.emit_fpr_save(using_fpr, false);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;                 // vm (Executor)
+            mov x1, x20;                 // globals
+            mov x2, (kind as u64);       // kind (NonlocalExitKind)
+        );
+        self.a64_frame_load(3, lfp, off_val); // x3 = val (slot value)
+        monoasm_arm64!(&mut self.jit,
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        true
+    }
+
     /// Alias a method via runtime::alias_method(vm, globals, old, new) where
     /// `old`/`new` are the symbol/string Values read from the `old`/`new`
     /// frame slots. The Option<Value> result (None == error) is checked by a

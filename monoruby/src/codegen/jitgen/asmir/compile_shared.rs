@@ -1167,6 +1167,15 @@ impl Codegen {
             AsmInst::UndefMethod { undef, using_fpr } => {
                 self.encode_linst(LInst::UndefMethod { undef, using_fpr })
             }
+            AsmInst::CheckExit {
+                kind,
+                val,
+                using_fpr,
+            } => self.encode_linst(LInst::CheckExit {
+                kind,
+                val,
+                using_fpr,
+            }),
             AsmInst::AliasGvar {
                 new,
                 old,
@@ -2175,6 +2184,13 @@ impl Codegen {
             }
             LInst::UndefMethod { undef, using_fpr } => {
                 self.emit_undef_method(undef, using_fpr);
+            }
+            LInst::CheckExit {
+                kind,
+                val,
+                using_fpr,
+            } => {
+                self.emit_check_exit(kind, val, using_fpr);
             }
             LInst::AliasGvar {
                 new,

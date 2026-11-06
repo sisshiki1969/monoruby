@@ -3126,6 +3126,54 @@ pub(super) extern "C" fn err_divide_by_zero(vm: &mut Executor) {
 }
 
 pub(super) extern "C" fn err_method_return(vm: &mut Executor, globals: &mut Globals, val: Value) {
+    match method_return_target(vm, globals) {
+        Some(target_lfp) => vm.set_error(MonorubyErr::method_return(val, target_lfp)),
+        None => vm.set_error(MonorubyErr::localjumperr_with_val("unexpected return", val)),
+    }
+}
+
+///
+/// `CheckExit` opcode helper (issue #1801): raise the LocalJumpError the
+/// `MethodRet` / `BlockBreak` that follows would raise, *before* its
+/// replayed `ensure` bodies run, so that the regions around the exit
+/// rescue it and run each body once. `None` (error set) when the exit is
+/// invalid; otherwise nothing happens and the replay and the exit follow.
+///
+/// The `break` case checks what `err_block_break` checks: that the
+/// block's defining frame is on this stack. A defining frame that is
+/// there but no longer running the call that received the block is only
+/// found out by the unwinder, as before.
+///
+pub(super) extern "C" fn check_nonlocal_exit(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    kind: u32,
+    val: Value,
+) -> Option<Value> {
+    match NonlocalExitKind::from(kind as u16) {
+        NonlocalExitKind::MethodRet => {
+            if method_return_target(vm, globals).is_none() {
+                vm.set_error(MonorubyErr::localjumperr_with_val("unexpected return", val));
+                return None;
+            }
+        }
+        NonlocalExitKind::BlockBreak => {
+            if block_break_is_local(globals, vm.cfp().lfp()).is_none()
+                && block_break_outer(vm).is_none()
+            {
+                vm.set_error(MonorubyErr::break_from_proc_closure(val));
+                return None;
+            }
+        }
+    }
+    Some(Value::nil())
+}
+
+///
+/// The frame a `return` compiled to `MethodRet` returns from, or `None`
+/// when the return is invalid there (LocalJumpError "unexpected return").
+///
+fn method_return_target(vm: &Executor, globals: &Globals) -> Option<Lfp> {
     // `return` is only compiled to a method-return inside a block (a
     // brace/`do` block — a lambda literal returns locally). At runtime
     // the same block may have been promoted to a lambda by `Kernel#lambda`
@@ -3174,8 +3222,7 @@ pub(super) extern "C" fn err_method_return(vm: &mut Executor, globals: &mut Glob
         // bare `return` in a thread body raises LocalJumpError at the
         // return site, rescuable inside the body (CRuby).
         if !lfp_reachable_within_barrier(vm, target) {
-            vm.set_error(MonorubyErr::localjumperr_with_val("unexpected return", val));
-            return;
+            return None;
         }
         // A return whose home chain crosses a class/module body is
         // invalid (CRuby: `class A; 1.times { return }; end` raises
@@ -3183,8 +3230,7 @@ pub(super) extern "C" fn err_method_return(vm: &mut Executor, globals: &mut Glob
         let mut hop = cfp.lfp();
         loop {
             if globals[hop.func_id()].is_classdef() {
-                vm.set_error(MonorubyErr::localjumperr_with_val("unexpected return", val));
-                return;
+                return None;
             }
             if hop == target {
                 break;
@@ -3201,14 +3247,13 @@ pub(super) extern "C" fn err_method_return(vm: &mut Executor, globals: &mut Glob
         // the top level, ends the script.
         if globals[target.func_id()].is_toplevel() && eval_inside_block(globals, cfp.lfp(), target)
         {
-            vm.set_error(MonorubyErr::localjumperr_with_val("unexpected return", val));
-            return;
+            return None;
         }
         target
     } else {
         cfp.lfp()
     };
-    vm.set_error(MonorubyErr::method_return(val, target_lfp));
+    Some(target_lfp)
 }
 
 /// Whether the lexical chain from `lfp` up to `target` holds an eval body
@@ -3252,33 +3297,37 @@ fn lfp_reachable_within_barrier(vm: &Executor, target: Lfp) -> bool {
 }
 
 pub(super) extern "C" fn err_block_break(vm: &mut Executor, globals: &mut Globals, val: Value) {
-    // In a lambda (including a block promoted by Kernel#lambda) and in
-    // a `define_method` body (which behaves exactly like a lambda),
-    // break is local: it exits the frame itself, like return.
     let lfp = vm.cfp().lfp();
-    if !globals[lfp.func_id()].is_block_style() || lfp.meta().is_proc_method() {
+    if let Some(lfp) = block_break_is_local(globals, lfp) {
         vm.set_error(MonorubyErr::method_return(val, lfp));
         return;
     }
-    // `break` escapes to the invocation of the call that received this
-    // block literal (CRuby's BREAK catch-table semantics): the unwinder
-    // stops at the block's *defining* frame and resumes it only when
-    // its in-progress call site is the one carrying this block; any
-    // other route (a materialized Proc invoked later, a re-yield of a
-    // captured proc) is a LocalJumpError. Pre-check that the defining
-    // frame is on this stack at all, so a proc whose creation scope has
-    // returned (or lives on another thread/fiber stack) fails fast.
     let block_fid = lfp.func_id();
-    if let Some(outer) = lfp.outer()
-        && lfp_reachable_within_barrier(vm, outer)
-    {
+    if let Some(outer) = block_break_outer(vm) {
         vm.set_error(MonorubyErr::block_break(val, block_fid, outer));
     } else {
-        vm.set_error(MonorubyErr::new(
-            MonorubyErrKind::LocalJump,
-            "break from proc-closure".to_string(),
-        ));
+        vm.set_error(MonorubyErr::break_from_proc_closure(val));
     }
+}
+
+/// In a lambda (including a block promoted by Kernel#lambda) and in a
+/// `define_method` body (which behaves exactly like a lambda), break is
+/// local: it exits the frame itself, like return. `Some(lfp)` then.
+fn block_break_is_local(globals: &Globals, lfp: Lfp) -> Option<Lfp> {
+    (!globals[lfp.func_id()].is_block_style() || lfp.meta().is_proc_method()).then_some(lfp)
+}
+
+/// `break` escapes to the invocation of the call that received this
+/// block literal (CRuby's BREAK catch-table semantics): the unwinder
+/// stops at the block's *defining* frame and resumes it only when its
+/// in-progress call site is the one carrying this block; any other route
+/// (a materialized Proc invoked later, a re-yield of a captured proc) is
+/// a LocalJumpError. Pre-check that the defining frame is on this stack
+/// at all, so a proc whose creation scope has returned (or lives on
+/// another thread/fiber stack) fails fast: `None` then.
+fn block_break_outer(vm: &Executor) -> Option<Lfp> {
+    let outer = vm.cfp().lfp().outer()?;
+    lfp_reachable_within_barrier(vm, outer).then_some(outer)
 }
 
 pub(super) extern "C" fn err_retry(vm: &mut Executor) {

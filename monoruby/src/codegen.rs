@@ -1237,6 +1237,7 @@ pub(crate) struct VmHandlers {
     pub concat_regexp: CodePtr,        // 86
     pub redo: CodePtr,                 // 87
     pub defined_cvar: CodePtr,         // 88
+    pub check_exit: CodePtr,           // 89
     pub pos: CodePtr,                  // 121
     pub neg: CodePtr,                  // 122
     pub bitnot: CodePtr,               // 123
@@ -1381,6 +1382,7 @@ impl Codegen {
         self.dispatch[86] = h.concat_regexp;
         self.dispatch[87] = h.redo;
         self.dispatch[88] = h.defined_cvar;
+        self.dispatch[89] = h.check_exit;
 
         self.dispatch[121] = h.pos;
         self.dispatch[122] = h.neg;

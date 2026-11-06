@@ -251,10 +251,7 @@ pub(super) extern "C" fn handle_error(
                     (0..40).filter_map(|i| globals.store.get_callsite_id(iseq_id, crate::bytecodegen::BcIndex::from(i)).map(|id| (i, globals.store[id].block_fid))).collect::<Vec<_>>()
                 );
                 vm.take_error();
-                vm.set_error(MonorubyErr::new(
-                    MonorubyErrKind::LocalJump,
-                    "break from proc-closure".to_string(),
-                ));
+                vm.set_error(MonorubyErr::break_from_proc_closure(val));
                 // fall through to the ordinary exception handling below
                 // (rescue table of this frame, or propagate).
             }

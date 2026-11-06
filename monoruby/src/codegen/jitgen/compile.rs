@@ -1387,6 +1387,17 @@ impl<'a> JitContext<'a> {
                 state.discard_temps();
                 return Ok(CompileResult::Break(result));
             }
+            TraceIr::CheckExit(kind, val) => {
+                // Issue #1801: raise the exit's LocalJumpError ahead of its
+                // replayed `ensure` bodies. A target frame inside this unit
+                // is on the stack whenever this code runs (the exit lowers
+                // to the specialized teardown), so there is nothing to check.
+                if !self.nonlocal_exit_target_in_unit(kind) {
+                    state.flush_gp(ir);
+                    state.write_back_slots(ir, &[val]);
+                    ir.check_exit(state, kind, val);
+                }
+            }
             TraceIr::Raise(ret) => {
                 state.flush_gp(ir);
                 state.locals_to_S(ir);

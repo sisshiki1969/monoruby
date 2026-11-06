@@ -1,6 +1,28 @@
 use super::*;
 use crate::ast::CmpKind;
 
+///
+/// The non-local exit a `CheckExit` instruction validates ahead of its
+/// replayed `ensure` bodies (issue #1801).
+///
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum NonlocalExitKind {
+    /// A `return` compiled to `MethodRet` (inside a block).
+    MethodRet = 0,
+    /// A `break` out of a block (`BlockBreak`).
+    BlockBreak = 1,
+}
+
+impl NonlocalExitKind {
+    pub fn from(i: u16) -> Self {
+        match i {
+            0 => Self::MethodRet,
+            1 => Self::BlockBreak,
+            _ => unreachable!(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum BrKind {
     BrIf = 0,
@@ -213,6 +235,10 @@ pub(super) enum BytecodeInst {
     Ret(BcReg),
     MethodRet(BcReg),
     BlockBreak(BcReg),
+    /// Raise LocalJumpError here, ahead of the `ensure` bodies a
+    /// `MethodRet` / `BlockBreak` replays, when that exit would turn out
+    /// to be invalid (issue #1801). The operand is the exit's value.
+    CheckExit(NonlocalExitKind, BcReg),
     Raise(BcReg),
     Retry(Label),
     Redo(Label),
