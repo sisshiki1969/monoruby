@@ -746,6 +746,11 @@ impl<'a> JitContext<'a> {
         {
             return *lhs == slot && *rhs != slot && Self::range_ends(src).is_some();
         }
+        // `yield [k, v]` into a block that auto-splats it
+        // ([`Self::yield_expanded_for`]).
+        if let TraceIr::Yield { callid } = trace_ir {
+            return self.yield_expanded_for(*callid, slot, src, bc_pos).is_some();
+        }
         let TraceIr::MethodCall { callid, cache, .. } = trace_ir else {
             return false;
         };
@@ -786,6 +791,41 @@ impl<'a> JitContext<'a> {
                             && self.caller_slots_ok(e.func_id))
             }
         }
+    }
+
+    ///
+    /// The expanded twin of the `yield [e1, .., en]` site *callid*
+    /// (`CallSiteInfo::yield_expanded`) when the yield may pass the
+    /// elements in place of the elided Array *src* in *slot*: the Array is
+    /// the one built from the twin's argument temporaries and nothing
+    /// reads it afterwards, and the block — the literal one specialized
+    /// in place — auto-splats a lone Array argument
+    /// (`FuncInfo::single_arg_expand`), so it binds `e1, .., en` exactly
+    /// as it would bind the Array, takes no keywords, and is a simple
+    /// call for the twin.
+    ///
+    pub(super) fn yield_expanded_for(
+        &self,
+        callid: CallSiteId,
+        slot: SlotId,
+        src: VirtualSrc,
+        bc_pos: BcIndex,
+    ) -> Option<CallSiteId> {
+        let cs = &self.store[callid];
+        let exp = cs.yield_expanded?;
+        let ecs = &self.store[exp];
+        let fid = self.current_method_given_block()?.block_fid;
+        let info = &self.store[fid];
+        (cs.args == slot
+            && matches!(src, VirtualSrc::Slots { src, len, .. }
+                if src == ecs.args && len as usize == ecs.pos_num)
+            && !self.in_dispatch_arm()
+            && self.dead_after(bc_pos, slot)
+            && info.is_iseq().is_some()
+            && info.single_arg_expand()
+            && info.no_keyword()
+            && self.store.is_simple_call(fid, exp))
+            .then_some(exp)
     }
 
     ///

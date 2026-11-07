@@ -35,19 +35,12 @@ class Hash
       # CRuby's semantics. `__entry_count` is the raw bound, tombstones
       # included; *adding* a key still raises, so it cannot grow mid-loop.
       i = 0
-      if __block_pair_yield?
-        # A block that requires two or more arguments splits the pair
-        # anyway: hand it key and value directly and skip the Array
-        # (CRuby's `rb_block_pair_yield_optimizable`).
-        while i < __entry_count
-          yield __key_at(i), __value_at(i) if __live_at(i)
-          i += 1
-        end
-      else
-        while i < __entry_count
-          yield [__key_at(i), __value_at(i)] if __live_at(i)
-          i += 1
-        end
+      # A literal block that splits the pair anyway (`{ |k, v| }`) takes
+      # key and value straight from the yield's argument temporaries: the
+      # JIT yields `[k, v]` without building it (`CallSiteInfo::yield_expanded`).
+      while i < __entry_count
+        yield [__key_at(i), __value_at(i)] if __live_at(i)
+        i += 1
       end
     ensure
       __iter_end(guard)

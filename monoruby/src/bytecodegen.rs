@@ -286,6 +286,10 @@ struct CallSite {
     /// on the object the site produces — see
     /// `CallSiteInfo::class_new_init`.
     class_new_init: bool,
+    /// `yield [e1, .., en]` (n >= 2, no splat): the number of elements.
+    /// `encode_call` gives the site a twin describing `yield e1, .., en`
+    /// — see `CallSiteInfo::yield_expanded`.
+    yield_expanded: Option<usize>,
 }
 
 impl CallSite {
@@ -317,6 +321,7 @@ impl CallSite {
             vcall: false,
             send_direct_name: None,
             class_new_init: false,
+            yield_expanded: None,
         }
     }
 

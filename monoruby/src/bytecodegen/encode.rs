@@ -753,6 +753,7 @@ impl<'a> BytecodeGen<'a> {
             block_fid,
             send_direct_name,
             class_new_init,
+            yield_expanded,
             ..
         } = callsite;
         let ret = match dst {
@@ -829,6 +830,32 @@ impl<'a> BytecodeGen<'a> {
             );
             self.store.set_class_new_init(callid, init);
         }
+        // The expanded twin of `yield [e1, .., en]`: `yield e1, .., en`,
+        // the elements being the temporaries the Array literal is built
+        // from (`args + 1 ..`), with the same result slot. Only the JIT
+        // looks it up, for a block that would auto-splat the Array anyway
+        // (`CallSiteInfo::yield_expanded`).
+        if let Some(len) = yield_expanded {
+            let expanded = self.store.new_callsite(
+                Some(IdentId::get_id("<block>")),
+                bc_pos,
+                len,
+                SlotId(0),
+                indexmap::IndexMap::default(),
+                vec![],
+                vec![],
+                vec![],
+                None,
+                None,
+                arg_slot + 1usize,
+                recv_slot,
+                dst_slot,
+                false,
+                false,
+                false,
+            );
+            self.store.set_yield_expanded(callid, expanded);
+        }
         let op1 = enc_wl(opcode, ret, callid.get());
         let op2 = enc_www(
             0,
@@ -865,6 +892,7 @@ impl<'a> BytecodeGen<'a> {
             // before handing the original here.
             send_direct_name: _,
             class_new_init: _,
+            yield_expanded: _,
         } = callsite;
 
         let args = self.slot_id(&args);

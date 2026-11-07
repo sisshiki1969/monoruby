@@ -117,10 +117,13 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "__pairs", pairs, 0);
     // The block-shape question `Hash#map` (builtins/hash.rb) asks about its
     // own block, answered without capturing it into a Proc.
-    globals.define_builtin_func(HASH_CLASS, "__block_splits_pair?", block_splits_pair, 0);
-    // Whether `Hash#each` may yield key and value as two values instead of
-    // a `[key, value]` pair (CRuby's `rb_block_pair_yield_optimizable`).
-    globals.define_builtin_func(HASH_CLASS, "__block_pair_yield?", block_pair_yield, 0);
+    globals.define_builtin_inline_func(
+        HASH_CLASS,
+        "__block_splits_pair?",
+        block_splits_pair,
+        inline_gen2!(hash_block_splits_pair),
+        0,
+    );
     // A fresh, empty Hash pre-sized for n entries — the result-hash
     // allocation for the Ruby-side bulk builders (to_h / transform_*),
     // skipping the inline→boxed→indexed growth ladder.
@@ -1368,54 +1371,6 @@ fn hash_index_assign(
 }
 
 ///
-/// ### Hash#__block_pair_yield? (internal)
-///
-/// Whether the *caller's* block can be handed key and value as two
-/// arguments instead of a fresh `[key, value]` Array — CRuby's
-/// `rb_block_pair_yield_optimizable`, which `Hash#each` asks for the same
-/// reason: a non-lambda block that requires at least two positional
-/// arguments auto-splats the pair anyway, so the Array is never seen and
-/// need not be built. A lambda (it would bind the pair strictly), a Symbol
-/// or Method block, and a Proc whose arity is not fixed keep the pair.
-///
-/// Read off the caller's yield home like `__block_splits_pair?`, so `each`
-/// needs no `&blk` parameter.
-///
-#[monoruby_builtin]
-fn block_pair_yield(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    _lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    Ok(Value::bool(
-        block_splats_pair(vm, globals).unwrap_or(false),
-    ))
-}
-
-/// The rule behind [`block_pair_yield`], `None` meaning "no".
-fn block_splats_pair(vm: &Executor, globals: &Globals) -> Option<bool> {
-    let bh = vm.cfp().prev()?.lfp().yield_home().block()?;
-    // (func, whether the block's arity must be fixed)
-    let (fid, fixed) = match bh.try_proxy() {
-        Some((fid, _)) => (fid, false),
-        None => {
-            let proc = bh
-                .try_proc()
-                .filter(|proc| !super::proc::proc_is_lambda(globals, proc))?;
-            (proc.func_id(), true)
-        }
-    };
-    let info = &globals[fid];
-    let min = info.req_num() + info.post_num();
-    Some(
-        info.is_block_style()
-            && min > 1
-            && (!fixed || (!info.is_rest() && info.opt_num() == 0)),
-    )
-}
-
-///
 /// ### Hash#__block_splits_pair? (internal)
 ///
 /// Whether the *caller's* block must receive a `[key, value]` pair split in
@@ -1488,6 +1443,54 @@ fn block_splits_pair(
         }
     };
     Ok(Value::bool(split))
+}
+
+/// The block of the method frame being compiled, when the JIT can name it
+/// statically: `Some(Some(fid))` for a literal block (or a lambda literal)
+/// written at the call site that entered the method, `Some(None)` when no
+/// block was passed, `None` when only the runtime knows (an unspecialized
+/// frame, or an `&blk` argument).
+fn literal_block(jitctx: &JitContext) -> Option<Option<FuncId>> {
+    jitctx
+        .resolve_given_block()
+        .map(|b| b.map(|info| info.block_fid))
+}
+
+/// Fold an inline-generated block-shape predicate to the constant *b*.
+fn def_bool(state: &mut AbstractState, store: &Store, callid: CallSiteId, b: bool) {
+    if let Some(dst) = store[callid].dst {
+        state.def_C(dst, Immediate::bool(b));
+    }
+}
+
+/// `Hash#__block_splits_pair?` at a call site whose block the JIT knows:
+/// the answer depends on nothing but that block's func (the proxy arm of
+/// [`block_splits_pair`]), so it is a compile-time constant and `Hash#map`'s
+/// choice of loop folds away with it.
+fn hash_block_splits_pair(
+    state: &mut AbstractState,
+    _: &mut AsmIr,
+    jitctx: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    if !store[callid].is_simple() {
+        return false;
+    }
+    let Some(block) = literal_block(jitctx) else {
+        return false;
+    };
+    let b = block.is_some_and(|fid| {
+        let info = &store[fid];
+        !info.is_block_style() && {
+            let ar = info.arity();
+            ar >= 2 || ar <= -3
+        }
+    });
+    def_bool(state, store, callid, b);
+    true
 }
 
 /// ### Hash#__key_at (internal)

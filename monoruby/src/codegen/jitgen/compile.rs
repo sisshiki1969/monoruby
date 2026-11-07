@@ -958,7 +958,26 @@ impl<'a> JitContext<'a> {
                 if let Some(block_info) = self.current_method_given_block()
                     && let Some(iseq) = self.store[block_info.block_fid].is_iseq()
                 {
-                    return self.compile_yield_specialized(state, ir, callid, &block_info, iseq);
+                    // `yield [k, v]` whose Array was elided and kept for this
+                    // yield (`settle_virtuals`): yield the elements through
+                    // the expanded twin instead, the Array never built. The
+                    // object stays in the state until the block's arguments
+                    // are filled, so an exit that hands the yield back to the
+                    // interpreter (a frameless block's redo) builds it.
+                    let arg = self.store[callid].args;
+                    let Some(src) = state.virtual_at(arg) else {
+                        return self.compile_yield_specialized(state, ir, callid, &block_info, iseq);
+                    };
+                    // `settle_virtuals` keeps an object in the argument slot
+                    // only for this very consumer (`may_consume_virtual`).
+                    let exp = self
+                        .yield_expanded_for(callid, arg, src, bc_pos)
+                        .expect("an elided yield argument without its expanded twin");
+                    let res = self.compile_yield_specialized(state, ir, exp, &block_info, iseq)?;
+                    if let Some(src) = state.take_virtual(arg) {
+                        state.discard_dead_elements(src, arg);
+                    }
+                    return Ok(res);
                 }
                 // Not inlined: the block becomes a unit of its own, and
                 // whatever it stores it stores where we cannot see it. So

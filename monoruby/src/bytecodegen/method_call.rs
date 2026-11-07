@@ -349,11 +349,31 @@ impl<'a> BytecodeGen<'a> {
             return Err(self.syntax_error("Block argument should not be given", loc));
         }
 
-        let callid =
+        // `yield [e1, .., en]`: the elements land in the temporaries just
+        // past the Array's own slot, which is all the expanded twin needs
+        // (`CallSiteInfo::yield_expanded`).
+        let expanded = match arglist.args.as_slice() {
+            [Node {
+                kind: NodeKind::Array(elems, false),
+                ..
+            }] if arglist.kw_args.is_empty()
+                && arglist.hash_splat.is_empty()
+                && !arglist.delegate_block
+                && (2..=expression::LITERAL_CHUNK_LEN).contains(&elems.len())
+                && !elems.iter().any(|n| matches!(n.kind, NodeKind::Splat(..))) =>
+            {
+                Some(elems.len())
+            }
+            _ => None,
+        };
+        let mut callid =
             self.handle_no_forward(arglist, IdentId::get_id("<block>"), BcReg::Self_, dst, loc)?;
-        self.emit_yield(callid, loc);
-
+        callid.yield_expanded = expanded;
+        // The arguments are dead once the yield has read them, as for a
+        // method call (`gen_method_call`): their temporaries are popped
+        // before the instruction, so the JIT sees them free at it.
         self.temp = old;
+        self.emit_yield(callid, loc);
 
         if use_mode.is_ret() {
             self.emit_ret(None)?;
