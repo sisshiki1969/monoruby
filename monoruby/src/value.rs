@@ -242,11 +242,10 @@ impl<T: Copy + PartialEq> RecursionStack<T> {
         true
     }
 
-    /// Remove *id*, normally the top of the stack.
+    /// Remove *id*: normally the top of the stack, but a Fiber switch
+    /// inside a walk can finish an inner walk under an outer one.
     fn remove(&mut self, id: &T) {
-        if self.0.last() == Some(id) {
-            self.0.pop();
-        } else if let Some(pos) = self.0.iter().rposition(|x| x == id) {
+        if let Some(pos) = self.0.iter().rposition(|x| x == id) {
             self.0.remove(pos);
         }
     }

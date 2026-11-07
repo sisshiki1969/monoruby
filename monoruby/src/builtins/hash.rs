@@ -1388,30 +1388,31 @@ fn block_pair_yield(
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let Some(caller) = vm.cfp().prev() else {
-        return Ok(Value::bool(false));
-    };
-    let Some(bh) = caller.lfp().yield_home().block() else {
-        return Ok(Value::bool(false));
-    };
+    Ok(Value::bool(
+        block_splats_pair(vm, globals).unwrap_or(false),
+    ))
+}
+
+/// The rule behind [`block_pair_yield`], `None` meaning "no".
+fn block_splats_pair(vm: &Executor, globals: &Globals) -> Option<bool> {
+    let bh = vm.cfp().prev()?.lfp().yield_home().block()?;
     // (func, whether the block's arity must be fixed)
-    let (fid, fixed) = if let Some((fid, _)) = bh.try_proxy() {
-        (fid, false)
-    } else if let Some(proc) = bh.try_proc() {
-        if super::proc::proc_is_lambda(globals, &proc) {
-            return Ok(Value::bool(false));
+    let (fid, fixed) = match bh.try_proxy() {
+        Some((fid, _)) => (fid, false),
+        None => {
+            let proc = bh
+                .try_proc()
+                .filter(|proc| !super::proc::proc_is_lambda(globals, proc))?;
+            (proc.func_id(), true)
         }
-        (proc.func_id(), true)
-    } else {
-        return Ok(Value::bool(false));
     };
     let info = &globals[fid];
-    if !info.is_block_style() {
-        return Ok(Value::bool(false));
-    }
     let min = info.req_num() + info.post_num();
-    let ok = min > 1 && (!fixed || (!info.is_rest() && info.opt_num() == 0));
-    Ok(Value::bool(ok))
+    Some(
+        info.is_block_style()
+            && min > 1
+            && (!fixed || (!info.is_rest() && info.opt_num() == 0)),
+    )
 }
 
 ///
