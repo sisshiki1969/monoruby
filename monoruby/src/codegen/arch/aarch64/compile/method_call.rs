@@ -90,6 +90,10 @@ impl Codegen {
             mov x9, (crate::codegen::runtime::invoke_method_missing as *const () as u64);
             blr x9;                            // x0 = Option<Value>
             ldr x30, [sp], #16;
+            // `method_missing` may have moved this frame to the heap (a
+            // block literal turned into a Proc): reload the LFP from the
+            // cfp, as `pop_frame` does after a regular call.
+            ldur x22, [x29, #(-((BP_CFP + CFP_LFP) as i32))];
         );
         self.emit_fpr_restore(using_fpr, false);
         self.emit_handle_error(error);

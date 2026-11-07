@@ -195,3 +195,83 @@ fn super_without_a_super_method() {
         "##,
     );
 }
+
+/// `method_missing` turning the caller's block literal into a Proc moves
+/// the caller's frame to the heap in the middle of the call. The caller
+/// must carry on against the heap copy: locals assigned after the call
+/// used to land in the abandoned stack frame and read back as `nil`
+/// (#1823). This is the interpreter's half — `f` runs once.
+#[test]
+fn block_captured_by_method_missing_in_the_vm() {
+    run_test_once(
+        r##"
+        class Cap
+          def method_missing(*, &b) = b
+        end
+        def f
+          o = Cap.new
+          pr = o.bar { 7 }
+          x = 1
+          y = 2
+          [o.class, x, y, pr.call]
+        end
+        f
+        "##,
+    );
+}
+
+/// The compiled half of #1823: a block literal handed to `method_missing`
+/// from compiled code, whether `method_missing` captures it as a Proc or
+/// only yields to it, sees the caller's locals and has its stores seen by
+/// the caller; and a `method_missing` that defines the missing method
+/// leaves nothing cached behind it.
+#[test]
+fn block_captured_by_method_missing_in_compiled_code() {
+    run_test(
+        r##"
+        class Cap
+          def method_missing(name, *a, &b) = b ? b : name
+          def respond_to_missing?(*) = true
+        end
+        class Yld
+          def method_missing(name, *a) = yield(*a)
+        end
+        class Dfn
+          def method_missing(name, *a)
+            self.class.define_method(name) { |*x| [name, x] }
+            send(name, *a)
+          end
+        end
+        def t1(i)
+          y = Yld.new; s = 0; y.foo(i) { |v| s += v }; t = s * 2; [s, t]
+        end
+        def t2(i)
+          o = Cap.new; acc = []
+          [1, 2].each { |k| pr = o.bar { k + i }; z = k * 10; acc << [pr.call, z] }
+          q = acc.size; [acc, q]
+        end
+        def t3(i)
+          d = Dfn.new; a = d.qux(i); b = d.qux(i + 1); [a, b]
+        end
+        def t4(i)
+          o = Cap.new; n = o.zz; w = i + 1; [n, w]
+        end
+        def t5(i)
+          o = Cap.new; f = i * 1.5; pr = o.bar { f }; g = f + 1.0; [g, pr.call]
+        end
+        def t6
+          o = Cap.new; a = 1; o.bar { a += 1 }.call; b = a + 10; [a, b]
+        end
+        r = []
+        40.times { |i| r = [t1(i), t2(i), t3(i), t4(i), t5(i), t6] }
+        i = 0; s = 0; o = Cap.new
+        while i < 50
+          pr = o.bar { s += 1 }
+          pr.call
+          u = i
+          i += 1
+        end
+        r << [i, s, u]
+        "##,
+    );
+}
