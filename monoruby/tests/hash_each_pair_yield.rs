@@ -38,3 +38,43 @@ fn hash_each_block_shapes() {
         "##,
     );
 }
+
+#[test]
+fn hash_each_non_block_procs() {
+    // Symbol and Method procs are not blocks: they keep the pair Array
+    // (a Method proc is a lambda, so a two-parameter one raises).
+    run_test_with_prelude(
+        r##"
+        t({a: 1, b: 2})
+        "##,
+        r##"
+        def m1(kv) = kv
+        def m2(k, v) = [k, v]
+        def t(h)
+          r = [h.each(&:to_s), h.map(&method(:m1))]
+          begin; h.each(&method(:m2)); r << :ok; rescue ArgumentError => e; r << e.class; end
+          r << h.each_with_object([]) { |(k, v), a| a << k }
+        end
+        "##,
+    );
+}
+
+#[test]
+fn recursion_guard_out_of_order_exit() {
+    // A Fiber suspended inside an Array#== keeps its guard entry while
+    // the main fiber starts another comparison and resumes it from
+    // there: the inner walk's entry is then removed below the top of
+    // the guard stack.
+    run_test_once(
+        r##"
+        class E; def ==(o) = (Fiber.yield; true); end
+        class R; def ==(o) = ($f.resume; true); end
+        $f = Fiber.new { [E.new] == [1] }
+        $f.resume
+        r = [[R.new] == [2], [[1, 2], [3]] == [[1, 2], [3]]]
+        a = [1]; a << a
+        r << (a == a) << (a.hash == a.hash) << a.inspect
+        r
+        "##,
+    );
+}
