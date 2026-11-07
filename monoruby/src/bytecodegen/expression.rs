@@ -1056,11 +1056,14 @@ impl<'a> BytecodeGen<'a> {
                 let arg = self.sp();
                 if seed {
                     let r = self.push().into();
-                    // Plain (never chilled/frozen) seed: the concat
-                    // result is a fresh mutable string in CRuby, even
-                    // under a frozen_string_literal pragma.
+                    // The seed only carries the source encoding into the
+                    // concat, which reads it and always builds a fresh
+                    // mutable result — so, like the literal fragments
+                    // below, it is the interned frozen `""` rather than a
+                    // copy allocated on every evaluation.
                     let enc = self.source_encoding();
-                    self.emit_literal(r, Value::string_from_source_str("", enc));
+                    let v = self.store.intern_frozen_str(b"", enc);
+                    self.emit(BytecodeInst::FrozenLiteral(r, v), Loc::default());
                 }
                 for expr in nodes {
                     // A literal fragment of an interpolation is only ever
