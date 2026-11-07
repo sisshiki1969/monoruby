@@ -1,5 +1,5 @@
 # Run on monoruby (the gem installed through its C API layer, over
-# ruby/re.h) and on the host CRuby by tests/capi_gems.rs; both must print
+# ruby/re.h) and on the host CRuby by bin/test-gems; both must print
 # the same.
 gem "strscan", ENV.fetch("CAPI_GEM_VERSION")
 require "strscan"

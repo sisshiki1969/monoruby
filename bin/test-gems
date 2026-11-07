@@ -1,0 +1,291 @@
+#!/bin/bash
+# bin/test-gems
+#
+# The gem-install checks of the C API layer (doc/c_api.md §3.10, §3.11),
+# run as a script rather than as cargo tests. They were tests/mkmf.rs's
+# `gem_install_builds_the_extension` / `host_installed_gem_extension_is_rebuilt`
+# and the whole of tests/capi_gems.rs; everything they do is `gem build`,
+# `gem install`, run a script on both interpreters and diff, and what they
+# depend on — the host CRuby's `gem`, its gem cache, a C compiler and
+# make — is outside the interpreter, so on developer machines they failed
+# for reasons `cargo test` could not say much about. Here each check
+# reports what it needed and what it got, and a missing prerequisite is a
+# visible skip, not a silent pass.
+#
+#   1. The fixture gem tests/capi/capi_gem/ (a gem with an `extconf.rb`)
+#      is built and installed with monoruby's `bin/gem` and with the host
+#      CRuby's; `run.rb` must print the same on both.
+#   2. The gem the host CRuby installed in (1) — its extension built
+#      against CRuby's headers — loads on monoruby all the same: `require`
+#      rebuilds the gem's sources against the layer once, into a gem home
+#      under a HOME of this script's own, and a second run reuses it.
+#   3. Real gems with a C extension (bcrypt, msgpack, strscan, strptime,
+#      yajl-ruby, json at the newest cached version and at 2.18.0): the
+#      `.gem` the host CRuby has in its cache is installed into a gem
+#      home of monoruby's own, and tests/capi/gems/<gem>.rb is run there
+#      and on the host CRuby. A gem whose `.gem` is not in the host's
+#      cache is skipped (`gem install <gem>` puts it there).
+#
+# Usage:
+#   bin/test-gems                         # target/debug/monoruby (built if missing), `ruby` on PATH
+#   MONORUBY=/path/to/monoruby bin/test-gems
+#   CRUBY=/path/to/ruby bin/test-gems
+#   TEST_GEMS_DIR=/tmp/x bin/test-gems    # work dir (default target/test-gems, wiped first)
+#
+# Exits non-zero if any check fails; skips alone do not fail the run.
+# Plain bash 3.2 (macOS's /bin/bash): no mapfile, no `set -u` on arrays.
+set -o pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+FIXTURE="$REPO/monoruby/tests/capi/capi_gem"
+GEM_SCRIPTS="$REPO/monoruby/tests/capi/gems"
+WORK="${TEST_GEMS_DIR:-$REPO/target/test-gems}"
+
+# --- locate monoruby. The repo's rust-toolchain.toml requires the
+# rustup-managed cargo, so prepend ~/.cargo/bin if present.
+if [ -z "${MONORUBY:-}" ]; then
+  MONORUBY="$REPO/target/debug/monoruby"
+  if [ ! -x "$MONORUBY" ]; then
+    if [ -d "$HOME/.cargo/bin" ]; then PATH="$HOME/.cargo/bin:$PATH"; fi
+    (cd "$REPO" && cargo build -p monoruby) >&2 || exit 2
+  fi
+fi
+if [ ! -x "$MONORUBY" ]; then
+  echo "monoruby binary not found at $MONORUBY (run 'cargo build' first or set MONORUBY=...)" >&2
+  exit 2
+fi
+# The checks `cd` into their work dirs, so both interpreters are
+# addressed by absolute path (a bare command name is left to PATH).
+MONORUBY="$(cd "$(dirname "$MONORUBY")" && pwd)/$(basename "$MONORUBY")"
+CRUBY="${CRUBY:-ruby}"
+case "$CRUBY" in
+  */*) CRUBY="$(cd "$(dirname "$CRUBY")" && pwd)/$(basename "$CRUBY")" ;;
+esac
+CC="${CC:-cc}"
+
+PASSED=()
+FAILED=()
+SKIPPED=()
+
+# clean_env [VAR=value...] cmd...: the command with the environment the
+# Rust tests gave it — the gem home under test and nothing of the
+# caller's bundle.
+clean_env() {
+  env -u RUBYOPT -u BUNDLE_GEMFILE "$@"
+}
+
+# logged <log> <gem home> cmd...: runs the command with its stdout in the
+# log and its stderr in <log>.err (the outputs are compared on stdout
+# alone, as the Rust tests compared them: monoruby's startup warnings go
+# to stderr); on failure prints both plus every mkmf.log / gem_make.out
+# under the gem home (what says which compile or link failed).
+logged() {
+  local log="$1" home="$2"
+  shift 2
+  if ! "$@" > "$log" 2> "$log.err"; then
+    echo "--- command failed: $*" >&2
+    cat "$log" "$log.err" >&2
+    if [ -n "$home" ] && [ -d "$home" ]; then
+      find "$home" \( -name mkmf.log -o -name gem_make.out \) 2>/dev/null \
+        | while IFS= read -r f; do echo "--- $f" >&2; cat "$f" >&2; done
+    fi
+    return 1
+  fi
+}
+
+# mtime: one modification time per path read from stdin.
+mtime() {
+  "$CRUBY" -e 'STDIN.each_line { |f| puts File.mtime(f.chomp).to_r }'
+}
+
+# --- 1. the fixture gem, on each interpreter --------------------------------
+
+# fixture_gem <flavor>: gem build + gem install into $WORK/gem/<flavor>/home
+# with that interpreter's gem, then run.rb against it; the output goes to
+# $WORK/gem/<flavor>/out.
+fixture_gem() {
+  local flavor="$1"
+  local dir="$WORK/gem/$flavor" src="$WORK/gem/$flavor/src" home="$WORK/gem/$flavor/home"
+  local -a gem interp
+  case "$flavor" in
+    monoruby) interp=("$MONORUBY"); gem=("$MONORUBY" "$MONO_GEM") ;;
+    cruby)    interp=("$CRUBY");    gem=("$CRUBY" -S gem) ;;
+  esac
+  rm -rf "$dir"
+  mkdir -p "$src"
+  cp -R "$FIXTURE/." "$src"
+  (cd "$src" && logged "$dir/build.log" "$home" \
+    clean_env GEM_HOME="$home" GEM_PATH="$home" "${gem[@]}" build capi_gem.gemspec) || return 1
+  [ -f "$src/capi_gem-0.1.0.gem" ] || { echo "gem build produced no .gem" >&2; cat "$dir/build.log" >&2; return 1; }
+  (cd "$src" && logged "$dir/install.log" "$home" \
+    clean_env GEM_HOME="$home" GEM_PATH="$home" "${gem[@]}" install --local --no-document --ignore-dependencies \
+      --install-dir "$home" capi_gem-0.1.0.gem) || return 1
+  grep -q "Building native extensions" "$dir/install.log" || { echo "no 'Building native extensions' in:" >&2; cat "$dir/install.log" >&2; return 1; }
+  grep -q "1 gem installed" "$dir/install.log" || { echo "no '1 gem installed' in:" >&2; cat "$dir/install.log" >&2; return 1; }
+  [ -f "$home/gems/capi_gem-0.1.0/lib/capi_gem.rb" ] || { echo "lib/capi_gem.rb was not installed" >&2; return 1; }
+  # rubygems marks the build done under extensions/<platform>/<api>/.
+  local built
+  built="$(find "$home/extensions" -mindepth 3 -maxdepth 3 -name capi_gem-0.1.0 2>/dev/null)"
+  [ "$(printf '%s\n' "$built" | grep -c .)" = 1 ] || { echo "expected one built extension dir, got: $built" >&2; return 1; }
+  [ -f "$built/gem.build_complete" ] || { echo "no gem.build_complete in $built" >&2; return 1; }
+  (cd "$src" && logged "$dir/out" "$home" \
+    clean_env GEM_HOME="$home" GEM_PATH="$home" "${interp[@]}" "$FIXTURE/run.rb") || return 1
+}
+
+check_fixture_gem() {
+  fixture_gem monoruby || return 1
+  local out="$WORK/gem/monoruby/out"
+  grep -q '"hello, gem (sizeof(long) = 8)"' "$out" || { echo "unexpected output:" >&2; cat "$out" >&2; return 1; }
+  [ "$(tail -n 2 "$out")" = $'["ext/capi_gem/extconf.rb"]\n1' ] || { echo "unexpected output:" >&2; cat "$out" >&2; return 1; }
+  fixture_gem cruby || return 1
+  diff -u "$WORK/gem/cruby/out" "$WORK/gem/monoruby/out" \
+    || { echo "run.rb differs between CRuby (-) and monoruby (+)" >&2; return 1; }
+}
+
+# --- 2. a host-installed gem's extension is rebuilt for monoruby -------------
+
+check_host_rebuild() {
+  local dir="$WORK/gem/cruby" home="$WORK/gem/cruby/home" user_home="$WORK/gem/cruby/user_home"
+  [ -f "$dir/out" ] || { echo "the CRuby fixture gem install did not run" >&2; return 1; }
+  rm -rf "$user_home"
+  mkdir -p "$user_home"
+  local host_so
+  host_so="$(find "$home" \( -name capi_gem.so -o -name capi_gem.bundle \) | sort)"
+  [ -n "$host_so" ] || { echo "no CRuby-built capi_gem.so under $home" >&2; return 1; }
+  local before after
+  before="$(printf '%s\n' "$host_so" | mtime)"
+  # monoruby's gem home is `~/.monoruby/gems/<api>`: a HOME of this
+  # script's own keeps the rebuild out of the real one.
+  local -a run=(clean_env HOME="$user_home" GEM_HOME="$home" GEM_PATH="$home")
+  (cd "$dir" && logged "$dir/mono1.out" "$user_home" "${run[@]}" "$MONORUBY" "$FIXTURE/run.rb") || return 1
+  diff -u "$dir/out" "$dir/mono1.out" \
+    || { echo "run.rb on the host-installed gem differs between CRuby (-) and monoruby (+)" >&2; return 1; }
+  local built
+  built="$(find "$user_home/.monoruby" -name gem.build_complete 2>/dev/null)"
+  [ "$(printf '%s\n' "$built" | grep -c .)" = 1 ] || { echo "expected one rebuilt extension, got: $built" >&2; return 1; }
+  case "$built" in
+    *host_extensions*) ;;
+    *) echo "the rebuild is not under host_extensions: $built" >&2; return 1 ;;
+  esac
+  local built_at
+  built_at="$(printf '%s\n' "$built" | mtime)"
+  (cd "$dir" && logged "$dir/mono2.out" "$user_home" "${run[@]}" "$MONORUBY" "$FIXTURE/run.rb") || return 1
+  diff -u "$dir/out" "$dir/mono2.out" || { echo "second run differs" >&2; return 1; }
+  [ "$(printf '%s\n' "$built" | mtime)" = "$built_at" ] || { echo "the cached build was not reused" >&2; return 1; }
+  # The host's `.so` required again by its own path is the rebuild
+  # already loaded, not a second copy.
+  local so again
+  while IFS= read -r so; do
+    again="$(cd "$dir" && "${run[@]}" "$MONORUBY" -e "require 'capi_gem'; p require(ARGV[0])" "$so" 2> "$dir/again.err")" \
+      || { echo "require of $so failed: $again" >&2; cat "$dir/again.err" >&2; return 1; }
+    [ "$again" = "false" ] || { echo "require of $so printed $again, expected false" >&2; return 1; }
+  done <<< "$host_so"
+  after="$(printf '%s\n' "$host_so" | mtime)"
+  [ "$before" = "$after" ] || { echo "the host's extension was touched" >&2; return 1; }
+}
+
+# --- 3. real gems from the host's gem cache ----------------------------------
+
+# cached_gem <name> [<version>]: the path of the newest `<name>-<version>.gem`
+# in the host CRuby's gem caches (a plain version — not a prebuilt binary
+# gem's `1.8.5-x86_64-linux`), or of the one version asked for; nothing
+# when there is none.
+cached_gem() {
+  "$CRUBY" -e '
+    name, want = ARGV
+    found = Gem.path.flat_map { |d| Dir["#{d}/cache/#{name}-*.gem"] }.filter_map do |f|
+      v = File.basename(f, ".gem").delete_prefix("#{name}-")
+      next unless v.match?(/\A\d+(\.\d+)*\z/)
+      next if want && v != want
+      [Gem::Version.new(v), f]
+    end.max_by(&:first)
+    puts found.last if found
+  ' -- "$@"
+}
+
+# real_gem <name> [<version>]; returns 2 to skip.
+real_gem() {
+  local name="$1" want="${2:-}"
+  local gem_file version
+  gem_file="$(cached_gem "$name" ${want:+"$want"})"
+  if [ -z "$gem_file" ]; then
+    echo "$name-${want:-*}.gem is not in the host's gem cache (gem install $name${want:+ -v $want})" >&2
+    return 2
+  fi
+  version="$(basename "$gem_file" .gem)"
+  version="${version#"$name-"}"
+  local dir="$WORK/gems/$name-${want:-latest}" home="$WORK/gems/$name-${want:-latest}/home"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  echo "$gem_file"
+  (cd "$dir" && logged "$dir/install.log" "$home" \
+    clean_env GEM_HOME="$home" GEM_PATH="$home" \
+    "$MONORUBY" "$MONO_GEM" install --local --no-document --ignore-dependencies "$gem_file") || return 1
+  grep -q "Building native extensions" "$dir/install.log" || { echo "no 'Building native extensions' in:" >&2; cat "$dir/install.log" >&2; return 1; }
+  grep -q "1 gem installed" "$dir/install.log" || { echo "no '1 gem installed' in:" >&2; cat "$dir/install.log" >&2; return 1; }
+  local script="$GEM_SCRIPTS/$name.rb"
+  (cd "$dir" && logged "$dir/monoruby.out" "$home" \
+    clean_env GEM_HOME="$home" GEM_PATH="$home" CAPI_GEM_VERSION="$version" "$MONORUBY" "$script") || return 1
+  (cd "$dir" && logged "$dir/cruby.out" "" \
+    clean_env CAPI_GEM_VERSION="$version" "$CRUBY" "$script") || return 1
+  # The first line is the gem's own extension, loaded (not the stand-in
+  # in `gem/`, which would leave it empty).
+  [ "$(head -n 1 "$dir/monoruby.out")" != "[]" ] || { echo "the gem's C extension was not loaded:" >&2; cat "$dir/monoruby.out" >&2; return 1; }
+  diff -u "$dir/cruby.out" "$dir/monoruby.out" \
+    || { echo "$name $version: output differs between CRuby (-) and monoruby (+)" >&2; return 1; }
+}
+
+# --- driver -----------------------------------------------------------------
+
+# check <label> <function> [args...]: runs the check, records the result.
+check() {
+  local label="$1"
+  shift
+  printf '=== %s\n' "$label"
+  "$@"
+  case $? in
+    0) PASSED+=("$label"); echo "ok: $label" ;;
+    2) SKIPPED+=("$label"); echo "skipped: $label" ;;
+    *) FAILED+=("$label"); echo "FAILED: $label" ;;
+  esac
+}
+
+have() { "$1" "$2" > /dev/null 2>&1; }
+
+if ! have "$CC" --version || ! have make --version; then
+  echo "skipped: no C compiler or make" >&2
+  exit 0
+fi
+if ! have "$CRUBY" --version; then
+  echo "skipped: no host ruby ($CRUBY)" >&2
+  exit 0
+fi
+
+# monoruby's `gem` is next to the headers RbConfig names: <install root>/bin/gem.
+MONO_GEM="$(dirname "$("$MONORUBY" -e 'print RbConfig::CONFIG["rubyhdrdir"]')")/bin/gem"
+if [ ! -f "$MONO_GEM" ]; then
+  echo "monoruby's gem command not found at $MONO_GEM" >&2
+  exit 2
+fi
+
+rm -rf "$WORK"
+mkdir -p "$WORK"
+echo "monoruby: $MONORUBY"
+echo "cruby:    $("$CRUBY" -v) ($(command -v "$CRUBY"))"
+echo "work dir: $WORK"
+
+check "fixture gem: gem build + gem install on monoruby and CRuby" check_fixture_gem
+check "fixture gem: the host-installed extension is rebuilt for monoruby" check_host_rebuild
+check "bcrypt" real_gem bcrypt
+check "msgpack" real_gem msgpack
+check "strscan" real_gem strscan
+check "strptime" real_gem strptime
+check "yajl-ruby" real_gem yajl-ruby
+check "json (newest cached)" real_gem json
+check "json 2.18.0" real_gem json 2.18.0
+
+echo
+echo "passed: ${#PASSED[@]}, failed: ${#FAILED[@]}, skipped: ${#SKIPPED[@]}"
+for s in "${SKIPPED[@]}"; do echo "  skipped: $s"; done
+for f in "${FAILED[@]}"; do echo "  FAILED:  $f"; done
+[ "${#FAILED[@]}" = 0 ]

@@ -1,5 +1,5 @@
 # Run on monoruby (the gem installed through its C API layer) and on the
-# host CRuby by tests/capi_gems.rs; both must print the same.
+# host CRuby by bin/test-gems; both must print the same.
 gem "msgpack", ENV.fetch("CAPI_GEM_VERSION")
 require "msgpack"
 puts $LOADED_FEATURES.grep(/\.(so|bundle)\z/).map { |f| File.basename(f, ".*") }.grep(/\A(bcrypt_ext|msgpack|parser|generator)\z/).sort.inspect

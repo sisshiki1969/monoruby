@@ -1,5 +1,5 @@
 # Run on monoruby (the gem installed through its C API layer) and on the
-# host CRuby by tests/capi_gems.rs; both must print the same.
+# host CRuby by bin/test-gems; both must print the same.
 gem "yajl-ruby", ENV.fetch("CAPI_GEM_VERSION")
 require "yajl"
 require "stringio"

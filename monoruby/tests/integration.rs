@@ -35,7 +35,6 @@ mod break_proc;
 mod builtin_operator_binding;
 mod bundler_host_checkout;
 mod capi;
-mod capi_gems;
 mod capture_callee_no_abort;
 mod capture_ret;
 mod case;

@@ -1,6 +1,6 @@
 # Run on monoruby (the gem's own C extensions, parser.so and generator.so,
 # built through the C API layer) and on the host CRuby by
-# tests/capi_gems.rs; both must print the same.
+# bin/test-gems; both must print the same.
 gem "json", ENV.fetch("CAPI_GEM_VERSION")
 require "json"
 puts $LOADED_FEATURES.grep(/\.(so|bundle)\z/).map { |f| File.basename(f, ".*") }.grep(/\A(parser|generator)\z/).sort.inspect
