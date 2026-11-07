@@ -1660,11 +1660,24 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq [rax + (RVALUE_OFFSET_VAR)], 0;      // var_table = None
         }
+        // Two or more unused pairs: one `movups` of the shared `nil_pair`
+        // constant per pair (a pair is 16 contiguous bytes).
+        let simd_nil = HASH_INLINE_CAP - len >= 2;
+        if simd_nil {
+            let nil_pair = self.nil_pair.clone();
+            monoasm! { &mut self.jit,
+                movups xmm0, [rip + nil_pair];
+            }
+        }
         for i in 0..HASH_INLINE_CAP {
             let pair = HASH_INLINE_PAIRS_OFFSET + i * HASH_INLINE_PAIR_STRIDE;
             let key_off = (pair + HASH_INLINE_KEY_OFFSET) as i32;
             let val_off = (pair + HASH_INLINE_VALUE_OFFSET) as i32;
-            if i < len {
+            if i >= len && simd_nil {
+                monoasm! { &mut self.jit,
+                    movups [rax + (pair as i32)], xmm0;
+                }
+            } else if i < len {
                 let key = SlotId(args.0 + 2 * i as u16);
                 let val = SlotId(args.0 + 2 * i as u16 + 1);
                 monoasm! { &mut self.jit,

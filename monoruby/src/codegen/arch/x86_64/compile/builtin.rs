@@ -1401,8 +1401,23 @@ impl Codegen {
             // head of the `kind` union (the same `RVALUE_OFFSET_KIND +
             // ivarid * 8` addressing the ivar emitters use), and `None`
             // for `Option<Value>` is a zero word.
+            //
+            // Zeroed 16 bytes at a time from a cleared xmm0 (the slots
+            // follow `var_table`, so `RVALUE_OFFSET_KIND` is 16-aligned
+            // within the 64-byte cell).
             InlineAlloc::Object => {
-                for k in 0..OBJECT_INLINE_IVAR {
+                monoasm! { &mut self.jit,
+                    xorps xmm0, xmm0;
+                }
+                let mut k = 0;
+                while k + 1 < OBJECT_INLINE_IVAR {
+                    let off = RVALUE_OFFSET_KIND as i32 + (k as i32) * 8;
+                    monoasm! { &mut self.jit,
+                        movups [rax + (off)], xmm0;
+                    }
+                    k += 2;
+                }
+                if k < OBJECT_INLINE_IVAR {
                     let off = RVALUE_OFFSET_KIND as i32 + (k as i32) * 8;
                     monoasm! { &mut self.jit,
                         movq [rax + (off)], 0;
@@ -1416,7 +1431,23 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     movq [rax + (RVALUE_OFFSET_ARY_CAPA)], (len as i32);
                 }
-                for k in 0..len {
+                // Two nils per `movups` of the shared `nil_pair`
+                // constant once that beats one `movq` per slot.
+                let mut k = 0;
+                if len >= 3 {
+                    let nil_pair = self.nil_pair.clone();
+                    monoasm! { &mut self.jit,
+                        movups xmm0, [rip + nil_pair];
+                    }
+                    while k + 1 < len {
+                        let off = RVALUE_OFFSET_INLINE as i32 + (k as i32) * 8;
+                        monoasm! { &mut self.jit,
+                            movups [rax + (off)], xmm0;
+                        }
+                        k += 2;
+                    }
+                }
+                for k in k..len {
                     let off = RVALUE_OFFSET_INLINE as i32 + (k as i32) * 8;
                     monoasm! { &mut self.jit,
                         movq [rax + (off)], (NIL_VALUE as i32);

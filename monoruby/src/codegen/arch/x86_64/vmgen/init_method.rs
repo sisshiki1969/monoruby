@@ -71,18 +71,37 @@ impl Codegen {
     /// - rax: reg_num - arg_num
     /// - r15: reg_num
     ///
+    /// The run is `[r15 + 8, r15 + 8 + rax * 8)` once *r15* is rebased
+    /// below the last register. An odd count stores its top slot alone;
+    /// the rest goes two slots per 16-byte `movups` of the shared
+    /// `Codegen::nil_pair` constant (a rip-relative load: nothing is read
+    /// back from the frame being written).
+    ///
+    /// ### destroy
+    /// - rax, r15, xmm0
+    ///
     fn fill_nil(&mut self) {
         let l0 = self.jit.label();
         let l1 = self.jit.label();
+        let even = self.jit.label();
+        let nil_pair = self.nil_pair.clone();
         self.jit.branch_if_captured(&l1);
         monoasm! { &mut self.jit,
             testq rax, rax;
             jz   l1;
             negq r15;
             lea  r15, [r14 + r15 * 8 - (LFP_ARG0)];
-        l0:
+            testq rax, 1;
+            jz   even;
             movq [r15 + rax * 8], (NIL_VALUE);
             subq rax, 1;
+            jz   l1;
+        even:
+            movups xmm0, [rip + nil_pair];
+        l0:
+            // slots `rax - 1` and `rax` (counted from r15).
+            movups [r15 + rax * 8 - 8], xmm0;
+            subq rax, 2;
             jne  l0;
         l1:
         };

@@ -1,6 +1,11 @@
 use super::*;
 use monoasm_macro::monoasm_arm64;
 
+/// Slot count from which the prologue's nil fill goes through v0 (`dup`
+/// + 32-byte `stp q0, q0`). Below it the per-slot `stur`s are no more
+/// instructions than the address set-up and the broadcast.
+const SIMD_FILL_MIN: usize = 4;
+
 impl Codegen {
 
     /// Method prologue: establish fp/lr, reserve the local frame, and nil-fill
@@ -22,9 +27,20 @@ impl Codegen {
         let clear_len = info.reg_num - info.arg_num;
         if clear_len > 0 || info.destruct_len > 0 {
             monoasm_arm64!(&mut self.jit, mov x9, (NIL_VALUE););
-            for i in 0..clear_len {
-                let off = (info.arg_num + i) as u32 * 8 + LFP_ARG0 as u32;
-                self.a64_frame_store(9, lfp, off);
+            if clear_len >= SIMD_FILL_MIN {
+                // The run descends from slot `arg_num + 1`; its lowest
+                // address is the last register's. Broadcast nil into v0
+                // (scratch, never a pool register) and store it upward
+                // from there, 32 bytes per `stp q0, q0`.
+                let low = (info.reg_num - 1) as u32 * 8 + LFP_ARG0 as u32;
+                self.a64_addr_sub(10, lfp, low);
+                self.a64_dup_2d(0, 9);
+                self.a64_fill_slots_q(10, clear_len, 0, 9);
+            } else {
+                for i in 0..clear_len {
+                    let off = (info.arg_num + i) as u32 * 8 + LFP_ARG0 as u32;
+                    self.a64_frame_store(9, lfp, off);
+                }
             }
             // Destructured block params (`|(a, b)|`): inside the argument
             // area (missed by the loop above) and written only by the

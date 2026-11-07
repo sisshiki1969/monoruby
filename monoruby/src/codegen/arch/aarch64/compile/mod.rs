@@ -3285,11 +3285,16 @@ impl Codegen {
                 self.a64_frame_load(12, lfp, conv(val) as u32);
                 self.a64_field_store(12, rax, val_off);
             } else {
+                // An unused pair is nil-nil: 16 contiguous bytes, one
+                // `stp` (the pattern is materialized once, at the first).
+                if i == len {
+                    monoasm_arm64!(&mut self.jit,
+                        mov x12, (NIL_VALUE as u64);
+                    );
+                }
                 monoasm_arm64!(&mut self.jit,
-                    mov x12, (NIL_VALUE as u64);
+                    stp x12, x12, [x(rax), #(pair as i32)];
                 );
-                self.a64_field_store(12, rax, key_off);
-                self.a64_field_store(12, rax, val_off);
             }
         }
         monoasm_arm64!(&mut self.jit, b cont;);
