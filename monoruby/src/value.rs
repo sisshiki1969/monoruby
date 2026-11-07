@@ -228,10 +228,6 @@ impl GC<RValue> for Value {
 pub(crate) struct RecursionStack<T: Copy + PartialEq>(Vec<T>);
 
 impl<T: Copy + PartialEq> RecursionStack<T> {
-    const fn new() -> Self {
-        Self(Vec::new())
-    }
-
     /// Push *id*; `false` (and nothing pushed) when it is already on the
     /// stack, i.e. the walk has come back round to it.
     fn insert(&mut self, id: T) -> bool {
@@ -252,9 +248,9 @@ impl<T: Copy + PartialEq> RecursionStack<T> {
 }
 
 thread_local! {
-    static HASH_RECURSION_GUARD: std::cell::RefCell<RecursionStack<u64>> = const { std::cell::RefCell::new(RecursionStack::new()) };
-    static INSPECT_RECURSION_GUARD: std::cell::RefCell<RecursionStack<u64>> = const { std::cell::RefCell::new(RecursionStack::new()) };
-    static COMPARE_RECURSION_GUARD: std::cell::RefCell<RecursionStack<(u64, u64)>> = const { std::cell::RefCell::new(RecursionStack::new()) };
+    static HASH_RECURSION_GUARD: std::cell::RefCell<RecursionStack<u64>> = const { std::cell::RefCell::new(RecursionStack(Vec::new())) };
+    static INSPECT_RECURSION_GUARD: std::cell::RefCell<RecursionStack<u64>> = const { std::cell::RefCell::new(RecursionStack(Vec::new())) };
+    static COMPARE_RECURSION_GUARD: std::cell::RefCell<RecursionStack<(u64, u64)>> = const { std::cell::RefCell::new(RecursionStack(Vec::new())) };
 }
 
 /// Execute `f` with recursion protection for inspect/to_s.
