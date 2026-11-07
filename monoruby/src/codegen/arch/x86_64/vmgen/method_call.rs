@@ -99,6 +99,14 @@ impl Codegen {
             movl r8, [r13 + (CALLSITE_ID)];
             movq rax, (runtime::invoke_method_missing);
             call rax;
+        };
+        // `method_missing` may turn the block literal passed here into a
+        // Proc (`def method_missing(*, &b)`), which moves this frame to the
+        // heap. The invoker hands r14 back as it found it (callee-saved),
+        // so it still points at the abandoned stack copy: reload it from
+        // the cfp, as a regular call's `pop_frame` does.
+        self.restore_lfp();
+        monoasm! { &mut self.jit,
             jmp  done;
         };
         self.jit.select_page(0);

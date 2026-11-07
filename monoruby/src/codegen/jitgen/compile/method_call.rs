@@ -693,6 +693,20 @@ impl<'a> JitContext<'a> {
         state.load(ir, recv, GP::Rdi);
         state.guard_class(ir, recv, GP::Rdi, recv_class, deopt);
 
+        // A block literal handed to `method_missing` reaches this frame and
+        // its lexical ancestors: every unboxed local is homed in its slot
+        // first, as for any call that passes one. And `method_missing` may
+        // turn it into a Proc (`def method_missing(*, &b)`), which moves
+        // this frame to the heap in the middle of the call, so the
+        // no-capture invariant is dropped: the result is homed through the
+        // LFP and a capture guard follows the call (#1823).
+        if self.store[callid].block_fid.is_some() {
+            let home = state.innermost_level();
+            state.unbox_to_S_for_outgoing_block(self, ir, Some(home));
+            state.unset_no_capture_guard(self);
+        }
+        self.note_given_block_escape(state, ir, callid);
+
         // The helper reads the receiver, the arguments, the keywords and a
         // block argument out of this frame, so every one of them has to be
         // in its slot.
@@ -704,7 +718,17 @@ impl<'a> JitContext<'a> {
             let error = &labels[error];
             r#gen.method_missing_call(recv, callid, using_fpr, error);
         });
-        state.def_reg2acc(ir, GP::Rax, dst);
+        if state.no_capture_guard() {
+            state.def_reg2acc(ir, GP::Rax, dst);
+        } else {
+            state.def_rax2acc_capturing(ir, dst);
+        }
+        state.capture_guard_after_call(ir, &self.store, dst);
+        // `method_missing` runs arbitrary Ruby (it commonly defines the
+        // missing method), so nothing cached survives it.
+        state.unset_class_version_guard();
+        state.unset_const_version_guard();
+        state.unset_side_effect_guard();
         Ok(CompileResult::Continue)
     }
 

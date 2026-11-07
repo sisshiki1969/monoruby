@@ -200,7 +200,10 @@ impl Codegen {
         // callid) -> Option, then join the result path. The receiver register
         // was clobbered by find_method, so reload it from the recv slot.
         // invoke_method_missing manages its own frames and preserves PC/LFP
-        // (callee-saved), so no cfp/LFP restore is needed here.
+        // (callee-saved), but `method_missing` may turn the block literal
+        // passed here into a Proc (`def method_missing(*, &b)`), which moves
+        // this frame to the heap: the preserved LFP is then the abandoned
+        // stack copy, so reload it from the cfp (x86 `restore_lfp`).
         monoasm_arm64!(&mut self.jit,
             mm:
             ldrh x10, [x(PC.0), #(12)];  // recv slot
@@ -214,6 +217,7 @@ impl Codegen {
             ldr w4, [x(PC.0)];  // callid
             mov x9, (crate::codegen::runtime::invoke_method_missing as *const () as u64);
             blr x9;
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];
             b after_call;
         );
         // --- slow path: inline-cache miss. Look up the method, populate the

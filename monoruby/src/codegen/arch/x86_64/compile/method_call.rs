@@ -797,6 +797,11 @@ impl Codegen {
             movq rax, (runtime::invoke_method_missing);
             call rax;
         }
+        // `method_missing` may have moved this frame to the heap (a block
+        // literal turned into a Proc), and the invoker hands r14 back as it
+        // found it: reload it from the cfp, as `pop_frame` does after a
+        // regular call.
+        self.restore_lfp();
         self.fpr_restore(using_fpr);
         self.handle_error(error);
     }
