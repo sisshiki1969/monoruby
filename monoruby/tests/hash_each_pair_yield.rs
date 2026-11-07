@@ -1,10 +1,10 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// Hash#each yields `key, value` directly (no [k, v] Array) only when the
-// block takes two or more required parameters, as CRuby's
-// rb_block_pair_yield_optimizable decides. Every other block shape must
-// still see a single [k, v] pair.
+// Hash#each yields a [k, v] pair; a literal block that auto-splats it gets
+// key and value without the Array being built (the JIT yields through the
+// expanded twin of `yield [k, v]`, `CallSiteInfo::yield_expanded`). Every
+// block shape must bind exactly as it binds the pair.
 
 #[test]
 fn hash_each_block_shapes() {
@@ -75,6 +75,78 @@ fn recursion_guard_out_of_order_exit() {
         a = [1]; a << a
         r << (a == a) << (a.hash == a.hash) << a.inspect
         r
+        "##,
+    );
+}
+
+#[test]
+fn yield_array_literal_block_shapes() {
+    // `yield [e1, .., en]` into each block shape, with the yield's value
+    // used and discarded: a block that auto-splats the Array binds the
+    // elements just as it binds the Array, whichever way the JIT yields.
+    run_test_with_prelude(
+        r##"
+        t(3, 4)
+        "##,
+        r##"
+        def y2(a, b) = yield [a, b]
+        def y3(a, b) = yield [a, b, a + b]
+        def y1(a) = yield [a]
+        def ysp(a, b) = yield [a, *b]
+        def y2x(a, b)
+          yield [a, b]
+          :done
+        end
+        def y2b(a, b, &blk) = yield [a, b]
+        def t(a, b)
+          r = []
+          r << y2(a, b) { |x, y| x + y }
+          r << y2(a, b) { |x| x }
+          r << y2(a, b) { |x,| x }
+          r << y2(a, b) { |*x| x }
+          r << y2(a, b) { |x, *y| [x, y] }
+          r << y2(a, b) { |x, y, z = 9| [x, y, z] }
+          r << y2(a, b) { |x, y, z| [x, y, z] }
+          r << y2(a, b) { |(p, q), y| [p, q, y] }
+          r << y2(a, b) { |x, (p, q)| [x, p, q] }
+          r << y2(a, b) { |x, y, k: 1| [x, y, k] }
+          r << y2(a, b) { |x, y, &blk| [x, y, blk] }
+          r << y2(a, b) { [_1, _2] }
+          r << y2(a, b) { it }
+          r << y3(a, b) { |x, y| [x, y] }
+          r << y3(a, b) { |x, *y, z| [x, y, z] }
+          r << y1(a) { |x, y| [x, y] }
+          r << ysp(a, [b, 5]) { |x, y, z| [x, y, z] }
+          r << y2x(a, b) { |x, y| r << x * y }
+          r << y2b(a, b) { |x, y| [y, x] }
+          r << y2(a, b, &->(x) { x })
+          r << (y2(a, b, &->(x, y) { x }) rescue $!.class)
+          r << y2(a, b, &proc { |x, y| y })
+          r << y2(a, b) { |x, y| break x - y }
+          r << y2(a, b) { |x, y| next x * y }
+          r << y2(a, b) { |x, y| binding.local_variable_get(:y) }
+          r << y2(a, b) { |x, y| Array.new(100) { x }.size + y }
+          r
+        end
+        "##,
+    );
+}
+
+#[test]
+fn yield_array_literal_type_change() {
+    // The block's specialization guards fail on a later element type and
+    // deopt inside the yielded block; an exception raised there unwinds
+    // through the yield.
+    run_test_with_prelude(
+        r##"
+        r = []
+        30.times { |i| r << t(i) }
+        r << t(1.5) << t("s") << (t(nil) rescue $!.class)
+        r
+        "##,
+        r##"
+        def y2(a, b) = yield [a, b]
+        def t(v) = y2(v, v) { |x, y| x + y }
         "##,
     );
 }

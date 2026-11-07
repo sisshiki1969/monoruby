@@ -1841,6 +1841,7 @@ impl Store {
             pmc: PolyCache::default(),
             send_direct: None,
             class_new_init: None,
+            yield_expanded: None,
         });
         id
     }
@@ -1855,6 +1856,12 @@ impl Store {
     /// [`CallSiteInfo::class_new_init`].
     pub(crate) fn set_class_new_init(&mut self, callid: CallSiteId, init: CallSiteId) {
         self.callsite_info[callid.0 as usize].class_new_init = Some(init);
+    }
+
+    /// Attach the expanded twin of a `yield [e1, .., en]` site — see
+    /// [`CallSiteInfo::yield_expanded`].
+    pub(crate) fn set_yield_expanded(&mut self, callid: CallSiteId, expanded: CallSiteId) {
+        self.callsite_info[callid.0 as usize].yield_expanded = Some(expanded);
     }
 
     pub(crate) fn new_constsite(
@@ -2977,6 +2984,15 @@ pub struct CallSiteInfo {
     /// constructor through it as a frameless callee of the allocating
     /// site (`inline_class_new`).
     pub(crate) class_new_init: Option<CallSiteId>,
+    /// For `yield [e1, .., en]` (n >= 2, no splat): an alternate call site
+    /// describing `yield e1, .., en` — the elements are the temporaries
+    /// the Array literal is built from (this site's argument slot + 1 ..),
+    /// with the same result slot. A block that auto-splats a lone Array
+    /// argument (`FuncInfo::single_arg_expand`) binds its parameters the
+    /// same either way, so the JIT yields through this twin and never
+    /// builds the Array (`JitContext::yield_expanded_for`). Prepared by
+    /// bytecodegen and never executed by the VM.
+    pub(crate) yield_expanded: Option<CallSiteId>,
 }
 
 impl CallSiteInfo {

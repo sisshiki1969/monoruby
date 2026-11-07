@@ -29,7 +29,7 @@ fn regexp_encoding_bits(option: &str) -> u32 {
 /// frame's register count — frames live on the native machine stack — stays
 /// bounded no matter how large the literal is (issue #706).
 ///
-const LITERAL_CHUNK_LEN: usize = 256;
+pub(super) const LITERAL_CHUNK_LEN: usize = 256;
 
 ///
 /// A single target of a multiple assignment: either a resolved leaf

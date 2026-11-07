@@ -119,6 +119,20 @@ callee's `RecvEscape`:
 
 Anything else materializes the object and compiles the call as before.
 
+A `yield [e1, .., en]` (n >= 2, no splat) is a consumer too
+(`yield_expanded_for`). Bytecodegen gives such a site an expanded twin,
+`CallSiteInfo::yield_expanded`: the call site of `yield e1, .., en`, whose
+arguments are the temporaries the Array literal is built from (the yield's
+argument slot + 1 ..), with the same result slot. When the block is the
+literal one specialized in place and auto-splats a lone Array argument
+(`FuncInfo::single_arg_expand`: block style, more than one positional
+parameter) and takes no keywords, it binds the elements exactly as it would
+bind the Array, so the JIT yields through the twin and the Array is never
+built (`Hash#each`'s `yield [key, value]` into `{ |k, v| }`). The object
+stays registered until the block's arguments are filled: a frameless
+block's redo exit hands the original yield back to the interpreter, which
+reads the Array from its slot, so that exit materializes it.
+
 The class-version guard is emitted while the object is still registered,
 so a redefinition (`class Array; def max = self; end`) deopts with the
 object materialized and the interpreter calls the new method on a fresh
