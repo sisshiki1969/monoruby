@@ -502,6 +502,47 @@ fn interpolation_encoding_negotiation() {
 }
 
 #[test]
+fn interpolation_drops_empty_literal_fragments() {
+    // Empty literal fragments are dropped from the concat's operands
+    // (the first operand, which seeds the encoding, excepted). The
+    // result must still be a fresh, unfrozen String with the same
+    // encoding as before. (CRuby 4.0.6 compiles `"#{v}#{""}"` to a bare
+    // `objtostring` and hands back `v.to_s` itself — `v` when `v` is a
+    // String, a frozen string for an Integer — so identity and
+    // frozenness are only compared where another piece remains.)
+    run_test(
+        r##"
+        r = []
+        20.times do |i|
+            x = i
+            e = ""
+            r << "#{x}#{""}" << "#{""}#{x}" << "#{x}#{""}b#{""}"
+            r << ("" "#{x}" "") << ("#{x}" "" "#{x}")
+            s = "#{e}#{""}"
+            r << s << s.frozen? << s.encoding.to_s
+            t = "#{""}"
+            r << t << t.frozen? << t.encoding.to_s
+            u = "#{x}#{""}y"
+            u << "!"
+            r << u << "#{x}#{""}z".equal?("#{x}#{""}z")
+        end
+        r
+        "##,
+    );
+    // The negotiated encoding is unaffected by the dropped fragments.
+    run_test(r##"b = "\xFF".b; "#{b}#{""}".encoding.to_s"##);
+    run_test(r##"b = "a".b; ["#{""}#{b}", "#{b}" "", "#{""}#{b}#{""}"].map { _1.encoding.to_s }"##);
+    run_test(
+        r##"e = "あ".encode("EUC-JP"); ["#{e}#{""}", "#{""}#{e}#{""}"].map { _1.encoding.to_s }"##,
+    );
+    // Under the frozen_string_literal pragma an interpolation is still
+    // a fresh mutable string.
+    run_test(
+        r##"eval(%Q{# frozen_string_literal: true\nx = 1\ns = "\#{x}\#{''}y"\n[s, s.frozen?]})"##,
+    );
+}
+
+#[test]
 fn command_literal_frozen_argument() {
     // A non-interpolated command literal (`` `cmd` `` / `%x{...}`) passes its
     // command string to `Kernel#\`` FROZEN, matching CRuby (regardless of any

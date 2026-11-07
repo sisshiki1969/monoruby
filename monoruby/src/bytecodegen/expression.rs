@@ -1039,6 +1039,19 @@ impl<'a> BytecodeGen<'a> {
                         | Some(NodeKind::Bytes(_))
                         | Some(NodeKind::EncodedString(..))
                 );
+                // An empty literal fragment (`"#{a}" ""`, `#{""}`, an
+                // empty heredoc chunk) is the identity of the concat's
+                // fold once the result's encoding is seeded — an empty
+                // piece leaves both the negotiated encoding and the code
+                // range as they are — so it is dropped from the operand
+                // list. The first operand is kept even when empty: it is
+                // what seeds the result's encoding.
+                let nodes: Vec<Node> = nodes
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(i, n)| (*i == 0 && !seed) || !Self::is_empty_str_literal(n))
+                    .map(|(_, n)| n)
+                    .collect();
                 let len = nodes.len() + seed as usize;
                 let arg = self.sp();
                 if seed {
@@ -1473,6 +1486,15 @@ impl<'a> BytecodeGen<'a> {
 }
 
 impl<'a> BytecodeGen<'a> {
+    /// Whether `node` is a string literal fragment with no bytes.
+    fn is_empty_str_literal(node: &Node) -> bool {
+        match &node.kind {
+            NodeKind::String(s) => s.is_empty(),
+            NodeKind::Bytes(b) | NodeKind::EncodedString(b, _) => b.is_empty(),
+            _ => false,
+        }
+    }
+
     ///
     /// Generate multiple assignment.
     ///
