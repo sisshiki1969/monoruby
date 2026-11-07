@@ -57,10 +57,19 @@ fi
 # The checks `cd` into their work dirs, so both interpreters are
 # addressed by absolute path (a bare command name is left to PATH).
 MONORUBY="$(cd "$(dirname "$MONORUBY")" && pwd)/$(basename "$MONORUBY")"
+# A bare command name is resolved here, in the checkout, to the executable
+# behind it: rbenv's shim would otherwise pick the version by the cwd of
+# each check.
 CRUBY="${CRUBY:-ruby}"
 case "$CRUBY" in
   */*) CRUBY="$(cd "$(dirname "$CRUBY")" && pwd)/$(basename "$CRUBY")" ;;
+  *)   resolved="$(cd "$REPO" && "$CRUBY" -e 'print RbConfig.ruby' 2>/dev/null)"
+       [ -x "$resolved" ] && CRUBY="$resolved" ;;
 esac
+# CRuby's `gem` is the script next to its executable. Not `ruby -S gem`:
+# with an absolute ruby, `-S` searches PATH and finds a version manager's
+# shim (a shell script), which ruby then refuses to run.
+CRUBY_GEM="$("$CRUBY" -e 'print File.join(RbConfig::CONFIG["bindir"], "gem")' 2>/dev/null)"
 CC="${CC:-cc}"
 
 PASSED=()
@@ -109,7 +118,7 @@ fixture_gem() {
   local -a gem interp
   case "$flavor" in
     monoruby) interp=("$MONORUBY"); gem=("$MONORUBY" "$MONO_GEM") ;;
-    cruby)    interp=("$CRUBY");    gem=("$CRUBY" -S gem) ;;
+    cruby)    interp=("$CRUBY");    gem=("$CRUBY" "$CRUBY_GEM") ;;
   esac
   rm -rf "$dir"
   mkdir -p "$src"
@@ -258,6 +267,10 @@ if ! have "$CC" --version || ! have make --version; then
 fi
 if ! have "$CRUBY" --version; then
   echo "skipped: no host ruby ($CRUBY)" >&2
+  exit 0
+fi
+if [ ! -f "$CRUBY_GEM" ]; then
+  echo "skipped: no gem command next to $CRUBY" >&2
   exit 0
 fi
 

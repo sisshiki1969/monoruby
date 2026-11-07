@@ -20,17 +20,44 @@ const MIN_RUBY_VERSION: (u32, u32) = (4, 0);
 static RUBY: LazyLock<String> = LazyLock::new(find_ruby);
 
 ///
-/// The reference CRuby the harness resolved (PATH, then rbenv/rvm shims).
-/// A test that spawns `ruby` itself must use this rather than
-/// `Command::new("ruby")`, which breaks in shells where only a version
-/// manager provides Ruby.
+/// The reference CRuby the harness resolved (PATH, then rbenv/rvm shims),
+/// as the absolute path of the executable. A test that spawns `ruby`
+/// itself must use this rather than `Command::new("ruby")`, which breaks
+/// in shells where only a version manager provides Ruby.
+///
+/// Absolute, not the shim: rbenv's shim picks the version from the
+/// `.ruby-version` nearest the *current directory*, so a test that runs
+/// `ruby` with its cwd outside the checkout (`../ruby-bench/benchmarks/…`)
+/// got whichever Ruby `~/.rbenv/version` names — a different version with
+/// a different gem set — while the same command from the checkout got the
+/// pinned one. The resolution runs from the workspace root, so every test
+/// gets the Ruby the checkout's `.ruby-version` selects wherever it cds.
 ///
 pub fn ruby_path() -> &'static str {
     &RUBY
 }
 
 fn find_ruby() -> String {
-    resolve_ruby(ruby_candidates())
+    let cmd = resolve_ruby(ruby_candidates());
+    real_ruby(&cmd).unwrap_or(cmd)
+}
+
+///
+/// The executable behind `ruby_cmd` — `RbConfig.ruby`, asked from the
+/// workspace root so a version manager's shim answers for the checkout.
+///
+fn real_ruby(ruby_cmd: &str) -> Option<String> {
+    let output = std::process::Command::new(ruby_cmd)
+        .current_dir(workspace_root())
+        .args(["-e", "print RbConfig.ruby"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(output.stdout).ok()?;
+    let path = path.trim();
+    (!path.is_empty() && std::path::Path::new(path).is_file()).then(|| path.to_string())
 }
 
 ///
@@ -67,6 +94,7 @@ fn ruby_candidates() -> Vec<String> {
 
 fn ruby_version_ok(ruby_cmd: &str) -> bool {
     let Ok(output) = std::process::Command::new(ruby_cmd)
+        .current_dir(workspace_root())
         .args(["-e", "puts RUBY_VERSION"])
         .output()
     else {
@@ -215,11 +243,32 @@ mod tests {
     }
 
     ///
-    /// Whatever `find_ruby` settled on is one of the places it looked.
+    /// Whatever `find_ruby` settled on is the executable behind one of
+    /// the places it looked — an absolute path, the same one whichever
+    /// directory it is asked from — or, with no usable Ruby, the bare
+    /// `ruby` of `resolve_ruby`.
     ///
     #[test]
-    fn the_resolved_ruby_is_a_candidate() {
-        assert!(ruby_candidates().contains(&ruby_path().to_string()));
+    fn the_resolved_ruby_is_the_executable_behind_a_candidate() {
+        let ruby = ruby_path();
+        if ruby == "ruby" {
+            assert!(real_ruby("ruby").is_none(), "a usable ruby was not resolved to its path");
+            return;
+        }
+        assert!(std::path::Path::new(ruby).is_absolute(), "{ruby}");
+        assert!(ruby_version_ok(ruby), "{ruby}");
+        let candidate = ruby_candidates()
+            .into_iter()
+            .find(|c| real_ruby(c).as_deref() == Some(ruby));
+        assert!(candidate.is_some(), "{ruby} is behind none of {:?}", ruby_candidates());
+        // Not the shim, so the same answer from a directory outside the
+        // checkout, where a version manager could pick another version.
+        let elsewhere = std::process::Command::new(ruby)
+            .current_dir(std::env::temp_dir())
+            .args(["-e", "print RbConfig.ruby"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&elsewhere.stdout), ruby);
     }
 
     ///
