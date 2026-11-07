@@ -968,10 +968,11 @@ impl<'a> JitContext<'a> {
                     let Some(src) = state.virtual_at(arg) else {
                         return self.compile_yield_specialized(state, ir, callid, &block_info, iseq);
                     };
-                    let Some(exp) = self.yield_expanded_for(callid, arg, src, bc_pos) else {
-                        self.materialize_virtual(state, ir, arg);
-                        return self.compile_yield_specialized(state, ir, callid, &block_info, iseq);
-                    };
+                    // `settle_virtuals` keeps an object in the argument slot
+                    // only for this very consumer (`may_consume_virtual`).
+                    let exp = self
+                        .yield_expanded_for(callid, arg, src, bc_pos)
+                        .expect("an elided yield argument without its expanded twin");
                     let res = self.compile_yield_specialized(state, ir, exp, &block_info, iseq)?;
                     if let Some(src) = state.take_virtual(arg) {
                         state.discard_dead_elements(src, arg);

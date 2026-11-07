@@ -813,22 +813,18 @@ impl<'a> JitContext<'a> {
     ) -> Option<CallSiteId> {
         let cs = &self.store[callid];
         let exp = cs.yield_expanded?;
-        let VirtualSrc::Slots { src, len, .. } = src else {
-            return None;
-        };
         let ecs = &self.store[exp];
-        if cs.args != slot
-            || src != ecs.args
-            || len as usize != ecs.pos_num
-            || self.in_dispatch_arm()
-            || !self.dead_after(bc_pos, slot)
-        {
-            return None;
-        }
         let fid = self.current_method_given_block()?.block_fid;
-        self.store[fid].is_iseq()?;
         let info = &self.store[fid];
-        (info.single_arg_expand() && info.no_keyword() && self.store.is_simple_call(fid, exp))
+        (cs.args == slot
+            && matches!(src, VirtualSrc::Slots { src, len, .. }
+                if src == ecs.args && len as usize == ecs.pos_num)
+            && !self.in_dispatch_arm()
+            && self.dead_after(bc_pos, slot)
+            && info.is_iseq().is_some()
+            && info.single_arg_expand()
+            && info.no_keyword()
+            && self.store.is_simple_call(fid, exp))
             .then_some(exp)
     }
 
