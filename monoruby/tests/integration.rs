@@ -95,6 +95,7 @@ mod gp_float_reuse_repro;
 mod gsub_binary_replacement;
 mod gsub_wide_replacement;
 mod hash_compare_by_identity;
+mod hash_each_pair_yield;
 mod hash_probe_jit;
 mod hash_seed;
 mod hash_string_keys;

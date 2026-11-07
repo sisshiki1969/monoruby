@@ -217,15 +217,45 @@ impl GC<RValue> for Value {
     }
 }
 
-// The recursion guards hash object ids, which an attacker does not choose,
-// so they use the crate's FxHash rather than std's SipHash: every `==`,
-// `eql?`, `hash` and `inspect` of an Array / Hash / Struct goes through one
-// insert and one remove here, and SipHash made that the larger part of a
-// small Struct's `==`.
+// The recursion guards record the containers currently being walked, keyed
+// by object id. Every `==`, `eql?`, `hash` and `inspect` of an Array / Hash
+// / Struct enters and leaves one, so they are stacks rather than hash sets:
+// the walk nests, an entry is pushed on the way in and popped on the way
+// out, and the stack is only as deep as the structure being walked (each
+// level is a Rust frame too). A hash set paid a hash, a probe, and — since
+// the ids never repeat — tombstones that made it rehash in place every so
+// often (railsbench: ~13k instructions a request).
+pub(crate) struct RecursionStack<T: Copy + PartialEq>(Vec<T>);
+
+impl<T: Copy + PartialEq> RecursionStack<T> {
+    const fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Push *id*; `false` (and nothing pushed) when it is already on the
+    /// stack, i.e. the walk has come back round to it.
+    fn insert(&mut self, id: T) -> bool {
+        if self.0.contains(&id) {
+            return false;
+        }
+        self.0.push(id);
+        true
+    }
+
+    /// Remove *id*, normally the top of the stack.
+    fn remove(&mut self, id: &T) {
+        if self.0.last() == Some(id) {
+            self.0.pop();
+        } else if let Some(pos) = self.0.iter().rposition(|x| x == id) {
+            self.0.remove(pos);
+        }
+    }
+}
+
 thread_local! {
-    static HASH_RECURSION_GUARD: std::cell::RefCell<fxhash::FxHashSet<u64>> = std::cell::RefCell::new(fxhash::FxHashSet::default());
-    static INSPECT_RECURSION_GUARD: std::cell::RefCell<fxhash::FxHashSet<u64>> = std::cell::RefCell::new(fxhash::FxHashSet::default());
-    static COMPARE_RECURSION_GUARD: std::cell::RefCell<fxhash::FxHashSet<(u64, u64)>> = std::cell::RefCell::new(fxhash::FxHashSet::default());
+    static HASH_RECURSION_GUARD: std::cell::RefCell<RecursionStack<u64>> = const { std::cell::RefCell::new(RecursionStack::new()) };
+    static INSPECT_RECURSION_GUARD: std::cell::RefCell<RecursionStack<u64>> = const { std::cell::RefCell::new(RecursionStack::new()) };
+    static COMPARE_RECURSION_GUARD: std::cell::RefCell<RecursionStack<(u64, u64)>> = const { std::cell::RefCell::new(RecursionStack::new()) };
 }
 
 /// Execute `f` with recursion protection for inspect/to_s.

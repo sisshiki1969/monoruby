@@ -118,6 +118,9 @@ pub(super) fn init(globals: &mut Globals) {
     // The block-shape question `Hash#map` (builtins/hash.rb) asks about its
     // own block, answered without capturing it into a Proc.
     globals.define_builtin_func(HASH_CLASS, "__block_splits_pair?", block_splits_pair, 0);
+    // Whether `Hash#each` may yield key and value as two values instead of
+    // a `[key, value]` pair (CRuby's `rb_block_pair_yield_optimizable`).
+    globals.define_builtin_func(HASH_CLASS, "__block_pair_yield?", block_pair_yield, 0);
     // A fresh, empty Hash pre-sized for n entries — the result-hash
     // allocation for the Ruby-side bulk builders (to_h / transform_*),
     // skipping the inline→boxed→indexed growth ladder.
@@ -1362,6 +1365,53 @@ fn hash_index_assign(
     ir.handle_error(error);
     state.def_rax2acc(ir, dst);
     true
+}
+
+///
+/// ### Hash#__block_pair_yield? (internal)
+///
+/// Whether the *caller's* block can be handed key and value as two
+/// arguments instead of a fresh `[key, value]` Array — CRuby's
+/// `rb_block_pair_yield_optimizable`, which `Hash#each` asks for the same
+/// reason: a non-lambda block that requires at least two positional
+/// arguments auto-splats the pair anyway, so the Array is never seen and
+/// need not be built. A lambda (it would bind the pair strictly), a Symbol
+/// or Method block, and a Proc whose arity is not fixed keep the pair.
+///
+/// Read off the caller's yield home like `__block_splits_pair?`, so `each`
+/// needs no `&blk` parameter.
+///
+#[monoruby_builtin]
+fn block_pair_yield(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let Some(caller) = vm.cfp().prev() else {
+        return Ok(Value::bool(false));
+    };
+    let Some(bh) = caller.lfp().yield_home().block() else {
+        return Ok(Value::bool(false));
+    };
+    // (func, whether the block's arity must be fixed)
+    let (fid, fixed) = if let Some((fid, _)) = bh.try_proxy() {
+        (fid, false)
+    } else if let Some(proc) = bh.try_proc() {
+        if super::proc::proc_is_lambda(globals, &proc) {
+            return Ok(Value::bool(false));
+        }
+        (proc.func_id(), true)
+    } else {
+        return Ok(Value::bool(false));
+    };
+    let info = &globals[fid];
+    if !info.is_block_style() {
+        return Ok(Value::bool(false));
+    }
+    let min = info.req_num() + info.post_num();
+    let ok = min > 1 && (!fixed || (!info.is_rest() && info.opt_num() == 0));
+    Ok(Value::bool(ok))
 }
 
 ///
