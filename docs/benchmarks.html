@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-b0bcc219.js";
+            window.path_to_searchindex_js = "searchindex-ca5246bb.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-8a4c8fb9.js"></script>
+        <script src="toc-9192be69.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -192,7 +192,7 @@ portal</a>:</p>
 <tr><th>Dashboard</th><th>What it shows</th></tr>
 </thead>
 <tbody>
-<tr><td><a href="https://sisshiki1969.github.io/monoruby/bench/">Performance vs YJIT (x86-64)</a></td><td>Per-benchmark speed relative to CRuby + YJIT, plus a history chart per benchmark</td></tr>
+<tr><td><a href="https://sisshiki1969.github.io/monoruby/bench/">Performance vs YJIT (x86-64)</a></td><td>Per-benchmark speed relative to CRuby + YJIT and + ZJIT, plus a history chart per benchmark</td></tr>
 <tr><td><a href="https://sisshiki1969.github.io/monoruby/bench-arm64/">Performance vs YJIT (aarch64)</a></td><td>The same suite on an Apple Silicon runner</td></tr>
 </tbody>
 </table>
@@ -202,23 +202,34 @@ portal</a>:</p>
 <p>Methodology, from <code>.github/workflows/bench.yml</code>:</p>
 <ul>
 <li>The suite is <a href="https://github.com/Shopify/yjit-bench">yjit-bench</a>, run with
-<code>--rss --harness=harness-warmup</code>, monoruby against <code>ruby --yjit</code> on the same
-runner in the same job.</li>
-<li>The reference CRuby is 4.0.2 (<code>ruby/setup-ruby</code>), and monoruby is installed
+<code>--rss --harness=harness-warmup</code>. Three engines are measured on the same
+runner in the same job: monoruby, <code>ruby --yjit</code>, and <code>ruby --zjit</code> built
+from ruby-head.</li>
+<li>The reference CRuby is 4.0.6 (<code>ruby/setup-ruby</code>), and monoruby is installed
 with <code>cargo install --path monoruby --locked</code>.</li>
-<li>Each benchmark gets a 400-second timeout per interpreter; a benchmark that
-times out or exits non-zero is recorded as a failure rather than silently
-dropped, and shows on the dashboard as a gap.</li>
-<li>The published <code>ratio</code> is <strong>× YJIT, higher = monoruby faster</strong>, 1× being
-parity. <code>latest.json</code> and <code>data/history.csv</code> next to each dashboard hold the
-raw numbers if you want to plot them yourself.</li>
+<li>Each benchmark gets a 1000-second timeout <strong>per engine</strong> — the same rule
+for all three, since they are being compared. A benchmark that times out or
+exits non-zero is recorded as a failure rather than silently dropped, and
+shows on the dashboard as a gap.</li>
+<li><code>harness-warmup</code> iterates until its median absolute deviation falls under a
+threshold that relaxes as it goes. The workflow asks for 2% and gives two
+points back per iteration (<code>MAD_TARGET=0.02</code>,
+<code>MAD_INCREASE_PER_ITER=0.02</code>) rather than the 0.1% default: on a shared
+GitHub runner with several of these jobs in flight, the tighter default is
+a precision the environment cannot deliver, and chasing it cost hundreds of
+iterations per benchmark.</li>
+<li>The published <code>ratio</code> is <strong>× YJIT, higher = faster</strong>, 1× being parity — for
+both engines, each measured as YJIT’s time over its own. <code>latest.json</code> and
+<code>data/history.csv</code> next to each dashboard hold the raw numbers if you want
+to plot them yourself.</li>
 </ul>
-<p>As a snapshot: on the x86-64 run of commit <code>a13bfe0</code> (2026-08-31), 59 of the
-76 benchmarks produced a ratio on both interpreters; over those the geometric
-mean was <strong>1.28× YJIT</strong>, with monoruby ahead on 30 of them. The spread is
-wide in both directions — from ~16× on <code>string_malloc_pressure</code> down to ~0.3×
-on <code>send_bmethod</code> — which is the point of reading the dashboard rather than a
-single headline number.</p>
+<p>As a snapshot: on the x86-64 run of commit <code>a29f308</code> (2026-11-08), 77 of the
+79 benchmarks produced a ratio on both interpreters; over those the geometric
+mean was <strong>1.55× YJIT</strong>, with monoruby ahead on 49 of them. (ZJIT, measured
+the same way on the same run, came out at 1.51×.) The spread is wide in both
+directions — from ~26× on <code>30k_variables</code> down to ~0.4× on <code>30k_methods</code> —
+which is the point of reading the dashboard rather than a single headline
+number.</p>
 <h2 id="reproducing-a-measurement-locally"><a class="header" href="#reproducing-a-measurement-locally">Reproducing a measurement locally</a></h2>
 <p>The helper scripts in <code>bin/</code> wrap the two harnesses the project uses. Most of
 them assume <a href="https://github.com/benchmark-driver/benchmark-driver">benchmark-driver</a>

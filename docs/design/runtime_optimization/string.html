@@ -35,10 +35,10 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-b0bcc219.js";
+            window.path_to_searchindex_js = "../../searchindex-ca5246bb.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../../toc-8a4c8fb9.js"></script>
+        <script src="../../toc-9192be69.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,12 +181,11 @@
 <p>String はテンプレートエンジンとパーサの最内ループに出てくる型で、erubi の
 バッファ <code>&lt;&lt;</code>、Hash の String キー、<code>"lit".freeze</code> がそれぞれ計測で
 ボトルネックになった
-（<a href="../yjit_bench_slow_investigation_2026-09.html"><code>../yjit_bench_slow_investigation_2026-09.md</code></a>
-§5.2、§5.6）。</p>
+（2026-09 の yjit-bench 調査による）。</p>
 <p>この文書は、String のセル内レイアウト、部分文字列の共有と copy-on-write、
 エンコーディングと code range のキャッシュ、リテラルの扱い、VM と JIT の
 高速経路をまとめ、最後に CRuby との実装差異を並べる。共通の前提は
-<a href="README.html">README.md</a>、Hash の String キーについては <a href="hash.html">hash.md</a> を参照。</p>
+<a href="./">README.md</a>、Hash の String キーについては <a href="hash.html">hash.md</a> を参照。</p>
 <hr>
 <h2 id="1-表現"><a class="header" href="#1-表現">1. 表現</a></h2>
 <h3 id="11-セルと-32-バイトの-inline-閾値"><a class="header" href="#11-セルと-32-バイトの-inline-閾値">1.1 セルと 32 バイトの inline 閾値</a></h3>
@@ -613,7 +612,7 @@ inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも
 <tr><td><code>rb_fstring</code> の重複排除</td><td>pragma のリテラル<strong>と</strong>実行時の <code>-"str"</code> / <code>String#-@</code> / Hash キーに適用</td><td>コンパイル時のリテラルプール <code>Store::frozen_str_pool</code>（<code>(bytes, encoding)</code> キー）<strong>のみ</strong>。<code>String#-@</code> は素の <code>dup.freeze</code>（<strong>実行時の重複排除無し</strong>）。Hash の String キーは格納ごとに <code>dup</code> + <code>freeze</code> でインターンしない</td></tr>
 <tr><td>chilled リテラル</td><td>CRuby 3.4 の <code>STR_CHILLED</code></td><td>ヘッダフラグのビット 7 <code>CHILLED_LITERAL_BIT</code>、<code>Symbol#to_s</code> 用の別の <code>is_chilled</code> ビット、<code>--debug-frozen-string-literal</code> の出自テーブル</td></tr>
 <tr><td>coderange</td><td><code>ENC_CODERANGE_*</code> を RBasic のフラグにキャッシュ</td><td>JIT 既知オフセットの <code>Cell&lt;CodeRange&gt;</code>（<code>repr(u8)</code>）。<strong>遅延</strong>計算で、追記・部分文字列・repeat では再計算でなく O(1) で畳む</td></tr>
-<tr><td><code>String#hash</code></td><td>seeded SipHash。fstring 側でキャッシュ</td><td>seeded SipHash（<code>DefaultHasher</code> + プロセスごとの <code>RandomState</code>）。<strong>String ごとのキャッシュ無し</strong>（<a href="../yjit_bench_slow_investigation_2026-09.html"><code>../yjit_bench_slow_investigation_2026-09.md</code></a> §5.2 が未解決コストとして挙げる）</td></tr>
+<tr><td><code>String#hash</code></td><td>seeded SipHash。fstring 側でキャッシュ</td><td>seeded SipHash（<code>DefaultHasher</code> + プロセスごとの <code>RandomState</code>）。<strong>String ごとのキャッシュ無し</strong>（2026-09 の yjit-bench 調査が未解決コストとして挙げる）</td></tr>
 <tr><td>Hash キーのバケッティング</td><td><code>any_hash</code> はサブクラスでも内容をハッシュ、<code>rb_any_cmp</code> は <code>String</code> ちょうどのときだけバイト比較</td><td>同じ分割: <code>string_digest</code> は無条件に内容、<code>string_key_eq</code> / <code>is_plain_rstring_inner</code> がバイト比較をクラス一致でゲート</td></tr>
 <tr><td><code>opt_str_freeze</code></td><td>あり</td><td>あり — <code>StringFreeze</code> 命令（§3.5）</td></tr>
 <tr><td><code>opt_str_uminus</code></td><td>あり</td><td><strong>無し</strong></td></tr>

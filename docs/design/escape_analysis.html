@@ -1,0 +1,950 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Escape analysis - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-ca5246bb.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-9192be69.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="escape-analysis-eliding-array-hash-and-range-literals-rest-and-kwrest"><a class="header" href="#escape-analysis-eliding-array-hash-and-range-literals-rest-and-kwrest">Escape analysis: eliding Array, Hash and Range literals, <code>*rest</code> and <code>**kwrest</code></a></h1>
+<p><code>[a, b].max</code>, <code>[:get, :head].include?(verb)</code>, <code>[x, y].first</code>,
+<code>{a: 1, b: 2}[k]</code>, <code>(lo..hi).include?(v)</code>, <code>case v when 1..5</code>: an Array,
+Hash or Range literal that is built only to be the receiver of one call,
+and is dead right after it. The JIT does not
+allocate such a literal when it is compiled. It records it in the abstract
+state as an <strong>elided object</strong> and decides at its use whether the object is
+needed at all. The same object can be handed, still elided, into a
+specialized callee’s parameter — as the literal argument of <code>size([a, b])</code>,
+as the <code>*rest</code> parameter the callee binds <code>f(a, b)</code> into (§6), or as the
+<code>**opts</code> parameter the callee binds <code>f(x: 1, y: 2)</code> into (§7).</p>
+<p>This replaced <code>try_fuse_array_minmax</code>, a peephole that recognized exactly
+<code>array</code> + <code>min</code>/<code>max</code> on the next instruction. The pattern-specific part is
+now data: what a callee may be handed instead of a real Array is its
+<strong>receiver escape summary</strong>, declared next to the builtin.</p>
+<p>Source: <code>codegen/jitgen/compile/escape.rs</code>; the state half in
+<code>state/slot.rs</code> (<code>SlotState::virtuals</code>, <code>LinkMode::from_caller</code>) and
+<code>state.rs</code>; the side-exit half in <code>WriteBack::virtual_obj</code>
+(<code>codegen/jitgen.rs</code>, and <code>a64_gen_virtual_materialize</code> on aarch64); the
+summaries in <code>builtins/array.rs</code>, <code>builtins/hash.rs</code> and
+<code>builtins/range.rs</code> (<code>init_recv_escape</code>, <code>init_recv_escape_ruby</code>) and
+<code>executor/inline.rs</code> (<code>RecvEscape</code>, <code>ElementsOp</code>); the Range runtime
+helpers in <code>codegen/runtime.rs</code> (<code>create_range</code>, <code>range_cover</code>,
+<code>range_fold</code>).</p>
+<h2 id="1-the-elided-object"><a class="header" href="#1-the-elided-object">1. The elided object</a></h2>
+<p>Three instructions and a method entry can produce one:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Where</th><th><code>VirtualSrc</code></th><th>Condition</th></tr>
+</thead>
+<tbody>
+<tr><td><code>%d = array[%s..%s+n]</code></td><td><code>Slots { src, len, callid }</code></td><td>no splat; <code>%d</code> and the elements are temporaries, the elements dead once the literal is built (at or above the stack top)</td></tr>
+<tr><td><code>%d = literal[...]</code></td><td><code>Literal(template)</code></td><td>the template is a plain <code>Array</code> whose elements are all immediates, a plain <code>Hash</code> whose keys and values are all immediates, or a <code>Range</code> whose endpoints are immediates</td></tr>
+<tr><td><code>%d = %s..%e</code> / <code>%s...%e</code></td><td><code>Range { start, end, exclude_end }</code></td><td><code>%d</code> is a temporary; each endpoint is a compile-time Fixnum or <code>nil</code> (<code>RangeEnd::Const</code>) or a slot proven to hold a Fixnum (<code>RangeEnd::Slot</code>), so building the Range later can neither dispatch <code>&lt;=&gt;</code> nor fail (§8)</td></tr>
+<tr><td>a specialized callee’s parameter</td><td><code>CallerSlots { src, len, base }</code>, or the caller’s <code>Literal</code></td><td>the caller handed the object over (§6)</td></tr>
+<tr><td>a specialized callee’s <code>**kwrest</code> parameter</td><td><code>CallerKw { callid, base }</code></td><td>the caller handed its leftover keyword arguments over (§7)</td></tr>
+</tbody>
+</table>
+</div>
+<p>The slot <code>%d</code> becomes <code>LinkMode::V</code> and the object lives only in
+<code>SlotState::virtuals</code>. A <code>Slots</code> object’s element slots, and a <code>Range</code>
+object’s endpoint temporaries, are <em>pinned</em> (<code>VirtualSrc::own_slots</code>):
+<code>clear_above_next_sp</code> leaves them alone although the bytecode considers them
+dead, because they are the object’s contents. A <code>Literal</code> object needs no
+storage: its contents are the template’s.</p>
+<p>The object ends in one of four ways.</p>
+<ul>
+<li><strong>Consumed</strong> by its use (§2): the Array is never allocated.</li>
+<li><strong>Handed over</strong> to a specialized callee as a parameter (§6), where it
+ends in one of these ways again.</li>
+<li><strong>Dropped</strong>: its slot is overwritten, or falls above the stack top, without
+being read; or it is a parameter nothing reads any more. Nothing ever saw
+it.</li>
+<li><strong>Materialized</strong>: allocated after all, by exactly the code the literal
+would have run (<code>NewArray</code> / <code>DeepCopyLit</code>, <code>CreateArrayFrom</code> over the
+caller’s window, <code>RestKw</code> over the caller’s keyword slots, or
+<code>CreateRange</code> from the endpoints), at the point where something could
+first observe it.</li>
+</ul>
+<h2 id="2-consuming-uses"><a class="header" href="#2-consuming-uses">2. Consuming uses</a></h2>
+<p>A use that may consume the object is a method call with it as the
+receiver, and nowhere else in the call’s operands
+(<code>may_consume_virtual</code>); for a Hash or an Array also the <code>%d = %base[%idx]</code>
+index instruction (<code>consume_virtual_index</code>), which is <code>Hash#[]</code> / <code>Array#[]</code>
+resolved the same way; for a Range also the <code>===</code> comparison with it on the left
+(<code>consume_virtual_teq</code>: the <code>case … when lo..hi</code> opcode and the explicit
+<code>(lo..hi) === v</code>), which is <code>Range#===</code> resolved the same way. The call resolves the method on the object’s class
+(<code>VirtualSrc::class_id</code>) under the class-version guard and reads the
+callee’s <code>RecvEscape</code>:</p>
+<ul>
+<li><code>elements: Some(op)</code> — an allocation-free lowering over the object’s
+elements, for a <code>Slots</code> or <code>CallerSlots</code> object and an argument-less,
+block-less call. <code>Min</code> / <code>Max</code> compare the elements in their slots
+(<code>ArrayMinMax</code>, over the frame’s own slots or the caller’s window);
+<code>Size</code>, <code>Empty</code> are answered at compile time; <code>First</code>, <code>Last</code> are a copy
+of one element slot (<code>LoadCallerSlot</code> for a handed-over object);
+<code>ArrayIndex</code> (<code>%d = %base[%idx]</code>) is that same copy for a compile-time
+Integer index (counting from the end when negative, <code>nil</code> out of
+range), and for any other index proven or cached Fixnum an in-place
+read of the element slots with the bounds check (<code>ElidedArrayIndex</code>;
+the Fixnum guard deopts with the object still registered). A Range or
+non-Integer index materializes. The object stays elided afterwards
+(the read observes an element, not the Array), which is what lets a
+loop body read a local’s Array by index without building it (§10). Over
+the pairs of an elided Hash (a template’s, or a <code>CallerKw</code> object’s
+names and caller slots), <code>Size</code> / <code>Empty</code> are constants, and
+<code>HashIndex</code> (<code>[]</code>), <code>HashFetch</code> (<code>fetch</code>) and <code>HashHasKey</code> (<code>include?</code>
+and its aliases) are folded when the key is a compile-time packed
+immediate — a symbol or a fixnum, for which <code>eql?</code> is bit equality and
+no <code>hash</code> is dispatched — and, for <code>[]</code> / <code>fetch</code> with one argument,
+present (a miss would dispatch <code>default</code> or raise). <code>fetch(k, d)</code> on a
+miss is <code>d</code>’s own slot. A found value is the template’s constant or a
+<code>LoadCallerSlot</code> of the caller’s keyword slot (<code>plan_hash_op</code>,
+<code>emit_hash_fold</code>). Over the endpoints of an elided Range (<code>Const</code> or
+<code>Slot</code>), <code>RangeCover</code> (<code>include?</code>, <code>member?</code>, <code>cover?</code>, <code>===</code>) is two
+tagged compares inline for a Fixnum argument — the tag bit is the same
+on both sides, so Fixnums order as tagged words, and a <code>nil</code> endpoint
+bounds nothing — with <code>runtime::range_cover</code> behind it for any other
+argument; <code>RangeSize</code>, <code>RangeCount</code>, <code>RangeSum</code>, <code>Min</code>, <code>Max</code>, <code>First</code>,
+<code>Last</code> are folded at compile time for constant endpoints
+(<code>runtime::range_fold</code>) and go through a helper otherwise; <code>RangeBegin</code>,
+<code>RangeEndpoint</code>, <code>RangeExcludeEnd</code> are the endpoint itself
+(<code>plan_range_op</code>, <code>emit_range_plan</code>). Where the in-place answer does
+not apply — a non-numeric argument, a <code>nil</code> endpoint the method rejects,
+a redefined <code>Integer#&lt;=&gt;</code> — the helper builds the Range and dispatches
+the resolved method on it, exactly the call that would have been made.
+A parameter stays elided after such a use if it is still live (the next
+<code>args.size</code> or <code>opts[:y]</code> is free too); a temporary is done.</li>
+<li><code>transparent: true</code> — the callee never mutates, stores or returns its
+receiver, nor returns an Enumerator over it, in any argument form. A
+<code>Literal</code> object’s copy is then indistinguishable from the template to
+the callee, so the call is compiled as usual with the receiver slot bound
+to the template (<code>LinkMode::C</code>). Arguments and a block literal are fine:
+only the receiver’s identity is at stake. The receiver slot must be dead
+after the call, so the template never becomes visible to later code.</li>
+</ul>
+<p>Anything else materializes the object and compiles the call as before.</p>
+<p>A <code>yield [e1, .., en]</code> (n &gt;= 2, no splat) is a consumer too
+(<code>yield_expanded_for</code>). Bytecodegen gives such a site an expanded twin,
+<code>CallSiteInfo::yield_expanded</code>: the call site of <code>yield e1, .., en</code>, whose
+arguments are the temporaries the Array literal is built from (the yield’s
+argument slot + 1 ..), with the same result slot. When the block is the
+literal one specialized in place and auto-splats a lone Array argument
+(<code>FuncInfo::single_arg_expand</code>: block style, more than one positional
+parameter) and takes no keywords, it binds the elements exactly as it would
+bind the Array, so the JIT yields through the twin and the Array is never
+built (<code>Hash#each</code>’s <code>yield [key, value]</code> into <code>{ |k, v| }</code>). The object
+stays registered until the block’s arguments are filled: a frameless
+block’s redo exit hands the original yield back to the interpreter, which
+reads the Array from its slot, so that exit materializes it.</p>
+<p>The class-version guard is emitted while the object is still registered,
+so a redefinition (<code>class Array; def max = self; end</code>) deopts with the
+object materialized and the interpreter calls the new method on a fresh
+Array.</p>
+<p>Adding a consumer is a summary entry. An entry is a promise about every
+argument form of the method; <code>take</code> qualifies (<code>take(n)</code> larger than the
+size returns a <code>dup</code>), <code>each</code> does not (it returns <code>self</code>), <code>index</code> does
+not (blockless, argument-less it returns an Enumerator over <code>self</code>). The
+Hash table is in two halves: the builtins in <code>builtins/hash.rs</code>
+(<code>init_recv_escape</code>, with <code>[]</code>, <code>fetch</code>, <code>include?</code>, <code>size</code>, <code>empty?</code> as
+elements lowerings and <code>keys</code>, <code>values</code>, <code>merge</code>, <code>==</code>, <code>inspect</code>, … as
+transparent) and the methods <code>builtins/hash.rb</code> defines in Ruby (<code>dig</code>,
+<code>slice</code>, <code>except</code>, <code>any?</code>, <code>count</code>, …), registered after that file is
+loaded (<code>init_recv_escape_ruby</code>, from <code>Executor::new</code>). The Range table
+(<code>builtins/range.rs</code>, <code>init_recv_escape_ruby</code>) is registered the same way,
+on the resolved methods, since <code>builtins/range.rb</code> defines most of them
+(<code>===</code>, <code>include?</code>, <code>cover?</code>, <code>size</code>, <code>sum</code>, <code>min</code>, <code>max</code>, …) over the
+builtins; a Range is immutable, so every method of its own that returns
+neither <code>self</code> nor an object holding it (<code>each</code>, <code>step</code>, <code>%</code> do) is
+transparent.</p>
+<h2 id="3-when-an-object-is-materialized"><a class="header" href="#3-when-an-object-is-materialized">3. When an object is materialized</a></h2>
+<p><code>settle_virtuals</code> runs before every instruction. An object not consumed
+by the instruction is</p>
+<ul>
+<li>dropped if the instruction does not read it and it is dead after it;</li>
+<li>otherwise materialized if any of these hold:
+<ul>
+<li>the instruction reads it (a <code>Mov</code>, an argument, a <code>ret</code>, an index base);</li>
+<li>the instruction could overwrite an element slot (its stack top reaches
+the elements: bytecode temporaries are only written by pushes), or
+writes a local that is an elided Range’s endpoint (<code>written_slot</code>);</li>
+<li>the instruction ends the basic block (a parameter’s object may be
+carried into a forward merge instead, below);</li>
+<li>the instruction can run Ruby code or reach a call — only <code>Mov</code>,
+<code>Literal</code>, <code>FrozenLiteral</code>, <code>Array</code> and the <code>InlineCache</code> word are
+survivable (<code>virtual_survives</code>).</li>
+</ul>
+</li>
+</ul>
+<p><code>settle_virtuals_at_bb_end</code> does the same after an instruction that ends
+its block by falling through.</p>
+<p>An intra-block dispatch (a class dispatch, a polymorphic call, a generic
+binary operator: <code>declare_merge</code>) is a merge of its own, and its arms may
+emit the <code>CondBr</code> that follows it (<code>CondBrSink</code>), which makes the
+instruction the block’s last. So <code>declare_merge</code> materializes an elided
+object among the operands (no arm takes one over), and, under a sink,
+settles every live object of the frame as the block’s end would
+(<code>settle_virtuals_before_branch</code>): a parameter’s object would otherwise
+reach the branch target through an arm’s side-branch state while the
+fall-through materializes it, and the join of the two would not keep
+both.</p>
+<p>A parameter holding a handed-over object (§6) follows the same rules but
+two: it survives its frame’s calls, and it survives a forward block
+boundary. Its elements are in the caller’s frame (or are a template),
+which no callee can reach, and the callee gate guarantees that nothing in
+the body can observe the parameter slot behind the compiler’s back. It is
+dropped once nothing can read it any more (<code>local_live_after</code>: the rest
+of its block and every block reachable from there).</p>
+<p><strong>Merges.</strong> A block whose successors are all forward merges — none is a
+loop head, and the block is not a dispatch arm (<code>merge_carries_virtual</code>)
+— leaves a live parameter’s object elided in the state its branch entry
+carries. When the merge is compiled (<code>incoming_context</code>), the entries are
+reconciled first (<code>settle_entries</code>): an object every entry brings
+identically (same slot, same <code>VirtualSrc</code>) stays elided through the
+join, and any other is materialized on its entry’s bridge, in a per-entry
+<code>AsmIr</code> the bridge is prepended with (<code>gen_bridges_for_branches</code>). The
+join itself then only ever meets equal tables (it asserts so, debug), and
+the merged state inherits them. This is what lets an optional parameter’s
+prologue (<code>def f(a, b = 0) = a.max + b</code>, <code>def g(x: 1, **opts) = opts[:y]</code>),
+a guard clause (<code>return 0 if a.empty?</code>) or a <code>?:</code> before the use keep the
+object elided. A temporary’s object never crosses a block boundary: it is
+materialized or dropped where its block ends, as before.</p>
+<p><strong>Loop heads.</strong> A loop head is a merge whose back edge is a fixpoint over
+the body, so an object reaches it only when the tables (§11) say the loop
+can keep it (<code>loop_keeps_virtual</code>): no block of the loop writes the local
+(<code>bb_def</code> over the loop’s blocks; nor a local among the object’s element
+slots — the others are the scratch window, which only a literal into the
+local writes), and no capture point in the loop reaches it. The forward
+entries and the back edges then branch with the object in place, the
+entries are reconciled as at any merge (<code>settle_entries</code> also drops
+whatever a back edge already recorded for the head does not carry), and
+the fixpoint walks the body from a head <em>with</em> the object
+(<code>analyse_backedge_fixpoint</code>). The body may still read the object in a
+way the compiler cannot fold (an Array index, §10), materializing it; the
+back edge then arrives without it, every later walk of the fixpoint
+starts from a head with it materialized (<code>analyse_loop</code>), and the loop’s
+forward entries materialize it once, on their bridges, as every entry did
+before. The real back edge materializes what the head does not carry
+(<code>backedge_branches</code>) and, since creating an object is defining its
+local, never brings one the head lacks. So <code>r = (lo..hi); while ...; r.include?(i)</code> folds the test every iteration and allocates nothing;
+<code>def f(*a); while ...; a.first; end</code> keeps its rest Array elided through
+the loop.</p>
+<p>The consequences are what keep the mechanism small:</p>
+<ul>
+<li><strong>A merge only ever sees equal elided objects.</strong> A temporary’s object
+never reaches one, and a parameter’s reaches it on every path or on
+none, so joins and the branch bridges reconcile nothing; a loop-head
+fixpoint sees only an object its loop can neither write nor capture.</li>
+<li><strong>A suspended frame owes only objects whose elements are safe.</strong> A
+temporary’s object never lives across a call; a handed-over object’s
+elements are in the caller’s frame, and a local’s (§10) in the frame’s
+own scratch slots, so the chain-deopt replay stub
+(<code>gen_chain_replay_stub</code>) materializes <code>CallerSlots</code> (through the
+frame’s saved bp or its window offset), <code>Literal</code>, and <code>Slots</code> /
+<code>Range</code> entries (through the frame’s lfp).</li>
+<li><strong>Liveness comes from the stack top.</strong> The bytecode’s own per-instruction
+stack top says when a temporary’s object is dead and when its elements
+can be clobbered; a parameter’s reads are counted off the basic-block
+graph (<code>local_live_after</code>). No separate escape pass over the bytecode is
+needed.</li>
+</ul>
+<h2 id="4-side-exits-and-gc"><a class="header" href="#4-side-exits-and-gc">4. Side exits and GC</a></h2>
+<p>A side exit while an object is pending performs the allocation in its
+write back: <code>WriteBack::virtual_obj</code> holds <code>(dst, VirtualSrc)</code> and runs
+last, after every other slot is homed, so the frame is GC-consistent across
+the allocating call (<code>create_array</code> over the element slots or the caller’s
+window, <code>value_deep_copy</code> of the template, or <code>create_range</code> from the
+endpoints). Both
+<code>gen_write_back_for_deopt</code> (x86-64) and <code>a64_gen_write_back_for_deopt</code> do
+this, and the chain-deopt conversion of a frame suspended in a call does
+the same for its handed-over objects.</p>
+<p>At a GC safepoint the object’s slot is <code>V</code>, so the GC write back stores
+<code>nil</code> into it; the pinned element slots hold their (boxed, homed) values
+and are scanned like any frame slot. A handed-over object’s elements are
+in the caller’s frame, which the caller spilled before the call
+(<code>write_back_range</code>) and which is on the control-frame chain.</p>
+<h2 id="5-what-is-not-covered-yet"><a class="header" href="#5-what-is-not-covered-yet">5. What is not covered (yet)</a></h2>
+<ul>
+<li><strong>Locals</strong> hold an object under the rules of §10: not in a body that
+rescues, not while the frame may be captured, and an alias (<code>y = x</code>
+with <code>x</code> read again) builds it.</li>
+<li><strong>Elements overwritten before the use.</strong> <code>[a, b].include?(c + 1)</code>
+evaluates <code>c + 1</code> into the first element’s slot, so the object is
+materialized there. A local or literal argument (<code>include?(x)</code>) is passed
+in its own slot and does not clobber. The same happens to a literal
+followed by another argument: in <code>size([i, 2], 1)</code> the <code>1</code> is evaluated
+into the literal’s first element slot, so only a literal in the last
+positional position (or alone) reaches the callee elided; a literal of
+immediates (<code>Literal</code>) has no element slots and is not affected.</li>
+<li><strong><code>Slots</code> objects and transparent callees.</strong> Without a template there is
+no Array to hand a transparent callee; only the <code>elements</code> lowerings apply.</li>
+<li><strong>Loops that read the object unfoldably.</strong> An object carried through a
+loop head (§3) is materialized on the loop’s entries as soon as the
+body reads it in a way that is not folded — an Array slice (<code>a[i, n]</code>,
+<code>a[lo..hi]</code>), a transparent-only callee on a <code>Slots</code> object
+(<code>a.include?(x)</code>), or a <code>Range</code> use that is not one of §8’s — so the
+per-iteration fold is only as wide as the consuming uses are.</li>
+<li><strong>Return values that escape the callee’s frame first.</strong> A plain <code>return</code>
+of an elided object from a specialized callee hands it over elided (§9);
+a <code>return</code> from inside a block, from a callee with a handler, with a
+block or a binding in flight, or of a <code>**kwrest</code>, builds it at the <code>ret</code>.</li>
+<li><strong>Hash lookups by a non-constant key, or by a missing one.</strong> <code>h[k]</code>
+with <code>k</code> a variable needs <code>k.hash</code> and <code>eql?</code>, and <code>h[:zz]</code> on a
+template without <code>:zz</code> needs <code>default</code>; both run on the template (a
+<code>Literal</code>) or materialize (a <code>CallerKw</code>). A Hash literal with a dynamic
+value (<code>{a: x}</code>) is not elided at all: its value is evaluated into the
+slot a later literal key argument lands on, so the lookup would
+materialize it anyway.</li>
+<li><strong>Range endpoints of unknown class.</strong> <code>(a..b.size).sum</code> builds the Range:
+the end is a call’s result, not proven Fixnum at the <code>Range</code>
+instruction. A Float, Bignum or String endpoint builds it too, and so does
+a Range into a local. The endpoint temporary of <code>(a..f(b)).include?(x)</code>
+is clobbered by the argument push, as an Array’s elements are.</li>
+<li><strong>Other classes.</strong> Objects whose <code>initialize</code> the JIT inlines are the
+natural next <code>VirtualSrc</code> kind.</li>
+</ul>
+<h2 id="6-into-callees-virtualsrccallerslots"><a class="header" href="#6-into-callees-virtualsrccallerslots">6. Into callees: <code>VirtualSrc::CallerSlots</code></a></h2>
+<p>A specialized callee (<code>compile_specialized_func</code>, <code>LinkMode::from_caller</code>)
+is compiled for one call site, with the caller’s abstract state at the
+call in hand. Two kinds of parameter can then start as an elided object:</p>
+<ul>
+<li>the <strong><code>*rest</code> parameter</strong>, over the caller’s argument window that the
+callee would bind into a new <code>Array</code> — <code>def f(*args) = args.size</code>,
+and the <code>...</code> of a forwarding trampoline <code>def f(...) = g(...)</code>;</li>
+<li>a <strong>positional parameter</strong> whose argument is itself an elided literal in
+the caller — <code>size([a, b])</code>, <code>t([1, 2], x)</code>.</li>
+</ul>
+<p>Both are <code>VirtualSrc::CallerSlots { src, len, base }</code>, the caller’s slot
+window <code>src..src+len</code> read through the base the callee’s frame knows:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th><code>SlotBase</code></th><th>Callee</th><th>Element <code>i</code> lives at</th></tr>
+</thead>
+<tbody>
+<tr><td><code>SavedFp</code></td><td>framed</td><td><code>[[rbp] - rbp_local(src + i)]</code>: the caller’s frame pointer, saved at <code>[rbp]</code> by the callee’s prologue</td></tr>
+<tr><td><code>Window(delta)</code></td><td>frameless (<code>frameless_call.rs</code>)</td><td><code>[r14 + delta - conv(src + i)]</code>: the callee runs in a window <code>delta</code> below the caller’s locals, so the caller’s slots are at a constant offset from its own LFP</td></tr>
+<tr><td><code>Own</code></td><td>—</td><td>the frame’s own slot <code>src + i</code>: what a <code>Slots</code> object is, used by the shared lowerings only</td></tr>
+</tbody>
+</table>
+</div>
+<p>A caller’s <code>Literal</code> object is handed over as it is (the template is
+global).</p>
+<p><strong>The hand-over</strong> (<code>specialized_iseq</code>): the caller decides
+<code>handover = Some(base)</code> when the call is specialized on its arguments and
+the callee passes the gate below; <code>from_caller</code> then returns, next to the
+parameter link modes, the objects to register at the callee’s entry
+(<code>SlotState::new_method</code>). The caller stores <code>nil</code> into the parameter’s
+slot in the callee frame instead of the value (<code>fetch_arg_for_callee</code>),
+skips <code>create_array</code> for the rest window, and spills the window
+(<code>write_back_range</code>) so that the callee’s reads and any side exit’s
+rebuild find the elements in memory. A literal inside the rest window is
+materialized first: it is an element there, not a parameter. The caller’s
+own entry for the object is taken at the end of the fill: the object now
+belongs to the callee.</p>
+<p><strong>The callee gate</strong> (<code>caller_slots_ok</code>): an iseq that cannot capture its
+locals without a block (<code>possibly_capture_without_block</code>: no <code>binding</code>,
+<code>eval</code>, <code>local_variables</code>, …), has no block literal, <code>super</code> or <code>yield</code>
+(<code>ISeqInfo::forwarding_no_escape</code>), and rescues nothing. Then a parameter
+whose reads are all behind it is dead for good, and nothing in the body can
+observe the slot except through the compiler. The gate reads the callee’s
+own iseq; a call <em>it</em> makes to a capturing method (<code>binding</code>, <code>eval</code>)
+resolves through the inline cache and counts as a read of every object of
+the frame in <code>settle_virtuals</code> (<code>captures</code>), so the parameter is
+materialized before the call.</p>
+<p><strong>Lifetime in the callee.</strong> A parameter’s object follows §3 with one
+difference: it survives the frame’s own calls, since its elements are not
+in this frame. It is materialized when read (a <code>Mov</code>, an argument to a
+non-specialized call, a <code>ret</code>, an index base), at the end of its basic
+block while still live, or when read by an instruction that cannot
+consume it; dropped when <code>local_live_after</code> says nothing reads it any
+more. It is <em>not</em> handed over again: a <code>CallerSlots</code> object passed to a
+further specialized callee is materialized, except for the forwarding
+consume below.</p>
+<p><strong>The forwarding consume.</strong> The rest of <code>def f(...) = g(...)</code> is consumed
+by the <code>g(*rest, **kwrest, &amp;blk)</code> call itself: <code>set_arguments</code>’ forwarding
+arm reads the object (<code>SetArgumentsForwarded::deferred_src</code>) and copies the
+caller’s window straight into <code>g</code>’s frame, or builds <code>g</code>’s own <code>*rest</code>
+from the window’s tail (<code>forwarded_deferred_layout</code>), whenever <code>g</code>’s bind
+is a compile-time constant. The rest slot stays elided through the call
+(<code>arg_forwarding_jit.md</code> §3.4). The forwarding consume works on a generic
+call too — it is the only consume of a <code>CallerSlots</code> object that does not
+need the callee specialized — so <code>settle_virtual_args</code> leaves the trailing
+<code>...</code> splat to it.</p>
+<p><strong>Reads that consume.</strong> <code>ElementsOp</code> lowerings over a <code>CallerSlots</code> object
+read the caller’s window: <code>ArrayMinMax { base, args, len }</code> for <code>min</code> /
+<code>max</code>, <code>LoadCallerSlot { base, slot }</code> for <code>first</code> / <code>last</code>, constants for
+<code>size</code> / <code>empty?</code>. Materialization is <code>CreateArrayFrom { base, src, len }</code>
+(<code>runtime::create_array</code> over the window); the same addressing is used by
+the side-exit write-back, by the chain-deopt replay stub of a frame
+suspended in a call (through <code>[rsi]</code> / <code>[x24]</code> for the saved bp, <code>rdx</code> /
+<code>x25</code> for the window), and by the frameless callee’s exit write-back.</p>
+<p><strong>What it buys.</strong> <code>def f(*args)</code>-style helpers (<code>args.size</code>, <code>args.first</code>,
+<code>args.last</code>, <code>args.max</code>) and <code>...</code> trampolines (<code>Class#new</code>’s forward to
+<code>initialize</code> included) run without the rest <code>Array</code>; literal arguments into
+<code>def size(a) = a.size</code>-style callees without the literal. The mechanism
+replaced the former deferred-rest annotation (D1): the kw half (K1) keeps
+its annotation (<code>DeferredForward { kw }</code>), the rest half is this.</p>
+<h2 id="7-hash-literals-and-kwrest-virtualsrccallerkw"><a class="header" href="#7-hash-literals-and-kwrest-virtualsrccallerkw">7. Hash literals and <code>**kwrest</code>: <code>VirtualSrc::CallerKw</code></a></h2>
+<p>A Hash is an elided object in two forms.</p>
+<p><strong>A literal of immediates</strong> (<code>{a: 1, b: 2}</code>, <code>{200 =&gt; :ok}</code>) is a
+<code>Literal(template)</code> like an Array’s, and ends the same ways: consumed by a
+folded lookup (<code>[]</code>, <code>fetch</code>, <code>include?</code>, <code>size</code>, <code>empty?</code> with a constant
+key, §2), handed to a transparent callee as the template, dropped, or
+copied by <code>DeepCopyLit</code>. A specialized callee receives it in a parameter
+as it is. There is no <code>Slots</code> form: a Hash literal with a non-immediate
+value is built as before (§5).</p>
+<p><strong>A <code>**kwrest</code> parameter.</strong> The kwrest of a specialized callee —
+<code>def f(a, **opts)</code> called as <code>f(x, y: 1, z: 2)</code> — would be a fresh Hash of
+the caller’s keyword arguments that the callee’s own parameters do not
+name. Instead it starts as <code>VirtualSrc::CallerKw { callid, base }</code>: the
+caller’s call site, and the base through which the caller’s frame is
+reached (<code>SavedFp</code> only; a frameless callee is never specialized with a
+kwrest). Its pairs are a compile-time table, <code>AbstractFrame::caller_kw</code>
+(<code>JitContext::caller_kw_table</code>): the call site’s keyword names, minus the
+callee’s <code>kw_names</code>, each with the caller slot its value was evaluated
+into (<code>kw_pos + offset</code>). Keys are symbols, so every lookup by a constant
+symbol is folded to a <code>LoadCallerSlot</code> of that slot, or to a miss.</p>
+<p><strong>The hand-over</strong> (<code>specialized_iseq</code>, <code>set_arguments</code>’s kwrest fill): the
+caller elides the kwrest when the call is specialized on its arguments,
+the callee’s body passes §6’s gate, the call site has no <code>**splat</code>, the
+callee is not a forwarding trampoline (its kw half keeps <code>DeferredForward { kw }</code>), and the bind is a simple call. Then the caller spills the
+leftover keyword slots (<code>use_as_value</code> + <code>write_back</code>) so the callee and
+any side exit find them in memory, stores <code>nil</code> into the kwrest slot of
+the callee frame, and <code>from_caller</code> registers the <code>CallerKw</code> object with
+the parameter in <code>LinkMode::V</code>. The callee skips its <code>CheckKwRest</code>
+(nothing to check: the object has no duplicate keys by construction — a
+duplicate at the call site is already resolved by the caller’s layout).
+A call site to a <code>**kwrest</code> method is now a reason to specialize at all
+(<code>specializable</code>), as a <code>*rest</code> method is.</p>
+<p><strong>Materialization</strong> is <code>AsmInst::RestKw { rest_kw, table, base }</code>
+(<code>AsmIr::kw_rest_from</code>), the same <code>correct_rest_kw</code> runtime call the
+callee’s prologue uses, pointed at the caller’s frame through <code>base</code>
+(<code>emit_rest_kw</code> on both arches: <code>[rbp]</code> / <code>[x29]</code> minus
+<code>RBP_LOCAL_FRAME</code> for <code>SavedFp</code>). A side exit while the object is pending
+writes it back as <code>WriteBack::forward_kwrest</code> (<code>wb_forward_kwrest</code>), the
+entry that already rebuilt a deferred forwarding kwrest, so the deopt
+exits and the chain-deopt stub need no new case; <code>WriteBack::virtual_obj</code>
+never carries a <code>CallerKw</code>.</p>
+<p><strong>What it buys.</strong> <code>def f(**opts)</code>-style helpers that only read their
+options (<code>opts[:x]</code>, <code>opts.fetch(:x, 0)</code>, <code>opts.key?(:x)</code>, <code>opts.empty?</code>,
+<code>opts.size</code>) run without the kwrest Hash; <code>{a: 1, b: 2}[k]</code>-style literal
+tables and <code>{...}.include?(k)</code> without the literal’s copy. An optional
+keyword parameter next to the kwrest (<code>def f(x: 1, **opts)</code>) still
+allocates: its prologue branch ends the basic block before the use (§5).</p>
+<h2 id="8-range-literals-virtualsrcrange"><a class="header" href="#8-range-literals-virtualsrcrange">8. Range literals: <code>VirtualSrc::Range</code></a></h2>
+<p><code>(lo..hi).include?(v)</code>, <code>(0...n).sum</code>, <code>case v when lo..hi</code> — the
+<code>Range</code> instruction builds a Range from two slots (<code>gen_range</code>), which
+compares the endpoints with <code>&lt;=&gt;</code> (a dispatch, which may raise) unless
+one is <code>nil</code>. The object is elided only where that compare is known to be
+free: each endpoint is a compile-time Fixnum or <code>nil</code> (<code>RangeEnd::Const</code>),
+or a slot the abstract state has proven Fixnum (<code>RangeEnd::Slot</code>, after
+<code>write_back_slots</code>, so the frame holds it). The destination must be a
+temporary, as for an Array literal.</p>
+<p>An endpoint slot is pinned like an Array’s element slots, with one twist:
+the Range is usually built <em>into</em> its first endpoint’s slot (the
+bytecode evaluates <code>lo</code> into the temporary the Range then occupies), and
+that slot is never written while the object is elided — <code>V</code> slots are not
+written — so it is excluded from the overwrite check. An endpoint that is
+a local (<code>a..b</code> with locals, the common shape) is not pinned; the object is
+materialized before any survivable instruction that writes the local
+(<code>written_slot</code>).</p>
+<p>Materialization is <code>CreateRange</code> (<code>runtime::create_range</code>: <code>Value::range</code>
+with no compare) in the body, in an argument fill, and at a side exit
+(<code>gen_virtual_materialize</code> / <code>a64_gen_virtual_materialize</code> load each
+endpoint as a constant or from its slot). A Range is never handed into a
+callee (its endpoints are this frame’s slots) and lives only in a
+temporary, so no suspended frame owes one and the chain replay asserts the
+kind away.</p>
+<p>A <code>Range</code> literal with constant endpoints (<code>1..5</code>) is a template
+(<code>VirtualSrc::Literal</code>), as an Array or Hash of immediates is, and its
+element ops are the same lowerings over <code>Const</code> endpoints: <code>(1..3).sum</code> is
+folded at compile time, <code>when 1..5</code> is the inline compare against two
+immediates. A Range is always frozen, so the bytecode loads such a literal
+with <code>FrozenLiteral</code> (no per-execution copy), and the <code>FrozenLiteral</code>
+lowering routes a Range through <code>try_elide_literal</code> like a <code>Literal</code>;
+materializing the template — in the body, handed into a callee, at a side
+exit — yields the literal object itself (<code>value_deep_copy</code> returns a value
+of an always-frozen class unchanged), as the instruction would have. The fold and the inline compare stand in for <code>Integer#&lt;=&gt;</code>
+(and <code>Float#&lt;=&gt;</code>), so they are taken under the basic-op license
+(<code>basic_op_assumable</code>, <code>record_bop_dep</code>) and the unit is evicted by a
+redefinition; the helpers re-check <code>cmp_redefined</code> at run time and
+dispatch the real method then.</p>
+<h2 id="9-return-values-an-elided-object-handed-back-to-the-call-site"><a class="header" href="#9-return-values-an-elided-object-handed-back-to-the-call-site">9. Return values: an elided object handed back to the call site</a></h2>
+<p><code>def pair(a, b) = [a, b]</code> followed by <code>pair(x, y).max</code>, <code>a, b = pair(x, y)</code>,
+<code>def rest(*a) = a</code> / <code>rest(x, y).min</code>, <code>def rng(a, b) = (a..b)</code> /
+<code>rng(x, x + 10).include?(5)</code>: the callee’s last act is to return an
+object it never let out. The <code>Ret</code> of a specialized callee is one edge of
+the caller’s continuation merge (<code>record_return_edge</code>,
+<code>build_return_segments</code>); an elided object still in the returned slot
+there is left elided on the edge (<code>may_consume_virtual</code>’s <code>Ret</code> arm, when
+<code>return_virtual_in_caller</code> accepts it) instead of being built, and the
+decision is made once every return path is known.</p>
+<p><strong>The gate</strong> (<code>return_virtual_in_caller_of</code>): the callee is a method (no
+<code>outer</code>), has no exception handler and never captures its frame without
+a block (<code>possibly_capture_without_block</code>); the call site passes no
+block, has a destination above the caller’s locals, and the caller’s
+frame is proven on the stack (<code>no_capture_guard</code>); and the object maps
+into the caller: a <code>Literal</code> as it is, an Array (<code>Slots</code>, or a
+<code>CallerSlots</code> handed <em>in</em>) as <code>CallerSlots { src: dst, len, base: Own }</code>,
+a <code>Range</code> with its slot endpoints relocated to <code>dst, dst + 1</code> — all
+provided the slots fit in the caller’s frame (<code>dst + n &lt;= total_reg_num</code>).
+A <code>CallerKw</code> is not handed back (its table belongs to the callee).</p>
+<p><strong>The decision</strong> (<code>return_virtual_ok</code>, in <code>build_return_segments</code>): every
+edge carries an object, they all map to the same caller-side
+<code>VirtualSrc</code>, and the callee has no boxed return (a non-local <code>return</code>
+from a block, a <code>break</code>). <code>JitStackFrame::return_virtual</code> records it,
+next to <code>float_return</code>, and travels with the compile result
+(<code>SpecializedCompileResult::return_virtual</code>, memoized).</p>
+<p><strong>The copies</strong> (<code>emit_return_virtual_copies</code>): on each edge, after the
+chain bridge, the elements are stored into the caller’s slots
+<code>dst..dst+len</code> through <code>AsmInst::StoreCallerSlot</code> (the twin of
+<code>LoadCallerSlot</code>: <code>SavedFp</code> from a framed callee, <code>Window(delta)</code> from a
+frameless one — <code>DynVarOffset::Hint</code> chain addressing is not usable from
+a frameless callee, whose frame totals include the window). A <code>Slots</code>
+object’s elements are loaded from the callee’s state (a <code>V</code> element —
+the object’s own slot doubling as its first element, see below — from
+the stack); a <code>CallerSlots</code> handed in from the same caller is moved
+slot by slot, far end first where the windows overlap. No value is
+loaded into the return register: the caller does not read it. An edge
+whose object did not pass (another path returned a bare value) is
+materialized on its own segment, as before.</p>
+<p><strong>The call site</strong> (<code>def_specialized_result</code> → <code>def_virtual_return</code>): the
+destination becomes the object’s slot (<code>def_virtual</code>, <code>V</code>), the slots
+above it <code>S</code> (proven <code>Fixnum</code> for a Range’s endpoints, <code>Value</code>
+otherwise). The destination itself is <strong>element 0</strong>: for a self-call the
+result slot is the first argument slot and the frame ends right after the
+arguments, so there is no room above; the element’s value sits on the
+stack under a <code>V</code> link, which the write-backs no longer <code>nil</code>-fill
+(<code>SlotState::wb_void</code> skips the own slot of an elided object), the
+element lowerings read from memory (<code>copy_element</code>,
+<code>write_back_elements</code>), and <code>discard_dead_elements</code> leaves alone when the
+object is gone, since the slot then holds whatever replaced it. The
+caller’s <code>InlineCache</code> pseudo-instruction after the call writes nothing,
+so it no longer counts as overwriting element 1 (<code>settle_virtuals</code> asks
+for the slot an instruction actually writes).</p>
+<p><strong>Destructuring</strong> (<code>consume_virtual_expand</code>): <code>a, b = f(x, y)</code> expands
+the object straight into its targets — a template’s constants, copies of
+the element slots, <code>nil</code> past the end — with the object gone afterwards.
+The targets are the temporaries right above the result, overlapping the
+element slots, so the copies run far end first (a <code>memmove</code>) when the
+targets lie above the elements.</p>
+<p><strong>A discarded result</strong> (<code>return_discarded</code>): a call site with no
+destination (<code>pair(x, y)</code> as a statement, a setter body’s last
+expression) has nothing to resume with, so the same gate minus the
+destination (<code>handover_site_of</code>) lets the <code>Ret</code> keep the object, and the
+segment drops it: it loads <code>nil</code> into the return register (which must
+carry a non-zero value, zero being the error return) and the allocation
+never happens. The decision is per edge — a path returning a bare value
+loads it as before, and <code>return_virtual</code> stays <code>None</code>.</p>
+<p><strong>Not carried</strong>: a <code>return</code> reached through a block (<code>new_method_return</code>
+boxes it), the hand-over of an object the caller then returns again to a
+non-specialized frame (materialized at that <code>Ret</code>, as any escape: the
+unit’s callers are unknown code that needs a real <code>Value</code> in the return
+register), and a Range whose consuming use evaluates an argument into its
+slot after the return (<code>rng(x, x + 10).include?(x + 3)</code>, the §5
+clobbering).</p>
+<h2 id="10-locals-an-object-kept-in-a-local-variable-across-calls"><a class="header" href="#10-locals-an-object-kept-in-a-local-variable-across-calls">10. Locals: an object kept in a local variable, across calls</a></h2>
+<p><code>x = [a, b]; … x.max</code>, <code>r = (lo..hi); … r.include?(v)</code>, <code>opts = {a: 1}; … opts[:a]</code>: the literal is assigned to a local, used later — after
+other statements, after calls — and never let out of the frame. The
+object is elided into the local and stays elided until something could
+observe it; the rules of §3 apply, with a local’s lifetime (it survives
+the frame’s calls, is dropped when nothing reads it any more, and
+crosses a forward merge) and the escape points below.</p>
+<p><strong>Scratch windows.</strong> A temporary’s elements stay in the temporaries the
+literal was built from, which the next push overwrites — so a local’s
+object cannot keep its elements there across the statements that follow.
+The bytecode compiler reserves, for every local an Array literal (no
+splat, at most 8 elements) or a Range literal is assigned to, a <em>scratch
+window</em> as wide as the widest such literal: hidden temporaries above
+every temporary the bytecode uses (<code>BytecodeGen::local_scratch</code>,
+<code>ISeqInfo::local_scratch</code>, counted in <code>temp_num</code> and so nil-filled at
+entry like every register, at most 16 slots per iseq). The interpreter
+never reads them. When the JIT elides <code>x = [a, b]</code>, it copies the
+elements into <code>x</code>’s window and homes them there (<code>copy_to_scratch</code>); the
+object is <code>Slots { src: window, len }</code>, and every consuming lowering,
+side-exit write back and GC safepoint reads the window exactly as it
+would read a temporary’s pinned elements. A Range’s slot endpoints move
+into the window the same way (<code>RangeEnd::Slot(window + i)</code>), so a later
+write to the local the endpoint came from (<code>a = f(a)</code>, which
+<code>written_slot</code> would not see in a call) cannot change the Range. A
+literal of immediates needs no window.</p>
+<p><strong>The local gate</strong> (<code>local_elision_ok</code>): the frame is proven on the stack
+and uncaptured (<code>no_capture_guard</code>) and rescues nothing (a handler could
+read any local). A frameless callee (<code>frameless_call.rs</code>) passes it: its
+window is its whole frame as its own prologue would have laid it out,
+scratch windows included, and its body addresses them through the
+shifted LFP like any slot of its own; a redo exit hands the whole call
+back to the caller, whose state never saw the callee’s object, and a
+materializing exit builds the object from the window into the frame it
+makes (<code>get_write_back_with_void</code>: the <code>nil</code> fill first, the build
+last), as a framed side exit does. So <code>x = [a, b]; x.size</code> as the whole
+of a tiny method, inlined frameless, allocates nothing, and the object
+returned from such a callee is copied out of the window through
+<code>Window(delta)</code> (§9). Once a capture drops the invariant, no further object
+goes into a local until a capture guard re-proves it.</p>
+<p><strong>Escape points.</strong> <code>settle_virtuals</code> materializes a local’s object
+before</p>
+<ul>
+<li>any instruction that reads the local without consuming it: a store
+into an ivar, gvar, cvar or constant, an index store, an argument to a
+call that is not specialized with the object handed over, a <code>ret</code> of
+the root unit, a <code>Mov</code> that aliases it (<code>y = x</code> with <code>x</code> read again);</li>
+<li>a call that could read the frame’s locals behind the compiler’s back
+(<code>capture_point</code>): one resolved to a callee that captures its caller’s
+frame (<code>binding</code>, <code>eval</code>, <code>local_variables</code>) or resolved to nothing
+the compiler can name (a generic <code>send</code>, which could be any of these)
+materializes every object; one passing a block literal materializes
+the objects of the locals the block, or a block nested in it, touches
+(<code>touched_by_blocks</code>: a <code>LoadDynVar</code> / <code>StoreDynVar</code> of the local at
+the block’s depth — a store replaces the object behind the compiler’s
+back — a lambda literal, or a capturing or unresolved call inside the
+block, which could reach the whole frame). The same check covers a
+parameter’s handed-over object;</li>
+<li>a block boundary into a loop head whose loop writes the local or holds
+a capture point reaching it (a forward merge, or a loop that does
+neither, carries it, §3).</li>
+</ul>
+<p>Everything else — the frame’s own calls to known callees, operators,
+instance-variable loads, loads of other locals — leaves the object in
+place: its elements are in the window, which nothing but the next
+literal into the same local writes. That write is the one way a window
+is refilled, and an object that moved out of the local into a temporary
+(<code>t = x</code> with <code>x</code> dead) still has its elements there, so
+<code>settle_virtuals</code> treats the window of a <code>Mov</code> / <code>Array</code> / <code>Range</code>
+destination as written and materializes any <em>other</em> object whose
+elements lie in it.</p>
+<p><strong>Moves</strong> (<code>consume_virtual_mov</code>): <code>y = x</code> with <code>x</code> dead after the copy
+hands the object to <code>y</code> instead of building it — into a temporary as it
+is, into a local by copying its own-frame elements into <code>y</code>’s window
+(<code>mov_target_ok</code>: the window must be wide enough; a template or a
+handed-over object needs none; a <code>**kwrest</code> object is tied to its
+parameter’s table and is built instead). The bytecode compiler gives a
+local assigned from another local a window as wide as that local’s, so
+the move has somewhere to go.</p>
+<p><strong>A temporary’s view</strong> (<code>alias_consumed_by_call</code>): <code>x.include?(a + 1)</code>
+evaluates its receiver into a temporary <em>before</em> its argument, and so
+does <code>x[i % 3]</code>, so the <code>Mov</code> copies a still-live local. When the first
+reader of that temporary in the block is a call that only reads the
+elements of its receiver (a method with a <code>RecvEscape::elements</code>
+summary, block-less, with plain arguments; the index instruction counts
+as <code>[]</code>) and the instructions between write nothing but a plain
+destination, the temporary takes a second view of the same
+object — the same <code>VirtualSrc</code>, sharing the window — which the call
+consumes while the local keeps its own. The two views are never told
+apart: such a method neither mutates nor lets out its receiver, so
+even a lowering that builds the temporary’s copy after all answers the
+same. An object in a temporary likewise outlives the instructions that
+write a plain destination (<code>defined_slot</code>: the operator computing the
+argument), not only the <code>Mov</code> / literal family; a call is still a
+boundary for it. Liveness is kill-aware
+(<code>local_live_after</code>, <code>defined_slot</code>): a write to the local before any
+read ends its life on that path, so <code>x = [a, b]; n = x.max; x = 1</code> and a
+literal rebuilt at the top of a loop body do not keep the previous
+object alive. An instruction that redefines the local without reading
+it (<code>x = 1..n</code>, <code>x = f(y)</code> over an elided <code>x</code>) drops the object the same
+way (<code>settle_virtuals</code>, <code>redefined</code>) instead of building it first.</p>
+<p><strong>Across calls.</strong> The local’s slot is <code>V</code> (the GC write back and any
+side exit <code>nil</code>-fill or build it), the window is homed, and the frame is
+on the chain. A chain deopt that converts the frame while it is
+suspended in a call builds the object from the window through the
+frame’s lfp (<code>gen_chain_replay_stub</code>, <code>a64_gen_chain_replay_stub</code>:
+<code>Slots</code> and <code>Range</code> entries next to <code>CallerSlots</code> and <code>Literal</code>); a
+side exit in the frame itself does what it did for a temporary. An
+in-line build of a window-based <code>Slots</code> object uses <code>CreateArrayFrom</code>
+rather than the call site’s <code>NewArray</code>, whose cold path reads the
+literal’s original argument temporaries, long since overwritten. A
+specialized callee’s <code>return x</code> hands the local’s object back as §9
+describes, its elements copied out of the window.</p>
+<p><strong>Not carried</strong>: through a loop head whose body writes or captures the
+local, or reads the object unfoldably (§3); an alias that keeps both
+names live beyond a temporary’s view; a Range whose endpoints are not proven Fixnum or
+<code>nil</code> where it is built (as for a temporary’s Range); an object
+returned into a local of the caller (<code>x = pair(a, b)</code> needs the slots
+above the destination, §9); a transparent callee on a literal of
+immediates that stays live (<code>opts.key?(:a)</code> twice: the first call
+builds the Hash); an Array slice on a local’s object (<code>x[1, 2]</code>,
+<code>x[1..]</code>: only <code>[]</code> by an Integer is folded, <code>consume_virtual_index</code>).</p>
+<h2 id="11-the-def-use-and-liveness-tables-jitgenslot_analysisrs"><a class="header" href="#11-the-def-use-and-liveness-tables-jitgenslot_analysisrs">11. The def-use and liveness tables (<code>jitgen/slot_analysis.rs</code>)</a></h2>
+<p>The questions §3 and §10 ask of the bytecode — is this local read again
+after this instruction, may a block of the frame touch it, is the next
+instruction the one call a temporary’s view may be consumed by — were
+answered by forward scans that re-decode the bytecode on every call
+(<code>local_live_after</code>, <code>touched_by_blocks</code>, <code>alias_consumed_by_call</code>).
+<code>slot_analysis.rs</code> answers them from two tables instead.</p>
+<p><strong>Layer A, <code>SlotAnalysis</code></strong> — what the bytecode alone decides. Per
+instruction, the slots it reads (<code>TraceIr::read_slots</code>) and the one it
+defines without reading (<code>TraceIr::defined_slot</code>; an instruction whose
+destination is not plain is neither a read nor a kill). Per basic block,
+the use and def sets. And what the frame’s
+block literals (and blocks nested in them) do to its locals: the slots
+they reach through the outer chain (<code>LoadDynVar</code> / <code>StoreDynVar</code> at the
+block’s depth), whether one of them is opaque (a handler, whose
+instructions the JIT cannot decode, or a lambda literal, whose body is
+not reachable from here), and the positions of the calls inside them.
+It is built once per iseq, the first time a compilation needs it, and
+kept in <code>ISeqInfo::slot_analysis</code> for good: the bytecode is never
+rewritten after it is installed (the inline caches patch operand words,
+never the shape of an instruction), so nothing invalidates it. An iseq
+with an exception handler is marked <code>all_live</code>, as the scans treat it (a
+handler block could read anything); its tables are still built, with
+the handler-only instructions (the rescue-clause matches, which the JIT
+never visits and <code>TraceIr::from_pc</code> refuses) as empty summaries, for
+the questions that stay inside a basic block. The tables are kept
+small, since they live as long as the iseq: a 16-byte summary per
+instruction, the reads of every instruction in one shared vector, the
+per-block sets in one bit matrix.</p>
+<p><strong>Layer B, <code>UnitLiveness</code></strong> — what the inline caches decide, which may
+differ from one compilation to the next. Whether a call is a capture
+point (<code>capture_point</code>: <code>Frame</code> for a callee that may <code>binding</code> / <code>eval</code>
+or a call the compiler cannot name, <code>Block</code> for a call passed a block
+literal) is a <code>MethodCache</code> verdict, and so is whether every call inside
+the frame’s blocks is resolved to a callee that cannot capture its
+caller. Per compilation unit and per iseq, Layer B reads those verdicts
+once, forms the set of locals the blocks may touch (Layer A’s set, or
+every slot when a block is opaque or holds an unresolved call), adds a
+capture point’s reads (every slot for <code>Frame</code>, the touched set for
+<code>Block</code>) to the use sets, and runs a backward liveness dataflow over
+<code>BasicBlockInfo::succ</code> for the blocks’ live-out sets. The
+compilation sees one state of the caches throughout (it runs no Ruby
+code), so the table is built when first asked for and shared with the
+analysis clones (<code>JitContext::unit_liveness</code>).</p>
+<p>A query is then a scan of the rest of the instruction’s basic block
+over Layer A’s summaries, with Layer B’s capture verdicts, and the
+block’s live-out set past it (<code>table_live_after</code>). The one instruction a
+temporary’s view may be consumed by is <code>SlotAnalysis::alias_stop</code>; the
+call-site and receiver-class conditions of <code>alias_consumed_by_call</code> are
+checked on it as before.</p>
+<p><code>local_live_after</code>, <code>touched_by_blocks</code> and <code>alias_consumed_by_call</code>
+are table lookups; the forward scans they replaced were checked against
+the tables, call for call, on the whole test suite, ruby/spec core and
+optcarrot before being removed.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/polymorphic_call.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/ivar_type_tracking.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/polymorphic_call.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/ivar_type_tracking.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

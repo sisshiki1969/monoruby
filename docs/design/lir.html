@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b0bcc219.js";
+            window.path_to_searchindex_js = "../searchindex-ca5246bb.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8a4c8fb9.js"></script>
+        <script src="../toc-9192be69.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,7 +184,7 @@ This is <strong>Phase-1 item ①</strong> (“a low-level IR that describes amd6
 uniformly”).</p>
 <p>Status: <strong>the great majority of <code>AsmInst</code> families now lower through
 <code>encode_linst</code>.</strong> The model lives in
-<a href="../monoruby/src/codegen/jitgen/lir.rs"><code>monoruby/src/codegen/jitgen/lir.rs</code></a>;
+<code>monoruby/src/codegen/jitgen/lir.rs</code>;
 the per-arch encoder is <code>Codegen::encode_linst</code>, defined once in each
 <code>arch/&lt;arch&gt;/compile/…</code> file. As of this writing the integer + control-flow
 core, all addressing modes, the GC write barrier, the common guard/check family,
@@ -229,7 +229,7 @@ well-defined target and a correctness oracle.</li>
 </code></pre>
 <p><code>AsmIR</code> stays the register-allocated, arch-neutral <em>front-end</em> output (one
 <code>AsmInst</code> per semantic operation). The arch-neutral dispatcher
-<code>compile_asmir</code> (<a href="../monoruby/src/codegen/jitgen/asmir/compile_shared.rs">compile_shared.rs</a>)
+<code>compile_asmir</code> (<code>compile_shared.rs</code>)
 lowers each migrated <code>AsmInst</code> into one or more <code>LInst</code>s and feeds them to
 <code>encode_linst</code>; not-yet-migrated families still call their per-arch <code>emit_*</code>
 directly from the dispatcher.</p>
@@ -294,7 +294,7 @@ convenient.</p>
 <p>The macro-op variants do not lower to primitives inside <code>encode_linst</code>; instead
 each backend’s <code>encode_linst</code> ends with <code>other =&gt; self.encode_linst_macro(other)</code>,
 and the <strong>arch-neutral</strong> <code>encode_linst_macro</code>
-(<a href="../monoruby/src/codegen/jitgen/asmir/compile_shared.rs">compile_shared.rs</a>)
+(<code>compile_shared.rs</code>)
 delegates each macro-op to the existing per-arch <code>emit_*</code> helper. This keeps the
 delegation in one place (rather than duplicating it in both backends) while
 still funnelling <em>all</em> emission through <code>encode_linst</code>. See §5.</p>

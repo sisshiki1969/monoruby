@@ -1,0 +1,1398 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>CRuby-compatible C API layer (Japanese) - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-ca5246bb.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-9192be69.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="cruby-互換-c-apimonoruby_capi"><a class="header" href="#cruby-互換-c-apimonoruby_capi">CRuby 互換 C API（<code>monoruby_capi/</code>）</a></h1>
+<p>CRuby 向けに書かれた C 拡張を、<strong>ソースのまま</strong> monoruby 用にビルドして
+<code>require</code> できるようにする層。<code>doc/native_extension_loading.md</code> §4 の段階 5
+（「必要なら A を <code>mr_*</code> の上に積む」）にあたる。設計検討の経緯は
+<code>doc/c_extention.md</code>（2026-08）。</p>
+<hr>
+<h2 id="1-使い方"><a class="header" href="#1-使い方">1. 使い方</a></h2>
+<pre><code class="language-sh">root=~/.monoruby/v&lt;version&gt;      # globals::install_root()
+cc -shared -fPIC -I "$root/include" -o foo.so foo.c "$root/capi/capi.c"
+monoruby -I . -e 'require "foo"; ...'
+</code></pre>
+<ul>
+<li><code>include/</code> に <code>ruby.h</code>、<code>ruby/{ruby,intern,encoding,thread,version,…}.h</code>
+と、その土台の <code>monoruby_ext.h</code> が入る（<code>build.rs</code> が
+<code>monoruby_capi/include</code> と <code>monoruby_ext_sys/include</code> から置く）。</li>
+<li><code>capi/capi.c</code> が <code>rb_*</code> の実装。<strong>拡張ごとに静的にリンクする</strong>（§3.1）。</li>
+<li>できた <code>.so</code> は <code>$LOAD_PATH</code> 上の普通の <code>require "foo"</code> / <code>require "x/foo"</code>
+で読める。初期化関数は CRuby と同じ <code>void Init_foo(void)</code>。</li>
+<li>CRuby 用にビルド済みの <code>.so</code> は読めない（§2）。読もうとすると
+<code>LoadError</code>（「monoruby’s C API headers でビルドせよ」）になる。</li>
+</ul>
+<p><code>extconf.rb</code> のある拡張は CRuby と同じ手順でビルドできる（§3.10）:</p>
+<pre><code class="language-sh">monoruby extconf.rb &amp;&amp; make          # RbConfig が $root/include と
+                                     # $root/capi/libmonoruby_capi.a を指す
+monoruby "$root/bin/gem" install foo # C 拡張付き gem も同じ経路でビルド
+</code></pre>
+<p><code>gem install</code> したものは monoruby 専用の gem home
+（<code>~/.monoruby/gems/&lt;api version&gt;</code>、<code>Gem.default_dir</code>）に入る。</p>
+<h2 id="2-互換の範囲-api-互換abi-非互換"><a class="header" href="#2-互換の範囲-api-互換abi-非互換">2. 互換の範囲: API 互換、ABI 非互換</a></h2>
+<p>拡張の中の <code>VALUE</code> は <strong>CRuby のビット列</strong>（64-bit、flonum あり）で、
+monoruby の <code>Value</code>（<code>value.rs</code>）とは層（<code>capi.c</code>）が境界で相互変換する
+（段階 8、§3.15）。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>CRuby = 拡張内の <code>VALUE</code></th><th>monoruby の <code>Value</code></th><th>変換</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Qfalse</code> / <code>Qnil</code> / <code>Qtrue</code> / <code>Qundef</code></td><td>0x00 / 0x04 / 0x14 / 0x24</td><td>0x14 / 0x04 / 0x1c / 0x00</td><td>表引き（nil は同じビット、CRuby の true が monoruby の false）</td></tr>
+<tr><td>Fixnum</td><td><code>(i &lt;&lt; 1) | 1</code></td><td>同じ</td><td>なし</td></tr>
+<tr><td>Flonum</td><td><code>rotl(bits, 3) &amp; ~1 | 2</code>、下位 2 bit = <code>10</code></td><td>同じ（回転も同じ）</td><td>なし</td></tr>
+<tr><td>Static Symbol</td><td><code>(id &lt;&lt; 8) | 0x0c</code></td><td><code>(id &lt;&lt; 32) | 0x0c</code></td><td>シフト</td></tr>
+<tr><td>ヒープ</td><td>8 バイト境界のポインタ</td><td>同じ</td><td>なし</td></tr>
+<tr><td><code>ID</code></td><td><code>uintptr_t</code></td><td><code>uintptr_t</code>（中身は <code>IdentId</code>）</td><td>なし</td></tr>
+</tbody>
+</table>
+</div>
+<p>即値はヘッダのマクロに焼き込まれるので、CRuby のヘッダでビルドした
+<code>.so</code> はそれでも動かない（<code>rb_*</code> の実体が libruby ではなく層だから）。
+必ず再コンパイルする。</p>
+<p>拡張から見える CRuby との差:</p>
+<ul>
+<li>オブジェクトレイアウトのマクロ（<code>RSTRING_PTR</code>、<code>RARRAY_LEN</code>、<code>RBASIC</code>
+…）は関数。<code>RBasic</code> / <code>RString</code> 構造体は無い。<code>RARRAY_PTR</code> /
+<code>RARRAY_CONST_PTR</code> は要素を変換した<strong>コピー</strong>を指し（§3.15）、読み取り
+専用（書くときは <code>rb_ary_store</code> / <code>RARRAY_ASET</code>）。</li>
+<li>世代別 GC が無いので write barrier（<code>RB_OBJ_WRITE</code> 等）は代入だけ。</li>
+</ul>
+<h2 id="3-設計"><a class="header" href="#3-設計">3. 設計</a></h2>
+<h3 id="31-シムは拡張に静的リンクする"><a class="header" href="#31-シムは拡張に静的リンクする">3.1 シムは拡張に静的リンクする</a></h3>
+<p><code>rb_*</code> の実体は C で書いた <code>capi.c</code> で、各拡張の <code>.so</code> に一緒にリンク
+される。monoruby 本体は <code>rb_*</code> を一切 export しない。</p>
+<ul>
+<li><code>rb_raise</code> は longjmp、<code>rb_funcall(recv, mid, n, ...)</code> は可変長引数で、
+どちらも Rust では素直に書けない（<code>setjmp</code> は Rust から呼べず、可変長の
+定義は nightly 機能）。C で書くのが自然。</li>
+<li>本体から <code>--export-dynamic</code> で出す案は、テストバイナリを含む全バイナリの
+シンボル表を膨らませ、<code>rb_*</code> の ABI をコアに固定する。静的リンクなら
+<code>.so</code> は自己完結し、<code>monoruby_ext.h</code> の表（<code>MrApi</code>）だけが境界になる
+（<code>native_extension_loading.md</code> §4.3 の「拡張は monoruby をリンクしない」
+をそのまま守る）。</li>
+<li>判別: ローダは <code>dlsym(handle, "monoruby_capi_init")</code> があれば C API 拡張
+とみなし、<code>monoruby_capi_init(ctx, Init_foo)</code> を呼ぶ（<code>ext.rs</code>
+<code>load_capi_extension</code>）。<code>$LOAD_PATH</code> 上で見つかった <code>.so</code> は
+<code>ext::is_capi_extension</code> がファイルのシンボル表（ELF の <code>.dynsym</code>、
+Mach-O の <code>LC_SYMTAB</code>）に <code>monoruby_capi_init</code> があるかで判定し、開かない
+（§3.18。<code>dlopen</code> で試すと、<code>libruby.so</code> をリンクした CRuby 用の <code>.so</code> は
+開けてしまい、その依存ライブラリがプロセスに残る）。</li>
+</ul>
+<h3 id="32-フレームと例外"><a class="header" href="#32-フレームと例外">3.2 フレームと例外</a></h3>
+<p><code>capi.c</code> はスレッドごとに「現在のフレーム」<code>capi_cur</code> を持つ:
+<code>MrContext*</code>、渡されたブロック、<code>jmp_buf</code>、外側のフレーム。</p>
+<ul>
+<li>Ruby → C の入口（<code>capi_dispatch</code>、<code>monoruby_capi_init</code>）と <code>rb_protect</code>
+がフレームを積み、<code>setjmp</code> する。</li>
+<li>API 呼び出しが失敗すると（<code>MR_UNDEF</code> が返る / <code>-1</code> が返る）、エラーは
+インタプリタ側に保留されたまま <code>capi_unwind</code> が一番内側のフレームへ
+<code>longjmp</code> する。越えるのは<strong>拡張自身の C フレームだけ</strong>で、Rust / JIT の
+フレームは一切越えない（<code>native_extension_loading.md</code> §4.3 規則 2）。
+<code>capi_dispatch</code> は <code>MR_UNDEF</code> を返し、保留中のエラーがそのまま Ruby の
+例外になる。</li>
+<li><code>rb_protect</code> はエラーを <code>error_take</code> で例外オブジェクトとして取り出し
+<code>rb_errinfo</code> に置く。<code>rb_jump_tag</code> / <code>rb_ensure</code> / <code>rb_rescue2</code> はこの上。
+block からの <code>return</code> / <code>break</code> / <code>throw</code> などクラスを持たない大域脱出は、
+<code>error_take</code> が種類ごと <code>Exception</code> のオブジェクトに包んで返し、
+<code>raise_exception</code>（<code>rb_jump_tag</code>）がそれを元の脱出に戻す
+（psych の <code>Psych.parse</code> が block 内の <code>return</code> で抜ける）。</li>
+<li><code>@</code> で始まらない名前の ivar（<code>rb_iv_set(obj, "-aggregators", ...)</code>、
+CRuby の隠し ivar）は <code>/</code> を前に付けたコア側の隠し ivar になり、
+<code>#instance_variables</code> や inspect には出ない。</li>
+<li>Ruby を呼ぶ API（<code>rb_funcall</code>、<code>rb_yield</code>、<code>rb_proc_call</code>、
+<code>rb_thread_call_without_gvl</code>）は戻ったあと <code>capi_cur</code> を呼ぶ前の値に戻す。
+green thread の切り替えは LIFO でないので、呼び出し中に別スレッドが同じ
+OS スレッドで拡張に入っても自分のフレームが残る。</li>
+</ul>
+<h3 id="33-gc-呼び出し中は全部生かす"><a class="header" href="#33-gc-呼び出し中は全部生かす">3.3 GC: 呼び出し中は全部生かす</a></h3>
+<p>CRuby は C スタックを保守的に走査するので、拡張はローカル変数の <code>VALUE</code>
+を気にせず <code>rb_funcall</code> を挟める。monoruby の GC は precise なので、層が
+C に渡す<strong>ヒープ上の <code>VALUE</code> はすべて temp stack に積む</strong>（<code>root()</code>）。
+temp stack はメソッド呼び出し（と <code>Init_</code>）が戻ったときにインタプリタが
+切り詰める。TruffleRuby の <code>ExtensionCallStack</code> と同じ考え方
+（<code>doc/c_extention.md</code> §3.4）。</p>
+<p>呼び出しを越えて C のグローバル変数に持つ値は CRuby と同じく
+<code>rb_gc_register_address</code> / <code>rb_global_variable</code>（アドレスを毎回読む新しい
+ABI 項目 <code>gc_register_address</code>）か <code>rb_gc_register_mark_object</code>（pin）。</p>
+<p>代償: 1 回の呼び出しの中で大量に値を作るループは、戻るまで全部生かす。</p>
+<h3 id="34-メソッド"><a class="header" href="#34-メソッド">3.4 メソッド</a></h3>
+<p><code>rb_define_method(klass, name, func, argc)</code> は <code>capi_method { func, arity }</code>
+を確保し、新しい ABI 項目 <code>define_method_data</code> で「<code>capi_dispatch</code> +
+そのポインタ」として登録する。<code>capi_dispatch</code> が arity（-2、-1、0〜15）に
+応じて CRuby の呼び出し規約で <code>func</code> を呼ぶ。引数個数のチェックは固定
+arity ならコア側の builtin と同じ。</p>
+<p><code>rb_define_attr</code> は Ruby の <code>attr_reader</code> / <code>attr_writer</code> を呼んだあと
+<code>public</code> にする（C から呼ぶと require された場所の既定の可視性、
+トップレベルなら private を拾うため）。</p>
+<h3 id="35-文字列"><a class="header" href="#35-文字列">3.5 文字列</a></h3>
+<p><code>RSTRING_PTR</code> は新しい ABI 項目 <code>str_cptr</code> を呼ぶ: 共有中なら切り離し、
+長さの直後（予備容量）に NUL を置き、code range のキャッシュを捨てて、
+String 自身のバッファを返す。書き込み可能で、<code>rb_str_new(NULL, n)</code> して
+<code>RSTRING_PTR</code> に書く CRuby の定石がそのまま動く。String は動かない
+（non-moving）ので、リサイズされるか回収されるまで有効。
+<code>rb_str_resize</code> / <code>rb_str_set_len</code> は <code>str_resize</code>、<code>rb_str_cat</code> は <code>str_cat</code>。</p>
+<h3 id="36-そのほか"><a class="header" href="#36-そのほか">3.6 そのほか</a></h3>
+<ul>
+<li><code>ID</code> は <code>IdentId</code>。<code>rb_id2name</code> は ID ごとに一度だけ複製した C 文字列を
+返す（プロセスの寿命の間有効）。</li>
+<li><code>rb_cObject</code> などのグローバル変数は <code>monoruby_capi_init</code> が定数参照で
+埋める。拡張の <code>static</code> は 1 プロセスに 1 つなので、テストハーネスの
+ように 1 プロセスで複数のインタプリタを作ると後のものが勝つ（<code>Init_</code>
+はインタプリタごとに走る）。ネイティブ拡張全般の既知の制約
+（<code>native_extension_loading.md</code> §6.2）。</li>
+<li><code>rb_encoding</code> は名前ごとの小さな記録。添字 0/1/2 は CRuby と同じく
+ASCII-8BIT / UTF-8 / US-ASCII。</li>
+<li><code>rb_thread_call_without_gvl</code> は <code>call_blocking_ubf</code>（1:1 モデルでは GVL を
+外して呼んだカーネルスレッド上で、green では native pool のワーカーで実行）。
+ubf は呼び出しの間 <code>ThreadInner::blocking_ubf</code> に記録され、そのスレッドへの
+<code>Thread#wakeup</code> / <code>#raise</code> / <code>#kill</code>（<code>interrupt_blocking</code>）と、main が
+ブロック中のシグナル（ポーリング点でそれを見たスレッドが呼ぶ）で 1 回だけ
+GVL を持ったまま呼ばれる（CRuby の <code>rb_threadptr_interrupt</code> と同じ）。
+<code>RUBY_UBF_IO</code> は関数なしで、割り込みの <code>SIGVTALRM</code> がシステムコールを
+<code>EINTR</code> で切る（1:1 モデルのみ。green ではワーカーに送るシグナルがなく未対応）。
+fixture は <code>tests/capi/capi_nogvl.c</code>。</li>
+<li>多くの関数は Ruby のメソッドを <code>rb_funcall</code> で呼ぶだけの薄い実装
+（TruffleRuby の <code>Truffle::CExt</code> と同じ方針）。正しさ優先で、ホットな
+ものから順に ABI 側へ寄せる。</li>
+</ul>
+<h3 id="37-data--typeddata-と-alloc-関数段階-2"><a class="header" href="#37-data--typeddata-と-alloc-関数段階-2">3.7 Data / TypedData と alloc 関数（段階 2）</a></h3>
+<p><code>Data</code> / <code>TypedData</code> のオブジェクトは本体のネイティブオブジェクト
+（<code>native_new</code>、種別 <code>data_ops</code>）で、ペイロードは層の記録
+<code>capi_data { data, dmark, dfree, type }</code>。<code>ruby.h</code> の <code>struct RData</code> /
+<code>struct RTypedData</code> はこの記録のビューなので、<code>RDATA(obj)-&gt;data</code> /
+<code>DATA_PTR(obj)</code> は lvalue として書ける。<code>data_ops</code> の mark は
+<code>type-&gt;function.dmark</code>（型無しなら <code>dmark</code>）を、free は <code>dfree</code>
+（<code>RUBY_DEFAULT_FREE</code> なら <code>xfree</code>）を呼んで記録を解放する。
+<code>dsize</code> / <code>dcompact</code> は読まない（non-moving）。</p>
+<p>alloc 関数はコアの <code>alloc_func</code>（<code>fn(ClassId, &amp;mut Globals) -&gt; Value</code>、
+<code>Executor</code> 無し、エラー不可）から直接は呼べないので遅延する:</p>
+<ol>
+<li><code>rb_define_alloc_func(klass, f)</code> は新しい ABI 項目 <code>class_set_alloc</code> で
+<code>klass</code> のインスタンスをネイティブオブジェクトにし（既定の alloc は
+「ペイロード無しで作る」<code>ext_alloc_func</code>）、<code>f</code> を層の表に記録する。
+Ruby で定義したサブクラスはコアの継承でそのまま同じになる。</li>
+<li><code>new</code> / <code>allocate</code> / <code>dup</code> が作った空のインスタンスを、<code>DATA_PTR</code> /
+<code>TypedData_Get_Struct</code> / <code>rb_check_typeddata</code> / <code>RTYPEDDATA_P</code> が最初に
+見たとき、クラス（と祖先）の alloc 関数を呼び、できたオブジェクトから
+記録を <code>native_take</code>（解放せずに外す）で取り、<code>native_set</code> で本物に
+付ける。CRuby で <code>allocate</code> が alloc 関数を呼ぶのと同じ結果になる。
+<code>initialize_copy</code> の中の <code>TypedData_Get_Struct(copy)</code> もこれで埋まる。</li>
+<li>alloc 関数を登録していないクラスに <code>Data_Wrap_Struct</code> したときも
+その場で <code>class_set_alloc</code> する（<code>klass == 0</code> の隠しオブジェクトは層の
+匿名クラス）。インスタンスが既にあるクラスでやると JIT の ivar 配置の
+前提が崩れるので、拡張の <code>Init_</code> で済ませること。</li>
+<li><code>rb_undef_alloc_func</code> は <code>MR_ALLOC_UNDEF</code>（<code>new</code> が
+「allocator undefined for X」）。</li>
+</ol>
+<p><code>rb_check_typeddata</code> のエラー文（「wrong argument type X (expected Y)」、
+nil / true / false / 型無し Data / 別の型名）と <code>parent</code> による型の継承は
+CRuby と同じ。</p>
+<h3 id="38-c-関数をブロックにする"><a class="header" href="#38-c-関数をブロックにする">3.8 C 関数をブロックにする</a></h3>
+<p><code>rb_block_call</code> / <code>rb_proc_new</code> / <code>rb_iterate</code> は、層の隠しクラス
+（<code>Class.new(Object)</code>、ネイティブ）のインスタンスに <code>{func, arg, block}</code> を
+持たせ、その <code>call(*args)</code> を <code>Method#to_proc</code> で Proc にして渡す。
+<code>call</code> の入口 <code>block_dispatch</code> は <code>capi_dispatch</code> と同じフレームを積み、
+そのフレームのブロックを「作った時点のメソッドのブロック」（Proc に
+しておく）にするので、コールバック内の <code>rb_yield</code> は CRuby と同じく
+<code>rb_block_call</code> を呼んだメソッドのブロックに届く。<code>rb_block_call</code> の
+callback が NULL なら自分のブロックをそのまま渡す。</p>
+<p><code>rb_iter_break</code> / <code>rb_iter_break_value</code> は層の隠し例外クラス
+（<code>Exception</code> 直下なので Ruby 側の <code>rescue</code> に捕まらず、<code>ensure</code> は走る）を
+投げ、<code>rb_block_call</code> / <code>rb_iterate</code> が受け止めて値を返す。</p>
+<h3 id="39-rb_call_super-と-struct"><a class="header" href="#39-rb_call_super-と-struct">3.9 <code>rb_call_super</code> と Struct</a></h3>
+<p><code>rb_call_super</code> は新しい ABI 項目 <code>call_super</code>: コンテキストのフレーム
+（この C メソッド自身の lfp）の <code>FuncId</code> と名前、<code>self</code> のクラスから
+<code>Store::check_super</code> で次の定義を引き、<code>invoke_func_named</code> で呼ぶ。
+ブロックは呼び出し元のものを渡す（CRuby の <code>rb_call_super</code> と同じ）。
+メソッドの外（<code>Init_</code>）では RuntimeError。</p>
+<p><code>rb_struct_define</code> / <code>rb_struct_define_under</code> は <code>Struct.new</code> に、
+<code>rb_struct_new</code> / <code>aref</code> / <code>aset</code> / <code>getmember</code> / <code>members</code> / <code>size</code> は
+それぞれの Ruby メソッドに委ねる。<code>rb_obj_call_init</code> は private の
+<code>initialize</code> をブロック付きで、<code>rb_class_new</code> / <code>rb_module_new</code> は
+<code>Class.new</code> / <code>Module.new</code>。</p>
+<h3 id="310-mkmf--gem-install段階-3"><a class="header" href="#310-mkmf--gem-install段階-3">3.10 mkmf / <code>gem install</code>（段階 3）</a></h3>
+<p>CRuby の <code>extconf.rb</code> は <code>mkmf</code> が <code>RbConfig</code> から得る値だけでビルドを
+組み立てる: ヘッダの場所（<code>rubyhdrdir</code> / <code>rubyarchhdrdir</code>）、コンパイラと
+フラグ、そして拡張がリンクする「<code>libruby</code>」（<code>LIBRUBYARG</code>）。vendored の
+<code>rbconfig.rb</code> はスナップショット元の CRuby の値を答えるので、そのままでは
+CRuby のヘッダでビルドした（monoruby では読めない）<code>.so</code> ができる。
+<code>builtins/capi_config.rb</code>（startup.rb の最後に読む）が
+<code>RbConfig.fire_update!</code> でこれらを monoruby のものに差し替える:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>キー</th><th>値</th></tr>
+</thead>
+<tbody>
+<tr><td><code>rubyhdrdir</code> / <code>rubyarchhdrdir</code> / <code>topdir</code></td><td><code>&lt;install root&gt;/include</code></td></tr>
+<tr><td><code>LIBRUBYARG</code> / <code>LIBRUBYARG_SHARED</code> / <code>LIBRUBYARG_STATIC</code></td><td><code>-L&lt;install root&gt;/capi -lmonoruby_capi</code></td></tr>
+<tr><td><code>LIBRUBY</code> / <code>LIBRUBY_A</code> / <code>LIBRUBY_SO</code></td><td><code>libmonoruby_capi.a</code></td></tr>
+<tr><td>macOS のみ: <code>CC</code> / <code>LDSHARED</code> / <code>DLDFLAGS</code> / <code>warnflags</code> …</td><td>clang と <code>-bundle</code> リンク（CRuby の macOS 版 rbconfig 相当）。<code>DLEXT</code> は startup.rb が <code>bundle</code> にしている</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><strong><code>libmonoruby_capi.a</code></strong> は <code>build.rs</code>（<code>build_capi_archive</code>）が <code>cc</code>
+crate で <code>capi.c</code> をコンパイルして <code>&lt;install root&gt;/capi/</code> に置く
+アーカイブ。§3.1 の「拡張ごとに静的リンク」を、mkmf の <code>$(LIBS)</code> に
+<code>-lmonoruby_capi</code> が入ることで実現する。mkmf の <code>have_func("rb_...")</code>
+は conftest をこのアーカイブとリンクして判定するので、層に無い関数は
+正しく「no」になる。monoruby 本体にはリンクしない。</li>
+<li><code>ruby/config.h</code>（ruby.h の設定部を分離）、<code>ruby/backward.h</code> /
+<code>subst.h</code>（中身は無い; <code>st.h</code> は段階 5 で本物になった、§3.12）を足した。mkmf は生成する Makefile で
+これらを全オブジェクトの前提に並べるので、存在しないと <code>make</code> が
+止まる。</li>
+<li><code>Kernel#system</code> が <code>system(env, *cmd)</code> と spawn オプションを受けるように
+なった（mkmf の <code>xsystem</code> が環境ハッシュ付きで呼ぶ）。env ハッシュか
+オプションがあるときは <code>builtins::spawn</code> で <code>spawn</code> + <code>waitpid</code>。</li>
+<li><strong><code>gem install</code></strong>: rubygems の <code>ExtConfBuilder</code> は <code>Gem.ruby</code>（= 今の
+monoruby）で <code>extconf.rb</code> を走らせ <code>make</code> するだけなので、上の RbConfig
+でそのまま通る。<code>.gem</code> の作成（<code>gem build</code>）に必要だった
+<code>Digest::Instance#new</code> を足した。</li>
+<li><strong>gem home は monoruby 専用</strong>（<code>stdlib/rubygems/defaults/operating_system.rb</code>、
+rubygems が <code>$LOAD_PATH</code> から読む packager 向けフック）。<code>Gem.default_dir</code>
+は <code>~/.monoruby/gems/&lt;api version&gt;</code>、<code>Gem.user_dir</code> は
+<code>~/.local/share/gem/monoruby/&lt;api version&gt;</code>。rubygems はビルド済み拡張を
+<code>extensions/&lt;platform&gt;/&lt;api version&gt;/&lt;gem&gt;</code> だけで区別するので、ホスト
+CRuby の gem home に入れると同じ gem の CRuby ビルドと上書きし合う。
+ホストの gem ディレクトリは従来どおり <code>GEM_PATH</code>（<code>Gem.path</code>）に残り、
+default gem の spec（<code>Gem.default_specifications_dir</code>）もホストのまま。</li>
+<li><strong><code>require</code> の gem フォールバック</strong>: monoruby の <code>require</code> はホストの
+gem の <code>lib/</code> をプローブ結果から知っているが、monoruby 自身の gem home
+に入った gem は知らない。<code>$LOAD_PATH</code> にもそこにも無いときに
+<code>Gem.try_activate(feature)</code>（rubygems の <code>Kernel#require</code> が LoadError
+で行うこと）を呼び、activate されたら探し直す
+（<code>Executor::activate_gem_for</code>）。rubygems の起動中・相対 / 絶対パス・
+<code>--disable-gems</code> では呼ばない。</li>
+<li><code>&lt;install root&gt;/bin/gem</code>（<code>bin/dist</code> では <code>bin/gem</code>）は CRuby の
+<code>bin/gem</code> そのもの。<code>monoruby "$root/bin/gem" install foo</code> で使う。</li>
+<li><code>tests/mkmf.rs</code>: <code>tests/capi/capi_gem/</code>（<code>extconf.rb</code> 付きの gem）を
+<code>extconf.rb</code> + <code>make</code> でビルドする。<code>gem build</code> + <code>gem install</code> で monoruby と
+ホスト CRuby の双方にインストールし同じスクリプトの出力が一致することを
+見る検査（と §3.24 のホスト gem の再ビルド検査）は <code>bin/test-gems</code>
+（<code>bin/test</code> が呼ぶシェルスクリプト。cargo test ではない）に移した：
+ホストの <code>gem</code> と gem cache、cc、make に依存し、開発機では処理系の外の
+理由でよく落ちたため。</li>
+</ul>
+<h3 id="311-実-gem-で面積を詰める段階-4"><a class="header" href="#311-実-gem-で面積を詰める段階-4">3.11 実 gem で面積を詰める（段階 4）</a></h3>
+<p><code>gem install</code> でビルドした実 gem を CRuby と比較して足りない API を埋めた。
+<code>bin/test-gems</code>（もと <code>tests/capi_gems.rs</code>。<code>bin/test</code> が呼ぶシェルスクリプトで、
+cargo test からは外した）がホスト CRuby の gem cache にある <code>.gem</code> を monoruby
+の <code>bin/gem</code> で専用 home に入れ、<code>tests/capi/gems/&lt;gem&gt;.rb</code> を双方で走らせて
+出力を比べる（1 行目は読み込んだ拡張の名前なので、stand-in でなく C 拡張が
+動いたことも見る）。cache に <code>.gem</code> が無い gem はスキップとして報告する。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>gem</th><th>状態</th><th>使う面</th></tr>
+</thead>
+<tbody>
+<tr><td>bcrypt 3.1.22</td><td>一致</td><td><code>rb_str_new</code> / <code>StringValuePtr</code> / <code>NUM2INT</code>、特異メソッド定義</td></tr>
+<tr><td>msgpack 1.8.5</td><td>一致（Buffer / Packer / Unpacker / Factory / ext 型 / Timestamp / IO 相手 / pool）</td><td>TypedData + alloc、<code>rb_num2ll</code> / <code>rb_num2ull</code> と Bignum、<code>rb_hash_foreach</code>、<code>rb_io_write</code>、<code>rb_enc_*</code>、<code>rb_ext_ractor_safe</code>、<code>-fvisibility=hidden</code></td></tr>
+<tr><td>json 2.18.0 / 3.1.0</td><td>一致（§3.15。段階 7 までは <code>Qfalse != 0</code> のため生成器が動かなかった。3.x は <code>rb_scan_args_kw</code> / <code>rb_catch_obj</code> / <code>rb_throw_obj</code> / <code>rb_check_funcall</code> / <code>rb_str_tmp_new</code> も使う）</td><td><code>RUBY_INTEGER_UNIFICATION</code>、<code>SIZEOF_UINT64_T</code>、<code>ALLOCV</code>、<code>rb_enc_interned_str</code> の <code>have_func</code> 判定、<code>rb_str_buf_new</code> + <code>RSTRING_PTR</code> 直書き、<code>rb_global_variable</code>、<code>rb_hash_lookup2</code> の <code>Qundef</code></td></tr>
+<tr><td>strscan 3.1.8</td><td>一致（§3.13）</td><td><code>ruby/re.h</code>: <code>rb_reg_onig_match</code> / <code>rb_reg_prepare_re</code> + <code>onig_search</code> / <code>onig_match</code>、<code>struct re_registers</code> をスタックに置く、<code>onig_foreach_name</code>、<code>rb_memsearch</code>、<code>rb_enc_precise_mbclen</code>（EUC-JP）、<code>rb_get_kwargs</code>、<code>_((args))</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>macOS の CI で msgpack の <code>extconf.rb</code> が monoruby ごと落ちた（スタック
+オーバーフロー）のは層ではなく JIT の問題だった。mkmf が呼ぶ FileUtils の
+<code>Entry_#postorder_traverse</code>（<code>children.each { |c| c.traverse { |e| yield e } }; yield self</code> の形）で、ブロック literal 付きの再帰呼び出しが特殊化の深さ
+制限を素通りして無限に特殊化していた（再帰防止を入れた）。その上で同じ形
+が、特殊化フレームから外に出たブロック（yield する literal / <code>&amp;b</code> / <code>super</code>
+を汎用呼び出しに渡す）の書き込みを呼び出し元の定数化ローカルが見ない既存
+バグを露わにした。どちらも <code>tests/given_block_escape.rs</code> が回帰テストで、
+層とは独立の修正（<code>codegen/jitgen/compile/method_call.rs</code> の
+<code>note_given_block_escape</code>）。</p>
+<p>層に足したもの:</p>
+<ul>
+<li><strong>可視性</strong>: <code>RUBY_FUNC_EXPORTED</code> を <code>__attribute__((visibility("default")))</code>
+に、<code>RUBY_SYMBOL_EXPORT_BEGIN</code> / <code>END</code> を pragma に。msgpack は
+<code>-fvisibility=hidden</code> でビルドし <code>Init_msgpack</code> だけこれで出すので、
+空マクロだと <code>Init_</code> が隠れて「not a Ruby extension」になる。</li>
+<li><strong>config.h</strong>: <code>RUBY_INTEGER_UNIFICATION</code>（無いと json が <code>Fixnum</code> /
+<code>Bignum</code> のジェネレータモジュールを作る）、<code>SIZEOF_INT64_T</code> /
+<code>SIZEOF_UINT64_T</code> / <code>HAVE_(U)INT64_T</code>。</li>
+<li><strong>Bignum 系</strong>: <code>rb_big2ll</code> / <code>rb_big2ull</code> / <code>rb_big2long</code> / <code>rb_big2ulong</code>
+/ <code>rb_big2dbl</code> / <code>rb_big2str</code> / <code>rb_dbl2big</code>、<code>rb_big_cmp</code> / <code>eq</code> / 四則 /
+ビット演算 / シフト（すべて <code>rb_funcall</code> 経由）、<code>RBIGNUM_SIGN</code> /
+<code>RBIGNUM_POSITIVE_P</code>、<code>rb_absint_size</code>（<code>abs.bit_length</code> から）、
+<code>rb_absint_singlebit_p</code>。<code>rb_num2ll</code> は Fixnum が 63 bit なので
+<code>long long</code> の端 1/64 が T_BIGNUM になることを踏まえて範囲を判定し、
+範囲外は CRuby と同じ <code>'long long'</code> / <code>'unsigned long long'</code> の文言で
+RangeError にする（<code>'long'</code> ではなく）。</li>
+<li><strong>ALLOCV</strong>: <code>rb_alloc_tmp_buffer(_with_count)</code> / <code>rb_free_tmp_buffer</code>、
+<code>RB_ALLOCV</code> / <code>RB_ALLOCV_N</code> / <code>RB_ALLOCV_END</code>。CRuby は大きいものを
+String に載せて GC に解放させるが、ここでは <code>ruby_xmalloc</code> の
+ポインタを VALUE スロットに入れて <code>ALLOCV_END</code> で <code>free</code> する。</li>
+<li><strong>encoding.h</strong>: <code>ENCODING_GET</code> / <code>SET</code>（<code>_INLINED</code> 含む）、coderange
+定数と <code>ENC_CODERANGE(obj)</code>（<code>valid_encoding?</code> / <code>ascii_only?</code> から毎回
+計算、<code>SET</code> / <code>CLEAR</code> は no-op）、<code>rb_enc_check</code> / <code>rb_enc_compatible</code> /
+<code>rb_enc_strlen</code> / <code>rb_enc_mbclen</code> / <code>rb_enc_precise_mbclen</code> /
+<code>rb_enc_codelen</code> / <code>rb_enc_codepoint_len</code> / <code>rb_enc_mbminlen</code> /
+<code>mbmaxlen</code> / <code>unicode_p</code> / <code>dummy_p</code>、<code>rb_enc_raise</code>、<code>rb_intern3</code>、
+<code>MBCLEN_*</code> マクロ。</li>
+<li><strong>ruby/util.h</strong>（新設）: <code>ruby_strdup</code> / <code>ruby_strtoul</code> / <code>ruby_strtod</code> /
+<code>ruby_scan_oct</code> / <code>ruby_scan_hex</code> / <code>ruby_scan_digits</code> / <code>ruby_qsort</code>
+（比較関数に <code>void *d</code> を渡す CRuby 形。マージソートで実装）/
+<code>ruby_getcwd</code>。</li>
+<li><strong>ほか</strong>: <code>rb_ext_ractor_safe</code>、<code>rb_proc_arity</code> / <code>rb_proc_lambda_p</code>、
+<code>rb_io_write</code> / <code>flush</code> / <code>puts</code> / <code>print</code> / <code>gets</code> / <code>getbyte</code> / <code>close</code> /
+<code>eof</code> / <code>binmode</code> / <code>addstr</code> / <code>printf</code> / <code>get_io</code> / <code>check_io</code>、
+<code>rb_str_replace</code>、<code>rb_str_to_interned_str</code>、<code>RB_OBJ_FROZEN_RAW</code>、
+<code>rb_isxxx</code> / <code>ISXXX</code> / <code>TOLOWER</code> / <code>TOUPPER</code>。<code>ruby.h</code> が <code>&lt;stdio.h&gt;</code> と
+<code>&lt;inttypes.h&gt;</code> を include する（mkmf の conftest は宣言なしに <code>printf</code>
+を呼ぶ）。</li>
+<li><strong>require の優先順</strong>: stand-in（<code>stub/</code>）が当たった feature でも、
+<code>$LOAD_PATH</code> 上に monoruby 向けにビルドされた同名の <code>.so</code>
+（<code>ext::is_capi_extension</code>）があればそれを読む
+（<code>Store::built_extension_on_load_path</code>、<code>require.rs</code>）。monoruby の
+gem home から activate した gem の <code>lib/</code> はそこに入るので、
+<code>gem "msgpack"; require "msgpack"</code> は gem 自身の <code>msgpack.so</code> に届く。
+CRuby でビルドされた <code>.so</code> はシンボル表に <code>monoruby_capi_init</code> が無いので
+数えない（§3.18）。</li>
+<li>未捕捉例外の報告（<code>x (MessagePack::UnknownExtTypeError)</code>）が
+クラスの完全な名前を出すようになった（以前は <code>UnknownExtTypeError</code>
+のみ。<code>MonorubyErr::class_name</code> の <code>Other</code> 腕）。</li>
+</ul>
+<h3 id="312-st_table段階-5"><a class="header" href="#312-st_table段階-5">3.12 <code>st_table</code>（段階 5）</a></h3>
+<p><code>ruby/st.h</code> の中身を入れた。実装は CRuby の <code>st.c</code>（public domain、
+<code>ruby_4_0</code> ブランチ）をそのまま <code>monoruby_capi/src/st.c</code> に持ち込んだもので、
+Ruby 内部ヘッダへの依存（<code>internal/bits.h</code> の <code>nlz_intptr</code>、<code>RUBY_ASSERT</code>、
+<code>NO_SANITIZE</code>）を冒頭の数行で置き換え、<code>RHASH</code> に入り込む
+<code>rb_hash_bulk_insert_into_st_table</code> とその裏の rehash 補助、内部用の
+<code>set_table</code> を落としただけ。<code>st.h</code> も CRuby の宣言と <code>struct st_table</code> の
+レイアウトをそのまま持ち、CRuby と同じく全関数は <code>rb_st_*</code> で、<code>st_insert</code>
+などは <code>#define</code> で届く。<code>ruby.h</code> が末尾で <code>ruby/st.h</code> を include する
+（CRuby と同じく、<code>&lt;ruby/st.h&gt;</code> を自分で include しない拡張のため。
+<code>enum st_retval</code> はそちらへ移した）。メモリは <code>ruby_xmalloc</code> 系
+（GC 圧力に数える）、テーブルが <code>st_index_t</code> を越えると RuntimeError
+（オリジナルの <code>RUBY</code> 構成どおり）。</p>
+<p>同じコードなので、挿入順の走査、<code>st_hash</code> / <code>st_hash_uint</code> / <code>st_numhash</code>
+の値、<code>st_memsize</code> まで CRuby と一致する。<code>tests/capi/capi_st.c</code> が
+numtable（1000 件の挿入・再挿入・<code>delete</code> / <code>shift</code> / <code>foreach</code> の
+<code>ST_DELETE</code> / <code>ST_STOP</code>、<code>update</code> の 3 経路、<code>insert2</code>、<code>add_direct</code>、
+<code>copy</code> / <code>clear</code>、bins の無い小テーブル）、strtable / strcasetable
+（別ポインタ同内容の検索、<code>st_strcasecmp</code>）、独自 <code>st_hash_type</code>
+（衝突だらけの hash で <code>foreach_check</code> / <code>foreach_with_replace</code> /
+<code>keys_check</code> / <code>delete_safe</code> + <code>cleanup_safe</code>）、hash 関数群、
+VALUE を鍵と値に持つ TypedData（mark で <code>st_foreach</code>）を CRuby と比べる。
+<code>rb_memhash</code> は <code>st_hash(ptr, len, 0)</code>（CRuby はプロセスごとの seed を
+混ぜるが、同一プロセス内で等しいことだけが契約）。</p>
+<p>ホストの gem cache にある C 拡張で <code>st_table</code> を使うのは nokogiri だけ
+（monoruby では <code>ext/nokogiri</code> が肩代わり）なので、実 gem での検証は無い。
+oj / ruby-prof / stackprof のような <code>st_table</code> を使う gem がこれで
+ビルドできる。</p>
+<h3 id="313-rubyreh段階-6"><a class="header" href="#313-rubyreh段階-6">3.13 <code>ruby/re.h</code>（段階 6）</a></h3>
+<p>strscan のように Onigmo を自分で回す拡張のための面。<code>ruby/onigmo.h</code> は
+monoruby がリンクしている <code>onigmo-regex</code> crate の <code>onigmo/onigmo.h</code>
+そのもの（Onigmo 6.2）で、<code>OnigRegion</code> / <code>struct re_registers</code> は本物の
+構造体なので <code>regs-&gt;beg[i]</code> の読み書きは CRuby と同じ。ただし crate の
+Onigmo は <code>RUBY</code> を定義せずにビルドされていて <code>OnigRegion</code> が
+<code>history_root</code> を持つ（32 バイト、CRuby は 24）ため、ヘッダの先頭で
+<code>USE_CAPTURE_HISTORY</code> を強制し、拡張がスタックに置く構造体をライブラリと
+そろえる（そろえないと <code>onig_region_init</code> がスタックを壊す）。</p>
+<p>拡張の <code>.so</code> は monoruby のバイナリのシンボルを解決できないので、
+<code>onig_search</code> / <code>onig_match</code> / <code>onig_region_*</code> / <code>onig_free</code> /
+<code>onig_name_to_backref_number</code> / <code>onig_foreach_name</code> /
+<code>onig_number_of_*</code> / <code>onig_error_code_to_str</code> は capi.c の薄い関数で、
+<code>MrApi::onig_api()</code> が返す <code>MrOnigApi</code> テーブル（<code>void *</code> で型を消した
+関数ポインタ）経由で monoruby 内の Onigmo を呼ぶ。<code>onig_new</code> と
+エンコーディング / 構文のテーブル（データシンボル）は出さない。
+パターンは Regexp を作って得る（<code>rb_reg_regcomp</code>）。</p>
+<p><code>regex_t</code> は monoruby のもの。<code>rb_reg_prepare_re(re, str)</code> は
+<code>Regexp#match</code> が <code>str</code> を相手に使う codec（<code>RegexpInner::capi_compile_key</code>:
+<code>check_match_encoding</code> で互換性を検査し、ネイティブ codec なら素のパターン
+バイト列とその encoding、さもなくば engine が持つ変換済みパターン）で
+<code>onig_new</code> したバッファを <code>(pattern, option, encoding)</code> 鍵のキャッシュから
+返す（<code>ext::capi_regex</code>、プロセスの寿命まで解放しない）。<code>RREGEXP_PTR(re)</code>
+（<code>rb_reg_ptr</code>）は Regexp 自身の codec のもので、<code>onig_foreach_name</code> などの
+パターン側の問い合わせ用。CRuby の <code>struct RRegexp</code> は無いので
+<code>RREGEXP(re)-&gt;ptr</code> は書けず、<code>RREGEXP_PTR</code> / <code>RREGEXP_SRC</code> は呼び出し。
+どちらの <code>regex_t</code> も <code>onig_free</code> してはいけない。</p>
+<p><code>rb_reg_onig_match(re, str, match_fn, args, regs)</code> は CRuby 3.3 の形
+（<code>ONIG_MISMATCH</code> を返す、<code>ONIGERR_TIMEOUT</code> は <code>Regexp::TimeoutError</code>、
+ほかの負値は <code>RegexpError</code>）、<code>rb_reg_region_copy</code> は <code>onig_region_copy</code>
+に失敗時の <code>rb_memerror</code>、<code>onig_region_memsize</code> は CRuby の計算。
+<code>rb_memsearch</code> はバイト検索（<code>enc</code> は使わない。ASCII 互換 encoding では
+CRuby も同じ）。<code>rb_long2int</code>、<code>rb_deprecate_constant</code>、<code>_((args))</code> /
+<code>__((args))</code>（<code>ruby/backward/2/stdarg.h</code> の K&amp;R 移行マクロ、strscan が
+まだ使う）も足した。</p>
+<p><code>rb_enc_precise_mbclen</code> は monoruby 自身の走査（<code>value::precise_mbclen</code>:
+UTF-8、EUC-JP / Shift_JIS 系、UTF-16 / 32、それ以外は 1 バイト）を
+<code>MrApi::enc_precise_mbclen</code> で呼び、答えは CRuby と同じ Onigmo の符号化
+（見つかれば長さ、<code>-1</code> が不正、<code>-1-n</code> が n バイト不足）。<code>ruby/encoding.h</code>
+の <code>MBCLEN_*</code> は CRuby どおり <code>ONIGENC_MBCLEN_*</code> の別名で、後者は
+<code>onigmo.h</code> とトークン単位で同じ定義を <code>#ifndef</code> で持つ（両方をどの順で
+include してもよい）。<code>rb_enc_mbclen</code> / <code>rb_enc_strlen</code> / <code>rb_enc_codepoint_len</code>
+はその上に乗る（strscan の <code>charpos</code> が EUC-JP で合うのはこれ）。</p>
+<p><code>require</code> の解決も二つ変えた。(1) stand-in（<code>stub/strscan.rb</code>）が当たり、
+<code>$LOAD_PATH</code> 上に monoruby でビルドした <code>.so</code> があるとき、同じディレクトリ
+に gem 自身の <code>.rb</code>（strscan の <code>lib/strscan.rb</code>: <code>require "strscan.so"</code>
+の後に Ruby 側のメソッドを足す）があればそちらを返す。(2) <code>.so</code> /
+<code>.bundle</code> 候補の <code>$LOAD_PATH</code> 走査で、monoruby が読めないもの（プローブ
+結果に入るホスト CRuby の <code>x86_64-linux/strscan.so</code>）は飛ばして先を見る。
+読めるものが無ければ最初のそれを返して従来の LoadError を出す。</p>
+<p>検証: <code>tests/capi/capi_re.c</code>（<code>tests/capi.rs</code> の 4 本目）が <code>onig_search</code> /
+<code>onig_match</code>（UTF-8 / バイナリ / Shift_JIS / EUC-JP の対象、
+<code>Encoding::CompatibilityError</code>、不正バイト列の <code>ArgumentError</code>）、
+名前付き捕獲、<code>rb_reg_region_copy</code>、<code>rb_memsearch</code>、<code>rb_reg_regcomp</code> /
+<code>rb_reg_quote</code> / <code>rb_reg_options</code> / <code>rb_reg_nth_match</code>、<code>rb_long2int</code> の
+RangeError、<code>rb_enc_precise_mbclen</code> の <code>MBCLEN_*</code> 判定を CRuby と比較。
+<code>bin/test-gems</code> の <code>strscan</code>（3.1.8、CI は <code>gem install strscan</code>）が
+<code>StringScanner</code> のほぼ全メソッド（<code>scan_integer</code> の Ruby 側含む）を
+CRuby と比較する。残る差は <code>$LOADED_FEATURES</code> の順（monoruby は読む前に、
+CRuby は読んだ後に登録する）だけ。</p>
+<h3 id="314-time-apirb_keyword_given_putf-8-以外の-rb_enc_codepoint_len段階-7"><a class="header" href="#314-time-apirb_keyword_given_putf-8-以外の-rb_enc_codepoint_len段階-7">3.14 Time API、<code>rb_keyword_given_p</code>、UTF-8 以外の <code>rb_enc_codepoint_len</code>（段階 7）</a></h3>
+<p>strptime（<code>rb_time_timespec_new</code> / <code>rb_time_timespec</code> /
+<code>rb_time_utc_offset</code> / <code>rb_timespec_now</code>）と yajl-ruby のための面。</p>
+<p>Time の関数は全部 <code>Time</code> 自身のメソッド呼び出しで、拡張が作る値は
+<code>Time.at</code> が作るものそのもの: <code>rb_time_nano_new(sec, nsec)</code> は
+<code>Time.at(sec, nsec, :nanosecond)</code>、<code>rb_time_new(sec, usec)</code> は
+<code>:microsecond</code>、<code>rb_time_timespec_new(ts, offset)</code> は CRuby の読み方
+（<code>INT_MAX</code> がローカル、<code>INT_MAX-1</code> が UTC（<code>.utc</code>）、一日未満なら固定
+オフセット（<code>.localtime(offset)</code>）、それ以外は <code>ArgumentError</code>
+“utc_offset out of range”）、<code>rb_time_num_new(timev, off)</code> は
+<code>Time.at(timev)</code> に <code>off</code> が nil でなければ <code>.localtime(off)</code>（秒数、
+“+09:00”、“UTC”）。<code>rb_time_timespec(v)</code> / <code>rb_time_timeval(v)</code> は Time か
+Numeric（Integer / Float / Rational、<code>Time.at</code> を通すので負値は切り下げ）
+を <code>to_i</code> / <code>nsec</code> で分解し、<code>rb_time_timespec_interval</code> /
+<code>rb_time_interval</code> はそれに負値の <code>ArgumentError</code> と Time の <code>TypeError</code>
+を足したもの。<code>rb_time_utc_offset</code> は Time でなければ <code>TypeError</code>。
+<code>rb_timespec_now</code> は <code>clock_gettime(CLOCK_REALTIME)</code> で、<strong>weak</strong> 定義:
+strptime の <code>ruby_time.c</code> は <code>HAVE_RB_TIMESPEC_NOW</code> に関わらず自分でも
+定義するので、libmonoruby_capi.a 側が強いと <code>.so</code> のリンクで二重定義に
+なる（CRuby では libruby.so の symbol interposition で済んでいる）。
+<code>NUM2TIMET</code> / <code>TIMET2NUM</code>、<code>OBJ_INIT_COPY</code> + <code>rb_obj_init_copy</code>
+（frozen と同クラスの検査）、<code>UNREACHABLE</code> / <code>UNREACHABLE_RETURN</code>、
+<code>RUBY_INTEGER_UNIFICATION</code>、ruby/config.h の <code>HAVE_SYS_TIME_H</code> /
+<code>HAVE_CLOCK_GETTIME</code> / <code>HAVE_GMTIME_R</code> / <code>HAVE_TIMEGM</code> / <code>HAVE_MKTIME</code> /
+<code>HAVE_STRUCT_TM_TM_GMTOFF</code> ほかの時刻系の答え、最上位 <code>ruby.h</code> の
+<code>HAVE_RUBY_ENCODING_H</code> などヘッダ告知（yajl-ruby は
+<code>HAVE_RUBY_ENCODING_H</code> のときだけ <code>ruby/encoding.h</code> を include する）も
+足した。</p>
+<p><code>rb_keyword_given_p</code> は <code>MrApi::keyword_given</code>: 走っている拡張メソッドの
+フレームに入った呼び出し命令（<code>runtime::entered_by</code> が caller の pc から
+復元する call site）が <code>kw_may_exists</code> で、かつメソッドが末尾の位置引数
+として Hash を受け取っているとき 1。<code>send</code> / <code>public_send</code> / <code>Method#call</code>
+のように引数をそのまま渡す組み込み越しの呼び出しは、その組み込みを呼んだ
+call site まで遡って見るので同じ答え（CRuby でもキーワードフラグは引数と
+一緒に運ばれる）。<code>super(a: 1)</code> も call site を持つので同じ。C からの
+<code>rb_funcall</code> や <code>Init_</code> の中は 0。<code>f({a: 1})</code> と <code>f(a: 1)</code> はこれで区別
+できる（§6 の制約は消えた）。残る曖昧さは <code>f(h, **empty)</code> だけ: call site
+に <code>**</code> があり末尾に Hash が来ているので 1 になる（CRuby は空の <code>**</code> を
+渡さないので 0）。<code>rb_scan_args</code> の <code>:</code> は従来どおり末尾 Hash で判定する。</p>
+<p><code>rb_enc_codepoint_len</code> は <code>MrApi::enc_codepoint</code>（<code>value::precise_mbclen</code></p>
+<ul>
+<li><code>value::enc_codepoint</code>）で、UTF-8 だけだった復号が EUC-JP / Shift_JIS /
+Windows-31J / UTF-16 / UTF-32 / ISO-8859-x など monoruby が持つ全部に
+なった。空なら “empty string”、文字が始まらなければ “invalid byte sequence
+in <code>&lt;enc&gt;</code>” の <code>ArgumentError</code>（CRuby と同文）。</li>
+</ul>
+<p>検証: <code>tests/capi/capi_time.c</code>（<code>tests/capi.rs</code> の 5 本目）が上の全部を
+CRuby と比較する。<code>bin/test-gems</code> に <code>strptime</code>（0.2.5）と
+<code>yajl_ruby</code>（1.4.3）を足した。どちらも CI の <code>gem install</code> 対象に既に
+入っている（stand-in の比較テスト用）。</p>
+<h3 id="315-拡張内の-value-を-cruby-のビット列に段階-8"><a class="header" href="#315-拡張内の-value-を-cruby-のビット列に段階-8">3.15 拡張内の <code>VALUE</code> を CRuby のビット列に（段階 8）</a></h3>
+<p>段階 7 までは <code>VALUE</code> が monoruby の <code>Value</code> そのものだった。<code>Qfalse</code> が 0
+でないので、<code>if (fb-&gt;io)</code> のように C の真偽で <code>VALUE</code> を見る json 2.18 の
+拡張（<code>fbuffer.h</code>、generator.c の <code>if (!data-&gt;vstate)</code>）が動かず、
+<code>RTEST</code> を使っていない拡張は同じ目に遭う。そこで拡張の中では CRuby の
+ビット列を使い（§2 の表）、層が境界で変換することにした。</p>
+<p><strong>変換は 2 関数</strong> <code>M(VALUE) -&gt; MrValue</code> と <code>R(MrValue) -&gt; VALUE</code>
+（<code>capi.c</code> 冒頭）。nil / true / false / undef は表引き、Symbol は
+シフト幅の付け替え、それ以外は恒等。Fixnum と flonum（回転も同じ）と
+ヒープポインタは両者でビットが同じなので、変換は分岐 4 つと <code>&amp; 0xff</code>
+だけで済む。どちら側のヒープポインタも相手側の Symbol に見えることは
+ない（下位バイト 0x0c は 8 の倍数でない）。</p>
+<p><strong>境界</strong>（どれも <code>capi.c</code> の中で閉じていて、ABI は変わらない）:</p>
+<ul>
+<li><code>api-&gt;</code> 呼び出し全部: 引数は <code>M()</code>、戻りは <code>check()</code> / <code>R()</code>。
+<code>argv</code> 配列は <code>mr_args()</code> で変換したものを渡す（16 個までスタック、
+それ以上は呼び出し単位のバッファ）。</li>
+<li>Ruby → C の入口 <code>capi_dispatch</code> / <code>block_dispatch</code>: <code>self</code> と <code>argv</code>
+を <code>R()</code> し、結果を <code>M()</code> して返す。</li>
+<li><code>rb_gc_register_address</code> / <code>rb_global_variable</code>: C グローバルには
+CRuby の値が入っているのでコアには読ませない。層が番地リストを持ち、
+pin した隠しネイティブオブジェクト 1 個の <code>mark</code> から変換して報告する
+（json は <code>rb_global_variable</code> を 5 箇所で使う）。</li>
+<li><code>RARRAY_CONST_PTR</code> / <code>RARRAY_PTR</code>: 要素を変換したコピーを返す。
+コピーは現在の Ruby 呼び出し（<code>capi_frame</code> の owner）が持ち、呼び出し
+が戻るとき解放する。1 呼び出しにつき 8 スロット（Array ごとに 1 つ、
+同じ Array はスロットを再利用して要素を取り直す）なので、CRuby と同じ
+ように複数の Array のポインタを同時に持てる。<code>RARRAY_AREF</code> は
+<code>rb_ary_entry</code>（変換あり）。</li>
+<li>TypedData の <code>dmark</code> / ブロックの <code>mark</code>: <code>rb_gc_mark(VALUE)</code> が
+<code>M()</code> してコアに渡す。</li>
+<li><code>rb_protect</code> の <code>rb_errinfo</code>、<code>rb_hash_foreach</code> のコールバック、
+<code>rb_iter_break</code> の値、など VALUE を保持する層内の構造体はすべて
+CRuby 側の値で持ち、コアに渡す瞬間だけ変換する。</li>
+</ul>
+<p>ヘッダ（<code>ruby/ruby.h</code>）は CRuby の定義そのもの: <code>RTEST(v)</code> は
+<code>(v &amp; ~Qnil) != 0</code>、<code>IMMEDIATE_P</code> は <code>v &amp; 7</code>、<code>SPECIAL_CONST_P</code> は
+<code>IMMEDIATE_P || !RTEST</code>、<code>ID2SYM</code> / <code>SYM2ID</code> は 8 ビットシフト。</p>
+<p>CRuby と違う点で残るのは「C に渡したポインタ先の要素が生のオブジェクト
+メモリではない」ことだけ: <code>RARRAY_CONST_PTR</code> に書き込んでも Array は
+変わらない（<code>RARRAY_PTR</code> は前から読み取り専用）。</p>
+<p>検証: <code>tests/capi/capi_value.c</code>（<code>tests/capi.rs</code> の 6 本目）が定数の
+数値、<code>RTEST</code> 等のビット判定、Symbol の往復、flonum / heap float、
+<code>rb_global_variable</code> した C グローバル（nil / false / String を入れて
+<code>GC.start</code>）、<code>RARRAY_CONST_PTR</code> を 2 本同時、<code>rb_ary_new_from_values</code>、
+<code>Qundef</code> を返す API、<code>rb_scan_args</code> の省略引数、<code>rb_yield</code> / <code>rb_block_call</code>
+/ <code>rb_protect</code> / <code>rb_ensure</code> / <code>rb_hash_foreach</code> / <code>rb_funcall</code> を通る
+nil / false、<code>dmark</code> で mark される VALUE を CRuby と比較する。
+<code>bin/test-gems</code> に json 2.18.0 が加わり、gem の parser.so /
+generator.so（stand-in <code>gem/json/ext/*.rb</code> より <code>.so</code> が勝つ）で
+<code>JSON.generate</code> / <code>parse</code> / <code>pretty_generate</code> / <code>State</code> / <code>Coder</code> /
+エラーメッセージが CRuby と一致する。既存の 5 フィクスチャと bcrypt /
+msgpack / strscan / strptime / yajl-ruby も変わらず一致。</p>
+<p><strong>json 3.1.0（最新系）も一致する。</strong> 3.x の parser.c / generator.c が新たに
+使う 5 つ — <code>rb_scan_args_kw</code>（<code>RB_SCAN_ARGS_LAST_HASH_KEYWORDS</code> など 4 つ
+のフラグ。<code>rb_scan_args</code> は <code>PASS_CALLED_KEYWORDS</code> の特殊形として同じ
+<code>scan_args_v</code> に乗せた）、<code>rb_check_funcall</code>（応答しなければ <code>Qundef</code>、
+private も数える）、<code>rb_str_tmp_new</code>（CRuby では hidden な作業用 String、
+ここでは普通の String）、再開可能パーサ（<code>ResumableParser</code>）が使う
+<code>rb_catch_obj</code> / <code>rb_throw_obj</code>（<code>Kernel#catch</code> / <code>#throw</code> そのもの。
+<code>throw</code> は interpreter の throw 例外として C フレームを巻き戻し、タグの
+合う <code>catch</code> が値を返す。C ↔ Ruby のどちらで catch / throw しても対応する）
+— を層に足した。<code>tests/capi/capi_value.c</code> の <code>scan_kw</code> / <code>check_call</code> /
+<code>tmp_fill</code> / <code>catch_</code> / <code>throw_</code> が CRuby と比較する。</p>
+<p>json はコアの default gem なので、Ruby 側の半分（<code>json.rb</code>、<code>json/common.rb</code>
+…）が stand-in ツリーに 2.18.0 で入っている。<code>gem "json", "3.1.0"</code> で
+活性化した gem の <code>.so</code> が stand-in の <code>json/ext/generator.rb</code> に勝っても、
+<code>json.rb</code> 自体は stand-in（2.18.0 の Ruby）に解決されていて
+<code>JSON::Ext::Generator::GeneratorMethods</code> の <code>NameError</code> になっていた。
+<code>require.rs</code> の <code>built_gem_file_on_load_path</code>: stand-in に当たった候補が、
+<strong>monoruby がビルドした拡張を持つ gem</strong>（<code>&lt;home&gt;/gems/&lt;name-ver&gt;/lib</code> と、
+C API 層の拡張を含む <code>&lt;home&gt;/extensions/&lt;platform&gt;/&lt;api&gt;/&lt;name-ver&gt;</code> が
+ともに <code>$LOAD_PATH</code> にある）の lib にもあれば、そちらを返す。stand-in に
+勝つのは活性化後だけで、素の <code>require "json"</code> は従来どおり stand-in。
+<code>bin/test-gems</code> は <code>json</code>（キャッシュ中の最新、CI では 3.1.0）と
+<code>json_2_18</code>（2.18.0 固定）の両方を比較する。ついでに rubygems の
+<code>generate_plugins</code> が踏む <code>Hash#flat_map(&amp;:last)</code>（ペアを分割しないブロック
+にはペアを丸ごと渡す）を <code>builtins/hash.rb</code> で直した。</p>
+<h3 id="316-未実装-api-はロードを通し呼ばれたら-notimplementederror"><a class="header" href="#316-未実装-api-はロードを通し呼ばれたら-notimplementederror">3.16 未実装 API はロードを通し、呼ばれたら NotImplementedError</a></h3>
+<p>CRuby の公開 C API（<code>monoruby_capi/src/cruby_api.txt</code>、CRuby 4.0 の
+<code>include/ruby/**</code> の宣言と libruby の export から採った関数名）のうち層が
+定義していないものについて、<code>build.rs</code> が <code>capi_unimplemented(name)</code> を呼ぶ
+weak なスタブを生成し <code>capi/libmonoruby_capi_stubs.a</code> に入れる。
+<code>RbConfig</code> の <code>EXTDLDFLAGS</code>（拡張の <code>.so</code> のリンク行にだけ入る）が
+<code>-lmonoruby_capi_stubs</code> を足すので、拡張にはスタブもリンクされる。</p>
+<ul>
+<li>未実装の <code>rb_*</code> を<strong>参照するだけ</strong>の拡張もロードでき、その関数を<strong>呼んだ
+とき</strong>に <code>NotImplementedError</code>（<code>rb_foo() is not implemented in monoruby's C API</code>）になる。以前は <code>dlopen</code>（<code>RTLD_NOW</code>）が未解決シンボルで
+失敗し、拡張全体が <code>LoadError</code> だった（ruby/spec の <code>optional/capi</code> では
+47 ファイル中 22 ファイルがこれで丸ごと落ちていた）。</li>
+<li><code>have_func</code> は従来どおり「無い」と答える。mkmf の conftest は
+<code>EXTDLDFLAGS</code> を使わず <code>LIBRUBYARG</code>（層のアーカイブだけ）でリンクするので、
+拡張の <code>#ifdef HAVE_RB_FOO</code> は層に無いものについてフォールバック側を選び
+続ける。</li>
+<li>スタブを出すのは、ビルドした層のアーカイブに（<code>nm</code> で見て）無いシンボル
+だけ（<code>st_hash_end</code> のようにヘッダのリネームで別名になるものも正しく除外
+される）。スタブは weak でもあるので、層が定義する関数は常に層のものが勝つ。</li>
+<li>ヘッダに宣言の無い関数は C としては暗黙宣言になる（GCC 14 以降は
+エラー）。宣言はこれまでどおり実装したときに足す。</li>
+</ul>
+<h3 id="317-標準ライブラリの-c-拡張を層でビルドして同梱する-date段階-9"><a class="header" href="#317-標準ライブラリの-c-拡張を層でビルドして同梱する-date段階-9">3.17 標準ライブラリの C 拡張を層でビルドして同梱する: date（段階 9）</a></h3>
+<p><code>require "date"</code> は長らく <code>stdlib/date_core.rb</code>（最小限の Ruby 実装）で
+しのいでいたが、<code>date.rb</code> が無く <code>require "date"</code> 自体が LoadError で、
+<code>time</code>（<code>Time.parse</code>）と <code>psych</code>（YAML）と rubygems の <code>gem build</code> が
+道連れだった。CRuby の <code>ext/date</code>（date gem 3.5.1）をそのまま層でビルドして
+同梱する。</p>
+<ul>
+<li><strong>ソース</strong>: <code>monoruby_capi/ext/date/</code>（<code>date_core.c</code> / <code>date_parse.c</code> /
+<code>date_strftime.c</code> / <code>date_strptime.c</code> / <code>date_tmx.h</code> / <code>zonetab.h</code>、
+CRuby 4.0.6 のまま。ライセンスは同ディレクトリの <code>BSDL</code> / <code>COPYING</code>）。
+Ruby 側の <code>date.rb</code>（CRuby の <code>ext/date/lib/date.rb</code>）は
+<code>monoruby/stdlib/date.rb</code>。<code>stdlib/date_core.rb</code> は削除した。</li>
+<li><strong>ビルド</strong>: <code>build.rs</code> の <code>build_capi_extensions</code> が <code>cc</code> crate で
+オブジェクトをコンパイルし（<code>extconf.rb</code> のプローブの代わりに
+<code>HAVE_STRUCT_TM_TM_GMTOFF</code> を define）、同じコンパイラで
+<code>-shared</code>（macOS は <code>-dynamiclib</code>）に層のアーカイブ 2 本をリンクして
+<code>OUT_DIR/capi_ext/date_core.so</code> を作る。<code>install_extensions</code> が Rust 製
+拡張（<code>CARGO_CDYLIB_FILE_*</code>）と一緒に <code>&lt;install root&gt;/ext/</code> へ置くので、
+<code>require "date_core"</code> は <code>ext::find_extension</code> で見つかる。失敗しても
+警告だけで、その場合 <code>date</code> が無いだけの monoruby になる。
+クロスビルドでは他の拡張と同じく install しない。</li>
+<li><strong>mkmf <code>depend</code> ファイルのための CRuby ヘッダ名</strong>: CRuby の <code>ext/</code> 由来の
+gem はみな <code>depend</code> を持ち、mkmf はそこに並ぶ
+<code>$(hdrdir)/ruby/internal/...</code> を各オブジェクトの前提に書く。存在しない
+前提で <code>make</code> は止まるので、monoruby に無い CRuby 4.0 の公開ヘッダ名
+177 個（<code>monoruby_capi/include/cruby_headers.txt</code>）を、<code>ruby/ruby.h</code> を
+include するだけの 1 行ヘッダとして <code>include/</code> に生成する
+（<code>install_cruby_header_names</code>）。直接 include されても API 全体に
+解決する。</li>
+<li><strong>date が要求して層に足したもの</strong>: <code>rb_rational_raw</code> / <code>rb_rational_num</code> /
+<code>rb_rational_den</code>、<code>rb_num_coerce_bin</code> / <code>_cmp</code> / <code>_relop</code>（coerce
+プロトコル）、<code>rb_cstr_to_inum</code>、<code>rb_int_positive_pow</code>、
+<code>rb_marshal_dump</code> / <code>rb_marshal_load</code>、<code>rb_copy_generic_ivar</code>、
+<code>rb_enumeratorize</code> / <code>_with_size</code> / <code>_with_size_kw</code>（<code>to_enum</code>; size 関数は
+受けるだけ）、<code>rb_frame_this_func</code> / <code>rb_frame_callee</code>（<code>capi_frame</code> が
+実行中の <code>capi_method</code> を持つ）、<code>RETURN_ENUMERATOR</code> 系マクロ、
+<code>rb_backref_get</code> / <code>rb_backref_set</code>（§4 の ABI 追加 <code>backref_get</code> /
+<code>backref_set</code>）、<code>LONG_LONG</code>、<code>PRI_SIZE_PREFIX</code> / <code>PRIdSIZE</code> 系、
+<code>DECIMAL_SIZE_OF_BITS</code> / <code>DECIMAL_SIZE_OF</code>、<code>rb_strlen_lit</code>、
+<code>RB_EXT_RACTOR_SAFE</code>、<code>STRCASECMP</code> / <code>STRNCASECMP</code> / <code>STRTOUL</code>、
+<code>rb_enc_str_asciicompat_p</code>。</li>
+<li><strong>1 文字演算子の ID</strong>: CRuby では <code>rb_intern("+") == '+'</code> で、C 拡張は
+<code>rb_funcall(x, '+', 1, y)</code> と書く（date_core.c の <code>f_add</code> ほか）。
+monoruby の <code>IdentId</code> は 1 から順に振っていて 43（<code>'+'</code>）は
+<code>millisecond</code> だったので、これが <code>x.millisecond(y)</code> になっていた。
+<code>IdentId</code> の予約番号を変え、1 文字演算子（<code>+ - * / % &lt; &gt; &amp; | ^ ~ ! \``） は ASCII コードを id に、他の予約名は 128 以降にした （</code>id_table.rs<code>; ASCII 範囲の残りは名前の無いスロットで、 </code>Symbol.all_symbols<code>は飛ばす）。層は ID を</code>IdentId` のまま渡すので
+それだけで一致する。</li>
+<li><strong>同じ C 関数を 2 つの名前で定義したら 1 つのメソッド</strong>: CRuby の
+<code>Method#==</code> は cfunc の同一性で見るので <code>Date#mday == Date#day</code>。層の
+<code>define_cfunc</code> は (関数, クラス, arity, 可視性) を覚えていて、2 度目は
+<code>alias_method</code>（特異メソッドなら特異クラスの）にする。</li>
+<li><strong><code>$~</code></strong>: C メソッドが <code>rb_funcall(re, "match", str)</code> した結果は呼び出し元
+Ruby フレームの <code>$~</code> に入る（CRuby と同じ、ネイティブ呼び出しは自分の
+フレームを持たない）。date のパーサは <code>rb_backref_get</code> で退避して
+<code>rb_backref_set</code> で戻すので、ABI に <code>backref_get</code> / <code>backref_set</code> を
+足した（<code>Executor::get_last_matchdata</code> / <code>set_backref</code>）。</li>
+<li><strong><code>Float#&lt;=&gt;</code></strong>: 無限大の self は coerce より先に相手の <code>infinite?</code> を
+聞く（CRuby の <code>flo_cmp</code>）。<code>Date::JULIAN &lt;=&gt; Date::Infinity.new</code> が
+<code>coerce</code> 経由で -1 になっていた。</li>
+<li><strong>結果</strong> (ruby/spec <code>mspec ci</code>): <code>library/date</code> 297 例 0 失敗、
+<code>library/datetime</code> 177 例 0 失敗、<code>library/time</code> 7 例 0 失敗（以前は
+3 つとも <code>require "date"</code> の LoadError で全滅）。<code>optional/capi</code> は
+演算子 ID の修正で 825 → 906 例が走るようになった。
+<code>tests/date.rs</code> が Date / DateTime / Time / YAML / JSON の挙動を
+CRuby と比較し、<code>tests/capi/capi_ids.c</code> が演算子 ID・<code>RETURN_ENUMERATOR</code>・
+エイリアス・coerce・<code>$~</code> の退避復元を CRuby と比較する。
+<code>bin/test-gems</code> の <code>gem install</code> 検査は rubygems が <code>date</code> を要求する
+ので、これで通るようになった。</li>
+</ul>
+<h3 id="318-c-で裏打ちされたグローバル変数c-の-anyargsalloc-関数の副作用段階-10"><a class="header" href="#318-c-で裏打ちされたグローバル変数c-の-anyargsalloc-関数の副作用段階-10">3.18 C で裏打ちされたグローバル変数、C++ の ANYARGS、alloc 関数の副作用（段階 10）</a></h3>
+<p>gosu 1.4.6（SWIG が生成した C++ ラッパー <code>RubyGosu.cxx</code> + C++ 本体）を
+<code>monoruby bin/gem install</code> でそのままビルドして動かすために足した面。
+dewasm の DOOM（gosu のウィンドウに描く）が動作確認の相手。</p>
+<ul>
+<li><strong><code>rb_define_variable</code> / <code>rb_define_readonly_variable</code> /
+<code>rb_define_virtual_variable</code> / <code>rb_define_hooked_variable</code></strong>（<code>rb_gvar_*</code>
+の getter / setter / marker を含む）: 新しい ABI 項目 <code>gvar_hook</code> が、コア
+の gvar テーブルに <code>GvarEntry::Native</code>（data ポインタ付きの C の getter /
+setter）を置く。層は名前ごとの記録 <code>capi_gvar</code>（ID、<code>var</code>、getter、
+setter、marker）を持ち、<code>gvar_get_dispatch</code> / <code>gvar_set_dispatch</code> が
+<code>capi_dispatch</code> と同じフレームを積んで拡張の関数を CRuby の引数で呼ぶ。
+setter が <code>rb_gvar_readonly_setter</code> なら setter 無しで登録し、コアが
+CRuby と同文の NameError（<code>$x is a read-only variable</code>）を出す。<code>var</code> の
+先の値は記録の marker（<code>rb_gvar_var_marker</code> は <code>*var</code>、
+<code>rb_gvar_val_marker</code> は <code>(VALUE)var</code>）が、pin した 1 つのネイティブ
+オブジェクトの mark から辿る。<code>defined?($x)</code> は getter を呼ばずに
+<code>"global-variable"</code>（CRuby と同じ）。alias / <code>trace_var</code> / <code>rb_gv_get</code>
+はコアの既存の経路がそのまま効く。</li>
+<li><strong>getter の例外</strong>: gvar の読み出しは VM / JIT に例外経路が無い
+（<code>get_global_var</code> は素の <code>Value</code> を返す）ので、getter が raise すると
+警告を出して nil を読む（§6）。setter の例外は普通に伝播する。</li>
+<li><strong><code>ruby/backward/cxxanyargs.hpp</code></strong>: C++ としてコンパイルされるとき
+<code>ruby.h</code> が末尾で include する。CRuby の同名ヘッダと同じく、
+<code>VALUE (*)(...)</code> / <code>void (*)(...)</code> / <code>int (*)(...)</code> にキャストした関数
+ポインタを受ける overload（<code>rb_define_virtual_variable</code> /
+<code>rb_define_hooked_variable</code>（nullptr 版含む）、<code>rb_rescue</code> /
+<code>rb_rescue2</code> / <code>rb_ensure</code>、<code>rb_iterate</code> / <code>rb_block_call</code> / <code>rb_catch</code> /
+<code>rb_catch_obj</code> / <code>rb_proc_new</code>、<code>st_foreach</code> / <code>st_foreach_check</code> /
+<code>rb_ivar_foreach</code>）を提供する。SWIG は <code>VALUEFUNC(f)</code> 等でこの形に揃えて
+渡す。<code>rb_define_method</code> 系はマクロのキャストで足りるので CRuby の
+template dispatcher は持たない。<code>rb_rescue2</code> の overload のために
+<code>rb_vrescue2</code> を足した。</li>
+<li><strong><code>HAVE_RB_DEFINE_ALLOC_FUNC</code></strong>: CRuby の <code>ruby/internal/intern/vm.h</code> が
+定義する告知。無いと SWIG は Ruby 1.6 向けの <code>new</code>（特異メソッド +
+<code>rb_obj_call_init</code>）を生成し、キーワード引数が <code>initialize</code> に届かない
+（<code>Gosu::Window.new(w, h, fullscreen: ...)</code> が ArgumentError）。</li>
+<li><strong>alloc 関数が置いた ivar</strong>: 遅延 alloc（§3.7）でペイロードを本物の
+インスタンスへ移すとき、一時オブジェクトの ivar も <code>rb_ivar_foreach</code> で
+写す（SWIG の alloc は <code>@__swigtype__</code> を置き、全メソッドの型検査が
+それを読む）。さらに <code>capi_dispatch</code> は C メソッドのレシーバがペイロード
+無しのネイティブオブジェクトなら先に alloc を走らせる
+（<code>materialize_payload</code>）ので、C の <code>initialize</code> は CRuby の <code>allocate</code>
+直後と同じ状態を見る。</li>
+<li><strong><code>rb_obj_instance_eval</code> / <code>rb_obj_instance_exec</code> / <code>rb_mod_module_eval</code>
+/ <code>rb_mod_module_exec</code></strong>: 対応する Ruby メソッドの呼び出し。argc == 0 の
+eval と exec は走っている C メソッドのブロックを渡す。<code>rb_ivar_foreach</code>
+も足した（<code>#instance_variables</code> に出るものだけ）。</li>
+<li><strong><code>strlcpy</code> / <code>strlcat</code></strong>: CRuby の libruby が glibc 2.38 より前の C
+ライブラリのために持っているもの。<code>date_strftime.c</code> が呼ぶので、glibc
+2.35（Ubuntu 22.04）では <code>require "date"</code> が <code>undefined symbol: strlcpy</code>
+で落ち、psych 経由で <code>gem install</code> も落ちていた。層が weak で定義し
+（持つ libc ではそちらが勝つ）、<code>config.h</code> が <code>HAVE_STRLCPY</code> /
+<code>HAVE_STRLCAT</code> を答える。Apple の libc は fortify のマクロとして持って
+いて関数宣言が書き換えられてしまうので、そこでは宣言も定義もしない。</li>
+<li><strong><code>is_capi_extension</code> は dlopen しない</strong>: 従来は <code>RTLD_NOW</code> で試し開きし
+「CRuby 用の <code>.so</code> は <code>rb_*</code> が未解決で失敗する」としていたが、ホストの
+CRuby が <code>--enable-shared</code> なら拡張は <code>libruby.so</code> をリンクしていて普通に
+開ける。gosu の <code>.so</code>（C++）は <code>dlclose</code> で降りず、<code>libruby</code> とそれが使う
+SDL 2.33 がプロセスに残り、stand-in（<code>stub/gosu</code>）が FFI で開いた SDL
+2.0.18 と同居して segfault した（<code>bundle exec monoruby</code> では vendor/bundle
+の CRuby 用 <code>.so</code> が <code>$LOAD_PATH</code> にある）。いまは <code>ext/dynsym.rs</code> が
+ファイルから ELF の <code>.dynsym</code> / Mach-O の <code>LC_SYMTAB</code> を読んで
+<code>monoruby_capi_init</code> の有無を答え、読めない形式のときだけ従来の dlopen に
+落ちる。</li>
+</ul>
+<p>検証: <code>tests/capi/capi_vars.c</code>（<code>tests/capi.rs</code> の 10 本目）が 4 種の定義
+関数、alias / <code>trace_var</code> / <code>rb_gv_get</code>、<code>instance_eval</code> 系、alloc 関数の
+ivar を CRuby と比較する。<code>tests/capi/capi_cxx.cpp</code> は SWIG の形の C++ 拡張
+（<code>VALUEFUNC</code> キャスト、<code>rb_define_alloc_func</code> 経由の <code>new</code> とキーワード、
+<code>$SWIG_TRACKINGS_COUNT</code> 相当の virtual 変数、readonly 変数）で、C++
+コンパイラがあれば双方でビルドして比較する。<code>capi_cruby_build_is_not_opened</code>
+は <code>libruby</code> をリンクし <code>-z nodelete</code> で降りないようにした CRuby 用 <code>.so</code>
+を <code>$LOAD_PATH</code> に置き、LoadError の後に <code>/proc/self/maps</code> に <code>libruby</code> が
+無いことを見る（以前の実装では残った）。</p>
+<h3 id="319-strscan--stringio--zlib-も-cruby-の-c-拡張に段階-11"><a class="header" href="#319-strscan--stringio--zlib-も-cruby-の-c-拡張に段階-11">3.19 strscan / stringio / zlib も CRuby の C 拡張に（段階 11）</a></h3>
+<blockquote>
+<p>strscan は段階 13（§3.21）で Ruby 実装に戻した。以下は段階 11 時点の記録。</p>
+</blockquote>
+<p>この 3 つは monoruby 専用の Ruby 実装（<code>stdlib/strscan.rb</code> /
+<code>stdlib/stringio.rb</code> と、<code>ext/zlib</code> の上の <code>stdlib/zlib.rb</code>）だったが、
+ruby/spec の <code>library/stringscanner</code> / <code>stringio</code> / <code>zlib</code> で計 300 件余り
+落ちていた。§3.17 の date と同じく、CRuby 4.0.6 の <code>ext/strscan</code> /
+<code>ext/stringio</code> / <code>ext/zlib</code> をそのまま層でビルドして同梱する。</p>
+<ul>
+<li><strong>ソース</strong>: <code>monoruby_capi/ext/{strscan,stringio,zlib}/</code>（CRuby 4.0.6 の
+<code>.c</code> のまま、<code>BSDL</code> / <code>COPYING</code> 同梱）。strscan の Ruby 半分
+<code>lib/strscan/strscan.rb</code> は <code>monoruby/stdlib/strscan/strscan.rb</code>。</li>
+<li><strong>ローダ</strong>: <code>stdlib/{strscan,stringio,zlib}.rb</code> は <code>require "x.so"</code>
+（strscan はさらに <code>require_relative "strscan/strscan"</code>）だけ。stub 木に
+あるので <code>$LOAD_PATH</code> 上のホスト gem（strscan 3.1.8 など）より先に当たり、
+rubygems も起動しない（ホスト gem に行くと <code>Gem</code> の起動で ~6 億 Ir）。
+<code>ext/zlib</code>（<code>zlib_native</code>）と <code>String#__strscan_match</code> /
+<code>Kernel#__set_lastline_in_caller</code> は削除した。</li>
+<li><strong>ビルド</strong>: <code>build.rs</code> の <code>EXTENSIONS</code> 表に 3 つを足した。extconf.rb の
+プローブの代わりに strscan は <code>HAVE_ONIG_REGION_MEMSIZE</code> /
+<code>HAVE_RB_REG_ONIG_MATCH</code> / <code>HAVE_RB_DEPRECATE_CONSTANT</code>、zlib は
+<code>OS_CODE=OS_UNIX</code> / <code>HAVE_CRC32_COMBINE</code> / <code>HAVE_ADLER32_COMBINE</code> /
+<code>HAVE_TYPE_Z_CRC_T</code> / <code>HAVE_ZLIB_SIZE_T_FUNCS</code> を define。libz は
+<code>monoruby</code> の <code>libz-sys</code> 依存（<code>bundled-zlib</code> 既定、<code>static</code>）が出す
+<code>DEP_Z_ROOT/lib/libz.a</code> をオブジェクトの後ろに静的リンクする
+（<code>system-zlib</code> では <code>-lz</code>）。x86-64 Linux では層のアーカイブを
+<code>-mtls-dialect=gnu2</code> でコンパイルする（<code>.so</code> 内の TLS 参照が
+<code>__tls_get_addr</code> を呼ばない）。</li>
+<li><strong>層に足したもの</strong>: IO まわり（<code>rb_io_puts</code> / <code>print</code> / <code>printf</code>、
+<code>rb_io_extract_modeenc</code> / <code>rb_io_extract_encoding_option</code> /
+<code>rb_io_modestr_fmode</code> / <code>oflags</code>、<code>FMODE_*</code>、<code>rb_eof_error</code>、
+<code>rb_file_open(_str)</code>、<code>$/</code> <code>$,</code> <code>$;</code> と <code>rb_default_rs</code>、<code>rb_lastline_get</code> /
+<code>set</code>）、encoding（<code>rb_enc_compatible</code> / <code>check</code>、<code>rb_enc_mbclen</code> /
+<code>strlen</code> / <code>codelen</code> / <code>uint_chr</code> / <code>left_char_head</code> ほか、
+<code>rb_enc_interned_str</code>、<code>rb_intern3</code>、<code>rb_find_encoding</code>、<code>rb_enc_warn</code>）、
+変換器（<code>rb_econv_t</code> を <code>Encoding::Converter</code> で包む <code>rb_econv_open(_opts)</code> /
+<code>convert</code> / <code>close</code> / <code>check_error</code>、<code>rb_econv_prepare_opts</code>、
+<code>rb_str_conv_enc_opts</code>）、<code>rb_mutex_*</code>（<code>Thread::Mutex</code>）、
+<code>rb_str_capacity</code> / <code>locktmp</code> / <code>replace</code> / <code>to_interned_str</code>、
+<code>rb_funcallv_kw</code> 系と <code>rb_class_new_instance_kw</code>、<code>rb_f_sprintf</code>、
+<code>rb_f_notimplement</code>、<code>FL_TEST</code> / <code>FL_SET</code>。<code>rb_rescue</code> の rescue 関数の
+中では <code>rb_errinfo</code> がその例外を返す（zlib の <code>GzipReader</code> が読む）。</li>
+<li><strong>速度</strong>: 最初に動いた版は strscan のループで 44 秒（stub 0.22 秒）、
+<code>StringIO#read</code> で 150 秒かかった。効いた順に:
+<ol>
+<li><strong>GVL 再取得の <code>cpuid</code></strong>: <code>Gvl::on_acquired</code> は取得のたびに
+命令ストリームを直列化していたが、仮想化環境では <code>cpuid</code> が VM exit
+になり 1 回数十 µs かかる。C 拡張が <code>rb_thread_call_without_gvl</code> /
+<code>rb_mutex_*</code> で GVL を頻繁に出入りすると支配的になる（valgrind は
+<code>cpuid</code> のコストをモデル化しないので Ir では見えず、gdb のサンプリングで
+見つけた）。直前の持ち主が同じスレッドなら直列化は不要なので省く
+（<code>State::last</code>）。zlib の小さい入力の繰り返しで 1.56 → 0.27 秒。</li>
+<li><strong>ABI 追加で <code>funcall</code> を避ける</strong>: <code>str_coderange</code> / <code>str_dup</code> /
+<code>str_capacity</code> / <code>str_subseq</code> / <code>str_enc_name</code> / <code>str_set_enc</code> /
+<code>str_rptr</code> / <code>obj_frozen</code> / <code>gvar_get</code> / <code>gvar_set</code>（§4）。<code>rb_enc_get</code>
+は名前ポインタをキーにキャッシュ、<code>rb_type</code> は RValue ヘッダの <code>ty</code>
+バイトを直接読む（<code>RB_MONORUBY_CELL_TYPE_OFFSET</code>、<code>rvalue.rs</code> の
+const assert で固定）。<code>rb_intern("...")</code> は GNU C の文ブロックで
+呼び出し箇所ごとに ID をキャッシュする。</li>
+<li><strong><code>rb_reg_prepare_re</code> のキャッシュ</strong>: スレッドローカルな
+(ソースポインタ, オプション, encoding) → <code>regex_t</code> の表を Mutex の
+共有表の前に置いた。</li>
+<li><code>capi_frame</code> の配列スロットを使った分だけ初期化（memset をやめる）、
+<code>data_of</code> がメソッドの self の記録をフレームに持つ、<code>ExtState</code> の表を
+FxHashMap に。</li>
+</ol>
+</li>
+<li><strong>1 プロセスに複数インタプリタ</strong>: CRuby の拡張は状態を C の static に
+持つ（クラス、キャッシュした ID / VALUE、層自身の <code>api</code> や遅延キャッシュ）。
+テストハーネスはテストスレッドごとにインタプリタを立てるので、同じ
+マッピングで <code>Init_</code> が 2 度走ると前のインタプリタの static を
+上書きし、<code>Init_</code> が書き直さない遅延キャッシュは死んだヒープを指す。
+<code>ext::CAPI_INSTANCES</code> がパスごとにマッピングと持ち主を覚え、2 つ目以降の
+インタプリタには <code>.so</code> を一時ディレクトリにコピーしてから <code>dlopen</code> する
+（別 inode なので動的ローダが別にマップする。コピーはマップ後に消す）。
+マッピングは再利用も解放もしない。ふつうの monoruby プロセスは
+インタプリタ 1 つなので常に元ファイルを開くだけ。</li>
+<li><strong>結果</strong> (ruby/spec、release ビルド): <code>library/zlib</code> 148 例、
+<code>library/stringio</code> 703 例、<code>library/stringscanner</code> 240 例、すべて
+0 失敗 0 エラー（以前は zlib 35F+6E、stringio 122F+77E、strscan 7F+58E）。
+速度は stub 比で zlib はほぼ同等〜速い、<code>StringIO#gets</code> / <code>read(n)</code> は
+同等、strscan のループと <code>StringIO#write</code> は約 2〜3 倍遅い（CRuby 比でも
+遅い。<code>rb_io_addstr</code> → <code>write</code> の funcall → 可変長引数の配列 →
+トランポリンという分散したディスパッチ費用）。詳細は
+<code>/mnt/project-files/reports/stdlib_cext_2026-11-04.md</code> を参照。</li>
+</ul>
+<h3 id="320-bigdecimal-も-gem-の-c-拡張に段階-12"><a class="header" href="#320-bigdecimal-も-gem-の-c-拡張に段階-12">3.20 bigdecimal も gem の C 拡張に（段階 12）</a></h3>
+<p><code>gem/bigdecimal.rb</code> は monoruby 専用の Ruby 実装（整数の係数と指数）で、
+ruby/spec の <code>library/bigdecimal</code> で 73F+42E 落ちていた。CRuby 4.0.6 が同梱する
+bigdecimal gem 4.0.1 の <code>ext/bigdecimal</code> をそのまま層でビルドして同梱する。</p>
+<ul>
+<li><strong>ソース</strong>: <code>monoruby_capi/ext/bigdecimal/</code>（gem の <code>bigdecimal.c</code> /
+<code>missing.c</code> / <code>missing/dtoa.c</code> とヘッダ、<code>LICENSE</code>）。gem の <code>lib/</code> は
+<code>monoruby/gem/bigdecimal.rb</code> と <code>gem/bigdecimal/</code>（<code>require 'bigdecimal.so'</code>）。</li>
+<li><strong>ビルド</strong>: <code>EXTENSIONS</code> 表に追加。extconf.rb のプローブの代わりに
+<code>HAVE_BUILTIN___BUILTIN_CLZ(L|LL)</code> と <code>HAVE_{FLOAT,MATH,STDBOOL,STDLIB}_H</code>。</li>
+<li><strong>層に足したもの</strong>: <code>PUREFUNC</code> / <code>CONSTFUNC</code>、<code>rb_special_const_p</code>、
+<code>rb_thread_local_aref</code> / <code>aset</code>、<code>ruby/subst.h</code> の
+<code>snprintf</code> → <code>ruby_snprintf</code> 置き換え（C のみ。<code>%d</code> <code>%u</code> <code>%s</code> <code>%c</code> と
+l / ll / z だけの書式は stdio を通さずに整形し、それ以外は libc へ）。</li>
+<li><strong>速度</strong>: bigdecimal は演算のたびにスレッドローカルの例外モード / 精度上限 /
+丸めモードを <code>rb_thread_local_aref(rb_thread_current(), ...)</code> で読み、結果を
+<code>rb_obj_freeze</code> する。どれも <code>funcall</code> だった（<code>aref</code> 1 回 ≈ 1,900 Ir、
+<code>freeze</code> は <code>bind_call</code> 経由で ≈ 2,500 Ir）ので、ABI に <code>thread_current</code> /
+<code>thread_local_aref</code>（<code>builtins/thread.rb</code> のファイバーローカル表をディスパッチ
+なしで読む）/ <code>obj_freeze</code> を足した。<code>to_s</code> / <code>to_f</code> は数字 1 桁ごとに
+<code>snprintf("%lu")</code> を呼ぶ（glibc で ≈ 1,000 Ir）ので上の置き換えで半分以下に。
+<code>rb_usascii_str_new</code> も <code>str_set_enc</code> で <code>force_encoding</code> の funcall を避ける。
+旧 Ruby 実装比で、文字列からの生成は約 5 倍、多倍長の除算 / 平方根は数十倍
+速い。小さい値の <code>+ 1</code> / <code>to_s</code> は旧実装（JIT がまとめてインライン化する）より
+遅く、CRuby 比で <code>+ 1</code> が約 1.5 倍。</li>
+<li><strong>結果</strong>: ruby/spec <code>library/bigdecimal</code> 370 例すべて通過。</li>
+</ul>
+<h3 id="321-strscan-を-ruby-実装に戻し層の入口を速く段階-13"><a class="header" href="#321-strscan-を-ruby-実装に戻し層の入口を速く段階-13">3.21 strscan を Ruby 実装に戻し、層の入口を速く（段階 13）</a></h3>
+<p>段階 11 の後、ruby-bench の StringScanner を回すベンチが大きく遅くなった
+（#1800 前 → 後: ruby-json 175 → 1535 ms、tinygql 172 → 353、
+liquid-compile 26 → 38、graphql 18 → 38）。原因は二つ。</p>
+<ol>
+<li><strong>二乗のエンコーディング検査</strong>: strscan は String パターンの照合ごとに
+<code>rb_enc_check(p-&gt;str, pattern)</code> を呼ぶ。層はこれを
+<code>Encoding.compatible?</code> の funcall で済ませていて、core の
+<code>encoded_operand</code> が subject 全体をコピーして走査し直していた。トークン
+ごとに入力全体の長さだけ働くので ruby-json は二乗になる。</li>
+<li><strong>呼び出しごとの固定費</strong>: JIT → ネイティブラッパー →
+<code>ext_method_trampoline</code> → <code>capi_dispatch</code>（<code>_setjmp</code>）→ cfunc で 1 回
+約 470 Ir。JIT がインライン化する Ruby のメソッドならほぼ 0 で、
+tinygql は 1 回の実行で StringScanner を約 980 万回呼ぶ。</li>
+</ol>
+<p>1 は直し（下記）、2 は層では消せないので <strong>strscan だけ Ruby 実装に戻した</strong>。
+stringio / zlib は C 拡張のまま。</p>
+<ul>
+<li><strong>strscan</strong>: <code>stdlib/strscan.rb</code> は #1800 前の実装（照合はバイト位置の
+suffix に対する <code>String#__strscan_match</code> 1 回、MatchData を作らず <code>$~</code>
+にも触れない）。<code>monoruby_capi/ext/strscan/</code> と
+<code>stdlib/strscan/strscan.rb</code> は削除し、<code>String#__strscan_match</code> /
+<code>RegexpInner::strscan_match(_bytes)</code> を戻した。ruby/spec
+<code>library/stringscanner</code> の 7F+58E は Ruby 側で直した: <code>fixed_anchor:</code>
+（と <code>fixed_anchor?</code>）、<code>scan_full</code> / <code>search_full</code>、<code>scan_byte</code> /
+<code>peek_byte</code>、<code>scan_integer(base: 10 | 16)</code>（strscan 3.1.3 以降の
+<code>0x</code> の扱い）、<code>named_captures</code>（失敗した照合のパターンも覚える）、
+<code>must_C_version</code>、<code>StringValue</code>（<code>to_str</code>）での <code>initialize</code> /
+<code>string=</code> / <code>concat</code>、負の <code>pos=</code>、負の <code>peek</code> の ArgumentError、
+CRuby と同じ <code>inspect</code>（前後 5 バイトをバイナリとして <code>dump</code>）。
+<code>fixed_anchor: true</code> のスキャナだけが特異モジュールから全体照合版の
+マッチャを受け取るので、ふつうのスキャナは照合ごとのフラグ判定も
+7 つ目の ivar（inline 枠は 6）も持たない。<code>initialize(str, options = nil)</code>
+は CRuby の <code>rb_scan_args("11")</code> の形で、<code>fixed_anchor:</code> は Hash の位置
+引数として届く（キーワードを受けるより安い）。</li>
+<li><strong>層の高速化</strong>（stringio / zlib と、ほかの C 拡張にも効く）:
+<ul>
+<li><code>rb_enc_compatible</code> / <code>rb_enc_check</code> は両方が String なら C で
+<code>enc_compatible_latter</code> を辿る。コードレンジは String のキャッシュを
+読む。core の <code>EncodedOperand</code> も String をコピーせずに持ち、キャッシュ
+済みのコードレンジを使う（<code>Encoding.compatible?</code> 自体も速くなった）。</li>
+<li><code>RSTRING_PTR</code> / <code>RSTRING_LEN</code> はヘッダの static inline で String セルを
+直接読む（inline / heap / 共有の 3 形、それ以外は関数に落ちる）。
+レイアウトは <code>string.rs</code> の const assert で固定。<code>rb_enc_get</code> は
+String のエンコーディングタグ（+ ペイロード）をキーにした 64 要素の
+表を引く。</li>
+<li><code>rb_reg_prepare_re</code>: 7 ビットの subject には core の <code>engine_for</code> /
+CRuby の <code>rb_reg_prepare_enc</code> と同じく US-ASCII のエンジンを渡す
+（<code>RegexpInner::ascii_eligible</code>）。</li>
+<li><code>ext.rs</code>: メソッド表を <code>Vec&lt;Option&lt;ExtMethod&gt;&gt;</code> に、トランポリンは
+引数を 16 要素のスタック配列にコピーし、可変長引数のメソッドは
+固定 8 スロット + あふれた分の Array（<code>set_native_variadic</code>）で受ける
+（引数ごとの Array 確保をやめた）。</li>
+</ul>
+</li>
+<li><strong>結果</strong>（release、ruby-bench の反復の中央値）: #1800 前 → この段階で
+ruby-json 172 → 170 ms、tinygql 172 → 172、liquid-compile 25 → 26、
+graphql 18 → 18。liquid-compile の残り（+0.7% Ir）は
+<code>initialize</code> の省略可能引数で <code>StringScanner.new</code> が JIT の inline
+構築（frameless の <code>initialize</code>）から外れる分。C 拡張のままの層の
+効果は段階 11 比で <code>StringIO#write</code> のループ −13% Ir、<code>gets</code> −8%。
+ruby/spec <code>library/stringscanner</code> 240 / <code>stringio</code> 703 / <code>zlib</code> 148 例
+すべて通過。</li>
+</ul>
+<h3 id="322-socket-も-cruby-の-c-拡張に段階-14"><a class="header" href="#322-socket-も-cruby-の-c-拡張に段階-14">3.22 socket も CRuby の C 拡張に（段階 14）</a></h3>
+<p><code>src/builtins/socket.rs</code>（2,900 行のネイティブ実装）と <code>stdlib/socket.rb</code> の
+上乗せは、ruby/spec の <code>library/socket</code> で 1169 例中 139F+557E 落ちていた
+（CRuby は 1463 例）。CRuby 4.0.6 の <code>ext/socket</code> をそのまま層でビルドし、
+<code>stdlib/socket.rb</code> は CRuby の <code>ext/socket/lib/socket.rb</code>（<code>require 'socket.so'</code>）
+にした。</p>
+<ul>
+<li><strong>ソース</strong>: <code>monoruby_capi/ext/socket/</code>（<code>.c</code> / <code>.h</code>、生成済みの
+<code>constdefs.c</code> / <code>constdefs.h</code>）。CRuby の内部ヘッダ（<code>internal.h</code>、
+<code>internal/*.h</code>）は使う数関数だけを宣言する代役を同じ場所に置いた。
+<code>extconf.h</code> は extconf.rb の検査結果: Linux（glibc、x86-64 / aarch64）は
+実行した記録、macOS は同じ検査からの導出（BSD の <code>sa_len</code> 類、
+<code>getpeereid</code>、<code>struct tcp_info</code> なし）。Linux は <code>_GNU_SOURCE</code>、macOS は
+<code>__APPLE_USE_RFC_3542</code> を足す（Ext の <code>linux</code> / <code>macos</code> 欄）。</li>
+<li><strong><code>rb_io_t</code></strong>: monoruby の IO に <code>struct rb_io</code> は無い。<code>GetOpenFile</code> /
+<code>MakeOpenFile</code> / <code>RFILE(io)-&gt;fptr</code> は層が持つ <code>struct rb_io</code> を、それを求めた
+Ruby 呼び出し（owner フレーム）の間だけ渡す。中身は ABI <code>io_state</code> で
+オブジェクトから埋め（fd、FMODE ビット、読み込み済みバッファ）、
+<code>io_update</code> で書き戻す: 新しいオブジェクトの <code>fd</code> に入れた記述子はその IO が
+引き取り、<code>close_read</code> が落とした <code>FMODE_READABLE</code> はその向きを閉じ、
+インタプリタが使わない FMODE ビット（<code>FMODE_NOREVLOOKUP</code>、<code>FMODE_UNIX</code> …）は
+<code>IoInner</code> の欄に残り、消費した <code>rbuf</code> は捨てる。書き戻しは Ruby を呼ぶ前
+（<code>funcall</code> の入口）とフレームの終わり、呼んだ後は読み直すので、Ruby 側の
+<code>close</code> は CRuby と同じく <code>fd == -1</code> に見える。</li>
+<li><strong>待ち</strong>: <code>rb_io_wait</code> はファイバースケジューラがあればその <code>io_wait</code> の答えを
+そのまま、無ければ <code>IO#wait</code>（<code>IO#timeout</code> を既定に。<code>IO#timeout</code> /
+<code>timeout=</code> は今回足した。インタプリタ自身の read / write は見ない）、
+時間切れは <code>false</code>。<code>rb_io_maybe_wait*</code>、<code>rb_wait_for_single_fd</code>、
+<code>rb_thread_fd_select</code>（<code>rb_fdset_t</code>）は GVL を外した <code>poll</code> / <code>select</code>。
+<code>rb_io_blocking_region</code> は記述子が非ブロッキングなら GVL を持ったまま呼ぶ
+（拡張のソケットは全部 <code>SOCK_NONBLOCK</code> で、EAGAIN は <code>rb_io_wait</code> へ行くので
+すぐ返る。recv ごとの GVL の手放しと取り直しが無くなり、関数内の
+<code>RSTRING_PTR</code> も安全）。ブロッキングなら GVL を外す。</li>
+<li><strong>他に層に足したもの</strong>: <code>rb_thread_check_ints</code>（GVL を一度手放して保留の
+割り込みを受ける）、<code>rb_thread_prevent_fork</code>、<code>rb_readwrite_syserr_fail</code>
+（<code>IO::EAGAINWaitReadable</code> など）、<code>rb_fiber_scheduler_*</code>、
+<code>rb_eIOTimeoutError</code> / <code>rb_mWaitReadable</code> / <code>rb_mWaitWritable</code>、<code>RB_INT2NUM</code> 類、
+<code>UIDT2NUM</code> / <code>GIDT2NUM</code>、<code>rb_nogvl</code> での <code>errno</code> の持ち越し（CRuby と同じく
+呼び出し側が失敗した syscall の <code>errno</code> を読む）。</li>
+<li><strong><code>rb_str_modify</code> がバッファを潰していた</strong>: <code>str_cptr</code> は長さの位置に NUL を
+書くので、<code>rb_str_modify_expand</code> した容量に recv してから <code>rb_str_modify</code> +
+<code>rb_str_set_len</code> する形（<code>read_nonblock</code> / <code>recv</code> の出力バッファ）で先頭バイトが
+0 になった。ABI <code>str_modify</code> は共有の切り離しとコードレンジの破棄だけをする。</li>
+<li><strong>IO のサブクラスの <code>new</code></strong>: <code>IO.new</code> はネイティブで <code>initialize</code> を通らずに
+ストリームを作っていた。<code>initialize</code> を自前で持つサブクラス（ソケットの
+クラス）は Class#new と同じ allocate + initialize に回す（<code>builtins/io.rb</code>）。</li>
+<li><strong>結果</strong>: ruby/spec <code>library/socket</code> 1463 例で 1F（IO#close が待っている
+ファイバーをスケジューラの <code>fiber_interrupt</code> で起こす、コア側の 4.0 の機能）、
+<code>library/net-ftp</code> 461 例で 4E（すべて OpenSSL::SSL の定数。§3.23 で 0E）。
+両スレッドモデルで同じ。</li>
+</ul>
+<h3 id="323-openssl-も-cruby-の-c-拡張に段階-15"><a class="header" href="#323-openssl-も-cruby-の-c-拡張に段階-15">3.23 openssl も CRuby の C 拡張に（段階 15）</a></h3>
+<p><code>stdlib/openssl.rb</code> は Digest / HMAC / PBKDF2 / KDF を <code>ext/digest</code> の上に、
+Cipher の AES-GCM / CBC を <code>ext/openssl</code>（RustCrypto）の上に Ruby で書き、
+PKey / X509 / SSL は読み込めるだけの空の殻だった（ruby/spec <code>library/openssl</code>
+171 例中 21F+66E、<code>library/net-ftp</code> は <code>OpenSSL::SSL</code> の定数で落ちる）。
+CRuby 4.0.6 の <code>ext/openssl</code> をそのまま層でビルドし、システムの OpenSSL
+（Linux は libssl-dev、macOS は Homebrew の openssl@3）に動的リンクする。
+<code>stdlib/openssl.rb</code> と <code>stdlib/openssl/*.rb</code> は CRuby の <code>ext/openssl/lib/</code>
+（<code>require 'openssl.so'</code>）。<code>ext/openssl</code> crate は削除した。</p>
+<ul>
+<li><strong>OpenSSL の見つけ方</strong>（<code>build.rs</code> <code>openssl_link</code>）: openssl-sys と同じ順で
+<code>OPENSSL_DIR</code>（<code>&lt;dir&gt;/include</code>、<code>&lt;dir&gt;/lib</code>）、<code>pkg-config openssl</code>、
+Homebrew の keg-only な <code>openssl@3</code>（pkg-config の既定の探索路に無い）、
+コンパイラ自身の探索路。<code>openssl/ssl.h</code> が見つからなければ拡張は作らず
+警告だけ出す（<code>require "openssl"</code> が LoadError になる。monoruby 自体は動く）。
+<code>extconf.h</code> は OpenSSL 3.x に対する extconf.rb の検査結果。</li>
+<li><strong>層に足したもの</strong>: <code>rb_attr</code>（<code>rb_define_attr</code> と同じく常に public。
+C から <code>attr_reader</code> を呼ぶと拡張を require した場所の可視性、トップレベルの
+private になる）、<code>rb_str_drop_bytes</code>、<code>ruby_verbose</code> / <code>ruby_debug</code>
+（<code>rb_ruby_verbose_ptr</code>: 呼ぶたびにグローバルから読み直すポインタ）、
+<code>rb_thread_call_with_gvl</code>（GVL を外した区間の中からは呼ばない: 鍵生成の
+割り込み確認だけが使い、区間が返ってから届く）、<code>RHASH_SET_IFNONE</code>、
+<code>ruby/assert.h</code>（<code>RUBY_DEBUG</code> なしの CRuby と同じく検査しない）。</li>
+<li><strong><code>rb_obj_class</code></strong>: <code>rb_class_of</code> を返していたので、クラスオブジェクトには
+そのメタクラスが返り、<code>StringValue(klass)</code> の TypeError が
+<code>#&lt;Class:OpenSSL::Digest::SHA1&gt;</code> になった。ABI <code>obj_class</code> で特異クラスを
+飛ばした本当のクラスを返す。</li>
+<li><strong><code>Digest::Class</code></strong>（monoruby の Ruby 実装 <code>stdlib/digest.rb</code>）: CRuby の
+digest.c と同じく <code>hexdigest(*args)</code> は <code>digest(*args)</code> を通る
+（<code>OpenSSL::Digest.digest(name, data)</code> が引数の順を入れ替えて再定義する）。
+引数なしの <code>Instance#digest</code> は複製の <code>finish</code>（OpenSSL::Digest の <code>finish</code>
+は読んだ状態を消費する）。</li>
+<li><strong>結果</strong>: ruby/spec <code>library/openssl</code> 173 例 / <code>library/net-ftp</code> 461 例とも
+0F 0E。</li>
+</ul>
+<h3 id="324-ホストの-cruby-が入れた-gem-の-c-拡張を-monoruby-向けに建て直す段階-16"><a class="header" href="#324-ホストの-cruby-が入れた-gem-の-c-拡張を-monoruby-向けに建て直す段階-16">3.24 ホストの CRuby が入れた gem の C 拡張を monoruby 向けに建て直す（段階 16）</a></h3>
+<p>ruby-bench のハーネスはホストの CRuby で <code>bundle install</code> し、monoruby は
+そのバンドルを <code>Bundler.setup</code> で使う。gem の <code>.so</code> は CRuby のヘッダで
+ビルドされているので読めない（§2）。graphql-native（graphql-c_parser）と
+liquid-c はこれで止まっていた。</p>
+<ul>
+<li><strong>再ビルド</strong>: <code>require</code> が CRuby 向けの <code>.so</code> に当たると
+（<code>RequireLoad::Foreign</code>、判別はこれまでどおりシンボル表）、
+<code>Executor::build_host_extension</code> が <code>stdlib/monoruby_hooks/host_extension.rb</code>
+の <code>Gem::MonorubyHostExtension.build</code> を呼ぶ。<code>.so</code> を含む gem を
+<code>Gem.loaded_specs</code> から（なければ全 spec から）探し、拡張がすべて
+<code>extconf.rb</code> のときだけ、gem のツリーを一時ディレクトリに写して
+（ホストのツリーは読むだけ）ホストのビルド残り（<code>*.o</code> / <code>*.so</code>）を消し、
+<code>Gem::Ext::ExtConfBuilder</code> で層に対してビルドする。置き場所は monoruby の
+gem home の <code>host_extensions/&lt;platform&gt;/&lt;gem&gt;-&lt;version&gt;/</code>（gem の
+<code>extension_dir</code> と同じ並び）で、<code>$LOAD_PATH</code> の先頭に足すので、同じ gem の
+ほかの拡張ファイルはそのまま見つかる。<code>gem.build_complete</code> に gem のパスと
+<code>libmonoruby_capi.a</code> の大きさ・mtime を書き、層が変われば建て直す。
+並行実行は flock で 1 回に絞る。失敗はログ（<code>&lt;gem&gt;.gem_make.out</code>）を残して
+1 度だけ警告し、元の LoadError を返す。extconf と make は
+<code>Bundler.with_unbundled_env</code> の中で走る（子の monoruby が
+<code>-rbundler/setup</code> でベンチのバンドルを立ち上げないように）。
+<code>bin/test-gems</code> の「the host-installed extension is rebuilt for monoruby」（もと <code>tests/mkmf.rs</code> の <code>host_installed_gem_extension_is_rebuilt</code>）。</li>
+<li><strong>alloc 関数が self を覚える</strong>（liquid-c の <code>body-&gt;self</code>）: 遅延 alloc
+（§3.7）は一時オブジェクトに alloc 関数を走らせて記録を本物に移すので、
+記録の中に保存された <code>self</code> が一時オブジェクトを指していた。alloc 関数の
+実行中は「いま埋めている本物」（<code>pending_alloc</code>）を覚え、同じクラスの
+<code>Data_Wrap_Struct</code> / <code>TypedData_Wrap_Struct</code> はその本物を返す。</li>
+<li><strong><code>rb_str_capacity</code></strong>: 空の String や共有バッファの String に 0 を返して
+いたので、「容量が足りなければ倍にする」ループ（liquid-c の
+<code>c_buffer</code>）が止まらなかった。CRuby の埋め込み容量 23 を下限に、共有なら
+長さを答える（<code>RStringInner::c_capacity</code>）。</li>
+<li><strong><code>ruby_vsnprintf</code> の無限ループ</strong>: <code>SUBST_PUT(ch)</code> がバッファに空きがある
+ときしか引数を評価せず、<code>digits[--nd]</code> の副作用が飛んで <code>%lld</code> の桁が
+尽きなかった（<code>snprintf(NULL, 0, ...)</code> で必ず起きる）。引数は 1 度だけ
+評価する。</li>
+<li><strong>足した API</strong>: <code>rb_check_symbol</code> / <code>rb_check_symbol_cstr</code> /
+<code>rb_check_id_cstr</code>（ABI <code>intern_check</code>: 既に intern されていれば返し、
+なければ intern しない）、<code>rb_obj_encoding</code>、<code>rb_str_dup_frozen</code>、
+<code>rb_utf8_str_new_literal</code>、<code>RB_NUM2LL</code> 系マクロ、<code>&lt;alloca.h&gt;</code>、
+<code>ruby/vm.h</code> の <code>ruby_vm_at_exit</code>（プロセス終了時に逆順で呼ぶ）。
+<code>tests/capi/capi_gaps.c</code>。</li>
+</ul>
+<h2 id="4-abi-への追加mrapi末尾に追記版は据え置き"><a class="header" href="#4-abi-への追加mrapi末尾に追記版は据え置き">4. ABI への追加（<code>MrApi</code>、末尾に追記、版は据え置き）</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>項目</th><th>用途</th></tr>
+</thead>
+<tbody>
+<tr><td><code>define_method_data</code></td><td><code>data</code> ポインタ付きのメソッド登録（<code>capi_dispatch</code> 1 本で全メソッドを受ける）</td></tr>
+<tr><td><code>str_cptr</code></td><td><code>RSTRING_PTR</code>: NUL 終端・書き込み可能な自前バッファ</td></tr>
+<tr><td><code>str_resize</code> / <code>str_cat</code></td><td><code>rb_str_resize</code> / <code>rb_str_set_len</code> / <code>rb_str_cat</code>（frozen チェック付き）</td></tr>
+<tr><td><code>ary_ptr</code></td><td><code>RARRAY_CONST_PTR</code> / <code>RARRAY_LEN</code></td></tr>
+<tr><td><code>gc_register_address</code> / <code>gc_unregister_address</code></td><td><code>rb_gc_register_address</code></td></tr>
+<tr><td><code>class_set_alloc</code></td><td>定義済みクラスをネイティブにする（<code>rb_define_alloc_func</code>、<code>Data_Wrap_Struct</code>）/ alloc を外す（<code>rb_undef_alloc_func</code>）</td></tr>
+<tr><td><code>native_take</code></td><td>ペイロードを解放せずに外す（遅延 alloc でできたオブジェクトから本物へ移す）</td></tr>
+<tr><td><code>call_super</code></td><td><code>rb_call_super</code></td></tr>
+<tr><td><code>regexp_prepare</code> / <code>regexp_ptr</code></td><td><code>rb_reg_prepare_re</code> / <code>RREGEXP_PTR</code>: monoruby が持つ <code>regex_t</code>（§3.13）</td></tr>
+<tr><td><code>onig_api</code></td><td><code>MrOnigApi</code>: monoruby 内の Onigmo の関数群（<code>onig_search</code> ほか）</td></tr>
+<tr><td><code>enc_precise_mbclen</code></td><td><code>rb_enc_precise_mbclen</code> を monoruby の encoding 走査で</td></tr>
+<tr><td><code>keyword_given</code></td><td><code>rb_keyword_given_p</code>: 入ってきた call site のキーワード有無（§3.14）</td></tr>
+<tr><td><code>enc_codepoint</code></td><td><code>rb_enc_codepoint_len</code> を monoruby の復号で（UTF-8 以外も）</td></tr>
+<tr><td><code>backref_get</code> / <code>backref_set</code></td><td><code>rb_backref_get</code> / <code>rb_backref_set</code>: 呼び出し元 Ruby フレームの <code>$~</code>（C メソッド内の照合はそこに入るので、拡張が退避・復元する。date のパーサが行う）</td></tr>
+<tr><td><code>gvar_hook</code></td><td><code>rb_define_hooked_variable</code> 系: グローバル変数の読み書きを data ポインタ付きの C 関数に委ねる（setter NULL で読み取り専用、§3.18）</td></tr>
+</tbody>
+</table>
+</div>
+<p>| <code>lastline_get</code> / <code>lastline_set</code> | <code>rb_lastline_get</code> / <code>set</code>: 呼び出し元 Ruby フレームの <code>$_</code>（<code>StringIO#gets</code>） |
+| <code>obj_frozen</code> | <code>OBJ_FROZEN</code> を <code>frozen?</code> の呼び出しなしで |
+| <code>gvar_get</code> / <code>gvar_set</code> | <code>rb_gv_get</code> / <code>rb_gv_set</code>（フック込み、<code>$/</code> など） |
+| <code>funcall_kw</code> | <code>rb_funcallv_kw</code> 系 |
+| <code>str_rptr</code> | <code>RSTRING_PTR</code> の読み取り専用版: 共有バッファの String をコピーせずに読む |
+| <code>str_subseq</code> / <code>str_dup</code> / <code>str_capacity</code> | <code>rb_str_subseq</code> / <code>rb_str_dup</code> / <code>rb_str_capacity</code> |
+| <code>str_enc_name</code> / <code>str_set_enc</code> / <code>str_coderange</code> | <code>rb_enc_get</code>（プロセス寿命の名前ポインタ）/ <code>rb_enc_associate</code> / <code>rb_enc_str_coderange</code>（キャッシュ付き） |
+| <code>thread_current</code> / <code>thread_local_aref</code> | <code>rb_thread_current</code> / <code>rb_thread_local_aref</code> をディスパッチなしで（§3.20） |
+| <code>obj_freeze</code> | <code>rb_obj_freeze</code> を <code>Kernel#freeze</code> の呼び出しなしで |
+| <code>io_state</code> / <code>io_update</code> | 層の <code>struct rb_io</code> と IO オブジェクトの同期（§3.22） |
+| <code>str_modify</code> | <code>rb_str_modify</code>: 長さより後ろのバイトに触れない（§3.22） |
+| <code>obj_class</code> | <code>rb_obj_class</code>: 特異クラスを飛ばした本当のクラス（§3.23） |
+| <code>intern_check</code> | <code>rb_check_symbol_cstr</code> / <code>rb_check_id_cstr</code>: intern 済みの名前だけを返す（§3.24） |</p>
+<p>あわせて <code>ary_push</code> / <code>hash_set</code> が frozen なレシーバを拒むようにした
+（以前は素通りしていた）。</p>
+<h2 id="5-段階計画"><a class="header" href="#5-段階計画">5. 段階計画</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>段階</th><th>内容</th><th>状態</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>ローダ（<code>monoruby_capi_init</code> 判別、<code>$LOAD_PATH</code> 上の <code>.so</code>）、<code>ruby.h</code> 互換ヘッダ、<code>capi.c</code>: クラス / モジュール / メソッド定義（arity -2〜15）、即値・数値・文字列・シンボル・配列・ハッシュ・Range、<code>rb_funcall</code> 系、ブロック（<code>rb_yield</code> 系、<code>rb_block_proc</code>）、例外（<code>rb_raise</code>、<code>rb_protect</code> / <code>rb_ensure</code> / <code>rb_rescue2</code> / <code>rb_jump_tag</code>）、<code>rb_scan_args</code> / <code>rb_get_kwargs</code>、ivar / 定数 / cvar / gvar、GC 登録、<code>rb_sprintf</code>（<code>PRIsVALUE</code>）、最小限の encoding、<code>rb_thread_call_without_gvl</code></td><td>済（<code>tests/capi.rs</code>: 同じ C ソースを CRuby と monoruby で動かし出力一致）</td></tr>
+<tr><td>2</td><td><code>Data</code> / <code>TypedData</code>（<code>TypedData_Make_Struct</code>、<code>DATA_PTR</code> の lvalue、dmark / dfree）、<code>rb_define_alloc_func</code> / <code>rb_undef_alloc_func</code>、<code>rb_block_call</code> / <code>rb_proc_new</code> / <code>rb_iterate</code> / <code>rb_iter_break</code>（C 関数をブロックとして渡す）、<code>rb_call_super</code>、<code>rb_struct_*</code>、<code>rb_obj_call_init</code>、<code>rb_class_new</code></td><td>済（§3.7〜3.9、<code>tests/capi/capi_data.c</code>）。<code>rb_keyword_given_p</code> は段階 7</td></tr>
+<tr><td>3</td><td><code>RbConfig::CONFIG</code>（<code>rubyhdrdir</code> などを install root に）、<code>mkmf</code> が monoruby を相手に <code>Makefile</code> を作れること、<code>capi.c</code> を <code>libmonoruby_capi.a</code> として <code>LIBRUBYARG</code> に、<code>gem install</code> で C 拡張 gem がビルドされ <code>extensions/&lt;arch&gt;/…</code> から読めること</td><td>済（§3.10、<code>tests/mkmf.rs</code> と <code>bin/test-gems</code>）。gem home は monoruby 専用</td></tr>
+<tr><td>4</td><td>実 gem で面積を詰める（<code>rb_io_*</code>、<code>rb_enc_*</code>、Bignum 系、<code>ALLOCV</code>、<code>ruby/util.h</code>、シンボル可視性）。<code>bcrypt</code> と <code>msgpack</code> が CRuby と一致</td><td>済（§3.11、<code>bin/test-gems</code>）。<code>json</code> は段階 8、<code>strscan</code> は段階 6</td></tr>
+<tr><td>5</td><td><code>st_table</code>（<code>ruby/st.h</code> + CRuby の <code>st.c</code>）</td><td>済（§3.12、<code>tests/capi/capi_st.c</code>）</td></tr>
+<tr><td>6</td><td><code>ruby/re.h</code>（Onigmo を <code>MrOnigApi</code> 経由で、<code>rb_reg_prepare_re</code> / <code>rb_reg_onig_match</code>、<code>rb_enc_precise_mbclen</code> を本物に、<code>require</code> の <code>.so</code> 解決）</td><td>済（§3.13、<code>tests/capi/capi_re.c</code>、<code>bin/test-gems</code> の strscan）</td></tr>
+<tr><td>7</td><td>Time API（<code>rb_time_*</code>、<code>rb_timespec_now</code>）、<code>rb_keyword_given_p</code>、UTF-8 以外の <code>rb_enc_codepoint_len</code>、<code>OBJ_INIT_COPY</code>、<code>UNREACHABLE</code>、config.h の時刻系 <code>HAVE_*</code>、<code>HAVE_RUBY_*_H</code></td><td>済（§3.14、<code>tests/capi/capi_time.c</code>、<code>bin/test-gems</code> の strptime / yajl-ruby）</td></tr>
+<tr><td>8</td><td>拡張内の <code>VALUE</code> を CRuby のビット列に（<code>Qfalse == 0</code>）、層が境界で変換</td><td>済（§3.15、<code>tests/capi/capi_value.c</code>、<code>bin/test-gems</code> の json 2.18.0 と 3.1.0）</td></tr>
+<tr><td>9</td><td>層に無い API への参照はロードを通し呼ばれたら NotImplementedError（スタブアーカイブ）、CRuby の <code>ext/date</code> を層でビルドして同梱（<code>require "date"</code> / <code>time</code> / YAML）、1 文字演算子 ID、<code>RETURN_ENUMERATOR</code>、<code>$~</code> の退避復元 ABI、mkmf <code>depend</code> 用の CRuby ヘッダ名</td><td>済（§3.16〜3.17、<code>tests/capi/capi_ids.c</code>、<code>tests/date.rs</code>、ruby/spec <code>library/date</code> / <code>datetime</code> 全通過）</td></tr>
+<tr><td>10</td><td>C で裏打ちされたグローバル変数（<code>rb_define_*_variable</code>、ABI <code>gvar_hook</code>）、C++ の ANYARGS overload（<code>ruby/backward/cxxanyargs.hpp</code>）、<code>HAVE_RB_DEFINE_ALLOC_FUNC</code>、alloc 関数が置いた ivar の引き継ぎ、<code>rb_obj_instance_eval</code> 系、<code>strlcpy</code>、<code>.so</code> の判別を dlopen からシンボル表へ。gosu（SWIG の C++ ラッパー）がビルドでき dewasm の DOOM が動く</td><td>済（§3.18、<code>tests/capi/capi_vars.c</code>、<code>tests/capi/capi_cxx.cpp</code>）</td></tr>
+<tr><td>11</td><td>CRuby の <code>ext/strscan</code> / <code>ext/stringio</code> / <code>ext/zlib</code> を層でビルドして同梱（monoruby 専用実装と <code>ext/zlib</code> を削除）、IO / encoding / econv / mutex の API、GVL 再取得の直列化省略、1 プロセス複数インタプリタでの拡張マッピング分離</td><td>済（§3.19、ruby/spec <code>library/zlib</code> / <code>stringio</code> / <code>stringscanner</code> 全通過）</td></tr>
+<tr><td>12</td><td>bigdecimal gem 4.0.1 の C 拡張を層でビルドして同梱（Ruby 実装を削除）、<code>ruby_snprintf</code>、スレッドローカル / freeze の ABI</td><td>済（§3.20、ruby/spec <code>library/bigdecimal</code> 全通過）</td></tr>
+<tr><td>13</td><td>strscan を Ruby 実装に戻す（呼び出しごとの層の固定費がトークナイザで支配的）、<code>rb_enc_check</code> の二乗コスト除去、<code>RSTRING_PTR</code> / <code>LEN</code> の inline 化、トランポリンの引数受け渡し</td><td>済（§3.21、ruby-bench の StringScanner 系 4 本が #1800 前の速度に、<code>library/stringscanner</code> 全通過）</td></tr>
+<tr><td>14</td><td>CRuby の <code>ext/socket</code> を層でビルドして同梱（<code>src/builtins/socket.rs</code> を削除）、<code>rb_io_t</code>、待ちと fd 集合の API、<code>IO#timeout</code></td><td>済（§3.22、ruby/spec <code>library/socket</code> 1463 例で 1F）</td></tr>
+<tr><td>15</td><td>CRuby の <code>ext/openssl</code> を層でビルドしシステムの OpenSSL にリンク（<code>ext/openssl</code> crate と Ruby 実装を削除）、<code>rb_attr</code>、<code>ruby_verbose</code>、<code>rb_obj_class</code> の ABI</td><td>済（§3.23、ruby/spec <code>library/openssl</code> / <code>net-ftp</code> 全通過）</td></tr>
+<tr><td>16</td><td>ホストの CRuby が入れた gem の C 拡張を層で建て直して読む、alloc 関数の self、<code>rb_str_capacity</code> の下限、<code>ruby_vsnprintf</code> の無限ループ、<code>rb_check_symbol</code> 系</td><td>済（§3.24、ruby-bench の graphql-native / liquid-c が完走、liquid-c の出力は CRuby と一致）</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="6-既知の制約"><a class="header" href="#6-既知の制約">6. 既知の制約</a></h2>
+<ul>
+<li><code>rb_scan_args</code> の <code>:</code> は「末尾の引数が Hash ならキーワード」とみなす
+（<code>f({a: 1})</code> と <code>f(a: 1)</code> を区別しない。<code>rb_keyword_given_p</code> は区別する、
+§3.14）。</li>
+<li><code>rb_protect</code> で捕まえた大域脱出（§5）は、<code>rb_errinfo</code> で取り出すと
+クラス <code>Exception</code> のオブジェクトに見える（<code>rb_jump_tag</code> で再送すれば
+元の脱出に戻る）。</li>
+<li>GC 中に走る <code>dfree</code> / mark 関数から C API の関数を呼ぶと止まる
+（markly の <code>RTYPEDDATA_DATA(self) = NULL</code>、sqlite3 の aggregate の
+finalize）。<code>rb_gc_mark</code> 系だけが使える。</li>
+<li><code>rb_iter_break</code> は隠し例外で実装しているので、<code>rb_block_call</code> /
+<code>rb_iterate</code> の外（<code>rb_funcall</code> で呼んだメソッドに渡した
+<code>rb_proc_new</code> の Proc の中など）で使うとその例外が外へ出る。</li>
+<li><code>rb_proc_new</code> の Proc は <code>Method#to_proc</code> 由来なので <code>lambda?</code> が true
+（CRuby は false）。arity は同じ -1。</li>
+<li>alloc 関数は遅延して呼ばれる（§3.7）。ペイロードが読まれるか、その
+インスタンスで C のメソッドが走るまでは alloc 関数はまだ走っておらず、
+alloc 関数が置く ivar も無い（§3.18）。写すのは <code>#instance_variables</code> に
+出る ivar だけで、隠し ivar は写らない。</li>
+<li>C で裏打ちされたグローバル変数の getter が raise しても、読み出しは
+警告を出して nil になる（VM / JIT の gvar 読み出しに例外経路が無い）。
+setter の例外は伝播する。</li>
+<li><code>cxxanyargs.hpp</code> は <code>rb_define_method</code> 系の template dispatcher と、
+<code>rb_hash_foreach</code> / <code>rb_fiber_new</code> / <code>rb_thread_create</code> の overload を
+持たない（前二者はマクロが受ける、後二者は層に無い）。</li>
+<li><code>dsize</code> / <code>dcompact</code> は使わない。<code>RUBY_TYPED_*</code> のフラグはすべて無視。</li>
+<li><code>rb_warn</code> は <code>Kernel#warn("warning: ...")</code>（ファイル名・行番号は付かない）。</li>
+<li><code>rb_gv_get</code> / <code>rb_gv_set</code> は <code>eval</code> 経由。</li>
+<li>mkmf の <code>create_header</code> は使えるが、<code>$(hdrdir)/ruby/backward/2/*</code> の中身
+は無い。<code>RbConfig::CONFIG["CC"]</code> は Linux では
+スナップショットの <code>gcc</code> のまま（<code>CC</code> 環境変数で上書きできる）。</li>
+<li><code>RARRAY_CONST_PTR</code> / <code>RARRAY_PTR</code> が指すのは要素のコピー（§3.15）。
+書き込みは Array に届かず、1 回の Ruby 呼び出しの中で 9 本目の Array の
+ポインタを取ると最初のものが使い回される。</li>
+<li><code>ruby/re.h</code> は <code>onig_new</code> と Onigmo のテーブル群を出さない（§3.13）。
+<code>OnigRegion</code> は CRuby より 8 バイト大きい（<code>history_root</code>）。
+<code>rb_reg_prepare_re</code> のバッファは解放されない。</li>
+<li><code>rb_enc_codepoint_len</code> が符号位置を組み立てるのは UTF-8 だけ（ほかの
+多バイト encoding では先頭バイトを返す）。<code>ENC_CODERANGE</code> は呼ぶたびに
+計算する。</li>
+<li><code>ALLOCV</code> の確保は例外で巻き戻ると解放されない（CRuby は String に
+載せて GC に任せる）。</li>
+<li>ホスト CRuby に同じ gem があると、<code>require "msgpack"</code> の Ruby 側
+（<code>lib/msgpack.rb</code>）はプローブ結果にあるホストの <code>lib/</code> から読まれ、
+<code>.so</code> だけ monoruby の gem home のものになる。<code>gem "msgpack"</code> で
+monoruby 側を先に activate すれば両方そろう。</li>
+<li><code>gem install</code> は monoruby の gem home に入れる。ホスト CRuby で
+入れた C 拡張 gem の <code>.so</code> は monoruby では読めない（stub のあるものは
+stub が読まれる）ので、monoruby で使うには monoruby で入れ直す。</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/encoding_char_iteration_design.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/native_extension_loading.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/encoding_char_iteration_design.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/native_extension_loading.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

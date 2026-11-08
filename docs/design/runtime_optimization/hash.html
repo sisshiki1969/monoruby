@@ -35,10 +35,10 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-b0bcc219.js";
+            window.path_to_searchindex_js = "../../searchindex-ca5246bb.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../../toc-8a4c8fb9.js"></script>
+        <script src="../../toc-9192be69.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,14 +182,14 @@
 <code>[]</code> / <code>[]=</code> / <code>key?</code> / <code>fetch</code> はアプリケーションのもっとも内側のループに
 現れる。yjit-bench の erubi では実行時間の 29 %、rack で 18 %、
 activerecord で 13 % が Hash 参照だった
-（<a href="../yjit_bench_slow_investigation_2026-09.html"><code>yjit_bench_slow_investigation_2026-09.md</code></a> §5.2）。</p>
+（2026-09 の yjit-bench 調査による）。</p>
 <p>この文書は、現在の Hash がどういう表現とどういう探索経路を持っているかを
 まとめ、そこに入れた最適化を計測とともに記録し、残っているコストと次の
 候補を優先順位付きで並べる。個々の API の意味論ではなく「1 回の参照に何が
 起きるか」に焦点を当てる。CRuby の <code>ar_table</code> / <code>st_table</code> と実装が
 どう違うかは §6 にまとめた。</p>
 <p><code>runtime_optimization/</code> の他の章（<a href="array.html">Array</a> / <a href="string.html">String</a> /
-<a href="regexp.html">Regexp</a>）と共通の前提は <a href="README.html">README.md</a> にある。</p>
+<a href="regexp.html">Regexp</a>）と共通の前提は <a href="./">README.md</a> にある。</p>
 <hr>
 <h2 id="1-3-つの表現"><a class="header" href="#1-3-つの表現">1. 3 つの表現</a></h2>
 <p>Hash の表現は <code>RValue</code> ヘッダの型別メタデータバイト（<code>Metadata::ty_flags</code>）に

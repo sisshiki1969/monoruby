@@ -1,0 +1,715 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Native extension loading (Japanese) - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-ca5246bb.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-9192be69.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="ネイティブライブラリの動的ロード--同梱をやめる方法の検討"><a class="header" href="#ネイティブライブラリの動的ロード--同梱をやめる方法の検討">ネイティブライブラリの動的ロード — 同梱をやめる方法の検討</a></h1>
+<p>monoruby には C 拡張を含め、外部の C / Rust ライブラリを実行時にロードする
+仕組みがない。そのため C 拡張 gem に相当する機能は「gem の Ruby 半分を
+vendoring し、ネイティブ半分を Rust で書き直し、依存する C ライブラリを
+<code>cc</code> で同梱する」形で <strong>すべてコアのバイナリとワークスペースの中に</strong> 抱えて
+いる。本稿は、この状態を解消する方法として、(A) CRuby C API 互換層、(B)
+monoruby 独自の動的拡張 ABI、(C) システム共有ライブラリの dlopen、(D) Cargo
+feature 分割、(E) 別プロセス、(F) WASM、(G) Fiddle 上の Ruby バインディング
+を比較し、B を土台に段階的に進める案を推奨する。</p>
+<p><code>doc/c_extention.md</code>（CRuby C 拡張ロードの設計検討、2026-08）と
+<code>doc/nokogiri.md</code> §2（nokogiri での A / B / 純 Rust の比較）の続きにあたる。
+前者の Path B / C の結論は変わらないが、本稿は「新しい拡張を書けるように
+する」より先に「<strong>今抱えているものを外へ出す</strong>」ことを最初の目標に置く。</p>
+<hr>
+<h2 id="1-現状"><a class="header" href="#1-現状">1. 現状</a></h2>
+<h3 id="11-何をどれだけ抱えているか"><a class="header" href="#11-何をどれだけ抱えているか">1.1 何をどれだけ抱えているか</a></h3>
+<p><code>target/release</code>（x86-64 Linux、2026-09-17、master <code>7692aee</code>）の実測:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>項目</th><th>規模</th></tr>
+</thead>
+<tbody>
+<tr><td>バイナリ</td><td>16.5 MB。<code>ldd</code> は libc / libm / libgcc_s のみ（完全静的リンク）</td></tr>
+<tr><td>同梱 C ソース（ワークスペース内）</td><td>libxml2 5.3 MB + libxslt 1.4 MB + gumbo 1.3 MB（<code>libxml2-src/vendor/</code>）+ SQLite 9.5 MB（<code>libsqlite3-src/vendor/</code>）= <strong>17.5 MB</strong></td></tr>
+<tr><td>crate 経由で同梱ビルドされる C</td><td>zlib（<code>libz-sys</code> <code>static</code>）、libzstd 1.5.7（<code>zstd-sys</code>）、libffi（<code>libffi-sys</code>、macOS/aarch64 のみ system）、libyaml は Rust 移植（<code>libyaml-safer</code>）</td></tr>
+<tr><td>リンクされる C オブジェクト</td><td>libxml2.a 2.7 MB、libsqlite3.a 2.6 MB、libxslt.a 0.7 MB、libgumbo.a 0.6 MB ≒ <strong>6.6 MB</strong>（prism 1.5 MB / onigmo 1.1 MB はコアの一部）</td></tr>
+<tr><td>ネイティブ半分の Rust</td><td>約 11k 行 — <code>sqlite3.rs</code> 2.2k、<code>nokogiri/</code> 5k、<code>zlib.rs</code> / <code>zstd.rs</code> / <code>yaml.rs</code> / <code>json.rs</code> / <code>cipher.rs</code> / <code>digest.rs</code></td></tr>
+<tr><td>Ruby 半分の vendoring</td><td><code>gem/</code> 3.3 MB — prism 1.8 MB、nokogiri 0.6 MB、psych 0.2 MB、sqlite3 0.1 MB、msgpack / yajl / strptime / cool.io / zstd-ruby / gosu / ffi_c / bigdecimal</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>monoruby/src</code> でこれらの C crate に依存しているファイルは 6 つだけ
+（<code>fiddle.rs</code>, <code>nokogiri.rs</code>, <code>sqlite3.rs</code>, <code>yaml.rs</code>, <code>zlib.rs</code>, <code>zstd.rs</code>）で、
+依存は一方向（コア → 拡張）である。これは後述の分離が現実的である根拠になる。</p>
+<h3 id="12-この形になった-3-つの判断"><a class="header" href="#12-この形になった-3-つの判断">1.2 この形になった 3 つの判断</a></h3>
+<p>いずれも正しく、本稿でも前提として引き継ぐ。</p>
+<ol>
+<li><strong>CRuby ビルド済みの <code>.so</code> は原理的に読めない。</strong> <code>Value</code> のビット配置が
+CRuby の <code>VALUE</code> と違う（<code>Qnil</code> = <code>0x04</code> vs <code>0x08</code>、Fixnum タグ位置）ので、
+<code>.so</code> に埋め込まれた即値定数がそのままでは意味を持たない
+（<code>doc/c_extention.md</code> §5）。「ロードできる」ためには最低でも monoruby の
+ヘッダでの再コンパイルが要る。</li>
+<li><strong>汎用 FFI（Fiddle）経由はホットなライブラリには遅すぎる。</strong> activerecord
+では Fiddle 版 sqlite3 が 1 反復の <strong>35 %</strong> を占め、native builtin 化で 0 に
+なった（2026-09 の activerecord / liquid-il / rack 調査による）。
+1 クエリあたり 30 回前後の FFI 呼び出しで、各呼び出しの引数変換
+（<code>value_to_carg</code> / <code>bits_to_value</code>）と <code>ffi_call</code> が支配する。</li>
+<li><strong>CRuby と出力を byte 単位で一致させるには同じライブラリを使うしかない。</strong>
+nokogiri のエラーメッセージ・シリアライズ・XPath の細部は libxml2
+（nokogiri のパッチ入り）の挙動そのもの（<code>doc/nokogiri.md</code> §1）。
+zlib / zstd / libyaml も「同じ実装だから byte 一致」で検証している。</li>
+</ol>
+<h3 id="13-既にある土台"><a class="header" href="#13-既にある土台">1.3 既にある土台</a></h3>
+<ul>
+<li><strong>builtin の ABI は既に <code>extern "C"</code></strong>:
+<code>extern "C" fn(&amp;mut Executor, &amp;mut Globals, Lfp, BytecodePtr) -&gt; Option&lt;Value&gt;</code>
+（<code>executor.rs:16</code>）。JIT の inline cache も VM もこの関数ポインタを呼ぶ
+だけなので、動的ロードした関数を登録する受け口は事実上ある。</li>
+<li><strong><code>dlopen</code> / <code>dlsym</code> は実装済み</strong>: <code>Kernel.___dlopen</code> / <code>___dlsym</code>
+（<code>builtins/kernel.rs:4333</code>、<code>libc</code> の生 API、<code>dlerror</code> の排水込み）。</li>
+<li><strong>ネイティブ資源を持つオブジェクトの型がある</strong>: <code>ObjTy::NATIVE</code> と
+<code>NativeData { mark, dup, as_any }</code>（<code>value/rvalue.rs:258</code>）。
+<code>define_class_with_instance_ty(NATIVE)</code> で JIT がペイロードを ivar と
+誤認しない。GC は precise / non-moving なので、外部が持つ <code>Value</code> は
+「どこにあるかを教えてもらえれば」そのままマークできる（TruffleRuby の
+handle 二重化は不要）。</li>
+<li><strong>ブロッキング呼び出しのオフロード</strong>: <code>NativeOp::{Ffi, Sqlite, Flock, Fcntl, Open}</code>（<code>doc/threads.md</code> §9）。<code>Fiddle.___prepare</code> の
+<code>PREPARE_BLOCKING</code> フラグで Ruby 側から申告できる。</li>
+<li><strong>per-version の install root</strong>: <code>~/.monoruby/v&lt;ver&gt;/{lib,stub,builtins}</code>
+（<code>build.rs</code>）。ここに <code>ext/</code> を足せば、ABI の版違いは自然に避けられる。</li>
+<li><strong>require の解決順</strong>: <code>stub/</code> が <code>$LOAD_PATH</code> より先に pin されており
+（<code>globals/require.rs:263</code>）、<code>.rb</code> 候補が <code>.so</code> 候補より先に探索される。
+gem 自身の <code>.so</code> を stand-in が上書きする仕組みはこれで成立している。
+例外は monoruby 向けにビルドされた <code>.so</code>（C API 層経由の <code>gem install</code>、
+<code>doc/c_api.md</code> §3.11）: stand-in が当たった feature について <code>$LOAD_PATH</code>
+上に <code>ext::is_capi_extension</code> を満たす同名の <code>.so</code> があれば、そちらが
+stand-in に勝つ（<code>Store::built_extension_on_load_path</code>）。</li>
+<li><strong>例外は戻り値で伝える方針が確定している</strong>: builtin 内の panic は JIT
+フレーム（unwind 情報なし）越しに巻き戻せないので捕捉しない
+（<code>executor.rs:17</code> 付近のコメント）。<code>Option&lt;Value&gt;</code> + <code>set_error</code>。</li>
+</ul>
+<hr>
+<h2 id="2-選択肢"><a class="header" href="#2-選択肢">2. 選択肢</a></h2>
+<h3 id="a-cruby-c-api-互換層docc_extentionmd-の-path-a--c"><a class="header" href="#a-cruby-c-api-互換層docc_extentionmd-の-path-a--c">A. CRuby C API 互換層（<code>doc/c_extention.md</code> の Path A / C）</a></h3>
+<p><code>ruby.h</code> 互換ヘッダと <code>rb_*</code> シムを提供し、<code>gem install</code> の再コンパイルで
+既存 gem の C 拡張を monoruby 向けに生成して動かす。</p>
+<p>長所:</p>
+<ul>
+<li>gem エコシステムがそのまま手に入る。nokogiri / sqlite3 / pg / bcrypt /
+markly … を個別に移植する必要がなくなり、<code>gem/</code> の vendoring も要らなく
+なる。<strong>「抱えている」問題を根本から解く唯一の案</strong>。</li>
+<li><code>gem install</code> のフロー（<code>Gem::Ext::ExtConfBuilder</code> → <code>mkmf</code> → <code>make</code>）は
+Ruby で書かれているので、<code>RbConfig::CONFIG</code> を monoruby 値にすれば流用
+できる（旧稿 §6–7）。</li>
+</ul>
+<p>短所:</p>
+<ul>
+<li><strong>面積が巨大。</strong> nokogiri 一つで <code>rb_*</code> 201 シンボル、<code>TypedData_Get_Struct</code>
+77 箇所、<code>StringValueCStr</code> 85 箇所、<code>rb_funcall</code> 64 箇所。「よく使われる
+順に」積んでも、最初の実 gem が通るまでに数百シンボルが要る。</li>
+<li><strong><code>rb_raise</code> の longjmp 型例外。</strong> C 拡張は任意の深さから <code>rb_raise</code> を
+呼ぶ。monoruby は JIT フレームを unwind できないので、<code>rb_protect</code> 相当を
+<code>setjmp</code> で作り、C 呼び出しの境界（builtin trampoline の直下、JIT
+フレームを跨がない場所）で必ず受けてから <code>set_error</code> に変換する設計が
+要る。C 側のリソース解放は <code>rb_ensure</code> に頼る CRuby 流儀に従わせる。</li>
+<li><strong>GVL がなく green thread。</strong> <code>rb_thread_call_without_gvl</code> を
+<code>NativeOp</code> オフロードに写像する。<code>rb_thread_create</code> 等は対象外にする。</li>
+<li><strong>レイアウト前提マクロ。</strong> <code>RSTRING_PTR</code> / <code>RARRAY_PTR</code> は lazy
+materialize + pin、<code>RTYPEDDATA</code> は co-allocation で吸収し、<code>RARRAY_PTR[i] =</code>
+の lvalue 書き込みは諦める（旧稿 §4）。</li>
+<li><strong>性能。</strong> C 拡張のメソッドは JIT から不透明。今 <code>__take</code> / <code>___read</code> 等に
+付いているインライナは効かず、「CRuby と同じ速さ」が上限。</li>
+<li>前回検討時から進んだ点: <code>ObjTy::NATIVE</code> + <code>NativeData</code> がそのまま
+<code>TypedData</code> の受け皿になる（<code>doc/nokogiri.md</code> §5 の見立て通り）。</li>
+</ul>
+<h3 id="b-monoruby-独自の動的拡張-abic--rust-の-cdylib-を必要時に-dlopen"><a class="header" href="#b-monoruby-独自の動的拡張-abic--rust-の-cdylib-を必要時に-dlopen">B. monoruby 独自の動的拡張 ABI（C / Rust の cdylib を必要時に dlopen）</a></h3>
+<p><code>mr_*</code> 接頭辞の <strong>C ABI</strong> を定義し、<code>Init_&lt;name&gt;(MrContext*)</code> を <code>dlsym</code> して
+呼ぶ。今ある sqlite3 / nokogiri / zlib / zstd / psych のネイティブ半分を、
+この ABI の上に載る**別 crate（cdylib）**に分離し、<code>~/.monoruby/v&lt;ver&gt;/ext/</code>
+に置く。</p>
+<p>長所:</p>
+<ul>
+<li>コアバイナリから 6.6 MB の C オブジェクトと 11k 行の Rust が出ていき、
+コアのビルドから <code>cc</code> の C ビルドが消える。</li>
+<li><strong>C も Rust も同格の拡張</strong>になる。libxml2 のパッチや SQLite の版は
+コアの <code>Cargo.lock</code> から切り離せる。C で書く方が自然なもの（libxml2 の
+glue）は C のまま書ける。</li>
+<li>VM 側の受け口はほぼそのまま（§1.3）。<code>dlopen</code> も実装済み。</li>
+<li>新しい拡張を書く人向けの API が生まれる。A を後で積むときの下層にも
+そのままなる。</li>
+</ul>
+<p>短所・設計上の要点:</p>
+<ul>
+<li><strong>Rust cdylib は <code>monoruby</code> crate にリンクしてはいけない。</strong> Rust ABI は
+不安定、toolchain は nightly 固定、そしてコアには <code>thread_local!</code> が 31 個
+（<code>CODEGEN</code>、<code>ALLOC</code> を含む）ある。拡張側が <code>monoruby</code> をリンクすると
+静的変数が<strong>二重化</strong>して GC とコード生成が壊れる。拡張は <code>MrContext</code> に
+載せた**関数ポインタ表（vtable）**経由でしか VM に触れない、が鉄則。
+Rust 側には <code>monoruby-ext-sys</code>（C ヘッダの bindgen 相当）と薄い安全
+ラッパを別 crate で用意する（magnus / rb-sys の monoruby 版）。</li>
+<li><strong><code>Lfp</code> / <code>BytecodePtr</code> を ABI に晒さない。</strong> 晒すとフレームレイアウトが
+凍結される。拡張向けには
+<code>fn(MrContext*, self, argc, argv, block) -&gt; MrValue</code>（エラーはコンテキスト
+側のフラグ）の trampoline を挟む。引数コピー 1 回のコストは、実際に
+ネイティブ処理をする呼び出しに対しては測定できない。</li>
+<li>例外は戻り値で伝える（現行規約と同じ）。unwind は境界を跨がない。
+Rust 拡張は <code>panic = "abort"</code> か、境界で <code>catch_unwind</code> する。</li>
+<li>GC: 拡張が保持する <code>Value</code> は (a) <code>NativeData::mark</code> 相当のコールバック
+（オブジェクトに属するもの）と (b) per-call の pin stack（呼び出し中の
+一時値、旧稿 §3.6）で見せる。<code>mr_gc_register_address</code> 型の永続ルートも
+用意する（クラス定数などに使う）。</li>
+<li>Green thread: ブロッキング呼び出しは拡張側が <code>mr_call_blocking(fn, arg)</code>
+で申告し、<code>NativeOp</code> に落とす（今の <code>NativeOp::Sqlite</code> と同じ）。
+コールバック再入（sqlite3 の <code>create_function</code>、nokogiri の XPath
+ハンドラ）は <code>mr_funcall</code> で行い、その中で raise された例外は
+「stash して C から戻ってから再 raise」の現行規約を ABI として明文化する。</li>
+<li>失うもの: 拡張が定義するメソッドには JIT インライナを付けられない。
+今インライン化されているのは <code>Fiddle.___read</code> / <code>___write</code> などコア側の
+primitive なので、<strong>それらはコアに残せば</strong>実害はない。</li>
+<li>完全静的リンクの単一バイナリという配布上の利点は部分的に失う。ただし
+<code>ext/</code> を <code>build.rs</code> が同じ install root に置くなら、ユーザーから見た
+体験（<code>cargo install</code> して終わり）は変わらない。</li>
+</ul>
+<h3 id="c-システムの共有ライブラリを-dlopenrust-の-glue-はコアに残す"><a class="header" href="#c-システムの共有ライブラリを-dlopenrust-の-glue-はコアに残す">C. システムの共有ライブラリを dlopen（Rust の glue はコアに残す）</a></h3>
+<p>libxml2 / libsqlite3 / libz / libzstd を同梱せず、OS のものを実行時に
+<code>dlopen</code>。<code>libz-sys</code> の <code>static</code> feature を外すのと同じ発想を全ライブラリに
+広げる。</p>
+<p>長所:</p>
+<ul>
+<li>一番小さい一歩。17.5 MB の C ソースと <code>cc</code> ビルドが消える。Rust の glue
+はそのまま。</li>
+<li>Linux ディストリと macOS はどれも OS に持っている（macOS:
+<code>/usr/lib/libxml2.2.dylib</code>、<code>libsqlite3.dylib</code>、<code>libz.1.dylib</code>）。libffi は
+既に macOS/aarch64 で system 版に切り替えているので前例がある。</li>
+</ul>
+<p>短所:</p>
+<ul>
+<li><strong>版のブレ。</strong> nokogiri のパッチ入り libxml2 でなくなるので出力一致が
+崩れうる（nokogiri 自身が <code>--use-system-libraries</code> を公式にサポートして
+いるので「許容されるモード」ではある）。SQLite / zlib / zstd のマイナー
+版差は実用上ほぼ影響しない。</li>
+<li>動的ロードの<strong>仕組み</strong>は生まれない。「同梱を減らす」だけ。</li>
+<li>位置づけとしては B と組み合わせ、<strong>拡張ごとに <code>bundled</code> / <code>system</code> を
+選べる</strong>ようにするのが良い（<code>libz-sys</code> がやっている通り）。</li>
+</ul>
+<h3 id="d-cargo-feature-でのビルド時分割"><a class="header" href="#d-cargo-feature-でのビルド時分割">D. Cargo feature でのビルド時分割</a></h3>
+<p><code>nokogiri</code> / <code>sqlite3</code> / <code>zstd</code> / <code>psych</code> / <code>zlib</code> を optional feature にし、
+既定では全部付ける。</p>
+<p>長所: 半日で入る。不要な人のフットプリントは即減る。依存が一方向である
+ことの確認になり、B で crate 境界を切るときの下ごしらえになる。</p>
+<p>短所: 動的ロードではない。配布バイナリは結局全部入り。</p>
+<h3 id="e-別プロセス--ipc"><a class="header" href="#e-別プロセス--ipc">E. 別プロセス + IPC</a></h3>
+<p>ライブラリを helper プロセスで動かし、Ruby 側とは IPC。</p>
+<p>長所: クラッシュ隔離。green thread と相性が良い（ブロッキングが問題に
+ならない）。</p>
+<p>短所: 呼び出し粒度が細かい API（nokogiri の Node 操作、sqlite3 の <code>step</code>
+ごと）には遅すぎる。Fiddle の 35 % より悪くなる。バッチ型（画像変換など）
+以外には不適。</p>
+<h3 id="f-wasm-コンポーネントwasmtime"><a class="header" href="#f-wasm-コンポーネントwasmtime">F. WASM コンポーネント（wasmtime）</a></h3>
+<p>長所: サンドボックス、可搬性、ABI が仕様として安定。</p>
+<p>短所: wasmtime 自体が 10 MB 級で「フットプリント削減」と矛盾する。
+C ライブラリは wasi-sdk で別ビルドが要る。性能も落ちる。TruffleRuby が
+Sulong（同種の間接実行）を捨ててネイティブ実行に戻った理由
+（起動時間・warmup・互換性・配布サイズ、旧稿 §3.5）がそのまま当てはまる。
+見送り。</p>
+<h3 id="g-fiddle--ffi-上の-ruby-バインディングコールドなライブラリ向け"><a class="header" href="#g-fiddle--ffi-上の-ruby-バインディングコールドなライブラリ向け">G. Fiddle / ffi 上の Ruby バインディング（コールドなライブラリ向け）</a></h3>
+<p><code>gem/ffi_c.rb</code> が既にこの形（ffi gem の Ruby 半分を <code>Fiddle.___*</code> primitive
+の上で動かす）。gosu / cool.io のように「ロードできて落ちなければ良い」
+段階のものにはこれで十分で、ネイティブ層は要らない。ホットなものには
+使えない（§1.2 判断 2）。B の対象を絞る基準として使う。</p>
+<hr>
+<h2 id="3-比較"><a class="header" href="#3-比較">3. 比較</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>A: CRuby API 互換</th><th>B: 独自 C ABI 拡張</th><th>C: システム lib dlopen</th><th>D: feature 分割</th><th>G: Fiddle 上の Ruby</th></tr>
+</thead>
+<tbody>
+<tr><td>同梱 C ソースが消える</td><td>◎（gem が持つ）</td><td>◎（拡張 crate へ）</td><td>◎</td><td>×（feature 内に残る）</td><td>◎</td></tr>
+<tr><td>コアバイナリが縮む</td><td>◎</td><td>◎</td><td>○（glue は残る）</td><td>○（無効化時のみ）</td><td>◎</td></tr>
+<tr><td>既存 gem がそのまま動く</td><td>◎</td><td>×（移植要）</td><td>×</td><td>×</td><td>×</td></tr>
+<tr><td>出力の CRuby 一致</td><td>◎</td><td>◎（同梱時）</td><td>△（版依存）</td><td>◎</td><td>◎</td></tr>
+<tr><td>ホットな用途の速度</td><td>○（CRuby 並）</td><td>◎（今と同じ）</td><td>◎</td><td>◎</td><td>×（Fiddle 35 %）</td></tr>
+<tr><td>JIT インライナ</td><td>×</td><td>×（コア primitive は可）</td><td>◎</td><td>◎</td><td>◎（<code>___read</code> 等）</td></tr>
+<tr><td>例外モデルの追加作業</td><td>大（setjmp 境界）</td><td>小（現行規約のまま）</td><td>なし</td><td>なし</td><td>なし</td></tr>
+<tr><td>作業量</td><td>大（数百シンボル + 例外 / GVL モデル）</td><td>中（ABI 設計 + 5 拡張の分離）</td><td>小〜中</td><td>小</td><td>小</td></tr>
+<tr><td>他 gem への波及</td><td>大</td><td>中（新規は書きやすい）</td><td>なし</td><td>なし</td><td>なし</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="4-推奨-b-を土台に段階的にa-はその上に"><a class="header" href="#4-推奨-b-を土台に段階的にa-はその上に">4. 推奨: B を土台に段階的に、A はその上に</a></h2>
+<p><strong>B を土台にして段階的に進め、A は必要になったらその上に積む。</strong> 旧稿の
+Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出す」に変える。
+理由:</p>
+<ul>
+<li>B の機構（dlopen / <code>Init_*</code> / vtable / pin / ブロッキング申告 / コール
+バック再入）は A を作るときにも<strong>丸ごと下層として必要</strong>で、無駄にならない。</li>
+<li>逆に A から始めると、最初の実 gem が通るまでの間、抱えている問題は
+何も減らない。</li>
+<li>B の作業は既に書いてある 11k 行を<strong>ABI の向こうへ動かす</strong>ことが主で、
+新しい振る舞いをほとんど含まない。出力比較テスト
+（<code>tests/{nokogiri,sqlite3,zstd,…}.rs</code>）がそのまま回帰テストになる。</li>
+</ul>
+<h3 id="41-順序"><a class="header" href="#41-順序">4.1 順序</a></h3>
+<ol>
+<li><strong>D を先に入れる</strong>（数時間）。<code>nokogiri</code> / <code>sqlite3</code> / <code>zstd</code> / <code>psych</code> /
+<code>zlib</code> を feature にして、<code>builtins.rs</code> の登録が feature で切れる形に
+する。依存が一方向であることをコンパイラに確認させる。</li>
+<li><strong><code>mr_*</code> C ABI を定義し、<code>monoruby-ext-sys</code> を切り出す。</strong> 載せるのは
+今の 5 拡張が実際に使っている面だけ（§4.2）。<code>MrContext</code> の先頭に
+<code>abi_version: u32</code>。</li>
+<li><strong>既存 5 拡張を cdylib crate に分離</strong>し、<code>build.rs</code> が
+<code>~/.monoruby/v&lt;ver&gt;/ext/&lt;name&gt;.so</code> に置く。<code>require "nokogiri/nokogiri"</code>
+は stub ツリー解決（<code>require.rs:263</code>）の手前で <code>ext/</code> を探す分岐を足す
+だけ。<strong>sqlite3 から始める</strong>: 2.2k 行で自己完結し、<code>create_function</code> の
+コールバック再入と <code>NativeOp</code> オフロードの両方を含むので ABI の試金石に
+なる。次に zlib / zstd（handle table 型で最も単純）、psych（イベント
+コールバック）、最後に nokogiri（<code>NativeData</code> の寿命モデルが最も込み入る）。</li>
+<li><strong>C を拡張ごとの feature にする</strong>（<code>bundled</code> / <code>system</code>）。既定は
+<code>bundled</code> のままで出力一致を守り、ディストリ向けに <code>system</code> を選べる。</li>
+<li>その後、必要なら <strong>A</strong> を <code>mr_*</code> の上に「使われる順」で積む。
+<code>rb_define_method</code> → <code>mr_define_method</code>、<code>rb_raise</code> → setjmp を切った
+境界で <code>mr_set_error</code>、<code>TypedData_*</code> → <code>mr_native_*</code>、という薄い写像で
+始められる。</li>
+</ol>
+<h3 id="42-abi-に載せるもの5-拡張の実使用から"><a class="header" href="#42-abi-に載せるもの5-拡張の実使用から">4.2 ABI に載せるもの（5 拡張の実使用から）</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>区分</th><th>関数（案）</th><th>今の対応物</th></tr>
+</thead>
+<tbody>
+<tr><td>登録</td><td><code>mr_define_class(ctx, name, super, instance_ty)</code>, <code>mr_define_module</code>, <code>mr_define_method(ctx, class, name, fn, min, max, rest, kw[])</code>, <code>mr_define_singleton_method</code></td><td><code>define_class_with_instance_ty</code>, <code>define_builtin_func_with_kw</code></td></tr>
+<tr><td>値の生成・取り出し</td><td><code>mr_str_new(ctx, ptr, len)</code>, <code>mr_str_ptr_len</code>, <code>mr_int</code>, <code>mr_float</code>, <code>mr_sym</code>, <code>mr_ary_new</code> / <code>push</code> / <code>len</code> / <code>aref</code>, <code>mr_hash_new</code> / <code>aset</code> / <code>aref</code>, <code>mr_nil</code> / <code>true</code> / <code>false</code></td><td><code>Value::string_from_*</code>, <code>as_bytes</code>, <code>Value::integer</code> …</td></tr>
+<tr><td>ネイティブ資源</td><td><code>mr_native_new(ctx, class, data, vtable{mark, drop, dup})</code>, <code>mr_native_get(obj) -&gt; data</code></td><td><code>ObjTy::NATIVE</code>, <code>NativeData</code></td></tr>
+<tr><td>GC</td><td><code>mr_gc_mark(ctx, value)</code>（mark コールバック内でのみ有効）, <code>mr_gc_pin</code> / <code>unpin</code>（永続ルート）</td><td><code>Allocator::mark</code>, <code>GCRoot</code></td></tr>
+<tr><td>呼び出し・例外</td><td><code>mr_funcall(ctx, recv, name, argc, argv, block)</code>, <code>mr_yield</code>, <code>mr_set_error(ctx, class, msg)</code>, <code>mr_error_pending(ctx)</code></td><td><code>vm.invoke_method</code>, <code>set_error</code></td></tr>
+<tr><td>スレッド</td><td><code>mr_call_blocking(ctx, fn, arg)</code></td><td><code>NativeOp::Ffi</code> / <code>Sqlite</code></td></tr>
+<tr><td>文脈</td><td><code>mr_abi_version(ctx)</code>, <code>mr_ruby_version(ctx)</code></td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>Lfp</code> / <code>BytecodePtr</code> / <code>IdentId</code> / <code>ClassId</code> の内部表現は出さない
+（名前は <code>const char*</code>、クラスは不透明 handle）。</p>
+<h3 id="43-決めておくべき不変条件"><a class="header" href="#43-決めておくべき不変条件">4.3 決めておくべき不変条件</a></h3>
+<ol>
+<li>拡張は <code>monoruby</code> crate をリンクしない（Rust の型を一切晒さない C ABI）。</li>
+<li>C / Rust 境界を unwind は跨がない。例外は <code>mr_set_error</code> + 戻り値。</li>
+<li>拡張が保持する <code>Value</code> は必ず <code>mark</code> コールバックか pin で GC に見せる
+（C メモリに隠したものは collector から見えない — sqlite3 の
+<code>sqlite3_aggregate_context</code> の slot 番号方式が前例）。</li>
+<li>カーネルでブロックしうる呼び出しは <code>mr_call_blocking</code> で申告する。</li>
+<li><code>Init_*</code> はロード時に一度だけ呼ばれ、以後クラス定義を変えない
+（JIT の class version を不用意に動かさない）。</li>
+<li>ABI の版は <code>MrContext.abi_version</code> で判定し、不一致は <code>LoadError</code>。
+同梱拡張は per-version install root で自然に一致する。</li>
+</ol>
+<hr>
+<h2 id="5-判断が必要な点"><a class="header" href="#5-判断が必要な点">5. 判断が必要な点</a></h2>
+<ul>
+<li><strong><code>ext/</code> の配布形態</strong>（決着済み、§7）: <code>cargo install</code> 時に <code>build.rs</code> が
+install root に置く（今の stub と同じ体験）を採った。ビルド自体は
+Cargo の artifact dependency に任せ、<code>build.rs</code> は受け取ったパスを
+置くだけにしてある。</li>
+<li><strong><code>system</code> を既定にするライブラリ</strong>: zlib / zstd は OS 版で出力が
+一致するので <code>system</code> 既定でよい可能性がある。libxml2 は nokogiri の
+パッチがあるので <code>bundled</code> 既定。</li>
+<li><strong>A に進むか</strong>: pg / bcrypt / markly など「Rust で書き直す価値が薄く、
+数が多い」gem が本当に必要になった時点で判断する。それまでは B + G
+（ホット: 独自拡張、コールド: Fiddle 上の Ruby）で足りる。</li>
+</ul>
+<h2 id="6-実装状況2026-09"><a class="header" href="#6-実装状況2026-09">6. 実装状況（2026-09）</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>段階</th><th>状態</th><th>場所</th></tr>
+</thead>
+<tbody>
+<tr><td>1. feature 分割</td><td>済（役目を終えて撤去）</td><td>5 つを default-on の feature にし、off で builtin が消え <code>build.rs</code> がその stand-in を install しない形にした。3 で全部が拡張に出たので、feature も <code>build.rs</code> の gating も CI の <code>--no-default-features</code> チェックも取り除いた。</td></tr>
+<tr><td>2. C ABI</td><td>済</td><td><code>monoruby_ext_sys/</code>（<code>MrValue</code> / <code>MrContext</code> / <code>MrApi</code>、<code>include/monoruby_ext.h</code>）、<code>monoruby/src/ext.rs</code>（表の実装、trampoline、<code>ExtNative</code>、loader）、<code>monoruby_ext/</code>（Rust 向け安全ラッパ: <code>Ctx</code> / <code>Value</code> / <code>method!</code> / <code>native!</code>）。<code>tests/native_ext.rs</code> が C で書いた拡張をヘッダから <code>cc</code> でビルドして全項目を通す。</td></tr>
+<tr><td>3. sqlite3 の分離</td><td>済</td><td><code>ext/sqlite3/</code>（crate <code>sqlite3_native</code>、cdylib）。<code>gem/sqlite3/sqlite3_native.rb</code> が <code>require "sqlite3_native.so"</code> する。<code>tests/sqlite3.rs</code> の 23 本は無変更で通る。コアから <code>src/builtins/sqlite3.rs</code>（2.2k 行）と <code>libsqlite3-src</code> 依存が消えた。</td></tr>
+<tr><td>3. zlib / zstd の分離</td><td>済</td><td><code>ext/zlib/</code>（<code>zlib_native</code>、checksum と <code>__zstream_*</code>）、<code>ext/zstd/</code>（<code>zstd_native</code>）。<code>stdlib/zlib.rb</code> / <code>gem/zstd-ruby/zstdruby.rb</code> が <code>require "…_native.so"</code> する。コアから <code>libz-sys</code> / <code>zstd-safe</code> が消えた。rubygems が <code>zlib</code> を要るので、インストール時は <code>build.rs</code> が（artifact dependency 経由で）拡張を <code>&lt;install root&gt;/ext/</code> に置く（§7）。</td></tr>
+<tr><td>3. psych の分離</td><td>済</td><td><code>ext/psych/</code>（<code>psych_native</code>、<code>__yaml_parse</code> は <code>Psych::Handler</code> を <code>funcall</code> で駆動）。<code>gem/psych/psych.rb</code> が <code>require "psych_native.so"</code> する。コアから <code>libyaml-safer</code> が消えた。</td></tr>
+<tr><td>3. nokogiri の分離</td><td>済</td><td><code>ext/nokogiri/</code>（<code>nokogiri_native</code>、12 ファイル ~7k 行）。<code>gem/nokogiri/nokogiri.rb</code> が <code>require "nokogiri_native.so"</code> する。コアから <code>src/builtins/nokogiri/</code> と <code>libxml2-src</code> 依存が消え、<code>ObjTy::NATIVE</code> を使う builtin はコア側に無くなった（<code>ext.rs</code> の <code>ExtNative</code> だけ）。<code>tests/nokogiri.rs</code> の 23 本（CRuby の gem と出力比較）はスクリプト無変更。</td></tr>
+<tr><td>3. markly / bcrypt / digest / openssl の分離（2026-10）</td><td>済</td><td>外部 C ライブラリは持たないが Rust の依存 crate を抱えた 4 つ。<code>ext/markly</code>（<code>markly_native</code>、comrak）、<code>ext/bcrypt</code>（<code>bcrypt_native</code>）、<code>ext/digest</code>（<code>digest_native</code>、md-5 / sha1 / sha2 / hmac / pbkdf2）、<code>ext/openssl</code>（<code>openssl_native</code>、aes-gcm / aes / cbc。<code>OpenSSL::Cipher</code> の AES）。<code>gem/markly/markly.rb</code>・<code>gem/bcrypt_ext.rb</code>・<code>stdlib/digest.rb</code>・<code>stdlib/openssl.rb</code> が <code>require "…_native.so"</code> する。どれも引数のバイト列・整数・配列を読んで文字列か配列を返すだけなので、ABI の追加は無し。コアの release バイナリは 15.7 MB → 14.3 MB。各 <code>.so</code> は std を抱えるので 0.45〜1.6 MB ずつある（使わなければ開かれない）。digest は rubygems が <code>.gem</code> のハッシュに使うので zlib と同様に常にインストールされる。json（ホットで ABI の追加も多い）はコアに残した。</td></tr>
+<tr><td>3. zlib を CRuby の <code>ext/zlib</code> に置き換え（2026-11）</td><td>済</td><td><code>ext/zlib</code>（<code>zlib_native</code>）は削除した。CRuby 4.0.6 の <code>zlib.c</code> を C API 層でビルドした <code>zlib.so</code>（<code>monoruby_capi/ext/zlib/</code>、<code>doc/c_api.md</code> §3.19）が <code>Zlib</code> 全体を担い、<code>stdlib/zlib.rb</code> は <code>require "zlib.so"</code> だけ。libz は <code>monoruby</code> の <code>libz-sys</code> 依存（<code>bundled-zlib</code> 既定）の <code>DEP_Z_ROOT/lib/libz.a</code> を <code>zlib.so</code> に静的リンクし、<code>system-zlib</code> では <code>-lz</code>。同時に strscan / stringio も CRuby の C 拡張にした（strscan は呼び出しごとの層の固定費が重く、後に Ruby 実装へ戻した。<code>doc/c_api.md</code> §3.21）。</td></tr>
+<tr><td>4. <code>bundled</code> / <code>system</code> feature</td><td>済（3 拡張。nokogiri / psych は対象外、§6.3）</td><td><code>ext/{sqlite3,zstd}</code>（と当時の <code>ext/zlib</code>。今は <code>zlib.so</code> が <code>monoruby</code> の <code>libz-sys</code> 経由で同じ対を持つ）に <code>default = ["bundled"]</code> と <code>system</code>。Cargo の feature は加算しかしないので、選ぶときは <code>--no-default-features --features system</code>。拡張が artifact dependency になったので、選択は <code>monoruby</code> 側の feature（<code>system-zlib</code> とその <code>bundled-…</code> の対）に持ち上げてある。<code>bin/install</code> は <code>MONORUBY_SYSTEM_LIBS="zlib zstd"</code>（または <code>all</code>）を <code>--no-default-features --features "system-zlib,system-zstd,bundled-sqlite3"</code> に翻訳する。</td></tr>
+<tr><td>5. CRuby API 互換層</td><td>段階 1〜3 済</td><td><code>monoruby_capi/</code>（<code>ruby.h</code> 互換ヘッダと <code>capi.c</code>）。CRuby 向けの C ソースを monoruby のヘッダで再ビルドし、<code>$LOAD_PATH</code> から <code>require</code> できる。<code>tests/capi.rs</code> が同じ C ソースを CRuby と monoruby で動かして出力一致を見る。段階 2（TypedData / alloc 関数（遅延 payload）、C 関数のブロック化、<code>rb_call_super</code>、Struct）、段階 3（<code>RbConfig</code> が <code>&lt;root&gt;/include</code> と <code>&lt;root&gt;/capi/libmonoruby_capi.a</code> を指し、<code>extconf.rb</code> + <code>make</code> と <code>gem install</code> がそのまま通る。gem home は monoruby 専用 <code>~/.monoruby/gems/&lt;api&gt;</code>、<code>tests/mkmf.rs</code>）も済。<code>doc/c_api.md</code>。</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="61-実際の-abi42-との差"><a class="header" href="#61-実際の-abi42-との差">6.1 実際の ABI（§4.2 との差）</a></h3>
+<p>§4.2 の案から変わった点:</p>
+<ul>
+<li><strong><code>MrContext</code> は呼び出しごと</strong>（<code>api</code> と VM 側の不透明ポインタ）。<code>Init_&lt;name&gt;(MrContext*)</code> も同じ形。C コールバック（sqlite の <code>xFunc</code>）からは、その呼び出しの <code>ctx</code> をそのまま使う（park を跨いでも有効）。</li>
+<li><strong>クラスは <code>MrValue</code></strong>（クラスオブジェクトそのもの）。別の handle 型は作らなかった。</li>
+<li><strong>alloc 関数は ABI に無い。</strong> <code>MR_CLASS_NATIVE</code> のクラスは core 側の汎用 alloc がペイロード無しの instance を作り、拡張の <code>initialize</code> / <code>open</code> が <code>native_set</code> で埋める。<code>native_data(obj, ops)</code> は <code>ops</code> の一致で種類を判定する（<code>MrNativeOps</code> のアドレスが型の identity）。</li>
+<li><strong>メソッドは <code>fn(ctx, self, argc, argv, block) -&gt; MrValue</code></strong>、<code>argc</code> は固定数か <code>MR_ARGC_VARIADIC</code>。<code>Lfp</code> / <code>BytecodePtr</code> は出さない。<code>MR_UNDEF</code>（= 0、<code>Value</code> の niche）が「エラー保留」。</li>
+<li><strong>例外の stash は exception object で</strong>: <code>error_take</code> が保留中のエラーを exception object として取り出し、<code>raise_exception</code> で戻す（C フレームを跨ぐ間は temp stack に載せる）。</li>
+<li><code>str_encoding</code>（エンコーディング名）を追加。sqlite3 の BLOB 判定に要った。</li>
+<li><code>mr_call_blocking</code> は <code>fn(void*) -&gt; i64</code> + 引数ポインタ。Rust ラッパでは closure。</li>
+</ul>
+<h3 id="62-分かったこと"><a class="header" href="#62-分かったこと">6.2 分かったこと</a></h3>
+<ul>
+<li><strong>拡張の <code>static</code> はプロセス共通、<code>Init_</code> はインタプリタごと。</strong> テストハーネスは 1 プロセスに多数の <code>Globals</code> を作るので、拡張が定義したクラスを <code>static</code> に持つと 2 つ目のインタプリタで壊れる。<code>Ctx::interpreter_id</code>（globals ポインタ）で key する。sqlite3 は thread-local + id 照合にした。</li>
+<li><strong><code>require "x/4.0/x_native"</code> は <code>.rb</code> stand-in に届かなければならない。</strong> ext の探索は bare な <code>require "x_native.so"</code> だけに限定した（gem の nested <code>.so</code> 名で ext に飛ぶと stand-in が持つ Ruby 側の定義を飛ばす）。</li>
+<li><strong>テストから拡張をビルドするときは別の target dir</strong>（<code>target/ext/</code>）。外側の <code>cargo test</code> が target dir のロックを持ったままテストを走らせるので、同じ dir への nested <code>cargo build</code> は待ち続ける。aarch64 の qemu 実行では <code>--target</code> を明示する必要がある。</li>
+<li><strong>alloc 関数が無い代わりの「遅延 payload」。</strong> nokogiri の <code>SAX::Parser</code> / <code>SAX::PushParser</code> / <code>NodeSet</code> はコア側で alloc 関数を持ち、<code>new</code> の時点でペイロードを作っていた。拡張では汎用 alloc がペイロード無しの instance を作るので、最初にペイロードへ触るアクセサ（<code>handler_ptr</code> / <code>install_push_ctxt</code> / <code>set_ptr</code>）が <code>is_kind_of</code> で確かめて <code>native_set</code> で埋める。<code>Object#dup</code> のコピーも同じ経路で埋まる。</li>
+<li><strong>variadic の引数は平らに渡る。</strong> コアの rest builtin は <code>lfp.arg(0)</code> が rest 配列だったが、trampoline は <code>MR_ARGC_VARIADIC</code> の <code>argv</code> に要素を展開する。移植で <code>ary_vec(args[0])</code> を残すと最初の引数を配列として読んで壊れる（nokogiri で 6 箇所）。</li>
+<li><strong>C パーサの出力が入力バッファを指す場合は <code>str_bytes</code> の生ポインタを使う。</strong> gumbo の error record は入力の中を指す。<code>str_vec</code>（コピー）だと <code>add_errors</code> が別のメモリに対して診断を描くので、<code>Ctx::str_bytes</code> の <code>(ptr, len)</code> を取り出して渡す（collector は動かさないので String が生きている限り有効）。</li>
+<li>配布: <code>cargo build</code>（workspace root）で <code>.so</code> がバイナリの隣にできる。<code>cargo install</code> 自体はバイナリしか置かないが、5 つの拡張は <code>monoruby</code> の <strong>artifact dependency</strong>（<code>-Z bindeps</code>）なので、Cargo がビルドして <code>build.rs</code> に <code>CARGO_CDYLIB_FILE_&lt;NAME&gt;</code> でパスを渡し、<code>build.rs</code> が vendored stdlib と同じ install root の <code>ext/</code> に置く。つまり <code>cargo install --path monoruby</code> の一手で <code>require "psych"</code> の通るインストールができる（<code>bin/install</code> はその薄い包み）。詳細は §7。<code>bin/test</code> / <code>bin/test-aarch64</code> はベンチマーク用バイナリの隣に拡張をビルドする。</li>
+<li><strong>カバレッジの計測外。</strong> <code>bin/test</code> は拡張を計装フラグ無しでビルドし、<code>dlopen</code> で読み込むので、<code>cargo llvm-cov report</code> はそのカウンタを集めない。テストは実際にバイナリ越しに拡張を通しているのに、Codecov 上は <code>ext/</code> 7409 行中 94 hit（1.3%）、<code>monoruby_ext/</code> 448 行中 0 hit と出る。そこで <code>codecov.yml</code> で <code>ext/**</code> と <code>monoruby_ext/**</code> を <code>ignore</code> にした（コア側の <code>monoruby/src/ext.rs</code> は 82% で計測されており、除外していない）。計測を取り戻すには、拡張を計装付きでビルドし、各 <code>.so</code> を <code>--object</code> として report に渡す必要がある。移設でよく覆われたコードがコアから抜けた分、全体は 0.2 ポイントほど一度だけ薄まるので、<code>project</code> の <code>threshold</code> を 1% にしてある。</li>
+</ul>
+<h3 id="63-system-を出した拡張と出さなかった拡張"><a class="header" href="#63-system-を出した拡張と出さなかった拡張">6.3 <code>system</code> を出した拡張と出さなかった拡張</a></h3>
+<p>既定は 3 つとも <code>bundled</code> のまま。出力一致を守るのが第一で、<code>system</code> は
+ディストリ側が「同梱コピーを持ちたくない」と判断したときの opt-in。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>拡張</th><th><code>system</code></th><th>実測（Ubuntu 24.04 の共有ライブラリ、同梱版との比較）</th></tr>
+</thead>
+<tbody>
+<tr><td>zlib</td><td>あり</td><td><code>libz.so.1</code>（1.3）にリンク。入力 5 種 × level 0–9 × strategy 4 種の <strong>200 ケースすべてで deflate の出力バイトが同梱版（1.3.2）と一致</strong>、crc32 / adler32 も一致。差は <code>Zlib.zlib_version</code> が <code>"1.3"</code> を返すことだけで、これはホストの CRuby と同じ値になる。</td></tr>
+<tr><td>zstd</td><td>あり</td><td><code>libzstd.so.1</code>（1.5.5）にリンク。同じ入力 5 種 × level 1 / 3 / 9 / 19 の 20 ケースのうち <strong>1 ケースだけ圧縮バイトが同梱版（1.5.7）と食い違う</strong>（60 KB の C ヘッダ、level 3）。復元はもちろん両方できるが、<code>tests/zstd.rs</code> は gem と byte 一致を見るので、既定が <code>bundled</code> であることに意味があるのはこの 1 件が示している。<code>Zstd.zstd_version</code> は <code>10505</code> を返す。</td></tr>
+<tr><td>sqlite3</td><td>あり</td><td><code>libsqlite3.so.0</code>（3.45.1）にリンク。CRUD、<code>create_function</code> のコールバック、エラーメッセージ（トークン位置の <code>^</code> 付き）、FTS5 まで同梱版（3.48.0）と同じ。<code>SQLite3.libversion</code> は当然リンクした版を返す。<code>build.rs</code> の <code>-D</code> は効かないので、変数の上限は 999、拡張の有無はディストリの選択、<code>load_extension</code> が有効な場合もある。3.38 以上が要る（FFI が <code>sqlite3_error_offset</code> を呼ぶ）。</td></tr>
+<tr><td>psych</td><td>なし</td><td>置き換える C ライブラリが無い。<code>libyaml-safer</code> は libyaml 0.2.5 の Rust への移植で、システムの libyaml にリンクするなら別のバインディングを書くことになる。</td></tr>
+<tr><td>nokogiri</td><td>なし</td><td>危険が実測で確認できたので出していない。下記。</td></tr>
+</tbody>
+</table>
+</div>
+<p>nokogiri を外した理由は 3 つある。</p>
+<ol>
+<li><strong>FFI が構造体レイアウトを写している。</strong> <code>libxml2-src/src/lib.rs</code> は
+<code>xmlNode</code> / <code>xmlDoc</code> / <code>xmlSAXHandler</code> などをフィールド単位で持つ。
+同梱の 2.13.8 と Ubuntu 24.04 の 2.9.14 でヘッダを突き合わせると、
+18 個中 15 個は完全一致だが <code>xmlAttr</code> は 2.13.8 にだけ末尾の
+<code>struct _xmlID *id</code> があり（12 対 13）、<code>xmlEntity</code> は 18 番目以降が
+食い違う（<code>int checked</code> 対 <code>int flags</code>、21 対 20）。今 monoruby が
+読むのは前方のフィールドだけなので実際には動く公算が高いが、外れた
+ときの症状が静かなメモリ破壊で、リンク時にも実行時にも警告が出ない。</li>
+<li><strong>nokogiri のパッチが出力に効く。</strong> 同梱しているのはパッチ適用済みの
+libxml2 で、エラーメッセージや直列化の細部はそれ込みの挙動
+（<code>doc/nokogiri.md</code> §1）。<code>tests/nokogiri.rs</code> は gem（こちらも自前の
+2.13.8 を同梱する）と出力を突き合わせるので、システム版では差が出る。</li>
+<li><strong>どのみち半分しか外せない。</strong> gumbo-parser は nokogiri のフォークで
+システムパッケージが無く、<code>system</code> にしても同梱ビルドが残る。</li>
+</ol>
+<p>出すとすれば、FFI がレイアウトを写すのをやめる（アクセサをすべて C 側の
+glue に移す）か、検出した版に合わせて生成するかが先になる。</p>
+<h2 id="7-インストールと配布2026-09"><a class="header" href="#7-インストールと配布2026-09">7. インストールと配布（2026-09）</a></h2>
+<p>拡張をコアから外した結果、「インストールされた monoruby」は<strong>バイナリ</strong>と
+<strong>それが読む木</strong>（vendored stdlib、<code>builtins/</code>、stub、そして <code>ext/</code>）の
+二つになった。<code>cargo install</code> はバイナリしか置かないので、この二つを
+揃えるのが最後の穴だった。<code>bin/ruby-bench</code> が <code>cargo install</code> だけを
+呼んでいた時期に、77 本中 14 本が <code>libpsych_native.so</code> /
+<code>libzlib_native.so</code> の <code>LoadError</code> で落ちたのがその症状で、インタプリタの
+退行ではなくインストールの形の問題だった。</p>
+<h3 id="71-cargo-install-だけで揃うartifact-dependency"><a class="header" href="#71-cargo-install-だけで揃うartifact-dependency">7.1 <code>cargo install</code> だけで揃う（artifact dependency）</a></h3>
+<p>5 つの拡張を <code>monoruby</code> の <strong>build-dependency</strong>（<code>artifact = "cdylib"</code>,
+<code>lib = false</code>, <code>target = "target"</code>）にした。Cargo が各 cdylib を
+ターゲット向けにビルドし、<code>build.rs</code> に <code>CARGO_CDYLIB_FILE_&lt;NAME&gt;</code> で
+パスを渡す。<code>build.rs</code> はそれを install root の <code>ext/</code> へ（一時名 →
+<code>rename</code> で）置くだけ。<code>lib = false</code> なのはコアがどれもリンクしない
+（<code>dlopen</code> する）から、<code>target = "target"</code> なのはビルドホストではなく
+ターゲット向けの <code>.so</code> が要るから。</p>
+<ul>
+<li><strong>feature は <code>monoruby</code> 側に上がった。</strong> artifact dependency の feature は
+依存元が決めるので、<code>bundled-zlib</code> / <code>system-zlib</code> の対を <code>monoruby</code> の
+feature として持ち、<code>sqlite3_native/system</code> などへ転送する。Cargo の
+feature は加算しかしないので、<code>default-features = false</code> を付けた上で
+<code>--no-default-features --features "system-zlib,bundled-sqlite3,…"</code> と
+全部を書き下す。これを組み立てるのが <code>bin/install</code> の仕事。</li>
+<li><strong><code>-Z bindeps</code> は unstable</strong> なので <code>.cargo/config.toml</code> の
+<code>[unstable] bindeps = true</code> で有効にしてある。無効なら
+「<code>artifact = …</code> requires <code>-Z bindeps</code>」とマニフェスト解析の時点で
+はっきり落ちる（黙って拡張を飛ばすことはない）。リポジトリの外から
+<code>cargo install --path …/monoruby</code> を叩くと <code>rust-toolchain.toml</code> が
+効かず stable に落ちてこのエラーになるので、<code>bin/install</code> は
+リポジトリルートへ <code>cd</code> する。</li>
+<li><strong><code>ext/.build-stamp</code> で自己修復する。</strong> <code>build.rs</code> は木のハッシュが
+一致すれば早期に戻るが、その経路でも拡張の設置だけは通す。さらに
+置いた <code>.so</code> の名前を <code>ext/.build-stamp</code> に書き、それを
+<code>cargo:rerun-if-changed</code> で見ている。<code>ext/</code> を消せば次のビルドで
+<code>build.rs</code> が走り直して戻ってくる。</li>
+<li><strong>install root は版ごとに一つなので、最後のビルドが勝つ。</strong> Ruby の木は
+プロファイル非依存だったが <code>.so</code> はそうではない。debug の <code>cargo test</code>
+を通すと、release の <code>bin/install</code> が置いた <code>.so</code> が debug 版に
+置き換わる（<code>cargo llvm-cov</code> なら計装版に。psych で 0.9 MB → 6.9 MB）。
+動作は正しく、遅いだけ。どのビルドが書いたかは <code>ext/.build-stamp</code> の
+1 行目（プロファイル名）で分かる。release に戻すには <code>bin/install</code>。</li>
+<li><strong>クロスビルドでは設置しない。</strong> 成果物はターゲット向けで、install root
+はホストのバイナリのものだから。<code>bin/test-aarch64</code> は従来どおり
+バイナリの隣に建てる。設置したかどうかは
+<code>cargo:rustc-env=MONORUBY_EXT_INSTALLED</code> でテスト側に渡してあり、
+<code>tests/relocatable_install.rs</code> はそれを見て skip する（「回帰で消えた」
+と「そもそも置いていない」を取り違えないため）。</li>
+</ul>
+<h3 id="72-どこでも動く木bindist"><a class="header" href="#72-どこでも動く木bindist">7.2 どこでも動く木（<code>bin/dist</code>）</a></h3>
+<p>install root の絶対パスはバイナリに焼き込まれている
+（<code>MONORUBY_INSTALL_ROOT</code>）ので、それだけでは<strong>ビルドした本人の
+ホームでしか動かない</strong>。そこで <code>globals::install_root</code> の解決順に
+「実行ファイルからの相対」を足した:</p>
+<ol>
+<li>環境変数 <code>MONORUBY_INSTALL_ROOT</code></li>
+<li><code>&lt;実行ファイルのあるディレクトリ&gt;/..</code> に <code>builtins/</code> があればそこ</li>
+<li>焼き込まれた <code>env!("MONORUBY_INSTALL_ROOT")</code></li>
+</ol>
+<p>2 の目印が <code>builtins/</code> なのは、それが install root にしか無く、
+<code>~/.cargo/bin/monoruby</code> のような「木を伴わないバイナリ」を
+誤検出しないため。<code>bin/dist</code> はこの形</p>
+<pre><code>&lt;out&gt;/bin/monoruby   &lt;out&gt;/builtins   &lt;out&gt;/lib   &lt;out&gt;/stub   &lt;out&gt;/ext
+</code></pre>
+<p>に並べ、<code>--tar</code> で <code>target/dist/monoruby-&lt;ver&gt;-&lt;platform&gt;.tar.gz</code> を書く。
+展開すればどのユーザーでも環境変数無しで動く。</p>
+<ul>
+<li><strong>ホスト Ruby のプローブは <code>~/.monoruby</code> を自分で作る。</strong> 通常この
+ディレクトリは <code>build.rs</code> が install root を置くついでにできているが、
+tarball を展開しただけのマシンには誰も作っていない。<code>fs::write</code> は
+親を作らないので、放っておくとキャッシュの書き込みが黙って失敗し、
+毎回 <code>ruby</code> を起動し直して「library path file が読めない」と警告する。
+<code>ruby_probe</code> の結果を書く前に <code>create_dir_all</code> する。
+（<code>tests/relocatable_install.rs::a_fresh_home_gets_its_probe_cache_written</code>）</li>
+</ul>
+<p><code>tests/relocatable_install.rs</code> が両方を押さえている: 5 つの <code>.so</code> が
+install root にあること、木ごと移した先で <code>$LOAD_PATH</code> が自分の木から
+来て焼き込まれた root からは来ないこと、そこで psych / zlib が読めること、
+<code>MONORUBY_INSTALL_ROOT</code> が今も勝つこと。</p>
+<h2 id="8-参考"><a class="header" href="#8-参考">8. 参考</a></h2>
+<ul>
+<li><code>doc/c_extention.md</code> — CRuby C API 互換層の設計検討（Path A / B / C、
+TruffleRuby の事例、レイアウト不一致の吸収、<code>gem install</code> のフロー）</li>
+<li><code>doc/nokogiri.md</code> §2, §5 — nokogiri での選択肢比較と <code>NativeData</code> の位置づけ</li>
+<li><code>doc/threads.md</code> §9–10 — native offload（<code>NativeOp</code>）と残る制約</li>
+<li>2026-09 の activerecord / liquid-il / rack 調査 — Fiddle 経由 sqlite3 の
+35 % と native 化後の数字</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/c_api.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/nokogiri.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/c_api.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/nokogiri.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

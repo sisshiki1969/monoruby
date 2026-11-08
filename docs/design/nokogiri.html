@@ -1,0 +1,633 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Nokogiri (Japanese) - monoruby</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for monoruby — a Ruby implementation with a JIT compiler, written in Rust">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-ca5246bb.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-9192be69.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">monoruby</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/sisshiki1969/monoruby" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="nokogiri-を-monoruby-で動かす方法の検討"><a class="header" href="#nokogiri-を-monoruby-で動かす方法の検討">nokogiri を monoruby で動かす方法の検討</a></h1>
+<p>nokogiri は C 拡張（libxml2 / libxslt / gumbo）の上に Ruby を載せた gem で、
+monoruby では <code>require "nokogiri"</code> が <code>nokogiri/nokogiri</code> の LoadError で止まる
+（precompiled gem の <code>.so</code> は CRuby ABI なので読めない）。本稿は、psych
+（<code>doc/…</code> の libyaml 移植）・zlib（<code>libz-sys</code> 同梱）と同じ「gem の Ruby 半分は
+そのまま、ネイティブ半分を monoruby 側で提供する」路線を nokogiri に適用する
+場合の設計と、代替案との比較をまとめる。<code>doc/c_extention.md</code>（CRuby C API 互換層）
+との関係も述べる。</p>
+<p>調査対象: nokogiri 1.19.1（x86_64-linux precompiled gem）と 1.18.9（source gem）。</p>
+<h2 id="1-nokogiri-の構造と規模"><a class="header" href="#1-nokogiri-の構造と規模">1. nokogiri の構造と規模</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>部分</th><th>規模</th><th>備考</th></tr>
+</thead>
+<tbody>
+<tr><td>Ruby 半分 <code>lib/nokogiri/**</code></td><td>77 ファイル、11,893 行</td><td>xml 5,605 / html4 2,739 / css 1,444 / sax 650 / html5 542 / xslt 49</td></tr>
+<tr><td>C 拡張 <code>ext/nokogiri/*.c</code></td><td>36 ファイル、10,018 行</td><td>ネイティブメソッド定義 202 個</td></tr>
+<tr><td>C 拡張が使う libxml2 / libxslt API</td><td>227 関数</td><td></td></tr>
+<tr><td>C 拡張が使う CRuby C API</td><td><code>rb_*</code> 201 シンボル</td><td><code>TypedData_Get_Struct</code> 77 箇所、<code>StringValueCStr</code> 85 箇所、<code>rb_funcall</code> 64 箇所</td></tr>
+<tr><td>同梱ライブラリ</td><td>libxml2 2.13.x（nokogiri 独自パッチ 6〜10 本）、libxslt 1.1.43（1 本）、gumbo-parser（HTML5、42 ファイル 33,067 行 C）、zlib、libiconv</td><td>source gem の <code>dependencies.yml</code> と <code>patches/</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>ネイティブメソッドの分布（多い順）: <code>XML::Node</code> 54、<code>XML::Reader</code> 26、
+<code>HTML4::ElementDescription</code> 14、<code>XML::NodeSet</code> 12、<code>XML::Document</code> 12、
+<code>XML::SAX::ParserContext</code> 10、<code>XML::DTD</code> 7、<code>XML::SAX::PushParser</code> 6、
+<code>XML::ElementContent</code> 6、<code>XML::XPathContext</code> 5、以下 XSLT / Schema / RelaxNG /
+EncodingHandler / gumbo など。</p>
+<p>重要なのは <strong>CSS セレクタは Ruby 側</strong>（racc 生成の <code>css/parser.rb</code> が CSS を
+XPath に変換する）で、ネイティブに要るのは XPath 1.0 エンジンだけ、という点。
+一方 <code>Node#to_xml</code> / <code>to_html</code> の整形、HTML4 パーサの補正、XPath の関数・
+比較規則、<code>SyntaxError</code> のメッセージはすべて libxml2 の挙動そのもので、CRuby
+と同じ出力を出すには同じ libxml2（同じパッチ）を使うのが唯一確実な道になる。</p>
+<h2 id="2-選択肢"><a class="header" href="#2-選択肢">2. 選択肢</a></h2>
+<h3 id="a-ネイティブ半分を-rust-で書き直すlibxml2--libxslt--gumbo-は-c-のまま同梱"><a class="header" href="#a-ネイティブ半分を-rust-で書き直すlibxml2--libxslt--gumbo-は-c-のまま同梱">A. ネイティブ半分を Rust で書き直す（libxml2 / libxslt / gumbo は C のまま同梱）</a></h3>
+<p>zlib と同じ形。libxml2 等は <code>-sys</code> 相当の workspace crate で C ソースから
+ビルドして静的リンクし、<code>ext/nokogiri</code> の 202 メソッドを Rust の builtin
+として書き直す。gem の Ruby 半分（<code>lib/nokogiri/**</code>）は psych と同様に
+<code>gem/nokogiri/</code> に vendoring し、<code>nokogiri/nokogiri</code> の require をスタブで
+受ける。</p>
+<ul>
+<li>長所: CRuby と同じ libxml2 なので出力・エラー・XPath の意味論が一致する。
+XSLT / Schema / RelaxNG / Reader / SAX が全部手に入る。psych・zlib で
+確立した手順（Ruby 半分 vendoring + native stand-in + CRuby との出力比較
+テスト）をそのまま使える。</li>
+<li>短所: 10k 行の C を Rust に移植する作業量。libxml2 のビルドを自前で持つ
+（autotools を使わず <code>cc</code> crate で ~60 ファイルを直接コンパイルし、
+<code>config.h</code> を Linux / macOS 向けに固定する）。ノードの寿命管理（後述）は
+nokogiri の C コードで最も込み入った部分で、そこはそのまま移植が要る。</li>
+</ul>
+<h3 id="b-cruby-c-api-互換層docc_extentionmd-の-path-cで-nokogiri-の-c-拡張をそのまま動かす"><a class="header" href="#b-cruby-c-api-互換層docc_extentionmd-の-path-cで-nokogiri-の-c-拡張をそのまま動かす">B. CRuby C API 互換層（<code>doc/c_extention.md</code> の Path C）で nokogiri の C 拡張をそのまま動かす</a></h3>
+<p><code>ruby.h</code> 互換ヘッダと <code>rb_*</code> シムを作り、<code>gem install nokogiri</code> の再コンパイル
+で nokogiri.so を monoruby 向けに生成する。</p>
+<ul>
+<li>長所: 汎用。nokogiri に限らず sqlite3 / pg / bcrypt など C 拡張 gem 全体が
+射程に入る。</li>
+<li>短所: nokogiri 一つで <code>rb_*</code> 201 シンボル、<code>TypedData</code>（mark / free / size
+関数付き）、<code>rb_protect</code> / <code>rb_ensure</code> / <code>rb_rescue</code> の例外モデル、
+<code>rb_enc_*</code>、IO コールバック（<code>rb_io_*</code> 27 箇所）まで要る。C 拡張層の
+「最小ライン」（hello world の <code>.so</code>）から nokogiri までの距離が非常に長く、
+最初のマイルストーンとしては重い。<code>doc/c_extention.md</code> §4 のレイアウト
+不一致（<code>RSTRING_PTR</code> 等）も nokogiri は踏む（<code>StringValueCStr</code> 85 箇所）。</li>
+</ul>
+<h3 id="c-純-rust-で再実装html5ever--quick-xml--自前-dom--xpath"><a class="header" href="#c-純-rust-で再実装html5ever--quick-xml--自前-dom--xpath">C. 純 Rust で再実装（html5ever / quick-xml + 自前 DOM + XPath）</a></h3>
+<p>crates.io の状況（2026-09）: <code>html5ever</code> 0.39（HTML5、Servo 由来で
+仕様準拠）、<code>quick-xml</code> 0.42 / <code>xml-rs</code> 1.0 / <code>roxmltree</code> 0.21（XML 読み）、
+<code>scraper</code> 0.27（CSS セレクタ）、XPath は <code>sxd-xpath</code> 0.4（2018 年で停止、
+XPath 1.0 部分実装）、<code>xrust</code> 2.2 / <code>xee</code> 0.1（XPath 3.1 / XSLT 3.0、開発中）。
+libxml2 を同梱ビルドする <code>-sys</code> crate は無い（<code>libxml</code> 0.3 はシステムの
+libxml2 に pkg-config でリンクする wrapper）。</p>
+<ul>
+<li>長所: C のビルドが無い。</li>
+<li>短所: libxml2 と同じ整形・同じ HTML4 補正・同じ XPath 1.0 の細部・同じ
+エラーメッセージを別実装で再現するのは現実的でなく、XSLT / Schema /
+RelaxNG / DTD は丸ごと欠ける。CRuby との出力一致を検証の軸にしている
+monoruby の方針（psych・zlib・json）と合わない。「よくあるスクレイピング
+が動く」止まりの部分互換にしかならない。</li>
+</ul>
+<h3 id="比較"><a class="header" href="#比較">比較</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>A: Rust 書き直し + C ライブラリ同梱</th><th>B: C API 互換層</th><th>C: 純 Rust</th></tr>
+</thead>
+<tbody>
+<tr><td>CRuby との出力一致</td><td>同じ libxml2 なので一致</td><td>一致</td><td>一致しない</td></tr>
+<tr><td>機能の網羅</td><td>全部</td><td>全部</td><td>XML/HTML のみ、XPath は部分</td></tr>
+<tr><td>作業量</td><td>中〜大（C 10k 行の移植）</td><td>大（汎用層の構築が先）</td><td>大（エンジン自作）</td></tr>
+<tr><td>他 gem への波及</td><td>なし</td><td>大</td><td>なし</td></tr>
+<tr><td>既存の前例</td><td>psych / zlib / json</td><td>なし</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>推奨は A。</strong> B は長期の別プロジェクトとして価値があるが、nokogiri を動かす
+最短路ではない。A で作る Rust 側のオブジェクト・寿命モデルは、将来 B を
+やるときの <code>TypedData</code> の設計にも流用できる。</p>
+<h2 id="3-a-の設計"><a class="header" href="#3-a-の設計">3. A の設計</a></h2>
+<h3 id="31-crate-構成"><a class="header" href="#31-crate-構成">3.1 crate 構成</a></h3>
+<pre><code>monoruby/
+├── libxml2-src/        # workspace crate: libxml2 + libxslt (+libexslt) を cc でビルド
+│   ├── build.rs        # ~60 + ~40 ファイルを直接コンパイル、config.h は同梱の固定版
+│   ├── vendor/         # nokogiri の dependencies.yml と同じ版に patches/ を適用したもの
+│   └── src/lib.rs      # 使う 227 関数の extern "C" 宣言（手書き。bindgen は使わない）
+├── gumbo-src/          # nokogiri 同梱の gumbo-parser（42 ファイル）を cc でビルド
+├── ext/nokogiri/       # ext/nokogiri の移植（crate nokogiri_native、cdylib）
+│   │                   # 当初は monoruby/src/builtins/nokogiri/ にあり、
+│   │                   # doc/native_extension_loading.md の 3 で拡張に出た
+│   └── src/            # document.rs, node.rs, node_set.rs, xpath.rs, sax.rs, reader.rs,
+│       │               #   xslt.rs, schema.rs, dtd.rs, html5.rs, misc.rs
+│       └── lib.rs      # クラス登録（Init_nokogiri_native）、寿命モデルの共通部
+└── monoruby/gem/nokogiri/            # gem の lib/nokogiri/** を vendoring
+    └── nokogiri/nokogiri.rb          # C 拡張の代わりに読まれるスタブ（定数定義など）
+</code></pre>
+<p>libz-sys の前例どおり、C ソースは monoruby のビルドで静的リンクする。
+iconv は libxml2 の encoding 変換に必要で、glibc と macOS は libc に持つので
+libiconv は同梱しない（nokogiri の precompiled ビルドだけが同梱している）。
+zlib は既存の libz-sys を共有する。</p>
+<p>libxml2 は nokogiri のパッチを当てた版を使う。とくに <code>0009-allow-wildcard- namespaces</code>（<code>*:foo</code> の XPath）と <code>0019-xpath-…static-hash-table</code> は
+nokogiri の挙動そのものなので外せない。</p>
+<h3 id="32-オブジェクトと寿命"><a class="header" href="#32-オブジェクトと寿命">3.2 オブジェクトと寿命</a></h3>
+<p>nokogiri の C 側で最も難しい部分。libxml2 のノードはドキュメントに属し、
+<code>xmlFreeDoc</code> で木ごと解放される。Ruby 側のオブジェクトとの対応は:</p>
+<ul>
+<li><code>Document</code> が <code>xmlDocPtr</code> を所有し、ドキュメントの解放と同時に木を解放する。</li>
+<li>各 <code>xmlNode</code> は <code>_private</code> に対応する Ruby オブジェクトを 1 つだけ持つ
+（同じノードを 2 回取り出しても同じ <code>Node</code> が返る）。ドキュメントは
+<code>node_cache</code>（Ruby Array）で生成済み <code>Node</code> を強参照する。</li>
+<li><code>unlink</code> されたノードは木から外れるが <code>Document</code> の <code>unlinkedNodes</code> 集合に
+入り、ドキュメントと一緒に解放される（別ドキュメントへの <code>add_child</code> は
+<code>xmlDOMWrapAdoptNode</code> / reparent で所有権を移す）。</li>
+<li><code>NodeSet</code> は <code>xmlNodeSetPtr</code> を持ち、含むノードの <code>Document</code> を参照して
+生かす。XPath の結果（<code>XPathContext#evaluate</code>）はここから作る。</li>
+</ul>
+<p>monoruby では、zlib の「整数ハンドル + スレッドローカル表 + <code>ObjectSpace</code>
+finalizer」方式ではなく、<strong><code>RValue</code> に新しい種別（<code>ObjTy::XML_DOC</code> /
+<code>XML_NODE</code> / <code>XML_NODE_SET</code> など）を足して生ポインタを直接持たせる</strong>のが
+適切。理由は (1) ノードは大量に生成され、表経由の間接参照は遅い、(2) GC の
+mark で <code>Node</code> → <code>Document</code> の参照を辿る必要がある、(3) <code>Document</code> の解放時に
+<code>xmlFreeDoc</code> を呼ぶ drop が要る、の 3 点。<code>RValue</code> の mark / drop に種別ごとの
+処理を足す形で、<code>Fiber</code> や <code>Binding</code> と同じ扱いになる。</p>
+<p>ノード → Ruby オブジェクトの逆引きは nokogiri と同じく <code>_private</code> に
+<code>Value</code> を入れる（GC 移動が無い mark-and-sweep なのでそのまま持てる）。
+ドキュメントの mark でキャッシュ済みノードを全部 mark する。</p>
+<h3 id="33-ruby-との境界"><a class="header" href="#33-ruby-との境界">3.3 Ruby との境界</a></h3>
+<ul>
+<li><strong>パース</strong>: <code>read_memory</code> は文字列から、<code>read_io</code> は <code>xmlReadIO</code> に Ruby の
+<code>IO#read</code> を呼ぶコールバックを渡す。コールバック中の Ruby 例外は nokogiri
+（<code>rb_rescue</code> で受けて -1 を返す）と同じく握りつぶし、libxml2 には IO エラー
+として見せる（パースなら “Unknown IO error” が <code>errors</code> に入り、書き出しなら
+そこで止まる）。</li>
+<li><strong>エラー</strong>: libxml2 の structured error handler で <code>xmlError</code> を受け、
+<code>Nokogiri::XML::SyntaxError</code> を作って <code>document.errors</code> に積む。
+<code>RECOVER</code> 無しなら最初のエラーで raise。メッセージは libxml2 のものを
+そのまま使う（CRuby と一致させる要）。</li>
+<li><strong>シリアライズ</strong>: <code>native_write_to</code> は <code>xmlSaveToIO</code> に Ruby の
+<code>IO#write</code> コールバック。<code>to_xml</code> / <code>to_html</code> / <code>to_s</code> の整形はこれで
+libxml2 任せ。HTML5 は Ruby 側の <code>html_standard_serialize</code> が gumbo の
+シリアライザを呼ぶ。</li>
+<li><strong>XPath</strong>: <code>XPathContext#evaluate</code> で文字列を評価し、結果の型
+（nodeset / bool / number / string）を変換。<code>register_ns</code>、
+<code>register_variable</code>、Ruby ハンドラによるカスタム関数（<code>xmlXPathRegisterFunc</code>
+に Rust の trampoline を登録し、そこから Ruby のメソッドを呼ぶ）。</li>
+<li><strong>SAX / PushParser / Reader</strong>: libxml2 の SAX ハンドラを Rust で受けて
+<code>Nokogiri::XML::SAX::Document</code> の各メソッドを呼ぶ。Reader は
+<code>xmlTextReader</code> の薄い wrapper。</li>
+<li><strong>XSLT</strong>: <code>Stylesheet.parse_stylesheet_doc</code> / <code>transform</code> / <code>serialize</code>。
+EXSLT 関数の登録込み。カスタム XSLT 関数（Ruby ハンドラ）は後回しで良い。</li>
+<li><strong>Schema / RelaxNG / DTD</strong>: <code>xmlSchemaParse</code> / <code>xmlRelaxNGParse</code> と
+<code>validate_document</code>、DTD の <code>ElementDecl</code> / <code>AttributeDecl</code> /
+<code>EntityDecl</code> / <code>ElementContent</code> は <code>XML::Node</code> のサブクラスとして生ポインタを
+読むだけ。</li>
+</ul>
+<h3 id="34-スタブと-ruby-半分"><a class="header" href="#34-スタブと-ruby-半分">3.4 スタブと Ruby 半分</a></h3>
+<p><code>gem/psych/psych.rb</code> と同じく <code>gem/nokogiri/nokogiri/nokogiri.rb</code> を置き、
+C 拡張が定義していた定数（<code>Nokogiri::LIBXML_COMPILED_VERSION</code>、
+<code>LIBXML_PARSER_VERSION</code>、<code>VERSION_INFO</code> の libxml 部分、<code>XML::Node::*_NODE</code>
+の型定数、<code>XML::ParseOptions</code> の値）と、ネイティブメソッドを持つクラスの
+骨格をここで定義する。Ruby 半分は gem のものを無改造で使う。<code>extension.rb</code>
+は <code>nokogiri/#{RUBY_VERSION}/nokogiri</code> を試してから <code>nokogiri/nokogiri</code> に
+落ちるので、後者をスタブで受ければ足りる。</p>
+<h2 id="4-進め方と検証"><a class="header" href="#4-進め方と検証">4. 進め方と検証</a></h2>
+<p>ruby-bench に nokogiri のベンチマークは無いので、動機は「動かす」こと自体と
+Rails 系（rails-dom-testing、loofah、rails-html-sanitizer は nokogiri 必須）
+の解放。段階:</p>
+<ol>
+<li><strong>XML の基本</strong>: <code>libxml2-src</code> のビルド、<code>Document.parse</code> / <code>Node</code> の
+走査・属性・<code>content</code> / <code>xpath</code> / <code>to_xml</code> / <code>SyntaxError</code>。ここで
+3.2 の寿命モデルを確定させる。</li>
+<li><strong>HTML4 と CSS</strong>: <code>HTML4::Document.parse</code>（libxml2 の HTML パーサ）、
+CSS → XPath は Ruby 側なので <code>css</code> / <code>at_css</code> はほぼ自動で通る。
+<code>ElementDescription</code>。</li>
+<li><strong>編集と再シリアライズ</strong>: <code>add_child</code> / <code>replace</code> / <code>unlink</code> /
+<code>add_namespace_definition</code>、ドキュメント間の移動、<code>Builder</code>（Ruby 側）。</li>
+<li><strong>HTML5</strong>: gumbo の同梱と <code>HTML5::Document.parse</code> / <code>html_standard_serialize</code>。</li>
+<li><strong>SAX / PushParser / Reader</strong>。</li>
+<li><strong>XSLT / Schema / RelaxNG / DTD</strong>。</li>
+</ol>
+<p>検証は二本立て:</p>
+<ul>
+<li>nokogiri 本体のテストスイート（GitHub の <code>test/</code>、minitest）。gem には
+入っていないので checkout が要る。まず <code>test/xml/test_document.rb</code>、
+<code>test_node.rb</code>、<code>test_node_set.rb</code>、<code>test_xpath.rb</code>、<code>html4/test_document.rb</code>
+から。</li>
+<li><code>tests/ruby_bench_outputs.rs</code> と同じ形の CRuby 出力比較テスト（同じ
+HTML / XML を両方でパースして <code>to_xml</code> / <code>xpath</code> の結果を突き合わせる）。
+同じ libxml2 なので byte 単位で一致するはず。</li>
+</ul>
+<h2 id="5-見積りの目安"><a class="header" href="#5-見積りの目安">5. 見積りの目安</a></h2>
+<p>既存の native stand-in は yaml.rs 496 行（libyaml-safer の上）、zlib.rs 635 行、
+prism.rs 172 行で、いずれも下に完成したライブラリがある。nokogiri は
+<code>ext/nokogiri</code> 10k 行の移植が本体で、<code>RValue</code> の新種別と GC 連携、
+libxml2 のビルドが付く。段階 1〜3 で ext の 6 割程度（Node 54 + Document 12</p>
+<ul>
+<li>NodeSet 12 + XPathContext 5 + HTML4 + SyntaxError）を占め、そこまでで
+一般的な用途（スクレイピング、Rails のビュー検証、loofah のサニタイズ）は動く。</li>
+</ul>
+<p>B（C API 互換層）を将来やるなら、ここで作る <code>ObjTy::XML_*</code> の mark / drop の
+形がそのまま <code>TypedData</code> の受け皿になるので、A の作業は無駄にならない。</p>
+<h2 id="6-実装状況xslt-以外の全段階2026-09"><a class="header" href="#6-実装状況xslt-以外の全段階2026-09">6. 実装状況（XSLT 以外の全段階、2026-09）</a></h2>
+<p><code>libxml2-src/</code>（libxml2 2.13.9 + nokogiri 1.19.7 の patches、<code>cc</code> でビルド、
+<code>config.h</code> は手書き、<code>xmlversion.h</code> は build.rs が生成）、
+<code>ext/nokogiri/</code>（Rust 側、monoruby 拡張 <code>nokogiri_native</code>。もとは
+<code>monoruby/src/builtins/nokogiri/</code> で、<code>doc/native_extension_loading.md</code> の
+手順 3 で <code>monoruby_ext</code> の <code>Ctx</code> 越しに書き直してコアの外に出した）、
+<code>monoruby/gem/nokogiri/</code>（gem 1.19.7 の Ruby 半分をそのまま +
+<code>nokogiri/nokogiri.rb</code> のスタブ、拡張を <code>require</code> する）。
+<code>tests/nokogiri.rs</code> が CRuby の nokogiri gem と同じスクリプトを走らせて出力を
+突き合わせる（gem が無ければ skip、CI は入れる）。</p>
+<p>動くもの:</p>
+<ul>
+<li>
+<p><code>XML::Document</code>: <code>parse</code> / <code>read_memory</code> / <code>read_io</code>（Ruby の IO を
+コールバックで読む）/ <code>new</code> / <code>root</code> / <code>root=</code> / <code>encoding</code> / <code>version</code> /
+<code>url</code>、<code>errors</code>、strict モードの <code>SyntaxError</code>（message / line / column /
+domain / code / level / file / str1..3 / int1 が CRuby と一致）。</p>
+</li>
+<li>
+<p><code>XML::Node</code> の 54 のネイティブのうち <code>dup</code> 系（<code>initialize_copy_with_args</code>）、
+<code>canonicalize</code>、<code>process_xincludes</code>、
+<code>html_standard_serialize</code>（HTML5）、<code>prepend_newline?</code>、<code>create_external_subset</code>
+以外: 走査、属性（<code>get</code> / <code>set</code> / <code>key?</code> / <code>attribute_nodes</code>）、名前空間、
+<code>content</code> / <code>native_content=</code>、<code>path</code> / <code>line</code>、<code>unlink</code>、<code>add_child</code> /
+<code>add_next_sibling</code> / <code>add_previous_sibling</code> / <code>replace</code>（<code>reparent_node_with</code>
+と <code>relink_namespace</code> の移植: 別ドキュメントやテキストノードの複製、
+隣接テキストの併合、名前空間の再結合）、<code>in_context</code>（<code>DocumentFragment</code>、
+<code>Node#parse</code>、<code>inner_html=</code>、<code>add_child(String)</code>）、<code>native_write_to</code>
+（<code>to_xml</code> / <code>to_html</code> / <code>to_s</code>、インデント、エンコーディング指定）、
+<code>dump_html</code>。<code>Text</code> / <code>Comment</code> / <code>CDATA</code> / <code>ProcessingInstruction</code> / <code>Attr</code>
+/ <code>DocumentFragment</code> のコンストラクタ、<code>Attr#value=</code>、<code>Namespace</code>。</p>
+</li>
+<li>
+<p><code>XML::NodeSet</code>（<code>&amp;</code> <code>|</code> <code>-</code> <code>[]</code> <code>slice</code> <code>delete</code> <code>include?</code> <code>length</code> <code>push</code>
+<code>to_a</code> <code>unlink</code> <code>initialize_copy</code>）、<code>XML::XPathContext</code>（<code>evaluate</code> /
+<code>register_ns</code> / <code>register_variable</code> / <code>node=</code>、<code>css-class</code> と
+<code>local-name-is</code> の組み込み関数なので CSS セレクタが全部通る）。</p>
+</li>
+<li>
+<p><code>HTML4::Document</code>（<code>read_memory</code> / <code>read_io</code> / <code>new</code> / <code>type</code>）、
+<code>HTML4::EntityLookup</code>、<code>EncodingHandler</code>。</p>
+</li>
+<li>
+<p>DTD 一式（<code>dtd.rs</code>）: <code>XML::DTD</code>（<code>entities</code> / <code>elements</code> / <code>attributes</code> /
+<code>notations</code> の各ハッシュ、<code>validate</code>、<code>external_id</code> / <code>system_id</code>、
+<code>create_internal_subset</code> / <code>internal_subset</code> / <code>external_subset</code>）、
+<code>EntityDecl</code>（<code>content</code> / <code>original_content</code> / <code>entity_type</code> / 各 ID と型定数）、
+<code>ElementDecl</code>（<code>element_type</code> / <code>content</code> / <code>prefix</code>）、<code>AttributeDecl</code>
+（<code>attribute_type</code> / <code>default</code> / <code>enumeration</code>）、<code>ElementContent</code>（内容モデルの
+木、<code>NATIVE</code> クラスで <code>@document</code> を持つ）、<code>Document#create_entity</code>。</p>
+</li>
+<li>
+<p>SAX（<code>sax.rs</code>）: <code>XML::SAX::Parser</code>（<code>xmlSAXHandler</code> の全コールバック:
+<code>xmldecl</code> / <code>start_document</code> / <code>start_element(_namespace)</code> /
+<code>end_element(_namespace)</code> / <code>characters</code> / <code>comment</code> / <code>cdata_block</code> /
+<code>processing_instruction</code> / <code>reference</code> / <code>warning</code> / <code>error</code>、DTD と
+エンティティは libxml2 の SAX2 既定を使う）、<code>SAX::ParserContext</code>
+（<code>native_memory</code> / <code>native_io</code> / <code>native_file</code>、<code>parse_with</code>、
+<code>replace_entities</code> / <code>recovery</code>、<code>line</code> / <code>column</code>）、<code>SAX::PushParser</code>
+（<code>xmlParseChunk</code>、<code>options</code>、RECOVER 無しのエラーは <code>SyntaxError</code>）、
+<code>HTML4::SAX::Parser</code> / <code>ParserContext</code> / <code>PushParser</code>（HTML パーサ上）。
+これで <code>HTML4::EncodingReader</code> が動くので、<strong><code>Nokogiri::HTML4(io)</code> を
+エンコーディング指定無しで</strong>パースできる（<code>&lt;meta charset&gt;</code> の検出と
+<code>EncodingFound</code> による再パース込み）。</p>
+</li>
+<li>
+<p><code>XML::Reader</code>（<code>reader.rs</code>、<code>xmlTextReader</code> の薄い wrapper）: <code>from_memory</code> /
+<code>from_io</code>、<code>read</code> と Enumerable、名前・値・深さ・型・属性（<code>attribute</code> /
+<code>attribute_at</code> / <code>attribute_hash</code> / <code>namespaces</code> / <code>attributes</code>）、
+<code>inner_xml</code> / <code>outer_xml</code>、<code>base_uri</code> / <code>lang</code> / <code>xml_version</code> / <code>encoding</code>、
+エラーは <code>errors</code> に積まれ <code>read</code> の失敗で aggregate を raise。</p>
+</li>
+<li>
+<p><code>Node#dup</code> / <code>#clone</code>（<code>initialize_copy_with_args</code>: <code>Object#dup</code> が作った
+ペイロード無しのコピーに <code>xmlDocCopyNode</code> の複製を持たせる。別ドキュメントへの
+複製も可）、<code>Document#dup</code> / <code>#clone</code>（<code>xmlCopyDoc</code>）。<code>RValue::replace_native</code>
+でペイロードを差し替える。</p>
+</li>
+<li>
+<p>XPath のカスタム関数ハンドラ（<code>evaluate(expr, handler)</code>、CSS の
+<code>:regex()</code> 等の擬似クラスも通る）: <code>xmlXPathRegisterFuncLookup</code> でハンドラが
+応答する名前を Rust の invoker に解決し、引数を Ruby 値（NodeSet / String /
+Float / bool）に、戻り値を XPath 値（数値 / 文字列 / 真偽 / NodeSet / Array →
+NodeSet、nil は何も積まない）に変換する。ハンドラの例外は呼び出し状態に保存して
+<code>xmlXPathErr</code> で評価を打ち切り、<code>evaluate</code> から投げ直す。呼び出し状態は
+コンテキストの <code>funcLookupData</code> に置く（<code>userData</code> は 2.13 の
+<code>xmlXPathSetErrorHandler</code> が上書きするので使えない）。</p>
+</li>
+<li>
+<p><code>XML::Schema</code> / <code>XML::RelaxNG</code>（<code>schema.rs</code>）: <code>from_document</code>
+（<code>xmlSchemaParse</code> / <code>xmlRelaxNGParse</code>、パースエラーは <code>@errors</code>、失敗は
+aggregate を raise、NONET なら外部エンティティローダを <code>xmlNoNet</code> に差し替え、
+空白テキストノードに Ruby オブジェクトがあるドキュメントはコピーしてから
+コンパイル）、<code>validate_document</code> / <code>validate_file</code>（<code>SyntaxError</code> の配列）。</p>
+</li>
+<li>
+<p><code>HTML4::ElementDescription</code>（<code>misc.rs</code>、libxml2 の静的な要素表
+<code>htmlTagLookup</code> の wrapper）: 名前・説明・各フラグ・サブ要素・属性リスト。
+<code>Node#description</code> が動く。</p>
+</li>
+<li>
+<p>HTML5（<code>html5.rs</code> + <code>libxml2-src/glue/monoruby_gumbo.c</code>、nokogiri の
+gumbo-parser を <code>libxml2-src/vendor/gumbo-parser/</code> に同梱して <code>-std=c99</code> で
+ビルド）: <code>Nokogiri::Gumbo.parse</code> / <code>.fragment</code>（gumbo の木から libxml2 の
+木を組む walk は nokogiri の <code>build_tree</code> を C のまま置き、Rust 側は
+オプション・エラー・Ruby オブジェクトだけを扱う。gumbo の構造体は Rust に
+写さない）、<code>quirks_mode</code>、<code>max_attributes</code> / <code>max_errors</code> /
+<code>max_tree_depth</code> / <code>parse_noscript_content_as_text</code>、fragment の文脈
+（nil / “ns:tag” / Node、form の祖先、<code>annotation-xml</code> の encoding、
+quirks の計算）、エラーの caret 診断（<code>SyntaxError</code> の <code>str1</code> が gumbo の
+エラーコード）、HTML5 シリアライザ（<code>html_standard_serialize</code> /
+<code>prepend_newline?</code>、void 要素・raw text 要素・名前空間接頭辞の規則）。
+エラー診断は <strong>パースした文字列そのもの</strong>（String の内部バッファ）に対して
+描く必要がある（gumbo のエラーはそのバッファへのポインタを持つ。コピーを
+渡すと assert で落ちる）。</p>
+</li>
+<li>
+<p>XSLT（<code>xslt.rs</code> + <code>libxml2-src/glue/monoruby_xslt.c</code>、libxslt 1.1.43 と
+libexslt を <code>libxml2-src/vendor/libxslt/</code> に無改造で同梱。nokogiri の
+libxslt パッチは config.guess / config.sub だけ。<code>xsltconfig.h</code> /
+<code>exsltconfig.h</code> は build.rs がテンプレートから生成し、<code>config.h</code> は
+<code>config/xslt-config.h</code>。libxml2 の <code>config.h</code> と衝突しないよう別の
+include ルートに置く）: <code>XSLT::Stylesheet.parse_stylesheet_doc</code>
+（ドキュメントのコピーを <code>xsltParseStylesheetDoc</code>、失敗は libxslt の
+generic error をまとめた <code>RuntimeError</code>）、<code>#transform(doc, params)</code>
+（Hash は <code>to_a.flatten</code>、<code>xsltApplyStylesheet</code>。transform 中の libxslt /
+libxml2 の generic error は全部集めて <code>RuntimeError</code>——nokogiri と同じく、
+terminate しない <code>xsl:message</code> でも raise する。<code>xsl:strip-space</code> を持つ
+stylesheet で空白テキストノードに Ruby オブジェクトがある入力はコピーを
+変換する、nokogiri #2800）、<code>#serialize</code> / <code>apply_to</code>
+（<code>xsltSaveResultToString</code>）、<code>XSLT.register(uri, klass)</code> /
+<code>XSLT.parse(xsl, modules)</code>（<code>xsltRegisterExtModule</code>。変換が名前空間に触れると
+klass のインスタンスメソッド全部を <code>xsltRegisterExtFunction</code> で登録し、
+インスタンスを 1 つ作って Stylesheet の <code>func_instances</code> に保持する。
+関数呼び出しの引数・戻り値の変換は XPath のカスタム関数ハンドラと同じ
+<code>xpath.rs::marshal_funcall</code>。ハンドラの例外は transform の呼び出し状態
+（thread-local）に保存して評価を打ち切り、transform から投げ直す）。
+EXSLT（<code>exsltRegisterAll</code>）と libxslt の extras（<code>xt:node-set</code> 等、
+<code>xsltInit</code> が登録）が使える。generic error の可変長引数コールバックは
+C の glue で整形する。<code>LIBXSLT_*</code> 定数は本物になった。</p>
+</li>
+</ul>
+<p>これで <code>doc/nokogiri.md</code> の対象は全部実装済み。</p>
+<p>設計上わかったこと:</p>
+<ul>
+<li>ネイティブオブジェクトの種別 <code>ObjTy::NATIVE</code>（<code>RValue</code> に
+<code>Box&lt;dyn NativeData&gt;</code> を持たせ、<code>mark</code> と <code>Drop</code> を型ごとに実装）を足した。
+そのクラスは <strong><code>instance_ty</code> を <code>NATIVE</code> で定義しなければならない</strong>
+（<code>Store::define_class_with_instance_ty</code>）: JIT は <code>instance_ty</code> が <code>OBJECT</code>
+のクラスの ivar をインラインスロット（<code>kind</code> 共用体）に読み書きするので、
+普通の <code>define_class</code> で作ると <code>@errors = ...</code> がペイロードの Box を上書きして
+落ちる。</li>
+<li>パースのエラー収集は <strong>libxml2 のグローバル（スレッドローカル）structured
+handler</strong>（<code>xmlSetStructuredErrorFunc</code>）で行い、コンテキストの
+<code>xmlCtxtSetErrorHandler</code> は使わない。<code>NOERROR</code> / <code>NOWARNING</code> オプション
+（<code>DEFAULT_HTML</code> に入っている）が付くと libxml2 はコンテキストのハンドラを
+素通りするが、グローバルのハンドラには依然として届く。nokogiri が
+<code>document.errors</code> を埋め、strict モードで raise できるのはこのため。</li>
+<li>SAX のコールバックは libxml2 の C フレームの内側で Ruby を呼ぶ。Ruby の
+例外は C を巻き戻せないので、コールバックは例外を <code>SaxCall</code>（<code>xmlParserCtxt</code>
+の <code>_private</code> に置いた、呼び出し中だけ生きる構造体）に保存して
+<code>xmlStopParser</code> し、以後のコールバックは何もせず、<code>xmlParseDocument</code> /
+<code>xmlParseChunk</code> から戻ったネイティブメソッドが投げ直す（nokogiri は
+longjmp で C を突き抜ける）。停止した PushParser にさらに書くと
+<code>XML_ERR_USER_STOP</code> で RuntimeError になる（CRuby ではパーサ状態が壊れた
+まま続く）。</li>
+<li><code>warning</code> / <code>error</code> の SAX コールバックは可変長引数（printf 形式）なので
+Rust では書けない。<code>libxml2-src/glue/monoruby_glue.c</code> に C で置き、
+<code>vsnprintf</code> で整形した文字列を起動時に登録した Rust の関数へ渡す。
+同じファイルに <code>xmlParserCtxt</code> のフィールドアクセサ（<code>_private</code> / <code>sax</code> /
+<code>userData</code> / <code>myDoc</code> / <code>standalone</code> / <code>encoding</code> / <code>version</code> / <code>options</code> /
+行・桁）を置き、巨大でバージョン依存の構造体を Rust 側で写さずに済ませる。</li>
+<li>ビルトインの中で作った <code>Value</code> を Ruby 呼び出し（<code>initialize</code>、<code>decorate</code>、
+<code>SyntaxError.new</code>）を跨いで持つときは <code>vm.temp_push</code> で根付けする
+（<code>doc/gc.md</code> §8.1）。<code>wrap_document</code> / <code>wrap_node_set</code> / <code>errors_to_array</code>
+/ <code>NodeSet#to_a</code> がそれ。</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../design/native_extension_loading.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../design/c_extention.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../design/native_extension_loading.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../design/c_extention.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>
