@@ -7,8 +7,9 @@
 # (which is gitignored) and then runs `mdbook build`. The subdirectory keeps
 # its name under src/design/ so the relative links inside those documents
 # (`../gc.md` and the like) resolve the same way in the book as in the repo.
-# Planning/handoff memos are excluded. If a new design document is added to
-# doc/, list it in src/SUMMARY.md to give it a chapter.
+# If a new design document is added to doc/, list it in src/SUMMARY.md to
+# give it a chapter -- mdBook renders only what SUMMARY.md lists, so an
+# unlisted document is copied here and then silently dropped.
 set -eu
 cd "$(dirname "$0")"
 
@@ -17,6 +18,5 @@ mkdir -p src/design
 cp ../doc/*.md src/design/
 cp ../doc/*.svg ../doc/*.png src/design/
 cp -r ../doc/runtime_optimization src/design/runtime_optimization
-rm -f src/design/handoff_record_stream.md src/design/plan-activerecord.md
 
 mdbook build

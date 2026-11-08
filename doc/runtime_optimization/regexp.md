@@ -2,14 +2,13 @@
 
 Regexp は graphql の実行時間の 3 分の 1 を占め（`perf` で 33.9 %）、
 StringScanner を介して activerecord / rack のパーサ群にも効いてくる
-（[`../yjit_bench_slow_investigation_2026-09.md`](../yjit_bench_slow_investigation_2026-09.md)
-§5.6、§8.1）。
+（2026-09 の yjit-bench 調査による）。
 
 この文書は、正規表現エンジンとコンパイル済みパターンのキャッシュ、`$~` と
 `MatchData` の置き方、正規表現を使う `String` メソッドがどこで高速経路を
 取り、どこで取らないかをまとめ、最後に CRuby との実装差異を並べる。
 String 側の表現（共有部分文字列、code range、`regex_view`）は
-[string.md](string.md) が前提になる。共通の前提は [README.md](README.md)。
+[string.md](string.md) が前提になる。共通の前提は [README.md](./)。
 
 ---
 
@@ -276,9 +275,8 @@ matches:  SmallVec<[Span; 2]>   // 24
 
 `RValue::is_promotable` で `ObjTy::REGEXP` は `TIME` / `UMETHOD` とともに
 昇格可能（「この 3 つは `Value` を一切持たない」）。remember-on-promote
-（`young_child_exists`）からも参照無しの腕で除外される。効果は
-[`../yjit_bench_slow_investigation_2026-09.md`](../yjit_bench_slow_investigation_2026-09.md)
-§8.6（minor GC ごとの REGEXP の mark が erubi で 291 → 5）。
+（`young_child_exists`）からも参照無しの腕で除外される。効果は 2026-09 の yjit-bench 調査で確認済み（minor GC ごとの REGEXP の
+mark が erubi で 291 → 5）。
 `ObjTy::MATCHDATA` は昇格**しない**（regexp と haystack の `Value` を持ち、
 `_ => false` の腕に落ちる）。
 
@@ -405,9 +403,7 @@ Rust 側の `String#__strscan_match`:
   素の Fixnum、それ以外は平坦な `[b0, e0, b1, e1, …]` Array。
 - `$~` は触らない（CRuby の C 実装 strscan もレジスタを自分で持つ）。
 
-計測と経緯は
-[`../yjit_bench_slow_investigation_2026-09.md`](../yjit_bench_slow_investigation_2026-09.md)
-§5.6、§8.1。
+計測と経緯は 2026-09 の yjit-bench 調査による。
 
 ---
 
@@ -473,7 +469,7 @@ Rust 側の `String#__strscan_match`:
    （`count_num_cache_opcodes_inner` の "A nested OP_REPEAT is not yet
    supported"）。`Regexp.linear_time?` が false を返すものを縛るには
    `Regexp.timeout` を使う。
-5. `Regexp#multiline?` は未実装（[`../plan-activerecord.md`](../plan-activerecord.md)）。
+5. `Regexp#multiline?` は未実装。
 6. 非 UTF-8 レシーバに対する Regexp 付き `String#slice!`、同一エンコーディング
    の多バイト `tr` / `count` 集合は追記予定として `string.rs` に記録がある。
 

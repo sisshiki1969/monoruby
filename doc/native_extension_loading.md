@@ -46,7 +46,7 @@ feature 分割、(E) 別プロセス、(F) WASM、(G) Fiddle 上の Ruby バイ�
    ヘッダでの再コンパイルが要る。
 2. **汎用 FFI（Fiddle）経由はホットなライブラリには遅すぎる。** activerecord
    では Fiddle 版 sqlite3 が 1 反復の **35 %** を占め、native builtin 化で 0 に
-   なった（`doc/activerecord_liquid_il_rack_investigation_2026-09.md` §3.1）。
+   なった（2026-09 の activerecord / liquid-il / rack 調査による）。
    1 クエリあたり 30 回前後の FFI 呼び出しで、各呼び出しの引数変換
    （`value_to_carg` / `bits_to_value`）と `ffi_call` が支配する。
 3. **CRuby と出力を byte 単位で一致させるには同じライブラリを使うしかない。**
@@ -488,5 +488,5 @@ install root にあること、木ごと移した先で `$LOAD_PATH` が自分�
   TruffleRuby の事例、レイアウト不一致の吸収、`gem install` のフロー）
 - `doc/nokogiri.md` §2, §5 — nokogiri での選択肢比較と `NativeData` の位置づけ
 - `doc/threads.md` §9–10 — native offload（`NativeOp`）と残る制約
-- `doc/activerecord_liquid_il_rack_investigation_2026-09.md` §3.1 — Fiddle
-  経由 sqlite3 の 35 % と native 化後の数字
+- 2026-09 の activerecord / liquid-il / rack 調査 — Fiddle 経由 sqlite3 の
+  35 % と native 化後の数字

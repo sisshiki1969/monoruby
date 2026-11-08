@@ -39,6 +39,8 @@
 - [Chain deoptimization](design/chain_deopt.md)
 - [Reading the deopt log](design/deopt_log.md)
 - [Receiver-polymorphic call sites (Japanese)](design/polymorphic_call.md)
+- [Escape analysis](design/escape_analysis.md)
+- [Per-ivar type tracking](design/ivar_type_tracking.md)
 
 ---
 
@@ -53,9 +55,11 @@
 - [Exception handling — mechanism and CRuby contrast](design/exception_handling.md)
 - [Stack layout for the interpreter / JIT'ed code](design/stack_frame.md)
 - [Method argument processing (Japanese)](design/method_args.md)
+- [The `&block` parameter](design/block_param.md)
 - [Native (builtin) function registration](design/native_func.md)
 - [CREF — Class / Constant Reference](design/cref.md)
 - [Refinements and method resolution](design/refinements.md)
+- [Singleton classes — facts and invariants](design/singleton_class_facts.md)
 - [TOPLEVEL_BINDING and the main script](design/toplevel_binding.md)
 - [super resolution via the caller PC (Japanese)](design/super_resolution.md)
 
@@ -70,7 +74,10 @@
 # Design Documents (continued)
 
 - [Per-encoding character iteration design](design/encoding_char_iteration_design.md)
-- [C extension support — design notes (Japanese)](design/c_extention.md)
+- [CRuby-compatible C API layer (Japanese)](design/c_api.md)
+- [Native extension loading (Japanese)](design/native_extension_loading.md)
+- [Nokogiri (Japanese)](design/nokogiri.md)
+- [C extension support — the design study that preceded the layer (Japanese)](design/c_extention.md)
 - [ruby/spec hang countermeasures (Japanese)](design/ruby_spec_skip_tags.md)
 - [optcarrot --opt profile (Japanese)](design/optcarrot_opt_profile.md)
 - [Progress summary (April 2025 – April 2026)](design/progress_2025-2026.md)

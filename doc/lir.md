@@ -7,7 +7,7 @@ uniformly").
 
 Status: **the great majority of `AsmInst` families now lower through
 `encode_linst`.** The model lives in
-[`monoruby/src/codegen/jitgen/lir.rs`](../monoruby/src/codegen/jitgen/lir.rs);
+`monoruby/src/codegen/jitgen/lir.rs`;
 the per-arch encoder is `Codegen::encode_linst`, defined once in each
 `arch/<arch>/compile/…` file. As of this writing the integer + control-flow
 core, all addressing modes, the GC write barrier, the common guard/check family,
@@ -59,7 +59,7 @@ TraceIR
 
 `AsmIR` stays the register-allocated, arch-neutral *front-end* output (one
 `AsmInst` per semantic operation). The arch-neutral dispatcher
-`compile_asmir` ([compile_shared.rs](../monoruby/src/codegen/jitgen/asmir/compile_shared.rs))
+`compile_asmir` (`compile_shared.rs`)
 lowers each migrated `AsmInst` into one or more `LInst`s and feeds them to
 `encode_linst`; not-yet-migrated families still call their per-arch `emit_*`
 directly from the dispatcher.
@@ -120,7 +120,7 @@ convenient.
 The macro-op variants do not lower to primitives inside `encode_linst`; instead
 each backend's `encode_linst` ends with `other => self.encode_linst_macro(other)`,
 and the **arch-neutral** `encode_linst_macro`
-([compile_shared.rs](../monoruby/src/codegen/jitgen/asmir/compile_shared.rs))
+(`compile_shared.rs`)
 delegates each macro-op to the existing per-arch `emit_*` helper. This keeps the
 delegation in one place (rather than duplicating it in both backends) while
 still funnelling *all* emission through `encode_linst`. See §5.

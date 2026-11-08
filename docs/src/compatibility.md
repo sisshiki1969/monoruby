@@ -128,9 +128,7 @@ plain `require`, `extconf.rb` + `make` and `gem install` work against it, and
 CRuby's own `ext/date`, `ext/stringio`, `ext/zlib`, `ext/socket`,
 `ext/openssl` and `ext/bigdecimal` are built from unmodified upstream source.
 That is what moved the `library` group from 57.6% to 98.5%. The layer is
-documented in
-[`doc/c_api.md`](https://github.com/sisshiki1969/monoruby/blob/master/doc/c_api.md)
-and
-[`doc/native_extension_loading.md`](https://github.com/sisshiki1969/monoruby/blob/master/doc/native_extension_loading.md);
-the older [C extension support](design/c_extention.md) design study predates
-it and describes the problem, not the shipped solution.
+documented in [CRuby-compatible C API layer](design/c_api.md) and [Native
+extension loading](design/native_extension_loading.md); the older [C
+extension support](design/c_extention.md) design study predates it and
+describes the problem, not the shipped solution.

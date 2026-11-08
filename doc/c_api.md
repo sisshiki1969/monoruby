@@ -520,7 +520,7 @@ call site まで遡って見るので同じ答え（CRuby でもキーワード�
 + `value::enc_codepoint`）で、UTF-8 だけだった復号が EUC-JP / Shift_JIS /
 Windows-31J / UTF-16 / UTF-32 / ISO-8859-x など monoruby が持つ全部に
 なった。空なら "empty string"、文字が始まらなければ "invalid byte sequence
-in <enc>" の `ArgumentError`（CRuby と同文）。
+in `<enc>`" の `ArgumentError`（CRuby と同文）。
 
 検証: `tests/capi/capi_time.c`（`tests/capi.rs` の 5 本目）が上の全部を
 CRuby と比較する。`bin/test-gems` に `strptime`（0.2.5）と

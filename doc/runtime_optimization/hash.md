@@ -4,7 +4,7 @@ Ruby プログラムは Hash を「オブジェクトのフィールド袋」と
 `[]` / `[]=` / `key?` / `fetch` はアプリケーションのもっとも内側のループに
 現れる。yjit-bench の erubi では実行時間の 29 %、rack で 18 %、
 activerecord で 13 % が Hash 参照だった
-（[`yjit_bench_slow_investigation_2026-09.md`](../yjit_bench_slow_investigation_2026-09.md) §5.2）。
+（2026-09 の yjit-bench 調査による）。
 
 この文書は、現在の Hash がどういう表現とどういう探索経路を持っているかを
 まとめ、そこに入れた最適化を計測とともに記録し、残っているコストと次の
@@ -13,7 +13,7 @@ activerecord で 13 % が Hash 参照だった
 どう違うかは §6 にまとめた。
 
 `runtime_optimization/` の他の章（[Array](array.md) / [String](string.md) /
-[Regexp](regexp.md)）と共通の前提は [README.md](README.md) にある。
+[Regexp](regexp.md)）と共通の前提は [README.md](./) にある。
 
 ---
 

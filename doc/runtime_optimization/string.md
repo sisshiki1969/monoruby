@@ -3,13 +3,12 @@
 String はテンプレートエンジンとパーサの最内ループに出てくる型で、erubi の
 バッファ `<<`、Hash の String キー、`"lit".freeze` がそれぞれ計測で
 ボトルネックになった
-（[`../yjit_bench_slow_investigation_2026-09.md`](../yjit_bench_slow_investigation_2026-09.md)
-§5.2、§5.6）。
+（2026-09 の yjit-bench 調査による）。
 
 この文書は、String のセル内レイアウト、部分文字列の共有と copy-on-write、
 エンコーディングと code range のキャッシュ、リテラルの扱い、VM と JIT の
 高速経路をまとめ、最後に CRuby との実装差異を並べる。共通の前提は
-[README.md](README.md)、Hash の String キーについては [hash.md](hash.md) を参照。
+[README.md](./)、Hash の String キーについては [hash.md](hash.md) を参照。
 
 ---
 
@@ -480,7 +479,7 @@ inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも
 | `rb_fstring` の重複排除 | pragma のリテラル**と**実行時の `-"str"` / `String#-@` / Hash キーに適用 | コンパイル時のリテラルプール `Store::frozen_str_pool`（`(bytes, encoding)` キー）**のみ**。`String#-@` は素の `dup.freeze`（**実行時の重複排除無し**）。Hash の String キーは格納ごとに `dup` + `freeze` でインターンしない |
 | chilled リテラル | CRuby 3.4 の `STR_CHILLED` | ヘッダフラグのビット 7 `CHILLED_LITERAL_BIT`、`Symbol#to_s` 用の別の `is_chilled` ビット、`--debug-frozen-string-literal` の出自テーブル |
 | coderange | `ENC_CODERANGE_*` を RBasic のフラグにキャッシュ | JIT 既知オフセットの `Cell<CodeRange>`（`repr(u8)`）。**遅延**計算で、追記・部分文字列・repeat では再計算でなく O(1) で畳む |
-| `String#hash` | seeded SipHash。fstring 側でキャッシュ | seeded SipHash（`DefaultHasher` + プロセスごとの `RandomState`）。**String ごとのキャッシュ無し**（[`../yjit_bench_slow_investigation_2026-09.md`](../yjit_bench_slow_investigation_2026-09.md) §5.2 が未解決コストとして挙げる） |
+| `String#hash` | seeded SipHash。fstring 側でキャッシュ | seeded SipHash（`DefaultHasher` + プロセスごとの `RandomState`）。**String ごとのキャッシュ無し**（2026-09 の yjit-bench 調査が未解決コストとして挙げる） |
 | Hash キーのバケッティング | `any_hash` はサブクラスでも内容をハッシュ、`rb_any_cmp` は `String` ちょうどのときだけバイト比較 | 同じ分割: `string_digest` は無条件に内容、`string_key_eq` / `is_plain_rstring_inner` がバイト比較をクラス一致でゲート |
 | `opt_str_freeze` | あり | あり — `StringFreeze` 命令（§3.5） |
 | `opt_str_uminus` | あり | **無し** |
