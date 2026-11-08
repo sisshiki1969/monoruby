@@ -1,5 +1,5 @@
 # Run on monoruby (the gem installed through its C API layer, over the
-# Time API) and on the host CRuby by tests/capi_gems.rs; both must print
+# Time API) and on the host CRuby by bin/test-gems; both must print
 # the same.
 gem "strptime", ENV.fetch("CAPI_GEM_VERSION")
 require "strptime"

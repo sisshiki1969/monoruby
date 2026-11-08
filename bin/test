@@ -10,10 +10,26 @@ set -e
 # lines with awk instead. Identical output to `head -n -3` on GNU.
 drop_last3() { awk 'NR>3{print buf[NR%3]} {buf[NR%3]=$0}'; }
 
+# The reference CRuby, as the absolute path of the executable `ruby` on
+# PATH resolves to *here*. rbenv's shim picks the version from the
+# `.ruby-version` nearest the current directory, so the phases that run
+# `ruby` with their cwd outside the checkout (ruby-bench, the gem tests'
+# fixtures under ../ruby-bench) got whichever Ruby `~/.rbenv/version`
+# names — a different version with a different gem set — while the gem
+# check below, run here, saw the pinned one and found nothing missing.
+# Pinning the path once makes every phase, and every child the tests
+# spawn, use the Ruby the checkout's `.ruby-version` selects.
+RUBY_BIN="$(ruby -e 'print RbConfig.ruby')"
+[ -x "$RUBY_BIN" ] || { echo "cannot resolve the ruby on PATH to an executable (got '$RUBY_BIN')" >&2; exit 2; }
+# Its `gem` is the script next to it (not `ruby -S gem`, which would find
+# a version manager's shell-script shim on PATH and fail to run it).
+GEM_BIN="$("$RUBY_BIN" -e 'print File.join(RbConfig::CONFIG["bindir"], "gem")')"
+[ -f "$GEM_BIN" ] || { echo "no gem command next to $RUBY_BIN" >&2; exit 2; }
+echo "ruby: $RUBY_BIN ($("$RUBY_BIN" -v))"
 # Use YJIT when this ruby supports it (x86-64 Linux CI); fall back to plain ruby
 # where the prebuilt has no YJIT (some arm64 macOS builds). YJIT changes speed,
 # not semantics, so the output diffs are unaffected either way.
-RUBY=(ruby --yjit)
+RUBY=("$RUBY_BIN" --yjit)
 
 # stress-spill-pool / gc-stress amplify the JIT's spill + GC paths and run on
 # every arch. `GP_ALLOC_POOL` is empty on *both* arches now — GP-pool residence
@@ -88,10 +104,9 @@ phase() {
 }
 
 # Host gems the suite needs: `bigdecimal` for tests/bigdecimal.rs (not a
-# default gem since Ruby 3.4), the gems whose C extensions monoruby stands in
-# for (tests/{bcrypt,msgpack,yajl,strptime,coolio,zstd,markly}.rs run the same
-# code on the host CRuby with the real gem), and the ruby-bench workloads'
-# gems for bin/ruby-bench-diff. Same list, same pins as
+# default gem since Ruby 3.4), the gems whose C extensions bin/test-gems
+# installs for monoruby from the host's gem cache and compares against,
+# and the ruby-bench workloads' gems for bin/ruby-bench-diff. Same list, same pins as
 # .github/workflows/rust.yml and .claude/hooks/session-start.sh — keep the
 # three in sync. rbenv keeps gems per ruby version, so switching versions
 # silently drops them — install whatever is missing (idempotent; touches the
@@ -104,11 +119,11 @@ for spec in "${HOST_GEMS[@]}"; do
   name="${spec%%:*}"
   version=()
   [ "$name" != "$spec" ] && version=(-v "${spec#*:}")
-  gem list -i "^$name\$" "${version[@]}" > /dev/null || MISSING_GEMS+=("$spec")
+  "$RUBY_BIN" "$GEM_BIN" list -i "^$name\$" "${version[@]}" > /dev/null || MISSING_GEMS+=("$spec")
 done
 if [ "${#MISSING_GEMS[@]}" -gt 0 ]; then
   phase "installing missing host gems: ${MISSING_GEMS[*]}"
-  gem install --no-document --conservative "${MISSING_GEMS[@]}"
+  "$RUBY_BIN" "$GEM_BIN" install --no-document --conservative "${MISSING_GEMS[@]}"
   # monoruby caches the host gem paths (src/ruby_probe.rs); drop the cache so
   # the next run re-probes and sees the gems just installed.
   rm -f "$HOME/.monoruby/library_path" "$HOME/.monoruby/gem_path"
@@ -145,6 +160,20 @@ phase "build extensions next to the benchmark binary"
 env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS -u LLVM_PROFILE_FILE \
   cargo build -p sqlite3_native -p zstd_native -p psych_native -p nokogiri_native -p markly_native -p bcrypt_native -p digest_native \
   --target-dir "$(dirname "$(dirname "$MONORUBY")")"
+
+# The gem-install checks of the C API layer: the fixture gem built and
+# installed on both interpreters, a host-installed gem's extension rebuilt
+# for monoruby, and the real gems (bcrypt, msgpack, strscan, strptime,
+# yajl-ruby, json) installed from the host's gem cache through monoruby's
+# `gem` and compared with CRuby. These used to be cargo tests
+# (tests/capi_gems.rs and two of tests/mkmf.rs's) and are a script now:
+# what they depend on — the host's `gem`, its gem cache, cc and make —
+# is outside the interpreter, and they failed on developer machines for
+# reasons `cargo test` could say little about. Here they run against the
+# binary just built and report each check's result; a gem whose `.gem`
+# is not in the host's cache is a visible skip.
+phase "gem-install checks (bin/test-gems)"
+MONORUBY="$MONORUBY" CRUBY="$RUBY_BIN" bin/test-gems
 
 phase "benchmarks: app_fib / tarai / so_nbody"
 $MONORUBY benchmark/app_fib.rb > monoruby.log 2> /dev/null
@@ -251,7 +280,7 @@ rm *.log
 if [ -d "../ruby-bench/benchmarks" ]; then
   phase "ruby-bench output diff"
   echo "Running ruby-bench output diff..."
-  MONORUBY="$MONORUBY" CRUBY=ruby bin/ruby-bench-diff
+  MONORUBY="$MONORUBY" CRUBY="$RUBY_BIN" bin/ruby-bench-diff
 fi
 
 # Run ruby/spec with instrumented binary for coverage
@@ -261,7 +290,7 @@ if [ -d "../spec" ] && [ -d "../mspec" ]; then
   for cat in core/basicobject core/true core/false core/nil core/integer core/float core/comparable core/math core/builtin_constants core/class core/numeric core/rational core/range core/struct core/symbol core/range core/set core/systemexit core/method core/unboundmethod core/exception core/signal command_line; do
     phase "ruby/spec $cat"
     echo "=== $cat ==="
-    ../mspec/bin/mspec $cat -t "$MONORUBY"
+    "$RUBY_BIN" ../mspec/bin/mspec $cat -t "$MONORUBY"
   done
   cd "$OLDPWD"
 fi

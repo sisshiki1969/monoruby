@@ -288,17 +288,21 @@ CRuby のヘッダでビルドした（monoruby では読めない）`.so` が�
 - `<install root>/bin/gem`（`bin/dist` では `bin/gem`）は CRuby の
   `bin/gem` そのもの。`monoruby "$root/bin/gem" install foo` で使う。
 - `tests/mkmf.rs`: `tests/capi/capi_gem/`（`extconf.rb` 付きの gem）を
-  `extconf.rb` + `make` で、また `gem build` + `gem install` で monoruby と
-  ホスト CRuby の双方にビルド・インストールし、同じスクリプトの出力が
-  一致することを見る。
+  `extconf.rb` + `make` でビルドする。`gem build` + `gem install` で monoruby と
+  ホスト CRuby の双方にインストールし同じスクリプトの出力が一致することを
+  見る検査（と §3.24 のホスト gem の再ビルド検査）は `bin/test-gems`
+  （`bin/test` が呼ぶシェルスクリプト。cargo test ではない）に移した：
+  ホストの `gem` と gem cache、cc、make に依存し、開発機では処理系の外の
+  理由でよく落ちたため。
 
 ### 3.11 実 gem で面積を詰める（段階 4）
 
 `gem install` でビルドした実 gem を CRuby と比較して足りない API を埋めた。
-`tests/capi_gems.rs` がホスト CRuby の gem cache にある `.gem` を monoruby
+`bin/test-gems`（もと `tests/capi_gems.rs`。`bin/test` が呼ぶシェルスクリプトで、
+cargo test からは外した）がホスト CRuby の gem cache にある `.gem` を monoruby
 の `bin/gem` で専用 home に入れ、`tests/capi/gems/<gem>.rb` を双方で走らせて
 出力を比べる（1 行目は読み込んだ拡張の名前なので、stand-in でなく C 拡張が
-動いたことも見る）。
+動いたことも見る）。cache に `.gem` が無い gem はスキップとして報告する。
 
 | gem | 状態 | 使う面 |
 |---|---|---|
@@ -464,7 +468,7 @@ include してもよい）。`rb_enc_mbclen` / `rb_enc_strlen` / `rb_enc_codepoi
 名前付き捕獲、`rb_reg_region_copy`、`rb_memsearch`、`rb_reg_regcomp` /
 `rb_reg_quote` / `rb_reg_options` / `rb_reg_nth_match`、`rb_long2int` の
 RangeError、`rb_enc_precise_mbclen` の `MBCLEN_*` 判定を CRuby と比較。
-`tests/capi_gems.rs` の `strscan`（3.1.8、CI は `gem install strscan`）が
+`bin/test-gems` の `strscan`（3.1.8、CI は `gem install strscan`）が
 `StringScanner` のほぼ全メソッド（`scan_integer` の Ruby 側含む）を
 CRuby と比較する。残る差は `$LOADED_FEATURES` の順（monoruby は読む前に、
 CRuby は読んだ後に登録する）だけ。
@@ -519,7 +523,7 @@ Windows-31J / UTF-16 / UTF-32 / ISO-8859-x など monoruby が持つ全部に
 in <enc>" の `ArgumentError`（CRuby と同文）。
 
 検証: `tests/capi/capi_time.c`（`tests/capi.rs` の 5 本目）が上の全部を
-CRuby と比較する。`tests/capi_gems.rs` に `strptime`（0.2.5）と
+CRuby と比較する。`bin/test-gems` に `strptime`（0.2.5）と
 `yajl_ruby`（1.4.3）を足した。どちらも CI の `gem install` 対象に既に
 入っている（stand-in の比較テスト用）。
 
@@ -576,7 +580,7 @@ CRuby と違う点で残るのは「C に渡したポインタ先の要素が生
 `Qundef` を返す API、`rb_scan_args` の省略引数、`rb_yield` / `rb_block_call`
 / `rb_protect` / `rb_ensure` / `rb_hash_foreach` / `rb_funcall` を通る
 nil / false、`dmark` で mark される VALUE を CRuby と比較する。
-`tests/capi_gems.rs` に json 2.18.0 が加わり、gem の parser.so /
+`bin/test-gems` に json 2.18.0 が加わり、gem の parser.so /
 generator.so（stand-in `gem/json/ext/*.rb` より `.so` が勝つ）で
 `JSON.generate` / `parse` / `pretty_generate` / `State` / `Coder` /
 エラーメッセージが CRuby と一致する。既存の 5 フィクスチャと bcrypt /
@@ -604,7 +608,7 @@ json はコアの default gem なので、Ruby 側の半分（`json.rb`、`json/
 C API 層の拡張を含む `<home>/extensions/<platform>/<api>/<name-ver>` が
 ともに `$LOAD_PATH` にある）の lib にもあれば、そちらを返す。stand-in に
 勝つのは活性化後だけで、素の `require "json"` は従来どおり stand-in。
-`tests/capi_gems.rs` は `json`（キャッシュ中の最新、CI では 3.1.0）と
+`bin/test-gems` は `json`（キャッシュ中の最新、CI では 3.1.0）と
 `json_2_18`（2.18.0 固定）の両方を比較する。ついでに rubygems の
 `generate_plugins` が踏む `Hash#flat_map(&:last)`（ペアを分割しないブロック
 にはペアを丸ごと渡す）を `builtins/hash.rb` で直した。
@@ -703,7 +707,7 @@ weak なスタブを生成し `capi/libmonoruby_capi_stubs.a` に入れる。
   `tests/date.rs` が Date / DateTime / Time / YAML / JSON の挙動を
   CRuby と比較し、`tests/capi/capi_ids.c` が演算子 ID・`RETURN_ENUMERATOR`・
   エイリアス・coerce・`$~` の退避復元を CRuby と比較する。
-  `tests/mkmf.rs` の `gem install` テストは rubygems が `date` を要求する
+  `bin/test-gems` の `gem install` 検査は rubygems が `date` を要求する
   ので、これで通るようになった。
 
 ### 3.18 C で裏打ちされたグローバル変数、C++ の ANYARGS、alloc 関数の副作用（段階 10）
@@ -1067,7 +1071,7 @@ liquid-c はこれで止まっていた。
   1 度だけ警告し、元の LoadError を返す。extconf と make は
   `Bundler.with_unbundled_env` の中で走る（子の monoruby が
   `-rbundler/setup` でベンチのバンドルを立ち上げないように）。
-  `tests/mkmf.rs` の `host_installed_gem_extension_is_rebuilt`。
+  `bin/test-gems` の「the host-installed extension is rebuilt for monoruby」（もと `tests/mkmf.rs` の `host_installed_gem_extension_is_rebuilt`）。
 - **alloc 関数が self を覚える**（liquid-c の `body->self`）: 遅延 alloc
   （§3.7）は一時オブジェクトに alloc 関数を走らせて記録を本物に移すので、
   記録の中に保存された `self` が一時オブジェクトを指していた。alloc 関数の
@@ -1131,12 +1135,12 @@ liquid-c はこれで止まっていた。
 |---|---|---|
 | 1 | ローダ（`monoruby_capi_init` 判別、`$LOAD_PATH` 上の `.so`）、`ruby.h` 互換ヘッダ、`capi.c`: クラス / モジュール / メソッド定義（arity -2〜15）、即値・数値・文字列・シンボル・配列・ハッシュ・Range、`rb_funcall` 系、ブロック（`rb_yield` 系、`rb_block_proc`）、例外（`rb_raise`、`rb_protect` / `rb_ensure` / `rb_rescue2` / `rb_jump_tag`）、`rb_scan_args` / `rb_get_kwargs`、ivar / 定数 / cvar / gvar、GC 登録、`rb_sprintf`（`PRIsVALUE`）、最小限の encoding、`rb_thread_call_without_gvl` | 済（`tests/capi.rs`: 同じ C ソースを CRuby と monoruby で動かし出力一致） |
 | 2 | `Data` / `TypedData`（`TypedData_Make_Struct`、`DATA_PTR` の lvalue、dmark / dfree）、`rb_define_alloc_func` / `rb_undef_alloc_func`、`rb_block_call` / `rb_proc_new` / `rb_iterate` / `rb_iter_break`（C 関数をブロックとして渡す）、`rb_call_super`、`rb_struct_*`、`rb_obj_call_init`、`rb_class_new` | 済（§3.7〜3.9、`tests/capi/capi_data.c`）。`rb_keyword_given_p` は段階 7 |
-| 3 | `RbConfig::CONFIG`（`rubyhdrdir` などを install root に）、`mkmf` が monoruby を相手に `Makefile` を作れること、`capi.c` を `libmonoruby_capi.a` として `LIBRUBYARG` に、`gem install` で C 拡張 gem がビルドされ `extensions/<arch>/…` から読めること | 済（§3.10、`tests/mkmf.rs`）。gem home は monoruby 専用 |
-| 4 | 実 gem で面積を詰める（`rb_io_*`、`rb_enc_*`、Bignum 系、`ALLOCV`、`ruby/util.h`、シンボル可視性）。`bcrypt` と `msgpack` が CRuby と一致 | 済（§3.11、`tests/capi_gems.rs`）。`json` は段階 8、`strscan` は段階 6 |
+| 3 | `RbConfig::CONFIG`（`rubyhdrdir` などを install root に）、`mkmf` が monoruby を相手に `Makefile` を作れること、`capi.c` を `libmonoruby_capi.a` として `LIBRUBYARG` に、`gem install` で C 拡張 gem がビルドされ `extensions/<arch>/…` から読めること | 済（§3.10、`tests/mkmf.rs` と `bin/test-gems`）。gem home は monoruby 専用 |
+| 4 | 実 gem で面積を詰める（`rb_io_*`、`rb_enc_*`、Bignum 系、`ALLOCV`、`ruby/util.h`、シンボル可視性）。`bcrypt` と `msgpack` が CRuby と一致 | 済（§3.11、`bin/test-gems`）。`json` は段階 8、`strscan` は段階 6 |
 | 5 | `st_table`（`ruby/st.h` + CRuby の `st.c`） | 済（§3.12、`tests/capi/capi_st.c`） |
-| 6 | `ruby/re.h`（Onigmo を `MrOnigApi` 経由で、`rb_reg_prepare_re` / `rb_reg_onig_match`、`rb_enc_precise_mbclen` を本物に、`require` の `.so` 解決） | 済（§3.13、`tests/capi/capi_re.c`、`tests/capi_gems.rs` の strscan） |
-| 7 | Time API（`rb_time_*`、`rb_timespec_now`）、`rb_keyword_given_p`、UTF-8 以外の `rb_enc_codepoint_len`、`OBJ_INIT_COPY`、`UNREACHABLE`、config.h の時刻系 `HAVE_*`、`HAVE_RUBY_*_H` | 済（§3.14、`tests/capi/capi_time.c`、`tests/capi_gems.rs` の strptime / yajl-ruby） |
-| 8 | 拡張内の `VALUE` を CRuby のビット列に（`Qfalse == 0`）、層が境界で変換 | 済（§3.15、`tests/capi/capi_value.c`、`tests/capi_gems.rs` の json 2.18.0 と 3.1.0） |
+| 6 | `ruby/re.h`（Onigmo を `MrOnigApi` 経由で、`rb_reg_prepare_re` / `rb_reg_onig_match`、`rb_enc_precise_mbclen` を本物に、`require` の `.so` 解決） | 済（§3.13、`tests/capi/capi_re.c`、`bin/test-gems` の strscan） |
+| 7 | Time API（`rb_time_*`、`rb_timespec_now`）、`rb_keyword_given_p`、UTF-8 以外の `rb_enc_codepoint_len`、`OBJ_INIT_COPY`、`UNREACHABLE`、config.h の時刻系 `HAVE_*`、`HAVE_RUBY_*_H` | 済（§3.14、`tests/capi/capi_time.c`、`bin/test-gems` の strptime / yajl-ruby） |
+| 8 | 拡張内の `VALUE` を CRuby のビット列に（`Qfalse == 0`）、層が境界で変換 | 済（§3.15、`tests/capi/capi_value.c`、`bin/test-gems` の json 2.18.0 と 3.1.0） |
 | 9 | 層に無い API への参照はロードを通し呼ばれたら NotImplementedError（スタブアーカイブ）、CRuby の `ext/date` を層でビルドして同梱（`require "date"` / `time` / YAML）、1 文字演算子 ID、`RETURN_ENUMERATOR`、`$~` の退避復元 ABI、mkmf `depend` 用の CRuby ヘッダ名 | 済（§3.16〜3.17、`tests/capi/capi_ids.c`、`tests/date.rs`、ruby/spec `library/date` / `datetime` 全通過） |
 | 10 | C で裏打ちされたグローバル変数（`rb_define_*_variable`、ABI `gvar_hook`）、C++ の ANYARGS overload（`ruby/backward/cxxanyargs.hpp`）、`HAVE_RB_DEFINE_ALLOC_FUNC`、alloc 関数が置いた ivar の引き継ぎ、`rb_obj_instance_eval` 系、`strlcpy`、`.so` の判別を dlopen からシンボル表へ。gosu（SWIG の C++ ラッパー）がビルドでき dewasm の DOOM が動く | 済（§3.18、`tests/capi/capi_vars.c`、`tests/capi/capi_cxx.cpp`） |
 | 11 | CRuby の `ext/strscan` / `ext/stringio` / `ext/zlib` を層でビルドして同梱（monoruby 専用実装と `ext/zlib` を削除）、IO / encoding / econv / mutex の API、GVL 再取得の直列化省略、1 プロセス複数インタプリタでの拡張マッピング分離 | 済（§3.19、ruby/spec `library/zlib` / `stringio` / `stringscanner` 全通過） |
