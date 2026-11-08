@@ -11,12 +11,6 @@
     --fg: #1a1a1a;
     --muted: #666;
     --link: #1565c0;
-    --accent: #2e7d32;
-    --accent-dark: #1b5e20;
-    --accent-blue: #1565c0;
-    --accent-blue-dark: #0d47a1;
-    --accent-doc: #5e35b1;
-    --accent-doc-dark: #4527a0;
     --border: #eaeaea;
     --code-bg: #f5f5f5;
   }
@@ -30,47 +24,18 @@
     background: var(--bg);
     line-height: 1.6;
   }
-  .cta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75em;
-    margin: 2em 0 2.5em;
+  .portal-links { margin: 2em 0 2.5em; }
+  .portal-links section + section { margin-top: 1.4em; }
+  .portal-links h2 {
+    font-size: 1.05em;
+    margin: 0 0 0.4em;
+    padding: 0;
+    border: 0;
   }
-  .cta a {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5em;
-    padding: 0.85em 1.5em;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 1em;
-    text-decoration: none;
-    transition: transform 0.1s, background 0.1s;
-  }
-  .cta a:hover { transform: translateY(-1px); }
-  .cta .primary {
-    background: var(--accent);
-    color: #fff;
-    box-shadow: 0 2px 6px rgba(46, 125, 50, 0.25);
-  }
-  .cta .primary:hover { background: var(--accent-dark); }
-  .cta .primary-blue {
-    background: var(--accent-blue);
-    color: #fff;
-    box-shadow: 0 2px 6px rgba(21, 101, 192, 0.25);
-  }
-  .cta .primary-blue:hover { background: var(--accent-blue-dark); }
-  .cta .primary-doc {
-    background: var(--accent-doc);
-    color: #fff;
-    box-shadow: 0 2px 6px rgba(94, 53, 177, 0.25);
-  }
-  .cta .primary-doc:hover { background: var(--accent-doc-dark); }
-  .cta .secondary {
-    background: #f0f0f0;
-    color: var(--fg);
-  }
-  .cta .secondary:hover { background: #e0e0e0; }
+  .portal-links ul { margin: 0; padding-left: 1.3em; }
+  .portal-links li { margin: 0.25em 0; }
+  .portal-links a { font-weight: 600; }
+  .portal-links .note { color: var(--muted); font-weight: 400; }
   main h1 {
     border-bottom: 2px solid var(--border);
     padding-bottom: 0.3em;
@@ -105,35 +70,78 @@
 </head>
 <body>
 
-<nav class="cta">
-  <a class="primary-doc" href="./docs/">Documentation →</a>
-  <a class="primary-blue" href="./bench/">Performance vs YJIT (x86-64) →</a>
-  <a class="primary-blue" href="./bench-arm64/">Performance vs YJIT (aarch64) →</a>
-  <a class="primary" href="./spec/">ruby/spec compliance dashboard →</a>
-  <a class="primary" href="./library/">ruby/spec library dashboard →</a>
-  <a class="primary" href="https://sisshiki1969.github.io/rubyspec-stats/">rubyspec-stats (monoruby) →</a>
-  <a class="primary" href="https://eregon.me/rubyspec-stats/">rubyspec-stats (upstream) →</a>
-  <a class="secondary" href="https://github.com/sisshiki1969/monoruby">GitHub</a>
+<main>
+
+<div id="readme-head"><p class="loading">Loading README…</p></div>
+
+<nav class="portal-links">
+  <section>
+    <h2>Repository</h2>
+    <ul>
+      <li><a href="https://github.com/sisshiki1969/monoruby">sisshiki1969/monoruby</a> <span class="note">— source, issues and pull requests</span></li>
+    </ul>
+  </section>
+  <section>
+    <h2>Documentation</h2>
+    <ul>
+      <li><a href="./docs/">monoruby documentation</a> <span class="note">— installation and build, development and build options, architecture overviews and the design documents</span></li>
+    </ul>
+  </section>
+  <section>
+    <h2>Compatibility with CRuby</h2>
+    <ul>
+      <li><a href="https://sisshiki1969.github.io/rubyspec-stats/">rubyspec-stats</a> <span class="note">— daily ruby/spec pass rates for monoruby (<a href="https://eregon.me/rubyspec-stats/">upstream, across Ruby implementations</a>)</span></li>
+      <li><a href="./spec/">ruby/spec — core</a> <span class="note">— per-category pass rates, re-measured on every interpreter change</span></li>
+      <li><a href="./library/">ruby/spec — standard library</a> <span class="note">— the same for the <code>library</code> group</span></li>
+    </ul>
+  </section>
+  <section>
+    <h2>Benchmark</h2>
+    <ul>
+      <li><a href="./bench/">vs YJIT — x86-64</a> <span class="note">— yjit-bench against CRuby + YJIT, with a history chart per benchmark</span></li>
+      <li><a href="./bench-arm64/">vs YJIT — aarch64</a> <span class="note">— the same suite on an Apple Silicon runner</span></li>
+    </ul>
+  </section>
 </nav>
 
-<main id="readme"><p class="loading">Loading README…</p></main>
+<div id="readme-body"></div>
+
+</main>
 
 <script>
 const README_URL =
   "https://raw.githubusercontent.com/sisshiki1969/monoruby/master/README.md";
 const STOP_AT = /^## Prerequisites/m;
+// The README's own link bullets are the GitHub-side equivalent of the list
+// above (there "Repository" would be a self-link, here "Project portal" is),
+// so the portal renders the README *around* them: the title, badges and
+// intro before the markers, then `## What's New` onward after.
+// Prefix-matched: either marker may carry a trailing note before its `-->`.
+const LINKS_BEGIN = "<!-- BEGIN PORTAL-LINKS";
+const LINKS_END = "<!-- END PORTAL-LINKS";
 
 (async () => {
-  const target = document.getElementById("readme");
+  const head = document.getElementById("readme-head");
+  const body = document.getElementById("readme-body");
+  const render = (md) => marked.parse(md, { breaks: false, gfm: true });
   try {
     const res = await fetch(README_URL + "?t=" + Date.now());
     if (!res.ok) throw new Error("HTTP " + res.status);
-    const md = await res.text();
-    const trimmed = md.split(STOP_AT)[0];
-    target.innerHTML = marked.parse(trimmed, { breaks: false, gfm: true });
+    const md = (await res.text()).split(STOP_AT)[0];
+    const i = md.indexOf(LINKS_BEGIN);
+    const j = md.indexOf(LINKS_END);
+    const after = j === -1 ? -1 : md.indexOf("-->", j);
+    if (i !== -1 && after > i) {
+      head.innerHTML = render(md.slice(0, i));
+      body.innerHTML = render(md.slice(after + 3));
+    } else {
+      // Markers gone from the README: show all of it rather than nothing.
+      head.innerHTML = render(md);
+      body.innerHTML = "";
+    }
   } catch (e) {
-    target.innerHTML =
-      '<p>Could not load README (' + e.message + '). ' +
+    head.innerHTML =
+      '<h1>monoruby</h1><p>Could not load README (' + e.message + '). ' +
       'See the <a href="https://github.com/sisshiki1969/monoruby">repository</a>.</p>';
   }
 })();

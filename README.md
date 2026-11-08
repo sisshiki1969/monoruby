@@ -6,8 +6,10 @@
 
 Ruby implementation with yet another JIT compiler written in Rust.
 
+<!-- BEGIN PORTAL-LINKS: the project portal renders its own link list instead of these two bullets (.github/portal/index.html) -->
 - 📖 **[Documentation](https://sisshiki1969.github.io/monoruby/docs/)** — [installation and build](https://sisshiki1969.github.io/monoruby/docs/installation.html), [development and build options](https://sisshiki1969.github.io/monoruby/docs/development.html), [benchmark](https://sisshiki1969.github.io/monoruby/docs/benchmarks.html), [compatibility](https://sisshiki1969.github.io/monoruby/docs/compatibility.html) and the full [changelog](https://sisshiki1969.github.io/monoruby/docs/changelog.html), plus architecture overviews and the design documents.
 - 📊 **[Project portal](https://sisshiki1969.github.io/monoruby/)** — benchmark and ruby/spec dashboards, re-measured on every push to `master` that touches the interpreter.
+<!-- END PORTAL-LINKS -->
 
 ## What's New
 
