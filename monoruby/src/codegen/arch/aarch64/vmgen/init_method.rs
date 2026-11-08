@@ -13,6 +13,7 @@ impl Codegen {
         let dskip = self.jit.label();
         let dloop = self.jit.label();
         let bskip = self.jit.label();
+        let even = self.jit.label();
         // allocate stack: sp -= stack_offset * 16
         monoasm_arm64!(&mut self.jit,
             ldrh x10, [x(PC.0)];
@@ -54,16 +55,40 @@ impl Codegen {
             ldrh x11, [x(PC.0), #(2)];  // arg_num
             sub x12, x15, x11;
             cbz x12, skip;
-        // base = lfp - reg_num*8 - LFP_ARG0 ; fill [base + count*8] downward
+        // base = lfp - reg_num*8 - LFP_ARG0: the run is [base + 8,
+        // base + 8 + count*8), filled upward from x10 = base + 8.
             neg x15, x15;
             add x15, x(LFP.0), x15, lsl #(3);
             sub x15, x15, #(LFP_ARG0 as u32);
             mov x14, (NIL_VALUE);
-            loop_:
-            add x10, x15, x12, lsl #(3);
+            add x10, x15, #(8);
+        // An odd count stores one slot alone ...
+            tbz x12, #(0), even;
             str x14, [x10];
+            add x10, x10, #(8);
             sub x12, x12, #(1);
-            cbnz x12, loop_;
+            cbz x12, skip;
+            even:
+        );
+        // ... the rest goes through v0 (scratch) holding nil twice: a
+        // 16-byte store if the count is 2 mod 4, then 32 bytes per
+        // `stp q0, q0`.
+        self.a64_dup_2d(0, 14);
+        monoasm_arm64!(&mut self.jit,
+            tbz x12, #(1), loop_;
+        );
+        self.a64_str_q_post16(0, 10);
+        monoasm_arm64!(&mut self.jit,
+            sub x12, x12, #(2);
+            cbz x12, skip;
+            loop_:
+        );
+        self.a64_stp_q_post32(0, 10);
+        monoasm_arm64!(&mut self.jit,
+            subs x12, x12, #(4);
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &loop_);
+        monoasm_arm64!(&mut self.jit,
             skip:
         // The named `&block` parameter's slot (`[PC+12]`, 0: none) starts
         // cleared to 0: "not assigned, the frame's block handler is the

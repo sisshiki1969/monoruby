@@ -321,3 +321,104 @@ impl Codegen {
         }
     }
 }
+
+/// Hand-encoded AdvSIMD (NEON) stores for the zero/nil fills. monoasm's
+/// arm64 DSL has no Q-register forms, so these emit the instruction words
+/// directly; each encoding is pinned against the architectural one by
+/// `neon_fill_encodings` below.
+impl Codegen {
+    /// `dup v(vd).2d, x(xn)`: broadcast a 64-bit GPR into both lanes.
+    pub(in crate::codegen) fn a64_dup_2d(&mut self, vd: u32, xn: u32) {
+        self.jit.emitl(a64_enc::dup_2d(vd, xn));
+    }
+
+    /// `str q(vt), [x(xn)], #16`: 16-byte store, post-incrementing `xn`.
+    pub(in crate::codegen) fn a64_str_q_post16(&mut self, vt: u32, xn: u32) {
+        self.jit.emitl(a64_enc::str_q_post(vt, xn, 16));
+    }
+
+    /// `stp q(vt), q(vt), [x(xn)], #32`: 32-byte store, post-incrementing
+    /// `xn`.
+    pub(in crate::codegen) fn a64_stp_q_post32(&mut self, vt: u32, xn: u32) {
+        self.jit.emitl(a64_enc::stp_q_post(vt, vt, xn, 32));
+    }
+
+    /// Store `n_slots` 8-byte words upward from `x(base)` (which the fill
+    /// may advance): 32 bytes per `stp q(v), q(v)`, then a 16-byte
+    /// `str q(v)` and an 8-byte `str x(xs)` for the tail. `v(v)` holds
+    /// the pattern in both lanes and `x(xs)` the same pattern as a scalar.
+    pub(in crate::codegen) fn a64_fill_slots_q(
+        &mut self,
+        base: u32,
+        n_slots: usize,
+        v: u32,
+        xs: u32,
+    ) {
+        let bytes = n_slots as u32 * 8;
+        // `stp`'s scaled imm7 reaches +1008; past it, step the base on.
+        let mut done = 0;
+        let mut pos = 0u32;
+        while done + 32 <= bytes {
+            if pos > 1008 {
+                monoasm_arm64!(&mut self.jit, add x(base), x(base), #(pos););
+                pos = 0;
+            }
+            self.jit.emitl(a64_enc::stp_q_off(v, v, base, pos as i32));
+            pos += 32;
+            done += 32;
+        }
+        if done + 16 <= bytes {
+            self.jit.emitl(a64_enc::str_q_off(v, base, pos));
+            pos += 16;
+            done += 16;
+        }
+        if done + 8 <= bytes {
+            monoasm_arm64!(&mut self.jit, str x(xs), [x(base), #(pos)];);
+        }
+    }
+}
+
+pub(crate) mod a64_enc {
+    /// `dup Vd.2D, Xn`
+    pub(crate) fn dup_2d(vd: u32, xn: u32) -> u32 {
+        0x4E08_0C00 | (xn << 5) | vd
+    }
+    /// `str Qt, [Xn, #imm]` (unsigned offset, a multiple of 16 up to 65520)
+    pub(crate) fn str_q_off(vt: u32, xn: u32, imm: u32) -> u32 {
+        assert!(imm % 16 == 0 && imm / 16 < 4096);
+        0x3D80_0000 | ((imm / 16) << 10) | (xn << 5) | vt
+    }
+    /// `str Qt, [Xn], #imm` (post-index, -256..=255)
+    pub(crate) fn str_q_post(vt: u32, xn: u32, imm: i32) -> u32 {
+        assert!((-256..256).contains(&imm));
+        0x3C80_0400 | (((imm as u32) & 0x1ff) << 12) | (xn << 5) | vt
+    }
+    /// `stp Qt1, Qt2, [Xn, #imm]` (signed offset, a multiple of 16 in
+    /// -1024..=1008)
+    pub(crate) fn stp_q_off(vt1: u32, vt2: u32, xn: u32, imm: i32) -> u32 {
+        assert!(imm % 16 == 0 && (-1024..=1008).contains(&imm));
+        0xAD00_0000 | ((((imm / 16) as u32) & 0x7f) << 15) | (vt2 << 10) | (xn << 5) | vt1
+    }
+    /// `stp Qt1, Qt2, [Xn], #imm` (post-index)
+    pub(crate) fn stp_q_post(vt1: u32, vt2: u32, xn: u32, imm: i32) -> u32 {
+        assert!(imm % 16 == 0 && (-1024..=1008).contains(&imm));
+        0xAC80_0000 | ((((imm / 16) as u32) & 0x7f) << 15) | (vt2 << 10) | (xn << 5) | vt1
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The words `llvm-mc -triple=aarch64 -show-encoding` gives.
+        #[test]
+        fn neon_fill_encodings() {
+            assert_eq!(dup_2d(0, 9), 0x4E08_0D20); // dup v0.2d, x9
+            assert_eq!(dup_2d(0, 14), 0x4E08_0DC0); // dup v0.2d, x14
+            assert_eq!(str_q_off(0, 10, 16), 0x3D80_0540); // str q0, [x10, #16]
+            assert_eq!(str_q_post(0, 10, 16), 0x3C81_0540); // str q0, [x10], #16
+            assert_eq!(stp_q_off(0, 0, 10, 32), 0xAD01_0140); // stp q0, q0, [x10, #32]
+            assert_eq!(stp_q_off(0, 0, 22, -64), 0xAD3E_02C0); // stp q0, q0, [x22, #-64]
+            assert_eq!(stp_q_post(0, 0, 10, 32), 0xAC81_0140); // stp q0, q0, [x10], #32
+        }
+    }
+}

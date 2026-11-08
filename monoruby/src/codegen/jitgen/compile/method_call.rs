@@ -2370,7 +2370,8 @@ impl<'a> JitContext<'a> {
             self.pending_class_new_redo = Some((init_callid, ir.new_deopt(state)));
         }
         // The live fprs are saved only around the runtime fallback inside
-        // the emitted code: the inline fast path touches no float register.
+        // the emitted code: the inline fast path touches no pool float
+        // register (its vector zero/nil fill uses the scratch xmm0 / v0).
         ir.inline(move |r#gen, _, _, _| {
             r#gen.emit_class_allocate(
                 class_id.u32(),

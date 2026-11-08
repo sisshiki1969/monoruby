@@ -1,10 +1,11 @@
 use super::*;
 
 /// Slot count from which the prologue's nil fill switches to 16-byte
-/// `movups` stores. Below it the scalar form is at least as small and
-/// avoids occupying an xmm register plus the pattern load; a method with
-/// a handful of locals is also where the fill is not worth measuring.
-const SIMD_FILL_MIN: usize = 6;
+/// `movups` stores. From three slots on the vector form takes fewer
+/// instructions (pattern load + one `movups` per pair, vs. the scalar
+/// form's `movq rax, nil` + one store per slot) for no more code bytes;
+/// at two they tie and the scalar form keeps xmm0 untouched.
+const SIMD_FILL_MIN: usize = 3;
 
 impl Codegen {
     ///
@@ -57,15 +58,6 @@ impl Codegen {
             if i < clear_len {
                 monoasm!( &mut self.jit,
                     movq [rbp - (ofs(i))], (NIL_VALUE);
-                );
-            }
-        } else if clear_len > 2 {
-            monoasm!( &mut self.jit,
-                movq rax, (NIL_VALUE);
-            );
-            for i in 0..clear_len {
-                monoasm!( &mut self.jit,
-                    movq [rbp - (ofs(i))], rax;
                 );
             }
         } else {
