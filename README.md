@@ -6,8 +6,10 @@
 
 Ruby implementation with yet another JIT compiler written in Rust.
 
+<!-- BEGIN PORTAL-LINKS: the project portal renders its own link list instead of these two bullets (.github/portal/index.html) -->
 - 📖 **[Documentation](https://sisshiki1969.github.io/monoruby/docs/)** — [installation and build](https://sisshiki1969.github.io/monoruby/docs/installation.html), [development and build options](https://sisshiki1969.github.io/monoruby/docs/development.html), [benchmark](https://sisshiki1969.github.io/monoruby/docs/benchmarks.html), [compatibility](https://sisshiki1969.github.io/monoruby/docs/compatibility.html) and the full [changelog](https://sisshiki1969.github.io/monoruby/docs/changelog.html), plus architecture overviews and the design documents.
 - 📊 **[Project portal](https://sisshiki1969.github.io/monoruby/)** — benchmark and ruby/spec dashboards, re-measured on every push to `master` that touches the interpreter.
+<!-- END PORTAL-LINKS -->
 
 ## What's New
 
@@ -57,7 +59,7 @@ Earlier months: [Changelog](https://sisshiki1969.github.io/monoruby/docs/changel
 ## Compatibility
 
 Conformance with Ruby has improved dramatically over the course of 2026, driven by an extensive [ruby/spec](https://github.com/ruby/spec)-based compliance effort.
-Pass rates are re-measured on every interpreter change and published on the project portal: as of commit `a13bfe0` (2026-08-31) monoruby passes **97.6%** of the [core specs](https://sisshiki1969.github.io/monoruby/spec/) (22468 / 23029 examples) and **59.1%** of the [library specs](https://sisshiki1969.github.io/monoruby/library/).
+Pass rates are re-measured on every interpreter change and published on the project portal: as of commit `ebfcdca` (2026-11-08) monoruby passes **99.6%** of the [core specs](https://sisshiki1969.github.io/monoruby/spec/) (23159 / 23264 examples) and **98.5%** of the [library specs](https://sisshiki1969.github.io/monoruby/library/) (6287 / 6384).
 As of July 2026 it also passed 100% of the command-line specs and 99.6% of the language specs.
 Daily-updated pass statistics, compared with CRuby / TruffleRuby / JRuby, are published at [rubyspec-stats](https://sisshiki1969.github.io/rubyspec-stats/).
 
@@ -153,7 +155,7 @@ Inputs and outputs:
 
 ## Benchmark
 
-Up-to-date benchmark results (yjit-bench, re-measured on every interpreter change) and the ruby/spec compliance dashboards are published on [the project portal](https://sisshiki1969.github.io/monoruby/). On the x86-64 run of commit `a13bfe0` (2026-08-31), over the 59 benchmarks that completed on both interpreters, monoruby averaged 1.28x the speed of CRuby+YJIT (geometric mean).
+Up-to-date benchmark results (yjit-bench, re-measured on every interpreter change) and the ruby/spec compliance dashboards are published on [the project portal](https://sisshiki1969.github.io/monoruby/). On the x86-64 run of commit `a29f308` (2026-11-08), over the 77 benchmarks that completed on both interpreters, monoruby averaged 1.55x the speed of CRuby+YJIT (geometric mean).
 
 The [Benchmarks](https://sisshiki1969.github.io/monoruby/docs/benchmarks.html) chapter of the documentation explains the measurement methodology and how to reproduce a run locally. The numbers below are older one-off measurements, kept for the record.
 
