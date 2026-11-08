@@ -13,7 +13,7 @@ portal](https://sisshiki1969.github.io/monoruby/):
 
 | Dashboard | What it shows |
 | --- | --- |
-| [Performance vs YJIT (x86-64)](https://sisshiki1969.github.io/monoruby/bench/) | Per-benchmark speed relative to CRuby + YJIT, plus a history chart per benchmark |
+| [Performance vs YJIT (x86-64)](https://sisshiki1969.github.io/monoruby/bench/) | Per-benchmark speed relative to CRuby + YJIT and + ZJIT, plus a history chart per benchmark |
 | [Performance vs YJIT (aarch64)](https://sisshiki1969.github.io/monoruby/bench-arm64/) | The same suite on an Apple Silicon runner |
 
 The portal also hosts the two ruby/spec dashboards; those are covered in
@@ -22,23 +22,34 @@ The portal also hosts the two ruby/spec dashboards; those are covered in
 Methodology, from `.github/workflows/bench.yml`:
 
 - The suite is [yjit-bench](https://github.com/Shopify/yjit-bench), run with
-  `--rss --harness=harness-warmup`, monoruby against `ruby --yjit` on the same
-  runner in the same job.
-- The reference CRuby is 4.0.2 (`ruby/setup-ruby`), and monoruby is installed
+  `--rss --harness=harness-warmup`. Three engines are measured on the same
+  runner in the same job: monoruby, `ruby --yjit`, and `ruby --zjit` built
+  from ruby-head.
+- The reference CRuby is 4.0.6 (`ruby/setup-ruby`), and monoruby is installed
   with `cargo install --path monoruby --locked`.
-- Each benchmark gets a 400-second timeout per interpreter; a benchmark that
-  times out or exits non-zero is recorded as a failure rather than silently
-  dropped, and shows on the dashboard as a gap.
-- The published `ratio` is **× YJIT, higher = monoruby faster**, 1× being
-  parity. `latest.json` and `data/history.csv` next to each dashboard hold the
-  raw numbers if you want to plot them yourself.
+- Each benchmark gets a 1000-second timeout **per engine** — the same rule
+  for all three, since they are being compared. A benchmark that times out or
+  exits non-zero is recorded as a failure rather than silently dropped, and
+  shows on the dashboard as a gap.
+- `harness-warmup` iterates until its median absolute deviation falls under a
+  threshold that relaxes as it goes. The workflow asks for 2% and gives two
+  points back per iteration (`MAD_TARGET=0.02`,
+  `MAD_INCREASE_PER_ITER=0.02`) rather than the 0.1% default: on a shared
+  GitHub runner with several of these jobs in flight, the tighter default is
+  a precision the environment cannot deliver, and chasing it cost hundreds of
+  iterations per benchmark.
+- The published `ratio` is **× YJIT, higher = faster**, 1× being parity — for
+  both engines, each measured as YJIT's time over its own. `latest.json` and
+  `data/history.csv` next to each dashboard hold the raw numbers if you want
+  to plot them yourself.
 
-As a snapshot: on the x86-64 run of commit `a13bfe0` (2026-08-31), 59 of the
-76 benchmarks produced a ratio on both interpreters; over those the geometric
-mean was **1.28× YJIT**, with monoruby ahead on 30 of them. The spread is
-wide in both directions — from ~16× on `string_malloc_pressure` down to ~0.3×
-on `send_bmethod` — which is the point of reading the dashboard rather than a
-single headline number.
+As a snapshot: on the x86-64 run of commit `a29f308` (2026-11-08), 77 of the
+79 benchmarks produced a ratio on both interpreters; over those the geometric
+mean was **1.55× YJIT**, with monoruby ahead on 49 of them. (ZJIT, measured
+the same way on the same run, came out at 1.51×.) The spread is wide in both
+directions — from ~26× on `30k_variables` down to ~0.4× on `30k_methods` —
+which is the point of reading the dashboard rather than a single headline
+number.
 
 ## Reproducing a measurement locally
 
