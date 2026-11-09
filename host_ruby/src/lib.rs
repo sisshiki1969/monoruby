@@ -243,8 +243,30 @@ fn shims() -> Vec<PathBuf> {
 /// `cwd` is where the `PATH` `ruby` (and `MONORUBY_RUBY`) is run from,
 /// see [`identify`].
 pub fn find(target: Version, cwd: Option<&Path>) -> Option<HostRuby> {
-    if let Some(pinned) = std::env::var_os("MONORUBY_RUBY")
-        && let Some(pinned) = pinned.to_str()
+    let pinned = std::env::var_os("MONORUBY_RUBY");
+    find_among(
+        target,
+        cwd,
+        pinned.as_deref().and_then(|p| p.to_str()),
+        identify("ruby", cwd),
+        versioned_rubies(),
+        &shims(),
+    )
+}
+
+/// [`find`] over an explicit set of candidates: `pinned` is
+/// `MONORUBY_RUBY`, `on_path` what `ruby` on `PATH` identified as (if
+/// anything), `versioned` the version managers' installs and `shims`
+/// the entry points to fall back on.
+pub fn find_among(
+    target: Version,
+    cwd: Option<&Path>,
+    pinned: Option<&str>,
+    on_path: Option<HostRuby>,
+    versioned: Vec<(PathBuf, Version)>,
+    shims: &[PathBuf],
+) -> Option<HostRuby> {
+    if let Some(pinned) = pinned
         && let Some(ruby) = identify(pinned, cwd)
     {
         return Some(ruby);
@@ -252,11 +274,10 @@ pub fn find(target: Version, cwd: Option<&Path>) -> Option<HostRuby> {
 
     // (candidate, version, is `ruby` on PATH)
     let mut candidates: Vec<(Candidate, Version, bool)> = vec![];
-    let on_path = identify("ruby", cwd);
     if let Some(ruby) = &on_path {
         candidates.push((Candidate::Identified(ruby.clone()), ruby.version, true));
     }
-    for (exe, v) in versioned_rubies() {
+    for (exe, v) in versioned {
         // The install `ruby` on PATH resolves to is already in.
         if on_path.as_ref().is_some_and(|r| Path::new(&r.path) == exe) {
             continue;
@@ -283,7 +304,7 @@ pub fn find(target: Version, cwd: Option<&Path>) -> Option<HostRuby> {
         }
     }
 
-    shims()
+    shims
         .iter()
         .filter_map(|shim| shim.to_str())
         .find_map(|shim| identify(shim, cwd))
@@ -401,11 +422,274 @@ mod tests {
         assert!(identify("echo", None).is_none());
     }
 
+    /// A stand-in `ruby`: a script that answers `identify`'s question
+    /// with `version` and, as `RbConfig.ruby`, `reports` (its own path
+    /// by default — a shim names the executable behind it instead). An
+    /// empty `version` makes it fail, like a shim with nothing selected.
+    fn fake_ruby(at: &Path, version: &str, reports: Option<&Path>) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        let body = if version.is_empty() {
+            "#!/bin/sh\nexit 1\n".to_string()
+        } else {
+            let exe = reports
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "$0".to_string());
+            format!("#!/bin/sh\necho {version}\necho \"{exe}\"\n")
+        };
+        std::fs::write(at, body).unwrap();
+        std::fs::set_permissions(at, std::fs::Permissions::from_mode(0o755)).unwrap();
+        at.to_path_buf()
+    }
+
+    fn install(root: &Path, version: &str) -> PathBuf {
+        fake_ruby(&root.join(version).join("bin").join("ruby"), version, None)
+    }
+
+    #[test]
+    fn identify_reads_the_version_and_the_executable_behind_the_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = install(tmp.path(), "4.0.6");
+        let shim = fake_ruby(&tmp.path().join("shims").join("ruby"), "4.0.6", Some(&real));
+        let found = identify(shim.to_str().unwrap(), None).unwrap();
+        assert_eq!(
+            found,
+            HostRuby {
+                path: real.display().to_string(),
+                version: (4, 0, 6)
+            }
+        );
+        // A `RbConfig.ruby` that is not a file: the command itself stands.
+        let odd = fake_ruby(
+            &tmp.path().join("odd").join("ruby"),
+            "4.0.6",
+            Some(Path::new("/no/such/ruby")),
+        );
+        assert_eq!(
+            identify(odd.to_str().unwrap(), None).unwrap().path,
+            odd.display().to_string()
+        );
+        // Too old, or a failing script.
+        let old = install(tmp.path(), "3.4.1");
+        assert!(identify(old.to_str().unwrap(), None).is_none());
+        let broken = fake_ruby(&tmp.path().join("broken").join("ruby"), "", None);
+        assert!(identify(broken.to_str().unwrap(), Some(tmp.path())).is_none());
+    }
+
+    #[test]
+    fn the_pin_overrides_the_ranking() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("versions");
+        let exact = install(&root, "4.0.6");
+        let far = install(&root, "4.2.0");
+        let found = find_among(
+            (4, 0, 6),
+            None,
+            far.to_str(),
+            None,
+            collect_versioned(&[root.clone()]),
+            &[],
+        );
+        assert_eq!(found.unwrap().path, far.display().to_string());
+        // A pin that does not run falls back to the ranking.
+        let broken = fake_ruby(&tmp.path().join("broken").join("ruby"), "", None);
+        let found = find_among(
+            (4, 0, 6),
+            None,
+            broken.to_str(),
+            None,
+            collect_versioned(&[root]),
+            &[],
+        );
+        assert_eq!(found.unwrap().path, exact.display().to_string());
+    }
+
+    #[test]
+    fn path_wins_a_tie_and_loses_to_a_closer_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("versions");
+        let v5 = install(&root, "4.0.5");
+        let v6 = install(&root, "4.0.6");
+        let elsewhere = fake_ruby(&tmp.path().join("sys").join("ruby"), "4.0.6", None);
+        let on_path = identify(elsewhere.to_str().unwrap(), None);
+        // Same version as an install: the one on PATH keeps its gems.
+        let found = find_among(
+            (4, 0, 6),
+            None,
+            None,
+            on_path.clone(),
+            collect_versioned(&[root.clone()]),
+            &[],
+        );
+        assert_eq!(found.unwrap().path, elsewhere.display().to_string());
+        // Further from the pin than an install: the install wins.
+        let found = find_among(
+            (4, 0, 5),
+            None,
+            None,
+            on_path,
+            collect_versioned(&[root.clone()]),
+            &[],
+        );
+        assert_eq!(found.unwrap().path, v5.display().to_string());
+        // `ruby` on PATH *is* one of the installs: listed once, as PATH.
+        let on_path = identify(v6.to_str().unwrap(), None);
+        let found = find_among(
+            (4, 0, 6),
+            None,
+            None,
+            on_path,
+            collect_versioned(&[root]),
+            &[],
+        );
+        assert_eq!(found.unwrap().path, v6.display().to_string());
+    }
+
+    #[test]
+    fn an_install_that_does_not_run_hands_over_then_the_shims() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("versions");
+        // Closest by name, but its `bin/ruby` fails to run.
+        fake_ruby(&root.join("4.0.6").join("bin").join("ruby"), "", None);
+        let next = install(&root, "4.0.7");
+        let found = find_among(
+            (4, 0, 6),
+            None,
+            None,
+            None,
+            collect_versioned(&[root.clone()]),
+            &[],
+        );
+        assert_eq!(found.unwrap().path, next.display().to_string());
+        // Nothing usable among the installs: the shims, in order.
+        let dead_shim = fake_ruby(&tmp.path().join("rvm").join("ruby"), "", None);
+        let real = install(&tmp.path().join("hidden"), "4.0.6");
+        let shim = fake_ruby(&tmp.path().join("shims").join("ruby"), "4.0.6", Some(&real));
+        let empty = tmp.path().join("none");
+        let found = find_among(
+            (4, 0, 6),
+            None,
+            None,
+            None,
+            collect_versioned(&[empty.clone()]),
+            &[dead_shim.clone(), shim],
+        );
+        assert_eq!(found.unwrap().path, real.display().to_string());
+        // And with no shim answering either, no host Ruby.
+        assert!(
+            find_among(
+                (4, 0, 6),
+                None,
+                None,
+                None,
+                collect_versioned(&[empty]),
+                &[dead_shim]
+            )
+            .is_none()
+        );
+        assert!(
+            find_among(
+                (4, 0, 6),
+                None,
+                None,
+                None,
+                vec![],
+                &[tmp.path().join("missing")]
+            )
+            .is_none()
+        );
+    }
+
+    /// The process environment is shared by every test in this binary
+    /// (under plain `cargo test`; nextest gives each its own process), so
+    /// the tests that read or set it take this lock, and the one that
+    /// sets it puts everything back.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn version_manager_roots_follow_the_managers_variables() {
+        let _env = ENV_LOCK.lock().unwrap();
+        const VARS: [&str; 5] = [
+            "HOME",
+            "RBENV_ROOT",
+            "ASDF_DATA_DIR",
+            "PATH",
+            "MONORUBY_RUBY",
+        ];
+        let saved: Vec<_> = VARS.iter().map(|v| (*v, std::env::var_os(v))).collect();
+        struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (var, value) in &self.0 {
+                    // SAFETY: serialized by ENV_LOCK, and nothing here spawns a
+                    // thread that reads the environment concurrently.
+                    unsafe {
+                        match value {
+                            Some(v) => std::env::set_var(var, v),
+                            None => std::env::remove_var(var),
+                        }
+                    }
+                }
+            }
+        }
+        let _restore = Restore(saved);
+        let tmp = tempfile::tempdir().unwrap();
+        // SAFETY: as above — this test is the only writer, under the lock.
+        unsafe {
+            std::env::set_var("HOME", tmp.path());
+            std::env::set_var("RBENV_ROOT", tmp.path().join("rb"));
+            std::env::set_var("ASDF_DATA_DIR", tmp.path().join("as"));
+        }
+        let roots = version_manager_roots();
+        assert_eq!(
+            roots,
+            vec![
+                tmp.path().join("rb").join("versions"),
+                tmp.path().join("as").join("installs").join("ruby"),
+                tmp.path().join(".rvm").join("rubies"),
+                tmp.path().join(".local/share/mise/installs/ruby"),
+            ]
+        );
+        assert_eq!(
+            shims(),
+            vec![
+                tmp.path().join(".rbenv/shims/ruby"),
+                tmp.path().join(".rvm/bin/ruby")
+            ]
+        );
+        // `find` itself, over that empty home with no `ruby` on PATH.
+        unsafe {
+            std::env::set_var("PATH", tmp.path());
+            std::env::remove_var("MONORUBY_RUBY");
+        }
+        assert!(find((4, 0, 6), None).is_none());
+        let pinned = install(&tmp.path().join("rb").join("versions"), "4.0.6");
+        assert_eq!(
+            find((4, 0, 6), None).unwrap().path,
+            pinned.display().to_string()
+        );
+        unsafe {
+            std::env::set_var("MONORUBY_RUBY", &pinned);
+        }
+        assert_eq!(
+            find((4, 2, 0), None).unwrap().path,
+            pinned.display().to_string()
+        );
+        unsafe {
+            std::env::remove_var("HOME");
+            std::env::remove_var("RBENV_ROOT");
+            std::env::remove_var("ASDF_DATA_DIR");
+        }
+        assert!(version_manager_roots().is_empty());
+        assert!(shims().is_empty());
+    }
+
     /// Whatever `find` settles on is an executable, the same one from
     /// every directory (so not a shim), and nothing closer to the target
     /// is installed. Skipped on a host with no Ruby at all.
     #[test]
     fn the_found_ruby_is_the_closest_executable() {
+        let _env = ENV_LOCK.lock().unwrap();
         let target = pinned_version();
         let Some(ruby) = find(target, None) else {
             eprintln!("skipped: no host ruby");
