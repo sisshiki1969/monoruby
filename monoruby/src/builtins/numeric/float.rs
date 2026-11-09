@@ -662,7 +662,7 @@ fn pow10(ndigits: i64) -> f64 {
 /// This is version-sensitive: 4.0.2 had no such fallback for `#floor` /
 /// `#ceil` and computed the round-trip regardless, so `0.1.ceil(15)` was
 /// `0.1` there and is `0.100000000000001` from 4.0.3-ish on. The pin is
-/// 4.0.6 (`vendor/ruby-stdlib/.ruby-version`); if it ever moves back,
+/// 4.0.9 (`vendor/ruby-stdlib/.ruby-version`); if it ever moves back,
 /// this is the switch.
 fn accurate_pow10(ndigits: i64) -> bool {
     ndigits < f64::DIGITS as i64

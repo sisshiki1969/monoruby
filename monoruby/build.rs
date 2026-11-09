@@ -4,57 +4,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{fs, io};
 
-/// Minimum CRuby version whose `RUBY_PLATFORM` monoruby is willing to bake
-/// at build time. Older Rubies (Debian's system 3.0, for example) lack APIs
-/// monoruby relies on and report a platform string monoruby would not pair
-/// with the vendored 4.x snapshot.
-const MIN_RUBY_VERSION: (u32, u32) = (4, 0);
-
-fn ruby_version_ok(ruby_cmd: &str) -> bool {
-    let Ok(output) = Command::new(ruby_cmd)
-        .args(["-e", "puts RUBY_VERSION"])
-        .output()
-    else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let s = String::from_utf8_lossy(&output.stdout);
-    let mut parts = s.trim().split('.').map(|p| p.parse::<u32>().ok());
-    let major = parts.next().flatten();
-    let minor = parts.next().flatten();
-    match (major, minor) {
-        (Some(maj), Some(min)) => (maj, min) >= MIN_RUBY_VERSION,
-        _ => false,
-    }
-}
-
-/// Pick a `ruby` executable that is at least `MIN_RUBY_VERSION`. Returns
-/// `None` if no suitable Ruby is found. The build never *requires* this:
-/// it is consulted only to recover the host `RUBY_PLATFORM` (best effort),
-/// and everything else is derived from the checked-in vendored snapshot.
+/// The host `ruby` whose `RUBY_PLATFORM` is baked: the one closest to
+/// the vendored pin, chosen by `host_ruby::find` exactly as the runtime
+/// probe and the test harness choose theirs. `None` when no suitable
+/// Ruby is found. The build never *requires* this: it is consulted only
+/// to recover the host `RUBY_PLATFORM` (best effort), and everything
+/// else is derived from the checked-in vendored snapshot.
 fn find_ruby() -> Option<String> {
-    if ruby_version_ok("ruby") {
-        return Some("ruby".to_string());
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        let shim = PathBuf::from(home).join(".rbenv/shims/ruby");
-        if let Some(s) = shim.to_str()
-            && ruby_version_ok(s)
-        {
-            return Some(s.to_string());
-        }
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        let rvm = PathBuf::from(home).join(".rvm/bin/ruby");
-        if let Some(s) = rvm.to_str()
-            && ruby_version_ok(s)
-        {
-            return Some(s.to_string());
-        }
-    }
-    None
+    host_ruby::find(host_ruby::pinned_version(), None).map(|r| r.path)
 }
 
 fn main() {
@@ -585,7 +542,7 @@ fn build_capi_extensions(capi_dir: &Path) {
             defines: &[],
             zlib: false,
             openssl: false,
-            // `extconf.h` (next to the sources) is what CRuby 4.0.6's
+            // `extconf.h` (next to the sources) is what CRuby 4.0.9's
             // extconf.rb finds on Linux (glibc) and on macOS.
             linux: &["_GNU_SOURCE", "RUBY_EXTCONF_H=\"extconf.h\""],
             macos: &["__APPLE_USE_RFC_3542", "RUBY_EXTCONF_H=\"extconf.h\""],
@@ -603,7 +560,7 @@ fn build_capi_extensions(capi_dir: &Path) {
                 "ossl_x509ext.c", "ossl_x509name.c", "ossl_x509req.c", "ossl_x509revoked.c",
                 "ossl_x509store.c",
             ],
-            // `extconf.h` (next to the sources): what CRuby 4.0.6's
+            // `extconf.h` (next to the sources): what CRuby 4.0.9's
             // extconf.rb finds against OpenSSL 3.x.
             defines: &["RUBY_EXTCONF_H=\"extconf.h\""],
             zlib: false,
@@ -789,7 +746,7 @@ fn openssl_link() -> Option<OpensslLink> {
             link: ssl_libs(),
         });
     }
-    // CRuby 4.0.6's ext/openssl (the openssl gem 4.0.2) and its
+    // CRuby 4.0.9's ext/openssl (the openssl gem 4.0.2) and its
     // `extconf.h` are the OpenSSL 3.x build, so a 3.x install wins over a
     // newer one found first: Homebrew's plain `openssl` (what pkg-config
     // finds there) is OpenSSL 4 now, with `openssl@3` installed beside it.

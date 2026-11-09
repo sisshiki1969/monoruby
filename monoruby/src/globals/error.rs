@@ -1038,12 +1038,14 @@ impl MonorubyErr {
     /// `Encoding::UndefinedConversionError` — raised when a source
     /// character cannot be represented in the destination encoding.
     pub(crate) fn undefined_conversion_error(store: &Store, msg: String) -> MonorubyErr {
+        let msg = crate::value::transcode::canonical_econv_message(msg);
         Self::encoding_subclass_error(store, "UndefinedConversionError", msg)
     }
 
     /// `Encoding::InvalidByteSequenceError` — raised when the input
     /// bytes are ill-formed under the source encoding.
     pub(crate) fn invalid_byte_sequence_error(store: &Store, msg: String) -> MonorubyErr {
+        let msg = crate::value::transcode::canonical_econv_message(msg);
         Self::encoding_subclass_error(store, "InvalidByteSequenceError", msg)
     }
 
@@ -1059,6 +1061,7 @@ impl MonorubyErr {
         msg: String,
         detail: Value,
     ) -> MonorubyErr {
+        let msg = crate::value::transcode::canonical_econv_message(msg);
         let mut err = Self::encoding_subclass_error(store, "InvalidByteSequenceError", msg);
         err.payload = Some((detail, ENC_ERR_PAYLOAD));
         err

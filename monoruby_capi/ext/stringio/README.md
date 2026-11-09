@@ -1,6 +1,6 @@
 # ext/stringio from CRuby, built against the C API layer
 
-`stringio.c` is CRuby 4.0.6's `ext/stringio` (the stringio gem
+`stringio.c` is CRuby 4.0.9's `ext/stringio` (the stringio gem
 3.2.0), unmodified.
 `monoruby/build.rs` (`build_capi_extensions`) compiles it against
 `monoruby_capi/include`, links the layer's archives in, and installs the

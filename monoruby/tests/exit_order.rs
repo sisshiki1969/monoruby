@@ -3,7 +3,7 @@
 //! (`scheduler::terminate_all`), then the `ObjectSpace` finalizers —
 //! CRuby's `rb_ec_teardown` → `rb_thread_terminate_all` →
 //! `rb_objspace_call_finalizer`. Spawns the real binary, because the
-//! in-process harness never runs the exit sequence. CRuby 4.0.6 prints
+//! in-process harness never runs the exit sequence. CRuby 4.0.9 prints
 //! exactly the expected string for this script.
 
 use std::process::Command;

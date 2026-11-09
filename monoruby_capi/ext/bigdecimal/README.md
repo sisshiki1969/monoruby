@@ -1,7 +1,7 @@
 # bigdecimal from the bigdecimal gem, built against the C API layer
 
 `bigdecimal.c` and its headers, `missing.c` and `missing/dtoa.c` are the
-bigdecimal gem 4.0.1's `ext/bigdecimal` (the version CRuby 4.0.6 bundles),
+bigdecimal gem 4.0.1's `ext/bigdecimal` (the version CRuby 4.0.9 bundles),
 unmodified. `monoruby/build.rs` (`build_capi_extensions`) compiles them
 against `monoruby_capi/include`, links the layer's archives in, and
 installs the result as `<install root>/ext/bigdecimal.so` (`.dylib` on

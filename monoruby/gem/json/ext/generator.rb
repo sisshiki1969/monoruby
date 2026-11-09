@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 #
 # monoruby's stand-in for the json gem's generator.so (json 2.18.0, the
-# version CRuby 4.0.6 ships): it defines what the C extension's
+# version CRuby 4.0.9 ships): it defines what the C extension's
 # Init_generator does, JSON::Ext::Generator::State and the
 # GeneratorMethods modules JSON.generator= mixes into the core classes,
 # with the methods implemented natively in src/builtins/json.rs as a

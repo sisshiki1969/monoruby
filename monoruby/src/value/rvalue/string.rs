@@ -14,7 +14,7 @@ use transcode::{
     latin1_bytes_to_ibm037, mac_replace_pivot, mac_replacement_leads, pivot_chain,
     quote_error_bytes, reporting_as, single_byte_table, source_byte_table, stateless_good_prefix,
     stateless_iso2022jp, stateless_kddi_enc, stream_convert, table_cell_encode, table_decode,
-    table_decode_lossy, table_encode, transcoder_spelling, undefined_before_eucjp_message,
+    table_decode_lossy, table_encode, undefined_before_eucjp_message,
     utf8_kddi_enc, validate_replacement, wrapper_dst_undefined,
 };
 
@@ -6731,23 +6731,8 @@ fn undefined_byte_message(
     dst_enc: crate::value::Encoding,
 ) -> String {
     let quoted = quote_error_bytes(&[b]);
-    // A source whose transcoder is spelled differently from the
-    // encoding is written out in full, one hop or not — with the
-    // encoding's own spelling in the chain (#1530).
-    if transcoder_spelling(src_enc.name()) != src_enc.name() {
-        return if dst_enc == crate::value::Encoding::UTF8 {
-            format!(
-                "{quoted} to UTF-8 in conversion from {} to UTF-8",
-                src_enc.name()
-            )
-        } else {
-            format!(
-                "{quoted} to UTF-8 in conversion from {} to UTF-8 to {}",
-                src_enc.name(),
-                dst_enc.name()
-            )
-        };
-    }
+    // Worded with the encodings' own names; the error constructor
+    // respells them as the transcoders do (`canonical_econv_message`).
     if dst_enc == crate::value::Encoding::UTF8 {
         format!("{quoted} from {} to {}", src_enc.name(), dst_enc.name())
     } else {
@@ -6870,20 +6855,8 @@ fn undefined_char_message(
     src_enc: crate::value::Encoding,
     dst_enc: crate::value::Encoding,
 ) -> String {
-    // A destination whose transcoder is spelled differently from the
-    // encoding asked for is written out in full, one hop or not.
-    let spelled = transcoder_spelling(dst_enc.name());
-    if spelled != dst_enc.name() {
-        let from = if src_enc == crate::value::Encoding::UTF8 {
-            src_enc.name().to_string()
-        } else {
-            pivot_chain(src_enc)
-        };
-        return format!(
-            "U+{:04X} to {spelled} in conversion from {from} to {spelled}",
-            c as u32
-        );
-    }
+    // Worded with the encodings' own names; the error constructor
+    // respells them as the transcoders do (`canonical_econv_message`).
     // The short form is for a conversion that really is one hop, so
     // the source has to *be* the pivot — `UTF8-MAC` is UTF-8
     // compatible and still a step of its own (#1609).
@@ -7491,7 +7464,7 @@ mod encoding_tests {
             end
             print JSON.dump(out)
         "#;
-        let Ok(out) = std::process::Command::new("ruby")
+        let Ok(out) = std::process::Command::new(crate::tests::ruby_path())
             .arg("-e")
             .arg(script)
             .output()

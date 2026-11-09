@@ -1344,6 +1344,7 @@ VALUE rb_thread_current(void);
 void rb_thread_check_ints(void);
 /* `func(arg)` with fork(2) held off; nothing to hold off here. */
 void *rb_thread_prevent_fork(void *(*func)(void *), void *arg);
+void rb_thread_register_exiting(void);
 
 /* CRuby's resizable fd_set (`rb_fd_*`), and select(2) with the interpreter
  * released. */

@@ -1,4 +1,4 @@
-/* What CRuby 4.0.6's ext/openssl/extconf.rb finds against OpenSSL 3.x
+/* What CRuby 4.0.9's ext/openssl/extconf.rb finds against OpenSSL 3.x
  * (the system OpenSSL monoruby links: libssl-dev on Linux, Homebrew's
  * openssl@3 on macOS) together with monoruby's C API layer. */
 #ifndef EXTCONF_H

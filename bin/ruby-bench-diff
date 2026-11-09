@@ -43,9 +43,11 @@ if [ ! -x "$MONORUBY" ]; then
 fi
 
 # --- locate CRuby. When CRUBY is explicitly set, trust it as-is. When
-# unset, auto-detect a Ruby >= 4.0 (the version monoruby compares
-# against in its other test paths) by walking PATH and the standard
-# rbenv / rvm shim locations.
+# unset, take the Ruby `host_ruby::find` picks (the `host_ruby` crate):
+# the installed one closest to the vendored pin — the same Ruby the test
+# harness and monoruby's runtime probe use, so the gems compared are the
+# gems monoruby sees. Walking PATH and the rbenv / rvm shims is the
+# fallback when cargo cannot build it.
 ruby_ok() {
   local r="$1" v
   [ -x "$r" ] || command -v "$r" >/dev/null 2>&1 || return 1
@@ -55,6 +57,9 @@ ruby_ok() {
     *) return 1 ;;
   esac
 }
+if [ -z "${CRUBY:-}" ]; then
+  CRUBY="$(cd "$(dirname "$0")/.." && cargo run -q -p host_ruby 2>/dev/null)" || CRUBY=""
+fi
 if [ -z "${CRUBY:-}" ]; then
   for c in ruby "$HOME/.rbenv/shims/ruby" "$HOME/.rvm/bin/ruby"; do
     if ruby_ok "$c"; then CRUBY="$c"; break; fi

@@ -964,7 +964,7 @@ stringio / zlib は C 拡張のまま。
 
 `src/builtins/socket.rs`（2,900 行のネイティブ実装）と `stdlib/socket.rb` の
 上乗せは、ruby/spec の `library/socket` で 1169 例中 139F+557E 落ちていた
-（CRuby は 1463 例）。CRuby 4.0.6 の `ext/socket` をそのまま層でビルドし、
+（CRuby は 1463 例）。CRuby 4.0.9 の `ext/socket` をそのまま層でビルドし、
 `stdlib/socket.rb` は CRuby の `ext/socket/lib/socket.rb`（`require 'socket.so'`）
 にした。
 
@@ -995,7 +995,11 @@ stringio / zlib は C 拡張のまま。
   すぐ返る。recv ごとの GVL の手放しと取り直しが無くなり、関数内の
   `RSTRING_PTR` も安全）。ブロッキングなら GVL を外す。
 - **他に層に足したもの**: `rb_thread_check_ints`（GVL を一度手放して保留の
-  割り込みを受ける）、`rb_thread_prevent_fork`、`rb_readwrite_syserr_fail`
+  割り込みを受ける）、`rb_thread_prevent_fork`、`rb_thread_register_exiting`
+  （CRuby 4.0.9 の `raddrinfo.c` は getaddrinfo を joinable な pthread で
+  走らせ、終了時にこれを呼んで VM に fork 前の join を頼む。層の
+  `prevent_fork` はただの呼び出しで、そのスレッドを追跡しないので空実装）、
+  `rb_readwrite_syserr_fail`
   （`IO::EAGAINWaitReadable` など）、`rb_fiber_scheduler_*`、
   `rb_eIOTimeoutError` / `rb_mWaitReadable` / `rb_mWaitWritable`、`RB_INT2NUM` 類、
   `UIDT2NUM` / `GIDT2NUM`、`rb_nogvl` での `errno` の持ち越し（CRuby と同じく
@@ -1018,7 +1022,7 @@ stringio / zlib は C 拡張のまま。
 Cipher の AES-GCM / CBC を `ext/openssl`（RustCrypto）の上に Ruby で書き、
 PKey / X509 / SSL は読み込めるだけの空の殻だった（ruby/spec `library/openssl`
 171 例中 21F+66E、`library/net-ftp` は `OpenSSL::SSL` の定数で落ちる）。
-CRuby 4.0.6 の `ext/openssl` をそのまま層でビルドし、システムの OpenSSL
+CRuby 4.0.9 の `ext/openssl` をそのまま層でビルドし、システムの OpenSSL
 （Linux は libssl-dev、macOS は Homebrew の openssl@3）に動的リンクする。
 `stdlib/openssl.rb` と `stdlib/openssl/*.rb` は CRuby の `ext/openssl/lib/`
 （`require 'openssl.so'`）。`ext/openssl` crate は削除した。

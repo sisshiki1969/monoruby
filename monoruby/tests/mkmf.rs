@@ -88,7 +88,10 @@ fn have_build_tools() -> bool {
 }
 
 fn have_cruby() -> bool {
-    has("ruby", "--version") && has("gem", "--version")
+    // The harness's Ruby, and the `gem` script next to it (not `gem` on
+    // PATH, which may belong to another Ruby or be a version manager's shim).
+    let ruby = monoruby::tests::ruby_path();
+    has(ruby, "--version") && Path::new(ruby).with_file_name("gem").is_file()
 }
 
 /// A fresh directory under the target's tmp dir.
@@ -294,7 +297,7 @@ puts $hdrdir, $arch_hdrdir, $LIBRUBYARG"#,
     assert!(root.join("bin/gem").is_file(), "bin/gem was not installed");
     // Not the host CRuby's gem home.
     if have_cruby() {
-        let host = run(Command::new("ruby").args(["-e", "print Gem.default_dir"]));
+        let host = run(Command::new(monoruby::tests::ruby_path()).args(["-e", "print Gem.default_dir"]));
         assert_ne!(lines[9], host, "{out}");
     }
 }

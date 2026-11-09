@@ -10,7 +10,7 @@
 
 module RbConfig
   RUBY_VERSION.start_with?("4.0.") or
-    raise "ruby lib version (4.0.6) doesn't match executable version (#{RUBY_VERSION})"
+    raise "ruby lib version (4.0.9) doesn't match executable version (#{RUBY_VERSION})"
 
   # Ruby installed directory.
   TOPDIR = File.dirname(__FILE__).chomp!("/lib/ruby/4.0.0/x86_64-linux")
@@ -21,11 +21,11 @@ module RbConfig
   CONFIG["DESTDIR"] = DESTDIR
   CONFIG["MAJOR"] = "4"
   CONFIG["MINOR"] = "0"
-  CONFIG["TEENY"] = "6"
+  CONFIG["TEENY"] = "9"
   CONFIG["PATCHLEVEL"] = "0"
   CONFIG["INSTALL"] = '/usr/bin/install -c'
   CONFIG["EXEEXT"] = ""
-  CONFIG["prefix"] = (TOPDIR || DESTDIR + "/opt/rbenv/versions/4.0.6")
+  CONFIG["prefix"] = (TOPDIR || DESTDIR + "/home/monochrome/.rbenv/versions/4.0.9")
   CONFIG["ruby_install_name"] = "$(RUBY_BASE_NAME)"
   CONFIG["RUBY_INSTALL_NAME"] = "$(RUBY_BASE_NAME)"
   CONFIG["RUBY_SO_NAME"] = "$(RUBY_BASE_NAME)"
@@ -35,7 +35,7 @@ module RbConfig
   CONFIG["PACKAGE"] = "ruby"
   CONFIG["BUILTIN_TRANSSRCS"] = " enc/trans/newline.c"
   CONFIG["MKMF_VERBOSE"] = "0"
-  CONFIG["MANTYPE"] = "man"
+  CONFIG["MANTYPE"] = "doc"
   CONFIG["vendorarchhdrdir"] = "$(vendorhdrdir)/$(sitearch)"
   CONFIG["sitearchhdrdir"] = "$(sitehdrdir)/$(sitearch)"
   CONFIG["rubyarchhdrdir"] = "$(rubyhdrdir)/$(arch)"
@@ -45,7 +45,7 @@ module RbConfig
   CONFIG["RUBY_SEARCH_PATH"] = ""
   CONFIG["UNIVERSAL_INTS"] = ""
   CONFIG["UNIVERSAL_ARCHNAMES"] = ""
-  CONFIG["configure_args"] = " '--prefix=/opt/rbenv/versions/4.0.6' '--enable-shared' '--with-ext=openssl,psych,+'"
+  CONFIG["configure_args"] = " '--prefix=/home/monochrome/.rbenv/versions/4.0.9' '--enable-shared' '--with-ext=openssl,psych,+' '--enable-yjit' '--enable-zjit' '--disable-install-doc'"
   CONFIG["CONFIGURE"] = "configure"
   CONFIG["vendorarchdir"] = "$(vendorlibdir)/$(sitearch)"
   CONFIG["vendorlibdir"] = "$(vendordir)/$(ruby_version)"
@@ -63,7 +63,7 @@ module RbConfig
   CONFIG["sitearchlibdir"] = "$(libdir)/$(sitearch)"
   CONFIG["archlibdir"] = "$(libdir)/$(arch)"
   CONFIG["libdirname"] = "libdir"
-  CONFIG["RUBY_EXEC_PREFIX"] = "/opt/rbenv/versions/4.0.6"
+  CONFIG["RUBY_EXEC_PREFIX"] = "/home/monochrome/.rbenv/versions/4.0.9"
   CONFIG["RUBY_LIB_VERSION"] = ""
   CONFIG["RUBY_LIB_VERSION_STYLE"] = "3\t/* full */"
   CONFIG["RI_BASE_NAME"] = "ri"
@@ -80,7 +80,7 @@ module RbConfig
   CONFIG["COMMON_HEADERS"] = ""
   CONFIG["COMMON_MACROS"] = ""
   CONFIG["COMMON_LIBS"] = ""
-  CONFIG["MAINLIBS"] = "-lz -lrt -lrt -ldl -lcrypt -lm -lpthread "
+  CONFIG["MAINLIBS"] = "-lz -lrt -lrt -lgmp -ldl -lcrypt -lm -lpthread "
   CONFIG["ENABLE_SHARED"] = "yes"
   CONFIG["DLDSHARED"] = "$(CC) -shared"
   CONFIG["DLDLIBS"] = "-lc"
@@ -107,7 +107,7 @@ module RbConfig
   CONFIG["DLNOBJ"] = "dln.o"
   CONFIG["JIT_CARGO_SUPPORT"] = "no"
   CONFIG["RLIB_DIR"] = "target/release"
-  CONFIG["RUST_LIB"] = "/tmp/ruby-build.20260920021846.1476.WyiyZK/ruby-4.0.6/target/release/libruby.a"
+  CONFIG["RUST_LIB"] = "/tmp/ruby-build.20261105145834.2228027.hihTJA/ruby-4.0.9/target/release/libruby.a"
   CONFIG["JIT_OBJ"] = "jit.$(OBJEXT)"
   CONFIG["ZJIT_OBJ"] = "zjit.$(OBJEXT)"
   CONFIG["ZJIT_LIBS"] = ""
@@ -168,7 +168,7 @@ module RbConfig
   CONFIG["RM"] = "rm -f"
   CONFIG["PKG_CONFIG"] = "pkg-config"
   CONFIG["DOXYGEN"] = ""
-  CONFIG["DOT"] = ""
+  CONFIG["DOT"] = "dot"
   CONFIG["MKDIR_P"] = "/usr/bin/mkdir -p"
   CONFIG["INSTALL_DATA"] = "$(INSTALL) -m 644"
   CONFIG["INSTALL_SCRIPT"] = "$(INSTALL)"
@@ -179,7 +179,7 @@ module RbConfig
   CONFIG["WINDRES"] = ""
   CONFIG["ARFLAGS"] = "rcD "
   CONFIG["try_header"] = ""
-  CONFIG["CC_VERSION_MESSAGE"] = "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+  CONFIG["CC_VERSION_MESSAGE"] = "gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0\nCopyright (C) 2021 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
   CONFIG["CC_VERSION"] = "$(CC) --version"
   CONFIG["CSRCFLAG"] = ""
   CONFIG["COUTFLAG"] = "-o "

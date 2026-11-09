@@ -3487,18 +3487,62 @@ pub(crate) fn jis_wrapper(enc: crate::value::Encoding) -> Option<JisWrapper> {
 }
 
 /// The name CRuby's transcoder for a single-byte table carries, which
-/// is the encoding's name in upper case for the Windows code pages and
-/// the Mac ones — `WINDOWS-874`, `MACROMAN` — and the name itself
-/// everywhere else. It is what `primitive_errinfo` names, and a
-/// conversion whose end is spelled differently from the encoding
-/// asked for is written out in full: `U+3042 to WINDOWS-874 in
-/// conversion from UTF-8 to WINDOWS-874` (#1530).
+/// is the encoding's name in upper case for the Windows code pages, the
+/// Mac ones and DoCoMo's Shift_JIS — `WINDOWS-874`, `MACROMAN`,
+/// `SJIS-DOCOMO` — and the name itself everywhere else. It is what
+/// `primitive_errinfo` names and, since CRuby 4.0.9 (the pin), what
+/// the two ends of a conversion are called as well: `rb_econv_open0`
+/// takes the converter's source and destination names from the first
+/// and last transcoder rather than from the encodings asked for, so an
+/// error reads `U+3042 from UTF-8 to WINDOWS-874` and a converter
+/// inspects as `WINDOWS-874 to UTF-8`. (4.0.6 kept the encoding's own
+/// spelling at the ends, and so wrote such a conversion out in full to
+/// get the transcoder's in — `U+3042 to WINDOWS-874 in conversion from
+/// UTF-8 to WINDOWS-874` (#1530); [`canonical_econv_message`] is where
+/// that became the short form.)
 pub(crate) fn transcoder_spelling(name: &str) -> String {
-    if name.starts_with("mac") || (name.starts_with("Windows-") && name != "Windows-31J") {
+    if name.starts_with("mac")
+        || (name.starts_with("Windows-") && name != "Windows-31J")
+        || name == "SJIS-DoCoMo"
+    {
         name.to_uppercase()
     } else {
         name.to_string()
     }
+}
+
+/// A conversion error's message as CRuby 4.0.9 words it, from one
+/// built with the encodings' own names.
+///
+/// Every name in the message is a transcoder's spelling
+/// ([`transcoder_spelling`]), the ends included — and `UTF8-DoCoMo`
+/// is `UTF8-DOCOMO` when it is the hop *out of* `SJIS-DOCOMO`, whose
+/// table spells it so. With the ends spelled that way, a conversion of
+/// one hop is always the short form, `U+3042 from UTF-8 to
+/// WINDOWS-1252`: `make_econv_exception` writes the chain out only
+/// when the failing hop's names differ from the converter's.
+///
+/// Names never contain a space and the quoted bytes never contain one
+/// either, so the words of the message can be walked as tokens.
+pub(crate) fn canonical_econv_message(msg: String) -> String {
+    let mut words: Vec<String> = msg.split(' ').map(transcoder_spelling).collect();
+    for i in 2..words.len() {
+        if words[i] == "UTF8-DoCoMo" && words[i - 1] == "to" && words[i - 2] == "SJIS-DOCOMO" {
+            words[i] = "UTF8-DOCOMO".to_string();
+        }
+    }
+    let msg = words.join(" ");
+    // `{what} to {d} in conversion from {a} to {b}` with `b == d`: a
+    // single hop, which is the short form `{what} from {a} to {b}`.
+    if let Some((head, chain)) = msg.split_once(" in conversion from ") {
+        let hops: Vec<&str> = chain.split(" to ").collect();
+        if hops.len() == 2
+            && let Some(what) = head.strip_suffix(&format!(" to {}", hops[1]))
+        {
+            return format!("{what} from {} to {}", hops[0], hops[1]);
+        }
+    }
+    msg
 }
 
 /// `"\xEE\x97\x8D" from UTF8-KDDI to UTF-8`, `"\xEE\x97\x8D" to UTF-8 in

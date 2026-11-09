@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Deliberately dependency-free. The point of this crate is that a test
-# which only spawns processes can use it *without* linking the
+# Deliberately (almost) dependency-free. The point of this crate is that
+# a test which only spawns processes can use it *without* linking the
 # interpreter: doing that through `monoruby::tests` costs 122 MB of test
-# binary where 7 MB would do, once per `tests/*.rs` file.
+# binary where 7 MB would do, once per `tests/*.rs` file. `host_ruby` is
+# itself dependency-free: it is the one place that decides which host
+# CRuby to use, shared with the interpreter's runtime probe and build.rs.
 [dependencies]
+host_ruby = { path = "../host_ruby" }

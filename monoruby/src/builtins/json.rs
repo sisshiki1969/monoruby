@@ -1,5 +1,5 @@
 //!
-//! The native half of the json gem (2.18.0, the version CRuby 4.0.6
+//! The native half of the json gem (2.18.0, the version CRuby 4.0.9
 //! ships as a default gem).
 //!
 //! The gem's Ruby half is vendored as it is under `gem/json/`; its two

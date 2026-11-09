@@ -1,6 +1,6 @@
 # ext/zlib from CRuby, built against the C API layer
 
-`zlib.c` is CRuby 4.0.6's `ext/zlib`, unmodified. `monoruby/build.rs`
+`zlib.c` is CRuby 4.0.9's `ext/zlib`, unmodified. `monoruby/build.rs`
 (`build_capi_extensions`) compiles it against `monoruby_capi/include`
 and zlib's headers, and links it with the layer's archives and zlib
 into `<install root>/ext/zlib.so` (`.dylib` on macOS), which

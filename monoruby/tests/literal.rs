@@ -506,7 +506,7 @@ fn interpolation_drops_empty_literal_fragments() {
     // Empty literal fragments are dropped from the concat's operands
     // (the first operand, which seeds the encoding, excepted). The
     // result must still be a fresh, unfrozen String with the same
-    // encoding as before. (CRuby 4.0.6 compiles `"#{v}#{""}"` to a bare
+    // encoding as before. (CRuby 4.0.9 compiles `"#{v}#{""}"` to a bare
     // `objtostring` and hands back `v.to_s` itself — `v` when `v` is a
     // String, a frozen string for an Integer — so identity and
     // frozenness are only compared where another piece remains.)

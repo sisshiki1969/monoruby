@@ -8716,6 +8716,15 @@ rb_thread_prevent_fork(void *(*func)(void *), void *arg)
     return func(arg);
 }
 
+/* CRuby 4.0.9's raddrinfo.c runs getaddrinfo on a *joinable* pthread and
+ * has the thread announce its exit so the VM can join it before a fork.
+ * monoruby does not track those threads (the layer's prevent_fork above
+ * is a plain call), so there is nothing to register. */
+void
+rb_thread_register_exiting(void)
+{
+}
+
 /* ---- rb_fdset_t ------------------------------------------------------ */
 
 static size_t

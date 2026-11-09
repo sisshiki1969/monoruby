@@ -6235,9 +6235,9 @@ w1252:ok	force(BINARY)	"\x80\x93caf\xE9"/ASCII-8BIT/true/false/false
 w1252:ok	force(EUC-JP)	"\x80\x93caf\xE9"/EUC-JP/false/false/false
 w1252:ok	encode(UTF-8)	"\u20AC\u201Ccaf\u00E9"/UTF-8/true/false/false
 w1252:ok	encode(UTF-16LE)	"\u20AC\u201Ccaf\u00E9"/UTF-16LE/true/false/false
-w1252:ok	encode(EUC-JP)	Encoding::UndefinedConversionError: U+20AC to EUC-JP in conversion from Windows-1252 to UTF-8 to EUC-JP
-w1252:ok	encode(SJIS)	Encoding::UndefinedConversionError: U+20AC to Shift_JIS in conversion from Windows-1252 to UTF-8 to Shift_JIS
-w1252:ok	encode(US-ASCII)	Encoding::UndefinedConversionError: U+20AC to US-ASCII in conversion from Windows-1252 to UTF-8 to US-ASCII
+w1252:ok	encode(EUC-JP)	Encoding::UndefinedConversionError: U+20AC to EUC-JP in conversion from WINDOWS-1252 to UTF-8 to EUC-JP
+w1252:ok	encode(SJIS)	Encoding::UndefinedConversionError: U+20AC to Shift_JIS in conversion from WINDOWS-1252 to UTF-8 to Shift_JIS
+w1252:ok	encode(US-ASCII)	Encoding::UndefinedConversionError: U+20AC to US-ASCII in conversion from WINDOWS-1252 to UTF-8 to US-ASCII
 w1252:ok	encode(US-ASCII,undef)	"??caf?"/US-ASCII/true/true/false
 w1252:ok	encode(UTF-8,invalid)	"\u20AC\u201Ccaf\u00E9"/UTF-8/true/false/false
 w1252:ok	encode(UTF-8,inv,repl)	"\u20AC\u201Ccaf\u00E9"/UTF-8/true/false/false
@@ -6247,8 +6247,8 @@ w1252:ok	encode(UTF-8,crlf)	"\u20AC\u201Ccaf\u00E9"/UTF-8/true/false/false
 w1252:ok	encode(UTF-8,fallback)	"<8364><8220>caf<233>"/US-ASCII/true/true/false
 w1252:ok	encode(same)	"\x80\x93caf\xE9"/Windows-1252/true/false/false
 w1252:ok	encode()	"\x80\x93caf\xE9"/Windows-1252/true/false/false
-w1252:ok	encode(BINARY)	Encoding::UndefinedConversionError: U+20AC to ASCII-8BIT in conversion from Windows-1252 to UTF-8 to ASCII-8BIT
-w1252:ok	encode(ISO-2022-JP)	Encoding::UndefinedConversionError: U+20AC to EUC-JP in conversion from Windows-1252 to UTF-8 to EUC-JP to stateless-ISO-2022-JP to ISO-2022-JP
+w1252:ok	encode(BINARY)	Encoding::UndefinedConversionError: U+20AC to ASCII-8BIT in conversion from WINDOWS-1252 to UTF-8 to ASCII-8BIT
+w1252:ok	encode(ISO-2022-JP)	Encoding::UndefinedConversionError: U+20AC to EUC-JP in conversion from WINDOWS-1252 to UTF-8 to EUC-JP to stateless-ISO-2022-JP to ISO-2022-JP
 w1252:ok	encode(UTF-7)	Encoding::ConverterNotFoundError: code converter not found (Windows-1252 to UTF-7)
 w1252:ok	encode!(UTF-8)	"\u20AC\u201Ccaf\u00E9"/UTF-8/true/false/false
 w1252:ok	unpack('C*')	[128, 147, 99, 97, 102, 233]

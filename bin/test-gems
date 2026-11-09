@@ -60,7 +60,10 @@ MONORUBY="$(cd "$(dirname "$MONORUBY")" && pwd)/$(basename "$MONORUBY")"
 # A bare command name is resolved here, in the checkout, to the executable
 # behind it: rbenv's shim would otherwise pick the version by the cwd of
 # each check.
-CRUBY="${CRUBY:-ruby}"
+# Unset: the Ruby `host_ruby::find` picks — the same one the test harness
+# and monoruby's runtime probe pick, so the gems compared here are the
+# gems monoruby sees.
+CRUBY="${CRUBY:-$(cd "$REPO" && cargo run -q -p host_ruby 2>/dev/null || echo ruby)}"
 case "$CRUBY" in
   */*) CRUBY="$(cd "$(dirname "$CRUBY")" && pwd)/$(basename "$CRUBY")" ;;
   *)   resolved="$(cd "$REPO" && "$CRUBY" -e 'print RbConfig.ruby' 2>/dev/null)"

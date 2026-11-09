@@ -4,7 +4,7 @@
 gem "strscan", ENV.fetch("CAPI_GEM_VERSION")
 require "strscan"
 puts $LOADED_FEATURES.grep(/\.(so|bundle)\z/).map { |f| File.basename(f, ".*") }.grep(/\Astrscan\z/).sort.inspect
-# The gem's extension, not the one monoruby ships (CRuby 4.0.6's, 3.1.6),
+# The gem's extension, not the one monoruby ships (CRuby 4.0.9's, 3.1.6),
 # which also loads as `strscan.so` on Linux.
 p StringScanner::Version
 s = StringScanner.new("test string 123")

@@ -76,6 +76,8 @@ monoruby/                   # Workspace root
 │   └── build.rs            # Build script (sets up library path file)
 │
 ├── monoruby_attr/          # Proc-macro crate (#[monoruby_builtin], etc.)
+├── host_ruby/              # Which host CRuby to pair with (one answer for the runtime
+│                           #   probe, the test harness, build.rs and bin/test)
 ├── rubymap/                # Order-preserving hash map for Ruby Hash
 ├── hashbrown/              # Vendored hashbrown (local fork)
 ├── ruby_traits/            # Shared trait definitions
@@ -107,7 +109,7 @@ monoruby/                   # Workspace root
 
 The monoruby test harness compares output against CRuby, and several of
 its answers are version-specific, so the reference Ruby must **match the
-vendored pin** in `monoruby/vendor/ruby-stdlib/.ruby-version` — `4.0.6`
+vendored pin** in `monoruby/vendor/ruby-stdlib/.ruby-version` — `4.0.9`
 today. (`Float#floor` / `#ceil` with a large `ndigits` are the sharp
 edge: 4.0.2 and 4.0.6 genuinely disagree there.) Install it with rbenv,
 or build it from the [ruby/ruby](https://github.com/ruby/ruby)
@@ -148,29 +150,29 @@ bigdecimal`.
 Claude Code on the web (and comparable prebuilt sandbox images) already
 carries several CRubies — `/opt/ruby-3.1.6`, `/opt/ruby-3.2.6`,
 `/opt/ruby-3.3.6`, all registered with an rbenv at
-`RBENV_ROOT=/opt/rbenv` — but **not** the pinned `4.0.6`, and `ruby` on
-`PATH` resolves to 3.3.6. Going from that state to a verified 4.0.6 is
+`RBENV_ROOT=/opt/rbenv` — but **not** the pinned `4.0.9`, and `ruby` on
+`PATH` resolves to 3.3.6. Going from that state to a verified 4.0.9 is
 the procedure below; it is idempotent, so re-running it in a container
 that is already set up is a no-op.
 
 ```sh
-# 1. The image's ruby-build plugin is usually too old to know 4.0.6
+# 1. The image's ruby-build plugin is usually too old to know 4.0.9
 #    (`rbenv install --list | grep '^4\.'` tells you). Update it:
 rb="$(rbenv root)/plugins/ruby-build"
 git -C "$rb" fetch --depth 50 origin
 git -C "$rb" checkout "$(git -C "$rb" tag --sort=-v:refname | head -1)"
-ls "$rb/share/ruby-build/" | grep '^4\.0'              # 4.0.6 must appear
+ls "$rb/share/ruby-build/" | grep '^4\.0'              # 4.0.9 must appear
 
 # 2. Build it. The image already carries the build deps (libssl-dev,
 #    libyaml-dev, zlib1g-dev, libreadline-dev, libffi-dev, libgdbm-dev),
 #    so no apt step is needed; ~6 minutes on 4 cores.
 MAKE_OPTS=-j"$(nproc)" RUBY_CONFIGURE_OPTS=--disable-install-doc \
-    rbenv install -s 4.0.6
-rbenv global 4.0.6
+    rbenv install -s 4.0.9
+rbenv global 4.0.9
 rbenv rehash
 ```
 
-`rbenv global` alone does **not** put 4.0.6 on `PATH`: the image wires the
+`rbenv global` alone does **not** put 4.0.9 on `PATH`: the image wires the
 baked-in 3.3.6 ahead of rbenv in two independent places, and both have to
 be undone.
 
@@ -196,7 +198,7 @@ for c in ruby gem irb bundle; do
 done
 ```
 
-Then the gems §1 asks for (`bigdecimal` is already present in a 4.0.6
+Then the gems §1 asks for (`bigdecimal` is already present in a 4.0.9
 built this way, but naming it is harmless and keeps the line copy-pastable):
 
 ```sh
@@ -208,7 +210,7 @@ Finally, verify — all three shell flavours must agree, since different
 tools reach Ruby through different ones:
 
 ```sh
-ruby -v                                  # ruby 4.0.6 ... +PRISM  (non-login)
+ruby -v                                  # ruby 4.0.9 ... +PRISM  (non-login)
 bash -lc 'ruby -v; rbenv version'        # same, via the shims    (login)
 bash -ic 'ruby -v'                       # same                   (interactive)
 test "$(ruby -e 'print RUBY_VERSION')" = \
@@ -218,7 +220,7 @@ ruby -e 'require "openssl"; require "psych"; require "zlib"; require "fiddle"'
 ```
 
 A fresh container has no `~/.monoruby/` yet, so there is no stale probe
-cache to invalidate — the first monoruby build/run probes and picks 4.0.6
+cache to invalidate — the first monoruby build/run probes and picks 4.0.9
 (an exact match for `ruby_probe::COMPAT_RUBY_VERSION`). After any *later*
 `gem install`, refresh it with `MONORUBY_REPROBE=1 monoruby -e ''`.
 
@@ -235,7 +237,7 @@ Confirm that the `ruby` command launches the pinned CRuby:
 
 ```sh
 ruby --version
-# => ruby 4.0.6 (2026-07-14 ...) — must match .ruby-version
+# => ruby 4.0.9 (2026-10-23 ...) — must match .ruby-version
 ```
 
 `build.rs` uses this `ruby` binary at build time to capture `$LOAD_PATH` and `RUBY_VERSION`. Tests will fail if `ruby` is not in `PATH`.
@@ -464,12 +466,13 @@ Registration happens in `builtins/builtins.rs` → `init_builtins()`.
 
 ## Workspace Crates
 
-Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys`, `monoruby_ext`, `ext/sqlite3`, `ext/zstd`, `ext/psych`, `ext/nokogiri`, `ext/markly`, `ext/bcrypt`, `ext/digest`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
+Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `host_ruby`, `monoruby_test_support`, `gem_tests`, `monoruby_ext_sys`, `monoruby_ext`, `ext/sqlite3`, `ext/zstd`, `ext/psych`, `ext/nokogiri`, `ext/markly`, `ext/bcrypt`, `ext/digest`, `rubymap`, `hashbrown`, `ruby_traits`, `libxml2-src`, `libsqlite3-src`.
 
 | Crate           | Purpose                                                  |
 | --------------- | -------------------------------------------------------- |
 | `monoruby`      | Main interpreter + JIT (includes the prism→AST bridge)   |
 | `monoruby_attr` | Proc macros: `#[monoruby_builtin]`, `#[monoruby_object]` |
+| `host_ruby` | Dependency-free. `host_ruby::find(target, cwd)` ranks `ruby` on `PATH` and every versioned rbenv / rvm / asdf / mise install by distance from the vendored pin (`PINNED_RUBY_VERSION`, `include_str!` of `vendor/ruby-stdlib/.ruby-version`) and answers the **absolute executable** (`RbConfig.ruby`, never a shim); `MONORUBY_RUBY` overrides. The runtime probe (`ruby_probe`), the test harness (`monoruby_test_support::ruby_path`), `build.rs` and the shell scripts (`cargo run -q -p host_ruby`, the `host-ruby` binary) all take their Ruby from it, so they cannot disagree |
 | `monoruby_ext_sys` | The C ABI handed to dynamically loaded extensions (`MrValue`, `MrContext`, the `MrApi` table; `include/monoruby_ext.h` for C). The interpreter side is `monoruby/src/ext.rs`; see `doc/native_extension_loading.md` |
 | `monoruby_ext` | Safe Rust over `monoruby_ext_sys` for writing an extension in Rust (`Ctx`, `Value`, the `method!` / `native!` macros) |
 | `monoruby_capi/` (C, not a crate) | The CRuby-compatible C API on top of `monoruby_ext_sys`: `include/ruby.h` and friends, and `src/capi.c` (the `rb_*` functions) plus `src/st.c` (CRuby's own public-domain st.c behind a CRuby-identical `ruby/st.h`), which every such extension links statically. A C extension written for CRuby is rebuilt against these headers (API- not ABI-compatible) and loaded by a plain `require` from `$LOAD_PATH`; inside the extension a `VALUE` has CRuby's bit layout (`Qfalse == 0`, `Qnil == 4`, `Qtrue == 0x14`, Symbols `id << 8 | 0x0c`), and capi.c converts to and from monoruby's `Value` at every ABI crossing (`M()` / `R()`; `RARRAY_CONST_PTR` hands out a converted per-call copy, registered C globals are marked by the layer); `build.rs` installs both into `<install root>/{include,capi}`, plus `capi/libmonoruby_capi.a` (capi.c compiled with the `cc` crate) and `bin/gem`. `RbConfig` points `rubyhdrdir` at `<root>/include` and `LIBRUBYARG` at that archive (`builtins/capi_config.rb`), so `extconf.rb` + `make` and `gem install` (`monoruby <root>/bin/gem install foo`) build an extension for monoruby; gems go to monoruby's own home `~/.monoruby/gems/<api>` (`stdlib/rubygems/defaults/operating_system.rb`), and a `require` that misses everywhere else asks `Gem.try_activate` (`Executor::activate_gem_for`). TypedData / Data objects use the core's native payloads, with the C alloc function run lazily the first time a payload is read or a C method runs on the instance (the core's allocator has no `Executor`), the instance variables it set carried over; C functions become blocks through a hidden class's `Method#to_proc`; C-backed globals (`rb_define_variable` and its relatives) are `GvarEntry::Native` entries of the core's gvar table through the ABI's `gvar_hook`; `ruby/backward/cxxanyargs.hpp` gives C++ extensions (SWIG's wrappers, gosu) the ANYARGS overloads CRuby's header of that name gives them. `ruby/re.h` is there too: the `onig_*` functions reach the interpreter's Onigmo through a sub-table of the ABI (`MrOnigApi`), `rb_reg_prepare_re` hands out a `regex_t` monoruby compiled and caches for the string's codec, and `ruby/onigmo.h` is the crate's own header with `USE_CAPTURE_HISTORY` forced on (the linked library's `OnigRegion` carries it). The Time API (`rb_time_*`, `rb_timespec_now`) is `Time`'s own methods under the hood, `rb_keyword_given_p` reads the call site that entered the method (`runtime::entered_by`, through `send` / `Method#call`), and `rb_enc_codepoint_len` decodes every encoding monoruby walks. `tests/capi.rs` runs ten C sources (API basics, TypedData, st_table, re.h, Time / keywords / codepoints, the VALUE layout, gaps real gems hit, operator IDs / enumerators / aliases / `$~`, `rb_thread_call_without_gvl`, C-backed globals / `instance_eval` from C / an alloc function's ivars) and one C++ source in SWIG's shape on CRuby and monoruby and compares; `tests/mkmf.rs` builds a fixture extension with `extconf.rb` + `make`, and `bin/test-gems` (a script run by `bin/test`, not a cargo test) `gem build`s and `gem install`s the fixture gem on both and installs real gems (bcrypt, msgpack, strscan, strptime, yajl-ruby, json 2.18.0 and 3.1.0) from the host's gem cache through monoruby's `gem` and compares a script on both; a monoruby-built `.so` on `$LOAD_PATH` wins over the stand-in in `gem/` / `stdlib/` for the same feature (the gem's own `.rb` next to it first, when there is one), the Ruby files of an activated gem whose extensions monoruby built win over the stand-in tree too (json 3.x's `json.rb` over the vendored 2.18.0 one), and a host CRuby's `.so` on `$LOAD_PATH` is skipped, told apart by its symbol table (`ext/dynsym.rs`) rather than by a `dlopen`, which would keep a `libruby`-linked one and its dependencies in the process; when such a `.so` belongs to an installed gem whose extensions are all `extconf.rb` ones (a host `bundle install`, as ruby-bench's harness runs), `require` rebuilds the gem's sources against the layer once, into `~/.monoruby/gems/<api>/host_extensions/<platform>/<gem>-<version>/`, and loads that (`stdlib/monoruby_hooks/host_extension.rb`, doc/c_api.md §3.24). See `doc/c_api.md` |
@@ -480,7 +483,7 @@ Workspace members (`Cargo.toml`): `monoruby`, `monoruby_attr`, `monoruby_ext_sys
 | `ext/nokogiri` | Nokogiri's native half (`libnokogiri_native.so`, crate `nokogiri_native`): what the gem's nokogiri.so provides, over `libxml2-src` — the last stand-in moved out of the core, and the one with the most involved object lifetimes (see `doc/nokogiri.md`) |
 | `ext/markly` | The markly gem's native half (`libmarkly_native.so`, crate `markly_native`) over `comrak`, required by `gem/markly/markly.rb` |
 | `ext/bcrypt` | The bcrypt gem's native half (`libbcrypt_native.so`, crate `bcrypt_native`) over the `bcrypt` crate, required by `gem/bcrypt_ext.rb` |
-| `monoruby_capi/ext/` | Standard-library C extensions taken from CRuby unmodified and built against the layer by `build.rs` (`build_capi_extensions`, objects via the `cc` crate, then linked `-shared` with the layer's archives) into `<install root>/ext/<name>.so`, where `require` finds them like the Rust extensions. Today `date/` (CRuby 4.0.6's `ext/date`, the date gem 3.5.1): `require "date"` (`stdlib/date.rb` is CRuby's `ext/date/lib/date.rb`, which requires `date_core`), and with it `time`, `psych`/YAML and rubygems' `gem build`; and `stringio/`, `zlib/` (CRuby 4.0.6's, unmodified), loaded by the stub-tree `stdlib/{stringio,zlib}.rb` (`require "stringio.so"` etc., so they win over a host gem without booting rubygems). `strscan` was built the same way for a while and went back to the Ruby implementation (`stdlib/strscan.rb` over the `String#__strscan_match` primitive): tokenizers call it millions of times, and the per-call C-API crossing (~470 Ir) made ruby-json / tinygql / graphql 2× slower than JIT-inlined Ruby. `bigdecimal/` is the bigdecimal gem 4.0.1's `ext/bigdecimal` (the version CRuby 4.0.6 bundles), loaded by the gem's own `lib/` vendored as `gem/bigdecimal.rb` + `gem/bigdecimal/`. `socket/` is CRuby 4.0.6's `ext/socket` (with stand-ins for the internal headers it includes and an `extconf.h` per OS), loaded by `stdlib/socket.rb`, CRuby's own `ext/socket/lib/socket.rb`; the layer hands it a `struct rb_io` per Ruby call, synced with the IO object through the ABI's `io_state` / `io_update` (`GetOpenFile`, `MakeOpenFile` then `fptr->fd = fd`, `fptr->mode` bits), and `IO.new` on a subclass with its own `initialize` runs allocate + initialize (`builtins/io.rb`). `openssl/` is CRuby 4.0.6's `ext/openssl`, linked against the system OpenSSL (`openssl_link`; skipped with a warning when none is found), loaded by `stdlib/openssl.rb`, CRuby's `ext/openssl/lib/openssl.rb`. `zlib.so` links the bundled libz statically (`libz-sys`'s archive; `-lz` under `system-zlib`). A process running several interpreters (the test harness) gives each its own mapping of a C-API extension — the first the file, later ones a private copy — since an extension's C statics belong to one interpreter (`ext::CAPI_INSTANCES`). See `doc/c_api.md` §3.17, §3.19, §3.21, §3.22 and §3.23 |
+| `monoruby_capi/ext/` | Standard-library C extensions taken from CRuby unmodified and built against the layer by `build.rs` (`build_capi_extensions`, objects via the `cc` crate, then linked `-shared` with the layer's archives) into `<install root>/ext/<name>.so`, where `require` finds them like the Rust extensions. Today `date/` (CRuby 4.0.9's `ext/date`, the date gem 3.5.1): `require "date"` (`stdlib/date.rb` is CRuby's `ext/date/lib/date.rb`, which requires `date_core`), and with it `time`, `psych`/YAML and rubygems' `gem build`; and `stringio/`, `zlib/` (CRuby 4.0.9's, unmodified), loaded by the stub-tree `stdlib/{stringio,zlib}.rb` (`require "stringio.so"` etc., so they win over a host gem without booting rubygems). `strscan` was built the same way for a while and went back to the Ruby implementation (`stdlib/strscan.rb` over the `String#__strscan_match` primitive): tokenizers call it millions of times, and the per-call C-API crossing (~470 Ir) made ruby-json / tinygql / graphql 2× slower than JIT-inlined Ruby. `bigdecimal/` is the bigdecimal gem 4.0.1's `ext/bigdecimal` (the version CRuby 4.0.9 bundles), loaded by the gem's own `lib/` vendored as `gem/bigdecimal.rb` + `gem/bigdecimal/`. `socket/` is CRuby 4.0.9's `ext/socket` (with stand-ins for the internal headers it includes and an `extconf.h` per OS), loaded by `stdlib/socket.rb`, CRuby's own `ext/socket/lib/socket.rb`; the layer hands it a `struct rb_io` per Ruby call, synced with the IO object through the ABI's `io_state` / `io_update` (`GetOpenFile`, `MakeOpenFile` then `fptr->fd = fd`, `fptr->mode` bits), and `IO.new` on a subclass with its own `initialize` runs allocate + initialize (`builtins/io.rb`). `openssl/` is CRuby 4.0.9's `ext/openssl`, linked against the system OpenSSL (`openssl_link`; skipped with a warning when none is found), loaded by `stdlib/openssl.rb`, CRuby's `ext/openssl/lib/openssl.rb`. `zlib.so` links the bundled libz statically (`libz-sys`'s archive; `-lz` under `system-zlib`). A process running several interpreters (the test harness) gives each its own mapping of a C-API extension — the first the file, later ones a private copy — since an extension's C statics belong to one interpreter (`ext::CAPI_INSTANCES`). See `doc/c_api.md` §3.17, §3.19, §3.21, §3.22 and §3.23 |
 | `ext/digest` | `Digest`'s one-shot hashing (plus HMAC and PBKDF2 natives `String.__hmac` / `__pbkdf2_hmac`) (`libdigest_native.so`, crate `digest_native`) over RustCrypto's md-5 / sha1 / sha2 / hmac / pbkdf2, required by `stdlib/digest.rb`. rubygems hashes `.gem` files with it, so like `zlib.so` it is part of every install |
 | `rubymap`       | Order-preserving Ruby-compatible HashMap/Set             |
 | `hashbrown`     | Vendored hash table (local fork)                         |
@@ -496,7 +499,7 @@ External crates (fetched from git):
 - `smallvec` — local fork with `const_generics` (pinned via git, not vendored in-tree)
 - The **system OpenSSL** (libssl-dev on Linux, Homebrew's `openssl@3` on
   macOS; `OPENSSL_DIR` overrides, see `build.rs` `openssl_link`) — linked
-  dynamically into `openssl.so`, CRuby 4.0.6's `ext/openssl` built on the
+  dynamically into `openssl.so`, CRuby 4.0.9's `ext/openssl` built on the
   C API layer (`monoruby_capi/ext/openssl/`); `stdlib/openssl.rb` +
   `stdlib/openssl/` are CRuby's `ext/openssl/lib/`. Without one the
   extension is not built and `require "openssl"` raises LoadError.
@@ -534,7 +537,7 @@ External crates (fetched from git):
 - `libz-sys` — zlib built from its bundled C source (`bundled-zlib`, the
   default). `monoruby` depends on it only so that `build.rs` sees its
   `DEP_Z_ROOT` and links `libz.a` statically **into `zlib.so`**, CRuby
-  4.0.6's own `ext/zlib/zlib.c` built against the C API layer
+  4.0.9's own `ext/zlib/zlib.c` built against the C API layer
   (`monoruby_capi/ext/zlib/`); `stdlib/zlib.rb` just requires it, so the
   whole of `Zlib` — streams, gzip framing, `GzipReader` / `GzipWriter` —
   is CRuby's C. rubygems needs `zlib` for `.gem` files, so an installed
@@ -612,7 +615,7 @@ independent**: it does not need a `ruby` on `PATH` to produce a correct,
 reproducible build. It performs two jobs:
 
 1. **Bake the reported Ruby version** — Reads `monoruby/vendor/ruby-stdlib/.ruby-version`
-   (the pin marker written by `bin/vendor-ruby-stdlib`, currently `4.0.6`)
+   (the pin marker written by `bin/vendor-ruby-stdlib`, currently `4.0.9`)
    and exposes it as the compile-time env var `MONORUBY_RUBY_VERSION`, which
    the runtime reports as `RUBY_VERSION`. This is read from the vendored
    snapshot — **not** from a host `ruby` — so the version monoruby reports
@@ -641,20 +644,20 @@ reproducible build. It performs two jobs:
      C-extension-backed libraries, laid down last so they win name clashes;
      the `stub/` copy is pinned ahead of `$LOAD_PATH` by the require resolver.
      `gem/prism/` is the prism gem's Ruby half (the version the `ruby-prism`
-     crate links, 1.9.0 today; the vendored Ruby 4.0.6 snapshot carries
-     1.8.1) plus `gem/prism/prism.rb`, monoruby's stand-in for the gem's C
+     crate links, 1.9.0 today; the vendored Ruby 4.0.9 snapshot carries
+     1.8.2) plus `gem/prism/prism.rb`, monoruby's stand-in for the gem's C
      extension: `src/builtins/prism.rs` runs libprism's serializers and the
      gem's `Prism::Serialize` builds the node tree. The serialization format
      is per prism version, so bumping the crate means re-vendoring these
      files from the matching gem. `stdlib/ripper.rb` is
      `Prism::Translation::Ripper` on top of it. `gem/psych/` is the psych
-     5.3.1 gem's Ruby half (Ruby 4.0.6's) plus `gem/psych/psych.rb`, the
+     5.3.1 gem's Ruby half (Ruby 4.0.9's) plus `gem/psych/psych.rb`, the
      stand-in for its C extension: it requires the `ext/psych` extension,
      which drives `libyaml-safer` (a port of libyaml 0.2.5) as
      `Psych::Parser`'s event source and `Psych::Emitter`'s sink, so
      `Psych.load` / `dump` and the event API are CRuby's byte for byte.
      `gem/json.rb` + `gem/json/` are the json 2.18.0 gem's Ruby half
-     (Ruby 4.0.6's default gem, vendored as it is) plus
+     (Ruby 4.0.9's default gem, vendored as it is) plus
      `gem/json/ext/{parser,generator}.rb`, the stand-ins for its two C
      extensions: they create the classes `parser.so` / `generator.so`
      define and hand them to `String.__json_setup_parser` /
@@ -868,7 +871,9 @@ Modes via `MONORUBY_TEST_ORACLE`:
 > commits its timezone, its uid and the working tree's current
 > `Cargo.toml` into the snapshot. Moving the pin from 4.0.2 to 4.0.6
 > needed **no** oracle change at all — the suite was already green
-> replaying the stored entries — so check `git diff` on the file before
+> replaying the stored entries — and 4.0.6 to 4.0.9 changed only `Set`
+> (every derived set now inherits `compare_by_identity`, see
+> `builtins/set.rs`), so check `git diff` on the file before
 > committing a refresh, and treat a changed entry that has nothing to do
 > with the version bump as a test that wants `run_test_live`.
 
@@ -1048,7 +1053,7 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
 
 1. **Nightly only**: Attempting to build with stable Rust will fail. The toolchain is pinned in `rust-toolchain.toml`.
 2. **Architecture-specific backends**: The VM and JIT emit machine code directly per `target_arch` (`codegen/arch/{x86_64,aarch64}/`). Both backends lower the full AsmInst set; aarch64 never bails (large immediates go through scratch registers, so the `bool` "decline" return is vestigial — see `doc/arch_difference.md`). Adding/altering low-level codegen usually means touching both backends. Use `bin/test-aarch64` / `bin/setup-aarch64-cross` for the aarch64 path.
-3. **Ruby in PATH**: Tests compare output against a system `ruby` binary matching the vendored pin (`4.0.6`, see `vendor/ruby-stdlib/.ruby-version`). The harness (`monoruby_test_support::ruby_path`) and `bin/test` resolve that `ruby` **once, from the checkout, to the absolute path of the executable** (`RbConfig.ruby`): rbenv's shim picks the version from the `.ruby-version` nearest the *current directory*, so a test that ran `ruby` with its cwd in `../ruby-bench/benchmarks/…` used to get whichever Ruby `~/.rbenv/version` names — another version, with none of the gems installed — and fail with `LoadError` while the gem check in the checkout saw nothing missing. A test that spawns CRuby must use `ruby_path()`, never `Command::new("ruby")` with a changed cwd; its `gem` is the script next to the executable (`RbConfig::CONFIG["bindir"]`), not `ruby -S gem`, which would find the shim. The single-code helpers replay the checked-in snapshot oracle (`monoruby/tests/ruby_oracle.tsv`) and only spawn `ruby` on a cache miss, but the batched helpers (`run_tests` etc.) and several integration tests still invoke it directly — keep a matching Ruby installed for full-suite runs, and use `MONORUBY_TEST_ORACLE=ruby` after a version bump to refresh the oracle.
+3. **Which host Ruby**: Tests compare output against a CRuby matching the vendored pin (`4.0.9`, see `vendor/ruby-stdlib/.ruby-version`). The harness (`monoruby_test_support::ruby_path`), `bin/test` / `bin/test-gems` / `bin/ruby-bench-diff` (`cargo run -q -p host_ruby`), `build.rs` and the interpreter's runtime probe (`ruby_probe`) all pick it through **one function, `host_ruby::find`**: the installed Ruby closest to the pin among `ruby` on `PATH` and the versioned installs of rbenv / rvm / asdf / mise, resolved **to the absolute path of the executable** (`RbConfig.ruby`, never a shim — a shim picks its version from the `.ruby-version` nearest the *current directory*). `MONORUBY_RUBY=<path>` overrides for all of them alike. Before this, each had its own rule: `bin/test` and the harness took `ruby` on `PATH` (whatever `~/.rbenv/version` named — 4.0.9, say) and installed the suite's gems there, while the probe took the pinned 4.0.9, so the gem tests failed with `LoadError` (`cannot load such file -- hexapdf`) although the gem check saw nothing missing. A test that spawns CRuby must use `ruby_path()`, never `Command::new("ruby")`; its `gem` is the script next to the executable (`RbConfig::CONFIG["bindir"]`), not `ruby -S gem`, which would find the shim. The single-code helpers replay the checked-in snapshot oracle (`monoruby/tests/ruby_oracle.tsv`) and only spawn `ruby` on a cache miss, but the batched helpers (`run_tests` etc.) and several integration tests still invoke it directly — keep a matching Ruby installed for full-suite runs, and use `MONORUBY_TEST_ORACLE=ruby` after a version bump to refresh the oracle.
 4. **optcarrot**: The full CI test requires optcarrot cloned at `../optcarrot` relative to the repo root.
 5. **Weak references**: `ObjectSpace::WeakMap` is real — its storage is
    `ObjTy::WEAKMAP` (`src/value/rvalue/weakmap.rs`), whose `mark` traces
@@ -1064,7 +1069,7 @@ run `bin/refresh-prism-vendored` (rebuilds and force-pushes
 
 6. **Library path**: `build.rs` does **not** invoke a host `ruby` for `$LOAD_PATH` / `RUBY_VERSION` (those come from the vendored snapshot). Host-installed *non-default* gems are discovered at run time by `src/ruby_probe.rs`, which invokes a host `ruby` once if present and caches `~/.monoruby/{library_path,gem_path}`. That cache is the **only** place a non-default gem's `lib/` is listed — rubygems boots lazily (`builtins/gem_prelude.rb` autoloads `Gem`), so CRuby's spec-index `require` fallback is not installed at startup. `ruby_probe::cache_is_stale` therefore re-probes whenever `library_path` is older than any `<gem root>/specifications` directory — so a `gem install` becomes visible on the next start — and whenever **every** cached gem root has vanished (the probed Ruby was removed wholesale, e.g. an rbenv version upgrade deleted the old tree); `MONORUBY_REPROBE=1` forces a probe regardless.
 
-   *Which* Ruby gets probed is not simply `ruby` on `PATH`. The CRuby release monoruby conforms to lives in the source as `ruby_probe::COMPAT_RUBY_VERSION` (baked by `build.rs` from `vendor/ruby-stdlib/.ruby-version`, with `FALLBACK_RUBY_VERSION` as the compiled-in stand-in) and is also what `RUBY_VERSION` reports. `find_ruby` ranks `ruby` on `PATH` together with every versioned install of rbenv / rvm / asdf / mise by distance from it — same `major.minor` first, then nearest teeny, newer winning an exact tie, `PATH` winning ties overall — and takes the closest. The versioned installs are read off directory names, so that costs `read_dir` and no spawn. The winner is recorded in `~/.monoruby/probed_ruby` (command + version), and `ruby_probe::preferred_ruby_changed` re-probes once a closer Ruby appears — an `rbenv install` of the pinned version, or a `.ruby-version` switch that moved `ruby` off it — which is what keeps the cache from describing a Ruby whose default gems disagree with the vendored stdlib. `MONORUBY_RUBY=<path>` pins one explicitly and suppresses both the ranking and that re-probe. If no host Ruby is found, those caches stay empty and a warning is printed at startup, but the vendored stdlib still loads from the per-version install root (`~/.monoruby/v<version>/lib`).
+   *Which* Ruby gets probed is not simply `ruby` on `PATH`. The CRuby release monoruby conforms to lives in the source as `ruby_probe::COMPAT_RUBY_VERSION` (baked by `build.rs` from `vendor/ruby-stdlib/.ruby-version`, with `FALLBACK_RUBY_VERSION` as the compiled-in stand-in) and is also what `RUBY_VERSION` reports. `host_ruby::find` (the `host_ruby` crate, shared with the test harness and `bin/test` — gotcha 3) ranks `ruby` on `PATH` together with every versioned install of rbenv / rvm / asdf / mise by distance from it — same `major.minor` first, then nearest teeny, newer winning an exact tie, `PATH` winning ties overall — and takes the closest, as the absolute path of its executable. The versioned installs are read off directory names, so that costs `read_dir` and no spawn. The winner is recorded in `~/.monoruby/probed_ruby` (executable + version), and `ruby_probe::preferred_ruby_changed` re-probes once a closer Ruby appears — an `rbenv install` of the pinned version, or a `.ruby-version` switch that moved `ruby` off it — which is what keeps the cache from describing a Ruby whose default gems disagree with the vendored stdlib. `MONORUBY_RUBY=<path>` pins one explicitly and suppresses both the ranking and that re-probe. If no host Ruby is found, those caches stay empty and a warning is printed at startup, but the vendored stdlib still loads from the per-version install root (`~/.monoruby/v<version>/lib`).
 
    Gems monoruby installs itself (`gem install` through `<root>/bin/gem`) go to **monoruby's own gem home**, `~/.monoruby/gems/<api version>` (`Gem.default_dir`, set in `stdlib/rubygems/defaults/operating_system.rb`; `GEM_HOME` overrides it), never the host CRuby's: a C extension built there is linked against monoruby's C API layer and rubygems keys built extensions on `extensions/<platform>/<api>/<gem>` alone. Those gems are not in the probe cache, so a `require` that finds nothing on `$LOAD_PATH` or in the cached host gem `lib/`s calls `Gem.try_activate(feature)` and looks again (`Executor::activate_gem_for`; what rubygems' own `Kernel#require` does on a `LoadError`). The host's gem directories stay on `Gem.path` for reading: through `GEM_PATH`, and — because a program may clear `GEM_PATH` itself, as ruby-bench's harness does before running the host's `bundle install` — through `Gem.default_path`, which `operating_system.rb` extends with the `GEM_PATH` monoruby started with (`MONORUBY_HOST_GEM_PATH`, set by `Globals::new`). A gem bundled from a **git** source is checked out by Bundler under `Gem.dir/bundler/gems` — monoruby's own home when Bundler runs on monoruby, the host's after the host's `bundle install` — so `stdlib/monoruby_hooks/bundler_source_git.rb` prepends a fallback to `Bundler::Source::Git#install_path`: a checkout missing from monoruby's home is taken from the same place under a host gem directory. It is loaded right after `bundler/source/git.rb` by `Executor::run_load_hooks` (a table of path suffix → stub feature, applied after any `require` / autoload of a matching file), since Bundler autoloads that file by absolute path and a same-named stub could not intercept it. The same table loads `stdlib/monoruby_hooks/bundler_runtime.rb` after `bundler/runtime.rb`: once `Bundler.setup` has run, the cached host gem `lib/`s stop being a `require` fallback (`Globals::disable_host_gem_fallback`), so only the bundle is visible, as on CRuby (ruby-lsp probes `require "rubocop"` and must not find a host rubocop outside its bundle). `stdlib/<arch>/rbconfig/sizeof.rb` asks the host `ruby` with the Bundler variables (`RUBYOPT`, `BUNDLER_SETUP`, `GEM_HOME`, …) removed, so the child does not set up the bundle against monoruby's gem home.
 7. **gc-stress in tests**: `gc-stress` is **opt-in** — `export GC_STRESS=1` before `bin/test` and it applies to **every** phase (nextest *and* the benchmark binary, so optcarrot / ruby-spec are stressed too). Since the true-stress restoration this means a collection at **every safepoint**, so a `GC_STRESS=1` run of the full scope is an hours-scale job. Nothing enables it implicitly, so the automatic CI never pays it; run the manual `gc-stress` workflow instead. Tests whose loop counts exist only to reach the JIT thresholds should shrink them under `cfg!(feature = "gc-stress")` (see `tests/method_call.rs`) — otherwise they blow past nextest's per-test cap.

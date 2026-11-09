@@ -2797,15 +2797,28 @@ fn converter_inspect(
     let conv = Converter::new(lfp.self_val());
     let src = conv.src();
     let dst = conv.dst();
+    // The converter's ends are the transcoders' names, since 4.0.9
+    // (`transcoder_spelling`): `WINDOWS-1252 to EUC-JP`.
     Ok(Value::string_sprintf(format!(
         "#<Encoding::Converter: {} to {}>",
-        src.name(),
-        dst.name()
+        transcoder_spelling(src.name()),
+        transcoder_spelling(dst.name())
     )))
 }
 
-/// Build the CRuby-compatible message for a conversion error.
+/// Build the CRuby-compatible message for a conversion error: the
+/// message the stream worded with the encodings' own names, respelled
+/// as CRuby 4.0.9 words it (`canonical_econv_message`).
 fn conversion_error_message(
+    result: StreamConvertResult,
+    meta: &ErrMeta,
+    src_enc: crate::value::Encoding,
+    dst_enc: crate::value::Encoding,
+) -> String {
+    canonical_econv_message(conversion_error_message_as_named(result, meta, src_enc, dst_enc))
+}
+
+fn conversion_error_message_as_named(
     result: StreamConvertResult,
     meta: &ErrMeta,
     src_enc: crate::value::Encoding,
@@ -2830,20 +2843,7 @@ fn conversion_error_message(
             // invalid sequence is dumped, and the failing hop is
             // source → pivot.
             let bytes = quote_error_bytes(&meta.error_bytes);
-            if transcoder_spelling(src_enc.name()) != src_enc.name() {
-                if dst_enc == crate::value::Encoding::UTF8 {
-                    format!(
-                        "{bytes} to UTF-8 in conversion from {} to UTF-8",
-                        src_enc.name()
-                    )
-                } else {
-                    format!(
-                        "{bytes} to UTF-8 in conversion from {} to UTF-8 to {}",
-                        src_enc.name(),
-                        dst_enc.name()
-                    )
-                }
-            } else if stage_dst == dst_enc.name() {
+            if stage_dst == dst_enc.name() {
                 format!("{} from {} to {}", bytes, stage_src, stage_dst)
             } else {
                 format!(
@@ -2861,17 +2861,7 @@ fn conversion_error_message(
                 .and_then(|s| s.chars().next())
                 .map(|c| c as u32)
                 .unwrap_or(0);
-            if transcoder_spelling(dst_enc.name()) != dst_enc.name() {
-                let from = if is_the_utf8_pivot(src_enc) {
-                    src_enc.name().to_string()
-                } else {
-                    format!("{} to UTF-8", src_enc.name())
-                };
-                format!(
-                    "U+{:04X} to {stage_dst} in conversion from {from} to {stage_dst}",
-                    cp
-                )
-            } else if is_the_utf8_pivot(src_enc) {
+            if is_the_utf8_pivot(src_enc) {
                 format!("U+{:04X} from {} to {}", cp, stage_src, stage_dst)
             } else {
                 // Two-hop path: show the whole conversion chain.
