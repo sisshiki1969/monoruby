@@ -43,6 +43,27 @@ impl<'a> JitContext<'a> {
         frame: JitStackFrame,
         entry_chain: Option<Vec<FrameRef>>,
     ) -> JitResult<JitStackFrame> {
+        // `jit-log`: time this method's front-end run, its callees' runs
+        // (nested in it) excluded (`codegen/jit_timing.rs`).
+        #[cfg(feature = "jit-log")]
+        {
+            let key = (frame.asm_info.iseq_id, frame.asm_info.self_class);
+            crate::codegen::jit_timing::time(
+                key.0,
+                key.1,
+                crate::codegen::jit_timing::Phase::FrontEnd,
+                || self.traceir_to_asmir_inner(frame, entry_chain),
+            )
+        }
+        #[cfg(not(feature = "jit-log"))]
+        self.traceir_to_asmir_inner(frame, entry_chain)
+    }
+
+    fn traceir_to_asmir_inner(
+        &mut self,
+        frame: JitStackFrame,
+        entry_chain: Option<Vec<FrameRef>>,
+    ) -> JitResult<JitStackFrame> {
         self.push_frame(frame);
 
         // A nested compile's view of the suspended frames is the caller's

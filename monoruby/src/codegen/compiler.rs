@@ -304,6 +304,8 @@ impl Codegen {
         let (start0, start1) = self.get_address_pair();
 
         let const_version = self.const_version();
+        #[cfg(feature = "jit-log")]
+        crate::codegen::jit_timing::begin_unit();
         match self.jit_compile(
             &globals.store,
             iseq_id,
@@ -346,6 +348,20 @@ impl Codegen {
                             end1
                         );
                         eprintln!("{}", specialized_info.format(&globals.store));
+                    }
+                }
+                #[cfg(feature = "jit-log")]
+                {
+                    let times = crate::codegen::jit_timing::take_unit();
+                    if self.startup_flag {
+                        eprint!(
+                            "{}",
+                            crate::codegen::jit_timing::format_unit(
+                                &globals.store,
+                                &times,
+                                elapsed
+                            )
+                        );
                     }
                 }
                 self.add_compilation_unit(
@@ -399,6 +415,20 @@ impl Codegen {
                             .get_label_address(&globals.store[func_id].entry_label());
                         let vm_entry = self.vm_entry();
                         self.jit.apply_jmp_patch_address(entry, &vm_entry);
+                    }
+                }
+                #[cfg(feature = "jit-log")]
+                {
+                    let times = crate::codegen::jit_timing::take_unit();
+                    if self.startup_flag {
+                        eprint!(
+                            "{}",
+                            crate::codegen::jit_timing::format_unit(
+                                &globals.store,
+                                &times,
+                                now.elapsed()
+                            )
+                        );
                     }
                 }
                 #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
