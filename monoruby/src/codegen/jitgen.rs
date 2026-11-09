@@ -980,6 +980,40 @@ impl Codegen {
     /// or the outer caller does (aarch64).
     fn gen_machine_code(
         &mut self,
+        frame: AsmInfo,
+        store: &Store,
+        entry_label: DestLabel,
+        level: usize,
+        class_version: DestLabel,
+        root: (ISeqId, ClassId, Option<BytecodePtr>),
+    ) {
+        // `jit-log`: time this method's back-end run, the callees emitted
+        // from inside it excluded (`codegen/jit_timing.rs`).
+        #[cfg(feature = "jit-log")]
+        {
+            let key = (frame.iseq_id, frame.self_class);
+            crate::codegen::jit_timing::time(
+                key.0,
+                key.1,
+                crate::codegen::jit_timing::Phase::BackEnd,
+                || {
+                    self.gen_machine_code_inner(
+                        frame,
+                        store,
+                        entry_label,
+                        level,
+                        class_version,
+                        root,
+                    )
+                },
+            )
+        }
+        #[cfg(not(feature = "jit-log"))]
+        self.gen_machine_code_inner(frame, store, entry_label, level, class_version, root)
+    }
+
+    fn gen_machine_code_inner(
+        &mut self,
         mut frame: AsmInfo,
         store: &Store,
         entry_label: DestLabel,

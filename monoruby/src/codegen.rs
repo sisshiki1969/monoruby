@@ -9,6 +9,8 @@ use monoasm_macro::monoasm;
 use std::time::Duration;
 
 mod compiler;
+#[cfg(feature = "jit-log")]
+pub(crate) mod jit_timing;
 mod jit_module;
 pub mod jitgen;
 mod patch;
