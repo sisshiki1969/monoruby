@@ -10,17 +10,19 @@ set -e
 # lines with awk instead. Identical output to `head -n -3` on GNU.
 drop_last3() { awk 'NR>3{print buf[NR%3]} {buf[NR%3]=$0}'; }
 
-# The reference CRuby, as the absolute path of the executable `ruby` on
-# PATH resolves to *here*. rbenv's shim picks the version from the
-# `.ruby-version` nearest the current directory, so the phases that run
-# `ruby` with their cwd outside the checkout (ruby-bench, the gem tests'
-# fixtures under ../ruby-bench) got whichever Ruby `~/.rbenv/version`
-# names — a different version with a different gem set — while the gem
-# check below, run here, saw the pinned one and found nothing missing.
-# Pinning the path once makes every phase, and every child the tests
-# spawn, use the Ruby the checkout's `.ruby-version` selects.
-RUBY_BIN="$(ruby -e 'print RbConfig.ruby')"
-[ -x "$RUBY_BIN" ] || { echo "cannot resolve the ruby on PATH to an executable (got '$RUBY_BIN')" >&2; exit 2; }
+# The reference CRuby, as the absolute path of its executable, chosen by
+# `host_ruby::find` (the `host_ruby` crate): the installed Ruby closest
+# to the vendored pin, `ruby` on PATH winning a tie, MONORUBY_RUBY
+# overriding. That is the *same* code the test harness
+# (`monoruby_test_support::ruby_path`) and the interpreter's runtime
+# probe (`ruby_probe`) choose their Ruby with, so the Ruby this script
+# installs the suite's gems into is the Ruby the tests compare against
+# and the Ruby the monoruby they spawn borrows gems from. Resolving
+# `ruby` on PATH here used to pick whatever `~/.rbenv/version` named
+# (4.0.9, say) while the probe took the pinned 4.0.6: the gem check saw
+# nothing missing and the gem tests failed with LoadError.
+RUBY_BIN="$(cargo run -q -p host_ruby)" || { echo "no usable host ruby (see host_ruby/src/main.rs)" >&2; exit 2; }
+[ -x "$RUBY_BIN" ] || { echo "host_ruby answered '$RUBY_BIN', not an executable" >&2; exit 2; }
 # Its `gem` is the script next to it (not `ruby -S gem`, which would find
 # a version manager's shell-script shim on PATH and fail to run it).
 GEM_BIN="$("$RUBY_BIN" -e 'print File.join(RbConfig::CONFIG["bindir"], "gem")')"

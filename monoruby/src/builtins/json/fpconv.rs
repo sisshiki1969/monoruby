@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn layouts() {
-        // CRuby 4.0.6 (json 2.18.0): `f.to_json`.
+        // CRuby 4.0.9 (json 2.18.0): `f.to_json`.
         for (f, s) in [
             (1.0, "1.0"),
             (1e20, "1e+20"),

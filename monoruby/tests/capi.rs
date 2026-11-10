@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use monoruby::tests::ruby_path;
 
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -88,7 +89,7 @@ fn build_for_monoruby_once() -> Option<PathBuf> {
 }
 
 fn ruby_config(key: &str) -> String {
-    let out = Command::new("ruby")
+    let out = Command::new(ruby_path())
         .args(["-e", &format!("print RbConfig::CONFIG[{key:?}]")])
         .output()
         .expect("a host `ruby` is needed to build the CRuby side of the comparison");
@@ -159,7 +160,7 @@ fn capi_extension_matches_cruby() {
 /// be identical.
 fn compare(name: &str, mr_dir: &Path, cr_dir: &Path) {
     let script = manifest_dir().join(format!("tests/capi/{name}.rb"));
-    let expected = run(Command::new("ruby").arg("-I").arg(cr_dir).arg(&script));
+    let expected = run(Command::new(ruby_path()).arg("-I").arg(cr_dir).arg(&script));
     for args in [&[][..], &["--no-jit"][..]] {
         let actual = run(monoruby(mr_dir).args(args).arg(&script));
         if actual != expected {

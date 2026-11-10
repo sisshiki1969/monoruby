@@ -1,7 +1,7 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// The json gem as CRuby 4.0.6 ships it (json 2.18.0, #1623): its Ruby
+// The json gem as CRuby 4.0.9 ships it (json 2.18.0, #1623): its Ruby
 // half vendored as it is, and its two C extensions ported —
 // `JSON::Ext::ParserConfig` / `JSON::Ext::Parser.parse` from parser.c,
 // `JSON::Ext::Generator::State` and the `GeneratorMethods` from

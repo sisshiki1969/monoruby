@@ -99,7 +99,7 @@ jobs:
         # The test harness diffs monoruby's output against this CRuby.
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "4.0.6"
+          ruby-version: "4.0.9"
       - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
         run: gem install bigdecimal --no-document
       - uses: dtolnay/rust-toolchain@nightly
@@ -163,7 +163,7 @@ jobs:
         if: inputs.scope == 'full'
         # Same pinned revisions as the automatic workflow — keep in sync.
         env:
-          SPEC_REV: 87b1631992bd00cf0c4934474766d54dad088191
+          SPEC_REV: 484c424b08e0ed022055aff3c3ed0e4cea94ae7c
           MSPEC_REV: dffcdf7d00612c13465983224203e457a30cf124
         run: |
           git init ../spec

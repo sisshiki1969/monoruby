@@ -25,7 +25,7 @@ Methodology, from `.github/workflows/bench.yml`:
   `--rss --harness=harness-warmup`. Three engines are measured on the same
   runner in the same job: monoruby, `ruby --yjit`, and `ruby --zjit` built
   from ruby-head.
-- The reference CRuby is 4.0.6 (`ruby/setup-ruby`), and monoruby is installed
+- The reference CRuby is 4.0.9 (`ruby/setup-ruby`), and monoruby is installed
   with `cargo install --path monoruby --locked`.
 - Each benchmark gets a 1000-second timeout **per engine** — the same rule
   for all three, since they are being compared. A benchmark that times out or

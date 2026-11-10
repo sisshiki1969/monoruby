@@ -206,7 +206,7 @@ fn marshal_payload_holds_the_utc_clock() {
     // back. monoruby wrote the *local* clock, which round-tripped within
     // monoruby but not with CRuby — a dump of a `Asia/Tokyo` local time
     // read back nine hours out, in either direction. These are the exact
-    // bytes CRuby 4.0.6 writes.
+    // bytes CRuby 4.0.9 writes.
     run_test_once(
         r#"
         old = ENV['TZ']

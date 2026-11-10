@@ -716,6 +716,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "host_ruby"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "html-escape"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1023,6 +1030,7 @@ dependencies = [
  "fxhash",
  "getrandom 0.3.4",
  "hex",
+ "host_ruby",
  "html-escape",
  "indexmap",
  "libc",
@@ -1078,6 +1086,9 @@ version = "0.1.0"
 [[package]]
 name = "monoruby_test_support"
 version = "0.1.0"
+dependencies = [
+ "host_ruby",
+]
 
 [[package]]
 name = "nibble_vec"

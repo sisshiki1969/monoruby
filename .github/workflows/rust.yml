@@ -16,7 +16,7 @@ jobs:
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "4.0.6"
+          ruby-version: "4.0.9"
       - uses: dtolnay/rust-toolchain@nightly
         with:
           # Keep in sync with rust-toolchain.toml. A floating `nightly` here
@@ -35,9 +35,12 @@ jobs:
         # Pinned to fixed commits so upstream ruby/spec changes can't break CI.
         # `bin/test` runs these specs under `set -e`, so a single newly added
         # upstream spec that monoruby doesn't pass yet would fail the whole run.
-        # Bump these SHAs deliberately when adopting newer specs.
+        # Bump these SHAs deliberately when adopting newer specs. SPEC_REV is
+        # ruby/spec 484c424b (2026-10-24, "Set operations retain
+        # compare_by_identity flag"): the Set specs older revisions pin to
+        # 4.0.6's behaviour, which the 4.0.9 pin no longer has.
         env:
-          SPEC_REV: 87b1631992bd00cf0c4934474766d54dad088191
+          SPEC_REV: 484c424b08e0ed022055aff3c3ed0e4cea94ae7c
           MSPEC_REV: dffcdf7d00612c13465983224203e457a30cf124
         run: |
           git init ../spec
@@ -156,7 +159,7 @@ jobs:
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "4.0.6"
+          ruby-version: "4.0.9"
       - name: Install bigdecimal (no longer a default gem since Ruby 3.4)
         run: gem install bigdecimal --no-document
       - name: Install ruby-bench gem dependencies
@@ -188,7 +191,7 @@ jobs:
         # Pinned to fixed commits so upstream ruby/spec changes can't break CI.
         # Keep these SHAs in sync with the `amd64` job above; bump deliberately.
         env:
-          SPEC_REV: 87b1631992bd00cf0c4934474766d54dad088191
+          SPEC_REV: 484c424b08e0ed022055aff3c3ed0e4cea94ae7c
           MSPEC_REV: dffcdf7d00612c13465983224203e457a30cf124
         run: |
           git init ../spec

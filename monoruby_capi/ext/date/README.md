@@ -1,7 +1,7 @@
 # ext/date from CRuby, built against the C API layer
 
 `date_core.c`, `date_parse.c`, `date_strftime.c`, `date_strptime.c`,
-`date_tmx.h` and `zonetab.h` are CRuby 4.0.6's `ext/date` (the date gem
+`date_tmx.h` and `zonetab.h` are CRuby 4.0.9's `ext/date` (the date gem
 3.5.1), unmodified. `monoruby/build.rs` (`build_capi_extensions`)
 compiles them against `monoruby_capi/include`, links the layer's
 archives in, and installs the result as `<install root>/ext/date_core.so`

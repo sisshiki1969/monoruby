@@ -101,14 +101,17 @@ fn new_empty_set() -> Value {
     Value::hash_with_class_and_default(SET_CLASS, Value::nil())
 }
 
-/// Create a new empty Set that compares its members the same way `model`
-/// does.
+/// Create a new empty Set of `model`'s class that compares its members the
+/// same way `model` does — what CRuby's `set_s_alloc(rb_obj_class(set))`
+/// followed by `set_i_compare_by_identity` builds for every derived set
+/// (`&`, `|`, `-`, `^`, `map!`, `flatten`, the subsets of `classify` /
+/// `divide`), since 4.0.9 for the identity half.
 ///
 /// The mode is set while the set is still empty, so every subsequent insert
 /// already uses the right comparison — flipping it afterwards would rehash
 /// (and merge) elements that were meant to stay distinct.
-fn new_empty_set_like(model: Value) -> Result<Value> {
-    let set = new_empty_set();
+fn new_empty_set_like(model: Value, store: &Store) -> Result<Value> {
+    let set = Value::hash_with_class_and_default(model.real_class(store).id(), Value::nil());
     if model.as_hash().is_compare_by_identity() {
         set.as_hash().set_compare_by_identity_empty(true)?;
     }
@@ -122,6 +125,21 @@ fn set_from_iter(
     globals: &mut Globals,
 ) -> Result<Value> {
     let set = new_empty_set();
+    let mut h = set.as_hash();
+    for v in iter {
+        h.insert(v, Value::bool(true), vm, globals)?;
+    }
+    Ok(set)
+}
+
+/// [`set_from_iter`], into a Set like `model` ([`new_empty_set_like`]).
+fn set_from_iter_like(
+    model: Value,
+    iter: impl Iterator<Item = Value>,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<Value> {
+    let set = new_empty_set_like(model, &globals.store)?;
     let mut h = set.as_hash();
     for v in iter {
         h.insert(v, Value::bool(true), vm, globals)?;
@@ -208,7 +226,13 @@ pub(crate) extern "C" fn set_alloc_func(class_id: ClassId, _: &mut Globals) -> V
 #[monoruby_builtin]
 fn set_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
-    set_from_iter(args.iter().copied(), vm, globals)
+    // Of the receiver's class: `MySet[1, 2]` is a `MySet`.
+    let set = Value::hash_with_class_and_default(lfp.self_val().as_class().id(), Value::nil());
+    let mut h = set.as_hash();
+    for v in args.iter().copied() {
+        h.insert(v, Value::bool(true), vm, globals)?;
+    }
+    Ok(set)
 }
 
 ///
@@ -412,12 +436,9 @@ fn set_inspect(
 #[monoruby_builtin]
 fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let keys = set_keys(lfp.self_val());
-    let new_set = set_from_iter(keys.into_iter(), vm, globals)?;
-    // `compare_by_identity` persists across #dup / #clone.
-    if lfp.self_val().as_hash().is_compare_by_identity() {
-        new_set.as_hash().compare_by_identity(vm, globals)?;
-    }
-    Ok(new_set)
+    // Of `self`'s class, and `compare_by_identity` persists across
+    // #dup / #clone.
+    set_from_iter_like(lfp.self_val(), keys.into_iter(), vm, globals)
 }
 
 ///
@@ -509,15 +530,15 @@ fn intersection(
     // Build a temp hash for the other side. It compares like `self` does, so
     // the membership tests below follow `self`'s rule — CRuby probes the
     // enum's elements against `self`'s own hash.
-    let other = new_empty_set_like(self_val)?;
+    let other = new_empty_set_like(self_val, &globals.store)?;
     for elem in other_elems {
         other
             .as_hash().insert(elem, Value::bool(true), vm, globals)?;
     }
     let other_inner = other.as_hashmap_inner();
-    // `&` alone builds a *plain* result: CRuby allocates a fresh Set here
-    // rather than duplicating `self` (see `new_empty_set_like` at `-` / `^`).
-    let result = new_empty_set();
+    // Since 4.0.9 the result compares like `self` too (CRuby 4.0.6 built a
+    // plain Set here, the one derived set that dropped the flag).
+    let result = new_empty_set_like(self_val, &globals.store)?;
     for (k, _) in self_inner.iter() {
         if other_inner.contains_key(k, vm, globals)? {
             result
@@ -541,7 +562,7 @@ fn union_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let other_elems = enum_to_vec(vm, globals, lfp.arg(0))?;
     // CRuby builds `|` by duplicating `self` and merging the enum into it, so
     // the result keeps `self`'s comparison mode (and the merge follows it).
-    let result = new_empty_set_like(lfp.self_val())?;
+    let result = new_empty_set_like(lfp.self_val(), &globals.store)?;
     for k in self_keys {
         result
             .as_hash().insert(k, Value::bool(true), vm, globals)?;
@@ -568,13 +589,13 @@ fn difference(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // CRuby builds `-` by duplicating `self` and deleting the enum's elements
     // from it: the result keeps `self`'s comparison mode, and so do the
     // deletions (hence the `_like` temp probed below).
-    let other = new_empty_set_like(self_val)?;
+    let other = new_empty_set_like(self_val, &globals.store)?;
     for elem in other_elems {
         other
             .as_hash().insert(elem, Value::bool(true), vm, globals)?;
     }
     let other_inner = other.as_hashmap_inner();
-    let result = new_empty_set_like(self_val)?;
+    let result = new_empty_set_like(self_val, &globals.store)?;
     for (k, _) in self_inner.iter() {
         if !other_inner.contains_key(k, vm, globals)? {
             result
@@ -602,13 +623,13 @@ fn symmetric_difference(
     let other_elems = enum_to_vec(vm, globals, lfp.arg(0))?;
     // Both halves of the symmetric difference are probed with `self`'s
     // comparison mode, and the result keeps it (as CRuby's `^` does).
-    let other = new_empty_set_like(self_val)?;
+    let other = new_empty_set_like(self_val, &globals.store)?;
     for elem in other_elems {
         other
             .as_hash().insert(elem, Value::bool(true), vm, globals)?;
     }
     let other_inner = other.as_hashmap_inner();
-    let result = new_empty_set_like(self_val)?;
+    let result = new_empty_set_like(self_val, &globals.store)?;
     for (k, _) in self_inner.iter() {
         if !other_inner.contains_key(k, vm, globals)? {
             result
@@ -1079,10 +1100,10 @@ fn collect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
         }
         let new_elems_idx = vm.temp_len() - 1;
         let self_val = lfp.self_val();
+        // CRuby rebuilds `self` from a freshly allocated Set of the same
+        // class — and, since 4.0.9, the same comparison mode — so the mapped
+        // elements are compared the way `self` compares and the flag stays.
         self_val.as_hash().clear()?;
-        // CRuby rebuilds `self` from a freshly allocated (plain) Set, so the
-        // mapped elements are compared by `eql?` and the flag is dropped.
-        self_val.as_hash().set_compare_by_identity_empty(false)?;
         let n = vm.temp_at(new_elems_idx).as_array().len();
         for i in 0..n {
             let elem = vm.temp_at(new_elems_idx).as_array()[i];
@@ -1102,7 +1123,8 @@ fn collect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
 #[monoruby_builtin]
 fn flatten(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let mut result = new_empty_set();
+    // Of `self`'s class and (since 4.0.9) comparison mode.
+    let mut result = new_empty_set_like(self_val, &globals.store)?;
     let mut seen = std::collections::HashSet::new();
     seen.insert(self_val.id());
     flatten_set_into(&mut result, self_val, vm, globals, &mut seen)?;
@@ -1149,16 +1171,14 @@ fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         return Ok(Value::nil());
     }
     self_val.ensure_not_frozen(&globals.store)?;
-    let mut result = new_empty_set();
+    let mut result = new_empty_set_like(self_val, &globals.store)?;
     let mut seen = std::collections::HashSet::new();
     seen.insert(self_val.id());
     flatten_set_into(&mut result, self_val, vm, globals, &mut seen)?;
-    // Replace self's contents. As with `map!`, CRuby swaps in the freshly
-    // built (plain) Set, so the flag is dropped — but only on this path: an
-    // already-flat Set returned early above and keeps its flag.
+    // `replace(self, flatten(self))`: the flattened set compares like
+    // `self` (since 4.0.9), so the flag survives the swap.
     let self_val = lfp.self_val();
     self_val.as_hash().clear()?;
-    self_val.as_hash().set_compare_by_identity_empty(false)?;
     let new_keys = set_keys(result);
     for k in new_keys {
         self_val
@@ -1236,7 +1256,9 @@ fn classify(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
             if let Some(set) = existing {
                 set.as_hash().insert(k, Value::bool(true), vm, globals)?;
             } else {
-                let new_set = new_empty_set();
+                // Each subset is of `self`'s class and (since 4.0.9)
+                // comparison mode.
+                let new_set = new_empty_set_like(lfp.self_val(), &globals.store)?;
                 vm.temp_push(new_set);
                 new_set.as_hash().insert(k, Value::bool(true), vm, globals)?;
                 result_hash.as_hash().insert(classification, new_set, vm, globals)?;
@@ -1366,7 +1388,7 @@ fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
             vm.temp_push(result_set);
             for comp in sccs {
                 let elems: Vec<Value> = comp.into_iter().map(|i| keys[i]).collect();
-                let subset = set_from_iter(elems.into_iter(), vm, globals)?;
+                let subset = set_from_iter_like(lfp.self_val(), elems.into_iter(), vm, globals)?;
                 let depth = vm.temp_len();
                 vm.temp_push(subset);
                 result_set.as_hash().insert(subset, Value::bool(true), vm, globals)?;
@@ -1399,7 +1421,7 @@ fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
             vm.temp_push(result_set);
             for key in group_order {
                 if let Some(elems) = groups.remove(&key) {
-                    let subset = set_from_iter(elems.into_iter(), vm, globals)?;
+                    let subset = set_from_iter_like(lfp.self_val(), elems.into_iter(), vm, globals)?;
                     let depth = vm.temp_len();
                     vm.temp_push(subset);
                     result_set.as_hash().insert(subset, Value::bool(true), vm, globals)?;
@@ -1732,16 +1754,18 @@ mod tests {
     }
 
     /// Which Set operations carry the `compare_by_identity` flag over to
-    /// their result, and which drop it. CRuby's rule is "the flag follows
-    /// the hash that gets copied": `|` / `-` / `^` duplicate `self`, so they
-    /// keep it (and compare the operand's elements by identity too), while
-    /// `&` / `flatten` allocate a fresh plain Set. The in-place `map!` /
-    /// `flatten!` / `replace` swap in a freshly built hash, so they take
-    /// *its* flag — which is how `replace` can turn identity comparison off.
+    /// their result. Since CRuby 4.0.9 (the pin) every set derived from
+    /// `self` compares the way `self` does: `|` / `-` / `^` duplicate
+    /// `self`, and `&`, `flatten`, `map!`, the subsets of `classify` /
+    /// `divide` allocate a fresh Set of `self`'s class and switch it to
+    /// identity comparison first (4.0.6 built those four plain, so they
+    /// dropped the flag). The in-place `map!` / `flatten!` / `replace`
+    /// swap in a freshly built hash and take *its* flag — which is how
+    /// `replace` can turn identity comparison off.
     #[test]
     fn compare_by_identity_propagation() {
         run_tests(&[
-            // Binary operators: `|` / `-` / `^` retain, `&` does not.
+            // Binary operators: all four retain.
             r#"(s=Set[1,2,3,4].compare_by_identity; [(s|Set[3,4,5]).compare_by_identity?,
                 (s-Set[3,4]).compare_by_identity?, (s^Set[3,4,5]).compare_by_identity?,
                 (s&Set[3,4]).compare_by_identity?])"#,
@@ -1752,12 +1776,12 @@ mod tests {
             // A plain Set keeps comparing by value through the same ops.
             r#"(a="x".dup; b="x".dup; s=Set.new; s<<a;
                 [(s-[b]).size, (s|[b]).size, (s^[b]).size, (s&[b]).size])"#,
-            // flatten always returns a plain Set; flatten! drops the flag
-            // only when something was actually flattened.
+            // flatten keeps it (so flatten!, `replace(self, flatten)`, does
+            // too, flattened or not).
             r#"Set[1,2,Set[3,4]].compare_by_identity.flatten.compare_by_identity?"#,
             r#"(s=Set[1,2,Set[3,4]].compare_by_identity; s.flatten!; s.compare_by_identity?)"#,
             r#"(s=Set[1,2].compare_by_identity; s.flatten!; s.compare_by_identity?)"#,
-            // map! drops it; merge / subtract keep it.
+            // map! / merge / subtract keep it.
             r#"(s=Set[1,2,3].compare_by_identity; s.map!{|x| x*2}; [s.compare_by_identity?, s.to_a.sort])"#,
             r#"(s=Set[1,2].compare_by_identity; s.merge([3]); s.compare_by_identity?)"#,
             r#"(s=Set[1,2].compare_by_identity; s.subtract([2]); s.compare_by_identity?)"#,
@@ -1766,6 +1790,13 @@ mod tests {
             r#"(s=Set[:a].compare_by_identity; s.replace(Set[1,2]); s.compare_by_identity?)"#,
             r#"(s=Set[:a]; s.replace(Set[1,2].compare_by_identity); s.compare_by_identity?)"#,
             r#"(s=Set[:a].compare_by_identity; s.replace([1,2]); [s.compare_by_identity?, s.to_a])"#,
+            // classify / divide: the subsets compare like `self`, the
+            // container of divide is a plain Set.
+            r#"(s=Set[1,2,3,4].compare_by_identity; s.classify(&:odd?).values.map(&:compare_by_identity?))"#,
+            r#"(s=Set[1,2,3,4].compare_by_identity; d=s.divide(&:odd?); [d.compare_by_identity?, d.map(&:compare_by_identity?)])"#,
+            r#"(s=Set[1,2,3,4].compare_by_identity; d=s.divide{|a,b| (a-b).abs==1}; [d.compare_by_identity?, d.map(&:compare_by_identity?)])"#,
+            // ... and are of `self`'s class, as every derived set is.
+            r#"(class MySet < Set; end; s=MySet[1,2,3]; [(s&[1]).class, (s|[9]).class, (s-[1]).class, (s^[9]).class, s.flatten.class, s.classify(&:odd?).values.map(&:class), s.divide(&:odd?).class, s.divide(&:odd?).map(&:class), s.dup.map!{|x| x}.class])"#,
         ]);
     }
 

@@ -1,0 +1,20 @@
+[package]
+name = "host_ruby"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# The one place that decides which host CRuby monoruby pairs with: the
+# runtime probe (`monoruby/src/ruby_probe.rs`), the test harness
+# (`monoruby_test_support::ruby_path`), `build.rs` and `bin/test` (through
+# the `host-ruby` binary) all call `host_ruby::find`, so they cannot
+# disagree. Deliberately dependency-free: `monoruby_test_support` is
+# meant to be linked by tests that must not pull in the interpreter.
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "host-ruby"
+path = "src/main.rs"

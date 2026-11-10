@@ -141,6 +141,9 @@ tempfile = "3.27.0"
 # The interpreter-free half of the test harness. `tests` is part of this
 # lib (integration tests import it), so this is a normal dependency.
 monoruby_test_support = { path = "../monoruby_test_support" }
+# Which host CRuby to pair with (`ruby_probe`): the same answer the test
+# harness, build.rs and bin/test get, from the same code.
+host_ruby = { path = "../host_ruby" }
 dtoa = "1.0.11"
 chrono = "0.4.44"
 encoding_rs = "0.8"
@@ -172,6 +175,9 @@ libffi = { version = "5.1.0", features = ["system"] }
 
 [build-dependencies]
 dirs = "6.0.0"
+# The host CRuby whose `RUBY_PLATFORM` is baked: the one `ruby_probe`
+# and the test harness use too.
+host_ruby = { path = "../host_ruby" }
 # Compiles the C API layer into the `libmonoruby_capi.a` an `extconf.rb`
 # build links (build.rs `build_capi_archive`).
 cc = "1.0"

@@ -1,5 +1,5 @@
 /*
- * extconf.h for CRuby 4.0.6's ext/socket built against monoruby's C API
+ * extconf.h for CRuby 4.0.9's ext/socket built against monoruby's C API
  * layer (build.rs, `build_capi_extensions`): what its extconf.rb defines
  * on Linux (glibc, x86-64 and aarch64: recorded from a run there) and on
  * macOS (derived from the same checks: BSD sockaddr lengths, getpeereid,

@@ -5,6 +5,47 @@
 mod tests {
     use crate::tests::*;
 
+    /// `canonical_econv_message`, on messages worded with the encodings'
+    /// own names: the transcoder spellings CRuby 4.0.9 uses, the hop out
+    /// of SJIS-DOCOMO, and the short form for a single hop.
+    #[test]
+    fn econv_messages_are_respelled_as_4_0_9_words_them() {
+        use crate::value::transcode::canonical_econv_message as c;
+        let m = |s: &str| c(s.to_string());
+        // The ends take the transcoder's spelling.
+        assert_eq!(
+            m("U+20AC to EUC-JP in conversion from Windows-1252 to UTF-8 to EUC-JP"),
+            "U+20AC to EUC-JP in conversion from WINDOWS-1252 to UTF-8 to EUC-JP"
+        );
+        assert_eq!(m("\"\\xFF\" on SJIS-DoCoMo"), "\"\\xFF\" on SJIS-DOCOMO");
+        // UTF8-DoCoMo is UTF8-DOCOMO only as the hop out of SJIS-DOCOMO.
+        assert_eq!(
+            m("U+2600 to US-ASCII in conversion from SJIS-DoCoMo to UTF8-DoCoMo to UTF-8 to US-ASCII"),
+            "U+2600 to US-ASCII in conversion from SJIS-DOCOMO to UTF8-DOCOMO to UTF-8 to US-ASCII"
+        );
+        assert_eq!(
+            m("U+2600 to US-ASCII in conversion from UTF8-DoCoMo to UTF-8 to US-ASCII"),
+            "U+2600 to US-ASCII in conversion from UTF8-DoCoMo to UTF-8 to US-ASCII"
+        );
+        // One hop written out in full (4.0.6's wording) is the short form.
+        assert_eq!(
+            m("U+3042 to WINDOWS-874 in conversion from UTF-8 to WINDOWS-874"),
+            "U+3042 from UTF-8 to WINDOWS-874"
+        );
+        assert_eq!(
+            m("\"\\x81\" to UTF-8 in conversion from Windows-1252 to UTF-8"),
+            "\"\\x81\" from WINDOWS-1252 to UTF-8"
+        );
+        // A chain of two hops whose last name is not the error's stays.
+        assert_eq!(
+            m("U+3042 to UTF-16LE in conversion from macRoman to UTF-8"),
+            "U+3042 to UTF-16LE in conversion from MACROMAN to UTF-8"
+        );
+        // Anything else passes through.
+        assert_eq!(m("U+3042 from UTF-8 to EUC-JP"), "U+3042 from UTF-8 to EUC-JP");
+        assert_eq!(m("incomplete \"\\xE3\" on UTF-8"), "incomplete \"\\xE3\" on UTF-8");
+    }
+
     // -------- ASCII identity / passthrough --------
 
     #[test]

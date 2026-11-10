@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use monoruby::tests::ruby_path;
 
 fn script(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/date/{name}.rb"))
@@ -25,7 +26,7 @@ fn run(cmd: &mut Command) -> String {
 }
 
 fn host_ruby_has_date() -> bool {
-    Command::new("ruby")
+    Command::new(ruby_path())
         .args(["-e", "require 'date'; require 'time'; require 'yaml'; require 'json'"])
         .output()
         .is_ok_and(|o| o.status.success())
@@ -37,7 +38,7 @@ fn matches_cruby(name: &str) {
         return;
     }
     let script = script(name);
-    let expected = run(Command::new("ruby").env("TZ", "UTC").arg(&script));
+    let expected = run(Command::new(ruby_path()).env("TZ", "UTC").arg(&script));
     for args in [&[][..], &["--no-jit"][..]] {
         let actual = run(Command::new(env!("CARGO_BIN_EXE_monoruby")).env("TZ", "UTC").args(args).arg(&script));
         if actual != expected {
