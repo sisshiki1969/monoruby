@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ca5246bb.js";
+            window.path_to_searchindex_js = "searchindex-efaec4e6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-9192be69.js"></script>
@@ -205,7 +205,7 @@ portal</a>:</p>
 <code>--rss --harness=harness-warmup</code>. Three engines are measured on the same
 runner in the same job: monoruby, <code>ruby --yjit</code>, and <code>ruby --zjit</code> built
 from ruby-head.</li>
-<li>The reference CRuby is 4.0.6 (<code>ruby/setup-ruby</code>), and monoruby is installed
+<li>The reference CRuby is 4.0.9 (<code>ruby/setup-ruby</code>), and monoruby is installed
 with <code>cargo install --path monoruby --locked</code>.</li>
 <li>Each benchmark gets a 1000-second timeout <strong>per engine</strong> — the same rule
 for all three, since they are being compared. A benchmark that times out or

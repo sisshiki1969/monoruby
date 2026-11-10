@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-ca5246bb.js";
+            window.path_to_searchindex_js = "../searchindex-efaec4e6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-9192be69.js"></script>
@@ -1095,7 +1095,7 @@ ruby/spec <code>library/stringscanner</code> 240 / <code>stringio</code> 703 / <
 <h3 id="322-socket-も-cruby-の-c-拡張に段階-14"><a class="header" href="#322-socket-も-cruby-の-c-拡張に段階-14">3.22 socket も CRuby の C 拡張に（段階 14）</a></h3>
 <p><code>src/builtins/socket.rs</code>（2,900 行のネイティブ実装）と <code>stdlib/socket.rb</code> の
 上乗せは、ruby/spec の <code>library/socket</code> で 1169 例中 139F+557E 落ちていた
-（CRuby は 1463 例）。CRuby 4.0.6 の <code>ext/socket</code> をそのまま層でビルドし、
+（CRuby は 1463 例）。CRuby 4.0.9 の <code>ext/socket</code> をそのまま層でビルドし、
 <code>stdlib/socket.rb</code> は CRuby の <code>ext/socket/lib/socket.rb</code>（<code>require 'socket.so'</code>）
 にした。</p>
 <ul>
@@ -1126,7 +1126,11 @@ Ruby 呼び出し（owner フレーム）の間だけ渡す。中身は ABI <cod
 すぐ返る。recv ごとの GVL の手放しと取り直しが無くなり、関数内の
 <code>RSTRING_PTR</code> も安全）。ブロッキングなら GVL を外す。</li>
 <li><strong>他に層に足したもの</strong>: <code>rb_thread_check_ints</code>（GVL を一度手放して保留の
-割り込みを受ける）、<code>rb_thread_prevent_fork</code>、<code>rb_readwrite_syserr_fail</code>
+割り込みを受ける）、<code>rb_thread_prevent_fork</code>、<code>rb_thread_register_exiting</code>
+（CRuby 4.0.9 の <code>raddrinfo.c</code> は getaddrinfo を joinable な pthread で
+走らせ、終了時にこれを呼んで VM に fork 前の join を頼む。層の
+<code>prevent_fork</code> はただの呼び出しで、そのスレッドを追跡しないので空実装）、
+<code>rb_readwrite_syserr_fail</code>
 （<code>IO::EAGAINWaitReadable</code> など）、<code>rb_fiber_scheduler_*</code>、
 <code>rb_eIOTimeoutError</code> / <code>rb_mWaitReadable</code> / <code>rb_mWaitWritable</code>、<code>RB_INT2NUM</code> 類、
 <code>UIDT2NUM</code> / <code>GIDT2NUM</code>、<code>rb_nogvl</code> での <code>errno</code> の持ち越し（CRuby と同じく
@@ -1148,7 +1152,7 @@ Ruby 呼び出し（owner フレーム）の間だけ渡す。中身は ABI <cod
 Cipher の AES-GCM / CBC を <code>ext/openssl</code>（RustCrypto）の上に Ruby で書き、
 PKey / X509 / SSL は読み込めるだけの空の殻だった（ruby/spec <code>library/openssl</code>
 171 例中 21F+66E、<code>library/net-ftp</code> は <code>OpenSSL::SSL</code> の定数で落ちる）。
-CRuby 4.0.6 の <code>ext/openssl</code> をそのまま層でビルドし、システムの OpenSSL
+CRuby 4.0.9 の <code>ext/openssl</code> をそのまま層でビルドし、システムの OpenSSL
 （Linux は libssl-dev、macOS は Homebrew の openssl@3）に動的リンクする。
 <code>stdlib/openssl.rb</code> と <code>stdlib/openssl/*.rb</code> は CRuby の <code>ext/openssl/lib/</code>
 （<code>require 'openssl.so'</code>）。<code>ext/openssl</code> crate は削除した。</p>
