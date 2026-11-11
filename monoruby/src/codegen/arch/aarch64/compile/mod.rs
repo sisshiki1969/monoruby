@@ -3440,6 +3440,7 @@ impl Codegen {
         arg: SlotId,
         fid: FuncId,
         inline: bool,
+        pure: bool,
         using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
@@ -3447,9 +3448,12 @@ impl Codegen {
         let slow = self.jit.label();
         let no = self.jit.label();
         let exit = self.jit.label();
+        debug_assert!(!pure || inline);
         if inline {
             self.a64_frame_load(0, lfp, conv(arg) as u32);
-            monoasm_arm64!(&mut self.jit, tbz x0, #(0), slow;);
+            if !pure {
+                monoasm_arm64!(&mut self.jit, tbz x0, #(0), slow;);
+            }
             if self.a64_cmp_range_end(start) {
                 self.jit.bcond_label(monoasm::Cond::Lt, &no);
             }
@@ -3468,6 +3472,11 @@ impl Codegen {
                 mov x0, (FALSE_VALUE);
                 b exit;
             );
+        }
+        if pure {
+            self.jit.bind_label(slow);
+            self.jit.bind_label(exit);
+            return true;
         }
         self.jit.bind_label(slow);
         self.emit_fpr_save(using_fpr, false);

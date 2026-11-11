@@ -1895,16 +1895,22 @@ impl Codegen {
         arg: SlotId,
         fid: FuncId,
         inline: bool,
+        pure: bool,
         using_fpr: UsingFpr,
     ) -> bool {
         let slow = self.jit.label();
         let no = self.jit.label();
         let exit = self.jit.label();
+        debug_assert!(!pure || inline);
         if inline {
             monoasm! { &mut self.jit,
                 movq rdi, [r14 - (conv(arg))];
-                testq rdi, 0b001;
-                jz   slow;
+            }
+            if !pure {
+                monoasm! { &mut self.jit,
+                    testq rdi, 0b001;
+                    jz   slow;
+                }
             }
             if self.cmp_range_end(start) {
                 monoasm! { &mut self.jit,
@@ -1929,6 +1935,11 @@ impl Codegen {
                 movq rax, (FALSE_VALUE);
                 jmp  exit;
             }
+        }
+        if pure {
+            self.jit.bind_label(slow);
+            self.jit.bind_label(exit);
+            return true;
         }
         self.jit.bind_label(slow);
         self.fpr_save(using_fpr);

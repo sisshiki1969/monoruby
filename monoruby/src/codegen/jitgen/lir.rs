@@ -960,6 +960,7 @@ pub(in crate::codegen) enum LInst {
         arg: SlotId,
         fid: FuncId,
         inline: bool,
+        pure: bool,
         using_fpr: UsingFpr,
     },
     RangeOp {

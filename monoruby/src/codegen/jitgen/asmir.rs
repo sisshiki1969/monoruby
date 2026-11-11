@@ -1721,6 +1721,7 @@ impl AsmIr {
         arg: SlotId,
         fid: FuncId,
         inline: bool,
+        pure: bool,
     ) {
         self.push(AsmInst::RangeCover {
             start,
@@ -1729,6 +1730,7 @@ impl AsmIr {
             arg,
             fid,
             inline,
+            pure,
             using_fpr,
         });
     }
@@ -3479,6 +3481,10 @@ pub(super) enum AsmInst {
         arg: SlotId,
         fid: FuncId,
         inline: bool,
+        /// `arg` is a proven Fixnum and `inline` holds: the two compares
+        /// are the whole answer, with no helper behind them (and no
+        /// `HandleError` after it).
+        pure: bool,
         using_fpr: UsingFpr,
     },
     ///

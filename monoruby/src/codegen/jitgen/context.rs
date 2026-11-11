@@ -1982,6 +1982,16 @@ impl<'a> JitContext<'a> {
         self.stack_frame.len()
     }
 
+    /// How many frameless frames sit on top of the specialization stack,
+    /// up to the innermost framed one.
+    pub(super) fn frameless_chain_len(&self) -> usize {
+        self.stack_frame
+            .iter()
+            .rev()
+            .take_while(|f| f.asm_info.frameless)
+            .count()
+    }
+
     /// Whether `iseq_id` is already one of the frames of this compilation
     /// unit, i.e. specializing a call to it now would inline a method into
     /// itself. A call without a block to a method already in the unit is

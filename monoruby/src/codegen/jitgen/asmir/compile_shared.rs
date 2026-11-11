@@ -362,6 +362,7 @@ impl Codegen {
                 arg,
                 fid,
                 inline,
+                pure,
                 using_fpr,
             } => self.encode_linst(LInst::RangeCover {
                 start,
@@ -370,6 +371,7 @@ impl Codegen {
                 arg,
                 fid,
                 inline,
+                pure,
                 using_fpr,
             }),
             AsmInst::RangeOp {
@@ -2155,9 +2157,10 @@ impl Codegen {
                 arg,
                 fid,
                 inline,
+                pure,
                 using_fpr,
             } => {
-                self.emit_range_cover(start, end, exclude_end, arg, fid, inline, using_fpr);
+                self.emit_range_cover(start, end, exclude_end, arg, fid, inline, pure, using_fpr);
             }
             LInst::RangeOp {
                 op,
