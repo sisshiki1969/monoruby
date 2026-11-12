@@ -4236,7 +4236,19 @@ impl Executor {
             && !self.current_refinements(globals).is_empty()
     }
 
-    pub(crate) fn invoke_tos(&mut self, globals: &mut Globals, receiver: Value) -> Result<Value> {
+    /// `receiver.to_s`, for an interpolated value. The built-in `to_s` of
+    /// an immediate, a Bignum, a Complex or a Rational is answered without
+    /// a call; with `exact_encoding` its result carries the encoding the
+    /// method itself gives it — the Symbol's own, US-ASCII for the others
+    /// — which decides the encoding of a `"#{a}#{b}"` (CRuby's
+    /// `rb_str_concat_literals`). Without it the shortcut result is
+    /// UTF-8, which is what the interpolated Regexp source expects.
+    pub(crate) fn invoke_tos(
+        &mut self,
+        globals: &mut Globals,
+        receiver: Value,
+        exact_encoding: bool,
+    ) -> Result<Value> {
         if !self.to_s_is_refined(globals) {
             match receiver.unpack() {
                 // String operands round-trip via `to_s` to themselves
@@ -4248,6 +4260,19 @@ impl Executor {
                 // tagged UTF-8 with broken bytes).
                 RV::String(_) => return Ok(receiver),
                 RV::Object(_) => {}
+                RV::Symbol(sym) if exact_encoding => {
+                    return Ok(Value::string_from_inner(
+                        crate::builtins::symbol::symbol_string_inner(sym),
+                    ));
+                }
+                _ if exact_encoding => {
+                    return Ok(Value::string_from_inner(
+                        crate::value::rvalue::RStringInner::from_encoding(
+                            receiver.to_s(&globals.store).as_bytes(),
+                            Encoding::UsAscii,
+                        ),
+                    ));
+                }
                 _ => return Ok(Value::string(receiver.to_s(&globals.store))),
             }
         }
