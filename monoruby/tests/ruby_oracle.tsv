@@ -1893,6 +1893,7 @@
 55cfd8bcda45f95d6f872d7615ecd004	[true, true, true]	__a = [];__a << (Symbol.all_symbols.is_a?(Array));__a << (Symbol.all_symbols.all
 55d3766f222609a4076548bde20c92c4	5	m = Module.new; m.const_set("ἍBB", 5); m.const_get("ἍBB")
 55d4331ac5b0d6b85a29b08cd75d814c	["echo hi", false]	def `(cmd); [cmd, cmd.frozen?]; end\n        x = "hi"\n        `echo #{x}
+55d6b5b6dcb686350994cb857704a4f4	["abcd", [1, "xxx"], {k: "vv"}]	begin\n              GC.stress = true\n              a = Thread.new {
 55e0c5f6cdca1e7736c6f5a8ef3c31a9	[[[:a, 1], [:b, 2], [:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]]]	S = Struct.new(:a, :b)\n               s = S.new(1, 2)\n               r = []\n    
 55f0fc54d8a7b9fc5936d77ffe989680	true	File.absolute_path?("/tmp")
 56038da008a973f6fabe8d8e55d4ebe0	[:locked, true]	require 'fcntl'\n        DARWIN = RUBY_PLATFORM.include?("darwin")\n     

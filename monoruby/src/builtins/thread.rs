@@ -991,6 +991,26 @@ mod tests {
     }
 
     #[test]
+    fn thread_value_survives_a_collection_in_the_exit_hooks() {
+        // The body's heap result is unrooted until the thread records it;
+        // the exit hooks (`__unlock_on_exit`) run Ruby in between (#1880).
+        run_test_once(
+            r#"
+            begin
+              GC.stress = true
+              a = Thread.new { "abc" + "d" }.value
+              b = Thread.new { sleep 0.01; [1, "x" * 3] }.value
+              m = Mutex.new
+              c = Thread.new { m.lock; { k: "v" * 2 } }.value
+              [a, b, c]
+            ensure
+              GC.stress = false
+            end
+            "#,
+        );
+    }
+
+    #[test]
     fn thread_new_join_value() {
         run_test(r#"Thread.new { 42 }.value"#);
         run_test(

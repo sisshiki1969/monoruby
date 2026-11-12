@@ -2070,14 +2070,27 @@ fn flush_pending_unblocks(vm: &mut Executor, globals: &mut Globals) {
 /// fiber)` — the joining thread as the blocker, as CRuby passes it.
 /// Ruby runs here as it does in the body, so a hook may park.
 ///
-/// `ret` is the body's result word, handed back untouched. An error the
-/// body left pending on the executor is held aside while the hooks run
-/// and restored after; an error a hook raises is dropped.
+/// `ret` is the body's result word (0 when the body raised), handed back
+/// untouched. Nothing roots it yet — the thread records it only once
+/// this returns — so it is held on the executor's temp stack while the
+/// hooks run Ruby, which may collect. An error the body left pending on
+/// the executor is held aside while the hooks run and restored after; an
+/// error a hook raises is dropped.
 pub(crate) extern "C" fn thread_body_exit(
     vm: &mut Executor,
     globals: &mut Globals,
     ret: u64,
 ) -> u64 {
+    vm.with_temp_scope(|vm| {
+        if ret != 0 {
+            vm.temp_push(Value::from_u64(ret));
+        }
+        run_thread_exit_hooks(vm, globals);
+    });
+    ret
+}
+
+fn run_thread_exit_hooks(vm: &mut Executor, globals: &mut Globals) {
     let pending = vm.take_pending_error();
     let thread = current_thread(vm);
     let _ = vm.invoke_method_inner(
@@ -2107,7 +2120,6 @@ pub(crate) extern "C" fn thread_body_exit(
     if let Some(err) = pending {
         vm.set_error(err);
     }
-    ret
 }
 
 /// Queue a dead thread's terminating exception as a pending interrupt on
