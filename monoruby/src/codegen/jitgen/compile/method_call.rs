@@ -428,6 +428,7 @@ impl<'a> JitContext<'a> {
         // compile clears rather than restores; keep this instruction's.
         let depth = self.stack_frame_len();
         let unfrozen_save = (self.unfrozen_slots.clone(), self.instr_unfrozen.clone());
+        let spec_len = self.specialized_methods_len();
         let (entry, merge) = self.declare_merge(state, ir, &operands, dst);
         let residual = self.label();
         let mut fast = entry.clone();
@@ -448,6 +449,7 @@ impl<'a> JitContext<'a> {
                 "a rolled-back fast arm left frames on the specialization stack"
             );
             ir.restore(ir_save);
+            self.specialized_methods_truncate(spec_len);
             *state = state_save;
             (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
             self.discard_cond_results();
@@ -2324,6 +2326,7 @@ impl<'a> JitContext<'a> {
         let ir_save = ir.save();
         let state_save = state.clone();
         let cache_len = self.inline_method_cache.len();
+        let spec_len = self.specialized_methods_len();
         self.inline_method_cache.push(InlineCacheEntry {
             recv_class: CachedClass::from_class(class_id),
             name: Some(IdentId::INITIALIZE),
@@ -2445,6 +2448,7 @@ impl<'a> JitContext<'a> {
                     // remembers the rejection, so the retry is cheap.
                     _ => {
                         ir.restore(ir_save);
+                        self.specialized_methods_truncate(spec_len);
                         *state = state_save;
                         self.inline_method_cache.truncate(cache_len);
                         return false;

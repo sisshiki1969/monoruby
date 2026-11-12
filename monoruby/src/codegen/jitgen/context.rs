@@ -1610,6 +1610,19 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().specialized_methods.push(info);
     }
 
+    ///
+    /// Drop the specialized callees pushed since *len*
+    /// ([`Self::specialized_methods_len`]): the part of a rollback that
+    /// `ir.restore` cannot do. An abandoned attempt's callee bodies have no
+    /// call left in the instruction stream, and a frameless one would stay
+    /// parked for an `InlineCall` that is never lowered; the next callee
+    /// pushed takes the dropped one's index (`JitType::Specialized::idx`),
+    /// which is right, since its code is the only one at that position.
+    ///
+    pub(super) fn specialized_methods_truncate(&mut self, len: usize) {
+        self.current_frame_mut().specialized_methods.truncate(len);
+    }
+
     pub(super) fn push_return_context(&mut self, pos: usize, ret: ReturnState) {
         if let Some(frame) = self.current_frame_mut().return_context.get_mut(&pos) {
             frame.join(&ret);

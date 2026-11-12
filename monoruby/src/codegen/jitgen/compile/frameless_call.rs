@@ -307,6 +307,7 @@ impl<'a> JitContext<'a> {
         let state_save = state.clone();
         let depth = self.stack_frame_len();
         let unfrozen_save = (self.unfrozen_slots.clone(), self.instr_unfrozen.clone());
+        let spec_len = self.specialized_methods_len();
         match self.specialized_iseq(
             state, ir, callid, recv_class, func_id, iseq, true, None, true,
         ) {
@@ -318,6 +319,7 @@ impl<'a> JitContext<'a> {
                     "a rolled-back frameless compile left frames on the specialization stack"
                 );
                 ir.restore(ir_save);
+                self.specialized_methods_truncate(spec_len);
                 *state = state_save;
                 (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
                 self.discard_cond_results();
@@ -348,6 +350,7 @@ impl<'a> JitContext<'a> {
         let state_save = state.clone();
         let depth = self.stack_frame_len();
         let unfrozen_save = (self.unfrozen_slots.clone(), self.instr_unfrozen.clone());
+        let spec_len = self.specialized_methods_len();
         match self.compile_yield_frameless(state, ir, callid, block, iseq) {
             Ok(res) => Some(res),
             Err(_) => {
@@ -357,6 +360,7 @@ impl<'a> JitContext<'a> {
                     "a rolled-back frameless yield left frames on the specialization stack"
                 );
                 ir.restore(ir_save);
+                self.specialized_methods_truncate(spec_len);
                 *state = state_save;
                 (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
                 self.discard_cond_results();
