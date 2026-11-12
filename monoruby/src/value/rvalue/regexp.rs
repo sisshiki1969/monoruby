@@ -636,6 +636,261 @@ fn pre_validate_regex(src: &str) -> Result<()> {
     Ok(())
 }
 
+/// The `\u` half of CRuby's `rb_reg_preprocess` (`unescape_nonascii`)
+/// for a source compiled under its own ASCII-compatible, non-UTF-8 codec
+/// (EUC-JP, Windows-31J, ISO-8859-*, …): Onigmo there knows neither the
+/// `\u{…}` list nor a Unicode codepoint, so every `\u` escape is
+/// rewritten before the pattern reaches it. An ASCII codepoint becomes
+/// `\xHH`, as `append_utf8` writes it; a non-ASCII one, or a raw / `\xHH`
+/// non-ASCII character after one, gives the error CRuby gives for a
+/// pattern that mixes the source's encoding with UTF-8. `None` when the
+/// source has no `\u` escape (nothing to rewrite).
+///
+/// Errors are the bare messages; the caller appends the `: /src/` part.
+fn preprocess_native_unicode(
+    source: &[u8],
+    enc: crate::value::Encoding,
+    extended: bool,
+) -> std::result::Result<Option<Vec<u8>>, &'static str> {
+    if !source.windows(2).any(|w| w == b"\\u") {
+        return Ok(None);
+    }
+    #[derive(PartialEq, Clone, Copy)]
+    enum Fixed {
+        Source,
+        Utf8,
+    }
+    let walker = super::string::mbc_walker(enc);
+    // The width of the (non-ASCII) character at `pos`; an ill-formed
+    // byte is passed through one at a time and left to the engine.
+    let char_len = |pos: usize| -> usize {
+        match walker {
+            Some((_, precise)) => match precise(source, pos) {
+                super::string::PreciseLen::Char(n) => n,
+                _ => 1,
+            },
+            None => 1,
+        }
+    };
+    let mut fixed: Option<Fixed> = None;
+    let note_non_ascii = |fixed: &mut Option<Fixed>, msg: &'static str| match fixed {
+        None => {
+            *fixed = Some(Fixed::Source);
+            Ok(())
+        }
+        Some(Fixed::Source) => Ok(()),
+        Some(Fixed::Utf8) => Err(msg),
+    };
+    let append_utf8 = |out: &mut Vec<u8>, fixed: &mut Option<Fixed>, cp: u32| {
+        if (0xd800..=0xdfff).contains(&cp) || cp > 0x10ffff {
+            return Err("invalid Unicode range");
+        }
+        if cp < 0x80 {
+            out.extend_from_slice(format!("\\x{cp:02X}").as_bytes());
+            return Ok(());
+        }
+        match fixed {
+            None | Some(Fixed::Utf8) => {
+                *fixed = Some(Fixed::Utf8);
+                let mut buf = [0u8; 4];
+                // `cp` is a scalar value: the range was checked above.
+                let ch = char::from_u32(cp).unwrap();
+                out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                Ok(())
+            }
+            Some(Fixed::Source) => Err("UTF-8 character in non UTF-8 regexp"),
+        }
+    };
+    let hex_run = |from: usize, max: usize| -> (u32, usize) {
+        let mut val: u32 = 0;
+        let mut j = from;
+        while j < source.len() && j - from < max && source[j].is_ascii_hexdigit() {
+            val = val.saturating_mul(16) + (source[j] as char).to_digit(16).unwrap();
+            j += 1;
+        }
+        (val, j - from)
+    };
+    let mut out = Vec::with_capacity(source.len());
+    let mut extended = extended;
+    // The extended flag to restore at each open group's `)`.
+    let mut groups: Vec<bool> = vec![];
+    let mut in_char_class = 0usize;
+    let mut i = 0;
+    while i < source.len() {
+        let c = source[i];
+        if c >= 0x80 {
+            let n = char_len(i).min(source.len() - i);
+            out.extend_from_slice(&source[i..i + n]);
+            i += n;
+            note_non_ascii(&mut fixed, "non ASCII character in UTF-8 regexp")?;
+            continue;
+        }
+        match c {
+            b'\\' => {
+                let Some(&e) = source.get(i + 1) else {
+                    out.push(c);
+                    i += 1;
+                    continue;
+                };
+                if e >= 0x80 {
+                    let n = char_len(i + 1).min(source.len() - i - 1);
+                    out.extend_from_slice(&source[i..i + 1 + n]);
+                    i += 1 + n;
+                    note_non_ascii(&mut fixed, "non ASCII character in UTF-8 regexp")?;
+                    continue;
+                }
+                match e {
+                    b'u' => {
+                        if i + 2 >= source.len() {
+                            return Err("too short escape sequence");
+                        }
+                        if source[i + 2] == b'{' {
+                            let mut j = i + 3;
+                            let mut any = false;
+                            loop {
+                                while source
+                                    .get(j)
+                                    .is_some_and(|b| b.is_ascii_whitespace() || *b == 0x0b)
+                                {
+                                    j += 1;
+                                }
+                                let (cp, len) = hex_run(j, usize::MAX);
+                                if len == 0 {
+                                    break;
+                                }
+                                if len > 6 {
+                                    return Err("invalid Unicode range");
+                                }
+                                append_utf8(&mut out, &mut fixed, cp)?;
+                                any = true;
+                                j += len;
+                            }
+                            if !any || source.get(j) != Some(&b'}') {
+                                return Err("invalid Unicode list");
+                            }
+                            i = j + 1;
+                        } else {
+                            let (cp, len) = hex_run(i + 2, 4);
+                            if len != 4 {
+                                return Err("invalid Unicode escape");
+                            }
+                            append_utf8(&mut out, &mut fixed, cp)?;
+                            i += 6;
+                        }
+                    }
+                    b'x' | b'0'..=b'7' => {
+                        // Copied as written; a non-ASCII byte it spells
+                        // pins the source's encoding (`unescape_escaped_nonascii`).
+                        let (val, len) = if e == b'x' {
+                            hex_run(i + 2, 2)
+                        } else {
+                            let mut val = 0u32;
+                            let mut j = i + 1;
+                            while j < source.len()
+                                && j - (i + 1) < 3
+                                && (b'0'..=b'7').contains(&source[j])
+                            {
+                                val = val * 8 + (source[j] - b'0') as u32;
+                                j += 1;
+                            }
+                            (val, j - (i + 2))
+                        };
+                        let end = i + 2 + len;
+                        out.extend_from_slice(&source[i..end]);
+                        i = end;
+                        if val >= 0x80 {
+                            note_non_ascii(
+                                &mut fixed,
+                                "escaped non ASCII character in UTF-8 regexp",
+                            )?;
+                        }
+                    }
+                    _ => {
+                        out.extend_from_slice(&source[i..i + 2]);
+                        i += 2;
+                    }
+                }
+            }
+            b'#' if extended && in_char_class == 0 => {
+                // A comment runs to the end of the line and is not scanned.
+                let end = source[i..]
+                    .iter()
+                    .position(|&b| b == b'\n')
+                    .map_or(source.len(), |p| i + p + 1);
+                out.extend_from_slice(&source[i..end]);
+                i = end;
+            }
+            b'(' if in_char_class == 0 && source[i..].starts_with(b"(?#") => {
+                // `(?#…)` is a comment in any pattern.
+                let mut j = i + 3;
+                while j < source.len() && source[j] != b')' {
+                    j += if source[j] == b'\\' { 2 } else { 1 };
+                }
+                let end = (j + 1).min(source.len());
+                out.extend_from_slice(&source[i..end]);
+                i = end;
+            }
+            b'(' if in_char_class == 0 => {
+                // A group keeps the extended flag of its surroundings,
+                // unless it is `(?x-x:…)`, which sets it for its body;
+                // `(?x-x)` sets it for the rest of the enclosing group.
+                let mut j = i + 1;
+                let mut next = extended;
+                let mut kind = None;
+                if source.get(j) == Some(&b'?') {
+                    j += 1;
+                    let mut invert = false;
+                    while let Some(&f) = source.get(j) {
+                        match f {
+                            b'-' => invert = true,
+                            b'x' => next = !invert,
+                            b'i' | b'm' | b'a' | b'd' | b'u' => {}
+                            b':' | b')' => {
+                                kind = Some(f);
+                                break;
+                            }
+                            _ => break,
+                        }
+                        j += 1;
+                    }
+                }
+                match kind {
+                    Some(b')') => extended = next,
+                    Some(_) => {
+                        groups.push(extended);
+                        extended = next;
+                    }
+                    None => groups.push(extended),
+                }
+                out.push(c);
+                i += 1;
+            }
+            b')' if in_char_class == 0 => {
+                if let Some(e) = groups.pop() {
+                    extended = e;
+                }
+                out.push(c);
+                i += 1;
+            }
+            b'[' => {
+                in_char_class += 1;
+                out.push(c);
+                i += 1;
+            }
+            b']' => {
+                in_char_class = in_char_class.saturating_sub(1);
+                out.push(c);
+                i += 1;
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    Ok(Some(out))
+}
+
 /// Onigmo's `\u` handler only accepts exactly four hex digits, so the
 /// Ruby-level brace form must be normalized before the source is handed off.
 /// Leaves every other escape (including `\\u{...}`) untouched.
@@ -1286,16 +1541,42 @@ impl RegexpInner {
             resolve_declared_encoding(&source, option, kcode, source_encoding);
         let onigmo_option = option & !(Self::NOENCODING | Self::FIXEDENCODING | Self::KCODE_MASK);
         let noencoding = option & Self::NOENCODING != 0;
+        // Onigmo under a non-UTF-8 codec reads no `\u{…}` list, and no
+        // Unicode codepoint at all: CRuby's preprocessing rewrites them
+        // first (`Regexp.new("\\u{41}あ".encode("EUC-JP"))`).
+        let source_enc = source_encoding.unwrap_or(declared_encoding);
+        let rewritten = if source_enc.is_ascii_compatible() && !source_enc.is_utf8_compatible() {
+            preprocess_native_unicode(
+                &source,
+                source_enc,
+                onigmo_option & onigmo_regex::ONIG_OPTION_EXTEND != 0,
+            )
+            .map_err(|msg| {
+                let desc = crate::builtins::string::regexp_source_desc_bytes(
+                    &source,
+                    declared_encoding,
+                    None,
+                );
+                MonorubyErr::regexerr(format!("{msg}: /{}/", String::from_utf8_lossy(&desc)))
+            })?
+        } else {
+            None
+        };
+        let pattern: &[u8] = rewritten.as_deref().unwrap_or(&source);
         // The cache is keyed by text; the byte image (one scalar per
         // byte) is that text here, and is lossless.
-        let key = (crate::value::map_bytes_to_utf8(&source), onigmo_option, encoding);
+        let key = (
+            crate::value::map_bytes_to_utf8(pattern),
+            onigmo_option,
+            encoding,
+        );
         let cached = REGEX_CACHE.read().unwrap().0.get(&key).cloned();
         let regex = match cached {
             Some(re) => {
                 queue_regexp_warnings(&re);
                 re
             }
-            None => match Regex::new_bytes_with_encoding(&source, onigmo_option, encoding) {
+            None => match Regex::new_bytes_with_encoding(pattern, onigmo_option, encoding) {
                 Ok(regexp) => {
                     queue_regexp_warnings(&regexp);
                     let re = Arc::new(CachedRegex::new(regexp));
@@ -1596,11 +1877,28 @@ impl RegexpInner {
             return Ok(re.clone());
         }
         let option = self.regex.option();
-        let key = (self.source.to_vec(), option, enc);
+        // A codec other than UTF-8 reads no `\u` escape: rewrite them as
+        // `compile_native` does. A pattern whose `\u` cannot be spelled
+        // that way is pinned to UTF-8 and never gets here with a subject
+        // it could match, so its source is kept as is.
+        let rewritten =
+            if enc != OnigmoEncoding::UTF8 && self.declared_encoding.is_ascii_compatible() {
+                preprocess_native_unicode(
+                    &self.source,
+                    self.declared_encoding,
+                    option & onigmo_regex::ONIG_OPTION_EXTEND != 0,
+                )
+                .ok()
+                .flatten()
+            } else {
+                None
+            };
+        let pattern: &[u8] = rewritten.as_deref().unwrap_or(&self.source);
+        let key = (pattern.to_vec(), option, enc);
         let re = if let Some(re) = NATIVE_CACHE.read().unwrap().get(&key) {
             re.clone()
         } else {
-            match Regex::new_bytes_with_encoding(&self.source, option, enc) {
+            match Regex::new_bytes_with_encoding(pattern, option, enc) {
                 Ok(re) => {
                     let re = Arc::new(re);
                     NATIVE_CACHE.write().unwrap().insert(key, re.clone());
