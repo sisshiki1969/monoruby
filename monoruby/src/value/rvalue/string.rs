@@ -3434,6 +3434,83 @@ impl RStringInner {
     pub fn valid(&self) -> bool {
         self.is_valid_encoding()
     }
+
+    /// The multibyte walk of an ASCII-compatible, non-Unicode encoding
+    /// (Windows-31J, EUC-JP, GBK, …) — the encodings whose printable
+    /// characters `rb_str_inspect` copies as they are when the result
+    /// encoding is the string's own.
+    fn native_mbc_walker(&self) -> Option<(usize, fn(&[u8], usize) -> PreciseLen)> {
+        if matches!(self.ty, Encoding::NamedByte(CESU_8)) || !self.ty.is_ascii_compatible() {
+            return None;
+        }
+        mbc_walker(self.ty)
+    }
+
+    /// `rb_str_inspect` (the part between the quotes) when the result
+    /// encoding `resenc` is this string's own multibyte encoding: a
+    /// non-ASCII character — printable there, Windows-31J's one-byte
+    /// halfwidth katakana included — is copied as it is, so the rendering is
+    /// bytes in that encoding rather than the UTF-8 text
+    /// [`inspect`](Self::inspect) gives (`"\x87] x"` in Windows-31J is
+    /// `"\x87] x"`, not `"\x{875D} x"`, under `-E Windows-31J`). The
+    /// rest — ASCII, an ill-formed byte — is
+    /// escaped as `inspect` escapes it. `None` when `inspect`'s rendering
+    /// is the answer: another result encoding, or nothing to copy.
+    pub fn inspect_in(&self, resenc: Encoding) -> Option<Vec<u8>> {
+        if self.ty != resenc || self.as_bytes().is_ascii() {
+            return None;
+        }
+        let (max_len, precise) = self.native_mbc_walker()?;
+        let bytes = self.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len() + 2);
+        let mut tmp = String::new();
+        let mut pos = 0;
+        let _ = walk_mbc_with(bytes, max_len, precise, IllFormed::Byte, |piece| {
+            let next = bytes.get(pos + 1).copied();
+            match piece {
+                MbcPiece::Char(cb) if cb.len() > 1 || cb[0] >= 0x80 => out.extend_from_slice(cb),
+                // One byte here: `IllFormed::Byte` cuts a bad piece
+                // a byte at a time.
+                MbcPiece::Char(cb) | MbcPiece::Bad(cb) => {
+                    tmp.clear();
+                    ascii_escape_with_next(&mut tmp, cb[0], next);
+                    out.extend_from_slice(tmp.as_bytes());
+                }
+            }
+            pos += match piece {
+                MbcPiece::Char(cb) | MbcPiece::Bad(cb) => cb.len(),
+            };
+            Ok(())
+        });
+        Some(out)
+    }
+
+    /// A symbol name in this string's multibyte encoding, as UTF-8 text
+    /// the symbol-name predicates can read: ASCII as it is, and every
+    /// multibyte character as one stand-in identifier character (CRuby's
+    /// `is_identchar` takes any non-ASCII character). `None` when the
+    /// bytes hold an ill-formed one, which no symbol name has, or for an
+    /// encoding this walk does not cover.
+    pub(crate) fn symname_stand_in(&self) -> Option<String> {
+        let (max_len, precise) = self.native_mbc_walker()?;
+        let mut out = String::with_capacity(self.len());
+        let mut ok = true;
+        let _ = walk_mbc_with(
+            self.as_bytes(),
+            max_len,
+            precise,
+            IllFormed::Byte,
+            |piece| {
+                match piece {
+                    MbcPiece::Char(&[b]) if b.is_ascii() => out.push(b as char),
+                    MbcPiece::Char(_) => out.push('\u{3042}'),
+                    MbcPiece::Bad(_) => ok = false,
+                }
+                Ok(())
+            },
+        );
+        ok.then_some(out)
+    }
 }
 
 /// True iff byte position `pos` falls on a UTF-8 character boundary

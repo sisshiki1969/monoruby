@@ -1073,6 +1073,23 @@ impl Value {
         Value::symbol(IdentId::get_id_from_bytes(s.as_bytes().to_vec(), src_enc))
     }
 
+    /// As [`Value::symbol_from_source_str`], for a symbol literal's name
+    /// as the parser handed it over: the raw bytes of a non-UTF-8 source
+    /// keep those bytes (`:\x87]` in Windows-31J is `[0x87, 0x5D]`),
+    /// interned under the source encoding.
+    pub(crate) fn symbol_from_source_name(name: &IdentName, src_enc: Encoding) -> Self {
+        // A non-ASCII symbol of a US-ASCII source (`:"\xff"`) is
+        // ASCII-8BIT, as its string literals are.
+        let src_enc = match src_enc {
+            Encoding::UsAscii if !name.is_ascii() => Encoding::Ascii8,
+            e => e,
+        };
+        match name {
+            IdentName::Utf8(s) => Self::symbol_from_source_str(s, src_enc),
+            IdentName::Bytes(b) => Value::symbol(IdentId::get_id_from_bytes(b.clone(), src_enc)),
+        }
+    }
+
     fn fixnum(num: i64) -> Self {
         Immediate::fixnum(num).into()
     }
@@ -2173,6 +2190,61 @@ pub(crate) fn inspect_symbol(id: IdentId, escape: bool) -> String {
         body
     };
     format!(":\"{body}\"")
+}
+
+/// The name of a symbol whose encoding is the result encoding itself, a
+/// non-UTF-8 multibyte one (`:\x87]` in Windows-31J under
+/// `-E Windows-31J`), with its stand-in for the symbol-name predicates
+/// ([`RStringInner::symname_stand_in`]). Such a symbol's `#inspect` is
+/// bytes in that encoding, which the UTF-8 renderings
+/// ([`inspect_symbol`], [`symbol_hash_label`]) cannot hold; `None` for
+/// every other symbol, which they render.
+fn resenc_symbol(id: IdentId, store: &Store) -> Option<(RStringInner, Option<String>)> {
+    if !store.inspect_escape() {
+        return None;
+    }
+    let name = crate::builtins::symbol::symbol_string_inner(id);
+    let resenc = store.inspect_escape_encoding();
+    // Only a name `inspect_in` copies bytes of: non-ASCII, in `resenc`.
+    name.inspect_in(resenc)?;
+    let stand_in = name.symname_stand_in();
+    Some((name, stand_in))
+}
+
+/// `Symbol#inspect` (CRuby's `sym_inspect`) for a symbol of the result
+/// encoding's own multibyte encoding: `:` and the name as it is when
+/// `rb_str_symname_p` accepts it, else `:` and `String#inspect` of the
+/// name — in that encoding. `None` hands over to [`inspect_symbol`].
+pub(crate) fn inspect_symbol_in_resenc(id: IdentId, store: &Store) -> Option<RStringInner> {
+    let (name, stand_in) = resenc_symbol(id, store)?;
+    let enc = name.encoding();
+    let mut out = vec![b':'];
+    if stand_in.is_some_and(|s| is_simple_symbol(&IdentName::Utf8(s))) {
+        out.extend_from_slice(name.as_bytes());
+    } else {
+        out.push(b'"');
+        out.extend(name.inspect_in(enc)?);
+        out.push(b'"');
+    }
+    Some(RStringInner::from_encoding(&out, enc))
+}
+
+/// `Hash#inspect`'s label for such a symbol key (`symbol_key_needs_quote`
+/// in CRuby's `inspect_i`): the bare name, or `"name"` rendered as
+/// `String#inspect` renders it, in the symbol's encoding. `None` hands
+/// over to [`symbol_hash_label`].
+pub(crate) fn symbol_hash_label_in_resenc(id: IdentId, store: &Store) -> Option<RStringInner> {
+    let (name, stand_in) = resenc_symbol(id, store)?;
+    let enc = name.encoding();
+    let out = if stand_in.is_some_and(|s| is_label_symbol(&s)) {
+        name.as_bytes().to_vec()
+    } else {
+        let mut out = vec![b'"'];
+        out.extend(name.inspect_in(enc)?);
+        out.push(b'"');
+        out
+    };
+    Some(RStringInner::from_encoding(&out, enc))
 }
 
 /// When a container (`Array`/`Hash`) `#inspect` concatenates a
@@ -3538,7 +3610,7 @@ impl Value {
             }
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
-            NodeKind::Symbol(sym) => Value::symbol_from_source_str(sym, src_enc),
+            NodeKind::Symbol(sym) => Value::symbol_from_source_name(sym, src_enc),
             NodeKind::String(s) => Value::string_from_source_str(s, src_enc),
             NodeKind::Bytes(b) => Value::string_from_source_bytes(b, src_enc),
             NodeKind::EncodedString(b, name) => {
@@ -3705,7 +3777,7 @@ impl Value {
             }
             NodeKind::Bool(b) => Value::bool(*b),
             NodeKind::Nil => Value::nil(),
-            NodeKind::Symbol(sym) => Value::symbol_from_source_str(sym, src_enc),
+            NodeKind::Symbol(sym) => Value::symbol_from_source_name(sym, src_enc),
             NodeKind::String(s) => Value::string_from_source_str(s, src_enc),
             NodeKind::Bytes(b) => Value::string_from_source_bytes(b, src_enc),
             NodeKind::EncodedString(b, name) => {

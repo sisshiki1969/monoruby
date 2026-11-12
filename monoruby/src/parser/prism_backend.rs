@@ -19,6 +19,7 @@
 //!   [`Lowerer::lower_node`] (or the relevant sub-helper) when the
 //!   error fires.
 
+use crate::IdentName;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -129,7 +130,7 @@ fn inject_encoding_comment(
     line_offset: &mut i64,
 ) {
     let Some(enc) = default_encoding else { return };
-    if enc.eq_ignore_ascii_case("UTF-8") || enc.eq_ignore_ascii_case("US-ASCII") {
+    if enc.eq_ignore_ascii_case("UTF-8") {
         return;
     }
     if detect_source_encoding(code).is_some() {
@@ -2301,12 +2302,8 @@ impl<'pr> Lowerer<'pr> {
     }
 
     fn lower_symbol(&self, node: &SymbolNode<'pr>) -> Node {
-        let bytes: &[u8] = node.unescaped();
-        let s = std::str::from_utf8(bytes)
-            .map(str::to_owned)
-            .unwrap_or_else(|_| String::from_utf8_lossy(bytes).into_owned());
         Node {
-            kind: NodeKind::Symbol(s),
+            kind: NodeKind::Symbol(symbol_name(node.unescaped())),
             loc: location_to_loc(&node.location()),
         }
     }
@@ -3241,7 +3238,15 @@ impl<'pr> Lowerer<'pr> {
                 for elem in kh.elements().iter() {
                     if let prism::Node::AssocNode { .. } = elem {
                         let assoc = elem.as_assoc_node().unwrap();
-                        if !matches!(assoc.key(), prism::Node::SymbolNode { .. }) {
+                        // A key `kw_args`'s `String` cannot name — an
+                        // empty one, or the raw bytes of a non-UTF-8
+                        // source (`f(\x87]: 1)` in Windows-31J) — takes
+                        // the `**{...}` shape below too, so its symbol is
+                        // interned under the source encoding.
+                        let static_utf8 = assoc.key().as_symbol_node().is_some_and(|s| {
+                            !s.unescaped().is_empty() && std::str::from_utf8(s.unescaped()).is_ok()
+                        });
+                        if !static_utf8 {
                             all_static_symbol = false;
                             break;
                         }
@@ -3297,17 +3302,8 @@ impl<'pr> Lowerer<'pr> {
                             let assoc = elem.as_assoc_node().unwrap();
                             let key = assoc.key();
                             let s = key.as_symbol_node().unwrap();
-                            let bytes = s.unescaped();
-                            let key_loc = location_to_loc(&key.location());
-                            if bytes.is_empty() {
-                                return Err(
-                                    self.unsupported_node("empty keyword arg name", key_loc)
-                                );
-                            }
-                            let name =
-                                std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| {
-                                    self.unsupported_node("non-utf8 keyword arg name", key_loc)
-                                })?;
+                            // Non-empty UTF-8, checked above.
+                            let name = std::str::from_utf8(s.unescaped()).unwrap().to_owned();
                             let value = self.lower_node(&assoc.value())?;
                             kw_args.push((name, value));
                         }
@@ -3965,7 +3961,7 @@ impl<'pr> Lowerer<'pr> {
     ) -> Result<Node, MonorubyErr> {
         // Collect (symbol-name, value-pattern) pairs first — the keys
         // double as the `deconstruct_keys` argument.
-        let mut pairs: Vec<(String, Option<prism::Node<'pr>>)> = vec![];
+        let mut pairs: Vec<(IdentName, Option<prism::Node<'pr>>)> = vec![];
         for e in n.elements().iter() {
             let assoc = match &e {
                 prism::Node::AssocNode { .. } => e.as_assoc_node().unwrap(),
@@ -3974,8 +3970,7 @@ impl<'pr> Lowerer<'pr> {
             let key = assoc.key();
             let name = match &key {
                 prism::Node::SymbolNode { .. } => {
-                    let sym = key.as_symbol_node().unwrap();
-                    String::from_utf8_lossy(sym.unescaped()).into_owned()
+                    symbol_name(key.as_symbol_node().unwrap().unescaped())
                 }
                 other => return Err(self.unsupported("hash pattern key", other)),
             };
@@ -4021,7 +4016,7 @@ impl<'pr> Lowerer<'pr> {
             Node::new_array(
                 pairs
                     .iter()
-                    .map(|(name, _)| Node::new_symbol(name.clone(), loc))
+                    .map(|(name, _)| Node::new_symbol_name(name.clone(), loc))
                     .collect(),
                 loc,
             )
@@ -4049,7 +4044,7 @@ impl<'pr> Lowerer<'pr> {
             let has_key = Node::new_mcall(
                 h(loc),
                 "key?".to_string(),
-                crate::ast::ArgList::from_args(vec![Node::new_symbol(name.clone(), loc)]),
+                crate::ast::ArgList::from_args(vec![Node::new_symbol_name(name.clone(), loc)]),
                 false,
                 loc,
             );
@@ -4063,7 +4058,7 @@ impl<'pr> Lowerer<'pr> {
                             pm_assign(
                                 pm_lvar(ke, loc),
                                 Node::new_array(
-                                    vec![h(loc), Node::new_symbol(name.clone(), loc)],
+                                    vec![h(loc), Node::new_symbol_name(name.clone(), loc)],
                                     loc,
                                 ),
                             ),
@@ -4078,7 +4073,7 @@ impl<'pr> Lowerer<'pr> {
             if let Some(v) = value {
                 let elem = Node::new_array_member(
                     h(loc),
-                    vec![Node::new_symbol(name.clone(), loc)],
+                    vec![Node::new_symbol_name(name.clone(), loc)],
                     loc,
                 );
                 checks.push(self.lower_pattern(v, &elem, None)?);
@@ -4103,7 +4098,7 @@ impl<'pr> Lowerer<'pr> {
                 stmts.push(Node::new_mcall(
                     rest_read.clone(),
                     "delete".to_string(),
-                    crate::ast::ArgList::from_args(vec![Node::new_symbol(name.clone(), loc)]),
+                    crate::ast::ArgList::from_args(vec![Node::new_symbol_name(name.clone(), loc)]),
                     false,
                     loc,
                 ));
@@ -5621,6 +5616,16 @@ fn jump_value_node(values: Vec<Node>, loc: Loc) -> Node {
     }
 }
 
+/// A symbol literal's name: UTF-8 text when the bytes are valid UTF-8,
+/// else the raw bytes (a non-UTF-8 source), which bytecodegen interns
+/// under the source encoding as CRuby does.
+fn symbol_name(bytes: &[u8]) -> IdentName {
+    match std::str::from_utf8(bytes) {
+        Ok(s) => IdentName::Utf8(s.to_owned()),
+        Err(_) => IdentName::Bytes(bytes.to_vec()),
+    }
+}
+
 /// Convert a Prism global-variable reference (the kind that appears
 /// on either side of `alias $foo $bar`) into the
 /// `Symbol("$foo")`-shape ruruby uses for `NodeKind::AliasMethod`
@@ -5631,7 +5636,7 @@ fn global_var_alias_target(node: &prism::Node<'_>) -> Result<Node, MonorubyErr> 
     let bytes = node.location().as_slice();
     match std::str::from_utf8(bytes) {
         Ok(s) => Ok(Node {
-            kind: NodeKind::Symbol(s.to_owned()),
+            kind: NodeKind::Symbol(IdentName::Utf8(s.to_owned())),
             loc,
         }),
         Err(_) => Err(MonorubyErr::fatal(
