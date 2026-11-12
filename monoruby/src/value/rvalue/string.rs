@@ -2117,6 +2117,27 @@ pub(crate) fn scrub_mbc(
     out
 }
 
+/// Whether `enc` can be one [`native_mbc_walker`] walks: a test cheap
+/// enough to inline ahead of it on every `#inspect`, which a `C` locale
+/// (US-ASCII) fails at once.
+#[inline]
+pub(crate) fn may_be_native_mbc(enc: Encoding) -> bool {
+    matches!(enc, Encoding::Sjis(_) | Encoding::EucJp(_) | Encoding::NamedByte(_))
+}
+
+/// [`mbc_walker`] for the ASCII-compatible, non-Unicode multibyte
+/// encodings only — those whose printable characters `#inspect` copies
+/// as they are when the result encoding is theirs
+/// ([`RStringInner::inspect_in`]).
+pub(crate) fn native_mbc_walker(
+    enc: Encoding,
+) -> Option<(usize, fn(&[u8], usize) -> PreciseLen)> {
+    if matches!(enc, Encoding::NamedByte(CESU_8)) || !enc.is_ascii_compatible() {
+        return None;
+    }
+    mbc_walker(enc)
+}
+
 /// The `(mbmaxlen, precise_mbclen)` pair for an encoding monoruby walks
 /// itself, or `None` for one it leaves to `encoding_rs` or to a
 /// fixed-width rule.
@@ -3440,10 +3461,7 @@ impl RStringInner {
     /// characters `rb_str_inspect` copies as they are when the result
     /// encoding is the string's own.
     fn native_mbc_walker(&self) -> Option<(usize, fn(&[u8], usize) -> PreciseLen)> {
-        if matches!(self.ty, Encoding::NamedByte(CESU_8)) || !self.ty.is_ascii_compatible() {
-            return None;
-        }
-        mbc_walker(self.ty)
+        native_mbc_walker(self.ty)
     }
 
     /// `rb_str_inspect` (the part between the quotes) when the result

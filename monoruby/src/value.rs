@@ -2199,12 +2199,19 @@ pub(crate) fn inspect_symbol(id: IdentId, escape: bool) -> String {
 /// bytes in that encoding, which the UTF-8 renderings
 /// ([`inspect_symbol`], [`symbol_hash_label`]) cannot hold; `None` for
 /// every other symbol, which they render.
+///
+/// Callers test the result encoding first, inline
+/// ([`may_be_native_mbc`](crate::value::rvalue::may_be_native_mbc)):
+/// under a UTF-8 or a `C` locale every symbol `#inspect` would otherwise
+/// pay for the call.
+#[cold]
 fn resenc_symbol(id: IdentId, store: &Store) -> Option<(RStringInner, Option<String>)> {
-    if !store.inspect_escape() {
+    let resenc = store.inspect_escape_encoding();
+    crate::value::rvalue::native_mbc_walker(resenc)?;
+    if id.symbol_encoding() != Some(resenc) {
         return None;
     }
     let name = crate::builtins::symbol::symbol_string_inner(id);
-    let resenc = store.inspect_escape_encoding();
     // Only a name `inspect_in` copies bytes of: non-ASCII, in `resenc`.
     name.inspect_in(resenc)?;
     let stand_in = name.symname_stand_in();
@@ -2215,7 +2222,13 @@ fn resenc_symbol(id: IdentId, store: &Store) -> Option<(RStringInner, Option<Str
 /// encoding's own multibyte encoding: `:` and the name as it is when
 /// `rb_str_symname_p` accepts it, else `:` and `String#inspect` of the
 /// name — in that encoding. `None` hands over to [`inspect_symbol`].
+#[inline]
 pub(crate) fn inspect_symbol_in_resenc(id: IdentId, store: &Store) -> Option<RStringInner> {
+    if !store.inspect_escape()
+        || !crate::value::rvalue::may_be_native_mbc(store.inspect_escape_encoding())
+    {
+        return None;
+    }
     let (name, stand_in) = resenc_symbol(id, store)?;
     let enc = name.encoding();
     let mut out = vec![b':'];
@@ -2233,7 +2246,13 @@ pub(crate) fn inspect_symbol_in_resenc(id: IdentId, store: &Store) -> Option<RSt
 /// in CRuby's `inspect_i`): the bare name, or `"name"` rendered as
 /// `String#inspect` renders it, in the symbol's encoding. `None` hands
 /// over to [`symbol_hash_label`].
+#[inline]
 pub(crate) fn symbol_hash_label_in_resenc(id: IdentId, store: &Store) -> Option<RStringInner> {
+    if !store.inspect_escape()
+        || !crate::value::rvalue::may_be_native_mbc(store.inspect_escape_encoding())
+    {
+        return None;
+    }
     let (name, stand_in) = resenc_symbol(id, store)?;
     let enc = name.encoding();
     let out = if stand_in.is_some_and(|s| is_label_symbol(&s)) {

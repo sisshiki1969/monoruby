@@ -5848,6 +5848,7 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         // its printable characters as they are — bytes, not UTF-8 text.
         if let Some(inner) = self_val.is_rstring_inner()
             && globals.store.inspect_escape()
+            && crate::value::rvalue::may_be_native_mbc(globals.store.inspect_escape_encoding())
             && let Some(body) = inner.inspect_in(globals.store.inspect_escape_encoding())
         {
             let mut out = Vec::with_capacity(body.len() + 2);
