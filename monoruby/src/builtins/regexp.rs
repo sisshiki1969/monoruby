@@ -1254,17 +1254,23 @@ pub(crate) fn check_match_encoding(
         )));
     }
     let str_enc = subject.encoding();
-    let str_ascii_only = subject.is_ascii_only();
     let reg_enc = regex.declared_encoding();
     if !str_enc.is_ascii_compatible() {
         if reg_enc != str_enc {
             return Err(regexp_encoding_mismatch(store, reg_enc, str_enc));
         }
-    } else if regex.fixed_encoding()
-        && reg_enc != str_enc
-        && (!reg_enc.is_ascii_compatible() || !str_ascii_only)
+    } else if regex.fixed_encoding() {
+        if reg_enc != str_enc && (!reg_enc.is_ascii_compatible() || !subject.is_ascii_only()) {
+            return Err(regexp_encoding_mismatch(store, reg_enc, str_enc));
+        }
+    } else if reg_enc != str_enc
+        // Cheapest first: almost every source reads the same anywhere,
+        // and the 7-bit test walks the subject.
+        && regex.source_reads_bytes()
+        && !(reg_enc == crate::value::Encoding::UsAscii && subject.is_ascii_only())
     {
-        return Err(regexp_encoding_mismatch(store, reg_enc, str_enc));
+        // An unpinned regexp is read again in the subject's encoding.
+        regex.check_reread(str_enc)?;
     }
     Ok(())
 }
@@ -3988,6 +3994,37 @@ re = Regexp.new(u.("(?<n>a)(b)"))
             rescue RegexpError => e
               e.message.b
             end
+            "##,
+        );
+    }
+
+    #[test]
+    fn regexp_unpinned_source_reread_in_subject_encoding() {
+        // #1864: an unpinned regexp is read again in the encoding of a
+        // subject that is not its own (`rb_reg_prepare_re`), and a source
+        // that does not read there (an escaped single-byte high byte, a
+        // byte escape spelling no character) is an ArgumentError. A fresh
+        // regexp per match: CRuby recompiles an unpinned regexp in place
+        // for the last subject's encoding, which later matches compare
+        // against.
+        run_test(
+            r##"
+            srcs = [["\\é\\u{41}", "ISO-8859-1"], ["\\é", "Windows-1252"], ["\\xE3\\x81\\x82", "US-ASCII"],
+                    ["\\xA4", "US-ASCII"], ["\\244\\242", "US-ASCII"], ["(?x)a # é\n", "US-ASCII"], ["\\M-\\C-a", "US-ASCII"],
+                    ["abc", "UTF-8"], ["a\\x41", "US-ASCII"], ["[\\xA4\\xA2]", "US-ASCII"], ["\\cA", "US-ASCII"]]
+            subjects = ["éA".encode("ISO-8859-1"), "xA", "あA", "あ".encode("EUC-JP"), "\xE9A".b, "éA".encode("Windows-1252"),
+                        "xyz", "abcあ", "é".encode("UTF-16LE"), "\x01あ"]
+            res = srcs.map do |src, enc|
+              mk = -> { Regexp.new((src.encode(enc) rescue src.dup.force_encoding(enc))) }
+              r = (mk.() rescue nil)
+              next [:err] unless r
+              [r.source.b, r.encoding.to_s, r.fixed_encoding?] +
+                subjects.map { |s| (mk.() =~ s) rescue [$!.class, $!.message] } +
+                [(mk.().match("あ")&.[](0) rescue $!.class), ("あ".index(mk.()) rescue $!.class), ("あい".sub(mk.(), "") rescue $!.class),
+                 ("あ".scan(mk.()) rescue $!.class), (mk.().match?("あ") rescue $!.class), ("あ".split(mk.()) rescue $!.class),
+                 ("あ".gsub(mk.(), "") rescue $!.class), ("あ" =~ mk.() rescue $!.class)]
+            end
+            res
             "##,
         );
     }

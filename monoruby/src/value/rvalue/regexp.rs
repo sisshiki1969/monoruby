@@ -156,9 +156,14 @@ pub struct RegexpInner {
     /// to keep the payload within the RValue cell.
     native: std::cell::OnceCell<Arc<Regex>>,
     native_enc: std::cell::Cell<OnigmoEncoding>,
-    /// Whether the US-ASCII compile of this pattern may stand in for
-    /// `regex` on a 7-bit subject (see [`ascii_engine`](Self::ascii_engine)):
-    /// 0 = not decided yet, 1 = yes (it lives in `native`), 2 = no.
+    /// Two lazily settled facts, packed to keep the payload within the
+    /// RValue cell. Bits 0–1: whether the US-ASCII compile of this
+    /// pattern may stand in for `regex` on a 7-bit subject (see
+    /// [`ascii_engine`](Self::ascii_engine)): 0 = not decided yet, 1 = yes
+    /// (it lives in `native`), 2 = no. Bits 2–3: whether the source can
+    /// read differently in another encoding (see
+    /// [`source_reads_bytes`](Self::source_reads_bytes)): 0 = not decided
+    /// yet, [`Self::SRC_PLAIN`], [`Self::SRC_BYTES`].
     ascii_state: std::cell::Cell<u8>,
     /// This regexp's own `Regexp.new(src, timeout:)`, in nanoseconds;
     /// 0 when it has none and the global `Regexp.timeout` applies
@@ -1903,7 +1908,7 @@ impl RegexpInner {
     /// failure — anything else the US-ASCII codec rejects — settles on
     /// "no" as well.
     fn ascii_eligible(&self) -> bool {
-        match self.ascii_state.get() {
+        match self.ascii_state.get() & 0b11 {
             1 => true,
             2 => false,
             _ => {
@@ -1912,9 +1917,50 @@ impl RegexpInner {
                     && self.source.is_ascii()
                     && !has_escape(&self.source, b"pPu")
                     && self.native_regex(OnigmoEncoding::ASCII).is_ok();
-                self.ascii_state.set(if eligible { 1 } else { 2 });
+                self.ascii_state
+                    .set((self.ascii_state.get() & !0b11) | if eligible { 1 } else { 2 });
                 eligible
             }
+        }
+    }
+
+    const SRC_PLAIN: u8 = 0b0100;
+    const SRC_BYTES: u8 = 0b1000;
+
+    /// Whether reading the source in another encoding could fail where
+    /// reading it in its own did not: it has a non-ASCII byte (an
+    /// unpinned regexp keeps one only as an escaped single-byte
+    /// character, or in a comment) or a byte escape (`\xHH`, `\OOO`,
+    /// `\cX`, `\C-X`, `\M-X`), whose value is a character in one
+    /// encoding and none in another. Settled once per regexp.
+    #[inline]
+    pub(crate) fn source_reads_bytes(&self) -> bool {
+        let state = self.ascii_state.get();
+        match state & (Self::SRC_PLAIN | Self::SRC_BYTES) {
+            Self::SRC_PLAIN => false,
+            Self::SRC_BYTES => true,
+            _ => {
+                let bytes = !self.source.is_ascii() || has_escape(&self.source, b"x01234567cCM");
+                self.ascii_state
+                    .set(state | if bytes { Self::SRC_BYTES } else { Self::SRC_PLAIN });
+                bytes
+            }
+        }
+    }
+
+    /// `rb_reg_prepare_re` for a subject in `enc`, which is not this
+    /// unpinned regexp's own encoding: CRuby reads the source again in
+    /// `enc` (with no options) to recompile it, and a source that does
+    /// not read there is an `ArgumentError`. A US-ASCII regexp whose
+    /// source is `\é` in ISO-8859-1 cannot match a non-ASCII UTF-8
+    /// string; neither can `\xA4` read in UTF-8. Only a source that
+    /// [reads bytes](Self::source_reads_bytes) can fail.
+    pub(crate) fn check_reread(&self, enc: crate::value::Encoding) -> Result<()> {
+        match reg_preprocess(&self.source, enc, false) {
+            Ok(_) => Ok(()),
+            Err(msg) => Err(MonorubyErr::argumenterr(format!(
+                "regexp preprocess failed: {msg}"
+            ))),
         }
     }
 
