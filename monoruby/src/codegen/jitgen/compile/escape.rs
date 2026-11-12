@@ -1120,6 +1120,9 @@ impl<'a> JitContext<'a> {
                     super_of: None,
                 });
                 self.guard_class_version(state, ir, true);
+                if let ElementsPlan::Range(plan) = &plan {
+                    self.guard_range_cover_arg(state, ir, plan);
+                }
                 // The operation observes the elements, not the object: a
                 // receiver still live afterwards (a parameter read again
                 // later) stays elided for its next use.
@@ -1371,6 +1374,7 @@ impl<'a> JitContext<'a> {
                     super_of: None,
                 });
                 self.guard_class_version(state, ir, true);
+                self.guard_range_cover_arg(state, ir, &plan);
                 if recv_dead {
                     state.take_virtual(lhs);
                 }
@@ -1446,6 +1450,24 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    /// A frameless body cannot take the `include?` helper (it may run Ruby
+    /// code, a non-numeric argument's `<=>`, while the window is
+    /// invisible), so there a non-Fixnum argument leaves the body instead:
+    /// the guard's exit hands the call back (or materializes the frame)
+    /// and the interpreter answers it. Emitted while the Range is still
+    /// registered, so a materializing exit rebuilds it.
+    fn guard_range_cover_arg(&self, state: &mut AbstractState, ir: &mut AsmIr, plan: &RangePlan) {
+        if let RangePlan::Cover(_, _, _, arg) = *plan
+            && self.current_frame().asm_info.frameless
+            && !state.is_fixnum(arg)
+            && self.basic_op_assumable(CachedClass::INTEGER, IdentId::_CMP)
+            && self.basic_op_assumable(CachedClass::FLOAT, IdentId::_CMP)
+        {
+            state.load(ir, arg, GP::Rdi);
+            state.guard_fixnum(ir, arg, GP::Rdi);
+        }
+    }
+
     /// Emit a Range elements lowering ([`Self::plan_range_op`]); *fid* is
     /// the resolved callee, which the helpers dispatch on a Range built
     /// after all when the in-place answer does not apply.
@@ -1481,14 +1503,23 @@ impl<'a> JitContext<'a> {
                     self.record_bop_dep(CachedClass::INTEGER, IdentId::_CMP);
                     self.record_bop_dep(CachedClass::FLOAT, IdentId::_CMP);
                 }
+                // With Fixnum endpoints (`range_ends`) and a Fixnum `arg`
+                // the two compares are the whole answer: no helper, no
+                // error exit, nothing that runs Ruby code.
+                let pure = inline && state.is_fixnum(arg);
                 state.write_back_slots(ir, &[arg]);
                 state.discard(dst);
                 let using_fpr = state.get_using_fpr(ir);
-                let error = ir.new_error(state);
-                ir.range_cover(using_fpr, start, end, exclude_end, arg, fid, inline);
-                ir.handle_error(error);
-                state.def_rax2acc(ir, dst);
-                self.after_range_helper(state);
+                if pure {
+                    ir.range_cover(using_fpr, start, end, exclude_end, arg, fid, inline, true);
+                    state.def_rax2acc(ir, dst);
+                } else {
+                    let error = ir.new_error(state);
+                    ir.range_cover(using_fpr, start, end, exclude_end, arg, fid, inline, false);
+                    ir.handle_error(error);
+                    state.def_rax2acc(ir, dst);
+                    self.after_range_helper(state);
+                }
             }
             RangePlan::Op(op, start, end, exclude_end) => {
                 state.discard(dst);

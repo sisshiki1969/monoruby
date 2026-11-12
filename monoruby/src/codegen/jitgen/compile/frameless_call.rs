@@ -57,7 +57,19 @@
 //! calls it the ordinary way.
 //!
 //! The static check below is only a cheap pre-filter for that compile:
-//! the violation tracking is what makes the result sound.
+//! the violation tracking is what makes the result sound. A body is
+//! abandoned at the end of the first basic block that commits a violation
+//! (`traceir_to_asmir_inner`), so a rejected callee costs only the blocks
+//! up to it.
+//!
+//! # Depth
+//!
+//! A frameless callee may itself call frameless callees — a getter inside
+//! a predicate inside an accessor — and nothing else, so a run of them is
+//! bounded on its own (`FRAMELESS_CHAIN_LIMIT` consecutive frameless
+//! frames above the innermost framed one) rather than by the framed
+//! specialization budget. A callee that is already a frame of the unit is
+//! never tried: a recursion ends in a call.
 //!
 //! # Blocks
 //!

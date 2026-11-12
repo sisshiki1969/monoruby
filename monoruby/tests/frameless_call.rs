@@ -900,3 +900,125 @@ fn frameless_keyword_materialize() {
         "#,
     );
 }
+
+#[test]
+fn frameless_chain_past_the_framed_depth_limit() {
+    // A five-deep chain of frameless callees, entered from a block nested
+    // in another block: the chain is longer than the framed specialization
+    // budget, and the enclosing blocks spend levels of it too. The
+    // innermost callee sees a Float (redo), an overflowing `+` after an
+    // ivar store (materialize) and a raise (error exit) at full depth.
+    run_test(
+        r#"
+        class C
+          def initialize = (@k = 3; @n = 0)
+          attr_reader :n
+          def a(x) = b(x) + 1
+          def b(x) = c(x) * 2
+          def c(x) = d(x) - @k
+          def d(x) = e(x) + 1
+          def e(x)
+            raise ArgumentError, "neg" if x < 0
+            @n += 1
+            x + 1
+          end
+          def run(arr)
+            s = []
+            arr.each do |v|
+              2.times do |j|
+                begin
+                  s << a(v + j)
+                rescue ArgumentError => err
+                  s << [err.message, err.backtrace_locations.map(&:label).include?("C#e")]
+                end
+              end
+            end
+            s
+          end
+        end
+        c = C.new
+        res = []
+        arr = (0..12).to_a
+        30.times do |i|
+          res << c.run(arr)
+          res << c.run([1.5, 2**62 - 2, -5, 4]) if i % 10 == 9
+        end
+        res << c.n
+        "#,
+    );
+}
+
+#[test]
+fn frameless_recursion_inside_a_chain() {
+    // Mutual recursion: `odd?` is already on the specialization stack when
+    // `even?` calls it again, so that call stays a real call and the chain
+    // above it stays frameless.
+    run_test(
+        r#"
+        def ev(n) = n == 0 ? true : od(n - 1)
+        def od(n) = n == 0 ? false : ev(n - 1)
+        def wrap(n) = ev(n) ? 1 : 0
+        def top(n) = wrap(n) + wrap(n + 1)
+        res = []
+        40.times { |i| res << top(i % 9) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_range_include_argument_kinds() {
+    // `(0...@h).include?(y)` on an elided Range inside a frameless callee:
+    // Integer arguments take the inline compare, the rest (Float, nil,
+    // String, Bignum) go through the generic cover check.
+    run_test(
+        r#"
+        class R
+          def initialize = (@h = 10)
+          def chk(y) = (0...@h).include?(y)
+          def chk2(y) = (0..@h).include?(y) ? 1 : 2
+          def run(a) = chk(a)
+        end
+        r = R.new
+        res = []
+        30.times { |i| res << r.run(i % 15) << r.chk2(i % 13) }
+        res << [r.run(3.5), r.run(10.0), r.run(nil), r.run("a"), r.chk2(10), r.chk2(11), r.run(-1), r.run(2**70)]
+        30.times { |i| res << r.run(i % 15) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_integer_pow_exits() {
+    // `a ** b` in a frameless callee: an overflow returns a Bignum, a
+    // negative exponent a Rational, and `0 ** -1` raises ZeroDivisionError,
+    // after an ivar store that has to stay done.
+    run_test(
+        r#"
+        class P
+          def initialize = (@n = 0)
+          attr_reader :n
+          def pw(a, b) = (@n += 1; a ** b)
+          def run(a, b) = pw(a, b) + 0
+        end
+        p = P.new
+        res = []
+        40.times do |i|
+          b = case i
+              when 30 then 70
+              when 31 then -2
+              else i % 7
+              end
+          a = i == 32 ? 0 : 2
+          b = -1 if i == 32
+          begin
+            res << p.run(a, b)
+          rescue ZeroDivisionError => e
+            res << [e.class, p.n]
+          end
+        end
+        res << p.n
+        "#,
+    );
+}

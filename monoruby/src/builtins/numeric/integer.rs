@@ -934,7 +934,9 @@ fn integer_pow_int_rhs(
     state.load_fixnum(ir, recv, GP::Rdi);
     state.load_fixnum(ir, args, GP::Rsi);
     let using_fpr = state.get_using_fpr(ir);
-    let error = ir.new_error(state);
+    // `pow_ii` runs no Ruby code: it builds an Integer / Bignum / Rational
+    // or raises (ZeroDivisionError, "exponent is too large").
+    let error = ir.new_error_pure(state);
     ir.inline(move |r#gen, _, labels, _| r#gen.gen_int_pow(using_fpr, &labels[error]));
     state.def_reg2acc(ir, GP::Rax, dst);
     true

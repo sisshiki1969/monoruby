@@ -137,7 +137,16 @@ impl<'a> JitContext<'a> {
                     return Err(e);
                 }
             };
+            let violated = ir.frameless_violation();
             self.push_ir(Some(bbid), ir);
+            // A frameless callee that has compiled something it cannot run
+            // without a frame is abandoned at once (below), not after the
+            // rest of its body — and the frameless callees inside it — has
+            // been compiled for nothing.
+            if violated && self.current_frame().frameless {
+                self.discard_frame();
+                return Err(CompileError);
+            }
         }
 
         self.backedge_branches();
