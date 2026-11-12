@@ -748,6 +748,10 @@ pub(crate) fn do_spawn(
             let (stage, e) = child_exec(spec);
             let buf = [stage, (e & 0xff) as u8, ((e >> 8) & 0xff) as u8, ((e >> 16) & 0xff) as u8, ((e >> 24) & 0xff) as u8];
             let _ = libc::write(wfd, buf.as_ptr() as *const libc::c_void, buf.len());
+            // `_exit` skips the profiling runtime's exit hook, which would
+            // leave the child-side failure paths above invisible to
+            // coverage (a no-op outside an instrumented build).
+            crate::fork::flush_coverage_profile();
             libc::_exit(127);
         }
     }
@@ -990,6 +994,29 @@ mod tests {
         run_test_error(r#"Process.spawn("echo", close_others: 1)"#);
         run_test_error(r#"Process.spawn({})"#);
         run_test_error(r#"Process.spawn({}, {})"#);
+    }
+
+    #[test]
+    fn spawn_child_side_failures() {
+        // Each fails in the child, after the fork, and comes back through
+        // the status pipe. (Messages differ from CRuby's: #1862.)
+        run_test_once(
+            r#"
+            [
+              -> { Process.wait Process.spawn("true", err: 99) },
+              -> { Process.wait Process.spawn("true", err: "/nonexistent-dir-xyzzy/x") },
+              -> { Process.wait Process.spawn("true", pgroup: 999999) },
+              -> { Process.wait Process.spawn("true", chdir: "/nonexistent-dir-xyzzy") },
+              -> { IO.popen(["true"], err: 99) {} },
+              -> { IO.popen(["true"], err: "/nonexistent-dir-xyzzy/x") {} },
+            ].map do |f|
+              f.call
+              :ok
+            rescue SystemCallError => e
+              e.class
+            end
+            "#,
+        );
     }
 
     #[test]

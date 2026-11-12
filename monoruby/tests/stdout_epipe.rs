@@ -59,6 +59,10 @@ fn uncaught_epipe_on_stdout_dies_by_sigpipe_silently() {
 #[test]
 fn every_stdout_write_path_dies_by_sigpipe() {
     for script in [
+        // No Ruby-level rescue clause (as in `Kernel#loop`) between the
+        // write and the top level: the error reaches the exit path before
+        // it was ever materialized.
+        "while true; puts :ok; end",
         "loop { print \"ok\\n\" }",
         "loop { p :ok }",
         "loop { $stdout << \"ok\\n\" }",
@@ -127,11 +131,14 @@ fn a_thread_error_joined_into_main_dies_by_sigpipe() {
 
 #[test]
 fn a_forked_child_dies_by_sigpipe() {
-    let (_, out) = run_until_reader_leaves(
+    for script in [
         "pid = fork { loop { puts :ok } }; Process.wait pid; STDERR.puts $?.termsig",
-    );
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(stderr(&out), format!("{}\n", libc::SIGPIPE));
+        "pid = fork { while true; puts :ok; end }; Process.wait pid; STDERR.puts $?.termsig",
+    ] {
+        let (_, out) = run_until_reader_leaves(script);
+        assert_eq!(out.status.code(), Some(0), "{script}");
+        assert_eq!(stderr(&out), format!("{}\n", libc::SIGPIPE), "{script}");
+    }
 }
 
 #[test]

@@ -2834,8 +2834,13 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         // syscalls and touches no Rust state.
         unsafe {
             command.pre_exec(move || {
-                super::spawn::apply_redirects(&stderr_redirects)
-                    .map_err(std::io::Error::from_raw_os_error)
+                super::spawn::apply_redirects(&stderr_redirects).map_err(|e| {
+                    // std `_exit`s the child on this error, skipping the
+                    // profiling runtime's exit hook (no-op unless
+                    // instrumented).
+                    crate::fork::flush_coverage_profile();
+                    std::io::Error::from_raw_os_error(e)
+                })
             });
         }
     }
