@@ -421,6 +421,53 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Settle the elided objects for the `CondBr` at *sink_pos* before
+    /// the instruction that produces its condition (reading the slots
+    /// *reads*) is lowered
+    /// with that branch as its sink (`CondBrSink`).
+    ///
+    /// Such a producer may leave its answer in the condition flags, and
+    /// nothing may be emitted between it and the branch: the allocation
+    /// performed for an object still live at the block's end
+    /// ([`Self::settle_virtuals_before_branch`], run again at the
+    /// `CondBr`) is a call, which clobbers them. So every object the block
+    /// end would materialize is materialized here, ahead of the producer,
+    /// and the `CondBr` finds only the ones a merge carries (which it
+    /// leaves elided, emitting nothing). The objects the producer reads
+    /// are left to it: [`Self::settle_virtuals`] already materialized
+    /// those it cannot consume, and a consuming lowering (a predicate on
+    /// an elided receiver) declined before the sink was installed.
+    ///
+    pub(super) fn settle_virtuals_for_sink(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        reads: &[SlotId],
+        sink_pos: BcIndex,
+    ) {
+        if state.virtuals().is_empty() {
+            return;
+        }
+        let next_sp = state.next_sp();
+        for (dst, src) in state.virtuals().to_vec() {
+            if reads.contains(&dst) {
+                continue;
+            }
+            let dead = if self.is_temp(dst) {
+                dst >= next_sp
+            } else {
+                !self.local_live_after(sink_pos, dst)
+            };
+            if dead {
+                state.take_virtual(dst);
+                state.discard_dead_elements(src, dst);
+            } else if !self.merge_carries_virtual(sink_pos, dst, src) {
+                self.materialize_virtual(state, ir, dst);
+            }
+        }
+    }
+
+    ///
     /// Whether every merge the block ending at *bc_pos* branches into may
     /// carry the elided object *src* in the local *dst*
     /// (`doc/escape_analysis.md` §3): a forward merge, compiled from the
@@ -983,6 +1030,13 @@ impl<'a> JitContext<'a> {
         // which the redefinition below would otherwise record as a kill
         // — and a loop-entry seed (`predict_loop_entries`) only types a
         // slot the loop reads.
+        // The allocation is a call: it may not come between a producer's
+        // condition flags (or a dispatch's per-arm branches) and the
+        // `CondBr` they are for ([`Self::settle_virtuals_for_sink`]).
+        debug_assert!(
+            !self.cond_flags_pending() && !self.condbr_done_pending(),
+            "an elided object materialized while a CondBr's condition is pending"
+        );
         state.note_read(dst);
         let src = state.take_virtual(dst).unwrap();
         match src {
