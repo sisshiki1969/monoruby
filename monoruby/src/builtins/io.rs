@@ -1,7 +1,5 @@
 use super::*;
 use std::fs::File;
-use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
 
 
 //
@@ -1817,10 +1815,9 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         .self_val()
         .as_io_inner_mut()
         .close_detaching_child(&globals.store)?;
-    let popen_result = detached.map(|(child, pid)| {
-        let status = crate::scheduler::without_gvl(vm, move || {
-            crate::value::rvalue::io::reap_child(child)
-        });
+    let popen_result = detached.map(|pid| {
+        let status =
+            crate::scheduler::without_gvl(vm, move || crate::value::rvalue::io::reap_child(pid));
         (status, pid)
     });
     if let Some((exit_status, pid)) = popen_result {
@@ -1968,8 +1965,7 @@ fn seek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     self_.as_io_inner_mut().clear_pushback();
     self_
         .as_io_inner_mut()
-        .seek(offset, whence)
-        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
+        .seek_for(offset, whence, &globals.store, "rb_io_seek")?;
     Ok(Value::integer(0))
 }
 
@@ -2613,212 +2609,135 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/popen.html]
 #[monoruby_builtin]
 fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let raw_args = lfp.arg(0).as_array();
-    if raw_args.is_empty() {
-        return Err(MonorubyErr::argumenterr(
-            "wrong number of arguments (given 0, expected 1+)",
-        ));
+    // CRuby's `rb_io_s_popen`: `IO.popen([env,] cmd [, mode] [, opts])`.
+    // A trailing Hash is the options, then a leading one the environment.
+    let mut args: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
+    let mut opts: Option<Value> = None;
+    if args.len() > 1 && args.last().unwrap().try_hash_ty().is_some() {
+        opts = args.pop();
     }
-    // CRuby `IO.popen([env,] cmd_or_argv [, mode] [, opts])`. When the first
-    // argument is a Hash, treat it as the environment and shift everything
-    // else left.
     let mut env_hash: Option<Value> = None;
-    let mut idx = 0usize;
-    if raw_args[0].try_hash_ty().is_some() {
-        env_hash = Some(raw_args[0]);
-        idx = 1;
+    if args.len() > 1 && args[0].try_hash_ty().is_some() {
+        env_hash = Some(args.remove(0));
     }
-    if idx >= raw_args.len() {
-        return Err(MonorubyErr::argumenterr(
-            "wrong number of arguments (given 1, expected 2+)",
+    if !(1..=2).contains(&args.len()) {
+        let ex = opts.is_some() as usize;
+        return Err(MonorubyErr::wrong_number_of_arg_range(
+            args.len() + ex,
+            1 + ex..=2 + ex,
         ));
     }
-    let args: Vec<Value> = raw_args.iter().skip(idx).cloned().collect();
     let cmd_val = args[0];
-
-    // Build the command from either a String or an Array of strings.
-    // Array elements pass their BYTES through verbatim (OsString): an
-    // argv entry may legitimately hold non-UTF-8 bytes (e.g. a
-    // `# encoding: big5` script passed via `-e`), and `to_s` would
-    // mangle them.
-    fn arg_os(v: Value, globals: &Globals) -> std::ffi::OsString {
-        use std::os::unix::ffi::OsStringExt;
-        if let Some(inner) = v.is_rstring_inner() {
-            std::ffi::OsString::from_vec(inner.as_bytes().to_vec())
-        } else {
-            v.to_s(globals).into()
-        }
-    }
-    // CRuby's Array form is `[env, cmd, arg1, ..., exec_opts]`: a leading
-    // Hash inside the Array is the environment, a trailing Hash the exec
-    // options.
-    let mut array_opts: Option<Value> = None;
-    let (mut command, cmd_name) = if let Some(ary) = cmd_val.try_array_ty() {
-        let mut elems: Vec<Value> = ary.iter().cloned().collect();
-        if elems.first().is_some_and(|v| v.try_hash_ty().is_some()) {
-            let h = elems.remove(0);
-            if env_hash.is_none() {
-                env_hash = Some(h);
-            }
-        }
-        if elems.len() > 1 && elems.last().is_some_and(|v| v.try_hash_ty().is_some()) {
-            array_opts = elems.pop();
-        }
-        // A leading two-element Array is the `[cmdname, argv0]` form:
-        // the file to execute and the `argv[0]` the child sees.
-        let argv0 = elems
-            .first()
-            .and_then(|v| v.try_array_ty())
-            .filter(|a| a.len() == 2)
-            .map(|a| (arg_os(a[0], globals), arg_os(a[1], globals)));
-        let rest_from = if argv0.is_some() { 1 } else { 0 };
-        let parts: Vec<std::ffi::OsString> = elems
-            .iter()
-            .skip(rest_from)
-            .map(|v| arg_os(*v, globals))
-            .collect();
-        if argv0.is_none() && parts.is_empty() {
-            return Err(MonorubyErr::argumenterr("popen: empty command array"));
-        }
-        let (program, extra) = match &argv0 {
-            Some((path, _)) => (path.clone(), &parts[..]),
-            None => (parts[0].clone(), &parts[1..]),
-        };
-        let name = program.to_string_lossy().into_owned();
-        let mut cmd = Command::new(&program);
-        if let Some((_, zero)) = &argv0 {
-            use std::os::unix::process::CommandExt;
-            cmd.arg0(zero);
-        }
-        for part in extra {
-            cmd.arg(part);
-        }
-        (cmd, name)
-    } else {
-        // String command: like CRuby, only go through the shell when the
-        // string actually needs one (metacharacters); otherwise split and
-        // exec directly. The interposed `sh` matters for more than speed:
-        // when the child dies by a signal, a wrapping shell exits *normally*
-        // with 128+signo, destroying `$?.signaled?` / `termsig` for the
-        // caller (mspec's ruby_exe checks exactly that).
-        let cmd_str = cmd_val.coerce_to_str(vm, globals)?;
-        let (program, args) = super::kernel::prepare_command_arg(&cmd_str);
-        let mut cmd = Command::new(program);
-        cmd.args(&args);
-        (cmd, cmd_str)
-    };
-
-    // Apply the leading ENV Hash (after `command` exists so we can call .env).
-    if let Some(env) = env_hash {
-        let h = env.as_hash();
-        for (k, v) in h.iter() {
-            let key = k.to_s(globals);
-            if v.is_nil() {
-                command.env_remove(&key);
-            } else {
-                command.env(&key, v.to_s(globals));
-            }
-        }
-    }
-
-    // Parse mode and options.
-    //   IO.popen(cmd)
-    //   IO.popen(cmd, mode)
-    //   IO.popen(cmd, mode, opts)
-    //   IO.popen(cmd, opts)   -- Hash as second arg means spawn options
-    let mut opts_hash = None;
-    let mode = if args.len() > 1 {
-        if args[1].try_hash_ty().is_some() {
-            opts_hash = Some(args[1]);
-            "r".to_string()
-        } else {
-            let m = args[1].coerce_to_str(vm, globals)?;
-            if args.len() > 2 && args[2].try_hash_ty().is_some() {
-                opts_hash = Some(args[2]);
-            }
-            m
-        }
-    } else {
-        "r".to_string()
+    let mode = match args.get(1) {
+        Some(m) if !m.is_nil() => m.coerce_to_str(vm, globals)?,
+        _ => "r".to_string(),
     };
     let readable = mode.contains('r') || mode.contains('+');
     let writable = mode.contains('w') || mode.contains('+');
 
-    if writable {
-        command.stdin(Stdio::piped());
-    } else {
-        command.stdin(Stdio::null());
-    }
-    if readable {
-        command.stdout(Stdio::piped());
-    } else {
-        command.stdout(Stdio::inherit());
+    // The options are the exec options (`rb_execarg_extract_options`:
+    // `chdir:`, `err:`, fd keys, ...), which go to the child, and the
+    // rest, the stream's own (`encoding:`, ...).
+    let mut exec_opts = RubyMap::default();
+    let mut io_opts: Vec<(Value, Value)> = vec![];
+    if let Some(h) = opts {
+        for (k, v) in h.as_hash().iter() {
+            if super::spawn::is_exec_option_key(k) {
+                exec_opts.insert(k, v, vm, globals)?;
+            } else {
+                io_opts.push((k, v));
+            }
+        }
     }
 
-    // Process the exec-option hashes: the Array-trailing one and the
-    // positional/keyword one both apply.
-    let mut stderr_redirects: Vec<super::spawn::Redirect> = vec![];
+    let fork = cmd_val.try_array_ty().is_none()
+        && cmd_val.is_rstring().is_some_and(|s| s.as_bytes() == b"-");
+    let (pid, reader, writer) = if fork {
+        // `IO.popen("-")`: the environment and exec options do not apply.
+        match popen_fork(vm, globals, lfp, readable, writable)? {
+            Some(child) => child,
+            // The child: `nil`, or the block's run.
+            None => return Ok(Value::nil()),
+        }
+    } else {
+        // The spawn arguments: `[env,] command..., exec_opts`. The Array
+        // form carries its own leading environment (which the outer one
+        // replaces, as `rb_execarg_setenv`) and trailing options.
+        let mut items: Vec<Value> = vec![];
+        let mut inner_opts: Option<Value> = None;
+        let accept_shell = if let Some(ary) = cmd_val.try_array_ty() {
+            let mut elems: Vec<Value> = ary.iter().copied().collect();
+            if elems.first().is_some_and(|v| v.try_hash_ty().is_some()) {
+                let inner = elems.remove(0);
+                env_hash.get_or_insert(inner);
+            }
+            if elems.len() > 1 && elems.last().is_some_and(|v| v.try_hash_ty().is_some()) {
+                inner_opts = elems.pop();
+            }
+            if elems.is_empty() {
+                return Err(MonorubyErr::argumenterr(
+                    "wrong number of arguments (given 0, expected 1+)",
+                ));
+            }
+            items.extend(elems);
+            false
+        } else {
+            items.push(Value::string(cmd_val.coerce_to_str(vm, globals)?));
+            true
+        };
+        if let Some(env) = env_hash {
+            items.insert(0, env);
+        }
+        if let Some(inner) = inner_opts {
+            let mut merged = RubyMap::default();
+            let pairs: Vec<(Value, Value)> = inner
+                .as_hash()
+                .iter()
+                .chain(exec_opts.iter().map(|(k, v)| (*k, *v)))
+                .collect();
+            for (k, v) in pairs {
+                merged.insert(k, v, vm, globals)?;
+            }
+            exec_opts = merged;
+        }
+        if !exec_opts.is_empty() {
+            items.push(Value::hash(exec_opts));
+        }
+        let spec = super::spawn::parse_exec_args(vm, globals, &items, accept_shell)?;
+        let (pid, reader, writer) = super::spawn::do_popen(vm, globals, &spec, readable, writable)?;
+        (pid as u32, reader, writer)
+    };
+
+    // Encodings for the read end: the options, then the mode string's
+    // "r:ext:int" suffix.
     let mut ext_obj: Option<Value> = None;
     let mut int_obj: Option<Value> = None;
-    for opts in [array_opts, opts_hash].into_iter().flatten() {
-        let h = opts.as_hash();
-        // `unsetenv_others:` / `close_others:` only take a boolean
-        // (or nil); anything else is an ArgumentError, as for `spawn`.
-        for key in ["unsetenv_others", "close_others"] {
-            if let Some(v) = h.get(Value::symbol(IdentId::get_id(key)), vm, globals)?
-                && !v.is_nil()
-                && v != Value::bool(true)
-                && v != Value::bool(false)
-            {
-                return Err(MonorubyErr::argumenterr(format!(
-                    "expected true or false as {key}: {}",
-                    v.inspect(&globals.store)
-                )));
+    for (k, v) in io_opts {
+        let Some(sym) = k.try_symbol() else { continue };
+        if v.is_nil() {
+            continue;
+        }
+        match sym.get_name().as_str() {
+            "encoding" => {
+                if let Some(sv) = v.is_str() {
+                    let mut parts = sv.split(':');
+                    ext_obj = parts
+                        .next()
+                        .filter(|x| !x.is_empty())
+                        .and_then(|x| enc_by_name(globals, x));
+                    int_obj = parts
+                        .next()
+                        .filter(|x| !x.is_empty())
+                        .and_then(|x| enc_by_name(globals, x));
+                } else {
+                    ext_obj = arg_to_enc_obj(globals, v);
+                }
             }
-        }
-        // `err:` takes `spawn`'s redirect forms: a path (opened for
-        // writing in the child), `[path, mode, perm]`, an IO or fd,
-        // `[:child, :out]` (the child's stderr onto the pipe), `:close`.
-        if let Some(err_val) = h.get(Value::symbol_from_str("err"), vm, globals)? {
-            stderr_redirects.push(super::spawn::parse_popen_redirect(vm, globals, 2, err_val)?);
-        }
-        // chdir: the child's working directory (String / #to_path / #to_str).
-        if let Some(dir) = h.get(Value::symbol_from_str("chdir"), vm, globals)?
-            && !dir.is_nil()
-        {
-            let path = super::file::to_path_str(vm, globals, dir)?;
-            command.current_dir(path);
-        }
-        // encoding options for the read end.
-        if let Some(v) = h.get(Value::symbol(IdentId::get_id("encoding")), vm, globals)?
-            && !v.is_nil()
-        {
-            if let Some(sv) = v.is_str() {
-                let mut parts = sv.split(':');
-                ext_obj = parts
-                    .next()
-                    .filter(|x| !x.is_empty())
-                    .and_then(|x| enc_by_name(globals, x));
-                int_obj = parts
-                    .next()
-                    .filter(|x| !x.is_empty())
-                    .and_then(|x| enc_by_name(globals, x));
-            } else {
-                ext_obj = arg_to_enc_obj(globals, v);
-            }
-        }
-        if let Some(v) = h.get(Value::symbol(IdentId::get_id("external_encoding")), vm, globals)?
-            && !v.is_nil()
-        {
-            ext_obj = arg_to_enc_obj(globals, v);
-        }
-        if let Some(v) = h.get(Value::symbol(IdentId::get_id("internal_encoding")), vm, globals)?
-            && !v.is_nil()
-        {
-            int_obj = arg_to_enc_obj(globals, v);
+            "external_encoding" => ext_obj = arg_to_enc_obj(globals, v),
+            "internal_encoding" => int_obj = arg_to_enc_obj(globals, v),
+            _ => {}
         }
     }
-    // Mode-string encoding suffix ("r:ext:int") — explicit options win.
     {
         let (me, mi) = mode_encoding_names(&mode);
         if ext_obj.is_none() {
@@ -2828,33 +2747,11 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             int_obj = mi.and_then(|i| enc_by_name(globals, i));
         }
     }
-    if !stderr_redirects.is_empty() {
-        // SAFETY: runs in the forked child right before exec, after std
-        // has set up the pipe ends; `apply_redirects` only makes fd
-        // syscalls and touches no Rust state.
-        unsafe {
-            command.pre_exec(move || {
-                super::spawn::apply_redirects(&stderr_redirects).map_err(|e| {
-                    // std `_exit`s the child on this error, skipping the
-                    // profiling runtime's exit hook (no-op unless
-                    // instrumented).
-                    crate::fork::flush_coverage_profile();
-                    std::io::Error::from_raw_os_error(e)
-                })
-            });
-        }
-    }
-    command.stderr(Stdio::inherit());
-    crate::scheduler::command_for_child(&mut command);
-
-    let child = command
-        .spawn()
-        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_f_spawn", &cmd_name))?;
 
     // Instantiate as the receiver class (a subclass' popen yields the
     // subclass), and install the resolved encodings on the read end.
     let class_id = lfp.self_val().as_class_id();
-    let io_val = Value::new_io_with_class(IoInner::popen(child), class_id);
+    let io_val = Value::new_io_with_class(IoInner::popen(pid, reader, writer), class_id);
     {
         let de = enc_default_external_obj(globals);
         let di = enc_default_internal_obj(globals);
@@ -2880,9 +2777,9 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                 .as_io_inner_mut()
                 .close_detaching_child(&globals.store)
                 .map(|d| {
-                    d.map(|(child, pid)| {
+                    d.map(|pid| {
                         let status = crate::scheduler::without_gvl(vm, move || {
-                            crate::value::rvalue::io::reap_child(child)
+                            crate::value::rvalue::io::reap_child(pid)
                         });
                         (status, pid)
                     })
@@ -2911,6 +2808,94 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     } else {
         Ok(io_val)
     }
+}
+
+/// `IO.popen("-")`: fork, the child's stdin and/or stdout on fresh pipes
+/// (CRuby's `pipe_open` without a command, then `popen_finish`). The fork
+/// goes through `Process._fork` by name, as `Kernel#fork` does. The
+/// parent gets the child's pid and its own pipe ends; the child gets
+/// `None` — after running the block with `nil`, if there is one, and
+/// leaving by `_exit(0)` without the exit sequence (an exception in the
+/// block is dropped, as under CRuby's `rb_protect`).
+fn popen_fork(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    readable: bool,
+    writable: bool,
+) -> Result<
+    Option<(
+        u32,
+        Option<std::os::fd::OwnedFd>,
+        Option<std::os::fd::OwnedFd>,
+    )>,
+> {
+    use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+    let pipe = |globals: &Globals| {
+        super::spawn::pipe_cloexec()
+            .map(|(r, w)| {
+                // SAFETY: fresh descriptors, owned from here on.
+                unsafe { (OwnedFd::from_raw_fd(r), OwnedFd::from_raw_fd(w)) }
+            })
+            .map_err(|err| MonorubyErr::errno_plain(&globals.store, &err))
+    };
+    let stdin_pipe = if writable { Some(pipe(globals)?) } else { None };
+    let stdout_pipe = if readable { Some(pipe(globals)?) } else { None };
+    let process_mod = globals
+        .store
+        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Process"))
+        .ok_or_else(|| MonorubyErr::runtimeerr("Process module not found"))?;
+    let pid_val = vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("_fork"),
+        process_mod,
+        &[],
+        None,
+        None,
+    )?;
+    let pid = pid_val.coerce_to_int_i64(vm, globals)?;
+    if pid != 0 {
+        return Ok(Some((
+            pid as u32,
+            stdout_pipe.map(|(r, _)| r),
+            stdin_pipe.map(|(_, w)| w),
+        )));
+    }
+    // ===== child =====
+    // `popen_redirect`: the child ends onto stdin / stdout.
+    let onto = |fd: OwnedFd, target: i32| {
+        if fd.as_raw_fd() == target {
+            // Already there (the parent had that descriptor closed):
+            // keep it, without its close-on-exec flag.
+            let fd = fd.into_raw_fd();
+            // SAFETY: our own descriptor.
+            unsafe { libc::fcntl(fd, libc::F_SETFD, 0) };
+        } else {
+            // SAFETY: dup2 of our own descriptor; `fd` closes on drop.
+            unsafe { libc::dup2(fd.as_raw_fd(), target) };
+        }
+    };
+    if let Some((r, w)) = stdin_pipe {
+        drop(w);
+        onto(r, 0);
+    }
+    if let Some((r, w)) = stdout_pipe {
+        drop(r);
+        onto(w, 1);
+    }
+    // `rb_io_synchronized(orig_stdout)`: the parent is reading.
+    crate::rvalue::io::stdout_buf().set_sync(true);
+    let Some(bh) = lfp.block() else {
+        return Ok(None);
+    };
+    let _ = vm
+        .get_block_data(globals, bh)
+        .and_then(|data| vm.invoke_block(globals, &data, &[Value::nil()]));
+    crate::rvalue::io::flush_std_streams();
+    crate::fork::flush_coverage_profile();
+    // SAFETY: leaving the forked child without the exit sequence, as
+    // CRuby's `popen_finish` does.
+    unsafe { libc::_exit(0) }
 }
 
 /// ### IO#pid
@@ -3617,9 +3602,7 @@ fn io_pos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let mut self_ = lfp.self_val();
     let io = self_.as_io_inner_mut();
     let pb = io.pushback_len() as i64;
-    let pos = io
-        .seek(0, 1)
-        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
+    let pos = io.seek_for(0, 1, &globals.store, "rb_io_tell")?;
     Ok(Value::integer((pos as i64 - pb).max(0)))
 }
 
@@ -3643,8 +3626,7 @@ fn io_pos_set(
     self_.as_io_inner_mut().clear_pushback();
     self_
         .as_io_inner_mut()
-        .seek(n, 0)
-        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
+        .seek_for(n, 0, &globals.store, "rb_io_set_pos")?;
     Ok(Value::integer(n))
 }
 
@@ -3667,8 +3649,7 @@ fn io_rewind(
     self_.as_io_inner_mut().clear_pushback();
     self_
         .as_io_inner_mut()
-        .seek(0, 0)
-        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
+        .seek_for(0, 0, &globals.store, "rb_io_rewind")?;
     self_.as_io_inner_mut().set_lineno(0);
     Ok(Value::integer(0))
 }
@@ -4209,11 +4190,10 @@ fn io_syswrite(
             }
             continue;
         }
-        return Err(MonorubyErr::errno_with_msg(
-            &globals.store,
-            &err,
-            "syswrite",
-        ));
+        return Err(lfp
+            .self_val()
+            .as_io_inner()
+            .errno_for(&globals.store, &err, "rb_io_syswrite"));
     };
     Ok(Value::integer(written as i64))
 }
@@ -4310,10 +4290,10 @@ fn io_pwrite(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         vm.to_s(globals, lfp.arg(0))?.into_bytes()
     };
     let offset = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
+    // CRuby's `rb_io_pwrite` leaves the write buffer alone: the
+    // positional write goes straight to the fd, and buffered bytes land
+    // at the stream's own offset when they are flushed.
     lfp.self_val().as_io_inner().ensure_writable()?;
-    // Flush any buffered writes so the file offset/content the OS sees
-    // is consistent before the positional write.
-    lfp.self_val().as_io_inner_mut().flush(&globals.store)?;
     let fd = lfp.self_val().as_io_inner().fileno()?;
     // SAFETY: fd is valid, bytes is a valid buffer of `bytes.len()`.
     let n = unsafe {
@@ -4326,7 +4306,10 @@ fn io_pwrite(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     };
     if n < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pwrite"));
+        return Err(lfp
+            .self_val()
+            .as_io_inner()
+            .errno_for(&globals.store, &err, "rb_io_pwrite"));
     }
     Ok(Value::integer(n as i64))
 }
@@ -7265,6 +7248,143 @@ mod tests {
                 res << e.message
               end
               res
+            end
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_popen_fork_form() {
+        // `IO.popen("-")` forks (#1861): the parent reads/writes the
+        // child's stdout/stdin, the child sees `nil`; with a block it runs
+        // in both and the child leaves by `_exit(0)`, its exception
+        // dropped.
+        run_test_once(
+            r#"
+            res = []
+            io = IO.popen("-")
+            if io
+              res << io.read
+              io.close
+              res << $?.success?
+            else
+              puts "child"
+              exit!(0)
+            end
+            res << IO.popen("-") { |f| f ? f.read : (puts "blk"; raise "dropped") }
+            res << $?.exitstatus
+            res << IO.popen("-", "r+") { |f|
+              if f
+                f.puts "ping"
+                f.close_write
+                f.read
+              else
+                puts "got #{STDIN.gets}"
+              end
+            }
+            res << IO.popen("-", "w") { |f| f ? (f.puts "x"; :parent) : (STDIN.read) }
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_popen_takes_spawn_options() {
+        // The command runs through the spawn engine, so `IO.popen` takes
+        // every exec option, checks them as `spawn` does, and reports a
+        // failed child-side call by name (#1862).
+        run_test_once(
+            r#"
+            res = []
+            res << IO.popen(["sh", "-c", "umask"], umask: 0o27, &:read)
+            res << IO.popen(["cat"], "r", in: File::NULL, &:read)
+            res << IO.popen(["echo hi"]) { :ran } rescue res << $!.class
+            res << IO.popen("echo hi | tr h H", &:read)
+            res << IO.popen({"A" => "outer"}, [{"A" => "inner"}, "sh", "-c", "echo $A"], &:read)
+            res << IO.popen("cat > /dev/null", "w") { |f| f.fileno.is_a?(Integer) }
+            [
+              -> { IO.popen(["true"], out: File::NULL) {} },
+              -> { IO.popen(["cat"], "w", in: File::NULL) {} },
+              -> { IO.popen(["true"], "w", err: [:child, :out]) {} },
+              -> { IO.popen(["true"], err: 99) {} },
+              -> { IO.popen(["true"], chdir: "/nonexistent-dir-xyzzy") {} },
+              -> { IO.popen(["true"], 3 => "/nonexistent-dir-xyzzy/x") {} },
+              -> { IO.popen(["no-such-cmd-xyzzy"]) {} },
+              -> { IO.popen() },
+              -> { IO.popen([]) },
+            ].each do |f|
+              f.call
+              res << :no_error
+            rescue => e
+              res << [e.class, e.message]
+            end
+            res << $?.exitstatus
+            res
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_write_error_messages() {
+        // A failed write names the function and the stream's path, as
+        // CRuby's `rb_syserr_new_path_in` does; a stream without a path
+        // (a pipe) gets the bare description (#1860). A close that fails
+        // to flush still closes.
+        run_test_once(
+            r#"
+            r, w = IO.pipe
+            r.close
+            io = IO.new(w.fileno, "w", path: "named", autoclose: false)
+            res = []
+            run = ->(&b) { begin; b.call; res << :ok; rescue => e; res << [e.class, e.message]; end }
+            run.() { io.write "x"; io.flush }
+            run.() { $VERBOSE = nil; io.syswrite "x" }
+            run.() { io.write_nonblock "x" }
+            run.() { io.pwrite "x", 0 }
+            run.() { io.seek 0 }
+            run.() { io.pos }
+            run.() { io.write "x"; io.rewind }
+            run.() { w.syswrite "x" }
+            run.() { w.write_nonblock "x" }
+            run.() { w.sync = false; w.write "x"; w.close }
+            res << w.closed?
+            run.() { io.write "x"; io.close }
+            res << io.closed?
+            res
+            "#,
+        );
+        // `write_nonblock` lands after what a `write` buffered; `pwrite`
+        // leaves the buffer alone.
+        run_test_once(
+            r##"
+            require "tmpdir"
+            Dir.mktmpdir do |d|
+              res = []
+              File.open("#{d}/a", "w+") { |f| f.write "aaaa"; f.pwrite "b", 0 }
+              res << File.read("#{d}/a")
+              r, w = IO.pipe
+              w.sync = false
+              w.write "1"
+              w.write_nonblock "2"
+              w.close
+              res << r.read
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn file_open_block_close_error_replaces_the_blocks() {
+        // `File.open` closes in an `ensure`: a flush that fails there
+        // replaces the block's own exception. (/dev/full is Linux-only.)
+        run_test_once_live(
+            r#"
+            if File.exist?("/dev/full")
+              begin
+                File.open("/dev/full", "w") { |f| f.write "x"; raise "block" }
+              rescue => e
+                [e.class, e.message]
+              end
             end
             "#,
         );

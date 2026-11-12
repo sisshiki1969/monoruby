@@ -3533,14 +3533,16 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             }
         }
     }
-    let simple = argv[0].is_rstring().is_some()
-        && argv[1..].iter().all(|v| v.try_hash_ty().is_none());
+    let simple =
+        argv[0].is_rstring().is_some() && argv[1..].iter().all(|v| v.try_hash_ty().is_none());
     if !simple {
         let spec = crate::builtins::spawn::parse_spawn_args(vm, globals, &argv)?;
-        let pid = match crate::builtins::spawn::do_spawn(vm, globals, &spec) {
+        let pid = match crate::builtins::spawn::spawn_reporting_child(vm, globals, &spec)? {
             Ok(pid) => pid,
             // The child could not exec (an `Errno`): `nil`, as for the
-            // simple form, unless `exception: true`.
+            // simple form, unless `exception: true`. What fails in the
+            // parent first (a redirect file that cannot be opened) raises
+            // either way, as in CRuby.
             Err(err) if !exception && matches!(err.kind(), MonorubyErrKind::Other(_)) => {
                 return Ok(Value::nil());
             }
@@ -3666,7 +3668,7 @@ pub(super) fn exec(
 ) -> Result<Value> {
     let args: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
     let spec = crate::builtins::spawn::parse_spawn_args(vm, globals, &args)?;
-    Err(crate::builtins::spawn::do_exec(globals, &spec))
+    Err(crate::builtins::spawn::do_exec(vm, globals, &spec))
 }
 
 ///

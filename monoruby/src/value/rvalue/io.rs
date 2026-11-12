@@ -5,7 +5,6 @@ use std::{
     io::{BufRead, IsTerminal, Read, Seek, SeekFrom},
     mem::ManuallyDrop,
     os::fd::{AsRawFd, FromRawFd, IntoRawFd},
-    os::unix::process::ExitStatusExt,
     rc::Rc,
     sync::{LazyLock, Mutex, MutexGuard},
 };
@@ -95,8 +94,20 @@ pub fn write_stdout(bytes: &[u8], store: &Store) -> Result<()> {
     let mut progress = 0;
     stdout_buf()
         .write(bytes, &mut progress, &signal_pending)
-        .map_err(|e| drain_err(e, store, true))
+        .map_err(|e| {
+            drain_err(e, true, |err| {
+                MonorubyErr::errno_with_path(store, err, ON_WRITE, "<STDOUT>")
+            })
+        })
 }
+
+/// The function names CRuby's write-side failures carry in their
+/// message (`"<description> @ <func> - <path>"`, see
+/// [`IoInner::errno_for`]): a buffered write or a flush ahead of a seek /
+/// read / `write_nonblock` raises through `rb_sys_fail_on_write`, the
+/// flush of `IO#close` through `fptr_finalize_flush`.
+pub(crate) const ON_WRITE: &str = "rb_sys_fail_on_write";
+pub(crate) const ON_CLOSE: &str = "fptr_finalize_flush";
 
 /// Map a stalled drain to the internal marker / error the IO builtins
 /// expect. Bytes the kernel took are already out of the buffer, so the
@@ -105,15 +116,20 @@ pub fn write_stdout(bytes: &[u8], store: &Store) -> Result<()> {
 /// `signal_on_epipe` is the stream's [`IoInner::signal_on_epipe`]: an
 /// `EPIPE` there is still an `Errno::EPIPE`, but one that ends the
 /// process by `SIGPIPE` if nothing rescues it (CRuby's
-/// `rb_sys_fail_on_write`).
-fn drain_err(e: DrainErr, store: &Store, signal_on_epipe: bool) -> MonorubyErr {
+/// `rb_sys_fail_on_write`). `errno` builds the `Errno::*` itself, which
+/// names the stream's path (see [`IoInner::errno_for`]).
+fn drain_err(
+    e: DrainErr,
+    signal_on_epipe: bool,
+    errno: impl FnOnce(&std::io::Error) -> MonorubyErr,
+) -> MonorubyErr {
     match e {
         DrainErr::Signal => MonorubyErr::signal_interrupt(),
         DrainErr::WouldBlock => MonorubyErr::would_block_interrupt(),
         // Surface the OS error as the matching Errno::* (e.g. Errno::EPIPE
         // on a closed pipe -- SIGPIPE is ignored at startup, as in CRuby).
         DrainErr::Io(e) => {
-            let err = MonorubyErr::errno_plain(store, &e);
+            let err = errno(&e);
             if signal_on_epipe && e.raw_os_error() == Some(libc::EPIPE) {
                 err.with_exit_signal(libc::SIGPIPE)
             } else {
@@ -164,22 +180,22 @@ fn unregister_owned_fd(fd: i32) {
     });
 }
 
-/// Recover the raw POSIX `wait(2)` status word from an `ExitStatus` so that
-/// Ruby-side `Process::Status` can decode exit code vs termination signal
-/// uniformly. `ExitStatus::code()` returns `None` for signal-terminated
-/// children, which loses information; using the raw status preserves it.
-fn encode_wait_status(status: &std::process::ExitStatus) -> i32 {
-    status.into_raw()
-}
-
-/// Wait for a popen child and encode its status. This blocks for as long
-/// as the child runs, so a caller holding the GVL must wrap it in
-/// `scheduler::without_gvl` (see [`IoInner::close_detaching_child`]). It
-/// touches nothing the interpreter owns, which is what makes that legal.
-pub(crate) fn reap_child(mut child: std::process::Child) -> i32 {
-    match child.wait() {
-        Ok(s) => encode_wait_status(&s),
-        Err(_) => 0,
+/// Wait for a popen child and answer its raw `wait(2)` status. This
+/// blocks for as long as the child runs, so a caller holding the GVL must
+/// wrap it in `scheduler::without_gvl` (see
+/// [`IoInner::close_detaching_child`]). It touches nothing the
+/// interpreter owns, which is what makes that legal.
+pub(crate) fn reap_child(pid: u32) -> i32 {
+    let mut raw: i32 = 0;
+    loop {
+        // SAFETY: waitpid on our own child, into a local.
+        let r = unsafe { libc::waitpid(pid as libc::pid_t, &mut raw, 0) };
+        if r >= 0 {
+            return raw;
+        }
+        if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+            return 0;
+        }
     }
 }
 
@@ -534,10 +550,11 @@ impl Drop for FileDescriptor {
 
 #[derive(Debug)]
 pub struct PopenDescriptor {
-    /// `None` only between [`IoInner::close_detaching_child`] taking the
-    /// child out and the stream becoming `Closed` on the next line, so no
-    /// reader ever observes it empty.
-    child: Option<std::process::Child>,
+    /// The child's pid. `None` only between
+    /// [`IoInner::close_detaching_child`] taking it out and the stream
+    /// becoming `Closed` on the next line, so no reader ever observes it
+    /// empty.
+    child: Option<u32>,
     pub(crate) reader: Option<IoReader<std::process::ChildStdout>>,
     pub(crate) writer: Option<IoWriter<std::process::ChildStdin>>,
     /// See `FileDescriptor::pushback`.
@@ -822,6 +839,12 @@ impl IoInner {
     /// Only monoruby's own buffers are involved — there is no `fsync`
     /// here, matching CRuby's `IO#flush` (`IO#fsync` is separate).
     pub fn flush(&mut self, store: &Store) -> Result<()> {
+        self.flush_in(store, ON_WRITE)
+    }
+
+    /// [`Self::flush`], naming `func` in a failure's message
+    /// ([`ON_WRITE`] or [`ON_CLOSE`]).
+    fn flush_in(&mut self, store: &Store, func: &str) -> Result<()> {
         let res = match &mut self.kind {
             IoKind::Stdin => return Ok(()),
             IoKind::Stdout => stdout_buf().drain(&signal_pending),
@@ -836,7 +859,32 @@ impl IoInner {
             }
             IoKind::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
         };
-        res.map_err(|e| drain_err(e, store, self.signal_on_epipe))
+        res.map_err(|e| {
+            drain_err(e, self.signal_on_epipe, |err| {
+                self.errno_for(store, err, func)
+            })
+        })
+    }
+
+    /// The `Errno::*` for a failed call on this stream, as CRuby's
+    /// `rb_syserr_new_path_in(func, e, fptr->pathv)` builds it: a stream
+    /// with a path (a `File`, `<STDOUT>`, an fd opened with `path:`)
+    /// reads `"<description> @ <func> - <path>"`, one without (a pipe, a
+    /// socket, `popen`) the bare description.
+    pub(crate) fn errno_for(&self, store: &Store, err: &std::io::Error, func: &str) -> MonorubyErr {
+        use std::os::unix::ffi::OsStrExt;
+        if let Some((bytes, _)) = self.path_raw() {
+            return MonorubyErr::errno_with_path(
+                store,
+                err,
+                func,
+                std::ffi::OsStr::from_bytes(bytes),
+            );
+        }
+        match self.path() {
+            Some(path) => MonorubyErr::errno_with_path(store, err, func, path),
+            None => MonorubyErr::errno_plain(store, err),
+        }
     }
 
     /// `IO#sync`.
@@ -921,7 +969,7 @@ impl IoInner {
     pub fn close(&mut self, store: &Store) -> Result<Option<(i32, u32)>> {
         Ok(self
             .close_detaching_child(store)?
-            .map(|(child, pid)| (reap_child(child), pid)))
+            .map(|pid| (reap_child(pid), pid)))
     }
 
     /// `close`, but handing the popen child back rather than waiting for
@@ -931,28 +979,30 @@ impl IoInner {
     /// wait lasts as long as the child does, and in the 1:1 thread model
     /// holding the GVL across it stops every other Ruby thread for the
     /// duration (closing a `sleep 30` child's IO froze them for 30 s).
-    pub fn close_detaching_child(
-        &mut self,
-        store: &Store,
-    ) -> Result<Option<(std::process::Child, u32)>> {
+    pub fn close_detaching_child(&mut self, store: &Store) -> Result<Option<u32>> {
         if self.is_closed() {
             return Err(MonorubyErr::ioerr("closed stream"));
         }
         // Anything still buffered has to reach the fd before it goes away
-        // (CRuby's `finish_writeconv` / `io_fflush` in `rb_io_close`).
-        if self.is_writable() {
-            self.flush(store)?;
+        // (CRuby's `finish_writeconv` / `io_fflush` in `rb_io_close`). A
+        // failed flush still closes the stream and raises afterwards, as
+        // `fptr_finalize_flush` does; only the internal retry markers
+        // leave it open for the retried call.
+        let flushed = if self.is_writable() {
+            self.flush_in(store, ON_CLOSE)
+        } else {
+            Ok(())
+        };
+        if let Err(err) = &flushed
+            && (err.is_signal_interrupt() || err.is_would_block_interrupt())
+        {
+            return Err(flushed.unwrap_err());
         }
         let popen_result = if let IoKind::Popen(popen) = &mut self.kind {
             let popen = Rc::get_mut(popen).unwrap();
             popen.reader = None;
             popen.writer = None;
-            let mut child = popen.child.take();
-            let pid = child.as_ref().map(|c| c.id());
-            if let Some(child) = child.as_mut() {
-                child.stdout.take();
-            }
-            child.zip(pid)
+            popen.child.take()
         } else {
             None
         };
@@ -964,6 +1014,13 @@ impl IoInner {
             _ => None,
         };
         self.kind = IoKind::Closed(retained.map(Box::new));
+        if let Err(err) = flushed {
+            // The child is not waited for here: the error goes up instead
+            // of the status, like `rb_io_close` raising out of
+            // `fptr_finalize_flush` before the popen wait.
+            let _ = popen_result;
+            return Err(err);
+        }
         Ok(popen_result)
     }
 
@@ -1117,13 +1174,20 @@ impl IoInner {
         }));
     }
 
-    pub(crate) fn popen(mut child: std::process::Child) -> Self {
-        let reader = child.stdout.take().map(IoReader::new);
+    /// The `IO.popen` stream over child `pid`: `reader` is the pipe its
+    /// stdout feeds, `writer` the one its stdin reads.
+    pub(crate) fn popen(
+        pid: u32,
+        reader: Option<std::os::fd::OwnedFd>,
+        writer: Option<std::os::fd::OwnedFd>,
+    ) -> Self {
+        let reader = reader.map(|fd| IoReader::new(std::process::ChildStdout::from(fd)));
         // Never a TTY; synchronized, as CRuby's `IO.popen` is — the child
         // is waiting on the other end of this pipe.
-        let writer = child.stdin.take().map(|w| IoWriter::new(w, true, false));
+        let writer =
+            writer.map(|fd| IoWriter::new(std::process::ChildStdin::from(fd), true, false));
         Self::with_kind(IoKind::Popen(Rc::new(PopenDescriptor {
-            child: Some(child),
+            child: Some(pid),
             reader,
             writer,
             pushback: RefCell::new(Vec::new()),
@@ -1132,7 +1196,7 @@ impl IoInner {
 
     pub(crate) fn pid(&self) -> Option<u32> {
         match &self.kind {
-            IoKind::Popen(popen) => popen.child.as_ref().map(|c| c.id()),
+            IoKind::Popen(popen) => popen.child,
             _ => None,
         }
     }
@@ -1209,7 +1273,11 @@ impl IoInner {
             // `ensure_writable` already rejected non-writable streams.
             IoKind::Stdin | IoKind::Closed(..) => unreachable!(),
         };
-        res.map_err(|e| drain_err(e, store, self.signal_on_epipe))
+        res.map_err(|e| {
+            drain_err(e, self.signal_on_epipe, |err| {
+                self.errno_for(store, err, ON_WRITE)
+            })
+        })
     }
 
     /// Push out anything a *write* left buffered before reading or
@@ -1700,6 +1768,11 @@ impl IoInner {
         if !self.is_writable() {
             return Err(MonorubyErr::ioerr("not opened for writing"));
         }
+        // Bytes an earlier `#write` left buffered go first (CRuby's
+        // `io_fflush` ahead of the `write(2)`), so they are not overtaken.
+        if self.write_data_buffered() {
+            self.flush(store)?;
+        }
         let fd = self.fileno()?;
         self.set_nonblock()?;
         // SAFETY: fd is valid; bytes is a valid buffer of `bytes.len()`.
@@ -1717,7 +1790,7 @@ impl IoInner {
                 // CRuby (`rb_syserr_fail_path` with the IO's path): a
                 // pipe or socket has none, so the message is the bare
                 // description ("Broken pipe").
-                _ => Err(MonorubyErr::errno_plain(store, &err)),
+                _ => Err(self.errno_for(store, &err, "io_write_nonblock")),
             }
         }
     }
@@ -2029,10 +2102,12 @@ impl IoInner {
             IoKind::Stderr => Ok(2),
             IoKind::File(file) => Ok(file.reader.get_ref().as_raw_fd()),
             IoKind::Popen(popen) => {
-                if let Some(stdout) = popen.child.as_ref().and_then(|c| c.stdout.as_ref()) {
-                    Ok(stdout.as_raw_fd())
-                } else if let Some(ref reader) = popen.reader {
+                // A write-only stream's descriptor is its write end, as
+                // CRuby's (which keeps only that one in `fptr->fd`).
+                if let Some(ref reader) = popen.reader {
                     Ok(reader.get_ref().as_raw_fd())
+                } else if let Some(ref writer) = popen.writer {
+                    Ok(writer.get_ref().as_raw_fd())
                 } else {
                     Err(MonorubyErr::ioerr("closed stream"))
                 }
@@ -2049,9 +2124,6 @@ impl IoInner {
         if events & libc::POLLOUT != 0
             && let IoKind::Popen(popen) = &self.kind
         {
-            if let Some(stdin) = popen.child.as_ref().and_then(|c| c.stdin.as_ref()) {
-                return Ok(stdin.as_raw_fd());
-            }
             if let Some(ref writer) = popen.writer {
                 return Ok(writer.get_ref().as_raw_fd());
             }
@@ -2064,6 +2136,16 @@ impl IoInner {
     /// Fails with `ESPIPE` for streams that do not support seeking
     /// (stdin/stdout/stderr, pipes) and with `EINVAL` for unsupported
     /// `whence` values or a negative `SEEK_SET` offset.
+    /// [`Self::seek`] for `IO#seek` and its relatives, with CRuby's
+    /// errors: anything still buffered is flushed first
+    /// (`flush_before_seek`, failing through `rb_sys_fail_on_write`), and
+    /// a failed seek names `func` and the stream's path.
+    pub fn seek_for(&mut self, offset: i64, whence: i32, store: &Store, func: &str) -> Result<u64> {
+        self.flush(store)?;
+        self.seek(offset, whence)
+            .map_err(|e| self.errno_for(store, &e, func))
+    }
+
     pub fn seek(&mut self, offset: i64, whence: i32) -> std::io::Result<u64> {
         const EINVAL: i32 = 22;
         const ESPIPE: i32 = 29;
@@ -2168,9 +2250,12 @@ impl IoInner {
                 libc::fsync(fd)
             }
         };
-        if ret == -1 {
+        // CRuby's `rb_io_fdatasync` falls back to `rb_io_fsync` when
+        // `fdatasync(2)` fails, so either failure is reported as fsync's.
+        // SAFETY: fsync only inspects the descriptor.
+        if ret == -1 && (!data_only || unsafe { libc::fsync(fd) } == -1) {
             let err = std::io::Error::last_os_error();
-            return Err(MonorubyErr::ioerr(err.to_string()));
+            return Err(self.errno_for(store, &err, "rb_io_fsync"));
         }
         Ok(0)
     }

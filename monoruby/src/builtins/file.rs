@@ -1186,8 +1186,10 @@ pub(super) fn mode_string_from_flags(flags: i64) -> String {
 
 /// Close `io` at `File.open` block exit through `#close` *dispatch* (a
 /// subclass/singleton override must run), swallowing the IOError that
-/// means "already closed" and propagating everything else. A block
-/// error, when present, wins over a close error (close still runs).
+/// means "already closed" and propagating everything else. The close
+/// runs as CRuby's `rb_ensure` would: an error out of it replaces the
+/// block's own (a write buffered by the block that fails to flush is
+/// what the caller sees).
 pub(super) fn block_close(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1196,16 +1198,9 @@ pub(super) fn block_close(
 ) -> Result<Value> {
     let close_result =
         vm.invoke_method_inner(globals, IdentId::get_id("close"), io, &[], None, None);
-    match (block_result, close_result) {
-        (Err(e), _) => Err(e),
-        (Ok(v), Ok(_)) => Ok(v),
-        (Ok(v), Err(ce)) => {
-            if ce.message().contains("closed stream") {
-                Ok(v)
-            } else {
-                Err(ce)
-            }
-        }
+    match close_result {
+        Err(ce) if !ce.message().contains("closed stream") => Err(ce),
+        _ => block_result,
     }
 }
 
