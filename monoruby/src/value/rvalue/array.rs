@@ -267,7 +267,11 @@ pub struct ArrayInner(ArrayContent);
 
 impl Drop for ArrayInner {
     fn drop(&mut self) {
-        if !self.0.is_shared() {
+        // Only a spilled buffer owns an allocation, and `Value` is `Copy`,
+        // so an inline array has nothing to drop. Testing for it here keeps
+        // the sweep (`RValue::free`, once per dead array) from depending on
+        // whether the `SmallVec` drop glue happens to be inlined into it.
+        if self.owned_spilled() {
             // SAFETY: tag-discriminated; `owned` is the live variant, and
             // it is dropped exactly once, here.
             unsafe { ManuallyDrop::drop(&mut self.0.owned) }
