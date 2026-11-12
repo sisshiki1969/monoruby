@@ -252,8 +252,21 @@ impl<'a> JitContext<'a> {
                     state.clear_above_next_sp();
                     break;
                 }
+                // A block ended by a deopt adds nothing to the caller's
+                // return context. It used to add a `ReturnState::default()`
+                // — any value, every invariant dropped — for the caller's
+                // continuation to be sound when the callee came back from
+                // the interpreter. It never does: every side exit under a
+                // specialized call converts the caller by the chain walk
+                // (`doc/chain_deopt.md` §8.6), and a frameless callee's
+                // exit redoes or materializes the call, so the compiled
+                // continuation runs only after a compiled return, which is
+                // what the return context describes (see the same argument
+                // in `compile_specialized_func_uncached`). The default had
+                // dropped `no_capture_guard` too, which put a capture guard
+                // and an LFP-relative result store after every call whose
+                // callee has a never-taken branch.
                 CompileResult::Recompile(reason) => {
-                    self.new_return(ReturnState::default());
                     self.recompile_and_deopt(&mut state, &mut ir, reason);
                     return Ok(ir);
                 }
@@ -263,7 +276,6 @@ impl<'a> JitContext<'a> {
                     // all — every execution deopts here for the rest of the
                     // run, and the runtime cause column cannot name it (rdi
                     // is not loaded, so it logs as `UNDEFINED`).
-                    self.new_return(ReturnState::default());
                     ir.deopt(&mut state);
                     return Ok(ir);
                 }
