@@ -104,6 +104,9 @@ r << t { STDOUT.rewind; STDOUT.write "X"; STDOUT.seek(0, :END) }
 r << t { STDOUT.seek(-2, :CUR); STDOUT.write "YZ"; STDOUT.pos }
 STDOUT.flush
 r << t { STDOUT.sysseek(1) }
+# The report goes to stderr, a pipe: it does not seek.
+r << t { STDERR.seek(0) }
+r << t { STDERR.pos }
 STDERR.puts r.inspect
 "##;
 

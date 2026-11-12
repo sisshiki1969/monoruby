@@ -6415,6 +6415,44 @@ mod tests {
     use crate::tests::*;
 
     #[test]
+    fn copy_stream_fd_paths_and_seek_errors() {
+        run_test_once(
+            r##"
+            path = "/tmp/monoruby_test_copy_stream_cov_#{Process.pid}"
+            src = path + ".src"
+            File.write(src, "0123456789abcdef")
+            res = []
+            # The source's read-ahead counts against the length.
+            File.open(src) do |s|
+              s.getc
+              File.open(path, "w") { |d| res << IO.copy_stream(s, d, 5) }
+              res << File.read(path) << s.pos
+            end
+            # Not a regular file: the read loop, `pread` at the offset of
+            # a source handed in, `lseek` of one opened by path.
+            File.open("/dev/zero") do |z|
+              File.open(path, "w") { |d| res << IO.copy_stream(z, d, 4, 3) }
+              res << File.binread(path).bytes << z.pos
+            end
+            File.open(path, "w") { |d| res << IO.copy_stream("/dev/zero", d, 3, 5) }
+            res << File.binread(path).bytes
+            res << File.open(src) do |f|
+              f.sysseek(-1)
+            rescue SystemCallError => e
+              [e.class, e.message == "Invalid argument @ rb_io_sysseek - #{src}"]
+            end
+            res << IO.popen("true") do |io|
+              io.seek(0)
+            rescue SystemCallError => e
+              e.class
+            end
+            File.delete(path, src)
+            res
+            "##,
+        );
+    }
+
+    #[test]
     fn io_sysseek_whence_symbols_and_advise() {
         // sysseek accepts :SET/:CUR/:END (and integers); an unknown symbol
         // is ArgumentError; an unknown advice is NotImplementedError.
