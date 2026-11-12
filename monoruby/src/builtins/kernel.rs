@@ -329,6 +329,12 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "to_s", to_s, 0);
     globals.define_builtin_func(kernel_class, "inspect", inspect, 0);
     globals.define_private_builtin_func(kernel_class, "__inspect", display_inspect, 1);
+    globals.define_private_builtin_func(
+        kernel_class,
+        "__write_error_str",
+        super::io::kernel_write_error_str,
+        1,
+    );
     globals.define_builtin_inline_func(
         kernel_class,
         "instance_of?",

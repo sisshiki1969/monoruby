@@ -1098,6 +1098,46 @@ pub(super) fn bytes_for_write(
     Ok(newline.apply(&bytes).into_owned())
 }
 
+/// CRuby's `rb_write_error_str`: what the default `Warning.warn` (and a
+/// thread's `report_on_exception` text) is written with. While `$stderr`
+/// is still the process's own standard error the bytes go out as they
+/// are, past the stream's encoding conversion — under `-E EXT:INT` a
+/// warning is not transcoded even though `$stderr.write` would be
+/// (#1848). A replaced `$stderr` gets an ordinary `#write`.
+pub(crate) fn write_error_str(vm: &mut Executor, globals: &mut Globals, msg: Value) -> Result<()> {
+    let stderr = globals
+        .get_gvar(IdentId::get_id("$stderr"))
+        .unwrap_or_default();
+    if stderr.ty() == Some(ObjTy::IO)
+        && matches!(stderr.as_io_inner().kind(), IoKind::Stderr)
+        && let Some(bytes) = msg.is_rstring().map(|r| r.to_vec())
+    {
+        let mut done = 0;
+        let mut io = stderr;
+        blocking_io_region(vm, globals, stderr, libc::POLLOUT, |store| {
+            io.as_io_inner_mut().write(&bytes, &mut done, store)
+        })?;
+        return Ok(());
+    }
+    vm.invoke_method_inner(globals, IdentId::get_id("write"), stderr, &[msg], None, None)?;
+    Ok(())
+}
+
+///
+/// ### Kernel#__write_error_str (monoruby intrinsic)
+///
+/// [`write_error_str`] for the Ruby-level `Warning.warn`.
+#[monoruby_builtin]
+pub(super) fn kernel_write_error_str(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    write_error_str(vm, globals, lfp.arg(0))?;
+    Ok(Value::nil())
+}
+
 ///
 /// ### IO#<<
 ///
@@ -5016,11 +5056,15 @@ fn set_encoding(
     let writable = self_.as_io_inner().is_writable();
     let de = enc_default_external_obj(globals);
     let di = enc_default_internal_obj(globals);
+    let di = if int_suppressed { None } else { di };
+    let (slot, i) = resolve_io_encodings(globals, ext, int, false, readable, writable, de, di);
     // A readable text-mode stream cannot decode a non-ASCII-compatible
     // external encoding unless a conversion to an internal encoding is
-    // set up (CRuby's `validate_enc_binmode`).
+    // set up (CRuby's `validate_enc_binmode`, which looks at the
+    // *resolved* pair: an internal encoding taken from
+    // `Encoding.default_internal` counts too).
     if readable
-        && int.is_none()
+        && i.is_none()
         && !self_.as_io_inner().binmode()
         && let Some(e) = ext.or(Some(de)).and_then(|o| enc_obj_to_enum(globals, o))
         && !e.is_ascii_compatible()
@@ -5029,8 +5073,6 @@ fn set_encoding(
             "ASCII incompatible encoding needs binmode",
         ));
     }
-    let di = if int_suppressed { None } else { di };
-    let (slot, i) = resolve_io_encodings(globals, ext, int, false, readable, writable, de, di);
     store_io_encodings(globals, self_, slot, i);
     Ok(self_)
 }
