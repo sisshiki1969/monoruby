@@ -3441,6 +3441,7 @@ impl Codegen {
         fid: FuncId,
         inline: bool,
         pure: bool,
+        flags: bool,
         using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0;
@@ -3449,6 +3450,27 @@ impl Codegen {
         let no = self.jit.label();
         let exit = self.jit.label();
         debug_assert!(!pure || inline);
+        debug_assert!(!flags || pure);
+        if flags {
+            // The flags of the last compare are the answer
+            // (`range_cover_flags_kind`); a failed start compare sets
+            // flags reading false for `lt` / `le` (1 - 0: N = Z = V = 0).
+            self.a64_frame_load(0, lfp, conv(arg) as u32);
+            let has_end = !matches!(end, RangeEnd::Const(v) if v.is_nil());
+            if self.a64_cmp_range_end(start) && has_end {
+                let cont = self.jit.label();
+                self.jit.bcond_label(monoasm::Cond::Ge, &cont);
+                monoasm_arm64!(&mut self.jit,
+                    mov x9, #(1);
+                    cmp x9, #(0);
+                    b exit;
+                cont:
+                );
+            }
+            self.a64_cmp_range_end(end);
+            self.jit.bind_label(exit);
+            return true;
+        }
         if inline {
             self.a64_frame_load(0, lfp, conv(arg) as u32);
             if !pure {

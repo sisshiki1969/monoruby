@@ -1897,12 +1897,42 @@ impl Codegen {
         fid: FuncId,
         inline: bool,
         pure: bool,
+        flags: bool,
         using_fpr: UsingFpr,
     ) -> bool {
         let slow = self.jit.label();
         let no = self.jit.label();
         let exit = self.jit.label();
         debug_assert!(!pure || inline);
+        debug_assert!(!flags || pure);
+        if flags {
+            // The flags of the last compare are the answer
+            // (`range_cover_flags_kind`). A start compare that fails
+            // leaves for the cold page, which sets flags reading false for
+            // `Lt` and `Le` (rsp is nonzero and positive: ZF = SF = OF = 0)
+            // and comes back.
+            monoasm! { &mut self.jit,
+                movq rdi, [r14 - (conv(arg))];
+            }
+            let has_end = !matches!(end, RangeEnd::Const(v) if v.is_nil());
+            if self.cmp_range_end(start) && has_end {
+                let fail = self.jit.label();
+                monoasm! { &mut self.jit,
+                    jlt  fail;
+                }
+                assert_eq!(0, self.jit.get_page());
+                self.jit.select_page(1);
+                monoasm! { &mut self.jit,
+                fail:
+                    testq rsp, rsp;
+                    jmp  exit;
+                }
+                self.jit.select_page(0);
+            }
+            self.cmp_range_end(end);
+            self.jit.bind_label(exit);
+            return true;
+        }
         if inline {
             monoasm! { &mut self.jit,
                 movq rdi, [r14 - (conv(arg))];

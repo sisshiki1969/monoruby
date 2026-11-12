@@ -443,7 +443,8 @@ impl<'a> JitContext<'a> {
     /// nothing. The objects the producer reads are left to it:
     /// [`Self::settle_virtuals`] already materialized those it cannot
     /// consume, and a consuming lowering (a predicate on an elided
-    /// receiver) declined before the sink was installed.
+    /// receiver) runs with the sink installed, answering in the flags or
+    /// declining before it emits anything.
     ///
     pub(super) fn settle_virtuals_for_sink(
         &mut self,
@@ -1551,13 +1552,40 @@ impl<'a> JitContext<'a> {
                 let pure = inline && state.is_fixnum(arg);
                 state.write_back_slots(ir, &[arg]);
                 state.discard(dst);
+                // Only the conditional branch that follows reads the answer
+                // (`raise unless (0...n).include?(i)`): leave it in the
+                // condition flags. Nothing may come between them, so the GP
+                // residents are settled first and the dead temp holds a nil,
+                // as `nil?` does.
+                let flags_kind = range_cover_flags_kind(start, end, exclude_end);
+                if pure
+                    && let Some(kind) = flags_kind
+                    && let Some(dst) = self.wants_cond_flags(dst)
+                {
+                    state.flush_gp(ir);
+                    let using_fpr = state.get_using_fpr(ir);
+                    ir.range_cover(using_fpr, start, end, exclude_end, arg, fid, true, true, true);
+                    state.def_C(dst, Value::nil());
+                    self.set_cond_flags(dst, CondFlags::Int(kind));
+                    return;
+                }
                 let using_fpr = state.get_using_fpr(ir);
                 if pure {
-                    ir.range_cover(using_fpr, start, end, exclude_end, arg, fid, inline, true);
+                    ir.range_cover(using_fpr, start, end, exclude_end, arg, fid, inline, true, false);
                     state.def_rax2acc(ir, dst);
                 } else {
                     let error = ir.new_error(state);
-                    ir.range_cover(using_fpr, start, end, exclude_end, arg, fid, inline, false);
+                    ir.range_cover(
+                        using_fpr,
+                        start,
+                        end,
+                        exclude_end,
+                        arg,
+                        fid,
+                        inline,
+                        false,
+                        false,
+                    );
                     ir.handle_error(error);
                     state.def_rax2acc(ir, dst);
                     self.after_range_helper(state);
