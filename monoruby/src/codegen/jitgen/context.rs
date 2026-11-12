@@ -309,6 +309,24 @@ pub(in crate::codegen) struct AsmInfo {
 }
 
 impl AsmInfo {
+    ///
+    /// Does this body read its own LFP header while it runs compiled
+    /// ([`AsmIr::reads_frame_header`])? A frameless callee's window gets
+    /// the header written at the call only when it does
+    /// (`AbstractState::fill_window`).
+    ///
+    pub(super) fn reads_frame_header(&self) -> bool {
+        self.ir.iter().any(|(_, ir)| ir.reads_frame_header())
+            || self
+                .inline_bridges
+                .values()
+                .any(|(ir, _)| ir.reads_frame_header())
+            || self
+                .outline_bridges
+                .iter()
+                .any(|(ir, _, _)| ir.reads_frame_header())
+    }
+
     fn dup(&self) -> Self {
         Self {
             jit_type: self.jit_type.clone(),
@@ -1590,6 +1608,19 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn specialized_methods_push(&mut self, info: SpecializeInfo) {
         self.current_frame_mut().specialized_methods.push(info);
+    }
+
+    ///
+    /// Drop the specialized callees pushed since *len*
+    /// ([`Self::specialized_methods_len`]): the part of a rollback that
+    /// `ir.restore` cannot do. An abandoned attempt's callee bodies have no
+    /// call left in the instruction stream, and a frameless one would stay
+    /// parked for an `InlineCall` that is never lowered; the next callee
+    /// pushed takes the dropped one's index (`JitType::Specialized::idx`),
+    /// which is right, since its code is the only one at that position.
+    ///
+    pub(super) fn specialized_methods_truncate(&mut self, len: usize) {
+        self.current_frame_mut().specialized_methods.truncate(len);
     }
 
     pub(super) fn push_return_context(&mut self, pos: usize, ret: ReturnState) {
