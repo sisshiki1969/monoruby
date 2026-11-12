@@ -1022,3 +1022,92 @@ fn frameless_integer_pow_exits() {
         "#,
     );
 }
+
+#[test]
+fn frameless_yield_outer_locals() {
+    // Blocks that read and write their home's locals run frameless: one
+    // level out (`each`), two levels out through a framed block in
+    // between, with Integer, Float and object values, with block
+    // parameters and with a block-local.
+    run_test(
+        r#"
+        def sum(a) = (s = 0; a.each { |x| s += x }; s)
+        def fsum(a) = (s = 0.0; c = 0; a.each { |x| s += x * 0.5; c += 1 }; [s, c])
+        def last(a) = (l = nil; a.each { |x| l = x }; l)
+        def odd(a) = (r = []; a.each { |x| r << x if x.odd? }; r)
+        def grid(m)
+          s = 0
+          m.each { |row| t = 0; row.each { |v| t += v; s += v }; s -= t / 2 }
+          s
+        end
+        def wi(a) = (s = 0; a.each_with_index { |x, i| s += x * i }; s)
+        def mp(a) = (k = 1; a.map { |x| k *= 3; x + k }.sum + k)
+        def tm(n) = (s = 0; n.times { |i| s += i if i.even? }; s)
+        res = []
+        a = (1..20).to_a
+        m = [[1, 2], [3, 4, 5], [6]]
+        30.times do
+          res << sum(a) << fsum(a) << last(a) << odd(a) << grid(m) << wi(a) << mp(a.first(5)) << tm(30)
+        end
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_yield_outer_store_then_exit() {
+    // The exits of a block after it has stored to its home: an overflow
+    // (materialize; the store and the rest of the iteration stay done), a
+    // raise rescued outside the iterator, and a type change of the outer
+    // local the home had a guard for.
+    run_test(
+        r#"
+        def sum(a) = (s = 0; a.each { |x| s += x }; s)
+        def boom(a)
+          s = 0
+          begin
+            a.each { |x| s += 1; raise "boom #{x}" if x == 7 }
+          rescue => e
+            return [s, e.message]
+          end
+          s
+        end
+        def mix(a) = (s = 0; a.each { |x| s = s + x }; s)
+        res = []
+        40.times do |i|
+          a = (1..20).to_a
+          a << 2**62 if i == 30
+          b = i == 35 ? a.map(&:to_f) : a
+          res << sum(a) << boom(a) << mix(b)
+          GC.start if i == 31
+        end
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_yield_outer_captured() {
+    // The home's locals are captured (a Proc, a `binding`), so the block
+    // reaches them through the header word rather than at a static
+    // distance.
+    run_test(
+        r#"
+        def pr(a)
+          s = 0
+          get = proc { s }
+          a.each { |x| s += x }
+          [s, get.call]
+        end
+        def bd(a)
+          s = 0
+          b = binding
+          a.each { |x| s += x }
+          [s, b.local_variable_get(:s)]
+        end
+        res = []
+        30.times { res << pr([1, 2, 3]) << bd([4, 5]) }
+        res
+        "#,
+    );
+}

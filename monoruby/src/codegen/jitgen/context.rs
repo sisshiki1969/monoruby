@@ -2098,12 +2098,22 @@ impl<'a> JitContext<'a> {
     ///
     pub(super) fn specialized_ids_at_pos(&self, pos: usize) -> (Vec<SpecializedId>, usize) {
         let end = self.stack_frame.len() - 1;
-        let chain = &self.stack_frame[pos..end];
-        let ids = chain.iter().map(|f| f.specialized_id).collect();
-        let extra = chain
-            .iter()
-            .map(|f| f.stack_offset - f.base_stack_offset)
-            .sum();
+        let mut ids = vec![];
+        let mut extra = 0;
+        // Each link of the chain is the distance from a frame's frame
+        // pointer to its callee's. A framed callee sits below the whole
+        // native frame of its caller (`total`, resolved after the caller
+        // pops, plus the call site's bump); a frameless one runs in a
+        // window at its caller's `base_stack_offset`
+        // (`inline_window_delta`), a constant already known.
+        for (i, f) in self.stack_frame[pos..end].iter().enumerate() {
+            if self.stack_frame[pos + i + 1].asm_info.frameless {
+                extra += f.base_stack_offset;
+            } else {
+                ids.push(f.specialized_id);
+                extra += f.stack_offset - f.base_stack_offset;
+            }
+        }
         (ids, extra)
     }
 
@@ -2766,13 +2776,7 @@ impl<'a> JitContext<'a> {
     ) -> Option<(Vec<SpecializedId>, usize, bool)> {
         let not_captured = state.outer_no_capture_guard(outer)?;
         let outer = self.outer_pos(outer)?;
-        let end = self.stack_frame.len() - 1;
-        let chain = &self.stack_frame[outer..end];
-        let ids = chain.iter().map(|f| f.specialized_id).collect();
-        let extra = chain
-            .iter()
-            .map(|f| f.stack_offset - f.base_stack_offset)
-            .sum();
+        let (ids, extra) = self.specialized_ids_at_pos(outer);
         Some((ids, extra, not_captured))
     }
 
