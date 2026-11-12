@@ -1554,18 +1554,16 @@ fn index_assign(
             ary.set_index(idx, val)
         }
     } else {
-        let mut i = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+        let start = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
         let l = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
         if l < 0 {
             return Err(MonorubyErr::indexerr(format!("negative length ({})", l)));
         }
+        let mut i = start;
         if i < 0 {
             i += ary.len() as i64;
             if i < 0 {
-                return Err(MonorubyErr::index_too_small(
-                    lfp.arg(0).coerce_to_int_i64(vm, globals)?,
-                    0,
-                ));
+                return Err(MonorubyErr::index_too_small(start, -(ary.len() as i64)));
             }
         }
         let val = lfp.arg(2);
@@ -1706,10 +1704,11 @@ extern "C" fn set_array_slice(
     ) -> Result<Value> {
         let mut ary = base.as_array();
         if start < 0 {
-            start += ary.len() as i64;
-            if start < 0 {
-                return Err(MonorubyErr::index_too_small(start - ary.len() as i64, 0));
+            let size = ary.len() as i64;
+            if start + size < 0 {
+                return Err(MonorubyErr::index_too_small(start, -size));
             }
+            start += size;
         }
         let val = if val.try_array_ty().is_some() {
             val
@@ -7469,6 +7468,28 @@ mod tests {
           a[1, -1] = [:a]
         rescue => e
           res << e.class
+        end
+        res
+        "##,
+        );
+    }
+
+    /// Issue #1838: an out-of-range negative start in the `[start, len] =`
+    /// form reports `minimum: -size`, as the single-index form does — both
+    /// from the builtin and from the JIT's out-of-line `set_array_slice`.
+    #[test]
+    fn index_assign_slice_too_small_message() {
+        run_test(
+            r##"
+        def sl2(a, i, v) = a[i, 2] = v
+        def sln(a, i, n, v) = a[i, n] = v
+        res = []
+        [-100, -9].each do |i|
+          a = [0] * 8
+          begin; sl2(a, i, [1]); rescue IndexError => e; res << e.message; end
+          begin; sln(a, i, 2, [1]); rescue IndexError => e; res << e.message; end
+          begin; a[i] = 1; rescue IndexError => e; res << e.message; end
+          begin; [][i, 0] = 1; rescue IndexError => e; res << e.message; end
         end
         res
         "##,
