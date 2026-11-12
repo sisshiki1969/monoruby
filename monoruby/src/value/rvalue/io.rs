@@ -628,7 +628,7 @@ pub struct IoInner {
     /// (https://bugs.ruby-lang.org/issues/14413). Only `STDOUT` starts
     /// with it; `#dup` keeps it and `#reopen` takes the other stream's.
     signal_on_epipe: bool,
-    /// The `newline:` write decorator the stream was opened with.
+    /// The newline decorator the stream was opened with.
     newline: NewlineMode,
     /// The FMODE bits a C extension keeps in `fptr->mode` that this
     /// struct does not model itself (`FMODE_DUPLEX`, the socket
@@ -637,9 +637,9 @@ pub struct IoInner {
     capi_fmode: i32,
 }
 
-/// The `newline:` open option's write side: what a `"\n"` in the data
-/// is written as. (The read side — universal newline conversion — is
-/// not implemented; CRuby only converts on input for `:universal`.)
+/// The stream's newline decorator. `Crlf` / `Cr` are the `newline:`
+/// option's write side: what a `"\n"` in the data is written as.
+/// `Universal` is the read side ([`IoInner::universal_newline`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NewlineMode {
     /// No decorator: bytes go out unchanged.
@@ -647,6 +647,12 @@ pub enum NewlineMode {
     None,
     Crlf,
     Cr,
+    /// CRuby's universal newline decorator on reads (`FMODE_TEXTMODE`
+    /// with `ECONV_UNIVERSAL_NEWLINE_DECORATOR`: a `"rt"` mode,
+    /// `textmode: true`, `newline: :universal`, `universal_newline:
+    /// true`): the character-oriented reads see `"\r\n"` and a lone
+    /// `"\r"` as `"\n"`, byte reads stay raw, and writes are unchanged.
+    Universal,
 }
 
 impl NewlineMode {
@@ -655,7 +661,7 @@ impl NewlineMode {
     pub fn apply<'a>(self, data: &'a [u8]) -> std::borrow::Cow<'a, [u8]> {
         use std::borrow::Cow;
         let replacement: &[u8] = match self {
-            Self::None => return Cow::Borrowed(data),
+            Self::None | Self::Universal => return Cow::Borrowed(data),
             Self::Crlf => b"\r\n",
             Self::Cr => b"\r",
         };
@@ -672,6 +678,27 @@ impl NewlineMode {
         }
         Cow::Owned(out)
     }
+}
+
+/// The universal newline decorator over bytes read to the end of the
+/// stream: `"\r\n"` and a lone `"\r"` become `"\n"`.
+pub fn universal_newline_bytes(bytes: Vec<u8>) -> Vec<u8> {
+    if !bytes.contains(&b'\r') {
+        return bytes;
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut it = bytes.iter().peekable();
+    while let Some(&b) = it.next() {
+        if b == b'\r' {
+            if it.peek() == Some(&&b'\n') {
+                it.next();
+            }
+            out.push(b'\n');
+        } else {
+            out.push(b);
+        }
+    }
+    out
 }
 
 /// Outcome of a non-blocking `IO#read_nonblock`.
@@ -789,6 +816,27 @@ impl IoInner {
 
     pub fn set_binmode(&mut self) {
         self.binmode = true;
+        // Binary mode is the end of text mode, and with it of the read
+        // side's newline conversion (`rb_io_ascii8bit_binmode` clears
+        // `FMODE_TEXTMODE`).
+        if self.newline == NewlineMode::Universal {
+            self.newline = NewlineMode::None;
+        }
+    }
+
+    /// Whether character reads convert `"\r\n"` / `"\r"` to `"\n"`.
+    pub fn universal_newline(&self) -> bool {
+        self.newline == NewlineMode::Universal
+    }
+
+    /// Turn the read side's universal newline decorator on or off; a
+    /// write decorator, when the stream has one, is left alone.
+    pub fn set_universal_newline(&mut self, on: bool) {
+        match (on, self.newline) {
+            (true, NewlineMode::None) => self.newline = NewlineMode::Universal,
+            (false, NewlineMode::Universal) => self.newline = NewlineMode::None,
+            _ => {}
+        }
     }
 
     /// The `newline:` write decorator (`IO.new` / `File.open`).
@@ -1998,6 +2046,9 @@ impl IoInner {
         if limit == Some(0) {
             return Ok(Some(Vec::new()));
         }
+        if self.universal_newline() {
+            return self.getline_universal(sep, limit, complete_utf8);
+        }
         match sep {
             None => {
                 let mut buf = self.read(limit)?;
@@ -2092,6 +2143,93 @@ impl IoInner {
                 }
             }
         }
+    }
+
+    /// One byte of the stream as a universal-newline read sees it: a
+    /// `"\r"` comes out as `"\n"`, taking a `"\n"` right after it along
+    /// (CRuby's decorator holds the `"\r"` until it sees the next byte,
+    /// or the end of the stream). `acc` is what the line read holds so
+    /// far, pushed back if the read is interrupted.
+    fn read1_universal(&mut self, acc: &[u8]) -> Result<Option<u8>> {
+        match self.read1_preserving(acc)? {
+            Some(b'\r') => {
+                let mut held = acc.to_vec();
+                held.push(b'\r');
+                match self.read1_preserving(&held)? {
+                    Some(b'\n') | None => {}
+                    Some(b) => self.unget(&[b])?,
+                }
+                Ok(Some(b'\n'))
+            }
+            other => Ok(other),
+        }
+    }
+
+    /// [`Self::getline`] on a universal-newline stream
+    /// ([`Self::universal_newline`]): the separator, the limit and
+    /// paragraph mode all apply to the converted bytes, as CRuby's
+    /// `rb_io_getline` works on the read converter's output.
+    fn getline_universal(
+        &mut self,
+        sep: Option<&[u8]>,
+        limit: Option<usize>,
+        complete_utf8: bool,
+    ) -> Result<Option<Vec<u8>>> {
+        if sep.is_none() && limit.is_none() {
+            let buf = universal_newline_bytes(self.read(None)?);
+            return Ok(if buf.is_empty() { None } else { Some(buf) });
+        }
+        let paragraph = sep == Some(b"".as_slice());
+        let mut buf = Vec::new();
+        if paragraph {
+            loop {
+                match self.read1_universal(&buf)? {
+                    None => return Ok(None),
+                    Some(b'\n') => continue,
+                    Some(b) => {
+                        buf.push(b);
+                        break;
+                    }
+                }
+            }
+        }
+        let end: Option<&[u8]> = if paragraph { Some(b"\n\n") } else { sep };
+        let mut at_sep = false;
+        loop {
+            if let Some(l) = limit
+                && buf.len() >= l
+            {
+                if complete_utf8 {
+                    self.complete_partial_char(&mut buf)?;
+                }
+                break;
+            }
+            match self.read1_universal(&buf)? {
+                None => break,
+                Some(b) => {
+                    buf.push(b);
+                    if let Some(e) = end
+                        && buf.ends_with(e)
+                    {
+                        at_sep = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if paragraph && at_sep {
+            loop {
+                match self.read1_universal(&buf)? {
+                    Some(b'\n') => continue,
+                    Some(b) => {
+                        self.unget(&[b])?;
+                        break;
+                    }
+                    None => break,
+                }
+            }
+        }
+        Ok(if buf.is_empty() { None } else { Some(buf) })
     }
 
     /// [`Self::getline`] for a stream whose external encoding has `unit`
