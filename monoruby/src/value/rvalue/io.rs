@@ -1373,7 +1373,13 @@ impl IoInner {
     pub fn unget(&mut self, bytes: &[u8]) -> Result<()> {
         match &self.kind {
             IoKind::Closed(..) => Err(MonorubyErr::ioerr("closed stream")),
-            IoKind::Stdin | IoKind::Stdout | IoKind::Stderr => {
+            // The standard input's pushback goes into its (process-wide)
+            // read buffer, as CRuby's goes into the IO's `rbuf`.
+            IoKind::Stdin => {
+                stdin_buf().unread(bytes);
+                Ok(())
+            }
+            IoKind::Stdout | IoKind::Stderr => {
                 Err(MonorubyErr::ioerr("not opened for reading"))
             }
             IoKind::File(f) if !f.readable => {
@@ -1687,6 +1693,18 @@ impl IoInner {
     /// `maxlen` bytes. Drains ungetc pushback first; otherwise sets
     /// `O_NONBLOCK` and issues one raw `read(2)`. Reports `WouldBlock`
     /// on `EAGAIN`/`EWOULDBLOCK` and `Eof` on a 0-byte read.
+    /// Everything a read would serve without touching the fd — the
+    /// `ungetc` pushback, then what the buffered path already pulled from
+    /// it — up to `max` bytes. After this the fd's offset is the stream's
+    /// logical position, as `IO.copy_stream` needs before it reads the
+    /// descriptor directly (CRuby's `read_buffered_data` of its rbuf).
+    pub fn take_read_buffered(&mut self, max: usize) -> Vec<u8> {
+        let mut out = self.take_pushback(Some(max));
+        let rest = self.take_buffered(max - out.len());
+        out.extend_from_slice(&rest);
+        out
+    }
+
     /// Take up to `max` bytes the reader has already pulled from the fd,
     /// without refilling. CRuby's `read_buffered_data`: a non-blocking
     /// read serves these before it would ever report `EAGAIN`.
@@ -2133,9 +2151,11 @@ impl IoInner {
 
     /// Seek the underlying file. `whence` follows POSIX: 0 = SEEK_SET,
     /// 1 = SEEK_CUR, 2 = SEEK_END. Returns the new absolute position.
-    /// Fails with `ESPIPE` for streams that do not support seeking
-    /// (stdin/stdout/stderr, pipes) and with `EINVAL` for unsupported
-    /// `whence` values or a negative `SEEK_SET` offset.
+    /// Fails with `ESPIPE` for streams whose descriptor does not support
+    /// seeking (pipes, terminals, sockets — the kernel's answer, so a
+    /// standard stream redirected to a regular file seeks like any other
+    /// fd) and with `EINVAL` for unsupported `whence` values or a
+    /// negative `SEEK_SET` offset.
     /// [`Self::seek`] for `IO#seek` and its relatives, with CRuby's
     /// errors: anything still buffered is flushed first
     /// (`flush_before_seek`, failing through `rb_sys_fail_on_write`), and
@@ -2144,6 +2164,29 @@ impl IoInner {
         self.flush(store)?;
         self.seek(offset, whence)
             .map_err(|e| self.errno_for(store, &e, func))
+    }
+
+    /// `IO#pos`. CRuby's `rb_io_tell` first gives back what the stream
+    /// holds unread (`io_unread`: `lseek` back by its length and drop it),
+    /// then subtracts whatever it could not give back from the fd's
+    /// offset. The standard input keeps its pushback in its read buffer,
+    /// so an `ungetc` at offset 0 — which cannot be sought back over —
+    /// stays buffered and answers a negative position, as in CRuby.
+    pub fn tell_for(&mut self, store: &Store, func: &str) -> Result<i64> {
+        if let IoKind::Stdin = self.kind {
+            let mut buf = stdin_buf();
+            if let Ok(pos) = buf.seek(SeekFrom::Current(0)) {
+                return Ok(pos as i64);
+            }
+            let fd = buf
+                .get_mut()
+                .seek(SeekFrom::Current(0))
+                .map_err(|e| self.errno_for(store, &e, func))?;
+            return Ok(fd as i64 - buf.buffer().len() as i64);
+        }
+        let pb = self.pushback_len() as i64;
+        let pos = self.seek_for(0, 1, store, func)?;
+        Ok((pos as i64 - pb).max(0))
     }
 
     pub fn seek(&mut self, offset: i64, whence: i32) -> std::io::Result<u64> {
@@ -2173,8 +2216,28 @@ impl IoInner {
                 }
                 Rc::get_mut(file).unwrap().reader.seek(seek_from)
             }
+            // The shared read-ahead buffer makes the logical position
+            // the fd's offset minus what it still holds; `IoReader`'s
+            // seek folds that in and drops the buffer (CRuby's
+            // `io_unread` ahead of the `lseek`).
+            IoKind::Stdin => stdin_buf().seek(seek_from),
+            // The process-wide write buffer has to reach the fd before
+            // its offset moves, as a `File`'s does above.
+            IoKind::Stdout | IoKind::Stderr => {
+                let mut buf = match self.kind {
+                    IoKind::Stdout => stdout_buf(),
+                    _ => stderr_buf(),
+                };
+                if let Err(e) = buf.drain(&signal_pending) {
+                    return Err(match e {
+                        DrainErr::Io(e) => e,
+                        _ => std::io::Error::from_raw_os_error(EINTR),
+                    });
+                }
+                buf.get_mut().seek(seek_from)
+            }
             IoKind::Closed(..) => Err(std::io::Error::from_raw_os_error(9)), // EBADF
-            _ => Err(std::io::Error::from_raw_os_error(ESPIPE)),
+            IoKind::Popen(_) => Err(std::io::Error::from_raw_os_error(ESPIPE)),
         }
     }
 

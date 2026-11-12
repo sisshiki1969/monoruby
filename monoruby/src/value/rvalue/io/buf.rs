@@ -76,6 +76,15 @@ impl Read for StdFd {
     }
 }
 
+impl Seek for StdFd {
+    /// `lseek(2)` on the descriptor itself: a standard stream redirected
+    /// to a regular file seeks like any other fd, and one on a pipe or a
+    /// terminal answers `ESPIPE` from the kernel.
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        (&*self.0).seek(pos)
+    }
+}
+
 impl Write for StdFd {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         (&*self.0).write(buf)
@@ -139,6 +148,25 @@ impl<T> IoReader<T> {
 
     pub(crate) fn into_inner(self) -> T {
         self.inner
+    }
+
+    /// Put `bytes` back in front of what is buffered, so the next read
+    /// returns them first: CRuby's `io_ungetbyte` into the IO's `rbuf`.
+    /// They count as read-ahead, so the logical position moves back by
+    /// their length.
+    pub(crate) fn unread(&mut self, bytes: &[u8]) {
+        if bytes.len() <= self.pos {
+            self.pos -= bytes.len();
+            self.buf[self.pos..self.pos + bytes.len()].copy_from_slice(bytes);
+            return;
+        }
+        let mut grown = Vec::with_capacity((bytes.len() + self.cap - self.pos).max(IO_BUF_CAPA));
+        grown.extend_from_slice(bytes);
+        grown.extend_from_slice(&self.buf[self.pos..self.cap]);
+        self.cap = grown.len();
+        self.pos = 0;
+        grown.resize(grown.capacity().max(IO_BUF_CAPA), 0);
+        self.buf = grown.into_boxed_slice();
     }
 
     fn discard_buffer(&mut self) {
@@ -433,6 +461,10 @@ impl<T> IoWriter<T> {
 
     pub(crate) fn get_ref(&self) -> &T {
         &self.inner
+    }
+
+    pub(crate) fn get_mut(&mut self) -> &mut T {
+        &mut self.inner
     }
 }
 

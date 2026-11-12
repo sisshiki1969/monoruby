@@ -182,6 +182,7 @@ mod spliced_exit_claim;
 mod spliced_exit_delivery;
 mod sqlite3;
 mod std_fds;
+mod std_stream_seek;
 mod stdout_buffering;
 mod stdout_epipe;
 mod string_bytes;

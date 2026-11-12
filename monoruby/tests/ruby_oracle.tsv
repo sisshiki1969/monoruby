@@ -1893,6 +1893,7 @@
 55cfd8bcda45f95d6f872d7615ecd004	[true, true, true]	__a = [];__a << (Symbol.all_symbols.is_a?(Array));__a << (Symbol.all_symbols.all
 55d3766f222609a4076548bde20c92c4	5	m = Module.new; m.const_set("ἍBB", 5); m.const_get("ἍBB")
 55d4331ac5b0d6b85a29b08cd75d814c	["echo hi", false]	def `(cmd); [cmd, cmd.frozen?]; end\n        x = "hi"\n        `echo #{x}
+55d6b5b6dcb686350994cb857704a4f4	["abcd", [1, "xxx"], {k: "vv"}]	begin\n              GC.stress = true\n              a = Thread.new {
 55e0c5f6cdca1e7736c6f5a8ef3c31a9	[[[:a, 1], [:b, 2], [:a, 1], [:b, 2]], [[:a, 1], [:b, 2]], [[:a, 1], [:b, 2]]]	S = Struct.new(:a, :b)\n               s = S.new(1, 2)\n               r = []\n    
 55f0fc54d8a7b9fc5936d77ffe989680	true	File.absolute_path?("/tmp")
 56038da008a973f6fabe8d8e55d4ebe0	[:locked, true]	require 'fcntl'\n        DARWIN = RUBY_PLATFORM.include?("darwin")\n     
@@ -3089,6 +3090,7 @@
 8c9756554430bb7072dc29c2c12abded	[[:ge, 500], [:lt, 100]]	def probe(a, b)\n              if a < b\n                :lt\n        
 8cc0c47bfa05bc3a2f09519198350a26	["UTF-8", "US-ASCII", "UTF-8", "UTF-8", "UTF-16BE", "UTF-8", "UTF-8", "UTF-8", "UTF-8", "nil", "nil", "nil", "nil", "nil", "US-ASCII", "US-ASCII", "UTF-8"]	__a = [];__a << (Encoding.compatible?("abc", "def").to_s);__a << (\n             
 8cccb4747cfdbfa71bed00dbdaf949ab	[["RuntimeError", "TypeError"], ["RuntimeError", nil], "TypeError", ["RuntimeError", nil], "ArgumentError"]	def t; yield; rescue Exception => e; [e.class.to_s, (e.cause && e.c
+8cee4762dcc0acf82694ead42dcce94c	[5, "12345", 6, 4, [0, 0, 0, 0], 0, 3, [0, 0, 0], [Errno::EINVAL, true], Errno::ESPIPE]	path = "/tmp/monoruby_test_copy_stream_cov_#{Process.pid}"\n        
 8cf4538ff9dc5775c6aa04d3c95d1924	[[:pa, 1000], [:pb, 1000], [:pc, 1000]]	class Vbase; def val = @v; end\n            class Va < Vbase; def in
 8cf61f75f99a0e9c53f3bf071168dad0	[:foo]	class P\n              def foo; end\n              def bar; end\n     
 8d0a1944580afa656cee33f2e1515dd4	[["keyed by 1", "keyed by :sym", "keyed by nil", "keyed by true", "keyed by false", "keyed by 2.5"], 42, 7, ["keyed by 1", "keyed by :sym", "keyed by nil", "keyed by true", "keyed by false", "keyed by 2.5"], [42, true, 7]]	m = ObjectSpace::WeakMap.new\n        imm = [1, :sym, nil, true, false, 
