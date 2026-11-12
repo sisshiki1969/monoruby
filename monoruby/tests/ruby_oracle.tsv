@@ -3562,6 +3562,7 @@ a32e5a59e048d15bbb352b6fdb7e1699	[0, 0.0, 6, 8.5, 15.25, "abc"]	[[].sum, [].sum(
 a32ecda935b7e94450e788b8832e13a4	[3, 1, 5, 3]	class C\n            include Comparable\n            attr_accessor :x\n 
 a331276eee9103e6d3857063f69777b4	[:foo, :bar]	$res = []\n            class C\n              def self.singleton_meth
 a339383cb7515f27adeda21648117046	[[[:a, :b, :c, :d, :e, :f, :g, :h, :i, :j, :k, :l, :m, :n, :o, :p, :q, :r, :s, :t], {}], [[:a, :b, :c], [[:a, 1], [:b, 2], [:c, 3]], {}], :raised]	__a = [];__a << (\n        h = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, 
+a33ab03c916a6581cc2afd5e5e35727d	[SyntaxError, SyntaxError, SyntaxError, "a\\\\xE3\\\\201\\\\202", "a\\\\xE3\\\\x81\\\\x82"]	x = "a"\n            ['/#{x}\\xff/', '/#{x}\\xA4\\242/', '/\\xA4#{x}/e',
 a34c4e369e6d5139f06cb9ce6026b999	42	class C\n          def self.class_method\n            42\n          end\n  
 a350f18bfa74eb691291c66f2ed106e8	11200072.0	def clamped(d)\n          return 0.0 if d < 1.0\n          160.0 / d\n    
 a359b845a5de697d94d846bfda30d830	14614	class C\n          def initialize\n            @a = [0.0, 1.0, 2.0]\n     

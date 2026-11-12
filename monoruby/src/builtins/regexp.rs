@@ -3907,6 +3907,18 @@ re = Regexp.new(u.("(?<n>a)(b)"))
              /x[\343\201\202]+/.match("xああ")&.[](0), /\xE3\201\202/.encoding.to_s, /\343\201\202/.fixed_encoding?]
             "##,
         );
+        // The literal fragments of an interpolated regexp are checked at
+        // compile time (`rb_reg_check_preprocess`): a SyntaxError.
+        run_test(
+            r##"
+            x = "a"
+            ['/#{x}\xff/', '/#{x}\xA4\242/', '/\xA4#{x}/e', '/#{x}\xE3\201\202/', '/#{x}\M-c\x81\x82/'].map do |s|
+              eval(s).source
+            rescue SyntaxError => e
+              e.class
+            end
+            "##,
+        );
     }
 
     #[test]
