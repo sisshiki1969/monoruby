@@ -1505,19 +1505,17 @@ impl<'a> BytecodeGen<'a> {
     }
 
     /// Appends the literal fragment `next` to the literal fragment `last`
-    /// when both carry the same encoding (CRuby joins such a run into one
-    /// operand at compile time). Returns false, leaving `last` as it is,
-    /// when either is not a literal or their encodings differ.
+    /// when both are of the same kind and encoding (CRuby joins a run of
+    /// literal fragments into one operand at compile time). Returns
+    /// false, leaving `last` as it is, otherwise. The pairs left apart
+    /// (a `Bytes` fragment, never empty, next to anything) concatenate
+    /// to the same result as separate operands: only an empty fragment
+    /// can act differently from its merged run, and an empty `String`
+    /// next to a non-empty source-encoding `Bytes` is absorbed by it
+    /// either way.
     fn merge_str_literal(last: &mut Node, next: &Node) -> bool {
         match (&mut last.kind, &next.kind) {
             (NodeKind::String(a), NodeKind::String(b)) => a.push_str(b),
-            (NodeKind::Bytes(a), NodeKind::Bytes(b)) => a.extend_from_slice(b),
-            (NodeKind::Bytes(a), NodeKind::String(b)) => a.extend_from_slice(b.as_bytes()),
-            (NodeKind::String(a), NodeKind::Bytes(b)) => {
-                let mut bytes = std::mem::take(a).into_bytes();
-                bytes.extend_from_slice(b);
-                last.kind = NodeKind::Bytes(bytes);
-            }
             (NodeKind::EncodedString(a, ea), NodeKind::EncodedString(b, eb)) if ea == eb => {
                 a.extend_from_slice(b)
             }
