@@ -36,8 +36,10 @@ impl<'a> JitContext<'a> {
                     head_virtuals,
                     state.virtuals()
                 );
+                let src_pin = state.gp_regfile.pin();
                 self.materialize_except(&mut state, &mut ir, &head_virtuals);
                 state.gen_bridge_all(&mut ir, &target, pc, &self.chain_surrender_table());
+                AbstractFrame::bridge_pin(src_pin, &mut ir, target.last().unwrap());
                 match mode {
                     BranchMode::Side { dest } => {
                         self.add_outline_bridge(ir, dest, bbid);
@@ -348,6 +350,16 @@ impl<'a> JitContext<'a> {
             // LoopStart's PC) directly; an extra `+1` here would push
             // the deopt resume past the fused BinCmp into the bare
             // CondBr, which then reads a stale `%dst` — see #480.
+            // Loop pinning: an innermost loop keeps its most-read integer
+            // local in the pin register across its blocks.
+            let pin = if self.iseq().bb_info.loops_within(loop_start, loop_end).len() == 1 {
+                self.loop_pin_candidate(loop_start, loop_end)
+            } else {
+                None
+            };
+            self.current_frame_mut()
+                .set_loop_pin(loop_start, loop_end, pin);
+            target.set_entry_pin(pin);
             self.gen_bridges_for_branches(
                 &target,
                 entries,
@@ -365,7 +377,8 @@ impl<'a> JitContext<'a> {
             #[cfg(feature = "jit-debug")]
             eprintln!("\n===gen_merge {bbid:?}");
 
-            let target = AbstractState::join_entries(&entries);
+            let mut target = AbstractState::join_entries(&entries);
+            target.set_entry_pin(self.current_frame().loop_pin_of(bbid));
             self.gen_bridges_for_branches(
                 &target,
                 entries,
@@ -470,7 +483,9 @@ impl<'a> JitContext<'a> {
                     },
                 });
             }
+            let src_pin = state.gp_regfile.pin();
             state.gen_bridge_all(&mut ir, &target, pc, &self.chain_surrender_table());
+            AbstractFrame::bridge_pin(src_pin, &mut ir, target.last().unwrap());
             match mode {
                 BranchMode::Side { dest } => {
                     self.add_outline_bridge(ir, dest, bbid);
@@ -653,6 +668,83 @@ impl<'a> JitContext<'a> {
             .filter(|slot| recorded.is_none_or(|be| be.mode(*slot) == array))
             .filter(|slot| self.loop_reads_elements(loop_start, loop_end, *slot))
             .collect()
+    }
+
+    ///
+    /// The local the innermost loop `loop_start..=loop_end` pins
+    /// (`gp_alloc::LoopPin`): the one read most often as an Integer
+    /// operand — of an integer `BinOp` / `BinCmp`, or as the index of an
+    /// `Array` element access — if it is read at least twice.
+    ///
+    fn loop_pin_candidate(
+        &self,
+        loop_start: BasicBlockId,
+        loop_end: BasicBlockId,
+    ) -> Option<SlotId> {
+        let iseq = self.iseq();
+        let local_num = self.local_num();
+        let block_param = iseq.block_param_slot();
+        let is_local =
+            |s: SlotId| (1..=local_num).contains(&(s.0 as usize)) && Some(s) != block_param;
+        let mut counts: Vec<(SlotId, usize)> = vec![];
+        let mut count = |s: SlotId| {
+            if !is_local(s) {
+                return;
+            }
+            match counts.iter_mut().find(|(x, _)| *x == s) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((s, 1)),
+            }
+        };
+        let int = CachedClass::INTEGER;
+        let begin = iseq.bb_info[loop_start].begin;
+        let end = iseq.bb_info[loop_end].end;
+        let mut pos = begin;
+        while pos <= end {
+            let pc = iseq.get_pc(pos);
+            if !pc.is_handler_only() {
+                match TraceIr::from_pc(pc, self.store) {
+                    TraceIr::BinOp {
+                        lhs,
+                        rhs,
+                        ic: Some((lc, rc)),
+                        ..
+                    }
+                    | TraceIr::BinCmp {
+                        lhs,
+                        rhs,
+                        ic: Some((lc, rc)),
+                        ..
+                    } if lc == int && rc == int => {
+                        count(lhs);
+                        if rhs != lhs {
+                            count(rhs);
+                        }
+                    }
+                    TraceIr::Index {
+                        idx,
+                        class: Some((_, ic)),
+                        ..
+                    }
+                    | TraceIr::IndexAssign {
+                        idx,
+                        class: Some((_, ic)),
+                        ..
+                    } if ic == int => count(idx),
+                    // A call flushes the register file, the pin with it:
+                    // in a loop that calls, the pin would be reloaded on
+                    // every edge and only takes a register away.
+                    TraceIr::MethodCall { .. } | TraceIr::Yield { .. } => return None,
+                    _ => {}
+                }
+            }
+            pos = pos + 1;
+        }
+        counts
+            .into_iter()
+            .filter(|(_, n)| *n >= 2)
+            .max_by_key(|(s, n)| (*n, std::cmp::Reverse(s.0)))
+            .map(|(s, _)| s)
     }
 
     ///

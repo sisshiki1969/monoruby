@@ -119,6 +119,7 @@ mod loop_head_const_placement;
 mod loop_hoist;
 mod loop_jit_dead_loop_end;
 mod loop_jit_exit_sp;
+mod loop_pin;
 mod main_script;
 mod method_call;
 mod method_lists;

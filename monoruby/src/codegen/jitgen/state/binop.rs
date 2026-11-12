@@ -329,7 +329,16 @@ impl AbstractState {
         in_place_ok: bool,
         extra_pinned: &[GP],
         dst: Option<SlotId>,
-    ) -> bool {
+    ) -> DstPlan {
+        // The loop's pinned local is computed straight into the pin
+        // register (in place when it is the clean `lhs` itself), so that it
+        // is current there for the rest of the loop with no move.
+        if let Some(p) = self.gp_regfile.pin_dst(dst)
+            && !extra_pinned.contains(&p)
+            && (lhs_gp != p || (in_place_ok && self.gp_regfile.dirty_reg_of(lhs).is_none()))
+        {
+            return DstPlan::Pin(p);
+        }
         let next_sp = self.next_sp();
         let in_place = in_place_ok
             && self.gp_regfile.dirty_reg_of(lhs).is_none()
@@ -342,7 +351,7 @@ impl AbstractState {
                 ir.reg2stack(reg, slot);
             }
         }
-        in_place
+        if in_place { DstPlan::InPlace } else { DstPlan::Fresh }
     }
 
     /// The post-snapshot half of [`Self::plan_dst_reg`]: drop the stale cache
@@ -352,7 +361,7 @@ impl AbstractState {
     fn take_dst_reg(
         &mut self,
         ir: &mut AsmIr,
-        in_place: bool,
+        plan: DstPlan,
         lhs: SlotId,
         lhs_gp: GP,
         extra_pinned: &[GP],
@@ -363,7 +372,10 @@ impl AbstractState {
         }
         let next_sp = self.next_sp();
         self.gp_regfile.free_above_sp(next_sp);
-        if in_place {
+        if let DstPlan::Pin(p) = plan {
+            return p;
+        }
+        if plan == DstPlan::InPlace {
             debug_assert!(self.gp_regfile.will_hold_at_most(lhs_gp, lhs, next_sp, None));
             self.gp_regfile.invalidate(lhs);
             return lhs_gp;
@@ -411,6 +423,13 @@ impl AbstractState {
         // Not resident and not a constant: put the value at its canonical stack
         // home (a no-op for an `S` slot; materializes a boxed float), then load it.
         self.write_back(ir, slot, Keep::All);
+        // The loop's pinned local reloads into the pin register, where the
+        // rest of the loop's blocks find it.
+        if let Some(gp) = self.gp_regfile.stale_pin_of(slot) {
+            ir.stack2reg(slot, gp);
+            self.gp_regfile.validate_pin();
+            return (gp, !self.is_fixnum(slot));
+        }
         let (gp, spills) = self.gp_regfile.alloc_reg(pinned);
         for (reg, s) in spills {
             ir.reg2stack(reg, s);
@@ -723,7 +742,7 @@ impl AbstractState {
         // before the compare (the operands' registers still hold their values
         // for it), leaving the file empty for both successors.
         self.gp_regfile.invalidate(dst);
-        self.flush_gp(ir);
+        self.flush_gp_keep_pin(ir);
         match rhs_gp {
             Some((rhs_gp, _)) => ir.cmp_flags(lhs_gp, rhs_gp),
             None => ir.cmp_imm_flags(lhs_gp, imm.unwrap()),
@@ -751,7 +770,7 @@ impl AbstractState {
         let (rhs_gp, _) = self.gp_ensure(ir, rhs, &[lhs_gp]);
         // Block terminator, as in `gen_cmp_integer_flags`.
         self.gp_regfile.invalidate(dst);
-        self.flush_gp(ir);
+        self.flush_gp_keep_pin(ir);
         ir.cmp_flags(lhs_gp, rhs_gp);
         self.def_C(dst, Value::nil());
         CondFlags::Int(CmpKind::Eq)
@@ -1021,7 +1040,7 @@ impl AbstractState {
         self.guard_float_cmp_exact(ir, info);
         let mode = self.load_binary_fpr(ir, info);
         self.gp_regfile.invalidate(dst);
-        self.flush_gp(ir);
+        self.flush_gp_keep_pin(ir);
         ir.float_cmp_flags(mode);
         self.def_C(dst, Value::nil());
         Some(CondFlags::Float(kind))
@@ -1079,4 +1098,15 @@ impl AbstractState {
             FOpClass::Float => self.load_fpr(ir, rhs),
         }
     }
+}
+
+/// Where an integer op's result goes (`plan_dst_reg`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DstPlan {
+    /// In `lhs`'s register.
+    InPlace,
+    /// In a register `reserve` made room for.
+    Fresh,
+    /// In the loop pin's register: the result is the pinned local.
+    Pin(GP),
 }

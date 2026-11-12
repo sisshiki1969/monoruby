@@ -1328,11 +1328,73 @@ impl AbstractFrame {
     }
 
     pub(crate) fn flush_gp(&mut self, ir: &mut AsmIr) {
+        // What follows may clobber the caller-saved registers, the loop
+        // pin's included.
+        self.gp_regfile.invalidate_pin();
         if self.gp_regfile.is_empty() {
             return;
         }
         for (reg, slot) in self.gp_regfile.take_dirty_spills() {
             ir.reg2stack(reg, slot);
+        }
+    }
+
+    /// Install the loop pin of a block's entry state: `slot` is the local
+    /// the enclosing loop pins (`None` outside a pinned loop). The entry
+    /// state claims the pin register valid wherever the slot's home is
+    /// current, and every edge into the block makes it so
+    /// ([`Self::bridge_pin`]).
+    pub(in crate::codegen::jitgen) fn set_entry_pin(&mut self, slot: Option<SlotId>) {
+        use crate::codegen::jitgen::gp_alloc::{LoopPin, PIN_REG};
+        let pin = slot.map(|slot| LoopPin {
+            reg: PIN_REG,
+            slot,
+            valid: matches!(self.mode(slot), LinkMode::S(_) | LinkMode::Sf(_, _)),
+        });
+        self.gp_regfile.set_pin(pin);
+    }
+
+    /// The pin half of an edge's bridge into a block whose entry state is
+    /// `target`, appended to the bridge `ir` (after it has made the homes
+    /// current): when the entry claims the pin valid, reload it unless
+    /// this edge carries it valid and the bridge emitted nothing — any
+    /// emitted code (a materialization, a boxing, a guard load) may have
+    /// clobbered the register.
+    ///
+    /// `src` is the edge's own pin, taken before the bridge consumed its
+    /// state.
+    pub(in crate::codegen::jitgen) fn bridge_pin(
+        src: Option<crate::codegen::jitgen::gp_alloc::LoopPin>,
+        ir: &mut AsmIr,
+        target: &SlotState,
+    ) {
+        let Some(p) = target.gp_regfile.pin().filter(|p| p.valid) else {
+            return;
+        };
+        let carried = ir.is_empty()
+            && src.is_some_and(|q| q.valid && q.slot == p.slot && q.reg == p.reg);
+        if !carried {
+            ir.stack2reg(p.slot, p.reg);
+        }
+    }
+
+    /// The flush at a block boundary (a branch or the fall-through into
+    /// the next block): the residents go home, the loop pin stays — and is
+    /// refilled from a holder of its slot when stale, so that the edge
+    /// into the next block of the loop needs no reload.
+    pub(crate) fn flush_gp_keep_pin(&mut self, ir: &mut AsmIr) {
+        if self.gp_regfile.is_empty() {
+            return;
+        }
+        let (spills, refill) = self.gp_regfile.take_dirty_spills_keep_pin();
+        for (reg, slot) in spills {
+            ir.reg2stack(reg, slot);
+        }
+        if let Some(src) = refill
+            && let Some(pin) = self.gp_regfile.pin()
+        {
+            ir.reg_move(src, pin.reg);
+            self.gp_regfile.validate_pin();
         }
     }
 
