@@ -421,7 +421,8 @@ impl<'a> JitContext<'a> {
             trace_ir,
             TraceIr::Mov(..) | TraceIr::FrozenLiteral(..) | TraceIr::Literal(..)
         ));
-        for slot in trace_ir.read_slots(self.store) {
+        let reads = trace_ir.read_slots(self.store);
+        for &slot in &reads {
             state.note_read(slot);
         }
         // Ruby code ran since the last instruction (a call, a yield, a
@@ -939,6 +940,11 @@ impl<'a> JitContext<'a> {
                 // generator may leave its answer in the condition flags
                 // (and a dispatch emit the branch per arm).
                 let sink = if fused { self.cond_sink_after(bc_pos, dst) } else { None };
+                // Nothing may come between the flags and the branch: the
+                // block end's allocations go first (issue #1837).
+                if let Some(sink) = &sink {
+                    self.settle_virtuals_for_sink(state, ir, &reads, sink.pos);
+                }
                 return self.with_cond_sink(sink, |this| {
                     this.binary_cmp(
                         state,
@@ -987,6 +993,10 @@ impl<'a> JitContext<'a> {
                 // predicate generator may answer in the condition flags; a
                 // dispatch emits the branch at the end of every arm.
                 let sink = self.cond_sink_after_call(bc_pos, self.store[callid].dst);
+                // As for a comparison: the block end's allocations first.
+                if let Some(sink) = &sink {
+                    self.settle_virtuals_for_sink(state, ir, &reads, sink.pos);
+                }
                 return self.with_cond_sink(sink, |this| this.method_call(state, ir, callid, cache));
             }
             TraceIr::Yield { callid } => {

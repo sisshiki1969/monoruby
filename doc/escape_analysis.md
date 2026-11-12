@@ -186,6 +186,18 @@ reach the branch target through an arm's side-branch state while the
 fall-through materializes it, and the join of the two would not keep
 both.
 
+A producer lowered with a `CondBr` as its sink without a dispatch — a
+fused comparison, a predicate call — may leave its answer in the
+condition flags, and nothing may be emitted between it and the branch.
+The block-end materialization the `CondBr` would perform is an
+allocation call that clobbers them (issue #1837: `[[1], c ? [7] : [6]]`
+branched on whatever the allocator left), so it is done before the
+producer instead (`settle_virtuals_for_sink`): every object the
+producer does not read is dropped if dead after the branch and
+materialized unless a merge carries it, and the `CondBr` finds only
+carried objects, for which it emits nothing. `materialize_virtual`
+asserts (debug) that no condition is pending.
+
 A parameter holding a handed-over object (§6) follows the same rules but
 two: it survives its frame's calls, and it survives a forward block
 boundary. Its elements are in the caller's frame (or are a template),

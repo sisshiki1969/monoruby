@@ -109,7 +109,7 @@ impl<'a> JitContext<'a> {
             }
         }
         if let Some(sink) = sink {
-            self.settle_virtuals_before_branch(state, ir, sink.pos, false);
+            self.settle_virtuals_before_branch(state, ir, sink.pos, false, &[]);
         }
         state.write_back_slots(ir, operands);
         state.flush_gp(ir);

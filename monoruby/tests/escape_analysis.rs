@@ -2485,3 +2485,51 @@ fn expand_of_an_array_the_method_returns() {
         "#,
     );
 }
+
+#[test]
+fn materialize_before_a_condition_left_in_the_flags() {
+    // Issue #1837: a comparison (or a predicate call) fused with the
+    // `CondBr` after it leaves its answer in the condition flags, and an
+    // elided object still live at the block's end used to be allocated
+    // between the two — a call that clobbered the flags, so the branch
+    // went whichever way the allocator left them. The objects are now
+    // settled before the producer (`settle_virtuals_for_sink`). Covered:
+    // a temporary element of an Array literal (`[1]`, `{a: 1}`) across a
+    // `?:`, and a local's object at a do-while condition, both for a
+    // fused comparison and for an `Integer#zero?` predicate.
+    run_test_with_prelude(
+        r#"
+        r = []
+        50.times { |i| r << [f1(i), f2(i), f3(i), f4(i), f5(i), f6(i)] }
+        r
+        "#,
+        r#"
+        def f1(i) = (a = [[1], i == 44 ? [7] : [6]]; a[1])
+        def f2(i) = (a = [{a: 1}, i == 44 ? [7] : [6]]; a[1])
+        def f3(i) = (a = [[1, 2], i < 30 ? [7] : [6]]; a)
+        def f4(i)
+          j = 0
+          x = nil
+          begin
+            x = [j, i]
+            j += 1
+          end while j < 3
+          [x.min, j]
+        end
+        def f5(i)
+          j = 3
+          x = nil
+          begin
+            x = [j, i]
+            j -= 1
+            break if j < -5 # the miscompile looped forever
+          end until j.zero?
+          [x.min, j]
+        end
+        def f6(i)
+          x = [i, i + 1]
+          i == 44 ? x.max : x.min
+        end
+        "#,
+    );
+}
