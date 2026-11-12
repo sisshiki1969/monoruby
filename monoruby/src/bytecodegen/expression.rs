@@ -2282,8 +2282,8 @@ impl<'a> BytecodeGen<'a> {
         // The upper 32 bits carry the literal's line: Onigmo's
         // diagnostics for the assembled source are reported there.
         opt |= (self.sourceinfo.get_line(&loc) as i64) << 32;
-        // The literal fragments' `\xHH` escapes are checked now, in the
-        // encoding the literal is read in, so `/\xff#{x}/` is the
+        // The literal fragments' byte and `\u` escapes are checked now, in
+        // the encoding the literal is read in, so `/\xff#{x}/` is the
         // SyntaxError CRuby raises rather than a RegexpError later.
         if enc_bits & RegexpInner::NOENCODING == 0 {
             let enc = match enc_bits {
@@ -2295,10 +2295,12 @@ impl<'a> BytecodeGen<'a> {
             for node in &nodes {
                 let bytes: &[u8] = match &node.kind {
                     NodeKind::String(s) => s.as_bytes(),
-                    NodeKind::Bytes(b) => b,
+                    NodeKind::Bytes(b) | NodeKind::EncodedString(b, _) => b,
                     _ => continue,
                 };
-                if let Err(err) = crate::builtins::check_regexp_hex_escapes(bytes, enc) {
+                // `rb_reg_check_preprocess`, which reads a fragment with
+                // no options (a `/x` literal's comments included).
+                if let Err(err) = crate::builtins::check_regexp_preprocess(bytes, enc, 0) {
                     return Err(self.syntax_error(err.message(), loc));
                 }
             }

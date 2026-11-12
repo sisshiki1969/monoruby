@@ -1412,6 +1412,8 @@ fn format_i64(buf: &mut [u8; 20], n: i64) -> &[u8] {
 struct DregexpPieces {
     /// The literal is `/…/n`.
     noencoding: bool,
+    /// The literal is `/…/x`: a piece's `# …` comments are not read.
+    extended: bool,
     /// The encoding the pieces seen so far pin the pattern to.
     fixed: Option<crate::value::rvalue::Encoding>,
 }
@@ -1439,7 +1441,7 @@ impl DregexpPieces {
         } else {
             enc
         };
-        if let Some(e) = crate::value::rvalue::regexp::dregexp_fixed_encoding(bytes, enc) {
+        if let Some(e) = crate::value::rvalue::regexp::dregexp_fixed_encoding(bytes, enc, self.extended) {
             match self.fixed {
                 Some(p) if p != e => {
                     return Err(MonorubyErr::regexerr(format!(
@@ -1481,6 +1483,7 @@ pub(super) extern "C" fn concatenate_regexp(
     // encoding (`/#{euc_str}/.encoding == EUC-JP`).
     let mut pieces = DregexpPieces {
         noencoding: option & RegexpInner::NOENCODING != 0,
+        extended: option & onigmo_regex::ONIG_OPTION_EXTEND != 0,
         fixed: None,
     };
     let s_val = match concatenate_string_inner(vm, globals, arg, len, Some(&mut pieces)) {
