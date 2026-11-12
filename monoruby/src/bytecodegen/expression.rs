@@ -1028,30 +1028,37 @@ impl<'a> BytecodeGen<'a> {
                 return Ok(());
             }
             NodeKind::InterporatedString(nodes) => {
-                // The interpolation result takes the SOURCE encoding as its
-                // starting point (CRuby: a dstr begins with its first
-                // literal segment). When the first part is an embedded
-                // expression (`"#{a}"`), seed with an empty literal so the
-                // runtime concat negotiates from the source encoding.
-                let seed = !matches!(
-                    nodes.first().map(|n| &n.kind),
-                    Some(NodeKind::String(_))
-                        | Some(NodeKind::Bytes(_))
-                        | Some(NodeKind::EncodedString(..))
-                );
-                // An empty literal fragment (`"#{a}" ""`, `#{""}`, an
-                // empty heredoc chunk) is the identity of the concat's
-                // fold once the result's encoding is seeded — an empty
-                // piece leaves both the negotiated encoding and the code
-                // range as they are — so it is dropped from the operand
-                // list. The first operand is kept even when empty: it is
-                // what seeds the result's encoding.
-                let nodes: Vec<Node> = nodes
-                    .into_iter()
-                    .enumerate()
-                    .filter(|(i, n)| (*i == 0 && !seed) || !Self::is_empty_str_literal(n))
-                    .map(|(_, n)| n)
-                    .collect();
+                // The operand list follows CRuby's prism compiler
+                // (`pm_interpolated_node_compile` + the `concatstrings`
+                // peephole), since what `rb_str_concat_literals` answers
+                // for the result's encoding depends on exactly which
+                // operands it sees (see `concatenate_string_inner`):
+                //
+                // - Only an interpolation of a single embedded expression
+                //   (`"#{a}"`) is seeded with an empty source-encoding
+                //   literal. `"#{a}#{b}"` starts from `a.to_s` itself, so a
+                //   BINARY `a` makes a BINARY result.
+                // - A run of adjacent literal fragments (`#{"x"}` counts as
+                //   one) is a single operand.
+                // - An empty literal is an operand like any other — it
+                //   upgrades a US-ASCII accumulation to the source encoding
+                //   (`"#{u}#{""}#{u}"` is UTF-8) — except at the very end,
+                //   where CRuby's peephole drops it (`"#{u}#{u}#{""}"` stays
+                //   US-ASCII).
+                let seed = nodes.len() == 1 && !Self::is_str_literal(&nodes[0]);
+                let mut merged: Vec<Node> = Vec::with_capacity(nodes.len());
+                for node in nodes {
+                    if let Some(last) = merged.last_mut()
+                        && Self::merge_str_literal(last, &node)
+                    {
+                        continue;
+                    }
+                    merged.push(node);
+                }
+                if merged.len() > 1 && merged.last().is_some_and(Self::is_empty_str_literal) {
+                    merged.pop();
+                }
+                let nodes = merged;
                 let len = nodes.len() + seed as usize;
                 let arg = self.sp();
                 if seed {
@@ -1489,6 +1496,34 @@ impl<'a> BytecodeGen<'a> {
 }
 
 impl<'a> BytecodeGen<'a> {
+    /// Whether `node` is a string literal fragment.
+    fn is_str_literal(node: &Node) -> bool {
+        matches!(
+            node.kind,
+            NodeKind::String(_) | NodeKind::Bytes(_) | NodeKind::EncodedString(..)
+        )
+    }
+
+    /// Appends the literal fragment `next` to the literal fragment `last`
+    /// when both are of the same kind and encoding (CRuby joins a run of
+    /// literal fragments into one operand at compile time). Returns
+    /// false, leaving `last` as it is, otherwise. The pairs left apart
+    /// (a `Bytes` fragment, never empty, next to anything) concatenate
+    /// to the same result as separate operands: only an empty fragment
+    /// can act differently from its merged run, and an empty `String`
+    /// next to a non-empty source-encoding `Bytes` is absorbed by it
+    /// either way.
+    fn merge_str_literal(last: &mut Node, next: &Node) -> bool {
+        match (&mut last.kind, &next.kind) {
+            (NodeKind::String(a), NodeKind::String(b)) => a.push_str(b),
+            (NodeKind::EncodedString(a, ea), NodeKind::EncodedString(b, eb)) if ea == eb => {
+                a.extend_from_slice(b)
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// Whether `node` is a string literal fragment with no bytes.
     fn is_empty_str_literal(node: &Node) -> bool {
         match &node.kind {

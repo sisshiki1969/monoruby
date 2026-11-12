@@ -1151,27 +1151,39 @@ pub(super) extern "C" fn concatenate_string(
     arg: *mut Value,
     len: usize,
 ) -> Option<Value> {
-    concatenate_string_inner(vm, globals, arg, len)
+    concatenate_string_inner(vm, globals, arg, len, true)
         .map_err(|err| vm.set_error(err))
         .ok()
 }
 
+/// Concatenates the `len` operands at `arg` (read downward) into a fresh
+/// String, converting each non-String operand with `to_s`.
+///
+/// With `literals` set this is CRuby's `rb_str_concat_literals`, the
+/// `concatstrings` of a `"…#{}…"` interpolation: on top of the
+/// `rb_str_buf_append` negotiation, a result that is still US-ASCII takes
+/// the encoding of every later operand that is not (`"#{u}#{b}"` is
+/// BINARY for a US-ASCII `u` and a BINARY `b`, although `b` may be all
+/// ASCII). Without it — the interpolated Regexp source — the operands
+/// only negotiate.
 fn concatenate_string_inner(
     vm: &mut Executor,
     globals: &mut Globals,
     arg: *mut Value,
     len: usize,
+    literals: bool,
 ) -> Result<Value> {
     use crate::value::rvalue::{CodeRange, Encoding, RStringInner, StringBuf};
     // Build the result as raw bytes so invalid byte sequences in any
     // operand survive interpolation (going through a Rust `String`
     // would silently rewrite them as U+FFFD via `from_utf8_lossy`).
-    // The result seeds its encoding from the FIRST string operand —
-    // bytecodegen guarantees an interpolation starts with a (possibly
-    // empty) literal segment carrying the source encoding — and each
-    // further operand negotiates under CRuby's `compatible_encoding`
-    // rules; an incompatible mix (two non-ASCII operands in different
-    // encodings) raises Encoding::CompatibilityError like `<<`.
+    // The result seeds its encoding from the FIRST operand — the
+    // literal fragment it starts with, the empty source-encoding seed of
+    // a lone `"#{a}"`, or else the first interpolated value's `to_s` —
+    // and each further operand negotiates under CRuby's
+    // `compatible_encoding` rules; an incompatible mix (two non-ASCII
+    // operands in different encodings) raises
+    // Encoding::CompatibilityError like `<<`.
     //
     // The accumulated side's encoding and code range are tracked
     // incrementally (mirroring `RStringInner::extend`'s fold), so the
@@ -1208,6 +1220,13 @@ fn concatenate_string_inner(
     let mut enc: Option<Encoding> = None;
     let mut cr = CodeRange::SevenBit; // classify("") — the fold identity
     let mut digits = [0u8; 20];
+    // `Integer#to_s` is US-ASCII. The Regexp source keeps reading it as
+    // UTF-8, which is what its own encoding selection was settled on.
+    let int_enc = if literals {
+        Encoding::UsAscii
+    } else {
+        Encoding::UTF8
+    };
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
         if !refined {
@@ -1219,8 +1238,9 @@ fn concatenate_string_inner(
                     &mut enc,
                     &mut cr,
                     piece,
-                    Encoding::UTF8,
+                    int_enc,
                     CodeRange::SevenBit,
+                    literals,
                 )?;
                 continue;
             }
@@ -1240,10 +1260,11 @@ fn concatenate_string_inner(
                 inner.as_bytes(),
                 inner.encoding(),
                 inner.code_range(),
+                literals,
             )?;
             continue;
         }
-        let s_val = vm.invoke_tos(globals, v)?;
+        let s_val = vm.invoke_tos(globals, v, literals)?;
         if let Some(inner) = s_val.is_rstring_inner() {
             append_piece(
                 globals,
@@ -1253,6 +1274,7 @@ fn concatenate_string_inner(
                 inner.as_bytes(),
                 inner.encoding(),
                 inner.code_range(),
+                literals,
             )?;
         } else {
             // `invoke_tos` returns the user-defined `to_s` result
@@ -1260,19 +1282,28 @@ fn concatenate_string_inner(
             // only reached when that override returned a non-String.
             // Per CRuby, the bogus result is discarded and the
             // default `Object#to_s` form (`#<ClassName:0xADDR>`) of
-            // the original receiver is emitted instead.
+            // the original receiver is emitted instead — a BINARY
+            // String, as `rb_any_to_s` makes it.
             let s = format!(
                 "#<{}:0x{:016x}>",
                 v.get_real_class_name(&globals.store),
                 v.id()
             );
-            enc = Some(match enc {
-                None => Encoding::UTF8,
-                Some(prev) => prev,
-            });
-            // The appended form is pure ASCII: the fold is the identity
-            // (SevenBit/Valid/Unknown all absorb a SevenBit piece).
-            bytes.extend_from_slice(s.as_bytes());
+            let piece_enc = if literals {
+                Encoding::Ascii8
+            } else {
+                Encoding::UTF8
+            };
+            append_piece(
+                globals,
+                &mut bytes,
+                &mut enc,
+                &mut cr,
+                s.as_bytes(),
+                piece_enc,
+                CodeRange::SevenBit,
+                literals,
+            )?;
         }
     }
     Ok(Value::string_from_inner(RStringInner::from_buf_cr(
@@ -1293,6 +1324,7 @@ fn append_piece(
     piece: &[u8],
     piece_enc: crate::value::rvalue::Encoding,
     piece_cr: crate::value::rvalue::CodeRange,
+    us_ascii_upgrade: bool,
 ) -> Result<()> {
     use crate::value::rvalue::{CodeRange, Encoding};
     *enc = Some(match *enc {
@@ -1332,6 +1364,16 @@ fn append_piece(
         _ => CodeRange::Unknown,
     };
     crate::value::rvalue::buf_append(bytes, piece);
+    // `rb_str_concat_literals`: a US-ASCII result takes the encoding of
+    // any operand that is not US-ASCII, whatever its contents. The code
+    // range was classified under US-ASCII, so it only carries over as
+    // 7-bit into an ASCII-compatible encoding.
+    if us_ascii_upgrade && *enc == Some(Encoding::UsAscii) && piece_enc != Encoding::UsAscii {
+        *enc = Some(piece_enc);
+        if !(*cr == CodeRange::SevenBit && piece_enc.is_ascii_compatible()) {
+            *cr = CodeRange::Unknown;
+        }
+    }
     Ok(())
 }
 
@@ -1380,7 +1422,7 @@ pub(super) extern "C" fn concatenate_regexp(
     // bytes and encoding combine under the same rules as `"#{}"` — a
     // non-ASCII embedded String (e.g. EUC-JP) then upgrades the regexp's
     // encoding (`/#{euc_str}/.encoding == EUC-JP`).
-    let s_val = match concatenate_string_inner(vm, globals, arg, len) {
+    let s_val = match concatenate_string_inner(vm, globals, arg, len, false) {
         Ok(v) => v,
         Err(err) => {
             vm.set_error(err);

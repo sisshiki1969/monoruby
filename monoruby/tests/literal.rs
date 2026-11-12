@@ -502,11 +502,12 @@ fn interpolation_encoding_negotiation() {
 }
 
 #[test]
-fn interpolation_drops_empty_literal_fragments() {
-    // Empty literal fragments are dropped from the concat's operands
-    // (the first operand, which seeds the encoding, excepted). The
-    // result must still be a fresh, unfrozen String with the same
-    // encoding as before. (CRuby 4.0.9 compiles `"#{v}#{""}"` to a bare
+fn interpolation_empty_literal_fragments() {
+    // A trailing empty literal fragment is dropped from the concat's
+    // operands, as CRuby's peephole drops it; a middle one is kept (it
+    // can change a US-ASCII result's encoding, see
+    // `interpolation_concat_literals_encoding`). The result must still
+    // be a fresh, unfrozen String. (CRuby 4.0.9 compiles `"#{v}#{""}"` to a bare
     // `objtostring` and hands back `v.to_s` itself — `v` when `v` is a
     // String, a frozen string for an Integer — so identity and
     // frozenness are only compared where another piece remains.)
@@ -539,6 +540,113 @@ fn interpolation_drops_empty_literal_fragments() {
     // a fresh mutable string.
     run_test(
         r##"eval(%Q{# frozen_string_literal: true\nx = 1\ns = "\#{x}\#{''}y"\n[s, s.frozen?]})"##,
+    );
+}
+
+#[test]
+fn interpolation_concat_literals_encoding() {
+    // CRuby's `concatstrings` (`rb_str_concat_literals`) starts from the
+    // first operand's encoding and upgrades a US-ASCII result to the
+    // encoding of any later operand that is not US-ASCII. Only a lone
+    // `"#{a}"` is seeded with an empty source-encoding literal, so an
+    // interpolated value that comes first decides the encoding (#1827).
+    run_test(
+        r##"
+        b = "a".b
+        u = "a".force_encoding("US-ASCII")
+        ub = "\xff".force_encoding("US-ASCII")
+        e = "".force_encoding("US-ASCII")
+        x = 1
+        f = 1.5
+        s = :sym
+        o = Object.new
+        ej = "あ".encode("EUC-JP")
+        r = []
+        r << "#{b}#{b}" << "#{b}x" << "#{x}#{b}" << "#{s}#{b}" << "#{u}#{u}"
+        r << "#{b}" << "#{u}" << "#{x}#{x}" << "#{x}x" << "#{s}x" << "x#{u}"
+        r << "#{f}#{b}" << "#{nil}#{b}" << "#{true}#{b}" << "#{1r}#{b}"
+        r << "#{Complex(1, 2)}#{b}" << "#{2**70}#{b}" << "#{o}#{b}"
+        r << "#{u}#{b}" << "#{u}#{"あ"}" << "#{ub}#{b}" << "#{ub}x" << "#{ub}#{u}x"
+        r << "#{ej}#{u}" << "#{u}#{ej}" << "#{u}#{ej}#{b}" << "#{:"あ"}#{b}"
+        r << "#{e}#{e}" << "#{e}#{b}" << "#{b}#{e}"
+        r = r.map { [_1.encoding.to_s, _1.valid_encoding?] }
+        r << :"#{u}#{b}".encoding.to_s << :"#{u}#{u}".encoding.to_s
+        "##,
+    );
+    // Empty literal fragments: a middle one upgrades a US-ASCII
+    // accumulation, a trailing one is dropped, adjacent fragments
+    // (`#{""}` included) form one operand.
+    run_test(
+        r##"
+        u = "a".force_encoding("US-ASCII")
+        r = []
+        r << "#{u}#{""}#{u}" << "#{u}#{u}#{""}" << "#{u}#{u}#{""}#{""}"
+        r << "#{""}#{u}" << "#{u}#{"x"}" << "#{u}x#{u}" << "#{u}#{""}#{""}#{u}"
+        r << ("#{u}" "#{u}") << ("#{u}" "x") << ("#{u}#{u}" "")
+        r.map { [_1, _1.encoding.to_s] }
+        "##,
+    );
+    // Adjacent literal fragments whose bytes are not valid UTF-8 are
+    // merged with their neighbours into one operand.
+    run_test(
+        r##"
+        x = 1
+        u = "a".force_encoding("US-ASCII")
+        r = []
+        r << "\xff#{"\xfe"}#{x}" << "\xff#{"a"}#{x}" << "a#{"\xff"}#{x}"
+        r << "#{u}#{"\xff"}#{"a"}#{u}" << "#{u}#{"a"}#{"\xff"}"
+        r.map { [_1.bytes, _1.encoding.to_s, _1.valid_encoding?] }
+        "##,
+    );
+    // An interpolated Regexp source whose piece's `to_s` returns a
+    // non-String falls back to the default `#<Class:0x…>` form.
+    run_test(
+        r##"
+        o = Object.new
+        def o.to_s = 1
+        re = /#{o}x/
+        [re.source.start_with?("#<Object:0x"), re.source.end_with?(">x"), re.encoding.to_s]
+        "##,
+    );
+    // Non-ASCII-compatible operands.
+    run_test(
+        r##"
+        u = "a".force_encoding("US-ASCII")
+        e = "".force_encoding("US-ASCII")
+        w = "".encode("UTF-16LE")
+        a = "a".encode("UTF-16LE")
+        r = []
+        r << "#{w}#{u}" << "#{u}#{w}" << "#{e}#{a}" << "#{e}#{a}#{e}"
+        r.map! { [_1.encoding.to_s, _1.bytes] }
+        r << (begin; "#{u}#{a}"; rescue Encoding::CompatibilityError; :raised; end)
+        r
+        "##,
+    );
+    // The source encoding seeds a lone `"#{a}"`; the other rules apply
+    // under any source encoding.
+    run_test(
+        r##"eval(%Q{# encoding: us-ascii\nb = "a".b\nu = "a".force_encoding("US-ASCII")\n["\#{b}", "\#{u}", "\#{u}\#{b}", "\#{1}x", "\#{u}\#{''}\#{u}"].map { _1.encoding.to_s }})"##,
+    );
+    run_test(
+        r##"eval(%Q{# encoding: euc-jp\nu = "a".force_encoding("US-ASCII")\n["\#{u}", "\#{1}x", "\#{u}\#{''}\#{u}", "\#{u}\#{u}"].map { _1.encoding.to_s }})"##,
+    );
+    // A refined `to_s` result is an operand like any other, and the
+    // same holds once the method is JIT-compiled.
+    run_test(
+        r##"
+        module R1827; refine Integer do; def to_s = "R".b; end; end
+        using R1827
+        u = "a".force_encoding("US-ASCII")
+        ["#{1}#{u}", "#{1}#{u}".encoding.to_s]
+        "##,
+    );
+    run_test(
+        r##"
+        def m1827(a, c) = "#{a}#{c}"
+        b = "a".b
+        u = "a".force_encoding("US-ASCII")
+        [m1827(u, b), m1827(u, u), m1827(1, :s), m1827(b, "あ"), m1827(nil, 2.5)].map { _1.encoding.to_s }
+        "##,
     );
 }
 
