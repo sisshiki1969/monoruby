@@ -536,7 +536,7 @@ fn run_body(globals: &mut Globals, mut thread: Value) {
     let ret = handle.invoke_proc(globals, proc, &args);
     // The exit hook, in this thread's context: releases the mutexes it
     // still holds, answers the fibers that joined it through a scheduler.
-    super::thread_body_exit(handle, globals, 0);
+    super::thread_body_exit(handle, globals, ret.as_ref().map_or(0, |v| v.id()));
     handle.set_terminated();
     let ret = match ret {
         Ok(v) => Some(v),
