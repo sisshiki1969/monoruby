@@ -370,7 +370,7 @@ fn read_all(reader: &mut impl Read, out: &mut Vec<u8>) -> std::io::Result<()> {
 /// remain in `out`.
 fn read_until_step(
     reader: &mut impl BufRead,
-    delim: u8,
+    find: impl Fn(&[u8]) -> Option<usize>,
     out: &mut Vec<u8>,
 ) -> std::io::Result<usize> {
     let mut total = 0;
@@ -390,7 +390,7 @@ fn read_until_step(
                 }
                 Err(e) => return Err(e),
             };
-            match avail.iter().position(|&b| b == delim) {
+            match find(avail) {
                 Some(i) => {
                     out.extend_from_slice(&avail[..=i]);
                     (true, i + 1)
@@ -1921,17 +1921,26 @@ impl IoInner {
 
     /// Read one `\n`-terminated line as raw bytes (pushback-aware).
     pub fn read_line_bytes(&mut self) -> Result<Option<Vec<u8>>> {
+        self.read_line_bytes_by(|b: &[u8]| memchr::memchr(b'\n', b))
+    }
+
+    /// [`Self::read_line_bytes`] up to whatever `find` locates: the bytes
+    /// through the first match, or to the end of the stream.
+    fn read_line_bytes_by(
+        &mut self,
+        find: impl Fn(&[u8]) -> Option<usize> + Copy,
+    ) -> Result<Option<Vec<u8>>> {
         self.flush_wbuf_before_read()?;
         if self.pushback_len() > 0 {
             let cell = self.pushback_cell().unwrap();
-            let nl = cell.borrow().iter().position(|&b| b == b'\n');
+            let nl = find(&cell.borrow());
             match nl {
                 Some(idx) => {
                     return Ok(Some(self.take_pushback(Some(idx + 1))));
                 }
                 None => {
                     let mut line = self.take_pushback(None);
-                    if let Some(rest) = self.read_line_bytes_underlying()? {
+                    if let Some(rest) = self.read_line_bytes_underlying(find)? {
                         line.extend_from_slice(&rest);
                     }
                     // `line` is non-empty: the pushback supplied at least
@@ -1940,10 +1949,13 @@ impl IoInner {
                 }
             }
         }
-        self.read_line_bytes_underlying()
+        self.read_line_bytes_underlying(find)
     }
 
-    fn read_line_bytes_underlying(&mut self) -> Result<Option<Vec<u8>>> {
+    fn read_line_bytes_underlying(
+        &mut self,
+        find: impl Fn(&[u8]) -> Option<usize>,
+    ) -> Result<Option<Vec<u8>>> {
         let mut buf = Vec::new();
         // See `read_underlying`: on a restartable interrupt, push already-
         // read bytes back so the retried getline sees them first.
@@ -1960,7 +1972,7 @@ impl IoInner {
         };
         let size = match &mut self.kind {
             IoKind::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
-            IoKind::Stdin => read_until_step(&mut *stdin_buf(), b'\n', &mut buf)
+            IoKind::Stdin => read_until_step(&mut *stdin_buf(), find, &mut buf)
                 .map_err(|e| map_read_err(e, MonorubyErr::runtimeerr))?,
             IoKind::Stdout => return Err(MonorubyErr::argumenterr("can't read from $stdin")),
             IoKind::Stderr => return Err(MonorubyErr::argumenterr("can't read from $stderr")),
@@ -1969,7 +1981,7 @@ impl IoInner {
                     return Err(MonorubyErr::ioerr("not opened for reading"));
                 }
                 let file = Rc::get_mut(file).unwrap();
-                match read_until_step(&mut *file.reader, b'\n', &mut buf) {
+                match read_until_step(&mut *file.reader, &find, &mut buf) {
                     Ok(n) => n,
                     Err(e) if is_interrupt_kind(e.kind()) => {
                         return Err(interrupted(e.kind(), buf, Some(&file.pushback)));
@@ -1983,7 +1995,7 @@ impl IoInner {
                     .reader
                     .as_mut()
                     .ok_or_else(|| MonorubyErr::ioerr("not opened for reading"))?;
-                match read_until_step(reader, b'\n', &mut buf) {
+                match read_until_step(reader, &find, &mut buf) {
                     Ok(n) => n,
                     Err(e) if is_interrupt_kind(e.kind()) => {
                         return Err(interrupted(e.kind(), buf, Some(&popen.pushback)));
@@ -2178,6 +2190,23 @@ impl IoInner {
         if sep.is_none() && limit.is_none() {
             let buf = universal_newline_bytes(self.read(None)?);
             return Ok(if buf.is_empty() { None } else { Some(buf) });
+        }
+        // The default separator: a converted line ends at the first raw
+        // "\r" or "\n", so read up to either in bulk.
+        if sep == Some(b"\n".as_slice()) && limit.is_none() {
+            let Some(mut line) =
+                self.read_line_bytes_by(|b: &[u8]| memchr::memchr2(b'\n', b'\r', b))?
+            else {
+                return Ok(None);
+            };
+            if line.last() == Some(&b'\r') {
+                match self.read1_preserving(&line)? {
+                    Some(b'\n') | None => {}
+                    Some(b) => self.unget(&[b])?,
+                }
+                *line.last_mut().unwrap() = b'\n';
+            }
+            return Ok(Some(line));
         }
         let paragraph = sep == Some(b"".as_slice());
         let mut buf = Vec::new();
