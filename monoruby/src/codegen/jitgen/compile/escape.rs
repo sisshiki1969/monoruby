@@ -386,7 +386,7 @@ impl<'a> JitContext<'a> {
         if !self.is_bb_end(bc_pos) {
             return;
         }
-        self.settle_virtuals_before_branch(state, ir, bc_pos, true);
+        self.settle_virtuals_before_branch(state, ir, bc_pos, true, &[]);
     }
 
     ///
@@ -395,7 +395,8 @@ impl<'a> JitContext<'a> {
     /// dispatch's per-arm `CondBr` was sunk into, see
     /// [`JitContext::declare_merge`]), dropping the dead ones. With
     /// *carries*, a local's object is left for the merges that may carry
-    /// it ([`Self::merge_carries_virtual`]).
+    /// it ([`Self::merge_carries_virtual`]). The objects in *keep* are
+    /// left alone.
     ///
     pub(super) fn settle_virtuals_before_branch(
         &mut self,
@@ -403,9 +404,16 @@ impl<'a> JitContext<'a> {
         ir: &mut AsmIr,
         branch_pos: BcIndex,
         carries: bool,
+        keep: &[SlotId],
     ) {
         let next_sp = state.next_sp();
-        for (dst, src) in state.virtuals().to_vec() {
+        let settled: Vec<_> = state
+            .virtuals()
+            .iter()
+            .filter(|(dst, _)| !keep.contains(dst))
+            .cloned()
+            .collect();
+        for (dst, src) in settled {
             let dead = if self.is_temp(dst) {
                 dst >= next_sp
             } else {
@@ -423,20 +431,19 @@ impl<'a> JitContext<'a> {
     ///
     /// Settle the elided objects for the `CondBr` at *sink_pos* before
     /// the instruction that produces its condition (reading the slots
-    /// *reads*) is lowered
-    /// with that branch as its sink (`CondBrSink`).
+    /// *reads*) is lowered with that branch as its sink (`CondBrSink`).
     ///
     /// Such a producer may leave its answer in the condition flags, and
     /// nothing may be emitted between it and the branch: the allocation
     /// performed for an object still live at the block's end
     /// ([`Self::settle_virtuals_before_branch`], run again at the
-    /// `CondBr`) is a call, which clobbers them. So every object the block
-    /// end would materialize is materialized here, ahead of the producer,
-    /// and the `CondBr` finds only the ones a merge carries (which it
-    /// leaves elided, emitting nothing). The objects the producer reads
-    /// are left to it: [`Self::settle_virtuals`] already materialized
-    /// those it cannot consume, and a consuming lowering (a predicate on
-    /// an elided receiver) declined before the sink was installed.
+    /// `CondBr`) is a call, which clobbers them. So the block end is
+    /// settled here, ahead of the producer (issue #1837), and the `CondBr`
+    /// finds only the objects a merge carries, for which it emits
+    /// nothing. The objects the producer reads are left to it:
+    /// [`Self::settle_virtuals`] already materialized those it cannot
+    /// consume, and a consuming lowering (a predicate on an elided
+    /// receiver) declined before the sink was installed.
     ///
     pub(super) fn settle_virtuals_for_sink(
         &mut self,
@@ -445,26 +452,7 @@ impl<'a> JitContext<'a> {
         reads: &[SlotId],
         sink_pos: BcIndex,
     ) {
-        if state.virtuals().is_empty() {
-            return;
-        }
-        let next_sp = state.next_sp();
-        for (dst, src) in state.virtuals().to_vec() {
-            if reads.contains(&dst) {
-                continue;
-            }
-            let dead = if self.is_temp(dst) {
-                dst >= next_sp
-            } else {
-                !self.local_live_after(sink_pos, dst)
-            };
-            if dead {
-                state.take_virtual(dst);
-                state.discard_dead_elements(src, dst);
-            } else if !self.merge_carries_virtual(sink_pos, dst, src) {
-                self.materialize_virtual(state, ir, dst);
-            }
-        }
+        self.settle_virtuals_before_branch(state, ir, sink_pos, true, reads);
     }
 
     ///
