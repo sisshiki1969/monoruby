@@ -64,6 +64,7 @@ impl Codegen {
             | AsmInst::BrClassNotIn(..)
             | AsmInst::Deopt(..)
             | AsmInst::HandleError(..)
+            | AsmInst::DeoptIfNull(..)
             | AsmInst::CheckStack { .. }
             | AsmInst::ExecGc { .. }
             | AsmInst::GuardConstBaseClass { .. }

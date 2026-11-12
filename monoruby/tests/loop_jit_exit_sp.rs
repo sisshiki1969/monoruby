@@ -136,3 +136,34 @@ fn break_running_an_ensure_that_writes_an_outer_local() {
         "#,
     );
 }
+
+/// The self-class guard at a loop-JIT unit's entry used to come *before*
+/// the sp bump while its exit, like every exit of the unit, undid the
+/// bump (#1840). The frameless `step` gives the unit a window, so the
+/// undo is non-zero: `B#run` enters the loop compiled for an `A` self,
+/// fails the guard, and the VM resumed with `rsp` above its own local
+/// area, so the `sum` call built its frame over `run`'s.
+#[test]
+fn loop_entry_self_guard_exit_keeps_the_vm_frame() {
+    run_test_once(
+        r#"
+        class LoopEntryA
+          def initialize(n) = @n = n
+          def step(i) = i + @n
+          def run(k)
+            a = 1; b = 2; c = 3
+            i = 0
+            while i < k
+              i = step(i)
+            end
+            [a, b, c, i].sum { |x| x }
+          end
+        end
+        class LoopEntryB < LoopEntryA; end
+        r = []
+        3.times { r << LoopEntryA.new(1).run(300) }
+        20.times { r << LoopEntryB.new(1).run(5) }
+        r
+        "#,
+    );
+}

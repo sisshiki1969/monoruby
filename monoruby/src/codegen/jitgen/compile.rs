@@ -94,6 +94,22 @@ impl<'a> JitContext<'a> {
 
         let mut ir = AsmIr::new(self);
         if let Some(pc) = self.position() {
+            // Loop JIT runs inside an existing invoker / interpreter
+            // frame, so its prologue isn't JIT-emitted. Any
+            // JIT-managed stack space (VirtFPReg spill slots, the
+            // windows of frameless callees) needs its own `subq rsp, _`
+            // here, paired with an `addq rsp, _` of the same value at
+            // every deopt / side-exit handler. The size is resolved by
+            // the pre-codegen pass from this frame's
+            // `stack_offset - base_stack_offset`.
+            //
+            // The bump comes *first*, before anything that can exit:
+            // every exit of the unit undoes it, the self-class guard's
+            // below included, and an exit taken before the bump would
+            // leave the interpreter's `rsp` above its own local area,
+            // where the next call it makes builds its frame over the
+            // caller's (#1840).
+            ir.loop_jit_rsp_bump(LoopRspOffset::Hint(self.current_frame_id()));
             // generate class guard of *self* for loop JIT
             // We must pass pc + 1 because pc (= LoopStart) cause an infinite loop.
             let deopt = ir.new_deopt_with_pc(&state, pc + 1);
@@ -104,16 +120,6 @@ impl<'a> JitContext<'a> {
                 deopt,
             ));
             ir.push(AsmInst::Preparation);
-            // Loop JIT runs inside an existing invoker / interpreter
-            // frame, so its prologue isn't JIT-emitted. Any
-            // JIT-managed spill space (e.g. future VirtFPReg spill
-            // slots) needs its own `subq rsp, _` here, paired with
-            // an `addq rsp, _` of the same value at every deopt /
-            // side-exit handler. The size is resolved by the
-            // pre-codegen pass from this frame's
-            // `stack_offset - base_stack_offset`.
-            ir.loop_jit_rsp_bump(LoopRspOffset::Hint(self.current_frame_id()));
-
         };
 
         //assert!(self.ir.is_empty());

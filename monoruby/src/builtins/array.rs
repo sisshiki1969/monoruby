@@ -1584,7 +1584,7 @@ fn index_assign(
 fn array_index_assign(
     state: &mut AbstractState,
     ir: &mut AsmIr,
-    _: &JitContext,
+    ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
     _: Option<CachedClass>,
@@ -1606,7 +1606,7 @@ fn array_index_assign(
             state.array_integer_index_assign(ir, store, args + 1usize, recv, args);
             true
         }
-        3 => array_slice_assign(state, ir, store, callid),
+        3 => array_slice_assign(state, ir, ctx, store, callid),
         _ => false,
     }
 }
@@ -1631,6 +1631,7 @@ fn array_index_assign(
 fn array_slice_assign(
     state: &mut AbstractState,
     ir: &mut AsmIr,
+    ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
 ) -> bool {
@@ -1669,13 +1670,22 @@ fn array_slice_assign(
     state.load_fixnum(ir, start, GP::Rsi);
     state.load(ir, src, GP::Rdx);
     let using_fpr = state.get_using_fpr(ir);
-    let error = ir.new_error(state);
+    // In a frameless body, the pure helper (`JitContext::wants_pure_helper`).
+    let pure = ctx.wants_pure_helper(state);
+    let helper = if pure {
+        set_array_slice_pure as *const () as u64
+    } else {
+        set_array_slice as *const () as u64
+    };
     ir.fpr_save(using_fpr);
-    ir.inline(move |r#gen, _, _, _| {
-        r#gen.emit_array_slice_assign(set_array_slice as *const () as u64, len)
-    });
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_array_slice_assign(helper, len));
     ir.fpr_restore(using_fpr);
-    ir.handle_error(error);
+    if pure {
+        ctx.pure_helper_exit(state, ir);
+    } else {
+        let error = ir.new_error(state);
+        ir.handle_error(error);
+    }
     true
 }
 
@@ -1723,6 +1733,33 @@ extern "C" fn set_array_slice(
     inner(base, start, len, val, vm, globals)
         .map_err(|err| vm.set_error(err))
         .ok()
+}
+
+///
+/// [`set_array_slice`] for a frameless body: the same splice when the
+/// right-hand side is an Array (so no `#to_ary` is called), and 0 — with
+/// no error set and the receiver untouched — otherwise, and where the
+/// builtin would raise (an index out of range, detected before anything
+/// is stored): the interpreter then performs the assignment again in a
+/// frame.
+///
+extern "C" fn set_array_slice_pure(
+    base: Value,
+    mut start: i64,
+    len: usize,
+    val: Value,
+    _: &mut Executor,
+    _: &mut Globals,
+) -> Option<Value> {
+    val.try_array_ty()?;
+    let mut ary = base.as_array();
+    if start < 0 {
+        start += ary.len() as i64;
+        if start < 0 {
+            return None;
+        }
+    }
+    ary.set_index2(start as usize, len, val).ok()
 }
 
 ///

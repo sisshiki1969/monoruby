@@ -1055,6 +1055,57 @@ fn frameless_yield_outer_locals() {
 }
 
 #[test]
+fn frameless_hash_index_pure_helper() {
+    // `@h[k]` in a frameless callee calls the pure `Hash#[]` helper. It
+    // answers plain lookups, misses with a default value and identity
+    // hashes itself, and declines a miss on a default-proc Hash and a key
+    // whose `#hash` is user-defined: the body deopts (redo before the ivar
+    // store, materialize after it) and the site recompiles to the
+    // ordinary helper.
+    run_test(
+        r##"
+        class K
+          def initialize(v) = (@v = v)
+          attr_reader :v
+          def hash = @v.hash
+          def eql?(o) = o.is_a?(K) && o.v == @v
+          def to_s = "K#{@v}"
+          def inspect = to_s
+        end
+        class C
+          def initialize(h) = (@h = h; @n = 0)
+          attr_reader :n
+          attr_writer :h
+          def get(k) = (@n += 1; @h[k])
+          def peek(k) = @h[k]
+          def run(k) = get(k)
+          def run2(k) = peek(k)
+        end
+        key = "x"
+        plain = {a: 1, "s" => 2, 3 => 4, nil => 5}
+        dflt = Hash.new(:dv); dflt[:a] = 6
+        prc = Hash.new { |h, k| h[k] = "#{k}!" }
+        ident = {}.compare_by_identity; ident[key] = 9
+        obj = {K.new(1) => :k1, a: 7}
+        keys = [:a, "s", 3, nil, :zz, key, K.new(1), 2.5]
+        res = []
+        [plain, dflt, prc, ident, obj].each do |h|
+          c = C.new(h)
+          40.times { |i| res << c.run(keys[i % 8]) << c.run2(keys[(i + 3) % 8]) }
+          res << c.n
+        end
+        c = C.new(plain)
+        60.times do |i|
+          c.h = prc if i == 30
+          res << c.run(keys[i % 5]) << c.run2(keys[i % 4])
+        end
+        res << prc.size << c.n
+        res
+        "##,
+    );
+}
+
+#[test]
 fn frameless_yield_outer_store_then_exit() {
     // The exits of a block after it has stored to its home: an overflow
     // (materialize; the store and the rest of the iteration stay done), a
@@ -1109,5 +1160,98 @@ fn frameless_yield_outer_captured() {
         30.times { res << pr([1, 2, 3]) << bd([4, 5]) }
         res
         "#,
+    );
+}
+
+#[test]
+fn frameless_hash_index_assign_pure_helper() {
+    // `@h[k] = v` in a frameless callee: a new key, an update, a String
+    // key that is dup-frozen, an identity hash, a user-defined key, and
+    // the raising cases (frozen receiver, a new key during iteration),
+    // which are reported from the callee's own frame.
+    run_test(
+        r##"
+        class K
+          def initialize(v) = (@v = v)
+          attr_reader :v
+          def hash = @v.hash
+          def eql?(o) = o.is_a?(K) && o.v == @v
+          def to_s = "K#{@v}"
+          def inspect = to_s
+        end
+        class S
+          def initialize(h) = (@h = h)
+          attr_accessor :h
+          def set(k, v) = (@h[k] = v)
+          def run(k, v) = set(k, v)
+        end
+        res = []
+        s = S.new({})
+        40.times { |i| res << s.run([:a, "s", i, K.new(i % 3)][i % 4], i) }
+        res << s.h.size << s.h.keys.map(&:class)
+        str = +"mut"
+        s.run(str, 1)
+        str << "ated"
+        res << s.h.key?("mut") << s.h.keys.last.frozen?
+        s.h = {}.compare_by_identity
+        30.times { |i| s.run(i.to_s, i) }
+        res << s.h.size
+        s.h = {a: 1}.freeze
+        begin
+          s.run(:b, 2)
+        rescue FrozenError => e
+          res << e.class << e.backtrace_locations.map(&:label).include?("S#set")
+        end
+        h = {a: 1}
+        s.h = h
+        begin
+          h.each { s.run(:new, 2) }
+        rescue RuntimeError => e
+          res << e.message
+        end
+        h.each { s.run(:a, 3) }
+        res << h
+        res
+        "##,
+    );
+}
+
+#[test]
+fn frameless_array_slice_assign_pure_helper() {
+    // `a[s, 2] = v` in a frameless callee: the in-place copy, a resizing
+    // splice, a right-hand side converted by `#to_ary` (Ruby code: the
+    // body hands the call back), and an out-of-range start.
+    run_test(
+        r##"
+        class V
+          def to_ary = [:t, :u, :v]
+          def inspect = "V"
+        end
+        class Q
+          def initialize = (@a = [0] * 8; @n = 0)
+          attr_reader :a, :n
+          def put(s, v) = (@n += 1; @a[s, 2] = v)
+          def run(s, v) = put(s, v)
+        end
+        q = Q.new
+        res = []
+        40.times do |i|
+          v = case i % 5
+              when 0 then [i, i + 1]
+              when 1 then [i]
+              when 2 then V.new
+              when 3 then :sym
+              else [1, 2, 3]
+              end
+          res << q.run(i % 6, v).inspect << q.a.size
+        end
+        begin
+          q.run(-100, [1, 2])
+        rescue IndexError => e
+          res << e.class << e.backtrace_locations.map(&:label).include?("Q#put")
+        end
+        res << q.a << q.n
+        res
+        "##,
     );
 }
