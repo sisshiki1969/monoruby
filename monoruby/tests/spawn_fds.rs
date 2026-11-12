@@ -85,3 +85,35 @@ fn spawn_dup2_cycles_close_others_and_noexec() {
 "##,
     );
 }
+
+/// The same child-side steps, with a `chdir:` that fails after them: the
+/// child reports through the error pipe instead of exec'ing, so this is
+/// also the run in which a coverage build records the steps (a
+/// successful `execve` discards the child's counters).
+#[test]
+fn child_steps_before_a_failing_chdir() {
+    assert_same_as_cruby(
+        r##"
+    res = []
+    r1, w1 = IO.pipe
+    r2, w2 = IO.pipe
+    a, b = w1.fileno, w2.fileno
+    w1.close_on_exec = false
+    bad = "/nonexistent-dir-xyzzy"
+    [
+      -> { Process.spawn("true", a => b, b => a, chdir: bad) },
+      -> { Process.spawn("true", a => a, chdir: bad) },
+      -> { Process.spawn("true", close_others: true, chdir: bad) },
+      -> { Process.spawn("true", 3 => w2, 4 => 3, 5 => 4, chdir: bad) },
+      -> { Process.spawn("true", out: b, err: :out, chdir: bad) },
+      -> { IO.popen(["true", a => b, b => a, chdir: bad]) },
+    ].each do |l|
+      l.call
+      res << :ok
+    rescue SystemCallError => e
+      res << [e.class, e.message]
+    end
+    p res
+"##,
+    );
+}
