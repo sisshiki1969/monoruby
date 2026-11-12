@@ -49,10 +49,17 @@ impl<'a> JitContext<'a> {
             .map(|(begin, _)| begin)
             .collect();
         debug_assert_eq!(heads[0], loop_start);
-        // Each walk can carry a back edge one nesting level further out,
-        // so the bound grows with the number of heads.
-        let limit = 10 * heads.len();
+        // The bound is the length of the chain the recorded back edges can
+        // climb: per head, every slot of the chain a few steps
+        // (`AbstractState::backedge_chain_len`). It is not a small
+        // constant per head — a body that copies along a chain of locals
+        // (`a0 = a1; a1 = a2; ...`, a delay line) moves a type one local
+        // further per walk, so it needs as many walks as it has such
+        // locals, and a bound of ten walks used to abort the process on
+        // a ten-tap one (`doc/fixpoint_engine_plan.md` §2.3).
+        let limit = heads.len() * state.backedge_chain_len();
         for x in 0..limit {
+            let _ = x;
             #[cfg(feature = "jit-debug")]
             eprintln!("########## analyse iteration[{x}]");
             let walk = self.analyse_loop(loop_start, loop_end, &heads, state.clone())?;
@@ -127,13 +134,18 @@ impl<'a> JitContext<'a> {
                 }
             }
             if !changed {
-                break;
-            }
-            if x == limit - 1 {
-                panic!("not fixed")
+                return Ok(());
             }
         }
-        Ok(())
+        // Past the chain's length the walks are not climbing it: give this
+        // compile up rather than the process. The unit is abandoned like
+        // any other failed compile and its code keeps running in the
+        // interpreter.
+        #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
+        eprintln!(
+            "<== back-edge fixpoint of {loop_start:?}..={loop_end:?} not reached in {limit} walks"
+        );
+        Err(CompileError)
     }
 
     fn analyse_loop(

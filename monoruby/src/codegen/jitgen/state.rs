@@ -17,6 +17,7 @@ pub(in crate::codegen::jitgen) use slot::NonNil;
 pub(in crate::codegen::jitgen) use slot::SfGuarded;
 pub(in crate::codegen::jitgen) use slot::DynVarAliasLoad;
 pub(super) use slot::{ClassProofScan, Guarded, Keep, LinkMode, SlotState};
+use slot::LINK_MODE_CHAIN;
 
 /// A frame of the abstract-state chain, shared by reference.
 ///
@@ -159,6 +160,31 @@ impl AbstractState {
         let frame = FrameRef::make_mut(&mut self.frames[pos]);
         frame.grow_fpr_to(fpr.0 + 1);
         frame.set_Sf(slot, fpr, SfGuarded::Float);
+    }
+
+    ///
+    /// An upper bound on how many times one recorded loop back edge over
+    /// this chain can change before it has nowhere left to go — the
+    /// length of the longest chain the back-edge fixpoint
+    /// (`analyse_backedge_fixpoint`) can climb, per loop head.
+    ///
+    /// A back edge is compared by `equiv`: every slot of every frame
+    /// through its type, plus each frame's invariant flags. A slot moves
+    /// at most [`LINK_MODE_CHAIN`] times and a flag once (the join only
+    /// ever clears it), and a head's first recording is one more step.
+    ///
+    /// The bound depends on the number of slots, not on the number of
+    /// loop heads alone: a type reaches one more slot per walk when the
+    /// body copies along a chain of locals (`a0 = a1; a1 = a2; ...`), so
+    /// a body with *n* such locals needs *n* + 1 walks to settle.
+    ///
+    pub(super) fn backedge_chain_len(&self) -> usize {
+        let slots: usize = self
+            .frames
+            .iter()
+            .map(|f| f.slot_state().slots_len())
+            .sum();
+        LINK_MODE_CHAIN * slots + Invariants::FLAGS * self.frames.len() + 1
     }
 
     pub(super) fn depth(&self) -> usize {
@@ -1649,7 +1675,20 @@ impl Invariants {
         }
     }
 
+    /// The number of flags; each is cleared at most once by `join`.
+    const FLAGS: usize = 6;
+
     fn join(&mut self, other: &Self) {
+        // Keep `FLAGS` in step: this destructuring fails to compile when
+        // a field is added.
+        let Invariants {
+            class_version_guard: _,
+            const_version_guard: _,
+            no_capture_guard: _,
+            side_effect_guard: _,
+            class_proofs_settled: _,
+            ivar_ty_guard: _,
+        } = *self;
         self.class_version_guard &= other.class_version_guard;
         self.const_version_guard &= other.const_version_guard;
         self.no_capture_guard &= other.no_capture_guard;

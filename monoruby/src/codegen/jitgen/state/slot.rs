@@ -2534,6 +2534,20 @@ impl AsmIr {
 }
 
 ///
+/// How many times one slot's [`LinkMode`] can change, as [`LinkMode::equiv`]
+/// sees it, along a chain of joins: a constant, its primitive type or
+/// class, that type or `nil` ([`Guarded::NilOr`]), and `Value` — three
+/// steps — plus one of slack for a step that is not a rise (a back edge
+/// is recorded by replacement, and a loop head's float adoption can make
+/// a later one narrower: `doc/fixpoint_engine_plan.md` §2.4).
+///
+/// Whoever adds a layer to [`Guarded`] raises this; the back-edge
+/// fixpoint's walk bound is derived from it
+/// (`AbstractState::backedge_chain_len`).
+///
+pub(super) const LINK_MODE_CHAIN: usize = 4;
+
+///
 /// Mode of linkage between stack slot and fpr registers.
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
