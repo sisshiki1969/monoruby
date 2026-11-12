@@ -586,6 +586,28 @@ fn interpolation_concat_literals_encoding() {
         r.map { [_1, _1.encoding.to_s] }
         "##,
     );
+    // Adjacent literal fragments whose bytes are not valid UTF-8 are
+    // merged with their neighbours into one operand.
+    run_test(
+        r##"
+        x = 1
+        u = "a".force_encoding("US-ASCII")
+        r = []
+        r << "\xff#{"\xfe"}#{x}" << "\xff#{"a"}#{x}" << "a#{"\xff"}#{x}"
+        r << "#{u}#{"\xff"}#{"a"}#{u}" << "#{u}#{"a"}#{"\xff"}"
+        r.map { [_1.bytes, _1.encoding.to_s, _1.valid_encoding?] }
+        "##,
+    );
+    // An interpolated Regexp source whose piece's `to_s` returns a
+    // non-String falls back to the default `#<Class:0x…>` form.
+    run_test(
+        r##"
+        o = Object.new
+        def o.to_s = 1
+        re = /#{o}x/
+        [re.source.start_with?("#<Object:0x"), re.source.end_with?(">x"), re.encoding.to_s]
+        "##,
+    );
     // Non-ASCII-compatible operands.
     run_test(
         r##"
