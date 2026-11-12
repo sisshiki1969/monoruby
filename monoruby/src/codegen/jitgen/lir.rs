@@ -961,6 +961,7 @@ pub(in crate::codegen) enum LInst {
         fid: FuncId,
         inline: bool,
         pure: bool,
+        flags: bool,
         using_fpr: UsingFpr,
     },
     RangeOp {

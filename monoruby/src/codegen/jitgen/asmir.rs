@@ -1780,6 +1780,7 @@ impl AsmIr {
         fid: FuncId,
         inline: bool,
         pure: bool,
+        flags: bool,
     ) {
         self.push(AsmInst::RangeCover {
             start,
@@ -1789,6 +1790,7 @@ impl AsmIr {
             fid,
             inline,
             pure,
+            flags,
             using_fpr,
         });
     }
@@ -3548,6 +3550,10 @@ pub(super) enum AsmInst {
         /// are the whole answer, with no helper behind them (and no
         /// `HandleError` after it).
         pure: bool,
+        /// With `pure`: leave the answer in the condition flags for the
+        /// conditional branch that consumes it (`CondFlags::Int` of
+        /// [`range_cover_flags_kind`]) instead of a boolean in rax.
+        flags: bool,
         using_fpr: UsingFpr,
     },
     ///
@@ -4587,5 +4593,28 @@ impl Codegen {
             testq rax, rax;
             jeq   error;
         }
+    }
+}
+
+///
+/// The flags a `RangeCover { flags: true }` leaves: the predicate of the
+/// last endpoint compare it makes. A failed compare against the start
+/// (when there is an end compare after it) leaves flags that read false
+/// for `Lt` / `Le`; with no end, the start compare is the whole answer.
+/// `None` when neither endpoint bounds anything (the answer is `true`).
+///
+pub(crate) fn range_cover_flags_kind(
+    start: RangeEnd,
+    end: RangeEnd,
+    exclude_end: bool,
+) -> Option<crate::ast::CmpKind> {
+    use crate::ast::CmpKind;
+    let bounded = |e: RangeEnd| !matches!(e, RangeEnd::Const(v) if v.is_nil());
+    if bounded(end) {
+        Some(if exclude_end { CmpKind::Lt } else { CmpKind::Le })
+    } else if bounded(start) {
+        Some(CmpKind::Ge)
+    } else {
+        None
     }
 }

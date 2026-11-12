@@ -994,11 +994,6 @@ impl<'a> JitContext<'a> {
                 callid,
                 cache,
             } => {
-                if state.virtual_at(self.store[callid].recv).is_some()
-                    && let Some(res) = self.consume_virtual(state, ir, callid, bc_pos)
-                {
-                    return Ok(res);
-                }
                 // A method-call condition (`if a.even?` — bytecodegen
                 // marked the following CondBr optimizable): install that
                 // branch as the sink, exactly as for a comparison. A
@@ -1008,6 +1003,21 @@ impl<'a> JitContext<'a> {
                 // As for a comparison: the block end's allocations first.
                 if let Some(sink) = &sink {
                     self.settle_virtuals_for_sink(state, ir, &reads, sink.pos);
+                }
+                // A predicate on an elided receiver takes the sink too
+                // (`(0...n).include?(i)` answers in the flags).
+                if state.virtual_at(self.store[callid].recv).is_some() {
+                    let saved = self.swap_cond_sink(sink);
+                    let res = self.consume_virtual(state, ir, callid, bc_pos);
+                    self.swap_cond_sink(saved);
+                    if let Some(res) = res {
+                        if !matches!(res, CompileResult::Continue) {
+                            self.discard_cond_results();
+                        }
+                        return Ok(res);
+                    }
+                    // Declined: nothing it emitted reads the sink.
+                    self.discard_cond_results();
                 }
                 return self.with_cond_sink(sink, |this| this.method_call(state, ir, callid, cache));
             }

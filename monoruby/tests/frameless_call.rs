@@ -990,6 +990,33 @@ fn frameless_range_include_argument_kinds() {
 }
 
 #[test]
+fn range_include_answers_in_the_branch_flags() {
+    // `include?` on an elided Range consumed only by the branch leaves its
+    // answer in the flags: both endpoints (a failed start compare must read
+    // false for `<` and `<=`), the start alone (`(1..)`), the end alone
+    // (`(..h)`), and the `raise unless` guard shape.
+    run_test(
+        r#"
+        def a(x, w) = (0...w).include?(x) ? 1 : 0
+        def b(x, h) = (2..h).include?(x) ? 1 : 0
+        def c(x) = (1..).include?(x) ? 1 : 0
+        def d(x, h) = (..h).include?(x) ? 1 : 0
+        def e(x, w)
+          raise "out" unless (0...w).include?(x)
+          x
+        end
+        res = []
+        40.times do |i|
+          x = i % 11 - 3
+          res << a(x, 5) << b(x, 6) << c(x) << d(x, 4)
+          res << (begin; e(x, 5); rescue => err; err.message; end)
+        end
+        res
+        "#,
+    );
+}
+
+#[test]
 fn frameless_integer_pow_exits() {
     // `a ** b` in a frameless callee: an overflow returns a Bignum, a
     // negative exponent a Rational, and `0 ** -1` raises ZeroDivisionError,
