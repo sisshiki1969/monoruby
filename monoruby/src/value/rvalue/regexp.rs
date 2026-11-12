@@ -885,6 +885,96 @@ pub(crate) fn has_non_ascii_hex_escape(source: &[u8]) -> bool {
     false
 }
 
+/// The encoding one piece of an interpolated Regexp source pins the
+/// whole pattern to, as CRuby's `rb_reg_preprocess` reports it per piece
+/// (`fixed_enc`) inside `rb_reg_preprocess_dregexp`: an
+/// ASCII-incompatible encoding always, else the piece's own encoding
+/// once it carries a raw non-ASCII byte or a `\xHH` / `\OOO` escape of a
+/// non-ASCII byte, else UTF-8 for a `\u` escape of a non-ASCII
+/// codepoint. `None` for a piece that leaves the encoding open (7-bit
+/// text, ASCII escapes).
+///
+/// Malformed escapes are not judged here: the source is compiled as a
+/// whole afterwards, which refuses them with the usual messages.
+pub(crate) fn dregexp_fixed_encoding(
+    bytes: &[u8],
+    enc: crate::value::Encoding,
+) -> Option<crate::value::Encoding> {
+    if !enc.is_ascii_compatible() || bytes.iter().any(|&b| b >= 0x80) {
+        return Some(enc);
+    }
+    let mut unicode = false;
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] != b'\\' {
+            i += 1;
+            continue;
+        }
+        let digits = |from: usize, max: usize, radix: u32| -> (u32, usize) {
+            let mut val = 0;
+            let mut j = from;
+            while j < bytes.len()
+                && j - from < max
+                && let Some(d) = (bytes[j] as char).to_digit(radix)
+            {
+                val = val * radix + d;
+                j += 1;
+            }
+            (val, j)
+        };
+        match bytes[i + 1] {
+            b'x' => {
+                let (val, next) = digits(i + 2, 2, 16);
+                if next > i + 2 && val >= 0x80 {
+                    return Some(enc);
+                }
+                i = next.max(i + 2);
+            }
+            b'0'..=b'7' => {
+                // `\1`..`\7` may be backreferences, but only an octal
+                // escape reaches 0o200.
+                let (val, next) = digits(i + 1, 3, 8);
+                if val >= 0o200 {
+                    return Some(enc);
+                }
+                i = next;
+            }
+            b'u' => {
+                let (code, next) = if bytes.get(i + 2) == Some(&b'{') {
+                    // `\u{X Y …}`: any non-ASCII codepoint in the list.
+                    let mut j = i + 3;
+                    let mut max = 0;
+                    loop {
+                        while bytes.get(j).is_some_and(|b| b.is_ascii_whitespace()) {
+                            j += 1;
+                        }
+                        let (val, next) = digits(j, 8, 16);
+                        if next == j {
+                            break;
+                        }
+                        max = max.max(val);
+                        j = next;
+                    }
+                    (max, j)
+                } else {
+                    let (val, next) = digits(i + 2, 4, 16);
+                    if next == i + 6 {
+                        (val, next)
+                    } else {
+                        (0, i + 2)
+                    }
+                };
+                unicode |= code >= 0x80;
+                i = next;
+            }
+            // Any other escaped character (`\\` included) is skipped
+            // whole, so an escaped backslash never starts an escape.
+            _ => i += 2,
+        }
+    }
+    unicode.then_some(crate::value::Encoding::UTF8)
+}
+
 /// Scan `src` for a `\u` escape (`\uXXXX` or `\u{...}`) whose
 /// codepoint is non-ASCII (>= 0x80). Returns `true` for the first
 /// such escape, `false` if none. Used to pin the declared encoding

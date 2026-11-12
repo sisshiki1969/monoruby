@@ -1151,7 +1151,7 @@ pub(super) extern "C" fn concatenate_string(
     arg: *mut Value,
     len: usize,
 ) -> Option<Value> {
-    concatenate_string_inner(vm, globals, arg, len, true)
+    concatenate_string_inner(vm, globals, arg, len, None)
         .map_err(|err| vm.set_error(err))
         .ok()
 }
@@ -1159,21 +1159,24 @@ pub(super) extern "C" fn concatenate_string(
 /// Concatenates the `len` operands at `arg` (read downward) into a fresh
 /// String, converting each non-String operand with `to_s`.
 ///
-/// With `literals` set this is CRuby's `rb_str_concat_literals`, the
+/// Without `dregexp` this is CRuby's `rb_str_concat_literals`, the
 /// `concatstrings` of a `"…#{}…"` interpolation: on top of the
 /// `rb_str_buf_append` negotiation, a result that is still US-ASCII takes
 /// the encoding of every later operand that is not (`"#{u}#{b}"` is
 /// BINARY for a US-ASCII `u` and a BINARY `b`, although `b` may be all
-/// ASCII). Without it — the interpolated Regexp source — the operands
-/// only negotiate.
+/// ASCII). With it — the interpolated Regexp source — the operands only
+/// negotiate, and each String piece is first shown to `dregexp`, which
+/// raises the RegexpErrors CRuby's `rb_reg_preprocess_dregexp` raises
+/// before it appends that piece.
 fn concatenate_string_inner(
     vm: &mut Executor,
     globals: &mut Globals,
     arg: *mut Value,
     len: usize,
-    literals: bool,
+    mut dregexp: Option<&mut DregexpPieces>,
 ) -> Result<Value> {
     use crate::value::rvalue::{CodeRange, Encoding, RStringInner, StringBuf};
+    let literals = dregexp.is_none();
     // Build the result as raw bytes so invalid byte sequences in any
     // operand survive interpolation (going through a Rust `String`
     // would silently rewrite them as U+FFFD via `from_utf8_lossy`).
@@ -1252,6 +1255,9 @@ fn concatenate_string_inner(
         // override is consulted for the literal pieces or for a String
         // value.
         if let Some(inner) = v.is_rstring_inner() {
+            if let Some(d) = dregexp.as_deref_mut() {
+                d.check(inner.as_bytes(), inner.encoding(), inner.code_range())?;
+            }
             append_piece(
                 globals,
                 &mut bytes,
@@ -1266,6 +1272,9 @@ fn concatenate_string_inner(
         }
         let s_val = vm.invoke_tos(globals, v, literals)?;
         if let Some(inner) = s_val.is_rstring_inner() {
+            if let Some(d) = dregexp.as_deref_mut() {
+                d.check(inner.as_bytes(), inner.encoding(), inner.code_range())?;
+            }
             append_piece(
                 globals,
                 &mut bytes,
@@ -1397,13 +1406,61 @@ fn format_i64(buf: &mut [u8; 20], n: i64) -> &[u8] {
     &buf[pos..]
 }
 
+/// The per-piece encoding checks of CRuby's `rb_reg_preprocess_dregexp`,
+/// run on each piece of an interpolated Regexp source (after `to_s`)
+/// before it is appended.
+struct DregexpPieces {
+    /// The literal is `/…/n`.
+    noencoding: bool,
+    /// The encoding the pieces seen so far pin the pattern to.
+    fixed: Option<crate::value::rvalue::Encoding>,
+}
+
+impl DregexpPieces {
+    fn check(
+        &mut self,
+        bytes: &[u8],
+        enc: crate::value::rvalue::Encoding,
+        cr: crate::value::rvalue::CodeRange,
+    ) -> Result<()> {
+        use crate::value::rvalue::{CodeRange, Encoding};
+        let enc = if self.noencoding && enc != Encoding::Ascii8 {
+            let seven_bit = match cr {
+                CodeRange::SevenBit => true,
+                CodeRange::Unknown => enc.classify(bytes) == CodeRange::SevenBit,
+                _ => false,
+            };
+            if !seven_bit {
+                return Err(MonorubyErr::regexerr(
+                    "/.../n has a non escaped non ASCII character in non ASCII-8BIT script",
+                ));
+            }
+            Encoding::Ascii8
+        } else {
+            enc
+        };
+        if let Some(e) = crate::value::rvalue::regexp::dregexp_fixed_encoding(bytes, enc) {
+            match self.fixed {
+                Some(p) if p != e => {
+                    return Err(MonorubyErr::regexerr(format!(
+                        "encoding mismatch in dynamic regexp : {} and {}",
+                        p.name(),
+                        e.name()
+                    )));
+                }
+                _ => self.fixed = Some(e),
+            }
+        }
+        Ok(())
+    }
+}
+
 pub(super) extern "C" fn concatenate_regexp(
     vm: &mut Executor,
     globals: &mut Globals,
     arg: *mut Value,
     len: usize,
 ) -> Option<Value> {
-    use crate::value::rvalue::Encoding;
     // Operand 0 is the literal-syntax option word (Onigmo `i`/`m`/`x` bits
     // plus the `NOENCODING` / `KCODE_*` encoding-selector bits for
     // `n`/`u`/`e`/`s`), emitted by `gen_regexp` as a Fixnum (0 = none).
@@ -1422,7 +1479,11 @@ pub(super) extern "C" fn concatenate_regexp(
     // bytes and encoding combine under the same rules as `"#{}"` — a
     // non-ASCII embedded String (e.g. EUC-JP) then upgrades the regexp's
     // encoding (`/#{euc_str}/.encoding == EUC-JP`).
-    let s_val = match concatenate_string_inner(vm, globals, arg, len, false) {
+    let mut pieces = DregexpPieces {
+        noencoding: option & RegexpInner::NOENCODING != 0,
+        fixed: None,
+    };
+    let s_val = match concatenate_string_inner(vm, globals, arg, len, Some(&mut pieces)) {
         Ok(v) => v,
         Err(err) => {
             vm.set_error(err);
@@ -1433,33 +1494,17 @@ pub(super) extern "C" fn concatenate_regexp(
     let bytes = inner.as_bytes().to_vec();
     let mut enc = inner.encoding();
     let mut option = option;
-    // A fixed-encoding Regexp fragment pins the literal's encoding
-    // (CRuby's `rb_reg_preprocess_dregexp`), whatever the String
-    // concatenation above decided: `/#{/[\xC2-\xDF]/n}+/` is BINARY and
-    // byte-matched, although the fragment's `to_s` is 7-bit text and
-    // would compile under UTF-8 as "too short multibyte code string".
-    let mut pinned: Option<Encoding> = None;
-    for i in 0..len {
-        // SAFETY: fragments occupy the `len` operand slots below `arg`.
-        let v = unsafe { *arg.sub(i) };
-        if let Some(re) = v.is_regex()
-            && re.fixed_encoding()
-        {
-            let e = re.declared_encoding();
-            match pinned {
-                Some(p) if p != e => {
-                    vm.set_error(MonorubyErr::regexerr(format!(
-                        "incompatible encodings: {} and {}",
-                        p.name(),
-                        e.name()
-                    )));
-                    return None;
-                }
-                _ => pinned = Some(e),
-            }
-        }
-    }
-    if let Some(e) = pinned {
+    // A piece that pins the encoding (non-ASCII text, a `\xHH` / `\u`
+    // escape of a non-ASCII character, an ASCII-incompatible encoding)
+    // pins the literal to it (CRuby's `rb_reg_preprocess_dregexp`),
+    // whatever the String concatenation above decided: `/#{/[\xC2-\xDF]/n}+/`
+    // is BINARY and byte-matched, although the fragment's `to_s` is 7-bit
+    // text and would compile under UTF-8 as "too short multibyte code
+    // string". A Regexp fragment pins nothing by its own fixed encoding
+    // alone: `/#{/a/u}/` is a US-ASCII pattern, as on CRuby.
+    if !pieces.noencoding
+        && let Some(e) = pieces.fixed
+    {
         enc = e;
         option |= RegexpInner::FIXEDENCODING;
     }

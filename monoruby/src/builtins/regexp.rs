@@ -3735,6 +3735,55 @@ re = Regexp.new(u.("(?<n>a)(b)"))
     }
 
     #[test]
+    fn regexp_interpolation_encoding_mismatch() {
+        // `rb_reg_preprocess_dregexp` (#1845): each piece that pins an
+        // encoding — non-ASCII text, a `\xHH` / `\OOO` / `\u` escape of a
+        // non-ASCII character, an ASCII-incompatible encoding — has to
+        // agree with the earlier ones, else RegexpError, raised before the
+        // String concatenation would raise Encoding::CompatibilityError.
+        run_test(
+            r##"
+            a = "あ"; e = "あ".encode("EUC-JP"); s = "あ".encode("Shift_JIS")
+            b = "\xff".b; w = "a".encode("UTF-16LE"); ea = "a".encode("EUC-JP")
+            eesc = "\\xA4\\xA2".force_encoding("EUC-JP"); uesc = "\\u3042"
+            oesc = "\\244\\242".force_encoding("EUC-JP"); o7 = "\\101"
+            ub = "\\u{3042 41}"; ub7 = "\\u{ 41  42 }"
+            [
+              -> { /#{a}#{e}/ }, -> { /#{e}#{a}/ }, -> { /あ#{e}/ }, -> { /#{e}あ/ },
+              -> { /#{a}#{eesc}/ }, -> { /#{uesc}#{e}/ }, -> { /あ#{e}/ },
+              -> { /#{oesc}#{a}/ }, -> { /#{b}#{a}/ }, -> { /#{a}#{b}/ },
+              -> { /#{w}#{a}/ }, -> { /#{w}#{ea}/ }, -> { /#{e}#{s}/ },
+              -> { /#{e}#{1}#{a}/ }, -> { /#{:"あ"}#{e}/ }, -> { /#{a}#{e}/o },
+              -> { /#{/\xA4\xA2/n}#{a}/ }, -> { /#{/あ/}#{/\xA4\xA2/n}/ },
+              -> { /#{/a/u}#{e}/ }, -> { /#{/a/e}#{/a/u}/ }, -> { /#{/a/u}/ },
+              -> { /#{e}x/ }, -> { /#{a}#{a}/ }, -> { /#{e}#{ea}/ },
+              -> { /#{/[\xC2-\xDF]/n}+/ }, -> { /#{o7}#{a}/ }, -> { /#{ub}#{e}/ },
+              -> { /#{e}#{ub}/ }, -> { /#{ub7}#{a}/ },
+            ].map do |f|
+              r = f.call
+              [r.source.b, r.encoding.to_s, r.fixed_encoding?]
+            rescue => x
+              [x.class, x.message.b]
+            end
+            "##,
+        );
+        // `/…/n` refuses a piece with raw non-ASCII text that is not BINARY.
+        run_test(
+            r##"
+            a = "あ"; ea = "a".encode("EUC-JP"); bb = "\xA4".b
+            fa = "a".dup.force_encoding("EUC-JP"); fe = "\xA4\xA2".dup.force_encoding("EUC-JP")
+            [-> { /#{a}/n }, -> { /#{ea}#{a}/n }, -> { /#{bb}x/n }, -> { /#{ea}x/n },
+             -> { /#{fa}x/n }, -> { /#{fe}x/n }].map do |f|
+              r = f.call
+              [r.source.b, r.encoding.to_s, r.fixed_encoding?]
+            rescue => x
+              [x.class, x.message.b]
+            end
+            "##,
+        );
+    }
+
+    #[test]
     fn regexp_nested_quantifier_not_reduced() {
         // Bug #17341 semantics (ported into our Onigmo fork): a+?*
         // behaves as (a+?)*; the match consumes all input.
