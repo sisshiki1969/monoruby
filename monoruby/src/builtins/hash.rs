@@ -2287,85 +2287,64 @@ fn include(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/inspect.html]
 #[monoruby_builtin]
 fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use crate::builtins::encoding::{InspectBuf, inspect_resenc, rb_inspect_in};
     let self_val = lfp.self_val();
+    if self_val.as_hash().len() == 0 {
+        return Ok(Value::string_from_inner(RStringInner::from_encoding(
+            b"{}",
+            Encoding::UsAscii,
+        )));
+    }
     crate::value::exec_recursive(
         self_val.id(),
         || {
+            // CRuby's `inspect_hash` / `inspect_i`: keys and values
+            // through `rb_inspect`, a Symbol key as its name, the result
+            // taking the first key's encoding and then that of any
+            // non-ASCII piece (#1841).
+            let resenc = inspect_resenc(globals);
             let escape = globals.store.inspect_escape();
-            let escape_enc = globals.store.inspect_escape_encoding();
-            let mk = |s: String| {
-                if escape {
-                    Value::string_from_inner(RStringInner::from_encoding(
-                        crate::value::escape_nonascii_to_u(&s).as_bytes(),
-                        escape_enc,
-                    ))
-                } else {
-                    Value::string(s)
-                }
-            };
-            let hash = self_val.as_hash();
-            if hash.len() == 0 {
-                return Ok(mk("{}".to_string()));
-            }
-            let mut s = String::from("{");
+            let mut buf = InspectBuf::new("{");
             let mut first = true;
-            for (k, v) in hash.iter() {
-                if !first {
-                    s.push_str(", ");
+            for (k, v) in self_val.as_hash().iter() {
+                if let Some(sym) = k.try_symbol() {
+                    // `rb_sym2str(key)` gives the encoding; the label is
+                    // the bare name, or `"name"` when it needs quoting
+                    // (stricter than `Symbol#inspect`: operators,
+                    // `=`-setters, `@` / `$` names are quoted).
+                    if first {
+                        buf.copy_encoding(&crate::builtins::symbol::symbol_string_inner(sym));
+                    } else {
+                        buf.cat(", ");
+                    }
+                    let label = crate::value::symbol_hash_label(sym, escape);
+                    let label = if escape {
+                        crate::value::escape_nonascii_to_u(&label)
+                    } else {
+                        label
+                    };
+                    buf.append_str(&globals.store, &label)?;
+                    buf.cat(": ");
+                } else {
+                    let ks = rb_inspect_in(vm, globals, k, resenc)?;
+                    let ks = ks.as_rstring_inner();
+                    if first {
+                        buf.copy_encoding(ks);
+                    } else {
+                        buf.cat(", ");
+                    }
+                    buf.append(&globals.store, ks)?;
+                    buf.cat(" => ");
                 }
                 first = false;
-                let v_str = inspect_value_for_hash(vm, globals, v)?;
-                if let Some(sym) = k.try_symbol() {
-                    // Hash short form: bare `name:` only for plain-
-                    // identifier symbols; operators / `=`-setters /
-                    // `@`/`$` / quoted names use `"name":` (stricter
-                    // than `Symbol#inspect`).
-                    let key_str = crate::value::symbol_hash_label(sym, escape);
-                    s.push_str(&format!("{key_str}: {v_str}"));
-                } else {
-                    let k_str = inspect_value_for_hash(vm, globals, k)?;
-                    s.push_str(&format!("{k_str} => {v_str}"));
-                }
+                let vs = rb_inspect_in(vm, globals, v, resenc)?;
+                buf.append(&globals.store, vs.as_rstring_inner())?;
             }
-            s.push('}');
-            Ok(mk(s))
+            buf.cat("}");
+            Ok(buf.into_value())
         },
-        Value::string("{...}".to_string()),
+        Value::string_from_inner(RStringInner::from_encoding(b"{...}", Encoding::UsAscii)),
     )
-}
-
-/// Return the string to embed for a hash key/value when rendering
-/// `Hash#inspect`. Calls Ruby `#inspect`; if the result is not a String,
-/// calls Ruby `#to_s` on it, but does not coerce further (no `#to_str`).
-/// Per CRuby `rb_hash_inspect`, exceptions raised by `#to_s` propagate.
-fn inspect_value_for_hash(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    v: Value,
-) -> Result<String> {
-    let inspected = vm.invoke_method_inner(globals, IdentId::INSPECT, v, &[], None, None)?;
-    if let Some(inner) = inspected.is_rstring_inner() {
-        if let Some(esc) = crate::value::escape_unicode_noncompat_component(inner) {
-            return Ok(esc);
-        }
-    }
-    if let Some(s) = inspected.is_str() {
-        return Ok(s.to_string());
-    }
-    let to_s_result =
-        vm.invoke_method_inner(globals, IdentId::TO_S, inspected, &[], None, None)?;
-    if let Some(inner) = to_s_result.is_rstring_inner() {
-        if let Some(esc) = crate::value::escape_unicode_noncompat_component(inner) {
-            return Ok(esc);
-        }
-    }
-    if let Some(s) = to_s_result.is_str() {
-        Ok(s.to_string())
-    } else {
-        // #to_s returned a non-String; fall back to the default object
-        // representation rather than coercing via #to_str.
-        Ok(to_s_result.to_s(&globals.store))
-    }
 }
 
 ///

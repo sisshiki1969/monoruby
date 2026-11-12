@@ -585,72 +585,39 @@ fn empty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/inspect.html]
 #[monoruby_builtin]
 fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use crate::builtins::encoding::{InspectBuf, inspect_resenc, rb_inspect_in};
     let self_val = lfp.self_val();
+    if self_val.as_array().len() == 0 {
+        return Ok(Value::string_from_inner(RStringInner::from_encoding(
+            b"[]",
+            Encoding::UsAscii,
+        )));
+    }
     crate::value::exec_recursive(
         self_val.id(),
         || {
-            let escape = globals.store.inspect_escape();
-            let escape_enc = globals.store.inspect_escape_encoding();
-            let ary = self_val.as_array();
-            if ary.len() == 0 {
-                return Ok(Value::string_from_inner(RStringInner::from_encoding(
-                    b"[]",
-                    Encoding::UsAscii,
-                )));
-            }
-            let mut s = String::from("[");
-            for (i, elem) in ary.iter().enumerate() {
+            // CRuby's `inspect_ary`: each element through `rb_inspect`,
+            // the result taking the first element's encoding and then
+            // that of any non-ASCII one (#1841).
+            let resenc = inspect_resenc(globals);
+            let mut buf = InspectBuf::new("[");
+            let mut i = 0;
+            // The array may change under a user-defined `#inspect`.
+            while let Some(elem) = self_val.as_array().get(i).copied() {
+                let s = rb_inspect_in(vm, globals, elem, resenc)?;
+                let s = s.as_rstring_inner();
                 if i > 0 {
-                    s.push_str(", ");
-                }
-                let inspected =
-                    vm.invoke_method_inner(globals, IdentId::INSPECT, *elem, &[], None, None)?;
-                // If #inspect returned a String, use it directly.
-                // Otherwise, call Ruby #to_s on the result.
-                if let Some(str_inner) = inspected.is_rstring_inner() {
-                    if let Some(esc) =
-                        crate::value::escape_unicode_noncompat_component(str_inner)
-                    {
-                        s.push_str(&esc);
-                    } else {
-                        let bytes = str_inner.as_bytes();
-                        match std::str::from_utf8(bytes) {
-                            Ok(utf8) => s.push_str(utf8),
-                            Err(_) => s.push_str(&inspected.to_s(&globals.store)),
-                        }
-                    }
+                    buf.cat(", ");
                 } else {
-                    let to_s_result =
-                        vm.invoke_method_inner(globals, IdentId::TO_S, inspected, &[], None, None)?;
-                    if let Some(str_inner) = to_s_result.is_rstring_inner() {
-                        if let Some(esc) =
-                            crate::value::escape_unicode_noncompat_component(str_inner)
-                        {
-                            s.push_str(&esc);
-                        } else {
-                            let bytes = str_inner.as_bytes();
-                            match std::str::from_utf8(bytes) {
-                                Ok(utf8) => s.push_str(utf8),
-                                Err(_) => s.push_str(&to_s_result.to_s(&globals.store)),
-                            }
-                        }
-                    } else {
-                        // If #to_s also doesn't return a String, use default representation
-                        s.push_str(&to_s_result.to_s(&globals.store));
-                    }
+                    buf.copy_encoding(s);
                 }
+                buf.append(&globals.store, s)?;
+                i += 1;
             }
-            s.push(']');
-            if escape {
-                Ok(Value::string_from_inner(RStringInner::from_encoding(
-                    crate::value::escape_nonascii_to_u(&s).as_bytes(),
-                    escape_enc,
-                )))
-            } else {
-                Ok(Value::string(s))
-            }
+            buf.cat("]");
+            Ok(buf.into_value())
         },
-        Value::string("[...]".to_string()),
+        Value::string_from_inner(RStringInner::from_encoding(b"[...]", Encoding::UsAscii)),
     )
 }
 

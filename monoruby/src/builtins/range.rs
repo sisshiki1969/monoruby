@@ -59,6 +59,8 @@ pub(super) fn init(globals: &mut Globals) {
     // block / fallback decision.
     globals.define_builtin_func(RANGE_CLASS, "__builtin_sum", int_sum, 1);
     globals.define_builtin_func(RANGE_CLASS, "minmax", minmax, 0);
+    globals.define_builtin_func(RANGE_CLASS, "inspect", inspect, 0);
+    globals.define_builtin_func(RANGE_CLASS, "to_s", to_s, 0);
 }
 
 ///
@@ -1360,6 +1362,76 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
 }
 
+///
+/// ### Range#inspect
+///
+/// - inspect -> String
+///
+/// CRuby's `inspect_range`: each endpoint through `rb_inspect` (so a
+/// user-defined `#inspect` shows), a lone `nil` endpoint left out, and
+/// the result in the encoding the pieces negotiate — `(1..2).inspect`
+/// is US-ASCII, and a beginless range starts from an empty ASCII-8BIT
+/// buffer, so `(..1).inspect` is ASCII-8BIT (#1841).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Range/i/inspect.html]
+#[monoruby_builtin]
+fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use crate::builtins::encoding::{InspectBuf, inspect_resenc, rb_inspect_in};
+    let self_val = lfp.self_val();
+    let range = self_val.as_range();
+    let (start, end, excl) = (range.start(), range.end(), range.exclude_end());
+    let sep = if excl { "..." } else { ".." };
+    crate::value::exec_recursive(
+        self_val.id(),
+        || {
+            let resenc = inspect_resenc(globals);
+            let mut buf = if !start.is_nil() || end.is_nil() {
+                let s = rb_inspect_in(vm, globals, start, resenc)?;
+                InspectBuf::from_piece(&globals.store, s.as_rstring_inner())?
+            } else {
+                InspectBuf::new("")
+            };
+            buf.cat(sep);
+            if start.is_nil() || !end.is_nil() {
+                let s = rb_inspect_in(vm, globals, end, resenc)?;
+                buf.append(&globals.store, s.as_rstring_inner())?;
+            }
+            Ok(buf.into_value())
+        },
+        Value::string_from_inner(RStringInner::from_encoding(
+            if excl {
+                b"(... ... ...)"
+            } else {
+                b"(... .. ...)"
+            },
+            Encoding::Ascii8,
+        )),
+    )
+}
+
+///
+/// ### Range#to_s
+///
+/// - to_s -> String
+///
+/// CRuby's `range_to_s`: each endpoint through `to_s`, the result
+/// starting from a copy of the first one's (#1841).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Range/i/to_s.html]
+#[monoruby_builtin]
+fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use crate::builtins::encoding::{InspectBuf, rb_obj_as_string};
+    let self_val = lfp.self_val();
+    let range = self_val.as_range();
+    let (start, end, excl) = (range.start(), range.end(), range.exclude_end());
+    let s = rb_obj_as_string(vm, globals, start)?;
+    let e = rb_obj_as_string(vm, globals, end)?;
+    let mut buf = InspectBuf::from_piece(&globals.store, s.as_rstring_inner())?;
+    buf.cat(if excl { "..." } else { ".." });
+    buf.append(&globals.store, e.as_rstring_inner())?;
+    Ok(buf.into_value())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -1449,6 +1521,21 @@ mod tests {
             "(..10).cover?(4...11)",
             "(0..10.0).cover?(5...11.0)",
             "(..10.0).cover?(...11.0)",
+        ]);
+    }
+
+    #[test]
+    fn range_inspect_to_s_dispatch() {
+        // `Range#inspect` / `#to_s` call the endpoints' own `#inspect` /
+        // `#to_s`, as CRuby's `rb_inspect` / `rb_obj_as_string` do.
+        run_tests(&[
+            r#"c = Class.new { include Comparable; def <=>(o) = 0
+                              def inspect = "CI"; def to_s = "CS" }
+               r = (c.new..c.new)
+               [r.inspect, r.to_s, [r].inspect, (c.new...).inspect, (...c.new).to_s]"#,
+            r#"c = Class.new { include Comparable; def <=>(o) = 0; def inspect = 1; def to_s = 2 }
+               (c.new..c.new).inspect.sub(/0x\h+/, "").sub(/0x\h+/, "")"#,
+            r#"a = []; r = (a..a); a << r; [r.inspect, r.inspect.encoding.name]"#,
         ]);
     }
 

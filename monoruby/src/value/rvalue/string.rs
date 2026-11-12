@@ -2886,6 +2886,19 @@ impl EncBuf {
         self.append(store, s.as_bytes(), s.encoding(), s.is_ascii_only())
     }
 
+    /// Append ASCII bytes without touching the encoding: CRuby's
+    /// `rb_str_buf_cat` of a separator.
+    pub fn push_ascii(&mut self, s: &[u8]) {
+        debug_assert!(s.is_ascii());
+        buf_append(&mut self.buf, s);
+    }
+
+    /// Re-tag what has been built so far: CRuby's `rb_enc_copy`.
+    pub fn set_encoding(&mut self, enc: Encoding) {
+        self.enc = enc;
+        self.seven_bit = enc.is_ascii_compatible() && self.buf.is_ascii();
+    }
+
     /// The string built, with a lazy code range.
     pub fn finish(self) -> RStringInner {
         RStringInner::from(self.buf, self.enc, CodeRange::Unknown)

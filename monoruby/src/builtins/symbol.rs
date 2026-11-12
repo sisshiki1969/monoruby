@@ -132,6 +132,17 @@ fn sym_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn sym_inspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let sym = lfp.self_val().as_symbol();
     let s = inspect_symbol(sym, globals.store.inspect_escape());
+    // CRuby's `sym_inspect`: a name that needs no quoting is copied in
+    // the symbol's own encoding (`:a.inspect` is US-ASCII whatever
+    // `default_external` says, #1841); a quoted one is `String#inspect`'s
+    // rendering, in the result encoding.
+    if !s.starts_with(":\"") {
+        let enc = symbol_string_inner(sym).encoding();
+        return Ok(Value::string_from_inner(RStringInner::from_encoding(
+            s.as_bytes(),
+            enc,
+        )));
+    }
     Ok(crate::builtins::encoding::inspect_result(globals, s))
 }
 

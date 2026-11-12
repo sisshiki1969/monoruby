@@ -1882,12 +1882,36 @@ pub(crate) fn inspect_embedded(globals: &Globals, s: String) -> String {
 /// Unlike [`inspect_embedded`], this dispatches `#inspect`, so a
 /// user-defined one is what gets embedded.
 pub(crate) fn rb_inspect(vm: &mut Executor, globals: &mut Globals, obj: Value) -> Result<Value> {
+    let resenc = inspect_resenc(globals);
+    rb_inspect_in(vm, globals, obj, resenc)
+}
+
+/// `rb_inspect`'s result encoding, as [`rb_inspect_in`] takes it:
+/// `default_internal`, else `default_external`, UTF-8 when neither is
+/// set. A container looks it up once rather than once per element.
+pub(crate) fn inspect_resenc(globals: &mut Globals) -> Encoding {
+    default_internal_or_external(globals).unwrap_or(Encoding::UTF8)
+}
+
+/// [`rb_inspect`] against a result encoding the caller has already
+/// looked up ([`inspect_resenc`]).
+pub(crate) fn rb_inspect_in(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    obj: Value,
+    resenc: Encoding,
+) -> Result<Value> {
     let res = vm.invoke_method_inner(globals, IdentId::INSPECT, obj, &[], None, None)?;
-    let res = rb_obj_as_string(vm, globals, res)?;
+    let res = if res.is_rstring_inner().is_some() {
+        res
+    } else {
+        rb_obj_as_string(vm, globals, res)?
+    };
     let inner = res.as_rstring_inner();
     let enc = inner.encoding();
-    let ascii_only = enc.is_ascii_compatible() && inner.as_bytes().is_ascii();
-    let resenc = default_internal_or_external(globals).unwrap_or(Encoding::UTF8);
+    // The code range is cached on the piece, so the container appending
+    // it does not scan it again.
+    let ascii_only = enc.is_ascii_compatible() && inner.is_ascii_only();
     let escape = !ascii_only && (!resenc.is_ascii_compatible() || enc != resenc);
     if !escape {
         return Ok(res);
@@ -1901,7 +1925,11 @@ pub(crate) fn rb_inspect(vm: &mut Executor, globals: &mut Globals, obj: Value) -
 /// `rb_obj_as_string`: a String as it is, anything else through its
 /// `#to_s` — and, when that is no String either, `rb_any_to_s`'s
 /// `#<Class:0x…>`.
-fn rb_obj_as_string(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Value> {
+pub(crate) fn rb_obj_as_string(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<Value> {
     if v.is_rstring_inner().is_some() {
         return Ok(v);
     }
@@ -1909,12 +1937,70 @@ fn rb_obj_as_string(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resul
     if s.is_rstring_inner().is_some() {
         return Ok(s);
     }
+    // `rb_any_to_s` builds it with `rb_sprintf`: ASCII-8BIT when the
+    // class name is ASCII.
     let class_name = v.get_real_class_name(&globals.store);
-    Ok(Value::string(format!(
+    Ok(Value::string_sprintf(format!(
         "#<{}:0x{:016x}>",
         class_name,
         v.id()
     )))
+}
+
+/// A rendering built the way CRuby's container `#inspect`s build theirs
+/// (`inspect_ary`, `inspect_hash`, `inspect_range`), so that it ends up
+/// in the encoding CRuby's does: the buffer starts out ASCII-8BIT
+/// (`rb_str_buf_new2`), takes the encoding of the first piece
+/// (`rb_enc_copy`), and every piece is then appended under
+/// `rb_str_buf_append`'s negotiation — an all-ASCII piece leaves the
+/// encoding alone, a non-ASCII one takes over an all-ASCII buffer. So
+/// `[1, "a"].inspect` is US-ASCII (`1.inspect` is) and `["a", 1].inspect`
+/// follows `"a".inspect`, which is in `default_external` (#1841).
+///
+/// The separators are ASCII and appended as bytes (`rb_str_buf_cat2`),
+/// which never changes the encoding.
+pub(crate) struct InspectBuf(crate::value::rvalue::EncBuf);
+
+impl InspectBuf {
+    /// `rb_str_buf_new2(open)`.
+    pub(crate) fn new(open: &str) -> Self {
+        let mut buf = crate::value::rvalue::EncBuf::with_capacity(Encoding::Ascii8, 32);
+        buf.push_ascii(open.as_bytes());
+        Self(buf)
+    }
+
+    /// `rb_str_dup(piece)`: a buffer that starts as a copy of `piece`.
+    pub(crate) fn from_piece(store: &Store, piece: &RStringInner) -> Result<Self> {
+        let mut buf = crate::value::rvalue::EncBuf::new(piece.encoding());
+        buf.append_inner(store, piece)?;
+        Ok(Self(buf))
+    }
+
+    /// `rb_str_buf_cat2`: ASCII bytes, the encoding untouched.
+    pub(crate) fn cat(&mut self, s: &str) {
+        self.0.push_ascii(s.as_bytes());
+    }
+
+    /// `rb_enc_copy(buf, piece)`.
+    pub(crate) fn copy_encoding(&mut self, piece: &RStringInner) {
+        self.0.set_encoding(piece.encoding());
+    }
+
+    /// `rb_str_buf_append`: raises `Encoding::CompatibilityError` for two
+    /// non-ASCII pieces in different encodings, as CRuby does.
+    pub(crate) fn append(&mut self, store: &Store, piece: &RStringInner) -> Result<()> {
+        self.0.append_inner(store, piece)
+    }
+
+    /// [`append`](Self::append) of a rendering monoruby made as a Rust
+    /// `String` (always UTF-8), such as a Hash's symbol label.
+    pub(crate) fn append_str(&mut self, store: &Store, s: &str) -> Result<()> {
+        self.0.append(store, s.as_bytes(), Encoding::UTF8, false)
+    }
+
+    pub(crate) fn into_value(self) -> Value {
+        Value::string_from_inner(self.0.finish())
+    }
 }
 
 /// `default_internal`, else `default_external`: the encoding
@@ -6778,6 +6864,50 @@ mod tests {
                Encoding.default_external = o
                r"#,
         ]);
+    }
+
+    #[test]
+    fn container_inspect_encoding() {
+        // #1841: a container's `#inspect` takes the encoding of its first
+        // piece, then that of a non-ASCII one, as CRuby's `inspect_ary` /
+        // `inspect_hash` / `inspect_range` build it — not the result
+        // encoding wholesale. The harness runs under a UTF-8
+        // `default_external`, where `[1].inspect` is still US-ASCII.
+        run_tests(&[
+            r#"[[].inspect, [1].inspect, [nil].inspect, ["a"].inspect, [1, "a"].inspect,
+                ["a", 1].inspect, [:a].inspect, [:"a b"].inspect, [1, "é"].inspect,
+                [[1]].inspect, [1..2].inspect].map { [_1, _1.encoding.name] }"#,
+            r#"[{}.inspect, { a: 1 }.inspect, { "a b": 1 }.inspect, { "a" => 1 }.inspect,
+                { 1 => "é" }.inspect, { あ: 1 }.inspect, { a: "x" }.inspect].map { [_1, _1.encoding.name] }"#,
+            r#"[(1..2).inspect, (1..).inspect, (..1).inspect, ("a".."b").inspect,
+                (nil..nil).inspect, (1...2).inspect, (1..2).to_s, ("a".."b").to_s,
+                (..1).to_s, (nil..nil).to_s].map { [_1, _1.encoding.name] }"#,
+            r#"[:a.inspect, :"a b".inspect, :あ.inspect, :"あ b".inspect, :+.inspect,
+                :a=.inspect].map { [_1, _1.encoding.name] }"#,
+            // The encoding reaches interpolation (a US-ASCII first piece
+            // takes the next one's).
+            r##"["#{[1]}#{"a".b}".encoding.name, "#{{a: 1}}#{"a".b}".encoding.name,
+                "#{1..2}#{"a".b}".encoding.name]"##,
+            // A user-defined `#inspect` decides its piece's encoding.
+            r#"c = Class.new { def initialize(s) = @s = s; def inspect = @s }
+               [[c.new("x".b)], [c.new("x".encode("EUC-JP"))], [c.new("é")],
+                [1, c.new("é")], [c.new("あ".encode("EUC-JP"))], { c.new("x".b) => 1 }]
+                 .map { [_1.inspect, _1.inspect.encoding.name] }"#,
+            // Recursion markers.
+            r#"a = [1]; a << a; h = {}; h[:a] = h
+               [a.inspect, a.inspect.encoding.name, h.inspect, h.inspect.encoding.name]"#,
+        ]);
+        for enc in ["US_ASCII", "ASCII_8BIT", "EUC_JP"] {
+            run_tests(&[format!(
+                r#"o = Encoding.default_external
+                   Encoding.default_external = Encoding::{enc}
+                   r = [[1], [nil], [1, "a"], ["a", 1], [:a], {{ a: 1 }}, {{ "a" => 1 }},
+                        1..2, ..1, "a".."b", :a, :"a b", ["é"], {{ 1 => "é" }}]
+                         .map {{ [_1.inspect.b, _1.inspect.encoding.name, _1.to_s.encoding.name] }}
+                   Encoding.default_external = o
+                   r"#
+            )]);
+        }
     }
 
     #[test]
