@@ -2034,17 +2034,7 @@ pub(crate) fn flush_pending_reports(vm: &mut Executor, globals: &mut Globals) {
         }) else {
             return;
         };
-        let stderr = globals
-            .get_gvar(IdentId::get_id("$stderr"))
-            .unwrap_or_default();
-        let _ = vm.invoke_method_inner(
-            globals,
-            IdentId::get_id("write"),
-            stderr,
-            &[Value::string(text)],
-            None,
-            None,
-        );
+        let _ = crate::builtins::write_error_str(vm, globals, Value::string(text));
         SCHEDULER.with(|s| s.borrow_mut().flushing_reports = false);
     }
 }

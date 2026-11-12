@@ -992,6 +992,19 @@ fn main() {
             parser::set_cli_source_encoding(path.clone(), enc.to_string());
         }
     }
+    // CRuby's `process_options` ends its encoding setup with
+    // `rb_stdio_set_default_encoding`, i.e. `set_encoding(nil)` on the
+    // three standard streams: under a default internal encoding they get
+    // the external/internal pair, so a write transcodes to the external
+    // encoding and a read to the internal one (#1848). It also refuses an
+    // ASCII-incompatible external encoding for the text-mode `STDIN`
+    // (`-E UTF-16LE`). Without an encoding switch the call leaves the
+    // streams as they start out, so it is skipped then.
+    if opts.external_enc.is_some() || internal_enc.is_some() || opts.kcode.is_some() {
+        prelude.push_str(
+            "STDIN.set_encoding(nil)\nSTDOUT.set_encoding(nil)\nSTDERR.set_encoding(nil)\n",
+        );
+    }
     if let Some(digits) = &opts.record_sep {
         let lit = if digits.is_empty() {
             // Bare `-0`: NUL separator.

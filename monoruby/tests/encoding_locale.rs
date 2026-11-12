@@ -450,3 +450,100 @@ fn argv_and_stdin_script_follow_the_locale() {
         }
     }
 }
+
+/// `-E EXT:INT` / `-U` give the standard streams the default encoding
+/// pair, as CRuby's `rb_stdio_set_default_encoding` does: a write to
+/// `$stdout` / `$stderr` transcodes to the external encoding (raising
+/// when it cannot), a read from `$stdin` transcodes to the internal one,
+/// and the default `Warning.warn` still writes its bytes untranscoded
+/// (`rb_write_error_str`) (#1848). Compared byte for byte.
+#[test]
+fn stdio_follow_command_line_default_internal() {
+    use std::io::Write;
+    let path = write_script(
+        "mr_enc_locale_stdio.rb",
+        r##"
+# Each step reports an error by its class only (an ASCII line, which
+# every external encoding here can take).
+def t
+  yield
+rescue => e
+  STDOUT.write("#{e.class}\n")
+end
+p [$stdout.external_encoding, $stdout.internal_encoding,
+   $stderr.external_encoding, $stderr.internal_encoding,
+   $stdin.external_encoding, $stdin.internal_encoding]
+t { puts "\u3042" }
+t { print :"\u3044", 1, "\n" }
+t { $stdout << "\u3046\n" }
+t { $stdout.write("\u3048\n", "\u304A\n") }
+t { printf("%s\n", "\u304B") }
+t { p "\u304D" }
+t { puts "\u304F".encode("EUC-JP"), "\u3051".encode("Shift_JIS") }
+t { puts "caf\u00e9" }
+t { $stdout.write "\xE3\x81\x82".b }
+t { puts "ascii" }
+$stdout.flush
+t { $stderr.puts "\u3053" }
+t { warn "\u3055" }
+# The input is EUC-JP: read it where that is valid (or not converted).
+if $stdin.internal_encoding.nil? || $stdin.external_encoding == Encoding::EUC_JP
+  l = $stdin.gets
+  p l&.encoding, l&.bytes
+  l = $stdin.read
+  p l&.encoding, l&.bytes
+end
+Encoding.default_internal = nil
+p [$stdout.external_encoding, $stdout.internal_encoding]
+$stdout.set_encoding(nil)
+p [$stdout.external_encoding, $stdout.internal_encoding]
+"##,
+    );
+    let run = |mut cmd: Command, switches: &[&str]| {
+        let mut child = cmd
+            .args(switches)
+            .arg(&path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("failed to spawn");
+        // "あ\nい\n" in EUC-JP.
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"\xa4\xa2\n\xa4\xa4\n")
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        (out.status.code(), out.stdout, out.stderr)
+    };
+    let locales = [LOCALES[1], LOCALES[3]];
+    let switch_sets: &[&[&str]] = &[
+        &[],
+        &["-E", "EUC-JP:UTF-8"],
+        &["-E", "UTF-8:EUC-JP"],
+        &["-E", "EUC-JP:EUC-JP"],
+        &["-E", "BINARY:UTF-8"],
+        &["-E", ":EUC-JP"],
+        &["-E", "EUC-JP"],
+        &["-U"],
+        &["-Ke", "-U"],
+    ];
+    for (label, env) in locales {
+        for switches in switch_sets {
+            let (mcode, mout, merr) = run(monoruby(env), switches);
+            let (ccode, cout, cerr) = run(cruby(env), switches);
+            assert_eq!(
+                (mcode, String::from_utf8_lossy(&mout), &mout),
+                (ccode, String::from_utf8_lossy(&cout), &cout),
+                "stdout under {label} {switches:?}"
+            );
+            assert_eq!(
+                (String::from_utf8_lossy(&merr), &merr),
+                (String::from_utf8_lossy(&cerr), &cerr),
+                "stderr under {label} {switches:?}"
+            );
+        }
+    }
+}

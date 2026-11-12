@@ -18,7 +18,9 @@ module Warning
       end
       return nil unless Warning[category]
     end
-    $stderr.write(msg)
+    # `rb_write_error_str`: the original standard error gets the bytes
+    # as they are, with no `-E EXT:INT` transcoding.
+    __write_error_str(msg)
     nil
   end
   extend self

@@ -66,6 +66,7 @@ pub(crate) use kernel::object_send;
 pub(crate) use method::source_path_line as method_source_path_line;
 pub(crate) use kernel::{parse_kernel_float, parse_kernel_integer, send};
 pub(crate) use process::signal_name_to_number;
+pub(crate) use io::write_error_str;
 pub use time::TimeInner;
 
 //
