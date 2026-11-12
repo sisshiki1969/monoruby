@@ -643,7 +643,8 @@ fn pre_validate_regex(src: &str) -> Result<()> {
 /// rewritten before the pattern reaches it. An ASCII codepoint becomes
 /// `\xHH`, as `append_utf8` writes it; a non-ASCII one, or a raw / `\xHH`
 /// non-ASCII character after one, gives the error CRuby gives for a
-/// pattern that mixes the source's encoding with UTF-8. `None` when the
+/// pattern that mixes the source's encoding with UTF-8, and a trailing
+/// `\` is "too short escape sequence", as CRuby words it. `None` when the
 /// source has no `\u` escape (nothing to rewrite).
 ///
 /// Errors are the bare messages; the caller appends the `: /src/` part.
@@ -652,9 +653,7 @@ fn preprocess_native_unicode(
     enc: crate::value::Encoding,
     extended: bool,
 ) -> std::result::Result<Option<Vec<u8>>, &'static str> {
-    if !source.windows(2).any(|w| w == b"\\u") {
-        return Ok(None);
-    }
+    let has_unicode_escape = source.windows(2).any(|w| w == b"\\u");
     #[derive(PartialEq, Clone, Copy)]
     enum Fixed {
         Source,
@@ -728,9 +727,9 @@ fn preprocess_native_unicode(
         match c {
             b'\\' => {
                 let Some(&e) = source.get(i + 1) else {
-                    out.push(c);
-                    i += 1;
-                    continue;
+                    // A lone `\` at the end (Onigmo's "end pattern at
+                    // escape").
+                    return Err("too short escape sequence");
                 };
                 if e >= 0x80 {
                     let n = char_len(i + 1).min(source.len() - i - 1);
@@ -888,7 +887,7 @@ fn preprocess_native_unicode(
             }
         }
     }
-    Ok(Some(out))
+    Ok(has_unicode_escape.then_some(out))
 }
 
 /// Onigmo's `\u` handler only accepts exactly four hex digits, so the
