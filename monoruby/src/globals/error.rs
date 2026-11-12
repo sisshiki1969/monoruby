@@ -15,6 +15,18 @@ pub(crate) const WOULD_BLOCK_INTERRUPT_MSG: &str = "__monoruby_would_block_inter
 /// carries, in order.
 pub(crate) const ENC_ERR_PAYLOAD: &str = "enc_err";
 
+/// The `payload` tag of a `SystemCallError` that is to end the process
+/// by a signal when it goes uncaught: an `EPIPE` on a write to `STDOUT`
+/// carries `SIGPIPE` (CRuby's `rb_sys_fail_on_write` sets the hidden
+/// `signo` ivar when the stream has `FMODE_SIGNAL_ON_EPIPE`).
+/// `Executor::take_ex_obj` stores it as the hidden ivar [`SIGNO_IVAR`].
+pub(crate) const SIGNO_PAYLOAD: &str = "signo";
+
+/// The hidden ivar a materialized `SystemCallError` keeps the
+/// [`SIGNO_PAYLOAD`] signal in (CRuby's `id_signo`, likewise invisible
+/// to `#instance_variables`).
+pub(crate) const SIGNO_IVAR: &str = "/signo";
+
 /// The `Encoding::InvalidByteSequenceError` accessors, in the order the
 /// [`ENC_ERR_PAYLOAD`] Array packs them.
 pub(crate) const ENC_ERR_IVARS: [&str; 5] = [
@@ -507,6 +519,11 @@ impl MonorubyErr {
     /// `SignalException#initialize` in builtins/error.rb) when the object
     /// exists, else from the runtime-conversion message (`"Interrupt"` /
     /// `"SIG<NAME>"` as produced by `signal_table::signo_to_error`).
+    ///
+    /// A `SystemCallError` that carries a signal (an `EPIPE` on a write
+    /// to `STDOUT`, see [`MonorubyErr::with_exit_signal`]) answers that
+    /// signal too, as not an interrupt: CRuby's `error_handle` ends the
+    /// process by it without a message.
     pub fn signal_exception_signo(&self, store: &Store) -> Option<(i32, bool)> {
         // Only real exception classes can be SignalExceptions; the
         // control-flow pseudo-kinds never reach here (guard before
@@ -515,6 +532,9 @@ impl MonorubyErr {
             MonorubyErrKind::Other(c) => *c,
             _ => return None,
         };
+        if let Some(signo) = self.exit_signal(store) {
+            return Some((signo, false));
+        }
         let ancestors = store.ancestors(class);
         if !ancestors.iter().any(|m| m.id() == SIGNAL_EXCEPTION_CLASS) {
             return None;
@@ -1476,6 +1496,30 @@ impl MonorubyErr {
     pub(crate) fn errno_plain(store: &Store, err: &std::io::Error) -> MonorubyErr {
         let desc = errno_description(err);
         Self::from_io_err(store, err, desc)
+    }
+
+    /// Mark this (`SystemCallError`) to end the process by `signo` if it
+    /// goes uncaught, silently — what CRuby's `rb_sys_fail_on_write`
+    /// does for an `EPIPE` on a stream with `FMODE_SIGNAL_ON_EPIPE`
+    /// (`STDOUT`): the error is still an ordinary, rescuable
+    /// `Errno::EPIPE`.
+    pub(crate) fn with_exit_signal(mut self, signo: i32) -> MonorubyErr {
+        self.payload = Some((Value::integer(signo as i64), SIGNO_PAYLOAD));
+        self
+    }
+
+    /// The signal [`MonorubyErr::with_exit_signal`] attached, before or
+    /// after the exception object was materialized (a re-raise of the
+    /// rescued object, a `Thread#join` handing it on).
+    fn exit_signal(&self, store: &Store) -> Option<i32> {
+        if let Some((val, SIGNO_PAYLOAD)) = self.payload {
+            return val.try_fixnum().map(|n| n as i32);
+        }
+        let obj = self.original?;
+        store
+            .get_ivar(obj, IdentId::get_id(SIGNO_IVAR))
+            .and_then(|v| v.try_fixnum())
+            .map(|n| n as i32)
     }
 
     pub(crate) fn rangeerr(msg: impl ToString) -> MonorubyErr {
