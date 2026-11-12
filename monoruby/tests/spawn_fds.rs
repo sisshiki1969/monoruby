@@ -107,6 +107,9 @@ fn child_steps_before_a_failing_chdir() {
       -> { Process.spawn("true", 3 => w2, 4 => 3, 5 => 4, chdir: bad) },
       -> { Process.spawn("true", out: b, err: :out, chdir: bad) },
       -> { IO.popen(["true", a => b, b => a, chdir: bad]) },
+      -> { Process.spawn("true", b => b, chdir: bad) },
+      -> { exec("true", err: "#{bad}/x") },
+      -> { exec("true", a => b, b => a, chdir: bad) },
     ].each do |l|
       l.call
       res << :ok
