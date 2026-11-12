@@ -436,7 +436,7 @@ fn parse_redirect(
             "err" => RedirectTarget::Fd(2),
             other => {
                 return Err(MonorubyErr::argumenterr(format!(
-                    "wrong exec redirect symbol: :{other}"
+                    "wrong exec redirect symbol: {other}"
                 )));
             }
         }
@@ -506,6 +506,71 @@ fn parse_redirect(
     Ok(Redirect { child_fds, target })
 }
 
+/// Parse one redirect value for `child_fd` (`IO.popen`'s `err:` option,
+/// which takes the same forms as `spawn`'s).
+pub(crate) fn parse_popen_redirect(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    child_fd: i32,
+    v: Value,
+) -> Result<Redirect> {
+    parse_redirect(vm, globals, vec![child_fd], v)
+}
+
+/// Perform `redirects` in option order, answering the failing call's
+/// errno. Async-signal-safe: no allocation.
+///
+/// # Safety
+/// Must only be called in a freshly forked child, before `execve`.
+pub(crate) unsafe fn apply_redirects(redirects: &[Redirect]) -> std::result::Result<(), i32> {
+    // SAFETY: fd syscalls in the forked child (caller's contract); the
+    // paths are NUL-terminated CStrings prepared in the parent.
+    unsafe {
+        for r in redirects {
+            match &r.target {
+                RedirectTarget::Fd(src) => {
+                    for &cfd in &r.child_fds {
+                        if *src == cfd {
+                            // `fd => fd`: keep the fd open across exec by
+                            // clearing close-on-exec.
+                            libc::fcntl(cfd, libc::F_SETFD, 0);
+                        } else if libc::dup2(*src, cfd) < 0 {
+                            return Err(errno());
+                        }
+                    }
+                }
+                RedirectTarget::File { path, flags, perm } => {
+                    let fd = libc::open(path.as_ptr(), *flags, *perm);
+                    if fd < 0 {
+                        return Err(errno());
+                    }
+                    for &cfd in &r.child_fds {
+                        if fd != cfd && libc::dup2(fd, cfd) < 0 {
+                            return Err(errno());
+                        }
+                    }
+                    if !r.child_fds.contains(&fd) {
+                        libc::close(fd);
+                    }
+                }
+                RedirectTarget::Close => {
+                    for &cfd in &r.child_fds {
+                        libc::close(cfd);
+                    }
+                }
+                RedirectTarget::Child(other) => {
+                    for &cfd in &r.child_fds {
+                        if *other != cfd && libc::dup2(*other, cfd) < 0 {
+                            return Err(errno());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Apply the child-side process attributes and fd plumbing, then
 /// `execve` through the candidate list. Only returns on failure, with
 /// `(stage, errno)`. Async-signal-safe: no allocation.
@@ -539,46 +604,8 @@ unsafe fn child_exec(spec: &ExecSpec) -> (u8, i32) {
         {
             return (STAGE_CHDIR, errno());
         }
-        for r in &spec.redirects {
-            match &r.target {
-                RedirectTarget::Fd(src) => {
-                    for &cfd in &r.child_fds {
-                        if *src == cfd {
-                            // `fd => fd`: keep the fd open across exec by
-                            // clearing close-on-exec.
-                            libc::fcntl(cfd, libc::F_SETFD, 0);
-                        } else if libc::dup2(*src, cfd) < 0 {
-                            return (STAGE_EXEC, errno());
-                        }
-                    }
-                }
-                RedirectTarget::File { path, flags, perm } => {
-                    let fd = libc::open(path.as_ptr(), *flags, *perm);
-                    if fd < 0 {
-                        return (STAGE_EXEC, errno());
-                    }
-                    for &cfd in &r.child_fds {
-                        if fd != cfd && libc::dup2(fd, cfd) < 0 {
-                            return (STAGE_EXEC, errno());
-                        }
-                    }
-                    if !r.child_fds.contains(&fd) {
-                        libc::close(fd);
-                    }
-                }
-                RedirectTarget::Close => {
-                    for &cfd in &r.child_fds {
-                        libc::close(cfd);
-                    }
-                }
-                RedirectTarget::Child(other) => {
-                    for &cfd in &r.child_fds {
-                        if *other != cfd && libc::dup2(*other, cfd) < 0 {
-                            return (STAGE_EXEC, errno());
-                        }
-                    }
-                }
-            }
+        if let Err(e) = apply_redirects(&spec.redirects) {
+            return (STAGE_EXEC, e);
         }
         if spec.pty_session {
             libc::setsid();
@@ -721,6 +748,10 @@ pub(crate) fn do_spawn(
             let (stage, e) = child_exec(spec);
             let buf = [stage, (e & 0xff) as u8, ((e >> 8) & 0xff) as u8, ((e >> 16) & 0xff) as u8, ((e >> 24) & 0xff) as u8];
             let _ = libc::write(wfd, buf.as_ptr() as *const libc::c_void, buf.len());
+            // `_exit` skips the profiling runtime's exit hook, which would
+            // leave the child-side failure paths above invisible to
+            // coverage (a no-op outside an instrumented build).
+            crate::fork::flush_coverage_profile();
             libc::_exit(127);
         }
     }
@@ -963,6 +994,29 @@ mod tests {
         run_test_error(r#"Process.spawn("echo", close_others: 1)"#);
         run_test_error(r#"Process.spawn({})"#);
         run_test_error(r#"Process.spawn({}, {})"#);
+    }
+
+    #[test]
+    fn spawn_child_side_failures() {
+        // Each fails in the child, after the fork, and comes back through
+        // the status pipe. (Messages differ from CRuby's: #1862.)
+        run_test_once(
+            r#"
+            [
+              -> { Process.wait Process.spawn("true", err: 99) },
+              -> { Process.wait Process.spawn("true", err: "/nonexistent-dir-xyzzy/x") },
+              -> { Process.wait Process.spawn("true", pgroup: 999999) },
+              -> { Process.wait Process.spawn("true", chdir: "/nonexistent-dir-xyzzy") },
+              -> { IO.popen(["true"], err: 99) {} },
+              -> { IO.popen(["true"], err: "/nonexistent-dir-xyzzy/x") {} },
+            ].map do |f|
+              f.call
+              :ok
+            rescue SystemCallError => e
+              e.class
+            end
+            "#,
+        );
     }
 
     #[test]

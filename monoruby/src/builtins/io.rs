@@ -2757,7 +2757,7 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 
     // Process the exec-option hashes: the Array-trailing one and the
     // positional/keyword one both apply.
-    let mut stderr_to_stdout = false;
+    let mut stderr_redirects: Vec<super::spawn::Redirect> = vec![];
     let mut ext_obj: Option<Value> = None;
     let mut int_obj: Option<Value> = None;
     for opts in [array_opts, opts_hash].into_iter().flatten() {
@@ -2776,16 +2776,11 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                 )));
             }
         }
-        // err: [:child, :out] redirects the child's stderr to its stdout.
-        if let Ok(Some(err_val)) = h.get(Value::symbol_from_str("err"), vm, globals) {
-            if let Some(ary) = err_val.try_array_ty() {
-                if ary.len() == 2
-                    && ary[0].try_symbol_or_string() == Some(IdentId::get_id("child"))
-                    && ary[1].try_symbol_or_string() == Some(IdentId::get_id("out"))
-                {
-                    stderr_to_stdout = true;
-                }
-            }
+        // `err:` takes `spawn`'s redirect forms: a path (opened for
+        // writing in the child), `[path, mode, perm]`, an IO or fd,
+        // `[:child, :out]` (the child's stderr onto the pipe), `:close`.
+        if let Some(err_val) = h.get(Value::symbol_from_str("err"), vm, globals)? {
+            stderr_redirects.push(super::spawn::parse_popen_redirect(vm, globals, 2, err_val)?);
         }
         // chdir: the child's working directory (String / #to_path / #to_str).
         if let Some(dir) = h.get(Value::symbol_from_str("chdir"), vm, globals)?
@@ -2833,13 +2828,19 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             int_obj = mi.and_then(|i| enc_by_name(globals, i));
         }
     }
-    if stderr_to_stdout {
-        // SAFETY: dup2(1, 2) duplicates stdout fd to stderr fd in the child
-        // process right before exec; no Rust state is touched.
+    if !stderr_redirects.is_empty() {
+        // SAFETY: runs in the forked child right before exec, after std
+        // has set up the pipe ends; `apply_redirects` only makes fd
+        // syscalls and touches no Rust state.
         unsafe {
-            command.pre_exec(|| {
-                libc::dup2(1, 2);
-                Ok(())
+            command.pre_exec(move || {
+                super::spawn::apply_redirects(&stderr_redirects).map_err(|e| {
+                    // std `_exit`s the child on this error, skipping the
+                    // profiling runtime's exit hook (no-op unless
+                    // instrumented).
+                    crate::fork::flush_coverage_profile();
+                    std::io::Error::from_raw_os_error(e)
+                })
             });
         }
     }
@@ -3255,6 +3256,11 @@ fn io_reopen_io(globals: &mut Globals, self_: Value, other: Value) -> Result<Val
         (o.is_readable(), o.is_writable())
     };
     rebuild_reopened_inner(&mut self_, fd1, other.as_io_inner().path(), readable, writable);
+    // `fptr->mode = orig->mode | …`: the receiver takes the other
+    // stream's FMODE_SIGNAL_ON_EPIPE, so `STDOUT.reopen(pipe_w)` raises
+    // a plain `Errno::EPIPE` like the pipe itself would.
+    let signal_on_epipe = other.as_io_inner().signal_on_epipe();
+    self_.as_io_inner_mut().set_signal_on_epipe(signal_on_epipe);
     if let Some(pos) = other_pos {
         // Both fds now share one description; seeking re-syncs the
         // kernel offset to the logical position and drops both sides'
@@ -3284,6 +3290,7 @@ fn io_reopen_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
     // doesn't store; write-only non-append receivers are treated as
     // "w" (create + truncate), matching the common `File.open(_, "w")`
     // origin.
+    let explicit_mode = lfp.try_arg(1).is_some();
     let mode_base = if let Some(m) = lfp.try_arg(1) {
         let mode = if let Some(n) = m.try_fixnum() {
             super::file::mode_string_from_flags(n)
@@ -3363,6 +3370,11 @@ fn io_reopen_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
         let mut fresh = IoInner::from_raw_fd_autoclose(fd, path, true, readable, writable, true);
         fresh.copy_state_from(inner);
         *inner = fresh;
+    }
+    if explicit_mode {
+        // `fptr->mode = fmode`: an explicit mode replaces the FMODE bits,
+        // FMODE_SIGNAL_ON_EPIPE among them; without one they are kept.
+        self_.as_io_inner_mut().set_signal_on_epipe(false);
     }
     Ok(self_)
 }
@@ -7220,6 +7232,40 @@ mod tests {
         run_test_once(
             r#"
             IO.popen(["sh", "-c", "echo out; echo err 1>&2"], err: [:child, :out]) { |io| io.read }
+            "#,
+        );
+    }
+
+    #[test]
+    fn io_popen_err_redirect_forms() {
+        // `err:` takes `spawn`'s redirect forms (it used to honor only
+        // `[:child, :out]` and drop the rest silently).
+        run_test_once(
+            r#"
+            require "tmpdir"
+            cmd = ["sh", "-c", "echo out; echo err 1>&2"]
+            Dir.mktmpdir do |dir|
+              path = File.join(dir, "err.txt")
+              res = []
+              res << IO.popen(cmd, "r", err: path, &:read)
+              res << File.read(path)
+              File.write(path, "old\n")
+              res << IO.popen(cmd, err: [path, "a"], &:read)
+              res << File.read(path)
+              res << IO.popen(cmd, err: File::NULL, &:read)
+              r, w = IO.pipe
+              res << IO.popen(cmd, err: w, &:read)
+              w.close
+              res << r.read
+              r.close
+              res << IO.popen(cmd, err: :close, &:read)
+              begin
+                IO.popen(cmd, err: :bogus)
+              rescue ArgumentError => e
+                res << e.message
+              end
+              res
+            end
             "#,
         );
     }

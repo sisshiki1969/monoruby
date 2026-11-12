@@ -2576,13 +2576,25 @@ impl Executor {
                 // above.)
                 let payload = err.payload;
                 let v = Value::new_exception(err);
-                if let Some((val, _)) = payload {
-                    for (ivar, field) in ENC_ERR_IVARS.iter().zip(val.as_array().iter()) {
+                match payload {
+                    // A `SystemCallError` that ends the process by a
+                    // signal when uncaught (EPIPE on STDOUT): CRuby's
+                    // hidden `signo` ivar.
+                    Some((val, SIGNO_PAYLOAD)) => {
                         globals
                             .store
-                            .set_ivar(v, IdentId::get_id(ivar), *field)
+                            .set_ivar(v, IdentId::get_id(SIGNO_IVAR), val)
                             .unwrap();
                     }
+                    Some((val, _)) => {
+                        for (ivar, field) in ENC_ERR_IVARS.iter().zip(val.as_array().iter()) {
+                            globals
+                                .store
+                                .set_ivar(v, IdentId::get_id(ivar), *field)
+                                .unwrap();
+                        }
+                    }
+                    None => {}
                 }
                 v
             }

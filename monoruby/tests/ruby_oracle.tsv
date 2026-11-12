@@ -4602,6 +4602,7 @@ d0c6abf7f73c6d4b08fdf4d5b4cc620a	"  あい   "	"あい".center(7)
 d0d4f3cd1fe5f73081f98efbe7d5fcc9	[82, 82, 72, 62, 52, 42, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 60.5, 59]	def f(lo, hi, xs)\n          r = (lo..hi)\n          i = 0\n          c = 
 d0e949ddcae2cd0568d9499efd884d20	[-3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3, :redefined]	def n(x) = -x\n            a = []\n            40.times { a << n(3) }
 d104b4b08fd7ce7b6bab312ea263b1cf	["incomplete \\"\\\\xE3\\\\x81\\" on UTF-8", "\\"\\\\xE3\\\\x81\\" followed by \\"A\\" on UTF-8", "incomplete \\"\\\\xF0\\\\x9F\\\\x98\\" on UTF-8", "incomplete \\"\\\\xC2\\" on UTF-8", "\\"\\\\xA1\\" followed by \\"\\\\a\\" on EUC-JP", "\\"\\\\xA1\\" followed by \\"\\\\e\\" on EUC-JP", "\\"\\\\xA1\\" followed by \\"\\\\x7F\\" on EUC-JP", "\\"\\\\xA1\\" followed by \\"\\\\x00\\" on EUC-JP", "\\"\\\\xA1\\" followed by \\" \\" on EUC-JP"]	r = []\n            [[0xE3, 0x81], [0xE3, 0x81, 0x41], [0xF0, 0x9F, 
+d10b3f168f1b7f5e51dac09d61c9f4c8	["out\\n", "err\\n", "out\\n", "old\\nerr\\n", "out\\n", "out\\n", "err\\n", "out\\n", "wrong exec redirect symbol: bogus"]	require "tmpdir"\n            cmd = ["sh", "-c", "echo out; echo err
 d10b829ef1e04926b1eae930571f658d	55	class C\n              def initialize\n                @x = raise("er
 d11a3a528260e27321bb9a8bc367ecac	["N", "Back", "N", "m", "A", "B", "B", "A", "Outer", "Outer::B", "Outer::B", "Outer"]	# (Anonymous prefixes carry addresses, and CRuby before 4.0\n       
 d12a3b0760c9f5495da3bdd386716f31	1764	class Foo\n          def foo(arg)\n            yield arg\n          end\n  
@@ -4819,6 +4820,7 @@ da48230942e60b233c8123b262b16bca	["E", [:inner, :outer]]	$log = []\n        def 
 da48c5ccaf7eab98bdcc4d2241a65f9f	[[":a", "1", ":b", "2", "{a: 1, b: 2}"], 3, [true, true]]	__a = [];__a << (\n            ret = []\n            Marshal.load(Marshal.dump({a:
 da502c78f817a078ccda98b92ccb36ac	["end pattern with unmatched parenthesis: /(/i", "end pattern with unmatched parenthesis: /(/mx", "end pattern in group: /(?#a/x", "premature end of char-class: /[a/mix", "too short escaped multibyte character: /\\\\xA4/m"]	[["(", "i"], ["(".encode("EUC-JP"), "mx"], ["(?#a", "x"], ["[a", "m
 da52e290ddf3ec3f474fa3a4bb76acdd	[2.5, 2.5, 3.5, TypeError, 4611686018427387904, Integer, FrozenError, 1]	class L\n              def initialize(n, a); @n = n; @a = a; end\n   
+da57b30c997be674c92bc0d4058a0d7b	[Errno::EBADF, Errno::ENOENT, Errno::EPERM, Errno::ENOENT, Errno::EBADF, Errno::ENOENT]	[\n              -> { Process.wait Process.spawn("true", err: 99) },
 da5e06d1fe5eed1ee4258f71a99b2332	0	a = "abc".dup.force_encoding("UTF-8")\n              b = "abc".dup
 da64841b8187b9d8951f84703a56f5e9	[true, false]	$x = []\n            path = "/tmp/monoruby_test_mkdir_#{Process.pid}
 da6b246283b4f211581ca1d5eb140461	"a b\\n"	IO.popen(["echo", "a b"]) { |io| io.read }\n            

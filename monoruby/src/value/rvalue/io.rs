@@ -95,19 +95,31 @@ pub fn write_stdout(bytes: &[u8], store: &Store) -> Result<()> {
     let mut progress = 0;
     stdout_buf()
         .write(bytes, &mut progress, &signal_pending)
-        .map_err(|e| drain_err(e, store))
+        .map_err(|e| drain_err(e, store, true))
 }
 
 /// Map a stalled drain to the internal marker / error the IO builtins
 /// expect. Bytes the kernel took are already out of the buffer, so the
 /// builtin's retry resumes without duplicating output.
-fn drain_err(e: DrainErr, store: &Store) -> MonorubyErr {
+///
+/// `signal_on_epipe` is the stream's [`IoInner::signal_on_epipe`]: an
+/// `EPIPE` there is still an `Errno::EPIPE`, but one that ends the
+/// process by `SIGPIPE` if nothing rescues it (CRuby's
+/// `rb_sys_fail_on_write`).
+fn drain_err(e: DrainErr, store: &Store, signal_on_epipe: bool) -> MonorubyErr {
     match e {
         DrainErr::Signal => MonorubyErr::signal_interrupt(),
         DrainErr::WouldBlock => MonorubyErr::would_block_interrupt(),
         // Surface the OS error as the matching Errno::* (e.g. Errno::EPIPE
         // on a closed pipe -- SIGPIPE is ignored at startup, as in CRuby).
-        DrainErr::Io(e) => MonorubyErr::errno_plain(store, &e),
+        DrainErr::Io(e) => {
+            let err = MonorubyErr::errno_plain(store, &e);
+            if signal_on_epipe && e.raw_os_error() == Some(libc::EPIPE) {
+                err.with_exit_signal(libc::SIGPIPE)
+            } else {
+                err
+            }
+        }
     }
 }
 
@@ -593,6 +605,12 @@ pub struct IoInner {
     ext_state: ExtEnc,
     /// `IO#binmode?`.
     binmode: bool,
+    /// CRuby's `FMODE_SIGNAL_ON_EPIPE`: an `EPIPE` on a write is raised
+    /// as an `Errno::EPIPE` that ends the process by `SIGPIPE` when
+    /// uncaught, so `ruby -e 'loop { puts 1 }' | head -1` dies quietly
+    /// (https://bugs.ruby-lang.org/issues/14413). Only `STDOUT` starts
+    /// with it; `#dup` keeps it and `#reopen` takes the other stream's.
+    signal_on_epipe: bool,
     /// The `newline:` write decorator the stream was opened with.
     newline: NewlineMode,
     /// The FMODE bits a C extension keeps in `fptr->mode` that this
@@ -706,9 +724,18 @@ impl IoInner {
             int: None,
             ext_state: ExtEnc::Unset,
             binmode: false,
+            signal_on_epipe: false,
             newline: NewlineMode::None,
             capi_fmode: 0,
         }
+    }
+
+    pub(crate) fn signal_on_epipe(&self) -> bool {
+        self.signal_on_epipe
+    }
+
+    pub(crate) fn set_signal_on_epipe(&mut self, on: bool) {
+        self.signal_on_epipe = on;
     }
 
     pub(crate) fn capi_fmode(&self) -> i32 {
@@ -809,7 +836,7 @@ impl IoInner {
             }
             IoKind::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
         };
-        res.map_err(|e| drain_err(e, store))
+        res.map_err(|e| drain_err(e, store, self.signal_on_epipe))
     }
 
     /// `IO#sync`.
@@ -961,6 +988,7 @@ impl IoInner {
         self.ext_state = other.ext_state;
         self.binmode = other.binmode;
         self.newline = other.newline;
+        self.signal_on_epipe = other.signal_on_epipe;
     }
 
     /// Replace the underlying stream while keeping the per-object state
@@ -1003,7 +1031,10 @@ impl IoInner {
     }
 
     pub(super) fn stdout() -> Self {
-        Self::with_kind(IoKind::Stdout)
+        // `rb_io_prep_stdout`: `FMODE_WRITABLE | FMODE_SIGNAL_ON_EPIPE`.
+        let mut io = Self::with_kind(IoKind::Stdout);
+        io.signal_on_epipe = true;
+        io
     }
 
     pub(super) fn stderr() -> Self {
@@ -1178,7 +1209,7 @@ impl IoInner {
             // `ensure_writable` already rejected non-writable streams.
             IoKind::Stdin | IoKind::Closed(..) => unreachable!(),
         };
-        res.map_err(|e| drain_err(e, store))
+        res.map_err(|e| drain_err(e, store, self.signal_on_epipe))
     }
 
     /// Push out anything a *write* left buffered before reading or
