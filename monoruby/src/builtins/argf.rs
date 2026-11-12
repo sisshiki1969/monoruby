@@ -395,20 +395,23 @@ pub(crate) fn argf_getline_raw(
             }
         };
         let complete_utf8 = matches!(ext, crate::value::Encoding::Utf8(_));
+        let wide = super::io::wide_lines(globals, sep, ext, intl);
         let line = super::io::blocking_io_region(vm, globals, stream, libc::POLLIN, |_store| {
-            let mut s = stream;
-            s.as_io_inner_mut().getline(sep, limit, complete_utf8)
+            super::io::getline_with(stream, sep, limit, complete_utf8, wide.as_ref())
         })?;
         match line {
             Some(mut buf) => {
-                if chomp {
-                    super::io::chomp_line(&mut buf, sep, limit);
-                }
+                let tail = if chomp {
+                    let converts = super::io::read_converts(ext, intl);
+                    super::io::chomp_line_for(&mut buf, sep, limit, converts, wide.as_ref())
+                } else {
+                    vec![]
+                };
+                let s = super::io::read_conv(globals, stream, buf, &tail, ext, intl)?;
                 let inner = expect_inner(argf)?;
                 inner.lineno += 1;
                 let n = inner.lineno;
                 globals.set_lineno(Value::integer(n));
-                let s = super::io::tagged_read_string_with(globals, buf, ext, intl);
                 vm.set_last_read_line(s);
                 return Ok(Some(s));
             }
@@ -638,18 +641,18 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     } else {
         read_any.then_some(collected)
     };
-    let strval = result.map(|bytes| match (length, enc) {
-        // An unbounded read is text in the stream's encoding; a bounded
-        // read is binary, like `IO#read(len)`.
-        (None, Some((ext, intl))) => {
-            super::io::tagged_read_string_with(globals, bytes, ext, intl)
-        }
-        (None, None) => {
-            let (ext, intl) = default_encodings(globals);
-            super::io::tagged_read_string_with(globals, bytes, ext, intl)
-        }
-        _ => Value::bytes(bytes),
-    });
+    let strval = result
+        .map(|bytes| match (length, enc) {
+            // An unbounded read is text in the stream's encoding; a
+            // bounded read is binary, like `IO#read(len)`.
+            (None, Some((ext, intl))) => super::io::read_conv_detached(globals, bytes, ext, intl),
+            (None, None) => {
+                let (ext, intl) = default_encodings(globals);
+                super::io::read_conv_detached(globals, bytes, ext, intl)
+            }
+            _ => Ok(Value::bytes(bytes)),
+        })
+        .transpose()?;
     finish_read(vm, globals, strval, outbuf)
 }
 

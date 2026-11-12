@@ -286,6 +286,8 @@ pub(super) fn io_init_from_fd(
     }
 
     let kw: Option<crate::value::Hashmap> = lfp.try_arg(2).and_then(|v| v.try_hash_ty());
+    // `invalid:` / `undef:` / `replace:` for what the stream reads.
+    let ecopts = super::encoding::io_read_ecopts(globals, 0, kw)?;
 
     // Mode: positional arg vs `mode:` option — both given is an error.
     let pos_mode = lfp.try_arg(1).filter(|v| !v.is_nil());
@@ -493,6 +495,7 @@ pub(super) fn io_init_from_fd(
     let (slot, i) =
         resolve_io_encodings(globals, ext_obj, int_obj, binmode, readable, writable, de, di);
     store_io_encodings(globals, obj, slot, i);
+    set_io_ecopts(globals, obj, ecopts)?;
     if binmode {
         obj.as_io_inner_mut().set_binmode();
     }
@@ -939,6 +942,7 @@ fn class_read_opts(
     let Some(h) = opts else {
         return Ok((mode, ext, int, bom));
     };
+    let mut binopt = None;
     if let Some(oa) = h.get(Value::symbol(IdentId::get_id("open_args")), vm, globals)?
         && let Some(ary) = oa.try_array_ty()
     {
@@ -956,12 +960,95 @@ fn class_read_opts(
                 }
             } else if let Some(hh) = v.try_hash_ty() {
                 read_opts_from_hash(vm, globals, hh, &mut mode, &mut ext, &mut int, &mut bom)?;
+                binopt = Some(hh);
             }
         }
-        return Ok((mode, ext, int, bom));
+    } else {
+        read_opts_from_hash(vm, globals, h, &mut mode, &mut ext, &mut int, &mut bom)?;
+        binopt = Some(h);
     }
-    read_opts_from_hash(vm, globals, h, &mut mode, &mut ext, &mut int, &mut bom)?;
+    // `b` (or `binmode: true`) with no encoding given reads BINARY, as
+    // `File.open(path, "rb")` does (`rb_io_extract_modeenc`).
+    let mut binmode = mode.split(':').next().unwrap_or("").contains('b');
+    if let Some(hh) = binopt
+        && let Some(v) = hh.get(Value::symbol(IdentId::get_id("binmode")), vm, globals)?
+        && v.as_bool()
+    {
+        binmode = true;
+    }
+    if binmode && ext.is_none() && int.is_none() {
+        ext = enc_by_name(globals, "ASCII-8BIT");
+    }
     Ok((mode, ext, int, bom))
+}
+
+/// An IO keeps its read-conversion options — CRuby's `encs.ecflags` bits
+/// (`encoding::IO_INVALID_REPLACE` / `IO_UNDEF_REPLACE`) and the
+/// `replace:` String of `encs.ecopts` — in the hidden instance variable
+/// `/ecopts` ([`IdentId::_IO_ECOPTS`]) as `[flags, replace]`, rather
+/// than in `IoInner`, whose RValue cell has no byte to spare. It is
+/// absent (or nil) for the default, and read only when a read actually
+/// converts.
+fn io_ecopts(globals: &Globals, io: Value) -> (i64, Option<Value>) {
+    let Some(ary) = globals
+        .store
+        .get_ivar(io, IdentId::_IO_ECOPTS)
+        .and_then(|v| v.try_array_ty())
+    else {
+        return (0, None);
+    };
+    let flags = ary.first().and_then(|v| v.try_fixnum()).unwrap_or(0);
+    let replace = ary.get(1).copied().filter(|v| !v.is_nil());
+    (flags, replace)
+}
+
+/// Store what [`super::encoding::io_read_ecopts`] settled on `io`, the
+/// `replace:` String as a frozen copy (`rb_str_new_frozen`). The default
+/// (no flags, no replacement) adds nothing to a stream that never had
+/// options.
+fn set_io_ecopts(
+    globals: &mut Globals,
+    io: Value,
+    (flags, replace): (i64, Option<Value>),
+) -> Result<()> {
+    let val = if flags == 0 && replace.is_none() {
+        if globals.store.get_ivar(io, IdentId::_IO_ECOPTS).is_none() {
+            return Ok(());
+        }
+        Value::nil()
+    } else {
+        let replace = match replace {
+            Some(r) if r.is_frozen() => r,
+            Some(r) => {
+                let mut copy = Value::string_from_inner(r.as_rstring_inner().clone());
+                copy.set_frozen();
+                copy
+            }
+            None => Value::nil(),
+        };
+        Value::array2(Value::integer(flags), replace)
+    };
+    globals.store.set_ivar(io, IdentId::_IO_ECOPTS, val)
+}
+
+/// The read-conversion options (`invalid:` / `undef:` / `replace:`) of a
+/// class-level reader's options Hash; with `:open_args`, those of the
+/// Hash inside it.
+fn class_read_ecopts(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    opts: Option<crate::value::Hashmap>,
+) -> Result<(i64, Option<Value>)> {
+    let Some(h) = opts else {
+        return Ok((0, None));
+    };
+    if let Some(oa) = h.get(Value::symbol(IdentId::get_id("open_args")), vm, globals)?
+        && let Some(ary) = oa.try_array_ty()
+    {
+        let inner = ary.iter().find_map(|v| v.try_hash_ty());
+        return super::encoding::io_read_ecopts(globals, 0, inner);
+    }
+    super::encoding::io_read_ecopts(globals, 0, Some(h))
 }
 
 /// Resolve + store IO encodings at creation time. `opt_range` is the
@@ -989,6 +1076,15 @@ pub(super) fn init_io_encodings(
     if binmode {
         io.as_io_inner_mut().set_binmode();
     }
+    // `invalid:` / `undef:` / `replace:` for what the stream reads
+    // (`rb_io_extract_modeenc` keeps them in `encs.ecflags` / `ecopts`).
+    let hash = opt_range
+        .clone()
+        .filter_map(|i| lfp.try_arg(i))
+        .chain(extra)
+        .find_map(|v| v.try_hash_ty());
+    let ecopts = super::encoding::io_read_ecopts(globals, 0, hash)?;
+    set_io_ecopts(globals, io, ecopts)?;
     if let Some(nl) = parse_newline_option(vm, globals, lfp, opt_range, extra)? {
         io.as_io_inner_mut().set_newline(nl);
     }
@@ -1483,6 +1579,147 @@ pub(super) fn chomp_line(buf: &mut Vec<u8>, sep: Option<&[u8]>, _limit: Option<u
     }
 }
 
+/// [`chomp_line`], handing back what it took off the end when the line
+/// is about to be converted to an internal encoding: a conversion error
+/// has to be located — and the stream rewound — on the line as it was
+/// read ([`read_conv`]'s `tail`). Without a conversion nothing is kept.
+/// A line read by [`WideLines`] is chomped by its separator in the
+/// external encoding.
+pub(super) fn chomp_line_for(
+    buf: &mut Vec<u8>,
+    sep: Option<&[u8]>,
+    limit: Option<usize>,
+    converts: bool,
+    wide: Option<&WideLines>,
+) -> Vec<u8> {
+    if let Some(w) = wide {
+        let before = buf.len();
+        let mut removed = vec![];
+        if let Some(s) = &w.sep
+            && !s.is_empty()
+            && before % w.unit == 0
+            && buf.ends_with(s)
+        {
+            let mut cut = before - s.len();
+            if w.newline_sep && buf[..cut].ends_with(&w.cr) {
+                cut -= w.cr.len();
+            }
+            removed = buf.split_off(cut);
+        }
+        return removed;
+    }
+    if !converts {
+        chomp_line(buf, sep, limit);
+        return vec![];
+    }
+    let span = match sep {
+        None => 0,
+        Some([]) => 2,
+        Some(s) => s.len() + 1,
+    };
+    let from = buf.len().saturating_sub(span);
+    let suffix = buf[from..].to_vec();
+    chomp_line(buf, sep, limit);
+    suffix[buf.len() - from..].to_vec()
+}
+
+/// How a line read splits a stream whose external encoding is UTF-16 or
+/// UTF-32 and is converted to an internal one: by the separator *in the
+/// external encoding*, on code-unit boundaries
+/// ([`IoInner::getline_units`]). Every other stream splits on the
+/// separator's own bytes.
+pub(super) struct WideLines {
+    /// The separator in the external encoding; `None` reads to EOF.
+    sep: Option<Vec<u8>>,
+    /// `"\r"` in the external encoding, chomped ahead of a `"\n"`
+    /// separator.
+    cr: Vec<u8>,
+    newline_sep: bool,
+    unit: usize,
+}
+
+/// The [`WideLines`] a line read of a stream with these encodings uses,
+/// or `None` when it splits on bytes.
+#[inline]
+pub(super) fn wide_lines(
+    globals: &Globals,
+    sep: Option<&[u8]>,
+    ext: crate::value::Encoding,
+    intl: Option<crate::value::Encoding>,
+) -> Option<WideLines> {
+    use crate::value::Encoding as E;
+    // A stream without an internal encoding — nearly every one — is
+    // settled by the first test.
+    if intl.is_none() || !matches!(ext, E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be) {
+        return None;
+    }
+    wide_lines_of(globals, sep, ext, intl)
+}
+
+fn wide_lines_of(
+    globals: &Globals,
+    sep: Option<&[u8]>,
+    ext: crate::value::Encoding,
+    intl: Option<crate::value::Encoding>,
+) -> Option<WideLines> {
+    use crate::value::Encoding as E;
+    let unit = match ext {
+        E::Utf16Le | E::Utf16Be => 2,
+        E::Utf32Le | E::Utf32Be => 4,
+        _ => return None,
+    };
+    if !read_converts(ext, intl) {
+        return None;
+    }
+    let enc = |b: &[u8]| {
+        crate::value::transcode_bytes_with_opts(
+            b,
+            E::UTF8,
+            ext,
+            &crate::value::transcode::TranscodeOpts::default(),
+            &globals.store,
+        )
+        .ok()
+    };
+    let sep_ext = match sep {
+        None => None,
+        // Paragraph mode: split at a blank line.
+        Some([]) => Some(enc(b"\n\n")?),
+        Some(s) => Some(enc(s)?),
+    };
+    Some(WideLines {
+        sep: sep_ext,
+        cr: enc(b"\r")?,
+        newline_sep: sep == Some(b"\n".as_slice()),
+        unit,
+    })
+}
+
+/// Read one line off `io` for `IO#gets` and its relatives: split on the
+/// separator's bytes, or as `wide` says.
+pub(super) fn getline_with(
+    mut io: Value,
+    sep: Option<&[u8]>,
+    limit: Option<usize>,
+    complete_utf8: bool,
+    wide: Option<&WideLines>,
+) -> Result<Option<Vec<u8>>> {
+    match wide {
+        Some(w) => io
+            .as_io_inner_mut()
+            .getline_units(w.sep.as_deref(), limit, w.unit),
+        None => io.as_io_inner_mut().getline(sep, limit, complete_utf8),
+    }
+}
+
+/// Whether a read with these encodings transcodes what it reads.
+pub(super) fn read_converts(
+    ext: crate::value::Encoding,
+    intl: Option<crate::value::Encoding>,
+) -> bool {
+    intl.is_some_and(|i| i != ext)
+}
+
 /// Whether reads on this IO should complete UTF-8 characters cut by a
 /// byte limit (true unless the external encoding is a single-byte one).
 fn io_completes_utf8(globals: &mut Globals, io: Value) -> bool {
@@ -1728,18 +1965,28 @@ fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let self_ = lfp.self_val();
     let (ext, intl) = io_encodings(globals, self_);
     let complete_utf8 = matches!(ext, crate::value::Encoding::Utf8(_));
+    let wide = wide_lines(globals, sep.as_deref(), ext, intl);
     let line = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
-        lfp.self_val()
-            .as_io_inner_mut()
-            .getline(sep.as_deref(), limit, complete_utf8)
+        getline_with(
+            lfp.self_val(),
+            sep.as_deref(),
+            limit,
+            complete_utf8,
+            wide.as_ref(),
+        )
     })?;
     match line {
         Some(mut buf) => {
-            if chomp {
-                chomp_line(&mut buf, sep.as_deref(), limit);
-            }
+            let tail = if chomp {
+                let converts = read_converts(ext, intl);
+                chomp_line_for(&mut buf, sep.as_deref(), limit, converts, wide.as_ref())
+            } else {
+                vec![]
+            };
+            // Converted before the line counts: a conversion error
+            // leaves `lineno` / `$.` alone, as in CRuby.
+            let s = read_conv(globals, self_, buf, &tail, ext, intl)?;
             bump_lineno(globals, self_)?;
-            let s = tagged_read_string_with(globals, buf, ext, intl);
             // `$_` is frame-local: set it on the calling Ruby scope's
             // LEP (the builtin's own native frame is skipped).
             vm.set_last_read_line(s);
@@ -2050,7 +2297,19 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             } else {
                 // Unsized read: the buffer takes the transcoded content
                 // and its encoding (like the no-buffer return value).
-                let tagged = tagged_read_string(globals, lfp.self_val(), buf, false);
+                let (ext, intl) = io_encodings(globals, lfp.self_val());
+                let tagged = match read_conv_keeping(globals, lfp.self_val(), buf, &[], ext, intl) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let (err, done) = *e;
+                        // What was converted ahead of the error is left
+                        // in the buffer.
+                        if let Some(done) = done {
+                            *out.as_rstring_inner_mut() = (*done.as_rstring_inner()).clone();
+                        }
+                        return Err(err);
+                    }
+                };
                 *out.as_rstring_inner_mut() = (*tagged.as_rstring_inner()).clone();
             }
             if eof_nil { Ok(Value::nil()) } else { Ok(out) }
@@ -2059,12 +2318,7 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             if eof_nil {
                 return Ok(Value::nil());
             }
-            Ok(tagged_read_string(
-                globals,
-                lfp.self_val(),
-                buf,
-                length.is_some(),
-            ))
+            tagged_read_string(globals, lfp.self_val(), buf, length.is_some())
         }
     }
 }
@@ -2118,6 +2372,7 @@ fn io_class_read(
     };
 
     let (mode, ext_obj, int_obj, bom) = class_read_opts(vm, globals, opts)?;
+    let ecopts = class_read_ecopts(vm, globals, opts)?;
     // A write/append-only mode can't be used for reading.
     reject_unreadable_mode(&filename, &mode)?;
 
@@ -2182,13 +2437,18 @@ fn io_class_read(
             enc_obj_to_enum(globals, de).unwrap_or(E::UTF8)
         }
     };
-    let intl = int_obj.and_then(|o| enc_obj_to_enum(globals, o));
+    // An unset internal encoding is `Encoding.default_internal`, as for
+    // any stream opened for reading.
+    let intl = int_obj
+        .or_else(|| enc_default_internal_obj(globals))
+        .and_then(|o| enc_obj_to_enum(globals, o))
+        .filter(|_| !matches!(ext, E::Ascii8));
     let (out, final_enc) = match intl {
         Some(i) if i != ext => {
-            let topts = crate::value::transcode::TranscodeOpts::default();
-            match crate::value::transcode_bytes_with_opts(&buf, ext, i, &topts, &globals.store) {
+            let topts = super::encoding::io_transcode_opts(&globals.store, ecopts.0, ecopts.1);
+            match convert_read_bytes(globals, &buf, &[], ext, i, &topts) {
                 Ok(b) => (b, i),
-                Err(_) => (buf, ext),
+                Err(e) => return Err(e.0),
             }
         }
         _ => (buf, ext),
@@ -2220,7 +2480,8 @@ fn io_class_readlines(
         .coerce_to_path_rstring(vm, globals)?
         .to_str()?
         .to_string();
-    let (sep, limit, chomp, (mode, ext_obj, int_obj, _bom)) = class_getline_args(vm, globals, lfp)?;
+    let (sep, limit, chomp, (mode, ext_obj, int_obj, _bom), ecopts) =
+        class_getline_args(vm, globals, lfp)?;
     if limit == Some(0) {
         return Err(MonorubyErr::argumenterr("invalid limit: 0 for readlines"));
     }
@@ -2229,21 +2490,31 @@ fn io_class_readlines(
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
     let complete_utf8 = ext_completes_utf8(globals, ext_obj);
     let mut io_val = Value::new_file(file, path, None, true, false);
+    set_io_ecopts(globals, io_val, ecopts)?;
+    let (converts, wide) = {
+        let (ext, intl) = resolve_encs(globals, ext_obj, int_obj);
+        (
+            read_converts(ext, intl),
+            wide_lines(globals, sep.as_deref(), ext, intl),
+        )
+    };
     vm.with_temp_scope(|vm| {
         // Root the transient File IO (and the result lines) across the
         // per-line allocations below.
         vm.temp_push(io_val);
         vm.temp_array_new(None);
         let result = (|| {
-            while let Some(mut buf) = blocking_io_region(vm, globals, io_val, libc::POLLIN, |_store| {
-                io_val
-                    .as_io_inner_mut()
-                    .getline(sep.as_deref(), limit, complete_utf8)
-            })? {
-                if chomp {
-                    chomp_line(&mut buf, sep.as_deref(), limit);
-                }
-                let line = tag_with_encs(globals, buf, ext_obj, int_obj);
+            while let Some(mut buf) =
+                blocking_io_region(vm, globals, io_val, libc::POLLIN, |_store| {
+                    getline_with(io_val, sep.as_deref(), limit, complete_utf8, wide.as_ref())
+                })?
+            {
+                let tail = if chomp {
+                    chomp_line_for(&mut buf, sep.as_deref(), limit, converts, wide.as_ref())
+                } else {
+                    vec![]
+                };
+                let line = tag_with_encs(globals, io_val, buf, &tail, ext_obj, int_obj)?;
                 vm.temp_array_push(line);
             }
             Ok(vm.temp_pop())
@@ -2292,6 +2563,7 @@ fn class_getline_args(
     Option<usize>,
     bool,
     (String, Option<Value>, Option<Value>, bool),
+    (i64, Option<Value>),
 )> {
     let opts = lfp.try_arg(3).and_then(|v| v.try_hash_ty());
     let mut chomp = false;
@@ -2333,7 +2605,8 @@ fn class_getline_args(
         }
     };
     let open = class_read_opts(vm, globals, opts)?;
-    Ok((sep, limit, chomp, open))
+    let ecopts = class_read_ecopts(vm, globals, opts)?;
+    Ok((sep, limit, chomp, open, ecopts))
 }
 
 /// Whether limit-cut reads should complete UTF-8 characters, given the
@@ -2392,7 +2665,8 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
         .to_str()?
         .to_string();
     let p = vm.get_block_data(globals, bh)?;
-    let (sep, limit, chomp, (mode, ext_obj, int_obj, _bom)) = class_getline_args(vm, globals, lfp)?;
+    let (sep, limit, chomp, (mode, ext_obj, int_obj, _bom), ecopts) =
+        class_getline_args(vm, globals, lfp)?;
     if limit == Some(0) {
         return Err(MonorubyErr::argumenterr("invalid limit: 0 for foreach"));
     }
@@ -2401,20 +2675,30 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
     let complete_utf8 = ext_completes_utf8(globals, ext_obj);
     let mut io_val = Value::new_file(file, path, None, true, false);
+    set_io_ecopts(globals, io_val, ecopts)?;
+    let (converts, wide) = {
+        let (ext, intl) = resolve_encs(globals, ext_obj, int_obj);
+        (
+            read_converts(ext, intl),
+            wide_lines(globals, sep.as_deref(), ext, intl),
+        )
+    };
     vm.with_temp_scope(|vm| {
         // Root the transient File IO across the block calls below.
         vm.temp_push(io_val);
         let mut lineno = 0i64;
         let result = (|| {
-            while let Some(mut buf) = blocking_io_region(vm, globals, io_val, libc::POLLIN, |_store| {
-                io_val
-                    .as_io_inner_mut()
-                    .getline(sep.as_deref(), limit, complete_utf8)
-            })? {
-                if chomp {
-                    chomp_line(&mut buf, sep.as_deref(), limit);
-                }
-                let line = tag_with_encs(globals, buf, ext_obj, int_obj);
+            while let Some(mut buf) =
+                blocking_io_region(vm, globals, io_val, libc::POLLIN, |_store| {
+                    getline_with(io_val, sep.as_deref(), limit, complete_utf8, wide.as_ref())
+                })?
+            {
+                let tail = if chomp {
+                    chomp_line_for(&mut buf, sep.as_deref(), limit, converts, wide.as_ref())
+                } else {
+                    vec![]
+                };
+                let line = tag_with_encs(globals, io_val, buf, &tail, ext_obj, int_obj)?;
                 // CRuby's foreach reads through the getline machinery,
                 // which updates `$.` and `$_` per line (and leaves `$_`
                 // nil at EOF).
@@ -2491,8 +2775,8 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let class = lfp.self_val().as_class_id();
 
     // Optional read-end encodings: (ext), (ext, int), ("ext:int"), each a
-    // String (#to_str) or an Encoding; a trailing options Hash (transcode
-    // options like `invalid: :replace`) is accepted and ignored.
+    // String (#to_str) or an Encoding; a trailing options Hash carries the
+    // read end's conversion options (`invalid: :replace`, ...).
     let mut ext_obj: Option<Value> = None;
     let mut int_obj: Option<Value> = None;
     let mut enc_args: Vec<Value> = Vec::new();
@@ -2538,6 +2822,19 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             }
         };
     }
+
+    // The read end's conversion options, as `#set_encoding` takes them
+    // (`io_encoding_set`): read from the Hash when two encodings or an
+    // `"ext:int"` String were given.
+    let takes_opts = enc_args.len() >= 2
+        || enc_args
+            .first()
+            .is_some_and(|v| v.class() != super::encoding::encoding_class(globals));
+    let opts_hash = (0..3)
+        .filter_map(|i| lfp.try_arg(i))
+        .find_map(|v| v.try_hash_ty())
+        .filter(|_| takes_opts);
+    let ecopts = super::encoding::io_read_ecopts(globals, 0, opts_hash)?;
 
     // CLOEXEC by default, like CRuby: pipe ends do not leak across
     // exec unless explicitly redirected (or close_on_exec = false).
@@ -2586,6 +2883,7 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             resolve_io_encodings(globals, ext_obj, int_obj, false, true, false, de, di);
         store_io_encodings(globals, read_io, slot, i);
     }
+    set_io_ecopts(globals, read_io, ecopts)?;
 
     match lfp.block() {
         Some(bh) => {
@@ -3440,16 +3738,27 @@ fn io_readlines(
     let self_ = lfp.self_val();
     let complete_utf8 = io_completes_utf8(globals, self_);
     let mut lines = Vec::new();
-    while let Some(mut buf) = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
-        lfp.self_val()
-            .as_io_inner_mut()
-            .getline(sep.as_deref(), limit, complete_utf8)
-    })? {
-        if chomp {
-            chomp_line(&mut buf, sep.as_deref(), limit);
-        }
+    let (ext, intl) = io_encodings(globals, self_);
+    let converts = read_converts(ext, intl);
+    let wide = wide_lines(globals, sep.as_deref(), ext, intl);
+    while let Some(mut buf) =
+        blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
+            getline_with(
+                lfp.self_val(),
+                sep.as_deref(),
+                limit,
+                complete_utf8,
+                wide.as_ref(),
+            )
+        })?
+    {
+        let tail = if chomp {
+            chomp_line_for(&mut buf, sep.as_deref(), limit, converts, wide.as_ref())
+        } else {
+            vec![]
+        };
+        lines.push(read_conv(globals, self_, buf, &tail, ext, intl)?);
         bump_lineno(globals, self_)?;
-        lines.push(tagged_read_string(globals, self_, buf, false));
     }
     Ok(Value::array_from_vec(lines))
 }
@@ -3837,7 +4146,7 @@ fn io_getc(
     if buf.is_empty() {
         Ok(Value::nil())
     } else {
-        Ok(tagged_read_string_with(globals, buf, ext, intl))
+        read_conv(globals, self_, buf, &[], ext, intl)
     }
 }
 
@@ -5053,6 +5362,18 @@ fn set_encoding(
     let di = enc_default_internal_obj(globals);
     let di = if int_suppressed { None } else { di };
     let (slot, i) = resolve_io_encodings(globals, ext, int, false, readable, writable, de, di);
+    // `io_encoding_set`: the options are read (`rb_econv_prepare_options`)
+    // when the encodings came as two arguments or as one `"ext:int"`
+    // String; a lone Encoding or nil drops `replace:` and ignores the
+    // Hash. The `invalid:` / `undef:` choices already made stay either
+    // way — CRuby only ever sets those bits.
+    let takes_opts = arg0.is_str().is_some()
+        || lfp
+            .try_arg(1)
+            .is_some_and(|a| !a.is_nil() && a.try_hash_ty().is_none());
+    let (prev, _) = io_ecopts(globals, self_);
+    let ecopts =
+        super::encoding::io_read_ecopts(globals, prev, if takes_opts { opts } else { None })?;
     // A readable text-mode stream cannot decode a non-ASCII-compatible
     // external encoding unless a conversion to an internal encoding is
     // set up (CRuby's `validate_enc_binmode`, which looks at the
@@ -5069,6 +5390,7 @@ fn set_encoding(
         ));
     }
     store_io_encodings(globals, self_, slot, i);
+    set_io_ecopts(globals, self_, ecopts)?;
     Ok(self_)
 }
 
@@ -5208,7 +5530,16 @@ fn detect_and_consume_bom(
     io.as_io_inner_mut().unget(&head[consume..])?;
     let enc = enc_by_name(globals, enc_name)
         .ok_or_else(|| MonorubyErr::runtimeerr(format!("encoding {enc_name} not found")))?;
-    store_io_encodings(globals, io, ExtSlot::Fixed(enc), None);
+    // `io_encoding_set(fptr, extenc, rb_io_internal_encoding(io), Qnil)`:
+    // the internal encoding stays, and so do the `invalid:` / `undef:`
+    // choices, but not the `replace:` string.
+    let int = io
+        .as_io_inner()
+        .int_enc()
+        .filter(|&i| !enc_same(globals, i, enc));
+    store_io_encodings(globals, io, ExtSlot::Fixed(enc), int);
+    let (flags, _) = io_ecopts(globals, io);
+    set_io_ecopts(globals, io, (flags, None))?;
     Ok(Some(enc))
 }
 
@@ -5222,16 +5553,16 @@ pub(super) fn enc_obj_to_enum(globals: &Globals, v: Value) -> Option<crate::valu
     crate::value::Encoding::try_from_str(name).ok()
 }
 
-/// Tag `bytes` with the resolved external encoding (defaulting to
-/// `Encoding.default_external`), transcoding external -> internal when
-/// an internal encoding is set and differs and the external is not
-/// BINARY. Used by the `IO.readlines` / `IO.foreach` class methods.
-pub(super) fn tag_with_encs(
+/// The `(external, internal)` pair the class-level readers (`IO.readlines`,
+/// `IO.foreach`) and `Dir` resolve from optional encoding objects: an
+/// unset external is `Encoding.default_external`, an unset internal
+/// `Encoding.default_internal`, and a BINARY external converts to
+/// nothing.
+fn resolve_encs(
     globals: &mut Globals,
-    bytes: Vec<u8>,
     ext_obj: Option<Value>,
     int_obj: Option<Value>,
-) -> Value {
+) -> (crate::value::Encoding, Option<crate::value::Encoding>) {
     use crate::value::Encoding as E;
     let ext = match ext_obj {
         Some(o) => enc_obj_to_enum(globals, o).unwrap_or(E::UTF8),
@@ -5244,12 +5575,26 @@ pub(super) fn tag_with_encs(
     // (this is what makes IO.readlines & friends honor it).
     let intl = int_obj
         .or_else(|| enc_default_internal_obj(globals))
-        .and_then(|o| enc_obj_to_enum(globals, o));
+        .and_then(|o| enc_obj_to_enum(globals, o))
+        .filter(|_| !matches!(ext, E::Ascii8));
+    (ext, intl)
+}
+
+/// Tag `bytes` with the resolved encodings, transcoding external ->
+/// internal when it can and keeping the external-tagged bytes when it
+/// cannot. This is `rb_external_str_new_with_enc`'s rule, which a
+/// directory entry follows; a *read* raises instead (`read_conv`).
+pub(super) fn tag_with_encs_lossy(
+    globals: &mut Globals,
+    bytes: Vec<u8>,
+    ext_obj: Option<Value>,
+    int_obj: Option<Value>,
+) -> Value {
+    let (ext, intl) = resolve_encs(globals, ext_obj, int_obj);
     let (out, final_enc) = match intl {
-        Some(i) if i != ext && !matches!(ext, E::Ascii8) => {
+        Some(i) if i != ext => {
             let topts = crate::value::transcode::TranscodeOpts::default();
-            match crate::value::transcode_bytes_with_opts(&bytes, ext, i, &topts, &globals.store)
-            {
+            match crate::value::transcode_bytes_with_opts(&bytes, ext, i, &topts, &globals.store) {
                 Ok(b) => (b, i),
                 Err(_) => (bytes, ext),
             }
@@ -5261,30 +5606,191 @@ pub(super) fn tag_with_encs(
     s
 }
 
+/// [`read_conv`] for the class-level readers, whose encodings come as
+/// optional objects (see [`resolve_encs`]).
+fn tag_with_encs(
+    globals: &mut Globals,
+    io: Value,
+    bytes: Vec<u8>,
+    tail: &[u8],
+    ext_obj: Option<Value>,
+    int_obj: Option<Value>,
+) -> Result<Value> {
+    let (ext, intl) = resolve_encs(globals, ext_obj, int_obj);
+    read_conv(globals, io, bytes, tail, ext, intl)
+}
+
+/// CRuby's read conversion (`readconv`) of what one read took off `io`:
+/// the bytes tagged with the external encoding, or — when an internal
+/// encoding is set and differs — transcoded to it with the stream's
+/// `invalid:` / `undef:` / `replace:` options.
+///
+/// A conversion error is raised, as `fill_cbuf` raises it, and leaves
+/// the stream where CRuby's converter leaves it: what was converted
+/// ahead of the error is lost with the exception (CRuby has moved it
+/// into the String being built), the offending bytes are consumed, and
+/// everything after them — the read-again bytes first — is pushed
+/// back for the next read. `tail` is what the caller stripped off the
+/// end of `bytes` (a chomped separator): it was read too, so it is
+/// converted with the rest when an error has to be located, and pushed
+/// back with it.
+pub(super) fn read_conv(
+    globals: &mut Globals,
+    io: Value,
+    bytes: Vec<u8>,
+    tail: &[u8],
+    ext: crate::value::Encoding,
+    intl: Option<crate::value::Encoding>,
+) -> Result<Value> {
+    read_conv_keeping(globals, io, bytes, tail, ext, intl).map_err(|e| e.0)
+}
+
+/// [`read_conv`], handing back with an error what was converted ahead of
+/// it, tagged with the internal encoding: `IO#read` into a buffer leaves
+/// that in the buffer (CRuby converts straight into it).
+fn read_conv_keeping(
+    globals: &mut Globals,
+    mut io: Value,
+    bytes: Vec<u8>,
+    tail: &[u8],
+    ext: crate::value::Encoding,
+    intl: Option<crate::value::Encoding>,
+) -> std::result::Result<Value, Box<(MonorubyErr, Option<Value>)>> {
+    let (out, final_enc) = match intl {
+        Some(i) if i != ext => {
+            let owned;
+            let opts = match io_ecopts(globals, io) {
+                (0, None) => &crate::value::transcode::TranscodeOpts::DEFAULT,
+                (flags, replace) => {
+                    owned = super::encoding::io_transcode_opts(&globals.store, flags, replace);
+                    &owned
+                }
+            };
+            match convert_read_bytes(globals, &bytes, tail, ext, i, opts) {
+                Ok(b) => (b, i),
+                Err(e) => {
+                    let (err, rest, done) = *e;
+                    if !rest.is_empty()
+                        && let Err(e) = io.as_io_inner_mut().unget(&rest)
+                    {
+                        return Err(Box::new((e, None)));
+                    }
+                    let mut s = Value::string_from_vec(done);
+                    s.as_rstring_inner_mut().set_encoding(i);
+                    return Err(Box::new((err, Some(s))));
+                }
+            }
+        }
+        _ => (bytes, ext),
+    };
+    let mut s = Value::string_from_vec(out);
+    s.as_rstring_inner_mut().set_encoding(final_enc);
+    Ok(s)
+}
+
+/// [`read_conv`] for bytes no single stream can be rewound by (ARGF's
+/// read across files), with the default options.
+pub(super) fn read_conv_detached(
+    globals: &mut Globals,
+    bytes: Vec<u8>,
+    ext: crate::value::Encoding,
+    intl: Option<crate::value::Encoding>,
+) -> Result<Value> {
+    let (out, final_enc) = match intl {
+        Some(i) if i != ext => {
+            let opts = &crate::value::transcode::TranscodeOpts::DEFAULT;
+            (
+                convert_read_bytes(globals, &bytes, &[], ext, i, opts).map_err(|e| e.0)?,
+                i,
+            )
+        }
+        _ => (bytes, ext),
+    };
+    let mut s = Value::string_from_vec(out);
+    s.as_rstring_inner_mut().set_encoding(final_enc);
+    Ok(s)
+}
+
+/// The conversion [`read_conv`] runs: `bytes` from `ext` to `intl`, or
+/// the error, the bytes the stream has to be rewound by (everything
+/// after the offending sequence, read-again bytes first) and what was
+/// converted ahead of the error.
+fn convert_read_bytes(
+    globals: &Globals,
+    bytes: &[u8],
+    tail: &[u8],
+    ext: crate::value::Encoding,
+    intl: crate::value::Encoding,
+    opts: &crate::value::transcode::TranscodeOpts,
+) -> std::result::Result<Vec<u8>, Box<(MonorubyErr, Vec<u8>, Vec<u8>)>> {
+    match crate::value::transcode_bytes_with_opts(bytes, ext, intl, opts, &globals.store) {
+        Ok(b) => Ok(b),
+        Err(err) => Err(locate_read_error(
+            globals, err, bytes, tail, ext, intl, opts,
+        )),
+    }
+}
+
+/// [`convert_read_bytes`]'s error path: where in the read the conversion
+/// stopped, which is where the stream resumes.
+#[cold]
+#[inline(never)]
+fn locate_read_error(
+    globals: &Globals,
+    err: MonorubyErr,
+    bytes: &[u8],
+    tail: &[u8],
+    ext: crate::value::Encoding,
+    intl: crate::value::Encoding,
+    opts: &crate::value::transcode::TranscodeOpts,
+) -> Box<(MonorubyErr, Vec<u8>, Vec<u8>)> {
+    use crate::value::transcode::{StreamConvertResult as R, stream_convert};
+    let mut full = bytes.to_vec();
+    full.extend_from_slice(tail);
+    match crate::value::transcode_bytes_with_opts(&full, ext, intl, opts, &globals.store) {
+        // Only what was stripped off made it convert; the error still
+        // stands where it was found.
+        Ok(_) => Box::new((err, tail.to_vec(), vec![])),
+        Err(err) => {
+            let (res, consumed, done, meta) =
+                stream_convert(&full, ext, intl, None, false, opts, &globals.store);
+            let rest = match res {
+                R::InvalidByteSequence | R::UndefinedConversion | R::IncompleteInput => {
+                    let mut rest = meta.readagain_bytes.clone();
+                    rest.extend_from_slice(&full[consumed.min(full.len())..]);
+                    rest
+                }
+                _ => vec![],
+            };
+            Box::new((err, rest, done))
+        }
+    }
+}
+
 /// Build the String returned by a read: tag it with the IO's external
 /// encoding, transcoding external -> internal when an internal encoding
-/// is set. `sized` reads (an explicit byte count) return ASCII-8BIT,
-/// matching CRuby.
+/// is set (see [`read_conv`]). `sized` reads (an explicit byte count)
+/// return ASCII-8BIT, matching CRuby.
 fn tagged_read_string(
     globals: &mut Globals,
     io: Value,
     bytes: Vec<u8>,
     sized: bool,
-) -> Value {
+) -> Result<Value> {
     use crate::value::Encoding as E;
     if sized {
         let mut s = Value::string_from_vec(bytes);
         s.as_rstring_inner_mut().set_encoding(E::Ascii8);
-        return s;
+        return Ok(s);
     }
     let (ext, intl) = io_encodings(globals, io);
-    tagged_read_string_with(globals, bytes, ext, intl)
+    read_conv(globals, io, bytes, &[], ext, intl)
 }
 
 /// The stream's `(external, internal)` encodings, resolved once.
 ///
 /// Callers that need them anyway (`IO#getc`, `IO#gets`) resolve here and
-/// hand the result to [`tagged_read_string_with`]: going back through
+/// hand the result to [`read_conv`]: going back through
 /// `tagged_read_string` would repeat the ivar reads and the name parse
 /// two more times per character or line.
 pub(super) fn io_encodings(
@@ -5301,29 +5807,6 @@ pub(super) fn io_encodings(
         enc_obj_to_enum(globals, int_v)
     };
     (ext, intl)
-}
-
-/// [`tagged_read_string`] with the encodings already resolved.
-pub(super) fn tagged_read_string_with(
-    globals: &mut Globals,
-    bytes: Vec<u8>,
-    ext: crate::value::Encoding,
-    intl: Option<crate::value::Encoding>,
-) -> Value {
-    let (out, final_enc) = match intl {
-        Some(i) if i != ext => {
-            let opts = crate::value::transcode::TranscodeOpts::default();
-            match crate::value::transcode_bytes_with_opts(&bytes, ext, i, &opts, &globals.store)
-            {
-                Ok(b) => (b, i),
-                Err(_) => (bytes, ext),
-            }
-        }
-        _ => (bytes, ext),
-    };
-    let mut s = Value::string_from_vec(out);
-    s.as_rstring_inner_mut().set_encoding(final_enc);
-    s
 }
 
 /// Read `/enc_ext` / `/enc_int`, resolving the live-default marker.
