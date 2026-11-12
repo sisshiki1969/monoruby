@@ -102,6 +102,7 @@ mod install_root;
 mod integer_64bit;
 mod invoked_name;
 mod io_console;
+mod io_read_conversion;
 mod ivar_ty;
 mod jit_method_deps;
 mod jit_method_missing;

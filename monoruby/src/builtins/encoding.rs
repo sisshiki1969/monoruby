@@ -1338,6 +1338,90 @@ fn parse_transcode_opts(lfp: Lfp, store: &Store) -> TranscodeOpts {
     with_newline_flags(out, flags)
 }
 
+/// `invalid: :replace` in an IO's read-conversion flags.
+pub(crate) const IO_INVALID_REPLACE: i64 = 1;
+/// `undef: :replace` in an IO's read-conversion flags.
+pub(crate) const IO_UNDEF_REPLACE: i64 = 2;
+
+/// The conversion options an IO keeps for what it reads, after
+/// `rb_econv_prepare_options(opthash, &ecopts, ecflags)` with the
+/// stream's current flags as `prev_flags`: the new flags
+/// (`IO_INVALID_REPLACE` / `IO_UNDEF_REPLACE`) and the `replace:`
+/// String as given (the stream keeps a frozen copy of it, made when the
+/// options are stored, so nothing is allocated here for a caller to
+/// root).
+///
+/// CRuby keeps the `invalid:` / `undef:` choices as bits of
+/// `encs.ecflags`, which `econv_opts` only ever *sets*, and the
+/// `replace:` string in `encs.ecopts`, which is rebuilt from the new
+/// Hash each time — so a later `#set_encoding` without options keeps
+/// `invalid: :replace` but goes back to the default replacement.
+/// `hash` is `None` when no options were given. A value other than
+/// `:replace` (or nil) for `invalid:` / `undef:` is CRuby's
+/// ArgumentError, and a non-String `replace:` its TypeError.
+pub(crate) fn io_read_ecopts(
+    globals: &Globals,
+    prev_flags: i64,
+    hash: Option<crate::value::Hashmap>,
+) -> Result<(i64, Option<Value>)> {
+    let mut flags = prev_flags;
+    let Some(hash) = hash else {
+        return Ok((flags, None));
+    };
+    let get = |key: &str| find_hash_value_for_symbol(&hash, key).filter(|v| !v.is_nil());
+    let is_replace = |v: Value| v.try_symbol().is_some_and(|s| s.get_name() == "replace");
+    if let Some(v) = get("invalid") {
+        if !is_replace(v) {
+            return Err(MonorubyErr::argumenterr(
+                "unknown value for invalid character option",
+            ));
+        }
+        flags |= IO_INVALID_REPLACE;
+    }
+    if let Some(v) = get("undef") {
+        if !is_replace(v) {
+            return Err(MonorubyErr::argumenterr(
+                "unknown value for undefined character option",
+            ));
+        }
+        flags |= IO_UNDEF_REPLACE;
+    }
+    let mut replace = None;
+    if let Some(v) = get("replace") {
+        if flags & IO_INVALID_REPLACE == 0 {
+            flags |= IO_UNDEF_REPLACE;
+        }
+        if v.is_rstring_inner().is_none() {
+            return Err(MonorubyErr::no_implicit_conversion(
+                &globals.store,
+                v,
+                STRING_CLASS,
+            ));
+        }
+        replace = Some(v);
+    }
+    Ok((flags, replace))
+}
+
+/// The [`TranscodeOpts`] an IO's read conversion runs with, from what
+/// [`io_read_ecopts`] settled.
+pub(crate) fn io_transcode_opts(
+    store: &Store,
+    flags: i64,
+    replace: Option<Value>,
+) -> TranscodeOpts {
+    let mut out = TranscodeOpts {
+        invalid_replace: flags & IO_INVALID_REPLACE != 0,
+        undef_replace: flags & IO_UNDEF_REPLACE != 0,
+        ..TranscodeOpts::default()
+    };
+    if let Some(v) = replace {
+        out.replace = replacement_text(v, store);
+        out.replace_enc = v.is_rstring_inner().map(|i| i.encoding());
+    }
+    out
+}
+
 /// Pull the `fallback:` option value off `String#encode`'s kwargs (the
 /// conversion-time callback consulted for undefined characters). Kept
 /// out of [`TranscodeOpts`] because invoking it needs the VM.

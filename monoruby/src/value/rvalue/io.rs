@@ -2094,6 +2094,64 @@ impl IoInner {
         }
     }
 
+    /// [`Self::getline`] for a stream whose external encoding has `unit`
+    /// bytes per code unit (UTF-16 / UTF-32) and is converted to an
+    /// internal one: `sep` is the separator *in the external encoding*,
+    /// and it ends a line only on a code-unit boundary, so the line comes
+    /// out whole for the conversion. (CRuby converts first and looks for
+    /// the separator in what it converted, which splits at the same
+    /// places.) A limit is rounded up to a whole code unit.
+    pub fn getline_units(
+        &mut self,
+        sep: Option<&[u8]>,
+        limit: Option<usize>,
+        unit: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        if limit == Some(0) {
+            return Ok(Some(Vec::new()));
+        }
+        let mut buf = match sep {
+            None => {
+                let buf = self.read(limit)?;
+                if buf.is_empty() {
+                    return Ok(None);
+                }
+                buf
+            }
+            Some(s) => {
+                let mut buf = Vec::new();
+                loop {
+                    if let Some(l) = limit
+                        && buf.len() >= l
+                        && buf.len() % unit == 0
+                    {
+                        break;
+                    }
+                    match self.read1_preserving(&buf)? {
+                        None => break,
+                        Some(b) => {
+                            buf.push(b);
+                            if buf.len() % unit == 0 && !s.is_empty() && buf.ends_with(s) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                if buf.is_empty() {
+                    return Ok(None);
+                }
+                buf
+            }
+        };
+        while buf.len() % unit != 0 {
+            match self.read1_preserving(&buf)? {
+                None => break,
+                Some(b) => buf.push(b),
+            }
+        }
+        Ok(Some(buf))
+    }
+
     /// After a limit cut, read up to 16 extra bytes to complete a UTF-8
     /// character the cut may have split. Like CRuby, the scan keeps
     /// consuming while the tail still looks like an unfinished character

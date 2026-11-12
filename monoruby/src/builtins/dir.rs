@@ -136,7 +136,7 @@ fn external_str_with_enc(globals: &mut Globals, bytes: Vec<u8>, enc_obj: Option<
     if target == Some(E::UsAscii) && !bytes.is_ascii() {
         return super::file::path_value(&bytes, E::Ascii8);
     }
-    super::io::tag_with_encs(globals, bytes, enc_obj, None)
+    super::io::tag_with_encs_lossy(globals, bytes, enc_obj, None)
 }
 
 /// Resolve an `encoding:` keyword value (String name or Encoding

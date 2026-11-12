@@ -3929,6 +3929,21 @@ pub(crate) struct TranscodeOpts {
 }
 
 impl TranscodeOpts {
+    /// `TranscodeOpts::default()` as a constant, for a caller that wants
+    /// to lend the default out without building one per call.
+    pub(crate) const DEFAULT: Self = Self {
+        invalid_replace: false,
+        undef_replace: false,
+        replace: None,
+        replace_enc: None,
+        report_src: None,
+        iso_state: None,
+        universal_newline: false,
+        crlf_newline: false,
+        cr_newline: false,
+        lf_newline: false,
+    };
+
     pub(crate) fn has_newline(&self) -> bool {
         self.universal_newline || self.crlf_newline || self.cr_newline || self.lf_newline
     }

@@ -1315,6 +1315,10 @@ fn open_impl(
     is_new: bool,
 ) -> Result<Value> {
     let kw_hash = open_kw_hash(vm, globals, lfp)?;
+    // `rb_io_extract_modeenc` reads the conversion options before
+    // anything is opened, so a bad `invalid:` / `undef:` / `replace:` is
+    // reported even for a path that does not exist.
+    super::encoding::io_read_ecopts(globals, 0, kw_hash.map(|h| h.as_hash()))?;
     // If the first argument is an Integer, treat it as a file descriptor.
     if let Some(fd) = lfp.arg(0).try_fixnum() {
         let fd_i32 = fd as i32;
