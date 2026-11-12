@@ -1508,6 +1508,14 @@ pub(super) extern "C" fn concatenate_regexp(
         enc = e;
         option |= RegexpInner::FIXEDENCODING;
     }
+    // A `u` / `e` / `s` modifier has already re-tagged the literal
+    // fragments (`gen_regexp`), and only them: the pattern is fixed to
+    // the encoding the pieces settled on, not read again in the
+    // modifier's (`/#{euc}/u` is an EUC-JP regexp, `/#{ascii_euc}x/u`
+    // too). This is `rb_reg_initialize` under `ARG_ENCODING_FIXED`.
+    if option & RegexpInner::KCODE_MASK != 0 {
+        option = (option & !RegexpInner::KCODE_MASK) | RegexpInner::FIXEDENCODING;
+    }
     // From here the source is read exactly as `Regexp.new` reads a
     // String in `enc`: the engine, the declared encoding and the `\xHH`
     // escapes are all settled by the shared builder.

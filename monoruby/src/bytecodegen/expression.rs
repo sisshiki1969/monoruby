@@ -2303,6 +2303,50 @@ impl<'a> BytecodeGen<'a> {
                 }
             }
         }
+        // A `u` / `e` / `s` modifier re-tags the literal fragments only
+        // (CRuby's `reg_fragment_setenc`; prism's `parse_regexp_string_part`);
+        // interpolated values keep their own encoding, and
+        // `concatenate_regexp` settles the pattern's encoding from the
+        // pieces as `rb_reg_preprocess_dregexp` does. A lone interpolation
+        // is seeded with an empty fragment in that encoding, as prism's
+        // compiler does (`parts_size == 1` in `pm_interpolated_node_compile`):
+        // `/#{ascii_euc}/u` is then a UTF-8 regexp, while a non-ASCII value
+        // still brings its own encoding. An interpolated literal with
+        // nothing but literal parts (`/x#{"a"}/e`) is compiled statically
+        // by prism (`parse_regexp_concat`), from fragments left in the
+        // file's encoding: its pattern is fixed to that encoding instead.
+        let is_fragment = |node: &Node| {
+            matches!(
+                node.kind,
+                NodeKind::String(_) | NodeKind::Bytes(_) | NodeKind::EncodedString(..)
+            )
+        };
+        let kcode_enc = match enc_bits {
+            b if b & RegexpInner::KCODE_UTF8 != 0 => Some("UTF-8"),
+            b if b & RegexpInner::KCODE_EUCJP != 0 => Some("EUC-JP"),
+            b if b & RegexpInner::KCODE_SJIS != 0 => Some("Windows-31J"),
+            _ => None,
+        }
+        .filter(|_| !nodes.iter().all(is_fragment));
+        let nodes: Vec<Node> = match kcode_enc {
+            Some(name) if nodes.len() == 1 => {
+                len += 1;
+                let seed = Node::new(NodeKind::EncodedString(vec![], name), nodes[0].loc());
+                std::iter::once(seed).chain(nodes).collect()
+            }
+            Some(name) => nodes
+                .into_iter()
+                .map(|node| {
+                    let bytes = match node.kind {
+                        NodeKind::String(s) => s.into_bytes(),
+                        NodeKind::Bytes(b) | NodeKind::EncodedString(b, _) => b,
+                        kind => return Node { kind, ..node },
+                    };
+                    Node::new(NodeKind::EncodedString(bytes, name), node.loc)
+                })
+                .collect(),
+            None => nodes,
+        };
         // Always the first operand (even when 0) so the run-time layout is
         // uniform: operand 0 is the option word, the rest are source
         // fragments.

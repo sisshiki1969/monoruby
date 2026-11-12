@@ -361,6 +361,14 @@ pub(crate) fn check_regexp_hex_escapes(bytes: &[u8], enc: crate::value::Encoding
                     {
                         ch.push(b);
                         i = next;
+                    } else if bytes.get(i) == Some(&b'\\')
+                        && bytes
+                            .get(i + 1)
+                            .is_some_and(|e| !b"\\ntrfvae01234567xMCc".contains(e))
+                    {
+                        // An escape that spells no byte (`\u`, `\d`, …):
+                        // `read_escaped_byte`'s refusal.
+                        return Err(refuse("unexpected escape sequence"));
                     } else {
                         return Err(refuse("too short escaped multibyte character"));
                     }
@@ -3778,6 +3786,88 @@ re = Regexp.new(u.("(?<n>a)(b)"))
               [r.source.b, r.encoding.to_s, r.fixed_encoding?]
             rescue => x
               [x.class, x.message.b]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn regexp_interpolation_kcode_keeps_piece_encodings() {
+        // #1846: `u` / `e` / `s` re-tag the literal fragments only; the
+        // interpolated values keep their own encodings, and the pattern is
+        // fixed to whatever the pieces settle on. A lone interpolation is
+        // seeded with an empty fragment in the modifier's encoding, and an
+        // interpolation of literals only is compiled statically by prism
+        // from fragments in the file's encoding.
+        run_test(
+            r##"
+            e = "あ".encode("EUC-JP"); a = "あ"; ea = "a".encode("EUC-JP"); b = "a".b
+            [
+              -> { /#{e}/u }, -> { /#{a}/e }, -> { /#{ea}x/u }, -> { /#{a}x/s },
+              -> { /x#{ea}/u }, -> { /#{ea}/u }, -> { /#{b}/u }, -> { /#{1}/u },
+              -> { /a#{1}/s }, -> { /#{"\\u3042"}x/e }, -> { /#{ea}#{"\\u{3042}"}/e },
+              -> { /x#{e}/e }, -> { /x#{e}/u }, -> { /#{e}#{a}/u }, -> { /#{1}/n },
+              -> { /#{"a"}/e }, -> { /x#{"a"}/e }, -> { /#{"a"}#{ea}/e },
+              -> { /#{"a"}x/e }, -> { /#{ea}#{ea}/u }, -> { /#{"a".b}x/e },
+              -> { /#{:a}/u }, -> { /#{ea}/s }, -> { /#{e}x/ou },
+            ].map do |f|
+              r = f.call
+              [r.source.b, r.encoding.to_s, r.fixed_encoding?]
+            rescue => x
+              [x.class, x.message.b]
+            end
+            "##,
+        );
+        run_test(
+            r##"
+            e = "あ".encode("EUC-JP"); a = "あ"; ea = "a".encode("EUC-JP")
+            [(/#{e}/u =~ "xあ".encode("EUC-JP")), (/#{a}x/s =~ "あx"),
+             (/#{ea}x/u =~ "ax".encode("EUC-JP")),
+             ((/#{ea}x/u =~ "あax") rescue $!.class)]
+            "##,
+        );
+    }
+
+    #[test]
+    fn regexp_unicode_escape_in_non_utf8_source() {
+        // #1847: a `\u` escape of an ASCII codepoint is read in any
+        // ASCII-compatible source (CRuby's preprocessing turns it into
+        // `\xHH` before Onigmo sees it); a non-ASCII one cannot share a
+        // pattern with the source's own non-ASCII characters.
+        run_test(
+            r##"
+            srcs = ["\\u{41}あ", "\\u0041あ", "\\u{41}a", "\\u{3042}あ", "\\u3042あ", "あ\\u{3042}",
+                    "あ\\u{41 42}", "あ\\u{41 3042}", "\\\\u{41}あ", "あ\\u{110000}", "あ\\u{}",
+                    "あ\\u{4", "あ\\u004", "あ[\\u{41}-\\u{43}]", "あ\\u{41}+", "あ(?<n>\\u{61})",
+                    "\\u{7F}あ", "あ\\xA4\\u{3042}", "あ\\xA4\\d", "あ\\xA4\\xA2\\u{3042}", "\\u{3042}\\xA4\\xA2", "あ(?#\\u{3042})\\u{41}",
+                    "あ\\", "あ\\u", "あ\\u{1234567}", "あ\\244\\242\\u{3042}", "あ\\101\\u{41}",
+                    "(?x:\\u{41} # \\u{3042}\n)あ", "(?-x)あ # \\u{41}", "(?i)あ\\u{41}",
+                    "(あ)\\u{41}", "あ[\\]\\u{41}]", "あ(?x)[#]\\u{41}", "あ\\u{ 41 }", "あ\\n\\u{41}"]
+            %w[EUC-JP Windows-31J ISO-8859-1].flat_map do |enc|
+              srcs.map do |s|
+                s = s.encode(enc) rescue s.sub("あ", "\u00e9").encode(enc)
+                r = Regexp.new(s)
+                [r.source.b, r.encoding.to_s, r.fixed_encoding?]
+              rescue => x
+                [x.class, x.message.b]
+              end
+            end
+            "##,
+        );
+        run_test(
+            r##"
+            %w[EUC-JP Windows-31J].flat_map do |enc|
+              subj = "xABCあ表A\nA".encode(enc)
+              ["\\u{41}あ", "\\u0042\\u{43}あ", "[\\u{41}-\\u{43}]+あ", "\\u{41 42}",
+               "(?<n>\\u{43})あ", "あ|\\u{78}", "(?x) \\u{41} # \\u{3042}\n あ",
+               "表\\u{41}", "あ\\n\\u{41}", "\\あ\\u{41}"].map do |s|
+                r = Regexp.new(s.encode(enc))
+                m = r.match(subj)
+                [m && m[0].b, m && m.begin(0), Regexp.new(s.encode(enc), "i") =~ subj.downcase, r.names]
+              end + [
+                (/#{"\\u{41}"}#{"あ".encode(enc)}/ =~ "xAあ".encode(enc)),
+                (/\u{41}/ =~ "xAあ".encode(enc)), ("xAあ".encode(enc).index(/\u{41 42}+/i)),
+              ]
             end
             "##,
         );
