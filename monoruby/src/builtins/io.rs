@@ -3470,15 +3470,21 @@ fn io_binmode(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut self_ = lfp.self_val();
+    let self_ = lfp.self_val();
     ensure_io_open(self_)?;
-    // CRuby: binmode forces external = ASCII-8BIT, internal = nil.
+    ascii8bit_binmode(globals, self_);
+    Ok(self_)
+}
+
+/// CRuby's `io_ascii8bit_binmode`: binary mode, external = ASCII-8BIT,
+/// internal = nil. `IO#binmode`, and `IO.copy_stream` on its
+/// destination.
+fn ascii8bit_binmode(globals: &mut Globals, mut io: Value) {
     let bin = enc_by_name(globals, "ASCII-8BIT")
         .map(ExtSlot::Fixed)
         .unwrap_or(ExtSlot::Nil);
-    store_io_encodings(globals, self_, bin, None);
-    self_.as_io_inner_mut().set_binmode();
-    Ok(self_)
+    store_io_encodings(globals, io, bin, None);
+    io.as_io_inner_mut().set_binmode();
 }
 
 ///
@@ -3600,10 +3606,10 @@ fn io_advise(
 fn io_pos(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
     let mut self_ = lfp.self_val();
-    let io = self_.as_io_inner_mut();
-    let pb = io.pushback_len() as i64;
-    let pos = io.seek_for(0, 1, &globals.store, "rb_io_tell")?;
-    Ok(Value::integer((pos as i64 - pb).max(0)))
+    let pos = self_
+        .as_io_inner_mut()
+        .tell_for(&globals.store, "rb_io_tell")?;
+    Ok(Value::integer(pos))
 }
 
 ///
@@ -3957,7 +3963,7 @@ fn io_sysseek(
     let pos = self_
         .as_io_inner_mut()
         .seek(offset, whence)
-        .map_err(|e| MonorubyErr::errno_with_msg(&globals.store, &e, ""))?;
+        .map_err(|e| self_.as_io_inner().errno_for(&globals.store, &e, "rb_io_sysseek"))?;
     Ok(Value::integer(pos as i64))
 }
 
@@ -5975,6 +5981,26 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
             vm.temp_push(v);
         }
 
+        // `copy_stream_body`: a descriptor destination is put in binary
+        // mode before anything is written (`io_ascii8bit_binmode`). It
+        // may allocate, so the endpoints opened above are rooted first.
+        if let Some(v) = dst_val {
+            ascii8bit_binmode(globals, v);
+        }
+
+        // Both ends are descriptors: CRuby's own copy loop on the fds.
+        if let (Some(s), Some(d)) = (src_val, dst_val) {
+            return copy_stream_fds(
+                vm,
+                globals,
+                s,
+                d,
+                src_offset,
+                copy_length,
+                src_io_owned.is_some(),
+            );
+        }
+
         // Write one chunk to the destination, looping over partial
         // writes. Object destinations dispatch #write and read back the
         // written byte count.
@@ -6136,6 +6162,252 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         let _ = v.as_io_inner_mut().close(&globals.store);
     }
     Ok(Value::integer(result? as i64))
+}
+
+/// `IO.copy_stream` between two descriptors: CRuby's `copy_stream_body`
+/// from the point both endpoints are known to have one, and the
+/// `nogvl_copy_stream_func` it runs.
+///
+/// 1. Without a source offset, what the source has already buffered
+///    (pushback and read-ahead) goes first, through the destination's
+///    buffered write (`io_binwrite`, failing as `rb_sys_fail_on_write`).
+/// 2. The destination's write buffer is flushed (`IOError` "flush
+///    failed" when that fails).
+/// 3. The rest is copied on the raw fds: `copy_file_range(2)`, then
+///    `sendfile(2)` (both Linux, regular-file source only), then a
+///    `read` / `pread` + `write` loop. A failure raises the `Errno::*`
+///    named after the syscall that failed (`"Broken pipe - sendfile"`,
+///    `"No space left on device - write"`), as CRuby's
+///    `rb_syserr_fail(errno, stp->syserr)` does.
+///
+/// Each syscall runs inside [`blocking_io_region`], so `EAGAIN` parks on
+/// the fd and `EINTR` runs the pending interrupts before it is retried,
+/// with the progress kept outside the closure.
+fn copy_stream_fds(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut src: Value,
+    mut dst: Value,
+    src_offset: Option<u64>,
+    copy_length: Option<u64>,
+    src_owned: bool,
+) -> Result<u64> {
+    let mut copied: u64 = 0;
+    let mut remaining = copy_length;
+
+    if src_offset.is_none() {
+        let max = remaining.map_or(usize::MAX, |l| l.min(usize::MAX as u64) as usize);
+        let buffered = src.as_io_inner_mut().take_read_buffered(max);
+        if !buffered.is_empty() {
+            let mut done = 0;
+            blocking_io_region(vm, globals, dst, libc::POLLOUT, |store| {
+                dst.as_io_inner_mut().write(&buffered, &mut done, store)
+            })?;
+            copied += buffered.len() as u64;
+            if let Some(l) = remaining.as_mut() {
+                *l -= buffered.len() as u64;
+            }
+        }
+    }
+    blocking_io_region(vm, globals, dst, libc::POLLOUT, |store| {
+        match dst.as_io_inner_mut().flush(store) {
+            Err(e) if e.is_signal_interrupt() || e.is_would_block_interrupt() => Err(e),
+            Err(_) => Err(MonorubyErr::ioerr("flush failed")),
+            Ok(()) => Ok(()),
+        }
+    })?;
+    if remaining == Some(0) {
+        return Ok(copied);
+    }
+
+    let src_fd = src.as_io_inner().fileno()?;
+    let dst_fd = dst.as_io_inner().wait_fd_for(libc::POLLOUT)?;
+    let syserr = |globals: &Globals, err: &std::io::Error, name: &str| {
+        MonorubyErr::errno_with_msg(&globals.store, err, name)
+    };
+    // One syscall, retried on `EINTR` (after the interrupts ran) and
+    // parked on `EAGAIN`; any other failure comes back as `Ok(Err(_))`.
+    fn attempt(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        io: Value,
+        events: i16,
+        mut call: impl FnMut() -> isize,
+    ) -> Result<std::result::Result<usize, std::io::Error>> {
+        blocking_io_region(vm, globals, io, events, |_| {
+            let n = call();
+            if n >= 0 {
+                return Ok(Ok(n as usize));
+            }
+            let err = std::io::Error::last_os_error();
+            match err.raw_os_error() {
+                Some(libc::EINTR) => Err(MonorubyErr::signal_interrupt()),
+                Some(e) if e == libc::EAGAIN || e == libc::EWOULDBLOCK => {
+                    Err(MonorubyErr::would_block_interrupt())
+                }
+                _ => Ok(Err(err)),
+            }
+        })
+    }
+
+    let mut offset = src_offset.map(|o| o as libc::off_t);
+
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: `st` is a plain-data out-parameter for fstat(2) on a
+        // live descriptor.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstat(src_fd, &mut st) } < 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(syserr(globals, &err, "fstat"));
+        }
+        if st.st_mode & libc::S_IFMT == libc::S_IFREG {
+            // The length to offload: what is left of the file from the
+            // starting point when no length was given.
+            let mut length = match remaining {
+                Some(l) => l as i64,
+                None => {
+                    let start = match offset {
+                        Some(o) => o,
+                        None => {
+                            // SAFETY: lseek(2) on a live descriptor.
+                            let cur = unsafe { libc::lseek(src_fd, 0, libc::SEEK_CUR) };
+                            if cur < 0 {
+                                let err = std::io::Error::last_os_error();
+                                return Err(syserr(globals, &err, "lseek"));
+                            }
+                            cur
+                        }
+                    };
+                    st.st_size - start
+                }
+            };
+            // copy_file_range(2), then sendfile(2): each either finishes
+            // the copy, fails it, or declines (falls through to the next).
+            for name in ["copy_file_range", "sendfile"] {
+                loop {
+                    let count = length.max(0) as usize;
+                    let res = attempt(vm, globals, dst, libc::POLLOUT, || {
+                        let off_ptr = match offset.as_mut() {
+                            Some(o) => o as *mut libc::off_t,
+                            None => std::ptr::null_mut(),
+                        };
+                        // SAFETY: both fds are live; `off_ptr` is null or
+                        // points at `offset`, which outlives the call.
+                        unsafe {
+                            if name == "sendfile" {
+                                libc::sendfile(dst_fd, src_fd, off_ptr, count)
+                            } else {
+                                libc::copy_file_range(
+                                    src_fd,
+                                    off_ptr,
+                                    dst_fd,
+                                    std::ptr::null_mut(),
+                                    count,
+                                    0,
+                                )
+                            }
+                        }
+                    })?;
+                    match res {
+                        Ok(n) => {
+                            copied += n as u64;
+                            length -= n as i64;
+                            if let Some(l) = remaining.as_mut() {
+                                *l -= n as u64;
+                            }
+                            if n > 0 && length > 0 {
+                                continue;
+                            }
+                            return Ok(copied);
+                        }
+                        Err(err) => {
+                            let e = err.raw_os_error().unwrap_or(0);
+                            let declined = if name == "sendfile" {
+                                e == libc::EINVAL || e == libc::ENOSYS || e == libc::EOPNOTSUPP
+                            } else {
+                                e == libc::EINVAL
+                                    || e == libc::EPERM
+                                    || e == libc::ENOSYS
+                                    || e == libc::EXDEV
+                                    // An `O_APPEND` destination.
+                                    || (e == libc::EBADF && {
+                                        // SAFETY: fcntl(F_GETFL) on a live fd.
+                                        let fl = unsafe { libc::fcntl(dst_fd, libc::F_GETFL) };
+                                        fl != -1 && fl & libc::O_APPEND != 0
+                                    })
+                            };
+                            if declined {
+                                break;
+                            }
+                            return Err(syserr(globals, &err, name));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // The read / write loop. A source `copy_stream` opened itself is
+    // positioned with `lseek` and read; one handed in is `pread` at the
+    // offset, so its own position stays where it was.
+    if src_owned && let Some(o) = offset.take() {
+        // SAFETY: lseek(2) on a live descriptor.
+        if unsafe { libc::lseek(src_fd, o, libc::SEEK_SET) } < 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(syserr(globals, &err, "lseek"));
+        }
+    }
+    const CHUNK: usize = 16 * 1024;
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        let len = match remaining {
+            Some(0) => break,
+            Some(l) => (l as usize).min(CHUNK),
+            None => CHUNK,
+        };
+        let res = attempt(vm, globals, src, libc::POLLIN, || {
+            let p = buf.as_mut_ptr() as *mut libc::c_void;
+            // SAFETY: `buf` holds at least `len` writable bytes; the fd
+            // is live.
+            unsafe {
+                match offset {
+                    Some(o) => libc::pread(src_fd, p, len, o),
+                    None => libc::read(src_fd, p, len),
+                }
+            }
+        })?;
+        let n = match res {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(err) => {
+                let name = if offset.is_some() { "pread" } else { "read" };
+                return Err(syserr(globals, &err, name));
+            }
+        };
+        if let Some(o) = offset.as_mut() {
+            *o += n as libc::off_t;
+        }
+        let mut off = 0;
+        while off < n {
+            let chunk = &buf[off..n];
+            let res = attempt(vm, globals, dst, libc::POLLOUT, || {
+                // SAFETY: `chunk` is a live slice; the fd is live.
+                unsafe { libc::write(dst_fd, chunk.as_ptr() as *const libc::c_void, chunk.len()) }
+            })?;
+            match res {
+                Ok(w) => {
+                    off += w;
+                    copied += w as u64;
+                }
+                Err(err) => return Err(syserr(globals, &err, "write")),
+            }
+        }
+        if let Some(l) = remaining.as_mut() {
+            *l -= n as u64;
+        }
+    }
+    Ok(copied)
 }
 
 #[cfg(test)]
