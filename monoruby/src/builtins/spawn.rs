@@ -1555,18 +1555,18 @@ mod tests {
         run_test_once(
             r#"
             [
-              -> { Process.wait Process.spawn("true", err: 99) },
+              -> { Process.wait Process.spawn("true", err: 1_000_000) },
               -> { Process.wait Process.spawn("true", err: "/nonexistent-dir-xyzzy/x") },
               -> { Process.wait Process.spawn("true", in: "/nonexistent-dir-xyzzy/x") },
               -> { Process.wait Process.spawn("true", out: "/") },
               -> { Process.wait Process.spawn("true", pgroup: 999999) },
               -> { Process.wait Process.spawn("true", chdir: "/nonexistent-dir-xyzzy") },
-              -> { Process.wait Process.spawn("true", 99 => :close) },
-              -> { Process.wait Process.spawn("true", 99 => 99) },
-              -> { IO.popen(["true"], err: 99) {} },
+              -> { Process.wait Process.spawn("true", 1_000_000 => :close) },
+              -> { Process.wait Process.spawn("true", 1_000_000 => 1_000_000) },
+              -> { IO.popen(["true"], err: 1_000_000) {} },
               -> { IO.popen(["true"], err: "/nonexistent-dir-xyzzy/x") {} },
               -> { system("true", err: "/nonexistent-dir-xyzzy/x") },
-              -> { system("true", err: 99) },
+              -> { system("true", err: 1_000_000) },
             ].map do |f|
               r = f.call
               [:ok, r]

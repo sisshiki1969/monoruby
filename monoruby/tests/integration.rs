@@ -175,6 +175,7 @@ mod signal_trap;
 mod singleton_class_facts;
 mod socket;
 mod sort_fast_path;
+mod spawn_fds;
 mod spec_conformance;
 mod spliced_exit_chain;
 mod spliced_exit_claim;
