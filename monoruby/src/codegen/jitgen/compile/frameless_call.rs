@@ -14,8 +14,9 @@
 //! its spill slots live in a *window* the caller reserves inside its own
 //! native frame, right below the caller's slot area
 //! (`JitContext::note_inline_window`); the caller writes `self`, the
-//! arguments and, when the body reads it, the header into the window as
-//! plain slot stores of its own (`AbstractState::fill_window`), then
+//! arguments and, when the compiled body reads it
+//! (`AsmIr::reads_frame_header`), the header into the window as plain slot
+//! stores of its own (`AbstractState::fill_window`), then
 //! moves the native frame pointer and the LFP down into it and runs the
 //! callee's body in place (`AsmInst::InlineCall`,
 //! `Codegen::gen_inline_call`). With both pointers shifted, the body is
@@ -412,6 +413,7 @@ impl<'a> JitContext<'a> {
             // A block's plain return never hands an object over
             // (`return_virtual_in_caller`).
             return_virtual: _,
+            reads_header,
         } = self.compile_specialized_func(
             state,
             iseq,
@@ -443,52 +445,12 @@ impl<'a> JitContext<'a> {
             using_fpr,
             &arg_hints,
             hops,
+            reads_header,
         );
         let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
         state.capture_guard_after_call(ir, &self.store, dst);
         Ok(res)
     }
-}
-
-///
-/// Does the body of *iseq_id* read its own LFP header? The window of an
-/// inline callee gets a header (outer, meta, svar, block) only when
-/// something in the body can look at it: a method call, which may be
-/// lowered to an inline builtin that reads the block word or the meta
-/// (`block_given?`, `__method__`), an index operation, whose runtime
-/// helpers can re-enter Ruby, or anything that touches `$~` / `$_`. A body
-/// of loads, stores, arithmetic and branches reads `self` and its
-/// arguments from the slots and nothing above them.
-///
-fn reads_frame_header(store: &Store, iseq_id: ISeqId) -> bool {
-    let iseq = &store[iseq_id];
-    (0..iseq.bytecode().len()).any(|i| {
-        let pc = iseq.get_pc(BcIndex::from(i));
-        !matches!(
-            TraceIr::from_pc(pc, store),
-            TraceIr::Br(..)
-                | TraceIr::CondBr(..)
-                | TraceIr::NilBr(..)
-                | TraceIr::OptCase { .. }
-                | TraceIr::FrozenLiteral(..)
-                | TraceIr::StringFreeze(..)
-                | TraceIr::Literal(..)
-                | TraceIr::Array { .. }
-                | TraceIr::Hash { .. }
-                | TraceIr::Range { .. }
-                | TraceIr::LoadConst(..)
-                | TraceIr::LoadIvar(..)
-                | TraceIr::StoreIvar(..)
-                | TraceIr::UnOp { .. }
-                | TraceIr::BinOp { .. }
-                | TraceIr::BinCmp { .. }
-                | TraceIr::Ret(..)
-                | TraceIr::Mov(..)
-                | TraceIr::InitMethod(..)
-                | TraceIr::CheckLocal(..)
-                | TraceIr::InlineCache
-        )
-    })
 }
 
 impl AbstractState {
@@ -516,6 +478,7 @@ impl AbstractState {
         arg_hints: &[(GP, SlotId)],
         float_args: &[(SlotId, FPReg)],
         redo: Option<AsmDeopt>,
+        reads_header: bool,
     ) {
         // Taken when the callee hands the call back: deopt to this very
         // call instruction, with this frame as it stands before the call.
@@ -525,7 +488,16 @@ impl AbstractState {
         // (`inline_class_new`) supplies one taken before it did.
         let redo = redo.unwrap_or_else(|| ir.new_deopt(self));
         ir.fpr_save(using_fpr);
-        self.fill_window(store, ir, callid, callee_fid, delta, arg_hints, float_args);
+        self.fill_window(
+            store,
+            ir,
+            callid,
+            callee_fid,
+            delta,
+            arg_hints,
+            float_args,
+            reads_header,
+        );
         let dst = store[callid].dst;
         self.discard(dst);
         self.clear_above_next_sp();
@@ -554,7 +526,9 @@ impl AbstractState {
     ///
     /// The window counterpart of `set_arguments` for the one call shape a
     /// frameless callee accepts (`eligible`): `self` and the required
-    /// positionals, plus the header when the body reads it. Same order as
+    /// positionals, plus the header when the compiled body reads it
+    /// (*reads_header*, `AsmIr::reads_frame_header`; a materializing exit
+    /// writes the header itself, so nothing else needs it). Same order as
     /// `set_arguments`: the GP-pool residents go straight to their slots
     /// first, before a boxing call can take the pool with them, and the
     /// register-passed floats move last.
@@ -568,6 +542,7 @@ impl AbstractState {
         delta: i32,
         arg_hints: &[(GP, SlotId)],
         float_args: &[(SlotId, FPReg)],
+        reads_header: bool,
     ) {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
@@ -579,7 +554,7 @@ impl AbstractState {
         // words are the (negative) slots above `self`.
         let window = |s: i32| SlotId((s + delta / 8) as u16);
 
-        if reads_frame_header(store, callee.as_iseq()) {
+        if reads_header {
             ir.push(AsmInst::U64ToStack(0, window(-(LFP_SELF - LFP_OUTER) / 8)));
             ir.push(AsmInst::U64ToStack(
                 callee.meta().get(),
@@ -690,13 +665,23 @@ impl AbstractState {
         using_fpr: UsingFpr,
         arg_hints: &[(GP, SlotId)],
         hops: usize,
+        reads_header: bool,
     ) {
         // The redo: deopt to this very `yield`, with this frame as it
         // stands before it. Made after `get_using_fpr`'s flush, as in
         // `send_frameless`.
         let redo = ir.new_deopt(self);
         ir.fpr_save(using_fpr);
-        self.fill_yield_window(store, ir, callid, callee_fid, delta, arg_hints, hops);
+        self.fill_yield_window(
+            store,
+            ir,
+            callid,
+            callee_fid,
+            delta,
+            arg_hints,
+            hops,
+            reads_header,
+        );
         let dst = store[callid].dst;
         self.discard(dst);
         self.clear_above_next_sp();
@@ -730,6 +715,7 @@ impl AbstractState {
         delta: i32,
         arg_hints: &[(GP, SlotId)],
         hops: usize,
+        reads_header: bool,
     ) {
         let callee = &store[callee_fid];
         let callsite = &store[callid];
@@ -761,7 +747,7 @@ impl AbstractState {
                 self.fetch_to_slot(ir, args + i, window(1 + i as i32));
             }
         }
-        if reads_frame_header(store, callee.as_iseq()) {
+        if reads_header {
             ir.push(AsmInst::U64ToStack(
                 callee.meta().get(),
                 window(-(LFP_SELF - LFP_META) / 8),

@@ -309,6 +309,24 @@ pub(in crate::codegen) struct AsmInfo {
 }
 
 impl AsmInfo {
+    ///
+    /// Does this body read its own LFP header while it runs compiled
+    /// ([`AsmIr::reads_frame_header`])? A frameless callee's window gets
+    /// the header written at the call only when it does
+    /// (`AbstractState::fill_window`).
+    ///
+    pub(super) fn reads_frame_header(&self) -> bool {
+        self.ir.iter().any(|(_, ir)| ir.reads_frame_header())
+            || self
+                .inline_bridges
+                .values()
+                .any(|(ir, _)| ir.reads_frame_header())
+            || self
+                .outline_bridges
+                .iter()
+                .any(|(ir, _, _)| ir.reads_frame_header())
+    }
+
     fn dup(&self) -> Self {
         Self {
             jit_type: self.jit_type.clone(),

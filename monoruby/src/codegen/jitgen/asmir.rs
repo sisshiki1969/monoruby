@@ -1027,6 +1027,56 @@ impl AsmIr {
 
 impl AsmIr {
     ///
+    /// Does any instruction of this IR read its frame's LFP header (outer,
+    /// meta, svar, block) while it runs compiled?
+    ///
+    /// Asked of a frameless callee's body (`AsmInfo::reads_frame_header`):
+    /// its window gets the header written at the call only when this
+    /// holds. Nothing else in a frameless body looks above `self`: a
+    /// materializing exit writes the whole header itself before the window
+    /// becomes a frame (`Codegen::gen_frameless_materialize`), a redo exit
+    /// abandons the window, and the runtime helpers a body calls find the
+    /// *caller's* frame through `Executor::cfp`, never the window's. The
+    /// instructions below are the ones whose lowering reads `[lfp - ..]`
+    /// above slot 0 or hands the LFP to the runtime; the frame-pushing ones
+    /// are frameless violations, listed only so that the answer does not
+    /// rest on that.
+    ///
+    pub(super) fn reads_frame_header(&self) -> bool {
+        self.inst.iter().any(|inst| {
+            matches!(
+                inst,
+                // The capture bit of the meta.
+                AsmInst::GuardCapture(..)
+                    | AsmInst::ReloadIfCaptured(..)
+                    // The outer chain and the block word.
+                    | AsmInst::BlockGiven { .. }
+                    | AsmInst::BlockArgProxy { .. }
+                    | AsmInst::BlockArg { .. }
+                    | AsmInst::DefinedYield { .. }
+                    // Not the outer locals (`LoadDynVar` and friends): they
+                    // read the outer word alone, which a block's window
+                    // always gets (`fill_yield_window`), and a method has
+                    // none to read.
+                    //
+                    // The LFP handed to the runtime.
+                    | AsmInst::RestKw { .. }
+                    | AsmInst::Raise
+                    | AsmInst::SetArguments { .. }
+                    | AsmInst::SetArgumentsForwarded { .. }
+                    | AsmInst::SetArgumentsForwardedHelper { .. }
+                    | AsmInst::SetupMethodFrame { .. }
+                    | AsmInst::SetupYieldFrame { .. }
+                    | AsmInst::Call { .. }
+                    | AsmInst::SpecializedCall { .. }
+                    | AsmInst::Yield { .. }
+                    | AsmInst::SpecializedYield { .. }
+                    | AsmInst::GenericSend { .. }
+            )
+        })
+    }
+
+    ///
     /// Save floating point registers in use.
     ///
     /// ### stack pointer adjustment

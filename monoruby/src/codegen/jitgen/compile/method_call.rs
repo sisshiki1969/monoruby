@@ -1781,6 +1781,7 @@ impl<'a> JitContext<'a> {
             // A block's plain return never hands an object over
             // (`return_virtual_in_caller`).
             return_virtual: _,
+            reads_header: _,
         } = {
             self.current_frame_mut().landing_sink = true;
             let compiled = self.compile_specialized_func(
@@ -2653,6 +2654,7 @@ impl<'a> JitContext<'a> {
             using_fpr: frozen_using_fpr,
             float_return,
             return_virtual,
+            reads_header,
         } = compiled;
         let rest_elided = handover.is_some();
         // The call site passes a block literal: if the callee heapifies
@@ -2720,6 +2722,7 @@ impl<'a> JitContext<'a> {
                 &arg_hints,
                 &float_args,
                 redo,
+                reads_header,
             );
             let res =
                 def_specialized_result(state, ir, dst, return_state, float_return, return_virtual);
@@ -2793,6 +2796,10 @@ pub(super) struct SpecializedCompileResult {
     /// instead of a value in rax — see [`JitStackFrame::return_virtual`].
     /// Binding on this call site.
     pub return_virtual: Option<VirtualSrc>,
+    /// A frameless body reads its own LFP header, so its window needs one
+    /// written at the call ([`AsmInfo::reads_frame_header`]). Always
+    /// `false` for a framed callee, which builds its header itself.
+    pub reads_header: bool,
 }
 
 impl SpecializedCompileResult {
@@ -2833,6 +2840,8 @@ impl SpecializedCompileResult {
             using_fpr,
             float_return,
             return_virtual,
+            // The memo never holds a frameless callee.
+            reads_header: false,
         }
     }
 }
@@ -3115,6 +3124,7 @@ impl<'a> JitContext<'a> {
         let frame_float_return = frame.float_return;
         let frame_return_virtual = frame.return_virtual;
         let frame_has_boxed_return = frame.has_boxed_return;
+        let frame_reads_header = frameless && frame.asm_info.reads_frame_header();
         // `has_exception_handler` taints the return state so the caller
         // doesn't propagate a speculative `Const` past us: the BB graph
         // doesn't include rescue/ensure successors, so the computed
@@ -3214,6 +3224,7 @@ impl<'a> JitContext<'a> {
             using_fpr: frame_using_fpr,
             float_return: frame_float_return,
             return_virtual: frame_return_virtual,
+            reads_header: frame_reads_header,
         })
     }
 
