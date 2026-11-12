@@ -285,12 +285,6 @@ impl RegexpInner {
         self.encoding
     }
 
-    /// Whether `source` embeds a byte >= 0x80 through a `\xHH` escape
-    /// (see [`has_non_ascii_hex_escape`]).
-    pub fn has_non_ascii_hex_escape(source: &[u8]) -> bool {
-        has_non_ascii_hex_escape(source)
-    }
-
     /// CRuby-visible source encoding (set at construction time
     /// from source-string encoding + `n`/`u`/`e`/`s` modifiers).
     pub fn declared_encoding(&self) -> crate::value::Encoding {
@@ -552,6 +546,24 @@ impl RegexpInner {
     }
 }
 
+/// The flag letters `rb_enc_reg_error_desc` appends to the source it
+/// renders in an error message (`option_to_str`: `m`, `i`, `x`).
+fn option_letters(option: u32) -> &'static str {
+    let m = option & onigmo_regex::ONIG_OPTION_MULTILINE != 0;
+    let i = option & onigmo_regex::ONIG_OPTION_IGNORECASE != 0;
+    let x = option & onigmo_regex::ONIG_OPTION_EXTEND != 0;
+    match (m, i, x) {
+        (false, false, false) => "",
+        (true, false, false) => "m",
+        (false, true, false) => "i",
+        (false, false, true) => "x",
+        (true, true, false) => "mi",
+        (true, false, true) => "mx",
+        (false, true, true) => "ix",
+        (true, true, true) => "mix",
+    }
+}
+
 /// Onigmo says "too short multibyte code string"
 /// (`ONIGERR_TOO_SHORT_MULTI_BYTE_STRING`) about a lead byte with too
 /// few trail bytes behind it. CRuby never lets that wording out, and
@@ -636,258 +648,531 @@ fn pre_validate_regex(src: &str) -> Result<()> {
     Ok(())
 }
 
-/// The `\u` half of CRuby's `rb_reg_preprocess` (`unescape_nonascii`)
-/// for a source compiled under its own ASCII-compatible, non-UTF-8 codec
-/// (EUC-JP, Windows-31J, ISO-8859-*, …): Onigmo there knows neither the
-/// `\u{…}` list nor a Unicode codepoint, so every `\u` escape is
-/// rewritten before the pattern reaches it. An ASCII codepoint becomes
-/// `\xHH`, as `append_utf8` writes it; a non-ASCII one, or a raw / `\xHH`
-/// non-ASCII character after one, gives the error CRuby gives for a
-/// pattern that mixes the source's encoding with UTF-8, and a trailing
-/// `\` is "too short escape sequence", as CRuby words it. `None` when the
-/// source has no `\u` escape (nothing to rewrite).
+/// What CRuby's `rb_reg_preprocess` makes of a regexp source: the
+/// pattern handed to Onigmo (`buf`) and the encoding the source's
+/// content pins the regexp to (`fixed`, `None` when it leaves it open).
+pub(crate) struct RegPreprocessed {
+    pub buf: Vec<u8>,
+    pub fixed: Option<crate::value::Encoding>,
+}
+
+/// `rb_reg_preprocess` (`unescape_nonascii` and its helpers in re.c),
+/// ported as it stands: walk `source` in `enc` and
 ///
-/// Errors are the bare messages; the caller appends the `: /src/` part.
-fn preprocess_native_unicode(
+///   - copy a raw non-ASCII character through, pinning `enc` — so does
+///     a `\` followed by a multibyte character; a `\` followed by a
+///     single high byte of a single-byte encoding is an ordinary
+///     escaped character and pins nothing;
+///   - read a byte escape that spells a non-ASCII byte (`\xHH`, an
+///     octal escape above `\177`, `\0…`, `\cX`, `\C-X`, `\M-X`) together
+///     with the byte escapes after it, in any mix, as one character of
+///     `enc`, and write that character raw (Onigmo under a multibyte
+///     codec reads the escapes as one only when it sees the bytes),
+///     pinning `enc`; an ASCII byte is written `\xHH`;
+///   - rewrite a `\u` escape: an ASCII codepoint as `\xHH`, any other as
+///     raw UTF-8, pinning UTF-8;
+///   - note a `\p` / `\P` property, which pins `enc` once the walk ends
+///     with nothing else pinned;
+///   - drop comments — an extended-mode `# …` line and `(?#…)` — without
+///     reading their escapes (only a raw non-ASCII byte in one, in a
+///     UTF-8 source, pins UTF-8).
+///
+/// A UTF-16 / UTF-32 source is pinned to its encoding and returned as
+/// is: monoruby compiles it under its own codec unchanged. Errors are
+/// CRuby's bare messages; the caller appends the `: /src/` part.
+pub(crate) fn reg_preprocess(
     source: &[u8],
     enc: crate::value::Encoding,
     extended: bool,
-) -> std::result::Result<Option<Vec<u8>>, &'static str> {
-    let has_unicode_escape = source.windows(2).any(|w| w == b"\\u");
-    #[derive(PartialEq, Clone, Copy)]
-    enum Fixed {
-        Source,
-        Utf8,
+) -> std::result::Result<RegPreprocessed, &'static str> {
+    if !enc.is_ascii_compatible() {
+        return Ok(RegPreprocessed {
+            buf: source.to_vec(),
+            fixed: Some(enc),
+        });
     }
-    let walker = super::string::mbc_walker(enc);
-    // The width of the (non-ASCII) character at `pos`; an ill-formed
-    // byte is passed through one at a time and left to the engine.
-    let char_len = |pos: usize| -> usize {
-        match walker {
-            Some((_, precise)) => match precise(source, pos) {
-                super::string::PreciseLen::Char(n) => n,
-                _ => 1,
-            },
+    let mut pre = Preprocess {
+        src: source,
+        enc,
+        buf: Vec::with_capacity(source.len()),
+        fixed: None,
+        has_property: false,
+    };
+    let mut p = 0;
+    pre.unescape_nonascii(&mut p, extended, false)?;
+    let Preprocess {
+        buf,
+        mut fixed,
+        has_property,
+        ..
+    } = pre;
+    if has_property && fixed.is_none() {
+        fixed = Some(enc);
+    }
+    Ok(RegPreprocessed { buf, fixed })
+}
+
+/// The encoding [`reg_preprocess`] pins `source` to. A source it
+/// refuses falls back to its raw bytes (any byte above `0x7F` pins
+/// `enc`): whoever compiles it reports the error.
+pub(crate) fn reg_content_fixed_encoding(
+    source: &[u8],
+    enc: crate::value::Encoding,
+    extended: bool,
+) -> Option<crate::value::Encoding> {
+    match reg_preprocess(source, enc, extended) {
+        Ok(pre) => pre.fixed,
+        Err(_) => source.iter().any(|&b| b >= 0x80).then_some(enc),
+    }
+}
+
+struct Preprocess<'a> {
+    src: &'a [u8],
+    enc: crate::value::Encoding,
+    buf: Vec<u8>,
+    fixed: Option<crate::value::Encoding>,
+    has_property: bool,
+}
+
+type PreResult<T> = std::result::Result<T, &'static str>;
+
+impl Preprocess<'_> {
+    /// `rb_enc_precise_mbclen` at `p`, as the width of a found character.
+    fn char_len(&self, p: usize) -> PreResult<usize> {
+        // An ASCII byte is a character of its own in every
+        // ASCII-compatible encoding (the only kind walked here).
+        if self.src.get(p).is_some_and(|b| b.is_ascii()) {
+            return Ok(1);
+        }
+        match crate::value::precise_mbclen(self.enc, self.src, p) {
+            super::string::PreciseLen::Char(n) => Ok(n),
+            _ => Err("invalid multibyte character"),
+        }
+    }
+
+    /// Pin `enc` (`*encp = enc`), or refuse when something else is
+    /// pinned already.
+    fn pin(&mut self, enc: crate::value::Encoding, msg: &'static str) -> PreResult<()> {
+        match self.fixed {
+            None => {
+                self.fixed = Some(enc);
+                Ok(())
+            }
+            Some(e) if e == enc => Ok(()),
+            Some(_) => Err(msg),
+        }
+    }
+
+    fn is_utf8(&self) -> bool {
+        self.enc == crate::value::Encoding::UTF8
+    }
+
+    /// `unescape_nonascii0`. With `recurse`, the walk is the body of a
+    /// `(?x:…)` / `(?-x:…)` group and returns after its `)`.
+    fn unescape_nonascii(&mut self, pp: &mut usize, mut extended: bool, recurse: bool) -> PreResult<()> {
+        let src = self.src;
+        let end = src.len();
+        let mut p = *pp;
+        let mut in_char_class = 0usize;
+        let mut parens = 1usize;
+        while p < end {
+            let chlen = self.char_len(p)?;
+            if chlen > 1 || src[p] & 0x80 != 0 {
+                self.buf.extend_from_slice(&src[p..p + chlen]);
+                p += chlen;
+                self.pin(self.enc, "non ASCII character in UTF-8 regexp")?;
+                continue;
+            }
+            let c = src[p];
+            p += 1;
+            match c {
+                b'\\' => {
+                    if p == end {
+                        return Err("too short escape sequence");
+                    }
+                    let chlen = self.char_len(p)?;
+                    if chlen > 1 {
+                        // The backslash goes with the character.
+                        self.buf.extend_from_slice(&src[p - 1..p + chlen]);
+                        p += chlen;
+                        self.pin(self.enc, "non ASCII character in UTF-8 regexp")?;
+                        continue;
+                    }
+                    let c = src[p];
+                    p += 1;
+                    match c {
+                        // A backreference or a 7-bit octal escape: kept as
+                        // written (re-escaping could break a backreference).
+                        b'1'..=b'7' if scan_oct(src, p - 1, 3).0 <= 0o177 => {
+                            self.buf.extend_from_slice(&[b'\\', c]);
+                        }
+                        b'0'..=b'7' | b'x' | b'c' | b'C' | b'M' => {
+                            p -= 2;
+                            if self.enc == crate::value::Encoding::UsAscii {
+                                let pbeg = p;
+                                read_escaped_byte(src, &mut p)?;
+                                self.buf.extend_from_slice(&src[pbeg..p]);
+                            } else {
+                                self.unescape_escaped_nonascii(&mut p)?;
+                            }
+                        }
+                        b'u' => {
+                            if p == end {
+                                return Err("too short escape sequence");
+                            }
+                            if src[p] == b'{' {
+                                p += 1;
+                                self.unescape_unicode_list(&mut p)?;
+                                if p == end || src[p] != b'}' {
+                                    return Err("invalid Unicode list");
+                                }
+                                p += 1;
+                            } else {
+                                self.unescape_unicode_bmp(&mut p)?;
+                            }
+                        }
+                        b'p' | b'P' => {
+                            if self.fixed.is_none() {
+                                self.has_property = true;
+                            }
+                            self.buf.extend_from_slice(&[b'\\', c]);
+                        }
+                        _ => self.buf.extend_from_slice(&[b'\\', c]),
+                    }
+                }
+                b'#' if extended && in_char_class == 0 => {
+                    // A comment to the end of the line, dropped unread.
+                    while p < end {
+                        let c = src[p];
+                        p += 1;
+                        if c == b'\n' {
+                            break;
+                        }
+                        if c & 0x80 != 0 && self.fixed.is_none() && self.is_utf8() {
+                            self.fixed = Some(self.enc);
+                        }
+                    }
+                }
+                b'[' => {
+                    in_char_class += 1;
+                    self.buf.push(c);
+                }
+                b']' => {
+                    in_char_class = in_char_class.saturating_sub(1);
+                    self.buf.push(c);
+                }
+                b')' => {
+                    self.buf.push(c);
+                    if in_char_class == 0 && recurse {
+                        parens -= 1;
+                        if parens == 0 {
+                            *pp = p;
+                            return Ok(());
+                        }
+                    }
+                }
+                b'(' if in_char_class == 0 && p + 1 < end && src[p] == b'?' => {
+                    if src[p + 1] == b'#' {
+                        // `(?#…)`: a comment in any pattern, dropped unread.
+                        let orig_p = p;
+                        let mut cont = true;
+                        while cont && p < end {
+                            let c = src[p];
+                            p += 1;
+                            match c {
+                                b')' => cont = false,
+                                b'\\' => p += self.char_len(p)?,
+                                c if c & 0x80 != 0 => {
+                                    if self.fixed.is_none() && self.is_utf8() {
+                                        self.fixed = Some(self.enc);
+                                    }
+                                    p -= 1;
+                                    p += self.char_len(p)?;
+                                }
+                                _ => {}
+                            }
+                        }
+                        if cont {
+                            // Unterminated: left for Onigmo to refuse.
+                            p = orig_p;
+                            self.buf.push(b'(');
+                        }
+                        continue;
+                    }
+                    // `(?x…:` / `(?-x…:` changes the extended flag for the
+                    // group's body, `(?x…)` / `(?-x…)` for the rest of this
+                    // one.
+                    if recurse {
+                        parens += 1;
+                    }
+                    let mut invert = false;
+                    let mut local_extend = 0i8;
+                    let mut recursed = false;
+                    let mut s = p + 1;
+                    while s < end {
+                        match src[s] {
+                            b'x' => local_extend = if invert { -1 } else { 1 },
+                            b'-' => invert = true,
+                            d @ (b':' | b')') => {
+                                if local_extend == 0
+                                    || (local_extend == -1 && !extended)
+                                    || (local_extend == 1 && extended)
+                                {
+                                    // No change to the extended flag.
+                                    break;
+                                }
+                                if d == b')' {
+                                    extended = local_extend == 1;
+                                    break;
+                                }
+                                self.buf.push(c);
+                                self.unescape_nonascii(&mut p, local_extend == 1, true)?;
+                                recursed = true;
+                                break;
+                            }
+                            // Other option letters.
+                            b'i' | b'm' | b'a' | b'd' | b'u' => {}
+                            _ => break,
+                        }
+                        s += 1;
+                    }
+                    if recursed {
+                        continue;
+                    }
+                    self.buf.push(c);
+                }
+                b'(' => {
+                    if in_char_class == 0 && recurse {
+                        parens += 1;
+                    }
+                    self.buf.push(c);
+                }
+                _ => self.buf.push(c),
+            }
+        }
+        if recurse {
+            *pp = p;
+        }
+        Ok(())
+    }
+
+    /// `unescape_escaped_nonascii`: the byte escapes at `p` read as one
+    /// character of `enc`.
+    fn unescape_escaped_nonascii(&mut self, pp: &mut usize) -> PreResult<()> {
+        let src = self.src;
+        let mut p = *pp;
+        let maxlen = match super::string::mbc_walker(self.enc) {
+            Some((max, _)) => max,
+            None if matches!(self.enc, crate::value::Encoding::Utf8(_)) => 4,
             None => 1,
+        };
+        let mut area = vec![read_escaped_byte(src, &mut p)?];
+        while area.len() < maxlen
+            && matches!(
+                crate::value::precise_mbclen(self.enc, &area, 0),
+                super::string::PreciseLen::NeedMore
+            )
+        {
+            area.push(read_escaped_byte(src, &mut p)?);
         }
-    };
-    let mut fixed: Option<Fixed> = None;
-    let note_non_ascii = |fixed: &mut Option<Fixed>, msg: &'static str| match fixed {
-        None => {
-            *fixed = Some(Fixed::Source);
-            Ok(())
+        if matches!(
+            crate::value::precise_mbclen(self.enc, &area, 0),
+            super::string::PreciseLen::Invalid
+        ) {
+            return Err("invalid multibyte escape");
         }
-        Some(Fixed::Source) => Ok(()),
-        Some(Fixed::Utf8) => Err(msg),
-    };
-    let append_utf8 = |out: &mut Vec<u8>, fixed: &mut Option<Fixed>, cp: u32| {
+        if area.len() > 1 || area[0] & 0x80 != 0 {
+            self.buf.extend_from_slice(&area);
+            self.pin(self.enc, "escaped non ASCII character in UTF-8 regexp")?;
+        } else {
+            push_hex_escape(&mut self.buf, area[0]);
+        }
+        *pp = p;
+        Ok(())
+    }
+
+    /// `append_utf8`.
+    fn append_utf8(&mut self, cp: u64) -> PreResult<()> {
         if (0xd800..=0xdfff).contains(&cp) || cp > 0x10ffff {
             return Err("invalid Unicode range");
         }
         if cp < 0x80 {
-            out.extend_from_slice(format!("\\x{cp:02X}").as_bytes());
+            push_hex_escape(&mut self.buf, cp as u8);
             return Ok(());
         }
-        match fixed {
-            None | Some(Fixed::Utf8) => {
-                *fixed = Some(Fixed::Utf8);
-                let mut buf = [0u8; 4];
-                // `cp` is a scalar value: the range was checked above.
-                let ch = char::from_u32(cp).unwrap();
-                out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
-                Ok(())
-            }
-            Some(Fixed::Source) => Err("UTF-8 character in non UTF-8 regexp"),
-        }
-    };
-    let hex_run = |from: usize, max: usize| -> (u32, usize) {
-        let mut val: u32 = 0;
-        let mut j = from;
-        while j < source.len() && j - from < max && source[j].is_ascii_hexdigit() {
-            val = val.saturating_mul(16) + (source[j] as char).to_digit(16).unwrap();
-            j += 1;
-        }
-        (val, j - from)
-    };
-    let mut out = Vec::with_capacity(source.len());
-    let mut extended = extended;
-    // The extended flag to restore at each open group's `)`.
-    let mut groups: Vec<bool> = vec![];
-    let mut in_char_class = 0usize;
-    let mut i = 0;
-    while i < source.len() {
-        let c = source[i];
-        if c >= 0x80 {
-            let n = char_len(i).min(source.len() - i);
-            out.extend_from_slice(&source[i..i + n]);
-            i += n;
-            note_non_ascii(&mut fixed, "non ASCII character in UTF-8 regexp")?;
-            continue;
-        }
-        match c {
-            b'\\' => {
-                let Some(&e) = source.get(i + 1) else {
-                    // A lone `\` at the end (Onigmo's "end pattern at
-                    // escape").
-                    return Err("too short escape sequence");
-                };
-                if e >= 0x80 {
-                    let n = char_len(i + 1).min(source.len() - i - 1);
-                    out.extend_from_slice(&source[i..i + 1 + n]);
-                    i += 1 + n;
-                    note_non_ascii(&mut fixed, "non ASCII character in UTF-8 regexp")?;
-                    continue;
-                }
-                match e {
-                    b'u' => {
-                        if i + 2 >= source.len() {
-                            return Err("too short escape sequence");
-                        }
-                        if source[i + 2] == b'{' {
-                            let mut j = i + 3;
-                            let mut any = false;
-                            loop {
-                                while source
-                                    .get(j)
-                                    .is_some_and(|b| b.is_ascii_whitespace() || *b == 0x0b)
-                                {
-                                    j += 1;
-                                }
-                                let (cp, len) = hex_run(j, usize::MAX);
-                                if len == 0 {
-                                    break;
-                                }
-                                if len > 6 {
-                                    return Err("invalid Unicode range");
-                                }
-                                append_utf8(&mut out, &mut fixed, cp)?;
-                                any = true;
-                                j += len;
-                            }
-                            if !any || source.get(j) != Some(&b'}') {
-                                return Err("invalid Unicode list");
-                            }
-                            i = j + 1;
-                        } else {
-                            let (cp, len) = hex_run(i + 2, 4);
-                            if len != 4 {
-                                return Err("invalid Unicode escape");
-                            }
-                            append_utf8(&mut out, &mut fixed, cp)?;
-                            i += 6;
-                        }
-                    }
-                    b'x' | b'0'..=b'7' => {
-                        // Copied as written; a non-ASCII byte it spells
-                        // pins the source's encoding (`unescape_escaped_nonascii`).
-                        let (val, len) = if e == b'x' {
-                            hex_run(i + 2, 2)
-                        } else {
-                            let mut val = 0u32;
-                            let mut j = i + 1;
-                            while j < source.len()
-                                && j - (i + 1) < 3
-                                && (b'0'..=b'7').contains(&source[j])
-                            {
-                                val = val * 8 + (source[j] - b'0') as u32;
-                                j += 1;
-                            }
-                            (val, j - (i + 2))
-                        };
-                        let end = i + 2 + len;
-                        out.extend_from_slice(&source[i..end]);
-                        i = end;
-                        if val >= 0x80 {
-                            note_non_ascii(
-                                &mut fixed,
-                                "escaped non ASCII character in UTF-8 regexp",
-                            )?;
-                        }
-                    }
-                    _ => {
-                        out.extend_from_slice(&source[i..i + 2]);
-                        i += 2;
-                    }
-                }
-            }
-            b'#' if extended && in_char_class == 0 => {
-                // A comment runs to the end of the line and is not scanned.
-                let end = source[i..]
-                    .iter()
-                    .position(|&b| b == b'\n')
-                    .map_or(source.len(), |p| i + p + 1);
-                out.extend_from_slice(&source[i..end]);
-                i = end;
-            }
-            b'(' if in_char_class == 0 && source[i..].starts_with(b"(?#") => {
-                // `(?#…)` is a comment in any pattern.
-                let mut j = i + 3;
-                while j < source.len() && source[j] != b')' {
-                    j += if source[j] == b'\\' { 2 } else { 1 };
-                }
-                let end = (j + 1).min(source.len());
-                out.extend_from_slice(&source[i..end]);
-                i = end;
-            }
-            b'(' if in_char_class == 0 => {
-                // A group keeps the extended flag of its surroundings,
-                // unless it is `(?x-x:…)`, which sets it for its body;
-                // `(?x-x)` sets it for the rest of the enclosing group.
-                let mut j = i + 1;
-                let mut next = extended;
-                let mut kind = None;
-                if source.get(j) == Some(&b'?') {
-                    j += 1;
-                    let mut invert = false;
-                    while let Some(&f) = source.get(j) {
-                        match f {
-                            b'-' => invert = true,
-                            b'x' => next = !invert,
-                            b'i' | b'm' | b'a' | b'd' | b'u' => {}
-                            b':' | b')' => {
-                                kind = Some(f);
-                                break;
-                            }
-                            _ => break,
-                        }
-                        j += 1;
-                    }
-                }
-                match kind {
-                    Some(b')') => extended = next,
-                    Some(_) => {
-                        groups.push(extended);
-                        extended = next;
-                    }
-                    None => groups.push(extended),
-                }
-                out.push(c);
-                i += 1;
-            }
-            b')' if in_char_class == 0 => {
-                if let Some(e) = groups.pop() {
-                    extended = e;
-                }
-                out.push(c);
-                i += 1;
-            }
-            b'[' => {
-                in_char_class += 1;
-                out.push(c);
-                i += 1;
-            }
-            b']' => {
-                in_char_class = in_char_class.saturating_sub(1);
-                out.push(c);
-                i += 1;
-            }
-            _ => {
-                out.push(c);
-                i += 1;
-            }
-        }
+        // A scalar value: the range was checked above.
+        let ch = char::from_u32(cp as u32).unwrap();
+        let mut utf8 = [0u8; 4];
+        self.buf.extend_from_slice(ch.encode_utf8(&mut utf8).as_bytes());
+        self.pin(crate::value::Encoding::UTF8, "UTF-8 character in non UTF-8 regexp")
     }
-    Ok(has_unicode_escape.then_some(out))
+
+    /// `unescape_unicode_list`: the codepoints of `\u{…}`, from just
+    /// after the `{` up to (not including) the `}`.
+    fn unescape_unicode_list(&mut self, pp: &mut usize) -> PreResult<()> {
+        let src = self.src;
+        let is_space = |b: u8| matches!(b, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r');
+        let mut p = *pp;
+        let mut any = false;
+        while p < src.len() && is_space(src[p]) {
+            p += 1;
+        }
+        loop {
+            let (code, len) = scan_hex(src, p, usize::MAX);
+            if len == 0 {
+                break;
+            }
+            if len > 6 {
+                return Err("invalid Unicode range");
+            }
+            p += len;
+            self.append_utf8(code)?;
+            any = true;
+            while p < src.len() && is_space(src[p]) {
+                p += 1;
+            }
+        }
+        if !any {
+            return Err("invalid Unicode list");
+        }
+        *pp = p;
+        Ok(())
+    }
+
+    /// `unescape_unicode_bmp`: the four digits of `\uHHHH`.
+    fn unescape_unicode_bmp(&mut self, pp: &mut usize) -> PreResult<()> {
+        let (code, len) = scan_hex(self.src, *pp, 4);
+        if len != 4 {
+            return Err("invalid Unicode escape");
+        }
+        self.append_utf8(code)?;
+        *pp += 4;
+        Ok(())
+    }
+}
+
+/// `\xHH`, as `unescape_escaped_nonascii` / `append_utf8` write an ASCII
+/// byte (`"\\x%02X"`).
+fn push_hex_escape(buf: &mut Vec<u8>, b: u8) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    buf.extend_from_slice(&[b'\\', b'x', HEX[(b >> 4) as usize], HEX[(b & 0xf) as usize]]);
+}
+
+/// `ruby_scan_hex` over at most `max` bytes from `p`: the value and the
+/// number of digits read.
+fn scan_hex(src: &[u8], p: usize, max: usize) -> (u64, usize) {
+    let mut val: u64 = 0;
+    let mut len = 0;
+    while len < max
+        && let Some(d) = src.get(p + len).and_then(|b| (*b as char).to_digit(16))
+    {
+        val = val.saturating_mul(16).saturating_add(d as u64);
+        len += 1;
+    }
+    (val, len)
+}
+
+/// `ruby_scan_oct` over at most `max` bytes from `p`.
+fn scan_oct(src: &[u8], p: usize, max: usize) -> (u32, usize) {
+    let mut val = 0;
+    let mut len = 0;
+    while len < max && let Some(&b @ b'0'..=b'7') = src.get(p + len) {
+        val = val * 8 + (b - b'0') as u32;
+        len += 1;
+    }
+    (val, len)
+}
+
+/// `read_escaped_byte`: the byte the escape at `p` (its `\`) spells.
+fn read_escaped_byte(src: &[u8], pp: &mut usize) -> PreResult<u8> {
+    let end = src.len();
+    let mut p = *pp;
+    if p == end || src[p] != b'\\' {
+        return Err("too short escaped multibyte character");
+    }
+    p += 1;
+    let mut meta = false;
+    let mut ctrl = false;
+    let code: u32 = loop {
+        if p == end {
+            return Err("too short escape sequence");
+        }
+        let c = src[p];
+        p += 1;
+        match c {
+            b'\\' => break b'\\' as u32,
+            b'n' => break b'\n' as u32,
+            b't' => break b'\t' as u32,
+            b'r' => break b'\r' as u32,
+            b'f' => break 0x0c,
+            b'v' => break 0x0b,
+            b'a' => break 0x07,
+            b'e' => break 0x1b,
+            b'0'..=b'7' => {
+                let (val, len) = scan_oct(src, p - 1, 3);
+                p += len - 1;
+                break val;
+            }
+            b'x' => {
+                let (val, len) = scan_hex(src, p, 2);
+                if len < 1 {
+                    return Err("invalid hex escape");
+                }
+                p += len;
+                break val as u32;
+            }
+            b'M' => {
+                if meta {
+                    return Err("duplicate meta escape");
+                }
+                meta = true;
+                if p + 1 < end && src[p] == b'-' && src[p + 1] & 0x80 == 0 {
+                    p += 1;
+                    if src[p] == b'\\' {
+                        p += 1;
+                        continue;
+                    }
+                    p += 1;
+                    break src[p - 1] as u32;
+                }
+                return Err("too short meta escape");
+            }
+            b'C' | b'c' => {
+                if c == b'C' {
+                    if p == end || src[p] != b'-' {
+                        return Err("too short control escape");
+                    }
+                    p += 1;
+                }
+                if ctrl {
+                    return Err("duplicate control escape");
+                }
+                ctrl = true;
+                if p < end && src[p] & 0x80 == 0 {
+                    if src[p] == b'\\' {
+                        p += 1;
+                        continue;
+                    }
+                    p += 1;
+                    break src[p - 1] as u32;
+                }
+                return Err("too short control escape");
+            }
+            _ => return Err("unexpected escape sequence"),
+        }
+    };
+    if code > 0xff {
+        return Err("invalid escape code");
+    }
+    let mut code = code as u8;
+    if ctrl {
+        code &= 0x1f;
+    }
+    if meta {
+        code |= 0x80;
+    }
+    *pp = p;
+    Ok(code)
 }
 
 /// Onigmo's `\u` handler only accepts exactly four hex digits, so the
@@ -1029,9 +1314,11 @@ fn expand_unicode_braces(src: &str) -> Result<String> {
 ///   1. `n` modifier or `NOENCODING` flag → BINARY (fixed).
 ///   2. `u`/`e`/`s` modifier → UTF-8 / EUC-JP / Windows-31J (fixed).
 ///   3. `FIXEDENCODING` flag → keep the source encoding, pinned.
-///   4. Source contains non-ASCII bytes → source's encoding,
-///      pinned (CRuby pins because the literal cannot be
-///      re-interpreted as US-ASCII).
+///   4. The content pins an encoding (`content_fixed`, from
+///      [`reg_content_fixed_encoding`]: a non-ASCII character, raw or
+///      spelled by byte escapes, or a `\p{…}` → the source's encoding;
+///      a non-ASCII `\u` escape → UTF-8; comments pin nothing) → that
+///      encoding, pinned.
 ///   5. Otherwise (pure 7-bit content, no modifier) → `US-ASCII`,
 ///      *not* pinned. Such regexps freely combine with strings
 ///      of any ASCII-compatible encoding.
@@ -1040,6 +1327,7 @@ pub(crate) fn resolve_declared_encoding(
     option: u32,
     kcode: Option<u32>,
     source_encoding: Option<crate::value::Encoding>,
+    content_fixed: Option<crate::value::Encoding>,
 ) -> (crate::value::Encoding, bool) {
     use crate::value::Encoding;
     // Non-ASCII is decided on the *raw source* bytes (which may be
@@ -1070,35 +1358,35 @@ pub(crate) fn resolve_declared_encoding(
             Encoding::Sjis(1)
         } else {
             // Bit set but unknown — fall through to source-encoding logic.
-            return source_encoding_fallback(source_encoding, has_non_ascii, option);
+            return source_encoding_fallback(source_encoding, content_fixed, option);
         };
         return (enc, true);
     }
-    // A BINARY source whose only high bytes are `\xHH` escapes is still
-    // binary content (CRuby's `unescape_nonascii` pins ASCII-8BIT on
-    // such an escape): `Regexp.new("[\xC2-\xDF]".b).encoding` is BINARY.
-    if source_encoding == Some(Encoding::Ascii8) && has_non_ascii_hex_escape(source) {
-        return (Encoding::Ascii8, true);
-    }
-    source_encoding_fallback(source_encoding, has_non_ascii, option)
+    source_encoding_fallback(source_encoding, content_fixed, option)
 }
 
+/// Steps 3–5 of [`resolve_declared_encoding`]. `content_fixed` is what
+/// the source's content pins ([`reg_content_fixed_encoding`]): its own
+/// encoding for a non-ASCII character, raw or escaped, or a `\p{…}`;
+/// UTF-8 for a non-ASCII `\u` escape. As in `rb_reg_initialize`, that
+/// wins over the source string's encoding.
 fn source_encoding_fallback(
     source_encoding: Option<crate::value::Encoding>,
-    has_non_ascii: bool,
+    content_fixed: Option<crate::value::Encoding>,
     option: u32,
 ) -> (crate::value::Encoding, bool) {
     use crate::value::Encoding;
     let fixed_flag = option & RegexpInner::FIXEDENCODING != 0;
+    if let Some(enc) = content_fixed {
+        return (enc, true);
+    }
     match source_encoding {
-        Some(src) if has_non_ascii => (src, true),
         // An ASCII-incompatible source encoding (UTF-16/32) is pinned
         // even when the content is all 7-bit: such a string can never be
         // re-interpreted as US-ASCII.
         Some(src) if !src.is_ascii_compatible() => (src, true),
         Some(src) if fixed_flag => (src, true),
         Some(_) => (Encoding::UsAscii, false),
-        None if has_non_ascii => (Encoding::UTF8, true),
         None => (Encoding::UsAscii, fixed_flag),
     }
 }
@@ -1142,98 +1430,25 @@ pub(crate) fn has_non_ascii_hex_escape(source: &[u8]) -> bool {
 /// The encoding one piece of an interpolated Regexp source pins the
 /// whole pattern to, as CRuby's `rb_reg_preprocess` reports it per piece
 /// (`fixed_enc`) inside `rb_reg_preprocess_dregexp`: an
-/// ASCII-incompatible encoding always, else the piece's own encoding
-/// once it carries a raw non-ASCII byte or a `\xHH` / `\OOO` escape of a
-/// non-ASCII byte, else UTF-8 for a `\u` escape of a non-ASCII
-/// codepoint. `None` for a piece that leaves the encoding open (7-bit
-/// text, ASCII escapes).
+/// ASCII-incompatible encoding always, else what the piece's content
+/// pins ([`reg_content_fixed_encoding`]: its own encoding for non-ASCII
+/// text, raw or spelled by byte escapes, or a `\p{…}`; UTF-8 for a `\u`
+/// escape of a non-ASCII codepoint). `None` for a piece that leaves the
+/// encoding open (7-bit text, ASCII escapes, comments).
 ///
 /// Malformed escapes are not judged here: the source is compiled as a
 /// whole afterwards, which refuses them with the usual messages.
 pub(crate) fn dregexp_fixed_encoding(
     bytes: &[u8],
     enc: crate::value::Encoding,
+    extended: bool,
 ) -> Option<crate::value::Encoding> {
-    if !enc.is_ascii_compatible() || bytes.iter().any(|&b| b >= 0x80) {
+    if !enc.is_ascii_compatible() {
         return Some(enc);
     }
-    let mut unicode = false;
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        if bytes[i] != b'\\' {
-            i += 1;
-            continue;
-        }
-        let digits = |from: usize, max: usize, radix: u32| -> (u32, usize) {
-            let mut val = 0;
-            let mut j = from;
-            while j < bytes.len()
-                && j - from < max
-                && let Some(d) = (bytes[j] as char).to_digit(radix)
-            {
-                val = val * radix + d;
-                j += 1;
-            }
-            (val, j)
-        };
-        match bytes[i + 1] {
-            b'x' => {
-                let (val, next) = digits(i + 2, 2, 16);
-                if next > i + 2 && val >= 0x80 {
-                    return Some(enc);
-                }
-                i = next.max(i + 2);
-            }
-            b'0'..=b'7' => {
-                // `\1`..`\7` may be backreferences, but only an octal
-                // escape reaches 0o200.
-                let (val, next) = digits(i + 1, 3, 8);
-                if val >= 0o200 {
-                    return Some(enc);
-                }
-                i = next;
-            }
-            b'u' => {
-                let (code, next) = if bytes.get(i + 2) == Some(&b'{') {
-                    // `\u{X Y …}`: any non-ASCII codepoint in the list.
-                    let mut j = i + 3;
-                    let mut max = 0;
-                    loop {
-                        while bytes.get(j).is_some_and(|b| b.is_ascii_whitespace()) {
-                            j += 1;
-                        }
-                        let (val, next) = digits(j, 8, 16);
-                        if next == j {
-                            break;
-                        }
-                        max = max.max(val);
-                        j = next;
-                    }
-                    (max, j)
-                } else {
-                    let (val, next) = digits(i + 2, 4, 16);
-                    if next == i + 6 {
-                        (val, next)
-                    } else {
-                        (0, i + 2)
-                    }
-                };
-                unicode |= code >= 0x80;
-                i = next;
-            }
-            // Any other escaped character (`\\` included) is skipped
-            // whole, so an escaped backslash never starts an escape.
-            _ => i += 2,
-        }
-    }
-    unicode.then_some(crate::value::Encoding::UTF8)
+    reg_content_fixed_encoding(bytes, enc, extended)
 }
 
-/// Scan `src` for a `\u` escape (`\uXXXX` or `\u{...}`) whose
-/// codepoint is non-ASCII (>= 0x80). Returns `true` for the first
-/// such escape, `false` if none. Used to pin the declared encoding
-/// to UTF-8 when the source contains a non-ASCII Unicode escape,
-/// matching CRuby's `\u`-fixes-encoding behavior.
 /// Whether `src` has a backslash escape whose letter is one of `letters`
 /// (`\\` pairs are stepped over, so an escaped backslash before a `p`
 /// does not count).
@@ -1248,50 +1463,6 @@ fn has_escape(src: &[u8], letters: &[u8]) -> bool {
         } else {
             i += 1;
         }
-    }
-    false
-}
-
-fn has_non_ascii_unicode_escape(src: &str) -> bool {
-    let bytes = src.as_bytes();
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        if bytes[i] == b'\\' && bytes[i + 1] == b'u' {
-            if i + 2 < bytes.len() && bytes[i + 2] == b'{' {
-                let content_start = i + 3;
-                if let Some(rel_end) = bytes[content_start..].iter().position(|&b| b == b'}') {
-                    if let Ok(content) = std::str::from_utf8(
-                        &bytes[content_start..content_start + rel_end],
-                    ) {
-                        for tok in content.split_ascii_whitespace() {
-                            if tok.bytes().all(|b| b.is_ascii_hexdigit()) && !tok.is_empty() {
-                                if let Ok(cp) = u32::from_str_radix(tok, 16) {
-                                    if cp >= 0x80 {
-                                        return true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    i = content_start + rel_end + 1;
-                    continue;
-                }
-            } else if i + 5 < bytes.len() {
-                let hex = &bytes[i + 2..i + 6];
-                if hex.iter().all(|b| b.is_ascii_hexdigit()) {
-                    if let Ok(s) = std::str::from_utf8(hex) {
-                        if let Ok(cp) = u32::from_str_radix(s, 16) {
-                            if cp >= 0x80 {
-                                return true;
-                            }
-                        }
-                    }
-                    i += 6;
-                    continue;
-                }
-            }
-        }
-        i += 1;
     }
     false
 }
@@ -1406,31 +1577,70 @@ impl RegexpInner {
         source_encoding: Option<crate::value::Encoding>,
         source: Option<Vec<u8>>,
     ) -> Result<Self> {
+        Self::with_preprocessed(reg_str, option, encoding, kcode, source_encoding, source, None)
+    }
+
+    /// [`with_option_kcode_source`](Self::with_option_kcode_source) for a
+    /// caller that has run [`reg_preprocess`] on `source` already, in
+    /// `source_encoding` under `option`'s extended flag (`pre`), so the
+    /// walk is not repeated.
+    pub(crate) fn with_preprocessed(
+        reg_str: impl Into<String>,
+        option: u32,
+        encoding: OnigmoEncoding,
+        kcode: Option<u32>,
+        source_encoding: Option<crate::value::Encoding>,
+        source: Option<Vec<u8>>,
+        pre: Option<RegPreprocessed>,
+    ) -> Result<Self> {
         let reg_str: String = reg_str.into();
         if !matches!(encoding, OnigmoEncoding::UTF8 | OnigmoEncoding::ASCII) {
-            return Self::compile_native(reg_str, option, encoding, kcode, source_encoding, source);
+            return Self::compile_native(
+                reg_str,
+                option,
+                encoding,
+                kcode,
+                source_encoding,
+                source,
+                pre,
+            );
         }
         // Capture the source as written (before `\u{}` expansion); the
         // caller may override with the true raw bytes for non-UTF-8 input.
         let source: Arc<[u8]> =
             source.map_or_else(|| Arc::from(reg_str.as_bytes()), Arc::from);
-        let (mut declared_encoding, mut fixed_encoding) =
-            resolve_declared_encoding(&source, option, kcode, source_encoding);
-        // CRuby pins the regex to UTF-8 when the source contains a
-        // `\u` escape that decodes to a non-ASCII codepoint, even on
-        // an otherwise pure-7-bit pattern (`/\u{1234}/.fixed_encoding?`
-        // is `true`), and likewise for a `\p{…}` / `\P{…}` property
-        // class (`/\p{Alpha}/.encoding` is UTF-8 and pinned: the class
-        // is defined over Unicode, whatever the subject). The `n`/`e`/`s`
-        // modifiers and the `NOENCODING` flag override this — they leave
-        // the explicit kcode intact.
-        if option & Self::NOENCODING == 0
-            && kcode.map(|k| k & Self::KCODE_UTF8 != 0).unwrap_or(true)
-            && (has_non_ascii_unicode_escape(&reg_str) || has_escape(reg_str.as_bytes(), b"pP"))
-        {
-            declared_encoding = crate::value::Encoding::UTF8;
-            fixed_encoding = true;
-        }
+        // What the content pins, as `rb_reg_preprocess` reads it: a
+        // non-ASCII character (raw, or spelled by byte escapes) its own
+        // encoding, a `\u` escape of a non-ASCII codepoint UTF-8
+        // (`/\u{1234}/.fixed_encoding?` is `true`), a `\p{…}` property
+        // the source's encoding (`/\p{Alpha}/` is UTF-8 and pinned);
+        // nothing inside a comment. The `n`/`u`/`e`/`s` modifiers and the
+        // `NOENCODING` flag override this.
+        let pre = if option & Self::NOENCODING == 0 {
+            Some(pre.map_or_else(
+                || {
+                    reg_preprocess(
+                        &source,
+                        source_encoding.unwrap_or(crate::value::Encoding::UTF8),
+                        option & onigmo_regex::ONIG_OPTION_EXTEND != 0,
+                    )
+                },
+                Ok,
+            ))
+        } else {
+            None
+        };
+        let content_fixed = match &pre {
+            Some(Ok(pre)) => pre.fixed,
+            // Refused: whoever compiles it reports the error.
+            Some(Err(_)) => source
+                .iter()
+                .any(|&b| b >= 0x80)
+                .then(|| source_encoding.unwrap_or(crate::value::Encoding::UTF8)),
+            None => None,
+        };
+        let (declared_encoding, fixed_encoding) =
+            resolve_declared_encoding(&source, option, kcode, source_encoding, content_fixed);
         // A source that is broken in its own encoding is refused
         // before Onigmo sees it, with the message CRuby's
         // `rb_reg_initialize` gives: Onigmo's own wording is its
@@ -1450,12 +1660,26 @@ impl RegexpInner {
         // `\uXXXX`, the original source isn't recoverable for the
         // error message.
         pre_validate_regex(&reg_str)?;
-        let reg_str = expand_unicode_braces(&reg_str)?;
+        // The UTF-8 engine gets the preprocessed source when it is UTF-8
+        // text, as CRuby hands it over: a character spelled by byte
+        // escapes (`\xE3\201\202`, `\M-c\x81\x82`) is then read as one
+        // even inside a class, `\u` escapes are expanded and comments are
+        // gone. `expand_unicode_braces` is the fallback for a source the
+        // walk refuses (the callers that check sources have reported it
+        // by now).
+        let pattern = if encoding == OnigmoEncoding::UTF8
+            && let Some(Ok(pre)) = pre
+            && let Ok(text) = String::from_utf8(pre.buf)
+        {
+            text
+        } else {
+            expand_unicode_braces(&reg_str)?
+        };
         match REGEX_CACHE
             .write()
             .unwrap()
             .0
-            .entry((reg_str.clone(), onigmo_option, encoding))
+            .entry((pattern.clone(), onigmo_option, encoding))
         {
             std::collections::hash_map::Entry::Occupied(entry) => {
                 // The cached Regex still carries its compile-time
@@ -1477,7 +1701,7 @@ impl RegexpInner {
                 })
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
-                match Regex::new_with_option_and_encoding(&reg_str, onigmo_option, encoding) {
+                match Regex::new_with_option_and_encoding(&pattern, onigmo_option, encoding) {
                     Ok(regexp) => {
                         queue_regexp_warnings(&regexp);
                         let regex = Arc::new(CachedRegex::new(regexp));
@@ -1508,7 +1732,7 @@ impl RegexpInner {
                         let formatted = if raw_msg.contains(':') {
                             raw_msg
                         } else {
-                            format!("{raw_msg}: /{reg_str}/")
+                            format!("{raw_msg}: /{reg_str}/{}", option_letters(option))
                         };
                         Err(MonorubyErr::regexerr(formatted))
                     }
@@ -1533,35 +1757,40 @@ impl RegexpInner {
         kcode: Option<u32>,
         source_encoding: Option<crate::value::Encoding>,
         source: Option<Vec<u8>>,
+        pre: Option<RegPreprocessed>,
     ) -> Result<Self> {
         let source: Arc<[u8]> =
             source.map_or_else(|| Arc::from(reg_str.as_bytes()), Arc::from);
-        let (declared_encoding, fixed_encoding) =
-            resolve_declared_encoding(&source, option, kcode, source_encoding);
         let onigmo_option = option & !(Self::NOENCODING | Self::FIXEDENCODING | Self::KCODE_MASK);
         let noencoding = option & Self::NOENCODING != 0;
-        // Onigmo under a non-UTF-8 codec reads no `\u{…}` list, and no
-        // Unicode codepoint at all: CRuby's preprocessing rewrites them
-        // first (`Regexp.new("\\u{41}あ".encode("EUC-JP"))`).
-        let source_enc = source_encoding.unwrap_or(declared_encoding);
-        let rewritten = if source_enc.is_ascii_compatible() && !source_enc.is_utf8_compatible() {
-            preprocess_native_unicode(
-                &source,
-                source_enc,
-                onigmo_option & onigmo_regex::ONIG_OPTION_EXTEND != 0,
-            )
-            .map_err(|msg| {
-                let desc = crate::builtins::string::regexp_source_desc_bytes(
+        // Onigmo gets the preprocessed pattern, as CRuby hands it over:
+        // under a non-UTF-8 codec it reads no `\u{…}` list and no Unicode
+        // codepoint at all (`Regexp.new("\\u{41}あ".encode("EUC-JP"))`),
+        // and it reads a multibyte character spelled by byte escapes as
+        // one only when it gets the bytes (`\xA4\242`).
+        let source_enc = source_encoding.unwrap_or(crate::value::Encoding::UTF8);
+        let pre = pre.map_or_else(
+            || {
+                reg_preprocess(
                     &source,
-                    declared_encoding,
-                    None,
-                );
-                MonorubyErr::regexerr(format!("{msg}: /{}/", String::from_utf8_lossy(&desc)))
-            })?
-        } else {
-            None
-        };
-        let pattern: &[u8] = rewritten.as_deref().unwrap_or(&source);
+                    source_enc,
+                    onigmo_option & onigmo_regex::ONIG_OPTION_EXTEND != 0,
+                )
+            },
+            Ok,
+        )
+        .map_err(|msg| {
+            let desc = crate::builtins::string::regexp_source_desc_bytes(&source, source_enc, None);
+            MonorubyErr::regexerr(format!(
+                "{msg}: /{}/{}",
+                String::from_utf8_lossy(&desc),
+                option_letters(option)
+            ))
+        })?;
+        let content_fixed = if noencoding { None } else { pre.fixed };
+        let (declared_encoding, fixed_encoding) =
+            resolve_declared_encoding(&source, option, kcode, source_encoding, content_fixed);
+        let pattern: &[u8] = &pre.buf;
         // The cache is keyed by text; the byte image (one scalar per
         // byte) is that text here, and is lossless.
         let key = (
@@ -1592,7 +1821,11 @@ impl RegexpInner {
                             declared_encoding,
                             None,
                         );
-                        format!("{raw_msg}: /{}/", String::from_utf8_lossy(&desc))
+                        format!(
+                            "{raw_msg}: /{}/{}",
+                            String::from_utf8_lossy(&desc),
+                            option_letters(option)
+                        )
                     };
                     return Err(MonorubyErr::regexerr(formatted));
                 }
@@ -1876,19 +2109,27 @@ impl RegexpInner {
             return Ok(re.clone());
         }
         let option = self.regex.option();
-        // A codec other than UTF-8 reads no `\u` escape: rewrite them as
-        // `compile_native` does. A pattern whose `\u` cannot be spelled
-        // that way is pinned to UTF-8 and never gets here with a subject
-        // it could match, so its source is kept as is.
+        // A codec other than UTF-8 reads no `\u` escape, and a character
+        // spelled by byte escapes only as bytes: hand it the preprocessed
+        // pattern, as `compile_native` does. A pattern that cannot be
+        // preprocessed that way is pinned to UTF-8 and never gets here
+        // with a subject it could match, so its source is kept as is.
+        // An unpinned pattern is read a byte at a time when its own
+        // encoding cannot read it: a US-ASCII regexp whose only high byte
+        // is escaped (`\é` in an ISO-8859-1 source pins nothing).
+        let extended = option & onigmo_regex::ONIG_OPTION_EXTEND != 0;
         let rewritten =
             if enc != OnigmoEncoding::UTF8 && self.declared_encoding.is_ascii_compatible() {
-                preprocess_native_unicode(
-                    &self.source,
-                    self.declared_encoding,
-                    option & onigmo_regex::ONIG_OPTION_EXTEND != 0,
-                )
-                .ok()
-                .flatten()
+                reg_preprocess(&self.source, self.declared_encoding, extended)
+                    .or_else(|err| {
+                        if self.fixed_encoding {
+                            Err(err)
+                        } else {
+                            reg_preprocess(&self.source, crate::value::Encoding::Ascii8, extended)
+                        }
+                    })
+                    .ok()
+                    .map(|pre| pre.buf)
             } else {
                 None
             };

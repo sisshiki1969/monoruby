@@ -259,6 +259,11 @@ fn option_letters(option: u32) -> String {
 /// different complaint ("/.../n has a non escaped non ASCII character
 /// in non ASCII-8BIT script"), which monoruby does not raise yet, so
 /// leave that case as it stands instead of answering it with this one.
+///
+/// The walk skips comments unread, so a source broken only inside an
+/// extended-mode `# …` line or a `(?#…)` passes (`(?x)# \xE3\x81\x82`
+/// in US-ASCII); an escape the walk refuses before it reaches the
+/// broken byte is reported as that refusal.
 pub(super) fn check_regexp_source_valid(source: &RStringInner, option: u32) -> Result<()> {
     if option & RegexpInner::NOENCODING != 0
         || source.encoding() == crate::value::Encoding::Ascii8
@@ -266,8 +271,20 @@ pub(super) fn check_regexp_source_valid(source: &RStringInner, option: u32) -> R
     {
         return Ok(());
     }
+    let msg = if source.encoding().is_ascii_compatible() {
+        match crate::value::rvalue::regexp::reg_preprocess(
+            source.as_bytes(),
+            source.encoding(),
+            option & onigmo_regex::ONIG_OPTION_EXTEND != 0,
+        ) {
+            Ok(_) => return Ok(()),
+            Err(msg) => msg,
+        }
+    } else {
+        "invalid multibyte character"
+    };
     Err(MonorubyErr::regexerr(format!(
-        "invalid multibyte character: /{}/{}",
+        "{msg}: /{}/{}",
         super::string::regexp_source_desc(source),
         option_letters(option)
     )))
@@ -296,87 +313,49 @@ fn regexp_source_desc_in_message(bytes: &[u8], enc: crate::value::Encoding) -> S
     .into_owned()
 }
 
-/// `unescape_nonascii`'s reading of the `\xHH` escapes in a regexp
-/// source: an escaped byte above `0x7F` has to spell, together with the
-/// `\xHH` escapes right after it, one character of `enc` — "too short
-/// escaped multibyte character" when the escapes run out first,
-/// "invalid multibyte escape" when they spell none — and when it does,
-/// the regexp is pinned to `enc` (`Ok(true)`). BINARY and US-ASCII
-/// sources are exempt: their escaped bytes are bytes, and UTF-16 /
-/// UTF-32 sources are pinned already, and spell their escapes in code
-/// units this walk does not read.
-pub(crate) fn check_regexp_hex_escapes(bytes: &[u8], enc: crate::value::Encoding) -> Result<bool> {
-    use crate::value::Encoding;
-    if matches!(enc, Encoding::Ascii8 | Encoding::UsAscii) || enc.is_wide() {
-        return Ok(false);
+/// `rb_reg_preprocess`'s refusals of a regexp source read in `enc`
+/// ([`reg_preprocess`](crate::value::rvalue::regexp::reg_preprocess)):
+/// an escaped byte above `0x7F` has to spell, together with the byte
+/// escapes right after it (`\xHH`, `\OOO`, `\cX`, `\M-X`, … in any mix),
+/// one character of `enc` — "too short escaped multibyte character"
+/// when the escapes run out first, "invalid multibyte escape" when they
+/// spell none — and the `\u` escapes have to be well formed and agree
+/// with the rest of the source. Raised as CRuby words it, with the
+/// source and `option`'s letters (`/\xA4/i`). UTF-16 / UTF-32 sources
+/// are not walked: they spell their escapes in code units.
+///
+/// Answers the encoding the content pins (see
+/// [`reg_content_fixed_encoding`](crate::value::rvalue::regexp::reg_content_fixed_encoding)).
+pub(crate) fn check_regexp_preprocess(
+    bytes: &[u8],
+    enc: crate::value::Encoding,
+    option: u32,
+) -> Result<Option<crate::value::Encoding>> {
+    Ok(match regexp_preprocess_checked(bytes, enc, option)? {
+        Some(pre) => pre.fixed,
+        None => Some(enc),
+    })
+}
+
+/// [`check_regexp_preprocess`], handing back the walk itself (`None`
+/// for a UTF-16 / UTF-32 source, which is not walked).
+fn regexp_preprocess_checked(
+    bytes: &[u8],
+    enc: crate::value::Encoding,
+    option: u32,
+) -> Result<Option<crate::value::rvalue::regexp::RegPreprocessed>> {
+    if enc.is_wide() {
+        return Ok(None);
     }
-    let refuse = |what: &str| {
-        MonorubyErr::regexerr(format!("{what}: /{}/", regexp_source_desc_in_message(bytes, enc)))
-    };
-    // A `\xH` / `\xHH` at `i` (the `x`): its byte and the index after
-    // the digits.
-    let hex_at = |i: usize| -> Option<(u8, usize)> {
-        let d = |j: usize| bytes.get(j).and_then(|b| (*b as char).to_digit(16));
-        let first = d(i + 1)?;
-        match d(i + 2) {
-            Some(second) => Some(((first * 16 + second) as u8, i + 3)),
-            None => Some((first as u8, i + 2)),
-        }
-    };
-    let mut pinned = false;
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        if bytes[i] != b'\\' {
-            i += 1;
-            continue;
-        }
-        if bytes[i + 1] != b'x' {
-            // `\\`, `\n`, `\u`, …: the escaped character is skipped
-            // whole, so a `\\` is never read as the start of an escape.
-            i += 2;
-            continue;
-        }
-        let Some((byte, next)) = hex_at(i + 1) else {
-            // No digits: the engine's "invalid hex escape".
-            i += 2;
-            continue;
-        };
-        i = next;
-        if byte < 0x80 {
-            continue;
-        }
-        let mut ch = vec![byte];
-        loop {
-            match crate::value::precise_mbclen(enc, &ch, 0) {
-                PreciseLen::Char(_) => {
-                    pinned = true;
-                    break;
-                }
-                PreciseLen::Invalid => return Err(refuse("invalid multibyte escape")),
-                PreciseLen::NeedMore => {
-                    // The rest of the character has to be escaped too.
-                    if bytes.get(i) == Some(&b'\\')
-                        && bytes.get(i + 1) == Some(&b'x')
-                        && let Some((b, next)) = hex_at(i + 1)
-                    {
-                        ch.push(b);
-                        i = next;
-                    } else if bytes.get(i) == Some(&b'\\')
-                        && bytes
-                            .get(i + 1)
-                            .is_some_and(|e| !b"\\ntrfvae01234567xMCc".contains(e))
-                    {
-                        // An escape that spells no byte (`\u`, `\d`, …):
-                        // `read_escaped_byte`'s refusal.
-                        return Err(refuse("unexpected escape sequence"));
-                    } else {
-                        return Err(refuse("too short escaped multibyte character"));
-                    }
-                }
-            }
-        }
+    let extended = option & onigmo_regex::ONIG_OPTION_EXTEND != 0;
+    match crate::value::rvalue::regexp::reg_preprocess(bytes, enc, extended) {
+        Ok(pre) => Ok(Some(pre)),
+        Err(msg) => Err(MonorubyErr::regexerr(format!(
+            "{msg}: /{}/{}",
+            regexp_source_desc_in_message(bytes, enc),
+            option_letters(option)
+        ))),
     }
-    Ok(pinned)
 }
 
 /// Parse `Regexp.new`/`#initialize` arguments (source + optional option)
@@ -508,7 +487,7 @@ pub(crate) fn regexp_inner_from_parts(
     string: String,
     source_encoding: Option<crate::value::Encoding>,
     source_bytes: Option<Vec<u8>>,
-    mut option: u32,
+    option: u32,
     default_kcode: Option<u32>,
 ) -> Result<RegexpInner> {
     // The encoding the source is read in: the modifier's when there
@@ -521,22 +500,25 @@ pub(crate) fn regexp_inner_from_parts(
         Some(k) if k & RegexpInner::KCODE_SJIS != 0 => Some(crate::value::Encoding::Sjis(1)),
         _ => source_encoding,
     };
-    // A `\xHH` escape spelling a character of that encoding pins the
-    // regexp to it, and one spelling none is refused here, before
-    // Onigmo (whose own reading of the bytes is worded differently).
-    if option & RegexpInner::NOENCODING == 0
-        && let (Some(enc), Some(bytes)) = (source_encoding, source_bytes.as_deref())
-        && check_regexp_hex_escapes(bytes, enc)?
-    {
-        option |= RegexpInner::FIXEDENCODING;
-    }
-    // A BINARY source carrying high bytes — raw, or as `\xHH` escapes
+    // The source as `rb_reg_preprocess` reads it: a byte escape spelling
+    // no character of that encoding is refused here, before Onigmo
+    // (whose own reading of the bytes is worded differently), and what
+    // the content pins decides the codec below.
+    let pre = match (source_encoding, source_bytes.as_deref()) {
+        (Some(enc), Some(bytes)) if option & RegexpInner::NOENCODING == 0 => {
+            regexp_preprocess_checked(bytes, enc, option)?
+        }
+        _ => None,
+    };
+    let content_fixed = pre.as_ref().and_then(|pre| pre.fixed);
+    // A BINARY source carrying high bytes — raw, or as byte escapes
     // (`Regexp.new("[\xC2-\xDF]".b)`, what `Regexp.union` of `/…/n`
     // regexps hands back) — is matched byte-wise like `/…/n`; under the
     // UTF-8 codec such an escape is "too short multibyte code string".
     let binary_source = source_encoding == Some(crate::value::Encoding::Ascii8)
         && source_bytes.as_ref().is_some_and(|b| {
-            b.iter().any(|&c| c >= 0x80) || RegexpInner::has_non_ascii_hex_escape(b)
+            b.iter().any(|&c| c >= 0x80)
+                || content_fixed == Some(crate::value::Encoding::Ascii8)
         });
     // A source in a native ASCII-compatible codec (EUC-JP, Shift_JIS,
     // ISO-8859-*) carrying non-ASCII bytes has to be compiled under
@@ -552,9 +534,9 @@ pub(crate) fn regexp_inner_from_parts(
                         | crate::value::Encoding::Ascii8
                 )
             })
-            .filter(|_| {
+            .filter(|e| {
                 source_bytes.as_ref().is_some_and(|b| {
-                    b.iter().any(|&c| c >= 0x80) || RegexpInner::has_non_ascii_hex_escape(b)
+                    b.iter().any(|&c| c >= 0x80) || content_fixed == Some(*e)
                 })
             })
             .and_then(RegexpInner::onigmo_encoding_for)
@@ -586,13 +568,14 @@ pub(crate) fn regexp_inner_from_parts(
     } else {
         default_kcode
     };
-    let regexp = RegexpInner::with_option_kcode_source(
+    let regexp = RegexpInner::with_preprocessed(
         string,
         option,
         encoding,
         kcode,
         source_encoding,
         source_bytes,
+        pre,
     )?;
     Ok(regexp)
 }
@@ -3868,6 +3851,142 @@ re = Regexp.new(u.("(?<n>a)(b)"))
                 (/#{"\\u{41}"}#{"あ".encode(enc)}/ =~ "xAあ".encode(enc)),
                 (/\u{41}/ =~ "xAあ".encode(enc)), ("xAあ".encode(enc).index(/\u{41 42}+/i)),
               ]
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn regexp_escaped_multibyte_mixed_escapes() {
+        // #1855: the trail bytes of an escaped multibyte character may be
+        // spelled by any byte escape (`read_escaped_byte`): `\xHH`, `\OOO`,
+        // `\M-X`, `\cX` in any mix. The character is handed to the engine
+        // raw, so it is one character inside a class too.
+        run_test(
+            r##"
+            %w[EUC-JP Windows-31J UTF-8 GB18030].flat_map do |enc|
+              bytes = "あ".encode(enc).bytes
+              hex = ->(b) { "\\x%02X" % b }
+              oct = ->(b) { "\\%03o" % b }
+              forms = [
+                bytes.map(&hex).join,
+                hex.(bytes[0]) + bytes[1..].map(&oct).join,
+                bytes.map(&oct).join,
+                oct.(bytes[0]) + bytes[1..].map(&hex).join,
+                "\\M-" + (bytes[0] & 0x7f).chr + bytes[1..].map(&hex).join,
+                hex.(bytes[0]) + bytes[1..].map { "\\M-" + (_1 & 0x7f).chr }.join,
+                "\\c\\M-" + (bytes[0] & 0x7f | 0x40).chr + bytes[1..].map(&oct).join,
+              ]
+              subj = "xyあいa".encode(enc)
+              forms.flat_map do |f|
+                ["x#{f}", "[#{f}]+", "#{f}|y", f[0...-1], "#{f}\\q", "#{f}\\u{41}"].map do |src|
+                  r = Regexp.new(src.dup.force_encoding(enc))
+                  m = r.match(subj)
+                  [r.source.b, r.encoding.to_s, r.fixed_encoding?, m && m.begin(0), m && m[0].b]
+                rescue => e
+                  [e.class, e.message.b]
+                end
+              end
+            end
+            "##,
+        );
+        run_test(
+            r##"
+            ["\\xA4\\777", "\\xA4\\u3042", "\\xA4\\M-\\C-b", "\\xA4\\M-a", "\\xA4\\M-", "\\xA4\\C-\\M-\\M-a",
+             "\\xA4\\c\\c", "\\xA4\\C", "\\xA4\\x", "\\xA4\\", "\\xA4\\101", "\\xA4\\n"].map do |s|
+              r = Regexp.new(s.encode("EUC-JP"), "i")
+              [r.source.b, r.encoding.to_s, r.fixed_encoding?]
+            rescue => e
+              [e.class, e.message.b]
+            end
+            "##,
+        );
+        run_test(
+            r##"
+            [/\xE3\201\202/ =~ "xあ", /\343\x81\x82/ =~ "xあ", /\M-c\x81\202/ =~ "xあ",
+             /x[\343\201\202]+/.match("xああ")&.[](0), /\xE3\201\202/.encoding.to_s, /\343\201\202/.fixed_encoding?]
+            "##,
+        );
+        // The literal fragments of an interpolated regexp are checked at
+        // compile time (`rb_reg_check_preprocess`): a SyntaxError.
+        run_test(
+            r##"
+            x = "a"
+            ['/#{x}\xff/', '/#{x}\xA4\242/', '/\xA4#{x}/e', '/#{x}\xE3\201\202/', '/#{x}\M-c\x81\x82/'].map do |s|
+              eval(s).source
+            rescue SyntaxError => e
+              e.class
+            end
+            "##,
+        );
+    }
+
+    #[test]
+    fn regexp_encoding_not_pinned_by_comments_or_escaped_single_byte() {
+        // #1858: `rb_reg_preprocess` does not read comments (`(?#…)`, and
+        // `# …` in extended mode, which a group's `(?x:` / `(?-x:` turns
+        // on and off), so a `\u` / `\p` / byte escape in one pins nothing;
+        // only a raw non-ASCII byte in a UTF-8 source's comment does.
+        run_test(
+            r##"
+            srcs = ["(?x:\\u{41} # \\u{3042}\n)C", "a(?#\\u3042)", "(?#\\u{3042})a", "(?x)a # \\u3042\n", "a # \\u3042\n",
+                    "(?#\\p{Alpha})a", "(?x) # \\p{Alpha}\na", "(?x:# \\xA4\\xA2\n)a", "(?-x:# \\u3042)", "[#\\u3042]",
+                    "(?#あ)a", "(?x)# あ\na", "(?x:a)# \\u3042", "(?x:(?-x:# \\u3042))", "(?x:(b)# \\u3042\n)",
+                    "(?#\\)\\u3042)a", "(?#unterminated", "\\(?#\\u3042)", "(?im-x:# \\u3042\n)", "(?x-im:# \\u3042\n)",
+                    "(?x)(?-x)# \\u3042", "[(?#]\\u3042", "a\\p{Alpha}", "(?x)\\# \\u3042"]
+            %w[UTF-8 US-ASCII EUC-JP].flat_map do |enc|
+              [nil, Regexp::EXTENDED].flat_map do |opt|
+                srcs.map do |s|
+                  r = Regexp.new((s.encode(enc) rescue s.dup.force_encoding(enc)), opt)
+                  [r.source.b, r.encoding.to_s, r.fixed_encoding?, r =~ "xaCA"]
+                rescue => e
+                  [e.class, e.message.b]
+                end
+              end
+            end
+            "##,
+        );
+        // In a single-byte encoding a `\` before a high byte is an escaped
+        // character, not a multibyte one: it pins nothing, so the regexp
+        // is US-ASCII and open, while a raw high byte pins the encoding.
+        run_test(
+            r##"
+            sb = ["\\\u00e9\\u{41}", "\\\u00e9", "\u00e9", "\\\u00e9\\xE9", "a\\\u00e9", "[\\\u00e9]A", "\\\u00e9|\\u{41}"]
+            %w[ISO-8859-1 Windows-1252].flat_map do |enc|
+              subj = "x\u00e9A".encode(enc)
+              sb.map do |s|
+                r = Regexp.new(s.encode(enc))
+                [r.source.b, r.encoding.to_s, r.fixed_encoding?, r =~ subj]
+              end
+            end + ["\\\xff".b, "\\\xff\\x41".b, "\\\xffA".b].map { |s|
+              r = Regexp.new(s); [r.encoding.to_s, r.fixed_encoding?, r =~ "x\xffA".b]
+            } + [/a(?#\u3042)/.encoding.to_s, /(?x:a # \u{3042}
+            )/.encoding.to_s, /a(?#\u3042)/ =~ "xa", /a(?#あ)/.encoding.to_s, /(?x)a # あ
+            /.fixed_encoding?]
+            "##,
+        );
+        // A `\p{…}` property pins the source's own encoding; in an
+        // interpolated regexp a piece's comments are not read either.
+        run_test(
+            r##"
+            x = "a"
+            [Regexp.new("\\p{Alpha}".force_encoding("US-ASCII")), Regexp.new("\\p{Alpha}".encode("EUC-JP")),
+             /\p{Alpha}/, /#{x}(?#\u3042)/, /#{x}\p{Alpha}/, /#{x}# \u3042
+            /x].map { [_1.encoding.to_s, _1.fixed_encoding?] }
+            "##,
+        );
+    }
+
+    #[test]
+    fn regexp_error_message_carries_option_letters() {
+        // `rb_enc_reg_error_desc` renders the source with its `m` / `i` /
+        // `x` letters, for Onigmo's errors too.
+        run_test(
+            r##"
+            [["(", "i"], ["(".encode("EUC-JP"), "mx"], ["(?#a", "x"], ["[a", "mix"], ["\\xA4".encode("EUC-JP"), "m"]].map do |s, o|
+              Regexp.new(s, o)
+            rescue RegexpError => e
+              e.message.b
             end
             "##,
         );
