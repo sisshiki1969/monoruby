@@ -248,6 +248,42 @@ fn body_ok(store: &Store, iseq_id: ISeqId, block: bool) -> bool {
 
 impl<'a> JitContext<'a> {
     ///
+    /// Should an inline generator call its builtin's *pure* helper at this
+    /// site, rather than the ordinary one?
+    ///
+    /// Some helpers run Ruby code only in a corner of their domain — the
+    /// default proc of a `Hash#[]` miss, a key whose `#hash` is
+    /// user-defined — and are otherwise plain Rust. The ordinary helper
+    /// handles the corner itself, which puts an error exit behind it that
+    /// a frameless body cannot contain (`AsmIr::new_error`). The pure
+    /// helper answers everything outside the corner and *declines* the
+    /// corner (returns 0, raising nothing), and the body deopts
+    /// ([`Self::pure_helper_exit`]), so the interpreter performs the
+    /// operation again in a frame of its own. That is only worth it where
+    /// the frame is what is at stake: in a frameless body. A site whose
+    /// pure helper ever declined is stamped by its exit and takes the
+    /// ordinary helper from the recompile on.
+    ///
+    pub(crate) fn wants_pure_helper(&self, state: &AbstractState) -> bool {
+        self.in_frameless_frame() && !state.pc().impure_helper()
+    }
+
+    ///
+    /// The exit after a pure helper call ([`Self::wants_pure_helper`]):
+    /// deopt when it declined. The exit stamps the site and recompiles
+    /// the unit after a few misses (`RecompileReason::ImpureHelper`), so a
+    /// site that keeps reaching the corner goes back to the ordinary
+    /// helper instead of deopting on every call.
+    ///
+    pub(crate) fn pure_helper_exit(&self, state: &AbstractState, ir: &mut AsmIr) {
+        let deopt = match self.recv_miss_recompile_target() {
+            Some(target) => ir.new_recompile_deopt(state, RecompileReason::ImpureHelper, target),
+            None => ir.new_deopt(state),
+        };
+        ir.deopt_if_null(deopt);
+    }
+
+    ///
     /// Compile the call `callid` to *iseq* as a frameless specialized
     /// call. `None` when the callee turned out not to be frameless: the
     /// compile is then rolled back, leaving `state` and `ir` as they were,

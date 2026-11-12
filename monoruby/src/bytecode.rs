@@ -304,6 +304,9 @@ pub const OPCODE_SUB_POLY: u8 = 1;
 /// `opcode_sub` bit: a fixnum-compiled Integer arithmetic site took its
 /// arithmetic exit (set by the `IntegerOverflow` recompile exit).
 pub const OPCODE_SUB_OVERFLOW: u8 = 2;
+/// `opcode_sub` bit: a frameless body's pure helper call at this site
+/// declined (set by the `ImpureHelper` recompile exit).
+pub const OPCODE_SUB_IMPURE: u8 = 4;
 
 impl std::ops::Sub<isize> for BytecodePtr {
     type Output = BytecodePtr;
@@ -365,8 +368,9 @@ impl BytecodePtr {
     ///
     /// The instruction's profile byte (op1 bits 63:56). A bit set:
     /// [`OPCODE_SUB_POLY`] by the interpreter when a site's receiver /
-    /// operand class changed, [`OPCODE_SUB_OVERFLOW`] by a JIT side exit
-    /// (`RecompileReason::IntegerOverflow`). Both writers `or` their bit in.
+    /// operand class changed, [`OPCODE_SUB_OVERFLOW`] / [`OPCODE_SUB_IMPURE`]
+    /// by a JIT side exit (`RecompileReason::IntegerOverflow` /
+    /// `ImpureHelper`). Every writer `or`s its bit in.
     ///
     pub fn opcode_sub(&self) -> u8 {
         (self.op1 >> 56) as u8
@@ -381,6 +385,12 @@ impl BytecodePtr {
     /// arithmetic exit (see `RecompileReason::IntegerOverflow`).
     pub fn integer_overflowed(&self) -> bool {
         self.opcode_sub() & OPCODE_SUB_OVERFLOW != 0
+    }
+
+    /// A pure helper call a frameless body made here declined (see
+    /// `RecompileReason::ImpureHelper`).
+    pub fn impure_helper(&self) -> bool {
+        self.opcode_sub() & OPCODE_SUB_IMPURE != 0
     }
 
     pub fn as_ptr(&self) -> *mut Bytecode {

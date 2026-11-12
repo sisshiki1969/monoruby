@@ -1179,6 +1179,15 @@ fn hash_index(
     if !recv_class.is(HASH_CLASS) {
         return false;
     }
+    // In a frameless body, the helper behind the call / the probe's slow
+    // path is the pure one, so the body needs no error exit
+    // (`JitContext::wants_pure_helper`).
+    let pure = ctx.wants_pure_helper(state);
+    let helper = if pure {
+        hashindex_pure as *const () as u64
+    } else {
+        hashindex as *const () as u64
+    };
     state.load(ir, callsite.args, GP::Rcx);
     state.load(ir, callsite.recv, GP::Rdx);
     // A compile-time key (`LinkMode::C`: a frozen String literal, a folded
@@ -1207,10 +1216,9 @@ fn hash_index(
         if let Some((digest, key_eq)) = const_probe {
             let using_fpr = state.get_using_fpr(ir);
             ir.fpr_save(using_fpr);
-            ir.hash_probe(layout, hashindex as *const () as u64, digest, key_eq);
+            ir.hash_probe(layout, helper, digest, key_eq);
             ir.fpr_restore(using_fpr);
-            let error = ir.new_error(state);
-            ir.handle_error(error);
+            hash_index_exit(state, ir, ctx, pure);
             state.def_rax2acc(ir, callsite.dst);
             return true;
         }
@@ -1277,21 +1285,32 @@ fn hash_index(
         state.guard_class(ir, callsite.args, GP::Rcx, kc, deopt);
         let using_fpr = state.get_using_fpr(ir);
         ir.fpr_save(using_fpr);
-        ir.hash_probe(layout, hashindex as *const () as u64, digest, key_eq);
+        ir.hash_probe(layout, helper, digest, key_eq);
         ir.fpr_restore(using_fpr);
-        let error = ir.new_error(state);
-        ir.handle_error(error);
+        hash_index_exit(state, ir, ctx, pure);
         state.def_rax2acc(ir, callsite.dst);
         return true;
     }
     let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
-    ir.inline(|r#gen, _, _, _| r#gen.emit_call_2args(hashindex as *const () as u64));
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_call_2args(helper));
     ir.fpr_restore(using_fpr);
-    let error = ir.new_error(state);
-    ir.handle_error(error);
+    hash_index_exit(state, ir, ctx, pure);
     state.def_rax2acc(ir, callsite.dst);
     true
+}
+
+///
+/// The exit after `Hash#[]`'s helper call: the error exit of `hashindex`,
+/// or the deopt of `hashindex_pure` declining.
+///
+fn hash_index_exit(state: &AbstractState, ir: &mut AsmIr, ctx: &JitContext, pure: bool) {
+    if pure {
+        ctx.pure_helper_exit(state, ir);
+    } else {
+        let error = ir.new_error(state);
+        ir.handle_error(error);
+    }
 }
 
 ///
@@ -1342,7 +1361,7 @@ fn hash_get_or_key(
 fn hash_index_assign(
     state: &mut AbstractState,
     ir: &mut AsmIr,
-    _: &JitContext,
+    ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
     _: Option<CachedClass>,
@@ -1355,17 +1374,21 @@ fn hash_index_assign(
     let CallSiteInfo {
         recv, args, dst, ..
     } = *callsite;
+    // In a frameless body, the pure helper (`JitContext::wants_pure_helper`).
+    let pure = ctx.wants_pure_helper(state);
+    let helper = if pure {
+        hashindex_assign_pure as *const () as u64
+    } else {
+        hashindex_assign as *const () as u64
+    };
     state.load(ir, args, GP::Rsi);
     state.load(ir, args + 1usize, GP::Rdx);
     state.load(ir, recv, GP::Rdi);
     let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
-    ir.inline(|r#gen, _, _, _| {
-        r#gen.emit_hash_index_assign(hashindex_assign as *const () as u64)
-    });
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_hash_index_assign(helper));
     ir.fpr_restore(using_fpr);
-    let error = ir.new_error(state);
-    ir.handle_error(error);
+    hash_index_exit(state, ir, ctx, pure);
     state.def_rax2acc(ir, dst);
     true
 }
@@ -1903,6 +1926,43 @@ extern "C" fn hashindex(
     }
 }
 
+///
+/// [`hashindex`] for a frameless body: the same answer wherever finding it
+/// runs no Ruby code, and 0 — with no error set — where it would.
+///
+/// The lookup itself runs none for a packed key, a String of class
+/// `String` itself, or any key of an identity-keyed Hash: those are
+/// digested and compared without dispatching `#hash` / `#eql?` (see
+/// `HashRef::get`). A miss runs none unless the Hash has a default proc
+/// (the `#default` *method* is not consulted: the inliner admits only
+/// receivers of class `Hash` itself, whose `#default` is the builtin
+/// under the class-version guard). Everything else declines, and the JIT
+/// code deopts so that the interpreter performs the lookup in a frame.
+///
+extern "C" fn hashindex_pure(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    base: Value,
+    key: Value,
+) -> Option<Value> {
+    let h = base.as_hash();
+    if !(key.is_packed_value()
+        || key.is_plain_rstring_inner().is_some()
+        || h.is_compare_by_identity())
+    {
+        return None;
+    }
+    // `get` cannot fail for such a key; should it, decline and let the
+    // interpreter raise it in a frame.
+    match h.get(key, vm, globals) {
+        Ok(Some(v)) => Some(v),
+        Ok(None) if h.defalut_proc().is_none() => {
+            Some(h.defalut_value().unwrap_or_default())
+        }
+        _ => None,
+    }
+}
+
 /// `Hash#__get_or_key` for the JIT: same ABI as [`hashindex`], so the
 /// inliner reuses `emit_call_2args` with this address. One probe, the
 /// key itself on a miss, the default never consulted.
@@ -1948,6 +2008,39 @@ extern "C" fn hashindex_assign(
             None
         }
     }
+}
+
+///
+/// [`hashindex_assign`] for a frameless body: the same store wherever it
+/// runs no Ruby code, and 0 — with no error set and the Hash untouched —
+/// where it would run some or would raise.
+///
+/// The probe runs none for the keys [`hashindex_pure`] admits (and
+/// neither does promoting an inline Hash, whose stored keys are all of
+/// that kind). The raising cases — a frozen receiver, a new key during
+/// an iteration — are declined rather than raised, since both are
+/// detected before anything is stored: the interpreter then performs
+/// the store again in a frame, and raises from there.
+///
+extern "C" fn hashindex_assign_pure(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    base: Value,
+    key: Value,
+    val: Value,
+) -> Option<Value> {
+    let ident = base.as_hash().is_compare_by_identity();
+    if !(ident || key.is_packed_value() || key.is_plain_rstring_inner().is_some()) {
+        return None;
+    }
+    let key = if ident {
+        key
+    } else {
+        key.frozen_hash_key(&globals.store)
+    };
+    let mut h = base.as_hash_mut(&globals.store).ok()?;
+    h.insert(key, val, vm, globals).ok()?;
+    Some(val)
 }
 
 ///

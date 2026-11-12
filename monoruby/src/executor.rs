@@ -6038,6 +6038,13 @@ pub enum RecompileReason {
     /// routed to a residual generic arm (`binary_dispatch`). One-shot per
     /// site: a stamped site is never converted again.
     IntegerOverflow = 8,
+    /// A frameless body called a builtin's *pure* helper (one that answers
+    /// only what it can without running Ruby code — `Hash#[]` on a Hash
+    /// with no default proc, say) and the helper declined. Only the exit
+    /// itself sees that, so it stamps the site (`OPCODE_SUB_IMPURE`) and
+    /// the recompile gives the site its ordinary helper call, whose error
+    /// exit keeps the callee framed. One-shot per site.
+    ImpureHelper = 9,
 }
 
 impl RecompileReason {
@@ -6046,6 +6053,7 @@ impl RecompileReason {
     pub(crate) fn site_stamp(self) -> Option<u8> {
         match self {
             Self::IntegerOverflow => Some(crate::bytecode::OPCODE_SUB_OVERFLOW),
+            Self::ImpureHelper => Some(crate::bytecode::OPCODE_SUB_IMPURE),
             _ => None,
         }
     }

@@ -179,6 +179,12 @@ impl Codegen {
             AsmInst::HandleError(error) => self.encode_linst(LInst::HandleError {
                 error: labels[error].clone(),
             }),
+            // The same test against a deopt: a pure helper that declined.
+            AsmInst::DeoptIfNull(deopt) => {
+                let deopt =
+                    self.deopt_label(labels, deopt, DeoptCause::Static("pure helper declined"));
+                self.encode_linst(LInst::HandleError { error: deopt })
+            }
             // Stack-overflow check before establishing a callee frame (aarch64
             // bails if the write-back needs an unsupported feature).
             AsmInst::CheckStack { write_back, error } => {

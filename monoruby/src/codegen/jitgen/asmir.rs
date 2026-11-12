@@ -1496,6 +1496,14 @@ impl AsmIr {
     }
 
     ///
+    /// Deopt to *deopt* if the preceding pure helper call declined
+    /// (returned 0 in rax). See [`AsmInst::DeoptIfNull`].
+    ///
+    pub(crate) fn deopt_if_null(&mut self, deopt: AsmDeopt) {
+        self.push(AsmInst::DeoptIfNull(deopt));
+    }
+
+    ///
     /// Guard that the object in *rdi* is not frozen.
     ///
     pub(crate) fn guard_frozen(&mut self, deopt: AsmDeopt) {
@@ -2590,6 +2598,11 @@ pub(super) enum AsmInst {
     /// Check *rax*, and if it is 0, go to 'error'.
     ///
     HandleError(AsmError),
+    ///
+    /// Check *rax*, and if it is 0, deopt: the exit of a pure helper
+    /// (one that runs no Ruby code) that declined to answer.
+    ///
+    DeoptIfNull(AsmDeopt),
     ///
     /// Save floating point registers in use.
     ///
@@ -4176,6 +4189,7 @@ impl AsmInst {
                 format!("recompile_deopt {:?} {:?}", position, reason)
             }
             Self::HandleError(error) => format!("handle_error {:?}", error),
+            Self::DeoptIfNull(deopt) => format!("deopt_if_null {:?}", deopt),
             Self::FprSave(using_fpr, cont) => format!("fpr_save {:?} {cont}", using_fpr),
             Self::FprRestore(using_fpr, cont) => format!("fpr_restore {:?} {cont}", using_fpr),
             Self::ExecGc {
