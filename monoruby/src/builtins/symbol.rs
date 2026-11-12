@@ -131,6 +131,9 @@ fn sym_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn sym_inspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let sym = lfp.self_val().as_symbol();
+    if let Some(inner) = crate::value::inspect_symbol_in_resenc(sym, &globals.store) {
+        return Ok(Value::string_from_inner(inner));
+    }
     let s = inspect_symbol(sym, globals.store.inspect_escape());
     // CRuby's `sym_inspect`: a name that needs no quoting is copied in
     // the symbol's own encoding (`:a.inspect` is US-ASCII whatever

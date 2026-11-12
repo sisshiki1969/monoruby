@@ -139,8 +139,8 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::SelfValue => self.emit_mov(dst, BcReg::Self_),
             NodeKind::Integer(i) => self.emit_integer(dst, i),
             NodeKind::Symbol(sym) => {
-                let val = Value::symbol_from_source_str(&sym, self.source_encoding());
-                self.emit_symbol(dst, val.as_symbol())
+                let id = self.symbol_id(&sym);
+                self.emit_symbol(dst, id)
             }
             NodeKind::Bignum(bigint) => self.emit_bigint(dst, bigint),
             NodeKind::Float(f) => self.emit_float(dst, f),
@@ -1121,11 +1121,14 @@ impl<'a> BytecodeGen<'a> {
                 if let (NodeKind::Symbol(new_name), NodeKind::Symbol(old_name)) =
                     (&new.kind, &old.kind)
                 {
-                    if new_name.starts_with('$') && old_name.starts_with('$') {
+                    if let (Some(new_name), Some(old_name)) = (new_name.as_str(), old_name.as_str())
+                        && new_name.starts_with('$')
+                        && old_name.starts_with('$')
+                    {
                         // Global variable alias: resolve names at compile
                         // time and emit a dedicated AliasGvar instruction.
-                        let new_id = IdentId::get_id_from_string(new_name.clone());
-                        let old_id = IdentId::get_id_from_string(old_name.clone());
+                        let new_id = IdentId::get_id(new_name);
+                        let old_id = IdentId::get_id(old_name);
                         self.emit(
                             BytecodeInst::AliasGvar {
                                 new: new_id,
@@ -1177,7 +1180,7 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::UndefMethod(deref!(undef)) => {
                 if let NodeKind::Symbol(name) = &undef.kind {
                     let temp = self.temp;
-                    let undef = IdentId::get_id(name);
+                    let undef = self.symbol_id(name);
                     self.temp = temp;
                     self.emit(BytecodeInst::UndefMethod { undef }, loc);
                 } else {
@@ -2217,7 +2220,7 @@ impl<'a> BytecodeGen<'a> {
         // (equality key, inspect string)
         fn literal_key(kind: &NodeKind) -> Option<(String, String)> {
             match kind {
-                NodeKind::Symbol(s) => Some((format!("sym:{s}"), format!(":{s}"))),
+                NodeKind::Symbol(s) => Some((format!("sym:{:?}", s.as_bytes()), format!(":{s}"))),
                 NodeKind::String(s) => Some((format!("str:{s}"), format!("{s:?}"))),
                 NodeKind::Integer(i) => Some((format!("int:{i}"), format!("{i}"))),
                 NodeKind::Bignum(n) => Some((format!("int:{n}"), format!("{n}"))),

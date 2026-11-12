@@ -1,4 +1,5 @@
 use super::*;
+use crate::IdentName;
 use num::BigInt;
 
 pub type Node = Annot<NodeKind>;
@@ -36,7 +37,10 @@ pub enum NodeKind {
     EncodedString(Vec<u8>, &'static str),
     InterporatedString(Vec<Node>),
     Command(Box<Node>),
-    Symbol(String),
+    /// A symbol literal's name as the source spelled it: UTF-8 text, or
+    /// the raw bytes of a non-UTF-8 source (`:\x87]` in Windows-31J),
+    /// which bytecodegen interns under the source encoding.
+    Symbol(IdentName),
     Range {
         start: Box<Option<Node>>,
         end: Box<Option<Node>>,
@@ -686,6 +690,10 @@ impl Node {
     }
 
     pub(crate) fn new_symbol(symbol: String, loc: Loc) -> Self {
+        Node::new(NodeKind::Symbol(IdentName::Utf8(symbol)), loc)
+    }
+
+    pub(crate) fn new_symbol_name(symbol: IdentName, loc: Loc) -> Self {
         Node::new(NodeKind::Symbol(symbol), loc)
     }
 

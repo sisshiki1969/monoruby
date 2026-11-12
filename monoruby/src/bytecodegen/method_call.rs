@@ -153,7 +153,7 @@ impl<'a> BytecodeGen<'a> {
             && let Some(first) = arglist.args.first()
             && let NodeKind::Symbol(sym) = &first.kind
         {
-            Some(IdentId::get_id(sym))
+            Some(self.symbol_id(sym))
         } else {
             None
         };

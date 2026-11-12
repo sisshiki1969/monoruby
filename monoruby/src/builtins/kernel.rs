@@ -5846,6 +5846,22 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     if self_val.ty() != Some(ObjTy::OBJECT)
         || globals.store.get_ivar(self_val, IdentId::_NAME).is_some()
     {
+        // A String of the result encoding's own multibyte encoding keeps
+        // its printable characters as they are — bytes, not UTF-8 text.
+        if let Some(inner) = self_val.is_rstring_inner()
+            && globals.store.inspect_escape()
+            && crate::value::rvalue::may_be_native_mbc(globals.store.inspect_escape_encoding())
+            && let Some(body) = inner.inspect_in(globals.store.inspect_escape_encoding())
+        {
+            let mut out = Vec::with_capacity(body.len() + 2);
+            out.push(b'"');
+            out.extend(body);
+            out.push(b'"');
+            return Ok(Value::string_from_inner(RStringInner::from_encoding(
+                &out,
+                inner.encoding(),
+            )));
+        }
         let s = self_val.inspect(&globals.store);
         // A Regexp's rendering carries the *regexp's* own encoding,
         // whatever the result encoding is: `rb_reg_desc` escapes what
@@ -10849,6 +10865,121 @@ mod tests {
             // binding.eval takes the same path
             r##"
             binding.eval("'\xE3'".b).encoding.to_s
+            "##,
+        ]);
+    }
+
+    /// A symbol literal in a non-UTF-8 eval source keeps the source's
+    /// bytes, tagged with its encoding, in every position a static
+    /// symbol can take (#1850).
+    #[test]
+    fn eval_non_utf8_symbol() {
+        run_tests(&[
+            r##"
+            s = eval(":\x87]".dup.force_encoding('Windows-31J'))
+            [s.encoding.to_s, s.to_s.bytes, s == eval(":\x87]".dup.force_encoding('Windows-31J'))]
+            "##,
+            r##"
+            h = eval("{\x87]: 1}".dup.force_encoding('Windows-31J'))
+            k = h.keys[0]
+            [k.encoding.to_s, k.to_s.bytes, h.inspect.bytes]
+            "##,
+            // a constant array / hash of literals
+            r##"
+            a = eval("[:\x87], :a]".dup.force_encoding('Windows-31J'))
+            h = eval("{\x87]: :\x87], b: 2}".dup.force_encoding('Windows-31J'))
+            [a.map { [_1.encoding.to_s, _1.to_s.bytes] }, h.to_a.flatten.map(&:to_s).map(&:bytes)]
+            "##,
+            // keyword arguments
+            r##"
+            def kw_1850(**k) = k
+            k = eval("kw_1850(\x87]: 1, a: 2)".dup.force_encoding('Windows-31J'))
+            [k.keys.map { [_1.encoding.to_s, _1.to_s.bytes] }, k.values]
+            "##,
+            // a hash pattern
+            r##"
+            eval("case {\x87]: 5}\nin {\x87]: v} then v\nend".dup.force_encoding('Windows-31J'))
+            "##,
+            // a method returning a constant symbol
+            r##"
+            eval("def ret_1850 = :\x87]".dup.force_encoding('Windows-31J'))
+            r = ret_1850
+            [r.encoding.to_s, r.to_s.bytes]
+            "##,
+            // BINARY source
+            r##"
+            s = eval(":\xE3".b)
+            [s.encoding.to_s, s.to_s.bytes]
+            "##,
+            // a UTF-8-valid non-ASCII name in a Windows-31J source
+            r##"
+            s = eval(":\x83A".dup.force_encoding('Windows-31J'))
+            [s.encoding.to_s, s.to_s.bytes]
+            "##,
+            // undef of such a name
+            r##"
+            class C1850; end
+            C1850.define_method(eval(":\x87]".dup.force_encoding('Windows-31J'))) { 1 }
+            C1850.define_method(:keep) { 2 }
+            eval("class C1850; undef \x87]; end".dup.force_encoding('Windows-31J'))
+            C1850.instance_methods(false)
+            "##,
+            // an empty keyword name
+            r##"
+            def kw2_1850(**k) = k
+            kw2_1850("": 1).keys
+            "##,
+            // a US-ASCII source: a non-ASCII symbol or string is
+            // ASCII-8BIT, a plain one US-ASCII
+            r##"
+            src = ":\"\\xff\"".encode('US-ASCII')
+            [eval(src).encoding.to_s, eval(":abc".encode('US-ASCII')).encoding.to_s,
+             eval("'abc'".encode('US-ASCII')).encoding.to_s,
+             eval("\"\\xff\"".encode('US-ASCII')).encoding.to_s]
+            "##,
+            // ruby/spec core/hash/inspect_spec.rb: the inspect of such a
+            // hash evals back to it under that default_external
+            r##"
+            o = Encoding.default_external
+            Encoding.default_external = Encoding::Windows_31J
+            src = "{\x87]: 1}".dup.force_encoding('sjis')
+            r = [eval(src).inspect == src, eval(src).inspect.encoding.to_s]
+            Encoding.default_external = o
+            r
+            "##,
+        ]);
+    }
+
+    /// `#inspect` under a non-UTF-8 multibyte result encoding copies a
+    /// String's or Symbol's printable multibyte characters as they are
+    /// when the object is of that very encoding (#1850).
+    #[test]
+    fn inspect_in_native_multibyte_result_encoding() {
+        run_tests(&[
+            r##"
+            o = Encoding.default_external
+            Encoding.default_external = Encoding::Windows_31J
+            j = ->(s) { s.dup.force_encoding('Windows-31J') }
+            syms = ["\x87]", "\x87] x", "\x87]?", "@\x87]", "\x87]=", "A\x87]", "\xB1",
+                    "\x87]\x87", "#\x87]"].map { j[_1].to_sym rescue j[_1] }
+            r = syms.map do |s|
+              [s.inspect.bytes, s.inspect.encoding.to_s,
+               ({s => 1}.inspect.bytes rescue $!.class), [s].inspect.bytes]
+            end
+            r << [j["\x87] x\t\xB1\x87"].inspect.bytes, j["\x87]"].inspect.encoding.to_s]
+            # another encoding is escaped as before
+            r << ["\xA4\xA2".dup.force_encoding('EUC-JP').inspect.bytes, :a.inspect.encoding.to_s]
+            Encoding.default_external = o
+            r
+            "##,
+            r##"
+            o = Encoding.default_external
+            Encoding.default_external = Encoding::EUC_JP
+            e = "\xA4\xA2".dup.force_encoding('EUC-JP')
+            r = [e.inspect.bytes, e.to_sym.inspect.bytes, {e.to_sym => e}.inspect.bytes,
+                 [e, e.to_sym].inspect.bytes, {e => 1}.inspect.bytes]
+            Encoding.default_external = o
+            r
             "##,
         ]);
     }

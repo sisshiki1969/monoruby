@@ -981,7 +981,7 @@ impl<'a> BytecodeGen<'a> {
                 NodeKind::Bool(b) => Some(ISeqHint::ConstReturn(Immediate::bool(*b))),
                 NodeKind::Integer(i) => Immediate::check_fixnum(*i).map(ISeqHint::ConstReturn),
                 NodeKind::Symbol(name) => Some(ISeqHint::ConstReturn(Immediate::symbol(
-                    IdentId::get_id(name),
+                    self.symbol_id(name),
                 ))),
                 NodeKind::Float(f) => Immediate::flonum(*f).map(ISeqHint::ConstReturn),
                 NodeKind::SelfValue => Some(ISeqHint::SelfReturn),
@@ -1731,6 +1731,13 @@ impl<'a> BytecodeGen<'a> {
             }
             None => crate::value::Encoding::UTF8,
         }
+    }
+
+    /// The symbol a literal `name` in this file denotes: interned under
+    /// the source encoding, so a non-ASCII symbol of a non-UTF-8 source
+    /// keeps its bytes and its encoding (CRuby).
+    pub(crate) fn symbol_id(&self, name: &IdentName) -> IdentId {
+        Value::symbol_from_source_name(name, self.source_encoding()).as_symbol()
     }
 
     /// Whether this file declared `# frozen_string_literal: true`, in which

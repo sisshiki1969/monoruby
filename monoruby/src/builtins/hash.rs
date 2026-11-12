@@ -2317,13 +2317,19 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                     } else {
                         buf.cat(", ");
                     }
-                    let label = crate::value::symbol_hash_label(sym, escape);
-                    let label = if escape {
-                        crate::value::escape_nonascii_to_u(&label)
+                    if let Some(label) =
+                        crate::value::symbol_hash_label_in_resenc(sym, &globals.store)
+                    {
+                        buf.append(&globals.store, &label)?;
                     } else {
-                        label
-                    };
-                    buf.append_str(&globals.store, &label)?;
+                        let label = crate::value::symbol_hash_label(sym, escape);
+                        let label = if escape {
+                            crate::value::escape_nonascii_to_u(&label)
+                        } else {
+                            label
+                        };
+                        buf.append_str(&globals.store, &label)?;
+                    }
                     buf.cat(": ");
                 } else {
                     let ks = rb_inspect_in(vm, globals, k, resenc)?;
