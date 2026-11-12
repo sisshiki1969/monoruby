@@ -82,14 +82,25 @@
 //! `LFP_OUTER`. The yield site walks the control-frame chain to the home
 //! as `setup_yield_frame` does (`AsmInst::YieldOuterLfp`) and stores both
 //! into the window — the LFP as the header word a materializing exit then
-//! keeps (`InlineCtx::block`), `self` as slot 0. The body itself reads
-//! nothing through that word: a block that reaches its outer frame
-//! (`LoadDynVar` / `StoreDynVar`, a `yield` or `block_given?` of its own,
-//! `break`, a non-local `return`) is not in the instruction allow-list and
-//! takes the framed yield. The distance to the home is the same on the
-//! specialization stack and on the runtime chain (`JitBlockInfo::outer`):
-//! no frameless frame can sit between a `yield` and the block's home,
-//! since a frameless body neither yields nor passes a block.
+//! keeps (`InlineCtx::block`), `self` as slot 0. The distance to the home
+//! is the same on the specialization stack and on the runtime chain
+//! (`JitBlockInfo::outer`): no frameless frame can sit between a `yield`
+//! and the block's home, since a frameless body neither yields nor passes
+//! a block.
+//!
+//! The block may read and write its outer frames' locals (`LoadDynVar` /
+//! `StoreDynVar`), as `s` in `a.each { |x| s += x }`. Those frames are
+//! frames of the unit, so the accesses compile exactly as in a framed
+//! block — straight to the owner's slot at a static distance from the
+//! frame pointer while the owner's locals are not captured, through the
+//! header word otherwise. The only difference is that distance: the
+//! window's frame pointer is its caller's moved down by the window's
+//! position, not by the caller's whole frame
+//! (`JitContext::specialized_ids_at_pos`). A store is a side effect like
+//! an ivar store, so an exit after it materializes rather than redoes the
+//! `yield`. What still keeps a block framed is anything else that reaches
+//! its outer frame: a `yield` or `block_given?` of its own, `break`, a
+//! non-local `return`.
 
 use super::*;
 use super::method_call::SpecializedCompileResult;
@@ -122,7 +133,7 @@ pub(super) fn eligible(
         && callee_shape_ok(store, func_id, iseq_id, true)
         && call_site_ok(store, func_id, callid, true)
         && cs.pos_num == func.req_num()
-        && body_ok(store, iseq_id)
+        && body_ok(store, iseq_id, false)
 }
 
 ///
@@ -131,8 +142,9 @@ pub(super) fn eligible(
 /// The block is held to what [`eligible`] asks of a method, with the
 /// positional count free: a block drops the arguments it has no parameter
 /// for and binds `nil` to the parameters it is not given (`apply_args`,
-/// `LinkMode::from_caller_inner`), which `fill_yield_window` follows. A
-/// block that reaches its outer frame in any way fails `body_ok`.
+/// `LinkMode::from_caller_inner`), which `fill_yield_window` follows. Of
+/// the ways a block reaches its outer frame, only its outer locals pass
+/// `body_ok`.
 ///
 pub(super) fn yield_eligible(
     store: &Store,
@@ -142,7 +154,7 @@ pub(super) fn yield_eligible(
 ) -> bool {
     callee_shape_ok(store, block_fid, iseq_id, false)
         && call_site_ok(store, block_fid, callid, false)
-        && body_ok(store, iseq_id)
+        && body_ok(store, iseq_id, true)
 }
 
 /// The callee's parameter list and body shape: no block parameter,
@@ -185,7 +197,13 @@ fn call_site_ok(store: &Store, func_id: FuncId, callid: CallSiteId, keywords: bo
 }
 
 /// Is the body built only of instructions that need no frame of their own?
-fn body_ok(store: &Store, iseq_id: ISeqId) -> bool {
+///
+/// A block (*block*) may also read and write its outer frames' locals
+/// (`LoadDynVar` / `StoreDynVar`): those frames are frames of the unit,
+/// addressed from the window like from a block frame of its own
+/// (`JitContext::specialized_ids_at_pos` counts the window's link as its
+/// position in the yielding frame).
+fn body_ok(store: &Store, iseq_id: ISeqId, block: bool) -> bool {
     let iseq = &store[iseq_id];
     (0..iseq.bytecode().len()).all(|i| {
         let pc = iseq.get_pc(BcIndex::from(i));
@@ -222,6 +240,7 @@ fn body_ok(store: &Store, iseq_id: ISeqId) -> bool {
             TraceIr::MethodCall { callid, .. } => {
                 store[callid].block_fid.is_none() && store[callid].block_arg.is_none()
             }
+            TraceIr::LoadDynVar(..) | TraceIr::StoreDynVar(..) => block,
             _ => false,
         }
     })
