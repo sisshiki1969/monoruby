@@ -208,6 +208,48 @@ fn pty_spawn_with_an_extra_redirect() {
     );
 }
 
+/// `PTY.spawn` applies the caller's own `in:` / `out:` / `err:` on top of
+/// the pty, as ext/pty's child does (#1872): the slave goes on fds 0-2
+/// first, then the options run, so a redirect wins and the slave stays
+/// the controlling terminal. A child that fails reports the failing call
+/// by name (`dup2`, `chdir`), and a failed exec as `fork failed`.
+#[test]
+fn pty_spawn_redirects_and_child_failures() {
+    run_test_once_live(
+        r#"
+        require "pty"
+        def drain(r) = (s = +""; begin; loop { s << r.readpartial(100) }; rescue Errno::EIO, EOFError; end; s)
+        res = []
+        pr, pw = IO.pipe
+        r, w, pid = PTY.spawn("sh", "-c", "echo out; echo err >&2", err: pw)
+        pw.close
+        res << [drain(r), pr.read]
+        Process.wait(pid)
+        pr, pw = IO.pipe
+        r, w, pid = PTY.spawn("sh", "-c", "tty -s && echo tty; echo e >&2", out: pw)
+        pw.close
+        res << [drain(r), pr.read]
+        Process.wait(pid)
+        pr, pw = IO.pipe
+        pw.write "hello\n"
+        pw.close
+        r, w, pid = PTY.spawn("sh", "-c", "cat; exec 0</dev/tty && echo ctty", in: pr)
+        pr.close
+        res << drain(r)
+        Process.wait(pid)
+        [-> { PTY.spawn("nonexistent-cmd-xyzzy") },
+         -> { PTY.spawn("true", err: 1_000_000) },
+         -> { PTY.spawn("true", 1_000_000 => :close) },
+         -> { PTY.spawn("true", chdir: "/nonexistent") }].each do |l|
+          res << l.call.size
+        rescue SystemCallError => e
+          res << [e.class, e.message, $?.exitstatus]
+        end
+        res
+        "#,
+    );
+}
+
 /// `tty?` asks isatty(3) for a File (a pty's slave is one, `/dev/null`
 /// is not) and answers false for a pipe; `readpartial` on a pipe returns
 /// what is there and raises EOFError at its end.
