@@ -129,3 +129,51 @@ fn frame_captured_after_the_call() {
         "##,
     );
 }
+
+/// The block's store reaches the accumulator's float home from a register
+/// that is itself spilled (enough floats live in the block for the pool to
+/// run out, which `stress-spill-pool` makes two). The aarch64 lowering of
+/// that store materialized the home's address in the scratch register the
+/// spill read then reused, so the home was never written and every `+=`
+/// started over from the accumulator's first value.
+#[test]
+fn accumulator_written_from_a_spilled_register() {
+    run_test(
+        r##"
+        def occ_literal(n, k)
+          occ = 0.0
+          p0 = k + 0.0001 * k
+          n.times do |j|
+            n.times do |i|
+              r = (i * 0.37 + j * 0.11) % 1.0
+              x = 1.0 - r
+              y = r * 2.0
+              z = r * 3.0
+              rx = x * p0 + y * 0.5 + z * 0.25
+              occ += 1.0 if rx > 0.3
+            end
+          end
+          (n.to_f * n.to_f - occ) / (n.to_f * n.to_f)
+        end
+        def occ_computed(n, k)
+          occ = k * 0.0
+          p0 = k + 0.0001 * k
+          n.times do |j|
+            n.times do |i|
+              r = (i * 0.37 + j * 0.11) % 1.0
+              x = 1.0 - r
+              y = r * 2.0
+              z = r * 3.0
+              rx = x * p0 + y * 0.5 + z * 0.25
+              occ += rx if rx > 0.3
+            end
+          end
+          occ / (n.to_f * n.to_f)
+        end
+        s = 0.0
+        t = 0.0
+        100.times { |i| s += occ_literal(6, 0.5 + i * 0.0001); t += occ_computed(6, 0.5 + i * 0.0001) }
+        [s, t]
+        "##,
+    );
+}

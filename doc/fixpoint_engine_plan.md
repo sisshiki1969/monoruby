@@ -1074,6 +1074,25 @@ optcarrot では、jit-log の walk 数と JIT コードの総バイト数が変
     同一で、増分は rustc のインライン化の揺れによる(グローバルアロケータの
     `alloc::malloc_hard_limit` がインライン化されなくなり、so_mandelbrot で +5.0M)。
     クレートにコードを足すと動く種類の差で、この変更に固有のものではない。
+- **既定で有効にして表に出た aarch64 の既存バグ**(2026-11-13、同じ PR で修正)。
+  - macOS(aarch64)の CI で、app_aobench(`AO_SIZE=64`)の画像が CRuby と違った。
+    CI のビルドは `stress-spill-pool`(float レジスタのプールが 2 本)で、上の aarch64 の
+    確認は通常のプールでしか行っていなかった。
+  - 原因はこの経路ではなく、aarch64 の `emit_store_outer_fpr_home_f`(ブロックが外側
+    フレームの float の置き場へ生の f64 を書く命令)にあった。置き場のアドレスを x10 に
+    作ってから値を読んでいたが、値が退避スロットにあるとき `a64_fpr_load` も x10 を
+    アドレスに使う。そのため値は自分の退避スロットへ書き戻され、置き場は更新されなかった
+    (`occ += 1.0` が毎回最初の値からやり直しになる)。値を先に読む順に直した
+    (`StoreDynVarSpecF` と同じ順)。
+  - この不具合は master にもある。計算で作った float(`occ = k * 0.0`)なら、この経路なしで
+    同じ誤りになる。リテラルを保持するようになって aobench の `occlusion = 0.0` が
+    同じ命令を通るようになり、表に出た。通常のプール(d2〜d15)でも、ブロックの中で
+    float が 14 本を超えて生きていれば起きる。
+  - 回帰テスト `accumulator_written_from_a_spilled_register`(リテラルと計算値の両方)。
+    aarch64 + `stress-spill-pool` で、修正前は失敗し、修正後は `float_literal_carry` の
+    8 本が成功する。修正後は app_aobench と optcarrot(通常、`--opt`)の出力も CRuby と
+    一致した。
+  - 教訓: aarch64 の確認は CI と同じ `stress-spill-pool` でも行う。
 - **残っていること。**
   - 入口が箱入りの float(`S`、クラスが Float と分かっている)の場合は扱っていない。
     integration の事前のみ 41 個のうち 1 個がこれに当たる。

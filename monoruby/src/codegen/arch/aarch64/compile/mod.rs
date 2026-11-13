@@ -4497,6 +4497,11 @@ impl Codegen {
     /// raw f64 of `src` to `[x29 + disp]` (an outer frame's `Sf` home),
     /// elided when `None`. d0 carries the value (reserved scratch), x10
     /// the materialized address.
+    ///
+    /// The value is loaded before the address is materialized: reading a
+    /// spilled `src` goes through x10 too (`a64_fpr_load`), so the other
+    /// order stored the value back into `src`'s own spill slot and left
+    /// the home as it was (same order as `StoreDynVarSpecF`).
     pub(in crate::codegen::jitgen) fn emit_store_outer_fpr_home_f(
         &mut self,
         src: OuterFprSrc,
@@ -4504,17 +4509,19 @@ impl Codegen {
         base: usize,
     ) -> bool {
         let Some(disp) = disp else { return true };
-        monoasm_arm64!(&mut self.jit,
-            mov x10, (disp as u64);
-            add x10, x29, x10;
-        );
         match src {
             OuterFprSrc::Fpr(src) => {
                 self.a64_fpr_load(src, 0, base); // value -> d0 (pool fmov or spill load)
-                monoasm_arm64!(&mut self.jit, str d0, [x10];);
+                monoasm_arm64!(&mut self.jit,
+                    mov x10, (disp as u64);
+                    add x10, x29, x10;
+                    str d0, [x10];
+                );
             }
             OuterFprSrc::Imm(bits) => {
                 monoasm_arm64!(&mut self.jit,
+                    mov x10, (disp as u64);
+                    add x10, x29, x10;
                     mov x11, (bits);
                     str x11, [x10];
                 );

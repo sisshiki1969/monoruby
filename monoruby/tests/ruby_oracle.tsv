@@ -5175,6 +5175,7 @@ e86f1d136bc147bc86fabb026ba5ec24	599	c = Class.new { def m; 1; end }\n        o 
 e871c862dc00bd51e90fcc27f2ace91f	:OVERRIDDEN	class FalseClass; def |(o); :OVERRIDDEN; end; end; false | true
 e8725aa5299b38b5c143ac96f54115d6	[480, 40, 20]	acc = 0\n        40.times do |i|\n          acc += 1 if i.even?\n         
 e874e1da171336c766ccb7c7051d0664	true	e = Exception.new\n            r = Marshal.load(Marshal.dump([e, e])
+e87508107d590f640fb966a49a6696e6	[0.0, 109.98335918333332]	def occ_literal(n, k)\n          occ = 0.0\n          p0 = k + 0.0001 * k
 e88599070c8943da135687c83d834899	["SELECT a FROM t WHERE a = ? OR a = :n", "SELECT a FROM t WHERE a = NULL OR a = NULL", "SELECT a FROM t WHERE a = 42 OR a = 'x'", true, "SELECT a FROM t WHERE a = NULL OR a = NULL", true, 2, ["SQLite3::Exception", "SQLite3::Exception", "SQLite3::Exception", "SQLite3::Exception"]]	require "rubygems"\n        require "sqlite3"\n        db = SQLite3::Data
 e889ad07ee40049b513a3a933fb0546e	["E2", [:inner, :outer]]	$log = []\n        def f\n          begin\n            begin\n             
 e8962f663b29be65e4e0dd56609acec4	[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 100]	def f\n                $res << 12.times { |x|\n                    $r
