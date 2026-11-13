@@ -134,6 +134,11 @@ impl AbstractState {
         self.frames.clone()
     }
 
+    /// The frames of the chain, outermost first.
+    pub(super) fn frames(&self) -> &[FrameRef] {
+        &self.frames
+    }
+
     pub(super) fn new(jitctx: &JitContext) -> Self {
         // Join unification, step B2: the chain spans the whole trace
         // (every suspended frame, 1:1 with the specialization stack), not
@@ -678,6 +683,24 @@ impl AbstractState {
 
     pub(super) fn outer_no_capture_guard(&self, outer: usize) -> Option<bool> {
         Some(self.frames[self.outer_level(outer)?].no_capture_guard())
+    }
+
+    /// [`AbstractFrame::set_entry_pin`] on the innermost frame, leaving
+    /// the frame alone when it already carries that pin. A block with one
+    /// entry starts from that entry's own frame, still shared with the
+    /// entry until its bridge is done, and writing the pin it already has
+    /// (none, outside a pinned loop) would copy the frame for nothing.
+    pub(in crate::codegen::jitgen) fn set_entry_pin(&mut self, slot: Option<SlotId>) {
+        let frame: &AbstractFrame = self;
+        let (new, old) = (frame.entry_pin(slot), frame.gp_regfile.pin());
+        let same = match (new, old) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.reg == b.reg && a.slot == b.slot && a.valid == b.valid,
+            _ => false,
+        };
+        if !same {
+            std::ops::DerefMut::deref_mut(self).set_entry_pin(slot);
+        }
     }
 
     pub(super) fn join_entries(entries: &[BranchEntry]) -> Self {
@@ -1448,13 +1471,18 @@ impl AbstractFrame {
     /// current, and every edge into the block makes it so
     /// ([`Self::bridge_pin`]).
     pub(in crate::codegen::jitgen) fn set_entry_pin(&mut self, slot: Option<SlotId>) {
+        let pin = self.entry_pin(slot);
+        self.gp_regfile.set_pin(pin);
+    }
+
+    /// The pin [`Self::set_entry_pin`] installs for `slot`.
+    fn entry_pin(&self, slot: Option<SlotId>) -> Option<crate::codegen::jitgen::gp_alloc::LoopPin> {
         use crate::codegen::jitgen::gp_alloc::{LoopPin, PIN_REG};
-        let pin = slot.map(|slot| LoopPin {
+        slot.map(|slot| LoopPin {
             reg: PIN_REG,
             slot,
             valid: matches!(self.mode(slot), LinkMode::S(_) | LinkMode::Sf(_, _)),
-        });
-        self.gp_regfile.set_pin(pin);
+        })
     }
 
     /// The pin half of an edge's bridge into a block whose entry state is

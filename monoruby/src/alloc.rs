@@ -306,17 +306,28 @@ fn malloc_amount_relaxed() -> usize {
 /// what `MALLOC_AMOUNT` tracks, so only real buffer growth counts —
 /// though a single oversized request trips the cap regardless via
 /// `layout.size()`.
+#[inline]
 fn malloc_hard_limit() -> usize {
-    // usize::MAX = "not initialized yet". Initialization reads the
-    // environment, which itself allocates; IN_INIT makes those nested
-    // allocations skip the cap instead of recursing unboundedly (and
-    // OnceLock::get_or_init would deadlock on such reentrancy).
-    static LIMIT: AtomicUsize = AtomicUsize::new(usize::MAX);
-    static IN_INIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    let v = LIMIT.load(Ordering::Relaxed);
+    // Every allocation asks: the answer, once known, is one load in the
+    // caller.
+    let v = MALLOC_HARD_LIMIT.load(Ordering::Relaxed);
     if v != usize::MAX {
         return v;
     }
+    malloc_hard_limit_init()
+}
+
+// usize::MAX = "not initialized yet".
+static MALLOC_HARD_LIMIT: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+#[cold]
+#[inline(never)]
+fn malloc_hard_limit_init() -> usize {
+    // Initialization reads the environment, which itself allocates;
+    // IN_INIT makes those nested allocations skip the cap instead of
+    // recursing unboundedly (and OnceLock::get_or_init would deadlock on
+    // such reentrancy).
+    static IN_INIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if IN_INIT.swap(true, Ordering::Relaxed) {
         // Nested allocation during init (or a racing thread): treat as
         // unlimited for this one call; LIMIT is stored momentarily.
@@ -326,7 +337,7 @@ fn malloc_hard_limit() -> usize {
         .ok()
         .and_then(|s| parse_byte_size(s.trim()))
         .unwrap_or(0);
-    LIMIT.store(parsed, Ordering::Relaxed);
+    MALLOC_HARD_LIMIT.store(parsed, Ordering::Relaxed);
     parsed
 }
 

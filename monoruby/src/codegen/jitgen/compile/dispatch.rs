@@ -198,7 +198,7 @@ impl<'a> JitContext<'a> {
             }
         }
         arm.flush_gp(ir);
-        arm.gen_bridge_all(ir, &m.target.frames_cloned(), m.pc, &self.chain_surrender_table());
+        arm.gen_bridge_all(ir, m.target.frames(), m.pc, &self.chain_surrender_table());
         if jump {
             ir.push(AsmInst::Br(m.merge));
         }

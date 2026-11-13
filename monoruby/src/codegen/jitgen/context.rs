@@ -674,7 +674,7 @@ pub(super) struct JitStackFrame {
     ///
     /// Map for forward branches.
     ///
-    branch_map: HashMap<BasicBlockId, Vec<BranchEntry>>,
+    branch_map: HashMap<BasicBlockId, BranchEntries>,
     ///
     /// Map for target contexts of backward branches.
     ///
@@ -906,9 +906,10 @@ impl JitStackFrame {
     ) -> Self {
         let self_ty = store[self_class].instance_ty();
         let is_not_block = store[store[iseq_id].func_id()].is_not_block();
-        let mut basic_block_labels = HashMap::default();
-        let mut labels = vec![];
-        for i in 0..store[iseq_id].bb_info.len() {
+        let bb_num = store[iseq_id].bb_info.len();
+        let mut basic_block_labels = HashMap::with_capacity_and_hasher(bb_num, Default::default());
+        let mut labels = Vec::with_capacity(bb_num);
+        for i in 0..bb_num {
             let idx = BasicBlockId::new(i);
             basic_block_labels.insert(idx, JitLabel(labels.len()));
             labels.push(None);
@@ -4036,7 +4037,7 @@ impl<'a> JitContext<'a> {
     pub(super) fn branch_continue(&mut self, bb_begin: BasicBlockId, state: AbstractState) {
         self.current_frame_mut().branch_map.insert(
             bb_begin,
-            vec![BranchEntry {
+            smallvec::smallvec![BranchEntry {
                 src_bb: None,
                 state,
                 mode: BranchMode::Continue,
@@ -4044,7 +4045,7 @@ impl<'a> JitContext<'a> {
         );
     }
 
-    pub(super) fn remove_branch(&mut self, bb: BasicBlockId) -> Option<Vec<BranchEntry>> {
+    pub(super) fn remove_branch(&mut self, bb: BasicBlockId) -> Option<BranchEntries> {
         self.current_frame_mut().branch_map.remove(&bb)
     }
 
@@ -4052,7 +4053,7 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().backedge_map.remove(&bb)
     }
 
-    pub(super) fn detach_branch_map(&mut self) -> HashMap<BasicBlockId, Vec<BranchEntry>> {
+    pub(super) fn detach_branch_map(&mut self) -> HashMap<BasicBlockId, BranchEntries> {
         std::mem::take(&mut self.current_frame_mut().branch_map)
     }
 

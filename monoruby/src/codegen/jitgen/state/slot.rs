@@ -244,17 +244,40 @@ pub(crate) struct SlotState {
     /// provenance dropped) at the start of the instruction following any
     /// other instruction ([`SlotState::begin_instruction`]).
     copy_window: bool,
+    /// How many slots carry a copy provenance ([`Slot::copy_src`]). Most
+    /// instructions run with none, and the walks over every slot that
+    /// drop provenance (at the start of an instruction, after it, and at
+    /// every redefinition of a slot) are skipped then.
+    copy_srcs: u16,
     /// Allocations elided by the escape analysis and not (yet) performed
     /// (`doc/escape_analysis.md`). Each one's slot is `V` (it physically
     /// holds a stale but valid `Value`, `nil` at a GC safepoint), and a
     /// `Slots` one's element slots are pinned (`is_virtual_src`).
     virtuals: Vec<(SlotId, VirtualSrc)>,
+    /// Stage-B home-aliased reads: for a slot holding a bare-`F` home read
+    /// of an outer float, the recipe for loading the *boxed* twin straight
+    /// from the owner's slot (which still holds the value the home read
+    /// took) instead of re-boxing the fpr. Valid only while nothing can
+    /// have rewritten the owner's slot: killed at every store through the
+    /// frame chain and at every call boundary (`clear_dynvar_aliases`),
+    /// and dropped with the binding on any mode transition
+    /// ([`SlotState::clear`]).
+    ///
+    /// At most one entry per slot, ordered by slot, so that two states
+    /// with the same aliases compare equal. Kept beside the slot records
+    /// rather than in them: it is almost always empty, and without it a
+    /// [`Slot`] is plain data, which is what makes copying a state (once
+    /// per branch edge, in every walk) a block copy.
+    dynvar_aliases: Vec<(SlotId, DynVarAliasLoad)>,
 }
 
 ///
 /// One slot of an abstract frame.
 ///
-#[derive(Clone, Default, PartialEq, Eq, Hash)]
+/// `Copy`: a state is copied at every branch edge, so a slot record
+/// holds nothing that owns memory (see [`SlotState::dynvar_aliases`]).
+///
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 struct Slot {
     /// Where the live copies of the value are, and what is known about
     /// its type.
@@ -278,15 +301,6 @@ struct Slot {
     /// signal feeds only the loop-entry `Sf` adoption
     /// (`Liveness::subtree_float_reads`).
     subtree_float_read: bool,
-    /// Stage-B home-aliased reads: for a slot holding a bare-`F` home read
-    /// of an outer float, the recipe for loading the *boxed* twin straight
-    /// from the owner's slot (which still holds the value the home read
-    /// took) instead of re-boxing the fpr. Valid only while nothing can
-    /// have rewritten the owner's slot: killed at every store through the
-    /// frame chain and at every call boundary (`clear_dynvar_aliases`),
-    /// and dropped with the binding on any mode transition
-    /// ([`SlotState::clear`]).
-    dynvar_alias: Option<DynVarAliasLoad>,
     /// Copy provenance: this temporary holds the value a `Mov` copied
     /// from the local `src`, and neither has been redefined since — so a
     /// type guard on the temporary proves the local's type too
@@ -313,12 +327,11 @@ pub(in crate::codegen::jitgen) struct DynVarAliasLoad {
 
 impl Slot {
     /// The state [`SlotState::discard`] leaves a slot in, as far as the
-    /// record itself goes.
+    /// record itself goes (a home alias is kept beside the records).
     fn is_discarded(&self) -> bool {
         self.mode == LinkMode::V
             && self.used.is_killed()
             && self.dynvar_src.is_none()
-            && self.dynvar_alias.is_none()
             && self.copy_src.is_none()
     }
 }
@@ -367,7 +380,9 @@ impl SlotState {
             gp_regfile: crate::codegen::jitgen::gp_alloc::GpRegFile::new(),
             local_num,
             copy_window: false,
+            copy_srcs: 0,
             virtuals: vec![],
+            dynvar_aliases: vec![],
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
@@ -534,6 +549,7 @@ impl SlotState {
             || self.gp_regfile != other.gp_regfile
             || self.copy_window != other.copy_window
             || self.virtuals != other.virtuals
+            || self.dynvar_aliases != other.dynvar_aliases
         {
             return false;
         }
@@ -542,7 +558,6 @@ impl SlotState {
             a.mode == b.mode
                 && a.dynvar_src == b.dynvar_src
                 && a.subtree_float_read == b.subtree_float_read
-                && a.dynvar_alias == b.dynvar_alias
                 && a.copy_src == b.copy_src
                 && a.used.observable() == b.used.observable()
         })
@@ -557,12 +572,12 @@ impl SlotState {
         self.gp_regfile.hash(state);
         self.copy_window.hash(state);
         self.virtuals.hash(state);
+        self.dynvar_aliases.hash(state);
         for i in self.all_regs() {
             let s = &self.slots[i.0 as usize];
             s.mode.hash(state);
             s.dynvar_src.hash(state);
             s.subtree_float_read.hash(state);
-            s.dynvar_alias.hash(state);
             s.copy_src.hash(state);
             s.used.observable().hash(state);
         }
@@ -854,7 +869,9 @@ impl SlotState {
         self.gp_regfile.invalidate(slot);
         // Any transition away from the aliased-`F` binding ends the alias;
         // the consult site takes it *before* transitioning.
-        self.slots[slot.0 as usize].dynvar_alias = None;
+        if !self.dynvar_aliases.is_empty() {
+            self.dynvar_aliases.retain(|(s, _)| *s != slot);
+        }
         if self.mode(slot) == LinkMode::V {
             return;
         }
@@ -890,7 +907,33 @@ impl SlotState {
         // A redefinition ends the dynvar provenance — the new value did
         // not come through the frame chain.
         self.slots[slot.0 as usize].dynvar_src = None;
-        self.slots[slot.0 as usize].copy_src = None;
+        self.set_copy_src(slot, None);
+    }
+
+    /// Record (or drop) the copy provenance of *slot*.
+    fn set_copy_src(&mut self, slot: SlotId, src: Option<SlotId>) {
+        let s = &mut self.slots[slot.0 as usize];
+        self.copy_srcs = self.copy_srcs - s.copy_src.is_some() as u16 + src.is_some() as u16;
+        s.copy_src = src;
+    }
+
+    /// Drop the copy provenance of every slot *stale* holds for.
+    fn drop_copy_srcs(&mut self, stale: impl Fn(SlotId) -> bool) {
+        debug_assert_eq!(
+            self.copy_srcs as usize,
+            self.slots.iter().filter(|s| s.copy_src.is_some()).count()
+        );
+        if self.copy_srcs == 0 {
+            return;
+        }
+        for s in &mut self.slots {
+            if let Some(src) = s.copy_src
+                && stale(src)
+            {
+                s.copy_src = None;
+                self.copy_srcs -= 1;
+            }
+        }
     }
 
     ///
@@ -905,35 +948,38 @@ impl SlotState {
     ///
     pub(in crate::codegen::jitgen) fn discard_above(&mut self, sp: SlotId) {
         let mut kept: smallvec::SmallVec<[SlotId; 4]> = smallvec::SmallVec::new();
-        // Most of the temporary area is already discarded, and with no
-        // elided object and no register caching a slot up there,
-        // discarding such a slot again changes nothing.
-        let quick = self.virtuals.is_empty() && self.gp_regfile.idle_above(sp);
-        for i in sp.0..self.slots.len() as u16 {
-            let slot = SlotId(i);
-            if quick && self.slots[i as usize].is_discarded() {
-                continue;
+        if self.virtuals.is_empty() {
+            // The usual case, no elided object: no slot is kept, and what
+            // `discard` does outside a slot's own record covers the whole
+            // area at once. Most of the area is already discarded, and
+            // discarding such a slot again changes nothing.
+            self.gp_regfile.invalidate_above(sp);
+            if !self.dynvar_aliases.is_empty() {
+                self.dynvar_aliases.retain(|(s, _)| *s < sp);
             }
-            if self.is_virtual_src(slot) {
-                kept.push(slot);
-                continue;
+            for i in sp.0..self.slots.len() as u16 {
+                if !self.slots[i as usize].is_discarded() {
+                    self.discard_keeping_links(SlotId(i));
+                }
             }
-            // The whole of `discard` but its last step. An elided object
-            // goes with its slot, which frees its elements' slots for the
-            // rest of this walk (those after it), as in `discard`.
-            if let Some(i) = self.virtuals.iter().position(|(dst, _)| *dst == slot) {
-                self.virtuals.remove(i);
+        } else {
+            for i in sp.0..self.slots.len() as u16 {
+                let slot = SlotId(i);
+                if self.is_virtual_src(slot) {
+                    kept.push(slot);
+                    continue;
+                }
+                // The whole of `discard` but its last step. An elided
+                // object goes with its slot, which frees its elements'
+                // slots for the rest of this walk (those after it), as in
+                // `discard`.
+                if let Some(i) = self.virtuals.iter().position(|(dst, _)| *dst == slot) {
+                    self.virtuals.remove(i);
+                }
+                self.discard_keeping_links(slot);
             }
-            self.discard_keeping_links(slot);
         }
-        for s in &mut self.slots {
-            if let Some(src) = s.copy_src
-                && src >= sp
-                && !kept.contains(&src)
-            {
-                s.copy_src = None;
-            }
-        }
+        self.drop_copy_srcs(|src| src >= sp && !kept.contains(&src));
     }
 
     ///
@@ -1512,7 +1558,13 @@ impl SlotState {
         slot: SlotId,
         alias: DynVarAliasLoad,
     ) {
-        self.slots[slot.0 as usize].dynvar_alias = Some(alias);
+        match self
+            .dynvar_aliases
+            .binary_search_by_key(&slot.0, |(s, _)| s.0)
+        {
+            Ok(i) => self.dynvar_aliases[i].1 = alias,
+            Err(i) => self.dynvar_aliases.insert(i, (slot, alias)),
+        }
     }
 
     ///
@@ -1520,7 +1572,8 @@ impl SlotState {
     /// (the `F` boxed-use arm), before the `F -> Sf` transition clears it.
     ///
     pub(super) fn take_dynvar_alias(&mut self, slot: SlotId) -> Option<DynVarAliasLoad> {
-        self.slots[slot.0 as usize].dynvar_alias.take()
+        let i = self.dynvar_aliases.iter().position(|(s, _)| *s == slot)?;
+        Some(self.dynvar_aliases.remove(i).1)
     }
 
     ///
@@ -1528,9 +1581,7 @@ impl SlotState {
     /// call boundary may rewrite any owner slot, so every alias dies.
     ///
     pub(in crate::codegen::jitgen) fn clear_dynvar_aliases(&mut self) {
-        for s in &mut self.slots {
-            s.dynvar_alias = None;
-        }
+        self.dynvar_aliases.clear();
     }
 
     ///
@@ -1545,15 +1596,15 @@ impl SlotState {
                 l.dynvar_src = None;
             }
             l.subtree_float_read |= r.subtree_float_read;
-            // An alias is a per-path fact about the owner's slot content;
-            // it survives a merge only when both paths carry the identical
-            // claim.
-            if l.dynvar_alias != r.dynvar_alias {
-                l.dynvar_alias = None;
+            if l.copy_src != r.copy_src && l.copy_src.take().is_some() {
+                self.copy_srcs -= 1;
             }
-            if l.copy_src != r.copy_src {
-                l.copy_src = None;
-            }
+        }
+        // An alias is a per-path fact about the owner's slot content; it
+        // survives a merge only when both paths carry the identical claim.
+        if !self.dynvar_aliases.is_empty() {
+            self.dynvar_aliases
+                .retain(|alias| other.dynvar_aliases.contains(alias));
         }
     }
 
@@ -1711,12 +1762,8 @@ impl SlotState {
     /// temporary is a copy of it any more.
     ///
     fn drop_copy_links(&mut self, slot: SlotId) {
-        self.slots[slot.0 as usize].copy_src = None;
-        for s in &mut self.slots {
-            if s.copy_src == Some(slot) {
-                s.copy_src = None;
-            }
-        }
+        self.set_copy_src(slot, None);
+        self.drop_copy_srcs(|src| src == slot);
     }
 
     ///
@@ -1731,9 +1778,7 @@ impl SlotState {
     ///
     pub(in crate::codegen::jitgen) fn begin_instruction(&mut self, mov_like: bool) {
         if !self.copy_window {
-            for s in &mut self.slots {
-                s.copy_src = None;
-            }
+            self.drop_copy_srcs(|_| true);
         }
         self.copy_window = mov_like;
     }
@@ -2223,7 +2268,7 @@ impl SlotState {
             } else {
                 self.slots[src.0 as usize].copy_src
             };
-            self.slots[dst.0 as usize].copy_src = origin;
+            self.set_copy_src(dst, origin);
         }
     }
 }
@@ -4173,5 +4218,135 @@ mod tests {
         end
         "###,
         );
+    }
+}
+
+/// The bookkeeping kept beside the slot records.
+#[cfg(test)]
+mod side_table_tests {
+    use super::*;
+    use crate::codegen::GP;
+
+    fn sl(i: u16) -> SlotId {
+        SlotId(i)
+    }
+
+    fn state(n: usize) -> SlotState {
+        SlotState::for_test(&vec![LinkMode::S(Guarded::Value); n])
+    }
+
+    fn alias(reg: u16) -> DynVarAliasLoad {
+        DynVarAliasLoad {
+            ids: vec![],
+            extra: 0,
+            reg: sl(reg),
+        }
+    }
+
+    /// Two states with the same home aliases are equal whatever order
+    /// the aliases were recorded in, and a slot has at most one.
+    #[test]
+    fn dynvar_aliases_are_a_set_keyed_by_slot() {
+        let (mut a, mut b) = (state(6), state(6));
+        a.set_dynvar_alias(sl(4), alias(1));
+        a.set_dynvar_alias(sl(2), alias(3));
+        b.set_dynvar_alias(sl(2), alias(9));
+        b.set_dynvar_alias(sl(4), alias(1));
+        assert!(a != b);
+        b.set_dynvar_alias(sl(2), alias(3));
+        assert!(a == b);
+        assert!(a.memo_eq(&b));
+
+        assert_eq!(a.take_dynvar_alias(sl(2)), Some(alias(3)));
+        assert_eq!(a.take_dynvar_alias(sl(2)), None);
+        // A redefinition of the slot ends its alias.
+        b.discard(sl(2));
+        assert_eq!(b.take_dynvar_alias(sl(2)), None);
+        assert_eq!(b.take_dynvar_alias(sl(4)), Some(alias(1)));
+        a.clear_dynvar_aliases();
+        assert_eq!(a.take_dynvar_alias(sl(4)), None);
+    }
+
+    /// A merge keeps an alias only where both sides carry the same one.
+    #[test]
+    fn dynvar_aliases_join_to_the_common_ones() {
+        let (mut a, mut b) = (state(6), state(6));
+        a.set_dynvar_alias(sl(2), alias(3));
+        a.set_dynvar_alias(sl(3), alias(1));
+        a.set_dynvar_alias(sl(4), alias(1));
+        b.set_dynvar_alias(sl(2), alias(3));
+        b.set_dynvar_alias(sl(3), alias(2));
+        b.set_dynvar_alias(sl(5), alias(1));
+        a.join_subtree_read_meta(&b);
+        assert_eq!(a.dynvar_aliases, vec![(sl(2), alias(3))]);
+    }
+
+    /// `discard_above` leaves the state `discard` on each slot in turn
+    /// leaves: register caches, home aliases and copy provenance of the
+    /// discarded area are gone, the rest stays.
+    #[test]
+    fn discard_above_is_discard_of_each_slot() {
+        let mut a = state(8);
+        a.gp_regfile.bind(GP::R8, sl(2), false);
+        a.gp_regfile.bind(GP::R8, sl(6), true);
+        a.gp_regfile.bind(GP::R9, sl(5), true);
+        a.set_dynvar_alias(sl(3), alias(1));
+        a.set_dynvar_alias(sl(6), alias(1));
+        a.set_copy_src(sl(3), Some(sl(1)));
+        a.set_copy_src(sl(5), Some(sl(1)));
+        a.set_copy_src(sl(2), Some(sl(6)));
+        a.set_copy_src(sl(7), Some(sl(4)));
+        let mut b = a.clone();
+
+        a.discard_above(sl(4));
+        for i in 4..8 {
+            b.discard(sl(i));
+        }
+        assert!(a == b);
+        assert_eq!(a.gp_regfile.reg_of(sl(2)), Some(GP::R8));
+        assert_eq!(a.gp_regfile.reg_of(sl(6)), None);
+        assert_eq!(a.gp_regfile.reg_of(sl(5)), None);
+        assert_eq!(a.dynvar_aliases, vec![(sl(3), alias(1))]);
+        // %3 is still a copy of %1; %2 was a copy of the discarded %6.
+        assert_eq!(a.slots[3].copy_src, Some(sl(1)));
+        assert_eq!(a.slots[2].copy_src, None);
+        assert_eq!(a.copy_srcs, 1);
+
+        // Discarding it again changes nothing.
+        let before = a.clone();
+        a.discard_above(sl(4));
+        assert!(a == before);
+    }
+
+    /// The count of slots carrying copy provenance follows every way the
+    /// provenance is dropped.
+    #[test]
+    fn copy_provenance_is_counted() {
+        let mut a = state(8);
+        a.set_copy_src(sl(5), Some(sl(1)));
+        a.set_copy_src(sl(6), Some(sl(1)));
+        a.set_copy_src(sl(7), Some(sl(2)));
+        assert_eq!(a.copy_srcs, 3);
+        a.set_copy_src(sl(7), Some(sl(3)));
+        assert_eq!(a.copy_srcs, 3);
+        // %1 is redefined: its copies are no longer copies of it.
+        a.discard(sl(1));
+        assert_eq!(a.copy_srcs, 1);
+        assert_eq!(a.slots[7].copy_src, Some(sl(3)));
+
+        let mut b = a.clone();
+        b.set_copy_src(sl(7), Some(sl(2)));
+        b.set_copy_src(sl(6), Some(sl(2)));
+        a.join_subtree_read_meta(&b);
+        assert_eq!(a.copy_srcs, 0);
+
+        // A window left open (by a move) keeps the provenance through
+        // the next instruction; a closed one drops it at the next start.
+        b.copy_window = true;
+        b.begin_instruction(false);
+        assert_eq!(b.copy_srcs, 2);
+        b.begin_instruction(false);
+        assert_eq!(b.copy_srcs, 0);
+        assert!(b.slots.iter().all(|s| s.copy_src.is_none()));
     }
 }

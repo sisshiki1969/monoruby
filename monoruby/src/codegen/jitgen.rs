@@ -168,6 +168,15 @@ struct BranchEntry {
     mode: BranchMode,
 }
 
+/// The branches flowing into one basic block. Almost every block has one
+/// or two, and a list is built and torn down for every block of every
+/// walk, so they are stored inline.
+type BranchEntries = smallvec::SmallVec<[BranchEntry; 2]>;
+
+/// Per entry of a merge, the code its bridge starts with
+/// (`JitContext::settle_entries`).
+type PreBridges = smallvec::SmallVec<[AsmIr; 1]>;
+
 thread_local! {
     /// x86-64: how far below the native frame pointer and the LFP the frame
     /// whose code is being emitted lives. Zero, except while the body of a
