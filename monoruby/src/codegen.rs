@@ -2449,9 +2449,10 @@ pub(crate) mod jit_stats {
     pub static FX_WALK_TOP_NS: AtomicUsize = AtomicUsize::new(0);
     /// How many walks are running right now (to tell the outermost).
     pub static FX_DEPTH: AtomicUsize = AtomicUsize::new(0);
-    /// Walks whose entry state equals the previous walk's (`==`), with no
-    /// inner head's record and no outer widening moved in between: the
-    /// walk can only repeat the previous one (step D's target).
+    /// Walks not run because their entry state equals the previous walk's
+    /// (`==`), with no inner head's info and no outer widening moved in
+    /// between: the walk could only repeat the previous one (step D).
+    /// They are not counted in `FX_WALKS`.
     pub static FX_ENTRY_REPEATS: AtomicUsize = AtomicUsize::new(0);
     /// Fixpoints `analyse_loop_head` ran again without the `Array` seed.
     pub static FX_SEED_RETRIES: AtomicUsize = AtomicUsize::new(0);
@@ -2507,7 +2508,7 @@ pub(crate) mod jit_stats {
             std::time::Duration::from_nanos(g(&FX_WALK_TOP_NS) as u64)
         );
         eprintln!(
-            "    entry repeats previous walk:     {}",
+            "    skipped (entry repeats):         {}",
             g(&FX_ENTRY_REPEATS)
         );
         eprintln!(

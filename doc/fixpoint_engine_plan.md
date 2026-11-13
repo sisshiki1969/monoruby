@@ -541,6 +541,53 @@ app_aobench でも最小値が ±7% 動いた。時間で言えるのは「join 
   その効果の要約(入口状態 → 出口状態の memo)が要り、`spec_memo` 相当の仕組みを
   ループ単位でもう一つ作ることになる。D で残る walk を見てから判断する。
 
+#### D の結果(2026-11-13)
+
+- **入れたもの。** `analyse_backedge_fixpoint` は walk の前に入口状態を作り
+  (`loop_walk_entry`。`incoming ⊔ 記録済み後退辺`、省略オブジェクトの実体化、
+  liveness のリセットまで)、直前の walk の入口と `==` で、直前の walk が
+  外側フレームの widen を報告せず、内側ヘッドの記録も liveness も動かさなかった
+  ときは、walk せずに収束とする。walk が読むものは入口状態、内側ヘッドの
+  `loop_info`(後退辺と liveness)、外側フレームだけで、walk の間に動くのは
+  この 3 つだけなので、省略した walk は直前の walk を繰り返し、記録を何も
+  動かさない。B の計測では内側ヘッドの liveness の更新を「動いた」に数えて
+  いなかったが、walk は内側ヘッドの liveness も読む(`merge.rs` の
+  `loop_info`)ので、D ではそれも数える。
+- **C の 1(決定性の shadow)は D の中に入れた。** debug ビルドでは省略する walk を
+  実際に実行し、結果(各ヘッドの後退辺と liveness、veto)が直前の walk と `==` で
+  あることを assert する。`stress-spill-pool` 付きの debug ビルドで integration
+  1769/1769、lib 2955/2957 が通り、assert は一度も発火しなかった(lib の 2 件は
+  `fork_block_child_runs_the_exit_sequence`(クラウド環境で master でも失敗)と、
+  標準出力をファイルにリダイレクトしたため `$stdout.seek(0)` が成功した
+  `io_seek_errors` で、どちらも D とは関係しない)。C の 2(向きの不変条件)は
+  入れていない。
+- **生成コードは変わらない。** `emit-asm` 付きで B と D をビルドし、ASLR を切って
+  so_mandelbrot、so_nbody、app_aobench、bf、quick_sort、binarytrees、
+  plb2/matmul(200)、optcarrot を比べた。アドレスと時間を正規化し、JIT 時間の表を
+  除くと、違いは統計の節(walk 数と収束の分布、specialized-call memo のヒット数)
+  だけだった。出力も一致した(optcarrot の fps 行を除く)。
+- **walk 数(x86-64、B の数値と同じ定義)。**
+
+| ベンチマーク | walk B → D | 1/2/3/4 walk で収束 B → D | 省略 |
+|---|---|---|---|
+| so_mandelbrot | 20 → 19 | 3/4/3/0 → 3/5/2/0 | 1 |
+| so_nbody | 23 → 20 | 0/7/3/0 → 0/10/0/0 | 3 |
+| app_aobench | 137 → 98 | 0/4/43/0 → 0/43/4/0 | 39 |
+| bf | 36 → 35 | 4/10/4/0 → 4/11/3/0 | 1 |
+| quick_sort | 21 → 18 | 0/6/3/0 → 0/9/0/0 | 3 |
+| binarytrees | 11 → 10 | 0/4/1/0 → 0/5/0/0 | 1 |
+| plb2/matmul(200) | 45 → 37 | 0/5/9/2 → 0/11/5/0 | 8 |
+| optcarrot | 153 → 119 | 3/33/28/0 → 9/55/0/0 | 34 |
+
+- **命令数(cachegrind Ir、コンパイル時間込み、`jit-log` 無しのリリースビルド)。**
+  mandelbrot 1000 −0.21%、nbody 50k −0.15%、aobench(AO_SIZE=64)−1.13%、
+  plb2/matmul 200 −0.18%、optcarrot −0.39%。生成コードが同じなので、差は
+  すべてコンパイル時間の短縮である。
+- **残り。** 収束に 2 walk かかる不動点が大半になった。最初の walk は記録の無い
+  状態から始まり、その後退辺を合流すると入口はたいてい広がるので、2 walk 目は
+  省略できないことが多い。これを減らすには
+  最初の walk の入口を予測する必要があり、§5.4 の領分になる。
+
 ### E. `LinkMode` 段の合流と `equiv` の整合テスト(G2、G4)
 
 - **目的。** `Guarded` の法則は `guarded_join_lattice_laws` があるが、

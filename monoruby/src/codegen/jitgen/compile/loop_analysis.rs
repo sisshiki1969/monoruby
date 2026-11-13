@@ -5,6 +5,7 @@ use super::*;
 /// the walked range: the head of the walked loop itself and every loop
 /// nested inside it.
 ///
+#[derive(Clone, PartialEq)]
 struct LoopWalk {
     /// Per head: the liveness of its loop (joined at the loop's back
     /// edges and at every leaving path inside it).
@@ -14,10 +15,6 @@ struct LoopWalk {
     backedge: indexmap::IndexMap<BasicBlockId, Option<AbstractState>>,
     /// Stage-C loop adoption vetoes, for the walked loop's own head.
     vetoes: (bool, Vec<(usize, SlotId)>),
-    /// The state the walk started the walked loop's head from
-    /// (`jit-log` statistics: [`FixpointStats`]).
-    #[cfg(feature = "jit-log")]
-    entry: Option<AbstractState>,
 }
 
 ///
@@ -30,10 +27,6 @@ struct LoopWalk {
 #[derive(Default)]
 struct FixpointStats {
     walks: usize,
-    /// The previous walk's entry state, and whether that walk moved
-    /// anything the next walk reads besides the entry state: an inner
-    /// head's record, or an outer frame's widening.
-    prev: Option<(AbstractState, bool)>,
 }
 
 #[cfg(feature = "jit-log")]
@@ -61,19 +54,9 @@ impl FixpointStats {
         res
     }
 
-    /// The walk's entry repeats the previous walk's, with nothing else it
-    /// reads moved: it can only reproduce the previous walk.
-    fn note_entry(&mut self, entry: &AbstractState) {
-        if let Some((prev, moved)) = &self.prev
-            && !*moved
-            && prev == entry
-        {
-            crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::FX_ENTRY_REPEATS);
-        }
-    }
-
-    fn end_walk(&mut self, entry: AbstractState, moved: bool) {
-        self.prev = Some((entry, moved));
+    /// A walk was not run: it could only have repeated the previous one.
+    fn skipped(&self) {
+        crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::FX_ENTRY_REPEATS);
     }
 
     /// A head's recorded back edge `old` (if any) is being replaced by `new`.
@@ -118,6 +101,15 @@ impl<'a> JitContext<'a> {
     /// merges (`incoming_context`, when the real compile reaches them)
     /// start their fixpoint from, so those converge on their first walk.
     ///
+    /// A walk reads its entry state (the incoming state joined with the
+    /// back edge recorded for *loop_start*), the inner heads' recorded
+    /// loop info and the outer frames; nothing else it reads changes from
+    /// one walk to the next. So when a walk moved neither an inner head's
+    /// info nor an outer frame, and the next entry equals its entry, the
+    /// next walk could only repeat it — record nothing new — and is not
+    /// run: the fixpoint has converged (`doc/fixpoint_engine_plan.md`
+    /// step D). Debug builds run it anyway and check that it does repeat.
+    ///
     pub(in crate::codegen::jitgen) fn analyse_backedge_fixpoint(
         &mut self,
         state: AbstractState,
@@ -143,20 +135,45 @@ impl<'a> JitContext<'a> {
         let limit = heads.len() * state.backedge_chain_len();
         #[cfg(feature = "jit-log")]
         let mut stats = FixpointStats::start();
+        // The previous walk's entry, kept only when that walk moved
+        // nothing else a walk reads (and, in debug builds, what it found).
+        let mut repeatable: Option<(AbstractState, Option<LoopWalk>)> = None;
         for x in 0..limit {
             let _ = x;
+            let (ctx, entry) = self.loop_walk_entry(loop_start, state.clone());
+            if let Some((prev_entry, _prev_walk)) = &repeatable
+                && *prev_entry == entry
+            {
+                #[cfg(debug_assertions)]
+                {
+                    let walk = self.analyse_loop(ctx, loop_start, loop_end, &heads, entry);
+                    assert!(
+                        walk.ok().as_ref() == _prev_walk.as_ref(),
+                        "a walk from a repeated entry did not repeat: {loop_start:?}..={loop_end:?}"
+                    );
+                }
+                #[cfg(feature = "jit-log")]
+                {
+                    stats.skipped();
+                    stats.converged();
+                }
+                return Ok(());
+            }
             #[cfg(feature = "jit-debug")]
             eprintln!("########## analyse iteration[{x}]");
             #[cfg(not(feature = "jit-log"))]
-            let walk = self.analyse_loop(loop_start, loop_end, &heads, state.clone())?;
+            let walk = self.analyse_loop(ctx, loop_start, loop_end, &heads, entry.clone())?;
             #[cfg(feature = "jit-log")]
-            let mut walk = stats
-                .time_walk(|| self.analyse_loop(loop_start, loop_end, &heads, state.clone()))?;
-            #[cfg(feature = "jit-log")]
-            let entry = walk.entry.take().unwrap();
-            #[cfg(feature = "jit-log")]
-            stats.note_entry(&entry);
-            #[cfg(feature = "jit-log")]
+            let walk = stats.time_walk(|| {
+                self.analyse_loop(ctx, loop_start, loop_end, &heads, entry.clone())
+            })?;
+            let prev_walk = if cfg!(debug_assertions) {
+                Some(walk.clone())
+            } else {
+                None
+            };
+            // Whether this walk moved anything the next walk reads besides
+            // its entry: an outer frame's widening, or an inner head's info.
             let mut moved = !walk.vetoes.1.is_empty();
             // The walk ran on a throwaway clone, so every widen it
             // reported reached the *clone's* parked outer frames: a
@@ -202,10 +219,8 @@ impl<'a> JitContext<'a> {
                             backedge.slot_state()
                         );
                         #[cfg(feature = "jit-log")]
-                        {
-                            FixpointStats::note_record(self.loop_backedge(head), &backedge);
-                            moved |= head != loop_start;
-                        }
+                        FixpointStats::note_record(self.loop_backedge(head), &backedge);
+                        moved |= head != loop_start;
                         self.add_loop_info(head, liveness, Some(backedge));
                         changed = true;
                     }
@@ -230,13 +245,12 @@ impl<'a> JitContext<'a> {
                     // the next walk applies its liveness at the merge, as
                     // the walk that recorded it would have.
                     let first = self.loop_info(head).is_none();
+                    // The walk reads an inner head's liveness too.
+                    moved |= head != loop_start
+                        && self.loop_info(head).is_none_or(|(l, _)| *l != liveness);
                     let be = self.loop_backedge(head).cloned();
                     self.add_loop_info(head, liveness, be);
                     changed |= first;
-                    #[cfg(feature = "jit-log")]
-                    {
-                        moved |= first && head != loop_start;
-                    }
                 }
             }
             if !changed {
@@ -244,8 +258,7 @@ impl<'a> JitContext<'a> {
                 stats.converged();
                 return Ok(());
             }
-            #[cfg(feature = "jit-log")]
-            stats.end_walk(entry, moved);
+            repeatable = (!moved).then_some((entry, prev_walk));
         }
         #[cfg(feature = "jit-log")]
         stats.gave_up();
@@ -301,20 +314,19 @@ impl<'a> JitContext<'a> {
         new
     }
 
-    fn analyse_loop(
+    ///
+    /// The throwaway context for one walk over the loop at *loop_start*,
+    /// and the state the walk starts the loop's head from: *state* (the
+    /// state arriving from before the loop) joined with the back edge
+    /// recorded so far.
+    ///
+    fn loop_walk_entry(
         &self,
         loop_start: BasicBlockId,
-        loop_end: BasicBlockId,
-        heads: &[BasicBlockId],
         mut state: AbstractState,
-    ) -> JitResult<LoopWalk> {
+    ) -> (JitContext<'a>, AbstractState) {
         let pc = self.iseq().get_bb_pc(loop_start);
         let mut ctx = JitContext::loop_analysis(self, pc, loop_start);
-        let mut liveness: indexmap::IndexMap<BasicBlockId, Liveness> = heads
-            .iter()
-            .map(|head| (*head, Liveness::new(ctx.total_reg_num())))
-            .collect();
-
         if let Some(backedge) = self.loop_backedge(loop_start) {
             // An elided object the entry carries but the recorded back
             // edge does not is one the body materializes: analyse the
@@ -328,9 +340,22 @@ impl<'a> JitContext<'a> {
         // before the loop (a method JIT's `i = 0`) must not stand in for
         // what the loop does with the slot.
         state.reset_liveness();
-        #[cfg(feature = "jit-log")]
-        let entry = state.clone();
-        ctx.branch_continue(loop_start, state);
+        (ctx, state)
+    }
+
+    fn analyse_loop(
+        &self,
+        mut ctx: JitContext<'a>,
+        loop_start: BasicBlockId,
+        loop_end: BasicBlockId,
+        heads: &[BasicBlockId],
+        entry: AbstractState,
+    ) -> JitResult<LoopWalk> {
+        let mut liveness: indexmap::IndexMap<BasicBlockId, Liveness> = heads
+            .iter()
+            .map(|head| (*head, Liveness::new(ctx.total_reg_num())))
+            .collect();
+        ctx.branch_continue(loop_start, entry);
 
         for bbid in loop_start..=loop_end {
             ctx.analyse_basic_block(&mut liveness, bbid, bbid == loop_end)?;
@@ -393,8 +418,6 @@ impl<'a> JitContext<'a> {
             liveness,
             backedge,
             vetoes,
-            #[cfg(feature = "jit-log")]
-            entry: Some(entry),
         })
     }
 
