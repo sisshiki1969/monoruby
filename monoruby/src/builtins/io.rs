@@ -2387,6 +2387,11 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
         _ => None,
     };
+    // A sized read is byte oriented: refused while `ungetc` left
+    // converted characters pending (`rb_io_check_byte_readable`).
+    if length.is_some() && !lfp.self_val().as_io_inner().is_closed() {
+        lfp.self_val().as_io_inner().check_byte_readable()?;
+    }
     let buf = if length == Some(0) {
         // `read(0)` never blocks and returns "" (CRuby) — entering the
         // blocking region would park on POLLIN waiting for data that a
@@ -2402,7 +2407,10 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // `read_all` goes through the read converter, so its newline
     // decorator; a sized read (`io_fread`) takes the bytes as they are.
     let buf = if length.is_none() && lfp.self_val().as_io_inner().universal_newline() {
-        crate::value::rvalue::io::universal_newline_bytes(buf)
+        // Characters `ungetc` pushed back are already converted.
+        let mut out = lfp.self_val().as_io_inner_mut().take_char_pending(None);
+        out.extend_from_slice(&crate::value::rvalue::io::universal_newline_bytes(buf));
+        out
     } else {
         buf
     };
@@ -4106,6 +4114,9 @@ fn io_rewind(
     self_
         .as_io_inner_mut()
         .seek_for(0, 0, &globals.store, "rb_io_rewind")?;
+    // `rb_io_rewind` also drops the read converter, and with it what
+    // `ungetc` left converted.
+    self_.as_io_inner_mut().clear_char_pending();
     self_.as_io_inner_mut().set_lineno(0);
     Ok(Value::integer(0))
 }
@@ -4167,7 +4178,10 @@ fn io_getbyte(
     _: BytecodePtr,
 ) -> Result<Value> {
     let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
-        lfp.self_val().as_io_inner_mut().read_buffered(Some(1))
+        let mut self_ = lfp.self_val();
+        let io = self_.as_io_inner_mut();
+        io.check_byte_readable()?;
+        io.read_buffered(Some(1))
     })?;
     if buf.is_empty() {
         Ok(Value::nil())
@@ -4287,6 +4301,34 @@ fn io_getc(
 ) -> Result<Value> {
     let self_ = lfp.self_val();
     let (ext, intl) = io_encodings(globals, self_);
+    // A character `ungetc` left converted comes out as it was given.
+    let pending = self_.as_io_inner().char_pending_len();
+    if pending > 0 {
+        let mut io = self_;
+        let inner = io.as_io_inner_mut();
+        let mut buf = inner.take_char_pending(None);
+        let width = if matches!(ext, crate::value::Encoding::Utf8(_)) {
+            // One whole character, or one byte of an invalid sequence
+            // (`rb_enc_precise_mbclen`).
+            let w = match buf[0] {
+                b if b & 0x80 == 0 => 1,
+                b if b & 0xE0 == 0xC0 => 2,
+                b if b & 0xF0 == 0xE0 => 3,
+                b if b & 0xF8 == 0xF0 => 4,
+                _ => 1,
+            };
+            if w <= buf.len() && std::str::from_utf8(&buf[..w]).is_ok() {
+                w
+            } else {
+                1
+            }
+        } else {
+            char_width_from_lead(ext, buf[0]).clamp(1, buf.len())
+        };
+        let rest = buf.split_off(width);
+        inner.restore_char_pending(&rest);
+        return read_conv(globals, self_, buf, &[], ext, intl);
+    }
     let mut buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         read_one_char_enc(lfp.self_val().as_io_inner_mut(), ext)
     })?;
@@ -4339,6 +4381,9 @@ fn io_ungetbyte(
                 .to_vec(),
         }
     };
+    if !lfp.self_val().as_io_inner().is_closed() {
+        lfp.self_val().as_io_inner().check_byte_readable()?;
+    }
     lfp.self_val().as_io_inner_mut().unget(&bytes)?;
     Ok(Value::nil())
 }
@@ -4384,7 +4429,7 @@ fn io_ungetc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 .to_vec(),
         }
     };
-    lfp.self_val().as_io_inner_mut().unget(&bytes)?;
+    lfp.self_val().as_io_inner_mut().unget_char(&bytes)?;
     Ok(Value::nil())
 }
 
@@ -4691,6 +4736,7 @@ fn io_pread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         _ => None,
     };
     lfp.self_val().as_io_inner().ensure_readable()?;
+    lfp.self_val().as_io_inner().check_byte_readable()?;
     // A positional read goes to the fd directly, so anything still sitting
     // in the write buffer has to land first or `pread` reads stale bytes
     // (CRuby flushes via `rb_io_check_char_readable`).
@@ -4806,6 +4852,7 @@ fn io_sysread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     if lfp.self_val().as_io_inner().is_closed() {
         return Err(MonorubyErr::ioerr("closed stream"));
     }
+    lfp.self_val().as_io_inner().check_byte_readable()?;
     // `rb_io_sysread` refuses to read past what the buffered path has
     // already taken from the fd (or what `ungetc` pushed back): the two
     // views of the stream position would disagree.
@@ -4867,6 +4914,7 @@ fn io_readpartial(
     if lfp.self_val().as_io_inner().is_closed() {
         return Err(MonorubyErr::ioerr("closed stream"));
     }
+    lfp.self_val().as_io_inner().check_byte_readable()?;
     if maxlen == 0 {
         // CRuby's readpartial(0) clears and returns a supplied buffer.
         return Ok(match buffer {
@@ -4965,6 +5013,7 @@ fn io_read_nonblock(
     if lfp.self_val().as_io_inner().is_closed() {
         return Err(MonorubyErr::ioerr("closed stream"));
     }
+    lfp.self_val().as_io_inner().check_byte_readable()?;
     if maxlen == 0 {
         // CRuby clears the supplied buffer and hands it back.
         return Ok(match buffer {
@@ -5549,6 +5598,10 @@ fn set_encoding(
     }
     store_io_encodings(globals, self_, slot, i);
     set_io_ecopts(globals, self_, ecopts)?;
+    // `io_encoding_set` ends in `clear_codeconv`: the read converter
+    // goes, and with it the characters `ungetc` left converted.
+    let mut io = self_;
+    io.as_io_inner_mut().clear_char_pending();
     Ok(self_)
 }
 
@@ -6511,6 +6564,7 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
     let src_v = to_io(vm, globals, lfp.arg(0))?;
     let src = if is_io(src_v) {
         src_v.as_io_inner().ensure_readable()?;
+        src_v.as_io_inner().check_byte_readable()?;
         Src::Io(src_v)
     } else if src_v.is_rstring().is_some()
         || globals.check_method(src_v, IdentId::TO_PATH).is_some()
@@ -7660,6 +7714,81 @@ mod tests {
             r, w = IO.pipe
             rt = IO.new(r.fileno, "rt", autoclose: false)
             th = Thread.new { w.write "a\r"; sleep 0.05; w.write "\nb\r"; sleep 0.05; w.write "c\r"; w.close }
+            res << [rt.gets, rt.gets, rt.gets, rt.gets]
+            th.join
+            r.close
+            File.delete(path)
+            res
+            "##,
+        );
+    }
+
+    #[test]
+    fn ungetc_on_universal_newline_stream() {
+        // #1883: on a universal-newline stream `ungetc` pushes into the
+        // converted buffer (CRuby's `cbuf`): what was pushed back comes
+        // out as given, and byte-oriented reads refuse the stream while
+        // any of it is pending.
+        run_test_once(
+            r##"
+            def t; yield; rescue => e; "#{e.class}: #{e.message}"; end
+            path = "/tmp/monoruby_test_ungetc_universal_#{Process.pid}"
+            File.binwrite(path, "a\r\nb\rc\n\r\n\r\nd\n")
+            o = ->(m = "rt", **kw, &b) { File.open(path, m, **kw) { |io| t { b.(io) } } }
+            res = []
+            res << o.() { |io| io.ungetc("\r"); io.read }
+            res << o.() { |io| io.ungetc("\r"); [io.getc, io.getc] }
+            res << o.() { |io| io.ungetc(13); io.readchar }
+            res << o.() { |io| io.ungetc("\r"); io.gets }
+            res << o.() { |io| io.ungetc("x\r\ny"); [io.gets, io.gets, io.gets] }
+            res << o.() { |io| io.ungetc("x\r"); [io.gets(nil), io.gets(nil)] }
+            res << o.() { |io| io.ungetc("x\r"); io.gets(2) }
+            res << o.() { |io| io.ungetc("x\r"); io.gets("\ra") }
+            res << o.() { |io| io.ungetc("x\r"); io.gets(chomp: true) }
+            res << o.() { |io| io.ungetc("x\r"); io.readlines }
+            res << o.() { |io| io.ungetc("x\r"); io.each_char.to_a }
+            res << o.() { |io| io.ungetc("x\n\n\r"); [io.gets(""), io.gets("")] }
+            res << o.("rt:UTF-8") { |io| io.ungetc("é\r"); [io.getc, io.getc, io.getc] }
+            res << o.("rt:UTF-8") { |io| io.ungetc("\xff\r"); [io.getc, io.getc].map(&:bytes) }
+            res << o.("rt:Shift_JIS") { |io| io.ungetc("\x82\xa0\r".b); [io.getc, io.getc].map(&:bytes) }
+            res << o.() { |io| io.ungetc("\r"); io.ungetc("Q"); io.read }
+            res << o.() { |io| io.ungetbyte("\r"); io.ungetc("Z"); io.read }
+            res << o.() { |io| io.getc; io.ungetc("\r"); io.read }
+            res << o.() { |io| io.gets; io.ungetc("\r"); io.ungetc("\r"); io.read }
+            # Byte-oriented reads refuse pending characters.
+            res << o.() { |io| io.ungetc("\r"); io.getbyte }
+            res << o.() { |io| io.ungetc("\r"); io.readbyte }
+            res << o.() { |io| io.ungetc("\r"); io.each_byte.to_a }
+            res << o.() { |io| io.ungetc("\r"); io.read(2) }
+            res << o.() { |io| io.ungetc("\r"); io.read(0) }
+            res << o.() { |io| io.ungetc("\r"); io.readpartial(5) }
+            res << o.() { |io| io.ungetc("\r"); io.read_nonblock(5) }
+            res << o.() { |io| io.ungetc("\r"); io.sysread(5) }
+            res << o.() { |io| io.ungetc("\r"); io.pread(2, 0) }
+            res << o.() { |io| io.ungetc("\r"); io.ungetbyte("\r") }
+            res << o.() { |io| io.ungetc("\r"); io.sysseek(0) }
+            res << o.() { |io| io.ungetc("\r"); IO.copy_stream(io, "/dev/null") }
+            # Positioning: seek / pos= keep them, rewind / binmode /
+            # set_encoding drop them; eof? sees them.
+            res << o.() { |io| io.ungetc("\r"); io.eof? }
+            res << o.() { |io| io.read; io.ungetc("\r"); [io.eof?, io.read, io.eof?] }
+            res << o.() { |io| io.ungetc("\r"); [io.pos, io.read] }
+            res << o.() { |io| io.ungetc("\r"); io.seek(0); io.read }
+            res << o.() { |io| io.ungetc("\r"); io.pos = 3; io.read }
+            res << o.() { |io| io.ungetc("\r"); io.rewind; io.read }
+            res << o.() { |io| io.ungetc("\r"); io.binmode; io.read }
+            res << o.() { |io| io.ungetc("\r"); io.set_encoding("UTF-8"); io.read }
+            res << o.() { |io| io.ungetc("\r"); io.dup.read }
+            res << o.() { |io| io.ungetc("\r"); io.close; io.ungetc("a") }
+            res << o.("r", textmode: true) { |io| io.ungetc("\r"); io.read }
+            # Without the decorator `ungetc` is a byte pushback as before.
+            res << o.("r") { |io| io.ungetc("\r"); [io.getbyte, io.read] }
+            # A blocking line read keeps the pending characters across the
+            # wait for more data.
+            r, w = IO.pipe
+            rt = IO.new(r.fileno, "rt", autoclose: false)
+            rt.ungetc("x\r")
+            th = Thread.new { sleep 0.05; w.write "a\r"; sleep 0.05; w.write "b\r\nc"; w.close }
             res << [rt.gets, rt.gets, rt.gets, rt.gets]
             th.join
             r.close
