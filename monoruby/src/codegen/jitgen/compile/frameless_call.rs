@@ -66,14 +66,19 @@
 //! (`traceir_to_asmir_inner`), so a rejected callee costs only the blocks
 //! up to it.
 //!
-//! # Depth
+//! # Size
 //!
 //! A frameless callee may itself call frameless callees — a getter inside
-//! a predicate inside an accessor — and nothing else, so a run of them is
-//! bounded on its own (`FRAMELESS_CHAIN_LIMIT` consecutive frameless
-//! frames above the innermost framed one) rather than by the framed
-//! specialization budget. A callee that is already a frame of the unit is
-//! never tried: a recursion ends in a call.
+//! a predicate inside an accessor — and nothing else. Every frameless
+//! callee run under one call site of a framed frame (its *chain*: the
+//! whole tree, siblings included) is bounded together, by the sum of the
+//! bodies' bytecodes (`FRAMELESS_CHAIN_BUDGET`), on top of each body's own
+//! limit (`FRAMELESS_MAX_BYTECODES`), rather than by the framed
+//! specialization budget or by how deep the chain nests: what a site
+//! grows the unit by is the code of the whole tree, and in real code
+//! that grows with the number of calls a body makes, not with depth. A
+//! callee that is already a frame of the unit is never tried: a recursion
+//! ends in a call.
 //!
 //! # Blocks
 //!
@@ -111,10 +116,34 @@ use super::method_call::SpecializedCompileResult;
 use crate::codegen::jitgen::context::JitBlockInfo;
 
 ///
-/// Bytecode budget for a frameless callee. Every call site gets its own
-/// copy of the body, so this bounds the code a unit can grow by per site.
+/// Bytecode limit for one frameless callee's body.
 ///
-const FRAMELESS_MAX_BYTECODES: usize = 40;
+const FRAMELESS_MAX_BYTECODES: usize = 80;
+
+///
+/// Bytecode budget for one frameless chain: the bodies of every frameless
+/// callee and block run inline under one call site of a framed frame,
+/// siblings included (`JitContext::frameless_chain_enter`). Every call
+/// site gets its own copy of the bodies, so this bounds the code a unit
+/// can grow by per site.
+///
+/// Across ruby-bench the largest chain compiled under these two limits
+/// is 133 bytecodes (optcarrot's `CPU#do_isr`, seven bodies), and the
+/// budget stops a single attempt; what moved the code was the
+/// per-callee limit, which used to be 40 and kept bodies such as
+/// optcarrot's `PPU#render_pixel` (68) and rubyboy's `Timer#step` (73)
+/// framed.
+///
+/// The chain is bounded by its own budget, not by the framed
+/// specialization depth: charging frameless callees the framed budget
+/// cut real chains at the wrong place, since one level short loses every
+/// level (the bottom callee's plain call is a violation in its frameless
+/// caller, whose rollback is one in its own caller, up to the top). Nor
+/// by how deep it nests: the chains real code builds are wide, a
+/// predicate calling a few accessors, rather than deep, and a budget on
+/// the sum bounds both.
+///
+const FRAMELESS_CHAIN_BUDGET: usize = 160;
 
 ///
 /// Can the call `callid` to *iseq_id* be tried frameless?
@@ -288,6 +317,27 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Charge *iseq*'s body to the frameless chain it would join
+    /// ([`FRAMELESS_CHAIN_BUDGET`]); a call from a framed frame starts a
+    /// new chain. `None` when the body does not fit, which is not a
+    /// rejection of the callee (`frameless_rejected`): it may well fit in
+    /// another chain. Otherwise the chain's count before the charge, for a
+    /// rollback to restore.
+    ///
+    fn frameless_chain_enter(&mut self, iseq: ISeqId) -> Option<usize> {
+        if self.frameless_chain_len() == 0 {
+            self.frameless_chain_bc = 0;
+        }
+        let save = self.frameless_chain_bc;
+        let total = save + self.store[iseq].bytecode().len();
+        if total > FRAMELESS_CHAIN_BUDGET {
+            return None;
+        }
+        self.frameless_chain_bc = total;
+        Some(save)
+    }
+
+    ///
     /// Compile the call `callid` to *iseq* as a frameless specialized
     /// call. `None` when the callee turned out not to be frameless: the
     /// compile is then rolled back, leaving `state` and `ir` as they were,
@@ -305,6 +355,7 @@ impl<'a> JitContext<'a> {
         if self.frameless_rejected.contains(&iseq) {
             return None;
         }
+        let chain_save = self.frameless_chain_enter(iseq)?;
         // The same rollback as `method_call_with_residual`'s.
         let ir_save = ir.save();
         let state_save = state.clone();
@@ -327,6 +378,7 @@ impl<'a> JitContext<'a> {
                 (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
                 self.discard_cond_results();
                 self.frameless_rejected.insert(iseq);
+                self.frameless_chain_bc = chain_save;
                 None
             }
         }
@@ -349,6 +401,7 @@ impl<'a> JitContext<'a> {
         if self.frameless_rejected.contains(&iseq) {
             return None;
         }
+        let chain_save = self.frameless_chain_enter(iseq)?;
         let ir_save = ir.save();
         let state_save = state.clone();
         let depth = self.stack_frame_len();
@@ -368,6 +421,7 @@ impl<'a> JitContext<'a> {
                 (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
                 self.discard_cond_results();
                 self.frameless_rejected.insert(iseq);
+                self.frameless_chain_bc = chain_save;
                 None
             }
         }

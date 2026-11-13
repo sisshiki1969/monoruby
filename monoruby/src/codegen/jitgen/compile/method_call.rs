@@ -1427,15 +1427,15 @@ impl<'a> JitContext<'a> {
                 // call overhead alone. A callee that turns out to need a
                 // frame rolls back and takes the gate below.
                 //
-                // Its depth is not the framed budget's (`frameless_room`),
-                // and a callee already on the specialization stack is not
-                // tried: a recursion can only ever end in a call, which no
-                // frameless body may make, so every level of it would be
-                // compiled only to be rolled back.
+                // Its size is not the framed budget's but its chain's
+                // (`FRAMELESS_CHAIN_BUDGET`), and a callee already on the
+                // specialization stack is not tried: a recursion can only
+                // ever end in a call, which no frameless body may make, so
+                // every level of it would be compiled only to be rolled
+                // back.
                 if recv_class_proven
                     && !self.in_dispatch_arm()
                     && !callee_forwards_block
-                    && self.frameless_room()
                     && !self.iseq_on_specialization_stack(iseq)
                     && frameless_call::eligible(&self.store, func_id, iseq, callid)
                     && let Some(res) =
@@ -2288,7 +2288,7 @@ impl<'a> JitContext<'a> {
                 if let Some(init_callid) = callsite.class_new_init
                     && !self.in_dispatch_arm()
                     && !self.frameless_rejected.contains(&init_iseq)
-                    && self.frameless_room()
+                    && !self.iseq_on_specialization_stack(init_iseq)
                     && frameless_call::eligible(&self.store, init_fid, init_iseq, init_callid) =>
             {
                 InitPlan::Frameless(init_callid, init_iseq)
@@ -3345,25 +3345,6 @@ impl<'a> JitContext<'a> {
 /// spread of repeated runs.
 const SPECIALIZE_DEPTH_LIMIT: usize = 3;
 
-/// How many frameless callees may sit in a row on the specialization stack,
-/// above the innermost framed frame (`JitContext::frameless_room`).
-///
-/// Frameless callees do not spend [`SPECIALIZE_DEPTH_LIMIT`]. That budget
-/// bounds what a framed callee costs — a frame of its own, and every
-/// specializable site inside it — while a frameless body is at most
-/// `FRAMELESS_MAX_BYTECODES` long and can contain nothing but other
-/// frameless calls (any framed call in it is a violation). Charging them
-/// the framed budget cut real call chains at the wrong place twice over:
-/// a chain one level deeper than the budget lost *every* level, since the
-/// bottom callee's plain call made its frameless caller a violation, and
-/// that one's rollback made its own caller one, up to the top; and the
-/// frames a nest of blocks spends (`each` and its block are two framed
-/// levels each) left no budget at all for the small methods called from
-/// the innermost block. Counting the frameless run from the innermost
-/// framed frame instead keeps the code a site can grow by bounded the same
-/// way, independent of where in the unit the site sits.
-const FRAMELESS_CHAIN_LIMIT: usize = 3;
-
 /// How deep a chain of *forwarding* frames may go, which is a recursion
 /// backstop rather than a budget — see `forward_exempt` at the
 /// specialization gate for why forwarding is exempt from the budget
@@ -3379,16 +3360,6 @@ const FRAMELESS_CHAIN_LIMIT: usize = 3;
 /// trampoline materializes the rest `Array` that the hand-over of elided
 /// objects exists to elide (a generic `send` takes none).
 const FORWARD_EXEMPT_RECURSION_CAP: usize = 32;
-
-impl<'a> JitContext<'a> {
-    ///
-    /// May a frameless callee be pushed on the specialization stack here?
-    /// See [`FRAMELESS_CHAIN_LIMIT`].
-    ///
-    fn frameless_room(&self) -> bool {
-        self.frameless_chain_len() < FRAMELESS_CHAIN_LIMIT
-    }
-}
 
 impl AbstractState {
     ///
