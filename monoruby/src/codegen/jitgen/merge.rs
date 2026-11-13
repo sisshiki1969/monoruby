@@ -441,6 +441,7 @@ impl<'a> JitContext<'a> {
         hoisted_guards: &[(SlotId, Guarded)],
     ) {
         let target = target.frames_cloned();
+        let surrender = self.chain_surrender_table();
         #[cfg(feature = "jit-debug")]
         eprintln!("  bridge to:{bbid:?} target:{target:?}");
         for (
@@ -508,9 +509,34 @@ impl<'a> JitContext<'a> {
                     },
                 });
             }
-            let src_pin = state.gp_regfile.pin();
-            state.gen_bridge_all(&mut ir, &target, pc, &self.chain_surrender_table());
-            AbstractFrame::bridge_pin(src_pin, &mut ir, target.last().unwrap());
+            if !ir.codegen_mode() {
+                // The analysis pass emits nothing and drops the source
+                // state, so of a bridge it keeps one fact: whether it can
+                // deopt (`JitStackFrame::had_deopt`, which decides what a
+                // block-passing call may keep of this frame). Asking that
+                // of the modes spares it the bridge — a copy of every
+                // frame that differs from the target and a walk over its
+                // slots, at every edge of every walk. A debug build
+                // builds the bridge all the same and checks the answer.
+                let deopts = state.bridge_deopts(&target);
+                #[cfg(debug_assertions)]
+                {
+                    let mut probe = AsmIr::new(self);
+                    state.gen_bridge_all(&mut probe, &target, pc, &surrender);
+                    assert_eq!(
+                        deopts,
+                        probe.had_deopt(),
+                        "bridge_deopts disagrees with the bridge to {bbid:?}"
+                    );
+                }
+                if deopts {
+                    ir.note_analysis_deopt();
+                }
+            } else {
+                let src_pin = state.gp_regfile.pin();
+                state.gen_bridge_all(&mut ir, &target, pc, &surrender);
+                AbstractFrame::bridge_pin(src_pin, &mut ir, target.last().unwrap());
+            }
             match mode {
                 BranchMode::Side { dest } => {
                     self.add_outline_bridge(ir, dest, bbid);

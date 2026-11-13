@@ -3668,7 +3668,7 @@ impl AbstractState {
         using_fpr: UsingFpr,
         dst: Option<SlotId>,
     ) {
-        let spec = Box::new(ChainExitSpec::new(self, using_fpr, dst));
+        let spec = Box::new(ChainExitSpec::new(ir, self, using_fpr, dst));
         ir.push(AsmInst::ChainExit { evict, spec });
     }
 
@@ -3705,7 +3705,10 @@ impl AbstractState {
         dst: Option<SlotId>,
     ) {
         let next_pc = self.pc().next();
-        ir[evict] = SideExit::Evict(Some((next_pc, self.get_write_back())));
+        // The analysis pass has no exit table to fill (`AsmIr::new_label`).
+        if ir.codegen_mode() {
+            ir[evict] = SideExit::Evict(Some((next_pc, self.get_write_back())));
+        }
         self.capture_guard_after_call(ir, store, dst);
     }
 

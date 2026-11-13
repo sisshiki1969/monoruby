@@ -173,6 +173,15 @@ impl IsUsed {
             IsUsed::ND => *self = IsUsed::Killed,
         }
     }
+
+    /// [`Self::kill`] would change nothing.
+    pub(super) fn is_killed(&self) -> bool {
+        match self {
+            IsUsed::Killed => true,
+            IsUsed::Used(used) => used.killed,
+            IsUsed::ND => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

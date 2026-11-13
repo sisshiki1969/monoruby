@@ -364,6 +364,18 @@ impl AbstractState {
     }
 
     ///
+    /// Whether [`Self::gen_bridge_all`] to *target* creates a deopt exit.
+    /// Only the innermost frame's bridge can: an outer frame's is pure
+    /// state (`AbstractFrame::bridge_at`).
+    ///
+    pub(super) fn bridge_deopts(&self, target: &[FrameRef]) -> bool {
+        let (Some(src), Some(tgt)) = (self.frames.last(), target.last()) else {
+            return false;
+        };
+        !FrameRef::ptr_eq(src, tgt) && src.all_regs().any(|slot| src.bridge_deopts(tgt, slot))
+    }
+
+    ///
     /// Home every unboxed local of *this* frame in its slot, keeping the
     /// rest of the abstract state — each `C` and each `Sf` view included.
     ///
@@ -730,6 +742,9 @@ pub(super) struct ChainSurrender {
     /// `(ids, extra, owner unit)` per chain level; `None` for the
     /// innermost frame.
     pub(super) per_level: Vec<Option<(Vec<crate::codegen::jitgen::context::SpecializedId>, usize, crate::codegen::jitgen::context::SpecializedId)>>,
+    /// The analysis pass emits no surrender write, so its table carries
+    /// no addressing.
+    pub(super) analysis: bool,
 }
 
 impl ChainSurrender {
@@ -746,6 +761,9 @@ impl ChainSurrender {
         fpr: FPReg,
         slot: SlotId,
     ) -> bool {
+        if self.analysis {
+            return true;
+        }
         let Some(Some((ids, extra, owner))) = self.per_level.get(level) else {
             return false;
         };
@@ -1331,7 +1349,7 @@ impl AbstractFrame {
     /// arguments; the poll follows the prologue, so the state at the poll
     /// is exactly "about to run the next instruction").
     pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool, deopt_pc: BytecodePtr) {
-        let wb = self.get_gc_write_back();
+        let wb = ir.gc_write_back(self);
         let error = ir.new_error(self);
         let deopt = ir.new_poll_deopt(self, deopt_pc);
         ir.exec_gc(wb, error, deopt, check_stack);
@@ -1343,7 +1361,7 @@ impl AbstractFrame {
     /// safepoint.
     ///
     pub fn check_stack(&self, ir: &mut AsmIr) {
-        let wb = self.get_gc_write_back();
+        let wb = ir.gc_write_back(self);
         let error = ir.new_error(self);
         ir.check_stack(wb, error);
     }
@@ -1384,14 +1402,7 @@ impl AbstractFrame {
 
     /// Discard the slots at and above *sp*.
     pub(in crate::codegen::jitgen) fn clear_above(&mut self, sp: SlotId) {
-        for i in sp..SlotId(self.slots_len() as u16) {
-            // The elements of an elided Array stay put until it is
-            // materialized or consumed (`doc/escape_analysis.md`).
-            if self.is_virtual_src(i) {
-                continue;
-            }
-            self.discard(i);
-        }
+        self.discard_above(sp);
     }
 }
 

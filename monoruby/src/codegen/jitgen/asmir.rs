@@ -375,6 +375,8 @@ impl std::ops::Index<AsmEvict> for AsmIr {
     }
 }
 
+/// Codegen mode only: the analysis pass keeps no exit table
+/// (`AsmIr::new_label`).
 impl std::ops::IndexMut<AsmEvict> for AsmIr {
     fn index_mut(&mut self, index: AsmEvict) -> &mut Self::Output {
         &mut self.side_exit[index.0]
@@ -385,6 +387,14 @@ impl std::ops::IndexMut<AsmEvict> for AsmIr {
 impl AsmIr {
     #[cfg_attr(feature = "deopt", track_caller)]
     fn new_label(&mut self, side_exit: SideExit) -> usize {
+        if !self.codegen_mode {
+            // The analysis pass emits nothing, so its exits are never
+            // read. It keeps the facts the walk reads off them
+            // (`had_deopt`, `frameless_violation`, set by the callers) and
+            // leaves the table empty: every handle is `0`, and nothing may
+            // index the table with one (`immediate_evict`).
+            return 0;
+        }
         let label = self.side_exit.len();
         self.side_exit.push(side_exit);
         #[cfg(feature = "deopt")]
@@ -486,11 +496,41 @@ impl AsmIr {
     /// collector would read whatever the window held before. A framed body
     /// needs none of that: its prologue filled the slots.
     ///
+    /// Empty in the analysis pass, which builds no side exit
+    /// (`new_label`).
+    ///
     pub(crate) fn exit_write_back(&self, state: &AbstractFrame) -> WriteBack {
+        if !self.codegen_mode {
+            return WriteBack::empty();
+        }
         if self.frameless {
             state.get_write_back_with_void()
         } else {
             state.get_write_back()
+        }
+    }
+
+    ///
+    /// [`AbstractFrame::get_write_back`], for an exit that never makes a
+    /// frameless window a frame. Empty in the analysis pass, like
+    /// [`Self::exit_write_back`].
+    ///
+    pub(crate) fn plain_write_back(&self, state: &AbstractFrame) -> WriteBack {
+        if self.codegen_mode {
+            state.get_write_back()
+        } else {
+            WriteBack::empty()
+        }
+    }
+
+    ///
+    /// [`AbstractFrame::get_gc_write_back`]; empty in the analysis pass.
+    ///
+    pub(crate) fn gc_write_back(&self, state: &AbstractFrame) -> WriteBack {
+        if self.codegen_mode {
+            state.get_gc_write_back()
+        } else {
+            WriteBack::empty()
         }
     }
 
@@ -844,7 +884,7 @@ impl AsmIr {
         self.set_frameless_violation();
         let i = self.new_label(SideExit::Deoptimize(
             pc,
-            state.get_write_back(),
+            self.plain_write_back(state),
             self.chain_frames,
             false,
         ));
@@ -995,7 +1035,7 @@ impl AsmIr {
         self.set_frameless_violation();
         let i = self.new_label(SideExit::Error(
             pc,
-            state.get_write_back(),
+            self.plain_write_back(state),
             self.chain_frames,
         ));
         AsmError(i)

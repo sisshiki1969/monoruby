@@ -62,6 +62,11 @@ use crate::jitgen::SlotId;
 /// rather than fused into the type fixpoint.
 pub(in crate::codegen::jitgen) const GP_ALLOC_SET: &[GP] = &[GP::R8, GP::R9, GP::R10, GP::R11];
 
+const GP_ALLOC_LEN: usize = GP_ALLOC_SET.len();
+
+/// The slots one register caches.
+type Holders = smallvec::SmallVec<[Holder; 4]>;
+
 /// One slot an allocatable register currently caches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Holder {
@@ -91,14 +96,16 @@ struct Holder {
 /// It is flushed empty at every basic-block boundary, so although it rides
 /// inside the cloned/merged `SlotState` it never actually carries state across a
 /// block merge (the per-block-locality the design requires).
-#[derive(Clone)]
 pub(in crate::codegen::jitgen) struct GpRegFile {
     /// `holders[i]` is the set of slots `GP_ALLOC_SET[i]` caches (empty = free).
-    holders: Vec<Vec<Holder>>,
+    /// Inline storage: the file rides in every `SlotState`, which the walk
+    /// clones at each branch and merge, and a register rarely caches more
+    /// than a couple of slots.
+    holders: [Holders; GP_ALLOC_LEN],
     /// `age[i]`: monotonically-increasing stamp set when a slot was last bound
     /// to `GP_ALLOC_SET[i]`, used to pick the oldest register as the eviction
     /// victim (FIFO).
-    age: Vec<u64>,
+    age: [u64; GP_ALLOC_LEN],
     /// FIFO clock for victim selection.
     clock: u64,
     /// The loop pin (see [`LoopPin`]), when this block lies in a loop that
@@ -132,6 +139,25 @@ pub(in crate::codegen::jitgen) struct LoopPin {
 /// one `find_free` hands out last.
 pub(in crate::codegen::jitgen) const PIN_REG: GP = GP::R11;
 
+impl Clone for GpRegFile {
+    fn clone(&self) -> Self {
+        Self {
+            // The file is empty at every block boundary, which is where
+            // most clones are taken.
+            holders: std::array::from_fn(|i| {
+                if self.holders[i].is_empty() {
+                    Holders::new()
+                } else {
+                    self.holders[i].clone()
+                }
+            }),
+            age: self.age,
+            clock: self.clock,
+            pin: self.pin,
+        }
+    }
+}
+
 impl PartialEq for GpRegFile {
     fn eq(&self, other: &Self) -> bool {
         self.holders == other.holders && self.age == other.age && self.clock == other.clock
@@ -157,8 +183,8 @@ impl Default for GpRegFile {
 impl GpRegFile {
     pub(in crate::codegen::jitgen) fn new() -> Self {
         Self {
-            holders: vec![vec![]; GP_ALLOC_SET.len()],
-            age: vec![0; GP_ALLOC_SET.len()],
+            holders: std::array::from_fn(|_| Holders::new()),
+            age: [0; GP_ALLOC_LEN],
             clock: 0,
             pin: None,
         }
@@ -438,6 +464,16 @@ impl GpRegFile {
         Some(GP_ALLOC_SET[i])
     }
 
+    /// Nothing here refers to a slot at or above `sp`: no register caches
+    /// one and the pin is not one, so [`Self::invalidate`] of any of them
+    /// is a no-op.
+    pub(in crate::codegen::jitgen) fn idle_above(&self, sp: SlotId) -> bool {
+        self.holders
+            .iter()
+            .all(|hs| hs.iter().all(|h| h.slot < sp))
+            && self.pin.is_none_or(|p| p.slot < sp)
+    }
+
     /// Free every register caching a slot at or above `sp` — those temporaries
     /// are dead (popped past the stack pointer), so they are dropped without a
     /// spill, mirroring `clear_above_next_sp`.
@@ -483,7 +519,7 @@ impl GpRegFile {
         sp: SlotId,
         dst: Option<SlotId>,
     ) -> Vec<(GP, SlotId)> {
-        let free_later = |hs: &Vec<Holder>| hs.iter().all(|h| h.slot >= sp || Some(h.slot) == dst);
+        let free_later = |hs: &Holders| hs.iter().all(|h| h.slot >= sp || Some(h.slot) == dst);
         if (0..GP_ALLOC_SET.len())
             .any(|i| !self.excluded(pinned, i) && free_later(&self.holders[i]))
         {
@@ -502,7 +538,9 @@ impl GpRegFile {
     /// old value is dead, so no spill). The register's other holders stay.
     pub(in crate::codegen::jitgen) fn invalidate(&mut self, slot: SlotId) {
         for h in self.holders.iter_mut() {
-            h.retain(|held| held.slot != slot);
+            if !h.is_empty() {
+                h.retain(|held| held.slot != slot);
+            }
         }
         if let Some(p) = &mut self.pin
             && p.slot == slot

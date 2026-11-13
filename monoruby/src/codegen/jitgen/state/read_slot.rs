@@ -417,8 +417,7 @@ impl AbstractFrame {
         // later `stack2reg`/`reg2stack` are pure emits that don't perturb the
         // snapshot. The guard-free `Sf`/`F`/`C` arms record no deopt, exactly as
         // before. The side-exit itself is materialized in the emit half.
-        let deopt =
-            matches!(self.mode(slot), LinkMode::S(_)).then(|| self.deopt_point());
+        let deopt = matches!(self.mode(slot), LinkMode::S(_)).then(|| self.deopt_point(ir));
         let (x, load) = self.load_fpr_fixnum_state(slot);
         ir.fpr_fixnum_load(load, slot, deopt);
         x
@@ -473,7 +472,13 @@ impl AbstractFrame {
     /// side-exit via [`AsmIr::deopt_from_point`]. Mirrors `AsmIr::new_deopt`'s
     /// snapshot, minus the `side_exit` push.
     ///
-    pub(in crate::codegen::jitgen) fn deopt_point(&self) -> DeoptPoint {
+    /// The analysis pass emits no record, so there the point is a
+    /// placeholder: only its presence is read (`FprFixnumLoad::deopts`).
+    ///
+    pub(in crate::codegen::jitgen) fn deopt_point(&self, ir: &AsmIr) -> DeoptPoint {
+        if !ir.codegen_mode() {
+            return DeoptPoint::new(self.pc(), WriteBack::empty(), true, vec![]);
+        }
         DeoptPoint::new(
             self.pc(),
             self.get_write_back(),
@@ -521,7 +526,7 @@ impl AbstractState {
         // doc/regalloc_separation.md §9. The record carries the program point
         // (pc + write-back), not a frozen `AsmDeopt`; the emit half materializes
         // the side-exit from it.
-        let deopt = self.deopt_point();
+        let deopt = self.deopt_point(ir);
         let (x, load) = self.load_fpr_state(slot);
         ir.fpr_load(load, slot, deopt);
         x
