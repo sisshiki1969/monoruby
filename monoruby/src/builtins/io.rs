@@ -372,6 +372,9 @@ pub(super) fn io_init_from_fd(
         ));
     }
     let binmode = fmode_bin;
+    if binmode && newline_decorator_given(vm, globals, kw)? {
+        return Err(MonorubyErr::argumenterr("newline decorator with binary mode"));
+    }
 
     // Encodings: the mode-string suffix conflicts with any encoding
     // keyword; `encoding:` is ignored (with a warning) when an explicit
@@ -498,6 +501,14 @@ pub(super) fn io_init_from_fd(
     set_io_ecopts(globals, obj, ecopts)?;
     if binmode {
         obj.as_io_inner_mut().set_binmode();
+    } else {
+        // Without a mode, `rb_io_initialize` takes the fmode from the
+        // descriptor's own flags (`rb_io_oflags_fmode`), which never
+        // carry FMODE_TEXTMODE, so no option turns the decorator on.
+        let on = readable
+            && mode_str.is_some()
+            && reads_universal_newline(vm, globals, fmode_text, kw)?;
+        obj.as_io_inner_mut().set_universal_newline(on);
     }
     Ok(())
 }
@@ -1031,6 +1042,65 @@ fn set_io_ecopts(
     globals.store.set_ivar(io, IdentId::_IO_ECOPTS, val)
 }
 
+/// Whether an options Hash asks for a newline decorator: `newline:`, or
+/// one of the booleans `universal_newline:` / `crlf_newline:` /
+/// `cr_newline:` / `lf_newline:` set true (`rb_econv_prepare_options`).
+/// A binary-mode stream refuses one (`rb_io_extract_modeenc`).
+pub(super) fn newline_decorator_given(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    hash: Option<crate::value::Hashmap>,
+) -> Result<bool> {
+    let Some(h) = hash else { return Ok(false) };
+    if h.get(Value::symbol(IdentId::get_id("newline")), vm, globals)?
+        .is_some_and(|v| !v.is_nil())
+    {
+        return Ok(true);
+    }
+    for key in ["universal_newline", "crlf_newline", "cr_newline", "lf_newline"] {
+        if h.get(Value::symbol(IdentId::get_id(key)), vm, globals)?
+            .is_some_and(|v| v.as_bool())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether a class-level reader (`IO.read`, `IO.readlines`,
+/// `IO.foreach`) converts newlines (#1875): the same rule as an opened
+/// stream ([`reads_universal_newline`]), read off the `mode:` it settled
+/// on and its options Hash — the one inside `:open_args` when given.
+fn class_reads_universal_newline(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mode: &str,
+    opts: Option<crate::value::Hashmap>,
+) -> Result<bool> {
+    let mut hash = opts;
+    if let Some(h) = opts
+        && let Some(oa) = h.get(Value::symbol(IdentId::get_id("open_args")), vm, globals)?
+        && let Some(ary) = oa.try_array_ty()
+    {
+        hash = ary.iter().find_map(|v| v.try_hash_ty());
+    }
+    let base = mode.split(':').next().unwrap_or("");
+    let binmode = base.contains('b')
+        || match hash {
+            Some(h) => h
+                .get(Value::symbol(IdentId::get_id("binmode")), vm, globals)?
+                .is_some_and(|v| v.as_bool()),
+            None => false,
+        };
+    if binmode {
+        if newline_decorator_given(vm, globals, hash)? {
+            return Err(MonorubyErr::argumenterr("newline decorator with binary mode"));
+        }
+        return Ok(false);
+    }
+    reads_universal_newline(vm, globals, base.contains('t'), hash)
+}
+
 /// The read-conversion options (`invalid:` / `undef:` / `replace:`) of a
 /// class-level reader's options Hash; with `:open_args`, those of the
 /// Hash inside it.
@@ -1085,8 +1155,12 @@ pub(super) fn init_io_encodings(
         .find_map(|v| v.try_hash_ty());
     let ecopts = super::encoding::io_read_ecopts(globals, 0, hash)?;
     set_io_ecopts(globals, io, ecopts)?;
-    if let Some(nl) = parse_newline_option(vm, globals, lfp, opt_range, extra)? {
+    if let Some(nl) = parse_newline_option(vm, globals, lfp, opt_range.clone(), extra)? {
         io.as_io_inner_mut().set_newline(nl);
+    }
+    let textmode = base.contains('t');
+    if readable && !binmode && reads_universal_newline(vm, globals, textmode, hash)? {
+        io.as_io_inner_mut().set_universal_newline(true);
     }
     // A "BOM|utf-..." encoding: peek the stream for a byte-order mark;
     // a detected BOM is consumed and *overrides* the external encoding,
@@ -1095,6 +1169,44 @@ pub(super) fn init_io_encodings(
         detect_and_consume_bom(vm, globals, io)?;
     }
     Ok(())
+}
+
+/// Whether a stream opened in this mode with these options converts
+/// newlines on read (#1875): CRuby's `rb_io_extract_modeenc` starts a
+/// readable text-mode stream (`"t"`, `textmode: true`) with the universal
+/// newline decorator, and `rb_econv_prepare_options` replaces the
+/// decorator by `newline:` when given, otherwise by the boolean
+/// `universal_newline:` / `crlf_newline:` / `cr_newline:` / `lf_newline:`
+/// when any of them is given. Only the universal one acts on reads (the
+/// others are write decorators, masked off for the read converter).
+pub(super) fn reads_universal_newline(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    textmode: bool,
+    hash: Option<crate::value::Hashmap>,
+) -> Result<bool> {
+    let Some(h) = hash else {
+        return Ok(textmode);
+    };
+    let get = |vm: &mut Executor, globals: &mut Globals, key: &str| {
+        h.get(Value::symbol(IdentId::get_id(key)), vm, globals)
+            .map(|v| v.filter(|v| !v.is_nil()))
+    };
+    let textmode = textmode || get(vm, globals, "textmode")?.is_some_and(|v| v.as_bool());
+    if let Some(v) = get(vm, globals, "newline")? {
+        return Ok(v.try_symbol().is_some_and(|s| s.get_name() == "universal"));
+    }
+    let mut given = false;
+    let mut universal = false;
+    for key in ["universal_newline", "crlf_newline", "cr_newline", "lf_newline"] {
+        if let Some(v) = get(vm, globals, key)? {
+            given = true;
+            if key == "universal_newline" && v.as_bool() {
+                universal = true;
+            }
+        }
+    }
+    Ok(if given { universal } else { textmode })
 }
 
 /// The `newline:` open option's write decorator, if one was given.
@@ -2287,6 +2399,13 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             lfp.self_val().as_io_inner_mut().read(length)
         })?
     };
+    // `read_all` goes through the read converter, so its newline
+    // decorator; a sized read (`io_fread`) takes the bytes as they are.
+    let buf = if length.is_none() && lfp.self_val().as_io_inner().universal_newline() {
+        crate::value::rvalue::io::universal_newline_bytes(buf)
+    } else {
+        buf
+    };
     let eof_nil = buf.is_empty() && length.is_some() && length != Some(0);
     match outbuf {
         Some(mut out) => {
@@ -2373,6 +2492,7 @@ fn io_class_read(
 
     let (mode, ext_obj, int_obj, bom) = class_read_opts(vm, globals, opts)?;
     let ecopts = class_read_ecopts(vm, globals, opts)?;
+    let universal = class_reads_universal_newline(vm, globals, &mode, opts)?;
     // A write/append-only mode can't be used for reading.
     reject_unreadable_mode(&filename, &mode)?;
 
@@ -2404,6 +2524,9 @@ fn io_class_read(
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_io_read", &filename))?;
+    if universal {
+        buf = crate::value::rvalue::io::universal_newline_bytes(buf);
+    }
 
     use crate::value::Encoding as E;
     // A "BOM|..." mode: a leading byte-order mark is consumed and
@@ -2482,6 +2605,12 @@ fn io_class_readlines(
         .to_string();
     let (sep, limit, chomp, (mode, ext_obj, int_obj, _bom), ecopts) =
         class_getline_args(vm, globals, lfp)?;
+    let universal = class_reads_universal_newline(
+        vm,
+        globals,
+        &mode,
+        lfp.try_arg(3).and_then(|v| v.try_hash_ty()),
+    )?;
     if limit == Some(0) {
         return Err(MonorubyErr::argumenterr("invalid limit: 0 for readlines"));
     }
@@ -2491,6 +2620,9 @@ fn io_class_readlines(
     let complete_utf8 = ext_completes_utf8(globals, ext_obj);
     let mut io_val = Value::new_file(file, path, None, true, false);
     set_io_ecopts(globals, io_val, ecopts)?;
+    if universal {
+        io_val.as_io_inner_mut().set_universal_newline(true);
+    }
     let (converts, wide) = {
         let (ext, intl) = resolve_encs(globals, ext_obj, int_obj);
         (
@@ -2667,6 +2799,12 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
     let p = vm.get_block_data(globals, bh)?;
     let (sep, limit, chomp, (mode, ext_obj, int_obj, _bom), ecopts) =
         class_getline_args(vm, globals, lfp)?;
+    let universal = class_reads_universal_newline(
+        vm,
+        globals,
+        &mode,
+        lfp.try_arg(3).and_then(|v| v.try_hash_ty()),
+    )?;
     if limit == Some(0) {
         return Err(MonorubyErr::argumenterr("invalid limit: 0 for foreach"));
     }
@@ -2676,6 +2814,9 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
     let complete_utf8 = ext_completes_utf8(globals, ext_obj);
     let mut io_val = Value::new_file(file, path, None, true, false);
     set_io_ecopts(globals, io_val, ecopts)?;
+    if universal {
+        io_val.as_io_inner_mut().set_universal_newline(true);
+    }
     let (converts, wide) = {
         let (ext, intl) = resolve_encs(globals, ext_obj, int_obj);
         (
@@ -4146,9 +4287,20 @@ fn io_getc(
 ) -> Result<Value> {
     let self_ = lfp.self_val();
     let (ext, intl) = io_encodings(globals, self_);
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
+    let mut buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         read_one_char_enc(lfp.self_val().as_io_inner_mut(), ext)
     })?;
+    if buf == b"\r" && self_.as_io_inner().universal_newline() {
+        // The decorator holds the `"\r"` until the next byte says
+        // whether it was a `"\r\n"`; either way it reads as `"\n"`.
+        let next = blocking_io_region(vm, globals, self_, libc::POLLIN, |_store| {
+            lfp.self_val().as_io_inner_mut().read_buffered(Some(1))
+        })?;
+        if !next.is_empty() && next != b"\n" {
+            lfp.self_val().as_io_inner_mut().unget(&next)?;
+        }
+        buf = b"\n".to_vec();
+    }
     if buf.is_empty() {
         Ok(Value::nil())
     } else {
@@ -7448,6 +7600,71 @@ mod tests {
             f = File.open(path); b = (+"x").force_encoding("ISO-8859-1"); f.read(3, b); r << b.encoding.name; f.close
             t.close!
             r
+            "##,
+        );
+    }
+
+    #[test]
+    fn universal_newline_on_read() {
+        // #1875: "rt" / `textmode:` / `universal_newline:` / `newline:
+        // :universal` turn "\r\n" and "\r" into "\n" on read, for the
+        // instance readers and the class-level ones alike.
+        run_test_once(
+            r##"
+            path = "/tmp/monoruby_test_universal_newline_#{Process.pid}"
+            File.binwrite(path, "a\r\nb\rc\n\r\r\nd\r")
+            res = []
+            res << File.open(path, "r", universal_newline: true) { |io| io.read }
+            res << File.open(path, "r:UTF-8:EUC-JP", universal_newline: true) { |io| io.read }
+            res << File.open(path, "rt") { |io| [io.gets, io.gets, io.gets, io.pos, io.gets] }
+            res << File.open(path, "rt") { |io| io.readlines(chomp: true) }
+            res << File.open(path, "rt") { |io| io.each_char.to_a }
+            res << File.open(path, "rt") { |io| r = []; while (c = io.getc); r << c; end; r }
+            res << File.open(path, "rt") { |io| [io.read(4), io.read] }
+            res << File.open(path, "rt") { |io| [io.gets(""), io.gets("")] }
+            res << File.open(path, "rt") { |io| [io.gets(2), io.gets(2), io.gets(2), io.gets("b")] }
+            res << File.open(path, "rt") { |io| io.gets(nil, 4) }
+            res << File.open(path, "r", newline: :universal) { |io| io.read }
+            res << File.open(path, "r", newline: :lf) { |io| io.read }
+            res << File.open(path, "r", textmode: true) { |io| io.read }
+            res << File.open(path, "rt") { |io| io.binmode; io.read }
+            res << File.open(path, "r", universal_newline: false) { |io| io.read }
+            res << File.open(path, "rt", crlf_newline: false) { |io| io.read }
+            res << IO.read(path, mode: "rt")
+            res << File.read(path, universal_newline: true)
+            res << IO.read(path, open_args: ["rt"])
+            res << IO.read(path, open_args: ["r", {newline: :universal}])
+            res << IO.read(path, 4, mode: "rt")
+            res << IO.readlines(path, mode: "rt")
+            res << IO.readlines(path, chomp: true, textmode: true)
+            res << IO.foreach(path, mode: "rt").to_a
+            res << IO.foreach(path, nil, mode: "rt").to_a
+            res << File.open(path) { |io| IO.new(io.fileno, "rt", autoclose: false).read }
+            res << File.open(path) { |io| IO.new(io.fileno, universal_newline: true, autoclose: false).read }
+            [
+              -> { File.open(path, "rb", universal_newline: true) {} },
+              -> { File.open(path, "r", binmode: true, cr_newline: true) {} },
+              -> { File.open(path, "rb", lf_newline: true) {} },
+              -> { IO.read(path, mode: "rb", universal_newline: true) },
+              -> { IO.readlines(path, binmode: true, newline: :cr) },
+              -> { File.open(path) { |io| IO.new(io.fileno, "rb", crlf_newline: true, autoclose: false) } },
+            ].each do |f|
+              f.call
+              res << :ok
+            rescue ArgumentError => e
+              res << e.message
+            end
+            res << File.open(path, "rb", universal_newline: false) { |io| io.read }
+            res << File.binread(path)
+            # A CR at the end of what is available waits for the next byte.
+            r, w = IO.pipe
+            rt = IO.new(r.fileno, "rt", autoclose: false)
+            th = Thread.new { w.write "a\r"; sleep 0.05; w.write "\nb\r"; sleep 0.05; w.write "c\r"; w.close }
+            res << [rt.gets, rt.gets, rt.gets, rt.gets]
+            th.join
+            r.close
+            File.delete(path)
+            res
             "##,
         );
     }

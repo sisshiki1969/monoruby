@@ -1456,7 +1456,12 @@ fn open_impl(
         binmode = true;
     }
     // CRuby rejects newline decorators on a binary-mode stream.
-    if binmode && open_kw(lfp, "newline").is_some() {
+    if binmode
+        && (open_kw(lfp, "newline").is_some() || {
+            let h = open_kw_hash(vm, globals, lfp)?.map(|h| h.as_hash());
+            super::io::newline_decorator_given(vm, globals, h)?
+        })
+    {
         return Err(MonorubyErr::argumenterr("newline decorator with binary mode"));
     }
     let access = (oflags as i32) & libc::O_ACCMODE;
