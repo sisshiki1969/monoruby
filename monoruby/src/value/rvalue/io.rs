@@ -508,8 +508,10 @@ pub struct FileDescriptor {
     pushback: RefCell<Vec<u8>>,
     /// CRuby's `cbuf`: characters `ungetc` pushed back onto a stream
     /// whose reads go through the read converter (the universal newline
-    /// decorator). They are already converted, so they come out of the
-    /// next character read as they were given, ahead of `pushback`.
+    /// decorator, or a conversion to an internal encoding). They are
+    /// already converted (in the internal encoding, when there is one),
+    /// so they come out of the next character read as they were given,
+    /// ahead of `pushback`.
     cbuf: RefCell<Vec<u8>>,
     /// monoruby's own write buffer over the *same* descriptor the reader
     /// owns (a `"r+"` file is read and written through one fd). Held
@@ -861,6 +863,9 @@ impl IoInner {
 
     pub fn set_newline(&mut self, mode: NewlineMode) {
         self.newline = mode;
+        if !self.may_have_char_pending() {
+            self.clear_char_pending();
+        }
     }
 
     /// `IO#external_encoding`'s state, and its object when `Fixed`.
@@ -884,6 +889,9 @@ impl IoInner {
 
     pub fn set_int_enc(&mut self, int: Option<Value>) {
         self.int = int;
+        if !self.may_have_char_pending() {
+            self.clear_char_pending();
+        }
     }
 
     /// The encoding objects are GC roots reachable only from here.
@@ -1385,6 +1393,17 @@ impl IoInner {
         }
     }
 
+    /// Whether CRuby's `rbuf` would hold anything: bytes read ahead of
+    /// the reader, or pushed back by `ungetbyte` (a File keeps those
+    /// apart, the standard input in its read buffer).
+    fn read_ahead_pending(&self) -> bool {
+        match &self.kind {
+            IoKind::Stdin => !stdin_buf().buffer().is_empty(),
+            IoKind::File(f) => !f.pushback.borrow().is_empty() || !f.reader.buffer().is_empty(),
+            _ => false,
+        }
+    }
+
     /// Bytes currently sitting in the `ungetc`/`ungetbyte` pushback buffer.
     pub fn pushback_len(&self) -> usize {
         match &self.kind {
@@ -1473,14 +1492,21 @@ impl IoInner {
     }
 
     /// CRuby's `READ_CHAR_PENDING`: bytes in the stream's `cbuf`. Only
-    /// a universal-newline stream fills it (and every way out of that
-    /// mode empties it), so the others answer without looking.
+    /// a stream with a read converter (the universal newline decorator,
+    /// or an internal encoding) fills it, and every way out of both
+    /// empties it, so the others answer without looking.
     #[inline]
     pub fn char_pending_len(&self) -> usize {
-        if !self.universal_newline() {
+        if !self.may_have_char_pending() {
             return 0;
         }
         self.cbuf_len()
+    }
+
+    /// Whether `cbuf` can hold anything: the stream has a read converter.
+    #[inline]
+    fn may_have_char_pending(&self) -> bool {
+        self.universal_newline() || self.int.is_some()
     }
 
     #[inline(never)]
@@ -1506,11 +1532,12 @@ impl IoInner {
     }
 
     /// `IO#ungetc`: on a stream whose character reads are converted
-    /// (the universal newline decorator, CRuby's `NEED_READCONV`) the
-    /// character goes into the converted buffer (`cbuf`), so it is not
-    /// converted again; otherwise it is pushed back like `ungetbyte`.
-    pub fn unget_char(&mut self, bytes: &[u8]) -> Result<()> {
-        if !self.universal_newline() {
+    /// (`converted`: the universal newline decorator, or a conversion to
+    /// an internal encoding — CRuby's `NEED_READCONV`) the character goes
+    /// into the converted buffer (`cbuf`), so it is not converted again;
+    /// otherwise it is pushed back like `ungetbyte`.
+    pub fn unget_char(&mut self, bytes: &[u8], converted: bool) -> Result<()> {
+        if !converted || !self.may_have_char_pending() {
             return self.unget(bytes);
         }
         match &self.kind {
@@ -1567,7 +1594,8 @@ impl IoInner {
 
     /// Drop the converted characters `ungetc` pushed back. CRuby's
     /// `clear_readconv`: `IO#rewind` and binary mode discard them, while
-    /// `IO#seek` / `#pos=` keep them.
+    /// `IO#seek` / `#pos=` / `#pos` discard them only when the stream had
+    /// bytes read ahead to give back (see [`Self::seek`]).
     pub fn clear_char_pending(&mut self) {
         self.with_cbuf(|c| c.clear());
     }
@@ -1578,8 +1606,16 @@ impl IoInner {
     /// `#rewind`) do this — `IO#pos` reads the position through the same
     /// `lseek` and must leave the pushback alone.
     pub fn clear_pushback(&mut self) {
-        if let Some(cell) = self.pushback_cell() {
-            cell.borrow_mut().clear();
+        let had = self.pushback_cell().is_some_and(|cell| {
+            let mut pb = cell.borrow_mut();
+            let had = !pb.is_empty();
+            pb.clear();
+            had
+        });
+        // Bytes given back ahead of a seek drop the read converter too
+        // (see [`Self::seek`]).
+        if had && self.char_pending_len() > 0 {
+            self.clear_char_pending();
         }
     }
 
@@ -2553,6 +2589,9 @@ impl IoInner {
     /// stays buffered and answers a negative position, as in CRuby.
     pub fn tell_for(&mut self, store: &Store, func: &str) -> Result<i64> {
         if let IoKind::Stdin = self.kind {
+            if self.char_pending_len() > 0 && self.read_ahead_pending() {
+                self.clear_char_pending();
+            }
             let mut buf = stdin_buf();
             if let Ok(pos) = buf.seek(SeekFrom::Current(0)) {
                 return Ok(pos as i64);
@@ -2583,6 +2622,13 @@ impl IoInner {
             2 => SeekFrom::End(offset),
             _ => return Err(std::io::Error::from_raw_os_error(EINVAL)),
         };
+        // CRuby's `io_unread`, ahead of every `lseek` (`IO#seek`, `#pos=`
+        // and `#pos` alike): giving back read-ahead bytes also drops the
+        // read converter (`clear_codeconv`), and with it the characters
+        // `ungetc` left converted. With nothing read ahead, they stay.
+        if self.char_pending_len() > 0 && self.read_ahead_pending() {
+            self.clear_char_pending();
+        }
         match &mut self.kind {
             IoKind::File(file) => {
                 // A pending write has to land before the offset moves,
