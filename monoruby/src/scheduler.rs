@@ -2073,9 +2073,10 @@ fn flush_pending_unblocks(vm: &mut Executor, globals: &mut Globals) {
 /// `ret` is the body's result word (0 when the body raised), handed back
 /// untouched. Nothing roots it yet — the thread records it only once
 /// this returns — so it is held on the executor's temp stack while the
-/// hooks run Ruby, which may collect. An error the body left pending on
-/// the executor is held aside while the hooks run and restored after; an
-/// error a hook raises is dropped.
+/// hooks run Ruby, which may collect. The error the body raised is
+/// pending on the executor; it is held aside — rooted, since it may be
+/// the only reference to its exception object — while the hooks run and
+/// restored after (#1880). An error a hook raises is dropped.
 pub(crate) extern "C" fn thread_body_exit(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -2085,13 +2086,12 @@ pub(crate) extern "C" fn thread_body_exit(
         if ret != 0 {
             vm.temp_push(Value::from_u64(ret));
         }
-        run_thread_exit_hooks(vm, globals);
+        vm.with_pending_error_held(|vm| run_thread_exit_hooks(vm, globals));
     });
     ret
 }
 
 fn run_thread_exit_hooks(vm: &mut Executor, globals: &mut Globals) {
-    let pending = vm.take_pending_error();
     let thread = current_thread(vm);
     let _ = vm.invoke_method_inner(
         globals,
@@ -2116,9 +2116,6 @@ fn run_thread_exit_hooks(vm: &mut Executor, globals: &mut Globals) {
                 None,
             );
         }
-    }
-    if let Some(err) = pending {
-        vm.set_error(err);
     }
 }
 

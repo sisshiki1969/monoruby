@@ -533,19 +533,21 @@ fn run_body(globals: &mut Globals, mut thread: Value) {
     // The body block's LEP belongs to the spawning frame; claim it as
     // this context's root svar scope (see `dispatch`).
     handle.enter_root_svar_scope(root_lep);
-    let ret = handle.invoke_proc(globals, proc, &args);
-    // The exit hook, in this thread's context: releases the mutexes it
-    // still holds, answers the fibers that joined it through a scheduler.
-    super::thread_body_exit(handle, globals, ret.as_ref().map_or(0, |v| v.id()));
-    handle.set_terminated();
-    let ret = match ret {
-        Ok(v) => Some(v),
+    // The outcome is handed to the exit hook as the green invoker hands
+    // it: the result word, or 0 with the error pending on the executor,
+    // where the hook keeps it rooted while it runs Ruby (#1880).
+    let ret = match handle.invoke_proc(globals, proc, &args) {
+        Ok(v) => v.id(),
         Err(err) => {
             handle.set_error(err);
-            None
+            0
         }
     };
-    finalize(globals, thread, ret);
+    // The exit hook, in this thread's context: releases the mutexes it
+    // still holds, answers the fibers that joined it through a scheduler.
+    let ret = super::thread_body_exit(handle, globals, ret);
+    handle.set_terminated();
+    finalize(globals, thread, (ret != 0).then(|| Value::from_u64(ret)));
 }
 
 /// Park the current thread `cur` — which holds the GVL — until it is

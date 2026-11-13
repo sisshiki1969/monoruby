@@ -456,6 +456,13 @@ pub struct Executor {
     /// frame — a frame that returns without raising discards its own).
     ///
     deferred_top_lfp: Option<Lfp>,
+    ///
+    /// Pending errors set aside by [`Self::with_pending_error_held`] while
+    /// Ruby runs with an empty error slot — a thread body's terminating
+    /// exception during its exit hooks (#1880). Marked like `exception`:
+    /// the error may be the only reference to its exception object.
+    ///
+    held_errors: Vec<MonorubyErr>,
     /// The `Fiber` object whose body is currently executing on this
     /// `Executor`, or `None` for a thread's root context (which falls back
     /// to the per-thread root Fiber object). Exposed as `Fiber.current` so
@@ -528,6 +535,7 @@ impl std::default::Default for Executor {
             errinfo: Value::nil(),
             deferred_unwind: vec![],
             deferred_top_lfp: None,
+            held_errors: vec![],
             current_fiber: None,
             resuming_fiber: None,
             return_to: None,
@@ -612,6 +620,9 @@ impl alloc::GC<RValue> for Executor {
         // the ensure body that suspended them.
         for (lfp, err) in &self.deferred_unwind {
             lfp.mark(alloc);
+            err.mark(alloc);
+        }
+        for err in &self.held_errors {
             err.mark(alloc);
         }
     }
@@ -2205,6 +2216,17 @@ impl Executor {
     /// The pending error, if any, leaving none.
     pub(crate) fn take_pending_error(&mut self) -> Option<MonorubyErr> {
         self.exception.take()
+    }
+
+    /// Run `f` with the pending error (if any) set aside, rooted, and
+    /// put it back afterwards. An error `f` leaves pending is dropped.
+    pub(crate) fn with_pending_error_held<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let held = self.exception.take();
+        let is_held = held.is_some();
+        self.held_errors.extend(held);
+        let res = f(self);
+        self.exception = if is_held { self.held_errors.pop() } else { None };
+        res
     }
 
     pub(crate) fn discard_error(&mut self) {

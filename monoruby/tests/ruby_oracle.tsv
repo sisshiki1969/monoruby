@@ -1743,6 +1743,7 @@
 4d3b8cfdb3abf0074873c94df0f08c11	nil	ENV.rehash
 4d3df55da53ba45fdeda6a3f5a171162	[:caught, :caught, :caught, :propagated, :propagated, :propagated, :propagated, :propagated, :propagated]	def caught?(k)\n              begin\n                begin\n          
 4d3e3e2c0afc6cd7e00e85a264e70654	[111, 222, 333, 111, 222, 333]	def add_fold; 5 + 3; end\n        def mul_fold; 100 * 100; end\n        d
+4d41ef27ac4d2747af280bb246289d7e	[["boom ttt", "ttt"], ["boom uuu", "uuu"], ["unexpected return", "rr", :return]]	class E1880 < StandardError\n              def initialize(tag) = (@t
 4d59acc812858b13ef3ed51f02730d3b	[]	begin\n          Object.new.no_such_method\n        rescue NoMethodError 
 4d5c5ebc315582c724d99bfe750271af	"M1"	module M1\n              def f; "M1"; end\n            end\n          
 4d68f852fba127b042c84037069425b0	[{1 => "a", 2 => "BB", 3 => "CC", 4 => "DD"}, {1 => "a", 2 => "BB", 3 => "CC", 4 => "DD"}, {1 => "a", 2 => "BB", 3 => "CC", 4 => "DD"}]	foo = {1 => 'a', 2 => 'b', 3 => 'c'}\n            bar = {2 => 'B', 3
