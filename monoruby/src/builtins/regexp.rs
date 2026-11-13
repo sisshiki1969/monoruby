@@ -101,23 +101,13 @@ pub(crate) fn init(globals: &mut Globals) {
 fn names(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let re = self_.as_regexp_inner();
-    let raw = re.capture_names().unwrap_or_default();
-    let mut unique: Vec<String> = Vec::with_capacity(raw.len());
-    for n in raw {
-        if !unique.iter().any(|u| *u == n) {
-            unique.push(n);
-        }
-    }
-    // A name is spelled in the pattern's encoding: in a UTF-16 regexp
-    // it is the UTF-16 bytes, which CRuby hands back as they are.
-    let enc = re.declared_encoding();
-    Ok(Value::array_from_iter(unique.iter().map(|n| {
-        if enc.is_wide() {
-            Value::string_from_inner(RStringInner::from_encoding(n.as_bytes(), enc))
-        } else {
-            Value::string_from_str(n)
-        }
-    })))
+    // A name is spelled in the pattern's encoding (in a UTF-16 regexp
+    // it is the UTF-16 bytes), and CRuby hands it back as it is.
+    Ok(Value::array_from_iter(
+        re.unique_capture_names()
+            .into_iter()
+            .map(|n| re.name_string(n)),
+    ))
 }
 
 // Class methods
@@ -2053,18 +2043,17 @@ fn named_captures(
 ) -> Result<Value> {
     let self_ = lfp.self_val();
     let regex = self_.as_regexp_inner();
-    let raw = regex.capture_names().unwrap_or_default();
     let mut map = RubyMap::default();
-    let mut seen: Vec<String> = Vec::with_capacity(raw.len());
-    for name in raw {
-        if seen.iter().any(|n| *n == name) {
-            continue;
-        }
-        let members = regex.get_group_members(&name);
+    for name in regex.unique_capture_names() {
+        let members = regex.get_group_members(name);
         let arr = Value::array_from_iter(members.iter().map(|i| Value::integer(*i as i64)));
-        let key = Value::string_from_str(&name);
+        // CRuby's `reg_named_captures_iter` keys the Hash by a plain
+        // `rb_str_new`: the name's bytes as a BINARY String.
+        let key = Value::string_from_inner(RStringInner::from_encoding(
+            name,
+            crate::value::Encoding::Ascii8,
+        ));
         map.insert(key, arr, vm, globals)?;
-        seen.push(name);
     }
     Ok(Value::hash(map))
 }

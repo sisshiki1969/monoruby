@@ -1346,11 +1346,12 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         // Second arg may be an Integer (group number) or a String/Symbol
         // (named capture group).
         if let Some(arg1) = lfp.try_arg(1) {
-            if let Some(name) = arg1.is_str() {
-                return string_match_named(vm, globals, self_, lhs, &re, name);
+            if let Some(name) = arg1.is_rstring_inner() {
+                let name = name.as_bytes().to_vec();
+                return string_match_named(vm, globals, self_, lhs, &re, &name);
             }
             if let Some(sym) = arg1.try_symbol() {
-                let name = sym.get_name();
+                let name = sym.with_ident_name(|name, _| name.as_bytes().to_vec());
                 return string_match_named(vm, globals, self_, lhs, &re, &name);
             }
             let nth = arg1.coerce_to_int_i64(vm, globals)?;
@@ -1618,12 +1619,13 @@ fn string_match_named(
     self_val: Value,
     s: &RStringInner,
     re: &RegexpInner,
-    name: &str,
+    name: &[u8],
 ) -> Result<Value> {
     let members = re.get_group_members(name);
     if members.is_empty() {
         return Err(MonorubyErr::indexerr(format!(
-            "undefined group name reference: {name}"
+            "undefined group name reference: {}",
+            String::from_utf8_lossy(name)
         )));
     }
     let mut view = None;
