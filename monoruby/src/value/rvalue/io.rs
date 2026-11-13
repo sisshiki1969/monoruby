@@ -25,6 +25,9 @@ use super::*;
 /// context switch (each call locks, works, and returns).
 static STDIN_BUF: LazyLock<Mutex<IoReader<StdFd>>> =
     LazyLock::new(|| Mutex::new(IoReader::new(StdFd::new(0))));
+/// The standard input's `cbuf` (see `FileDescriptor::cbuf`), process-wide
+/// like its read buffer.
+static STDIN_CBUF: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 static STDOUT_BUF: LazyLock<Mutex<IoWriter<StdFd>>> = LazyLock::new(|| {
     let fd = StdFd::new(1);
     // CRuby: `$stdout.sync` is false, on a TTY as well — a TTY instead
@@ -503,6 +506,11 @@ pub struct FileDescriptor {
     /// the underlying reader on the next read. Stored in read order (front
     /// = next byte out); each unget splices its bytes at the front.
     pushback: RefCell<Vec<u8>>,
+    /// CRuby's `cbuf`: characters `ungetc` pushed back onto a stream
+    /// whose reads go through the read converter (the universal newline
+    /// decorator). They are already converted, so they come out of the
+    /// next character read as they were given, ahead of `pushback`.
+    cbuf: RefCell<Vec<u8>>,
     /// monoruby's own write buffer over the *same* descriptor the reader
     /// owns (a `"r+"` file is read and written through one fd). Held
     /// behind a `RefCell` because writes reach here through `&self` —
@@ -559,6 +567,8 @@ pub struct PopenDescriptor {
     pub(crate) writer: Option<IoWriter<std::process::ChildStdin>>,
     /// See `FileDescriptor::pushback`.
     pushback: RefCell<Vec<u8>>,
+    /// See `FileDescriptor::cbuf`.
+    cbuf: RefCell<Vec<u8>>,
 }
 
 /// What an [`IoInner`] is a stream *over*.
@@ -822,9 +832,11 @@ impl IoInner {
         if self.newline == NewlineMode::Universal {
             self.newline = NewlineMode::None;
         }
+        self.clear_char_pending();
     }
 
     /// Whether character reads convert `"\r\n"` / `"\r"` to `"\n"`.
+    #[inline]
     pub fn universal_newline(&self) -> bool {
         self.newline == NewlineMode::Universal
     }
@@ -834,7 +846,10 @@ impl IoInner {
     pub fn set_universal_newline(&mut self, on: bool) {
         match (on, self.newline) {
             (true, NewlineMode::None) => self.newline = NewlineMode::Universal,
-            (false, NewlineMode::Universal) => self.newline = NewlineMode::None,
+            (false, NewlineMode::Universal) => {
+                self.clear_char_pending();
+                self.newline = NewlineMode::None;
+            }
             _ => {}
         }
     }
@@ -1164,6 +1179,7 @@ impl IoInner {
             writable,
             autoclose: Cell::new(true),
             pushback: RefCell::new(Vec::new()),
+            cbuf: RefCell::new(Vec::new()),
             wbuf: RefCell::new(WriteBuf::new(false, is_tty)),
         })))
     }
@@ -1218,6 +1234,7 @@ impl IoInner {
             writable,
             autoclose: Cell::new(true),
             pushback: RefCell::new(Vec::new()),
+            cbuf: RefCell::new(Vec::new()),
             wbuf: RefCell::new(WriteBuf::new(sync, is_tty)),
         }));
     }
@@ -1239,6 +1256,7 @@ impl IoInner {
             reader,
             writer,
             pushback: RefCell::new(Vec::new()),
+            cbuf: RefCell::new(Vec::new()),
         })))
     }
 
@@ -1278,6 +1296,7 @@ impl IoInner {
             writable,
             autoclose: Cell::new(autoclose),
             pushback: RefCell::new(Vec::new()),
+            cbuf: RefCell::new(Vec::new()),
             wbuf: RefCell::new(WriteBuf::new(false, is_tty)),
         })))
     }
@@ -1351,7 +1370,7 @@ impl IoInner {
     /// pushback or bytes already sitting in the internal BufReader. Used
     /// by the green-thread IO scheduler to skip the fd-readiness park.
     pub fn has_buffered_data(&self) -> bool {
-        if self.pushback_len() > 0 {
+        if self.pushback_len() > 0 || self.char_pending_len() > 0 {
             return true;
         }
         match &self.kind {
@@ -1380,7 +1399,7 @@ impl IoInner {
     /// pushed back, and that a raw `sysread` / `sysseek` would therefore
     /// skip over. CRuby refuses both while any are pending.
     pub fn read_data_buffered(&self) -> bool {
-        if self.pushback_len() > 0 {
+        if self.pushback_len() > 0 || self.char_pending_len() > 0 {
             return true;
         }
         match &self.kind {
@@ -1440,6 +1459,117 @@ impl IoInner {
                 Ok(())
             }
         }
+    }
+
+    /// Run `f` on the stream's `cbuf` (see `FileDescriptor::cbuf`);
+    /// `None` for a stream that has none (a closed or write-only one).
+    fn with_cbuf<R>(&self, f: impl FnOnce(&mut Vec<u8>) -> R) -> Option<R> {
+        match &self.kind {
+            IoKind::File(fd) => Some(f(&mut fd.cbuf.borrow_mut())),
+            IoKind::Popen(p) => Some(f(&mut p.cbuf.borrow_mut())),
+            IoKind::Stdin => Some(f(&mut STDIN_CBUF.lock().unwrap())),
+            _ => None,
+        }
+    }
+
+    /// CRuby's `READ_CHAR_PENDING`: bytes in the stream's `cbuf`. Only
+    /// a universal-newline stream fills it (and every way out of that
+    /// mode empties it), so the others answer without looking.
+    #[inline]
+    pub fn char_pending_len(&self) -> usize {
+        if !self.universal_newline() {
+            return 0;
+        }
+        self.cbuf_len()
+    }
+
+    #[inline(never)]
+    fn cbuf_len(&self) -> usize {
+        self.with_cbuf(|c| c.len()).unwrap_or(0)
+    }
+
+    /// CRuby's `rb_io_check_byte_readable`: a byte-oriented read
+    /// (`getbyte`, a sized `read`, `readpartial`, `sysread`, `pread`,
+    /// `ungetbyte`, `IO.copy_stream`'s source) refuses a stream that has
+    /// converted characters pending.
+    #[inline]
+    pub fn check_byte_readable(&self) -> Result<()> {
+        if self.char_pending_len() > 0 {
+            return Err(Self::byte_read_on_char_buffered());
+        }
+        Ok(())
+    }
+
+    #[cold]
+    fn byte_read_on_char_buffered() -> MonorubyErr {
+        MonorubyErr::ioerr("byte oriented read for character buffered IO")
+    }
+
+    /// `IO#ungetc`: on a stream whose character reads are converted
+    /// (the universal newline decorator, CRuby's `NEED_READCONV`) the
+    /// character goes into the converted buffer (`cbuf`), so it is not
+    /// converted again; otherwise it is pushed back like `ungetbyte`.
+    pub fn unget_char(&mut self, bytes: &[u8]) -> Result<()> {
+        if !self.universal_newline() {
+            return self.unget(bytes);
+        }
+        match &self.kind {
+            IoKind::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
+            IoKind::Stdout | IoKind::Stderr => {
+                return Err(MonorubyErr::ioerr("not opened for reading"));
+            }
+            IoKind::File(f) if !f.readable => {
+                return Err(MonorubyErr::ioerr("not opened for reading"));
+            }
+            _ => {}
+        }
+        self.push_char_pending(bytes);
+        Ok(())
+    }
+
+    /// Put back what was taken from the front of `cbuf` and not used.
+    pub fn restore_char_pending(&mut self, bytes: &[u8]) {
+        if !bytes.is_empty() {
+            self.push_char_pending(bytes);
+        }
+    }
+
+    /// Put already-converted bytes at the front of `cbuf`.
+    fn push_char_pending(&mut self, bytes: &[u8]) {
+        self.with_cbuf(|c| {
+            c.splice(0..0, bytes.iter().copied());
+        });
+    }
+
+    /// Push back bytes a universal-newline read has already converted.
+    /// They go into `cbuf` when they must not be converted again (a
+    /// `"\r"`, which can only have come from `cbuf`) or when `cbuf`
+    /// still holds bytes they precede; otherwise into the raw pushback,
+    /// where they read the same (converted bytes are a fixed point of
+    /// the decorator) and byte reads keep working.
+    fn unget_converted(&mut self, bytes: &[u8]) -> Result<()> {
+        if self.char_pending_len() > 0 || bytes.contains(&b'\r') {
+            self.push_char_pending(bytes);
+            Ok(())
+        } else {
+            self.unget(bytes)
+        }
+    }
+
+    /// Take up to `max` bytes (all if `None`) from the front of `cbuf`.
+    pub fn take_char_pending(&mut self, max: Option<usize>) -> Vec<u8> {
+        self.with_cbuf(|c| {
+            let n = max.map_or(c.len(), |m| m.min(c.len()));
+            c.drain(..n).collect()
+        })
+        .unwrap_or_default()
+    }
+
+    /// Drop the converted characters `ungetc` pushed back. CRuby's
+    /// `clear_readconv`: `IO#rewind` and binary mode discard them, while
+    /// `IO#seek` / `#pos=` keep them.
+    pub fn clear_char_pending(&mut self) {
+        self.with_cbuf(|c| c.clear());
     }
 
     /// Drop everything `ungetc` / `ungetbyte` pushed back. `rb_io_seek`
@@ -2162,18 +2292,39 @@ impl IoInner {
     /// (CRuby's decorator holds the `"\r"` until it sees the next byte,
     /// or the end of the stream). `acc` is what the line read holds so
     /// far, pushed back if the read is interrupted.
+    ///
+    /// Characters `ungetc` left in `cbuf` come first, unconverted.
     fn read1_universal(&mut self, acc: &[u8]) -> Result<Option<u8>> {
-        match self.read1_preserving(acc)? {
-            Some(b'\r') => {
-                let mut held = acc.to_vec();
-                held.push(b'\r');
-                match self.read1_preserving(&held)? {
-                    Some(b'\n') | None => {}
-                    Some(b) => self.unget(&[b])?,
+        if let Some(b) = self
+            .with_cbuf(|c| (!c.is_empty()).then(|| c.remove(0)))
+            .flatten()
+        {
+            return Ok(Some(b));
+        }
+        // On a restartable interrupt, push back the raw bytes read so
+        // far (`raw`), and in front of them the converted line (`acc`).
+        let keep = |io: &mut Self, err: MonorubyErr, raw: &[u8]| {
+            if err.is_signal_interrupt() || err.is_would_block_interrupt() {
+                if !raw.is_empty() {
+                    let _ = io.unget(raw);
+                }
+                if !acc.is_empty() {
+                    let _ = io.unget_converted(acc);
+                }
+            }
+            err
+        };
+        match self.read1() {
+            Err(err) => Err(keep(self, err, b"")),
+            Ok(Some(b'\r')) => {
+                match self.read1() {
+                    Err(err) => return Err(keep(self, err, b"\r")),
+                    Ok(Some(b'\n')) | Ok(None) => {}
+                    Ok(Some(b)) => self.unget(&[b])?,
                 }
                 Ok(Some(b'\n'))
             }
-            other => Ok(other),
+            other => other,
         }
     }
 
@@ -2188,12 +2339,15 @@ impl IoInner {
         complete_utf8: bool,
     ) -> Result<Option<Vec<u8>>> {
         if sep.is_none() && limit.is_none() {
-            let buf = universal_newline_bytes(self.read(None)?);
+            let rest = universal_newline_bytes(self.read(None)?);
+            let mut buf = self.take_char_pending(None);
+            buf.extend_from_slice(&rest);
             return Ok(if buf.is_empty() { None } else { Some(buf) });
         }
         // The default separator: a converted line ends at the first raw
-        // "\r" or "\n", so read up to either in bulk.
-        if sep == Some(b"\n".as_slice()) && limit.is_none() {
+        // "\r" or "\n", so read up to either in bulk. (Characters
+        // pending in `cbuf` take the byte-at-a-time path below.)
+        if sep == Some(b"\n".as_slice()) && limit.is_none() && self.char_pending_len() == 0 {
             let Some(mut line) =
                 self.read_line_bytes_by(|b: &[u8]| memchr::memchr2(b'\n', b'\r', b))?
             else {
@@ -2251,7 +2405,7 @@ impl IoInner {
                 match self.read1_universal(&buf)? {
                     Some(b'\n') => continue,
                     Some(b) => {
-                        self.unget(&[b])?;
+                        self.unget_converted(&[b])?;
                         break;
                     }
                     None => break,
