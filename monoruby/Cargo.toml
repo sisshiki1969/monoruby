@@ -46,6 +46,10 @@ gc-verify = []
 # code paths (LoadSpill / StoreSpill, spill-aware AsmInst lowerings,
 # 16-byte spill-region alignment).
 stress-spill-pool = []
+# Record a loop's back edge as the join with the one recorded before
+# (doc/fixpoint_engine_plan.md step A'), so the recorded back edges only
+# ever climb. Off by default until benchmarked on both architectures.
+fixpoint-join = []
 # Counters only: `profile` needs `TraceIr::format` for its deopt-site table,
 # not the bytecode dumps `dump-bc` brings.
 profile = ["dump-traceir"]

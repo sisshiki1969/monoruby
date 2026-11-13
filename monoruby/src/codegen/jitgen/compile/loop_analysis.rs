@@ -184,6 +184,8 @@ impl<'a> JitContext<'a> {
             for (head, backedge) in walk.backedge {
                 let liveness = walk.liveness[&head].clone();
                 if let Some(backedge) = backedge {
+                    #[cfg(feature = "fixpoint-join")]
+                    let backedge = self.accumulate_backedge(loop_start, head, backedge);
                     if let Some(be) = self.loop_backedge(head)
                         && be.equiv(&backedge)
                     {
@@ -256,6 +258,47 @@ impl<'a> JitContext<'a> {
             "<== back-edge fixpoint of {loop_start:?}..={loop_end:?} not reached in {limit} walks"
         );
         Err(CompileError)
+    }
+
+    ///
+    /// The back edge to record for *head* when a walk found *new*: its
+    /// join with the back edge recorded before, if any, so that the
+    /// recorded back edges only ever climb (`doc/fixpoint_engine_plan.md`
+    /// step A'). A walk can find a narrower back edge than the previous
+    /// one — a loop head's float adoption narrows below `incoming ⊔
+    /// backedge` (§2.4) — and recording it as it is made the sequence
+    /// rise and fall.
+    ///
+    /// The two sides must carry the same elided objects for the join: one
+    /// not on both is materialized, as `analyse_loop` does for the walk's
+    /// entry. The join keeps *new*'s placement where the two disagree.
+    ///
+    #[cfg(feature = "fixpoint-join")]
+    fn accumulate_backedge(
+        &self,
+        loop_start: BasicBlockId,
+        head: BasicBlockId,
+        mut new: AbstractState,
+    ) -> AbstractState {
+        let Some(old) = self.loop_backedge(head) else {
+            return new;
+        };
+        let mut old = old.clone();
+        if new.virtuals() != old.virtuals() {
+            let common: Vec<(SlotId, VirtualSrc)> = new
+                .virtuals()
+                .iter()
+                .filter(|v| old.virtuals().contains(v))
+                .copied()
+                .collect();
+            let pc = self.iseq().get_bb_pc(loop_start);
+            let mut ctx = JitContext::loop_analysis(self, pc, loop_start);
+            let mut scratch = AsmIr::new(&ctx);
+            ctx.materialize_except(&mut new, &mut scratch, &common);
+            ctx.materialize_except(&mut old, &mut scratch, &common);
+        }
+        new.join(&old);
+        new
     }
 
     fn analyse_loop(
