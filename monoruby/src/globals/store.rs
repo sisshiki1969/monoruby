@@ -1358,6 +1358,21 @@ impl Store {
     /// labeled by the owner that actually dispatched — `Q.f` when
     /// called on the module, `Q#f` from an instance (CRuby).
     pub(crate) fn func_description_for(&self, func_id: FuncId, frame_self: Option<Value>) -> String {
+        self.func_description_hinted(func_id, Self::label_hint(frame_self))
+    }
+
+    /// The part of a frame's `self` that [`Self::func_description_for`]
+    /// labels by: the class or module it is, if it is one. A backtrace
+    /// keeps this rather than `self`, so it holds no `Value`.
+    pub(crate) fn label_hint(frame_self: Option<Value>) -> Option<ClassId> {
+        frame_self
+            .and_then(|sv| sv.is_class_or_module())
+            .map(|module| module.id())
+    }
+
+    /// [`Self::func_description_for`] with the frame's `self` reduced to
+    /// [`Self::label_hint`].
+    pub(crate) fn func_description_hinted(&self, func_id: FuncId, hint: Option<ClassId>) -> String {
         let info = &self[func_id];
         let name = if let Some(iseq_id) = info.is_iseq() {
             let iseq = &self[iseq_id];
@@ -1375,7 +1390,7 @@ impl Store {
                 if iseq.is_eval
                     && let Some(outer) = iseq.outer
                 {
-                    return self.func_description_for(self[outer].func_id(), frame_self);
+                    return self.func_description_hinted(self[outer].func_id(), hint);
                 }
                 // Block nesting depth: hops up the lexical chain to the
                 // first non-block scope — or the `_MAIN`-stamped main
@@ -1396,8 +1411,8 @@ impl Store {
                     base = outer_iseq.outer;
                 }
                 let base_desc = match base {
-                    Some(o) => self.func_description_for(self[o].func_id(), frame_self),
-                    None => self.func_description_for(self[mother].func_id(), frame_self),
+                    Some(o) => self.func_description_hinted(self[o].func_id(), hint),
+                    None => self.func_description_hinted(self[mother].func_id(), hint),
                 };
                 return if depth == 1 {
                     format!("block in {base_desc}")
@@ -1459,15 +1474,16 @@ impl Store {
         // With a frame-self hint and several owners, prefer the owner
         // whose singleton class is attached to that self (the entry
         // `module_function` dispatched), falling back to the first.
-        let owner = match frame_self {
-            Some(sv) if info.owner_class().len() > 1 => info
+        let owner = match hint {
+            Some(module) if info.owner_class().len() > 1 => info
                 .owner_class()
                 .iter()
                 .find(|o| {
                     self[**o]
                         .get_module()
                         .is_singleton()
-                        .is_some_and(|obj| obj.id() == sv.id())
+                        .and_then(|obj| obj.is_class_or_module())
+                        .is_some_and(|attached| attached.id() == module)
                 })
                 .or_else(|| info.owner_class().first()),
             _ => info.owner_class().first(),
@@ -1492,17 +1508,26 @@ impl Store {
         }
     }
 
-    pub fn location(&self, func_id: Option<FuncId>, source: &SourceInfoRef, loc: Loc) -> String {
-        let source = source.clone();
-        if let Some(func_id) = func_id {
-            format!(
+    /// One backtrace entry as CRuby prints it: `file:line:in 'label'`,
+    /// `file:line` for a frame with no function, `<internal>:in 'label'`
+    /// for a native frame with no source location.
+    pub(crate) fn trace_entry_location(&self, entry: &TraceEntry) -> String {
+        let (source_loc, func_id, hint) = entry;
+        match (source_loc, func_id) {
+            (Some((loc, source)), Some(func_id)) => format!(
                 "{}:{}:in '{}'",
-                display_path(&source),
-                source.get_line(&loc),
-                self.func_description(func_id)
-            )
-        } else {
-            format!("{}:{}", display_path(&source), source.get_line(&loc))
+                display_path(source),
+                source.get_line(loc),
+                self.func_description_hinted(*func_id, *hint)
+            ),
+            (Some((loc, source)), None) => {
+                format!("{}:{}", display_path(source), source.get_line(loc))
+            }
+            (None, Some(func_id)) => format!(
+                "<internal>:in '{}'",
+                self.func_description_hinted(*func_id, *hint)
+            ),
+            (None, None) => "<internal>".to_string(),
         }
     }
 
@@ -1532,10 +1557,6 @@ impl Store {
         } else {
             "<internal>:0".to_string()
         }
-    }
-
-    pub fn internal_location(&self, func_id: FuncId) -> String {
-        format!("<internal>:in '{}'", self.func_description(func_id))
     }
 }
 

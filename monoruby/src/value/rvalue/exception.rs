@@ -45,20 +45,14 @@ impl ExceptionInner {
         &self.message
     }
 
-    pub fn trace(&self) -> &[(Option<(Loc, SourceInfoRef)>, Option<FuncId>)] {
+    pub fn trace(&self) -> &[TraceEntry] {
         &self.trace
     }
 
     pub fn trace_location(&self, store: &Store) -> Vec<String> {
         self.trace
             .iter()
-            .map(|(source_loc, fid)| {
-                if let Some((loc, source)) = source_loc {
-                    store.location(fid.clone(), source, *loc)
-                } else {
-                    store.internal_location(fid.unwrap())
-                }
-            })
+            .map(|entry| store.trace_entry_location(entry))
             .collect()
     }
 

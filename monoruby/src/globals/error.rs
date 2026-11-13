@@ -72,24 +72,31 @@ fn show_string_backtrace(bt: &[String], error_message: &str) {
 /// Print `trace`'s caller frames (everything after the header entry) as
 /// `\tfrom <location>` lines, honouring `--backtrace-limit=N`: after N
 /// frames the rest collapse into `\t ... K levels...`.
-fn show_trace_rest(store: &Store, trace: &[(Option<(Loc, SourceInfoRef)>, Option<FuncId>)]) {
+fn show_trace_rest(store: &Store, trace: &[TraceEntry]) {
     if trace.len() <= 1 {
         return;
     }
     let rest = &trace[1..];
     let limit = crate::globals::backtrace_limit().unwrap_or(usize::MAX);
-    for (i, (source_loc, func_id)) in rest.iter().enumerate() {
+    for (i, entry) in rest.iter().enumerate() {
         if i >= limit {
             eprintln!("\t ... {} levels...", rest.len() - i);
             break;
         }
-        if let Some((loc, source)) = source_loc {
-            eprintln!("\tfrom {}", store.location(*func_id, source, *loc));
-        } else {
-            eprintln!("\tfrom {}", store.internal_location(func_id.unwrap()))
-        }
+        eprintln!("\tfrom {}", store.trace_entry_location(entry));
     }
 }
+
+/// One backtrace frame: its source location (`None` for a native frame
+/// with no resolvable call site), its function, and the
+/// [`Store::label_hint`] of the frame's `self`, which picks the label of
+/// a function owned by several modules (`M.f` and `M#f` for
+/// `module_function`'s two copies).
+pub type TraceEntry = (
+    Option<(Loc, SourceInfoRef)>,
+    Option<FuncId>,
+    Option<ClassId>,
+);
 
 ///
 /// Exception information which is stored in *Executor*.
@@ -98,7 +105,7 @@ fn show_trace_rest(store: &Store, trace: &[(Option<(Loc, SourceInfoRef)>, Option
 pub struct MonorubyErr {
     pub kind: MonorubyErrKind,
     pub message: String,
-    pub trace: Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)>,
+    pub trace: Vec<TraceEntry>,
     /// When re-raising an existing exception object, the original
     /// `Value`. `Executor::take_ex_obj` returns this object instead of
     /// materialising a fresh one, preserving the object's identity and
@@ -212,7 +219,7 @@ impl MonorubyErr {
         MonorubyErr {
             kind,
             message: msg,
-            trace: vec![(Some((loc, sourceinfo)), func_id)],
+            trace: vec![(Some((loc, sourceinfo)), func_id, None)],
             original: None,
             explicit_cause: None,
             raw_message: None,
@@ -304,16 +311,29 @@ impl MonorubyErr {
         self.default_message_class = None;
     }
 
-    pub fn trace(&self) -> &[(Option<(Loc, SourceInfoRef)>, Option<FuncId>)] {
+    pub fn trace(&self) -> &[TraceEntry] {
         &self.trace
     }
 
     pub fn push_trace(&mut self, loc: Loc, sourceinfo: SourceInfoRef, fid: FuncId) {
-        self.trace.push((Some((loc, sourceinfo)), Some(fid)));
+        self.trace.push((Some((loc, sourceinfo)), Some(fid), None));
+    }
+
+    /// [`Self::push_trace`] for a frame whose `self` is known, so the
+    /// label follows the module that dispatched (see [`TraceEntry`]).
+    pub fn push_trace_with_self(
+        &mut self,
+        loc: Loc,
+        sourceinfo: SourceInfoRef,
+        fid: FuncId,
+        frame_self: Value,
+    ) {
+        let hint = Store::label_hint(Some(frame_self));
+        self.trace.push((Some((loc, sourceinfo)), Some(fid), hint));
     }
 
     pub fn push_internal_trace(&mut self, fid: FuncId) {
-        self.trace.push((None, Some(fid)));
+        self.trace.push((None, Some(fid), None));
     }
 
     /// The frame of a callee whose arguments could not be bound (a wrong
@@ -337,7 +357,7 @@ impl MonorubyErr {
         }
     }
 
-    pub fn take_trace(&mut self) -> Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)> {
+    pub fn take_trace(&mut self) -> Vec<TraceEntry> {
         std::mem::take(&mut self.trace)
     }
 
@@ -382,11 +402,8 @@ impl MonorubyErr {
             } else {
                 let trace = inner.trace();
                 match trace.first() {
-                    Some((Some((loc, source)), func_id)) => {
-                        eprintln!("{}: {msg}", store.location(*func_id, source, *loc));
-                    }
-                    Some((None, Some(fid))) => {
-                        eprintln!("{}: {msg}", store.internal_location(*fid));
+                    Some(entry @ ((Some(_), _, _) | (None, Some(_), _))) => {
+                        eprintln!("{}: {msg}", store.trace_entry_location(entry));
                     }
                     _ => eprintln!("{msg}"),
                 }
@@ -398,13 +415,10 @@ impl MonorubyErr {
 
     fn show_error_message_and_loc(&self, store: &Store) -> bool {
         let mut loc_flag = false;
-        if let Some((source_loc, func_id)) = self.trace.first() {
+        if let Some(entry @ (source_loc, func_id, _)) = self.trace.first() {
             let error_message = self.get_error_message(store);
             if let Some((loc, source)) = source_loc {
-                eprintln!(
-                    "{}: {error_message}",
-                    store.location(func_id.clone(), source, *loc),
-                );
+                eprintln!("{}: {error_message}", store.trace_entry_location(entry));
                 // CRuby's runtime-error report is the compact
                 // `file:line:in 'method': message` form; only syntax
                 // errors keep the source excerpt with a caret.
@@ -412,8 +426,8 @@ impl MonorubyErr {
                     source.show_loc(loc);
                     loc_flag = true;
                 }
-            } else if let Some(func_id) = func_id {
-                eprintln!("{}: {error_message}", store.internal_location(*func_id),);
+            } else if func_id.is_some() {
+                eprintln!("{}: {error_message}", store.trace_entry_location(entry));
             } else {
                 eprintln!("<internal>: {error_message}");
             }

@@ -1494,7 +1494,9 @@ pub(crate) fn push_builtin_trace(
     }
     let originating = err.trace().is_empty();
     match native_call_site(globals, vm.cfp()) {
-        Some((loc, source)) => err.push_trace(loc, source, fid),
+        Some((loc, source)) => {
+            err.push_trace_with_self(loc, source, fid, vm.cfp().lfp().self_val())
+        }
         // With no resolvable call site an originating error keeps the
         // Ruby caller as its innermost frame (a bare `<internal>` header
         // would be worse); a propagating error keeps the established
@@ -11541,6 +11543,31 @@ mod tests {
             r#"this = caller_locations(0)[0].label
                [eval("caller_locations(0)[0].label") == this, binding.eval("caller_locations(0)[0].label") == this]"#,
         ]);
+    }
+
+    /// An exception's backtrace labels a `module_function` method by the
+    /// copy that ran (#1881): `M.f` called on the module, `M#f` from an
+    /// instance, blocks and builtin module functions (`Math.sqrt`) alike.
+    #[test]
+    fn backtrace_labels_module_function_copies() {
+        run_test_once(
+            r#"
+            module BTMF
+              module_function
+              def f = raise("x")
+              def g = [1].each { raise "y" }
+              def w = BTMF2.k
+            end
+            module BTMF2; def self.k = raise("z"); end
+            class BTMFC; include BTMF; def t = f; def u = g; end
+            [-> { BTMF.f }, -> { BTMFC.new.t }, -> { BTMF.g }, -> { BTMFC.new.u }, -> { BTMF.w },
+             -> { Math.sqrt(-1) }].map do |l|
+              l.call
+            rescue => e
+              [e.backtrace[0].sub(/^.*:in /, ""), e.backtrace_locations.map(&:label).grep(/BTMF|Math/)]
+            end
+            "#,
+        );
     }
 
     #[test]
