@@ -24,7 +24,7 @@ impl<'a> BytecodeGen<'a> {
             && let NodeKind::Integer(_) = start.kind
         {
             assert_eq!(1, param.len());
-            let c_name = IdentId::get_id(&param[0].1);
+            let c_name = self.ident(&param[0].1);
             let c_outer = param[0].0;
             let counter = if c_outer == 0 {
                 Counter::Local(self.assign_local(c_name).into())
@@ -532,7 +532,7 @@ impl<'a> BytecodeGen<'a> {
                         else {
                             unreachable!()
                         };
-                        let setter = IdentId::get_id_from_string(format!("{method}="));
+                        let setter = self.ident(&format!("{method}="));
                         let old = self.temp;
                         let recv = self.push_expr(receiver)?.into();
                         let skip = self.new_label();

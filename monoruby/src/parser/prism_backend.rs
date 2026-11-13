@@ -187,9 +187,15 @@ fn build_prism_options(
         // Walk outermost -> innermost.
         for scope_idx in (0..ctx.len()).rev() {
             let (locals, block_param) = &ctx[scope_idx];
-            let mut names: Vec<String> = locals.keys().map(|id: &IdentId| id.get_name()).collect();
+            // prism matches the eval source's bytes against these, so a
+            // local of a non-UTF-8 source is handed over as its bytes
+            // (`x\x87]` of a Windows-31J one), not as lossy text.
+            let mut names: Vec<Vec<u8>> = locals
+                .keys()
+                .map(|id: &IdentId| id.get_ident_name_clone().as_bytes().to_vec())
+                .collect();
             if let Some(blk_id) = block_param {
-                let name = blk_id.get_name();
+                let name = blk_id.get_ident_name_clone().as_bytes().to_vec();
                 // A reassigned `&block` already has a local slot.
                 if !names.contains(&name) {
                     names.push(name);
@@ -216,7 +222,13 @@ fn build_prism_options(
     //   the binding's locals go in as the last (eval-body-itself)
     //   scope, and we don't append a separate empty placeholder.
     if let Some(coll) = binding_locals {
-        let names: Vec<String> = coll.table().iter().cloned().collect();
+        let names: Vec<Vec<u8>> = coll
+            .table()
+            .iter()
+            .map(|n| {
+                crate::id_table::uncarry_source_ident(n).unwrap_or_else(|| n.as_bytes().to_vec())
+            })
+            .collect();
         scopes.push(prism::Scope::new(names));
     } else {
         scopes.push(prism::Scope::new(Vec::<&[u8]>::new()));
@@ -698,6 +710,11 @@ struct Lowerer<'pr> {
     /// compiles and so is the one caller that would otherwise miss an
     /// `unsupported_node` inside a method body.
     defer_bodies: bool,
+    /// Whether the source is in an encoding other than UTF-8, whose
+    /// non-ASCII identifiers travel through the AST as
+    /// [`carry_source_ident`](crate::id_table::carry_source_ident) text
+    /// (see [`Lowerer::ident_name`]).
+    carry_idents: bool,
 }
 
 /// See [`Lowerer::scope_wraps`].
@@ -727,6 +744,49 @@ impl<'pr> Lowerer<'pr> {
             cli_loop_wrap: None,
             ctx: ctx.clone(),
             defer_bodies: true,
+            carry_idents: ctx
+                .source_info
+                .source_encoding
+                .as_deref()
+                .and_then(|name| crate::value::Encoding::try_from_str(name).ok())
+                .is_some_and(|enc| !matches!(enc, crate::value::Encoding::Utf8(_))),
+        }
+    }
+
+    /// An identifier (a constant, method, variable or parameter name)
+    /// as the AST carries it: the text of a UTF-8 source, and for any
+    /// other source encoding the bytes in
+    /// [`carry_source_ident`](crate::id_table::carry_source_ident)'s
+    /// form, which bytecodegen interns under the source encoding
+    /// ([`IdentId::get_id_from_source`]) — so `V\xCF\x80x` of a BINARY
+    /// source names a BINARY constant and `m\x87]` of a Windows-31J one
+    /// a Windows-31J method, as in CRuby.
+    fn ident_name(&self, bytes: &[u8]) -> String {
+        if self.carry_idents && !bytes.is_ascii() {
+            return crate::id_table::carry_source_ident(bytes);
+        }
+        match std::str::from_utf8(bytes) {
+            Ok(s) => s.to_owned(),
+            // prism has rejected an identifier that is not UTF-8 in a
+            // UTF-8 source, so this is not reached.
+            Err(_) => String::from_utf8_lossy(bytes).into_owned(),
+        }
+    }
+
+    /// [`ident_name`](Self::ident_name) of a prism constant (an
+    /// identifier the parser interned).
+    fn constant_name(&self, id: &ConstantId<'_>) -> Result<String, MonorubyErr> {
+        Ok(self.ident_name(id.as_slice()))
+    }
+
+    /// A symbol literal the lowerer makes of an identifier
+    /// ([`ident_name`](Self::ident_name)'s text): the source bytes of a
+    /// carried name, which bytecodegen interns under the source
+    /// encoding, as it does a written symbol literal's.
+    fn ident_symbol(&self, name: String) -> IdentName {
+        match crate::id_table::uncarry_source_ident(&name) {
+            Some(bytes) if self.carry_idents => IdentName::Bytes(bytes),
+            _ => IdentName::Utf8(name),
         }
     }
 
@@ -965,7 +1025,7 @@ impl<'pr> Lowerer<'pr> {
 
     fn collect_locals(&mut self, locals: &ConstantList<'pr>) -> Result<(), MonorubyErr> {
         for id in locals.iter() {
-            let name = constant_name(&id)?;
+            let name = self.constant_name(&id)?;
             self.lvars.insert(&name);
         }
         Ok(())
@@ -984,7 +1044,7 @@ impl<'pr> Lowerer<'pr> {
         let mut names = vec![];
         for n in locals.iter() {
             if let Some(blv) = n.as_block_local_variable_node() {
-                let name = constant_name(&blv.name())?;
+                let name = self.constant_name(&blv.name())?;
                 self.lvars.insert(&name);
                 names.push(name.to_string());
             }
@@ -1302,8 +1362,10 @@ impl<'pr> Lowerer<'pr> {
                         _ => unreachable!("MatchWriteNode target is not a local variable"),
                     };
                     let regexp = Node::new_const("Regexp".to_string(), false, None, vec![], loc);
-                    let arglist =
-                        crate::ast::ArgList::from_args(vec![Node::new_symbol(cap_name, loc)]);
+                    let arglist = crate::ast::ArgList::from_args(vec![Node::new_symbol_name(
+                        self.ident_symbol(cap_name),
+                        loc,
+                    )]);
                     let last_match =
                         Node::new_mcall(regexp, "last_match".to_string(), arglist, false, loc);
                     stmts.push(Node::new_mul_assign(vec![tgt], vec![last_match]));
@@ -1345,7 +1407,7 @@ impl<'pr> Lowerer<'pr> {
                 let n = node.as_local_variable_operator_write_node().unwrap();
                 let target = Node {
                     kind: {
-                        let name = constant_name(&n.name())?;
+                        let name = self.constant_name(&n.name())?;
                         let depth = self.adjust_lvar_depth(n.depth() as usize, &name);
                         NodeKind::LocalVar(depth, name)
                     },
@@ -1357,7 +1419,7 @@ impl<'pr> Lowerer<'pr> {
                 let n = node.as_local_variable_or_write_node().unwrap();
                 let target = Node {
                     kind: {
-                        let name = constant_name(&n.name())?;
+                        let name = self.constant_name(&n.name())?;
                         let depth = self.adjust_lvar_depth(n.depth() as usize, &name);
                         NodeKind::LocalVar(depth, name)
                     },
@@ -1369,7 +1431,7 @@ impl<'pr> Lowerer<'pr> {
                 let n = node.as_local_variable_and_write_node().unwrap();
                 let target = Node {
                     kind: {
-                        let name = constant_name(&n.name())?;
+                        let name = self.constant_name(&n.name())?;
                         let depth = self.adjust_lvar_depth(n.depth() as usize, &name);
                         NodeKind::LocalVar(depth, name)
                     },
@@ -1380,7 +1442,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::InstanceVariableOperatorWriteNode { .. } => {
                 let n = node.as_instance_variable_operator_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::InstanceVar(constant_name(&n.name())?),
+                    kind: NodeKind::InstanceVar(self.constant_name(&n.name())?),
                     loc: location_to_loc(&n.name_loc()),
                 };
                 self.build_op_assign(target, &n.binary_operator(), &n.value(), loc)?
@@ -1388,7 +1450,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::InstanceVariableOrWriteNode { .. } => {
                 let n = node.as_instance_variable_or_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::InstanceVar(constant_name(&n.name())?),
+                    kind: NodeKind::InstanceVar(self.constant_name(&n.name())?),
                     loc: location_to_loc(&n.name_loc()),
                 };
                 self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
@@ -1396,7 +1458,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::InstanceVariableAndWriteNode { .. } => {
                 let n = node.as_instance_variable_and_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::InstanceVar(constant_name(&n.name())?),
+                    kind: NodeKind::InstanceVar(self.constant_name(&n.name())?),
                     loc: location_to_loc(&n.name_loc()),
                 };
                 self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
@@ -1404,7 +1466,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::GlobalVariableOperatorWriteNode { .. } => {
                 let n = node.as_global_variable_operator_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::GlobalVar(constant_name(&n.name())?),
+                    kind: NodeKind::GlobalVar(self.constant_name(&n.name())?),
                     loc: location_to_loc(&n.name_loc()),
                 };
                 self.build_op_assign(target, &n.binary_operator(), &n.value(), loc)?
@@ -1412,7 +1474,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::GlobalVariableOrWriteNode { .. } => {
                 let n = node.as_global_variable_or_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::GlobalVar(constant_name(&n.name())?),
+                    kind: NodeKind::GlobalVar(self.constant_name(&n.name())?),
                     loc: location_to_loc(&n.name_loc()),
                 };
                 // `$x ||= v` must not fire the verbose-mode
@@ -1436,7 +1498,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::GlobalVariableAndWriteNode { .. } => {
                 let n = node.as_global_variable_and_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::GlobalVar(constant_name(&n.name())?),
+                    kind: NodeKind::GlobalVar(self.constant_name(&n.name())?),
                     loc: location_to_loc(&n.name_loc()),
                 };
                 self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
@@ -1444,7 +1506,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::ClassVariableOperatorWriteNode { .. } => {
                 let n = node.as_class_variable_operator_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::ClassVar(constant_name(&n.name())?),
+                    kind: NodeKind::ClassVar(self.constant_name(&n.name())?),
                     loc: location_to_loc(&n.name_loc()),
                 };
                 self.build_op_assign(target, &n.binary_operator(), &n.value(), loc)?
@@ -1452,7 +1514,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::ClassVariableOrWriteNode { .. } => {
                 let n = node.as_class_variable_or_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::ClassVar(constant_name(&n.name())?),
+                    kind: NodeKind::ClassVar(self.constant_name(&n.name())?),
                     loc: location_to_loc(&n.name_loc()),
                 };
                 self.build_short_circuit_assign(BinOp::LOr, target, &n.value(), loc)?
@@ -1460,7 +1522,7 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::ClassVariableAndWriteNode { .. } => {
                 let n = node.as_class_variable_and_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::ClassVar(constant_name(&n.name())?),
+                    kind: NodeKind::ClassVar(self.constant_name(&n.name())?),
                     loc: location_to_loc(&n.name_loc()),
                 };
                 self.build_short_circuit_assign(BinOp::LAnd, target, &n.value(), loc)?
@@ -1472,7 +1534,7 @@ impl<'pr> Lowerer<'pr> {
                         toplevel: false,
                         parent: None,
                         prefix: vec![],
-                        name: constant_name(&n.name())?,
+                        name: self.constant_name(&n.name())?,
                     })),
                     loc: location_to_loc(&n.name_loc()),
                 };
@@ -1485,7 +1547,7 @@ impl<'pr> Lowerer<'pr> {
                         toplevel: false,
                         parent: None,
                         prefix: vec![],
-                        name: constant_name(&n.name())?,
+                        name: self.constant_name(&n.name())?,
                     })),
                     loc: location_to_loc(&n.name_loc()),
                 };
@@ -1499,7 +1561,7 @@ impl<'pr> Lowerer<'pr> {
                         toplevel: false,
                         parent: None,
                         prefix: vec![],
-                        name: constant_name(&n.name())?,
+                        name: self.constant_name(&n.name())?,
                     })),
                     loc: location_to_loc(&n.name_loc()),
                 };
@@ -1707,7 +1769,7 @@ impl<'pr> Lowerer<'pr> {
                         let inner = index.as_local_variable_target_node().unwrap();
                         (
                             {
-                                let name = constant_name(&inner.name())?;
+                                let name = self.constant_name(&inner.name())?;
                                 let depth =
                                     self.adjust_lvar_depth(inner.depth() as usize, &name);
                                 vec![(depth, name)]
@@ -1733,7 +1795,7 @@ impl<'pr> Lowerer<'pr> {
                             for tgt in mt.lefts().iter() {
                                 let inner = tgt.as_local_variable_target_node().unwrap();
                                 out.push({
-                                    let name = constant_name(&inner.name())?;
+                                    let name = self.constant_name(&inner.name())?;
                                     let depth = self
                                         .adjust_lvar_depth(inner.depth() as usize, &name);
                                     (depth, name)
@@ -1846,7 +1908,7 @@ impl<'pr> Lowerer<'pr> {
                 // warning the guard suppresses cannot fire here.
                 let inner = if let Some(gw) = value.as_global_variable_or_write_node() {
                     let target = Node {
-                        kind: NodeKind::GlobalVar(constant_name(&gw.name())?),
+                        kind: NodeKind::GlobalVar(self.constant_name(&gw.name())?),
                         loc: location_to_loc(&gw.name_loc()),
                     };
                     let inner_loc = location_to_loc(&value.location());
@@ -2058,14 +2120,14 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::ClassVariableReadNode { .. } => {
                 let n = node.as_class_variable_read_node().unwrap();
                 Node {
-                    kind: NodeKind::ClassVar(constant_name(&n.name())?),
+                    kind: NodeKind::ClassVar(self.constant_name(&n.name())?),
                     loc,
                 }
             }
             prism::Node::ClassVariableWriteNode { .. } => {
                 let n = node.as_class_variable_write_node().unwrap();
                 let target = Node {
-                    kind: NodeKind::ClassVar(constant_name(&n.name())?),
+                    kind: NodeKind::ClassVar(self.constant_name(&n.name())?),
                     loc: location_to_loc(&n.name_loc()),
                 };
                 let value = self.lower_node(&n.value())?;
@@ -2117,7 +2179,7 @@ impl<'pr> Lowerer<'pr> {
                 // included.
                 let n = node.as_back_reference_read_node().unwrap();
                 Node {
-                    kind: NodeKind::GlobalVar(constant_name(&n.name())?),
+                    kind: NodeKind::GlobalVar(self.constant_name(&n.name())?),
                     loc,
                 }
             }
@@ -2309,7 +2371,7 @@ impl<'pr> Lowerer<'pr> {
     }
 
     fn lower_local_var_read(&mut self, node: &LocalVariableReadNode<'pr>) -> Result<Node, MonorubyErr> {
-        let name = constant_name(&node.name())?;
+        let name = self.constant_name(&node.name())?;
         Ok(Node {
             kind: NodeKind::LocalVar(self.adjust_lvar_depth(node.depth() as usize, &name), name),
             loc: location_to_loc(&node.location()),
@@ -2320,7 +2382,7 @@ impl<'pr> Lowerer<'pr> {
         &mut self,
         node: &LocalVariableWriteNode<'pr>,
     ) -> Result<Node, MonorubyErr> {
-        let name = constant_name(&node.name())?;
+        let name = self.constant_name(&node.name())?;
         let depth = self.adjust_lvar_depth(node.depth() as usize, &name);
         let target = Node {
             kind: NodeKind::LocalVar(depth, name),
@@ -2937,12 +2999,12 @@ impl<'pr> Lowerer<'pr> {
         match path {
             prism::Node::ConstantReadNode { .. } => {
                 let n = path.as_constant_read_node().unwrap();
-                Ok((None, constant_name(&n.name())?))
+                Ok((None, self.constant_name(&n.name())?))
             }
             prism::Node::ConstantPathNode { .. } => {
                 let n = path.as_constant_path_node().unwrap();
                 let name = match n.name() {
-                    Some(id) => constant_name(&id)?,
+                    Some(id) => self.constant_name(&id)?,
                     None => {
                         return Err(self.unsupported_node(
                             "class path missing name",
@@ -3004,7 +3066,7 @@ impl<'pr> Lowerer<'pr> {
                 toplevel: false,
                 parent: None,
                 prefix: vec![],
-                name: constant_name(&node.name())?,
+                name: self.constant_name(&node.name())?,
             })),
             loc: location_to_loc(&node.location()),
         })
@@ -3062,13 +3124,13 @@ impl<'pr> Lowerer<'pr> {
                     toplevel: false,
                     parent: None,
                     prefix: vec![],
-                    name: constant_name(&n.name())?,
+                    name: self.constant_name(&n.name())?,
                 }))
             }
             prism::Node::ConstantPathNode { .. } => {
                 let n = node.as_constant_path_node().unwrap();
                 let name = match n.name() {
-                    Some(id) => constant_name(&id)?,
+                    Some(id) => self.constant_name(&id)?,
                     None => {
                         return Err(self.unsupported_node(
                             "constant path missing name",
@@ -3130,7 +3192,7 @@ impl<'pr> Lowerer<'pr> {
         loc: &Location<'pr>,
     ) -> Result<Node, MonorubyErr> {
         Ok(Node {
-            kind: kind(constant_name(name)?),
+            kind: kind(self.constant_name(name)?),
             loc: location_to_loc(loc),
         })
     }
@@ -3144,7 +3206,7 @@ impl<'pr> Lowerer<'pr> {
         full_loc: &Location<'pr>,
     ) -> Result<Node, MonorubyErr> {
         let target = Node {
-            kind: kind(constant_name(name)?),
+            kind: kind(self.constant_name(name)?),
             loc: location_to_loc(name_loc),
         };
         let value = self.lower_node(value)?;
@@ -3354,7 +3416,7 @@ impl<'pr> Lowerer<'pr> {
     ) -> Result<Node, MonorubyErr> {
         let recv = receiver.ok_or(self.unsupported_node("attr op-assign without receiver", loc))?;
         let receiver_node = self.lower_node(recv)?;
-        let method = constant_name(read_name)?;
+        let method = self.constant_name(read_name)?;
         Ok(Node {
             kind: NodeKind::MethodCall {
                 receiver: Box::new(receiver_node),
@@ -3406,7 +3468,7 @@ impl<'pr> Lowerer<'pr> {
         value: &prism::Node<'pr>,
         loc: Loc,
     ) -> Result<Node, MonorubyErr> {
-        let op_name = constant_name(op_id)?;
+        let op_name = self.constant_name(op_id)?;
         let op = binop_from_name(&op_name)
             .ok_or(self.unsupported_node("unknown op-assign operator", loc))?;
         let value = self.lower_node(value)?;
@@ -4116,7 +4178,7 @@ impl<'pr> Lowerer<'pr> {
                 let n = node.as_local_variable_target_node().unwrap();
                 Node {
                     kind: {
-                        let name = constant_name(&n.name())?;
+                        let name = self.constant_name(&n.name())?;
                         let depth = self.adjust_lvar_depth(n.depth() as usize, &name);
                         NodeKind::LocalVar(depth, name)
                     },
@@ -4126,21 +4188,21 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::InstanceVariableTargetNode { .. } => {
                 let n = node.as_instance_variable_target_node().unwrap();
                 Node {
-                    kind: NodeKind::InstanceVar(constant_name(&n.name())?),
+                    kind: NodeKind::InstanceVar(self.constant_name(&n.name())?),
                     loc,
                 }
             }
             prism::Node::GlobalVariableTargetNode { .. } => {
                 let n = node.as_global_variable_target_node().unwrap();
                 Node {
-                    kind: NodeKind::GlobalVar(constant_name(&n.name())?),
+                    kind: NodeKind::GlobalVar(self.constant_name(&n.name())?),
                     loc,
                 }
             }
             prism::Node::ClassVariableTargetNode { .. } => {
                 let n = node.as_class_variable_target_node().unwrap();
                 Node {
-                    kind: NodeKind::ClassVar(constant_name(&n.name())?),
+                    kind: NodeKind::ClassVar(self.constant_name(&n.name())?),
                     loc,
                 }
             }
@@ -4151,7 +4213,7 @@ impl<'pr> Lowerer<'pr> {
                         toplevel: false,
                         parent: None,
                         prefix: vec![],
-                        name: constant_name(&n.name())?,
+                        name: self.constant_name(&n.name())?,
                     })),
                     loc,
                 }
@@ -4170,7 +4232,7 @@ impl<'pr> Lowerer<'pr> {
                 // by reading the parent chain plus this target's name.
                 let n = node.as_constant_path_target_node().unwrap();
                 let name = match n.name() {
-                    Some(id) => constant_name(&id)?,
+                    Some(id) => self.constant_name(&id)?,
                     None => {
                         return Err(self.unsupported_node("constant path target missing name", loc));
                     }
@@ -4228,7 +4290,7 @@ impl<'pr> Lowerer<'pr> {
                 // here.
                 let n = node.as_call_target_node().unwrap();
                 let receiver = self.lower_node(&n.receiver())?;
-                let raw = constant_name(&n.name())?;
+                let raw = self.constant_name(&n.name())?;
                 let method = raw.strip_suffix('=').unwrap_or(&raw).to_owned();
                 Node {
                     kind: NodeKind::MethodCall {
@@ -4604,7 +4666,7 @@ impl<'pr> Lowerer<'pr> {
 
     fn lower_constant_write(&mut self, node: &ConstantWriteNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
-        let name = constant_name(&node.name())?;
+        let name = self.constant_name(&node.name())?;
         let target = Node {
             kind: NodeKind::Const(Box::new(ConstInfo {
                 toplevel: false,
@@ -4629,7 +4691,7 @@ impl<'pr> Lowerer<'pr> {
     /// `ensure` see a uniform structure.
     fn lower_def(&mut self, node: &DefNode<'pr>) -> Result<Node, MonorubyErr> {
         let loc = location_to_loc(&node.location());
-        let name = constant_name(&node.name())?;
+        let name = self.constant_name(&node.name())?;
 
         // `def self.foo`, `def obj.foo` — Prism puts the receiver in
         // `node.receiver()`. It is evaluated in the *enclosing* scope
@@ -4948,7 +5010,7 @@ impl<'pr> Lowerer<'pr> {
         match el {
             prism::Node::RequiredParameterNode { .. } => {
                 let inner = el.as_required_parameter_node().unwrap();
-                let name = constant_name(&inner.name())?;
+                let name = self.constant_name(&inner.name())?;
                 self.lvars.insert(&name);
                 entries.push(DestructEntry::Param(name, location_to_loc(&inner.location())));
             }
@@ -4982,7 +5044,7 @@ impl<'pr> Lowerer<'pr> {
                         Some(e) => match e {
                             prism::Node::RequiredParameterNode { .. } => {
                                 let rp = e.as_required_parameter_node().unwrap();
-                                let name = constant_name(&rp.name())?;
+                                let name = self.constant_name(&rp.name())?;
                                 self.lvars.insert(&name);
                                 Some(name)
                             }
@@ -5023,7 +5085,7 @@ impl<'pr> Lowerer<'pr> {
             match n {
                 prism::Node::RequiredParameterNode { .. } => {
                     let inner = n.as_required_parameter_node().unwrap();
-                    let name = constant_name(&inner.name())?;
+                    let name = self.constant_name(&inner.name())?;
                     self.lvars.insert(&name);
                     out.push(crate::ast::FormalParam {
                         kind: ParamKind::Param(name),
@@ -5057,7 +5119,7 @@ impl<'pr> Lowerer<'pr> {
             match n {
                 prism::Node::OptionalParameterNode { .. } => {
                     let inner = n.as_optional_parameter_node().unwrap();
-                    let name = constant_name(&inner.name())?;
+                    let name = self.constant_name(&inner.name())?;
                     self.lvars.insert(&name);
                     let default = self.lower_node(&inner.value())?;
                     out.push(crate::ast::FormalParam {
@@ -5075,7 +5137,7 @@ impl<'pr> Lowerer<'pr> {
                 prism::Node::RestParameterNode { .. } => {
                     let inner = rest.as_rest_parameter_node().unwrap();
                     let name = match inner.name() {
-                        Some(id) => Some(constant_name(&id)?),
+                        Some(id) => Some(self.constant_name(&id)?),
                         // Anonymous `*`: bind a reserved, unspellable local
                         // so `foo(*)` forwarding can splat it.
                         None => {
@@ -5115,7 +5177,7 @@ impl<'pr> Lowerer<'pr> {
             match n {
                 prism::Node::RequiredParameterNode { .. } => {
                     let inner = n.as_required_parameter_node().unwrap();
-                    let name = constant_name(&inner.name())?;
+                    let name = self.constant_name(&inner.name())?;
                     self.lvars.insert(&name);
                     out.push(crate::ast::FormalParam {
                         kind: ParamKind::Post(Some(name)),
@@ -5144,7 +5206,7 @@ impl<'pr> Lowerer<'pr> {
             match n {
                 prism::Node::RequiredKeywordParameterNode { .. } => {
                     let inner = n.as_required_keyword_parameter_node().unwrap();
-                    let name = constant_name(&inner.name())?;
+                    let name = self.constant_name(&inner.name())?;
                     let lid = self.lvars.insert(&name);
                     self.lvars.kw.push(lid);
                     out.push(crate::ast::FormalParam {
@@ -5154,7 +5216,7 @@ impl<'pr> Lowerer<'pr> {
                 }
                 prism::Node::OptionalKeywordParameterNode { .. } => {
                     let inner = n.as_optional_keyword_parameter_node().unwrap();
-                    let name = constant_name(&inner.name())?;
+                    let name = self.constant_name(&inner.name())?;
                     let lid = self.lvars.insert(&name);
                     self.lvars.kw.push(lid);
                     let default = self.lower_node(&inner.value())?;
@@ -5174,7 +5236,7 @@ impl<'pr> Lowerer<'pr> {
                     let inner = kr.as_keyword_rest_parameter_node().unwrap();
                     let loc = location_to_loc(&inner.location());
                     let name_opt = match inner.name() {
-                        Some(id) => Some(constant_name(&id)?),
+                        Some(id) => Some(self.constant_name(&id)?),
                         // Anonymous `**`: bind a reserved, unspellable local
                         // so `foo(**)` forwarding can splat it.
                         None => {
@@ -5222,7 +5284,7 @@ impl<'pr> Lowerer<'pr> {
         if let Some(bp) = params.block() {
             let loc = location_to_loc(&bp.location());
             let name = match bp.name() {
-                Some(id) => Some(constant_name(&id)?),
+                Some(id) => Some(self.constant_name(&id)?),
                 None => None,
             };
             if let Some(n) = &name {
@@ -5251,10 +5313,7 @@ impl<'pr> Lowerer<'pr> {
         } else {
             Vec::new()
         };
-        let name_bytes = node.name().as_slice();
-        let method = std::str::from_utf8(name_bytes)
-            .map(str::to_owned)
-            .unwrap_or_else(|_| String::from_utf8_lossy(name_bytes).into_owned());
+        let method = self.ident_name(node.name().as_slice());
 
         let mut args: Vec<Node> = vec![];
         let mut kw_args: Vec<(String, Node)> = vec![];
@@ -5663,12 +5722,6 @@ fn is_constant_literal(kind: &NodeKind) -> bool {
     )
 }
 
-fn constant_name(id: &ConstantId<'_>) -> Result<String, MonorubyErr> {
-    let bytes = id.as_slice();
-    std::str::from_utf8(bytes)
-        .map(str::to_owned)
-        .map_err(|_| MonorubyErr::fatal("prism lowerer: non-utf8 identifier"))
-}
 
 /// 1-based line number of `offset` in `source`, used to inline
 /// `__LINE__`.

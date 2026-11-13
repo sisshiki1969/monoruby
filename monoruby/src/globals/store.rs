@@ -1592,7 +1592,7 @@ impl Store {
             loc: Loc::default(),
             is_lambda: false,
         };
-        let compile_info = Store::handle_args(info, vec![])?;
+        let compile_info = Store::handle_args(info, vec![], crate::value::Encoding::UTF8)?;
         self.new_iseq_method(
             Some(IdentId::_MAIN),
             compile_info,
@@ -1702,7 +1702,7 @@ impl Store {
             loc,
             is_lambda: false,
         };
-        let compile_info = Store::handle_args(info, vec![])?;
+        let compile_info = Store::handle_args(info, vec![], crate::value::Encoding::UTF8)?;
         // eval'd code is block-style: a `return` / `break` in the string
         // escapes to the enclosing method, like a block (not locally like
         // a lambda). eval bodies and lambdas are otherwise both
@@ -2385,6 +2385,7 @@ fn flatten_destruct(
     src: ExpandSrc,
     expand: &mut Vec<(ExpandSrc, usize, usize, Option<usize>)>,
     destruct_args: &mut Vec<Option<IdentId>>,
+    src_enc: crate::value::Encoding,
 ) {
     let len = entries.len();
     let dst_start = destruct_args.len();
@@ -2394,12 +2395,12 @@ fn flatten_destruct(
         child_slots.push(destruct_args.len());
         match entry {
             DestructEntry::Param(name, _) => {
-                destruct_args.push(Some(IdentId::get_id_from_string(name.clone())));
+                destruct_args.push(Some(IdentId::get_id_from_source(name, src_enc)));
             }
             DestructEntry::Rest(name, _) => {
                 rest_pos = Some(i);
                 destruct_args
-                    .push(name.as_ref().map(|n| IdentId::get_id_from_string(n.clone())));
+                    .push(name.as_ref().map(|n| IdentId::get_id_from_source(n, src_enc)));
             }
             DestructEntry::Nested(_, _) => {
                 // Temp slot: the parent `ExpandArray` writes the sub-array
@@ -2411,15 +2412,25 @@ fn flatten_destruct(
     expand.push((src, dst_start, len, rest_pos));
     for (i, entry) in entries.iter().enumerate() {
         if let DestructEntry::Nested(sub, _) = entry {
-            flatten_destruct(sub, ExpandSrc::Destruct(child_slots[i]), expand, destruct_args);
+            flatten_destruct(
+                sub,
+                ExpandSrc::Destruct(child_slots[i]),
+                expand,
+                destruct_args,
+                src_enc,
+            );
         }
     }
 }
 
 impl Store {
+    /// `src_enc` is the encoding of the source the parameters were
+    /// written in, under which a non-ASCII name is interned
+    /// ([`IdentId::get_id_from_source`]).
     pub(crate) fn handle_args(
         info: BlockInfo,
         for_params: Vec<(usize, BcLocal, IdentId)>,
+        src_enc: crate::value::Encoding,
     ) -> Result<CompileInfo> {
         let BlockInfo {
             params,
@@ -2452,7 +2463,7 @@ impl Store {
         for param in params {
             match param.kind {
                 ParamKind::Param(name) => {
-                    args_names.push(Some(IdentId::get_id_from_string(name)));
+                    args_names.push(Some(IdentId::get_id_from_source(&name, src_enc)));
                     required_num += 1;
                 }
                 ParamKind::ItParam => {
@@ -2472,7 +2483,7 @@ impl Store {
                     let src = args_names.len();
                     args_names.push(None);
                     required_num += 1;
-                    flatten_destruct(&entries, ExpandSrc::Surface(src), &mut expand, &mut destruct_args);
+                    flatten_destruct(&entries, ExpandSrc::Surface(src), &mut expand, &mut destruct_args, src_enc);
                 }
                 ParamKind::PostDestruct(entries) => {
                     // Same as `Destruct`, but the surface slot lives in the
@@ -2481,18 +2492,18 @@ impl Store {
                     let src = args_names.len();
                     args_names.push(None);
                     post_num += 1;
-                    flatten_destruct(&entries, ExpandSrc::Surface(src), &mut expand, &mut destruct_args);
+                    flatten_destruct(&entries, ExpandSrc::Surface(src), &mut expand, &mut destruct_args, src_enc);
                 }
                 ParamKind::Optional(name, deref!(initializer)) => {
                     let local = BcLocal(args_names.len() as u16);
-                    args_names.push(Some(IdentId::get_id_from_string(name)));
+                    args_names.push(Some(IdentId::get_id_from_source(&name, src_enc)));
                     optional_num += 1;
                     optional_info.push(OptionalInfo::new(local, initializer));
                 }
                 ParamKind::Rest(name) => {
                     assert_eq!(rest, None);
                     rest = Some(args_names.len());
-                    args_names.push(name.map(IdentId::get_id_from_string));
+                    args_names.push(name.map(|n| IdentId::get_id_from_source(&n, src_enc)));
                 }
                 ParamKind::ImplicitRest => {
                     // `|a,|` — synthetic anonymous rest emitted for a
@@ -2509,7 +2520,7 @@ impl Store {
                     args_names.push(None);
                 }
                 ParamKind::Post(name) => {
-                    args_names.push(name.map(IdentId::get_id_from_string));
+                    args_names.push(name.map(|n| IdentId::get_id_from_source(&n, src_enc)));
                     post_num += 1;
                 }
                 ParamKind::Forwarding => {
@@ -2523,7 +2534,7 @@ impl Store {
                     forwarding = true;
                 }
                 ParamKind::Keyword(name, init) => {
-                    let name = IdentId::get_id_from_string(name);
+                    let name = IdentId::get_id_from_source(&name, src_enc);
                     args_names.push(Some(name));
                     keyword_names.push(name);
                     keyword_initializers.push(init);
@@ -2535,14 +2546,14 @@ impl Store {
                     if name.as_deref() == Some("nil") {
                         forbid_keyword = true;
                     }
-                    let name = name.map(IdentId::get_id_from_string);
+                    let name = name.map(|n| IdentId::get_id_from_source(&n, src_enc));
                     assert!(kw_rest_param.is_none());
                     kw_rest_param = Some(SlotId(1 + args_names.len() as u16));
                     args_names.push(name);
                 }
                 ParamKind::Block(name) => {
                     block_param = Some(match name {
-                        Some(name) => IdentId::get_id_from_string(name.clone()),
+                        Some(name) => IdentId::get_id_from_source(&name, src_enc),
                         None => IdentId::get_id(""),
                     });
                 }

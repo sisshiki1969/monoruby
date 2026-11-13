@@ -2207,7 +2207,9 @@ pub(crate) fn inspect_symbol(id: IdentId, escape: bool) -> String {
 #[cold]
 fn resenc_symbol(id: IdentId, store: &Store) -> Option<(RStringInner, Option<String>)> {
     let resenc = store.inspect_escape_encoding();
-    crate::value::rvalue::native_mbc_walker(resenc)?;
+    if !crate::value::rvalue::inspects_natively(resenc) {
+        return None;
+    }
     if id.symbol_encoding() != Some(resenc) {
         return None;
     }

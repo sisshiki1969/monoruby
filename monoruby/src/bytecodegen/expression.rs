@@ -87,7 +87,7 @@ impl<'a> BytecodeGen<'a> {
                 let old = self.temp;
                 let dst = self.push().into();
                 let loc = expr.loc;
-                let name = IdentId::get_id_from_string(name);
+                let name = self.ident(&name);
                 self.emit_check_cvar(Some(dst), name, loc);
                 assert_eq!(old + 1, self.temp);
             }
@@ -239,7 +239,7 @@ impl<'a> BytecodeGen<'a> {
                         else {
                             unreachable!()
                         };
-                        let setter = IdentId::get_id_from_string(format!("{method}="));
+                        let setter = self.ident(&format!("{method}="));
                         self.gen_safe_nav_attr_assign(
                             receiver,
                             setter,
@@ -281,7 +281,7 @@ impl<'a> BytecodeGen<'a> {
                 }
             }
             NodeKind::LocalVar(outer, ident) => {
-                let name = IdentId::get_id_from_string(ident);
+                let name = self.ident(&ident);
                 if let Some(src) = self.refer_dynamic_local_read(outer, name) {
                     let src = src.into();
                     self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
@@ -306,15 +306,15 @@ impl<'a> BytecodeGen<'a> {
                 self.emit_load_const(dst.into(), base, toplevel, name, prefix, loc);
             }
             NodeKind::InstanceVar(name) => {
-                let name = IdentId::get_id_from_string(name);
+                let name = self.ident(&name);
                 self.emit_load_ivar(dst.into(), name, loc);
             }
             NodeKind::GlobalVar(name) => {
-                let name = IdentId::get_id_from_string(name);
+                let name = self.ident(&name);
                 self.emit_load_gvar(dst.into(), name, loc);
             }
             NodeKind::ClassVar(name) => {
-                let name = IdentId::get_id_from_string(name);
+                let name = self.ident(&name);
                 self.emit_load_cvar(dst.into(), name, loc);
             }
             // `__ENCODING__` — evaluate to the source-encoding `Encoding`
@@ -339,7 +339,7 @@ impl<'a> BytecodeGen<'a> {
                 arglist: deref!(arglist),
                 safe_nav,
             } => {
-                let method = IdentId::get_id_from_string(method);
+                let method = self.ident(&method);
                 self.gen_method_call(
                     method,
                     Some(receiver),
@@ -355,7 +355,7 @@ impl<'a> BytecodeGen<'a> {
                 arglist: deref!(arglist),
                 safe_nav,
             } => {
-                let method = IdentId::get_id_from_string(method);
+                let method = self.ident(&method);
                 self.gen_method_call(
                     method,
                     None,
@@ -369,7 +369,7 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::Ident(method) => {
                 // A bare-identifier vcall (`a = foo`). Store straight into `dst`
                 // instead of landing in a temp and moving.
-                let method = IdentId::get_id_from_string(method);
+                let method = self.ident(&method);
                 self.gen_method_call(
                     method,
                     None,
@@ -403,7 +403,7 @@ impl<'a> BytecodeGen<'a> {
                 info: deref!(info),
                 is_module,
             } => {
-                let name = IdentId::get_id_from_string(name);
+                let name = self.ident(&name);
                 self.gen_class_def(
                     name,
                     base,
@@ -637,7 +637,7 @@ impl<'a> BytecodeGen<'a> {
                         else {
                             unreachable!()
                         };
-                        let setter = IdentId::get_id_from_string(format!("{method}="));
+                        let setter = self.ident(&format!("{method}="));
                         return self.gen_safe_nav_attr_assign(receiver, setter, rhs, use_mode, loc);
                     }
                     let temp = self.temp;
@@ -689,7 +689,7 @@ impl<'a> BytecodeGen<'a> {
             }
             NodeKind::LocalVar(outer, ident) => {
                 let ret = self.push().into();
-                let lvar = IdentId::get_id_from_string(ident);
+                let lvar = self.ident(&ident);
                 if let Some(src) = self.refer_dynamic_local_read(outer, lvar) {
                     let src = src.into();
                     self.emit(
@@ -717,7 +717,7 @@ impl<'a> BytecodeGen<'a> {
                 arglist: deref!(arglist),
                 safe_nav,
             } => {
-                let method = IdentId::get_id_from_string(method);
+                let method = self.ident(&method);
                 return self.gen_method_call(
                     method,
                     Some(receiver),
@@ -733,7 +733,7 @@ impl<'a> BytecodeGen<'a> {
                 arglist: deref!(arglist),
                 safe_nav,
             } => {
-                let method = IdentId::get_id_from_string(method);
+                let method = self.ident(&method);
                 return self.gen_method_call(method, None, arglist, safe_nav, false, use_mode, loc);
             }
             NodeKind::Super(arglist) => {
@@ -776,7 +776,7 @@ impl<'a> BytecodeGen<'a> {
             }
             NodeKind::Ident(method) => {
                 let arglist = ArgList::default();
-                let method = IdentId::get_id_from_string(method);
+                let method = self.ident(&method);
                 return self.gen_method_call(method, None, arglist, false, true, use_mode, loc);
             }
             NodeKind::If {
@@ -997,14 +997,14 @@ impl<'a> BytecodeGen<'a> {
                 return self.gen_begin(body, rescue, else_, ensure, use_mode);
             }
             NodeKind::MethodDef(name, deref!(deferred)) => {
-                let name = IdentId::get_id_from_string(name);
+                let name = self.ident(&name);
                 let block = self.lower_def_body(&deferred)?;
                 self.gen_method_def(name, block, use_mode, loc)?;
                 return Ok(());
             }
             NodeKind::SingletonMethodDef(deref!(obj), name, deref!(deferred)) => {
                 self.gen_expr(obj, UseMode2::Push)?;
-                let name = IdentId::get_id_from_string(name);
+                let name = self.ident(&name);
                 let block = self.lower_def_body(&deferred)?;
                 self.gen_singleton_method_def(name, block, use_mode, loc)?;
                 return Ok(());
@@ -1016,7 +1016,7 @@ impl<'a> BytecodeGen<'a> {
                 info: deref!(info),
                 is_module,
             } => {
-                let name = IdentId::get_id_from_string(name);
+                let name = self.ident(&name);
                 self.gen_class_def(name, base, superclass, info, use_mode, is_module, loc)?;
                 return Ok(());
             }
@@ -1127,8 +1127,8 @@ impl<'a> BytecodeGen<'a> {
                     {
                         // Global variable alias: resolve names at compile
                         // time and emit a dedicated AliasGvar instruction.
-                        let new_id = IdentId::get_id(new_name);
-                        let old_id = IdentId::get_id(old_name);
+                        let new_id = self.ident(new_name);
+                        let old_id = self.ident(old_name);
                         self.emit(
                             BytecodeInst::AliasGvar {
                                 new: new_id,
@@ -1286,7 +1286,7 @@ impl<'a> BytecodeGen<'a> {
         // turns the `Send` lvalue's method into the setter (`attr=`), so keep
         // the original method name for the read.
         let getter = if let NodeKind::MethodCall { method, .. } = &lhs.kind {
-            Some(IdentId::get_id(method))
+            Some(self.ident(method))
         } else {
             None
         };
@@ -2504,7 +2504,7 @@ impl<'a> BytecodeGen<'a> {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let compile_info = Store::handle_args(block, vec![])?;
+        let compile_info = Store::handle_args(block, vec![], self.source_encoding())?;
         let func_id = self.add_method(Some(name), compile_info, loc)?;
         self.emit(BytecodeInst::MethodDef { name, func_id }, loc);
         self.gen_symbol(name, use_mode)?;
@@ -2518,7 +2518,7 @@ impl<'a> BytecodeGen<'a> {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let compile_info = Store::handle_args(block, vec![])?;
+        let compile_info = Store::handle_args(block, vec![], self.source_encoding())?;
         let func_id = self.add_method(Some(name), compile_info, loc)?;
         let obj = self.pop().into();
         self.emit(BytecodeInst::SingletonMethodDef { obj, name, func_id }, loc);
@@ -2554,7 +2554,7 @@ impl<'a> BytecodeGen<'a> {
         } else {
             None
         };
-        let compile_info = Store::handle_args(info, vec![])?;
+        let compile_info = Store::handle_args(info, vec![], self.source_encoding())?;
         let func_id = self.add_classdef(Some(name), compile_info, loc, false, is_module)?;
         let superclass = match superclass {
             Some(deref!(superclass)) => Some(self.push_expr(superclass)?.into()),
@@ -2599,7 +2599,7 @@ impl<'a> BytecodeGen<'a> {
         use_mode: UseMode2,
         loc: Loc,
     ) -> Result<()> {
-        let compile_info = Store::handle_args(info, vec![])?;
+        let compile_info = Store::handle_args(info, vec![], self.source_encoding())?;
         let func_id = self.add_classdef(None, compile_info, loc, true, false)?;
         let old = self.temp;
         let base = self.gen_expr_reg(base)?;

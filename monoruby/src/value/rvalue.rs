@@ -48,7 +48,7 @@ pub(crate) use string::{
     cp5022x_to_eucjp_from, cp51932_transcoder_len, enc_codepoint, enc_mbcput, euc_jp_const_name,
     euc_jp_variant_index, eucjp_char_width, eucjp_precise_len, eucjp_to_cp5022x_from,
     eucjp_to_stateless_iso2022jp, iso2022jp_to_stateless_from, mac_clusters, mac_to_utf8,
-    may_be_native_mbc, mbc_walker, named_byte_const_name, native_mbc_walker, named_byte_index, precise_mbclen, scrub_mbc,
+    inspects_natively, may_be_native_mbc, mbc_walker, named_byte_const_name, named_byte_index, precise_mbclen, scrub_mbc,
     sjis_char_width, sjis_const_name, sjis_precise_len, stateless_iso2022jp_to_eucjp,
     stateless_iso2022jp_transcode_len, stateless_to_iso2022jp_from, unicode_unit_at,
     unicode_unit_codepoint, unicode_unit_encode, unicode_unit_precise_len, utf8_const_name,

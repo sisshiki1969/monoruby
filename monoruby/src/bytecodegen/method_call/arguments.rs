@@ -385,7 +385,7 @@ impl<'a> BytecodeGen<'a> {
                 // (`CallSiteInfo::kw_overwritten_literal`).
                 let offset = kw_order.len();
                 self.push_expr(value)?;
-                let name = IdentId::get_id_from_string(name);
+                let name = self.ident(&name);
                 kw_args.insert(name, offset);
                 kw_order.push(KwElem::Kw(name));
                 emitted_pairs += 1;
@@ -396,7 +396,7 @@ impl<'a> BytecodeGen<'a> {
         for (name, value) in pairs {
             let offset = kw_order.len();
             self.push_expr(value)?;
-            let name = IdentId::get_id_from_string(name);
+            let name = self.ident(&name);
             kw_args.insert(name, offset);
             kw_order.push(KwElem::Kw(name));
         }
@@ -434,7 +434,7 @@ impl<'a> BytecodeGen<'a> {
                 }
             }
             NodeKind::LocalVar(outer, proc_local) => {
-                let proc_local = IdentId::get_id_from_string(proc_local);
+                let proc_local = self.ident(&proc_local);
                 let dst = self.push().into();
                 if let Some(src) = self.refer_dynamic_local_read(outer, proc_local) {
                     let src = src.into();
