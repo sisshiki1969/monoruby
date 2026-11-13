@@ -623,6 +623,8 @@ impl<'a> JitContext<'a> {
             _ => false,
         };
         if !fits {
+            #[cfg(feature = "jit-log")]
+            crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::FX_SEED_RETRIES);
             self.take_loop_infos(loop_start, loop_end);
             self.restore_loop_infos(saved);
             self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end)?;

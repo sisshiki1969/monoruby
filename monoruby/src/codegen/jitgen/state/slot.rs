@@ -323,6 +323,24 @@ impl std::fmt::Debug for SlotState {
 }
 
 impl SlotState {
+    /// A slot state over *modes* alone (slot 0 is `self`), for unit tests
+    /// of the merge that have no `JitContext` to build one from. The fpr
+    /// file is derived from the modes, so `F` / `Sf` may name any
+    /// register below `PHYS_FPR_POOL`.
+    #[cfg(test)]
+    pub(super) fn for_test(modes: &[LinkMode]) -> Self {
+        let mut state = SlotState {
+            slots: vec![Slot::default(); modes.len()],
+            fpr_alloc: FprAllocator::new(),
+            local_num: modes.len(),
+            ..Default::default()
+        };
+        for (i, mode) in modes.iter().enumerate() {
+            state.set_mode(SlotId(i as u16), *mode);
+        }
+        state
+    }
+
     fn new(cc: &JitContext, default: LinkMode) -> Self {
         let total_reg_num = cc.total_reg_num();
         let local_num = cc.local_num();
@@ -456,6 +474,16 @@ impl SlotState {
 
     pub(super) fn slots_len(&self) -> usize {
         self.slots.len()
+    }
+
+    /// Whether every slot of `self` sits at or below the same slot of
+    /// `other` in the order [`LinkMode::equiv`] sees ([`LinkMode::climbs_to`]).
+    #[cfg(feature = "jit-log")]
+    pub(super) fn climbs_to(&self, other: &Self) -> bool {
+        self.slots_len() == other.slots_len()
+            && self
+                .all_regs()
+                .all(|i| self.mode(i).climbs_to(&other.mode(i)))
     }
 
     /// The slot's abstract type as a lattice element; the sentinels
@@ -2534,6 +2562,20 @@ impl AsmIr {
 }
 
 ///
+/// How many times one slot's [`LinkMode`] can change, as [`LinkMode::equiv`]
+/// sees it, along a chain of joins: a constant, its primitive type or
+/// class, that type or `nil` ([`Guarded::NilOr`]), and `Value` — three
+/// steps — plus one of slack for a step that is not a rise (a back edge
+/// is recorded by replacement, and a loop head's float adoption can make
+/// a later one narrower: `doc/fixpoint_engine_plan.md` §2.4).
+///
+/// Whoever adds a layer to [`Guarded`] raises this; the back-edge
+/// fixpoint's walk bound is derived from it
+/// (`AbstractState::backedge_chain_len`).
+///
+pub(super) const LINK_MODE_CHAIN: usize = 4;
+
+///
 /// Mode of linkage between stack slot and fpr registers.
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2619,6 +2661,33 @@ impl LinkMode {
             (LinkMode::C(_), _) => false,
             (_, LinkMode::C(_)) => false,
             (lhs, rhs) => lhs.guarded() == rhs.guarded(),
+        }
+    }
+
+    ///
+    /// Whether joining `self` into `other` leaves `other` where it was, as
+    /// [`Self::equiv`] sees it: `self` is at or below `other` in the order
+    /// the back-edge fixpoint climbs (`jit-log` statistics only).
+    ///
+    /// Pure: it compares types with [`Guarded::join_raw`] rather than
+    /// running the frame join, which allocates registers and has no arm
+    /// for some pairs of sentinels. A sentinel against anything it is not
+    /// `equiv` to is answered `false` both ways (incomparable).
+    ///
+    #[cfg(feature = "jit-log")]
+    pub(super) fn climbs_to(&self, other: &Self) -> bool {
+        if self.equiv(other) {
+            return true;
+        }
+        match (self, other) {
+            (LinkMode::None | LinkMode::MaybeNone | LinkMode::V, _)
+            | (_, LinkMode::None | LinkMode::MaybeNone | LinkMode::V) => false,
+            // A constant is the bottom of its own type only.
+            (_, LinkMode::C(_)) => false,
+            (lhs, rhs) => {
+                let top = rhs.guarded();
+                lhs.guarded().join_raw(&top) == top
+            }
         }
     }
 

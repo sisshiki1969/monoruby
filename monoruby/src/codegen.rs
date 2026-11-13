@@ -2433,6 +2433,38 @@ pub(crate) mod jit_stats {
     pub static SPEC_MEMO_HIT: AtomicUsize = AtomicUsize::new(0);
     pub static SPEC_MEMO_MISS: AtomicUsize = AtomicUsize::new(0);
 
+    // The loop back-edge fixpoint (`analyse_backedge_fixpoint`,
+    // doc/fixpoint_engine_plan.md step B).
+    /// Fixpoints run (one per `analyse_backedge_fixpoint` call).
+    pub static FX_FIXPOINTS: AtomicUsize = AtomicUsize::new(0);
+    /// Analysis walks run, nested ones included.
+    pub static FX_WALKS: AtomicUsize = AtomicUsize::new(0);
+    /// Fixpoints that converged in 1, 2, 3, 4 and 5-or-more walks.
+    pub static FX_CONVERGED_IN: [AtomicUsize; 5] = [const { AtomicUsize::new(0) }; 5];
+    /// The most walks one converged fixpoint took.
+    pub static FX_MAX_WALKS: AtomicUsize = AtomicUsize::new(0);
+    /// Fixpoints that ran out of walks and abandoned the compile.
+    pub static FX_GAVE_UP: AtomicUsize = AtomicUsize::new(0);
+    /// Nanoseconds spent in walks that no other walk encloses.
+    pub static FX_WALK_TOP_NS: AtomicUsize = AtomicUsize::new(0);
+    /// How many walks are running right now (to tell the outermost).
+    pub static FX_DEPTH: AtomicUsize = AtomicUsize::new(0);
+    /// Walks whose entry state equals the previous walk's (`==`), with no
+    /// inner head's record and no outer widening moved in between: the
+    /// walk can only repeat the previous one (step D's target).
+    pub static FX_ENTRY_REPEATS: AtomicUsize = AtomicUsize::new(0);
+    /// Fixpoints `analyse_loop_head` ran again without the `Array` seed.
+    pub static FX_SEED_RETRIES: AtomicUsize = AtomicUsize::new(0);
+    /// A head's first recorded back edge.
+    pub static FX_BE_FIRST: AtomicUsize = AtomicUsize::new(0);
+    /// A recorded back edge replaced by a wider one.
+    pub static FX_BE_RISE: AtomicUsize = AtomicUsize::new(0);
+    /// ... by a narrower one.
+    pub static FX_BE_DESCENT: AtomicUsize = AtomicUsize::new(0);
+    /// ... by one the order cannot compare (or `equiv`-different but
+    /// order-equal, which the order folds in here too).
+    pub static FX_BE_INCOMPARABLE: AtomicUsize = AtomicUsize::new(0);
+
     pub fn bump(c: &AtomicUsize) {
         c.fetch_add(1, Ordering::Relaxed);
     }
@@ -2456,6 +2488,38 @@ pub(crate) mod jit_stats {
         eprintln!(
             "    replay can allocate:             {}",
             g(&CHAIN_CONV_ALLOC)
+        );
+        eprintln!("loop back-edge fixpoint:");
+        eprintln!("  fixpoints:                         {}", g(&FX_FIXPOINTS));
+        eprintln!("  walks:                             {}", g(&FX_WALKS));
+        eprintln!(
+            "    converged in 1/2/3/4/5+ walks:   {}/{}/{}/{}/{}",
+            g(&FX_CONVERGED_IN[0]),
+            g(&FX_CONVERGED_IN[1]),
+            g(&FX_CONVERGED_IN[2]),
+            g(&FX_CONVERGED_IN[3]),
+            g(&FX_CONVERGED_IN[4])
+        );
+        eprintln!("    most walks to converge:          {}", g(&FX_MAX_WALKS));
+        eprintln!("    gave up (bound reached):         {}", g(&FX_GAVE_UP));
+        eprintln!(
+            "    outermost walk time:             {:?}",
+            std::time::Duration::from_nanos(g(&FX_WALK_TOP_NS) as u64)
+        );
+        eprintln!(
+            "    entry repeats previous walk:     {}",
+            g(&FX_ENTRY_REPEATS)
+        );
+        eprintln!(
+            "    Array seed retries:              {}",
+            g(&FX_SEED_RETRIES)
+        );
+        eprintln!(
+            "  back-edge records first/rise/descent/incomparable: {}/{}/{}/{}",
+            g(&FX_BE_FIRST),
+            g(&FX_BE_RISE),
+            g(&FX_BE_DESCENT),
+            g(&FX_BE_INCOMPARABLE)
         );
         eprintln!("  specialized-call memo hits:        {}", g(&SPEC_MEMO_HIT));
         eprintln!(

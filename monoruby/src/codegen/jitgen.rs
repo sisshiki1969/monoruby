@@ -25,6 +25,8 @@ use state::{DeoptPoint, FrameRef, Keep, LinkMode, ReturnState};
 use super::*;
 use asmir::*;
 use context::{JitArgumentInfo, JitType};
+#[cfg(feature = "jit-log")]
+use state::ClimbDirection;
 use state::Liveness;
 use trace_ir::*;
 

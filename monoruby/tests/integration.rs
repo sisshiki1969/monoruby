@@ -78,6 +78,7 @@ mod fcntl_lock;
 mod fiber_scheduler_io;
 mod fiddle_int64;
 mod fiddle_virtual_library;
+mod fixpoint_chain;
 mod flip_flop;
 mod float_across_block_call;
 mod float_call_convention;
