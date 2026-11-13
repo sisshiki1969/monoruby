@@ -1011,6 +1011,46 @@ mod tests {
     }
 
     #[test]
+    fn thread_exception_survives_a_collection_in_the_exit_hooks() {
+        // The body's terminating error is the only reference to its
+        // exception object while the exit hooks run Ruby (#1880).
+        run_test_once(
+            r#"
+            class E1880 < StandardError
+              def initialize(tag) = (@tag = tag; super("boom " + tag))
+              attr_reader :tag
+            end
+            def ret1880 = Thread.new { return "r" * 2 }
+            begin
+              Thread.report_on_exception = false
+              GC.stress = true
+              res = []
+              begin
+                Thread.new { raise E1880.new("t" * 3) }.join
+              rescue E1880 => e
+                res << [e.message, e.tag]
+              end
+              m = Mutex.new
+              begin
+                Thread.new { m.lock; raise E1880.new("u" * 3) }.value
+              rescue E1880 => e
+                res << [e.message, e.tag]
+              end
+              begin
+                ret1880.value
+              rescue LocalJumpError => e
+                res << [e.message, e.exit_value, e.reason]
+              end
+              res
+            ensure
+              GC.stress = false
+              Thread.report_on_exception = true
+            end
+            "#,
+        );
+    }
+
+    #[test]
     fn thread_new_join_value() {
         run_test(r#"Thread.new { 42 }.value"#);
         run_test(
