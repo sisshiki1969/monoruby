@@ -116,6 +116,7 @@ mod kwargs_source_order;
 mod language_fixes;
 mod literal;
 mod loop_analysis_outer_widen;
+mod loop_counter_seed;
 mod loop_entry_types;
 mod loop_head_const_placement;
 mod loop_hoist;

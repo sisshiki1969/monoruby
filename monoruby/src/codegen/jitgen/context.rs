@@ -629,6 +629,13 @@ pub(super) struct JitStackFrame {
     ///
     loop_pins: Vec<(BasicBlockId, BasicBlockId, SlotId)>,
     ///
+    /// Loop-counter seeding (`JitContext::analyse_loop_head`): whether the
+    /// analysis walks of the fixpoint in progress seed, and the
+    /// `(head, counter)` pairs they seeded so far.
+    ///
+    counter_seed_on: bool,
+    counter_seeds: Vec<(BasicBlockId, SlotId)>,
+    ///
     /// Kept-claim surrender per return path (join unification): one entry
     /// per plain `Ret` this frame compiled, recorded so the caller's
     /// resume can join the return-path chains and emit, on each path, the
@@ -952,6 +959,8 @@ impl JitStackFrame {
             loop_info: indexmap::IndexMap::default(),
             loop_outer_reads: HashMap::default(),
             loop_pins: vec![],
+            counter_seed_on: false,
+            counter_seeds: vec![],
             return_edges: vec![],
             spill_home_watermark: 0,
             spill_home_ids: std::collections::HashSet::default(),
@@ -988,6 +997,8 @@ impl JitStackFrame {
             loop_info: indexmap::IndexMap::default(),
             loop_outer_reads: HashMap::default(),
             loop_pins: vec![],
+            counter_seed_on: self.counter_seed_on,
+            counter_seeds: vec![],
             return_edges: vec![],
             // Analysis walks allocate home ids too; starting from the
             // live mark keeps their ids consistent with what codegen
@@ -3027,6 +3038,8 @@ impl<'a> JitContext<'a> {
             loop_info: _,
             loop_outer_reads: _,
             loop_pins: _,
+            counter_seed_on: _,
+            counter_seeds: _,
             return_edges: _,
             branch_map: _,
             backedge_map: _,
@@ -3968,6 +3981,48 @@ impl<'a> JitContext<'a> {
             .loop_info
             .get(&entry_bb)
             .and_then(|(_, be)| be.as_ref())
+    }
+
+    /// Whether the analysis walks seed loop counters
+    /// (`analyse_loop_head`).
+    pub(super) fn counter_seed_on(&self) -> bool {
+        self.current_frame().counter_seed_on
+    }
+
+    /// Switch the seeding on or off, forgetting what was seeded.
+    pub(super) fn set_counter_seed(&mut self, on: bool) {
+        let frame = self.current_frame_mut();
+        frame.counter_seed_on = on;
+        frame.counter_seeds.clear();
+    }
+
+    /// A walk seeded *slot* at *head*.
+    pub(super) fn note_counter_seed(&mut self, head: BasicBlockId, slot: SlotId) {
+        let seeds = &mut self.current_frame_mut().counter_seeds;
+        if !seeds.contains(&(head, slot)) {
+            seeds.push((head, slot));
+        }
+    }
+
+    pub(super) fn counter_seeds(&self) -> &[(BasicBlockId, SlotId)] {
+        &self.current_frame().counter_seeds
+    }
+
+    /// No fixpoint has recorded anything for a head of the loop
+    /// `loop_start..=loop_end`.
+    pub(super) fn no_loop_info_within(
+        &self,
+        loop_start: BasicBlockId,
+        loop_end: BasicBlockId,
+    ) -> bool {
+        let frame = self.current_frame();
+        frame.loop_info.is_empty()
+            || self
+                .iseq()
+                .bb_info
+                .loops_within(loop_start, loop_end)
+                .into_iter()
+                .all(|(head, _)| !frame.loop_info.contains_key(&head))
     }
 
     ///

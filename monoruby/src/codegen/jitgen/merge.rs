@@ -150,6 +150,15 @@ impl<'a> JitContext<'a> {
             // is the same one that keeps `bridge_at` asserting no outer
             // `F`/`Sf`.
             let mut target = incoming;
+            // Loop-counter seeding (`analyse_loop_head`): in an analysis
+            // walk, a head no back edge is recorded for yet takes its
+            // counters as the join with the back edge will leave them.
+            if no_calc_backedge && self.counter_seed_on() && self.loop_backedge(bbid).is_none() {
+                for slot in self.counter_seed_candidates(&target, loop_start, loop_end) {
+                    target.set_S_with_guard(slot, Guarded::Fixnum);
+                    self.note_counter_seed(bbid, slot);
+                }
+            }
             let mut hoist_version_guard = false;
             let mut hoisted_guards = vec![];
             if let Some((liveness, backedge)) = self.loop_info(bbid) {
@@ -650,6 +659,17 @@ impl<'a> JitContext<'a> {
     /// anything but `Array` at the back edge, the loop is analysed again
     /// without the seed.
     ///
+    /// Loop counters (`counter_seed_candidates`) are seeded too, for a
+    /// different reason: `i = 0; while ...; i += 1; end` walks the body
+    /// once with `i` the constant, finds an `Integer` at the back edge,
+    /// and walks it again from `constant ⊔ Integer`. Starting from
+    /// `Integer` is the second walk without the first. The seed goes on
+    /// this head and on every inner head the walks reach before a back
+    /// edge is recorded for it (`incoming_context`); a seeded counter
+    /// that does not come round as an `Integer` at its head's back edge
+    /// has the loop analysed again from the constants
+    /// (`doc/fixpoint_engine_plan.md` §5.8).
+    ///
     fn analyse_loop_head(
         &mut self,
         incoming: &AbstractState,
@@ -659,7 +679,11 @@ impl<'a> JitContext<'a> {
         loop_end: BasicBlockId,
     ) -> JitResult<()> {
         let candidates = self.array_seed_candidates(incoming, entries, head, loop_start, loop_end);
-        if candidates.is_empty() {
+        // Counters are seeded only where the fixpoint starts from nothing:
+        // with a back edge recorded (an inner head the enclosing loop's
+        // analysis reached), the first walk's entry is typed already.
+        let counters = self.no_loop_info_within(loop_start, loop_end);
+        if candidates.is_empty() && !counters {
             return self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end);
         }
         let saved = self.take_loop_infos(loop_start, loop_end);
@@ -667,12 +691,42 @@ impl<'a> JitContext<'a> {
         for &slot in &candidates {
             seeded.refine_S_guarded(slot, Guarded::Class(ARRAY_CLASS));
         }
-        self.analyse_backedge_fixpoint(seeded, loop_start, loop_end)?;
+        self.set_counter_seed(counters);
+        let mut with_counters = seeded.clone();
+        if counters {
+            for slot in self.counter_seed_candidates(incoming, loop_start, loop_end) {
+                with_counters.set_S_with_guard(slot, Guarded::Fixnum);
+                self.note_counter_seed(head, slot);
+            }
+        }
+        let res = self.analyse_backedge_fixpoint(with_counters, loop_start, loop_end);
+        let fixnum = LinkMode::S(Guarded::Fixnum);
+        let counters_fit = self.counter_seeds().iter().all(|&(head, slot)| {
+            self.loop_backedge(head)
+                .is_some_and(|be| be.mode(slot) == fixnum)
+        });
+        self.set_counter_seed(false);
+        res?;
+        if !counters_fit {
+            // A seeded counter did not come round as an Integer: analyse
+            // again from the constants.
+            #[cfg(feature = "jit-log")]
+            crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::FX_SEED_RETRIES);
+            self.take_loop_infos(loop_start, loop_end);
+            if candidates.is_empty() {
+                self.restore_loop_infos(saved);
+                return self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end);
+            }
+            self.analyse_backedge_fixpoint(seeded, loop_start, loop_end)?;
+        }
         let array = LinkMode::S(Guarded::Class(ARRAY_CLASS));
-        let fits = match self.loop_info(head) {
-            Some((_, Some(backedge))) => candidates.iter().all(|&slot| backedge.mode(slot) == array),
-            _ => false,
-        };
+        let fits = candidates.is_empty()
+            || match self.loop_info(head) {
+                Some((_, Some(backedge))) => {
+                    candidates.iter().all(|&slot| backedge.mode(slot) == array)
+                }
+                _ => false,
+            };
         if !fits {
             #[cfg(feature = "jit-log")]
             crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::FX_SEED_RETRIES);
@@ -681,6 +735,65 @@ impl<'a> JitContext<'a> {
             self.analyse_backedge_fixpoint(incoming.clone(), loop_start, loop_end)?;
         }
         Ok(())
+    }
+
+    ///
+    /// The loop counters of the loop `loop_start..=loop_end` to seed at
+    /// its head (`analyse_loop_head`): the locals *incoming* brings in as
+    /// an Integer constant that a block ending in a back edge of this
+    /// loop steps (`i += 1`, `i = i - n`, seen with Integer operands).
+    ///
+    /// The step has to sit in such a block so that it is known to come
+    /// round: a counter stepped only on a path that leaves the loop is a
+    /// constant at the head, and seeding it would lose that.
+    ///
+    fn counter_seed_candidates(
+        &self,
+        incoming: &AbstractState,
+        loop_start: BasicBlockId,
+        loop_end: BasicBlockId,
+    ) -> smallvec::SmallVec<[SlotId; 4]> {
+        use crate::bytecodegen::BinOpK;
+        let block_param = self.iseq().block_param_slot();
+        let consts: smallvec::SmallVec<[SlotId; 4]> = (1..=self.local_num())
+            .map(|i| SlotId(i as u16))
+            .filter(|slot| Some(*slot) != block_param)
+            .filter(|slot| incoming.is_fixnum_literal(*slot).is_some())
+            .collect();
+        if consts.is_empty() {
+            return consts;
+        }
+        let mut stepped: smallvec::SmallVec<[SlotId; 4]> = smallvec::SmallVec::new();
+        let iseq = self.iseq();
+        for bb in loop_start..=loop_end {
+            if !iseq.bb_info.succ(bb).contains(&loop_start) {
+                continue;
+            }
+            let BasicBlockInfoEntry { begin, end, .. } = iseq.bb_info[bb];
+            let mut pos = begin;
+            while pos <= end {
+                let pc = iseq.get_pc(pos);
+                if !pc.is_handler_only()
+                    && let TraceIr::BinOp {
+                        kind: BinOpK::Add | BinOpK::Sub,
+                        dst: Some(dst),
+                        lhs,
+                        rhs,
+                        ic: Some((lhs_class, rhs_class)),
+                        ..
+                    } = TraceIr::from_pc(pc, self.store)
+                    && (lhs == dst || rhs == dst)
+                    && lhs_class == CachedClass::INTEGER
+                    && rhs_class == CachedClass::INTEGER
+                    && consts.contains(&dst)
+                    && !stepped.contains(&dst)
+                {
+                    stepped.push(dst);
+                }
+                pos = pos + 1;
+            }
+        }
+        stepped
     }
 
     ///

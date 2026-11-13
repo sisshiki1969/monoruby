@@ -5,7 +5,7 @@ use super::*;
 /// the walked range: the head of the walked loop itself and every loop
 /// nested inside it.
 ///
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 struct LoopWalk {
     /// Per head: the liveness of its loop (joined at the loop's back
     /// edges and at every leaving path inside it).
@@ -15,6 +15,18 @@ struct LoopWalk {
     backedge: indexmap::IndexMap<BasicBlockId, Option<AbstractState>>,
     /// Stage-C loop adoption vetoes, for the walked loop's own head.
     vetoes: (bool, Vec<(usize, SlotId)>),
+    /// The loop counters this walk seeded, per head
+    /// (`JitContext::analyse_loop_head`). Not part of what a walk found:
+    /// a head is seeded only until a back edge is recorded for it.
+    seeded: Vec<(BasicBlockId, SlotId)>,
+}
+
+impl PartialEq for LoopWalk {
+    fn eq(&self, other: &Self) -> bool {
+        self.liveness == other.liveness
+            && self.backedge == other.backedge
+            && self.vetoes == other.vetoes
+    }
 }
 
 ///
@@ -125,6 +137,9 @@ impl<'a> JitContext<'a> {
         loop_end: BasicBlockId,
     ) -> JitResult<()> {
         state.clear_above(self.iseq().get_sp(self.iseq().bb_info[loop_start].begin));
+        if state.copy_window_idle() {
+            state.close_copy_window();
+        }
         let heads: Vec<BasicBlockId> = self
             .iseq()
             .bb_info
@@ -206,6 +221,9 @@ impl<'a> JitContext<'a> {
             // the back edge there. Inner heads get theirs from their own
             // fixpoint when the real compile reaches them.
             self.record_loop_adoption_vetoes(loop_start, walk.vetoes);
+            for (head, slot) in walk.seeded {
+                self.note_counter_seed(head, slot);
+            }
             let mut changed = false;
             for (head, backedge) in walk.backedge {
                 let liveness = walk.liveness[&head].clone();
@@ -427,6 +445,7 @@ impl<'a> JitContext<'a> {
             liveness,
             backedge,
             vetoes,
+            seeded: ctx.counter_seeds().to_vec(),
         })
     }
 

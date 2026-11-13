@@ -1766,6 +1766,19 @@ impl SlotState {
         self.drop_copy_srcs(|src| src == slot);
     }
 
+    /// Whether the copy window is open with no provenance behind it. It
+    /// then says nothing — [`Self::begin_instruction`] has nothing to drop
+    /// whether it is open or closed — but two states that differ in it
+    /// alone still compare unequal.
+    pub(in crate::codegen::jitgen) fn copy_window_idle(&self) -> bool {
+        self.copy_window && self.copy_srcs == 0
+    }
+
+    /// Close the copy window.
+    pub(in crate::codegen::jitgen) fn close_copy_window(&mut self) {
+        self.copy_window = false;
+    }
+
     ///
     /// Open or close the copy-provenance window at the start of an
     /// instruction (*mov_like*: the instruction only copies a slot or
