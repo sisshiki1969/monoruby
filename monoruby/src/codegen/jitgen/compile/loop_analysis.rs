@@ -491,13 +491,13 @@ impl<'a> JitContext<'a> {
 /// adopts from the fixpoint's back edge (`keep_backedge_floats`). Nothing
 /// here feeds back into the compile.
 ///
-#[cfg(feature = "jit-log")]
+#[cfg(feature = "block-summary")]
 use crate::bytecodegen::{BinOpK, UnOpK};
 
 ///
 /// What one definition puts in a slot of the frame a loop is in.
 ///
-#[cfg(feature = "jit-log")]
+#[cfg(feature = "block-summary")]
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum FloatDef {
     Float,
@@ -512,7 +512,7 @@ enum FloatDef {
 /// `BinCmp` or `UnOp` whose cache says `Float` for the operand), and the
 /// slot it defines as a float: float arithmetic, or a float literal.
 ///
-#[cfg(feature = "jit-log")]
+#[cfg(feature = "block-summary")]
 fn float_ops(ir: &TraceIr) -> (Vec<SlotId>, Option<SlotId>) {
     let is_num = |c: CachedClass| c == CachedClass::FLOAT || c == CachedClass::INTEGER;
     let mut reads = vec![];
@@ -581,7 +581,7 @@ fn float_ops(ir: &TraceIr) -> (Vec<SlotId>, Option<SlotId>) {
 /// Every slot of its own frame *ir* writes: `TraceIr::defined_slot`, and
 /// the destinations that are not plain.
 ///
-#[cfg(feature = "jit-log")]
+#[cfg(feature = "block-summary")]
 fn written_slots(ir: &TraceIr, store: &Store) -> Vec<SlotId> {
     let mut written: Vec<SlotId> = ir.defined_slot(store).into_iter().collect();
     match ir {
@@ -613,7 +613,7 @@ fn written_slots(ir: &TraceIr, store: &Store) -> Vec<SlotId> {
 ///
 /// The iseq of the block literal *ir* passes, for a method call with one.
 ///
-#[cfg(feature = "jit-log")]
+#[cfg(feature = "block-summary")]
 fn block_literal(ir: &TraceIr, store: &Store) -> Option<ISeqId> {
     let TraceIr::MethodCall { callid, .. } = ir else {
         return None;
@@ -632,7 +632,7 @@ fn block_literal(ir: &TraceIr, store: &Store) -> Option<ISeqId> {
 /// a "may": a definition here does not end the life of the value the slot
 /// had.
 ///
-#[cfg(feature = "jit-log")]
+#[cfg(feature = "block-summary")]
 struct BlockSummary {
     /// Read as a float operand.
     float_read: Vec<bool>,
@@ -660,7 +660,7 @@ impl BlockSummary {
     }
 }
 
-#[cfg(feature = "jit-log")]
+#[cfg(feature = "block-summary")]
 impl<'a> JitContext<'a> {
     ///
     /// Whether the block literal the call *ir* passes is expected to be
@@ -1369,5 +1369,34 @@ impl<'a> JitContext<'a> {
                 both.len(),
             );
         }
+    }
+}
+
+#[cfg(feature = "carry-float-literal")]
+impl<'a> JitContext<'a> {
+    ///
+    /// The locals of the current frame that the block literal *block*
+    /// accumulates floats into: slots the block reads as a float and
+    /// whose every write in the block (nested blocks included) is a
+    /// float. Used at the call that hands *block* to an inlined callee,
+    /// to give a float literal in such a slot a float home before the
+    /// call (see `method_call.rs`). Only a profitability hint: whatever
+    /// the block really does to the slot, the claim the call site makes
+    /// is the one a computed float already makes there.
+    ///
+    pub(in crate::codegen::jitgen) fn block_float_accumulators(
+        &self,
+        block: ISeqId,
+    ) -> Vec<SlotId> {
+        let n = self.iseq().total_reg_num();
+        let sum = self.block_summary(block, 1, n);
+        (1..n)
+            .filter(|&i| {
+                sum.float_read[i]
+                    && !sum.defs[i].is_empty()
+                    && sum.defs[i].iter().all(|d| *d == FloatDef::Float)
+            })
+            .map(|i| SlotId(i as u16))
+            .collect()
     }
 }

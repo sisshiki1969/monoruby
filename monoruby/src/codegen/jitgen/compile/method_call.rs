@@ -922,6 +922,21 @@ impl<'a> JitContext<'a> {
                 && !self.in_dispatch_arm()
                 && state.no_capture_guard();
             if inlined_block {
+                // Experimental (`carry-float-literal`): a float literal
+                // the block accumulates into stays a kept `C` across the
+                // call, and the callee's loop head then joins it with the
+                // block's store to a boxed `S` — a box and an unbox per
+                // iteration. A *computed* float in the same slot is
+                // carried in a spill home instead (`Keep::Claims` below).
+                // Give the literal the same start.
+                #[cfg(feature = "carry-float-literal")]
+                if state.has_float_literal_local()
+                    && let Some(block) = callsite.block_fid.and_then(|fid| self.store[fid].is_iseq())
+                {
+                    for slot in self.block_float_accumulators(block) {
+                        state.float_literal_to_F(ir, slot);
+                    }
+                }
                 state.locals_unbox_to_S_keeping_claims(ir);
             } else {
                 // The literal block handed out here is homed in the
