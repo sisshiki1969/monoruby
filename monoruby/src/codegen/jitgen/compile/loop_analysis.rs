@@ -110,12 +110,21 @@ impl<'a> JitContext<'a> {
     /// run: the fixpoint has converged (`doc/fixpoint_engine_plan.md`
     /// step D). Debug builds run it anyway and check that it does repeat.
     ///
+    /// The temporaries above the head's stack top are dead at the head,
+    /// and the join with a back edge discards them there. The incoming
+    /// state can still carry something in them (a loop JIT's entry has
+    /// every slot a boxed value), which made the second walk's entry
+    /// differ from the first's in those slots alone and so kept the
+    /// second walk from being skipped. They are discarded before the
+    /// first walk (`doc/fixpoint_engine_plan.md` §5.5).
+    ///
     pub(in crate::codegen::jitgen) fn analyse_backedge_fixpoint(
         &mut self,
-        state: AbstractState,
+        mut state: AbstractState,
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
     ) -> JitResult<()> {
+        state.clear_above(self.iseq().get_sp(self.iseq().bb_info[loop_start].begin));
         let heads: Vec<BasicBlockId> = self
             .iseq()
             .bb_info
