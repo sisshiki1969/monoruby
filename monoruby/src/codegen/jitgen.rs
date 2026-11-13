@@ -1381,20 +1381,7 @@ impl Codegen {
                 store.func_description(store[info.iseq_id].func_id()),
             );
         }
-        // x86-64 leaves rbp / r14 where they are and emits the body with
-        // its frame displacement grown by `delta` instead (`fdisp`): every
-        // frame-relative access of the body adds it. aarch64 moves them.
-        let outer_disp = fdisp();
-        let shift = if cfg!(target_arch = "x86_64") {
-            set_fdisp(outer_disp + delta);
-            0
-        } else {
-            set_fdisp(0);
-            outer_disp + delta
-        };
-        if shift != 0 {
-            self.inline_frame_shift(shift);
-        }
+        self.inline_frame_enter(delta);
         self.inline_ctx.push(InlineCtx {
             done: done.clone(),
             redo: redo.clone(),
@@ -1407,13 +1394,10 @@ impl Codegen {
         let entry = self.jit.label();
         self.gen_machine_code(info, store, entry, level, class_version, root);
         self.inline_ctx.pop();
-        set_fdisp(outer_disp);
         self.jit.bind_label(done);
-        if shift != 0 {
-            self.inline_frame_unshift(shift);
-        }
+        self.inline_frame_leave(delta);
         self.inline_fpr_restore(using_fpr);
-        self.inline_redo_trampoline(redo, shift, using_fpr, &deopt, &cont);
+        self.inline_redo_trampoline(redo, delta, using_fpr, &deopt, &cont);
         self.jit.bind_label(cont);
     }
 }
@@ -1431,8 +1415,21 @@ impl Codegen {
         }
     }
 
+    /// Enter an inline callee's window, *delta* below the frame being
+    /// emitted: rbp / r14 stay where they are, and the body is emitted
+    /// with the frame displacement grown by *delta* (`fdisp`), so every
+    /// frame-relative access of it lands in the window.
+    fn inline_frame_enter(&mut self, delta: i32) {
+        set_fdisp(fdisp() + delta);
+    }
+
+    /// Leave the window `inline_frame_enter` entered.
+    fn inline_frame_leave(&mut self, delta: i32) {
+        set_fdisp(fdisp() - delta);
+    }
+
     /// Move the native frame pointer and the LFP down into an inline
-    /// callee's window.
+    /// callee's window (for real: a materializing exit).
     fn inline_frame_shift(&mut self, delta: i32) {
         monoasm! { &mut self.jit,
             subq rbp, (delta);
@@ -1451,14 +1448,13 @@ impl Codegen {
         self.fpr_restore(using_fpr);
     }
 
-    /// The cold way out of an inline body: undo the frame shift (if the
-    /// `InlineCall` made one), bring the caller's fprs back and take the
-    /// caller's deopt. On the cold page, so
-    /// the hot path falls straight through to *cont*.
+    /// The cold way out of an inline body: bring the caller's fprs back
+    /// and take the caller's deopt (rbp / r14 never moved). On the cold
+    /// page, so the hot path falls straight through to *cont*.
     fn inline_redo_trampoline(
         &mut self,
         redo: DestLabel,
-        shift: i32,
+        _delta: i32,
         using_fpr: UsingFpr,
         deopt: &DestLabel,
         _cont: &DestLabel,
@@ -1466,9 +1462,6 @@ impl Codegen {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(redo);
-        if shift != 0 {
-            self.inline_frame_unshift(shift);
-        }
         self.inline_fpr_restore(using_fpr);
         monoasm! { &mut self.jit,
             jmp deopt;
@@ -2472,9 +2465,8 @@ impl Codegen {
         // callee's window if the body left them where they were
         // (`gen_inline_call`), and address everything from there.
         let disp = set_fdisp(0);
-        if disp != 0 {
-            self.inline_frame_shift(disp);
-        }
+        debug_assert_ne!(0, disp, "frameless materialize outside an inline body");
+        self.inline_frame_shift(disp);
         self.gen_write_back_for_deopt(wb, base);
         let cont_stub = self.jit.get_label_address(&self.chain_cont_stub).as_ptr() as u64;
         let levels: Vec<(i32, UsingFpr, ChainReplay, u64, bool)> = self
