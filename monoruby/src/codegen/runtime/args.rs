@@ -167,7 +167,7 @@ pub(crate) extern "C" fn jit_generic_set_arguments(
     match res {
         Ok(_) => {}
         Err(mut err) => {
-            err.push_internal_trace(callee_fid);
+            err.push_callee_trace(&globals.store, callee_fid);
             vm.set_error(err);
             return None;
         }
@@ -206,7 +206,7 @@ pub(crate) extern "C" fn jit_forwarded_set_arguments(
     match forwarded_set_arguments_core(vm, globals, callid, callee_lfp, callee_fid, caller_lfp) {
         Ok(_) => Some(Value::nil()),
         Err(mut err) => {
-            err.push_internal_trace(callee_fid);
+            err.push_callee_trace(&globals.store, callee_fid);
             vm.set_error(err);
             None
         }
@@ -1665,7 +1665,8 @@ pub(crate) extern "C" fn handle_invoker_arguments(
 ) -> Option<Value> {
     match invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, true, kw_arg) {
         Ok(val) => Some(val),
-        Err(err) => {
+        Err(mut err) => {
+            err.push_callee_trace(&globals.store, callee_lfp.func_id());
             vm.set_error(err);
             None
         }
@@ -1682,7 +1683,8 @@ pub(crate) extern "C" fn handle_invoker_arguments2(
 ) -> Option<Value> {
     match invoker_arguments_inner(vm, globals, callee_lfp, arg_num, args, false, kw_arg) {
         Ok(val) => Some(val),
-        Err(err) => {
+        Err(mut err) => {
+            err.push_callee_trace(&globals.store, callee_lfp.func_id());
             vm.set_error(err);
             None
         }

@@ -36,8 +36,18 @@ extern "C" fn no_method_name(vm: &mut Executor) -> Option<Value> {
     None
 }
 
-extern "C" fn wrong_number_of_arg(vm: &mut Executor, expected: usize, given: usize) -> Option<Value> {
-    let err = MonorubyErr::wrong_number_of_arg(expected, given);
+/// The arity error of an inlined `send` / `Method#call` whose callee
+/// `callee` is a simple iseq: raised from the callee's frame, as CRuby
+/// raises it, so the backtrace starts at the callee's `def` line.
+extern "C" fn wrong_number_of_arg(
+    vm: &mut Executor,
+    globals: &Globals,
+    expected: usize,
+    given: usize,
+    callee: FuncId,
+) -> Option<Value> {
+    let mut err = MonorubyErr::wrong_number_of_arg(expected, given);
+    err.push_callee_trace(&globals.store, callee);
     vm.set_error(err);
     None
 }
@@ -551,14 +561,16 @@ impl Codegen {
             self.a64_frame_store(9, 13, (LFP_ARG0 + 8 * k as i32) as u32);
         }
         monoasm_arm64!(&mut self.jit, b exit;);
-        // arity mismatch (inline): raise. `wrong_number_of_arg(vm, expected,
-        // given)` matches x86: the callee's min arity is what it expects,
+        // arity mismatch (inline): raise. `wrong_number_of_arg(vm, globals,
+        // expected, given, callee)` matches x86: the callee's min arity is what it expects,
         // the call site's count is what it was given.
         self.jit.bind_label(arg_error);
         monoasm_arm64!(&mut self.jit,
-            mov x1, x9;                               // expected (callee min arity)
+            mov x2, x9;                               // expected (callee min arity)
             mov x0, x19;                              // vm
-            mov x2, #((pos_num - 1) as u64);          // given
+            mov x1, x20;                              // globals
+            mov x3, #((pos_num - 1) as u64);          // given
+            ldr w4, [x26, #((FUNCDATA_META + META_FUNCID) as u32)]; // callee
             str x30, [sp, #-16]!;
             mov x9, (wrong_number_of_arg as *const () as u64);
             blr x9;
@@ -606,9 +618,11 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit, b exit;);
         self.jit.bind_label(arg_error);
         monoasm_arm64!(&mut self.jit,
-            mov x1, x9;                               // expected (callee min arity)
+            mov x2, x9;                               // expected (callee min arity)
             mov x0, x19;                              // vm
-            mov x2, #(pos_num as u64);                // given
+            mov x1, x20;                              // globals
+            mov x3, #(pos_num as u64);                // given
+            ldr w4, [x26, #((FUNCDATA_META + META_FUNCID) as u32)]; // callee
             str x30, [sp, #-16]!;
             mov x9, (wrong_number_of_arg as *const () as u64);
             blr x9;

@@ -2766,20 +2766,11 @@ pub(crate) fn env_generation() -> u64 {
     ENV_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// The `Encoding` `Encoding.find("locale")` resolves to, for the strings
-/// the environment hands out.
-fn env_locale_encoding() -> Encoding {
-    static ENC: std::sync::OnceLock<Encoding> = std::sync::OnceLock::new();
-    *ENC.get_or_init(|| {
-        Encoding::try_from_str(super::encoding::locale_charmap_str()).unwrap_or(Encoding::UTF8)
-    })
-}
-
 /// `env_str_new`: an environment string carries the *locale* encoding,
 /// falling back to ASCII-8BIT when its bytes are not valid in it (a
 /// UTF-8 value under a US-ASCII locale is the common case).
 fn env_string(s: &str) -> Value {
-    let enc = env_locale_encoding();
+    let enc = super::encoding::locale_encoding();
     let inner = RStringInner::from_encoding(s.as_bytes(), enc);
     if inner.is_valid_encoding() {
         Value::string_from_inner(inner)

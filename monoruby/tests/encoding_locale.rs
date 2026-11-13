@@ -547,3 +547,52 @@ p [$stdout.external_encoding, $stdout.internal_encoding]
         }
     }
 }
+
+/// `SystemCallError` messages start as `strerror` in the *locale*
+/// encoding, as CRuby's `syserr_initialize` builds them
+/// (`rb_enc_str_new_cstr(strerror(e), rb_locale_encoding())`), and what
+/// is appended (a location, a message, a path) moves them off it only
+/// when it brings non-ASCII text of its own (#1869). Both the Ruby
+/// constructors and the errors the runtime raises itself.
+#[test]
+fn system_call_error_messages_use_the_locale_encoding() {
+    let path = write_script(
+        "mr_enc_locale_syserr.rb",
+        r##"# encoding: utf-8
+p Encoding.find("locale")
+p SystemCallError.new(nil).message.encoding
+p Errno::ENOENT.new("x").message.encoding
+p Errno::ENOENT.new("é").message.encoding
+p Errno::ENOENT.new("x", "é").message
+p Errno::ENOENT.new("x", "é").message.encoding
+p Errno::ENOENT.new("x".b).message.encoding
+p Errno::ENOENT.new("\xff".b).message.encoding
+p Errno::ENOENT.new("xé".encode("UTF-16LE")).message
+p Errno::ENOENT.new("xé".encode("UTF-16LE")).message.encoding
+p Errno::ENOENT.new("xé".encode("EUC-JP")).message.encoding
+p Errno::ENOENT.new(nil, "loc").message
+p Errno::ENOENT.new("m", 3).message
+p Errno::ENOENT.new("m", "loc").message.encoding
+p Errno::ENOENT.new("m", "lé").message.encoding
+p Errno::ENETDOWN.new.message
+p SystemCallError.new("x", 99999).message
+p SystemCallError.new("x", -1).message
+p SystemCallError.new(nil).message
+p SystemCallError.new("q").message
+p((SystemCallError.new("x", 2**40) rescue $!))
+p((SystemCallError.new("x", -2**40) rescue $!))
+class MyENOENT < Errno::ENOENT; end
+p MyENOENT.new("z").message, MyENOENT.new("z").message.encoding
+p Errno::EAGAIN.new.message.encoding
+p((File.open("/nonexistent") rescue [$!.message, $!.message.encoding]))
+p((File.open("/nonexistent/é") rescue [$!.message, $!.message.encoding]))
+p((IO.new(99) rescue [$!.message, $!.message.encoding]))
+p((Process.wait rescue [$!.message, $!.message.encoding]))
+"##,
+    );
+    for (label, env) in LOCALES {
+        let expected = run_script(cruby(env), &path);
+        let actual = run_script(monoruby(env), &path);
+        assert_eq!(actual, expected, "SystemCallError messages under {label}");
+    }
+}

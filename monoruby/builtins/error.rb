@@ -8,42 +8,19 @@
 #   Errno::X.new([msg[, location]])       -> "strerror [@ loc] - msg"
 #   SystemCallError#errno                 -> the errno Integer
 class SystemCallError
-  # strerror(3) text for the errnos whose message CRuby tests exercise;
-  # anything else falls back to "Unknown error N".
-  STRERROR = {
-    "ENOENT" => "No such file or directory",
-    "EEXIST" => "File exists",
-    "EACCES" => "Permission denied",
-    "ENOTEMPTY" => "Directory not empty",
-    "ECONNRESET" => "Connection reset by peer",
-    "ETIMEDOUT" => "Connection timed out",
-    "ECONNREFUSED" => "Connection refused",
-    "EISDIR" => "Is a directory",
-    "ENOTDIR" => "Not a directory",
-    "EPERM" => "Operation not permitted",
-    "EINVAL" => "Invalid argument",
-    "EIO" => "Input/output error",
-    "EAGAIN" => "Resource temporarily unavailable",
-    "EPIPE" => "Broken pipe",
-    "EBADF" => "Bad file descriptor",
-    "ENOMEM" => "Cannot allocate memory",
-    "EBUSY" => "Device or resource busy",
-    "EROFS" => "Read-only file system",
-    "ENOSPC" => "No space left on device",
-    "EADDRINUSE" => "Address already in use",
-    "ECHILD" => "No child processes",
-    "EINTR" => "Interrupted system call",
-    "EDOM" => "Numerical argument out of domain",
-    "ERANGE" => "Numerical result out of range",
-    "ESRCH" => "No such process",
-    "ENXIO" => "No such device or address",
-    "ESPIPE" => "Illegal seek",
-    "EXDEV" => "Invalid cross-device link",
-    "ENODEV" => "No such device",
-    "EMFILE" => "Too many open files",
-    "ELOOP" => "Too many levels of symbolic links",
-    "ENAMETOOLONG" => "File name too long",
-  }
+  # Append `str` to the message `buf` as CRuby's `rb_str_catf` appends a
+  # `%PRIsVALUE` argument: the result takes the encoding the two are
+  # compatible in — so ASCII text keeps the locale encoding and non-ASCII
+  # text brings its own — and an incompatible `str` is converted into
+  # `buf`'s encoding, with replacement characters for what does not map.
+  def self.__syserr_cat(buf, str)
+    if (enc = Encoding.compatible?(buf, str))
+      buf.force_encoding(enc)
+    else
+      str = str.encode(buf.encoding, invalid: :replace, undef: :replace)
+    end
+    buf << str
+  end
 
   def self.__errno_class(n)
     @__errno_map ||= begin
@@ -133,18 +110,23 @@ class SystemCallError
       end
     end
     @__errno = reported_errno.nil? ? errno : reported_errno
-    # Walk the ancestors so a user subclass of Errno::ENOENT inherits
-    # "No such file or directory" rather than the unknown-errno text.
-    base = nil
-    self.class.ancestors.each do |a|
-      next unless a.is_a?(Class) && a.name
-      base = STRERROR[a.name.split("::").last]
-      break if base
-      break if a.equal?(SystemCallError)
+    # CRuby's `NUM2INT(error)` before `strerror`.
+    if errno && (errno < -0x80000000 || errno > 0x7fffffff)
+      raise RangeError, "integer #{errno} too #{errno > 0 ? 'big' : 'small'} to convert to 'int'"
     end
-    base ||= errno ? "Unknown error #{errno}" : "unknown error"
-    base = "#{base} @ #{loc}" unless loc.nil?
-    base = "#{base} - #{msg}" unless msg.nil?
+    # `strerror(errno)` as a String in the locale encoding, and the
+    # location and message appended the way `rb_str_catf` appends a
+    # `%PRIsVALUE` (see `__syserr_cat`). CRuby names the location only
+    # together with a message.
+    base = SystemCallError.__strerror(errno)
+    unless msg.nil?
+      unless loc.nil?
+        base << " @ "
+        SystemCallError.__syserr_cat(base, loc.to_s)
+      end
+      base << " - "
+      SystemCallError.__syserr_cat(base, msg)
+    end
     ::Exception.instance_method(:initialize).bind(self).call(base)
   end
 end

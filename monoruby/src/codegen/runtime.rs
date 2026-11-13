@@ -2166,7 +2166,7 @@ pub(super) extern "C" fn vm_handle_arguments(
             Some(Value::nil())
         }
         Err(mut err) => {
-            err.push_internal_trace(callee_lfp.func_id());
+            err.push_callee_trace(&globals.store, callee_lfp.func_id());
             vm.set_error(err);
             None
         }
@@ -2183,7 +2183,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block(
     match set_frame_arguments(vm, globals, callee_lfp, caller_lfp, callid) {
         Ok(_) => Some(Value::nil()),
         Err(mut err) => {
-            err.push_internal_trace(callee_lfp.func_id());
+            err.push_callee_trace(&globals.store, callee_lfp.func_id());
             vm.set_error(err);
             None
         }
@@ -2229,7 +2229,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_yield(
     match set_frame_arguments_simple(vm, globals, callee_lfp, caller_lfp, callid, src, pos_num) {
         Ok(_) => Some(Value::nil()),
         Err(mut err) => {
-            err.push_internal_trace(callee_lfp.func_id());
+            err.push_callee_trace(&globals.store, callee_lfp.func_id());
             vm.set_error(err);
             None
         }
@@ -2254,7 +2254,8 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_send(
         globals.store[callid].pos_num - 1,
     ) {
         Ok(_) => Some(Value::nil()),
-        Err(err) => {
+        Err(mut err) => {
+            err.push_callee_trace(&globals.store, callee_lfp.func_id());
             vm.set_error(err);
             None
         }
@@ -2279,7 +2280,7 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_method_object(
     match set_frame_arguments_simple(vm, globals, callee_lfp, caller_lfp, callid, src, pos_num) {
         Ok(_) => Some(Value::nil()),
         Err(mut err) => {
-            err.push_internal_trace(callee_lfp.func_id());
+            err.push_callee_trace(&globals.store, callee_lfp.func_id());
             vm.set_error(err);
             None
         }
