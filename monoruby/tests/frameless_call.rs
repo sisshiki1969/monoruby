@@ -1338,3 +1338,148 @@ fn frameless_block_outer_locals_with_nested_window() {
         "#,
     );
 }
+
+#[test]
+fn frameless_callee_past_the_old_size_limit() {
+    // A 53-bytecode body: over the per-callee limit this file's other
+    // tests stay under, inside `FRAMELESS_MAX_BYTECODES`. A Float takes a
+    // redo, an overflow after the ivar store a materializing exit, and
+    // `nil` the error exit.
+    run_test(
+        r#"
+        class Mix
+          def initialize = (@acc = 0; @hits = 0)
+          attr_reader :acc, :hits
+          # 41..80 bytecodes: framed under the old 40 limit.
+          def step(a, b, c)
+            x = a + b
+            y = b - c
+            z = a * 2 + c
+            if x > y
+              x -= 1
+              @hits += 1
+            elsif x < y
+              y += 2
+            else
+              z += 3
+            end
+            w = x * y - z
+            w += 7 if w % 2 == 1
+            w -= a if a > c
+            w += b if b > c
+            w = -w if w < -1000
+            @acc += 1
+            w + x + y + z
+          end
+        end
+        m = Mix.new
+        res = []
+        40.times do |i|
+          res << m.step(i, i % 7, 3)
+        end
+        res << m.step(1.5, 2, 3)            # redo / materialize (after the ivar store)
+        res << m.step(2**62 - 1, 2**62 - 1, 0)  # overflow after the ivar store
+        begin
+          m.step(nil, 1, 2)
+        rescue NoMethodError => e
+          res << e.class
+        end
+        res << m.acc << m.hits
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_chain_over_the_budget() {
+    // `all` calls four 45-bytecode siblings: 193 bytecodes together, over
+    // `FRAMELESS_CHAIN_BUDGET`, so the fourth does not fit, `all` rolls
+    // back, and each sibling runs frameless under a framed `all` instead.
+    // `two` fits with its two siblings.
+    run_test(
+        r#"
+        class W
+          def initialize = (@k = 1)
+          def p1(x)
+            a = x + 1; b = a * 2; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 2 + a - b + c
+          end
+          def p2(x)
+            a = x + 2; b = a * 3; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 3 + a - b + c
+          end
+          def p3(x)
+            a = x + 3; b = a * 4; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 4 + a - b + c
+          end
+          def p4(x)
+            a = x + 4; b = a * 5; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 5 + a - b + c
+          end
+          # Four siblings of ~45 bytecodes each: over the chain budget together.
+          def all(x) = p1(x) + p2(x) + p3(x) + p4(x)
+          def two(x) = p1(x) + p2(x)
+        end
+        w = W.new
+        res = []
+        40.times { |i| res << w.all(i) << w.two(i) }
+        res << w.all(1.5) << w.two(2**62)
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_class_new_recursive_initialize() {
+    // `initialize` builds the rest of the list through `Node.new`: the
+    // nested construction finds its `initialize` on the specialization
+    // stack and stays a call (which keeps the outer one framed too),
+    // rather than descending level by level until the chain budget runs
+    // out and the whole tower rolls back.
+    run_test(
+        r#"
+        class Node
+          attr_reader :v, :nxt
+          def initialize(n)
+            @v = n
+            @nxt = n > 0 ? Node.new(n - 1) : nil
+          end
+        end
+        def len(node)
+          c = 0
+          while node
+            c += node.v
+            node = node.nxt
+          end
+          c
+        end
+        res = []
+        40.times { |i| res << len(Node.new(i % 12)) }
+        res
+        "#,
+    );
+}
