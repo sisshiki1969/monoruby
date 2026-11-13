@@ -451,6 +451,13 @@ pub(crate) struct UnitLiveness {
 }
 
 impl UnitLiveness {
+    /// Whether a block literal of the frame is opaque to the compilation
+    /// (`JitContext::table_blocks_opaque`).
+    #[cfg(feature = "jit-log")]
+    pub(crate) fn blocks_opaque(&self) -> bool {
+        self.blocks_opaque
+    }
+
     /// Whether a capture point in `begin..=end` may read the local
     /// *slot*.
     pub(crate) fn captured_in(&self, begin: BcIndex, end: BcIndex, slot: SlotId) -> bool {

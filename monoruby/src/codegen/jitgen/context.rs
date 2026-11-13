@@ -2116,6 +2116,19 @@ impl<'a> JitContext<'a> {
         len.checked_sub(1)?.checked_sub(outer)
     }
 
+    /// The iseq of the frame at stack position *pos*.
+    #[cfg(feature = "jit-log")]
+    pub(super) fn frame_iseq_at(&self, pos: usize) -> ISeqId {
+        self.stack_frame[pos].iseq_id
+    }
+
+    /// The stack position of the lexical outer of the frame at *pos*
+    /// (`None` for a method frame).
+    #[cfg(feature = "jit-log")]
+    pub(super) fn lexical_outer_at(&self, pos: usize) -> Option<usize> {
+        pos.checked_sub(self.stack_frame[pos].outer?)
+    }
+
     pub(super) fn outer_pos(&self, outer: usize) -> Option<usize> {
         let mut i = self.stack_frame.len() - 1;
         for _ in 0..outer {

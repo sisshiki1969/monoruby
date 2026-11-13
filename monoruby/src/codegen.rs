@@ -2470,6 +2470,17 @@ pub(crate) mod jit_stats {
     pub static FX54_FIX_ONLY_BLOCK: AtomicUsize = AtomicUsize::new(0);
     pub static FX54_FIX_ONLY_DEAD: AtomicUsize = AtomicUsize::new(0);
     pub static FX54_PRE_ONLY: AtomicUsize = AtomicUsize::new(0);
+    /// The yield side (`record_pre_fixpoint_outer_floats`): loop-entry
+    /// merges whose loop reaches a slot of an outer frame, those where
+    /// the two float sets agree, and the outer slots in both, held as a
+    /// float by the merge only, and chosen before the fixpoint only (of
+    /// which: slots the loop also writes).
+    pub static FX54O_HEADS: AtomicUsize = AtomicUsize::new(0);
+    pub static FX54O_SAME: AtomicUsize = AtomicUsize::new(0);
+    pub static FX54O_BOTH: AtomicUsize = AtomicUsize::new(0);
+    pub static FX54O_FIX_ONLY: AtomicUsize = AtomicUsize::new(0);
+    pub static FX54O_PRE_ONLY: AtomicUsize = AtomicUsize::new(0);
+    pub static FX54O_PRE_ONLY_WRITTEN: AtomicUsize = AtomicUsize::new(0);
     /// Fixpoints `analyse_loop_head` ran again without the `Array` seed.
     pub static FX_SEED_RETRIES: AtomicUsize = AtomicUsize::new(0);
     /// A head's first recorded back edge.
@@ -2544,6 +2555,19 @@ pub(crate) mod jit_stats {
             g(&FX54_FIX_ONLY_BLOCK),
             g(&FX54_FIX_ONLY_DEAD),
             g(&FX54_PRE_ONLY)
+        );
+        eprintln!("  the same for the frames outside a loop's own (yield side):");
+        eprintln!(
+            "    heads compared / same set:       {}/{}",
+            g(&FX54O_HEADS),
+            g(&FX54O_SAME)
+        );
+        eprintln!(
+            "    outer slots both / fixpoint only / pre only (written): {}/{}/{} ({})",
+            g(&FX54O_BOTH),
+            g(&FX54O_FIX_ONLY),
+            g(&FX54O_PRE_ONLY),
+            g(&FX54O_PRE_ONLY_WRITTEN)
         );
         eprintln!(
             "  back-edge records first/rise/descent/incomparable: {}/{}/{}/{}",

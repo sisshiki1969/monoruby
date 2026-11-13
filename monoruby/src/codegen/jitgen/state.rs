@@ -1379,7 +1379,11 @@ impl AbstractFrame {
     }
 
     pub(in crate::codegen::jitgen) fn clear_above_next_sp(&mut self) {
-        let sp = self.next_sp;
+        self.clear_above(self.next_sp);
+    }
+
+    /// Discard the slots at and above *sp*.
+    pub(in crate::codegen::jitgen) fn clear_above(&mut self, sp: SlotId) {
         for i in sp..SlotId(self.slots_len() as u16) {
             // The elements of an elided Array stay put until it is
             // materialized or consumed (`doc/escape_analysis.md`).

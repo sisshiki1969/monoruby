@@ -1057,6 +1057,32 @@ impl SlotState {
     }
 
     ///
+    /// Whether some local of this frame is a float literal (`C(v)`, *v* a
+    /// Float).
+    ///
+    pub(in crate::codegen::jitgen) fn has_float_literal_local(&self) -> bool {
+        self.locals()
+            .any(|slot| matches!(self.mode(slot), LinkMode::C(v) if v.try_float().is_some()))
+    }
+
+    ///
+    /// A float literal local (`C(v)`, *v* a Float) becomes a float in a
+    /// register or spill slot (`F`); anything else is left alone.
+    ///
+    #[allow(non_snake_case)]
+    pub(in crate::codegen::jitgen) fn float_literal_to_F(&mut self, ir: &mut AsmIr, slot: SlotId) {
+        if !self.locals().contains(&slot) {
+            return;
+        }
+        if let LinkMode::C(v) = self.mode(slot)
+            && let Some(f) = v.try_float()
+        {
+            let x = self.set_new_F(slot);
+            ir.f64_to_fpr(f, x);
+        }
+    }
+
+    ///
     /// C -> F (no asm emit). Returns `None` when only Phase-2 spill could free
     /// an fpr — caller should fall back (e.g. leave the slot as `S`).
     ///

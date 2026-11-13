@@ -355,6 +355,19 @@ impl<'a> JitContext<'a> {
             } else {
                 vec![]
             };
+            // §5.4 recording stage, the yield side: the same comparison
+            // for the frames outside the loop's own.
+            #[cfg(feature = "jit-log")]
+            if self.codegen_mode() {
+                self.record_pre_fixpoint_outer_floats(
+                    bbid,
+                    loop_start,
+                    loop_end,
+                    &target,
+                    &entries,
+                    &target_incoming,
+                );
+            }
 
             // `bridge` adds `+1` to the deopt resume PC so it lands on
             // the first body instruction (skipping LoopStart, which

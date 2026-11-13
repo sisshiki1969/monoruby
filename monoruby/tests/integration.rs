@@ -82,6 +82,7 @@ mod fixpoint_chain;
 mod flip_flop;
 mod float_across_block_call;
 mod float_call_convention;
+mod float_literal_carry;
 mod float_speculation;
 mod forwarded_block_yield;
 mod forwarding_depth;
