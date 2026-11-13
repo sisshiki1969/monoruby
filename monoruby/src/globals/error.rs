@@ -316,6 +316,27 @@ impl MonorubyErr {
         self.trace.push((None, Some(fid)));
     }
 
+    /// The frame of a callee whose arguments could not be bound (a wrong
+    /// arity, a missing or unknown keyword). CRuby raises those from a
+    /// frame it pushes for the callee, so the backtrace starts there:
+    /// a method or block written in Ruby at the line of its `def` /
+    /// block (`t.rb:1:in 'Object#m'`), a builtin as `<internal>`. A
+    /// method made by `define_method` from a block is that block's frame
+    /// (`t.rb:2:in 'block in <class:C>'`).
+    pub(crate) fn push_callee_trace(&mut self, store: &Store, fid: FuncId) {
+        let fid = match &store[fid].kind {
+            FuncKind::Proc(proc) => proc.func_id(),
+            _ => fid,
+        };
+        match store[fid].is_iseq() {
+            Some(iseq) => {
+                let iseq = &store[iseq];
+                self.push_trace(iseq.loc, iseq.sourceinfo.clone(), fid);
+            }
+            None => self.push_internal_trace(fid),
+        }
+    }
+
     pub fn take_trace(&mut self) -> Vec<(Option<(Loc, SourceInfoRef)>, Option<FuncId>)> {
         std::mem::take(&mut self.trace)
     }
@@ -1395,13 +1416,28 @@ impl MonorubyErr {
                         store.get_constant_noautoload(errno_class_id, IdentId::get_id(errno_name));
                     if let Some(err_class) = err_class {
                         let class_id = err_class.as_class_id();
-                        return MonorubyErr::new(MonorubyErrKind::Other(class_id), msg);
+                        return Self::syserr(class_id, msg);
                     }
                 }
             }
         }
         // Fallback to RuntimeError
         MonorubyErr::runtimeerr(msg)
+    }
+
+    /// A `SystemCallError` of class `class_id` with the message `msg`,
+    /// tagged the way CRuby's `syserr_initialize` tags it: the strerror
+    /// text is a string in the *locale* encoding, and what is appended
+    /// to it (a path, a syscall name) only moves the result off that
+    /// encoding when it carries non-ASCII bytes of its own. So under a
+    /// `C` locale an all-ASCII message is US-ASCII, not UTF-8.
+    fn syserr(class_id: ClassId, msg: String) -> MonorubyErr {
+        let mut e = MonorubyErr::with_message(MonorubyErrKind::Other(class_id), msg);
+        let locale = crate::builtins::encoding::locale_encoding();
+        if locale != crate::value::Encoding::UTF8 && e.message.is_ascii() {
+            e.raw_message = Some((e.message.as_bytes().to_vec(), locale));
+        }
+        e
     }
 
     /// Create an Errno exception from a `std::io::Error` with a syscall name and path.

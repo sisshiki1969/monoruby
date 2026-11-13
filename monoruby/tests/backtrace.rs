@@ -91,3 +91,87 @@ fn backtrace_of_unraised_exception_is_nil() {
         r#"RuntimeError.new("x").backtrace"#,
     ]);
 }
+
+/// An argument that cannot be bound (a wrong arity, a missing or
+/// unknown keyword) is raised from the callee's frame, which CRuby
+/// reports at the line of its `def` / block rather than as `<internal>`
+/// (#1870) — whichever way the callee was reached.
+#[test]
+fn argument_error_frame_is_the_callee_definition() {
+    run_test_once(
+        r#"
+        def m(a)
+        end
+        def k(a:, b: 1)
+        end
+        def o(a, b = 1,
+              c = 2)
+        end
+        class C
+          def im(x) = x
+          define_method(:dm) { |x| x }
+        end
+        def show
+          yield
+        rescue => e
+          # Only the callee's own frame: the frames between it and the
+          # caller differ for `send` / `Method#call` (#1894).
+          loc = e.backtrace_locations[0]
+          [e.message, e.backtrace[0].sub(/\A.*:(\d+:in )/, '\1'), loc.lineno, loc.label]
+        end
+        l = ->(a) {}
+        pr = proc { |a:| }
+        [
+          show { m },
+          show { m(1, 2) },
+          show { k },
+          show { k(a: 1, c: 2) },
+          show { o },
+          show { C.new.im },
+          show { C.new.dm },
+          show { send(:m) },
+          show { method(:m).call },
+          show { l.call },
+          show { pr.call },
+        ]
+        "#,
+    );
+}
+
+/// The same, once the caller is JIT-compiled: the direct call, and the
+/// inlined `send` / `Method#call` fast paths that check a simple
+/// callee's arity in the caller's code.
+#[test]
+fn argument_error_frame_is_the_callee_definition_jit() {
+    // `run_test_once`: the loops warm the JIT themselves, and the
+    // repeated copies `run_test` makes would move the line numbers.
+    run_test_once(
+        r#"
+        def m(a)
+        end
+        class C
+          def im(x) = x
+        end
+        def direct = m
+        def snd(o, n) = o.send(n)
+        def mcall(mm) = mm.call
+        r = []
+        mm = method(:m)
+        c = C.new
+        [
+          -> { direct },
+          -> { snd(self, :m) },
+          -> { snd(c, :im) },
+          -> { mcall(mm) },
+          -> { c.im(1, 2) },
+        ].each do |f|
+          200.times do
+            f.call
+          rescue ArgumentError => e
+            r << [e.message, e.backtrace[0].sub(/\A.*:(\d+:in )/, '\1')]
+          end
+        end
+        r.tally
+        "#,
+    );
+}

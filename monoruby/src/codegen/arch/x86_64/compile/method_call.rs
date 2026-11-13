@@ -480,12 +480,18 @@ extern "C" fn no_method_name(vm: &mut Executor) -> Option<Value> {
     None
 }
 
+/// The arity error of an inlined `send` / `Method#call` whose callee
+/// `callee` is a simple iseq: raised from the callee's frame, as CRuby
+/// raises it, so the backtrace starts at the callee's `def` line.
 extern "C" fn wrong_number_of_arg(
     vm: &mut Executor,
+    globals: &Globals,
     expected: usize,
     given: usize,
+    callee: FuncId,
 ) -> Option<Value> {
-    let err = MonorubyErr::wrong_number_of_arg(expected, given);
+    let mut err = MonorubyErr::wrong_number_of_arg(expected, given);
+    err.push_callee_trace(&globals.store, callee);
     vm.set_error(err);
     None
 }
@@ -756,9 +762,11 @@ impl Codegen {
         self.jit.select_page(1);
         monoasm! { &mut self.jit,
         arg_error:
-            movq rsi, rax;
+            movq rdx, rax;
             movq rdi, rbx;
-            movq rdx, (pos_num);
+            movq rsi, r12;
+            movq rcx, (pos_num);
+            movl r8, [r15 + ((FUNCDATA_META + META_FUNCID) as i32)];
             movq rax, (wrong_number_of_arg);
             call rax;
             jmp  error;
@@ -1071,12 +1079,14 @@ impl Codegen {
         self.jit.select_page(1);
         monoasm! { &mut self.jit,
         arg_error:
-            // `wrong_number_of_arg(vm, expected, given)`: the callee's
-            // min arity is what it expects, the call site's count is what
-            // it was given.
-            movq rsi, rax;
+            // `wrong_number_of_arg(vm, globals, expected, given, callee)`:
+            // the callee's min arity is what it expects, the call site's
+            // count is what it was given.
+            movq rdx, rax;
             movq rdi, rbx;
-            movq rdx, (pos_num - 1);
+            movq rsi, r12;
+            movq rcx, (pos_num - 1);
+            movl r8, [r15 + ((FUNCDATA_META + META_FUNCID) as i32)];
             movq rax, (wrong_number_of_arg);
             call rax;
             jmp  error;

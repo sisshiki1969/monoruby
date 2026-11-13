@@ -365,6 +365,7 @@ pub(super) fn init(globals: &mut Globals) {
         let cls = globals.define_class(name, syscall_err_module, errno_id);
         globals.set_constant_by_str(cls.id(), "Errno", Value::integer(*num as i64));
     }
+    globals.define_builtin_class_func(syscall_err_module.id(), "__strerror", syserr_strerror, 1);
     for (alias, canonical) in ERRNO_ALIASES {
         let target = globals
             .store
@@ -372,6 +373,27 @@ pub(super) fn init(globals: &mut Globals) {
             .unwrap_or_else(|| panic!("Errno alias target {canonical} not defined"));
         globals.set_constant_by_str(errno_id, alias, target);
     }
+}
+
+///
+/// ### SystemCallError.__strerror(errno) (internal)
+///
+/// The start of a `SystemCallError` message, as CRuby's
+/// `syserr_initialize` builds it: `strerror(errno)` — `"unknown error"`
+/// for a `nil` errno — as a String in the *locale* encoding
+/// (`rb_enc_str_new_cstr(err, rb_locale_encoding())`). The caller has
+/// already range-checked `errno` into a C `int`.
+///
+#[monoruby_builtin]
+fn syserr_strerror(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let text = match lfp.arg(0).try_fixnum() {
+        Some(n) => strerror(n as i32),
+        None => "unknown error".to_string(),
+    };
+    Ok(Value::string_from_inner(RStringInner::from_encoding(
+        text.as_bytes(),
+        super::encoding::locale_encoding(),
+    )))
 }
 
 /// Look up the canonical Ruby `Errno` class name (e.g. `"ENETDOWN"`) for a

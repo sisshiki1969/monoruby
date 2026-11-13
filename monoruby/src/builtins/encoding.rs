@@ -4044,6 +4044,19 @@ fn system_locale_charmap() -> String {
     }
 }
 
+/// The encoding `Encoding.find("locale")` resolves to, as an
+/// [`Encoding`](crate::value::Encoding): CRuby's `rb_locale_encoding()`,
+/// for the strings it tags with the locale (environment variables,
+/// `SystemCallError` messages). UTF-8 when the charmap names an
+/// encoding monoruby does not know, as `Encoding.find("locale")` does.
+pub(crate) fn locale_encoding() -> crate::value::Encoding {
+    static ENC: std::sync::OnceLock<crate::value::Encoding> = std::sync::OnceLock::new();
+    *ENC.get_or_init(|| {
+        crate::value::Encoding::try_from_str(locale_charmap_str())
+            .unwrap_or(crate::value::Encoding::UTF8)
+    })
+}
+
 /// The canonical name of the encoding the locale charmap selects, or
 /// `None` when it names none monoruby knows. This is the source
 /// encoding CRuby gives a `-e` script: a `C` locale makes
