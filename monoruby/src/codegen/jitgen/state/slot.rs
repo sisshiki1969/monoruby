@@ -458,6 +458,16 @@ impl SlotState {
         self.slots.len()
     }
 
+    /// Whether every slot of `self` sits at or below the same slot of
+    /// `other` in the order [`LinkMode::equiv`] sees ([`LinkMode::climbs_to`]).
+    #[cfg(feature = "jit-log")]
+    pub(super) fn climbs_to(&self, other: &Self) -> bool {
+        self.slots_len() == other.slots_len()
+            && self
+                .all_regs()
+                .all(|i| self.mode(i).climbs_to(&other.mode(i)))
+    }
+
     /// The slot's abstract type as a lattice element; the sentinels
     /// (`None` / `MaybeNone` / `V`) carry no type and read as ⊤.
     fn ty(&self, slot: SlotId) -> Guarded {
@@ -2633,6 +2643,33 @@ impl LinkMode {
             (LinkMode::C(_), _) => false,
             (_, LinkMode::C(_)) => false,
             (lhs, rhs) => lhs.guarded() == rhs.guarded(),
+        }
+    }
+
+    ///
+    /// Whether joining `self` into `other` leaves `other` where it was, as
+    /// [`Self::equiv`] sees it: `self` is at or below `other` in the order
+    /// the back-edge fixpoint climbs (`jit-log` statistics only).
+    ///
+    /// Pure: it compares types with [`Guarded::join_raw`] rather than
+    /// running the frame join, which allocates registers and has no arm
+    /// for some pairs of sentinels. A sentinel against anything it is not
+    /// `equiv` to is answered `false` both ways (incomparable).
+    ///
+    #[cfg(feature = "jit-log")]
+    pub(super) fn climbs_to(&self, other: &Self) -> bool {
+        if self.equiv(other) {
+            return true;
+        }
+        match (self, other) {
+            (LinkMode::None | LinkMode::MaybeNone | LinkMode::V, _)
+            | (_, LinkMode::None | LinkMode::MaybeNone | LinkMode::V) => false,
+            // A constant is the bottom of its own type only.
+            (_, LinkMode::C(_)) => false,
+            (lhs, rhs) => {
+                let top = rhs.guarded();
+                lhs.guarded().join_raw(&top) == top
+            }
         }
     }
 

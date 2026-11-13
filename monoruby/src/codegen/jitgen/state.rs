@@ -31,6 +31,23 @@ use slot::LINK_MODE_CHAIN;
 /// per-slot walk over them collapses to a pointer compare.
 pub(in crate::codegen::jitgen) type FrameRef = std::rc::Rc<AbstractFrame>;
 
+///
+/// How a loop's recorded back edge moved from one fixpoint walk to the
+/// next ([`AbstractState::climb_direction`]; `jit-log` statistics).
+///
+#[cfg(feature = "jit-log")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::codegen::jitgen) enum ClimbDirection {
+    /// Wider (or equal) in every slot and flag, and wider somewhere.
+    Rise,
+    /// Narrower (or equal) everywhere, and narrower somewhere.
+    Descent,
+    /// `equiv`, as far as the order can tell.
+    Same,
+    /// Wider in one place and narrower in another, or a sentinel moved.
+    Incomparable,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct AbstractState {
     frames: Vec<FrameRef>,
@@ -504,6 +521,29 @@ impl AbstractState {
             .all(|(lhs, rhs)| FrameRef::ptr_eq(lhs, rhs) || lhs.equiv(rhs))
     }
 
+    ///
+    /// Which way a loop's recorded back edge moved when `self` (the newer
+    /// back edge) replaced `older`, in the order [`Self::equiv`] sees:
+    /// every slot through [`LinkMode::climbs_to`], every invariant flag
+    /// with cleared above set. `jit-log` statistics only
+    /// (`doc/fixpoint_engine_plan.md` §2.4, step B).
+    ///
+    #[cfg(feature = "jit-log")]
+    pub(super) fn climb_direction(&self, older: &Self) -> ClimbDirection {
+        if self.frames.len() != older.frames.len() {
+            return ClimbDirection::Incomparable;
+        }
+        let pairs = || self.frames.iter().zip(older.frames.iter());
+        let up = pairs().all(|(new, old)| old.climbs_to(new));
+        let down = pairs().all(|(new, old)| new.climbs_to(old));
+        match (up, down) {
+            (true, false) => ClimbDirection::Rise,
+            (false, true) => ClimbDirection::Descent,
+            (true, true) => ClimbDirection::Same,
+            (false, false) => ClimbDirection::Incomparable,
+        }
+    }
+
     pub(super) fn unset_no_capture_guard(&mut self, jitctx: &mut JitContext) {
         jitctx.unset_outer_no_capture_guard();
         self.unset_lexical_no_capture_guard();
@@ -784,6 +824,14 @@ impl AbstractFrame {
 
     fn equiv(&self, other: &Self) -> bool {
         self.slot_state.equiv(&other.slot_state) && self.invariants == other.invariants
+    }
+
+
+    /// [`AbstractState::climb_direction`] for one frame: `self` at or
+    /// below `other`.
+    #[cfg(feature = "jit-log")]
+    fn climbs_to(&self, other: &Self) -> bool {
+        self.slot_state.climbs_to(&other.slot_state) && self.invariants.climbs_to(&other.invariants)
     }
 
     ///
@@ -1677,6 +1725,27 @@ impl Invariants {
 
     /// The number of flags; each is cleared at most once by `join`.
     const FLAGS: usize = 6;
+
+    /// Whether `join`ing `self` into `other` leaves `other` as it is: every
+    /// flag `other` holds, `self` holds too (the join is an AND, so a
+    /// cleared flag is the top).
+    #[cfg(feature = "jit-log")]
+    fn climbs_to(&self, other: &Self) -> bool {
+        let Invariants {
+            class_version_guard,
+            const_version_guard,
+            no_capture_guard,
+            side_effect_guard,
+            class_proofs_settled,
+            ivar_ty_guard,
+        } = *other;
+        (!class_version_guard || self.class_version_guard)
+            && (!const_version_guard || self.const_version_guard)
+            && (!no_capture_guard || self.no_capture_guard)
+            && (!side_effect_guard || self.side_effect_guard)
+            && (!class_proofs_settled || self.class_proofs_settled)
+            && (!ivar_ty_guard || self.ivar_ty_guard)
+    }
 
     fn join(&mut self, other: &Self) {
         // Keep `FLAGS` in step: this destructuring fails to compile when

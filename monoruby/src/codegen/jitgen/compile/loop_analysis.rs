@@ -14,6 +14,89 @@ struct LoopWalk {
     backedge: indexmap::IndexMap<BasicBlockId, Option<AbstractState>>,
     /// Stage-C loop adoption vetoes, for the walked loop's own head.
     vetoes: (bool, Vec<(usize, SlotId)>),
+    /// The state the walk started the walked loop's head from
+    /// (`jit-log` statistics: [`FixpointStats`]).
+    #[cfg(feature = "jit-log")]
+    entry: Option<AbstractState>,
+}
+
+///
+/// The `jit-log` statistics of one back-edge fixpoint
+/// (`crate::codegen::jit_stats`'s `FX_*` counters;
+/// `doc/fixpoint_engine_plan.md` step B). Nothing here feeds back into
+/// the compile.
+///
+#[cfg(feature = "jit-log")]
+#[derive(Default)]
+struct FixpointStats {
+    walks: usize,
+    /// The previous walk's entry state, and whether that walk moved
+    /// anything the next walk reads besides the entry state: an inner
+    /// head's record, or an outer frame's widening.
+    prev: Option<(AbstractState, bool)>,
+}
+
+#[cfg(feature = "jit-log")]
+impl FixpointStats {
+    fn start() -> Self {
+        crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::FX_FIXPOINTS);
+        Self::default()
+    }
+
+    /// Time one walk; only a walk no other walk encloses adds to the
+    /// total, so nested fixpoints are not counted twice.
+    fn time_walk<T>(&mut self, walk: impl FnOnce() -> T) -> T {
+        use crate::codegen::jit_stats::*;
+        use std::sync::atomic::Ordering::Relaxed;
+        self.walks += 1;
+        bump(&FX_WALKS);
+        let depth = FX_DEPTH.fetch_add(1, Relaxed);
+        let start = std::time::Instant::now();
+        let res = walk();
+        let elapsed = start.elapsed().as_nanos() as usize;
+        FX_DEPTH.fetch_sub(1, Relaxed);
+        if depth == 0 {
+            FX_WALK_TOP_NS.fetch_add(elapsed, Relaxed);
+        }
+        res
+    }
+
+    /// The walk's entry repeats the previous walk's, with nothing else it
+    /// reads moved: it can only reproduce the previous walk.
+    fn note_entry(&mut self, entry: &AbstractState) {
+        if let Some((prev, moved)) = &self.prev
+            && !*moved
+            && prev == entry
+        {
+            crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::FX_ENTRY_REPEATS);
+        }
+    }
+
+    fn end_walk(&mut self, entry: AbstractState, moved: bool) {
+        self.prev = Some((entry, moved));
+    }
+
+    /// A head's recorded back edge `old` (if any) is being replaced by `new`.
+    fn note_record(old: Option<&AbstractState>, new: &AbstractState) {
+        use crate::codegen::jit_stats::*;
+        bump(match old.map(|old| new.climb_direction(old)) {
+            None => &FX_BE_FIRST,
+            Some(ClimbDirection::Rise) => &FX_BE_RISE,
+            Some(ClimbDirection::Descent) => &FX_BE_DESCENT,
+            Some(ClimbDirection::Same | ClimbDirection::Incomparable) => &FX_BE_INCOMPARABLE,
+        });
+    }
+
+    fn converged(&self) {
+        use crate::codegen::jit_stats::*;
+        use std::sync::atomic::Ordering::Relaxed;
+        bump(&FX_CONVERGED_IN[self.walks.clamp(1, 5) - 1]);
+        FX_MAX_WALKS.fetch_max(self.walks, Relaxed);
+    }
+
+    fn gave_up(&self) {
+        crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::FX_GAVE_UP);
+    }
 }
 
 impl<'a> JitContext<'a> {
@@ -58,11 +141,23 @@ impl<'a> JitContext<'a> {
         // locals, and a bound of ten walks used to abort the process on
         // a ten-tap one (`doc/fixpoint_engine_plan.md` §2.3).
         let limit = heads.len() * state.backedge_chain_len();
+        #[cfg(feature = "jit-log")]
+        let mut stats = FixpointStats::start();
         for x in 0..limit {
             let _ = x;
             #[cfg(feature = "jit-debug")]
             eprintln!("########## analyse iteration[{x}]");
+            #[cfg(not(feature = "jit-log"))]
             let walk = self.analyse_loop(loop_start, loop_end, &heads, state.clone())?;
+            #[cfg(feature = "jit-log")]
+            let mut walk = stats
+                .time_walk(|| self.analyse_loop(loop_start, loop_end, &heads, state.clone()))?;
+            #[cfg(feature = "jit-log")]
+            let entry = walk.entry.take().unwrap();
+            #[cfg(feature = "jit-log")]
+            stats.note_entry(&entry);
+            #[cfg(feature = "jit-log")]
+            let mut moved = !walk.vetoes.1.is_empty();
             // The walk ran on a throwaway clone, so every widen it
             // reported reached the *clone's* parked outer frames: a
             // block handed out of the unit inside the loop body
@@ -104,6 +199,11 @@ impl<'a> JitContext<'a> {
                             "analyse_loop[{x}] backedge: ->{head:?} {:?}",
                             backedge.slot_state()
                         );
+                        #[cfg(feature = "jit-log")]
+                        {
+                            FixpointStats::note_record(self.loop_backedge(head), &backedge);
+                            moved |= head != loop_start;
+                        }
                         self.add_loop_info(head, liveness, Some(backedge));
                         changed = true;
                     }
@@ -131,12 +231,22 @@ impl<'a> JitContext<'a> {
                     let be = self.loop_backedge(head).cloned();
                     self.add_loop_info(head, liveness, be);
                     changed |= first;
+                    #[cfg(feature = "jit-log")]
+                    {
+                        moved |= first && head != loop_start;
+                    }
                 }
             }
             if !changed {
+                #[cfg(feature = "jit-log")]
+                stats.converged();
                 return Ok(());
             }
+            #[cfg(feature = "jit-log")]
+            stats.end_walk(entry, moved);
         }
+        #[cfg(feature = "jit-log")]
+        stats.gave_up();
         // Past the chain's length the walks are not climbing it: give this
         // compile up rather than the process. The unit is abandoned like
         // any other failed compile and its code keeps running in the
@@ -175,6 +285,8 @@ impl<'a> JitContext<'a> {
         // before the loop (a method JIT's `i = 0`) must not stand in for
         // what the loop does with the slot.
         state.reset_liveness();
+        #[cfg(feature = "jit-log")]
+        let entry = state.clone();
         ctx.branch_continue(loop_start, state);
 
         for bbid in loop_start..=loop_end {
@@ -238,6 +350,8 @@ impl<'a> JitContext<'a> {
             liveness,
             backedge,
             vetoes,
+            #[cfg(feature = "jit-log")]
+            entry: Some(entry),
         })
     }
 
