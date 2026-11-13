@@ -644,6 +644,23 @@ struct BlockSummary {
 }
 
 #[cfg(feature = "jit-log")]
+impl BlockSummary {
+    /// Add what *other* may do as well.
+    fn merge(&mut self, other: &BlockSummary) {
+        for i in 0..self.defs.len().min(other.defs.len()) {
+            self.float_read[i] |= other.float_read[i];
+            self.exposed[i] |= other.exposed[i];
+            self.defs[i].extend(&other.defs[i]);
+        }
+    }
+
+    /// Whether anything here reads or writes the slot.
+    fn touches(&self, i: usize) -> bool {
+        self.float_read[i] || self.exposed[i] || !self.defs[i].is_empty()
+    }
+}
+
+#[cfg(feature = "jit-log")]
 impl<'a> JitContext<'a> {
     ///
     /// Whether the block literal the call *ir* passes is expected to be
@@ -695,6 +712,22 @@ impl<'a> JitContext<'a> {
     /// what a float is, so the summary belongs to the moment it is made.
     ///
     fn block_summary(&self, block: ISeqId, depth: usize, n: usize) -> BlockSummary {
+        self.region_summary(block, None, depth, n)
+    }
+
+    ///
+    /// `block_summary` for the basic blocks *region* (inclusive) of
+    /// *iseq* alone, or all of them: what a loop in a block does to the
+    /// frame *depth* levels out, through the outer chain and through the
+    /// block literals it passes.
+    ///
+    fn region_summary(
+        &self,
+        block: ISeqId,
+        region: Option<(BasicBlockId, BasicBlockId)>,
+        depth: usize,
+        n: usize,
+    ) -> BlockSummary {
         use std::collections::{HashMap, HashSet};
         /// What a slot of the block's own frame holds.
         #[derive(Clone, Copy)]
@@ -711,7 +744,11 @@ impl<'a> JitContext<'a> {
             exposed: vec![false; n],
             defs: vec![vec![]; n],
         };
-        for bb in 0..iseq.bb_info.len() {
+        let (first, last) = match region {
+            Some((first, last)) => (first.index(), last.index()),
+            None => (0, iseq.bb_info.len().saturating_sub(1)),
+        };
+        for bb in first..=last {
             let mut tmp: HashMap<SlotId, Tmp> = Default::default();
             // The outer slot an own slot was loaded from, and how many
             // times this basic block had written that outer slot by then.
@@ -1128,6 +1165,208 @@ impl<'a> JitContext<'a> {
                         }
                     ))
                     .collect::<Vec<_>>(),
+            );
+        }
+    }
+}
+
+#[cfg(feature = "jit-log")]
+impl<'a> JitContext<'a> {
+    ///
+    /// The yield side of `record_pre_fixpoint_floats`: at the loop-entry
+    /// merge of *head*, compare the floats the merge holds in the frames
+    /// **outside** the loop's own (`F`, or `Sf` guarded `Float`, in
+    /// *target*) with a choice made before the fixpoint, for the slots the
+    /// loop reaches. A loop reaches an outer frame's slots
+    ///
+    /// - through the outer chain, when its frame is a block (its own
+    ///   `LoadDynVar` / `StoreDynVar`, and the block literals it passes),
+    ///   and
+    /// - through a `yield` to the block literal its method was given,
+    ///   whose summary (`block_summary`) says what that block does to the
+    ///   frame that wrote it and to that frame's lexical ancestors.
+    ///
+    /// The choice is the one `loop_float_candidates` makes for the loop's
+    /// own frame, read off the summaries: a slot the loop reads as a
+    /// float, may read before it writes, whose every definition in the
+    /// loop is a float (or, with none, that comes in as a `Float` or with
+    /// no known class), and that every entry can bridge to a float. Into
+    /// the `FX54O_*` counters; with `MONORUBY_FX54_LOG` set, each head
+    /// where the two differ is printed.
+    ///
+    pub(in crate::codegen::jitgen) fn record_pre_fixpoint_outer_floats(
+        &self,
+        head: BasicBlockId,
+        loop_start: BasicBlockId,
+        loop_end: BasicBlockId,
+        target: &AbstractState,
+        entries: &[BranchEntry],
+        incoming: &AbstractState,
+    ) {
+        use crate::codegen::jit_stats::*;
+        use FloatDef as Def;
+        use std::sync::atomic::Ordering::Relaxed;
+        let store = self.store;
+        let innermost = self.stack_frame_len() - 1;
+        if innermost == 0 || target.depth() != innermost + 1 {
+            return;
+        }
+        // What the loop may do to each outer frame, by stack position.
+        let mut effects: std::collections::BTreeMap<usize, BlockSummary> = Default::default();
+        let mut add = |pos: usize, sum: BlockSummary| match effects.get_mut(&pos) {
+            Some(e) => e.merge(&sum),
+            None => {
+                effects.insert(pos, sum);
+            }
+        };
+        let slots_at = |pos: usize| store[self.frame_iseq_at(pos)].total_reg_num();
+        // Through the outer chain.
+        let mut depth = 1;
+        while let Some(pos) = self.outer_pos(depth) {
+            add(
+                pos,
+                self.region_summary(
+                    self.iseq_id(),
+                    Some((loop_start, loop_end)),
+                    depth,
+                    slots_at(pos),
+                ),
+            );
+            depth += 1;
+        }
+        // Through a `yield` in the loop.
+        let iseq = self.iseq();
+        let yields = (loop_start..=loop_end).any(|bb| {
+            let BasicBlockInfoEntry { begin, end, .. } = iseq.bb_info[bb];
+            (begin..=end).any(|pos| {
+                let pc = iseq.get_pc(pos);
+                !TraceIr::is_handler_only(pc)
+                    && matches!(TraceIr::from_pc(pc, store), TraceIr::Yield { .. })
+            })
+        });
+        if yields
+            && let Some(info) = self.current_method_given_block()
+            && let Some(block) = store[info.block_fid].is_iseq()
+        {
+            let mut pos = innermost.checked_sub(info.outer);
+            let mut depth = 1;
+            while let Some(p) = pos {
+                add(p, self.block_summary(block, depth, slots_at(p)));
+                pos = self.lexical_outer_at(p);
+                depth += 1;
+            }
+        }
+        let float_bridgeable = |m: LinkMode| {
+            matches!(m, LinkMode::F(_) | LinkMode::S(_) | LinkMode::Sf(_, _))
+                || matches!(m, LinkMode::C(v) if v.is_float())
+        };
+        let (mut both, mut fix_only, mut pre_only) = (vec![], vec![], vec![]);
+        for (&pos, sum) in &effects {
+            let n = sum.defs.len();
+            let opaque = self.unit_liveness(self.frame_iseq_at(pos)).blocks_opaque();
+            // The greatest set closed under "every definition is a float".
+            let float_valued = |ok: &[bool], i: usize| {
+                if sum.defs[i].is_empty() {
+                    incoming[pos]
+                        .guarded(SlotId(i as u16))
+                        .class()
+                        .is_none_or(|c| c == FLOAT_CLASS)
+                } else {
+                    ok[i]
+                }
+            };
+            let mut ok: Vec<bool> = sum.defs.iter().map(|d| !d.contains(&Def::Other)).collect();
+            loop {
+                let mut changed = false;
+                for i in 0..n {
+                    if ok[i]
+                        && sum.defs[i].iter().any(|d| {
+                            matches!(d, Def::CopyOf(s)
+                                if (s.0 as usize) >= n || !float_valued(&ok, s.0 as usize))
+                        })
+                    {
+                        ok[i] = false;
+                        changed = true;
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+            for i in 1..n {
+                if !sum.touches(i) {
+                    continue;
+                }
+                let slot = SlotId(i as u16);
+                let verdict = if opaque {
+                    Err("an opaque block")
+                } else if !sum.float_read[i] {
+                    Err("no float read")
+                } else if !float_valued(&ok, i) {
+                    Err(if sum.defs[i].is_empty() {
+                        "not a Float on entry, by class"
+                    } else {
+                        "a non-float def"
+                    })
+                } else if !sum.exposed[i] {
+                    Err("written before read")
+                } else if !entries
+                    .iter()
+                    .all(|e| e.state.depth() > pos && float_bridgeable(e.state[pos].mode(slot)))
+                {
+                    Err("an entry is not float")
+                } else {
+                    Ok(())
+                };
+                let mode = target[pos].mode(slot);
+                // A float constant at the head needs no register: no
+                // choice to compare.
+                if matches!(mode, LinkMode::C(v) if v.is_float()) {
+                    continue;
+                }
+                let adopted = matches!(
+                    mode,
+                    LinkMode::F(_) | LinkMode::Sf(_, state::SfGuarded::Float)
+                );
+                match (adopted, verdict) {
+                    (true, Ok(())) => both.push((pos, slot)),
+                    (true, Err(why)) => fix_only.push(format!("{pos}:{slot:?} {mode:?}: {why}")),
+                    (false, Ok(())) => {
+                        let written = !sum.defs[i].is_empty();
+                        if written {
+                            bump(&FX54O_PRE_ONLY_WRITTEN);
+                        }
+                        pre_only.push(format!(
+                            "{pos}:{slot:?} {mode:?} ({}, entry {:?})",
+                            if written { "written" } else { "read only" },
+                            incoming[pos].mode(slot)
+                        ))
+                    }
+                    (false, Err(_)) => {}
+                }
+            }
+        }
+        if effects
+            .values()
+            .all(|sum| (1..sum.defs.len()).all(|i| !sum.touches(i)))
+        {
+            return;
+        }
+        bump(&FX54O_HEADS);
+        if fix_only.is_empty() && pre_only.is_empty() {
+            bump(&FX54O_SAME);
+        }
+        FX54O_BOTH.fetch_add(both.len(), Relaxed);
+        FX54O_FIX_ONLY.fetch_add(fix_only.len(), Relaxed);
+        FX54O_PRE_ONLY.fetch_add(pre_only.len(), Relaxed);
+        if (!fix_only.is_empty() || !pre_only.is_empty())
+            && std::env::var_os("MONORUBY_FX54_LOG").is_some()
+        {
+            eprintln!(
+                "[fx54-outer] {:?} {} {head:?}: both {}, fixpoint only {fix_only:?}, pre only {pre_only:?}",
+                self.iseq_id(),
+                iseq.name(),
+                both.len(),
             );
         }
     }
