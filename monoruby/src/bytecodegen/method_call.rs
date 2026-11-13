@@ -266,7 +266,7 @@ impl<'a> BytecodeGen<'a> {
         // collect assignments for local variables.
         let mut optional_params = vec![];
         for (outer, name) in param {
-            let name = IdentId::get_id_from_string(name);
+            let name = self.ident(&name);
             let r = if outer == 0 {
                 self.assign_local(name)
             } else {
@@ -394,11 +394,11 @@ impl<'a> BytecodeGen<'a> {
                 n1.iter_mut().for_each(|n| {
                     if level == 0 {
                         if let NodeKind::LocalVar(0, name) = &n.kind {
-                            let name = IdentId::get_id(name);
+                            let name = self.ident(name);
                             self.assign_local(name);
                         } else if let NodeKind::Splat(n) = &n.kind {
                             if let NodeKind::LocalVar(0, name) = &n.kind {
-                                let name = IdentId::get_id(name);
+                                let name = self.ident(name);
                                 self.assign_local(name);
                             }
                         }
@@ -414,11 +414,11 @@ impl<'a> BytecodeGen<'a> {
                 targets.iter_mut().for_each(|n| {
                     if level == 0 {
                         if let NodeKind::LocalVar(0, name) = &n.kind {
-                            let name = IdentId::get_id(name);
+                            let name = self.ident(name);
                             self.assign_local(name);
                         } else if let NodeKind::Splat(n) = &n.kind {
                             if let NodeKind::LocalVar(0, name) = &n.kind {
-                                let name = IdentId::get_id(name);
+                                let name = self.ident(name);
                                 self.assign_local(name);
                             }
                         }
@@ -547,7 +547,7 @@ impl<'a> BytecodeGen<'a> {
             } => {
                 for (outer, name) in param {
                     if level == *outer {
-                        let name = IdentId::get_id(name);
+                        let name = self.ident(name);
                         self.assign_local(name);
                     }
                     if *outer >= level {
@@ -613,7 +613,7 @@ impl<'a> BytecodeGen<'a> {
                         if level == 0
                             && let NodeKind::LocalVar(0, name) = &n.kind
                         {
-                            let name = IdentId::get_id(name);
+                            let name = self.ident(name);
                             self.assign_local(name);
                         }
                         self.level_down(n, level);

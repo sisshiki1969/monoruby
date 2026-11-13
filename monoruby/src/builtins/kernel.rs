@@ -10984,6 +10984,93 @@ mod tests {
         ]);
     }
 
+    /// Under a single-byte result encoding with a printable table of its
+    /// own, `#inspect` copies the high bytes that encoding prints and
+    /// escapes the rest — 0x85 (NEXT LINE) included, though a symbol
+    /// name keeps it bare (#1874).
+    #[test]
+    fn inspect_in_single_byte_result_encoding() {
+        run_tests(&[
+            r##"
+            o = Encoding.default_external
+            Encoding.default_external = Encoding::ISO_8859_1
+            s = "caf\xE9".dup.force_encoding('ISO-8859-1')
+            c = "a\x80".dup.force_encoding('ISO-8859-1')
+            r = [s.inspect.bytes, s.to_sym.inspect.bytes, {s.to_sym => 1}.inspect.bytes,
+                 [s, s.to_sym].inspect.bytes, c.inspect.bytes, c.to_sym.inspect.bytes,
+                 {c.to_sym => 1}.inspect.bytes, s.inspect.encoding.to_s]
+            Encoding.default_external = o
+            r
+            "##,
+            r##"
+            o = Encoding.default_external
+            r = %w[Windows-1252 KOI8-R Windows-1256 TIS-620 IBM437].map do |e|
+              Encoding.default_external = Encoding.find(e)
+              (0x80..0xff).select { |b| b.chr.force_encoding(e).inspect.bytesize == 3 }
+            end
+            Encoding.default_external = Encoding::KOI8_R
+            k = "a\x85".dup.force_encoding('KOI8-R')
+            r << [k.inspect.bytes, k.to_sym.inspect.bytes]
+            Encoding.default_external = o
+            r
+            "##,
+        ]);
+    }
+
+    /// Identifiers of a non-UTF-8 source are interned under the source
+    /// encoding, valid UTF-8 or not, in every position a name takes
+    /// (#1873).
+    #[test]
+    fn eval_non_utf8_identifiers() {
+        run_tests(&[
+            // ruby/spec core/kernel/eval_spec.rb: a BINARY source
+            r##"
+            Object.send(:remove_const, :EvalSpecs1873) if defined?(EvalSpecs1873)
+            code = "class EvalSpecs1873\n  V\xCF\x80x = 'frozen'\n  def m\xCF\x80; 1; end\n  @\xCF\x80 = 1\nend\n".b
+            eval(code)
+            [EvalSpecs1873.constants(false), EvalSpecs1873.instance_methods(false),
+             EvalSpecs1873.instance_variables].flatten.map { [_1.encoding.to_s, _1.to_s.bytes] }
+            "##,
+            // (in a method, so that `local_variables` sees only the eval's)
+            r##"
+            def run_1873(code) = eval(code)
+            code = "def m1873\x87]; 1; end; x\x87] = 2; [:m1873\x87], local_variables, m1873\x87]]".dup.force_encoding('Windows-31J')
+            run_1873(code).flatten.map { _1.is_a?(Symbol) ? [_1.encoding.to_s, _1.to_s.bytes] : _1 }
+            "##,
+            // parameters, attributes, setters, op-assigns, class
+            // variables, globals, singleton methods, keyword calls
+            r##"
+            src = <<~'R'
+              class K1873\x87]
+                attr_accessor :a\x87]
+                def k\x87](y\x87] = 3, *r\x87], x\x87]:, &b\x87]) = [x\x87], y\x87]]
+                def self.c\x87] = 7
+                @@v\x87] = 1
+                def cv = @@v\x87]
+                def call_kw = k\x87](x\x87]: 5)
+                def setter; self.a\x87] = 9; self.a\x87] += 1; a\x87]; end
+              end
+              $g1873\x87] = 4
+              o = K1873\x87].new
+              r = [o.call_kw, K1873\x87].c\x87], o.cv, o.setter, $g1873\x87]]
+              r << K1873\x87].instance_method(:k\x87]).parameters.flatten
+              r << K1873\x87].instance_methods(false).sort
+              r << [1].map { |e\x87]| binding.local_variables }.flatten
+              r << (def z1873\x87]; end)
+              r << K1873\x87].class_variables
+              r << global_variables.select { _1.to_s.start_with?("$g1873") }
+              begin; u\x87]; rescue NameError => e; r << e.name; end
+              r
+            R
+            src = src.gsub('\x87]', "\x87]".b).force_encoding('Windows-31J')
+            def run2_1873(code) = eval(code)
+            run2_1873(src).map do |x|
+              Array(x).map { _1.is_a?(Symbol) ? [_1.encoding.to_s, _1.to_s.bytes] : _1 }
+            end
+            "##,
+        ]);
+    }
+
     /// The seeded global PRNG draws exactly like CRuby for every
     /// Kernel#rand shape (integer / Bignum / ranges / floats).
     #[test]

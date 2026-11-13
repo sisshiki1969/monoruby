@@ -2117,12 +2117,74 @@ pub(crate) fn scrub_mbc(
     out
 }
 
-/// Whether `enc` can be one [`native_mbc_walker`] walks: a test cheap
-/// enough to inline ahead of it on every `#inspect`, which a `C` locale
-/// (US-ASCII) fails at once.
+/// Whether `enc` can be one whose printable non-ASCII characters
+/// `#inspect` copies as they are when it is the result encoding — one
+/// [`native_mbc_walker`] walks, or a single-byte one with a printable
+/// table ([`single_byte_print_table`]): a test cheap enough to inline
+/// ahead of them on every `#inspect`, which a `C` locale (US-ASCII) and
+/// a UTF-8 one fail at once.
 #[inline]
 pub(crate) fn may_be_native_mbc(enc: Encoding) -> bool {
-    matches!(enc, Encoding::Sjis(_) | Encoding::EucJp(_) | Encoding::NamedByte(_))
+    matches!(
+        enc,
+        Encoding::Sjis(_) | Encoding::EucJp(_) | Encoding::NamedByte(_) | Encoding::Iso8859(_)
+    )
+}
+
+/// The bytes 0x80..=0xFF a single-byte, ASCII-compatible encoding
+/// prints — bit `b - 0x80` set when `rb_enc_isprint(b, enc)` holds — read
+/// from Onigmo's ctype for the encoding, which is where CRuby reads it.
+/// `None` for an encoding that is not single-byte or has no such table:
+/// the IBM / Mac code pages, Windows-1258 and the like are replicas of
+/// ASCII-8BIT in CRuby, whose high bytes print nowhere.
+///
+/// Windows-1255, Windows-1256 and TIS-620 / Windows-874 are CRuby's
+/// replicas of ISO-8859-8, ISO-8859-6 and ISO-8859-11, and take their
+/// tables.
+pub(crate) fn single_byte_print_table(enc: Encoding) -> Option<u128> {
+    use onigmo_regex::OnigmoEncoding as O;
+    let onig = match enc {
+        Encoding::Iso8859(_) => super::RegexpInner::onigmo_encoding_for(enc)?,
+        Encoding::NamedByte(_) => match enc.name() {
+            "Windows-1255" => O::ISO_8859_8,
+            "Windows-1256" => O::ISO_8859_6,
+            "TIS-620" | "Windows-874" => O::ISO_8859_11,
+            "KOI8-R" | "KOI8-U" | "Windows-1250" | "Windows-1251" | "Windows-1252"
+            | "Windows-1253" | "Windows-1254" | "Windows-1257" => {
+                super::RegexpInner::onigmo_encoding_for(enc)?
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let ty = onig.as_type();
+    // SAFETY: `as_type` points at one of Onigmo's static
+    // `OnigEncodingType`s, which live for the whole process; their
+    // `is_code_ctype` reads only its arguments and the encoding's own
+    // static tables.
+    let is_code_ctype = unsafe { (*ty).is_code_ctype }?;
+    let mut table = 0u128;
+    for b in 0x80u32..=0xFF {
+        // SAFETY: as above.
+        if unsafe { is_code_ctype(b, onigmo_regex::ONIGENC_CTYPE_PRINT, ty) } != 0 {
+            table |= 1 << (b - 0x80);
+        }
+    }
+    Some(table)
+}
+
+/// Whether byte `b` is printable under [`single_byte_print_table`]'s
+/// `table`: every ASCII byte is judged by the ASCII rules, not here.
+#[inline]
+fn single_byte_prints(table: u128, b: u8) -> bool {
+    b >= 0x80 && table & (1 << (b - 0x80)) != 0
+}
+
+/// Whether `#inspect` copies the printable non-ASCII characters of a
+/// string in `enc` as they are when `enc` is the result encoding:
+/// [`RStringInner::inspect_in`] has a walk for it.
+pub(crate) fn inspects_natively(enc: Encoding) -> bool {
+    native_mbc_walker(enc).is_some() || single_byte_print_table(enc).is_some()
 }
 
 /// [`mbc_walker`] for the ASCII-compatible, non-Unicode multibyte
@@ -3474,9 +3536,32 @@ impl RStringInner {
     /// rest — ASCII, an ill-formed byte — is
     /// escaped as `inspect` escapes it. `None` when `inspect`'s rendering
     /// is the answer: another result encoding, or nothing to copy.
+    ///
+    /// A single-byte encoding with a printable table of its own (ISO-8859-1,
+    /// Windows-1252, KOI8-R, …) copies each byte it prints and escapes the
+    /// rest as `\xHH` (`"caf\xE9"` in ISO-8859-1 is `"café"` there, but
+    /// its `"\x80"` stays escaped, and so does KOI8-R's printable 0x85).
     pub fn inspect_in(&self, resenc: Encoding) -> Option<Vec<u8>> {
         if self.ty != resenc || self.as_bytes().is_ascii() {
             return None;
+        }
+        if let Some(table) = single_byte_print_table(self.ty) {
+            let bytes = self.as_bytes();
+            let mut out = Vec::with_capacity(bytes.len() + 2);
+            let mut tmp = String::new();
+            for (i, &b) in bytes.iter().enumerate() {
+                // 0x85 (NEXT LINE) prints in Onigmo's tables but not in
+                // `[[:print:]]`, and `rb_str_inspect` escapes it (Ruby
+                // Bug #16842); `sym_printable` does not make the exception.
+                if single_byte_prints(table, b) && b != 0x85 {
+                    out.push(b);
+                } else {
+                    tmp.clear();
+                    ascii_escape_with_next(&mut tmp, b, bytes.get(i + 1).copied());
+                    out.extend_from_slice(tmp.as_bytes());
+                }
+            }
+            return Some(out);
         }
         let (max_len, precise) = self.native_mbc_walker()?;
         let bytes = self.as_bytes();
@@ -3509,7 +3594,24 @@ impl RStringInner {
     /// `is_identchar` takes any non-ASCII character). `None` when the
     /// bytes hold an ill-formed one, which no symbol name has, or for an
     /// encoding this walk does not cover.
+    ///
+    /// A single-byte encoding's character stands in when the encoding
+    /// prints it, and a byte it does not print makes the answer `None`:
+    /// `sym_printable` refuses the name, so `#inspect` quotes it.
     pub(crate) fn symname_stand_in(&self) -> Option<String> {
+        if let Some(table) = single_byte_print_table(self.ty) {
+            let mut out = String::with_capacity(self.len());
+            for &b in self.as_bytes() {
+                if b.is_ascii() {
+                    out.push(b as char);
+                } else if single_byte_prints(table, b) {
+                    out.push('\u{3042}');
+                } else {
+                    return None;
+                }
+            }
+            return Some(out);
+        }
         let (max_len, precise) = self.native_mbc_walker()?;
         let mut out = String::with_capacity(self.len());
         let mut ok = true;

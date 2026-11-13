@@ -14,7 +14,7 @@ impl<'a> BytecodeGen<'a> {
                 self.emit(
                     BytecodeInst::DefinedGvar {
                         dst,
-                        name: IdentId::get_id(name),
+                        name: self.ident(name),
                     },
                     node.loc,
                 );
@@ -82,7 +82,7 @@ impl<'a> BytecodeGen<'a> {
     fn declare_assignment_target(&mut self, lhs: &Node) {
         match &lhs.kind {
             NodeKind::LocalVar(0, name) | NodeKind::Ident(name) => {
-                self.assign_local(IdentId::get_id(name));
+                self.assign_local(self.ident(name));
             }
             _ => {}
         }
@@ -249,7 +249,7 @@ impl<'a> BytecodeGen<'a> {
             // `__ENCODING__` is a pseudo-variable, always defined.
             NodeKind::SourceEncoding => return Ok(()),
             NodeKind::Ident(name) => {
-                let name = IdentId::get_id_from_string(name);
+                let name = self.ident(&name);
                 self.emit(
                     BytecodeInst::DefinedMethod {
                         ret,
@@ -262,7 +262,7 @@ impl<'a> BytecodeGen<'a> {
             NodeKind::FuncCall {
                 method, arglist, ..
             } => {
-                let name = IdentId::get_id_from_string(method);
+                let name = self.ident(&method);
                 self.emit(
                     BytecodeInst::DefinedMethod {
                         ret,
@@ -281,7 +281,7 @@ impl<'a> BytecodeGen<'a> {
                 arglist,
                 ..
             } => {
-                let name = IdentId::get_id_from_string(method);
+                let name = self.ident(&method);
                 if top {
                     let body_start = self.new_label();
                     let body_end = self.new_label();
@@ -359,11 +359,8 @@ impl<'a> BytecodeGen<'a> {
                 prefix,
                 name,
             }) => {
-                let name = IdentId::get_id_from_string(name);
-                let prefix = prefix
-                    .into_iter()
-                    .map(IdentId::get_id_from_string)
-                    .collect();
+                let name = self.ident(&name);
+                let prefix = prefix.into_iter().map(|n| self.ident(&n)).collect();
                 let base = if let Some(deref!(parent)) = parent {
                     // Evaluate the parent expression; if it raises, defined? yields nil.
                     let body_start = self.new_label();
@@ -401,15 +398,15 @@ impl<'a> BytecodeGen<'a> {
             }
             NodeKind::LocalVar(..) => {}
             NodeKind::InstanceVar(name) => {
-                let name = IdentId::get_id_from_string(name);
+                let name = self.ident(&name);
                 self.emit(BytecodeInst::DefinedIvar { ret, name }, node.loc);
             }
             NodeKind::GlobalVar(name) => {
-                let name = IdentId::get_id_from_string(name);
+                let name = self.ident(&name);
                 self.emit(BytecodeInst::DefinedGvar { dst: ret, name }, node.loc);
             }
             NodeKind::ClassVar(name) => {
-                let name = IdentId::get_id_from_string(name);
+                let name = self.ident(&name);
                 self.emit(BytecodeInst::DefinedCvar { dst: ret, name }, node.loc);
             }
             NodeKind::Lambda(_) => {

@@ -1601,7 +1601,7 @@ impl Store {
         // hidden `for`-loop index, the numbered block parameters `_1`..`_9`, …)
         // that are not real local variables.
         map.into_iter()
-            .filter(|id| is_local_variable_name(&id.get_name()))
+            .filter(|id| is_local_variable_name(id.get_ident_name_clone().as_bytes()))
             .map(Value::symbol)
             .collect()
     }
@@ -1612,27 +1612,33 @@ impl Store {
 /// numbered block parameter (`_1`..`_9`, which Ruby reserves and never reports
 /// as a local variable). Filters out the compiler's reserved slots (`*`, `**`,
 /// `&`'s empty name, `(for)`, …).
-fn is_local_variable_name(name: &str) -> bool {
+///
+/// The reserved slots are all ASCII, and a name with a non-ASCII
+/// character is a local the source spelled — in whatever encoding: a
+/// Windows-31J `x\x87]` has an ASCII `]` as the second byte of its
+/// character, so it is not read byte by byte.
+fn is_local_variable_name(name: &[u8]) -> bool {
+    if !name.is_ascii() {
+        return true;
+    }
     // `**nil` (a keyword-forbidding definition) is modeled internally as a
     // kwrest slot literally named `nil` so `#parameters` can report it as
     // `[:nokey]`. `nil` is a reserved word and can never be a real local
     // variable, so it must not surface in `local_variables`.
-    if name == "nil" {
+    if name == b"nil" {
         return false;
     }
     // Numbered block parameters `_1`..`_9`.
-    if let Some(rest) = name.strip_prefix('_')
-        && rest.len() == 1
-        && matches!(rest.as_bytes()[0], b'1'..=b'9')
-    {
+    if let [b'_', b'1'..=b'9'] = name {
         return false;
     }
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(c) if c == '_' || (!c.is_ascii()) || c.is_lowercase() => {}
+    match name.first() {
+        Some(&c) if c == b'_' || c.is_ascii_lowercase() => {}
         _ => return false,
     }
-    chars.all(|c| c == '_' || !c.is_ascii() || c.is_alphanumeric())
+    name[1..]
+        .iter()
+        .all(|&c| c == b'_' || c.is_ascii_alphanumeric())
 }
 
 ///

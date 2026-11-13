@@ -67,6 +67,54 @@ impl IdentName {
     }
 }
 
+/// The first of the 128 characters (U+10FF80..=U+10FFFF, in
+/// Supplementary Private Use Area-B) that stand for the bytes
+/// 0x80..=0xFF of an identifier in a non-UTF-8 source while the name
+/// travels through the AST as a Rust `String` ([`carry_source_ident`]).
+const SOURCE_BYTE_CARRIER: u32 = 0x10FF00;
+
+/// An identifier of a **non-UTF-8** source as the AST carries it: ASCII
+/// as it is, and every byte 0x80..=0xFF as the private-use character
+/// `U+10FF00 + byte`, so the name is UTF-8 text the AST can hold whatever
+/// the bytes are (`m\x87]` in Windows-31J, `V\xCF\x80x` in a BINARY
+/// source), and the bytes come back exactly ([`IdentId::get_id_from_source`]).
+///
+/// Every non-ASCII byte is carried, valid UTF-8 or not: CRuby interns a
+/// non-ASCII identifier under the source encoding, so a BINARY source's
+/// `V\xCF\x80x` is a BINARY symbol, not the UTF-8 `:"Vπx"`.
+pub(crate) fn carry_source_ident(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|&b| {
+            if b.is_ascii() {
+                b as char
+            } else {
+                char::from_u32(SOURCE_BYTE_CARRIER + b as u32).unwrap()
+            }
+        })
+        .collect()
+}
+
+/// The source bytes of a name [`carry_source_ident`] built, or `None`
+/// for a name with no carried byte.
+pub(crate) fn uncarry_source_ident(name: &str) -> Option<Vec<u8>> {
+    let carried =
+        |c: char| (SOURCE_BYTE_CARRIER + 0x80..=SOURCE_BYTE_CARRIER + 0xFF).contains(&(c as u32));
+    if name.is_ascii() || !name.chars().any(carried) {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(name.len());
+    for c in name.chars() {
+        if carried(c) {
+            bytes.push((c as u32 - SOURCE_BYTE_CARRIER) as u8);
+        } else {
+            let mut buf = [0; 4];
+            bytes.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        }
+    }
+    Some(bytes)
+}
+
 impl std::fmt::Debug for IdentName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -461,6 +509,31 @@ impl IdentId {
     }
 
     ///
+    /// The *IdentId* an identifier of a source in `src_enc` names, as the
+    /// AST carries it ([`carry_source_ident`]): a non-ASCII name of a
+    /// non-UTF-8 source is interned per (bytes, source encoding), as
+    /// CRuby interns it — `m\x87]` of a Windows-31J source is a
+    /// Windows-31J symbol, `m\xCF\x80` of a BINARY one a BINARY symbol.
+    /// Every other name is [`get_id`](Self::get_id)'s.
+    ///
+    pub(crate) fn get_id_from_source(name: &str, src_enc: crate::value::Encoding) -> IdentId {
+        use crate::value::Encoding;
+        if !name.is_ascii()
+            && !matches!(src_enc, Encoding::Utf8(_))
+            && let Some(bytes) = uncarry_source_ident(name)
+        {
+            // A US-ASCII source holds no non-ASCII identifier; if one
+            // got through, it is BINARY, as its string literals are.
+            let enc = match src_enc {
+                Encoding::UsAscii => Encoding::Ascii8,
+                e => e,
+            };
+            return Self::get_id_from_bytes(bytes, enc);
+        }
+        Self::get_id(name)
+    }
+
+    ///
     /// Get name as String from *self* (lossy for binary names).
     ///
     pub fn get_name(&self) -> String {
@@ -751,8 +824,33 @@ impl IdentifierTable {
     /// ex) "var" -> "@var"
     ///
     fn add_ivar_prefix(&mut self, id: IdentId) -> IdentId {
-        let ivar_name = format!("@{}", self.table[id.to_usize() - 1]);
-        self.get_id_from_string(ivar_name)
+        self.affix(id, "@", "")
+    }
+
+    ///
+    /// `prefix` + the name of *id* + `suffix`, interned in *id*'s own
+    /// encoding: a name of raw bytes (`a\x87]` in Windows-31J) keeps its
+    /// bytes and its encoding (`:"@a\x87]"`, `:"a\x87]="`).
+    ///
+    fn affix(&mut self, id: IdentId, prefix: &str, suffix: &str) -> IdentId {
+        match &self.table[id.to_usize() - 1] {
+            IdentName::Utf8(name) => {
+                let name = format!("{prefix}{name}{suffix}");
+                self.get_id_from_string(name)
+            }
+            IdentName::Bytes(name) => {
+                let mut bytes = Vec::with_capacity(prefix.len() + name.len() + suffix.len());
+                bytes.extend_from_slice(prefix.as_bytes());
+                bytes.extend_from_slice(name);
+                bytes.extend_from_slice(suffix.as_bytes());
+                let enc = self
+                    .enc_map
+                    .get(&id)
+                    .copied()
+                    .unwrap_or(crate::value::Encoding::Ascii8);
+                self.get_id_from_bytes(bytes, enc)
+            }
+        }
     }
 
     ///
@@ -761,7 +859,6 @@ impl IdentifierTable {
     /// ex) "var" -> "var="
     ///
     fn add_assign_postfix(&mut self, id: IdentId) -> IdentId {
-        let method_name = format!("{}=", self.table[id.to_usize() - 1]);
-        self.get_id_from_string(method_name)
+        self.affix(id, "", "=")
     }
 }

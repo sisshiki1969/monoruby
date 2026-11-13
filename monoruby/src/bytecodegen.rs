@@ -778,7 +778,8 @@ impl<'a> BytecodeGen<'a> {
         if let Some(lvc) = binding {
             assert!(params.args_names.is_empty());
             lvc.table.0.iter().for_each(|name| {
-                codegen.add_local(IdentId::get_id(name));
+                let id = codegen.ident(name);
+                codegen.add_local(id);
             });
         } else {
             params.args_names.iter().for_each(|name| {
@@ -994,7 +995,7 @@ impl<'a> BytecodeGen<'a> {
                 // elements and a named `&block` live in later slots, so
                 // neither can match.
                 NodeKind::LocalVar(0, name) => {
-                    let id = IdentId::get_id(name);
+                    let id = self.ident(name);
                     if Some(id) == self.block_param {
                         return None;
                     }
@@ -1302,7 +1303,7 @@ impl<'a> BytecodeGen<'a> {
     /// the frame's block handler), never a plain slot read.
     /// Writes go through `assign_local`, which does use the slot.
     fn refer_local(&mut self, ident: &str) -> Option<BcReg> {
-        let name = IdentId::get_id(ident);
+        let name = self.ident(ident);
         if Some(name) == self.block_param {
             return None;
         }
@@ -1373,7 +1374,7 @@ impl<'a> BytecodeGen<'a> {
 
     fn is_assign_local(&mut self, node: &Node) -> Option<BcLocal> {
         if let NodeKind::LocalVar(0, name) = &node.kind {
-            let name = IdentId::get_id(name);
+            let name = self.ident(name);
             Some(self.assign_local(name))
         } else {
             None
@@ -1394,7 +1395,7 @@ impl<'a> BytecodeGen<'a> {
     /// enclosing one?
     fn is_refer_block_arg(&mut self, node: &Node) -> bool {
         if let NodeKind::LocalVar(outer, name) = &node.kind {
-            let lvar = IdentId::get_id(name);
+            let lvar = self.ident(name);
             if *outer == 0 {
                 return self.block_param == Some(lvar);
             } else {
@@ -1410,13 +1411,13 @@ impl<'a> BytecodeGen<'a> {
         block: BlockInfo,
     ) -> Result<FuncId> {
         let loc = block.loc;
-        let compile_info = Store::handle_args(block, optional_params)?;
+        let compile_info = Store::handle_args(block, optional_params, self.source_encoding())?;
         self.add_block(self.iseq_id, compile_info, loc)
     }
 
     fn handle_lambda(&mut self, block: BlockInfo) -> Result<FuncId> {
         let loc = block.loc;
-        let compile_info = Store::handle_args(block, vec![])?;
+        let compile_info = Store::handle_args(block, vec![], self.source_encoding())?;
         self.add_lambda(self.iseq_id, compile_info, loc)
     }
 }
@@ -1736,6 +1737,22 @@ impl<'a> BytecodeGen<'a> {
     /// The symbol a literal `name` in this file denotes: interned under
     /// the source encoding, so a non-ASCII symbol of a non-UTF-8 source
     /// keeps its bytes and its encoding (CRuby).
+    /// The *IdentId* an identifier of this file names: interned under
+    /// the source encoding when it is a non-ASCII name of a non-UTF-8
+    /// source, which the lowerer hands over in
+    /// [`carry_source_ident`](crate::id_table::carry_source_ident)'s
+    /// form (CRuby interns `m\x87]` of a Windows-31J source as a
+    /// Windows-31J symbol).
+    pub(crate) fn ident(&self, name: &str) -> IdentId {
+        // No magic comment (the common case) is a UTF-8 source, whose
+        // names the lowerer hands over as they are.
+        if self.sourceinfo.source_encoding.is_none() || name.is_ascii() {
+            IdentId::get_id(name)
+        } else {
+            IdentId::get_id_from_source(name, self.source_encoding())
+        }
+    }
+
     pub(crate) fn symbol_id(&self, name: &IdentName) -> IdentId {
         Value::symbol_from_source_name(name, self.source_encoding()).as_symbol()
     }
@@ -1892,10 +1909,10 @@ impl<'a> BytecodeGen<'a> {
         prefix: Vec<String>,
         loc: Loc,
     ) {
-        let name = IdentId::get_id_from_string(name);
+        let name = self.ident(&name);
         let prefix = prefix
             .into_iter()
-            .map(IdentId::get_id_from_string)
+            .map(|n| self.ident(&n))
             .collect();
         let dst = self.get_reg(dst);
         self.emit(
@@ -1919,10 +1936,10 @@ impl<'a> BytecodeGen<'a> {
         prefix: Vec<String>,
         loc: Loc,
     ) {
-        let name = IdentId::get_id_from_string(name);
+        let name = self.ident(&name);
         let prefix = prefix
             .into_iter()
-            .map(IdentId::get_id_from_string)
+            .map(|n| self.ident(&n))
             .collect();
         let dst = self.get_reg(dst);
         self.emit(
@@ -2080,8 +2097,8 @@ impl<'a> BytecodeGen<'a> {
                 parent,
                 prefix,
             }) => {
-                let name = IdentId::get_id(name);
-                let prefix = prefix.iter().map(|s| IdentId::get_id(s)).collect();
+                let name = self.ident(name);
+                let prefix = prefix.iter().map(|s| self.ident(s)).collect();
                 let parent = if let Some(deref!(parent)) = parent {
                     Some(self.push_expr(parent.clone())?.into())
                 } else {
@@ -2095,25 +2112,25 @@ impl<'a> BytecodeGen<'a> {
                 }
             }
             NodeKind::InstanceVar(name) => {
-                let name = IdentId::get_id(name);
+                let name = self.ident(name);
                 LvalueKind::InstanceVar(name)
             }
             NodeKind::ClassVar(name) => {
-                let name = IdentId::get_id(name);
+                let name = self.ident(name);
                 LvalueKind::ClassVar(name)
             }
             NodeKind::GlobalVar(name) => {
-                let name = IdentId::get_id(name);
+                let name = self.ident(name);
                 LvalueKind::GlobalVar(name)
             }
             NodeKind::LocalVar(0, name) | NodeKind::Ident(name) => {
-                let name = IdentId::get_id(name);
+                let name = self.ident(name);
                 let dst = self.assign_local(name).into();
                 LvalueKind::LocalVar { dst }
             }
             NodeKind::LocalVar(outer, ident) => {
                 let outer = *outer;
-                let name = IdentId::get_id(ident);
+                let name = self.ident(ident);
                 let dst = match self.refer_dynamic_local(outer, name) {
                     Some(dst) => dst,
                     None => {
@@ -2183,7 +2200,7 @@ impl<'a> BytecodeGen<'a> {
                 && !safe_nav =>
             {
                 let recv = self.gen_expr_reg(receiver.clone())?;
-                let method = IdentId::get_id_from_string(format!("{method}="));
+                let method = self.ident(&format!("{method}="));
                 LvalueKind::Send { recv, method }
             }
             NodeKind::DiscardLhs => LvalueKind::Discard,
