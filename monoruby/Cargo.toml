@@ -29,7 +29,7 @@ dump-bc = []
 dump-traceir = []
 emit-asm = ["dump-bc", "dump-traceir", "jit-log"]
 emit-bc = ["dump-bc", "dump-traceir"]
-jit-log = ["block-summary"]
+jit-log = []
 jit-debug = ["dump-traceir"]
 deopt = ["jit-log", "dump-bc", "dump-traceir"]
 gc-log = []
@@ -50,14 +50,6 @@ stress-spill-pool = []
 # (doc/fixpoint_engine_plan.md step A'), so the recorded back edges only
 # ever climb. Off by default until benchmarked on both architectures.
 fixpoint-join = []
-# What a block literal does to the frames outside it, read off its TraceIR
-# (`BlockSummary`). Internal: enabled by the features that use it.
-block-summary = []
-# Experimental, off by default: at a call that hands an inlined callee a
-# block, a float literal local the block accumulates into (`s = 0.0;
-# arr.each { |x| s += x }`) is put in a float home, so the callee's loop
-# carries it unboxed. See doc/fixpoint_engine_plan.md.
-carry-float-literal = ["block-summary"]
 # Counters only: `profile` needs `TraceIr::format` for its deopt-site table,
 # not the bytecode dumps `dump-bc` brings.
 profile = ["dump-traceir"]

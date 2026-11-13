@@ -488,16 +488,16 @@ impl<'a> JitContext<'a> {
 /// slots a loop head would unbox if the choice were made *before* the
 /// back-edge fixpoint, from the bytecode, the inline caches and the
 /// incoming state alone, to be compared with the set the loop-entry merge
-/// adopts from the fixpoint's back edge (`keep_backedge_floats`). Nothing
-/// here feeds back into the compile.
+/// adopts from the fixpoint's back edge (`keep_backedge_floats`). The
+/// recording itself (`jit-log`) feeds nothing back into the compile; the
+/// block summaries below are also what `block_float_accumulators` reads,
+/// which does.
 ///
-#[cfg(feature = "block-summary")]
 use crate::bytecodegen::{BinOpK, UnOpK};
 
 ///
 /// What one definition puts in a slot of the frame a loop is in.
 ///
-#[cfg(feature = "block-summary")]
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum FloatDef {
     Float,
@@ -512,7 +512,6 @@ enum FloatDef {
 /// `BinCmp` or `UnOp` whose cache says `Float` for the operand), and the
 /// slot it defines as a float: float arithmetic, or a float literal.
 ///
-#[cfg(feature = "block-summary")]
 fn float_ops(ir: &TraceIr) -> (Vec<SlotId>, Option<SlotId>) {
     let is_num = |c: CachedClass| c == CachedClass::FLOAT || c == CachedClass::INTEGER;
     let mut reads = vec![];
@@ -581,7 +580,6 @@ fn float_ops(ir: &TraceIr) -> (Vec<SlotId>, Option<SlotId>) {
 /// Every slot of its own frame *ir* writes: `TraceIr::defined_slot`, and
 /// the destinations that are not plain.
 ///
-#[cfg(feature = "block-summary")]
 fn written_slots(ir: &TraceIr, store: &Store) -> Vec<SlotId> {
     let mut written: Vec<SlotId> = ir.defined_slot(store).into_iter().collect();
     match ir {
@@ -613,7 +611,6 @@ fn written_slots(ir: &TraceIr, store: &Store) -> Vec<SlotId> {
 ///
 /// The iseq of the block literal *ir* passes, for a method call with one.
 ///
-#[cfg(feature = "block-summary")]
 fn block_literal(ir: &TraceIr, store: &Store) -> Option<ISeqId> {
     let TraceIr::MethodCall { callid, .. } = ir else {
         return None;
@@ -632,7 +629,6 @@ fn block_literal(ir: &TraceIr, store: &Store) -> Option<ISeqId> {
 /// a "may": a definition here does not end the life of the value the slot
 /// had.
 ///
-#[cfg(feature = "block-summary")]
 struct BlockSummary {
     /// Read as a float operand.
     float_read: Vec<bool>,
@@ -660,7 +656,6 @@ impl BlockSummary {
     }
 }
 
-#[cfg(feature = "block-summary")]
 impl<'a> JitContext<'a> {
     ///
     /// Whether the block literal the call *ir* passes is expected to be
@@ -1372,7 +1367,6 @@ impl<'a> JitContext<'a> {
     }
 }
 
-#[cfg(feature = "carry-float-literal")]
 impl<'a> JitContext<'a> {
     ///
     /// The locals of the current frame that the block literal *block*

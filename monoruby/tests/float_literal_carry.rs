@@ -1,13 +1,11 @@
 //! A float local that starts as a literal and is accumulated into by a
 //! block the callee inlines: `s = 0.0; arr.each { |x| s += x }`.
 //!
-//! With the `carry-float-literal` feature the literal gets a float home
-//! at the call, so the callee's loop carries `s` unboxed (see
-//! `doc/fixpoint_engine_plan.md`). The slot of `s` is then stale while
-//! the callee runs, and every way out of the loop has to make it current
-//! again: the normal return, `break`, `return` and `throw` from the
-//! block, an exception, a guard that fails in the middle. These run in
-//! every build; they pin the behaviour the feature must keep.
+//! The literal gets a float home at the call, so the callee's loop
+//! carries `s` unboxed (see `doc/fixpoint_engine_plan.md`). The slot of
+//! `s` is then stale while the callee runs, and every way out of the loop
+//! has to make it current again: the normal return, `break`, `return` and
+//! `throw` from the block, an exception, a guard that fails in the middle.
 
 extern crate monoruby;
 use monoruby::tests::*;

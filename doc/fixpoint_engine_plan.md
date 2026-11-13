@@ -1004,7 +1004,7 @@ optcarrot では、jit-log の walk 数と JIT コードの総バイト数が変
   2. 不透明の判定をブロックごとにする(記録のみ)。
   3. `ensure` を持つブロックを要約できるようにする(記録のみ)。
 
-#### float リテラルの初期値を保持する試作(2026-11-13、既定で無効のフィーチャ `carry-float-literal`)
+#### float リテラルの初期値を保持する(2026-11-13、試作ののち既定で有効)
 
 上の 1. を調べた。足りなかったのは不動点の側ではなく、呼び出し位置の 1 か所だった。
 
@@ -1040,16 +1040,41 @@ optcarrot では、jit-log の walk 数と JIT コードの総バイト数が変
     出力が master と一致した(対象の形が無い)。
   - each の小品では、yield 側の記録の「事前のみ 9」がすべて「両方 9」になった。
     事前の選択が予告した集合と一致する。
-  - ゲート(§13.4)の対象 3 本に後退は無い。aarch64 は測っていない。
+  - ゲート(§13.4)の対象 3 本に後退は無い。
 - **確認。**
   - integration は、フィーチャ有効で 1778 本すべて成功した
     (`stress-spill-pool` との組み合わせも、フィーチャ無効の既定の構成も同じ)。
   - `tests/float_literal_carry.rs` を足した(7 本)。ループの途中でスロットが古くなるので、
     出口をすべて通す: 正常な戻り、`break`、ブロックからの `return` と `throw`、
     例外(持ち主の `rescue` が読む場合を含む)、途中でのオペランドのクラス変化、
-    0 回、呼び出し後の `proc` / `binding` による捕獲。フィーチャ無効でも走る。
+    0 回、呼び出し後の `proc` / `binding` による捕獲。
+- **aarch64**(qemu-user 8.2.2、クロスビルド)。
+  - `emit-asm` の出力(ユニットごとのコードサイズと位置)は、so_mandelbrot・so_nbody・
+    plb2/matmul・optcarrot で切り替えの前後が一致した。app_aobench と each の小品は
+    変わる(aobench の該当ユニットは 27,628 → 27,372 バイト)。標準出力は x86-64 の
+    master と一致した。
+  - 実行した命令数(`-one-insn-per-tb -d exec,nochain` で数えた)は、each の小品で
+    486.0M → 430.1M(−11.5%)。何もしないスクリプトの 230.6M を引くと
+    255.4M → 199.5M(−21.9%)。
+  - integration は 1778 本のうち 1683 本が成功した。残りの 95 本(失敗 94 本と、
+    時間切れ 1 本)は、この経路を入れないビルドでも同じ 95 本が同じ結果になる。
+    クロスビルドでは読み込めない C 拡張(stringio、socket、openssl、bigdecimal、date、
+    zlib、psych、capi)と、qemu-user の fork / flock / シグナルに依存するテストである。
+    `float_literal_carry` の 7 本は成功した。
+    なお qemu-user では 1 プロセスで全テストを流すと途中から劣化して失敗が連鎖するので、
+    失敗した分は 1 テスト 1 プロセスで流し直した。
+- **既定で有効にした**(2026-11-13)。フィーチャ `carry-float-literal` と内部フィーチャ
+  `block-summary` は削除し、この経路とブロックの要約は常にコンパイルされる
+  (`--no-default-features` で組む `bin/install` の構成でも落ちないようにするため)。
+  記録だけの部分(`loop_float_candidates`、`record_pre_fixpoint_*`)は `jit-log` のままである。
+  - x86-64 の最終ビルドでも、so_mandelbrot・so_nbody・bf・quick_sort・binarytrees・
+    plb2/matmul の `emit-asm` の出力は master と一致し、integration は 1778 本すべて成功した。
+  - バイナリ同士で master と比べた Ir は、so_mandelbrot +0.57%、so_nbody +0.39%、
+    plb2/matmul +0.23%、optcarrot +0.18%、each の小品 −27.8% である。JIT が出すコードは
+    同一で、増分は rustc のインライン化の揺れによる(グローバルアロケータの
+    `alloc::malloc_hard_limit` がインライン化されなくなり、so_mandelbrot で +5.0M)。
+    クレートにコードを足すと動く種類の差で、この変更に固有のものではない。
 - **残っていること。**
-  - aarch64 での測定(既定で有効にする前に必要)。
   - 入口が箱入りの float(`S`、クラスが Float と分かっている)の場合は扱っていない。
     integration の事前のみ 41 個のうち 1 個がこれに当たる。
   - 不動点の側で「事前の集合」を使う変更は、この形には要らなかった。
