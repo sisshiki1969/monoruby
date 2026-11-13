@@ -1157,6 +1157,15 @@ pub(super) fn init_io_encodings(
     set_io_ecopts(globals, io, ecopts)?;
     if let Some(nl) = parse_newline_option(vm, globals, lfp, opt_range.clone(), extra)? {
         io.as_io_inner_mut().set_newline(nl);
+    } else if let Some(h) = hash
+        && let Some(
+            nl @ (crate::value::rvalue::io::NewlineMode::Crlf
+            | crate::value::rvalue::io::NewlineMode::Cr),
+        ) = newline_decorator_of(vm, globals, h)?
+    {
+        // The boolean spellings of a write decorator (`crlf_newline:
+        // true`, `cr_newline: true`).
+        io.as_io_inner_mut().set_newline(nl);
     }
     let textmode = base.contains('t');
     if readable && !binmode && reads_universal_newline(vm, globals, textmode, hash)? {
@@ -1207,6 +1216,58 @@ pub(super) fn reads_universal_newline(
         }
     }
     Ok(if given { universal } else { textmode })
+}
+
+/// The newline decorator an options Hash replaces the stream's with, if
+/// it names one (`rb_econv_prepare_options`): `newline:` when given,
+/// otherwise the booleans `universal_newline:` / `crlf_newline:` /
+/// `cr_newline:` / `lf_newline:` when any of them is non-nil. `None`
+/// leaves the stream's decorator as it is.
+fn newline_decorator_of(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    h: crate::value::Hashmap,
+) -> Result<Option<crate::value::rvalue::io::NewlineMode>> {
+    use crate::value::rvalue::io::NewlineMode;
+    let get = |vm: &mut Executor, globals: &mut Globals, key: &str| {
+        h.get(Value::symbol(IdentId::get_id(key)), vm, globals)
+            .map(|v| v.filter(|v| !v.is_nil()))
+    };
+    if let Some(v) = get(vm, globals, "newline")? {
+        let name = v.try_symbol().map(|s| s.get_name());
+        return Ok(Some(match name.as_deref() {
+            Some("universal") => NewlineMode::Universal,
+            Some("crlf") => NewlineMode::Crlf,
+            Some("cr") => NewlineMode::Cr,
+            Some("lf") => NewlineMode::None,
+            Some(other) => {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "unexpected value for newline option: {other}"
+                )));
+            }
+            None => {
+                return Err(MonorubyErr::argumenterr(
+                    "unexpected value for newline option",
+                ));
+            }
+        }));
+    }
+    let mut given = None;
+    for (key, mode) in [
+        ("universal_newline", NewlineMode::Universal),
+        ("crlf_newline", NewlineMode::Crlf),
+        ("cr_newline", NewlineMode::Cr),
+        ("lf_newline", NewlineMode::None),
+    ] {
+        if let Some(v) = get(vm, globals, key)? {
+            if v.as_bool() && given.is_none_or(|g| g == NewlineMode::None) {
+                given = Some(mode);
+            } else {
+                given.get_or_insert(NewlineMode::None);
+            }
+        }
+    }
+    Ok(given)
 }
 
 /// The `newline:` open option's write decorator, if one was given.
@@ -1752,7 +1813,7 @@ pub(super) struct WideLines {
 
 /// The [`WideLines`] a line read of a stream with these encodings uses,
 /// or `None` when it splits on bytes.
-#[inline]
+#[inline(always)]
 pub(super) fn wide_lines(
     globals: &Globals,
     sep: Option<&[u8]>,
@@ -2078,6 +2139,23 @@ fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let (ext, intl) = io_encodings(globals, self_);
     let complete_utf8 = matches!(ext, crate::value::Encoding::Utf8(_));
     let wide = wide_lines(globals, sep.as_deref(), ext, intl);
+    if let Some(i) = intl
+        && read_converts(ext, intl)
+        && self_.as_io_inner().char_pending_len() > 0
+        && let Some(s) = gets_pending_line(
+            vm,
+            globals,
+            self_,
+            sep.as_deref(),
+            limit,
+            chomp,
+            (ext, i),
+            complete_utf8,
+            wide.as_ref(),
+        )?
+    {
+        return Ok(s);
+    }
     let line = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         getline_with(
             lfp.self_val(),
@@ -2108,6 +2186,138 @@ fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
             vm.set_last_read_line(Value::nil());
             Ok(Value::nil())
         }
+    }
+}
+
+/// [`gets_with_pending`] for `IO#gets`: the line chomped, tagged with
+/// the internal encoding, counted and set as `$_`. Kept out of line, so
+/// the common read path stays small.
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn gets_pending_line(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    io: Value,
+    sep: Option<&[u8]>,
+    limit: Option<usize>,
+    chomp: bool,
+    (ext, intl): (crate::value::Encoding, crate::value::Encoding),
+    complete_utf8: bool,
+    wide: Option<&WideLines>,
+) -> Result<Option<Value>> {
+    let Some(mut line) = gets_with_pending(
+        vm,
+        globals,
+        io,
+        sep,
+        limit,
+        (ext, intl),
+        complete_utf8,
+        wide,
+    )?
+    else {
+        return Ok(None);
+    };
+    if chomp {
+        chomp_line(&mut line, sep, limit);
+    }
+    let mut s = Value::string_from_vec(line);
+    s.as_rstring_inner_mut().set_encoding(intl);
+    bump_lineno(globals, io)?;
+    vm.set_last_read_line(s);
+    Ok(Some(s))
+}
+
+/// `IO#gets` on a stream converting to an internal encoding, with
+/// characters `ungetc` left in `cbuf` (already in that encoding). CRuby's
+/// line reader works on converted characters, so the line is looked for
+/// in them first — the separator, or the limit rounded up to a whole
+/// character — and otherwise goes on into what the rest of the line
+/// converts to. `None` when nothing is left pending (a paragraph read
+/// skipped it all as blank lines): the caller reads as usual.
+#[allow(clippy::too_many_arguments)]
+fn gets_with_pending(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mut io: Value,
+    sep: Option<&[u8]>,
+    limit: Option<usize>,
+    (ext, intl): (crate::value::Encoding, crate::value::Encoding),
+    complete_utf8: bool,
+    wide: Option<&WideLines>,
+) -> Result<Option<Vec<u8>>> {
+    let mut pre = io.as_io_inner_mut().take_char_pending(None);
+    let paragraph = sep == Some(b"".as_slice());
+    if paragraph {
+        let blank = pre.iter().take_while(|&&b| b == b'\n').count();
+        pre.drain(..blank);
+        if pre.is_empty() {
+            return Ok(None);
+        }
+    }
+    let end: Option<&[u8]> = if paragraph { Some(b"\n\n") } else { sep };
+    let mut cut = end.and_then(|e| memchr::memmem::find(&pre, e).map(|i| i + e.len()));
+    if let Some(l) = limit
+        && l <= pre.len()
+    {
+        let at = char_boundary_from(intl, &pre, l);
+        if cut.is_none_or(|c| at < c) {
+            cut = Some(at);
+        }
+    }
+    if let Some(c) = cut {
+        let rest = pre.split_off(c);
+        io.as_io_inner_mut().restore_char_pending(&rest);
+        return Ok(Some(pre));
+    }
+    // The line goes on past what was pending.
+    let more = limit.map(|l| l - pre.len());
+    let raw = match blocking_io_region(vm, globals, io, libc::POLLIN, |_store| {
+        getline_with(io, sep, more, complete_utf8, wide)
+    }) {
+        Ok(raw) => raw,
+        Err(err) => {
+            io.as_io_inner_mut().restore_char_pending(&pre);
+            return Err(err);
+        }
+    };
+    if let Some(raw) = raw {
+        let converted = read_conv(globals, io, raw, &[], ext, Some(intl))?;
+        pre.extend_from_slice(converted.as_rstring_inner().as_bytes());
+    }
+    Ok(Some(pre))
+}
+
+/// The first character boundary at or after byte `at` of `bytes` in
+/// `enc` (at most `bytes.len()`): a line limit cuts whole characters.
+fn char_boundary_from(enc: crate::value::Encoding, bytes: &[u8], at: usize) -> usize {
+    let mut pos = 0;
+    while pos < at && pos < bytes.len() {
+        pos += char_width_at(enc, &bytes[pos..]);
+    }
+    pos.min(bytes.len())
+}
+
+/// The width of the character at the start of `bytes` in `enc`: a whole
+/// character, or one byte of an invalid sequence (`rb_enc_precise_mbclen`
+/// as `IO#getc` uses it).
+fn char_width_at(enc: crate::value::Encoding, bytes: &[u8]) -> usize {
+    if matches!(enc, crate::value::Encoding::Utf8(_)) {
+        let w = match bytes[0] {
+            b if b & 0x80 == 0 => 1,
+            b if b & 0xE0 == 0xC0 => 2,
+            b if b & 0xF0 == 0xE0 => 3,
+            b if b & 0xF8 == 0xF0 => 4,
+            _ => 1,
+        };
+        if w <= bytes.len() && std::str::from_utf8(&bytes[..w]).is_ok() {
+            w
+        } else {
+            1
+        }
+    } else {
+        char_width_from_lead(enc, bytes[0]).clamp(1, bytes.len())
     }
 }
 
@@ -2406,11 +2616,15 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     };
     // `read_all` goes through the read converter, so its newline
     // decorator; a sized read (`io_fread`) takes the bytes as they are.
+    // Characters `ungetc` pushed back are already converted: they go in
+    // front of what the rest converts to.
+    let pending = if length.is_none() {
+        lfp.self_val().as_io_inner_mut().take_char_pending(None)
+    } else {
+        vec![]
+    };
     let buf = if length.is_none() && lfp.self_val().as_io_inner().universal_newline() {
-        // Characters `ungetc` pushed back are already converted.
-        let mut out = lfp.self_val().as_io_inner_mut().take_char_pending(None);
-        out.extend_from_slice(&crate::value::rvalue::io::universal_newline_bytes(buf));
-        out
+        crate::value::rvalue::io::universal_newline_bytes(buf)
     } else {
         buf
     };
@@ -2432,11 +2646,13 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                         // What was converted ahead of the error is left
                         // in the buffer.
                         if let Some(done) = done {
+                            let done = prepend_pending(done, &pending);
                             *out.as_rstring_inner_mut() = (*done.as_rstring_inner()).clone();
                         }
                         return Err(err);
                     }
                 };
+                let tagged = prepend_pending(tagged, &pending);
                 *out.as_rstring_inner_mut() = (*tagged.as_rstring_inner()).clone();
             }
             if eof_nil { Ok(Value::nil()) } else { Ok(out) }
@@ -2445,9 +2661,23 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             if eof_nil {
                 return Ok(Value::nil());
             }
-            tagged_read_string(globals, lfp.self_val(), buf, length.is_some())
+            let s = tagged_read_string(globals, lfp.self_val(), buf, length.is_some())?;
+            Ok(prepend_pending(s, &pending))
         }
     }
+}
+
+/// Put the characters `ungetc` left converted (`pending`, already in the
+/// string's encoding) in front of what a read converted.
+fn prepend_pending(mut s: Value, pending: &[u8]) -> Value {
+    if !pending.is_empty() {
+        let inner = s.as_rstring_inner_mut();
+        let enc = inner.encoding();
+        let mut bytes = pending.to_vec();
+        bytes.extend_from_slice(inner.as_bytes());
+        *inner = RStringInner::from_encoding(&bytes, enc);
+    }
+    s
 }
 
 ///
@@ -3075,16 +3305,10 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         ));
     }
     let cmd_val = args[0];
-    let mode = match args.get(1) {
-        Some(m) if !m.is_nil() => m.coerce_to_str(vm, globals)?,
-        _ => "r".to_string(),
-    };
-    let readable = mode.contains('r') || mode.contains('+');
-    let writable = mode.contains('w') || mode.contains('+');
 
     // The options are the exec options (`rb_execarg_extract_options`:
     // `chdir:`, `err:`, fd keys, ...), which go to the child, and the
-    // rest, the stream's own (`encoding:`, ...).
+    // rest, the stream's own (`encoding:`, `mode:`, `binmode:`, ...).
     let mut exec_opts = RubyMap::default();
     let mut io_opts: Vec<(Value, Value)> = vec![];
     if let Some(h) = opts {
@@ -3096,6 +3320,47 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             }
         }
     }
+    let io_opt = |name: &str| {
+        io_opts
+            .iter()
+            .find(|(k, _)| k.try_symbol().is_some_and(|s| s.get_name() == name))
+            .map(|(_, v)| *v)
+            .filter(|v| !v.is_nil())
+    };
+
+    // The mode, its text / binary flags and the newline decorator, all
+    // settled before the child starts (CRuby's `rb_io_extract_modeenc`,
+    // #1895): a positional mode and `mode:` together are an error, as are
+    // text and binary mode together, and a decorator on a binary stream.
+    let positional_mode = args.get(1).copied().filter(|m| !m.is_nil());
+    let mode = match (positional_mode, io_opt("mode")) {
+        (Some(_), Some(_)) => return Err(MonorubyErr::argumenterr("mode specified twice")),
+        (Some(m), None) | (None, Some(m)) => m.coerce_to_str(vm, globals)?,
+        (None, None) => "r".to_string(),
+    };
+    let base = mode.split(':').next().unwrap_or("");
+    let readable = base.contains('r') || base.contains('+');
+    let writable = base.contains('w') || base.contains('+');
+    let binmode = base.contains('b') || io_opt("binmode").is_some_and(|v| v.as_bool());
+    let textmode = base.contains('t') || io_opt("textmode").is_some_and(|v| v.as_bool());
+    if binmode && textmode {
+        return Err(MonorubyErr::argumenterr(
+            "both textmode and binmode specified",
+        ));
+    }
+    // The decorator keys are never exec options, so the options Hash as
+    // given (rooted by the argument list) answers for them.
+    let io_hashmap = opts.and_then(|h| h.try_hash_ty());
+    if binmode && newline_decorator_given(vm, globals, io_hashmap)? {
+        return Err(MonorubyErr::argumenterr(
+            "newline decorator with binary mode",
+        ));
+    }
+    let newline = match io_hashmap {
+        Some(h) => newline_decorator_of(vm, globals, h)?,
+        None => None,
+    }
+    .or(textmode.then_some(crate::value::rvalue::io::NewlineMode::Universal));
 
     let fork = cmd_val.try_array_ty().is_none()
         && cmd_val.is_rstring().is_some_and(|s| s.as_bytes() == b"-");
@@ -3202,9 +3467,16 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     {
         let de = enc_default_external_obj(globals);
         let di = enc_default_internal_obj(globals);
-        let (slot, i) =
-            resolve_io_encodings(globals, ext_obj, int_obj, false, readable, !readable, de, di);
+        let (slot, i) = resolve_io_encodings(
+            globals, ext_obj, int_obj, binmode, readable, !readable, de, di,
+        );
         store_io_encodings(globals, io_val, slot, i);
+        let mut io = io_val;
+        if binmode {
+            io.as_io_inner_mut().set_binmode();
+        } else if let Some(nl) = newline {
+            io.as_io_inner_mut().set_newline(nl);
+        }
     }
 
     if let Some(bh) = lfp.block() {
@@ -3890,6 +4162,29 @@ fn io_readlines(
     let (ext, intl) = io_encodings(globals, self_);
     let converts = read_converts(ext, intl);
     let wide = wide_lines(globals, sep.as_deref(), ext, intl);
+    // Lines out of the characters `ungetc` left converted come first.
+    while let Some(i) = intl
+        && converts
+        && self_.as_io_inner().char_pending_len() > 0
+        && let Some(mut line) = gets_with_pending(
+            vm,
+            globals,
+            self_,
+            sep.as_deref(),
+            limit,
+            (ext, i),
+            complete_utf8,
+            wide.as_ref(),
+        )?
+    {
+        if chomp {
+            chomp_line(&mut line, sep.as_deref(), limit);
+        }
+        let mut s = Value::string_from_vec(line);
+        s.as_rstring_inner_mut().set_encoding(i);
+        lines.push(s);
+        bump_lineno(globals, self_)?;
+    }
     while let Some(mut buf) =
         blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
             getline_with(
@@ -4304,30 +4599,19 @@ fn io_getc(
     // A character `ungetc` left converted comes out as it was given.
     let pending = self_.as_io_inner().char_pending_len();
     if pending > 0 {
+        // In the read encoding: the internal one when the reads convert.
+        let enc = match intl {
+            Some(i) if read_converts(ext, intl) => i,
+            _ => ext,
+        };
         let mut io = self_;
         let inner = io.as_io_inner_mut();
         let mut buf = inner.take_char_pending(None);
-        let width = if matches!(ext, crate::value::Encoding::Utf8(_)) {
-            // One whole character, or one byte of an invalid sequence
-            // (`rb_enc_precise_mbclen`).
-            let w = match buf[0] {
-                b if b & 0x80 == 0 => 1,
-                b if b & 0xE0 == 0xC0 => 2,
-                b if b & 0xF0 == 0xE0 => 3,
-                b if b & 0xF8 == 0xF0 => 4,
-                _ => 1,
-            };
-            if w <= buf.len() && std::str::from_utf8(&buf[..w]).is_ok() {
-                w
-            } else {
-                1
-            }
-        } else {
-            char_width_from_lead(ext, buf[0]).clamp(1, buf.len())
-        };
-        let rest = buf.split_off(width);
+        let rest = buf.split_off(char_width_at(enc, &buf));
         inner.restore_char_pending(&rest);
-        return read_conv(globals, self_, buf, &[], ext, intl);
+        let mut s = Value::string_from_vec(buf);
+        s.as_rstring_inner_mut().set_encoding(enc);
+        return Ok(s);
     }
     let mut buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
         read_one_char_enc(lfp.self_val().as_io_inner_mut(), ext)
@@ -4404,12 +4688,22 @@ fn io_ungetc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             "no implicit conversion of nil into Integer",
         ));
     }
+    // Reads that convert (an internal encoding, or the universal newline
+    // decorator) take a pushed-back character as already converted.
+    let (ext, intl) = io_encodings(globals, lfp.self_val());
+    let converts = read_converts(ext, intl);
+    let converted = converts || lfp.self_val().as_io_inner().universal_newline();
     let bytes = if arg.is_integer() {
         let cp = (arg.coerce_to_pack_u64(vm, globals)? & 0xffff_ffff) as u32;
         // CRuby's `rb_io_ungetc` builds the character in the stream's
-        // *external* encoding, so `ungetc(130)` on an IBM437 stream
-        // pushes the single byte 130, not U+0082's UTF-8 form.
-        let enc = io_external_encoding(globals, lfp.self_val());
+        // read encoding (`io_read_encoding`: the internal one when the
+        // reads convert, otherwise the external one), so `ungetc(130)` on
+        // an IBM437 stream pushes the single byte 130, not U+0082's UTF-8
+        // form.
+        let enc = match intl {
+            Some(i) if converts => Some(i),
+            _ => io_external_encoding(globals, lfp.self_val()),
+        };
         match enc {
             Some(e) if !e.is_utf8_compatible() && cp < 0x100 => vec![cp as u8],
             _ => match char::from_u32(cp) {
@@ -4429,7 +4723,9 @@ fn io_ungetc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 .to_vec(),
         }
     };
-    lfp.self_val().as_io_inner_mut().unget_char(&bytes)?;
+    lfp.self_val()
+        .as_io_inner_mut()
+        .unget_char(&bytes, converted)?;
     Ok(Value::nil())
 }
 
@@ -5602,6 +5898,14 @@ fn set_encoding(
     // goes, and with it the characters `ungetc` left converted.
     let mut io = self_;
     io.as_io_inner_mut().clear_char_pending();
+    // The options also replace the newline decorator (#1895), under the
+    // same rule as `invalid:` / `undef:`: only when they are read at all.
+    if takes_opts
+        && let Some(h) = opts
+        && let Some(nl) = newline_decorator_of(vm, globals, h)?
+    {
+        io.as_io_inner_mut().set_newline(nl);
+    }
     Ok(self_)
 }
 
@@ -7724,6 +8028,155 @@ mod tests {
     }
 
     #[test]
+    fn ungetc_under_internal_encoding() {
+        // #1896: with an internal encoding `ungetc` pushes into the
+        // converted buffer, so the next read returns the characters as
+        // given instead of converting them a second time.
+        run_test_once(
+            r##"
+            def t; yield; rescue => e; "#{e.class}: #{e.message}"; end
+            res = []
+            path = "/tmp/monoruby_test_ungetc_enc2_#{Process.pid}"
+            File.binwrite(path, "a\xE9b\nc\xE9\nd\n")
+            o = ->(m = "r:ISO-8859-1:UTF-8", **kw, &b) { File.open(path, m, **kw) { |io| t { b.(io) } } }
+            res << o.() { |io| io.ungetc("é"); [io.getc, io.read] }
+            res << o.() { |io| io.ungetc("é"); io.gets }
+            res << o.() { |io| io.ungetc("é\nx"); [io.gets, io.gets, io.gets] }
+            res << o.() { |io| io.ungetc("é\nx"); io.gets(chomp: true) }
+            res << o.() { |io| io.ungetc("éx"); io.gets(chomp: true) }
+            res << o.() { |io| io.ungetc("é"); io.gets(nil) }
+            res << o.() { |io| io.ungetc("é"); io.gets(2) }
+            res << o.() { |io| io.ungetc("é"); io.gets(1) }
+            res << o.() { |io| io.ungetc("é"); io.gets(4) }
+            res << o.() { |io| io.ungetc("éx"); io.gets("x") }
+            res << o.() { |io| io.ungetc("é"); io.gets("b") }
+            res << o.() { |io| io.ungetc("é\n\nz"); [io.gets(""), io.gets("")] }
+            res << o.() { |io| io.ungetc("é"); io.readlines }
+            res << o.() { |io| io.ungetc("é"); io.each_char.to_a }
+            res << o.() { |io| io.ungetc("é"); io.read.encoding.name }
+            res << o.() { |io| io.ungetc("é"); [io.getc.encoding.name] }
+            res << o.() { |io| io.ungetc(233); [io.getc, io.read] }
+            res << o.() { |io| io.ungetc(0x3042); io.getc }
+            res << o.() { |io| io.ungetc("é"); io.getbyte }
+            res << o.() { |io| io.ungetc("é"); io.read(1) }
+            res << o.() { |io| io.ungetc("é"); io.eof? }
+            res << o.() { |io| io.ungetc("é"); io.ungetbyte(65) }
+            res << o.() { |io| io.ungetbyte(0xE9); io.read }
+            res << o.() { |io| io.ungetc("é"); io.rewind; io.getc }
+            res << o.() { |io| io.ungetc("é"); s = +"buf"; io.read(nil, s); s }
+            res << o.() { |io| io.ungetc("é"); io.set_encoding("ISO-8859-1:UTF-8"); io.getc }
+            res << o.() { |io| io.getc; io.ungetc("é"); io.read }
+            res << o.("r:UTF-8:UTF-8") { |io| io.ungetc("é"); io.getbyte }
+            res << o.("r:UTF-8:UTF-16LE") { |io| io.ungetc("é".encode("UTF-16LE")); [io.getc, io.getc].map(&:bytes) }
+            res << o.("r:ISO-8859-1:UTF-8", universal_newline: true) { |io| io.ungetc("é\r"); [io.getc, io.getc, io.read] }
+            res << o.("rt:ISO-8859-1:UTF-8") { |io| io.ungetc("é\r"); io.gets }
+            res << o.("r:ISO-8859-1:UTF-8", invalid: :replace) { |io| io.ungetc("\xff"); io.getc.bytes }
+            File.delete(path)
+            res
+            "##,
+        );
+    }
+
+    #[test]
+    fn popen_text_binary_and_newline_options() {
+        // #1895: IO.popen honours "t" / "b" / `mode:` / `binmode:` /
+        // `textmode:` and the newline decorator options.
+        run_test_once(
+            r##"
+            def t; yield; rescue => e; "#{e.class}: #{e.message}"; end
+            res = []
+            c = ["printf", "a\\r\\nb\\rc"]
+            res << t { IO.popen(c, "rt", &:read) }
+            res << t { IO.popen(c, "r", universal_newline: true, &:read) }
+            res << t { IO.popen(c, textmode: true, &:gets) }
+            res << t { IO.popen(c, "r", newline: :universal, &:read) }
+            res << t { IO.popen(c, "rt", universal_newline: false, &:read) }
+            res << t { IO.popen(c, "rb", &:binmode?) }
+            res << t { IO.popen(c, "r", binmode: true) { |io| [io.binmode?, io.external_encoding.name, io.read] } }
+            res << t { IO.popen(c, "rb", universal_newline: true, &:read) }
+            res << t { IO.popen(c, "rt:UTF-8", &:read) }
+            res << t { IO.popen(c, "rt") { |io| io.ungetc("\r"); io.read } }
+            res << t { IO.popen(c, mode: "rt", &:read) }
+            res << t { IO.popen("printf 'x\\r\\ny'", "rt", &:readlines) }
+            res << t { IO.popen(c, "r+t") { |io| io.read } }
+            res << t { IO.popen(["cat"], "r+t") { |io| io.write("a\r\nb"); io.close_write; io.read } }
+            res << t { IO.popen(["cat"], "w+", universal_newline: true) { |io| io.write("a\r\nb"); io.close_write; io.read } }
+            res << t { IO.popen(c, "r", mode: "r", &:read) }
+            res << t { IO.popen(c, mode: "rb", &:binmode?) }
+            res << t { IO.popen(c, "rb", encoding: "UTF-8") { |io| [io.binmode?, io.external_encoding.name] } }
+            res << t { IO.popen(c, "rb:UTF-8") { |io| [io.binmode?, io.external_encoding.name] } }
+            res << t { IO.popen(c, binmode: true, textmode: true, &:read) }
+            res << t { IO.popen(c, "rt", binmode: true, &:read) }
+            res << t { IO.popen(c, "rb", newline: :universal, &:read) }
+            res << t { IO.popen(c, "r", newline: :lf, &:read) }
+            res << t { IO.popen(c, "rt", newline: :crlf, &:read) }
+            res << t { IO.popen(["cat"], "w", crlf_newline: true) { |io| io.write("x\n") } }
+            res << t { IO.popen(c, "rt:ISO-8859-1:UTF-8", &:read) }
+            res << t { IO.popen(c, "rt") { |io| io.binmode; io.read } }
+            res << t { IO.popen(c, "r", universal_newline: true) { |io| [io.getc, io.getc, io.getc, io.gets] } }
+            res << t { IO.popen(c, "r", textmode: true, universal_newline: false, &:read) }
+            res
+            "##,
+        );
+    }
+
+    #[test]
+    fn set_encoding_newline_options() {
+        // #1895: `set_encoding` options replace the newline decorator when
+        // the options are read at all (two encodings or an "ext:int" String).
+        run_test_once(
+            r##"
+            def t; yield; rescue => e; "#{e.class}: #{e.message}"; end
+            res = []
+            path = "/tmp/monoruby_test_setenc_newline_#{Process.pid}"
+            File.binwrite(path, "a\r\nb\rc\n")
+            o = ->(m = "r", **kw, &b) { File.open(path, m, **kw) { |io| t { b.(io) } } }
+            res << o.() { |io| io.set_encoding("UTF-8", universal_newline: true); io.read }
+            res << o.() { |io| io.set_encoding("UTF-8", newline: :universal); io.read }
+            res << o.() { |io| io.set_encoding("UTF-8:UTF-8", universal_newline: true); io.read }
+            res << o.() { |io| io.set_encoding("UTF-8", "UTF-8", universal_newline: true); io.read }
+            res << o.() { |io| io.set_encoding(Encoding::UTF_8, universal_newline: true); io.read }
+            res << o.() { |io| io.set_encoding(nil, universal_newline: true); io.read }
+            res << o.("rt") { |io| io.set_encoding("UTF-8", universal_newline: false); io.read }
+            res << o.("rt") { |io| io.set_encoding("UTF-8", newline: :lf); io.read }
+            res << o.("rt") { |io| io.set_encoding("UTF-8"); io.read }
+            res << o.("rt") { |io| io.set_encoding("UTF-8", invalid: :replace); io.read }
+            res << o.("rt") { |io| io.set_encoding(Encoding::UTF_8, universal_newline: false); io.read }
+            res << o.("rt") { |io| io.set_encoding("UTF-8", crlf_newline: true); io.read }
+            res << o.("rb") { |io| io.set_encoding("UTF-8", universal_newline: true); io.read }
+            res << o.() { |io| io.set_encoding("ISO-8859-1:UTF-8", universal_newline: true); io.read }
+            res << o.() { |io| io.set_encoding("UTF-8", universal_newline: true); [io.gets, io.gets, io.gets] }
+            res << o.() { |io| io.set_encoding("UTF-8", universal_newline: true); io.set_encoding("UTF-8"); io.read }
+            res << o.("r+") { |io| io.set_encoding("UTF-8", crlf_newline: true); io.seek(0, :END); io.write("x\n"); io.rewind; io.read }
+            res << o.("r+t") { |io| io.set_encoding("UTF-8", crlf_newline: true); io.read }
+            File.delete(path)
+            res
+            "##,
+        );
+    }
+
+    #[test]
+    fn open_boolean_newline_options() {
+        // The boolean spellings of the write decorators on File.open.
+        run_test_once(
+            r##"
+            res = []
+            path = "/tmp/monoruby_test_open_newline_bool_#{Process.pid}"
+            File.open(path, "w", crlf_newline: true) { |f| f.write("a\nb\n") }
+            res << File.binread(path)
+            File.open(path, "w", cr_newline: true) { |f| f.write("a\nb\n") }
+            res << File.binread(path)
+            File.binwrite(path, "a\r\nb\rc")
+            File.open(path, "r", universal_newline: true) { |f| p f.read }
+            File.open(path, "rt", newline: :lf) { |f| p f.read }
+            File.open(path, "rt", crlf_newline: true) { |f| p f.read }
+            File.delete(path)
+            res
+            "##,
+        );
+    }
+
+    #[test]
     fn ungetc_on_universal_newline_stream() {
         // #1883: on a universal-newline stream `ungetc` pushes into the
         // converted buffer (CRuby's `cbuf`): what was pushed back comes
@@ -7768,13 +8221,20 @@ mod tests {
             res << o.() { |io| io.ungetc("\r"); io.ungetbyte("\r") }
             res << o.() { |io| io.ungetc("\r"); io.sysseek(0) }
             res << o.() { |io| io.ungetc("\r"); IO.copy_stream(io, "/dev/null") }
-            # Positioning: seek / pos= keep them, rewind / binmode /
-            # set_encoding drop them; eof? sees them.
+            # Positioning: seek / pos= / pos keep them unless bytes were
+            # read ahead, rewind / binmode / set_encoding drop them; eof?
+            # sees them.
             res << o.() { |io| io.ungetc("\r"); io.eof? }
             res << o.() { |io| io.read; io.ungetc("\r"); [io.eof?, io.read, io.eof?] }
             res << o.() { |io| io.ungetc("\r"); [io.pos, io.read] }
             res << o.() { |io| io.ungetc("\r"); io.seek(0); io.read }
             res << o.() { |io| io.ungetc("\r"); io.pos = 3; io.read }
+            res << o.() { |io| io.getc; io.ungetc("\r"); io.seek(3); io.read }
+            res << o.() { |io| io.getc; io.ungetc("\r"); io.pos = 3; io.read }
+            res << o.() { |io| io.getc; io.ungetc("\r"); [io.pos, io.read] }
+            res << o.() { |io| io.ungetbyte("q"); io.ungetc("\r"); io.seek(0, :CUR); io.read }
+            res << o.("r:UTF-8:UTF-16LE") { |io| io.getc; io.ungetc("Z".encode("UTF-16LE")); io.seek(1); io.getc.bytes }
+            res << o.("r:UTF-8:UTF-16LE") { |io| io.ungetc("Z".encode("UTF-16LE")); io.seek(1); io.getc.bytes }
             res << o.() { |io| io.ungetc("\r"); io.rewind; io.read }
             res << o.() { |io| io.ungetc("\r"); io.binmode; io.read }
             res << o.() { |io| io.ungetc("\r"); io.set_encoding("UTF-8"); io.read }
