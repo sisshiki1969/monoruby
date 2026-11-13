@@ -19,6 +19,8 @@ struct LoopWalk {
     /// (`JitContext::analyse_loop_head`). Not part of what a walk found:
     /// a head is seeded only until a back edge is recorded for it.
     seeded: Vec<(BasicBlockId, SlotId)>,
+    /// The back edges reached: `(head, source block)`.
+    backedge_srcs: Vec<(BasicBlockId, BasicBlockId)>,
 }
 
 impl PartialEq for LoopWalk {
@@ -26,6 +28,7 @@ impl PartialEq for LoopWalk {
         self.liveness == other.liveness
             && self.backedge == other.backedge
             && self.vetoes == other.vetoes
+            && self.backedge_srcs == other.backedge_srcs
     }
 }
 
@@ -224,6 +227,7 @@ impl<'a> JitContext<'a> {
             for (head, slot) in walk.seeded {
                 self.note_counter_seed(head, slot);
             }
+            self.set_backedge_srcs(walk.backedge_srcs);
             let mut changed = false;
             for (head, backedge) in walk.backedge {
                 let liveness = walk.liveness[&head].clone();
@@ -390,6 +394,7 @@ impl<'a> JitContext<'a> {
 
         let mut backedge: indexmap::IndexMap<BasicBlockId, Option<AbstractState>> =
             heads.iter().map(|head| (*head, None)).collect();
+        let mut backedge_srcs = vec![];
         for head in heads {
             // Entries left for a head after its block was walked all come
             // from blocks behind it: its back edges.
@@ -400,6 +405,7 @@ impl<'a> JitContext<'a> {
                     .into_iter()
                     .map(|BranchEntry { src_bb, state, .. }| {
                         assert!(src_bb.unwrap() >= *head);
+                        backedge_srcs.push((*head, src_bb.unwrap()));
                         state
                     })
                     .collect();
@@ -446,6 +452,7 @@ impl<'a> JitContext<'a> {
             backedge,
             vetoes,
             seeded: ctx.counter_seeds().to_vec(),
+            backedge_srcs,
         })
     }
 

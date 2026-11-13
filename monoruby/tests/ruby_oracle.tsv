@@ -4701,6 +4701,7 @@ d333b9dcc1340bcc14af5a43f9166fa7	["bb", "cc"]	"foo" =~ /(o+)/\n            e = E
 d33c0b61b1c253801859e41d71a2a56a	[0, 3, 1, 2, 0, 3, nil]	__a = [];__a << ("blablabla".rindex("blab", 2));__a << ("blablabla".rindex("blab
 d33d9a4d8c30a6c6ae6f174ccdc5dd45	true	GC.enable; GC.disable; GC.disable
 d35145572a23f1c9be8cde778c274d8a	10	a = 5\n        p = proc {\n          a = 10\n        }\n        a = 1\n     
+d35851ddac5cb89024e89fae917a7dc2	[[27, [20, 20]], [7, [0, 20]], [27, [20, 20], 7], [7, [0, 0]], [7, [0, 0]]]	def g(k, n); i = 0; c = 0; while c < n; c += 1; next if k; i += 1; end;
 d368d68db28c315d554367c978f045d5	84	def bar(&)\n          yield 42\n        end\n\n        def foo(&)\n         
 d36968e944a707d687381c2ca349c143	[[44032], [44032], ["80", true, "Encoding::InvalidByteSequenceError", "Encoding::InvalidByteSequenceError"], ["8041", true, "Encoding::InvalidByteSequenceError", "Encoding::InvalidByteSequenceError"], ["A2", false, "Encoding::InvalidByteSequenceError", "ok"], ["A2E841", true, "Encoding::UndefinedConversionError", "Encoding::UndefinedConversionError"]]	r = []\n            r << [0xB0, 0xA1].pack("C*").force_encoding("CP9
 d3861dd96a95e0c96f222a0649294cc2	[true, false]	class InstanceExecA; end\n            InstanceExecA.new.instance_exe

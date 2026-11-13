@@ -636,6 +636,11 @@ pub(super) struct JitStackFrame {
     counter_seed_on: bool,
     counter_seeds: Vec<(BasicBlockId, SlotId)>,
     ///
+    /// The back edges the last analysis walk of the fixpoint in progress
+    /// reached: `(head, source block)`.
+    ///
+    backedge_srcs: Vec<(BasicBlockId, BasicBlockId)>,
+    ///
     /// Kept-claim surrender per return path (join unification): one entry
     /// per plain `Ret` this frame compiled, recorded so the caller's
     /// resume can join the return-path chains and emit, on each path, the
@@ -961,6 +966,7 @@ impl JitStackFrame {
             loop_pins: vec![],
             counter_seed_on: false,
             counter_seeds: vec![],
+            backedge_srcs: vec![],
             return_edges: vec![],
             spill_home_watermark: 0,
             spill_home_ids: std::collections::HashSet::default(),
@@ -999,6 +1005,7 @@ impl JitStackFrame {
             loop_pins: vec![],
             counter_seed_on: self.counter_seed_on,
             counter_seeds: vec![],
+            backedge_srcs: vec![],
             return_edges: vec![],
             // Analysis walks allocate home ids too; starting from the
             // live mark keeps their ids consistent with what codegen
@@ -3040,6 +3047,7 @@ impl<'a> JitContext<'a> {
             loop_pins: _,
             counter_seed_on: _,
             counter_seeds: _,
+            backedge_srcs: _,
             return_edges: _,
             branch_map: _,
             backedge_map: _,
@@ -3994,6 +4002,7 @@ impl<'a> JitContext<'a> {
         let frame = self.current_frame_mut();
         frame.counter_seed_on = on;
         frame.counter_seeds.clear();
+        frame.backedge_srcs.clear();
     }
 
     /// A walk seeded *slot* at *head*.
@@ -4006,6 +4015,16 @@ impl<'a> JitContext<'a> {
 
     pub(super) fn counter_seeds(&self) -> &[(BasicBlockId, SlotId)] {
         &self.current_frame().counter_seeds
+    }
+
+    /// The back edges the last analysis walk reached, `(head, source
+    /// block)`.
+    pub(super) fn set_backedge_srcs(&mut self, srcs: Vec<(BasicBlockId, BasicBlockId)>) {
+        self.current_frame_mut().backedge_srcs = srcs;
+    }
+
+    pub(super) fn backedge_srcs(&self) -> &[(BasicBlockId, BasicBlockId)] {
+        &self.current_frame().backedge_srcs
     }
 
     /// No fixpoint has recorded anything for a head of the loop

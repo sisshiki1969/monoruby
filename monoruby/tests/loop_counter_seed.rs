@@ -108,6 +108,25 @@ fn counters_that_do_not_come_round_as_integers() {
     );
 }
 
+/// The step is live in the method on its own and dead where it is
+/// inlined with a constant argument: there the counter is a constant,
+/// and what comes round the loop is the value the head started from.
+#[test]
+fn counters_whose_step_is_dead_in_a_specialization() {
+    run_test(
+        r##"
+        def g(k, n); i = 0; c = 0; while c < n; c += 1; next if k; i += 1; end; i + 7; end
+        def h(k, n); i = 0; c = 0; while c < n; c += 1; i += 1 unless k; end; [i, c]; end
+        def on(n); [g(true, n), h(true, n)]; end
+        def off(n); [g(false, n), h(false, n)]; end
+        def mixed(n); [g(n > 100, n), h(nil, n), g(1, n)]; end
+        r = nil
+        40.times { r = [off(20), on(20), mixed(20), on(0), off(0)] }
+        r
+        "##,
+    );
+}
+
 /// The counter leaves the Integer range, or the step stops being an
 /// Integer after the loop was compiled.
 #[test]

@@ -701,9 +701,16 @@ impl<'a> JitContext<'a> {
         }
         let res = self.analyse_backedge_fixpoint(with_counters, loop_start, loop_end);
         let fixnum = LinkMode::S(Guarded::Fixnum);
+        // A seeded counter has to come round as an Integer, and by way
+        // of a step: one the walk carried round untouched (its step is
+        // dead in this specialization) is a constant at the head.
         let counters_fit = self.counter_seeds().iter().all(|&(head, slot)| {
             self.loop_backedge(head)
                 .is_some_and(|be| be.mode(slot) == fixnum)
+                && self
+                    .backedge_srcs()
+                    .iter()
+                    .any(|&(h, src)| h == head && self.block_steps(src).contains(&slot))
         });
         self.set_counter_seed(false);
         res?;
@@ -753,7 +760,6 @@ impl<'a> JitContext<'a> {
         loop_start: BasicBlockId,
         loop_end: BasicBlockId,
     ) -> smallvec::SmallVec<[SlotId; 4]> {
-        use crate::bytecodegen::BinOpK;
         let block_param = self.iseq().block_param_slot();
         let consts: smallvec::SmallVec<[SlotId; 4]> = (1..=self.local_num())
             .map(|i| SlotId(i as u16))
@@ -764,34 +770,48 @@ impl<'a> JitContext<'a> {
             return consts;
         }
         let mut stepped: smallvec::SmallVec<[SlotId; 4]> = smallvec::SmallVec::new();
-        let iseq = self.iseq();
         for bb in loop_start..=loop_end {
-            if !iseq.bb_info.succ(bb).contains(&loop_start) {
+            if !self.iseq().bb_info.succ(bb).contains(&loop_start) {
                 continue;
             }
-            let BasicBlockInfoEntry { begin, end, .. } = iseq.bb_info[bb];
-            let mut pos = begin;
-            while pos <= end {
-                let pc = iseq.get_pc(pos);
-                if !pc.is_handler_only()
-                    && let TraceIr::BinOp {
-                        kind: BinOpK::Add | BinOpK::Sub,
-                        dst: Some(dst),
-                        lhs,
-                        rhs,
-                        ic: Some((lhs_class, rhs_class)),
-                        ..
-                    } = TraceIr::from_pc(pc, self.store)
-                    && (lhs == dst || rhs == dst)
-                    && lhs_class == CachedClass::INTEGER
-                    && rhs_class == CachedClass::INTEGER
-                    && consts.contains(&dst)
-                    && !stepped.contains(&dst)
-                {
-                    stepped.push(dst);
+            for slot in self.block_steps(bb) {
+                if consts.contains(&slot) && !stepped.contains(&slot) {
+                    stepped.push(slot);
                 }
-                pos = pos + 1;
             }
+        }
+        stepped
+    }
+
+    ///
+    /// The slots the block *bb* steps: `x = x + _`, `x = x - _` or
+    /// `x = _ + x`, recorded with Integer operands.
+    ///
+    fn block_steps(&self, bb: BasicBlockId) -> smallvec::SmallVec<[SlotId; 4]> {
+        use crate::bytecodegen::BinOpK;
+        let mut stepped = smallvec::SmallVec::new();
+        let iseq = self.iseq();
+        let BasicBlockInfoEntry { begin, end, .. } = iseq.bb_info[bb];
+        let mut pos = begin;
+        while pos <= end {
+            let pc = iseq.get_pc(pos);
+            if !pc.is_handler_only()
+                && let TraceIr::BinOp {
+                    kind: kind @ (BinOpK::Add | BinOpK::Sub),
+                    dst: Some(dst),
+                    lhs,
+                    rhs,
+                    ic: Some((lhs_class, rhs_class)),
+                    ..
+                } = TraceIr::from_pc(pc, self.store)
+                && (lhs == dst || (rhs == dst && kind == BinOpK::Add))
+                && lhs_class == CachedClass::INTEGER
+                && rhs_class == CachedClass::INTEGER
+                && !stepped.contains(&dst)
+            {
+                stepped.push(dst);
+            }
+            pos = pos + 1;
         }
         stepped
     }
