@@ -323,6 +323,18 @@ impl<'a> JitContext<'a> {
                             _ => None,
                         };
                         target.keep_backedge_floats(adopt, adopt_sf, adopt_deferred, promotable);
+                        // §5.4 recording stage: what a choice made before
+                        // the fixpoint would have adopted.
+                        #[cfg(feature = "jit-log")]
+                        if self.codegen_mode() {
+                            let verdicts = self.loop_float_candidates(
+                                loop_start,
+                                loop_end,
+                                &target_incoming,
+                                promotable,
+                            );
+                            self.record_pre_fixpoint_floats(bbid, &target, &verdicts);
+                        }
                     }
                 }
             }

@@ -482,3 +482,354 @@ impl<'a> JitContext<'a> {
         Ok(())
     }
 }
+
+///
+/// `doc/fixpoint_engine_plan.md` §5.4, the recording stage: the float
+/// slots a loop head would unbox if the choice were made *before* the
+/// back-edge fixpoint, from the bytecode, the inline caches and the
+/// incoming state alone, to be compared with the set the loop-entry merge
+/// adopts from the fixpoint's back edge (`keep_backedge_floats`). Nothing
+/// here feeds back into the compile.
+///
+#[cfg(feature = "jit-log")]
+use crate::bytecodegen::{BinOpK, UnOpK};
+
+#[cfg(feature = "jit-log")]
+impl<'a> JitContext<'a> {
+    ///
+    /// Per slot, whether it is a candidate of the loop
+    /// `loop_start..=loop_end` in the innermost frame, given the state
+    /// *incoming* from before the loop, or why not; and per slot whether
+    /// it is live at the head (below). A candidate is a slot
+    /// that
+    /// some instruction of the loop reads as a float operand (a `BinOp`,
+    /// `BinCmp` or `UnOp` whose cache says `Float` for it), every entry
+    /// can bridge to a float (*promotable*), the loop may read before it
+    /// writes it (live at the head by the tables, and read before written
+    /// in some basic block of the loop), no block literal of the frame
+    /// touches, and that either
+    ///
+    /// - the loop defines only by float arithmetic (a numeric `BinOp` or
+    ///   `UnOp` with a `Float` operand in its cache), float literals, and
+    ///   copies of slots that are float by this same rule, or
+    /// - the loop does not define, and *incoming* has as a `Float` or as a
+    ///   value of no known class (the float reads guard it).
+    ///
+    pub(in crate::codegen::jitgen) fn loop_float_candidates(
+        &self,
+        loop_start: BasicBlockId,
+        loop_end: BasicBlockId,
+        incoming: &AbstractState,
+        promotable: impl Fn(SlotId) -> bool,
+    ) -> (Vec<std::result::Result<(), &'static str>>, Vec<bool>) {
+        /// What one definition puts in its slot.
+        #[derive(Clone, Copy, PartialEq)]
+        enum Def {
+            Float,
+            Other,
+            /// A copy of the slot's value at its basic block's entry.
+            CopyOf(SlotId),
+        }
+        let iseq = self.iseq();
+        let store = self.store;
+        let n = self.total_reg_num();
+        let mut defs: Vec<Vec<Def>> = vec![vec![]; n];
+        let mut float_use = vec![false; n];
+        // Read in some basic block of the loop before that block writes it.
+        let mut exposed = vec![false; n];
+        let table = self.slot_analysis(self.iseq_id());
+        let is_num = |c: CachedClass| c == CachedClass::FLOAT || c == CachedClass::INTEGER;
+        for bb in loop_start..=loop_end {
+            // The definitions made so far in this basic block.
+            let mut local: std::collections::HashMap<SlotId, Def> = Default::default();
+            // The slot whose value a slot copied in this basic block holds.
+            let mut copy_src: std::collections::HashMap<SlotId, SlotId> = Default::default();
+            // A slot this basic block defined other than as a float, not
+            // read since: the index of that definition in `defs`.
+            let mut pending: std::collections::HashMap<SlotId, usize> = Default::default();
+            let BasicBlockInfoEntry { begin, end, .. } = iseq.bb_info[bb];
+            for pos in begin..=end {
+                let pc = iseq.get_pc(pos);
+                if TraceIr::is_handler_only(pc) {
+                    continue;
+                }
+                for r in table.reads(pos) {
+                    if (r.0 as usize) < n && !local.contains_key(r) {
+                        exposed[r.0 as usize] = true;
+                    }
+                }
+                let ir = TraceIr::from_pc(pc, store);
+                let mut float_def = None;
+                let mut float_reads: Vec<SlotId> = vec![];
+                let mut read_float = |s: SlotId| float_reads.push(s);
+                match &ir {
+                    TraceIr::BinOp {
+                        kind,
+                        dst,
+                        lhs,
+                        rhs,
+                        ic: Some((l, r)),
+                        ..
+                    } => {
+                        if *l == CachedClass::FLOAT {
+                            read_float(*lhs);
+                        }
+                        if *r == CachedClass::FLOAT {
+                            read_float(*rhs);
+                        }
+                        let arith = matches!(
+                            kind,
+                            BinOpK::Add
+                                | BinOpK::Sub
+                                | BinOpK::Mul
+                                | BinOpK::Div
+                                | BinOpK::Rem
+                                | BinOpK::Exp
+                        );
+                        if arith
+                            && is_num(*l)
+                            && is_num(*r)
+                            && (*l == CachedClass::FLOAT || *r == CachedClass::FLOAT)
+                        {
+                            float_def = *dst;
+                        }
+                    }
+                    TraceIr::BinCmp {
+                        lhs,
+                        rhs,
+                        ic: Some((l, r)),
+                        ..
+                    } => {
+                        if *l == CachedClass::FLOAT {
+                            read_float(*lhs);
+                        }
+                        if *r == CachedClass::FLOAT {
+                            read_float(*rhs);
+                        }
+                    }
+                    TraceIr::UnOp {
+                        kind,
+                        _dst,
+                        src,
+                        ic: Some(c),
+                        ..
+                    } if *c == CachedClass::FLOAT => {
+                        read_float(*src);
+                        if matches!(kind, UnOpK::Neg | UnOpK::Pos) {
+                            float_def = Some(*_dst);
+                        }
+                    }
+                    TraceIr::Literal(dst, v) | TraceIr::FrozenLiteral(dst, v) if v.is_float() => {
+                        float_def = Some(*dst)
+                    }
+                    _ => {}
+                }
+                let mut written: Vec<SlotId> = ir.defined_slot(store).into_iter().collect();
+                match &ir {
+                    TraceIr::ToA { dst, .. }
+                    | TraceIr::DefinedYield { dst, .. }
+                    | TraceIr::DefinedConst { dst, .. }
+                    | TraceIr::DefinedMethod { dst, .. }
+                    | TraceIr::DefinedSuper { dst, .. }
+                    | TraceIr::DefinedGvar { dst, .. }
+                    | TraceIr::DefinedIvar { dst, .. }
+                    | TraceIr::DefinedCvar { dst, .. } => written.push(*dst),
+                    TraceIr::ClassDef { dst, .. }
+                    | TraceIr::ModuleDef { dst, .. }
+                    | TraceIr::SingletonClassDef { dst, .. }
+                    | TraceIr::ConcatRegexp(dst, ..) => written.extend(*dst),
+                    TraceIr::Yield { callid } => written.extend(store[*callid].dst),
+                    TraceIr::ExpandArray {
+                        dst: (start, len, rest),
+                        ..
+                    } => {
+                        let len = *len as usize + rest.is_some() as usize;
+                        written.extend((0..len).map(|i| SlotId(start.0 + i as u16)));
+                    }
+                    _ => {}
+                }
+                // The reads come before the writes. A float read of a copy
+                // is a float read of what it copies; a float read guards
+                // the value a slot was given in this block (an `Index`
+                // read, a call's result), so that definition is a float
+                // on the paths that reach the loop's back edge.
+                for r in float_reads {
+                    for r in std::iter::once(r).chain(copy_src.get(&r).copied()) {
+                        if let Some(f) = float_use.get_mut(r.0 as usize) {
+                            *f = true;
+                        }
+                    }
+                    if let Some(idx) = pending.remove(&r) {
+                        defs[r.0 as usize][idx] = Def::Float;
+                        local.insert(r, Def::Float);
+                    }
+                }
+                for w in written {
+                    if w.0 as usize >= n {
+                        continue;
+                    }
+                    copy_src.remove(&w);
+                    pending.remove(&w);
+                    let def = if float_def == Some(w) {
+                        Def::Float
+                    } else if let TraceIr::Mov(dst, src) = ir
+                        && dst == w
+                    {
+                        copy_src.insert(dst, copy_src.get(&src).copied().unwrap_or(src));
+                        local.get(&src).copied().unwrap_or(Def::CopyOf(src))
+                    } else {
+                        pending.insert(w, defs[w.0 as usize].len());
+                        Def::Other
+                    };
+                    local.insert(w, def);
+                    defs[w.0 as usize].push(def);
+                }
+            }
+        }
+        // The greatest set closed under "every definition is a float".
+        let float_valued = |ok: &[bool], s: SlotId| {
+            let i = s.0 as usize;
+            i < n
+                && if defs[i].is_empty() {
+                    // Loop-invariant: a Float on entry, or one the float
+                    // reads would guard on every iteration (a guard the
+                    // merge hoists to the entries; *promotable* checks
+                    // that they can take it).
+                    incoming.guarded(s).class().is_none_or(|c| c == FLOAT_CLASS)
+                } else {
+                    ok[i]
+                }
+        };
+        let mut ok: Vec<bool> = defs.iter().map(|d| !d.contains(&Def::Other)).collect();
+        loop {
+            let mut changed = false;
+            for i in 0..n {
+                if ok[i]
+                    && defs[i]
+                        .iter()
+                        .any(|d| matches!(d, Def::CopyOf(s) if !float_valued(&ok, *s)))
+                {
+                    ok[i] = false;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let head_pos = iseq.bb_info[loop_start].begin;
+        let live: Vec<bool> = (0..n)
+            .map(|i| exposed[i] && self.table_live_after(head_pos, SlotId(i as u16)))
+            .collect();
+        let verdicts = (0..n)
+            .map(|i| {
+                let s = SlotId(i as u16);
+                if i == 0 {
+                    Err("self")
+                } else if self.table_touched_by_blocks(s) {
+                    // A block's reads and writes are in its own iseq, which
+                    // this scan does not look into.
+                    Err("touched by a block")
+                } else if !float_use[i] {
+                    Err("no float read")
+                } else if !float_valued(&ok, s) {
+                    Err(if defs[i].is_empty() {
+                        "not a Float on entry, by class"
+                    } else if defs[i].contains(&Def::Other) {
+                        "a non-float def"
+                    } else {
+                        "a copy of a non-float"
+                    })
+                } else if !live[i] {
+                    Err("dead at the head")
+                } else if !promotable(s) {
+                    Err("an entry is not float")
+                } else {
+                    Ok(())
+                }
+            })
+            .collect();
+        (verdicts, live)
+    }
+}
+
+#[cfg(feature = "jit-log")]
+impl<'a> JitContext<'a> {
+    ///
+    /// Compare the floats the loop-entry merge of *head* adopted (`F`, or
+    /// `Sf` guarded `Float`, in the innermost frame of *target*) with the
+    /// candidates *pre* chosen before the fixpoint
+    /// (`loop_float_candidates`), into the `FX54_*` counters. With
+    /// `MONORUBY_FX54_LOG` set, each head where the two differ is printed.
+    ///
+    pub(in crate::codegen::jitgen) fn record_pre_fixpoint_floats(
+        &self,
+        head: BasicBlockId,
+        target: &AbstractState,
+        (verdicts, live): &(Vec<std::result::Result<(), &'static str>>, Vec<bool>),
+    ) {
+        let live = |s: SlotId| live[s.0 as usize];
+        let pre: Vec<SlotId> = (0..verdicts.len())
+            .filter(|&i| verdicts[i].is_ok())
+            .map(|i| SlotId(i as u16))
+            .collect();
+        use crate::codegen::jit_stats::*;
+        use std::sync::atomic::Ordering::Relaxed;
+        let adopted: Vec<SlotId> = (1..self.total_reg_num())
+            .map(|i| SlotId(i as u16))
+            .filter(|&s| {
+                matches!(
+                    target.mode(s),
+                    LinkMode::F(_) | LinkMode::Sf(_, state::SfGuarded::Float)
+                )
+            })
+            .collect();
+        let both = adopted.iter().filter(|s| pre.contains(s)).count();
+        let fix_only: Vec<SlotId> = adopted
+            .iter()
+            .copied()
+            .filter(|s| !pre.contains(s))
+            .collect();
+        let fix_only_block = fix_only
+            .iter()
+            .filter(|&&s| self.table_touched_by_blocks(s))
+            .count();
+        // Not read before written in the loop: an adoption the loop never
+        // reads from the head.
+        let fix_only_dead = fix_only.iter().filter(|&&s| !live(s)).count();
+        let pre_only: Vec<SlotId> = pre
+            .iter()
+            .copied()
+            .filter(|s| !adopted.contains(s))
+            .collect();
+        bump(&FX54_HEADS);
+        if fix_only.is_empty() && pre_only.is_empty() {
+            bump(&FX54_SAME);
+        }
+        FX54_BOTH.fetch_add(both, Relaxed);
+        FX54_FIX_ONLY.fetch_add(fix_only.len(), Relaxed);
+        FX54_FIX_ONLY_BLOCK.fetch_add(fix_only_block, Relaxed);
+        FX54_FIX_ONLY_DEAD.fetch_add(fix_only_dead, Relaxed);
+        FX54_PRE_ONLY.fetch_add(pre_only.len(), Relaxed);
+        if (!fix_only.is_empty() || !pre_only.is_empty())
+            && std::env::var_os("MONORUBY_FX54_LOG").is_some()
+        {
+            let iseq = self.iseq();
+            eprintln!(
+                "[fx54] {:?} {} {head:?}: both {both}, fixpoint only {:?}, pre only {:?}",
+                self.iseq_id(),
+                iseq.name(),
+                fix_only
+                    .iter()
+                    .map(|&s| format!(
+                        "{s:?} {:?}{}: {}",
+                        target.mode(s),
+                        if live(s) { "" } else { " (dead at head)" },
+                        verdicts[s.0 as usize].err().unwrap_or("?")
+                    ))
+                    .collect::<Vec<_>>(),
+                pre_only
+            );
+        }
+    }
+}
