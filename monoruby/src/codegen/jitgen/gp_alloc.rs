@@ -464,16 +464,6 @@ impl GpRegFile {
         Some(GP_ALLOC_SET[i])
     }
 
-    /// Nothing here refers to a slot at or above `sp`: no register caches
-    /// one and the pin is not one, so [`Self::invalidate`] of any of them
-    /// is a no-op.
-    pub(in crate::codegen::jitgen) fn idle_above(&self, sp: SlotId) -> bool {
-        self.holders
-            .iter()
-            .all(|hs| hs.iter().all(|h| h.slot < sp))
-            && self.pin.is_none_or(|p| p.slot < sp)
-    }
-
     /// Free every register caching a slot at or above `sp` — those temporaries
     /// are dead (popped past the stack pointer), so they are dropped without a
     /// spill, mirroring `clear_above_next_sp`.
@@ -544,6 +534,20 @@ impl GpRegFile {
         }
         if let Some(p) = &mut self.pin
             && p.slot == slot
+        {
+            p.valid = false;
+        }
+    }
+
+    /// [`Self::invalidate`] of every slot at or above `sp`, in one pass.
+    pub(in crate::codegen::jitgen) fn invalidate_above(&mut self, sp: SlotId) {
+        for h in self.holders.iter_mut() {
+            if !h.is_empty() {
+                h.retain(|held| held.slot < sp);
+            }
+        }
+        if let Some(p) = &mut self.pin
+            && p.slot >= sp
         {
             p.valid = false;
         }

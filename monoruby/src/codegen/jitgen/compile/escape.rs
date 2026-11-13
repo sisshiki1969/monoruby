@@ -534,7 +534,7 @@ impl<'a> JitContext<'a> {
         &mut self,
         entries: &mut [BranchEntry],
         backedge: Option<&[(SlotId, VirtualSrc)]>,
-    ) -> Vec<AsmIr> {
+    ) -> PreBridges {
         let common: Vec<(SlotId, VirtualSrc)> = if entries.is_empty() {
             vec![]
         } else {

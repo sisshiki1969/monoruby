@@ -799,6 +799,11 @@ fn dec_www(op: u64) -> (u16, u16, u16) {
     ((op >> 32) as u16, (op >> 16) as u16, op as u16)
 }
 
+/// What [`TraceIr::read_slots`] answers. It is asked once per instruction
+/// of every walk, and an instruction rarely reads more than a few slots,
+/// so the answer is stored inline.
+pub(crate) type ReadSlots = smallvec::SmallVec<[SlotId; 8]>;
+
 impl TraceIr {
     ///
     /// Whether the instruction at *pc* only ever executes inside an
@@ -848,13 +853,14 @@ impl TraceIr {
     /// chain (`LoadDynVar`) are not this frame's and are left out, as are
     /// the slots a `Hash`/`ConcatStr`-style instruction only writes.
     ///
-    pub(crate) fn read_slots(&self, store: &Store) -> Vec<SlotId> {
+    pub(crate) fn read_slots(&self, store: &Store) -> ReadSlots {
+        use smallvec::smallvec;
         fn range(start: SlotId, len: usize) -> impl Iterator<Item = SlotId> {
             (start.0..start.0 + len as u16).map(SlotId)
         }
-        fn callsite(store: &Store, callid: CallSiteId, recv: bool) -> Vec<SlotId> {
+        fn callsite(store: &Store, callid: CallSiteId, recv: bool) -> ReadSlots {
             let cs = &store[callid];
-            let mut v: Vec<SlotId> = vec![];
+            let mut v = ReadSlots::new();
             if recv {
                 v.push(cs.recv);
             }
@@ -893,7 +899,7 @@ impl TraceIr {
             | TraceIr::DefinedIvar { .. }
             | TraceIr::DefinedCvar { .. }
             | TraceIr::LoopStart { .. }
-            | TraceIr::LoopEnd => vec![],
+            | TraceIr::LoopEnd => ReadSlots::new(),
             TraceIr::CondBr(slot, ..)
             | TraceIr::NilBr(slot, _)
             | TraceIr::CheckLocal(slot, _)
@@ -916,7 +922,7 @@ impl TraceIr {
             | TraceIr::SingletonMethodDef { obj: slot, .. }
             | TraceIr::SingletonClassDef { base: slot, .. }
             | TraceIr::ExpandArray { src: slot, .. }
-            | TraceIr::DefinedMethod { recv: slot, .. } => vec![*slot],
+            | TraceIr::DefinedMethod { recv: slot, .. } => smallvec![*slot],
             TraceIr::ArrayConcat { dst: a, src: b }
             | TraceIr::Range {
                 start: a, end: b, ..
@@ -927,8 +933,8 @@ impl TraceIr {
             | TraceIr::Index {
                 base: a, idx: b, ..
             }
-            | TraceIr::AliasMethod { new: a, old: b } => vec![*a, *b],
-            TraceIr::IndexAssign { base, idx, src, .. } => vec![*base, *idx, *src],
+            | TraceIr::AliasMethod { new: a, old: b } => smallvec![*a, *b],
+            TraceIr::IndexAssign { base, idx, src, .. } => smallvec![*base, *idx, *src],
             // `len` counts key/value pairs.
             TraceIr::Hash { args, len, .. } => range(*args, *len as usize * 2).collect(),
             TraceIr::HashInsert { hash, args, len } => std::iter::once(*hash)

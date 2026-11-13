@@ -430,17 +430,17 @@ impl<'a> JitContext<'a> {
     fn gen_bridges_for_branches(
         &mut self,
         target: &AbstractState,
-        entries: Vec<BranchEntry>,
+        entries: BranchEntries,
         // Per entry, the materialization of the elided objects the merge
         // does not carry (`settle_entries`), which the bridge starts with.
-        pre_bridges: Vec<AsmIr>,
+        pre_bridges: PreBridges,
         bbid: BasicBlockId,
         pc: BytecodePtr,
         outer_inits: &[(Vec<SpecializedId>, usize, SlotId, OuterFprHome)],
         hoist_version_guard: bool,
         hoisted_guards: &[(SlotId, Guarded)],
     ) {
-        let target = target.frames_cloned();
+        let target = target.frames();
         let surrender = self.chain_surrender_table();
         #[cfg(feature = "jit-debug")]
         eprintln!("  bridge to:{bbid:?} target:{target:?}");
@@ -518,11 +518,11 @@ impl<'a> JitContext<'a> {
                 // frame that differs from the target and a walk over its
                 // slots, at every edge of every walk. A debug build
                 // builds the bridge all the same and checks the answer.
-                let deopts = state.bridge_deopts(&target);
+                let deopts = state.bridge_deopts(target);
                 #[cfg(debug_assertions)]
                 {
                     let mut probe = AsmIr::new(self);
-                    state.gen_bridge_all(&mut probe, &target, pc, &surrender);
+                    state.gen_bridge_all(&mut probe, target, pc, &surrender);
                     assert_eq!(
                         deopts,
                         probe.had_deopt(),
@@ -534,7 +534,7 @@ impl<'a> JitContext<'a> {
                 }
             } else {
                 let src_pin = state.gp_regfile.pin();
-                state.gen_bridge_all(&mut ir, &target, pc, &surrender);
+                state.gen_bridge_all(&mut ir, target, pc, &surrender);
                 AbstractFrame::bridge_pin(src_pin, &mut ir, target.last().unwrap());
             }
             match mode {
