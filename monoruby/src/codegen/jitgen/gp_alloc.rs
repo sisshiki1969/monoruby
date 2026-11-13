@@ -91,7 +91,7 @@ struct Holder {
 /// It is flushed empty at every basic-block boundary, so although it rides
 /// inside the cloned/merged `SlotState` it never actually carries state across a
 /// block merge (the per-block-locality the design requires).
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub(in crate::codegen::jitgen) struct GpRegFile {
     /// `holders[i]` is the set of slots `GP_ALLOC_SET[i]` caches (empty = free).
     holders: Vec<Vec<Holder>>,
@@ -101,6 +101,51 @@ pub(in crate::codegen::jitgen) struct GpRegFile {
     age: Vec<u64>,
     /// FIFO clock for victim selection.
     clock: u64,
+    /// The loop pin (see [`LoopPin`]), when this block lies in a loop that
+    /// keeps one of its locals in a register across its blocks.
+    pin: Option<LoopPin>,
+}
+
+/// A local an innermost loop keeps in a fixed register across the loop's
+/// blocks, so that reading it costs no reload at each block entry.
+///
+/// The register is taken out of the allocatable set for the whole loop (it
+/// is never a victim and never computed into), and holds a **clean** copy:
+/// `valid` says the register equals the slot's current (boxed) value. It is
+/// invalidated by a redefinition of the slot and by every full flush (the
+/// operation that follows may clobber the caller-saved registers), and
+/// re-established lazily by the next read of the slot (`gp_ensure`) or on
+/// the edge into the next block of the loop, whose entry state requires it
+/// valid. Since the copy is clean, no write-back ever looks at it.
+///
+/// It is not part of the state's identity (`PartialEq` / `Hash`): the
+/// loop fixpoint and the memo compare abstract states, and the pin only
+/// changes which register a read finds the value in.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::codegen::jitgen) struct LoopPin {
+    pub reg: GP,
+    pub slot: SlotId,
+    pub valid: bool,
+}
+
+/// The register a loop pin lives in: the last of the allocatable set, the
+/// one `find_free` hands out last.
+pub(in crate::codegen::jitgen) const PIN_REG: GP = GP::R11;
+
+impl PartialEq for GpRegFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.holders == other.holders && self.age == other.age && self.clock == other.clock
+    }
+}
+
+impl Eq for GpRegFile {}
+
+impl std::hash::Hash for GpRegFile {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.holders.hash(state);
+        self.age.hash(state);
+        self.clock.hash(state);
+    }
 }
 
 impl Default for GpRegFile {
@@ -115,7 +160,73 @@ impl GpRegFile {
             holders: vec![vec![]; GP_ALLOC_SET.len()],
             age: vec![0; GP_ALLOC_SET.len()],
             clock: 0,
+            pin: None,
         }
+    }
+
+    /// The loop pin, if any.
+    pub(in crate::codegen::jitgen) fn pin(&self) -> Option<LoopPin> {
+        self.pin
+    }
+
+    /// Install (or drop) the loop pin. A pin whose register still caches
+    /// slots would hand the register out twice, so the file must hold
+    /// nothing in it.
+    pub(in crate::codegen::jitgen) fn set_pin(&mut self, pin: Option<LoopPin>) {
+        if let Some(p) = pin {
+            debug_assert!(self.holders[Self::index_of(p.reg)].is_empty());
+        }
+        self.pin = pin;
+    }
+
+    /// The pin's register may be clobbered: its copy is no longer valid.
+    pub(in crate::codegen::jitgen) fn invalidate_pin(&mut self) {
+        if let Some(p) = &mut self.pin {
+            p.valid = false;
+        }
+    }
+
+    /// The pin's register now holds its slot's value.
+    pub(in crate::codegen::jitgen) fn validate_pin(&mut self) {
+        if let Some(p) = &mut self.pin {
+            p.valid = true;
+        }
+    }
+
+    /// The pinned slot when its copy is stale (a read should reload it
+    /// into the pin register).
+    pub(in crate::codegen::jitgen) fn stale_pin_of(&self, slot: SlotId) -> Option<GP> {
+        let p = self.pin.filter(|p| p.slot == slot && !p.valid)?;
+        // Only the pinned slot itself is ever bound to the pin register,
+        // and redefining it dropped that holder with the pin's validity.
+        debug_assert!(self.holders[Self::index_of(p.reg)].is_empty());
+        Some(p.reg)
+    }
+
+    /// The pin register, when an op defining `dst` may compute into it:
+    /// `dst` is the pinned local, and the register carries no dirty value
+    /// (a deopt snapshot taken before the op may list a dirty holder, and
+    /// would store the overwritten register).
+    pub(in crate::codegen::jitgen) fn pin_dst(&self, dst: Option<SlotId>) -> Option<GP> {
+        let p = self.pin?;
+        (Some(p.slot) == dst && self.holders[Self::index_of(p.reg)].iter().all(|h| !h.dirty))
+            .then_some(p.reg)
+    }
+
+    fn pin_reg(&self) -> Option<GP> {
+        self.pin.map(|p| p.reg)
+    }
+
+    /// The register a holder caches `slot` in. That is the pin register
+    /// only for the pinned slot itself, computed into it (`pin_dst`); a
+    /// caller binding *another* slot to the register it got must not take
+    /// the pin register ([`Self::is_pin_reg`]).
+    pub(in crate::codegen::jitgen) fn holder_reg_of(&self, slot: SlotId) -> Option<GP> {
+        self.position_of(slot).map(|(i, _)| GP_ALLOC_SET[i])
+    }
+
+    pub(in crate::codegen::jitgen) fn is_pin_reg(&self, reg: GP) -> bool {
+        self.pin_reg() == Some(reg)
     }
 
     /// True when no register is occupied (the common case — flushing then is a
@@ -161,7 +272,27 @@ impl GpRegFile {
         for h in self.holders.iter_mut() {
             h.clear();
         }
+        self.invalidate_pin();
         spills
+    }
+
+    /// The block-boundary flush: like [`Self::take_dirty_spills`], but the
+    /// pin survives (nothing runs between the flush and the next block
+    /// that could clobber it). Also answers a holder of the pinned slot
+    /// when the pin is stale, for the caller to copy into the pin register
+    /// after the spills.
+    pub(in crate::codegen::jitgen) fn take_dirty_spills_keep_pin(
+        &mut self,
+    ) -> (Vec<(GP, SlotId)>, Option<GP>) {
+        let refill = self
+            .pin
+            .filter(|p| !p.valid)
+            .and_then(|p| self.holder_reg_of(p.slot));
+        let spills = self.dirty_residents();
+        for h in self.holders.iter_mut() {
+            h.clear();
+        }
+        (spills, refill)
     }
 
     fn tick(&mut self) -> u64 {
@@ -175,7 +306,7 @@ impl GpRegFile {
 
     /// True when `reg` holds no resident (free for immediate reuse).
     pub(in crate::codegen::jitgen) fn is_free(&self, reg: GP) -> bool {
-        self.holders[Self::index_of(reg)].is_empty()
+        self.pin_reg() != Some(reg) && self.holders[Self::index_of(reg)].is_empty()
     }
 
     /// True when `slot` is the **only** slot `reg` caches. An op may compute in
@@ -195,8 +326,17 @@ impl GpRegFile {
     }
 
     /// The register currently caching `slot`, if any (the reuse lookup).
+    ///
+    /// A valid loop pin answers too: its register holds the slot's value,
+    /// clean. Such a register must only be read — it is not a holder, so a
+    /// caller that wants to bind or compute into the register it got takes
+    /// [`Self::holder_reg_of`] instead.
     pub(in crate::codegen::jitgen) fn reg_of(&self, slot: SlotId) -> Option<GP> {
-        self.position_of(slot).map(|(i, _)| GP_ALLOC_SET[i])
+        self.holder_reg_of(slot).or_else(|| {
+            self.pin
+                .filter(|p| p.valid && p.slot == slot)
+                .map(|p| p.reg)
+        })
     }
 
     /// The register caching `slot` only if that cache is **dirty** (its value
@@ -215,8 +355,15 @@ impl GpRegFile {
     /// still in use), so they must never be handed out even when free.
     fn find_free(&self, pinned: &[GP]) -> Option<GP> {
         (0..GP_ALLOC_SET.len())
-            .find(|&i| self.holders[i].is_empty() && !pinned.contains(&GP_ALLOC_SET[i]))
+            .find(|&i| self.holders[i].is_empty() && !self.excluded(pinned, i))
             .map(|i| GP_ALLOC_SET[i])
+    }
+
+    /// `GP_ALLOC_SET[i]` may not be handed out: an operand register of the
+    /// current op, or the loop pin's.
+    fn excluded(&self, pinned: &[GP], i: usize) -> bool {
+        let reg = GP_ALLOC_SET[i];
+        pinned.contains(&reg) || self.pin_reg() == Some(reg)
     }
 
     /// Online allocation primitive for the codegen driver: return a register
@@ -230,7 +377,7 @@ impl GpRegFile {
             return (reg, vec![]);
         }
         let victim_idx = (0..GP_ALLOC_SET.len())
-            .filter(|&i| !pinned.contains(&GP_ALLOC_SET[i]))
+            .filter(|&i| !self.excluded(pinned, i))
             .min_by_key(|&i| self.age[i])
             .expect("more pinned registers than the allocatable set");
         let reg = GP_ALLOC_SET[victim_idx];
@@ -240,7 +387,13 @@ impl GpRegFile {
     /// Forget every holder of `reg`, returning the spills owed for its dirty
     /// ones. Used when an op is about to destroy the register's value
     /// (`Mul`/`Div` clobber `rhs`), and by [`Self::alloc_reg`] for its victim.
+    ///
+    /// On the pin register this drops the pin's copy (the op is about to
+    /// overwrite the register); the pin holds nothing dirty.
     pub(in crate::codegen::jitgen) fn evict_reg(&mut self, reg: GP) -> Vec<(GP, SlotId)> {
+        if self.pin_reg() == Some(reg) {
+            self.invalidate_pin();
+        }
         let idx = Self::index_of(reg);
         let spills = self.holders[idx]
             .iter()
@@ -256,12 +409,20 @@ impl GpRegFile {
     /// which is exactly what a slot copy relies on (`%dst = %src` binds `dst`
     /// dirty to `src`'s register). A register handed out by [`Self::alloc_reg`]
     /// is empty, so binding a freshly produced value never shares by accident.
+    ///
+    /// The pin register takes only its own slot, and then holds it valid.
     pub(in crate::codegen::jitgen) fn bind(&mut self, reg: GP, slot: SlotId, dirty: bool) {
         self.invalidate(slot);
         let age = self.tick();
         let idx = Self::index_of(reg);
         self.holders[idx].push(Holder { slot, dirty });
         self.age[idx] = age;
+        if let Some(p) = &mut self.pin
+            && p.reg == reg
+        {
+            debug_assert_eq!(p.slot, slot, "the pin register holds its own slot only");
+            p.valid = true;
+        }
     }
 
     /// If `slot` is a GP resident, return its register and mark it **clean** —
@@ -298,7 +459,9 @@ impl GpRegFile {
         sp: SlotId,
         dst: Option<SlotId>,
     ) -> bool {
-        self.holders[Self::index_of(reg)]
+        // The pin register is never computed into.
+        self.pin_reg() != Some(reg)
+            && self.holders[Self::index_of(reg)]
             .iter()
             .all(|h| h.slot == slot || h.slot >= sp || Some(h.slot) == dst)
     }
@@ -322,12 +485,12 @@ impl GpRegFile {
     ) -> Vec<(GP, SlotId)> {
         let free_later = |hs: &Vec<Holder>| hs.iter().all(|h| h.slot >= sp || Some(h.slot) == dst);
         if (0..GP_ALLOC_SET.len())
-            .any(|i| !pinned.contains(&GP_ALLOC_SET[i]) && free_later(&self.holders[i]))
+            .any(|i| !self.excluded(pinned, i) && free_later(&self.holders[i]))
         {
             return vec![];
         }
         let victim_idx = (0..GP_ALLOC_SET.len())
-            .filter(|&i| !pinned.contains(&GP_ALLOC_SET[i]))
+            .filter(|&i| !self.excluded(pinned, i))
             .min_by_key(|&i| self.age[i])
             .expect("more pinned registers than the allocatable set");
         self.evict_reg(GP_ALLOC_SET[victim_idx])
@@ -340,6 +503,11 @@ impl GpRegFile {
     pub(in crate::codegen::jitgen) fn invalidate(&mut self, slot: SlotId) {
         for h in self.holders.iter_mut() {
             h.retain(|held| held.slot != slot);
+        }
+        if let Some(p) = &mut self.pin
+            && p.slot == slot
+        {
+            p.valid = false;
         }
     }
 }

@@ -230,7 +230,7 @@ impl<'a> JitContext<'a> {
                     // successor must never inherit a pool-resident (`Alloc`) slot.
                     // a successor block starts with an empty GP
                     // register file (the file is never carried across a merge).
-                    state.flush_gp(&mut ir);
+                    state.flush_gp_keep_pin(&mut ir);
                     self.new_branch(bc_pos, dest_bb, state);
                     return Ok(ir);
                 }
@@ -294,7 +294,7 @@ impl<'a> JitContext<'a> {
             // the last instruction may be a GP-aware binop, so
             // flush the GP residents before the fall-through state is recorded —
             // the successor block starts with an empty register file.
-            state.flush_gp(&mut ir);
+            state.flush_gp_keep_pin(&mut ir);
             self.prepare_next(state, end)
         }
 
@@ -547,7 +547,15 @@ impl<'a> JitContext<'a> {
                 }
             }
             TraceIr::LoopStart { .. } => {
-                state.flush_gp(ir);
+                // The poll preserves every caller-saved register, so the
+                // loop pin survives it — unless the frame's locals may be
+                // captured: another thread scheduled at the poll could
+                // then store to the pinned local through the capture.
+                if state.no_capture_guard() {
+                    state.flush_gp_keep_pin(ir);
+                } else {
+                    state.flush_gp(ir);
+                }
                 state.unset_side_effect_guard();
                 self.inc_loop_count();
                 // Another thread may run at the poll and widen an ivar
@@ -1537,12 +1545,12 @@ impl<'a> JitContext<'a> {
                 });
             }
             TraceIr::Br(disp) => {
-                state.flush_gp(ir);
+                state.flush_gp_keep_pin(ir);
                 let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
                 return Ok(CompileResult::Branch(dest_bb));
             }
             TraceIr::CondBr(cond_, disp, opt_, brkind) => {
-                state.flush_gp(ir);
+                state.flush_gp_keep_pin(ir);
                 // Every arm of the dispatch that produced the operand has
                 // already branched on its own result (`end_arm`): only the
                 // fall-through reaches here.
@@ -1554,7 +1562,7 @@ impl<'a> JitContext<'a> {
                 }
             }
             TraceIr::NilBr(cond_, disp) => {
-                state.flush_gp(ir);
+                state.flush_gp_keep_pin(ir);
                 let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
                 if state.is_nil(cond_) {
                     return Ok(CompileResult::Branch(dest_bb));
@@ -1576,7 +1584,7 @@ impl<'a> JitContext<'a> {
                 }
             }
             TraceIr::CheckLocal(local, disp) => {
-                state.flush_gp(ir);
+                state.flush_gp_keep_pin(ir);
                 let dest_bb = self.iseq().get_bb(bc_pos + 1 + disp);
                 match state.mode(local) {
                     LinkMode::S(_) | LinkMode::C(_) => {

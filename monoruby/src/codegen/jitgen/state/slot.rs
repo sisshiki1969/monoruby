@@ -2066,7 +2066,17 @@ impl SlotState {
                 // `src` is not resident it is loaded (clean) into a fresh
                 // register first, so `src` and `dst` share it from here on.
                 let reg = match self.gp_regfile.reg_of(src) {
-                    Some(reg) => reg,
+                    Some(reg) if !self.gp_regfile.is_pin_reg(reg) => reg,
+                    // The pin register holds the pinned slot alone: the
+                    // copy takes a register of its own.
+                    Some(pin) => {
+                        let (reg, spills) = self.gp_regfile.alloc_reg(&[pin]);
+                        for (r, s) in spills {
+                            ir.reg2stack(r, s);
+                        }
+                        ir.reg_move(pin, reg);
+                        reg
+                    }
                     None => {
                         let (reg, spills) = self.gp_regfile.alloc_reg(&[]);
                         for (r, s) in spills {

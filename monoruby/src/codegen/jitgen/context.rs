@@ -623,6 +623,12 @@ pub(super) struct JitStackFrame {
     ///
     loop_outer_reads: HashMap<BasicBlockId, (bool, Vec<(usize, SlotId)>)>,
     ///
+    /// The loop pins (`gp_alloc::LoopPin`): per innermost loop
+    /// `(loop_start, loop_end)`, the local its blocks keep in the pin
+    /// register. Chosen by the loop-entry merge.
+    ///
+    loop_pins: Vec<(BasicBlockId, BasicBlockId, SlotId)>,
+    ///
     /// Kept-claim surrender per return path (join unification): one entry
     /// per plain `Ret` this frame compiled, recorded so the caller's
     /// resume can join the return-path chains and emit, on each path, the
@@ -859,6 +865,27 @@ impl Clone for JitStackFrame {
 }
 
 impl JitStackFrame {
+    /// Record the pinned local of the loop `start..=end` (`None` drops it).
+    pub(super) fn set_loop_pin(
+        &mut self,
+        start: BasicBlockId,
+        end: BasicBlockId,
+        slot: Option<SlotId>,
+    ) {
+        self.loop_pins.retain(|(s, _, _)| *s != start);
+        if let Some(slot) = slot {
+            self.loop_pins.push((start, end, slot));
+        }
+    }
+
+    /// The local pinned in the loop *bb* belongs to, if any.
+    pub(super) fn loop_pin_of(&self, bb: BasicBlockId) -> Option<SlotId> {
+        self.loop_pins
+            .iter()
+            .find(|(s, e, _)| *s <= bb && bb <= *e)
+            .map(|(_, _, slot)| *slot)
+    }
+
     ///
     /// Mark this frame as a define_method proc-method body: `return`
     /// targets the frame itself (lambda-style) and `current_method_frame`
@@ -923,6 +950,7 @@ impl JitStackFrame {
             is_not_block,
             loop_info: indexmap::IndexMap::default(),
             loop_outer_reads: HashMap::default(),
+            loop_pins: vec![],
             return_edges: vec![],
             spill_home_watermark: 0,
             spill_home_ids: std::collections::HashSet::default(),
@@ -958,6 +986,7 @@ impl JitStackFrame {
             is_not_block: self.is_not_block,
             loop_info: indexmap::IndexMap::default(),
             loop_outer_reads: HashMap::default(),
+            loop_pins: vec![],
             return_edges: vec![],
             // Analysis walks allocate home ids too; starting from the
             // live mark keeps their ids consistent with what codegen
@@ -2975,6 +3004,7 @@ impl<'a> JitContext<'a> {
             // is reachable from one.
             loop_info: _,
             loop_outer_reads: _,
+            loop_pins: _,
             return_edges: _,
             branch_map: _,
             backedge_map: _,
