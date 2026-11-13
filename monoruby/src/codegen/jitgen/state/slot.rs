@@ -311,6 +311,18 @@ pub(in crate::codegen::jitgen) struct DynVarAliasLoad {
     pub(in crate::codegen::jitgen) reg: SlotId,
 }
 
+impl Slot {
+    /// The state [`SlotState::discard`] leaves a slot in, as far as the
+    /// record itself goes.
+    fn is_discarded(&self) -> bool {
+        self.mode == LinkMode::V
+            && self.used.is_killed()
+            && self.dynvar_src.is_none()
+            && self.dynvar_alias.is_none()
+            && self.copy_src.is_none()
+    }
+}
+
 impl std::fmt::Debug for SlotState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{{ ")?;
@@ -865,12 +877,62 @@ impl SlotState {
             if let Some(i) = self.virtuals.iter().position(|(dst, _)| *dst == slot) {
                 self.virtuals.remove(i);
             }
-            self.clear(slot);
-            self.is_used_mut(slot).kill();
-            // A redefinition ends the dynvar provenance — the new value did
-            // not come through the frame chain.
-            self.slots[slot.0 as usize].dynvar_src = None;
+            self.discard_keeping_links(slot);
             self.drop_copy_links(slot);
+        }
+    }
+
+    /// [`Self::discard`] without the walk over every slot that drops the
+    /// copy provenance naming *slot* — left to the caller.
+    fn discard_keeping_links(&mut self, slot: SlotId) {
+        self.clear(slot);
+        self.is_used_mut(slot).kill();
+        // A redefinition ends the dynvar provenance — the new value did
+        // not come through the frame chain.
+        self.slots[slot.0 as usize].dynvar_src = None;
+        self.slots[slot.0 as usize].copy_src = None;
+    }
+
+    ///
+    /// Discard every slot at and above *sp*, bar the elements of an elided
+    /// Array, which stay put until it is materialized or consumed
+    /// (`doc/escape_analysis.md`).
+    ///
+    /// The same as [`Self::discard`] on each in turn, with one walk over
+    /// the slots for the copy provenance instead of one per discarded
+    /// slot: this runs after every instruction, over the whole temporary
+    /// area.
+    ///
+    pub(in crate::codegen::jitgen) fn discard_above(&mut self, sp: SlotId) {
+        let mut kept: smallvec::SmallVec<[SlotId; 4]> = smallvec::SmallVec::new();
+        // Most of the temporary area is already discarded, and with no
+        // elided object and no register caching a slot up there,
+        // discarding such a slot again changes nothing.
+        let quick = self.virtuals.is_empty() && self.gp_regfile.idle_above(sp);
+        for i in sp.0..self.slots.len() as u16 {
+            let slot = SlotId(i);
+            if quick && self.slots[i as usize].is_discarded() {
+                continue;
+            }
+            if self.is_virtual_src(slot) {
+                kept.push(slot);
+                continue;
+            }
+            // The whole of `discard` but its last step. An elided object
+            // goes with its slot, which frees its elements' slots for the
+            // rest of this walk (those after it), as in `discard`.
+            if let Some(i) = self.virtuals.iter().position(|(dst, _)| *dst == slot) {
+                self.virtuals.remove(i);
+            }
+            self.discard_keeping_links(slot);
+        }
+        for s in &mut self.slots {
+            if let Some(src) = s.copy_src
+                && src >= sp
+                && !kept.contains(&src)
+            {
+                s.copy_src = None;
+            }
         }
     }
 
@@ -2341,7 +2403,7 @@ impl AbstractFrame {
         entries
     }
 
-    pub(super) fn get_gc_write_back(&self) -> WriteBack {
+    pub(in crate::codegen::jitgen) fn get_gc_write_back(&self) -> WriteBack {
         // A deferred `**kwrest` slot always physically holds a valid
         // `Value` at any GC safepoint: when the deferral activated the
         // caller-side `set_arguments` stored a real `nil` there; when it
@@ -3209,6 +3271,36 @@ impl AbstractFrame {
             // and the binding stays.
             LinkMode::F(_) => OuterBarrier::Kept,
             _ => OuterBarrier::Kept,
+        }
+    }
+
+    ///
+    /// Whether [`Self::bridge`] of *slot* to *target* creates a deopt exit:
+    /// the arms that guard a boxed value on the way to a narrower
+    /// placement, and a constant no value of the target's placement can
+    /// equal (`const_placement_miss`). Each arm's answer depends on this
+    /// slot alone, and an arm that changes another slot's placement (a
+    /// pressure demotion in `set_new_*`) is itself one that answers yes,
+    /// so the answer over a frame is the same in any order.
+    ///
+    /// The analysis pass asks this instead of building the bridge: of a
+    /// bridge it keeps only the fact that it can deopt
+    /// (`JitContext::gen_bridges_for_branches`).
+    ///
+    pub(super) fn bridge_deopts(&self, target: &SlotState, slot: SlotId) -> bool {
+        match (self.mode(slot), target.mode(slot)) {
+            (LinkMode::S(_), LinkMode::Sf(_, SfGuarded::Float) | LinkMode::F(_)) => true,
+            (LinkMode::S(_), LinkMode::Sf(_, SfGuarded::Fixnum)) => {
+                !self.is_class(slot, INTEGER_CLASS)
+            }
+            (LinkMode::S(_), LinkMode::S(guarded)) => guarded
+                .class()
+                .is_some_and(|class| !self.is_class(slot, class)),
+            (LinkMode::C(l), LinkMode::F(_)) => l.try_float().is_none(),
+            (LinkMode::C(l), LinkMode::Sf(_, _)) => {
+                l.try_float().is_none() && l.try_fixnum().is_none()
+            }
+            _ => false,
         }
     }
 

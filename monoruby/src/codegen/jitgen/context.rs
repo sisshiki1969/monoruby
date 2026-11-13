@@ -4196,6 +4196,12 @@ impl<'a> JitContext<'a> {
     /// through the ordinary own-frame arms).
     ///
     pub(super) fn chain_surrender_table(&self) -> crate::codegen::jitgen::state::ChainSurrender {
+        if !self.codegen_mode() {
+            return crate::codegen::jitgen::state::ChainSurrender {
+                per_level: vec![],
+                analysis: true,
+            };
+        }
         let len = self.stack_frame.len();
         let per_level = (0..len)
             .map(|level| {
@@ -4206,7 +4212,10 @@ impl<'a> JitContext<'a> {
                 Some((ids, extra, self.stack_frame[level].specialized_id))
             })
             .collect();
-        crate::codegen::jitgen::state::ChainSurrender { per_level }
+        crate::codegen::jitgen::state::ChainSurrender {
+            per_level,
+            analysis: false,
+        }
     }
 
     ///

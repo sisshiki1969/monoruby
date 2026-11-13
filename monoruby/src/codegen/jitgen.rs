@@ -431,6 +431,12 @@ impl std::fmt::Debug for WriteBack {
 }
 
 impl WriteBack {
+    /// A write-back of nothing: what the analysis pass hands out, whose
+    /// side exits are never emitted (`AsmIr::exit_write_back`).
+    pub(crate) fn empty() -> Self {
+        Self::new(vec![], vec![], vec![], vec![], vec![], vec![])
+    }
+
     /// Whether a chain-deopt replay of this write-back would do nothing —
     /// i.e. the suspended frame is already in interpreter-consistent shape
     /// and only its return address has to be rewritten. Counted under
@@ -584,12 +590,13 @@ impl ChainExitSpec {
     /// save area the replay reads the pool-resident floats out of.
     ///
     pub(crate) fn new(
+        ir: &AsmIr,
         state: &AbstractFrame,
         using_fpr: UsingFpr,
         dst: Option<SlotId>,
     ) -> Self {
         Self {
-            wb: state.get_write_back(),
+            wb: ir.plain_write_back(state),
             using_fpr,
             dst,
             pc: state.pc(),
