@@ -494,6 +494,346 @@ impl<'a> JitContext<'a> {
 #[cfg(feature = "jit-log")]
 use crate::bytecodegen::{BinOpK, UnOpK};
 
+///
+/// What one definition puts in a slot of the frame a loop is in.
+///
+#[cfg(feature = "jit-log")]
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum FloatDef {
+    Float,
+    Other,
+    /// Whatever that slot of the frame holds: a float when the slot is
+    /// float-valued around the loop.
+    CopyOf(SlotId),
+}
+
+///
+/// The slots *ir* reads as float operands, by its cache (a `BinOp`,
+/// `BinCmp` or `UnOp` whose cache says `Float` for the operand), and the
+/// slot it defines as a float: float arithmetic, or a float literal.
+///
+#[cfg(feature = "jit-log")]
+fn float_ops(ir: &TraceIr) -> (Vec<SlotId>, Option<SlotId>) {
+    let is_num = |c: CachedClass| c == CachedClass::FLOAT || c == CachedClass::INTEGER;
+    let mut reads = vec![];
+    let mut def = None;
+    match ir {
+        TraceIr::BinOp {
+            kind,
+            dst,
+            lhs,
+            rhs,
+            ic: Some((l, r)),
+            ..
+        } => {
+            if *l == CachedClass::FLOAT {
+                reads.push(*lhs);
+            }
+            if *r == CachedClass::FLOAT {
+                reads.push(*rhs);
+            }
+            let arith = matches!(
+                kind,
+                BinOpK::Add | BinOpK::Sub | BinOpK::Mul | BinOpK::Div | BinOpK::Rem | BinOpK::Exp
+            );
+            if arith
+                && is_num(*l)
+                && is_num(*r)
+                && (*l == CachedClass::FLOAT || *r == CachedClass::FLOAT)
+            {
+                def = *dst;
+            }
+        }
+        TraceIr::BinCmp {
+            lhs,
+            rhs,
+            ic: Some((l, r)),
+            ..
+        } => {
+            if *l == CachedClass::FLOAT {
+                reads.push(*lhs);
+            }
+            if *r == CachedClass::FLOAT {
+                reads.push(*rhs);
+            }
+        }
+        TraceIr::UnOp {
+            kind,
+            _dst,
+            src,
+            ic: Some(c),
+            ..
+        } if *c == CachedClass::FLOAT => {
+            reads.push(*src);
+            if matches!(kind, UnOpK::Neg | UnOpK::Pos) {
+                def = Some(*_dst);
+            }
+        }
+        TraceIr::Literal(dst, v) | TraceIr::FrozenLiteral(dst, v) if v.is_float() => {
+            def = Some(*dst)
+        }
+        _ => {}
+    }
+    (reads, def)
+}
+
+///
+/// Every slot of its own frame *ir* writes: `TraceIr::defined_slot`, and
+/// the destinations that are not plain.
+///
+#[cfg(feature = "jit-log")]
+fn written_slots(ir: &TraceIr, store: &Store) -> Vec<SlotId> {
+    let mut written: Vec<SlotId> = ir.defined_slot(store).into_iter().collect();
+    match ir {
+        TraceIr::ToA { dst, .. }
+        | TraceIr::DefinedYield { dst, .. }
+        | TraceIr::DefinedConst { dst, .. }
+        | TraceIr::DefinedMethod { dst, .. }
+        | TraceIr::DefinedSuper { dst, .. }
+        | TraceIr::DefinedGvar { dst, .. }
+        | TraceIr::DefinedIvar { dst, .. }
+        | TraceIr::DefinedCvar { dst, .. } => written.push(*dst),
+        TraceIr::ClassDef { dst, .. }
+        | TraceIr::ModuleDef { dst, .. }
+        | TraceIr::SingletonClassDef { dst, .. }
+        | TraceIr::ConcatRegexp(dst, ..) => written.extend(*dst),
+        TraceIr::Yield { callid } => written.extend(store[*callid].dst),
+        TraceIr::ExpandArray {
+            dst: (start, len, rest),
+            ..
+        } => {
+            let len = *len as usize + rest.is_some() as usize;
+            written.extend((0..len).map(|i| SlotId(start.0 + i as u16)));
+        }
+        _ => {}
+    }
+    written
+}
+
+///
+/// The iseq of the block literal *ir* passes, for a method call with one.
+///
+#[cfg(feature = "jit-log")]
+fn block_literal(ir: &TraceIr, store: &Store) -> Option<ISeqId> {
+    let TraceIr::MethodCall { callid, .. } = ir else {
+        return None;
+    };
+    store[store[*callid].block_fid?].is_iseq()
+}
+
+///
+/// What a block literal — with the blocks nested in it — may do, each
+/// time it runs, to the slots of a frame outside it: the summary a scan
+/// of that frame's own instructions uses in place of the block's body,
+/// which is another iseq (doc/fixpoint_engine_plan.md §5.4). Indexed by
+/// the slots of that frame.
+///
+/// The block may run any number of times, or not at all, so each entry is
+/// a "may": a definition here does not end the life of the value the slot
+/// had.
+///
+#[cfg(feature = "jit-log")]
+struct BlockSummary {
+    /// Read as a float operand.
+    float_read: Vec<bool>,
+    /// Read in some basic block of the block before that basic block
+    /// writes it.
+    exposed: Vec<bool>,
+    /// What each write puts there.
+    defs: Vec<Vec<FloatDef>>,
+}
+
+#[cfg(feature = "jit-log")]
+impl<'a> JitContext<'a> {
+    ///
+    /// Whether the block literal the call *ir* passes is expected to be
+    /// compiled into this unit, as far as the call site alone says: the
+    /// call is resolved to a Ruby method that does not take its block as
+    /// a `&blk` parameter (the static part of the specialization gate in
+    /// `compile/method_call.rs`). A builtin callee runs the block as a
+    /// unit of its own.
+    ///
+    fn block_call_inlines(&self, ir: &TraceIr) -> bool {
+        matches!(ir, TraceIr::MethodCall { cache: MethodCache::Cached(e), .. }
+            if self.store[e.func_id]
+                .is_iseq()
+                .is_some_and(|iseq| !self.store[iseq].has_block_arg()))
+    }
+
+    ///
+    /// The summary of the block literal *block* the call *ir* passes
+    /// (`block_summary`). When the call is not expected to compile the
+    /// block into this unit, the block runs as a unit of its own, reading
+    /// and writing the slots in the frame: its float reads say nothing to
+    /// the loop, and what it writes is a boxed value of no known class.
+    ///
+    fn block_summary_at(
+        &self,
+        ir: &TraceIr,
+        block: ISeqId,
+        depth: usize,
+        n: usize,
+    ) -> BlockSummary {
+        let mut sum = self.block_summary(block, depth, n);
+        if !self.block_call_inlines(ir) {
+            sum.float_read.fill(false);
+            for d in sum.defs.iter_mut().flatten() {
+                *d = FloatDef::Other;
+            }
+        }
+        sum
+    }
+
+    ///
+    /// The summary of the block *block*, for the *n* slots of the frame
+    /// *depth* levels out from it (1 for a block literal of that frame).
+    ///
+    /// A basic block of the block is scanned in order, tracing which of
+    /// its own slots hold a float, a copy of an outer slot, or something
+    /// else; what crosses basic blocks in the block's own slots is not
+    /// followed and counts as something else. The inline caches decide
+    /// what a float is, so the summary belongs to the moment it is made.
+    ///
+    fn block_summary(&self, block: ISeqId, depth: usize, n: usize) -> BlockSummary {
+        use std::collections::{HashMap, HashSet};
+        /// What a slot of the block's own frame holds.
+        #[derive(Clone, Copy)]
+        enum Tmp {
+            Float,
+            Other,
+            /// Whatever that outer slot holds.
+            Outer(SlotId),
+        }
+        let store = self.store;
+        let iseq = &store[block];
+        let mut sum = BlockSummary {
+            float_read: vec![false; n],
+            exposed: vec![false; n],
+            defs: vec![vec![]; n],
+        };
+        for bb in 0..iseq.bb_info.len() {
+            let mut tmp: HashMap<SlotId, Tmp> = Default::default();
+            // The outer slot an own slot was loaded from, and how many
+            // times this basic block had written that outer slot by then.
+            let mut src: HashMap<SlotId, (SlotId, usize)> = Default::default();
+            // What this basic block (certainly) left in an outer slot.
+            let mut outer_now: HashMap<SlotId, FloatDef> = Default::default();
+            // The outer slots this basic block has certainly written.
+            let mut certain: HashSet<SlotId> = Default::default();
+            // How many times this basic block has (maybe) written an
+            // outer slot.
+            let mut generation: HashMap<SlotId, usize> = Default::default();
+            // An outer slot this basic block wrote other than as a float:
+            // the index of that definition, until a float read guards it.
+            let mut pending: HashMap<SlotId, usize> = Default::default();
+            let BasicBlockInfoEntry { begin, end, .. } = iseq.bb_info[BasicBlockId(bb as u32)];
+            for pos in begin..=end {
+                let pc = iseq.get_pc(pos);
+                if TraceIr::is_handler_only(pc) {
+                    continue;
+                }
+                let ir = TraceIr::from_pc(pc, store);
+                let (float_reads, float_def) = float_ops(&ir);
+                for r in float_reads {
+                    if let Some(&(x, at)) = src.get(&r) {
+                        sum.float_read[x.0 as usize] = true;
+                        // The read guards the value: a definition this
+                        // basic block made of the slot, still there, is a
+                        // float on the paths that go on.
+                        if generation.get(&x).copied().unwrap_or(0) == at
+                            && let Some(idx) = pending.remove(&x)
+                        {
+                            sum.defs[x.0 as usize][idx] = FloatDef::Float;
+                            outer_now.insert(x, FloatDef::Float);
+                        }
+                    }
+                    if !matches!(tmp.get(&r), Some(Tmp::Outer(_))) {
+                        tmp.insert(r, Tmp::Float);
+                    }
+                }
+                for w in written_slots(&ir, store) {
+                    let from = match ir {
+                        TraceIr::Mov(dst, from) if dst == w => Some(from),
+                        _ => None,
+                    };
+                    let (t, s) = if float_def == Some(w) {
+                        (Some(Tmp::Float), None)
+                    } else if let Some(from) = from {
+                        (tmp.get(&from).copied(), src.get(&from).copied())
+                    } else {
+                        (Some(Tmp::Other), None)
+                    };
+                    match t {
+                        Some(t) => tmp.insert(w, t),
+                        None => tmp.remove(&w),
+                    };
+                    match s {
+                        Some(s) => src.insert(w, s),
+                        None => src.remove(&w),
+                    };
+                }
+                match &ir {
+                    TraceIr::LoadDynVar(dst, DynVar { reg, outer })
+                        if *outer == depth && (reg.0 as usize) < n =>
+                    {
+                        let x = *reg;
+                        if !certain.contains(&x) {
+                            sum.exposed[x.0 as usize] = true;
+                        }
+                        tmp.insert(
+                            *dst,
+                            match outer_now.get(&x) {
+                                Some(FloatDef::Float) => Tmp::Float,
+                                Some(FloatDef::Other) => Tmp::Other,
+                                Some(FloatDef::CopyOf(y)) => Tmp::Outer(*y),
+                                None => Tmp::Outer(x),
+                            },
+                        );
+                        src.insert(*dst, (x, generation.get(&x).copied().unwrap_or(0)));
+                    }
+                    TraceIr::StoreDynVar(DynVar { reg, outer }, from)
+                        if *outer == depth && (reg.0 as usize) < n =>
+                    {
+                        let x = *reg;
+                        let def = match tmp.get(from) {
+                            Some(Tmp::Float) => FloatDef::Float,
+                            Some(Tmp::Outer(y)) => FloatDef::CopyOf(*y),
+                            Some(Tmp::Other) | None => FloatDef::Other,
+                        };
+                        if def == FloatDef::Other {
+                            pending.insert(x, sum.defs[x.0 as usize].len());
+                        } else {
+                            pending.remove(&x);
+                        }
+                        sum.defs[x.0 as usize].push(def);
+                        outer_now.insert(x, def);
+                        certain.insert(x);
+                        *generation.entry(x).or_default() += 1;
+                    }
+                    _ => {}
+                }
+                // A block nested here may run, any number of times.
+                if let Some(inner) = block_literal(&ir, store) {
+                    let inner = self.block_summary_at(&ir, inner, depth + 1, n);
+                    for i in 0..n {
+                        let x = SlotId(i as u16);
+                        sum.float_read[i] |= inner.float_read[i];
+                        if inner.exposed[i] && !certain.contains(&x) {
+                            sum.exposed[i] = true;
+                        }
+                        if !inner.defs[i].is_empty() {
+                            sum.defs[i].extend(&inner.defs[i]);
+                            outer_now.remove(&x);
+                            *generation.entry(x).or_default() += 1;
+                        }
+                    }
+                }
+            }
+        }
+        sum
+    }
+}
+
 #[cfg(feature = "jit-log")]
 impl<'a> JitContext<'a> {
     ///
@@ -506,14 +846,19 @@ impl<'a> JitContext<'a> {
     /// `BinCmp` or `UnOp` whose cache says `Float` for it), every entry
     /// can bridge to a float (*promotable*), the loop may read before it
     /// writes it (live at the head by the tables, and read before written
-    /// in some basic block of the loop), no block literal of the frame
-    /// touches, and that either
+    /// in some basic block of the loop), and that either
     ///
     /// - the loop defines only by float arithmetic (a numeric `BinOp` or
     ///   `UnOp` with a `Float` operand in its cache), float literals, and
     ///   copies of slots that are float by this same rule, or
     /// - the loop does not define, and *incoming* has as a `Float` or as a
     ///   value of no known class (the float reads guard it).
+    ///
+    /// A block literal passed in the loop counts through its summary
+    /// (`block_summary_at`): its reads and writes of the frame's slots
+    /// are reads and writes the loop may make at the call. A slot the
+    /// frame's blocks touch is no candidate when one of them is opaque to
+    /// this compilation (`table_blocks_opaque`), where no summary holds.
     ///
     pub(in crate::codegen::jitgen) fn loop_float_candidates(
         &self,
@@ -522,14 +867,8 @@ impl<'a> JitContext<'a> {
         incoming: &AbstractState,
         promotable: impl Fn(SlotId) -> bool,
     ) -> (Vec<std::result::Result<(), &'static str>>, Vec<bool>) {
-        /// What one definition puts in its slot.
-        #[derive(Clone, Copy, PartialEq)]
-        enum Def {
-            Float,
-            Other,
-            /// A copy of the slot's value at its basic block's entry.
-            CopyOf(SlotId),
-        }
+        use FloatDef as Def;
+        use std::collections::{HashMap, HashSet};
         let iseq = self.iseq();
         let store = self.store;
         let n = self.total_reg_num();
@@ -538,15 +877,17 @@ impl<'a> JitContext<'a> {
         // Read in some basic block of the loop before that block writes it.
         let mut exposed = vec![false; n];
         let table = self.slot_analysis(self.iseq_id());
-        let is_num = |c: CachedClass| c == CachedClass::FLOAT || c == CachedClass::INTEGER;
         for bb in loop_start..=loop_end {
             // The definitions made so far in this basic block.
-            let mut local: std::collections::HashMap<SlotId, Def> = Default::default();
+            let mut local: HashMap<SlotId, Def> = Default::default();
+            // The slots this basic block has certainly written.
+            let mut certain: HashSet<SlotId> = Default::default();
             // The slot whose value a slot copied in this basic block holds.
-            let mut copy_src: std::collections::HashMap<SlotId, SlotId> = Default::default();
+            let mut copy_src: HashMap<SlotId, SlotId> = Default::default();
             // A slot this basic block defined other than as a float, not
-            // read since: the index of that definition in `defs`.
-            let mut pending: std::collections::HashMap<SlotId, usize> = Default::default();
+            // read since: the indices of those definitions in `defs`
+            // (more than one when a block may have written it).
+            let mut pending: HashMap<SlotId, Vec<usize>> = Default::default();
             let BasicBlockInfoEntry { begin, end, .. } = iseq.bb_info[bb];
             for pos in begin..=end {
                 let pc = iseq.get_pc(pos);
@@ -554,100 +895,12 @@ impl<'a> JitContext<'a> {
                     continue;
                 }
                 for r in table.reads(pos) {
-                    if (r.0 as usize) < n && !local.contains_key(r) {
+                    if (r.0 as usize) < n && !certain.contains(r) {
                         exposed[r.0 as usize] = true;
                     }
                 }
                 let ir = TraceIr::from_pc(pc, store);
-                let mut float_def = None;
-                let mut float_reads: Vec<SlotId> = vec![];
-                let mut read_float = |s: SlotId| float_reads.push(s);
-                match &ir {
-                    TraceIr::BinOp {
-                        kind,
-                        dst,
-                        lhs,
-                        rhs,
-                        ic: Some((l, r)),
-                        ..
-                    } => {
-                        if *l == CachedClass::FLOAT {
-                            read_float(*lhs);
-                        }
-                        if *r == CachedClass::FLOAT {
-                            read_float(*rhs);
-                        }
-                        let arith = matches!(
-                            kind,
-                            BinOpK::Add
-                                | BinOpK::Sub
-                                | BinOpK::Mul
-                                | BinOpK::Div
-                                | BinOpK::Rem
-                                | BinOpK::Exp
-                        );
-                        if arith
-                            && is_num(*l)
-                            && is_num(*r)
-                            && (*l == CachedClass::FLOAT || *r == CachedClass::FLOAT)
-                        {
-                            float_def = *dst;
-                        }
-                    }
-                    TraceIr::BinCmp {
-                        lhs,
-                        rhs,
-                        ic: Some((l, r)),
-                        ..
-                    } => {
-                        if *l == CachedClass::FLOAT {
-                            read_float(*lhs);
-                        }
-                        if *r == CachedClass::FLOAT {
-                            read_float(*rhs);
-                        }
-                    }
-                    TraceIr::UnOp {
-                        kind,
-                        _dst,
-                        src,
-                        ic: Some(c),
-                        ..
-                    } if *c == CachedClass::FLOAT => {
-                        read_float(*src);
-                        if matches!(kind, UnOpK::Neg | UnOpK::Pos) {
-                            float_def = Some(*_dst);
-                        }
-                    }
-                    TraceIr::Literal(dst, v) | TraceIr::FrozenLiteral(dst, v) if v.is_float() => {
-                        float_def = Some(*dst)
-                    }
-                    _ => {}
-                }
-                let mut written: Vec<SlotId> = ir.defined_slot(store).into_iter().collect();
-                match &ir {
-                    TraceIr::ToA { dst, .. }
-                    | TraceIr::DefinedYield { dst, .. }
-                    | TraceIr::DefinedConst { dst, .. }
-                    | TraceIr::DefinedMethod { dst, .. }
-                    | TraceIr::DefinedSuper { dst, .. }
-                    | TraceIr::DefinedGvar { dst, .. }
-                    | TraceIr::DefinedIvar { dst, .. }
-                    | TraceIr::DefinedCvar { dst, .. } => written.push(*dst),
-                    TraceIr::ClassDef { dst, .. }
-                    | TraceIr::ModuleDef { dst, .. }
-                    | TraceIr::SingletonClassDef { dst, .. }
-                    | TraceIr::ConcatRegexp(dst, ..) => written.extend(*dst),
-                    TraceIr::Yield { callid } => written.extend(store[*callid].dst),
-                    TraceIr::ExpandArray {
-                        dst: (start, len, rest),
-                        ..
-                    } => {
-                        let len = *len as usize + rest.is_some() as usize;
-                        written.extend((0..len).map(|i| SlotId(start.0 + i as u16)));
-                    }
-                    _ => {}
-                }
+                let (float_reads, float_def) = float_ops(&ir);
                 // The reads come before the writes. A float read of a copy
                 // is a float read of what it copies; a float read guards
                 // the value a slot was given in this block (an `Index`
@@ -659,17 +912,49 @@ impl<'a> JitContext<'a> {
                             *f = true;
                         }
                     }
-                    if let Some(idx) = pending.remove(&r) {
-                        defs[r.0 as usize][idx] = Def::Float;
+                    if let Some(idxs) = pending.remove(&r) {
+                        for idx in idxs {
+                            defs[r.0 as usize][idx] = Def::Float;
+                        }
                         local.insert(r, Def::Float);
                     }
                 }
-                for w in written {
+                // A block literal passed here may run, any number of
+                // times, before the call's own result is written.
+                if let Some(block) = block_literal(&ir, store) {
+                    let sum = self.block_summary_at(&ir, block, 1, n);
+                    for i in 0..n {
+                        let x = SlotId(i as u16);
+                        if sum.float_read[i] {
+                            float_use[i] = true;
+                            if let Some(y) = copy_src.get(&x) {
+                                float_use[y.0 as usize] = true;
+                            }
+                        }
+                        if sum.exposed[i] && !certain.contains(&x) {
+                            exposed[i] = true;
+                        }
+                        if sum.defs[i].is_empty() {
+                            continue;
+                        }
+                        for d in &sum.defs[i] {
+                            if *d == Def::Other {
+                                pending.entry(x).or_default().push(defs[i].len());
+                            }
+                            defs[i].push(*d);
+                        }
+                        // Written or not: whatever the slot holds.
+                        local.insert(x, Def::CopyOf(x));
+                        copy_src.remove(&x);
+                    }
+                }
+                for w in written_slots(&ir, store) {
                     if w.0 as usize >= n {
                         continue;
                     }
                     copy_src.remove(&w);
                     pending.remove(&w);
+                    certain.insert(w);
                     let def = if float_def == Some(w) {
                         Def::Float
                     } else if let TraceIr::Mov(dst, src) = ir
@@ -678,7 +963,7 @@ impl<'a> JitContext<'a> {
                         copy_src.insert(dst, copy_src.get(&src).copied().unwrap_or(src));
                         local.get(&src).copied().unwrap_or(Def::CopyOf(src))
                     } else {
-                        pending.insert(w, defs[w.0 as usize].len());
+                        pending.insert(w, vec![defs[w.0 as usize].len()]);
                         Def::Other
                     };
                     local.insert(w, def);
@@ -718,6 +1003,7 @@ impl<'a> JitContext<'a> {
             }
         }
         let head_pos = iseq.bb_info[loop_start].begin;
+        let blocks_opaque = self.table_blocks_opaque();
         let live: Vec<bool> = (0..n)
             .map(|i| exposed[i] && self.table_live_after(head_pos, SlotId(i as u16)))
             .collect();
@@ -726,10 +1012,10 @@ impl<'a> JitContext<'a> {
                 let s = SlotId(i as u16);
                 if i == 0 {
                     Err("self")
-                } else if self.table_touched_by_blocks(s) {
-                    // A block's reads and writes are in its own iseq, which
-                    // this scan does not look into.
-                    Err("touched by a block")
+                } else if self.table_touched_by_blocks(s) && blocks_opaque {
+                    // A block has a handler or a lambda, or a call that
+                    // may capture the frame: its summary does not hold.
+                    Err("touched by an opaque block")
                 } else if !float_use[i] {
                     Err("no float read")
                 } else if !float_valued(&ok, s) {
@@ -766,6 +1052,7 @@ impl<'a> JitContext<'a> {
         &self,
         head: BasicBlockId,
         target: &AbstractState,
+        backedge: &state::SlotState,
         (verdicts, live): &(Vec<std::result::Result<(), &'static str>>, Vec<bool>),
     ) {
         let live = |s: SlotId| live[s.0 as usize];
@@ -829,6 +1116,18 @@ impl<'a> JitContext<'a> {
                     ))
                     .collect::<Vec<_>>(),
                 pre_only
+                    .iter()
+                    .map(|&s| format!(
+                        "{s:?} {:?} (back edge {:?}){}",
+                        target.mode(s),
+                        backedge.mode(s),
+                        if self.table_touched_by_blocks(s) {
+                            ", touched by a block"
+                        } else {
+                            ""
+                        }
+                    ))
+                    .collect::<Vec<_>>(),
             );
         }
     }

@@ -333,7 +333,7 @@ impl<'a> JitContext<'a> {
                                 &target_incoming,
                                 promotable,
                             );
-                            self.record_pre_fixpoint_floats(bbid, &target, &verdicts);
+                            self.record_pre_fixpoint_floats(bbid, &target, be, &verdicts);
                         }
                     }
                 }
