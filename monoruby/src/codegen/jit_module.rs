@@ -258,7 +258,7 @@ pub(super) extern "C" fn handle_error(
             let sourceinfo = info.sourceinfo.clone();
             let loc = info.sourcemap[pc.to_usize()];
             let fid = info.func_id();
-            vm.push_error_location(loc, sourceinfo, fid);
+            vm.push_error_location(loc, sourceinfo, fid, lfp.self_val());
             // Fatal errors (Rust panics caught at an `extern "C"` boundary)
             // must never be caught by `rescue`, and we also skip `ensure`
             // since the interpreter/VM state may be inconsistent after a

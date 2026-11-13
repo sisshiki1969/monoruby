@@ -2,8 +2,9 @@
 
 # PTY — pseudo terminals, in Ruby over two primitives: `Process.__pty_open`
 # (`posix_openpt` / `grantpt` / `unlockpt` and the slave opened by name)
-# and `Process.spawn`'s private `__pty_session:` option (the child calls
-# `setsid` and takes the slave on its stdin as its controlling terminal).
+# and `Process.spawn`'s private `__pty_session: slave_fd` option (the
+# child calls `setsid`, takes the slave as its controlling terminal and
+# on its stdin, stdout and stderr, then applies the other options).
 # CRuby's ext/pty does the same around its own fork; its pty.so is built
 # for CRuby, so without this file `require "pty"` would reach it and fail
 # (shipit-engine requires it at boot).
@@ -44,7 +45,9 @@ module PTY
       opts = args.size > 1 && args.last.is_a?(Hash) ? args.pop.dup : {}
       master_fd, slave_fd, name = Process.__pty_open
       begin
-        opts.update(in: slave_fd, out: slave_fd, err: slave_fd, __pty_session: true)
+        # The child puts the slave on its stdin, stdout and stderr before
+        # it applies `opts`, so a redirect given here still wins (ext/pty).
+        opts[:__pty_session] = slave_fd
         pid = Process.spawn(*args, opts)
       rescue Exception
         IO.new(master_fd).close

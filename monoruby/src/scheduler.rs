@@ -1941,13 +1941,7 @@ fn queue_exception_report(globals: &mut Globals, thread: Value) {
                 let frames: Vec<String> = err
                     .trace
                     .iter()
-                    .map(|(source_loc, fid)| {
-                        if let Some((loc, source)) = source_loc {
-                            globals.store.location(*fid, source, *loc)
-                        } else {
-                            globals.store.internal_location(fid.unwrap())
-                        }
-                    })
+                    .map(|entry| globals.store.trace_entry_location(entry))
                     .collect();
                 match frames.split_first() {
                     None => head,

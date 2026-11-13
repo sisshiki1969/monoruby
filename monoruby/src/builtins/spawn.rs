@@ -48,11 +48,13 @@ pub(crate) struct ExecSpec {
     pgroup: Option<i32>,
     redirects: Vec<Redirect>,
     close_others: bool,
-    /// `__pty_session: true` (stdlib/pty.rb's `PTY.spawn`, not a CRuby
-    /// option): the child starts a new session and takes the terminal on
-    /// its stdin, which the redirects have made a pty's slave, as its
-    /// controlling terminal.
-    pty_session: bool,
+    /// `__pty_session: slave_fd` (stdlib/pty.rb's `PTY.spawn`, not a
+    /// CRuby option): the parent's fd of a pty's slave. Before anything
+    /// else the child starts a new session, takes the slave as its
+    /// controlling terminal and puts it on fds 0, 1 and 2, then runs the
+    /// options as any spawn would — CRuby's ext/pty `chfunc`, so an
+    /// `in:` / `out:` / `err:` the caller gave applies on top.
+    pty_slave: Option<i32>,
 }
 
 impl ExecSpec {
@@ -62,16 +64,9 @@ impl ExecSpec {
         &self.program_display
     }
 
-    /// The parent's fd the child's stdin is taken from, for a
-    /// `__pty_session` spawn: the pty's slave.
+    /// The pty's slave of a `__pty_session` spawn.
     fn pty_slave(&self) -> Option<i32> {
-        if !self.pty_session {
-            return None;
-        }
-        self.redirects.iter().find_map(|r| match r.target {
-            RedirectTarget::Fd(fd) if r.child_fds.contains(&0) => Some(fd),
-            _ => None,
-        })
+        self.pty_slave
     }
 }
 
@@ -191,7 +186,7 @@ pub(crate) fn parse_exec_args(
     let mut pgroup: Option<i32> = None;
     let mut unsetenv_others = false;
     let mut close_others = false;
-    let mut pty_session = false;
+    let mut pty_slave: Option<i32> = None;
     let mut redirects: Vec<Redirect> = vec![];
     if items.len() > 1 || (have_env && items.len() == 1) {
         if let Some(last) = items.last().copied()
@@ -249,7 +244,12 @@ pub(crate) fn parse_exec_args(
                                 close_others = flag;
                             }
                         }
-                        "__pty_session" => pty_session = v.as_bool(),
+                        "__pty_session" => {
+                            pty_slave = (!v.is_nil())
+                                .then(|| v.coerce_to_int_i64(vm, globals))
+                                .transpose()?
+                                .map(|fd| fd as i32);
+                        }
                         "in" => redirects.push(parse_redirect(vm, globals, vec![0], v)?),
                         "out" => redirects.push(parse_redirect(vm, globals, vec![1], v)?),
                         "err" => redirects.push(parse_redirect(vm, globals, vec![2], v)?),
@@ -415,7 +415,7 @@ pub(crate) fn parse_exec_args(
         pgroup,
         redirects,
         close_others,
-        pty_session,
+        pty_slave,
     })
 }
 
@@ -913,6 +913,20 @@ unsafe fn child_exec(spec: &ExecSpec, fds: &mut ChildFds, ptrs: &mut ExecPtrs) -
         // model blocks the asynchronous signals, and the child would
         // inherit that (`scheduler::command_for_child`).
         crate::scheduler::reset_child_sigmask();
+        // A pty's child (CRuby's ext/pty `chfunc`): a new session, the
+        // slave as the controlling terminal (an error is ignored there
+        // too) and as fds 0, 1 and 2 — all before the options, which
+        // then apply as for any spawn.
+        if let Some(slave) = spec.pty_slave {
+            libc::setsid();
+            libc::ioctl(slave, libc::TIOCSCTTY as _, 0);
+            for fd in 0..3 {
+                libc::dup2(slave, fd);
+            }
+            if slave > 2 {
+                libc::close(slave);
+            }
+        }
         if let Some(pg) = spec.pgroup
             && libc::setpgid(0, pg) != 0
         {
@@ -948,12 +962,6 @@ unsafe fn child_exec(spec: &ExecSpec, fds: &mut ChildFds, ptrs: &mut ExecPtrs) -
         for &(newfd, oldfd) in &fds.dup2_child {
             if libc::dup2(oldfd, newfd) == -1 {
                 return (STAGE_DUP2, errno());
-            }
-        }
-        if spec.pty_session {
-            libc::setsid();
-            if libc::ioctl(0, libc::TIOCSCTTY as _, 0) != 0 {
-                return (STAGE_EXEC, errno());
             }
         }
         if let Some((dir, _)) = &spec.chdir
@@ -1012,7 +1020,9 @@ fn set_status(vm: &mut Executor, globals: &mut Globals, raw: i32, pid: i32) -> R
 
 /// The parent-side error for a reported (stage, errno). `spawn` / `exec`
 /// (CRuby's `rb_exec_fail`) name a failed `chdir` by its directory;
-/// `IO.popen` (`pipe_open`) names every failed call by the call.
+/// `IO.popen` (`pipe_open`) names every failed call by the call. A pty's
+/// child (ext/pty's `establishShell`) names the call too, and a failed
+/// exec, for which its error buffer is left empty, `fork failed`.
 fn stage_error(
     globals: &Globals,
     spec: &ExecSpec,
@@ -1021,9 +1031,11 @@ fn stage_error(
     popen: bool,
 ) -> MonorubyErr {
     let err = std::io::Error::from_raw_os_error(errno);
+    let pty = spec.pty_slave.is_some();
     match stage {
+        STAGE_EXEC if pty => MonorubyErr::errno_with_msg(&globals.store, &err, "fork failed"),
         STAGE_EXEC => MonorubyErr::errno_with_msg(&globals.store, &err, &spec.program_display),
-        STAGE_CHDIR if !popen => {
+        STAGE_CHDIR if !popen && !pty => {
             let dir = spec.chdir.as_ref().map(|(_, d)| d.as_str()).unwrap_or("");
             MonorubyErr::errno_with_msg(&globals.store, &err, dir)
         }

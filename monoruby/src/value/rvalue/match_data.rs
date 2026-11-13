@@ -331,13 +331,12 @@ impl MatchDataInner {
         );
         let names = self
             .regexp()
-            .and_then(|r| r.capture_names().ok())
+            .map(|r| r.capture_names().to_vec())
             .unwrap_or_default();
         for i in 1..self.len() {
-            if names.is_empty() {
-                s.push_str(&format!(" {i}:"));
-            } else {
-                s.push_str(&format!(" {}:", names[i - 1]));
+            match names.get(i - 1) {
+                Some(name) => s.push_str(&format!(" {}:", String::from_utf8_lossy(name))),
+                None => s.push_str(&format!(" {i}:")),
             }
             if let Some(capture) = self.at(i) {
                 s.push_str(&format!("\"{}\"", String::from_utf8_lossy(capture)));

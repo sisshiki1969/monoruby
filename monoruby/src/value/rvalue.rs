@@ -7,7 +7,6 @@ use onigmo_regex::Captures;
 use rubymap::RubyEql;
 use std::mem::ManuallyDrop;
 
-use crate::ast::{Loc, SourceInfoRef};
 
 pub use argf::*;
 pub(crate) use bignum::BignumInner;

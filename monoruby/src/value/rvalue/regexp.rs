@@ -79,6 +79,11 @@ struct CachedRegex {
     /// (see [`RegexpInner::single_byte_class`]); `Some(None)` once
     /// decided not to be one.
     byte_class: std::sync::OnceLock<Option<[u64; 4]>>,
+    /// The group names, one per group in group order (empty for an
+    /// unnamed group), as the bytes Onigmo registered them under — in
+    /// the pattern's encoding, which need not be UTF-8 (see
+    /// [`RegexpInner::capture_names`]).
+    names: std::sync::OnceLock<Vec<Vec<u8>>>,
 }
 
 impl CachedRegex {
@@ -86,7 +91,71 @@ impl CachedRegex {
         Self {
             engine,
             byte_class: std::sync::OnceLock::new(),
+            names: std::sync::OnceLock::new(),
         }
+    }
+
+    fn names(&self) -> &[Vec<u8>] {
+        self.names
+            .get_or_init(|| match self.engine.capture_names() {
+                Ok(names) => names.into_iter().map(String::into_bytes).collect(),
+                // The engine's own listing reads the names as UTF-8 and gives
+                // up on any other bytes: a Windows-31J `(?<n\x87]>…)`.
+                Err(_) => raw_capture_names(&self.engine),
+            })
+    }
+}
+
+/// The group names of `engine` as raw bytes, read from a second compile
+/// of the same pattern (the engine keeps its `regex_t` to itself), freed
+/// again before returning. An empty list if that compile fails, which
+/// it cannot for a pattern that compiled once.
+fn raw_capture_names(engine: &Regex) -> Vec<Vec<u8>> {
+    unsafe extern "C" fn collect(
+        name: *const u8,
+        name_end: *const u8,
+        ngroups: std::os::raw::c_int,
+        groups: *mut std::os::raw::c_int,
+        _: *mut onigmo_regex::regex_t,
+        arg: *mut std::ffi::c_void,
+    ) -> std::os::raw::c_int {
+        // SAFETY: Onigmo hands the name's span and its group list, valid
+        // for the call, and `arg` is the `Vec` below.
+        unsafe {
+            let names = &mut *(arg as *mut Vec<Vec<u8>>);
+            let name = std::slice::from_raw_parts(name, name_end.offset_from(name) as usize);
+            for &g in std::slice::from_raw_parts(groups, ngroups as usize) {
+                if let Some(slot) = names.get_mut(g as usize - 1) {
+                    *slot = name.to_vec();
+                }
+            }
+        }
+        0
+    }
+    let pattern = engine.as_bytes();
+    let mut raw: *mut onigmo_regex::regex_t = std::ptr::null_mut();
+    let mut einfo = std::mem::MaybeUninit::<onigmo_regex::OnigErrorInfo>::uninit();
+    // SAFETY: the pattern bytes outlive the call; `raw` and `einfo` are
+    // out-parameters Onigmo fills; the syntax table is a static. `raw`
+    // is freed below and does not escape.
+    unsafe {
+        let r = onigmo_regex::onig_new(
+            &mut raw,
+            pattern.as_ptr(),
+            pattern.as_ptr().add(pattern.len()),
+            engine.option(),
+            engine.encoding().as_type(),
+            &raw const onigmo_regex::OnigSyntaxRuby,
+            einfo.as_mut_ptr(),
+        );
+        if r != onigmo_regex::ONIG_NORMAL as std::os::raw::c_int {
+            return vec![];
+        }
+        let len = onigmo_regex::onig_number_of_captures(raw) as usize;
+        let mut names = vec![vec![]; len];
+        onigmo_regex::onig_foreach_name(raw, Some(collect), &mut names as *mut Vec<Vec<u8>> as _);
+        onigmo_regex::onig_free(raw);
+        names
     }
 }
 
@@ -1851,14 +1920,53 @@ impl RegexpInner {
         })
     }
 
-    pub fn get_group_members(&self, name: &str) -> Vec<i32> {
-        self.regex.get_group_nembers(name)
+    /// The groups named `name` (its bytes, as written), in group order.
+    pub fn get_group_members(&self, name: &[u8]) -> Vec<i32> {
+        self.capture_names()
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| !n.is_empty() && n.as_slice() == name)
+            .map(|(i, _)| i as i32 + 1)
+            .collect()
     }
 
-    pub fn capture_names(&self) -> Result<Vec<String>> {
-        self.regex
-            .capture_names()
-            .map_err(|err| MonorubyErr::regexerr(err.message()))
+    /// The group names, one per group (empty for an unnamed group; no
+    /// entries at all when the pattern names none), as bytes in the
+    /// pattern's encoding: CRuby looks a name up by its bytes, so a
+    /// Windows-31J `(?<n\x87]>…)` is `:n\x87]` of a Windows-31J source.
+    pub fn capture_names(&self) -> &[Vec<u8>] {
+        self.regex.names()
+    }
+
+    /// The names of [`Self::capture_names`], each once, in order of
+    /// first appearance.
+    pub fn unique_capture_names(&self) -> Vec<&[u8]> {
+        let mut unique: Vec<&[u8]> = vec![];
+        for n in self.capture_names() {
+            if !n.is_empty() && !unique.contains(&n.as_slice()) {
+                unique.push(n);
+            }
+        }
+        unique
+    }
+
+    /// A group name as CRuby hands it out: a String in the pattern's
+    /// encoding.
+    pub fn name_string(&self, name: &[u8]) -> Value {
+        Value::string_from_inner(RStringInner::from_encoding(name, self.declared_encoding))
+    }
+
+    /// A group name as a Symbol (`MatchData#deconstruct_keys`): the
+    /// UTF-8 / ASCII symbol of the name, or one interned per (bytes,
+    /// encoding) for a name in another encoding.
+    pub fn name_symbol(&self, name: &[u8]) -> Value {
+        let enc = self.declared_encoding;
+        match std::str::from_utf8(name) {
+            Ok(s) if s.is_ascii() || matches!(enc, crate::value::Encoding::Utf8(_)) => {
+                Value::symbol_from_str(s)
+            }
+            _ => Value::symbol(IdentId::get_id_from_bytes(name.to_vec(), enc)),
+        }
     }
 
     pub fn captures<'a>(&self, given: &'a str, vm: &mut Executor) -> Result<Option<Captures<'a>>> {
@@ -3758,11 +3866,11 @@ impl RegexpInner {
                         if let Some(end_off) = bytes[i + 3..].iter().position(|&b| b == b'>') {
                             let name_start = i + 3;
                             let name_end = name_start + end_off;
-                            let name = String::from_utf8_lossy(&bytes[name_start..name_end]);
+                            let name = &bytes[name_start..name_end];
                             // Onigmo allows multiple groups to share
                             // a name; pick the highest-numbered one
                             // that participated, matching CRuby.
-                            let members = self.get_group_members(&name);
+                            let members = self.get_group_members(name);
                             let mut chosen: Option<usize> = None;
                             for &m_idx in members.iter() {
                                 if group(m_idx as usize).is_some() {
@@ -3868,9 +3976,9 @@ impl RegexpInner {
                         j += w;
                     }
                     if j + w <= bytes.len() {
-                        let name = String::from_utf8_lossy(&bytes[name_start..j]).into_owned();
+                        let name = &bytes[name_start..j];
                         let mut chosen: Option<usize> = None;
-                        for &m_idx in self.get_group_members(&name).iter() {
+                        for &m_idx in self.get_group_members(name).iter() {
                             if group(m_idx as usize).is_some() {
                                 chosen = Some(m_idx as usize);
                             }

@@ -83,12 +83,20 @@ fn allocate_undefined(
 /// group names are compared against. A String is read as it is: it used to
 /// be interned into a symbol first, which for a name the regexp does not
 /// have meant one more symbol for every wrong name ever asked about.
-fn group_name_of(arg: Value) -> Option<String> {
+fn group_name_of(arg: Value) -> Option<Vec<u8>> {
     if let Some(sym) = arg.try_symbol() {
-        return Some(sym.get_name());
+        return Some(sym.with_ident_name(|name, _| name.as_bytes().to_vec()));
     }
     let inner = arg.is_rstring_inner()?;
-    Some(String::from_utf8_lossy(inner.as_bytes()).into_owned())
+    Some(inner.as_bytes().to_vec())
+}
+
+/// `IndexError` for a group name the pattern does not have.
+fn undefined_group_name(name: &[u8]) -> MonorubyErr {
+    MonorubyErr::indexerr(format!(
+        "undefined group name reference: {}",
+        String::from_utf8_lossy(name)
+    ))
 }
 
 /// Resolve a `begin`/`end`/`offset`/`bytebegin`/`byteend`/`byteoffset`
@@ -106,22 +114,11 @@ fn resolve_capture_index(
     if let Some(group_name) = group_name_of(arg) {
         if let Some(i) = m
             .regexp()
-            .and_then(|r| r.capture_names().ok())
-            .and_then(|names| {
-                let mut last: Option<usize> = None;
-                for (i, n) in names.iter().enumerate() {
-                    if *n == group_name {
-                        last = Some(i + 1);
-                    }
-                }
-                last
-            })
+            .and_then(|r| r.get_group_members(&group_name).last().copied())
         {
-            return Ok(i);
+            return Ok(i as usize);
         }
-        return Err(MonorubyErr::indexerr(format!(
-            "undefined group name reference: {group_name}"
-        )));
+        return Err(undefined_group_name(&group_name));
     }
     let idx = arg.coerce_to_int_i64(vm, globals)?;
     let len = m.len() as i64;
@@ -156,23 +153,20 @@ fn deconstruct_keys_md(
     let arg = lfp.arg(0);
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let names = m
-        .regexp()
-        .and_then(|r| r.capture_names().ok())
-        .unwrap_or_default();
-    let val_for = |name: &str| -> Value {
-        let mut last: Option<usize> = None;
-        for (i, n) in names.iter().enumerate() {
-            if n == name {
-                last = Some(i);
-            }
-        }
-        last.and_then(|i| m.at_value(i + 1)).unwrap_or_default()
+    let Some(re) = m.regexp() else {
+        return Ok(Value::hash(RubyMap::default()));
+    };
+    let names = re.unique_capture_names();
+    let val_for = |name: &[u8]| -> Value {
+        re.get_group_members(name)
+            .last()
+            .and_then(|&i| m.at_value(i as usize))
+            .unwrap_or_default()
     };
     let mut map = RubyMap::default();
     if arg.is_nil() {
-        for name in &names {
-            let key = Value::symbol_from_str(name);
+        for &name in &names {
+            let key = re.name_symbol(name);
             map.insert(key, val_for(name), vm, globals)?;
         }
     } else if arg.is_array_ty() {
@@ -188,10 +182,10 @@ fn deconstruct_keys_md(
                     key.builtin_class_name(globals)
                 )));
             };
-            let name = sym.get_name();
+            let name = sym.with_ident_name(|name, _| name.as_bytes().to_vec());
             // Stop at the first key with no corresponding named
             // capture, returning what was collected so far.
-            if !names.iter().any(|n| *n == name) {
+            if !names.contains(&name.as_slice()) {
                 break;
             }
             map.insert(*key, val_for(&name), vm, globals)?;
@@ -377,17 +371,15 @@ fn offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn names(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let names = m.regexp().and_then(|r| r.capture_names().ok()).unwrap_or_default();
     // A name shared by several groups appears only once (== Regexp#names).
-    let mut seen: Vec<&str> = Vec::with_capacity(names.len());
-    for n in &names {
-        if !seen.iter().any(|s| *s == n.as_str()) {
-            seen.push(n);
-        }
-    }
-    Ok(Value::array_from_iter(
-        seen.into_iter().map(Value::string_from_str),
-    ))
+    Ok(match m.regexp() {
+        Some(re) => Value::array_from_iter(
+            re.unique_capture_names()
+                .into_iter()
+                .map(|n| re.name_string(n)),
+        ),
+        None => Value::array_empty(),
+    })
 }
 
 /// The value of named capture `name`: the *last* group sharing that
@@ -395,12 +387,12 @@ fn names(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<
 /// "latest matched capture"); `None` if the name never matched.
 fn last_matched_named(
     m: &crate::value::rvalue::MatchDataInner,
-    capture_names: &[String],
-    name: &str,
+    capture_names: &[Vec<u8>],
+    name: &[u8],
 ) -> Option<usize> {
     let mut result = None;
     for (i, n) in capture_names.iter().enumerate() {
-        if n == name && m.at(i + 1).is_some() {
+        if n.as_slice() == name && m.at(i + 1).is_some() {
             result = Some(i + 1);
         }
     }
@@ -456,21 +448,9 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         if let Some(group_name) = group_name_of(*a) {
             let i = m
                 .regexp()
-                .and_then(|r| r.capture_names().ok())
-                .and_then(|names| {
-                    let mut last: Option<usize> = None;
-                    for (i, n) in names.iter().enumerate() {
-                        if *n == group_name {
-                            last = Some(i + 1);
-                        }
-                    }
-                    last
-                })
-                .ok_or_else(|| {
-                    MonorubyErr::indexerr(format!(
-                        "undefined group name reference: {group_name}"
-                    ))
-                })?;
+                .and_then(|r| r.get_group_members(&group_name).last().copied())
+                .map(|i| i as usize)
+                .ok_or_else(|| undefined_group_name(&group_name))?;
             res.push(
                 m.at_value(i)
                     .unwrap_or_else(Value::nil),
@@ -556,9 +536,7 @@ fn match_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             Ok(m.at_value(i as usize)
                 .unwrap_or_default())
         } else {
-            Err(MonorubyErr::indexerr(format!(
-                "undefined group name reference: {sym}"
-            )))
+            Err(undefined_group_name(&sym))
         }
     } else {
         Err(MonorubyErr::typeerr(format!(
@@ -599,9 +577,7 @@ fn match_length(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
         {
             i as usize
         } else {
-            return Err(MonorubyErr::indexerr(format!(
-                "undefined group name reference: {sym}"
-            )));
+            return Err(undefined_group_name(&sym));
         }
     } else {
         let _ = (vm, globals);
@@ -703,7 +679,7 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     } else if let Some(sym) = lfp.arg(0).try_symbol()
         && let Some(r) = m.regexp()
         && let Some(members) =
-            sym.with_ident_name(|name, _| name.as_str().map(|n| r.get_group_members(n)))
+            Some(sym.with_ident_name(|name, _| r.get_group_members(name.as_bytes())))
         && !members.is_empty()
     {
         // `m[:name]`, the common form: look the name up in place rather
@@ -715,9 +691,7 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             .map(|r| r.get_group_members(&sym))
             .unwrap_or_default();
         if members.is_empty() {
-            return Err(MonorubyErr::indexerr(format!(
-                "undefined group name reference: {sym}"
-            )));
+            return Err(undefined_group_name(&sym));
         }
         Ok(last_matched_member(&m, members))
     } else {
@@ -851,10 +825,10 @@ fn match_end(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn named_captures(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
-    let names = m
-        .regexp()
-        .and_then(|r| r.capture_names().ok())
-        .unwrap_or_default();
+    let Some(re) = m.regexp() else {
+        return Ok(Value::hash(RubyMap::default()));
+    };
+    let names = re.capture_names();
     // `named_captures(symbolize_names: true)` -> Symbol keys.
     let symbolize = lfp
         .try_arg(0)
@@ -863,18 +837,13 @@ fn named_captures(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         .map(|v| v.as_bool())
         .unwrap_or(false);
     let mut map = RubyMap::default();
-    let mut done: Vec<&str> = Vec::with_capacity(names.len());
-    for name in &names {
-        if done.iter().any(|s| *s == name.as_str()) {
-            continue;
-        }
-        done.push(name);
+    for name in re.unique_capture_names() {
         let key = if symbolize {
-            Value::symbol_from_str(name)
+            re.name_symbol(name)
         } else {
-            Value::string_from_str(name)
+            re.name_string(name)
         };
-        let val = last_matched_named(&m, &names, name)
+        let val = last_matched_named(&m, names, name)
             .and_then(|i| m.at_value(i))
             .unwrap_or_default();
         map.insert(key, val, vm, globals)?;
@@ -1177,5 +1146,44 @@ mod tests {
         run_test(r##"/(?<t>\w+)/ =~ "TEST"; l = -> { Regexp.last_match(:t) }; l.call"##);
         run_test(r##"def m; /(\w)(\w)/ =~ "xy"; -> { $~[0] }.call; end; m"##);
         run_test(r##"/(\w+)/ =~ "abc"; [1].each { }; $1"##);
+    }
+
+    /// A group name is looked up and handed out by its bytes, in the
+    /// pattern's encoding (#1902): a Windows-31J `(?<n\x87]>…)` is
+    /// reachable by its symbol and string, and every listing of the
+    /// names gives it back in Windows-31J. ASCII names of a US-ASCII
+    /// pattern are US-ASCII; `Regexp#named_captures` keys are BINARY.
+    #[test]
+    fn match_data_non_utf8_group_names() {
+        run_test_once(
+            r##"
+            src = <<~'R'.gsub("NAME", "n\x87]").force_encoding("Windows-31J")
+              m = 'abbc'.match(/(?<NAME>b+)(?<x>c)/)
+              r = [$~[:NAME], $~.names, Regexp.last_match(:NAME), m["NAME"], m.begin(:NAME), m.byteoffset("NAME"),
+                   m.values_at(:NAME), m.named_captures, m.named_captures(symbolize_names: true),
+                   m.deconstruct_keys(nil), m.deconstruct_keys([:NAME]), m.regexp.names, m.regexp.named_captures,
+                   'abbc'[/(?<NAME>b+)/, :NAME], 'abbc'[/(?<NAME>b+)/, "NAME"], 'abbc'.sub(/(?<NAME>b+)/, '<\k<NAME>>'),
+                   (m[:zz] rescue $!.class)]
+              r << (/(?<NAME>b+)/ =~ 'abbc' && NAME)
+              case m
+              in {NAME: String => v} then r << v
+              end
+              r
+            R
+            show = ->(v) { v.is_a?(Array) || v.is_a?(Hash) ? v.to_a.flatten.map(&show) : (v.respond_to?(:encoding) ? [v.class, v.encoding.to_s, v.to_s.bytes] : v) }
+            show.(eval(src))
+            "##,
+        );
+        run_test_once(
+            r##"
+            m = /(?<a>x)(?<a>y)?(?<b>z)/.match("xz")
+            u = Regexp.new("(?<ab>x)".encode("UTF-16LE"))
+            r = [m.names, m.named_captures, m.regexp.names, m.regexp.named_captures, m[:a],
+                 /(?<a>x)/n.names, Regexp.new("(?<a>x)".encode("EUC-JP")).names, u.names, u.named_captures,
+                 "xyz".sub(/(?<a>y)/, '[\k<a>]')]
+            show = ->(v) { v.is_a?(Array) || v.is_a?(Hash) ? v.to_a.flatten.map(&show) : (v.respond_to?(:encoding) ? [v.class, v.encoding.to_s, v.to_s.bytes] : v) }
+            show.(r)
+            "##,
+        );
     }
 }

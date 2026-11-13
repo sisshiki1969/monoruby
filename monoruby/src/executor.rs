@@ -2555,7 +2555,7 @@ impl Executor {
                 let path = err
                     .trace
                     .first()
-                    .and_then(|(source_loc, _)| source_loc.as_ref())
+                    .and_then(|(source_loc, _, _)| source_loc.as_ref())
                     .map(|(_, source)| Value::string(source.file_name().to_string()));
                 let v = Value::new_exception(err);
                 if let Some(path) = path {
@@ -2666,10 +2666,16 @@ impl Executor {
         self.set_error(MonorubyErr::divide_by_zero());
     }
 
-    pub(crate) fn push_error_location(&mut self, loc: Loc, sourceinfo: SourceInfoRef, fid: FuncId) {
+    pub(crate) fn push_error_location(
+        &mut self,
+        loc: Loc,
+        sourceinfo: SourceInfoRef,
+        fid: FuncId,
+        frame_self: Value,
+    ) {
         match &mut self.exception {
             Some(err) => {
-                err.push_trace(loc, sourceinfo, fid);
+                err.push_trace_with_self(loc, sourceinfo, fid, frame_self);
             }
             None => unreachable!(),
         };
@@ -2741,7 +2747,12 @@ impl Executor {
                 }
                 .unwrap_or(info.loc);
                 if let Some(err) = &mut self.exception {
-                    err.push_trace(loc, info.sourceinfo.clone(), func_id);
+                    err.push_trace_with_self(
+                        loc,
+                        info.sourceinfo.clone(),
+                        func_id,
+                        cfp.lfp().self_val(),
+                    );
                 }
             }
             match cfp.prev() {
