@@ -2453,10 +2453,23 @@ pub(crate) mod jit_stats {
     pub static FX_WALK_TOP_NS: AtomicUsize = AtomicUsize::new(0);
     /// How many walks are running right now (to tell the outermost).
     pub static FX_DEPTH: AtomicUsize = AtomicUsize::new(0);
-    /// Walks whose entry state equals the previous walk's (`==`), with no
-    /// inner head's record and no outer widening moved in between: the
-    /// walk can only repeat the previous one (step D's target).
+    /// Walks not run because their entry state equals the previous walk's
+    /// (`==`), with no inner head's info and no outer widening moved in
+    /// between: the walk could only repeat the previous one (step D).
+    /// They are not counted in `FX_WALKS`.
     pub static FX_ENTRY_REPEATS: AtomicUsize = AtomicUsize::new(0);
+    /// §5.4 recording stage (`record_pre_fixpoint_floats`): loop-entry
+    /// merges compared, those where the two float sets agree, and the
+    /// slots in both, adopted from the fixpoint only (of them, touched by
+    /// a block literal, and not live at the head), and chosen before the
+    /// fixpoint only.
+    pub static FX54_HEADS: AtomicUsize = AtomicUsize::new(0);
+    pub static FX54_SAME: AtomicUsize = AtomicUsize::new(0);
+    pub static FX54_BOTH: AtomicUsize = AtomicUsize::new(0);
+    pub static FX54_FIX_ONLY: AtomicUsize = AtomicUsize::new(0);
+    pub static FX54_FIX_ONLY_BLOCK: AtomicUsize = AtomicUsize::new(0);
+    pub static FX54_FIX_ONLY_DEAD: AtomicUsize = AtomicUsize::new(0);
+    pub static FX54_PRE_ONLY: AtomicUsize = AtomicUsize::new(0);
     /// Fixpoints `analyse_loop_head` ran again without the `Array` seed.
     pub static FX_SEED_RETRIES: AtomicUsize = AtomicUsize::new(0);
     /// A head's first recorded back edge.
@@ -2511,12 +2524,26 @@ pub(crate) mod jit_stats {
             std::time::Duration::from_nanos(g(&FX_WALK_TOP_NS) as u64)
         );
         eprintln!(
-            "    entry repeats previous walk:     {}",
+            "    skipped (entry repeats):         {}",
             g(&FX_ENTRY_REPEATS)
         );
         eprintln!(
             "    Array seed retries:              {}",
             g(&FX_SEED_RETRIES)
+        );
+        eprintln!("  loop-head floats, adopted vs chosen before the fixpoint (§5.4):");
+        eprintln!(
+            "    heads compared / same set:       {}/{}",
+            g(&FX54_HEADS),
+            g(&FX54_SAME)
+        );
+        eprintln!(
+            "    slots both / fixpoint only (block, dead) / pre only: {}/{} ({}, {})/{}",
+            g(&FX54_BOTH),
+            g(&FX54_FIX_ONLY),
+            g(&FX54_FIX_ONLY_BLOCK),
+            g(&FX54_FIX_ONLY_DEAD),
+            g(&FX54_PRE_ONLY)
         );
         eprintln!(
             "  back-edge records first/rise/descent/incomparable: {}/{}/{}/{}",

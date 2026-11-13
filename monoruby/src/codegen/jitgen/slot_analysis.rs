@@ -443,6 +443,9 @@ pub(crate) struct UnitLiveness {
     /// A's `block_touched`, or every slot when a block is opaque or holds a
     /// call this compilation cannot resolve to a non-capturing callee.
     touched: SlotSet,
+    /// The latter case: `touched` is every slot.
+    #[cfg(feature = "jit-log")]
+    blocks_opaque: bool,
     /// Per basic block: live at its exit, the capture reads counted.
     live_out: SlotSets,
 }
@@ -490,6 +493,8 @@ impl<'a> JitContext<'a> {
             let ir = TraceIr::from_pc(self.store[*bid].get_pc(*pos), self.store);
             !self.call_resolved_non_capturing(&ir)
         });
+        #[cfg(feature = "jit-log")]
+        let blocks_opaque = a.block_opaque || unresolved;
         let touched = if a.block_opaque || unresolved {
             SlotSet::full(n)
         } else {
@@ -533,6 +538,8 @@ impl<'a> JitContext<'a> {
         UnitLiveness {
             captures,
             touched,
+            #[cfg(feature = "jit-log")]
+            blocks_opaque,
             live_out,
         }
     }
@@ -589,6 +596,16 @@ impl<'a> JitContext<'a> {
     ///
     pub(in crate::codegen::jitgen) fn table_touched_by_blocks(&self, slot: SlotId) -> bool {
         self.unit_liveness(self.iseq_id()).touched.contains(slot)
+    }
+
+    ///
+    /// Whether a block literal of the current frame is opaque to this
+    /// compilation: it has a handler or a lambda literal, or holds a call
+    /// not resolved to a callee that cannot capture its caller.
+    ///
+    #[cfg(feature = "jit-log")]
+    pub(in crate::codegen::jitgen) fn table_blocks_opaque(&self) -> bool {
+        self.unit_liveness(self.iseq_id()).blocks_opaque
     }
 }
 
