@@ -443,3 +443,138 @@ impl IsUsed {
         };
     }
 }
+
+///
+/// The merge at the granularity the back-edge fixpoint's convergence test
+/// sees it (`doc/fixpoint_engine_plan.md` step E): the type lattice has its
+/// laws (`guarded_join_lattice_laws`), and these are the same laws one
+/// level up, over `LinkMode` — the fused join with its placement, judged
+/// by `LinkMode::equiv`, which ignores placement.
+///
+#[cfg(test)]
+mod link_mode_lattice {
+    use super::*;
+
+    /// The population: constants, `S` of every `Guarded` shape, `F` and
+    /// `Sf` in two registers (a merge of different registers takes other
+    /// arms than one of the same register), and the sentinels.
+    fn population() -> Vec<LinkMode> {
+        let foo = ClassId::new(100);
+        let mut modes = vec![
+            LinkMode::C(Value::i32(1)),
+            LinkMode::C(Value::float(1.0)),
+            LinkMode::C(Value::nil()),
+            LinkMode::S(Guarded::Value),
+            LinkMode::S(Guarded::Fixnum),
+            LinkMode::S(Guarded::Float),
+            LinkMode::S(Guarded::Class(NIL_CLASS)),
+            LinkMode::S(Guarded::Class(foo)),
+            LinkMode::S(Guarded::NilOr(NonNil::Fixnum)),
+            LinkMode::S(Guarded::NilOr(NonNil::Float)),
+            LinkMode::S(Guarded::NilOr(NonNil::Class(foo))),
+        ];
+        for fpr in [FPReg(0), FPReg(1)] {
+            modes.push(LinkMode::F(fpr));
+            modes.push(LinkMode::Sf(fpr, SfGuarded::Fixnum));
+            modes.push(LinkMode::Sf(fpr, SfGuarded::Float));
+            modes.push(LinkMode::Sf(fpr, SfGuarded::FixnumOrFloat));
+        }
+        modes
+    }
+
+    fn sentinels() -> [LinkMode; 3] {
+        [LinkMode::None, LinkMode::MaybeNone, LinkMode::V]
+    }
+
+    /// A frame with `self` in slot 0 and *mode* in slot 1.
+    fn frame(mode: LinkMode) -> AbstractFrame {
+        AbstractFrame::for_test(&[LinkMode::S(Guarded::Value), mode])
+    }
+
+    /// `a ⊔ b` as the innermost frame of a merge does it, or `None` when
+    /// the merge has no arm for the pair (it panics).
+    fn join(a: LinkMode, b: LinkMode) -> Option<LinkMode> {
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let res = std::panic::catch_unwind(|| {
+            let mut lhs = frame(a);
+            lhs.join_with(&frame(b), true);
+            lhs.mode(SlotId(1))
+        });
+        std::panic::set_hook(hook);
+        res.ok()
+    }
+
+    fn equiv(a: LinkMode, b: LinkMode) -> bool {
+        frame(a).equiv(&frame(b))
+    }
+
+    /// Every pair the merge has no arm for. Each one pairs `None` (an
+    /// optional parameter's slot before it is known whether a value was
+    /// passed) with a slot that has a type: no merge meets them, because
+    /// both sides of a merge come from the same parameter binding — a
+    /// slot is `None` on every path or on none, and a path that may or
+    /// may not have bound it is `MaybeNone` (which meets anything).
+    #[test]
+    fn unjoinable_pairs() {
+        let all: Vec<LinkMode> = population().into_iter().chain(sentinels()).collect();
+        let mut panics = vec![];
+        for &a in &all {
+            for &b in &all {
+                if join(a, b).is_none() {
+                    panics.push((a, b));
+                }
+            }
+        }
+        for &(a, b) in &panics {
+            assert!(
+                (a == LinkMode::None) != (b == LinkMode::None)
+                    && !matches!(a, LinkMode::MaybeNone | LinkMode::V)
+                    && !matches!(b, LinkMode::MaybeNone | LinkMode::V),
+                "unexpected unjoinable pair {a:?} / {b:?}"
+            );
+        }
+        let typed = population().len();
+        assert_eq!(panics.len(), 2 * typed, "{panics:?}");
+    }
+
+    /// The laws, over every pair (and triple) the merge has an arm for.
+    #[test]
+    fn join_laws_up_to_equiv() {
+        let all: Vec<LinkMode> = population().into_iter().chain(sentinels()).collect();
+        let j = |a, b| join(a, b);
+        for &a in &all {
+            // 1. idempotent
+            if let Some(aa) = j(a, a) {
+                assert!(equiv(aa, a), "idempotence: {a:?} -> {aa:?}");
+            }
+            for &b in &all {
+                let (Some(ab), Some(ba)) = (j(a, b), j(b, a)) else {
+                    continue;
+                };
+                // 2. commutative (placement may differ)
+                assert!(equiv(ab, ba), "commutativity: {a:?} {b:?}: {ab:?} / {ba:?}");
+                // 3. an upper bound of both
+                for x in [a, b] {
+                    if let Some(abx) = j(ab, x) {
+                        assert!(
+                            equiv(abx, ab),
+                            "upper bound: {a:?} {b:?} / {x:?}: {ab:?} -> {abx:?}"
+                        );
+                    }
+                }
+                // 4. equiv is a congruence for the join
+                if equiv(a, b) {
+                    for &c in &all {
+                        if let (Some(ac), Some(bc)) = (j(a, c), j(b, c)) {
+                            assert!(
+                                equiv(ac, bc),
+                                "congruence: {a:?} ~ {b:?}, with {c:?}: {ac:?} / {bc:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

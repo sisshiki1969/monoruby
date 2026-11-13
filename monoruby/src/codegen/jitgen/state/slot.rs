@@ -323,6 +323,24 @@ impl std::fmt::Debug for SlotState {
 }
 
 impl SlotState {
+    /// A slot state over *modes* alone (slot 0 is `self`), for unit tests
+    /// of the merge that have no `JitContext` to build one from. The fpr
+    /// file is derived from the modes, so `F` / `Sf` may name any
+    /// register below `PHYS_FPR_POOL`.
+    #[cfg(test)]
+    pub(super) fn for_test(modes: &[LinkMode]) -> Self {
+        let mut state = SlotState {
+            slots: vec![Slot::default(); modes.len()],
+            fpr_alloc: FprAllocator::new(),
+            local_num: modes.len(),
+            ..Default::default()
+        };
+        for (i, mode) in modes.iter().enumerate() {
+            state.set_mode(SlotId(i as u16), *mode);
+        }
+        state
+    }
+
     fn new(cc: &JitContext, default: LinkMode) -> Self {
         let total_reg_num = cc.total_reg_num();
         let local_num = cc.local_num();

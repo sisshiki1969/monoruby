@@ -826,6 +826,20 @@ impl AbstractFrame {
         self.slot_state.equiv(&other.slot_state) && self.invariants == other.invariants
     }
 
+    /// A frame over *modes* alone, with default invariants
+    /// ([`SlotState::for_test`]).
+    #[cfg(test)]
+    pub(super) fn for_test(modes: &[LinkMode]) -> Self {
+        AbstractFrame {
+            pc: None,
+            slot_state: SlotState::for_test(modes),
+            next_sp: SlotId(modes.len() as u16),
+            invariants: Invariants::default(),
+            deferred_forward: None,
+            caller_kw: None,
+            lexical_outer: None,
+        }
+    }
 
     /// [`AbstractState::climb_direction`] for one frame: `self` at or
     /// below `other`.
