@@ -444,8 +444,9 @@ impl JitModule {
     /// if the frame is captured, jump to *label*.
     ///
     pub(in crate::codegen) fn branch_if_captured(&mut self, label: &DestLabel) {
+        let kind = LFP_META - META_KIND as i32 + crate::codegen::jitgen::fdisp();
         monoasm! { &mut self.jit,
-            testb [r14 - (LFP_META - META_KIND)], (0b1000_1000_u8 as i8);
+            testb [r14 - (kind)], (0b1000_1000_u8 as i8);
             jnz label;
         }
     }
@@ -515,6 +516,7 @@ impl JitModule {
     ///
     /// the local frame MUST BE on the stack.
     pub(in crate::codegen) fn set_lfp(&mut self) {
+        debug_assert_eq!(0, crate::codegen::jitgen::fdisp(), "a frameless body makes no call");
         monoasm!( &mut self.jit,
             // set lfp
             lea  r14, [rsp - (RSP_LOCAL_FRAME)];
@@ -528,6 +530,7 @@ impl JitModule {
     /// - rdi, rsi
     ///
     pub(in crate::codegen) fn push_frame(&mut self) {
+        debug_assert_eq!(0, crate::codegen::jitgen::fdisp(), "a frameless body makes no call");
         monoasm!( &mut self.jit,
             // push cfp
             movq rdi, [rbx + (EXECUTOR_CFP)];
@@ -538,6 +541,7 @@ impl JitModule {
     }
 
     pub(in crate::codegen) fn restore_lfp(&mut self) {
+        debug_assert_eq!(0, crate::codegen::jitgen::fdisp(), "a frameless body makes no call");
         monoasm!( &mut self.jit,
             // restore lfp
             movq r14, [rbp - (BP_CFP + CFP_LFP)];
@@ -546,6 +550,7 @@ impl JitModule {
 
     /// Pop control frame
     pub(in crate::codegen) fn pop_frame(&mut self) {
+        debug_assert_eq!(0, crate::codegen::jitgen::fdisp(), "a frameless body makes no call");
         monoasm!( &mut self.jit,
             // pop cfp
             lea  r14, [rbp - (BP_CFP)];
@@ -633,6 +638,7 @@ impl JitModule {
     /// - r15: &FuncData
     ///
     pub(in crate::codegen) fn call_funcdata(&mut self) -> CodePtr {
+        debug_assert_eq!(0, crate::codegen::jitgen::fdisp(), "a frameless body makes no call");
         self.push_frame();
         self.set_lfp();
         monoasm! { &mut self.jit,
@@ -660,6 +666,7 @@ impl JitModule {
     /// - caller save registers
     ///
     pub(in crate::codegen) fn call_invoker(&mut self) {
+        debug_assert_eq!(0, crate::codegen::jitgen::fdisp(), "a frameless body makes no call");
         self.push_frame();
         self.set_lfp();
         monoasm! { &mut self.jit,
@@ -686,6 +693,7 @@ impl JitModule {
     /// - caller save registers
     ///
     pub(in crate::codegen) fn call_invoker_with_binding(&mut self) {
+        debug_assert_eq!(0, crate::codegen::jitgen::fdisp(), "a frameless body makes no call");
         self.push_frame();
         monoasm! { &mut self.jit,
             // set lfp

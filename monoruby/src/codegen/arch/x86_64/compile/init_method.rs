@@ -22,6 +22,7 @@ impl Codegen {
         let FnInitInfo {
             reg_num, arg_num, ..
         } = *fn_info;
+        debug_assert_eq!(0, fdisp(), "a frameless body has no prologue");
 
         monoasm!( &mut self.jit,
             pushq rbp;

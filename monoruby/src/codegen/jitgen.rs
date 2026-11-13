@@ -168,6 +168,35 @@ struct BranchEntry {
     mode: BranchMode,
 }
 
+thread_local! {
+    /// x86-64: how far below the native frame pointer and the LFP the frame
+    /// whose code is being emitted lives. Zero, except while the body of a
+    /// frameless callee entered without moving rbp / r14 is emitted
+    /// (`Codegen::gen_inline_call`): every frame-relative access of that
+    /// body adds it, as the moved registers would have.
+    static FRAME_DISP: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+}
+
+/// The current frame displacement (`FRAME_DISP`).
+pub(crate) fn fdisp() -> i32 {
+    FRAME_DISP.with(|c| c.get())
+}
+
+/// Set the frame displacement and answer the previous one.
+pub(crate) fn set_fdisp(disp: i32) -> i32 {
+    FRAME_DISP.with(|c| c.replace(disp))
+}
+
+/// `conv` for the frame being emitted: `[r14 - jconv(slot)]`.
+pub(crate) fn jconv(reg: SlotId) -> i32 {
+    conv(reg) + fdisp()
+}
+
+/// `rbp_local` for the frame being emitted: `[rbp - jrbp_local(slot)]`.
+pub(crate) fn jrbp_local(reg: SlotId) -> i32 {
+    rbp_local(reg) + fdisp()
+}
+
 pub(crate) fn conv(reg: SlotId) -> i32 {
     reg.0 as i32 * 8 + LFP_SELF
 }
@@ -1050,6 +1079,8 @@ impl Codegen {
                 continue;
             }
             let entry = frame.resolve_label(&mut self.jit, specialized_entry);
+            // A function of its own: its frame is where rbp / r14 point.
+            let disp = set_fdisp(0);
             self.gen_machine_code(
                 specialized_info,
                 store,
@@ -1058,6 +1089,7 @@ impl Codegen {
                 class_version.clone(),
                 root,
             );
+            set_fdisp(disp);
         }
 
         self.jit.bind_label(entry_label);
@@ -1293,26 +1325,30 @@ impl Codegen {
     /// (`using_fpr`); from here:
     ///
     /// ```text
-    ///     <frame pointer, LFP -= delta>
+    ///     [aarch64: <frame pointer, LFP -= delta>]
     ///     <callee body>            Ret -> done, every side exit -> redo
     /// done:
-    ///     <frame pointer, LFP += delta>; <restore fprs>
+    ///     [aarch64: <frame pointer, LFP += delta>]; <restore fprs>
     /// redo:  (cold: the x86 cold page, or behind a `b cont` on aarch64)
-    ///     <frame pointer, LFP += delta>; <restore fprs>; jmp deopt
+    ///     [aarch64: <frame pointer, LFP += delta>]; <restore fprs>; jmp deopt
     /// cont:
     /// ```
     ///
-    /// With the frame pointer moved, every frame-pointer-relative access the
-    /// body makes — its slots on x86, its spill slots on both arches — and
-    /// every LFP-relative one lands in the window, so the body is emitted
-    /// exactly as it would be for a frame of its own, prologue and `ret`
-    /// aside (`LInst::InlineRet`, the `Init` lowering). Nothing in the
-    /// body reads the native frame link above the frame pointer: that is
-    /// what `frameless_call::eligible` and the frameless violations keep
-    /// out of it. A side exit after a side effect does not come back this
-    /// way: it makes the window a frame and leaves for the interpreter
-    /// (`Self::gen_frameless_materialize`), with *replay* — this frame's
-    /// state at the call — to convert this frame by.
+    /// The body addresses the window as a frame of its own, prologue and
+    /// `ret` aside (`LInst::InlineRet`, the `Init` lowering). aarch64
+    /// moves the frame pointer and the LFP down into the window for it.
+    /// x86-64 leaves them alone and emits the body with the frame
+    /// displacement (`fdisp`) grown by *delta* instead: every
+    /// frame-pointer-relative access (slots, spill slots, an outer frame's
+    /// locals) and every LFP-relative one (the header, `self`, a helper's
+    /// `lfp` argument) adds it, so the entry and the exit cost nothing.
+    /// Nothing in the body reads the native frame link above the frame
+    /// pointer: that is what `frameless_call::eligible` and the frameless
+    /// violations keep out of it. A side exit after a side effect does not
+    /// come back this way: it makes the window a frame and leaves for the
+    /// interpreter (`Self::gen_frameless_materialize`, which does move the
+    /// registers to the window first), with *replay* — this frame's state
+    /// at the call — to convert this frame by.
     ///
     fn gen_inline_call(
         &mut self,
@@ -1345,7 +1381,20 @@ impl Codegen {
                 store.func_description(store[info.iseq_id].func_id()),
             );
         }
-        self.inline_frame_shift(delta);
+        // x86-64 leaves rbp / r14 where they are and emits the body with
+        // its frame displacement grown by `delta` instead (`fdisp`): every
+        // frame-relative access of the body adds it. aarch64 moves them.
+        let outer_disp = fdisp();
+        let shift = if cfg!(target_arch = "x86_64") {
+            set_fdisp(outer_disp + delta);
+            0
+        } else {
+            set_fdisp(0);
+            outer_disp + delta
+        };
+        if shift != 0 {
+            self.inline_frame_shift(shift);
+        }
         self.inline_ctx.push(InlineCtx {
             done: done.clone(),
             redo: redo.clone(),
@@ -1358,16 +1407,30 @@ impl Codegen {
         let entry = self.jit.label();
         self.gen_machine_code(info, store, entry, level, class_version, root);
         self.inline_ctx.pop();
+        set_fdisp(outer_disp);
         self.jit.bind_label(done);
-        self.inline_frame_unshift(delta);
+        if shift != 0 {
+            self.inline_frame_unshift(shift);
+        }
         self.inline_fpr_restore(using_fpr);
-        self.inline_redo_trampoline(redo, delta, using_fpr, &deopt, &cont);
+        self.inline_redo_trampoline(redo, shift, using_fpr, &deopt, &cont);
         self.jit.bind_label(cont);
     }
 }
 
 #[cfg(target_arch = "x86_64")]
 impl Codegen {
+    /// `reg <- ` the LFP of the frame being emitted: r14, less the frame
+    /// displacement inside a frameless body that left r14 alone (`fdisp`).
+    pub(in crate::codegen) fn lfp_into(&mut self, reg: GP) {
+        let disp = fdisp();
+        if disp == 0 {
+            monoasm! { &mut self.jit, movq R(reg as _), r14; }
+        } else {
+            monoasm! { &mut self.jit, lea R(reg as _), [r14 - (disp)]; }
+        }
+    }
+
     /// Move the native frame pointer and the LFP down into an inline
     /// callee's window.
     fn inline_frame_shift(&mut self, delta: i32) {
@@ -1388,13 +1451,14 @@ impl Codegen {
         self.fpr_restore(using_fpr);
     }
 
-    /// The cold way out of an inline body: undo the frame shift, bring the
-    /// caller's fprs back and take the caller's deopt. On the cold page, so
+    /// The cold way out of an inline body: undo the frame shift (if the
+    /// `InlineCall` made one), bring the caller's fprs back and take the
+    /// caller's deopt. On the cold page, so
     /// the hot path falls straight through to *cont*.
     fn inline_redo_trampoline(
         &mut self,
         redo: DestLabel,
-        delta: i32,
+        shift: i32,
         using_fpr: UsingFpr,
         deopt: &DestLabel,
         _cont: &DestLabel,
@@ -1402,7 +1466,9 @@ impl Codegen {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(redo);
-        self.inline_frame_unshift(delta);
+        if shift != 0 {
+            self.inline_frame_unshift(shift);
+        }
         self.inline_fpr_restore(using_fpr);
         monoasm! { &mut self.jit,
             jmp deopt;
@@ -1437,7 +1503,7 @@ macro_rules! load_store {
                 let reg = reg.into();
                 if let Some(reg) = reg {
                     monoasm!{ &mut self.jit,
-                        movq [rbp - (rbp_local(reg))], $reg;
+                        movq [rbp - (jrbp_local(reg))], $reg;
                     }
                 }
             }
@@ -1448,7 +1514,7 @@ macro_rules! load_store {
             #[allow(dead_code)]
             pub(crate) fn [<load_ $reg>](&mut self, reg: SlotId) {
                 monoasm!( &mut self.jit,
-                    movq $reg, [rbp - (rbp_local(reg))];
+                    movq $reg, [rbp - (jrbp_local(reg))];
                 );
             }
         }
@@ -1567,7 +1633,7 @@ impl JitModule {
         );
         for reg in v {
             monoasm! { &mut self.jit,
-                movq [r14 - (conv(*reg))], rax;
+                movq [r14 - (jconv(*reg))], rax;
             }
         }
     }
@@ -1587,7 +1653,7 @@ impl JitModule {
             );
         } else {
             let n = fpr.0 - pool;
-            let off = (base as i32) - 24 + 8 * (n as i32);
+            let off = (base as i32) - 24 + 8 * (n as i32) + fdisp();
             monoasm!( &mut self.jit,
                 movq xmm0, [rbp - (off)];
             );
@@ -1608,7 +1674,7 @@ impl JitModule {
             );
         } else {
             let n = fpr.0 - pool;
-            let off = (base as i32) - 24 + 8 * (n as i32);
+            let off = (base as i32) - 24 + 8 * (n as i32) + fdisp();
             monoasm!( &mut self.jit,
                 movq xmm1, [rbp - (off)];
             );
@@ -1628,7 +1694,7 @@ impl JitModule {
             );
         } else {
             let n = fpr.0 - pool;
-            let off = (base as i32) - 24 + 8 * (n as i32);
+            let off = (base as i32) - 24 + 8 * (n as i32) + fdisp();
             monoasm!( &mut self.jit,
                 movq [rbp - (off)], xmm0;
             );
@@ -1645,12 +1711,12 @@ impl JitModule {
         let i = v.id() as i64;
         if i32::try_from(i).is_ok() {
             monoasm! { &mut self.jit,
-                movq [rbp - (rbp_local(reg))], (v.id());
+                movq [rbp - (jrbp_local(reg))], (v.id());
             }
         } else {
             monoasm! { self,
                 movq rax, (v.id());
-                movq [rbp - (rbp_local(reg))], rax;
+                movq [rbp - (jrbp_local(reg))], rax;
             }
         }
     }
@@ -1665,12 +1731,12 @@ impl JitModule {
         let i = v.id() as i64;
         if i32::try_from(i).is_ok() {
             monoasm! { &mut self.jit,
-                movq [r14 - (conv(reg))], (v.id());
+                movq [r14 - (jconv(reg))], (v.id());
             }
         } else {
             monoasm! { &mut self.jit,
                 movq rax, (v.id());
-                movq [r14 - (conv(reg))], rax;
+                movq [r14 - (jconv(reg))], rax;
             }
         }
     }
@@ -1720,7 +1786,7 @@ impl JitModule {
         // scratch.
         for (reg, slot) in &wb.gp {
             monoasm! { &mut *self,
-                movq [rbp - (rbp_local(*slot))], R(*reg as _);
+                movq [rbp - (jrbp_local(*slot))], R(*reg as _);
             }
         }
         for (fpr, v) in &wb.fpr {
@@ -1750,7 +1816,7 @@ impl JitModule {
         // scratch.
         for (reg, slot) in &wb.gp {
             monoasm! { &mut *self,
-                movq [r14 - (conv(*slot))], R(*reg as _);
+                movq [r14 - (jconv(*slot))], R(*reg as _);
             }
         }
         for (fpr, v) in &wb.fpr {
@@ -1783,7 +1849,7 @@ impl JitModule {
         match src {
             VirtualSrc::Slots { src, len, .. } => {
                 monoasm! { &mut self.jit,
-                    lea  rdi, [r14 - (conv(src))];
+                    lea  rdi, [r14 - (jconv(src))];
                     movq rsi, (len as usize);
                     movq rax, (runtime::create_array);
                     call rax;
@@ -1827,7 +1893,7 @@ impl JitModule {
             }
         }
         monoasm! { &mut self.jit,
-            movq [r14 - (conv(dst))], rax;
+            movq [r14 - (jconv(dst))], rax;
         }
     }
 
@@ -1841,7 +1907,7 @@ impl JitModule {
             }
             RangeEnd::Slot(slot) => {
                 monoasm! { &mut self.jit,
-                    movq R(reg as _), [r14 - (conv(slot))];
+                    movq R(reg as _), [r14 - (jconv(slot))];
                 }
             }
         }
@@ -1861,13 +1927,14 @@ impl JitModule {
         }
         self.const_i32(0);
         self.const_i32(0);
+        debug_assert_eq!(0, fdisp(), "a frameless body has no saved fp");
         monoasm! { self,
             movq rsi, [rbp];
             subq rsi, (RBP_LOCAL_FRAME);
             lea  rdi, [rip + data];
             movq rax, (runtime::correct_rest_kw);
             call rax;
-            movq [r14 - (conv(dst))], rax;
+            movq [r14 - (jconv(dst))], rax;
         }
     }
 
@@ -2087,7 +2154,7 @@ impl JitModule {
         match base {
             SlotBase::Own => {
                 monoasm! { &mut self.jit,
-                    lea  R(reg as _), [r14 - (conv(slot))];
+                    lea  R(reg as _), [r14 - (jconv(slot))];
                 }
             }
             // This frame established its own `rbp` (`init_func`'s
@@ -2095,6 +2162,7 @@ impl JitModule {
             // value saved at `[rbp]`, and the caller's slot is at
             // `[caller_rbp - rbp_local(slot)]`.
             SlotBase::SavedFp => {
+                debug_assert_eq!(0, fdisp(), "a frameless body has no saved fp");
                 monoasm! { &mut self.jit,
                     movq R(reg as _), [rbp];
                     lea  R(reg as _), [R(reg as _) - (rbp_local(slot))];
@@ -2104,7 +2172,7 @@ impl JitModule {
             // `delta`, so the caller's slot is `delta` above.
             SlotBase::Window(delta) => {
                 monoasm! { &mut self.jit,
-                    lea  R(reg as _), [r14 + (delta - conv(slot))];
+                    lea  R(reg as _), [r14 + (delta - conv(slot) - fdisp())];
                 }
             }
         }
@@ -2358,7 +2426,8 @@ impl Codegen {
     /// (`JitContext::inline_window_delta`); what it lacks is written here:
     ///
     /// 1. the callee's write-back, like any deopt's (the frame pointer and
-    ///    the LFP are still the callee's);
+    ///    the LFP are the callee's: x86-64 moves them into its window
+    ///    first, as the body addressed it through the frame displacement);
     /// 2. for every inline level, innermost first: the LFP header (outer
     ///    `0` — or, for a block run by a frameless `yield`, the home LFP
     ///    the yield site already stored —, the callee's meta, svar `0`,
@@ -2399,6 +2468,13 @@ impl Codegen {
         assert_eq!(0, self.jit.get_page());
         self.jit.select_page(1);
         self.jit.bind_label(entry);
+        // From here on the frames are real ones: move rbp / r14 to the
+        // callee's window if the body left them where they were
+        // (`gen_inline_call`), and address everything from there.
+        let disp = set_fdisp(0);
+        if disp != 0 {
+            self.inline_frame_shift(disp);
+        }
         self.gen_write_back_for_deopt(wb, base);
         let cont_stub = self.jit.get_label_address(&self.chain_cont_stub).as_ptr() as u64;
         let levels: Vec<(i32, UsingFpr, ChainReplay, u64, bool)> = self
@@ -2499,6 +2575,7 @@ impl Codegen {
             );
         }
         self.jit.select_page(0);
+        set_fdisp(disp);
     }
 
     ///

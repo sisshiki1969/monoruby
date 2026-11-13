@@ -17,11 +17,14 @@
 //! arguments and, when the compiled body reads it
 //! (`AsmIr::reads_frame_header`), the header into the window as plain slot
 //! stores of its own (`AbstractState::fill_window`), then
-//! moves the native frame pointer and the LFP down into it and runs the
-//! callee's body in place (`AsmInst::InlineCall`,
-//! `Codegen::gen_inline_call`). With both pointers shifted, the body is
-//! emitted exactly as it would be for a frame of its own, prologue and
-//! `ret` aside, and everything that reads the LFP finds what it expects.
+//! runs the callee's body in place (`AsmInst::InlineCall`,
+//! `Codegen::gen_inline_call`), addressing the window as the frame: on
+//! aarch64 by moving the native frame pointer and the LFP down into it,
+//! on x86-64 by adding the window's displacement to every frame-relative
+//! access instead (`jitgen::fdisp`), which costs the entry nothing. The
+//! body is emitted exactly as it would be for a frame of its own,
+//! prologue and `ret` aside, and everything that reads the LFP finds
+//! what it expects.
 //! What is gone is everything that makes the frame *visible*: no control
 //! frame is linked, so nothing can ever find the callee suspended, report
 //! it in a backtrace, or rescue in it.
@@ -467,8 +470,8 @@ impl AbstractState {
     /// the callee's slot `s` is this frame's pseudo slot `s + delta / 8`,
     /// and the four header words sit just above its slot 0. They are
     /// written with the frame pointer still this frame's, as plain slot
-    /// stores; the `InlineCall` then moves the frame pointer and the LFP
-    /// down by *delta* for the body.
+    /// stores; the `InlineCall` then addresses the window, *delta* down,
+    /// as the body's frame.
     ///
     pub(super) fn send_frameless(
         &mut self,
@@ -645,8 +648,8 @@ impl AbstractState {
         }
         // `self`, through rdi and after everything that could call out:
         // the body enters with rdi still holding it (nothing between here
-        // and its first instruction touches rdi — the frame shift and the
-        // fpr saves use other registers), and its entry notes that
+        // and its first instruction touches rdi — the aarch64 frame shift
+        // and the fpr saves use other registers), and its entry notes that
         // (`note_rdi_holds` in the frameless `InitMethod`), so the first
         // use of `self` reads no slot.
         self.load(ir, callsite.recv, GP::Rdi);

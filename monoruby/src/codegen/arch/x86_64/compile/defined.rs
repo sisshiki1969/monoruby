@@ -13,7 +13,7 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::defined_yield);
             call rax;
-            lea  rdi, [rbp - (rbp_local(dst))];
+            lea  rdi, [rbp - (jrbp_local(dst))];
             movq [rdi], rax;
         };
         self.fpr_restore(using_fpr);
@@ -24,7 +24,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
-            lea  rdx, [rbp - (rbp_local(dst))];
+            lea  rdx, [rbp - (jrbp_local(dst))];
             movl rcx, (siteid.0);
             movq rax, (runtime::defined_const);
             call rax;
@@ -43,8 +43,8 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
-            lea  rdx, [rbp - (rbp_local(dst))];
-            movq rcx, [rbp - (rbp_local(recv))];
+            lea  rdx, [rbp - (jrbp_local(dst))];
+            movq rcx, [rbp - (jrbp_local(recv))];
             movl r8, (name.get());
             movq rax, (runtime::defined_method);
             call rax;
@@ -64,7 +64,7 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::defined_super);
             call rax;
-            lea  rdi, [rbp - (rbp_local(dst))];
+            lea  rdi, [rbp - (jrbp_local(dst))];
             movq [rdi], rax;
         };
         self.fpr_restore(using_fpr);
@@ -83,7 +83,7 @@ impl Codegen {
             movl rdx, (name.get());
             movq rax, (runtime::defined_gvar);
             call rax;
-            lea  rdi, [rbp - (rbp_local(dst))];
+            lea  rdi, [rbp - (jrbp_local(dst))];
             movq [rdi], rax;
         };
         self.fpr_restore(using_fpr);
@@ -94,7 +94,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
-            lea  rdx, [rbp - (rbp_local(dst))];
+            lea  rdx, [rbp - (jrbp_local(dst))];
             movl rcx, (name.get());
             movq rax, (runtime::defined_ivar);
             call rax;
@@ -110,7 +110,7 @@ impl Codegen {
             movl rdx, (name.get());
             movq rax, (runtime::defined_cvar);
             call rax;
-            lea  rdi, [rbp - (rbp_local(dst))];
+            lea  rdi, [rbp - (jrbp_local(dst))];
             movq [rdi], rax;
         };
         self.fpr_restore(using_fpr);

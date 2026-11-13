@@ -1282,3 +1282,59 @@ fn frameless_array_slice_assign_pure_helper() {
         "##,
     );
 }
+
+#[test]
+fn frameless_three_levels_materialize_with_spilled_floats() {
+    // x86-64 runs a frameless body without moving rbp / r14: every slot,
+    // spill slot and header word of the window is addressed from the
+    // enclosing frame's registers plus the window's displacement, three
+    // levels deep here. The innermost body spills floats, then a guard
+    // after its ivar store materializes all three windows; the exit moves
+    // the registers to the innermost window before it writes anything.
+    run_test(
+        r#"
+        class C
+          def initialize = (@n = 0; @m = 0; @l = 0)
+          attr_reader :n, :m, :l
+          def f3(x, a)
+            @l += 1
+            b = a * 1.5; c = b + 0.25; d = c * b; e = d - a; f = e * c
+            g = f + d; h = g * 0.5; k = h + e; q = k * f; r = q - g
+            r + h + (x + 1)
+          end
+          def f2(x, a) = (@m += 1; f3(x, a * 2.0) + 1.0)
+          def f1(x, a) = (@n += 1; f2(x + 1, a) * 2.0)
+        end
+        c = C.new
+        res = []
+        80.times do |i|
+          x = i == 70 ? 2**62 : i
+          res << c.f1(x, i * 0.125)
+        end
+        res << c.n << c.m << c.l
+        "#,
+    );
+}
+
+#[test]
+fn frameless_block_outer_locals_with_nested_window() {
+    // A frameless block reads and writes its home's locals through the
+    // enclosing frame's rbp, and runs a frameless call of its own; the
+    // `block_given?` in a frameless body reads the window's header.
+    run_test(
+        r#"
+        def bump(v) = v + 3
+        def given? = block_given?
+        def each3; yield 1; yield 2; yield 3; end
+        def run(k)
+          s = 0
+          t = 10
+          each3 { |i| s += bump(i) * k; t -= i }
+          [s, t, given?, given? { }]
+        end
+        res = []
+        40.times { |k| res << run(k) }
+        res
+        "#,
+    );
+}

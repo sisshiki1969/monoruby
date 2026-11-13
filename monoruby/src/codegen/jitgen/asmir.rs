@@ -2849,10 +2849,11 @@ pub(super) enum AsmInst {
     ///
     /// Run a frameless specialized callee (`AsmInfo::frameless`) inline:
     /// its body (`Codegen::inline_bodies[spec_id]`) is emitted right here,
-    /// with the native frame pointer and the LFP moved `delta` bytes down
-    /// into the window the caller reserved for it, so the callee's slots,
-    /// header and spills are addressed exactly as they would be in a frame
-    /// of its own. The caller's live fprs (`using_fpr`, saved before the
+    /// addressing the window the caller reserved for it `delta` bytes down
+    /// (through the native frame pointer and the LFP moved there on
+    /// aarch64, through a frame displacement on x86-64), so the callee's
+    /// slots, header and spills are addressed exactly as they would be in
+    /// a frame of its own. The caller's live fprs (`using_fpr`, saved before the
     /// window was filled) are restored on both ways out: the callee's
     /// `Ret` lands on the continuation with rax the return value (or xmm1
     /// the raw float). A side exit of the callee lands on `redo`, the
