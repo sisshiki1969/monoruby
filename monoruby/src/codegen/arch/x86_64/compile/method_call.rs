@@ -79,7 +79,7 @@ impl Codegen {
         self.push_block(callsite.block_fid, callsite.block_arg);
         // set self
         monoasm!( &mut self.jit,
-            pushq [rbp - (rbp_local(callsite.recv))];
+            pushq [rbp - (jrbp_local(callsite.recv))];
             addq  rsp, 64;
         );
 
@@ -172,10 +172,12 @@ impl Codegen {
         monoasm! { &mut self.jit,
         symbol:
             movq r8, rax;                   // outer: the symbol's frame
+        }
+        self.lfp_into(GP::Rcx);
+        monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (callid.get());
-            movq rcx, r14;
             movq rax, (runtime::yield_symbol_proc);
             call rax;
             jmp  done;
@@ -414,7 +416,7 @@ impl Codegen {
             );
         } else if let Some(block) = block_arg {
             monoasm!( &mut self.jit,
-                movq rax, [rbp - (rbp_local(block))];
+                movq rax, [rbp - (jrbp_local(block))];
                 movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], rax;
             );
         } else {
@@ -539,7 +541,7 @@ impl Codegen {
                 }
             } else {
                 monoasm! { &mut self.jit,
-                    movq rcx, [rbp - (rbp_local(args))];
+                    movq rcx, [rbp - (jrbp_local(args))];
                 }
                 self.object_send_inner(recv, cache, &missing, &error);
             }
@@ -565,7 +567,7 @@ impl Codegen {
         };
         self.set_block(block_fid, block_arg);
         monoasm!( &mut self.jit,
-            movq rax, [rbp - (rbp_local(recv))];
+            movq rax, [rbp - (jrbp_local(recv))];
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
         );
 
@@ -650,7 +652,7 @@ impl Codegen {
         self.fpr_save_with_cont(using_fpr, true);
         self.emit_cont_frame_pc(call_site_pc);
         monoasm! { &mut self.jit,
-            movq rdi, [rbp - (rbp_local(recv))];
+            movq rdi, [rbp - (jrbp_local(recv))];
             cmpl [rdi + (METHOD_MM_NAME_OFFSET as i32)], 0;
             jne  proxy;
             movl rdx, [rdi + (METHOD_FUNC_ID_OFFSET as i32)];
@@ -677,7 +679,7 @@ impl Codegen {
         };
         self.set_block(block_fid, block_arg);
         monoasm!( &mut self.jit,
-            movq rax, [rbp - (rbp_local(recv))];
+            movq rax, [rbp - (jrbp_local(recv))];
             movq rax, [rax + (METHOD_RECEIVER_OFFSET as i32)];
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
         );
@@ -734,7 +736,7 @@ impl Codegen {
         }
         if pos_num > 0 {
             monoasm! { &mut self.jit,
-                lea  rdi, [rbp - (rbp_local(args))];
+                lea  rdi, [rbp - (jrbp_local(args))];
                 lea  rdx, [rsp - (RSP_LOCAL_FRAME + LFP_ARG0)];
                 movq r8, (pos_num + 1);
             loop0:
@@ -791,7 +793,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdi, rbx;                        // vm
             movq rsi, r12;                        // globals
-            movq rdx, [rbp - (rbp_local(recv))];  // receiver
+            movq rdx, [rbp - (jrbp_local(recv))];  // receiver
             movq rcx, r14;                        // this frame's LFP
             movl r8, (callid.get());              // CallSiteId
             movq rax, (runtime::invoke_method_missing);
@@ -827,7 +829,7 @@ impl Codegen {
         let get_class = self.get_class.clone();
         let class_version = self.class_version_label();
         monoasm! { &mut self.jit,
-            movq rdi, [rbp - (rbp_local(recv))];
+            movq rdi, [rbp - (jrbp_local(recv))];
             call get_class;                       // rax <- receiver's ClassId
             movq r11, (cache);
             cmpl rax, [r11];
@@ -842,7 +844,7 @@ impl Codegen {
             movq rdi, rbx;                        // vm
             movq rsi, r12;                        // globals
             movl rdx, (callid.get());             // CallSiteId
-            movq rcx, [rbp - (rbp_local(recv))];  // receiver
+            movq rcx, [rbp - (jrbp_local(recv))];  // receiver
             movq r8, (cache);
             movq rax, (runtime::jit_generic_send_check);
             call rax;
@@ -894,7 +896,7 @@ impl Codegen {
             // container is allocated on first MatchData write.
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SVAR)], 0;
             movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], 0;
-            movq rax, [rbp - (rbp_local(recv))];
+            movq rax, [rbp - (jrbp_local(recv))];
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
         }
         if let Some((args, pos_num)) = simple_args {
@@ -914,7 +916,7 @@ impl Codegen {
             }
             for i in 0..pos_num {
                 monoasm! { &mut self.jit,
-                    movq rax, [rbp - (rbp_local(args + i))];
+                    movq rax, [rbp - (jrbp_local(args + i))];
                     movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + 8 * i as i32)], rax;
                 }
             }
@@ -973,7 +975,7 @@ impl Codegen {
         let exit = self.jit.label();
         let get_class = self.get_class.clone();
         monoasm! {&mut self.jit,
-            movq rdi, [rbp - (rbp_local(recv))];
+            movq rdi, [rbp - (jrbp_local(recv))];
             call get_class;
             // rcx: receiver's ClassId. Free here — arg0 is loaded into it
             // only after this check.
@@ -1011,7 +1013,7 @@ impl Codegen {
         let exit = self.jit.label();
         let heap = self.jit.label();
         monoasm! { &mut self.jit,
-            movq rcx, [rbp - (rbp_local(args))];
+            movq rcx, [rbp - (jrbp_local(args))];
             testq rcx, 0b111;
             jnz  exit;
             cmpb [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
@@ -1051,7 +1053,7 @@ impl Codegen {
             movzxw rax, [r15 + (FUNCDATA_MIN)];
             cmpw  rax, (pos_num - 1);
             jne  arg_error;
-            lea  rdi, [rbp - (rbp_local(args + 1usize))];
+            lea  rdi, [rbp - (jrbp_local(args + 1usize))];
             lea  rdx, [rsp - (RSP_LOCAL_FRAME + LFP_ARG0)];
             movq r8, (pos_num);
             // src: rdi, dst: rdx
@@ -1176,12 +1178,12 @@ impl Codegen {
                 }
             }
             monoasm! { &mut self.jit,
-                movq rax, [rbp - (rbp_local(recv))];
+                movq rax, [rbp - (jrbp_local(recv))];
                 movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
             }
             for i in 0..lead_num {
                 monoasm! { &mut self.jit,
-                    movq rax, [rbp - (rbp_local(args + i))];
+                    movq rax, [rbp - (jrbp_local(args + i))];
                     movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32)], rax;
                 }
             }
@@ -1234,7 +1236,7 @@ impl Codegen {
         let rest_slot = args + lead_num;
         monoasm! { &mut self.jit,
             // set self
-            movq rax, [rbp - (rbp_local(recv))];
+            movq rax, [rbp - (jrbp_local(recv))];
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
         }
         // copy `lead_num` ordinary leading args (unrolled; lead_num is a
@@ -1242,13 +1244,13 @@ impl Codegen {
         // slots by `write_back_recv_and_callargs`.
         for i in 0..lead_num {
             monoasm! { &mut self.jit,
-                movq rax, [rbp - (rbp_local(args + i))];
+                movq rax, [rbp - (jrbp_local(args + i))];
                 movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + (8 * i) as i32)], rax;
             }
         }
         monoasm! { &mut self.jit,
             // load forwarded `...` rest array
-            movq rcx, [rbp - (rbp_local(rest_slot))];
+            movq rcx, [rbp - (jrbp_local(rest_slot))];
             testq rcx, 0b111;
             jnz  fallback;
             cmpb [rcx + (RVALUE_OFFSET_TY)], (ObjTy::ARRAY.get());
@@ -1270,7 +1272,7 @@ impl Codegen {
         if let Some(kw) = kwrest_guard {
             monoasm! { &mut self.jit,
                 // only fast-path when no keywords are actually forwarded
-                cmpq [rbp - (rbp_local(kw))], (NIL_VALUE);
+                cmpq [rbp - (jrbp_local(kw))], (NIL_VALUE);
                 jne  fallback;
             }
         }
@@ -1390,7 +1392,7 @@ impl Codegen {
             pushq rcx;
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [rbp - (rbp_local(recv))];
+            movq rdx, [rbp - (jrbp_local(recv))];
             lea  r8, [rip + cache];
             movq rax, (find);
             call rax;

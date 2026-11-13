@@ -408,8 +408,9 @@ impl Codegen {
     }
 
     pub(in crate::codegen::jitgen) fn load_dyn_var_specialized(&mut self, offset: usize, reg: SlotId) {
+        let disp = outer_slot_disp(offset, reg);
         monoasm!( &mut self.jit,
-            movq rax, [rbp + ((offset - (BP_CFP + CFP_LFP) as usize - 8 - conv(reg) as usize))];
+            movq rax, [rbp + (disp)];
         );
     }
 
@@ -422,14 +423,15 @@ impl Codegen {
     }
 
     pub(in crate::codegen::jitgen) fn store_dyn_var_specialized(&mut self, offset: usize, dst: SlotId, src: GP) {
+        let disp = outer_slot_disp(offset, dst);
         monoasm!( &mut self.jit,
-            movq [rbp + ((offset - (BP_CFP + CFP_LFP) as usize - 8 - conv(dst) as usize))], R(src as _);
+            movq [rbp + (disp)], R(src as _);
         );
     }
 
     fn get_outer(&mut self, outer: usize) {
         monoasm!( &mut self.jit,
-            movq rax, [r14];
+            movq rax, [r14 - (LFP_OUTER + fdisp())];
         );
         for _ in 0..outer - 1 {
             monoasm!( &mut self.jit,
@@ -470,7 +472,7 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (name.get());
-            movq rcx, [rbp - (rbp_local(src))];
+            movq rcx, [rbp - (jrbp_local(src))];
             movq rax, (runtime::set_class_var);
             call rax;
         };
@@ -495,7 +497,7 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (name.get());
-            movq rcx, [rbp - (rbp_local(src))];
+            movq rcx, [rbp - (jrbp_local(src))];
             movq rax, (runtime::set_global_var);
             call rax;
         };
@@ -586,4 +588,11 @@ mod tests {
             "##,
         );
     }
+}
+
+/// `[rbp + outer_slot_disp(offset, slot)]` is *slot* of the frame `offset`
+/// bytes above this one (the frame's lfp word `BP_CFP + CFP_LFP` below its
+/// bp), from this frame's frame pointer less the frame displacement.
+fn outer_slot_disp(offset: usize, slot: SlotId) -> i32 {
+    (offset - (BP_CFP + CFP_LFP) as usize - 8 - conv(slot) as usize) as i32 - fdisp()
 }

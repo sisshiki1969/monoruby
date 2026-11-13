@@ -1525,7 +1525,7 @@ impl Codegen {
     /// rsi. `args_off` is `conv(args)`.
     pub(crate) fn emit_fiber_yield_value_array(&mut self, args_off: usize, pos_num: usize) {
         monoasm! { &mut self.jit,
-            lea rdi, [r14 - (args_off as i32)];
+            lea rdi, [r14 - (args_off as i32 + fdisp())];
             movq rsi, (pos_num);
             movq rax, (crate::runtime::create_array);
             call rax;

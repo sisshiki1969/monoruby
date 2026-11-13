@@ -306,9 +306,11 @@ impl PhysMap {
     fn apply_base(&self, slot: PhysSlot) -> FPRegLoc {
         match slot {
             PhysSlot::Xmm(p) => FPRegLoc::Xmm(p),
-            PhysSlot::Spill(n) => {
-                FPRegLoc::Spill((self.base_stack_offset as i32) - 24 + 8 * (n as i32))
-            }
+            // `fdisp`: a frameless body entered without moving the frame
+            // pointer addresses its spill slots from the caller's.
+            PhysSlot::Spill(n) => FPRegLoc::Spill(
+                (self.base_stack_offset as i32) - 24 + 8 * (n as i32) + jitgen::fdisp(),
+            ),
         }
     }
 }
@@ -870,10 +872,12 @@ pub(in crate::codegen) struct InlineCtx {
     /// with the return value in rax / x0 (or xmm1 / d1 for a raw float).
     pub(in crate::codegen) done: DestLabel,
     /// Where a redo exit of the body goes: a trampoline that undoes the
-    /// frame shift and continues to the caller's deopt at the call.
+    /// frame shift (if any) and continues to the caller's deopt
+    /// at the call.
     pub(in crate::codegen) redo: DestLabel,
-    /// How far the frame pointer and the LFP were moved down into the
-    /// window.
+    /// How far below the enclosing frame the window starts (the frame
+    /// pointer and the LFP are moved this far on aarch64; x86-64 adds it
+    /// to the frame displacement, `jitgen::fdisp`).
     pub(in crate::codegen) delta: i32,
     /// The caller's fprs the `InlineCall` saved below the stack pointer.
     pub(in crate::codegen) using_fpr: jitgen::UsingFpr,

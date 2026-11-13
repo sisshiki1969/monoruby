@@ -320,12 +320,9 @@ impl Codegen {
     /// handed-over `**kwrest`, `VirtualSrc::CallerKw`).
     pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, table: DestLabel, base: SlotBase) {
         match base {
-            SlotBase::Own => {
-                monoasm!( &mut self.jit,
-                    movq rsi, r14;
-                );
-            }
+            SlotBase::Own => self.lfp_into(GP::Rsi),
             SlotBase::SavedFp => {
+                debug_assert_eq!(0, fdisp(), "a frameless body has no saved fp");
                 monoasm!( &mut self.jit,
                     movq rsi, [rbp];
                     subq rsi, (RBP_LOCAL_FRAME);
@@ -333,7 +330,7 @@ impl Codegen {
             }
             SlotBase::Window(delta) => {
                 monoasm!( &mut self.jit,
-                    lea  rsi, [r14 + (delta)];
+                    lea  rsi, [r14 + (delta - fdisp())];
                 );
             }
         }
@@ -379,7 +376,7 @@ impl Codegen {
             } => {
                 let r = x86_lreg(dst);
                 monoasm!( &mut self.jit,
-                    movq R(r), [rbp - (rbp_local(slot))];
+                    movq R(r), [rbp - (jrbp_local(slot))];
                 );
             }
             // dst <- [r14 - slot] (LFP relative; follows a heap-moved frame)
@@ -389,7 +386,7 @@ impl Codegen {
             } => {
                 let r = x86_lreg(dst);
                 monoasm!( &mut self.jit,
-                    movq R(r), [r14 - (conv(slot))];
+                    movq R(r), [r14 - (jconv(slot))];
                 );
             }
             // dst <- [base + disp] (object field; no immediate-range limit on x86)
@@ -523,8 +520,8 @@ impl Codegen {
                 // `Lfp::outermost` there is NO stop at a `proc_method`
                 // (define_method body) boundary; yield keeps block
                 // semantics there and ignores the call-site block (CRuby).
+                self.lfp_into(GP::Rdi); // rdi = current LFP
                 monoasm!( &mut self.jit,
-                    movq rdi, r14;                              // rdi = current LFP
                 walk:
                     movq rax, [rdi - (LFP_OUTER)];              // rax = outer LFP (0 = none)
                     testq rax, rax;
@@ -549,7 +546,7 @@ impl Codegen {
             } => {
                 let r = src as u64;
                 monoasm!( &mut self.jit,
-                    movq [rbp - (rbp_local(slot))], R(r);
+                    movq [rbp - (jrbp_local(slot))], R(r);
                 );
             }
             // [r14 - slot] <- src (LFP relative; follows a heap-moved frame)
@@ -559,7 +556,7 @@ impl Codegen {
             } => {
                 let r = src as u64;
                 monoasm!( &mut self.jit,
-                    movq [r14 - (conv(slot))], R(r);
+                    movq [r14 - (jconv(slot))], R(r);
                 );
             }
             // [base + disp] <- src (object field; no immediate-range limit on x86)
@@ -591,12 +588,12 @@ impl Codegen {
             } => {
                 if i32::try_from(imm as i64).is_ok() {
                     monoasm!( &mut self.jit,
-                        movq [rbp - (rbp_local(slot))], (imm);
+                        movq [rbp - (jrbp_local(slot))], (imm);
                     );
                 } else {
                     monoasm!( &mut self.jit,
                         movq rax, (imm);
-                        movq [rbp - (rbp_local(slot))], rax;
+                        movq [rbp - (jrbp_local(slot))], rax;
                     );
                 }
             }
@@ -996,7 +993,7 @@ impl Codegen {
             LInst::I64ToBoth { i, slot, dst, base } => {
                 let f = self.jit.const_f64(i as f64);
                 monoasm! {&mut self.jit,
-                    movq [rbp - (rbp_local(slot))], (Value::integer(i).id());
+                    movq [rbp - (jrbp_local(slot))], (Value::integer(i).id());
                 }
                 match PhysMap::new(base).resolve(dst) {
                     FPRegLoc::Xmm(p) => monoasm!( &mut self.jit,
@@ -1096,7 +1093,7 @@ impl Codegen {
                 dst,
                 base,
             } => {
-                let off = offset as i32 + disp;
+                let off = offset as i32 + disp - fdisp();
                 monoasm!( &mut self.jit,
                     movq xmm0, [rbp + (off)];
                 );
@@ -1108,7 +1105,7 @@ impl Codegen {
                 src,
                 base,
             } => {
-                let off = offset as i32 + disp;
+                let off = offset as i32 + disp - fdisp();
                 self.load_fpr_into_xmm0(src, base);
                 monoasm!( &mut self.jit,
                     movq [rbp + (off)], xmm0;
@@ -1117,7 +1114,7 @@ impl Codegen {
             LInst::GuardCapture { deopt } => self.guard_capture(&deopt),
             LInst::BrIfNotCaptured { dest } => {
                 monoasm! { &mut self.jit,
-                    testb [r14 - (LFP_META - META_KIND)], (0b1000_1000_u8 as i8);
+                    testb [r14 - (LFP_META - META_KIND as i32 + fdisp())], (0b1000_1000_u8 as i8);
                     jz dest;
                 }
             }
@@ -1382,7 +1379,7 @@ impl Codegen {
         len: usize,
     ) -> bool {
         monoasm!( &mut self.jit,
-            lea  rdi, [r14 - (conv(src))];
+            lea  rdi, [r14 - (jconv(src))];
             movq rsi, (len);
             movq rax, (runtime::create_array);
             call rax;
@@ -1577,7 +1574,7 @@ impl Codegen {
             let slot = SlotId(args.0 + k);
             let off = RVALUE_OFFSET_INLINE as i32 + (k as i32) * 8;
             monoasm! { &mut self.jit,
-                movq rcx, [rbp - (rbp_local(slot))];
+                movq rcx, [rbp - (jrbp_local(slot))];
                 movq [rax + (off)], rcx;
             }
         }
@@ -1633,7 +1630,7 @@ impl Codegen {
             let key = SlotId(args.0 + 2 * i as u16);
             // Heap iff (bits & 0b111) == 0 (`Value::is_packed_value`).
             monoasm! { &mut self.jit,
-                movq rax, [rbp - (rbp_local(key))];
+                movq rax, [rbp - (jrbp_local(key))];
                 andq rax, 0b111;
                 jz   slow;
             }
@@ -1643,8 +1640,8 @@ impl Codegen {
                 let ki = SlotId(args.0 + 2 * i as u16);
                 let kj = SlotId(args.0 + 2 * j as u16);
                 monoasm! { &mut self.jit,
-                    movq rax, [rbp - (rbp_local(ki))];
-                    cmpq rax, [rbp - (rbp_local(kj))];
+                    movq rax, [rbp - (jrbp_local(ki))];
+                    cmpq rax, [rbp - (jrbp_local(kj))];
                     jeq  slow;
                 }
             }
@@ -1682,9 +1679,9 @@ impl Codegen {
                 let key = SlotId(args.0 + 2 * i as u16);
                 let val = SlotId(args.0 + 2 * i as u16 + 1);
                 monoasm! { &mut self.jit,
-                    movq rcx, [rbp - (rbp_local(key))];
+                    movq rcx, [rbp - (jrbp_local(key))];
                     movq [rax + (key_off)], rcx;
-                    movq rcx, [rbp - (rbp_local(val))];
+                    movq rcx, [rbp - (jrbp_local(val))];
                     movq [rax + (val_off)], rcx;
                 }
             } else {
@@ -1796,9 +1793,9 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            lea  rdx, [rbp - (rbp_local(args))];
+            lea  rdx, [rbp - (jrbp_local(args))];
             movq rcx, (len);
-            movq r8, [rbp - (rbp_local(hash))];
+            movq r8, [rbp - (jrbp_local(hash))];
             movq rax, (runtime::hash_insert);
             call rax;
         );
@@ -1818,8 +1815,8 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [rbp - (rbp_local(dst))];
-            movq rcx, [rbp - (rbp_local(src))];
+            movq rdx, [rbp - (jrbp_local(dst))];
+            movq rcx, [rbp - (jrbp_local(src))];
             movq rax, (runtime::array_concat);
             call rax;
         );
@@ -1877,7 +1874,7 @@ impl Codegen {
             }
             RangeEnd::Slot(slot) => {
                 monoasm! { &mut self.jit,
-                    cmpq rdi, [r14 - (conv(slot))];
+                    cmpq rdi, [r14 - (jconv(slot))];
                 }
                 true
             }
@@ -1912,7 +1909,7 @@ impl Codegen {
             // `Lt` and `Le` (rsp is nonzero and positive: ZF = SF = OF = 0)
             // and comes back.
             monoasm! { &mut self.jit,
-                movq rdi, [r14 - (conv(arg))];
+                movq rdi, [r14 - (jconv(arg))];
             }
             let has_end = !matches!(end, RangeEnd::Const(v) if v.is_nil());
             if self.cmp_range_end(start) && has_end {
@@ -1935,7 +1932,7 @@ impl Codegen {
         }
         if inline {
             monoasm! { &mut self.jit,
-                movq rdi, [r14 - (conv(arg))];
+                movq rdi, [r14 - (jconv(arg))];
             }
             if !pure {
                 monoasm! { &mut self.jit,
@@ -1979,7 +1976,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            movq r8, [r14 - (conv(arg))];
+            movq r8, [r14 - (jconv(arg))];
             movq r9, (runtime::range_op_info(fid, exclude_end));
             movq rax, (runtime::range_cover);
             call rax;
@@ -2212,12 +2209,10 @@ impl Codegen {
     ///
     fn get_method_lfp(&mut self, outer: usize) {
         if outer == 0 {
-            monoasm! { &mut self.jit,
-                movq rax, r14;
-            };
+            self.lfp_into(GP::Rax);
         } else {
             monoasm!( &mut self.jit,
-                movq rax, [r14];
+                movq rax, [r14 - (LFP_OUTER + fdisp())];
             );
             for _ in 0..outer - 1 {
                 monoasm!( &mut self.jit,
@@ -2372,7 +2367,7 @@ impl Codegen {
         self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movl rdx, (callid.get());
-            lea  rcx, [r14 - (LFP_SELF)];
+            lea  rcx, [r14 - (LFP_SELF + fdisp())];
             movq rdi, rbx;
             movq rsi, r12;
             movq rax, (runtime::gen_array);
@@ -2386,7 +2381,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            lea  rdx, [rbp - (rbp_local(args))];
+            lea  rdx, [rbp - (jrbp_local(args))];
             movq rcx, (len);
             movq rax, (runtime::gen_hash);
             call rax;
@@ -2411,7 +2406,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            lea rdx, [rbp - (rbp_local(arg))];
+            lea rdx, [rbp - (jrbp_local(arg))];
             movq rcx, (len);
             movq rax, (runtime::concatenate_string);
             call rax;
@@ -2423,7 +2418,7 @@ impl Codegen {
         let toa = self.jit.label();
         let exit = self.jit.label();
         monoasm!( &mut self.jit,
-            movq rax, [rbp - (rbp_local(src))];
+            movq rax, [rbp - (jrbp_local(src))];
         );
         self.guard_rvalue(GP::Rax, ARRAY_CLASS, &toa);
         self.bind_label(exit.clone());
@@ -2450,7 +2445,7 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            lea rdx, [rbp - (rbp_local(arg))];
+            lea rdx, [rbp - (jrbp_local(arg))];
             movq rcx, (len);
             movq rax, (runtime::concatenate_regexp);
             call rax;
@@ -2509,8 +2504,8 @@ impl Codegen {
             runtime::block_arg as *const () as u64
         };
         self.fpr_save(using_fpr);
+        self.lfp_into(GP::Rdx);
         monoasm! { &mut self.jit,
-            movq rdx, r14;
             movq rdi, rbx;
             movq rsi, r12;
             movq rcx, (call_site_ptr_val);
@@ -2605,6 +2600,7 @@ impl Codegen {
         // handler-carrying iseqs; the call preserves rax (the return
         // value) around itself.
         if check_deferred {
+            debug_assert_eq!(0, fdisp(), "a frameless body has no handler");
             let no_defer = self.jit.label();
             monoasm! { &mut self.jit,
                 movq rdi, [rbx + (EXECUTOR_DEFERRED_TOP)];
@@ -2750,7 +2746,7 @@ impl Codegen {
             let fail = self.jit.label();
             let exit = self.jit.label();
             monoasm!(&mut self.jit,
-                movq rdi, [r14 - (LFP_SELF)];
+                movq rdi, [r14 - (LFP_SELF + fdisp())];
                 movq rsi, (heap_len);
                 movq rdx, [rdi + (RVALUE_OFFSET_VAR as i32)];
                 // check var_table is not None
@@ -2773,7 +2769,7 @@ impl Codegen {
                 // The call clobbered rdi; the fall-through path leaves
                 // `self` in it, and a frameless callee's entry relies on
                 // that (`note_rdi_holds` in the frameless `InitMethod`).
-                movq rdi, [r14 - (LFP_SELF)];
+                movq rdi, [r14 - (LFP_SELF + fdisp())];
                 jmp exit;
             );
             self.jit.select_page(0);
@@ -2798,6 +2794,7 @@ impl Codegen {
         // move, and `resolve_specialized_id_chain`'s rbp-to-rbp distances
         // are fixed at compile time.
         let below = offset.unwrap_concrete();
+        debug_assert_eq!(0, fdisp(), "a frameless body has no loop");
         monoasm! { &mut self.jit, lea rsp, [rbp - (below as i32)]; }
         true
     }
@@ -2847,7 +2844,7 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (kind as u32);
-            movq rcx, [r14 - (conv(val))];
+            movq rcx, [r14 - (jconv(val))];
             movq rax, (runtime::check_nonlocal_exit);
             call rax;
         );
@@ -2906,8 +2903,8 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [r14 - (conv(old))];
-            movq rcx, [r14 - (conv(new))];
+            movq rdx, [r14 - (jconv(old))];
+            movq rcx, [r14 - (jconv(new))];
             movq rax, (runtime::alias_method);
             call rax;
         );
@@ -3047,11 +3044,11 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_check_kw_rest(&mut self, slot: SlotId) -> bool {
         let exit = self.jit.label();
         monoasm! { &mut self.jit,
-            cmpq [rbp - (rbp_local(slot))], (NIL_VALUE);
+            cmpq [rbp - (jrbp_local(slot))], (NIL_VALUE);
             jne  exit;
             movq rax, (runtime::empty_hash);
             call rax;
-            movq [rbp - (rbp_local(slot))], rax;
+            movq [rbp - (jrbp_local(slot))], rax;
         exit:
         };
         true
@@ -3077,7 +3074,7 @@ impl Codegen {
         // rdi = &mut Executor, rsi = &mut Globals, rdx = src, rcx = &dst,
         // r8 = len, r9 = rest.
         monoasm!( &mut self.jit,
-            lea rcx, [rbp - (rbp_local(dst))];
+            lea rcx, [rbp - (jrbp_local(dst))];
             movq r8, (len);
             movq r9, (rest);
             movq rdi, rbx;
@@ -3139,7 +3136,7 @@ impl Codegen {
         // `dst` descends: slot `dst.0 + i` sits `i * 8` below `&dst`.
         for i in 0..len {
             let src_disp = (i * 8) as i32;
-            let dst_disp = rbp_local(dst) + (i * 8) as i32;
+            let dst_disp = jrbp_local(dst) + (i * 8) as i32;
             monoasm! { &mut self.jit,
                 movq rax, [rcx + (src_disp)];
                 movq [rbp - (dst_disp)], rax;
@@ -3253,6 +3250,7 @@ impl Codegen {
         spliced_ret: Option<LSplicedArm>,
     ) -> bool {
         let raise = self.entry_raise();
+        debug_assert_eq!(0, fdisp(), "a frameless body has no ensure");
         if spliced_break.is_none() && spliced_ret.is_none() {
             // The plain form asks one question — "is a deferred unwind
             // parked for this frame?" — and the answer reaching *compiled*
@@ -3322,7 +3320,7 @@ impl Codegen {
         };
         match spliced_break {
             Some(LSplicedArm::Hop { host, .. }) => monoasm! { &mut self.jit,
-                lea  rsi, [rbp + (host)];
+                lea  rsi, [rbp + (host as i32 - fdisp())];
                 movq rsi, [rsi - (BP_CFP + CFP_LFP)];
             },
             _ => monoasm! { &mut self.jit,
@@ -3331,7 +3329,7 @@ impl Codegen {
         }
         match spliced_ret {
             Some(LSplicedArm::Hop { host, .. }) => monoasm! { &mut self.jit,
-                lea  rdx, [rbp + (host)];
+                lea  rdx, [rbp + (host as i32 - fdisp())];
                 movq rdx, [rdx - (BP_CFP + CFP_LFP)];
             },
             _ => monoasm! { &mut self.jit,
@@ -3401,7 +3399,8 @@ impl Codegen {
         base: usize,
     ) -> bool {
         let Some(disp) = disp else { return true };
-        let disp = i32::try_from(disp).expect("outer fpr home displacement out of i32 range");
+        let disp =
+            i32::try_from(disp).expect("outer fpr home displacement out of i32 range") - fdisp();
         match src {
             OuterFprSrc::Fpr(src) => match PhysMap::new(base).resolve(src) {
                 FPRegLoc::Xmm(p) => monoasm! { &mut self.jit,
@@ -3433,7 +3432,7 @@ impl Codegen {
         disp: i64,
         deopt: &DestLabel,
     ) {
-        let disp = i32::try_from(disp).expect("outer home displacement out of i32 range");
+        let disp = i32::try_from(disp).expect("outer home displacement out of i32 range") - fdisp();
         self.float_to_f64(src, 0, deopt);
         monoasm! { &mut self.jit,
             movq [rbp + (disp)], xmm0;
@@ -3453,7 +3452,7 @@ impl Codegen {
         offset: usize,
         reg: SlotId,
     ) {
-        let disp = i32::try_from(disp).expect("outer home displacement out of i32 range");
+        let disp = i32::try_from(disp).expect("outer home displacement out of i32 range") - fdisp();
         let f64_to_val = self.f64_to_val.clone();
         monoasm! { &mut self.jit,
             movq xmm0, [rbp + (disp)];
@@ -3470,7 +3469,8 @@ impl Codegen {
         disp: i64,
         base: usize,
     ) -> bool {
-        let disp = i32::try_from(disp).expect("outer fpr home displacement out of i32 range");
+        let disp =
+            i32::try_from(disp).expect("outer fpr home displacement out of i32 range") - fdisp();
         match PhysMap::new(base).resolve(dst) {
             FPRegLoc::Xmm(p) => monoasm! { &mut self.jit,
                 movq xmm(p), [rbp + (disp)];
@@ -3507,6 +3507,7 @@ impl Codegen {
         expect: usize,
         pc: BytecodePtr,
     ) -> bool {
+        debug_assert_eq!(0, fdisp(), "a frameless body has no spliced exit");
         let raise = self.entry_raise();
         let f = match kind {
             SplicedExitKind::Break => runtime::defer_block_break_at as *const u8,
@@ -3515,9 +3516,9 @@ impl Codegen {
         let tag = kind.outer_tag();
         let cont = self.jit.label();
         monoasm! { &mut self.jit,
-            lea  rcx, [rbp + (host)];
+            lea  rcx, [rbp + (host as i32 - fdisp())];
             movq rcx, [rcx - (BP_CFP + CFP_LFP)];
-            lea  r8, [rbp + (expect)];
+            lea  r8, [rbp + (expect as i32 - fdisp())];
             movq r8, [r8 - (BP_CFP + CFP_LFP)];
             movq rdi, rbx;
             movq rsi, r12;

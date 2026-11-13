@@ -167,6 +167,11 @@ impl Codegen {
     }
 
     pub(in crate::codegen) fn method_return_specialized(&mut self, rbp_offset: usize) {
+        debug_assert_eq!(
+            0,
+            crate::codegen::jitgen::fdisp(),
+            "a frameless body has no method return"
+        );
         monoasm! { &mut self.jit,
             lea  rbp, [rbp + (rbp_offset)];
             leave;
@@ -205,6 +210,7 @@ impl Codegen {
         &mut self,
         f: extern "C" fn(&mut Executor, &mut Globals, Lfp, Lfp, CallSiteId) -> Option<Value>,
     ) {
+        debug_assert_eq!(0, crate::codegen::jitgen::fdisp(), "a frameless body makes no call");
         monoasm! { &mut self.jit,
             // rcx <- callee LFP
             lea  rcx, [rsp - (RSP_LOCAL_FRAME)];

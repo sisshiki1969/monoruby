@@ -797,9 +797,10 @@ impl Codegen {
             // Method prologue: establish fp/lr, reserve the local frame, nil-fill
             // non-argument locals (aarch64 bails if the frame exceeds the 12-bit
             // sub-sp immediate).
-            // An inline callee's frame is the window its caller filled, with
-            // the frame pointer and the LFP already moved into it
-            // (`InlineCall`): no prologue. Its non-argument locals are not
+            // An inline callee's frame is the window its caller filled,
+            // addressed through the frame pointer and the LFP moved into it
+            // (aarch64) or through the frame displacement (x86-64,
+            // `InlineCall`): no prologue. Its non-argument locals are not
             // nil-filled either — the abstract state binds them to `nil`
             // and nothing reads a slot it has not written, since the body
             // has no safepoint to scan the window; the one exit that makes

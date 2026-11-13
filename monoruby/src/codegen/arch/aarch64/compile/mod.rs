@@ -797,8 +797,20 @@ impl Codegen {
         }
     }
 
+    /// Enter an inline callee's window (`Codegen::gen_inline_call`): move
+    /// the frame pointer and the LFP down into it (x86-64 adds a frame
+    /// displacement instead).
+    pub(in crate::codegen) fn inline_frame_enter(&mut self, delta: i32) {
+        self.inline_frame_shift(delta);
+    }
+
+    /// Leave the window `inline_frame_enter` entered.
+    pub(in crate::codegen) fn inline_frame_leave(&mut self, delta: i32) {
+        self.inline_frame_unshift(delta);
+    }
+
     /// Move the frame pointer and the LFP down into an inline callee's
-    /// window (`Codegen::gen_inline_call`).
+    /// window.
     pub(in crate::codegen) fn inline_frame_shift(&mut self, delta: i32) {
         let delta = delta as u32;
         if delta <= 4095 {
