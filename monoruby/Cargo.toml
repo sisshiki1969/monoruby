@@ -68,6 +68,12 @@ chain-deopt-log = []
 # free-side consolidate/unlink, which mimalloc's design does not have).
 mimalloc = ["dep:mimalloc"]
 perf = []
+# The built-in profiler (`src/prof.rs`): CPU samples attributed to Ruby
+# methods and to the part of the runtime the PC was in, object allocations
+# by class and method, GC time, and malloc counts and stacks. Selected at
+# run time with MONORUBY_PROF=cpu,alloc,malloc; a build without the feature
+# carries none of it. `backtrace` symbolizes native PCs in the report.
+prof = ["dep:backtrace"]
 # Answer from `encoding_rs` alone for the CJK encodings: neither
 # `transcode/cjk.rs`'s tables nor #1557's rule that a cell the destination
 # cannot hold is no cell. Both are corrections, and the override lists
@@ -161,6 +167,8 @@ bitvec = "1.0.1"
 dirs = "6.0.0"
 # Only the `emit-cfg` DOT dump escapes labels, so the crate is optional.
 html-escape = { version = "0.2.13", optional = true }
+# Only the `prof` report symbolizes native addresses.
+backtrace = { version = "0.3", optional = true }
 unicode-general-category = "1.0.0"
 unicode-normalization = "0.1.25"
 unicode-segmentation = "1.13.2"

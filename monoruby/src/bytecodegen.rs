@@ -53,6 +53,8 @@ fn bytecode_compile(
     binding: Option<LvarCollector>,
 ) -> Result<()> {
     assert!(globals.store.func_len() > main_fid.get() as usize);
+    #[cfg(feature = "prof")]
+    let _phase = crate::prof::phase(crate::prof::Phase::Parse);
     compile_iseq(&mut globals.store, main_fid, info, binding)?;
     let mut fid = main_fid;
     while globals.store.func_len() > fid.get() as usize {

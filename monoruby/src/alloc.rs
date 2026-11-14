@@ -7,6 +7,8 @@ pub struct RurubyAlloc;
 
 unsafe impl GlobalAlloc for RurubyAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        #[cfg(feature = "prof")]
+        let _phase = crate::prof::enter_malloc(layout.size());
         // Optional hard cap (MONORUBY_MALLOC_HARD_LIMIT): abort with a
         // report instead of letting a runaway allocation OOM-kill the
         // machine. Checked against layout.size() itself too, so even a
@@ -41,6 +43,8 @@ unsafe impl GlobalAlloc for RurubyAlloc {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        #[cfg(feature = "prof")]
+        let _phase = crate::prof::enter_free(layout.size());
         if layout.size() < MALLOC_TRACK_LIMIT {
             malloc_account(-(layout.size() as isize));
         }
@@ -1731,6 +1735,10 @@ impl<T: GCBox> Allocator<T> {
             self.ack_gc_request();
             return;
         }
+        #[cfg(feature = "prof")]
+        let _phase = crate::prof::phase(crate::prof::Phase::Gc);
+        #[cfg(feature = "prof")]
+        let prof_start = std::time::Instant::now();
         // A pending `GC.start` request forces a Major collection.
         let kind = if GC_FORCE_MAJOR.with(|f| f.replace(false)) || all_major_forced() {
             GcKind::Major
@@ -1842,6 +1850,8 @@ impl<T: GCBox> Allocator<T> {
             self.reclassify_remembered();
         }
         let mark_elapsed = clock.map(|(_, t)| t.elapsed());
+        #[cfg(feature = "prof")]
+        let prof_mark = prof_start.elapsed();
         self.salvage_empty_pages();
         self.sweep();
         // Re-arm the adaptive trigger relative to the *live* old
@@ -1908,6 +1918,13 @@ impl<T: GCBox> Allocator<T> {
         // thrash, while small heaps (e.g. a `String#<<` loop) stay bounded.
         let next_threshold = malloced + (malloced / 2).max(MALLOC_THRESHOLD);
         MALLOC_GC_THRESHOLD.store(next_threshold, Ordering::Relaxed);
+        #[cfg(feature = "prof")]
+        crate::prof::on_gc(
+            kind == GcKind::Major,
+            prof_start.elapsed(),
+            prof_mark,
+            self.mark_counter,
+        );
         #[cfg(feature = "gc-debug")]
         if root.startup_flag() {
             eprintln!("#### GC End");
