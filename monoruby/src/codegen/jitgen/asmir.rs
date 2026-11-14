@@ -248,6 +248,14 @@ pub(crate) struct AsmIr {
     /// ordinary specialized call. Sticky across `save` / `restore`: a
     /// rolled-back attempt only makes the verdict more conservative.
     frameless_violation: bool,
+    /// Set when something was compiled here that makes this frame visible
+    /// from outside while it keeps running compiled: an error exit of a
+    /// path that can run Ruby code (`new_error`), which every call has,
+    /// or an eviction point. The deferred prologue fill
+    /// (`FnInitInfo::lazy_fill`) has to be done before such an
+    /// instruction (`JitContext::compile_instruction`). A poll is not
+    /// one: its slow path fills the frame from its own write-back.
+    exposed: bool,
     /// While `Some`, every deopt exit created through this IR is a
     /// [`SideExit::Branch`] to this label instead (see there). Set and
     /// cleared explicitly around a dispatch arm's generator by
@@ -306,6 +314,7 @@ fn keeps_self_ivar_base(inst: &AsmInst) -> bool {
             | AsmInst::StackToReg(..)
             | AsmInst::LitToReg(..)
             | AsmInst::LitToStack(..)
+            | AsmInst::FillNil(..)
             | AsmInst::RegMove(..)
             | AsmInst::FprMove(..)
             | AsmInst::FprSwap(..)
@@ -418,6 +427,7 @@ impl AsmIr {
             chain_frames: ctx.chain_deopt_frames(),
             frameless: ctx.in_frameless_frame(),
             frameless_violation: false,
+            exposed: false,
             deopt_redirect: None,
             deopt_recompile: None,
             reg_holds: [None; 2],
@@ -677,6 +687,45 @@ impl AsmIr {
         }
     }
 
+    /// Whether this frame has been made visible since *flag* was last
+    /// cleared ([`Self::exposed`]); clears it.
+    pub(super) fn take_exposed(&mut self) -> bool {
+        std::mem::take(&mut self.exposed)
+    }
+
+    /// Restore the exposure flag (around a poll, which is not an exposure
+    /// although it makes an error exit).
+    pub(super) fn set_exposed(&mut self, exposed: bool) {
+        self.exposed = exposed;
+    }
+
+    ///
+    /// Put the deferred prologue fill of *slots* at position *at* of the
+    /// stream — the start of an instruction compiled already, which made
+    /// the frame visible (`JitContext::compile_instruction`).
+    ///
+    /// Sound to insert after the fact: control flow and side exits are
+    /// labels, never positions, and `FillNil` touches neither rdi, rax nor
+    /// the self-ivar base, so what the trackers say holds is shifted, not
+    /// invalidated.
+    ///
+    pub(super) fn insert_fill_nil(&mut self, at: usize, slots: Vec<SlotId>) {
+        if !self.codegen_mode || slots.is_empty() {
+            return;
+        }
+        self.inst.insert(at, AsmInst::FillNil(slots));
+        for h in self.reg_holds.iter_mut().flatten() {
+            if h.len >= at {
+                h.len += 1;
+            }
+        }
+        if let Some(b) = &mut self.ivar_base_at
+            && *b >= at
+        {
+            *b += 1;
+        }
+    }
+
     /// Number of `AsmInst`s in the stream — the frame-size estimate the
     /// aarch64 branch-relaxation decision reads (`Codegen::far_branch_mode`),
     /// and the size the unit's recompile budget scales with.
@@ -860,6 +909,7 @@ impl AsmIr {
 
     pub(crate) fn new_evict(&mut self) -> AsmEvict {
         self.set_frameless_violation();
+        self.exposed = true;
         let i = self.new_label(SideExit::Evict(None));
         AsmEvict(i)
     }
@@ -1033,6 +1083,7 @@ impl AsmIr {
         // to the frame walk while that code runs. Such a path is kept out
         // of a frameless body; see `new_error_pure` for the other kind.
         self.set_frameless_violation();
+        self.exposed = true;
         let i = self.new_label(SideExit::Error(
             pc,
             self.plain_write_back(state),
@@ -2365,6 +2416,15 @@ pub(super) enum AsmInst {
     /// - rax
     ///
     LitToStack(Value, SlotId),
+    ///
+    /// Store `nil` to each of the slots: the deferred prologue fill
+    /// (`FnInitInfo::lazy_fill`), placed where the frame first becomes
+    /// visible from outside. Touches no register but the backend's
+    /// immediate scratch (none on x86-64, x9 on aarch64), so it can be
+    /// put in front of an instruction already compiled
+    /// ([`AsmIr::insert_fill_nil`]).
+    ///
+    FillNil(Vec<SlotId>),
     ///
     /// Deep copy *v* and store it to `rax`.
     ///
@@ -4241,6 +4301,7 @@ impl AsmInst {
             Self::I64ToBoth(i, slot, fpr) => format!("{:?}:{:?} = {i}", slot, fpr),
             Self::FprToStack(fpr, slots) => format!("{:?} = {:?}", slots, fpr),
             Self::LitToStack(val, slot) => format!("{:?} = {}", slot, val.debug(store)),
+            Self::FillNil(slots) => format!("{:?} = nil (deferred fill)", slots),
             Self::DeepCopyLit(val, _using_fpr) => format!("DeepCopyLiteral {}", val.debug(store)),
             Self::FloatToFpr(gpr, fpr, _deopt) => format!("{:?} = {:?} Float to f64", fpr, gpr),
             Self::GuardClassVersion {

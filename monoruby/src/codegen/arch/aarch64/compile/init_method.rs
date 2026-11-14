@@ -24,7 +24,13 @@ impl Codegen {
             mov x29, sp;
         );
         self.a64_sp_sub(prologue_bytes as u32);
-        let clear_len = info.reg_num - info.arg_num;
+        // `lazy_fill`: the body fills the run itself where the frame first
+        // becomes visible (x86 `init_func`).
+        let clear_len = if info.lazy_fill {
+            0
+        } else {
+            info.reg_num - info.arg_num
+        };
         if clear_len > 0 || info.destruct_len > 0 {
             monoasm_arm64!(&mut self.jit, mov x9, (NIL_VALUE););
             if clear_len >= SIMD_FILL_MIN {

@@ -237,6 +237,20 @@ impl PoolOccupancy {
     }
 }
 
+/// The slots of an [`SlotState::unfilled_mask`], in slot order.
+pub(in crate::codegen::jitgen) fn unfilled_mask_slots(mut mask: u128) -> Vec<SlotId> {
+    let mut v = vec![];
+    while mask != 0 {
+        v.push(SlotId(mask.trailing_zeros() as u16));
+        mask &= mask - 1;
+    }
+    v
+}
+
+/// A frame defers its prologue fill (`FnInitInfo::lazy_fill`) only when
+/// all its slots fit [`SlotState`]'s unfilled bitset.
+pub(in crate::codegen::jitgen) const UNFILLED_LIMIT: usize = 128;
+
 #[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub(crate) struct SlotState {
     /// One record per slot: placement + type (`LinkMode`), liveness, and
@@ -281,6 +295,22 @@ pub(crate) struct SlotState {
     /// [`Slot`] is plain data, which is what makes copying a state (once
     /// per branch edge, in every walk) a block copy.
     dynvar_aliases: Vec<(SlotId, DynVarAliasLoad)>,
+    /// The slots whose stack home may still hold whatever the native
+    /// stack held before this frame (a bitset by slot index: a frame
+    /// defers its fill only below [`UNFILLED_LIMIT`] slots). Only a frame whose prologue deferred its nil fill
+    /// has any (`FnInitInfo::lazy_fill`); every other frame's homes hold
+    /// a valid `Value` from the prologue on.
+    ///
+    /// Such a home must be filled before anything outside the compiled
+    /// code can read the frame: a call or any other instruction that can
+    /// run Ruby code (`JitContext::compile_instruction` puts an
+    /// `AsmInst::FillNil` in front of it), and the side exits and the poll
+    /// slow paths, whose write-backs store `nil` there
+    /// ([`Self::wb_unfilled`]). A bit is only ever cleared along a path —
+    /// a home once written keeps a valid `Value` — so the merge is a
+    /// union. It is cleared where a home is written, not where a slot is
+    /// defined ([`Self::settle_unfilled`]).
+    unfilled: u128,
 }
 
 ///
@@ -395,6 +425,7 @@ impl SlotState {
             copy_srcs: 0,
             virtuals: vec![],
             dynvar_aliases: vec![],
+            unfilled: 0,
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
@@ -728,6 +759,117 @@ impl SlotState {
 impl SlotState {
     pub(super) fn set_mode(&mut self, slot: SlotId, mode: LinkMode) {
         self.slots[slot.0 as usize].mode = mode;
+    }
+
+    /// Does *slot*'s stack home hold its value? An `S` / `Sf` slot's does,
+    /// unless the value is still in a dirty GP register (`def_S_guarded`
+    /// followed by a dirty `bind`: the home is written when the register
+    /// is flushed, if ever — a temporary that dies first never is).
+    fn home_is_current(&self, slot: SlotId) -> bool {
+        matches!(self.mode(slot), LinkMode::S(_) | LinkMode::Sf(..))
+            && self.gp_regfile.dirty_reg_of(slot).is_none()
+    }
+
+    /// Drop the unfilled mark of every slot whose home now holds its
+    /// value ([`Self::home_is_current`]). A mark is not dropped when the
+    /// slot is defined, since the value may stay in a register and the
+    /// slot die there; it is dropped here, between instructions and at a
+    /// merge, and where a register is written to the home.
+    pub(in crate::codegen::jitgen) fn settle_unfilled(&mut self) {
+        for slot in self.unfilled_iter() {
+            if self.home_is_current(slot) {
+                self.clear_unfilled(slot);
+            }
+        }
+    }
+
+    /// The marked slots, in slot order.
+    fn unfilled_iter(&self) -> impl Iterator<Item = SlotId> + use<> {
+        let mut bits = self.unfilled;
+        std::iter::from_fn(move || {
+            if bits == 0 {
+                return None;
+            }
+            let i = bits.trailing_zeros();
+            bits &= bits - 1;
+            Some(SlotId(i as u16))
+        })
+    }
+
+    /// Mark *slots* as not yet filled (the deferred prologue fill); each
+    /// below [`UNFILLED_LIMIT`].
+    pub(in crate::codegen::jitgen) fn set_unfilled(&mut self, slots: impl Iterator<Item = SlotId>) {
+        for slot in slots {
+            debug_assert!((slot.0 as usize) < UNFILLED_LIMIT);
+            self.unfilled |= 1 << slot.0;
+        }
+    }
+
+    /// *slot*'s home has been written with a valid `Value`.
+    pub(in crate::codegen::jitgen) fn clear_unfilled(&mut self, slot: SlotId) {
+        if (slot.0 as usize) < UNFILLED_LIMIT {
+            self.unfilled &= !(1 << slot.0);
+        }
+    }
+
+    pub(in crate::codegen::jitgen) fn has_unfilled(&self) -> bool {
+        self.unfilled != 0
+    }
+
+    /// The unfilled homes to fill: all of them but the
+    /// slots holding an element of an elided object (`is_virtual_src`).
+    /// Such a slot is `V` with a home that holds the element — written
+    /// behind the state's back, by the return of a frameless callee that
+    /// hands its Array back elided — and the materialization reads it.
+    /// As a bitset by slot index ([`unfilled_mask_slots`] lists it), which
+    /// costs nothing to keep for an instruction that turns out not to need
+    /// it.
+    pub(in crate::codegen::jitgen) fn unfilled_mask(&self) -> u128 {
+        self.unfilled_iter()
+            .filter(|s| {
+                !self.home_is_current(*s)
+                    && !(self.mode(*s) == LinkMode::V && self.is_virtual_src(*s))
+            })
+            .fold(0, |m, s| m | 1 << s.0)
+    }
+
+    /// Every unfilled home has just been filled.
+    pub(in crate::codegen::jitgen) fn clear_all_unfilled(&mut self) {
+        self.unfilled = 0;
+    }
+
+    /// The merge of the unfilled sets: a home is unfilled where it is on
+    /// some incoming path — unless the meet makes it current
+    /// ([`Self::home_is_current`]: an `S` / `Sf` meet, which every edge's
+    /// bridge writes; no GP register is carried across a merge).
+    fn join_unfilled(&mut self, other: &SlotState) {
+        self.unfilled |= other.unfilled;
+        self.settle_unfilled();
+    }
+
+    /// The unfilled homes a side exit's or a poll's write-back must store
+    /// `nil` into: those it does not write anyway. `wb_literal` writes a
+    /// `C` slot, `wb_fpr` an `F` slot when *with_fpr*, and the poll's
+    /// `wb_void` a `V` slot when *with_void*.
+    fn wb_unfilled(&self, with_fpr: bool, with_void: bool) -> Vec<SlotId> {
+        self.unfilled_iter()
+            .filter(|s| {
+                match self.mode(*s) {
+                    LinkMode::C(_) => false,
+                    LinkMode::F(_) => !with_fpr,
+                    // An element slot of an elided object holds the
+                    // element, which its materialization reads
+                    // (`Self::unfilled_mask`).
+                    LinkMode::V if self.is_virtual_src(*s) => false,
+                    LinkMode::V => !with_void,
+                    // Its home holds the value, or the write-back's
+                    // `gp` part writes it from the dirty register
+                    // (before `void`, which would undo that).
+                    LinkMode::S(_) | LinkMode::Sf(..) => false,
+                    _ => true,
+                }
+            })
+            .collect()
     }
 
     pub(super) fn is_used(&self, slot: SlotId) -> &IsUsed {
@@ -1648,6 +1790,7 @@ impl SlotState {
     /// marks from either path remain evidence.
     ///
     pub(super) fn join_subtree_read_meta(&mut self, other: &SlotState) {
+        self.join_unfilled(other);
         self.copy_window &= other.copy_window;
         for (l, r) in self.slots.iter_mut().zip(other.slots.iter()) {
             if l.dynvar_src != r.dynvar_src {
@@ -1730,6 +1873,7 @@ impl SlotState {
     pub(in crate::codegen::jitgen) fn write_back(&mut self, ir: &mut AsmIr, slot: SlotId, keep: Keep) {
         if let Some(reg) = self.gp_regfile.dirty_reg_of(slot) {
             ir.reg2stack(reg, slot);
+            self.clear_unfilled(slot);
         }
         if keep == Keep::All {
             self.gp_regfile.invalidate(slot);
@@ -1800,6 +1944,9 @@ impl SlotState {
                 unreachable!("write_back({keep:?}) {slot:?} {:?} {self:?}", self.mode(slot));
             }
         };
+        if !matches!(spill, Spill::None) {
+            self.clear_unfilled(slot);
+        }
         ir.spill(spill);
     }
 
@@ -2516,7 +2663,10 @@ impl AbstractFrame {
         // capturable, so no heap snapshot observes it pre-consume. The
         // slot of an elided object (`V`) gets a `nil` (`void`).
         let literal = self.wb_literal(|_| true);
-        let void = self.wb_void();
+        let mut void = self.wb_void();
+        // The homes the deferred prologue fill has not reached yet, and
+        // that nothing above writes (an `F` slot's).
+        void.extend(self.wb_unfilled(false, true));
         // spill dirty GP residents so the GC marks them (the
         // registers themselves survive the collection — `exec_gc` preserves the
         // caller-saved set). Empty without the feature.
@@ -2532,10 +2682,13 @@ impl AbstractFrame {
         // register) so a deopt resuming in the VM reads them from their stack
         // home. Empty without the feature.
         let gp = self.gp_regfile.dirty_residents();
+        // The homes the deferred prologue fill has not reached yet: the
+        // interpreter resuming here scans and reads the whole frame.
+        let void = self.wb_unfilled(true, false);
         WriteBack::new(
             fpr,
             literal,
-            vec![],
+            void,
             gp,
             self.wb_forward_kwrest(),
             self.wb_virtual(),

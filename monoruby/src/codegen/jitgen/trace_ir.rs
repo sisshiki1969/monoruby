@@ -748,6 +748,7 @@ impl TraceIr {
                     destruct_start: (op2 as u16) as usize,
                     destruct_len: ((op2 >> 16) as u16) as usize,
                     block_param_slot: (op2 >> 32) as u16,
+                    lazy_fill: false,
                 }),
                 173 => TraceIr::ExpandArray {
                     src: SlotId::new(op1_w1),

@@ -52,6 +52,7 @@ impl Codegen {
             | AsmInst::StackToReg(..)
             | AsmInst::LitToReg(..)
             | AsmInst::LitToStack(..)
+            | AsmInst::FillNil(..)
             | AsmInst::CondBr(..)
             | AsmInst::NilBr(..)
             | AsmInst::Br(..)

@@ -406,7 +406,29 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         bc_pos: BcIndex,
     ) -> JitResult<CompileResult> {
-        let res = self.compile_instruction_inner(ir, state, bc_pos)?;
+        // The deferred prologue fill (`FnInitInfo::lazy_fill`): an
+        // instruction that makes the frame visible from outside — a call,
+        // anything that can run Ruby code (`AsmIr::take_exposed`) — gets
+        // the homes still unfilled filled in front of it. Decided after
+        // the fact, from what the instruction compiled to, and inserted
+        // at its start.
+        state.settle_unfilled();
+        let unfilled = state.unfilled_mask();
+        let branch_mark = if unfilled == 0 {
+            vec![]
+        } else {
+            self.branch_entry_counts()
+        };
+        let start = ir.inst_len();
+        let exposed = ir.take_exposed();
+        let res = self.compile_instruction_inner(ir, state, bc_pos);
+        if ir.take_exposed() && unfilled != 0 {
+            ir.insert_fill_nil(start, state::unfilled_mask_slots(unfilled));
+            state.clear_all_unfilled();
+            self.clear_unfilled_in_branches_since(&branch_mark);
+        }
+        ir.set_exposed(exposed);
+        let res = res?;
         // No elided allocation crosses a basic-block boundary
         // (`doc/escape_analysis.md`): one the block's last instruction left
         // is performed before the fall-through.
@@ -519,6 +541,34 @@ impl<'a> JitContext<'a> {
             TraceIr::InitMethod(info) => {
                 state.flush_gp(ir);
                 assert!(!self.is_loop());
+                // A loop-free framed body fills its locals and temporaries
+                // where the frame first becomes visible instead
+                // (`FnInitInfo::lazy_fill`); a loop head would have to
+                // agree on the fill state of every path into it.
+                let mut info = info;
+                if !self.in_frameless_frame()
+                    && !self.iseq().bb_info.has_loop()
+                    && info.reg_num < state::UNFILLED_LIMIT
+                {
+                    info.lazy_fill = true;
+                    let block_param = info.block_param_slot;
+                    let deferred: Vec<_> = (info.arg_num + 1..=info.reg_num)
+                        .map(|i| SlotId(i as u16))
+                        .filter(|s| s.0 != block_param)
+                        .collect();
+                    // The state may claim a deferred home as the value's
+                    // authority (`S`): the slot `Iseq::block_param_slot`
+                    // names when it is not the one the prologue clears
+                    // (in `def m(...)` it is an ordinary local). An eager
+                    // fill would have left `nil` there, which is what a
+                    // `C(nil)` says without reading the home.
+                    for &slot in &deferred {
+                        if matches!(state.mode(slot), LinkMode::S(_) | LinkMode::Sf(..)) {
+                            state.def_C(slot, Value::nil());
+                        }
+                    }
+                    state.set_unfilled(deferred.into_iter());
+                }
                 ir.push(AsmInst::Init {
                     info,
                     prologue_offset: PrologueOffset::Hint(self.current_frame_id()),
@@ -527,8 +577,9 @@ impl<'a> JitContext<'a> {
                 // Callee-entry GC/preempt poll, mirroring the VM's
                 // `vm_init` (see init_method.rs): the prologue has just
                 // completed — frame linked, rsp adjusted, non-arg
-                // registers nil-filled, nothing register-resident yet —
-                // so this is a fully frame-consistent poll point that
+                // registers nil-filled (or, under `lazy_fill`, filled by
+                // the poll's own write-back), nothing register-resident
+                // yet — so this is a fully frame-consistent poll point that
                 // fires on every entry regardless of the caller
                 // (including the poll-free Rust invokers).
                 //
