@@ -238,7 +238,7 @@ impl<'a> JitContext<'a> {
                     // the paths out of the loop included) takes the back
                     // edge's `F` whatever the entries bring: nothing
                     // sees what an entry left there, so the entry
-                    // bridges nothing (`SlotState::adopt_dead_float`)
+                    // bridges nothing (`AbstractFrame::adopt_dead_float`)
                     // and the back edge has nothing to box. A local
                     // first assigned inside the loop is the common case:
                     // the method's entry has it `C(nil)`, which no
@@ -549,9 +549,7 @@ impl<'a> JitContext<'a> {
             // brings nothing anyone reads, so it takes the register as
             // it is.
             for &slot in dead_floats {
-                if let LinkMode::F(x) = target.last().unwrap().mode(slot) {
-                    state.adopt_dead_float(slot, x);
-                }
+                state.adopt_dead_float(&mut ir, target.last().unwrap(), slot);
             }
             if !ir.codegen_mode() {
                 // The analysis pass emits nothing and drops the source
