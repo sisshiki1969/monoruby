@@ -316,6 +316,8 @@ impl Fiber {
                     child.set_yielding(false);
                 }
                 let invoker = CODEGEN.with(|codegen| codegen.borrow().transfer_fiber);
+                #[cfg(feature = "prof")]
+                crate::prof::set_executor(self.executor_ptr());
                 let res = invoker(vm as _, self.executor_mut(), val);
                 self.receive_switch_back(vm, res)
             }
@@ -367,6 +369,8 @@ impl Fiber {
             let invoker = CODEGEN.with(|codegen| codegen.borrow().resume_fiber);
             // SAFETY: same ABI, see `RawSwitch`.
             let invoker: RawSwitch = unsafe { std::mem::transmute(invoker) };
+            #[cfg(feature = "prof")]
+            crate::prof::set_executor(self.executor_ptr());
             let res = invoker(vm as _, self.executor_mut(), 0);
             self.receive_switch_back(vm, res)
         } else {
@@ -391,6 +395,8 @@ impl Fiber {
             let invoker = CODEGEN.with(|codegen| codegen.borrow().transfer_fiber);
             // SAFETY: same ABI, see `RawSwitch`.
             let invoker: RawSwitch = unsafe { std::mem::transmute(invoker) };
+            #[cfg(feature = "prof")]
+            crate::prof::set_executor(self.executor_ptr());
             let res = invoker(vm as _, self.executor_mut(), 0);
             self.receive_switch_back(vm, res)
         }
@@ -529,7 +535,9 @@ impl Fiber {
         };
         let handle = self.executor_mut();
         handle.enter_root_svar_scope(root_lep);
-        invoker(
+        #[cfg(feature = "prof")]
+        crate::prof::set_executor(handle);
+        let res = invoker(
             vm,
             globals,
             &proc,
@@ -537,7 +545,10 @@ impl Fiber {
             arg.as_ptr(),
             arg.len(),
             handle,
-        )
+        );
+        #[cfg(feature = "prof")]
+        crate::prof::set_executor(vm);
+        res
     }
 
     pub(super) fn resume_fiber(&mut self, vm: &mut Executor, val: Value) -> Result<Value> {
@@ -550,6 +561,8 @@ impl Fiber {
             child.set_yielding(false);
         }
         let invoker = CODEGEN.with(|codegen| codegen.borrow().resume_fiber);
+        #[cfg(feature = "prof")]
+        crate::prof::set_executor(self.executor_ptr());
         let res = invoker(vm as _, self.executor_mut(), val);
         self.receive_switch_back(vm, res)
     }
@@ -591,6 +604,8 @@ impl Fiber {
     ///   ancestor on the resume chain.
     ///
     fn receive_switch_back(&mut self, vm: &mut Executor, res: Option<Value>) -> Result<Value> {
+        #[cfg(feature = "prof")]
+        crate::prof::set_executor(vm);
         vm.set_resuming_fiber(None);
         {
             let child = self.executor_mut();

@@ -302,6 +302,8 @@ impl Codegen {
 
         let now = std::time::Instant::now();
         let (start0, start1) = self.get_address_pair();
+        #[cfg(feature = "prof")]
+        let prof_phase = crate::prof::phase(crate::prof::Phase::JitCompile);
 
         let const_version = self.const_version();
         #[cfg(feature = "jit-log")]
@@ -331,6 +333,20 @@ impl Codegen {
                     (start0, (end0 - start0) as usize),
                     (start1, (end1 - start1) as usize),
                 );
+                #[cfg(feature = "prof")]
+                {
+                    drop(prof_phase);
+                    crate::prof::on_jit_unit(
+                        globals.store[iseq_id].func_id(),
+                        self_class,
+                        position.is_some(),
+                        elapsed,
+                        Some([
+                            (start0.as_ptr() as usize, span.0.1),
+                            (start1.as_ptr() as usize, span.1.1),
+                        ]),
+                    );
+                }
                 #[cfg(feature = "jit-log")]
                 {
                     if self.startup_flag {
@@ -388,6 +404,17 @@ impl Codegen {
                 Some((cache, singleton_deps, class_version_label, const_map))
             }
             Err(_) => {
+                #[cfg(feature = "prof")]
+                {
+                    drop(prof_phase);
+                    crate::prof::on_jit_unit(
+                        globals.store[iseq_id].func_id(),
+                        self_class,
+                        position.is_some(),
+                        now.elapsed(),
+                        None,
+                    );
+                }
                 if position.is_none() {
                     globals.store.invalidate_jit_code(iseq_id);
                     // The permanent give-up dropped every jit_entry, but on

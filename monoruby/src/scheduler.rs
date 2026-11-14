@@ -1770,6 +1770,8 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
         Entry::Invoke(proc_data, args, len, handle) => {
             let invoker = CODEGEN.with(|c| c.borrow().thread_invoker);
             set_machinery(false);
+            #[cfg(feature = "prof")]
+            crate::prof::set_executor(handle);
             // SAFETY: `handle`/`args` point into the THREAD RValue,
             // which is rooted by the scheduler registry for the whole
             // run; the RValue arena does not move objects.
@@ -1782,20 +1784,30 @@ fn dispatch(globals: &mut Globals, mut thread: Value) -> Result<()> {
                 len,
             );
             set_machinery(true);
+            #[cfg(feature = "prof")]
+            crate::prof::set_executor(std::ptr::null());
             ret
         }
         Entry::Resume(exec) => {
             let resume = CODEGEN.with(|c| c.borrow().scheduler_resume);
             set_machinery(false);
+            #[cfg(feature = "prof")]
+            crate::prof::set_executor(exec);
             let ret = resume(exec, Value::nil().id());
             set_machinery(true);
+            #[cfg(feature = "prof")]
+            crate::prof::set_executor(std::ptr::null());
             ret
         }
         Entry::ResumeInterrupt(exec) => {
             let resume = CODEGEN.with(|c| c.borrow().scheduler_resume);
             set_machinery(false);
+            #[cfg(feature = "prof")]
+            crate::prof::set_executor(exec);
             let ret = resume(exec, 0);
             set_machinery(true);
+            #[cfg(feature = "prof")]
+            crate::prof::set_executor(std::ptr::null());
             ret
         }
         Entry::Skip(err) => {
