@@ -220,6 +220,9 @@ pub(crate) struct SlotAnalysis {
     /// position. Whether each is resolved to a callee that cannot capture
     /// its caller is an inline-cache verdict, left to Layer B.
     block_calls: Box<[(ISeqId, BcIndex)]>,
+    /// The frame's own body has a lambda literal: an instruction that
+    /// captures the frame without being a call.
+    has_lambda: bool,
 }
 
 impl SlotAnalysis {
@@ -279,6 +282,7 @@ impl SlotAnalysis {
         // chain, and the calls in them.
         let mut block_touched = SlotSet::empty(total_reg_num);
         let mut block_opaque = false;
+        let mut has_lambda = false;
         let mut block_calls = vec![];
         let mut stack: Vec<(ISeqId, usize)> = vec![(iseq_id, 0)];
         'walk: while let Some((bid, depth)) = stack.pop() {
@@ -303,6 +307,9 @@ impl SlotAnalysis {
                         block_opaque = true;
                         break 'walk;
                     }
+                    // The frame's own body is walked first and to its
+                    // end, so this is complete whatever the blocks hold.
+                    TraceIr::Lambda => has_lambda = true,
                     TraceIr::MethodCall { callid, .. } => {
                         if depth > 0 {
                             block_calls.push((bid, BcIndex::from(i)));
@@ -331,6 +338,7 @@ impl SlotAnalysis {
             block_touched,
             block_opaque,
             block_calls: block_calls.into_boxed_slice(),
+            has_lambda,
         }
     }
 
@@ -367,6 +375,42 @@ impl SlotAnalysis {
             }
         }
         live_out
+    }
+
+    ///
+    /// The per-block use sets with the capture points of one compilation
+    /// added: the capture at an instruction (*captures*, by `BcIndex`)
+    /// reads the slots *read* names for it. A capture point reads its
+    /// slots before anything written after it, so the def sets are
+    /// unchanged.
+    ///
+    fn use_with_captures<'s>(
+        &self,
+        bb_info: &BasicBlockInfo,
+        captures: &[Option<Capture>],
+        read: impl Fn(Capture) -> &'s SlotSet,
+    ) -> SlotSets {
+        let n = self.total_reg_num;
+        let mut bb_use = self.bb_use.clone();
+        let mut defined = SlotSet::empty(n);
+        let mut extra = SlotSet::empty(n);
+        for b in 0..bb_use.len() {
+            let entry = &bb_info[BasicBlockId(b as u32)];
+            // Slots written so far in the block: a capture read of one of
+            // them is not a use of the block's live-in value.
+            defined.words.fill(0);
+            for i in entry.begin.to_usize()..=entry.end.to_usize() {
+                if let Some(capture) = captures[i] {
+                    extra.words.copy_from_slice(&read(capture).words);
+                    extra.difference_with(&defined);
+                    word_union(bb_use.row_mut(b), &extra.words);
+                }
+                if let Some(d) = self.def(BcIndex::from(i)) {
+                    defined.insert(d);
+                }
+            }
+        }
+        bb_use
     }
 
     pub(crate) fn total_reg_num(&self) -> usize {
@@ -448,6 +492,9 @@ pub(crate) struct UnitLiveness {
     blocks_opaque: bool,
     /// Per basic block: live at its exit, the capture reads counted.
     live_out: SlotSets,
+    /// `live_out` with every capture point counted as a read of every
+    /// local (`JitContext::table_observable_after`), built on first use.
+    observable_out: std::cell::OnceCell<SlotSets>,
 }
 
 impl UnitLiveness {
@@ -508,39 +555,21 @@ impl<'a> JitContext<'a> {
             a.block_touched.clone()
         };
         // The capture verdict of every call, and the per-block use sets
-        // with the capture reads added (a capture point reads its slots
-        // before anything written after it, so the def set is unchanged).
+        // with the capture reads added.
         let bb_info = &iseq.bb_info;
         let mut captures = vec![None; a.insts.len()];
-        let mut bb_use = a.bb_use.clone();
-        let full = SlotSet::full(n);
-        let mut defined = SlotSet::empty(n);
-        let mut extra = SlotSet::empty(n);
-        for b in 0..bb_use.len() {
-            let entry = &bb_info[BasicBlockId(b as u32)];
-            // Slots written so far in the block: a capture read of one of
-            // them is not a use of the block's live-in value.
-            defined.words.fill(0);
-            for i in entry.begin.to_usize()..=entry.end.to_usize() {
-                let pos = BcIndex::from(i);
-                if a.call(pos).is_some() {
-                    let ir = TraceIr::from_pc(iseq.get_pc(pos), self.store);
-                    let capture = self.capture_point(&ir);
-                    captures[i] = capture;
-                    let read = match capture {
-                        Some(Capture::Frame) => &full,
-                        Some(Capture::Block) => &touched,
-                        None => continue,
-                    };
-                    extra.words.copy_from_slice(&read.words);
-                    extra.difference_with(&defined);
-                    word_union(bb_use.row_mut(b), &extra.words);
-                }
-                if let Some(d) = a.def(pos) {
-                    defined.insert(d);
-                }
+        for (i, capture) in captures.iter_mut().enumerate() {
+            let pos = BcIndex::from(i);
+            if a.call(pos).is_some() {
+                let ir = TraceIr::from_pc(iseq.get_pc(pos), self.store);
+                *capture = self.capture_point(&ir);
             }
         }
+        let full = SlotSet::full(n);
+        let bb_use = a.use_with_captures(bb_info, &captures, |capture| match capture {
+            Capture::Frame => &full,
+            Capture::Block => &touched,
+        });
         let live_out = SlotAnalysis::dataflow(bb_info, &bb_use, &a.bb_def);
         UnitLiveness {
             captures,
@@ -548,6 +577,7 @@ impl<'a> JitContext<'a> {
             #[cfg(feature = "jit-log")]
             blocks_opaque,
             live_out,
+            observable_out: std::cell::OnceCell::new(),
         }
     }
 
@@ -595,6 +625,64 @@ impl<'a> JitContext<'a> {
             }
         }
         u.live_out.contains(bb.index(), slot)
+    }
+
+    ///
+    /// Whether anything may observe the local *slot* of the current
+    /// frame after the instruction at *bc_pos*, before it is written
+    /// again: [`Self::table_live_after`] for a slot whose *content* is
+    /// in question, not just whether the frame's copy of it is current.
+    ///
+    /// A capture point then counts as a read of every local, whatever
+    /// the block it passes touches: the callee may keep the block as a
+    /// `Proc`, whose `binding` reaches all of them, and the capture
+    /// guard after the call hands the frame to the interpreter as the
+    /// call found it. A lambda literal captures the frame without being
+    /// a call, so a frame holding one answers true throughout.
+    ///
+    /// What is left out is what the tables leave out everywhere: a call
+    /// the inline cache resolved to a callee that captures nothing.
+    ///
+    pub(in crate::codegen::jitgen) fn table_observable_after(
+        &self,
+        bc_pos: BcIndex,
+        slot: SlotId,
+    ) -> bool {
+        let iseq_id = self.iseq_id();
+        let a = self.slot_analysis(iseq_id);
+        if a.all_live() || a.has_lambda {
+            return true;
+        }
+        let u = self.unit_liveness(iseq_id);
+        let bb_info = &self.store[iseq_id].bb_info;
+        let bb = bb_info.get_bb_id(bc_pos);
+        let end = bb_info[bb].end;
+        for i in bc_pos.to_usize() + 1..=end.to_usize() {
+            let pos = BcIndex::from(i);
+            if u.captures[i].is_some() || a.reads(pos).contains(&slot) {
+                return true;
+            }
+            if a.def(pos) == Some(slot) {
+                return false;
+            }
+        }
+        u.observable_out
+            .get_or_init(|| {
+                if !u.captures.contains(&Some(Capture::Block)) {
+                    // Every capture point already reads every local.
+                    return u.live_out.clone();
+                }
+                let full = SlotSet::full(a.total_reg_num());
+                let bb_use = a.use_with_captures(bb_info, &u.captures, |_| &full);
+                SlotAnalysis::dataflow(bb_info, &bb_use, &a.bb_def)
+            })
+            .contains(bb.index(), slot)
+    }
+
+    /// Whether the call at *bc_pos* is a capture point of this
+    /// compilation ([`Self::capture_point`]).
+    pub(in crate::codegen::jitgen) fn table_capture_at(&self, bc_pos: BcIndex) -> bool {
+        self.unit_liveness(self.iseq_id()).captures[bc_pos.to_usize()].is_some()
     }
 
     ///

@@ -152,6 +152,9 @@ impl<'a> JitContext<'a> {
             let mut target = incoming;
             let mut hoist_version_guard = false;
             let mut hoisted_guards = vec![];
+            // The slots the head adopts as `F` on the strength of being
+            // dead there, which some entry cannot bridge to a float.
+            let mut dead_floats: Vec<SlotId> = vec![];
             if let Some((liveness, backedge)) = self.loop_info(bbid) {
                 let backedge_for_floats = backedge.as_ref().map(|b| b.slot_state().clone());
                 if let Some(backedge) = backedge {
@@ -229,8 +232,24 @@ impl<'a> JitContext<'a> {
                     // (inside the mechanism) still self-limits to a free physical
                     // fpr, so a promotion the fixpoint could not place under
                     // pressure simply does not fire.
-                    let promotable =
-                        |i| entries.iter().all(|e| float_bridgeable(e.state.mode(i)));
+                    let bridgeable = |i| entries.iter().all(|e| float_bridgeable(e.state.mode(i)));
+                    // A slot that is dead at the head (written before
+                    // anything can observe it on every path from here,
+                    // the paths out of the loop included) takes the back
+                    // edge's `F` whatever the entries bring: nothing
+                    // sees what an entry left there, so the entry
+                    // bridges nothing (`SlotState::adopt_dead_float`)
+                    // and the back edge has nothing to box. A local
+                    // first assigned inside the loop is the common case:
+                    // the method's entry has it `C(nil)`, which no
+                    // bridge turns into a float. Only a back edge that
+                    // holds it in a register is taken this way: one
+                    // that has it boxed would unbox, every iteration, a
+                    // value nothing reads.
+                    let dead = |i: SlotId| self.dead_at_loop_head(loop_start, i);
+                    let promotable = |i: SlotId| {
+                        bridgeable(i) || (matches!(be.mode(i), LinkMode::F(_)) && dead(i))
+                    };
                     {
                         let loop_float: std::collections::HashSet<SlotId> =
                             liveness.loop_used_as_float().map(|(s, _)| s).collect();
@@ -286,10 +305,14 @@ impl<'a> JitContext<'a> {
                         // so_mandelbrot, whose `for` bodies are blocks).
                         let subtree_read: std::collections::HashSet<SlotId> =
                             liveness.subtree_float_reads().collect();
+                        // `Sf` says the slot is current, which an entry
+                        // that bridges nothing cannot make true: only
+                        // the plain `F` adoption takes a dead slot.
                         let adopt_sf = |i| {
-                            matches!(be.mode(i), LinkMode::Sf(_, SfGuarded::Float))
-                                || (subtree_read.contains(&i)
-                                    && matches!(be.mode(i), LinkMode::S(_)))
+                            bridgeable(i)
+                                && (matches!(be.mode(i), LinkMode::Sf(_, SfGuarded::Float))
+                                    || (subtree_read.contains(&i)
+                                        && matches!(be.mode(i), LinkMode::S(_))))
                         };
                         // Stage 1'': adopt a back-edge *home* view as
                         // `F(home)`, so a deferral the loop's subtree
@@ -315,7 +338,8 @@ impl<'a> JitContext<'a> {
                             .unwrap_or_default();
                         let adopt_deferred = move |i| match be.mode(i) {
                             LinkMode::Sf(h, SfGuarded::Float) | LinkMode::F(h)
-                                if h.0 >= crate::codegen::PHYS_FPR_POOL
+                                if bridgeable(i)
+                                    && h.0 >= crate::codegen::PHYS_FPR_POOL
                                     && homes.contains(&h.0) =>
                             {
                                 Some(h)
@@ -323,6 +347,14 @@ impl<'a> JitContext<'a> {
                             _ => None,
                         };
                         target.keep_backedge_floats(adopt, adopt_sf, adopt_deferred, promotable);
+                        dead_floats = target
+                            .locals()
+                            .filter(|&i| {
+                                matches!(target.mode(i), LinkMode::F(_))
+                                    && !bridgeable(i)
+                                    && dead(i)
+                            })
+                            .collect();
                         // §5.4 recording stage: what a choice made before
                         // the fixpoint would have adopted.
                         #[cfg(feature = "jit-log")]
@@ -394,6 +426,7 @@ impl<'a> JitContext<'a> {
                 &outer_inits,
                 hoist_version_guard,
                 &hoisted_guards,
+                &dead_floats,
             );
             self.new_backedge(target.frames_cloned(), bbid);
 
@@ -412,6 +445,7 @@ impl<'a> JitContext<'a> {
                 pc,
                 &[],
                 false,
+                &[],
                 &[],
             );
 
@@ -439,6 +473,7 @@ impl<'a> JitContext<'a> {
         outer_inits: &[(Vec<SpecializedId>, usize, SlotId, OuterFprHome)],
         hoist_version_guard: bool,
         hoisted_guards: &[(SlotId, Guarded)],
+        dead_floats: &[SlotId],
     ) {
         let target = target.frames();
         let surrender = self.chain_surrender_table();
@@ -509,6 +544,15 @@ impl<'a> JitContext<'a> {
                     },
                 });
             }
+            // A float the head adopted because the slot is dead there
+            // (`incoming_context`): an entry that brings no float in it
+            // brings nothing anyone reads, so it takes the register as
+            // it is.
+            for &slot in dead_floats {
+                if let LinkMode::F(x) = target.last().unwrap().mode(slot) {
+                    state.adopt_dead_float(slot, x);
+                }
+            }
             if !ir.codegen_mode() {
                 // The analysis pass emits nothing and drops the source
                 // state, so of a bridge it keeps one fact: whether it can
@@ -563,6 +607,25 @@ fn hoist_cached_class(g: Guarded) -> CachedClass {
 }
 
 impl<'a> JitContext<'a> {
+    ///
+    /// Whether the local *slot* of the current frame is dead at the head
+    /// of the loop *loop_start*, to the point that it may hold anything
+    /// there: written before anything can observe it on every path
+    /// from the head, those that leave the loop included, with every
+    /// capture point counted as observing every local
+    /// (`table_observable_after`). Never true of `self` or a temporary.
+    ///
+    fn dead_at_loop_head(&self, loop_start: BasicBlockId, slot: SlotId) -> bool {
+        if !self.locals().contains(&slot) {
+            return false;
+        }
+        let table = self.slot_analysis(self.iseq_id());
+        let head_pos = self.iseq().bb_info[loop_start].begin;
+        !self.table_capture_at(head_pos)
+            && !table.reads(head_pos).contains(&slot)
+            && (table.def(head_pos) == Some(slot) || !self.table_observable_after(head_pos, slot))
+    }
+
     ///
     /// The slots of this frame worth guarding on the forward entries of a
     /// loop head instead of in the body (loop-invariant guard hoisting):
