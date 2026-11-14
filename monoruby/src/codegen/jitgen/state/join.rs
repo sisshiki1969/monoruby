@@ -123,16 +123,23 @@ impl AbstractFrame {
                 // pick the register view and make the F side box at every
                 // arrival — for a loop back edge, a `f64_to_val` per
                 // iteration, the exact cost the deferral removes.
+                //
+                // Only a home nothing else on this side is bound to
+                // (`fpr_free_for`): the merge would otherwise have two
+                // slots on it that the other side has apart.
                 action = match (self.mode(i), other.mode(i)) {
                     (LinkMode::F(x), LinkMode::Sf(y, SfGuarded::Float))
                     | (LinkMode::Sf(y, SfGuarded::Float), LinkMode::F(x))
                     | (LinkMode::F(x), LinkMode::F(y))
-                        if x != y && x.0 >= PHYS_FPR_POOL =>
+                        if x != y && x.0 >= PHYS_FPR_POOL && self.fpr_free_for(x, i) =>
                     {
                         JoinAction::SetF(x)
                     }
                     (LinkMode::F(y), LinkMode::F(x))
-                        if x != y && y.0 < PHYS_FPR_POOL && x.0 >= PHYS_FPR_POOL =>
+                        if x != y
+                            && y.0 < PHYS_FPR_POOL
+                            && x.0 >= PHYS_FPR_POOL
+                            && self.fpr_free_for(x, i) =>
                     {
                         JoinAction::SetF(x)
                     }
@@ -381,7 +388,18 @@ impl AbstractFrame {
             JoinAction::TryFreshFKeep => {
                 // No AsmIr here — if a Phase-2 spill would be needed,
                 // fall back to keeping `F(l)` and let the bridge swap.
-                let _ = self.try_set_new_F(i);
+                // Not when another slot is bound to `l` (a copy,
+                // `copy_slot`): the two sides disagree on this slot's
+                // register, so they need not agree that the two slots
+                // are equal, and a merge with both on `l` would have
+                // one edge put two values in one register (#1915). A
+                // spill id of its own then.
+                if self.try_set_new_F(i).is_none()
+                    && let LinkMode::F(l) = self.mode(i)
+                    && self.fpr_shared(l, i)
+                {
+                    self.set_new_F(i);
+                }
             }
             JoinAction::TryFreshFElseS => {
                 if self.try_set_new_F(i).is_none() {
@@ -393,7 +411,12 @@ impl AbstractFrame {
             JoinAction::SetSf(x, guarded) => self.set_Sf(i, x, guarded),
             JoinAction::TryFreshSfElseKeep(x, guarded) => {
                 if self.try_set_new_Sf(i, guarded).is_none() {
-                    self.set_Sf(i, x, guarded);
+                    if self.fpr_shared(x, i) {
+                        // As `TryFreshFKeep`.
+                        self.set_new_Sf(i, guarded);
+                    } else {
+                        self.set_Sf(i, x, guarded);
+                    }
                 }
             }
             JoinAction::TryFreshSfElseS(guarded) => {

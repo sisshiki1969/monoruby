@@ -145,6 +145,18 @@ mod alloc_policy {
         }
         state.fpr_alloc.push_spill()
     }
+
+    ///
+    /// A register nothing is bound to, leaving every binding where it is:
+    /// phase 0 (a vacant pool register), else a fresh spill id. Phase 1 is
+    /// skipped — see [`SlotState::alloc_fpr_undisturbed`].
+    ///
+    pub(super) fn alloc_fpr_undisturbed(state: &mut SlotState) -> FPReg {
+        let occ = state.pool_occupancy();
+        AllocCtx::default()
+            .pick_vacant(state, &occ)
+            .unwrap_or_else(|| state.fpr_alloc.push_spill())
+    }
 }
 
 ///
@@ -743,6 +755,12 @@ impl SlotState {
         self.fpr_slots(fpr).any(|s| s != slot)
     }
 
+    /// Whether no slot other than *slot* is bound to *fpr*: *slot* may
+    /// be given it (or keep it) without joining another slot there.
+    pub(super) fn fpr_free_for(&self, fpr: FPReg, slot: SlotId) -> bool {
+        !self.fpr_shared(fpr, slot)
+    }
+
     ///
     /// *slot* has just been unboxed from the GP register *gp* into *fpr*
     /// as a Float (`S` -> `Sf`). A local caching the same register cleanly
@@ -854,6 +872,24 @@ impl SlotState {
 
     fn alloc_fpr(&mut self) -> FPReg {
         alloc_policy::alloc_fpr(self)
+    }
+
+    ///
+    /// A register for a bridge's temporary: a vacant one of the pool or a
+    /// fresh spill id, never one freed by demoting an `Sf` to `S`
+    /// ([`Self::alloc_fpr`]'s phase 1).
+    ///
+    /// A bridge goes slot by slot towards a fixed target, so a demotion
+    /// in the middle of it is not the free state change it is elsewhere.
+    /// The victim may be a slot the bridge already put in its target
+    /// register — the merge then reads a cache nobody holds any more —
+    /// or the very register the arm is moving a value out of
+    /// ([`AbstractFrame::split_shared`]: the temporary would be the
+    /// source), and one not yet bridged has to be loaded again from the
+    /// stack with a guard.
+    ///
+    fn alloc_fpr_undisturbed(&mut self) -> FPReg {
+        alloc_policy::alloc_fpr_undisturbed(self)
     }
 
     ///
@@ -1137,31 +1173,6 @@ impl SlotState {
     }
 
     ///
-    /// *slot* is dead here and the merge this state flows into has it as
-    /// `F(fpr)` (a loop head that took its back edge's float,
-    /// `JitContext::incoming_context`). A state that holds no float in
-    /// it — a constant that is not one, such as the `nil` of a local the
-    /// loop assigns first — becomes `F` without a load: whatever the
-    /// register holds stands for a value no path reads. A side exit
-    /// before the slot's first write boxes that into the slot, where it
-    /// is as dead as it was in the register.
-    ///
-    /// A state that does hold a float, or a boxed value its bridge
-    /// guards, is left to its bridge.
-    ///
-    pub(in crate::codegen::jitgen) fn adopt_dead_float(&mut self, slot: SlotId, fpr: FPReg) {
-        if !matches!(self.mode(slot), LinkMode::C(v) if !v.is_float()) {
-            return;
-        }
-        if self.is_fpr_vacant(fpr) {
-            self.set_F(slot, fpr);
-        } else {
-            // The bridge moves it to *fpr* (`F -> F`).
-            self.set_new_F(slot);
-        }
-    }
-
-    ///
     /// F/Sf -> F
     ///
     #[allow(non_snake_case)]
@@ -1232,6 +1243,28 @@ impl SlotState {
     #[allow(non_snake_case)]
     pub(super) fn set_new_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> FPReg {
         let x = self.alloc_fpr();
+        self.set_Sf(slot, x, guarded);
+        x
+    }
+
+    ///
+    /// [`Self::set_new_F`] for a bridge's temporary
+    /// ([`Self::alloc_fpr_undisturbed`]).
+    ///
+    #[allow(non_snake_case)]
+    fn bridge_tmp_F(&mut self, slot: SlotId) -> FPReg {
+        let x = self.alloc_fpr_undisturbed();
+        self.set_F(slot, x);
+        x
+    }
+
+    ///
+    /// [`Self::set_new_Sf`] for a bridge's temporary
+    /// ([`Self::alloc_fpr_undisturbed`]).
+    ///
+    #[allow(non_snake_case)]
+    fn bridge_tmp_Sf(&mut self, slot: SlotId, guarded: SfGuarded) -> FPReg {
+        let x = self.alloc_fpr_undisturbed();
         self.set_Sf(slot, x, guarded);
         x
     }
@@ -3349,9 +3382,10 @@ impl AbstractFrame {
     /// the arms that guard a boxed value on the way to a narrower
     /// placement, and a constant no value of the target's placement can
     /// equal (`const_placement_miss`). Each arm's answer depends on this
-    /// slot alone, and an arm that changes another slot's placement (a
-    /// pressure demotion in `set_new_*`) is itself one that answers yes,
-    /// so the answer over a frame is the same in any order.
+    /// slot alone, and no arm changes what another slot's arm sees of
+    /// its own slot — a register swap moves a neighbour, it never turns
+    /// one into a boxed value (`alloc_fpr_undisturbed`) — so the answer
+    /// over a frame is the same in any order.
     ///
     /// The analysis pass asks this instead of building the bridge: of a
     /// bridge it keeps only the fact that it can deopt
@@ -3360,7 +3394,7 @@ impl AbstractFrame {
     pub(super) fn bridge_deopts(&self, target: &SlotState, slot: SlotId) -> bool {
         match (self.mode(slot), target.mode(slot)) {
             (LinkMode::S(_), LinkMode::Sf(_, SfGuarded::Float) | LinkMode::F(_)) => true,
-            (LinkMode::S(_), LinkMode::Sf(_, SfGuarded::Fixnum)) => {
+            (LinkMode::S(_), LinkMode::Sf(_, SfGuarded::Fixnum | SfGuarded::FixnumOrFloat)) => {
                 !self.is_class(slot, INTEGER_CLASS)
             }
             (LinkMode::S(_), LinkMode::S(guarded)) => guarded
@@ -3390,7 +3424,7 @@ impl AbstractFrame {
                 self.discard(slot);
             }
             (LinkMode::F(l), LinkMode::F(r)) => {
-                if l != r {
+                if l != r && !self.split_shared(ir, target, slot, l, r) {
                     if self.is_fpr_vacant(r) {
                         self.set_F(slot, r);
                         ir.fpr_move(l, r);
@@ -3412,7 +3446,7 @@ impl AbstractFrame {
                     self.set_Sf(slot, l, guarded);
                 } else {
                     // F(l) -> Sf(r)
-                    self.to_sf(ir, slot, l, r, guarded);
+                    self.to_sf(ir, target, slot, l, r, guarded);
                 }
             }
             (LinkMode::F(_), LinkMode::S(_)) => {
@@ -3421,7 +3455,7 @@ impl AbstractFrame {
             (LinkMode::Sf(l, _), LinkMode::Sf(r, guarded)) => {
                 if l != r {
                     // Sf(l) -> Sf(r)
-                    self.to_sf(ir, slot, l, r, guarded);
+                    self.to_sf(ir, target, slot, l, r, guarded);
                 }
             }
             (LinkMode::Sf(_, guarded), LinkMode::S(_)) => {
@@ -3435,7 +3469,7 @@ impl AbstractFrame {
                     ir.float_to_fpr(GP::Rax, x, deopt);
                     self.set_Sf_float(slot, x);
                 } else {
-                    let tmp = self.set_new_Sf(slot, SfGuarded::Float);
+                    let tmp = self.bridge_tmp_Sf(slot, SfGuarded::Float);
                     ir.float_to_fpr(GP::Rax, tmp, deopt);
                     self.gen_fpr_swap(ir, x, tmp);
                 }
@@ -3457,9 +3491,40 @@ impl AbstractFrame {
                     ir.fixnum2fpr(GP::Rdi, x);
                     self.set_Sf(slot, x, SfGuarded::Fixnum);
                 } else {
-                    let tmp = self.set_new_Sf(slot, SfGuarded::Fixnum);
+                    let tmp = self.bridge_tmp_Sf(slot, SfGuarded::Fixnum);
                     ir.fixnum2fpr(GP::Rdi, tmp);
                     self.gen_fpr_swap(ir, x, tmp);
+                }
+            }
+            (LinkMode::S(_), LinkMode::Sf(x, SfGuarded::FixnumOrFloat)) => {
+                // S -> Sf(FixnumOrFloat): the two arms above in one. The
+                // back-edge fixpoint compares back edges by type alone
+                // (`LinkMode::equiv`), so the one a loop head was built
+                // from can carry a cache (`Sf(_, Fixnum)`, widened at the
+                // head by a float entry) that the walk it converged on —
+                // and the real back edge — dropped under fpr pressure.
+                // An integer is converted; anything else is unboxed as a
+                // float behind a guard, which a slot whose class is not
+                // proved (a demoted `Sf(_, FixnumOrFloat)`) may fail.
+                let deopt = if self.is_class(slot, INTEGER_CLASS) {
+                    ir.stack2reg(slot, GP::Rdi);
+                    None
+                } else {
+                    ir.stack2reg(slot, GP::Rax);
+                    Some(ir.new_deopt_with_pc(&self, pc + 1))
+                };
+                let dst = if self.is_fpr_vacant(x) {
+                    self.set_Sf(slot, x, SfGuarded::FixnumOrFloat);
+                    x
+                } else {
+                    self.bridge_tmp_Sf(slot, SfGuarded::FixnumOrFloat)
+                };
+                match deopt {
+                    None => ir.fixnum2fpr(GP::Rdi, dst),
+                    Some(deopt) => ir.float_to_fpr(GP::Rax, dst, deopt),
+                }
+                if dst != x {
+                    self.gen_fpr_swap(ir, x, dst);
                 }
             }
             (LinkMode::S(_), LinkMode::F(x)) => {
@@ -3473,7 +3538,7 @@ impl AbstractFrame {
                     ir.float_to_fpr(GP::Rax, x, deopt);
                     self.set_F(slot, x);
                 } else {
-                    let tmp = self.set_new_F(slot);
+                    let tmp = self.bridge_tmp_F(slot);
                     ir.float_to_fpr(GP::Rax, tmp, deopt);
                     self.gen_fpr_swap(ir, x, tmp);
                 }
@@ -3483,6 +3548,8 @@ impl AbstractFrame {
                 // boxed cache and rebind as pure `F`. Mirrors the `F -> F` arm.
                 if l == r {
                     self.set_F(slot, l);
+                } else if self.split_shared(ir, target, slot, l, r) {
+                    self.set_F(slot, r);
                 } else if self.is_fpr_vacant(r) {
                     self.set_F(slot, r);
                     ir.fpr_move(l, r);
@@ -3518,8 +3585,17 @@ impl AbstractFrame {
             }
             (LinkMode::C(l), LinkMode::F(r)) => {
                 if let Some(f) = l.try_float() {
-                    self.set_F(slot, r);
-                    ir.f64_to_fpr(f, r);
+                    // As the `S -> F` arm: the register may still be
+                    // another slot's on this edge, whose own bridge has
+                    // not run yet.
+                    if self.is_fpr_vacant(r) {
+                        self.set_F(slot, r);
+                        ir.f64_to_fpr(f, r);
+                    } else {
+                        let tmp = self.bridge_tmp_F(slot);
+                        ir.f64_to_fpr(f, tmp);
+                        self.gen_fpr_swap(ir, r, tmp);
+                    }
                 } else {
                     self.const_placement_miss(ir, slot, pc);
                     self.set_F(slot, r);
@@ -3535,8 +3611,14 @@ impl AbstractFrame {
                     self.set_Sf_float(slot, r);
                     return;
                 };
-                self.set_Sf_float(slot, r);
-                ir.f64_to_fpr(f, r);
+                if self.is_fpr_vacant(r) {
+                    self.set_Sf_float(slot, r);
+                    ir.f64_to_fpr(f, r);
+                } else {
+                    let tmp = self.bridge_tmp_Sf(slot, SfGuarded::Float);
+                    ir.f64_to_fpr(f, tmp);
+                    self.gen_fpr_swap(ir, r, tmp);
+                }
                 ir.lit2stack(v, slot);
             }
             (LinkMode::C(v), LinkMode::S(_)) => {
@@ -3589,9 +3671,121 @@ impl AbstractFrame {
         }
     }
 
-    fn to_sf(&mut self, ir: &mut AsmIr, slot: SlotId, l: FPReg, r: FPReg, guarded: SfGuarded) {
+    fn to_sf(
+        &mut self,
+        ir: &mut AsmIr,
+        target: &SlotState,
+        slot: SlotId,
+        l: FPReg,
+        r: FPReg,
+        guarded: SfGuarded,
+    ) {
+        if self.split_shared(ir, target, slot, l, r) {
+            self.set_Sf(slot, r, guarded);
+            return;
+        }
         let f = self.to_sf_state(slot, l, r, guarded);
         ir.fp_xfer(f);
+    }
+
+    ///
+    /// *slot* is dead here and *target*, the merge this state flows
+    /// into, has it in a float register (a loop head that took its back
+    /// edge's float, `JitContext::incoming_context`). A state that holds
+    /// no float in it — a constant that is not one, such as the `nil` of
+    /// a local the loop assigns first — takes the register without a
+    /// load: whatever it holds stands for a value nothing reads. A side
+    /// exit before the slot's first write boxes that into the slot,
+    /// where it is as dead as it was in the register.
+    ///
+    /// Run before [`Self::bridge`], which would take the constant for
+    /// one the target's placement cannot hold (`const_placement_miss`).
+    /// A state that does hold a float, or a boxed value its bridge
+    /// guards, is left to that bridge.
+    ///
+    pub(in crate::codegen::jitgen) fn adopt_dead_float(
+        &mut self,
+        ir: &mut AsmIr,
+        target: &SlotState,
+        slot: SlotId,
+    ) {
+        let LinkMode::F(fpr) = target.mode(slot) else {
+            return;
+        };
+        if !matches!(self.mode(slot), LinkMode::C(v) if !v.is_float()) {
+            return;
+        }
+        // As `gen_bridge_all` does before it reads the target's
+        // placements: a spill id issued below must not be one the target
+        // already hands to another slot.
+        self.grow_fpr_to(target.fpr_len());
+        if self.is_fpr_vacant(fpr) {
+            self.set_F(slot, fpr);
+        } else {
+            // The register is another slot's on this edge. That slot
+            // moves out, and its own bridge takes it from there.
+            let tmp = self.bridge_tmp_F(slot);
+            self.gen_fpr_swap(ir, fpr, tmp);
+        }
+    }
+
+    ///
+    /// *slot* goes from `l` to `r`, and `l` is also another slot's
+    /// (`copy_slot` binds a copy to its source's register) that
+    /// *target* has in a register other than `r`. The swap the caller
+    /// does when `r` is taken relabels every slot of both registers, so
+    /// that other slot would go to `r` with this one — out of the
+    /// register it may just have been bridged to, or, when it is
+    /// bridged later, back with *slot* in tow:
+    ///
+    /// ```text
+    /// z: Sf(0)  d: Sf(0)  p: F(2)      ->   z: Sf(0)  d: F(2)  p: S
+    /// d:  swap 0,2   z, d on 2, p on 0
+    /// z:  swap 2,0   z, d on 0          d is not where the target has it
+    /// ```
+    ///
+    /// So the two part here instead: whatever holds `r` moves to a fresh
+    /// register, and *slot* is copied to `r`, with the slots on `l` the
+    /// target has on `r` as well. Returns whether it did (the caller
+    /// then only has to set *slot*'s mode).
+    ///
+    fn split_shared(
+        &mut self,
+        ir: &mut AsmIr,
+        target: &SlotState,
+        slot: SlotId,
+        l: FPReg,
+        r: FPReg,
+    ) -> bool {
+        let goes_with = |s: SlotId| {
+            s == slot || matches!(target.mode(s), LinkMode::F(x) | LinkMode::Sf(x, _) if x == r)
+        };
+        // A slot the target has boxed, or not at all, may ride along:
+        // its bridge moves no register.
+        let parts = self.fpr_slots(l).any(|s| {
+            !goes_with(s) && matches!(target.mode(s), LinkMode::F(_) | LinkMode::Sf(_, _))
+        });
+        if !parts {
+            return false;
+        }
+        if !self.is_fpr_vacant(r) {
+            let tmp = self.alloc_fpr_undisturbed();
+            // `tmp` is vacant, so this only relabels the slots on `r`.
+            self.fpr_swap(r, tmp);
+            ir.fpr_move(r, tmp);
+        }
+        ir.fpr_move(l, r);
+        let movers: smallvec::SmallVec<[SlotId; 4]> =
+            self.fpr_slots(l).filter(|&s| goes_with(s)).collect();
+        for s in movers {
+            let mode = match self.mode(s) {
+                LinkMode::F(_) => LinkMode::F(r),
+                LinkMode::Sf(_, guarded) => LinkMode::Sf(r, guarded),
+                _ => unreachable!(),
+            };
+            self.set_mode(s, mode);
+        }
+        true
     }
 
     ///
