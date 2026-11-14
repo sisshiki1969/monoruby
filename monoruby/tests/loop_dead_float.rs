@@ -883,3 +883,149 @@ fn no_float_register_free_at_a_bridge() {
         "#,
     );
 }
+
+/// The same arms with two float registers (`stress-spill-pool`, the
+/// configuration CI measures coverage on), where the shapes above do
+/// not reach them. A local that is a float before the loop and an
+/// integer in it has a float view of either at the head
+/// (`Sf(_, FixnumOrFloat)`), and arrives boxed on the back edge: as a
+/// proved integer (`d`), as a value the bridge has to guard (`a`), and
+/// with the head's register still another local's on that edge (`b`).
+/// `c` is the integer-only view (`Sf(_, Fixnum)`) with its register
+/// taken, and `a` also a float constant headed for a taken register.
+/// `e` and `f` are merges whose two sides have a copied local
+/// (`p4 = p0` in `e`, `p4 = p2` in `f`) in different registers with
+/// none free, as a float (`e`) and as a float view of a value that is
+/// an integer on one side (`f`): the merge gives the copy a spill id
+/// of its own (#1915).
+#[test]
+fn boxed_back_edge_to_a_float_view_with_two_registers() {
+    run_test(
+        r#"
+        def a(n, z, q)
+          a = z * 0.5
+          b = z * 0.25
+          p3 = z * 2.0
+          a = nil
+          b = nil
+          i = 0
+          while i < n
+            d0 = i * 2.0
+            d0 = nil
+            p3 = i if i > 1
+            d1 = i * 0.5
+            i += 1
+          end
+          [p3, d1]
+        end
+        def b(n, z, q)
+          p3 = z * 2.0
+          s = z
+          i = 0
+          while i < n
+            d2 = i * 0.25
+            p5 = i
+            s += d2 if d2
+            p3 = i if i > 1
+            i += 1
+          end
+          [s, p3, d2]
+        end
+        def c(n, z, q)
+          a = z * 0.5
+          b = z * 0.25
+          p3 = 1
+          a = nil
+          b = nil
+          s = z
+          i = 0
+          while i < n
+            d0 = i * 2.0
+            p3 = i if i > 1
+            s += i * 1.5
+            p5 = i
+            i += 1
+          end
+          [s, p3, d0]
+        end
+        def d(n, z, q)
+          a = z * 0.5
+          b = z * 0.25
+          p3 = z
+          a = nil
+          b = nil
+          s = 0.0
+          i = 0
+          while i < n
+            d1 = i * 0.5 + 1.0
+            d0 = nil
+            s += i * 1.5
+            s += i * 1.5
+            d1 = i * 0.5 + 1.0
+            p3 = i
+            i += 1
+          end
+          [s, p3, d0, d1]
+        end
+        def e(n, z, q)
+          d0 = 0.5
+          p2 = "s"
+          p0 = z + 1.5
+          p3 = p0
+          p4 = p0
+          p5 = q
+          p1 = p0
+          i = 0
+          s = z
+          while i < n
+            d0 = i * 0.5
+            s += d0
+            p0 += d0
+            p3 = nil
+            p4 += d0
+            p1 = :a
+            i += 1
+          end
+          [s, p0, p1, p2, p3, p4, p5, d0]
+        end
+        def f(n, z, q)
+          p2 = z * 0.125
+          p3 = 1
+          p5 = 3.0
+          d6 = :s
+          p1 = "s"
+          p4 = p2
+          p0 = p2 * z
+          i = 0
+          s = 0.0
+          while i < n
+            d0 = i * 1.5
+            d1 = i * 0.125 + p5
+            d2 = d1 + 0.5
+            d3 = d1 * 3.0
+            d4 = i * 1.5 + p5
+            d5 = d4 - 3.0
+            d6 = d3 + 0.25
+            s += d2 + d4 + d5
+            p5 += d6
+            p4 = i
+            p0 += d4
+            i += 1
+          end
+          [s, p0, p1, p2, p3, p4, p5, d1, d4, d6]
+        end
+        r = []
+        12.times do
+          [0, 1, 4].each do |n|
+            r << a(n, 0.5, 1.25) << a(n, 1.5, 0.75)
+            r << b(n, 0.5, 1.25) << b(n, 1.5, 0.75)
+            r << c(n, 0.5, 1.25) << c(n, 1.5, 0.75)
+            r << d(n, 0.5, 1.25) << d(n, 1.5, 0.75)
+            r << e(n, 0.5, 1.25) << e(n, 1.5, 0.75)
+            r << f(n, 0.5, 1.25) << f(n, 1.5, 0.75)
+          end
+        end
+        r.uniq
+        "#,
+    );
+}
