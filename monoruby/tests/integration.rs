@@ -114,6 +114,7 @@ mod kernel_warn;
 mod kwargs_forward;
 mod kwargs_source_order;
 mod language_fixes;
+mod lazy_fill;
 mod literal;
 mod loop_analysis_outer_widen;
 mod loop_dead_float;

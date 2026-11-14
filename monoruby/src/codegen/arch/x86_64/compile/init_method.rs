@@ -31,8 +31,29 @@ impl Codegen {
         );
 
         let l1 = self.jit.label();
-        // fill nil to non-argument locals and temporary registers.
-        let clear_len = reg_num - arg_num;
+        // fill nil to non-argument locals and temporary registers — unless
+        // the body fills them itself where the frame first becomes visible
+        // (`FnInitInfo::lazy_fill`).
+        let clear_len = if fn_info.lazy_fill {
+            0
+        } else {
+            reg_num - arg_num
+        };
+        // Test aid: poison the deferred run with a pointer-tagged garbage
+        // word, so that any read of a home the body failed to fill — the
+        // collector's frame scan, the interpreter after a side exit —
+        // crashes instead of finding stale stack contents.
+        #[cfg(feature = "lazy-fill-poison")]
+        if fn_info.lazy_fill {
+            for i in 0..reg_num - arg_num {
+                let off = RBP_LOCAL_FRAME + (arg_num + i) as i32 * 8 + LFP_ARG0;
+                if fn_info.block_param_slot as usize != arg_num + i + 1 {
+                    monoasm!( &mut self.jit,
+                        movq [rbp - (off)], 0x10;
+                    );
+                }
+            }
+        }
         // Frame offset of the `i`-th slot of the cleared run. The run
         // descends — slot `i + 1` sits 8 bytes *below* slot `i` — so a
         // 16-byte store addressed at slot `i + 1` covers the pair
@@ -87,5 +108,50 @@ impl Codegen {
             );
         }
         self.jit.bind_label(l1);
+    }
+
+    ///
+    /// `AsmInst::FillNil`: the deferred prologue fill of *slots* (ascending),
+    /// at the start of an instruction. Two adjacent slots take one 16-byte
+    /// store of the shared `nil_pair` (`xmm0` is free between
+    /// instructions) once there are two such pairs to pay for the pattern
+    /// load; the rest take one `movq` each, as in the prologue.
+    ///
+    pub(in crate::codegen) fn fill_nil_slots(&mut self, slots: &[SlotId]) {
+        let mut pairs = vec![];
+        let mut singles = vec![];
+        let mut i = 0;
+        while i < slots.len() {
+            if i + 1 < slots.len() && slots[i + 1].0 == slots[i].0 + 1 {
+                pairs.push(slots[i + 1]);
+                i += 2;
+            } else {
+                singles.push(slots[i]);
+                i += 1;
+            }
+        }
+        if pairs.len() >= 2 {
+            let nil_pair = self.nil_pair.clone();
+            monoasm!( &mut self.jit,
+                movups xmm0, [rip + nil_pair];
+            );
+            for hi in pairs {
+                // Slot `hi` sits 8 bytes below slot `hi - 1`: a 16-byte
+                // store at `hi` covers both.
+                monoasm!( &mut self.jit,
+                    movups [rbp - (jrbp_local(hi))], xmm0;
+                );
+            }
+        } else {
+            for hi in pairs {
+                singles.push(hi);
+                singles.push(SlotId(hi.0 - 1));
+            }
+        }
+        for slot in singles {
+            monoasm!( &mut self.jit,
+                movq [rbp - (jrbp_local(slot))], (NIL_VALUE);
+            );
+        }
     }
 }

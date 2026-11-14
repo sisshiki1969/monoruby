@@ -80,6 +80,20 @@ impl Codegen {
                 imm: v.id(),
                 mem: LMem::Slot(slot),
             }),
+            // The deferred prologue fill: paired 16-byte stores on x86-64
+            // (`Codegen::fill_nil_slots`), one immediate store per slot
+            // elsewhere.
+            AsmInst::FillNil(slots) => {
+                #[cfg(target_arch = "x86_64")]
+                self.fill_nil_slots(&slots);
+                #[cfg(not(target_arch = "x86_64"))]
+                for slot in slots {
+                    self.encode_linst(LInst::StoreImm {
+                        imm: NIL_VALUE,
+                        mem: LMem::Slot(slot),
+                    });
+                }
+            }
             // Conditional branch on the truthiness of the accumulator.
             AsmInst::CondBr(brkind, dest) => {
                 let target = frame.resolve_label(&mut self.jit, dest);

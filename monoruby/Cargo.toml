@@ -33,6 +33,10 @@ jit-log = []
 jit-debug = ["dump-traceir"]
 deopt = ["jit-log", "dump-bc", "dump-traceir"]
 gc-log = []
+# Test aid for the deferred prologue fill (`FnInitInfo::lazy_fill`): the
+# x86-64 prologue writes a garbage pointer into every home it leaves
+# unfilled, and the collector aborts on finding one in a frame.
+lazy-fill-poison = []
 gc-debug = []
 gc-stress = []
 # After every minor GC, independently re-mark the whole live graph from

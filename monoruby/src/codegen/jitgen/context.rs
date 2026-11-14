@@ -4053,6 +4053,31 @@ impl<'a> JitContext<'a> {
         self.current_frame_mut().backedge_map.remove(&bb)
     }
 
+    /// How many entries each forward branch target of the current frame
+    /// has so far: the mark [`Self::clear_unfilled_in_branches_since`]
+    /// takes.
+    pub(super) fn branch_entry_counts(&self) -> Vec<(BasicBlockId, usize)> {
+        self.current_frame()
+            .branch_map
+            .iter()
+            .map(|(bb, entries)| (*bb, entries.len()))
+            .collect()
+    }
+
+    /// The branches recorded since *mark* (`branch_entry_counts`) leave an
+    /// instruction whose start filled every unfilled home
+    /// (`AsmInst::FillNil`): their states have no unfilled home either.
+    pub(super) fn clear_unfilled_in_branches_since(&mut self, mark: &[(BasicBlockId, usize)]) {
+        for (bb, entries) in self.current_frame_mut().branch_map.iter_mut() {
+            let from = mark.iter().find(|(b, _)| b == bb).map_or(0, |(_, n)| *n);
+            for entry in entries.iter_mut().skip(from) {
+                if entry.state.has_unfilled() {
+                    entry.state.clear_all_unfilled();
+                }
+            }
+        }
+    }
+
     pub(super) fn detach_branch_map(&mut self) -> HashMap<BasicBlockId, BranchEntries> {
         std::mem::take(&mut self.current_frame_mut().branch_map)
     }

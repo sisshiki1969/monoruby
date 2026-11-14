@@ -370,6 +370,11 @@ pub(crate) struct FnInitInfo {
     /// prologue clears it to 0 (`None`: "not assigned, the frame's block
     /// handler is the value") after the nil-fill.
     pub block_param_slot: u16,
+    /// JIT only: the prologue leaves the slots after the arguments
+    /// unfilled, and the compiled body fills them where the frame can
+    /// first be seen from outside (`AsmInst::FillNil`, placed by
+    /// `JitContext::compile_instruction`). Never set in the bytecode.
+    pub lazy_fill: bool,
 }
 
 impl std::fmt::Debug for FnInitInfo {
@@ -401,6 +406,7 @@ impl FnInitInfo {
             destruct_start: destructed_args.start,
             destruct_len: destructed_args.len(),
             block_param_slot: block_param_slot.map_or(0, |s| s.0),
+            lazy_fill: false,
         }
     }
 }

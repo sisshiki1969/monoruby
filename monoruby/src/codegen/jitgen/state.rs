@@ -16,7 +16,9 @@ pub(super) use read_slot::DeoptPoint;
 pub(in crate::codegen::jitgen) use slot::NonNil;
 pub(in crate::codegen::jitgen) use slot::SfGuarded;
 pub(in crate::codegen::jitgen) use slot::DynVarAliasLoad;
-pub(super) use slot::{ClassProofScan, Guarded, Keep, LinkMode, SlotState};
+pub(super) use slot::{
+    ClassProofScan, Guarded, Keep, LinkMode, SlotState, UNFILLED_LIMIT, unfilled_mask_slots,
+};
 use slot::LINK_MODE_CHAIN;
 
 /// A frame of the abstract-state chain, shared by reference.
@@ -1373,7 +1375,11 @@ impl AbstractFrame {
     /// is exactly "about to run the next instruction").
     pub fn exec_gc(&self, ir: &mut AsmIr, check_stack: bool, deopt_pc: BytecodePtr) {
         let wb = ir.gc_write_back(self);
+        // The poll's slow path fills the frame from `wb` before anything
+        // can see it, so its error exit is no exposure.
+        let exposed = ir.take_exposed();
         let error = ir.new_error(self);
+        ir.set_exposed(exposed);
         let deopt = ir.new_poll_deopt(self, deopt_pc);
         ir.exec_gc(wb, error, deopt, check_stack);
     }
@@ -1462,6 +1468,7 @@ impl AbstractFrame {
         }
         for (reg, slot) in self.gp_regfile.take_dirty_spills() {
             ir.reg2stack(reg, slot);
+            self.clear_unfilled(slot);
         }
     }
 
@@ -1520,6 +1527,7 @@ impl AbstractFrame {
         let (spills, refill) = self.gp_regfile.take_dirty_spills_keep_pin();
         for (reg, slot) in spills {
             ir.reg2stack(reg, slot);
+            self.clear_unfilled(slot);
         }
         if let Some(src) = refill
             && let Some(pin) = self.gp_regfile.pin()

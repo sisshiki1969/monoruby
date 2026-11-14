@@ -363,6 +363,14 @@ impl Lfp {
         let meta = self.meta();
         for r in meta.regs() {
             if let Some(v) = self.register(r) {
+                // The garbage word the x86-64 prologue leaves in a home it
+                // did not fill under `lazy-fill-poison`: the compiled code
+                // let the collector see the frame before filling it.
+                #[cfg(feature = "lazy-fill-poison")]
+                if v.id() == 0x10 {
+                    eprintln!("unfilled home: {:?} {r:?}", meta.func_id());
+                    std::process::abort();
+                }
                 v.mark(alloc);
             }
         }
