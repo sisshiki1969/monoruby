@@ -1137,6 +1137,31 @@ impl SlotState {
     }
 
     ///
+    /// *slot* is dead here and the merge this state flows into has it as
+    /// `F(fpr)` (a loop head that took its back edge's float,
+    /// `JitContext::incoming_context`). A state that holds no float in
+    /// it — a constant that is not one, such as the `nil` of a local the
+    /// loop assigns first — becomes `F` without a load: whatever the
+    /// register holds stands for a value no path reads. A side exit
+    /// before the slot's first write boxes that into the slot, where it
+    /// is as dead as it was in the register.
+    ///
+    /// A state that does hold a float, or a boxed value its bridge
+    /// guards, is left to its bridge.
+    ///
+    pub(in crate::codegen::jitgen) fn adopt_dead_float(&mut self, slot: SlotId, fpr: FPReg) {
+        if !matches!(self.mode(slot), LinkMode::C(v) if !v.is_float()) {
+            return;
+        }
+        if self.is_fpr_vacant(fpr) {
+            self.set_F(slot, fpr);
+        } else {
+            // The bridge moves it to *fpr* (`F -> F`).
+            self.set_new_F(slot);
+        }
+    }
+
+    ///
     /// F/Sf -> F
     ///
     #[allow(non_snake_case)]
