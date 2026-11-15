@@ -53,6 +53,23 @@ Note the third row: an event with no single name to attribute the change
 to bumps a *wildcard* epoch, which makes every unit's fast path (§4)
 conservative until it re-validates.
 
+**`extend` on an object that had no singleton class moves neither.**
+`Module#extend_object` (`builtins/module.rs`) makes the singleton class
+and includes the module into it in one call, and nothing can have resolved
+a method or a constant through a class that did not exist when the call
+began (`ClassId`s are never reused, so "its id is at or above the table
+length read before `get_singleton`" is exact). That include goes through
+`Module::include_module_into_new_singleton`, which skips both increments.
+The object leaving its old class is the business of the latch in
+[`singleton_class_facts.md`](singleton_class_facts.md), exactly as for
+`obj.singleton_class`, which never moved a version. An object that
+already has a singleton class, and any class or module, take the ordinary
+`include` path. This is what a program that decorates every object it
+builds needs: Loofah `extend`s each node of the documents it scrubs, about
+300 a request in shipit, and each one used to fail every unit's class
+guard and const guard (87,500 class-guard salvages and 41,600 const-guard
+recoveries per request).
+
 ## 2. One patchable snapshot word per compilation unit
 
 A compilation unit is a root body plus every specialized callee inlined

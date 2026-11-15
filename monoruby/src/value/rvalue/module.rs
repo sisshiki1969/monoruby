@@ -40,13 +40,33 @@ impl Module {
     /// class_version is incremented.
     ///
     pub(crate) fn include_module(&mut self, module: Module) -> Result<()> {
-        self.include_or_prepend_module(module, false)
+        self.include_or_prepend_module(module, false, true)
+    }
+
+    ///
+    /// Include `module` to `self`, a singleton class that was created for
+    /// this very `extend` and that nothing has seen yet.
+    ///
+    /// No version moves. Both counters guard answers that were resolved
+    /// through some class's ancestry — a method through the receiver's, a
+    /// constant through the lexical scope's — and no answer can have been
+    /// resolved through a class that did not exist when the call began.
+    /// The object's *old* class keeps the ancestry it had, so what was
+    /// cached for it stays true for its other instances; that this one
+    /// object left it is `Store::note_instance_singletons`' business, as
+    /// it is for `obj.singleton_class` and `def obj.m`, which move no
+    /// version either.
+    ///
+    pub(crate) fn include_module_into_new_singleton(&mut self, module: Module) -> Result<()> {
+        debug_assert!(self.is_singleton().is_some());
+        self.include_or_prepend_module(module, false, false)
     }
 
     fn include_or_prepend_module(
         &mut self,
         mut module: Module,
         for_prepend: bool,
+        invalidate: bool,
     ) -> Result<()> {
         if self.check_cyclic(module) {
             return Err(MonorubyErr::argumenterr("cyclic include detected"));
@@ -55,12 +75,14 @@ impl Module {
         // direct mix-ins, so the flag tells `Store::propagate_include`
         // whether a later `module.include(other)` has anyone to reach.
         module.mixed_in = true;
-        Globals::class_version_inc();
-        // The newly-inserted iclass exposes `module`'s constants to
-        // anything that previously resolved unqualified constants
-        // against `self`'s ancestor chain. Invalidate the constant
-        // cache so cached lookups re-walk the new chain.
-        Globals::const_version_inc();
+        if invalidate {
+            Globals::class_version_inc();
+            // The newly-inserted iclass exposes `module`'s constants to
+            // anything that previously resolved unqualified constants
+            // against `self`'s ancestor chain. Invalidate the constant
+            // cache so cached lookups re-walk the new chain.
+            Globals::const_version_inc();
+        }
         // If the module being included/prepended has its own origin
         // (i.e. one or more modules were prepended into it), the head
         // node represents the prepend-most position — its method table
@@ -237,7 +259,7 @@ impl Module {
             self.origin = Some(origin);
             self.0.write_barrier(origin.as_val());
         }
-        self.include_or_prepend_module(module, true)
+        self.include_or_prepend_module(module, true, true)
     }
 
     pub fn get_real_class(&self) -> Module {

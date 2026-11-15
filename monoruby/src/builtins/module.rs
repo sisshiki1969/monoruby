@@ -2118,9 +2118,26 @@ fn extend_object(
     // (a FrozenError, which is a RuntimeError subclass) before
     // mutating anything.
     obj.ensure_not_frozen(&globals.store)?;
+    // A plain object without a singleton class gets one made right here.
+    // Nothing has resolved anything through that class yet, so mixing the
+    // module into it invalidates nothing: a program that `extend`s every
+    // object it builds (Loofah decorates each node of the documents it
+    // scrubs, ~300 a request in shipit) would otherwise fail every
+    // compiled unit's version guard once per object.
+    // `ClassId`s are never reused: an id at or above this reading belongs
+    // to a class created from here on.
+    let classes = globals.store.classinfo_len();
     let mut class = globals.store.get_singleton(obj)?;
+    // A class object's metaclass may be created here too, but classes are
+    // what compiled code resolves class methods through.
+    let new_singleton =
+        obj.is_class_or_module().is_none() && class.id().u32() as usize >= classes;
     let include_module = lfp.self_val().expect_module(globals)?;
-    class.include_module(include_module)?;
+    if new_singleton {
+        class.include_module_into_new_singleton(include_module)?;
+    } else {
+        class.include_module(include_module)?;
+    }
     Ok(obj)
 }
 

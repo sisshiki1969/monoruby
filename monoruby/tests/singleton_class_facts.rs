@@ -232,3 +232,87 @@ fn frozen_singleton_class_and_clone() {
         "##,
     );
 }
+
+const EXTEND_PRELUDE: &str = r##"
+    module ScM1; def foo; :m1; end; X = :m1x; end
+    module ScM2; def foo; [:m2, super]; end; def bar; :bar2; end; X = :m2x; end
+    module ScHook
+      def self.extended(o); (@log ||= []) << o.class; end
+      def self.extend_object(o); super; end
+      def self.log; @log.size; end
+      def hooked; :hooked; end
+    end
+    class ScK
+      def foo; :k; end
+      def bar; :k; end
+      def become(m); extend(m); foo; end
+      def become2(m); r = foo; extend(m); [r, foo, bar]; end
+      def kind(m); m === self; end
+    end
+    class ScInit
+      def initialize(m); extend(m) if m; @v = foo; end
+      def foo; :init; end
+      attr_reader :v
+    end
+    def sc_call_foo(o) = o.foo
+    def sc_call_bar(o) = o.bar
+    def sc_isa(o) = [o.is_a?(ScM1), ScM2 === o, o.respond_to?(:hooked)]
+"##;
+
+/// `extend` on an object that has no singleton class yet creates one and
+/// includes the module into it without moving the global class / constant
+/// versions (nothing can have cached anything about a class that did not
+/// exist). Call sites, `is_a?` / `===` / `respond_to?` folds and the
+/// method's own `self` must still see the new class at once.
+#[test]
+fn extend_creating_the_singleton_class() {
+    run_test_with_prelude(
+        r##"
+        r = []
+        4.times do
+          o = ScK.new
+          r << sc_call_foo(o) << sc_isa(o)
+          o.extend(ScM1); r << sc_call_foo(o) << sc_isa(o) << o.kind(ScM1) << o.kind(ScM2)
+          o.extend(ScM2); r << sc_call_foo(o) << sc_call_bar(o) << sc_isa(o) << o.kind(ScM2)
+          o2 = ScK.new; o2.extend(ScM1, ScM2)
+          r << sc_call_foo(o2) << o2.singleton_class.ancestors[1, 2]
+          r << ScK.new.become(ScM1) << ScK.new.become(ScM2)
+          r << ScK.new.become2(ScM2) << ScK.new.become2(ScM1)
+          r << ScInit.new(nil).v << ScInit.new(ScM1).v << ScInit.new(ScM2).v
+          r << sc_call_foo(ScK.new) << sc_call_bar(ScK.new)
+        end
+        r.tally.sort_by { |k, _| k.inspect }
+        "##,
+        EXTEND_PRELUDE,
+    );
+}
+
+/// The same with a singleton class that already exists (`def o.m`,
+/// `singleton_class`), with the `extended` / `extend_object` hooks, with
+/// constants reached through the extended object, and with receivers that
+/// are frozen or not plain objects.
+#[test]
+fn extend_existing_singleton_hooks_and_constants() {
+    run_test_with_prelude(
+        r##"
+        r = []
+        4.times do
+          o3 = ScK.new; def o3.foo; :single; end; o3.extend(ScM2)
+          r << sc_call_foo(o3) << sc_call_bar(o3)
+          o5 = ScK.new; o5.extend(ScHook); r << o5.hooked << sc_isa(o5)
+          o6 = ScK.new; o6.extend(ScM1)
+          r << o6.instance_eval("X") << (class << o6; X; end) << o6.singleton_class::X
+          o7 = ScK.new; o7.extend(ScM2)
+          r << o7.instance_eval("X") << o7.singleton_class.const_get(:X)
+          o8 = ScK.new.freeze; r << (o8.extend(ScM1) rescue $!.class)
+          s = "str".dup; s.extend(ScM1); r << s.foo << s.frozen?
+          o9 = ScK.new; o9.singleton_class; o9.extend(ScM2)
+          r << sc_call_bar(o9) << sc_call_foo(o9)
+          c = Class.new; c.extend(ScM1); r << c.foo
+          r << sc_call_foo(ScK.new) << sc_call_bar(ScK.new)
+        end
+        [r.tally.sort_by { |k, _| k.inspect }, ScHook.log > 0]
+        "##,
+        EXTEND_PRELUDE,
+    );
+}

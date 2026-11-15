@@ -1255,6 +1255,32 @@ mod tests {
     }
 
     #[test]
+    fn class_subclasses_order_and_index() {
+        // Newest first, as CRuby lists them; a class created after an
+        // earlier query, one with an included module between it and its
+        // superclass, and one whose superclass arrives late through
+        // `initialize` are all found. Singleton classes and grandchildren
+        // are not listed.
+        run_test(
+            r#"
+            a = Class.new
+            b = Class.new(a); c = Class.new(a)
+            first = a.subclasses.map { |k| [b, c].index(k) }
+            k = Class.allocate
+            d = Class.new(a)
+            m = Module.new
+            e = Class.new(a) { include m }
+            o = a.new; o.singleton_class
+            g = Class.new(b)
+            mid = a.subclasses.map { |x| [b, c, d, e].index(x) }
+            k.send(:initialize, a)
+            [first, mid, a.subclasses.map { |x| [b, c, d, e, k].index(x) },
+             b.subclasses == [g], c.subclasses, g.subclasses]
+            "#,
+        );
+    }
+
+    #[test]
     fn thread_new_returns_a_thread() {
         // monoruby is single-threaded: Thread.new stores the block but never
         // runs it, and blocking / observation APIs (#join, #value, #status,

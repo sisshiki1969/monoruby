@@ -454,7 +454,10 @@ impl Reader {
             return Some(unsafe { *(addr as *const u64) });
         }
         // SAFETY: inside the live part of this thread's stack.
-        if addr >= self.lo && addr + 8 <= self.hi {
+        // `checked_add`: a half-built frame can hand in any word, and one
+        // of the last eight bytes of the address space would wrap to
+        // `0 <= hi` and be dereferenced.
+        if addr >= self.lo && addr.checked_add(8).is_some_and(|end| end <= self.hi) {
             return Some(unsafe { *(addr as *const u64) });
         }
         let page = addr & !4095;
