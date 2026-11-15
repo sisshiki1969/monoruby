@@ -895,7 +895,7 @@ Modes via `MONORUBY_TEST_ORACLE`:
 | `stress-spill-pool` | Shrink `PHYS_FPR_POOL` to 2 to stress the FP-register spill paths      |
 | `profile`           | Collect deopt/recompile statistics (implies `dump-bc`, `dump-traceir`) |
 | `perf`              | Emit perf-compatible symbol maps                                       |
-| `prof`              | Built-in profiler, selected by `MONORUBY_PROF=cpu,alloc,malloc` (`doc/profiler.md`) |
+| `prof`              | Built-in profiler, selected by `MONORUBY_PROF=cpu,alloc,malloc`; `MONORUBY_PROF_OUT=PREFIX` also writes `PREFIX.html`, a self-contained viewer (`doc/profiler.md`) |
 | `dump-require`      | Log `require`/`load` file resolution                                   |
 
 Chain deopt (`doc/chain_deopt.md`) is always on: every deopt / error side
