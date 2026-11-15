@@ -14243,13 +14243,15 @@ mod tests {
     #[test]
     fn gsub() {
         run_tests(&[
-            // A match inside the block (its own `gsub`) must not disturb the
-            // outer walk's `$~`: the captures read after it are still the
-            // outer match's, and the whole walk's last match is left behind.
+            // A match inside the block (its own `gsub`) replaces `$~` for the
+            // rest of the block, as in CRuby (the block shares the method's
+            // frame, hence its `$~`), and the walk's own last match is what
+            // is left behind once it is over.
             r##"
         res = ("ab1 cd2 ef3 " * 3000).gsub(/([a-z]+)(\d)/) {
+          outer = [$1, $2]
           inner = $2.gsub(/\d/) { "<#{$&}>" }
-          [$1, $2, inner].join("-")
+          (outer + [$1, $2, inner]).join("-")
         }
         [res.size, res[0, 40], $~[0], $1, $2, $~.pre_match.size]
         "##,
