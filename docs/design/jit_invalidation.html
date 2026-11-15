@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c906723a.js";
+            window.path_to_searchindex_js = "../searchindex-62d85155.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-9192be69.js"></script>
@@ -233,6 +233,22 @@ epochs described in §4:</p>
 <p>Note the third row: an event with no single name to attribute the change
 to bumps a <em>wildcard</em> epoch, which makes every unit’s fast path (§4)
 conservative until it re-validates.</p>
+<p><strong><code>extend</code> on an object that had no singleton class moves neither.</strong>
+<code>Module#extend_object</code> (<code>builtins/module.rs</code>) makes the singleton class
+and includes the module into it in one call, and nothing can have resolved
+a method or a constant through a class that did not exist when the call
+began (<code>ClassId</code>s are never reused, so “its id is at or above the table
+length read before <code>get_singleton</code>” is exact). That include goes through
+<code>Module::include_module_into_new_singleton</code>, which skips both increments.
+The object leaving its old class is the business of the latch in
+<a href="singleton_class_facts.html"><code>singleton_class_facts.md</code></a>, exactly as for
+<code>obj.singleton_class</code>, which never moved a version. An object that
+already has a singleton class, and any class or module, take the ordinary
+<code>include</code> path. This is what a program that decorates every object it
+builds needs: Loofah <code>extend</code>s each node of the documents it scrubs, about
+300 a request in shipit, and each one used to fail every unit’s class
+guard and const guard (87,500 class-guard salvages and 41,600 const-guard
+recoveries per request).</p>
 <h2 id="2-one-patchable-snapshot-word-per-compilation-unit"><a class="header" href="#2-one-patchable-snapshot-word-per-compilation-unit">2. One patchable snapshot word per compilation unit</a></h2>
 <p>A compilation unit is a root body plus every specialized callee inlined
 into it. <code>jit_compile</code> (<code>codegen/jitgen.rs</code>) creates <strong>one</strong> class-version
