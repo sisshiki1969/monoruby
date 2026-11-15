@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-91641990.js";
+            window.path_to_searchindex_js = "searchindex-87e0e4f6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-9192be69.js"></script>
@@ -15998,8 +15998,25 @@ O(N·total) だったのが O(total) になった。</li>
 組む。短い結果はヒープに触れず、長い結果は確保 1 回で、
 <code>RStringInner::from_buf_cr</code> がそのまま採用する。</li>
 <li><strong>Fixnum オペランドはバッファに直接整形する</strong>（<code>format_i64</code> +
-<code>append_piece</code>）。<code>to_s</code> でヒープ String を作らない。<code>vm.to_s_is_refined</code>
-で refinement が勝つようゲート。</li>
+<code>append_piece</code>）。<code>to_s</code> でヒープ String を作らない。</li>
+<li><strong><code>to_s</code> を呼ばない近道は、その <code>to_s</code> が組み込みのままの間だけ。</strong>
+Fixnum の直接整形と、nil / true / false / Symbol / Float / Bignum /
+Complex / Rational を dispatch なしで文字列にする近道
+（<code>Executor::tos_direct</code>）は、CRuby の <code>vm_objtostring</code> と同じく
+「そのクラスの <code>to_s</code> が組み込みのものに解決される」ことを条件にする
+（<code>class Integer; def to_s = ...; end</code>、<code>prepend</code>、<code>undef_method</code> で
+外れる）。判定は <code>Executor::to_s_shortcut_all</code> が式展開 1 回につき 1 度
+行う: 起動完了時に記録した 8 クラスの <code>to_s</code> の FuncId
+（<code>Store::record_builtin_to_s</code>）と現在の解決結果を比べ、結果を
+class_version と 1 語にまとめてメモする（<code>Store::to_s_builtin_at</code>）ので、
+通常は class_version の読み出しと比較 1 回。<code>to_s</code> の refinement が
+スコープにあるとき（<code>vm.to_s_is_refined</code>）も近道を取らない。全オペランド
+が String ならこの判定自体を飛ばす。</li>
+<li>呼び出しが必要なオペランドに当たったら、残りは <code>append_dispatched</code>
+（アウトライン）が引き継ぐ。呼んだ <code>to_s</code> が別の <code>to_s</code> を定義し得る
+ので、こちらは呼び出しのたびに判定し直す。主ループ側の判定結果を不変に
+保つための分割で、可変にするとループのレジスタ割り当てが崩れて
+オペランドあたり 8 命令増えた。</li>
 <li>ユーザーの <code>to_s</code> が非 String を返せば <code>#&lt;Class:0xADDR&gt;</code> に落とす。</li>
 </ul>
 <p>JIT の <code>TraceIr::ConcatStr</code> → <code>AsmInst::ConcatStr</code> → <code>LInst::ConcatStr</code> →
