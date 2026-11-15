@@ -257,7 +257,11 @@ Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実�
 
 その他:
 - park は `Thread.stop`(または timeout 付きは `Kernel.sleep`)、
-  unpark は上記 `#wakeup` / `#__wakeup_permit` を使う。
+  unpark は上記 `#wakeup` / `#__wakeup_permit` を使う。`Mutex#sleep` の timeout 付き park は
+  `Thread.__sleep(sec)`: `Kernel#sleep` と同じ待ちで、戻り値が「起こされた(true)/ 時間切れ
+  (false)」(`scheduler::sleep_woken`。1:1 モデルは `park` の戻り値、green は
+  `ThreadInner::sleep_timed_out`)。`Mutex#sleep` は CRuby(`rb_mut_sleep`)と同じく時間切れなら
+  nil、起こされたら経過秒を返し、`ConditionVariable#wait` は引数の `sleep` の戻り値をそのまま返す。
 - `Mutex#sleep` / `ConditionVariable#wait` は unlock → park → **ensure で re-lock**。
   `#kill` / `#raise` が park 中に配送されても(§6 の unwind は ensure を実行するので)
   mutex は正しく再取得・解放される。スレッドが握ったまま終了したロックは
@@ -277,6 +281,20 @@ Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実�
   `ConditionVariable#signal` 側は変更なし)。`Thread#join` も同様に `block(thread, 残り秒)`
   で待ち、対象スレッドの終了フックが `unblock(join 側のスレッド, fiber)` で答える
   (`ThreadInner::fiber_joiners`)。
+- **Monitor**(`builtins/monitor.rb`)は CRuby の `ext/monitor/monitor.c` を Ruby で書いたもので、
+  Mutex + 所有 **Fiber**(`@owner`)+ 進入回数(`@count`)。`@count` を読み書きするのは所有者
+  だけ、`@owner` が変わるのは mutex を握っている間だけなので、この 2 つに別のロックは要らない。
+  `MonitorMixin` と `MonitorMixin::ConditionVariable` は CRuby の `ext/monitor/lib/monitor.rb`
+  そのまま(`wait` は `Monitor#wait_for_cond` 経由で `Thread::ConditionVariable#wait(@mutex, timeout)`。
+  回数ごと手放し、戻るときに同じ回数で取り直す)。注意点は最外側の `exit`: 「`@owner = nil`」と
+  「`Mutex#unlock`」の間(= `unlock` の callee-entry poll)で `Thread#raise` / kill が配送されると、
+  mutex は握ったままなのに monitor は無所有という状態が残る(同じスレッドの次の `enter` が
+  "deadlock; recursive locking"、他スレッドは永久待ち)。そこでこの 2 つを
+  `Thread.__uninterruptible_begin` / `__uninterruptible_end`(`Thread.__uninterruptible { }` の
+  ブロックなし版。区間が短く、ブロック呼び出しが区間のコストの大半になる場所用)で挟む。
+  どちらもネイティブ関数なので区間に入るまでの間にも配送点はない。`enter` 側は
+  `try_lock || lock` が戻ってから `@owner` を書くまでに poll がないので保護不要。
+  mutex は初回使用時に作る(CRuby はアロケータで作るので `super` を呼ばないサブクラスでも動く)。
 - Queue / SizedQueue は Mutex + ConditionVariable の上に載る(CRuby thread_sync.c と同じ構造)。
   すべての check-and-take をキューの mutex 下で行うことで、かつての
   `@items.empty?` / `@items.shift` のセーフポイント窓(2 つの pop が競合し片方が幻の nil を

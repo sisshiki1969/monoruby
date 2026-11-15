@@ -33,6 +33,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(THREAD_CLASS, "list", thread_list, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "stop", thread_stop, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "__stop", thread_park_forever, 0);
+    globals.define_builtin_class_func(THREAD_CLASS, "__sleep", thread_sleep_woken, 1);
     globals.define_builtin_class_func(THREAD_CLASS, "ignore_deadlock", thread_ignore_deadlock, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "ignore_deadlock=", thread_set_ignore_deadlock, 1);
 
@@ -64,6 +65,8 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         false,
     );
+    globals.define_builtin_class_func(THREAD_CLASS, "__uninterruptible_begin", thread_uninterruptible_begin, 0);
+    globals.define_builtin_class_func(THREAD_CLASS, "__uninterruptible_end", thread_uninterruptible_end, 0);
     globals.define_builtin_class_func_with(
         THREAD_CLASS,
         "pending_interrupt?",
@@ -186,6 +189,31 @@ fn thread_uninterruptible(
     scheduler::set_uninterruptible(cur, false);
     scheduler::deliver_pending_now(vm, globals, cur, at_blocking)?;
     res
+}
+
+///
+/// ### Thread.__uninterruptible_begin / Thread.__uninterruptible_end
+///
+/// Internal: a `Thread.__uninterruptible` section without the block, for
+/// a section short enough that calling a block would be most of its cost
+/// (`Monitor#exit`: two instance variables and a `Mutex#unlock`). The
+/// caller pairs them itself, `__uninterruptible_end` in an `ensure`;
+/// that is where the interrupts deferred meanwhile are delivered — not
+/// as a blocking point — and one takes precedence over an exception the
+/// section raised, as at the end of the block form.
+#[monoruby_builtin]
+fn thread_uninterruptible_begin(vm: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    let cur = scheduler::current_thread(vm);
+    scheduler::set_uninterruptible(cur, true);
+    Ok(Value::nil())
+}
+
+#[monoruby_builtin]
+fn thread_uninterruptible_end(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    let cur = scheduler::current_thread(vm);
+    scheduler::set_uninterruptible(cur, false);
+    scheduler::deliver_pending_now(vm, globals, cur, false)?;
+    Ok(Value::nil())
 }
 
 fn pending_filter(globals: &Globals, lfp: Lfp) -> Result<Option<Module>> {
@@ -577,6 +605,16 @@ fn thread_stop(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr)
 fn thread_park_forever(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
     scheduler::sleep(vm, globals, None)?;
     Ok(Value::nil())
+}
+
+/// `Thread.__sleep(sec)`: `Kernel#sleep(sec)` for the pure-Ruby
+/// `Mutex#sleep` (builtins/thread.rb), answering what ended the wait
+/// instead of how long it took — `true` if the thread was woken, `false`
+/// if `sec` ran out. CRuby's `rb_mut_sleep` reports the second as `nil`.
+#[monoruby_builtin]
+fn thread_sleep_woken(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let woken = super::kernel::sleep_thread(vm, globals, Some(lfp.arg(0)))?;
+    Ok(Value::bool(woken))
 }
 
 ///
@@ -2162,6 +2200,74 @@ mod tests {
             cv = ConditionVariable.new
             m.synchronize { cv.wait(m, 0.02) }
             :timeout_ok
+            "#,
+        );
+    }
+
+    /// `Thread::Mutex#sleep` answers nil when its timeout ran out and the
+    /// seconds slept when the sleeper was woken; `ConditionVariable#wait`
+    /// answers whatever `sleep` on its argument did. (This is what tells
+    /// `MonitorMixin::ConditionVariable#wait` true from false, #1927.)
+    #[test]
+    fn mutex_sleep_and_condvar_wait_results() {
+        run_test_once(
+            r#"
+            res = []
+            m = Thread::Mutex.new
+            cv = Thread::ConditionVariable.new
+            res << m.synchronize { m.sleep(0.01) }
+            res << m.synchronize { m.sleep(0) }
+            res << m.synchronize { m.sleep(1.2r / 100) }
+            res << m.synchronize { cv.wait(m, 0.01) }
+            res << m.synchronize { cv.wait(m, 0) }
+            res << (th = Thread.new { m.synchronize { m.sleep } }; Thread.pass until th.status == "sleep"; th.wakeup; th.value)
+            res << (th = Thread.new { m.synchronize { m.sleep(5) } }; Thread.pass until th.status == "sleep"; th.wakeup; th.value)
+            res << (th = Thread.new { m.synchronize { cv.wait(m) } }; Thread.pass until th.status == "sleep"; m.synchronize { cv.signal }; th.value)
+            res << (th = Thread.new { m.synchronize { cv.wait(m, 5) } }; Thread.pass until th.status == "sleep"; m.synchronize { cv.signal }; th.value)
+            res << (th = Thread.new { m.synchronize { cv.wait(m, 5) } }; Thread.pass until th.status == "sleep"; th.wakeup; th.value)
+            o = Object.new
+            def o.sleep(t) = [:slept, t]
+            res << [cv.wait(o, 0.01), cv.wait(o)]
+            res << [m.locked?, sleep(0.01), sleep(0.001r)]
+            res
+            "#,
+        );
+    }
+
+    /// `Monitor` in the thread model under test (the fuller set is
+    /// tests/monitor.rs, which only the default model runs): other
+    /// threads are kept out, a timed `wait` answers false and a signaled
+    /// one true, each with the monitor held again.
+    #[test]
+    fn monitor_excludes_and_waits() {
+        run_test_once(
+            r#"
+            require "monitor"
+            m = Monitor.new
+            c = m.new_cond
+            inside = overlap = total = 0
+            work = -> {
+              100.times do
+                m.synchronize do
+                  inside += 1
+                  overlap += 1 if inside > 1
+                  Thread.pass
+                  m.synchronize { total += 1 }
+                  inside -= 1
+                end
+              end
+            }
+            ts = 3.times.map { Thread.new(&work) }
+            work.call
+            ts.each(&:join)
+            timed = m.synchronize { [c.wait(0.01), m.mon_owned?] }
+            log = []
+            th = Thread.new { m.synchronize { log << :w; [c.wait, c.wait(5), m.mon_owned?] } }
+            Thread.pass until log.first == :w && th.status == "sleep"
+            m.synchronize { c.signal }
+            Thread.pass until th.status == "sleep"
+            m.synchronize { c.broadcast }
+            [overlap, total, inside, timed, th.value, m.mon_locked?]
             "#,
         );
     }

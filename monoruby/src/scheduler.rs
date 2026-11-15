@@ -358,6 +358,13 @@ pub(crate) fn dump_state_for_gc() -> String {
 /// The `Thread` object for the currently running thread, creating the
 /// main thread object lazily on first use.
 pub(crate) fn current_thread(vm: &mut Executor) -> Value {
+    // `current` is set from the moment the main thread object exists
+    // (`ensure_main` sets both), so one look answers nearly every call:
+    // this is `Thread.current`, and what `Mutex` and `Monitor` ask on
+    // every lock and unlock.
+    if let Some(cur) = SCHEDULER.with(|s| s.borrow().current) {
+        return cur;
+    }
     ensure_main(vm);
     SCHEDULER.with(|s| s.borrow().current.unwrap())
 }
@@ -736,6 +743,19 @@ pub(crate) fn sleep(
     globals: &mut Globals,
     dur: Option<Duration>,
 ) -> Result<Duration> {
+    sleep_woken(vm, globals, dur).map(|(elapsed, _)| elapsed)
+}
+
+/// `sleep`, also answering what ended it: `true` for a wake-up
+/// (`Thread#wakeup` / `#run`, a `Mutex` or `ConditionVariable` waking its
+/// waiter, a park permit left by one that raced the park), `false` for
+/// `dur` running out. `Mutex#sleep` returns `nil` for the latter, and
+/// `MonitorMixin::ConditionVariable#wait` `false`.
+pub(crate) fn sleep_woken(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    dur: Option<Duration>,
+) -> Result<(Duration, bool)> {
     let _guard = SchedCall::enter();
     if native::enabled() {
         return native::sleep(vm, globals, dur);
@@ -755,8 +775,9 @@ pub(crate) fn sleep(
         let inner = cur.as_thread_inner_mut();
         if inner.park_permit {
             inner.park_permit = false;
-            return Ok(Duration::ZERO);
+            return Ok((Duration::ZERO, true));
         }
+        inner.sleep_timed_out = false;
     }
     let start = Instant::now();
     // An enormous duration (e.g. sleep(2**62)) must not overflow Instant
@@ -782,7 +803,7 @@ pub(crate) fn sleep(
         });
         park_switch(vm, globals, cur)?;
     }
-    Ok(start.elapsed())
+    Ok((start.elapsed(), !cur0.as_thread_inner().sleep_timed_out))
 }
 
 /// Terminate every live thread except main at process exit, the way
@@ -1521,6 +1542,7 @@ fn wake_due_sleepers() {
         let main = s.main;
         for mut t in due {
             t.as_thread_inner_mut().state = ThreadState::Runnable;
+            t.as_thread_inner_mut().sleep_timed_out = true;
             if Some(t) != main {
                 s.ready.push_back(t);
             }

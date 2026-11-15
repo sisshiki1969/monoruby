@@ -642,8 +642,11 @@ class Thread
 
     # Atomically release the mutex, sleep, and re-acquire it on wake
     # (including on an exception raised into the sleeper). Returns the
-    # rounded number of seconds actually slept, as in CRuby. A negative
-    # duration is an ArgumentError (validated before the ownership check).
+    # number of seconds slept, rounded, when something woke the sleeper,
+    # and nil when `timeout` ran out, as in CRuby (rb_mut_sleep) — which
+    # is how `MonitorMixin::ConditionVariable#wait` tells the two apart. A
+    # negative duration is an ArgumentError (validated before the
+    # ownership check).
     def sleep(timeout = nil)
       if timeout && timeout < 0
         raise ArgumentError, "time interval must not be negative"
@@ -651,14 +654,17 @@ class Thread
       raise ThreadError, "Attempt to unlock a mutex which is not locked" unless owned?
       start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       unlock
+      woken = true
       begin
         if (scheduler = Fiber.current_scheduler)
           # CRuby's rb_mutex_sleep: the scheduler's `kernel_sleep(timeout)`,
           # nil included; a ConditionVariable#signal wakes the fiber with
-          # `unblock(mutex, fiber)`.
+          # `unblock(mutex, fiber)`. Whatever the hook did counts as woken.
           scheduler.kernel_sleep(timeout)
+        elsif timeout
+          woken = Thread.__sleep(timeout)
         else
-          timeout ? Kernel.sleep(timeout) : Thread.__stop
+          Thread.__stop
         end
       ensure
         # The re-acquire must complete even when a kill / Thread#raise
@@ -670,7 +676,7 @@ class Thread
         # this is the ensure of is itself the blocking call.
         Thread.__uninterruptible(true) { lock }
       end
-      (Process.clock_gettime(Process::CLOCK_MONOTONIC) - start).round
+      woken ? (Process.clock_gettime(Process::CLOCK_MONOTONIC) - start).round : nil
     end
   end
 
@@ -935,7 +941,8 @@ class Thread
 
     # Atomically release `mutex` and park until signaled (or the timeout
     # elapses), then re-acquire `mutex` before returning — also on an
-    # exception raised into the waiter.
+    # exception raised into the waiter. Returns what `mutex.sleep(timeout)`
+    # returned, as CRuby does: for a Mutex, nil when the timeout elapsed.
     def wait(mutex, timeout = nil)
       __wait(mutex, timeout, nil)
     end
@@ -975,7 +982,6 @@ class Thread
           @waiters.delete(Thread.current)
         end
       end
-      self
     end
 
     # ConditionVariable holds runtime synchronization state that cannot be
