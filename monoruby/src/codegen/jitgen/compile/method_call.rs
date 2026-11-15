@@ -3029,6 +3029,7 @@ impl<'a> JitContext<'a> {
         // the caller's locals alone, so they can travel in a register too.
         frameless: bool,
     ) -> Vec<(SlotId, FPReg)> {
+        use crate::codegen::jitgen::state::SfGuarded;
         let Some(modes) = args_info.0.as_mut() else {
             return vec![];
         };
@@ -3055,11 +3056,18 @@ impl<'a> JitContext<'a> {
         if fpr_resident(cs.recv) || (!frameless && cs.args < state.temp_start()) {
             return vec![];
         }
+        // Only a Float travels in a register. The register of an `Sf`
+        // slot that is (or may be) an Integer holds the float *copy* an
+        // arithmetic instruction made of it (`i * 0.5`): the parameter
+        // would be a Float in the callee. Such an argument is fetched
+        // from its stack home, which needs no boxing call.
         let sources: Vec<(SlotId, FPReg)> = (0..cs.pos_num)
             .filter_map(|i| {
                 let slot = cs.args + i;
                 match state.mode(slot) {
-                    LinkMode::F(x) | LinkMode::Sf(x, _) => Some((SlotId(1 + i as u16), x)),
+                    LinkMode::F(x) | LinkMode::Sf(x, SfGuarded::Float) => {
+                        Some((SlotId(1 + i as u16), x))
+                    }
                     _ => None,
                 }
             })

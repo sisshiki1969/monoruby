@@ -1649,3 +1649,66 @@ fn frameless_failure_is_remembered_per_call_site() {
         "#,
     );
 }
+
+#[test]
+fn integer_with_a_float_copy_is_not_passed_in_a_float_register() {
+    // #1925. `i * 0.5` leaves `i` with a float copy in a register
+    // (`Sf(_, Fixnum)`). Passing `i` to a frameless callee must hand over
+    // the Integer, not that copy: the callee would see a Float (`o + 1`
+    // a Float, `o.class` Float, `Float#kind` dispatched).
+    run_test(
+        r#"
+        class Integer; def kind = [self, :int]; end
+        class Float; def kind = [self, :float]; end
+        class FloatCopyArg
+          def inc(o) = o + 1
+          def kd(o) = o.kind
+          def idt(o) = o
+          def a1(i) = [i * 0.5, inc(i)]
+          def a2(i) = [i * 0.5, kd(i)]
+          def a3(i) = (x = i * 0.5; y = i; [x, kd(y), idt(y)])
+          # A real Float still travels in the register.
+          def a4(f) = [f * 0.5, inc(f), kd(f)]
+          # Integer or Float, by the path taken.
+          def a5(i, c) = (v = c ? i : i + 0.5; [v * 2.0, kd(v), inc(v)])
+        end
+        o = FloatCopyArg.new
+        res = []
+        50.times do |i|
+          res << o.a1(i) << o.a2(i) << o.a3(i) << o.a4(i + 0.25) << o.a5(i, i.even?)
+        end
+        res
+        "#,
+    );
+}
+
+#[test]
+fn integer_with_a_float_copy_is_not_returned_as_a_raw_float() {
+    // #1925, the return side: a specialized body whose return value is an
+    // Integer with a float copy must not use the raw-f64 return
+    // convention.
+    run_test(
+        r#"
+        class FloatCopyRet
+          def initialize = @g = 0.0
+          def keep(i)
+            @g = i * 0.5
+            i
+          end
+          def keep2(i, f) = (@g = i + f; i)
+          # A Float on every return edge still returns raw.
+          def flt(i) = (@g = i * 0.5; @g + 1.0)
+          # Integer on one edge, Float on the other.
+          def mix(i) = (x = i * 0.5; i.even? ? i : x)
+          def c1(i) = keep(i) + 1
+          def c2(i) = [keep(i), keep2(i, 0.25).to_s]
+          def c3(i) = flt(i) * 2.0
+          def c4(i) = mix(i) + 1
+        end
+        o = FloatCopyRet.new
+        res = []
+        50.times { |i| res << o.c1(i) << o.c2(i) << o.c3(i) << o.c4(i) }
+        res
+        "#,
+    );
+}

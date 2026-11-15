@@ -4748,8 +4748,12 @@ impl<'a> JitContext<'a> {
 ///
 fn float_ret_src(mode: LinkMode) -> Option<crate::codegen::jitgen::asmir::OuterFprSrc> {
     use crate::codegen::jitgen::asmir::OuterFprSrc;
+    use crate::codegen::jitgen::state::SfGuarded;
     match mode {
-        LinkMode::F(fpr) | LinkMode::Sf(fpr, _) => Some(OuterFprSrc::Fpr(fpr)),
+        // Not an `Sf` that is (or may be) an Integer: its register holds
+        // the float copy an arithmetic instruction made of the Integer,
+        // and the call site would resume with a Float.
+        LinkMode::F(fpr) | LinkMode::Sf(fpr, SfGuarded::Float) => Some(OuterFprSrc::Fpr(fpr)),
         LinkMode::C(v) => v.try_float().map(|f| OuterFprSrc::Imm(f.to_bits())),
         _ => None,
     }
