@@ -1326,8 +1326,11 @@ pub(crate) struct JitContext<'a> {
     /// they are tried again only from a smaller count.
     pub(super) frameless_budget_rejected: HashMap<ISeqId, usize>,
     /// How many times a body was refused for the chain budget in this
-    /// compile (`frameless_chain_enter`).
+    /// compile (`frameless_chain_enter`, `frameless_refused`).
     pub(super) frameless_budget_hits: usize,
+    /// How many times a body was refused because this unit had already
+    /// abandoned it somewhere else (`frameless_refused`).
+    pub(super) frameless_unit_refusals: usize,
     /// Set by `inline_class_new` for the frameless compile it is about to
     /// start: the callee's `self` is the object just allocated, so its
     /// frame is marked `AsmInfo::self_fresh`. Taken by the frame's
@@ -1406,6 +1409,7 @@ impl<'a> JitContext<'a> {
             frameless_chain_bc: 0,
             frameless_budget_rejected: Default::default(),
             frameless_budget_hits: 0,
+            frameless_unit_refusals: 0,
             pending_fresh_self: false,
             pending_class_new_redo: None,
             outer_claim_barrier: false,
@@ -1490,6 +1494,7 @@ impl<'a> JitContext<'a> {
             frameless_chain_bc: self.frameless_chain_bc,
             frameless_budget_rejected: Default::default(),
             frameless_budget_hits: 0,
+            frameless_unit_refusals: 0,
             pending_fresh_self: false,
             pending_class_new_redo: None,
             loop_hoist_disabled: self.loop_hoist_disabled.clone(),
