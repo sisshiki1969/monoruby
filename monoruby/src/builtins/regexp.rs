@@ -507,7 +507,7 @@ pub(crate) fn regexp_inner_from_parts(
     // UTF-8 codec such an escape is "too short multibyte code string".
     let binary_source = source_encoding == Some(crate::value::Encoding::Ascii8)
         && source_bytes.as_ref().is_some_and(|b| {
-            b.iter().any(|&c| c >= 0x80)
+            !b.is_ascii()
                 || content_fixed == Some(crate::value::Encoding::Ascii8)
         });
     // A source in a native ASCII-compatible codec (EUC-JP, Shift_JIS,
@@ -526,7 +526,7 @@ pub(crate) fn regexp_inner_from_parts(
             })
             .filter(|e| {
                 source_bytes.as_ref().is_some_and(|b| {
-                    b.iter().any(|&c| c >= 0x80) || content_fixed == Some(*e)
+                    !b.is_ascii() || content_fixed == Some(*e)
                 })
             })
             .and_then(RegexpInner::onigmo_encoding_for)
@@ -899,7 +899,7 @@ fn union_arg_encoding(globals: &Globals, arg: Value) -> ArgEnc {
         // it must not be treated as ASCII-only (which would let
         // `Regexp.union` downgrade the result to US-ASCII).
         let ascii_only = re.declared_encoding() != crate::value::Encoding::Ascii8
-            && re.source_bytes().iter().all(|&b| b < 0x80);
+            && re.source_bytes().is_ascii();
         return ArgEnc {
             encoding: re.declared_encoding(),
             fixed: re.fixed_encoding(),
@@ -908,7 +908,7 @@ fn union_arg_encoding(globals: &Globals, arg: Value) -> ArgEnc {
     }
     if let Some(s) = arg.is_rstring_inner() {
         let enc = s.encoding();
-        let has_non_ascii = s.as_bytes().iter().any(|&b| b >= 0x80);
+        let has_non_ascii = !s.as_bytes().is_ascii();
         let fixed = has_non_ascii || !enc.is_ascii_compatible();
         return ArgEnc {
             encoding: enc,

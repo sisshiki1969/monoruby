@@ -11021,7 +11021,7 @@ fn tr_sets_cp(
         && recv.is_ascii_only()
         && [a, b].iter().all(|v| {
             v.is_rstring_inner()
-                .is_some_and(|s| s.as_bytes().iter().all(|x| *x < 0x80))
+                .is_some_and(|s| s.as_bytes().is_ascii())
         })
     {
         return Ok(None);
@@ -11030,7 +11030,7 @@ fn tr_sets_cp(
         let Some(s) = v.is_rstring_inner() else {
             return Ok(None);
         };
-        if s.as_bytes().iter().any(|x| *x >= 0x80) {
+        if !s.as_bytes().is_ascii() {
             let Some(merged) = recv.compatible_encoding(&s) else {
                 return Err(MonorubyErr::incompatible_encoding(
                     &globals.store,
@@ -11674,7 +11674,7 @@ fn nonutf8_charsets(
     if recv.is_ascii_only()
         && args.iter().all(|a| {
             a.is_rstring_inner()
-                .is_some_and(|s| s.as_bytes().iter().all(|x| *x < 0x80))
+                .is_some_and(|s| s.as_bytes().is_ascii())
         })
     {
         return Ok(None);
@@ -11684,7 +11684,7 @@ fn nonutf8_charsets(
         let Some(s) = a.is_rstring_inner() else {
             return Ok(None);
         };
-        if s.as_bytes().iter().any(|x| *x >= 0x80) && s.encoding() != recv.encoding() {
+        if !s.as_bytes().is_ascii() && s.encoding() != recv.encoding() {
             return Err(MonorubyErr::incompatible_encoding(
                 &globals.store,
                 recv.encoding(),
@@ -12594,7 +12594,7 @@ fn scrub_replacement(globals: &mut Globals, lfp: Lfp, self_enc: Encoding) -> Res
         // An all-ASCII replacement is compatible with any
         // ASCII-compatible target encoding (CRuby allows
         // `s.scrub("?")` regardless of `s`'s encoding).
-        let repl_ascii_only = r_inner.as_bytes().iter().all(|b| *b < 0x80);
+        let repl_ascii_only = r_inner.as_bytes().is_ascii();
         // `rb_enc_check`'s rule, and only that: the same encoding, or
         // a replacement with nothing above 0x7F. A US-ASCII receiver
         // does *not* take a non-ASCII UTF-8 replacement, though both
@@ -13051,7 +13051,7 @@ fn unicode_normalized_p(
     // ASCII-compatible encoding say that: UTF-16 `"e\u0301"` is four
     // bytes under 0x80.
     if enc == Encoding::UsAscii
-        || (enc.is_ascii_compatible() && inner.as_bytes().iter().all(|b| *b < 0x80))
+        || (enc.is_ascii_compatible() && inner.as_bytes().is_ascii())
     {
         // Verify the form is valid even when we shortcut.
         let _ = normalize_form(vm, globals, lfp)?;

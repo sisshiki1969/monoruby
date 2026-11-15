@@ -2951,7 +2951,7 @@ pub(crate) fn cell_decode<'a>(
     // A table encoding reads every cell through its own table, so the
     // buffer only skips the careful path when it holds no cell at all.
     let needs_fixup = fx.is_some_and(|fx| jp_decode_needs_fixup(fx, bytes))
-        || (cell_table(enc).is_some() && bytes.iter().any(|&b| b >= 0x80));
+        || (cell_table(enc).is_some() && !bytes.is_ascii());
     let broken = matches!(enc.classify(bytes), crate::value::CodeRange::Broken);
     if !needs_fixup && !broken {
         let d = plain(bytes);
@@ -6838,7 +6838,7 @@ pub(crate) fn stream_convert(
         let through_error = (consumed + meta.error_bytes.len()).min(src_bytes.len());
         return (kind, through_error, out, meta);
     }
-    let all_ascii = src_bytes.iter().all(|&b| b < 0x80);
+    let all_ascii = src_bytes.is_ascii();
     if all_ascii && src_enc.is_ascii_compatible() && dst_enc.is_ascii_compatible() {
         let limit = max_dst_bytes
             .unwrap_or(src_bytes.len())

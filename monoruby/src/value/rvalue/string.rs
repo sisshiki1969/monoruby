@@ -2390,7 +2390,7 @@ impl Encoding {
         // ASCII-compatible encoding (UTF-8/US-ASCII/EUC-JP/SJIS/
         // ISO-8859-*). UTF-16/32 don't qualify even for "abc" (since
         // their code units are 2/4 bytes), so skip the fast path.
-        if self.is_ascii_compatible() && bytes.iter().all(|b| *b < 0x80) {
+        if self.is_ascii_compatible() && bytes.is_ascii() {
             return CodeRange::SevenBit;
         }
         match self {
@@ -4650,7 +4650,7 @@ impl RStringInner {
     /// input was.
     pub fn from_ascii_bytes(bytes: SmallVec<[u8; STRING_INLINE_CAP]>, encoding: Encoding) -> Self {
         debug_assert!(
-            bytes.iter().all(|b| *b < 0x80),
+            bytes.is_ascii(),
             "from_ascii_bytes: caller passed a byte >= 0x80"
         );
         debug_assert!(
@@ -4810,7 +4810,7 @@ impl RStringInner {
     /// bytes, so we fold the SevenBit/Valid classification into the
     /// same pass.
     pub fn from_vec_scanned(vec: Vec<u8>) -> Self {
-        let (enc, cr) = if vec.iter().all(|&b| b < 0x80) {
+        let (enc, cr) = if vec.is_ascii() {
             (Encoding::UTF8, CodeRange::SevenBit)
         } else if std::str::from_utf8(&vec).is_ok() {
             (Encoding::UTF8, CodeRange::Valid)
@@ -5061,7 +5061,7 @@ impl RStringInner {
         // repeated callers (e.g. String#<< with single-char Integer args
         // or per-codepoint encode loops) don't degenerate to O(N²) when
         // self.code_range() is later queried.
-        let slice_cr = if slice.iter().all(|&b| b < 0x80) {
+        let slice_cr = if slice.is_ascii() {
             CodeRange::SevenBit
         } else if self.ty.is_utf8_compatible() {
             CodeRange::Valid
@@ -5101,7 +5101,7 @@ impl RStringInner {
         if slice.is_empty() {
             return;
         }
-        let slice_cr = if self.ty.is_ascii_compatible() && slice.iter().all(|&b| b < 0x80) {
+        let slice_cr = if self.ty.is_ascii_compatible() && slice.is_ascii() {
             CodeRange::SevenBit
         } else {
             self.ty.classify(slice)
@@ -5379,7 +5379,7 @@ impl RStringInner {
     /// broken one is re-scanned on demand.
     pub fn push_char_bytes(&mut self, bytes: &[u8]) {
         let cr = match self.cr.get() {
-            CodeRange::SevenBit if bytes.iter().all(|&b| b < 0x80) => CodeRange::SevenBit,
+            CodeRange::SevenBit if bytes.is_ascii() => CodeRange::SevenBit,
             CodeRange::SevenBit | CodeRange::Valid => CodeRange::Valid,
             _ => CodeRange::Unknown,
         };
@@ -6299,7 +6299,7 @@ pub(crate) fn transcode_bytes_with_opts(
     if src_enc == E::UsAscii
         && src_enc != dst_enc
         && !opts.invalid_replace
-        && src_bytes.iter().any(|&b| b >= 0x80)
+        && !src_bytes.is_ascii()
     {
         return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
     }
@@ -6335,7 +6335,7 @@ pub(crate) fn transcode_bytes_with_opts(
             })?;
         return Ok(latin1_bytes_to_ibm037(&latin1));
     }
-    let all_ascii = src_bytes.iter().all(|&b| b < 0x80);
+    let all_ascii = src_bytes.is_ascii();
     if all_ascii
         && src_enc.is_ascii_compatible()
         && !is_utf16_or_32(dst_enc)
