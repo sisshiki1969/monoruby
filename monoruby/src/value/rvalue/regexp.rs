@@ -2620,6 +2620,32 @@ impl<'a> Subject<'a> {
         }
     }
 
+    /// A text subject that is `inner`'s own bytes (`view` borrows them,
+    /// `check_utf8`) or their surrogate image (`regex_view`). Whether it
+    /// is ASCII is read off `inner`'s cached code range instead of a
+    /// scan of `view`: a surrogate image has a scalar above U+007F for
+    /// the high byte that made `inner` need one, and otherwise the view
+    /// is the bytes themselves — `SevenBit` says they are ASCII, and any
+    /// other range of an ASCII-compatible encoding means a high byte,
+    /// since `classify` answers `SevenBit` for ASCII-only bytes there.
+    pub(crate) fn of(view: &'a str, inner: &RStringInner) -> Self {
+        let mapped = inner.needs_byte_mapping();
+        let ascii = !mapped
+            && match inner.code_range() {
+                crate::value::CodeRange::SevenBit => true,
+                _ if inner.encoding().is_ascii_compatible() => false,
+                _ => view.is_ascii(),
+            };
+        Subject {
+            bytes: view.as_bytes(),
+            text: Some(view),
+            enc: inner.encoding(),
+            mapped,
+            native: None,
+            ascii,
+        }
+    }
+
     /// The raw bytes of `inner`, to be matched under `native`.
     pub(crate) fn bytes(inner: &'a RStringInner, native: OnigmoEncoding) -> Self {
         Subject {
@@ -2752,9 +2778,17 @@ impl<'a> Subject<'a> {
         }
     }
 
-    /// The walked bytes as a fresh string, in `view_encoding`.
+    /// The walked bytes as a fresh string, in `view_encoding`. A subject
+    /// known to be ASCII under an ASCII-compatible encoding is `SevenBit`
+    /// without a scan — the no-match return of `gsub`.
     pub(crate) fn to_inner(&self) -> RStringInner {
-        RStringInner::from_encoding_scanned(self.bytes, self.view_encoding())
+        let enc = self.view_encoding();
+        let cr = if self.ascii && enc.is_ascii_compatible() {
+            crate::value::CodeRange::SevenBit
+        } else {
+            enc.classify(self.bytes)
+        };
+        RStringInner::from_buf_cr(StringBuf::from_slice(self.bytes), enc, cr)
     }
 }
 
@@ -2820,10 +2854,11 @@ pub(crate) fn spans_of(region: &onigmo_regex::Region) -> Spans {
 }
 
 /// Save `spans` (a match over `subject`) as `$~`; `owner` is the String
-/// Value whose bytes a byte subject walks.
+/// Value whose bytes `subject` walks — a byte subject's raw bytes, or
+/// the string a text view was cut from.
 pub(crate) fn save_spans(vm: &mut Executor, subject: &Subject, spans: &[Option<(usize, usize)>], owner: Value) {
     match subject.as_text() {
-        Some(s) => vm.save_capture_spans(spans, s),
+        Some(s) => vm.save_capture_spans_in(spans, s, owner),
         None => vm.save_capture_spans_bytes(spans, owner),
     }
 }
@@ -3089,7 +3124,7 @@ impl RegexpInner {
                     Some(subject) => subject,
                     None => {
                         view = inner.regex_view()?;
-                        Subject::text(&view, inner.encoding(), inner.needs_byte_mapping())
+                        Subject::of(&view, inner)
                     }
                 };
                 let mut region = ScratchRegion::take();
@@ -3148,7 +3183,7 @@ impl RegexpInner {
             Some(subject) => subject,
             None => {
                 view = inner.regex_view()?;
-                Subject::text(&view, inner.encoding(), inner.needs_byte_mapping())
+                Subject::of(&view, inner)
             }
         };
         let recv_len = recv.as_rstring_inner().len();
@@ -3458,7 +3493,7 @@ impl RegexpInner {
             Some(subject) => subject,
             None => {
                 view = inner.regex_view()?;
-                Subject::text(&view, inner.encoding(), inner.needs_byte_mapping())
+                Subject::of(&view, inner)
             }
         };
         let recv_len = recv.as_rstring_inner().len();
@@ -4557,6 +4592,34 @@ mod expand_unicode_braces_tests {
 mod regex_cache_tests {
     use super::*;
     use onigmo_regex::OnigmoEncoding;
+
+    /// `Subject::of` answers `is_ascii` from the receiver's cached code
+    /// range; it must agree with the scan `Subject::text` runs on the view.
+    #[test]
+    fn subject_of_agrees_with_a_scan_of_the_view() {
+        use crate::value::Encoding;
+        let cases: [(&[u8], Encoding); 7] = [
+            (b"", Encoding::UTF8),
+            (b"abc", Encoding::UTF8),
+            ("\u{e9}".as_bytes(), Encoding::UTF8),
+            (b"abc", Encoding::Ascii8),
+            (b"a\xff", Encoding::Ascii8),
+            (b"abc", Encoding::EUC_JP),
+            (b"a\x00b\x00", Encoding::Utf16Le),
+        ];
+        for (bytes, enc) in cases {
+            let inner = RStringInner::from_encoding(bytes, enc);
+            let view = inner.regex_view().unwrap();
+            let of = Subject::of(&view, &inner);
+            let text = Subject::text(&view, inner.encoding(), inner.needs_byte_mapping());
+            assert_eq!(of.is_ascii(), text.is_ascii(), "{bytes:?} {enc:?}");
+            assert_eq!(of.mapped(), text.mapped(), "{bytes:?} {enc:?}");
+            assert_eq!(of.view_encoding(), text.view_encoding(), "{bytes:?} {enc:?}");
+            let back = of.to_inner();
+            assert_eq!(back.as_bytes(), view.as_bytes(), "{bytes:?} {enc:?}");
+            assert_eq!(back.code_range(), of.view_encoding().classify(view.as_bytes()));
+        }
+    }
 
     // Use a distinctive source per test so we don't depend on whether
     // some other test in the suite already populated REGEX_CACHE for

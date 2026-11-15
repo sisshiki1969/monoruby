@@ -1465,11 +1465,7 @@ fn slice_subject<'a>(
         return Ok(subject);
     }
     let text: &'a str = view.insert(inner.regex_view()?);
-    Ok(Subject::text(
-        text,
-        inner.encoding(),
-        inner.needs_byte_mapping(),
-    ))
+    Ok(Subject::of(text, inner))
 }
 
 /// Shared body of `String#partition` / `String#rpartition`.
@@ -5211,13 +5207,13 @@ fn pattern_subject(
     }
     match pattern_mode(globals, self_val, pattern)? {
         (_, Some(native)) => Ok((Subject::bytes(inner, native), None)),
-        (mapped, None) => {
+        (_, None) => {
             let view = inner.regex_view()?;
             // SAFETY of the lifetime: the view lives in the returned
             // tuple, which outlives the subject that borrows it; the
             // caller drops both together (`decode_replaced`).
             let text: &'static str = unsafe { std::mem::transmute::<&str, &'static str>(&view) };
-            Ok((Subject::text(text, inner.encoding(), mapped), Some(view)))
+            Ok((Subject::of(text, inner), Some(view)))
         }
     }
 }
@@ -5906,7 +5902,7 @@ fn scan_block_loop(
         Some(subject) => subject,
         None => {
             view = inner.regex_view()?;
-            Subject::text(&view, inner.encoding(), inner.needs_byte_mapping())
+            Subject::of(&view, inner)
         }
     };
     let recv_len = recv.as_rstring_inner().len();
@@ -14247,6 +14243,18 @@ mod tests {
     #[test]
     fn gsub() {
         run_tests(&[
+            // A match inside the block (its own `gsub`) replaces `$~` for the
+            // rest of the block, as in CRuby (the block shares the method's
+            // frame, hence its `$~`), and the walk's own last match is what
+            // is left behind once it is over.
+            r##"
+        res = ("ab1 cd2 ef3 " * 3000).gsub(/([a-z]+)(\d)/) {
+          outer = [$1, $2]
+          inner = $2.gsub(/\d/) { "<#{$&}>" }
+          (outer + [$1, $2, inner]).join("-")
+        }
+        [res.size, res[0, 40], $~[0], $1, $2, $~.pre_match.size]
+        "##,
             r##"
         res = "abcdefgdef".gsub(/def/, "!!")
         [res, $&, $']
