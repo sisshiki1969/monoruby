@@ -204,6 +204,18 @@ pub struct Store {
     /// class's resolved hooks against these to recognize the no-op case
     /// and skip the copy-hook dispatch. Set once during builtin init.
     default_copy_hooks: Option<[FuncId; 3]>,
+    /// What `to_s` resolved to, once the builtins had finished defining
+    /// themselves, on each class whose instances an interpolation formats
+    /// without a dispatch (`TO_S_SHORTCUT_CLASSES`). `None` until then:
+    /// while the core library is still loading, its own definitions are
+    /// the builtin ones. See `to_s_builtin_classes`.
+    builtin_to_s: Option<[Option<FuncId>; TO_S_SHORTCUT_CLASSES.len()]>,
+    /// Version-stamped memo: the classes of `TO_S_SHORTCUT_CLASSES` whose
+    /// `to_s` still resolves to `builtin_to_s`, as a bit per class in the
+    /// low byte, under the class_version they were resolved at
+    /// (`to_s_memo`). One word, so that "nothing has changed and every
+    /// class is builtin" is a single compare.
+    to_s_builtin_at: std::cell::Cell<u64>,
     /// Global method cache: memoizes `name` × `class` → method-table
     /// entry lookups, cleared as a whole when class_version moves on.
     /// In a `RefCell` because lookups happen behind `&Store` (including
@@ -859,6 +871,9 @@ impl Store {
             recv_escape: HashMap::default(),
             default_neq: None,
             default_copy_hooks: None,
+            builtin_to_s: None,
+            // No class_version is this wide: nothing is memoized yet.
+            to_s_builtin_at: std::cell::Cell::new(u64::MAX),
             method_cache: RefCell::new(GlobalMethodCache::default()),
             compile_warnings: vec![],
             frozen_str_pool: HashMap::default(),
@@ -2092,6 +2107,92 @@ impl Store {
         }
     }
 
+    /// Record what `to_s` resolves to on the classes an interpolation
+    /// formats directly. Called once, when the builtins (the Rust ones and
+    /// the Ruby core library) have finished defining themselves.
+    pub(crate) fn record_builtin_to_s(&mut self) {
+        let resolved = TO_S_SHORTCUT_CLASSES.map(|class_id| {
+            self.search_method_by_class_id(class_id, IdentId::TO_S)
+                .and_then(|e| e.func_id())
+        });
+        self.builtin_to_s = Some(resolved);
+    }
+
+    ///
+    /// The classes of `TO_S_SHORTCUT_CLASSES` on which `to_s` is still the
+    /// builtin one, as a bit per class (`TO_S_ALL_BUILTIN` when nobody has
+    /// touched any) — so `"#{v}"` may format a `v` of such a class itself
+    /// instead of calling the method.
+    ///
+    /// This is the test CRuby's `objtostring` makes before its own
+    /// shortcuts (`vm_objtostring`: the method entry found for the
+    /// receiver's class is `rb_int_to_s`, `rb_nil_to_s`, … ), widened to
+    /// the classes monoruby formats directly: a `def to_s` in the class, a
+    /// module prepended to it, an `undef_method` or a `remove_method` all
+    /// make the lookup answer something else, and the interpolation then
+    /// dispatches.
+    ///
+    /// Memoized per class_version (same pattern as `no_to_str`, kept here
+    /// rather than on the classes so one compare answers for all of
+    /// them): an interpolation asks once, and the common case is a load
+    /// and a compare. `version` must be the current class_version.
+    ///
+    #[inline]
+    pub(crate) fn to_s_builtin_classes(&self, version: u32) -> u8 {
+        let memo = self.to_s_builtin_at.get();
+        if memo >> 8 == version as u64 {
+            memo as u8
+        } else {
+            self.resolve_to_s_builtin_classes(version)
+        }
+    }
+
+    /// `to_s_builtin_classes(version) == TO_S_ALL_BUILTIN`, which is what
+    /// every interpolation asks first.
+    #[inline]
+    pub(crate) fn to_s_all_builtin(&self, version: u32) -> bool {
+        self.to_s_builtin_at.get() == to_s_memo(version, TO_S_ALL_BUILTIN)
+            || self.resolve_to_s_builtin_classes(version) == TO_S_ALL_BUILTIN
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn resolve_to_s_builtin_classes(&self, version: u32) -> u8 {
+        let Some(builtin) = self.builtin_to_s else {
+            return TO_S_ALL_BUILTIN;
+        };
+        let mut classes = 0;
+        for (i, class_id) in TO_S_SHORTCUT_CLASSES.into_iter().enumerate() {
+            let found = self
+                .check_method_for_class_with_version(class_id, IdentId::TO_S, version)
+                .and_then(|e| e.func_id());
+            if found.is_some() && found == builtin[i] {
+                classes |= 1 << i;
+            }
+        }
+        self.to_s_builtin_at.set(to_s_memo(version, classes));
+        classes
+    }
+
+    ///
+    /// `to_s` on `class_id` is still the builtin one
+    /// (`to_s_builtin_classes`). A class that never had a shortcut is not
+    /// builtin in this sense — nor is a singleton class of a Complex or a
+    /// Rational.
+    ///
+    pub(crate) fn to_s_is_builtin(&self, class_id: ClassId, version: u32) -> bool {
+        // The Bignum tag is a representation, not a method namespace.
+        let class_id = if class_id == BIGNUM_CLASS {
+            INTEGER_CLASS
+        } else {
+            class_id
+        };
+        match TO_S_SHORTCUT_CLASSES.iter().position(|c| *c == class_id) {
+            Some(i) => self.to_s_builtin_classes(version) & (1 << i) != 0,
+            None => false,
+        }
+    }
+
     ///
     /// Resolve `=~` on `class_id`, memoized per class_version (same
     /// pattern as `no_to_str`: the uncached ancestor walk runs at most
@@ -2816,6 +2917,30 @@ pub struct ConstSiteId(pub u32);
 /// Number of ways a call site's polymorphic method cache keeps before it
 /// counts further keys as megamorphic overflow.
 pub const PMC_WAYS: usize = 4;
+
+/// The classes whose instances `Executor::tos_direct` and
+/// `runtime::concatenate_string_inner` turn into a String without calling
+/// `to_s` — while that method is still the builtin one
+/// (`Store::to_s_builtin_classes`).
+const TO_S_SHORTCUT_CLASSES: [ClassId; 8] = [
+    INTEGER_CLASS,
+    FLOAT_CLASS,
+    NIL_CLASS,
+    TRUE_CLASS,
+    FALSE_CLASS,
+    SYMBOL_CLASS,
+    COMPLEX_CLASS,
+    RATIONAL_CLASS,
+];
+
+/// `Store::to_s_builtin_classes` when every class still has its builtin
+/// `to_s`.
+const TO_S_ALL_BUILTIN: u8 = u8::MAX;
+
+/// The word `Store::to_s_builtin_at` holds for `classes` at `version`.
+const fn to_s_memo(version: u32, classes: u8) -> u64 {
+    (version as u64) << 8 | classes as u64
+}
 
 /// The key of a compilation unit's salvage record, and of its entry in the
 /// method-name index: `(iseq, self_class, None)` for a whole-method unit,

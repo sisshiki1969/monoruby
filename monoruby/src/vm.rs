@@ -80,6 +80,9 @@ pub(crate) struct Vm {
     ivar_tys: RefCell<crate::ivar_ty::IvarTyTable>,
     /// The `is_a?` answers compiled units assumed (`ancestry::ANCESTRY`).
     ancestry: RefCell<crate::ancestry::AncestryTable>,
+    /// Where `codegen` keeps the VM's class-version word; null until
+    /// `codegen` exists. See [`class_version`].
+    class_version_word: Cell<*const u32>,
 }
 
 impl Vm {
@@ -107,6 +110,7 @@ impl Vm {
             owned_fds: RefCell::new(crate::HashSet::default()),
             ivar_tys: RefCell::new(Default::default()),
             ancestry: RefCell::new(Default::default()),
+            class_version_word: Cell::new(std::ptr::null()),
         }
     }
 }
@@ -265,8 +269,34 @@ pub(crate) static ALLOC: VmField<RefCell<Allocator<RValue>>> =
 
 pub(crate) static GC_FORCE_MAJOR: VmField<Cell<bool>> = VmField::new(|vm| &vm.gc_force_major);
 
-pub(crate) static CODEGEN: VmField<RefCell<Codegen>> =
-    VmField::new(|vm| vm.codegen.get_or_init(|| RefCell::new(Codegen::new())));
+pub(crate) static CODEGEN: VmField<RefCell<Codegen>> = VmField::new(|vm| {
+    vm.codegen.get_or_init(|| {
+        let codegen = Codegen::new();
+        vm.class_version_word.set(codegen.class_version_word());
+        RefCell::new(codegen)
+    })
+});
+
+/// The VM's class version: `Codegen::class_version`, without the
+/// `RefCell` borrow.
+///
+/// The version-stamped memos (`Store::hash_method`,
+/// `Store::to_s_all_builtin`, …) read it on every use, and several of
+/// them sit on paths that are a few dozen instructions long — a string
+/// interpolation, a Hash lookup — where the borrow was most of what the
+/// memo cost.
+#[inline]
+pub(crate) fn class_version() -> u32 {
+    let word = vm().class_version_word.get();
+    if word.is_null() {
+        return CODEGEN.with(|codegen| codegen.borrow().class_version());
+    }
+    // SAFETY: the word lives in the JIT memory `codegen` owns, at an
+    // address that never moves, and `codegen` is dropped only with the
+    // `Vm` itself. It is written under the GVL, like every other use of
+    // `codegen`.
+    unsafe { *word }
+}
 
 pub(crate) static SCHEDULER: VmField<RefCell<Scheduler>> =
     VmField::new(|vm| vm.scheduler.get_or_init(|| RefCell::new(Scheduler::new())));

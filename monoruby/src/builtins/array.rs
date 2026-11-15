@@ -1965,11 +1965,8 @@ fn drop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let ary = lfp.self_val().as_array();
     let num = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     if num < 0 {
-        return Err(MonorubyErr::argumenterr(format!(
-            "Attempt to drop negative size. {}",
-            num
-        )));
-    };
+        return Err(MonorubyErr::argumenterr("attempt to drop negative size"));
+    }
     let num = num as usize;
     if num >= ary.len() {
         return Ok(Value::array_empty());
@@ -2482,7 +2479,7 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
         if n < 0 {
-            return Err(MonorubyErr::argumenterr("must be positive."));
+            return Err(MonorubyErr::argumenterr("negative array size"));
         }
         let n = if n as usize > ary.len() {
             ary.len()
@@ -2508,7 +2505,7 @@ fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     } else {
         let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
         if n < 0 {
-            return Err(MonorubyErr::argumenterr("must be positive."));
+            return Err(MonorubyErr::argumenterr("negative array size"));
         }
         let n = if n as usize > ary.len() {
             0
@@ -2568,7 +2565,7 @@ fn take(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let ary = lfp.self_val().as_array();
     let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     if n < 0 {
-        return Err(MonorubyErr::argumenterr("must be positive."));
+        return Err(MonorubyErr::argumenterr("attempt to take negative size"));
     }
     let n = n as usize;
     if n > ary.len() {

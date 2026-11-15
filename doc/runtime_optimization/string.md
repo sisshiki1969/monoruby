@@ -264,8 +264,25 @@ String になる）。**リテラル断片はインターン済み frozen テン
   組む。短い結果はヒープに触れず、長い結果は確保 1 回で、
   `RStringInner::from_buf_cr` がそのまま採用する。
 - **Fixnum オペランドはバッファに直接整形する**（`format_i64` +
-  `append_piece`）。`to_s` でヒープ String を作らない。`vm.to_s_is_refined`
-  で refinement が勝つようゲート。
+  `append_piece`）。`to_s` でヒープ String を作らない。
+- **`to_s` を呼ばない近道は、その `to_s` が組み込みのままの間だけ。**
+  Fixnum の直接整形と、nil / true / false / Symbol / Float / Bignum /
+  Complex / Rational を dispatch なしで文字列にする近道
+  （`Executor::tos_direct`）は、CRuby の `vm_objtostring` と同じく
+  「そのクラスの `to_s` が組み込みのものに解決される」ことを条件にする
+  （`class Integer; def to_s = ...; end`、`prepend`、`undef_method` で
+  外れる）。判定は `Executor::to_s_shortcut_all` が式展開 1 回につき 1 度
+  行う: 起動完了時に記録した 8 クラスの `to_s` の FuncId
+  （`Store::record_builtin_to_s`）と現在の解決結果を比べ、結果を
+  class_version と 1 語にまとめてメモする（`Store::to_s_builtin_at`）ので、
+  通常は class_version の読み出しと比較 1 回。`to_s` の refinement が
+  スコープにあるとき（`vm.to_s_is_refined`）も近道を取らない。全オペランド
+  が String ならこの判定自体を飛ばす。
+- 呼び出しが必要なオペランドに当たったら、残りは `append_dispatched`
+  （アウトライン）が引き継ぐ。呼んだ `to_s` が別の `to_s` を定義し得る
+  ので、こちらは呼び出しのたびに判定し直す。主ループ側の判定結果を不変に
+  保つための分割で、可変にするとループのレジスタ割り当てが崩れて
+  オペランドあたり 8 命令増えた。
 - ユーザーの `to_s` が非 String を返せば `#<Class:0xADDR>` に落とす。
 
 JIT の `TraceIr::ConcatStr` → `AsmInst::ConcatStr` → `LInst::ConcatStr` →
