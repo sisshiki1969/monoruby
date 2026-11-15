@@ -1081,6 +1081,12 @@ pub struct Codegen {
     /// The `InlineCall`s whose bodies are being emitted, innermost last:
     /// where the body's `Ret` continues and where its side exits go.
     pub(in crate::codegen) inline_ctx: Vec<InlineCtx>,
+    /// `prof`: the functions whose frames the code being emitted runs in,
+    /// innermost last (the unit's own, then a framed specialized callee's).
+    /// A frameless body is recorded against the last one
+    /// (`prof::on_inline_body`).
+    #[cfg(feature = "prof")]
+    pub(in crate::codegen) prof_hosts: Vec<FuncId>,
     /// The const-version snapshot word of the unit currently being compiled:
     /// every `GuardConstVersion` / `GuardConstVersionSpecialized` lowered for
     /// the unit compares the global const counter against this one word
@@ -1532,6 +1538,8 @@ impl Codegen {
             specialized_base: 0,
             inline_bodies: HashMap::default(),
             inline_ctx: Vec::new(),
+            #[cfg(feature = "prof")]
+            prof_hosts: Vec::new(),
             unit_const_version: None,
             unit_recompile_counter: None,
             vm_entry: entry_panic.clone(),

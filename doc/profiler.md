@@ -34,6 +34,7 @@ change; measured with cachegrind it is within ±0.4% Ir of master
 | `MONORUBY_PROF_ALLOC_EVERY` | Record the whole stack of every N-th object allocation (the per-class / per-method counts are exact regardless) | 64 |
 | `MONORUBY_PROF_MALLOC_EVERY` | Record the stacks of every N-th `malloc` | 64 |
 | `MONORUBY_PROF_OUT` | Write the report to `PREFIX.txt` and the stacks to `PREFIX.{cpu,alloc,malloc}.folded` | stderr, no stacks |
+| `MONORUBY_PROF_INLINE` | `1`: show frameless-inlined callees as frames of their own (see [below](#frameless-inlined-callees-monoruby_prof_inline1)) | (off) |
 | `MONORUBY_PROF_TOP` | Rows per table | 30 |
 | `MONORUBY_PROF_BUF_MB` | Sample buffer (reserved lazily; samples past it are counted as dropped) | 512 |
 
@@ -47,6 +48,10 @@ finalizers. `exit!`, `exec` and a crash write nothing; a forked child
 writes nothing either (only the process that started profiling reports).
 
 ## What the report contains
+
+Every table starts with its title, a caption (the lines starting with
+`# `: what the rows are and how to read the columns) and its column
+heads. `grep -v '^  #'` drops the captions.
 
 ### `cpu`
 
@@ -94,6 +99,69 @@ estimated calls and bytes by Ruby method, and by Rust call site (the first
 native frame that is not allocator plumbing — `alloc::`, `core::`,
 `hashbrown::`, `smallvec::`, …).
 
+## Frameless-inlined callees (`MONORUBY_PROF_INLINE=1`)
+
+A callee the JIT inlined without a frame (frameless specialization,
+`jitgen/compile/frameless_call.rs`) has no control frame, so the frame
+walk cannot see it. By default its time, allocations and
+`malloc`s are reported against the method whose frame it ran in, and the
+callee's own row only holds what it did while it still had a frame (in the
+interpreter, or from a call site that was not inlined). A small row for a
+getter says nothing about how much time is spent in it.
+
+With `MONORUBY_PROF_INLINE=1` the callee gets a frame in the report:
+
+```
+methods by self time:
+     self      %   total      %    jit  ...  method
+      151  33.7%     151  33.7%    151  ...  V#dot (inl.rb:4)
+      129  28.8%     448 100.0%    129  ...  Object#work (inl.rb:13)
+       85  19.0%     121  27.0%     85  ...  V#each2 (inl.rb:7)
+       36   8.0%      36   8.0%     36  ...  block in Object#work (inl.rb:18)
+
+frameless-inlined callees by self samples, callee <- the method it ran in:
+      151  33.7%  V#dot (inl.rb:4) <- Object#work (inl.rb:13)
+       36   8.0%  block in Object#work (inl.rb:18) <- V#each2 (inl.rb:7)
+```
+
+- **methods by self / total time**, the allocation tables and `malloc`'s
+  "by Ruby method" count an inlined callee like a called one. A method's
+  row is the sum of its framed and its inlined executions.
+- **frameless-inlined callees by self samples** is the inlined part
+  alone, per (callee, method whose frame it ran in). A callee nested in
+  another frameless callee is listed under the method that has the frame.
+- In the folded stacks the callee is a frame marked `[inlined]`.
+- "JIT units" is unchanged: the callee's code is part of the unit.
+
+How: the JIT reports the address range of every frameless body it emits
+(main and cold page), with the callee and the function whose frame the
+body runs in. Bodies nest as the inlining does. Each CPU sample,
+allocation and sampled `malloc` records its *site*: the PC if it is in
+JIT memory, otherwise the first return address into JIT memory on the
+native frame-pointer chain (looked for up to 64 frames up), which is the
+call from generated code into the runtime. At exit a site inside a body
+gives the chain of callees, applied only if the sample's newest Ruby
+frame is the function the body was compiled into.
+
+What it costs: nothing when off. When on, the JIT records two address
+pairs per frameless body; a CPU sample walks a few more native frames; an
+object allocation walks the native stack up to the JIT frame (a loop
+that does nothing but allocate ran 38% more instructions under
+`alloc` with it than without; more on a fiber's stack, where every read
+is probed). `malloc` and `cpu` do not change measurably.
+
+What it cannot tell:
+
+- An object the escape analysis kept virtual in the callee and
+  materialized after the body returned (an Array the callee returns,
+  stored by the caller) is allocated by the caller's code, and is charged
+  to the caller.
+- A sample in the few instructions around the body (filling the callee's
+  window, restoring the caller's float registers) is the caller's.
+- Callees inlined by other means (attribute readers and writers, the
+  builtin methods the JIT expands inline) have no body of their own and
+  stay with the caller.
+
 ## How a sample is taken
 
 Each OS thread knows the `Executor` running on it: `prof::start` sets it
@@ -132,8 +200,9 @@ then as `object+offset`.
 ## Limits
 
 - Frameless-inlined callees have no frame, so their time and allocations
-  go to the method they were inlined into. A method JIT unit that inlines
-  callees shows up as one row in "JIT units".
+  go to the method they were inlined into unless `MONORUBY_PROF_INLINE=1`
+  is set. A method JIT unit that inlines callees shows up as one row in
+  "JIT units" either way.
 - The wall-clock mode samples the main thread only. `MONORUBY_PROF_CLOCK=cpu`
   samples whichever thread is on the CPU, at the kernel tick's rate.
 - The program's boot (`Executor::init`'s prelude) runs before the timer is
@@ -143,4 +212,4 @@ then as `object+offset`.
 - Linux only for `cpu` (it reads the signal context and uses
   `timer_create` / `process_vm_readv`); `alloc`, `malloc`, GC and JIT do
   not depend on the OS, though a `prof` build has so far been tried on
-  x86-64 Linux only.
+  Linux only (x86-64, and aarch64 under qemu).
