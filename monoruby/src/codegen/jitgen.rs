@@ -30,6 +30,15 @@ use state::ClimbDirection;
 use state::Liveness;
 use trace_ir::*;
 
+/// A frameless compile as far as its outcome can be told in advance: the
+/// call site, the callee, and a digest of the classes the site knows for
+/// the receiver and the arguments (`JitContext::frameless_site`).
+pub(in crate::codegen) type FramelessSite = (CallSiteId, ISeqId, u64);
+
+/// The frameless compiles that were abandoned — see
+/// `Codegen::frameless_failed`.
+pub(in crate::codegen) type FramelessFailed = std::rc::Rc<HashSet<FramelessSite>>;
+
 pub mod asmir;
 mod compile;
 pub(in crate::codegen) mod context;
@@ -794,7 +803,12 @@ impl Codegen {
             vec![],
         );
         ctx.loop_hoist_disabled = self.loop_hoist_disabled();
-        let mut frame = ctx.traceir_to_asmir(frame, None)?;
+        ctx.frameless_failed = self.frameless_failed();
+        let frame = ctx.traceir_to_asmir(frame, None);
+        // Only now: every walk of this compilation answered from the same
+        // set (`JitContext::frameless_failed`).
+        self.note_frameless_failures(std::mem::take(&mut ctx.frameless_new_failures));
+        let mut frame = frame?;
         let specialized_info = SpecializedCodeInfo::from(&frame);
 
         // Now that every frame's `stack_offset` has been finalised

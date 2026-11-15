@@ -1320,6 +1320,17 @@ pub(crate) struct JitContext<'a> {
     /// frameless chain being built (`FRAMELESS_CHAIN_BUDGET` in
     /// `compile/frameless_call.rs`).
     pub(super) frameless_chain_bc: usize,
+    /// Callees whose frameless compile was abandoned while a callee
+    /// beneath them did not fit the chain budget, by the chain's count
+    /// when they were entered: they may still fit in a shorter chain, so
+    /// they are tried again only from a smaller count.
+    pub(super) frameless_budget_rejected: HashMap<ISeqId, usize>,
+    /// How many times a body was refused for the chain budget in this
+    /// compile (`frameless_chain_enter`, `frameless_refused`).
+    pub(super) frameless_budget_hits: usize,
+    /// How many times a body was refused because this unit had already
+    /// abandoned it somewhere else (`frameless_refused`).
+    pub(super) frameless_unit_refusals: usize,
     /// Set by `inline_class_new` for the frameless compile it is about to
     /// start: the callee's `self` is the object just allocated, so its
     /// frame is marked `AsmInfo::self_fresh`. Taken by the frame's
@@ -1338,6 +1349,16 @@ pub(crate) struct JitContext<'a> {
     /// Iseqs whose loops do not hoist type guards onto their entries
     /// (`merge.rs`): a hoisted guard of theirs kept missing.
     pub(in crate::codegen) loop_hoist_disabled: std::rc::Rc<std::collections::HashSet<ISeqId>>,
+    /// The frameless compiles an earlier compilation abandoned
+    /// (`Codegen::frameless_failed`): not tried again.
+    /// A snapshot taken when this compilation began, so that its
+    /// analysis walks and its code generation pass make the same frameless
+    /// calls; what this compilation finds goes to
+    /// `frameless_new_failures` and joins the set once it is over.
+    pub(in crate::codegen) frameless_failed: FramelessFailed,
+    /// See `frameless_failed`. Only the code generation pass's list is
+    /// kept; an analysis walk abandons the same compiles.
+    pub(in crate::codegen) frameless_new_failures: Vec<FramelessSite>,
 }
 
 ///
@@ -1386,12 +1407,17 @@ impl<'a> JitContext<'a> {
             condbr_done: None,
             frameless_rejected: Default::default(),
             frameless_chain_bc: 0,
+            frameless_budget_rejected: Default::default(),
+            frameless_budget_hits: 0,
+            frameless_unit_refusals: 0,
             pending_fresh_self: false,
             pending_class_new_redo: None,
             outer_claim_barrier: false,
             widened_outer_log: vec![],
             spec_memo: Default::default(),
             loop_hoist_disabled: Default::default(),
+            frameless_failed: Default::default(),
+            frameless_new_failures: vec![],
         }
     }
 
@@ -1466,9 +1492,14 @@ impl<'a> JitContext<'a> {
             // A walk may start inside a chain; it charges the same bodies
             // the code generation pass will.
             frameless_chain_bc: self.frameless_chain_bc,
+            frameless_budget_rejected: Default::default(),
+            frameless_budget_hits: 0,
+            frameless_unit_refusals: 0,
             pending_fresh_self: false,
             pending_class_new_redo: None,
             loop_hoist_disabled: self.loop_hoist_disabled.clone(),
+            frameless_failed: self.frameless_failed.clone(),
+            frameless_new_failures: vec![],
         }
     }
 

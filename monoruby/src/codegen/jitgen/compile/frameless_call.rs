@@ -279,6 +279,15 @@ fn body_ok(store: &Store, iseq_id: ISeqId, block: bool) -> bool {
     })
 }
 
+/// See `JitContext::frameless_entry`.
+#[derive(Clone, Copy)]
+struct FramelessEntry {
+    /// The chain's bytecode count the body would have entered at.
+    chain_bc: usize,
+    budget_hits: usize,
+    unit_refusals: usize,
+}
+
 impl<'a> JitContext<'a> {
     ///
     /// Should an inline generator call its builtin's *pure* helper at this
@@ -331,10 +340,126 @@ impl<'a> JitContext<'a> {
         let save = self.frameless_chain_bc;
         let total = save + self.store[iseq].bytecode().len();
         if total > FRAMELESS_CHAIN_BUDGET {
+            self.frameless_budget_hits += 1;
             return None;
         }
         self.frameless_chain_bc = total;
         Some(save)
+    }
+
+    ///
+    /// The count a frameless chain would stand at when the next body
+    /// enters it: zero from a framed frame, which starts a new chain.
+    ///
+    fn frameless_chain_entry_bc(&self) -> usize {
+        if self.frameless_chain_len() == 0 {
+            0
+        } else {
+            self.frameless_chain_bc
+        }
+    }
+
+    ///
+    /// Is *iseq* known not to compile frameless from here? Either this
+    /// unit already abandoned it somewhere (`frameless_rejected`), or its
+    /// tree did not fit the chain budget from a count no larger than the
+    /// current one (`frameless_budget_rejected`).
+    ///
+    /// Either refusal is counted, for the frameless compile it happens
+    /// inside: that one fails with the call it leaves behind, and
+    /// `frameless_reject` must know that its failure is second-hand.
+    ///
+    pub(super) fn frameless_refused(&mut self, iseq: ISeqId) -> bool {
+        if self.frameless_rejected.contains(&iseq) {
+            self.frameless_unit_refusals += 1;
+            true
+        } else if self
+            .frameless_budget_rejected
+            .get(&iseq)
+            .is_some_and(|at| self.frameless_chain_entry_bc() >= *at)
+        {
+            self.frameless_budget_hits += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    ///
+    /// Record a frameless compile of *iseq* that was abandoned. One that
+    /// ran into the chain budget on the way (*budget_hits* is the counter
+    /// before it began) says nothing about the callee in a shorter chain:
+    /// it is only kept from being tried again from this count or a larger
+    /// one. Without that distinction a small callee whose own callee
+    /// happened not to fit the end of one long chain was refused at every
+    /// other site of the unit, where it would have started a chain of its
+    /// own.
+    ///
+    /// Any other failure keeps the callee from being tried again in this
+    /// unit (`frameless_rejected`), as it always did. When it is the
+    /// callee's own at this *site*, it is also remembered for the
+    /// compilations to come (`frameless_failed`): a failed attempt
+    /// compiles the body, and everything frameless beneath it, only to
+    /// roll it back, and without the memory every later compilation that
+    /// reaches the site pays that again. It is not the callee's own when
+    /// a body beneath it was refused only because this unit had abandoned
+    /// that one elsewhere (*unit_refusals* moved): a later compilation
+    /// does not try that one there again, and so may well get through
+    /// here.
+    ///
+    fn frameless_reject(&mut self, site: FramelessSite, entry: FramelessEntry) {
+        let iseq = site.1;
+        if self.frameless_budget_hits != entry.budget_hits {
+            self.frameless_budget_rejected.insert(iseq, entry.chain_bc);
+        } else {
+            self.frameless_rejected.insert(iseq);
+            if self.frameless_unit_refusals == entry.unit_refusals {
+                self.frameless_new_failures.push(site);
+            }
+        }
+    }
+
+    ///
+    /// Where a frameless compile starts from, for `frameless_reject` to
+    /// tell what kind of failure it was.
+    ///
+    fn frameless_entry(&self) -> FramelessEntry {
+        FramelessEntry {
+            chain_bc: self.frameless_chain_entry_bc(),
+            budget_hits: self.frameless_budget_hits,
+            unit_refusals: self.frameless_unit_refusals,
+        }
+    }
+
+    ///
+    /// The key an abandoned frameless compile is remembered under
+    /// (`frameless_failed`): the call site, the callee, and the classes
+    /// the site knows for the receiver and the arguments.
+    ///
+    /// The classes are there because the body is compiled against them.
+    /// `set_start_location(node)`, two attribute writes on `node`, needs a
+    /// frame where the class of `node` is not known and the writes are
+    /// polymorphic sends, and is frameless where the same call site has
+    /// been inlined under a caller that just built the node. The call
+    /// site is there because the callee and the classes do not say
+    /// everything either (an argument's constant value, the caller's
+    /// chain); it only costs sharing.
+    ///
+    fn frameless_site(
+        &self,
+        state: &AbstractState,
+        callid: CallSiteId,
+        iseq: ISeqId,
+        recv_class: Option<CachedClass>,
+    ) -> FramelessSite {
+        use std::hash::{Hash, Hasher};
+        let callsite = &self.store[callid];
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        recv_class.hash(&mut h);
+        for i in 0..callsite.pos_num {
+            state.class(callsite.args + i).hash(&mut h);
+        }
+        (callid, iseq, h.finish())
     }
 
     ///
@@ -352,9 +477,11 @@ impl<'a> JitContext<'a> {
         func_id: FuncId,
         iseq: ISeqId,
     ) -> Option<CompileResult> {
-        if self.frameless_rejected.contains(&iseq) {
+        let site = self.frameless_site(state, callid, iseq, Some(recv_class));
+        if self.frameless_refused(iseq) || self.frameless_failed.contains(&site) {
             return None;
         }
+        let entry = self.frameless_entry();
         let chain_save = self.frameless_chain_enter(iseq)?;
         // The same rollback as `method_call_with_residual`'s.
         let ir_save = ir.save();
@@ -377,7 +504,7 @@ impl<'a> JitContext<'a> {
                 *state = state_save;
                 (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
                 self.discard_cond_results();
-                self.frameless_rejected.insert(iseq);
+                self.frameless_reject(site, entry);
                 self.frameless_chain_bc = chain_save;
                 None
             }
@@ -398,9 +525,11 @@ impl<'a> JitContext<'a> {
         block: &JitBlockInfo,
         iseq: ISeqId,
     ) -> Option<CompileResult> {
-        if self.frameless_rejected.contains(&iseq) {
+        let site = self.frameless_site(state, callid, iseq, None);
+        if self.frameless_refused(iseq) || self.frameless_failed.contains(&site) {
             return None;
         }
+        let entry = self.frameless_entry();
         let chain_save = self.frameless_chain_enter(iseq)?;
         let ir_save = ir.save();
         let state_save = state.clone();
@@ -420,7 +549,7 @@ impl<'a> JitContext<'a> {
                 *state = state_save;
                 (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
                 self.discard_cond_results();
-                self.frameless_rejected.insert(iseq);
+                self.frameless_reject(site, entry);
                 self.frameless_chain_bc = chain_save;
                 None
             }

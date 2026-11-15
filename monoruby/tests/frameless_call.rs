@@ -1454,6 +1454,134 @@ fn frameless_chain_over_the_budget() {
 }
 
 #[test]
+fn frameless_callee_refused_for_the_budget_is_retried_in_a_shorter_chain() {
+    // `deep` nests p1 -> p2 -> p3 -> tail -> leaf, and `leaf` does not fit
+    // the end of that chain (`FRAMELESS_CHAIN_BUDGET`), which abandons the
+    // frameless compile of `tail` there. That says nothing about `tail`
+    // called from `direct`, where it starts a chain of its own: it is
+    // tried again, not refused for the rest of the unit.
+    run_test(
+        r#"
+        class W2
+          def initialize = (@k = 1)
+          def leaf(x)
+            a = x + 1; b = a * 2; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 2 + a - b + c
+          end
+          def tail(x) = leaf(x) + @k
+          def p3(x)
+            a = x + 3; b = a * 4; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 4 + a - b + tail(c)
+          end
+          def p2(x)
+            a = x + 2; b = a * 3; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 3 + a - b + p3(c)
+          end
+          def p1(x)
+            a = x + 1; b = a * 2; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 2 + a - b + p2(c)
+          end
+          def deep(x) = p1(x)
+          def direct(x) = tail(x) + tail(x + 1)
+          def both(x) = p1(x) + tail(x)
+        end
+        w = W2.new
+        res = []
+        40.times { |i| res << w.deep(i) << w.direct(i) << w.both(i) }
+        res << w.deep(1.5) << w.direct(2**62) << w.both(2.5)
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_callee_refused_for_the_budget_twice() {
+    // As above, but `p3` calls `tail` twice at the end of the long chain.
+    // The second call finds `tail` already known not to fit from there and
+    // does not try it; that refusal is a budget miss like the first, so
+    // `p3` around it is not taken for a callee that needs a frame either.
+    run_test(
+        r#"
+        class W3
+          def initialize = (@k = 1)
+          def leaf(x)
+            a = x + 1; b = a * 2; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 2 + a - b + c
+          end
+          def tail(x) = leaf(x) + @k
+          def p3(x)
+            a = x + 3; b = a * 4; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 4 + a - b + tail(c) + tail(d)
+          end
+          def p2(x)
+            a = x + 2; b = a * 3; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 3 + a - b + p3(c)
+          end
+          def p1(x)
+            a = x + 1; b = a * 2; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 2 + a - b + p2(c)
+          end
+          def deep(x) = p1(x)
+          def direct(x) = tail(x) + tail(x + 1)
+        end
+        w = W3.new
+        res = []
+        40.times { |i| res << w.deep(i) << w.direct(i) }
+        res << w.deep(1.5) << w.direct(2**62)
+        res
+        "#,
+    );
+}
+
+#[test]
 fn frameless_class_new_recursive_initialize() {
     // `initialize` builds the rest of the list through `Node.new`: the
     // nested construction finds its `initialize` on the specialization
@@ -1480,6 +1608,44 @@ fn frameless_class_new_recursive_initialize() {
         res = []
         40.times { |i| res << len(Node.new(i % 12)) }
         res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_failure_is_remembered_per_call_site() {
+    // `Ctx#evaluate` compiles frameless where the argument is known to be
+    // a String (the `respond_to?` folds and the call disappears) and needs
+    // a frame where it is an `Ev`, whose `evaluate` calls a block. `lit`
+    // and `obj` are inlined into `c2`, `c1` and `c3`, three compilation
+    // units that reach the same two call sites: the failed attempt at the
+    // one in `obj` is remembered from the first unit on, and must not
+    // keep the one in `lit` from compiling frameless in the later ones.
+    // In `c2`, the first to compile, `obj` comes first, so `lit` fails
+    // there too, second-hand (`evaluate` is refused for the rest of that
+    // unit): that failure is not `lit`'s own and is not remembered.
+    run_test(
+        r#"
+        class Ev
+          def evaluate(c) = [1, 2].sum { |x| x + c.k }
+        end
+        class Ctx
+          attr_reader :k
+          def initialize = (@k = 1; @ev = Ev.new)
+          def evaluate(o) = o.respond_to?(:evaluate) ? o.evaluate(self) : o
+          def lit = evaluate("s")
+          def obj = evaluate(@ev)
+          def c1 = lit.size + obj
+          def c2 = obj + lit.size
+          def c3 = [lit, obj]
+        end
+        c = Ctx.new
+        r = []
+        30.times { r << c.c2 }
+        30.times { r << c.c1 }
+        30.times { r << c.c3 }
+        30.times { r << c.obj << c.lit }
+        r.uniq
         "#,
     );
 }
