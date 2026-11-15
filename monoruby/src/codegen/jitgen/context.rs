@@ -4001,6 +4001,13 @@ impl<'a> JitContext<'a> {
             .and_then(|(_, be)| be.as_ref())
     }
 
+    /// Replace the back edge recorded for the loop head *entry_bb*.
+    pub(super) fn set_loop_backedge(&mut self, entry_bb: BasicBlockId, backedge: AbstractState) {
+        if let Some((_, be)) = self.current_frame_mut().loop_info.get_mut(&entry_bb) {
+            *be = Some(backedge);
+        }
+    }
+
     ///
     /// Remove (and return) what the back-edge fixpoints recorded for the
     /// loop heads in `loop_start..=loop_end`, so that the next fixpoint of

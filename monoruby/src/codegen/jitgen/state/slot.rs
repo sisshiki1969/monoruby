@@ -597,7 +597,13 @@ impl SlotState {
 
     pub(super) fn equiv(&self, other: &Self) -> bool {
         assert_eq!(self.slots_len(), other.slots_len());
+        // Two `V` slots are the same mode whether or not one of them holds
+        // an elided object: the tables are compared beside the modes, or
+        // a back edge that lost an object would pass for the recorded one
+        // that still has it.
         self.all_regs().all(|i| self.mode(i).equiv(&other.mode(i)))
+            && self.virtuals.len() == other.virtuals.len()
+            && self.virtuals.iter().all(|v| other.virtuals.contains(v))
     }
 
     pub(in crate::codegen::jitgen) fn liveness_analysis(&mut self, liveness: &Liveness) {

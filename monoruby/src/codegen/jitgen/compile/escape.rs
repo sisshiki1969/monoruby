@@ -558,6 +558,40 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Bring the back edge recorded for the loop head *head* in line with
+    /// the elided objects *head_virtuals* the state reaching the head
+    /// carries: one the back edge carries and the head does not is
+    /// materialized in the record.
+    ///
+    /// A back edge is recorded by a walk of the fixpoint of this loop or
+    /// of an enclosing one, and describes the head that walk entered. A
+    /// later walk can enter the head with less: the enclosing loop's body
+    /// materializes an object after this loop, so its second walk comes
+    /// round with the object materialized, to a head whose back edge was
+    /// recorded while it was still elided (issue #1914). The loop itself
+    /// never defines the local (`loop_keeps_virtual`), so its real back
+    /// edge brings what the head has, the materialized object; joining
+    /// the stale record as it is would meet `V` with the object's slot
+    /// and leave the local without a value.
+    ///
+    pub(in crate::codegen::jitgen) fn settle_recorded_backedge(
+        &mut self,
+        head: BasicBlockId,
+        head_virtuals: &[(SlotId, VirtualSrc)],
+    ) {
+        let Some(backedge) = self.loop_backedge(head) else {
+            return;
+        };
+        if backedge.virtuals().iter().all(|v| head_virtuals.contains(v)) {
+            return;
+        }
+        let mut backedge = backedge.clone();
+        let mut scratch = AsmIr::new(self);
+        self.materialize_except(&mut backedge, &mut scratch, head_virtuals);
+        self.set_loop_backedge(head, backedge);
+    }
+
+    ///
     /// Materialize every elided object of *state* but those in *keep*
     /// (same slot, same `VirtualSrc`).
     ///
