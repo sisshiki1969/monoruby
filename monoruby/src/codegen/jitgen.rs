@@ -30,9 +30,14 @@ use state::ClimbDirection;
 use state::Liveness;
 use trace_ir::*;
 
-/// The (call site, callee) pairs whose frameless compile was abandoned —
-/// see `Codegen::frameless_failed`.
-pub(in crate::codegen) type FramelessFailed = std::rc::Rc<HashSet<(CallSiteId, ISeqId)>>;
+/// A frameless compile as far as its outcome can be told in advance: the
+/// call site, the callee, and a digest of the classes the site knows for
+/// the receiver and the arguments (`JitContext::frameless_site`).
+pub(in crate::codegen) type FramelessSite = (CallSiteId, ISeqId, u64);
+
+/// The frameless compiles that were abandoned — see
+/// `Codegen::frameless_failed`.
+pub(in crate::codegen) type FramelessFailed = std::rc::Rc<HashSet<FramelessSite>>;
 
 pub mod asmir;
 mod compile;

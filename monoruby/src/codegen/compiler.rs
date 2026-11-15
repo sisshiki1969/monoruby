@@ -521,7 +521,7 @@ impl Codegen {
     ///
     /// Remember the frameless compiles a finished compilation abandoned.
     ///
-    pub(super) fn note_frameless_failures(&mut self, failures: Vec<(CallSiteId, ISeqId)>) {
+    pub(super) fn note_frameless_failures(&mut self, failures: Vec<jitgen::FramelessSite>) {
         if !failures.is_empty() {
             std::rc::Rc::make_mut(&mut self.frameless_failed).extend(failures);
         }

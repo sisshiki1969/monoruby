@@ -1025,9 +1025,10 @@ pub struct Codegen {
     /// a hoisted guard of theirs missed often enough to recompile
     /// (`RecompileReason::LoopHoistGuardFailed`, `jitgen/merge.rs`).
     loop_hoist_disabled: std::rc::Rc<std::collections::HashSet<ISeqId>>,
-    /// The (call site, callee) pairs whose frameless compile was abandoned
-    /// in an earlier compilation (`jitgen/compile/frameless_call.rs`): a
-    /// later compilation that reaches the site does not try again.
+    /// The frameless compiles an earlier compilation abandoned
+    /// (`jitgen/compile/frameless_call.rs`): a later compilation that
+    /// reaches the same site with the same knowledge of the arguments
+    /// does not try again.
     frameless_failed: jitgen::FramelessFailed,
     /// `doc/chain_deopt.md` §5 step 1 / §9.3. Keyed by the return-address
     /// slot of a suspended frame (§3.4), which is all the walk has to go on:

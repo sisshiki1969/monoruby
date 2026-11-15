@@ -351,22 +351,13 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Is *iseq* known not to compile frameless at the call site *callid*?
-    /// Either it needed a frame somewhere in this unit
-    /// (`frameless_rejected`), or its tree did not fit the chain budget
-    /// from a count no larger than the current one
-    /// (`frameless_budget_rejected`), or an earlier compilation already
-    /// abandoned it at this very site (`frameless_failed`).
+    /// Is *iseq* known not to compile frameless from here? Either it
+    /// needs a frame wherever it is called (`frameless_rejected`), or its
+    /// tree did not fit the chain budget from a count no larger than the
+    /// current one (`frameless_budget_rejected`).
     ///
-    /// The last one is per site, not per callee, because what a body
-    /// compiles to depends on what the site knows about the arguments:
-    /// `def evaluate(o) = o.respond_to?(:evaluate) ? o.evaluate(self) : o`
-    /// is frameless where the argument is known to be a String and needs
-    /// a frame elsewhere.
-    ///
-    pub(super) fn frameless_refused(&self, callid: CallSiteId, iseq: ISeqId) -> bool {
+    fn frameless_refused(&self, iseq: ISeqId) -> bool {
         self.frameless_rejected.contains(&iseq)
-            || self.frameless_failed.contains(&(callid, iseq))
             || self
                 .frameless_budget_rejected
                 .get(&iseq)
@@ -383,25 +374,51 @@ impl<'a> JitContext<'a> {
     /// other site of the unit, where it would have started a chain of its
     /// own.
     ///
-    /// Any other failure is the callee's own at this site, and is
+    /// Any other failure is the callee's own at this *site*, and is
     /// remembered for the compilations to come (`frameless_failed`): a
     /// failed attempt compiles the body, and everything frameless beneath
-    /// it, only to roll it back, and without the memory every unit that
-    /// reaches the site, and every analysis walk of it, pays that again.
+    /// it, only to roll it back, and without the memory every later
+    /// compilation that reaches the site pays that again.
     ///
-    fn frameless_reject(
-        &mut self,
-        callid: CallSiteId,
-        iseq: ISeqId,
-        entry_bc: usize,
-        budget_hits: usize,
-    ) {
+    fn frameless_reject(&mut self, site: FramelessSite, entry_bc: usize, budget_hits: usize) {
+        let iseq = site.1;
         if self.frameless_budget_hits != budget_hits {
             self.frameless_budget_rejected.insert(iseq, entry_bc);
         } else {
             self.frameless_rejected.insert(iseq);
-            self.frameless_new_failures.push((callid, iseq));
+            self.frameless_new_failures.push(site);
         }
+    }
+
+    ///
+    /// The key an abandoned frameless compile is remembered under
+    /// (`frameless_failed`): the call site, the callee, and the classes
+    /// the site knows for the receiver and the arguments.
+    ///
+    /// The classes are there because the body is compiled against them.
+    /// `set_start_location(node)`, two attribute writes on `node`, needs a
+    /// frame where the class of `node` is not known and the writes are
+    /// polymorphic sends, and is frameless where the same call site has
+    /// been inlined under a caller that just built the node. The call
+    /// site is there because the callee and the classes do not say
+    /// everything either (an argument's constant value, the caller's
+    /// chain); it only costs sharing.
+    ///
+    fn frameless_site(
+        &self,
+        state: &AbstractState,
+        callid: CallSiteId,
+        iseq: ISeqId,
+        recv_class: Option<CachedClass>,
+    ) -> FramelessSite {
+        use std::hash::{Hash, Hasher};
+        let callsite = &self.store[callid];
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        recv_class.hash(&mut h);
+        for i in 0..callsite.pos_num {
+            state.class(callsite.args + i).hash(&mut h);
+        }
+        (callid, iseq, h.finish())
     }
 
     ///
@@ -419,7 +436,8 @@ impl<'a> JitContext<'a> {
         func_id: FuncId,
         iseq: ISeqId,
     ) -> Option<CompileResult> {
-        if self.frameless_refused(callid, iseq) {
+        let site = self.frameless_site(state, callid, iseq, Some(recv_class));
+        if self.frameless_refused(iseq) || self.frameless_failed.contains(&site) {
             return None;
         }
         let entry_bc = self.frameless_chain_entry_bc();
@@ -446,7 +464,7 @@ impl<'a> JitContext<'a> {
                 *state = state_save;
                 (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
                 self.discard_cond_results();
-                self.frameless_reject(callid, iseq, entry_bc, budget_hits);
+                self.frameless_reject(site, entry_bc, budget_hits);
                 self.frameless_chain_bc = chain_save;
                 None
             }
@@ -467,7 +485,8 @@ impl<'a> JitContext<'a> {
         block: &JitBlockInfo,
         iseq: ISeqId,
     ) -> Option<CompileResult> {
-        if self.frameless_refused(callid, iseq) {
+        let site = self.frameless_site(state, callid, iseq, None);
+        if self.frameless_refused(iseq) || self.frameless_failed.contains(&site) {
             return None;
         }
         let entry_bc = self.frameless_chain_entry_bc();
@@ -491,7 +510,7 @@ impl<'a> JitContext<'a> {
                 *state = state_save;
                 (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
                 self.discard_cond_results();
-                self.frameless_reject(callid, iseq, entry_bc, budget_hits);
+                self.frameless_reject(site, entry_bc, budget_hits);
                 self.frameless_chain_bc = chain_save;
                 None
             }

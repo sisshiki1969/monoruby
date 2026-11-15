@@ -1346,16 +1346,16 @@ pub(crate) struct JitContext<'a> {
     /// Iseqs whose loops do not hoist type guards onto their entries
     /// (`merge.rs`): a hoisted guard of theirs kept missing.
     pub(in crate::codegen) loop_hoist_disabled: std::rc::Rc<std::collections::HashSet<ISeqId>>,
-    /// The (call site, callee) pairs whose frameless compile an earlier
-    /// compilation abandoned (`Codegen::frameless_failed`): not tried
-    /// again. A snapshot taken when this compilation began, so that its
+    /// The frameless compiles an earlier compilation abandoned
+    /// (`Codegen::frameless_failed`): not tried again.
+    /// A snapshot taken when this compilation began, so that its
     /// analysis walks and its code generation pass make the same frameless
     /// calls; what this compilation finds goes to
     /// `frameless_new_failures` and joins the set once it is over.
     pub(in crate::codegen) frameless_failed: FramelessFailed,
     /// See `frameless_failed`. Only the code generation pass's list is
     /// kept; an analysis walk abandons the same compiles.
-    pub(in crate::codegen) frameless_new_failures: Vec<(CallSiteId, ISeqId)>,
+    pub(in crate::codegen) frameless_new_failures: Vec<FramelessSite>,
 }
 
 ///
