@@ -2289,6 +2289,7 @@
 6622d68b20aa2154a49d5b127ef16dc7	:assigned	module MM\n          def self.const_missing(c); c; end\n        end\n     
 6640768cb0201ad9cc8cdbbc1ff67cd8	42	c = Class.new\n            c.class_exec do\n              define_meth
 664f853aae1b23342a7f3f6347677439	[nil, [:r]]	$clog = []\n            def craise; $clog << :r; raise "x"; end\n    
+66527b4878342f1d1cf9c7c21458a0b8	[[1, 0], [3, 2, 1, 0], [4, 3, 2, 1, 0], true, [], []]	a = Class.new\n            b = Class.new(a); c = Class.new(a)\n      
 666756434f77a17dca0c4a9844a9e4e2	[true, true]	def foo; end\n            def bar; end\n            public :foo, :bar
 6667be2e19d6bb7283e92472772b8804	[[[:req, :x]], [[:req, :y], [:rest, :x]], [[:opt, :x]], :req, [[:opt, :x]], [[:req, :x]], :opt, :req]	__a = [];__a << (proc {|x| }.parameters(lambda: true));__a << (proc {|y, *x| }.p
 66748409dc60958fc5d8ef557f0e9eb5	[[1, [nil, :err, 1]], [2, [0, 0, :err, 2]], [3, [nil, :err, nil, :err, 3]], [4, [nil, :err, nil, nil, :err, 4]], [2, [nil, :err, 2, 2]], [0, [0, 0, :err, 0, 0]]]	def b(a) = a.pack("C*").dup.force_encoding("Shift_JIS")\n           
@@ -3262,6 +3263,7 @@
 926dc795e3f8884de7460f5297a88103	[1, 0, 2, 1, 3, 2, 5, 3, 8, 4, 13, 5, 21, 6, 34, 7, 55, 8, 89, 9, nil]	fib = Enumerator.new do |y|\n                a = b = 1\n             
 9270be8e025f7cd9ba1ea30eee9c9d76	[[:f, :f], [:f, :g], [:f, :h], [[:blk, :blk], [:blk, :blk]], [[:blk, :blk2], [:blk, :blk2]], [:dm, :dm], [:dm, :dm2], [:helper, :helper], [:f, :f], [nil, nil]]	class CA\n              def f; [__method__, __callee__]; end\n       
 928c4d28eec053d3cb1ca62b7cecdf2d	["hi", "RuntimeError", "from to_s"]	__a = [];__a << (RuntimeError.new("hi").message);__a << (RuntimeError.new.messag
+9298b7e65f34d22347ee4a72f605f8f4	[[:bar2, 4], [:init, 4], [:k, 12], [:m1, 16], [[:k, :m1, :k], 4], [[:k, [:m2, :k], :bar2], 4], [[:m2, :init], 4], [[:m2, :k], 4], [[:m2, :m1], 4], [[ScM1, ScM2], 4], [[false, false, false], 4], [[true, false, false], 4], [[true, true, false], 4], [false, 4], [true, 8]]	module ScM1; def foo; :m1; end; X = :m1x; end\n    module ScM2; def foo; [:m
 929ec88122ad3533893000031753c174	[999, 999]	def m_dyn(a, b)\n          yield\n          a + b\n        end\n        def
 929f75a7c09a4431ea10f801538aa81f	[58, 6000]	$acc = 0\n        def mid\n          begin\n            yield\n            
 92ae34eef31e84efce3356329a17c934	"US-ASCII"	"\\x01".unpack("b")[0].encoding.to_s
@@ -4931,6 +4933,7 @@ db677610a3328f0c2ee7403b32b3de80	["3:in 'Object#a'", "4:in 'Object#b'", "5:in 'O
 db69773d9873cd5a0b65fbe068d8cb08	[2, 3, 2, 2]	def g(rows, idx, out)\n          k = 0\n          while k < idx.size\n    
 db7a17c8975c3f6420ff1c2a7f31f635	[[["ArgumentError", "invalid byte sequence in EUC-JP"], ["ArgumentError", "invalid byte sequence in EUC-JP"], ["ArgumentError", "invalid range in string transliteration"], ["ArgumentError", "invalid range \\"z-a\\" in string transliteration"], ["ArgumentError", "invalid range in string transliteration"], ["ArgumentError", "invalid range in string transliteration"]], [0, [130, 160, 130, 162, 130, 164], ["ArgumentError", "invalid range in string transliteration"], ["ArgumentError", "invalid range \\"z-a\\" in string transliteration"], ["ArgumentError", "invalid range in string transliteration"], ["ArgumentError", "invalid range in string transliteration"]], ["ArgumentError", "invalid range in string transliteration"], ["ArgumentError", "invalid range \\"z-a\\" in string transliteration"]]	def b(a, e) = a.pack("C*").dup.force_encoding(e)\n            def at
 db7e6f93dcea94ec7e29a333295bf930	[[[3, 4], [2, 9], [1, 2]], [[1, 2], [2, 9], [3, 4]]]	__a = [];__a << ({1 => 2, 2 => 9, 3 => 4}.sort { |a, b| b <=> a });__a << ({1 =>
+db8c14dcb5231ea76f692e87f9ffe1f0	[[[:bar2, 8], [:hooked, 4], [:k, 8], [:m1, 8], [:m1x, 12], [:m2x, 8], [:single, 4], [FrozenError, 4], [[:m2, :k], 4], [[false, false, true], 4], [false, 4]], true]	module ScM1; def foo; :m1; end; X = :m1x; end\n    module ScM2; def foo; [:m
 db8f70ed18c906c1d83c430b4c518b9c	48	class Integer; alias __orig :<<; def <<(o); __orig(o); end; end; 3 << 4
 db90f2376fc98c595018b8cd9811c86d	[[1, 2], [3, 2], [], [], [1, 2, 3], [3, 2, 1], [], [], 1, 3, 3, [1, 2], [1, 2], [3, 2], [1, 2], ["a", "b"], ["c", "b"], [1.5, 2.5], [3.5, 2.5], [3, 1, 2], [3, 1, 2]]	__a = [];__a << ([3, 1, 2].min(2));__a << ([3, 1, 2].max(2));__a << ([3, 1, 2].m
 dba2d7d71196ffa6ba5cc0dfc0c8e092	"!"	r, w = IO.pipe\n            begin\n              $\\ = "!"\n           
