@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-87e0e4f6.js";
+            window.path_to_searchindex_js = "searchindex-c906723a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-9192be69.js"></script>
@@ -10907,7 +10907,11 @@ running を起こしても no-op という CRuby 意味論に一致)。</li>
 <p>その他:</p>
 <ul>
 <li>park は <code>Thread.stop</code>(または timeout 付きは <code>Kernel.sleep</code>)、
-unpark は上記 <code>#wakeup</code> / <code>#__wakeup_permit</code> を使う。</li>
+unpark は上記 <code>#wakeup</code> / <code>#__wakeup_permit</code> を使う。<code>Mutex#sleep</code> の timeout 付き park は
+<code>Thread.__sleep(sec)</code>: <code>Kernel#sleep</code> と同じ待ちで、戻り値が「起こされた(true)/ 時間切れ
+(false)」(<code>scheduler::sleep_woken</code>。1:1 モデルは <code>park</code> の戻り値、green は
+<code>ThreadInner::sleep_timed_out</code>)。<code>Mutex#sleep</code> は CRuby(<code>rb_mut_sleep</code>)と同じく時間切れなら
+nil、起こされたら経過秒を返し、<code>ConditionVariable#wait</code> は引数の <code>sleep</code> の戻り値をそのまま返す。</li>
 <li><code>Mutex#sleep</code> / <code>ConditionVariable#wait</code> は unlock → park → <strong>ensure で re-lock</strong>。
 <code>#kill</code> / <code>#raise</code> が park 中に配送されても(§6 の unwind は ensure を実行するので)
 mutex は正しく再取得・解放される。スレッドが握ったまま終了したロックは
@@ -10927,6 +10931,20 @@ Thread の代わりに <code>Thread::SchedulerWaiter</code>(fiber + blocker)が�
 <code>ConditionVariable#signal</code> 側は変更なし)。<code>Thread#join</code> も同様に <code>block(thread, 残り秒)</code>
 で待ち、対象スレッドの終了フックが <code>unblock(join 側のスレッド, fiber)</code> で答える
 (<code>ThreadInner::fiber_joiners</code>)。</li>
+<li><strong>Monitor</strong>(<code>builtins/monitor.rb</code>)は CRuby の <code>ext/monitor/monitor.c</code> を Ruby で書いたもので、
+Mutex + 所有 <strong>Fiber</strong>(<code>@owner</code>)+ 進入回数(<code>@count</code>)。<code>@count</code> を読み書きするのは所有者
+だけ、<code>@owner</code> が変わるのは mutex を握っている間だけなので、この 2 つに別のロックは要らない。
+<code>MonitorMixin</code> と <code>MonitorMixin::ConditionVariable</code> は CRuby の <code>ext/monitor/lib/monitor.rb</code>
+そのまま(<code>wait</code> は <code>Monitor#wait_for_cond</code> 経由で <code>Thread::ConditionVariable#wait(@mutex, timeout)</code>。
+回数ごと手放し、戻るときに同じ回数で取り直す)。注意点は最外側の <code>exit</code>: 「<code>@owner = nil</code>」と
+「<code>Mutex#unlock</code>」の間(= <code>unlock</code> の callee-entry poll)で <code>Thread#raise</code> / kill が配送されると、
+mutex は握ったままなのに monitor は無所有という状態が残る(同じスレッドの次の <code>enter</code> が
+“deadlock; recursive locking”、他スレッドは永久待ち)。そこでこの 2 つを
+<code>Thread.__uninterruptible_begin</code> / <code>__uninterruptible_end</code>(<code>Thread.__uninterruptible { }</code> の
+ブロックなし版。区間が短く、ブロック呼び出しが区間のコストの大半になる場所用)で挟む。
+どちらもネイティブ関数なので区間に入るまでの間にも配送点はない。<code>enter</code> 側は
+<code>try_lock || lock</code> が戻ってから <code>@owner</code> を書くまでに poll がないので保護不要。
+mutex は初回使用時に作る(CRuby はアロケータで作るので <code>super</code> を呼ばないサブクラスでも動く)。</li>
 <li>Queue / SizedQueue は Mutex + ConditionVariable の上に載る(CRuby thread_sync.c と同じ構造)。
 すべての check-and-take をキューの mutex 下で行うことで、かつての
 <code>@items.empty?</code> / <code>@items.shift</code> のセーフポイント窓(2 つの pop が競合し片方が幻の nil を
