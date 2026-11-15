@@ -1714,31 +1714,46 @@ impl ClassInfoTable {
     /// not modules) whose direct superclass is *class_id*. The walk skips over
     /// any intermediate iclass nodes inserted by `include`/`prepend`.
     pub(crate) fn get_direct_subclasses(&self, class_id: ClassId) -> Vec<Value> {
-        let mut result = Vec::new();
-        for (idx, info) in self.table.iter().enumerate() {
-            let module = match info.object {
-                Some(m) => m,
-                None => continue,
-            };
-            if module.is_singleton().is_some() || module.is_iclass() {
-                continue;
-            }
+        let mut index = self.subclass_index.borrow_mut();
+        // File the entries added since the last query, and retry the ones
+        // that were not ready then.
+        let pending = std::mem::take(&mut index.pending);
+        // `ClassId(0)` does not exist; its table slot is a placeholder.
+        let upto = index.upto.max(1);
+        for idx in pending
+            .into_iter()
+            .map(|id| id.u32() as usize)
+            .chain(upto..self.table.len())
+        {
             let cid = ClassId::new(idx as u32);
-            if cid == class_id {
+            let Some(module) = self.table[idx].object else {
+                index.pending.push(cid);
+                continue;
+            };
+            // Only real classes: not iclasses, singleton classes or
+            // modules — none of them is a subclass of anything here.
+            if module.is_singleton().is_some()
+                || module.is_iclass()
+                || module.as_val().ty() != Some(ObjTy::CLASS)
+            {
                 continue;
             }
-            // Skip non-class objects (e.g. modules) — only Class entries can
-            // have *class_id* as a parent in the inheritance chain.
-            if module.as_val().ty() != Some(ObjTy::CLASS) {
-                continue;
-            }
-            if let Some(superclass) = module.get_real_superclass() {
-                if superclass.id() == class_id {
-                    result.push(module.as_val());
-                }
+            match module.get_real_superclass() {
+                Some(superclass) => index.children.entry(superclass.id()).or_default().push(cid),
+                None => index.pending.push(cid),
             }
         }
-        result
+        index.upto = self.table.len();
+        // Newest first, as CRuby lists them.
+        index
+            .children
+            .get(&class_id)
+            .into_iter()
+            .flatten()
+            .rev()
+            .filter_map(|cid| self[*cid].object)
+            .map(|module| module.as_val())
+            .collect()
     }
 
     /// After `base.include_module(include_module)` runs on a module

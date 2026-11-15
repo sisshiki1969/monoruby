@@ -2769,6 +2769,26 @@ pub struct ClassInfoTable {
     /// for `Store::note_instance_singletons` to poison the compiled units
     /// that assumed otherwise (the unit index lives on `Store`).
     pub(in crate::globals) new_instance_singletons: Vec<ClassId>,
+    /// The index behind `Class#subclasses` — see `SubclassIndex`.
+    pub(in crate::globals) subclass_index: std::cell::RefCell<SubclassIndex>,
+}
+
+/// Direct subclasses by superclass, built lazily from the class table.
+///
+/// The table only grows and a class's real superclass is fixed once it
+/// has one, so the index is extended over the entries added since the
+/// last query rather than rebuilt: `Class#subclasses` then costs the
+/// number of answers, not the number of classes (singleton classes and
+/// iclasses included) the process ever created.
+#[derive(Default)]
+pub struct SubclassIndex {
+    /// Table entries below this are indexed (or parked in `pending`).
+    upto: usize,
+    /// Real superclass -> its direct subclasses, in creation order.
+    children: HashMap<ClassId, Vec<ClassId>>,
+    /// Entries that could not be filed yet: no class object, or a class
+    /// without a superclass (`Class.allocate` before `initialize`).
+    pending: Vec<ClassId>,
 }
 
 impl std::ops::Index<ClassId> for ClassInfoTable {
@@ -2795,6 +2815,7 @@ impl ClassInfoTable {
             objects,
             builtin_funcs: HashSet::default(),
             new_instance_singletons: vec![],
+            subclass_index: Default::default(),
         }
     }
 
