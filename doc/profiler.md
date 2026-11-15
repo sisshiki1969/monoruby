@@ -17,7 +17,8 @@ It complements the older measurement features rather than replacing them:
 cargo build --release --features prof
 MONORUBY_PROF=cpu target/release/monoruby script.rb        # report on stderr
 MONORUBY_PROF=all MONORUBY_PROF_OUT=/tmp/p target/release/monoruby script.rb
-#   -> /tmp/p.txt, /tmp/p.cpu.folded, /tmp/p.alloc.folded, /tmp/p.malloc.folded
+#   -> /tmp/p.txt, /tmp/p.html (the viewer: open it in a browser),
+#      /tmp/p.cpu.folded, /tmp/p.alloc.folded, /tmp/p.malloc.folded
 ```
 
 A build without the feature has none of this code. A `prof` build that is
@@ -33,7 +34,7 @@ change; measured with cachegrind it is within ±0.4% Ir of master
 | `MONORUBY_PROF_HZ` | Sampling rate | 1000 |
 | `MONORUBY_PROF_ALLOC_EVERY` | Record the whole stack of every N-th object allocation (the per-class / per-method counts are exact regardless) | 64 |
 | `MONORUBY_PROF_MALLOC_EVERY` | Record the stacks of every N-th `malloc` | 64 |
-| `MONORUBY_PROF_OUT` | Write the report to `PREFIX.txt` and the stacks to `PREFIX.{cpu,alloc,malloc}.folded` | stderr, no stacks |
+| `MONORUBY_PROF_OUT` | Write the report to `PREFIX.txt`, [the viewer](#the-viewer-prefixhtml) to `PREFIX.html` and the stacks to `PREFIX.{cpu,alloc,malloc}.folded` | stderr, nothing else |
 | `MONORUBY_PROF_INLINE` | `1`: show frameless-inlined callees as frames of their own (see [below](#frameless-inlined-callees-monoruby_prof_inline1)) | (off) |
 | `MONORUBY_PROF_TOP` | Rows per table | 30 |
 | `MONORUBY_PROF_BUF_MB` | Sample buffer (reserved lazily; samples past it are counted as dropped) | 512 |
@@ -42,6 +43,56 @@ The `.folded` files are Brendan Gregg's folded-stack format: feed them to
 `flamegraph.pl`, `inferno-flamegraph` or speedscope. In the CPU stacks the
 last two frames are the tier (`[jit]`, `[vm]`, `[native]`, `[gc]`, …) and,
 for samples outside generated code, the native function the PC was in.
+
+## The viewer (`PREFIX.html`)
+
+With `MONORUBY_PROF_OUT`, the run also writes `PREFIX.html`: the same
+profile as a page to explore in a browser. It is one self-contained file
+— the page (`monoruby/src/prof/viewer.html`, compiled into a `prof`
+binary) with the run's data in it — so it needs no server and no network,
+and can be copied, attached or archived as it is. Light and dark follow
+the system (or the button at the top right).
+
+- **Time line** (when `cpu` is on) — the run cut into up to 300 equal
+  buckets of CPU samples, each drawn as its mix of tiers, with the objects
+  allocated and the bytes `malloc`ed in each below. **Drag over a part of
+  it** and every table and flame graph on the page is recomputed for that
+  part: the warm-up apart from the steady state, one GC burst, the
+  stretch where the JIT was compiling. A click, or *Whole run*, clears the
+  selection.
+- **Overview** — the totals, the tiers, the hottest methods, the most
+  allocated classes, the collector.
+- **Flame graph** — of CPU time, objects allocated, `malloc` calls or
+  `malloc` bytes. Ruby frames are neutral; the colored frame under each
+  stack is what the sample *was*: its tier and, outside generated code,
+  the Rust / C function the PC was in (for objects, the class; for
+  `malloc`, the Rust call site). A frameless-inlined callee is in italics
+  and marked `[inlined]`. Click a frame to zoom into it, type in the box
+  to highlight frames by name (and read off their share), and switch to
+  **Callers** to turn the graph over: leaves at the top, their callers
+  below — who is responsible for `memmove`, or for the `[GC]` tier.
+- **Methods** — self and total per method for the same four measures,
+  sortable, with the self time's mix of tiers as a bar. Selecting a
+  method shows its callers, its callees and what its self time (or its
+  allocations) consisted of; *Show in flame graph* highlights it there.
+- **Native functions**, **JIT** (every compilation unit with its samples,
+  code size and compile time; what was compiled more than once; the
+  frameless-inlined callees), **Objects & GC**, **malloc** — the report's
+  other tables, sortable.
+
+The numbers are the report's: the page computes them from the same
+records. Two things differ. The object tables are the exact counts for
+the whole run, but for a selected part of the run they are estimates from
+the sampled stacks (one allocation in `MONORUBY_PROF_ALLOC_EVERY`), and
+the page says so. And nothing is cut to `MONORUBY_PROF_TOP` rows.
+
+The data is the stacks themselves, not the tables: every distinct stack
+once (`View` in `prof.rs` describes the format), and per bucket of the
+time line how often each occurred. A record's bucket is the number of CPU
+samples taken before it, so the time line needs `cpu`; without it there
+is one bucket and no time line. Sizes are modest: the page of a
+600-frame optcarrot run with all three profiles is about 240 KB, 65 KB of
+it the viewer.
 
 The report is written at process exit, after `at_exit` handlers and
 finalizers. `exit!`, `exec` and a crash write nothing; a forked child

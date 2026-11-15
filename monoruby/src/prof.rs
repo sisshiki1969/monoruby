@@ -24,10 +24,12 @@
 //!   exact regardless).
 //! - `MONORUBY_PROF_MALLOC_EVERY` — record the stack of every N-th
 //!   `malloc` (default 64).
-//! - `MONORUBY_PROF_OUT=prefix` — write the report to `prefix.txt` and
-//!   the stacks as folded text (flamegraph.pl / speedscope / inferno) to
-//!   `prefix.{cpu,alloc,malloc}.folded`. Without it the report goes to
-//!   stderr and no stacks are written.
+//! - `MONORUBY_PROF_OUT=prefix` — write the report to `prefix.txt`, the
+//!   stacks as folded text (flamegraph.pl / speedscope / inferno) to
+//!   `prefix.{cpu,alloc,malloc}.folded`, and the viewer to `prefix.html`:
+//!   one self-contained page (time line, flame graphs, tables) to open
+//!   in a browser. Without it the report goes to stderr and nothing else
+//!   is written.
 //! - `MONORUBY_PROF_INLINE=1` — show frameless-inlined callees as frames
 //!   of their own (below).
 //! - `MONORUBY_PROF_TOP` — rows per table (default 30).
@@ -1304,6 +1306,9 @@ struct Record<'a> {
     native: &'a [u64],
     /// [`site_of`] the sample (0: none, or not recorded).
     site: u64,
+    /// CPU samples taken before this record: its place on the viewer's
+    /// time line (the buffer is in the order things happened).
+    tick: u32,
 }
 
 fn records() -> Vec<Record<'static>> {
@@ -1320,6 +1325,7 @@ fn records() -> Vec<Record<'static>> {
     // any more: the timer is off and the hooks are disabled.
     let words = unsafe { std::slice::from_raw_parts(buf, end) };
     let mut i = 0;
+    let mut tick = 0;
     while i + 2 <= words.len() {
         let h = words[i];
         let nr = (h & 0xffff_ffff) as usize;
@@ -1336,7 +1342,11 @@ fn records() -> Vec<Record<'static>> {
             ruby: &words[i + 2..i + 2 + nr],
             native: &words[i + 2 + nr..i + 2 + nr + nn],
             site: if ns == 1 { words[i + 2 + nr + nn] } else { 0 },
+            tick,
         });
+        if kind == KIND_CPU {
+            tick += 1;
+        }
         i += 2 + nr + nn + ns;
     }
     v
@@ -1401,6 +1411,31 @@ impl<'a> Names<'a> {
         };
         self.cache.insert(f, s.clone());
         s
+    }
+
+    /// *f*'s name and where it is defined (`path:line`, empty for a native
+    /// method), for the viewer.
+    fn parts(&self, f: u64) -> (String, String) {
+        if !self.valid(f) {
+            return ("<unknown>".to_string(), String::new());
+        }
+        let fid = FuncId::new(f as u32);
+        let mut name = self.store.func_description(fid);
+        if name.is_empty() {
+            name = format!("<func {f}>");
+        }
+        let loc = match self.store[fid].is_iseq() {
+            Some(iseq) => {
+                let info = &self.store[iseq];
+                format!(
+                    "{}:{}",
+                    info.sourceinfo.file_name(),
+                    info.sourceinfo.get_line(&info.loc)
+                )
+            }
+            None => String::new(),
+        };
+        (name, loc)
     }
 }
 
@@ -1655,6 +1690,299 @@ fn write_folded(path: &str, stacks: &HashMap<String, u64>) {
     }
 }
 
+//
+// The viewer (`PREFIX.html`)
+//
+// One self-contained HTML file: the viewer's page (`prof/viewer.html`,
+// compiled into the binary) with this run's data in it as JSON. The data
+// is the stacks themselves rather than the report's tables, so that the
+// page can build any view of them (flame graphs, callers and callees,
+// what happened in a part of the run).
+//
+
+/// The viewer's page.
+const VIEWER: &str = include_str!("prof/viewer.html");
+/// Where the data goes in [`VIEWER`].
+const VIEWER_DATA: &str = "/*MONORUBY_PROF_DATA*/";
+/// Buckets of the viewer's time line, at most.
+const MAX_BUCKETS: usize = 300;
+/// CPU samples in a bucket, at least: fewer say little about its mix.
+const MIN_BUCKET_SAMPLES: usize = 8;
+/// "None" in a stack's head.
+const NONE: u32 = u32::MAX;
+
+/// A JSON string. `<`, `>` and `&` are escaped too, so that no data can
+/// end the `<script>` element it is embedded in.
+fn json_str(out: &mut String, s: &str) {
+    use std::fmt::Write;
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            c if (c as u32) < 0x20
+                || matches!(c, '<' | '>' | '&' | '\u{7f}' | '\u{2028}' | '\u{2029}') =>
+            {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// Strings the viewer's tables refer to by index.
+#[derive(Default)]
+struct Interner {
+    index: HashMap<String, u32>,
+    items: Vec<String>,
+}
+
+impl Interner {
+    fn get(&mut self, s: &str) -> u32 {
+        if let Some(i) = self.index.get(s) {
+            return *i;
+        }
+        let i = self.items.len() as u32;
+        self.index.insert(s.to_string(), i);
+        self.items.push(s.to_string());
+        i
+    }
+
+    fn json(&self, out: &mut String) {
+        out.push('[');
+        for (i, s) in self.items.iter().enumerate() {
+            if i != 0 {
+                out.push(',');
+            }
+            json_str(out, s);
+        }
+        out.push(']');
+    }
+}
+
+///
+/// One profile as the viewer takes it: its distinct stacks, and how often
+/// each occurred in each bucket of the time line.
+///
+/// A stack is a few head words (what the sample was: its tier, its class,
+/// ...), the number of frameless-inlined frames at its top, and its Ruby
+/// frames, oldest first, as indices into the viewer's function table.
+///
+#[derive(Default)]
+struct Stacks {
+    index: HashMap<Vec<u32>, u32>,
+    stacks: Vec<Vec<u32>>,
+    /// Per bucket, per stack: how many, and their weight (bytes).
+    buckets: Vec<HashMap<u32, (u64, u64)>>,
+}
+
+impl Stacks {
+    fn add(&mut self, bucket: usize, stack: Vec<u32>, n: u64, weight: u64) {
+        let id = match self.index.get(&stack) {
+            Some(i) => *i,
+            None => {
+                let i = self.stacks.len() as u32;
+                self.index.insert(stack.clone(), i);
+                self.stacks.push(stack);
+                i
+            }
+        };
+        if self.buckets.len() <= bucket {
+            self.buckets.resize_with(bucket + 1, Default::default);
+        }
+        let e = self.buckets[bucket].entry(id).or_default();
+        e.0 += n;
+        e.1 += weight;
+    }
+
+    ///
+    /// `"stacks":[[head.., frames..],..],"buckets":[[stack,n(,weight),..],..]`:
+    /// a bucket is a flat list of *(stack, count)* pairs, or of *(stack,
+    /// count, weight)* triples if the profile is *weighted*.
+    ///
+    fn json(&self, out: &mut String, weighted: bool) {
+        use std::fmt::Write;
+        out.push_str("\"stacks\":[");
+        for (i, s) in self.stacks.iter().enumerate() {
+            if i != 0 {
+                out.push(',');
+            }
+            out.push('[');
+            for (j, w) in s.iter().enumerate() {
+                if j != 0 {
+                    out.push(',');
+                }
+                if *w == NONE {
+                    out.push_str("-1");
+                } else {
+                    let _ = write!(out, "{w}");
+                }
+            }
+            out.push(']');
+        }
+        out.push_str("],\"buckets\":[");
+        for (i, b) in self.buckets.iter().enumerate() {
+            if i != 0 {
+                out.push(',');
+            }
+            let mut v: Vec<_> = b.iter().collect();
+            v.sort();
+            out.push('[');
+            for (j, (s, (n, w))) in v.into_iter().enumerate() {
+                if j != 0 {
+                    out.push(',');
+                }
+                let _ = write!(out, "{s},{n}");
+                if weighted {
+                    let _ = write!(out, ",{w}");
+                }
+            }
+            out.push(']');
+        }
+        out.push(']');
+    }
+}
+
+/// The data of the viewer, collected while the report is written.
+struct View {
+    /// CPU samples in all: the clock of the time line.
+    ticks: u64,
+    /// `FuncId` -> index into `func_rows`.
+    funcs: HashMap<u32, u32>,
+    /// A function's name and location.
+    func_rows: Vec<(String, String)>,
+    /// Native function names.
+    syms: Interner,
+    classes: Interner,
+    cpu: Stacks,
+    alloc: Stacks,
+    malloc: Stacks,
+    /// The other sections, `"key":value`, as the report reaches them.
+    sections: Vec<String>,
+}
+
+impl View {
+    fn new(ticks: u64) -> Self {
+        View {
+            ticks,
+            funcs: HashMap::default(),
+            func_rows: vec![],
+            syms: Interner::default(),
+            classes: Interner::default(),
+            cpu: Stacks::default(),
+            alloc: Stacks::default(),
+            malloc: Stacks::default(),
+            sections: vec![],
+        }
+    }
+
+    fn buckets(&self) -> usize {
+        (self.ticks as usize / MIN_BUCKET_SAMPLES).clamp(1, MAX_BUCKETS)
+    }
+
+    /// The bucket of a record taken after *tick* CPU samples.
+    fn bucket(&self, tick: u32) -> usize {
+        let n = self.buckets();
+        if self.ticks == 0 {
+            0
+        } else {
+            ((tick as u64 * n as u64 / self.ticks) as usize).min(n - 1)
+        }
+    }
+
+    fn func(&mut self, f: u32, names: &Names) -> u32 {
+        if let Some(i) = self.funcs.get(&f) {
+            return *i;
+        }
+        let i = self.func_rows.len() as u32;
+        self.funcs.insert(f, i);
+        self.func_rows.push(names.parts(f as u64));
+        i
+    }
+
+    /// *head*, the number of inlined frames, and *frames* (newest first,
+    /// as [`Inlines::frames`] gives them) oldest first.
+    fn stack(&mut self, head: &[u32], frames: &[u64], inlined: usize, names: &Names) -> Vec<u32> {
+        let mut s = Vec::with_capacity(head.len() + 1 + frames.len());
+        s.extend_from_slice(head);
+        s.push(inlined as u32);
+        for f in frames.iter().rev() {
+            s.push(self.func(*f as u32, names));
+        }
+        s
+    }
+
+    /// The whole of the data, as JSON.
+    fn json(&self, meta: &str) -> String {
+        let mut out = String::new();
+        out.push_str("{\"version\":1,\"meta\":");
+        out.push_str(meta);
+        out.push_str(",\"tiers\":[");
+        for (i, t) in TIERS.iter().enumerate() {
+            if i != 0 {
+                out.push(',');
+            }
+            out.push('[');
+            json_str(&mut out, t.short());
+            out.push(',');
+            json_str(&mut out, t.label());
+            out.push(']');
+        }
+        out.push_str("],\"funcs\":[");
+        for (i, (name, loc)) in self.func_rows.iter().enumerate() {
+            if i != 0 {
+                out.push(',');
+            }
+            out.push('[');
+            json_str(&mut out, name);
+            out.push(',');
+            json_str(&mut out, loc);
+            out.push(']');
+        }
+        out.push_str("],\"syms\":");
+        self.syms.json(&mut out);
+        out.push_str(",\"classes\":");
+        self.classes.json(&mut out);
+        for (key, stacks, weighted) in [
+            ("cpu", &self.cpu, false),
+            ("alloc", &self.alloc, false),
+            ("malloc", &self.malloc, true),
+        ] {
+            out.push_str(",\"");
+            out.push_str(key);
+            out.push_str("\":{");
+            stacks.json(&mut out, weighted);
+            out.push('}');
+        }
+        for s in &self.sections {
+            out.push(',');
+            out.push_str(s);
+        }
+        out.push('}');
+        out
+    }
+
+    fn write(&self, path: &str, meta: &str) {
+        let json = self.json(meta);
+        let (head, tail) = VIEWER
+            .split_once(VIEWER_DATA)
+            .expect("the viewer has a place for the data");
+        let res = std::fs::File::create(path).and_then(|f| {
+            let mut f = std::io::BufWriter::new(f);
+            f.write_all(head.as_bytes())?;
+            f.write_all(json.as_bytes())?;
+            f.write_all(tail.as_bytes())?;
+            f.flush()
+        });
+        match res {
+            Ok(()) => eprintln!("monoruby prof: viewer written to {path} (open it in a browser)"),
+            Err(e) => eprintln!("monoruby prof: cannot write {path}: {e}"),
+        }
+    }
+}
+
 ///
 /// Stop profiling and write the report. Called once from the exit
 /// sequence, after the `at_exit` handlers and finalizers have run.
@@ -1726,6 +2054,10 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
         cache: HashMap::default(),
     };
     let mut syms = Symbols::new();
+    let mut view = cfg
+        .out
+        .as_ref()
+        .map(|_| View::new(records.iter().filter(|r| r.kind == KIND_CPU).count() as u64));
 
     let _ = writeln!(out);
     let _ = writeln!(
@@ -1765,6 +2097,7 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
         let mut seen = Vec::new();
         for r in &cpu {
             let pc = r.w1 as usize;
+            let mut unit = None;
             let tier = if r.ruby.is_empty() && r.phase == Phase::Run as u8 {
                 Tier::NoRuby
             } else {
@@ -1779,6 +2112,7 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
                             Tier::Vm
                         } else if let Some(u) = regions.unit_of(pc) {
                             add(&mut unit_by, u, 1);
+                            unit = Some(u);
                             Tier::JitCode
                         } else if in_jit_memory(pc) {
                             Tier::Stub
@@ -1809,14 +2143,21 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
                 add(&mut native_by, format!("[{}] {}", tier.short(), n), 1);
                 native_leaf = Some(n);
             }
-            if cfg.out.is_some() {
+            if let Some(view) = &mut view {
                 let mut s = inlines.folded(r, &mut names);
                 s += &format!(";[{}]", tier.short());
-                if let Some(n) = native_leaf {
+                if let Some(n) = &native_leaf {
                     s += ";";
-                    s += &sanitize(&n);
+                    s += &sanitize(n);
                 }
                 add(&mut folded, s, 1);
+                let head = [
+                    TIERS.iter().position(|t| *t == tier).unwrap() as u32,
+                    native_leaf.map_or(NONE, |n| view.syms.get(&n)),
+                    unit.map_or(NONE, |u| u as u32),
+                ];
+                let stack = view.stack(&head, &frames, inlined, &names);
+                view.cpu.add(view.bucket(r.tick), stack, 1, 0);
             }
         }
         let _ = writeln!(out);
@@ -2037,6 +2378,31 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
             jit.ns as f64 / 1e6,
             jit.code_bytes
         );
+        if let Some(view) = &mut view {
+            // A unit is `[method, class, loop?, code bytes, compile ns,
+            // abandoned?]`; the CPU stacks refer to it by index.
+            let mut s = format!(
+                "\"jit\":{{\"compiles\":{},\"loops\":{},\"failed\":{},\"ns\":{},\"codeBytes\":{},\"units\":[",
+                jit.compiles, jit.loops, jit.failed, jit.ns, jit.code_bytes
+            );
+            for (i, u) in jit.units.iter().enumerate() {
+                if i != 0 {
+                    s.push(',');
+                }
+                let _ = write!(
+                    s,
+                    "[{},{},{},{},{},{}]",
+                    view.func(u.func.get(), &names),
+                    view.classes.get(&store.debug_class_name(u.class)),
+                    u.is_loop as u8,
+                    u.ranges[0].1 + u.ranges[1].1,
+                    u.ns,
+                    u.failed as u8
+                );
+            }
+            s.push_str("]}");
+            view.sections.push(s);
+        }
         let mut by_time: Vec<&Unit> = jit.units.iter().collect();
         by_time.sort_by(|a, b| b.ns.cmp(&a.ns));
         table(
@@ -2187,7 +2553,7 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
                 name
             );
         }
-        if let Some(prefix) = &cfg.out {
+        if let (Some(prefix), Some(view)) = (&cfg.out, &mut view) {
             let mut folded: HashMap<String, u64> = HashMap::default();
             for r in records.iter().filter(|r| r.kind == KIND_ALLOC) {
                 let mut s = inlines.folded(r, &mut names);
@@ -2196,8 +2562,34 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
                     .unwrap_or_else(|| "<none>".to_string());
                 s += &format!(";[{}]", sanitize(&cname));
                 add(&mut folded, s, cfg.alloc_every);
+                let (frames, inlined) = inlines.frames(r, &names);
+                let head = [view.classes.get(&cname)];
+                let stack = view.stack(&head, &frames, inlined, &names);
+                view.alloc
+                    .add(view.bucket(r.tick), stack, cfg.alloc_every, 0);
             }
             write_folded(&format!("{prefix}.alloc.folded"), &folded);
+            // The exact counts: `[method (-1: none), class, objects]`.
+            let mut s = format!(
+                "\"objects\":{{\"total\":{total},\"every\":{},\"exact\":[",
+                cfg.alloc_every
+            );
+            for (i, ((f, c), n)) in sorted(&allocs).into_iter().enumerate() {
+                if i != 0 {
+                    s.push(',');
+                }
+                let cname = ClassId::from(c)
+                    .map(|c| store.debug_class_name(c))
+                    .unwrap_or_else(|| "<none>".to_string());
+                let f = if names.valid(f as u64) {
+                    view.func(f, &names) as i64
+                } else {
+                    -1
+                };
+                let _ = write!(s, "[{f},{},{n}]", view.classes.get(&cname));
+            }
+            s.push_str("]}");
+            view.sections.push(s);
         }
     }
     {
@@ -2239,6 +2631,27 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
             }
             alloc::ALLOC.with(|a| {
                 let a = a.borrow();
+                if let Some(view) = &mut view {
+                    let mut s = "\"gc\":{\"kinds\":[".to_string();
+                    for (i, (label, g)) in [("minor", gc[0]), ("major", gc[1])].iter().enumerate() {
+                        if i != 0 {
+                            s.push(',');
+                        }
+                        let _ = write!(
+                            s,
+                            "{{\"kind\":\"{label}\",\"count\":{},\"ns\":{},\"markNs\":{},\"marked\":{}}}",
+                            g.count, g.ns, g.mark_ns, g.marked
+                        );
+                    }
+                    let _ = write!(
+                        s,
+                        "],\"pages\":{},\"live\":{},\"allocated\":{}}}",
+                        a.pages_len(),
+                        a.live_count(),
+                        a.total_allocated()
+                    );
+                    view.sections.push(s);
+                }
                 table(
                     out,
                     "heap at exit",
@@ -2290,12 +2703,27 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
             let e = by_site.entry(site.clone()).or_default();
             e.0 += cfg.malloc_every;
             e.1 += r.w1 * cfg.malloc_every;
-            if cfg.out.is_some() {
+            if let Some(view) = &mut view {
                 let mut s = inlines.folded(r, &mut names);
                 s += ";";
                 s += &sanitize(&site);
                 add(&mut folded, s, cfg.malloc_every);
+                let (frames, inlined) = inlines.frames(r, &names);
+                let head = [view.syms.get(&site)];
+                let stack = view.stack(&head, &frames, inlined, &names);
+                view.malloc.add(
+                    view.bucket(r.tick),
+                    stack,
+                    cfg.malloc_every,
+                    r.w1 * cfg.malloc_every,
+                );
             }
+        }
+        if let Some(view) = &mut view {
+            view.sections.push(format!(
+                "\"mallocTotals\":{{\"calls\":{mc},\"bytes\":{mb},\"frees\":{fc},\"freeBytes\":{fb},\"every\":{}}}",
+                cfg.malloc_every
+            ));
         }
         let est: u64 = samples.len() as u64 * cfg.malloc_every;
         let _ = writeln!(
@@ -2366,6 +2794,33 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
         out,
         "=================================================================="
     );
+
+    if let (Some(prefix), Some(view)) = (&cfg.out, &view) {
+        let mut meta = "{\"command\":".to_string();
+        json_str(&mut meta, &std::env::args().collect::<Vec<_>>().join(" "));
+        let (wall, cpu) = clock.unwrap_or_default();
+        let _ = write!(
+            meta,
+            ",\"monoruby\":\"{}\",\"target\":\"{}-{}\",\"epoch\":{},\"elapsed\":{:.6},\"wall\":{wall:.6},\"cpuTime\":{cpu:.6},\"modes\":{{\"cpu\":{},\"alloc\":{},\"malloc\":{}}},\"clock\":\"{}\",\"hz\":{},\"samples\":{},\"buckets\":{},\"inline\":{},\"inlineBodies\":{},\"dropped\":{dropped}}}",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::ARCH,
+            std::env::consts::OS,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+            elapsed.as_secs_f64(),
+            cfg.cpu,
+            cfg.alloc,
+            cfg.malloc,
+            if cfg.wall { "wall" } else { "cpu" },
+            cfg.hz,
+            view.ticks,
+            view.buckets(),
+            cfg.inline,
+            inlines.bodies.len(),
+        );
+        view.write(&format!("{prefix}.html"), &meta);
+    }
 }
 
 #[cfg(test)]
@@ -2480,6 +2935,91 @@ mod tests {
         ));
         assert!(!is_alloc_plumbing("<[u8]>::repeat"));
         assert!(!is_alloc_plumbing("monoruby::bytecodegen::compile_iseq"));
+    }
+
+    #[test]
+    fn viewer_has_one_place_for_the_data() {
+        assert_eq!(1, VIEWER.matches(VIEWER_DATA).count());
+        let (head, tail) = VIEWER.split_once(VIEWER_DATA).unwrap();
+        assert!(
+            head.ends_with("type=\"application/json\">"),
+            "{}",
+            &head[head.len() - 60..]
+        );
+        assert!(tail.starts_with("</script>"));
+    }
+
+    #[test]
+    fn json_strings_cannot_end_the_script_element() {
+        let mut s = String::new();
+        json_str(&mut s, "a</script><!-- \"q\" \\ \n\t & \u{2028} é");
+        assert_eq!(
+            r#""a\u003c/script\u003e\u003c!-- \"q\" \\ \n\u0009 \u0026 \u2028 é""#,
+            s
+        );
+    }
+
+    #[test]
+    fn stacks_are_interned_and_counted_by_bucket() {
+        let mut s = Stacks::default();
+        s.add(0, vec![1, NONE, 0, 7, 8], 1, 0);
+        s.add(2, vec![1, NONE, 0, 7, 8], 2, 10);
+        s.add(2, vec![0, 3, 1, 7], 64, 640);
+        s.add(2, vec![0, 3, 1, 7], 64, 160);
+        let mut out = String::new();
+        s.json(&mut out, false);
+        assert_eq!(
+            r#""stacks":[[1,-1,0,7,8],[0,3,1,7]],"buckets":[[0,1],[],[0,2,1,128]]"#,
+            out
+        );
+        out.clear();
+        s.json(&mut out, true);
+        assert_eq!(
+            r#""stacks":[[1,-1,0,7,8],[0,3,1,7]],"buckets":[[0,1,0],[],[0,2,10,1,128,800]]"#,
+            out
+        );
+    }
+
+    #[test]
+    fn time_line_buckets_follow_the_cpu_samples() {
+        // no CPU samples: everything is in the one bucket
+        let v = View::new(0);
+        assert_eq!((1, 0), (v.buckets(), v.bucket(0)));
+        // too few for a time line
+        assert_eq!(1, View::new(12).buckets());
+        let v = View::new(80);
+        assert_eq!(10, v.buckets());
+        assert_eq!([0, 0, 1, 9], [0, 7, 8, 79].map(|t| v.bucket(t)));
+        // a record after the last sample
+        assert_eq!(9, v.bucket(80));
+        let v = View::new(1_000_000);
+        assert_eq!(MAX_BUCKETS, v.buckets());
+        assert_eq!(MAX_BUCKETS - 1, v.bucket(999_999));
+    }
+
+    #[test]
+    fn viewer_data_is_one_json_object() {
+        let mut v = View::new(16);
+        let a = v.syms.get("memmove");
+        assert_eq!(a, v.syms.get("memmove"));
+        assert_eq!(1, v.classes.get("Array") + v.classes.get("<Class:\"x\">"));
+        v.cpu.add(v.bucket(9), vec![3, a, NONE, 0], 1, 0);
+        v.sections.push("\"gc\":{}".to_string());
+        let json = v.json("{\"samples\":16}");
+        assert!(json.starts_with(
+            "{\"version\":1,\"meta\":{\"samples\":16},\"tiers\":[[\"jit\",\"JIT code\"],"
+        ));
+        assert!(json.contains(
+            ",\"syms\":[\"memmove\"],\"classes\":[\"Array\",\"\\u003cClass:\\\"x\\\"\\u003e\"],"
+        ));
+        assert!(json.contains(",\"cpu\":{\"stacks\":[[3,0,-1,0]],\"buckets\":[[],[0,1]]},\"alloc\":{\"stacks\":[],\"buckets\":[]},"));
+        assert!(json.ends_with(",\"gc\":{}}"));
+        // balanced, and nothing a browser would take for markup
+        assert_eq!(
+            json.matches(['{', '[']).count(),
+            json.matches(['}', ']']).count()
+        );
+        assert!(!json.contains(['<', '>', '&']));
     }
 
     fn init_test_buffer() {
