@@ -5657,7 +5657,12 @@ impl Executor {
     /// check makes a stale or unrelated stash harmless: it simply
     /// resolves to `None` and the caller copies the haystack as before.
     pub(crate) fn resolve_haystack(&self, s: &str) -> Option<(Value, usize)> {
-        let subject = self.sp_match_haystack?;
+        Self::haystack_offset(self.sp_match_haystack?, s)
+    }
+
+    /// `(subject, byte offset of s within it)` when `s` borrows from the
+    /// String `subject`'s byte buffer, by pointer containment.
+    fn haystack_offset(subject: Value, s: &str) -> Option<(Value, usize)> {
         let rs = subject.is_rstring()?;
         let bytes = rs.as_bytes();
         let base = bytes.as_ptr() as usize;
@@ -5695,7 +5700,36 @@ impl Executor {
     /// match read out of a caller-owned onigmo `Region` (a scan that
     /// reuses one region across matches and saves `$~` once, at the end).
     pub(crate) fn save_capture_spans(&mut self, spans: &[Option<(usize, usize)>], haystack: &str) {
-        let mut md = MatchDataInner::from_spans(spans, haystack, self.resolve_haystack(haystack));
+        let resolved = self.resolve_haystack(haystack);
+        self.save_capture_spans_resolved(spans, haystack, resolved);
+    }
+
+    /// As [`save_capture_spans`] for a `haystack` that borrows the bytes
+    /// of the String `owner` — the snapshot a `gsub` / `scan` walk cut
+    /// its view from — so the zero-copy snapshot is resolved against
+    /// `owner` and not against the stash, which a match run by the
+    /// block (a `gsub` inside a `gsub` block) has pointed at its own
+    /// subject by now. A stale stash made every later `$~` copy the
+    /// whole haystack and every `$1` classify the copy. A view that is
+    /// not `owner`'s bytes (a surrogate image) still copies.
+    pub(crate) fn save_capture_spans_in(
+        &mut self,
+        spans: &[Option<(usize, usize)>],
+        haystack: &str,
+        owner: Value,
+    ) {
+        let resolved =
+            Self::haystack_offset(owner, haystack).or_else(|| self.resolve_haystack(haystack));
+        self.save_capture_spans_resolved(spans, haystack, resolved);
+    }
+
+    fn save_capture_spans_resolved(
+        &mut self,
+        spans: &[Option<(usize, usize)>],
+        haystack: &str,
+        resolved: Option<(Value, usize)>,
+    ) {
+        let mut md = MatchDataInner::from_spans(spans, haystack, resolved);
         if let Some(regex_val) = self.sp_match_regex
             && let Some(regex) = regex_val.is_regex()
         {

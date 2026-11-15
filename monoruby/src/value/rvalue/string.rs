@@ -2982,9 +2982,17 @@ impl EncBuf {
         self.seven_bit = enc.is_ascii_compatible() && self.buf.is_ascii();
     }
 
-    /// The string built, with a lazy code range.
+    /// The string built. 7-bit content under an ASCII-compatible encoding
+    /// is `SevenBit` outright — every piece was checked for that on its
+    /// way in — so the result of one `gsub` is not rescanned by the next;
+    /// anything else is classified on demand.
     pub fn finish(self) -> RStringInner {
-        RStringInner::from(self.buf, self.enc, CodeRange::Unknown)
+        let cr = if self.seven_bit && self.enc.is_ascii_compatible() {
+            CodeRange::SevenBit
+        } else {
+            CodeRange::Unknown
+        };
+        RStringInner::from(self.buf, self.enc, cr)
     }
 }
 
@@ -7546,6 +7554,35 @@ fn opens_a_converter(
 #[cfg(test)]
 mod encoding_tests {
     use super::*;
+
+    /// `EncBuf` tracks whether everything appended was 7-bit; `finish`
+    /// hands that on as the code range so a `gsub` result is not
+    /// rescanned by the next `gsub`.
+    #[test]
+    fn encbuf_finish_records_seven_bit() {
+        let globals = Globals::new_test();
+        let mut buf = EncBuf::new(Encoding::UTF8);
+        buf.append(&globals.store, b"abc", Encoding::UTF8, false)
+            .unwrap();
+        buf.push_ascii(b", ");
+        assert_eq!(buf.finish().cr.get(), CodeRange::SevenBit);
+
+        // A high byte leaves the range to be classified on demand.
+        let mut buf = EncBuf::new(Encoding::UTF8);
+        buf.append(&globals.store, "\u{e9}".as_bytes(), Encoding::UTF8, false)
+            .unwrap();
+        let s = buf.finish();
+        assert_eq!(s.cr.get(), CodeRange::Unknown);
+        assert_eq!(s.code_range(), CodeRange::Valid);
+
+        // Not under an encoding that is not ASCII-compatible: two ASCII
+        // bytes are one UTF-16 code unit, not two 7-bit characters.
+        let mut buf = EncBuf::new(Encoding::Utf16Le);
+        buf.push_ascii(b"ab");
+        let s = buf.finish();
+        assert_eq!(s.cr.get(), CodeRange::Unknown);
+        assert_ne!(s.code_range(), CodeRange::SevenBit);
+    }
 
     /// The JIT's inline `String#<<` compares the encoding tag against a
     /// numeric bound, so the three encodings a raw byte append is sound
