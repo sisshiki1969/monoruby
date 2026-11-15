@@ -203,6 +203,9 @@ pub struct Store {
     /// FuncId of the default `BasicObject#!=`, used to recognize that an
     /// unredefined `!=` may be computed as `!(a == b)` without dispatch.
     default_neq: Option<FuncId>,
+    /// FuncId of the builtin `Symbol#!=`, which answers as the default
+    /// does; see [`Self::custom_neq`].
+    symbol_neq: Option<FuncId>,
     /// FuncIds of the default `initialize_copy` / `initialize_dup` /
     /// `initialize_clone` builtins. `Kernel#dup` / `#clone` compare a
     /// class's resolved hooks against these to recognize the no-op case
@@ -876,6 +879,7 @@ impl Store {
             leaf_builtins: HashMap::default(),
             identity_eq_fid: None,
             default_neq: None,
+            symbol_neq: None,
             default_copy_hooks: None,
             builtin_to_s: None,
             // No class_version is this wide: nothing is memoized yet.
@@ -2087,6 +2091,10 @@ impl Store {
         self.default_neq = Some(fid);
     }
 
+    pub(crate) fn set_symbol_neq(&mut self, fid: FuncId) {
+        self.symbol_neq = Some(fid);
+    }
+
 
     /// Record the FuncIds of the default `initialize_copy` /
     /// `initialize_dup` / `initialize_clone` builtins (see
@@ -2245,10 +2253,16 @@ impl Store {
         // registered as a basic op: overwriting a basic-op entry trips
         // the global BOP-redefine slow mode, and `BasicObject#!=` gets
         // legitimately shadowed during startup, e.g. by Comparable.)
+        // The builtin `Symbol#!=` counts too: it is `!(a == b)` for the
+        // builtin `Symbol#==`, and with it dispatched instead, a redefined
+        // `Symbol#==` would go unseen and a frameless body's `sym != x`
+        // would be declined every time (`cmp_ne_values_pure`).
         match self.search_method_by_class_id(class_id, IdentId::_NEQ) {
             Some(entry)
                 if entry.is_basic_op()
-                    || (entry.func_id().is_some() && entry.func_id() == self.default_neq) =>
+                    || (entry.func_id().is_some()
+                        && (entry.func_id() == self.default_neq
+                            || entry.func_id() == self.symbol_neq)) =>
             {
                 self[class_id].set_neq_basic_at(version);
                 None

@@ -12,9 +12,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SYMBOL_CLASS, "<=>", cmp, 1);
     globals.define_builtin_inline_func(SYMBOL_CLASS, "===", eq, inline_gen2!(symbol_eq), 1);
     globals.define_builtin_inline_func(SYMBOL_CLASS, "==", eq, inline_gen2!(symbol_eq), 1);
-    // No `Symbol#!=`, as in CRuby: `BasicObject#!=` is `!(a == b)`, which
-    // the comparison helpers compute without a dispatch
-    // (`Store::custom_neq`).
+    // CRuby has no `Symbol#!=`. This one is what a call site that has
+    // only seen Symbol receivers calls; the generic comparison helpers
+    // take it for the default `!(a == b)` (`Store::custom_neq`) instead
+    // of dispatching it.
+    let neq_fid = globals.define_builtin_func(SYMBOL_CLASS, "!=", ne, 1);
+    globals.store.set_symbol_neq(neq_fid);
     globals.define_builtin_func(SYMBOL_CLASS, "to_s", sym_to_s, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "name", sym_name, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "inspect", sym_inspect, 0);
@@ -359,6 +362,16 @@ fn symbol_eq(
     true
 }
 
+#[monoruby_builtin]
+fn ne(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let lhs = lfp.self_val();
+    let rhs = lfp.arg(0);
+    match (lhs.as_symbol(), rhs.try_symbol()) {
+        (lhs, Some(rhs)) => Ok(Value::bool(lhs != rhs)),
+        (_, None) => Ok(Value::bool(true)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -371,26 +384,27 @@ mod tests {
         );
     }
 
-    /// `Symbol` has no `!=` of its own: `a != b` is `!(a == b)`, so a
-    /// redefined `Symbol#==` is seen by `!=` as well.
+    /// A site that has seen receivers of many classes compares through the
+    /// generic helper, which takes `Symbol#!=` for the default `!=` and so
+    /// computes `!(a == b)`: a redefined `Symbol#==` is seen there.
     #[test]
-    fn symbol_neq_is_not_eq() {
+    fn symbol_neq_in_generic_comparison() {
         run_test_once(
             r##"
-        def sym_ne(a, b) = a != b
+        def any_ne(a, b) = a != b
+        vals = [nil, :a, :b, true, 1, 2.5, "a", [1], {}, 1..2, Object.new, 1r]
         r = []
-        30.times { r << sym_ne(:a, :a) << sym_ne(:a, :b) << sym_ne(:a, 1) }
-        r << Symbol.instance_method(:!=).owner
+        5.times { vals.each { |y| vals.each { |x| r << any_ne(x, y) } } }
         class Symbol
           alias_method :__sym_eq, :==
           def ==(o) = false
         end
-        r << sym_ne(:a, :a) << (:a != :a)
+        res = [any_ne(:a, :a), any_ne(:a, :b), any_ne(:a, 1)]
         class Symbol
           alias_method :==, :__sym_eq
           remove_method :__sym_eq
         end
-        r << sym_ne(:a, :a)
+        r << res << any_ne(:a, :a) << any_ne(:a, :b)
         r
         "##,
         );
