@@ -1712,3 +1712,402 @@ fn integer_with_a_float_copy_is_not_returned_as_a_raw_float() {
         "#,
     );
 }
+
+#[test]
+fn frameless_leaf_builtin_calls() {
+    // A callee whose body calls a builtin that runs no Ruby code and
+    // reaches no safepoint (`LeafCall`) compiles frameless: the call is
+    // made from the window, with no chain exit.
+    run_test(
+        r#"
+        class LeafCalls
+          def initialize(a, h, s) = (@a = a; @h = h; @s = s)
+          def asz = @a.size
+          def afirst(n) = @a.first(n)
+          def alast = @a.last
+          def aempty = @a.empty?
+          def hsz = @h.size + @h.length
+          def ssz = @s.size + @s.bytesize
+          def sbyte(i) = @s.getbyte(i)
+          def sslice(i, n) = @s.byteslice(i, n)
+          def sym = @s.to_sym
+          def istr(i) = i.to_s
+          def istr2(i, r) = i.to_s(r)
+          def fstr(f) = f.to_s
+          def cls(o) = o.class
+          def nilp(o) = o.nil?
+          def frz(o) = o.frozen?
+          def same(a, b) = a.equal?(b)
+          # A float live in a register across the leaf call.
+          def mix(x, i) = (x * 1.5) + istr(i).size + x
+          def all(i)
+            [asz, afirst(2), alast, aempty, hsz, ssz, sbyte(i % 3), sslice(i % 3, 2), sym,
+             istr(i), istr2(i, 16), fstr(i * 0.5), cls(i), cls(@s), nilp(nil), nilp(i),
+             frz(@s), frz(:a), same(@a, @a), same(@a, @h), mix(i * 0.25, i * 1000)]
+          end
+        end
+        l = LeafCalls.new([1, 2, 3], { a: 1 }, "héllo")
+        res = []
+        40.times { |i| res << l.all(i) }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_leaf_builtin_calls_more() {
+    // The rest of the leaf table: singleton methods, methods that mutate
+    // the receiver, a Bignum result, and strscan.rb's primitive
+    // (`String#__strscan_match`) under `StringScanner#scan` / `#skip`.
+    run_test(
+        r#"
+        require "strscan"
+        class LeafMore
+          def initialize(a, h) = (@a = a; @h = h)
+          def cur = Thread.current
+          def fib = Fiber.current
+          def symstr(s) = s.to_s
+          def iabs(i) = i.abs
+          def fabs(f) = f.abs
+          def hempty = @h.empty?
+          def pop1 = @a.pop
+          def pop2(n) = @a.pop(n)
+          def shift1 = @a.shift
+          def shift2(n) = @a.shift(n)
+          def last2(n) = @a.last(n)
+          def first1 = @a.first
+          def same(a, b) = a == b
+          def tok(ss) = ss.scan(/\w+/)
+          def skip(ss) = ss.skip(/\s+/)
+          def lit(ss) = ss.scan("=")
+          def all(i)
+            [cur.equal?(Thread.current), fib.equal?(Fiber.current), symstr(:"s#{i % 3}"), iabs(i - 20),
+             iabs(-(2**62) - i), fabs(i * -0.5), hempty, pop1, pop2(2), shift1, shift2(1), last2(2), first1,
+             same(@a, @a), same(self, @h)]
+          end
+          def lex(src)
+            ss = StringScanner.new(src)
+            out = []
+            until ss.eos?
+              skip(ss)
+              t = tok(ss) || lit(ss) || ss.getch
+              out << t
+            end
+            out
+          end
+        end
+        l = LeafMore.new((1..400).to_a, {})
+        res = []
+        40.times { |i| res << l.all(i) }
+        30.times { |i| res << l.lex("ab = c#{i} + d  = 12") }
+        res
+        "#,
+    );
+}
+
+#[test]
+fn frameless_leaf_builtin_raises() {
+    // An error raised by a leaf builtin is taken by a materializing exit:
+    // the backtrace has the builtin's own frame at the line of the call
+    // in the inlined body (the cont frame's pc is tagged and carries the
+    // body's iseq, `LEAF_CALL_PC_TAG`), then the inlined method, then its
+    // caller.
+    run_test(
+        r#"
+        class LeafRaise
+          def initialize(a) = @a = a
+          def radix(i, r)
+            i.to_s(r)
+          end
+          def take
+            @a.pop
+          end
+          def run(i, r)
+            radix(i, r).size + 1
+          end
+          def run2
+            take.to_i + 1
+          end
+          def a = @a
+        end
+        base = __LINE__
+        w = LeafRaise.new((1..100).to_a)
+        r = []
+        30.times { |i| r << w.run(i * 7, 2 + i % 30) << w.run2 }
+        trace = ->(e) {
+          [e.class, e.message] +
+            e.backtrace.first(3).map { _1 =~ /:(\d+):in (.*)$/; [$1.to_i - base, $2] }
+        }
+        [[255, 1], [255, 100]].each do |i, radix|
+          begin
+            w.run(i, radix)
+          rescue => e
+            r << trace.(e)
+          end
+        end
+        w.a.replace([1, 2]).freeze
+        begin
+          w.run2
+        rescue => e
+          r << trace.(e)
+        end
+        r << w.run(255, 16)
+        r
+        "#,
+    );
+}
+
+#[test]
+fn frameless_leaf_builtin_argument_forms() {
+    // `Array#first(n)` and `String#getbyte(i)` are leaves only where the
+    // argument is proven an Integer (`LeafCall::IntArgs`): with anything
+    // else they call `to_int`, which is Ruby code and needs the frame.
+    run_test(
+        r#"
+        class LeafToInt; def to_int = 2; end
+        class LeafArgs
+          def initialize(a) = @a = a
+          def head(n) = @a.first(n)
+          def run(n) = head(n).size
+          def byte(s, i) = s.getbyte(i)
+          def run2(s, i) = byte(s, i).to_i + 1
+        end
+        a = LeafArgs.new([1, 2, 3, 4])
+        n = LeafToInt.new
+        r = []
+        30.times { |i| r << a.run(i % 3) << a.run2("abc", i % 4) }
+        r << a.run(n) << a.run2("abc", n)
+        30.times { |i| r << a.run(n) << a.run(1) << a.run2("xyz", n) << a.run2("xyz", i % 3) }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn frameless_leaf_builtin_redefined() {
+    // The leaf call is under the class-version guard like any call: a
+    // redefinition of the builtin is seen.
+    run_test(
+        r#"
+        class LeafRedef
+          def initialize(a) = @a = a
+          def lst = @a.last
+          def run = lst + 1
+        end
+        a = LeafRedef.new([1, 2, 3])
+        r = []
+        30.times { r << a.run }
+        class Array
+          alias __leaf_last last
+          def last = 100
+        end
+        30.times { r << a.run }
+        class Array
+          alias last __leaf_last
+        end
+        30.times { r << a.run }
+        r.uniq
+        "#,
+    );
+}
+
+#[test]
+fn frameless_generic_eq_pure_helper() {
+    // `==` / `!=` on operands of no known class go through the helper
+    // that answers the cases decided without running Ruby code (nil,
+    // booleans, Symbols, numbers, Strings, `BasicObject#==`) and declines
+    // the rest: a user-defined `==` or `!=`, a String subclass, the
+    // reverse dispatch of `1 == obj`, Array and Hash. A decline deopts
+    // and the interpreter does the comparison in a real frame.
+    run_test(
+        r#"
+        class EqP
+          attr_reader :v
+          def initialize(v) = @v = v
+          def ==(o) = o.is_a?(EqP) && v == o.v
+        end
+        class EqQ; def initialize(v) = @v = v; end
+        class EqS < String; def ==(o) = o == :s2; end
+        class EqR; def !=(o) = :custom; end
+        class EqCmp
+          def eq(a, b) = a == b
+          def ne(a, b) = a != b
+          def both(a, b) = [eq(a, b), ne(a, b)]
+        end
+        c = EqCmp.new
+        q = EqQ.new(1)
+        vals = [nil, true, false, :a, :b, 1, 2, 1.0, 2**70, 2**70, 2**200, 2**200, 2.0**200,
+                "a", "b", "a".b, q, EqQ.new(1)]
+        r = []
+        3.times { vals.each { |x| vals.each { |y| r << c.both(x, y) } } }
+        pv = [EqP.new(1), EqP.new(1), EqP.new(2), EqS.new("x"), EqR.new, [1], [1], { a: 1 }]
+        3.times { pv.each { |x| (vals + pv).each { |y| r << c.both(x, y) << c.both(y, x) } } }
+        3.times { vals.each { |x| vals.each { |y| r << c.both(x, y) } } }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn frameless_generic_eq_redefined() {
+    // The pure helper checks the basic-op redefinition and a custom `!=`
+    // itself, per call.
+    run_test_once(
+        r#"
+        class EqCmp2
+          def eq(a, b) = a == b
+          def ne(a, b) = a != b
+          def both(a, b) = [eq(a, b), ne(a, b)]
+        end
+        class EqT; end
+        c = EqCmp2.new
+        t = EqT.new
+        vals = [nil, :a, 1, "a", t, EqT.new]
+        r = []
+        10.times { vals.each { |x| vals.each { |y| r << c.both(x, y) } } }
+        class EqT
+          def ==(o) = o.is_a?(EqT)
+        end
+        10.times { vals.each { |x| vals.each { |y| r << c.both(x, y) } } }
+        class NilClass
+          def ==(o) = o == :a
+        end
+        res = vals.map { |y| c.both(nil, y) }
+        class NilClass
+          remove_method :==
+        end
+        r << res
+        10.times { vals.each { |x| vals.each { |y| r << c.both(x, y) } } }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn frameless_generic_eq_each_decline() {
+    // A site whose pure helper has declined once is an ordinary call from
+    // then on, so each kind of decline gets a site of its own: a String
+    // subclass receiver, a String compared with a `to_str` responder, a
+    // receiver with its own `!=`, and a number compared with an object
+    // that defines `==` (the reverse dispatch).
+    run_test(
+        r#"
+        class EqDSub < String; def ==(o) = o == :sub; end
+        class EqDStr; def to_str = "a"; def ==(o) = o == "a"; end
+        class EqDNe; def !=(o) = :custom; end
+        class EqDRev; def ==(o) = o == 1; end
+        class EqDecl
+          def eq1(a, b) = a == b
+          def ne1(a, b) = a != b
+          def eq2(a, b) = a == b
+          def ne2(a, b) = a != b
+          def eq3(a, b) = a == b
+          def ne3(a, b) = a != b
+          def eq4(a, b) = a == b
+          def ne4(a, b) = a != b
+          def sub(a, b) = [eq1(a, b), ne1(a, b)]
+          def str(a, b) = [eq2(a, b), ne2(a, b)]
+          def neq(a, b) = [eq3(a, b), ne3(a, b)]
+          def rev(a, b) = [eq4(a, b), ne4(a, b)]
+        end
+        class EqD1; end
+        class EqD2; end
+        class EqD3; end
+        class EqD4; end
+        c = EqDecl.new
+        # Receivers of enough classes that the sites give up on dispatching
+        # by class and compare through the helper.
+        plain = [nil, :a, true, false, 1, 2.5, "a", "b", EqD1.new, EqD2.new, EqD3.new, EqD4.new]
+        r = []
+        warm = -> {
+          plain.each do |y|
+            plain.each { |x| r << c.sub(x, y) << c.str(x, y) << c.neq(x, y) << c.rev(x, y) }
+          end
+        }
+        3.times { warm.() }
+        s, t, n, v = EqDSub.new("a"), EqDStr.new, EqDNe.new, EqDRev.new
+        r << c.sub(s, :sub) << c.sub(s, "a")
+        r << c.str("a", t) << c.str("b", t)
+        r << c.neq(n, 1) << c.neq(n, n)
+        r << c.rev(1, v) << c.rev(2.5, v) << c.rev(2**70, v)
+        3.times { warm.() }
+        r << c.sub(s, :sub) << c.str("a", t) << c.neq(n, 1) << c.rev(1, v)
+        r
+        "#,
+    );
+}
+
+#[test]
+fn frameless_generic_eq_float_eq_redefined() {
+    // `Float#==` is no assumption of the compiled code (only the `==` of
+    // Integer, nil, true, false and Symbol is), so its redefinition does
+    // not evict the body: the pure helper sees it at the call and
+    // declines.
+    run_test_once(
+        r#"
+        class EqFlt
+          def eq(a, b) = a == b
+          def ne(a, b) = a != b
+          def both(a, b) = [eq(a, b), ne(a, b)]
+        end
+        c = EqFlt.new
+        vals = [nil, :a, 1, 1.5, 2.5, "a"]
+        r = []
+        10.times { vals.each { |x| vals.each { |y| r << c.both(x, y) } } }
+        class Float
+          alias_method :__eq_flt, :==
+          def ==(o) = o.nil?
+        end
+        res = vals.map { |y| c.both(1.5, y) + c.both(y, 1.5) }
+        class Float
+          alias_method :==, :__eq_flt
+          remove_method :__eq_flt
+        end
+        r << res
+        10.times { vals.each { |x| vals.each { |y| r << c.both(x, y) } } }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn frameless_leaf_builtin_not_simple_call() {
+    // A leaf builtin called with a splat, a block argument or a block is
+    // no leaf call.
+    run_test(
+        r#"
+        class LeafSplat
+          def initialize(a) = @a = a
+          def h1(args) = @a.first(*args)
+          def h2(blk) = @a.last(&blk)
+          def h3 = @a.size { 1 }
+          def h4(h) = @a.empty?(**h)
+          def run(args) = [h1(args), h2(nil), h3, h4({})]
+        end
+        a = LeafSplat.new([1, 2, 3, 4])
+        r = []
+        30.times { |i| r << a.run([i % 3]) << a.run([]) }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn strscan_match_takes_an_integer_position() {
+    // `String#__strscan_match` is monoruby's own (strscan.rb's primitive;
+    // CRuby has the C extension instead), so this is not oracle-checked.
+    // It is a leaf builtin and so calls no `to_int` on its position.
+    let v = run_test_no_result_check(
+        r##"
+        class StrscanPos; def to_int = 0; end
+        r = []
+        r << "abc".__strscan_match(/a/, 0, true)
+        r << "abc".__strscan_match(/a/, -1, true)
+        r << (begin; "abc".__strscan_match(/a/, StrscanPos.new, true); rescue TypeError => e; e.message; end)
+        expected = [1, nil, "no implicit conversion of StrscanPos into Integer"]
+        raise "got #{r.inspect}" unless r == expected
+        r.size
+        "##,
+    );
+    assert_eq!(v.try_fixnum(), Some(3));
+}

@@ -264,3 +264,61 @@ fn parse_f64(s: &str) -> (f64, bool) {
     };
     (f, err)
 }
+
+///
+/// Mark the builtins a frameless callee's body may call
+/// (`globals::LeafCall`). Each one listed was read for the three things a
+/// leaf must not do: run Ruby code (a dispatch, a block, a coercion of an
+/// argument outside the form the entry names), reach a safepoint, or look
+/// at a frame other than its own.
+///
+pub(crate) fn init_leaf_builtins(globals: &mut Globals) {
+    use crate::globals::LeafCall::{self, *};
+    let table: &[(ClassId, bool, &[&str], LeafCall)] = &[
+        (THREAD_CLASS, true, &["current"], Always),
+        (FIBER_CLASS, true, &["current"], Always),
+        (BASIC_OBJECT_CLASS, false, &["==", "equal?"], Always),
+        // `Kernel#class` / `#nil?` and `Object#frozen?`, as an Object
+        // finds them.
+        (OBJECT_CLASS, false, &["class", "nil?", "frozen?"], Always),
+        (FLOAT_CLASS, false, &["to_s", "abs"], Always),
+        (INTEGER_CLASS, false, &["abs"], Always),
+        (INTEGER_CLASS, false, &["to_s"], IntArgs),
+        (SYMBOL_CLASS, false, &["to_s"], Always),
+        (ARRAY_CLASS, false, &["empty?", "size", "length"], Always),
+        (ARRAY_CLASS, false, &["first", "last", "pop", "shift"], IntArgs),
+        (HASH_CLASS, false, &["empty?", "size", "length"], Always),
+        (
+            STRING_CLASS,
+            false,
+            &["empty?", "size", "length", "bytesize", "to_sym", "__strscan_match"],
+            Always,
+        ),
+        (STRING_CLASS, false, &["byteslice", "getbyte"], IntArgs),
+    ];
+    for (class, singleton, names, leaf) in table {
+        let class = if *singleton {
+            globals.store.get_metaclass(*class).id()
+        } else {
+            *class
+        };
+        for name in *names {
+            if let Some(fid) = globals
+                .store
+                .check_method_for_class(class, IdentId::get_id(name))
+                .and_then(|e| e.func_id())
+                && matches!(globals.store[fid].kind, FuncKind::Builtin { .. })
+            {
+                globals.store.set_leaf_builtin(fid, *leaf);
+            }
+        }
+    }
+    if let Some(fid) = globals
+        .store
+        .check_method_for_class(BASIC_OBJECT_CLASS, IdentId::_EQ)
+        .and_then(|e| e.func_id())
+        && matches!(globals.store[fid].kind, FuncKind::Builtin { .. })
+    {
+        globals.store.set_identity_eq_fid(fid);
+    }
+}

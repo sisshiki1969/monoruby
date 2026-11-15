@@ -12,7 +12,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SYMBOL_CLASS, "<=>", cmp, 1);
     globals.define_builtin_inline_func(SYMBOL_CLASS, "===", eq, inline_gen2!(symbol_eq), 1);
     globals.define_builtin_inline_func(SYMBOL_CLASS, "==", eq, inline_gen2!(symbol_eq), 1);
-    globals.define_builtin_func(SYMBOL_CLASS, "!=", ne, 1);
+    // No `Symbol#!=`, as in CRuby: `BasicObject#!=` is `!(a == b)`, which
+    // the comparison helpers compute without a dispatch
+    // (`Store::custom_neq`).
     globals.define_builtin_func(SYMBOL_CLASS, "to_s", sym_to_s, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "name", sym_name, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "inspect", sym_inspect, 0);
@@ -357,16 +359,6 @@ fn symbol_eq(
     true
 }
 
-#[monoruby_builtin]
-fn ne(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs = lfp.self_val();
-    let rhs = lfp.arg(0);
-    match (lhs.as_symbol(), rhs.try_symbol()) {
-        (lhs, Some(rhs)) => Ok(Value::bool(lhs != rhs)),
-        (_, None) => Ok(Value::bool(true)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
@@ -376,6 +368,31 @@ mod tests {
             &[":aaa", ":xxx", ":妖精"],
             &["<=>", "===", "==", "!="],
             &[":aaa", ":xxx", "nil", "3"],
+        );
+    }
+
+    /// `Symbol` has no `!=` of its own: `a != b` is `!(a == b)`, so a
+    /// redefined `Symbol#==` is seen by `!=` as well.
+    #[test]
+    fn symbol_neq_is_not_eq() {
+        run_test_once(
+            r##"
+        def sym_ne(a, b) = a != b
+        r = []
+        30.times { r << sym_ne(:a, :a) << sym_ne(:a, :b) << sym_ne(:a, 1) }
+        r << Symbol.instance_method(:!=).owner
+        class Symbol
+          alias_method :__sym_eq, :==
+          def ==(o) = false
+        end
+        r << sym_ne(:a, :a) << (:a != :a)
+        class Symbol
+          alias_method :==, :__sym_eq
+          remove_method :__sym_eq
+        end
+        r << sym_ne(:a, :a)
+        r
+        "##,
         );
     }
 

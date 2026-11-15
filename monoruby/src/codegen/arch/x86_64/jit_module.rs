@@ -515,8 +515,15 @@ impl JitModule {
     /// Set lfp(r14) for callee.
     ///
     /// the local frame MUST BE on the stack.
+    ///
+    /// This, `push_frame`, `pop_frame` and `restore_lfp` are also what a
+    /// leaf builtin call made from a frameless window uses (`emit_call`):
+    /// the callee's frame is addressed from rsp, and rbp / r14 are the host
+    /// frame's there (the window is a displacement, `fdisp`), so the code
+    /// is the same with a window open. The other call sequences below
+    /// (`call_funcdata`, the invokers, `generic_handle_arguments`) pass
+    /// r14 as the caller's LFP and stay out of frameless bodies.
     pub(in crate::codegen) fn set_lfp(&mut self) {
-        debug_assert_eq!(0, crate::codegen::jitgen::fdisp(), "a frameless body makes no call");
         monoasm!( &mut self.jit,
             // set lfp
             lea  r14, [rsp - (RSP_LOCAL_FRAME)];
@@ -530,7 +537,6 @@ impl JitModule {
     /// - rdi, rsi
     ///
     pub(in crate::codegen) fn push_frame(&mut self) {
-        debug_assert_eq!(0, crate::codegen::jitgen::fdisp(), "a frameless body makes no call");
         monoasm!( &mut self.jit,
             // push cfp
             movq rdi, [rbx + (EXECUTOR_CFP)];
@@ -541,7 +547,6 @@ impl JitModule {
     }
 
     pub(in crate::codegen) fn restore_lfp(&mut self) {
-        debug_assert_eq!(0, crate::codegen::jitgen::fdisp(), "a frameless body makes no call");
         monoasm!( &mut self.jit,
             // restore lfp
             movq r14, [rbp - (BP_CFP + CFP_LFP)];
@@ -550,7 +555,6 @@ impl JitModule {
 
     /// Pop control frame
     pub(in crate::codegen) fn pop_frame(&mut self) {
-        debug_assert_eq!(0, crate::codegen::jitgen::fdisp(), "a frameless body makes no call");
         monoasm!( &mut self.jit,
             // pop cfp
             lea  r14, [rbp - (BP_CFP)];

@@ -152,6 +152,11 @@ pub type UnaryOpFn = extern "C" fn(&mut Executor, &mut Globals, Value, bool) -> 
 
 pub(crate) const RSP_LOCAL_FRAME: i32 = 40;
 pub(crate) const RSP_CFP: i32 = 24;
+/// The tag of a call-site pc saved in a cont frame by a *leaf call from a
+/// frameless body* (`AsmInst::ContFramePc::window`): the pc belongs to the
+/// iseq named in the pad slot beside it, not to the caller frame's. An
+/// untagged pc is 8-aligned.
+pub(crate) const LEAF_CALL_PC_TAG: u64 = 1;
 pub(crate) const BP_CFP: i32 = 8;
 
 // Control frame offsets
@@ -699,6 +704,7 @@ impl Executor {
             // Likewise, the `Hash` methods hash.rb defines exist only now.
             crate::builtins::hash::init_recv_escape_ruby(globals);
             crate::builtins::range::init_recv_escape_ruby(globals);
+            crate::builtins::init_leaf_builtins(globals);
         }
         // TOPLEVEL_BINDING: registered as a *lazy* constant — defined
         // (it lists in `Object.constants` and answers `const_defined?`)

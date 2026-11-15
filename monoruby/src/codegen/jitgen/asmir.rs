@@ -864,6 +864,14 @@ impl AsmIr {
         AsmEvict(i)
     }
 
+    /// [`Self::new_evict`] for a call that is no frameless violation: a
+    /// leaf builtin (`globals::LeafCall`), which the chain walk never
+    /// finds suspended.
+    pub(crate) fn new_evict_leaf(&mut self) -> AsmEvict {
+        let i = self.new_label(SideExit::Evict(None));
+        AsmEvict(i)
+    }
+
     /// The exit a safepoint poll takes when its body was evicted by a
     /// basic-op redefinition while the frame sat at the poll
     /// (`executor::POLL_DEOPT`; resumes the interpreter at `pc`).
@@ -2929,6 +2937,12 @@ pub(super) enum AsmInst {
     /// specialized-frame-distance computation unchanged.
     ContFramePc {
         call_site_pc: u64,
+        /// A leaf call from a frameless body (`JitContext::leaf_call`):
+        /// the body's iseq. The pc is then stored tagged
+        /// (`executor::LEAF_CALL_PC_TAG`) with this word in the pad slot
+        /// next to it, since the frame the callee finds as its caller is
+        /// not the one the pc belongs to (`kernel::native_call_site`).
+        window: Option<ISeqId>,
     },
     Yield {
         callid: CallSiteId,

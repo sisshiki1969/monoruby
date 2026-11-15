@@ -1623,6 +1623,7 @@ impl<'a> JitContext<'a> {
         let proven_recv_class = (!same_target_set_guarded).then_some(recv_class);
         // The generic call takes no elided argument (`doc/escape_analysis.md`).
         self.settle_virtual_args(state, ir, callid);
+        let leaf = self.leaf_call(state, fid, callid).then(|| self.iseq_id());
         state.send(
             ir,
             &self.store,
@@ -1630,6 +1631,7 @@ impl<'a> JitContext<'a> {
             fid,
             proven_recv_class.map(CachedClass::id),
             outer_lfp,
+            leaf,
         );
 
         // `eval` and its family run arbitrary source against objects this
@@ -1835,6 +1837,7 @@ impl<'a> JitContext<'a> {
         ir.fpr_save_cont(using_fpr);
         ir.push(AsmInst::ContFramePc {
             call_site_pc: state.pc().as_ptr() as u64,
+            window: None,
         });
         state.set_arguments(&self.store, ir, callid, callee_fid, false, false, false, &arg_hints, &[]);
         state.discard(dst);
@@ -3403,13 +3406,26 @@ impl AbstractState {
         // `AsmInst::Call::recv_class`.
         recv_class: Option<ClassId>,
         outer_lfp: Option<Lfp>,
+        // A leaf builtin called from a frameless body
+        // (`JitContext::leaf_call`), with the body's iseq: the callee runs
+        // no Ruby code and reaches no safepoint, so nothing can look for
+        // this body's frame while it runs. The call is then no frameless
+        // violation: it registers no chain exit, and its error exit
+        // materializes the window (`AsmIr::new_error_pure`).
+        leaf: Option<ISeqId>,
     ) {
-        let evict = ir.new_evict();
+        let window = leaf;
+        let leaf = leaf.is_some();
+        let evict = if leaf {
+            ir.new_evict_leaf()
+        } else {
+            ir.new_evict()
+        };
         let dst = store[callid].dst;
         // Stack check only — no call-site GC/preempt poll. Ruby callees
         // poll at their entry (`InitMethod` / `vm_init`); native callees
         // are bounded between the caller's loop-edge/entry polls.
-        self.check_stack(ir);
+        self.check_stack_with(ir, leaf);
         // Flush the GP pool up front (folded into `get_using_fpr`), before
         // `set_arguments`. An earlier optimization deferred this for simple,
         // block-less calls — reading args straight from the pool registers and
@@ -3433,11 +3449,16 @@ impl AbstractState {
         ir.fpr_save_cont(using_fpr);
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
+            window,
         });
         self.set_arguments(store, ir, callid, callee_fid, false, false, false, &arg_hints, &[]);
         self.discard(dst);
         self.clear_above_next_sp();
-        let error = ir.new_error(self);
+        let error = if leaf {
+            ir.new_error_pure(self)
+        } else {
+            ir.new_error(self)
+        };
         let meta = store[callee_fid].meta();
         ir.push(AsmInst::SetupMethodFrame {
             meta,
@@ -3450,9 +3471,29 @@ impl AbstractState {
             evict,
             pc: self.pc(),
         });
-        self.chain_exit(ir, evict, using_fpr, dst);
+        if !leaf {
+            self.chain_exit(ir, evict, using_fpr, dst);
+        } else {
+            // The tagged pc is gone with the call: a later native call
+            // made on a path that does not write the slot must not find
+            // it there (`kernel::native_call_site`).
+            ir.push(AsmInst::ContFramePc {
+                call_site_pc: 0,
+                window: None,
+            });
+        }
         ir.fpr_restore_cont(using_fpr);
         ir.handle_error(error);
+        if leaf {
+            // Nothing a leaf does captures this frame, defines a method
+            // or assigns a constant, so the version guards stand.
+            self.def_rax2gp(ir, dst);
+            if ir.codegen_mode() {
+                ir[evict] = SideExit::Evict(Some((self.pc().next(), self.get_write_back())));
+            }
+            self.unset_side_effect_guard();
+            return;
+        }
         // When a capture guard follows (the callee may `move_frame_to_heap`,
         // e.g. by turning a block into a Proc), the result must be homed via
         // the LFP so it follows the frame onto the heap — see
@@ -3499,6 +3540,7 @@ impl AbstractState {
         ir.fpr_save_cont(using_fpr);
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
+            window: None,
         });
         self.discard(dst);
         self.clear_above_next_sp();
@@ -3567,6 +3609,7 @@ impl AbstractState {
         ir.fpr_save_cont(using_fpr);
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
+            window: None,
         });
         self.set_arguments(
             store,
@@ -3615,6 +3658,7 @@ impl AbstractState {
         ir.fpr_save_cont(using_fpr);
         ir.push(AsmInst::ContFramePc {
             call_site_pc: self.pc().as_ptr() as u64,
+            window: None,
         });
         // A statically simple call site (plain positional arguments) can
         // hand the values to the block via the direct-copy path; the

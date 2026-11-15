@@ -311,6 +311,29 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Is the call to *fid* at *callid* one a frameless body may make as
+    /// it is: a leaf builtin (`globals::LeafCall`) in an argument form it
+    /// is a leaf for?
+    ///
+    pub(super) fn leaf_call(&self, state: &AbstractState, fid: FuncId, callid: CallSiteId) -> bool {
+        use crate::globals::LeafCall;
+        if !self.in_frameless_frame() {
+            return false;
+        }
+        let Some(leaf) = self.store.leaf_builtin(fid) else {
+            return false;
+        };
+        let cs = &self.store[callid];
+        if !cs.is_simple() || cs.block_fid.is_some() || cs.block_arg.is_some() {
+            return false;
+        }
+        match leaf {
+            LeafCall::Always => true,
+            LeafCall::IntArgs => (cs.args..cs.args + cs.pos_num).all(|r| state.is_fixnum(r)),
+        }
+    }
+
+    ///
     /// The exit after a pure helper call ([`Self::wants_pure_helper`]):
     /// deopt when it declined. The exit stamps the site and recompiles
     /// the unit after a few misses (`RecompileReason::ImpureHelper`), so a

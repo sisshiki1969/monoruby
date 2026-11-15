@@ -1384,8 +1384,18 @@ impl AbstractFrame {
     /// safepoint.
     ///
     pub fn check_stack(&self, ir: &mut AsmIr) {
+        self.check_stack_with(ir, false);
+    }
+
+    /// [`Self::check_stack`]; with *pure*, as the stack check of a call a
+    /// frameless body may make (a leaf builtin): the overflow only raises.
+    pub fn check_stack_with(&self, ir: &mut AsmIr, pure: bool) {
         let wb = ir.gc_write_back(self);
-        let error = ir.new_error(self);
+        let error = if pure {
+            ir.new_error_pure(self)
+        } else {
+            ir.new_error(self)
+        };
         ir.check_stack(wb, error);
     }
 }

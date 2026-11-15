@@ -2193,9 +2193,30 @@ impl Codegen {
     /// reserved by the preceding cont-mode `FprSave`, whose xmm saves
     /// sit above it — so this is a plain store, no rsp adjustment.
     /// See `AsmInst::ContFramePc`.
-    pub(in crate::codegen) fn emit_cont_frame_pc(&mut self, call_site_pc: u64) {
+    pub(in crate::codegen) fn emit_cont_frame_pc(
+        &mut self,
+        call_site_pc: u64,
+        window: Option<ISeqId>,
+    ) {
+        let pc = match window {
+            Some(iseq) => {
+                let iseq: usize = iseq.into();
+                monoasm! { &mut self.jit,
+                    movq [rsp + 8], (iseq as i32);
+                }
+                call_site_pc | crate::executor::LEAF_CALL_PC_TAG
+            }
+            None => call_site_pc,
+        };
+        if pc == 0 {
+            // Clearing the slot after a leaf call (`AbstractState::send`).
+            monoasm! { &mut self.jit,
+                movq [rsp], 0;
+            }
+            return;
+        }
         monoasm! { &mut self.jit,
-            movq r11, (call_site_pc);
+            movq r11, (pc);
             movq [rsp], r11;
         }
     }

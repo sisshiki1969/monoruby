@@ -643,6 +643,119 @@ impl Executor {
 
 }
 
+impl Executor {
+    ///
+    /// `lhs == rhs` where it is decided without running Ruby code or
+    /// raising: the pairs [`Self::eq_values_vis`] answers by itself, and a
+    /// receiver whose `==` is `BasicObject#==`. `None` for the rest — a
+    /// user-defined (or redefined) `==`, a reverse dispatch, a lookup that
+    /// fails. This is `==` for a frameless body
+    /// (`JitContext::wants_pure_helper`).
+    ///
+    fn eq_values_pure(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+        is_func_call: bool,
+    ) -> Option<bool> {
+        if self.dispatch_redefined_op(globals, lhs.class(), IdentId::_EQ) {
+            return None;
+        }
+        if let Some(rv) = lhs.try_rvalue()
+            && rv.ty() == ObjTy::STRING
+            && rv.class() != STRING_CLASS
+        {
+            return None;
+        }
+        // Two Fixnums are answered here, so the arms below see a Fixnum
+        // only next to something else.
+        if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
+            return Some(l == r);
+        }
+        Some(match (lhs.unpack(), rhs.unpack()) {
+            // nil, true, false and Symbols are equal only to themselves.
+            (RV::Nil | RV::Bool(_) | RV::Symbol(_), _) => lhs.id() == rhs.id(),
+            (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
+            (RV::Fixnum(lhs), RV::Float(rhs)) => {
+                fixnum_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
+            }
+            (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
+            (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
+            (RV::BigInt(lhs), RV::Float(rhs)) => {
+                bigint_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
+            }
+            (RV::Float(lhs), RV::Fixnum(rhs)) => {
+                fixnum_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
+            }
+            (RV::Float(lhs), RV::BigInt(rhs)) => {
+                bigint_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
+            }
+            (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
+            // The reverse dispatch `rhs == lhs` (funcall semantics), where
+            // that one is decided here; *rhs* is no number, so this does
+            // not come back.
+            (RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_), _) => {
+                return self.eq_values_pure(globals, rhs, lhs, true);
+            }
+            (RV::String(lhs), RV::String(rhs)) => {
+                lhs.eq(rhs) && lhs.compatible_encoding(rhs).is_some()
+            }
+            (RV::String(_), _) => {
+                if globals
+                    .store
+                    .no_to_str(rhs.class(), Globals::class_version())
+                {
+                    false
+                } else {
+                    return None;
+                }
+            }
+            _ => {
+                let fid = self
+                    .find_method(globals, lhs, IdentId::_EQ, is_func_call)
+                    .ok()?;
+                if globals.store.identity_eq_fid() != Some(fid) {
+                    return None;
+                }
+                lhs.id() == rhs.id()
+            }
+        })
+    }
+}
+
+/// `==` for a frameless body: [`cmp_eq_values`] where no Ruby code has to
+/// run, 0 (nothing raised) where it would.
+pub(crate) extern "C" fn cmp_eq_values_pure(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+    is_func_call: bool,
+) -> Option<Value> {
+    vm.eq_values_pure(globals, lhs, rhs, is_func_call)
+        .map(Value::bool)
+}
+
+/// `!=` for a frameless body; see [`cmp_eq_values_pure`].
+pub(crate) extern "C" fn cmp_ne_values_pure(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+    is_func_call: bool,
+) -> Option<Value> {
+    if globals
+        .store
+        .custom_neq(lhs.class(), Globals::class_version())
+        .is_some()
+    {
+        return None;
+    }
+    vm.eq_values_pure(globals, lhs, rhs, is_func_call)
+        .map(|b| Value::bool(!b))
+}
+
 // `==` / `!=` wrappers return the dispatched method's value as-is (the
 // fast paths inside `eq_values` / `ne_values` produce booleans).
 macro_rules! eq_values {

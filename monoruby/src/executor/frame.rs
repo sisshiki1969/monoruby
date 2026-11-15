@@ -139,6 +139,13 @@ impl Cfp {
         unsafe { *(self.as_ptr() as *const u64).add(3) }
     }
 
+    /// The pad slot of the cont frame, next to [`Self::caller_pc_slot`].
+    /// Meaningful only where the pc slot says so
+    /// ([`LEAF_CALL_PC_TAG`](crate::executor::LEAF_CALL_PC_TAG)).
+    pub(crate) fn caller_pad_slot(&self) -> u64 {
+        unsafe { *(self.as_ptr() as *const u64).add(4) }
+    }
+
     ///
     /// Get LFP.
     ///

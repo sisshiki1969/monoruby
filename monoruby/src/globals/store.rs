@@ -196,6 +196,10 @@ pub struct Store {
     pub(crate) inline_info: InlineTable,
     /// Receiver escape summaries of builtins (`RecvEscape`).
     recv_escape: HashMap<FuncId, inline::RecvEscape>,
+    /// `BasicObject#==`: the `==` that is object identity.
+    identity_eq_fid: Option<FuncId>,
+    /// The builtins a frameless body may call ([`LeafCall`]).
+    leaf_builtins: HashMap<FuncId, LeafCall>,
     /// FuncId of the default `BasicObject#!=`, used to recognize that an
     /// unredefined `!=` may be computed as `!(a == b)` without dispatch.
     default_neq: Option<FuncId>,
@@ -869,6 +873,8 @@ impl Store {
             classes: ClassInfoTable::new(),
             inline_info: InlineTable::default(),
             recv_escape: HashMap::default(),
+            leaf_builtins: HashMap::default(),
+            identity_eq_fid: None,
             default_neq: None,
             default_copy_hooks: None,
             builtin_to_s: None,
@@ -1140,6 +1146,22 @@ impl Store {
 
     pub(crate) fn recv_escape(&self, fid: FuncId) -> Option<inline::RecvEscape> {
         self.recv_escape.get(&fid).copied()
+    }
+
+    pub(crate) fn set_identity_eq_fid(&mut self, fid: FuncId) {
+        self.identity_eq_fid = Some(fid);
+    }
+
+    pub(crate) fn identity_eq_fid(&self) -> Option<FuncId> {
+        self.identity_eq_fid
+    }
+
+    pub(crate) fn set_leaf_builtin(&mut self, fid: FuncId, leaf: LeafCall) {
+        self.leaf_builtins.insert(fid, leaf);
+    }
+
+    pub(crate) fn leaf_builtin(&self, fid: FuncId) -> Option<LeafCall> {
+        self.leaf_builtins.get(&fid).copied()
     }
 
     pub(crate) fn set_array_hash_fid(&mut self, fid: FuncId) {
@@ -3539,4 +3561,22 @@ mod tests {
         assert!(!plain.has_hash_splat());
         assert!(!plain.kw_may_exists());
     }
+}
+
+///
+/// A builtin that is a *leaf* of the Ruby call graph: one that runs no
+/// Ruby code (no method dispatch, no block, no coercion callout), never
+/// reaches a safepoint (no GC / preempt poll, no GVL release), and looks
+/// at no frame but its own (`binding`, `caller`, `block_given?`, `$~`).
+/// Such a call may be made from a frameless callee's body: its window is
+/// invisible to the collector and to the frame walk, and a leaf starts
+/// neither. An error it raises is taken by a materializing exit.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LeafCall {
+    /// In every positional argument form.
+    Always,
+    /// When every argument is proven an Integer at the call site (the
+    /// builtin would otherwise call `to_int`).
+    IntArgs,
 }
