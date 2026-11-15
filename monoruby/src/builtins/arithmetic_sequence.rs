@@ -533,7 +533,7 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     };
     let n = n_arg.coerce_to_int_i64(vm, globals)?;
     if n < 0 {
-        return Err(MonorubyErr::argumenterr("negative array size"));
+        return Err(MonorubyErr::argumenterr("attempt to take negative size"));
     }
     if n == 0 {
         return Ok(Value::array_empty());

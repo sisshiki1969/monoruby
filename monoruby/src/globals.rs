@@ -2101,7 +2101,7 @@ impl Globals {
     }
 
     pub(crate) fn class_version() -> u32 {
-        CODEGEN.with(|codegen| codegen.borrow().class_version())
+        crate::vm::class_version()
     }
 
     /// The JIT's class-version word (see `JitModule::jit_class_version`).

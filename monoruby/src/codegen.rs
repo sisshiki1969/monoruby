@@ -1783,6 +1783,12 @@ impl Codegen {
         unsafe { *self.class_version_addr }
     }
 
+    /// The address of the VM's class-version word, for
+    /// `vm::class_version`.
+    pub(crate) fn class_version_word(&self) -> *const u32 {
+        self.class_version_addr
+    }
+
     /// Move both version words: the VM's and the JIT's. This is the
     /// blunt invalidation, for a change no method name bounds.
     pub(crate) fn class_version_inc(&self) {

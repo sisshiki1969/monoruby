@@ -18280,7 +18280,7 @@ mod tests {
     #[test]
     fn string_interpolation_falls_back_when_to_s_returns_non_string() {
         // Exercises `concatenate_string_inner`'s else branch:
-        // `invoke_tos` returns the user-defined `to_s` result
+        // `tos_dispatch` returns the user-defined `to_s` result
         // verbatim, so a `to_s` override that returns a non-String
         // forces the bogus result to be discarded and replaced by
         // the default `Object#to_s` form (`#<ClassName:0xADDR>`),

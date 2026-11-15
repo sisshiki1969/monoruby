@@ -737,6 +737,9 @@ impl Executor {
         // The builtins have finished defining themselves; from here a
         // definition that lands on a basic op really is a monkey patch.
         globals.store.arm_basic_ops();
+        // Likewise for `to_s`: what it resolves to now is what the
+        // interpolation shortcuts stand for.
+        globals.store.record_builtin_to_s();
         #[cfg(feature = "profile")]
         globals.clear_stats();
         Ok(executor)
@@ -4275,52 +4278,83 @@ impl Executor {
     /// Strings must not be taken — interpolating an Integer is the
     /// common case, and it has to see the refined method
     /// (`doc/refinements.md` §1(d)).
+    #[inline]
     pub(crate) fn to_s_is_refined(&mut self, globals: &mut Globals) -> bool {
         globals.store.refinements().is_active()
             && globals.store.refinements().is_refined_name(IdentId::TO_S)
             && !self.current_refinements(globals).is_empty()
     }
 
-    /// `receiver.to_s`, for an interpolated value. The built-in `to_s` of
-    /// an immediate, a Bignum, a Complex or a Rational is answered without
-    /// a call; with `exact_encoding` its result carries the encoding the
-    /// method itself gives it — the Symbol's own, US-ASCII for the others
-    /// — which decides the encoding of a `"#{a}#{b}"` (CRuby's
-    /// `rb_str_concat_literals`). Without it the shortcut result is
-    /// UTF-8, which is what the interpolated Regexp source expects.
-    pub(crate) fn invoke_tos(
+    /// Whether every interpolated value that has a shortcut — an Integer,
+    /// a Float, nil, true, false, a Symbol, a Complex or a Rational — may
+    /// be formatted without calling its `to_s`: the method is still the
+    /// builtin one on each of those classes
+    /// (`Store::to_s_builtin_classes`; CRuby's `vm_objtostring` makes the
+    /// same test, per class, before its own shortcuts) and no refinement
+    /// of `to_s` is in effect at the current frame.
+    ///
+    /// Asked once per interpolation. In a program that redefines and
+    /// refines nothing it is a read of the class version and a compare.
+    #[inline(never)]
+    pub(crate) fn to_s_shortcut_all(&mut self, globals: &mut Globals) -> bool {
+        !self.to_s_is_refined(globals) && globals.store.to_s_all_builtin(Globals::class_version())
+    }
+
+    /// [`Self::to_s_shortcut_all`] for the one class of `receiver`: what
+    /// is left to ask once some other class has had its `to_s` replaced.
+    fn to_s_shortcut(&mut self, globals: &mut Globals, receiver: Value) -> bool {
+        !self.to_s_is_refined(globals)
+            && globals
+                .store
+                .to_s_is_builtin(receiver.class(), Globals::class_version())
+    }
+
+    /// `receiver.to_s` for an interpolated value, when that needs no
+    /// call: the built-in `to_s` of an immediate, a Bignum, a Complex or a
+    /// Rational, and a String, which is its own answer. `None` when the
+    /// method has to run (`Self::tos_dispatch`): `class Integer; def to_s
+    /// = ...; end` and the like, or a refinement. `all` is what
+    /// `to_s_shortcut_all` answered for this interpolation.
+    ///
+    /// With `exact_encoding` the result carries the encoding the method
+    /// itself gives it — the Symbol's own, US-ASCII for the others —
+    /// which decides the encoding of a `"#{a}#{b}"` (CRuby's
+    /// `rb_str_concat_literals`). Without it the result is UTF-8, which
+    /// is what the interpolated Regexp source expects.
+    pub(crate) fn tos_direct(
         &mut self,
         globals: &mut Globals,
         receiver: Value,
         exact_encoding: bool,
-    ) -> Result<Value> {
-        if !self.to_s_is_refined(globals) {
-            match receiver.unpack() {
-                // String operands round-trip via `to_s` to themselves
-                // (or to whatever the user-overridden `to_s` returns),
-                // so the receiver is the answer. Going through
-                // `to_s(&globals.store)` would route through
-                // `from_utf8_lossy` and corrupt invalid byte sequences
-                // (relevant to interpolation: `"abc#{x}"` for an `x`
-                // tagged UTF-8 with broken bytes).
-                RV::String(_) => return Ok(receiver),
-                RV::Object(_) => {}
-                RV::Symbol(sym) if exact_encoding => {
-                    return Ok(Value::string_from_inner(
-                        crate::builtins::symbol::symbol_string_inner(sym),
-                    ));
-                }
-                _ if exact_encoding => {
-                    return Ok(Value::string_from_inner(
-                        crate::value::rvalue::RStringInner::from_encoding(
-                            receiver.to_s(&globals.store).as_bytes(),
-                            Encoding::UsAscii,
-                        ),
-                    ));
-                }
-                _ => return Ok(Value::string(receiver.to_s(&globals.store))),
-            }
+        all: bool,
+    ) -> Option<Value> {
+        match receiver.unpack() {
+            RV::Object(_) => None,
+            // String operands round-trip via `to_s` to themselves
+            // (or to whatever the user-overridden `to_s` returns),
+            // so the receiver is the answer. Going through
+            // `to_s(&globals.store)` would route through
+            // `from_utf8_lossy` and corrupt invalid byte sequences
+            // (relevant to interpolation: `"abc#{x}"` for an `x`
+            // tagged UTF-8 with broken bytes).
+            RV::String(_) => (!self.to_s_is_refined(globals)).then_some(receiver),
+            _ if !all && !self.to_s_shortcut(globals, receiver) => None,
+            RV::Symbol(sym) if exact_encoding => Some(Value::string_from_inner(
+                crate::builtins::symbol::symbol_string_inner(sym),
+            )),
+            _ if exact_encoding => Some(Value::string_from_inner(
+                crate::value::rvalue::RStringInner::from_encoding(
+                    receiver.to_s(&globals.store).as_bytes(),
+                    Encoding::UsAscii,
+                ),
+            )),
+            _ => Some(Value::string(receiver.to_s(&globals.store))),
         }
+    }
+
+    /// `receiver.to_s`, called: the interpolated value `tos_direct` did
+    /// not answer.
+    pub(crate) fn tos_dispatch(&mut self, globals: &mut Globals, receiver: Value) -> Result<Value> {
         let func_id = self.find_method(globals, receiver, IdentId::TO_S, true)?;
         self.invoke_func_inner(globals, func_id, receiver, &[], None, None)
     }

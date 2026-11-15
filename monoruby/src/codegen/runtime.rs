@@ -1208,17 +1208,27 @@ fn concatenate_string_inner(
     // Integer operand is formatted into the buffer directly — it is
     // the most common non-String operand, and going through `to_s`
     // meant allocating a heap String only to copy it out again.
-    let refined = vm.to_s_is_refined(globals);
+    //
+    // Both that and the `to_s` shortcuts of the other immediates hold
+    // only while the builtin `to_s` is still in place and no refinement
+    // of `to_s` is in scope (`Executor::to_s_shortcut_all`), which is
+    // asked once up front — unless every operand is a String, which
+    // never has its `to_s` called — and again after any `to_s` that ran.
     let mut estimate = 0;
+    let mut others = 0;
     for i in 0..len {
         // SAFETY: `arg` points at operand 0 of `len` operand `Value`s
         // laid out downward.
         let v = unsafe { *arg.sub(i) };
         estimate += match v.is_rstring_inner() {
             Some(s) => s.len(),
-            None => 8,
+            None => {
+                others += 1;
+                8
+            }
         };
     }
+    let direct = others != 0 && vm.to_s_shortcut_all(globals);
     let mut bytes = StringBuf::with_capacity(estimate);
     let mut enc: Option<Encoding> = None;
     let mut cr = CodeRange::SevenBit; // classify("") — the fold identity
@@ -1232,7 +1242,7 @@ fn concatenate_string_inner(
     };
     for i in 0..len {
         let v = unsafe { *arg.sub(i) };
-        if !refined {
+        if direct {
             if let Some(n) = v.try_fixnum() {
                 let piece = format_i64(&mut digits, n);
                 append_piece(
@@ -1270,25 +1280,90 @@ fn concatenate_string_inner(
             )?;
             continue;
         }
-        let s_val = vm.invoke_tos(globals, v, literals)?;
+        // What is left has a `to_s` of its own. The built-in ones that
+        // `direct` licenses are answered here; the first one that has to
+        // be called hands the rest of the operands to the loop below,
+        // since a method that ran can change what `direct` stands for.
+        let Some(s_val) = vm.tos_direct(globals, v, literals, direct) else {
+            append_dispatched(
+                vm, globals, arg, i, len, direct, dregexp, &mut bytes, &mut enc, &mut cr,
+            )?;
+            break;
+        };
+        let inner = s_val.as_rstring_inner();
+        if let Some(d) = dregexp.as_deref_mut() {
+            d.check(inner.as_bytes(), inner.encoding(), inner.code_range())?;
+        }
+        append_piece(
+            globals,
+            &mut bytes,
+            &mut enc,
+            &mut cr,
+            inner.as_bytes(),
+            inner.encoding(),
+            inner.code_range(),
+            literals,
+        )?;
+    }
+    Ok(Value::string_from_inner(RStringInner::from_buf_cr(
+        bytes,
+        enc.unwrap_or(Encoding::UTF8),
+        cr,
+    )))
+}
+
+/// The tail of `concatenate_string_inner`, from the first operand whose
+/// `to_s` has to be called (`from`) on: `direct` is asked again after
+/// every call, as that method may have defined another `to_s`.
+///
+/// Kept out of line so the loop it takes over from — the one every
+/// interpolation of Strings and Integers runs — carries nothing that
+/// changes under it.
+#[inline(never)]
+fn append_dispatched(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg: *mut Value,
+    from: usize,
+    len: usize,
+    mut direct: bool,
+    mut dregexp: Option<&mut DregexpPieces>,
+    bytes: &mut crate::value::rvalue::StringBuf,
+    enc: &mut Option<crate::value::rvalue::Encoding>,
+    cr: &mut crate::value::rvalue::CodeRange,
+) -> Result<()> {
+    use crate::value::rvalue::{CodeRange, Encoding};
+    let literals = dregexp.is_none();
+    for i in from..len {
+        // SAFETY: as in `concatenate_string_inner`.
+        let v = unsafe { *arg.sub(i) };
+        let s_val = if v.is_rstring_inner().is_some() {
+            v
+        } else if let Some(s_val) = vm.tos_direct(globals, v, literals, direct) {
+            s_val
+        } else {
+            let s_val = vm.tos_dispatch(globals, v)?;
+            direct = vm.to_s_shortcut_all(globals);
+            s_val
+        };
         if let Some(inner) = s_val.is_rstring_inner() {
             if let Some(d) = dregexp.as_deref_mut() {
                 d.check(inner.as_bytes(), inner.encoding(), inner.code_range())?;
             }
             append_piece(
                 globals,
-                &mut bytes,
-                &mut enc,
-                &mut cr,
+                bytes,
+                enc,
+                cr,
                 inner.as_bytes(),
                 inner.encoding(),
                 inner.code_range(),
                 literals,
             )?;
         } else {
-            // `invoke_tos` returns the user-defined `to_s` result
-            // verbatim for `RV::Object` receivers, so this branch is
-            // only reached when that override returned a non-String.
+            // `tos_dispatch` returns the user-defined `to_s` result
+            // verbatim, so this branch is only reached when that
+            // override returned a non-String.
             // Per CRuby, the bogus result is discarded and the
             // default `Object#to_s` form (`#<ClassName:0xADDR>`) of
             // the original receiver is emitted instead — a BINARY
@@ -1305,9 +1380,9 @@ fn concatenate_string_inner(
             };
             append_piece(
                 globals,
-                &mut bytes,
-                &mut enc,
-                &mut cr,
+                bytes,
+                enc,
+                cr,
                 s.as_bytes(),
                 piece_enc,
                 CodeRange::SevenBit,
@@ -1315,11 +1390,7 @@ fn concatenate_string_inner(
             )?;
         }
     }
-    Ok(Value::string_from_inner(RStringInner::from_buf_cr(
-        bytes,
-        enc.unwrap_or(Encoding::UTF8),
-        cr,
-    )))
+    Ok(())
 }
 
 /// Append one interpolation operand to the growing buffer, negotiating

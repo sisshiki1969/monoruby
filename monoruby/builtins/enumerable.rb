@@ -672,12 +672,12 @@ module Enumerable
     unless n.is_a?(Integer)
       raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
     end
-    raise ArgumentError, "negative array size" if n < 0
-    # CRuby converts the count with NUM2LONG; a Bignum that does not
-    # fit in a C long raises RangeError.
-    if n > 0x7fff_ffff_ffff_ffff
+    # CRuby converts the count with NUM2LONG, before it looks at the
+    # sign; a Bignum that does not fit in a C long raises RangeError.
+    if n > 0x7fff_ffff_ffff_ffff || n < -0x8000_0000_0000_0000
       raise RangeError, "bignum too big to convert into 'long'"
     end
+    raise ArgumentError, "attempt to take negative size" if n < 0
     res = []
     return res if n == 0
     # Push-then-break so exactly `n` elements are consumed (the
