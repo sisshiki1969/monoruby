@@ -3085,6 +3085,8 @@ impl RValue {
     /// This method consumes `self` and allocates it on the heap, returning `Value`,
     /// a wrapped raw pointer.
     pub(crate) fn pack(self) -> Value {
+        #[cfg(feature = "prof")]
+        crate::prof::on_object_alloc(self.class());
         let ptr = alloc::ALLOC.with(|alloc| alloc.borrow_mut().alloc(self));
         Value::from_ptr(ptr)
     }

@@ -3008,6 +3008,13 @@ impl Codegen {
     /// #### destroy
     /// - x9, x11, x12
     fn emit_cell_acquire(&mut self, fail: &DestLabel) {
+        // `prof`'s allocation profile counts every object in
+        // `RValue::pack`, so the runtime must see every allocation.
+        #[cfg(feature = "prof")]
+        if crate::prof::alloc_enabled() {
+            self.jit.b_label(fail);
+            return;
+        }
         let rax = GP::Rax.a64().0; // x0 (result)
         let st = self.alloc_fast;
         let (free, count, total, used, page) =

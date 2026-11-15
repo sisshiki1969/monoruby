@@ -793,6 +793,8 @@ impl Globals {
         // Arm the optional hang watchdog (no-op unless
         // MONORUBY_HANG_WATCHDOG_SEC is set). See doc/signal.md B+.
         crate::watchdog::init();
+        #[cfg(feature = "prof")]
+        crate::prof::init();
 
         // Propagate the host CRuby's gem-root directories to the vendored
         // rubygems via GEM_PATH so `Gem::Specification.find_by_name` can
@@ -1424,6 +1426,8 @@ impl Globals {
         let program_name = path.to_string_lossy().to_string();
         let mut executor = Executor::init(self, &program_name)?;
         executor.init_stack_limit(self);
+        #[cfg(feature = "prof")]
+        crate::prof::start(&executor);
         let res = (|| {
             if !prelude.is_empty() {
                 executor.exec_script(
@@ -1509,6 +1513,8 @@ impl Globals {
         crate::rvalue::io::flush_std_streams();
         #[cfg(any(feature = "profile", feature = "jit-log"))]
         self.show_stats();
+        #[cfg(feature = "prof")]
+        crate::prof::finish(self);
         #[cfg(feature = "gc-log")]
         {
             alloc::ALLOC.with(|alloc| {

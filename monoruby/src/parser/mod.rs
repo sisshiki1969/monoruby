@@ -117,6 +117,8 @@ pub fn parse_program(
     code: impl Into<Vec<u8>>,
     path: impl Into<PathBuf>,
 ) -> Result<ParseResult, MonorubyErr> {
+    #[cfg(feature = "prof")]
+    let _phase = crate::prof::phase(crate::prof::Phase::Parse);
     prism_backend::parse_program(code.into(), path.into(), true)
 }
 
@@ -131,6 +133,8 @@ pub fn parse_program_eager(
     code: impl Into<Vec<u8>>,
     path: impl Into<PathBuf>,
 ) -> Result<ParseResult, MonorubyErr> {
+    #[cfg(feature = "prof")]
+    let _phase = crate::prof::phase(crate::prof::Phase::Parse);
     prism_backend::parse_program(code.into(), path.into(), false)
 }
 
@@ -138,6 +142,8 @@ pub fn parse_program_eager(
 pub(crate) fn lower_deferred_def(
     deferred: &crate::ast::DeferredDef,
 ) -> Result<(crate::ast::BlockInfo, Vec<(String, bool)>), MonorubyErr> {
+    #[cfg(feature = "prof")]
+    let _phase = crate::prof::phase(crate::prof::Phase::Parse);
     prism_backend::lower_deferred_def(deferred)
 }
 
@@ -151,6 +157,8 @@ pub(crate) fn parse_program_eval(
     line_offset: i64,
     default_encoding: Option<String>,
 ) -> Result<ParseResult, MonorubyErr> {
+    #[cfg(feature = "prof")]
+    let _phase = crate::prof::phase(crate::prof::Phase::Parse);
     prism_backend::parse_program_eval(
         code,
         path.into(),
@@ -171,6 +179,8 @@ pub(crate) fn parse_program_binding(
     default_encoding: Option<String>,
     main_script: bool,
 ) -> Result<ParseResult, MonorubyErr> {
+    #[cfg(feature = "prof")]
+    let _phase = crate::prof::phase(crate::prof::Phase::Parse);
     prism_backend::parse_program_binding(
         code,
         path.into(),

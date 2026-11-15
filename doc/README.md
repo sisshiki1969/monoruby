@@ -95,6 +95,7 @@ is the entry point.
 | Document | Lang | Kind | Answers |
 |---|---|---|---|
 | [`ruby_spec_skip_tags.md`](ruby_spec_skip_tags.md) | JA | reference | How the ruby/spec suite avoids hangs, and the audit that cut a coarse file-level skip list down to the handful that genuinely cannot run. |
+| [`profiler.md`](profiler.md) | EN | reference | The built-in profiler (`--features prof`, `MONORUBY_PROF=cpu,alloc,malloc`): Ruby methods by self / total time split by runtime tier, JIT units, native symbols, allocations by class and method, GC and JIT compile times, `malloc` call sites; how a sample is taken safely from a signal handler, and what it cannot see. |
 | [`optcarrot_opt_profile.md`](optcarrot_opt_profile.md) | JA | design record | Where `bin/optcarrot --opt` spends its time, measured with `perf` and `--features profile`, and the optimizations that came out of it. |
 
 ## Plans and history

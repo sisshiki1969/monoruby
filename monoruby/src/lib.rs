@@ -68,6 +68,8 @@ mod native_pool;
 pub mod parser;
 mod poll_flag;
 mod preempt;
+#[cfg(feature = "prof")]
+mod prof;
 mod ruby_probe;
 mod scheduler;
 pub mod tests;

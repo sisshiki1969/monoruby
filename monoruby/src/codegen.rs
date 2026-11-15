@@ -1305,6 +1305,22 @@ pub(crate) struct VmHandlers {
 }
 
 impl Codegen {
+    /// The VM's code, main and cold page (`prof`'s PC classification).
+    #[cfg(feature = "prof")]
+    pub(crate) fn prof_vm_regions(&self) -> [(usize, usize); 2] {
+        let (p0, l0, p1, l1) = self.vm_code_position;
+        [
+            (p0.map_or(0, |p| p.as_ptr() as usize), l0),
+            (p1.map_or(0, |p| p.as_ptr() as usize), l1),
+        ]
+    }
+
+    /// Whether *pc* lies in the JIT's code pages (`prof`).
+    #[cfg(feature = "prof")]
+    pub(crate) fn prof_in_jit_memory(&self, pc: usize) -> bool {
+        self.jit.include(pc as *mut u8)
+    }
+
     /// The address of this interpreter's poll word (see poll_flag.rs).
     pub(crate) fn poll_flag_addr(&self) -> *mut u32 {
         self.jit.get_label_address(&self.poll_flag).as_ptr() as *mut u32

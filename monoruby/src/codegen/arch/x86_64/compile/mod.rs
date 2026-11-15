@@ -1485,6 +1485,15 @@ impl Codegen {
     /// #### destroy
     /// - rdi, rcx
     fn emit_cell_acquire(&mut self, fail: &DestLabel) {
+        // `prof`'s allocation profile counts every object in
+        // `RValue::pack`, so the runtime must see every allocation.
+        #[cfg(feature = "prof")]
+        if crate::prof::alloc_enabled() {
+            monoasm! { &mut self.jit,
+                jmp fail;
+            }
+            return;
+        }
         let st = self.alloc_fast;
         let (free, count, total, used, page) = (
             st.free as i32,

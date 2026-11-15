@@ -527,6 +527,8 @@ fn run_body(globals: &mut Globals, mut thread: Value) {
     // RValue arena does not move objects.
     let handle = unsafe { &mut *handle };
     let proc = unsafe { &*proc };
+    #[cfg(feature = "prof")]
+    crate::prof::enter_thread(handle);
     // This kernel thread's stack is the primary context of the body:
     // the same budget as the process main thread's.
     handle.init_stack_limit(globals);
@@ -546,6 +548,8 @@ fn run_body(globals: &mut Globals, mut thread: Value) {
     // The exit hook, in this thread's context: releases the mutexes it
     // still holds, answers the fibers that joined it through a scheduler.
     let ret = super::thread_body_exit(handle, globals, ret);
+    #[cfg(feature = "prof")]
+    crate::prof::set_executor(std::ptr::null());
     handle.set_terminated();
     finalize(globals, thread, (ret != 0).then(|| Value::from_u64(ret)));
 }
