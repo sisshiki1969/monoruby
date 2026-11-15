@@ -2301,7 +2301,7 @@ impl<'a> JitContext<'a> {
             Some(init_iseq)
                 if let Some(init_callid) = callsite.class_new_init
                     && !self.in_dispatch_arm()
-                    && !self.frameless_rejected.contains(&init_iseq)
+                    && !self.frameless_refused(init_callid, init_iseq)
                     && !self.iseq_on_specialization_stack(init_iseq)
                     && frameless_call::eligible(&self.store, init_fid, init_iseq, init_callid) =>
             {

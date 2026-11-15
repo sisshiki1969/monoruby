@@ -351,13 +351,22 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Is *iseq* known not to compile frameless from here? Either it
-    /// needs a frame wherever it is called (`frameless_rejected`), or its
-    /// tree did not fit the chain budget from a count no larger than the
-    /// current one (`frameless_budget_rejected`).
+    /// Is *iseq* known not to compile frameless at the call site *callid*?
+    /// Either it needed a frame somewhere in this unit
+    /// (`frameless_rejected`), or its tree did not fit the chain budget
+    /// from a count no larger than the current one
+    /// (`frameless_budget_rejected`), or an earlier compilation already
+    /// abandoned it at this very site (`frameless_failed`).
     ///
-    fn frameless_refused(&self, iseq: ISeqId) -> bool {
+    /// The last one is per site, not per callee, because what a body
+    /// compiles to depends on what the site knows about the arguments:
+    /// `def evaluate(o) = o.respond_to?(:evaluate) ? o.evaluate(self) : o`
+    /// is frameless where the argument is known to be a String and needs
+    /// a frame elsewhere.
+    ///
+    pub(super) fn frameless_refused(&self, callid: CallSiteId, iseq: ISeqId) -> bool {
         self.frameless_rejected.contains(&iseq)
+            || self.frameless_failed.contains(&(callid, iseq))
             || self
                 .frameless_budget_rejected
                 .get(&iseq)
@@ -374,11 +383,24 @@ impl<'a> JitContext<'a> {
     /// other site of the unit, where it would have started a chain of its
     /// own.
     ///
-    fn frameless_reject(&mut self, iseq: ISeqId, entry_bc: usize, budget_hits: usize) {
+    /// Any other failure is the callee's own at this site, and is
+    /// remembered for the compilations to come (`frameless_failed`): a
+    /// failed attempt compiles the body, and everything frameless beneath
+    /// it, only to roll it back, and without the memory every unit that
+    /// reaches the site, and every analysis walk of it, pays that again.
+    ///
+    fn frameless_reject(
+        &mut self,
+        callid: CallSiteId,
+        iseq: ISeqId,
+        entry_bc: usize,
+        budget_hits: usize,
+    ) {
         if self.frameless_budget_hits != budget_hits {
             self.frameless_budget_rejected.insert(iseq, entry_bc);
         } else {
             self.frameless_rejected.insert(iseq);
+            self.frameless_new_failures.push((callid, iseq));
         }
     }
 
@@ -397,7 +419,7 @@ impl<'a> JitContext<'a> {
         func_id: FuncId,
         iseq: ISeqId,
     ) -> Option<CompileResult> {
-        if self.frameless_refused(iseq) {
+        if self.frameless_refused(callid, iseq) {
             return None;
         }
         let entry_bc = self.frameless_chain_entry_bc();
@@ -424,7 +446,7 @@ impl<'a> JitContext<'a> {
                 *state = state_save;
                 (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
                 self.discard_cond_results();
-                self.frameless_reject(iseq, entry_bc, budget_hits);
+                self.frameless_reject(callid, iseq, entry_bc, budget_hits);
                 self.frameless_chain_bc = chain_save;
                 None
             }
@@ -445,7 +467,7 @@ impl<'a> JitContext<'a> {
         block: &JitBlockInfo,
         iseq: ISeqId,
     ) -> Option<CompileResult> {
-        if self.frameless_refused(iseq) {
+        if self.frameless_refused(callid, iseq) {
             return None;
         }
         let entry_bc = self.frameless_chain_entry_bc();
@@ -469,7 +491,7 @@ impl<'a> JitContext<'a> {
                 *state = state_save;
                 (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
                 self.discard_cond_results();
-                self.frameless_reject(iseq, entry_bc, budget_hits);
+                self.frameless_reject(callid, iseq, entry_bc, budget_hits);
                 self.frameless_chain_bc = chain_save;
                 None
             }

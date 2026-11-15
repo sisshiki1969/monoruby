@@ -1346,6 +1346,16 @@ pub(crate) struct JitContext<'a> {
     /// Iseqs whose loops do not hoist type guards onto their entries
     /// (`merge.rs`): a hoisted guard of theirs kept missing.
     pub(in crate::codegen) loop_hoist_disabled: std::rc::Rc<std::collections::HashSet<ISeqId>>,
+    /// The (call site, callee) pairs whose frameless compile an earlier
+    /// compilation abandoned (`Codegen::frameless_failed`): not tried
+    /// again. A snapshot taken when this compilation began, so that its
+    /// analysis walks and its code generation pass make the same frameless
+    /// calls; what this compilation finds goes to
+    /// `frameless_new_failures` and joins the set once it is over.
+    pub(in crate::codegen) frameless_failed: FramelessFailed,
+    /// See `frameless_failed`. Only the code generation pass's list is
+    /// kept; an analysis walk abandons the same compiles.
+    pub(in crate::codegen) frameless_new_failures: Vec<(CallSiteId, ISeqId)>,
 }
 
 ///
@@ -1402,6 +1412,8 @@ impl<'a> JitContext<'a> {
             widened_outer_log: vec![],
             spec_memo: Default::default(),
             loop_hoist_disabled: Default::default(),
+            frameless_failed: Default::default(),
+            frameless_new_failures: vec![],
         }
     }
 
@@ -1481,6 +1493,8 @@ impl<'a> JitContext<'a> {
             pending_fresh_self: false,
             pending_class_new_redo: None,
             loop_hoist_disabled: self.loop_hoist_disabled.clone(),
+            frameless_failed: self.frameless_failed.clone(),
+            frameless_new_failures: vec![],
         }
     }
 

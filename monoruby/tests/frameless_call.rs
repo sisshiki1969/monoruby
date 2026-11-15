@@ -1548,3 +1548,38 @@ fn frameless_class_new_recursive_initialize() {
         "#,
     );
 }
+
+#[test]
+fn frameless_failure_is_remembered_per_call_site() {
+    // `Ctx#evaluate` compiles frameless where the argument is known to be
+    // a String (the `respond_to?` folds and the call disappears) and needs
+    // a frame where it is an `Ev`, whose `evaluate` calls a block. `lit`
+    // and `obj` are inlined into `c1`, `c2` and `c3`, three compilation
+    // units that reach the same two call sites: the failed attempt at the
+    // one in `obj` is remembered from the first unit on, and must not
+    // keep the one in `lit` from compiling frameless in the later ones.
+    run_test(
+        r#"
+        class Ev
+          def evaluate(c) = [1, 2].sum { |x| x + c.k }
+        end
+        class Ctx
+          attr_reader :k
+          def initialize = (@k = 1; @ev = Ev.new)
+          def evaluate(o) = o.respond_to?(:evaluate) ? o.evaluate(self) : o
+          def lit = evaluate("s")
+          def obj = evaluate(@ev)
+          def c1 = lit.size + obj
+          def c2 = obj + lit.size
+          def c3 = [lit, obj]
+        end
+        c = Ctx.new
+        r = []
+        30.times { r << c.c1 }
+        30.times { r << c.c2 }
+        30.times { r << c.c3 }
+        30.times { r << c.obj << c.lit }
+        r.uniq
+        "#,
+    );
+}

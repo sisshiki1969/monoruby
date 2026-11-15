@@ -514,6 +514,19 @@ impl Codegen {
         self.loop_hoist_disabled.clone()
     }
 
+    pub(super) fn frameless_failed(&self) -> jitgen::FramelessFailed {
+        self.frameless_failed.clone()
+    }
+
+    ///
+    /// Remember the frameless compiles a finished compilation abandoned.
+    ///
+    pub(super) fn note_frameless_failures(&mut self, failures: Vec<(CallSiteId, ISeqId)>) {
+        if !failures.is_empty() {
+            std::rc::Rc::make_mut(&mut self.frameless_failed).extend(failures);
+        }
+    }
+
     fn recompile_method(
         &mut self,
         globals: &mut Globals,
