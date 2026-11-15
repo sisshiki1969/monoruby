@@ -2533,3 +2533,143 @@ fn materialize_before_a_condition_left_in_the_flags() {
         "#,
     );
 }
+
+#[test]
+fn local_object_materialized_after_an_inner_loop() {
+    // Issue #1914. The outer loop's body builds the local's object after
+    // an inner loop that only carries it. The first walk of the outer
+    // fixpoint records the inner head's back edge with the object still
+    // elided; the second walk comes round with it built, and the inner
+    // head must not meet that stale record as it is: the local ended up
+    // without a value there. A debug build asserted; a release build
+    // either recompiled the method on every call (`<<`, whose receiver
+    // read as nil and left through the recompile exit) or aborted in
+    // `copy_slot` / `load` (any other read).
+    run_test_with_prelude(
+        r#"
+        out = []
+        60.times { [0, 1, 5].each { |n| out << [h1(n), h2(n), h3(n), h4(n), h5(n), h6(n), h7(n)] } }
+        out.uniq
+        "#,
+        r#"
+        def id(x) = x
+        # the issue's script: the append builds the Array
+        def h1(n)
+          i = 0
+          r = []
+          while i < n
+            j = 0
+            while j < 3
+              j += 1
+            end
+            r << i
+            i += 1
+          end
+          r
+        end
+        # a copy, a predicate, a comparison, an argument
+        def h2(n)
+          i = 0
+          r = []
+          k = nil
+          while i < n
+            j = 0
+            while j < 3
+              j += 1
+            end
+            k = [r, r.nil?, r == nil, id(r), "<#{r}>"]
+            i += 1
+          end
+          [r, k]
+        end
+        # the inner loop reads the object in a way that folds
+        def h3(n)
+          i = 0
+          r = [n, n + 1]
+          s = 0
+          k = nil
+          while i < n
+            j = 0
+            while j < 3
+              s += r.size
+              j += 1
+            end
+            k = r
+            i += 1
+          end
+          [r, k, s]
+        end
+        # a Range
+        def h4(n)
+          i = 0
+          r = (0..n)
+          s = 0
+          k = nil
+          while i < n
+            j = 0
+            while j < 2
+              s += 1 if r.include?(j)
+              j += 1
+            end
+            k = r
+            i += 1
+          end
+          [r, k, s]
+        end
+        # two levels below the loop that builds it
+        def h5(n)
+          i = 0
+          r = [1, 2]
+          k = nil
+          while i < n
+            j = 0
+            while j < 2
+              l = 0
+              while l < 2
+                l += 1
+              end
+              j += 1
+            end
+            k = id(r)
+            i += 1
+          end
+          [r, k]
+        end
+        # built in the middle loop, after the innermost one
+        def h6(n)
+          i = 0
+          r = []
+          s = 0
+          while i < n
+            j = 0
+            while j < 2
+              l = 0
+              while l < 2
+                l += 1
+              end
+              r << j
+              j += 1
+            end
+            s += r.size
+            i += 1
+          end
+          [r, s]
+        end
+        # built only on some iterations
+        def h7(n)
+          i = 0
+          r = [n]
+          k = nil
+          while i < n
+            j = 0
+            while j < 2
+              j += 1
+            end
+            k = r if i == 3
+            i += 1
+          end
+          [r, k]
+        end
+        "#,
+    );
+}

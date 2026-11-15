@@ -105,6 +105,11 @@ impl<'a> JitContext<'a> {
             // value the loop carries stays in its pool register across the
             // back-edge instead of round-tripping its stack home each iteration.
             let mut incoming = AbstractState::join_entries(&entries);
+            // A back edge recorded for a head that carried an elided
+            // object the entries no longer bring (issue #1914): settled
+            // before anything joins with it, the fixpoint's first walk
+            // included.
+            self.settle_recorded_backedge(bbid, incoming.virtuals());
             if !no_calc_backedge {
                 self.analyse_loop_head(&incoming, &entries, bbid, loop_start, loop_end)?;
             }
@@ -162,7 +167,9 @@ impl<'a> JitContext<'a> {
                     // carries one in (creating is defining, and
                     // `loop_keeps_virtual` carries only a local the loop
                     // never defines), so the back edge brings nothing the
-                    // head lacks.
+                    // head lacks; one recorded from an earlier head that
+                    // carried more was settled above
+                    // (`settle_recorded_backedge`).
                     debug_assert!(
                         backedge
                             .virtuals()

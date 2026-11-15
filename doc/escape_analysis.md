@@ -243,6 +243,35 @@ r.include?(i)` folds the test every iteration and allocates nothing;
 `def f(*a); while ...; a.first; end` keeps its rest Array elided through
 the loop.
 
+A recorded back edge describes the head the walk that recorded it
+entered, and a nest is walked as a whole (`analyse_backedge_fixpoint`),
+so an inner head's record can be older than the state reaching it. In
+
+```ruby
+r = []
+while i < n
+  j = 0
+  while j < 3; j += 1; end   # carries r, never touches it
+  r << i                     # builds r
+  i += 1
+end
+```
+
+the outer fixpoint's first walk reaches the inner head with `r` elided
+and records the inner back edge that way; the outer back edge arrives
+with `r` built, so the second walk reaches the inner head with `r` built
+and a record that still has it elided. The join has no arm for that (`V`
+against a slot with a value discards the value), so the record is
+settled first (`settle_recorded_backedge`): an object the record carries
+and the state reaching the head does not is materialized *in the
+record*, which is what the loop's real back edge brings, since the loop
+never defines the local. The walk's own back edge then differs from the
+record (`equiv` compares the tables beside the modes) and replaces it.
+Without this the local had no value at the inner head: a debug build
+asserted, and a release build recompiled the method on every call or
+aborted on the first read of the local after the inner loop (issue
+#1914).
+
 The consequences are what keep the mechanism small:
 
 - **A merge only ever sees equal elided objects.** A temporary's object
