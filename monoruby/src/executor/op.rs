@@ -668,13 +668,14 @@ impl Executor {
         {
             return None;
         }
+        // Two Fixnums are answered here, so the arms below see a Fixnum
+        // only next to something else.
         if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
             return Some(l == r);
         }
         Some(match (lhs.unpack(), rhs.unpack()) {
-            (RV::Nil, RV::Nil) => true,
-            (RV::Nil, _) => false,
-            (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
+            // nil, true, false and Symbols are equal only to themselves.
+            (RV::Nil | RV::Bool(_) | RV::Symbol(_), _) => lhs.id() == rhs.id(),
             (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
             (RV::Fixnum(lhs), RV::Float(rhs)) => {
                 fixnum_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
@@ -697,10 +698,6 @@ impl Executor {
             (RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_), _) => {
                 return self.eq_values_pure(globals, rhs, lhs, true);
             }
-            (RV::Bool(lhs), RV::Bool(rhs)) => lhs.eq(&rhs),
-            (RV::Bool(_), _) => false,
-            (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs.eq(&rhs),
-            (RV::Symbol(_), _) => false,
             (RV::String(lhs), RV::String(rhs)) => {
                 lhs.eq(rhs) && lhs.compatible_encoding(rhs).is_some()
             }

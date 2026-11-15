@@ -1982,3 +1982,132 @@ fn frameless_generic_eq_redefined() {
         "#,
     );
 }
+
+#[test]
+fn frameless_generic_eq_each_decline() {
+    // A site whose pure helper has declined once is an ordinary call from
+    // then on, so each kind of decline gets a site of its own: a String
+    // subclass receiver, a String compared with a `to_str` responder, a
+    // receiver with its own `!=`, and a number compared with an object
+    // that defines `==` (the reverse dispatch).
+    run_test(
+        r#"
+        class EqDSub < String; def ==(o) = o == :sub; end
+        class EqDStr; def to_str = "a"; def ==(o) = o == "a"; end
+        class EqDNe; def !=(o) = :custom; end
+        class EqDRev; def ==(o) = o == 1; end
+        class EqDecl
+          def eq1(a, b) = a == b
+          def ne1(a, b) = a != b
+          def eq2(a, b) = a == b
+          def ne2(a, b) = a != b
+          def eq3(a, b) = a == b
+          def ne3(a, b) = a != b
+          def eq4(a, b) = a == b
+          def ne4(a, b) = a != b
+          def sub(a, b) = [eq1(a, b), ne1(a, b)]
+          def str(a, b) = [eq2(a, b), ne2(a, b)]
+          def neq(a, b) = [eq3(a, b), ne3(a, b)]
+          def rev(a, b) = [eq4(a, b), ne4(a, b)]
+        end
+        class EqD1; end
+        class EqD2; end
+        class EqD3; end
+        class EqD4; end
+        c = EqDecl.new
+        # Receivers of enough classes that the sites give up on dispatching
+        # by class and compare through the helper.
+        plain = [nil, :a, true, false, 1, 2.5, "a", "b", EqD1.new, EqD2.new, EqD3.new, EqD4.new]
+        r = []
+        warm = -> {
+          plain.each do |y|
+            plain.each { |x| r << c.sub(x, y) << c.str(x, y) << c.neq(x, y) << c.rev(x, y) }
+          end
+        }
+        3.times { warm.() }
+        s, t, n, v = EqDSub.new("a"), EqDStr.new, EqDNe.new, EqDRev.new
+        r << c.sub(s, :sub) << c.sub(s, "a")
+        r << c.str("a", t) << c.str("b", t)
+        r << c.neq(n, 1) << c.neq(n, n)
+        r << c.rev(1, v) << c.rev(2.5, v) << c.rev(2**70, v)
+        3.times { warm.() }
+        r << c.sub(s, :sub) << c.str("a", t) << c.neq(n, 1) << c.rev(1, v)
+        r
+        "#,
+    );
+}
+
+#[test]
+fn frameless_generic_eq_float_eq_redefined() {
+    // `Float#==` is no assumption of the compiled code (only the `==` of
+    // Integer, nil, true, false and Symbol is), so its redefinition does
+    // not evict the body: the pure helper sees it at the call and
+    // declines.
+    run_test_once(
+        r#"
+        class EqFlt
+          def eq(a, b) = a == b
+          def ne(a, b) = a != b
+          def both(a, b) = [eq(a, b), ne(a, b)]
+        end
+        c = EqFlt.new
+        vals = [nil, :a, 1, 1.5, 2.5, "a"]
+        r = []
+        10.times { vals.each { |x| vals.each { |y| r << c.both(x, y) } } }
+        class Float
+          alias_method :__eq_flt, :==
+          def ==(o) = o.nil?
+        end
+        res = vals.map { |y| c.both(1.5, y) + c.both(y, 1.5) }
+        class Float
+          alias_method :==, :__eq_flt
+          remove_method :__eq_flt
+        end
+        r << res
+        10.times { vals.each { |x| vals.each { |y| r << c.both(x, y) } } }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn frameless_leaf_builtin_not_simple_call() {
+    // A leaf builtin called with a splat, a block argument or a block is
+    // no leaf call.
+    run_test(
+        r#"
+        class LeafSplat
+          def initialize(a) = @a = a
+          def h1(args) = @a.first(*args)
+          def h2(blk) = @a.last(&blk)
+          def h3 = @a.size { 1 }
+          def h4(h) = @a.empty?(**h)
+          def run(args) = [h1(args), h2(nil), h3, h4({})]
+        end
+        a = LeafSplat.new([1, 2, 3, 4])
+        r = []
+        30.times { |i| r << a.run([i % 3]) << a.run([]) }
+        r
+        "#,
+    );
+}
+
+#[test]
+fn strscan_match_takes_an_integer_position() {
+    // `String#__strscan_match` is monoruby's own (strscan.rb's primitive;
+    // CRuby has the C extension instead), so this is not oracle-checked.
+    // It is a leaf builtin and so calls no `to_int` on its position.
+    let v = run_test_no_result_check(
+        r##"
+        class StrscanPos; def to_int = 0; end
+        r = []
+        r << "abc".__strscan_match(/a/, 0, true)
+        r << "abc".__strscan_match(/a/, -1, true)
+        r << (begin; "abc".__strscan_match(/a/, StrscanPos.new, true); rescue TypeError => e; e.message; end)
+        expected = [1, nil, "no implicit conversion of StrscanPos into Integer"]
+        raise "got #{r.inspect}" unless r == expected
+        r.size
+        "##,
+    );
+    assert_eq!(v.try_fixnum(), Some(3));
+}

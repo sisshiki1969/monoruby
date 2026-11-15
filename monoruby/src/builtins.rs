@@ -278,6 +278,9 @@ pub(crate) fn init_leaf_builtins(globals: &mut Globals) {
         (THREAD_CLASS, true, &["current"], Always),
         (FIBER_CLASS, true, &["current"], Always),
         (BASIC_OBJECT_CLASS, false, &["==", "equal?"], Always),
+        // `Kernel#class` / `#nil?` and `Object#frozen?`, as an Object
+        // finds them.
+        (OBJECT_CLASS, false, &["class", "nil?", "frozen?"], Always),
         (FLOAT_CLASS, false, &["to_s", "abs"], Always),
         (INTEGER_CLASS, false, &["abs"], Always),
         (INTEGER_CLASS, false, &["to_s"], IntArgs),
@@ -317,21 +320,5 @@ pub(crate) fn init_leaf_builtins(globals: &mut Globals) {
         && matches!(globals.store[fid].kind, FuncKind::Builtin { .. })
     {
         globals.store.set_identity_eq_fid(fid);
-    }
-    if let Some(kernel) = globals
-        .store
-        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Kernel"))
-    {
-        let kernel = kernel.as_class_id();
-        for name in ["class", "nil?", "frozen?"] {
-            if let Some(fid) = globals
-                .store
-                .check_method_for_class(kernel, IdentId::get_id(name))
-                .and_then(|e| e.func_id())
-                && matches!(globals.store[fid].kind, FuncKind::Builtin { .. })
-            {
-                globals.store.set_leaf_builtin(fid, Always);
-            }
-        }
     }
 }
