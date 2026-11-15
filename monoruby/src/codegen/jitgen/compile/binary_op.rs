@@ -1428,6 +1428,21 @@ impl<'a> JitContext<'a> {
     ) {
         state.write_back_slots(ir, &[lhs, rhs]);
         self.guard_class_version(state, ir, true);
+        // In a frameless body, `==` / `!=` through the helper that
+        // declines instead of calling a user-defined `==`
+        // (`JitContext::wants_pure_helper`).
+        if let Some(kind @ (CmpKind::Eq | CmpKind::Ne)) = binop.cmp_kind()
+            && self.wants_pure_helper(state)
+            && self.opt_eq_assumable(kind)
+        {
+            let func: crate::executor::BinaryOpFn = match kind {
+                CmpKind::Eq => crate::executor::op::cmp_eq_values_pure,
+                _ => crate::executor::op::cmp_ne_values_pure,
+            };
+            ir.opt_eq_cmp(state, lhs, rhs, kind, func, is_func_call);
+            self.pure_helper_exit(state, ir);
+            return;
+        }
         let error = ir.new_error(state);
         match binop.cmp_kind() {
             // `==`/`!=` get an inline immediate fast path with the generic

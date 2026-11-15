@@ -3887,9 +3887,24 @@ impl Codegen {
     /// reserved by the preceding cont-mode `FprSave`, whose fp saves
     /// sit above it — so this is a plain store, no sp adjustment.
     /// See `AsmInst::ContFramePc`.
-    pub(in crate::codegen) fn emit_cont_frame_pc(&mut self, call_site_pc: u64) {
+    pub(in crate::codegen) fn emit_cont_frame_pc(
+        &mut self,
+        call_site_pc: u64,
+        window: Option<ISeqId>,
+    ) {
+        let pc = match window {
+            Some(iseq) => {
+                let iseq: usize = iseq.into();
+                monoasm_arm64!(&mut self.jit,
+                    mov x10, (iseq as u64);
+                    str x10, [sp, #8];
+                );
+                call_site_pc | crate::executor::LEAF_CALL_PC_TAG
+            }
+            None => call_site_pc,
+        };
         monoasm_arm64!(&mut self.jit,
-            mov x10, (call_site_pc);
+            mov x10, (pc);
             str x10, [sp];
         );
     }

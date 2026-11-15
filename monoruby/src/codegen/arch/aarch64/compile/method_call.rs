@@ -667,7 +667,7 @@ impl Codegen {
 
         // Cont mode: the callee's frame gets the call-site pc (#1505).
         self.emit_fpr_save(using_fpr, true);
-        self.emit_cont_frame_pc(call_site_pc);
+        self.emit_cont_frame_pc(call_site_pc, None);
         self.a64_frame_load(11, lfp, conv(recv) as u32); // x11 = the Method
         monoasm_arm64!(&mut self.jit,
             ldr w9, [x11, #(METHOD_MM_NAME_OFFSET as u32)];
@@ -778,7 +778,7 @@ impl Codegen {
         self.check_version_with_cache(cache_addr, recv);
         // Cont mode: the callee's frame gets the call-site pc (#1505).
         self.emit_fpr_save(using_fpr, true);
-        self.emit_cont_frame_pc(call_site_pc);
+        self.emit_cont_frame_pc(call_site_pc, None);
         // resolve arg0 -> FuncId in x0
         if no_splat {
             if pos_num < 1 {
@@ -1823,8 +1823,22 @@ impl Codegen {
         jit_slot: Option<u64>,
         evict: AsmEvict,
     ) {
+        // A call from inside a frameless window (a leaf builtin,
+        // `JitContext::leaf_call`): x29 and the LFP were moved into the
+        // window (`inline_frame_shift`), while the pop after the call reads
+        // this frame's control frame and LFP through x29. They go back to
+        // the real frame for the call — the callee then saves the real
+        // frame pointer too — and into the window again after it. x86-64
+        // addresses the window by a displacement and has nothing to undo.
+        let window: i32 = self.inline_ctx.iter().map(|ctx| ctx.delta).sum();
+        if window != 0 {
+            self.inline_frame_unshift(window);
+        }
         let return_addr =
             self.a64_do_call(codeptr, is_iseq, callee_pc, call_site_bc_ptr, jit_slot);
+        if window != 0 {
+            self.inline_frame_shift(window);
+        }
         self.set_deopt_with_return_addr(return_addr, evict);
     }
 

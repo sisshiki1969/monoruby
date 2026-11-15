@@ -696,8 +696,14 @@ impl Codegen {
                     deopt,
                 });
             }
-            AsmInst::ContFramePc { call_site_pc } => {
-                self.encode_linst(LInst::ContFramePc { call_site_pc });
+            AsmInst::ContFramePc {
+                call_site_pc,
+                window,
+            } => {
+                self.encode_linst(LInst::ContFramePc {
+                    call_site_pc,
+                    window,
+                });
             }
             AsmInst::SetupMethodFrame {
                 meta,
@@ -2540,8 +2546,11 @@ impl Codegen {
             } => {
                 self.singleton_class_def(base, dst, func_id, using_fpr, &error);
             }
-            LInst::ContFramePc { call_site_pc } => {
-                self.emit_cont_frame_pc(call_site_pc);
+            LInst::ContFramePc {
+                call_site_pc,
+                window,
+            } => {
+                self.emit_cont_frame_pc(call_site_pc, window);
             }
             LInst::SetupMethodFrame {
                 meta,

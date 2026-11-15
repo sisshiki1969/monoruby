@@ -6133,7 +6133,7 @@ fn string_match(
 /// Out-of-range or non-char-boundary positions return nil.
 #[monoruby_builtin]
 fn string_strscan_match(
-    vm: &mut Executor,
+    _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -6142,9 +6142,18 @@ fn string_strscan_match(
         static STRSCAN_REGION: std::cell::RefCell<onigmo_regex::Region> =
             std::cell::RefCell::new(onigmo_regex::Region::new());
     }
-    let byte_pos = match lfp.arg(1).coerce_to_int_i64(vm, globals)? {
-        pos if pos >= 0 => pos as usize,
-        _ => return Ok(Value::nil()),
+    // No `to_int`: this is strscan.rb's primitive, called with its own
+    // `@pos`, and it must stay a leaf (`LeafCall`).
+    let byte_pos = match lfp.arg(1).try_fixnum() {
+        Some(pos) if pos >= 0 => pos as usize,
+        Some(_) => return Ok(Value::nil()),
+        None => {
+            return Err(MonorubyErr::no_implicit_conversion(
+                &globals.store,
+                lfp.arg(1),
+                INTEGER_CLASS,
+            ));
+        }
     };
     let anchored = lfp.arg(2).as_bool();
     let pattern = lfp.arg(0);

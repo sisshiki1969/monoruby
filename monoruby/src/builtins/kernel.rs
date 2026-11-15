@@ -1439,10 +1439,21 @@ pub(crate) fn native_call_site(
     globals: &Globals,
     cfp: crate::executor::Cfp,
 ) -> Option<(crate::ast::Loc, crate::ast::SourceInfoRef)> {
-    let prev = cfp.prev()?;
-    let iseq = globals.store[prev.lfp().func_id()].is_iseq()?;
-    let info = &globals.store[iseq];
     let slot = cfp.caller_pc_slot();
+    let (slot, info) = if slot & 7 == crate::executor::LEAF_CALL_PC_TAG {
+        // A leaf call from a frameless body: the pc belongs to the body
+        // inlined into `prev`, whose iseq the call left in the pad slot
+        // (`AsmInst::ContFramePc::window`). Not every dispatch path
+        // writes these two words, so what looks like a tag may be
+        // anything: the id is checked against the table here, the pc
+        // against that iseq's span below.
+        let info = globals.store.iseqs.get(cfp.caller_pad_slot() as usize)?;
+        (slot & !7, info)
+    } else {
+        let prev = cfp.prev()?;
+        let iseq = globals.store[prev.lfp().func_id()].is_iseq()?;
+        (slot, &globals.store[iseq])
+    };
     if slot == 0 || slot % 8 != 0 {
         return None;
     }

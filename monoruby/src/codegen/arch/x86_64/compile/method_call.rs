@@ -536,7 +536,7 @@ impl Codegen {
 
         // Cont mode: the callee's frame gets the call-site pc (#1505).
         self.fpr_save_with_cont(using_fpr, true);
-        self.emit_cont_frame_pc(call_site_pc);
+        self.emit_cont_frame_pc(call_site_pc, None);
         if no_splat {
             if pos_num < 1 {
                 monoasm! { &mut self.jit,
@@ -656,7 +656,7 @@ impl Codegen {
 
         // Cont mode: the callee's frame gets the call-site pc (#1505).
         self.fpr_save_with_cont(using_fpr, true);
-        self.emit_cont_frame_pc(call_site_pc);
+        self.emit_cont_frame_pc(call_site_pc, None);
         monoasm! { &mut self.jit,
             movq rdi, [rbp - (jrbp_local(recv))];
             cmpl [rdi + (METHOD_MM_NAME_OFFSET as i32)], 0;

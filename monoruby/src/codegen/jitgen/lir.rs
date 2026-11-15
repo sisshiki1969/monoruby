@@ -1324,6 +1324,7 @@ pub(in crate::codegen) enum LInst {
     /// (reserved by the preceding cont-mode `FprSave`). No sp adjustment.
     ContFramePc {
         call_site_pc: u64,
+        window: Option<ISeqId>,
     },
     SetupMethodFrame {
         meta: Meta,
