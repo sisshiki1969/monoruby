@@ -796,7 +796,7 @@ pub(crate) fn reg_content_fixed_encoding(
 ) -> Option<crate::value::Encoding> {
     match reg_preprocess(source, enc, extended) {
         Ok(pre) => pre.fixed,
-        Err(_) => source.iter().any(|&b| b >= 0x80).then_some(enc),
+        Err(_) => (!source.is_ascii()).then_some(enc),
     }
 }
 
@@ -1407,7 +1407,7 @@ pub(crate) fn resolve_declared_encoding(
     // Non-ASCII is decided on the *raw source* bytes (which may be
     // non-UTF-8, e.g. a Shift_JIS pattern), not the escaped UTF-8 view
     // the matching engine sees.
-    let has_non_ascii = source.iter().any(|&b| b >= 0x80);
+    let has_non_ascii = !source.is_ascii();
     if option & RegexpInner::NOENCODING != 0 {
         // `/.../n` (NOENCODING): BINARY when the source carries
         // non-ASCII content — either raw bytes >= 0x80 or a `\xHH`
@@ -1707,9 +1707,7 @@ impl RegexpInner {
         let content_fixed = match &pre {
             Some(Ok(pre)) => pre.fixed,
             // Refused: whoever compiles it reports the error.
-            Some(Err(_)) => source
-                .iter()
-                .any(|&b| b >= 0x80)
+            Some(Err(_)) => (!source.is_ascii())
                 .then(|| source_encoding.unwrap_or(crate::value::Encoding::UTF8)),
             None => None,
         };

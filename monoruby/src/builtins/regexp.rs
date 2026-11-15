@@ -507,7 +507,7 @@ pub(crate) fn regexp_inner_from_parts(
     // UTF-8 codec such an escape is "too short multibyte code string".
     let binary_source = source_encoding == Some(crate::value::Encoding::Ascii8)
         && source_bytes.as_ref().is_some_and(|b| {
-            b.iter().any(|&c| c >= 0x80)
+            !b.is_ascii()
                 || content_fixed == Some(crate::value::Encoding::Ascii8)
         });
     // A source in a native ASCII-compatible codec (EUC-JP, Shift_JIS,
@@ -526,7 +526,7 @@ pub(crate) fn regexp_inner_from_parts(
             })
             .filter(|e| {
                 source_bytes.as_ref().is_some_and(|b| {
-                    b.iter().any(|&c| c >= 0x80) || content_fixed == Some(*e)
+                    !b.is_ascii() || content_fixed == Some(*e)
                 })
             })
             .and_then(RegexpInner::onigmo_encoding_for)
@@ -899,7 +899,7 @@ fn union_arg_encoding(globals: &Globals, arg: Value) -> ArgEnc {
         // it must not be treated as ASCII-only (which would let
         // `Regexp.union` downgrade the result to US-ASCII).
         let ascii_only = re.declared_encoding() != crate::value::Encoding::Ascii8
-            && re.source_bytes().iter().all(|&b| b < 0x80);
+            && re.source_bytes().is_ascii();
         return ArgEnc {
             encoding: re.declared_encoding(),
             fixed: re.fixed_encoding(),
@@ -908,7 +908,7 @@ fn union_arg_encoding(globals: &Globals, arg: Value) -> ArgEnc {
     }
     if let Some(s) = arg.is_rstring_inner() {
         let enc = s.encoding();
-        let has_non_ascii = s.as_bytes().iter().any(|&b| b >= 0x80);
+        let has_non_ascii = !s.as_bytes().is_ascii();
         let fixed = has_non_ascii || !enc.is_ascii_compatible();
         return ArgEnc {
             encoding: enc,
@@ -2307,6 +2307,43 @@ mod tests {
     #[test]
     fn regexp_error2() {
         run_test_error(r#"Regexp.new("+")"#);
+    }
+
+    #[test]
+    fn regexp_malformed_escape_is_refused_by_the_compile() {
+        // A source the preprocess step refuses is compiled anyway and
+        // refused there with CRuby's message, whether or not it carries
+        // a raw non-ASCII byte (which pins the encoding the compile runs
+        // under).
+        run_test(
+            r#"
+        ["\\x", "é\\x"].map { |src|
+          begin; Regexp.new(src); rescue RegexpError => e; e.message; end
+        }
+        "#,
+        );
+        // The same escape in a piece of an interpolated literal. CRuby
+        // refuses the piece itself (`ArgumentError`, the bare message);
+        // monoruby compiles the whole pattern and refuses that
+        // (`RegexpError`, with the `: /src/` suffix), so only the message
+        // proper is compared here.
+        run_test(
+            r#"
+        ["\\x", "é\\x"].map { |x|
+          begin; /a#{x}/; rescue StandardError => e; e.message[/\A[^:]*/]; end
+        }
+        "#,
+        );
+        // A Regexp read back by Marshal is built from its source bytes
+        // with no preprocessing done ahead, so the constructor runs it
+        // itself and the compile reports the refusal.
+        run_test(
+            r#"
+        [Marshal.dump(/ab/).sub("ab", "\\x"), Marshal.dump(/\u00e9bb/).sub("bb", "\\x")].map { |d|
+          begin; Marshal.load(d); rescue RegexpError => e; e.message; end
+        }
+        "#,
+        );
     }
 
     #[test]

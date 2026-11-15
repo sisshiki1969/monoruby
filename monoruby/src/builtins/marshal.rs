@@ -382,7 +382,7 @@ impl<'a> MarshalReader<'a> {
         // A plain ':' symbol with only ASCII bytes is a normal identifier;
         // one carrying non-ASCII bytes with no encoding wrapper is binary
         // (ASCII-8BIT), matching CRuby's `loads a binary encoded Symbol`.
-        let enc = if bytes.iter().all(|&b| b < 0x80) {
+        let enc = if bytes.is_ascii() {
             Encoding::UsAscii
         } else {
             Encoding::Ascii8
@@ -1770,7 +1770,7 @@ fn marshal_write_symbol(buf: &mut Vec<u8>, id: IdentId, symbols: &mut Vec<IdentI
     }
     let name = id.get_ident_name_clone();
     let bytes = name.as_bytes();
-    let ascii_only = bytes.iter().all(|&b| b < 0x80);
+    let ascii_only = bytes.is_ascii();
     // An ASCII-only symbol — or a binary (ASCII-8BIT) one — is written as
     // a plain ':' with no encoding ivar. A symbol carrying non-ASCII bytes
     // under a real encoding (UTF-8, or a named one) is wrapped in an 'I'
@@ -2329,7 +2329,7 @@ fn marshal_dump_value(
                         // A name with non-ASCII (UTF-8) bytes is wrapped in
                         // an 'I' block recording its encoding, like a
                         // String/Symbol.
-                        let ascii = name_bytes.iter().all(|&b| b < 0x80);
+                        let ascii = name_bytes.is_ascii();
                         if !ascii {
                             buf.push(b'I');
                         }
