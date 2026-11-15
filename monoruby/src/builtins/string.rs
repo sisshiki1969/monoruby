@@ -14417,6 +14417,20 @@ mod tests {
     }
 
     #[test]
+    fn count_delete_squeeze_ascii_only_in_a_walked_encoding() {
+        // An ASCII-only receiver in an encoding monoruby walks itself, with
+        // ASCII sets: every byte is its own character, so the byte paths
+        // are the per-character ones and no codepoint sets are built.
+        run_test(
+            r##"
+        s = "abcabc".force_encoding("Windows-31J")
+        [s.count("a"), s.count("a-c", "^b"), s.delete("a"), s.delete("a", "b"),
+         s.squeeze("b"), s.squeeze, s.delete("a").encoding.to_s]
+        "##,
+        );
+    }
+
+    #[test]
     fn delete() {
         run_tests(&[
             r##""abcdefg".delete("b")"##,

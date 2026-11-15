@@ -2310,6 +2310,43 @@ mod tests {
     }
 
     #[test]
+    fn regexp_malformed_escape_is_refused_by_the_compile() {
+        // A source the preprocess step refuses is compiled anyway and
+        // refused there with CRuby's message, whether or not it carries
+        // a raw non-ASCII byte (which pins the encoding the compile runs
+        // under).
+        run_test(
+            r#"
+        ["\\x", "é\\x"].map { |src|
+          begin; Regexp.new(src); rescue RegexpError => e; e.message; end
+        }
+        "#,
+        );
+        // The same escape in a piece of an interpolated literal. CRuby
+        // refuses the piece itself (`ArgumentError`, the bare message);
+        // monoruby compiles the whole pattern and refuses that
+        // (`RegexpError`, with the `: /src/` suffix), so only the message
+        // proper is compared here.
+        run_test(
+            r#"
+        ["\\x", "é\\x"].map { |x|
+          begin; /a#{x}/; rescue StandardError => e; e.message[/\A[^:]*/]; end
+        }
+        "#,
+        );
+        // A Regexp read back by Marshal is built from its source bytes
+        // with no preprocessing done ahead, so the constructor runs it
+        // itself and the compile reports the refusal.
+        run_test(
+            r#"
+        [Marshal.dump(/ab/).sub("ab", "\\x"), Marshal.dump(/\u00e9bb/).sub("bb", "\\x")].map { |d|
+          begin; Marshal.load(d); rescue RegexpError => e; e.message; end
+        }
+        "#,
+        );
+    }
+
+    #[test]
     fn query_apis_do_not_intern_their_string() {
         // A symbol is never collected, so `Regexp#match?` reading its subject
         // as an identifier (and `autoload?`, a named-capture reference
