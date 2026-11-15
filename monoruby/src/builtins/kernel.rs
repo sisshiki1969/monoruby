@@ -3888,11 +3888,25 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         // what the hook returned.
         return Ok(Value::integer(now.elapsed().as_secs() as i64));
     }
+    sleep_thread(vm, globals, lfp.try_arg(0))?;
+    Ok(Value::integer(now.elapsed().as_secs() as i64))
+}
+
+/// The wait of `Kernel#sleep` outside a fiber scheduler: park the calling
+/// thread for `sec` seconds, or until it is woken when `sec` is `None`.
+/// Answers whether a wake-up ended it (`true`) or the time ran out
+/// (`false`); `Thread.__sleep` hands that to `Mutex#sleep`.
+pub(crate) fn sleep_thread(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    sec: Option<Value>,
+) -> Result<bool> {
+    let now = std::time::Instant::now();
     // With other live green threads, sleeping must yield to the
     // scheduler so they run during the wait (and a no-duration sleep
     // parks until Thread#wakeup instead of returning immediately).
     if crate::scheduler::has_other_live_threads() {
-        let dur = match lfp.try_arg(0) {
+        let dur = match sec {
             Some(sec) => {
                 let sec = sleep_duration(vm, globals, sec)?;
                 if sec.is_nan() || sec < 0.0 {
@@ -3904,10 +3918,12 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             }
             None => None,
         };
-        let elapsed = crate::scheduler::sleep(vm, globals, dur)?;
-        return Ok(Value::integer(elapsed.as_secs() as i64));
+        let (_, woken) = crate::scheduler::sleep_woken(vm, globals, dur)?;
+        return Ok(woken);
     }
-    if let Some(sec) = lfp.try_arg(0) {
+    // No other thread exists to wake this one, so only the time running
+    // out ends the wait.
+    if let Some(sec) = sec {
         let sec = sleep_duration(vm, globals, sec)?;
         if sec.is_nan() || sec < 0.0 {
             return Err(MonorubyErr::argumenterr(
@@ -4017,8 +4033,7 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             }
         }
     }
-    let elapsed = now.elapsed().as_secs();
-    Ok(Value::integer(elapsed as i64))
+    Ok(false)
 }
 
 ///

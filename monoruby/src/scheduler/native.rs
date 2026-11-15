@@ -691,7 +691,7 @@ pub(super) fn sleep(
     vm: &mut Executor,
     globals: &mut Globals,
     dur: Option<Duration>,
-) -> Result<Duration> {
+) -> Result<(Duration, bool)> {
     ensure_main(vm);
     flush_pending_reports(vm, globals);
     let cur = current();
@@ -702,26 +702,25 @@ pub(super) fn sleep(
         let inner = cur.as_thread_inner_mut();
         if inner.park_permit {
             inner.park_permit = false;
-            return Ok(Duration::ZERO);
+            return Ok((Duration::ZERO, true));
         }
     }
     let start = Instant::now();
     let deadline = dur.and_then(|d| start.checked_add(d));
-    loop {
-        let woken = park(vm, globals, cur, ThreadState::Sleeping, &[], deadline)?;
-        if woken {
-            break;
+    let woken = loop {
+        if park(vm, globals, cur, ThreadState::Sleeping, &[], deadline)? {
+            break true;
         }
         if let Some(dl) = deadline
             && Instant::now() >= dl
         {
-            break;
+            break false;
         }
         // A signal interrupted the poll: sleep on for the remainder.
-    }
+    };
     flush_pending_reports(vm, globals);
     deliver_pending_now(vm, globals, cur, true)?;
-    Ok(start.elapsed())
+    Ok((start.elapsed(), woken))
 }
 
 /// `Thread.pass`: hand the GVL to the longest waiter, if any.

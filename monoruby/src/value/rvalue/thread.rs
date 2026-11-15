@@ -101,6 +101,11 @@ pub struct ThreadInner {
     /// Mutex / ConditionVariable / Queue in builtins/startup.rb all park
     /// through patterns that need this.
     pub(crate) park_permit: bool,
+    /// Green scheduler only: the thread's last timed park ended because
+    /// its deadline came (`wake_due_sleepers`), not because something
+    /// woke it. Cleared when a sleep starts; `scheduler::sleep_woken`
+    /// reads it back. (The 1:1 model learns the same from its `park`.)
+    pub(crate) sleep_timed_out: bool,
     /// `$?` / `Process.last_status` for this thread. CRuby keeps the
     /// last child status per thread, so a fresh thread sees `nil` until
     /// it reaps a child of its own.
@@ -241,6 +246,7 @@ impl ThreadInner {
             uninterruptible: 0,
             park_blocking: false,
             park_permit: false,
+            sleep_timed_out: false,
             last_status: None,
             sched_call_depth: 0,
             parker: None,
@@ -281,6 +287,7 @@ impl ThreadInner {
             uninterruptible: 0,
             park_blocking: false,
             park_permit: false,
+            sleep_timed_out: false,
             last_status: None,
             sched_call_depth: 0,
             parker: None,
@@ -313,6 +320,7 @@ impl ThreadInner {
             uninterruptible: 0,
             park_blocking: false,
             park_permit: false,
+            sleep_timed_out: false,
             last_status: None,
             sched_call_depth: 0,
             parker: None,

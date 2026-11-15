@@ -130,6 +130,7 @@ mod method_lists;
 mod method_lookup_errors;
 mod method_object_call;
 mod mkmf;
+mod monitor;
 mod mul_assign;
 mod name_error_api;
 mod native_ext;
