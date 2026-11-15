@@ -1439,6 +1439,12 @@ pub(crate) fn native_call_site(
     globals: &Globals,
     cfp: crate::executor::Cfp,
 ) -> Option<(crate::ast::Loc, crate::ast::SourceInfoRef)> {
+    // The cont-frame words are read only once the caller is known to be
+    // an iseq frame. A frame with no caller is the first one of its stack
+    // (a fiber's body can be a native function): its cont-frame words
+    // would lie beyond the stack's top, which need not even be mapped.
+    let prev = cfp.prev()?;
+    let host = globals.store[prev.lfp().func_id()].is_iseq()?;
     let slot = cfp.caller_pc_slot();
     let (slot, info) = if slot & 7 == crate::executor::LEAF_CALL_PC_TAG {
         // A leaf call from a frameless body: the pc belongs to the body
@@ -1450,9 +1456,7 @@ pub(crate) fn native_call_site(
         let info = globals.store.iseqs.get(cfp.caller_pad_slot() as usize)?;
         (slot & !7, info)
     } else {
-        let prev = cfp.prev()?;
-        let iseq = globals.store[prev.lfp().func_id()].is_iseq()?;
-        (slot, &globals.store[iseq])
+        (slot, &globals.store[host])
     };
     if slot == 0 || slot % 8 != 0 {
         return None;
