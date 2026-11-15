@@ -1320,6 +1320,14 @@ pub(crate) struct JitContext<'a> {
     /// frameless chain being built (`FRAMELESS_CHAIN_BUDGET` in
     /// `compile/frameless_call.rs`).
     pub(super) frameless_chain_bc: usize,
+    /// Callees whose frameless compile was abandoned while a callee
+    /// beneath them did not fit the chain budget, by the chain's count
+    /// when they were entered: they may still fit in a shorter chain, so
+    /// they are tried again only from a smaller count.
+    pub(super) frameless_budget_rejected: HashMap<ISeqId, usize>,
+    /// How many times a body was refused for the chain budget in this
+    /// compile (`frameless_chain_enter`).
+    pub(super) frameless_budget_hits: usize,
     /// Set by `inline_class_new` for the frameless compile it is about to
     /// start: the callee's `self` is the object just allocated, so its
     /// frame is marked `AsmInfo::self_fresh`. Taken by the frame's
@@ -1386,6 +1394,8 @@ impl<'a> JitContext<'a> {
             condbr_done: None,
             frameless_rejected: Default::default(),
             frameless_chain_bc: 0,
+            frameless_budget_rejected: Default::default(),
+            frameless_budget_hits: 0,
             pending_fresh_self: false,
             pending_class_new_redo: None,
             outer_claim_barrier: false,
@@ -1466,6 +1476,8 @@ impl<'a> JitContext<'a> {
             // A walk may start inside a chain; it charges the same bodies
             // the code generation pass will.
             frameless_chain_bc: self.frameless_chain_bc,
+            frameless_budget_rejected: Default::default(),
+            frameless_budget_hits: 0,
             pending_fresh_self: false,
             pending_class_new_redo: None,
             loop_hoist_disabled: self.loop_hoist_disabled.clone(),

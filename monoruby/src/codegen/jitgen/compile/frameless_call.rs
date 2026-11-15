@@ -331,10 +331,55 @@ impl<'a> JitContext<'a> {
         let save = self.frameless_chain_bc;
         let total = save + self.store[iseq].bytecode().len();
         if total > FRAMELESS_CHAIN_BUDGET {
+            self.frameless_budget_hits += 1;
             return None;
         }
         self.frameless_chain_bc = total;
         Some(save)
+    }
+
+    ///
+    /// The count a frameless chain would stand at when the next body
+    /// enters it: zero from a framed frame, which starts a new chain.
+    ///
+    fn frameless_chain_entry_bc(&self) -> usize {
+        if self.frameless_chain_len() == 0 {
+            0
+        } else {
+            self.frameless_chain_bc
+        }
+    }
+
+    ///
+    /// Is *iseq* known not to compile frameless from here? Either it
+    /// needs a frame wherever it is called (`frameless_rejected`), or its
+    /// tree did not fit the chain budget from a count no larger than the
+    /// current one (`frameless_budget_rejected`).
+    ///
+    fn frameless_refused(&self, iseq: ISeqId) -> bool {
+        self.frameless_rejected.contains(&iseq)
+            || self
+                .frameless_budget_rejected
+                .get(&iseq)
+                .is_some_and(|at| self.frameless_chain_entry_bc() >= *at)
+    }
+
+    ///
+    /// Record a frameless compile of *iseq* that was abandoned. One that
+    /// ran into the chain budget on the way (*budget_hits* is the counter
+    /// before it began) says nothing about the callee in a shorter chain:
+    /// it is only kept from being tried again from this count or a larger
+    /// one. Without that distinction a small callee whose own callee
+    /// happened not to fit the end of one long chain was refused at every
+    /// other site of the unit, where it would have started a chain of its
+    /// own.
+    ///
+    fn frameless_reject(&mut self, iseq: ISeqId, entry_bc: usize, budget_hits: usize) {
+        if self.frameless_budget_hits != budget_hits {
+            self.frameless_budget_rejected.insert(iseq, entry_bc);
+        } else {
+            self.frameless_rejected.insert(iseq);
+        }
     }
 
     ///
@@ -352,9 +397,11 @@ impl<'a> JitContext<'a> {
         func_id: FuncId,
         iseq: ISeqId,
     ) -> Option<CompileResult> {
-        if self.frameless_rejected.contains(&iseq) {
+        if self.frameless_refused(iseq) {
             return None;
         }
+        let entry_bc = self.frameless_chain_entry_bc();
+        let budget_hits = self.frameless_budget_hits;
         let chain_save = self.frameless_chain_enter(iseq)?;
         // The same rollback as `method_call_with_residual`'s.
         let ir_save = ir.save();
@@ -377,7 +424,7 @@ impl<'a> JitContext<'a> {
                 *state = state_save;
                 (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
                 self.discard_cond_results();
-                self.frameless_rejected.insert(iseq);
+                self.frameless_reject(iseq, entry_bc, budget_hits);
                 self.frameless_chain_bc = chain_save;
                 None
             }
@@ -398,9 +445,11 @@ impl<'a> JitContext<'a> {
         block: &JitBlockInfo,
         iseq: ISeqId,
     ) -> Option<CompileResult> {
-        if self.frameless_rejected.contains(&iseq) {
+        if self.frameless_refused(iseq) {
             return None;
         }
+        let entry_bc = self.frameless_chain_entry_bc();
+        let budget_hits = self.frameless_budget_hits;
         let chain_save = self.frameless_chain_enter(iseq)?;
         let ir_save = ir.save();
         let state_save = state.clone();
@@ -420,7 +469,7 @@ impl<'a> JitContext<'a> {
                 *state = state_save;
                 (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
                 self.discard_cond_results();
-                self.frameless_rejected.insert(iseq);
+                self.frameless_reject(iseq, entry_bc, budget_hits);
                 self.frameless_chain_bc = chain_save;
                 None
             }

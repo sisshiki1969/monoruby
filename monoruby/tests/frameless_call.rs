@@ -1454,6 +1454,71 @@ fn frameless_chain_over_the_budget() {
 }
 
 #[test]
+fn frameless_callee_refused_for_the_budget_is_retried_in_a_shorter_chain() {
+    // `deep` nests p1 -> p2 -> p3 -> tail -> leaf, and `leaf` does not fit
+    // the end of that chain (`FRAMELESS_CHAIN_BUDGET`), which abandons the
+    // frameless compile of `tail` there. That says nothing about `tail`
+    // called from `direct`, where it starts a chain of its own: it is
+    // tried again, not refused for the rest of the unit.
+    run_test(
+        r#"
+        class W2
+          def initialize = (@k = 1)
+          def leaf(x)
+            a = x + 1; b = a * 2; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 2 + a - b + c
+          end
+          def tail(x) = leaf(x) + @k
+          def p3(x)
+            a = x + 3; b = a * 4; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 4 + a - b + tail(c)
+          end
+          def p2(x)
+            a = x + 2; b = a * 3; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 3 + a - b + p3(c)
+          end
+          def p1(x)
+            a = x + 1; b = a * 2; c = b - x; d = c + @k
+            a += 1 if a % 2 == 1
+            a -= b if a > b
+            b -= c if b > c
+            b += 2 if b > 10
+            c -= 3 if c < 5
+            d += a + b + c
+            d * 2 + a - b + p2(c)
+          end
+          def deep(x) = p1(x)
+          def direct(x) = tail(x) + tail(x + 1)
+          def both(x) = p1(x) + tail(x)
+        end
+        w = W2.new
+        res = []
+        40.times { |i| res << w.deep(i) << w.direct(i) << w.both(i) }
+        res << w.deep(1.5) << w.direct(2**62) << w.both(2.5)
+        res
+        "#,
+    );
+}
+
+#[test]
 fn frameless_class_new_recursive_initialize() {
     // `initialize` builds the rest of the list through `Node.new`: the
     // nested construction finds its `initialize` on the specialization
