@@ -28,6 +28,8 @@
 //!   the stacks as folded text (flamegraph.pl / speedscope / inferno) to
 //!   `prefix.{cpu,alloc,malloc}.folded`. Without it the report goes to
 //!   stderr and no stacks are written.
+//! - `MONORUBY_PROF_INLINE=1` — show frameless-inlined callees as frames
+//!   of their own (below).
 //! - `MONORUBY_PROF_TOP` — rows per table (default 30).
 //! - `MONORUBY_PROF_BUF_MB` — sample buffer size (default 512, reserved
 //!   lazily; samples past it are counted as dropped).
@@ -56,9 +58,16 @@
 //! time, elsewhere in JIT memory is a stub / invoker / native-method
 //! wrapper, and outside it is Rust or libc (symbolized).
 //!
-//! Frameless-inlined callees have no frame of their own, so their time
-//! and allocations are reported against the method they were inlined
-//! into.
+//! ## Frameless-inlined callees
+//!
+//! A frameless callee has no control frame, so the frame walk does not
+//! see it: its time and allocations are reported against the method
+//! whose frame it runs in. With `MONORUBY_PROF_INLINE=1` the JIT reports
+//! where it emitted each frameless body ([`on_inline_body`]), every
+//! sample and allocation also records the JIT code it came from
+//! ([`site_of`]: the PC, or the innermost call from JIT code into the
+//! runtime), and the report puts the callees whose body that address is
+//! in above the frame they ran in ([`Inlines`]).
 //!
 
 use crate::*;
@@ -82,6 +91,9 @@ pub(crate) struct Config {
     /// rather than on the process's CPU time (`ITIMER_PROF`, whose
     /// resolution is the kernel tick, typically 4 ms).
     wall: bool,
+    /// Charge samples and allocations in a frameless-inlined callee's code
+    /// to the callee (`MONORUBY_PROF_INLINE`).
+    inline: bool,
     alloc_every: u64,
     malloc_every: u64,
     out: Option<String>,
@@ -114,6 +126,7 @@ pub(crate) fn config() -> &'static Config {
             malloc: false,
             hz: env_num("MONORUBY_PROF_HZ", 1000).min(100_000) as u32,
             wall: std::env::var("MONORUBY_PROF_CLOCK").as_deref() != Ok("cpu"),
+            inline: std::env::var("MONORUBY_PROF_INLINE").is_ok_and(|s| !s.is_empty() && s != "0"),
             alloc_every: env_num("MONORUBY_PROF_ALLOC_EVERY", 64),
             malloc_every: env_num("MONORUBY_PROF_MALLOC_EVERY", 64),
             out: std::env::var("MONORUBY_PROF_OUT")
@@ -157,6 +170,8 @@ pub(crate) fn alloc_enabled() -> bool {
 static MALLOC_EVERY: AtomicU64 = AtomicU64::new(0);
 /// Object-allocation profiling is on (mirrors `config().alloc`).
 static ALLOC_ON: AtomicBool = AtomicBool::new(false);
+/// Frameless-inlined callees are told apart (mirrors `config().inline`).
+static INLINE_ON: AtomicBool = AtomicBool::new(false);
 /// The process that started profiling (a forked child reports nothing).
 static OWNER_PID: AtomicUsize = AtomicUsize::new(0);
 static INIT: std::sync::Once = std::sync::Once::new();
@@ -173,10 +188,13 @@ pub(crate) fn init() {
             return;
         }
         OWNER_PID.store(std::process::id() as usize, Ordering::Relaxed);
+        // The boot allocates on this thread before `start`.
+        note_stack();
         ACTIVE.store(true, Ordering::Relaxed);
         let _ = START.set(std::time::Instant::now());
         buf_init(cfg.buf_words);
         ALLOC_ON.store(cfg.alloc, Ordering::Relaxed);
+        INLINE_ON.store(cfg.inline, Ordering::Relaxed);
         if cfg.malloc {
             MALLOC_EVERY.store(cfg.malloc_every, Ordering::Relaxed);
         }
@@ -190,7 +208,8 @@ pub(crate) fn init() {
 thread_local! {
     /// The `Executor` whose Ruby code runs on this OS thread (0 = none).
     static EXEC: Cell<usize> = const { Cell::new(0) };
-    /// Upper end of this OS thread's own stack (0 = unknown).
+    /// This OS thread's own stack, `[lo, hi)` (0 = unknown).
+    static STACK_LO: Cell<usize> = const { Cell::new(0) };
     static STACK_HI: Cell<usize> = const { Cell::new(0) };
     /// The runtime phase this thread is in ([`Phase`]).
     static PHASE: Cell<u8> = const { Cell::new(0) };
@@ -263,6 +282,11 @@ pub(crate) fn set_executor(exec: *const Executor) {
 ///
 pub(crate) fn enter_thread(exec: *const Executor) {
     set_executor(exec);
+    note_stack();
+}
+
+/// Remember the calling OS thread's stack bounds.
+fn note_stack() {
     // SAFETY: plain pthread queries on the calling thread; `attr` is
     // initialized by `pthread_getattr_np` before it is read and destroyed
     // afterwards.
@@ -273,6 +297,7 @@ pub(crate) fn enter_thread(exec: *const Executor) {
             let mut addr: *mut libc::c_void = std::ptr::null_mut();
             let mut size: libc::size_t = 0;
             if libc::pthread_attr_getstack(&attr, &mut addr, &mut size) == 0 {
+                STACK_LO.set(addr as usize);
                 STACK_HI.set(addr as usize + size);
             }
             libc::pthread_attr_destroy(&mut attr);
@@ -281,7 +306,9 @@ pub(crate) fn enter_thread(exec: *const Executor) {
     // SAFETY: plain pthread queries on the calling thread.
     #[cfg(target_os = "macos")]
     unsafe {
-        STACK_HI.set(libc::pthread_get_stackaddr_np(libc::pthread_self()) as usize);
+        let hi = libc::pthread_get_stackaddr_np(libc::pthread_self()) as usize;
+        STACK_LO.set(hi - libc::pthread_get_stacksize_np(libc::pthread_self()));
+        STACK_HI.set(hi);
     }
 }
 
@@ -294,10 +321,11 @@ pub(crate) fn enter_thread(exec: *const Executor) {
 // threads) never write the same words.
 //
 // Record layout:
-//   w0  kind << 56 | phase << 48 | native_len << 32 | ruby_len
+//   w0  has_site << 63 | kind << 56 | phase << 48 | native_len << 32 | ruby_len
 //   w1  CPU: the PC; ALLOC: the ClassId; MALLOC: the size
 //   ..  ruby_len FuncIds, newest frame first
 //   ..  native_len return addresses, innermost first
+//   ..  has_site: the JIT code the newest Ruby frame was running (`site_of`)
 //
 
 const KIND_CPU: u64 = 1;
@@ -333,12 +361,12 @@ fn buf_init(words: usize) {
     BUF.store(p as *mut u64, Ordering::Release);
 }
 
-fn buf_push(kind: u64, phase: u8, w1: u64, ruby: &[u64], native: &[u64]) {
+fn buf_push(kind: u64, phase: u8, w1: u64, ruby: &[u64], native: &[u64], site: Option<u64>) {
     let buf = BUF.load(Ordering::Acquire);
     if buf.is_null() {
         return;
     }
-    let len = 2 + ruby.len() + native.len();
+    let len = 2 + ruby.len() + native.len() + site.is_some() as usize;
     let pos = BUF_POS.fetch_add(len, Ordering::Relaxed);
     if pos + len > BUF_LEN.load(Ordering::Relaxed) {
         DROPPED.fetch_add(1, Ordering::Relaxed);
@@ -348,10 +376,17 @@ fn buf_push(kind: u64, phase: u8, w1: u64, ruby: &[u64], native: &[u64]) {
     // inside the mapping.
     unsafe {
         let p = buf.add(pos);
-        *p = kind << 56 | (phase as u64) << 48 | (native.len() as u64) << 32 | ruby.len() as u64;
+        *p = (site.is_some() as u64) << 63
+            | kind << 56
+            | (phase as u64) << 48
+            | (native.len() as u64) << 32
+            | ruby.len() as u64;
         *p.add(1) = w1;
         std::ptr::copy_nonoverlapping(ruby.as_ptr(), p.add(2), ruby.len());
         std::ptr::copy_nonoverlapping(native.as_ptr(), p.add(2 + ruby.len()), native.len());
+        if let Some(site) = site {
+            *p.add(2 + ruby.len() + native.len()) = site;
+        }
     }
 }
 
@@ -378,8 +413,14 @@ struct Reader {
 
 impl Reader {
     fn new(sp: usize) -> Self {
+        let lo = STACK_LO.try_with(|h| h.get()).unwrap_or(0);
         let hi = STACK_HI.try_with(|h| h.get()).unwrap_or(0);
-        let (lo, hi) = if hi > sp { (sp, hi) } else { (0, 0) };
+        // On a fiber's stack nothing is known to be mapped.
+        let (lo, hi) = if lo <= sp && sp < hi {
+            (sp, hi)
+        } else {
+            (0, 0)
+        };
         Reader {
             trusted: false,
             lo,
@@ -504,41 +545,87 @@ fn top_func(exec: usize) -> u32 {
     }
 }
 
+/// How far up the frame-pointer chain the JIT code under a sample is
+/// looked for.
+const MAX_SITE_DEPTH: usize = 64;
+
 ///
-/// Return addresses of the frame-pointer chain starting at *fp*.
+/// Return addresses of the frame-pointer chain starting at *fp*, into
+/// *out*; and, with *want_site*, the first one that lies in JIT memory
+/// (as the address of the call, 0: none), looked for a little further up
+/// than *out* reaches.
 ///
-fn walk_native(r: &mut Reader, mut fp: usize, out: &mut [u64]) -> usize {
+fn walk_native(r: &mut Reader, mut fp: usize, out: &mut [u64], want_site: bool) -> (usize, u64) {
     let mut n = 0;
-    while n < out.len() {
+    let mut site = 0;
+    let mut depth = 0;
+    while n < out.len() || (want_site && site == 0 && depth < MAX_SITE_DEPTH) {
         let (Some(next), Some(ret)) = (r.read(fp), r.read(fp + 8)) else {
             break;
         };
         if ret == 0 {
             break;
         }
-        out[n] = ret;
-        n += 1;
+        if n < out.len() {
+            out[n] = ret;
+            n += 1;
+        }
+        if want_site && site == 0 && in_jit_pages(ret as usize) {
+            site = ret - 1;
+        }
         let next = next as usize;
         if next <= fp {
             break;
         }
         fp = next;
+        depth += 1;
     }
-    n
+    (n, site)
 }
 
-fn take_sample(kind: u64, w1: u64, mut r: Reader, fp: usize, native_depth: usize) {
+///
+/// The JIT code the thread whose frame pointer is *fp* is running, or
+/// called the runtime from: *pc* itself if it is in JIT memory, else the
+/// innermost call from there on the native stack (0: none). The code a
+/// frameless-inlined callee was compiled to is told from its caller's by
+/// this address ([`Inlines`]).
+///
+fn site_of(r: &mut Reader, pc: usize, fp: usize) -> u64 {
+    if JIT_HI.load(Ordering::Relaxed) == 0 {
+        0
+    } else if in_jit_pages(pc) {
+        pc as u64
+    } else {
+        walk_native(r, fp, &mut [], true).1
+    }
+}
+
+///
+/// Record a sample: the Ruby frames read through *ruby*, *native_depth*
+/// native return addresses above *fp* read through *native*, and
+/// (`MONORUBY_PROF_INLINE`) *site*.
+///
+fn take_sample(
+    kind: u64,
+    w1: u64,
+    mut ruby_reader: Reader,
+    mut native_reader: Reader,
+    fp: usize,
+    native_depth: usize,
+    site: Option<u64>,
+) {
     let mut ruby = [0u64; MAX_RUBY];
     let mut native = [0u64; MAX_NATIVE];
     let exec = EXEC.try_with(|e| e.get()).unwrap_or(0);
     let phase = PHASE.try_with(|p| p.get()).unwrap_or(0);
-    let nr = walk_ruby(&mut r, exec, &mut ruby);
-    let nn = if fp != 0 {
-        walk_native(&mut r, fp, &mut native[..native_depth.min(MAX_NATIVE)])
+    let nr = walk_ruby(&mut ruby_reader, exec, &mut ruby);
+    let nn = if fp != 0 && native_depth != 0 {
+        let out = &mut native[..native_depth.min(MAX_NATIVE)];
+        walk_native(&mut native_reader, fp, out, false).0
     } else {
         0
     };
-    buf_push(kind, phase, w1, &ruby[..nr], &native[..nn]);
+    buf_push(kind, phase, w1, &ruby[..nr], &native[..nn], site);
 }
 
 #[inline(always)]
@@ -588,7 +675,18 @@ extern "C" fn on_sigprof(_sig: libc::c_int, _info: *mut libc::siginfo_t, ctx: *m
             (m.pc as usize, m.sp as usize, m.regs[29] as usize)
         };
         CPU_SAMPLES.fetch_add(1, Ordering::Relaxed);
-        take_sample(KIND_CPU, pc as u64, Reader::new(sp), fp, 8);
+        let site = INLINE_ON
+            .load(Ordering::Relaxed)
+            .then(|| site_of(&mut Reader::new(sp), pc, fp));
+        take_sample(
+            KIND_CPU,
+            pc as u64,
+            Reader::new(sp),
+            Reader::new(sp),
+            fp,
+            8,
+            site,
+        );
         *libc::__errno_location() = errno;
     }
 }
@@ -702,13 +800,13 @@ pub(crate) fn start(exec: *const Executor) {
 // Object allocation
 //
 
-/// (allocating method's FuncId, ClassId) -> count.
-/// (allocating method's FuncId, ClassId) -> count, merged from the
-/// per-thread tables when a thread ends and at [`finish`].
-static ALLOCS: Mutex<Option<fxhash::FxHashMap<(u32, u32), u64>>> = Mutex::new(None);
+/// (allocating method's FuncId, ClassId, site) -> count, merged from the
+/// per-thread tables when a thread ends and at [`finish`]. The site is
+/// [`site_of`] the allocation with `MONORUBY_PROF_INLINE`, else 0.
+static ALLOCS: Mutex<Option<fxhash::FxHashMap<(u32, u32, u64), u64>>> = Mutex::new(None);
 
 #[derive(Default)]
-struct AllocTable(std::cell::RefCell<fxhash::FxHashMap<(u32, u32), u64>>);
+struct AllocTable(std::cell::RefCell<fxhash::FxHashMap<(u32, u32, u64), u64>>);
 
 impl AllocTable {
     fn merge(&self) {
@@ -745,12 +843,24 @@ pub(crate) fn on_object_alloc(class: ClassId) {
     BUSY.set(true);
     let _phase = phase(Phase::Prof);
     let func = top_func(EXEC.get());
-    let _ =
-        ALLOC_TABLE.try_with(|t| *t.0.borrow_mut().entry((func, class.u32())).or_insert(0) += 1);
+    let site = INLINE_ON.load(Ordering::Relaxed).then(|| {
+        let fp = current_fp();
+        site_of(&mut Reader::new(fp), 0, fp)
+    });
+    let key = (func, class.u32(), site.unwrap_or(0));
+    let _ = ALLOC_TABLE.try_with(|t| *t.0.borrow_mut().entry(key).or_insert(0) += 1);
     let tick = ALLOC_TICK.get() + 1;
     ALLOC_TICK.set(tick);
     if tick % config().alloc_every == 0 {
-        take_sample(KIND_ALLOC, class.u32() as u64, Reader::trusted(), 0, 0);
+        take_sample(
+            KIND_ALLOC,
+            class.u32() as u64,
+            Reader::trusted(),
+            Reader::trusted(),
+            0,
+            0,
+            site,
+        );
     }
     BUSY.set(false);
 }
@@ -863,12 +973,21 @@ fn on_malloc(size: usize) {
         return;
     }
     let _phase = phase(Phase::Prof);
+    // The Ruby frames are consistent here; the native chain may pass
+    // through C code that keeps no frame pointer, so it is read as the
+    // sampler reads it.
+    let fp = current_fp();
+    let site = INLINE_ON
+        .load(Ordering::Relaxed)
+        .then(|| site_of(&mut Reader::new(fp), 0, fp));
     take_sample(
         KIND_MALLOC,
         size as u64,
         Reader::trusted(),
-        current_fp(),
+        Reader::new(fp),
+        fp,
         MAX_NATIVE,
+        site,
     );
     let _ = BUSY.try_with(|b| b.set(false));
 }
@@ -947,6 +1066,173 @@ pub(crate) fn on_jit_unit(
 }
 
 //
+// Frameless-inlined callees (`MONORUBY_PROF_INLINE`)
+//
+// A frameless callee has no control frame, so the frame walk cannot see
+// it. Its body is a contiguous piece of its caller's code instead, and the
+// JIT reports where: a sample whose site (the PC, or the innermost call
+// into the runtime from JIT code) lies in a body gets that callee, and the
+// frameless callees it is nested in, as frames above the Ruby frame they
+// ran in.
+//
+
+/// The JIT's code pages, `[lo, hi)` (hi 0: not known yet).
+static JIT_LO: AtomicUsize = AtomicUsize::new(usize::MAX);
+static JIT_HI: AtomicUsize = AtomicUsize::new(0);
+
+#[inline]
+fn in_jit_pages(addr: usize) -> bool {
+    JIT_LO.load(Ordering::Relaxed) <= addr && addr < JIT_HI.load(Ordering::Relaxed)
+}
+
+/// One frameless body in the generated code.
+struct InlineBody {
+    /// Its code on the main and the cold page, `[start, end)`.
+    ranges: [(usize, usize); 2],
+    callee: FuncId,
+    /// The function whose frame the body runs in.
+    host: FuncId,
+}
+
+static INLINE_BODIES: Mutex<Vec<InlineBody>> = Mutex::new(Vec::new());
+
+/// Whether the JIT should report its frameless bodies
+/// ([`on_inline_body`]).
+#[inline]
+pub(crate) fn inline_enabled() -> bool {
+    INLINE_ON.load(Ordering::Relaxed)
+}
+
+///
+/// The JIT emitted the body of the frameless *callee* inside code that
+/// runs in *host*'s frame. *before* and *after* are the code pages' `(base,
+/// bytes written)` around the emission (`Codegen::code_page_extents`).
+///
+pub(crate) fn on_inline_body(
+    callee: FuncId,
+    host: FuncId,
+    before: [(usize, usize); 2],
+    after: [(usize, usize); 2],
+) {
+    // The two pages are adjacent and of one size.
+    let (lo, page) = (before[0].0, before[1].0 - before[0].0);
+    JIT_LO.fetch_min(lo, Ordering::Relaxed);
+    JIT_HI.fetch_max(lo + 2 * page, Ordering::Relaxed);
+    let range = |i: usize| (before[i].0 + before[i].1, after[i].0 + after[i].1);
+    INLINE_BODIES.lock().unwrap().push(InlineBody {
+        ranges: [range(0), range(1)],
+        callee,
+        host,
+    });
+}
+
+/// The frameless bodies, indexed by address.
+struct Inlines {
+    bodies: Vec<InlineBody>,
+    /// `(start, end, body, enclosing interval)`, by start, an enclosing
+    /// interval before the ones inside it.
+    intervals: Vec<(usize, usize, usize, Option<usize>)>,
+}
+
+impl Inlines {
+    fn new(bodies: Vec<InlineBody>) -> Self {
+        let mut intervals: Vec<_> = bodies
+            .iter()
+            .enumerate()
+            .flat_map(|(i, b)| {
+                b.ranges
+                    .iter()
+                    .filter(|(s, e)| s < e)
+                    .map(move |(s, e)| (*s, *e, i, None))
+            })
+            .collect();
+        intervals.sort_by_key(|(s, e, i, _)| (*s, std::cmp::Reverse(*e), std::cmp::Reverse(*i)));
+        // Bodies nest or are disjoint, never overlap: a stack of the open
+        // ones gives each its parent.
+        let mut open: Vec<usize> = vec![];
+        for i in 0..intervals.len() {
+            while open
+                .last()
+                .is_some_and(|o| intervals[*o].1 <= intervals[i].0)
+            {
+                open.pop();
+            }
+            intervals[i].3 = open.last().copied();
+            open.push(i);
+        }
+        Inlines { bodies, intervals }
+    }
+
+    ///
+    /// The frameless callees whose code *site* is in, innermost first,
+    /// and the function whose frame they run in.
+    ///
+    fn chain(&self, site: usize) -> Option<(Vec<FuncId>, FuncId)> {
+        let i = self.intervals.partition_point(|(s, ..)| *s <= site);
+        let mut cur = i.checked_sub(1);
+        let mut chain = vec![];
+        let mut host = None;
+        while let Some(i) = cur {
+            let (_, end, body, parent) = self.intervals[i];
+            if site < end {
+                chain.push(self.bodies[body].callee);
+                host = Some(self.bodies[body].host);
+            }
+            cur = parent;
+        }
+        host.map(|host| (chain, host))
+    }
+
+    ///
+    /// The Ruby frames of *r*, newest first, with the frameless callees
+    /// its site is in put above the frame they ran in; and how many of
+    /// those there are.
+    ///
+    fn frames(&self, r: &Record, names: &Names) -> (Vec<u64>, usize) {
+        let mut frames: Vec<u64> = r.ruby.iter().copied().filter(|f| names.valid(*f)).collect();
+        if r.site != 0
+            && let Some((chain, host)) = self.chain(r.site as usize)
+            && frames.first() == Some(&(host.get() as u64))
+        {
+            let n = chain.len();
+            frames.splice(0..0, chain.into_iter().map(|f| f.get() as u64));
+            return (frames, n);
+        }
+        (frames, 0)
+    }
+
+    ///
+    /// The Ruby part of *r*'s folded stack, oldest frame first; a
+    /// frameless callee is marked `[inlined]`.
+    ///
+    fn folded(&self, r: &Record, names: &mut Names) -> String {
+        let (frames, inlined) = self.frames(r, names);
+        let mut s = String::new();
+        for (i, f) in frames.iter().enumerate().rev() {
+            if !s.is_empty() {
+                s.push(';');
+            }
+            s += &sanitize(&names.func(*f));
+            if i < inlined {
+                s += " [inlined]";
+            }
+        }
+        if s.is_empty() {
+            s += "<no ruby frame>";
+        }
+        s
+    }
+
+    /// The function an allocation by *func* at *site* is charged to.
+    fn allocator(&self, func: u32, site: u64) -> u32 {
+        match self.chain(site as usize) {
+            Some((chain, host)) if site != 0 && host.get() == func => chain[0].get(),
+            _ => func,
+        }
+    }
+}
+
+//
 // Report
 //
 
@@ -1016,6 +1302,8 @@ struct Record<'a> {
     w1: u64,
     ruby: &'a [u64],
     native: &'a [u64],
+    /// [`site_of`] the sample (0: none, or not recorded).
+    site: u64,
 }
 
 fn records() -> Vec<Record<'static>> {
@@ -1036,8 +1324,9 @@ fn records() -> Vec<Record<'static>> {
         let h = words[i];
         let nr = (h & 0xffff_ffff) as usize;
         let nn = ((h >> 32) & 0xffff) as usize;
-        let kind = h >> 56;
-        if kind == 0 || i + 2 + nr + nn > words.len() {
+        let kind = (h >> 56) & 0x7f;
+        let ns = (h >> 63) as usize;
+        if kind == 0 || i + 2 + nr + nn + ns > words.len() {
             break;
         }
         v.push(Record {
@@ -1046,8 +1335,9 @@ fn records() -> Vec<Record<'static>> {
             w1: words[i + 1],
             ruby: &words[i + 2..i + 2 + nr],
             native: &words[i + 2 + nr..i + 2 + nr + nn],
+            site: if ns == 1 { words[i + 2 + nr + nn] } else { 0 },
         });
-        i += 2 + nr + nn;
+        i += 2 + nr + nn + ns;
     }
     v
 }
@@ -1334,6 +1624,23 @@ fn sorted<K: Clone + Ord, S>(m: &HashMap<K, u64, S>) -> Vec<(K, u64)> {
     v
 }
 
+///
+/// The heading of a table of the report: its *title*, a *caption* saying
+/// what its rows are and how to read them (`# ` lines, so that they are
+/// easy to tell from data and to filter out), and its *columns*.
+///
+fn table(out: &mut String, title: &str, caption: &[&str], columns: &str) {
+    use std::fmt::Write;
+    let _ = writeln!(out);
+    let _ = writeln!(out, "{title}");
+    for line in caption {
+        let _ = writeln!(out, "  # {line}");
+    }
+    if !columns.is_empty() {
+        let _ = writeln!(out, "{columns}");
+    }
+}
+
 fn write_folded(path: &str, stacks: &HashMap<String, u64>) {
     let mut v: Vec<_> = stacks.iter().collect();
     v.sort();
@@ -1413,6 +1720,7 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
         (Regions { vm, units }, jit)
     };
     let in_jit_memory = |pc: usize| CODEGEN.with(|c| c.borrow().prof_in_jit_memory(pc));
+    let inlines = Inlines::new(std::mem::take(&mut *INLINE_BODIES.lock().unwrap()));
     let mut names = Names {
         store,
         cache: HashMap::default(),
@@ -1425,6 +1733,13 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
         "==================== monoruby prof ({:.3} s) ====================",
         elapsed.as_secs_f64()
     );
+    if cfg.inline {
+        let _ = writeln!(
+            out,
+            "MONORUBY_PROF_INLINE: frameless-inlined callees are frames of their own (bodies compiled: {})",
+            inlines.bodies.len()
+        );
+    }
     let dropped = DROPPED.load(Ordering::Relaxed);
     if dropped != 0 {
         let _ = writeln!(
@@ -1443,6 +1758,8 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
         let mut self_by: HashMap<u32, [u64; 10]> = HashMap::default();
         let mut total_by: HashMap<u32, u64> = HashMap::default();
         let mut unit_by: HashMap<usize, u64> = HashMap::default();
+        // (frameless callee, the function whose frame it ran in) -> self
+        let mut inlined_by: HashMap<(u32, u32), u64> = HashMap::default();
         let mut native_by: HashMap<String, u64> = HashMap::default();
         let mut folded: HashMap<String, u64> = HashMap::default();
         let mut seen = Vec::new();
@@ -1472,8 +1789,11 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
                 }
             };
             add(&mut tiers, tier, 1);
-            let frames: Vec<u64> = r.ruby.iter().copied().filter(|f| names.valid(*f)).collect();
+            let (frames, inlined) = inlines.frames(r, &names);
             let leaf = frames.first().copied().unwrap_or(0) as u32;
+            if inlined != 0 {
+                add(&mut inlined_by, (leaf, frames[inlined] as u32), 1);
+            }
             self_by.entry(leaf).or_insert([0; 10])
                 [TIERS.iter().position(|t| *t == tier).unwrap()] += 1;
             seen.clear();
@@ -1490,16 +1810,7 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
                 native_leaf = Some(n);
             }
             if cfg.out.is_some() {
-                let mut s = String::new();
-                for f in frames.iter().rev() {
-                    if !s.is_empty() {
-                        s.push(';');
-                    }
-                    s += &sanitize(&names.func(*f));
-                }
-                if s.is_empty() {
-                    s += "<no ruby frame>";
-                }
+                let mut s = inlines.folded(r, &mut names);
                 s += &format!(";[{}]", tier.short());
                 if let Some(n) = native_leaf {
                     s += ";";
@@ -1528,7 +1839,17 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
                 total as f64 / span.max(1e-9),
             );
         }
-        let _ = writeln!(out, "where the time went:");
+        table(
+            out,
+            "where the time went",
+            &[
+                "Every sample is in exactly one tier: the runtime phase its thread was in",
+                "(GC, JIT compile, parse / bytecodegen, malloc / free, the profiler), else",
+                "where its PC was (a JIT unit's code, the VM's code, other JIT memory, or",
+                "Rust / libc code).",
+            ],
+            &format!("  {:34} {:>9} {:>7}", "tier", "samples", "%"),
+        );
         for t in TIERS {
             let n = tiers.get(&t).copied().unwrap_or(0);
             if n != 0 {
@@ -1536,28 +1857,39 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
             }
         }
 
-        let _ = writeln!(out);
-        let _ = writeln!(
+        let inline_note = if cfg.inline {
+            "A frameless-inlined callee counts as a frame of its own (MONORUBY_PROF_INLINE)."
+        } else {
+            "A frameless-inlined callee has no frame: it counts as the method it was inlined into (MONORUBY_PROF_INLINE=1 tells them apart)."
+        };
+        table(
             out,
-            "methods by self time (top {}): self = the newest Ruby frame; jit/vm/stub/native/gc/... split self",
-            cfg.top
-        );
-        let _ = writeln!(
-            out,
-            "  {:>7} {:>6} {:>7} {:>6}  {:>5} {:>5} {:>5} {:>6} {:>5} {:>5} {:>5} {:>5} {:>5}  method",
-            "self",
-            "%",
-            "total",
-            "%",
-            "jit",
-            "vm",
-            "stub",
-            "native",
-            "gc",
-            "comp",
-            "parse",
-            "mallc",
-            "prof"
+            &format!("methods by self time (top {})", cfg.top),
+            &[
+                "self: samples whose newest Ruby frame is the method: its own code and the",
+                "  builtins, runtime and GC working for it. A native method (Array#sort) is",
+                "  a frame of its own.",
+                "total: samples with the method anywhere on the Ruby stack.",
+                "jit .. prof: self by tier (JIT code, VM, JIT stubs, builtins / runtime, GC,",
+                "  JIT compile, parse, malloc / free, the profiler).",
+                inline_note,
+            ],
+            &format!(
+                "  {:>7} {:>6} {:>7} {:>6}  {:>5} {:>5} {:>5} {:>6} {:>5} {:>5} {:>5} {:>5} {:>5}  method",
+                "self",
+                "%",
+                "total",
+                "%",
+                "jit",
+                "vm",
+                "stub",
+                "native",
+                "gc",
+                "comp",
+                "parse",
+                "mallc",
+                "prof"
+            ),
         );
         let mut rows: Vec<_> = self_by
             .iter()
@@ -1591,8 +1923,15 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
             );
         }
 
-        let _ = writeln!(out);
-        let _ = writeln!(out, "methods by total time (top {}):", cfg.top);
+        table(
+            out,
+            &format!("methods by total time (top {})", cfg.top),
+            &[
+                "Samples with the method anywhere on the Ruby stack: the method and",
+                "everything it called. A recursive method is counted once per sample.",
+            ],
+            &format!("  {:>7} {:>6}  method", "total", "%"),
+        );
         for (f, t) in sorted(&total_by).into_iter().take(cfg.top) {
             let _ = writeln!(
                 out,
@@ -1604,8 +1943,20 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
         }
 
         if !unit_by.is_empty() {
-            let _ = writeln!(out);
-            let _ = writeln!(out, "JIT units by samples in their code (top {}):", cfg.top);
+            table(
+                out,
+                &format!("JIT units by samples in their code (top {})", cfg.top),
+                &[
+                    "Samples whose PC was in the machine code of one compilation: a whole",
+                    "method or one loop, compiled for one class of self. Callees inlined into",
+                    "the unit are part of it; the runtime functions it calls are not.",
+                    "code: the unit's machine code size.",
+                ],
+                &format!(
+                    "  {:>7} {:>6}  {:>8}  {:6} method <class of self>",
+                    "samples", "%", "code", "kind"
+                ),
+            );
             for (u, n) in sorted(&unit_by).into_iter().take(cfg.top) {
                 let unit = &jit.units[u];
                 let _ = writeln!(
@@ -1621,12 +1972,47 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
             }
         }
 
-        if !native_by.is_empty() {
-            let _ = writeln!(out);
-            let _ = writeln!(
+        if cfg.inline {
+            table(
                 out,
-                "native functions by self samples (top {}), [tier] symbol:",
-                cfg.top
+                &format!(
+                    "frameless-inlined callees by self samples (top {})",
+                    cfg.top
+                ),
+                &[
+                    "The part of \"methods by self time\" spent in the code of a callee the JIT",
+                    "inlined without a frame, by callee and by the method whose frame it ran",
+                    "in (the caller, or the caller's caller for a nested inlining).",
+                ],
+                &format!(
+                    "  {:>7} {:>6}  callee <- method whose frame it ran in",
+                    "self", "%"
+                ),
+            );
+            if inlined_by.is_empty() {
+                let _ = writeln!(out, "  (no sample in a frameless body)");
+            }
+            for ((callee, host), n) in sorted(&inlined_by).into_iter().take(cfg.top) {
+                let _ = writeln!(
+                    out,
+                    "  {:>7} {:>5.1}%  {} <- {}",
+                    n,
+                    pct(n, total),
+                    names.func(callee as u64),
+                    names.func(host as u64)
+                );
+            }
+        }
+
+        if !native_by.is_empty() {
+            table(
+                out,
+                &format!("native functions by self samples (top {})", cfg.top),
+                &[
+                    "Samples outside generated code, by the Rust / C function the PC was in",
+                    "(not its callers), with the tier the sample was counted in.",
+                ],
+                &format!("  {:>7} {:>6}  [tier] function", "self", "%"),
             );
             for (n, c) in sorted(&native_by).into_iter().take(cfg.top) {
                 let _ = writeln!(out, "  {:>7} {:>5.1}%  {}", c, pct(c, total), n);
@@ -1653,7 +2039,18 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
         );
         let mut by_time: Vec<&Unit> = jit.units.iter().collect();
         by_time.sort_by(|a, b| b.ns.cmp(&a.ns));
-        let _ = writeln!(out, "compiles by time (top {}):", cfg.top);
+        table(
+            out,
+            &format!("compiles by time (top {})", cfg.top),
+            &[
+                "The slowest compilations. One row per compilation: a method compiled",
+                "twice is two rows.",
+            ],
+            &format!(
+                "  {:>12} {:>8}  {:6} method <class of self>",
+                "time", "code", "kind"
+            ),
+        );
         for u in by_time.into_iter().take(cfg.top) {
             let _ = writeln!(
                 out,
@@ -1677,10 +2074,17 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
         let mut again: Vec<_> = again.into_iter().filter(|(_, (n, _))| *n > 1).collect();
         if !again.is_empty() {
             again.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-            let _ = writeln!(
+            table(
                 out,
-                "compiled more than once (top {}), times / total ms:",
-                cfg.top
+                &format!("compiled more than once (top {})", cfg.top),
+                &[
+                    "Recompiles: the same method or loop compiled again for the same class of",
+                    "self, with the time all its compilations took together.",
+                ],
+                &format!(
+                    "  {:>5}   {:>12}  {:6} method <class of self>",
+                    "times", "total time", "kind"
+                ),
             );
             for ((f, c, l), (n, ns)) in again.into_iter().take(cfg.top) {
                 let _ = writeln!(
@@ -1703,7 +2107,11 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
     //
     if cfg.alloc {
         let _ = ALLOC_TABLE.try_with(|t| t.merge());
-        let allocs = ALLOCS.lock().unwrap().take().unwrap_or_default();
+        // A frameless callee's allocations are its own.
+        let mut allocs: HashMap<(u32, u32), u64> = HashMap::default();
+        for ((f, c, site), n) in ALLOCS.lock().unwrap().take().unwrap_or_default() {
+            add(&mut allocs, (inlines.allocator(f, site), c), n);
+        }
         let total: u64 = allocs.values().sum();
         let mut by_class: HashMap<u32, u64> = HashMap::default();
         let mut by_func: HashMap<u32, u64> = HashMap::default();
@@ -1713,14 +2121,40 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
         }
         let _ = writeln!(out);
         let _ = writeln!(out, "---- objects: {total} allocated ----");
-        let _ = writeln!(out, "by class (top {}):", cfg.top);
+        let _ = writeln!(
+            out,
+            "  # Every object allocation, counted exactly. The JIT's inline allocation is"
+        );
+        let _ = writeln!(
+            out,
+            "  # off while they are counted, so the times of this run are not representative."
+        );
+        table(
+            out,
+            &format!("objects by class (top {})", cfg.top),
+            &["Objects allocated, by their class at allocation."],
+            &format!("  {:>10} {:>6}  class", "objects", "%"),
+        );
         for (c, n) in sorted(&by_class).into_iter().take(cfg.top) {
             let name = ClassId::from(c)
                 .map(|c| store.debug_class_name(c))
                 .unwrap_or_else(|| "<none>".to_string());
             let _ = writeln!(out, "  {:>10} {:>5.1}%  {}", n, pct(n, total), name);
         }
-        let _ = writeln!(out, "by allocating method (top {}):", cfg.top);
+        table(
+            out,
+            &format!("objects by allocating method (top {})", cfg.top),
+            &[
+                "Objects allocated, by the newest Ruby frame at the allocation: the method",
+                "that asked for the object, or the native method that made it.",
+                if cfg.inline {
+                    "A frameless-inlined callee counts as a frame of its own (MONORUBY_PROF_INLINE)."
+                } else {
+                    "A frameless-inlined callee counts as the method it was inlined into."
+                },
+            ],
+            &format!("  {:>10} {:>6}  method", "objects", "%"),
+        );
         for (f, n) in sorted(&by_func).into_iter().take(cfg.top) {
             let name = if names.valid(f as u64) {
                 names.func(f as u64)
@@ -1729,7 +2163,12 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
             };
             let _ = writeln!(out, "  {:>10} {:>5.1}%  {}", n, pct(n, total), name);
         }
-        let _ = writeln!(out, "by method and class (top {}):", cfg.top);
+        table(
+            out,
+            &format!("objects by allocating method and class (top {})", cfg.top),
+            &["The two tables above combined: which method allocates which class."],
+            &format!("  {:>10} {:>6}  {:30} method", "objects", "%", "class"),
+        );
         for ((f, c), n) in sorted(&allocs).into_iter().take(cfg.top) {
             let name = if names.valid(f as u64) {
                 names.func(f as u64)
@@ -1751,17 +2190,7 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
         if let Some(prefix) = &cfg.out {
             let mut folded: HashMap<String, u64> = HashMap::default();
             for r in records.iter().filter(|r| r.kind == KIND_ALLOC) {
-                let mut s = String::new();
-                let frames: Vec<u64> = r.ruby.iter().copied().filter(|f| names.valid(*f)).collect();
-                for f in frames.iter().rev() {
-                    if !s.is_empty() {
-                        s.push(';');
-                    }
-                    s += &sanitize(&names.func(*f));
-                }
-                if s.is_empty() {
-                    s += "<no ruby frame>";
-                }
+                let mut s = inlines.folded(r, &mut names);
                 let cname = ClassId::from(r.w1 as u32)
                     .map(|c| store.debug_class_name(c))
                     .unwrap_or_else(|| "<none>".to_string());
@@ -1781,13 +2210,25 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
                 gc[0].count + gc[1].count,
                 (gc[0].ns + gc[1].ns) as f64 / 1e6
             );
+            table(
+                out,
+                "collections by kind",
+                &[
+                    "Every collection, timed. time = mark + sweep; us/GC = time per collection;",
+                    "marked/GC = objects marked (found live) per collection.",
+                ],
+                &format!(
+                    "  {:5} {:>7} {:>12} {:>12} {:>12} {:>10} {:>10}",
+                    "kind", "count", "time ms", "mark ms", "sweep ms", "us/GC", "marked/GC"
+                ),
+            );
             for (label, s) in [("minor", gc[0]), ("major", gc[1])] {
                 if s.count == 0 {
                     continue;
                 }
                 let _ = writeln!(
                     out,
-                    "  {label}: {:>6} x  {:>10.3} ms (mark {:.3} ms, sweep {:.3} ms)  {:.1} us/GC  {:.0} marked/GC",
+                    "  {label:5} {:>7} {:>12.3} {:>12.3} {:>12.3} {:>10.1} {:>10.0}",
                     s.count,
                     s.ns as f64 / 1e6,
                     s.mark_ns as f64 / 1e6,
@@ -1798,9 +2239,15 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
             }
             alloc::ALLOC.with(|a| {
                 let a = a.borrow();
+                table(
+                    out,
+                    "heap at exit",
+                    &["The object heap when the report was written."],
+                    "",
+                );
                 let _ = writeln!(
                     out,
-                    "  heap: {} pages, {} live objects after the last GC, {} objects allocated in all",
+                    "  {} pages, {} live objects after the last GC, {} objects allocated in all",
                     a.pages_len(),
                     a.live_count(),
                     a.total_allocated()
@@ -1830,12 +2277,7 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
         let mut by_site: HashMap<String, (u64, u64)> = HashMap::default();
         let mut folded: HashMap<String, u64> = HashMap::default();
         for r in &samples {
-            let leaf = r
-                .ruby
-                .iter()
-                .copied()
-                .find(|f| names.valid(*f))
-                .unwrap_or(0) as u32;
+            let leaf = inlines.frames(r, &names).0.first().copied().unwrap_or(0) as u32;
             let e = by_func.entry(leaf).or_default();
             e.0 += cfg.malloc_every;
             e.1 += r.w1 * cfg.malloc_every;
@@ -1849,25 +2291,33 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
             e.0 += cfg.malloc_every;
             e.1 += r.w1 * cfg.malloc_every;
             if cfg.out.is_some() {
-                let mut s = String::new();
-                let frames: Vec<u64> = r.ruby.iter().copied().filter(|f| names.valid(*f)).collect();
-                for f in frames.iter().rev() {
-                    if !s.is_empty() {
-                        s.push(';');
-                    }
-                    s += &sanitize(&names.func(*f));
-                }
-                if s.is_empty() {
-                    s += "<no ruby frame>";
-                }
+                let mut s = inlines.folded(r, &mut names);
                 s += ";";
                 s += &sanitize(&site);
                 add(&mut folded, s, cfg.malloc_every);
             }
         }
         let est: u64 = samples.len() as u64 * cfg.malloc_every;
-        let print = |out: &mut String, title: &str, rows: Vec<(String, (u64, u64))>| {
-            let _ = writeln!(out, "{title} (top {}), estimated calls / bytes:", cfg.top);
+        let _ = writeln!(
+            out,
+            "  # Calls into the global allocator, counted exactly. The tables below are"
+        );
+        let _ = writeln!(
+            out,
+            "  # estimates from the stacks recorded for one call in {}.",
+            cfg.malloc_every
+        );
+        let print = |out: &mut String,
+                     title: &str,
+                     caption: &[&str],
+                     key: &str,
+                     rows: Vec<(String, (u64, u64))>| {
+            table(
+                out,
+                &format!("{title} (top {})", cfg.top),
+                caption,
+                &format!("  {:>10} {:>6} {:>12}  {key}", "calls", "%", "bytes"),
+            );
             for (k, (c, b)) in rows.into_iter().take(cfg.top) {
                 let _ = writeln!(out, "  {:>10} {:>5.1}% {:>12}  {}", c, pct(c, est), b, k);
             }
@@ -1886,10 +2336,28 @@ fn report(globals: &Globals, cfg: &Config, clock: Option<(f64, f64)>, out: &mut 
             })
             .collect();
         rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
-        print(out, "by Ruby method", rows);
+        print(
+            out,
+            "malloc by Ruby method",
+            &[
+                "Allocations by the newest Ruby frame when malloc was called.",
+                "<no ruby frame>: the boot, before any Ruby code runs.",
+            ],
+            "method",
+            rows,
+        );
         let mut rows: Vec<_> = by_site.into_iter().collect();
         rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
-        print(out, "by Rust call site", rows);
+        print(
+            out,
+            "malloc by Rust call site",
+            &[
+                "Allocations by the innermost native caller that is not allocator plumbing",
+                "(alloc::, core::, std::, hashbrown::, smallvec::, ... are skipped).",
+            ],
+            "function",
+            rows,
+        );
         if let Some(prefix) = &cfg.out {
             write_folded(&format!("{prefix}.malloc.folded"), &folded);
         }
@@ -1925,22 +2393,68 @@ mod tests {
             48,
             &[3, 2, 1],
             &[0x1000, 0x2000],
+            None,
         );
-        buf_push(KIND_CPU, Phase::Run as u8, 0xdead, &[], &[]);
+        buf_push(KIND_CPU, Phase::Run as u8, 0xdead, &[], &[], Some(0xbeef));
+        buf_push(KIND_ALLOC, Phase::Prof as u8, 7, &[9], &[], Some(0));
         let r = records();
-        assert_eq!(before + 2, r.len());
+        assert_eq!(before + 3, r.len());
         let a = &r[before];
         assert_eq!(
-            (KIND_MALLOC, Phase::Malloc as u8, 48),
-            (a.kind, a.phase, a.w1)
+            (KIND_MALLOC, Phase::Malloc as u8, 48, 0),
+            (a.kind, a.phase, a.w1, a.site)
         );
         assert_eq!(&[3, 2, 1], a.ruby);
         assert_eq!(&[0x1000, 0x2000], a.native);
         let b = &r[before + 1];
         assert_eq!(
-            (KIND_CPU, 0xdead, 0, 0),
-            (b.kind, b.w1, b.ruby.len(), b.native.len())
+            (KIND_CPU, 0xdead, 0, 0, 0xbeef),
+            (b.kind, b.w1, b.ruby.len(), b.native.len(), b.site)
         );
+        let c = &r[before + 2];
+        assert_eq!((KIND_ALLOC, 7, &[9][..], 0), (c.kind, c.w1, c.ruby, c.site));
+    }
+
+    #[test]
+    fn inlined_bodies_are_found_by_address() {
+        let f = FuncId::new;
+        let body = |main: (usize, usize), cold: (usize, usize), callee, host| InlineBody {
+            ranges: [main, cold],
+            callee: f(callee),
+            host: f(host),
+        };
+        // As the JIT reports them: an inner body before the one around it.
+        //   host 1: [100, 200) = callee 2, with [120, 150) = callee 3 and
+        //   [150, 160) = callee 4 inside; [300, 320) = callee 5.
+        //   host 6: [400, 410) = callee 2, cold code at [900, 910).
+        let inl = Inlines::new(vec![
+            body((120, 150), (0, 0), 3, 1),
+            body((150, 160), (0, 0), 4, 1),
+            body((100, 200), (0, 0), 2, 1),
+            body((300, 320), (300, 300), 5, 1),
+            body((400, 410), (900, 910), 2, 6),
+        ]);
+        let chain = |a: usize| inl.chain(a).map(|(c, h)| (c, h));
+        assert_eq!(None, chain(0));
+        assert_eq!(None, chain(99));
+        assert_eq!(Some((vec![f(2)], f(1))), chain(100));
+        assert_eq!(Some((vec![f(3), f(2)], f(1))), chain(120));
+        assert_eq!(Some((vec![f(3), f(2)], f(1))), chain(149));
+        assert_eq!(Some((vec![f(4), f(2)], f(1))), chain(150));
+        assert_eq!(Some((vec![f(2)], f(1))), chain(160));
+        assert_eq!(Some((vec![f(2)], f(1))), chain(199));
+        assert_eq!(None, chain(200));
+        assert_eq!(Some((vec![f(5)], f(1))), chain(319));
+        assert_eq!(None, chain(320));
+        assert_eq!(Some((vec![f(2)], f(6))), chain(405));
+        assert_eq!(Some((vec![f(2)], f(6))), chain(900));
+        assert_eq!(None, chain(910));
+        // An allocation is the callee's only when it was made in the frame
+        // the body runs in.
+        assert_eq!(3, inl.allocator(1, 130));
+        assert_eq!(7, inl.allocator(7, 130));
+        assert_eq!(1, inl.allocator(1, 0));
+        assert_eq!(1, inl.allocator(1, 250));
     }
 
     #[test]

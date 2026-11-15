@@ -1034,6 +1034,14 @@ impl Codegen {
         class_version: DestLabel,
         root: (ISeqId, ClassId, Option<BytecodePtr>),
     ) {
+        // `prof`: a frame of its own hosts the frameless bodies emitted
+        // inside it.
+        #[cfg(feature = "prof")]
+        let prof_host = !frame.frameless;
+        #[cfg(feature = "prof")]
+        if prof_host {
+            self.prof_hosts.push(store[frame.iseq_id].func_id());
+        }
         // `jit-log`: time this method's back-end run, the callees emitted
         // from inside it excluded (`codegen/jit_timing.rs`).
         #[cfg(feature = "jit-log")]
@@ -1056,7 +1064,11 @@ impl Codegen {
             )
         }
         #[cfg(not(feature = "jit-log"))]
-        self.gen_machine_code_inner(frame, store, entry_label, level, class_version, root)
+        self.gen_machine_code_inner(frame, store, entry_label, level, class_version, root);
+        #[cfg(feature = "prof")]
+        if prof_host {
+            self.prof_hosts.pop();
+        }
     }
 
     fn gen_machine_code_inner(
@@ -1408,7 +1420,18 @@ impl Codegen {
             block,
         });
         let entry = self.jit.label();
+        // `prof`: the body's code, for charging samples in it to the
+        // callee (`MONORUBY_PROF_INLINE`).
+        #[cfg(feature = "prof")]
+        let prof_body = crate::prof::inline_enabled()
+            .then(|| (store[info.iseq_id].func_id(), self.code_page_extents()));
         self.gen_machine_code(info, store, entry, level, class_version, root);
+        #[cfg(feature = "prof")]
+        if let Some((callee, before)) = prof_body
+            && let Some(host) = self.prof_hosts.last().copied()
+        {
+            crate::prof::on_inline_body(callee, host, before, self.code_page_extents());
+        }
         self.inline_ctx.pop();
         self.jit.bind_label(done);
         self.inline_frame_leave(delta);
