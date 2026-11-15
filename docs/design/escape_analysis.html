@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d457944b.js";
+            window.path_to_searchindex_js = "../searchindex-91641990.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-9192be69.js"></script>
@@ -411,6 +411,31 @@ before. The real back edge materializes what the head does not carry
 local, never brings one the head lacks. So <code>r = (lo..hi); while ...; r.include?(i)</code> folds the test every iteration and allocates nothing;
 <code>def f(*a); while ...; a.first; end</code> keeps its rest Array elided through
 the loop.</p>
+<p>A recorded back edge describes the head the walk that recorded it
+entered, and a nest is walked as a whole (<code>analyse_backedge_fixpoint</code>),
+so an inner head’s record can be older than the state reaching it. In</p>
+<pre><code class="language-ruby">r = []
+while i &lt; n
+  j = 0
+  while j &lt; 3; j += 1; end   # carries r, never touches it
+  r &lt;&lt; i                     # builds r
+  i += 1
+end
+</code></pre>
+<p>the outer fixpoint’s first walk reaches the inner head with <code>r</code> elided
+and records the inner back edge that way; the outer back edge arrives
+with <code>r</code> built, so the second walk reaches the inner head with <code>r</code> built
+and a record that still has it elided. The join has no arm for that (<code>V</code>
+against a slot with a value discards the value), so the record is
+settled first (<code>settle_recorded_backedge</code>): an object the record carries
+and the state reaching the head does not is materialized <em>in the
+record</em>, which is what the loop’s real back edge brings, since the loop
+never defines the local. The walk’s own back edge then differs from the
+record (<code>equiv</code> compares the tables beside the modes) and replaces it.
+Without this the local had no value at the inner head: a debug build
+asserted, and a release build recompiled the method on every call or
+aborted on the first read of the local after the inner loop (issue
+#1914).</p>
 <p>The consequences are what keep the mechanism small:</p>
 <ul>
 <li><strong>A merge only ever sees equal elided objects.</strong> A temporary’s object
