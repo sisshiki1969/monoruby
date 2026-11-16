@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-94f70613.js";
+            window.path_to_searchindex_js = "../searchindex-fb52a4ad.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-9192be69.js"></script>
@@ -277,6 +277,63 @@ when a <em>version</em> guard (rather than a class guard) fails are described in
                                                          +---------------------------+                      +---------------------------+
 
 </code></pre>
+<h2 id="a-long-chain-the-class--entry-table"><a class="header" href="#a-long-chain-the-class--entry-table">a long chain: the class → entry table</a></h2>
+<p>A call that enters through <code>entry</code> — from the interpreter’s <code>send</code>, an
+invoker, a generic send, or a JIT call site whose callee had no body for
+the receiver’s class when the caller was compiled — walks the guards in
+the order the classes were compiled. For a method inherited by many
+classes (<code>Class#new</code> in a Rails application has a few hundred) that is a
+walk of half the chain on average, each guard in a different page of
+code, and it showed as ~15% of ruby-bench’s shipit
+(<a href="https://github.com/sisshiki1969/monoruby/issues/1944">#1944</a>).</p>
+<p>Once the chain has <code>CLASS_DISPATCH_THRESHOLD</code> (4) guards, <code>entry</code> is
+re-pointed at one stub that looks the class of <code>self</code> up in a hash table
+(<code>globals/store/class_dispatch.rs</code>; open addressing on the class id,
+linear probing, at most half full):</p>
+<pre><code class="language-text">
+      wrapper                       class dispatch stub                       table (leaked, grows ×2)
+   +--------------------+        +-------------------------------------+     +--------+----------------+
+   |                    |        |                                     |     | class  | target         |
+---+-&gt; entry:           |   +----+-&gt; stub:                             |     +--------+----------------+
+   |     jmp [stub]; ---+--/     |     rdi &lt;- self                     |     | class3 | patch_point3   |
+   |   next:            |        |     immediate?  --------------------+--+  | 0      |                |
+   |     ...            |        |     probe table for self's class    |  |  | class1 | patch_point1   |
+   +--------------------+        |       found:     jmp [slot.target] -+--+--+-&gt; ...                   |
+                                 |       Integer / Float?  ------------+--+  +--------+----------------+
+                                 |       not found: jmp [header.miss] -+--+--------&gt; the chain's tail stub
+                                 |                                     |  |          (counts, compiles the
+                                 +-------------------------------------+  |           class when hot)
+                                                                          |
+                                                                          +--------&gt; guard1 (header.chain):
+                                                                                     the whole chain, as before
+</code></pre>
+<p>The table is an accelerator in front of the chain, not a replacement for
+it:</p>
+<ul>
+<li>The chain stays complete and keeps growing at its tail. Each
+compilation enters the new class in the table and moves <code>header.miss</code>
+to the new tail.</li>
+<li>A <code>self</code> that cannot be found by its class word takes the chain from
+its first guard: an immediate (<code>nil</code>, <code>true</code>, <code>false</code>, a Symbol, a
+fixnum, a flonum), and a heap <code>Integer</code> or <code>Float</code>, whose guards do
+more than compare the class word (a Bignum goes to the interpreter).
+Those six classes are never entered in the table
+(<code>ClassDispatch::holds</code>).</li>
+<li>A class that is in neither goes straight to the chain’s tail stub,
+which is where the walk would have ended: it counts the call, and
+compiles the class once the warm-up sampler has seen it twice.</li>
+</ul>
+<p>On x86-64 a table slot holds the class’s <code>patch_point</code>, the jump the
+recompiler re-points, so a recompilation needs no table update. On
+aarch64 the wrapper dispatches through a data word rather than a patched
+jump: the word holds the stub’s address, a slot holds the body’s entry
+itself, and <code>recompile_method_by_id</code> updates the slot (and
+<code>header.chain</code> when the recompiled class is the chain’s first).</p>
+<p>An eviction (<code>ISeqInfo::drop_jit_code</code>: a basic-op redefinition, or a
+body the front-end gave up on) forgets the table together with the
+chain; the wrapper’s <code>entry</code> is put back as for a chain, and the next
+chain builds a new table. The header and the tables are leaked, like the
+code that reads them.</p>
 
                     </main>
 
