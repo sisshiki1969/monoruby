@@ -1307,7 +1307,11 @@ impl<'a> JitContext<'a> {
         // are unaffected.
         let recv_class_proven = !same_target_set_guarded || state.class(recv) == Some(recv_class.id());
         // in this point, the receiver's class is guaranteed to be identical to cached_class.
-        let (fid, outer_lfp) = match self.store[func_id].kind {
+        //
+        // `fid` is the function the call enters; `bind_fid` the one whose
+        // `FuncInfo` binds the arguments. They differ only for a
+        // `define_method` proc-method (see the `FuncKind::Proc` arm).
+        let (fid, outer_lfp, bind_fid) = match self.store[func_id].kind {
             FuncKind::AttrReader { ivar_name } if recv_class_proven => {
                 return Ok(self.attr_reader(state, ir, callid, recv_class, ivar_name));
             }
@@ -1318,14 +1322,14 @@ impl<'a> JitContext<'a> {
             // accessor's wrapper, which looks the name up on the receiver's
             // own class. `pic_groups` keeps accessors out of folded arms so
             // this stays a cold corner rather than the common case.
-            FuncKind::AttrReader { .. } | FuncKind::AttrWriter { .. } => (func_id, None),
+            FuncKind::AttrReader { .. } | FuncKind::AttrWriter { .. } => (func_id, None, func_id),
             FuncKind::StructReader { slot_index, inline } => {
                 return Ok(self.struct_slot_reader(state, ir, callid, slot_index, inline));
             }
             FuncKind::StructWriter { slot_index, inline } => {
                 return Ok(self.struct_slot_writer(state, ir, callid, slot_index, inline));
             }
-            FuncKind::Builtin { .. } => (func_id, None),
+            FuncKind::Builtin { .. } => (func_id, None, func_id),
             FuncKind::Proc(proc) => {
                 // A `define_method` proc-method. Its body is a real iseq,
                 // so give a monomorphic site the same treatment as a plain
@@ -1335,20 +1339,34 @@ impl<'a> JitContext<'a> {
                 // generic path below and the wrapper) and the proc-method
                 // meta bit (pre-set on the block's static Meta at
                 // `define_method` time — see `Meta::set_proc_method`).
-                // Everything params-driven (`is_simple_call`,
-                // `from_caller`, `set_arguments`) runs on the block fid,
-                // whose ParamsInfo is the entry's verbatim copy; the
-                // block-style `single_arg_expand` only makes the simple
-                // gate *more* conservative, never lenient, so arity
-                // semantics stay with the generic path. Sites that pass a
-                // block stay generic: a block flowing into a bmethod body
-                // meets `yield` resolution the specialized compile does
-                // not model for proc-method frames.
+                //
+                // The arguments are another matter. The block fid and the
+                // entry (`func_id`) carry the same ParamsInfo, but not the
+                // same binding rules: the body is still a block — it binds
+                // loosely (surplus arguments dropped, missing ones `nil`)
+                // and spreads a lone Array over several parameters — while
+                // the method `define_method` made of it has a method's
+                // strict arity and no auto-splat; that is the entry's
+                // `Meta` (`set_method_style`). So the call may only be
+                // specialized, or folded, when it is a simple call under
+                // *both* readings: the entry's rules it out when the
+                // arity is wrong (`o.q(1, 2)` for `{ |a| }` must raise),
+                // the body's when the specialized binding — which runs on
+                // the block fid (`from_caller`, `set_arguments`) — would
+                // spread an Array (`o.n([1, 2])` for `{ |a, b = :b| }`
+                // binds `a = [1, 2]`). Where both hold the two bindings
+                // are the same stores. Everything else is called with the
+                // entry as the binder (`bind_fid`), as the VM calls it
+                // (#1961). Sites that pass a block stay generic: a block
+                // flowing into a bmethod body meets `yield` resolution the
+                // specialized compile does not model for proc-method
+                // frames.
                 let block_iseq = self.store[proc.func_id()].is_iseq();
                 if let Some(iseq) = block_iseq
                     && !self.in_dispatch_arm()
                     && block_fid.is_none()
                     && callsite.block_arg.is_none()
+                    && self.store.is_simple_call(func_id, callid)
                     && self.store.is_simple_call(proc.func_id(), callid)
                 {
                     if self.store[proc.func_id()].no_keyword() && !callsite.kw_may_exists() {
@@ -1372,10 +1390,9 @@ impl<'a> JitContext<'a> {
                             }
                             // The argument is in the caller's own slot, so
                             // the call is the copy. Only when the site
-                            // passes it: a block-style body binds fewer
-                            // positionals leniently (`is_simple_call` lets
-                            // that through), and that case must keep
-                            // reading `nil` from the real frame.
+                            // passes it: a parameter the site leaves out
+                            // is in no slot of the caller's, and that case
+                            // must keep reading it from the real frame.
                             ISeqHint::ArgReturn(n) if callsite.pos_num > n => {
                                 if let Some(dst) = dst {
                                     if state.virtual_at(callsite.args + n).is_some() {
@@ -1402,7 +1419,7 @@ impl<'a> JitContext<'a> {
                         );
                     }
                 }
-                (proc.func_id(), proc.outer_lfp())
+                (proc.func_id(), proc.outer_lfp(), func_id)
             }
             FuncKind::ISeq(iseq) => {
                 // Check ISeq hint for trivial methods. Only fold when the
@@ -1651,7 +1668,7 @@ impl<'a> JitContext<'a> {
                         false,
                     );
                 }
-                (func_id, None)
+                (func_id, None, func_id)
             }
         };
 
@@ -1673,6 +1690,7 @@ impl<'a> JitContext<'a> {
             &self.store,
             callid,
             fid,
+            bind_fid,
             proven_recv_class.map(CachedClass::id),
             outer_lfp,
             leaf,
@@ -1883,7 +1901,18 @@ impl<'a> JitContext<'a> {
             call_site_pc: state.pc().as_ptr() as u64,
             window: None,
         });
-        state.set_arguments(&self.store, ir, callid, callee_fid, false, false, false, &arg_hints, &[]);
+        state.set_arguments(
+            &self.store,
+            ir,
+            callid,
+            callee_fid,
+            true,
+            false,
+            false,
+            false,
+            &arg_hints,
+            &[],
+        );
         state.discard(dst);
         state.clear_above_next_sp();
         let error = ir.new_error(state);
@@ -3449,6 +3478,11 @@ impl AbstractState {
         store: &Store,
         callid: CallSiteId,
         callee_fid: FuncId,
+        // The function whose `FuncInfo` binds the arguments: `callee_fid`
+        // itself, except for a `define_method` proc-method, which is
+        // entered at its body (a block) but binds as the method it was
+        // made into — strict arity, no single-Array spread.
+        bind_fid: FuncId,
         // `Some` only when the site proved this exact receiver class — the
         // licence for the class-keyed direct-entry dispatch. See
         // `AsmInst::Call::recv_class`.
@@ -3499,7 +3533,18 @@ impl AbstractState {
             call_site_pc: self.pc().as_ptr() as u64,
             window,
         });
-        self.set_arguments(store, ir, callid, callee_fid, false, false, false, &arg_hints, &[]);
+        self.set_arguments(
+            store,
+            ir,
+            callid,
+            bind_fid,
+            false,
+            false,
+            false,
+            false,
+            &arg_hints,
+            &[],
+        );
         self.discard(dst);
         self.clear_above_next_sp();
         let error = if leaf {
@@ -3664,6 +3709,7 @@ impl AbstractState {
             ir,
             callid,
             callee_fid,
+            false,
             rest_elided,
             defer_kw,
             kwrest_elided,
@@ -3916,6 +3962,9 @@ impl AbstractState {
         ir: &mut AsmIr,
         callid: CallSiteId,
         callee_fid: FuncId,
+        // A `yield` (the callee is a block and its frame's `self` comes
+        // from `SetupYieldFrame`), not a method call.
+        yield_site: bool,
         rest_elided: bool,
         defer_kw: bool,
         kwrest_elided: bool,
@@ -4137,7 +4186,8 @@ impl AbstractState {
             }
 
             ir.reg_add(GP::Rsp, stack_offset);
-        } else if callsite.pos_num == 1
+        } else if yield_site
+            && callsite.pos_num == 1
             && callee.single_arg_expand()
             && callee.meta().is_simple()
             && callee.post_num() == 0
@@ -4160,6 +4210,12 @@ impl AbstractState {
             // binding. Anything else — a non-Array (whose `#to_ary` may run
             // arbitrary code) — branches to the same generic runtime helper the
             // arm below uses, so semantics never depend on the fast path.
+            //
+            // A `yield` only: the in-line fill stores the parameters and
+            // nothing else, which is a whole frame for a block (its `self`
+            // is `SetupYieldFrame`'s) and not for a method, whose `self`
+            // the binder stores. A method call that binds through a
+            // block-style `FuncInfo` takes the generic arm, which does.
             let req_num = callee.req_num();
             self.write_back_recv_and_callargs(ir, callsite);
             self.load(ir, callsite.args, GP::Rdi);

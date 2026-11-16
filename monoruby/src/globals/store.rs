@@ -1461,16 +1461,29 @@ impl Store {
     }
 
     ///
-    /// Get the description of the function *func_id*.
+    /// Get the description of the function *func_id*, for the JIT logs,
+    /// the dumps and the profiler.
     ///
     /// If the function is a method, the description is "*class_name*#*method_name*".
     /// if the function is a block, the description is "block in *method_name*".
     ///
+    /// This is [`Self::func_label`] except that a method of a class with
+    /// no permanent name keeps its owner (`#<Class:0x…>#foo`): the label
+    /// CRuby prints drops it, which is what a backtrace wants and not
+    /// what a profile of anonymous classes does.
+    ///
     pub(crate) fn func_description(&self, func_id: FuncId) -> String {
-        self.func_description_for(func_id, None)
+        self.describe_func(func_id, None, false)
     }
 
-    /// Like [`Self::func_description`], but with the executing frame's
+    /// The label of the function *func_id* as CRuby prints it in a
+    /// backtrace (`rb_gen_method_name`), without a frame to take a hint
+    /// from.
+    pub(crate) fn func_label(&self, func_id: FuncId) -> String {
+        self.describe_func(func_id, None, true)
+    }
+
+    /// Like [`Self::func_label`], but with the executing frame's
     /// `self` as a hint: a method owned by several classes (e.g. the
     /// instance and singleton copies `module_function` creates) is
     /// labeled by the owner that actually dispatched — `Q.f` when
@@ -1491,6 +1504,12 @@ impl Store {
     /// [`Self::func_description_for`] with the frame's `self` reduced to
     /// [`Self::label_hint`].
     pub(crate) fn func_description_hinted(&self, func_id: FuncId, hint: Option<ClassId>) -> String {
+        self.describe_func(func_id, hint, true)
+    }
+
+    /// *label*: name the owner only by a permanent name, as a backtrace
+    /// label does; otherwise by whatever `Module#inspect` would print.
+    fn describe_func(&self, func_id: FuncId, hint: Option<ClassId>, label: bool) -> String {
         let info = &self[func_id];
         let name = if let Some(iseq_id) = info.is_iseq() {
             let iseq = &self[iseq_id];
@@ -1508,7 +1527,7 @@ impl Store {
                 if iseq.is_eval
                     && let Some(outer) = iseq.outer
                 {
-                    return self.func_description_hinted(self[outer].func_id(), hint);
+                    return self.describe_func(self[outer].func_id(), hint, label);
                 }
                 // Block nesting depth: hops up the lexical chain to the
                 // first non-block scope — or the `_MAIN`-stamped main
@@ -1529,8 +1548,8 @@ impl Store {
                     base = outer_iseq.outer;
                 }
                 let base_desc = match base {
-                    Some(o) => self.func_description_hinted(self[o].func_id(), hint),
-                    None => self.func_description_hinted(self[mother].func_id(), hint),
+                    Some(o) => self.describe_func(self[o].func_id(), hint, label),
+                    None => self.describe_func(self[mother].func_id(), hint, label),
                 };
                 return if depth == 1 {
                     format!("block in {base_desc}")
@@ -1578,15 +1597,22 @@ impl Store {
                 String::new()
             }
         };
-        // CRuby renders the owner with its *fully-qualified* name
-        // (`ExceptionSpecs::Backtrace.foo`, not `Backtrace.foo`).
-        // `qualified_name` returns "" for Object, where the legacy
+        // CRuby (`gen_method_name`, Ruby 3.4+) renders the owner with its
+        // *fully-qualified* name (`ExceptionSpecs::Backtrace.foo`, not
+        // `Backtrace.foo`) — and only when that name is *permanent*, i.e.
+        // reachable from a top-level constant. A method of an anonymous
+        // class or module, of one nested under an anonymous module
+        // (`#<Class:0x…>::Inner`), or of one that only has a
+        // `set_temporary_name`, is labelled with the bare method name
+        // (#1983). `qualified_name` returns "" for Object, where the
         // display is the bare "Object", so special-case it.
         let qual = |this: &Self, id: ClassId| {
             if id == OBJECT_CLASS {
-                "Object".to_string()
+                Some("Object".to_string())
+            } else if !label || this[id].is_name_permanent() {
+                Some(this.qualified_name(id))
             } else {
-                this.qualified_name(id)
+                None
             }
         };
         // With a frame-self hint and several owners, prefer the owner
@@ -1606,23 +1632,21 @@ impl Store {
                 .or_else(|| info.owner_class().first()),
             _ => info.owner_class().first(),
         };
-        match owner {
-            Some(owner) => {
-                if let Some(obj) = self[*owner].get_module().is_singleton() {
-                    if let Some(class) = obj.is_class_or_module() {
-                        format!("{}.{name}", qual(self, class.id()))
-                    } else {
-                        // CRuby names a plain object's singleton
-                        // method by the bare method name (only
-                        // class/module singletons get the
-                        // `Owner.name` form).
-                        name
-                    }
-                } else {
-                    format!("{}#{name}", qual(self, *owner))
-                }
-            }
-            None => name,
+        let Some(owner) = owner else {
+            return name;
+        };
+        match self[*owner].get_module().is_singleton() {
+            // CRuby names a plain object's singleton method by the bare
+            // method name (only class/module singletons get the
+            // `Owner.name` form).
+            Some(obj) => match obj.is_class_or_module().and_then(|class| qual(self, class.id())) {
+                Some(owner) => format!("{owner}.{name}"),
+                None => name,
+            },
+            None => match qual(self, *owner) {
+                Some(owner) => format!("{owner}#{name}"),
+                None => name,
+            },
         }
     }
 

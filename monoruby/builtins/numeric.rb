@@ -185,27 +185,32 @@ class Numeric
     to_f.truncate(ndigits)
   end
 
-  def step(limit = nil, step = nil, by: nil, to: nil)
+  def step(limit = nil, step = (no_step = true; nil), by: nil, to: nil)
     # The positional spelling as written, kept for
     # `ArithmeticSequence#inspect` (`1.step(10, 3)` prints itself back).
-    given_args = step.nil? ? (limit.nil? ? [] : [limit]) : [limit, step]
+    given_args = no_step ? (limit.nil? ? [] : [limit]) : [limit, step]
     if !to.nil? && !limit.nil?
-      raise ArgumentError, "wrong number of arguments (given 2, expected 0..1)"
+      raise ArgumentError, "to is given twice"
     end
     if !by.nil? && !step.nil?
-      raise ArgumentError, "wrong number of arguments (given 2, expected 0..1)"
+      raise ArgumentError, "step is given twice"
     end
     limit = to unless to.nil?
+    # `1.step(5, nil)` with a block: the nil was written, so it is not
+    # the default (CRuby's "compatibility" check in
+    # `num_step_check_fix_args`). Without a block it reads as 1.
+    if step.nil? && by.nil? && !no_step && block_given?
+      raise TypeError, "step must be numeric"
+    end
     step = by unless by.nil?
     step ||= 1
     raise ArgumentError, "step can't be 0" if step == 0
     unless block_given?
-      # Numeric step ⇒ ArithmeticSequence (introspectable via
+      # Numeric step and limit ⇒ ArithmeticSequence (introspectable via
       # `aseq.begin/end/step`, matches CRuby and `Range#step`).
-      # Non-Numeric step (e.g. `"foo"`) keeps the plain-Enumerator
-      # contract: CRuby raises ArgumentError lazily on iteration
-      # / `.size`, but the *kind* is still Enumerator until then.
-      if step.is_a?(Numeric)
+      # Anything else keeps the plain-Enumerator contract: nothing is
+      # checked until it is iterated or asked its `size`.
+      if step.is_a?(Numeric) && (limit.nil? || limit.is_a?(Numeric))
         return Enumerator::ArithmeticSequence
           .__build(self, limit, step, false)
           .__set_origin(self, :step, given_args)
@@ -214,11 +219,31 @@ class Numeric
       end
     end
 
-    # Non-numeric `step` (e.g. `"foo"`) passes through `to_enum`
-    # unchanged -- matching CRuby, which only raises at iteration time
-    # -- but must fail loudly once we actually start iterating.
+    # A step that is not a Numeric is not rejected by its class: CRuby
+    # asks it `step > 0` for the direction (`num_step_negative_p`) and
+    # then counts with `+` and `>` / `<`, so what is raised is whatever
+    # those raise — `0 can't be coerced into Object` for an object with
+    # no `>`, String's own comparison failure for `"a"` (#1988).
     unless step.is_a?(Numeric)
-      raise ArgumentError, "step must be numeric"
+      desc = __step_negative_p(step)
+      # No limit is ±Infinity, and a Float anywhere takes the float
+      # loop, which wants the step as a C double.
+      if limit.nil? || self.is_a?(Float) || limit.is_a?(Float)
+        raise TypeError, "can't convert #{step.class} into Float"
+      end
+      i = self
+      if desc
+        until i < limit
+          yield i
+          i += step
+        end
+      else
+        until i > limit
+          yield i
+          i += step
+        end
+      end
+      return self
     end
 
     use_float = self.is_a?(Float) ||
@@ -300,6 +325,17 @@ class Numeric
 
   private
 
+  # Whether a non-Numeric `step` counts downwards: `!(step > 0)`, asked
+  # of the step itself. An object that has no `>` at all is the
+  # TypeError a failed coercion of `0` with it would be (CRuby's
+  # `num_step_negative_p`).
+  def __step_negative_p(step)
+    unless step.respond_to?(:>, true)
+      raise TypeError, "0 can't be coerced into #{step.class}"
+    end
+    !(step > 0)
+  end
+
   # Compute the size that `step(limit, step)` will yield, without
   # actually iterating. Invoked lazily via the size block attached to
   # `to_enum(:step, ...)`. Returns:
@@ -309,11 +345,11 @@ class Numeric
   #   - `1` / `0` for infinite step, depending on whether the first
   #     yield occurs,
   #   - `floor((limit - self)/step + err) + 1` otherwise,
-  #   - raises `ArgumentError` for a non-numeric step, matching
-  #     `.each`'s behavior.
+  #   - raises for a non-numeric step what `.each` raises for it.
   def __step_size(limit, step)
     unless step.is_a?(Numeric)
-      raise ArgumentError, "step must be numeric"
+      __step_negative_p(step)
+      raise TypeError, "can't convert #{step.class} into Float"
     end
     return Float::INFINITY if limit.nil?
     beg  = self.to_f
