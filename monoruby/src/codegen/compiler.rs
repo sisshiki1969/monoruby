@@ -661,11 +661,33 @@ impl Codegen {
             singleton_deps,
             const_map,
         );
-        let guard = self.a64_gen_class_guard_stub(self_class, &jit_entry);
+        let (guard, _tail) = self.a64_gen_class_guard_stub(self_class, &jit_entry);
         self.jit.finalize();
         let guard_addr = self.jit.get_label_address(&guard).as_ptr() as u64;
-        // SAFETY: `slot` is the dispatch word recorded by `compile_patch`.
-        unsafe { *(slot as *mut u64) = guard_addr };
+        let entry_addr = self.jit.get_label_address(&jit_entry).as_ptr() as u64;
+        // Once the entry dispatches through the class → entry table, the
+        // wrapper's dispatch word holds the table's stub, and the chain's
+        // first guard — which is what `slot` names for the chain's first
+        // class — lives in the table's header. The table also has to learn
+        // the new body's entry.
+        let info = &mut globals.store[iseq_id];
+        let head = info.jit_chain_head();
+        match info.class_dispatch_mut() {
+            Some(dispatch) => {
+                if slot == head {
+                    dispatch.set_chain(guard_addr);
+                } else {
+                    // SAFETY: `slot` is the dispatch word recorded by
+                    // `compile_patch`.
+                    unsafe { *(slot as *mut u64) = guard_addr };
+                }
+                if ClassDispatch::holds(self_class) {
+                    dispatch.insert(self_class, entry_addr);
+                }
+            }
+            // SAFETY: `slot` is the dispatch word recorded by `compile_patch`.
+            None => unsafe { *(slot as *mut u64) = guard_addr },
+        }
         // Re-point the guard-free dispatch slot at the recompiled body so
         // every JIT call site that dispatches through it (skipping the
         // wrapper's re-guard) redirects too — the aarch64 analogue of x86
@@ -673,7 +695,6 @@ impl Codegen {
         // `compile_patch` compiled this (iseq, class) pair, which is a
         // precondition for reaching the recompiler.
         if let Some(guard_free) = globals.store[iseq_id].get_jit_guard_free_slot(self_class) {
-            let entry_addr = self.jit.get_label_address(&jit_entry).as_ptr() as u64;
             // SAFETY: heap-leaked `u64` published by `compile_patch`; valid
             // for the process lifetime, single-threaded write (see
             // `invalidate_jit_code`).

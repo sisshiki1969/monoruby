@@ -84,10 +84,11 @@ impl Codegen {
         // bare entry would mis-run a sibling subclass. The guard dispatches the
         // matching class to `jit_entry` and chains other classes to their own
         // specialization (mirrors the x86 `class_guard_stub`).
-        let guard = self.a64_gen_class_guard_stub(self_class, &jit_entry);
+        let (guard, tail) = self.a64_gen_class_guard_stub(self_class, &jit_entry);
         self.jit.finalize();
         // Publish the guard stub (not the bare entry) into the slot.
         let guard_addr = self.jit.get_label_address(&guard).as_ptr() as u64;
+        let tail_addr = self.jit.get_label_address(&tail).as_ptr() as u64;
         // SAFETY: `slot` is the address of the wrapper's (or a parent guard's)
         // heap-leaked u64 chain word (see arch/aarch64/wrapper.rs).
         unsafe { *(slot.as_ptr() as *mut u64) = guard_addr };
@@ -126,7 +127,75 @@ impl Codegen {
                 globals.store[iseq_id].set_jit_guard_free_slot(self_class, guard_free);
             }
         }
+        self.class_dispatch_note(
+            globals,
+            iseq_id,
+            self_class,
+            slot.as_ptr() as u64,
+            entry_addr,
+            tail_addr,
+        );
         Some(())
+    }
+
+    ///
+    /// A guard for *self_class* has just joined the method's class-guard
+    /// chain, published into *slot*: keep the class → entry table in step,
+    /// and once the chain is [`CLASS_DISPATCH_THRESHOLD`] long, build the
+    /// table and publish its stub in the wrapper's dispatch slot instead of
+    /// the first guard (see `class_dispatch.rs`; the x86-64 twin patches
+    /// the wrapper's jump).
+    ///
+    /// - *entry*: the guard-free entry of the class. The recompiler
+    ///   replaces the body, so it re-enters the class here
+    ///   (`recompile_method_by_id`).
+    /// - *tail*: the miss half of the new guard, the new end of the chain.
+    ///
+    #[cfg(target_arch = "aarch64")]
+    fn class_dispatch_note(
+        &mut self,
+        globals: &mut Globals,
+        iseq_id: ISeqId,
+        self_class: ClassId,
+        slot: u64,
+        entry: u64,
+        tail: u64,
+    ) {
+        let info = &mut globals.store[iseq_id];
+        if info.jit_chain_head() == 0 {
+            // The first class of a chain is published in the wrapper's own
+            // dispatch slot.
+            info.set_jit_chain_head(slot);
+        }
+        if let Some(dispatch) = info.class_dispatch_mut() {
+            if ClassDispatch::holds(self_class) {
+                dispatch.insert(self_class, entry);
+            }
+            dispatch.set_miss(tail);
+            return;
+        }
+        if info.jit_entry_len() < CLASS_DISPATCH_THRESHOLD {
+            return;
+        }
+        let head = info.jit_chain_head();
+        // SAFETY: `head` is the wrapper's heap-leaked dispatch word, which
+        // holds the address of the chain's first guard.
+        let chain = unsafe { *(head as *const u64) };
+        let mut dispatch = ClassDispatch::new(chain, tail);
+        for (class, guard_free) in info.jit_guard_free_slots() {
+            if ClassDispatch::holds(class) {
+                // SAFETY: a heap-leaked word holding the class's current
+                // entry (`compile_patch`, `recompile_method_by_id`).
+                dispatch.insert(class, unsafe { *(guard_free as *const u64) });
+            }
+        }
+        let header = dispatch.header_addr();
+        info.set_class_dispatch(dispatch);
+        let stub = self.a64_class_dispatch_stub(header);
+        self.jit.finalize();
+        let stub_addr = self.jit.get_label_address(&stub).as_ptr() as u64;
+        // SAFETY: as above; written under the GVL like every dispatch word.
+        unsafe { *(head as *mut u64) = stub_addr };
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -158,11 +227,11 @@ impl Codegen {
         ) {
             let patch_point = self.jit.label();
             let guard = self.jit.label();
-            self.class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
+            let tail = self.class_guard_stub(self_class, &patch_point, &jit_entry, &guard);
             globals.store.note_jit_iseq(iseq_id);
             let old_entry = globals.store[iseq_id].add_jit_code(
                 self_class,
-                patch_point,
+                patch_point.clone(),
                 class_version_label.clone(),
             );
             if let Some(_) = old_entry {
@@ -182,6 +251,7 @@ impl Codegen {
                 const_map,
             );
             self.jit.apply_jmp_patch_address(entry, &guard);
+            self.class_dispatch_note(globals, iseq_id, self_class, &guard, &patch_point, &tail);
             self.jit.finalize();
             Some(())
         } else {
@@ -205,6 +275,9 @@ impl Codegen {
     ///
     /// ~~~
     ///
+    /// Returns the label of the stub the guard's miss goes to: the end of
+    /// the chain until the next class is compiled, when its jump is
+    /// redirected to that class's guard.
     #[cfg(target_arch = "x86_64")]
     fn class_guard_stub(
         &mut self,
@@ -212,7 +285,7 @@ impl Codegen {
         patch_point: &DestLabel,
         jit_entry: &DestLabel,
         guard: &DestLabel,
-    ) {
+    ) -> DestLabel {
         let exit = self.jit_class_guard_fail.clone();
         let failed = self.jit.label();
 
@@ -230,5 +303,122 @@ impl Codegen {
         self.jit.select_page(1);
         let _ = self.gen_compile_patch(&exit, &failed, COUNT_RECOMPILE_ARECV_CLASS);
         self.jit.select_page(0);
+        failed
+    }
+
+    ///
+    /// A guard for *self_class* has just joined the method's class-guard
+    /// chain: keep the class → entry table in step, and once the chain is
+    /// [`CLASS_DISPATCH_THRESHOLD`] long, build the table and send the
+    /// method's entry through it (see `class_dispatch.rs`).
+    ///
+    /// - *guard*: the new guard.
+    /// - *patch_point*: the guard-free entry of the class, a jump the
+    ///   recompiler re-points, so its address stays good for the table.
+    /// - *tail*: the new end of the chain.
+    ///
+    #[cfg(target_arch = "x86_64")]
+    fn class_dispatch_note(
+        &mut self,
+        globals: &mut Globals,
+        iseq_id: ISeqId,
+        self_class: ClassId,
+        guard: &DestLabel,
+        patch_point: &DestLabel,
+        tail: &DestLabel,
+    ) {
+        let addr =
+            |jit: &JitMemory, label: &DestLabel| jit.get_label_address(label).as_ptr() as u64;
+        let tail = addr(&self.jit, tail);
+        let info = &mut globals.store[iseq_id];
+        if info.jit_chain_head() == 0 {
+            info.set_jit_chain_head(addr(&self.jit, guard));
+        }
+        if let Some(dispatch) = info.class_dispatch_mut() {
+            if ClassDispatch::holds(self_class) {
+                dispatch.insert(self_class, addr(&self.jit, patch_point));
+            }
+            dispatch.set_miss(tail);
+            return;
+        }
+        if info.jit_entry_len() < CLASS_DISPATCH_THRESHOLD {
+            return;
+        }
+        let mut dispatch = ClassDispatch::new(info.jit_chain_head(), tail);
+        for (class, entry) in info.jit_entries() {
+            if ClassDispatch::holds(class) {
+                dispatch.insert(class, addr(&self.jit, entry));
+            }
+        }
+        let stub = self.class_dispatch_stub(dispatch.header_addr());
+        let func_id = info.func_id();
+        info.set_class_dispatch(dispatch);
+        let head = self
+            .jit
+            .get_label_address(&globals.store[func_id].entry_label());
+        self.jit.apply_jmp_patch_address(head, &stub);
+    }
+
+    ///
+    /// The stub a method's entry jumps to once its class-guard chain is
+    /// long: one probe of the class → entry table instead of a walk.
+    ///
+    /// ~~~text
+    /// stub:
+    ///     rdi <- self
+    ///     immediate?                      -> the chain
+    ///     probe the table for self's class
+    ///       found                         -> the class's entry
+    ///       not found, Integer or Float   -> the chain
+    ///       not found                     -> the end of the chain
+    /// ~~~
+    ///
+    /// Every caller-saved register is free here, as it is for the guards
+    /// (the stub at the end of the chain calls into Rust before entering
+    /// the method either way).
+    ///
+    #[cfg(target_arch = "x86_64")]
+    fn class_dispatch_stub(&mut self, header: u64) -> DestLabel {
+        let stub = self.jit.label();
+        let probe = self.jit.label();
+        let hit = self.jit.label();
+        let miss = self.jit.label();
+        let chain = self.jit.label();
+        monoasm! { &mut self.jit,
+        stub:
+            movq rdi, [r14 - (LFP_SELF)];
+            testq rdi, 0b111;
+            jnz  chain;
+            movl rax, [rdi + (RVALUE_OFFSET_CLASS)];
+            movq r10, (header);
+            movq rsi, [r10 + (CLASS_DISPATCH_TABLE)];
+            movq rcx, [r10 + (CLASS_DISPATCH_MASK)];
+            movq rdx, rax;
+        probe:
+            andq rdx, rcx;
+            movq r8, rdx;
+            shlq r8, (CLASS_DISPATCH_SLOT_SHIFT);
+            addq r8, rsi;
+            movl r9, [r8];
+            cmpq r9, rax;
+            jeq  hit;
+            testq r9, r9;
+            jz   miss;
+            addq rdx, 1;
+            jmp  probe;
+        hit:
+            jmp  [r8 + (CLASS_DISPATCH_SLOT_TARGET)];
+        miss:
+            // A heap Integer or Float is not in the table: its class's
+            // guard does more than compare the class word.
+            subq rax, (INTEGER_CLASS.u32());
+            cmpq rax, (FLOAT_CLASS.u32() - INTEGER_CLASS.u32());
+            jbe  chain;
+            jmp  [r10 + (CLASS_DISPATCH_MISS)];
+        chain:
+            movq r10, (header);
+            jmp  [r10 + (CLASS_DISPATCH_CHAIN)];
+        }
+        stub
     }
 }

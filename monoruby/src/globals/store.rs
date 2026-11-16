@@ -9,10 +9,12 @@ use std::{cell::RefCell, pin::Pin};
 
 mod basic_op;
 mod class;
+mod class_dispatch;
 mod function;
 mod iseq;
 mod refinement;
 pub use class::*;
+pub(crate) use class_dispatch::*;
 pub use function::*;
 pub(crate) use iseq::*;
 pub use refinement::RefinementSetId;

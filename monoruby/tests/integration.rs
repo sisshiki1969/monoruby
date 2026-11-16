@@ -39,6 +39,7 @@ mod capture_callee_no_abort;
 mod capture_ret;
 mod case;
 mod class_chain;
+mod class_dispatch;
 mod class_new_inline;
 mod cold_call_site;
 mod command_line;

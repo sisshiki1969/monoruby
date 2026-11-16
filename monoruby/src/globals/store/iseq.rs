@@ -355,6 +355,17 @@ pub struct ISeqInfo {
     ///
     pub(super) jit_entry: HashMap<ClassId, JitInfo>,
     ///
+    /// The first guard of the class-guard chain at this method's entry
+    /// (x86-64: its address; aarch64: the address of the wrapper's
+    /// dispatch slot, which holds it). 0 while nothing is compiled.
+    ///
+    pub(super) jit_chain_head: u64,
+    ///
+    /// The class → entry table the entry dispatches through once the
+    /// chain is long (see `class_dispatch.rs`).
+    ///
+    pub(super) class_dispatch: Option<ClassDispatch>,
+    ///
     /// Whether this ISeq is already on `Store::jit_iseqs` — the list the GC
     /// walks instead of every ISeq. Set once, when the first compiled unit is
     /// recorded; an eviction (BOP redefinition clears both maps) leaves the
@@ -625,6 +636,8 @@ impl ISeqInfo {
             lexical_context: vec![],
             sourceinfo,
             jit_entry: HashMap::default(),
+            jit_chain_head: 0,
+            class_dispatch: None,
             on_jit_list: false,
             loop_jit_info: HashMap::default(),
             #[cfg(target_arch = "aarch64")]
@@ -1155,6 +1168,44 @@ impl ISeqInfo {
         )
     }
 
+    /// The number of self classes this method is compiled for.
+    pub(crate) fn jit_entry_len(&self) -> usize {
+        self.jit_entry.len()
+    }
+
+    /// The entry labels of every compiled self class.
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn jit_entries(&self) -> impl Iterator<Item = (ClassId, &DestLabel)> {
+        self.jit_entry
+            .iter()
+            .map(|(class, info)| (*class, &info.entry))
+    }
+
+    /// aarch64 only: the guard-free dispatch slot of every compiled self
+    /// class.
+    #[cfg(target_arch = "aarch64")]
+    pub(crate) fn jit_guard_free_slots(&self) -> impl Iterator<Item = (ClassId, u64)> + '_ {
+        self.jit_guard_free_slot
+            .iter()
+            .map(|(class, slot)| (*class, *slot))
+    }
+
+    pub(crate) fn jit_chain_head(&self) -> u64 {
+        self.jit_chain_head
+    }
+
+    pub(crate) fn set_jit_chain_head(&mut self, head: u64) {
+        self.jit_chain_head = head;
+    }
+
+    pub(crate) fn class_dispatch_mut(&mut self) -> Option<&mut ClassDispatch> {
+        self.class_dispatch.as_mut()
+    }
+
+    pub(crate) fn set_class_dispatch(&mut self, dispatch: ClassDispatch) {
+        self.class_dispatch = Some(dispatch);
+    }
+
     pub(crate) fn dump_jit_enntry(&self) {
         eprintln!("{:?}", self.jit_entry);
     }
@@ -1410,6 +1461,12 @@ impl ISeqInfo {
     /// whether the iseq may be compiled again.
     fn drop_jit_code(&mut self) {
         self.jit_entry.clear();
+        // The entry stops going to the chain (x86-64: the callers of this
+        // function put the wrapper's jump back; aarch64: the slots are
+        // zeroed below), and with it to the table's stub. The table itself
+        // is leaked, like the code that reads it.
+        self.jit_chain_head = 0;
+        self.class_dispatch = None;
         self.loop_jit_info.clear();
         self.jit_class_profile.clear();
         #[cfg(target_arch = "aarch64")]
