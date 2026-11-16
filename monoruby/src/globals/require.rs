@@ -317,16 +317,13 @@ impl Globals {
                 if let Some(s) = v.is_str() {
                     return Some(s.to_string());
                 }
-                let pathed = if let Some(fid) = self.check_method(v, IdentId::get_id("to_path")) {
-                    vm.invoke_func_inner(self, fid, v, &[], None, None).ok()?
-                } else {
-                    v
-                };
+                let pathed = crate::coerce::check_funcall(vm, self, v, IdentId::TO_PATH)
+                    .ok()?
+                    .unwrap_or(v);
                 if let Some(s) = pathed.is_str() {
                     return Some(s.to_string());
                 }
-                let fid = self.check_method(pathed, IdentId::get_id("to_str"))?;
-                let s = vm.invoke_func_inner(self, fid, pathed, &[], None, None).ok()?;
+                let s = crate::coerce::check_funcall(vm, self, pathed, IdentId::TO_STR).ok()??;
                 Some(s.is_str()?.to_string())
             })
             .collect()

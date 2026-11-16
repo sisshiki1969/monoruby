@@ -719,41 +719,9 @@ fn block_arg_to_ary(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resul
     // decides whether `#method_missing` supplies one (prism's
     // `LexCompat::Token` delegates to its array that way). Anything else
     // passes through as a single scalar argument, never a NoMethodError.
-    let responds = if let Some(b) =
-        super::default_responds_to(vm, globals, v, IdentId::TO_ARY)
-    {
-        // The default predicates decide from cached lookups alone — no
-        // `respond_to?` frame.
-        b
-    } else if globals.check_method(v, IdentId::RESPOND_TO_).is_some() {
-        vm.invoke_method_inner(
-            globals,
-            IdentId::RESPOND_TO_,
-            v,
-            &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
-            None,
-            None,
-        )?
-        .as_bool()
-    } else if globals.check_method(v, IdentId::TO_ARY).is_some() {
-        true
-    } else {
-        globals.check_method(v, IdentId::RESPOND_TO_MISSING_).is_some()
-            && vm
-                .invoke_method_inner(
-                    globals,
-                    IdentId::RESPOND_TO_MISSING_,
-                    v,
-                    &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
-                    None,
-                    None,
-                )?
-                .as_bool()
-    };
-    if !responds {
+    let Some(res) = super::check_funcall_cached(vm, globals, v, IdentId::TO_ARY)? else {
         return Ok(None);
-    }
-    let res = vm.invoke_method_inner(globals, IdentId::TO_ARY, v, &[], None, None)?;
+    };
     if res.is_array_ty() {
         Ok(Some(res))
     } else if res.is_nil() {
@@ -809,14 +777,8 @@ fn coerce_hash_splat_args(
             && !v.is_nil()
             && v.try_hash_ty().is_none()
         {
-            let converted = vm.invoke_method_if_exists(
-                globals,
-                IdentId::get_id("to_hash"),
-                v,
-                &[],
-                None,
-                None,
-            )?;
+            let converted =
+                crate::coerce::check_funcall(vm, globals, v, IdentId::get_id("to_hash"))?;
             let h = match converted {
                 Some(h) if h.try_hash_ty().is_some() => h,
                 Some(bad) => {

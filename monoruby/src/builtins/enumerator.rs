@@ -456,7 +456,7 @@ fn enumerator_initialize_copy(
 /// Integer / Float / Proc) and resolved lazily by `#size`.
 #[monoruby_builtin]
 fn enum_init_method(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     pc: BytecodePtr,
@@ -472,7 +472,7 @@ fn enum_init_method(
         )));
     }
     let obj = lfp.arg(0);
-    let method = lfp.arg(1).expect_symbol_or_string(globals)?;
+    let method = lfp.arg(1).expect_symbol_or_to_str(vm, globals)?;
     let args: Vec<Value> = lfp.arg(2).as_array().iter().copied().collect();
     let size = lfp.try_arg(3).filter(|v| !v.is_nil());
     let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);

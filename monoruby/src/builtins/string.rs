@@ -671,24 +671,21 @@ fn string_cmp(
     if let Some(rhs) = other.is_rstring() {
         return Ok(Some(string_byte_then_encoding_cmp(lhs, &rhs)));
     }
-    // Try `to_str` coercion first; CRuby uses it in preference to
-    // `<=>` (`String#<=>` only inverts via `<=>` when `to_str` is
-    // not defined).
-    if globals.check_method(other, IdentId::TO_STR).is_some() {
-        if let Ok(rhs) = other.coerce_to_rstring(vm, globals) {
-            return Ok(Some(string_byte_then_encoding_cmp(lhs, &rhs)));
-        }
+    // `rb_str_cmp_m`: `rb_check_string_type` first (so a `to_str` that
+    // answers a non-String is the conversion mismatch), and only what
+    // does not convert is asked for its own `<=>`, through
+    // `rb_check_funcall` (`rb_invcmp`).
+    if let Some(rhs) = other.check_string_type(vm, globals)? {
+        return Ok(Some(string_byte_then_encoding_cmp(
+            self_.as_rstring_inner(),
+            rhs.as_rstring_inner(),
+        )));
     }
-    // Fall back to `other <=> self` and invert the result. Returns
-    // `None` (i.e. `nil`) if `<=>` returns nil or the inverted form
-    // also delegates back (CRuby short-circuits the recursion via a
-    // thread-local guard; we just dispatch once).
-    if let Some(func_id) = globals.check_method(other, IdentId::_CMP) {
-        let result =
-            vm.invoke_func_inner(globals, func_id, other, &[lfp.self_val()], None, None)?;
-        if let Some(ord) = Value::ord_from(result) {
-            return Ok(Some(ord.reverse()));
-        }
+    if let Some(result) =
+        crate::coerce::check_funcall_args(vm, globals, other, IdentId::_CMP, &[self_])?
+        && let Some(ord) = Value::ord_from(result)
+    {
+        return Ok(Some(ord.reverse()));
     }
     Ok(None)
 }
@@ -777,15 +774,10 @@ fn casecmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let rhs = lfp.arg(0);
     // CRuby returns nil if the receiver isn't string-like; otherwise
     // returns nil for any pair whose encodings can't be negotiated.
-    let rhs_owned;
-    let rhs_inner_ref = if let Some(inner) = rhs.is_rstring_inner() {
-        inner
-    } else if let Ok(s) = rhs.coerce_to_rstring(vm, globals) {
-        rhs_owned = s;
-        &rhs_owned
-    } else {
+    let Some(rhs) = rhs.check_string_type(vm, globals)? else {
         return Ok(Value::nil());
     };
+    let rhs_inner_ref = rhs.as_rstring_inner();
     let lhs_inner = lhs.as_rstring_inner();
     if lhs_inner.compatible_encoding(rhs_inner_ref).is_none() {
         return Ok(Value::nil());
@@ -807,12 +799,12 @@ fn casecmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn casecmp_p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
-    let (rhs_bytes, rhs_enc) = if let Some(inner) = rhs.is_rstring_inner() {
-        (inner.as_bytes().to_vec(), inner.encoding())
-    } else if let Ok(s) = rhs.coerce_to_rstring(vm, globals) {
-        (s.as_bytes().to_vec(), s.encoding())
-    } else {
+    let Some(rhs) = rhs.check_string_type(vm, globals)? else {
         return Ok(Value::nil());
+    };
+    let (rhs_bytes, rhs_enc) = {
+        let inner = rhs.as_rstring_inner();
+        (inner.as_bytes().to_vec(), inner.encoding())
     };
     let lhs_inner = lhs.as_rstring_inner();
     let lhs_enc = lhs_inner.encoding();
@@ -837,6 +829,28 @@ fn casecmp_p(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let foldable = |enc: crate::value::Encoding, broken: bool| {
         enc.is_utf8_compatible() && (matches!(enc, crate::value::Encoding::Utf8(_)) || !broken)
     };
+    // CESU-8 folds as Unicode too, over the scalars its bytes spell
+    // (#1975). The other side of a compatible pair is CESU-8 as well,
+    // or ASCII.
+    let cesu = crate::value::Encoding::NamedByte(crate::value::CESU_8);
+    if lhs_enc == cesu || rhs_enc == cesu {
+        let text = |bytes: &[u8], enc| {
+            if enc == cesu {
+                crate::value::cesu8_to_utf8(bytes)
+            } else {
+                std::str::from_utf8(bytes).ok().map(str::to_string)
+            }
+        };
+        if let (Some(l), Some(r)) = (
+            text(lhs_inner.as_bytes(), lhs_enc),
+            text(&rhs_bytes, rhs_enc),
+        ) {
+            return Ok(Value::bool(
+                apply_case(&l, CaseOp::Downcase, CaseMode::Fold)
+                    == apply_case(&r, CaseOp::Downcase, CaseMode::Fold),
+            ));
+        }
+    }
     if foldable(lhs_enc, !lhs_inner.is_valid_encoding())
         && foldable(rhs_enc, std::str::from_utf8(&rhs_bytes).is_err())
     {
@@ -1098,22 +1112,11 @@ fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         vec![arg]
     } else if let Some(ary) = arg.try_array_ty() {
         ary.to_vec()
-    } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_ARY) {
-        // CRuby tries `to_ary` on non-Array operands before falling
-        // back to "wrap in a single-element array" — this lets a
-        // mock that defines `to_ary` exercise the splatting branch
-        // (`"%f" % obj` ↔ `"%f" % obj.to_ary`).
-        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
-        if let Some(ary) = result.try_array_ty() {
-            ary.to_vec()
-        } else if result.is_nil() {
-            // CRuby: when `to_ary` returns nil, fall back to wrapping
-            // the original object in a single-element array (so
-            // `"%s" % obj` becomes `"%s" % [obj]`).
-            vec![arg]
-        } else {
-            return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
-        }
+    } else if let Some(ary) = arg.check_array_type(vm, globals)? {
+        // `rb_check_array_type`: an operand that converts by `to_ary`
+        // is the argument list (`"%f" % obj` ↔ `"%f" % obj.to_ary`);
+        // one that does not, or answers nil, is a single argument.
+        ary.to_vec()
     } else {
         vec![arg]
     };
@@ -1360,57 +1363,38 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         // Try to_int coercion first, then to_str
         let arg0 = lfp.arg(0);
-        if globals.check_method(arg0, IdentId::TO_INT).is_some() {
-            // Through the shared coercion, so a `#to_int` that answers a
-            // non-Integer raises CRuby's mismatch TypeError and one that
-            // answers a Bignum raises RangeError — falling through to
-            // `#to_str` reported "no implicit conversion" for both.
-            let i = arg0.coerce_to_int_i64(vm, globals)?;
-            {
-                let index = match lhs.conv_char_index(i) {
-                    Some(i) => i,
-                    None => return Ok(Value::nil()),
-                };
-                if let Some(arg1) = lfp.try_arg(1) {
-                    let len = match arg1.coerce_to_int_i64(vm, globals)? {
-                        0 => return Ok(string_substring(self_, 0, 0)),
-                        i if i < 0 => return Ok(Value::nil()),
-                        i => i as usize,
-                    };
-                    let r = lhs.get_range(index, len);
-                    return Ok(Value::string_from_inner(RStringInner::from_encoding(
-                        &lhs[r], enc,
-                    )));
-                } else {
-                    let r = lhs.get_range(index, 1);
-                    if !r.is_empty() {
-                        return Ok(Value::string_from_inner(RStringInner::from_encoding(
-                            &lhs[r], enc,
-                        )));
-                    } else {
-                        return Ok(Value::nil());
-                    }
-                }
-            }
-        }
         // No `#to_str` fallback: CRuby's `rb_str_aref` only takes an
         // Integer, a Range, a Regexp or a String that already *is* one,
-        // and anything else is `NUM2LONG`'s TypeError (pinned by
-        // ruby/spec's "doesn't call to_str on its argument").
-        //
-        // An Integer that is not a Fixnum reached here because it does
-        // not fit a machine word — that is a RangeError ("bignum too big
-        // to convert into 'long'"), which is what the coercion raises,
-        // not a conversion error about its class.
-        // And nil has `NUM2LONG`'s message of its own.
-        if arg0.is_integer() || arg0.is_nil() {
-            arg0.num2long(vm, globals)?;
+        // and anything else is read by `NUM2LONG` (pinned by ruby/spec's
+        // "doesn't call to_str on its argument") — `to_int` through
+        // `rb_check_funcall`, a mismatch TypeError for one that answers
+        // a non-Integer, a RangeError for a Bignum, and a message of
+        // its own for nil.
+        let i = arg0.num2long(vm, globals)?;
+        let index = match lhs.conv_char_index(i) {
+            Some(i) => i,
+            None => return Ok(Value::nil()),
+        };
+        if let Some(arg1) = lfp.try_arg(1) {
+            let len = match arg1.num2long(vm, globals)? {
+                0 => return Ok(string_substring(self_, 0, 0)),
+                i if i < 0 => return Ok(Value::nil()),
+                i => i as usize,
+            };
+            let r = lhs.get_range(index, len);
+            Ok(Value::string_from_inner(RStringInner::from_encoding(
+                &lhs[r], enc,
+            )))
+        } else {
+            let r = lhs.get_range(index, 1);
+            if !r.is_empty() {
+                Ok(Value::string_from_inner(RStringInner::from_encoding(
+                    &lhs[r], enc,
+                )))
+            } else {
+                Ok(Value::nil())
+            }
         }
-        Err(MonorubyErr::no_implicit_conversion(
-            globals,
-            arg0,
-            INTEGER_CLASS,
-        ))
     }
 }
 
@@ -5305,8 +5289,7 @@ fn replacement_view(
     if let Some(inner) = arg.is_rstring_inner() {
         return Ok(template(inner));
     }
-    if let Some(func_id) = globals.check_method(arg, IdentId::TO_STR) {
-        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+    if let Some(result) = crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_STR)? {
         if let Some(inner) = result.is_rstring_inner() {
             return Ok(template(inner));
         }
@@ -5756,10 +5739,17 @@ fn decode_replaced_all(
 /// into a Regexp and refuses broken bytes there.
 fn char_aligned_scan(inner: &RStringInner, needle: &RStringInner) -> Option<Vec<(usize, usize)>> {
     let enc = inner.encoding();
-    if crate::value::mbc_walker(enc).is_none()
+    // UTF-16 / UTF-32 are here for another reason than alignment: the
+    // regexp path quotes a String pattern through `regex_view`, which
+    // has no view of them (#1978).
+    let wide = matches!(
+        enc,
+        Encoding::Utf16Le | Encoding::Utf16Be | Encoding::Utf32Le | Encoding::Utf32Be
+    );
+    if !(crate::value::mbc_walker(enc).is_some() || wide)
         || !inner.is_valid_encoding()
         || !needle.is_valid_encoding()
-        || !(needle.is_ascii_only() || needle.encoding() == enc)
+        || !(needle.encoding() == enc || (enc.is_ascii_compatible() && needle.is_ascii_only()))
     {
         return None;
     }
@@ -9363,11 +9353,30 @@ fn to_sym(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// The Symbol a String's content names (CRuby's `rb_str_intern`):
 /// `String#to_sym`, and a JSON object key under `symbolize_names:`.
 pub(crate) fn intern_string(store: &Store, inner: &RStringInner) -> Result<IdentId> {
-    use crate::value::Encoding as E;
+    intern_string_as(store, inner, false)
+}
+
+/// The Symbol a String given as a *name* stands for (`rb_check_id`,
+/// `rb_to_id`: `send`, `instance_variable_get`, `define_method`, …).
+/// As [`intern_string`], except that a US-ASCII string with 8-bit bytes
+/// is refused here too.
+pub(crate) fn intern_name_string(store: &Store, inner: &RStringInner) -> Result<IdentId> {
+    intern_string_as(store, inner, true)
+}
+
+/// `sym_check_asciionly`'s refusal: bytes that are not valid in their
+/// own encoding cannot name a symbol — where CRuby looks, which is only
+/// in an ASCII-compatible encoding. `rb_str_intern` (`name == false`)
+/// does not look at a string that is already US-ASCII either
+/// (`enc != ascii && …`), so `"a\xE9b".force_encoding("US-ASCII").to_sym`
+/// is a US-ASCII Symbol of those bytes, as a UTF-16 string of an odd
+/// length is a UTF-16 one (#1977); a *name* (`rb_check_id`) is refused.
+pub(crate) fn check_symbol_bytes(store: &Store, inner: &RStringInner, name: bool) -> Result<()> {
     let src = inner.encoding();
-    // Bytes that are not valid in their own encoding cannot name a
-    // symbol (CRuby's `rb_str_intern` → `rb_enc_symname_type`).
-    if !inner.is_valid_encoding() {
+    if src.is_ascii_compatible()
+        && (name || src != crate::value::Encoding::UsAscii)
+        && !inner.is_valid_encoding()
+    {
         return Err(MonorubyErr::encoding_error_with_store(
             store,
             format!(
@@ -9377,6 +9386,13 @@ pub(crate) fn intern_string(store: &Store, inner: &RStringInner) -> Result<Ident
             ),
         ));
     }
+    Ok(())
+}
+
+fn intern_string_as(store: &Store, inner: &RStringInner, name: bool) -> Result<IdentId> {
+    use crate::value::Encoding as E;
+    let src = inner.encoding();
+    check_symbol_bytes(store, inner, name)?;
     // CRuby symbol-encoding rule: ASCII-only content in an
     // ASCII-compatible encoding collapses to US-ASCII (so e.g.
     // `"a".force_encoding("KOI8-R").to_sym == :a`); otherwise the
@@ -9393,7 +9409,12 @@ pub(crate) fn intern_string(store: &Store, inner: &RStringInner) -> Result<Ident
     // `Encoding::UTF8`, not `Utf8(_)`: a `UTF8-MAC` name is an
     // encoding of its own to CRuby, and interning it as a plain string
     // would hand it back as UTF-8 (#1562).
-    let id = if matches!(canon, E::UsAscii | E::UTF8) {
+    let id = if src == E::UsAscii && !inner.as_bytes().is_ascii() {
+        // Not a name `get_id` may dedup with the UTF-8 one of the same
+        // bytes: `"\xC3\xA9".force_encoding("US-ASCII").to_sym` is not
+        // `:é`.
+        IdentId::get_id_from_bytes(inner.as_bytes().to_vec(), E::UsAscii)
+    } else if matches!(canon, E::UsAscii | E::UTF8) {
         match std::str::from_utf8(inner.as_bytes()) {
             Ok(s) => IdentId::get_id(s),
             Err(_) => IdentId::get_id_from_bytes(inner.as_bytes().to_vec(), E::Ascii8),
@@ -9663,6 +9684,22 @@ fn case_map(
             let bytes = crate::value::transcode::encode_utf16_32(&mapped, enc);
             RStringInner::from_encoding_scanned(&bytes, enc)
         }
+        // CESU-8 is a Unicode encoding (`ONIGENC_FLAG_UNICODE` in CRuby's
+        // `enc/cesu_8.c`): the same map over the scalars, a surrogate
+        // pair read as the astral scalar it spells and written back as
+        // one (#1975). ASCII-only text, and anything that is not
+        // well-formed CESU-8, stays on the byte map.
+        E::NamedByte(crate::value::CESU_8)
+            if mode == CaseMode::Turkic || !inner.is_ascii_only() =>
+        {
+            match crate::value::cesu8_to_utf8(inner.as_bytes()) {
+                Some(text) => {
+                    let mapped = apply_case(&text, op, mode);
+                    RStringInner::from_encoding_scanned(&crate::value::utf8_to_cesu8(&mapped), enc)
+                }
+                None => byte_case(inner, op, mode),
+            }
+        }
         _ => byte_case(inner, op, mode),
     })
 }
@@ -9861,6 +9898,52 @@ fn parse_case_options(args: Array, op: CaseOp) -> Result<CaseMode> {
     }
 }
 
+/// The codepoints that have a case mapping in the Unicode data of the
+/// Rust toolchain (`char::to_uppercase` / `to_lowercase`) and none in
+/// that of the CRuby monoruby conforms to (4.0.9: Unicode 17.0.0,
+/// `Encoding::UNICODE_VERSION`). They map to themselves here, as they
+/// do there — `"\u{277}".upcase` is not U+A7DD (#1979).
+///
+/// The list moves with the toolchain and with the pin: the test
+/// `case_mapping::unicode_case_pairs_match` compares a checksum over
+/// every codepoint's mappings with CRuby, and says how to find the
+/// codepoints to put here when it fails.
+#[rustfmt::skip]
+const NEWER_CASE_PAIRS: &[char] = &[
+    '\u{277}', '\u{27C}', '\u{A7DD}', '\u{A7E2}', '\u{AB4B}', '\u{AB4C}', '\u{AB6C}', '\u{AB6D}',
+    '\u{1DF40}', '\u{1DF41}', '\u{1DF48}', '\u{1DF49}', '\u{1DF4A}', '\u{1DF4B}', '\u{1DF4D}', '\u{1DF4E}',
+    '\u{1DF51}', '\u{1DF52}', '\u{1DF68}', '\u{1DF69}', '\u{1DF6A}', '\u{1DF6B}', '\u{1DF6C}', '\u{1DF6D}',
+    '\u{1DF6E}', '\u{1DF6F}', '\u{1DF72}', '\u{1DF73}', '\u{1DF74}', '\u{1DF75}', '\u{1DF76}', '\u{1DF77}',
+    '\u{1DF78}', '\u{1DF79}', '\u{1DF7A}', '\u{1DF7B}', '\u{1DF7C}', '\u{1DF7D}', '\u{1DF7E}', '\u{1DF7F}',
+    '\u{1DF95}',
+];
+
+/// Whether `c` has the case mappings Rust's tables give it.
+#[inline]
+fn has_case_pair(c: char) -> bool {
+    // The first two entries sit alone in the IPA block, far below the
+    // rest: everything under them and everything between them and the
+    // third (Greek, Cyrillic, CJK ...) is decided by two compares.
+    const P: &[char] = NEWER_CASE_PAIRS;
+    c < P[0] || (c > P[1] && c < P[2]) || P.binary_search(&c).is_err()
+}
+
+fn unicode_upper(c: char) -> SmallCaseBuf {
+    if has_case_pair(c) {
+        SmallCaseBuf::from_iter(c.to_uppercase())
+    } else {
+        SmallCaseBuf::one(c)
+    }
+}
+
+fn unicode_lower(c: char) -> SmallCaseBuf {
+    if has_case_pair(c) {
+        SmallCaseBuf::from_iter(c.to_lowercase())
+    } else {
+        SmallCaseBuf::one(c)
+    }
+}
+
 /// Per-character upcase under the requested `mode`. Returns an empty
 /// iterator-equivalent (the input char unchanged) for Ascii mode on
 /// non-ASCII bytes.
@@ -9878,9 +9961,9 @@ fn upcase_char(c: char, mode: CaseMode) -> SmallCaseBuf {
             // dotted `İ`; `ı` upcases to `I` (the regular ASCII
             // uppercase), which already happens by default.
             'i' => SmallCaseBuf::one('\u{0130}'),
-            _ => SmallCaseBuf::from_iter(c.to_uppercase()),
+            _ => unicode_upper(c),
         },
-        CaseMode::Full | CaseMode::Fold => SmallCaseBuf::from_iter(c.to_uppercase()),
+        CaseMode::Full | CaseMode::Fold => unicode_upper(c),
     }
 }
 
@@ -9898,13 +9981,13 @@ fn downcase_char(c: char, mode: CaseMode) -> SmallCaseBuf {
             // downcases to plain `i`.
             'I' => SmallCaseBuf::one('\u{0131}'),
             '\u{0130}' => SmallCaseBuf::one('i'),
-            _ => SmallCaseBuf::from_iter(c.to_lowercase()),
+            _ => unicode_lower(c),
         },
         CaseMode::Fold => match FULL_FOLD.binary_search_by_key(&c, |(from, _)| *from) {
             Ok(i) => SmallCaseBuf::from_iter(FULL_FOLD[i].1.iter().copied()),
-            Err(_) => SmallCaseBuf::from_iter(c.to_lowercase()),
+            Err(_) => unicode_lower(c),
         },
-        CaseMode::Full => SmallCaseBuf::from_iter(c.to_lowercase()),
+        CaseMode::Full => unicode_lower(c),
     }
 }
 

@@ -1111,6 +1111,49 @@ pub(crate) fn default_responds_to(
     }
 }
 
+/// CRuby's `rb_check_funcall(recv, name, 0, 0)` for the conversion
+/// probes of destructuring and splat (`to_ary`, `to_a`), with the two
+/// common outcomes decided from cached lookups: a method that is there
+/// is called, and a receiver that has none — with the default
+/// `respond_to?`, a `respond_to_missing?` that answers a constant
+/// false and no `method_missing` of its own — does not convert.
+/// Everything else (an overridden `respond_to?`, a computing
+/// `respond_to_missing?`, a `BasicObject`, a user-defined
+/// `method_missing`, which the protocol consults even when
+/// `respond_to?` says no) takes the full protocol.
+pub(crate) fn check_funcall_cached(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+    name: IdentId,
+) -> Result<Option<Value>> {
+    // `default_responds_to` resolves `name` through the caller's
+    // refinements, which the memo knows nothing about.
+    if !globals.store.refinements().is_active()
+        && globals
+            .store
+            .no_conversion(recv.class(), name, Globals::class_version())
+    {
+        return Ok(None);
+    }
+    match default_responds_to(vm, globals, recv, name) {
+        Some(true) => vm
+            .invoke_method_inner(globals, name, recv, &[], None, None)
+            .map(Some),
+        Some(false) if !has_user_method_missing(globals, recv) => Ok(None),
+        _ => crate::coerce::check_funcall(vm, globals, recv, name),
+    }
+}
+
+/// Whether `recv` has a `method_missing` other than `BasicObject`'s.
+fn has_user_method_missing(globals: &Globals, recv: Value) -> bool {
+    let default = globals
+        .store
+        .check_method_for_class(BASIC_OBJECT_CLASS, IdentId::METHOD_MISSING)
+        .and_then(|e| e.func_id());
+    globals.check_method(recv, IdentId::METHOD_MISSING) != default
+}
+
 pub(super) extern "C" fn empty_hash() -> Value {
     let map = RubyMap::default();
     Value::hash(map)
@@ -1642,37 +1685,12 @@ pub(super) extern "C" fn expand_array(
     // method-table lookup, so honour an overridden `respond_to?` here too.
     let src = if src.is_array_ty() {
         src
-    } else if match default_responds_to(vm, globals, src, IdentId::TO_ARY) {
-        // The default predicates decide from cached lookups alone —
-        // no `respond_to?` frame.
-        Some(b) => !b,
-        None if globals.check_method(src, IdentId::RESPOND_TO_).is_none() => {
-            // An object that does not even respond to `#respond_to?` (a bare
-            // `BasicObject`) cannot be coerced: leave it a scalar rather than
-            // raising `NoMethodError`, matching CRuby.
-            true
-        }
-        None => !match vm.invoke_method_inner(
-            globals,
-            IdentId::RESPOND_TO_,
-            src,
-            &[Value::symbol(IdentId::TO_ARY), Value::bool(true)],
-            None,
-            None,
-        ) {
-            Ok(v) => v.as_bool(),
-            Err(err) => {
-                vm.set_error(err);
-                return None;
-            }
-        },
-    } {
-        src
     } else {
-        match vm.invoke_method_inner(globals, IdentId::TO_ARY, src, &[], None, None) {
-            Ok(v) if v.is_array_ty() => v,
-            Ok(v) if v.is_nil() => src,
-            Ok(v) => {
+        match check_funcall_cached(vm, globals, src, IdentId::TO_ARY) {
+            Ok(Some(v)) if v.is_array_ty() => v,
+            Ok(None) => src,
+            Ok(Some(v)) if v.is_nil() => src,
+            Ok(Some(v)) => {
                 vm.set_error(MonorubyErr::cant_convert_error_ary(globals, src, v));
                 return None;
             }
@@ -3022,14 +3040,14 @@ pub(super) extern "C" fn alias_method(
     old: Value,
     new: Value,
 ) -> Option<Value> {
-    let new = match new.expect_symbol_or_string(&globals.store) {
+    let new = match new.expect_symbol_or_to_str(vm, globals) {
         Ok(id) => id,
         Err(err) => {
             vm.set_error(err);
             return None;
         }
     };
-    let old = match old.expect_symbol_or_string(&globals.store) {
+    let old = match old.expect_symbol_or_to_str(vm, globals) {
         Ok(id) => id,
         Err(err) => {
             vm.set_error(err);
@@ -3780,52 +3798,24 @@ pub(super) extern "C" fn to_a(
     // method-table lookup. An object without `#respond_to?` (a bare
     // `BasicObject`) falls back to the raw lookup — CRuby's
     // `rb_check_funcall` still calls a `to_a` defined on it.
-    let responds = if let Some(b) = default_responds_to(vm, globals, src, IdentId::TO_A) {
-        // The default predicates decide from cached lookups alone — no
-        // `respond_to?` frame.
-        b
-    } else if globals.check_method(src, IdentId::RESPOND_TO_).is_none() {
-        globals.check_method(src, IdentId::TO_A).is_some()
-    } else {
-        match vm.invoke_method_inner(
-            globals,
-            IdentId::RESPOND_TO_,
-            src,
-            &[Value::symbol(IdentId::TO_A), Value::bool(true)],
-            None,
-            None,
-        ) {
-            Ok(v) => v.as_bool(),
-            Err(err) => {
-                vm.set_error(err);
-                return None;
-            }
-        }
-    };
-    if responds {
-        let ary = match vm.invoke_method_inner(globals, IdentId::TO_A, src, &[], None, None) {
-            Ok(v) => v,
-            Err(err) => {
-                vm.set_error(err);
-                return None;
-            }
-        };
-        if ary.is_array_ty() {
-            Some(ary)
-        } else if ary.is_nil() {
-            // `#to_a` returning nil is treated like a missing `#to_a`:
-            // the splatted object is wrapped in a one-element array,
-            // matching CRuby (`m(*o)` with `o.to_a == nil` -> `[o]`).
-            Some(Value::array1(src))
-        } else {
+    match check_funcall_cached(vm, globals, src, IdentId::TO_A) {
+        Ok(Some(ary)) if ary.is_array_ty() => Some(ary),
+        // `#to_a` returning nil is treated like a missing `#to_a`:
+        // the splatted object is wrapped in a one-element array,
+        // matching CRuby (`m(*o)` with `o.to_a == nil` -> `[o]`).
+        Ok(None) => Some(Value::array1(src)),
+        Ok(Some(ary)) if ary.is_nil() => Some(Value::array1(src)),
+        Ok(Some(_)) => {
             let src_class = src.class().get_name(&globals.store);
             vm.set_error(MonorubyErr::typeerr(format!(
                 "can't convert {src_class} into Array"
             )));
             None
         }
-    } else {
-        Some(Value::array1(src))
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
     }
 }
 

@@ -192,3 +192,51 @@ fn index_argument_errors() {
         "##,
     );
 }
+
+// Issue #1979: the Unicode case tables are those of the CRuby monoruby
+// conforms to (`Encoding::UNICODE_VERSION`), not those of the Rust
+// toolchain it is built with.
+
+#[test]
+fn unicode_case_pairs_match() {
+    // A checksum over every codepoint's five mappings. When this fails
+    // after a toolchain or pin bump, dump `[cp, upcase, downcase,
+    // swapcase, capitalize, downcase(:fold)]` per codepoint on both and
+    // diff: the codepoints that differ are `NEWER_CASE_PAIRS`
+    // (`builtins/string.rs`).
+    run_test_once(
+        r##"
+        h = 0
+        n = 0
+        (0..0x10ffff).each do |cp|
+          next if cp >= 0xd800 && cp <= 0xdfff
+          c = [cp].pack("U")
+          u = c.upcase; d = c.downcase
+          next if u == c && d == c && c.swapcase == c && c.capitalize == c && c.downcase(:fold) == c
+          n += 1
+          [u, d, c.swapcase, c.capitalize, c.downcase(:fold)].each do |s|
+            s.each_codepoint { |x| h = (h * 31 + x) % 1000000007 }
+            h = (h * 31 + 7) % 1000000007
+          end
+          h = (h * 31 + cp) % 1000000007
+        end
+        [n, h, Encoding::UNICODE_VERSION]
+        "##,
+    );
+}
+
+#[test]
+fn case_pairs_newer_than_the_pinned_unicode() {
+    // Pairs a later Unicode added: no mapping here, in either direction,
+    // and through UTF-16 / CESU-8 and Symbol as well.
+    run_test_once(
+        r##"
+        [0x277, 0x27c, 0xa7dd, 0xa7e2, 0xab4b, 0xab6c, 0x1df40, 0x1df7f, 0x1df95].map do |cp|
+          c = [cp].pack("U")
+          [c.upcase == c, c.downcase == c, c.swapcase == c, c.capitalize == c, c.downcase(:fold) == c,
+           c.casecmp?(c), c.encode("UTF-16LE").upcase == c.encode("UTF-16LE"),
+           c.encode("CESU-8").upcase == c.encode("CESU-8"), c.to_sym.upcase == c.to_sym]
+        end
+        "##,
+    );
+}

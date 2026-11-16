@@ -3270,6 +3270,9 @@ impl Value {
     }
 
     pub(crate) fn expect_symbol_or_string(&self, store: &Store) -> Result<IdentId> {
+        if let Some(inner) = self.is_rstring_inner() {
+            crate::builtins::string::check_symbol_bytes(store, inner, true)?;
+        }
         self.try_symbol_or_string()
             .ok_or_else(|| MonorubyErr::is_not_symbol_nor_string(store, *self))
     }
@@ -3280,6 +3283,9 @@ impl Value {
         &self,
         store: &Store,
     ) -> Result<Option<IdentId>> {
+        if let Some(inner) = self.is_rstring_inner() {
+            crate::builtins::string::check_symbol_bytes(store, inner, true)?;
+        }
         self.try_symbol_or_existing_string()
             .ok_or_else(|| MonorubyErr::is_not_symbol_nor_string(store, *self))
     }

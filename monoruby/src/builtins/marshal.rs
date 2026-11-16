@@ -178,8 +178,7 @@ fn marshal_source_bytes(
     if let Some(s) = source.is_rstring_inner() {
         return Ok(Some(s.as_bytes().to_vec()));
     }
-    if globals.check_method(source, IdentId::TO_STR).is_some() {
-        let v = vm.invoke_method_inner(globals, IdentId::TO_STR, source, &[], None, None)?;
+    if let Some(v) = crate::coerce::check_funcall(vm, globals, source, IdentId::TO_STR)? {
         if let Some(s) = v.is_rstring_inner() {
             return Ok(Some(s.as_bytes().to_vec()));
         }

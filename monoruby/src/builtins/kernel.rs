@@ -208,6 +208,15 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     // nearest non-internal Ruby caller's "file:line: " (internal
     // `builtins/` frames are transparent, like CRuby's C frames).
     globals.define_private_builtin_func(kernel_class, "__warn_caller", warn_caller, 1);
+    // The implicit conversions of CRuby's C API, for builtins written
+    // in Ruby: `rb_to_int`, `StringValue`, `NUM2LONG` and `rb_String`,
+    // each through `rb_check_funcall` (so a redefined `respond_to?` is
+    // asked and a `method_missing`-backed conversion counts).
+    globals.define_private_builtin_func(kernel_class, "__to_int", kernel_to_int, 1);
+    globals.define_private_builtin_func(kernel_class, "__to_str", kernel_to_str, 1);
+    globals.define_private_builtin_func(kernel_class, "__num2long_slow", kernel_num2long, 1);
+    globals.define_private_builtin_func(kernel_class, "__String", kernel_string, 1);
+    globals.define_private_builtin_func(kernel_class, "__Hash", kernel_hash, 1);
     // Called by `monoruby_hooks/bundler_runtime.rb` once `Bundler.setup`
     // has run: the bundle is now the only set of gems `require` sees.
     globals.define_private_builtin_func(
@@ -2006,8 +2015,7 @@ fn kernel_integer_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> R
     if base.is_some() && !matches!(arg0.unpack(), RV::String(_)) {
         // With an explicit base only Strings (and #to_str convertibles,
         // handled below) are acceptable.
-        if let Some(func_id) = globals.check_method(arg0, IdentId::TO_STR) {
-            let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+        if let Some(result) = crate::coerce::check_funcall(vm, globals, arg0, IdentId::TO_STR)? {
             if let Some(s) = result.is_str() {
                 return parse_kernel_integer(s, base.unwrap_or(0));
             }
@@ -2044,8 +2052,7 @@ fn kernel_integer_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> R
     };
     // Try to_int coercion. If it returns a non-Integer (or nil), fall
     // through to `to_i` instead of erroring immediately (CRuby semantics).
-    if let Some(func_id) = globals.check_method(arg0, IdentId::TO_INT) {
-        let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+    if let Some(result) = crate::coerce::check_funcall(vm, globals, arg0, IdentId::TO_INT)? {
         match result.unpack() {
             RV::Fixnum(i) => return Ok(Value::integer(i)),
             RV::BigInt(b) => return Ok(Value::bigint(b.clone())),
@@ -2054,8 +2061,7 @@ fn kernel_integer_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> R
     }
     // Then #to_str (an object convertible to a String parses like one) —
     // preferred over #to_i (CRuby).
-    if let Some(func_id) = globals.check_method(arg0, IdentId::TO_STR) {
-        let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+    if let Some(result) = crate::coerce::check_funcall(vm, globals, arg0, IdentId::TO_STR)? {
         if let Some(s) = result.is_str() {
             return parse_kernel_integer(s, 0);
         }
@@ -2405,8 +2411,7 @@ fn kernel_float_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Res
     // Try to_f coercion. CRuby requires `#to_f` to return a Float; an
     // Integer (or anything else) is a TypeError. The result object is
     // returned as-is (identity preserved).
-    if let Some(func_id) = globals.check_method(arg0, IdentId::TO_F) {
-        let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
+    if let Some(result) = crate::coerce::check_funcall(vm, globals, arg0, IdentId::TO_F)? {
         match result.unpack() {
             RV::Float(_) => return Ok(result),
             _ => {
@@ -2907,17 +2912,17 @@ fn rational_from_value(vm: &mut Executor, globals: &mut Globals, v: Value) -> Re
             // result is an immediate TypeError, never a fallthrough —
             // and #to_int only for objects with no #to_r at all. An
             // exception raised inside #to_int surfaces as the TypeError.
-            if let Some(func_id) = globals.check_method(v, IdentId::get_id("to_r")) {
-                let result = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
+            if let Some(result) =
+                crate::coerce::check_funcall(vm, globals, v, IdentId::get_id("to_r"))?
+            {
                 if result.try_rational().is_some() {
                     return Ok(result);
                 }
                 return Err(bad_to_r_error(globals, v, result));
             }
-            if let Some(func_id) = globals.check_method(v, IdentId::get_id("to_int")) {
-                if let Ok(result) = vm.invoke_func_inner(globals, func_id, v, &[], None, None)
-                    && let Some(i) = result.try_fixnum()
-                {
+            if let Ok(Some(result)) = crate::coerce::check_funcall(vm, globals, v, IdentId::TO_INT)
+            {
+                if let Some(i) = result.try_fixnum() {
                     return Ok(Value::rational_from_inner(RationalInner::new(i, 1)));
                 }
                 return Err(rational_type_error(globals, v));
@@ -3139,17 +3144,17 @@ fn val_to_rational(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result
             // result is an immediate TypeError, never a fallthrough —
             // and #to_int only for objects with no #to_r at all. An
             // exception raised inside #to_int surfaces as the TypeError.
-            if let Some(func_id) = globals.check_method(v, IdentId::get_id("to_r")) {
-                let result = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
+            if let Some(result) =
+                crate::coerce::check_funcall(vm, globals, v, IdentId::get_id("to_r"))?
+            {
                 if let Some(r) = result.try_rational() {
                     return Ok(r.clone());
                 }
                 return Err(bad_to_r_error(globals, v, result));
             }
-            if let Some(func_id) = globals.check_method(v, IdentId::get_id("to_int")) {
-                if let Ok(result) = vm.invoke_func_inner(globals, func_id, v, &[], None, None)
-                    && let Some(i) = result.try_fixnum()
-                {
+            if let Ok(Some(result)) = crate::coerce::check_funcall(vm, globals, v, IdentId::TO_INT)
+            {
+                if let Some(i) = result.try_fixnum() {
                     return Ok(RationalInner::new(i, 1));
                 }
                 return Err(rational_type_error(globals, v));
@@ -3176,8 +3181,7 @@ fn kernel_array(
     if arg.is_array_ty() {
         return Ok(arg);
     }
-    if let Some(func_id) = globals.check_method(arg, IdentId::TO_ARY) {
-        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+    if let Some(result) = crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_ARY)? {
         if result.is_array_ty() {
             return Ok(result);
         }
@@ -3186,8 +3190,7 @@ fn kernel_array(
             return Err(MonorubyErr::cant_convert_error_ary(globals, arg, result));
         }
     }
-    if let Some(func_id) = globals.check_method(arg, IdentId::TO_A) {
-        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+    if let Some(result) = crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_A)? {
         if result.is_array_ty() {
             return Ok(result);
         }
@@ -3236,16 +3239,11 @@ fn path_arg_to_string(vm: &mut Executor, globals: &mut Globals, arg: Value) -> R
     if let Some(s) = arg.is_str() {
         return Ok(s.to_string());
     }
-    let v = if let Some(fid) = globals.check_method(arg, IdentId::TO_PATH) {
-        vm.invoke_func_inner(globals, fid, arg, &[], None, None)?
-    } else {
-        arg
-    };
+    let v = crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_PATH)?.unwrap_or(arg);
     if let Some(s) = v.is_str() {
         return Ok(s.to_string());
     }
-    if let Some(fid) = globals.check_method(v, IdentId::TO_STR) {
-        let r = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
+    if let Some(r) = crate::coerce::check_funcall(vm, globals, v, IdentId::TO_STR)? {
         if let Some(s) = r.is_str() {
             return Ok(s.to_string());
         }
@@ -3338,7 +3336,7 @@ fn autoload_query(
     _: BytecodePtr,
 ) -> Result<Value> {
     let cbase = kernel_cbase(vm, globals);
-    let Some(name) = lfp.arg(0).expect_symbol_or_existing_string(globals)? else {
+    let Some(name) = lfp.arg(0).expect_symbol_or_existing_to_str(vm, globals)? else {
         return Ok(Value::nil());
     };
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
@@ -4900,7 +4898,7 @@ fn public_send(
     if args.is_empty() {
         return Err(MonorubyErr::argumenterr("no method name given"));
     }
-    let method = args[0].expect_symbol_or_string(globals)?;
+    let method = args[0].expect_symbol_or_to_str(vm, globals)?;
     let receiver = lfp.self_val();
     // public_send only allows public methods. Both private and protected
     // are rejected unconditionally — unlike an ordinary call, where a
@@ -4970,7 +4968,7 @@ pub(crate) fn send(
     if args.is_empty() {
         return Err(MonorubyErr::argumenterr("no method name given"));
     }
-    let method = args[0].expect_symbol_or_string(globals)?;
+    let method = args[0].expect_symbol_or_to_str(vm, globals)?;
     vm.invoke_method_inner(
         globals,
         method,
@@ -5220,7 +5218,7 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         (IdentId::EACH, vec![])
     } else {
         (
-            args[0].expect_symbol_or_string(globals)?,
+            args[0].expect_symbol_or_to_str(vm, globals)?,
             args[1..].to_vec(),
         )
     };
@@ -5519,6 +5517,96 @@ fn warn_caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
     Ok(Value::nil())
 }
 
+/// `Kernel#__to_int(val)`: CRuby's `rb_to_int`.
+#[monoruby_builtin]
+fn kernel_to_int(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let val = lfp.arg(0);
+    if val.is_integer() {
+        return Ok(val);
+    }
+    val.coerce_to_int(vm, globals)
+}
+
+/// `Kernel#__to_str(val)`: CRuby's `StringValue`.
+#[monoruby_builtin]
+fn kernel_to_str(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp.arg(0).coerce_to_rstring(vm, globals)?.as_val())
+}
+
+/// `Kernel#__num2long_slow(val)`: CRuby's `NUM2LONG`
+/// ([`Value::num2long`]); `__num2long` in `builtins/kernel.rb` answers
+/// a Fixnum itself.
+#[monoruby_builtin]
+fn kernel_num2long(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::integer(lfp.arg(0).num2long(vm, globals)?))
+}
+
+/// `Kernel#__String(arg)`, the body of `Kernel#String` (`rb_String`):
+/// `to_str` when the object converts by it (`rb_check_string_type`),
+/// else `to_s`, which has to be there and answer a String.
+#[monoruby_builtin]
+fn kernel_string(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    if let Some(s) = arg.check_string_type(vm, globals)? {
+        return Ok(s);
+    }
+    match crate::coerce::convert_type(vm, globals, arg, IdentId::TO_S, "String", |v| {
+        v.is_rstring().is_some()
+    })? {
+        Some(s) => Ok(s),
+        None => Err(MonorubyErr::typeerr(format!(
+            "can't convert {} into String",
+            arg.builtin_class_name(&globals.store)
+        ))),
+    }
+}
+
+/// `Kernel#__Hash(arg)`, the body of `Kernel#Hash` (`rb_Hash`): what
+/// converts by `to_hash` (`rb_check_hash_type`), with nil and an empty
+/// Array standing for an empty Hash.
+#[monoruby_builtin]
+fn kernel_hash(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let arg = lfp.arg(0);
+    if arg.is_nil() {
+        return Ok(Value::hash(RubyMap::default()));
+    }
+    if let Some(h) = arg.check_hash_type(vm, globals)? {
+        return Ok(h.as_val());
+    }
+    if arg.try_array_ty().is_some_and(|a| a.is_empty()) {
+        return Ok(Value::hash(RubyMap::default()));
+    }
+    Err(MonorubyErr::typeerr(format!(
+        "can't convert {} into Hash",
+        arg.get_real_class_name(&globals.store)
+    )))
+}
+
 /// Drop `require`'s installed-gem fallback (`Globals::gem_lib_dirs`):
 /// under Bundler, CRuby's `require` sees only the bundle's gems, so a
 /// gem outside it (`require "rubocop"` guarded by `rescue LoadError`, as
@@ -5555,7 +5643,7 @@ fn define_singleton_method(
     if self_val.is_frozen() && !self_val.is_special_singleton() {
         return Err(MonorubyErr::cant_modify_frozen(&globals.store, self_val));
     }
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let name = lfp.arg(0).expect_symbol_or_to_str(vm, globals)?;
     // For a proc/block body, the runtime LFP carries the *block*'s
     // FuncId. `super` resolution (`find_super`) reads that FuncId's
     // `name`, so it must be set or it panics. Mirror the decoration
@@ -5745,7 +5833,7 @@ fn to_s(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // A name no symbol exists for cannot be a method, so it is not interned
     // to find that out (CRuby's `rb_check_id`).
-    let name = lfp.arg(0).expect_symbol_or_existing_string(globals)?;
+    let name = lfp.arg(0).expect_symbol_or_existing_to_str(vm, globals)?;
     let include_all = if let Some(arg1) = lfp.try_arg(1) {
         arg1.as_bool()
     } else {
@@ -5814,7 +5902,7 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
                 }
                 // Only now, and only for a body that will see it, is the
                 // name interned.
-                let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+                let name = lfp.arg(0).expect_symbol_or_to_str(vm, globals)?;
                 let priv_ = lfp.try_arg(1).unwrap_or(Value::nil());
                 vm.invoke_func_inner(
                     globals,
@@ -6294,13 +6382,13 @@ fn method_object_impl(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/singleton_method.html]
 #[monoruby_builtin]
 fn singleton_method(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let receiver = lfp.self_val();
-    let method_name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let method_name = lfp.arg(0).expect_symbol_or_to_str(vm, globals)?;
     // CRuby's `rb_obj_singleton_method`: only the singleton class itself
     // and the modules mixed into it count — a method the object's class
     // (or, for a class, its superclass's metaclass) provides is not a
@@ -6564,8 +6652,7 @@ fn ivar_name_id(
         sym.get_name().to_string()
     } else if let Some(s) = arg.is_str() {
         s.to_string()
-    } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_STR) {
-        let r = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+    } else if let Some(r) = crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_STR)? {
         match r.is_str() {
             Some(s) => s.to_string(),
             None => return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg)),

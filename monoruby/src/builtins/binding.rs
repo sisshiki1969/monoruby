@@ -421,8 +421,8 @@ fn arg_to_implicit_name(arg: Value, vm: &mut Executor, globals: &mut Globals) ->
     if let Some(sym) = arg.try_symbol() {
         return Ok(sym);
     }
-    if arg.is_str().is_some() || globals.check_method(arg, IdentId::get_id("to_str")).is_some() {
-        let s = arg.coerce_to_str(vm, globals)?;
+    if let Some(s) = arg.check_string_type(vm, globals)? {
+        let s = s.expect_string(&globals.store)?;
         return Ok(IdentId::get_id(&s));
     }
     Err(MonorubyErr::typeerr(format!(

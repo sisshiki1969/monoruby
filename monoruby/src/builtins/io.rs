@@ -302,8 +302,8 @@ pub(super) fn io_init_from_fd(
         Some(v) => {
             if let Some(s) = v.is_str() {
                 Some(s.to_string())
-            } else if globals.check_method(v, IdentId::TO_STR).is_some() {
-                Some(v.coerce_to_string(vm, globals)?)
+            } else if let Some(s) = v.check_string_type(vm, globals)? {
+                Some(s.expect_string(&globals.store)?)
             } else {
                 let flags = v.coerce_to_int_i64(vm, globals)?;
                 let m = super::file::mode_string_from_flags(flags);
@@ -667,11 +667,7 @@ fn coerce_enc_arg(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<
     {
         return Ok(v);
     }
-    if globals.store.check_method(v, IdentId::TO_STR).is_some() {
-        let s = v.coerce_to_str(vm, globals)?;
-        return Ok(Value::string(s));
-    }
-    Ok(v)
+    Ok(v.check_string_type(vm, globals)?.unwrap_or(v))
 }
 
 /// Argument `Value` -> Encoding object: an `Encoding` is taken as-is, a
@@ -1685,8 +1681,8 @@ pub(super) fn getline_args(
                 sep = None;
             } else if let Some(rs) = v0.is_rstring() {
                 sep = Some(rs.as_bytes().to_vec());
-            } else if globals.check_method(v0, IdentId::TO_STR).is_some() {
-                sep = Some(v0.coerce_to_rstring(vm, globals)?.as_bytes().to_vec());
+            } else if let Some(rs) = v0.check_string_type(vm, globals)? {
+                sep = Some(rs.as_rstring_inner().as_bytes().to_vec());
             } else {
                 limit_arg = Some(v0);
             }
@@ -2949,8 +2945,8 @@ fn class_getline_args(
                 sep = None;
             } else if let Some(rs) = v0.is_rstring() {
                 sep = Some(rs.as_bytes().to_vec());
-            } else if globals.check_method(v0, IdentId::TO_STR).is_some() {
-                sep = Some(v0.coerce_to_rstring(vm, globals)?.as_bytes().to_vec());
+            } else if let Some(rs) = v0.check_string_type(vm, globals)? {
+                sep = Some(rs.as_rstring_inner().as_bytes().to_vec());
             } else {
                 limit_arg = Some(v0);
             }
@@ -3879,8 +3875,9 @@ fn io_reopen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         if is_io(arg0) {
             return io_reopen_io(globals, lfp.self_val(), arg0);
         }
-        if let Some(fid) = globals.check_method(arg0, IdentId::get_id("to_io")) {
-            let conv = vm.invoke_func_inner(globals, fid, arg0, &[], None, None)?;
+        if let Some(conv) =
+            crate::coerce::check_funcall(vm, globals, arg0, IdentId::get_id("to_io"))?
+        {
             if !is_io(conv) {
                 // CRuby's conversion error spells this "to IO", not
                 // the generic coercion helper's "into", and names the
@@ -6848,12 +6845,12 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
     // converts, e.g. Tempfile) is used as an IO *before* the `#to_path` /
     // String file-name form is considered.
     let to_io = |vm: &mut Executor, globals: &mut Globals, v: Value| -> Result<Value> {
-        if !is_io(v) && globals.check_method(v, IdentId::get_id("to_io")).is_some() {
-            let converted =
-                vm.invoke_method_inner(globals, IdentId::get_id("to_io"), v, &[], None, None)?;
-            if is_io(converted) {
-                return Ok(converted);
-            }
+        if !is_io(v)
+            && let Some(converted) =
+                crate::coerce::check_funcall(vm, globals, v, IdentId::get_id("to_io"))?
+            && is_io(converted)
+        {
+            return Ok(converted);
         }
         Ok(v)
     };
