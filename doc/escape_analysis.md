@@ -109,6 +109,14 @@ callee's `RecvEscape`:
   the resolved method on it, exactly the call that would have been made.
   A parameter stays elided after such a use if it is still live (the next
   `args.size` or `opts[:y]` is free too); a temporary is done.
+  None of these applies when a positional argument of the call is itself
+  an elided object (`(1..10).cover?(1..5)`, `Range#cover?` being a Ruby
+  method that takes it, §6): each object is judged on its own
+  (`may_consume_virtual`), but the lowering here reads the argument slots
+  as values, and an elided argument's slot holds none. The call is then
+  the one that takes both — the receiver is materialized (a frozen
+  literal is its template, at no cost) and the argument handed over
+  (`consume_virtual`'s `args_elided`).
 - `transparent: true` — the callee never mutates, stores or returns its
   receiver, nor returns an Enumerator over it, in any argument form. A
   `Literal` object's copy is then indistinguishable from the template to

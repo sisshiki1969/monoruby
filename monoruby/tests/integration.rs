@@ -97,6 +97,7 @@ mod forwarded_block_yield;
 mod forwarding_depth;
 mod forwarding_megamorphic;
 mod forwarding_recompile;
+mod fp_inline_const_operand;
 mod frameless_call;
 mod fused_branch_nested;
 mod gem_boot_compat;

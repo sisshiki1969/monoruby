@@ -286,6 +286,7 @@ pub fn run_test_no_result_check(code: &str) -> Value {
 pub fn run_test_error(code: &str) {
     eprintln!("{code}");
     let mut globals = Globals::new_test();
+    let compile_panics = contained_compile_panics();
     match globals.run(code, std::path::Path::new(".")) {
         Ok(v) => {
             eprintln!("{}", v.inspect(&globals.store));
@@ -293,9 +294,33 @@ pub fn run_test_error(code: &str) {
         }
         Err(err) => err.show_error_message_and_all_loc(&globals.store),
     }
+    assert_no_compile_panic(compile_panics);
+}
+
+/// The compiles this thread's interpreter has abandoned because the
+/// compiler panicked (`codegen::compiler::contain_compile_panic`).
+fn contained_compile_panics() -> usize {
+    crate::codegen::CODEGEN.with(|codegen| codegen.borrow().contained_panics)
+}
+
+/// Fail the test if the compiler panicked since *before* was read. The
+/// panic is contained and the code runs interpreted, so the result alone
+/// would not show it (issue #1980). x86-64 only: there a compile panic is
+/// always a bug of the compiler, while the aarch64 emitter still panics on
+/// a branch out of range in a large body, which is what the containment
+/// was first for.
+fn assert_no_compile_panic(before: usize) {
+    if cfg!(target_arch = "x86_64") {
+        assert_eq!(
+            before,
+            contained_compile_panics(),
+            "the JIT compiler panicked while compiling this test's code (the panic message is above); the compile was abandoned and the code ran interpreted"
+        );
+    }
 }
 
 fn run_test_main(globals: &mut Globals, code: &str) -> Value {
+    let compile_panics = contained_compile_panics();
     let res = match globals.run(code, std::path::Path::new(".")) {
         Ok(res) => res,
         Err(err) => {
@@ -308,6 +333,8 @@ fn run_test_main(globals: &mut Globals, code: &str) -> Value {
             panic!();
         }
     };
+
+    assert_no_compile_panic(compile_panics);
 
     let jit_str = res.inspect(&globals.store);
     eprintln!("monoruby:  {jit_str}");

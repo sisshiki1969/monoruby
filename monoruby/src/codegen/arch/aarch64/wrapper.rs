@@ -64,7 +64,7 @@ impl Codegen {
                 //     to the JIT code (indirect-dispatch install; aarch64 has no
                 //     runtime branch patching);
                 //   - else decrement the counter; when it hits 0 call
-                //     jit_compile_patch, which runs the front-end + aarch64
+                //     jit_profile_patch, which runs the front-end + aarch64
                 //     lowering and, on success, writes the compiled entry into
                 //     the slot. Unsupported AsmInsts bail → stays VM.
                 // x19..x23 are callee-saved across the `extern "C"` call; LR is

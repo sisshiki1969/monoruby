@@ -1157,6 +1157,15 @@ impl<'a> JitContext<'a> {
         // The receiver slot must be dead after the call: whatever the call
         // leaves there is never read again.
         let recv_dead = Some(recv) == call_dst || self.dead_after(bc_pos, recv);
+        // An argument that is itself an elided object was left for the
+        // call to hand over (`may_consume_virtual` decides each object on
+        // its own: `(1..10).cover?(1..5)`, `Range#cover?` being Ruby): its
+        // slot holds no value, which the lowerings here would read. The
+        // two consumers exclude each other, and the call is the one that
+        // takes both: the receiver is built (a literal is its template,
+        // at no cost) and the argument stays elided into the callee
+        // (issue #1980).
+        let args_elided = (0..pos_num).any(|i| state.virtual_at(args + i).is_some());
         // What the elements lowering would do, decided before anything is
         // emitted: an Array's elements are in frame slots, a Hash's pairs
         // are in its template or in the caller's kw window, a Range's
@@ -1164,7 +1173,7 @@ impl<'a> JitContext<'a> {
         let plan = match summary {
             Some(RecvEscape {
                 elements: Some(op), ..
-            }) if block_less => match (
+            }) if block_less && !args_elided => match (
                 elements,
                 Self::hash_pairs(state, src),
                 Self::range_ends(src),
