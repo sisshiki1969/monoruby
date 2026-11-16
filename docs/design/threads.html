@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-62d85155.js";
+            window.path_to_searchindex_js = "../searchindex-e6aeb7a0.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-9192be69.js"></script>
@@ -401,7 +401,7 @@ main なら <code>scheduler_run</code> を呼び、戻ったら <code>take_main_
 スレッドを共有するので同じ id、1:1 では各スレッド固有)</li>
 <li><code>#report_on_exception</code>(インスタンスのみ)</li>
 <li><code>Thread.ignore_deadlock</code> / <code>=</code>(クラス変数に丸めるだけ。デッドロック検出器自体は止めない)</li>
-<li><code>Thread::Waiter</code>(<code>Process.detach</code> 用。native <code>Thread.new</code> はブロック必須なので
+<li><code>Process::Waiter</code>(<code>Process.detach</code> 用。native <code>Thread.new</code> はブロック必須なので
 <code>allocate</code> ベースで生成)</li>
 </ul>
 <p><code>Kernel#sleep</code> は他に生存スレッドがいるときだけスケジューラ経由になる

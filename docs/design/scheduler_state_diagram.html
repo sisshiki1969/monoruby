@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-62d85155.js";
+            window.path_to_searchindex_js = "../searchindex-e6aeb7a0.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-9192be69.js"></script>
@@ -249,7 +249,7 @@ resume → park していた <code>park_switch</code> が <code>Err</code> を�
 <code>sleepers</code> の両方)。どちらか一方の経路で起きたら他方のエントリは stale になり、
 <code>wake_due_sleepers</code> / <code>prune_io_waiters</code> が状態を再検査して破棄する。
 スプリアス起床は常に許容され、呼び出し元のループが条件を再検査する。</li>
-<li><strong><code>Thread.allocate</code> の shell</strong>(<code>Thread::Waiter</code> 等)は最初から <code>Dead</code> で
+<li><strong><code>Thread.allocate</code> の shell</strong>(<code>Process::Waiter</code> 等)は最初から <code>Dead</code> で
 生成され、スケジュールされない。</li>
 </ul>
 <h3 id="threadstatus-との対応"><a class="header" href="#threadstatus-との対応"><code>Thread#status</code> との対応</a></h3>
