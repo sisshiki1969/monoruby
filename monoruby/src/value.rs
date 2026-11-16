@@ -901,15 +901,21 @@ impl Value {
         }
     }
 
+    /// `nil`, `true` or `false`: the values whose class is their own
+    /// singleton class. They are frozen, and yet take singleton methods
+    /// and `extend`, which land in NilClass / TrueClass / FalseClass.
+    pub(crate) fn is_special_singleton(self) -> bool {
+        matches!(self.0.get(), NIL_VALUE | TRUE_VALUE | FALSE_VALUE)
+    }
+
     pub(crate) fn get_singleton(self, store: &mut Store) -> Result<Value> {
         if let Some(class) = self.is_class_or_module() {
             Ok(store.get_metaclass(class.id()).as_val())
         } else if self.is_packed_value() {
-            match self.0.get() {
-                NIL_VALUE => Ok(store[NIL_CLASS].get_module().as_val()),
-                TRUE_VALUE => Ok(store[TRUE_CLASS].get_module().as_val()),
-                FALSE_VALUE => Ok(store[FALSE_CLASS].get_module().as_val()),
-                _ => Err(MonorubyErr::typeerr("can't define singleton")),
+            if self.is_special_singleton() {
+                Ok(store[self.class()].get_module().as_val())
+            } else {
+                Err(MonorubyErr::typeerr("can't define singleton"))
             }
         } else {
             Ok(store.get_singleton(self)?.as_val())

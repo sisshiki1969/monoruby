@@ -126,6 +126,40 @@ impl Value {
         self.coerce_to_int_i64_slow(vm, globals)
     }
 
+    ///
+    /// CRuby's `NUM2LONG`, which is how a C method reads a count or a
+    /// size: a Float truncates without a call (one outside the range of
+    /// a `long` is a RangeError naming it), `nil` has a message of its
+    /// own, and anything else goes through `to_int`
+    /// ([`Self::coerce_to_int_i64`]). `builtins/kernel.rb` has the same
+    /// as `__num2long`.
+    ///
+    #[inline]
+    pub(crate) fn num2long(&self, vm: &mut Executor, globals: &mut Globals) -> Result<i64> {
+        if let Some(i) = self.try_fixnum() {
+            return Ok(i);
+        }
+        self.num2long_slow(vm, globals)
+    }
+
+    #[inline(never)]
+    fn num2long_slow(&self, vm: &mut Executor, globals: &mut Globals) -> Result<i64> {
+        if let Some(f) = self.try_float() {
+            // NaN fails both comparisons.
+            return if f < 9223372036854775808.0 && f >= -9223372036854775808.0 {
+                Ok(f as i64)
+            } else {
+                Err(MonorubyErr::float_out_of_range_of_integer(f))
+            };
+        }
+        if self.is_nil() {
+            return Err(MonorubyErr::typeerr(
+                "no implicit conversion from nil to integer",
+            ));
+        }
+        self.coerce_to_int_i64(vm, globals)
+    }
+
     #[inline(never)]
     fn coerce_to_int_i64_slow(&self, vm: &mut Executor, globals: &mut Globals) -> Result<i64> {
         let res = match self.unpack() {

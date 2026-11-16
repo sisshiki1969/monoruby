@@ -531,7 +531,7 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         // No arg: just return begin (matches Enumerator#first for AS).
         return Ok(b);
     };
-    let n = n_arg.coerce_to_int_i64(vm, globals)?;
+    let n = n_arg.num2long(vm, globals)?;
     if n < 0 {
         return Err(MonorubyErr::argumenterr("attempt to take negative size"));
     }
@@ -598,7 +598,21 @@ fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             term_or_generic(vm, globals, b, count - 1, s)
         }
         Some(n_arg) => {
-            let n = n_arg.coerce_to_int_i64(vm, globals)?;
+            // CRuby's `arith_seq_last` clamps the count to the length
+            // *before* NUM2LONG, so one beyond a `long` takes everything
+            // rather than raising.
+            let n = match n_arg.unpack() {
+                RV::Fixnum(n) => n,
+                _ => match n_arg.coerce_to_int(vm, globals)?.unpack() {
+                    RV::Fixnum(n) => n,
+                    RV::BigInt(b) if b.sign() == num::bigint::Sign::Plus => count,
+                    _ => {
+                        return Err(MonorubyErr::rangeerr(
+                            "bignum too big to convert into 'long'",
+                        ));
+                    }
+                },
+            };
             if n < 0 {
                 return Err(MonorubyErr::argumenterr("negative array size"));
             }

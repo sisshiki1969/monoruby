@@ -60,12 +60,53 @@ module Kernel
     if val.respond_to?(:to_int)
       result = val.to_int
       unless result.is_a?(Integer)
-        raise TypeError, "can't convert #{val.class} into Integer (#{val.class}#to_int gives #{result.class})"
+        raise TypeError, "can't convert #{val.class} to Integer (#{val.class}#to_int gives #{result.class})"
       end
       result
     else
       raise TypeError, "no implicit conversion of #{__builtin_class_name(val)} into Integer"
     end
+  end
+
+  # CRuby's NUM2LONG, which is how a C method reads a count, a size or a
+  # limit: an Integer that fits a C long, a Float truncated (one outside
+  # the range is a RangeError), anything else through #to_int. The
+  # conversion comes before any check of the sign, so `take(-2**64)` is
+  # the RangeError of a Bignum, not "attempt to take negative size"
+  # (#1930).
+  def __num2long(val)
+    # A Fixnum is its own answer; kept this small so that the JIT inlines
+    # it into `take(n)`, `each_slice(n)` and the like.
+    if val.is_a?(Integer) && val <= 0x3fff_ffff_ffff_ffff && val >= -0x4000_0000_0000_0000
+      return val
+    end
+    __num2long_slow(val)
+  end
+
+  def __num2long_slow(val)
+    unless val.is_a?(Integer)
+      if val.is_a?(Float)
+        # NaN fails both comparisons.
+        unless val < 9223372036854775808.0 && val >= -9223372036854775808.0
+          raise RangeError, "float #{'%-.10g' % val} out of range of integer"
+        end
+        return val.to_i
+      end
+      raise TypeError, "no implicit conversion from nil to integer" if val.nil?
+      unless val.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{__builtin_class_name(val)} into Integer"
+      end
+      conv = val.to_int
+      unless conv.is_a?(Integer)
+        raise TypeError,
+              "can't convert #{val.class} to Integer (#{val.class}#to_int gives #{conv.class})"
+      end
+      val = conv
+    end
+    if val.bit_length > 63
+      raise RangeError, "bignum too big to convert into 'long'"
+    end
+    val
   end
 
   # Internal helper: coerce value to String via to_str.

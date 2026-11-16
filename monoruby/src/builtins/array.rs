@@ -1025,7 +1025,7 @@ fn shift(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         ary.drain(0..1);
         Ok(res)
     } else {
-        let i = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+        let i = lfp.arg(0).num2long(vm, globals)?;
         if i < 0 {
             return Err(MonorubyErr::negative_array_size());
         }
@@ -1218,7 +1218,7 @@ fn push(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn pop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array_mut(&globals.store)?;
     if let Some(n) = lfp.try_arg(0) {
-        let n = n.coerce_to_int_i64(vm, globals)?;
+        let n = n.num2long(vm, globals)?;
         if n < 0 {
             return Err(MonorubyErr::argumenterr("negative array size"));
         }
@@ -1963,7 +1963,7 @@ fn fill_range_indices(
 #[monoruby_builtin]
 fn drop(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    let num = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let num = lfp.arg(0).num2long(vm, globals)?;
     if num < 0 {
         return Err(MonorubyErr::argumenterr("attempt to drop negative size"));
     }
@@ -2477,7 +2477,7 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     if lfp.try_arg(0).is_none() {
         Ok(ary.first().cloned().unwrap_or_default())
     } else {
-        let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+        let n = lfp.arg(0).num2long(vm, globals)?;
         if n < 0 {
             return Err(MonorubyErr::argumenterr("negative array size"));
         }
@@ -2503,7 +2503,7 @@ fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     if lfp.try_arg(0).is_none() {
         Ok(ary.last().cloned().unwrap_or_default())
     } else {
-        let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+        let n = lfp.arg(0).num2long(vm, globals)?;
         if n < 0 {
             return Err(MonorubyErr::argumenterr("negative array size"));
         }
@@ -2563,7 +2563,7 @@ fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn take(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let n = lfp.arg(0).num2long(vm, globals)?;
     if n < 0 {
         return Err(MonorubyErr::argumenterr("attempt to take negative size"));
     }
@@ -2679,7 +2679,7 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// the Ruby-side twin of this).
 ///
 fn minmax_n(vm: &mut Executor, globals: &mut Globals, n: Value) -> Result<usize> {
-    let n = n.coerce_to_int_i64(vm, globals)?;
+    let n = n.num2long(vm, globals)?;
     if n < 0 {
         // CRuby words this one per class: `Array#min` says "negative size
         // (-1)", `Range#min` "negative array size (or size too big)".

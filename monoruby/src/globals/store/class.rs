@@ -1280,6 +1280,13 @@ impl ClassInfoTable {
         if obj.ty() == Some(ObjTy::CLASS) {
             return Ok(self.get_metaclass(obj.as_class_id()));
         }
+        // `nil`, `true` and `false` are the only instances of their
+        // classes, and those classes are their singleton classes (CRuby's
+        // `special_singleton_class_of`): `nil.extend(M)` includes `M`
+        // into NilClass, `def nil.foo` defines NilClass#foo.
+        if obj.is_special_singleton() {
+            return Ok(self[obj.class()].get_module());
+        }
         let org_class = self[obj.class()].get_module();
         if org_class.is_singleton().is_some() {
             return Ok(org_class);

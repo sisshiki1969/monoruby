@@ -261,7 +261,7 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         ));
     }
     if let Some(n_val) = lfp.try_arg(0) {
-        let n = n_val.coerce_to_int_i64(vm, globals)?;
+        let n = n_val.num2long(vm, globals)?;
         if n < 0 {
             return Err(MonorubyErr::argumenterr(
                 "negative array size (or size too big)",
@@ -307,7 +307,7 @@ fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         ));
     }
     if let Some(n_val) = lfp.try_arg(0) {
-        let n = n_val.coerce_to_int_i64(vm, globals)?;
+        let n = n_val.num2long(vm, globals)?;
         if n < 0 {
             return Err(MonorubyErr::argumenterr("negative array size"));
         }

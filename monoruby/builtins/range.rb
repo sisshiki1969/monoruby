@@ -292,19 +292,13 @@ class Range
   end
 
   # The n argument of min(n)/max(n): #to_int conversion + validation.
-  def __minmax_n(n)
-    unless n.is_a?(Integer)
-      unless n.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
-      end
-      conv = n.to_int
-      unless conv.is_a?(Integer)
-        raise TypeError,
-              "can't convert #{n.class} to Integer (#{n.class}#to_int gives #{conv.class})"
-      end
-      n = conv
+  # With a block CRuby hands over to Enumerable#min / #max, whose
+  # message for a negative count is its own.
+  def __minmax_n(n, by_enumerable = false)
+    n = __num2long(n)
+    if n < 0
+      raise ArgumentError, by_enumerable ? "negative size (#{n})" : "negative array size (or size too big)"
     end
-    raise ArgumentError, "negative array size (or size too big)" if n < 0
     n
   end
 
@@ -315,7 +309,7 @@ class Range
         raise RangeError, "cannot get the minimum of endless range with custom comparison method"
       end
       return __builtin_min(&block) if n.nil?
-      return to_a.sort(&block).first(__minmax_n(n))
+      return to_a.sort(&block).first(__minmax_n(n, true))
     end
     return __builtin_min if n.nil?
     n = __minmax_n(n)
@@ -339,7 +333,7 @@ class Range
         raise RangeError, "cannot get the maximum of beginless range with custom comparison method"
       end
       return __builtin_max(&block) if n.nil?
-      return to_a.sort(&block).last(__minmax_n(n)).reverse
+      return to_a.sort(&block).last(__minmax_n(n, true)).reverse
     end
     if n.nil?
       if exclude_end? && !e.is_a?(Numeric)
@@ -386,12 +380,16 @@ class Range
   # (endless, `Float::INFINITY`-ended, String, …): walk `#each` and break
   # after `n` elements, so an infinite range terminates. Called from
   # `Range#first` in Rust; not part of the public API.
+  #
+  # `#each` runs even for `first(0)`, as CRuby's `range_first` runs it:
+  # a range that cannot be iterated — `(1.0..3.0)`, a Time range — is a
+  # TypeError whatever the count (#1930). The count is tested before an
+  # element is taken, as `first_i` tests it.
   private def __range_first_by_each(n)
     res = []
-    return res if n == 0
     each do |x|
-      res << x
       break if res.size >= n
+      res << x
     end
     res
   end
