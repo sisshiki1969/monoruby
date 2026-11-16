@@ -133,6 +133,30 @@ fn result_array_too_large_to_allocate() {
     );
 }
 
+// `Array#*` (`rb_ary_times`): a product past `ARY_MAX_SIZE` is
+// "argument too big" and one the allocator refuses a NoMemoryError,
+// whether the count is an Integer or arrives through `to_int`.
+#[test]
+fn array_times_too_big() {
+    run_test2(
+        r##"
+        $o = []
+        def t; yield.inspect[0, 60]; rescue Exception => e; "#{e.class}: #{e.message}"; end
+        huge = Object.new
+        def huge.to_int = 2**62
+        big = Object.new
+        def big.to_int = 2**40
+        $o << t { [1, 2] * (2**62) }
+        $o << t { [1, 2] * huge }
+        $o << t { [] * (2**62) }
+        $o << t { [] * huge }
+        $o << t { [1] * big }
+        $o << t { [1] * 3 }
+        $o
+        "##,
+    );
+}
+
 // Issue #1972 (5): the copy a Hash makes of an unfrozen String key is the
 // fstring of its content (`rb_hash_key_str` -> `rb_fstring`), the same
 // object `-str` and a frozen literal answer.

@@ -219,9 +219,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_private_builtin_func(kernel_class, "__array_capa_check", array_capa_check, 1);
     globals.define_private_builtin_func(kernel_class, "__check_ary", kernel_check_ary, 1);
     globals.define_private_builtin_func(kernel_class, "__check_str", kernel_check_str, 1);
-    globals.define_private_builtin_func(kernel_class, "__check_hash", kernel_check_hash, 1);
     globals.define_private_builtin_func(kernel_class, "__check_int", kernel_check_int, 1);
-    globals.define_private_builtin_func(kernel_class, "__to_ary", kernel_to_ary, 1);
     globals.define_private_builtin_func(kernel_class, "__to_hash", kernel_to_hash, 1);
     globals.define_private_builtin_func(kernel_class, "__to_path", kernel_to_path, 1);
     globals.define_private_builtin_func(kernel_class, "__num2dbl", kernel_num2dbl, 1);
@@ -5643,20 +5641,6 @@ fn kernel_check_str(
         .unwrap_or(Value::nil()))
 }
 
-/// `Kernel#__check_hash(val)`: CRuby's `rb_check_hash_type`.
-#[monoruby_builtin]
-fn kernel_check_hash(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    Ok(match lfp.arg(0).check_hash_type(vm, globals)? {
-        Some(h) => h.as_val(),
-        None => Value::nil(),
-    })
-}
-
 /// `Kernel#__check_int(val)`: CRuby's `rb_check_to_int` — the Integer
 /// `val` is or answers from `to_int`, nil otherwise (no error for a
 /// `to_int` that answers something else).
@@ -5671,18 +5655,6 @@ fn kernel_check_int(
         .arg(0)
         .check_to_int(vm, globals)?
         .unwrap_or(Value::nil()))
-}
-
-/// `Kernel#__to_ary(val)`: CRuby's `rb_convert_type(val, T_ARRAY,
-/// "Array", "to_ary")` — TypeError when `val` does not convert.
-#[monoruby_builtin]
-fn kernel_to_ary(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    Ok(lfp.arg(0).coerce_to_array(vm, globals)?.into())
 }
 
 /// `Kernel#__to_hash(val)`: CRuby's `rb_to_hash_type`.
