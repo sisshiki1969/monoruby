@@ -346,13 +346,24 @@ impl<'a> JitContext<'a> {
     /// dependency so `set_bop_redefine` evicts this body.
     ///
     fn opt_eq_assumable(&mut self, kind: CmpKind) -> bool {
-        // `!=` is a tracked pair only for a few classes (`BASIC_OP_DEFS`);
-        // where it is not, the runtime helper cannot see its redefinition
-        // either, so demanding it here would only cost the fast path
-        // without closing anything. `==` is tracked for all five.
+        // `==` is a tracked pair for all five. `!=` is the inherited
+        // `BasicObject#!=` for every one of them, `!(a == b)`, which the
+        // bit compare answers only while the class has not been given a
+        // `!=`. For `Integer` that is a tracked pair too (an inherited
+        // one, which also falls with `Integer#==`). For the other four it
+        // is a plain method resolution, so it is asked like one and
+        // recorded for the class-version salvage (the helper call this
+        // fast path sits in front of is class-version guarded): a
+        // `Symbol#!=` or `NilClass#!=` defined later recompiles the site
+        // onto the helper, which dispatches it.
         let eq = IdentId::_EQ;
         let op: IdentId = kind.into();
+        let default_neq = self.store.default_neq();
+        // The Ruby-written core stands in for CRuby's C, which calls no
+        // `!=` at all.
+        let ask_neq = op != eq && !self.in_internal_builtin();
         let mut deps = Vec::with_capacity(OPT_EQ_IMMEDIATE_CLASSES.len() + 1);
+        let mut default_neqs = Vec::new();
         for &class in OPT_EQ_IMMEDIATE_CLASSES {
             let class = CachedClass::from_class(class);
             if !self.basic_op_assumable(class, eq) {
@@ -364,10 +375,19 @@ impl<'a> JitContext<'a> {
                     return false;
                 }
                 deps.push((class, op));
+            } else if ask_neq {
+                let resolved = self.jit_check_method(class, op).map(|(fid, _)| fid);
+                if resolved.is_none() || resolved != default_neq {
+                    return false;
+                }
+                default_neqs.push(class);
             }
         }
         for (class, op) in deps {
             self.record_bop_dep(class, op);
+        }
+        for class in default_neqs {
+            self.assume_resolution(class, op, default_neq);
         }
         true
     }

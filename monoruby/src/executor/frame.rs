@@ -739,6 +739,18 @@ impl Lfp {
     }
 
     ///
+    /// Turn this frame into the frame of another function: for a native
+    /// method that runs a second native method of the same shape (same
+    /// receiver, same arguments) in its own frame instead of pushing one.
+    /// Until the caller puts its own `Meta` back the frame is the second
+    /// method's — in a backtrace, and for a native that looks itself up
+    /// through the frame.
+    ///
+    pub(crate) fn become_frame_of(&mut self, meta: Meta) {
+        *self.meta_mut() = meta;
+    }
+
+    ///
     /// Get block.
     ///
     pub fn block(&self) -> Option<BlockHandler> {

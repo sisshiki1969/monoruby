@@ -218,11 +218,8 @@ fn is_nil_or_bool(v: Value) -> bool {
 /// `eq_values_vis_raw` closely enough to be worth caching for.
 ///
 fn dispatched_eq_class(elem: Value) -> Option<ClassId> {
-    if elem.is_packed_value() {
-        // nil / booleans / Integer / Float / Symbol as immediates.
-        return None;
-    }
-    let class = elem.class();
+    // `None`: nil / booleans / Integer / Float / Symbol as immediates.
+    let class = elem.try_rvalue()?.class();
     // The heap ones: a Bignum, a boxed Float, a String.
     (class != INTEGER_CLASS && class != FLOAT_CLASS && class != STRING_CLASS).then_some(class)
 }
@@ -503,6 +500,89 @@ impl Executor {
     }
 
     ///
+    /// `lhs != rhs` for `BasicObject#!=` itself, whose frame `lfp` holds
+    /// the two operands: `!(lhs == rhs)` with `==` asked as
+    /// [`Self::eq_values_funcall`] asks it.
+    ///
+    /// A native `==` — Struct's, Array's, Rational's — takes the frame
+    /// over instead of getting one of its own through the invoker: the
+    /// frame already is what that `==` wants, receiver and argument. That
+    /// is one native frame for `a != b`, which is what the class-level
+    /// `!=` methods used to cost. While it runs the frame is `==`'s (in
+    /// `caller`, as where the interpreter negates `==` with no `!=` frame
+    /// at all); it is `!=`'s again afterwards, so an error coming out of
+    /// `==` is traced through both, as in CRuby.
+    ///
+    pub(crate) fn default_ne_in_frame(
+        &mut self,
+        globals: &mut Globals,
+        mut lfp: Lfp,
+        pc: BytecodePtr,
+    ) -> Result<bool> {
+        let lhs = lfp.self_val();
+        let rhs = lfp.arg(0);
+        let Some(class) = dispatched_eq_class(lhs) else {
+            return Ok(!self.eq_values_funcall(globals, lhs, rhs)?.as_bool());
+        };
+        let Some(eq) = globals
+            .store
+            .funcall_eq_entry(class, Globals::class_version())
+        else {
+            return Err(MonorubyErr::method_not_found(globals, IdentId::_EQ, lhs));
+        };
+        let res = match eq.native {
+            Some((meta, func)) => {
+                let own = *lfp.meta();
+                lfp.become_frame_of(meta);
+                let res = func(self, globals, lfp, pc);
+                lfp.become_frame_of(own);
+                res.ok_or_else(|| self.take_error())?
+            }
+            None => self.invoke_func_inner(globals, eq.func_id, lhs, &[rhs], None, None)?,
+        };
+        Ok(!res.as_bool())
+    }
+
+    ///
+    /// `lhs == rhs` as the default `!=` asks it. `rb_obj_not_equal` is C
+    /// and calls `==` with `rb_funcall`: a private `==` is callable, and
+    /// no refinement of `==` is in effect — not even one the scope that
+    /// wrote the `!=` activated (#1967). So unlike [`Self::eq_values_vis`]
+    /// this never asks which scope is running.
+    ///
+    pub(crate) fn eq_values_funcall(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Value> {
+        let name = IdentId::_EQ;
+        let func_id = if let Some(class) = dispatched_eq_class(lhs) {
+            // A receiver whose `==` is a lookup either way.
+            globals.store.funcall_eq(class, Globals::class_version())
+        } else if globals
+            .store
+            .basic_op_globally_redefined_for(lhs.class(), name)
+            && !self.in_internal_builtin()
+        {
+            globals
+                .store
+                .funcall_eq(lhs.class(), Globals::class_version())
+        } else {
+            // nil, a boolean, an Integer, a Float, a Symbol or a String
+            // whose `==` is the builtin: the arms of the implementation.
+            // A *refinement* of it marks the pair as well
+            // (`basic_op_redefined_for`), which is no reason to dispatch
+            // here.
+            return self.eq_values_vis_raw(globals, lhs, rhs, true);
+        };
+        match func_id {
+            Some(func_id) => self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None),
+            None => Err(MonorubyErr::method_not_found(globals, name, lhs)),
+        }
+    }
+
+    ///
     /// CRuby's `rb_equal`: an object is equal to *itself* without `==`
     /// being asked at all, and only otherwise is `elem == needle`
     /// dispatched.
@@ -590,24 +670,10 @@ impl Executor {
         }
     }
 
-    ///
-    /// `!=` with CRuby-faithful result-value semantics: while `!=`
-    /// resolves to a basic op / the default `BasicObject#!=`, the result
-    /// is the boolean negation of `==`; a custom `!=` returns the
-    /// method's value untouched.
-    ///
-    pub(crate) fn ne_values(
-        &mut self,
-        globals: &mut Globals,
-        lhs: Value,
-        rhs: Value,
-    ) -> Result<Value> {
-        // Internal callers use funcall semantics, matching `rb_equal`-style `!=`.
-        self.ne_values_vis(globals, lhs, rhs, true)
-    }
-
-    /// `!=` dispatch honoring the call site's func-call flag for a redefined
-    /// `!=` (or the private-`==` it negates).
+    /// `!=`: a custom `!=` returns the method's value untouched, honoring
+    /// the call site's func-call flag. The default — `BasicObject#!=`, the
+    /// only `!=` the builtins define — negates `==` as
+    /// [`Self::eq_values_funcall`] asks it.
     pub(crate) fn ne_values_vis(
         &mut self,
         globals: &mut Globals,
@@ -615,32 +681,27 @@ impl Executor {
         rhs: Value,
         is_func_call: bool,
     ) -> Result<Value> {
-        // Check if the receiver has a custom != method (not a basic op /
-        // the default BasicObject#!=). If so, dispatch to it (honoring its
+        // Check if the receiver has a custom != method (not the default
+        // BasicObject#!=). If so, dispatch to it (honoring its
         // visibility) instead of negating ==. `custom_neq` is memoized per
         // class_version, so the common unredefined case costs a load
-        // instead of a method-table probe per comparison.
-        let class_id = lhs.class();
-        if globals
-            .store
-            .custom_neq(class_id, Globals::class_version())
-            .is_some()
+        // instead of a method-table probe per comparison. That memo knows
+        // nothing of refinements, so a scope that activated some asks the
+        // lookup — a refinement can define `!=` as well.
+        if self.in_refined_scope(globals)
+            || globals
+                .store
+                .custom_neq(lhs.class(), Globals::class_version())
+                .is_some()
         {
             let func_id = self.find_method(globals, lhs, IdentId::_NEQ, is_func_call)?;
-            return self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None);
+            if Some(func_id) != globals.store.default_neq() {
+                return self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None);
+            }
         }
-        Ok(Value::bool(!self.eq_values_vis(globals, lhs, rhs, is_func_call)?.as_bool()))
+        let eq = self.eq_values_funcall(globals, lhs, rhs)?;
+        Ok(Value::bool(!eq.as_bool()))
     }
-
-    pub(crate) fn ne_values_bool(
-        &mut self,
-        globals: &mut Globals,
-        lhs: Value,
-        rhs: Value,
-    ) -> Result<bool> {
-        Ok(self.ne_values(globals, lhs, rhs)?.as_bool())
-    }
-
 }
 
 impl Executor {
@@ -745,10 +806,13 @@ pub(crate) extern "C" fn cmp_ne_values_pure(
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
-    if globals
-        .store
-        .custom_neq(lhs.class(), Globals::class_version())
-        .is_some()
+    // A scope with refinements may see another `!=`, and its `==` is not
+    // the one the default `!=` calls: left to `cmp_ne_values`.
+    if vm.in_refined_scope(globals)
+        || globals
+            .store
+            .custom_neq(lhs.class(), Globals::class_version())
+            .is_some()
     {
         return None;
     }
@@ -824,7 +888,9 @@ fn cmp_values() {
         );
         assert_eq!(
             ans,
-            !Executor::ne_values_bool(&mut vm, &mut globals, lhs, rhs).unwrap()
+            !Executor::ne_values_vis(&mut vm, &mut globals, lhs, rhs, true)
+                .unwrap()
+                .as_bool()
         );
     }
 }

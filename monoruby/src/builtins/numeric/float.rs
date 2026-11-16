@@ -109,7 +109,6 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         float_cmp_gen(CmpKind::Lt),
         1,
     );
-    globals.define_basic_op_inline(FLOAT_CLASS, "!=", ne, float_cmp_gen(CmpKind::Ne), 1);
     globals.define_builtin_func(FLOAT_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func_with(FLOAT_CLASS, "floor", floor, 0, 1, false);
     globals.define_builtin_func_with(FLOAT_CLASS, "ceil", ceil, 0, 1, false);
@@ -188,37 +187,52 @@ fn float_binop_gen(kind: BinOpK) -> Box<InlineGenBinary> {
 fn float_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
     Box::new(
         move |state, ir, ctx, store, callid, _recv_class, rhs_class| {
-            let callsite = &store[callid];
-            if !callsite.is_simple() {
-                return BinaryInlineOutcome::Declined;
-            }
-            let rhs_fop = match rhs_class {
-                Some(CachedClass::INTEGER) => FOpClass::Integer,
-                Some(CachedClass::FLOAT) => FOpClass::Float,
-                _ => return BinaryInlineOutcome::Declined,
-            };
-            let CallSiteInfo {
-                dst, recv, args, ..
-            } = *callsite;
-            let info = FBinOpInfo {
-                lhs: recv,
-                rhs: args,
-                lhs_class: FOpClass::Float,
-                rhs_class: rhs_fop,
-            };
-            if !state.float_cmp_literals_exact(info) {
-                return BinaryInlineOutcome::Declined;
-            }
-            if let Some(slot) = ctx.wants_cond_flags(dst)
-                && let Some(flags) = state.gen_cmp_float_flags(ir, slot, info, kind)
-            {
-                ctx.set_cond_flags(slot, flags);
-                return BinaryInlineOutcome::Done;
-            }
-            state.gen_cmp_float(ir, dst, info, kind);
-            BinaryInlineOutcome::Done
+            float_cmp_inline(kind, state, ir, ctx, store, callid, rhs_class)
         },
     )
+}
+
+/// The body of [`float_cmp_gen`]. Also `!=` on a Float while `Float#==` is
+/// the builtin: `Float` has no `!=` of its own, and `BasicObject#!=`'s
+/// generator (`object::object_ne`) hands the case here.
+pub(in crate::builtins) fn float_cmp_inline(
+    kind: CmpKind,
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    ctx: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    rhs_class: Option<CachedClass>,
+) -> BinaryInlineOutcome {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return BinaryInlineOutcome::Declined;
+    }
+    let rhs_fop = match rhs_class {
+        Some(CachedClass::INTEGER) => FOpClass::Integer,
+        Some(CachedClass::FLOAT) => FOpClass::Float,
+        _ => return BinaryInlineOutcome::Declined,
+    };
+    let CallSiteInfo {
+        dst, recv, args, ..
+    } = *callsite;
+    let info = FBinOpInfo {
+        lhs: recv,
+        rhs: args,
+        lhs_class: FOpClass::Float,
+        rhs_class: rhs_fop,
+    };
+    if !state.float_cmp_literals_exact(info) {
+        return BinaryInlineOutcome::Declined;
+    }
+    if let Some(slot) = ctx.wants_cond_flags(dst)
+        && let Some(flags) = state.gen_cmp_float_flags(ir, slot, info, kind)
+    {
+        ctx.set_cond_flags(slot, flags);
+        return BinaryInlineOutcome::Done;
+    }
+    state.gen_cmp_float(ir, dst, info, kind);
+    BinaryInlineOutcome::Done
 }
 
 ///
@@ -460,17 +474,6 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     let b = vm
         .eq_values_vis_raw(globals, lfp.self_val(), lfp.arg(0), true)?
         .as_bool();
-    Ok(Value::bool(b))
-}
-
-///
-/// ### Integer#!=
-///
-/// - self != other -> bool
-///
-#[monoruby_builtin]
-fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let b = vm.ne_values_bool(globals, lfp.self_val(), lfp.arg(0))?;
     Ok(Value::bool(b))
 }
 

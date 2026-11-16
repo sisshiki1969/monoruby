@@ -66,6 +66,12 @@ pub(crate) const BASIC_OP_DEFS: &[(ClassId, &str)] = &[
     (FLOAT_CLASS, ">="),
     // ---- equality: `eq_values_vis` / `ne_values` / `cmp_teq_values_impl`
     // answer directly for nil, booleans, Integer, Float, Symbol and String.
+    // The three `!=` pairs are *inherited* ones: no class has a `!=` of
+    // its own, as in CRuby, and what the pair licenses is the inline form
+    // of `BasicObject#!=` for that class — the VM's fixnum compare, the
+    // JIT's `object::object_ne`. It answers `!(a == b)` with the builtin
+    // `==`, so redefining the class's `==` takes the `!=` pair down too
+    // (`Store::set_bop_redefine`).
     (INTEGER_CLASS, "=="),
     (INTEGER_CLASS, "!="),
     (INTEGER_CLASS, "==="),
@@ -264,7 +270,14 @@ impl BasicOpTable {
         self.redefined = true;
         self.redefined_set.insert((class_id, name));
         self.globally_redefined_set.insert((class_id, name));
-        self.pending_warnings.push((class_id, name));
+        // CRuby has no `!=` basic operation to warn about: its `opt_neq`
+        // stands on `==`'s (`BOP_EQ`). Here the pair exists because
+        // `Integer` / `Float` / `String` have an inline `!=`, and it falls
+        // with `==` (`Store::set_bop_redefine`), whose warning is the one
+        // CRuby prints.
+        if name != IdentId::_NEQ {
+            self.pending_warnings.push((class_id, name));
+        }
     }
 
     /// Record that `class_id#name` was replaced *by a refinement*. Same

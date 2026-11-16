@@ -1983,6 +1983,41 @@ impl<'a> JitContext<'a> {
         self.jit_check_method(class_id, name)
     }
 
+    ///
+    /// What `class#==` is to C code that calls it with `rb_funcall` —
+    /// `rb_obj_not_equal`, the default `!=` — which no refinement reaches,
+    /// whatever the compiling scope activated (#1967). In monoruby's
+    /// Ruby-written core it is the `==` the interpreter started with, as
+    /// for every other operator there
+    /// ([`resolve_basic_op`](Self::resolve_basic_op)).
+    ///
+    /// A generator that emits code on the strength of this records the
+    /// resolution with [`assume_funcall_eq`](Self::assume_funcall_eq).
+    ///
+    pub(crate) fn funcall_eq(&self, class: CachedClass) -> Option<FuncId> {
+        let name = IdentId::_EQ;
+        if self.in_internal_builtin()
+            && let Some(fid) = self.store.basic_op_armed_func(class.id(), name)
+        {
+            return Some(fid);
+        }
+        self.store
+            .check_method_for_class_with_version(class.id(), name, self.class_version())?
+            .func_id()
+    }
+
+    ///
+    /// Record what [`funcall_eq`](Self::funcall_eq) answered, for the
+    /// class-version salvage to re-ask. Not in the Ruby-written core:
+    /// its answer there is no resolution of the live method table, so
+    /// there is nothing of it to assume.
+    ///
+    pub(crate) fn assume_funcall_eq(&self, class: CachedClass, func_id: FuncId) {
+        if !self.in_internal_builtin() {
+            self.assume_funcall_resolution(class, IdentId::_EQ, Some(func_id));
+        }
+    }
+
     fn jit_check_method(&self, class_id: CachedClass, name: IdentId) -> Option<(FuncId, Visibility)> {
         let refinements = self.refinements();
         let class_version = self.class_version();

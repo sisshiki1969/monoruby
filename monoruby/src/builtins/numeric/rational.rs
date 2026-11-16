@@ -21,7 +21,6 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(RATIONAL_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(RATIONAL_CLASS, "==", eq, 1);
-    globals.define_builtin_func(RATIONAL_CLASS, "!=", ne, 1);
     globals.define_builtin_func(RATIONAL_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func(RATIONAL_CLASS, "+", add, 1);
     globals.define_builtin_func(RATIONAL_CLASS, "-", sub, 1);
@@ -169,22 +168,6 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
                 vm.invoke_method_inner(globals, eq_id, rhs, &[lfp.self_val()], None, None)?;
             Ok(Value::bool(result.as_bool()))
         }
-    }
-}
-
-#[monoruby_builtin]
-fn ne(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs = self_rat(lfp);
-    let rhs = lfp.arg(0);
-    if let Some(r) = rhs.try_rational() {
-        return Ok(Value::bool(!lhs.eq(r)));
-    }
-    match rhs.unpack() {
-        RV::Fixnum(i) => Ok(Value::bool(
-            !(lhs.den().is_one() && *lhs.num() == IntegerRepr::Small(i)),
-        )),
-        RV::Float(f) => Ok(Value::bool(lhs.to_f() != f)),
-        _ => Ok(Value::bool(true)),
     }
 }
 

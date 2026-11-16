@@ -452,10 +452,17 @@ pub struct ClassInfo {
     no_to_str_at: std::cell::Cell<Option<u32>>,
     ///
     /// Version-stamped memo: as of class_version `v`, `!=` on this class
-    /// resolves to a basic op (`String#!=` / the default `BasicObject#!=`),
-    /// so `a != b` can be computed as `!(a == b)` without dispatch.
+    /// resolves to the default `BasicObject#!=`, so `a != b` can be
+    /// computed as `!(a == b)` without dispatching `!=`.
     ///
     neq_basic_at: std::cell::Cell<Option<u32>>,
+    ///
+    /// Version-stamped memo: as of class_version `.0`, `==` on this class
+    /// resolves — with no refinement — to `.1`. Consulted by the
+    /// default `!=`, so the `==` it negates costs a load instead of a
+    /// method-cache probe per call.
+    ///
+    eq_method_at: std::cell::Cell<Option<(u32, FuncallEq)>>,
     ///
     /// Version-stamped memo: as of class_version `.0`, `=~` on this class
     /// resolves to FuncId `.1`. Consulted by `Kernel#!~` so the inner
@@ -635,6 +642,7 @@ impl ClassInfo {
             alloc_func: None,
             no_to_str_at: std::cell::Cell::new(None),
             neq_basic_at: std::cell::Cell::new(None),
+            eq_method_at: std::cell::Cell::new(None),
             match_method_at: std::cell::Cell::new(None),
             hash_method_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
@@ -664,6 +672,7 @@ impl ClassInfo {
             alloc_func: self.alloc_func,
             no_to_str_at: std::cell::Cell::new(None),
             neq_basic_at: std::cell::Cell::new(None),
+            eq_method_at: std::cell::Cell::new(None),
             match_method_at: std::cell::Cell::new(None),
             hash_method_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
@@ -749,6 +758,14 @@ impl ClassInfo {
 
     pub(super) fn match_method_at(&self) -> Option<(u32, FuncId)> {
         self.match_method_at.get()
+    }
+
+    pub(super) fn eq_method_at(&self) -> Option<(u32, FuncallEq)> {
+        self.eq_method_at.get()
+    }
+
+    pub(super) fn set_eq_method_at(&self, version: u32, eq: FuncallEq) {
+        self.eq_method_at.set(Some((version, eq)));
     }
 
     pub(super) fn hash_method_at(&self) -> Option<(u32, Option<FuncId>)> {
@@ -2473,7 +2490,7 @@ impl Store {
         func_id: FuncId,
         visibility: Visibility,
     ) {
-        self.add_method_inner(class_id, name, func_id, visibility, false, name, false)
+        self.add_method_inner(class_id, name, func_id, visibility, name, false)
     }
 
     ///
@@ -2491,22 +2508,7 @@ impl Store {
         original_name: IdentId,
         is_alias: bool,
     ) {
-        self.add_method_inner(class_id, name, func_id, visibility, false, original_name, is_alias)
-    }
-
-    ///
-    /// Add a new basic operation method *func* with *name* to the class of *class_id*.
-    ///
-    /// This fn increments class version.
-    ///
-    pub(crate) fn add_basic_op_method(
-        &mut self,
-        class_id: ClassId,
-        name: IdentId,
-        func_id: FuncId,
-        visibility: Visibility,
-    ) {
-        self.add_method_inner(class_id, name, func_id, visibility, true, name, false)
+        self.add_method_inner(class_id, name, func_id, visibility, original_name, is_alias)
     }
 
     ///
@@ -2520,7 +2522,6 @@ impl Store {
         name: IdentId,
         func_id: FuncId,
         visibility: Visibility,
-        is_basic_op: bool,
         original_name: IdentId,
         is_alias: bool,
     ) {
@@ -2543,7 +2544,6 @@ impl Store {
                 owner,
                 func_id: Some(func_id),
                 visibility,
-                is_basic_op,
                 original_name,
                 visibility_shadow: false,
                 is_alias,
@@ -2575,7 +2575,6 @@ impl Store {
                 owner,
                 func_id: None,
                 visibility,
-                is_basic_op: false,
                 original_name: name,
                 visibility_shadow: false,
                 is_alias: false,
@@ -2811,7 +2810,6 @@ impl Store {
                             owner: class_id,
                             func_id: Some(func_id),
                             visibility,
-                            is_basic_op: false,
                             original_name,
                             visibility_shadow: true,
                             is_alias: false,
@@ -2961,6 +2959,14 @@ impl Store {
     fn set_bop_redefine(&mut self, class_id: ClassId, name: IdentId) {
         self.basic_ops.mark_redefined(class_id, name);
         self.invalidate_bop_fast_paths(class_id, name);
+        // No class has a `!=` of its own: it is `BasicObject#!=`, which
+        // answers by calling `==`. So the `!=` fast path of a class stands
+        // on that class's `==` and goes with it. (Not so for a
+        // *refinement* of `==`, which `BasicObject#!=` never sees — it
+        // calls `==` as C does. See `Executor::eq_values_funcall`.)
+        if name == IdentId::_EQ && self.basic_ops.contains(class_id, IdentId::_NEQ) {
+            self.set_bop_redefine(class_id, IdentId::_NEQ);
+        }
     }
 
     ///

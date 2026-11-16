@@ -1,5 +1,5 @@
 use super::struct_class::{
-    eq, eql, get_members, hash, members, ne, qualified_real_class_name, struct_members,
+    eq, eql, get_members, hash, members, qualified_real_class_name, struct_members,
 };
 use super::*;
 
@@ -29,7 +29,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(cid, "inspect", data_inspect, 0);
     globals.define_builtin_func(cid, "==", eq, 1);
     globals.define_builtin_func(cid, "eql?", eql, 1);
-    globals.define_builtin_func(cid, "!=", ne, 1);
     globals.define_builtin_func(cid, "hash", hash, 0);
     globals.define_builtin_func(cid, "members", members, 0);
     globals.define_builtin_func(cid, "deconstruct", deconstruct, 0);

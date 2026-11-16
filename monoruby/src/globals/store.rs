@@ -20,12 +20,33 @@ pub(crate) use iseq::*;
 pub use refinement::RefinementSetId;
 pub(crate) use refinement::RefinementTable;
 
+/// A class's `==` as C code calls it (`Store::funcall_eq_entry`).
+#[derive(Clone, Copy)]
+pub(crate) struct FuncallEq {
+    pub(crate) func_id: FuncId,
+    /// Its entry point and frame `Meta` when it is a native method of one
+    /// argument: what `BasicObject#!=`, whose own frame already holds the
+    /// receiver and that argument, needs to run it there instead of
+    /// pushing a second frame through the invoker.
+    pub(crate) native: Option<(Meta, BuiltinFn)>,
+}
+
+impl std::fmt::Debug for FuncallEq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "FuncallEq({:?}, native: {})",
+            self.func_id,
+            self.native.is_some()
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MethodTableEntry {
     owner: ClassId,
     func_id: Option<FuncId>,
     visibility: Visibility,
-    is_basic_op: bool,
     /// The method's *original* definition name, tracked through
     /// `alias_method` and `define_method`-from-(Unbound)Method so that
     /// `Method#original_name` and the `#name(original)` form of
@@ -62,10 +83,6 @@ impl MethodTableEntry {
 
     pub fn visibility(&self) -> Visibility {
         self.visibility
-    }
-
-    pub fn is_basic_op(&self) -> bool {
-        self.is_basic_op
     }
 
     pub fn is_visibility_shadow(&self) -> bool {
@@ -205,9 +222,9 @@ pub struct Store {
     /// FuncId of the default `BasicObject#!=`, used to recognize that an
     /// unredefined `!=` may be computed as `!(a == b)` without dispatch.
     default_neq: Option<FuncId>,
-    /// FuncId of the builtin `Symbol#!=`, which answers as the default
-    /// does; see [`Self::custom_neq`].
-    symbol_neq: Option<FuncId>,
+    /// FuncId of the builtin `Symbol#==`, the other `==` that compares the
+    /// two words; see [`Self::is_identity_eq`].
+    symbol_eq_fid: Option<FuncId>,
     /// FuncIds of the default `initialize_copy` / `initialize_dup` /
     /// `initialize_clone` builtins. `Kernel#dup` / `#clone` compare a
     /// class's resolved hooks against these to recognize the no-op case
@@ -905,7 +922,7 @@ impl Store {
             leaf_builtins: HashMap::default(),
             identity_eq_fid: None,
             default_neq: None,
-            symbol_neq: None,
+            symbol_eq_fid: None,
             default_copy_hooks: None,
             builtin_to_s: None,
             symbol_string_methods: None,
@@ -2151,10 +2168,24 @@ impl Store {
         self.default_neq = Some(fid);
     }
 
-    pub(crate) fn set_symbol_neq(&mut self, fid: FuncId) {
-        self.symbol_neq = Some(fid);
+    /// The builtin `BasicObject#!=`: what `!=` resolves to for a class
+    /// that has none of its own.
+    pub(crate) fn default_neq(&self) -> Option<FuncId> {
+        self.default_neq
     }
 
+    pub(crate) fn set_symbol_eq_fid(&mut self, fid: FuncId) {
+        self.symbol_eq_fid = Some(fid);
+    }
+
+    /// Whether *fid* is one of the builtin `==`s that answer by comparing
+    /// the two words — `BasicObject#==` (object identity) and `Symbol#==`
+    /// (a Symbol is an immediate, equal only to itself). `a != b` through
+    /// the default `!=` is then a compare of the words too, which is what
+    /// the JIT emits for it (`builtins::object::object_ne`).
+    pub(crate) fn is_identity_eq(&self, fid: FuncId) -> bool {
+        Some(fid) == self.identity_eq_fid || Some(fid) == self.symbol_eq_fid
+    }
 
     /// Record the FuncIds of the default `initialize_copy` /
     /// `initialize_dup` / `initialize_clone` builtins (see
@@ -2318,27 +2349,63 @@ impl Store {
         Some(fid)
     }
 
+    ///
+    /// `class_id#==` as C code calling it with `rb_funcall` finds it — no
+    /// refinement, no visibility — memoized per class_version on the
+    /// ClassInfo. `None`: the class has none (`undef_method :==`).
+    ///
+    pub(crate) fn funcall_eq_entry(&self, class_id: ClassId, version: u32) -> Option<FuncallEq> {
+        if let Some((v, eq)) = self[class_id].eq_method_at()
+            && v == version
+        {
+            return Some(eq);
+        }
+        let func_id = self
+            .search_method_by_class_id(class_id, IdentId::_EQ)?
+            .func_id()?;
+        let eq = FuncallEq {
+            func_id,
+            native: self.native_unary_entry(func_id),
+        };
+        self[class_id].set_eq_method_at(version, eq);
+        Some(eq)
+    }
+
+    /// The `FuncId` of [`Self::funcall_eq_entry`].
+    pub(crate) fn funcall_eq(&self, class_id: ClassId, version: u32) -> Option<FuncId> {
+        Some(self.funcall_eq_entry(class_id, version)?.func_id)
+    }
+
+    ///
+    /// `func_id` as something a native method taking one argument can run
+    /// in its own frame (`Lfp::become_frame_of`): a native method of
+    /// exactly one required argument. Its frame is laid out as the
+    /// caller's is, so only the `Meta` differs.
+    ///
+    fn native_unary_entry(&self, func_id: FuncId) -> Option<(Meta, BuiltinFn)> {
+        let info = &self[func_id];
+        let FuncKind::Builtin { abs_address } = info.kind else {
+            return None;
+        };
+        let meta = info.meta();
+        if !meta.is_simple() || info.req_num() != 1 {
+            return None;
+        }
+        // SAFETY: `abs_address` of a `FuncKind::Builtin` was stored from a
+        // `BuiltinFn` (`FuncInfo::new_native`).
+        let func = unsafe { std::mem::transmute::<u64, BuiltinFn>(abs_address) };
+        Some((meta, func))
+    }
+
     pub(crate) fn custom_neq(&self, class_id: ClassId, version: u32) -> Option<MethodTableEntry> {
         if self[class_id].neq_basic_at() == Some(version) {
             return None;
         }
-        // Uncached walk for the same reason as `no_to_str`. `!=` counts
-        // as default when it is a basic op (`String#!=`) or resolves to
-        // `BasicObject#!=` itself. (The latter is deliberately NOT
-        // registered as a basic op: overwriting a basic-op entry trips
-        // the global BOP-redefine slow mode, and `BasicObject#!=` gets
-        // legitimately shadowed during startup, e.g. by Comparable.)
-        // The builtin `Symbol#!=` counts too: it is `!(a == b)` for the
-        // builtin `Symbol#==`, and with it dispatched instead, a redefined
-        // `Symbol#==` would go unseen and a frameless body's `sym != x`
-        // would be declined every time (`cmp_ne_values_pure`).
+        // Uncached walk for the same reason as `no_to_str`. `!=` is the
+        // default when it resolves to `BasicObject#!=` itself — the only
+        // `!=` the builtins define, as in CRuby.
         match self.search_method_by_class_id(class_id, IdentId::_NEQ) {
-            Some(entry)
-                if entry.is_basic_op()
-                    || (entry.func_id().is_some()
-                        && (entry.func_id() == self.default_neq
-                            || entry.func_id() == self.symbol_neq)) =>
-            {
+            Some(entry) if entry.func_id().is_some() && entry.func_id() == self.default_neq => {
                 self[class_id].set_neq_basic_at(version);
                 None
             }

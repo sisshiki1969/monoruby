@@ -5,6 +5,8 @@ use paste::paste;
 mod complex;
 mod float;
 mod integer;
+pub(super) use float::float_cmp_inline;
+pub(super) use integer::integer_cmp_inline;
 pub(super) mod rational;
 
 //

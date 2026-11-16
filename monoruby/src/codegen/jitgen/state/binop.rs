@@ -754,18 +754,21 @@ impl AbstractState {
     }
 
     ///
-    /// `lhs == rhs` decided by the raw words alone, for receivers whose
-    /// equality is identity on an immediate (`Symbol#==` / `#===`): no
-    /// guards. Leaves the answer in the condition flags for the
-    /// following branch; `dst` is the branch's temp.
+    /// `lhs == rhs` (*kind* `Eq`) or `lhs != rhs` (`Ne`) decided by the raw
+    /// words alone, for receivers whose equality is identity (`Symbol#==` /
+    /// `#===`, `BasicObject#==`, and the default `!=` on top of either): no
+    /// guards. Leaves the answer in the condition flags for the following
+    /// branch; `dst` is the branch's temp.
     ///
-    pub(crate) fn gen_identity_eq_flags(
+    pub(crate) fn gen_identity_cmp_flags(
         &mut self,
         ir: &mut AsmIr,
+        kind: CmpKind,
         dst: SlotId,
         lhs: SlotId,
         rhs: SlotId,
     ) -> CondFlags {
+        debug_assert!(matches!(kind, CmpKind::Eq | CmpKind::Ne));
         let (lhs_gp, _) = self.gp_ensure(ir, lhs, &[]);
         let (rhs_gp, _) = self.gp_ensure(ir, rhs, &[lhs_gp]);
         // Block terminator, as in `gen_cmp_integer_flags`.
@@ -773,20 +776,22 @@ impl AbstractState {
         self.flush_gp_keep_pin(ir);
         ir.cmp_flags(lhs_gp, rhs_gp);
         self.def_C(dst, Value::nil());
-        CondFlags::Int(CmpKind::Eq)
+        CondFlags::Int(kind)
     }
 
     ///
-    /// `dst = lhs == rhs` as a bool, decided by the raw words alone; see
-    /// [`Self::gen_identity_eq_flags`].
+    /// `dst = lhs == rhs` (or `!=`) as a bool, decided by the raw words
+    /// alone; see [`Self::gen_identity_cmp_flags`].
     ///
-    pub(crate) fn gen_identity_eq(
+    pub(crate) fn gen_identity_cmp(
         &mut self,
         ir: &mut AsmIr,
+        kind: CmpKind,
         dst: Option<SlotId>,
         lhs: SlotId,
         rhs: SlotId,
     ) {
+        debug_assert!(matches!(kind, CmpKind::Eq | CmpKind::Ne));
         let (lhs_gp, _) = self.gp_ensure(ir, lhs, &[]);
         let (rhs_gp, _) = self.gp_ensure(ir, rhs, &[lhs_gp]);
         if let Some(dst) = dst {
@@ -794,7 +799,7 @@ impl AbstractState {
         }
         let next_sp = self.next_sp();
         self.gp_regfile.free_above_sp(next_sp);
-        ir.integer_cmp_reg(CmpKind::Eq, dst, lhs_gp, rhs_gp);
+        ir.integer_cmp_reg(kind, dst, lhs_gp, rhs_gp);
         if let Some(dst) = dst {
             self.def_S(dst);
         }
