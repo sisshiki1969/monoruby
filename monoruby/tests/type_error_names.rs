@@ -246,8 +246,9 @@ fn name_arguments_inspect_the_value() {
 
 /// Messages monoruby words differently from CRuby at the moment (so the
 /// oracle cannot pin them), checked for the naming rule alone:
-/// `IO.copy_stream` on a non-IO (CRuby: NoMethodError on `read`) and
-/// `String#index` with a non-pattern (CRuby: the String conversion).
+/// `IO.copy_stream` on a non-IO (CRuby: NoMethodError on `read`).
+/// (`String#index` / `#match?` with a non-pattern used to be here; they
+/// are worded as CRuby's now and pinned by `case_mapping.rs`.)
 #[test]
 fn naming_where_the_wording_still_differs() {
     run_test_no_result_check(
@@ -258,18 +259,12 @@ fn naming_where_the_wording_still_differs() {
           t.() { IO.copy_stream(true, $stdout) },
           t.() { IO.copy_stream($stdin, nil) },
           t.() { IO.copy_stream($stdin, false) },
-          t.() { "abc".index(nil) },
-          t.() { "abc".rindex(true) },
-          t.() { "abc".match?(:a) },
         ]
         expected = [
           [TypeError, "no implicit conversion of nil into IO"],
           [TypeError, "no implicit conversion of true into IO"],
           [TypeError, "no implicit conversion of nil into IO"],
           [TypeError, "no implicit conversion of false into IO"],
-          [TypeError, "nil is not a regexp nor a string"],
-          [TypeError, "true is not a regexp nor a string"],
-          [TypeError, ":a is not a regexp nor a string"],
         ]
         got.zip(expected).each_with_index do |(g, e), i|
           raise "case #{i}: #{g.inspect} != #{e.inspect}" unless g == e

@@ -2254,6 +2254,28 @@ impl RegexpInner {
                 "Windows-1253" => OnigmoEncoding::Windows_1253,
                 "Windows-1254" => OnigmoEncoding::Windows_1254,
                 "Windows-1257" => OnigmoEncoding::Windows_1257,
+                // The code pages CRuby has no codec of their own for
+                // either, and defines as replicas of one it has
+                // (`ENC_REPLICATE` in `enc/*.c`): the Thai pages of
+                // ISO-8859-11, Windows-1255 of ISO-8859-8, Windows-1256
+                // of ISO-8859-6, and the DOS and Macintosh pages of
+                // ASCII-8BIT — one character per byte, of which only the
+                // ASCII ones have a type or a case (`"\xE9"` in IBM437
+                // is no `\w`). Without an entry here such a string was
+                // matched through its byte ↔ `U+00XX` surrogate image:
+                // `$~` came out as UTF-8 text over other bytes, and a
+                // pattern with a high byte of its own did not compile
+                // (#1959).
+                "TIS-620" | "Windows-874" => OnigmoEncoding::ISO_8859_11,
+                "Windows-1255" => OnigmoEncoding::ISO_8859_8,
+                "Windows-1256" => OnigmoEncoding::ISO_8859_6,
+                "IBM437" | "IBM720" | "IBM737" | "IBM775" | "CP850" | "IBM852" | "CP852"
+                | "IBM855" | "CP855" | "IBM857" | "IBM860" | "IBM861" | "IBM862" | "IBM863"
+                | "IBM864" | "IBM865" | "IBM866" | "IBM869" | "Windows-1258" | "GB1988"
+                | "macCentEuro" | "macCroatian" | "macCyrillic" | "macGreek" | "macIceland"
+                | "macRoman" | "macRomania" | "macThai" | "macTurkish" | "macUkraine" => {
+                    OnigmoEncoding::ASCII
+                }
                 _ => return None,
             },
             _ => None?,
@@ -3021,7 +3043,7 @@ impl RegexpInner {
             view = inner.regex_view()?;
             &view
         } else {
-            s_owned = re_val.coerce_to_str(vm, globals)?;
+            s_owned = re_val.coerce_to_pattern_str(vm, globals)?;
             &s_owned
         };
         let re = Self::from_escaped(s)?;

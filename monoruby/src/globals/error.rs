@@ -1197,13 +1197,6 @@ impl MonorubyErr {
         MonorubyErr::typeerr(format!("{} is not a symbol nor a string", val.inspect(store)))
     }
 
-    ///
-    /// Set TypeError with message "*name* is not Regexp nor String".
-    ///
-    pub(crate) fn is_not_regexp_nor_string(store: &Store, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("{} is not a regexp nor a string", val.inspect(store)))
-    }
-
     /// Build an `Encoding::CompatibilityError` with the CRuby-format
     /// "incompatible character encodings: A and B" message. Falls
     /// back to `RuntimeError` if `Encoding::CompatibilityError`

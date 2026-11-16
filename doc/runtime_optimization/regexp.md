@@ -81,6 +81,11 @@ KOI8 / Windows-125x のとき、そのコーデックでパターンを再コン
 こちらは `read()` の高速経路が先にある。コーデック対応表 `onigmo_encoding_for`
 は多バイトの `NamedByte` コーデック（Big5 / GB18030 / EUC-KR）を意図的に
 外している — monoruby の文字イテレータが Onigmo の境界と食い違うため。
+CRuby が固有のコーデックを持たず `ENC_REPLICATE` で定義しているコードページ
+（IBM437 などの DOS / Mac 系は ASCII-8BIT、TIS-620 / Windows-874 は
+ISO-8859-11、Windows-1255 / 1256 は ISO-8859-8 / -6 の複製）は、複製元の
+コーデックに対応づける（#1959）。これでバイト指向エンコーディングのうち
+コーデックが無いのは CESU-8 だけになる（#1975）。
 これが CRuby の `rb_reg_prepare_re` のエンコーディング別再コンパイル
 キャッシュに相当する（§5）。
 
