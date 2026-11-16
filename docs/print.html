@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e6aeb7a0.js";
+            window.path_to_searchindex_js = "searchindex-94f70613.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-9192be69.js"></script>
@@ -16492,15 +16492,25 @@ matches:  SmallVec&lt;[Span; 2]&gt;   // 24
 クラス一致で文字境界のスライスをすると <code>extern "C"</code> 境界で abort するため。</p>
 <h3 id="24-一時の-stash-と保存経路"><a class="header" href="#24-一時の-stash-と保存経路">2.4 一時の stash と保存経路</a></h3>
 <ul>
-<li><code>sp_match_regex</code>: 進行中の <code>Regexp</code>。次の <code>save_capture_special_variables</code>
-が名前付きキャプチャ用に付ける。消費されたら消える。</li>
+<li><code>MatchOrigin</code>: マッチの出どころ。<code>Regexp(Value)</code>（照合した Regexp。
+<code>$~.regexp</code>・グループ名・<code>$~[:name]</code> が読む）か <code>Substring</code>（String
+パターンの部分文字列検索。CRuby の <code>rb_backref_set_string</code> と同じく
+Regexp を持たず、<code>#regexp</code> / <code>#==</code> / <code>#hash</code> が要求した時にマッチ文字列
+から組む）。保存関数（<code>save_capture_*</code> / <code>save_spans</code> /
+<code>RegexpInner::captures_*</code>）の<strong>必須引数</strong>なので、渡し忘れた経路は
+コンパイルが通らない（以前は任意の stash で、<code>sub</code> / <code>scan</code> / <code>index</code> /
+<code>[]</code> / <code>partition</code> などが付け忘れていた — #1946）。</li>
+<li><code>sp_match_regex</code>: 保存中のマッチの <code>MatchOrigin</code>。<code>MatchData</code> を確保する
+間だけの GC root（<code>"a".match("b")</code> がその場で組んだ Regexp は他に root
+が無い）。</li>
 <li><code>sp_match_haystack</code>: 被照合 String の <code>Value</code>。<code>resolve_haystack</code> は照合側
 の <code>&amp;str</code> が本当にそのバッファを借りているかを<strong>ポインタの包含</strong>で
 検証し、<code>(subject, byte offset)</code> を返す。古い stash は単に <code>None</code> に
 解決してコピーに落ちるだけで、誤帰属はしない。</li>
 <li>両方とも <code>Executor::mark</code> の GC root（<code>MatchData</code> 確保が GC を起こす）。</li>
-<li><code>save_capture_special_variables</code> / <code>_bytes</code> が <code>MatchData</code> を組み、regexp を
-付け、<code>SVAR_BACKREF</code> に格納する。呼び出し側は <code>String#match</code> / <code>=~</code> /
+<li><code>save_capture_special_variables</code> / <code>_bytes</code> が <code>MatchData</code> を組み、
+<code>MatchOrigin</code> を付け、<code>SVAR_BACKREF</code> に格納する（<code>Executor::store_match</code>）。
+呼び出し側は <code>String#match</code> / <code>=~</code> /
 <code>[]</code> 系 / <code>split</code> / <code>sub</code> / <code>gsub</code> / <code>scan</code>、<code>Regexp#=~</code> / <code>===</code> / <code>match</code>。</li>
 </ul>
 <h3 id="25-matchdata-を確保しない場合"><a class="header" href="#25-matchdata-を確保しない場合">2.5 <code>MatchData</code> を<strong>確保しない</strong>場合</a></h3>
@@ -16611,7 +16621,7 @@ splice 端点が UTF-8 境界なら変更後の code range 分類を O(1) に短
 <tbody>
 <tr><td><code>Regexp#=~</code></td><td>nil 引数は <code>$~</code> を消して nil（エンジン呼び出し無し）。1 回の <code>from_utf8</code> 検証後 <code>from_utf8_unchecked</code> でバイト列を借り、CoW スナップショットのために被照合を stash。<strong>バイト</strong>オフセットを返す</td></tr>
 <tr><td><code>Regexp#===</code></td><td>nil / Regexp / 非文字列様の引数は照合せず false。Symbol → String、他は <code>to_str</code></td></tr>
-<tr><td><code>Regexp#match?</code></td><td><code>match_pred</code>。<code>MatchData</code> 無し、<code>$~</code> 無し、<code>sp_match_regex</code> 無し</td></tr>
+<tr><td><code>Regexp#match?</code></td><td><code>match_pred</code>。<code>MatchData</code> 無し、<code>$~</code> 無し</td></tr>
 <tr><td><code>Regexp#match</code></td><td>まずエンコーディング検証。非 SevenBit でコーデックのある被照合は <strong>native コーデックのバイト経路</strong>（<code>.</code> が宣言エンコーディングに従う）、それ以外は借用 UTF-8 経路で、保存したばかりの <code>$~</code> を返す</td></tr>
 <tr><td><code>String#=~</code></td><td>Regexp 右辺が高速経路で<strong>文字</strong>添字を返す。String 右辺は <code>TypeError</code>、他は <code>to_str</code> の前に <code>rhs =~ self</code> を逆 dispatch</td></tr>
 <tr><td><code>String#match</code></td><td>両引数を借用の前に変換（ユーザーの <code>to_str</code> がレシーバを変えうる）。文字 → バイト位置は ASCII のみで O(1)、末尾超えは CRuby どおり clamp</td></tr>
