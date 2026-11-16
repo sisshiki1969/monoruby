@@ -204,3 +204,27 @@ fn case_eq_compiled() {
         "#,
     );
 }
+
+/// `<=>` with something that is no real number goes through its `coerce`
+/// (`rb_num_coerce_cmp`), and an imaginary part is asked whether it is
+/// zero whatever its class (`f_zero_p`, `k_exact_zero_p`).
+#[test]
+fn complex_cmp_coerce_results_and_zero_parts() {
+    probe(&[
+        "Complex(1, 0) <=> Object.new",
+        "k = Class.new { def coerce(o) = nil }; Complex(1, 0) <=> k.new",
+        "k = Class.new { def coerce(o) = [2, 3] }; Complex(1, 0) <=> k.new",
+        "k = Class.new { def coerce(o) = 5 }; Complex(1, 0) <=> k.new",
+        "Complex(1, 0r) <=> 1",
+        "Complex(1, 0r) <=> Complex(2, 0r)",
+        "Complex(1, 2**70) <=> 1",
+        "Complex(1, 1r) <=> 1",
+        "c0 <=> 1",
+        "c1 <=> 1",
+        "c0.to_i",
+        "c1.to_i",
+        "c1.to_r",
+        "Complex(1, 0r).to_i",
+        "Complex(1, 2**70).to_i",
+    ]);
+}

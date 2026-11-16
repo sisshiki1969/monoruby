@@ -198,3 +198,59 @@ fn results_unchanged() {
         "#,
     );
 }
+
+/// `Array#minmax` with a block takes the elements two at a time
+/// (`minmax_ii`): a pair that compares equal, one in order, one out of
+/// order, and extremes that move on a later pair.
+#[test]
+fn array_minmax_block_pairs() {
+    probe(&[
+        "[1, 1, 2, 3, 0, 9].minmax { |a, b| a <=> b }",
+        "[5, 5, 1, 2, 9, 9, 0].minmax { |a, b| a <=> b }",
+        "[3, 4, 1, 2, 7, 8].minmax { |a, b| a <=> b }",
+        "c = []; [[3, 4, 1, 2, 7].minmax { |a, b| c << [a, b]; a <=> b }, c]",
+        "[1, 2, 3].minmax { |a, b| nil }",
+        // `min` / `max` entered from a builtin (`map(&:max)`): no call
+        // site to ask, so it is `Array#max` on an Array.
+        "[[2, 1r, 3], [1.5, 2r]].map(&:max)",
+        "[[2, 1r, 3], [1.5, 2r]].map(&:min)",
+        "[[1, nil]].map(&:max)",
+    ]);
+}
+
+/// `Range#min` / `#max` / `#minmax` without a block answer from the
+/// endpoints (`range_min`, `range_max`).
+#[test]
+fn range_min_max_from_endpoints() {
+    probe(&[
+        "(..3).min",
+        "(1..).max",
+        "(1...2**70).max",
+        "(2**70...2**71).max == 2**71 - 1",
+        r#"("a"..."c").max"#,
+        r#"("a"..."a").max"#,
+        r#"(..."c").max"#,
+        "(1.0...3.0).max",
+        "(1...3.0).max",
+        "(1...2**70).minmax",
+        r#"("a"..."c").minmax"#,
+        r#"("b"..."a").minmax"#,
+        "(1.0...3.0).minmax",
+        "(1...3.5).minmax",
+        "(1r...3r).minmax",
+        "(1r...3r).max",
+    ]);
+}
+
+/// `Hash#sort` is `to_a.sort`: the pairs are compared, and one that
+/// cannot be is an Array in the message.
+#[test]
+fn hash_sort_compares_pairs() {
+    probe(&[
+        r#"{1 => 2, "a" => 3}.sort"#,
+        "{[1] => 2, [0] => 3}.sort",
+        "{1 => 2, 3 => 0}.sort { |a, b| b <=> a }",
+        "{2 => :a, 1 => :b}.sort",
+        r#"{"b" => 1, "a" => 2}.sort"#,
+    ]);
+}

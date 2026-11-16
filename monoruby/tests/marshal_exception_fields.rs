@@ -262,3 +262,15 @@ fn dumpable_objects() {
         "#,
     );
 }
+
+/// An exception that was loaded and then raised again carries the new
+/// raise's locations, not the ones it was loaded with.
+#[test]
+fn loaded_then_raised_again() {
+    probe(&[r#"
+        e = rt.(ex.() { raise "x" })
+        e2 = ex.() { raise e }
+        e3 = rt.(e2)
+        [e3.message, e3.backtrace.size == e2.backtrace.size, fields.(e2)]
+        "#]);
+}

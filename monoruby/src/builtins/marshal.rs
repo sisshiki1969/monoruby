@@ -1580,6 +1580,7 @@ enum UnsetField {
     Zero,
 }
 
+#[coverage(off)] // evaluated at compile time only (`EXCEPTION_FIELDS`)
 const fn field(
     wire: &'static str,
     slot: &'static str,

@@ -1129,11 +1129,12 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         } else if matches!(
             start.unpack(),
             RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_)
-        ) {
-            // Numeric start with non-numeric end (the
-            // canonical case is `(0...Float::INFINITY)`):
-            // CRuby raises immediately rather than running
-            // an unbounded loop.
+        ) || end.is_kind_of(&globals.store, NUMERIC_CLASS)
+        {
+            // An end that is a Numeric and no Integer (`range_max`:
+            // `(1r...3r)`), or a numeric start with a non-numeric
+            // end: CRuby raises immediately rather than running an
+            // unbounded loop.
             return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
         } else {
             // Generic non-numeric exclusive range: iterate
