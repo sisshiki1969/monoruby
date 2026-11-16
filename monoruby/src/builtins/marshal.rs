@@ -416,7 +416,7 @@ impl<'a> MarshalReader<'a> {
                     .ok_or_else(|| MonorubyErr::argumenterr("expected symbol in marshal data"))
             }
             _ => Err(MonorubyErr::argumenterr(format!(
-                "expected symbol tag (':' or ';'), got 0x{:02x}",
+                "dump format error for symbol(0x{:x})",
                 tag
             ))),
         }
@@ -708,6 +708,21 @@ impl<'a> MarshalReader<'a> {
                 let idx = self.symbols.len();
                 self.symbols.push(IdentId::get_id(""));
                 let (encoding, _user_ivars) = self.read_encoding_ivars(vm, globals)?;
+                // `r_symreal`: the name is validated under the encoding
+                // its ivar records — any but ASCII-8BIT, where every byte
+                // is a character. `String#to_sym` can make a US-ASCII
+                // Symbol of 8-bit bytes, and that one does not load back
+                // (#1987).
+                if encoding != Encoding::Ascii8 {
+                    let name = RStringInner::from_encoding(&bytes, encoding);
+                    if !name.is_valid_encoding() {
+                        return Err(MonorubyErr::argumenterr(format!(
+                            "invalid byte sequence in {}: \"{}\"",
+                            encoding.name(),
+                            name.inspect()
+                        )));
+                    }
+                }
                 let id = intern_symbol_bytes(&bytes, encoding);
                 self.symbols[idx] = id;
                 Ok(Value::symbol(id))

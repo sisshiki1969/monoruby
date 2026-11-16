@@ -6603,19 +6603,32 @@ fn singleton_methods(
     }))
 }
 
-/// True for a syntactically valid instance-variable name: `@`
-/// followed by an identifier whose first char is not a digit
-/// (and not another `@`, which would be a class variable).
-fn is_valid_ivar_name(s: &str) -> bool {
-    let mut it = s.chars();
-    if it.next() != Some('@') {
+/// True for a syntactically valid instance-variable name
+/// (`rb_is_instance_name`): `@` followed by an identifier whose first
+/// character is not a digit (and not another `@`, which would be a
+/// class variable). The name is walked in its own encoding — a
+/// multibyte character is an identifier character whatever its bytes
+/// are — and a name in an encoding that is not ASCII-compatible is no
+/// name at all.
+fn is_valid_ivar_name(bytes: &[u8], enc: Encoding) -> bool {
+    if !enc.is_ascii_compatible() {
         return false;
     }
-    match it.next() {
-        Some(c) if c == '_' || c.is_alphabetic() || !c.is_ascii() => {}
-        _ => return false,
+    let Some(rest) = bytes.strip_prefix(b"@") else {
+        return false;
+    };
+    if rest.first().is_none_or(|c| c.is_ascii_digit()) {
+        return false;
     }
-    it.all(|c| c == '_' || c.is_alphanumeric() || !c.is_ascii())
+    let mut pos = 0;
+    while pos < rest.len() {
+        let c = rest[pos];
+        if c.is_ascii() && c != b'_' && !c.is_ascii_alphanumeric() {
+            return false;
+        }
+        pos += crate::value::rvalue::char_width_at(enc, rest, pos);
+    }
+    true
 }
 
 /// Resolve an `instance_variable_*` name argument with CRuby
@@ -6648,31 +6661,49 @@ fn ivar_name_id(
     receiver: Value,
     arg: Value,
 ) -> Result<IdentId> {
-    let name = if let Some(sym) = arg.try_symbol() {
-        sym.get_name().to_string()
-    } else if let Some(s) = arg.is_str() {
-        s.to_string()
-    } else if let Some(r) = crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_STR)? {
-        match r.is_str() {
-            Some(s) => s.to_string(),
-            None => return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg)),
-        }
-    } else {
-        return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg));
-    };
-    if !is_valid_ivar_name(&name) {
-        // CRuby surfaces the given name and the receiver on this
-        // NameError (`#name` / `#receiver`); `#name` is the *exact*
-        // argument object (a String/Symbol), which the spec checks with
-        // `equal?`, so carry the original `arg` value.
-        return Err(name_error_reflection(
+    // CRuby surfaces the given name and the receiver on this
+    // NameError (`#name` / `#receiver`); `#name` is the *exact*
+    // argument object (a String/Symbol), which the spec checks with
+    // `equal?`, so carry the original `arg` value.
+    let not_allowed = |globals: &mut Globals, name: &[u8], enc: Encoding| {
+        let raw = [b"'", name, b"' is not allowed as an instance variable name"].concat();
+        let err = name_error_reflection(
             globals,
-            format!("'{name}' is not allowed as an instance variable name"),
+            String::from_utf8_lossy(&raw).into_owned(),
             arg,
             receiver,
-        ));
+        );
+        // A name that is not UTF-8 is shown as its own bytes.
+        if std::str::from_utf8(&raw).is_err()
+            && let Some(mut exc) = err.original
+            && let Some(inner) = exc.is_exception_mut()
+        {
+            inner.raw_message = Some((raw, enc));
+        }
+        err
+    };
+    if let Some(sym) = arg.try_symbol() {
+        let ident = sym.get_ident_name_clone();
+        let enc = sym.symbol_encoding().unwrap_or(Encoding::UTF8);
+        if !is_valid_ivar_name(ident.as_bytes(), enc) {
+            return Err(not_allowed(globals, ident.as_bytes(), enc));
+        }
+        return Ok(sym);
     }
-    Ok(IdentId::get_id(&name))
+    // `rb_check_id`: a String, or what `to_str` answers
+    // (`rb_check_string_type`); one that is broken in an
+    // ASCII-compatible encoding is refused as a name before the name is
+    // looked at (#1987).
+    let Some(s) = arg.check_string_type(vm, globals)? else {
+        return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg));
+    };
+    let inner = s.as_rstring_inner();
+    crate::builtins::string::check_symbol_bytes(&globals.store, inner, true)?;
+    if !is_valid_ivar_name(inner.as_bytes(), inner.encoding()) {
+        let (name, enc) = (inner.as_bytes().to_vec(), inner.encoding());
+        return Err(not_allowed(globals, &name, enc));
+    }
+    crate::builtins::string::intern_name_string(&globals.store, inner)
 }
 
 ///

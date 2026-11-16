@@ -3450,7 +3450,9 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 SepKind::Re(re, true)
             })
         } else if let Some(inner) = v.is_rstring_inner() {
-            if inner.encoding().is_wide() {
+            // (Not the BOM-carrying dummies `is_wide` also answers for:
+            // they have no codec, and are searched as bytes below.)
+            if inner.encoding().unit_width() > 1 {
                 // A UTF-16 / UTF-32 separator has no text view; it is
                 // searched for as the regexp of its escaped self, in
                 // its own encoding, which the receiver (already checked
@@ -5510,7 +5512,10 @@ pub(crate) fn regexp_source_desc_bytes(
     resenc: Option<crate::value::Encoding>,
 ) -> Vec<u8> {
     use crate::value::Encoding as E;
-    if enc.is_wide() {
+    // The four encodings with a code unit wider than a byte — not the
+    // BOM-carrying dummies `is_wide` also answers for, whose bytes
+    // CRuby escapes one by one (`/\xFE\xFF\x00b/`).
+    if enc.unit_width() > 1 {
         return wide_regexp_source_desc_bytes(bytes, enc, resenc);
     }
     let unicode = matches!(
@@ -11681,16 +11686,6 @@ fn squeeze_compute(
 /// leading `^` flag from `expand_tr_spec`.
 /// For a non-UTF-8 receiver, classify the `tr`-style set arguments:
 /// - `Ok(Some(sets))`  — every set is ASCII-only; safe to use.
-/// Whether `enc` numbers its characters by Unicode scalar. Everywhere
-/// else a character's "codepoint" is its own bytes.
-fn enc_is_unicode(enc: crate::value::Encoding) -> bool {
-    use crate::value::Encoding as E;
-    matches!(
-        enc,
-        E::Utf8(_) | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
-    )
-}
-
 /// The codepoint CRuby gives a character (`rb_enc_mbc_to_codepoint`):
 /// the Unicode scalar in a Unicode encoding, the character's own bytes
 /// packed big-endian in any other. A `tr`-style range compares on this
@@ -11699,25 +11694,26 @@ fn enc_is_unicode(enc: crate::value::Encoding) -> bool {
 /// byte pairs, whose scalars wander from U+FFE3 down to U+2010 and
 /// back up again (#1475).
 fn mbc_codepoint(enc: crate::value::Encoding, bytes: &[u8]) -> u32 {
-    if enc_is_unicode(enc)
-        && let Ok(s) = std::str::from_utf8(bytes)
-        && let Some(c) = s.chars().next()
-    {
-        return u32::from(c);
-    }
-    bytes.iter().fold(0u32, |acc, b| (acc << 8) | u32::from(*b))
+    // What is no character of `enc` (a stray byte, a lone surrogate)
+    // keeps its packed bytes, which no set of a valid string can name.
+    crate::value::enc_codepoint(enc, bytes)
+        .unwrap_or_else(|| bytes.iter().fold(0u32, |acc, b| (acc << 8) | u32::from(*b)))
 }
 
 /// The bytes of the character numbered `cp`: the inverse of
-/// [`mbc_codepoint`], which for a non-Unicode encoding is the packed
-/// value with its leading zero bytes dropped.
+/// [`mbc_codepoint`] — a scalar's encoded form in a Unicode encoding
+/// (UTF-16 / UTF-32 code units and CESU-8's surrogate pairs included,
+/// #1986), and for any other encoding the packed value with its leading
+/// zero bytes dropped.
 fn cp_to_bytes(enc: crate::value::Encoding, cp: u32) -> SmallVec<[u8; 4]> {
+    use crate::value::Encoding as E;
     let mut out: SmallVec<[u8; 4]> = SmallVec::new();
-    if enc_is_unicode(enc)
-        && let Some(c) = char::from_u32(cp)
+    if (matches!(enc, E::Utf8(_))
+        || enc.unit_width() > 1
+        || enc == E::NamedByte(crate::value::CESU_8))
+        && let Ok(bytes) = crate::value::enc_mbcput(enc, cp)
     {
-        let mut buf = [0u8; 4];
-        out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        out.extend_from_slice(&bytes);
         return out;
     }
     if cp <= 0xff {
