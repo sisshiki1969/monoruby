@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f695dddc.js";
+            window.path_to_searchindex_js = "searchindex-bbd76388.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-9192be69.js"></script>
+        <script src="toc-afb61271.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -218,6 +218,7 @@ run time with <code>--no-jit</code>. (The old <code>jit</code> / <code>jit_x86</
 <tr><td><code>chain-deopt-log</code></td><td>Trace every chain-deopt escalation to stderr. Deliberately <strong>not</strong> implied by <code>deopt</code> / <code>profile</code>: it fires hundreds of thousands of times per activerecord iteration and once wrote 160 MB of stderr in five iterations</td></tr>
 <tr><td><code>profile</code></td><td>Collect deopt / recompile statistics (implies <code>dump-traceir</code> for the deopt-site table, but not the bytecode dumps)</td></tr>
 <tr><td><code>perf</code></td><td>Emit perf-compatible symbol maps so JIT frames get names</td></tr>
+<tr><td><code>prof</code></td><td>The <a href="profiler.html">built-in profiler</a>, selected at run time with <code>MONORUBY_PROF=cpu,alloc,malloc</code>; <code>MONORUBY_PROF_OUT=PREFIX</code> also writes <code>PREFIX.html</code>, a self-contained viewer</td></tr>
 </tbody>
 </table>
 </div>
@@ -522,7 +523,11 @@ variants — <code>NotCached</code>, <code>MethodNotFound</code>, <code>IvarIdNo
 <a href="design/deopt_log.html">Reading the deopt log</a> explains the format, including
 how the log names the guard that actually branched when exits have been
 deduplicated.</p>
-<p>For time rather than counts, see <a href="benchmarks.html#profiling">Benchmarks</a>.</p>
+<p>For time rather than counts, build with <code>--features prof</code> and see
+<a href="profiler.html">Built-in Profiler</a>: methods by self and total time split by
+runtime tier, allocations, GC, JIT compiles and <code>malloc</code> call sites, as a text
+report and as an HTML page. <a href="benchmarks.html#profiling">Benchmarks</a> covers
+Linux <code>perf</code>.</p>
 <h2 id="jit-thresholds"><a class="header" href="#jit-thresholds">JIT thresholds</a></h2>
 <p>A function is compiled after <strong>20 calls</strong> (<code>COUNT_START_COMPILE</code>) and a loop
 after <strong>100 iterations</strong> (<code>COUNT_LOOP_START_COMPILE</code>). Both drop to 5 and 15

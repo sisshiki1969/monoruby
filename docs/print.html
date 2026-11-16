@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f695dddc.js";
+            window.path_to_searchindex_js = "searchindex-bbd76388.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-9192be69.js"></script>
+        <script src="toc-afb61271.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -441,6 +441,7 @@ run time with <code>--no-jit</code>. (The old <code>jit</code> / <code>jit_x86</
 <tr><td><code>chain-deopt-log</code></td><td>Trace every chain-deopt escalation to stderr. Deliberately <strong>not</strong> implied by <code>deopt</code> / <code>profile</code>: it fires hundreds of thousands of times per activerecord iteration and once wrote 160 MB of stderr in five iterations</td></tr>
 <tr><td><code>profile</code></td><td>Collect deopt / recompile statistics (implies <code>dump-traceir</code> for the deopt-site table, but not the bytecode dumps)</td></tr>
 <tr><td><code>perf</code></td><td>Emit perf-compatible symbol maps so JIT frames get names</td></tr>
+<tr><td><code>prof</code></td><td>The <a href="#built-in-profiler">built-in profiler</a>, selected at run time with <code>MONORUBY_PROF=cpu,alloc,malloc</code>; <code>MONORUBY_PROF_OUT=PREFIX</code> also writes <code>PREFIX.html</code>, a self-contained viewer</td></tr>
 </tbody>
 </table>
 </div>
@@ -745,7 +746,11 @@ variants — <code>NotCached</code>, <code>MethodNotFound</code>, <code>IvarIdNo
 <a href="#reading-the-deopt-log---features-deopt">Reading the deopt log</a> explains the format, including
 how the log names the guard that actually branched when exits have been
 deduplicated.</p>
-<p>For time rather than counts, see <a href="#profiling">Benchmarks</a>.</p>
+<p>For time rather than counts, build with <code>--features prof</code> and see
+<a href="#built-in-profiler">Built-in Profiler</a>: methods by self and total time split by
+runtime tier, allocations, GC, JIT compiles and <code>malloc</code> call sites, as a text
+report and as an HTML page. <a href="#profiling">Benchmarks</a> covers
+Linux <code>perf</code>.</p>
 <h2 id="jit-thresholds"><a class="header" href="#jit-thresholds">JIT thresholds</a></h2>
 <p>A function is compiled after <strong>20 calls</strong> (<code>COUNT_START_COMPILE</code>) and a loop
 after <strong>100 iterations</strong> (<code>COUNT_LOOP_START_COMPILE</code>). Both drop to 5 and 15
@@ -903,6 +908,15 @@ target/release/monoruby benchmark/app_fib.rb
 <code>benchmark/</code>. Passing <code>--no-jit</code> gives you the VM-only baseline for the same
 script, which is often more informative than an absolute number.</p>
 <h2 id="profiling"><a class="header" href="#profiling">Profiling</a></h2>
+<p>monoruby has a profiler of its own that knows about Ruby frames and the
+runtime’s tiers — see <a href="#built-in-profiler">Built-in Profiler</a>, which includes a live
+example of the HTML page it writes:</p>
+<pre><code class="language-sh">cargo build --release --features prof
+MONORUBY_PROF=cpu MONORUBY_PROF_OUT=/tmp/p target/release/monoruby benchmark/app_fib.rb
+# -&gt; /tmp/p.txt, /tmp/p.html, /tmp/p.cpu.folded
+</code></pre>
+<p>Linux <code>perf</code> works too, and sees what a sampling profiler inside the process
+cannot (the kernel, other processes):</p>
 <pre><code class="language-sh"># Flame graph via Linux perf (needs ../FlameGraph)
 bin/perf benchmark/app_fib.rb
 
@@ -979,6 +993,170 @@ is faster.</p>
 <li>CPU(s): 32 — 13th Gen Intel(R) Core(TM) i9-13900HX, 16 cores / 2 threads per core</li>
 <li>Caches (sum of all): L1d 768 KiB (16), L1i 512 KiB (16), L2 32 MiB (16), L3 36 MiB (1)</li>
 </ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="built-in-profiler"><a class="header" href="#built-in-profiler">Built-in Profiler</a></h1>
+<p>monoruby carries a profiler of its own, behind the <code>prof</code> Cargo feature. It
+answers the questions that come up when tuning a Ruby program on monoruby, or
+monoruby itself:</p>
+<ul>
+<li>which Ruby methods the time goes to, and in which part of the runtime it is
+spent — JIT-compiled code, the interpreter, builtins, the garbage collector,
+the JIT compiler, the parser, <code>malloc</code>;</li>
+<li>what allocates objects, and what the collector costs;</li>
+<li>what the JIT compiles, how long each compile takes, and what it compiles
+more than once;</li>
+<li>who calls <code>malloc</code>, from Ruby and from Rust.</li>
+</ul>
+<p>The result is a text report and a self-contained HTML page with a time line,
+flame graphs and sortable tables. This page is the introduction;
+<a href="#the-built-in-profiler---features-prof">The built-in profiler — reference</a> has every table, how
+a sample is taken, and the limits.</p>
+<h2 id="quick-start-1"><a class="header" href="#quick-start-1">Quick start</a></h2>
+<pre><code class="language-sh">cargo build --release --features prof
+
+# The report on stderr
+MONORUBY_PROF=cpu target/release/monoruby script.rb
+
+# The report, the HTML page and the folded stacks in files
+MONORUBY_PROF=cpu MONORUBY_PROF_OUT=/tmp/p target/release/monoruby script.rb
+#   -&gt; /tmp/p.txt          the report
+#      /tmp/p.html         the viewer: open it in a browser
+#      /tmp/p.cpu.folded   folded stacks (flamegraph.pl, inferno, speedscope)
+</code></pre>
+<p><code>MONORUBY_PROF</code> selects what to measure, as a comma-separated list:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Mode</th><th>Measures</th></tr>
+</thead>
+<tbody>
+<tr><td><code>cpu</code></td><td>Samples the Ruby stack and the PC 1000 times a second</td></tr>
+<tr><td><code>alloc</code></td><td>Counts every object allocation by class and by allocating method, and records the stack of every 64th</td></tr>
+<tr><td><code>malloc</code></td><td>Counts every <code>malloc</code> / <code>free</code> and records the Ruby stack and the Rust call site of every 64th <code>malloc</code></td></tr>
+<tr><td><code>all</code></td><td>All three</td></tr>
+</tbody>
+</table>
+</div>
+<p>JIT compiles and garbage collections are timed in every mode.</p>
+<p>A binary built without the feature has none of this code. A <code>prof</code> binary that
+is not asked to profile (<code>MONORUBY_PROF</code> unset) runs within ±0.4% of a plain
+release build, measured in instructions, so it can serve as the everyday
+binary.</p>
+<h2 id="an-example-optcarrot"><a class="header" href="#an-example-optcarrot">An example: optcarrot</a></h2>
+<p>The page below is a real one, written by</p>
+<pre><code class="language-sh">MONORUBY_PROF=all MONORUBY_PROF_INLINE=1 MONORUBY_PROF_OUT=optcarrot \
+    monoruby bin/optcarrot -b --frames 600 examples/Lan_Master.nes
+</code></pre>
+<p>and embedded as it came out. It is live: drag over the time line, switch
+tabs, click a frame of the flame graph.
+<strong><a href="profiler/optcarrot.html">Open it in a tab of its own</a></strong> for the full
+width.</p>
+<iframe src="profiler/optcarrot.html" title="monoruby profiler viewer: 600 frames of optcarrot" loading="lazy" style="width: 100%; height: 760px; border: 1px solid var(--table-border-color); border-radius: 6px;"></iframe>
+<p>Things to try in it:</p>
+<ul>
+<li><strong>Drag over the first 300 ms of the time line.</strong> Every table and flame
+graph on the page is recomputed for just that part, and it is a different
+program from the steady state: optcarrot is building its lookup tables
+(<code>Array#transpose</code>, <code>PPU#setup_lut</code>), the JIT compiler takes a fifth of the
+samples, and JIT code only a quarter instead of 70%. A click, or <em>Whole
+run</em>, clears the selection.</li>
+<li><strong><a href="profiler/optcarrot.html#flame">Flame graph</a>.</strong> Ruby frames are neutral;
+the colored frame under each stack is the tier the sample was counted in.
+<code>Optcarrot::PPU#render_pixel</code> is in italics and marked <code>[inlined]</code>: the JIT
+compiled it into <code>main_loop</code>’s block without a frame, and
+<code>MONORUBY_PROF_INLINE=1</code> shows it as a frame anyway. Switch the selector
+from <em>CPU time</em> to <em>Objects allocated</em> or <em>malloc bytes</em>, or switch to
+<strong>Callers</strong> to turn the graph over and see who is responsible for the <code>[GC]</code>
+tier.</li>
+<li><strong><a href="profiler/optcarrot.html#methods">Methods</a>.</strong> Self and total per method,
+sortable, with the self time’s mix of tiers as a bar. Selecting a row shows
+the method’s callers and callees.</li>
+<li><strong><a href="profiler/optcarrot.html#jit">JIT</a>.</strong> Every compilation unit with its
+samples, code size and compile time, and the methods compiled more than
+once.</li>
+<li><strong><a href="profiler/optcarrot.html#objects">Objects &amp; GC</a></strong> and
+<strong><a href="profiler/optcarrot.html#malloc">malloc</a></strong>. Allocations by class and by
+method, every collection timed, and <code>malloc</code> by Ruby method and by Rust
+call site.</li>
+</ul>
+<p>The page is one file with the run’s data in it (about 240 KB here, 65 KB of
+it the viewer), so it needs no server and no network and can be attached to
+an issue or archived as it is. The same run’s text report is
+<a href="profiler/optcarrot.txt">optcarrot.txt</a>.</p>
+<h2 id="a-second-example-timings-alone"><a class="header" href="#a-second-example-timings-alone">A second example: timings alone</a></h2>
+<p>The yellow banner at the top of the page above is there for a reason:
+counting objects turns the JIT’s inline allocation off, so every allocation
+takes the slower runtime path and the CPU times are no longer those of a
+normal run. For timings, profile <code>cpu</code> in a run of its own:</p>
+<pre><code class="language-sh">cd benchmark
+MONORUBY_PROF=cpu MONORUBY_PROF_OUT=aobench-cpu monoruby app_aobench.rb
+</code></pre>
+<p><strong><a href="profiler/aobench-cpu.html">Open the aobench page</a></strong> (93 KB), or read
+<a href="profiler/aobench-cpu.txt">its text report</a>, which starts like this:</p>
+<pre><code class="language-text">---- CPU: 3193 samples, main thread's wall clock at 1000 Hz ----
+sampled run: 3.195 s wall, 3.181 s CPU; one sample = 1.001 ms (effective 999 Hz)
+
+where the time went
+  tier                                 samples       %
+  JIT code                                1961   61.4%
+  VM interpreter                             1    0.0%
+  JIT stubs / invokers / wrappers          174    5.4%
+  builtins / runtime (Rust, libc)          710   22.2%
+  GC                                       311    9.7%
+  JIT compile                               25    0.8%
+  parse / bytecodegen                        1    0.0%
+  malloc / free                             10    0.3%
+
+methods by self time (top 30)
+     self      %   total      %    jit    vm  stub native    gc  ...  method
+     1347  42.2%    1348  42.2%    974     0    97     12   263  ...  Sphere#intersect (app_aobench.rb:75)
+      970  30.4%    2869  89.9%    547     0    28    395     0  ...  block (2 levels) in Scene#ambient_occlusion (app_aobench.rb:205)
+      380  11.9%     380  11.9%    321     0    21      0    37  ...  Plane#intersect (app_aobench.rb:106)
+      234   7.3%     234   7.3%      0     0    19    215     0  ...  Kernel#rand (native)
+</code></pre>
+<p>Every sample is in exactly one tier, and a method’s self time is split by
+tier: <code>Sphere#intersect</code> spent 974 of its 1347 samples in its own compiled
+code and 263 in the collector, which ran for the vectors it allocates.
+<code>Kernel#rand</code> is a native method and a frame of its own.</p>
+<h2 id="options"><a class="header" href="#options">Options</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variable</th><th>Meaning</th><th>Default</th></tr>
+</thead>
+<tbody>
+<tr><td><code>MONORUBY_PROF</code></td><td>Comma list of <code>cpu</code>, <code>alloc</code>, <code>malloc</code>, or <code>all</code></td><td>(off)</td></tr>
+<tr><td><code>MONORUBY_PROF_OUT</code></td><td>Write <code>PREFIX.txt</code>, <code>PREFIX.html</code> and <code>PREFIX.{cpu,alloc,malloc}.folded</code></td><td>report on stderr, nothing else</td></tr>
+<tr><td><code>MONORUBY_PROF_INLINE</code></td><td><code>1</code>: show callees the JIT inlined without a frame as frames of their own, marked <code>[inlined]</code></td><td>(off: counted as the method they were inlined into)</td></tr>
+<tr><td><code>MONORUBY_PROF_CLOCK</code></td><td><code>wall</code>: the main thread’s wall clock, at a high resolution. <code>cpu</code>: the process’s CPU time on every thread, at the kernel tick’s resolution (often 4 ms)</td><td><code>wall</code></td></tr>
+<tr><td><code>MONORUBY_PROF_HZ</code></td><td>Sampling rate</td><td>1000</td></tr>
+<tr><td><code>MONORUBY_PROF_ALLOC_EVERY</code></td><td>Record the stack of every N-th object allocation (the counts are exact regardless)</td><td>64</td></tr>
+<tr><td><code>MONORUBY_PROF_MALLOC_EVERY</code></td><td>Record the stacks of every N-th <code>malloc</code></td><td>64</td></tr>
+<tr><td><code>MONORUBY_PROF_TOP</code></td><td>Rows per table of the text report (the HTML page has them all)</td><td>30</td></tr>
+<tr><td><code>MONORUBY_PROF_BUF_MB</code></td><td>Sample buffer, reserved lazily; samples past it are counted as dropped</td><td>512</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="good-to-know"><a class="header" href="#good-to-know">Good to know</a></h2>
+<ul>
+<li><strong>Profile <code>cpu</code> and <code>alloc</code> separately</strong> when the timings matter, as above.
+<code>MONORUBY_PROF_INLINE=1</code> does not change what <code>cpu</code> costs measurably.</li>
+<li><strong>The report is written at process exit</strong>, after <code>at_exit</code> handlers and
+finalizers. <code>exit!</code>, <code>exec</code> and a crash write nothing, and a forked child
+writes nothing either.</li>
+<li><strong><code>cpu</code> is Linux only</strong>, and a <code>prof</code> build has so far been tried on Linux
+only (x86-64, and aarch64 under qemu); the other modes do not depend on the
+OS. The wall clock samples the main thread; use <code>MONORUBY_PROF_CLOCK=cpu</code>
+for a program whose work is on other threads.</li>
+<li><strong><code>SIGPROF</code> belongs to the profiler</strong> while <code>cpu</code> is on: a Ruby
+<code>trap("PROF")</code> would replace its handler.</li>
+<li>The profiler complements the older measurement features rather than
+replacing them: <code>profile</code> (deopt sites and recompile reasons), <code>jit-log</code>,
+<code>deopt</code>, <code>gc-log</code> and <code>perf</code> — see
+<a href="#cargo-features">Development and Build Options</a>.</li>
+</ul>
+<p>The two example pages were written by monoruby 0.3.0 at commit <code>eb09379</code> on
+x86-64 Linux; the numbers in them are that machine’s.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="compatibility"><a class="header" href="#compatibility">Compatibility</a></h1>
 <p>monoruby aims at CRuby 4.0 compatibility, and measures it against
@@ -20167,6 +20345,251 @@ target/release/monoruby ../optcarrot/bin/optcarrot -b --opt --frames 500 \
 
 # A/B は必ずインターリーブして中央値を取る（単発は ±20 % 振れる）
 </code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="the-built-in-profiler---features-prof"><a class="header" href="#the-built-in-profiler---features-prof">The built-in profiler (<code>--features prof</code>)</a></h1>
+<p>A profiler for tuning monoruby itself: which Ruby methods the time goes to,
+and in which part of the runtime (JIT code, the interpreter, builtins, GC,
+the JIT compiler, the parser, <code>malloc</code>); what allocates objects; what the
+collector costs; what the JIT compiles and recompiles; and who calls
+<code>malloc</code>. The code is <code>monoruby/src/prof.rs</code>.</p>
+<p>It complements the older measurement features rather than replacing them:
+<code>profile</code> (deopt sites, recompile reasons, method caches), <code>jit-log</code>
+(per-unit compile logs), <code>deopt</code>, <code>gc-log</code> (exit totals and the
+<code>malloc</code> size-class histogram) and <code>perf</code> (a perf map for <code>perf record</code>).</p>
+<h2 id="enabling-it"><a class="header" href="#enabling-it">Enabling it</a></h2>
+<pre><code class="language-sh">cargo build --release --features prof
+MONORUBY_PROF=cpu target/release/monoruby script.rb        # report on stderr
+MONORUBY_PROF=all MONORUBY_PROF_OUT=/tmp/p target/release/monoruby script.rb
+#   -&gt; /tmp/p.txt, /tmp/p.html (the viewer: open it in a browser),
+#      /tmp/p.cpu.folded, /tmp/p.alloc.folded, /tmp/p.malloc.folded
+</code></pre>
+<p>A build without the feature has none of this code. A <code>prof</code> build that is
+not asked to profile anything (<code>MONORUBY_PROF</code> unset) differs from a plain
+release build by one relaxed load per <code>malloc</code> / <code>free</code> and per phase
+change; measured with cachegrind it is within ±0.4% Ir of master
+(so_nbody +0.38%, binarytrees −0.20%, both mostly code layout).</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variable</th><th>Meaning</th><th>Default</th></tr>
+</thead>
+<tbody>
+<tr><td><code>MONORUBY_PROF</code></td><td>Comma list of <code>cpu</code>, <code>alloc</code>, <code>malloc</code>, or <code>all</code></td><td>(off)</td></tr>
+<tr><td><code>MONORUBY_PROF_CLOCK</code></td><td><code>wall</code>: a high-resolution timer on the main thread’s wall clock. <code>cpu</code>: the process’s CPU time (<code>ITIMER_PROF</code>), every thread, but only as fine as the kernel tick (often 4 ms, i.e. ~250 Hz)</td><td><code>wall</code></td></tr>
+<tr><td><code>MONORUBY_PROF_HZ</code></td><td>Sampling rate</td><td>1000</td></tr>
+<tr><td><code>MONORUBY_PROF_ALLOC_EVERY</code></td><td>Record the whole stack of every N-th object allocation (the per-class / per-method counts are exact regardless)</td><td>64</td></tr>
+<tr><td><code>MONORUBY_PROF_MALLOC_EVERY</code></td><td>Record the stacks of every N-th <code>malloc</code></td><td>64</td></tr>
+<tr><td><code>MONORUBY_PROF_OUT</code></td><td>Write the report to <code>PREFIX.txt</code>, <a href="#the-viewer-prefixhtml">the viewer</a> to <code>PREFIX.html</code> and the stacks to <code>PREFIX.{cpu,alloc,malloc}.folded</code></td><td>stderr, nothing else</td></tr>
+<tr><td><code>MONORUBY_PROF_INLINE</code></td><td><code>1</code>: show frameless-inlined callees as frames of their own (see <a href="#frameless-inlined-callees-monoruby_prof_inline1">below</a>)</td><td>(off)</td></tr>
+<tr><td><code>MONORUBY_PROF_TOP</code></td><td>Rows per table</td><td>30</td></tr>
+<tr><td><code>MONORUBY_PROF_BUF_MB</code></td><td>Sample buffer (reserved lazily; samples past it are counted as dropped)</td><td>512</td></tr>
+</tbody>
+</table>
+</div>
+<p>The <code>.folded</code> files are Brendan Gregg’s folded-stack format: feed them to
+<code>flamegraph.pl</code>, <code>inferno-flamegraph</code> or speedscope. In the CPU stacks the
+last two frames are the tier (<code>[jit]</code>, <code>[vm]</code>, <code>[native]</code>, <code>[gc]</code>, …) and,
+for samples outside generated code, the native function the PC was in.</p>
+<h2 id="the-viewer-prefixhtml"><a class="header" href="#the-viewer-prefixhtml">The viewer (<code>PREFIX.html</code>)</a></h2>
+<p>With <code>MONORUBY_PROF_OUT</code>, the run also writes <code>PREFIX.html</code>: the same
+profile as a page to explore in a browser. It is one self-contained file
+— the page (<code>monoruby/src/prof/viewer.html</code>, compiled into a <code>prof</code>
+binary) with the run’s data in it — so it needs no server and no network,
+and can be copied, attached or archived as it is. Light and dark follow
+the system (or the button at the top right).</p>
+<p>Two pages to try, written by real runs (optcarrot with all three profiles,
+aobench with <code>cpu</code> alone), are on the documentation site:
+<a href="https://sisshiki1969.github.io/monoruby/docs/profiler.html">https://sisshiki1969.github.io/monoruby/docs/profiler.html</a>.</p>
+<ul>
+<li><strong>Time line</strong> (when <code>cpu</code> is on) — the run cut into up to 300 equal
+buckets of CPU samples, each drawn as its mix of tiers, with the objects
+allocated and the bytes <code>malloc</code>ed in each below. <strong>Drag over a part of
+it</strong> and every table and flame graph on the page is recomputed for that
+part: the warm-up apart from the steady state, one GC burst, the
+stretch where the JIT was compiling. A click, or <em>Whole run</em>, clears the
+selection.</li>
+<li><strong>Overview</strong> — the totals, the tiers, the hottest methods, the most
+allocated classes, the collector.</li>
+<li><strong>Flame graph</strong> — of CPU time, objects allocated, <code>malloc</code> calls or
+<code>malloc</code> bytes. Ruby frames are neutral; the colored frame under each
+stack is what the sample <em>was</em>: its tier and, outside generated code,
+the Rust / C function the PC was in (for objects, the class; for
+<code>malloc</code>, the Rust call site). A frameless-inlined callee is in italics
+and marked <code>[inlined]</code>. Click a frame to zoom into it, type in the box
+to highlight frames by name (and read off their share), and switch to
+<strong>Callers</strong> to turn the graph over: leaves at the top, their callers
+below — who is responsible for <code>memmove</code>, or for the <code>[GC]</code> tier.</li>
+<li><strong>Methods</strong> — self and total per method for the same four measures,
+sortable, with the self time’s mix of tiers as a bar. Selecting a
+method shows its callers, its callees and what its self time (or its
+allocations) consisted of; <em>Show in flame graph</em> highlights it there.</li>
+<li><strong>Native functions</strong>, <strong>JIT</strong> (every compilation unit with its samples,
+code size and compile time; what was compiled more than once; the
+frameless-inlined callees), <strong>Objects &amp; GC</strong>, <strong>malloc</strong> — the report’s
+other tables, sortable.</li>
+</ul>
+<p>The numbers are the report’s: the page computes them from the same
+records. Two things differ. The object tables are the exact counts for
+the whole run, but for a selected part of the run they are estimates from
+the sampled stacks (one allocation in <code>MONORUBY_PROF_ALLOC_EVERY</code>), and
+the page says so. And nothing is cut to <code>MONORUBY_PROF_TOP</code> rows.</p>
+<p>The data is the stacks themselves, not the tables: every distinct stack
+once (<code>View</code> in <code>prof.rs</code> describes the format), and per bucket of the
+time line how often each occurred. A record’s bucket is the number of CPU
+samples taken before it, so the time line needs <code>cpu</code>; without it there
+is one bucket and no time line. Sizes are modest: the page of a
+600-frame optcarrot run with all three profiles is about 240 KB, 65 KB of
+it the viewer.</p>
+<p>The report is written at process exit, after <code>at_exit</code> handlers and
+finalizers. <code>exit!</code>, <code>exec</code> and a crash write nothing; a forked child
+writes nothing either (only the process that started profiling reports).</p>
+<h2 id="what-the-report-contains"><a class="header" href="#what-the-report-contains">What the report contains</a></h2>
+<p>Every table starts with its title, a caption (the lines starting with
+<code># </code>: what the rows are and how to read the columns) and its column
+heads. <code>grep -v '^  #'</code> drops the captions.</p>
+<h3 id="cpu"><a class="header" href="#cpu"><code>cpu</code></a></h3>
+<ul>
+<li><strong>where the time went</strong> — every sample put in one tier, in this order
+of precedence: the runtime <em>phase</em> the thread was in (GC, JIT compile,
+parse / bytecodegen, the global allocator, the profiler’s own
+bookkeeping), else where the PC was: the VM’s code (“VM interpreter”), a
+JIT unit’s code (“JIT code”), elsewhere in JIT memory (“JIT stubs /
+invokers / wrappers” — the native-method wrappers live there), or
+outside it (“builtins / runtime”: Rust and libc).</li>
+<li><strong>methods by self time</strong> — self is the newest Ruby frame (a native
+method such as <code>Array#sort</code> is a frame of its own), split by tier;
+total is every sample with the method anywhere on the stack.</li>
+<li><strong>methods by total time</strong>.</li>
+<li><strong>JIT units by samples in their code</strong> — which compiled units the JIT
+time is spent in, with their code size.</li>
+<li><strong>native functions by self samples</strong> — the symbol the PC was in, for
+every sample outside generated code, tagged with its tier.</li>
+</ul>
+<h3 id="jit"><a class="header" href="#jit">JIT</a></h3>
+<p>Every compile (with or without <code>cpu</code>): count, loop compiles, abandoned
+compiles, total compile time and code size; the slowest compiles; and the
+<code>(method, self class)</code> pairs compiled more than once, with their total
+time — the recompiles.</p>
+<h3 id="alloc-and-gc"><a class="header" href="#alloc-and-gc"><code>alloc</code> and GC</a></h3>
+<p>Object allocations counted exactly by class, by allocating method (the
+newest Ruby frame when <code>RValue::pack</code> runs), and by both. Every collection
+is timed (with or without <code>alloc</code>): minor and major separately, mark and
+sweep, objects marked per collection.</p>
+<p><strong><code>alloc</code> changes the code being measured.</strong> The JIT’s inline allocation
+(<code>emit_cell_acquire</code>) never calls into the runtime, so with <code>alloc</code> on it
+is not emitted and every allocation takes the runtime path. Counts are
+exact; time is not representative (binarytrees at depth 18 runs 2.2×
+slower). Profile <code>cpu</code> in a separate run.</p>
+<h3 id="malloc"><a class="header" href="#malloc"><code>malloc</code></a></h3>
+<p>Exact counts and bytes of <code>malloc</code> / <code>free</code> through the global allocator,
+and for every N-th <code>malloc</code> its Ruby stack and its native call chain: the
+estimated calls and bytes by Ruby method, and by Rust call site (the first
+native frame that is not allocator plumbing — <code>alloc::</code>, <code>core::</code>,
+<code>hashbrown::</code>, <code>smallvec::</code>, …).</p>
+<h2 id="frameless-inlined-callees-monoruby_prof_inline1"><a class="header" href="#frameless-inlined-callees-monoruby_prof_inline1">Frameless-inlined callees (<code>MONORUBY_PROF_INLINE=1</code>)</a></h2>
+<p>A callee the JIT inlined without a frame (frameless specialization,
+<code>jitgen/compile/frameless_call.rs</code>) has no control frame, so the frame
+walk cannot see it. By default its time, allocations and
+<code>malloc</code>s are reported against the method whose frame it ran in, and the
+callee’s own row only holds what it did while it still had a frame (in the
+interpreter, or from a call site that was not inlined). A small row for a
+getter says nothing about how much time is spent in it.</p>
+<p>With <code>MONORUBY_PROF_INLINE=1</code> the callee gets a frame in the report:</p>
+<pre><code>methods by self time:
+     self      %   total      %    jit  ...  method
+      151  33.7%     151  33.7%    151  ...  V#dot (inl.rb:4)
+      129  28.8%     448 100.0%    129  ...  Object#work (inl.rb:13)
+       85  19.0%     121  27.0%     85  ...  V#each2 (inl.rb:7)
+       36   8.0%      36   8.0%     36  ...  block in Object#work (inl.rb:18)
+
+frameless-inlined callees by self samples, callee &lt;- the method it ran in:
+      151  33.7%  V#dot (inl.rb:4) &lt;- Object#work (inl.rb:13)
+       36   8.0%  block in Object#work (inl.rb:18) &lt;- V#each2 (inl.rb:7)
+</code></pre>
+<ul>
+<li><strong>methods by self / total time</strong>, the allocation tables and <code>malloc</code>’s
+“by Ruby method” count an inlined callee like a called one. A method’s
+row is the sum of its framed and its inlined executions.</li>
+<li><strong>frameless-inlined callees by self samples</strong> is the inlined part
+alone, per (callee, method whose frame it ran in). A callee nested in
+another frameless callee is listed under the method that has the frame.</li>
+<li>In the folded stacks the callee is a frame marked <code>[inlined]</code>.</li>
+<li>“JIT units” is unchanged: the callee’s code is part of the unit.</li>
+</ul>
+<p>How: the JIT reports the address range of every frameless body it emits
+(main and cold page), with the callee and the function whose frame the
+body runs in. Bodies nest as the inlining does. Each CPU sample,
+allocation and sampled <code>malloc</code> records its <em>site</em>: the PC if it is in
+JIT memory, otherwise the first return address into JIT memory on the
+native frame-pointer chain (looked for up to 64 frames up), which is the
+call from generated code into the runtime. At exit a site inside a body
+gives the chain of callees, applied only if the sample’s newest Ruby
+frame is the function the body was compiled into.</p>
+<p>What it costs: nothing when off. When on, the JIT records two address
+pairs per frameless body; a CPU sample walks a few more native frames; an
+object allocation walks the native stack up to the JIT frame (a loop
+that does nothing but allocate ran 38% more instructions under
+<code>alloc</code> with it than without; more on a fiber’s stack, where every read
+is probed). <code>malloc</code> and <code>cpu</code> do not change measurably.</p>
+<p>What it cannot tell:</p>
+<ul>
+<li>An object the escape analysis kept virtual in the callee and
+materialized after the body returned (an Array the callee returns,
+stored by the caller) is allocated by the caller’s code, and is charged
+to the caller.</li>
+<li>A sample in the few instructions around the body (filling the callee’s
+window, restoring the caller’s float registers) is the caller’s.</li>
+<li>Callees inlined by other means (attribute readers and writers, the
+builtin methods the JIT expands inline) have no body of their own and
+stay with the caller.</li>
+</ul>
+<h2 id="how-a-sample-is-taken"><a class="header" href="#how-a-sample-is-taken">How a sample is taken</a></h2>
+<p>Each OS thread knows the <code>Executor</code> running on it: <code>prof::start</code> sets it
+for the main program, <code>prof::enter_thread</code> for a native thread’s body, and
+<code>prof::set_executor</code> follows every fiber switch (<code>Fiber#resume</code> /
+<code>#transfer</code>, the enumerator fibers) and green-thread resume. Each thread
+also carries a phase byte, set by guards around <code>Allocator::gc</code>, the JIT
+compile in <code>Codegen::compile</code>, the parser and <code>bytecode_compile</code>, and the
+global allocator.</p>
+<p>A sample is the phase, the PC, the <code>FuncId</code> of every Ruby frame (the <code>cfp</code>
+chain, read from the executor’s <code>cfp</code> field; each control frame points at
+its local frame, whose <code>Meta</code> holds the <code>FuncId</code>) and up to 8 native
+return addresses (the frame-pointer chain, which <code>-Cforce-frame-pointers</code>
+keeps intact, generated code included). It goes into a lock-free,
+lazily-committed buffer and is decoded only at exit.</p>
+<p>The CPU sample is taken inside the <code>SIGPROF</code> handler, so it may interrupt
+any instruction. A call publishes its control frame before it stores the
+frame’s <code>lfp</code>, so for two instructions the newest frame holds a stale
+<code>lfp</code>. The handler therefore reads through a fault-free reader: addresses
+in the interrupted thread’s own stack directly, anything else (heap
+frames, a fiber’s stack) after probing it with <code>process_vm_readv</code>, which
+fails instead of faulting. A stale <code>FuncId</code> that names no function is
+dropped at report time. The allocation hooks are called synchronously,
+where frames are consistent, and read directly.</p>
+<p>PCs are classified at exit, when every region is known: the VM’s code
+(<code>vm_code_position</code>), each JIT unit’s main and cold ranges (recorded when
+the unit is compiled; old code is never reused, so the ranges stay
+unique), and the rest of the JIT pages (<code>JitMemory::include</code>). Native PCs
+are symbolized from the executable’s own <code>.symtab</code> (which <code>backtrace</code>
+alone misses for LLVM’s <code>.llvm.*</code> local symbols), then with <code>backtrace</code>,
+then as <code>object+offset</code>.</p>
+<h2 id="limits"><a class="header" href="#limits">Limits</a></h2>
+<ul>
+<li>Frameless-inlined callees have no frame, so their time and allocations
+go to the method they were inlined into unless <code>MONORUBY_PROF_INLINE=1</code>
+is set. A method JIT unit that inlines callees shows up as one row in
+“JIT units” either way.</li>
+<li>The wall-clock mode samples the main thread only. <code>MONORUBY_PROF_CLOCK=cpu</code>
+samples whichever thread is on the CPU, at the kernel tick’s rate.</li>
+<li>The program’s boot (<code>Executor::init</code>’s prelude) runs before the timer is
+armed; its <code>malloc</code>s are sampled, with no Ruby frame.</li>
+<li><code>SIGPROF</code> belongs to the profiler while <code>cpu</code> is on; a Ruby
+<code>trap("PROF")</code> would replace its handler.</li>
+<li>Linux only for <code>cpu</code> (it reads the signal context and uses
+<code>timer_create</code> / <code>process_vm_readv</code>); <code>alloc</code>, <code>malloc</code>, GC and JIT do
+not depend on the OS, though a <code>prof</code> build has so far been tried on
+Linux only (x86-64, and aarch64 under qemu).</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="monoruby-progress-summary-april-2025--april-2026"><a class="header" href="#monoruby-progress-summary-april-2025--april-2026">monoruby Progress Summary (April 2025 – April 2026)</a></h1>
 <p>Over the past year monoruby advanced through roughly 500 commits, expanding language coverage, hardening the JIT, and dramatically improving CRuby compatibility.</p>

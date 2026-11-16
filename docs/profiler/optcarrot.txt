@@ -1,0 +1,473 @@
+
+==================== monoruby prof (2.350 s) ====================
+MONORUBY_PROF_INLINE: frameless-inlined callees are frames of their own (bodies compiled: 425)
+
+---- CPU: 2270 samples, main thread's wall clock at 1000 Hz ----
+sampled run: 2.273 s wall, 2.254 s CPU; one sample = 1.001 ms (effective 999 Hz)
+
+where the time went
+  # Every sample is in exactly one tier: the runtime phase its thread was in
+  # (GC, JIT compile, parse / bytecodegen, malloc / free, the profiler), else
+  # where its PC was (a JIT unit's code, the VM's code, other JIT memory, or
+  # Rust / libc code).
+  tier                                 samples       %
+  JIT code                                1609   70.9%
+  VM interpreter                            11    0.5%
+  JIT stubs / invokers / wrappers           40    1.8%
+  builtins / runtime (Rust, libc)          236   10.4%
+  GC                                        44    1.9%
+  JIT compile                               73    3.2%
+  parse / bytecodegen                       16    0.7%
+  malloc / free                             48    2.1%
+  the profiler itself                      193    8.5%
+
+methods by self time (top 30)
+  # self: samples whose newest Ruby frame is the method: its own code and the
+  #   builtins, runtime and GC working for it. A native method (Array#sort) is
+  #   a frame of its own.
+  # total: samples with the method anywhere on the Ruby stack.
+  # jit .. prof: self by tier (JIT code, VM, JIT stubs, builtins / runtime, GC,
+  #   JIT compile, parse, malloc / free, the profiler).
+  # A frameless-inlined callee counts as a frame of its own (MONORUBY_PROF_INLINE).
+     self      %   total      %    jit    vm  stub native    gc  comp parse mallc  prof  method
+      366  16.1%     366  16.1%    366     0     0      0     0     0     0     0     0  Optcarrot::PPU#render_pixel (ppu.rb:806)
+      223   9.8%    1554  68.5%     11     0     0     26    23     1     0     2   160  Numeric#step (numeric.rb:188)
+      195   8.6%    1205  53.1%    187     0     0      1     0     4     0     1     2  block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+      154   6.8%     383  16.9%     80     3     0     68     0     2     0     1     0  Optcarrot::CPU#run (cpu.rb:926)
+      147   6.5%     147   6.5%    129     0    16      0     0     0     0     0     2  Optcarrot::PPU#wait_one_clock (ppu.rb:905)
+      117   5.2%     117   5.2%     65     0     0     52     0     0     0     0     0  Optcarrot::PPU#load_tiles (ppu.rb:674)
+       92   4.1%      92   4.1%     92     0     0      0     0     0     0     0     0  Optcarrot::PPU#evaluate_sprites_even (ppu.rb:680)
+       64   2.8%      70   3.1%     62     0     2      0     0     0     0     0     0  Optcarrot::PPU#open_attr (ppu.rb:605)
+       56   2.5%     119   5.2%     55     0     0      0     0     0     0     1     0  block in Optcarrot::PPU#main_loop (ppu.rb:1194)
+       51   2.2%    1661  73.2%      7     0     0      1     0    22     0    11    10  Optcarrot::PPU#main_loop (ppu.rb:943)
+       49   2.2%      50   2.2%     47     0     2      0     0     0     0     0     0  Optcarrot::CPU#fetch (cpu.rb:128)
+       49   2.2%      49   2.2%     49     0     0      0     0     0     0     0     0  Optcarrot::PPU#update_address_line (ppu.rb:583)
+       49   2.2%     102   4.5%     48     0     0      0     0     1     0     0     0  Optcarrot::PPU#evaluate_sprites_odd (ppu.rb:685)
+       48   2.1%      48   2.1%      0     0     1     32     0     0     0    10     5  Array#transpose (native)
+       43   1.9%      55   2.4%     20     0     0      0     0    12     0     5     6  Optcarrot::PPU#open_name (ppu.rb:594)
+       42   1.9%      42   1.9%     42     0     0      0     0     0     0     0     0  Optcarrot::PPU#evaluate_sprites_odd_phase_1 (ppu.rb:712)
+       34   1.5%      90   4.0%     27     3     1      3     0     0     0     0     0  Optcarrot::CPU#r_op (cpu.rb:877)
+       26   1.1%      77   3.4%      0     5     0     20     0     0     0     1     0  Range#__builtin_map (native)
+       26   1.1%      57   2.5%     26     0     0      0     0     0     0     0     0  Optcarrot::PPU#open_pattern (ppu.rb:549)
+       24   1.1%      37   1.6%     22     0     2      0     0     0     0     0     0  Optcarrot::CPU#zpg (cpu.rb:327)
+       24   1.1%      24   1.1%     24     0     0      0     0     0     0     0     0  Optcarrot::PPU#fetch_name (ppu.rb:600)
+       24   1.1%      24   1.1%     24     0     0      0     0     0     0     0     0  Optcarrot::PPU#fetch_bg_pattern_1 (ppu.rb:624)
+       22   1.0%      31   1.4%     17     0     3      0     0     1     0     1     0  Optcarrot::CPU#branch (cpu.rb:274)
+       19   0.8%     122   5.4%      0     0     0      0     0     0    16     3     0  Kernel#require_relative (native)
+       19   0.8%      19   0.8%     19     0     0      0     0     0     0     0     0  Optcarrot::PPU#update_enabled_flags (ppu.rb:855)
+       18   0.8%      18   0.8%     16     0     0      0     0     0     0     1     1  Optcarrot::APU::Noise#sample (apu.rb:702)
+       18   0.8%      18   0.8%     12     0     1      0     4     1     0     0     0  block (3 levels) in <class:PPU> (ppu.rb:45)
+       18   0.8%      18   0.8%      0     0     0      4    10     0     0     1     3  block in Optcarrot::PPU#setup_lut (ppu.rb:200)
+       18   0.8%      18   0.8%     18     0     0      0     0     0     0     0     0  Optcarrot::PPU#scroll_clock_x (ppu.rb:629)
+       16   0.7%      45   2.0%     13     0     3      0     0     0     0     0     0  Optcarrot::CPU#_beq (cpu.rb:524)
+
+methods by total time (top 30)
+  # Samples with the method anywhere on the Ruby stack: the method and
+  # everything it called. A recursive method is counted once per sample.
+    total      %  method
+     1661  73.2%  block in Optcarrot::PPU#run (ppu.rb:879)
+     1661  73.2%  Optcarrot::PPU#main_loop (ppu.rb:943)
+     1554  68.5%  Numeric#step (numeric.rb:188)
+     1205  53.1%  block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+      609  26.8%  <main> (optcarrot:1)
+      450  19.8%  Optcarrot::NES#run (nes.rb:80)
+      444  19.6%  Optcarrot::NES#step (nes.rb:41)
+      383  16.9%  Optcarrot::CPU#run (cpu.rb:926)
+      366  16.1%  Optcarrot::PPU#render_pixel (ppu.rb:806)
+      147   6.5%  Optcarrot::PPU#wait_one_clock (ppu.rb:905)
+      122   5.4%  Kernel#require_relative (native)
+      122   5.4%  <top (required)> (optcarrot.rb:1)
+      119   5.2%  block in Optcarrot::PPU#main_loop (ppu.rb:1194)
+      117   5.2%  Optcarrot::PPU#load_tiles (ppu.rb:674)
+      102   4.5%  Optcarrot::PPU#evaluate_sprites_odd (ppu.rb:685)
+      100   4.4%  Array#map (array.rb:140)
+       99   4.4%  <top (required)> (ppu.rb:1)
+       99   4.4%  <module:Optcarrot> (ppu.rb:3)
+       99   4.4%  <class:PPU> (ppu.rb:5)
+       93   4.1%  block in <class:PPU> (ppu.rb:43)
+       92   4.1%  Optcarrot::PPU#evaluate_sprites_even (ppu.rb:680)
+       90   4.0%  Optcarrot::CPU#r_op (cpu.rb:877)
+       77   3.4%  Range#__builtin_map (native)
+       77   3.4%  Range#map (range.rb:152)
+       70   3.1%  Optcarrot::PPU#open_attr (ppu.rb:605)
+       57   2.5%  Optcarrot::PPU#open_pattern (ppu.rb:549)
+       55   2.4%  Optcarrot::APU#vsync (apu.rb:160)
+       55   2.4%  Optcarrot::APU#flush_sound (apu.rb:211)
+       55   2.4%  Optcarrot::APU#proceed (apu.rb:225)
+       55   2.4%  Optcarrot::PPU#open_name (ppu.rb:594)
+
+JIT units by samples in their code (top 30)
+  # Samples whose PC was in the machine code of one compilation: a whole
+  # method or one loop, compiled for one class of self. Callees inlined into
+  # the unit are part of it; the runtime functions it calls are not.
+  # code: the unit's machine code size.
+  samples      %      code  kind   method <class of self>
+      898  39.6%   340179B  loop   Optcarrot::PPU#main_loop (ppu.rb:943) <Optcarrot::PPU>
+      190   8.4%   281867B  loop   Optcarrot::PPU#main_loop (ppu.rb:943) <Optcarrot::PPU>
+      123   5.4%     1919B  method Optcarrot::PPU#wait_one_clock (ppu.rb:905) <Optcarrot::PPU>
+       81   3.6%     8689B  method Optcarrot::CPU#run (cpu.rb:926) <Optcarrot::CPU>
+       68   3.0%     3567B  method Optcarrot::PPU#open_attr (ppu.rb:605) <Optcarrot::PPU>
+       45   2.0%      921B  method Optcarrot::CPU#fetch (cpu.rb:128) <Optcarrot::CPU>
+       29   1.3%     2453B  method Optcarrot::CPU#r_op (cpu.rb:877) <Optcarrot::CPU>
+       21   0.9%     4755B  method Optcarrot::CPU#zpg (cpu.rb:327) <Optcarrot::CPU>
+       16   0.7%     7271B  method Optcarrot::CPU#branch (cpu.rb:274) <Optcarrot::CPU>
+       13   0.6%     1353B  method Optcarrot::CPU#_beq (cpu.rb:524) <Optcarrot::CPU>
+       12   0.5%     3521B  method block (3 levels) in <class:PPU> (ppu.rb:45) <#<Class:Optcarrot::PPU>>
+       11   0.5%     2170B  method Optcarrot::CPU#_cmp (cpu.rb:586) <Optcarrot::CPU>
+       11   0.5%    20903B  method Optcarrot::APU::Mixer#sample (apu.rb:377) <Optcarrot::APU::Mixer>
+        9   0.4%    10887B  method Optcarrot::APU::Noise#sample (apu.rb:702) <Optcarrot::APU::Noise>
+        7   0.3%     1920B  method Optcarrot::PPU#wait_two_clocks (ppu.rb:910) <Optcarrot::PPU>
+        7   0.3%    15393B  method Optcarrot::APU::Pulse#sample (apu.rb:559) <Optcarrot::APU::Pulse>
+        5   0.2%    29412B  method Optcarrot::CPU#do_clock (cpu.rb:906) <Optcarrot::CPU>
+        4   0.2%     2001B  method Optcarrot::APU::DMC#clock_dma (apu.rb:837) <Optcarrot::APU::DMC>
+        4   0.2%    10237B  method Optcarrot::APU::Noise#sample (apu.rb:702) <Optcarrot::APU::Noise>
+        3   0.1%     6076B  method Optcarrot::CPU#abs (cpu.rb:357) <Optcarrot::CPU>
+        3   0.1%     4428B  method Optcarrot::APU::Noise#sample (apu.rb:702) <Optcarrot::APU::Noise>
+        3   0.1%   145711B  loop   Optcarrot::PPU#main_loop (ppu.rb:943) <Optcarrot::PPU>
+        3   0.1%     7847B  loop   Optcarrot::CPU#run (cpu.rb:926) <Optcarrot::CPU>
+        3   0.1%     4252B  method Optcarrot::APU#do_clock (apu.rb:133) <Optcarrot::APU>
+        3   0.1%     9159B  method Optcarrot::APU#clock_dmc (apu.rb:186) <Optcarrot::APU>
+        2   0.1%     1447B  method block in Optcarrot::CPU#add_mappings (cpu.rb:119) <Optcarrot::CPU>
+        2   0.1%     7926B  method Optcarrot::APU::Pulse#sample (apu.rb:559) <Optcarrot::APU::Pulse>
+        2   0.1%     1613B  method Optcarrot::CPU#store (cpu.rb:132) <Optcarrot::CPU>
+        2   0.1%    31198B  method Optcarrot::PPU#poke_2007 (ppu.rb:460) <Optcarrot::PPU>
+        2   0.1%    11756B  method Optcarrot::CPU#_rts (cpu.rb:507) <Optcarrot::CPU>
+
+frameless-inlined callees by self samples (top 30)
+  # The part of "methods by self time" spent in the code of a callee the JIT
+  # inlined without a frame, by callee and by the method whose frame it ran
+  # in (the caller, or the caller's caller for a nested inlining).
+     self      %  callee <- method whose frame it ran in
+      366  16.1%  Optcarrot::PPU#render_pixel (ppu.rb:806) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+      117   5.2%  Optcarrot::PPU#load_tiles (ppu.rb:674) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+       92   4.1%  Optcarrot::PPU#evaluate_sprites_even (ppu.rb:680) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+       48   2.1%  Optcarrot::PPU#evaluate_sprites_odd (ppu.rb:685) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+       42   1.9%  Optcarrot::PPU#evaluate_sprites_odd_phase_1 (ppu.rb:712) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+       27   1.2%  Optcarrot::PPU#update_address_line (ppu.rb:583) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+       22   1.0%  Optcarrot::PPU#open_name (ppu.rb:594) <- Optcarrot::PPU#main_loop (ppu.rb:943)
+       22   1.0%  Optcarrot::PPU#fetch_bg_pattern_1 (ppu.rb:624) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+       20   0.9%  Optcarrot::PPU#open_pattern (ppu.rb:549) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+       19   0.8%  Optcarrot::PPU#update_enabled_flags (ppu.rb:855) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+       18   0.8%  Optcarrot::PPU#fetch_name (ppu.rb:600) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+       18   0.8%  Optcarrot::PPU#scroll_clock_x (ppu.rb:629) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+       12   0.5%  Optcarrot::PPU#update_address_line (ppu.rb:583) <- block in Optcarrot::PPU#main_loop (ppu.rb:1194)
+       11   0.5%  Optcarrot::PPU#open_name (ppu.rb:594) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+       11   0.5%  Optcarrot::PPU#fetch_bg_pattern_0 (ppu.rb:619) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+       11   0.5%  Optcarrot::PPU#evaluate_sprites_odd_phase_9 (ppu.rb:788) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+        7   0.3%  Optcarrot::PPU#open_name (ppu.rb:594) <- block in Optcarrot::PPU#main_loop (ppu.rb:1194)
+        6   0.3%  Optcarrot::PPU#open_pattern (ppu.rb:549) <- block in Optcarrot::PPU#main_loop (ppu.rb:1194)
+        6   0.3%  Optcarrot::PPU#update_address_line (ppu.rb:583) <- Optcarrot::PPU#open_attr (ppu.rb:605)
+        6   0.3%  Optcarrot::PPU#fetch_name (ppu.rb:600) <- Optcarrot::PPU#main_loop (ppu.rb:943)
+        6   0.3%  Optcarrot::PPU#fetch_attr (ppu.rb:611) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+        5   0.2%  Optcarrot::PPU#scroll_clock_y (ppu.rb:648) <- block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+        3   0.1%  Optcarrot::PPU#update_address_line (ppu.rb:583) <- Optcarrot::PPU#main_loop (ppu.rb:943)
+        3   0.1%  Optcarrot::PPU#update_enabled_flags_edge (ppu.rb:862) <- Optcarrot::PPU#main_loop (ppu.rb:943)
+        2   0.1%  Optcarrot::CPU#current_clock (cpu.rb:146) <- Optcarrot::APU#do_clock (apu.rb:133)
+        2   0.1%  Optcarrot::CPU#pull8 (cpu.rb:307) <- Optcarrot::CPU#_rts (cpu.rb:507)
+        2   0.1%  Optcarrot::APU::DMC#sample (apu.rb:771) <- Optcarrot::APU::Mixer#sample (apu.rb:377)
+        2   0.1%  Optcarrot::PPU#fetch_bg_pattern_0 (ppu.rb:619) <- Optcarrot::PPU#main_loop (ppu.rb:943)
+        2   0.1%  Optcarrot::PPU#fetch_bg_pattern_1 (ppu.rb:624) <- Optcarrot::PPU#main_loop (ppu.rb:943)
+        1   0.0%  Optcarrot::Pad#poke (pad.rb:68) <- Optcarrot::Pads#poke_4016 (pad.rb:30)
+
+native functions by self samples (top 30)
+  # Samples outside generated code, by the Rust / C function the PC was in
+  # (not its callers), with the tier the sample was counted in.
+     self      %  [tier] function
+      113   5.0%  [prof] process_vm_readv
+       44   1.9%  [prof] __GI_getpid
+       29   1.3%  [native] <monoruby::value::rvalue::array::Array>::push
+       23   1.0%  [native] monoruby::codegen::runtime::jit_handle_arguments_no_block_for_send_splat
+       21   0.9%  [native] __memcpy_avx512_unaligned_erms
+       20   0.9%  [native] <monoruby::alloc::Allocator<monoruby::value::rvalue::RValue>>::alloc
+       19   0.8%  [malloc] _int_malloc
+       18   0.8%  [prof] <monoruby::value::rvalue::RValue>::pack
+       16   0.7%  [native] monoruby::builtins::array::ary_rotate_
+       15   0.7%  [gc] <monoruby::value::rvalue::RValue as monoruby::alloc::GCBox>::mark_children
+       14   0.6%  [native] monoruby::codegen::runtime::args::resolve_lazy_forwarding
+       14   0.6%  [native] monoruby::codegen::runtime::args::set_frame_arguments_send_splat
+       13   0.6%  [native] monoruby::codegen::runtime::args::fill_positional_args
+       13   0.6%  [prof] <monoruby::prof::Reader>::read
+       12   0.5%  [native] monoruby::codegen::runtime::gen_array
+       11   0.5%  [malloc] monoruby::prof::enter_free_slow
+       10   0.4%  [compile] <monoasm::jit_memory::JitMemory>::encode
+       10   0.4%  [gc] <monoruby::alloc::Allocator<monoruby::value::rvalue::RValue>>::mark
+        9   0.4%  [native] core::slice::rotate::ptr_rotate::<monoruby::value::Value>
+        9   0.4%  [native] libc.so.6+0x1a1640
+        8   0.4%  [malloc] monoruby::prof::enter_malloc_slow
+        7   0.3%  [native] <monoruby::executor::Executor>::invoke_block_map1::<core::iter::adapters::map::Map<core::ops::range::Range<i64>, <monoruby::value::Value>::integer>, usize>
+        6   0.3%  [compile] __memcpy_avx512_unaligned_erms
+        6   0.3%  [gc] <monoruby::alloc::Allocator<monoruby::value::rvalue::RValue>>::drain_mark_queue
+        6   0.3%  [gc] <monoruby::value::rvalue::RValue as monoruby::alloc::GCBox>::young_child_exists
+        6   0.3%  [native] <monoruby::value::rvalue::RValue>::pack
+        4   0.2%  [compile] <monoasm::jit_memory::JitMemory>::emit_disp_imm
+        4   0.2%  [compile] <monoruby::codegen::jitgen::context::JitContext>::compile_method_call
+        4   0.2%  [native] <monoruby::globals::store::Store>::check_method_for_class_with_version
+        4   0.2%  [native] <smallvec::SmallVec<[monoruby::value::Value; 5]> as core::iter::traits::collect::Extend<monoruby::value::Value>>::extend::<core::iter::adapters::cloned::Cloned<core::iter::adapters::rev::Rev<core::slice::iter::Iter<monoruby::value::Value>>>>
+
+---- JIT: 257 compiles (17 loop, 0 abandoned), 118.716 ms, 2402185 bytes of code ----
+
+compiles by time (top 30)
+  # The slowest compilations. One row per compilation: a method compiled
+  # twice is two rows.
+          time     code  kind   method <class of self>
+     33.377 ms  340179B  loop   Optcarrot::PPU#main_loop (ppu.rb:943) <Optcarrot::PPU>
+     19.549 ms  281867B  loop   Optcarrot::PPU#main_loop (ppu.rb:943) <Optcarrot::PPU>
+      9.578 ms  145711B  loop   Optcarrot::PPU#main_loop (ppu.rb:943) <Optcarrot::PPU>
+      5.128 ms  160389B  method block in Optcarrot::PPU#main_loop (ppu.rb:1116) <Optcarrot::PPU>
+      2.114 ms   67683B  method block in Optcarrot::PPU#main_loop (ppu.rb:1116) <Optcarrot::PPU>
+      1.679 ms   53695B  method block in Optcarrot::PPU#main_loop (ppu.rb:1116) <Optcarrot::PPU>
+      1.072 ms   34586B  method block in Optcarrot::PPU#main_loop (ppu.rb:1194) <Optcarrot::PPU>
+      0.956 ms   40171B  method block in Optcarrot::PPU#main_loop (ppu.rb:1194) <Optcarrot::PPU>
+      0.877 ms   35711B  method Optcarrot::PPU#poke_2007 (ppu.rb:460) <Optcarrot::PPU>
+      0.854 ms   35806B  method Optcarrot::APU#clock_oscillators (apu.rb:174) <Optcarrot::APU>
+      0.821 ms   31198B  method Optcarrot::PPU#poke_2007 (ppu.rb:460) <Optcarrot::PPU>
+      0.768 ms    7127B  method Optcarrot::PPU#vblank_2 (ppu.rb:847) <Optcarrot::PPU>
+      0.727 ms   19344B  method Optcarrot::CPU#_rti (cpu.rb:512) <Optcarrot::CPU>
+      0.673 ms   26200B  method block in Optcarrot::PPU#main_loop (ppu.rb:1194) <Optcarrot::PPU>
+      0.673 ms   15481B  method Optcarrot::APU::Pulse#sample (apu.rb:559) <Optcarrot::APU::Pulse>
+      0.654 ms   10237B  method Optcarrot::APU::Noise#sample (apu.rb:702) <Optcarrot::APU::Noise>
+      0.646 ms   25084B  method Optcarrot::PPU#poke_2007 (ppu.rb:460) <Optcarrot::PPU>
+      0.593 ms    8156B  method Optcarrot::APU#flush_sound (apu.rb:211) <Optcarrot::APU>
+      0.588 ms   29412B  method Optcarrot::CPU#do_clock (cpu.rb:906) <Optcarrot::CPU>
+      0.586 ms   16006B  method Optcarrot::CPU.op (cpu.rb:957) <#<Class:Optcarrot::CPU>>
+      0.572 ms    4670B  method Optcarrot::APU#proceed (apu.rb:225) <Optcarrot::APU>
+      0.565 ms   10887B  method Optcarrot::APU::Noise#sample (apu.rb:702) <Optcarrot::APU::Noise>
+      0.560 ms   18087B  method block in Optcarrot::PPU#main_loop (ppu.rb:975) <Optcarrot::PPU>
+      0.509 ms    4351B  loop   Optcarrot::APU#proceed (apu.rb:225) <Optcarrot::APU>
+      0.490 ms   15172B  method block (2 levels) in Optcarrot::Config::Parser#find_option (config.rb:124) <Optcarrot::Config::Parser>
+      0.486 ms   15910B  method Optcarrot::NES#step (nes.rb:41) <Optcarrot::NES>
+      0.477 ms    9507B  method Optcarrot::PPU#poke_2000 (ppu.rb:340) <Optcarrot::PPU>
+      0.472 ms    7847B  loop   Optcarrot::CPU#run (cpu.rb:926) <Optcarrot::CPU>
+      0.430 ms    9627B  method Optcarrot::APU::Oscillator#poke_3 (apu.rb:438) <Optcarrot::APU::Pulse>
+      0.430 ms   15393B  method Optcarrot::APU::Pulse#sample (apu.rb:559) <Optcarrot::APU::Pulse>
+
+compiled more than once (top 30)
+  # Recompiles: the same method or loop compiled again for the same class of
+  # self, with the time all its compilations took together.
+  times     total time  kind   method <class of self>
+      4 x     0.931 ms  method Optcarrot::PPU#evaluate_sprites_odd (ppu.rb:685) <Optcarrot::PPU>
+      4 x     0.896 ms  method Optcarrot::APU::Triangle#sample (apu.rb:645) <Optcarrot::APU::Triangle>
+      3 x    62.504 ms  loop   Optcarrot::PPU#main_loop (ppu.rb:943) <Optcarrot::PPU>
+      3 x     8.921 ms  method block in Optcarrot::PPU#main_loop (ppu.rb:1116) <Optcarrot::PPU>
+      3 x     2.701 ms  method block in Optcarrot::PPU#main_loop (ppu.rb:1194) <Optcarrot::PPU>
+      3 x     2.344 ms  method Optcarrot::PPU#poke_2007 (ppu.rb:460) <Optcarrot::PPU>
+      3 x     1.339 ms  method Optcarrot::APU::Noise#sample (apu.rb:702) <Optcarrot::APU::Noise>
+      3 x     1.289 ms  method Optcarrot::APU::Pulse#sample (apu.rb:559) <Optcarrot::APU::Pulse>
+      3 x     0.632 ms  method Optcarrot::CPU#branch (cpu.rb:274) <Optcarrot::CPU>
+      3 x     0.568 ms  method Optcarrot::PPU#peek_2002 (ppu.rb:394) <Optcarrot::PPU>
+      2 x     0.965 ms  method block in Optcarrot::PPU#main_loop (ppu.rb:975) <Optcarrot::PPU>
+      2 x     0.803 ms  loop   Optcarrot::APU#proceed (apu.rb:225) <Optcarrot::APU>
+      2 x     0.754 ms  method Optcarrot::APU#clock_dmc (apu.rb:186) <Optcarrot::APU>
+      2 x     0.750 ms  method block in Optcarrot::PPU#main_loop (ppu.rb:953) <Optcarrot::PPU>
+      2 x     0.718 ms  method Optcarrot::CPU#do_clock (cpu.rb:906) <Optcarrot::CPU>
+      2 x     0.704 ms  loop   Optcarrot::CPU#run (cpu.rb:926) <Optcarrot::CPU>
+      2 x     0.644 ms  method Optcarrot::APU::Mixer#sample (apu.rb:377) <Optcarrot::APU::Mixer>
+      2 x     0.487 ms  method Optcarrot::CPU#ind_y (cpu.rb:403) <Optcarrot::CPU>
+      2 x     0.479 ms  method Optcarrot::APU#update (apu.rb:143) <Optcarrot::APU>
+      2 x     0.424 ms  method Optcarrot::CPU#abs_reg (cpu.rb:365) <Optcarrot::CPU>
+      2 x     0.367 ms  method Optcarrot::APU::Pulse#update_freq (apu.rb:502) <Optcarrot::APU::Pulse>
+      2 x     0.293 ms  method Optcarrot::PPU#wait_zero_clocks (ppu.rb:901) <Optcarrot::PPU>
+      2 x     0.269 ms  method block (3 levels) in <class:PPU> (ppu.rb:45) <#<Class:Optcarrot::PPU>>
+      2 x     0.253 ms  method Optcarrot::APU::Triangle#active? (apu.rb:610) <Optcarrot::APU::Triangle>
+      2 x     0.230 ms  method Optcarrot::CPU#read_write (cpu.rb:424) <Optcarrot::CPU>
+      2 x     0.218 ms  method Optcarrot::PPU#open_pattern (ppu.rb:549) <Optcarrot::PPU>
+      2 x     0.211 ms  method Optcarrot::APU#do_clock (apu.rb:133) <Optcarrot::APU>
+      2 x     0.176 ms  method Optcarrot::CPU#zpg (cpu.rb:327) <Optcarrot::CPU>
+      2 x     0.163 ms  method Optcarrot::PPU#update (ppu.rb:250) <Optcarrot::PPU>
+      2 x     0.162 ms  method Optcarrot::APU::DMC#sample (apu.rb:771) <Optcarrot::APU::DMC>
+
+---- objects: 681888 allocated ----
+  # Every object allocation, counted exactly. The JIT's inline allocation is
+  # off while they are counted, so the times of this run are not representative.
+
+objects by class (top 30)
+  # Objects allocated, by their class at allocation.
+     objects      %  class
+      672844  98.7%  Array
+        7349   1.1%  String
+         595   0.1%  Class
+         450   0.1%  MatchData
+         104   0.0%  Encoding
+          81   0.0%  Object
+          79   0.0%  Proc
+          75   0.0%  Method
+          72   0.0%  Hash
+          68   0.0%  Regexp
+          58   0.0%  Module
+          45   0.0%  Range
+          20   0.0%  UnboundMethod
+           8   0.0%  Enumerator::ArithmeticSequence
+           4   0.0%  Float
+           4   0.0%  Optcarrot::APU::LengthCounter
+           3   0.0%  IO
+           3   0.0%  Optcarrot::APU::Envelope
+           2   0.0%  Integer
+           2   0.0%  Optcarrot::Pad
+           2   0.0%  Optcarrot::APU::Pulse
+           1   0.0%  Fiber
+           1   0.0%  Complex
+           1   0.0%  Thread
+           1   0.0%  ARGF.class
+           1   0.0%  ThreadGroup
+           1   0.0%  Optcarrot::NES
+           1   0.0%  Optcarrot::ROM
+           1   0.0%  Optcarrot::Pads
+           1   0.0%  Optcarrot::CPU
+
+objects by allocating method (top 30)
+  # Objects allocated, by the newest Ruby frame at the allocation: the method
+  # that asked for the object, or the native method that made it.
+  # A frameless-inlined callee counts as a frame of its own (MONORUBY_PROF_INLINE).
+     objects      %  method
+      288726  42.3%  Numeric#step (numeric.rb:188)
+      262148  38.4%  Array#transpose (native)
+       69634  10.2%  block in Optcarrot::PPU#setup_lut (ppu.rb:200)
+       33920   5.0%  block in Optcarrot::PPU#setup_lut (ppu.rb:209)
+       14937   2.2%  <no ruby frame>
+        5872   0.9%  Optcarrot::PPU#run (ppu.rb:878)
+         753   0.1%  block (3 levels) in Optcarrot::Config::Parser#find_option (config.rb:125)
+         628   0.1%  Kernel#require_relative (native)
+         626   0.1%  block (2 levels) in Optcarrot::Palette#defacto_palette (palette.rb:28)
+         600   0.1%  Array#concat (native)
+         600   0.1%  Optcarrot::APU#flush_sound (apu.rb:211)
+         528   0.1%  block in Optcarrot::PPU#reset (ppu.rb:187)
+         497   0.1%  block in Optcarrot::CPU.op (cpu.rb:958)
+         406   0.1%  block (2 levels) in Optcarrot::Config::Parser#find_option (config.rb:124)
+         320   0.0%  Symbol#to_s (native)
+         267   0.0%  Hash#each (hash.rb:26)
+         232   0.0%  String#tr (native)
+         146   0.0%  <class:CPU> (cpu.rb:5)
+         117   0.0%  <class:Config> (config.rb:3)
+         100   0.0%  Range#map (range.rb:152)
+          85   0.0%  Optcarrot::PPU#wait_one_clock (ppu.rb:905)
+          75   0.0%  Kernel#method (native)
+          50   0.0%  Range#__builtin_map (native)
+          43   0.0%  Class#__builtin_allocate__ (native)
+          42   0.0%  block in Optcarrot::Config#initialize (config.rb:78)
+          39   0.0%  Module#attr_reader (native)
+          38   0.0%  Optcarrot::CPU#store (cpu.rb:132)
+          38   0.0%  Optcarrot::PPU#wait_frame (ppu.rb:897)
+          29   0.0%  block (2 levels) in <class:Config> (config.rb:68)
+          27   0.0%  Optcarrot::CPU#add_mappings (cpu.rb:114)
+
+objects by allocating method and class (top 30)
+  # The two tables above combined: which method allocates which class.
+     objects      %  class                          method
+      288726  42.3%  Array                          Numeric#step (numeric.rb:188)
+      262148  38.4%  Array                          Array#transpose (native)
+       69634  10.2%  Array                          block in Optcarrot::PPU#setup_lut (ppu.rb:200)
+       33920   5.0%  Array                          block in Optcarrot::PPU#setup_lut (ppu.rb:209)
+        8206   1.2%  Array                          <no ruby frame>
+        5872   0.9%  Array                          Optcarrot::PPU#run (ppu.rb:878)
+        5454   0.8%  String                         <no ruby frame>
+         744   0.1%  String                         block (3 levels) in Optcarrot::Config::Parser#find_option (config.rb:125)
+         626   0.1%  Array                          block (2 levels) in Optcarrot::Palette#defacto_palette (palette.rb:28)
+         600   0.1%  Array                          Array#concat (native)
+         600   0.1%  Array                          Optcarrot::APU#flush_sound (apu.rb:211)
+         533   0.1%  Class                          <no ruby frame>
+         528   0.1%  Array                          block in Optcarrot::PPU#reset (ppu.rb:187)
+         450   0.1%  MatchData                      <no ruby frame>
+         409   0.1%  Array                          block in Optcarrot::CPU.op (cpu.rb:958)
+         406   0.1%  Array                          block (2 levels) in Optcarrot::Config::Parser#find_option (config.rb:124)
+         334   0.0%  String                         Kernel#require_relative (native)
+         320   0.0%  String                         Symbol#to_s (native)
+         267   0.0%  Array                          Hash#each (hash.rb:26)
+         237   0.0%  Array                          Kernel#require_relative (native)
+         232   0.0%  String                         String#tr (native)
+         143   0.0%  Array                          <class:CPU> (cpu.rb:5)
+         104   0.0%  Encoding                       <no ruby frame>
+          88   0.0%  String                         block in Optcarrot::CPU.op (cpu.rb:958)
+          85   0.0%  Array                          Optcarrot::PPU#wait_one_clock (ppu.rb:905)
+          75   0.0%  Method                         Kernel#method (native)
+          63   0.0%  String                         <class:Config> (config.rb:3)
+          52   0.0%  Module                         <no ruby frame>
+          50   0.0%  Array                          Range#__builtin_map (native)
+          50   0.0%  Object                         Range#map (range.rb:152)
+
+---- GC: 11 collections, 46.442 ms ----
+
+collections by kind
+  # Every collection, timed. time = mark + sweep; us/GC = time per collection;
+  # marked/GC = objects marked (found live) per collection.
+  kind    count      time ms      mark ms     sweep ms      us/GC  marked/GC
+  minor      10       29.374       27.553        1.821     2937.4      73297
+  major       1       17.068       15.714        1.354    17067.6     338538
+
+heap at exit
+  # The object heap when the report was written.
+  102 pages, 137566 live objects after the last GC, 681888 objects allocated in all
+
+---- malloc: 808929 allocations (206144512 bytes), 488054 frees (164490711 bytes); stacks of 1 in 64 ----
+  # Calls into the global allocator, counted exactly. The tables below are
+  # estimates from the stacks recorded for one call in 64.
+
+malloc by Ruby method (top 30)
+  # Allocations by the newest Ruby frame when malloc was called.
+  # <no ruby frame>: the boot, before any Ruby code runs.
+       calls      %        bytes  method
+      262208  32.4%     20983808  Array#transpose (native)
+      190720  23.6%     71990848  <no ruby frame>
+       97408  12.0%     32174208  Optcarrot::PPU#main_loop (ppu.rb:943)
+       65152   8.1%      7892928  Kernel#require_relative (native)
+       49984   6.2%     15438656  Optcarrot::PPU#open_name (ppu.rb:594)
+       18240   2.3%      5705728  block in Optcarrot::PPU#main_loop (ppu.rb:1116)
+        8768   1.1%      1158912  block in Optcarrot::PPU#setup_lut (ppu.rb:200)
+        7296   0.9%      3068928  Optcarrot::PPU#poke_2007 (ppu.rb:460)
+        5184   0.6%      1995392  Optcarrot::PPU#wait_one_clock (ppu.rb:905)
+        4288   0.5%      1450944  Optcarrot::APU#proceed (apu.rb:225)
+        3328   0.4%      2026880  Optcarrot::APU::Pulse#sample (apu.rb:559)
+        2752   0.3%       967936  Optcarrot::APU::Triangle#sample (apu.rb:645)
+        2688   0.3%      1086464  Optcarrot::APU#clock_oscillators (apu.rb:174)
+        2688   0.3%       568192  Optcarrot::PPU#evaluate_sprites_odd (ppu.rb:685)
+        2624   0.3%       841792  Optcarrot::APU#clock_dmc (apu.rb:186)
+        2624   0.3%      1245312  block in Optcarrot::PPU#main_loop (ppu.rb:1194)
+        2560   0.3%       491328  Optcarrot::APU::Noise#sample (apu.rb:702)
+        2560   0.3%       878336  Optcarrot::CPU#run (cpu.rb:926)
+        2368   0.3%       246080  Optcarrot::CPU#do_clock (cpu.rb:906)
+        2048   0.3%      1013248  Optcarrot::PPU#wait_two_clocks (ppu.rb:910)
+        1728   0.2%       751744  Optcarrot::APU::Oscillator#poke_0 (apu.rb:422)
+        1728   0.2%       623936  Optcarrot::APU::Oscillator#poke_3 (apu.rb:438)
+        1600   0.2%       436224  Optcarrot::APU#flush_sound (apu.rb:211)
+        1600   0.2%       221760  Optcarrot::APU::DMC#sample (apu.rb:771)
+        1600   0.2%       379520  Optcarrot::CPU.op (cpu.rb:957)
+        1600   0.2%       582656  block in Optcarrot::PPU#setup_lut (ppu.rb:209)
+        1408   0.2%       393088  Numeric#step (numeric.rb:188)
+        1344   0.2%       138496  Optcarrot::APU::Oscillator#clock_envelope (apu.rb:464)
+        1344   0.2%      1497088  Optcarrot::CPU#abs_reg (cpu.rb:365)
+        1280   0.2%       387136  Optcarrot::CPU#branch (cpu.rb:274)
+
+malloc by Rust call site (top 30)
+  # Allocations by the innermost native caller that is not allocator plumbing
+  # (alloc::, core::, std::, hashbrown::, smallvec::, ... are skipped).
+       calls      %        bytes  function
+      269120  33.3%     22421504  <monoruby::value::rvalue::array::Array>::push
+       49216   6.1%      4456448  <monoasm::jit_memory::JitMemory>::label
+       28096   3.5%       154176  <monoruby::parser::prism_backend::Lowerer>::ident_name
+       26688   3.3%      7420992  <monoruby::bytecodegen::BytecodeGen>::ir_to_bc
+       20672   2.6%      3854336  <monoruby::codegen::jitgen::state::slot::SlotState as core::clone::Clone>::clone
+       20416   2.5%      2064384  <monoasm::jit_memory::JitMemory>::emit_reloc
+       20160   2.5%       956416  <monoruby::basic_block::BasicBlockInfo>::new
+       18560   2.3%      1460608  <monoruby::parser::prism_backend::Lowerer>::lower_call
+       16576   2.0%      1294336  <monoruby::codegen::jitgen::state::AbstractState>::join_entries
+       12608   1.6%     27414528  <monoruby::codegen::jitgen::asmir::AsmIr>::push
+       12480   1.5%      9174272  <monoruby::codegen::Codegen>::gen_asm
+       11392   1.4%      2186240  <monoruby::codegen::jitgen::context::JitContext>::emit_cond_branch
+       11072   1.4%       151808  <monoruby::codegen::jitgen::WriteBack as core::clone::Clone>::clone
+       10496   1.3%      3545600  <monoruby::codegen::jitgen::context::JitContext>::compile_specialized_func_uncached
+       10112   1.3%       474112  <monoruby::codegen::jitgen::state::AbstractFrame>::get_write_back
+        9856   1.2%       811072  monoruby::bytecodegen::compile_iseq
+        8704   1.1%      4354560  <monoruby::codegen::jitgen::context::JitContext>::traceir_to_asmir
+        7680   0.9%      2257920  <monoruby::bytecodegen::BytecodeGen>::emit_call
+        7424   0.9%      1119744  <monoruby::parser::prism_backend::Lowerer>::lower_if
+        6592   0.8%      2168320  <monoruby::codegen::jitgen::context::JitContext>::gen_bridges_for_branches
+        6272   0.8%      1812480  <monoruby::parser::prism_backend::Lowerer>::collect_call_arg
+        6016   0.7%       159232  <monoruby::codegen::jitgen::context::JitContext>::inline_asm_binary::<&alloc::boxed::Box<dyn for<'a, 'b, 'c, 'd, 'e> core::ops::function::Fn<(&'a mut monoruby::codegen::jitgen::state::AbstractState, &'b mut monoruby::codegen::jitgen::asmir::AsmIr, &'c monoruby::codegen::jitgen::context::JitContext<'d>, &'e monoruby::globals::store::Store, monoruby::globals::store::CallSiteId, monoruby::globals::store::class::CachedClass, core::option::Option<monoruby::globals::store::class::CachedClass>), Output = monoruby::codegen::jitgen::BinaryInlineOutcome>>>
+        5760   0.7%      1226752  <monoruby::bytecodegen::BytecodeGen>::gen_begin
+        5760   0.7%       200192  <monoruby::codegen::jitgen::context::JitContext>::fire_binary_inline
+        5568   0.7%       395712  <monoruby::codegen::jitgen::state::AbstractState>::plan_dst_reg
+        5120   0.6%       358656  <monoruby::bytecodegen::BytecodeGen>::add_merge
+        4928   0.6%        39936  <monoruby::codegen::jitgen::asmir::AsmIr>::exit_write_back
+        4800   0.6%        47104  <monoruby::id_table::IdentId>::get_id
+        4736   0.6%        18624  <monoruby::codegen::jitgen::state::AbstractState>::take_dst_reg
+        4288   0.5%      7833600  <monoruby::codegen::jitgen::context::JitContext>::push_ir
+==================================================================
