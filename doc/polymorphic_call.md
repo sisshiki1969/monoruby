@@ -442,7 +442,14 @@ PMC が既に多相を観測しているサイトの単相/集合ガードのミ
   届き、JIT フレームがヒープへ昇格する。残余アームでは
   `no_capture_guard` を落とし、send 後の capture ガードで deopt して
   ヒープ側のローカルを読む。
-- **対象外**: ブロック付き呼び出し、`...` 転送、名前のない呼び出し。
+- **対象外**: ブロック付き呼び出し、名前のない呼び出し。
+- **`...` 転送サイト**(2026-11、#1948): 当初は対象外で、`relation_class.new(model, ...)`
+  のようなメガモーフィックな転送サイトは呼び出しのたびに deopt していた。
+  実行時の束縛は VM と同じ `vm_handle_arguments` なので、転送された rest が
+  実 `Array` でも遅延転送マーカーでもそのまま束縛できる。JIT 側で要るのは、
+  引数充填(`set_arguments` の転送アーム)を通らないぶんの後始末だけで、
+  `settle_operands_for_runtime_binder` が elided のままの rest / `**kwrest` を
+  実体化し、K1 の kw スキップに拒否権を出す(`arg_forwarding_jit.md`)。
 
 テスト: `pic_overflow_generic_residual`(アリティ差・kw・splat+ブロック
 引数・`method_missing`・private・`alias tag binding`)、
