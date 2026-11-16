@@ -522,33 +522,67 @@ impl Value {
         coerce_to_rstring_inner(vm, globals, *self, &[IdentId::TO_PATH, IdentId::TO_STR])
     }
 
-    /// Like `expect_regexp_or_string` but tries `to_str` coercion for
-    /// non-string/non-regexp values.
+    /// `get_pat`'s String half: the String a pattern argument that is
+    /// not a Regexp stands for.
+    ///
+    /// A String is itself; anything else is asked for `to_str` through
+    /// the full `rb_check_funcall` protocol (`rb_check_string_type`),
+    /// so a `method_missing`-backed one converts and one that answers
+    /// something else is the conversion mismatch. What has no `to_str`
+    /// was supposed to be a Regexp, and the error says so
+    /// (`Check_Type(pat, T_REGEXP)`) — not "no implicit conversion into
+    /// String".
+    pub(crate) fn coerce_to_pattern_string(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Value> {
+        if self.is_rstring().is_some() {
+            return Ok(*self);
+        }
+        match check_funcall(vm, globals, *self, IdentId::TO_STR)? {
+            Some(result) if result.is_rstring().is_some() => Ok(result),
+            Some(result) if !result.is_nil() => Err(MonorubyErr::cant_convert_error(
+                &globals.store,
+                *self,
+                result,
+                "String",
+                IdentId::TO_STR,
+            )),
+            _ => Err(MonorubyErr::wrong_argument_type(
+                &globals.store,
+                *self,
+                "Regexp",
+            )),
+        }
+    }
+
+    /// [`Self::coerce_to_pattern_string`], as text.
+    pub(crate) fn coerce_to_pattern_str(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<String> {
+        let s = self.coerce_to_pattern_string(vm, globals)?;
+        Ok(s.as_rstring_inner().to_str()?.to_string())
+    }
+
+    /// `get_pat`: a Regexp as it is, and a String — or what answers
+    /// `to_str` — compiled as a regexp source.
     pub(crate) fn coerce_to_regexp_or_string(
         &self,
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<Regexp> {
         if let Some(re) = self.is_regex() {
-            Ok(re)
-        } else if self.is_rstring().is_some() {
-            // `get_pat`: the String is a regexp source in its own
-            // encoding — an EUC-KR or UTF-16 pattern included.
-            Ok(Regexp::new_unchecked(Value::regexp(
-                crate::builtins::regexp_inner_from_string(vm, globals, *self, 0, None)?,
-            )))
-        } else {
-            // `get_pat`'s `to_str` probe: the full `rb_check_funcall`
-            // protocol, so a `method_missing`-backed `to_str` converts.
-            if let Some(result) = check_funcall(vm, globals, *self, IdentId::TO_STR)?
-                && result.is_rstring().is_some()
-            {
-                return Ok(Regexp::new_unchecked(Value::regexp(
-                    crate::builtins::regexp_inner_from_string(vm, globals, result, 0, None)?,
-                )));
-            }
-            Err(MonorubyErr::is_not_regexp_nor_string(&globals.store, *self))
+            return Ok(re);
         }
+        // The String is a regexp source in its own encoding — an EUC-KR
+        // or UTF-16 pattern included.
+        let source = self.coerce_to_pattern_string(vm, globals)?;
+        Ok(Regexp::new_unchecked(Value::regexp(
+            crate::builtins::regexp_inner_from_string(vm, globals, source, 0, None)?,
+        )))
     }
 
     /// Coerce a value to a single `char` for sprintf `%c`. Returns `None`

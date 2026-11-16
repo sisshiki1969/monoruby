@@ -9,6 +9,8 @@ use jitgen::JitContext;
 #[cfg(target_arch = "aarch64")]
 use jitgen::{AbstractState, JitContext};
 
+mod byte_case;
+
 //
 // String class
 //
@@ -1226,14 +1228,10 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
     // CRuby: when rhs is neither Regexp nor String, dispatch to
     // `rhs =~ self` so a user-defined `=~` (e.g. on a Mock) is
-    // honoured. This must come BEFORE `to_str` coercion — CRuby
-    // doesn't try `to_str` for `=~` at all.
-    if let Some(fid) = globals.check_method(other, IdentId::_MATCH) {
-        return vm.invoke_func_inner(globals, fid, other, &[self_val], None, None);
-    }
-    // Last resort: surface the original "is not a regexp nor a
-    // string" error.
-    Err(MonorubyErr::is_not_regexp_nor_string(&globals.store, other))
+    // honoured — `to_str` is not tried for `=~` at all. It is an
+    // ordinary call (`rb_funcall(y, idEqTilde, 1, x)`): an operand
+    // without `=~` is a NoMethodError, or its `method_missing`'s say.
+    vm.invoke_method_inner(globals, IdentId::_MATCH, other, &[self_val], None, None)
 }
 
 ///
@@ -1433,8 +1431,9 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         // not fit a machine word — that is a RangeError ("bignum too big
         // to convert into 'long'"), which is what the coercion raises,
         // not a conversion error about its class.
-        if arg0.is_integer() {
-            arg0.coerce_to_int_i64(vm, globals)?;
+        // And nil has `NUM2LONG`'s message of its own.
+        if arg0.is_integer() || arg0.is_nil() {
+            arg0.num2long(vm, globals)?;
         }
         Err(MonorubyErr::no_implicit_conversion(
             globals,
@@ -1494,19 +1493,7 @@ fn partition_main(
         // bare `StringValue` would say "no implicit conversion".
         // Any String, whatever its encoding says about its bytes — a
         // Shift_JIS or broken separator is still a String separator.
-        let sep = if sep.is_rstring_inner().is_some() {
-            sep
-        } else {
-            match crate::coerce::check_funcall(vm, globals, sep, IdentId::TO_STR)? {
-                Some(v) if v.is_rstring_inner().is_some() => v,
-                _ => {
-                    return Err(MonorubyErr::typeerr(format!(
-                        "wrong argument type {} (expected Regexp)",
-                        sep.builtin_class_name(&globals.store)
-                    )));
-                }
-            }
-        };
+        let sep = sep.coerce_to_pattern_string(vm, globals)?;
         let name = if from_end {
             IdentId::get_id("__rpartition_str")
         } else {
@@ -1783,26 +1770,41 @@ fn index_assign(
         return Ok(arg_val);
     }
 
-    if arg0_val.is_str().is_some() {
-        // s["needle"] = val
+    if let Some(needle) = arg0_val.is_rstring_inner() {
+        // s["needle"] = val. With a length the first argument is an
+        // index (`NUM2LONG`), which a String is not.
         if arg1_opt.is_some() {
-            return Err(MonorubyErr::argumenterr(
-                "wrong number of arguments (given 3, expected 2)",
+            return Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                arg0_val,
+                INTEGER_CLASS,
             ));
         }
-        let needle = arg0_val.is_str().unwrap().to_string();
-        let subst = replacement_string(vm, globals, arg_val)?;
+        // `rb_str_index`: the two encodings are negotiated, then a byte
+        // search aligned to the receiver's characters — whatever the
+        // receiver's encoding, and whether or not either side is UTF-8
+        // (a receiver with 8-bit content in any other encoding used to
+        // raise "invalid byte sequence in UTF-8", #1959). The match is
+        // looked for before the replacement is converted, as
+        // `rb_str_aset` does.
         let self_ = lfp.self_val();
-        let lhs = self_.expect_str(globals)?;
-        let pos = match lhs.find(needle.as_str()) {
-            Some(p) => p,
-            None => return Err(MonorubyErr::indexerr("string not matched")),
+        check_pattern_encoding_compat(self_.as_rstring_inner(), arg0_val, globals)?;
+        let needle_len = needle.len();
+        let Some(pos) = char_aligned_search_fwd(self_.as_rstring_inner(), needle, 0) else {
+            return Err(MonorubyErr::indexerr("string not matched"));
         };
+        let subst = replacement_string(vm, globals, arg_val)?;
+        // The conversion may have run a `to_str` that shrank the
+        // receiver under the match (`rb_str_update_1`'s own check).
+        let len = lfp.self_val().as_rstring_inner().len();
+        if pos > len {
+            return Err(MonorubyErr::indexerr(format!("index {pos} out of string")));
+        }
         replace_byte_range(
             globals,
             lfp.self_val(),
             pos,
-            pos + needle.len(),
+            (pos + needle_len).min(len),
             subst.as_rstring_inner(),
         )?;
         return Ok(arg_val);
@@ -3531,7 +3533,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 SepKind::Str(s.into_owned())
             })
         } else {
-            let c = v.coerce_to_str(vm, globals)?;
+            let c = v.coerce_to_pattern_str(vm, globals)?;
             let s: &str = &c;
             Ok(if s.is_empty() {
                 SepKind::Chars
@@ -3972,17 +3974,41 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         replace_byte_range(globals, self_, r.start, r.end, &empty)?;
         return Ok(Value::string_from_inner(removed));
     }
-    // A Regexp over a byte-oriented receiver with 8-bit content: the
-    // raw bytes are walked (#1377) and the match cut out byte-wise.
-    if let Some(re) = arg0.is_regex()
-        && let Some(subject) = re.native_subject(self_.as_rstring_inner(), &globals.store, true)?
-    {
-        let nth = if let Some(arg1) = lfp.try_arg(1) {
-            arg1.coerce_to_int_i64(vm, globals)?
-        } else {
-            0
+    // A Regexp, over any receiver: walked as `String#[]` walks it — the
+    // raw bytes under their Onigmo codec (#1377), or the UTF-8 view —
+    // and the match cut out byte-wise. `$~` is over the receiver in its
+    // own encoding either way (a `UTF8-MAC` one used to leave UTF-8
+    // strings there).
+    if let Some(re) = arg0.is_regex() {
+        // The capture: a number, or a group name (String / Symbol) —
+        // checked against the pattern before anything is matched.
+        let (nth, members) = match lfp.try_arg(1) {
+            None => (0, None),
+            Some(arg1) => {
+                let name = if let Some(name) = arg1.is_rstring_inner() {
+                    Some(name.as_bytes().to_vec())
+                } else {
+                    arg1.try_symbol()
+                        .map(|sym| sym.with_ident_name(|name, _| name.as_bytes().to_vec()))
+                };
+                match name {
+                    Some(name) => {
+                        let members = re.get_group_members(&name);
+                        if members.is_empty() {
+                            return Err(MonorubyErr::indexerr(format!(
+                                "undefined group name reference: {}",
+                                String::from_utf8_lossy(&name)
+                            )));
+                        }
+                        (0, Some(members))
+                    }
+                    None => (arg1.coerce_to_int_i64(vm, globals)?, None),
+                }
+            }
         };
         vm.set_match_haystack(self_);
+        let mut view = None;
+        let subject = slice_subject(globals, self_.as_rstring_inner(), &re, true, &mut view)?;
         let mut region = crate::value::rvalue::regexp::ScratchRegion::take();
         if !re.find_spans(&subject, 0, &mut region)? {
             vm.clear_capture_special_variables();
@@ -3991,21 +4017,61 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let spans = spans_of(&region);
         save_spans(vm, &subject, &spans, self_, MatchOrigin::Regexp(arg0));
         let len = spans.len() as i64;
-        let nth = if nth >= 0 {
-            nth as usize
-        } else {
-            match len + nth {
-                i if i > 0 => i as usize,
-                _ => return Ok(Value::nil()),
+        let span = match &members {
+            // The rightmost matched group sharing the name.
+            Some(members) => members
+                .iter()
+                .rev()
+                .find_map(|&idx| spans.get(idx as usize).copied().flatten()),
+            None => {
+                let nth = if nth >= 0 {
+                    nth as usize
+                } else {
+                    match len + nth {
+                        i if i > 0 => i as usize,
+                        _ => return Ok(Value::nil()),
+                    }
+                };
+                spans.get(nth).copied().flatten()
             }
         };
-        let Some((start, end)) = spans.get(nth).copied().flatten() else {
-            return Ok(Value::nil());
+        // A group that exists and took no part in the match removes
+        // nothing and answers "" (`rb_str_slice_bang` cuts `BEG(nth)`
+        // for a length of zero), where `String#[]` answers nil.
+        let Some((start, end)) = span else {
+            if members.is_none() && nth.unsigned_abs() as usize >= spans.len() {
+                return Ok(Value::nil());
+            }
+            return Ok(subject.chunk(None, 0..0));
         };
-        let removed =
-            RStringInner::from_encoding(&subject.as_bytes()[start..end], subject.encoding());
+        // The removed text, and where it sat in the receiver's own
+        // bytes: the walked bytes are those, except for a surrogate
+        // image, whose characters stand for one byte each.
+        let removed = subject.chunk(None, start..end);
+        let (start, end) = if subject.mapped() {
+            let at = |pos: usize| subject.char_index(pos);
+            (at(start), at(end))
+        } else {
+            (start, end)
+        };
         let empty = RStringInner::from_str_scanned("");
         replace_byte_range(globals, self_, start, end, &empty)?;
+        return Ok(removed);
+    }
+    // A String: `rb_str_index` — the encodings are negotiated, then a
+    // byte search aligned to the receiver's characters, whatever the
+    // receiver's encoding (#1959) — and the result is a copy of the
+    // *argument*, its encoding included.
+    if lfp.try_arg(1).is_none()
+        && let Some(needle) = arg0.is_rstring_inner()
+    {
+        check_pattern_encoding_compat(self_.as_rstring_inner(), arg0, globals)?;
+        let Some(pos) = char_aligned_search_fwd(self_.as_rstring_inner(), needle, 0) else {
+            return Ok(Value::nil());
+        };
+        let removed = needle.clone();
+        let empty = RStringInner::from_str_scanned("");
+        replace_byte_range(globals, self_, pos, pos + removed.len(), &empty)?;
         return Ok(Value::string_from_inner(removed));
     }
     let lhs = self_.expect_string(globals)?;
@@ -4039,45 +4105,11 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             };
         let r = get_range(&lhs, start, len);
         Ok(slice_sub(lfp, lhs, r))
-    } else if let Some(info) = lfp.arg(0).is_regex() {
-        let nth = if let Some(arg1) = lfp.try_arg(1) {
-            arg1.coerce_to_int_i64(vm, globals)?
-        } else {
-            0
-        };
-        match info.captures(&lhs, vm, MatchOrigin::Regexp(lfp.arg(0)))? {
-            None => Ok(Value::nil()),
-            Some(captures) => {
-                let len = captures.len() as i64;
-                let nth = if nth >= 0 {
-                    nth as usize
-                } else {
-                    match len + nth {
-                        i if i > 0 => i as usize,
-                        _ => return Ok(Value::nil()),
-                    }
-                };
-                match captures.get(nth) {
-                    Some(m) => {
-                        let r = m.range();
-                        Ok(slice_sub(lfp, lhs, r))
-                    }
-                    None => Ok(Value::nil()),
-                }
-            }
-        }
-    } else if let Some(s) = lfp.arg(0).is_str() {
-        // String argument: return the string if it's a substring
-        if let Some(pos) = lhs.find(s) {
-            let end = pos + s.len();
-            Ok(slice_sub(lfp, lhs, pos..end))
-        } else {
-            Ok(Value::nil())
-        }
     } else {
-        // Try to_int coercion
+        // Anything else is an index (`NUM2LONG`) — a String with a
+        // second argument included, which is a TypeError.
         let arg0 = lfp.arg(0);
-        let i = arg0.coerce_to_int_i64(vm, globals)?;
+        let i = arg0.num2long(vm, globals)?;
         let index = match conv_index(i, lhs.chars().count()) {
             Some(i) => i,
             None => return Ok(Value::nil()),
@@ -5866,8 +5898,8 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     } else if arg0.is_regex().is_some() {
         arg0.as_regexp_inner()
     } else {
-        // Try to_str coercion
-        let coerced = arg0.coerce_to_str(vm, globals)?;
+        // `get_pat_quoted`'s `to_str` coercion.
+        let coerced = arg0.coerce_to_pattern_str(vm, globals)?;
         coerced_re = RegexpInner::from_escaped(&coerced)?;
         &coerced_re
     };
@@ -6368,6 +6400,33 @@ fn string_match_(
     Ok(Value::bool(res))
 }
 
+/// The pattern of `String#index` / `#rindex` (`rb_str_index_m`): a
+/// Regexp, or else a String by `StringValue` — so what has no `to_str`
+/// is "no implicit conversion into String" here, where the methods
+/// that take the String as a regexp source ask for a Regexp.
+fn index_pattern(vm: &mut Executor, globals: &mut Globals, pattern: Value) -> Result<Value> {
+    if pattern.is_regex().is_some() || pattern.is_rstring_inner().is_some() {
+        return Ok(pattern);
+    }
+    // `rb_convert_type_with_id`: `to_str` by the full `rb_check_funcall`
+    // protocol, so a `method_missing`-backed one converts.
+    match crate::coerce::check_funcall(vm, globals, pattern, IdentId::TO_STR)? {
+        Some(s) if s.is_rstring_inner().is_some() => Ok(s),
+        Some(other) => Err(MonorubyErr::cant_convert_error(
+            &globals.store,
+            pattern,
+            other,
+            "String",
+            IdentId::TO_STR,
+        )),
+        None => Err(MonorubyErr::no_implicit_conversion(
+            globals,
+            pattern,
+            STRING_CLASS,
+        )),
+    }
+}
+
 ///
 /// ### String#index
 ///
@@ -6381,6 +6440,7 @@ fn string_index(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    let arg0 = index_pattern(vm, globals, lfp.arg(0))?;
     let char_pos = if let Some(arg1) = lfp.try_arg(1) {
         arg1.coerce_to_int_i64(vm, globals)?
     } else {
@@ -6390,7 +6450,7 @@ fn string_index(
     let given = self_.is_rstring().unwrap();
     // Enable zero-copy $~ haystack snapshots (CoW).
     vm.set_match_haystack(self_);
-    if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
+    if let Some(arg_inner) = arg0.is_rstring_inner() {
         check_string_encoding_compat(&given, &arg_inner, globals)?;
         // String needle: substring search at character boundaries.
         // Never enters the regex engine, so `$~` is untouched (CRuby
@@ -6411,8 +6471,8 @@ fn string_index(
             },
         );
     }
-    check_pattern_encoding_compat(&self_.as_rstring_inner(), lfp.arg(0), globals)?;
-    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
+    check_pattern_encoding_compat(&self_.as_rstring_inner(), arg0, globals)?;
+    let re = arg0.coerce_to_regexp_or_string(vm, globals)?;
 
     let char_pos = match given.conv_char_index(char_pos) {
         Some(pos) => pos,
@@ -6426,13 +6486,7 @@ fn string_index(
 
     let inner = self_.as_rstring_inner();
     let mut view = None;
-    let subject = slice_subject(
-        globals,
-        inner,
-        &re,
-        lfp.arg(0).is_regex().is_some(),
-        &mut view,
-    )?;
+    let subject = slice_subject(globals, inner, &re, arg0.is_regex().is_some(), &mut view)?;
     let byte_pos = subject.byte_offset(char_pos);
     let mut region = crate::value::rvalue::regexp::ScratchRegion::take();
     if !re.find_spans(&subject, byte_pos, &mut region)? {
@@ -6825,11 +6879,12 @@ fn string_rindex(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    let arg0 = index_pattern(vm, globals, lfp.arg(0))?;
     let self_ = lfp.self_val();
     let given = self_.is_rstring().unwrap();
     // Enable zero-copy $~ haystack snapshots (CoW).
     vm.set_match_haystack(self_);
-    if let Some(arg_inner) = lfp.arg(0).is_rstring_inner() {
+    if let Some(arg_inner) = arg0.is_rstring_inner() {
         check_string_encoding_compat(&given, &arg_inner, globals)?;
     }
 
@@ -6840,22 +6895,16 @@ fn string_rindex(
     // we only ever return the rightmost. Walk the haystack with
     // `rmatch_indices` instead — one reverse two-way scan, no
     // regex engine in the loop.
-    if lfp.arg(0).is_rstring_inner().is_some() {
-        return string_rindex_string(vm, globals, &given, lfp.arg(0), lfp.try_arg(1));
+    if arg0.is_rstring_inner().is_some() {
+        return string_rindex_string(vm, globals, &given, arg0, lfp.try_arg(1));
     }
 
-    check_pattern_encoding_compat(&given, lfp.arg(0), globals)?;
-    let re = lfp.arg(0).coerce_to_regexp_or_string(vm, globals)?;
+    check_pattern_encoding_compat(&given, arg0, globals)?;
+    let re = arg0.coerce_to_regexp_or_string(vm, globals)?;
 
     let inner = self_.as_rstring_inner();
     let mut view = None;
-    let subject = slice_subject(
-        globals,
-        inner,
-        &re,
-        lfp.arg(0).is_regex().is_some(),
-        &mut view,
-    )?;
+    let subject = slice_subject(globals, inner, &re, arg0.is_regex().is_some(), &mut view)?;
     let bounds = subject.char_boundaries();
     let char_len = bounds.len();
     let len = subject.len();
@@ -6866,7 +6915,7 @@ fn string_rindex(
             Some(pos) => pos,
             // As in `byteindex`: the offset wrapped past the start, and
             // a Regexp pattern clears `$~` on the way out.
-            None => return Ok(clear_backref_for_regexp(vm, lfp.arg(0))),
+            None => return Ok(clear_backref_for_regexp(vm, arg0)),
         }
     } else {
         char_len
@@ -9384,114 +9433,20 @@ pub(crate) fn intern_string(store: &Store, inner: &RStringInner) -> Result<Ident
     Ok(id)
 }
 
-/// Byte-level case mapping for ASCII-only receivers. Returns the
-/// transformed `RStringInner` when the input's code range is
-/// `SevenBit` and `mode` is not `Turkic` (Turkic upcases `i`→`İ` /
-/// downcases `I`→`ı`, both non-ASCII, so the byte transform isn't
-/// closed under Turkic semantics).
+/// Case mapping of a string that is ASCII only, by any map that leaves
+/// ASCII to ASCII (every one but a `:turkic` one).
 ///
-/// For ASCII content, `Full` / `Ascii` / `Fold` all collapse to the
-/// trivial bitwise `b ^ 0x20` for letters — `Fold`'s only non-trivial
-/// expansion is `ß` → `ss`, which can't appear here. The output is
-/// provably ASCII, so we tag the result with `cr = SevenBit`
-/// directly via `from_ascii_bytes` and skip the O(N) classification
-/// scan that `from_encoding_scanned` would do.
+/// `Full` / `Ascii` / `Fold` all collapse to the trivial bitwise
+/// `b ^ 0x20` for letters here — `Fold`'s only expansions start from
+/// non-ASCII characters. The output is provably ASCII, so the result is
+/// tagged `SevenBit` directly via `from_ascii_bytes`, skipping the O(N)
+/// classification scan `from_encoding_scanned` would do.
 ///
 /// The transform loop intentionally has no loop-carried `changed`
 /// flag — that branchless byte-→byte map is the part the auto-
 /// vectoriser can turn into wide SIMD, so the bang variants compute
 /// changed-vs-unchanged with a single `memcmp` afterward instead.
-fn ascii_case_fast_path(inner: &RStringInner, op: CaseOp, mode: CaseMode) -> Option<RStringInner> {
-    if matches!(mode, CaseMode::Turkic) {
-        return None;
-    }
-    if !inner.is_ascii_only() {
-        // Byte-oriented encodings: CRuby's default (non-`:unicode`)
-        // case mapping touches ASCII bytes — plus, for ISO-8859-1,
-        // the Latin-1 letter range (`é` 0xE9 ↔ `É` 0xC9). Multibyte
-        // characters are copied verbatim. Walk the encoding-aware
-        // char iterator so a Shift_JIS trail byte in 0x40..=0x7E is
-        // never mistaken for a foldable ASCII letter.
-        let enc = inner.encoding();
-        if matches!(
-            enc,
-            crate::value::Encoding::EucJp(_)
-                | crate::value::Encoding::Sjis(_)
-                | crate::value::Encoding::Ascii8
-                | crate::value::Encoding::Iso8859(_)
-                | crate::value::Encoding::Other(_)
-                | crate::value::Encoding::NamedByte(_)
-                // US-ASCII reaches here only when it is *broken* — a
-                // well-formed one is ASCII-only and took the vector
-                // path below. CRuby's `single_byte_optimizable` sends
-                // it down the byte path too rather than refusing it.
-                | crate::value::Encoding::UsAscii
-        ) {
-            // Latin-1 case pairs exist only in ISO-8859-1: upper
-            // 0xC0..=0xDE (minus `×` 0xD7) ↔ lower 0xE0..=0xFE
-            // (minus `÷` 0xF7). `ÿ` (0xFF) has no upper in Latin-1
-            // and `µ`/`ß` have no single-byte mapping — unchanged.
-            let latin1 = matches!(enc, crate::value::Encoding::Iso8859(1));
-            let up = |b: u8| -> u8 {
-                if b.is_ascii() {
-                    b.to_ascii_uppercase()
-                } else if latin1 && (0xE0..=0xFE).contains(&b) && b != 0xF7 {
-                    b - 0x20
-                } else {
-                    b
-                }
-            };
-            let down = |b: u8| -> u8 {
-                if b.is_ascii() {
-                    b.to_ascii_lowercase()
-                } else if latin1 && (0xC0..=0xDE).contains(&b) && b != 0xD7 {
-                    b + 0x20
-                } else {
-                    b
-                }
-            };
-            let is_lower = |b: u8| -> bool {
-                b.is_ascii_lowercase() || (latin1 && (0xE0..=0xFE).contains(&b) && b != 0xF7)
-            };
-            let is_upper = |b: u8| -> bool {
-                b.is_ascii_uppercase() || (latin1 && (0xC0..=0xDE).contains(&b) && b != 0xD7)
-            };
-            let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
-                SmallVec::with_capacity(inner.as_bytes().len());
-            let mut first = true;
-            for ch in inner.iter_char_bytes() {
-                if ch.len() == 1 {
-                    let b = ch[0];
-                    let mapped = match op {
-                        CaseOp::Upcase => up(b),
-                        CaseOp::Downcase => down(b),
-                        CaseOp::Swapcase => {
-                            if is_lower(b) {
-                                up(b)
-                            } else if is_upper(b) {
-                                down(b)
-                            } else {
-                                b
-                            }
-                        }
-                        CaseOp::Capitalize => {
-                            if first {
-                                up(b)
-                            } else {
-                                down(b)
-                            }
-                        }
-                    };
-                    out.push(mapped);
-                } else {
-                    out.extend_from_slice(ch);
-                }
-                first = false;
-            }
-            return Some(RStringInner::from_encoding_scanned(&out, enc));
-        }
-        return None;
-    }
+fn ascii_only_case(inner: &RStringInner, op: CaseOp) -> RStringInner {
     let bytes = inner.as_bytes();
     let out: SmallVec<[u8; STRING_INLINE_CAP]> = match op {
         CaseOp::Upcase => bytes.iter().map(|b| b.to_ascii_uppercase()).collect(),
@@ -9515,7 +9470,93 @@ fn ascii_case_fast_path(inner: &RStringInner, op: CaseOp, mode: CaseMode) -> Opt
             v
         }
     };
-    Some(RStringInner::from_ascii_bytes(out, inner.encoding()))
+    RStringInner::from_ascii_bytes(out, inner.encoding())
+}
+
+/// Case mapping under a non-Unicode encoding: the encoding's own
+/// `case_map` in CRuby.
+///
+/// All of them map the ASCII letters; the ISO-8859 family and its
+/// Windows cousins map their own letters too, from the tables in
+/// [`byte_case`]; nothing else is touched. A multibyte character is
+/// copied as it is — the walk is the encoding's, so a Shift_JIS trail
+/// byte in `0x40..=0x7E` is never taken for the ASCII letter it looks
+/// like — and so is a byte that spells no character.
+///
+/// `:turkic` is honoured by the four encodings that have a dotless `ı`
+/// and a dotted `İ` (and ignored by the rest: there is nothing to map
+/// `I` to); `:ascii` switches the encoding's own letters off.
+fn byte_case(inner: &RStringInner, op: CaseOp, mode: CaseMode) -> RStringInner {
+    use crate::value::Encoding as E;
+    let enc = inner.encoding();
+    let map = match enc {
+        E::Iso8859(_) | E::NamedByte(_) if mode != CaseMode::Ascii => {
+            byte_case::byte_case_map(enc.name())
+        }
+        _ => None,
+    };
+    let turkic = match (mode, map) {
+        (CaseMode::Turkic, Some(map)) => map.turkic,
+        _ => None,
+    };
+    if turkic.is_none() && inner.is_ascii_only() {
+        return ascii_only_case(inner, op);
+    }
+    let up = |b: u8| -> u8 {
+        match (b, map, turkic) {
+            (b'i', _, Some((_, dotted))) => dotted,
+            (0x80.., Some(map), _) => map.up[(b - 0x80) as usize],
+            _ => b.to_ascii_uppercase(),
+        }
+    };
+    let down = |b: u8| -> u8 {
+        match (b, map, turkic) {
+            (b'I', _, Some((dotless, _))) => dotless,
+            (0x80.., Some(map), _) => {
+                if mode == CaseMode::Fold
+                    && let Some(&(_, folded)) = map.fold.iter().find(|(from, _)| *from == b)
+                {
+                    return folded;
+                }
+                map.down[(b - 0x80) as usize]
+            }
+            _ => b.to_ascii_lowercase(),
+        }
+    };
+    let sharp_s = map.is_some_and(|map| map.sharp_s);
+    let mut out: SmallVec<[u8; STRING_INLINE_CAP]> =
+        SmallVec::with_capacity(inner.as_bytes().len());
+    let mut first = true;
+    for ch in inner.iter_char_bytes() {
+        let was_first = std::mem::replace(&mut first, false);
+        let &[b] = ch else {
+            out.extend_from_slice(ch);
+            continue;
+        };
+        // `ß` has no capital of its own: it is spelled out.
+        if sharp_s && b == 0xDF {
+            let spelled: &[u8] = match op {
+                CaseOp::Upcase | CaseOp::Swapcase => b"SS",
+                CaseOp::Capitalize if was_first => b"Ss",
+                CaseOp::Downcase if mode == CaseMode::Fold => b"ss",
+                CaseOp::Downcase | CaseOp::Capitalize => &[b],
+            };
+            out.extend_from_slice(spelled);
+            continue;
+        }
+        out.push(match op {
+            CaseOp::Upcase => up(b),
+            CaseOp::Downcase => down(b),
+            // A letter with a capital goes up; any other goes down.
+            CaseOp::Swapcase => match up(b) {
+                u if u != b => u,
+                _ => down(b),
+            },
+            CaseOp::Capitalize if was_first => up(b),
+            CaseOp::Capitalize => down(b),
+        });
+    }
+    RStringInner::from_encoding_scanned(&out, enc)
 }
 
 ///
@@ -9617,27 +9658,74 @@ fn reverse_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     Ok(self_val)
 }
 
-/// Case mapping for a receiver in a Unicode but non-ASCII-compatible
-/// encoding (UTF-16/UTF-32): decode → `apply_case` → re-encode,
-/// preserving the encoding tag. Returns `None` for other encodings so
-/// the caller's normal `&str` path runs. (`expect_str` would fail on
-/// the UTF-16/32 byte stream.)
-fn unicode_noncompat_case(self_val: Value, op: CaseOp, mode: CaseMode) -> Option<RStringInner> {
-    let inner = self_val.is_rstring_inner()?;
+/// The receiver of a case method, mapped: `rb_str_casemap` and the
+/// single-byte shortcuts in front of it.
+///
+/// The map is the encoding's. The Unicode encodings share one
+/// ([`apply_case`], on the text — UTF-16 / UTF-32 are decoded for it
+/// and encoded back); every other encoding has a byte map
+/// ([`byte_case`]).
+fn case_map(
+    globals: &Globals,
+    self_val: Value,
+    op: CaseOp,
+    mode: CaseMode,
+) -> Result<RStringInner> {
+    use crate::value::Encoding as E;
+    let inner = self_val.as_rstring_inner();
     let enc = inner.encoding();
-    if !matches!(
-        enc,
-        crate::value::Encoding::Utf16Le
-            | crate::value::Encoding::Utf16Be
-            | crate::value::Encoding::Utf32Le
-            | crate::value::Encoding::Utf32Be
-    ) {
-        return None;
+    Ok(match enc {
+        E::Utf8(_) => {
+            // `:turkic` is the one map that takes ASCII out of ASCII.
+            if mode != CaseMode::Turkic && inner.is_ascii_only() {
+                return Ok(ascii_only_case(inner, op));
+            }
+            let s = self_val.expect_str(globals)?;
+            // `apply_case` walks `chars()` and pushes whole scalars, so
+            // the output is well-formed UTF-8 by construction; scanning
+            // it here lands the code range up front.
+            RStringInner::from_encoding_scanned(apply_case(s, op, mode).as_bytes(), enc)
+        }
+        E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be => {
+            let (decoded, _) = crate::value::transcode::decode_utf16_32(inner.as_bytes(), enc);
+            let mapped = apply_case(&decoded, op, mode);
+            let bytes = crate::value::transcode::encode_utf16_32(&mapped, enc);
+            RStringInner::from_encoding_scanned(&bytes, enc)
+        }
+        _ => byte_case(inner, op, mode),
+    })
+}
+
+/// `String#upcase` and its three siblings: a new string.
+fn case_method(globals: &Globals, lfp: Lfp, op: CaseOp) -> Result<Value> {
+    let mode = parse_case_options(lfp.arg(0).as_array(), op)?;
+    let self_val = lfp.self_val();
+    casemap_mustnot_broken(&globals.store, self_val.as_rstring_inner())?;
+    Ok(Value::string_from_inner(case_map(
+        globals, self_val, op, mode,
+    )?))
+}
+
+/// `String#upcase!` and its three siblings: `self`, or nil when the
+/// mapping changed nothing. The checks run in `rb_str_upcase_bang`'s
+/// order — the options, then the receiver's frozenness, then its
+/// contents.
+fn case_method_bang(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    op: CaseOp,
+) -> Result<Value> {
+    let mode = parse_case_options(lfp.arg(0).as_array(), op)?;
+    let mut self_val = lfp.self_val();
+    self_val.ensure_string_mutable(vm, globals)?;
+    casemap_mustnot_broken(&globals.store, self_val.as_rstring_inner())?;
+    let mapped = case_map(globals, self_val, op, mode)?;
+    if mapped.as_bytes() == self_val.as_rstring_inner().as_bytes() {
+        return Ok(Value::nil());
     }
-    let (decoded, _) = crate::value::transcode::decode_utf16_32(inner.as_bytes(), enc);
-    let mapped = apply_case(&decoded, op, mode);
-    let bytes = crate::value::transcode::encode_utf16_32(&mapped, enc);
-    Some(RStringInner::from_encoding_scanned(&bytes, enc))
+    self_val.replace_with_inner(mapped);
+    Ok(self_val)
 }
 
 ///
@@ -9648,26 +9736,7 @@ fn unicode_noncompat_case(self_val: Value, op: CaseOp, mode: CaseMode) -> Option
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase.html]
 #[monoruby_builtin]
 fn upcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Upcase)?;
-    casemap_mustnot_broken(&globals.store, &lfp.self_val().as_rstring_inner())?;
-    let self_val = lfp.self_val();
-    if let Some(inner) = self_val.is_rstring_inner() {
-        if let Some(fast) = ascii_case_fast_path(inner, CaseOp::Upcase, mode) {
-            return Ok(Value::string_from_inner(fast));
-        }
-    }
-    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Upcase, mode) {
-        return Ok(Value::string_from_inner(r));
-    }
-    let s = self_val.expect_str(globals)?;
-    // `apply_case` walks `chars()` and pushes whole scalars, so the
-    // output is well-formed UTF-8 by construction; pre-scan it so
-    // the cr lands as SevenBit/Valid up front and the next access
-    // doesn't have to walk the buffer again.
-    Ok(Value::string_from_str_with_encoding_of(
-        &apply_case(s, CaseOp::Upcase, mode),
-        self_val,
-    ))
+    case_method(globals, lfp, CaseOp::Upcase)
 }
 
 ///
@@ -9678,44 +9747,10 @@ fn upcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/upcase=21.html]
 #[monoruby_builtin]
 fn upcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Upcase)?;
-    casemap_mustnot_broken(&globals.store, &lfp.self_val().as_rstring_inner())?;
-    lfp.self_val().ensure_string_mutable(vm, globals)?;
-    let mut self_val = lfp.self_val();
-    let fast = ascii_case_fast_path(self_val.as_rstring_inner(), CaseOp::Upcase, mode);
-    if let Some(result) = fast {
-        let changed = result.as_bytes() != self_val.as_rstring_inner().as_bytes();
-        if changed {
-            self_val.replace_with_inner(result);
-            return Ok(lfp.self_val());
-        }
-        return Ok(Value::nil());
-    }
-    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Upcase, mode) {
-        let changed = r.as_bytes() != self_val.as_rstring_inner().as_bytes();
-        if changed {
-            self_val.replace_with_inner(r);
-            return Ok(lfp.self_val());
-        }
-        return Ok(Value::nil());
-    }
-    let s = self_val.expect_str(globals)?;
-    let result = apply_case(s, CaseOp::Upcase, mode);
-    let changed = &result != self_val.expect_str(globals)?;
-    let enc = self_val
-        .is_rstring_inner()
-        .map(|r| r.encoding())
-        .unwrap_or(crate::value::Encoding::UTF8);
-    self_val.replace_with_inner(RStringInner::from_encoding_scanned(result.as_bytes(), enc));
-
-    Ok(if changed {
-        lfp.self_val()
-    } else {
-        Value::nil()
-    })
+    case_method_bang(vm, globals, lfp, CaseOp::Upcase)
 }
 
-//
+///
 /// ### String#downcase
 ///
 /// - downcase(*options) -> String
@@ -9723,22 +9758,7 @@ fn upcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/downcase.html]
 #[monoruby_builtin]
 fn downcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Downcase)?;
-    casemap_mustnot_broken(&globals.store, &lfp.self_val().as_rstring_inner())?;
-    let self_val = lfp.self_val();
-    if let Some(inner) = self_val.is_rstring_inner() {
-        if let Some(fast) = ascii_case_fast_path(inner, CaseOp::Downcase, mode) {
-            return Ok(Value::string_from_inner(fast));
-        }
-    }
-    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Downcase, mode) {
-        return Ok(Value::string_from_inner(r));
-    }
-    let s = self_val.expect_str(globals)?;
-    Ok(Value::string_from_str_with_encoding_of(
-        &apply_case(s, CaseOp::Downcase, mode),
-        self_val,
-    ))
+    case_method(globals, lfp, CaseOp::Downcase)
 }
 
 ///
@@ -9749,41 +9769,7 @@ fn downcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/downcase=21.html]
 #[monoruby_builtin]
 fn downcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Downcase)?;
-    casemap_mustnot_broken(&globals.store, &lfp.self_val().as_rstring_inner())?;
-    lfp.self_val().ensure_string_mutable(vm, globals)?;
-    let mut self_val = lfp.self_val();
-    let fast = ascii_case_fast_path(self_val.as_rstring_inner(), CaseOp::Downcase, mode);
-    if let Some(result) = fast {
-        let changed = result.as_bytes() != self_val.as_rstring_inner().as_bytes();
-        if changed {
-            self_val.replace_with_inner(result);
-            return Ok(lfp.self_val());
-        }
-        return Ok(Value::nil());
-    }
-    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Downcase, mode) {
-        let changed = r.as_bytes() != self_val.as_rstring_inner().as_bytes();
-        if changed {
-            self_val.replace_with_inner(r);
-            return Ok(lfp.self_val());
-        }
-        return Ok(Value::nil());
-    }
-    let s = self_val.expect_str(globals)?;
-    let result = apply_case(s, CaseOp::Downcase, mode);
-    let changed = &result != self_val.expect_str(globals)?;
-    let enc = self_val
-        .is_rstring_inner()
-        .map(|r| r.encoding())
-        .unwrap_or(crate::value::Encoding::UTF8);
-    self_val.replace_with_inner(RStringInner::from_encoding_scanned(result.as_bytes(), enc));
-
-    Ok(if changed {
-        lfp.self_val()
-    } else {
-        Value::nil()
-    })
+    case_method_bang(vm, globals, lfp, CaseOp::Downcase)
 }
 
 ///
@@ -9799,22 +9785,7 @@ fn capitalize(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Capitalize)?;
-    casemap_mustnot_broken(&globals.store, &lfp.self_val().as_rstring_inner())?;
-    let self_val = lfp.self_val();
-    if let Some(inner) = self_val.is_rstring_inner() {
-        if let Some(fast) = ascii_case_fast_path(inner, CaseOp::Capitalize, mode) {
-            return Ok(Value::string_from_inner(fast));
-        }
-    }
-    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Capitalize, mode) {
-        return Ok(Value::string_from_inner(r));
-    }
-    let s = self_val.expect_str(globals)?;
-    Ok(Value::string_from_str_with_encoding_of(
-        &apply_case(s, CaseOp::Capitalize, mode),
-        self_val,
-    ))
+    case_method(globals, lfp, CaseOp::Capitalize)
 }
 
 ///
@@ -9830,40 +9801,7 @@ fn capitalize_(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Capitalize)?;
-    casemap_mustnot_broken(&globals.store, &lfp.self_val().as_rstring_inner())?;
-    lfp.self_val().ensure_string_mutable(vm, globals)?;
-    let mut self_val = lfp.self_val();
-    let fast = ascii_case_fast_path(self_val.as_rstring_inner(), CaseOp::Capitalize, mode);
-    if let Some(result) = fast {
-        let changed = result.as_bytes() != self_val.as_rstring_inner().as_bytes();
-        if changed {
-            self_val.replace_with_inner(result);
-            return Ok(lfp.self_val());
-        }
-        return Ok(Value::nil());
-    }
-    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Capitalize, mode) {
-        let changed = r.as_bytes() != self_val.as_rstring_inner().as_bytes();
-        if changed {
-            self_val.replace_with_inner(r);
-            return Ok(lfp.self_val());
-        }
-        return Ok(Value::nil());
-    }
-    let s = self_val.expect_str(globals)?;
-    let result = apply_case(s, CaseOp::Capitalize, mode);
-    let changed = &result != self_val.expect_str(globals)?;
-    let enc = self_val
-        .is_rstring_inner()
-        .map(|r| r.encoding())
-        .unwrap_or(crate::value::Encoding::UTF8);
-    self_val.replace_with_inner(RStringInner::from_encoding_scanned(result.as_bytes(), enc));
-    Ok(if changed {
-        lfp.self_val()
-    } else {
-        Value::nil()
-    })
+    case_method_bang(vm, globals, lfp, CaseOp::Capitalize)
 }
 
 ///
@@ -9874,22 +9812,7 @@ fn capitalize_(
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/swapcase.html]
 #[monoruby_builtin]
 fn swapcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Swapcase)?;
-    casemap_mustnot_broken(&globals.store, &lfp.self_val().as_rstring_inner())?;
-    let self_val = lfp.self_val();
-    if let Some(inner) = self_val.is_rstring_inner() {
-        if let Some(fast) = ascii_case_fast_path(inner, CaseOp::Swapcase, mode) {
-            return Ok(Value::string_from_inner(fast));
-        }
-    }
-    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Swapcase, mode) {
-        return Ok(Value::string_from_inner(r));
-    }
-    let s = self_val.expect_str(globals)?;
-    Ok(Value::string_from_str_with_encoding_of(
-        &apply_case(s, CaseOp::Swapcase, mode),
-        self_val,
-    ))
+    case_method(globals, lfp, CaseOp::Swapcase)
 }
 
 ///
@@ -9900,40 +9823,7 @@ fn swapcase(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/swapcase=21.html]
 #[monoruby_builtin]
 fn swapcase_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mode = parse_case_options(globals, lfp.arg(0).as_array(), CaseOp::Swapcase)?;
-    casemap_mustnot_broken(&globals.store, &lfp.self_val().as_rstring_inner())?;
-    lfp.self_val().ensure_string_mutable(vm, globals)?;
-    let mut self_val = lfp.self_val();
-    let fast = ascii_case_fast_path(self_val.as_rstring_inner(), CaseOp::Swapcase, mode);
-    if let Some(result) = fast {
-        let changed = result.as_bytes() != self_val.as_rstring_inner().as_bytes();
-        if changed {
-            self_val.replace_with_inner(result);
-            return Ok(lfp.self_val());
-        }
-        return Ok(Value::nil());
-    }
-    if let Some(r) = unicode_noncompat_case(self_val, CaseOp::Swapcase, mode) {
-        let changed = r.as_bytes() != self_val.as_rstring_inner().as_bytes();
-        if changed {
-            self_val.replace_with_inner(r);
-            return Ok(lfp.self_val());
-        }
-        return Ok(Value::nil());
-    }
-    let s = self_val.expect_str(globals)?;
-    let result = apply_case(s, CaseOp::Swapcase, mode);
-    let changed = &result != self_val.expect_str(globals)?;
-    let enc = self_val
-        .is_rstring_inner()
-        .map(|r| r.encoding())
-        .unwrap_or(crate::value::Encoding::UTF8);
-    self_val.replace_with_inner(RStringInner::from_encoding_scanned(result.as_bytes(), enc));
-    Ok(if changed {
-        lfp.self_val()
-    } else {
-        Value::nil()
-    })
+    case_method_bang(vm, globals, lfp, CaseOp::Swapcase)
 }
 
 /// Operation type for the `apply_case` helper.
@@ -9946,19 +9836,11 @@ enum CaseOp {
 }
 
 /// Case-mapping mode parsed from the `*options` rest-args of
-/// `String#upcase`/`#downcase`/`#capitalize`/`#swapcase`. CRuby accepts
-/// `:ascii`, `:turkic`, `:lithuanian`, `:fold` (the last being downcase
-/// only) with these constraints:
+/// `String#upcase`/`#downcase`/`#capitalize`/`#swapcase`.
 ///
-/// - `:ascii` cannot combine with `:turkic` or `:lithuanian`.
-/// - `:fold` is downcase-only.
-/// - At most one mutually-exclusive locale option may apply, but
-///   `:turkic` + `:lithuanian` is allowed (Turkic semantics win).
-///
-/// Lithuanian-specific transforms aren't implemented (CRuby's spec
-/// notes "currently works the same as full Unicode case mapping" for
-/// most cases), so `:lithuanian` falls through to the default Unicode
-/// mapping.
+/// `:lithuanian` has no variant: CRuby records the flag and no case map
+/// reads it ("currently works the same as full Unicode case mapping"),
+/// so it is `Full`, and with `:turkic` next to it, `Turkic`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CaseMode {
     Full,
@@ -9968,62 +9850,43 @@ enum CaseMode {
     Fold,
 }
 
-fn parse_case_options(globals: &Globals, args: Array, op: CaseOp) -> Result<CaseMode> {
-    if args.is_empty() {
+/// `check_case_options`, with its three messages and its order.
+///
+/// The options are compared as the Symbols they must be, so anything
+/// else is as `invalid` as an unknown name. Two options are a pair only
+/// as `:turkic` and `:lithuanian`, in either order; `:ascii` and `:fold`
+/// stand alone, and three are too many whatever they are.
+fn parse_case_options(args: Array, op: CaseOp) -> Result<CaseMode> {
+    let is = |v: Value, name: &str| v.try_symbol() == Some(IdentId::get_id(name));
+    let second = |locale: &str, mode: CaseMode| match args.get(1) {
+        None => Ok(mode),
+        Some(v) if is(*v, locale) => Ok(CaseMode::Turkic),
+        Some(_) => Err(MonorubyErr::argumenterr("invalid second option")),
+    };
+    let Some(&first) = args.first() else {
         return Ok(CaseMode::Full);
+    };
+    if args.len() > 2 {
+        return Err(MonorubyErr::argumenterr("too many options"));
     }
-    let mut ascii = false;
-    let mut turkic = false;
-    let mut lithuanian = false;
-    let mut fold = false;
-    for v in args.iter() {
-        let sym = match v.try_symbol() {
-            Some(s) => s,
-            None => {
-                return Err(MonorubyErr::argumenterr(format!(
-                    "invalid option: {}",
-                    v.inspect(&globals.store)
-                )));
-            }
-        };
-        match sym.get_name().as_str() {
-            "ascii" => ascii = true,
-            "turkic" => turkic = true,
-            "lithuanian" => lithuanian = true,
-            "fold" => fold = true,
-            other => {
-                return Err(MonorubyErr::argumenterr(format!(
-                    "invalid option: :{other}"
-                )));
-            }
-        }
-    }
-    if fold && op != CaseOp::Downcase {
-        return Err(MonorubyErr::argumenterr(
-            "option :fold only allowed for downcasing",
-        ));
-    }
-    if ascii && (turkic || lithuanian || fold) {
-        return Err(MonorubyErr::argumenterr(
-            "ASCII incompatible with other options",
-        ));
-    }
-    if fold && (turkic || lithuanian) {
-        return Err(MonorubyErr::argumenterr(
-            ":fold incompatible with other options",
-        ));
-    }
-    if ascii {
+    if is(first, "turkic") {
+        second("lithuanian", CaseMode::Turkic)
+    } else if is(first, "lithuanian") {
+        second("turkic", CaseMode::Full)
+    } else if args.len() > 1 {
+        Err(MonorubyErr::argumenterr("too many options"))
+    } else if is(first, "ascii") {
         Ok(CaseMode::Ascii)
-    } else if turkic {
-        // `:turkic` + `:lithuanian` collapses to Turkic semantics.
-        Ok(CaseMode::Turkic)
-    } else if fold {
-        Ok(CaseMode::Fold)
+    } else if is(first, "fold") {
+        if op == CaseOp::Downcase {
+            Ok(CaseMode::Fold)
+        } else {
+            Err(MonorubyErr::argumenterr(
+                "option :fold only allowed for downcasing",
+            ))
+        }
     } else {
-        // Bare `:lithuanian` (or empty after locale filter) behaves
-        // like the default full Unicode mapping.
-        Ok(CaseMode::Full)
+        Err(MonorubyErr::argumenterr("invalid option"))
     }
 }
 
@@ -10094,22 +9957,12 @@ fn apply_case(s: &str, op: CaseOp, mode: CaseMode) -> String {
         CaseOp::Capitalize => {
             let mut chars = s.chars();
             if let Some(first) = chars.next() {
-                // CRuby's `capitalize` only uppercases the *first*
-                // character produced by the leading character's
-                // upcase mapping. When a single source character
-                // upcases to multiple (e.g. `ß` → `SS`), only the
-                // first stays uppercase and the rest fall through
-                // the lowercase pipeline (so `"ß".capitalize` is
-                // `"Ss"`, not `"SS"`).
-                let buf = upcase_char(first, mode);
-                let mut it = buf.iter();
-                if let Some(head) = it.next() {
-                    result.push(head);
-                    for trailing in it {
-                        for nc in downcase_char(trailing, mode).iter() {
-                            result.push(nc);
-                        }
-                    }
+                // The leading character takes its *titlecase* mapping
+                // (`ǆ` → `ǅ`, `ß` → `Ss`), which is its uppercase one
+                // for all but the characters of `TITLECASE`.
+                match titlecase_special(first, mode) {
+                    Some(title) => result.extend(title),
+                    None => result.extend(upcase_char(first, mode).iter()),
                 }
                 for c in chars {
                     for nc in downcase_char(c, mode).iter() {
@@ -10120,24 +9973,272 @@ fn apply_case(s: &str, op: CaseOp, mode: CaseMode) -> String {
         }
         CaseOp::Swapcase => {
             for c in s.chars() {
-                let is_upper = c.is_uppercase();
-                let is_lower = c.is_lowercase();
-                if is_upper {
-                    for nc in downcase_char(c, mode).iter() {
-                        result.push(nc);
-                    }
-                } else if is_lower {
-                    for nc in upcase_char(c, mode).iter() {
-                        result.push(nc);
-                    }
+                // A titlecase letter swaps to its halves' swapped cases
+                // (`ǅ` → `dŽ`); a character with an uppercase goes up;
+                // any other goes down.
+                if mode != CaseMode::Ascii
+                    && c >= '\u{01C5}'
+                    && let Ok(i) = SWAPCASE.binary_search_by_key(&c, |(from, _)| *from)
+                {
+                    result.extend(SWAPCASE[i].1);
+                    continue;
+                }
+                let up = upcase_char(c, mode);
+                if up.iter().ne(std::iter::once(c)) {
+                    result.extend(up.iter());
                 } else {
-                    result.push(c);
+                    result.extend(downcase_char(c, mode).iter());
                 }
             }
         }
     }
     result
 }
+
+/// The titlecase mapping of `c`, where it is not its uppercase one.
+fn titlecase_special(c: char, mode: CaseMode) -> Option<&'static [char]> {
+    if mode == CaseMode::Ascii || c < '\u{00DF}' {
+        return None;
+    }
+    let i = TITLECASE.binary_search_by_key(&c, |(from, _)| *from).ok()?;
+    Some(TITLECASE[i].1)
+}
+
+/// The characters whose *titlecase* mapping is not their uppercase one
+/// — what `String#capitalize` gives its first character.
+///
+/// Four kinds: the digraphs with a titlecase form of their own (`ǆ` →
+/// `ǅ`); the characters whose uppercase is spelled out, which are
+/// titlecased as a capital and small letters (`ß` → `Ss`, `ﬁ` → `Fi`);
+/// the Greek letters with an iota subscript (`ᾀ` → `ᾈ`); and Georgian,
+/// where Mkhedruli is its own titlecase and Mtavruli titlecases back to
+/// it. A character that already is titlecase (`ǅ`) is listed as itself.
+///
+/// Read off the pinned CRuby over the whole codepoint space; sorted by
+/// codepoint, for the binary search above. `titlecase_tables_match`
+/// runs every entry against the oracle.
+#[rustfmt::skip]
+const TITLECASE: &[(char, &[char])] = &[
+    ('\u{00DF}', &['\u{0053}', '\u{0073}']),
+    ('\u{01C4}', &['\u{01C5}']),
+    ('\u{01C5}', &['\u{01C5}']),
+    ('\u{01C6}', &['\u{01C5}']),
+    ('\u{01C7}', &['\u{01C8}']),
+    ('\u{01C8}', &['\u{01C8}']),
+    ('\u{01C9}', &['\u{01C8}']),
+    ('\u{01CA}', &['\u{01CB}']),
+    ('\u{01CB}', &['\u{01CB}']),
+    ('\u{01CC}', &['\u{01CB}']),
+    ('\u{01F1}', &['\u{01F2}']),
+    ('\u{01F2}', &['\u{01F2}']),
+    ('\u{01F3}', &['\u{01F2}']),
+    ('\u{0587}', &['\u{0535}', '\u{0582}']),
+    ('\u{10D0}', &['\u{10D0}']),
+    ('\u{10D1}', &['\u{10D1}']),
+    ('\u{10D2}', &['\u{10D2}']),
+    ('\u{10D3}', &['\u{10D3}']),
+    ('\u{10D4}', &['\u{10D4}']),
+    ('\u{10D5}', &['\u{10D5}']),
+    ('\u{10D6}', &['\u{10D6}']),
+    ('\u{10D7}', &['\u{10D7}']),
+    ('\u{10D8}', &['\u{10D8}']),
+    ('\u{10D9}', &['\u{10D9}']),
+    ('\u{10DA}', &['\u{10DA}']),
+    ('\u{10DB}', &['\u{10DB}']),
+    ('\u{10DC}', &['\u{10DC}']),
+    ('\u{10DD}', &['\u{10DD}']),
+    ('\u{10DE}', &['\u{10DE}']),
+    ('\u{10DF}', &['\u{10DF}']),
+    ('\u{10E0}', &['\u{10E0}']),
+    ('\u{10E1}', &['\u{10E1}']),
+    ('\u{10E2}', &['\u{10E2}']),
+    ('\u{10E3}', &['\u{10E3}']),
+    ('\u{10E4}', &['\u{10E4}']),
+    ('\u{10E5}', &['\u{10E5}']),
+    ('\u{10E6}', &['\u{10E6}']),
+    ('\u{10E7}', &['\u{10E7}']),
+    ('\u{10E8}', &['\u{10E8}']),
+    ('\u{10E9}', &['\u{10E9}']),
+    ('\u{10EA}', &['\u{10EA}']),
+    ('\u{10EB}', &['\u{10EB}']),
+    ('\u{10EC}', &['\u{10EC}']),
+    ('\u{10ED}', &['\u{10ED}']),
+    ('\u{10EE}', &['\u{10EE}']),
+    ('\u{10EF}', &['\u{10EF}']),
+    ('\u{10F0}', &['\u{10F0}']),
+    ('\u{10F1}', &['\u{10F1}']),
+    ('\u{10F2}', &['\u{10F2}']),
+    ('\u{10F3}', &['\u{10F3}']),
+    ('\u{10F4}', &['\u{10F4}']),
+    ('\u{10F5}', &['\u{10F5}']),
+    ('\u{10F6}', &['\u{10F6}']),
+    ('\u{10F7}', &['\u{10F7}']),
+    ('\u{10F8}', &['\u{10F8}']),
+    ('\u{10F9}', &['\u{10F9}']),
+    ('\u{10FA}', &['\u{10FA}']),
+    ('\u{10FD}', &['\u{10FD}']),
+    ('\u{10FE}', &['\u{10FE}']),
+    ('\u{10FF}', &['\u{10FF}']),
+    ('\u{1C90}', &['\u{10D0}']),
+    ('\u{1C91}', &['\u{10D1}']),
+    ('\u{1C92}', &['\u{10D2}']),
+    ('\u{1C93}', &['\u{10D3}']),
+    ('\u{1C94}', &['\u{10D4}']),
+    ('\u{1C95}', &['\u{10D5}']),
+    ('\u{1C96}', &['\u{10D6}']),
+    ('\u{1C97}', &['\u{10D7}']),
+    ('\u{1C98}', &['\u{10D8}']),
+    ('\u{1C99}', &['\u{10D9}']),
+    ('\u{1C9A}', &['\u{10DA}']),
+    ('\u{1C9B}', &['\u{10DB}']),
+    ('\u{1C9C}', &['\u{10DC}']),
+    ('\u{1C9D}', &['\u{10DD}']),
+    ('\u{1C9E}', &['\u{10DE}']),
+    ('\u{1C9F}', &['\u{10DF}']),
+    ('\u{1CA0}', &['\u{10E0}']),
+    ('\u{1CA1}', &['\u{10E1}']),
+    ('\u{1CA2}', &['\u{10E2}']),
+    ('\u{1CA3}', &['\u{10E3}']),
+    ('\u{1CA4}', &['\u{10E4}']),
+    ('\u{1CA5}', &['\u{10E5}']),
+    ('\u{1CA6}', &['\u{10E6}']),
+    ('\u{1CA7}', &['\u{10E7}']),
+    ('\u{1CA8}', &['\u{10E8}']),
+    ('\u{1CA9}', &['\u{10E9}']),
+    ('\u{1CAA}', &['\u{10EA}']),
+    ('\u{1CAB}', &['\u{10EB}']),
+    ('\u{1CAC}', &['\u{10EC}']),
+    ('\u{1CAD}', &['\u{10ED}']),
+    ('\u{1CAE}', &['\u{10EE}']),
+    ('\u{1CAF}', &['\u{10EF}']),
+    ('\u{1CB0}', &['\u{10F0}']),
+    ('\u{1CB1}', &['\u{10F1}']),
+    ('\u{1CB2}', &['\u{10F2}']),
+    ('\u{1CB3}', &['\u{10F3}']),
+    ('\u{1CB4}', &['\u{10F4}']),
+    ('\u{1CB5}', &['\u{10F5}']),
+    ('\u{1CB6}', &['\u{10F6}']),
+    ('\u{1CB7}', &['\u{10F7}']),
+    ('\u{1CB8}', &['\u{10F8}']),
+    ('\u{1CB9}', &['\u{10F9}']),
+    ('\u{1CBA}', &['\u{10FA}']),
+    ('\u{1CBD}', &['\u{10FD}']),
+    ('\u{1CBE}', &['\u{10FE}']),
+    ('\u{1CBF}', &['\u{10FF}']),
+    ('\u{1F80}', &['\u{1F88}']),
+    ('\u{1F81}', &['\u{1F89}']),
+    ('\u{1F82}', &['\u{1F8A}']),
+    ('\u{1F83}', &['\u{1F8B}']),
+    ('\u{1F84}', &['\u{1F8C}']),
+    ('\u{1F85}', &['\u{1F8D}']),
+    ('\u{1F86}', &['\u{1F8E}']),
+    ('\u{1F87}', &['\u{1F8F}']),
+    ('\u{1F88}', &['\u{1F88}']),
+    ('\u{1F89}', &['\u{1F89}']),
+    ('\u{1F8A}', &['\u{1F8A}']),
+    ('\u{1F8B}', &['\u{1F8B}']),
+    ('\u{1F8C}', &['\u{1F8C}']),
+    ('\u{1F8D}', &['\u{1F8D}']),
+    ('\u{1F8E}', &['\u{1F8E}']),
+    ('\u{1F8F}', &['\u{1F8F}']),
+    ('\u{1F90}', &['\u{1F98}']),
+    ('\u{1F91}', &['\u{1F99}']),
+    ('\u{1F92}', &['\u{1F9A}']),
+    ('\u{1F93}', &['\u{1F9B}']),
+    ('\u{1F94}', &['\u{1F9C}']),
+    ('\u{1F95}', &['\u{1F9D}']),
+    ('\u{1F96}', &['\u{1F9E}']),
+    ('\u{1F97}', &['\u{1F9F}']),
+    ('\u{1F98}', &['\u{1F98}']),
+    ('\u{1F99}', &['\u{1F99}']),
+    ('\u{1F9A}', &['\u{1F9A}']),
+    ('\u{1F9B}', &['\u{1F9B}']),
+    ('\u{1F9C}', &['\u{1F9C}']),
+    ('\u{1F9D}', &['\u{1F9D}']),
+    ('\u{1F9E}', &['\u{1F9E}']),
+    ('\u{1F9F}', &['\u{1F9F}']),
+    ('\u{1FA0}', &['\u{1FA8}']),
+    ('\u{1FA1}', &['\u{1FA9}']),
+    ('\u{1FA2}', &['\u{1FAA}']),
+    ('\u{1FA3}', &['\u{1FAB}']),
+    ('\u{1FA4}', &['\u{1FAC}']),
+    ('\u{1FA5}', &['\u{1FAD}']),
+    ('\u{1FA6}', &['\u{1FAE}']),
+    ('\u{1FA7}', &['\u{1FAF}']),
+    ('\u{1FA8}', &['\u{1FA8}']),
+    ('\u{1FA9}', &['\u{1FA9}']),
+    ('\u{1FAA}', &['\u{1FAA}']),
+    ('\u{1FAB}', &['\u{1FAB}']),
+    ('\u{1FAC}', &['\u{1FAC}']),
+    ('\u{1FAD}', &['\u{1FAD}']),
+    ('\u{1FAE}', &['\u{1FAE}']),
+    ('\u{1FAF}', &['\u{1FAF}']),
+    ('\u{1FB2}', &['\u{1FBA}', '\u{0345}']),
+    ('\u{1FB3}', &['\u{1FBC}']),
+    ('\u{1FB4}', &['\u{0386}', '\u{0345}']),
+    ('\u{1FB7}', &['\u{0391}', '\u{0342}', '\u{0345}']),
+    ('\u{1FBC}', &['\u{1FBC}']),
+    ('\u{1FC2}', &['\u{1FCA}', '\u{0345}']),
+    ('\u{1FC3}', &['\u{1FCC}']),
+    ('\u{1FC4}', &['\u{0389}', '\u{0345}']),
+    ('\u{1FC7}', &['\u{0397}', '\u{0342}', '\u{0345}']),
+    ('\u{1FCC}', &['\u{1FCC}']),
+    ('\u{1FF2}', &['\u{1FFA}', '\u{0345}']),
+    ('\u{1FF3}', &['\u{1FFC}']),
+    ('\u{1FF4}', &['\u{038F}', '\u{0345}']),
+    ('\u{1FF7}', &['\u{03A9}', '\u{0342}', '\u{0345}']),
+    ('\u{1FFC}', &['\u{1FFC}']),
+    ('\u{FB00}', &['\u{0046}', '\u{0066}']),
+    ('\u{FB01}', &['\u{0046}', '\u{0069}']),
+    ('\u{FB02}', &['\u{0046}', '\u{006C}']),
+    ('\u{FB03}', &['\u{0046}', '\u{0066}', '\u{0069}']),
+    ('\u{FB04}', &['\u{0046}', '\u{0066}', '\u{006C}']),
+    ('\u{FB05}', &['\u{0053}', '\u{0074}']),
+    ('\u{FB06}', &['\u{0053}', '\u{0074}']),
+    ('\u{FB13}', &['\u{0544}', '\u{0576}']),
+    ('\u{FB14}', &['\u{0544}', '\u{0565}']),
+    ('\u{FB15}', &['\u{0544}', '\u{056B}']),
+    ('\u{FB16}', &['\u{054E}', '\u{0576}']),
+    ('\u{FB17}', &['\u{0544}', '\u{056D}']),
+];
+
+/// What `String#swapcase` makes of the titlecase letters: the lowercase
+/// of the first half and the uppercase of the second. Everything else
+/// swaps to its uppercase if it has one and to its lowercase if not.
+#[rustfmt::skip]
+const SWAPCASE: &[(char, &[char])] = &[
+    ('\u{01C5}', &['\u{0064}', '\u{017D}']),
+    ('\u{01C8}', &['\u{006C}', '\u{004A}']),
+    ('\u{01CB}', &['\u{006E}', '\u{004A}']),
+    ('\u{01F2}', &['\u{0064}', '\u{005A}']),
+    ('\u{1F88}', &['\u{1F00}', '\u{0399}']),
+    ('\u{1F89}', &['\u{1F01}', '\u{0399}']),
+    ('\u{1F8A}', &['\u{1F02}', '\u{0399}']),
+    ('\u{1F8B}', &['\u{1F03}', '\u{0399}']),
+    ('\u{1F8C}', &['\u{1F04}', '\u{0399}']),
+    ('\u{1F8D}', &['\u{1F05}', '\u{0399}']),
+    ('\u{1F8E}', &['\u{1F06}', '\u{0399}']),
+    ('\u{1F8F}', &['\u{1F07}', '\u{0399}']),
+    ('\u{1F98}', &['\u{1F20}', '\u{0399}']),
+    ('\u{1F99}', &['\u{1F21}', '\u{0399}']),
+    ('\u{1F9A}', &['\u{1F22}', '\u{0399}']),
+    ('\u{1F9B}', &['\u{1F23}', '\u{0399}']),
+    ('\u{1F9C}', &['\u{1F24}', '\u{0399}']),
+    ('\u{1F9D}', &['\u{1F25}', '\u{0399}']),
+    ('\u{1F9E}', &['\u{1F26}', '\u{0399}']),
+    ('\u{1F9F}', &['\u{1F27}', '\u{0399}']),
+    ('\u{1FA8}', &['\u{1F60}', '\u{0399}']),
+    ('\u{1FA9}', &['\u{1F61}', '\u{0399}']),
+    ('\u{1FAA}', &['\u{1F62}', '\u{0399}']),
+    ('\u{1FAB}', &['\u{1F63}', '\u{0399}']),
+    ('\u{1FAC}', &['\u{1F64}', '\u{0399}']),
+    ('\u{1FAD}', &['\u{1F65}', '\u{0399}']),
+    ('\u{1FAE}', &['\u{1F66}', '\u{0399}']),
+    ('\u{1FAF}', &['\u{1F67}', '\u{0399}']),
+    ('\u{1FBC}', &['\u{03B1}', '\u{0399}']),
+    ('\u{1FCC}', &['\u{03B7}', '\u{0399}']),
+    ('\u{1FFC}', &['\u{03C9}', '\u{0399}']),
+];
 
 /// Tiny inline buffer for a per-character case mapping. Most
 /// transforms produce 1 char, a few (`ß` → `ss`, German full upcase
@@ -15532,6 +15633,39 @@ mod tests {
         run_test_error(r#""i".upcase(:lithuanian, :ascii)"#);
         run_test_error(r#""abc".capitalize(:fold)"#);
         run_test_error(r#""abc".swapcase(:fold)"#);
+    }
+
+    /// The two tables behind `capitalize` and `swapcase` (#1955), rebuilt
+    /// from the methods themselves and compared with CRuby's: every
+    /// character whose titlecase is not its uppercase, and every one
+    /// that swaps to something else than its upper- or its lowercase.
+    /// All of them live in the BMP (the whole codepoint space was swept
+    /// when the tables were generated).
+    #[test]
+    fn titlecase_tables_match() {
+        assert!(super::TITLECASE.windows(2).all(|w| w[0].0 < w[1].0));
+        assert!(super::SWAPCASE.windows(2).all(|w| w[0].0 < w[1].0));
+        // A collection per safepoint makes the full scan an hour's work.
+        let last = if cfg!(feature = "gc-stress") {
+            "0x24F"
+        } else {
+            "0xFFFF"
+        };
+        run_test_once(&format!(
+            r#"
+            title = []; swap = []
+            (0x80..{last}).each do |cp|
+              next if cp >= 0xD800 && cp <= 0xDFFF
+              s = [cp].pack("U")
+              up = s.upcase
+              cap = s.capitalize
+              title << [cp, cap.unpack("U*")] if cap != up
+              sw = s.swapcase
+              swap << [cp, sw.unpack("U*")] if sw != (up != s ? up : s.downcase)
+            end
+            [title.size, swap.size, title, swap]
+            "#
+        ));
     }
 
     #[test]

@@ -1379,7 +1379,7 @@ fn regexp_match(
     // zero-copy MatchData snapshot, which also propagates the subject's
     // encoding to $&/$`/$'/$1..$N) when it is a UTF-8-valid String;
     // Symbols and non-UTF-8 subjects fall back to the owned conversion.
-    let arg0 = lfp.arg(0);
+    let arg0 = symbol_as_string(lfp.arg(0));
     check_subject_match_encoding(&globals.store, &regex, arg0)?;
     warn_binary_regexp_match(vm, globals, &regex, arg0);
     // A subject in a non-UTF-8 encoding Onigmo has a native codec for
@@ -1406,7 +1406,6 @@ fn regexp_match(
         };
         return Ok(res);
     }
-    let arg0 = symbol_as_string(arg0);
     let given_owned;
     let given: &str = match arg0.is_rstring() {
         Some(rs) if std::str::from_utf8(rs.as_bytes()).is_ok() => {
@@ -1419,8 +1418,11 @@ fn regexp_match(
             &given_owned
         }
     };
+    // The *character* index of the match start, as for the native
+    // subjects above: a byte offset is one only while everything before
+    // it is ASCII (`/b/ =~ "aéb"` is 2).
     let res = match regex.find_one(vm, given, MatchOrigin::Regexp(self_))? {
-        Some(mat) => Value::integer(mat.start as i64),
+        Some(mat) => Value::integer(given[..mat.start].chars().count() as i64),
         None => Value::nil(),
     };
     Ok(res)
@@ -1445,6 +1447,23 @@ pub(super) fn char_index_of_byte(s: &crate::value::rvalue::RStringInner, byte: u
 /// own encoding; clamps to the end for a position past it.
 pub(super) fn byte_offset_of_char(s: &crate::value::rvalue::RStringInner, cp: usize) -> usize {
     s.iter_char_bytes().take(cp).map(|c| c.len()).sum()
+}
+
+/// The character `Regexp#match(str, pos)` starts at in a string of `len`
+/// characters (`reg_match_pos`): a negative `pos` counts from the end,
+/// and is no match when it still falls before the start; one past the
+/// end is clamped to the end (`rb_str_offset`), where a pattern that can
+/// match the empty string still does — `/x?/.match("abc", 9)` is `""`.
+/// `Regexp#match?` does not clamp ([`conv_index`]).
+fn match_start_char(pos: i64, len: usize) -> Option<usize> {
+    if pos >= 0 {
+        Some((pos as u64).min(len as u64) as usize)
+    } else {
+        match len as i64 + pos {
+            n if n < 0 => None,
+            n => Some(n as usize),
+        }
+    }
 }
 
 ///
@@ -1517,7 +1536,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if !regex.initialized() {
         return Err(MonorubyErr::typeerr("uninitialized Regexp"));
     }
-    let arg0 = lfp.arg(0);
+    let arg0 = symbol_as_string(lfp.arg(0));
     if arg0.is_nil() {
         return Ok(Value::bool(false));
     }
@@ -1588,21 +1607,16 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// zero-copy path cannot borrow: a Symbol's name, or a String that is not
 /// valid UTF-8, read lossily as before. Never interns — the subject is
 /// arbitrary data, and a symbol is never collected.
-/// `rb_reg_match`'s reading of a Symbol subject: the String it names,
-/// US-ASCII when 7-bit and UTF-8 otherwise — which is what the
-/// MatchData's strings then carry. Anything else is handed back as it
-/// is.
+/// `rb_reg_match`'s reading of a Symbol subject (`reg_operand`): the
+/// String it names, in the symbol's own encoding — US-ASCII when 7-bit,
+/// otherwise UTF-8 or whatever the String it was interned from carried
+/// — which is what the MatchData's strings then carry. Anything else is
+/// handed back as it is.
 fn symbol_as_string(subject: Value) -> Value {
-    let Some(sym) = subject.try_symbol() else {
-        return subject;
-    };
-    let name = sym.get_name();
-    let enc = if name.is_ascii() {
-        crate::value::Encoding::UsAscii
-    } else {
-        crate::value::Encoding::UTF8
-    };
-    Value::string_from_inner(RStringInner::from_encoding(name.as_bytes(), enc))
+    match subject.try_symbol() {
+        Some(sym) => Value::string_from_inner(super::symbol::symbol_string_inner(sym)),
+        None => subject,
+    }
 }
 
 fn subject_to_string(store: &Store, subject: Value) -> Result<String> {
@@ -1629,7 +1643,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if !regex.initialized() {
         return Err(MonorubyErr::typeerr("uninitialized Regexp"));
     }
-    let arg0 = lfp.arg(0);
+    let arg0 = symbol_as_string(lfp.arg(0));
     // CRuby's `Regexp#match(nil)` clears `$~` and returns nil.
     if arg0.is_nil() {
         vm.clear_capture_special_variables();
@@ -1660,7 +1674,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         && let Some(native_enc) = RegexpInner::onigmo_encoding_for(rs.encoding())
     {
         let byte_pos = if let Some(pos) = lfp.try_arg(1) {
-            match conv_index(pos.coerce_to_int_i64(vm, globals)?, rs.char_length()) {
+            match match_start_char(pos.coerce_to_int_i64(vm, globals)?, rs.char_length()) {
                 // Convert char index -> byte offset by walking char
                 // boundaries under the native encoding.
                 Some(cp) => rs.iter_char_bytes().take(cp).map(|c| c.len()).sum(),
@@ -1695,9 +1709,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
     // Borrow the subject's bytes directly (and stash the Value for
     // the zero-copy MatchData snapshot) when it is a UTF-8 String;
-    // Symbols and non-UTF-8 subjects fall back to the owned
-    // conversion as before.
-    let arg0 = symbol_as_string(arg0);
+    // non-UTF-8 subjects fall back to the owned conversion as before.
     let heystack_owned;
     let heystack: &str = match arg0.is_rstring() {
         Some(rs) if std::str::from_utf8(rs.as_bytes()).is_ok() => {
@@ -1711,7 +1723,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
     };
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
-        match conv_index(
+        match match_start_char(
             pos.coerce_to_int_i64(vm, globals)?,
             heystack.chars().count(),
         ) {
@@ -1726,7 +1738,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
     let byte_pos = match heystack.char_indices().nth(char_pos) {
         Some((pos, _)) => pos,
-        None => 0, //return Ok(Value::bool(false)),
+        None => heystack.len(),
     };
     let md = if let Some(captures) =
         regex.captures_from_pos(heystack, byte_pos, vm, MatchOrigin::Regexp(self_))?
@@ -2002,7 +2014,7 @@ fn regexp_tilde(
         None => return Ok(Value::nil()),
     };
     let res = match regex.find_one(vm, &s, MatchOrigin::Regexp(self_))? {
-        Some(mat) => Value::integer(mat.start as i64),
+        Some(mat) => Value::integer(s[..mat.start].chars().count() as i64),
         None => Value::nil(),
     };
     Ok(res)
