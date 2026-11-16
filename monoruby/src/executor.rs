@@ -485,10 +485,6 @@ pub struct Executor {
     /// the error may be the only reference to its exception object.
     ///
     held_errors: Vec<MonorubyErr>,
-    /// A redefined `Symbol#to_s` is running to render the name in a
-    /// NameError's message (`Self::name_error_through_to_s`): an error
-    /// raised and rescued inside it keeps the plain name.
-    naming_error: bool,
     /// The `Fiber` object whose body is currently executing on this
     /// `Executor`, or `None` for a thread's root context (which falls back
     /// to the per-thread root Fiber object). Exposed as `Fiber.current` so
@@ -562,7 +558,6 @@ impl std::default::Default for Executor {
             deferred_unwind: vec![],
             deferred_top_lfp: None,
             held_errors: vec![],
-            naming_error: false,
             current_fiber: None,
             resuming_fiber: None,
             return_to: None,
@@ -2452,72 +2447,7 @@ impl Executor {
         self.method_missing_style = MethodMissingStyle::Plain;
     }
 
-    /// `name` as a redefined `Symbol#to_s` renders it, for the message of
-    /// a NameError / NoMethodError; `None` while that method is the
-    /// builtin one, which is one memo read to find out.
-    ///
-    /// CRuby builds such a message from a format and the name *as a
-    /// Symbol* (`name_err_mesg_to_str`), so the name goes through
-    /// `Symbol#to_s`: under `class Symbol; def to_s = "SYM"; end`,
-    /// `nil.foo` reports `undefined method 'SYM' for nil` (#1929).
-    ///
-    /// The caller keeps whatever the error holds alive.
-    pub(crate) fn name_through_to_s(
-        &mut self,
-        globals: &mut Globals,
-        name: IdentId,
-    ) -> Option<String> {
-        if self.naming_error
-            || globals
-                .store
-                .to_s_is_builtin(SYMBOL_CLASS, Globals::class_version())
-        {
-            return None;
-        }
-        self.naming_error = true;
-        let shown = self.obj_as_string(globals, Value::symbol(name));
-        self.naming_error = false;
-        // CRuby renders the name each time the message is read, and a
-        // `to_s` that raises does so out of `Exception#message`. Here
-        // the name is rendered once, when the error is raised, and a
-        // `to_s` that raises leaves it as it is.
-        let shown = shown.ok()?;
-        let shown = shown.is_rstring_inner()?;
-        Some(String::from_utf8_lossy(shown.as_bytes()).into_owned())
-    }
-
-    /// [`Self::name_through_to_s`] for the pending error. Its message was
-    /// formatted when the error was created, with no interpreter at
-    /// hand, so the quoted name in it is replaced now that the exception
-    /// object is being made.
-    fn name_error_through_to_s(&mut self, globals: &mut Globals) {
-        let Some(err) = &self.exception else { return };
-        let (MonorubyErrKind::NotMethod {
-            name: Some(name), ..
-        }
-        | MonorubyErrKind::Name(Some(name), _)) = err.kind()
-        else {
-            return;
-        };
-        let name = *name;
-        if err.original.is_some() || err.raw_message.is_some() {
-            return;
-        }
-        let Some(shown) = self.with_pending_error_held(|vm| vm.name_through_to_s(globals, name))
-        else {
-            return;
-        };
-        let quoted = format!("'{name}'");
-        if let Some(err) = &mut self.exception
-            && let Some(at) = err.message.find(&quoted)
-        {
-            err.message
-                .replace_range(at + 1..at + quoted.len() - 1, &shown);
-        }
-    }
-
     pub(crate) fn take_ex_obj(&mut self, globals: &mut Globals) -> Value {
-        self.name_error_through_to_s(globals);
         let mut err = self.take_error();
         let explicit_cause = err.explicit_cause;
         // Re-raise of an existing exception object (`raise exc`): return
@@ -2596,14 +2526,16 @@ impl Executor {
                 v
             }
             MonorubyErrKind::Name(name, receiver) => {
-                let name = *name;
+                // `#name` is the Symbol, or what the error carries in
+                // its place (the String `undef_method` reports).
+                let name = match err.payload {
+                    Some((name, NAME_PAYLOAD)) => Some(name),
+                    _ => name.map(Value::symbol),
+                };
                 let receiver = *receiver;
                 let v = Value::new_exception(err);
                 if let Some(name) = name {
-                    globals
-                        .store
-                        .set_ivar(v, IdentId::_NAME, Value::symbol(name))
-                        .unwrap();
+                    globals.store.set_ivar(v, IdentId::_NAME, name).unwrap();
                 }
                 if let Some(receiver) = receiver {
                     globals
@@ -3130,14 +3062,14 @@ impl Executor {
                     Ok(v) => Ok((v, base)),
                     Err(_) => {
                         let receiver = globals.store[defining].get_module().get();
-                        Err(MonorubyErr::nameerr_with_name_receiver(
-                            format!(
-                                "private constant {}::{} referenced",
-                                defining.get_name(&globals.store),
-                                name
+                        Err(MonorubyErr::nameerr_showing(
+                            format_args!(
+                                "private constant {}::",
+                                defining.get_name(&globals.store)
                             ),
                             name,
-                            receiver,
+                            format_args!(" referenced"),
+                            Some(receiver),
                         ))
                     }
                 };
@@ -3660,6 +3592,7 @@ impl Executor {
         func_id: FuncId,
         visibility: Visibility,
     ) -> Result<()> {
+        globals.store.class_modify_check(class_id)?;
         globals.add_method(class_id, name, func_id, visibility);
         // Evict stale on-stack JIT frames *after* the store mutation and
         // *before* the `method_added` hook: if this definition redefined a
@@ -3687,6 +3620,7 @@ impl Executor {
         visibility: Visibility,
         original_name: IdentId,
     ) -> Result<()> {
+        globals.store.class_modify_check(class_id)?;
         globals.add_method_with_original(class_id, name, func_id, visibility, original_name, false);
         // BOP-redefinition eviction — see `add_method`.
         Codegen::check_bop_redefine(self.cfp());
@@ -3701,6 +3635,7 @@ impl Executor {
         new_name: IdentId,
         old_name: IdentId,
     ) -> Result<()> {
+        globals.store.class_modify_check(class_id)?;
         globals.alias_method_for_class(class_id, new_name, old_name)?;
         // BOP-redefinition eviction (`alias_method :+, :other`) — see `add_method`.
         Codegen::check_bop_redefine(self.cfp());
@@ -3715,6 +3650,7 @@ impl Executor {
         method_name: IdentId,
         visi: Visibility,
     ) -> Result<IdentId> {
+        globals.store.class_modify_check(class_id)?;
         let ivar_name = self.attr_ivar_name(&globals.store, method_name);
         let (name, func_id) = globals.define_attr_reader_of(class_id, method_name, ivar_name, visi);
         self.record_attr_def_site(globals, func_id);
@@ -3730,6 +3666,7 @@ impl Executor {
         method_name: IdentId,
         visi: Visibility,
     ) -> Result<IdentId> {
+        globals.store.class_modify_check(class_id)?;
         let ivar_name = self.attr_ivar_name(&globals.store, method_name);
         let (name, func_id) = globals.define_attr_writer_of(class_id, method_name, ivar_name, visi);
         self.record_attr_def_site(globals, func_id);
@@ -3929,13 +3866,11 @@ impl Executor {
             globals.store[iseq].nested_definee = Some(class_id);
         }
         // Defining a method modifies the target class/module; a frozen one
-        // raises FrozenError. For a singleton class (`class << obj`), the
-        // attached object's frozen state is what matters.
-        let target = globals.store[class_id].get_module();
-        target.get().ensure_not_frozen(&globals.store)?;
-        if let Some(attached) = target.is_singleton() {
-            attached.ensure_not_frozen(&globals.store)?;
-        }
+        // raises FrozenError, about the attached object for a singleton
+        // class (`Store::class_modify_check`, also run by `add_method`).
+        // An object frozen after its singleton class was made froze that
+        // class with it (`Object#freeze`), so one check covers both.
+        globals.store.class_modify_check(class_id)?;
         if cref.module_function {
             self.add_method(globals, class_id, name, func, Visibility::Private)?;
             self.add_singleton_method(globals, class_id, name, func, cref.visibility)?;
@@ -6096,14 +6031,11 @@ pub(crate) fn check_constant_visibility(
         // CRuby's `NameError` for a private constant exposes the *defining*
         // class as `#receiver` and the constant symbol as `#name`.
         let receiver = globals.store[class_id].get_module().get();
-        return Err(MonorubyErr::nameerr_with_name_receiver(
-            format!(
-                "private constant {}::{} referenced",
-                class_id.get_name(&globals.store),
-                name
-            ),
+        return Err(MonorubyErr::nameerr_showing(
+            format_args!("private constant {}::", class_id.get_name(&globals.store)),
             name,
-            receiver,
+            format_args!(" referenced"),
+            Some(receiver),
         ));
     }
     Ok(())

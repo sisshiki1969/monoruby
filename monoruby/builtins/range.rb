@@ -291,27 +291,29 @@ class Range
     super
   end
 
-  # The n argument of min(n)/max(n): #to_int conversion + validation.
-  # With a block CRuby hands over to Enumerable#min / #max, whose
-  # message for a negative count is its own.
-  def __minmax_n(n, by_enumerable = false)
+  # The n argument of min(n)/max(n) without a block: CRuby makes the
+  # result with `rb_ary_new2(NUM2LONG(n))`. (With a block it hands over
+  # to Enumerable#min / #max, whose checks are `__nmin_n`.)
+  def __minmax_n(n)
     n = __num2long(n)
-    if n < 0
-      raise ArgumentError, by_enumerable ? "negative size (#{n})" : "negative array size (or size too big)"
-    end
-    n
+    raise ArgumentError, "negative array size (or size too big)" if n < 0
+    __ary_capa(n)
   end
 
-  def min(n = nil, &block)
+  # Without a block, a count that is *given* is converted even when it
+  # is nil (`(1..3).min(nil)` is a TypeError: CRuby's `range_min` hands
+  # any argument to `range_first`); with one, Enumerable's `min` takes
+  # nil for "no count".
+  def min(n = (no_n = true; nil), &block)
     raise RangeError, "cannot get the minimum of beginless range" if self.begin.nil?
     if block
       if self.end.nil?
         raise RangeError, "cannot get the minimum of endless range with custom comparison method"
       end
       return __builtin_min(&block) if n.nil?
-      return to_a.sort(&block).first(__minmax_n(n, true))
+      return to_a.sort(&block).first(__nmin_n(n))
     end
-    return __builtin_min if n.nil?
+    return __builtin_min if no_n
     n = __minmax_n(n)
     # min(n) == the first n elements in iteration order: works lazily for
     # endless Integer ranges, yields [] for empty/backward ones, and
@@ -325,7 +327,7 @@ class Range
     res
   end
 
-  def max(n = nil, &block)
+  def max(n = (no_n = true; nil), &block)
     e = self.end
     raise RangeError, "cannot get the maximum of endless range" if e.nil?
     if block
@@ -333,7 +335,7 @@ class Range
         raise RangeError, "cannot get the maximum of beginless range with custom comparison method"
       end
       return __builtin_max(&block) if n.nil?
-      return to_a.sort(&block).last(__minmax_n(n, true)).reverse
+      return to_a.sort(&block).last(__nmin_n(n)).reverse
     end
     if n.nil?
       if exclude_end? && !e.is_a?(Numeric)
@@ -349,7 +351,7 @@ class Range
         each { |x| m = x }
         return m
       end
-      return __builtin_max
+      return __builtin_max if no_n
     end
     n = __minmax_n(n)
     if e.is_a?(Integer)

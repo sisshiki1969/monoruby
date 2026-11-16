@@ -227,13 +227,11 @@ fn local_variable_get(
         }
         return Ok(v.unwrap_or_default());
     }
-    Err(MonorubyErr::nameerr_with_name(
-        format!(
-            "local variable '{}' is not defined for {}",
-            name,
-            self_val.to_s(&globals.store)
-        ),
+    Err(MonorubyErr::nameerr_showing(
+        format_args!("local variable '"),
         name,
+        format_args!("' is not defined for {}", self_val.to_s(&globals.store)),
+        Some(self_val),
     ))
 }
 
@@ -323,9 +321,11 @@ fn implicit_parameter_defined(
     let arg = lfp.arg(0);
     let name = arg_to_implicit_name(arg, vm, globals)?;
     if !is_implicit_param_name(name) {
-        return Err(MonorubyErr::nameerr_with_name(
-            format!("'{name}' is not an implicit parameter"),
+        return Err(MonorubyErr::nameerr_showing(
+            format_args!("'"),
             name,
+            format_args!("' is not an implicit parameter"),
+            Some(lfp.self_val()),
         ));
     }
     let self_val = lfp.self_val();
@@ -349,9 +349,11 @@ fn implicit_parameter_get(
     let arg = lfp.arg(0);
     let name = arg_to_implicit_name(arg, vm, globals)?;
     if !is_implicit_param_name(name) {
-        return Err(MonorubyErr::nameerr_with_name(
-            format!("'{name}' is not an implicit parameter"),
+        return Err(MonorubyErr::nameerr_showing(
+            format_args!("'"),
             name,
+            format_args!("' is not an implicit parameter"),
+            Some(lfp.self_val()),
         ));
     }
     let self_val = lfp.self_val();
@@ -365,13 +367,11 @@ fn implicit_parameter_get(
             return Ok(host.register(slot).unwrap_or_default());
         }
     }
-    Err(MonorubyErr::nameerr_with_name(
-        format!(
-            "implicit parameter '{}' is not defined for {}",
-            name,
-            self_val.to_s(&globals.store)
-        ),
+    Err(MonorubyErr::nameerr_showing(
+        format_args!("implicit parameter '"),
         name,
+        format_args!("' is not defined for {}", self_val.to_s(&globals.store)),
+        Some(self_val),
     ))
 }
 
@@ -495,9 +495,11 @@ fn numbered_param_error(name: IdentId) -> Option<MonorubyErr> {
     let s = name.get_name();
     let b = s.as_bytes();
     if b.len() == 2 && b[0] == b'_' && (b'1'..=b'9').contains(&b[1]) {
-        Some(MonorubyErr::nameerr_with_name(
-            format!("numbered parameter '{s}' is not a local variable"),
+        Some(MonorubyErr::nameerr_showing(
+            format_args!("numbered parameter '"),
             name,
+            format_args!("' is not a local variable"),
+            None,
         ))
     } else {
         None

@@ -55,40 +55,42 @@ class Struct
   end
 
   # Index access: by Integer, Symbol, or String. Negative indices count
-  # from the end (matching CRuby's `rb_struct_aref`).
+  # from the end. Anything that is not a Symbol or a String is read as
+  # an integer index with NUM2LONG, as CRuby's `rb_struct_pos` reads it:
+  # a Float truncates, `#to_int` is called, and a `#to_int` that answers
+  # a non-Integer is "can't convert X to Integer (X#to_int gives Y)".
   def [](key)
-    if key.is_a?(Integer)
-      i = key
-      i += size if i < 0
-      raise IndexError, "offset #{key} too small for struct (size:#{size})" if i < 0
-      raise IndexError, "offset #{key} too large for struct (size:#{size})" if i >= size
-      __slot_get(i)
-    elsif key.is_a?(Symbol) || key.is_a?(String)
-      sym = key.to_sym
-      i = __members.index(sym)
-      raise NameError, "no member '#{key}' in struct" unless i
-      __slot_get(i)
-    else
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(key)} into Integer"
+    unless key.is_a?(Integer)
+      if key.is_a?(Symbol) || key.is_a?(String)
+        i = __members.index(key.to_sym)
+        raise NameError.__showing("no member '", key, "' in struct", self) unless i
+        return __slot_get(i)
+      end
     end
+    key = __num2long(key)
+    i = key
+    i += size if i < 0
+    raise IndexError, "offset #{key} too small for struct(size:#{size})" if i < 0
+    raise IndexError, "offset #{key} too large for struct(size:#{size})" if i >= size
+    __slot_get(i)
   end
 
   def []=(key, value)
-    raise FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self) if frozen?
-    if key.is_a?(Integer)
-      i = key
-      i += size if i < 0
-      raise IndexError, "offset #{key} too small for struct (size:#{size})" if i < 0
-      raise IndexError, "offset #{key} too large for struct (size:#{size})" if i >= size
-      __slot_set(i, value)
-    elsif key.is_a?(Symbol) || key.is_a?(String)
-      sym = key.to_sym
-      i = __members.index(sym)
-      raise NameError, "no member '#{key}' in struct" unless i
-      __slot_set(i, value)
-    else
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(key)} into Integer"
+    unless key.is_a?(Integer)
+      if key.is_a?(Symbol) || key.is_a?(String)
+        i = __members.index(key.to_sym)
+        raise NameError.__showing("no member '", key, "' in struct", self) unless i
+        raise FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self) if frozen?
+        return __slot_set(i, value)
+      end
     end
+    key = __num2long(key)
+    i = key
+    i += size if i < 0
+    raise IndexError, "offset #{key} too small for struct(size:#{size})" if i < 0
+    raise IndexError, "offset #{key} too large for struct(size:#{size})" if i >= size
+    raise FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self) if frozen?
+    __slot_set(i, value)
   end
 
   def values_at(*indices)
@@ -107,15 +109,7 @@ class Struct
           result << (i < size ? __slot_get(i) : nil)
         end
       else
-        i = if idx.is_a?(Integer)
-              idx
-            elsif idx.respond_to?(:to_int)
-              c = idx.to_int
-              raise TypeError, "no implicit conversion of #{__builtin_class_name(idx)} into Integer" unless c.is_a?(Integer)
-              c
-            else
-              raise TypeError, "no implicit conversion of #{__builtin_class_name(idx)} into Integer"
-            end
+        i = __num2long(idx)
         adj = i
         adj += size if adj < 0
         if adj < 0
@@ -130,10 +124,9 @@ class Struct
   end
 
   def dig(key, *rest)
-    raise ArgumentError, "wrong number of arguments (given 0, expected 1+)" if key.nil? && rest.empty?
     val =
       if key.is_a?(Integer)
-        idx = key
+        idx = __num2long(key)
         idx += size if idx < 0
         if idx < 0 || idx >= size
           nil
@@ -144,8 +137,11 @@ class Struct
         idx = __members.index(key.to_sym)
         idx ? __slot_get(idx) : nil
       else
-        # Mirror Struct#[] coercion path; unsupported types raise TypeError.
-        self[key]
+        # `rb_struct_lookup`: an index is read with NUM2LONG, and one
+        # out of range is nil.
+        idx = __num2long(key)
+        idx += size if idx < 0
+        idx < 0 || idx >= size ? nil : __slot_get(idx)
       end
     return val if rest.empty? || val.nil?
     raise TypeError, "#{val.class} does not have #dig method" unless val.respond_to?(:dig)

@@ -727,6 +727,22 @@ impl Store {
     /// Give *units* a class-version miss on their next guard: their version
     /// word and guard immediates are set to a value the JIT word can never
     /// hold. What the miss then does is up to the unit's salvage record.
+    /// CRuby's `rb_class_modify_check`: the class *class_id* is about to
+    /// gain, lose or re-scope a method (or an ancestor). A frozen one
+    /// raises FrozenError — and for a singleton class the error is about
+    /// the object the class is attached to, which is what the program
+    /// froze: `o.freeze; class << o; def x; end; end` is "can't modify
+    /// frozen Object: #<Object:0x…>", not "... frozen Class:
+    /// #<Class:#<Object:0x…>>".
+    pub(crate) fn class_modify_check(&self, class_id: ClassId) -> Result<()> {
+        let module = self[class_id].get_module();
+        if !module.as_val().is_frozen() {
+            return Ok(());
+        }
+        let named = module.is_singleton().unwrap_or(module.as_val());
+        Err(MonorubyErr::cant_modify_frozen(self, named))
+    }
+
     ///
     /// Get the singleton class of *obj*, creating it if needed — and when
     /// that is the first singleton class any instance of the object's class
@@ -955,28 +971,23 @@ impl Store {
             return *v;
         }
         let mut v = Value::string_from_source_bytes(bytes, enc);
-        v.set_frozen();
+        v.set_fstring();
         pool.insert(bytes.into(), v);
         v
     }
 
     ///
-    /// *obj* is the pooled String of its content — a frozen string literal,
-    /// `-str`, a `"lit".freeze` (CRuby's `RSTRING_FSTR`). Such a String is
-    /// shared by everything that names the same content, so it cannot be
-    /// given a singleton class: `rb_singleton_class` raises TypeError for
-    /// it, where any other frozen String gets a (frozen) one.
+    /// *obj* is an fstring (CRuby's `RSTRING_FSTR`): the pooled String of
+    /// its content — a frozen string literal, `-str`, a `"lit".freeze` —
+    /// or one of the Strings made as such without going through the pool
+    /// (`Symbol#name`, `Module#name`, a Hash's copy of a String key). Such
+    /// a String is shared by everything that names the same content, so
+    /// it cannot be given a singleton class: `rb_singleton_class` raises
+    /// TypeError for it, where any other frozen String gets a (frozen)
+    /// one. The answer is a header bit (`Header::is_fstr`).
     ///
     pub(crate) fn is_fstring(&self, obj: Value) -> bool {
-        let Some(inner) = obj.is_rstring_inner() else {
-            return false;
-        };
-        obj.is_frozen()
-            && self
-                .frozen_str_pool
-                .get(&inner.encoding())
-                .and_then(|pool| pool.get(inner.as_bytes()))
-                .is_some_and(|pooled| pooled.id() == obj.id())
+        obj.try_rvalue().is_some_and(|rv| rv.is_fstr())
     }
 
     ///
@@ -987,7 +998,7 @@ impl Store {
     ///
     pub(crate) fn intern_frozen_string(
         &mut self,
-        s: Value,
+        mut s: Value,
         bytes: &[u8],
         enc: crate::value::Encoding,
     ) -> Value {
@@ -996,6 +1007,7 @@ impl Store {
         if let Some(v) = pool.get(bytes) {
             return *v;
         }
+        s.set_fstring();
         pool.insert(bytes.into(), s);
         s
     }
@@ -1408,8 +1420,26 @@ impl Store {
                     };
                     format!("#<{kind}:0x{:016x}>", class_obj.as_val().id())
                 }
-                Some(base) => format!("#<Class:{}>", base.to_s(self)),
+                Some(base) => format!("#<Class:{}>", self.attached_object_name(base)),
             },
+        }
+    }
+
+    /// How a singleton class names the object it is attached to
+    /// (`rb_mod_to_s`): a class or module by its own name, anything else
+    /// as `rb_any_to_s` renders it — `#<String:0x…>`, never the object's
+    /// `to_s` or `inspect`, so the class of the String `"xyz"` is
+    /// `#<Class:#<String:0x…>>` and that of `main`
+    /// `#<Class:#<Object:0x…>>`.
+    pub(crate) fn attached_object_name(&self, attached: Value) -> String {
+        if attached.is_class_or_module().is_some() {
+            attached.to_s(self)
+        } else {
+            format!(
+                "#<{}:0x{:016x}>",
+                attached.get_real_class_name(self),
+                attached.id()
+            )
         }
     }
 

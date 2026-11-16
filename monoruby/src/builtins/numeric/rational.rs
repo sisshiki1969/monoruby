@@ -583,7 +583,7 @@ fn rat_round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let r = self_rat(lfp);
     let ndigits = coerce_ndigits(vm, globals, lfp)?;
     let half = if let Some(kw_val) = lfp.try_arg(1) {
-        super::float::parse_half_mode(kw_val)?
+        super::float::parse_half_mode(vm, globals, kw_val)?
     } else {
         None
     };

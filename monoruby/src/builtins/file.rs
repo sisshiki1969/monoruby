@@ -94,16 +94,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func_rest(file, "chmod", chmod);
     globals.define_builtin_class_func_rest(file, "lchmod", lchmod);
     globals.define_builtin_class_func(file, "symlink", file_symlink, 2);
-    globals.define_builtin_class_func_with_kw(
-        file,
-        "readlines",
-        readlines,
-        1,
-        3,
-        false,
-        &["chomp"],
-        true,
-    );
+    // `File.readlines` is `IO.readlines` (builtins/io.rs), inherited.
 
     globals.define_builtin_class_func(file, "size", file_size, 1);
     globals.define_builtin_module_func(file_test, "size", file_size, 1);
@@ -1968,122 +1959,6 @@ fn file_symlink(
         MonorubyErr::errno_with_paths(&globals.store, &e, "rb_file_s_symlink", &old, &new)
     })?;
     Ok(Value::integer(0))
-}
-
-///
-/// ### File.readlines
-///
-/// - readlines(path) -> [String]
-///
-/// Reads the entire file and returns an array of lines.
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/IO/s/readlines.html]
-#[monoruby_builtin]
-fn readlines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = lfp.arg(0).coerce_to_str(vm, globals)?;
-    // Optional separator / limit, `chomp:` keyword — `IO#gets` rules,
-    // shifted one slot right of the path argument, and read before the
-    // file is opened (`extract_getline_args`, then `open_key_args`).
-    let mut sep: Option<Vec<u8>> = globals.rs_bytes();
-    let mut limit_arg: Option<Value> = None;
-    match (lfp.try_arg(1), lfp.try_arg(2)) {
-        (None, _) => {}
-        (Some(v), None) => {
-            if v.is_nil() {
-                sep = None;
-            } else if let Some(rs) = v.is_rstring() {
-                sep = Some(rs.as_bytes().to_vec());
-            } else if globals.check_method(v, IdentId::TO_STR).is_some() {
-                sep = Some(v.coerce_to_rstring(vm, globals)?.as_bytes().to_vec());
-            } else {
-                limit_arg = Some(v);
-            }
-        }
-        (Some(v), Some(l)) => {
-            sep = if v.is_nil() {
-                None
-            } else {
-                Some(v.coerce_to_rstring(vm, globals)?.as_bytes().to_vec())
-            };
-            limit_arg = Some(l);
-        }
-    }
-    let limit = super::io::getline_limit(vm, globals, limit_arg)?;
-    let content = std::fs::read(&path)
-        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
-    // A zero limit would never advance (`io_readlines`).
-    if limit == Some(0) {
-        return Err(MonorubyErr::argumenterr("invalid limit: 0 for readlines"));
-    }
-    let chomp = lfp.try_arg(3).is_some_and(|v| v.as_bool());
-    let lines: Vec<Value> = split_records(&content, sep.as_deref(), limit, chomp)
-        .into_iter()
-        .map(Value::string_from_vec)
-        .collect();
-    Ok(Value::array_from_vec(lines))
-}
-
-/// Split `content` into records the way repeated `IO#gets(sep, limit)`
-/// would: each record ends with `sep` (kept unless `chomp`), a `nil`
-/// separator slurps, `""` is paragraph mode, and `limit` caps a
-/// record's byte length.
-fn split_records(
-    content: &[u8],
-    sep: Option<&[u8]>,
-    limit: Option<usize>,
-    chomp: bool,
-) -> Vec<Vec<u8>> {
-    let mut out: Vec<Vec<u8>> = vec![];
-    match sep {
-        None => {
-            if !content.is_empty() {
-                out.push(content.to_vec());
-            }
-        }
-        Some([]) => {
-            // Paragraph mode: records end at a blank line; extra blank
-            // lines between paragraphs are skipped.
-            let mut i = 0;
-            while i < content.len() {
-                while content[i..].starts_with(b"\n") {
-                    i += 1;
-                }
-                if i >= content.len() {
-                    break;
-                }
-                let end = content[i..]
-                    .windows(2)
-                    .position(|w| w == b"\n\n")
-                    .map(|p| i + p + 2)
-                    .unwrap_or(content.len());
-                out.push(content[i..end].to_vec());
-                i = end;
-            }
-        }
-        Some(sep) => {
-            let mut i = 0;
-            while i < content.len() {
-                let mut end = content[i..]
-                    .windows(sep.len())
-                    .position(|w| w == sep)
-                    .map(|p| i + p + sep.len())
-                    .unwrap_or(content.len());
-                if let Some(l) = limit
-                    && end - i > l
-                {
-                    end = i + l;
-                }
-                out.push(content[i..end].to_vec());
-                i = end;
-            }
-        }
-    }
-    if chomp {
-        for rec in &mut out {
-            super::io::chomp_line(rec, sep, limit);
-        }
-    }
-    out
 }
 
 ///

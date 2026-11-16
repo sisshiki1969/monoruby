@@ -786,6 +786,12 @@ impl Value {
         self.rvalue_mut().set_frozen()
     }
 
+    /// Make the String `self` an fstring (`Header::is_fstr`): frozen, and
+    /// refused a singleton class.
+    pub(crate) fn set_fstring(&mut self) {
+        self.rvalue_mut().set_fstr()
+    }
+
     /// Clear the frozen flag on `self` (used by `clone(freeze: false)`).
     /// No-op for packed values, which are always frozen.
     pub(crate) fn clear_frozen(&mut self) {
@@ -1478,7 +1484,15 @@ impl Value {
         {
             let inner = self.as_rstring_inner().clone();
             let mut dup = Value::string_from_inner(inner);
-            dup.set_frozen();
+            // `rb_hash_key_str`: the copy of a bare String — no singleton
+            // class, no instance variables — is its fstring, which
+            // refuses a singleton class of its own; any other key gets
+            // a plain frozen copy (`rb_str_new_frozen`).
+            if self.class() == STRING_CLASS && !self.rvalue().has_var_table() {
+                dup.set_fstring();
+            } else {
+                dup.set_frozen();
+            }
             dup
         } else {
             self

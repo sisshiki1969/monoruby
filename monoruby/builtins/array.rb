@@ -362,7 +362,10 @@ class Array
     mode == :find_min ? low < size ? low : nil : nil
   end
 
-  def permutation(n = nil)
+  # A count that is given as nil is "the whole length" to iterate, but
+  # the Enumerator's size function converts whatever was given
+  # (`rb_ary_permutation_size`): `permutation(nil).size` is a TypeError.
+  def permutation(n = (no_n = true; nil))
     unless block_given?
       # When called with no argument the Enumerator must use the
       # receiver's size *at iteration time*, not freeze it now — CRuby
@@ -370,9 +373,9 @@ class Array
       # Replay with no arg so `self.size` is recomputed; with an
       # explicit `n` the Enumerator is built with that fixed length.
       # Descending factorial size = n * (n-1) * ... * (n-k+1).
-      enum_args = n.nil? ? [] : [n]
+      enum_args = no_n ? [] : [n]
       return to_enum(:permutation, *enum_args) {
-        k = n.nil? ? self.size : __num2long(n)
+        k = no_n ? self.size : __num2long(n)
         len = self.size
         if k < 0 || k > len
           0
