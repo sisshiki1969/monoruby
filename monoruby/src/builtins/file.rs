@@ -2849,16 +2849,16 @@ fn fill_stat_ivars(
 ) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
     let pairs: &[(&str, i64)] = &[
-        ("@dev", metadata.dev() as i64),
-        ("@ino", metadata.ino() as i64),
-        ("@mode", metadata.mode() as i64),
-        ("@nlink", metadata.nlink() as i64),
-        ("@uid", metadata.uid() as i64),
-        ("@gid", metadata.gid() as i64),
-        ("@rdev", metadata.rdev() as i64),
-        ("@size", metadata.size() as i64),
-        ("@blksize", metadata.blksize() as i64),
-        ("@blocks", metadata.blocks() as i64),
+        ("/__dev", metadata.dev() as i64),
+        ("/__ino", metadata.ino() as i64),
+        ("/__mode", metadata.mode() as i64),
+        ("/__nlink", metadata.nlink() as i64),
+        ("/__uid", metadata.uid() as i64),
+        ("/__gid", metadata.gid() as i64),
+        ("/__rdev", metadata.rdev() as i64),
+        ("/__size", metadata.size() as i64),
+        ("/__blksize", metadata.blksize() as i64),
+        ("/__blocks", metadata.blocks() as i64),
     ];
     for (name, val) in pairs {
         obj.set_instance_var(&mut globals.store, name, Value::integer(*val))?;
@@ -2866,9 +2866,9 @@ fn fill_stat_ivars(
     let atime = time_from_secs_nsec(vm, globals, metadata.atime(), metadata.atime_nsec())?;
     let mtime = time_from_secs_nsec(vm, globals, metadata.mtime(), metadata.mtime_nsec())?;
     let ctime = time_from_secs_nsec(vm, globals, metadata.ctime(), metadata.ctime_nsec())?;
-    obj.set_instance_var(&mut globals.store, "@atime", atime)?;
-    obj.set_instance_var(&mut globals.store, "@mtime", mtime)?;
-    obj.set_instance_var(&mut globals.store, "@ctime", ctime)?;
+    obj.set_instance_var(&mut globals.store, "/__atime", atime)?;
+    obj.set_instance_var(&mut globals.store, "/__mtime", mtime)?;
+    obj.set_instance_var(&mut globals.store, "/__ctime", ctime)?;
     Ok(())
 }
 

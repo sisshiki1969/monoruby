@@ -225,6 +225,36 @@ impl Store {
     }
 
     ///
+    /// What *class_id* answers for the instance method *name* when asked
+    /// by reflection, as seen from a scope whose activated refinements are
+    /// *set*.
+    ///
+    /// A class is [`Self::check_method_with_refinements`]. A module is
+    /// searched no further than its own ancestors, which hold no class:
+    /// `Comparable.instance_method(:to_s)` finds nothing although a call
+    /// of `to_s` inside one of `Comparable`'s methods would (#1966). A
+    /// refinement comes before the class or module it refines, so its
+    /// search goes on there.
+    ///
+    pub(crate) fn check_instance_method(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+        set: RefinementSetId,
+    ) -> Option<MethodTableEntry> {
+        let Some(module) = self[class_id].try_get_module().filter(|m| m.is_module()) else {
+            return self.check_method_with_refinements(class_id, name, set);
+        };
+        let found =
+            self.classes
+                .search_module_method_refined(module, name, self.refinements.entries(set));
+        match self[class_id].refined_class() {
+            Some(refined) if found.is_none() => self.check_instance_method(refined, name, set),
+            _ => found,
+        }
+    }
+
+    ///
     /// Every `(refined class, refinement)` pair *module* contributes to a
     /// `using`: its own, plus those of everything it includes or
     /// prepends. CRuby activates a module's ancestors' refinements too.

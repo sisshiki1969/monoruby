@@ -1,3 +1,5 @@
+# monoruby-hidden-ivars: true
+#
 # Enumerator::Lazy — a chain of *pending* transformations over a source
 # enumerable.
 #
@@ -55,6 +57,15 @@ class Enumerator
     # internal helpers
     # ---------------------------------------------------------------
 
+    # What `#inspect` shows of a stage: the stage it was built on and
+    # the method (with its arguments) that built it. Hidden instance
+    # variables (doc/hidden_ivars.md), as CRuby keeps them out of sight.
+    private def __lazy_origin(source, meth, args)
+      @__lazy_source = source
+      @__lazy_method = meth
+      @__lazy_args = args
+    end
+
     # `rb_enum_values_pack`.
     private def __lazy_pack(vals)
       if vals.size == 1
@@ -70,9 +81,7 @@ class Enumerator
     # only; `gen` is the generator body and receives the Yielder.
     private def __lazy_stage(meth, args, size, &gen)
       lz = Lazy.allocate
-      lz.instance_variable_set(:@__lazy_source, self)
-      lz.instance_variable_set(:@__lazy_method, meth)
-      lz.instance_variable_set(:@__lazy_args, args)
+      lz.__send__(:__lazy_origin, self, meth, args)
       lz.__send__(:__enumerator_init__, size, &gen)
       lz
     end
@@ -414,9 +423,7 @@ class Enumerator
     def to_enum(meth = :each, *args, &size_block)
       meth = LAZY_SUPER_METHOD[meth] || meth
       lz = Lazy.allocate
-      lz.instance_variable_set(:@__lazy_source, self)
-      lz.instance_variable_set(:@__lazy_method, meth)
-      lz.instance_variable_set(:@__lazy_args, args)
+      lz.__send__(:__lazy_origin, self, meth, args)
       lz.__send__(:__enum_init_method__, self, meth, args, size_block)
       lz
     end

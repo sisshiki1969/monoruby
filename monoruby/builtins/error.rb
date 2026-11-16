@@ -1,3 +1,5 @@
+# monoruby-hidden-ivars: true
+#
 # `Errno::E*` exception classes and their `Errno` constants are populated
 # by Rust-side `errno::init` (see monoruby/src/builtins/errno.rs), which
 # walks the host's `libc::E*` table at startup so any errno present on the

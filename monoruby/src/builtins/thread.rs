@@ -692,7 +692,7 @@ fn join_timeout(
 /// CRuby's `rb_num2dbl`: a Float from a number, `to_f` for other
 /// objects that have one, and its own wording for the ones that are
 /// never a number.
-fn num2dbl(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f64> {
+pub(super) fn num2dbl(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f64> {
     if v.is_str().is_some() {
         return Err(MonorubyErr::typeerr(
             "no implicit conversion to float from string",

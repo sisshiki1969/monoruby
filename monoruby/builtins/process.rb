@@ -1,3 +1,5 @@
+# monoruby-hidden-ivars: true
+
 module Process
   # CLOCK_* constants are installed from libc (platform-correct values)
   # in builtins/process.rs.
@@ -20,58 +22,58 @@ module Process
     Process::Waiter.__detach(pid)
   end
 
-  class Tms
-    attr_accessor :utime, :stime, :cutime, :cstime
-
-    def initialize(utime = nil, stime = nil, cutime = nil, cstime = nil)
-      @utime = utime
-      @stime = stime
-      @cutime = cutime
-      @cstime = cstime
-    end
-  end
+  # A Struct, as in CRuby (`Process.times.to_a`, `#<struct Process::Tms
+  # utime=...>`).
+  Tms = Struct.new(:utime, :stime, :cutime, :cstime)
 
   # Wraps the raw POSIX wait(2) status word (as returned by `waitpid`).
+  # The word and the pid are hidden instance variables
+  # (doc/hidden_ivars.md): CRuby keeps them in a C struct.
   # Callers pass the raw int and pid; all predicates decode the bit layout:
   #   bits 0..6  = termination signal (0 = normal exit)
   #   bit  7     = core dumped flag
   #   bits 8..15 = exit code (for normal exit)
   #   low byte 0x7F = stopped (SIGSTOP etc.)
   class Status
-    attr_reader :pid
+    def pid
+      @__pid
+    end
 
     def initialize(raw_status, pid)
-      @status = raw_status
-      @pid = pid
+      @__status = raw_status
+      @__pid = pid
+      # CRuby freezes the status it stores in `$?`; nothing here writes
+      # an ordinary instance variable.
+      freeze
     end
 
     def exited?
-      (@status & 0x7F) == 0
+      (@__status & 0x7F) == 0
     end
 
     def exitstatus
-      exited? ? (@status >> 8) & 0xFF : nil
+      exited? ? (@__status >> 8) & 0xFF : nil
     end
 
     def signaled?
-      low = @status & 0x7F
+      low = @__status & 0x7F
       low != 0 && low != 0x7F
     end
 
     def termsig
-      signaled? ? @status & 0x7F : nil
+      signaled? ? @__status & 0x7F : nil
     end
 
     def stopped?
-      (@status & 0xFF) == 0x7F
+      (@__status & 0xFF) == 0x7F
     end
 
     def stopsig
-      stopped? ? (@status >> 8) & 0xFF : nil
+      stopped? ? (@__status >> 8) & 0xFF : nil
     end
 
     def coredump?
-      (@status & 0x80) != 0
+      (@__status & 0x80) != 0
     end
 
     def success?
@@ -79,16 +81,16 @@ module Process
     end
 
     def to_i
-      @status
+      @__status
     end
 
     def to_s
       if signaled?
-        "pid #{@pid} SIG#{termsig}#{coredump? ? ' (core dumped)' : ''}"
+        "pid #{@__pid} SIG#{termsig}#{coredump? ? ' (core dumped)' : ''}"
       elsif stopped?
-        "pid #{@pid} stopped SIG#{stopsig}"
+        "pid #{@__pid} stopped SIG#{stopsig}"
       else
-        "pid #{@pid} exit #{exitstatus}"
+        "pid #{@__pid} exit #{exitstatus}"
       end
     end
 
@@ -96,12 +98,9 @@ module Process
       __sprintf_repr("#<Process::Status: #{to_s}>")
     end
 
+    # CRuby's `pst_equal`: the same object, or `to_i == other`.
     def ==(other)
-      if other.is_a?(Integer)
-        to_i == other
-      else
-        super
-      end
+      equal?(other) || to_i == other
     end
   end
 end

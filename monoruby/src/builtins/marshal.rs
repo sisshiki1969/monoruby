@@ -988,7 +988,12 @@ impl<'a> MarshalReader<'a> {
                     // Location objects are CRuby's own; monoruby keeps
                     // the backtrace as strings and has nothing to restore.
                     "bt_locations" => {}
-                    _ => user_ivars.push((*name, *val)),
+                    // A field of a builtin exception goes back to the
+                    // hidden slot its accessor reads.
+                    field => match exception_field_slot(field) {
+                        Some(slot) => user_ivars.push((IdentId::get_id(slot), *val)),
+                        None => user_ivars.push((*name, *val)),
+                    },
                 }
             }
             // A nil `:mesg` means "no explicit message"; CRuby's default
@@ -1513,6 +1518,35 @@ fn resolve_class_path(globals: &Globals, path: &str) -> Option<Module> {
         last = Some(module);
     }
     last
+}
+
+/// State of the builtin exception classes that CRuby keeps in instance
+/// variables named without an `@` — which no Ruby code can read, and
+/// `instance_variables` does not list, but which `Marshal` dumps under
+/// those names: `SystemCallError#errno`, `SignalException#signo`,
+/// `NoMatchingPatternKeyError#matchee` / `#key`, and what a transcoding
+/// error knows about the conversion that failed.
+///
+/// monoruby keeps the same state in hidden slots (doc/hidden_ivars.md);
+/// each pair is the name on the wire and the slot.
+const EXCEPTION_FIELDS: [(&str, &str); 10] = [
+    ("errno", "/__errno"),
+    ("signo", "/__signo"),
+    ("matchee", "/__matchee"),
+    ("key", "/__key"),
+    ("error_bytes", "/error_bytes"),
+    ("readagain_bytes", "/readagain_bytes"),
+    ("incomplete_input", "/incomplete_input"),
+    ("error_char", "/error_char"),
+    ("source_encoding_name", "/source_encoding_name"),
+    ("destination_encoding_name", "/destination_encoding_name"),
+];
+
+fn exception_field_slot(wire: &str) -> Option<&'static str> {
+    EXCEPTION_FIELDS
+        .iter()
+        .find(|(name, _)| *name == wire)
+        .map(|(_, slot)| *slot)
 }
 
 /// Walk a Struct subclass's ancestor chain looking for the
@@ -2595,7 +2629,17 @@ fn marshal_dump_value(
                         let msg_unset = obj
                             .is_exception()
                             .is_some_and(|e| e.default_message_class.is_some());
-                        let user_ivars = globals.get_ivars(obj);
+                        let mut user_ivars = globals.get_ivars(obj);
+                        // The fields of the builtin exceptions come first,
+                        // under the names CRuby dumps them by.
+                        let fields: Vec<_> = EXCEPTION_FIELDS
+                            .iter()
+                            .filter_map(|(wire, slot)| {
+                                let val = globals.store.get_ivar(obj, IdentId::get_id(slot))?;
+                                Some((IdentId::get_id(wire), val))
+                            })
+                            .collect();
+                        user_ivars.splice(0..0, fields);
                         // `#cause` is kept in the internal `/cause` slot,
                         // which `get_ivars` hides; CRuby dumps it as a
                         // plain `:cause` field, and only when set.

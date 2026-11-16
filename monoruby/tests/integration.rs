@@ -14,6 +14,7 @@
 
 mod add_coverage;
 mod arith;
+mod arith_seq_float;
 mod array_frozen_index_assign;
 mod array_initialize;
 mod array_loop_seed;
@@ -110,6 +111,7 @@ mod hash_probe_jit;
 mod hash_seed;
 mod hash_string_keys;
 mod hidden_ivars;
+mod hidden_state;
 mod inspect_dispatch;
 mod install_root;
 mod integer_64bit;
@@ -142,6 +144,7 @@ mod method_lookup_errors;
 mod method_missing_conversion;
 mod method_object_call;
 mod mkmf;
+mod module_instance_method;
 mod monitor;
 mod mul_assign;
 mod name_argument_checks;

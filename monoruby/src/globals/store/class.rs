@@ -1488,9 +1488,43 @@ impl ClassInfoTable {
     ///
     pub(super) fn search_method_refined(
         &self,
+        module: Module,
+        name: IdentId,
+        refinements: &[(ClassId, ClassId)],
+    ) -> Option<MethodTableEntry> {
+        self.search_method_from(module, name, refinements, false)
+    }
+
+    ///
+    /// The search reflection does on a *module* (`Module#instance_method`,
+    /// `undef_method`): the module itself and the modules it includes or
+    /// prepends, and nothing further.
+    ///
+    /// A module's ancestors hold no class, so CRuby's
+    /// `Comparable.instance_method(:to_s)` is a NameError. monoruby links
+    /// every module's internal superclass to `Object` — that link is what
+    /// lets a `module_function` body or a module's own singleton method
+    /// reach `Kernel` — so the ordinary walk would answer `Kernel#to_s`
+    /// here (#1966). This one stops where the chain leaves the include
+    /// classes. A `public :to_s` in the module body is no definition
+    /// either: with no ancestor of the module to supply the body, CRuby
+    /// reports the name as undefined.
+    ///
+    pub(super) fn search_module_method_refined(
+        &self,
+        module: Module,
+        name: IdentId,
+        refinements: &[(ClassId, ClassId)],
+    ) -> Option<MethodTableEntry> {
+        self.search_method_from(module, name, refinements, true)
+    }
+
+    fn search_method_from(
+        &self,
         mut module: Module,
         name: IdentId,
         refinements: &[(ClassId, ClassId)],
+        within_module: bool,
     ) -> Option<MethodTableEntry> {
         let mut visi = None;
         // A `public :inherited_method` declaration is a visibility modifier,
@@ -1554,6 +1588,7 @@ impl ClassInfoTable {
                 }
             }
             module = match module.superclass() {
+                Some(next) if within_module && !next.is_iclass() => return None,
                 Some(module) => module,
                 None => {
                     let shadow = shadow?;
@@ -2693,6 +2728,28 @@ impl Store {
         set: RefinementSetId,
     ) -> Result<(FuncId, Visibility, ClassId)> {
         if let Some(entry) = self.check_method_with_refinements(class, func_name, set)
+            && let Some(func_id) = entry.func_id()
+        {
+            Ok((func_id, entry.visibility, entry.owner))
+        } else {
+            Err(MonorubyErr::method_not_found_for_class(
+                self, func_name, class,
+            ))
+        }
+    }
+
+    /// The instance method *func_name* of *class* as reflection names it
+    /// (`Module#instance_method`, `#public_instance_method`,
+    /// `#undef_method`): [`Self::find_method_for_class_refined`] for a
+    /// class, and for a module only what the module and the modules mixed
+    /// into it define (see [`Self::check_instance_method`]).
+    pub(crate) fn find_instance_method(
+        &self,
+        class: ClassId,
+        func_name: IdentId,
+        set: RefinementSetId,
+    ) -> Result<(FuncId, Visibility, ClassId)> {
+        if let Some(entry) = self.check_instance_method(class, func_name, set)
             && let Some(func_id) = entry.func_id()
         {
             Ok((func_id, entry.visibility, entry.owner))

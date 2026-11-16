@@ -1,7 +1,7 @@
 use super::*;
 use jitgen::{AbstractState, JitContext};
 
-use num::{BigInt, ToPrimitive, Zero};
+use num::{BigInt, Zero};
 
 //
 // Enumerator::ArithmeticSequence — native (begin, end, step, exclude_end?)
@@ -79,6 +79,7 @@ pub(super) fn init(globals: &mut Globals) {
     // inline the block dispatch directly into the loop. See benchmark
     // discussion in PR comments.
     globals.define_builtin_funcs(ARITHMETIC_SEQUENCE_CLASS, "size", &["length"], size, 0);
+    globals.define_builtin_func(ARITHMETIC_SEQUENCE_CLASS, "__float_step", float_step, 0);
     globals.define_builtin_func_with(ARITHMETIC_SEQUENCE_CLASS, "first", first, 0, 1, false);
     globals.define_builtin_func_with(ARITHMETIC_SEQUENCE_CLASS, "last", last, 0, 1, false);
     globals.define_builtin_func(ARITHMETIC_SEQUENCE_CLASS, "[]", index_op, 1);
@@ -239,6 +240,14 @@ fn inline_field_load(
 }
 
 // ─── Type-dispatched helpers ────────────────────────────────────────
+//
+// The iteration rules are CRuby's (`enumerator.c`): a sequence is a
+// *Float* sequence as soon as any of begin, end and step is a Float —
+// its terms are then `i * step + begin` in C doubles, counted by
+// `ruby_float_step_size` — and otherwise it is walked with the numbers'
+// own `+`, `-`, `*` and `div`, whatever they are (Integer, Rational, a
+// user's Numeric). All-Fixnum sequences take a native shortcut that
+// gives the same answers.
 
 /// True iff `v` is numerically zero (Fixnum/BigInt/Float).
 fn value_is_zero(v: Value) -> bool {
@@ -250,223 +259,274 @@ fn value_is_zero(v: Value) -> bool {
     }
 }
 
-/// Check `v.is_a?(Numeric)` natively first; method dispatch fallback for
-/// user-defined classes.
-fn value_is_numeric(globals: &Globals, v: Value) -> bool {
-    match v.unpack() {
-        RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) | RV::Complex(_) => true,
-        _ => v.is_kind_of(&globals.store, NUMERIC_CLASS),
+/// CRuby's `ruby_float_step_size`: how many terms `beg, beg + unit, …`
+/// has up to `end`, as a C double (it can be infinite, and NaN for NaN
+/// operands). The count is rounded by an error bound proportional to
+/// the magnitudes involved, so that `1.0.step(1.3, 0.1)` has the four
+/// terms a reader counts although `0.3 / 0.1` is `2.9999999999999996`.
+fn float_step_size(beg: f64, end: f64, unit: f64, excl: bool) -> f64 {
+    if unit == 0.0 {
+        return f64::INFINITY;
     }
-}
-
-/// Best-effort conversion to f64. None for non-numeric / Complex.
-fn to_f64(v: Value) -> Option<f64> {
-    match v.unpack() {
-        RV::Fixnum(i) => Some(i as f64),
-        RV::Float(f) => Some(f),
-        RV::BigInt(b) => b.to_f64(),
-        _ => None,
+    if unit.is_infinite() {
+        let one = if unit > 0.0 { beg <= end } else { beg >= end };
+        return if one { 1.0 } else { 0.0 };
     }
-}
-
-/// Result of counting terms in a bounded AS.
-#[derive(Debug)]
-enum Count {
-    /// Concrete count, fits in i64 (used as Array size + index domain).
-    Finite(i64),
-    /// `e == ±Infinity` ⇒ unbounded in step's direction.
-    Infinite,
-}
-
-/// Compute `(b + i * s)` natively for the index `i` (signed). Promotes
-/// to BigInt on Fixnum overflow.
-fn term_at(b: Value, i: i64, s: Value) -> Option<Value> {
-    match (b.unpack(), s.unpack()) {
-        (RV::Fixnum(b_i), RV::Fixnum(s_i)) => {
-            let prod = (i as i128).checked_mul(s_i as i128)?;
-            let sum = (b_i as i128).checked_add(prod)?;
-            Some(if let Ok(v) = i64::try_from(sum) {
-                Value::integer(v)
-            } else {
-                Value::bigint(BigInt::from(sum))
-            })
+    let mut n = (end - beg) / unit;
+    let err = ((beg.abs() + end.abs() + (end - beg).abs()) / unit.abs() * f64::EPSILON).min(0.5);
+    if excl {
+        if n <= 0.0 {
+            return 0.0;
         }
-        // Float-involved: arithmetic in f64.
-        _ => {
-            let b_f = to_f64(b)?;
-            let s_f = to_f64(s)?;
-            Some(Value::float(b_f + (i as f64) * s_f))
+        n = if n < 1.0 { 0.0 } else { (n - err).floor() };
+        let d = (n + 1.0) * unit + beg;
+        if (beg < end && d < end) || (beg > end && d > end) {
+            n += 1.0;
+        }
+    } else {
+        if n < 0.0 {
+            return 0.0;
+        }
+        n = (n + err).floor();
+        let d = (n + 1.0) * unit + beg;
+        if (beg < end && d <= end) || (beg > end && d >= end) {
+            n += 1.0;
         }
     }
+    n + 1.0
 }
 
-/// Compute term at index `i` using Ruby's `+` / `*` for non-trivial
-/// numeric types (BigInt with i64-overflowing products, Rational,
-/// user-defined Numerics). Slower than `term_at` but type-correct.
-fn term_at_generic(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    b: Value,
-    i: i64,
-    s: Value,
-) -> Result<Value> {
-    let i_val = Value::integer(i);
-    let prod = vm.invoke_method_inner(globals, IdentId::_MUL, i_val, &[s], None, None)?;
-    vm.invoke_method_inner(globals, IdentId::_ADD, b, &[prod], None, None)
+/// A Float sequence, as CRuby's `ruby_float_step` sets it up.
+struct FloatSeq {
+    beg: f64,
+    end: f64,
+    unit: f64,
+    /// [`float_step_size`] of the three.
+    len: f64,
 }
 
-/// Closed-form count formula. Caller must have validated:
-///   * step is Numeric and non-zero
-///   * begin is non-nil
-/// `e` is the end (may be `Float::INFINITY` / `-Float::INFINITY`).
-fn finite_count(
+impl FloatSeq {
+    /// The `i`-th term. The last one is clamped to the end: `i * unit +
+    /// beg` can land a rounding error beyond it.
+    fn term(&self, i: i64) -> f64 {
+        let d = (i as f64) * self.unit + self.beg;
+        if self.unit >= 0.0 {
+            if self.end < d { self.end } else { d }
+        } else if d < self.end {
+            self.end
+        } else {
+            d
+        }
+    }
+
+    /// The length as `#size` answers it: `Infinity`, or an Integer.
+    fn len_value(&self) -> Result<Value> {
+        if self.len.is_infinite() {
+            Ok(Value::float(self.len))
+        } else {
+            // NaN is a FloatDomainError here, as `rb_dbl2big` makes it.
+            Value::coerce_f64_to_int(self.len)
+        }
+    }
+}
+
+/// The sequence as a Float one, if it is one: any of begin, end and
+/// step a Float. An endless sequence runs to the infinity its step
+/// points at.
+fn float_seq(
     vm: &mut Executor,
     globals: &mut Globals,
     b: Value,
     e: Value,
     s: Value,
     excl: bool,
-) -> Result<Count> {
-    // ── All-Fixnum fast path ────────────────────────────────────
-    if let (Some(b_i), Some(e_i), Some(s_i)) = (b.try_fixnum(), e.try_fixnum(), s.try_fixnum()) {
-        return Ok(fixnum_count(b_i, e_i, s_i, excl));
+) -> Result<Option<FloatSeq>> {
+    if !(b.is_float() || e.is_float() || s.is_float()) {
+        return Ok(None);
     }
-
-    // ── Float-involved fast path ────────────────────────────────
-    // (Catches the e == Float::INFINITY case before generic dispatch.)
-    if let (Some(b_f), Some(e_f), Some(s_f)) = (to_f64(b), to_f64(e), to_f64(s)) {
-        return Ok(float_count(b_f, e_f, s_f, excl));
-    }
-
-    // ── Generic slow path (BigInt overflow, Rational, etc.) ────
-    generic_count(vm, globals, b, e, s, excl)
+    let unit = thread::num2dbl(vm, globals, s)?;
+    let beg = thread::num2dbl(vm, globals, b)?;
+    let end = if e.is_nil() {
+        if unit < 0.0 {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        }
+    } else {
+        thread::num2dbl(vm, globals, e)?
+    };
+    let len = float_step_size(beg, end, unit, excl);
+    Ok(Some(FloatSeq {
+        beg,
+        end,
+        unit,
+        len,
+    }))
 }
 
-fn fixnum_count(b: i64, e: i64, s: i64, excl: bool) -> Count {
-    let diff = match (e as i128).checked_sub(b as i128) {
-        Some(d) => d,
-        None => return Count::Finite(0), // shouldn't happen with i64 inputs
+fn call(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+    op: IdentId,
+    arg: Value,
+) -> Result<Value> {
+    vm.invoke_method_inner(globals, op, recv, &[arg], None, None)
+}
+
+/// CRuby's `rb_int_plus` / `rb_int_minus` / `rb_int_mul` for a receiver
+/// that need not be an Integer: an Integer's own operator, and for
+/// anything else `rb_num_coerce_bin` — the *argument* coerces the
+/// receiver, and the operator is applied to what comes back.
+///
+/// `arith_seq_size`, the tail of `arith_seq_last` and the endless loop
+/// of `arith_seq_each` are written with these, where the rest of the
+/// file uses the generic `num_plus` & co. ([`call`]). The difference
+/// shows with a Rational step, which an Integer argument coerces to a
+/// Float: `(1..2).step(1r/3).last(2)` is `[1.6666666666666667, 2.0]` in
+/// CRuby although `#last` is `(2/1)`.
+fn int_op(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    x: Value,
+    op: IdentId,
+    y: Value,
+) -> Result<Value> {
+    if x.is_integer() {
+        return call(vm, globals, x, op, y);
+    }
+    let pair = call(vm, globals, y, IdentId::get_id("coerce"), x)?;
+    match pair.try_array_ty() {
+        Some(pair) if pair.len() == 2 => call(vm, globals, pair[0], op, pair[1]),
+        _ => Err(MonorubyErr::typeerr("coerce must return [x, y]")),
+    }
+}
+
+/// CRuby's `num_idiv` (and `rb_int_idiv`, which differs only for a
+/// receiver that has no `div` worth calling): the floored quotient, as
+/// an Integer wherever the operands' own division makes that possible.
+fn num_idiv(vm: &mut Executor, globals: &mut Globals, a: Value, b: Value) -> Result<Value> {
+    let q = if a.is_float() || a.class() == RATIONAL_CLASS {
+        call(vm, globals, a, IdentId::_DIV, b)?
+    } else {
+        call(vm, globals, a, IdentId::get_id("div"), b)?
     };
-    if (s > 0 && diff < 0) || (s < 0 && diff > 0) {
-        return Count::Finite(0);
+    if q.is_integer() {
+        Ok(q)
+    } else {
+        vm.invoke_method_inner(globals, IdentId::get_id("floor"), q, &[], None, None)
+    }
+}
+
+/// CRuby's `rb_num_negative_int_p`.
+fn negative_p(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<bool> {
+    Ok(match v.unpack() {
+        RV::Fixnum(i) => i < 0,
+        RV::BigInt(b) => b.sign() == num::bigint::Sign::Minus,
+        _ => call(vm, globals, v, IdentId::_LT, Value::integer(0))?.as_bool(),
+    })
+}
+
+/// Where a sequence that is not a Float one stops: `len_1` is the index
+/// of the last term (negative for an empty sequence — there is no
+/// `Tail` then), `adjusted` says the end was excluded and exactly hit,
+/// `last` is the last term.
+struct Tail {
+    len_1: Value,
+    last: Value,
+    adjusted: bool,
+}
+
+impl Tail {
+    /// As `arith_seq_last` and `arith_seq_each` compute it, with the
+    /// operands' own arithmetic (`num_minus`, `num_idiv`, …).
+    fn new(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        b: Value,
+        e: Value,
+        s: Value,
+        excl: bool,
+    ) -> Result<Option<Self>> {
+        let diff = call(vm, globals, e, IdentId::_SUB, b)?;
+        let len_1 = num_idiv(vm, globals, diff, s)?;
+        if negative_p(vm, globals, len_1)? {
+            return Ok(None);
+        }
+        let prod = call(vm, globals, s, IdentId::_MUL, len_1)?;
+        let mut last = call(vm, globals, b, IdentId::_ADD, prod)?;
+        let adjusted = excl && call(vm, globals, last, IdentId::_EQ, e)?.as_bool();
+        if adjusted {
+            last = call(vm, globals, last, IdentId::_SUB, s)?;
+        }
+        Ok(Some(Tail {
+            len_1,
+            last,
+            adjusted,
+        }))
+    }
+
+    /// As `arith_seq_size` computes it, with [`int_op`].
+    fn for_size(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        b: Value,
+        e: Value,
+        s: Value,
+        excl: bool,
+    ) -> Result<Option<Self>> {
+        let diff = int_op(vm, globals, e, IdentId::_SUB, b)?;
+        let len_1 = num_idiv(vm, globals, diff, s)?;
+        if negative_p(vm, globals, len_1)? {
+            return Ok(None);
+        }
+        let prod = int_op(vm, globals, s, IdentId::_MUL, len_1)?;
+        let last = int_op(vm, globals, b, IdentId::_ADD, prod)?;
+        let adjusted = excl && call(vm, globals, last, IdentId::_EQ, e)?.as_bool();
+        Ok(Some(Tail {
+            len_1,
+            last,
+            adjusted,
+        }))
+    }
+
+    /// The number of terms.
+    fn len(&self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+        if self.adjusted {
+            Ok(self.len_1)
+        } else {
+            call(vm, globals, self.len_1, IdentId::_ADD, Value::integer(1))
+        }
+    }
+}
+
+/// The number of terms of an all-Fixnum sequence.
+fn fixnum_count(b: i64, e: i64, s: i64, excl: bool) -> i64 {
+    let diff = e as i128 - b as i128;
+    if s == 0 || (s > 0 && diff < 0) || (s < 0 && diff > 0) {
+        return 0;
     }
     let s128 = s as i128;
     let mut n_int = diff / s128; // same sign ⇒ trunc == floor
-    if excl {
-        // last_val = b + n_int * s
-        let last_val = b as i128 + n_int * s128;
-        let overshoot = if s > 0 {
-            last_val >= e as i128
-        } else {
-            last_val <= e as i128
-        };
-        if overshoot {
-            n_int -= 1;
-        }
-    }
-    if n_int < 0 {
-        return Count::Finite(0);
+    if excl && b as i128 + n_int * s128 == e as i128 {
+        n_int -= 1;
     }
     // n_int + 1 is the count; clamp to i64 max (unrealistically large).
-    let count = n_int.saturating_add(1);
-    if count > i64::MAX as i128 {
-        Count::Finite(i64::MAX)
-    } else {
-        Count::Finite(count as i64)
+    (n_int + 1).clamp(0, i64::MAX as i128) as i64
+}
+
+/// The `i`-th term of an all-Fixnum sequence, an Integer of whatever
+/// size it takes.
+fn fixnum_term(b: i64, i: i64, s: i64) -> Value {
+    let v = b as i128 + (i as i128) * (s as i128);
+    match i64::try_from(v) {
+        Ok(v) => Value::integer(v),
+        Err(_) => Value::bigint(BigInt::from(v)),
     }
 }
 
-fn float_count(b: f64, e: f64, s: f64, excl: bool) -> Count {
-    if s.is_infinite() {
-        let ok = if s > 0.0 {
-            if excl { b < e } else { b <= e }
-        } else if excl {
-            b > e
-        } else {
-            b >= e
-        };
-        return Count::Finite(if ok { 1 } else { 0 });
-    }
-    let diff = e - b;
-    if (s > 0.0 && diff < 0.0) || (s < 0.0 && diff > 0.0) {
-        return Count::Finite(0);
-    }
-    let nf = diff / s;
-    if nf.is_nan() || nf < 0.0 {
-        return Count::Finite(0);
-    }
-    if nf.is_infinite() {
-        return Count::Infinite;
-    }
-    let mut n_int = nf.floor() as i64;
-    if excl {
-        let last_v = b + (n_int as f64) * s;
-        let overshoot = if s > 0.0 { last_v >= e } else { last_v <= e };
-        if overshoot {
-            n_int -= 1;
-        }
-    }
-    if n_int < 0 {
-        return Count::Finite(0);
-    }
-    Count::Finite(n_int.saturating_add(1))
-}
-
-/// Generic slow path — dispatches arithmetic through Ruby methods.
-fn generic_count(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    b: Value,
-    e: Value,
-    s: Value,
-    excl: bool,
-) -> Result<Count> {
-    let zero = Value::integer(0);
-    // diff = e - b
-    let diff = vm.invoke_method_inner(globals, IdentId::_SUB, e, &[b], None, None)?;
-    let s_pos = vm
-        .invoke_method_inner(globals, IdentId::_GT, s, &[zero], None, None)?
-        .as_bool();
-    let diff_neg = vm
-        .invoke_method_inner(globals, IdentId::_LT, diff, &[zero], None, None)?
-        .as_bool();
-    let diff_pos = vm
-        .invoke_method_inner(globals, IdentId::_GT, diff, &[zero], None, None)?
-        .as_bool();
-    if (s_pos && diff_neg) || (!s_pos && diff_pos) {
-        return Ok(Count::Finite(0));
-    }
-    // nf = diff.to_f / s.to_f
-    let diff_f = invoke_to_f(vm, globals, diff)?;
-    let s_f = invoke_to_f(vm, globals, s)?;
-    let nf = diff_f / s_f;
-    if nf.is_nan() || nf < 0.0 {
-        return Ok(Count::Finite(0));
-    }
-    if nf.is_infinite() {
-        return Ok(Count::Infinite);
-    }
-    let mut n_int = nf.floor() as i64;
-    if excl {
-        let last_v = term_at_generic(vm, globals, b, n_int, s)?;
-        let cmp_op = if s_pos { IdentId::_GE } else { IdentId::_LE };
-        let overshoot = vm
-            .invoke_method_inner(globals, cmp_op, last_v, &[e], None, None)?
-            .as_bool();
-        if overshoot {
-            n_int -= 1;
-        }
-    }
-    if n_int < 0 {
-        return Ok(Count::Finite(0));
-    }
-    Ok(Count::Finite(n_int.saturating_add(1)))
-}
-
-fn invoke_to_f(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f64> {
-    let res = vm.invoke_method_inner(globals, IdentId::get_id("to_f"), v, &[], None, None)?;
-    res.try_float()
-        .ok_or_else(|| MonorubyErr::typeerr("to_f did not return a Float"))
+fn fixnum_terms(b: i64, s: i64, start: i64, n: i64) -> Value {
+    Value::array_from_iter((0..n).map(|i| fixnum_term(b, start + i, s)))
 }
 
 // ─── size ──────────────────────────────────────────────────────────
@@ -481,18 +541,18 @@ fn invoke_to_f(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f64
 #[monoruby_builtin]
 fn size(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let (b, e, s, excl) = unpack_as(lfp.self_val());
-    if !value_is_numeric(globals, s) {
-        return Err(MonorubyErr::argumenterr("step must be numeric"));
+    if let Some(fs) = float_seq(vm, globals, b, e, s, excl)? {
+        return fs.len_value();
     }
-    if value_is_zero(s) {
-        return Err(MonorubyErr::argumenterr("step can't be 0"));
-    }
-    if b.is_nil() || e.is_nil() {
+    if e.is_nil() || value_is_zero(s) {
         return Ok(Value::float(f64::INFINITY));
     }
-    match finite_count(vm, globals, b, e, s, excl)? {
-        Count::Finite(n) => Ok(Value::integer(n)),
-        Count::Infinite => Ok(Value::float(f64::INFINITY)),
+    if let (Some(b), Some(e), Some(s)) = (b.try_fixnum(), e.try_fixnum(), s.try_fixnum()) {
+        return Ok(Value::integer(fixnum_count(b, e, s, excl)));
+    }
+    match Tail::for_size(vm, globals, b, e, s, excl)? {
+        Some(tail) => tail.len(vm, globals),
+        None => Ok(Value::integer(0)),
     }
 }
 
@@ -514,7 +574,40 @@ fn unpack_as(recv: Value) -> (Value, Value, Value, bool) {
 //
 // `each` is registered in `builtins/arithmetic_sequence.rb` rather
 // than here — benchmarks showed the JIT'd Ruby loop is on par with
-// the Rust + `invoke_block` path.
+// the Rust + `invoke_block` path. It asks `__float_step` what a Float
+// sequence is made of, so that the counting stays in one place.
+
+///
+/// ### Enumerator::ArithmeticSequence#__float_step
+///
+/// - __float_step -> [beg, unit, end, len] | nil
+///
+/// For a Float sequence — CRuby's `ruby_float_step` — the three
+/// operands as Floats and the number of terms (an Integer, or
+/// `Infinity`); nil for any other sequence, and for a Complex step,
+/// which `arith_seq_each` keeps out of the Float loop.
+#[monoruby_builtin]
+fn float_step(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let (b, e, s, excl) = unpack_as(lfp.self_val());
+    if s.class() == COMPLEX_CLASS {
+        return Ok(Value::nil());
+    }
+    let Some(fs) = float_seq(vm, globals, b, e, s, excl)? else {
+        return Ok(Value::nil());
+    };
+    // A NaN length is a loop that never runs.
+    let len = if fs.len.is_nan() {
+        Value::integer(0)
+    } else {
+        fs.len_value()?
+    };
+    Ok(Value::array_from_vec(vec![
+        Value::float(fs.beg),
+        Value::float(fs.unit),
+        Value::float(fs.end),
+        len,
+    ]))
+}
 
 ///
 /// ### Enumerator::ArithmeticSequence#first
@@ -526,35 +619,80 @@ fn unpack_as(recv: Value) -> (Value, Value, Value, bool) {
 #[monoruby_builtin]
 fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let (b, e, s, excl) = unpack_as(lfp.self_val());
-    let arg = lfp.try_arg(0);
-    let Some(n_arg) = arg else {
-        // No arg: just return begin (matches Enumerator#first for AS).
+    let Some(n_arg) = lfp.try_arg(0) else {
+        // The begin as it is — `(1..3.0).step.first` is `1` although the
+        // terms are Floats — unless the sequence is empty.
+        if b.is_nil() {
+            return Ok(Value::nil());
+        }
+        if !e.is_nil() {
+            let zero = Value::integer(0);
+            let empty = if call(vm, globals, s, IdentId::_GT, zero)?.as_bool() {
+                call(vm, globals, b, IdentId::_GT, e)?.as_bool()
+            } else if call(vm, globals, s, IdentId::_LT, zero)?.as_bool() {
+                call(vm, globals, b, IdentId::_LT, e)?.as_bool()
+            } else {
+                false
+            };
+            if empty {
+                return Ok(Value::nil());
+            }
+        }
         return Ok(b);
     };
-    let n = n_arg.num2long(vm, globals)?;
+    let mut n = n_arg.num2long(vm, globals)?;
     if n < 0 {
         return Err(MonorubyErr::argumenterr("attempt to take negative size"));
     }
     if n == 0 {
         return Ok(Value::array_empty());
     }
-    if value_is_zero(s) {
-        return Err(MonorubyErr::typeerr("step can't be 0"));
+    if let (Some(b), Some(s)) = (b.try_fixnum(), s.try_fixnum()) {
+        if e.is_nil() {
+            return Ok(fixnum_terms(b, s, 0, n));
+        }
+        if let Some(e) = e.try_fixnum() {
+            return Ok(fixnum_terms(b, s, 0, n.min(fixnum_count(b, e, s, excl))));
+        }
     }
-    if b.is_nil() {
-        return Err(MonorubyErr::argumenterr(
-            "#each for beginless arithmetic sequences is meaningless",
+    if let Some(fs) = float_seq(vm, globals, b, e, s, excl)? {
+        if (n as f64) > fs.len {
+            n = fs.len as i64;
+        }
+        if fs.unit.is_infinite() {
+            // `i * unit + beg` would be NaN: the one term is the begin.
+            let one = (fs.len > 0.0).then(|| Value::float(fs.beg));
+            return Ok(Value::array_from_iter(one.into_iter()));
+        }
+        return Ok(Value::array_from_iter(
+            (0..n).map(|i| Value::float(fs.term(i))),
         ));
     }
-    let take = if e.is_nil() {
-        n
-    } else {
-        match finite_count(vm, globals, b, e, s, excl)? {
-            Count::Infinite => n,
-            Count::Finite(c) => std::cmp::min(n, c),
+    // What is left is `Enumerator#first(n)` over `#each`: the terms by
+    // repeated addition, which for an endless sequence is `rb_int_plus`.
+    let endless = e.is_nil();
+    if !endless && !value_is_zero(s) {
+        let len = match Tail::new(vm, globals, b, e, s, excl)? {
+            Some(tail) => tail.len(vm, globals)?,
+            None => return Ok(Value::array_empty()),
+        };
+        if let Some(len) = len.try_fixnum() {
+            n = n.min(len);
         }
-    };
-    build_terms(vm, globals, b, s, 0, take)
+    }
+    let mut terms = Vec::with_capacity(n as usize);
+    let mut c = b;
+    for i in 0..n {
+        if i != 0 {
+            c = if endless {
+                int_op(vm, globals, c, IdentId::_ADD, s)?
+            } else {
+                call(vm, globals, c, IdentId::_ADD, s)?
+            };
+        }
+        terms.push(c);
+    }
+    Ok(Value::array_from_vec(terms))
 }
 
 // ─── last ──────────────────────────────────────────────────────────
@@ -565,97 +703,74 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// - last -> Numeric | nil
 /// - last(n) -> [Numeric]
 ///
+/// The one place a Float sequence is *not* walked in C doubles: CRuby's
+/// `arith_seq_last` computes with the operands' own arithmetic for
+/// every kind of sequence, so `(1..3.0).step(1).last` is the Integer
+/// `3` although `to_a.last` is `3.0`, and `last(n)` counts back from
+/// the last term by repeated addition.
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator=3a=3aArithmeticSequence/i/last.html]
 #[monoruby_builtin]
 fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let (b, e, s, excl) = unpack_as(lfp.self_val());
-    if value_is_zero(s) {
-        return Err(MonorubyErr::typeerr("step can't be 0"));
-    }
     if e.is_nil() {
         return Err(MonorubyErr::rangeerr(
             "cannot get the last element of endless arithmetic sequence",
         ));
     }
-    if b.is_nil() {
-        // CRuby raises TypeError from internal `nil - end` arithmetic.
-        return Err(MonorubyErr::typeerr("nil can't be coerced into Integer"));
-    }
-    let count = match finite_count(vm, globals, b, e, s, excl)? {
-        Count::Finite(c) => c,
-        Count::Infinite => {
-            return Err(MonorubyErr::rangeerr(
-                "cannot get the last element of endless arithmetic sequence",
-            ));
+    let arg = lfp.try_arg(0);
+    let empty = |arg: Option<Value>| {
+        if arg.is_some() {
+            Value::array_empty()
+        } else {
+            Value::nil()
         }
     };
-    let arg = lfp.try_arg(0);
-    match arg {
-        None => {
-            if count == 0 {
-                return Ok(Value::nil());
-            }
-            term_or_generic(vm, globals, b, count - 1, s)
+    let fixnums = match (b.try_fixnum(), e.try_fixnum(), s.try_fixnum()) {
+        (Some(b), Some(e), Some(s)) if s != 0 => Some((b, e, s)),
+        _ => None,
+    };
+    // The number of terms and the last of them.
+    let (len, last) = if let Some((b, e, s)) = fixnums {
+        let count = fixnum_count(b, e, s, excl);
+        if count == 0 {
+            return Ok(empty(arg));
         }
-        Some(n_arg) => {
-            // CRuby's `arith_seq_last` clamps the count to the length
-            // *before* NUM2LONG, so one beyond a `long` takes everything
-            // rather than raising.
-            let n = match n_arg.unpack() {
-                RV::Fixnum(n) => n,
-                _ => match n_arg.coerce_to_int(vm, globals)?.unpack() {
-                    RV::Fixnum(n) => n,
-                    RV::BigInt(b) if b.sign() == num::bigint::Sign::Plus => count,
-                    _ => {
-                        return Err(MonorubyErr::rangeerr(
-                            "bignum too big to convert into 'long'",
-                        ));
-                    }
-                },
-            };
-            if n < 0 {
-                return Err(MonorubyErr::argumenterr("negative array size"));
-            }
-            if count == 0 || n == 0 {
-                return Ok(Value::array_empty());
-            }
-            let n = std::cmp::min(n, count);
-            let base = count - n;
-            build_terms(vm, globals, b, s, base, n)
-        }
+        (Value::integer(count), fixnum_term(b, count - 1, s))
+    } else {
+        let Some(tail) = Tail::new(vm, globals, b, e, s, excl)? else {
+            return Ok(empty(arg));
+        };
+        (tail.len(vm, globals)?, tail.last)
+    };
+    let Some(n_arg) = arg else {
+        return Ok(last);
+    };
+    // The count is clamped to the length *before* NUM2LONG, so one
+    // beyond a `long` takes everything rather than raising.
+    let mut nv = if n_arg.is_integer() {
+        n_arg
+    } else {
+        n_arg.coerce_to_int(vm, globals)?
+    };
+    if call(vm, globals, nv, IdentId::_GT, len)?.as_bool() {
+        nv = len;
     }
-}
-
-/// Build an Array of `n` terms starting at index `start_idx`: term[i]
-/// = b + (start_idx + i) * s for i in 0..n.
-fn build_terms(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    b: Value,
-    s: Value,
-    start_idx: i64,
-    n: i64,
-) -> Result<Value> {
-    let mut vec = Vec::with_capacity(n as usize);
-    for i in 0..n {
-        vec.push(term_or_generic(vm, globals, b, start_idx + i, s)?);
+    let n = nv.num2long(vm, globals)?;
+    if n < 0 {
+        return Err(MonorubyErr::argumenterr("negative array size"));
     }
-    Ok(Value::array_from_vec(vec))
-}
-
-/// `b + idx * s`: native fast path for Fixnum/Float; generic
-/// method-dispatch for everything else.
-fn term_or_generic(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    b: Value,
-    idx: i64,
-    s: Value,
-) -> Result<Value> {
-    if let Some(v) = term_at(b, idx, s) {
-        return Ok(v);
+    if let Some((b, e, s)) = fixnums {
+        return Ok(fixnum_terms(b, s, fixnum_count(b, e, s, excl) - n, n));
     }
-    term_at_generic(vm, globals, b, idx, s)
+    let back = int_op(vm, globals, s, IdentId::_MUL, nv)?;
+    let mut c = int_op(vm, globals, last, IdentId::_SUB, back)?;
+    let mut terms = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        c = int_op(vm, globals, c, IdentId::_ADD, s)?;
+        terms.push(c);
+    }
+    Ok(Value::array_from_vec(terms))
 }
 
 // ─── [] (Array stride-aware index) ─────────────────────────────────
@@ -840,15 +955,14 @@ fn format_oob(b: Value, e: Value, s: Value, excl: bool) -> String {
 #[cfg(test)]
 mod tests {
     // Coverage for the two error-prone helpers that aren't directly
-    // exposed: `generic_count` (the Rational / user-Numeric slow path
-    // under `finite_count`) and `format_oob` (the error builder
-    // dispatched from `index_op`).
+    // exposed: `Tail::for_size` (the Rational / user-Numeric path of
+    // `size`) and `format_oob` (the error builder dispatched from
+    // `index_op`).
     //
-    // `generic_count` is reached only when the all-Fixnum and the
-    // all-`to_f64` fast paths in `finite_count` both fall through —
-    // i.e. at least one of (b, e, s) is a Rational / Complex /
-    // user-defined Numeric. Rational steps below drive `.size`
-    // through `size` → `finite_count` → `generic_count`.
+    // `Tail::for_size` is reached only when the sequence is neither
+    // all-Fixnum nor a Float one — i.e. at least one of (b, e, s) is a
+    // Rational / Bignum / user-defined Numeric. Rational steps below
+    // drive `.size` through it.
     //
     // `format_oob` fires from `index_op` whenever the underlying
     // `rb_arithmetic_sequence_beg_len_step` (folded into `index_op`)

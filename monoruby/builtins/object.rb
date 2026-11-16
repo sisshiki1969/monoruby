@@ -5,7 +5,10 @@ class Object
   # Spelling it `def initialize(...)` anywhere would silently accept any
   # arguments and defeat the JIT's forwarding specialization for
   # argument-less `Class#new`.
+end
 
+# `Kernel`'s, as in CRuby: `Kernel.instance_method(:then)` finds them.
+module Kernel
   def itself
     self
   end

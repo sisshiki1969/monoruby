@@ -1,3 +1,5 @@
+# monoruby-hidden-ivars: true
+
 module GC
   # Most of the module is implemented in Rust (`src/builtins/gc.rs`),
   # reading the allocator's own counters: `count`, `stat`, `total_time`,
@@ -35,14 +37,14 @@ module GC
   # off. The accessors round-trip a stored value so callers (including
   # yjit-bench's harness-common.rb which calls `GC.auto_compact = false`
   # unconditionally) get the same interface as CRuby without errors.
-  @auto_compact = false
+  @__auto_compact = false
 
   def self.auto_compact
-    @auto_compact
+    @__auto_compact
   end
 
   def self.auto_compact=(flag)
-    @auto_compact = flag ? true : false
+    @__auto_compact = flag ? true : false
   end
 
   # `compact` degrades to a full collection and reports that nothing

@@ -1,3 +1,5 @@
+# monoruby-hidden-ivars: true
+
 module Enumerable
   # Iterate `self.each`, gathering multi-value yields into a single
   # Array per iteration. CRuby's rule (block-arity-1 semantics): a
@@ -1139,10 +1141,10 @@ class Enumerator
     include Enumerable
 
     def initialize(*enums)
-      @enums = enums
+      @__enums = enums
       # How far `#each` got, so `#rewind` only rewinds what was actually
       # iterated (CRuby's `enum_chain_rewind` walks `pos` downwards).
-      @pos = -1
+      @__pos = -1
       __enum_init_method__(self, :__chain_each, [], -> { size })
       self
     end
@@ -1159,8 +1161,12 @@ class Enumerator
       unless other.instance_of?(self.class)
         raise TypeError, "initialize_copy should take same class object"
       end
-      raise ArgumentError, "uninitialized chain" if other.instance_variable_get(:@enums).nil?
+      raise ArgumentError, "uninitialized chain" if other.__send__(:__chain_enums).nil?
       super
+    end
+
+    private def __chain_enums
+      @__enums
     end
 
     private def __chain_each(&block)
@@ -1169,9 +1175,9 @@ class Enumerator
 
     def each(&block)
       return to_enum(:each) { size } unless block
-      @pos = -1
-      @enums.each_with_index do |e, i|
-        @pos = i
+      @__pos = -1
+      @__enums.each_with_index do |e, i|
+        @__pos = i
         e.each { |*x| block.call(*x) }
       end
       self
@@ -1179,7 +1185,7 @@ class Enumerator
 
     def size
       total = 0
-      @enums.each do |e|
+      @__enums.each do |e|
         s = e.respond_to?(:size) ? e.size : nil
         return s if s.nil? || (s.respond_to?(:infinite?) && s.infinite?)
         total += s
@@ -1190,19 +1196,19 @@ class Enumerator
     # Rewinds — in reverse order — only the sources `#each` reached, and
     # only those that respond to `rewind`.
     def rewind
-      i = @pos
+      i = @__pos
       while i >= 0
-        e = @enums[i]
+        e = @__enums[i]
         e.rewind if e.respond_to?(:rewind)
         i -= 1
       end
-      @pos = -1
+      @__pos = -1
       self
     end
 
     def inspect
-      return __sprintf_repr("#<Enumerator::Chain: uninitialized>") if @enums.nil?
-      __sprintf_repr("#<Enumerator::Chain: #{@enums.inspect}>")
+      return __sprintf_repr("#<Enumerator::Chain: uninitialized>") if @__enums.nil?
+      __sprintf_repr("#<Enumerator::Chain: #{@__enums.inspect}>")
     end
     alias to_s inspect
   end
