@@ -2070,7 +2070,11 @@ impl<'a> JitContext<'a> {
         state.load(ir, recv, GP::Rdi);
         // ④-b: skip the frozen guard when an earlier ivar store on this
         // straight-line path already proved this receiver slot unfrozen.
-        if !self.instr_unfrozen_contains(recv) {
+        // A hidden slot is written on a frozen object too (see
+        // `TraceIr::StoreIvar`): no guard, and nothing proven.
+        let hidden = ivar_name.is_hidden_ivar();
+        let unfrozen = self.instr_unfrozen_contains(recv);
+        if !unfrozen && !hidden {
             let deopt = ir.new_deopt(state);
             ir.guard_frozen(deopt);
         }
@@ -2099,7 +2103,7 @@ impl<'a> JitContext<'a> {
         // now proven unfrozen — unless the call's dst redefined that very
         // slot with the stored value.
         self.restore_unfrozen(dst);
-        if dst != Some(recv) {
+        if dst != Some(recv) && (unfrozen || !hidden) {
             self.prove_unfrozen(recv);
         }
         CompileResult::Continue

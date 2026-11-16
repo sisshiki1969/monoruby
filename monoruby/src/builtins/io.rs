@@ -5457,20 +5457,10 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let timeout = if timeout_arg.is_nil() {
         None // block forever
     } else {
-        let f = timeout_arg.coerce_to_f64(vm, globals)?;
-        if f.is_nan() {
-            return Err(MonorubyErr::rangeerr("NaN out of Time range"));
-        }
-        if f < 0.0 {
-            return Err(MonorubyErr::argumenterr(
-                "time interval must not be negative",
-            ));
-        }
-        let secs = f.floor() as libc::time_t;
-        let usecs = ((f - f.floor()) * 1_000_000.0) as libc::suseconds_t;
+        let dur = super::kernel::time_interval(vm, globals, timeout_arg)?;
         Some(libc::timeval {
-            tv_sec: secs,
-            tv_usec: usecs,
+            tv_sec: dur.as_secs().min(libc::time_t::MAX as u64) as libc::time_t,
+            tv_usec: dur.subsec_micros() as libc::suseconds_t,
         })
     };
 
@@ -6395,15 +6385,7 @@ fn parse_wait_timeout(
     if v.is_nil() {
         return Ok(-1);
     }
-    let f = v.coerce_to_f64(vm, globals)?;
-    if f.is_nan() {
-        return Err(MonorubyErr::rangeerr("NaN out of Time range"));
-    }
-    if f < 0.0 {
-        return Err(MonorubyErr::argumenterr(
-            "time interval must not be negative",
-        ));
-    }
+    let f = super::kernel::time_interval(vm, globals, v)?.as_secs_f64();
     let ms = (f * 1000.0).ceil();
     let capped = if ms > i32::MAX as f64 {
         i32::MAX

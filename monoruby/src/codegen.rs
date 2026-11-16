@@ -2250,11 +2250,18 @@ extern "C" fn set_instance_var_with_cache(
     cache: &mut InstanceVarCache,
 ) -> Option<Value> {
     let class_id = base.class();
-    let rval = match base.try_rvalue_mut_or_frozen(&globals.store) {
-        Ok(rval) => rval,
-        Err(err) => {
-            vm.set_error(err);
-            return None;
+    // A hidden slot is not state `freeze` protects: a frozen Mutex still
+    // locks. (Such a `self` is a heap object: an immediate has no method
+    // that stores into one.)
+    let rval = if base.is_frozen() && name.is_hidden_ivar() && base.try_rvalue().is_some() {
+        base.rvalue_mut()
+    } else {
+        match base.try_rvalue_mut_or_frozen(&globals.store) {
+            Ok(rval) => rval,
+            Err(err) => {
+                vm.set_error(err);
+                return None;
+            }
         }
     };
     if class_id == cache.class_id {

@@ -226,7 +226,7 @@ Ruby 側(startup.rb、`class Thread`):
   スレッドを共有するので同じ id、1:1 では各スレッド固有)
 - `#report_on_exception`(インスタンスのみ)
 - `Thread.ignore_deadlock` / `=`(クラス変数に丸めるだけ。デッドロック検出器自体は止めない)
-- `Thread::Waiter`(`Process.detach` 用。native `Thread.new` はブロック必須なので
+- `Process::Waiter`(`Process.detach` 用。native `Thread.new` はブロック必須なので
   `allocate` ベースで生成)
 
 `Kernel#sleep` は他に生存スレッドがいるときだけスケジューラ経由になる

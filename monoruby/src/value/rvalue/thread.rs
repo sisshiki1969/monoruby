@@ -42,7 +42,7 @@ pub struct ThreadInner {
     /// live `main_exec` pointer while green threads run).
     handle: Option<Box<Executor>>,
     /// The body block. `None` for the main thread and for bare
-    /// `Thread.allocate` shells (e.g. `Thread::Waiter`).
+    /// `Thread.allocate` shells (e.g. `Process::Waiter`).
     proc: Option<Proc>,
     /// Arguments passed to `Thread.new`, delivered to the body block.
     args: Vec<Value>,
@@ -301,7 +301,7 @@ impl ThreadInner {
 
     /// An inert shell for `Thread.allocate` (never scheduled). Used by
     /// Ruby-level subclasses with their own life cycle, e.g.
-    /// `Thread::Waiter` returned by `Process.detach`.
+    /// `Process::Waiter` returned by `Process.detach`.
     pub(crate) fn shell() -> Self {
         Self {
             handle: None,

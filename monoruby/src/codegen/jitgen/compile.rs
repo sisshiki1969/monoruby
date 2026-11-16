@@ -741,13 +741,27 @@ impl<'a> JitContext<'a> {
                     // a safepoint, so `self` has seen no collection and is
                     // young — a store into it needs no write barrier.
                     let self_young = frozen_checked && self.current_frame().self_fresh;
-                    self.store_ivar(state, ir, src, self_class, ivarid, frozen_checked, self_young);
+                    // A hidden slot is written on a frozen object too (a
+                    // frozen Mutex still locks), so its store carries no
+                    // frozen guard — and proves nothing about `self`.
+                    let hidden = name.is_hidden_ivar();
+                    self.store_ivar(
+                        state,
+                        ir,
+                        src,
+                        self_class,
+                        ivarid,
+                        frozen_checked || hidden,
+                        self_young,
+                    );
                     // The store itself runs no Ruby code (the heap-table
                     // grow path is a Rust call), so the other proofs
                     // survive; the guard (or the carried proof) just
                     // established that self is not frozen here.
                     self.restore_unfrozen(None);
-                    self.prove_unfrozen(SlotId::self_());
+                    if frozen_checked || !hidden {
+                        self.prove_unfrozen(SlotId::self_());
+                    }
                     state.unset_side_effect_guard();
                 } else {
                     return Ok(CompileResult::Recompile(RecompileReason::IvarIdNotFound));
