@@ -106,6 +106,9 @@ const CHILLED_LITERAL_BIT: u16 = 0b1000_0000;
 /// with the JIT, whose inline literal copy masks the template's header word
 /// with exactly this, so the two cannot drift apart.
 pub const NEWBORN_FLAG_MASK: u16 = 0b0001_0111 | CHILLED_LITERAL_BIT;
+/// Header flag bit 5: the String is an fstring (see `Header::is_fstr`).
+/// Not in `NEWBORN_FLAG_MASK`: a copy is an ordinary String.
+const FSTR_BIT: u16 = 0b0010_0000;
 pub const RVALUE_OFFSET_FLAG: usize = std::mem::offset_of!(RValue, header.meta.flag);
 pub const RVALUE_OFFSET_TY: usize = std::mem::offset_of!(RValue, header.meta.ty);
 // `ty_flags_ptr` addresses the per-type metadata byte as `ty` + 1.
@@ -1399,6 +1402,23 @@ impl RValue {
 
     pub(crate) fn clear_frozen(&mut self) {
         self.header.clear_frozen()
+    }
+
+    /// See `Header::is_fstr`.
+    pub(crate) fn is_fstr(&self) -> bool {
+        self.header.is_fstr()
+    }
+
+    /// See `Header::is_fstr`. Freezes the String as well.
+    pub(crate) fn set_fstr(&mut self) {
+        debug_assert_eq!(self.ty(), ObjTy::STRING);
+        self.header.set_fstr()
+    }
+
+    /// Whether a table of instance variables was ever attached to this
+    /// object (it may hold none by now).
+    pub(crate) fn has_var_table(&self) -> bool {
+        self.var_table.is_some()
     }
 
     pub(crate) fn is_chilled(&self) -> bool {
@@ -3198,7 +3218,25 @@ impl Header {
     }
 
     fn clear_frozen(&mut self) {
-        unsafe { self.meta.flag &= !0b10 }
+        unsafe { self.meta.flag &= !(0b10 | FSTR_BIT) }
+    }
+
+    /// A String the interpreter shares by content or by owner — CRuby's
+    /// `RSTRING_FSTR`: a pooled literal (`"lit".freeze`, `-str`, a
+    /// `# frozen_string_literal: true` literal), a `Symbol#name`, a
+    /// `Module#name`, and the frozen copy a Hash makes of an unfrozen
+    /// String key. It is frozen, and — unlike any other frozen String,
+    /// which gets a frozen one — it cannot be given a singleton class
+    /// (`rb_singleton_class`: "can't define singleton").
+    ///
+    /// The bit is outside `NEWBORN_FLAG_MASK`, so a `dup` / `clone` of
+    /// such a String is an ordinary one.
+    fn is_fstr(&self) -> bool {
+        unsafe { self.meta.flag & (0b10 | FSTR_BIT) == (0b10 | FSTR_BIT) }
+    }
+
+    fn set_fstr(&mut self) {
+        unsafe { self.meta.flag |= 0b10 | FSTR_BIT }
     }
 
     ///
@@ -3234,9 +3272,10 @@ impl Header {
     //
     // bit3 `0b000_1000` = OLD            (promoted to old generation)
     // bit4 `0b001_0000` = WB_UNPROTECTED (shady; never promoted)
-    // bit5 `0b010_0000` = (free — was REMEMBERED; "in the remembered
+    // bit5 `0b010_0000` = FSTR_BIT — not a GC flag (see `is_fstr`); the
+    //                     bit was REMEMBERED once: "in the remembered
     //                     set" is now derived as `OLD && !WB_ARMED`,
-    //                     and the set itself is `Allocator::remembered`)
+    //                     and the set itself is `Allocator::remembered`
     // bit6 `0b100_0000` = WB_ARMED       (see `is_wb_armed`)
     //
     // A freshly allocated object has `flag == 1`, so all these bits

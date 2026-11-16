@@ -35,6 +35,7 @@ impl ExceptionInner {
     pub fn set_message(&mut self, msg: String) {
         self.message = msg;
         self.default_message_class = None;
+        self.name_span = None;
     }
 
     pub fn kind(&self) -> MonorubyErrKind {

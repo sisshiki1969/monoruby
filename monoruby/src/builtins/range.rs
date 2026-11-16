@@ -267,6 +267,10 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 "negative array size (or size too big)",
             ));
         }
+        // `rb_ary_new2(n)`: longer than ARY_MAX_SIZE is refused.
+        if n > i64::MAX / 8 {
+            return Err(MonorubyErr::argumenterr("array size too big"));
+        }
         let n = n as usize;
         if let Some((start, end)) = range.try_fixnum() {
             let vec: Vec<Value> = (start..end).take(n).map(Value::integer).collect();

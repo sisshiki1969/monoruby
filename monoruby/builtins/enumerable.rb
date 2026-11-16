@@ -259,6 +259,7 @@ module Enumerable
     raise ArgumentError, "attempt to take negative size" if n < 0
     res = []
     return res if n == 0
+    raise ArgumentError, "array size too big" if n > 0x0fff_ffff_ffff_ffff
     __gather_each do |x|
       res << x
       break if res.size >= n
@@ -375,8 +376,7 @@ module Enumerable
       end
       elem
     else
-      n = __num2long(n)
-      raise ArgumentError, "negative size (#{n})" if n < 0
+      n = __nmin_n(n, true)
       return [] if n == 0
       pairs = []
       __gather_each { |x| pairs << [yield(x), x] }
@@ -592,8 +592,7 @@ module Enumerable
       end
       elem
     else
-      n = __num2long(n)
-      raise ArgumentError, "negative size (#{n})" if n < 0
+      n = __nmin_n(n, true)
       return [] if n == 0
       pairs = []
       __gather_each { |x| pairs << [yield(x), x] }
@@ -667,6 +666,7 @@ module Enumerable
     raise ArgumentError, "attempt to take negative size" if n < 0
     res = []
     return res if n == 0
+    raise ArgumentError, "array size too big" if n > 0x0fff_ffff_ffff_ffff
     # Push-then-break so exactly `n` elements are consumed (the
     # underlying `each` is not advanced past what is needed).
     __gather_each do |x|
@@ -778,8 +778,7 @@ module Enumerable
       end
       m
     else
-      n = __num2long(n)
-      raise ArgumentError, "negative size (#{n})" if n < 0
+      n = __nmin_n(n)
       return [] if n == 0
       if block_given?
         self.to_a.sort { |a, b| yield(a, b) }.first(n)
@@ -818,8 +817,7 @@ module Enumerable
       end
       m
     else
-      n = __num2long(n)
-      raise ArgumentError, "negative size (#{n})" if n < 0
+      n = __nmin_n(n)
       return [] if n == 0
       if block_given?
         self.to_a.sort { |a, b| yield(a, b) }.last(n).reverse

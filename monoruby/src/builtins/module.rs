@@ -89,6 +89,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MODULE_CLASS, "subclasses", subclasses, 0);
     globals.define_builtin_func_with(MODULE_CLASS, "const_defined?", const_defined, 1, 2, false);
     globals.define_builtin_func_with(MODULE_CLASS, "const_get", const_get, 1, 2, false);
+    globals.define_builtin_func(MODULE_CLASS, "const_missing", const_missing, 1);
     globals.define_builtin_func(MODULE_CLASS, "const_set", const_set, 2);
     globals.define_private_builtin_func(MODULE_CLASS, "remove_const", remove_const, 1);
     globals.define_builtin_func_with(
@@ -531,8 +532,8 @@ fn alias_method(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
-    self_val.ensure_not_frozen(&globals.store)?;
     let class_id = self_val.as_class_id();
+    globals.store.class_modify_check(class_id)?;
     let new_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
     let old_name = lfp.arg(1).coerce_to_symbol_or_string(vm, globals)?;
     vm.alias_method_for_class(globals, class_id, new_name, old_name)?;
@@ -1178,6 +1179,71 @@ fn const_defined(
 }
 
 ///
+/// ### Module#const_missing
+///
+/// - const_missing(name)
+///
+/// The default raises CRuby's `uninitialized_constant`: `uninitialized
+/// constant Foo` on Object, `uninitialized constant M::Foo` on any other
+/// module — `M` being its `#name`, or its `#inspect` when it has none —
+/// with the name on `#name` and the module on `#receiver`. The name is
+/// shown through `Symbol#to_s` each time the message is read
+/// (`MonorubyErr::name_span`); a name given as anything else is shown
+/// by its `to_s`, and is `#name` as it is.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Module/i/const_missing.html]
+#[monoruby_builtin]
+fn const_missing(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let name = lfp.arg(0);
+    let prefix = if self_val.as_class_id() == OBJECT_CLASS {
+        String::new()
+    } else {
+        let shown = match vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("name"),
+            self_val,
+            &[],
+            None,
+            None,
+        ) {
+            Ok(v) if !v.is_nil() => Some(v),
+            _ => vm
+                .invoke_method_inner(globals, IdentId::INSPECT, self_val, &[], None, None)
+                .ok(),
+        };
+        let shown = shown
+            .and_then(|v| {
+                v.is_rstring_inner()
+                    .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+            })
+            .unwrap_or_else(|| globals.store.get_class_name(self_val.as_class_id()));
+        format!("{shown}::")
+    };
+    if let Some(sym) = name.try_symbol() {
+        return Err(MonorubyErr::nameerr_showing(
+            format_args!("uninitialized constant {prefix}"),
+            sym,
+            format_args!(""),
+            Some(self_val),
+        ));
+    }
+    let shown = vm.obj_as_string(globals, name)?;
+    let shown = String::from_utf8_lossy(shown.as_rstring_inner().as_bytes()).into_owned();
+    Err(crate::builtins::kernel::name_error_reflection(
+        globals,
+        format!("uninitialized constant {prefix}{shown}"),
+        name,
+        self_val,
+    ))
+}
+
+///
 /// ### Module#const_get
 ///
 /// - const_get(name, inherit = true) -> object
@@ -1218,7 +1284,7 @@ fn const_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 ) {
                     Ok(v) => Ok(v),
                     Err(e) if matches!(e.kind, MonorubyErrKind::Name(..)) => {
-                        Err(MonorubyErr::nameerr_with_name(e.message, sym))
+                        Err(e.nameerr_about(sym, None))
                     }
                     Err(e) => Err(e),
                 };
@@ -1660,9 +1726,14 @@ fn remove_const(
         let qualified = format!("{}::{}", module.get_name(&globals.store), name);
         crate::value::emit_deprecated_constant_warning(vm, globals, &qualified)?;
     }
-    globals
-        .remove_constant(module, name)
-        .ok_or(MonorubyErr::uninitialized_constant(name))
+    match globals.remove_constant(module, name) {
+        Some(v) => Ok(v),
+        None => Err(MonorubyErr::constant_not_defined(
+            &globals.store,
+            name,
+            module,
+        )),
+    }
 }
 
 ///
@@ -1696,9 +1767,7 @@ fn define_method(
     pc: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
-    if self_val.is_frozen() {
-        return Err(MonorubyErr::cant_modify_frozen(&globals.store, self_val));
-    }
+    globals.store.class_modify_check(self_val.as_class_id())?;
     let class_id = self_val.as_class_id();
     // The name accepts Symbol / String and anything `to_str`-convertible
     // (CRuby's `define_method(obj)` with `obj.to_str`).
@@ -2087,7 +2156,7 @@ fn append_features(
 ) -> Result<Value> {
     require_module_receiver(globals, lfp.self_val(), "append_features")?;
     let mut base = lfp.arg(0).expect_class_or_module(&globals.store)?;
-    base.as_val().ensure_not_frozen(&globals.store)?;
+    globals.store.class_modify_check(base.id())?;
     let include_module = lfp.self_val().expect_module(globals)?;
     base.include_module(include_module)?;
     globals
@@ -2221,7 +2290,7 @@ fn prepend_features(
 ) -> Result<Value> {
     require_module_receiver(globals, lfp.self_val(), "prepend_features")?;
     let mut base = lfp.arg(0).expect_class_or_module(&globals.store)?;
-    base.as_val().ensure_not_frozen(&globals.store)?;
+    globals.store.class_modify_check(base.id())?;
     let prepend_module = lfp.self_val().as_class();
     base.prepend_module(prepend_module)?;
     // CRuby propagates a `Module#prepend` to every class that has
@@ -2350,12 +2419,9 @@ fn undef_method(
         .map(|n| n.coerce_to_symbol_or_string(vm, globals))
         .collect::<Result<_>>()?;
     if !resolved.is_empty() {
-        self_val.ensure_not_frozen(&globals.store)?;
+        globals.store.class_modify_check(class_id)?;
     }
     for name in resolved {
-        if globals.find_method_for_class(class_id, name).is_err() {
-            return Err(undefined_method_for_kind(globals, class_id, name));
-        }
         globals.undef_method_for_class(class_id, name)?;
         vm.invoke_method_undefined(globals, class_id, name)?;
     }
@@ -2383,51 +2449,13 @@ fn remove_method(
         .map(|n| n.coerce_to_symbol_or_string(vm, globals))
         .collect::<Result<_>>()?;
     if !resolved.is_empty() {
-        self_val.ensure_not_frozen(&globals.store)?;
+        globals.store.class_modify_check(class_id)?;
     }
     for name in resolved {
         globals.remove_method(class_id, name)?;
         vm.invoke_method_removed(globals, class_id, name)?;
     }
     Ok(lfp.self_val())
-}
-
-/// CRuby renders `undef_method`'s missing-name NameError as
-/// "undefined method `<name>' for module `<X>'" or `... for class
-/// `<X>'` depending on whether the receiver is a Module or a Class.
-/// For a singleton class, the name string is the attached object
-/// rather than `#<Class:X>` so e.g.
-/// `String.singleton_class.send(:undef_method, :foo)` reads
-/// `... for class `String'`.
-fn undefined_method_for_kind(
-    globals: &Globals,
-    class_id: ClassId,
-    method: IdentId,
-) -> MonorubyErr {
-    let module = globals.store[class_id].get_module();
-    let kind = if module.as_val().ty() == Some(ObjTy::MODULE) {
-        "module"
-    } else {
-        "class"
-    };
-    // Singleton class display: when the attached object is itself a
-    // class/module (a metaclass like `String.singleton_class`), CRuby
-    // unwraps the display to the attached's own name (`String`). For an
-    // instance's singleton, fall back to the singleton class's own
-    // `#<Class:#<Foo:0x...>>` form.
-    let display = if let Some(attached) = module.is_singleton() {
-        if attached.is_class_or_module().is_some() {
-            attached.to_s(&globals.store)
-        } else {
-            class_id.get_name(&globals.store)
-        }
-    } else {
-        class_id.get_name(&globals.store)
-    };
-    MonorubyErr::nameerr(format!(
-        "undefined method '{}' for {kind} '{display}'",
-        method.get_name(),
-    ))
 }
 
 fn check_method_defined(
@@ -2645,7 +2673,8 @@ fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     let class_name = globals.store.get_class_name(class_id);
     let mut val = Value::string_usascii(class_name);
-    val.set_frozen();
+    // The class path is an fstring (`rb_fstring` in `build_const_path`).
+    val.set_fstring();
     globals.store[class_id].set_cached_name_value(val);
     Ok(val)
 }
@@ -2738,7 +2767,7 @@ fn coerce_to_class_var_name(
         // spec's `equal?` holds) and the receiver on this NameError.
         return Err(crate::builtins::kernel::name_error_reflection(
             globals,
-            format!("`{s}' is not allowed as a class variable name"),
+            format!("'{s}' is not allowed as a class variable name"),
             name_arg,
             receiver,
         ));
@@ -2763,10 +2792,12 @@ fn remove_class_variable(
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
     match globals.store[class_id].remove_cvar(name) {
         Some(val) => Ok(val),
-        None => Err(MonorubyErr::nameerr(format!(
-            "class variable {name} not defined for {}",
-            class_id.get_name(&globals.store)
-        ))),
+        None => Err(MonorubyErr::nameerr_showing(
+            format_args!("class variable "),
+            name,
+            format_args!(" not defined for {}", class_id.get_name(&globals.store)),
+            Some(lfp.self_val()),
+        )),
     }
 }
 
@@ -2910,6 +2941,7 @@ fn private_constant(
 /// Shared body of `Module#private_constant` and `Module#public_constant`.
 fn set_constants_visibility(globals: &mut Globals, lfp: Lfp, make_private: bool) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
+    globals.store.class_modify_check(class_id)?;
     let args = lfp.arg(0).as_array();
     // Validate every name first so a partial failure does not leave the
     // class in an inconsistent state.
@@ -2917,11 +2949,11 @@ fn set_constants_visibility(globals: &mut Globals, lfp: Lfp, make_private: bool)
     for arg in args.iter() {
         let name = arg.expect_symbol_or_string(globals)?;
         if !globals.store[class_id].has_own_constant(name) {
-            return Err(MonorubyErr::nameerr(format!(
-                "constant {}::{} not defined",
-                class_id.get_name(&globals.store),
-                name
-            )));
+            return Err(MonorubyErr::constant_not_defined(
+                &globals.store,
+                name,
+                class_id,
+            ));
         }
         names.push(name);
     }
@@ -2954,6 +2986,7 @@ fn deprecate_constant(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
+    globals.store.class_modify_check(class_id)?;
     let args = lfp.arg(0).as_array();
     // Validate every name first so a partial failure does not leave the
     // class in an inconsistent state — matching CRuby and the behaviour
@@ -2962,11 +2995,11 @@ fn deprecate_constant(
     for arg in args.iter() {
         let name = arg.expect_symbol_or_string(globals)?;
         if !globals.store[class_id].has_own_constant(name) {
-            return Err(MonorubyErr::nameerr(format!(
-                "constant {}::{} not defined",
-                class_id.get_name(&globals.store),
-                name
-            )));
+            return Err(MonorubyErr::constant_not_defined(
+                &globals.store,
+                name,
+                class_id,
+            ));
         }
         names.push(name);
     }
@@ -3009,6 +3042,11 @@ pub(super) fn ruby2_keywords_mark(
     class_id: ClassId,
     names: &[Value],
 ) -> Result<Value> {
+    // `rb_mod_ruby2_keywords`: `rb_check_frozen(module)`.
+    globals.store[class_id]
+        .get_module()
+        .as_val()
+        .ensure_not_frozen(&globals.store)?;
     for arg in names.iter() {
         // expect_symbol_or_string accepts Symbol and String (and rejects
         // anything else with TypeError "<obj> is not a symbol nor a
@@ -3016,11 +3054,12 @@ pub(super) fn ruby2_keywords_mark(
         // `ruby2_keywords` is also strict about Symbol/String only.
         let name = arg.expect_symbol_or_string(globals)?;
         if !globals.store[class_id].has_own_method(name) {
-            return Err(MonorubyErr::nameerr(format!(
-                "undefined method '{}' for class '{}'",
+            return Err(MonorubyErr::method_name_error(
+                &globals.store,
                 name,
-                class_id.get_name(&globals.store)
-            )));
+                class_id,
+                None,
+            ));
         }
         // Mark the method when its signature is compatible (a `*rest`,
         // no keyword params / `**kw`, no post-rest requireds);
@@ -3497,7 +3536,10 @@ fn module_function(
         names.push(v.coerce_to_symbol_or_string(vm, globals)?);
     }
     for &name in &names {
-        let func_id = globals.find_method_for_class(class_id, name)?.0;
+        let func_id = globals
+            .find_method_for_class(class_id, name)
+            .map_err(|_| MonorubyErr::method_name_error(&globals.store, name, class_id, None))?
+            .0;
         // Module-method copy: install on the singleton (callable as `M.name`)
         // *and* mark the instance-method side private (matching CRuby).
         vm.add_singleton_method(globals, class_id, name, func_id, Visibility::Public)?;
@@ -3567,7 +3609,6 @@ pub(super) fn change_visi(
         vm.clear_module_function();
         return Ok(Value::nil());
     }
-    let (res, names) = extract_names(globals, arg)?;
     // At top level `self` is the `main` object (an Object instance, not
     // a Module); CRuby's default definee there is `Object`, so e.g.
     // `private :m` makes `Object#m` private. Fall back to OBJECT_CLASS
@@ -3577,6 +3618,14 @@ pub(super) fn change_visi(
     } else {
         OBJECT_CLASS
     };
+    // `set_method_visibility` is `rb_check_frozen(self)` before it reads
+    // a name — the class itself, also for a singleton class (unlike a
+    // method definition, `Store::class_modify_check`).
+    globals.store[class_id]
+        .get_module()
+        .as_val()
+        .ensure_not_frozen(&globals.store)?;
+    let (res, names) = extract_names(globals, arg)?;
     // CRuby fires `method_added` only when `private` / `protected` /
     // `public` adds a *new* entry to the receiver's method table —
     // i.e. when the method was inherited rather than defined locally.

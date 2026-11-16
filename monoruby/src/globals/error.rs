@@ -27,6 +27,11 @@ pub(crate) const SIGNO_PAYLOAD: &str = "signo";
 /// to `#instance_variables`).
 pub(crate) const SIGNO_IVAR: &str = "/signo";
 
+/// The `payload` tag of a NameError whose `#name` is not the Symbol of
+/// its kind but the Value carried here — the String `undef_method`
+/// reports (see [`MonorubyErr::undef_method_name_error`]).
+pub(crate) const NAME_PAYLOAD: &str = "name";
+
 /// The `Encoding::InvalidByteSequenceError` accessors, in the order the
 /// [`ENC_ERR_PAYLOAD`] Array packs them.
 pub(crate) const ENC_ERR_IVARS: [&str; 5] = [
@@ -138,6 +143,19 @@ pub struct MonorubyErr {
     /// class-name renderings that almost nothing reads. The read paths
     /// render it instead, via `message_with`.
     pub(crate) default_message_class: Option<ClassId>,
+    /// Where a NameError / NoMethodError message shows the name it is
+    /// about, as `(start, length)` in bytes of `message`.
+    ///
+    /// CRuby keeps such a message as a format and its arguments
+    /// (`NameError::message`, `name_err_mesg_to_str`) and renders the
+    /// name with `rb_obj_as_string` every time the message is read, so
+    /// a redefined `Symbol#to_s` shows in it, is called again per read,
+    /// and may raise out of `Exception#message` (#1954). Here the
+    /// message is built once with the name as it is, and
+    /// `Exception#to_s` swaps this span for the answer of that `to_s`.
+    /// `None` for a message the name is not part of — every message a
+    /// program gave itself (`NameError.new(msg, name)`).
+    pub(crate) name_span: Option<(u32, u32)>,
 }
 
 impl MonorubyErr {
@@ -161,7 +179,48 @@ impl MonorubyErr {
             payload: None,
             raw_message: None,
             default_message_class: None,
+            name_span: None,
         }
+    }
+
+    ///
+    /// An error whose message is *before*, *name*, *after*, and shows
+    /// the name through `Symbol#to_s` when it is read (see
+    /// [`MonorubyErr::name_span`]).
+    ///
+    pub(crate) fn with_shown_name(
+        kind: MonorubyErrKind,
+        before: std::fmt::Arguments,
+        name: IdentId,
+        after: std::fmt::Arguments,
+    ) -> Self {
+        let mut err = Self::with_message(kind, String::new());
+        err.set_msg_showing(before, name, after);
+        err
+    }
+
+    ///
+    /// Replace the message by *before*, *name*, *after*, the name shown
+    /// through `Symbol#to_s` when the message is read.
+    ///
+    pub(crate) fn set_msg_showing(
+        &mut self,
+        before: std::fmt::Arguments,
+        name: IdentId,
+        after: std::fmt::Arguments,
+    ) {
+        use std::fmt::Write;
+        let mut message = std::mem::take(&mut self.message);
+        message.clear();
+        let _ = message.write_fmt(before);
+        let start = message.len();
+        let _ = write!(message, "{name}");
+        let len = message.len() - start;
+        let _ = message.write_fmt(after);
+        self.message = message;
+        self.default_message_class = None;
+        self.raw_message = None;
+        self.name_span = Some((start as u32, len as u32));
     }
 
     ///
@@ -198,6 +257,7 @@ impl MonorubyErr {
             payload: None,
             raw_message: ex.raw_message.clone(),
             default_message_class: ex.default_message_class,
+            name_span: ex.name_span,
         }
     }
 
@@ -225,6 +285,7 @@ impl MonorubyErr {
             raw_message: None,
             payload: None,
             default_message_class: None,
+            name_span: None,
         }
     }
 
@@ -309,6 +370,7 @@ impl MonorubyErr {
     pub fn set_msg(&mut self, msg: String) {
         self.message = msg;
         self.default_message_class = None;
+        self.name_span = None;
     }
 
     pub fn trace(&self) -> &[TraceEntry] {
@@ -746,23 +808,63 @@ impl MonorubyErr {
         } else if store[obj.class()].get_module().is_singleton().is_some() {
             // A receiver with a singleton class keeps the address form
             // (`for #<Object:0x…>`) in CRuby, not `an instance of …`.
-            obj.to_s(store)
+            Self::singleton_receiver_description(store, obj)
         } else {
             format!("an instance of {}", obj.get_real_class_name(store))
         }
     }
 
-    pub(crate) fn method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
-        MonorubyErr::new(
+    ///
+    /// How a NameError / NoMethodError message names a receiver that has
+    /// a singleton class: `main` for the top-level object, and for
+    /// anything else the default `#<Class:0x…>` form — `rb_any_to_s`,
+    /// never the object's own `to_s` (a String with a singleton class is
+    /// `#<String:0x…>`, not its content).
+    ///
+    pub(crate) fn singleton_receiver_description(store: &Store, obj: Value) -> String {
+        if obj.ty() == Some(ObjTy::OBJECT) {
+            // The top-level object carries its name (`main`).
+            obj.to_s(store)
+        } else {
+            format!("#<{}:0x{:016x}>", obj.get_real_class_name(store), obj.id())
+        }
+    }
+
+    fn not_method(store: &Store, before: &str, name: IdentId, obj: Value) -> MonorubyErr {
+        Self::with_shown_name(
             MonorubyErrKind::NotMethod {
                 name: Some(name),
                 receiver: Some(obj),
             },
-            format!(
-                "undefined method '{name}' for {}",
-                Self::receiver_description(store, obj)
-            ),
+            format_args!("{before}"),
+            name,
+            format_args!("' for {}", Self::receiver_description(store, obj)),
         )
+    }
+
+    /// A NoMethodError about calling *name* on *obj*, whose message is
+    /// *before*, the name, *after* — for a caller that has described
+    /// the receiver itself (`Kernel#method_missing`, which can ask the
+    /// receiver's class for its `#name`).
+    pub(crate) fn no_method_error(
+        before: &str,
+        name: IdentId,
+        obj: Value,
+        after: std::fmt::Arguments,
+    ) -> MonorubyErr {
+        Self::with_shown_name(
+            MonorubyErrKind::NotMethod {
+                name: Some(name),
+                receiver: Some(obj),
+            },
+            format_args!("{before}"),
+            name,
+            after,
+        )
+    }
+
+    pub(crate) fn method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
+        Self::not_method(store, "undefined method '", name, obj)
     }
 
     ///
@@ -771,16 +873,7 @@ impl MonorubyErr {
     /// ordinary missing method (`super: no superclass method '<name>' …`).
     ///
     pub(crate) fn super_method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
-        MonorubyErr::new(
-            MonorubyErrKind::NotMethod {
-                name: Some(name),
-                receiver: Some(obj),
-            },
-            format!(
-                "super: no superclass method '{name}' for {}",
-                Self::receiver_description(store, obj)
-            ),
-        )
+        Self::not_method(store, "super: no superclass method '", name, obj)
     }
 
     pub(crate) fn method_not_found_for_class(
@@ -788,15 +881,14 @@ impl MonorubyErr {
         name: IdentId,
         class: ClassId,
     ) -> MonorubyErr {
-        MonorubyErr::new(
+        Self::with_shown_name(
             MonorubyErrKind::NotMethod {
                 name: Some(name),
                 receiver: None,
             },
-            format!(
-                "undefined method '{name}' for {}",
-                store.get_class_name(class)
-            ),
+            format_args!("undefined method '"),
+            name,
+            format_args!("' for {}", store.get_class_name(class)),
         )
     }
 
@@ -822,42 +914,103 @@ impl MonorubyErr {
             "class"
         };
         let class_name = store.get_class_name(class);
-        let msg = match visibility {
-            Some(Visibility::Private) => {
-                format!("method '{name}' for {kind} '{class_name}' is private")
-            }
-            Some(Visibility::Protected) => {
-                format!("method '{name}' for {kind} '{class_name}' is protected")
-            }
-            _ => format!("undefined method '{name}' for {kind} '{class_name}'"),
+        let (before, after) = match visibility {
+            Some(Visibility::Private) => ("method '", " is private"),
+            Some(Visibility::Protected) => ("method '", " is protected"),
+            _ => ("undefined method '", ""),
         };
-        Self::nameerr_with_name_receiver(msg, name, module.as_val())
+        Self::nameerr_showing(
+            format_args!("{before}"),
+            name,
+            format_args!("' for {kind} '{class_name}'{after}"),
+            Some(module.as_val()),
+        )
+    }
+
+    /// CRuby's `rb_method_name_error` as `rb_undef` calls it
+    /// (`Module#undef_method`, `undef`): `undefined method 'x' for class
+    /// 'C'` like [`Self::method_name_error`], except that the singleton
+    /// class of a class or module is reported as that class or module
+    /// (still `for class`), and that `#name` is the name as a *String*
+    /// (`rb_id2str`) — which, a String being what it is under
+    /// `rb_obj_as_string`, a redefined `Symbol#to_s` does not touch.
+    pub(crate) fn undef_method_name_error(
+        store: &Store,
+        name: IdentId,
+        class: ClassId,
+    ) -> MonorubyErr {
+        let module = store[class].get_module();
+        let (kind, shown) = match module.is_singleton() {
+            Some(attached) => match attached.is_class_or_module() {
+                Some(m) => ("class", m),
+                None => ("class", module),
+            },
+            None if module.as_val().ty() == Some(ObjTy::MODULE) => ("module", module),
+            None => ("class", module),
+        };
+        let mut err = Self::nameerr_with_name_receiver(
+            format!(
+                "undefined method '{name}' for {kind} '{}'",
+                store.get_class_name(shown.id())
+            ),
+            name,
+            shown.as_val(),
+        );
+        err.payload = Some((
+            Value::string_from_inner(crate::builtins::symbol::symbol_string_inner(name)),
+            NAME_PAYLOAD,
+        ));
+        err
+    }
+
+    /// `Module#remove_method` of a method the module does not define
+    /// itself: `method 'x' not defined in C`.
+    pub(crate) fn method_not_defined_in(
+        store: &Store,
+        name: IdentId,
+        class: ClassId,
+    ) -> MonorubyErr {
+        Self::nameerr_showing(
+            format_args!("method '"),
+            name,
+            format_args!("' not defined in {}", store.get_class_name(class)),
+            Some(store[class].get_module().as_val()),
+        )
+    }
+
+    /// `Module#remove_const` of a constant the module does not define
+    /// itself: `constant Object::Nope not defined`.
+    pub(crate) fn constant_not_defined(
+        store: &Store,
+        name: IdentId,
+        class: ClassId,
+    ) -> MonorubyErr {
+        Self::nameerr_showing(
+            format_args!("constant {}::", store.get_class_name(class)),
+            name,
+            format_args!(" not defined"),
+            Some(store[class].get_module().as_val()),
+        )
+    }
+
+    fn not_method_called(store: &Store, before: &str, name: IdentId, obj: Value) -> MonorubyErr {
+        Self::with_shown_name(
+            MonorubyErrKind::NotMethod {
+                name: Some(name),
+                receiver: Some(obj),
+            },
+            format_args!("{before}"),
+            name,
+            format_args!("' called for {}", Self::receiver_description(store, obj)),
+        )
     }
 
     pub(crate) fn private_method_called(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
-        MonorubyErr::new(
-            MonorubyErrKind::NotMethod {
-                name: Some(name),
-                receiver: Some(obj),
-            },
-            format!(
-                "private method '{name}' called for {}",
-                Self::receiver_description(store, obj)
-            ),
-        )
+        Self::not_method_called(store, "private method '", name, obj)
     }
 
     pub(crate) fn protected_method_called(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
-        MonorubyErr::new(
-            MonorubyErrKind::NotMethod {
-                name: Some(name),
-                receiver: Some(obj),
-            },
-            format!(
-                "protected method '{name}' called for {}",
-                Self::receiver_description(store, obj)
-            ),
-        )
+        Self::not_method_called(store, "protected method '", name, obj)
     }
 
     pub fn wrong_number_of_arg(expected: usize, given: usize) -> MonorubyErr {
@@ -934,15 +1087,58 @@ impl MonorubyErr {
         )
     }
 
+    /// A NameError whose message is *before*, *name*, *after*, the name
+    /// shown through `Symbol#to_s` when the message is read (see
+    /// [`MonorubyErr::name_span`]) — CRuby's `rb_name_err_raise` with a
+    /// `%1$s` in the format.
+    pub(crate) fn nameerr_showing(
+        before: std::fmt::Arguments,
+        name: IdentId,
+        after: std::fmt::Arguments,
+        receiver: Option<Value>,
+    ) -> MonorubyErr {
+        Self::with_shown_name(
+            MonorubyErrKind::Name(Some(name), receiver),
+            before,
+            name,
+            after,
+        )
+    }
+
+    /// This NameError, about *name* — and *receiver*, when one is given
+    /// — instead of whatever it carried: the message stays, and with it
+    /// the place the name is shown at when it is the same name.
+    pub(crate) fn nameerr_about(mut self, name: IdentId, receiver: Option<Value>) -> MonorubyErr {
+        let (same, old_receiver) = match &self.kind {
+            MonorubyErrKind::Name(n, r) => (*n == Some(name), *r),
+            _ => (false, None),
+        };
+        if !same {
+            self.name_span = None;
+        }
+        self.kind = MonorubyErrKind::Name(Some(name), receiver.or(old_receiver));
+        self
+    }
+
     pub(crate) fn uninitialized_constant(name: IdentId) -> MonorubyErr {
-        Self::nameerr_with_name(format!("uninitialized constant {name}"), name)
+        Self::nameerr_showing(
+            format_args!("uninitialized constant "),
+            name,
+            format_args!(""),
+            None,
+        )
     }
 
     /// As [`Self::uninitialized_constant`], but also records the module
     /// the constant was looked up on as `NameError#receiver` (CRuby
     /// reports the namespace class, or `Object` for a bare reference).
     pub(crate) fn uninitialized_constant_in(name: IdentId, receiver: Value) -> MonorubyErr {
-        Self::nameerr_with_name_receiver(format!("uninitialized constant {name}"), name, receiver)
+        Self::nameerr_showing(
+            format_args!("uninitialized constant "),
+            name,
+            format_args!(""),
+            Some(receiver),
+        )
     }
 
     pub(crate) fn uninitialized_cvar(
@@ -950,23 +1146,16 @@ impl MonorubyErr {
         class_name: String,
         receiver: Value,
     ) -> MonorubyErr {
-        Self::nameerr_with_name_receiver(
-            format!("uninitialized class variable {name} in {class_name}"),
+        Self::nameerr_showing(
+            format_args!("uninitialized class variable "),
             name,
-            receiver,
+            format_args!(" in {class_name}"),
+            Some(receiver),
         )
     }
 
     pub(crate) fn identifier_must_be_constant(name: &str) -> MonorubyErr {
         Self::nameerr(format!("identifier {name} needs to be constant"))
-    }
-
-    pub(crate) fn undefined_method(method_name: IdentId, class_name: String) -> MonorubyErr {
-        Self::nameerr(format!(
-            "undefined method '{}' for class '{}'",
-            method_name.get_name(),
-            class_name,
-        ))
     }
 
     pub(crate) fn typeerr(msg: impl ToString) -> MonorubyErr {

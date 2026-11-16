@@ -6307,14 +6307,11 @@ fn singleton_method(
     // singleton method. `nil` / `true` / `false` have none. Private ones
     // are found (#1642).
     let undefined = || {
-        MonorubyErr::nameerr_with_name_receiver(
-            format!(
-                "undefined singleton method '{}' for '{}'",
-                method_name,
-                receiver.inspect(&globals.store)
-            ),
+        MonorubyErr::nameerr_showing(
+            format_args!("undefined singleton method '"),
             method_name,
-            receiver,
+            format_args!("' for '{}'", receiver.inspect(&globals.store)),
+            Some(receiver),
         )
     };
     if receiver.is_nil() || receiver == Value::bool(true) || receiver == Value::bool(false) {

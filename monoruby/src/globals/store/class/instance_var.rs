@@ -71,9 +71,12 @@ impl Store {
             return Ok(val);
         }
 
-        Err(MonorubyErr::nameerr(format!(
-            "instance variable {name} not defined"
-        )))
+        Err(MonorubyErr::nameerr_showing(
+            format_args!("instance variable "),
+            name,
+            format_args!(" not defined"),
+            Some(base),
+        ))
     }
 
     /// Re-key the instance variables of `copy` — a shallow copy whose
