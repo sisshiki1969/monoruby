@@ -228,8 +228,11 @@ impl<'a> JitContext<'a> {
     ///
     /// No literal block (handing one out needs the outgoing-block treatment
     /// of the frame's locals, which the residual does not give). A named
-    /// site must not be a `(...)` forwarding one (the lazy forwarding
-    /// marker is the specialized binder's business).
+    /// `(...)` forwarding site qualifies: the run-time binder is the VM's
+    /// own (`vm_handle_arguments`), which reads the forwarded rest as an
+    /// `Array` or resolves the lazy forwarding marker in its place, and
+    /// [`Self::generic_send_arm`] has the rest and the `**kwrest` built
+    /// when this frame took them over elided.
     ///
     /// A `super` site qualifies when written in the method body itself.
     /// Its target depends on the frame, not just the receiver, and the run
@@ -246,7 +249,7 @@ impl<'a> JitContext<'a> {
             return false;
         }
         match callsite.name {
-            Some(_) => !callsite.forwarding,
+            Some(_) => true,
             None => {
                 let iseq_id = self.iseq_id();
                 self.store[iseq_id].mother().0 == iseq_id
@@ -280,7 +283,47 @@ impl<'a> JitContext<'a> {
     ) {
         state.unset_no_capture_guard(self);
         self.note_given_block_escape(state, ir, callid);
+        self.settle_operands_for_runtime_binder(state, ir, callid);
         state.generic_send(ir, self.store, callid);
+    }
+
+    ///
+    /// *callid* is about to be lowered as a call whose arguments a run-time
+    /// helper binds out of this frame's slots (a generic send, the
+    /// `method_missing` helper), with no argument fill of its own: have
+    /// every operand a real object.
+    ///
+    /// That matters for a `(...)` forwarding site in a trampoline
+    /// specialized into its caller (`doc/arg_forwarding_jit.md`).
+    /// `settle_virtual_args` leaves the forwarded rest to the fill, which
+    /// routes the caller's window or builds the `Array` — and here there is
+    /// no fill, so:
+    ///
+    /// - D1: an operand still elided (the rest handed over as the caller's
+    ///   argument window, a `**kwrest` as its keyword window) is allocated;
+    /// - K1: the caller must not skip building the rest and the `**kwrest`
+    ///   on the strength of another consume having routed its keywords.
+    ///
+    fn settle_operands_for_runtime_binder(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+    ) {
+        let callsite = &self.store[callid];
+        if !callsite.forwarding {
+            return;
+        }
+        if state.deferred_forward_info().is_some() {
+            ir.set_kw_vetoed();
+        }
+        let positional = callsite.args..callsite.args + callsite.pos_num;
+        let keywords = callsite.kw_pos..callsite.kw_pos + callsite.kw_len();
+        for slot in positional.chain(keywords) {
+            if state.virtual_at(slot).is_some() {
+                self.materialize_virtual(state, ir, slot);
+            }
+        }
     }
 
     ///
@@ -711,7 +754,8 @@ impl<'a> JitContext<'a> {
 
         // The helper reads the receiver, the arguments, the keywords and a
         // block argument out of this frame, so every one of them has to be
-        // in its slot.
+        // in its slot — and a real object (#1962).
+        self.settle_operands_for_runtime_binder(state, ir, callid);
         let callsite = self.store[callid].clone();
         state.write_back_recv_and_callargs(ir, &callsite);
         let using_fpr = state.get_using_fpr(ir);

@@ -219,6 +219,15 @@ routed の場合、rest スロットは呼び出しを跨いで `V` のまま: �
 唯一の `CallerSlots` 消費であり、`Class#new` の
 `__builtin_initialize__(...)` もここを通る。
 
+A 段を通らずに下ろされる転送 callsite もある: 実行時ヘルパが引数を
+フレームのスロットから束縛する generic send の残余アーム（メガモーフィックな
+`recv.m(...)`、`polymorphic_call.md` §10）と `method_missing` の呼び出し
+（`compile_method_missing`）。どちらも引数充填を持たないので、書き戻しの前に
+`settle_operands_for_runtime_binder` が elided のままの rest / `**kwrest` を
+実体化し、K1 を veto する。これが無いと書き戻しが `V` のスロットに当たる
+（#1962: トランポリンが呼び出し元にインライン化され、転送先が
+`method_missing` で応答する場合に JIT が panic していた）。
+
 callee フレームの静的レイアウトは
 `FuncInfo::forwarded_deferred_layout` → `ForwardedLayout { from_src,
 none_fill, rest, kw_rest }`。先頭引数は必ず req/opt に消費される

@@ -89,6 +89,7 @@ mod float_literal_carry;
 mod float_speculation;
 mod forwarded_block_yield;
 mod forwarding_depth;
+mod forwarding_megamorphic;
 mod forwarding_recompile;
 mod frameless_call;
 mod fused_branch_nested;
