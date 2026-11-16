@@ -906,7 +906,9 @@ pub(crate) fn compile_panic_contained() -> bool {
 /// declined compile — the warm-up counter that led here has run out, so
 /// the method or loop stays interpreted, and a failed recompile leaves
 /// the old code in place, deopting as before. The panic hook has
-/// reported the panic by then, so it is not silent.
+/// reported the panic by then, and `Codegen::contained_panics` counts it:
+/// the code still answers correctly, so the test harness fails a run
+/// that raised the count (`tests::run_test_main`).
 ///
 fn contain_compile_panic(_entry: &str, f: impl FnOnce()) -> bool {
     PANIC_CONTAINED.with(|c| c.set(c.get() + 1));
@@ -915,7 +917,11 @@ fn contain_compile_panic(_entry: &str, f: impl FnOnce()) -> bool {
     if result.is_err() {
         #[cfg(feature = "jit-log")]
         eprintln!("[JIT] {_entry} panicked, falling back to VM interpreter");
-        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
+        CODEGEN.with(|codegen| {
+            let mut codegen = codegen.borrow_mut();
+            codegen.contained_panics += 1;
+            codegen.jit.finalize();
+        });
     }
     result.is_ok()
 }
@@ -1428,6 +1434,8 @@ mod tests {
 
     #[test]
     fn compile_panic_is_contained() {
+        let contained = || CODEGEN.with(|codegen| codegen.borrow().contained_panics);
+        let before = contained();
         assert!(!compile_panic_contained());
         // A compile that completes: the panic hook is told a panic in it
         // would be contained.
@@ -1439,6 +1447,7 @@ mod tests {
             unreachable!("a compiler bug (expected by this test)")
         }));
         assert!(!compile_panic_contained());
+        assert_eq!(before + 1, contained());
         // The JIT is intact afterwards.
         run_test(
             r#"

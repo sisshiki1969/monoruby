@@ -1190,6 +1190,13 @@ impl<'a> JitContext<'a> {
                     }
                     // Declined: fall through to the ordinary builtin call.
                 }
+                // A constant operand that is neither a Fixnum nor a Float
+                // (`x ** nil`, `Math.sqrt(10**30)`) has no FP load: there is
+                // nothing to guard and deopt on, as there is for a slot of
+                // unknown type. The ordinary builtin call converts or
+                // raises (issue #1997).
+                InlineFuncInfo::CFunc_F_F(_) | InlineFuncInfo::CFunc_FF_F(_)
+                    if state.is_C_non_f64(callsite.args) => {}
                 InlineFuncInfo::CFunc_F_F(f) => {
                     let CallSiteInfo { args, dst, .. } = *callsite;
                     if let Some(args) = state.coerce_C_f64(args) {

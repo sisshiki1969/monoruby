@@ -1160,6 +1160,11 @@ pub struct Codegen {
     pub(crate) switch_to_scheduler: extern "C" fn(*mut Executor, Value) -> Option<Value>,
     pub(crate) scheduler_resume: extern "C" fn(*mut Executor, u64) -> Option<Value>,
     pub(crate) startup_flag: bool,
+    /// The compiles abandoned because the compiler panicked
+    /// (`compiler::contain_compile_panic`). The test harness reads it
+    /// around each run: on x86-64 such a panic is always a bug, and the
+    /// code it leaves interpreted still answers correctly.
+    pub(crate) contained_panics: usize,
     /// aarch64 branch relaxation: set while emitting a frame so large that
     /// an Imm19 (`b.cond`/`cbz`, ±1 MiB) or Adr (±1 MiB) reference between
     /// basic blocks might not reach. BB-edge branches then emit their long
@@ -1570,6 +1575,7 @@ impl Codegen {
             switch_to_scheduler,
             scheduler_resume,
             startup_flag: false,
+            contained_panics: 0,
             #[cfg(target_arch = "aarch64")]
             far_branch_mode: false,
             #[cfg(target_arch = "aarch64")]

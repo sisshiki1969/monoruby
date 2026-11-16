@@ -2112,6 +2112,14 @@ impl SlotState {
         }
     }
 
+    /// Whether *slot* holds a compile-time constant that is neither a
+    /// Fixnum nor a Float: one `load_fpr` cannot take, since a constant
+    /// has no guard to fail.
+    #[allow(non_snake_case)]
+    pub fn is_C_non_f64(&self, slot: SlotId) -> bool {
+        matches!(self.mode(slot), LinkMode::C(_)) && self.coerce_C_f64(slot).is_none()
+    }
+
     pub fn is_u16(&self, slot: SlotId) -> Option<u16> {
         let i = self.is_fixnum_literal(slot)?.get();
         u16::try_from(i).ok()

@@ -820,6 +820,15 @@ run_test_once(code)  // runs code once, compares result with the CRuby oracle
 run_tests(codes)     // runs multiple expressions, compares each with a live CRuby
 ```
 
+**A panic inside the JIT compiler fails the test.** Every compile entry
+contains such a panic (`codegen/compiler.rs` `contain_compile_panic`): the
+compile is abandoned, the method or loop stays interpreted and the answer
+is still right, so the comparison with CRuby would not show it. The
+harness therefore reads `Codegen::contained_panics` around each run and
+fails when it rose (x86-64 only — the aarch64 emitter can still panic on a
+branch out of range in a large body, which is what the containment was
+first for). The panic message is in the test's output.
+
 **Snapshot oracle** — the single-code helpers (`run_test`, `run_test_once`,
 `run_test2`, `run_test_with_prelude`) do **not** spawn CRuby per call.
 Expected outputs are memoized in the checked-in file

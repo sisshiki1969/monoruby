@@ -712,6 +712,10 @@ fn math_sqrt(
         return false;
     }
     let CallSiteInfo { args, dst, .. } = *callsite;
+    // `Math.sqrt(nil)`, `Math.sqrt(10**30)`: the builtin raises or converts.
+    if state.is_C_non_f64(args) {
+        return false;
+    }
     let fsrc = state.load_fpr(ir, args);
     // Create the deopt label before allocating `fret` so the write-back
     // state captured here does not include the (unmodified) dst slot.
