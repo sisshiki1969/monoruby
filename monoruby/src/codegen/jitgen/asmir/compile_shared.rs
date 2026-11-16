@@ -1284,12 +1284,14 @@ impl Codegen {
                 rhs,
                 func,
                 is_func_call,
+                pc,
                 using_fpr,
             } => self.encode_linst(LInst::GenericBinOp {
                 lhs,
                 rhs,
                 func,
                 is_func_call,
+                pc,
                 using_fpr,
             }),
             AsmInst::OptEqCmp {
@@ -1298,6 +1300,7 @@ impl Codegen {
                 kind,
                 func,
                 is_func_call,
+                pc,
                 using_fpr,
             } => self.encode_linst(LInst::OptEqCmp {
                 lhs,
@@ -1305,6 +1308,7 @@ impl Codegen {
                 kind,
                 func,
                 is_func_call,
+                pc,
                 using_fpr,
             }),
             AsmInst::ArrayTEq {
@@ -2292,9 +2296,10 @@ impl Codegen {
                 rhs,
                 func,
                 is_func_call,
+                pc,
                 using_fpr,
             } => {
-                self.emit_generic_binop(lhs, rhs, func, is_func_call, using_fpr);
+                self.emit_generic_binop(lhs, rhs, func, is_func_call, pc, using_fpr);
             }
             LInst::OptEqCmp {
                 lhs,
@@ -2302,9 +2307,10 @@ impl Codegen {
                 kind,
                 func,
                 is_func_call,
+                pc,
                 using_fpr,
             } => {
-                self.emit_opt_eq_cmp(lhs, rhs, kind, func, is_func_call, using_fpr);
+                self.emit_opt_eq_cmp(lhs, rhs, kind, func, is_func_call, pc, using_fpr);
             }
             LInst::ArrayTEq {
                 lhs,

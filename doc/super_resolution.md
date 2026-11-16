@@ -150,6 +150,12 @@ pub(crate) struct MethodTableEntry {
    `AsmInst::ContFramePc` が `movq [rsp], pc`(a64: `str x10, [sp]`)を
    send / specialized send / yield / specialized yield の 4 箇所すべてで発行する。
 3. **invoker / native 経路** — 書かれない(ゴミが残る)。読む側が必ず検証する。
+   例外は二項演算子の汎用ヘルパー(`cmp_eq_values`, `add_values`, …)が演算子の
+   ためにメソッドを呼ぶ場合で、`Executor::at_site` 経由の呼び出しは
+   `Invokers::method_at_site` が**演算子の** PC(VM / JIT がヘルパー呼び出し前に
+   `Executor::site_pc` へ書いたもの)を cont-frame として積む。send 系の
+   オペコードではないので `entered_by` は `None` のままだが、`Kernel#caller` と
+   バックトレースは演算子の行を読める(#1982)。
 
 ### 3.2 読み出しと検証
 

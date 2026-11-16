@@ -201,6 +201,9 @@ pub(crate) const EXECUTOR_DEFERRED_TOP: i64 = std::mem::offset_of!(Executor, def
 pub(crate) const EXECUTOR_ERRINFO: i64 = std::mem::offset_of!(Executor, errinfo) as _;
 pub(crate) const EXECUTOR_PARENT_FIBER: i64 = std::mem::offset_of!(Executor, parent_fiber) as _;
 pub(crate) const EXECUTOR_STACK_LIMIT: i64 = std::mem::offset_of!(Executor, stack_limit) as _;
+/// The pc of the binary operator whose generic helper is being called —
+/// see the `site_pc` field.
+pub(crate) const EXECUTOR_SITE_PC: i64 = std::mem::offset_of!(Executor, site_pc) as _;
 /// Scratch words a deopt trampoline fills in before branching to its
 /// (deduplicated) handler — see `codegen::jitgen::deopt_log`.
 #[cfg(feature = "deopt")]
@@ -281,6 +284,24 @@ pub struct Executor {
     rsp_save: Option<std::ptr::NonNull<u8>>,
     parent_fiber: Option<std::ptr::NonNull<Executor>>,
     stack_limit: usize,
+    /// The pc of the binary operator being computed by its generic
+    /// helper (`executor::op::cmp_eq_values`, `add_values`, …), written by
+    /// the VM and by JIT code just before they call one. A helper that
+    /// has to call a method for the operator has the invoker
+    /// ([`Self::at_site`]) put it where a send would
+    /// have put the call site's pc: in the callee's cont-frame slot
+    /// ([`Cfp::caller_pc_slot`]), for backtraces and `caller` to read the
+    /// operator's line from.
+    ///
+    /// Valid only on entry to such a helper — nothing clears it, and
+    /// whatever the helper calls may run another operator. A stale value
+    /// is harmless to the readers, which check the pc against the
+    /// bytecode of the frame they attribute it to.
+    site_pc: usize,
+    /// Set while a helper is about to call a method for its operator:
+    /// the next method invocation takes [`Self::site_pc`] as its call
+    /// site. See [`Self::at_site`].
+    armed_site: bool,
     /// Raw bits of the operand the deopting guard was looking at, stored
     /// by its trampoline before the write-back can clobber the register.
     ///
@@ -531,6 +552,8 @@ impl std::default::Default for Executor {
             rsp_save: None,
             parent_fiber: None,
             stack_limit: 0,
+            site_pc: 0,
+            armed_site: false,
             #[cfg(feature = "deopt")]
             deopt_cause_bits: 0,
             #[cfg(feature = "deopt")]
@@ -4112,58 +4135,63 @@ impl Executor {
             Ok(func_id) => {
                 self.invoke_func_named(globals, func_id, method, receiver, args, bh, kw_args)
             }
-            Err(original_err) => {
-                // Fall back to method_missing, matching CRuby behavior.
-                self.method_missing_style = MethodMissingStyle::Plain;
-                match self.find_method(globals, receiver, IdentId::METHOD_MISSING, true) {
-                    Ok(mm_func_id) => {
-                        // On the stack for the usual few arguments: this is
-                        // Rails' config access path (17 a request on
-                        // railsbench), and the Vec was one of its mallocs.
-                        let mut mm_args: smallvec::SmallVec<[Value; 8]> =
-                            smallvec::SmallVec::with_capacity(args.len() + 1);
-                        mm_args.push(Value::symbol(method));
-                        mm_args.extend_from_slice(args);
-                        self.invoke_func_named(
-                            globals,
-                            mm_func_id,
-                            IdentId::METHOD_MISSING,
-                            receiver,
-                            &mm_args,
-                            bh,
-                            kw_args,
-                        )
-                    }
-                    Err(_) => Err(original_err),
-                }
-            }
+            Err(original_err) => self.invoke_method_missing_for(
+                globals,
+                receiver,
+                method,
+                args,
+                bh,
+                kw_args,
+                original_err,
+            ),
         }
     }
 
-    pub(crate) fn invoke_eq(
+    ///
+    /// The lookup of `receiver.method(*args)` failed with `original_err`
+    /// (not found, or not visible from the call site): fall back to
+    /// `method_missing`, matching CRuby. `original_err` is what the call
+    /// raises when the receiver has no `method_missing` at all.
+    ///
+    pub(crate) fn invoke_method_missing_for(
         &mut self,
         globals: &mut Globals,
-        lhs: Value,
-        rhs: Value,
-    ) -> Result<bool> {
-        Ok(self.invoke_eq_raw(globals, lhs, rhs)?.as_bool())
-    }
-
-    /// Dispatch `lhs == rhs` and return the method's value untouched. Uses
-    /// funcall semantics (private `==` allowed) — for the visibility-aware
-    /// top-level `a == b` dispatch use [`Self::invoke_eq_raw_vis`].
-    pub(crate) fn invoke_eq_raw(
-        &mut self,
-        globals: &mut Globals,
-        lhs: Value,
-        rhs: Value,
+        receiver: Value,
+        method: IdentId,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+        kw_args: Option<Hashmap>,
+        original_err: MonorubyErr,
     ) -> Result<Value> {
-        self.invoke_eq_raw_vis(globals, lhs, rhs, true)
+        self.method_missing_style = MethodMissingStyle::Plain;
+        match self.find_method(globals, receiver, IdentId::METHOD_MISSING, true) {
+            Ok(mm_func_id) => {
+                // On the stack for the usual few arguments: this is
+                // Rails' config access path (17 a request on
+                // railsbench), and the Vec was one of its mallocs.
+                let mut mm_args: smallvec::SmallVec<[Value; 8]> =
+                    smallvec::SmallVec::with_capacity(args.len() + 1);
+                mm_args.push(Value::symbol(method));
+                mm_args.extend_from_slice(args);
+                self.invoke_func_named(
+                    globals,
+                    mm_func_id,
+                    IdentId::METHOD_MISSING,
+                    receiver,
+                    &mm_args,
+                    bh,
+                    kw_args,
+                )
+            }
+            Err(_) => Err(original_err),
+        }
     }
 
-    /// Dispatch `lhs == rhs`, enforcing the receiver's `==` visibility per the
-    /// call site's func-call flag (a private `==` is callable only from a
-    /// func-call site).
+    /// Dispatch `lhs == rhs` for the operator written at a call site,
+    /// returning the method's value untouched: the receiver's `==` as
+    /// that scope sees it (its refinements; a private `==` is callable
+    /// only from a func-call site), `method_missing` when the lookup
+    /// fails.
     pub(crate) fn invoke_eq_raw_vis(
         &mut self,
         globals: &mut Globals,
@@ -4171,8 +4199,12 @@ impl Executor {
         rhs: Value,
         is_func_call: bool,
     ) -> Result<Value> {
-        let func_id = self.find_method(globals, lhs, IdentId::_EQ, is_func_call)?;
-        self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None)
+        match self.find_method(globals, lhs, IdentId::_EQ, is_func_call) {
+            Ok(func_id) => self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None),
+            Err(err) => {
+                self.invoke_method_missing_for(globals, lhs, IdentId::_EQ, &[rhs], None, None, err)
+            }
+        }
     }
 
     pub(crate) fn invoke_method_missing(
@@ -4925,7 +4957,17 @@ impl Executor {
         }
         let bh = bh.map(|bh| bh.delegate());
         let kw_ext = kw_args.is_some() && globals.ext.note_kw_entry(func_id);
-        let res = (globals.invokers.method)(
+        // The call an operator's generic helper makes for the operator
+        // (`Self::at_site`) leaves the operator's pc under the callee, as
+        // the call site; any other gets no call site. `site_pc` still
+        // holds that pc: no Ruby code has run since the helper was
+        // entered.
+        let invoker = if std::mem::take(&mut self.armed_site) {
+            globals.invokers.method_at_site
+        } else {
+            globals.invokers.method
+        };
+        let res = invoker(
             self,
             globals,
             func_id,
@@ -4941,6 +4983,44 @@ impl Executor {
             globals.ext.clear_kw_entry();
         }
         res
+    }
+
+    ///
+    /// Run `f`, the part of an operator's generic helper that calls a
+    /// method for the operator — the receiver's `==`, the `coerce` of a
+    /// `+` — so that the first method it invokes has the operator as its
+    /// call site: the callee's frame is entered through
+    /// `Invokers::method_at_site`, with `site_pc` (the operator's pc, as
+    /// the VM or the JIT code left it on calling the helper) in its
+    /// cont-frame slot. `caller` and backtraces then show the line of the
+    /// operator for the frame that wrote it, and a native callee at that
+    /// line, where they showed the line of the `def` and `<internal>`
+    /// (#1982).
+    ///
+    /// For the helpers the generic binary-operator paths call. Run from a
+    /// builtin instead, the pc is a stale one, and nobody reads it: it is
+    /// looked at only under a Ruby frame whose bytecode contains it.
+    ///
+    #[inline]
+    pub(crate) fn at_site<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.armed_site = true;
+        let res = f(self);
+        self.armed_site = false;
+        res
+    }
+
+    /// [`Self::invoke_method`] under [`Self::at_site`].
+    pub(crate) fn invoke_method_at_site(
+        &mut self,
+        globals: &mut Globals,
+        method: IdentId,
+        is_func_call: bool,
+        receiver: Value,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.at_site(|vm| {
+            vm.invoke_method(globals, method, is_func_call, receiver, args, None, None)
+        })
     }
 
     pub(crate) fn invoke_func_inner(

@@ -1,18 +1,14 @@
 module Comparable
+  # CRuby's `cmp_equal`: whatever `<=>` raises is the caller's to see
+  # (it stopped being rescued in Ruby 2.3), and its answer is read as
+  # `rb_cmpint` reads it -- an Integer by its sign, anything else by
+  # asking it `> 0` and `< 0`.
   def ==(other)
     return true if equal?(other)
-    begin
-      res = self <=> other
-    rescue NoMethodError, ArgumentError
-      return false
-    end
-    if res.nil?
-      false
-    elsif res.is_a?(Numeric)
-      res == 0
-    else
-      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
-    end
+    res = self <=> other
+    return false if res.nil?
+    return res == 0 if res.is_a?(Integer)
+    !(res > 0) && !(res < 0)
   end
 
   def >=(other)

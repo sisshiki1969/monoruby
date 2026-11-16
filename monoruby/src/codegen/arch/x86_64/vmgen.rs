@@ -844,6 +844,9 @@ impl Codegen {
             xorq  r8, r8;
             testq rax, rax;
             seteq r8;
+            // The operator's pc, for the helper (`Executor::site_pc`).
+            lea   rax, [r13 - 16];
+            movq  [rbx + (EXECUTOR_SITE_PC)], rax;
         };
         self.call_binop(func);
         self.vm_handle_error();

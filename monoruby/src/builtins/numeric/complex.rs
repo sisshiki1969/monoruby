@@ -85,10 +85,10 @@ fn complex_eq(
         if !lhs.im().is_zero() {
             return Ok(false);
         }
-        let r = vm.invoke_method_inner(globals, IdentId::_EQ, lhs.re().get(), &[other], None, None)?;
+        let r = vm.eq_values_funcall(globals, lhs.re().get(), other)?;
         return Ok(r.as_bool());
     }
-    let r = vm.invoke_method_inner(globals, IdentId::_EQ, other, &[self_val], None, None)?;
+    let r = vm.eq_values_funcall(globals, other, self_val)?;
     Ok(r.as_bool())
 }
 
@@ -565,8 +565,7 @@ fn complex_to_real(
             if let Some(r) = im.try_rational() {
                 r.is_zero()
             } else {
-                let eq_id = IdentId::_EQ;
-                let res = vm.invoke_method_inner(globals, eq_id, im, &[Value::integer(0)], None, None)?;
+                let res = vm.eq_values_funcall(globals, im, Value::integer(0))?;
                 res.as_bool()
             }
         }
@@ -608,8 +607,7 @@ fn to_r(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             if let Some(r) = im.try_rational() {
                 r.is_zero()
             } else {
-                let eq_id = IdentId::_EQ;
-                let res = vm.invoke_method_inner(globals, eq_id, im, &[Value::integer(0)], None, None)?;
+                let res = vm.eq_values_funcall(globals, im, Value::integer(0))?;
                 res.as_bool()
             }
         }

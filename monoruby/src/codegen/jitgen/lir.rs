@@ -1053,6 +1053,7 @@ pub(in crate::codegen) enum LInst {
         rhs: SlotId,
         func: crate::executor::BinaryOpFn,
         is_func_call: bool,
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     },
     OptEqCmp {
@@ -1061,6 +1062,7 @@ pub(in crate::codegen) enum LInst {
         kind: CmpKind,
         func: crate::executor::BinaryOpFn,
         is_func_call: bool,
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     },
     ArrayTEq {

@@ -653,8 +653,7 @@ fn string_eq_bool(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
         .store
         .no_to_str(rhs.class(), Globals::class_version())
     {
-        let result =
-            vm.invoke_method_inner(globals, IdentId::_EQ, rhs, &[lfp.self_val()], None, None)?;
+        let result = vm.eq_values_funcall(globals, rhs, lfp.self_val())?;
         return Ok(result.as_bool());
     }
     Ok(false)

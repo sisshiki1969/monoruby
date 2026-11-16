@@ -1309,6 +1309,8 @@ impl Codegen {
             cset x4, eq;
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
+            // The operator's pc, for the helper (`Executor::site_pc`).
+            str x(PC.0), [x(EXEC.0), #(EXECUTOR_SITE_PC as u32)];
             mov x9, (cmp_fn);
             blr x9;
         );
@@ -1374,6 +1376,8 @@ impl Codegen {
             cset x4, eq;
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
+            // The operator's pc, for the helper (`Executor::site_pc`).
+            str x(PC.0), [x(EXEC.0), #(EXECUTOR_SITE_PC as u32)];
             mov x9, (cmp_fn);
             blr x9;
         );
@@ -1612,6 +1616,8 @@ impl Codegen {
             cset x4, eq;
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
+            // The operator's pc, for the helper (`Executor::site_pc`).
+            str x(PC.0), [x(EXEC.0), #(EXECUTOR_SITE_PC as u32)];
             mov x9, (func as u64);
             blr x9;
         // The dst slot is re-read from PC (callee-saved): `func` may re-enter

@@ -199,7 +199,7 @@ macro_rules! binop_values {
                 is_func_call: bool,
             ) -> Option<Value> {
                 if vm.dispatch_redefined_op(globals, lhs.class(), $op_str) {
-                    return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
+                    return vm.invoke_method_at_site(globals, $op_str, is_func_call, lhs, &[rhs]);
                 }
                 [<$op _values_raw>](vm, globals, lhs, rhs, is_func_call)
             }
@@ -289,7 +289,7 @@ macro_rules! binop_values {
                         // Original receiver `lhs`: honor the call site's
                         // func-call flag (a private operator is callable only
                         // from `self OP x`).
-                        return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
+                        return vm.invoke_method_at_site(globals, $op_str, is_func_call, lhs, &[rhs]);
                     }
                 };
                 Some(v)
@@ -323,7 +323,7 @@ macro_rules! bop_entry {
             is_func_call: bool,
         ) -> Option<Value> {
             if vm.dispatch_redefined_op(globals, lhs.class(), $op) {
-                return vm.invoke_method(globals, $op, is_func_call, lhs, &[rhs], None, None);
+                return vm.invoke_method_at_site(globals, $op, is_func_call, lhs, &[rhs]);
             }
             $raw(vm, globals, lhs, rhs, is_func_call)
         }
@@ -370,15 +370,7 @@ pub(crate) extern "C" fn div_values_raw(
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
             try_coerce_and_apply(vm, globals, IdentId::_DIV, lhs, rhs, "Integer")
         }
-        _ => vm.invoke_method(
-            globals,
-            IdentId::_DIV,
-            is_func_call,
-            lhs,
-            &[rhs],
-            None,
-            None,
-        ),
+        _ => vm.invoke_method_at_site(globals, IdentId::_DIV, is_func_call, lhs, &[rhs]),
     }
 }
 
@@ -446,15 +438,7 @@ pub(crate) extern "C" fn rem_values_raw(
             return try_coerce_and_apply(vm, globals, IdentId::_REM, lhs, rhs, "Complex");
         }
         _ => {
-            return vm.invoke_method(
-                globals,
-                IdentId::_REM,
-                is_func_call,
-                lhs,
-                &[rhs],
-                None,
-                None,
-            );
+            return vm.invoke_method_at_site(globals, IdentId::_REM, is_func_call, lhs, &[rhs]);
         }
     };
     Some(v)
@@ -626,15 +610,7 @@ pub(crate) extern "C" fn pow_values_raw(
             return try_coerce_and_apply(vm, globals, IdentId::_POW, lhs, rhs, "Float");
         }
         _ => {
-            return vm.invoke_method(
-                globals,
-                IdentId::_POW,
-                is_func_call,
-                lhs,
-                &[rhs],
-                None,
-                None,
-            );
+            return vm.invoke_method_at_site(globals, IdentId::_POW, is_func_call, lhs, &[rhs]);
         }
     };
     Some(v)
@@ -656,7 +632,7 @@ macro_rules! int_binop_values {
                 // check is the only thing standing between a redefined
                 // `Integer#&` and a wrong answer.
                 if vm.dispatch_redefined_op(globals, lhs.class(), $op_str) {
-                    return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
+                    return vm.invoke_method_at_site(globals, $op_str, is_func_call, lhs, &[rhs]);
                 }
                 // Two 128-bit Integers compute in `i128` (see `add_values_raw`).
                 if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
@@ -673,7 +649,7 @@ macro_rules! int_binop_values {
                         return try_coerce_and_apply_bit(vm, globals, $op_str, lhs, rhs);
                     }
                     _ => {
-                        return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
+                        return vm.invoke_method_at_site(globals, $op_str, is_func_call, lhs, &[rhs]);
                     }
                 };
                 Some(v)
@@ -758,15 +734,7 @@ pub(crate) extern "C" fn shr_values_raw(
             }
         }
         _ => {
-            return vm.invoke_method(
-                globals,
-                IdentId::_SHR,
-                is_func_call,
-                lhs,
-                &[rhs],
-                None,
-                None,
-            );
+            return vm.invoke_method_at_site(globals, IdentId::_SHR, is_func_call, lhs, &[rhs]);
         }
     };
     Some(v)
@@ -841,15 +809,7 @@ pub(crate) extern "C" fn shl_values_raw(
             }
         }
         _ => {
-            return vm.invoke_method(
-                globals,
-                IdentId::_SHL,
-                is_func_call,
-                lhs,
-                &[rhs],
-                None,
-                None,
-            );
+            return vm.invoke_method_at_site(globals, IdentId::_SHL, is_func_call, lhs, &[rhs]);
         }
     };
     Some(v)

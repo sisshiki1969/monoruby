@@ -341,6 +341,10 @@ impl ExternalContext {
 pub(crate) struct Invokers {
     pub init_stack_limit: extern "C" fn(&mut Executor) -> *const u8,
     pub method: MethodInvoker,
+    /// [`Self::method`] for a call an operator's generic helper makes:
+    /// the callee gets the operator's pc as its call site
+    /// (`Executor::at_site`).
+    pub method_at_site: MethodInvoker,
     pub block: BlockInvoker,
     pub block_with_self: BlockInvoker,
     pub fiber: FiberInvoker,
@@ -959,6 +963,7 @@ impl Globals {
             Invokers {
                 init_stack_limit: codegen.init_stack_limit,
                 method: codegen.method_invoker,
+                method_at_site: codegen.method_invoker_at_site,
                 block: codegen.block_invoker,
                 block_with_self: codegen.block_invoker_with_self,
                 fiber: codegen.fiber_invoker,
