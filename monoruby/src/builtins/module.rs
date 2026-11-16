@@ -1837,9 +1837,24 @@ fn define_method(
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    let self_val = lfp.self_val();
-    globals.store.class_modify_check(self_val.as_class_id())?;
-    let class_id = self_val.as_class_id();
+    let class_id = lfp.self_val().as_class_id();
+    define_method_in(vm, globals, lfp, pc, class_id, false)
+}
+
+/// `Module#define_method` on *class_id*, with the name in `arg(0)` and
+/// the body in `arg(1)` or the block. `main.define_method` is this on
+/// `Object` (CRuby's `top_define_method` calls `rb_mod_define_method`
+/// with `rb_cObject`), where *toplevel* makes the method public whatever
+/// the default visibility of the toplevel is.
+pub(super) fn define_method_in(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    pc: BytecodePtr,
+    class_id: ClassId,
+    toplevel: bool,
+) -> Result<Value> {
+    globals.store.class_modify_check(class_id)?;
     // The name accepts Symbol / String and anything `to_str`-convertible
     // (CRuby's `define_method(obj)` with `obj.to_str`).
     let name_val = lfp.arg(0);
@@ -1899,7 +1914,16 @@ fn define_method(
             "tried to create Proc object without a block",
         ));
     };
-    let visibility = define_method_visibility(vm, class_id, name);
+    // At the toplevel `self` is `main`, not `Object`, so there is no
+    // cref to take a default visibility (or a `module_function` toggle)
+    // from: the method is public, unlike a toplevel `def`.
+    let visibility = if !toplevel {
+        define_method_visibility(vm, class_id, name)
+    } else if is_special_private_method_name(name) {
+        Visibility::Private
+    } else {
+        Visibility::Public
+    };
     // Honor the `module_function` toggle (set via `module_function`
     // with no arguments earlier in the same body): when the target
     // matches the current lexical class AND the toggle is on, the
@@ -1907,7 +1931,7 @@ fn define_method(
     // module-level singleton method, exactly like a `def` in the
     // same scope. Cross-class `klass.send(:define_method, ...)`
     // never enters module-function mode (the toggle is per-cref).
-    if vm.context_class_id() == class_id && vm.is_module_function() {
+    if !toplevel && vm.context_class_id() == class_id && vm.is_module_function() {
         vm.add_method_with_original(
             globals,
             class_id,

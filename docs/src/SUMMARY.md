@@ -10,6 +10,7 @@
 # Performance and Compatibility
 
 - [Benchmark](benchmarks.md)
+- [Built-in Profiler](profiler.md)
 - [Compatibility](compatibility.md)
 - [Changelog](changelog.md)
 
@@ -80,4 +81,5 @@
 - [C extension support — the design study that preceded the layer (Japanese)](design/c_extention.md)
 - [ruby/spec hang countermeasures (Japanese)](design/ruby_spec_skip_tags.md)
 - [optcarrot --opt profile (Japanese)](design/optcarrot_opt_profile.md)
+- [The built-in profiler — reference](design/profiler.md)
 - [Progress summary (April 2025 – April 2026)](design/progress_2025-2026.md)

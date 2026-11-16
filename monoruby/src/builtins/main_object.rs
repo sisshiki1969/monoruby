@@ -156,32 +156,11 @@ fn main_define_method(
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    let class_id = OBJECT_CLASS;
-    let name = lfp.arg(0).expect_symbol_or_to_str(vm, globals)?;
-    let func_id = if let Some(method) = lfp.try_arg(1) {
-        if let Some(proc) = method.is_proc() {
-            globals.define_proc_method(proc)
-        } else if let Some(method) = method.is_method() {
-            method.func_id()
-        } else if let Some(umethod) = method.is_umethod() {
-            umethod.func_id()
-        } else {
-            return Err(MonorubyErr::wrong_argument_type(
-                globals,
-                method,
-                "Proc/Method/UnboundMethod",
-            ));
-        }
-    } else if let Some(bh) = lfp.block() {
-        let proc = vm.generate_proc(globals, bh, pc)?;
-        globals.define_proc_method(proc)
-    } else {
-        return Err(MonorubyErr::wrong_number_of_arg(2, 1));
-    };
-    // Top-level `define_method` adds a *public* method on Object,
-    // unlike top-level `def` which is private. Matches CRuby.
-    vm.add_public_method(globals, class_id, name, func_id)?;
-    Ok(Value::symbol(name))
+    // CRuby's `top_define_method` is `rb_mod_define_method` on `Object`:
+    // the same method `Module#define_method` makes — strict arity, no
+    // spreading of a lone Array, `return` and `super` as in a method —
+    // and public, unlike a toplevel `def`.
+    super::module::define_method_in(vm, globals, lfp, pc, OBJECT_CLASS, true)
 }
 
 #[cfg(test)]
