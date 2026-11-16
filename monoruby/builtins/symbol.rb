@@ -28,7 +28,6 @@ end
 # aliased original must already be defined (natively or above) by now.
 
 class Symbol
-  alias === ==
   alias id2name to_s
   alias intern to_sym
 end

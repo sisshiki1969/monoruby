@@ -3129,14 +3129,10 @@ impl Codegen {
         base: SlotBase,
         args: SlotId,
         len: u16,
-        min: bool,
+        min: MinMaxOp,
         using_fpr: UsingFpr,
     ) -> bool {
-        let f = if min {
-            runtime::opt_array_min as *const () as u64
-        } else {
-            runtime::opt_array_max as *const () as u64
-        };
+        let f = min.func() as u64;
         self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;              // vm

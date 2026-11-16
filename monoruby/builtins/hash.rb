@@ -421,9 +421,16 @@ class Hash
     min_val = nil
     each do |k, v|
       val = yield(k, v)
-      if min_val.nil? || (val <=> min_val) < 0
+      if min_entry.nil?
         min_entry = [k, v]
         min_val = val
+      else
+        c = val <=> min_val
+        c = __cmpint(c, val, min_val) unless Integer === c
+        if c < 0
+          min_entry = [k, v]
+          min_val = val
+        end
       end
     end
     min_entry

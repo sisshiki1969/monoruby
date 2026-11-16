@@ -77,7 +77,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_inline_func(ARRAY_CLASS, "<<", shl, inline_gen2!(array_shl), 1);
     globals.define_builtin_funcs_with(ARRAY_CLASS, "push", &["append"], push, 0, 0, true);
     globals.define_builtin_func_with(ARRAY_CLASS, "pop", pop, 0, 1, false);
-    globals.define_builtin_funcs(ARRAY_CLASS, "==", &["==="], eq, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "==", eq, 1);
     globals.define_builtin_func(ARRAY_CLASS, "eql?", eql, 1);
     globals.define_builtin_func(ARRAY_CLASS, "<=>", cmp, 1);
     globals.define_builtin_inline_funcs_with(
@@ -1411,8 +1411,8 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let idx = lfp.arg(0);
         // Non-fixnum, non-range index: delegate. The
         // `Enumerator::ArithmeticSequence` case is handed off to
-        // `aseq.[](self)` — slicing logic lives in
-        // `ArithmeticSequence#[]` (`builtins/arithmetic_sequence.rs`).
+        // `aseq.__slice_array(self)` — slicing logic lives in
+        // `builtins/arithmetic_sequence.rs`.
         // We dispatch via ObjTy so singleton-classed AS values
         // (e.g. those returned by `Range#%`, which patches `inspect`)
         // also hit the fast path. Anything else falls through to the
@@ -1421,7 +1421,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             if idx.ty() == Some(ObjTy::ARITHMETIC_SEQUENCE) {
                 return vm.invoke_method_inner(
                     globals,
-                    IdentId::get_id("[]"),
+                    IdentId::get_id("__slice_array"),
                     idx,
                     &[lfp.self_val()],
                     None,
@@ -2846,17 +2846,74 @@ pub(crate) fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         if let Some((min, _)) = min_max_homogeneous(globals, &ary) {
             return Ok(min);
         }
-        let mut min = ary[0];
-        for v in &ary[1..] {
-            // The element is the receiver of `<=>`, as in CRuby, so an
-            // incomparable pair is reported the way CRuby reports it:
-            // `[1, "a"].min` names the String, not the Integer.
-            if vm.compare_values(globals, *v, min)? == std::cmp::Ordering::Less {
-                min = *v;
-            }
-        }
-        Ok(min)
+        let newarray = newarray_send(vm, globals);
+        min_max_generic(vm, globals, ary, true, newarray)
     }
+}
+
+///
+/// CRuby's `ary_min_generic` / `ary_max_generic`: the running extreme is
+/// the receiver of `<=>` and the element its argument (`vmin <=> v`), so
+/// `[1, nil].max` is "comparison of Integer with nil failed" and a
+/// user-defined `<=>` sees the operands in array order (#2007). With a
+/// block it is the other way round — the element comes first — which is
+/// what `min` / `max` above do.
+///
+///
+/// Written on the Array literal itself — `[x, y].min` — CRuby does not
+/// call the method at all (`opt_newarray_send`) and compares the other way
+/// round, `v <=> vmin`: `newarray` says which form the call site is.
+///
+fn min_max_generic(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    ary: Array,
+    is_min: bool,
+    newarray: bool,
+) -> Result<Value> {
+    let replace_on = if is_min == newarray {
+        std::cmp::Ordering::Less
+    } else {
+        std::cmp::Ordering::Greater
+    };
+    let mut best = ary[0];
+    let mut i = 1;
+    // The length is read again on every round: `<=>` is Ruby code and may
+    // shrink the receiver.
+    while i < ary.len() {
+        let v = ary[i];
+        let ord = if newarray {
+            vm.compare_values(globals, v, best)?
+        } else {
+            vm.compare_values(globals, best, v)?
+        };
+        if ord == replace_on {
+            best = v;
+        }
+        i += 1;
+    }
+    Ok(best)
+}
+
+///
+/// Whether the running builtin was entered from a call site of the
+/// `[e1, .., en].min` shape (`CallSiteInfo::newarray_recv`). Asked only on
+/// the general path of `min` / `max`, once per call.
+///
+fn newarray_send(vm: &Executor, globals: &Globals) -> bool {
+    let cfp = vm.cfp();
+    let Some(caller) = cfp.prev() else {
+        return false;
+    };
+    let caller_lfp = caller.lfp();
+    if caller_lfp.meta().is_native() {
+        return false;
+    }
+    let store = &globals.store;
+    store[caller_lfp.func_id()]
+        .is_iseq()
+        .and_then(|iseq| super::kernel::call_site_id(store, iseq, cfp))
+        .is_some_and(|id| store[id].newarray_recv)
 }
 
 ///
@@ -2893,14 +2950,8 @@ pub(crate) fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         if let Some((_, max)) = min_max_homogeneous(globals, &ary) {
             return Ok(max);
         }
-        let mut max = ary[0];
-        for v in &ary[1..] {
-            // Element as receiver, as in `min` above.
-            if vm.compare_values(globals, *v, max)? == std::cmp::Ordering::Greater {
-                max = *v;
-            }
-        }
-        Ok(max)
+        let newarray = newarray_send(vm, globals);
+        min_max_generic(vm, globals, ary, false, newarray)
     }
 }
 
@@ -2917,32 +2968,55 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if ary.len() == 0 {
         return Ok(Value::array2(Value::nil(), Value::nil()));
     }
-    let mut min = ary[0];
-    let mut max = ary[0];
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
-        for v in &ary[1..] {
-            let r_min = vm.invoke_block(globals, &data, &[*v, min])?;
-            if vm.cmpint(globals, r_min, *v, min)? == std::cmp::Ordering::Less {
-                min = *v;
-            }
-            let r_max = vm.invoke_block(globals, &data, &[*v, max])?;
-            if vm.cmpint(globals, r_max, *v, max)? == std::cmp::Ordering::Greater {
-                max = *v;
-            }
+    let Some(bh) = lfp.block() else {
+        if let Some((min, max)) = min_max_homogeneous(globals, &ary) {
+            return Ok(Value::array2(min, max));
         }
-    } else if let Some((min, max)) = min_max_homogeneous(globals, &ary) {
+        // CRuby's `rb_ary_minmax` is `[ary.min, ary.max]`: two scans,
+        // each with the running extreme as the receiver of `<=>` — the
+        // maximum first, the order the reference build evaluates the two
+        // arguments in.
+        let max = min_max_generic(vm, globals, ary, false, false)?;
+        let min = min_max_generic(vm, globals, ary, true, false)?;
         return Ok(Value::array2(min, max));
-    } else {
-        for v in &ary[1..] {
-            if vm.compare_values(globals, min, *v)? == std::cmp::Ordering::Greater {
-                min = *v;
-            }
-            if vm.compare_values(globals, max, *v)? == std::cmp::Ordering::Less {
-                max = *v;
-            }
+    };
+    // With a block CRuby hands over to `Enumerable#minmax` (`minmax_ii`):
+    // the elements are taken two at a time, the pair is ordered with one
+    // call of the block, and then the smaller is compared with the
+    // minimum and the larger with the maximum — three calls for two
+    // elements, where comparing each element with both takes four.
+    let data = vm.get_block_data(globals, bh)?;
+    let cmp = |vm: &mut Executor, globals: &mut Globals, a: Value, b: Value| {
+        let res = vm.invoke_block(globals, &data, &[a, b])?;
+        vm.cmpint(globals, res, a, b)
+    };
+    let mut extremes: Option<(Value, Value)> = None;
+    let mut i = 0;
+    while i < ary.len() {
+        let (mut lo, mut hi) = (ary[i], ary[i]);
+        if i + 1 < ary.len() {
+            let (j, k) = (ary[i], ary[i + 1]);
+            (lo, hi) = match cmp(vm, globals, j, k)? {
+                std::cmp::Ordering::Equal => (j, j),
+                std::cmp::Ordering::Less => (j, k),
+                std::cmp::Ordering::Greater => (k, j),
+            };
         }
+        i += 2;
+        extremes = Some(match extremes {
+            None => (lo, hi),
+            Some((mut min, mut max)) => {
+                if cmp(vm, globals, lo, min)? == std::cmp::Ordering::Less {
+                    min = lo;
+                }
+                if cmp(vm, globals, hi, max)? == std::cmp::Ordering::Greater {
+                    max = hi;
+                }
+                (min, max)
+            }
+        });
     }
+    let (min, max) = extremes.unwrap();
     Ok(Value::array2(min, max))
 }
 
@@ -2979,7 +3053,7 @@ fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
     ))
 }
 
-fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, ary: Array) -> Result<Value> {
+pub(super) fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, ary: Array) -> Result<Value> {
     // The merge buffer must be scanned by the GC: while a merge is in
     // flight it holds the only reference to one run's elements (their
     // slots in `ary` have already been overwritten with merge output),
@@ -3092,22 +3166,7 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
             if !crate::executor::op::sort_indices_by_homogeneous_keys(
                 globals, &keys, &mut indices,
             ) {
-                let mut err = None;
-                indices.sort_by(|&a, &b| {
-                    if err.is_some() {
-                        return std::cmp::Ordering::Equal;
-                    }
-                    match Executor::compare_values(vm, globals, keys[a], keys[b]) {
-                        Ok(o) => o,
-                        Err(e) => {
-                            err = Some(e);
-                            std::cmp::Ordering::Equal
-                        }
-                    }
-                });
-                if let Some(e) = err {
-                    return Err(e);
-                }
+                sort_indices_by_keys(vm, globals, &keys, &mut indices)?;
             }
             // Read elems back in sorted order from the temp_stack (still
             // rooted) and write them to the receiver.
@@ -3125,6 +3184,24 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
     } else {
         array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("sort_by!"), pc)
     }
+}
+
+/// The general case of `sort_by`: order `indices` by the keys they index,
+/// each pair compared as `keys[left] <=> keys[right]` — CRuby's
+/// `sort_by_cmp`, which is why `[1, nil].sort_by { _1 }` reports
+/// "comparison of Integer with nil failed". The keys are rooted by the
+/// caller; the indices need no rooting, so the merge buffer is a plain
+/// `Vec`.
+fn sort_indices_by_keys(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    keys: &[Value],
+    indices: &mut [usize],
+) -> Result<()> {
+    let mut buf = vec![0usize; executor::op::merge_scratch_len(indices.len())];
+    executor::op::sort_by(indices, buf.as_mut_ptr(), |a, b| {
+        Executor::compare_values(vm, globals, keys[a], keys[b])
+    })
 }
 
 /// Build an `Enumerator` for an `Array` iterator that has the same size
@@ -3197,22 +3274,7 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
             if !crate::executor::op::sort_indices_by_homogeneous_keys(
                 globals, &keys, &mut indices,
             ) {
-                let mut err = None;
-                indices.sort_by(|&a, &b| {
-                    if err.is_some() {
-                        return std::cmp::Ordering::Equal;
-                    }
-                    match Executor::compare_values(vm, globals, keys[a], keys[b]) {
-                        Ok(o) => o,
-                        Err(e) => {
-                            err = Some(e);
-                            std::cmp::Ordering::Equal
-                        }
-                    }
-                });
-                if let Some(e) = err {
-                    return Err(e);
-                }
+                sort_indices_by_keys(vm, globals, &keys, &mut indices)?;
             }
             let sorted_elems: Vec<Value> = indices
                 .iter()
@@ -6911,7 +6973,7 @@ mod tests {
             // `Array#[]` and `Array#slice` accept an
             // `Enumerator::ArithmeticSequence` as a stride-aware index
             // (`runtime::get_index` / `builtins::array::index` dispatch
-            // to `aseq#[]` instead of `coerce_to_int_i64`).
+            // to `aseq.__slice_array` instead of `coerce_to_int_i64`).
             "[10, 20, 30, 40, 50][(0..).step(2)]",
             "[10, 20, 30, 40, 50][(0..-1).step(2)]",
             "[10, 20, 30, 40, 50][(1..3).step(1)]",

@@ -852,7 +852,7 @@ impl MonorubyErr {
             // `get_class_name` resolves names assigned via constant
             // assignment (`MyClass = Class.new`) too, unlike the raw
             // `to_s`, and falls back to `#<Class:0x…>` when anonymous.
-            format!("{kind} {}", store.get_class_name(m.id()))
+            format!("{kind} {}", store.nameerr_class_name(m.id()))
         } else if store[obj.class()].get_module().is_singleton().is_some() {
             // A receiver with a singleton class keeps the address form
             // (`for #<Object:0x…>`) in CRuby, not `an instance of …`.
@@ -961,7 +961,7 @@ impl MonorubyErr {
         } else {
             "class"
         };
-        let class_name = store.get_class_name(class);
+        let class_name = store.nameerr_class_name(class);
         let (before, after) = match visibility {
             Some(Visibility::Private) => ("method '", " is private"),
             Some(Visibility::Protected) => ("method '", " is protected"),
@@ -999,7 +999,7 @@ impl MonorubyErr {
         let mut err = Self::nameerr_with_name_receiver(
             format!(
                 "undefined method '{name}' for {kind} '{}'",
-                store.get_class_name(shown.id())
+                store.nameerr_class_name(shown.id())
             ),
             name,
             shown.as_val(),
@@ -1021,7 +1021,7 @@ impl MonorubyErr {
         Self::nameerr_showing(
             format_args!("method '"),
             name,
-            format_args!("' not defined in {}", store.get_class_name(class)),
+            format_args!("' not defined in {}", store.nameerr_class_name(class)),
             Some(store[class].get_module().as_val()),
         )
     }

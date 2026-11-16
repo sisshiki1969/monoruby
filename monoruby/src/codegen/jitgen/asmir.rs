@@ -1727,7 +1727,7 @@ impl AsmIr {
         base: SlotBase,
         args: SlotId,
         len: u16,
-        min: bool,
+        min: MinMaxOp,
     ) {
         self.push(AsmInst::ArrayMinMax {
             base,
@@ -2272,6 +2272,45 @@ pub(crate) enum ProbeDigest {
     /// per process (`RubyRandomState::new`), and the JIT compiles in
     /// the process it emits for, so the baked value is the map's.
     Const(u64),
+}
+
+///
+/// Which extreme an elided `[a, b, …].min` / `.max` computes, and in which
+/// order it hands each pair to `<=>` (`AsmInst::ArrayMinMax`).
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MinMaxOp {
+    /// `Array#min` on an Array: `best <=> v`.
+    Min,
+    /// `Array#max` on an Array: `best <=> v`.
+    Max,
+    /// `[a, b].min` written on the literal (`CallSiteInfo::newarray_recv`):
+    /// `v <=> best`.
+    NewarrayMin,
+    /// `[a, b].max` written on the literal: `v <=> best`.
+    NewarrayMax,
+}
+
+impl MinMaxOp {
+    pub(crate) fn new(is_min: bool, newarray: bool) -> Self {
+        match (is_min, newarray) {
+            (true, false) => Self::Min,
+            (false, false) => Self::Max,
+            (true, true) => Self::NewarrayMin,
+            (false, true) => Self::NewarrayMax,
+        }
+    }
+
+    /// The runtime function that computes it.
+    pub(crate) fn func(self) -> usize {
+        use crate::codegen::runtime;
+        (match self {
+            Self::Min => runtime::opt_array_min,
+            Self::Max => runtime::opt_array_max,
+            Self::NewarrayMin => runtime::opt_newarray_min,
+            Self::NewarrayMax => runtime::opt_newarray_max,
+        }) as *const () as usize
+    }
 }
 
 #[derive(Debug)]
@@ -3495,7 +3534,7 @@ pub(super) enum AsmInst {
         base: SlotBase,
         args: SlotId,
         len: u16,
-        min: bool,
+        min: MinMaxOp,
         using_fpr: UsingFpr,
     },
     ///

@@ -63,7 +63,7 @@ pub(super) fn init(globals: &mut Globals) {
         inline_gen2!(hash_default_assign),
         1,
     );
-    globals.define_builtin_funcs(HASH_CLASS, "==", &["==="], eq, 1);
+    globals.define_builtin_func(HASH_CLASS, "==", eq, 1);
     globals.define_builtin_func(HASH_CLASS, "eql?", eql, 1);
     let hash_hash = globals.define_builtin_func(HASH_CLASS, "hash", hash, 0);
     globals.store.set_hash_hash_fid(hash_hash);
@@ -2454,71 +2454,40 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
 #[monoruby_builtin]
 fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let hash = lfp.self_val().as_hash();
-    if let Some(bh) = lfp.block() {
-        let mut pairs: Vec<Value> = hash
-            .iter()
-            .map(|(k, v)| Value::array2(k, v))
-            .collect();
-        let data = vm.get_block_data(globals, bh)?;
-        // Root the pending pair Arrays: the comparator block runs
-        // arbitrary Ruby while they live only in this Rust Vec.
-        vm.with_temp_scope(|vm| {
-            vm.temp_array_new(pairs.len());
-            vm.temp_array_extend_from_slice(&pairs);
-            // Stable sort with a comparator block.
-            let mut err: Option<MonorubyErr> = None;
-            pairs.sort_by(|a, b| {
-                if err.is_some() {
-                    return std::cmp::Ordering::Equal;
-                }
-                // Interpret the block's result exactly as `Array#sort` does:
-                // an Integer's sign, a non-Integer via its own `<=>` against
-                // 0, and `nil` as "not comparable" (ArgumentError).
-                match vm
-                    .invoke_block(globals, &data, &[*a, *b])
-                    .and_then(|r| vm.cmpint(globals, r, *a, *b))
-                {
-                    Ok(ord) => ord,
-                    Err(e) => {
-                        err = Some(e);
-                        std::cmp::Ordering::Equal
-                    }
-                }
-            });
-            if let Some(e) = err {
-                return Err(e);
-            }
-            Ok(Value::array_from_vec(pairs))
-        })
-    } else {
+    // Keys that are all Fixnums, or all Strings, order the pairs by
+    // themselves: two distinct keys of those classes never compare equal,
+    // so the values are never consulted, and the keys sort without running
+    // any Ruby.
+    if lfp.block().is_none() {
         let mut keys = hash.keys();
-        // Root the merge buffer (see `Array::sort_inner`): the hash keeps
-        // the keys alive, but a user-defined `<=>` may mutate the hash
-        // mid-sort, and the buffer would then be their only reference.
-        let scratch_len = executor::op::merge_scratch_len(keys.len());
-        vm.with_temp_scope(|vm| {
-            let buf = if scratch_len == 0 {
-                std::ptr::null_mut()
-            } else {
-                let mut scratch = Array::new_from_vec(vec![Value::nil(); scratch_len]);
-                vm.temp_push(scratch.into());
-                scratch.as_mut_ptr()
-            };
-            vm.sort(globals, &mut keys, buf)
-        })?;
-        // Each fresh pair must survive the Ruby `hash`/`eql?` dispatch
-        // inside `hash.get` for the following keys — accumulate into a
-        // rooted Array instead of a bare Rust Vec.
-        vm.with_temp_scope(|vm| {
-            vm.temp_array_new(keys.len());
-            let idx = vm.temp_len() - 1;
-            for &k in keys.iter() {
-                let v = hash.get(k, vm, globals)?.unwrap();
-                vm.temp_array_push(Value::array2(k, v));
-            }
-            Ok(vm.temp_at(idx))
-        })
+        if matches!(
+            executor::op::homogeneous_ord(globals, &keys),
+            Some(executor::op::HomogeneousOrd::Fixnum | executor::op::HomogeneousOrd::String)
+        ) {
+            vm.sort(globals, &mut keys, std::ptr::null_mut())?;
+            let pairs = keys
+                .into_iter()
+                .map(|k| {
+                    // The keys are of a class whose `hash` / `eql?` is
+                    // answered natively, so the lookup runs no Ruby.
+                    let v = hash.get(k, vm, globals)?.unwrap_or_default();
+                    Ok(Value::array2(k, v))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(Value::array_from_vec(pairs));
+        }
     }
+    // Otherwise this is CRuby's `Enumerable#sort`, `to_a.sort`: the pairs
+    // themselves are compared — with `Array#<=>`, which goes on to the
+    // values when two keys compare equal (`{1 => "b", 1.0 => "a"}`), or
+    // with the block — and a failed comparison names the pairs
+    // ("comparison of Array with Array failed").
+    let pairs: Vec<Value> = hash.iter().map(|(k, v)| Value::array2(k, v)).collect();
+    let pairs = Array::new_from_vec(pairs);
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(pairs.into());
+        super::array::sort_inner(vm, globals, lfp, pairs)
+    })
 }
 
 ///

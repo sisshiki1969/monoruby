@@ -371,9 +371,13 @@ module Enumerable
           elem = x
           res = r
           first = false
-        elsif (r <=> res) < 0
-          elem = x
-          res = r
+        else
+          c = r <=> res
+          c = __cmpint(c, r, res) unless Integer === c
+          if c < 0
+            elem = x
+            res = r
+          end
         end
       end
       elem
@@ -571,7 +575,9 @@ module Enumerable
     # shape here.)
     pairs = []
     __gather_each { |x| pairs << [yield(x), x] }
-    pairs.sort! { |a, b| a[0] <=> b[0] }
+    # The keys are what is compared (CRuby's `sort_by_cmp`), so two that
+    # cannot be are named in the error — not the pairs holding them.
+    pairs.sort_by! { |p| p[0] }
     pairs.map { |p| p[1] }
   end
 
@@ -587,9 +593,13 @@ module Enumerable
           elem = x
           res = r
           first = false
-        elsif (r <=> res) > 0
-          elem = x
-          res = r
+        else
+          c = r <=> res
+          c = __cmpint(c, r, res) unless Integer === c
+          if c > 0
+            elem = x
+            res = r
+          end
         end
       end
       elem
@@ -762,7 +772,7 @@ module Enumerable
             first = false
           else
             cmp = yield(x, m)
-            raise ArgumentError, "comparison of #{x.class} with #{__coerce_failed_name(m)} failed" if cmp.nil?
+            cmp = __cmpint(cmp, x, m) unless Integer === cmp
             m = x if cmp < 0
           end
         end
@@ -771,10 +781,10 @@ module Enumerable
           if first
             m = x
             first = false
-          elsif (cmp = (x <=> m)).nil?
-            raise ArgumentError, "comparison of #{x.class} with #{__coerce_failed_name(m)} failed"
-          elsif cmp < 0
-            m = x
+          else
+            cmp = x <=> m
+            cmp = __cmpint(cmp, x, m) unless Integer === cmp
+            m = x if cmp < 0
           end
         end
       end
@@ -801,7 +811,7 @@ module Enumerable
             first = false
           else
             cmp = yield(x, m)
-            raise ArgumentError, "comparison of #{x.class} with #{__coerce_failed_name(m)} failed" if cmp.nil?
+            cmp = __cmpint(cmp, x, m) unless Integer === cmp
             m = x if cmp > 0
           end
         end
@@ -810,10 +820,10 @@ module Enumerable
           if first
             m = x
             first = false
-          elsif (cmp = (x <=> m)).nil?
-            raise ArgumentError, "comparison of #{x.class} with #{__coerce_failed_name(m)} failed"
-          elsif cmp > 0
-            m = x
+          else
+            cmp = x <=> m
+            cmp = __cmpint(cmp, x, m) unless Integer === cmp
+            m = x if cmp > 0
           end
         end
       end
@@ -829,29 +839,98 @@ module Enumerable
     end
   end
 
-  def minmax(&block)
-    if block
-      mn = nil
-      mx = nil
-      first = true
-      __gather_each do |x|
-        if first
-          mn = x
-          mx = x
-          first = false
+  # CRuby's `enum_minmax` (`minmax_i` / `minmax_ii`): the elements are
+  # taken two at a time. The pair is ordered with one comparison, then the
+  # smaller is compared with the minimum and the larger with the maximum —
+  # three comparisons for two elements where comparing each element with
+  # both would take four.
+  def minmax
+    mn = mx = nil
+    seen = false
+    j = nil
+    pending = false
+    if block_given?
+      __gather_each do |i|
+        unless pending
+          j = i
+          pending = true
+          next
+        end
+        pending = false
+        c = yield(j, i)
+        c = __cmpint(c, j, i) unless Integer === c
+        if c == 0
+          i = j
+        elsif c < 0
+          i, j = j, i
+        end
+        if seen
+          c = yield(i, mn)
+          c = __cmpint(c, i, mn) unless Integer === c
+          mn = i if c < 0
+          c = yield(j, mx)
+          c = __cmpint(c, j, mx) unless Integer === c
+          mx = j if c > 0
         else
-          cmp_mn = block.call(x, mn)
-          raise ArgumentError, "comparison of #{x.class} with #{__coerce_failed_name(mn)} failed" if cmp_mn.nil?
-          mn = x if cmp_mn < 0
-          cmp_mx = block.call(x, mx)
-          raise ArgumentError, "comparison of #{x.class} with #{__coerce_failed_name(mx)} failed" if cmp_mx.nil?
-          mx = x if cmp_mx > 0
+          mn = i
+          mx = j
+          seen = true
         end
       end
-      [mn, mx]
+      if pending
+        if seen
+          c = yield(j, mn)
+          c = __cmpint(c, j, mn) unless Integer === c
+          mn = j if c < 0
+          c = yield(j, mx)
+          c = __cmpint(c, j, mx) unless Integer === c
+          mx = j if c > 0
+        else
+          mn = mx = j
+        end
+      end
     else
-      [min, max]
+      __gather_each do |i|
+        unless pending
+          j = i
+          pending = true
+          next
+        end
+        pending = false
+        c = j <=> i
+        c = __cmpint(c, j, i) unless Integer === c
+        if c == 0
+          i = j
+        elsif c < 0
+          i, j = j, i
+        end
+        if seen
+          c = i <=> mn
+          c = __cmpint(c, i, mn) unless Integer === c
+          mn = i if c < 0
+          c = j <=> mx
+          c = __cmpint(c, j, mx) unless Integer === c
+          mx = j if c > 0
+        else
+          mn = i
+          mx = j
+          seen = true
+        end
+      end
+      if pending
+        if seen
+          c = j <=> mn
+          c = __cmpint(c, j, mn) unless Integer === c
+          mn = j if c < 0
+          c = j <=> mx
+          c = __cmpint(c, j, mx) unless Integer === c
+          mx = j if c > 0
+        else
+          mn = mx = j
+        end
+      end
     end
+    [mn, mx]
   end
 
   def uniq
@@ -916,29 +995,65 @@ module Enumerable
   # mapping each element through the block.
   def minmax_by
     return to_enum(:minmax_by) { respond_to?(:size) ? size : nil } unless block_given?
-    min_elem = nil
-    max_elem = nil
-    min_score = nil
-    max_score = nil
-    first = true
-    __gather_each do |x|
-      score = yield(x)
-      if first
-        min_elem = max_elem = x
-        min_score = max_score = score
-        first = false
+    # CRuby's `minmax_by_i`: pairwise, like `minmax` above, over the
+    # block's values.
+    min_elem = max_elem = nil
+    min_score = max_score = nil
+    seen = false
+    j = vj = nil
+    pending = false
+    __gather_each do |i|
+      vi = yield(i)
+      unless pending
+        j = i
+        vj = vi
+        pending = true
+        next
+      end
+      pending = false
+      c = vj <=> vi
+      c = __cmpint(c, vj, vi) unless Integer === c
+      if c == 0
+        i = j
+        vi = vj
+      elsif c < 0
+        i, j = j, i
+        vi, vj = vj, vi
+      end
+      if seen
+        c = vi <=> min_score
+        c = __cmpint(c, vi, min_score) unless Integer === c
+        if c < 0
+          min_score = vi
+          min_elem = i
+        end
+        c = vj <=> max_score
+        c = __cmpint(c, vj, max_score) unless Integer === c
+        if c > 0
+          max_score = vj
+          max_elem = j
+        end
       else
-        if (score <=> min_score) < 0
-          min_elem = x
-          min_score = score
-        end
-        if (score <=> max_score) > 0
-          max_elem = x
-          max_score = score
-        end
+        min_score = vi
+        min_elem = i
+        max_score = vj
+        max_elem = j
+        seen = true
       end
     end
-    first ? [nil, nil] : [min_elem, max_elem]
+    if pending
+      if seen
+        c = vj <=> min_score
+        c = __cmpint(c, vj, min_score) unless Integer === c
+        min_elem = j if c < 0
+        c = vj <=> max_score
+        c = __cmpint(c, vj, max_score) unless Integer === c
+        max_elem = j if c > 0
+      else
+        min_elem = max_elem = j
+      end
+    end
+    [min_elem, max_elem]
   end
 
   # Pass each element of `self` to the block, treating multi-value

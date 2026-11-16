@@ -9,6 +9,8 @@ class File
   # variables (doc/hidden_ivars.md), `/__dev` and so on: CRuby keeps a
   # `struct stat` behind the object.
   class Stat
+    # A C struct in CRuby, with no `_dump_data`: `Marshal.dump` refuses it.
+    @__no_dump_data = true
     include Comparable
 
     def dev ; @__dev ; end

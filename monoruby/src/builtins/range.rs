@@ -58,7 +58,9 @@ pub(super) fn init(globals: &mut Globals) {
     // Reached from `Range#sum` (builtins/range.rb), which owns the
     // block / fallback decision.
     globals.define_builtin_func(RANGE_CLASS, "__builtin_sum", int_sum, 1);
-    globals.define_builtin_func(RANGE_CLASS, "minmax", minmax, 0);
+    // Reached from `Range#minmax` (builtins/range.rb), which hands a call
+    // with a block to `Enumerable`.
+    globals.define_builtin_func(RANGE_CLASS, "__builtin_minmax", minmax, 0);
     globals.define_builtin_func(RANGE_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(RANGE_CLASS, "to_s", to_s, 0);
 }
@@ -838,32 +840,6 @@ fn toa(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
-/// Map a Range#min / Range#max block result to a sign, the way CRuby's
-/// `rb_cmpint` does. Integers are taken at face value; for any other
-/// object we call `> 0` first and, only if it returns falsy, fall
-/// through to `< 0`. The short-circuit matches CRuby: a mock that
-/// stubs `:>` to return truthy must not also see a `:<` dispatch.
-fn cmpint_block_result(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    val: Value,
-) -> Result<i64> {
-    if let Some(i) = val.try_fixnum() {
-        return Ok(i.signum());
-    }
-    let zero = Value::integer(0);
-    let gt = vm
-        .invoke_method_inner(globals, IdentId::_GT, val, &[zero], None, None)?
-        .as_bool();
-    if gt {
-        return Ok(1);
-    }
-    let lt = vm
-        .invoke_method_inner(globals, IdentId::_LT, val, &[zero], None, None)?
-        .as_bool();
-    Ok(if lt { -1 } else { 0 })
-}
-
 ///
 /// ### Range#min
 ///
@@ -878,62 +854,26 @@ fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let start = range.start();
     let end = range.end();
 
-    if let Some(bh) = lfp.block() {
-        // With block: raise RangeError for endless ranges, then delegate to iteration
-        if end.is_nil() {
-            return Err(MonorubyErr::rangeerr(
-                "cannot get the minimum of endless range",
-            ));
-        }
-        if start.is_nil() {
-            return Err(MonorubyErr::rangeerr(
-                "cannot get the minimum of beginless range",
-            ));
-        }
-        // Check for empty range first
+    // No block
+    if start.is_nil() {
+        return Err(MonorubyErr::rangeerr(
+            "cannot get the minimum of beginless range",
+        ));
+    }
+    // Check for empty range
+    if !end.is_nil() {
         let cmp = vm.compare_values_inner(globals, start, end)?;
         match cmp {
             Some(std::cmp::Ordering::Greater) => return Ok(Value::nil()),
-            Some(std::cmp::Ordering::Equal) if range.exclude_end() => return Ok(Value::nil()),
+            Some(std::cmp::Ordering::Equal) => {
+                if range.exclude_end() {
+                    return Ok(Value::nil());
+                }
+            }
             _ => {}
         }
-        // Iterate the range and find min using the block
-        if let Some((s, e)) = range.try_fixnum() {
-            let data = vm.get_block_data(globals, bh)?;
-            let mut min_val = Value::integer(s);
-            for i in (s + 1)..e {
-                let val = Value::integer(i);
-                let cmp = vm.invoke_block(globals, &data, &[val, min_val])?;
-                if cmpint_block_result(vm, globals, cmp)? < 0 {
-                    min_val = val;
-                }
-            }
-            Ok(min_val)
-        } else {
-            Err(MonorubyErr::runtimeerr("not supported"))
-        }
-    } else {
-        // No block
-        if start.is_nil() {
-            return Err(MonorubyErr::rangeerr(
-                "cannot get the minimum of beginless range",
-            ));
-        }
-        // Check for empty range
-        if !end.is_nil() {
-            let cmp = vm.compare_values_inner(globals, start, end)?;
-            match cmp {
-                Some(std::cmp::Ordering::Greater) => return Ok(Value::nil()),
-                Some(std::cmp::Ordering::Equal) => {
-                    if range.exclude_end() {
-                        return Ok(Value::nil());
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(start)
     }
+    Ok(start)
 }
 
 ///
@@ -950,85 +890,50 @@ fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let start = range.start();
     let end = range.end();
 
-    if let Some(bh) = lfp.block() {
-        // With block: raise RangeError for endless/beginless ranges, then iterate
-        if end.is_nil() {
-            return Err(MonorubyErr::rangeerr(
-                "cannot get the maximum of endless range",
-            ));
-        }
-        if start.is_nil() {
-            return Err(MonorubyErr::rangeerr(
-                "cannot get the maximum of beginless range",
-            ));
-        }
-        // Check for empty range first
+    // No block
+    if end.is_nil() {
+        return Err(MonorubyErr::rangeerr(
+            "cannot get the maximum of endless range",
+        ));
+    }
+
+    // Check for empty range
+    if !start.is_nil() {
         let cmp = vm.compare_values_inner(globals, start, end)?;
         match cmp {
             Some(std::cmp::Ordering::Greater) => return Ok(Value::nil()),
-            Some(std::cmp::Ordering::Equal) if range.exclude_end() => return Ok(Value::nil()),
+            Some(std::cmp::Ordering::Equal) => {
+                if range.exclude_end() {
+                    return Ok(Value::nil());
+                }
+                return Ok(end);
+            }
             _ => {}
         }
-        if let Some((s, e)) = range.try_fixnum() {
-            let data = vm.get_block_data(globals, bh)?;
-            let mut max_val = Value::integer(s);
-            for i in (s + 1)..e {
-                let val = Value::integer(i);
-                let cmp = vm.invoke_block(globals, &data, &[val, max_val])?;
-                if cmpint_block_result(vm, globals, cmp)? > 0 {
-                    max_val = val;
-                }
-            }
-            Ok(max_val)
-        } else {
-            Err(MonorubyErr::runtimeerr("not supported"))
-        }
-    } else {
-        // No block
-        if end.is_nil() {
-            return Err(MonorubyErr::rangeerr(
-                "cannot get the maximum of endless range",
-            ));
-        }
-
-        // Check for empty range
-        if !start.is_nil() {
-            let cmp = vm.compare_values_inner(globals, start, end)?;
-            match cmp {
-                Some(std::cmp::Ordering::Greater) => return Ok(Value::nil()),
-                Some(std::cmp::Ordering::Equal) => {
-                    if range.exclude_end() {
-                        return Ok(Value::nil());
-                    }
-                    return Ok(end);
-                }
-                _ => {}
-            }
-        }
-
-        if range.exclude_end() {
-            // For exclusive ranges, need integer end or string end
-            if let Some(i) = end.try_fixnum() {
-                // Ruby 4.0+: beginless exclusive Integer ranges return end - 1.
-                return Ok(Value::integer(i - 1));
-            } else if let RV::BigInt(b) = end.unpack() {
-                return Ok(Value::bigint(b - 1));
-            } else if let Some(end_str) = end.is_str() {
-                // For exclusive string ranges, iterate to find the predecessor
-                if let Some(start_str) = start.is_str() {
-                    let Some(prev) = str_range_predecessor(start_str, end_str) else {
-                        return Ok(Value::nil());
-                    };
-                    return Ok(Value::string_from_str(&prev));
-                }
-                return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
-            } else {
-                return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
-            }
-        }
-
-        Ok(end)
     }
+
+    if range.exclude_end() {
+        // For exclusive ranges, need integer end or string end
+        if let Some(i) = end.try_fixnum() {
+            // Ruby 4.0+: beginless exclusive Integer ranges return end - 1.
+            return Ok(Value::integer(i - 1));
+        } else if let RV::BigInt(b) = end.unpack() {
+            return Ok(Value::bigint(b - 1));
+        } else if let Some(end_str) = end.is_str() {
+            // For exclusive string ranges, iterate to find the predecessor
+            if let Some(start_str) = start.is_str() {
+                let Some(prev) = str_range_predecessor(start_str, end_str) else {
+                    return Ok(Value::nil());
+                };
+                return Ok(Value::string_from_str(&prev));
+            }
+            return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
+        } else {
+            return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
+        }
+    }
+
+    Ok(end)
 }
 
 ///
@@ -1190,55 +1095,51 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         ));
     }
 
-    if let Some(bh) = lfp.block() {
-        // With block: iterate
-        if let Some((s, e)) = range.try_fixnum() {
-            if e <= s {
+    // No block: compute min and max directly
+    // Check for empty range
+    let cmp = vm.compare_values_inner(globals, start, end)?;
+    match cmp {
+        Some(std::cmp::Ordering::Greater) => {
+            return Ok(Value::array_from_vec(vec![Value::nil(), Value::nil()]));
+        }
+        Some(std::cmp::Ordering::Equal) => {
+            if range.exclude_end() {
                 return Ok(Value::array_from_vec(vec![Value::nil(), Value::nil()]));
             }
-            let data = vm.get_block_data(globals, bh)?;
-            let mut min_val = Value::integer(s);
-            let mut max_val = Value::integer(s);
-            for i in (s + 1)..e {
-                let val = Value::integer(i);
-                let cmp_min = vm.invoke_block(globals, &data, &[val, min_val])?;
-                let is_less = vm
-                    .invoke_method_inner(
-                        globals,
-                        IdentId::_LT,
-                        cmp_min,
-                        &[Value::integer(0)],
-                        None,
-                        None,
-                    )?
-                    .as_bool();
-                if is_less {
-                    min_val = val;
+            return Ok(Value::array_from_vec(vec![start, end]));
+        }
+        _ => {}
+    }
+
+    // Get max value
+    let max_val = if range.exclude_end() {
+        if let Some(i) = end.try_fixnum() {
+            Value::integer(i - 1)
+        } else if let RV::BigInt(b) = end.unpack() {
+            Value::bigint(b - 1)
+        } else if let Some(end_str) = end.is_str() {
+            if let Some(start_str) = start.is_str() {
+                match str_range_predecessor(start_str, end_str) {
+                    Some(prev) => Value::string_from_str(&prev),
+                    None => return Ok(Value::nil()),
                 }
-                let cmp_max = vm.invoke_block(globals, &data, &[val, max_val])?;
-                let is_greater = vm
-                    .invoke_method_inner(
-                        globals,
-                        IdentId::_GT,
-                        cmp_max,
-                        &[Value::integer(0)],
-                        None,
-                        None,
-                    )?
-                    .as_bool();
-                if is_greater {
-                    max_val = val;
-                }
+            } else {
+                return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
             }
-            Ok(Value::array_from_vec(vec![min_val, max_val]))
+        } else if matches!(
+            start.unpack(),
+            RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_)
+        ) {
+            // Numeric start with non-numeric end (the
+            // canonical case is `(0...Float::INFINITY)`):
+            // CRuby raises immediately rather than running
+            // an unbounded loop.
+            return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
         } else {
-            // Non-numeric range with block: walk via `each`
-            // (which understands `succ` and works for Time /
-            // String / Symbol / mocked types) and apply the
-            // block as the comparator. Mirrors Enumerable#minmax.
-            let data = vm.get_block_data(globals, bh)?;
-            let mut min_val: Option<Value> = None;
-            let mut max_val: Option<Value> = None;
+            // Generic non-numeric exclusive range: iterate
+            // via `each` (uses `#succ`) and take the last
+            // yielded element. Mocked / user-defined types
+            // only need to respond to `<=>` / `succ`.
             let arr = vm
                 .invoke_method_inner(
                     globals,
@@ -1249,123 +1150,16 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                     None,
                 )?
                 .as_array();
-            // The `to_a` result is referenced only by this Rust local
-            // while the comparator block runs — root it.
-            vm.with_temp_scope(|vm| {
-            vm.temp_push(arr.into());
-            for v in arr.iter() {
-                let v = *v;
-                let mn = match min_val {
-                    Some(m) => m,
-                    None => {
-                        min_val = Some(v);
-                        max_val = Some(v);
-                        continue;
-                    }
-                };
-                let mx = max_val.unwrap();
-                let cmp_min = vm.invoke_block(globals, &data, &[v, mn])?;
-                if vm
-                    .invoke_method_inner(
-                        globals,
-                        IdentId::_LT,
-                        cmp_min,
-                        &[Value::integer(0)],
-                        None,
-                        None,
-                    )?
-                    .as_bool()
-                {
-                    min_val = Some(v);
-                }
-                let cmp_max = vm.invoke_block(globals, &data, &[v, mx])?;
-                if vm
-                    .invoke_method_inner(
-                        globals,
-                        IdentId::_GT,
-                        cmp_max,
-                        &[Value::integer(0)],
-                        None,
-                        None,
-                    )?
-                    .as_bool()
-                {
-                    max_val = Some(v);
-                }
-            }
-            Ok(Value::array_from_vec(vec![
-                min_val.unwrap_or_else(Value::nil),
-                max_val.unwrap_or_else(Value::nil),
-            ]))
-            })
-        }
-    } else {
-        // No block: compute min and max directly
-        // Check for empty range
-        let cmp = vm.compare_values_inner(globals, start, end)?;
-        match cmp {
-            Some(std::cmp::Ordering::Greater) => {
+            if arr.is_empty() {
                 return Ok(Value::array_from_vec(vec![Value::nil(), Value::nil()]));
             }
-            Some(std::cmp::Ordering::Equal) => {
-                if range.exclude_end() {
-                    return Ok(Value::array_from_vec(vec![Value::nil(), Value::nil()]));
-                }
-                return Ok(Value::array_from_vec(vec![start, end]));
-            }
-            _ => {}
+            arr[arr.len() - 1]
         }
+    } else {
+        end
+    };
 
-        // Get max value
-        let max_val = if range.exclude_end() {
-            if let Some(i) = end.try_fixnum() {
-                Value::integer(i - 1)
-            } else if let RV::BigInt(b) = end.unpack() {
-                Value::bigint(b - 1)
-            } else if let Some(end_str) = end.is_str() {
-                if let Some(start_str) = start.is_str() {
-                    match str_range_predecessor(start_str, end_str) {
-                        Some(prev) => Value::string_from_str(&prev),
-                        None => return Ok(Value::nil()),
-                    }
-                } else {
-                    return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
-                }
-            } else if matches!(
-                start.unpack(),
-                RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_)
-            ) {
-                // Numeric start with non-numeric end (the
-                // canonical case is `(0...Float::INFINITY)`):
-                // CRuby raises immediately rather than running
-                // an unbounded loop.
-                return Err(MonorubyErr::typeerr("cannot exclude non Integer end value"));
-            } else {
-                // Generic non-numeric exclusive range: iterate
-                // via `each` (uses `#succ`) and take the last
-                // yielded element. Mocked / user-defined types
-                // only need to respond to `<=>` / `succ`.
-                let arr = vm
-                    .invoke_method_inner(
-                        globals,
-                        IdentId::get_id("to_a"),
-                        self_,
-                        &[],
-                        None,
-                        None,
-                    )?
-                    .as_array();
-                if arr.is_empty() {
-                    return Ok(Value::array_from_vec(vec![Value::nil(), Value::nil()]));
-                }
-                arr[arr.len() - 1]
-            }
-        } else {
-            end
-        };
-
-        Ok(Value::array_from_vec(vec![start, max_val]))
-    }
+    Ok(Value::array_from_vec(vec![start, max_val]))
 }
 
 ///

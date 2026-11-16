@@ -31,6 +31,18 @@ impl Store {
         rval.get_ivar(self, name)
     }
 
+    /// Every instance variable of `val`, the hidden slots included.
+    pub(crate) fn get_all_ivars(&self, val: Value) -> Vec<(IdentId, Value)> {
+        let Some(rval) = val.try_rvalue() else {
+            return vec![];
+        };
+        self.classes[val.class()]
+            .ivar_names
+            .iter()
+            .filter_map(|(name, id)| rval.get_ivar_by_ivarid(*id).map(|v| (*name, v)))
+            .collect()
+    }
+
     pub(crate) fn get_ivars(&self, val: Value) -> Vec<(IdentId, Value)> {
         let class_id = val.class();
         let rval = match val.try_rvalue() {

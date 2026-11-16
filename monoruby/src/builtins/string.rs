@@ -32,7 +32,17 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_inline_funcs(
         STRING_CLASS,
         "==",
-        &["===", "eql?"],
+        &["eql?"],
+        eq,
+        inline_gen2!(string_eq_gen),
+        1,
+    );
+    // A method of its own over the same function, as in CRuby
+    // (`rb_define_method(rb_cString, "===", rb_str_equal, 1)`).
+    globals.define_builtin_inline_funcs(
+        STRING_CLASS,
+        "===",
+        &[],
         eq,
         inline_gen2!(string_eq_gen),
         1,

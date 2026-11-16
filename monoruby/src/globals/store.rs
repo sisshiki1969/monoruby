@@ -1414,6 +1414,36 @@ impl Store {
 
     /// Get class name of *ClassId*.
     pub(crate) fn get_class_name(&self, class: ClassId) -> String {
+        // A refinement is identified by what it refines and where, never
+        // by a constant it got bound to (`rb_mod_to_s`): as a method's
+        // owner and as the receiver in a NameError message alike.
+        if let (Some(refined), Some(owner)) = (
+            self.classes[class].refined_class(),
+            self.classes[class].refinement_owner(),
+        ) {
+            return format!(
+                "#<refinement:{}@{}>",
+                self.get_class_name(refined),
+                self.get_class_name(owner)
+            );
+        }
+        self.get_class_path(class)
+    }
+
+    /// How a NameError message shows a class or module (`name_err_mesg_to_str`):
+    /// its `name` when it has one — a refinement bound to a constant is
+    /// that constant here — and its `inspect` otherwise.
+    pub(crate) fn nameerr_class_name(&self, class: ClassId) -> String {
+        if self.classes[class].get_name().is_some() && !self.classes.is_name_erased(class) {
+            self.get_class_path(class)
+        } else {
+            self.get_class_name(class)
+        }
+    }
+
+    /// The name of *ClassId* as `Module#name` gives it (`rb_class_path`):
+    /// [`Self::get_class_name`] without the refinement form.
+    pub(crate) fn get_class_path(&self, class: ClassId) -> String {
         let class_obj = self.classes[class].get_module();
         match self.classes[class].get_name().filter(|_| {
             // An ancestor erased by `set_temporary_name(nil)` makes the
@@ -2009,6 +2039,7 @@ impl Store {
             send_direct: None,
             class_new_init: None,
             yield_expanded: None,
+            newarray_recv: false,
         });
         id
     }
@@ -2029,6 +2060,12 @@ impl Store {
     /// [`CallSiteInfo::yield_expanded`].
     pub(crate) fn set_yield_expanded(&mut self, callid: CallSiteId, expanded: CallSiteId) {
         self.callsite_info[callid.0 as usize].yield_expanded = Some(expanded);
+    }
+
+    /// Mark a `[e1, .., en].min` / `.max` site — see
+    /// [`CallSiteInfo::newarray_recv`].
+    pub(crate) fn set_newarray_recv(&mut self, callid: CallSiteId) {
+        self.callsite_info[callid.0 as usize].newarray_recv = true;
     }
 
     pub(crate) fn new_constsite(
@@ -3440,6 +3477,18 @@ pub struct CallSiteInfo {
     /// builds the Array (`JitContext::yield_expanded_for`). Prepared by
     /// bytecodegen and never executed by the VM.
     pub(crate) yield_expanded: Option<CallSiteId>,
+    /// `[e1, .., en].min` / `.max` written on a non-constant Array literal
+    /// itself, with no argument and no block — the shape CRuby compiles
+    /// to `opt_newarray_send`, which never builds the Array and compares
+    /// *each element with the running extreme* (`v <=> best`), where
+    /// `Array#min` / `#max` called on an Array compare the running extreme
+    /// with each element (`best <=> v`). The two differ in the receiver a
+    /// user-defined `<=>` sees and in the operands a failed comparison
+    /// names: `[x, "a"].min` is "comparison of String with 1 failed",
+    /// `a = [x, "a"]; a.min` "comparison of Integer with String failed".
+    /// The builtin (`array::newarray_send`) and the JIT's elided form
+    /// (`runtime::opt_newarray_min`) read the flag.
+    pub(crate) newarray_recv: bool,
 }
 
 impl CallSiteInfo {

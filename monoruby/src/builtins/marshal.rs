@@ -987,15 +987,27 @@ impl<'a> MarshalReader<'a> {
                     }
                     // Location objects are CRuby's own; monoruby keeps
                     // the backtrace as strings and has nothing to restore.
+                    // `exception_loader` leaves the field nil (it is the
+                    // backtrace itself on the wire).
                     "bt_locations" => {}
                     // A field of a builtin exception goes back to the
-                    // hidden slot its accessor reads.
-                    field => match exception_field_slot(field) {
+                    // hidden slot its accessor reads; any other name
+                    // without an `@` is kept where nothing but the next
+                    // dump sees it.
+                    field => match exception_field_slot(&globals.store, module, field) {
                         Some(slot) => user_ivars.push((IdentId::get_id(slot), *val)),
-                        None => user_ivars.push((*name, *val)),
+                        None if field.starts_with('@') => user_ivars.push((*name, *val)),
+                        None => user_ivars.push((
+                            IdentId::get_id(&format!("{EXTRA_FIELD_PREFIX}{field}")),
+                            *val,
+                        )),
                     },
                 }
             }
+            user_ivars.push((
+                IdentId::get_id(&format!("{EXTRA_FIELD_PREFIX}bt_locations")),
+                Value::nil(),
+            ));
             // A nil `:mesg` means "no explicit message"; CRuby's default
             // message is then the class name.
             let msg = message.unwrap_or_else(|| class_name.clone());
@@ -1020,8 +1032,20 @@ impl<'a> MarshalReader<'a> {
                 class_name
             )));
         } else {
+            let has_fields = has_object_fields(&class_name);
             for (name, val) in &ivars {
-                globals.set_ivar(obj, *name, *val)?;
+                // A field dumped under a name without an `@` goes back
+                // to the hidden slot its accessor reads.
+                let name = if has_fields {
+                    let wire = name.get_name();
+                    match object_fields(&class_name).find(|(w, _)| *w == wire) {
+                        Some((_, slot)) => IdentId::get_id(slot),
+                        None => *name,
+                    }
+                } else {
+                    *name
+                };
+                globals.set_ivar(obj, name, *val)?;
             }
             obj
         };
@@ -1523,31 +1547,178 @@ fn resolve_class_path(globals: &Globals, path: &str) -> Option<Module> {
 /// State of the builtin exception classes that CRuby keeps in instance
 /// variables named without an `@` — which no Ruby code can read, and
 /// `instance_variables` does not list, but which `Marshal` dumps under
-/// those names: `SystemCallError#errno`, `SignalException#signo`,
+/// those names: `KeyError#key` / `#receiver`, `NameError#name`,
+/// `NoMethodError#args` / `#private_call?`, `SystemExit#status`,
+/// `UncaughtThrowError#tag` / `#value`, `StopIteration#result`,
+/// `SystemCallError#errno`, `SignalException#signo`,
 /// `NoMatchingPatternKeyError#matchee` / `#key`, and what a transcoding
-/// error knows about the conversion that failed.
+/// error knows about the conversion that failed. `LocalJumpError` and
+/// `LoadError` / `SyntaxError` keep theirs in real instance variables
+/// (`@exit_value`, `@reason`, `@path`).
 ///
-/// monoruby keeps the same state in hidden slots (doc/hidden_ivars.md);
-/// each pair is the name on the wire and the slot.
-const EXCEPTION_FIELDS: [(&str, &str); 10] = [
-    ("errno", "/__errno"),
-    ("signo", "/__signo"),
-    ("matchee", "/__matchee"),
-    ("key", "/__key"),
-    ("error_bytes", "/error_bytes"),
-    ("readagain_bytes", "/readagain_bytes"),
-    ("incomplete_input", "/incomplete_input"),
-    ("error_char", "/error_char"),
-    ("source_encoding_name", "/source_encoding_name"),
-    ("destination_encoding_name", "/destination_encoding_name"),
+/// monoruby keeps the same state in hidden slots (doc/hidden_ivars.md).
+/// The table is in the order CRuby dumps the fields of one exception.
+struct ExceptionField {
+    /// The name on the wire.
+    wire: &'static str,
+    /// The hidden slot the accessor reads.
+    slot: &'static str,
+    /// The (top-level) class whose instances carry the field; `None` for
+    /// a field that is taken from whichever exception has it.
+    class: Option<&'static str>,
+    /// What an instance that never had the field set dumps: CRuby's
+    /// `initialize` stores some fields unconditionally.
+    unset: UnsetField,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum UnsetField {
+    /// Not dumped at all.
+    Skip,
+    Nil,
+    False,
+    Zero,
+}
+
+const fn field(
+    wire: &'static str,
+    slot: &'static str,
+    class: Option<&'static str>,
+    unset: UnsetField,
+) -> ExceptionField {
+    ExceptionField {
+        wire,
+        slot,
+        class,
+        unset,
+    }
+}
+
+const EXCEPTION_FIELDS: [ExceptionField; 23] = [
+    field("key", "/key", Some("KeyError"), UnsetField::Skip),
+    field("receiver", "/receiver", Some("KeyError"), UnsetField::Skip),
+    // A NameError's receiver is under an internal id in CRuby and is
+    // not dumped; nor is a FrozenError's.
+    field("name", "/name", Some("NameError"), UnsetField::Nil),
+    field("args", "/args", Some("NoMethodError"), UnsetField::Nil),
+    field(
+        "private_call?",
+        "/private_call",
+        Some("NoMethodError"),
+        UnsetField::False,
+    ),
+    field("status", "/status", Some("SystemExit"), UnsetField::Zero),
+    field("tag", "/__tag", Some("UncaughtThrowError"), UnsetField::Nil),
+    field(
+        "value",
+        "/__value",
+        Some("UncaughtThrowError"),
+        UnsetField::Nil,
+    ),
+    field("result", "/result", Some("StopIteration"), UnsetField::Skip),
+    field(
+        "@exit_value",
+        "/exit_value",
+        Some("LocalJumpError"),
+        UnsetField::Skip,
+    ),
+    field("@reason", "/reason", Some("LocalJumpError"), UnsetField::Skip),
+    field("@path", "/path", Some("LoadError"), UnsetField::Skip),
+    field("@path", "/path", Some("SyntaxError"), UnsetField::Skip),
+    field("errno", "/__errno", None, UnsetField::Skip),
+    field("signo", "/__signo", None, UnsetField::Skip),
+    field("matchee", "/__matchee", None, UnsetField::Skip),
+    field("key", "/__key", None, UnsetField::Skip),
+    field("error_bytes", "/error_bytes", None, UnsetField::Skip),
+    field("readagain_bytes", "/readagain_bytes", None, UnsetField::Skip),
+    field("incomplete_input", "/incomplete_input", None, UnsetField::Skip),
+    field("error_char", "/error_char", None, UnsetField::Skip),
+    field(
+        "source_encoding_name",
+        "/source_encoding_name",
+        None,
+        UnsetField::Skip,
+    ),
+    field(
+        "destination_encoding_name",
+        "/destination_encoding_name",
+        None,
+        UnsetField::Skip,
+    ),
 ];
 
-fn exception_field_slot(wire: &str) -> Option<&'static str> {
-    EXCEPTION_FIELDS
-        .iter()
-        .find(|(name, _)| *name == wire)
-        .map(|(_, slot)| *slot)
+/// Whether `class` is the top-level class `name` or below it.
+fn class_is_or_below(store: &Store, class: Module, name: &str) -> bool {
+    let mut cur = Some(class);
+    while let Some(c) = cur {
+        if store[c.id()].get_name() == Some(name) {
+            return true;
+        }
+        cur = c.superclass();
+    }
+    false
 }
+
+/// The fields of the table that an instance of `class` carries.
+fn exception_fields_of(
+    store: &Store,
+    class: Module,
+) -> impl Iterator<Item = &'static ExceptionField> + '_ {
+    EXCEPTION_FIELDS.iter().filter(move |f| match f.class {
+        Some(name) => class_is_or_below(store, class, name),
+        None => true,
+    })
+}
+
+/// The slot a field read off the wire goes to on an instance of `class`.
+fn exception_field_slot(store: &Store, class: Module, wire: &str) -> Option<&'static str> {
+    exception_fields_of(store, class)
+        .find(|f| f.wire == wire)
+        .map(|f| f.slot)
+}
+
+/// The same for the classes that are not exceptions: `Process::Status`
+/// is dumped as an object with the fields `status` and `pid`. Each entry
+/// is the class, the name on the wire and the slot.
+const OBJECT_FIELDS: [(&str, &str, &str); 2] = [
+    ("Process::Status", "status", "/__status"),
+    ("Process::Status", "pid", "/__pid"),
+];
+
+fn object_fields(class_name: &str) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
+    OBJECT_FIELDS
+        .iter()
+        .filter(move |(class, _, _)| *class == class_name)
+        .map(|(_, wire, slot)| (*wire, *slot))
+}
+
+/// Whether the class has any such field — asked once per object, so
+/// that the others pay nothing per instance variable.
+fn has_object_fields(class_name: &str) -> bool {
+    OBJECT_FIELDS.iter().any(|(class, _, _)| *class == class_name)
+}
+
+/// Whether `obj` is an instance of a class marked — in the Ruby file
+/// that defines it, with the class-level hidden variable
+/// `@__no_dump_data` — as one CRuby backs with a C struct that has no
+/// `_dump_data`.
+fn has_no_dump_data(store: &Store, obj: Value) -> bool {
+    let marker = IdentId::get_id("/__no_dump_data");
+    let mut class = Some(obj.real_class(store));
+    while let Some(c) = class {
+        if store.get_ivar(c.as_val(), marker).is_some() {
+            return true;
+        }
+        class = c.superclass();
+    }
+    false
+}
+
+/// Where a field with no accessor is kept: CRuby copies every instance
+/// variable of a loaded exception, whatever its name, and dumps it
+/// again. `bt_locations` is the one that matters — a loaded exception
+/// carries it as nil, and says so when dumped.
+const EXTRA_FIELD_PREFIX: &str = "/marshal/";
 
 /// Walk a Struct subclass's ancestor chain looking for the
 /// `/members` ivar (an Array of Symbols set by `Struct.new`).
@@ -2482,6 +2653,15 @@ fn marshal_dump_value(
                         // own cannot be dumped.
                         marshal_check_singleton(globals, obj)?;
                         let class_name = obj.get_real_class_name(&globals.store);
+                        // An object CRuby backs with a C struct that has
+                        // no `_dump_data` (`Dir`, `File::Stat`, …): its
+                        // state is in hidden slots here, and there is
+                        // nothing to write.
+                        if has_no_dump_data(&globals.store, obj) {
+                            return Err(MonorubyErr::typeerr(format!(
+                                "no _dump_data is defined for class {class_name}"
+                            )));
+                        }
                         if class_name.starts_with("#<") {
                             return Err(MonorubyErr::typeerr(format!(
                                 "can't dump anonymous class {}",
@@ -2489,7 +2669,19 @@ fn marshal_dump_value(
                             )));
                         }
                         let class_name_id = IdentId::get_id(&class_name);
-                        let ivars = globals.get_ivars(obj);
+                        let mut ivars = globals.get_ivars(obj);
+                        // The fields CRuby keeps under names without an
+                        // `@` come first.
+                        if has_object_fields(&class_name) {
+                            let fields: Vec<_> = object_fields(&class_name)
+                                .filter_map(|(wire, slot)| {
+                                    let val =
+                                        globals.store.get_ivar(obj, IdentId::get_id(slot))?;
+                                    Some((IdentId::get_id(wire), val))
+                                })
+                                .collect();
+                            ivars.splice(0..0, fields);
+                        }
                         for m in marshal_extended_modules(globals, obj) {
                             let name = globals.get_class_name(m);
                             if name.starts_with("#<") {
@@ -2629,17 +2821,25 @@ fn marshal_dump_value(
                         let msg_unset = obj
                             .is_exception()
                             .is_some_and(|e| e.default_message_class.is_some());
-                        let mut user_ivars = globals.get_ivars(obj);
-                        // The fields of the builtin exceptions come first,
-                        // under the names CRuby dumps them by.
-                        let fields: Vec<_> = EXCEPTION_FIELDS
-                            .iter()
-                            .filter_map(|(wire, slot)| {
-                                let val = globals.store.get_ivar(obj, IdentId::get_id(slot))?;
-                                Some((IdentId::get_id(wire), val))
+                        let user_ivars = globals.get_ivars(obj);
+                        // The fields of the builtin exceptions, under the
+                        // names CRuby dumps them by.
+                        let real_class = obj.real_class(&globals.store);
+                        let fields: Vec<_> = exception_fields_of(&globals.store, real_class)
+                            .filter_map(|f| {
+                                let val = match globals.store.get_ivar(obj, IdentId::get_id(f.slot))
+                                {
+                                    Some(val) => val,
+                                    None => match f.unset {
+                                        UnsetField::Skip => return None,
+                                        UnsetField::Nil => Value::nil(),
+                                        UnsetField::False => Value::bool(false),
+                                        UnsetField::Zero => Value::integer(0),
+                                    },
+                                };
+                                Some((IdentId::get_id(f.wire), val))
                             })
                             .collect();
-                        user_ivars.splice(0..0, fields);
                         // `#cause` is kept in the internal `/cause` slot,
                         // which `get_ivars` hides; CRuby dumps it as a
                         // plain `:cause` field, and only when set.
@@ -2657,11 +2857,49 @@ fn marshal_dump_value(
                             None,
                             None,
                         )?;
+                        // `bt_locations`: a raised exception dumps the
+                        // backtrace its raise captured under this name
+                        // too — a link to `bt` unless `set_backtrace`
+                        // has replaced that one since.
+                        let captured = obj
+                            .is_exception()
+                            .map(|e| e.trace_location(&globals.store))
+                            .unwrap_or_default();
+                        let bt_is_captured = !captured.is_empty()
+                            && bt.try_array_ty().is_some_and(|ary| {
+                                ary.len() == captured.len()
+                                    && ary.iter().zip(captured.iter()).all(|(v, s)| {
+                                        v.is_rstring_inner()
+                                            .is_some_and(|v| v.as_bytes() == s.as_bytes())
+                                    })
+                            });
+                        let has_locations = !captured.is_empty();
+                        // What a load kept without an accessor;
+                        // `bt_locations` was set last (`exception_loader`).
+                        let mut extras: Vec<_> = globals
+                            .store
+                            .get_all_ivars(obj)
+                            .into_iter()
+                            .filter_map(|(name, val)| {
+                                let name = name.get_name();
+                                let wire = name.strip_prefix(EXTRA_FIELD_PREFIX)?;
+                                if wire == "bt_locations" && has_locations {
+                                    return None;
+                                }
+                                Some((IdentId::get_id(wire), val))
+                            })
+                            .collect();
+                        let bt_locations = IdentId::get_id("bt_locations");
+                        extras.sort_by_key(|(name, _)| *name == bt_locations);
                         buf.push(b'o');
                         marshal_write_symbol(buf, class_name_id, symbols);
                         marshal_write_fixnum(
                             buf,
-                            (2 + usize::from(cause.is_some()) + user_ivars.len()) as i32,
+                            (2 + fields.len()
+                                + user_ivars.len()
+                                + usize::from(cause.is_some())
+                                + usize::from(has_locations)
+                                + extras.len()) as i32,
                         );
                         // :mesg — CRuby stores nil until a message is
                         // explicitly given.
@@ -2679,20 +2917,47 @@ fn marshal_dump_value(
                         // :bt
                         marshal_write_symbol(buf, IdentId::get_id("bt"), symbols);
                         marshal_dump_value(buf, bt, vm, globals, symbols, objects, limit)?;
+                        for (name, val) in fields.into_iter().chain(user_ivars) {
+                            marshal_write_symbol(buf, name, symbols);
+                            marshal_dump_value(buf, val, vm, globals, symbols, objects, limit)?;
+                        }
                         // :cause
                         if let Some(cause) = cause {
                             marshal_write_symbol(buf, IdentId::get_id("cause"), symbols);
                             marshal_dump_value(buf, cause, vm, globals, symbols, objects, limit)?;
                         }
-                        for (name, val) in user_ivars {
+                        if has_locations {
+                            marshal_write_symbol(buf, IdentId::get_id("bt_locations"), symbols);
+                            // Built here, where nothing can collect it
+                            // before it is written.
+                            let locations = if bt_is_captured {
+                                bt
+                            } else {
+                                Value::array_from_iter(
+                                    captured.iter().map(|s| Value::string_from_str(s)),
+                                )
+                            };
+                            marshal_dump_value(
+                                buf, locations, vm, globals, symbols, objects, limit,
+                            )?;
+                        }
+                        for (name, val) in extras {
                             marshal_write_symbol(buf, name, symbols);
                             marshal_dump_value(buf, val, vm, globals, symbols, objects, limit)?;
                         }
                     }
+                    // T_FILE and T_MATCH are not T_DATA: no `_dump_data`
+                    // could help them.
+                    Some(ObjTy::IO | ObjTy::MATCHDATA) => {
+                        return Err(MonorubyErr::typeerr(format!(
+                            "can't dump {}",
+                            obj.get_real_class_name(&globals.store)
+                        )));
+                    }
                     _ => {
                         return Err(MonorubyErr::typeerr(format!(
                             "no _dump_data is defined for class {}",
-                            globals.get_class_name(obj.class())
+                            obj.get_real_class_name(&globals.store)
                         )));
                     }
                 }

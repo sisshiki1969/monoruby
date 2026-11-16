@@ -64,7 +64,7 @@ pub(super) fn init(globals: &mut Globals) {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Method/i/=3d=3d.html]
 #[monoruby_builtin]
-fn method_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn method_eq(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
     if self_val.class() != other.class() {
@@ -77,10 +77,22 @@ fn method_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     }
     let eq = match (a.method_missing_name(), b.method_missing_name()) {
         (Some(an), Some(bn)) => an == bn,
-        (None, None) => a.func_id() == b.func_id(),
+        (None, None) => same_definition(&globals.store, a.func_id(), b.func_id()),
         _ => false,
     };
     Ok(Value::bool(eq))
+}
+
+/// CRuby's `rb_method_definition_eq`: the same body, or two builtin
+/// methods over one function with one arity — `Integer#==` and
+/// `Integer#===` are separate method entries (each labels its own
+/// backtrace frame), and still equal as Method objects.
+fn same_definition(store: &Store, a: FuncId, b: FuncId) -> bool {
+    a == b
+        || match (store[a].native_address(), store[b].native_address()) {
+            (Some(x), Some(y)) => x == y && store[a].arity() == store[b].arity(),
+            _ => false,
+        }
 }
 
 ///
@@ -91,7 +103,7 @@ fn method_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/UnboundMethod/i/=3d=3d.html]
 #[monoruby_builtin]
-fn umethod_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn umethod_eq(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
     if self_val.class() != other.class() {
@@ -104,7 +116,7 @@ fn umethod_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     }
     let eq = match (a.method_missing_name(), b.method_missing_name()) {
         (Some(an), Some(bn)) => an == bn,
-        (None, None) => a.func_id() == b.func_id(),
+        (None, None) => same_definition(&globals.store, a.func_id(), b.func_id()),
         _ => false,
     };
     Ok(Value::bool(eq))
@@ -351,10 +363,25 @@ fn method_inspect_str(
                     // `#<Class:Foo>` display; the singleton class of a
                     // plain object is unwrapped to the real class.
                     Some(att) if att.is_class_or_module().is_none() => recv_mod.get_real_class(),
+                    // A module's singleton class exists from the start
+                    // here and only on demand in CRuby: one nothing has
+                    // asked for is not shown (`Module#to_s`).
+                    Some(att)
+                        if att.ty() == Some(ObjTy::MODULE)
+                            && !store[recv_mod.id()].singleton_materialized() =>
+                    {
+                        recv_mod.get_real_class()
+                    }
                     _ => recv_mod,
                 };
                 let mut s = store.get_class_name(disp.id());
-                if owner != disp.id() {
+                // The defining module is named beside the receiver's
+                // class when the method was found above it. A module's
+                // method bound to an object that does not have the
+                // module (`UnboundMethod#bind`) is completed with the
+                // receiver's class instead
+                // (`rb_method_entry_complement_defined_class`).
+                if owner != disp.id() && recv.is_kind_of(store, owner) {
                     s = format!("{}({})", s, store.get_class_name(owner));
                 }
                 (s, "#")

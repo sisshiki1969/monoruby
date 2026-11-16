@@ -910,32 +910,41 @@ pub(super) extern "C" fn gen_lambda(
 /// `[a, b, …].min` / `.max` with the Array allocation elided: compare
 /// the literal's elements right in their stack slots (they descend from
 /// `src`, like `gen_hash`'s). The compare loop mirrors the builtin
-/// `Array#min` / `#max` exactly (`best <=> v`, replace on
-/// Greater/Less, ties keep the earlier element, incomparable pairs
+/// `Array#min` / `#max` exactly (`array::min_max_generic`: replace on a
+/// strict improvement, ties keep the earlier element, incomparable pairs
 /// raise through `compare_values`), so the elided JIT path and the VM
-/// builtin are indistinguishable. An empty literal reads as nil.
+/// builtin are indistinguishable — including the order each pair is handed
+/// to `<=>` in, which `newarray` selects: `v <=> best` for a call written
+/// on the literal itself (`CallSiteInfo::newarray_recv`), `best <=> v`
+/// otherwise. An empty literal reads as nil.
+///
+/// Inlined into its four entry points, so each is a loop with its
+/// direction and operand order folded in.
+#[inline(always)]
 fn opt_array_minmax(
     vm: &mut Executor,
     globals: &mut Globals,
     src: *const Value,
     len: usize,
     is_min: bool,
+    newarray: bool,
 ) -> Option<Value> {
     if len == 0 {
         return Some(Value::nil());
     }
-    let replace_on = if is_min {
-        std::cmp::Ordering::Greater
-    } else {
+    let replace_on = if is_min == newarray {
         std::cmp::Ordering::Less
+    } else {
+        std::cmp::Ordering::Greater
     };
     let mut best = unsafe { *src };
     for i in 1..len {
         let v = unsafe { *src.sub(i) };
-        let ord = if let (Some(a), Some(b)) = (best.try_fixnum(), v.try_fixnum()) {
+        let (lhs, rhs) = if newarray { (v, best) } else { (best, v) };
+        let ord = if let (Some(a), Some(b)) = (lhs.try_fixnum(), rhs.try_fixnum()) {
             a.cmp(&b)
         } else {
-            match vm.compare_values(globals, best, v) {
+            match vm.compare_values(globals, lhs, rhs) {
                 Ok(ord) => ord,
                 Err(err) => {
                     vm.set_error(err);
@@ -950,22 +959,40 @@ fn opt_array_minmax(
     Some(best)
 }
 
-pub(super) extern "C" fn opt_array_min(
+pub(crate) extern "C" fn opt_array_min(
     vm: &mut Executor,
     globals: &mut Globals,
     src: *const Value,
     len: usize,
 ) -> Option<Value> {
-    opt_array_minmax(vm, globals, src, len, true)
+    opt_array_minmax(vm, globals, src, len, true, false)
 }
 
-pub(super) extern "C" fn opt_array_max(
+pub(crate) extern "C" fn opt_array_max(
     vm: &mut Executor,
     globals: &mut Globals,
     src: *const Value,
     len: usize,
 ) -> Option<Value> {
-    opt_array_minmax(vm, globals, src, len, false)
+    opt_array_minmax(vm, globals, src, len, false, false)
+}
+
+pub(crate) extern "C" fn opt_newarray_min(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    len: usize,
+) -> Option<Value> {
+    opt_array_minmax(vm, globals, src, len, true, true)
+}
+
+pub(crate) extern "C" fn opt_newarray_max(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    src: *const Value,
+    len: usize,
+) -> Option<Value> {
+    opt_array_minmax(vm, globals, src, len, false, true)
 }
 
 pub(super) extern "C" fn gen_hash(
@@ -2520,7 +2547,7 @@ pub(super) extern "C" fn get_index(
         ARRAY_CLASS => {
             // Non-fixnum, non-range index: ask the index to slice
             // the array itself. `Enumerator::ArithmeticSequence`
-            // defines `#[]` (in `enumerable.rb`) for this — the
+            // defines `#__slice_array` for this — the
             // slicing logic lives on the AS, not parasitically in
             // Array's `[]` path. Other types fall through to the
             // existing `to_int` coercion. Mirrors `builtins/
@@ -2530,7 +2557,7 @@ pub(super) extern "C" fn get_index(
                 if is_arithmetic_sequence(globals, index) {
                     return match vm.invoke_method_inner(
                         globals,
-                        IdentId::_INDEX,
+                        IdentId::get_id("__slice_array"),
                         index,
                         &[base],
                         None,
