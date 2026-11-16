@@ -46,6 +46,7 @@ mod class_chain;
 mod class_dispatch;
 mod class_new_inline;
 mod cold_call_site;
+mod cold_page_class_guard;
 mod command_line;
 mod comparable;
 mod const_across_block_call;
