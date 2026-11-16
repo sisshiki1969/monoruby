@@ -2006,6 +2006,27 @@ pub(crate) fn rb_inspect_in(
     )))
 }
 
+/// `rb_str_inspect`: what `String#inspect` answers for `s`, without
+/// dispatching the method — CRuby's own renderings that embed a string
+/// (`match_inspect`'s captures) call the C function, so a redefined
+/// `String#inspect` does not show in them.
+pub(crate) fn str_inspect(globals: &mut Globals, s: &RStringInner) -> Value {
+    // A String of the result encoding's own multibyte encoding keeps
+    // its printable characters as they are — bytes, not UTF-8 text.
+    if globals.store.inspect_escape()
+        && crate::value::rvalue::may_be_native_mbc(globals.store.inspect_escape_encoding())
+        && let Some(body) = s.inspect_in(globals.store.inspect_escape_encoding())
+    {
+        let mut out = Vec::with_capacity(body.len() + 2);
+        out.push(b'"');
+        out.extend(body);
+        out.push(b'"');
+        return Value::string_from_inner(RStringInner::from_encoding(&out, s.encoding()));
+    }
+    let text = crate::value::inspect_string(s, globals.store.inspect_escape());
+    inspect_result(globals, text)
+}
+
 /// `rb_obj_as_string`: a String as it is, anything else through its
 /// `#to_s` — and, when that is no String either, `rb_any_to_s`'s
 /// `#<Class:0x…>`.
@@ -2063,6 +2084,12 @@ impl InspectBuf {
     /// `rb_str_buf_cat2`: ASCII bytes, the encoding untouched.
     pub(crate) fn cat(&mut self, s: &str) {
         self.0.push_ascii(s.as_bytes());
+    }
+
+    /// `rb_str_buf_cat`: bytes copied as they are — a regexp group name
+    /// in its pattern's encoding — the encoding untouched.
+    pub(crate) fn cat_bytes(&mut self, s: &[u8]) {
+        self.0.push_bytes(s);
     }
 
     /// `rb_enc_copy(buf, piece)`.

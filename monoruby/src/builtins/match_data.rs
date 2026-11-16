@@ -35,6 +35,95 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MATCHDATA_CLASS, "byteoffset", byteoffset, 1);
     globals.define_builtin_func_with(MATCHDATA_CLASS, "deconstruct_keys", deconstruct_keys_md, 1, 1, false);
     globals.define_builtin_funcs(MATCHDATA_CLASS, "==", &["eql?"], eq, 1);
+    globals.define_builtin_func(MATCHDATA_CLASS, "inspect", inspect, 0);
+    globals.define_builtin_func(MATCHDATA_CLASS, "to_s", to_s, 0);
+}
+
+///
+/// ### MatchData#to_s
+///
+/// - to_s -> String
+///
+/// The whole match, in the subject's encoding (`rb_reg_last_match`).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/to_s.html]
+#[monoruby_builtin]
+fn to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(lfp
+        .self_val()
+        .as_match_data()
+        .at_value(0)
+        .unwrap_or_else(|| Value::string_from_str("")))
+}
+
+///
+/// ### MatchData#inspect
+///
+/// - inspect -> String
+///
+/// CRuby's `match_inspect` (re.c). The rendering is built in a BINARY
+/// buffer: a group's name is copied into it byte for byte
+/// (`rb_str_buf_cat`), in whatever encoding the pattern is, and only the
+/// captures go through `rb_str_inspect` and `rb_str_buf_append`'s
+/// encoding negotiation. So `/(?<é>x)/.match("x").inspect` is a BINARY
+/// string holding the name's two bytes, the rendering takes a
+/// capture's encoding only when the capture shows non-ASCII, and a
+/// non-ASCII capture after a non-ASCII name is
+/// `Encoding::CompatibilityError`, as it is there (#1907).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/inspect.html]
+#[monoruby_builtin]
+fn inspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let m = self_.as_match_data();
+    // A substring-search match nobody has asked the Regexp of has none
+    // in CRuby, and `match_inspect` shows it another way: the matched
+    // text as it is, through `rb_sprintf`.
+    if m.is_substring_match() {
+        let mut buf = crate::builtins::encoding::InspectBuf::new("#<MatchData: ");
+        if let Some(matched) = m.at_value(0) {
+            let matched = matched.as_rstring_inner();
+            if matched.encoding().is_ascii_compatible() {
+                buf.append(&globals.store, matched)?;
+            } else {
+                // `rb_sprintf` reads a UTF-16 / UTF-32 string as the C
+                // string its bytes make.
+                if matched.as_bytes().contains(&0) {
+                    return Err(MonorubyErr::argumenterr("string contains null byte"));
+                }
+                buf.cat_bytes(matched.as_bytes());
+            }
+        }
+        buf.cat(">");
+        return Ok(buf.into_value());
+    }
+    let re = m.regexp();
+    let names: &[Vec<u8>] = match &re {
+        Some(re) => re.capture_names(),
+        None => &[],
+    };
+    let mut buf = crate::builtins::encoding::InspectBuf::new("#<MatchData");
+    for i in 0..m.len() {
+        buf.cat(" ");
+        if i > 0 {
+            // An unnamed group has an empty entry, and is shown by number.
+            match names.get(i - 1).filter(|name| !name.is_empty()) {
+                Some(name) => buf.cat_bytes(name),
+                None => buf.cat(&i.to_string()),
+            }
+            buf.cat(":");
+        }
+        match m.at_value(i) {
+            Some(capture) => {
+                let piece =
+                    crate::builtins::encoding::str_inspect(globals, capture.as_rstring_inner());
+                buf.append(&globals.store, piece.as_rstring_inner())?;
+            }
+            None => buf.cat("nil"),
+        }
+    }
+    buf.cat(">");
+    Ok(buf.into_value())
 }
 
 ///
@@ -46,21 +135,28 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/=3d=3d.html]
 #[monoruby_builtin]
 fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
-    let other = lfp.arg(0);
+    let mut self_ = lfp.self_val();
+    let mut other = lfp.arg(0);
     if !matches!(other.unpack(), RV::Object(rv) if rv.ty() == ObjTy::MATCHDATA) {
         return Ok(Value::bool(false));
     }
-    let a = self_.as_match_data();
-    let b = other.as_match_data();
-    let src_eq = a.string() == b.string();
-    let re_eq = match (a.regexp(), b.regexp()) {
+    if self_.as_match_data().string() != other.as_match_data().string() {
+        return Ok(Value::bool(false));
+    }
+    // CRuby compares `match_regexp` of both sides, which builds and
+    // keeps the Regexp of a substring-search match.
+    let re_eq = match (
+        self_.as_match_data_mut().materialize_regexp(),
+        other.as_match_data_mut().materialize_regexp(),
+    ) {
         (Some(x), Some(y)) => x.as_str() == y.as_str(),
         (None, None) => true,
         _ => false,
     };
+    let a = self_.as_match_data();
+    let b = other.as_match_data();
     let pos_eq = a.len() == b.len() && (0..a.len()).all(|i| a.pos(i) == b.pos(i));
-    Ok(Value::bool(src_eq && re_eq && pos_eq))
+    Ok(Value::bool(re_eq && pos_eq))
 }
 
 /// Stand-in for the undefined `MatchData.allocate`. Raises NoMethodError
@@ -283,7 +379,9 @@ fn size(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 /// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/regexp.html]
 #[monoruby_builtin]
 fn regexp_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    match lfp.self_val().as_match_data().regexp() {
+    // CRuby builds the Regexp of a substring-search match on the first
+    // call and keeps it (`match_regexp`).
+    match lfp.self_val().as_match_data_mut().materialize_regexp() {
         Some(r) => Ok(r.as_val()),
         None => Ok(Value::nil()),
     }
@@ -885,6 +983,223 @@ mod tests {
         mds.each_with_index.map { |m, i| m[0] == "needle#{i}" && m.string.start_with?("p#{i}") }.all?
         "##,
         ]);
+    }
+
+    /// The probes of the `match_data_inspect_*` tests: `#inspect` of
+    /// each match under `Encoding.default_external = enc`, as bytes
+    /// and encoding, or the error it raises.
+    fn inspect_probe(enc: &str, matches: &str) -> String {
+        format!(
+            r##"
+        $VERBOSE = nil
+        sj = ->(s) {{ s.dup.force_encoding("Windows-31J") }}
+        eu = ->(s) {{ s.dup.force_encoding("EUC-JP") }}
+        l1 = ->(s) {{ s.dup.force_encoding("ISO-8859-1") }}
+        ext = Encoding.default_external
+        Encoding.default_external = "{enc}"
+        res = [{matches}].map do |m|
+          begin
+            s = m.call.inspect
+            [s.b, s.encoding.to_s]
+          rescue => e
+            [e.class.to_s, e.message]
+          end
+        end
+        Encoding.default_external = ext
+        res
+        "##
+        )
+    }
+
+    /// The matches every result encoding is probed with (#1907): group
+    /// names are copied byte for byte, captures are `String#inspect`ed.
+    const INSPECT_MATCHES: &str = r##"
+          -> { /(?<a>x)/.match("x") },
+          -> { /x/.match("x") },
+          -> { /é/.match("é") },
+          -> { /(x)(y)?(z)?/.match("x") },
+          -> { /(é)(y)?/.match("é") },
+          -> { /(?<é>x)/.match("x") },
+          -> { /(?<é>é)/.match("é") },
+          -> { /(?<é>é)?x/.match("x") },
+          -> { /(?<é>x)(?<ü>y)/.match("xy") },
+          -> { /(?<a>é)/.match("é") },
+          -> { /(?<é>x)é/.match("xé") },
+          # A capture outside the whole match: the name has made the
+          # BINARY buffer non-ASCII by the time a non-ASCII capture comes.
+          -> { /(?=(?<é>é))/.match("é") },
+          -> { /(?=(?<a>é))/.match("é") },
+          -> { /(?=(?<é>x)(?<ü>é))/.match("xé") },
+          -> { /(?<é>foo)(?<b>bar)(?<é>BAZ)?/.match("foobar") },
+          -> { Regexp.new(sj["(?<n\x87]>x)"]).match("x") },
+          -> { Regexp.new(sj["(?<n\x87]>x)\x87]"]).match(sj["x\x87]"]) },
+          -> { Regexp.new(sj["(?<n\x87]>\x87])"]).match(sj["\x87]"]) },
+          -> { Regexp.new(sj["(?<n>\x87])"]).match(sj["\x87]"]) },
+          -> { Regexp.new(eu["(?<\xA4\xA2>x)"]).match("x") },
+          -> { Regexp.new(eu["(?<\xA4\xA2>\xA4\xA2)"]).match(eu["\xA4\xA2"]) },
+          -> { Regexp.new(eu["(?<n>\xA4\xA2)x"]).match(eu["\xA4\xA2x"]) },
+          -> { Regexp.new(l1["(?<n\xE9>\xE9)"]).match(l1["\xE9"]) },
+          -> { Regexp.new(l1["(?<n\xE9>x)"]).match("x") },
+          -> { /(?<a>.)/n.match("\xff".b) },
+          -> { /(?<a>.)(.)?/m.match("\n") },
+          -> { /(?<a>.)/.match("\"") },
+          -> { "x" =~ /(?<é>x)/; $~ },
+          -> { r = nil; "xéy".gsub(/(?<é>é)/) { r = $~; "" }; r },
+    "##;
+
+    #[test]
+    fn match_data_inspect_utf8() {
+        run_test(&inspect_probe("UTF-8", INSPECT_MATCHES));
+    }
+
+    #[test]
+    fn match_data_inspect_us_ascii() {
+        run_test(&inspect_probe("US-ASCII", INSPECT_MATCHES));
+    }
+
+    #[test]
+    fn match_data_inspect_binary() {
+        run_test(&inspect_probe("ASCII-8BIT", INSPECT_MATCHES));
+    }
+
+    #[test]
+    fn match_data_inspect_windows_31j() {
+        run_test(&inspect_probe("Windows-31J", INSPECT_MATCHES));
+    }
+
+    #[test]
+    fn match_data_inspect_euc_jp() {
+        run_test(&inspect_probe("EUC-JP", INSPECT_MATCHES));
+    }
+
+    #[test]
+    fn match_data_inspect_iso_8859_1() {
+        run_test(&inspect_probe("ISO-8859-1", INSPECT_MATCHES));
+    }
+
+    /// `rb_inspect` escapes the BINARY rendering where it is embedded,
+    /// and the captures are not `String#inspect` dispatched.
+    #[test]
+    fn match_data_inspect_embedded() {
+        run_test(
+            r##"
+        $VERBOSE = nil
+        ext = Encoding.default_external
+        res = ["UTF-8", "US-ASCII", "ASCII-8BIT"].map do |enc|
+          Encoding.default_external = enc
+          m = /(?<é>x)/.match("x")
+          [[m], ["é", m], {a: m}, "#{m.inspect}!"].map { |o|
+            s = o.is_a?(String) ? o : o.inspect
+            [s.b, s.encoding.to_s]
+          }
+        end
+        Encoding.default_external = ext
+        class String
+          alias_method :__inspect_1907, :inspect
+          def inspect = "REDEFINED"
+        end
+        r = /(?<a>x)/.match("x").inspect
+        class String
+          alias_method :inspect, :__inspect_1907
+        end
+        res << r
+        "##,
+        );
+    }
+
+    /// A match found by a substring search has no Regexp until one is
+    /// asked for (`#regexp`, `#==`), and inspects in a form of its own.
+    #[test]
+    fn match_data_inspect_substring_match() {
+        run_test(&inspect_probe(
+            "UTF-8",
+            r##"
+          -> { "abc".sub("b", "x"); $~ },
+          -> { "aéc".sub("é", "x"); $~ },
+          -> { "abc".gsub("b", "x"); $~ },
+          -> { "a.c".sub(".", "x"); $~ },
+          -> { sj["a\x87]c"].sub(sj["\x87]"], "x"); $~ },
+          -> { s = +"abc"; s.sub!("b", "x"); $~ },
+          -> { "abc".sub("b", "x"); m = $~; m.regexp; m },
+          -> { "aéc".sub("é", "x"); m = $~; m.regexp; m },
+          -> { "abc".sub("b", "x"); m = $~; "abc".sub("b", "y"); m == $~; m },
+          -> { "abc".sub("b", "x"); m = $~; "abd".sub("b", "y"); m == $~; m },
+          -> { "abc".sub("b", "x"); m = $~; m.names; m.named_captures; m[0]; m.to_a; m },
+            "##,
+        ));
+        run_test(
+            r##"
+        "abc".sub("b", "x")
+        m = $~
+        [m.regexp.equal?(m.regexp), m.regexp.source, m == m, m.inspect, m.to_s.encoding.to_s]
+        "##,
+        );
+        // `rb_sprintf` takes a UTF-16 string for the C string its bytes
+        // make.
+        run_test(
+            r##"
+        u = ->(s) { s.encode("UTF-16LE") }
+        [u["abc"], u["a\u3042\u3043c"]].zip([u["b"], u["\u3042\u3043"]]).map do |s, pat|
+          s.sub(pat, u["x"])
+          begin
+            i = $~.inspect
+            [i.b, i.encoding.to_s]
+          rescue => e
+            [e.class.to_s, e.message]
+          end
+        end
+        "##,
+        );
+    }
+
+    /// `MatchData#to_s` is in the subject's encoding.
+    #[test]
+    fn match_data_to_s_encoding() {
+        run_test(
+            r##"
+        [
+          /(?<a>x)/.match("x").to_s,
+          /é/.match("é").to_s,
+          /./n.match("\xff".b).to_s,
+          /x/.match("x".encode("Windows-31J")).to_s,
+          /x/.match("x".force_encoding("US-ASCII")).to_s,
+        ].map { |s| [s.b, s.encoding.to_s] }
+        "##,
+        );
+    }
+
+    /// `Kernel#p` shows a rendering through `rb_inspect`: one in another
+    /// encoding than the result encoding is escaped, a BINARY one byte by
+    /// byte.
+    #[test]
+    fn match_data_inspect_p() {
+        run_test(
+            r##"
+        $VERBOSE = nil
+        ext = Encoding.default_external
+        bin = Object.new
+        def bin.inspect = "caf\xC3\xA9".b
+        broken = Object.new
+        def broken.inspect = "\xFF\u3042"
+        sjis = Object.new
+        def sjis.inspect = "\x87]".dup.force_encoding("Windows-31J")
+        res = ["UTF-8", "US-ASCII", "ASCII-8BIT", "Windows-31J"].map do |enc|
+          Encoding.default_external = enc
+          r, w = IO.pipe
+          $stdout = w
+          begin
+            p /(?<é>x)/.match("x"), /(?<a>é)/.match("é"), /é/.match("é")
+            p bin, broken, sjis, "é", :é, nil
+          ensure
+            $stdout = STDOUT
+          end
+          w.close
+          r.read.b
+        end
+        Encoding.default_external = ext
+        res
+        "##,
+        );
     }
 
     #[test]

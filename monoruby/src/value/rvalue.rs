@@ -3077,6 +3077,10 @@ impl RValue {
     pub(super) unsafe fn as_match_data(&self) -> &MatchDataInner {
         unsafe { &self.kind.matchdata }
     }
+
+    pub(super) unsafe fn as_match_data_mut(&mut self) -> &mut MatchDataInner {
+        unsafe { &mut self.kind.matchdata }
+    }
 }
 
 impl RValue {

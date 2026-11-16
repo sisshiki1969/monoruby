@@ -221,6 +221,26 @@ impl MatchDataInner {
         Value::regexp(inner).is_regex()
     }
 
+    /// `MatchData#regexp` (CRuby's `match_regexp`): as
+    /// [`regexp`](Self::regexp), and the Regexp built for a
+    /// substring-search match is kept, so the next call answers the same
+    /// object and the match stops being a
+    /// [substring match](Self::is_substring_match) — which shows in
+    /// `#inspect`.
+    pub fn materialize_regexp(&mut self) -> Option<Regexp> {
+        if self.regex.is_none() {
+            self.regex = self.regexp();
+        }
+        self.regex
+    }
+
+    /// A match found by a substring search (`String#sub` with a String
+    /// pattern) whose Regexp nothing has asked for yet: CRuby's
+    /// `RMATCH(match)->regexp == Qnil`.
+    pub fn is_substring_match(&self) -> bool {
+        self.regex.is_none() && self.pattern.is_some()
+    }
+
     fn heystack_bytes(&self) -> &[u8] {
         self.heystack.as_rstring_inner().as_bytes()
     }

@@ -5878,21 +5878,8 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     if self_val.ty() != Some(ObjTy::OBJECT)
         || globals.store.get_ivar(self_val, IdentId::_NAME).is_some()
     {
-        // A String of the result encoding's own multibyte encoding keeps
-        // its printable characters as they are — bytes, not UTF-8 text.
-        if let Some(inner) = self_val.is_rstring_inner()
-            && globals.store.inspect_escape()
-            && crate::value::rvalue::may_be_native_mbc(globals.store.inspect_escape_encoding())
-            && let Some(body) = inner.inspect_in(globals.store.inspect_escape_encoding())
-        {
-            let mut out = Vec::with_capacity(body.len() + 2);
-            out.push(b'"');
-            out.extend(body);
-            out.push(b'"');
-            return Ok(Value::string_from_inner(RStringInner::from_encoding(
-                &out,
-                inner.encoding(),
-            )));
+        if let Some(inner) = self_val.is_rstring_inner() {
+            return Ok(crate::builtins::encoding::str_inspect(globals, inner));
         }
         let s = self_val.inspect(&globals.store);
         // A Regexp's rendering carries the *regexp's* own encoding,
@@ -5967,14 +5954,12 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(Value::string_sprintf(s))
 }
 
-/// `rb_inspect`: dispatch `#inspect` and render what it answered the
-/// way CRuby displays it. An `#inspect` — a user-defined one, or
-/// `Exception`'s — may hand back text in an encoding the result
-/// encoding cannot show, and CRuby escapes it there rather than in
-/// every `#inspect`: `rb_inspect` escapes to `\uXXXX` unless the
-/// answer is already ASCII-only (the builtin renderers' is, since
-/// [`inspect_result`](crate::builtins::encoding::inspect_result)
-/// escaped it). `Kernel#p` is its caller, as in CRuby.
+/// `Kernel#p`'s rendering of one argument: `rb_inspect`
+/// ([`rb_inspect`](crate::builtins::encoding::rb_inspect)), which
+/// dispatches `#inspect` and escapes an answer the result encoding
+/// cannot show — `\uXXXX` for Unicode text, `\xXX` for the bytes of
+/// any other encoding, a BINARY rendering such as `MatchData#inspect`'s
+/// with a non-ASCII group name included (#1907).
 #[monoruby_builtin]
 fn display_inspect(
     vm: &mut Executor,
@@ -5982,23 +5967,7 @@ fn display_inspect(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let obj = lfp.arg(0);
-    let res = vm.invoke_method_inner(globals, IdentId::get_id("inspect"), obj, &[], None, None)?;
-    if !globals.store.inspect_escape() {
-        return Ok(res);
-    }
-    match res.is_str() {
-        // Already showable as it stands — CRuby hands back the very
-        // string `#inspect` returned, encoding and all.
-        Some(inner) if !inner.as_bytes().is_ascii() => {
-            let text = String::from_utf8_lossy(inner.as_bytes()).into_owned();
-            Ok(Value::string_from_inner(RStringInner::from_encoding(
-                crate::value::escape_nonascii_to_u(&text).as_bytes(),
-                globals.store.inspect_escape_encoding(),
-            )))
-        }
-        _ => Ok(res),
-    }
+    crate::builtins::encoding::rb_inspect(vm, globals, lfp.arg(0))
 }
 
 ///
