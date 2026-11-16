@@ -1087,6 +1087,28 @@ impl MonorubyErr {
         )
     }
 
+    /// A NameError whose message is *before*, *name*, *after*, for a
+    /// name given as a String of any bytes: CRuby formats the String
+    /// itself into the message (`%1$s`), so a name that is not UTF-8
+    /// keeps its own bytes there, in its own encoding.
+    pub(crate) fn nameerr_with_bytes(
+        before: &str,
+        name: &[u8],
+        enc: crate::value::Encoding,
+        after: &str,
+    ) -> MonorubyErr {
+        let raw = [before.as_bytes(), name, after.as_bytes()].concat();
+        match String::from_utf8(raw) {
+            Ok(msg) => Self::nameerr(msg),
+            Err(e) => {
+                let raw = e.into_bytes();
+                let mut err = Self::nameerr(String::from_utf8_lossy(&raw));
+                err.raw_message = Some((raw, enc));
+                err
+            }
+        }
+    }
+
     /// A NameError whose message is *before*, *name*, *after*, the name
     /// shown through `Symbol#to_s` when the message is read (see
     /// [`MonorubyErr::name_span`]) — CRuby's `rb_name_err_raise` with a
@@ -1152,10 +1174,6 @@ impl MonorubyErr {
             format_args!(" in {class_name}"),
             Some(receiver),
         )
-    }
-
-    pub(crate) fn identifier_must_be_constant(name: &str) -> MonorubyErr {
-        Self::nameerr(format!("identifier {name} needs to be constant"))
     }
 
     pub(crate) fn typeerr(msg: impl ToString) -> MonorubyErr {

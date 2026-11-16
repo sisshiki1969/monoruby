@@ -2309,6 +2309,18 @@ impl Encoding {
         }
     }
 
+    /// True for the encodings `Encoding#dummy?` answers true for in
+    /// CRuby (UTF-7, the BOM-carrying UTF-16 / UTF-32, the stateful
+    /// ISO-2022-JP family, IBM037): no Regexp can be built in one, and
+    /// none is a class path's encoding. The three everyday encodings
+    /// are answered without looking at the name.
+    pub(crate) fn is_cruby_dummy(self) -> bool {
+        !matches!(
+            self,
+            Encoding::Ascii8 | Encoding::Utf8(_) | Encoding::UsAscii
+        ) && transcode::is_cruby_dummy_name(self.name())
+    }
+
     /// True if monoruby has no native byte→character decoder for
     /// this encoding and the bytes are stored opaquely. Used to
     /// route operations down the binary-style path.
@@ -4970,7 +4982,10 @@ impl RStringInner {
             | Encoding::Iso8859(_)
             | Encoding::Other(_)
             | Encoding::NamedByte(_) => Some(1),
-            Encoding::Utf16Le | Encoding::Utf16Be => Some(2),
+            // UTF-16 is not fixed-width: a surrogate pair is one
+            // character of two units, which `char_length` counts once,
+            // so the offsets have to come from the same walk (#1986).
+            Encoding::Utf16Le | Encoding::Utf16Be => None,
             Encoding::Utf32Le | Encoding::Utf32Be => Some(4),
             // ISO-2022-JP still iterates byte-wise (stateful decode
             // deferred), so the fixed-1-byte shortcut matches its
@@ -6646,6 +6661,12 @@ pub(crate) fn transcode_bytes_with_opts(
     // The endianness-less dummy UTF-16 / UTF-32: CRuby's encoder emits a
     // BOM followed by the big-endian form.
     if let Some(wide) = dummy_wide_target(dst_enc) {
+        // The BOM goes out ahead of the first character, so a
+        // conversion that emits none writes no BOM either:
+        // `"".encode("UTF-16")` is empty (#1986).
+        if decoded.is_empty() {
+            return Ok(vec![]);
+        }
         let mut out: Vec<u8> = match wide {
             E::Utf16Be => vec![0xFE, 0xFF],
             _ => vec![0x00, 0x00, 0xFE, 0xFF],

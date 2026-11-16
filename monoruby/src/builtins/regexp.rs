@@ -480,6 +480,23 @@ pub(crate) fn regexp_inner_from_parts(
     option: u32,
     default_kcode: Option<u32>,
 ) -> Result<RegexpInner> {
+    // `rb_reg_initialize` refuses a source in a dummy encoding (UTF-7,
+    // ISO-2022-JP, the BOM-carrying UTF-16 / UTF-32, …) before it reads
+    // it at all — such an encoding has no characters for a pattern to
+    // be made of — and whatever modifier came with it (#1986). Only
+    // `/…/n` is looked at first, by the callers: it complains about the
+    // source not being BINARY.
+    if option & RegexpInner::NOENCODING == 0
+        && let Some(enc) = source_encoding
+        && enc.is_cruby_dummy()
+    {
+        let bytes = source_bytes.as_deref().unwrap_or(string.as_bytes());
+        return Err(MonorubyErr::regexerr(format!(
+            "can't make regexp with dummy encoding: /{}/{}",
+            regexp_source_desc_in_message(bytes, enc),
+            option_letters(option)
+        )));
+    }
     // The encoding the source is read in: the modifier's when there
     // is one, else the string's own.
     let kcode_bits = option & RegexpInner::KCODE_MASK;
@@ -722,47 +739,109 @@ fn regexp_union(
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut rest = lfp.arg(0).as_array();
+    // A lone Array argument is the list of members.
+    if rest.len() == 1
+        && let Some(arr) = rest[0].try_array_ty()
+    {
+        rest = arr;
+    }
     if rest.is_empty() {
         return Ok(Value::regexp(RegexpInner::with_option("(?!)", 0)?));
     }
     if rest.len() == 1 {
         let arg = rest[0];
-        if let Some(arr) = arg.try_array_ty() {
-            rest = arr;
-        } else {
-            if let Some(re) = arg.is_regex() {
+        if let Some(re) = arg.is_regex() {
+            return Ok(re.into());
+        }
+        if let Some(result) =
+            crate::coerce::check_funcall(vm, globals, arg, IdentId::get_id("to_regexp"))?
+        {
+            if let Some(re) = result.is_regex() {
                 return Ok(re.into());
             }
-            if let Some(result) =
-                crate::coerce::check_funcall(vm, globals, arg, IdentId::get_id("to_regexp"))?
-            {
-                if let Some(re) = result.is_regex() {
-                    return Ok(re.into());
-                }
-            }
-            let arg = union_member_value(vm, globals, arg)?;
-            let s = format_union_member(vm, globals, arg)?;
-            // Single non-Regexp arg: pin the encoding to the
-            // arg's source encoding (CRuby behaviour), rendering
-            // through the same compat-check pipeline so a
-            // non-ASCII-compatible source produces a
-            // non-ASCII-compatible regex.
-            let combined = UnionEnc::Free.combine(union_arg_encoding(globals, arg), &globals.store)?;
-            return Ok(Value::regexp(union_inner_with_encoding(s, combined)?));
         }
+        let arg = union_member_value(vm, globals, arg)?;
+        let s = format_union_member(vm, globals, arg)?;
+        // Single non-Regexp arg: pin the encoding to the
+        // arg's source encoding (CRuby behaviour), rendering
+        // through the same compat-check pipeline so a
+        // non-ASCII-compatible source produces a
+        // non-ASCII-compatible regex.
+        let enc = union_arg_encoding(globals, arg);
+        let combined = if enc.fixed {
+            UnionEnc::Pinned(enc.encoding)
+        } else {
+            UnionEnc::Free
+        };
+        return Ok(Value::regexp(union_inner_with_encoding(s, combined)?));
     }
+    // `rb_reg_s_union`'s negotiation: every member is ASCII-only (a
+    // String of 7-bit content, a Regexp that is not `fixed_encoding?`),
+    // pinned to an ASCII-compatible encoding, or in an encoding that is
+    // not ASCII-compatible. Two members of the same kind have to agree,
+    // and the last kind cannot meet either of the other two; both are
+    // checked as each member is read, so the first clash in argument
+    // order is the one reported.
     let mut parts = Vec::with_capacity(rest.len());
-    let mut combined: UnionEnc = UnionEnc::Free;
     let mut all_ascii_only = true;
+    let mut any_free = false;
+    let mut compat_fixed: Option<crate::value::Encoding> = None;
+    let mut incompat: Option<crate::value::Encoding> = None;
+    let agree = |seen: &mut Option<crate::value::Encoding>, enc: crate::value::Encoding| match *seen
+    {
+        Some(prev) if prev != enc => Err(MonorubyErr::argumenterr(format!(
+            "incompatible encodings: {} and {}",
+            prev.name(),
+            enc.name()
+        ))),
+        _ => {
+            *seen = Some(enc);
+            Ok(())
+        }
+    };
     for arg in rest.iter() {
         let arg = union_member_value(vm, globals, *arg)?;
+        // Among several members a Symbol is not one: only a lone
+        // argument is read through `Regexp.escape`, which takes it.
+        if arg.try_symbol().is_some() {
+            return Err(MonorubyErr::no_implicit_conversion(
+                &globals.store,
+                arg,
+                STRING_CLASS,
+            ));
+        }
         let enc = union_arg_encoding(globals, arg);
         if !enc.ascii_only {
             all_ascii_only = false;
         }
-        combined = combined.combine(enc, &globals.store)?;
+        if !union_ascii_compatible(enc.encoding) {
+            agree(&mut incompat, enc.encoding)?;
+        } else if enc.fixed {
+            agree(&mut compat_fixed, enc.encoding)?;
+        } else {
+            any_free = true;
+        }
+        if let Some(wide) = incompat {
+            if any_free {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "ASCII incompatible encoding: {}",
+                    wide.name()
+                )));
+            }
+            if let Some(fixed) = compat_fixed {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "incompatible encodings: {} and {}",
+                    wide.name(),
+                    fixed.name()
+                )));
+            }
+        }
         parts.push(format_union_member(vm, globals, arg)?);
     }
+    let combined = match incompat.or(compat_fixed) {
+        Some(enc) => UnionEnc::Pinned(enc),
+        None => UnionEnc::Free,
+    };
     // CRuby's `Regexp.union` downgrades the result to US-ASCII
     // when *every* arg was 7-bit ASCII content, even if
     // individual args were declared as a pinned encoding via a
@@ -770,7 +849,7 @@ fn regexp_union(
     // ASCII-incompatible encoding is in play (UTF-16, UTF-32),
     // which we always pin.
     let resolved_combined = if all_ascii_only
-        && !matches!(combined, UnionEnc::Pinned(e) if !e.is_ascii_compatible())
+        && !matches!(combined, UnionEnc::Pinned(e) if !union_ascii_compatible(e))
     {
         UnionEnc::Free
     } else {
@@ -811,81 +890,20 @@ struct ArgEnc {
 }
 
 impl UnionEnc {
-    fn combine(self, arg: ArgEnc, store: &Store) -> Result<Self> {
-        let _ = store;
-        // An ASCII-incompatible encoding (UTF-16LE/BE, UTF-32LE/BE,
-        // …) can't share a regex with anything else: even pure-
-        // ASCII strings/Regexps live in a 1-byte-per-char world
-        // that an ASCII-incompatible encoding doesn't speak.
-        // CRuby raises ArgumentError for any mix.
-        let prev_pinned = matches!(self, UnionEnc::Pinned(prev) if !prev.is_ascii_compatible());
-        let arg_ascii_incompat = !arg.encoding.is_ascii_compatible();
-        if prev_pinned && arg_ascii_incompat {
-            // both sides have an explicit non-ASCII-compat encoding —
-            // they must match exactly, otherwise raise.
-            if let UnionEnc::Pinned(prev) = self
-                && prev != arg.encoding
-            {
-                return Err(MonorubyErr::argumenterr(format!(
-                    "incompatible encodings: {} and {}",
-                    prev.name(),
-                    arg.encoding.name()
-                )));
-            }
-        } else if prev_pinned {
-            // Previous side is non-ASCII-compat; arg is anything
-            // else (even pure-ASCII). CRuby still rejects. When the
-            // other side is pure 7-bit ASCII, CRuby phrases it as
-            // "ASCII incompatible encoding: <enc>"; otherwise it names
-            // both encodings.
-            if let UnionEnc::Pinned(prev) = self {
-                if arg.ascii_only {
-                    return Err(MonorubyErr::argumenterr(format!(
-                        "ASCII incompatible encoding: {}",
-                        prev.name()
-                    )));
-                }
-                return Err(MonorubyErr::argumenterr(format!(
-                    "incompatible encodings: {} and {}",
-                    prev.name(),
-                    arg.encoding.name()
-                )));
-            }
-        } else if arg_ascii_incompat {
-            // Arg is non-ASCII-compat. Pin to it — but a previous
-            // ASCII-only value already in `self` (Free or pinned-
-            // ASCII) is incompatible with it.
-            if !matches!(self, UnionEnc::Free) {
-                if let UnionEnc::Pinned(prev) = self {
-                    return Err(MonorubyErr::argumenterr(format!(
-                        "incompatible encodings: {} and {}",
-                        prev.name(),
-                        arg.encoding.name()
-                    )));
-                }
-            }
-            return Ok(UnionEnc::Pinned(arg.encoding));
-        }
-        if !arg.fixed {
-            return Ok(self);
-        }
-        match self {
-            UnionEnc::Free => Ok(UnionEnc::Pinned(arg.encoding)),
-            UnionEnc::Pinned(prev) if prev == arg.encoding => Ok(self),
-            UnionEnc::Pinned(prev) => Err(MonorubyErr::argumenterr(format!(
-                "incompatible encodings: {} and {}",
-                prev.name(),
-                arg.encoding.name()
-            ))),
-        }
-    }
-
     fn resolved(self) -> crate::value::Encoding {
         match self {
             UnionEnc::Free => crate::value::Encoding::UsAscii,
             UnionEnc::Pinned(e) => e,
         }
     }
+}
+
+/// `rb_enc_asciicompat` as `Regexp.union` asks it: a dummy encoding
+/// (UTF-7, ISO-2022-JP, …) is not ASCII-compatible to CRuby whatever
+/// its bytes look like, so a String in one pins the union to it — and
+/// the union is then refused as a regexp of a dummy encoding.
+fn union_ascii_compatible(enc: crate::value::Encoding) -> bool {
+    enc.is_ascii_compatible() && !enc.is_cruby_dummy()
 }
 
 /// Read encoding info off a `Regexp.union` argument: Regexp uses
@@ -910,11 +928,26 @@ fn union_arg_encoding(globals: &Globals, arg: Value) -> ArgEnc {
     if let Some(s) = arg.is_rstring_inner() {
         let enc = s.encoding();
         let has_non_ascii = !s.as_bytes().is_ascii();
-        let fixed = has_non_ascii || !enc.is_ascii_compatible();
+        let fixed = has_non_ascii || !union_ascii_compatible(enc);
         return ArgEnc {
             encoding: enc,
             fixed,
-            ascii_only: !has_non_ascii && enc.is_ascii_compatible(),
+            ascii_only: !has_non_ascii && union_ascii_compatible(enc),
+        };
+    }
+    // A Symbol is its name (`rb_sym2str`), in the encoding the Symbol
+    // carries: US-ASCII for an ASCII one, else its own.
+    if let Some(sym) = arg.try_symbol() {
+        let ascii = sym.with_ident_name(|name, _| name.is_ascii());
+        let enc = sym.symbol_encoding().unwrap_or(if ascii {
+            crate::value::Encoding::UsAscii
+        } else {
+            crate::value::Encoding::UTF8
+        });
+        return ArgEnc {
+            encoding: enc,
+            fixed: !ascii || !union_ascii_compatible(enc),
+            ascii_only: ascii && union_ascii_compatible(enc),
         };
     }
     let _ = globals;
@@ -1017,7 +1050,10 @@ fn format_union_member(
         return Ok(re.tos_bytes());
     }
     if let Some(sym) = arg.try_symbol() {
-        return Ok(RegexpInner::escape(sym.get_name().as_str()).into_bytes());
+        // The name's own bytes, read in the encoding the Symbol carries
+        // (see `union_arg_encoding`).
+        let enc = union_arg_encoding(globals, arg).encoding;
+        return Ok(sym.with_ident_name(|name, _| RegexpInner::escape_in(name.as_bytes(), enc)));
     }
     if let Some(result) =
         crate::coerce::check_funcall(vm, globals, arg, IdentId::get_id("to_regexp"))?

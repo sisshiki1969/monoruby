@@ -991,10 +991,17 @@ fn validate_constant_name(name: IdentId) -> Result<()> {
         }
     };
     if !valid {
-        return Err(MonorubyErr::nameerr(format!(
-            "wrong constant name {}",
-            ident.to_string_lossy()
-        )));
+        // The message carries the name's own bytes (CRuby formats it
+        // with `%1$s` of the name), not a lossy UTF-8 rendering.
+        let enc = name
+            .symbol_encoding()
+            .unwrap_or(crate::value::Encoding::Ascii8);
+        return Err(MonorubyErr::nameerr_with_bytes(
+            "wrong constant name ",
+            ident.as_bytes(),
+            enc,
+            "",
+        ));
     }
     Ok(())
 }
@@ -1323,6 +1330,68 @@ fn is_valid_const_name(name: &str) -> bool {
     chars.all(|c| c.is_alphanumeric() || c == '_')
 }
 
+/// `rb_is_const_name` of a String's bytes: [`is_valid_const_name`] for
+/// text, and for a name that is not UTF-8 the bytewise reading CRuby's
+/// `rb_enc_*` predicates give — an uppercase ASCII letter first, every
+/// byte of a multibyte character (>= 0x80) a name character. Nothing in
+/// an encoding that is not ASCII-compatible is a name.
+pub(crate) fn is_const_name_bytes(bytes: &[u8], enc: crate::value::Encoding) -> bool {
+    if !enc.is_ascii_compatible() || enc.is_cruby_dummy() {
+        return false;
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(s) => is_valid_const_name(s),
+        Err(_) => {
+            matches!(bytes.first(), Some(c) if c.is_ascii_uppercase())
+                && bytes[1..]
+                    .iter()
+                    .all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c >= 0x80)
+        }
+    }
+}
+
+/// What `rb_mod_const_get` / `rb_mod_const_defined` refuse of a String
+/// path before any segment of it is looked up: a path in an encoding
+/// that is not ASCII-compatible (an `ArgumentError`), and — segment by
+/// segment, each one a name handed to `rb_check_id_cstr` — a segment
+/// that is broken in the path's encoding (`EncodingError: invalid
+/// symbol in encoding …`, #1987). A well-formed segment ahead of the
+/// broken one that is no constant name is refused first, as the walk
+/// would have refused it.
+fn check_constant_path_string(store: &Store, path: &RStringInner) -> Result<()> {
+    let enc = path.encoding();
+    if !enc.is_ascii_compatible() || enc.is_cruby_dummy() {
+        return Err(MonorubyErr::argumenterr(
+            "invalid class path encoding (non ASCII)",
+        ));
+    }
+    if path.is_valid_encoding() {
+        return Ok(());
+    }
+    let bytes = path.as_bytes();
+    let mut rest = bytes.strip_prefix(b"::").unwrap_or(bytes);
+    loop {
+        let (seg, tail) = match rest.windows(2).position(|w| w == b"::") {
+            Some(i) => (&rest[..i], Some(&rest[i + 2..])),
+            None => (rest, None),
+        };
+        let seg_str = RStringInner::from_encoding(seg, enc);
+        crate::builtins::string::check_symbol_bytes(store, &seg_str, true)?;
+        if !is_const_name_bytes(seg, enc) {
+            return Err(MonorubyErr::nameerr_with_bytes(
+                "wrong constant name ",
+                seg,
+                enc,
+                "",
+            ));
+        }
+        match tail {
+            Some(tail) => rest = tail,
+            None => return Ok(()),
+        }
+    }
+}
+
 /// Coerce *name_arg* to a Symbol or String (via `#to_str`) and split it
 /// into the sequence of interned constant names the path denotes. A
 /// Symbol is a bare name (a `::`-containing Symbol is a NameError); a
@@ -1337,28 +1406,23 @@ fn constant_path_segments(
 ) -> Result<(bool, Vec<IdentId>)> {
     let (name, was_symbol) = if let Some(sym) = name_arg.try_symbol() {
         (sym, true)
-    } else if name_arg.is_rstring().is_some()
-        && let Some(id) = name_arg.try_symbol_or_string()
-    {
-        (id, false)
+    } else if name_arg.is_rstring().is_some() {
+        check_constant_path_string(&globals.store, name_arg.as_rstring_inner())?;
+        (name_arg.try_symbol_or_string().unwrap(), false)
     } else if let Some(result) =
         crate::coerce::check_funcall(vm, globals, name_arg, IdentId::TO_STR)?
     {
-        match result
-            .is_rstring()
-            .and_then(|_| result.try_symbol_or_string())
-        {
-            Some(id) => (id, false),
-            None => {
-                return Err(MonorubyErr::cant_convert_error(
-                    &globals.store,
-                    name_arg,
-                    result,
-                    "String",
-                    IdentId::TO_STR,
-                ));
-            }
+        if result.is_rstring().is_none() {
+            return Err(MonorubyErr::cant_convert_error(
+                &globals.store,
+                name_arg,
+                result,
+                "String",
+                IdentId::TO_STR,
+            ));
         }
+        check_constant_path_string(&globals.store, result.as_rstring_inner())?;
+        (result.try_symbol_or_string().unwrap(), false)
     } else {
         return Err(MonorubyErr::typeerr(format!(
             "no implicit conversion of {} into String",
@@ -1390,8 +1454,14 @@ fn constant_path_segments(
         (false, path.split("::").collect())
     };
 
-    if segs.iter().any(|s| !is_valid_const_name(s)) {
+    // `rb_mod_const_get`: an empty segment (`"A::"`, `"A::::B"`) makes the
+    // whole path the wrong name; otherwise the complaint names the first
+    // segment that is not a constant name.
+    if segs.iter().any(|s| s.is_empty()) {
         return Err(MonorubyErr::nameerr(format!("wrong constant name {path}")));
+    }
+    if let Some(bad) = segs.iter().find(|s| !is_valid_const_name(s)) {
+        return Err(MonorubyErr::nameerr(format!("wrong constant name {bad}")));
     }
 
     Ok((

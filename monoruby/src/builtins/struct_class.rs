@@ -111,37 +111,30 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         None
     };
 
-    // First-arg classification:
-    // * `nil` -> anonymous struct (consume the arg).
-    // * String starting with uppercase -> named struct constant.
-    // * Object with #to_str returning an uppercase-starting String -> ditto.
-    // * Anything else -> first positional becomes a member name.
-    let name = if let Some(arg0) = args.first().copied() {
+    // `rb_struct_s_def`: a first argument that is not a Symbol is the
+    // class name — `nil` for none — and never a member. `new_struct`
+    // then reads it with `rb_str_to_str`, checks that it is a constant
+    // name *before* it is interned (so a name broken in its encoding is
+    // the NameError, #1987), and interns it as `String#to_sym` would
+    // (`rb_to_id`).
+    let name = if let Some(arg0) = args.first().copied()
+        && arg0.try_symbol().is_none()
+    {
+        args.remove(0);
         if arg0.is_nil() {
-            args.remove(0);
             None
-        } else if let Some(s) = arg0.is_str() {
-            if s.starts_with(|c: char| c.is_ascii_uppercase()) {
-                let n = IdentId::get_id(s);
-                args.remove(0);
-                Some(n)
-            } else {
-                return Err(MonorubyErr::identifier_must_be_constant(s));
-            }
-        } else if arg0.try_symbol().is_none()
-            && let Some(coerced) = crate::coerce::check_funcall(vm, globals, arg0, IdentId::TO_STR)?
-            && coerced.is_str().is_some()
-        {
-            let s = coerced.as_str();
-            if s.starts_with(|c: char| c.is_ascii_uppercase()) {
-                let n = IdentId::get_id(&s);
-                args.remove(0);
-                Some(n)
-            } else {
-                return Err(MonorubyErr::identifier_must_be_constant(&s));
-            }
         } else {
-            None
+            let s = arg0.coerce_to_rstring(vm, globals)?;
+            let (bytes, enc) = (s.as_bytes(), s.encoding());
+            if !super::module::is_const_name_bytes(bytes, enc) {
+                return Err(MonorubyErr::nameerr_with_bytes(
+                    "identifier ",
+                    bytes,
+                    enc,
+                    " needs to be constant",
+                ));
+            }
+            Some(super::string::intern_string(&globals.store, &s)?)
         }
     } else {
         None
