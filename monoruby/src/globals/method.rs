@@ -49,7 +49,7 @@ impl Globals {
             .new_basic_op(name.to_string(), address, min, max, rest);
         let method_name = IdentId::get_id(name);
         self.gen_wrapper(func_id);
-        self.add_basic_op_method(class_id, method_name, func_id, visi);
+        self.add_method(class_id, method_name, func_id, visi);
         func_id
     }
 
@@ -620,8 +620,6 @@ impl Globals {
 
     /// Like [`define_builtin_inline_funcs`](Self::define_builtin_inline_funcs),
     /// but registers a binary-operator generator (see [`InlineGenBinary`]).
-    /// The entry keeps `is_basic_op = false`, matching today's plain-builtin
-    /// registrations of the comparison operators.
     pub(crate) fn define_builtin_inline_binary_funcs(
         &mut self,
         class_id: ClassId,

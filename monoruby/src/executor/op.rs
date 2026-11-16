@@ -629,24 +629,8 @@ impl Executor {
         }
     }
 
-    ///
-    /// `!=` with CRuby-faithful result-value semantics: while `!=`
-    /// resolves to a basic op / the default `BasicObject#!=`, the result
-    /// is the boolean negation of `==`; a custom `!=` returns the
-    /// method's value untouched.
-    ///
-    pub(crate) fn ne_values(
-        &mut self,
-        globals: &mut Globals,
-        lhs: Value,
-        rhs: Value,
-    ) -> Result<Value> {
-        // Internal callers use funcall semantics, matching `rb_equal`-style `!=`.
-        self.ne_values_vis(globals, lhs, rhs, true)
-    }
-
-    /// `!=` dispatch honoring the call site's func-call flag for a `!=`
-    /// that is not the default one. The default — `BasicObject#!=`, the
+    /// `!=`: a custom `!=` returns the method's value untouched, honoring
+    /// the call site's func-call flag. The default — `BasicObject#!=`, the
     /// only `!=` the builtins define — negates `==` as
     /// [`Self::eq_values_funcall`] asks it.
     pub(crate) fn ne_values_vis(
@@ -677,16 +661,6 @@ impl Executor {
         let eq = self.eq_values_funcall(globals, lhs, rhs)?;
         Ok(Value::bool(!eq.as_bool()))
     }
-
-    pub(crate) fn ne_values_bool(
-        &mut self,
-        globals: &mut Globals,
-        lhs: Value,
-        rhs: Value,
-    ) -> Result<bool> {
-        Ok(self.ne_values(globals, lhs, rhs)?.as_bool())
-    }
-
 }
 
 impl Executor {
@@ -873,7 +847,9 @@ fn cmp_values() {
         );
         assert_eq!(
             ans,
-            !Executor::ne_values_bool(&mut vm, &mut globals, lhs, rhs).unwrap()
+            !Executor::ne_values_vis(&mut vm, &mut globals, lhs, rhs, true)
+                .unwrap()
+                .as_bool()
         );
     }
 }

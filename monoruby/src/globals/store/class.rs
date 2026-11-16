@@ -2490,7 +2490,7 @@ impl Store {
         func_id: FuncId,
         visibility: Visibility,
     ) {
-        self.add_method_inner(class_id, name, func_id, visibility, false, name, false)
+        self.add_method_inner(class_id, name, func_id, visibility, name, false)
     }
 
     ///
@@ -2508,22 +2508,7 @@ impl Store {
         original_name: IdentId,
         is_alias: bool,
     ) {
-        self.add_method_inner(class_id, name, func_id, visibility, false, original_name, is_alias)
-    }
-
-    ///
-    /// Add a new basic operation method *func* with *name* to the class of *class_id*.
-    ///
-    /// This fn increments class version.
-    ///
-    pub(crate) fn add_basic_op_method(
-        &mut self,
-        class_id: ClassId,
-        name: IdentId,
-        func_id: FuncId,
-        visibility: Visibility,
-    ) {
-        self.add_method_inner(class_id, name, func_id, visibility, true, name, false)
+        self.add_method_inner(class_id, name, func_id, visibility, original_name, is_alias)
     }
 
     ///
@@ -2537,7 +2522,6 @@ impl Store {
         name: IdentId,
         func_id: FuncId,
         visibility: Visibility,
-        is_basic_op: bool,
         original_name: IdentId,
         is_alias: bool,
     ) {
@@ -2560,7 +2544,6 @@ impl Store {
                 owner,
                 func_id: Some(func_id),
                 visibility,
-                is_basic_op,
                 original_name,
                 visibility_shadow: false,
                 is_alias,
@@ -2592,7 +2575,6 @@ impl Store {
                 owner,
                 func_id: None,
                 visibility,
-                is_basic_op: false,
                 original_name: name,
                 visibility_shadow: false,
                 is_alias: false,
@@ -2825,7 +2807,6 @@ impl Store {
                             owner: class_id,
                             func_id: Some(func_id),
                             visibility,
-                            is_basic_op: false,
                             original_name,
                             visibility_shadow: true,
                             is_alias: false,

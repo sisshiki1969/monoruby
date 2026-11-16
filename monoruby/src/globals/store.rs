@@ -25,7 +25,6 @@ pub(crate) struct MethodTableEntry {
     owner: ClassId,
     func_id: Option<FuncId>,
     visibility: Visibility,
-    is_basic_op: bool,
     /// The method's *original* definition name, tracked through
     /// `alias_method` and `define_method`-from-(Unbound)Method so that
     /// `Method#original_name` and the `#name(original)` form of
@@ -62,10 +61,6 @@ impl MethodTableEntry {
 
     pub fn visibility(&self) -> Visibility {
         self.visibility
-    }
-
-    pub fn is_basic_op(&self) -> bool {
-        self.is_basic_op
     }
 
     pub fn is_visibility_shadow(&self) -> bool {
