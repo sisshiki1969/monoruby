@@ -171,7 +171,7 @@ class Struct
               k
             elsif k.respond_to?(:to_int)
               c = k.to_int
-              raise TypeError, "can't convert #{k.class} into Integer (#{k.class}#to_int gives #{c.class})" unless c.is_a?(Integer)
+              raise TypeError, "can't convert #{k.class} to Integer (#{k.class}#to_int gives #{c.class})" unless c.is_a?(Integer)
               c
             else
               raise TypeError, "no implicit conversion of #{__builtin_class_name(k)} into Integer"

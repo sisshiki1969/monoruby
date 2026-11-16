@@ -111,3 +111,67 @@ when a *version* guard (rather than a class guard) fails are described in
                                                          +---------------------------+                      +---------------------------+
 
 ```
+
+## a long chain: the class → entry table
+
+A call that enters through `entry` — from the interpreter's `send`, an
+invoker, a generic send, or a JIT call site whose callee had no body for
+the receiver's class when the caller was compiled — walks the guards in
+the order the classes were compiled. For a method inherited by many
+classes (`Class#new` in a Rails application has a few hundred) that is a
+walk of half the chain on average, each guard in a different page of
+code, and it showed as ~15% of ruby-bench's shipit
+([#1944](https://github.com/sisshiki1969/monoruby/issues/1944)).
+
+Once the chain has `CLASS_DISPATCH_THRESHOLD` (4) guards, `entry` is
+re-pointed at one stub that looks the class of `self` up in a hash table
+(`globals/store/class_dispatch.rs`; open addressing on the class id,
+linear probing, at most half full):
+
+```text
+
+      wrapper                       class dispatch stub                       table (leaked, grows ×2)
+   +--------------------+        +-------------------------------------+     +--------+----------------+
+   |                    |        |                                     |     | class  | target         |
+---+-> entry:           |   +----+-> stub:                             |     +--------+----------------+
+   |     jmp [stub]; ---+--/     |     rdi <- self                     |     | class3 | patch_point3   |
+   |   next:            |        |     immediate?  --------------------+--+  | 0      |                |
+   |     ...            |        |     probe table for self's class    |  |  | class1 | patch_point1   |
+   +--------------------+        |       found:     jmp [slot.target] -+--+--+-> ...                   |
+                                 |       Integer / Float?  ------------+--+  +--------+----------------+
+                                 |       not found: jmp [header.miss] -+--+--------> the chain's tail stub
+                                 |                                     |  |          (counts, compiles the
+                                 +-------------------------------------+  |           class when hot)
+                                                                          |
+                                                                          +--------> guard1 (header.chain):
+                                                                                     the whole chain, as before
+```
+
+The table is an accelerator in front of the chain, not a replacement for
+it:
+
+- The chain stays complete and keeps growing at its tail. Each
+  compilation enters the new class in the table and moves `header.miss`
+  to the new tail.
+- A `self` that cannot be found by its class word takes the chain from
+  its first guard: an immediate (`nil`, `true`, `false`, a Symbol, a
+  fixnum, a flonum), and a heap `Integer` or `Float`, whose guards do
+  more than compare the class word (a Bignum goes to the interpreter).
+  Those six classes are never entered in the table
+  (`ClassDispatch::holds`).
+- A class that is in neither goes straight to the chain's tail stub,
+  which is where the walk would have ended: it counts the call, and
+  compiles the class once the warm-up sampler has seen it twice.
+
+On x86-64 a table slot holds the class's `patch_point`, the jump the
+recompiler re-points, so a recompilation needs no table update. On
+aarch64 the wrapper dispatches through a data word rather than a patched
+jump: the word holds the stub's address, a slot holds the body's entry
+itself, and `recompile_method_by_id` updates the slot (and
+`header.chain` when the recompiled class is the chain's first).
+
+An eviction (`ISeqInfo::drop_jit_code`: a basic-op redefinition, or a
+body the front-end gave up on) forgets the table together with the
+chain; the wrapper's `entry` is put back as for a chain, and the next
+chain builds a new table. The header and the tables are leaked, like the
+code that reads them.

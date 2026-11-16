@@ -194,7 +194,7 @@ class Enumerator
     end
 
     def take(n)
-      n = __lazy_to_int(n)
+      n = __num2long(n)
       raise ArgumentError, "attempt to take negative size" if n < 0
       src = self
       # CRuby's `lazy_take_size`: an unknown (nil) upstream size stays
@@ -232,7 +232,7 @@ class Enumerator
     end
 
     def drop(n)
-      n = __lazy_to_int(n)
+      n = __num2long(n)
       raise ArgumentError, "attempt to drop negative size" if n < 0
       src = self
       size = lambda do

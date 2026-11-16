@@ -239,16 +239,13 @@ class Array
 
   def cycle(n = (no_n = true; nil))
     unless block_given?
-      unless no_n || n.nil? || n.is_a?(Integer)
-        raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer" unless n.respond_to?(:to_int)
-        n = n.to_int
-        raise TypeError, "can't convert to Integer" unless n.is_a?(Integer)
-      end
       # Size hint:
       #   * empty array            -> 0
       #   * cycle()/cycle(nil)     -> Float::INFINITY
       #   * cycle(n) with n >= 0   -> length * n
       #   * cycle(n) with n  < 0   -> 0
+      # The count is converted (CRuby's NUM2LONG) only here and when the
+      # Enumerator is iterated: `cycle("x")` itself raises nothing.
       args = no_n ? [] : [n]
       return to_enum(:cycle, *args) {
         len = self.length
@@ -256,24 +253,20 @@ class Array
           0
         elsif no_n || n.nil?
           Float::INFINITY
-        elsif n < 0
-          0
         else
-          len * n
+          k = __num2long(n)
+          k <= 0 ? 0 : len * k
         end
       }
     end
-    return nil if empty?
     if n.nil?
+      return nil if empty?
       while true
         each { |x| yield x }
       end
     else
-      unless n.is_a?(Integer)
-        raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer" unless n.respond_to?(:to_int)
-        n = n.to_int
-        raise TypeError, "can't convert to Integer" unless n.is_a?(Integer)
-      end
+      n = __num2long(n)
+      return nil if empty?
       n.times do
         each { |x| yield x }
       end
@@ -288,7 +281,7 @@ class Array
       # for k == 0, otherwise the multiplicative form so we never
       # build the full factorial.
       return to_enum(:combination, n) {
-        k = n.is_a?(Integer) ? n : n.to_int
+        k = __num2long(n)
         len = self.size
         if k < 0 || k > len
           0
@@ -302,7 +295,7 @@ class Array
         end
       }
     end
-    n = n.to_int
+    n = __num2long(n)
     # Defensive copy: CRuby snapshots the receiver before iterating,
     # so mutations from the block don't change the generated combos.
     pool = self.dup
@@ -379,7 +372,7 @@ class Array
       # Descending factorial size = n * (n-1) * ... * (n-k+1).
       enum_args = n.nil? ? [] : [n]
       return to_enum(:permutation, *enum_args) {
-        k = n.nil? ? self.size : (n.is_a?(Integer) ? n : n.to_int)
+        k = n.nil? ? self.size : __num2long(n)
         len = self.size
         if k < 0 || k > len
           0
@@ -392,7 +385,7 @@ class Array
         end
       }
     end
-    n = n.nil? ? self.size : n.to_int
+    n = n.nil? ? self.size : __num2long(n)
     if n == 0
       yield []
       return self
@@ -563,7 +556,7 @@ class Array
       # size**n; 0 when n < 0 (no permutations); 1 when n == 0
       # (the empty permutation), even for an empty receiver.
       return to_enum(:repeated_permutation, n) {
-        k = n.is_a?(Integer) ? n : n.to_int
+        k = __num2long(n)
         if k < 0
           0
         elsif k == 0
@@ -573,7 +566,7 @@ class Array
         end
       }
     end
-    n = n.to_int
+    n = __num2long(n)
     copy = self.dup
     len = copy.size
     if n == 0
@@ -605,7 +598,7 @@ class Array
       # C(size + k - 1, k); 0 for k < 0; 1 for k == 0; the full
       # multiplicative form to avoid factorials of large arrays.
       return to_enum(:repeated_combination, n) {
-        k = n.is_a?(Integer) ? n : n.to_int
+        k = __num2long(n)
         len = self.size
         if k < 0
           0
@@ -621,7 +614,7 @@ class Array
         end
       }
     end
-    n = n.to_int
+    n = __num2long(n)
     # Defensive copy (see #combination): ignore block mutations.
     pool = self.dup
     len = pool.size

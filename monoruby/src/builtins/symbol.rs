@@ -33,6 +33,22 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SYMBOL_CLASS, "=~", sym_match_op, 1);
     globals.define_builtin_funcs_with(SYMBOL_CLASS, "[]", &["slice"], sym_aref, 1, 2, false);
     globals.define_builtin_func_with(SYMBOL_CLASS, "match", sym_match, 1, 2, false);
+    // The rest of the String-like methods. They are native for a
+    // different reason: CRuby runs them on the Symbol's own name
+    // (`rb_sym2str`), so a program that redefines `Symbol#to_s` does not
+    // change what `:a.upcase` or `:a.size` answer (#1929) — which a
+    // `to_s.upcase.to_sym` in Ruby cannot promise.
+    globals.define_builtin_func_with(SYMBOL_CLASS, "match?", sym_match_p, 1, 2, false);
+    globals.define_builtin_funcs(SYMBOL_CLASS, "length", &["size"], sym_length, 0);
+    globals.define_builtin_func(SYMBOL_CLASS, "empty?", sym_empty, 0);
+    globals.define_builtin_func(SYMBOL_CLASS, "encoding", sym_encoding, 0);
+    globals.define_builtin_func_rest(SYMBOL_CLASS, "upcase", sym_upcase);
+    globals.define_builtin_func_rest(SYMBOL_CLASS, "downcase", sym_downcase);
+    globals.define_builtin_func_rest(SYMBOL_CLASS, "capitalize", sym_capitalize);
+    globals.define_builtin_func_rest(SYMBOL_CLASS, "swapcase", sym_swapcase);
+    globals.define_builtin_funcs(SYMBOL_CLASS, "succ", &["next"], sym_succ, 0);
+    globals.define_builtin_func(SYMBOL_CLASS, "casecmp", sym_casecmp, 1);
+    globals.define_builtin_func(SYMBOL_CLASS, "casecmp?", sym_casecmp_p, 1);
     globals.define_builtin_func_variadic(SYMBOL_CLASS, "start_with?", sym_start_with, 0);
     globals.define_builtin_func_variadic(SYMBOL_CLASS, "end_with?", sym_end_with, 0);
     // Symbol.new is undefined (raises NoMethodError). Insert the undef
@@ -177,10 +193,89 @@ fn sym_to_proc(
     Ok(globals.symbol_proc(lfp.self_val().as_symbol(), pc))
 }
 
-/// Convert the receiver Symbol to its `String` `Value` by invoking
-/// `to_s` (a frozen-name string), for delegating String-method calls.
-fn sym_self_string(vm: &mut Executor, globals: &mut Globals, self_val: Value) -> Result<Value> {
-    vm.invoke_method_inner(globals, IdentId::get_id("to_s"), self_val, &[], None, None)
+/// The String methods a Symbol method of the same name runs on its name.
+///
+/// CRuby's `sym_upcase`, `sym_aref`, `sym_match`, … call the C functions
+/// behind `String#upcase`, `#[]`, `#match` on `rb_sym2str(sym)`: neither
+/// a redefined `Symbol#to_s` nor a redefined `String#upcase` is seen.
+/// So the receiver is built from the name ([`symbol_string_inner`]), and
+/// the method is String's builtin, by `FuncId`
+/// ([`Store::symbol_string_method`]) rather than by a lookup.
+#[derive(Clone, Copy)]
+pub(crate) enum SymStr {
+    MatchOp,
+    Aref,
+    Match,
+    MatchP,
+    Encoding,
+    Upcase,
+    Downcase,
+    Capitalize,
+    Swapcase,
+    Succ,
+    Casecmp,
+    CasecmpP,
+}
+
+/// The names of [`SymStr`], in its order.
+pub(crate) const SYMBOL_STRING_METHODS: [&str; 12] = [
+    "=~",
+    "[]",
+    "match",
+    "match?",
+    "encoding",
+    "upcase",
+    "downcase",
+    "capitalize",
+    "swapcase",
+    "succ",
+    "casecmp",
+    "casecmp?",
+];
+
+/// The String a Symbol method works on: the name, in the symbol's
+/// encoding. What `Symbol#to_s` answers while nobody has redefined it,
+/// less the chilled flag.
+fn sym_string(sym: Value) -> Value {
+    Value::string_from_inner(symbol_string_inner(sym.as_symbol()))
+}
+
+/// Run String's builtin `which` on the name of `sym`.
+fn sym_string_call(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    sym: Value,
+    which: SymStr,
+    args: &[Value],
+    bh: Option<BlockHandler>,
+) -> Result<Value> {
+    let recv = sym_string(sym);
+    let func_id = match globals.store.symbol_string_method(which) {
+        Some(func_id) => func_id,
+        // The core library is still loading: what the name resolves to
+        // is the builtin.
+        None => {
+            let name = IdentId::get_id(SYMBOL_STRING_METHODS[which as usize]);
+            vm.find_method(globals, recv, name, true)?
+        }
+    };
+    vm.invoke_func_inner(globals, func_id, recv, args, bh, None)
+}
+
+/// [`sym_string_call`] for the methods that answer a Symbol: the String
+/// result, interned (`rb_str_intern`).
+fn sym_string_map(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    sym: Value,
+    which: SymStr,
+    args: &[Value],
+) -> Result<Value> {
+    let s = sym_string_call(vm, globals, sym, which, args, None)?;
+    Ok(Value::symbol(crate::builtins::string::intern_string(
+        &globals.store,
+        s.as_rstring_inner(),
+    )?))
 }
 
 ///
@@ -188,13 +283,24 @@ fn sym_self_string(vm: &mut Executor, globals: &mut Globals, self_val: Value) ->
 ///
 /// - self =~ other -> Integer | nil
 ///
-/// Delegates to `to_s =~ other`; native so `$~` is set on the caller.
+/// `name =~ other`; native so `$~` is set on the caller.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/=3d=7e.html]
 #[monoruby_builtin]
-fn sym_match_op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = sym_self_string(vm, globals, lfp.self_val())?;
-    vm.invoke_method_inner(globals, IdentId::_MATCH, s, &[lfp.arg(0)], None, None)
+fn sym_match_op(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    sym_string_call(
+        vm,
+        globals,
+        lfp.self_val(),
+        SymStr::MatchOp,
+        &[lfp.arg(0)],
+        None,
+    )
 }
 
 ///
@@ -202,18 +308,16 @@ fn sym_match_op(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodeP
 ///
 /// - self[*args] -> String | nil
 ///
-/// Delegates to `to_s[*args]`; native so a Regexp index sets `$~` on
-/// the caller.
+/// `name[*args]`; native so a Regexp index sets `$~` on the caller.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/=5b=5d.html]
 #[monoruby_builtin]
 fn sym_aref(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = sym_self_string(vm, globals, lfp.self_val())?;
     let mut args: Vec<Value> = vec![lfp.arg(0)];
     if let Some(a1) = lfp.try_arg(1) {
         args.push(a1);
     }
-    vm.invoke_method_inner(globals, IdentId::get_id("[]"), s, &args, None, None)
+    sym_string_call(vm, globals, lfp.self_val(), SymStr::Aref, &args, None)
 }
 
 ///
@@ -222,17 +326,218 @@ fn sym_aref(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// - match(pattern, pos = 0) -> MatchData | nil
 /// - match(pattern, pos = 0) { |m| ... } -> object | nil
 ///
-/// Delegates to `to_s.match(...)`; native so `$~` is set on the caller.
+/// `name.match(...)`; native so `$~` is set on the caller.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/match.html]
 #[monoruby_builtin]
 fn sym_match(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let s = sym_self_string(vm, globals, lfp.self_val())?;
     let mut args: Vec<Value> = vec![lfp.arg(0)];
     if let Some(pos) = lfp.try_arg(1) {
         args.push(pos);
     }
-    vm.invoke_method_inner(globals, IdentId::get_id("match"), s, &args, lfp.block(), None)
+    sym_string_call(
+        vm,
+        globals,
+        lfp.self_val(),
+        SymStr::Match,
+        &args,
+        lfp.block(),
+    )
+}
+
+///
+/// ### Symbol#match?
+///
+/// - match?(pattern, pos = 0) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/match=3f.html]
+#[monoruby_builtin]
+fn sym_match_p(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let mut args: Vec<Value> = vec![lfp.arg(0)];
+    if let Some(pos) = lfp.try_arg(1) {
+        args.push(pos);
+    }
+    sym_string_call(vm, globals, lfp.self_val(), SymStr::MatchP, &args, None)
+}
+
+///
+/// ### Symbol#length
+///
+/// - length -> Integer
+/// - size -> Integer
+///
+/// The number of characters of the name.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/length.html]
+#[monoruby_builtin]
+fn sym_length(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let inner = symbol_string_inner(lfp.self_val().as_symbol());
+    Ok(Value::integer(inner.char_length() as i64))
+}
+
+///
+/// ### Symbol#empty?
+///
+/// - empty? -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/empty=3f.html]
+#[monoruby_builtin]
+fn sym_empty(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let empty = lfp
+        .self_val()
+        .as_symbol()
+        .with_ident_name(|name, _| match name {
+            IdentName::Utf8(s) => s.is_empty(),
+            IdentName::Bytes(b) => b.is_empty(),
+        });
+    Ok(Value::bool(empty))
+}
+
+///
+/// ### Symbol#encoding
+///
+/// - encoding -> Encoding
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/encoding.html]
+#[monoruby_builtin]
+fn sym_encoding(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    sym_string_call(vm, globals, lfp.self_val(), SymStr::Encoding, &[], None)
+}
+
+///
+/// ### Symbol#upcase
+///
+/// - upcase(*options) -> Symbol
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/upcase.html]
+#[monoruby_builtin]
+fn sym_upcase(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    sym_string_map(vm, globals, lfp.self_val(), SymStr::Upcase, &args)
+}
+
+///
+/// ### Symbol#downcase
+///
+/// - downcase(*options) -> Symbol
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/downcase.html]
+#[monoruby_builtin]
+fn sym_downcase(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    sym_string_map(vm, globals, lfp.self_val(), SymStr::Downcase, &args)
+}
+
+///
+/// ### Symbol#capitalize
+///
+/// - capitalize(*options) -> Symbol
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/capitalize.html]
+#[monoruby_builtin]
+fn sym_capitalize(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    sym_string_map(vm, globals, lfp.self_val(), SymStr::Capitalize, &args)
+}
+
+///
+/// ### Symbol#swapcase
+///
+/// - swapcase(*options) -> Symbol
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/swapcase.html]
+#[monoruby_builtin]
+fn sym_swapcase(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    sym_string_map(vm, globals, lfp.self_val(), SymStr::Swapcase, &args)
+}
+
+///
+/// ### Symbol#succ
+///
+/// - succ -> Symbol
+/// - next -> Symbol
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/succ.html]
+#[monoruby_builtin]
+fn sym_succ(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    sym_string_map(vm, globals, lfp.self_val(), SymStr::Succ, &[])
+}
+
+///
+/// ### Symbol#casecmp
+///
+/// - casecmp(other) -> -1 | 0 | 1 | nil
+///
+/// `nil` unless `other` is a Symbol.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/casecmp.html]
+#[monoruby_builtin]
+fn sym_casecmp(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    if lfp.arg(0).try_symbol().is_none() {
+        return Ok(Value::nil());
+    }
+    let other = sym_string(lfp.arg(0));
+    sym_string_call(vm, globals, lfp.self_val(), SymStr::Casecmp, &[other], None)
+}
+
+///
+/// ### Symbol#casecmp?
+///
+/// - casecmp?(other) -> bool | nil
+///
+/// `nil` unless `other` is a Symbol.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Symbol/i/casecmp=3f.html]
+#[monoruby_builtin]
+fn sym_casecmp_p(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    if lfp.arg(0).try_symbol().is_none() {
+        return Ok(Value::nil());
+    }
+    let other = sym_string(lfp.arg(0));
+    sym_string_call(
+        vm,
+        globals,
+        lfp.self_val(),
+        SymStr::CasecmpP,
+        &[other],
+        None,
+    )
 }
 
 ///

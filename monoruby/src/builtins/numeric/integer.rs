@@ -1495,47 +1495,32 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 "Integer#pow() 2nd argument not allowed unless a 1st argument is integer",
             ));
         }
+        // CRuby's `rb_int_powm`, in its order: the exponent's sign, then
+        // the modulus' type, then a zero modulus. Neither the exponent
+        // nor the modulus has to fit a machine word (#1930).
+        let to_big = |v: Value| match v.unpack() {
+            RV::Fixnum(i) => BigInt::from(i),
+            RV::BigInt(b) => b.clone(),
+            _ => unreachable!(),
+        };
+        let exp = to_big(exp);
+        if num::Signed::is_negative(&exp) {
+            return Err(MonorubyErr::rangeerr(
+                "Integer#pow() 1st argument cannot be negative when 2nd argument specified",
+            ));
+        }
         if !mod_val.is_integer() {
             return Err(MonorubyErr::typeerr(
                 "Integer#pow() 2nd argument not allowed unless all arguments are integers",
             ));
         }
-        let exp_i = exp.coerce_to_int_i64(vm, globals)?;
-        if exp_i < 0 {
-            return Err(MonorubyErr::rangeerr(
-                "Integer#pow() 1st argument cannot be negative when 2nd argument specified",
-            ));
-        }
-        let mod_i = mod_val.coerce_to_int_i64(vm, globals)?;
-        if mod_i == 0 {
+        let modulus = to_big(mod_val);
+        if modulus.is_zero() {
             return Err(MonorubyErr::divide_by_zero());
         }
-        // Modular exponentiation: self**exp % mod
-        let base_big = match lfp.self_val().unpack() {
-            RV::Fixnum(i) => BigInt::from(i),
-            RV::BigInt(b) => b.clone(),
-            _ => unreachable!(),
-        };
-        let mod_big = BigInt::from(mod_i.abs());
-        let mut base = base_big % &mod_big;
-        let mut result = BigInt::from(1);
-        let mut e = exp_i as u64;
-        while e > 0 {
-            if e & 1 == 1 {
-                result = result * &base % &mod_big;
-            }
-            base = &base * &base % &mod_big;
-            e >>= 1;
-        }
-        // Normalize result to match Ruby semantics:
-        // the result has the same sign as mod.
-        if result < BigInt::ZERO {
-            result += &mod_big;
-        }
-        if mod_i < 0 && result > BigInt::ZERO {
-            result -= &mod_big;
-        }
-        Ok(Value::bigint(result))
+        // `modpow` rounds like `Integer#%`: the result takes the sign of
+        // the modulus.
+        Ok(Value::bigint(to_big(lfp.self_val()).modpow(&exp, &modulus)))
     } else {
         // 2-argument form: pow(exp) — delegate to ** operator
         let lhs = lfp.self_val();

@@ -11918,7 +11918,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// `NoMemoryError`, for a `capacity:` the allocator will not satisfy.
 /// Built through the class object because the error kind is not one of
 /// `MonorubyErrKind`'s own variants.
-fn no_memory_error(vm: &mut Executor, globals: &mut Globals) -> MonorubyErr {
+pub(crate) fn no_memory_error(vm: &mut Executor, globals: &mut Globals) -> MonorubyErr {
     const MSG: &str = "failed to allocate memory";
     let Some(klass) = globals
         .store

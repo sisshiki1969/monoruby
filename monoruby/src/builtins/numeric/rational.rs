@@ -108,8 +108,39 @@ fn to_i(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 }
 
 #[monoruby_builtin]
-fn to_s(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::string_usascii(self_rat(lfp).to_s()))
+fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let rat = self_rat(lfp);
+    if globals
+        .store
+        .to_s_is_builtin(INTEGER_CLASS, Globals::class_version())
+    {
+        return Ok(Value::string_usascii(rat.to_s()));
+    }
+    // CRuby's `nurat_to_s` formats the numerator and the denominator
+    // through their `to_s` (`f_format(self, f_to_s)`), so a redefined
+    // `Integer#to_s` shows (#1929).
+    let (num, den) = (rat.num().to_value(), rat.den().to_value());
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(num);
+        vm.temp_push(den);
+        let num = vm.obj_as_string(globals, num)?;
+        vm.temp_push(num);
+        let den = vm.obj_as_string(globals, den)?;
+        let (num, den) = (num.as_rstring_inner(), den.as_rstring_inner());
+        let mut bytes = num.as_bytes().to_vec();
+        bytes.push(b'/');
+        bytes.extend_from_slice(den.as_bytes());
+        // The numerator's String is the one CRuby appends to; an
+        // all-ASCII one takes the encoding of what is appended.
+        let enc = if num.as_bytes().is_ascii() && !den.as_bytes().is_ascii() {
+            den.encoding()
+        } else {
+            num.encoding()
+        };
+        Ok(Value::string_from_inner(RStringInner::from_encoding(
+            &bytes, enc,
+        )))
+    })
 }
 
 #[monoruby_builtin]

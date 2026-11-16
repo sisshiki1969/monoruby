@@ -259,7 +259,13 @@ fn bo_method_missing(
     if undefined {
         let mut err = err;
         if let Ok(desc) = nme_receiver_description(vm, globals, recv) {
-            err.set_msg(format!("undefined method '{name}' for {desc}"));
+            // ... and the method's name through `Symbol#to_s`, once that
+            // has been redefined (`Executor::name_through_to_s`).
+            let msg = match vm.name_through_to_s(globals, name) {
+                Some(shown) => format!("undefined method '{shown}' for {desc}"),
+                None => format!("undefined method '{name}' for {desc}"),
+            };
+            err.set_msg(msg);
         }
         let call_args = Value::array_from_iter(args.iter().skip(1).cloned());
         return Err(no_method_error_with_args(globals, err, call_args));

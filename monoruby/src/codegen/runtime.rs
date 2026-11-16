@@ -2943,11 +2943,14 @@ pub(super) extern "C" fn singleton_define_method(
     // special singletons nil / true / false, which accept singleton methods
     // (they are defined on NilClass / TrueClass / FalseClass) despite being
     // frozen.
-    if !obj.is_nil() && obj != Value::bool(true) && obj != Value::bool(false) {
-        if let Err(err) = obj.ensure_not_frozen(&globals.store) {
-            vm.set_error(err);
-            return None;
-        }
+    // A pooled String has no singleton class at all, which is a TypeError
+    // (`get_singleton` below), not the FrozenError of a frozen receiver.
+    if !obj.is_special_singleton()
+        && !globals.store.is_fstring(obj)
+        && let Err(err) = obj.ensure_not_frozen(&globals.store)
+    {
+        vm.set_error(err);
+        return None;
     }
     let singleton = match obj.get_singleton(&mut globals.store) {
         Ok(val) => val,

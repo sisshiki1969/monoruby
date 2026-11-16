@@ -1577,7 +1577,10 @@ impl MonorubyErr {
     }
 
     pub(crate) fn float_out_of_range_of_integer(f: f64) -> MonorubyErr {
-        MonorubyErr::rangeerr(format!("float {:?} out of range of integer", f))
+        MonorubyErr::rangeerr(format!(
+            "float {} out of range of integer",
+            crate::executor::format::float_g_image_with(f, 10)
+        ))
     }
 
     pub fn localjumperr(msg: impl ToString) -> MonorubyErr {

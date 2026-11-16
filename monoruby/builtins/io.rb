@@ -111,16 +111,25 @@ class IO
     # would return "" forever), but only once the walk starts: without a
     # block `each_line(0)` is an Enumerator that raises when iterated.
     # The limit is the second positional argument, or the first when it
-    # is not a (nil/String) separator.
-    lim = if args.size >= 2
-            args[1]
-          elsif args.size == 1 && !args[0].nil? && !args[0].is_a?(String)
-            args[0]
-          end
-    if lim.is_a?(Integer) && lim == 0
-      raise ArgumentError, "invalid limit: 0 for each_line"
+    # is not a separator (nil, a String, or something with #to_str:
+    # `rb_check_string_type` comes first in `extract_getline_args`).
+    at = if args.size >= 2
+           1
+         elsif args.size == 1 && !args[0].is_a?(String) && !args[0].respond_to?(:to_str)
+           0
+         end
+    lim = nil
+    if at && !args[at].nil?
+      # The limit is read with NUM2LONG, so `each_line(0.5)` is a zero
+      # limit too. It is converted once: #gets below takes the Integer.
+      lim = __num2long(args[at])
+      unless lim.equal?(args[at])
+        args = args.dup
+        args[at] = lim
+      end
     end
     raise IOError, "closed stream" if closed?
+    raise ArgumentError, "invalid limit: 0 for each_line" if lim == 0
     # CRuby's `each_line` reads through the internal `rb_io_getline`,
     # which — unlike `IO#gets` — leaves `$_` alone. We drive `#gets`
     # (it implements the full (sep, limit, chomp:) semantics natively),

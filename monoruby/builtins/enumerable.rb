@@ -101,7 +101,7 @@ module Enumerable
   alias reduce inject
 
   def each_slice(n)
-    n = n.to_int unless n.is_a?(Integer)
+    n = __num2long(n)
     raise ArgumentError, "invalid slice size" if n <= 0
     return to_enum(:each_slice, n) { respond_to?(:size) ? (size.to_f / n).ceil : nil } unless block_given?
     slice = []
@@ -255,10 +255,7 @@ module Enumerable
   end
 
   def take(n)
-    n = n.to_int if !n.is_a?(Integer) && n.respond_to?(:to_int)
-    unless n.is_a?(Integer)
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
-    end
+    n = __num2long(n)
     raise ArgumentError, "attempt to take negative size" if n < 0
     res = []
     return res if n == 0
@@ -270,10 +267,7 @@ module Enumerable
   end
 
   def drop(n)
-    n = n.to_int if !n.is_a?(Integer) && n.respond_to?(:to_int)
-    unless n.is_a?(Integer)
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
-    end
+    n = __num2long(n)
     raise ArgumentError, "attempt to drop negative size" if n < 0
     res = []
     i = 0
@@ -381,7 +375,7 @@ module Enumerable
       end
       elem
     else
-      n = n.to_int unless n.is_a?(Integer)
+      n = __num2long(n)
       raise ArgumentError, "negative size (#{n})" if n < 0
       return [] if n == 0
       pairs = []
@@ -598,7 +592,7 @@ module Enumerable
       end
       elem
     else
-      n = n.to_int unless n.is_a?(Integer)
+      n = __num2long(n)
       raise ArgumentError, "negative size (#{n})" if n < 0
       return [] if n == 0
       pairs = []
@@ -667,16 +661,9 @@ module Enumerable
       __gather_each { |x| return x }
       return nil
     end
-    n = args[0]
-    n = n.to_int if !n.is_a?(Integer) && n.respond_to?(:to_int)
-    unless n.is_a?(Integer)
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
-    end
     # CRuby converts the count with NUM2LONG, before it looks at the
     # sign; a Bignum that does not fit in a C long raises RangeError.
-    if n > 0x7fff_ffff_ffff_ffff || n < -0x8000_0000_0000_0000
-      raise RangeError, "bignum too big to convert into 'long'"
-    end
+    n = __num2long(args[0])
     raise ArgumentError, "attempt to take negative size" if n < 0
     res = []
     return res if n == 0
@@ -750,7 +737,7 @@ module Enumerable
   end
 
   def each_cons(n)
-    n = n.to_int unless n.is_a?(Integer)
+    n = __num2long(n)
     raise ArgumentError, "invalid size" if n <= 0
     return to_enum(:each_cons, n) { respond_to?(:size) ? [size - n + 1, 0].max : nil } unless block_given?
     buf = []
@@ -791,7 +778,7 @@ module Enumerable
       end
       m
     else
-      n = n.to_int unless n.is_a?(Integer)
+      n = __num2long(n)
       raise ArgumentError, "negative size (#{n})" if n < 0
       return [] if n == 0
       if block_given?
@@ -831,7 +818,7 @@ module Enumerable
       end
       m
     else
-      n = n.to_int unless n.is_a?(Integer)
+      n = __num2long(n)
       raise ArgumentError, "negative size (#{n})" if n < 0
       return [] if n == 0
       if block_given?
@@ -992,15 +979,23 @@ module Enumerable
         cache.each { |x| yield x }
       end
     else
-      unless n.is_a?(Integer)
-        if n.respond_to?(:to_int)
-          n = n.to_int
-          raise TypeError, "can't convert to Integer" unless n.is_a?(Integer)
-        else
-          raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
-        end
+      # CRuby hands out the Enumerator before it converts the count:
+      # `cycle("x")` without a block raises only once it is iterated or
+      # sized (`enum_cycle_size`, which asks the receiver's size first).
+      unless block_given?
+        return to_enum(:cycle, n) {
+          sz = respond_to?(:size) ? size : nil
+          if sz.nil?
+            nil
+          elsif sz == 0
+            0
+          else
+            k = __num2long(n)
+            k <= 0 ? 0 : sz * k
+          end
+        }
       end
-      return to_enum(:cycle, n) { respond_to?(:size) ? (n <= 0 ? 0 : size * n) : nil } unless block_given?
+      n = __num2long(n)
       return nil if n <= 0
       cache = []
       # First pass collects and yields simultaneously so `break` stops early.
