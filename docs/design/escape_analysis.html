@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-606337d2.js";
+            window.path_to_searchindex_js = "../searchindex-55171338.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -285,7 +285,15 @@ not apply — a non-numeric argument, a <code>nil</code> endpoint the method rej
 a redefined <code>Integer#&lt;=&gt;</code> — the helper builds the Range and dispatches
 the resolved method on it, exactly the call that would have been made.
 A parameter stays elided after such a use if it is still live (the next
-<code>args.size</code> or <code>opts[:y]</code> is free too); a temporary is done.</li>
+<code>args.size</code> or <code>opts[:y]</code> is free too); a temporary is done.
+None of these applies when a positional argument of the call is itself
+an elided object (<code>(1..10).cover?(1..5)</code>, <code>Range#cover?</code> being a Ruby
+method that takes it, §6): each object is judged on its own
+(<code>may_consume_virtual</code>), but the lowering here reads the argument slots
+as values, and an elided argument’s slot holds none. The call is then
+the one that takes both — the receiver is materialized (a frozen
+literal is its template, at no cost) and the argument handed over
+(<code>consume_virtual</code>’s <code>args_elided</code>).</li>
 <li><code>transparent: true</code> — the callee never mutates, stores or returns its
 receiver, nor returns an Enumerator over it, in any argument form. A
 <code>Literal</code> object’s copy is then indistinguishable from the template to

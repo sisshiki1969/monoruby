@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-606337d2.js";
+            window.path_to_searchindex_js = "searchindex-55171338.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -6497,6 +6497,7 @@ identically to <code>Slot</code>.</p>
 <tr><td><strong>Installing / re-pointing JIT code</strong></td><td>patches branches in place (<code>apply_jmp_patch_address</code>, the <code>patch_point</code> <code>call</code>)</td><td>indirect heap slots — <code>ISeqInfo::jit_slot</code> and <code>jit_guard_free_slot</code> are <code>#[cfg(target_arch = "aarch64")]</code> fields — plus <code>Codegen::patch_call_to_entry</code>, a single <code>bl</code> rewrite under the MAP_JIT writable/executable flip</td></tr>
 <tr><td><strong>Cold-code placement</strong></td><td>cold handlers go on page 1 (<code>select_page</code>, ~90 sites)</td><td>page 1 is past <code>B</code>/<code>BL</code> range from page 0, so cold blocks are laid inline (~7 sites). In exchange aarch64 has an optimization x86 has no use for: <code>AsmIr::as_pure_deopt</code> / <code>pure_deopt_target</code> (<code>#[cfg(target_arch = "aarch64")]</code>) emit a deopt-only block’s handler <em>at</em> the block label, so predecessors branch straight onto the deopt code</td></tr>
 <tr><td><strong>Branch range</strong></td><td>never a constraint</td><td>a large loop body can put a <code>TBZ</code>/<code>TBNZ</code> further from its deopt than imm14 (+/-32 KiB) reaches, which panics the emit. <code>jit_compile_loop</code> catches it and leaves the codeptr unpublished; <code>a64_op_loop_start</code>’s tri-state slot (<code>0</code> / <code>1</code> sentinel / codeptr) stops the retry loop</td></tr>
+<tr><td><strong>A panic inside a compile</strong></td><td>contained at every entry point (<code>compiler.rs</code> <code>contain_compile_panic</code>): nothing is published, the warm-up counter has run out so the method / loop stays interpreted, and a failed recompile leaves the old code deopting as before</td><td>the same for a first compile; a <em>recompile</em> panic additionally sets a Ruby <code>FatalError</code> (the row below)</td></tr>
 <tr><td><strong><code>RecompileDeopt</code> error exit</strong></td><td><code>error: None</code></td><td>needs <code>Some(ir.new_error(state))</code> — a recompile-time panic surfaces as a Ruby <code>FatalError</code> to branch to (<code>jitgen/compile.rs</code>)</td></tr>
 <tr><td><strong>GC frame tracing</strong></td><td><code>alloc.rs</code>’s <code>record_frames</code> walks <code>rbp</code> via inline asm</td><td>not implemented (x86-only debug aid)</td></tr>
 <tr><td><strong>Loop-JIT entry <code>sp</code></strong></td><td><code>lea rsp, [rbp - depth]</code></td><td><code>sub</code>+<code>mov sp</code> to the same depth</td></tr>
@@ -9538,7 +9539,15 @@ not apply — a non-numeric argument, a <code>nil</code> endpoint the method rej
 a redefined <code>Integer#&lt;=&gt;</code> — the helper builds the Range and dispatches
 the resolved method on it, exactly the call that would have been made.
 A parameter stays elided after such a use if it is still live (the next
-<code>args.size</code> or <code>opts[:y]</code> is free too); a temporary is done.</li>
+<code>args.size</code> or <code>opts[:y]</code> is free too); a temporary is done.
+None of these applies when a positional argument of the call is itself
+an elided object (<code>(1..10).cover?(1..5)</code>, <code>Range#cover?</code> being a Ruby
+method that takes it, §6): each object is judged on its own
+(<code>may_consume_virtual</code>), but the lowering here reads the argument slots
+as values, and an elided argument’s slot holds none. The call is then
+the one that takes both — the receiver is materialized (a frozen
+literal is its template, at no cost) and the argument handed over
+(<code>consume_virtual</code>’s <code>args_elided</code>).</li>
 <li><code>transparent: true</code> — the callee never mutates, stores or returns its
 receiver, nor returns an Enumerator over it, in any argument form. A
 <code>Literal</code> object’s copy is then indistinguishable from the template to
