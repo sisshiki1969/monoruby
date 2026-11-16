@@ -814,6 +814,42 @@ arm64 は 400 秒のタイムアウトに達した。
 直接主張する — 値の比較では、fast path が消えても答えは正しいままなので
 検出できない。
 
+### Step 5 — `!=` を継承ペアにする（#1938, #1964, #1967）— **実装済み**
+
+CRuby にはどのクラスにも固有の `!=` がない。あるのは `BasicObject#!=`
+（`rb_obj_not_equal`）だけで、`!(a == b)` を計算する。monoruby は
+`Integer` / `Float` / `String`（basic op）と `Symbol` / `Rational` /
+`Complex` / `Struct` / `Data` に固有の `!=` を持っていたため、
+`x.method(:!=).owner` が違い、`==` を再定義しても `!=` が追随しなかった
+（`Integer` では VM の fixnum 高速パスと JIT のインライン展開が、他では
+ビルトイン自身が `==` を呼ばずに答えていた）。
+
+固有の `!=` は全て削除した。高速パスは次の形で残る。
+
+- 表には `(Integer|Float|String, "!=")` を**継承ペア**として残す
+  （`Integer#!` と同じく、クラス自身にエントリは無い）。このペアが許可する
+  のは「そのクラスに対する `BasicObject#!=` のインライン形」— VM の fixnum
+  比較と、JIT の `object::object_ne` — である。
+- インライン形はビルトインの `==` を前提にするので、**そのクラスの `==` の
+  グローバルな再定義は `!=` のペアも一緒に落とす**
+  （`Store::set_bop_redefine`）。refinement による `==` の差し替えは連動
+  させない。`rb_obj_not_equal` は C で、`==` を `rb_funcall` で呼ぶので、
+  refinement された `==` は見えないからである（#1967。実行時は
+  `Executor::eq_values_funcall`、JIT は `JitContext::funcall_eq`）。
+- `BasicObject#!=` の生成器 `object_ne` は受け手のクラスで分岐する:
+  `==` が `BasicObject#==` / `Symbol#==` ならワード比較、`Integer#==` /
+  `Float#==` なら数値比較（`integer_cmp_inline` / `float_cmp_inline`）、
+  `String#==` なら定数との比較（`string_ne_gen`）。クラスバージョンガード
+  付きの呼び出し経路から入った場合は「`==` の解決先」を salvage 用に
+  記録する（`JitContext::assume_funcall_eq`）。
+- `:performance` 警告は `!=` のペアには出さない。CRuby に `!=` の basic
+  op は無く（`opt_neq` は `BOP_EQ` に乗る）、`Integer#!=` を定義しても何も
+  言わない。`Integer#==` の再定義で出る警告は `==` の 1 行だけになる。
+
+megamorphic なサイトの即値ビット比較（`opt_eq_assumable`）は、`!=` のペアを
+持たない 4 クラス（`Symbol` / `NilClass` / `TrueClass` / `FalseClass`）に
+ついて「`!=` が `BasicObject#!=` に解決する」ことを確かめて記録する（#1965）。
+
 ### Step 3 の当初計画（記録として保存）
 
 Step 2 の (op, class) ビットマスクができれば、#1066 が要求する

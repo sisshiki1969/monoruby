@@ -37,7 +37,6 @@ pub(crate) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRUCT_CLASS, "members", members, 0);
     globals.define_builtin_func(STRUCT_CLASS, "==", eq, 1);
     globals.define_builtin_func(STRUCT_CLASS, "eql?", eql, 1);
-    globals.define_builtin_func(STRUCT_CLASS, "!=", ne, 1);
     globals.define_builtin_func(STRUCT_CLASS, "hash", hash, 0);
     // Raw slot access for `builtins/struct.rb`: CRuby's `Struct#to_a`,
     // `#[]`, `#each`, ... read the member slots directly
@@ -784,61 +783,6 @@ pub(super) fn eql(
         other.id(),
         || body(vm, globals),
         Value::bool(true),
-    )
-}
-
-///
-/// Struct#!=
-///
-#[monoruby_builtin]
-pub(super) fn ne(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let self_val = lfp.self_val();
-    let other = lfp.arg(0);
-    // The *real* classes, as CRuby's `rb_obj_class` gives: an object
-    // that has been `extend`ed carries a singleton class of its own, and
-    // comparing those made two otherwise-identical extended structs
-    // unequal.
-    if self_val.real_class(&globals.store).id() != other.real_class(&globals.store).id() {
-        return Ok(Value::bool(true));
-    }
-    let lhs_struct = match self_val.try_struct() {
-        Some(s) => s,
-        None => return Ok(Value::bool(true)),
-    };
-    let rhs_struct = match other.try_struct() {
-        Some(s) => s,
-        None => return Ok(Value::bool(true)),
-    };
-    if lhs_struct.len() != rhs_struct.len() {
-        return Ok(Value::bool(true));
-    }
-    let len = lhs_struct.len();
-    let body = |vm: &mut Executor, globals: &mut Globals| {
-        let lhs_struct = self_val.try_struct().unwrap();
-        let rhs_struct = other.try_struct().unwrap();
-        for i in 0..len {
-            let lhs = lhs_struct.get(i);
-            let rhs = rhs_struct.get(i);
-            // The negation of `Struct#==`, which asks `rb_equal`.
-            if lhs.id() != rhs.id() && !vm.eq_values_bool(globals, lhs, rhs)? {
-                return Ok(Value::bool(true));
-            }
-        }
-        Ok(Value::bool(false))
-    };
-    if eq_needs_no_guard(globals, lhs_struct, rhs_struct) {
-        return body(vm, globals);
-    }
-    crate::value::exec_recursive_paired(
-        self_val.id(),
-        other.id(),
-        || body(vm, globals),
-        Value::bool(false),
     )
 }
 

@@ -3396,6 +3396,15 @@ impl Executor {
     }
 
     ///
+    /// Whether the scope [`Self::basic_op_refinements`] answers for — the
+    /// code that wrote the operator being run — activated any refinement.
+    /// One load in a program that refines nothing.
+    ///
+    pub(crate) fn in_refined_scope(&self, globals: &Globals) -> bool {
+        globals.store.refinements().is_active() && !self.basic_op_refinements(globals).is_empty()
+    }
+
+    ///
     /// The refinement set of the scope that called the builtin currently
     /// running — what `Module.used_refinements` and the reflective entry
     /// points (`send`, `respond_to?`, …) must resolve under.

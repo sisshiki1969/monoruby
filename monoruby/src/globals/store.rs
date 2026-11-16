@@ -203,9 +203,9 @@ pub struct Store {
     /// FuncId of the default `BasicObject#!=`, used to recognize that an
     /// unredefined `!=` may be computed as `!(a == b)` without dispatch.
     default_neq: Option<FuncId>,
-    /// FuncId of the builtin `Symbol#!=`, which answers as the default
-    /// does; see [`Self::custom_neq`].
-    symbol_neq: Option<FuncId>,
+    /// FuncId of the builtin `Symbol#==`, the other `==` that compares the
+    /// two words; see [`Self::is_identity_eq`].
+    symbol_eq_fid: Option<FuncId>,
     /// FuncIds of the default `initialize_copy` / `initialize_dup` /
     /// `initialize_clone` builtins. `Kernel#dup` / `#clone` compare a
     /// class's resolved hooks against these to recognize the no-op case
@@ -879,7 +879,7 @@ impl Store {
             leaf_builtins: HashMap::default(),
             identity_eq_fid: None,
             default_neq: None,
-            symbol_neq: None,
+            symbol_eq_fid: None,
             default_copy_hooks: None,
             builtin_to_s: None,
             // No class_version is this wide: nothing is memoized yet.
@@ -2091,10 +2091,24 @@ impl Store {
         self.default_neq = Some(fid);
     }
 
-    pub(crate) fn set_symbol_neq(&mut self, fid: FuncId) {
-        self.symbol_neq = Some(fid);
+    /// The builtin `BasicObject#!=`: what `!=` resolves to for a class
+    /// that has none of its own.
+    pub(crate) fn default_neq(&self) -> Option<FuncId> {
+        self.default_neq
     }
 
+    pub(crate) fn set_symbol_eq_fid(&mut self, fid: FuncId) {
+        self.symbol_eq_fid = Some(fid);
+    }
+
+    /// Whether *fid* is one of the builtin `==`s that answer by comparing
+    /// the two words — `BasicObject#==` (object identity) and `Symbol#==`
+    /// (a Symbol is an immediate, equal only to itself). `a != b` through
+    /// the default `!=` is then a compare of the words too, which is what
+    /// the JIT emits for it (`builtins::object::object_ne`).
+    pub(crate) fn is_identity_eq(&self, fid: FuncId) -> bool {
+        Some(fid) == self.identity_eq_fid || Some(fid) == self.symbol_eq_fid
+    }
 
     /// Record the FuncIds of the default `initialize_copy` /
     /// `initialize_dup` / `initialize_clone` builtins (see
@@ -2243,27 +2257,33 @@ impl Store {
         Some(fid)
     }
 
+    ///
+    /// `class_id#==` as C code calling it with `rb_funcall` finds it — no
+    /// refinement, no visibility — memoized per class_version on the
+    /// ClassInfo. `None`: the class has none (`undef_method :==`).
+    ///
+    pub(crate) fn funcall_eq(&self, class_id: ClassId, version: u32) -> Option<FuncId> {
+        if let Some((v, fid)) = self[class_id].eq_method_at()
+            && v == version
+        {
+            return Some(fid);
+        }
+        let fid = self
+            .search_method_by_class_id(class_id, IdentId::_EQ)?
+            .func_id()?;
+        self[class_id].set_eq_method_at(version, fid);
+        Some(fid)
+    }
+
     pub(crate) fn custom_neq(&self, class_id: ClassId, version: u32) -> Option<MethodTableEntry> {
         if self[class_id].neq_basic_at() == Some(version) {
             return None;
         }
-        // Uncached walk for the same reason as `no_to_str`. `!=` counts
-        // as default when it is a basic op (`String#!=`) or resolves to
-        // `BasicObject#!=` itself. (The latter is deliberately NOT
-        // registered as a basic op: overwriting a basic-op entry trips
-        // the global BOP-redefine slow mode, and `BasicObject#!=` gets
-        // legitimately shadowed during startup, e.g. by Comparable.)
-        // The builtin `Symbol#!=` counts too: it is `!(a == b)` for the
-        // builtin `Symbol#==`, and with it dispatched instead, a redefined
-        // `Symbol#==` would go unseen and a frameless body's `sym != x`
-        // would be declined every time (`cmp_ne_values_pure`).
+        // Uncached walk for the same reason as `no_to_str`. `!=` is the
+        // default when it resolves to `BasicObject#!=` itself — the only
+        // `!=` the builtins define, as in CRuby.
         match self.search_method_by_class_id(class_id, IdentId::_NEQ) {
-            Some(entry)
-                if entry.is_basic_op()
-                    || (entry.func_id().is_some()
-                        && (entry.func_id() == self.default_neq
-                            || entry.func_id() == self.symbol_neq)) =>
-            {
+            Some(entry) if entry.func_id().is_some() && entry.func_id() == self.default_neq => {
                 self[class_id].set_neq_basic_at(version);
                 None
             }

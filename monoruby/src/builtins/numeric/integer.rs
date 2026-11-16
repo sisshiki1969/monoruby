@@ -114,7 +114,6 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         integer_cmp_gen(CmpKind::Lt),
         1,
     );
-    globals.define_basic_op_inline(INTEGER_CLASS, "!=", ne, integer_cmp_gen(CmpKind::Ne), 1);
     globals.define_builtin_func(INTEGER_CLASS, "<=>", cmp, 1);
     globals.define_builtin_inline_func_with(
         INTEGER_CLASS,
@@ -426,17 +425,6 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
             return Ok(Value::bool(result.as_bool()));
         }
     };
-    Ok(Value::bool(b))
-}
-
-///
-/// ### Integer#!=
-///
-/// - self != other -> bool
-///
-#[monoruby_builtin]
-fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let b = vm.ne_values_bool(globals, lfp.self_val(), lfp.arg(0))?;
     Ok(Value::bool(b))
 }
 
@@ -1064,45 +1052,61 @@ fn integer_binop_gen(kind: BinOpK) -> Box<InlineGenBinary> {
 fn integer_cmp_gen(kind: CmpKind) -> Box<InlineGenBinary> {
     Box::new(
         move |state, ir, ctx, store, callid, _recv_class, rhs_class| {
-            let callsite = &store[callid];
-            if !callsite.is_simple() {
-                return BinaryInlineOutcome::Declined;
-            }
-            let CallSiteInfo {
-                dst, recv, args, ..
-            } = *callsite;
-            let float_info = match rhs_class {
-                Some(CachedClass::INTEGER) => None,
-                Some(CachedClass::FLOAT) => Some(FBinOpInfo {
-                    lhs: recv,
-                    rhs: args,
-                    lhs_class: FOpClass::Integer,
-                    rhs_class: FOpClass::Float,
-                }),
-                _ => return BinaryInlineOutcome::Declined,
-            };
-            if let Some(info) = float_info
-                && !state.float_cmp_literals_exact(info)
-            {
-                return BinaryInlineOutcome::Declined;
-            }
-            if let Some(slot) = ctx.wants_cond_flags(dst) {
-                let flags = match float_info {
-                    None => state.gen_cmp_integer_flags(ir, kind, slot, recv, args),
-                    Some(info) => state.gen_cmp_float_flags(ir, slot, info, kind),
-                };
-                if let Some(flags) = flags {
-                    ctx.set_cond_flags(slot, flags);
-                    return BinaryInlineOutcome::Done;
-                }
-            }
-            match float_info {
-                None => state.gen_cmp_integer(ir, kind, dst, recv, args),
-                Some(info) => state.gen_cmp_float(ir, dst, info, kind),
-            }
-            BinaryInlineOutcome::Done
+            integer_cmp_inline(kind, state, ir, ctx, store, callid, rhs_class)
         },
     )
+}
+
+/// The body of [`integer_cmp_gen`], for a receiver proven a fixnum. Also
+/// `!=` on an Integer while `Integer#==` is the builtin: `Integer` has no
+/// `!=` of its own, and `BasicObject#!=`'s generator (`object::object_ne`)
+/// hands the case here.
+pub(in crate::builtins) fn integer_cmp_inline(
+    kind: CmpKind,
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    ctx: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    rhs_class: Option<CachedClass>,
+) -> BinaryInlineOutcome {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return BinaryInlineOutcome::Declined;
+    }
+    let CallSiteInfo {
+        dst, recv, args, ..
+    } = *callsite;
+    let float_info = match rhs_class {
+        Some(CachedClass::INTEGER) => None,
+        Some(CachedClass::FLOAT) => Some(FBinOpInfo {
+            lhs: recv,
+            rhs: args,
+            lhs_class: FOpClass::Integer,
+            rhs_class: FOpClass::Float,
+        }),
+        _ => return BinaryInlineOutcome::Declined,
+    };
+    if let Some(info) = float_info
+        && !state.float_cmp_literals_exact(info)
+    {
+        return BinaryInlineOutcome::Declined;
+    }
+    if let Some(slot) = ctx.wants_cond_flags(dst) {
+        let flags = match float_info {
+            None => state.gen_cmp_integer_flags(ir, kind, slot, recv, args),
+            Some(info) => state.gen_cmp_float_flags(ir, slot, info, kind),
+        };
+        if let Some(flags) = flags {
+            ctx.set_cond_flags(slot, flags);
+            return BinaryInlineOutcome::Done;
+        }
+    }
+    match float_info {
+        None => state.gen_cmp_integer(ir, kind, dst, recv, args),
+        Some(info) => state.gen_cmp_float(ir, dst, info, kind),
+    }
+    BinaryInlineOutcome::Done
 }
 
 ///

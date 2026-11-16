@@ -503,6 +503,45 @@ impl Executor {
     }
 
     ///
+    /// `lhs == rhs` as the default `!=` asks it. `rb_obj_not_equal` is C
+    /// and calls `==` with `rb_funcall`: a private `==` is callable, and
+    /// no refinement of `==` is in effect — not even one the scope that
+    /// wrote the `!=` activated (#1967). So unlike [`Self::eq_values_vis`]
+    /// this never asks which scope is running.
+    ///
+    pub(crate) fn eq_values_funcall(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Value> {
+        let name = IdentId::_EQ;
+        let func_id = if let Some(class) = dispatched_eq_class(lhs) {
+            // A receiver whose `==` is a lookup either way.
+            globals.store.funcall_eq(class, Globals::class_version())
+        } else if globals
+            .store
+            .basic_op_globally_redefined_for(lhs.class(), name)
+            && !self.in_internal_builtin()
+        {
+            globals
+                .store
+                .funcall_eq(lhs.class(), Globals::class_version())
+        } else {
+            // nil, a boolean, an Integer, a Float, a Symbol or a String
+            // whose `==` is the builtin: the arms of the implementation.
+            // A *refinement* of it marks the pair as well
+            // (`basic_op_redefined_for`), which is no reason to dispatch
+            // here.
+            return self.eq_values_vis_raw(globals, lhs, rhs, true);
+        };
+        match func_id {
+            Some(func_id) => self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None),
+            None => Err(MonorubyErr::method_not_found(globals, name, lhs)),
+        }
+    }
+
+    ///
     /// CRuby's `rb_equal`: an object is equal to *itself* without `==`
     /// being asked at all, and only otherwise is `elem == needle`
     /// dispatched.
@@ -606,8 +645,10 @@ impl Executor {
         self.ne_values_vis(globals, lhs, rhs, true)
     }
 
-    /// `!=` dispatch honoring the call site's func-call flag for a redefined
-    /// `!=` (or the private-`==` it negates).
+    /// `!=` dispatch honoring the call site's func-call flag for a `!=`
+    /// that is not the default one. The default — `BasicObject#!=`, the
+    /// only `!=` the builtins define — negates `==` as
+    /// [`Self::eq_values_funcall`] asks it.
     pub(crate) fn ne_values_vis(
         &mut self,
         globals: &mut Globals,
@@ -615,21 +656,26 @@ impl Executor {
         rhs: Value,
         is_func_call: bool,
     ) -> Result<Value> {
-        // Check if the receiver has a custom != method (not a basic op /
-        // the default BasicObject#!=). If so, dispatch to it (honoring its
+        // Check if the receiver has a custom != method (not the default
+        // BasicObject#!=). If so, dispatch to it (honoring its
         // visibility) instead of negating ==. `custom_neq` is memoized per
         // class_version, so the common unredefined case costs a load
-        // instead of a method-table probe per comparison.
-        let class_id = lhs.class();
-        if globals
-            .store
-            .custom_neq(class_id, Globals::class_version())
-            .is_some()
+        // instead of a method-table probe per comparison. That memo knows
+        // nothing of refinements, so a scope that activated some asks the
+        // lookup — a refinement can define `!=` as well.
+        if self.in_refined_scope(globals)
+            || globals
+                .store
+                .custom_neq(lhs.class(), Globals::class_version())
+                .is_some()
         {
             let func_id = self.find_method(globals, lhs, IdentId::_NEQ, is_func_call)?;
-            return self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None);
+            if Some(func_id) != globals.store.default_neq() {
+                return self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None);
+            }
         }
-        Ok(Value::bool(!self.eq_values_vis(globals, lhs, rhs, is_func_call)?.as_bool()))
+        let eq = self.eq_values_funcall(globals, lhs, rhs)?;
+        Ok(Value::bool(!eq.as_bool()))
     }
 
     pub(crate) fn ne_values_bool(
@@ -745,10 +791,13 @@ pub(crate) extern "C" fn cmp_ne_values_pure(
     rhs: Value,
     is_func_call: bool,
 ) -> Option<Value> {
-    if globals
-        .store
-        .custom_neq(lhs.class(), Globals::class_version())
-        .is_some()
+    // A scope with refinements may see another `!=`, and its `==` is not
+    // the one the default `!=` calls: left to `cmp_ne_values`.
+    if vm.in_refined_scope(globals)
+        || globals
+            .store
+            .custom_neq(lhs.class(), Globals::class_version())
+            .is_some()
     {
         return None;
     }

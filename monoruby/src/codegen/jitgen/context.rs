@@ -3789,10 +3789,32 @@ impl<'a> JitContext<'a> {
         name: IdentId,
         func_id: Option<FuncId>,
     ) {
+        self.assume_resolution_under(class, name, self.refinements(), func_id);
+    }
+
+    /// [`assume_resolution`](Self::assume_resolution) for a method C code
+    /// calls with `rb_funcall`: resolved with no refinement active,
+    /// whatever this unit's scope activated.
+    pub(crate) fn assume_funcall_resolution(
+        &self,
+        class: CachedClass,
+        name: IdentId,
+        func_id: Option<FuncId>,
+    ) {
+        self.assume_resolution_under(class, name, RefinementSetId::EMPTY, func_id);
+    }
+
+    fn assume_resolution_under(
+        &self,
+        class: CachedClass,
+        name: IdentId,
+        refinements: RefinementSetId,
+        func_id: Option<FuncId>,
+    ) {
         let entry = InlineCacheEntry {
             recv_class: class,
             name: Some(name),
-            refinements: self.refinements(),
+            refinements,
             func_id,
             super_of: None,
         };

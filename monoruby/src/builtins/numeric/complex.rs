@@ -15,7 +15,6 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         ObjTy::COMPLEX,
     );
     globals.define_builtin_func(COMPLEX_CLASS, "==", eq, 1);
-    globals.define_builtin_func(COMPLEX_CLASS, "!=", ne, 1);
     globals.define_builtin_func(COMPLEX_CLASS, "<=>", cmp, 1);
     globals.define_builtin_class_func_with(COMPLEX_CLASS, "polar", complex_polar, 1, 2, false);
     globals.define_builtin_class_funcs_with(
@@ -102,11 +101,6 @@ fn complex_eq(
 #[monoruby_builtin]
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(Value::bool(complex_eq(vm, globals, lfp.self_val(), lfp.arg(0))?))
-}
-
-#[monoruby_builtin]
-fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(!complex_eq(vm, globals, lfp.self_val(), lfp.arg(0))?))
 }
 
 ///

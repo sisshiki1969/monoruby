@@ -38,11 +38,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(STRING_CLASS, "<=>", cmp, 1);
     globals.define_builtin_func(STRING_CLASS, "casecmp", casecmp, 1);
     globals.define_builtin_func(STRING_CLASS, "casecmp?", casecmp_p, 1);
-    let ne_fid = globals.define_basic_op(STRING_CLASS, "!=", ne, 1);
-    globals.store.inline_info.add_inline(
-        ne_fid,
-        crate::executor::inline::InlineFuncInfo::new_inline_gen(inline_gen2!(string_ne_gen)),
-    );
     globals.define_builtin_func(STRING_CLASS, ">=", ge, 1);
     globals.define_builtin_func(STRING_CLASS, ">", gt, 1);
     globals.define_builtin_func(STRING_CLASS, "<=", le, 1);
@@ -451,9 +446,11 @@ fn string_eq_gen(
         || string_cmp_const_gen(state, ir, ctx, store, callid, arg_class, false)
 }
 
-/// JIT inliner for the basic-op `String#!=`: same compile-time analysis as
-/// `string_eq_gen`, folding to constant `true`.
-fn string_ne_gen(
+/// JIT inliner for `!=` on a String while `String#==` is the builtin
+/// (`String` has no `!=` of its own; `BasicObject#!=`'s generator,
+/// `object::object_ne`, hands the case over): same compile-time analysis
+/// as `string_eq_gen`, folding to constant `true`.
+pub(super) fn string_ne_gen(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     ctx: &JitContext,
@@ -632,33 +629,7 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     Ok(Value::bool(string_eq_bool(vm, globals, lfp)?))
 }
 
-///
-/// ### String#!=
-///
-/// - self != other -> bool
-///
-/// CRuby has no `String#!=`; `str != x` resolves to `BasicObject#!=`,
-/// i.e. the boolean negation of `String#==` *including* its `to_str`
-/// reverse dispatch. This basic op shortcuts the dispatch but must
-/// keep that negation exact — a strict byte-compare here diverges for
-/// a rhs that defines both `to_str` and a custom `==`.
-///
-/// The receiver side has the same obligation: an instance of a String
-/// subclass negates *its own* `==` (`BCrypt::Password#==` hashes the
-/// other side first), which the JIT reaches through this body when
-/// `!=` resolves here for the subclass.
-#[monoruby_builtin]
-fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
-    if self_.class() != STRING_CLASS {
-        let eq = vm.eq_values_vis(globals, self_, lfp.arg(0), true)?;
-        return Ok(Value::bool(!eq.as_bool()));
-    }
-    Ok(Value::bool(!string_eq_bool(vm, globals, lfp)?))
-}
-
-/// The full `String#==` predicate shared by `==`/`===`/`eql?` and the
-/// `!=` negation.
+/// The full `String#==` predicate shared by `==`/`===`/`eql?`.
 fn string_eq_bool(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<bool> {
     let self_ = lfp.self_val();
     let lhs = self_.as_rstring_inner();

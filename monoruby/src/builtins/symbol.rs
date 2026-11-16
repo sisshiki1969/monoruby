@@ -1,4 +1,5 @@
 use super::*;
+use crate::ast::CmpKind;
 use jitgen::{AbstractState, JitContext};
 
 //
@@ -11,13 +12,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(SYMBOL_CLASS, "all_symbols", all_symbols, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "<=>", cmp, 1);
     globals.define_builtin_inline_func(SYMBOL_CLASS, "===", eq, inline_gen2!(symbol_eq), 1);
-    globals.define_builtin_inline_func(SYMBOL_CLASS, "==", eq, inline_gen2!(symbol_eq), 1);
-    // CRuby has no `Symbol#!=`. This one is what a call site that has
-    // only seen Symbol receivers calls; the generic comparison helpers
-    // take it for the default `!(a == b)` (`Store::custom_neq`) instead
-    // of dispatching it.
-    let neq_fid = globals.define_builtin_func(SYMBOL_CLASS, "!=", ne, 1);
-    globals.store.set_symbol_neq(neq_fid);
+    // No `Symbol#!=`, as in CRuby: `sym != x` is `BasicObject#!=`, whose
+    // inline generator (`object_ne`) compares the two words while `==`
+    // still resolves to this builtin.
+    let eq_fid =
+        globals.define_builtin_inline_func(SYMBOL_CLASS, "==", eq, inline_gen2!(symbol_eq), 1);
+    globals.store.set_symbol_eq_fid(eq_fid);
     globals.define_builtin_func(SYMBOL_CLASS, "to_s", sym_to_s, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "name", sym_name, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "inspect", sym_inspect, 0);
@@ -354,22 +354,12 @@ fn symbol_eq(
         return true;
     }
     if let Some(dst) = ctx.wants_cond_flags(dst) {
-        let flags = state.gen_identity_eq_flags(ir, dst, recv, args);
+        let flags = state.gen_identity_cmp_flags(ir, CmpKind::Eq, dst, recv, args);
         ctx.set_cond_flags(dst, flags);
         return true;
     }
-    state.gen_identity_eq(ir, dst, recv, args);
+    state.gen_identity_cmp(ir, CmpKind::Eq, dst, recv, args);
     true
-}
-
-#[monoruby_builtin]
-fn ne(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let lhs = lfp.self_val();
-    let rhs = lfp.arg(0);
-    match (lhs.as_symbol(), rhs.try_symbol()) {
-        (lhs, Some(rhs)) => Ok(Value::bool(lhs != rhs)),
-        (_, None) => Ok(Value::bool(true)),
-    }
 }
 
 #[cfg(test)]
@@ -384,9 +374,101 @@ mod tests {
         );
     }
 
+    /// CRuby defines no `Symbol#!=`: `sym != x` is `BasicObject#!=` (#1938).
+    #[test]
+    fn symbol_has_no_neq_of_its_own() {
+        run_test_once(
+            r##"
+        [
+          Symbol.instance_method(:!=).owner,
+          :a.method(:!=).owner,
+          Symbol.instance_methods(false).include?(:!=),
+          Symbol.method_defined?(:!=),
+        ]
+        "##,
+        );
+    }
+
+    /// `sym != x` at a site that has only seen Symbol receivers is a compare
+    /// of the two words in JIT code (the default `!=`'s inline generator),
+    /// fused into the branch of an `if`, whatever the argument is.
+    #[test]
+    fn symbol_neq_jit_inline() {
+        run_test(
+            r##"
+        def ne(x, y) = [x != y, x != :a, :a != x, x.!=(y)]
+        def br(x, y)
+          if x != y then 1 else 2 end
+        end
+        def cnt(x, ys)
+          n = 0
+          ys.each { |y| n += 1 if x != y }
+          n
+        end
+        def lit
+          a = :a
+          [a != :a, a != :b]
+        end
+        syms = [:a, :b, :c]
+        others = [:a, :b, nil, 1, "a", 1.5, []]
+        first = nil
+        unstable = 0
+        30.times do
+          res = []
+          syms.each { |x| others.each { |y| res << ne(x, y) << br(x, y) } }
+          res << cnt(:a, others) << cnt(:b, syms) << lit
+          first ||= res
+          unstable += 1 unless res == first
+        end
+        [first, unstable]
+        "##,
+        );
+    }
+
+    /// `!=` is `!(a == b)`: a redefined `Symbol#==` changes its answer, at a
+    /// site compiled before the redefinition and at one compiled under it,
+    /// and a `Symbol#!=` defined later is called.
+    #[test]
+    fn symbol_neq_sees_redefined_eq() {
+        run_test_once(
+            r##"
+        def ne(x, y) = x != y
+        def br(x, y)
+          if x != y then 1 else 2 end
+        end
+        res = []
+        30.times { res << ne(:a, :a) << ne(:a, :b) << br(:a, :a) << br(:a, :b) }
+        class Symbol
+          alias_method :__sym_eq, :==
+          def ==(o) = false
+        end
+        res << ne(:a, :a) << ne(:a, :b) << br(:a, :a) << br(:a, :b)
+        def ne2(x, y) = x != y
+        def br2(x, y)
+          if x != y then 1 else 2 end
+        end
+        30.times { res << ne2(:a, :a) << ne2(:a, :b) << br2(:a, :a) << br2(:a, :b) }
+        class Symbol
+          alias_method :==, :__sym_eq
+          remove_method :__sym_eq
+        end
+        30.times { res << ne(:a, :a) << ne2(:a, :a) << br(:a, :a) << br2(:a, :b) }
+        class Symbol
+          def !=(o) = :custom
+        end
+        res << ne(:a, :a) << ne2(:a, :b) << br(:a, :a) << br2(:a, :b)
+        class Symbol
+          remove_method :!=
+        end
+        30.times { res << ne(:a, :a) << ne2(:a, :b) << br(:a, :a) << br2(:a, :b) }
+        res
+        "##,
+        );
+    }
+
     /// A site that has seen receivers of many classes compares through the
-    /// generic helper, which takes `Symbol#!=` for the default `!=` and so
-    /// computes `!(a == b)`: a redefined `Symbol#==` is seen there.
+    /// generic helper, which computes `!(a == b)` for the default `!=`: a
+    /// redefined `Symbol#==` is seen there.
     #[test]
     fn symbol_neq_in_generic_comparison() {
         run_test_once(
