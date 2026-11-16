@@ -52,12 +52,14 @@ pub struct MatchDataInner {
     regex: Option<Regexp>,
     heystack: Value,
     matches: SmallVec<[Span; 2]>,
-    /// The String pattern of a substring search that produced this
-    /// match (`String#sub` / `#gsub` with a String pattern, which never
-    /// compile a Regexp). `regexp()` builds the escaped Regexp from it
-    /// on demand, so `$~.regexp` reads the same as after the regex path
-    /// without paying a compile on every match.
-    pattern: Option<Value>,
+    /// The match was found by a substring search — `String#sub` /
+    /// `#gsub` / `#scan` with a String pattern — and nothing has asked
+    /// for its Regexp yet: CRuby's `RMATCH(match)->regexp == Qnil`.
+    /// `MatchData#regexp` builds the Regexp from the matched text on
+    /// demand ([`set_regexp`](Self::set_regexp)), so `$~.regexp` reads
+    /// the same as after the regex path without paying a compile on
+    /// every match.
+    substring: bool,
 }
 
 impl GC<RValue> for MatchDataInner {
@@ -66,9 +68,6 @@ impl GC<RValue> for MatchDataInner {
             re.mark(alloc);
         }
         self.heystack.mark(alloc);
-        if let Some(p) = &self.pattern {
-            p.mark(alloc);
-        }
     }
 }
 
@@ -107,7 +106,7 @@ impl MatchDataInner {
             regex: None,
             heystack: Self::snapshot(heystack, resolved),
             matches,
-            pattern: None,
+            substring: false,
         }
     }
 
@@ -128,7 +127,7 @@ impl MatchDataInner {
             regex: None,
             heystack: Self::snapshot(heystack, resolved),
             matches: spans.iter().map(|m| encode_span(*m)).collect(),
-            pattern: None,
+            substring: false,
         }
     }
 
@@ -137,8 +136,7 @@ impl MatchDataInner {
     /// String pattern set `$~` without running the regex engine). Like
     /// `from_captures_bytes`, `heystack` must be the exact String Value
     /// the search ran over; the snapshot is a CoW substring of it.
-    /// `pattern` is the String searched for; see `regexp()`.
-    pub fn from_byte_span(heystack: Value, start: usize, end: usize, pattern: Value) -> Self {
+    pub fn from_byte_span(heystack: Value, start: usize, end: usize) -> Self {
         let len = heystack.as_rstring_inner().as_bytes().len();
         assert!(
             len < u32::MAX as usize,
@@ -150,7 +148,7 @@ impl MatchDataInner {
             regex: None,
             heystack: string_substring(heystack, 0, len),
             matches,
-            pattern: Some(pattern),
+            substring: true,
         }
     }
 
@@ -166,7 +164,7 @@ impl MatchDataInner {
             regex: None,
             heystack: string_substring(heystack, 0, len),
             matches: spans.iter().map(|m| encode_span(*m)).collect(),
-            pattern: None,
+            substring: false,
         }
     }
 
@@ -195,7 +193,7 @@ impl MatchDataInner {
             regex: None,
             heystack: string_substring(heystack, 0, len),
             matches,
-            pattern: None,
+            substring: false,
         }
     }
 
@@ -209,36 +207,37 @@ impl MatchDataInner {
         self
     }
 
-    pub fn regexp(&self) -> Option<Regexp> {
-        if self.regex.is_some() {
-            return self.regex;
-        }
-        // A substring-search match: the Regexp CRuby would have
-        // attached is the escaped pattern, built here on demand.
-        let pattern = self.pattern?;
-        let text = pattern.as_rstring_inner().check_utf8().ok()?;
-        let inner = RegexpInner::from_escaped(text).ok()?;
-        Value::regexp(inner).is_regex()
+    /// Builder helper: mark a freshly-constructed `MatchDataInner` as a
+    /// substring-search match — one the regex engine found for an
+    /// escaped String pattern (`"abc".sub("b") { }`), which CRuby finds
+    /// with a plain search and records without a Regexp.
+    pub fn as_substring_match(mut self) -> Self {
+        self.substring = true;
+        self
     }
 
-    /// `MatchData#regexp` (CRuby's `match_regexp`): as
-    /// [`regexp`](Self::regexp), and the Regexp built for a
-    /// substring-search match is kept, so the next call answers the same
-    /// object and the match stops being a
+    /// The Regexp attached to this match: `None` for a
+    /// [substring match](Self::is_substring_match), which has no group
+    /// names to look up.
+    pub fn regexp(&self) -> Option<Regexp> {
+        self.regex
+    }
+
+    /// Attach the Regexp `MatchData#regexp` built for a substring match
+    /// (CRuby's `match_regexp`): the next call answers the same object
+    /// and the match stops being a
     /// [substring match](Self::is_substring_match) — which shows in
     /// `#inspect`.
-    pub fn materialize_regexp(&mut self) -> Option<Regexp> {
-        if self.regex.is_none() {
-            self.regex = self.regexp();
-        }
-        self.regex
+    pub fn set_regexp(&mut self, regex: Regexp) {
+        self.regex = Some(regex);
+        self.substring = false;
     }
 
     /// A match found by a substring search (`String#sub` with a String
     /// pattern) whose Regexp nothing has asked for yet: CRuby's
     /// `RMATCH(match)->regexp == Qnil`.
     pub fn is_substring_match(&self) -> bool {
-        self.regex.is_none() && self.pattern.is_some()
+        self.regex.is_none() && self.substring
     }
 
     fn heystack_bytes(&self) -> &[u8] {

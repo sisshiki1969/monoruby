@@ -33,8 +33,16 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(MATCHDATA_CLASS, "bytebegin", bytebegin, 1);
     globals.define_builtin_func(MATCHDATA_CLASS, "byteend", byteend, 1);
     globals.define_builtin_func(MATCHDATA_CLASS, "byteoffset", byteoffset, 1);
-    globals.define_builtin_func_with(MATCHDATA_CLASS, "deconstruct_keys", deconstruct_keys_md, 1, 1, false);
+    globals.define_builtin_func_with(
+        MATCHDATA_CLASS,
+        "deconstruct_keys",
+        deconstruct_keys_md,
+        1,
+        1,
+        false,
+    );
     globals.define_builtin_funcs(MATCHDATA_CLASS, "==", &["eql?"], eq, 1);
+    globals.define_builtin_func(MATCHDATA_CLASS, "hash", hash, 0);
     globals.define_builtin_func(MATCHDATA_CLASS, "inspect", inspect, 0);
     globals.define_builtin_func(MATCHDATA_CLASS, "to_s", to_s, 0);
 }
@@ -134,22 +142,24 @@ fn inspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/=3d=3d.html]
 #[monoruby_builtin]
-fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut self_ = lfp.self_val();
-    let mut other = lfp.arg(0);
+fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let other = lfp.arg(0);
     if !matches!(other.unpack(), RV::Object(rv) if rv.ty() == ObjTy::MATCHDATA) {
         return Ok(Value::bool(false));
     }
-    if self_.as_match_data().string() != other.as_match_data().string() {
+    if self_.as_match_data().string_value().as_rstring_inner()
+        != other.as_match_data().string_value().as_rstring_inner()
+    {
         return Ok(Value::bool(false));
     }
     // CRuby compares `match_regexp` of both sides, which builds and
     // keeps the Regexp of a substring-search match.
     let re_eq = match (
-        self_.as_match_data_mut().materialize_regexp(),
-        other.as_match_data_mut().materialize_regexp(),
+        match_regexp(vm, globals, self_)?,
+        match_regexp(vm, globals, other)?,
     ) {
-        (Some(x), Some(y)) => x.as_str() == y.as_str(),
+        (Some(x), Some(y)) => super::regexp::reg_equal(&x, &y),
         (None, None) => true,
         _ => false,
     };
@@ -157,6 +167,30 @@ fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Val
     let b = other.as_match_data();
     let pos_eq = a.len() == b.len() && (0..a.len()).all(|i| a.pos(i) == b.pos(i));
     Ok(Value::bool(re_eq && pos_eq))
+}
+
+///
+/// ### MatchData#hash
+///
+/// CRuby's `match_hash`: the target string, the pattern (`match_regexp`,
+/// so a substring-search match gets its Regexp here) and every match
+/// position — what `==` compares.
+#[monoruby_builtin]
+fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    use std::hash::{Hash, Hasher};
+    let self_ = lfp.self_val();
+    let re = match_regexp(vm, globals, self_)?;
+    let m = self_.as_match_data();
+    let mut h = crate::value::seeded_hasher();
+    m.string_value().as_rstring_inner().hash(&mut h);
+    if let Some(re) = re {
+        super::regexp::reg_hash(&re, &mut h);
+    }
+    m.len().hash(&mut h);
+    for i in 0..m.len() {
+        m.pos(i).hash(&mut h);
+    }
+    Ok(Value::from_hash_digest(h.finish()))
 }
 
 /// Stand-in for the undefined `MatchData.allocate`. Raises NoMethodError
@@ -378,13 +412,38 @@ fn size(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/regexp.html]
 #[monoruby_builtin]
-fn regexp_(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    // CRuby builds the Regexp of a substring-search match on the first
-    // call and keeps it (`match_regexp`).
-    match lfp.self_val().as_match_data_mut().materialize_regexp() {
+fn regexp_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    match match_regexp(vm, globals, lfp.self_val())? {
         Some(r) => Ok(r.as_val()),
         None => Ok(Value::nil()),
     }
+}
+
+/// CRuby's `match_regexp`: the Regexp of `md`. A substring-search match
+/// has none until this is called; it is then built from the matched
+/// text (`rb_reg_regcomp(rb_reg_quote(match[0]))`, in the text's own
+/// encoding) and kept, so every later call answers the same object.
+fn match_regexp(vm: &mut Executor, globals: &mut Globals, mut md: Value) -> Result<Option<Regexp>> {
+    let m = md.as_match_data();
+    if !m.is_substring_match() {
+        return Ok(m.regexp());
+    }
+    let Some(matched) = m.at(0) else {
+        return Ok(None);
+    };
+    let enc = m.string_value().as_rstring_inner().encoding();
+    let escaped = RegexpInner::escape_in(matched, enc);
+    // `rb_reg_quote` tags a 7-bit result US-ASCII.
+    let enc = if enc.is_ascii_compatible() && escaped.is_ascii() {
+        crate::value::Encoding::UsAscii
+    } else {
+        enc
+    };
+    let source = Value::string_from_inner(RStringInner::from_encoding(&escaped, enc));
+    let inner = crate::builtins::regexp::regexp_inner_from_string(vm, globals, source, 0, None)?;
+    let re = Value::regexp(inner).is_regex().unwrap();
+    md.as_match_data_mut().set_regexp(re);
+    Ok(Some(re))
 }
 
 ///
@@ -1499,6 +1558,182 @@ mod tests {
             show = ->(v) { v.is_a?(Array) || v.is_a?(Hash) ? v.to_a.flatten.map(&show) : (v.respond_to?(:encoding) ? [v.class, v.encoding.to_s, v.to_s.bytes] : v) }
             show.(r)
             "##,
+        );
+    }
+
+    /// Every String method that matches a Regexp leaves that Regexp on
+    /// `$~` (#1946): `$~.regexp`, the group names and `$~[:name]` work
+    /// after `sub`, `scan`, `index`, `[]`, `partition`, … as they do
+    /// after `=~`.
+    #[test]
+    fn backref_carries_the_regexp() {
+        run_test(
+            r##"
+        re = /(?<n>b)(c)?/
+        [
+          -> { "abc" =~ re },
+          -> { "abc".match(re) },
+          -> { "abc".match("b") },
+          -> { "abc".sub(re, "x") },
+          -> { (+"abc").sub!(re, "x") },
+          -> { "abc".sub(re) { "x" } },
+          -> { "abc".sub(re, "b" => "x") },
+          -> { "abcabc".gsub(re, "x") },
+          -> { (+"abcabc").gsub!(re, "x") },
+          -> { "abcabc".gsub(re) { "x" } },
+          -> { "abcabc".gsub(re, "b" => "x") },
+          -> { "abcabc".scan(re) },
+          -> { "abcabc".scan(re) { } },
+          -> { "abc".index(re) },
+          -> { "abcabc".index(re, 2) },
+          -> { "abcabc".rindex(re) },
+          -> { "abcabc".rindex(re, 3) },
+          -> { "abcabc".byteindex(re, 2) },
+          -> { "abcabc".byterindex(re, 3) },
+          -> { "abc"[re] },
+          -> { "abc"[re, 1] },
+          -> { "abc"[re, "n"] },
+          -> { "abc".slice(re) },
+          -> { (+"abc").slice!(re) },
+          -> { (+"abc").slice!(re, 1) },
+          -> { s = +"abc"; s[re] = "x" },
+          -> { s = +"abc"; s[re, 1] = "x" },
+          -> { "abc".partition(re) },
+          -> { "abcabc".rpartition(re) },
+          -> { "bc".start_with?(re) },
+          -> { $_ = "abc"; ~re },
+          -> { :abc[re] },
+          -> { :abc =~ re },
+          -> { :abc.match(re) },
+          -> { :bc.start_with?(re) },
+          -> { re =~ "abc" },
+          -> { re === "abc" },
+          -> { re.match("abcabc", 2) },
+          -> { case "abc" when re then 1 end },
+        ].map do |f|
+          f.call
+          m = $~
+          [m.regexp.equal?(re) || m.regexp.source, m.names, (m[:n] rescue $!.class.to_s), m.inspect]
+        end
+        "##,
+        );
+        // Inside the block, and for a subject Onigmo walks on its own
+        // bytes or that is matched through a surrogate image.
+        run_test(
+            r##"
+        re = /(?<n>b)/
+        r = []
+        "abcabc".gsub(re) { r << $~[:n]; "" }
+        "abcabc".scan(re) { r << $~[:n] << $~.regexp.source }
+        "abc".sub(re) { r << $~.names; "" }
+        [
+          "\x82\xA0b\x82\xA0b".dup.force_encoding("Windows-31J"),
+          "\xA4\xA2b\xA4\xA2b".dup.force_encoding("EUC-JP"),
+          "a\xffb\xffb".b,
+          "a\xE9b\xE9b".dup.force_encoding("ISO-8859-1"),
+        ].each do |s|
+          [
+            -> { s =~ re }, -> { s.sub(re, "x") }, -> { s.gsub(re, "x") }, -> { s.gsub(re) { "" } },
+            -> { s.scan(re) }, -> { s.scan(re) { } }, -> { s.index(re) }, -> { s.rindex(re) },
+            -> { s.byteindex(re) }, -> { s.byterindex(re) }, -> { s[re] }, -> { s.dup.slice!(re) },
+            -> { s.partition(re) }, -> { s.rpartition(re) }, -> { s.split(re, 2) }, -> { re.match(s) },
+          ].each do |f|
+            f.call
+            m = $~
+            r << [m.regexp.equal?(re), m[:n], m.pre_match.bytes, m.pre_match.encoding.to_s, m.byteoffset(0)]
+          end
+        end
+        r
+        "##,
+        );
+    }
+
+    /// A String pattern is a substring search, and its `$~` is the
+    /// match CRuby's `rb_backref_set_string` records: no Regexp until
+    /// one is asked for, the `#<MatchData: b>` form, and offsets and
+    /// `pre_match` over the receiver's own bytes whatever its encoding
+    /// (not over the image its bytes are matched through).
+    #[test]
+    fn backref_of_a_string_pattern() {
+        run_test(
+            r##"
+        r = []
+        probe = ->(m) {
+          return nil unless m
+          i = (m.inspect.b rescue $!.message)
+          re = m.regexp
+          [i, m.inspect.b, re.source.bytes, re.encoding.to_s, re.options, m.names, m.to_a.map(&:bytes),
+           m.pre_match.bytes, m.post_match.bytes, m.pre_match.encoding.to_s, m.offset(0), m.byteoffset(0),
+           m.string.bytes, m.string.encoding.to_s]
+        }
+        [
+          ["abcab", "b"],
+          ["a.*b.*", ".*"],
+          ["aあbあ", "あ"],
+          ["abcab".dup.force_encoding("US-ASCII"), "b"],
+          ["a\xffb\xfe\xffc".b, "\xff".b],
+          ["a\xE9b\xE8\xE9c".dup.force_encoding("ISO-8859-1"), "\xE9".dup.force_encoding("ISO-8859-1")],
+          ["\x82\xA0b\x82\xA2\x82\xA0c".dup.force_encoding("Windows-31J"), "\x82\xA0".dup.force_encoding("Windows-31J")],
+          ["\xA4\xA2b\xA4\xA4\xA4\xA2c".dup.force_encoding("EUC-JP"), "\xA4\xA2".dup.force_encoding("EUC-JP")],
+          ["abcab".encode("UTF-16LE"), "b".encode("UTF-16LE")],
+          ["aあbあ".encode("UTF-32BE"), "あ".encode("UTF-32BE")],
+        ].each do |s, pat|
+          m = nil
+          s.sub(pat) { m = $~; "" };            r << probe.(m)
+          s.sub(pat, {});                       r << probe.($~)
+          s.sub(pat, "");                       r << probe.($~)
+          s.dup.sub!(pat, "");                  r << probe.($~)
+          s.gsub(pat) { m = $~; "" };           r << probe.(m) << probe.($~)
+          s.gsub(pat, {});                      r << probe.($~)
+          s.gsub(pat, "");                      r << probe.($~)
+          s.dup.gsub!(pat) { "" };              r << probe.($~)
+          s.scan(pat);                          r << probe.($~)
+          s.scan(pat) { m = $~ };               r << probe.(m) << probe.($~)
+          r << probe.(s.match(pat))
+        end
+        r
+        "##,
+        );
+        // `==` and `hash` go through the Regexp the match stands for.
+        run_test(
+            r##"
+        a = b = c = nil
+        "abc".sub("b") { a = $~; "" }
+        "abc".sub("b") { b = $~; "" }
+        "abd".sub("b") { c = $~; "" }
+        d = "abc".match(/b/)
+        e = "abc".match(/b/i)
+        h = { a => 1 }
+        [a == b, a.eql?(b), a.hash == b.hash, a == c, a == d, a.hash == d.hash, d == e, h[b], h[d], h[c],
+         a.regexp.equal?(a.regexp), a.dup.regexp.source, a.inspect]
+        "##,
+        );
+    }
+
+    /// `start_with?` matches at the start only, so a match further on
+    /// leaves `$~` nil; a wide String separator is walked by a Regexp
+    /// `split` builds for itself, which is not the caller's match.
+    #[test]
+    fn backref_start_with_and_split() {
+        run_test(
+            r##"
+        r = []
+        "abc" =~ /a/
+        r << "abc".start_with?(/b/) << $~.inspect
+        r << "abc".start_with?(/(?<n>a)b/) << $~.inspect << $~[:n]
+        r << :abc.start_with?(/b/) << $~.inspect
+        # A Symbol whose name is walked on its own bytes: `$~` is over a
+        # String made for it.
+        sym = "a\xE9b".dup.force_encoding("Windows-1252").to_sym
+        r << sym.start_with?(/a./) << $~[0].bytes << $~.post_match.bytes << $~[0].encoding.to_s << $~.regexp.source
+        "abc" =~ /a/
+        u = ->(s) { s.encode("UTF-16LE") }
+        r << u["abcab"].split(u["b"]).size << $~.inspect
+        r << "abcab".split("b").size << $~.inspect
+        r << "abcab".split(/(?<n>b)/, 2).size << $~.inspect << $~[:n]
+        r << "abcab".split(/b/).size << $~.inspect
+        r
+        "##,
         );
     }
 }

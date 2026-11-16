@@ -241,9 +241,29 @@ impl HookSite {
             HookSite::Loc(site, loc) => (crate::globals::display_path(site)
                 == crate::globals::display_path(source))
             .then(|| site.get_line(loc)),
-            HookSite::Line(file, line) => {
-                (*file == source.file_name()).then_some(*line as i64)
-            }
+            HookSite::Line(file, line) => (*file == source.file_name()).then_some(*line as i64),
+        }
+    }
+}
+
+/// Where a match about to be saved as `$~` came from: the Regexp that
+/// found it, or a substring search for a String pattern (`"abc".sub("b",
+/// "x")`), which CRuby records without a Regexp.
+#[derive(Debug, Clone, Copy)]
+pub enum MatchOrigin {
+    Regexp(Value),
+    Substring,
+}
+
+impl MatchOrigin {
+    /// The origin of a match for `pattern`, the pattern argument of a
+    /// `String` method: itself when it is a Regexp, a substring search
+    /// for a String (or anything `to_str` turned into one).
+    pub(crate) fn of(pattern: Value) -> Self {
+        if pattern.is_regex().is_some() {
+            MatchOrigin::Regexp(pattern)
+        } else {
+            MatchOrigin::Substring
         }
     }
 }
@@ -284,15 +304,12 @@ pub struct Executor {
     /// bare `private` / `public` / `protected`. CRuby's top-level
     /// default is `private`.
     toplevel_visibility: Visibility,
-    /// In-flight Regexp stash: every `RegexpInner::captures_*` /
-    /// `find_*` entry point sets this to the Regexp `Value` it is
-    /// about to match, so the subsequent
-    /// `save_capture_special_variables` knows which Regexp to attach
-    /// to the constructed `MatchData` (named-capture lookup needs
-    /// it). Cleared once the MatchData is built and stored in the
-    /// LEP's `LFP_SVAR`. All other per-match state (`$~`, `$&`, `$'`,
-    /// `$\``, `$1`..`$N`) now lives frame-locally on the LEP.
-    sp_match_regex: Option<Value>,
+    /// The origin of the match being saved, held here only while the
+    /// `save_capture_*` call that received it allocates the
+    /// `MatchData`: a Regexp built for the call (`"a".match("b")`) has
+    /// no other root at that point. All per-match state (`$~`, `$&`,
+    /// `$'`, `` $` ``, `$1`..`$N`) lives frame-locally on the LEP.
+    sp_match_regex: Option<MatchOrigin>,
     /// In-flight haystack stash: regex-matching entry points that know
     /// the *subject String Value* (e.g. `String#match`, `Regexp#match`,
     /// `String#gsub`) record it here so MatchData / `$~` construction
@@ -596,10 +613,9 @@ impl alloc::GC<RValue> for Executor {
         if let Some(s) = self.inherited_storage {
             s.mark(alloc);
         }
-        // Transient per-match stashes: live across the MatchData
-        // allocation in `save_capture_special_variables`, which can
-        // trigger GC.
-        if let Some(v) = self.sp_match_regex {
+        // Transient per-match roots: live across the MatchData
+        // allocation in `store_match`, which can trigger GC.
+        if let Some(MatchOrigin::Regexp(v)) = self.sp_match_regex {
             v.mark(alloc);
         }
         if let Some(v) = self.sp_match_haystack {
@@ -5628,13 +5644,24 @@ impl Executor {
         if let Some(c) = self.svar_container() {
             c.as_array()[SVAR_BACKREF] = Value::nil();
         }
-        self.sp_match_regex = None;
     }
 
-    /// Stash the Regexp the next `save_capture_special_variables`
-    /// call should associate with the captures.
-    pub(crate) fn set_match_regex(&mut self, regex: Value) {
-        self.sp_match_regex = Some(regex);
+    /// Allocate `md` as the current scope's `$~`, with the Regexp
+    /// `origin` names attached, or marked as a substring search's.
+    fn store_match(&mut self, md: MatchDataInner, origin: MatchOrigin) {
+        let md = match origin {
+            MatchOrigin::Regexp(regex_val) => match regex_val.is_regex() {
+                Some(regex) => md.with_regex(regex),
+                None => md,
+            },
+            MatchOrigin::Substring => md.as_substring_match(),
+        };
+        // The allocation can collect, and nothing else may be holding
+        // the Regexp.
+        self.sp_match_regex = Some(origin);
+        let md_val = RValue::new_match_data_from_inner(md).pack();
+        self.sp_match_regex = None;
+        self.set_backref(md_val);
     }
 
     //pub(crate) fn push_break_barrier(&mut self, cfp: Cfp) {
@@ -5681,33 +5708,33 @@ impl Executor {
     }
 
     ///
-    /// Build a `MatchData` from `captures` + `haystack` (plus the
-    /// transient `sp_match_regex` stash) and store it as the current
-    /// scope's `$~` on the LEP's svar container.
+    /// Build a `MatchData` from `captures` + `haystack` and store it as
+    /// the current scope's `$~` on the LEP's svar container. `origin`
+    /// is the Regexp that matched (what `$~.regexp`, the group names
+    /// and `$~[:name]` read), or says that a String pattern did.
     ///
     pub(crate) fn save_capture_special_variables<'h>(
         &mut self,
         captures: &onigmo_regex::Captures<'h>,
         haystack: &str,
+        origin: MatchOrigin,
     ) {
-        let mut md =
+        let md =
             MatchDataInner::from_captures_snap(captures, haystack, self.resolve_haystack(haystack));
-        if let Some(regex_val) = self.sp_match_regex
-            && let Some(regex) = regex_val.is_regex()
-        {
-            md = md.with_regex(regex);
-        }
-        let md_val = RValue::new_match_data_from_inner(md).pack();
-        self.set_backref(md_val);
-        self.sp_match_regex = None;
+        self.store_match(md, origin);
     }
 
     /// As [`save_capture_special_variables`], from the group spans of a
     /// match read out of a caller-owned onigmo `Region` (a scan that
     /// reuses one region across matches and saves `$~` once, at the end).
-    pub(crate) fn save_capture_spans(&mut self, spans: &[Option<(usize, usize)>], haystack: &str) {
+    pub(crate) fn save_capture_spans(
+        &mut self,
+        spans: &[Option<(usize, usize)>],
+        haystack: &str,
+        origin: MatchOrigin,
+    ) {
         let resolved = self.resolve_haystack(haystack);
-        self.save_capture_spans_resolved(spans, haystack, resolved);
+        self.save_capture_spans_resolved(spans, haystack, resolved, origin);
     }
 
     /// As [`save_capture_spans`] for a `haystack` that borrows the bytes
@@ -5723,10 +5750,11 @@ impl Executor {
         spans: &[Option<(usize, usize)>],
         haystack: &str,
         owner: Value,
+        origin: MatchOrigin,
     ) {
         let resolved =
             Self::haystack_offset(owner, haystack).or_else(|| self.resolve_haystack(haystack));
-        self.save_capture_spans_resolved(spans, haystack, resolved);
+        self.save_capture_spans_resolved(spans, haystack, resolved, origin);
     }
 
     fn save_capture_spans_resolved(
@@ -5734,16 +5762,10 @@ impl Executor {
         spans: &[Option<(usize, usize)>],
         haystack: &str,
         resolved: Option<(Value, usize)>,
+        origin: MatchOrigin,
     ) {
-        let mut md = MatchDataInner::from_spans(spans, haystack, resolved);
-        if let Some(regex_val) = self.sp_match_regex
-            && let Some(regex) = regex_val.is_regex()
-        {
-            md = md.with_regex(regex);
-        }
-        let md_val = RValue::new_match_data_from_inner(md).pack();
-        self.set_backref(md_val);
-        self.sp_match_regex = None;
+        let md = MatchDataInner::from_spans(spans, haystack, resolved);
+        self.store_match(md, origin);
     }
 
     /// As [`save_capture_spans`], for a byte-oriented match against a
@@ -5753,16 +5775,10 @@ impl Executor {
         &mut self,
         spans: &[Option<(usize, usize)>],
         haystack: Value,
+        origin: MatchOrigin,
     ) {
-        let mut md = MatchDataInner::from_spans_bytes(spans, haystack);
-        if let Some(regex_val) = self.sp_match_regex
-            && let Some(regex) = regex_val.is_regex()
-        {
-            md = md.with_regex(regex);
-        }
-        let md_val = RValue::new_match_data_from_inner(md).pack();
-        self.set_backref(md_val);
-        self.sp_match_regex = None;
+        let md = MatchDataInner::from_spans_bytes(spans, haystack);
+        self.store_match(md, origin);
     }
 
     /// As [`save_capture_special_variables`], for byte-oriented
@@ -5772,36 +5788,22 @@ impl Executor {
         &mut self,
         captures: &onigmo_regex::CapturesBytes,
         haystack: Value,
+        origin: MatchOrigin,
     ) {
-        let mut md = MatchDataInner::from_captures_bytes(captures, haystack);
-        if let Some(regex_val) = self.sp_match_regex
-            && let Some(regex) = regex_val.is_regex()
-        {
-            md = md.with_regex(regex);
-        }
-        let md_val = RValue::new_match_data_from_inner(md).pack();
-        self.set_backref(md_val);
-        self.sp_match_regex = None;
+        let md = MatchDataInner::from_captures_bytes(captures, haystack);
+        self.store_match(md, origin);
     }
 
     /// As [`save_capture_special_variables`], for a match found by a
-    /// plain substring search for the String `pattern`: the whole-match
+    /// plain substring search for a String pattern: the whole-match
     /// byte range `start..end` of `haystack` (the String Value
     /// searched), no groups.
-    pub(crate) fn save_capture_span(
-        &mut self,
-        haystack: Value,
-        start: usize,
-        end: usize,
-        pattern: Value,
-    ) {
-        // No stashed Regexp can belong to a substring search (only the
-        // Regexp paths call `set_match_regex`); `$~.regexp` is served
-        // from `pattern` on demand instead.
-        let md = MatchDataInner::from_byte_span(haystack, start, end, pattern);
+    pub(crate) fn save_capture_span(&mut self, haystack: Value, start: usize, end: usize) {
+        // No Regexp belongs to a substring search; `$~.regexp` builds
+        // one from the matched text on demand.
+        let md = MatchDataInner::from_byte_span(haystack, start, end);
         let md_val = RValue::new_match_data_from_inner(md).pack();
         self.set_backref(md_val);
-        self.sp_match_regex = None;
     }
 
     /// `$_` reader — the last line read by `gets` / `readline` in the

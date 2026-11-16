@@ -1119,11 +1119,23 @@ fn regexp_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     if !rhs.initialized() {
         return Err(MonorubyErr::typeerr("uninitialized Regexp"));
     }
-    let same_source = lhs.source_bytes() == rhs.source_bytes();
-    let same_options =
-        (lhs.raw_option() & REGEXP_EQ_OPTION_MASK) == (rhs.raw_option() & REGEXP_EQ_OPTION_MASK);
-    let same_encoding = lhs.declared_encoding() == rhs.declared_encoding();
-    Ok(Value::bool(same_source && same_options && same_encoding))
+    Ok(Value::bool(reg_equal(lhs, &rhs)))
+}
+
+/// CRuby's `rb_reg_equal` on two initialized regexps: same source
+/// bytes, same `m` / `i` / `x` options, same encoding.
+pub(crate) fn reg_equal(lhs: &RegexpInner, rhs: &RegexpInner) -> bool {
+    lhs.source_bytes() == rhs.source_bytes()
+        && (lhs.raw_option() & REGEXP_EQ_OPTION_MASK) == (rhs.raw_option() & REGEXP_EQ_OPTION_MASK)
+        && lhs.declared_encoding() == rhs.declared_encoding()
+}
+
+/// CRuby's `reg_hash`: the source bytes and the options `reg_equal`
+/// compares.
+pub(crate) fn reg_hash(re: &RegexpInner, h: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    re.source_bytes().hash(h);
+    (re.raw_option() & REGEXP_EQ_OPTION_MASK).hash(h);
 }
 
 /// ### Regexp#hash
@@ -1134,12 +1146,10 @@ fn regexp_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 /// semantics.
 #[monoruby_builtin]
 fn regexp_hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    use std::hash::{Hash, Hasher};
+    use std::hash::Hasher;
     let self_ = lfp.self_val();
-    let re = self_.as_regexp_inner();
     let mut h = crate::value::seeded_hasher();
-    re.source_bytes().hash(&mut h);
-    (re.raw_option() & REGEXP_EQ_OPTION_MASK).hash(&mut h);
+    reg_hash(self_.as_regexp_inner(), &mut h);
     Ok(Value::from_hash_digest(h.finish()))
 }
 
@@ -1184,10 +1194,16 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         && rs.code_range() != CodeRange::SevenBit
         && let Some(native_enc) = RegexpInner::native_codec_for(&subject.as_rstring_inner())
     {
-        vm.set_match_regex(self_);
         let bytes = subject.as_rstring_inner().as_bytes();
         let hit = regex
-            .captures_bytes_from_pos(bytes, subject, native_enc, 0, vm)?
+            .captures_bytes_from_pos(
+                bytes,
+                subject,
+                native_enc,
+                0,
+                vm,
+                MatchOrigin::Regexp(self_),
+            )?
             .is_some();
         return Ok(Value::bool(hit));
     }
@@ -1207,8 +1223,11 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             &given_owned
         }
     };
-    vm.set_match_regex(self_);
-    let res = Value::bool(regex.find_one(vm, given)?.is_some());
+    let res = Value::bool(
+        regex
+            .find_one(vm, given, MatchOrigin::Regexp(self_))?
+            .is_some(),
+    );
     Ok(res)
 }
 
@@ -1370,9 +1389,15 @@ fn regexp_match(
         && rs.code_range() != CodeRange::SevenBit
         && let Some(native_enc) = RegexpInner::onigmo_encoding_for(rs.encoding())
     {
-        vm.set_match_regex(self_);
         let bytes = arg0.as_rstring_inner().as_bytes();
-        let res = match regex.captures_bytes_from_pos(bytes, arg0, native_enc, 0, vm)? {
+        let res = match regex.captures_bytes_from_pos(
+            bytes,
+            arg0,
+            native_enc,
+            0,
+            vm,
+            MatchOrigin::Regexp(self_),
+        )? {
             Some(captures) => {
                 let start = captures.pos(0).map_or(0, |(s, _)| s);
                 Value::integer(char_index_of_byte(arg0.as_rstring_inner(), start) as i64)
@@ -1394,8 +1419,7 @@ fn regexp_match(
             &given_owned
         }
     };
-    vm.set_match_regex(self_);
-    let res = match regex.find_one(vm, given)? {
+    let res = match regex.find_one(vm, given, MatchOrigin::Regexp(self_))? {
         Some(mat) => Value::integer(mat.start as i64),
         None => Value::nil(),
     };
@@ -1553,11 +1577,11 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
     // CRuby's `Regexp#match?` is documented as "doesn't update
     // `$~` and friends". Route through the predicate helper so we
-    // skip both the special-var save (`save_capture_special_variables`)
-    // and the per-vm match-regex stash that `set_match_regex`
-    // would otherwise leave behind for `Regexp.last_match`.
+    // skip the special-var save (`save_capture_special_variables`).
     let _ = vm;
-    Ok(Value::bool(RegexpInner::match_pred(&regex, given, char_pos)?))
+    Ok(Value::bool(RegexpInner::match_pred(
+        &regex, given, char_pos,
+    )?))
 }
 
 /// The subject of a match as an owned UTF-8 String, for the operands the
@@ -1645,11 +1669,15 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         } else {
             0
         };
-        vm.set_match_regex(self_);
         let bytes = arg0.as_rstring_inner().as_bytes();
-        let md = if let Some(captures) =
-            regex.captures_bytes_from_pos(bytes, arg0, native_enc, byte_pos, vm)?
-        {
+        let md = if let Some(captures) = regex.captures_bytes_from_pos(
+            bytes,
+            arg0,
+            native_enc,
+            byte_pos,
+            vm,
+            MatchOrigin::Regexp(self_),
+        )? {
             Value::new_matchdata_bytes(&captures, arg0, regex)
         } else {
             Value::nil()
@@ -1700,10 +1728,11 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         Some((pos, _)) => pos,
         None => 0, //return Ok(Value::bool(false)),
     };
-    vm.set_match_regex(self_);
-    let md = if let Some(captures) = regex.captures_from_pos(heystack, byte_pos, vm)? {
+    let md = if let Some(captures) =
+        regex.captures_from_pos(heystack, byte_pos, vm, MatchOrigin::Regexp(self_))?
+    {
         // `captures_from_pos` has just saved this match as `$~` (with
-        // the Regexp attached through the stash above), and that object
+        // the Regexp attached), and that object
         // *is* the result — `regexp.match(s).equal?($~)` holds in CRuby
         // — so hand it back rather than building a second MatchData
         // with a second haystack view. A builtin always runs inside a
@@ -1972,7 +2001,7 @@ fn regexp_tilde(
         Some(s) => s.to_string(),
         None => return Ok(Value::nil()),
     };
-    let res = match regex.find_one(vm, &s)? {
+    let res = match regex.find_one(vm, &s, MatchOrigin::Regexp(self_))? {
         Some(mat) => Value::integer(mat.start as i64),
         None => Value::nil(),
     };
