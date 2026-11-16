@@ -34,15 +34,6 @@ class Float
     end
   end
 
-  def remainder(other)
-    r = self % other
-    if r != 0 && (self < 0) != (other < 0)
-      r - other
-    else
-      r
-    end
-  end
-
   def numerator
     return self if nan? || infinite?
     to_r.numerator

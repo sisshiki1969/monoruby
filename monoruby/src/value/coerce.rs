@@ -104,6 +104,7 @@ impl Value {
 
     /// CRuby's `rb_check_array_type`: the Array `self` is or converts to
     /// by `to_ary`, `None` when it does not convert.
+    #[inline]
     pub(crate) fn check_array_type(
         &self,
         vm: &mut Executor,
@@ -120,6 +121,7 @@ impl Value {
 
     /// CRuby's `rb_check_string_type`: the String `self` is or converts
     /// to by `to_str`, `None` when it does not convert.
+    #[inline]
     pub(crate) fn check_string_type(
         &self,
         vm: &mut Executor,
@@ -133,6 +135,7 @@ impl Value {
 
     /// CRuby's `rb_check_hash_type`: the Hash `self` is or converts to
     /// by `to_hash`, `None` when it does not convert.
+    #[inline]
     pub(crate) fn check_hash_type(
         &self,
         vm: &mut Executor,

@@ -1491,18 +1491,24 @@ impl Value {
             return self;
         }
         // SAFETY: the type check above ensures this RValue is a String.
-        let inner = unsafe { rv.as_rstring() }.clone();
-        let mut dup = Value::string_from_inner(inner);
+        let inner = unsafe { rv.as_rstring() };
         // `rb_hash_key_str`: the copy of a bare String — no singleton
-        // class, no instance variables — is its fstring, which refuses
-        // a singleton class of its own; any other key gets a plain
-        // frozen copy (`rb_str_new_frozen`).
+        // class, no instance variables — is its fstring (`rb_fstring`),
+        // the one String of that content, which `-str` and a frozen
+        // literal answer too, and which refuses a singleton class of
+        // its own; any other key gets a plain frozen copy
+        // (`rb_str_new_frozen`).
         if bare && !rv.has_var_table() {
-            dup.set_fstring();
+            rvalue::fstring::intern(inner.as_bytes(), inner.encoding(), || {
+                let mut dup = Value::string_from_inner(inner.clone());
+                dup.set_fstring();
+                dup
+            })
         } else {
+            let mut dup = Value::string_from_inner(inner.clone());
             dup.set_frozen();
+            dup
         }
-        dup
     }
 
     pub fn array(ary: ArrayInner) -> Self {

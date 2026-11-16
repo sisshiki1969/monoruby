@@ -127,8 +127,11 @@ class Hash
       while i < __entry_count
         if __live_at(i)
           pair = yield __key_at(i), __value_at(i)
-          pair = pair.to_ary if !pair.is_a?(Array) && pair.respond_to?(:to_ary)
-          raise TypeError, "wrong element type #{pair.class} (expected array)" unless pair.is_a?(Array)
+          unless pair.is_a?(Array)
+            ary = __check_ary(pair)
+            raise TypeError, "wrong element type #{pair.class} (expected array)" if ary.nil?
+            pair = ary
+          end
           raise ArgumentError, "element has wrong array length (expected 2, was #{pair.size})" unless pair.size == 2
           h[pair[0]] = pair[1]
         end
@@ -294,8 +297,13 @@ class Hash
   def dig(key, *rest)
     val = self[key]
     return val if rest.empty? || val.nil?
-    raise TypeError, "#{val.class} does not have #dig method" unless val.respond_to?(:dig)
-    val.dig(*rest)
+    # `rb_obj_dig`: the next level is asked by `rb_check_funcall`.
+    return val.dig(*rest) if val.is_a?(::Array) || val.is_a?(::Hash)
+    undef_ = __undef
+    cur = val
+    val = __check_funcall(cur, :dig, undef_, *rest)
+    raise TypeError, "#{cur.class} does not have #dig method" if undef_.equal?(val)
+    val
   end
 
   def each_with_object(obj)
@@ -461,8 +469,7 @@ class Hash
   end
 
   def flatten(level = 1)
-    level = level.to_int if level.respond_to?(:to_int) && !level.is_a?(Integer)
-    raise TypeError, "no implicit conversion of #{__builtin_class_name(level)} into Integer" unless level.is_a?(Integer)
+    level = __to_int(level)
     to_a.flatten(level)
   end
 

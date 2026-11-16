@@ -78,6 +78,7 @@ mod converter;
 mod enumerator;
 mod exception;
 mod fiber;
+pub(crate) mod fstring;
 mod hash;
 pub(crate) mod io;
 mod io_buffer;
@@ -1064,7 +1065,13 @@ impl alloc::GCBox for RValue {
                 //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", &self),
                 ObjTy::MODULE | ObjTy::CLASS => ManuallyDrop::drop(&mut self.kind.class),
                 ObjTy::BIGNUM => ManuallyDrop::drop(&mut self.kind.bignum),
-                ObjTy::STRING => ManuallyDrop::drop(&mut self.kind.string),
+                ObjTy::STRING => {
+                    // An fstring leaves the weak table with its cell.
+                    if self.header.is_fstr() {
+                        fstring::forget(self);
+                    }
+                    ManuallyDrop::drop(&mut self.kind.string)
+                }
                 ObjTy::TIME => ManuallyDrop::drop(&mut self.kind.time),
                 ObjTy::ARRAY => ManuallyDrop::drop(&mut self.kind.array),
                 ObjTy::EXCEPTION => ManuallyDrop::drop(&mut self.kind.exception),

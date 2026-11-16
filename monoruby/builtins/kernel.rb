@@ -58,6 +58,51 @@ module Kernel
   # conversion through rb_check_funcall, which a `respond_to?` test
   # written here would only approximate (src/builtins/kernel.rs).
 
+  # (The helpers below raise through `::Kernel.raise`: they also run with a
+  # Thread as `self`, where a bare `raise` is the asynchronous
+  # `Thread#raise`.)
+  #
+  # CRuby's `rb_check_id` argument rule: a Symbol or a String as it is,
+  # anything else through `to_str` (asked by `rb_check_funcall`, so a
+  # `method_missing`-backed one counts).
+  def __check_id(val)
+    return val if val.is_a?(::Symbol) || val.is_a?(::String)
+    str = __check_str(val)
+    ::Kernel.raise ::TypeError, "#{val.inspect} is not a symbol nor a string" if str.nil?
+    str
+  end
+
+  # CRuby's `rb_convert_type(val, type, name, mid)` for the conversions
+  # that have no native helper: `val` when it is a `klass` already, else
+  # what `mid` answers — asked by `rb_check_funcall` — which must be one.
+  def __convert_type(val, klass, name, mid, implicit = true)
+    return val if klass === val
+    undef_ = __undef
+    res = __check_funcall(val, mid, undef_)
+    if undef_.equal?(res)
+      if implicit
+        ::Kernel.raise ::TypeError, "no implicit conversion of #{__builtin_class_name(val)} into #{name}"
+      end
+      ::Kernel.raise ::TypeError, "can't convert #{__builtin_class_name(val)} into #{name}"
+    end
+    unless klass === res
+      ::Kernel.raise ::TypeError, "can't convert #{val.class} to #{name} (#{val.class}##{mid} gives #{res.class})"
+    end
+    res
+  end
+
+  # CRuby's `do_coerce(&x, &y, TRUE)`: `y.coerce(x)`, asked by
+  # `rb_check_funcall`, has to answer a pair.
+  def __num_coerce(x, y)
+    undef_ = __undef
+    pair = __check_funcall(y, :coerce, undef_, x)
+    if undef_.equal?(pair)
+      ::Kernel.raise ::TypeError, "#{__coerce_failed_name(y)} can't be coerced into #{x.class}"
+    end
+    ::Kernel.raise ::TypeError, "coerce must return [x, y]" unless pair.is_a?(::Array) && pair.size == 2
+    pair
+  end
+
   # CRuby's NUM2LONG, which is how a C method reads a count, a size or a
   # limit: an Integer that fits a C long, a Float truncated (one outside
   # the range is a RangeError), anything else through #to_int. The
@@ -106,22 +151,14 @@ module Kernel
   # $VERBOSE / Warning[category], then delegate to Warning.warn so a
   # user-overridden Warning.warn takes effect (matches CRuby).
   def warn(*messages, uplevel: nil, category: nil)
+    unless category.nil?
+      # `rb_to_symbol_type`, then `Warning[category]`, which refuses an
+      # unknown category — before the messages are looked at.
+      category = __convert_type(category, Symbol, "Symbol", :to_sym)
+      Warning[category]
+    end
     messages = messages.flatten
     return nil if messages.empty?
-
-    unless category.nil?
-      if category.is_a?(Symbol)
-        # already a Symbol
-      elsif category.respond_to?(:to_sym)
-        category = category.to_sym
-        unless category.is_a?(Symbol)
-          raise TypeError, "can't convert to Symbol"
-        end
-      else
-        raise TypeError,
-              "no implicit conversion of #{__builtin_class_name(category)} into Symbol"
-      end
-    end
 
     # $VERBOSE == nil silences all warnings.
     return nil if $VERBOSE.nil?
@@ -280,11 +317,15 @@ module Kernel
     end
   end
 
-  def printf(fmt = nil, *args)
-    if fmt.respond_to?(:write)
-      fmt.write(format(*args))
-    elsif fmt
-      $stdout.write(format(fmt, *args))
+  # `rb_f_printf`: a first argument that is not a String is the stream.
+  def printf(*args)
+    return nil if args.empty?
+    if args[0].is_a?(String)
+      $stdout.write(format(*args))
+    else
+      out = args.shift
+      raise ArgumentError, "too few arguments" if args.empty?
+      out.write(format(*args))
     end
     nil
   end
@@ -317,9 +358,7 @@ module Kernel
         raise ArgumentError,
               "wrong number of arguments (given #{1 + args.size}, expected 1..3)"
       end
-      name = name.to_path if name.respond_to?(:to_path)
-      name = name.to_str if name.respond_to?(:to_str)
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(name)} into String" unless name.is_a?(String)
+      name = __to_path(name)
       File.open(name, *args, **kw, &block)
     end
   end
@@ -467,8 +506,8 @@ module Kernel
   # remember the handler so the method exists with CRuby's shape (private
   # instance method / public module function). `nil` clears it.
   def set_trace_func(handler)
-    unless handler.nil? || handler.respond_to?(:call)
-      raise TypeError, "trace_func needs to respond to call"
+    unless handler.nil? || handler.is_a?(Proc)
+      raise TypeError, "trace_func needs to be Proc"
     end
     handler
   end

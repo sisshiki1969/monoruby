@@ -659,19 +659,9 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             } else {
                 orig_elem
             };
-            let elem = if let Some(a) = elem.try_array_ty() {
+            // `rb_check_array_type`
+            let elem = if let Some(a) = elem.check_array_type(vm, globals)? {
                 a
-            } else if let Some(ret) =
-                crate::coerce::check_funcall(vm, globals, elem, IdentId::TO_ARY)?
-            {
-                if let Some(a) = ret.try_array_ty() {
-                    a
-                } else {
-                    return Err(MonorubyErr::typeerr(format!(
-                        "wrong element type {} at {i} (expected array)",
-                        elem.get_real_class_name(&globals.store)
-                    )));
-                }
             } else {
                 return Err(MonorubyErr::typeerr(format!(
                     "wrong element type {} at {i} (expected array)",
@@ -875,6 +865,10 @@ fn ary_and(lhs: Array, rhs: Array, vm: &mut Executor, globals: &mut Globals) -> 
 /// - self * sep -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2a.html]
+/// CRuby's `ARY_MAX_SIZE`: the element count past which an Array is
+/// "too big" whatever memory there is.
+const ARY_MAX_SIZE: usize = (i64::MAX / 8) as usize;
+
 #[monoruby_builtin]
 fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
@@ -884,6 +878,19 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             return Err(MonorubyErr::negative_argument());
         }
         let rhs = v as usize;
+        // `rb_ary_times`: a product past the Array size limit is an
+        // ArgumentError, and one the allocator refuses a NoMemoryError
+        // (`[1] * 2**40`) — `repeat` would abort the process on it.
+        let Some(len) = lhs
+            .len()
+            .checked_mul(rhs)
+            .filter(|len| *len <= ARY_MAX_SIZE)
+        else {
+            return Err(MonorubyErr::argumenterr("argument too big"));
+        };
+        if !crate::builtins::kernel::array_capa_available(len) {
+            return Err(crate::builtins::string::no_memory_error(vm, globals));
+        }
         let vec = lhs.repeat(rhs);
         Ok(Value::array_from_vec(vec))
     } else if let Some(inner) = arg.is_rstring_inner() {
@@ -941,6 +948,19 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             return Err(MonorubyErr::negative_argument());
         }
         let rhs = v as usize;
+        // `rb_ary_times`: a product past the Array size limit is an
+        // ArgumentError, and one the allocator refuses a NoMemoryError
+        // (`[1] * 2**40`) — `repeat` would abort the process on it.
+        let Some(len) = lhs
+            .len()
+            .checked_mul(rhs)
+            .filter(|len| *len <= ARY_MAX_SIZE)
+        else {
+            return Err(MonorubyErr::argumenterr("argument too big"));
+        };
+        if !crate::builtins::kernel::array_capa_available(len) {
+            return Err(crate::builtins::string::no_memory_error(vm, globals));
+        }
         let vec = lhs.repeat(rhs);
         Ok(Value::array_from_vec(vec))
     }

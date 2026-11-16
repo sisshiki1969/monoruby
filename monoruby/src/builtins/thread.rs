@@ -692,7 +692,7 @@ fn join_timeout(
 /// CRuby's `rb_num2dbl`: a Float from a number, `to_f` for other
 /// objects that have one, and its own wording for the ones that are
 /// never a number.
-pub(super) fn num2dbl(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f64> {
+pub(crate) fn num2dbl(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f64> {
     if v.is_str().is_some() {
         return Err(MonorubyErr::typeerr(
             "no implicit conversion to float from string",
@@ -710,13 +710,18 @@ pub(super) fn num2dbl(vm: &mut Executor, globals: &mut Globals, v: Value) -> Res
             "no implicit conversion to float from {special}"
         )));
     }
-    if v.try_fixnum().is_none()
-        && !v.is_float()
-        && globals.check_method(v, IdentId::TO_F).is_none()
-    {
-        return Err(MonorubyErr::cant_convert_into_float(&globals.store, v));
+    if let RV::Fixnum(_) | RV::Float(_) | RV::BigInt(_) = v.unpack() {
+        return v.coerce_to_f64(vm, globals);
     }
-    v.coerce_to_f64(vm, globals)
+    // `rb_convert_type_with_id(val, T_FLOAT, "Float", id_to_f)`: asked
+    // by `rb_check_funcall`, and the answer has to be a Float.
+    match crate::coerce::check_funcall(vm, globals, v, IdentId::TO_F)? {
+        None => Err(MonorubyErr::cant_convert_into_float(&globals.store, v)),
+        Some(res) => match res.try_float() {
+            Some(f) => Ok(f),
+            None => Err(MonorubyErr::cant_convert_error_f(globals, v, res)),
+        },
+    }
 }
 
 /// `Thread#join` / `#value`: in a non-blocking fiber with a fiber

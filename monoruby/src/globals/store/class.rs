@@ -1308,14 +1308,10 @@ impl ClassInfoTable {
         if org_class.is_singleton().is_some() {
             return Ok(org_class);
         }
-        match org_class.id() {
-            INTEGER_CLASS | FLOAT_CLASS | SYMBOL_CLASS => {
-                return Err(MonorubyErr::typeerr("can't define singleton"));
-            }
-            RANGE_CLASS | COMPLEX_CLASS => {
-                return Err(MonorubyErr::frozenerr("can't define singleton"));
-            }
-            _ => {}
+        // A Range or a Complex is frozen but an ordinary object: it gets
+        // a (frozen) singleton class like any other frozen object.
+        if let INTEGER_CLASS | FLOAT_CLASS | SYMBOL_CLASS = org_class.id() {
+            return Err(MonorubyErr::typeerr("can't define singleton"));
         }
         let mut singleton = self.new_singleton_class(org_class, obj, org_class.id());
         obj.change_class(singleton.id());

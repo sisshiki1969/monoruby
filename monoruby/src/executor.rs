@@ -903,6 +903,7 @@ impl Executor {
         self.temp_stack.last_mut().unwrap().as_array().push(v);
     }
 
+    #[inline]
     pub fn temp_hash_insert(&mut self, globals: &mut Globals, k: Value, v: Value) -> Result<()> {
         let mut h = self.temp_stack.last_mut().unwrap().as_hash();
         h.insert(k, v, self, globals)
@@ -2212,17 +2213,28 @@ impl Executor {
             return vec![];
         };
         // A block carries no lexical context of its own; it is written
-        // inside its mother (a method body, a class body or the top
-        // level), and inherits that scope.
-        if globals.store[iseq].lexical_context.is_empty() {
-            iseq = globals.store[iseq].mother().0;
+        // inside an enclosing body (a method body, a class body, a
+        // string eval body or the top level), and inherits that scope.
+        if globals.store[iseq].lexical_context.is_empty()
+            && let Some(owner) = globals.store[globals.store.lexical_owner(fid)].is_iseq()
+        {
+            iseq = owner;
         }
-        globals.store[iseq]
+        let mut nesting: Vec<_> = globals.store[iseq]
             .lexical_context
             .iter()
             .rev()
             .copied()
-            .collect()
+            .collect();
+        // The cref of an `instance_eval "..."` body is the receiver's
+        // class as it is now (see `instance_eval_frame`).
+        if let Some((eval_iseq, receiver)) = self.instance_eval_frame(globals)
+            && eval_iseq == iseq
+            && let Some(top) = nesting.first_mut()
+        {
+            *top = receiver.class();
+        }
+        nesting
     }
 
     pub(crate) fn context_visibility(&self) -> Visibility {
@@ -3131,6 +3143,7 @@ impl Executor {
             // runtime context is the receiver but the lexical scope is the
             // block's enclosing scope. Mirror `find_constant` / `def`'s use
             // of the iseq-recorded lexical context.
+            self.instance_eval_cref_for_definition(globals)?;
             self.definition_func_id(globals)
                 .lexical_class(&globals.store)
         } else {
@@ -3146,6 +3159,12 @@ impl Executor {
                 .expect_namespace(&globals.store)?
                 .id();
         }
+        // `rb_const_set` checks the namespace first: a frozen class or
+        // module takes no new constant.
+        globals.store[parent]
+            .get_module()
+            .as_val()
+            .ensure_not_frozen(&globals.store)?;
         // Re-initialization warning, matching CRuby's
         // `rb_const_set_visibility`: the same wording (and same `$stderr`
         // delivery) used by `Module#const_set` so mspec's `complain`
@@ -3233,25 +3252,33 @@ impl Executor {
     ///
     /// Singleton-class cref entries are skipped (CRuby's
     /// `vm_get_cvar_base`): `class << obj` bodies, `def self.f`, and
-    /// `instance_eval("...")` — whose eval iseq is stamped with the
-    /// receiver's singleton class — all resolve class variables in the
-    /// enclosing non-singleton scope (or fail with the toplevel error).
+    /// `instance_eval("...")` — whose eval iseq's innermost entry
+    /// stands for the receiver's singleton class — all resolve class
+    /// variables in the enclosing non-singleton scope (or fail with
+    /// the toplevel error).
     fn get_parent(&self, globals: &Globals) -> Result<Module> {
         let fid = self.cfp().lfp().func_id();
         if let Some(mut iseq_id) = globals.store[fid].is_iseq() {
             loop {
                 let iseq = &globals.store[iseq_id];
-                for parent in iseq.lexical_context.iter().rev() {
+                // The innermost entry of an `instance_eval "..."` body
+                // is its singleton cref whether or not the receiver has
+                // a singleton class yet.
+                let skip = iseq.instance_eval_class.is_some() as usize;
+                for parent in iseq.lexical_context.iter().rev().skip(skip) {
                     let module = globals[*parent].get_module();
                     if module.is_singleton().is_none() {
                         return Ok(module);
                     }
                 }
-                let (mother, _) = iseq.mother();
-                if mother == iseq_id {
+                // Outward one enclosing body at a time: a string eval
+                // body sits between a block written in it and the
+                // method that called the eval.
+                let enclosing = iseq.outer.unwrap_or(iseq.mother().0);
+                if enclosing == iseq_id {
                     break;
                 }
-                iseq_id = mother;
+                iseq_id = enclosing;
             }
         }
         Err(MonorubyErr::runtimeerr(
@@ -3777,9 +3804,57 @@ impl Executor {
     /// context, otherwise methods defined via string-eval cannot resolve
     /// class variables / constants scoped to the eval's receiver.
     ///
+    /// The frame of an `instance_eval "..."` body, when the nearest
+    /// Ruby frame is one: its iseq and its receiver.
+    ///
+    /// CRuby's cref for such a body holds the *receiver* and a
+    /// "singleton" flag, not a class: constants are read through
+    /// `CLASS_OF(self)` (`CREF_CLASS`) and the singleton class is made
+    /// only when something is defined (`CREF_CLASS_FOR_DEFINITION`).
+    /// Here the body's innermost `lexical_context` entry stands for
+    /// that cref and is re-stamped as the receiver's class moves: by
+    /// [`Self::instance_eval_cref_refresh`] where the nesting is read,
+    /// by [`Self::instance_eval_cref_for_definition`] where it is
+    /// defined into.
+    fn instance_eval_frame(&self, globals: &Globals) -> Option<(ISeqId, Value)> {
+        let lfp = self.cfp().nearest_ruby_frame().lfp();
+        // A block written in the body shares its cref (and, unless it
+        // was rebound, its receiver).
+        let fid = globals.store.lexical_owner(lfp.func_id());
+        let iseq = globals.store[fid].is_iseq()?;
+        globals.store[iseq].instance_eval_class?;
+        Some((iseq, lfp.self_val()))
+    }
+
+    /// `CREF_CLASS` of an `instance_eval "..."` body: the receiver's
+    /// class as it is now — its singleton class once it has one.
+    pub(crate) fn instance_eval_cref_refresh(&self, globals: &mut Globals) {
+        if let Some((iseq, receiver)) = self.instance_eval_frame(globals)
+            && let Some(top) = globals.store[iseq].lexical_context.last_mut()
+        {
+            *top = receiver.class();
+        }
+    }
+
+    /// `CREF_CLASS_FOR_DEFINITION` of an `instance_eval "..."` body: a
+    /// constant, a class or a method defined there lands on the
+    /// receiver's singleton class, which is made now — a TypeError for
+    /// a receiver that cannot have one.
+    pub(crate) fn instance_eval_cref_for_definition(&self, globals: &mut Globals) -> Result<()> {
+        if let Some((iseq, receiver)) = self.instance_eval_frame(globals) {
+            let singleton = globals.store.get_singleton(receiver)?.id();
+            if let Some(top) = globals.store[iseq].lexical_context.last_mut() {
+                *top = singleton;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn definition_func_id(&self, globals: &Globals) -> FuncId {
         let current = self.method_func_id();
-        let frame = self.cfp().lfp().func_id();
+        // A block written in a string eval body defines into that body's
+        // scope (`Store::lexical_owner`).
+        let frame = globals.store.lexical_owner(self.cfp().lfp().func_id());
         if frame != current
             && let Some(iseq) = globals.store[frame].is_iseq()
             && !globals.store[iseq].lexical_context.is_empty()
@@ -3863,6 +3938,9 @@ impl Executor {
         name: IdentId,
         func: FuncId,
     ) -> Result<Value> {
+        // In an `instance_eval "..."` body the method goes to the
+        // receiver's singleton class, which its nesting then names.
+        self.instance_eval_cref_for_definition(globals)?;
         let current_func = self.definition_func_id(globals);
         if let Some(iseq) = globals.store[func].is_iseq() {
             // Inherit the enclosing method's lexical context. The
@@ -5196,7 +5274,10 @@ impl Executor {
             // end` / `class Foo; end` inside such a block must use
             // the block's captured lexical scope. CRuby's
             // `rb_vm_get_cref` / `rb_const_set` does the same.
-            None => self.lexical_context_class_id(globals),
+            None => {
+                self.instance_eval_cref_for_definition(globals)?;
+                self.lexical_context_class_id(globals)
+            }
         };
         // A qualified definition (`class A::B`) is a qualified constant
         // access, so `private_constant`-marked names are rejected — CRuby
@@ -5248,6 +5329,11 @@ impl Executor {
                     }
                     None => globals.store.object_class(),
                 };
+                // The new class or module is a constant of *parent*.
+                globals.store[parent]
+                    .get_module()
+                    .as_val()
+                    .ensure_not_frozen(&globals.store)?;
                 let new_module = if is_module {
                     globals.define_module_with_identid(name, parent)
                 } else {

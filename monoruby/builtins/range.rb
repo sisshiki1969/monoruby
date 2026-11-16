@@ -228,10 +228,14 @@ class Range
     end
   end
 
+  # `range_eqq` is `r_cover_p`, the value-only test: a Range argument is
+  # compared like any other value (so it is not "inside" a numeric
+  # range), and a redefined `cover?` is not consulted. Only `cover?`
+  # itself has the range-in-range rule.
   def ===(val)
     fast = __cover_num_q(val)
     return fast unless fast.nil?
-    cover?(val)
+    __cover_val_q(val)
   end
 
   def include?(val)
@@ -246,9 +250,13 @@ class Range
       return true if val.is_a?(Numeric) || val.is_a?(Time)
       raise TypeError, "cannot determine inclusion in beginless/endless ranges"
     end
-    # A range with a linear endpoint uses cover? (continuous semantics).
-    if b.is_a?(Numeric) || e.is_a?(Numeric) || b.is_a?(Time) || e.is_a?(Time)
-      return cover?(val)
+    # A range with a linear endpoint is continuous: `r_cover_p`, the
+    # value-only test (not `cover?`, see `===`).
+    # So is one with an endpoint that answers `to_int`
+    # (`rb_check_to_integer` in `range_include_internal`).
+    if b.is_a?(Numeric) || e.is_a?(Numeric) || b.is_a?(Time) || e.is_a?(Time) ||
+       !__check_int(b).nil? || !__check_int(e).nil?
+      return __cover_val_q(val)
     end
     # Non-linear ranges with a nil endpoint cannot decide inclusion.
     if b.nil? || e.nil?
@@ -257,23 +265,16 @@ class Range
     # String ranges convert the argument with #to_str first (CRuby's
     # rb_check_string_type in rb_str_include_range_p).
     if b.is_a?(String) && e.is_a?(String) && !val.is_a?(String)
-      return false unless val.respond_to?(:to_str)
-      conv = val.to_str
-      unless conv.is_a?(String)
-        raise TypeError,
-              "can't convert #{val.class} to String (#{val.class}#to_str gives #{conv.class})"
-      end
-      val = conv
+      val = __check_str(val)
+      return false if val.nil?
     end
-    # Both endpoints present and non-linear: use succ iteration if possible.
-    if b.respond_to?(:succ)
-      self.each do |x|
-        return true if x == val
-      end
-      return false
+    # Both endpoints present and non-linear: `range_include` gives up
+    # and calls super, `Enumerable#include?`, which walks `each` — and
+    # `each` raises TypeError for a begin without `succ`.
+    self.each do |x|
+      return true if x == val
     end
-    # Non-succ types: fall back to cover? semantics.
-    cover?(val)
+    false
   end
   alias member? include?
 

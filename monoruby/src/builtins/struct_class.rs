@@ -127,11 +127,17 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             let s = arg0.coerce_to_rstring(vm, globals)?;
             let (bytes, enc) = (s.as_bytes(), s.encoding());
             if !super::module::is_const_name_bytes(bytes, enc) {
-                return Err(MonorubyErr::nameerr_with_bytes(
+                // `rb_name_err_raise(…, super, name)`: the NameError is
+                // about the name String, on the receiver.
+                let bytes = bytes.to_vec();
+                return Err(super::kernel::name_error_reflection_bytes(
+                    globals,
                     "identifier ",
-                    bytes,
+                    &bytes,
                     enc,
                     " needs to be constant",
+                    s.as_val(),
+                    lfp.self_val(),
                 ));
             }
             Some(super::string::intern_string(&globals.store, &s)?)

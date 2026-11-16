@@ -56,8 +56,11 @@ class Data
     r = {}
     h.each do |k, v|
       pair = yield k, v
-      pair = pair.to_ary if !pair.is_a?(Array) && pair.respond_to?(:to_ary)
-      raise TypeError, "wrong element type #{pair.class} (expected Array)" unless pair.is_a?(Array)
+      unless pair.is_a?(Array)
+        ary = __check_ary(pair)
+        raise TypeError, "wrong element type #{pair.class} (expected array)" if ary.nil?
+        pair = ary
+      end
       raise ArgumentError, "element has wrong array length (expected 2, was #{pair.size})" unless pair.size == 2
       r[pair[0]] = pair[1]
     end
@@ -93,15 +96,8 @@ class Data
         when ::Symbol then [k, k]
         when ::String then [k.to_sym, k]
         else
-          if k.respond_to?(:to_str)
-            s = k.to_str
-            unless s.is_a?(::String)
-              raise TypeError, "can't convert #{__builtin_class_name(k)} into String"
-            end
-            [s.to_sym, s]
-          else
-            raise TypeError, "#{k.inspect} is not a symbol nor a string"
-          end
+          s = __check_id(k)
+          [s.to_sym, s]
         end
       break unless ms.include?(sym)
       result[rkey] = send(sym)
@@ -156,13 +152,8 @@ class Data
     when Symbol then [k, ":#{k}"]
     when String then [k.to_sym, k.inspect]
     else
-      if k.respond_to?(:to_str)
-        s = k.to_str
-        raise TypeError, "can't convert #{__builtin_class_name(k)} into String" unless s.is_a?(String)
-        [s.to_sym, s.inspect]
-      else
-        raise TypeError, "#{k.inspect} is not a symbol nor a string"
-      end
+      s = __check_id(k)
+      [s.to_sym, s.inspect]
     end
   end
 end

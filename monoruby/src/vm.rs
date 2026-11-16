@@ -61,6 +61,8 @@ pub(crate) struct Vm {
     preempt: OnceCell<RefCell<crate::preempt::State>>,
     /// Every live `ObjectSpace::WeakMap`, as raw cells (not roots).
     weakmaps: RefCell<Vec<*mut RValue>>,
+    /// The fstrings no root holds (`rvalue::fstring`), as raw cells.
+    fstrings: RefCell<crate::value::rvalue::fstring::FstringTable>,
     /// See [`PROBE_MEMOS`].
     probe_memos: RefCell<Vec<Box<[u64; 2]>>>,
     /// Cached `ClassId` of `Enumerator::ArithmeticSequence`.
@@ -100,6 +102,7 @@ impl Vm {
             sched_rsp: Cell::new(0),
             preempt: OnceCell::new(),
             weakmaps: RefCell::new(Vec::new()),
+            fstrings: RefCell::new(Default::default()),
             probe_memos: RefCell::new(Vec::new()),
             as_class_id_cache: Cell::new(None),
             json_state_class: Cell::new(None),
@@ -307,6 +310,9 @@ pub(crate) static PREEMPT_STATE: VmField<RefCell<crate::preempt::State>> =
     VmField::new(|vm| vm.preempt.get_or_init(|| RefCell::new(crate::preempt::State::new())));
 
 pub(crate) static WEAKMAPS: VmField<RefCell<Vec<*mut RValue>>> = VmField::new(|vm| &vm.weakmaps);
+
+pub(crate) static FSTRINGS: VmField<RefCell<crate::value::rvalue::fstring::FstringTable>> =
+    VmField::new(|vm| &vm.fstrings);
 
 /// The JIT hash-probe key memos (see `gen_hash_probe`): addresses of the
 /// per-site `last_key` words, zeroed at every collection so a dead key's

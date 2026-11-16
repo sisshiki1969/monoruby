@@ -104,9 +104,7 @@ class Exception
     highlight = Exception.to_tty? if highlight.nil?
     msg = nil
     if respond_to?(:detailed_message)
-      dm = detailed_message(highlight: highlight, **opts)
-      dm = dm.to_str if !dm.is_a?(String) && dm.respond_to?(:to_str)
-      msg = dm if dm.is_a?(String)
+      msg = __check_str(detailed_message(highlight: highlight, **opts))
     end
     if msg.nil?
       # No usable #detailed_message: fall back to the class name.

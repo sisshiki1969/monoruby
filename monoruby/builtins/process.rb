@@ -9,16 +9,7 @@ module Process
   # runs at #value/#join time), which matches Open3's "drain the pipes first,
   # then read the exit status" ordering.
   def self.detach(pid)
-    unless pid.is_a?(Integer)
-      unless pid.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{__builtin_class_name(pid)} into Integer"
-      end
-      converted = pid.to_int
-      unless converted.is_a?(Integer)
-        raise TypeError, "can't convert #{pid.class} to Integer (#{pid.class}#to_int gives #{converted.class})"
-      end
-      pid = converted
-    end
+    pid = __num2long(pid)
     Process::Waiter.__detach(pid)
   end
 
