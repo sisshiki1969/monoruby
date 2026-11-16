@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-bbd76388.js";
+            window.path_to_searchindex_js = "../searchindex-606337d2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -305,7 +305,13 @@ end
 <code>FprSave</code> が予約済み(xmm 退避はその上に置かれる)なので、
 <code>AsmInst::ContFramePc</code> が <code>movq [rsp], pc</code>(a64: <code>str x10, [sp]</code>)を
 send / specialized send / yield / specialized yield の 4 箇所すべてで発行する。</li>
-<li><strong>invoker / native 経路</strong> — 書かれない(ゴミが残る)。読む側が必ず検証する。</li>
+<li><strong>invoker / native 経路</strong> — 書かれない(ゴミが残る)。読む側が必ず検証する。
+例外は二項演算子の汎用ヘルパー(<code>cmp_eq_values</code>, <code>add_values</code>, …)が演算子の
+ためにメソッドを呼ぶ場合で、<code>Executor::at_site</code> 経由の呼び出しは
+<code>Invokers::method_at_site</code> が<strong>演算子の</strong> PC(VM / JIT がヘルパー呼び出し前に
+<code>Executor::site_pc</code> へ書いたもの)を cont-frame として積む。send 系の
+オペコードではないので <code>entered_by</code> は <code>None</code> のままだが、<code>Kernel#caller</code> と
+バックトレースは演算子の行を読める(#1982)。</li>
 </ol>
 <h3 id="32-読み出しと検証"><a class="header" href="#32-読み出しと検証">3.2 読み出しと検証</a></h3>
 <p>読み手(<code>Kernel#caller</code> と本機構)は共通のパターンで検証する

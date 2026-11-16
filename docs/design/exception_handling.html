@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-bbd76388.js";
+            window.path_to_searchindex_js = "../searchindex-606337d2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -745,6 +745,37 @@ the <code>__raise_backtrace</code> intrinsic (raise-time capture only), so
 <code>set_backtrace(strings)</code> on a never-raised exception keeps
 <code>#backtrace_locations</code> nil, while an Array of <code>Thread::Backtrace::Location</code>
 sets both — matching CRuby 3.4+.</p>
+<h3 id="builtin-frames-where-they-are-shown-and-the-ones-that-never-existed"><a class="header" href="#builtin-frames-where-they-are-shown-and-the-ones-that-never-existed">Builtin frames: where they are shown, and the ones that never existed</a></h3>
+<p>A native frame has no position of its own. CRuby shows a C frame at the line
+of the nearest Ruby frame below it, and so does monoruby, at two points:</p>
+<ul>
+<li><code>push_builtin_trace</code> reads the pc the Ruby caller saved under the native
+frame (<code>native_call_site</code>, the cont-frame slot of <code>doc/super_resolution.md</code>
+§3). When the builtin was not entered by a send — it was invoked from
+another builtin — there is no such pc and the entry is pushed without a
+location.</li>
+<li><code>MonorubyErr::push_trace</code> then fills every location-less builtin entry at
+the tail of the trace with the location of the Ruby frame being pushed
+(<code>locate_native_frames</code>): the error has just unwound into that frame, so
+it <em>is</em> the nearest Ruby frame below them. This is what turns
+<code>&lt;internal&gt;:in 'Struct#=='</code> under <code>Struct#!=</code> into <code>t.rb:15:in 'Struct#=='</code> (#1982).</li>
+</ul>
+<p>Some builtins never have a frame: an operator’s generic helper computes
+<code>Integer#==</code>’s reverse dispatch (<code>1 == obj</code> calls <code>obj == 1</code>), <code>Float#==</code>’s
+and <code>String#==</code>’s the same way, and the default <code>!=</code> (<code>BasicObject#!=</code>,
+which calls <code>==</code> and negates). CRuby has a C frame for each. When an error
+comes back through one of them, the helper pushes the entry the frame would
+have pushed (<code>Executor::trace_elided_frame</code>, a location-less builtin entry
+that <code>locate_native_frames</code> then places) — nothing on the path that does not
+raise.</p>
+<p>The operator’s own line comes from the same slot a send writes: the VM and
+JIT code leave the operator’s pc in <code>Executor::site_pc</code> before they call a
+binary operator’s generic helper, and the method the helper invokes for the
+operator is entered through <code>Invokers::method_at_site</code>, which pushes that pc
+as the callee’s cont frame (<code>Executor::at_site</code>). <code>caller</code> inside <code>def ==</code>
+and the backtrace of what it raises then name the operator’s line for the
+calling frame, where an invoker boundary used to leave the line of the
+<code>def</code>.</p>
 <h3 id="cost-summary-for-the-hot-paths"><a class="header" href="#cost-summary-for-the-hot-paths">Cost summary for the hot paths</a></h3>
 <div class="table-wrapper">
 <table>
