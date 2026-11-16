@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-5a95720f.js";
+            window.path_to_searchindex_js = "searchindex-870a61a1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-9192be69.js"></script>
@@ -16026,6 +16026,14 @@ SmallVec / 共有 union への改修より前のものであり、§2 が挙げ�
 <code>Value::string_from_source_bytes</code>（<code>cr</code> 走査済み）+ <code>set_frozen()</code> で作って
 記憶する。目的は CRuby と同じく pragma 下で <code>"abc".equal?("abc")</code> を true に
 すること。</p>
+<p>プールされた String はヘッダフラグのビット 5 <code>FSTR_BIT</code>（<code>Header::is_fstr</code>）を
+持つ。これが CRuby の <code>RSTRING_FSTR</code> にあたり、「frozen かつ特異クラスを
+作れない」（<code>singleton_class</code> / <code>extend</code> / <code>def s.x</code> は <code>TypeError: can't define singleton</code>）を意味する。プールを通らずに同じ扱いになる String もこの
+ビットだけを立てる: <code>Symbol#name</code>、<code>Module#name</code>、そして Hash が unfrozen な
+素の String キー（特異クラスもインスタンス変数も無いもの）から作る frozen
+コピー（<code>Value::frozen_hash_key</code>、CRuby の <code>rb_hash_key_str</code>）。ビットは
+<code>NEWBORN_FLAG_MASK</code> の外にあるので、<code>dup</code> / <code>clone</code> したものは普通の String に
+なる。<code>Store::is_fstring</code> はこのビットを読むだけで、プールは引かない。</p>
 <h3 id="32--frozen_string_literal-true"><a class="header" href="#32--frozen_string_literal-true">3.2 <code># frozen_string_literal: true</code></a></h3>
 <p><code>emit_string</code> / <code>emit_bytes</code> は pragma 下で <code>emit_frozen_interned</code> →
 <code>BytecodeInst::FrozenLiteral</code>（<strong>そのままロード、複製しない</strong>）。pragma が
@@ -16317,7 +16325,7 @@ inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも
 <tr><td>共有の方針</td><td>積極的（<code>rb_str_new_shared</code>、<code>RSTRING_EMBED_LEN_MAX</code> 超の <code>rb_str_substr</code>）</td><td><code>len &gt; 32</code> <strong>かつ</strong>親が既に共有かヒープあふれのときだけ</td></tr>
 <tr><td>root</td><td>共有の親自身が共有でありうる（連鎖、<code>rb_str_shared_root</code> で解決）</td><td>隠れた <strong>frozen</strong> root。sharer は連鎖しない。frozen な親は自分自身が root</td></tr>
 <tr><td>CoW</td><td><code>rb_str_modify</code> → <code>str_make_independent</code></td><td><code>owned_mut()</code> / <code>uniquify()</code> の単一入口</td></tr>
-<tr><td><code>rb_fstring</code> の重複排除</td><td>pragma のリテラル<strong>と</strong>実行時の <code>-"str"</code> / <code>String#-@</code> / Hash キーに適用</td><td>コンパイル時のリテラルプール <code>Store::frozen_str_pool</code>（<code>(bytes, encoding)</code> キー）<strong>のみ</strong>。<code>String#-@</code> は素の <code>dup.freeze</code>（<strong>実行時の重複排除無し</strong>）。Hash の String キーは格納ごとに <code>dup</code> + <code>freeze</code> でインターンしない</td></tr>
+<tr><td><code>rb_fstring</code> の重複排除</td><td>pragma のリテラル<strong>と</strong>実行時の <code>-"str"</code> / <code>String#-@</code> / Hash キーに適用</td><td>コンパイル時のリテラルプール <code>Store::frozen_str_pool</code>（<code>(bytes, encoding)</code> キー）<strong>のみ</strong>。<code>String#-@</code> は素の <code>dup.freeze</code>（<strong>実行時の重複排除無し</strong>）。Hash の String キーは格納ごとに <code>dup</code> + <code>freeze</code> でインターンしない（コピーには <code>FSTR_BIT</code> を立てるので特異クラスは CRuby と同じく作れないが、<code>-"k"</code> と同一オブジェクトにはならない）</td></tr>
 <tr><td>chilled リテラル</td><td>CRuby 3.4 の <code>STR_CHILLED</code></td><td>ヘッダフラグのビット 7 <code>CHILLED_LITERAL_BIT</code>、<code>Symbol#to_s</code> 用の別の <code>is_chilled</code> ビット、<code>--debug-frozen-string-literal</code> の出自テーブル</td></tr>
 <tr><td>coderange</td><td><code>ENC_CODERANGE_*</code> を RBasic のフラグにキャッシュ</td><td>JIT 既知オフセットの <code>Cell&lt;CodeRange&gt;</code>（<code>repr(u8)</code>）。<strong>遅延</strong>計算で、追記・部分文字列・repeat では再計算でなく O(1) で畳む</td></tr>
 <tr><td><code>String#hash</code></td><td>seeded SipHash。fstring 側でキャッシュ</td><td>seeded SipHash（<code>DefaultHasher</code> + プロセスごとの <code>RandomState</code>）。<strong>String ごとのキャッシュ無し</strong>（2026-09 の yjit-bench 調査が未解決コストとして挙げる）</td></tr>
