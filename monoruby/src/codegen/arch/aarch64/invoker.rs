@@ -228,12 +228,24 @@ impl JitModule {
         );
     }
 
-    pub(in crate::codegen) fn method_invoker(&mut self) -> MethodInvoker {
+    /// `at_site`: the variant an operator's generic helper calls a method
+    /// through (`Executor::at_site`) — it leaves a cont frame
+    /// under the callee holding the operator's pc (`Executor::site_pc`),
+    /// as a send would, so that the callee's `Cfp::caller_pc_slot` is the
+    /// line of the operator. See the x86-64 `method_invoker`.
+    pub(in crate::codegen) fn method_invoker(&mut self, at_site: bool) -> MethodInvoker {
         let codeptr = self.jit.get_current_address();
         let fdata = X9;
         // AAPCS64 in: x0 exec, x1 globals, x2 funcid, x3 self, x4 args,
         // x5 len, x6 block, x7 kw (Option<Hashmap>).
         self.a64_invoker_prologue();
+        if at_site {
+            monoasm_arm64!(&mut self.jit,
+                // The cont frame: the operator's pc at [sp], a pad word.
+                ldr x10, [x(EXEC.0), #(EXECUTOR_SITE_PC as u32)];
+                stp x10, x10, [sp, #(-16)]!;
+            );
+        }
         self.a64_get_func_data_x2();
         // frame setup (method): FB = sp - (RSP_LOCAL_FRAME + LFP_SELF).
         let fb = X12;
@@ -248,6 +260,11 @@ impl JitModule {
             str x13, [x(fb.0), #(32)];  // LFP_OUTER = 0
         );
         self.a64_invoker_args_and_call(true);
+        if at_site {
+            monoasm_arm64!(&mut self.jit,
+                add sp, sp, #(16);
+            );
+        }
         self.a64_invoker_epilogue();
         // SAFETY: codeptr points at an extern "C" fn with the MethodInvoker ABI.
         unsafe { std::mem::transmute_copy::<*mut u8, MethodInvoker>(&codeptr.as_ptr()) }

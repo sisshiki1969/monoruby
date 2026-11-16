@@ -654,10 +654,7 @@ fn weakkeymap_find(
     let key_hash = vm.invoke_method_inner(globals, hash, key, &[], None, None)?;
     for (i, k) in entries.into_iter().enumerate() {
         let k_hash = vm.invoke_method_inner(globals, hash, k, &[], None, None)?;
-        if !vm
-            .invoke_method_inner(globals, IdentId::_EQ, k_hash, &[key_hash], None, None)?
-            .as_bool()
-        {
+        if !vm.eq_values_funcall(globals, k_hash, key_hash)?.as_bool() {
             continue;
         }
         // `#eql?` goes to the key being looked up, not the one held:

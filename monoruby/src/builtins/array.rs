@@ -1302,7 +1302,7 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
         );
         if respond.is_ok_and(|v| v.as_bool()) {
             return vm
-                .invoke_method_inner(globals, IdentId::_EQ, arg, &[self_val], None, None)
+                .eq_values_funcall(globals, arg, self_val)
                 .map(|v| Value::bool(v.as_bool()));
         }
         return Ok(Value::bool(false));

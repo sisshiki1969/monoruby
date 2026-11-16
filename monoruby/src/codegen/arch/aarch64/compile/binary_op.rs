@@ -599,6 +599,7 @@ impl Codegen {
         rhs: SlotId,
         func: crate::executor::BinaryOpFn,
         is_func_call: bool,
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
@@ -614,6 +615,9 @@ impl Codegen {
         self.a64_frame_load(3, lfp, off_r); // x3 = rhs
         monoasm_arm64!(&mut self.jit,
             mov x4, (is_func_call as u64); // is_func_call
+            // The operator's pc, for the helper (`Executor::site_pc`).
+            mov x9, (pc.as_ptr() as u64);
+            str x9, [x19, #(EXECUTOR_SITE_PC as u32)];
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;
@@ -639,6 +643,7 @@ impl Codegen {
         kind: CmpKind,
         func: crate::executor::BinaryOpFn,
         is_func_call: bool,
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     ) -> bool {
         let lfp = GP::R14.a64().0; // x22
@@ -681,6 +686,9 @@ impl Codegen {
             mov x0, x19;                 // vm
             mov x1, x20;                 // globals (x2=lhs, x3=rhs intact)
             mov x4, (is_func_call as u64); // is_func_call
+            // The operator's pc, for the helper (`Executor::site_pc`).
+            mov x9, (pc.as_ptr() as u64);
+            str x9, [x19, #(EXECUTOR_SITE_PC as u32)];
         );
         // Save the live FP pool only on the slow path: the C call clobbers the
         // caller-saved d2.. pool regs, but the inline fast path above (which

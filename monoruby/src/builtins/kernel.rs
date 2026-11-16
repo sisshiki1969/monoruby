@@ -5476,7 +5476,7 @@ fn register_finalizer(
         .map(|(_, c)| *c)
         .collect();
     for c in existing {
-        if vm.invoke_eq(globals, c, callable)? {
+        if vm.eq_values_funcall(globals, c, callable)?.as_bool() {
             return Ok(c);
         }
     }

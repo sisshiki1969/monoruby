@@ -638,6 +638,41 @@ the `__raise_backtrace` intrinsic (raise-time capture only), so
 `#backtrace_locations` nil, while an Array of `Thread::Backtrace::Location`
 sets both — matching CRuby 3.4+.
 
+### Builtin frames: where they are shown, and the ones that never existed
+
+A native frame has no position of its own. CRuby shows a C frame at the line
+of the nearest Ruby frame below it, and so does monoruby, at two points:
+
+- `push_builtin_trace` reads the pc the Ruby caller saved under the native
+  frame (`native_call_site`, the cont-frame slot of `doc/super_resolution.md`
+  §3). When the builtin was not entered by a send — it was invoked from
+  another builtin — there is no such pc and the entry is pushed without a
+  location.
+- `MonorubyErr::push_trace` then fills every location-less builtin entry at
+  the tail of the trace with the location of the Ruby frame being pushed
+  (`locate_native_frames`): the error has just unwound into that frame, so
+  it *is* the nearest Ruby frame below them. This is what turns
+  `<internal>:in 'Struct#=='` under `Struct#!=` into `t.rb:15:in
+  'Struct#=='` (#1982).
+
+Some builtins never have a frame: an operator's generic helper computes
+`Integer#==`'s reverse dispatch (`1 == obj` calls `obj == 1`), `Float#==`'s
+and `String#==`'s the same way, and the default `!=` (`BasicObject#!=`,
+which calls `==` and negates). CRuby has a C frame for each. When an error
+comes back through one of them, the helper pushes the entry the frame would
+have pushed (`Executor::trace_elided_frame`, a location-less builtin entry
+that `locate_native_frames` then places) — nothing on the path that does not
+raise.
+
+The operator's own line comes from the same slot a send writes: the VM and
+JIT code leave the operator's pc in `Executor::site_pc` before they call a
+binary operator's generic helper, and the method the helper invokes for the
+operator is entered through `Invokers::method_at_site`, which pushes that pc
+as the callee's cont frame (`Executor::at_site`). `caller` inside `def ==`
+and the backtrace of what it raises then name the operator's line for the
+calling frame, where an invoker boundary used to leave the line of the
+`def`.
+
 ### Cost summary for the hot paths
 
 | scenario                              | backtrace cost in monoruby                          |

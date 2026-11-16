@@ -513,7 +513,7 @@ fn case_eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     if self_val.id() == other.id() {
         return Ok(Value::bool(true));
     }
-    vm.invoke_method_inner(globals, IdentId::_EQ, self_val, &[other], None, None)
+    vm.eq_values_funcall(globals, self_val, other)
 }
 
 ///

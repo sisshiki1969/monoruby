@@ -378,6 +378,7 @@ impl MonorubyErr {
     }
 
     pub fn push_trace(&mut self, loc: Loc, sourceinfo: SourceInfoRef, fid: FuncId) {
+        self.locate_native_frames(loc, &sourceinfo);
         self.trace.push((Some((loc, sourceinfo)), Some(fid), None));
     }
 
@@ -390,12 +391,59 @@ impl MonorubyErr {
         fid: FuncId,
         frame_self: Value,
     ) {
+        self.locate_native_frames(loc, &sourceinfo);
         let hint = Store::label_hint(Some(frame_self));
         self.trace.push((Some((loc, sourceinfo)), Some(fid), hint));
     }
 
+    ///
+    /// Give the native frames just above the frame being pushed its
+    /// position.
+    ///
+    /// A C frame has no line of its own: CRuby shows it at the line the
+    /// nearest Ruby frame below it is stopped at (`-e:1:in 'Array#=='`).
+    /// A native frame that knows its call site is pushed with it; one
+    /// that does not — entered from an operator or a conversion rather
+    /// than from a send, or computed with no frame at all
+    /// (`Executor::trace_elided_frame`) — waits here for the frame that
+    /// called it, which is the next one the error unwinds through.
+    ///
+    fn locate_native_frames(&mut self, loc: Loc, sourceinfo: &SourceInfoRef) {
+        for entry in self.trace.iter_mut().rev() {
+            match entry {
+                (pos @ None, Some(_), _) => *pos = Some((loc, sourceinfo.clone())),
+                _ => break,
+            }
+        }
+    }
+
     pub fn push_internal_trace(&mut self, fid: FuncId) {
         self.trace.push((None, Some(fid), None));
+    }
+
+    /// [`Self::push_internal_trace`] for a frame whose `self` is known.
+    pub fn push_internal_trace_with_self(&mut self, fid: FuncId, frame_self: Value) {
+        let hint = Store::label_hint(Some(frame_self));
+        self.trace.push((None, Some(fid), hint));
+    }
+
+    ///
+    /// Whether this is an exception whose backtrace is being built as it
+    /// unwinds — not one of the control-flow carriers (`return` out of a
+    /// block, `break`, `throw`, …) or the scheduler's internal markers,
+    /// which have none.
+    ///
+    pub(crate) fn is_traced(&self) -> bool {
+        !matches!(
+            self.kind,
+            MonorubyErrKind::MethodReturn(..)
+                | MonorubyErrKind::BlockBreak(..)
+                | MonorubyErrKind::Throw(..)
+                | MonorubyErrKind::FiberKill
+                | MonorubyErrKind::Retry
+                | MonorubyErrKind::Redo
+        ) && !self.is_signal_interrupt()
+            && !self.is_would_block_interrupt()
     }
 
     /// The frame of a callee whose arguments could not be bound (a wrong

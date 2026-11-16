@@ -472,7 +472,7 @@ fn div_floor(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // `_raw`: this *is* `Float#==`, so it must not re-dispatch `==`.
     let b = vm
-        .eq_values_vis_raw(globals, lfp.self_val(), lfp.arg(0), true)?
+        .eq_values_raw(globals, lfp.self_val(), lfp.arg(0))?
         .as_bool();
     Ok(Value::bool(b))
 }

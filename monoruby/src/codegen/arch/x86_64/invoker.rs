@@ -14,7 +14,18 @@ impl JitModule {
         unsafe { std::mem::transmute(codeptr.as_ptr()) }
     }
 
-    pub(in crate::codegen) fn method_invoker(&mut self) -> MethodInvoker {
+    ///
+    /// The method invoker.
+    ///
+    /// `at_site`: the variant an operator's generic helper calls a method
+    /// through (`Executor::at_site`). A send leaves a cont
+    /// frame under the callee — its pc and a pad word — and this variant
+    /// does the same with the operator's pc (`Executor::site_pc`), so
+    /// that the callee's `Cfp::caller_pc_slot` is the line of the
+    /// operator. Under the plain variant that slot is one of the
+    /// registers the prologue saved.
+    ///
+    pub(in crate::codegen) fn method_invoker(&mut self, at_site: bool) -> MethodInvoker {
         let codeptr = self.jit.get_current_address();
 
         #[cfg(feature = "perf")]
@@ -29,14 +40,29 @@ impl JitModule {
         // r10: Option<Hashmap>
         // r11: Option<BlockHandler>
         let error_exit = self.jit.label();
+        let site_exit = self.jit.label();
         monoasm! { &mut self.jit,
             movq r10, [rsp + 16];
             movq r11, [rsp + 8];
         }
         self.invoker_prologue(&error_exit);
+        if at_site {
+            monoasm! { &mut self.jit,
+                // The cont frame: pad, then the operator's pc.
+                movq rax, [rbx + (EXECUTOR_SITE_PC)];
+                pushq rax;
+                pushq rax;
+            }
+        }
         self.invoker_frame_setup(false, true);
-        self.invoker_args_setup(&error_exit, true);
+        self.invoker_args_setup(if at_site { &site_exit } else { &error_exit }, true);
         self.call_invoker();
+        if at_site {
+            monoasm! { &mut self.jit,
+            site_exit:
+                addq rsp, 16;
+            }
+        }
         self.invoker_epilogue(&error_exit);
 
         #[cfg(feature = "perf")]

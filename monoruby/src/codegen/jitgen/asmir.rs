@@ -1508,6 +1508,7 @@ impl AsmIr {
             rhs,
             func,
             is_func_call,
+            pc: state.pc(),
             using_fpr,
         });
     }
@@ -1536,6 +1537,7 @@ impl AsmIr {
             kind,
             func,
             is_func_call,
+            pc: state.pc(),
             using_fpr,
         });
     }
@@ -3376,6 +3378,9 @@ pub(super) enum AsmInst {
         /// method-visibility fallback (a private operator is callable
         /// only from a func-call site).
         is_func_call: bool,
+        /// The operator's pc, left in `Executor::site_pc` for the helper:
+        /// the call site of whatever method it has to call.
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     },
 
@@ -3391,6 +3396,8 @@ pub(super) enum AsmInst {
         kind: CmpKind,
         func: crate::executor::BinaryOpFn,
         is_func_call: bool,
+        /// As in [`AsmInst::GenericBinOp`]; stored on the slow path only.
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     },
 

@@ -413,8 +413,7 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
         }
         _ => {
             // Reverse dispatch: try rhs == lhs
-            let eq_id = IdentId::_EQ;
-            let result = vm.invoke_method_inner(globals, eq_id, rhs, &[lhs], None, None)?;
+            let result = vm.eq_values_funcall(globals, rhs, lhs)?;
             return Ok(Value::bool(result.as_bool()));
         }
     };

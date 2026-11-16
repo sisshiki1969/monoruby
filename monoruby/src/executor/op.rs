@@ -249,7 +249,7 @@ macro_rules! cmp_values {
                 is_func_call: bool,
             ) -> Option<Value> {
                 if vm.dispatch_redefined_op(globals, lhs.class(), $op_str) {
-                    return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
+                    return vm.invoke_method_at_site(globals, $op_str, is_func_call, lhs, &[rhs]);
                 }
                 [<cmp_ $op _values_raw>](vm, globals, lhs, rhs, is_func_call)
             }
@@ -339,7 +339,7 @@ macro_rules! cmp_values {
                         // Original receiver `lhs`: honor the call site's
                         // func-call flag so a private relational operator is
                         // callable only from `self OP x` (matches CRuby).
-                        return vm.invoke_method(globals, $op_str, is_func_call, lhs, &[rhs], None, None);
+                        return vm.invoke_method_at_site(globals, $op_str, is_func_call, lhs, &[rhs]);
                     }
                 };
                 Some(Value::bool(b))
@@ -359,14 +359,94 @@ cmp_values!(
     (lt, IdentId::_LT)
 );
 
+///
+/// How the builtin `==` of `nil`, a boolean, an Integer, a Float, a Symbol
+/// or a String answers for one pair of operands.
+///
+enum EqArm {
+    /// Decided by the two values alone.
+    Decided(bool),
+    /// The receiver hands the question to the argument — `rhs == lhs`,
+    /// asked as C asks it and coerced to a boolean: `num_equal` for the
+    /// numbers, `rb_str_equal` for a String whose argument responds to
+    /// `to_str`.
+    Reverse,
+    /// The receiver is none of those: its `==` is a lookup.
+    Dispatch,
+}
+
+///
+/// The builtin `==` of the classes whose values the operator answers for
+/// without a call. Runs no Ruby code.
+///
+#[inline(always)]
+fn eq_arm(store: &Store, lhs: Value, rhs: Value) -> EqArm {
+    // See `cmp_values`: Integers that fit an `i128` compare there.
+    if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
+        return EqArm::Decided(l == r);
+    }
+    let b = match (lhs.unpack(), rhs.unpack()) {
+        (RV::Nil, RV::Nil) => true,
+        (RV::Nil, _) => false,
+        (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
+        (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
+        (RV::Fixnum(lhs), RV::Float(rhs)) => {
+            fixnum_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
+        }
+        (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
+        (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
+        (RV::BigInt(lhs), RV::Float(rhs)) => {
+            bigint_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
+        }
+        (RV::Float(lhs), RV::Fixnum(rhs)) => {
+            fixnum_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
+        }
+        (RV::Float(lhs), RV::BigInt(rhs)) => {
+            bigint_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
+        }
+        (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
+        // CRuby's `num_equal`: `rhs == lhs`.
+        (RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_), _) => return EqArm::Reverse,
+        (RV::Bool(lhs), RV::Bool(rhs)) => lhs.eq(&rhs),
+        (RV::Bool(_), _) => false,
+        (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs.eq(&rhs),
+        (RV::Symbol(_), _) => false,
+        (RV::String(lhs), RV::String(rhs)) => {
+            // CRuby `String#==` is content-equal AND encoding-
+            // compatible: same bytes with incompatible encodings
+            // (e.g. UTF-8 vs UTF-32LE on non-ASCII content)
+            // compare *unequal*. The empty-string special case
+            // in `compatible_encoding` keeps `"".UTF-16BE ==
+            // "".UTF-8` true.
+            lhs.eq(rhs) && lhs.compatible_encoding(rhs).is_some()
+        }
+        (RV::String(_), _) => {
+            // CRuby's `String#==` dispatches to `rhs == self` when
+            // the rhs *responds to* `to_str` (it does NOT actually
+            // call `to_str`). Without this branch, the fast path
+            // would short-circuit to `false` and never reach the
+            // builtin, masking custom `==` defined alongside
+            // `to_str` on a mock. `no_to_str` is a version-stamped
+            // memo, so the common `str == nil` case costs a load
+            // instead of a method-table probe.
+            if store.no_to_str(rhs.class(), Globals::class_version()) {
+                false
+            } else {
+                return EqArm::Reverse;
+            }
+        }
+        _ => return EqArm::Dispatch,
+    };
+    EqArm::Decided(b)
+}
+
 impl Executor {
     ///
-    /// `==` with CRuby-faithful result-value semantics: the fast paths
-    /// produce booleans, and a *reverse* coercion dispatch (`1 == obj`
-    /// re-asking `obj == 1`) coerces the answer to a boolean exactly like
-    /// CRuby's `rb_equal`, but a direct dispatch of the receiver's own
-    /// `==` returns the method's value untouched (`obj == 1` evaluates to
-    /// whatever `obj.==` returned).
+    /// `==` as a builtin asks it — CRuby's `rb_funcall(lhs, idEq, 1, rhs)`,
+    /// which is what `rb_equal` comes down to once the two are not the
+    /// same object: a private `==` is callable, no refinement is in
+    /// effect, and a receiver with no `==` gets `method_missing`. The
+    /// method's value is returned untouched.
     ///
     pub(crate) fn eq_values(
         &mut self,
@@ -374,15 +454,23 @@ impl Executor {
         lhs: Value,
         rhs: Value,
     ) -> Result<Value> {
-        // Internal callers (`Array#==`, `Hash#==`, …) compare with funcall
-        // semantics, matching CRuby's `rb_equal`.
-        self.eq_values_vis(globals, lhs, rhs, true)
+        self.eq_values_funcall(globals, lhs, rhs)
     }
 
-    /// `==` dispatch honoring the call site's func-call flag for a
-    /// user-defined `==` (a private `==` is callable only from a func-call
-    /// site). The numeric/String *reverse* dispatches keep funcall semantics
-    /// (`rb_equal`), so only the direct receiver dispatch consults the flag.
+    ///
+    /// The `==` operator as written at a call site: the fast paths
+    /// produce booleans, a *reverse* dispatch (`1 == obj` re-asking `obj
+    /// == 1`) coerces the answer to a boolean as CRuby's `num_equal`
+    /// does, and a direct dispatch of the receiver's own `==` returns the
+    /// method's value untouched (`obj == 1` evaluates to whatever
+    /// `obj.==` returned).
+    ///
+    /// The direct dispatch is the one made on behalf of the scope that
+    /// wrote the operator: it honors the call site's func-call flag (a
+    /// private `==` is callable only from a func-call site) and the
+    /// refinements that scope activated. The reverse dispatches are the
+    /// builtin's own and ask as C does ([`Self::eq_values_funcall`]).
+    ///
     pub(crate) fn eq_values_vis(
         &mut self,
         globals: &mut Globals,
@@ -394,7 +482,9 @@ impl Executor {
         // booleans / Integer / Float / Symbol / String, so a redefined `==`
         // on the receiver's class has to take over here.
         if self.dispatch_redefined_op(globals, lhs.class(), IdentId::_EQ) {
-            return self.invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None, None);
+            return self.at_site(|vm| {
+                vm.invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None, None)
+            });
         }
         // The String arms below are `String#==`'s own; an instance of a
         // subclass takes the lookup, so a `==` the subclass defines wins
@@ -404,90 +494,89 @@ impl Executor {
             && rv.ty() == ObjTy::STRING
             && rv.class() != STRING_CLASS
         {
-            return self.invoke_eq_raw_vis(globals, lhs, rhs, is_func_call);
+            return self.at_site(|vm| vm.invoke_eq_raw_vis(globals, lhs, rhs, is_func_call));
         }
-        self.eq_values_vis_raw(globals, lhs, rhs, is_func_call)
+        match eq_arm(&globals.store, lhs, rhs) {
+            EqArm::Decided(b) => Ok(Value::bool(b)),
+            // The builtin `==` runs here with no frame of its own.
+            EqArm::Reverse => {
+                self.at_site(|vm| vm.eq_reverse(globals, lhs, rhs, Some(IdentId::_EQ)))
+            }
+            EqArm::Dispatch => {
+                self.at_site(|vm| vm.invoke_eq_raw_vis(globals, lhs, rhs, is_func_call))
+            }
+        }
     }
 
     /// `==` without the basic-op check — this is the body of the builtin
-    /// `Float#==`, reached only through a real lookup. Re-dispatching `==`
-    /// from inside it would send an alias of the original straight back to
-    /// the redefinition and recurse forever.
-    pub(crate) fn eq_values_vis_raw(
+    /// `Integer#==` / `Float#==` / `String#==`, reached only through a
+    /// real lookup. Re-dispatching `==` from inside it would send an alias
+    /// of the original straight back to the redefinition and recurse
+    /// forever.
+    pub(crate) fn eq_values_raw(
         &mut self,
         globals: &mut Globals,
         lhs: Value,
         rhs: Value,
-        is_func_call: bool,
     ) -> Result<Value> {
-        // See `cmp_values`: Integers that fit an `i128` compare there.
-        if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
-            return Ok(Value::bool(l == r));
+        match eq_arm(&globals.store, lhs, rhs) {
+            EqArm::Decided(b) => Ok(Value::bool(b)),
+            EqArm::Reverse => self.eq_reverse(globals, lhs, rhs, None),
+            EqArm::Dispatch => self.funcall_eq_dispatch(globals, lhs.class(), lhs, rhs),
         }
-        let b = match (lhs.unpack(), rhs.unpack()) {
-            (RV::Nil, RV::Nil) => true,
-            (RV::Nil, _) => false,
-            (RV::Fixnum(lhs), RV::Fixnum(rhs)) => lhs.eq(&rhs),
-            (RV::Fixnum(lhs), RV::BigInt(rhs)) => BigInt::from(lhs).eq(rhs),
-            (RV::Fixnum(lhs), RV::Float(rhs)) => {
-                fixnum_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
-            }
-            (RV::Fixnum(_), _) => {
-                // Reverse dispatch: try rhs == lhs (boolean-coerced, like
-                // CRuby's num_equal -> rb_equal)
-                return Ok(Value::bool(self.invoke_eq(globals, rhs, lhs)?));
-            }
-            (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
-            (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
-            (RV::BigInt(lhs), RV::Float(rhs)) => {
-                bigint_cmp_float(lhs, rhs) == Some(std::cmp::Ordering::Equal)
-            }
-            (RV::BigInt(_), _) => {
-                // Reverse dispatch: try rhs == lhs (boolean-coerced)
-                return Ok(Value::bool(self.invoke_eq(globals, rhs, lhs)?));
-            }
-            (RV::Float(lhs), RV::Fixnum(rhs)) => {
-                fixnum_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
-            }
-            (RV::Float(lhs), RV::BigInt(rhs)) => {
-                bigint_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
-            }
-            (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
-            (RV::Float(_), _) => {
-                // Reverse dispatch: try rhs == lhs (boolean-coerced)
-                return Ok(Value::bool(self.invoke_eq(globals, rhs, lhs)?));
-            }
-            (RV::Bool(lhs), RV::Bool(rhs)) => lhs.eq(&rhs),
-            (RV::Bool(_), _) => false,
-            (RV::Symbol(lhs), RV::Symbol(rhs)) => lhs.eq(&rhs),
-            (RV::Symbol(_), _) => false,
-            (RV::String(lhs), RV::String(rhs)) => {
-                // CRuby `String#==` is content-equal AND encoding-
-                // compatible: same bytes with incompatible encodings
-                // (e.g. UTF-8 vs UTF-32LE on non-ASCII content)
-                // compare *unequal*. The empty-string special case
-                // in `compatible_encoding` keeps `"".UTF-16BE ==
-                // "".UTF-8` true.
-                lhs.eq(rhs) && lhs.compatible_encoding(rhs).is_some()
-            }
-            (RV::String(_), _) => {
-                // CRuby's `String#==` dispatches to `rhs == self` when
-                // the rhs *responds to* `to_str` (it does NOT actually
-                // call `to_str`). Without this branch, the fast path
-                // would short-circuit to `false` and never reach the
-                // builtin, masking custom `==` defined alongside
-                // `to_str` on a mock. `no_to_str` is a version-stamped
-                // memo, so the common `str == nil` case costs a load
-                // instead of a method-table probe.
-                if globals.store.no_to_str(rhs.class(), Globals::class_version()) {
-                    false
-                } else {
-                    return Ok(Value::bool(self.invoke_eq(globals, rhs, lhs)?));
+    }
+
+    ///
+    /// The reverse dispatch of a builtin `==`: `rhs == lhs` asked as C
+    /// asks it, as a boolean.
+    ///
+    /// `elided`: the builtin is being computed in place — by the
+    /// operator, or for a builtin's `rb_equal` — where CRuby has called
+    /// the method of that name (`Integer#==`, `Float#===`, `String#==`).
+    /// An error coming out of `rhs`'s `==` is traced through that method
+    /// there, so it is here.
+    ///
+    pub(crate) fn eq_reverse(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+        elided: Option<IdentId>,
+    ) -> Result<Value> {
+        match self.eq_values_funcall(globals, rhs, lhs) {
+            Ok(v) => Ok(Value::bool(v.as_bool())),
+            Err(mut err) => {
+                if let Some(name) = elided {
+                    let func_id = globals
+                        .store
+                        .search_method_by_class_id(lhs.class(), name)
+                        .and_then(|entry| entry.func_id());
+                    self.trace_elided_frame(&mut err, func_id, lhs);
                 }
+                Err(err)
             }
-            _ => return self.invoke_eq_raw_vis(globals, lhs, rhs, is_func_call),
-        };
-        Ok(Value::bool(b))
+        }
+    }
+
+    ///
+    /// Record in `err`'s backtrace the frame of a builtin method that was
+    /// computed with no frame — `BasicObject#!=` negating `==` in place,
+    /// `Integer#==` asking its argument — as the error passes the point
+    /// where CRuby has that method's C frame. The entry has no location
+    /// of its own: like every C frame it is shown at the line of the Ruby
+    /// frame below it (`MonorubyErr::push_trace`).
+    ///
+    pub(crate) fn trace_elided_frame(
+        &self,
+        err: &mut MonorubyErr,
+        func_id: Option<FuncId>,
+        self_val: Value,
+    ) {
+        if let Some(func_id) = func_id
+            && err.is_traced()
+        {
+            err.push_internal_trace_with_self(func_id, self_val);
+        }
     }
 
     pub(crate) fn eq_values_bool(
@@ -528,7 +617,8 @@ impl Executor {
             .store
             .funcall_eq_entry(class, Globals::class_version())
         else {
-            return Err(MonorubyErr::method_not_found(globals, IdentId::_EQ, lhs));
+            // No `==` at all: `method_missing` answers.
+            return Ok(!self.eq_method_missing(globals, lhs, rhs)?.as_bool());
         };
         let res = match eq.native {
             Some((meta, func)) => {
@@ -544,11 +634,15 @@ impl Executor {
     }
 
     ///
-    /// `lhs == rhs` as the default `!=` asks it. `rb_obj_not_equal` is C
-    /// and calls `==` with `rb_funcall`: a private `==` is callable, and
-    /// no refinement of `==` is in effect — not even one the scope that
-    /// wrote the `!=` activated (#1967). So unlike [`Self::eq_values_vis`]
-    /// this never asks which scope is running.
+    /// `lhs == rhs` as C code asks it — the default `!=`
+    /// (`rb_obj_not_equal`), a builtin comparing elements (`rb_equal`),
+    /// the reverse dispatch of `Integer#==` (`num_equal`). All of them
+    /// call `==` with `rb_funcall`: a private `==` is callable, no
+    /// refinement of `==` is in effect — not even one the scope that
+    /// wrote the `!=` or called the builtin activated (#1967, #1970) —
+    /// and a receiver with no `==` at all gets `method_missing` (#1971).
+    /// So unlike [`Self::eq_values_vis`] this never asks which scope is
+    /// running.
     ///
     pub(crate) fn eq_values_funcall(
         &mut self,
@@ -556,30 +650,64 @@ impl Executor {
         lhs: Value,
         rhs: Value,
     ) -> Result<Value> {
-        let name = IdentId::_EQ;
-        let func_id = if let Some(class) = dispatched_eq_class(lhs) {
+        if let Some(class) = dispatched_eq_class(lhs) {
             // A receiver whose `==` is a lookup either way.
-            globals.store.funcall_eq(class, Globals::class_version())
+            self.funcall_eq_dispatch(globals, class, lhs, rhs)
         } else if globals
             .store
-            .basic_op_globally_redefined_for(lhs.class(), name)
+            .basic_op_globally_redefined_for(lhs.class(), IdentId::_EQ)
             && !self.in_internal_builtin()
         {
-            globals
-                .store
-                .funcall_eq(lhs.class(), Globals::class_version())
+            self.funcall_eq_dispatch(globals, lhs.class(), lhs, rhs)
         } else {
             // nil, a boolean, an Integer, a Float, a Symbol or a String
-            // whose `==` is the builtin: the arms of the implementation.
-            // A *refinement* of it marks the pair as well
-            // (`basic_op_redefined_for`), which is no reason to dispatch
-            // here.
-            return self.eq_values_vis_raw(globals, lhs, rhs, true);
-        };
-        match func_id {
-            Some(func_id) => self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None),
-            None => Err(MonorubyErr::method_not_found(globals, name, lhs)),
+            // whose `==` is the builtin: the arms of the implementation,
+            // with no frame for it. A *refinement* of it marks the pair
+            // as well (`basic_op_redefined_for`), which is no reason to
+            // dispatch here.
+            match eq_arm(&globals.store, lhs, rhs) {
+                EqArm::Decided(b) => Ok(Value::bool(b)),
+                EqArm::Reverse => self.eq_reverse(globals, lhs, rhs, Some(IdentId::_EQ)),
+                EqArm::Dispatch => self.funcall_eq_dispatch(globals, lhs.class(), lhs, rhs),
+            }
         }
+    }
+
+    ///
+    /// Call `class#==` on `lhs` as `rb_funcall` finds it: the method the
+    /// class resolves with no refinement and no visibility check
+    /// (`Store::funcall_eq`), `method_missing` when there is none.
+    ///
+    fn funcall_eq_dispatch(
+        &mut self,
+        globals: &mut Globals,
+        class: ClassId,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Value> {
+        match globals.store.funcall_eq(class, Globals::class_version()) {
+            // `BasicObject#==` itself: nothing to call.
+            Some(func_id) if globals.store.identity_eq_fid() == Some(func_id) => {
+                Ok(Value::bool(lhs.id() == rhs.id()))
+            }
+            Some(func_id) => self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None),
+            None => self.eq_method_missing(globals, lhs, rhs),
+        }
+    }
+
+    ///
+    /// `lhs == rhs` for a receiver that has no `==` (`undef_method :==`
+    /// on a BasicObject subclass): `method_missing(:==, rhs)`, as for any
+    /// other call (#1971).
+    ///
+    fn eq_method_missing(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Value> {
+        let err = MonorubyErr::method_not_found(globals, IdentId::_EQ, lhs);
+        self.invoke_method_missing_for(globals, lhs, IdentId::_EQ, &[rhs], None, None, err)
     }
 
     ///
@@ -652,7 +780,13 @@ impl Executor {
                 resolved
             }
             _ => {
-                let func_id = self.find_method(globals, elem, IdentId::_EQ, true)?;
+                // As `rb_equal` finds it: no refinement, no visibility.
+                let Some(func_id) = globals.store.funcall_eq(class, version) else {
+                    // No `==` at all: `method_missing`, not cached.
+                    return Ok(self
+                        .eq_method_missing(globals, elem, search.needle)?
+                        .as_bool());
+                };
                 let resolved = if Some(func_id) == basic_object_eq(globals) {
                     ResolvedEq::Identity
                 } else {
@@ -696,11 +830,19 @@ impl Executor {
         {
             let func_id = self.find_method(globals, lhs, IdentId::_NEQ, is_func_call)?;
             if Some(func_id) != globals.store.default_neq() {
-                return self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None);
+                return self
+                    .at_site(|vm| vm.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None));
             }
         }
-        let eq = self.eq_values_funcall(globals, lhs, rhs)?;
-        Ok(Value::bool(!eq.as_bool()))
+        // `BasicObject#!=`, computed here with no frame for it.
+        match self.at_site(|vm| vm.eq_values_funcall(globals, lhs, rhs)) {
+            Ok(eq) => Ok(Value::bool(!eq.as_bool())),
+            Err(mut err) => {
+                let ne = globals.store.default_neq();
+                self.trace_elided_frame(&mut err, ne, lhs);
+                Err(err)
+            }
+        }
     }
 }
 
@@ -970,7 +1112,7 @@ fn cmp_teq_values_impl(
         }
         (RV::Fixnum(_), _) => {
             // Reverse dispatch for Integer === non-numeric
-            return vm.invoke_method_simple(globals, IdentId::_EQ, rhs, &[lhs]);
+            return teq_reverse(vm, globals, lhs, rhs);
         }
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
@@ -979,7 +1121,7 @@ fn cmp_teq_values_impl(
         }
         (RV::BigInt(_), _) => {
             // Reverse dispatch for Integer === non-numeric
-            return vm.invoke_method_simple(globals, IdentId::_EQ, rhs, &[lhs]);
+            return teq_reverse(vm, globals, lhs, rhs);
         }
         (RV::Float(lhs), RV::Fixnum(rhs)) => {
             fixnum_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
@@ -990,13 +1132,25 @@ fn cmp_teq_values_impl(
         (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
         (RV::Float(_), _) => {
             // Reverse dispatch for Float === non-numeric
-            return vm.invoke_method_simple(globals, IdentId::_EQ, rhs, &[lhs]);
+            return teq_reverse(vm, globals, lhs, rhs);
         }
         _ => {
             return vm.invoke_method(globals, IdentId::_TEQ, private_ok, lhs, &[rhs], None, None);
         }
     };
     Some(Value::bool(b))
+}
+
+/// `Integer#===` / `Float#===` are their `==`: for an argument that is
+/// no number, `rhs == lhs` as `num_equal` asks it, as a boolean.
+fn teq_reverse(vm: &mut Executor, globals: &mut Globals, lhs: Value, rhs: Value) -> Option<Value> {
+    match vm.eq_reverse(globals, lhs, rhs, Some(IdentId::_TEQ)) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 pub(crate) fn cmp_teq_values_bool(
@@ -1023,7 +1177,9 @@ pub(crate) fn cmp_teq_values_bool(
         }
         (RV::Fixnum(_), _) => {
             // Reverse dispatch: try rhs == lhs
-            return vm.invoke_eq(globals, rhs, lhs);
+            return Ok(vm
+                .eq_reverse(globals, lhs, rhs, Some(IdentId::_TEQ))?
+                .as_bool());
         }
         (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.eq(&BigInt::from(rhs)),
         (RV::BigInt(lhs), RV::BigInt(rhs)) => lhs.eq(rhs),
@@ -1032,7 +1188,9 @@ pub(crate) fn cmp_teq_values_bool(
         }
         (RV::BigInt(_), _) => {
             // Reverse dispatch: try rhs == lhs
-            return vm.invoke_eq(globals, rhs, lhs);
+            return Ok(vm
+                .eq_reverse(globals, lhs, rhs, Some(IdentId::_TEQ))?
+                .as_bool());
         }
         (RV::Float(lhs), RV::Fixnum(rhs)) => {
             fixnum_cmp_float(rhs, lhs) == Some(std::cmp::Ordering::Equal)
@@ -1043,7 +1201,9 @@ pub(crate) fn cmp_teq_values_bool(
         (RV::Float(lhs), RV::Float(rhs)) => lhs.eq(&rhs),
         (RV::Float(_), _) => {
             // Reverse dispatch: try rhs == lhs
-            return vm.invoke_eq(globals, rhs, lhs);
+            return Ok(vm
+                .eq_reverse(globals, lhs, rhs, Some(IdentId::_TEQ))?
+                .as_bool());
         }
         _ => {
             return vm

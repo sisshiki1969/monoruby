@@ -1130,6 +1130,9 @@ pub struct Codegen {
     ///
     pub(crate) init_stack_limit: extern "C" fn(&mut Executor) -> *const u8,
     pub(crate) method_invoker: MethodInvoker,
+    /// The method invoker an operator's generic helper calls through —
+    /// see `Executor::at_site`.
+    pub(crate) method_invoker_at_site: MethodInvoker,
     pub(crate) block_invoker: BlockInvoker,
     pub(crate) block_invoker_with_self: BlockInvoker,
     pub(crate) binding_invoker: BindingInvoker,
@@ -1498,7 +1501,8 @@ impl Codegen {
         let entry_panic = jit.entry_panic.clone();
         let get_class = jit.get_class();
         let init_stack_limit = jit.init_stack_limit();
-        let method_invoker = jit.method_invoker();
+        let method_invoker = jit.method_invoker(false);
+        let method_invoker_at_site = jit.method_invoker(true);
         let block_invoker = jit.block_invoker();
         let block_invoker_with_self = jit.block_invoker_with_self();
         let binding_invoker = jit.binding_invoker();
@@ -1556,6 +1560,7 @@ impl Codegen {
             get_class,
             init_stack_limit,
             method_invoker,
+            method_invoker_at_site,
             block_invoker,
             block_invoker_with_self,
             binding_invoker,
