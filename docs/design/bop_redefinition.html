@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-84cc1bd6.js";
+            window.path_to_searchindex_js = "../searchindex-f695dddc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-9192be69.js"></script>
@@ -960,6 +960,50 @@ arm64 は 400 秒のタイムアウトに達した。</p>
 落ちない」ことを、後者は「落ちるべきものは落ちる」ことを表の状態に対して
 直接主張する — 値の比較では、fast path が消えても答えは正しいままなので
 検出できない。</p>
+<h3 id="step-5---を継承ペアにする1938-1964-1967-実装済み"><a class="header" href="#step-5---を継承ペアにする1938-1964-1967-実装済み">Step 5 — <code>!=</code> を継承ペアにする（#1938, #1964, #1967）— <strong>実装済み</strong></a></h3>
+<p>CRuby にはどのクラスにも固有の <code>!=</code> がない。あるのは <code>BasicObject#!=</code>
+（<code>rb_obj_not_equal</code>）だけで、<code>!(a == b)</code> を計算する。monoruby は
+<code>Integer</code> / <code>Float</code> / <code>String</code>（basic op）と <code>Symbol</code> / <code>Rational</code> /
+<code>Complex</code> / <code>Struct</code> / <code>Data</code> に固有の <code>!=</code> を持っていたため、
+<code>x.method(:!=).owner</code> が違い、<code>==</code> を再定義しても <code>!=</code> が追随しなかった
+（<code>Integer</code> では VM の fixnum 高速パスと JIT のインライン展開が、他では
+ビルトイン自身が <code>==</code> を呼ばずに答えていた）。</p>
+<p>固有の <code>!=</code> は全て削除した。高速パスは次の形で残る。</p>
+<ul>
+<li>表には <code>(Integer|Float|String, "!=")</code> を<strong>継承ペア</strong>として残す
+（<code>Integer#!</code> と同じく、クラス自身にエントリは無い）。このペアが許可する
+のは「そのクラスに対する <code>BasicObject#!=</code> のインライン形」— VM の fixnum
+比較と、JIT の <code>object::object_ne</code> — である。</li>
+<li>インライン形はビルトインの <code>==</code> を前提にするので、<strong>そのクラスの <code>==</code> の
+グローバルな再定義は <code>!=</code> のペアも一緒に落とす</strong>
+（<code>Store::set_bop_redefine</code>）。refinement による <code>==</code> の差し替えは連動
+させない。<code>rb_obj_not_equal</code> は C で、<code>==</code> を <code>rb_funcall</code> で呼ぶので、
+refinement された <code>==</code> は見えないからである（#1967。実行時は
+<code>Executor::eq_values_funcall</code>、JIT は <code>JitContext::funcall_eq</code>）。</li>
+<li><code>BasicObject#!=</code> の生成器 <code>object_ne</code> は受け手のクラスで分岐する:
+<code>==</code> が <code>BasicObject#==</code> / <code>Symbol#==</code> ならワード比較、<code>Integer#==</code> /
+<code>Float#==</code> なら数値比較（<code>integer_cmp_inline</code> / <code>float_cmp_inline</code>）、
+<code>String#==</code> なら定数との比較（<code>string_ne_gen</code>）。クラスバージョンガード
+付きの呼び出し経路から入った場合は「<code>==</code> の解決先」を salvage 用に
+記録する（<code>JitContext::assume_funcall_eq</code>）。</li>
+<li><code>:performance</code> 警告は <code>!=</code> のペアには出さない。CRuby に <code>!=</code> の basic
+op は無く（<code>opt_neq</code> は <code>BOP_EQ</code> に乗る）、<code>Integer#!=</code> を定義しても何も
+言わない。<code>Integer#==</code> の再定義で出る警告は <code>==</code> の 1 行だけになる。</li>
+</ul>
+<p>megamorphic なサイトの即値ビット比較（<code>opt_eq_assumable</code>）は、<code>!=</code> のペアを
+持たない 4 クラス（<code>Symbol</code> / <code>NilClass</code> / <code>TrueClass</code> / <code>FalseClass</code>）に
+ついて「<code>!=</code> が <code>BasicObject#!=</code> に解決する」ことを確かめて記録する（#1965）。</p>
+<p>インライン形を持たない <code>==</code>（<code>Struct</code> / <code>Array</code> / <code>Hash</code> / <code>Rational</code> …）は
+<code>BasicObject#!=</code> の本体が呼ぶ。クラスごとのメモ（<code>ClassInfo::eq_method_at</code>、
+<code>Store::funcall_eq_entry</code>）が <code>==</code> の解決先を持ち、それが引数 1 個のネイティブ
+メソッドなら入口アドレスと <code>Meta</code> も持つ。<code>!=</code> のフレームは受け手と引数が
+そのまま <code>==</code> の欲しい形なので、<strong><code>==</code> を <code>!=</code> 自身のフレームで実行する</strong>
+（<code>Executor::default_ne_in_frame</code>、<code>Lfp::become_frame_of</code>）。invoker を通す
+2 枚目のフレームが要らず、固有の <code>!=</code> を持っていたクラスのコスト増は半分以下に
+なり、もともと <code>BasicObject#!=</code> 経由だった <code>Array</code> / <code>Range</code> などは master より
+速い（<code>Array</code> で −33%）。実行中フレームの <code>Meta</code> は <code>==</code> のもので、戻ったら <code>!=</code>
+のものに戻すので、<code>==</code> の中から出た例外のバックトレースは CRuby と同じ
+<code>Struct#==</code> → <code>BasicObject#!=</code> の 2 行になる。</p>
 <h3 id="step-3-の当初計画記録として保存"><a class="header" href="#step-3-の当初計画記録として保存">Step 3 の当初計画（記録として保存）</a></h3>
 <p>Step 2 の (op, class) ビットマスクができれば、#1066 が要求する
 「refinement セットごとの BOP ビットマスク」はその自然な拡張になる。</p>
