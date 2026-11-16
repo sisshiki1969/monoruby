@@ -209,11 +209,15 @@ impl Codegen {
     ///         else countdown; hot -> compile this new class (extends chain)
     ///                         cold -> vm_entry
     /// ```
+    ///
+    /// Returns the guard and its miss half — the end of the chain until the
+    /// next class is compiled, which is where the class → entry table sends
+    /// a class it does not hold (`a64_class_dispatch_stub`).
     pub(in crate::codegen) fn a64_gen_class_guard_stub(
         &mut self,
         self_class: ClassId,
         jit_entry: &DestLabel,
-    ) -> DestLabel {
+    ) -> (DestLabel, DestLabel) {
         let vm_entry = self.vm_entry();
         let guard = self.jit.label();
         let miss = self.jit.label();
@@ -264,7 +268,73 @@ impl Codegen {
         run_next:
             br x10;
         );
-        guard
+        (guard, miss)
+    }
+
+    ///
+    /// The stub a method's dispatch slot holds once its class-guard chain
+    /// is long: one probe of the class → entry table instead of a walk
+    /// (see `class_dispatch.rs`; mirrors the x86 `class_dispatch_stub`).
+    ///
+    /// ```text
+    /// stub:
+    ///     x0 <- self
+    ///     immediate?                      -> the chain
+    ///     probe the table for self's class
+    ///       found                         -> the class's entry
+    ///       not found, Integer or Float   -> the chain
+    ///       not found                     -> the end of the chain
+    /// ```
+    ///
+    /// Uses x0 and x9-x15, which the guards and the wrapper's own counting
+    /// code are free to use as well.
+    pub(in crate::codegen) fn a64_class_dispatch_stub(&mut self, header: u64) -> DestLabel {
+        let stub = self.jit.label();
+        let probe = self.jit.label();
+        let hit = self.jit.label();
+        let miss = self.jit.label();
+        let chain = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+        stub:
+            ldur x0, [x(LFP.0), #(-(LFP_SELF as i32))];
+            mov x9, (0b111);
+            and x9, x0, x9;
+            cbnz x9, chain;
+            ldr w9, [x0, #(RVALUE_OFFSET_CLASS as u32)];
+            mov x10, (header);
+            ldr x11, [x10, #(CLASS_DISPATCH_TABLE as u32)];
+            ldr x12, [x10, #(CLASS_DISPATCH_MASK as u32)];
+            mov x13, x9;
+        probe:
+            and x13, x13, x12;
+            add x14, x11, x13, lsl #(CLASS_DISPATCH_SLOT_SHIFT as u32);
+            ldr w15, [x14, #(0)];
+            cmp x15, x9;
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &hit);
+        monoasm_arm64!(&mut self.jit,
+            cbz x15, miss;
+            add x13, x13, #1;
+            b probe;
+        hit:
+            ldr x10, [x14, #(CLASS_DISPATCH_SLOT_TARGET as u32)];
+            br x10;
+        miss:
+            // A heap Integer or Float is not in the table: its class's
+            // guard does more than compare the class word.
+            sub x9, x9, #(INTEGER_CLASS.u32());
+            cmp x9, #(FLOAT_CLASS.u32() - INTEGER_CLASS.u32());
+        );
+        self.jit.bcond_label(monoasm::Cond::Ls, &chain);
+        monoasm_arm64!(&mut self.jit,
+            ldr x10, [x10, #(CLASS_DISPATCH_MISS as u32)];
+            br x10;
+        chain:
+            mov x10, (header);
+            ldr x10, [x10, #(CLASS_DISPATCH_CHAIN as u32)];
+            br x10;
+        );
+        stub
     }
 
     /// attr_reader: return `self.@ivar_name` via the cached ivar accessor.
