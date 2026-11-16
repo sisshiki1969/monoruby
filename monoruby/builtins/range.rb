@@ -432,68 +432,79 @@ class Range
     true
   end
 
-  def step(step_arg = nil, &block)
+  # Range#step, as CRuby's `range_step` (range.c) decides it.
+  #
+  # The step is not converted (`to_int` plays no part since Ruby 3.4): a
+  # numeric range with a numeric step is an arithmetic progression, a
+  # String or Symbol range with an Integer step keeps its old reading
+  # ("every n-th element by #succ"), and everything else is `begin + step`
+  # repeated — so a step that `Integer#+` cannot take is that method's
+  # TypeError (`Object can't be coerced into Integer`), raised when the
+  # iteration starts, not when the Enumerator is made (#1988).
+  def step(step_arg = (no_step = true; nil), &block)
     b = self.begin
     e = self.end
-    excl = self.exclude_end?
+    b_num = b.is_a?(Numeric)
+    e_num = e.is_a?(Numeric)
+    str_b = b.is_a?(String) || b.is_a?(Symbol)
 
-    b_numeric = b.is_a?(Numeric)
-    e_compat  = e.nil? || e.is_a?(Numeric)
-    numeric_range = b_numeric && e_compat
+    if no_step
+      unless b_num || str_b || (b.nil? && e_num)
+        raise ArgumentError, "step is required for non-numeric ranges"
+      end
+      step_arg = 1
+    end
+    step_num = step_arg.is_a?(Numeric)
 
-    if b.nil?
-      step_is_num = step_arg.nil? || step_arg.is_a?(Numeric)
-      if !e.is_a?(Numeric) || !step_is_num
-        raise ArgumentError, "#step for non-numeric beginless ranges is meaningless"
-      end
-      if block_given?
-        raise ArgumentError, "#step iteration for beginless ranges is meaningless"
-      end
-      # Beginless + numeric still returns an ArithmeticSequence
-      # (CRuby behaviour) — `Array#[]` uses `begin`/`end`/`step`
-      # to slice from index 0.
-      s = step_arg.nil? ? 1 : step_arg
-      return Enumerator::ArithmeticSequence.__build(b, e, s, excl)
-        .__set_origin(self, :step, step_arg.nil? ? [] : [step_arg])
+    if step_num && b_num && step_arg == 0
+      raise ArgumentError, "step can't be 0"
     end
 
-    if numeric_range
-      if step_arg.is_a?(Numeric) && step_arg == 0
-        raise ArgumentError, "step can't be 0"
+    # `block_given?`, not `block`: reading the parameter would make the
+    # Proc, and forwarding it with `&block` below does not.
+    unless block_given?
+      # An ArithmeticSequence only for what is one: numeric endpoints
+      # (a beginless range included — `ary[(..-1) % 3]` slices with it)
+      # *and* a numeric step. Any other step makes a plain Enumerator,
+      # whose size is unknown.
+      if step_num && ((b_num && (e.nil? || e_num)) || (b.nil? && e_num))
+        return Enumerator::ArithmeticSequence.__build(b, e, step_arg, self.exclude_end?)
+          .__set_origin(self, :step, no_step ? [] : [step_arg])
       end
-      unless block_given?
-        # CRuby returns an Enumerator::ArithmeticSequence for the
-        # numeric, no-block case so callers can introspect
-        # begin/end/step and `Array#[]` can use it as a stride
-        # index.
-        s = step_arg.nil? ? 1 : step_arg
-        return Enumerator::ArithmeticSequence.__build(b, e, s, excl)
-          .__set_origin(self, :step, step_arg.nil? ? [] : [step_arg])
+      if b.nil?
+        raise ArgumentError, "#step for non-numeric beginless ranges is meaningless"
       end
-      step_val = __range_step_coerce(step_arg, b)
-      __range_step_numeric(step_val, &block)
+      # No `<=>` probe: building the Range already compared the
+      # endpoints (see `Range#each`).
+      return no_step ? to_enum(:step) { nil } : to_enum(:step, step_arg) { nil }
+    end
+
+    if b.nil?
+      raise ArgumentError, "#step iteration for beginless ranges is meaningless"
+    end
+
+    if b_num && step_num && (e.nil? || e_num)
+      __range_step_numeric(step_arg, &block)
+    elsif str_b && step_arg.is_a?(Integer) && step_arg.bit_length < 63
+      __range_step_succ(step_arg, &block)
     else
-      unless block_given?
-        # No `<=>` probe here either: building the Range already
-        # compared the endpoints (see `Range#each`).
-        return to_enum(:step, step_arg) { nil }
-      end
-      __range_step_non_numeric(step_arg, &block)
+      __range_step_generic(step_arg, &block)
     end
     self
   end
 
-  # `Range#%` is `Range#step` with a different `inspect` form:
-  # `((1..10).%(2))` instead of `((1..10).step(2))`. The
-  # underlying ArithmeticSequence is otherwise identical, so we
-  # delegate and patch `inspect` per-instance.
-  def %(step_arg)
-    aseq = step(step_arg)
-    # Same sequence as `#step`, but `#inspect` reports the `%` spelling.
-    if aseq.is_a?(Enumerator::ArithmeticSequence)
-      aseq.__set_origin(self, :%, [step_arg])
+  # `Range#%` is `Range#step` under another name: the same iteration
+  # with a block, the same sequence without one, and only the Enumerator
+  # (`#<Enumerator: 1..5:%(x)>`) or ArithmeticSequence (`((1..10).%(2))`)
+  # it returns remembers which spelling made it.
+  def %(step_arg, &block)
+    return step(step_arg, &block) if block_given?
+    seq = step(step_arg)
+    if seq.is_a?(Enumerator::ArithmeticSequence)
+      seq.__set_origin(self, :%, [step_arg])
+    else
+      to_enum(:%, step_arg) { nil }
     end
-    aseq
   end
 
   private :__builtin_map, :__builtin_flat_map
@@ -735,24 +746,6 @@ class Range
     r.exclude_end? ? cmp >= 0 : cmp > 0
   end
 
-  # Validate and, if needed, coerce `step_arg` for a numeric range.
-  # Returns the resulting numeric step.
-  def __range_step_coerce(step_arg, b)
-    if step_arg.nil?
-      1
-    elsif step_arg.is_a?(Numeric)
-      step_arg
-    elsif step_arg.respond_to?(:coerce)
-      _, s = step_arg.coerce(b)
-      unless s.is_a?(Numeric)
-        raise TypeError, "no implicit conversion of #{__builtin_class_name(step_arg)} into Integer"
-      end
-      s
-    else
-      raise TypeError, "#{__coerce_failed_name(step_arg)} can't be coerced into Integer"
-    end
-  end
-
   def __range_step_numeric(step_arg, &block)
     b = self.begin
     e = self.end
@@ -852,74 +845,92 @@ class Range
     end
   end
 
-  def __range_step_non_numeric(step_arg, &block)
+  # A String or Symbol range with a Fixnum step: every `n`-th element of
+  # the sequence `String#upto` walks (the pre-3.4 behaviour, kept for
+  # these two). The count is CRuby's `step_i`: a countdown to the next
+  # element to yield, which starts at 1 and is reset to `n` — so the
+  # first element is always yielded, and a step of zero or less never
+  # counts down to another one (the walk still runs to the end).
+  def __range_step_succ(n)
+    b = self.begin
+    e = self.end
+    sym = b.is_a?(Symbol)
+    count = 1
+    if e.nil?
+      s = sym ? b.name : b.dup
+      while true
+        count -= 1
+        if count == 0
+          yield(sym ? s.to_sym : s)
+          count = n
+        end
+        s = s.succ
+      end
+    else
+      (sym ? b.name : b).upto(sym ? e.name : e, self.exclude_end?) do |s|
+        count -= 1
+        if count == 0
+          yield(sym ? s.to_sym : s)
+          count = n
+        end
+      end
+    end
+  end
+
+  # `a <=> b` as CRuby's `r_less` reads it: -1, 0 or 1, and a value that
+  # is none of them (`INT_MAX` there) when the two do not compare.
+  def __range_r_less(a, b)
+    c = (a <=> b)
+    return 2 if c.nil?
+    c > 0 ? 1 : (c < 0 ? -1 : 0)
+  end
+
+  # Everything else: `begin + step` repeated, in the direction the range
+  # runs. This is where a numeric range ends up with a step that is not
+  # a Numeric — the first `+` raises what `Integer#+` / `Float#+` raise
+  # for it, or goes through its `coerce`.
+  def __range_step_generic(step)
     b = self.begin
     e = self.end
     excl = self.exclude_end?
+    v = b
 
-    if step_arg.is_a?(Float)
-      raise TypeError, "no implicit conversion of Float into Integer"
-    end
-
-    if step_arg.nil? || step_arg.is_a?(Integer)
-      n = step_arg.nil? ? 1 : step_arg
-      return if n == 0
-      i = b
-      if e.nil?
-        loop do
-          yield i
-          n.times { i = i.succ }
+    if e.nil?
+      while true
+        yield v
+        v = v + step
+      end
+    elsif b.is_a?(Numeric) && step.is_a?(Numeric) && __range_r_less(step, 0) < 0
+      # Backwards, for consistency with ArithmeticSequence.
+      if excl
+        while __range_r_less(e, v) < 0
+          yield v
+          v = v + step
         end
       else
-        loop do
-          c = (i <=> e)
-          break if c.nil?
-          if excl
-            break if c >= 0
-          else
-            break if c > 0
-          end
-          yield i
-          break if !excl && c == 0
-          n.times { i = i.succ }
+        while (c = __range_r_less(e, v)) <= 0
+          yield v
+          break if c == 0
+          v = v + step
         end
       end
-    else
-      if e.nil?
-        i = b
-        loop do
-          yield i
-          i = i + step_arg
+    elsif (dir = __range_r_less(b, e)) == 0
+      yield v unless excl
+    elsif dir == __range_r_less(b, b + step)
+      # `dir` is the comparison the loop keeps while it runs: `<` for a
+      # forward range, `>` for a backward one. The one addition above
+      # checks that the step moves the same way; if it does not, nothing
+      # is yielded.
+      if excl
+        while __range_r_less(v, e) == dir
+          yield v
+          v = v + step
         end
       else
-        dir = (b <=> e)
-        raise ArgumentError, "bad value for range" if dir.nil?
-        next_val = b + step_arg
-        step_dir = (b <=> next_val)
-        # Step-direction-mismatch short-circuit lives *inside* the
-        # loop so the upper-bound `<=>` test runs at least once even
-        # when no element is yielded. CRuby orders the dispatch the
-        # same way; the visible effect is that
-        # `(b..e).step(step) { ... }` always invokes `b <=> e` twice
-        # (once for direction, once as the loop-entry check) before
-        # giving up.
-        i = b
-        loop do
-          c = (i <=> e)
-          break if c.nil?
-          if dir < 0
-            break if excl ? c >= 0 : c > 0
-          elsif dir > 0
-            break if excl ? c <= 0 : c < 0
-          else
-            break if excl
-          end
-          if dir != 0 && step_dir != 0 && (dir < 0) != (step_dir < 0)
-            break
-          end
-          yield i
-          break if !excl && c == 0
-          i = i + step_arg
+        while (c = __range_r_less(v, e)) == dir || c == 0
+          yield v
+          break if c == 0
+          v = v + step
         end
       end
     end

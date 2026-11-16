@@ -320,8 +320,8 @@ fn warn_unused_block(vm: &mut Executor, globals: &mut Globals, callid: CallSiteI
     };
     // CRuby names the callee in the qualified `Owner#name` form (bare
     // name for a plain object's singleton method) — same rule as
-    // backtrace entries, so reuse func_description.
-    let name = globals.store.func_description(fid);
+    // backtrace entries, so reuse the label.
+    let name = globals.store.func_label(fid);
     let msg = format!(
         "{caller}: warning: the block passed to '{name}' defined at {defined_at} may be ignored\n"
     );
