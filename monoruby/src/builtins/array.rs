@@ -299,8 +299,7 @@ fn array_try_convert(
     if obj.is_nil() {
         return Ok(Value::nil());
     }
-    if let Some(func_id) = globals.check_method(obj, IdentId::TO_ARY) {
-        let result = vm.invoke_func_inner(globals, func_id, obj, &[], None, None)?;
+    if let Some(result) = crate::coerce::check_funcall(vm, globals, obj, IdentId::TO_ARY)? {
         if result.is_array_ty() {
             return Ok(result);
         }
@@ -352,8 +351,7 @@ fn init_from(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let arg = lfp.arg(0);
     let from_array: ArrayInner = if arg.is_array_ty() {
         (*arg.as_array()).clone()
-    } else if let Some(func_id) = globals.check_method(arg, IdentId::TO_ARY) {
-        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+    } else if let Some(result) = crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_ARY)? {
         if result.is_array_ty() {
             (*result.as_array()).clone()
         } else if result.is_nil() {
@@ -663,8 +661,9 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             };
             let elem = if let Some(a) = elem.try_array_ty() {
                 a
-            } else if let Some(fid) = globals.check_method(elem, IdentId::TO_ARY) {
-                let ret = vm.invoke_func_inner(globals, fid, elem, &[], None, None)?;
+            } else if let Some(ret) =
+                crate::coerce::check_funcall(vm, globals, elem, IdentId::TO_ARY)?
+            {
                 if let Some(a) = ret.try_array_ty() {
                     a
                 } else {
@@ -1345,8 +1344,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let lhs = self_val.as_array();
     let rhs = if let Some(rhs) = arg.try_array_ty() {
         rhs
-    } else if let Some(fid) = globals.check_method(arg, IdentId::TO_ARY) {
-        let v = vm.invoke_func_inner(globals, fid, arg, &[], None, None)?;
+    } else if let Some(v) = crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_ARY)? {
         if let Some(ary) = v.try_array_ty() {
             ary
         } else {
@@ -1537,8 +1535,8 @@ fn index_assign(
         // Try #to_ary conversion for multi-element assignment.
         let val = if val.try_array_ty().is_some() {
             val
-        } else if let Some(fid) = globals.check_method(val, IdentId::TO_ARY) {
-            vm.invoke_func_inner(globals, fid, val, &[], None, None)?
+        } else if let Some(a) = val.check_array_type(vm, globals)? {
+            a.peel()
         } else {
             val
         };
@@ -1689,8 +1687,8 @@ extern "C" fn set_array_slice(
         }
         let val = if val.try_array_ty().is_some() {
             val
-        } else if let Some(fid) = globals.check_method(val, IdentId::TO_ARY) {
-            vm.invoke_func_inner(globals, fid, val, &[], None, None)?
+        } else if let Some(a) = val.check_array_type(vm, globals)? {
+            a.peel()
         } else {
             val
         };
@@ -2406,8 +2404,7 @@ fn array_join(
             continue;
         }
         // Conversion order: to_str -> to_ary -> to_s
-        if let Some(fid) = globals.check_method(*v, IdentId::TO_STR) {
-            let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
+        if let Some(ret) = crate::coerce::check_funcall(vm, globals, *v, IdentId::TO_STR)? {
             if let Some(inner) = ret.is_rstring_inner() {
                 append_string(out, state, inner, &globals.store)?;
                 continue;
@@ -2418,8 +2415,7 @@ fn array_join(
                 continue;
             }
         }
-        if let Some(fid) = globals.check_method(*v, IdentId::TO_ARY) {
-            let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
+        if let Some(ret) = crate::coerce::check_funcall(vm, globals, *v, IdentId::TO_ARY)? {
             if let Some(inner_ary) = ret.try_array_ty() {
                 if !visited.insert(inner_ary.id()) {
                     return Err(MonorubyErr::argumenterr("recursive array join"));
@@ -3620,21 +3616,9 @@ fn flat_map_inner(
         let r = vm.invoke_block(globals, data, &[x])?;
         if let Some(a) = r.try_array_ty() {
             vm.temp_array_extend_from_slice(&a);
-        } else if globals.check_method(r, IdentId::TO_ARY).is_some() {
-            // One level of `#to_ary` flattening, matching CRuby.
-            let a = vm.invoke_method_inner(globals, IdentId::TO_ARY, r, &[], None, None)?;
-            if let Some(arr) = a.try_array_ty() {
-                vm.temp_array_extend_from_slice(&arr);
-            } else if a.is_nil() {
-                vm.temp_array_push(r);
-            } else {
-                return Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} to Array ({}#to_ary gives {})",
-                    r.get_real_class_name(&globals.store),
-                    r.get_real_class_name(&globals.store),
-                    a.get_real_class_name(&globals.store),
-                )));
-            }
+        } else if let Some(arr) = r.check_array_type(vm, globals)? {
+            // One level of `#to_ary` flattening (`rb_check_array_type`).
+            vm.temp_array_extend_from_slice(&arr);
         } else {
             vm.temp_array_push(r);
         }
@@ -3830,7 +3814,7 @@ fn grep_match(
         } else if let Some(sym) = v.try_symbol() {
             Some(sym.get_name())
         } else if let Some(conv) =
-            vm.invoke_method_if_exists(globals, IdentId::get_id("to_str"), v, &[], None, None)?
+            crate::coerce::check_funcall(vm, globals, v, IdentId::get_id("to_str"))?
         {
             conv.is_rstring_inner()
                 .and_then(|rs| rs.check_utf8().ok().map(|s| s.to_string()))
@@ -3996,8 +3980,7 @@ fn coerce_to_array_for_transpose(
         return Ok(ary);
     }
     // Try to_ary
-    if let Some(fid) = globals.check_method(val, IdentId::TO_ARY) {
-        let ret = vm.invoke_func_inner(globals, fid, val, &[], None, None)?;
+    if let Some(ret) = crate::coerce::check_funcall(vm, globals, val, IdentId::TO_ARY)? {
         if let Some(ary) = ret.try_array_ty() {
             return Ok(ary);
         }

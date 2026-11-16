@@ -311,8 +311,7 @@ fn coerce_rlimit_resource(val: Value, vm: &mut Executor, globals: &mut Globals) 
     // Non-Symbol/String object: CRuby tries #to_str first (using the
     // result as a resource name when it returns a String) and only then
     // falls back to #to_int.
-    if let Some(coerced) =
-        vm.invoke_method_if_exists(globals, IdentId::TO_STR, val, &[], None, None)?
+    if let Some(coerced) = crate::coerce::check_funcall(vm, globals, val, IdentId::TO_STR)?
         && let Some(s) = coerced.is_str()
     {
         return rlim_resource_from_name(s);
@@ -1365,8 +1364,8 @@ fn trap_signo(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<i3
         sym.get_name().to_string()
     } else if let Some(s) = arg.is_str() {
         s.to_string()
-    } else if globals.store.check_method(arg, IdentId::TO_STR).is_some() {
-        arg.coerce_to_str(vm, globals)?
+    } else if let Some(s) = arg.check_string_type(vm, globals)? {
+        s.expect_string(&globals.store)?
     } else {
         return Err(MonorubyErr::argumenterr(format!(
             "bad signal type {}",

@@ -128,6 +128,9 @@ pub struct Store {
     /// frame-free fast path only when a receiver resolves `respond_to?` to
     /// exactly this body.
     respond_to_fid: Option<FuncId>,
+    /// Direct-mapped memo of `(class, name, class_version)` triples for
+    /// which [`Self::no_conversion`] holds.
+    no_conversion_memo: [std::cell::Cell<(u32, u32, u32)>; Self::NO_CONVERSION_SLOTS],
     hash_hash_fid: Option<FuncId>,
     /// `FuncId` of the Ruby `Class#new` trampoline (`builtins/class.rb`),
     /// recorded once the bootstrap sources have loaded. The JIT compares a
@@ -903,6 +906,7 @@ impl Store {
             object_send_fids: vec![],
             array_hash_fid: None,
             respond_to_fid: None,
+            no_conversion_memo: std::array::from_fn(|_| std::cell::Cell::new((0, 0, 0))),
             hash_hash_fid: None,
             iseqs: vec![],
             literals: vec![],
@@ -2144,6 +2148,69 @@ impl Store {
             fid = mother;
         }
         fid
+    }
+
+    const NO_CONVERSION_SLOTS: usize = 64;
+
+    ///
+    /// Whether CRuby's `rb_check_funcall(obj, name)` on an instance of
+    /// `class_id` answers "does not respond" without running anything:
+    /// the class defines no `name`, and its `respond_to?`,
+    /// `respond_to_missing?` and `method_missing` are the built-in ones
+    /// (or absent, as on a `BasicObject`).
+    ///
+    /// This is the outcome of nearly every conversion probe that misses
+    /// (`[1, 2].join`, a block destructuring an Integer, `"a" == :a`
+    /// ...), so it is memoized: a direct-mapped table keyed by class,
+    /// name and class version, which any method definition moves. A hit
+    /// is one load and compare instead of four method-table probes.
+    ///
+    /// `version` must be the current class version.
+    ///
+    pub(crate) fn no_conversion(&self, class_id: ClassId, name: IdentId, version: u32) -> bool {
+        let (slot, key) = self.no_conversion_slot(class_id, name, version);
+        if slot.get() == key {
+            return true;
+        }
+        let fid = |class: ClassId, m: IdentId| {
+            self.check_method_for_class_with_version(class, m, version)
+                .and_then(|e| e.func_id())
+        };
+        let builtin = |m: IdentId, owner: ClassId| match fid(class_id, m) {
+            None => true,
+            f => f == fid(owner, m),
+        };
+        let holds = fid(class_id, name).is_none()
+            && builtin(IdentId::RESPOND_TO_, OBJECT_CLASS)
+            && builtin(IdentId::RESPOND_TO_MISSING_, OBJECT_CLASS)
+            && builtin(IdentId::METHOD_MISSING, BASIC_OBJECT_CLASS);
+        if holds {
+            slot.set(key);
+        }
+        holds
+    }
+
+    /// [`Self::no_conversion`] as far as it is already known: `true`
+    /// is that answer, `false` is "not decided yet".
+    pub(crate) fn no_conversion_memoized(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+        version: u32,
+    ) -> bool {
+        let (slot, key) = self.no_conversion_slot(class_id, name, version);
+        slot.get() == key
+    }
+
+    fn no_conversion_slot(
+        &self,
+        class_id: ClassId,
+        name: IdentId,
+        version: u32,
+    ) -> (&std::cell::Cell<(u32, u32, u32)>, (u32, u32, u32)) {
+        let key = (class_id.u32(), name.get(), version);
+        let slot = (key.0.wrapping_mul(31) ^ key.1) as usize & (Self::NO_CONVERSION_SLOTS - 1);
+        (&self.no_conversion_memo[slot], key)
     }
 
     pub(crate) fn no_to_str(&self, class_id: ClassId, version: u32) -> bool {

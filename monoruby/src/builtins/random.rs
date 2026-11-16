@@ -420,8 +420,8 @@ fn random_srand(
             // Coerce non-Integers through #to_int (CRuby).
             if v.try_fixnum().is_some() || matches!(v.unpack(), RV::BigInt(_)) {
                 v
-            } else if let Some(fid) = globals.check_method(v, IdentId::TO_INT) {
-                let res = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
+            } else if let Some(res) = crate::coerce::check_funcall(vm, globals, v, IdentId::TO_INT)?
+            {
                 if res.try_fixnum().is_none() && !matches!(res.unpack(), RV::BigInt(_)) {
                     return Err(MonorubyErr::no_implicit_conversion(
                         &globals.store,

@@ -140,7 +140,7 @@ fn stat(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
         // `GC.stat(:key)` / `GC.stat("key")` returns a single Integer.
         Some(arg) if arg.try_symbol().is_some() || arg.is_str().is_some() => {
-            let key_name = arg.expect_symbol_or_string(globals)?;
+            let key_name = arg.expect_symbol_or_to_str(vm, globals)?;
             let name = key_name.to_string();
             match stat_value(&name) {
                 Some(v) => Ok(Value::integer(v)),

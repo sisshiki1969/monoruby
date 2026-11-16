@@ -1560,8 +1560,8 @@ fn coerce_to_pack_f64(vm: &mut Executor, globals: &mut Globals, value: &Value) -
                 return Err(MonorubyErr::cant_convert_into_float(globals, *value));
             }
             // Try #to_f for Numeric subclasses (Rational, Complex, etc.)
-            if let Some(func_id) = globals.check_method(*value, IdentId::TO_F) {
-                let result = vm.invoke_func_inner(globals, func_id, *value, &[], None, None)?;
+            if let Some(result) = crate::coerce::check_funcall(vm, globals, *value, IdentId::TO_F)?
+            {
                 match result.unpack() {
                     RV::Float(f) => Ok(f),
                     RV::Fixnum(i) => Ok(i as f64),

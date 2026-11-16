@@ -105,7 +105,7 @@ fn data_define_class(
     // Readers only — Data is immutable, so no writers are installed;
     // `__data_init` stores through the slots directly.
     for (i, arg) in members_arg.iter().enumerate() {
-        let name = arg.expect_symbol_or_string(globals)?;
+        let name = arg.expect_symbol_or_to_str(vm, globals)?;
         globals.define_struct_reader(class_id, name, i as u16, inline, Visibility::Public);
         vm.invoke_method_added(globals, class_id, name, None)?;
     }

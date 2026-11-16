@@ -1,6 +1,61 @@
 use super::*;
 use num::{BigInt, FromPrimitive, ToPrimitive};
 
+/// CRuby's `rb_check_convert_type_with_id(recv, _, tname, method)`: the
+/// result of the implicit conversion `method`, or `None` when `recv`
+/// does not convert — it does not answer `method` (asked through
+/// [`check_funcall`], so `method_missing` counts), or answers nil. An
+/// answer that `is` rejects is the conversion mismatch.
+pub(crate) fn check_convert_type(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+    method: IdentId,
+    tname: &str,
+    is: fn(Value) -> bool,
+) -> Result<Option<Value>> {
+    match check_funcall(vm, globals, recv, method)? {
+        Some(v) if is(v) => Ok(Some(v)),
+        Some(v) if !v.is_nil() => Err(MonorubyErr::cant_convert_error(
+            globals, recv, v, tname, method,
+        )),
+        _ => Ok(None),
+    }
+}
+
+/// CRuby's `rb_convert_type_with_id`: as [`check_convert_type`], but
+/// the conversion is required — `None` means `recv` does not answer
+/// `method` (the caller words "no implicit conversion"), and a nil
+/// answer is a mismatch like any other.
+pub(crate) fn convert_type(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+    method: IdentId,
+    tname: &str,
+    is: fn(Value) -> bool,
+) -> Result<Option<Value>> {
+    match check_funcall(vm, globals, recv, method)? {
+        Some(v) if is(v) => Ok(Some(v)),
+        Some(v) => Err(MonorubyErr::cant_convert_error(
+            globals, recv, v, tname, method,
+        )),
+        None => Ok(None),
+    }
+}
+
+fn is_string(v: Value) -> bool {
+    v.is_rstring().is_some()
+}
+
+fn is_array(v: Value) -> bool {
+    v.try_array_ty().is_some()
+}
+
+fn is_hash(v: Value) -> bool {
+    v.try_hash_ty().is_some()
+}
+
 fn coerce_to_rstring_inner(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -11,37 +66,21 @@ fn coerce_to_rstring_inner(
         return Ok(s);
     }
     for &method in methods {
-        if let Some(func_id) = globals.check_method(recv, method) {
-            let result = vm.invoke_func_inner(globals, func_id, recv, &[], None, None)?;
-            if let Some(s) = result.is_rstring() {
-                return Ok(s);
+        if method == IdentId::TO_PATH {
+            // CRuby's `rb_get_path`: `to_path` is asked first and what
+            // it answers is then a String by `StringValue` (`to_str`).
+            if let Some(path) = check_funcall(vm, globals, recv, method)? {
+                return path.coerce_to_rstring(vm, globals);
             }
-            // CRuby's `rb_get_path` chains: a non-String `#to_path`
-            // result is itself converted with `#to_str`.
-            if method == IdentId::TO_PATH
-                && let Some(fid2) = globals.check_method(result, IdentId::TO_STR)
-            {
-                let result2 = vm.invoke_func_inner(globals, fid2, result, &[], None, None)?;
-                if let Some(s) = result2.is_rstring() {
-                    return Ok(s);
-                }
-                return Err(MonorubyErr::cant_convert_error(
-                    globals,
-                    result,
-                    result2,
-                    "String",
-                    IdentId::TO_STR,
-                ));
-            }
-            return Err(MonorubyErr::cant_convert_error(
-                globals, recv, result, "String", method,
-            ));
+        } else if let Some(s) = convert_type(vm, globals, recv, method, "String", is_string)? {
+            return Ok(s.is_rstring().unwrap());
         }
     }
-    Err(MonorubyErr::typeerr(format!(
-        "no implicit conversion of {} into String",
-        recv.builtin_class_name(&globals.store)
-    )))
+    Err(MonorubyErr::no_implicit_conversion(
+        globals,
+        recv,
+        STRING_CLASS,
+    ))
 }
 
 impl Value {
@@ -53,29 +92,78 @@ impl Value {
         if let Some(ary) = self.try_array_ty() {
             return Ok(ary);
         }
-        // Direct method lookup fast path, then fall back to
-        // `invoke_method_inner` which handles `method_missing` (a receiver
-        // that answers `to_ary` only through `method_missing` still
-        // coerces — matching CRuby; mirrors `coerce_to_int`).
-        let result = if let Some(fid) = globals.check_method(*self, IdentId::TO_ARY) {
-            vm.invoke_func_inner(globals, fid, *self, &[], None, None)?
-        } else {
-            match vm.invoke_method_inner(globals, IdentId::TO_ARY, *self, &[], None, None) {
-                Ok(result) => result,
-                Err(_) => {
-                    return Err(MonorubyErr::no_implicit_conversion(
-                        globals,
-                        *self,
-                        ARRAY_CLASS,
-                    ));
-                }
-            }
-        };
-        if let Some(ary) = result.try_array_ty() {
-            Ok(ary)
-        } else {
-            Err(MonorubyErr::cant_convert_error_ary(globals, *self, result))
+        match convert_type(vm, globals, *self, IdentId::TO_ARY, "Array", is_array)? {
+            Some(ary) => Ok(ary.try_array_ty().unwrap()),
+            None => Err(MonorubyErr::no_implicit_conversion(
+                globals,
+                *self,
+                ARRAY_CLASS,
+            )),
         }
+    }
+
+    /// CRuby's `rb_check_array_type`: the Array `self` is or converts to
+    /// by `to_ary`, `None` when it does not convert.
+    pub(crate) fn check_array_type(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Option<Array>> {
+        if let Some(ary) = self.try_array_ty() {
+            return Ok(Some(ary));
+        }
+        Ok(
+            check_convert_type(vm, globals, *self, IdentId::TO_ARY, "Array", is_array)?
+                .map(|v| v.try_array_ty().unwrap()),
+        )
+    }
+
+    /// CRuby's `rb_check_string_type`: the String `self` is or converts
+    /// to by `to_str`, `None` when it does not convert.
+    pub(crate) fn check_string_type(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Option<Value>> {
+        if self.is_rstring().is_some() {
+            return Ok(Some(*self));
+        }
+        check_convert_type(vm, globals, *self, IdentId::TO_STR, "String", is_string)
+    }
+
+    /// CRuby's `rb_check_hash_type`: the Hash `self` is or converts to
+    /// by `to_hash`, `None` when it does not convert.
+    pub(crate) fn check_hash_type(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Option<Hashmap>> {
+        if let Some(h) = self.try_hash_ty() {
+            return Ok(Some(h));
+        }
+        Ok(check_convert_type(
+            vm,
+            globals,
+            *self,
+            IdentId::get_id("to_hash"),
+            "Hash",
+            is_hash,
+        )?
+        .map(|v| v.try_hash_ty().unwrap()))
+    }
+
+    /// CRuby's `rb_check_to_int`: the Integer `self` is or answers from
+    /// `to_int`; `None` when it has no `to_int` or answers something
+    /// else (which is not an error here).
+    pub(crate) fn check_to_int(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Option<Value>> {
+        if self.is_integer() {
+            return Ok(Some(*self));
+        }
+        Ok(check_funcall(vm, globals, *self, IdentId::TO_INT)?.filter(|v| v.is_integer()))
     }
 
     ///
@@ -353,9 +441,8 @@ impl Value {
             }
             _ => {
                 if self.is_str().is_none()
-                    && let Some(func_id) = globals.check_method(*self, IdentId::TO_F)
+                    && let Some(result) = check_funcall(vm, globals, *self, IdentId::TO_F)?
                 {
-                    let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
                     match result.unpack() {
                         RV::Float(f) => Ok(f),
                         RV::Fixnum(i) => Ok(i as f64),
@@ -396,25 +483,21 @@ impl Value {
         if let Some(h) = self.try_hash_ty() {
             return Ok(h);
         }
-        let to_hash_id = IdentId::get_id("to_hash");
-        if let Some(result) =
-            vm.invoke_method_if_exists(globals, to_hash_id, *self, &[], None, None)?
-        {
-            if let Some(h) = result.try_hash_ty() {
-                return Ok(h);
-            }
-            return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} to Hash ({}#to_hash gives {})",
-                self.get_real_class_name(globals),
-                self.get_real_class_name(globals),
-                result.get_real_class_name(globals),
-            )));
-        }
-        Err(MonorubyErr::no_implicit_conversion(
-            &globals.store,
+        match convert_type(
+            vm,
+            globals,
             *self,
-            HASH_CLASS,
-        ))
+            IdentId::get_id("to_hash"),
+            "Hash",
+            is_hash,
+        )? {
+            Some(h) => Ok(h.try_hash_ty().unwrap()),
+            None => Err(MonorubyErr::no_implicit_conversion(
+                &globals.store,
+                *self,
+                HASH_CLASS,
+            )),
+        }
     }
 
     /// Like [`expect_symbol_or_string`], but additionally tries `#to_str`
@@ -437,23 +520,52 @@ impl Value {
         // `rb_str_intern`): bytes invalid in its encoding are an
         // EncodingError, not a name.
         if let Some(inner) = self.is_rstring_inner() {
-            return crate::builtins::string::intern_string(&globals.store, inner);
+            return crate::builtins::string::intern_name_string(&globals.store, inner);
         }
-        if let Some(func_id) = globals.check_method(*self, IdentId::TO_STR) {
-            let result = vm.invoke_func_inner(globals, func_id, *self, &[], None, None)?;
-            if let Some(inner) = result.is_rstring_inner() {
-                return crate::builtins::string::intern_string(&globals.store, inner);
-            }
-            // `#to_str` returned a non-String value -> TypeError, matching
-            // CRuby's "can't convert X to String (X#to_str gives Y)".
-            return Err(MonorubyErr::typeerr(format!(
-                "can't convert {} to String ({}#to_str gives {})",
-                self.get_real_class_name(&globals.store),
-                self.get_real_class_name(&globals.store),
-                result.get_real_class_name(&globals.store),
-            )));
+        // `rb_check_id`: `rb_check_string_type`, so `to_str` is asked
+        // through `rb_check_funcall` and a non-String answer is the
+        // conversion mismatch.
+        if let Some(s) = self.check_string_type(vm, globals)? {
+            return crate::builtins::string::intern_name_string(
+                &globals.store,
+                s.as_rstring_inner(),
+            );
         }
         Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, *self))
+    }
+
+    /// A method / variable / constant name argument (`rb_check_id`,
+    /// `rb_to_id`): a Symbol or a String as
+    /// [`Self::expect_symbol_or_string`] reads it, and anything else by
+    /// `rb_check_string_type` — `to_str` through `rb_check_funcall`.
+    pub(crate) fn expect_symbol_or_to_str(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<IdentId> {
+        if self.try_symbol().is_some() || self.is_rstring().is_some() {
+            return self.expect_symbol_or_string(&globals.store);
+        }
+        match self.check_string_type(vm, globals)? {
+            Some(s) => s.expect_symbol_or_string(&globals.store),
+            None => Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, *self)),
+        }
+    }
+
+    /// [`Self::expect_symbol_or_to_str`] for a query that must not
+    /// intern ([`Self::expect_symbol_or_existing_string`]).
+    pub(crate) fn expect_symbol_or_existing_to_str(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Option<IdentId>> {
+        if self.try_symbol().is_some() || self.is_rstring().is_some() {
+            return self.expect_symbol_or_existing_string(&globals.store);
+        }
+        match self.check_string_type(vm, globals)? {
+            Some(s) => s.expect_symbol_or_existing_string(&globals.store),
+            None => Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, *self)),
+        }
     }
 
     pub(crate) fn coerce_to_rstring(
@@ -710,7 +822,16 @@ pub(crate) fn check_funcall_args(
     name: IdentId,
     args: &[Value],
 ) -> Result<Option<Value>> {
-    let respond_to = IdentId::get_id("respond_to?");
+    // The probe that misses on every count is by far the common one,
+    // and is remembered (`Store::no_conversion`).
+    let class_version = Globals::class_version();
+    if globals
+        .store
+        .no_conversion_memoized(recv.class(), name, class_version)
+    {
+        return Ok(None);
+    }
+    let respond_to = IdentId::RESPOND_TO_;
     let default_fid = |globals: &Globals, class: ClassId, name: IdentId| {
         globals
             .store
@@ -719,6 +840,11 @@ pub(crate) fn check_funcall_args(
     };
     let user_fid = |globals: &Globals, method: IdentId, class: ClassId| {
         let fid = globals.check_method(recv, method)?;
+        // The builtin `respond_to?` is the default without asking what
+        // `Object` resolves it to.
+        if method == respond_to && Some(fid) == globals.store.respond_to_fid() {
+            return None;
+        }
         (Some(fid) != default_fid(globals, class, method)).then_some(fid)
     };
     let probe_args = [Value::symbol(name), Value::bool(true)];
@@ -740,6 +866,16 @@ pub(crate) fn check_funcall_args(
         return Ok(Some(
             vm.invoke_func_inner(globals, fid, recv, args, None, None)?,
         ));
+    }
+    // No method, and nobody was asked yet: when the rest of the
+    // protocol is the builtin one too, that is the answer — and the one
+    // to remember.
+    if respond < 0
+        && globals
+            .store
+            .no_conversion(recv.class(), name, class_version)
+    {
+        return Ok(None);
     }
     // 3. Default respond_to?: a user-defined respond_to_missing? gates
     //    the missing-dispatch.

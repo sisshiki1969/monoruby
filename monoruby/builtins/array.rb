@@ -524,9 +524,8 @@ class Array
     each do |elem|
       if elem.is_a?(Array)
         return elem if elem.size > 0 && __rb_equal(elem[0], key)
-      elsif elem.respond_to?(:to_ary)
-        ary = elem.to_ary
-        return ary if ary.is_a?(Array) && ary.size > 0 && __rb_equal(ary[0], key)
+      elsif (ary = Array.try_convert(elem))
+        return ary if ary.size > 0 && __rb_equal(ary[0], key)
       end
     end
     nil
@@ -536,9 +535,8 @@ class Array
     each do |elem|
       if elem.is_a?(Array)
         return elem if elem.size > 1 && __rb_equal(elem[1], key)
-      elsif elem.respond_to?(:to_ary)
-        ary = elem.to_ary
-        return ary if ary.is_a?(Array) && ary.size > 1 && __rb_equal(ary[1], key)
+      elsif (ary = Array.try_convert(elem))
+        return ary if ary.size > 1 && __rb_equal(ary[1], key)
       end
     end
     nil

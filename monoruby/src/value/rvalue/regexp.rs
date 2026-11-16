@@ -2246,6 +2246,10 @@ impl RegexpInner {
                 "Emacs-Mule" | "stateless-ISO-2022-JP" | "stateless-ISO-2022-JP-KDDI" => {
                     OnigmoEncoding::Emacs_Mule
                 }
+                // CRuby's own `enc/cesu_8.c`: a surrogate pair is one
+                // six-byte character standing for the astral scalar
+                // (#1975).
+                "CESU-8" => OnigmoEncoding::CESU_8,
                 "KOI8-R" => OnigmoEncoding::KOI8_R,
                 "KOI8-U" => OnigmoEncoding::KOI8_U,
                 "Windows-1250" => OnigmoEncoding::Windows_1250,

@@ -1508,9 +1508,8 @@ fn parse_utc_offset_exact(
     // An object that responds to `#to_str` (but is not itself numeric)
     // is coerced to a String offset like `"+05:00"`.
     if !v.is_integer()
-        && let Some(fid) = globals.check_method(v, IdentId::TO_STR)
+        && let Some(s) = crate::coerce::check_funcall(vm, globals, v, IdentId::TO_STR)?
     {
-        let s = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
         if let Some(s) = s.is_str() {
             return Ok((parse_utc_offset_string(s)?, None));
         }
@@ -2872,9 +2871,8 @@ fn time_month_to_i64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resu
     // A non-numeric object that responds to `#to_str` is coerced to a
     // String first (CRuby allows a month name via `#to_str`).
     if !v.is_integer()
-        && let Some(fid) = globals.check_method(v, IdentId::TO_STR)
+        && let Some(r) = crate::coerce::check_funcall(vm, globals, v, IdentId::TO_STR)?
     {
-        let r = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
         if let Some(s) = r.is_str() {
             return parse_str(s);
         }
@@ -2991,12 +2989,12 @@ fn num_exact_rational(
     }
     let to_r = IdentId::get_id("to_r");
     let to_int = IdentId::get_id("to_int");
-    if globals.check_method(v, to_r).is_some() {
+    // `to_r` through `rb_check_funcall`, then `rb_check_to_int`.
+    if let Some(r) = crate::coerce::check_funcall(vm, globals, v, to_r)? {
         // `#to_r` alone is not enough — CRuby also requires `#to_int`.
         if globals.check_method(v, to_int).is_none() {
             return Err(exact_number_err(globals, v));
         }
-        let r = vm.invoke_method_inner(globals, to_r, v, &[], None, None)?;
         if let RV::Rational(rr) = r.unpack() {
             return Ok((rr.num().to_bigint(), rr.den().to_bigint()));
         }
@@ -3005,12 +3003,8 @@ fn num_exact_rational(
         }
         return Err(exact_number_err(globals, v));
     }
-    if globals.check_method(v, to_int).is_some() {
-        let i = vm.invoke_method_inner(globals, to_int, v, &[], None, None)?;
-        if let Some(x) = int_ratio(i) {
-            return Ok(x);
-        }
-        return Err(exact_number_err(globals, v));
+    if let Some(x) = v.check_to_int(vm, globals)?.and_then(int_ratio) {
+        return Ok(x);
     }
     Err(exact_number_err(globals, v))
 }

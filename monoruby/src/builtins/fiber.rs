@@ -189,11 +189,8 @@ fn storage_key(vm: &mut Executor, globals: &mut Globals, key: Value) -> Result<V
     if key.try_symbol().is_some() {
         return Ok(key);
     }
-    if key.is_str().is_some() || globals.check_method(key, IdentId::TO_STR).is_some() {
-        let id = key.coerce_to_symbol_or_string(vm, globals)?;
-        return Ok(Value::symbol(id));
-    }
-    Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, key))
+    let id = key.coerce_to_symbol_or_string(vm, globals)?;
+    Ok(Value::symbol(id))
 }
 
 ///
