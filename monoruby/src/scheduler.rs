@@ -124,6 +124,15 @@ pub(crate) struct Scheduler {
     /// 1:1 model: the kernel threads, by Ruby thread object id, joined
     /// once their thread is dead (`native::terminate_all`).
     native_joins: Vec<(u64, std::thread::JoinHandle<()>)>,
+    /// The threads `terminate_all` is killing, for as long as it waits
+    /// for them (`Terminating`). A thread leaves `threads` the moment
+    /// it is finalized, and a program rarely holds the object of a
+    /// thread it left running (`Thread.new { .. }` with the result
+    /// dropped), so nothing else keeps that cell through a collection
+    /// one of the *other* dying threads runs in its ensure clause —
+    /// while the wait loop on the main thread's Rust stack, which the
+    /// collector does not scan, still reads its state (#2027).
+    terminating: Vec<Value>,
     /// `Thread.ignore_deadlock` (the truthiness of the value last
     /// assigned, as CRuby stores it). While set, the deadlock detector
     /// is off and a program whose threads all wait forever simply
@@ -148,6 +157,7 @@ impl Scheduler {
             pending_unblocks: vec![],
             flushing_reports: false,
             native_joins: vec![],
+            terminating: vec![],
             ignore_deadlock: false,
         }
     }
@@ -175,6 +185,9 @@ impl Scheduler {
             f.mark(alloc);
         }
         for (_, _, t) in &self.io_waiters {
+            t.mark(alloc);
+        }
+        for t in &self.terminating {
             t.mark(alloc);
         }
         // The 1:1 model never leaves `in_scheduler` (main publishes
@@ -806,6 +819,30 @@ pub(crate) fn sleep_woken(
     Ok((start.elapsed(), !cur0.as_thread_inner().sleep_timed_out))
 }
 
+/// Roots the threads `terminate_all` is killing (`Scheduler::terminating`)
+/// until it is dropped. A stack discipline rather than a plain clear, so
+/// a nested entry cannot unroot the outer one's targets.
+struct Terminating {
+    base: usize,
+}
+
+impl Terminating {
+    fn root(targets: &[Value]) -> Self {
+        SCHEDULER.with(|s| {
+            let terminating = &mut s.borrow_mut().terminating;
+            let base = terminating.len();
+            terminating.extend_from_slice(targets);
+            Terminating { base }
+        })
+    }
+}
+
+impl Drop for Terminating {
+    fn drop(&mut self) {
+        SCHEDULER.with(|s| s.borrow_mut().terminating.truncate(self.base));
+    }
+}
+
 /// Terminate every live thread except main at process exit, the way
 /// CRuby's `rb_thread_terminate_all` does after the `at_exit` handlers:
 /// each thread is killed — an unrescuable unwind that runs the ensure
@@ -832,6 +869,9 @@ pub(crate) fn terminate_all(vm: &mut Executor, globals: &mut Globals) {
     if targets.is_empty() {
         return;
     }
+    // Each target is finalized — and so leaves the registry — while the
+    // others are still unwinding and allocating.
+    let _rooted = Terminating::root(&targets);
     for mut t in targets.iter().copied() {
         t.as_thread_inner_mut()
             .pending
