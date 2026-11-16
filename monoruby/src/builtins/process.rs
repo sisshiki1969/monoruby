@@ -14,8 +14,6 @@ mod rusage;
 
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_toplevel_module("Process").id();
-    let object_class = globals.store.object_class();
-    globals.define_class("Tms", object_class, klass);
     globals.define_builtin_module_func(klass, "pid", pid, 0);
     // Share Kernel#fork's implementation: it resets the green-thread
     // scheduler in the child and maps an uncaught SystemExit /
@@ -217,6 +215,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func_rest(klass, "spawn", crate::builtins::kernel::spawn);
 
     // Process::Status class — methods defined in Ruby (startup.rb)
+    let object_class = globals.store.object_class();
     let status_class = globals.define_class("Status", object_class, klass).id();
     globals.define_builtin_class_func_with(status_class, "wait", process_status_wait, 0, 2, false);
     // pidfd_open(2) handle for Process.detach's reaper thread (nil when
@@ -241,35 +240,20 @@ pub(super) fn init(globals: &mut Globals) {
 /// [https://docs.ruby-lang.org/ja/latest/method/Process/m/times.html]
 #[monoruby_builtin]
 fn times(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let tms_class = vm
-        .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Tms"])?
-        .as_class();
-    let mut val = Value::object(tms_class.id());
+    let tms_class = vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Tms"])?;
     let mut self_rusage = rusage::Rusage::default();
     rusage::getrusage(rusage::RusageWho::Self_, &mut self_rusage);
-    val.set_instance_var(
-        &mut globals.store,
-        "@utime",
-        Value::float(self_rusage.ru_utime.get_f64()),
-    )?;
-    val.set_instance_var(
-        &mut globals.store,
-        "@stime",
-        Value::float(self_rusage.ru_stime.get_f64()),
-    )?;
     let mut child_rusage = rusage::Rusage::default();
     rusage::getrusage(rusage::RusageWho::Children, &mut child_rusage);
-    val.set_instance_var(
-        &mut globals.store,
-        "@cutime",
-        Value::float(child_rusage.ru_utime.get_f64()),
-    )?;
-    val.set_instance_var(
-        &mut globals.store,
-        "@cstime",
-        Value::float(child_rusage.ru_stime.get_f64()),
-    )?;
-    Ok(val)
+    // `Process::Tms` is a Struct (builtins/process.rb), as in CRuby.
+    let members = [
+        self_rusage.ru_utime.get_f64(),
+        self_rusage.ru_stime.get_f64(),
+        child_rusage.ru_utime.get_f64(),
+        child_rusage.ru_stime.get_f64(),
+    ]
+    .map(Value::float);
+    vm.invoke_method_inner(globals, IdentId::NEW, tms_class, &members, None, None)
 }
 
 ///

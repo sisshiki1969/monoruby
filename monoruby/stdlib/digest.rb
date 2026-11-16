@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+# monoruby-hidden-ivars: true
 #
 # Digest implementation for monoruby.
 #
@@ -62,13 +63,13 @@ module Digest
   # BLOCK_LENGTH (or override the corresponding methods).
   module Instance
     def update(str)
-      @buffer << str.b
+      @__buffer << str.b
       self
     end
     alias << update
 
     def reset
-      @buffer = ''.b
+      @__buffer = ''.b
       self
     end
 
@@ -80,7 +81,7 @@ module Digest
 
     # The raw digest of the accumulated data, computed natively.
     def finish
-      String.__digest(self.class::ALGORITHM, @buffer)
+      String.__digest(self.class::ALGORITHM, @__buffer)
     end
     private :finish
 
@@ -155,11 +156,11 @@ module Digest
   # Base class for the buffered algorithm implementations.
   class Base < Digest::Class
     def initialize
-      @buffer = ''.b
+      @__buffer = ''.b
     end
 
     def initialize_copy(other)
-      @buffer = other.instance_variable_get(:@buffer).dup
+      @__buffer = @__buffer.dup
     end
   end
 end

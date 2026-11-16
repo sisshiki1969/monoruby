@@ -3177,7 +3177,7 @@ fn build_last_error_object(vm: &mut Executor, globals: &mut Globals, recv: Conve
     vm.temp_push(obj);
     let _ = globals.store.set_ivar(
         obj,
-        IdentId::get_id("@error_bytes"),
+        IdentId::get_id("/error_bytes"),
         binary_string(&err.error_bytes),
     );
     // CRuby reports "no read-again bytes" as nil, not as an empty
@@ -3189,21 +3189,21 @@ fn build_last_error_object(vm: &mut Executor, globals: &mut Globals, recv: Conve
     };
     let _ = globals
         .store
-        .set_ivar(obj, IdentId::get_id("@readagain_bytes"), readagain);
+        .set_ivar(obj, IdentId::get_id("/readagain_bytes"), readagain);
     let incomplete = matches!(kind, StreamConvertResult::IncompleteInput);
     let _ = globals.store.set_ivar(
         obj,
-        IdentId::get_id("@incomplete_input"),
+        IdentId::get_id("/incomplete_input"),
         Value::bool(incomplete),
     );
     let _ = globals.store.set_ivar(
         obj,
-        IdentId::get_id("@source_encoding_name"),
+        IdentId::get_id("/source_encoding_name"),
         Value::string(err.stage_src),
     );
     let _ = globals.store.set_ivar(
         obj,
-        IdentId::get_id("@destination_encoding_name"),
+        IdentId::get_id("/destination_encoding_name"),
         Value::string(err.stage_dst),
     );
     // `UndefinedConversionError#error_char`: the offending character,
@@ -3214,7 +3214,7 @@ fn build_last_error_object(vm: &mut Executor, globals: &mut Globals, recv: Conve
     {
         let _ = globals
             .store
-            .set_ivar(obj, IdentId::get_id("@error_char"), Value::string(text));
+            .set_ivar(obj, IdentId::get_id("/error_char"), Value::string(text));
     }
     vm.temp_clear(temp);
     obj
@@ -4264,7 +4264,7 @@ fn enc_err_source_encoding_name(
 ) -> Result<Value> {
     if let Some(v) = globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("@source_encoding_name"))
+        .get_ivar(lfp.self_val(), IdentId::get_id("/source_encoding_name"))
         .filter(|v| !v.is_nil())
     {
         return Ok(v);
@@ -4288,7 +4288,7 @@ fn enc_err_destination_encoding_name(
         .store
         .get_ivar(
             lfp.self_val(),
-            IdentId::get_id("@destination_encoding_name"),
+            IdentId::get_id("/destination_encoding_name"),
         )
         .filter(|v| !v.is_nil())
     {
@@ -4319,7 +4319,7 @@ fn enc_err_source_encoding(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    if let Some(v) = enc_err_named_encoding(globals, lfp.self_val(), "@source_encoding_name") {
+    if let Some(v) = enc_err_named_encoding(globals, lfp.self_val(), "/source_encoding_name") {
         return Ok(v);
     }
     if let Some(msg) = enc_err_message(globals, lfp.self_val())
@@ -4338,7 +4338,7 @@ fn enc_err_destination_encoding(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    if let Some(v) = enc_err_named_encoding(globals, lfp.self_val(), "@destination_encoding_name") {
+    if let Some(v) = enc_err_named_encoding(globals, lfp.self_val(), "/destination_encoding_name") {
         return Ok(v);
     }
     if let Some(msg) = enc_err_message(globals, lfp.self_val())
@@ -4363,7 +4363,7 @@ fn enc_err_error_char(
 ) -> Result<Value> {
     if let Some(v) = globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("@error_char"))
+        .get_ivar(lfp.self_val(), IdentId::get_id("/error_char"))
         .filter(|v| !v.is_nil())
     {
         return Ok(v);
@@ -4404,7 +4404,7 @@ fn enc_err_incomplete_input_p(
     // nil like CRuby.
     if let Some(v) = globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("@incomplete_input"))
+        .get_ivar(lfp.self_val(), IdentId::get_id("/incomplete_input"))
     {
         return Ok(v);
     }
@@ -4432,7 +4432,7 @@ fn enc_err_error_bytes(
 ) -> Result<Value> {
     Ok(globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("@error_bytes"))
+        .get_ivar(lfp.self_val(), IdentId::get_id("/error_bytes"))
         .unwrap_or(Value::nil()))
 }
 
@@ -4449,7 +4449,7 @@ fn enc_err_readagain_bytes(
 ) -> Result<Value> {
     Ok(globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("@readagain_bytes"))
+        .get_ivar(lfp.self_val(), IdentId::get_id("/readagain_bytes"))
         .unwrap_or(Value::nil()))
 }
 

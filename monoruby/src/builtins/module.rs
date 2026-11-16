@@ -2430,7 +2430,7 @@ fn instance_method(
     let set = vm.caller_refinements(globals);
     let (func_id, _, owner) = globals
         .store
-        .find_method_for_class_refined(klass.id(), method_name, set)
+        .find_instance_method(klass.id(), method_name, set)
         .map_err(|_| {
             MonorubyErr::method_name_error(&globals.store, method_name, klass.id(), None)
         })?;
@@ -2455,7 +2455,8 @@ fn public_instance_method(
     let klass = lfp.self_val().as_class();
     let method_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
     let (func_id, visibility, owner) = globals
-        .find_method_for_class(klass.id(), method_name)
+        .store
+        .find_instance_method(klass.id(), method_name, RefinementSetId::EMPTY)
         .map_err(|_| {
             MonorubyErr::method_name_error(&globals.store, method_name, klass.id(), None)
         })?;

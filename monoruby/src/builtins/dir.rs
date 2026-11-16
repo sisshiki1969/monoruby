@@ -62,7 +62,8 @@ pub(super) fn init(globals: &mut Globals) {
     // Ruby ivars.
     globals.define_builtin_class_func(klass, "fchdir", fchdir, 1);
     globals.define_builtin_class_func(klass, "chroot", chroot, 1);
-    globals.define_builtin_func_with(klass, "chdir", dir_inst_chdir, 0, 0, false);
+    // Behind `Dir#chdir` (dir.rb), which checks the frozen flag first.
+    globals.define_builtin_func_with(klass, "__chdir", dir_inst_chdir, 0, 0, false);
     // fd-backed internals for builtins/dir.rb: every Dir instance holds a
     // real O_DIRECTORY descriptor so `fileno`, `Dir.for_fd`, and the
     // close(2)-level double-close detection behave like CRuby's DIR*.
@@ -1107,7 +1108,7 @@ fn dir_entries_fd(
 
 /// Read the `@path` ivar set by Ruby-side `Dir#initialize`.
 fn dir_path_ivar(globals: &Globals, self_: Value) -> Result<String> {
-    match globals.store.get_ivar(self_, IdentId::get_id("@path")) {
+    match globals.store.get_ivar(self_, IdentId::get_id("/__path")) {
         Some(v) if !v.is_nil() => Ok(v.to_s(&globals.store)),
         _ => Err(MonorubyErr::ioerr("uninitialized Dir")),
     }
@@ -1116,7 +1117,7 @@ fn dir_path_ivar(globals: &Globals, self_: Value) -> Result<String> {
 //fn dir_check_closed(globals: &Globals, self_: Value) -> Result<()> {
 //    let v = globals
 //        .store
-//        .get_ivar(self_, IdentId::get_id("@closed"));
+//        .get_ivar(self_, IdentId::get_id("/__closed"));
 //    if v.map(|v| v.as_bool()).unwrap_or(false) {
 //        Err(MonorubyErr::ioerr("closed directory"))
 //    } else {
@@ -1788,21 +1789,23 @@ mod tests {
         // CRuby holds the directory open via DIR*+fchdir, so chdir to a
         // removed-but-still-open dir succeeds in CRuby and surfaces ENOENT
         // in monoruby. Avoid that observability gap and instead exercise a
-        // path that was never a real directory.
+        // closed Dir, which both refuse (`GetDIR`: "closed directory").
+        // The path is not an instance variable a program could repoint.
         run_test_once(
             r##"
             base = "/tmp/monoruby_dir_chdir_missing_#{Process.pid}_#{rand(100000)}"
             Dir.mkdir(base)
             d = Dir.new(base)
             d.close
-            raised = false
+            raised = nil
             begin
               d.instance_variable_set(:@path, "/no_such_dir_qq_xyz_for_chdir")
               d.chdir
-            rescue SystemCallError, IOError
-              raised = true
+            rescue SystemCallError, IOError => e
+              raised = [e.class, e.message]
             end
-            raised
+            Dir.rmdir(base)
+            [raised, d.path == base]
             "##,
         );
     }

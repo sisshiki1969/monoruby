@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+# monoruby-hidden-ivars: true
 require 'digest'
 
 module Digest
@@ -24,7 +25,7 @@ module Digest
   # (defaults to 256). Delegates to the fixed-width algorithm above.
   class SHA2 < Base
     def initialize(bitlen = 256)
-      @algorithm, @digest_length, @block_length =
+      @__algorithm, @__digest_length, @__block_length =
         case bitlen
         when 256 then ['sha256', 32, 64]
         when 384 then ['sha384', 48, 128]
@@ -36,22 +37,22 @@ module Digest
     end
 
     def finish
-      String.__digest(@algorithm, @buffer)
+      String.__digest(@__algorithm, @__buffer)
     end
     private :finish
 
     def digest_length
-      @digest_length
+      @__digest_length
     end
     alias length digest_length
     alias size digest_length
 
     def block_length
-      @block_length
+      @__block_length
     end
 
     def inspect
-      "#<#{self.class.name}:#{@bitlen}: #{hexdigest}>"
+      "#<#{self.class.name}:#{@bitlen} #{hexdigest}>"
     end
   end
 end

@@ -1113,7 +1113,10 @@ impl Globals {
         class_id: ClassId,
         method: IdentId,
     ) -> Result<()> {
-        self.find_method_for_class(class_id, method)
+        // `rb_undef` searches the module's own ancestry: a module cannot
+        // undefine `to_s`, which it has not got (#1966).
+        self.store
+            .find_instance_method(class_id, method, RefinementSetId::EMPTY)
             .map_err(|_| MonorubyErr::undef_method_name_error(&self.store, method, class_id))?;
         self.add_empty_method(class_id, method, Visibility::Undefined);
         Ok(())

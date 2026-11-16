@@ -26,6 +26,7 @@ pub fn define_loop_mode_builtins(globals: &mut Globals) {
 pub(super) fn init(globals: &mut Globals) -> Module {
     let klass = globals.define_toplevel_module("Kernel");
     let kernel_class = klass.id();
+    super::object::init_kernel(globals, kernel_class);
     globals.define_builtin_inline_func(
         kernel_class,
         "nil?",

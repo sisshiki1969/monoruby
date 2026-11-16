@@ -35,11 +35,11 @@ pub(crate) const NAME_PAYLOAD: &str = "name";
 /// The `Encoding::InvalidByteSequenceError` accessors, in the order the
 /// [`ENC_ERR_PAYLOAD`] Array packs them.
 pub(crate) const ENC_ERR_IVARS: [&str; 5] = [
-    "@source_encoding_name",
-    "@destination_encoding_name",
-    "@error_bytes",
-    "@readagain_bytes",
-    "@incomplete_input",
+    "/source_encoding_name",
+    "/destination_encoding_name",
+    "/error_bytes",
+    "/readagain_bytes",
+    "/incomplete_input",
 ];
 
 use super::*;
@@ -685,10 +685,10 @@ impl MonorubyErr {
             return None;
         }
         let is_interrupt = ancestors.iter().any(|m| m.id() == INTERRUPT_CLASS);
-        // Prefer the materialized object's @__signo (covers user-raised
+        // Prefer the materialized object's hidden `/__signo` (covers user-raised
         // `SignalException.new(9)` with an explicit signal).
         if let Some(obj) = self.original {
-            if let Some(v) = store.get_ivar(obj, IdentId::get_id("@__signo")) {
+            if let Some(v) = store.get_ivar(obj, IdentId::get_id("/__signo")) {
                 if let Some(n) = v.try_fixnum() {
                     return Some((n as i32, is_interrupt));
                 }

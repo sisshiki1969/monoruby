@@ -1,3 +1,5 @@
+# monoruby-hidden-ivars: true
+
 class Enumerator
   include Enumerable
 end
@@ -77,7 +79,7 @@ class Enumerator
   # the usual external-iteration machinery.
   class Product < Enumerator
     def initialize(*enums)
-      @enums = enums
+      @__enums = enums
       __enum_init_method__(self, :__product_each, [], -> { size })
       self
     end
@@ -93,19 +95,24 @@ class Enumerator
       unless other.instance_of?(self.class)
         raise TypeError, "initialize_copy should take same class object"
       end
-      enums = other.instance_variable_get(:@enums)
+      enums = other.__send__(:__product_enums)
       raise ArgumentError, "uninitialized product" if enums.nil?
-      @enums = enums
+      @__enums = enums
       __enum_init_method__(self, :__product_each, [], -> { size })
       self
     end
 
     def each(&block)
       return to_enum(:each) { size } unless block
-      enums = @enums
+      enums = @__enums
       raise ArgumentError, "uninitialized product" if enums.nil?
       __product_each_i(enums, 0, [], &block)
       self
+    end
+
+    # The members, for `initialize_copy` to take from the original.
+    private def __product_enums
+      @__enums
     end
 
     # `each`'s inherited-payload entry point (see the class comment).
@@ -131,7 +138,7 @@ class Enumerator
     # is neither an Integer nor infinite (NaN, a Symbol, 1.0, …) makes
     # the whole size unknown.
     def size
-      enums = @enums
+      enums = @__enums
       return nil if enums.nil?
       sizes = []
       enums.each do |e|
@@ -150,14 +157,14 @@ class Enumerator
     end
 
     def rewind
-      enums = @enums
+      enums = @__enums
       return self if enums.nil?
       enums.each { |e| e.rewind if e.respond_to?(:rewind) }
       self
     end
 
     def inspect
-      enums = @enums
+      enums = @__enums
       return __sprintf_repr("#<#{self.class}: uninitialized>") if enums.nil?
       guard = (Thread.current[:__product_inspect] ||= [])
       return __sprintf_repr("#<#{self.class}: ...>") if guard.include?(object_id)

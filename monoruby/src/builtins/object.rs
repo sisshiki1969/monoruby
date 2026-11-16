@@ -9,6 +9,26 @@ use jitgen::{AbstractState, BinaryInlineOutcome, JitContext};
 // BasicObject class and Object class
 //
 
+/// The methods of this file that belong to `Kernel` rather than `Object`
+/// (`Kernel.instance_method(:freeze)` finds them, and a module's method
+/// search does not reach `Object`). Called from `kernel::init`, since
+/// `Kernel` does not exist yet when [`init`] runs.
+pub(super) fn init_kernel(globals: &mut Globals, kernel_class: ClassId) {
+    // CRuby defines `===` on Kernel, NOT on BasicObject. Keeping it on
+    // BasicObject would trap `===` for BasicObject subclasses (like
+    // mspec's `SpecPositiveOperatorMatcher`) instead of routing through
+    // `method_missing`, breaking the `actual.should === expected` idiom.
+    globals.define_builtin_func(kernel_class, "===", case_eq, 1);
+    globals.define_builtin_func(kernel_class, "freeze", freeze, 0);
+    globals.define_builtin_inline_func(
+        kernel_class,
+        "frozen?",
+        frozen,
+        inline_gen2!(object_frozen),
+        0,
+    );
+}
+
 pub(super) fn init(globals: &mut Globals) {
     // BasicObject methods
 
@@ -28,11 +48,6 @@ pub(super) fn init(globals: &mut Globals) {
     // BasicObject.instance_method(:==)` holds — see ruby/spec
     // core/basicobject/equal_spec.rb.
     globals.define_builtin_funcs(BASIC_OBJECT_CLASS, "==", &["equal?"], eq, 1);
-    // CRuby defines `===` on Kernel/Object, NOT on BasicObject. Keeping
-    // it on BasicObject would trap `===` for BasicObject subclasses (like
-    // mspec's `SpecPositiveOperatorMatcher`) instead of routing through
-    // `method_missing`, breaking the `actual.should === expected` idiom.
-    globals.define_builtin_func(OBJECT_CLASS, "===", case_eq, 1);
     globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, inline_gen2!(object_not), 0);
     let neq_fid = globals.define_builtin_inline_func(
         BASIC_OBJECT_CLASS,
@@ -78,15 +93,6 @@ pub(super) fn init(globals: &mut Globals) {
     );
     globals.store[send_fid].set_native_variadic();
     globals.store.record_object_send_fid(send_fid);
-    globals.define_builtin_func(OBJECT_CLASS, "freeze", freeze, 0);
-    globals.define_builtin_inline_func(
-        OBJECT_CLASS,
-        "frozen?",
-        frozen,
-        inline_gen2!(object_frozen),
-        0,
-    );
-
     globals.define_private_builtin_func_rest(
         BASIC_OBJECT_CLASS,
         "method_missing",

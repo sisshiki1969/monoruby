@@ -4,7 +4,11 @@ Some of monoruby's built-in classes are written in Ruby where CRuby
 writes them in C: `Thread::Mutex`, `Thread::Queue`, `Thread::SizedQueue`,
 `Thread::ConditionVariable`, `Monitor`, `ThreadGroup`,
 `Thread::Backtrace::Location`, `Process::Waiter`, the Ruby half of
-`Thread`. In CRuby their
+`Thread` — and, since #1950, `Process::Status`, `Dir`, `File::Stat`,
+`Enumerator::ArithmeticSequence` / `Lazy` / `Chain` / `Product`, the
+`errno` / `signo` / `key` / `matchee` fields of the exceptions that carry
+one, the conversion errors' fields, `Digest`'s buffer, `StringScanner`,
+`Ractor` and `GC`'s flags. In CRuby their
 state is a C struct behind the object. Nothing in Ruby can see that
 struct, and that is observable:
 
@@ -114,9 +118,45 @@ program that used it could keep slots of its own that reflection does not
 show and `freeze` does not protect. That is a monoruby extension with no
 effect on programs that do not ask for it.
 
+## What moving a class involves
+
+Besides renaming `@name` to `@__name` under the magic comment:
+
+- **Readers.** `attr_reader :name` reads the *ordinary* `@name`; write
+  `def name; @__name; end` (or `attr_reader :__name` when the method
+  itself may carry the prefix).
+- **Another object's state.** `other.instance_variable_get(:@name)` no
+  longer reaches it. Inside `initialize_copy` the slot has already been
+  copied, so `@__buffer = @__buffer.dup` does; elsewhere go through a
+  private helper (`other.__send__(:__chain_enums)`). In `builtins/*.rb` a
+  `__`-prefixed helper is left out of the reflection lists
+  (`is_internal_helper`); in `stdlib/*.rb` it is not, so prefer the copied
+  slot there.
+- **Rust readers** of the variable: `get_id("@name")` becomes
+  `get_id("/__name")` (`fill_stat_ivars`, `dir_path_ivar`, the scheduler).
+- **Marshal.** Hidden slots are not dumped. Where CRuby dumps a field of
+  the C struct under a name without `@` — an exception's `errno`, `signo`,
+  `key`, `matchee`, the conversion errors' fields — `marshal.rs` maps the
+  wire name to the slot in both directions (`EXCEPTION_FIELDS`).
+- **Frozen objects.** State in hidden slots no longer makes a frozen
+  object unusable, which is CRuby's behaviour for most of these classes
+  (`StringScanner#scan`, `Digest#update`, an `Enumerator::Chain`). Where
+  CRuby does check the flag (`Dir`, through `GetDIR`) the Ruby code checks
+  it itself (`Dir#__dir_check`).
+- **Copies.** `dup` copies hidden slots like any other. A class whose
+  CRuby copy starts uninitialized, or which owns a resource, resets them in
+  `initialize_copy` (`Dir` must not share its descriptor).
+
+A class that is a Struct in CRuby is a Struct here rather than a class
+with hidden slots: `Process::Tms`, `Etc::Passwd`, `Etc::Group`.
+
 ## Tests
 
 `monoruby/tests/hidden_ivars.rs`: the synchronization classes against
 CRuby (no state in `inspect` / `instance_variables`, frozen ones still
 lock, subclasses with colliding names), and the mechanism itself
 (`hidden_ivars_magic_comment`, monoruby-only).
+`monoruby/tests/hidden_state.rs`: the classes moved by #1950 — no
+instance variables, nothing in `inspect`, subclasses with colliding
+names, frozen objects, copies, the Struct classes and the Marshal round
+trip of the exception fields.

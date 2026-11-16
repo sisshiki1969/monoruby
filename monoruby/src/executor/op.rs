@@ -1541,14 +1541,20 @@ impl Executor {
             (RV::Symbol(_), _) => None,
             (RV::Bool(lhs), RV::Bool(rhs)) if lhs == rhs => Some(Ordering::Equal),
             (RV::Bool(_), _) => None,
+            // What cannot coerce an Integer or a Float is not comparable
+            // with one. Anything else — a Rational, a Complex, an object
+            // with a `coerce` — is for the number's own `<=>` to decide
+            // (`[3, 2r, 1].sort`, `(1..2r)`).
+            (
+                RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_),
+                RV::Nil | RV::Bool(_) | RV::Symbol(_) | RV::String(_),
+            ) => None,
             (RV::Fixnum(lhs), RV::Fixnum(rhs)) => Some(lhs.cmp(&rhs)),
             (RV::Fixnum(lhs), RV::BigInt(rhs)) => Some(BigInt::from(lhs).cmp(rhs)),
             (RV::Fixnum(lhs), RV::Float(rhs)) => fixnum_cmp_float(lhs, rhs),
-            (RV::Fixnum(_), _) => None,
             (RV::BigInt(lhs), RV::Fixnum(rhs)) => lhs.partial_cmp(&BigInt::from(rhs)),
             (RV::BigInt(lhs), RV::BigInt(rhs)) => Some(lhs.cmp(rhs)),
             (RV::BigInt(lhs), RV::Float(rhs)) => bigint_cmp_float(lhs, rhs),
-            (RV::BigInt(_), _) => None,
             (RV::Float(lhs), RV::Fixnum(rhs)) => {
                 fixnum_cmp_float(rhs, lhs).map(|ord| ord.reverse())
             }
@@ -1556,7 +1562,6 @@ impl Executor {
                 bigint_cmp_float(rhs, lhs).map(|ord| ord.reverse())
             }
             (RV::Float(lhs), RV::Float(rhs)) => lhs.partial_cmp(&rhs),
-            (RV::Float(_), _) => None,
             // `String#<=>` is a byte compare with an encoding tie-break —
             // no Ruby code runs for a String pair, so answering it here
             // saves the dispatch every comparison of a string sort paid.

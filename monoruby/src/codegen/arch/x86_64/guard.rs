@@ -113,7 +113,9 @@ impl Codegen {
                 );
                 self.jit.select_page(0);
             } else {
-                let label = self.jit.label();
+                // Already on the cold page (an outline bridge): the stub sits
+                // in place, jumped over. It must bind the *same* `label` the
+                // guard below branches to.
                 let exit = self.jit.label();
                 monoasm!( &mut self.jit,
                     jmp exit;
@@ -361,7 +363,9 @@ impl Codegen {
                 );
                 self.jit.select_page(0);
             } else {
-                let label = self.jit.label();
+                // Already on the cold page (an outline bridge): the stub sits
+                // in place, jumped over. It must bind the *same* `label` the
+                // guard below branches to.
                 let exit = self.jit.label();
                 monoasm!( &mut self.jit,
                     jmp exit;

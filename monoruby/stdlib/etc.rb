@@ -28,13 +28,9 @@ module Etc
     { sysname: "Linux", nodename: "monoruby", release: "", version: "", machine: "x86_64" }
   end
 
-  class Passwd
-    attr_accessor :name, :passwd, :uid, :gid, :gecos, :dir, :shell
-  end
-
-  class Group
-    attr_accessor :name, :passwd, :gid, :mem
-  end
+  # Structs, as in CRuby's ext/etc (`rb_struct_define_under`).
+  Passwd = Struct.new(:name, :passwd, :uid, :gid, :gecos, :dir, :shell)
+  Group = Struct.new(:name, :passwd, :gid, :mem)
 
   def self.__passwd(h)
     return nil if h.nil?

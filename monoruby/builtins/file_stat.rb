@@ -1,14 +1,29 @@
+# monoruby-hidden-ivars: true
+
 class File
-  # File::Stat — the fields (@dev, @ino, @mode, @nlink, @uid, @gid,
-  # @rdev, @size, @blksize, @blocks, @atime, @mtime, @ctime) are
-  # populated from a real stat(2)/lstat(2) by the Rust constructor
-  # (`File.stat`, `File.lstat`, `File::Stat.new`). The accessors and
-  # mode-bit predicates below read those fields.
+  # File::Stat — the fields (dev, ino, mode, nlink, uid, gid, rdev,
+  # size, blksize, blocks, atime, mtime, ctime) are populated from a
+  # real stat(2)/lstat(2) by the Rust constructor (`File.stat`,
+  # `File.lstat`, `File::Stat.new`). The accessors and mode-bit
+  # predicates below read those fields. They are hidden instance
+  # variables (doc/hidden_ivars.md), `/__dev` and so on: CRuby keeps a
+  # `struct stat` behind the object.
   class Stat
     include Comparable
 
-    attr_reader :dev, :ino, :mode, :nlink, :uid, :gid, :rdev,
-                :size, :blksize, :blocks, :atime, :mtime, :ctime
+    def dev ; @__dev ; end
+    def ino ; @__ino ; end
+    def mode ; @__mode ; end
+    def nlink ; @__nlink ; end
+    def uid ; @__uid ; end
+    def gid ; @__gid ; end
+    def rdev ; @__rdev ; end
+    def size ; @__size ; end
+    def blksize ; @__blksize ; end
+    def blocks ; @__blocks ; end
+    def atime ; @__atime ; end
+    def mtime ; @__mtime ; end
+    def ctime ; @__ctime ; end
 
     S_IFMT   = 0o170000
     S_IFSOCK = 0o140000
@@ -19,16 +34,16 @@ class File
     S_IFCHR  = 0o020000
     S_IFIFO  = 0o010000
 
-    def directory? ; (@mode & S_IFMT) == S_IFDIR  ; end
-    def file?      ; (@mode & S_IFMT) == S_IFREG  ; end
-    def symlink?   ; (@mode & S_IFMT) == S_IFLNK  ; end
-    def blockdev?  ; (@mode & S_IFMT) == S_IFBLK  ; end
-    def chardev?   ; (@mode & S_IFMT) == S_IFCHR  ; end
-    def pipe?      ; (@mode & S_IFMT) == S_IFIFO  ; end
-    def socket?    ; (@mode & S_IFMT) == S_IFSOCK ; end
+    def directory? ; (@__mode & S_IFMT) == S_IFDIR  ; end
+    def file?      ; (@__mode & S_IFMT) == S_IFREG  ; end
+    def symlink?   ; (@__mode & S_IFMT) == S_IFLNK  ; end
+    def blockdev?  ; (@__mode & S_IFMT) == S_IFBLK  ; end
+    def chardev?   ; (@__mode & S_IFMT) == S_IFCHR  ; end
+    def pipe?      ; (@__mode & S_IFMT) == S_IFIFO  ; end
+    def socket?    ; (@__mode & S_IFMT) == S_IFSOCK ; end
 
     def ftype
-      case @mode & S_IFMT
+      case @__mode & S_IFMT
       when S_IFREG  then "file"
       when S_IFDIR  then "directory"
       when S_IFCHR  then "characterSpecial"
@@ -40,23 +55,23 @@ class File
       end
     end
 
-    def setuid?  ; (@mode & 0o4000) != 0 ; end
-    def setgid?  ; (@mode & 0o2000) != 0 ; end
-    def sticky?  ; (@mode & 0o1000) != 0 ; end
+    def setuid?  ; (@__mode & 0o4000) != 0 ; end
+    def setgid?  ; (@__mode & 0o2000) != 0 ; end
+    def sticky?  ; (@__mode & 0o1000) != 0 ; end
 
     def world_readable?
-      (@mode & 0o004) != 0 ? (@mode & 0o777) : nil
+      (@__mode & 0o004) != 0 ? (@__mode & 0o777) : nil
     end
 
     def world_writable?
-      (@mode & 0o002) != 0 ? (@mode & 0o777) : nil
+      (@__mode & 0o002) != 0 ? (@__mode & 0o777) : nil
     end
 
-    def zero?     ; @size == 0 ; end
-    def size?     ; @size == 0 ? nil : @size ; end
+    def zero?     ; @__size == 0 ; end
+    def size?     ; @__size == 0 ? nil : @__size ; end
 
-    def owned?    ; @uid == Process.euid ; end
-    def grpowned? ; @gid == Process.egid ; end
+    def owned?    ; @__uid == Process.euid ; end
+    def grpowned? ; @__gid == Process.egid ; end
 
     def readable?       ; _access_ok?(Process.euid, Process.egid, 4) ; end
     def readable_real?  ; _access_ok?(Process.uid, Process.gid, 4) ; end
@@ -70,16 +85,16 @@ class File
     # bit is set (CRuby's eaccess semantics).
     private def _access_ok?(uid, gid, bit)
       if uid == 0
-        return bit != 1 || (@mode & 0o111) != 0
+        return bit != 1 || (@__mode & 0o111) != 0
       end
-      shift = @uid == uid ? 6 : (@gid == gid ? 3 : 0)
-      ((@mode >> shift) & bit) != 0
+      shift = @__uid == uid ? 6 : (@__gid == gid ? 3 : 0)
+      ((@__mode >> shift) & bit) != 0
     end
 
-    def dev_major  ; @dev >> 8 ; end
-    def dev_minor  ; @dev & 0xff ; end
-    def rdev_major ; @rdev >> 8 ; end
-    def rdev_minor ; @rdev & 0xff ; end
+    def dev_major  ; @__dev >> 8 ; end
+    def dev_minor  ; @__dev & 0xff ; end
+    def rdev_major ; @__rdev >> 8 ; end
+    def rdev_minor ; @__rdev & 0xff ; end
 
     def birthtime
       raise NotImplementedError, "birthtime() function is unimplemented"
@@ -87,16 +102,17 @@ class File
 
     def <=>(other)
       return nil unless other.is_a?(File::Stat)
-      @mtime <=> other.mtime
+      @__mtime <=> other.mtime
     end
 
     def inspect
+      return "#<File::Stat: uninitialized>" if @__dev.nil?
       # Times use Time#inspect (fractional seconds included), like CRuby.
       __sprintf_repr(
-        "#<File::Stat dev=0x#{@dev.to_s(16)}, ino=#{@ino}, mode=0#{@mode.to_s(8)}, " \
-        "nlink=#{@nlink}, uid=#{@uid}, gid=#{@gid}, rdev=0x#{@rdev.to_s(16)}, " \
-        "size=#{@size}, blksize=#{@blksize}, blocks=#{@blocks}, " \
-        "atime=#{@atime.inspect}, mtime=#{@mtime.inspect}, ctime=#{@ctime.inspect}>"
+        "#<File::Stat dev=0x#{@__dev.to_s(16)}, ino=#{@__ino}, mode=0#{@__mode.to_s(8)}, " \
+        "nlink=#{@__nlink}, uid=#{@__uid}, gid=#{@__gid}, rdev=0x#{@__rdev.to_s(16)}, " \
+        "size=#{@__size}, blksize=#{@__blksize}, blocks=#{@__blocks}, " \
+        "atime=#{@__atime.inspect}, mtime=#{@__mtime.inspect}, ctime=#{@__ctime.inspect}>"
       )
     end
   end

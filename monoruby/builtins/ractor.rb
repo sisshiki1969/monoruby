@@ -1,3 +1,5 @@
+# monoruby-hidden-ivars: true
+#
 # Ractor — a sequential-consistency emulation on top of monoruby's green
 # threads.
 #
@@ -43,9 +45,9 @@ class Ractor
     end
   end
 
-  @count = 0
-  @main = nil
-  @sequence = 0
+  @__count = 0
+  @__main = nil
+  @__sequence = 0
 
   class << self
     # Every Ractor other than the main one runs its block on its own
@@ -73,7 +75,7 @@ class Ractor
     end
 
     def main
-      @main ||= begin
+      @__main ||= begin
         r = __builtin_allocate__
         r.__send__(:__ractor_init_main)
         r
@@ -86,7 +88,7 @@ class Ractor
 
     # Live (unfinished) ractors, the main one included.
     def count
-      @count + 1
+      @__count + 1
     end
 
     def receive
@@ -132,15 +134,15 @@ class Ractor
     end
 
     def __next_id
-      @sequence += 1
+      @__sequence += 1
     end
 
     def __started
-      @count += 1
+      @__count += 1
     end
 
     def __finished
-      @count -= 1
+      @__count -= 1
     end
 
     private
@@ -220,7 +222,9 @@ class Ractor
     end
   end
 
-  attr_reader :name
+  def name
+    @__name
+  end
 
   # `dup` / `clone` allocate a copy, and Ractor has no allocator (see
   # `Ractor.allocate`).
@@ -229,8 +233,8 @@ class Ractor
   end
 
   def send(obj, move: false)
-    raise ClosedError, "The incoming-port is already closed" if @inbox_closed
-    @inbox.push(obj)
+    raise ClosedError, "The incoming-port is already closed" if @__inbox_closed
+    @__inbox.push(obj)
     self
   end
   alias << send
@@ -238,10 +242,10 @@ class Ractor
   # The next value the Ractor yielded, or its final value once the block
   # has returned. Raises `ClosedError` once the final value was consumed.
   def take
-    raise ClosedError, "The outgoing-port is already closed" if @outbox_closed
-    v = @outbox.pop
-    if v.equal?(@terminator)
-      @outbox_closed = true
+    raise ClosedError, "The outgoing-port is already closed" if @__outbox_closed
+    v = @__outbox.pop
+    if v.equal?(@__terminator)
+      @__outbox_closed = true
       __final_value
     else
       v
@@ -255,111 +259,111 @@ class Ractor
   end
 
   def join
-    @thread.join if @thread
+    @__thread.join if @__thread
     self
   end
 
   def close_incoming
-    was = @inbox_closed
-    @inbox_closed = true
+    was = @__inbox_closed
+    @__inbox_closed = true
     was
   end
 
   def close_outgoing
-    was = @outbox_closed
-    @outbox_closed = true
+    was = @__outbox_closed
+    @__outbox_closed = true
     was
   end
 
   def alive?
-    @thread.nil? ? true : @thread.alive?
+    @__thread.nil? ? true : @__thread.alive?
   end
 
   def inspect
-    loc = @loc ? " #{@loc}" : ""
-    name = @name ? " #{@name}" : ""
-    state = @thread.nil? ? "running" : (@thread.alive? ? "running" : "terminated")
-    "#<Ractor:##{@id}#{name}#{loc} #{state}>"
+    loc = @__loc ? " #{@__loc}" : ""
+    name = @__name ? " #{@__name}" : ""
+    state = @__thread.nil? ? "running" : (@__thread.alive? ? "running" : "terminated")
+    "#<Ractor:##{@__id}#{name}#{loc} #{state}>"
   end
   alias to_s inspect
 
   def [](sym)
-    (@locals ||= {})[sym.to_sym]
+    (@__locals ||= {})[sym.to_sym]
   end
 
   def []=(sym, val)
-    (@locals ||= {})[sym.to_sym] = val
+    (@__locals ||= {})[sym.to_sym] = val
   end
 
   private
 
   def __ractor_init(args, name, block)
-    @id = Ractor.__next_id
-    @name = name
-    @inbox = Thread::Queue.new
-    @outbox = Thread::Queue.new
-    @terminator = Object.new
-    @inbox_closed = false
-    @outbox_closed = false
-    @loc = block.source_location&.join(":")
+    @__id = Ractor.__next_id
+    @__name = name
+    @__inbox = Thread::Queue.new
+    @__outbox = Thread::Queue.new
+    @__terminator = Object.new
+    @__inbox_closed = false
+    @__outbox_closed = false
+    @__loc = block.source_location&.join(":")
     ractor = self
     Ractor.__started
-    @thread = Thread.new do
+    @__thread = Thread.new do
       Thread.current.thread_variable_set(:__ractor__, ractor)
       begin
         block.call(*args)
       ensure
         Ractor.__finished
-        @outbox.push(@terminator)
+        @__outbox.push(@__terminator)
       end
     end
-    @thread.report_on_exception = false
+    @__thread.report_on_exception = false
   end
 
   def __ractor_init_main
-    @id = Ractor.__next_id
-    @name = nil
-    @inbox = Thread::Queue.new
-    @outbox = Thread::Queue.new
-    @terminator = Object.new
-    @inbox_closed = false
-    @outbox_closed = false
-    @thread = nil
+    @__id = Ractor.__next_id
+    @__name = nil
+    @__inbox = Thread::Queue.new
+    @__outbox = Thread::Queue.new
+    @__terminator = Object.new
+    @__inbox_closed = false
+    @__outbox_closed = false
+    @__thread = nil
   end
 
   def __final_value
-    raise Error, "the main Ractor has no value" if @thread.nil?
+    raise Error, "the main Ractor has no value" if @__thread.nil?
     begin
-      @thread.value
+      @__thread.value
     rescue Exception => e
       raise RemoteError.new(self), "thrown by remote Ractor.", cause: e
     end
   end
 
   def __receive
-    raise ClosedError, "The incoming-port is already closed" if @inbox_closed && @inbox.empty?
-    @inbox.pop
+    raise ClosedError, "The incoming-port is already closed" if @__inbox_closed && @__inbox.empty?
+    @__inbox.pop
   end
 
   def __receive_if
     kept = []
     begin
       loop do
-        v = @inbox.pop
+        v = @__inbox.pop
         return v if yield(v)
         kept << v
       end
     ensure
-      kept.each { |v| @inbox.push(v) }
+      kept.each { |v| @__inbox.push(v) }
     end
   end
 
   def __yield(obj)
-    raise ClosedError, "The outgoing-port is already closed" if @outbox_closed
-    @outbox.push(obj)
+    raise ClosedError, "The outgoing-port is already closed" if @__outbox_closed
+    @__outbox.push(obj)
   end
 
   def __ready?
-    !@outbox.empty?
+    !@__outbox.empty?
   end
 end

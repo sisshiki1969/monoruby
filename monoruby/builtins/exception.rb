@@ -1,3 +1,5 @@
+# monoruby-hidden-ivars: true
+
 # Raised when a `case/in` exhausts its branches or an `expr => pattern`
 # match fails (the pattern-matching desugar references these by name).
 class NoMatchingPatternError < StandardError
@@ -5,12 +7,18 @@ end
 
 class NoMatchingPatternKeyError < NoMatchingPatternError
   def initialize(message = nil, matchee: nil, key: nil)
-    @matchee = matchee
-    @key = key
+    @__matchee = matchee
+    @__key = key
     super(message)
   end
 
-  attr_reader :matchee, :key
+  def matchee
+    @__matchee
+  end
+
+  def key
+    @__key
+  end
 end
 
 class Exception
@@ -31,10 +39,10 @@ class Exception
     # return the same, mutable Array.
     # A prior #backtrace_locations memo, or locations installed via
     # set_backtrace(locations), win over re-deriving from the capture.
-    return @backtrace_locations if defined?(@backtrace_locations) && @backtrace_locations
+    return @__backtrace_locations if defined?(@__backtrace_locations) && @__backtrace_locations
     frames = __raise_backtrace
     return nil if frames.nil?
-    @backtrace_locations = frames.map { |f| Thread::Backtrace::Location.new(f) }
+    @__backtrace_locations = frames.map { |f| Thread::Backtrace::Location.new(f) }
   end
 
   # CRuby 3.4+: `set_backtrace` (and thus `$@ =`) also accepts an Array
@@ -46,7 +54,7 @@ class Exception
       # CRuby 3.4+: an Array of Locations sets both the string backtrace
       # and #backtrace_locations.
       __set_backtrace(bt.map(&:to_s))
-      @backtrace_locations = bt
+      @__backtrace_locations = bt
     else
       # Setting a string backtrace leaves #backtrace_locations as it was
       # (the raise-time capture, or nil), so don't touch the memo here.
