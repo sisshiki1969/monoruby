@@ -400,7 +400,7 @@ fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Val
 /// `==` is callable and a refinement of `==` is not seen
 /// (`Executor::eq_values_funcall`).
 #[monoruby_builtin]
-fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let other = lfp.arg(0);
     // Two Strings, the pair the JIT sends here most (it inlines the
@@ -416,9 +416,9 @@ fn ne(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
     }
     // The optimized `==` dispatch (builtin fast paths first, a memoized
     // lookup otherwise) — the same policy `ne_values_vis` applies when
-    // `!=` resolves to this default.
-    let res = vm.eq_values_funcall(globals, self_val, other)?.as_bool();
-    Ok(Value::bool(!res))
+    // `!=` resolves to this default — with a native `==` run in this very
+    // frame.
+    Ok(Value::bool(vm.default_ne_in_frame(globals, lfp, pc)?))
 }
 
 ///
@@ -1091,6 +1091,49 @@ mod tests {
           ]
         end
         res.chunk_while { |x, y| x == y }.map(&:first)
+        "##,
+        );
+    }
+
+    /// The default `!=` runs a native `==` — Struct's, Array's, Hash's,
+    /// Range's, Rational's, Complex's — in its own frame instead of
+    /// calling it through a second one. Same answers, an error raised
+    /// under that `==` comes out as it is, and its backtrace has the two
+    /// frames CRuby's has.
+    #[test]
+    fn default_neq_over_a_native_eq() {
+        run_test_once(
+            r##"
+        s = Struct.new(:a)
+        d = Data.define(:a)
+        b = Class.new do
+          def initialize(x) = @x = x
+          attr_reader :x
+          def ==(o)
+            raise ArgumentError, "boom" if @x == 0
+            @x == o.x
+          end
+        end
+        def nne(a, b) = a != b
+        res = []
+        40.times { |i| res << nne(s.new(b.new(1)), s.new(b.new(i % 3))) }
+        40.times { |i| res << nne([b.new(1)], [b.new(i % 3)]) }
+        40.times { |i| res << nne({ a: b.new(1) }, { a: b.new(i % 3) }) }
+        40.times { |i| res << nne(d.new(b.new(1)), d.new(b.new(i % 3))) }
+        40.times { |i| res << nne(1..2, 1..(i % 3)) }
+        40.times { |i| res << nne(1r / 3, Rational(i % 3, 3)) }
+        40.times { |i| res << nne(Complex(1, 2), Complex(i % 3, 2)) }
+        res = res.chunk_while { |x, y| x == y }.map(&:first)
+        [s.new(b.new(0)), [b.new(0)], { a: b.new(0) }, d.new(b.new(0))].each do |v|
+          res << begin
+            nne(v, v.dup)
+          rescue => e
+            [e.class, e.message, e.backtrace.first(3).map { |l| l[/'(.*)'/, 1].sub(/\A#<Class:0x\h+>/, "") }]
+          end
+        end
+        # the frame is `!=`'s own again afterwards
+        40.times { |i| res << nne(s.new(b.new(1)), s.new(b.new(i % 3))) }
+        res
         "##,
         );
     }

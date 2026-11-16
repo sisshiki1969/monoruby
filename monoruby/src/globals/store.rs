@@ -20,6 +20,28 @@ pub(crate) use iseq::*;
 pub use refinement::RefinementSetId;
 pub(crate) use refinement::RefinementTable;
 
+/// A class's `==` as C code calls it (`Store::funcall_eq_entry`).
+#[derive(Clone, Copy)]
+pub(crate) struct FuncallEq {
+    pub(crate) func_id: FuncId,
+    /// Its entry point and frame `Meta` when it is a native method of one
+    /// argument: what `BasicObject#!=`, whose own frame already holds the
+    /// receiver and that argument, needs to run it there instead of
+    /// pushing a second frame through the invoker.
+    pub(crate) native: Option<(Meta, BuiltinFn)>,
+}
+
+impl std::fmt::Debug for FuncallEq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "FuncallEq({:?}, native: {})",
+            self.func_id,
+            self.native.is_some()
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MethodTableEntry {
     owner: ClassId,
@@ -2302,17 +2324,47 @@ impl Store {
     /// refinement, no visibility — memoized per class_version on the
     /// ClassInfo. `None`: the class has none (`undef_method :==`).
     ///
-    pub(crate) fn funcall_eq(&self, class_id: ClassId, version: u32) -> Option<FuncId> {
-        if let Some((v, fid)) = self[class_id].eq_method_at()
+    pub(crate) fn funcall_eq_entry(&self, class_id: ClassId, version: u32) -> Option<FuncallEq> {
+        if let Some((v, eq)) = self[class_id].eq_method_at()
             && v == version
         {
-            return Some(fid);
+            return Some(eq);
         }
-        let fid = self
+        let func_id = self
             .search_method_by_class_id(class_id, IdentId::_EQ)?
             .func_id()?;
-        self[class_id].set_eq_method_at(version, fid);
-        Some(fid)
+        let eq = FuncallEq {
+            func_id,
+            native: self.native_unary_entry(func_id),
+        };
+        self[class_id].set_eq_method_at(version, eq);
+        Some(eq)
+    }
+
+    /// The `FuncId` of [`Self::funcall_eq_entry`].
+    pub(crate) fn funcall_eq(&self, class_id: ClassId, version: u32) -> Option<FuncId> {
+        Some(self.funcall_eq_entry(class_id, version)?.func_id)
+    }
+
+    ///
+    /// `func_id` as something a native method taking one argument can run
+    /// in its own frame (`Lfp::become_frame_of`): a native method of
+    /// exactly one required argument. Its frame is laid out as the
+    /// caller's is, so only the `Meta` differs.
+    ///
+    fn native_unary_entry(&self, func_id: FuncId) -> Option<(Meta, BuiltinFn)> {
+        let info = &self[func_id];
+        let FuncKind::Builtin { abs_address } = info.kind else {
+            return None;
+        };
+        let meta = info.meta();
+        if !meta.is_simple() || info.req_num() != 1 {
+            return None;
+        }
+        // SAFETY: `abs_address` of a `FuncKind::Builtin` was stored from a
+        // `BuiltinFn` (`FuncInfo::new_native`).
+        let func = unsafe { std::mem::transmute::<u64, BuiltinFn>(abs_address) };
+        Some((meta, func))
     }
 
     pub(crate) fn custom_neq(&self, class_id: ClassId, version: u32) -> Option<MethodTableEntry> {

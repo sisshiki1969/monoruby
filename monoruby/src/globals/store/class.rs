@@ -458,11 +458,11 @@ pub struct ClassInfo {
     neq_basic_at: std::cell::Cell<Option<u32>>,
     ///
     /// Version-stamped memo: as of class_version `.0`, `==` on this class
-    /// resolves — with no refinement — to FuncId `.1`. Consulted by the
+    /// resolves — with no refinement — to `.1`. Consulted by the
     /// default `!=`, so the `==` it negates costs a load instead of a
     /// method-cache probe per call.
     ///
-    eq_method_at: std::cell::Cell<Option<(u32, FuncId)>>,
+    eq_method_at: std::cell::Cell<Option<(u32, FuncallEq)>>,
     ///
     /// Version-stamped memo: as of class_version `.0`, `=~` on this class
     /// resolves to FuncId `.1`. Consulted by `Kernel#!~` so the inner
@@ -760,12 +760,12 @@ impl ClassInfo {
         self.match_method_at.get()
     }
 
-    pub(super) fn eq_method_at(&self) -> Option<(u32, FuncId)> {
+    pub(super) fn eq_method_at(&self) -> Option<(u32, FuncallEq)> {
         self.eq_method_at.get()
     }
 
-    pub(super) fn set_eq_method_at(&self, version: u32, fid: FuncId) {
-        self.eq_method_at.set(Some((version, fid)));
+    pub(super) fn set_eq_method_at(&self, version: u32, eq: FuncallEq) {
+        self.eq_method_at.set(Some((version, eq)));
     }
 
     pub(super) fn hash_method_at(&self) -> Option<(u32, Option<FuncId>)> {

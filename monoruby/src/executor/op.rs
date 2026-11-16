@@ -218,11 +218,8 @@ fn is_nil_or_bool(v: Value) -> bool {
 /// `eq_values_vis_raw` closely enough to be worth caching for.
 ///
 fn dispatched_eq_class(elem: Value) -> Option<ClassId> {
-    if elem.is_packed_value() {
-        // nil / booleans / Integer / Float / Symbol as immediates.
-        return None;
-    }
-    let class = elem.class();
+    // `None`: nil / booleans / Integer / Float / Symbol as immediates.
+    let class = elem.try_rvalue()?.class();
     // The heap ones: a Bignum, a boxed Float, a String.
     (class != INTEGER_CLASS && class != FLOAT_CLASS && class != STRING_CLASS).then_some(class)
 }
@@ -500,6 +497,50 @@ impl Executor {
         rhs: Value,
     ) -> Result<bool> {
         Ok(self.eq_values(globals, lhs, rhs)?.as_bool())
+    }
+
+    ///
+    /// `lhs != rhs` for `BasicObject#!=` itself, whose frame `lfp` holds
+    /// the two operands: `!(lhs == rhs)` with `==` asked as
+    /// [`Self::eq_values_funcall`] asks it.
+    ///
+    /// A native `==` — Struct's, Array's, Rational's — takes the frame
+    /// over instead of getting one of its own through the invoker: the
+    /// frame already is what that `==` wants, receiver and argument. That
+    /// is one native frame for `a != b`, which is what the class-level
+    /// `!=` methods used to cost. While it runs the frame is `==`'s (in
+    /// `caller`, as where the interpreter negates `==` with no `!=` frame
+    /// at all); it is `!=`'s again afterwards, so an error coming out of
+    /// `==` is traced through both, as in CRuby.
+    ///
+    pub(crate) fn default_ne_in_frame(
+        &mut self,
+        globals: &mut Globals,
+        mut lfp: Lfp,
+        pc: BytecodePtr,
+    ) -> Result<bool> {
+        let lhs = lfp.self_val();
+        let rhs = lfp.arg(0);
+        let Some(class) = dispatched_eq_class(lhs) else {
+            return Ok(!self.eq_values_funcall(globals, lhs, rhs)?.as_bool());
+        };
+        let Some(eq) = globals
+            .store
+            .funcall_eq_entry(class, Globals::class_version())
+        else {
+            return Err(MonorubyErr::method_not_found(globals, IdentId::_EQ, lhs));
+        };
+        let res = match eq.native {
+            Some((meta, func)) => {
+                let own = *lfp.meta();
+                lfp.become_frame_of(meta);
+                let res = func(self, globals, lfp, pc);
+                lfp.become_frame_of(own);
+                res.ok_or_else(|| self.take_error())?
+            }
+            None => self.invoke_func_inner(globals, eq.func_id, lhs, &[rhs], None, None)?,
+        };
+        Ok(!res.as_bool())
     }
 
     ///

@@ -850,6 +850,18 @@ megamorphic なサイトの即値ビット比較（`opt_eq_assumable`）は、`!
 持たない 4 クラス（`Symbol` / `NilClass` / `TrueClass` / `FalseClass`）に
 ついて「`!=` が `BasicObject#!=` に解決する」ことを確かめて記録する（#1965）。
 
+インライン形を持たない `==`（`Struct` / `Array` / `Hash` / `Rational` …）は
+`BasicObject#!=` の本体が呼ぶ。クラスごとのメモ（`ClassInfo::eq_method_at`、
+`Store::funcall_eq_entry`）が `==` の解決先を持ち、それが引数 1 個のネイティブ
+メソッドなら入口アドレスと `Meta` も持つ。`!=` のフレームは受け手と引数が
+そのまま `==` の欲しい形なので、**`==` を `!=` 自身のフレームで実行する**
+（`Executor::default_ne_in_frame`、`Lfp::become_frame_of`）。invoker を通す
+2 枚目のフレームが要らず、固有の `!=` を持っていたクラスのコスト増は半分以下に
+なり、もともと `BasicObject#!=` 経由だった `Array` / `Range` などは master より
+速い（`Array` で −33%）。実行中フレームの `Meta` は `==` のもので、戻ったら `!=`
+のものに戻すので、`==` の中から出た例外のバックトレースは CRuby と同じ
+`Struct#==` → `BasicObject#!=` の 2 行になる。
+
 ### Step 3 の当初計画（記録として保存）
 
 Step 2 の (op, class) ビットマスクができれば、#1066 が要求する
