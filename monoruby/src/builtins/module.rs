@@ -720,7 +720,7 @@ pub(super) fn autoload_on(
     feature_arg: Value,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    let const_name = name_arg.expect_symbol_or_string(globals)?;
+    let const_name = name_arg.expect_symbol_or_to_str(vm, globals)?;
     validate_constant_name(const_name)?;
     let feature = feature_arg.coerce_to_path_rstring(vm, globals)?;
     let feature = feature.to_str()?.to_string();
@@ -789,14 +789,14 @@ pub(super) fn autoload_on(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/autoload=3f.html]
 #[monoruby_builtin]
 fn autoload_query(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     // No symbol for the name means no autoload is registered under it;
     // answer without interning (a query must not grow the symbol table).
-    let Some(name) = lfp.arg(0).expect_symbol_or_existing_string(globals)? else {
+    let Some(name) = lfp.arg(0).expect_symbol_or_existing_to_str(vm, globals)? else {
         return Ok(Value::nil());
     };
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
@@ -1341,8 +1341,9 @@ fn constant_path_segments(
         && let Some(id) = name_arg.try_symbol_or_string()
     {
         (id, false)
-    } else if let Some(func_id) = globals.check_method(name_arg, IdentId::TO_STR) {
-        let result = vm.invoke_func_inner(globals, func_id, name_arg, &[], None, None)?;
+    } else if let Some(result) =
+        crate::coerce::check_funcall(vm, globals, name_arg, IdentId::TO_STR)?
+    {
         match result
             .is_rstring()
             .and_then(|_| result.try_symbol_or_string())
@@ -1772,16 +1773,7 @@ fn define_method(
     // The name accepts Symbol / String and anything `to_str`-convertible
     // (CRuby's `define_method(obj)` with `obj.to_str`).
     let name_val = lfp.arg(0);
-    let name = if name_val.is_str().is_some() || name_val.try_symbol().is_some() {
-        name_val.expect_symbol_or_string(globals)?
-    } else if let Some(coerced) =
-        vm.invoke_method_if_exists(globals, IdentId::TO_STR, name_val, &[], None, None)?
-        && coerced.is_str().is_some()
-    {
-        coerced.expect_symbol_or_string(globals)?
-    } else {
-        name_val.expect_symbol_or_string(globals)?
-    };
+    let name = name_val.expect_symbol_or_to_str(vm, globals)?;
     // For proc-based define_method, the runtime LFP has the *block*'s
     // FuncId (the wrapper jumps directly to the block code, only
     // tagging the meta with `PROC_METHOD_MASK`). For `super` to work
@@ -2783,13 +2775,13 @@ fn coerce_to_class_var_name(
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/remove_class_variable.html]
 #[monoruby_builtin]
 fn remove_class_variable(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let name = lfp.arg(0).expect_symbol_or_to_str(vm, globals)?;
     match globals.store[class_id].remove_cvar(name) {
         Some(val) => Ok(val),
         None => Err(MonorubyErr::nameerr_showing(
@@ -2980,7 +2972,7 @@ fn set_constants_visibility(globals: &mut Globals, lfp: Lfp, make_private: bool)
 /// [https://docs.ruby-lang.org/ja/latest/method/Module/i/deprecate_constant.html]
 #[monoruby_builtin]
 fn deprecate_constant(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -2993,7 +2985,7 @@ fn deprecate_constant(
     // of `private_constant` / `public_constant`.
     let mut names = Vec::with_capacity(args.len());
     for arg in args.iter() {
-        let name = arg.expect_symbol_or_string(globals)?;
+        let name = arg.expect_symbol_or_to_str(vm, globals)?;
         if !globals.store[class_id].has_own_constant(name) {
             return Err(MonorubyErr::constant_not_defined(
                 &globals.store,
@@ -3052,7 +3044,7 @@ pub(super) fn ruby2_keywords_mark(
         // anything else with TypeError "<obj> is not a symbol nor a
         // string"). We don't honour `to_str` here — CRuby's
         // `ruby2_keywords` is also strict about Symbol/String only.
-        let name = arg.expect_symbol_or_string(globals)?;
+        let name = arg.expect_symbol_or_to_str(vm, globals)?;
         if !globals.store[class_id].has_own_method(name) {
             return Err(MonorubyErr::method_name_error(
                 &globals.store,

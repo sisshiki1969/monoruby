@@ -463,8 +463,7 @@ fn hash_bracket(
             } else {
                 // Try to_hash first
                 let to_hash_id = IdentId::get_id("to_hash");
-                if let Some(coerced) =
-                    vm.invoke_method_if_exists(globals, to_hash_id, arg, &[], None, None)?
+                if let Some(coerced) = crate::coerce::check_funcall(vm, globals, arg, to_hash_id)?
                     && coerced.try_hash_ty().is_some()
                 {
                     let mut map = RubyMap::default();
@@ -473,7 +472,7 @@ fn hash_bracket(
                     }
                     Value::hash(map)
                 } else if let Some(coerced) =
-                    vm.invoke_method_if_exists(globals, IdentId::TO_ARY, arg, &[], None, None)?
+                    crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_ARY)?
                     && let Some(ary) = coerced.try_array_ty()
                 {
                     hash_from_array_pairs(ary.iter().copied(), vm, globals)?
@@ -516,7 +515,7 @@ fn hash_from_array_pairs(
 ) -> Result<Value> {
     let mut map = RubyMap::default();
     for (idx, elem) in iter.enumerate() {
-        let Some(pair) = elem.try_array_ty() else {
+        let Some(pair) = elem.check_array_type(vm, globals)? else {
             // CRuby formats `nil`/`true`/`false` literally and uses class
             // name for everything else.
             let label = if elem.is_nil() {
@@ -618,26 +617,10 @@ fn try_convert(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let arg = lfp.arg(0);
-    if arg.try_hash_ty().is_some() {
-        return Ok(arg);
-    }
-    let method = IdentId::get_id("to_hash");
-    if let Some(result) = vm.invoke_method_if_exists(globals, method, arg, &[], None, None)? {
-        if result.is_nil() {
-            return Ok(Value::nil());
-        }
-        if result.try_hash_ty().is_some() {
-            return Ok(result);
-        }
-        return Err(MonorubyErr::typeerr(format!(
-            "can't convert {} to Hash ({}#to_hash gives {})",
-            arg.get_real_class_name(globals),
-            arg.get_real_class_name(globals),
-            result.get_real_class_name(globals),
-        )));
-    }
-    Ok(Value::nil())
+    Ok(match lfp.arg(0).check_hash_type(vm, globals)? {
+        Some(h) => h.as_val(),
+        None => Value::nil(),
+    })
 }
 
 ///
@@ -2970,41 +2953,30 @@ fn env_to_hash(
         // the entries come from the block's fresh return Arrays and must
         // survive the following block calls.
         return vm.with_temp_scope(|vm| {
-        vm.temp_push(Value::hash(RubyMap::default()));
-        let map_idx = vm.temp_len() - 1;
-        for (k, v) in pairs {
-            let result = vm.invoke_block(globals, &data, &[k, v])?;
-            // CRuby coerces the block's return value to an Array *only* via
-            // `#to_ary` (never `#to_a`); anything else raises
-            // `TypeError("wrong element type <Class> (expected array)")`.
-            let arr = if result.is_array_ty() {
-                result.as_array()
-            } else {
-                let converted = if let Some(func_id) =
-                    globals.check_method(result, IdentId::TO_ARY)
-                {
-                    vm.invoke_func_inner(globals, func_id, result, &[], None, None)?
-                } else {
-                    Value::nil()
-                };
-                if converted.is_array_ty() {
-                    converted.as_array()
-                } else {
+            vm.temp_push(Value::hash(RubyMap::default()));
+            let map_idx = vm.temp_len() - 1;
+            for (k, v) in pairs {
+                let result = vm.invoke_block(globals, &data, &[k, v])?;
+                // CRuby coerces the block's return value to an Array *only* via
+                // `#to_ary` (never `#to_a`); anything else raises
+                // `TypeError("wrong element type <Class> (expected array)")`.
+                let Some(arr) = result.check_array_type(vm, globals)? else {
                     return Err(MonorubyErr::typeerr(format!(
                         "wrong element type {} (expected array)",
                         result.get_real_class_name(&globals.store),
                     )));
+                };
+                if arr.len() != 2 {
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "element has wrong array length (expected 2, was {})",
+                        arr.len(),
+                    )));
                 }
-            };
-            if arr.len() != 2 {
-                return Err(MonorubyErr::argumenterr(format!(
-                    "element has wrong array length (expected 2, was {})",
-                    arr.len(),
-                )));
+                vm.temp_at(map_idx)
+                    .as_hash()
+                    .insert(arr[0], arr[1], vm, globals)?;
             }
-            vm.temp_at(map_idx).as_hash().insert(arr[0], arr[1], vm, globals)?;
-        }
-        Ok(vm.temp_at(map_idx))
+            Ok(vm.temp_at(map_idx))
         });
     }
     let pairs = env_transcoded_pairs(vm, globals, lfp.self_val())?;
@@ -3922,8 +3894,8 @@ fn try_coerce_env_string(
         }
         return Ok(Some(s));
     }
-    if globals.check_method(v, IdentId::TO_STR).is_some() {
-        let s = v.coerce_to_str(vm, globals)?;
+    if let Some(s) = v.check_string_type(vm, globals)? {
+        let s = s.expect_string(&globals.store)?;
         if s.as_bytes().contains(&0) {
             return Err(MonorubyErr::argumenterr("bare \\0 in env"));
         }

@@ -242,8 +242,7 @@ fn json_source(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Val
     if v.is_rstring_inner().is_some() {
         return Ok(v);
     }
-    if let Some(fid) = globals.check_method(v, IdentId::TO_STR) {
-        let converted = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
+    if let Some(converted) = crate::coerce::check_funcall(vm, globals, v, IdentId::TO_STR)? {
         if converted.is_rstring_inner().is_some() {
             return Ok(converted);
         }

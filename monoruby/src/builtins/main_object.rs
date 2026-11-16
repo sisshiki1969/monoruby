@@ -157,7 +157,7 @@ fn main_define_method(
     pc: BytecodePtr,
 ) -> Result<Value> {
     let class_id = OBJECT_CLASS;
-    let name = lfp.arg(0).expect_symbol_or_string(globals)?;
+    let name = lfp.arg(0).expect_symbol_or_to_str(vm, globals)?;
     let func_id = if let Some(method) = lfp.try_arg(1) {
         if let Some(proc) = method.is_proc() {
             globals.define_proc_method(proc)

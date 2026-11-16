@@ -25,7 +25,7 @@ extern "C" fn expect_string(
     globals: &mut Globals,
     v: Value,
 ) -> Option<IdentId> {
-    v.expect_symbol_or_string(globals)
+    v.expect_symbol_or_to_str(vm, globals)
         .map_err(|err| vm.set_error(err))
         .ok()
 }

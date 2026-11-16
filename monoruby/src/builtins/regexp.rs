@@ -733,8 +733,9 @@ fn regexp_union(
             if let Some(re) = arg.is_regex() {
                 return Ok(re.into());
             }
-            if let Some(func_id) = globals.check_method(arg, IdentId::get_id("to_regexp")) {
-                let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+            if let Some(result) =
+                crate::coerce::check_funcall(vm, globals, arg, IdentId::get_id("to_regexp"))?
+            {
                 if let Some(re) = result.is_regex() {
                     return Ok(re.into());
                 }
@@ -976,14 +977,14 @@ fn union_member_value(vm: &mut Executor, globals: &mut Globals, arg: Value) -> R
     if arg.is_rstring().is_some() || arg.is_regex().is_some() || arg.try_symbol().is_some() {
         return Ok(arg);
     }
-    if let Some(func_id) = globals.check_method(arg, IdentId::get_id("to_regexp")) {
-        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+    if let Some(result) =
+        crate::coerce::check_funcall(vm, globals, arg, IdentId::get_id("to_regexp"))?
+    {
         if result.is_regex().is_some() {
             return Ok(result);
         }
     }
-    if let Some(func_id) = globals.check_method(arg, IdentId::TO_STR) {
-        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+    if let Some(result) = crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_STR)? {
         if result.is_rstring().is_some() {
             return Ok(result);
         }
@@ -1018,14 +1019,14 @@ fn format_union_member(
     if let Some(sym) = arg.try_symbol() {
         return Ok(RegexpInner::escape(sym.get_name().as_str()).into_bytes());
     }
-    if let Some(func_id) = globals.check_method(arg, IdentId::get_id("to_regexp")) {
-        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+    if let Some(result) =
+        crate::coerce::check_funcall(vm, globals, arg, IdentId::get_id("to_regexp"))?
+    {
         if let Some(re) = result.is_regex() {
             return Ok(re.tos_bytes());
         }
     }
-    if let Some(func_id) = globals.check_method(arg, IdentId::TO_STR) {
-        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+    if let Some(result) = crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_STR)? {
         if let Some(s) = result.is_rstring_inner() {
             return Ok(RegexpInner::escape_in(s.as_bytes(), s.encoding()));
         }
@@ -1169,12 +1170,11 @@ fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         arg0
     } else if arg0.try_symbol().is_some() {
         symbol_as_string(arg0)
-    } else if let Some(func_id) = globals.check_method(arg0, IdentId::TO_STR) {
+    } else if let Some(result) = crate::coerce::check_funcall(vm, globals, arg0, IdentId::TO_STR)? {
         // `to_str` coercion path: call the method, then accept the
         // result iff it's a String. CRuby raises TypeError on a
         // non-String return value (`can't convert X to String
         // (X#to_str gives Y)`); we mirror that.
-        let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
         if result.is_str().is_none() {
             let class = arg0.get_real_class_name(&globals.store);
             let res_class = result.get_real_class_name(&globals.store);
@@ -1379,7 +1379,7 @@ fn regexp_match(
     // zero-copy MatchData snapshot, which also propagates the subject's
     // encoding to $&/$`/$'/$1..$N) when it is a UTF-8-valid String;
     // Symbols and non-UTF-8 subjects fall back to the owned conversion.
-    let arg0 = symbol_as_string(lfp.arg(0));
+    let arg0 = reg_operand(vm, globals, lfp.arg(0))?;
     check_subject_match_encoding(&globals.store, &regex, arg0)?;
     warn_binary_regexp_match(vm, globals, &regex, arg0);
     // A subject in a non-UTF-8 encoding Onigmo has a native codec for
@@ -1536,7 +1536,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if !regex.initialized() {
         return Err(MonorubyErr::typeerr("uninitialized Regexp"));
     }
-    let arg0 = symbol_as_string(lfp.arg(0));
+    let arg0 = reg_operand(vm, globals, lfp.arg(0))?;
     if arg0.is_nil() {
         return Ok(Value::bool(false));
     }
@@ -1619,6 +1619,21 @@ fn symbol_as_string(subject: Value) -> Value {
     }
 }
 
+/// `reg_operand(s, TRUE)`: the subject of `=~` / `match` / `match?` —
+/// a Symbol as the String it names, a String (or nil, which every
+/// caller answers without matching) as it is, and anything else by
+/// `rb_str_to_str`: `to_str` through `rb_check_funcall`, or "no
+/// implicit conversion of X into String".
+fn reg_operand(vm: &mut Executor, globals: &mut Globals, subject: Value) -> Result<Value> {
+    if subject.try_symbol().is_some() {
+        return Ok(symbol_as_string(subject));
+    }
+    if subject.is_nil() || subject.is_rstring().is_some() {
+        return Ok(subject);
+    }
+    Ok(subject.coerce_to_rstring(vm, globals)?.as_val())
+}
+
 fn subject_to_string(store: &Store, subject: Value) -> Result<String> {
     if let Some(sym) = subject.try_symbol() {
         return Ok(sym.get_name());
@@ -1643,7 +1658,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     if !regex.initialized() {
         return Err(MonorubyErr::typeerr("uninitialized Regexp"));
     }
-    let arg0 = symbol_as_string(lfp.arg(0));
+    let arg0 = reg_operand(vm, globals, lfp.arg(0))?;
     // CRuby's `Regexp#match(nil)` clears `$~` and returns nil.
     if arg0.is_nil() {
         vm.clear_capture_special_variables();
@@ -1791,8 +1806,9 @@ fn regexp_try_convert(
     if arg.is_regex().is_some() {
         return Ok(arg);
     }
-    if let Some(func_id) = globals.check_method(arg, IdentId::get_id("to_regexp")) {
-        let result = vm.invoke_func_inner(globals, func_id, arg, &[], None, None)?;
+    if let Some(result) =
+        crate::coerce::check_funcall(vm, globals, arg, IdentId::get_id("to_regexp"))?
+    {
         if result.is_nil() {
             return Ok(Value::nil());
         }

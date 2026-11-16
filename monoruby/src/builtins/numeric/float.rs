@@ -1085,8 +1085,7 @@ pub(super) fn parse_half_mode(
         Some(sym.get_name().into_bytes())
     } else if let Some(s) = v.is_rstring_inner() {
         Some(s.as_bytes().to_vec())
-    } else if let Some(func_id) = globals.check_method(v, IdentId::TO_STR) {
-        let s = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
+    } else if let Some(s) = crate::coerce::check_funcall(vm, globals, v, IdentId::TO_STR)? {
         s.is_rstring_inner().map(|s| s.as_bytes().to_vec())
     } else {
         None

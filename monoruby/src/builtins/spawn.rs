@@ -146,11 +146,8 @@ pub(crate) fn parse_exec_args(
     if let Some(first) = items.first().copied() {
         let env_hash = if let Some(h) = first.try_hash_ty() {
             Some(h)
-        } else if first.is_rstring().is_none()
-            && first.try_array_ty().is_none()
-            && globals.check_method(first, IdentId::get_id("to_hash")).is_some()
-        {
-            first.coerce_to_hash(vm, globals).ok()
+        } else if first.is_rstring().is_none() && first.try_array_ty().is_none() {
+            first.check_hash_type(vm, globals).ok().flatten()
         } else {
             None
         };
@@ -310,10 +307,8 @@ pub(crate) fn parse_exec_args(
     let first = items[0];
     let first_ary = if let Some(a) = first.try_array_ty() {
         Some(a)
-    } else if first.is_rstring().is_none()
-        && globals.check_method(first, IdentId::get_id("to_ary")).is_some()
-    {
-        first.coerce_to_array(vm, globals).ok()
+    } else if first.is_rstring().is_none() {
+        first.check_array_type(vm, globals).ok().flatten()
     } else {
         None
     };
@@ -540,8 +535,8 @@ fn parse_redirect(
             };
             RedirectTarget::File { path, flags, perm }
         }
-    } else if globals.check_method(v, IdentId::get_id("to_io")).is_some() {
-        let io = vm.invoke_method_inner(globals, IdentId::get_id("to_io"), v, &[], None, None)?;
+    } else if let Some(io) = crate::coerce::check_funcall(vm, globals, v, IdentId::get_id("to_io"))?
+    {
         if io.ty() != Some(ObjTy::IO) {
             return Err(MonorubyErr::typeerr(format!(
                 "can't convert {} to IO ({0}#to_io gives {})",

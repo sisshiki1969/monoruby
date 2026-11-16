@@ -129,8 +129,7 @@ fn struct_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
                 return Err(MonorubyErr::identifier_must_be_constant(s));
             }
         } else if arg0.try_symbol().is_none()
-            && let Some(coerced) =
-                vm.invoke_method_if_exists(globals, IdentId::TO_STR, arg0, &[], None, None)?
+            && let Some(coerced) = crate::coerce::check_funcall(vm, globals, arg0, IdentId::TO_STR)?
             && coerced.is_str().is_some()
         {
             let s = coerced.as_str();
@@ -231,7 +230,7 @@ fn struct_initialize(
     // `rb_struct_define_without_accessor`).
     let mut seen: Vec<IdentId> = Vec::with_capacity(members.len());
     for arg in members.iter() {
-        let name = arg.expect_symbol_or_string(globals)?;
+        let name = arg.expect_symbol_or_to_str(vm, globals)?;
         if seen.contains(&name) {
             return Err(MonorubyErr::argumenterr(format!(
                 "duplicate member: {name:?}"
@@ -252,7 +251,7 @@ fn struct_initialize(
     // sequence that `attr_reader`/`attr_writer` would have produced.
     let inline = members.len() <= crate::value::STRUCT_INLINE_SLOTS;
     for (i, arg) in members.iter().enumerate() {
-        let name = arg.expect_symbol_or_string(globals)?;
+        let name = arg.expect_symbol_or_to_str(vm, globals)?;
         let slot = i as u16;
         globals.define_struct_reader(class_id, name, slot, inline, Visibility::Public);
         vm.invoke_method_added(globals, class_id, name, None)?;

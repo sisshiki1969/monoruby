@@ -201,7 +201,7 @@ fn bo_method_missing(
     _: BytecodePtr,
 ) -> Result<Value> {
     let args = lfp.arg(0).as_array();
-    let name = args[0].expect_symbol_or_string(globals)?;
+    let name = args[0].expect_symbol_or_to_str(vm, globals)?;
     let recv = lfp.self_val();
     // The call style shapes the error, mirroring CRuby's default
     // method_missing: a failed "variable call" (bare identifier —

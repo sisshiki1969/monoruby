@@ -1528,9 +1528,9 @@ fn transcode_with_fallback(
                 }
                 let rep_str = if rep.is_str().is_some() {
                     rep
-                } else if globals.check_method(rep, IdentId::TO_STR).is_some() {
-                    let converted =
-                        vm.invoke_method_inner(globals, IdentId::TO_STR, rep, &[], None, None)?;
+                } else if let Some(converted) =
+                    crate::coerce::check_funcall(vm, globals, rep, IdentId::TO_STR)?
+                {
                     if converted.is_str().is_none() {
                         return Err(MonorubyErr::cant_convert_error(
                             globals,
@@ -1836,8 +1836,8 @@ fn resolve_default_encoding_arg(
     let name = if val.is_str().is_some() {
         val
     } else {
-        let converted = match globals.check_method(val, IdentId::TO_STR) {
-            Some(fid) => vm.invoke_func_inner(globals, fid, val, &[], None, None)?,
+        let converted = match crate::coerce::check_funcall(vm, globals, val, IdentId::TO_STR)? {
+            Some(converted) => converted,
             None => {
                 return Err(MonorubyErr::no_implicit_conversion(
                     &globals.store,

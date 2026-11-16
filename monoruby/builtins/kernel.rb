@@ -53,20 +53,10 @@ module Kernel
     end
   end
 
-  # Internal helper: coerce value to Integer via to_int.
-  # Raises TypeError with CRuby-compatible message if conversion fails.
-  def __to_int(val)
-    return val if val.is_a?(Integer)
-    if val.respond_to?(:to_int)
-      result = val.to_int
-      unless result.is_a?(Integer)
-        raise TypeError, "can't convert #{val.class} to Integer (#{val.class}#to_int gives #{result.class})"
-      end
-      result
-    else
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(val)} into Integer"
-    end
-  end
+  # `__to_int(val)` (CRuby's rb_to_int), `__to_str(val)` (StringValue)
+  # and `__num2long_slow(val)` (NUM2LONG) are native: they ask for the
+  # conversion through rb_check_funcall, which a `respond_to?` test
+  # written here would only approximate (src/builtins/kernel.rs).
 
   # CRuby's NUM2LONG, which is how a C method reads a count, a size or a
   # limit: an Integer that fits a C long, a Float truncated (one outside
@@ -108,47 +98,6 @@ module Kernel
   def __ary_capa(n)
     raise ArgumentError, "array size too big" if n > 0x0fff_ffff_ffff_ffff
     n
-  end
-
-  def __num2long_slow(val)
-    unless val.is_a?(Integer)
-      if val.is_a?(Float)
-        # NaN fails both comparisons.
-        unless val < 9223372036854775808.0 && val >= -9223372036854775808.0
-          raise RangeError, "float #{'%-.10g' % val} out of range of integer"
-        end
-        return val.to_i
-      end
-      raise TypeError, "no implicit conversion from nil to integer" if val.nil?
-      unless val.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{__builtin_class_name(val)} into Integer"
-      end
-      conv = val.to_int
-      unless conv.is_a?(Integer)
-        raise TypeError,
-              "can't convert #{val.class} to Integer (#{val.class}#to_int gives #{conv.class})"
-      end
-      val = conv
-    end
-    if val.bit_length > 63
-      raise RangeError, "bignum too big to convert into 'long'"
-    end
-    val
-  end
-
-  # Internal helper: coerce value to String via to_str.
-  # Raises TypeError with CRuby-compatible message if conversion fails.
-  def __to_str(val)
-    return val if val.is_a?(String)
-    if val.respond_to?(:to_str)
-      result = val.to_str
-      unless result.is_a?(String)
-        raise TypeError, "can't convert #{val.class} into String (#{val.class}#to_str gives #{result.class})"
-      end
-      result
-    else
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(val)} into String"
-    end
   end
 end
 
@@ -376,59 +325,11 @@ module Kernel
   end
 
   def String(arg)
-    # A BasicObject lacks #is_a?/#respond_to? entirely; every probe on
-    # `arg` is guarded so such objects fall through to the TypeError.
-    return arg if (arg.is_a?(::String) rescue false)
-    if (arg.respond_to?(:to_str) rescue false)
-      result = arg.to_str
-      return result if result.is_a?(::String)
-      raise TypeError, "can't convert #{arg.class} to String (#{arg.class}#to_str gives #{result.class})"
-    end
-    # CRuby's conversion (rb_check_funcall): a *user-defined*
-    # #respond_to? returning false suppresses the call, but with the
-    # default #respond_to? the conversion simply dispatches #to_s — so an
-    # undef'd #to_s still reaches a method_missing handler — and treats a
-    # NoMethodError as inconvertibility (TypeError, not NoMethodError).
-    klass = begin
-      arg.class
-    rescue ::NoMethodError
-      ::Object
-    end
-    custom_rt = begin
-      arg.method(:respond_to?).owner != ::Kernel
-    rescue ::NameError
-      false
-    end
-    if custom_rt
-      responds = begin
-        arg.respond_to?(:to_s)
-      rescue ::NoMethodError
-        false
-      end
-      raise TypeError, "can't convert #{klass} into String" unless responds
-    end
-    result = begin
-      arg.to_s
-    rescue ::NoMethodError
-      raise TypeError, "can't convert #{klass} into String"
-    end
-    unless result.is_a?(::String)
-      raise TypeError, "can't convert #{klass} to String (#{klass}#to_s gives #{result.class})"
-    end
-    result
+    __String(arg)
   end
 
   def Hash(arg)
-    return {} if arg.nil?
-    return {} if arg.is_a?(::Array) && arg.empty?
-    return arg if arg.is_a?(::Hash)
-    if arg.respond_to?(:to_hash)
-      result = arg.to_hash
-      return {} if result.nil?
-      return result if result.is_a?(::Hash)
-      raise TypeError, "can't convert #{arg.class} to Hash (#{arg.class}#to_hash gives #{result.class})"
-    end
-    raise TypeError, "can't convert #{arg.class} into Hash"
+    __Hash(arg)
   end
 
   def srand(*args)
