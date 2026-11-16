@@ -958,7 +958,7 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     };
     // Parse half: keyword (arg(1) after kw processing)
     let half = if let Some(kw_val) = lfp.try_arg(1) {
-        parse_half_mode(kw_val)?
+        parse_half_mode(vm, globals, kw_val)?
     } else {
         None
     };
@@ -1069,24 +1069,43 @@ fn round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
 }
 
-/// Parse the `half:` keyword argument for rounding mode.
-pub(super) fn parse_half_mode(v: Value) -> Result<Option<RoundHalf>> {
+/// Parse the `half:` keyword argument for rounding mode, as CRuby's
+/// `rb_num_get_rounding_option` reads it: `nil` is the default, and a
+/// Symbol, a String or anything with `#to_str` names the mode, whatever
+/// its case (`half: "EVEN"`).
+pub(super) fn parse_half_mode(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<Option<RoundHalf>> {
     if v.is_nil() {
         return Ok(None);
     }
-    if let Some(sym) = v.try_symbol() {
-        let name = sym.get_name();
-        match name.as_str() {
-            "up" => Ok(Some(RoundHalf::Up)),
-            "down" => Ok(Some(RoundHalf::Down)),
-            "even" => Ok(Some(RoundHalf::Even)),
-            _ => Err(MonorubyErr::argumenterr(format!(
-                "invalid rounding mode: {}",
-                name
-            ))),
-        }
+    let name = if let Some(sym) = v.try_symbol() {
+        Some(sym.get_name().into_bytes())
+    } else if let Some(s) = v.is_rstring_inner() {
+        Some(s.as_bytes().to_vec())
+    } else if let Some(func_id) = globals.check_method(v, IdentId::TO_STR) {
+        let s = vm.invoke_func_inner(globals, func_id, v, &[], None, None)?;
+        s.is_rstring_inner().map(|s| s.as_bytes().to_vec())
     } else {
-        Err(MonorubyErr::argumenterr("invalid rounding mode"))
+        None
+    };
+    match name
+        .as_deref()
+        .map(|name| name.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some(b"up") => Ok(Some(RoundHalf::Up)),
+        Some(b"down") => Ok(Some(RoundHalf::Down)),
+        Some(b"even") => Ok(Some(RoundHalf::Even)),
+        _ => {
+            let shown = vm.obj_as_string(globals, v)?;
+            Err(MonorubyErr::argumenterr(format!(
+                "invalid rounding mode: {}",
+                String::from_utf8_lossy(shown.as_rstring_inner().as_bytes())
+            )))
+        }
     }
 }
 

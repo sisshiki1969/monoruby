@@ -134,7 +134,9 @@ fn sym_name(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let enc = sym.symbol_encoding().unwrap_or(default_enc);
     let inner = RStringInner::from_encoding(bytes, enc);
     let mut v = Value::string_from_inner(inner);
-    v.set_frozen();
+    // The symbol's own fstring (`rb_sym2str`): frozen, shared by every
+    // `name` call, and without a singleton class.
+    v.set_fstring();
     globals.symbol_names.insert(sym, v);
     Ok(v)
 }

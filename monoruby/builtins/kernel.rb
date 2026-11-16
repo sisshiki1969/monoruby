@@ -83,6 +83,33 @@ module Kernel
     __num2long_slow(val)
   end
 
+  # The count of `min(n)` / `max(n)` (`by`: of `min_by(n)` / `max_by(n)`),
+  # with the checks of CRuby's `rb_nmin_run`. It keeps a buffer of four
+  # times the count (eight for `_by`), so a count that buffer cannot be
+  # made for is refused before any element is looked at: "too big size"
+  # when the multiplication would overflow a C long, "array size too
+  # big" when the Array would be too long (#1956).
+  def __nmin_n(n, by = false)
+    n = __num2long(n)
+    raise ArgumentError, "negative size (#{n})" if n < 0
+    __nmin_n_big(n, by) if n > 0x01ff_ffff_ffff_ffff
+    n
+  end
+
+  def __nmin_n_big(n, by)
+    # LONG_MAX / 4 (/ 2), then ARY_MAX_SIZE / 4 (/ 2).
+    raise ArgumentError, "too big size" if n > (by ? 0x0fff_ffff_ffff_ffff : 0x1fff_ffff_ffff_ffff)
+    raise ArgumentError, "array size too big" if n > (by ? 0x01ff_ffff_ffff_ffff : 0x03ff_ffff_ffff_ffff)
+  end
+
+  # A count CRuby allocates an Array of up front (`rb_ary_new2(n)`):
+  # longer than ARY_MAX_SIZE is refused. (`Enumerable#take` / `first(n)`
+  # spell the same check out, to stay one frame shallower.)
+  def __ary_capa(n)
+    raise ArgumentError, "array size too big" if n > 0x0fff_ffff_ffff_ffff
+    n
+  end
+
   def __num2long_slow(val)
     unless val.is_a?(Integer)
       if val.is_a?(Float)

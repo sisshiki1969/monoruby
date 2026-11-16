@@ -208,24 +208,28 @@ fn bo_method_missing(
     // could as well have been a local variable) raises NameError, and
     // a failed `super` raises the super-flavored NoMethodError.
     use crate::executor::MethodMissingStyle;
-    match vm.take_method_missing_style() {
+    let style = vm.take_method_missing_style();
+    // How CRuby's `name_err_mesg_to_str` names the receiver: through
+    // the Ruby-level `#name` of its class, so a class with an overridden
+    // `def self.name` shows that name.
+    let desc = nme_receiver_description(vm, globals, recv);
+    match style {
         MethodMissingStyle::VCall => {
-            // CRuby 4.0: `undefined local variable or method 'name' for
-            // <recv>` (single quotes), carrying the receiver on `#receiver`.
-            return Err(MonorubyErr::nameerr_with_name_receiver(
-                format!(
-                    "undefined local variable or method '{name}' for {}",
-                    recv.to_s(&globals.store)
-                ),
+            // `undefined local variable or method 'name' for <recv>`,
+            // carrying the receiver on `#receiver`.
+            return Err(MonorubyErr::nameerr_showing(
+                format_args!("undefined local variable or method '"),
                 name,
-                recv,
+                format_args!("' for {desc}"),
+                Some(recv),
             ));
         }
         MethodMissingStyle::Super => {
-            return Err(MonorubyErr::super_method_not_found(
-                &globals.store,
+            return Err(MonorubyErr::no_method_error(
+                "super: no superclass method '",
                 name,
                 recv,
+                format_args!("' for {desc}"),
             ));
         }
         MethodMissingStyle::Plain => {}
@@ -236,86 +240,79 @@ fn bo_method_missing(
     // CRuby reports these as "private/protected method … called" rather
     // than "undefined method".
     use crate::executor::Visibility;
-    // `undefined` marks a genuine missing method (as opposed to a
-    // visibility violation), which alone gets the Ruby-`#name`-based
-    // receiver rendering and the `#args` payload.
-    let (err, undefined) = match globals.store.check_method_for_class(recv.class(), name) {
-        Some(entry) if entry.func_id().is_some() => match entry.visibility() {
-            Visibility::Private => {
-                (MonorubyErr::private_method_called(&globals.store, name, recv), false)
-            }
-            Visibility::Protected => (
-                MonorubyErr::protected_method_called(&globals.store, name, recv),
-                false,
-            ),
-            _ => (MonorubyErr::method_not_found(&globals.store, name, recv), true),
-        },
-        _ => (MonorubyErr::method_not_found(&globals.store, name, recv), true),
+    let visibility = match globals.store.check_method_for_class(recv.class(), name) {
+        Some(entry) if entry.func_id().is_some() => Some(entry.visibility()),
+        _ => None,
     };
-    // A genuine NoMethodError carries the call arguments on `#args`
-    // (`args[0]` is the method name; the rest are the call arguments)
-    // and renders the receiver via its Ruby-level `#name` — CRuby calls
-    // it, so a class with an overridden `def self.name` shows that name.
-    if undefined {
-        let mut err = err;
-        if let Ok(desc) = nme_receiver_description(vm, globals, recv) {
-            // ... and the method's name through `Symbol#to_s`, once that
-            // has been redefined (`Executor::name_through_to_s`).
-            let msg = match vm.name_through_to_s(globals, name) {
-                Some(shown) => format!("undefined method '{shown}' for {desc}"),
-                None => format!("undefined method '{name}' for {desc}"),
-            };
-            err.set_msg(msg);
+    match visibility {
+        Some(Visibility::Private) => Err(MonorubyErr::no_method_error(
+            "private method '",
+            name,
+            recv,
+            format_args!("' called for {desc}"),
+        )),
+        Some(Visibility::Protected) => Err(MonorubyErr::no_method_error(
+            "protected method '",
+            name,
+            recv,
+            format_args!("' called for {desc}"),
+        )),
+        _ => {
+            // A genuine NoMethodError carries the call arguments on
+            // `#args` (`args[0]` is the method name; the rest are the
+            // call arguments).
+            let err = MonorubyErr::no_method_error(
+                "undefined method '",
+                name,
+                recv,
+                format_args!("' for {desc}"),
+            );
+            let call_args = Value::array_from_iter(args.iter().skip(1).cloned());
+            Err(no_method_error_with_args(globals, err, call_args))
         }
-        let call_args = Value::array_from_iter(args.iter().skip(1).cloned());
-        return Err(no_method_error_with_args(globals, err, call_args));
     }
-    Err(err)
 }
 
-/// CRuby's receiver rendering for a NoMethodError message, using the
-/// Ruby-level `#name` (never `#inspect`): `class <Name>` / `module
-/// <Name>` for a named class/module (anonymous → its `#<Class:0x…>`
-/// form), the object's own string form for a receiver that has a
-/// singleton class, and `an instance of <Class#name>` otherwise.
-fn nme_receiver_description(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    recv: Value,
-) -> Result<String> {
+/// CRuby's receiver rendering for a NameError / NoMethodError message
+/// (`name_err_mesg_to_str`): `nil` / `true` / `false`; `class <C>` /
+/// `module <M>`; `main`, or the default `#<Class:0x…>` form, for a
+/// receiver that has a singleton class; `an instance of <C>` otherwise.
+/// The class is shown by its Ruby-level `#name`, by its `#inspect` when
+/// that answers nil (an anonymous class) or raises, and by the default
+/// `#<Class:0x…>` form when neither answers a String. An exception from
+/// either method is dropped, as `rb_protect` drops it there.
+fn nme_receiver_description(vm: &mut Executor, globals: &mut Globals, recv: Value) -> String {
     if recv.is_nil() {
-        return Ok("nil".to_string());
+        return "nil".to_string();
     } else if recv == Value::bool(true) {
-        return Ok("true".to_string());
+        return "true".to_string();
     } else if recv == Value::bool(false) {
-        return Ok("false".to_string());
+        return "false".to_string();
     }
-    let name_id = IdentId::get_id("name");
-    if let Some(m) = recv.is_class_or_module() {
-        let kind = if m.is_module() { "module" } else { "class" };
-        let name = vm.invoke_method_inner(globals, name_id, recv, &[], None, None)?;
-        let s = match name.is_str() {
-            Some(s) => s.to_string(),
-            None => globals.store.get_class_name(m.id()),
-        };
-        return Ok(format!("{kind} {s}"));
-    }
-    // A receiver with its own singleton class renders as its object form.
-    if globals.store[recv.class()]
-        .get_module()
-        .is_singleton()
-        .is_some()
-    {
-        return Ok(recv.to_s(&globals.store));
-    }
-    let cls = recv.class();
-    let cls_val = globals.store[cls].get_module().as_val();
-    let name = vm.invoke_method_inner(globals, name_id, cls_val, &[], None, None)?;
-    let s = match name.is_str() {
-        Some(s) => s.to_string(),
-        None => globals.store.get_class_name(cls),
+    let (prefix, class) = if let Some(m) = recv.is_class_or_module() {
+        (if m.is_module() { "module " } else { "class " }, m)
+    } else {
+        let class = globals.store[recv.class()].get_module();
+        if class.is_singleton().is_some() {
+            return MonorubyErr::singleton_receiver_description(&globals.store, recv);
+        }
+        ("an instance of ", class)
     };
-    Ok(format!("an instance of {s}"))
+    let c = class.as_val();
+    let shown = match vm.invoke_method_inner(globals, IdentId::get_id("name"), c, &[], None, None) {
+        Ok(name) if !name.is_nil() => Some(name),
+        _ => vm
+            .invoke_method_inner(globals, IdentId::INSPECT, c, &[], None, None)
+            .ok(),
+    };
+    let shown = match shown.and_then(|v| {
+        v.is_rstring_inner()
+            .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+    }) {
+        Some(s) => s,
+        None => globals.store.get_class_name(class.id()),
+    };
+    format!("{prefix}{shown}")
 }
 
 /// Re-materialize a NoMethodError so it also carries `#args`. The
@@ -327,9 +324,13 @@ fn no_method_error_with_args(globals: &mut Globals, err: MonorubyErr, call_args:
         MonorubyErrKind::NotMethod { name, receiver } => (*name, *receiver),
         _ => (None, None),
     };
-    let exc = Value::new_exception_from(err.message().to_string(), NO_METHOD_ERROR_CLASS);
+    let mut exc = Value::new_exception_from(err.message().to_string(), NO_METHOD_ERROR_CLASS);
+    // The pre-built object shows the name where the error did.
+    exc.is_exception_mut().unwrap().name_span = err.name_span;
     if let Some(name) = name {
-        let _ = globals.store.set_ivar(exc, IdentId::_NAME, Value::symbol(name));
+        let _ = globals
+            .store
+            .set_ivar(exc, IdentId::_NAME, Value::symbol(name));
     }
     if let Some(receiver) = receiver {
         let _ = globals
@@ -664,7 +665,19 @@ fn instance_eval_inner(
         // class: `def` inside the string lands there, and class
         // variables skip it (singleton cref) and resolve in the
         // caller's scope.
-        let receiver_class = globals.store.get_singleton(self_val)?.id();
+        //
+        // A receiver that cannot have one — an Integer, a Symbol, a
+        // Float, an fstring — is still evaluated: CRuby's cref holds the
+        // receiver and asks for the singleton class only when something
+        // is defined (`CREF_CLASS_FOR_DEFINITION`), reading constants
+        // through `CLASS_OF(self)` until then. So the body's lexical
+        // class is the receiver's own class here, and a `def` in it
+        // raises the TypeError through the runtime cref
+        // (`DefinitionContext::Receiver`).
+        let receiver_class = match globals.store.get_singleton(self_val) {
+            Ok(singleton) => singleton.id(),
+            Err(_) => self_val.class(),
+        };
         let fid = globals.compile_script_eval(
             expr,
             path,

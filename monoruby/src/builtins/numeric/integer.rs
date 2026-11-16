@@ -159,16 +159,9 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func_with(INTEGER_CLASS, "floor", int_floor, 0, 1, false);
     globals.define_builtin_func_with(INTEGER_CLASS, "ceil", int_ceil, 0, 1, false);
     globals.define_builtin_func_with(INTEGER_CLASS, "truncate", int_truncate, 0, 1, false);
-    globals.define_builtin_func_with_kw(
-        INTEGER_CLASS,
-        "round",
-        int_round,
-        0,
-        1,
-        false,
-        &["half"],
-        false,
-    );
+    // Any keyword is taken (`kw_rest`): `int_round` returns the receiver
+    // before it looks at them when no digit count is given.
+    globals.define_builtin_func_with_kw(INTEGER_CLASS, "round", int_round, 0, 1, false, &[], true);
 }
 
 /// ### Integer#chr
@@ -1628,27 +1621,41 @@ fn int_truncate(
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/round.html]
 #[monoruby_builtin]
 fn int_round(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ndigits = if let Some(d) = lfp.try_arg(0) {
-        d.coerce_to_int_i64(vm, globals)?
-    } else {
+    // CRuby's `int_round`: without a digit count the receiver is the
+    // answer and the keywords are not even looked at, so
+    // `12.round(half: :even, ndigits: 1)` is 12 (#1956). With one, the
+    // only keyword is `half:`.
+    let Some(ndigits) = lfp.try_arg(0) else {
         return Ok(lfp.self_val());
     };
-    if ndigits > 0x3FFFFFFF || ndigits < -0x40000000 {
+    let ndigits = ndigits.num2long(vm, globals)?;
+    if ndigits > (i32::MAX as i64) || ndigits < (i32::MIN as i64) {
         return Err(MonorubyErr::rangeerr(format!(
-            "integer {} too big to convert to `int'",
-            ndigits
+            "integer {ndigits} too {} to convert to 'int'",
+            if ndigits < 0 { "small" } else { "big" },
         )));
     }
-    let half = if let Some(kw_val) = lfp.try_arg(1) {
-        super::float::parse_half_mode(kw_val)?
-    } else {
-        None
-    };
-    if ndigits > (i32::MAX as i64) || ndigits < -(i32::MAX as i64) {
-        return Err(MonorubyErr::rangeerr(format!(
-            "integer {} too big to convert to `int'",
-            ndigits
-        )));
+    let mut half = None;
+    if let Some(opts) = lfp.try_arg(1).and_then(|v| v.try_hash_ty()) {
+        let mut unknown = vec![];
+        let mut mode = None;
+        for (k, v) in opts.iter() {
+            if k.try_symbol() == Some(IdentId::get_id("half")) {
+                mode = Some(v);
+            } else {
+                unknown.push(k.inspect(&globals.store));
+            }
+        }
+        if !unknown.is_empty() {
+            return Err(MonorubyErr::argumenterr(format!(
+                "unknown keyword{}: {}",
+                if unknown.len() == 1 { "" } else { "s" },
+                unknown.join(", ")
+            )));
+        }
+        if let Some(mode) = mode {
+            half = super::float::parse_half_mode(vm, globals, mode)?;
+        }
     }
     if ndigits >= 0 {
         return Ok(lfp.self_val());

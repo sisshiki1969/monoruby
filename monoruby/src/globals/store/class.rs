@@ -315,7 +315,7 @@ impl ClassId {
                     };
                     format!("#<{kind}:0x{:016x}>", class.as_val().id())
                 }
-                Some(base) => format!("#<Class:{}>", base.to_s(store)),
+                Some(base) => format!("#<Class:{}>", store.attached_object_name(base)),
             },
         }
     }
@@ -2598,11 +2598,9 @@ impl Store {
         }
         self.check_refined_basic_op(class_id, func_name);
         if self.classes[class_id].methods.remove(&func_name).is_none() {
-            Err(MonorubyErr::nameerr(format!(
-                "method `{}' not defined in {}",
-                func_name,
-                self.get_class_name(class_id)
-            )))
+            Err(MonorubyErr::method_not_defined_in(
+                self, func_name, class_id,
+            ))
         } else {
             Ok(())
         }
@@ -2755,7 +2753,12 @@ impl Store {
             // `func_id` is `None`, which `is_private` / `is_public` and
             // friends treat as "no method present" — so the spec's
             // `m.private_instance_methods.include?(:foo)` would be false.
-            let (func_id, inherited_vis, _) = self.find_method_for_class(class_id, *name)?;
+            // A name that is no method is `rb_print_undef`'s NameError
+            // about the module (`undefined method 'x' for class 'C'`),
+            // not the NoMethodError of a call (#1952).
+            let (func_id, inherited_vis, _) = self
+                .find_method_for_class(class_id, *name)
+                .map_err(|_| MonorubyErr::method_name_error(self, *name, class_id, None))?;
             // A visibility shadow copies the *inherited* func_id, which goes
             // stale if the inherited method has since been redefined. Resolve
             // the current inherited definition from the superclass (the

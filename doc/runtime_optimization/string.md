@@ -171,6 +171,16 @@ encoding)` をキーにしたプログラム全体のプールで（`require` �
 記憶する。目的は CRuby と同じく pragma 下で `"abc".equal?("abc")` を true に
 すること。
 
+プールされた String はヘッダフラグのビット 5 `FSTR_BIT`（`Header::is_fstr`）を
+持つ。これが CRuby の `RSTRING_FSTR` にあたり、「frozen かつ特異クラスを
+作れない」（`singleton_class` / `extend` / `def s.x` は `TypeError: can't
+define singleton`）を意味する。プールを通らずに同じ扱いになる String もこの
+ビットだけを立てる: `Symbol#name`、`Module#name`、そして Hash が unfrozen な
+素の String キー（特異クラスもインスタンス変数も無いもの）から作る frozen
+コピー（`Value::frozen_hash_key`、CRuby の `rb_hash_key_str`）。ビットは
+`NEWBORN_FLAG_MASK` の外にあるので、`dup` / `clone` したものは普通の String に
+なる。`Store::is_fstring` はこのビットを読むだけで、プールは引かない。
+
 ### 3.2 `# frozen_string_literal: true`
 
 `emit_string` / `emit_bytes` は pragma 下で `emit_frozen_interned` →
@@ -493,7 +503,7 @@ inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも
 | 共有の方針 | 積極的（`rb_str_new_shared`、`RSTRING_EMBED_LEN_MAX` 超の `rb_str_substr`） | `len > 32` **かつ**親が既に共有かヒープあふれのときだけ |
 | root | 共有の親自身が共有でありうる（連鎖、`rb_str_shared_root` で解決） | 隠れた **frozen** root。sharer は連鎖しない。frozen な親は自分自身が root |
 | CoW | `rb_str_modify` → `str_make_independent` | `owned_mut()` / `uniquify()` の単一入口 |
-| `rb_fstring` の重複排除 | pragma のリテラル**と**実行時の `-"str"` / `String#-@` / Hash キーに適用 | コンパイル時のリテラルプール `Store::frozen_str_pool`（`(bytes, encoding)` キー）**のみ**。`String#-@` は素の `dup.freeze`（**実行時の重複排除無し**）。Hash の String キーは格納ごとに `dup` + `freeze` でインターンしない |
+| `rb_fstring` の重複排除 | pragma のリテラル**と**実行時の `-"str"` / `String#-@` / Hash キーに適用 | コンパイル時のリテラルプール `Store::frozen_str_pool`（`(bytes, encoding)` キー）**のみ**。`String#-@` は素の `dup.freeze`（**実行時の重複排除無し**）。Hash の String キーは格納ごとに `dup` + `freeze` でインターンしない（コピーには `FSTR_BIT` を立てるので特異クラスは CRuby と同じく作れないが、`-"k"` と同一オブジェクトにはならない） |
 | chilled リテラル | CRuby 3.4 の `STR_CHILLED` | ヘッダフラグのビット 7 `CHILLED_LITERAL_BIT`、`Symbol#to_s` 用の別の `is_chilled` ビット、`--debug-frozen-string-literal` の出自テーブル |
 | coderange | `ENC_CODERANGE_*` を RBasic のフラグにキャッシュ | JIT 既知オフセットの `Cell<CodeRange>`（`repr(u8)`）。**遅延**計算で、追記・部分文字列・repeat では再計算でなく O(1) で畳む |
 | `String#hash` | seeded SipHash。fstring 側でキャッシュ | seeded SipHash（`DefaultHasher` + プロセスごとの `RandomState`）。**String ごとのキャッシュ無し**（2026-09 の yjit-bench 調査が未解決コストとして挙げる） |

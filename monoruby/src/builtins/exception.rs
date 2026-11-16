@@ -108,6 +108,7 @@ pub(super) fn init(globals: &mut Globals) {
         &["receiver"],
         false,
     );
+    globals.define_builtin_class_func(NAME_ERROR_CLASS, "__showing", nameerr_showing, 4);
     globals.define_builtin_exception_class("NoMethodError", NO_METHOD_ERROR_CLASS, nameerr);
     globals.define_builtin_func_with_kw(
         NO_METHOD_ERROR_CLASS,
@@ -325,6 +326,44 @@ fn nameerr_initialize(
     Ok(Value::nil())
 }
 
+/// `NameError.__showing(before, name, after, receiver)` — for the
+/// builtins written in Ruby: the NameError CRuby raises with
+/// `rb_name_err_raise("…%1$s…", receiver, name)`. Its message is
+/// *before*, the name, *after*; a Symbol name is shown through
+/// `Symbol#to_s` each time the message is read
+/// (`MonorubyErr::name_span`), any other name by its `to_s`, and
+/// `#name` is the object given.
+#[monoruby_builtin]
+fn nameerr_showing(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let before = lfp.arg(0).expect_string(&globals.store)?;
+    let name = lfp.arg(1);
+    let after = lfp.arg(2).expect_string(&globals.store)?;
+    let receiver = lfp.arg(3);
+    let exc = match name.try_symbol() {
+        Some(sym) => Value::new_exception(MonorubyErr::nameerr_showing(
+            format_args!("{before}"),
+            sym,
+            format_args!("{after}"),
+            None,
+        )),
+        None => {
+            let shown = vm.obj_as_string(globals, name)?;
+            let shown = String::from_utf8_lossy(shown.as_rstring_inner().as_bytes()).into_owned();
+            Value::new_exception_from(format!("{before}{shown}{after}"), NAME_ERROR_CLASS)
+        }
+    };
+    globals.store.set_ivar(exc, IdentId::_NAME, name)?;
+    globals
+        .store
+        .set_ivar(exc, IdentId::get_id("/receiver"), receiver)?;
+    Ok(exc)
+}
+
 /// `NoMethodError.new(msg = nil, name = nil, args = nil, receiver: …)`.
 #[monoruby_builtin]
 fn nomethoderr_initialize(
@@ -475,8 +514,61 @@ fn message(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/to_s.html]
 #[monoruby_builtin]
-fn to_s(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(message_value(&globals.store, lfp.self_val()))
+fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    if self_.is_exception().unwrap().name_span.is_some()
+        && !globals
+            .store
+            .to_s_is_builtin(SYMBOL_CLASS, Globals::class_version())
+    {
+        return message_showing_name(vm, globals, self_);
+    }
+    Ok(message_value(&globals.store, self_))
+}
+
+///
+/// The message of a NameError / NoMethodError that shows the name it is
+/// about, once `Symbol#to_s` has been redefined.
+///
+/// CRuby keeps such a message as a format and its arguments and renders
+/// it when it is read (`name_err_mesg_to_str`), the name through
+/// `rb_obj_as_string`: under `class Symbol; def to_s = "SYM"; end`,
+/// `nil.foo` reports `undefined method 'SYM' for nil`, that `to_s` runs
+/// again on every read of the message, and what it raises comes out of
+/// `Exception#message` (#1929, #1954). A name that is a String
+/// (`undef_method`'s) is its own rendering.
+///
+fn message_showing_name(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    exception: Value,
+) -> Result<Value> {
+    let name = globals.store.get_ivar(exception, IdentId::_NAME);
+    let Some(name) = name.filter(|name| name.try_symbol().is_some()) else {
+        return Ok(message_value(&globals.store, exception));
+    };
+    let shown = vm.obj_as_string(globals, name)?;
+    let ex = exception.is_exception().unwrap();
+    let (Some((start, len)), None) = (ex.name_span, &ex.raw_message) else {
+        return Ok(message_value(&globals.store, exception));
+    };
+    let (start, len) = (start as usize, len as usize);
+    let message = ex.message.as_bytes();
+    let shown = shown.as_rstring_inner();
+    let mut bytes = Vec::with_capacity(message.len() - len + shown.len());
+    bytes.extend_from_slice(&message[..start]);
+    bytes.extend_from_slice(shown.as_bytes());
+    bytes.extend_from_slice(&message[start + len..]);
+    // The format is ASCII and the rest of the message UTF-8: a name in
+    // another encoding brings its own, as `rb_str_format` has it.
+    let enc = if shown.as_bytes().is_ascii() || std::str::from_utf8(&bytes).is_ok() {
+        crate::value::Encoding::UTF8
+    } else {
+        shown.encoding()
+    };
+    Ok(Value::string_from_inner(RStringInner::from_encoding(
+        &bytes, enc,
+    )))
 }
 
 ///

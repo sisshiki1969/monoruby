@@ -412,11 +412,7 @@ impl Executor {
                 // NameError; re-attach the name and the receiver (the
                 // module the lookup started on — `Object` for a bare
                 // top-level reference) that CRuby reports.
-                Err(MonorubyErr::nameerr_with_name_receiver(
-                    e.message,
-                    name,
-                    module.as_val(),
-                ))
+                Err(e.nameerr_about(name, Some(module.as_val())))
             }
             Err(e) => Err(e),
         }

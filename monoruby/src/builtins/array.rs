@@ -2685,6 +2685,15 @@ fn minmax_n(vm: &mut Executor, globals: &mut Globals, n: Value) -> Result<usize>
         // (-1)", `Range#min` "negative array size (or size too big)".
         return Err(MonorubyErr::argumenterr(format!("negative size ({n})")));
     }
+    // `rb_nmin_run` keeps a buffer of four times the count, and refuses
+    // one it cannot make before it looks at any element (#1956; the
+    // Ruby-side twin is `Kernel#__nmin_n`).
+    if n > i64::MAX / 4 {
+        return Err(MonorubyErr::argumenterr("too big size"));
+    }
+    if n > i64::MAX / 8 / 4 {
+        return Err(MonorubyErr::argumenterr("array size too big"));
+    }
     Ok(n as usize)
 }
 

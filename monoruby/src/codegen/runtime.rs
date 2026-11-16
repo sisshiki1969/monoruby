@@ -2997,7 +2997,11 @@ pub(super) extern "C" fn undef_method(
             return None;
         }
     };
-    match globals.undef_method_for_class(class_id, method) {
+    match globals
+        .store
+        .class_modify_check(class_id)
+        .and_then(|_| globals.undef_method_for_class(class_id, method))
+    {
         Err(err) => {
             vm.set_error(err);
             None

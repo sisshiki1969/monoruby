@@ -1114,7 +1114,7 @@ impl Globals {
         method: IdentId,
     ) -> Result<()> {
         self.find_method_for_class(class_id, method)
-            .map_err(|_| MonorubyErr::undefined_method(method, class_id.get_name(&self.store)))?;
+            .map_err(|_| MonorubyErr::undef_method_name_error(&self.store, method, class_id))?;
         self.add_empty_method(class_id, method, Visibility::Undefined);
         Ok(())
     }
@@ -1137,7 +1137,7 @@ impl Globals {
         };
         let (func_id, visibility, _) = self
             .find_method_for_class(source_class, old_name)
-            .map_err(|_| MonorubyErr::undefined_method(old_name, class_id.get_name(&self.store)))?;
+            .map_err(|_| MonorubyErr::method_name_error(&self.store, old_name, class_id, None))?;
         // The alias inherits the *source* method's original definition
         // name, so chained aliases all report the root: `Method#name`
         // is the alias, `#original_name` the original.
