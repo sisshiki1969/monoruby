@@ -1,0 +1,1337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>monoruby profile</title>
+<!--
+  The viewer of monoruby's built-in profiler (doc/profiler.md).
+
+  `MONORUBY_PROF_OUT=PREFIX` writes this page as PREFIX.html with the run's
+  data in the `data` script element below. Everything is in this one file:
+  no network, no dependency. The data is the stacks themselves (see `View`
+  in src/prof.rs for the format), and every table and chart here is
+  computed from them, so that they can be recomputed for a part of the run.
+-->
+<style>
+:root {
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10); --wash: rgba(11,11,11,.05);
+  --frame: #e9e8e2; --frame-native: #d5d3c8; --frame-dim: #f0efea;
+  --accent: #2a78d6; --accent-wash: rgba(42,120,214,.12);
+  --t0: #2a78d6; --t1: #eb6834; --t2: #1baf7a; --t3: #eda100; --t4: #e87ba4;
+  --t5: #008300; --t6: #6250d6; --t7: #e34948; --t8: #898781; --t9: #c3c2b7;
+  --on-t3: #0b0b0b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.06);
+    --frame: #33332f; --frame-native: #4a4943; --frame-dim: #262624;
+    --accent: #3987e5; --accent-wash: rgba(57,135,229,.18);
+    --t0: #3987e5; --t1: #d95926; --t2: #199e70; --t3: #c98500; --t4: #d55181;
+    --t5: #0ca30c; --t6: #9085e9; --t7: #e66767; --t8: #898781; --t9: #55544f;
+    --on-t3: #ffffff;
+  }
+}
+:root[data-theme="dark"] {
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.06);
+  --frame: #33332f; --frame-native: #4a4943; --frame-dim: #262624;
+  --accent: #3987e5; --accent-wash: rgba(57,135,229,.18);
+  --t0: #3987e5; --t1: #d95926; --t2: #199e70; --t3: #c98500; --t4: #d55181;
+  --t5: #0ca30c; --t6: #9085e9; --t7: #e66767; --t8: #898781; --t9: #55544f;
+  --on-t3: #ffffff;
+}
+* { box-sizing: border-box; }
+html { color-scheme: light dark; }
+body {
+  margin: 0; background: var(--page); color: var(--ink);
+  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+.wrap { max-width: 1500px; margin: 0 auto; padding: 16px 20px 48px; }
+header.top { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
+header.top h1 { font-size: 16px; margin: 0 0 2px; font-weight: 650; }
+header.top .cmd { color: var(--ink2); word-break: break-all; }
+header.top .info { color: var(--muted); margin-top: 2px; }
+header.top .grow { flex: 1; min-width: 0; }
+button, select, input[type="search"] {
+  font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; height: 28px;
+}
+button { cursor: pointer; }
+button:hover { background: var(--wash); }
+input[type="search"] { min-width: 220px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+.card h2 { font-size: 13px; font-weight: 650; margin: 0; }
+.card .cap { color: var(--muted); margin: 2px 0 8px; max-width: 110ch; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.row .grow { flex: 1; }
+.muted { color: var(--muted); }
+.warn { border-left: 3px solid #fab219; padding: 6px 10px; margin-bottom: 12px; background: var(--surface); border-radius: 4px; }
+nav.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin: 4px 0 12px; flex-wrap: wrap; }
+nav.tabs button { border: 0; background: none; border-radius: 6px 6px 0 0; height: 32px; padding: 4px 14px; color: var(--ink2); border-bottom: 2px solid transparent; }
+nav.tabs button[aria-selected="true"] { color: var(--ink); font-weight: 650; border-bottom-color: var(--accent); }
+.legend { display: flex; gap: 4px 14px; flex-wrap: wrap; color: var(--ink2); margin: 6px 0 2px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; flex: none; }
+canvas { display: block; width: 100%; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.tile .l { color: var(--ink2); }
+.tile .v { font-size: 22px; font-weight: 650; line-height: 1.25; }
+.tile .s { color: var(--muted); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(560px, 1fr)); gap: 12px; }
+.grid2 > .card { margin-bottom: 0; min-width: 0; }
+.grid2 { margin-bottom: 12px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 3px 8px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+th { color: var(--ink2); font-weight: 600; white-space: nowrap; position: sticky; top: 0; background: var(--surface); user-select: none; }
+th.sortable { cursor: pointer; }
+th.sortable:hover { color: var(--ink); }
+th .arrow { color: var(--accent); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td { white-space: nowrap; }
+td.name { white-space: normal; overflow-wrap: anywhere; min-width: 160px; }
+td.short { min-width: 0; white-space: nowrap; }
+td .loc { color: var(--muted); margin-left: 6px; white-space: nowrap; }
+tbody tr:hover { background: var(--wash); }
+tbody tr.sel { background: var(--accent-wash); }
+tbody tr.click { cursor: pointer; }
+.barcell { width: 96px; min-width: 96px; }
+.bar { height: 8px; border-radius: 4px; background: var(--wash); overflow: hidden; }
+.bar > i { display: block; height: 100%; border-radius: 4px; background: var(--accent); }
+.mix { display: flex; gap: 1px; height: 8px; border-radius: 4px; overflow: hidden; width: 96px; }
+.mix > i { display: block; height: 100%; min-width: 1px; }
+.tablewrap { max-height: 70vh; overflow: auto; }
+.more { margin-top: 8px; }
+.split { display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); gap: 12px; align-items: start; }
+@media (max-width: 1000px) { .split { grid-template-columns: 1fr; } }
+.split > .card { margin-bottom: 0; }
+.detail h3 { font-size: 13px; margin: 12px 0 4px; font-weight: 650; }
+.detail .big { font-weight: 650; font-size: 14px; word-break: break-word; }
+#tip {
+  position: fixed; z-index: 10; pointer-events: none; max-width: 520px;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; box-shadow: 0 4px 18px rgba(0,0,0,.18);
+}
+#tip .h { font-weight: 650; word-break: break-word; }
+#tip .sub { color: var(--muted); word-break: break-all; }
+#tip .kv { display: grid; grid-template-columns: auto auto 1fr; gap: 0 8px; margin-top: 4px; align-items: center; }
+#tip .kv b { text-align: right; font-variant-numeric: tabular-nums; }
+#tip .key { display: inline-block; width: 12px; height: 3px; border-radius: 2px; }
+.crumbs { color: var(--ink2); margin: 6px 0; min-height: 20px; word-break: break-word; }
+.crumbs a { color: var(--accent); cursor: pointer; text-decoration: none; }
+.flamebox { position: relative; }
+.flamebox canvas { cursor: pointer; }
+.empty { color: var(--muted); padding: 24px 0; text-align: center; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; height: 26px; }
+.seg button[aria-pressed="true"] { background: var(--accent-wash); font-weight: 650; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="grow">
+      <h1>monoruby profile</h1>
+      <div class="cmd mono" id="cmd"></div>
+      <div class="info" id="info"></div>
+    </div>
+    <button id="theme" title="Switch between the system's, the light and the dark theme">Theme: auto</button>
+  </header>
+  <div id="warnings"></div>
+  <section class="card" id="tl-card" hidden>
+    <div class="row">
+      <h2>Time line</h2>
+      <span class="muted" id="tl-hint">Share of each bucket's CPU samples by tier. Drag to look at a part of the run; everything below follows.</span>
+      <span class="grow"></span>
+      <span id="tl-range" class="mono"></span>
+      <button id="tl-reset" hidden>Whole run</button>
+    </div>
+    <div class="legend" id="tl-legend"></div>
+    <canvas id="tl" height="150" tabindex="0" aria-label="Time line of CPU samples by tier"></canvas>
+  </section>
+  <nav class="tabs" id="tabs" role="tablist"></nav>
+  <main id="view"></main>
+</div>
+<div id="tip" hidden></div>
+<script id="data" type="application/json">{"version":1,"meta":{"command":"monoruby app_aobench.rb","monoruby":"0.3.0","target":"x86_64-linux","epoch":1794823615,"elapsed":3.293287,"wall":3.195363,"cpuTime":3.181420,"modes":{"cpu":true,"alloc":false,"malloc":false},"clock":"wall","hz":1000,"samples":3193,"buckets":300,"inline":false,"inlineBodies":0,"dropped":0},"tiers":[["jit","JIT code"],["vm","VM interpreter"],["stub","JIT stubs / invokers / wrappers"],["native","builtins / runtime (Rust, libc)"],["gc","GC"],["compile","JIT compile"],["parse","parse / bytecodegen"],["malloc","malloc / free"],["prof","the profiler itself"],["noruby","outside Ruby (no Ruby frame)"]],"funcs":[["\u003cmain\u003e","app_aobench.rb:1"],["Scene#render","app_aobench.rb:236"],["Integer#times","/root/.monoruby/v0.3.0/builtins/integer.rb:20"],["block in Scene#render","app_aobench.rb:238"],["block (2 levels) in Scene#render","app_aobench.rb:239"],["block (3 levels) in Scene#render","app_aobench.rb:243"],["block (4 levels) in Scene#render","app_aobench.rb:244"],["Class#new","/root/.monoruby/v0.3.0/builtins/class.rb:17"],["Isect#initialize","app_aobench.rb:141"],["Kernel#print",""],["IO#print",""],["IO#write",""],["Sphere#intersect","app_aobench.rb:75"],["Plane#intersect","app_aobench.rb:106"],["Vec#vsub","app_aobench.rb:36"],["Scene#ambient_occlusion","app_aobench.rb:192"],["block in Scene#ambient_occlusion","app_aobench.rb:204"],["block (2 levels) in Scene#ambient_occlusion","app_aobench.rb:205"],["Object#otherBasis","app_aobench.rb:162"],["Kernel#rand",""],["Array#initialize","/root/.monoruby/v0.3.0/builtins/array.rb:43"],["Array#__init_fill",""],["Integer#chr",""],["block in \u003cmodule:Errno\u003e","/root/.monoruby/v0.3.0/builtins/error.rb:137"],["Array#each","/root/.monoruby/v0.3.0/builtins/array.rb:94"],["block in \u003cmodule:RbConfig\u003e","/root/.monoruby/v0.3.0/lib/rbconfig.rb:299"],["Hash#each","/root/.monoruby/v0.3.0/builtins/hash.rb:26"],["RbConfig.expand","/root/.monoruby/v0.3.0/lib/rbconfig.rb:309"],["block in \u003cmodule:RbConfig\u003e","/root/.monoruby/v0.3.0/lib/rbconfig.rb:327"],["block in RbConfig.expand","/root/.monoruby/v0.3.0/lib/rbconfig.rb:310"],["Hash#each_value","/root/.monoruby/v0.3.0/builtins/hash.rb:76"],["block in RbConfig.fire_update!","/root/.monoruby/v0.3.0/lib/rbconfig.rb:355"],["block in RbConfig.fire_update!","/root/.monoruby/v0.3.0/lib/rbconfig.rb:357"],["block in RbConfig.fire_update!","/root/.monoruby/v0.3.0/lib/rbconfig.rb:358"],["Vec#vdot","app_aobench.rb:46"],["Object#clamp","app_aobench.rb:151"],["Vec#vnormalize","app_aobench.rb:54"],["Vec#vcross","app_aobench.rb:40"]],"syms":["\u003cmonoruby::globals::store::Store\u003e::new_callsite","\u003cmonoruby::codegen::jitgen::asmir::AsmIr\u003e::inline::\u003cmonoruby::builtins::class::gen_class_allocate_inline::{closure#1}\u003e","\u003cmonoasm::jit_memory::JitMemory\u003e::modrm","\u003cmonoasm::jit_memory::JitMemory\u003e::enc_rexw_digit","\u003chashbrown::raw::RawTable\u003c(monoruby::basic_block::BasicBlockId, (bool, alloc::vec::Vec\u003c(usize, monoruby::executor::SlotId)\u003e))\u003e\u003e::reserve_rehash::\u003chashbrown::map::make_hasher\u003cmonoruby::basic_block::BasicBlockId, (bool, alloc::vec::Vec\u003c(usize, monoruby::executor::SlotId)\u003e), core::hash::BuildHasherDefault\u003cfxhash::FxHasher\u003e\u003e::{closure#0}\u003e","\u003cmonoasm::jit_memory::JitMemory\u003e::encode","\u003calloc::rc::Rc\u003cmonoruby::codegen::jitgen::state::AbstractFrame\u003e\u003e::make_mut","\u003cmonoruby::codegen::jitgen::context::JitContext\u003e::load_constant","\u003cmonoruby::codegen::jitgen::WriteBack as core::hash::Hash\u003e::hash::\u003cfxhash::FxHasher\u003e","core::ptr::drop_glue::\u003cmonoruby::codegen::jitgen::state::AbstractFrame\u003e","\u003csmallvec::SmallVec\u003c[monoruby::value::Value; 5]\u003e as core::iter::traits::collect::Extend\u003cmonoruby::value::Value\u003e\u003e::extend::\u003ccore::iter::adapters::cloned::Cloned\u003ccore::iter::adapters::rev::Rev\u003ccore::slice::iter::Iter\u003cmonoruby::value::Value\u003e\u003e\u003e\u003e","\u003cmonoruby::value::rvalue::io::IoInner\u003e::write","\u003cmonoruby::executor::Executor\u003e::find_method","\u003cmonoruby::alloc::Allocator\u003cmonoruby::value::rvalue::RValue\u003e\u003e::alloc","\u003cmonoruby::id_table::IdentId\u003e::get_id","\u003cmonoruby::globals::store::class::ClassInfo as monoruby::alloc::GC\u003cmonoruby::value::rvalue::RValue\u003e\u003e::mark","\u003cmonoruby::value::rvalue::RValue as monoruby::alloc::GCBox\u003e::free","monoruby::codegen::runtime::args::handle_invoker_arguments","\u003cmonoruby::executor::Executor\u003e::invoke_func","__memcpy_avx512_unaligned_erms","monoruby::builtins::kernel::print","\u003cmonoruby::codegen::jitgen::state::AbstractFrame\u003e::def_rax2acc::\u003cmonoruby::executor::SlotId\u003e","\u003cmonoruby::codegen::jitgen::context::JitContext\u003e::new_branch","monoruby::builtins::io::io_write_method","monoruby::builtins::io::bytes_for_write","monoruby::prof::enter_malloc_slow","\u003cmonoruby::executor::Root as monoruby::alloc::GCRoot\u003cmonoruby::value::rvalue::RValue\u003e\u003e::clear_weak_refs","monoruby::builtins::io::print","\u003cmonoruby::value::rvalue::RValue\u003e::pack","\u003chashbrown::raw::RawIterRange\u003c(monoruby::id_table::IdentId, monoruby::globals::store::class::constants::ConstState)\u003e\u003e::fold_impl::\u003c\u003chashbrown::map::Iter\u003cmonoruby::id_table::IdentId, monoruby::globals::store::class::constants::ConstState\u003e as core::iter::traits::iterator::Iterator\u003e::fold\u003c(), \u003cstd::collections::hash::map::Values\u003cmonoruby::id_table::IdentId, monoruby::globals::store::class::constants::ConstState\u003e as core::iter::traits::iterator::Iterator\u003e::fold\u003c(), core::iter::traits::iterator::Iterator::for_each::call\u003c\u0026monoruby::globals::store::class::constants::ConstState, \u003cmonoruby::globals::store::class::ClassInfo as monoruby::alloc::GC\u003cmonoruby::value::rvalue::RValue\u003e\u003e::mark::{closure#0}\u003e::{closure#0}\u003e::{closure#0}\u003e::{closure#0}, ()\u003e","monoruby::codegen::runtime::args::fill_positional_args","unlink_chunk","core::ptr::drop_glue::\u003cmonoruby::codegen::jitgen::WriteBack\u003e","\u003cmonoruby::codegen::jitgen::context::JitContext\u003e::gen_bridges_for_branches","_int_malloc","\u003cmonoruby::codegen::jitgen::context::JitContext\u003e::ivar_ty_for_load","do_sin","__GI___libc_free","\u003cmonoruby::codegen::jitgen::context::JitContext\u003e::specialized_iseq","\u003cmonoruby::codegen::jitgen::asmir::AsmInst\u003e::fpr_operands","\u003ccore::iter::adapters::flatten::FlatMap\u003ccore::ops::range::Range\u003cusize\u003e, core::iter::adapters::map::Map\u003ccore::iter::adapters::filter::Filter\u003ccore::slice::iter::Iter\u003cmonoruby::codegen::jitgen::gp_alloc::Holder\u003e, \u003cmonoruby::codegen::jitgen::gp_alloc::GpRegFile\u003e::pairs\u003c\u003cmonoruby::codegen::jitgen::gp_alloc::GpRegFile\u003e::dirty_residents::{closure#0}\u003e::{closure#0}::{closure#0}\u003e, \u003cmonoruby::codegen::jitgen::gp_alloc::GpRegFile\u003e::pairs\u003c\u003cmonoruby::codegen::jitgen::gp_alloc::GpRegFile\u003e::dirty_residents::{closure#0}\u003e::{closure#0}::{closure#1}\u003e, \u003cmonoruby::codegen::jitgen::gp_alloc::GpRegFile\u003e::pairs\u003c\u003cmonoruby::codegen::jitgen::gp_alloc::GpRegFile\u003e::dirty_residents::{closure#0}\u003e::{closure#0}\u003e as core::iter::traits::iterator::Iterator\u003e::next","monoruby::codegen::runtime::create_array","do_cos","reduce_sincos","\u003cmonoruby::globals::prng::Mt\u003e::next_u32","monoruby::builtins::kernel::rand","\u003cmonoruby::globals::store::Store as monoruby::alloc::GC\u003cmonoruby::value::rvalue::RValue\u003e\u003e::mark","__cos_fma","monoruby::value::rvalue::io::stdout_buf","\u003cmonoruby::alloc::Allocator\u003cmonoruby::value::rvalue::RValue\u003e\u003e::gc::\u003cmonoruby::executor::Root\u003e","__memcmp_evex_movbe","\u003cmonoruby::alloc::Allocator\u003cmonoruby::value::rvalue::RValue\u003e\u003e::mark","libc_feholdsetround_sse_ctx","monoruby::codegen::runtime::args::set_frame_arguments","\u003cmonoruby::vm::ALLOC::{closure#0} as core::ops::function::FnOnce\u003c(\u0026monoruby::vm::Vm,)\u003e\u003e::call_once","monoruby::globals::store::class::default_alloc_func","\u003cmonoruby::alloc::Allocator\u003cmonoruby::value::rvalue::RValue\u003e\u003e::drain_mark_queue","\u003cmonoruby::codegen::jitgen::state::slot::SlotState\u003e::discard::\u003cmonoruby::executor::SlotId\u003e","\u003cmonoruby::codegen::jitgen::state::slot::LinkMode\u003e::guarded","\u003cmonoruby::codegen::jitgen::gp_alloc::GpRegFile as core::clone::Clone\u003e::clone","\u003cmonoruby::value::rvalue::array::Array\u003e::set_index","monoruby::builtins::math::extern_sin","__sin_fma","\u003cmonoruby::alloc::RurubyAlloc as core::alloc::global::GlobalAlloc\u003e::alloc","\u003cmonoruby::globals::store::GlobalMethodCache\u003e::get","\u003cmonoruby::executor::Executor as monoruby::alloc::GC\u003cmonoruby::value::rvalue::RValue\u003e\u003e::mark","\u003cmonoruby::value::rvalue::RValue as monoruby::alloc::GCBox\u003e::mark_children","\u003cmonoruby::globals::store::Store\u003e::check_method_for_class_with_version","do_sincos","\u003cmonoruby::value::rvalue::io::NewlineMode\u003e::apply","libc.so.6+0xeca50","__GI___libc_malloc","monoruby::builtins::array::init_fill","_int_free","monoruby::builtins::math::extern_cos","monoruby::builtins::array::array_alloc_func","\u003cmonoruby::value::Value\u003e::as_array_mut","\u003cmonoruby::globals::store::iseq::ISeqInfo as monoruby::alloc::GC\u003cmonoruby::value::rvalue::RValue\u003e\u003e::mark","\u003cmonoruby::globals::gvar::SpecialGvars\u003e::mark::\u003c\u003cmonoruby::globals::Globals as monoruby::alloc::GC\u003cmonoruby::value::rvalue::RValue\u003e\u003e::mark::{closure#1}\u003e","\u003cmonoruby::executor::Executor\u003e::invoke_method_inner_vis","__GI___clock_gettime","\u003csmallvec::SmallVec\u003c[monoruby::value::Value; 5]\u003e\u003e::resize","__rustc::__rust_no_alloc_shim_is_unstable_v2"],"classes":["#\u003cClass:Errno\u003e","Array","#\u003cClass:RbConfig\u003e","Hash","#\u003cClass:Vec\u003e","Vec","#\u003cClass:Ray\u003e","Sphere","#\u003cClass:Isect\u003e","Integer","Scene","Plane","#\u003cClass:Array\u003e"],"cpu":{"stacks":[[6,0,-1,0],[5,1,-1,0,0,1,2,3,2,4,2,5,2,6,7,8,7],[5,2,-1,0,0,1,2,3,2,4,2,5,2,6,7],[5,3,-1,0,0,1,2,3,2,4,2,5,2,6],[5,4,-1,0,0,1,2,3,2,4,2,5],[5,5,-1,0,0,1,2,3,2,4,2,5],[5,6,-1,0,0,1,2,3,2,4],[5,7,-1,0,0,1,2,3,2,4],[5,8,-1,0,0,1,2,3,2,4],[5,9,-1,0,0,1,2,3,2,4],[3,10,-1,0,0,1,2,3,2,4],[3,11,-1,0,0,1,2,3,2,4,9,10,11],[0,-1,15,0,0,1,2,3,2,4,2,5,2,6,12],[3,12,-1,0,0,1,2,3,2,4,9,10],[0,-1,23,0,0,1,2,3,2,4,2,5,2,6],[3,13,-1,0,0,1,2,3,2,4,9,10],[0,-1,20,0,0,1,2,3,2,4,2,5,2,6,13],[3,14,-1,0,0,1,2,3,2,4,9],[4,15,-1,0,0,1,2,3,2,4,2,5,2,6,12],[4,16,-1,0,0,1,2,3,2,4,2,5,2,6,12],[3,13,-1,0,0,1,2,3,2,4],[4,16,-1,0,0,1,2,3,2],[3,17,-1,0,0,1,2,3,2,4,9,10],[0,-1,23,0,0,1,2,3,2,4,2],[3,18,-1,0,0,1,2,3,2,4,9],[3,19,-1,0,0,1,2,3,2,4,9],[3,20,-1,0,0,1,2,3,2,4,9],[5,21,-1,0,0,1,2,3],[5,22,-1,0,0,1,2,3],[5,19,-1,0,0,1,2,3],[3,17,-1,0,0,1,2,3,2,4,9],[2,-1,-1,0,0,1,2,3,2,4,2,5,2,6,12],[0,-1,24,0,0,1,2,3,2,4,2,5,2,6],[0,-1,24,0,0,1,2,3,2,4],[0,-1,24,0,0,1,2,3,2,4,2,5,2],[3,23,-1,0,0,1,2,3,2,4,9,10,11],[3,24,-1,0,0,1,2,3,2,4,9,10,11],[7,25,-1,0,0,1,2,3,2,4,9,10,11],[4,26,-1,0,0,1,2,3,2],[3,27,-1,0,0,1,2,3,2,4,9,10],[3,28,-1,0,0,1,2,3,2,4,9],[4,29,-1,0,0,1,2,3,2,4,2,5,2,6,12],[2,-1,-1,0,0,1,2,3,2,4,2,5,2,6],[3,30,-1,0,0,1,2,3,2,4,9,10],[7,31,-1,0,0,1,2,3,2,4,2,5,2,6,12,14],[7,32,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[5,33,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16],[5,19,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,13],[3,12,-1,0,0,1,2,3,2,4,9],[7,34,-1,0,0,1,2,3,2,4,2,5,2,6,15],[5,35,-1,0,0,1,2,3,2,4,2,5,2,6,15],[5,5,-1,0,0,1,2,3,2,4,2,5,2,6,15],[0,-1,27,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[3,36,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[7,37,-1,0,0,1,2,3,2,4,9,10,11],[4,16,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[5,38,-1,0,0,1,2,3,2,4,2,5,2,6],[5,39,-1,0,0,1,2,3,2,4,2,5,2,6],[5,40,-1,0,0,1,2,3,2,4,2,5,2,6],[0,-1,30,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,13],[3,41,-1,0,0,1,2,3,2,4],[0,-1,33,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[0,-1,27,0,0,1,2,3,2,4,2,5,2,6,12],[3,42,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[0,-1,33,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2],[5,5,-1,0,0,1,2,3,2,4,2,5,2,6,15,18],[3,43,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[7,34,-1,0,0,1,2,3,2,4,2,5,2,6,15,18],[3,44,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,19],[2,-1,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[0,-1,36,0,0,1,2,3,2,4,2,5,2,6],[3,45,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,19],[2,-1,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[0,-1,36,0,0,1,2,3,2,4,2,5,2],[0,-1,39,0,0,1,2,3,2,4,2,5,2,6,15,18],[4,46,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[3,47,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[4,16,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,13],[3,48,-1,0,0,1,2,3,2,4,9,10,11],[2,-1,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,19],[4,49,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[4,16,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2],[3,50,-1,0,0,1,2,3,2,4,9],[4,51,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[0,-1,36,0,0,1,2,3,2,4],[3,14,-1,0,0,1,2,3,2,4,9,10],[0,-1,33,0,0,1,2,3,2,4,2,5,2,6,15,2],[4,49,-1,0,0,1,2,3,2,4,2,5,2,6,13],[3,52,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[3,53,-1,0,0,1,2,3,2,4],[3,54,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[2,-1,-1,0,0,1,2,3,2,4,2,5,2,6,15],[3,55,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[0,-1,33,0,0,1,2,3,2,4,2,5,2,6,15,7,20],[0,-1,33,0,0,1,2,3,2,4,2,5,2,6,15,2,16],[4,56,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,13],[2,-1,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,13],[4,29,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2],[5,57,-1,0,0,1,2,3,2,4,2,5,2,6],[5,58,-1,0,0,1,2,3,2,4,2,5,2,6],[5,59,-1,0,0,1,2,3,2,4,2,5,2,6],[5,19,-1,0,0,1,2,3,2,4,2,5,2,6],[3,60,-1,0,0,1,2,3,2,4,2,5,2,6,15,18],[3,61,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[4,56,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[3,28,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[3,62,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[0,-1,40,0,0,1,2,3,2,4,2,5,2,6],[7,63,-1,0,0,1,2,3,2,4,9,10,11],[3,64,-1,0,0,1,2,3,2,4,9],[4,65,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[3,13,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[2,-1,-1,0,0,1,2,3,2,4,2,5,2,6,15,18],[4,16,-1,0,0,1,2,3,2,4,2,5,2,6,15,2],[0,-1,30,0,0,1,2,3,2,4,2,5,2,6,13],[4,49,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,13],[4,66,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,13],[3,67,-1,0,0,1,2,3,2,4,9],[3,28,-1,0,0,1,2,3,2,4,2,5,2,6,15,7],[3,67,-1,0,0,1,2,3,2,4,9,10],[0,-1,33,0,0,1,2,3,2,4,2,5,2,6,15,7],[3,68,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[0,-1,33,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,13],[0,-1,33,0,0,1,2,3,2,4,2,5,2,6,15],[3,28,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[2,-1,-1,0,0,1,2,3,2,4,9,10,11],[3,28,-1,0,0,1,2,3,2,4,9,10],[3,69,-1,0,0,1,2,3,2,4,9,10,11],[4,70,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,13],[4,46,-1,0,0,1,2,3,2,4,2,5,2,6,12],[7,71,-1,0,0,1,2,3,2,4,9],[4,16,-1,0,0,1,2,3,2,4,2,5,2,6,15,7,20],[4,19,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[3,72,-1,0,0,1,2,3,2,4,2,5,2,6,15,7,20,21],[7,73,-1,0,0,1,2,3,2,4,9],[3,74,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[3,75,-1,0,0,1,2,3,2,4,2,5,2,6,15,7],[3,76,-1,0,0,1,2,3,2,4,2,5,2,6,15,18],[4,46,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,13],[4,77,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[0,-1,40,0,0,1,2,3,2,4,2,5,2,6,13],[3,28,-1,0,0,1,2,3,2,4,22],[4,78,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[3,54,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[4,51,-1,0,0,1,2,3,2,4,2,5,2,6,15,2],[3,13,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17],[3,79,-1,0,0,1,2,3,2,4,9,10],[3,13,-1,0,0,1,2,3,2,4,2,5,2,6,15,7],[4,80,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,13],[4,15,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,13],[0,-1,40,0,0,1,2,3,2],[0,-1,40,0,0,1,2,3,2,4,2],[4,15,-1,0,0,1,2,3,2,4,2,5,2,6,15,2,16,2,17,12],[3,81,-1,0,0,1,2,3,2,4,2,5,2,6,15,18],[3,79,-1,0,0,1,2,3,2,4,9],[3,82,-1,0,0,1,2,3,2,4,9,10,11],[1,-1,-1,0,0,1,2,3,2,4,9]],"buckets":[[0,1,1,1,2,1,3,1,4,1,5,1,6,1,7,1,8,1,9,1,10,1],[11,1,12,2,13,1,14,1,15,2,16,1,17,1,18,1,19,1],[12,4,14,1,16,3,20,1,21,1],[12,1,14,3,19,1,22,1,23,1,24,1,25,1,26,1,27,1],[12,1,16,1,28,1,29,2,30,1,31,1,32,2,33,1,34,1],[12,2,13,1,17,1,31,1,32,2,33,1,34,1,35,1],[12,1,16,1,31,1,32,2,33,1,34,1,36,1,37,1,38,1,39,1],[12,2,40,1,41,1,42,1,43,1,44,1,45,1,46,1,47,1,48,1],[49,1,50,1,51,1,52,1,53,1,54,1,55,1,56,1,57,1,58,1],[52,5,59,2,60,1,61,2,62,1],[17,1,52,3,53,1,55,2,61,1,63,1,64,1,65,1],[52,1,53,1,55,2,59,1,61,2,63,1,66,2],[52,9,61,1,67,1],[52,5,59,1,61,3,66,1,68,1],[52,4,55,2,59,2,61,1,69,1],[52,2,55,2,59,1,61,1,62,1,63,1,70,1,71,1,72,1],[52,3,55,1,59,1,61,2,71,2,73,1],[52,3,53,1,59,1,61,3,69,1,71,1,74,1],[52,4,53,1,59,2,61,2,62,1,71,1],[52,2,59,2,61,2,71,1,75,1,76,1,77,1],[17,1,40,1,52,1,53,2,55,2,68,1,71,1,76,1,78,1],[10,1,52,3,59,1,61,1,66,2,71,1,76,1,79,1],[52,1,53,1,55,1,59,1,61,3,64,1,72,1,77,1],[52,1,53,1,59,5,71,2,72,1,80,1],[31,1,52,4,53,1,59,1,64,1,74,1,81,1,82,1],[17,1,52,4,53,1,59,1,61,2,62,1],[52,4,59,3,61,2,76,1,77,1],[52,3,53,1,59,1,61,1,63,1,72,1,76,1,83,1,84,1],[52,5,59,2,71,2,72,1],[21,1,52,3,61,2,66,1,72,1,85,1,86,1,87,1],[52,3,55,2,59,1,61,2,63,1,79,1],[21,1,32,1,52,1,53,2,59,3,61,2,72,1],[52,5,61,3,80,1,88,1,89,1],[52,1,53,1,55,1,59,2,61,1,66,3,72,1],[52,1,59,4,61,4,76,2],[52,4,55,2,61,3,68,1,71,1],[52,5,59,1,61,2,70,1,90,1],[52,1,55,1,61,4,63,2,64,1,74,1,79,1],[52,2,55,1,59,2,61,3,71,1,72,1,80,1],[52,3,61,1,62,1,71,2,91,1,92,1,93,1],[22,1,52,6,61,1,94,1,95,1,96,1],[52,4,55,1,59,3,61,2,96,1],[52,1,59,1,61,3,63,1,69,1,72,1,81,1,97,1],[52,5,55,1,59,1,61,2,71,1,88,1],[52,1,53,1,55,1,59,2,60,1,61,1,71,2,79,1],[52,4,55,1,61,1,71,1,88,1,98,1,99,1,100,1],[52,3,53,1,55,1,59,1,64,1,69,1,70,1,71,1,101,1],[52,1,53,1,59,1,61,4,71,1,80,1,102,1],[31,1,52,4,55,2,59,1,61,3],[52,1,55,1,61,1,69,1,71,4,72,1,76,1,79,1],[52,3,53,1,61,4,62,1,68,1],[52,4,55,2,61,3,63,1,103,1],[52,4,61,2,72,1,76,1,96,1,104,1,105,1],[52,2,53,2,55,1,68,1,74,1,79,1,106,1,107,1],[52,2,53,2,55,1,59,1,61,3,62,1,63,1],[52,1,55,1,59,2,61,2,62,1,63,1,71,1,72,1,80,1],[13,1,52,6,55,1,59,1,108,1],[52,3,59,1,61,2,66,1,68,1,96,1,109,1,110,1],[52,3,53,1,55,1,72,2,74,1,76,1,111,1],[17,1,52,3,55,1,59,1,61,1,66,1,72,1,79,1,112,1],[52,4,53,1,55,1,59,2,61,1,68,1,111,1],[52,5,59,2,61,1,107,1,113,1],[52,2,55,1,59,1,61,2,68,1,72,1,76,1,86,1,94,1],[52,3,55,1,59,1,61,4,62,1,96,1],[52,2,59,2,61,2,74,1,76,1,80,1,114,1],[52,4,55,1,59,2,61,1,72,2,79,1],[42,1,52,3,53,1,55,1,59,1,64,1,68,1,88,1,111,1],[52,1,55,2,59,1,61,5,72,1],[52,3,55,1,61,3,64,2,68,1,79,1],[52,3,55,1,61,2,63,1,71,1,72,1,74,1,88,1],[52,4,61,1,64,1,66,2,106,1,115,1],[52,3,53,1,55,1,59,1,61,1,64,1,66,1,76,1,88,1],[52,2,53,1,61,3,71,1,72,1,74,1,77,1],[52,4,53,1,59,1,61,1,62,1,63,1,71,1,77,1],[52,4,55,1,59,2,61,1,71,2,116,1],[52,5,55,2,61,2,71,1],[52,5,55,1,59,1,61,2,64,1,66,1],[52,4,53,2,59,1,61,2,71,1,80,1],[52,2,61,4,68,1,90,1,96,1,117,1],[52,4,55,2,61,4,118,1],[52,5,55,1,59,1,61,1,71,1,72,1,119,1],[52,5,61,2,63,1,80,1,114,1],[52,3,55,1,61,5,71,1,88,1],[52,3,53,1,55,2,59,1,61,1,62,1,66,1,71,1],[40,1,52,2,53,2,55,1,59,1,61,1,68,1,96,1],[36,1,52,4,53,1,55,1,61,2,63,1,72,1],[52,5,59,1,61,1,71,1,72,1,77,1],[52,3,59,2,61,3,63,1,71,1,77,1],[52,2,53,1,55,1,59,1,63,2,64,1,71,1,72,1,107,1],[52,5,53,1,55,1,61,2,96,1],[52,3,53,1,59,1,61,2,71,2,80,1,96,1],[52,3,55,1,59,1,61,4,66,1,114,1],[17,1,52,1,53,1,55,2,61,1,63,1,66,1,88,1,118,1],[52,7,55,1,61,1,72,1,106,1],[52,2,59,2,61,2,63,1,71,3,96,1],[52,3,59,1,61,2,63,1,71,1,96,1,103,1],[52,4,59,1,61,3,77,1,96,1,106,1],[52,1,53,1,59,2,61,2,68,1,71,1,79,1,120,1,121,1],[52,4,55,2,61,2,79,1,122,1],[52,5,55,3,61,2,123,1],[52,6,55,1,61,1,68,1,77,1],[52,2,53,2,55,1,59,1,63,1,68,2,69,1,74,1],[52,4,59,1,61,1,63,1,68,1,76,1,86,1,112,1],[52,3,55,1,59,2,61,3,77,1],[52,4,59,1,61,3,63,1,71,1,72,1],[52,5,59,1,61,2,66,1,76,1,79,1],[52,5,61,4,71,1],[52,3,55,2,61,4,71,1,79,1],[15,1,52,2,59,3,61,2,78,1,86,1,105,1],[52,1,55,1,61,5,63,1,112,1,124,1],[52,5,55,1,61,4,80,1],[52,4,53,1,55,1,61,3,71,2],[52,5,59,1,61,2,71,1,123,1],[52,6,53,2,63,1,76,1,88,1],[52,6,55,1,59,1,61,1,88,1],[52,3,59,1,61,1,66,1,68,1,71,3,125,1],[52,4,61,3,63,1,66,1,72,1,88,1],[52,2,53,1,59,4,61,3],[52,6,59,1,63,2,126,1,127,1],[22,1,35,1,52,3,53,1,55,1,59,1,64,1,94,1,128,1],[52,2,53,4,59,1,71,1,76,1,107,1],[52,3,53,1,59,1,61,2,63,1,66,1,72,1,74,1],[52,3,53,2,55,2,59,1,61,1,111,1,121,1],[52,5,61,1,63,1,69,1,72,1,76,1],[52,3,53,2,55,2,59,1,61,1,63,1,68,1],[52,5,53,2,63,1,68,1,71,1,129,1],[17,1,52,2,55,1,59,1,63,1,71,1,72,1,105,1,130,1],[52,5,59,2,61,2,71,1,131,1],[52,3,53,1,55,1,59,2,61,1,69,1,71,1],[52,7,55,1,59,1,61,2],[52,6,53,1,59,2,61,1,71,1],[52,4,55,1,61,1,63,1,64,1,66,1,114,1],[52,2,55,1,59,1,61,4,63,1,114,1,132,1],[52,3,59,2,61,3,68,1,72,1,76,1],[52,1,59,1,61,6,72,1,74,1],[17,1,52,1,53,1,55,1,59,1,61,2,63,1,72,1,76,1,88,1],[52,4,53,1,55,1,61,1,63,1,71,1,74,1,88,1],[52,2,55,1,61,2,63,1,71,1,88,1,105,1,114,1],[52,6,61,1,68,1,80,1,85,1,103,1],[52,6,55,1,59,1,61,1,68,1,96,1],[53,2,59,1,61,1,63,3,71,1,76,1,106,1],[35,1,52,5,55,2,61,1,68,2],[52,2,53,1,55,1,59,2,61,1,63,2,76,1],[19,1,52,3,61,3,68,1,69,1,71,1,76,1],[52,2,55,1,59,2,61,2,72,1,79,1,111,1,124,1],[52,3,53,1,55,1,59,1,61,1,63,1,66,1,77,1],[52,4,59,1,61,2,63,1,68,1,106,1,133,1],[52,3,53,2,55,1,59,2,61,1,88,1,121,1],[52,2,59,1,61,4,69,1,71,1,134,1],[52,4,53,1,64,1,68,1,72,1,76,1,77,1,135,1],[52,1,53,1,59,1,61,2,64,1,68,1,71,1,72,2,77,1],[52,5,53,1,59,1,61,1,74,1,135,1],[52,3,53,1,55,1,59,1,61,1,71,2,76,1,96,1],[52,2,53,1,55,1,59,1,61,2,71,2,80,1,107,1],[17,1,52,4,59,1,61,1,71,2,121,1],[52,3,59,5,72,2,80,1],[52,6,53,3,63,1,71,1],[53,2,59,2,61,1,71,2,76,1,79,1,136,1],[52,2,55,1,61,1,64,1,66,2,71,1,74,1,107,1,114,1],[52,4,53,1,55,1,59,1,61,2,96,1],[52,4,53,1,59,1,61,2,68,1,72,1,80,1],[52,2,59,2,61,3,69,2,74,1,85,1],[52,2,55,1,61,2,71,1,72,2,105,1,137,1],[52,4,53,1,59,2,61,1,76,1,135,1,138,1],[52,8,59,1,76,1,115,1],[52,6,55,1,59,1,61,2],[52,4,53,1,55,1,59,2,61,2,74,1],[52,6,59,1,68,1,74,1,76,1,77,1],[52,4,61,1,72,3,74,1,132,1],[52,4,55,1,59,1,61,4,63,1],[52,4,61,4,68,1,72,1,80,1],[52,3,55,1,59,1,61,1,68,3,71,1],[52,6,55,1,61,1,72,2,94,1],[52,2,53,1,55,1,59,2,63,1,66,1,72,1,124,1],[52,5,59,2,61,1,69,1,71,1,139,1],[52,4,55,1,59,3,61,1,72,1,76,1],[52,3,55,1,59,2,61,1,64,1,72,1,74,1],[52,1,53,1,59,1,61,6,72,1,80,1],[52,4,55,1,59,1,61,2,63,1,68,1,96,1],[52,3,53,1,61,1,68,1,69,1,71,2,80,1],[52,3,55,2,59,2,61,1,68,1,71,1,72,1],[26,1,52,5,55,1,61,3,76,1],[52,3,55,1,59,1,61,3,66,1,68,1],[59,1,61,3,64,1,68,2,71,1,88,1,96,1,140,1],[52,4,55,2,59,1,61,2,63,1,141,1],[52,4,59,1,61,3,103,1,142,1],[52,3,53,2,61,2,72,1,80,1,86,1,94,1],[52,2,55,1,59,1,61,1,63,1,69,1,71,1,76,1,77,1],[52,5,53,1,55,1,61,1,68,1,74,1,143,1],[52,5,59,1,61,2,66,1,107,1,144,1],[52,1,53,1,55,1,61,1,63,1,72,1,76,2,106,1,145,1],[52,3,55,1,61,5,66,1,72,1],[52,5,55,1,59,1,61,1,71,1,74,1,80,1],[52,2,55,1,59,1,61,3,66,1,72,2],[52,5,59,1,61,3,63,1,139,1],[52,3,53,1,55,1,59,2,61,1,71,1,72,1,96,1],[52,3,55,1,59,1,61,3,71,1,125,1],[52,2,61,3,63,1,71,2,80,1,106,1,111,1],[52,2,55,1,59,1,61,2,69,1,71,1,76,1,107,1,146,1],[52,4,61,2,64,1,68,1,71,1,139,1],[52,6,55,1,59,1,64,1,68,1,71,1],[52,5,55,1,61,2,63,1,77,1],[52,3,53,1,59,3,61,2,72,1,83,1],[52,4,53,1,55,1,61,3,63,1,88,1],[17,1,52,1,59,1,61,2,62,1,64,1,66,1,71,1,115,1],[52,2,55,1,59,1,61,4,72,1,96,1,113,1],[52,2,53,2,55,1,59,2,61,2,63,1,71,1],[52,2,53,1,55,1,61,3,71,1,72,1,76,1],[39,1,52,2,55,1,61,1,66,3,76,2,88,1],[52,4,53,1,55,1,61,1,71,2,76,2],[52,5,55,1,59,1,61,2,76,1],[52,6,55,1,59,1,64,1,72,1,79,1],[20,1,52,1,55,1,61,4,64,1,71,1,72,2],[52,2,55,1,59,2,61,1,68,1,106,1,112,1,147,1],[52,3,55,1,59,1,61,1,63,2,66,1,71,1,76,1],[52,2,61,2,68,1,71,2,75,1,106,1,133,1],[22,1,52,2,53,3,55,1,61,2,64,1,85,1],[52,3,53,1,61,2,63,1,68,1,71,1,80,1,106,1],[52,2,55,2,59,1,61,1,68,1,71,1,72,1,74,1],[52,9,61,1,80,1],[52,4,59,2,61,1,71,1,76,1,77,1,145,1],[52,6,61,2,77,1,88,1],[52,2,55,1,59,1,61,4,71,1,72,1,88,1],[52,2,61,6,68,1,71,1,77,1],[52,4,59,2,61,3,71,1],[52,3,53,1,55,1,59,1,61,1,66,1,77,1,107,1,118,1],[43,1,52,1,55,2,61,4,71,1,76,1,114,1],[52,3,53,1,55,1,61,4,72,1],[52,2,55,1,59,3,62,1,66,2,71,2],[52,3,53,2,59,1,61,2,64,1,77,1],[17,1,52,3,55,1,61,1,63,1,69,1,76,1,80,1,103,1],[52,3,55,1,61,3,63,2,66,1,71,1],[52,2,53,2,59,2,61,2,72,1,77,1],[52,3,53,1,59,1,61,1,63,1,72,1,79,1,139,1,148,1],[52,3,55,1,59,3,61,1,68,1,71,1,123,1],[52,4,59,1,61,2,63,1,69,1,149,1],[52,2,55,1,59,4,63,1,66,2,76,1],[52,3,53,1,55,2,59,1,68,3,69,1],[52,3,53,1,55,1,59,1,61,1,68,1,71,1,88,1],[52,2,55,1,59,2,61,4,72,1,76,1],[52,1,55,1,59,3,61,2,71,2,76,1,150,1],[52,2,53,1,55,1,59,1,61,3,68,2],[52,4,55,1,59,3,76,1,77,1,107,1],[52,3,59,1,61,2,68,1,71,2,74,1],[52,2,55,1,59,3,61,1,71,2,72,1,85,1],[52,4,55,1,59,2,61,1,76,1,77,1,109,1],[52,2,55,1,59,1,61,3,72,2,151,1],[19,1,52,1,59,1,61,4,69,1,72,2,76,1],[52,4,53,1,55,1,59,2,61,3],[40,1,52,5,61,1,71,1,72,1,80,1],[52,2,55,2,59,2,61,3,64,1,72,1],[52,4,55,1,61,3,64,1,69,1,80,1],[55,1,59,4,61,1,63,1,64,1,69,1,74,1],[52,2,55,1,59,2,61,2,63,1,68,1,76,1,106,1],[52,2,53,1,55,1,61,5,72,1,111,1],[52,2,55,1,61,2,63,1,66,1,72,1,76,1,123,1],[35,1,52,2,55,1,59,1,61,2,69,2,74,1,137,1],[52,5,55,1,59,1,61,1,71,1,76,1],[52,1,55,1,59,2,61,2,63,1,71,2,72,1,152,1],[52,5,53,1,61,2,66,1,71,1,80,1],[52,3,55,2,59,1,61,1,71,1,118,1,145,1],[52,2,59,1,61,1,62,1,68,2,71,1,80,1,106,1,123,1],[52,4,53,1,55,1,59,2,61,2,88,1],[31,1,52,3,55,1,59,3,72,1,103,1],[52,3,53,1,55,1,59,1,61,2,63,2,107,1],[53,1,55,1,59,4,61,2,72,1,86,1,153,1],[52,5,59,1,61,2,72,1,75,1],[52,4,55,1,59,1,63,1,69,1,72,1,114,1,135,1],[52,5,55,1,59,1,61,2,63,1,71,1],[55,1,59,2,61,3,71,1,79,2,107,1],[52,3,55,2,59,1,61,5],[52,5,53,1,55,1,61,2,72,1],[52,5,55,1,61,1,71,1,92,1,106,2],[52,2,53,1,55,1,59,1,61,4,66,1,134,1],[52,5,53,1,59,1,61,1,71,1,76,1],[52,6,59,1,61,1,68,1,80,1,121,1],[52,3,55,1,59,1,61,4,63,1,154,1],[22,1,52,3,53,1,55,1,59,1,68,1,147,1,155,1],[52,2,55,2,59,1,61,1,71,4,88,1],[52,4,53,1,55,1,61,1,63,1,68,1,69,1,106,1],[52,2,55,2,59,1,61,2,63,1,66,1,96,1],[52,3,59,3,61,2,62,1,68,1,72,1],[52,1,53,1,55,1,59,2,61,3,71,2,136,1],[52,5,59,1,61,2,63,1,139,1],[52,1,53,1,55,2,59,2,64,1,66,1,71,1,94,2],[52,2,53,2,64,1,68,2,80,1,86,1,156,1],[52,4,53,1,59,2,61,1,62,1,68,1,72,1],[52,2,53,1,61,1,66,1,68,1,71,1,76,1,77,1,135,1,141,1],[17,1,52,4,55,1,62,3,80,1],[52,1,53,1,55,1,59,1,61,2,63,2,68,1,71,1,145,1],[52,1,55,2,59,2,61,2,63,2,71,1,76,1],[52,2,55,1,59,1,66,2,68,1,69,1,88,1,109,1],[52,2,53,1,55,1,59,1,61,2,66,1,71,1,72,1,96,1],[52,4,55,1,59,2,61,3,85,1],[52,4,61,4,64,1,80,1],[52,2,55,2,59,2,61,2,76,1,88,1,106,1],[52,4,55,2,59,1,61,3,64,1],[52,2,53,1,59,3,61,4],[48,1,52,1,59,1,61,2,68,1,69,1,71,1,77,1,94,2],[52,3,53,2,61,3,77,1,135,1]]},"alloc":{"stacks":[],"buckets":[]},"malloc":{"stacks":[],"buckets":[]},"jit":{"compiles":41,"loops":4,"failed":0,"ns":30446648,"codeBytes":765424,"units":[[23,0,0,3911,280318,0],[24,1,1,2026,156954,0],[25,2,0,2204,153744,0],[26,3,1,2459,254440,0],[27,2,0,4319,139246,0],[28,2,0,1201,34474,0],[29,2,0,5126,154023,0],[30,3,1,2204,190100,0],[31,2,0,2181,104993,0],[24,1,0,2209,209814,0],[32,2,0,3104,114874,0],[33,2,0,2122,54576,0],[7,4,0,1844,203180,0],[34,5,0,2070,90904,0],[7,6,0,1628,77055,0],[12,7,0,10317,357330,0],[7,8,0,3924,195911,0],[2,9,1,1460,149847,0],[2,9,0,2037,96504,0],[6,10,0,35502,846388,0],[13,11,0,6988,272016,0],[35,10,0,908,47295,0],[5,10,0,38495,1607237,0],[4,10,0,51159,3528385,0],[3,10,0,54163,4554553,0],[14,5,0,3049,319963,0],[36,5,0,6579,168199,0],[12,7,0,31579,670069,0],[17,10,0,32246,512520,0],[16,10,0,36053,919321,0],[13,11,0,11571,371046,0],[7,12,0,3822,107869,0],[37,5,0,4349,135676,0],[15,10,0,49986,2299249,0],[18,10,0,43868,712543,0],[6,10,0,42211,702058,0],[4,10,0,58203,2303208,0],[5,10,0,45571,1077935,0],[18,10,0,45552,945825,0],[18,10,0,46001,987908,0],[3,10,0,61223,4339098,0]]},"gc":{"kinds":[{"kind":"minor","count":548,"ns":316773308,"markNs":21156521,"marked":44207},{"kind":"major","count":8,"ns":5635009,"markNs":1244594,"marked":29032}],"pages":31,"live":62,"allocated":80414840}}</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("data").textContent);
+const M = D.meta;
+const NB = Math.max(1, M.buckets | 0);
+const NT = D.tiers.length;
+// One CPU sample's worth of the sampled clock, in ms.
+const SPAN = M.clock === "wall" ? M.wall : M.cpuTime;
+const MS_PER_SAMPLE = M.samples ? SPAN * 1000 / M.samples : 0;
+
+//
+// Small helpers
+//
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  if (attrs) for (const k in attrs) {
+    const v = attrs[k];
+    if (v == null || v === false) continue;
+    if (k === "class") e.className = v;
+    else if (k === "text") e.textContent = v;
+    else if (k === "style") e.style.cssText = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids) if (k != null) e.append(k);
+  return e;
+}
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const fmtInt = (n) => Math.round(n).toLocaleString("en-US");
+const fmtPct = (n, total) => total ? (n * 100 / total).toFixed(1) + "%" : "–";
+function fmtCompact(n) {
+  const a = Math.abs(n);
+  if (a >= 1e9) return (n / 1e9).toFixed(a >= 1e10 ? 1 : 2) + "G";
+  if (a >= 1e6) return (n / 1e6).toFixed(a >= 1e7 ? 1 : 2) + "M";
+  if (a >= 1e4) return (n / 1e3).toFixed(1) + "K";
+  return fmtInt(n);
+}
+function fmtBytes(n) {
+  const a = Math.abs(n);
+  if (a >= 1 << 30) return (n / (1 << 30)).toFixed(2) + " GiB";
+  if (a >= 1 << 20) return (n / (1 << 20)).toFixed(2) + " MiB";
+  if (a >= 1 << 10) return (n / (1 << 10)).toFixed(1) + " KiB";
+  return fmtInt(n) + " B";
+}
+function fmtMs(ms) {
+  if (ms >= 1000) return (ms / 1000).toFixed(ms >= 10000 ? 1 : 2) + " s";
+  if (ms >= 1) return ms.toFixed(ms >= 100 ? 0 : 1) + " ms";
+  return (ms * 1000).toFixed(0) + " µs";
+}
+const fmtNs = (ns) => fmtMs(ns / 1e6);
+function basename(loc) {
+  const i = loc.lastIndexOf("/");
+  return i < 0 ? loc : loc.slice(i + 1);
+}
+
+//
+// Profiles: the stacks of one kind of event
+//
+// A stack is `head` words, the number of frameless-inlined frames at its
+// top, and its Ruby frames, oldest first. A bucket is a flat list of
+// (stack, count) pairs, or (stack, count, weight) triples.
+//
+const PROFILES = {
+  cpu: { src: D.cpu, head: 3, stride: 2, on: M.modes.cpu && D.cpu.stacks.length > 0 },
+  alloc: { src: D.alloc, head: 1, stride: 2, on: M.modes.alloc && D.alloc.stacks.length > 0 },
+  malloc: { src: D.malloc, head: 1, stride: 3, on: M.modes.malloc && D.malloc.stacks.length > 0 },
+};
+// What a view can be about.
+const METRICS = {
+  cpu: {
+    label: "CPU time", profile: "cpu", weight: false, unit: "samples",
+    fmt: (n) => fmtInt(n), detail: (n) => fmtInt(n) + " samples · " + fmtMs(n * MS_PER_SAMPLE),
+  },
+  alloc: {
+    label: "Objects allocated", profile: "alloc", weight: false, unit: "objects",
+    fmt: (n) => fmtInt(n), detail: (n) => "≈ " + fmtInt(n) + " objects",
+  },
+  mcalls: {
+    label: "malloc calls", profile: "malloc", weight: false, unit: "calls",
+    fmt: (n) => fmtInt(n), detail: (n) => "≈ " + fmtInt(n) + " calls",
+  },
+  mbytes: {
+    label: "malloc bytes", profile: "malloc", weight: true, unit: "bytes",
+    fmt: (n) => fmtBytes(n), detail: (n) => "≈ " + fmtBytes(n),
+  },
+};
+const metricKeys = () => Object.keys(METRICS).filter((k) => PROFILES[METRICS[k].profile].on);
+
+const state = {
+  tab: null,
+  range: [0, NB],          // buckets [a, b)
+  metric: null,
+  flame: { reverse: false, search: "", zoom: null },
+  methods: { selected: null, filter: "" },
+};
+const ranged = () => state.range[0] !== 0 || state.range[1] !== NB;
+
+// The value of every stack of *metric* in the selected range.
+const valueCache = new Map();
+function values(metricKey) {
+  const key = metricKey + "|" + state.range;
+  let v = valueCache.get(key);
+  if (v) return v;
+  const m = METRICS[metricKey], p = PROFILES[m.profile];
+  v = new Float64Array(p.src.stacks.length);
+  const off = m.weight ? 2 : 1;
+  const hi = Math.min(state.range[1], p.src.buckets.length);
+  for (let b = state.range[0]; b < hi; b++) {
+    const row = p.src.buckets[b];
+    for (let i = 0; i < row.length; i += p.stride) v[row[i]] += row[i + off];
+  }
+  if (valueCache.size > 12) valueCache.clear();
+  valueCache.set(key, v);
+  return v;
+}
+const sum = (a) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i]; return s; };
+
+// Frames: a key packs what a frame is and its index.
+const K = { RUBY: 0, INLINED: 1, TIER: 2, SYM: 3, CLASS: 4, SITE: 5 };
+const KSHIFT = 1 << 24;
+const kkind = (k) => Math.floor(k / KSHIFT), kid = (k) => k % KSHIFT;
+const frameCache = {};
+// The frames of every stack of a profile, root first, with the leaves that
+// say what the sample was (tier and native function; class; call site).
+function framesOf(profile) {
+  if (frameCache[profile]) return frameCache[profile];
+  const p = PROFILES[profile];
+  const out = p.src.stacks.map((s) => {
+    const ninl = s[p.head], n = s.length - p.head - 1, f = [];
+    for (let i = 0; i < n; i++) {
+      f.push((i >= n - ninl ? K.INLINED : K.RUBY) * KSHIFT + s[p.head + 1 + i]);
+    }
+    if (profile === "cpu") {
+      f.push(K.TIER * KSHIFT + s[0]);
+      if (s[1] >= 0) f.push(K.SYM * KSHIFT + s[1]);
+    } else if (profile === "alloc") {
+      f.push(K.CLASS * KSHIFT + s[0]);
+    } else {
+      f.push(K.SITE * KSHIFT + s[0]);
+    }
+    return f;
+  });
+  return frameCache[profile] = out;
+}
+function frameName(k) {
+  const id = kid(k);
+  switch (kkind(k)) {
+    case K.RUBY: return D.funcs[id][0];
+    case K.INLINED: return D.funcs[id][0] + " [inlined]";
+    case K.TIER: return "[" + D.tiers[id][1] + "]";
+    case K.SYM: case K.SITE: return D.syms[id];
+    case K.CLASS: return D.classes[id];
+  }
+  return "?";
+}
+function frameSub(k) {
+  const id = kid(k);
+  switch (kkind(k)) {
+    case K.RUBY: return D.funcs[id][1] || "native method";
+    case K.INLINED: return (D.funcs[id][1] || "native method") + " · inlined without a frame";
+    case K.TIER: return "tier: where the PC was, or the runtime phase";
+    case K.SYM: return "Rust / C function the PC was in";
+    case K.SITE: return "Rust / C function that asked for the memory";
+    case K.CLASS: return "class of the allocated object";
+  }
+  return "";
+}
+// The newest Ruby frame of a stack (-1: none) and its function.
+function leafFunc(profile, s) {
+  const p = PROFILES[profile];
+  return s.length > p.head + 1 ? s[s.length - 1] : -1;
+}
+function funcLabel(f) { return f < 0 ? "(no Ruby frame)" : D.funcs[f][0]; }
+function funcNode(f) {
+  const td = el("td", { class: "name" });
+  td.append(funcLabel(f));
+  if (f >= 0) {
+    const loc = D.funcs[f][1];
+    td.append(el("span", { class: "loc", text: loc ? basename(loc) : "native", title: loc || "a method implemented in Rust" }));
+  }
+  return td;
+}
+
+//
+// Tooltip
+//
+const tip = document.getElementById("tip");
+function showTip(ev, build) {
+  tip.replaceChildren();
+  build(tip);
+  tip.hidden = false;
+  const r = tip.getBoundingClientRect();
+  let x = ev.clientX + 14, y = ev.clientY + 16;
+  if (x + r.width > innerWidth - 8) x = Math.max(8, ev.clientX - r.width - 14);
+  if (y + r.height > innerHeight - 8) y = Math.max(8, ev.clientY - r.height - 12);
+  tip.style.left = x + "px";
+  tip.style.top = y + "px";
+}
+const hideTip = () => { tip.hidden = true; };
+function tipRows(parent, rows) {
+  const kv = el("div", { class: "kv" });
+  for (const [color, value, label] of rows) {
+    kv.append(color ? el("i", { class: "key", style: "background:" + color }) : el("i"),
+      el("b", { text: value }), el("span", { text: label }));
+  }
+  parent.append(kv);
+}
+
+//
+// Tables
+//
+// cols: { label, get(row) -> sortable value, fmt(value,row) -> text,
+//         cell(row) -> td (instead of fmt), num, bar: {max, color(row)}, title }
+const sortState = {};
+function makeTable(id, cols, rows, opts = {}) {
+  const st = sortState[id] || (sortState[id] = { col: opts.sort ?? 0, dir: -1, limit: opts.limit ?? 200 });
+  const wrap = el("div");
+  const draw = () => {
+    const c = cols[st.col];
+    const sorted = rows.slice().sort((a, b) => {
+      const x = c.get(a), y = c.get(b);
+      return (typeof x === "string" ? x.localeCompare(y) : x - y) * st.dir;
+    });
+    const thead = el("tr");
+    cols.forEach((col, i) => {
+      const th = el("th", { class: (col.num ? "num " : "") + (col.get ? "sortable" : ""), title: col.title });
+      th.append(col.label);
+      if (i === st.col) th.append(el("span", { class: "arrow", text: st.dir < 0 ? " ▾" : " ▴" }));
+      if (col.get) th.addEventListener("click", () => {
+        if (st.col === i) st.dir = -st.dir; else { st.col = i; st.dir = col.num ? -1 : 1; }
+        draw();
+      });
+      thead.append(th);
+      if (col.bar) thead.append(el("th"));
+    });
+    const tbody = el("tbody");
+    for (const r of sorted.slice(0, st.limit)) {
+      const tr = el("tr", { class: (opts.onRow ? "click " : "") + (opts.selected && opts.selected(r) ? "sel" : "") });
+      if (opts.onRow) tr.addEventListener("click", () => opts.onRow(r));
+      for (const col of cols) {
+        if (col.cell) tr.append(col.cell(r));
+        else tr.append(el("td", { class: col.num ? "num" : col.wrap ? "name" : "", text: col.fmt ? col.fmt(col.get(r), r) : col.get(r) }));
+        if (col.bar) {
+          const w = col.bar.max ? Math.max(0, Math.min(100, col.get(r) * 100 / col.bar.max)) : 0;
+          const i = el("i", { style: "width:" + w.toFixed(2) + "%" + (col.bar.color ? ";background:" + col.bar.color(r) : "") });
+          tr.append(el("td", { class: "barcell" }, el("div", { class: "bar" }, i)));
+        }
+      }
+      tbody.append(tr);
+    }
+    const t = el("table", null, el("thead", null, thead), tbody);
+    wrap.replaceChildren(el("div", { class: "tablewrap" }, t));
+    if (!rows.length) wrap.append(el("div", { class: "empty", text: opts.empty || "Nothing recorded." }));
+    if (sorted.length > st.limit) {
+      wrap.append(el("button", {
+        class: "more", text: "Show all " + fmtInt(sorted.length) + " rows",
+        onclick: () => { st.limit = Infinity; draw(); },
+      }));
+    }
+  };
+  draw();
+  return wrap;
+}
+function card(title, caption, ...body) {
+  const c = el("section", { class: "card" });
+  if (title) c.append(el("h2", { text: title }));
+  if (caption) c.append(el("div", { class: "cap", text: caption }));
+  c.append(...body);
+  return c;
+}
+function tile(label, value, sub) {
+  return el("div", { class: "tile" }, el("div", { class: "l", text: label }),
+    el("div", { class: "v", text: value }), sub ? el("div", { class: "s", text: sub }) : null);
+}
+function metricSelect(onchange) {
+  const keys = metricKeys();
+  const s = el("select", { "aria-label": "What to show" });
+  for (const k of keys) s.append(el("option", { value: k, text: METRICS[k].label, selected: k === state.metric }));
+  s.addEventListener("change", () => { state.metric = s.value; onchange(); });
+  return s;
+}
+const rangeNote = () => ranged() ? " In the selected part of the run." : "";
+
+//
+// Aggregates
+//
+// Per method: self (by tier for CPU) and total, in the selected range.
+function methodStats(metricKey) {
+  const m = METRICS[metricKey], p = PROFILES[m.profile], v = values(metricKey);
+  const n = D.funcs.length + 1;           // the last one is "no Ruby frame"
+  const self = new Float64Array(n), total = new Float64Array(n);
+  const tiers = m.profile === "cpu" ? Array.from({ length: n }, () => null) : null;
+  const seen = new Int32Array(n).fill(-1);
+  let all = 0;
+  p.src.stacks.forEach((s, i) => {
+    const w = v[i];
+    if (!w) return;
+    all += w;
+    const leaf = leafFunc(m.profile, s), li = leaf < 0 ? n - 1 : leaf;
+    self[li] += w;
+    if (tiers) (tiers[li] || (tiers[li] = new Float64Array(NT)))[s[0]] += w;
+    for (let j = p.head + 1; j < s.length; j++) {
+      if (seen[s[j]] !== i) { seen[s[j]] = i; total[s[j]] += w; }
+    }
+    if (leaf < 0) total[n - 1] += w;
+  });
+  const rows = [];
+  for (let f = 0; f < n; f++) {
+    if (self[f] || total[f]) rows.push({ f: f === n - 1 ? -1 : f, self: self[f], total: total[f], tiers: tiers && tiers[f] });
+  }
+  return { rows, all };
+}
+function tierTotals() {
+  const v = values("cpu"), t = new Float64Array(NT);
+  D.cpu.stacks.forEach((s, i) => { t[s[0]] += v[i]; });
+  return t;
+}
+const tierColor = (t) => css("--t" + t);
+function mixBar(tiers) {
+  const total = sum(tiers), box = el("div", { class: "mix", role: "img" });
+  const parts = [];
+  for (let t = 0; t < NT; t++) {
+    if (!tiers[t]) continue;
+    box.append(el("i", { style: "flex:" + tiers[t] + " 0 0;background:var(--t" + t + ")" }));
+    parts.push([tierColor(t), fmtPct(tiers[t], total), D.tiers[t][1]]);
+  }
+  box.setAttribute("aria-label", parts.map((p) => p[2] + " " + p[1]).join(", "));
+  box.addEventListener("pointermove", (ev) => showTip(ev, (t) => {
+    t.append(el("div", { class: "h", text: "Self time by tier" }));
+    tipRows(t, parts);
+  }));
+  box.addEventListener("pointerleave", hideTip);
+  return box;
+}
+
+//
+// Time line
+//
+const tl = { canvas: document.getElementById("tl"), drag: null, hover: -1, series: null };
+function timelineSeries() {
+  if (tl.series) return tl.series;
+  const tiers = Array.from({ length: NB }, () => new Float64Array(NT));
+  D.cpu.buckets.forEach((row, b) => {
+    for (let i = 0; i < row.length; i += 2) tiers[b][D.cpu.stacks[row[i]][0]] += row[i + 1];
+  });
+  const per = (p, off) => {
+    const a = new Float64Array(NB);
+    p.src.buckets.forEach((row, b) => { for (let i = 0; i < row.length; i += p.stride) a[b] += row[i + off]; });
+    return a;
+  };
+  const extra = [];
+  if (PROFILES.alloc.on) extra.push({ label: "objects", data: per(PROFILES.alloc, 1), fmt: fmtCompact });
+  if (PROFILES.malloc.on) extra.push({ label: "malloc", data: per(PROFILES.malloc, 2), fmt: fmtBytes });
+  return tl.series = { tiers, extra };
+}
+const TL = { left: 62, right: 8, top: 4, plot: 84, axis: 18, rowH: 20 };
+function drawTimeline() {
+  const c = tl.canvas;
+  if (document.getElementById("tl-card").hidden) return;
+  const s = timelineSeries();
+  const cssH = TL.top + TL.plot + TL.axis + s.extra.length * TL.rowH + 2;
+  const dpr = window.devicePixelRatio || 1, W = c.clientWidth;
+  c.style.height = cssH + "px";
+  c.width = Math.round(W * dpr); c.height = Math.round(cssH * dpr);
+  const g = c.getContext("2d");
+  g.scale(dpr, dpr);
+  const x0 = TL.left, pw = W - TL.left - TL.right, bw = pw / NB;
+  const ink2 = css("--ink2"), muted = css("--muted"), grid = css("--grid"), surface = css("--surface");
+  g.font = "11px system-ui, sans-serif";
+  g.textBaseline = "middle";
+  // y axis: share of the bucket's samples
+  g.textAlign = "right";
+  for (const [f, label] of [[0, "0"], [0.5, "50%"], [1, "100%"]]) {
+    const y = TL.top + TL.plot * (1 - f);
+    g.fillStyle = muted; g.fillText(label, x0 - 6, Math.min(Math.max(y, TL.top + 5), TL.top + TL.plot - 5));
+    g.fillStyle = grid; g.fillRect(x0, Math.round(y), pw, 1);
+  }
+  const colors = D.tiers.map((_, t) => tierColor(t));
+  for (let b = 0; b < NB; b++) {
+    const total = sum(s.tiers[b]);
+    if (!total) continue;
+    let y = TL.top + TL.plot;
+    const xa = Math.round(x0 + b * bw), xb = Math.round(x0 + (b + 1) * bw);
+    for (let t = 0; t < NT; t++) {
+      const h = s.tiers[b][t] / total * TL.plot;
+      if (!h) continue;
+      g.fillStyle = colors[t];
+      g.fillRect(xa, y - h, Math.max(1, xb - xa - (bw >= 6 ? 1 : 0)), h);
+      y -= h;
+    }
+  }
+  // x axis: time
+  const axisY = TL.top + TL.plot;
+  g.fillStyle = css("--axis"); g.fillRect(x0, axisY, pw, 1);
+  g.textAlign = "center";
+  if (SPAN > 0) {
+    const steps = [1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300, 600];
+    const step = steps.find((v) => SPAN / v <= Math.max(2, pw / 90)) || 600;
+    for (let t = 0; t <= SPAN + 1e-9; t += step) {
+      const x = x0 + t / SPAN * pw;
+      g.fillStyle = css("--axis"); g.fillRect(Math.round(x), axisY, 1, 4);
+      g.fillStyle = muted;
+      g.textAlign = x < x0 + 14 ? "left" : x > x0 + pw - 14 ? "right" : "center";
+      g.fillText(step < 1 ? (t * 1000).toFixed(0) + " ms" : t.toFixed(0) + " s", x, axisY + 11);
+    }
+  }
+  // the other profiles, one thin row each, each to its own peak
+  s.extra.forEach((e, i) => {
+    const top = TL.top + TL.plot + TL.axis + i * TL.rowH, h = TL.rowH - 6;
+    const max = Math.max(...e.data);
+    g.textAlign = "right"; g.fillStyle = ink2;
+    g.fillText(e.label, x0 - 6, top + h / 2 + 1);
+    g.fillStyle = grid; g.fillRect(x0, top + h, pw, 1);
+    g.fillStyle = muted;
+    for (let b = 0; b < NB; b++) {
+      if (!e.data[b]) continue;
+      const bh = Math.max(1, e.data[b] / max * h);
+      const xa = Math.round(x0 + b * bw), xb = Math.round(x0 + (b + 1) * bw);
+      g.fillRect(xa, top + h - bh, Math.max(1, xb - xa - (bw >= 6 ? 1 : 0)), bh);
+    }
+  });
+  // selection: wash what is outside
+  const [a, b] = tl.drag ? tl.drag.range : state.range;
+  if (a !== 0 || b !== NB) {
+    g.globalAlpha = 0.72; g.fillStyle = surface;
+    g.fillRect(x0, 0, a * bw, cssH);
+    g.fillRect(x0 + b * bw, 0, pw - b * bw, cssH);
+    g.globalAlpha = 1; g.fillStyle = css("--ink");
+    g.fillRect(Math.round(x0 + a * bw), 0, 1, cssH);
+    g.fillRect(Math.round(x0 + b * bw) - 1, 0, 1, cssH);
+  }
+  if (tl.hover >= 0 && !tl.drag) {
+    g.fillStyle = css("--ink"); g.globalAlpha = 0.5;
+    g.fillRect(Math.round(x0 + (tl.hover + 0.5) * bw), 0, 1, cssH);
+    g.globalAlpha = 1;
+  }
+}
+function bucketAt(ev) {
+  const r = tl.canvas.getBoundingClientRect();
+  const pw = r.width - TL.left - TL.right;
+  return Math.max(0, Math.min(NB - 1, Math.floor((ev.clientX - r.left - TL.left) / pw * NB)));
+}
+const bucketTime = (b) => b / NB * SPAN * 1000;
+function setRange(a, b) {
+  state.range = [a, b];
+  state.flame.zoom = null;
+  document.getElementById("tl-reset").hidden = !ranged();
+  document.getElementById("tl-range").textContent = ranged()
+    ? fmtMs(bucketTime(a)) + " – " + fmtMs(bucketTime(b)) + " of " + fmtMs(SPAN * 1000) : "";
+  drawTimeline();
+  render();
+}
+function initTimeline() {
+  if (!PROFILES.cpu.on || NB < 2) return;
+  document.getElementById("tl-card").hidden = false;
+  const lg = document.getElementById("tl-legend"), tt = sum2(timelineSeries().tiers);
+  for (let t = 0; t < NT; t++) {
+    if (tt[t]) lg.append(el("span", null, el("i", { class: "sw", style: "background:var(--t" + t + ")" }), D.tiers[t][1]));
+  }
+  const c = tl.canvas;
+  c.addEventListener("pointerdown", (ev) => {
+    const b = bucketAt(ev);
+    tl.drag = { from: b, range: [b, b + 1], moved: false };
+    c.setPointerCapture(ev.pointerId);
+    hideTip();
+  });
+  c.addEventListener("pointermove", (ev) => {
+    const b = bucketAt(ev);
+    if (tl.drag) {
+      tl.drag.moved = tl.drag.moved || b !== tl.drag.from;
+      tl.drag.range = [Math.min(b, tl.drag.from), Math.max(b, tl.drag.from) + 1];
+      drawTimeline();
+      return;
+    }
+    tl.hover = b;
+    drawTimeline();
+    const s = timelineSeries(), total = sum(s.tiers[b]);
+    showTip(ev, (t) => {
+      t.append(el("div", { class: "h", text: fmtMs(bucketTime(b)) + " – " + fmtMs(bucketTime(b + 1)) }));
+      t.append(el("div", { class: "sub", text: fmtInt(total) + " CPU samples" }));
+      const rows = [];
+      for (let i = 0; i < NT; i++) if (s.tiers[b][i]) rows.push([tierColor(i), fmtPct(s.tiers[b][i], total), D.tiers[i][1]]);
+      for (const e of s.extra) rows.push([null, e.fmt(e.data[b]), e.label === "objects" ? "objects allocated" : "malloc'ed"]);
+      tipRows(t, rows);
+    });
+  });
+  c.addEventListener("pointerup", () => {
+    const d = tl.drag;
+    tl.drag = null;
+    if (!d) return;
+    // a click on the selection's only bucket, or outside a selection, clears it
+    if (!d.moved && ranged()) setRange(0, NB);
+    else if (d.moved) setRange(d.range[0], d.range[1]);
+    else drawTimeline();
+  });
+  c.addEventListener("pointerleave", () => { tl.hover = -1; hideTip(); if (!tl.drag) drawTimeline(); });
+  c.addEventListener("keydown", (ev) => {
+    // keyboard: the arrows move a one-eighth window, Escape clears it
+    const w = Math.max(1, Math.round(NB / 8));
+    let [a, b] = state.range;
+    if (ev.key === "Escape") return setRange(0, NB);
+    if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
+    ev.preventDefault();
+    if (!ranged()) { a = 0; b = w; }
+    else if (ev.key === "ArrowRight") { a = Math.min(NB - w, a + w); b = a + w; }
+    else { a = Math.max(0, a - w); b = a + w; }
+    setRange(a, b);
+  });
+  document.getElementById("tl-reset").addEventListener("click", () => setRange(0, NB));
+}
+function sum2(rows) {
+  const t = new Float64Array(NT);
+  for (const r of rows) for (let i = 0; i < NT; i++) t[i] += r[i];
+  return t;
+}
+
+//
+// Overview
+//
+function viewOverview(root) {
+  const tiles = el("div", { class: "tiles" });
+  tiles.append(tile("Run", fmtMs(M.elapsed * 1000), "from the profiler's start to its report"));
+  if (M.modes.cpu) {
+    tiles.append(tile("Sampled time", fmtMs(M.wall * 1000), "wall; " + fmtMs(M.cpuTime * 1000) + " CPU"));
+    tiles.append(tile("CPU samples", fmtInt(M.samples),
+      (M.clock === "wall" ? "main thread's wall clock" : "process CPU clock") + ", " + fmtMs(MS_PER_SAMPLE) + " each"));
+  }
+  if (D.objects) tiles.append(tile("Objects allocated", fmtCompact(D.objects.total), "counted exactly"));
+  if (D.gc) {
+    const n = D.gc.kinds.reduce((a, k) => a + k.count, 0), ns = D.gc.kinds.reduce((a, k) => a + k.ns, 0);
+    tiles.append(tile("GC collections", fmtInt(n), fmtNs(ns) + " in all"));
+  }
+  if (D.jit) tiles.append(tile("JIT compiles", fmtInt(D.jit.compiles), fmtNs(D.jit.ns) + ", " + fmtBytes(D.jit.codeBytes) + " of code"));
+  if (D.mallocTotals) tiles.append(tile("malloc calls", fmtCompact(D.mallocTotals.calls), fmtBytes(D.mallocTotals.bytes) + " requested"));
+  root.append(tiles);
+
+  const grid = el("div", { class: "grid2" });
+  if (PROFILES.cpu.on) {
+    const t = tierTotals(), total = sum(t), max = Math.max(...t);
+    const rows = [];
+    for (let i = 0; i < NT; i++) if (t[i]) rows.push({ t: i, n: t[i] });
+    grid.append(card("Where the time went",
+      "Every sample is in exactly one tier: the runtime phase its thread was in (GC, JIT compile, parse, malloc, the profiler), else where its PC was." + rangeNote(),
+      makeTable("tiers", [
+        { label: "Tier", get: (r) => D.tiers[r.t][1], cell: (r) => el("td", null, el("i", { class: "sw", style: "margin-right:6px;background:var(--t" + r.t + ")" }), D.tiers[r.t][1]) },
+        { label: "Samples", num: true, get: (r) => r.n, fmt: fmtInt },
+        { label: "Time", num: true, get: (r) => r.n, fmt: (n) => fmtMs(n * MS_PER_SAMPLE) },
+        { label: "%", num: true, get: (r) => r.n, fmt: (n) => fmtPct(n, total), bar: { max, color: (r) => "var(--t" + r.t + ")" } },
+      ], rows, { sort: 1 })));
+    const ms = methodStats("cpu");
+    const top = ms.rows.filter((r) => r.self).sort((a, b) => b.self - a.self).slice(0, 12);
+    grid.append(card("Hottest methods",
+      "By self time: samples whose newest Ruby frame is the method, with the builtins, runtime and GC working for it. The Methods tab has them all." + rangeNote(),
+      makeTable("hot", [
+        { label: "Method", get: (r) => funcLabel(r.f), cell: (r) => funcNode(r.f) },
+        { label: "Self", num: true, get: (r) => r.self, fmt: (n) => fmtPct(n, ms.all), bar: { max: top.length ? top[0].self : 0 } },
+        { label: "By tier", cell: (r) => el("td", null, mixBar(r.tiers)) },
+      ], top, { sort: 1, onRow: (r) => { state.methods.selected = r.f; state.metric = "cpu"; go("methods"); } })));
+  }
+  if (D.objects) {
+    const by = new Map();
+    for (const [, c, n] of D.objects.exact) by.set(c, (by.get(c) || 0) + n);
+    const rows = [...by].map(([c, n]) => ({ c, n })).sort((a, b) => b.n - a.n).slice(0, 12);
+    grid.append(card("Most allocated classes", "Every object allocation of the whole run, counted exactly.",
+      makeTable("topclass", [
+        { label: "Class", get: (r) => D.classes[r.c], wrap: true },
+        { label: "Objects", num: true, get: (r) => r.n, fmt: fmtInt },
+        { label: "%", num: true, get: (r) => r.n, fmt: (n) => fmtPct(n, D.objects.total), bar: { max: rows.length ? rows[0].n : 0 } },
+      ], rows, { sort: 1 })));
+  }
+  if (D.gc) grid.append(gcCard());
+  root.append(grid);
+}
+function gcCard() {
+  const rows = D.gc.kinds.filter((k) => k.count);
+  return card("Garbage collection",
+    "Every collection of the whole run, timed. " + fmtInt(D.gc.pages) + " heap pages at exit, " + fmtInt(D.gc.live) +
+    " live objects after the last collection, " + fmtInt(D.gc.allocated) + " objects allocated in all.",
+    makeTable("gc", [
+      { label: "Kind", get: (r) => r.kind },
+      { label: "Collections", num: true, get: (r) => r.count, fmt: fmtInt },
+      { label: "Time", num: true, get: (r) => r.ns, fmt: fmtNs },
+      { label: "Mark", num: true, get: (r) => r.markNs, fmt: fmtNs },
+      { label: "Sweep", num: true, get: (r) => r.ns - Math.min(r.ns, r.markNs), fmt: fmtNs },
+      { label: "Per collection", num: true, get: (r) => r.ns / r.count, fmt: fmtNs },
+      { label: "Marked per collection", num: true, get: (r) => r.marked / r.count, fmt: fmtInt, title: "objects found live" },
+    ], rows, { sort: 2 }));
+}
+
+//
+// Flame graph
+//
+const ROW = 19;
+const flame = { tree: null, key: "", nodes: [], byDepth: [], hover: null, canvas: null };
+function buildTree(metricKey, reverse) {
+  const m = METRICS[metricKey], v = values(metricKey), frames = framesOf(m.profile);
+  const root = { k: -1, v: 0, self: 0, ch: new Map(), parent: null, d: -1 };
+  for (let i = 0; i < frames.length; i++) {
+    const w = v[i];
+    if (!w) continue;
+    root.v += w;
+    let n = root;
+    const f = frames[i];
+    for (let j = 0; j < f.length; j++) {
+      const k = reverse ? f[f.length - 1 - j] : f[j];
+      let c = n.ch.get(k);
+      if (!c) { c = { k, v: 0, self: 0, ch: new Map(), parent: n, d: n.d + 1 }; n.ch.set(k, c); }
+      c.v += w;
+      n = c;
+    }
+    n.self += w;
+  }
+  // lay out: widest first
+  const nodes = [], byDepth = [];
+  const place = (n, x) => {
+    n.x = x;
+    if (n !== root) { nodes.push(n); (byDepth[n.d] || (byDepth[n.d] = [])).push(n); }
+    let cx = x;
+    for (const c of [...n.ch.values()].sort((a, b) => b.v - a.v)) { place(c, cx); cx += c.v; }
+  };
+  place(root, 0);
+  return { root, nodes, byDepth };
+}
+function flameTree() {
+  const key = state.metric + "|" + state.range + "|" + state.flame.reverse;
+  if (flame.key !== key) {
+    Object.assign(flame, buildTree(state.metric, state.flame.reverse), { key });
+    state.flame.zoom = null;
+  }
+  return flame;
+}
+function frameFill(k) {
+  switch (kkind(k)) {
+    case K.RUBY: case K.INLINED: return D.funcs[kid(k)][1] ? css("--frame") : css("--frame-native");
+    case K.TIER: return tierColor(kid(k));
+    case K.CLASS: case K.SITE: return css("--t0");
+    default: return css("--frame-native");
+  }
+}
+function frameInk(k) {
+  if (kkind(k) === K.TIER) return kid(k) === 3 ? css("--on-t3") : kid(k) === 9 ? css("--ink") : "#ffffff";
+  if (kkind(k) === K.CLASS || kkind(k) === K.SITE) return "#ffffff";
+  return css("--ink");
+}
+const lowerNames = new Map();
+function matches(k) {
+  const q = state.flame.search.trim().toLowerCase();
+  if (!q) return false;
+  let name = lowerNames.get(k);
+  if (name === undefined) lowerNames.set(k, name = frameName(k).toLowerCase());
+  return name.includes(q);
+}
+function drawFlame() {
+  const c = flame.canvas;
+  if (!c) return;
+  const t = flameTree(), zoom = state.flame.zoom || t.root;
+  const depth = t.byDepth.length;
+  const dpr = window.devicePixelRatio || 1, W = c.clientWidth, H = Math.max(1, depth) * ROW;
+  c.style.height = H + "px";
+  c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
+  const g = c.getContext("2d");
+  g.scale(dpr, dpr);
+  g.font = "11px system-ui, sans-serif";
+  g.textBaseline = "middle";
+  const q = state.flame.search.trim() !== "";
+  const scale = zoom.v ? W / zoom.v : 0;
+  const anc = new Set();
+  for (let n = zoom.parent; n && n !== t.root; n = n.parent) anc.add(n);
+  for (const n of t.nodes) {
+    let x, w, dim = false;
+    n.pw = null;
+    // a match lights up everything under it (the nodes are parents first)
+    n.lit = q && (matches(n.k) || (n.parent !== t.root && n.parent.lit));
+    if (anc.has(n)) { x = 0; w = W; dim = true; }
+    else if (n.d <= zoom.d && n !== zoom) continue;
+    else {
+      x = (n.x - zoom.x) * scale; w = n.v * scale;
+      if (x + w <= 0 || x >= W) continue;
+    }
+    n.px = x; n.pw = w;
+    if (w < 0.4) continue;
+    const y = n.d * ROW;
+    g.globalAlpha = dim ? 0.45 : q && !n.lit ? 0.3 : 1;
+    g.fillStyle = frameFill(n.k);
+    g.fillRect(x, y, Math.max(0.5, w - 1), ROW - 1);
+    if (n === flame.hover) { g.fillStyle = css("--ink"); g.globalAlpha = 0.14; g.fillRect(x, y, Math.max(0.5, w - 1), ROW - 1); g.globalAlpha = dim ? 0.45 : 1; }
+    if (w > 28) {
+      let label = frameName(n.k);
+      const avail = w - 9;
+      let tw = g.measureText(label).width;
+      if (tw > avail) {
+        let len = Math.max(0, Math.floor(label.length * avail / tw) - 1);
+        while (len > 0 && g.measureText(label.slice(0, len) + "…").width > avail) len--;
+        label = len > 2 ? label.slice(0, len) + "…" : "";
+      }
+      if (label) {
+        g.fillStyle = frameInk(n.k);
+        if (kkind(n.k) === K.INLINED) g.font = "italic 11px system-ui, sans-serif";
+        g.fillText(label, Math.max(x, 0) + 4, y + ROW / 2);
+        if (kkind(n.k) === K.INLINED) g.font = "11px system-ui, sans-serif";
+      }
+    }
+  }
+  g.globalAlpha = 1;
+}
+function flameAt(ev) {
+  const t = flame, r = flame.canvas.getBoundingClientRect();
+  const x = ev.clientX - r.left, d = Math.floor((ev.clientY - r.top) / ROW);
+  const row = t.byDepth[d];
+  if (!row) return null;
+  const zoom = state.flame.zoom || t.root;
+  for (const n of row) {
+    const isAnc = n.d < zoom.d && n !== zoom;
+    if (isAnc) { let a = zoom.parent; while (a && a !== n) a = a.parent; if (a === n) return n; continue; }
+    if (n.d <= zoom.d && n !== zoom) continue;
+    if (n.pw != null && x >= n.px && x < n.px + Math.max(n.pw, 1)) return n;
+  }
+  return null;
+}
+function viewFlame(root) {
+  const m = METRICS[state.metric];
+  const t = flameTree();
+  const crumbs = el("div", { class: "crumbs" });
+  const matched = el("span", { class: "muted" });
+  const canvas = el("canvas", { tabindex: "0", "aria-label": "Flame graph: " + m.label });
+  flame.canvas = canvas;
+  const updateCrumbs = () => {
+    crumbs.replaceChildren();
+    const z = state.flame.zoom;
+    if (!z) { crumbs.append(el("span", { class: "muted", text: "Click a frame to zoom into it." })); return; }
+    crumbs.append(el("a", { text: "all", onclick: () => { state.flame.zoom = null; redraw(); } }));
+    const path = [];
+    for (let n = z; n && n !== t.root; n = n.parent) path.unshift(n);
+    for (const n of path) {
+      crumbs.append(" › ");
+      if (n === z) crumbs.append(el("b", { text: frameName(n.k) }));
+      else crumbs.append(el("a", { text: frameName(n.k), onclick: () => { state.flame.zoom = n; redraw(); } }));
+    }
+    crumbs.append(el("span", { class: "muted", text: "  " + fmtPct(z.v, t.root.v) + " of all" }));
+  };
+  const updateMatched = () => {
+    const q = state.flame.search.trim();
+    if (!q) { matched.textContent = ""; return; }
+    // the topmost matching frame of every path counts once
+    let n = 0;
+    const walk = (node) => { for (const c of node.ch.values()) { if (matches(c.k)) n += c.v; else walk(c); } };
+    walk(t.root);
+    matched.textContent = "matched: " + fmtPct(n, t.root.v) + " (" + m.detail(n) + ")";
+  };
+  const redraw = () => { updateCrumbs(); updateMatched(); drawFlame(); };
+  const search = el("input", { type: "search", placeholder: "Highlight frames…", value: state.flame.search, "aria-label": "Highlight frames by name" });
+  search.addEventListener("input", () => { state.flame.search = search.value; updateMatched(); drawFlame(); });
+  const seg = el("div", { class: "seg", role: "group", "aria-label": "Direction" });
+  for (const [rev, label, title] of [[false, "Callees", "Root at the top: what each method called"], [true, "Callers", "Leaf at the top: who is responsible for each leaf"]]) {
+    seg.append(el("button", { text: label, title, "aria-pressed": String(state.flame.reverse === rev), onclick: () => { state.flame.reverse = rev; render(); } }));
+  }
+  const legend = el("div", { class: "legend" },
+    el("span", null, el("i", { class: "sw", style: "background:var(--frame)" }), "Ruby method (italic: inlined without a frame)"),
+    el("span", null, el("i", { class: "sw", style: "background:var(--frame-native)" }), "native method / Rust function"));
+  if (m.profile === "cpu") {
+    const tt = tierTotals();
+    for (let i = 0; i < NT; i++) if (tt[i]) legend.append(el("span", null, el("i", { class: "sw", style: "background:var(--t" + i + ")" }), D.tiers[i][1]));
+  } else {
+    legend.append(el("span", null, el("i", { class: "sw", style: "background:var(--t0)" }), m.profile === "alloc" ? "class of the object" : "Rust call site"));
+  }
+  canvas.addEventListener("pointermove", (ev) => {
+    const n = flameAt(ev);
+    if (n !== flame.hover) { flame.hover = n; drawFlame(); }
+    if (!n) return hideTip();
+    showTip(ev, (tp) => {
+      tp.append(el("div", { class: "h", text: frameName(n.k) }), el("div", { class: "sub", text: frameSub(n.k) }));
+      const rows = [[null, fmtPct(n.v, t.root.v), "of all · " + m.detail(n.v)]];
+      if (n.parent && n.parent !== t.root) rows.push([null, fmtPct(n.v, n.parent.v), "of " + frameName(n.parent.k)]);
+      if (!state.flame.reverse && kkind(n.k) < K.TIER) {
+        // a method's self: the leaves that say what its samples were
+        let self = 0;
+        for (const c of n.ch.values()) if (kkind(c.k) >= K.TIER) self += c.v;
+        rows.push([null, fmtPct(self, t.root.v), "self · " + m.detail(self)]);
+      }
+      tipRows(tp, rows);
+    });
+  });
+  canvas.addEventListener("pointerleave", () => { flame.hover = null; hideTip(); drawFlame(); });
+  canvas.addEventListener("click", (ev) => {
+    const n = flameAt(ev);
+    if (!n) return;
+    state.flame.zoom = n === state.flame.zoom ? (n.parent === t.root ? null : n.parent) : n;
+    redraw();
+  });
+  canvas.addEventListener("keydown", (ev) => { if (ev.key === "Escape") { state.flame.zoom = null; redraw(); } });
+  const caption = (m.profile === "cpu"
+    ? "Each sample's Ruby stack, then the tier it was counted in and, outside generated code, the function the PC was in."
+    : m.profile === "alloc"
+      ? "The Ruby stack of one object allocation in " + D.objects.every + ", then the object's class. Counts are scaled up."
+      : "The Ruby stack of one malloc in " + D.mallocTotals.every + ", then the Rust function that asked for the memory. Counts are scaled up.")
+    + " Width is " + m.unit + "; the widest child is on the left." + rangeNote();
+  root.append(card(null, null,
+    el("div", { class: "row" }, metricSelect(render), seg, search, matched, el("span", { class: "grow" }),
+      el("button", { text: "Reset zoom", onclick: () => { state.flame.zoom = null; redraw(); } })),
+    el("div", { class: "cap", style: "margin-top:8px", text: caption }),
+    legend, crumbs,
+    t.root.v ? el("div", { class: "flamebox" }, canvas) : el("div", { class: "empty", text: "No stacks in this part of the run." })));
+  redraw();
+}
+
+//
+// Methods
+//
+function relatives(metricKey, f) {
+  const m = METRICS[metricKey], p = PROFILES[m.profile], v = values(metricKey);
+  const callers = new Map(), callees = new Map(), leaves = new Map();
+  p.src.stacks.forEach((s, i) => {
+    const w = v[i];
+    if (!w) return;
+    const first = p.head + 1;
+    const seenUp = new Set(), seenDown = new Set();
+    for (let j = first; j < s.length; j++) {
+      if (s[j] !== f) continue;
+      const up = j > first ? s[j - 1] : -1;
+      if (!seenUp.has(up)) { seenUp.add(up); callers.set(up, (callers.get(up) || 0) + w); }
+      if (j + 1 < s.length) {
+        const down = s[j + 1];
+        if (!seenDown.has(down)) { seenDown.add(down); callees.set(down, (callees.get(down) || 0) + w); }
+      }
+    }
+    if (leafFunc(m.profile, s) === f) {
+      const leaf = m.profile === "cpu" ? (s[1] >= 0 ? D.syms[s[1]] : "[" + D.tiers[s[0]][1] + "]")
+        : m.profile === "alloc" ? D.classes[s[0]] : D.syms[s[0]];
+      leaves.set(leaf, (leaves.get(leaf) || 0) + w);
+    }
+  });
+  const list = (map) => [...map].map(([k, n]) => ({ k, n })).sort((a, b) => b.n - a.n);
+  return { callers: list(callers), callees: list(callees), leaves: list(leaves) };
+}
+function viewMethods(root) {
+  const m = METRICS[state.metric], st = methodStats(state.metric);
+  const filter = el("input", { type: "search", placeholder: "Filter methods…", value: state.methods.filter, "aria-label": "Filter methods by name or file" });
+  const left = el("div"), right = el("div", { class: "card detail" });
+  const maxSelf = Math.max(0, ...st.rows.map((r) => r.self)), maxTotal = Math.max(0, ...st.rows.map((r) => r.total));
+  const cols = [
+    { label: "Method", get: (r) => funcLabel(r.f), cell: (r) => funcNode(r.f) },
+    { label: "Self", num: true, get: (r) => r.self, fmt: m.fmt, title: "the method is the newest Ruby frame" },
+    { label: "%", num: true, get: (r) => r.self, fmt: (n) => fmtPct(n, st.all), bar: { max: maxSelf } },
+    { label: "Total", num: true, get: (r) => r.total, fmt: m.fmt, title: "the method is anywhere on the Ruby stack" },
+    { label: "%", num: true, get: (r) => r.total, fmt: (n) => fmtPct(n, st.all), bar: { max: maxTotal, color: () => "var(--muted)" } },
+  ];
+  if (m.profile === "cpu") cols.push({ label: "Self by tier", cell: (r) => el("td", null, r.tiers ? mixBar(r.tiers) : null) });
+  const drawDetail = () => {
+    const f = state.methods.selected;
+    right.replaceChildren();
+    const row = st.rows.find((r) => r.f === f);
+    if (f == null || !row) {
+      right.append(el("div", { class: "empty", text: "Select a method to see who calls it and what it calls." }));
+      return;
+    }
+    right.append(el("div", { class: "big", text: funcLabel(f) }));
+    if (f >= 0) right.append(el("div", { class: "muted mono", text: D.funcs[f][1] || "native method (Rust)" }));
+    right.append(el("div", { style: "margin-top:6px", text: "self " + fmtPct(row.self, st.all) + " (" + m.detail(row.self) + ") · total " + fmtPct(row.total, st.all) + " (" + m.detail(row.total) + ")" }));
+    if (f >= 0) {
+      right.append(el("div", { style: "margin-top:8px" }, el("button", {
+        text: "Show in flame graph",
+        onclick: () => { state.flame.search = D.funcs[f][0]; go("flame"); },
+      })));
+    }
+    if (f < 0) return;
+    const rel = relatives(state.metric, f);
+    const mini = (id, title, cap, rows, name, of = row.total) => {
+      right.append(el("h3", { text: title }), el("div", { class: "cap", text: cap }));
+      right.append(makeTable(id, [
+        { label: name, get: (r) => typeof r.k === "string" ? r.k : funcLabel(r.k), cell: (r) => typeof r.k === "string" ? el("td", { class: "name", text: r.k }) : funcNode(r.k) },
+        { label: m.unit, num: true, get: (r) => r.n, fmt: m.fmt },
+        { label: "%", num: true, get: (r) => r.n, fmt: (n) => fmtPct(n, of) },
+      ], rows, { sort: 1, limit: 12, empty: "None.",
+        onRow: (r) => { if (typeof r.k !== "string" && r.k >= 0) { state.methods.selected = r.k; draw(); } } }));
+    };
+    mini("callers", "Callers", "The frame below it on the stack, as a share of its total.", rel.callers, "Caller");
+    mini("callees", "Callees", "The frame above it on the stack, as a share of its total.", rel.callees, "Callee");
+    mini("leaves", m.profile === "cpu" ? "Where its self time went" : m.profile === "alloc" ? "What it allocated" : "Who asked for the memory",
+      m.profile === "cpu" ? "The tier, or the Rust / C function the PC was in, while it was the newest Ruby frame, as a share of its self time."
+        : m.profile === "alloc" ? "Classes of the objects allocated while it was the newest Ruby frame."
+          : "Rust call sites while it was the newest Ruby frame.", rel.leaves, m.profile === "alloc" ? "Class" : "Function", row.self);
+  };
+  const draw = () => {
+    const q = state.methods.filter.trim().toLowerCase();
+    const rows = q ? st.rows.filter((r) => (funcLabel(r.f) + " " + (r.f >= 0 ? D.funcs[r.f][1] : "")).toLowerCase().includes(q)) : st.rows;
+    left.replaceChildren(makeTable("methods:" + m.profile, cols, rows, {
+      sort: 1, onRow: (r) => { state.methods.selected = r.f; draw(); },
+      selected: (r) => r.f === state.methods.selected, empty: "No method matches.",
+    }));
+    drawDetail();
+  };
+  filter.addEventListener("input", () => { state.methods.filter = filter.value; draw(); });
+  const inlineNote = M.inline
+    ? "A frameless-inlined callee counts as a frame of its own."
+    : "A frameless-inlined callee has no frame: it counts as the method it was inlined into (MONORUBY_PROF_INLINE=1 tells them apart).";
+  const main = card(null, null,
+    el("div", { class: "row" }, metricSelect(render), filter, el("span", { class: "muted", text: fmtInt(st.rows.length) + " methods" })),
+    el("div", { class: "cap", style: "margin-top:8px", text: "Self: the method is the newest Ruby frame (its own code and the builtins, runtime and GC working for it). Total: it is anywhere on the stack; a recursive method counts once. " + inlineNote + rangeNote() }),
+    left);
+  root.append(el("div", { class: "split" }, main, right));
+  draw();
+}
+
+//
+// Native functions
+//
+function viewNative(root) {
+  const v = values("cpu"), by = new Map();
+  let all = 0;
+  D.cpu.stacks.forEach((s, i) => {
+    if (!v[i]) return;
+    all += v[i];
+    if (s[1] < 0) return;
+    const key = s[0] + "|" + s[1];
+    by.set(key, (by.get(key) || 0) + v[i]);
+  });
+  const rows = [...by].map(([k, n]) => { const [t, s] = k.split("|").map(Number); return { t, s, n }; });
+  const max = Math.max(0, ...rows.map((r) => r.n));
+  root.append(card("Native functions by self samples",
+    "Samples outside generated code, by the Rust / C function the PC was in (not its callers), with the tier the sample was counted in." + rangeNote(),
+    makeTable("native", [
+      { label: "Function", get: (r) => D.syms[r.s], cell: (r) => el("td", { class: "name mono", text: D.syms[r.s] }) },
+      { label: "Tier", get: (r) => D.tiers[r.t][1], cell: (r) => el("td", null, el("i", { class: "sw", style: "margin-right:6px;background:var(--t" + r.t + ")" }), D.tiers[r.t][1]) },
+      { label: "Self", num: true, get: (r) => r.n, fmt: fmtInt },
+      { label: "Time", num: true, get: (r) => r.n, fmt: (n) => fmtMs(n * MS_PER_SAMPLE) },
+      { label: "%", num: true, get: (r) => r.n, fmt: (n) => fmtPct(n, all), bar: { max, color: (r) => "var(--t" + r.t + ")" } },
+    ], rows, { sort: 2 })));
+}
+
+//
+// JIT
+//
+function viewJit(root) {
+  const J = D.jit;
+  root.append(el("div", { class: "tiles" },
+    tile("Compiles", fmtInt(J.compiles), fmtInt(J.loops) + " loops, " + fmtInt(J.failed) + " abandoned"),
+    tile("Compile time", fmtNs(J.ns), J.compiles ? fmtNs(J.ns / J.compiles) + " per compile" : ""),
+    tile("Machine code", fmtBytes(J.codeBytes), J.compiles ? fmtBytes(J.codeBytes / J.compiles) + " per compile" : ""),
+    M.inline ? tile("Frameless bodies", fmtInt(M.inlineBodies), "callees inlined without a frame") : null));
+  const samples = new Float64Array(J.units.length);
+  let all = 0;
+  if (PROFILES.cpu.on) {
+    const v = values("cpu");
+    D.cpu.stacks.forEach((s, i) => { all += v[i]; if (s[2] >= 0) samples[s[2]] += v[i]; });
+  }
+  const rows = J.units.map((u, i) => ({ i, f: u[0], c: u[1], loop: u[2], code: u[3], ns: u[4], failed: u[5], n: samples[i] }));
+  const cols = [
+    { label: "Method", get: (r) => funcLabel(r.f), cell: (r) => funcNode(r.f) },
+    { label: "Class of self", get: (r) => D.classes[r.c], wrap: true },
+    { label: "Kind", get: (r) => (r.loop ? "loop" : "method") + (r.failed ? " (abandoned)" : "") },
+  ];
+  if (PROFILES.cpu.on) {
+    cols.push({ label: "Samples", num: true, get: (r) => r.n, fmt: fmtInt, title: "CPU samples whose PC was in the unit's code" },
+      { label: "%", num: true, get: (r) => r.n, fmt: (n) => fmtPct(n, all), bar: { max: Math.max(0, ...samples) } });
+  }
+  cols.push({ label: "Code", num: true, get: (r) => r.code, fmt: fmtBytes },
+    { label: "Compile", num: true, get: (r) => r.ns, fmt: fmtNs });
+  root.append(card("Compilation units",
+    "One row per compilation: a whole method or one loop, compiled for one class of self. Callees inlined into the unit are part of it; the runtime functions it calls are not. A method compiled twice is two rows." + rangeNote(),
+    makeTable("units", cols, rows, { sort: PROFILES.cpu.on ? 3 : cols.length - 1 })));
+
+  const again = new Map();
+  for (const r of rows) {
+    const key = r.f + "|" + r.c + "|" + r.loop;
+    const e = again.get(key) || { f: r.f, c: r.c, loop: r.loop, times: 0, ns: 0 };
+    e.times++; e.ns += r.ns;
+    again.set(key, e);
+  }
+  const re = [...again.values()].filter((e) => e.times > 1);
+  const grid = el("div", { class: "grid2" });
+  grid.append(card("Compiled more than once",
+    "Recompiles: the same method or loop compiled again for the same class of self, with the time all its compilations took together.",
+    makeTable("again", [
+      { label: "Method", get: (r) => funcLabel(r.f), cell: (r) => funcNode(r.f) },
+      { label: "Class of self", get: (r) => D.classes[r.c], wrap: true },
+      { label: "Kind", get: (r) => r.loop ? "loop" : "method" },
+      { label: "Times", num: true, get: (r) => r.times, fmt: fmtInt },
+      { label: "Total time", num: true, get: (r) => r.ns, fmt: fmtNs },
+    ], re, { sort: 4, empty: "Nothing was compiled twice." })));
+  if (M.inline && PROFILES.cpu.on) {
+    const v = values("cpu"), by = new Map();
+    D.cpu.stacks.forEach((s, i) => {
+      const ninl = s[3];
+      if (!v[i] || !ninl) return;
+      const key = s[s.length - 1] + "|" + s[s.length - 1 - ninl];
+      by.set(key, (by.get(key) || 0) + v[i]);
+    });
+    const ir = [...by].map(([k, n]) => { const [callee, host] = k.split("|").map(Number); return { callee, host, n }; });
+    grid.append(card("Frameless-inlined callees",
+      "Self samples in the code of a callee the JIT inlined without a frame, by callee and by the method whose frame it ran in." + rangeNote(),
+      makeTable("inl", [
+        { label: "Callee", get: (r) => funcLabel(r.callee), cell: (r) => funcNode(r.callee) },
+        { label: "Ran in the frame of", get: (r) => funcLabel(r.host), cell: (r) => funcNode(r.host) },
+        { label: "Self", num: true, get: (r) => r.n, fmt: fmtInt },
+        { label: "%", num: true, get: (r) => r.n, fmt: (n) => fmtPct(n, all), bar: { max: Math.max(0, ...ir.map((r) => r.n)) } },
+      ], ir, { sort: 2, empty: "No sample in a frameless body." })));
+  }
+  root.append(grid);
+}
+
+//
+// Objects and GC
+//
+function viewObjects(root) {
+  const O = D.objects;
+  // exact for the whole run; from the sampled stacks for a part of it
+  let triples, total, note;
+  if (!ranged() || !PROFILES.alloc.on) {
+    triples = O.exact; total = O.total;
+    note = "Every object allocation of the whole run, counted exactly. The JIT's inline allocation is off while they are counted, so the times of this run are not representative.";
+  } else {
+    const v = values("alloc"), by = new Map();
+    D.alloc.stacks.forEach((s, i) => {
+      if (!v[i]) return;
+      const key = leafFunc("alloc", s) + "|" + s[0];
+      by.set(key, (by.get(key) || 0) + v[i]);
+    });
+    triples = [...by].map(([k, n]) => { const [f, c] = k.split("|").map(Number); return [f, c, n]; });
+    total = triples.reduce((a, t) => a + t[2], 0);
+    note = "In the selected part of the run: estimates from the stacks recorded for one allocation in " + O.every + ".";
+  }
+  root.append(el("div", { class: "tiles" },
+    tile(ranged() ? "Objects allocated (estimate)" : "Objects allocated", fmtCompact(total), fmtInt(total)),
+    D.gc ? tile("GC collections", fmtInt(D.gc.kinds.reduce((a, k) => a + k.count, 0)), fmtNs(D.gc.kinds.reduce((a, k) => a + k.ns, 0)) + ", whole run") : null,
+    D.gc ? tile("Live objects", fmtCompact(D.gc.live), "after the last collection") : null,
+    D.gc ? tile("Heap pages", fmtInt(D.gc.pages), "at exit") : null));
+  const byClass = new Map(), byFunc = new Map();
+  for (const [f, c, n] of triples) {
+    byClass.set(c, (byClass.get(c) || 0) + n);
+    byFunc.set(f, (byFunc.get(f) || 0) + n);
+  }
+  const rc = [...byClass].map(([c, n]) => ({ c, n })), rf = [...byFunc].map(([f, n]) => ({ f, n }));
+  const rows = triples.map(([f, c, n]) => ({ f, c, n }));
+  const pct = (n) => fmtPct(n, total);
+  const grid = el("div", { class: "grid2" });
+  grid.append(card("Objects by class", "Objects allocated, by their class at allocation. " + note,
+    makeTable("oclass", [
+      { label: "Class", get: (r) => D.classes[r.c], wrap: true },
+      { label: "Objects", num: true, get: (r) => r.n, fmt: fmtInt },
+      { label: "%", num: true, get: (r) => r.n, fmt: pct, bar: { max: Math.max(0, ...rc.map((r) => r.n)) } },
+    ], rc, { sort: 1, limit: 50 })));
+  grid.append(card("Objects by allocating method",
+    "By the newest Ruby frame at the allocation: the method that asked for the object, or the native method that made it." +
+    (M.inline ? " A frameless-inlined callee counts as a frame of its own." : " A frameless-inlined callee counts as the method it was inlined into."),
+    makeTable("ofunc", [
+      { label: "Method", get: (r) => funcLabel(r.f), cell: (r) => funcNode(r.f) },
+      { label: "Objects", num: true, get: (r) => r.n, fmt: fmtInt },
+      { label: "%", num: true, get: (r) => r.n, fmt: pct, bar: { max: Math.max(0, ...rf.map((r) => r.n)) } },
+    ], rf, { sort: 1, limit: 50 })));
+  root.append(grid);
+  root.append(card("Objects by allocating method and class", "The two tables above combined: which method allocates which class.",
+    makeTable("oboth", [
+      { label: "Method", get: (r) => funcLabel(r.f), cell: (r) => funcNode(r.f) },
+      { label: "Class", get: (r) => D.classes[r.c], wrap: true },
+      { label: "Objects", num: true, get: (r) => r.n, fmt: fmtInt },
+      { label: "%", num: true, get: (r) => r.n, fmt: pct, bar: { max: Math.max(0, ...rows.map((r) => r.n)) } },
+    ], rows, { sort: 2, limit: 100 })));
+  if (D.gc) root.append(gcCard());
+}
+
+//
+// malloc
+//
+function viewMalloc(root) {
+  const T = D.mallocTotals;
+  root.append(el("div", { class: "tiles" },
+    tile("malloc calls", fmtCompact(T.calls), fmtInt(T.calls) + ", whole run"),
+    tile("Requested", fmtBytes(T.bytes), T.calls ? fmtBytes(T.bytes / T.calls) + " per call" : ""),
+    tile("free calls", fmtCompact(T.frees), fmtInt(T.frees) + ", whole run"),
+    tile("Freed", fmtBytes(T.freeBytes), "still held: " + fmtBytes(Math.max(0, T.bytes - T.freeBytes)))));
+  if (!PROFILES.malloc.on) return;
+  const calls = values("mcalls"), bytes = values("mbytes");
+  const byFunc = new Map(), bySite = new Map();
+  let all = 0;
+  D.malloc.stacks.forEach((s, i) => {
+    if (!calls[i]) return;
+    all += calls[i];
+    for (const [map, key] of [[byFunc, leafFunc("malloc", s)], [bySite, s[0]]]) {
+      const e = map.get(key) || { k: key, calls: 0, bytes: 0 };
+      e.calls += calls[i]; e.bytes += bytes[i];
+      map.set(key, e);
+    }
+  });
+  const cols = (first) => [first,
+    { label: "Calls", num: true, get: (r) => r.calls, fmt: fmtInt },
+    { label: "%", num: true, get: (r) => r.calls, fmt: (n) => fmtPct(n, all) },
+    { label: "Bytes", num: true, get: (r) => r.bytes, fmt: fmtBytes, bar: { max: 0 } },
+  ];
+  const note = " Estimates from the stacks recorded for one call in " + T.every + "." + rangeNote();
+  const mk = (id, first, map) => {
+    const rows = [...map.values()], c = cols(first);
+    c[3].bar.max = Math.max(0, ...rows.map((r) => r.bytes));
+    return makeTable(id, c, rows, { sort: 1, limit: 100 });
+  };
+  const grid = el("div", { class: "grid2" });
+  grid.append(card("malloc by Ruby method",
+    "Allocations by the newest Ruby frame when malloc was called. (no Ruby frame): the boot, before any Ruby code runs." + note,
+    mk("mfunc", { label: "Method", get: (r) => funcLabel(r.k), cell: (r) => funcNode(r.k) }, byFunc)));
+  grid.append(card("malloc by Rust call site",
+    "Allocations by the innermost native caller that is not allocator plumbing (alloc::, core::, std::, hashbrown::, smallvec::, … are skipped)." + note,
+    mk("msite", { label: "Function", get: (r) => D.syms[r.k], cell: (r) => el("td", { class: "name mono", text: D.syms[r.k] }) }, bySite)));
+  root.append(grid);
+}
+
+//
+// Shell
+//
+const TABS = [
+  ["overview", "Overview", viewOverview, () => true],
+  ["flame", "Flame graph", viewFlame, () => metricKeys().length > 0],
+  ["methods", "Methods", viewMethods, () => metricKeys().length > 0],
+  ["native", "Native functions", viewNative, () => PROFILES.cpu.on],
+  ["jit", "JIT", viewJit, () => !!D.jit],
+  ["objects", "Objects & GC", viewObjects, () => !!D.objects],
+  ["malloc", "malloc", viewMalloc, () => !!D.mallocTotals],
+];
+function render() {
+  hideTip();
+  flame.canvas = null;
+  const tabs = document.getElementById("tabs");
+  tabs.replaceChildren();
+  for (const [id, label, , on] of TABS) {
+    if (!on()) continue;
+    tabs.append(el("button", { role: "tab", "aria-selected": String(id === state.tab), text: label, onclick: () => go(id) }));
+  }
+  const view = document.getElementById("view");
+  view.replaceChildren();
+  const tab = TABS.find((t) => t[0] === state.tab) || TABS[0];
+  tab[2](view);
+}
+function go(tab) {
+  state.tab = tab;
+  try { history.replaceState(null, "", "#" + tab); } catch (e) { /* file: pages may refuse */ }
+  render();
+  window.scrollTo({ top: Math.min(window.scrollY, document.getElementById("tabs").offsetTop - 8) });
+}
+function initTheme() {
+  const btn = document.getElementById("theme"), order = ["auto", "light", "dark"];
+  let cur = "auto";
+  try { cur = localStorage.getItem("monoruby-prof-theme") || "auto"; } catch (e) { /* no storage */ }
+  const apply = () => {
+    if (cur === "auto") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", cur);
+    btn.textContent = "Theme: " + cur;
+    drawTimeline(); drawFlame();
+  };
+  btn.addEventListener("click", () => {
+    cur = order[(order.indexOf(cur) + 1) % order.length];
+    try { localStorage.setItem("monoruby-prof-theme", cur); } catch (e) { /* no storage */ }
+    apply(); render();
+  });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawTimeline(); drawFlame(); });
+  apply();
+}
+function init() {
+  document.title = "monoruby profile: " + M.command.split(" ").slice(1).join(" ");
+  document.getElementById("cmd").textContent = M.command;
+  const modes = Object.keys(M.modes).filter((k) => M.modes[k]).join(", ");
+  document.getElementById("info").textContent =
+    "monoruby " + M.monoruby + " (" + M.target + ") · " + (M.epoch ? new Date(M.epoch * 1000).toLocaleString() + " · " : "") +
+    "MONORUBY_PROF=" + modes + (M.modes.cpu ? " · " + M.hz + " Hz, " + M.clock + " clock" : "") +
+    (M.inline ? " · frameless-inlined callees shown as frames" : "");
+  const warn = document.getElementById("warnings");
+  if (M.dropped) warn.append(el("div", { class: "warn", text: fmtInt(M.dropped) + " samples were dropped: the sample buffer was full (raise MONORUBY_PROF_BUF_MB)." }));
+  if (M.modes.cpu && M.modes.alloc) warn.append(el("div", { class: "warn", text: "Objects were counted in this run, which turns the JIT's inline allocation off: the CPU times are not representative. Profile cpu in a run of its own for timings." }));
+  state.metric = metricKeys()[0] || null;
+  const want = location.hash.slice(1);
+  state.tab = TABS.some((t) => t[0] === want && t[3]()) ? want : "overview";
+  initTimeline();
+  initTheme();
+  render();
+  new ResizeObserver(() => { drawTimeline(); drawFlame(); }).observe(document.querySelector(".wrap"));
+}
+init();
+</script>
+</body>
+</html>
