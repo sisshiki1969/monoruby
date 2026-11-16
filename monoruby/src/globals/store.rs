@@ -217,6 +217,11 @@ pub struct Store {
     /// while the core library is still loading, its own definitions are
     /// the builtin ones. See `to_s_builtin_classes`.
     builtin_to_s: Option<[Option<FuncId>; TO_S_SHORTCUT_CLASSES.len()]>,
+    /// String's builtin methods that the Symbol methods of the same name
+    /// run on the symbol's name (`builtins::symbol::SymStr`), recorded
+    /// with `builtin_to_s`.
+    symbol_string_methods:
+        Option<[Option<FuncId>; crate::builtins::symbol::SYMBOL_STRING_METHODS.len()]>,
     /// Version-stamped memo: the classes of `TO_S_SHORTCUT_CLASSES` whose
     /// `to_s` still resolves to `builtin_to_s`, as a bit per class in the
     /// low byte, under the class_version they were resolved at
@@ -729,6 +734,9 @@ impl Store {
     /// here.
     ///
     pub(crate) fn get_singleton(&mut self, obj: Value) -> Result<Module> {
+        if self.is_fstring(obj) {
+            return Err(MonorubyErr::typeerr("can't define singleton"));
+        }
         let res = self.classes.get_singleton(obj);
         self.note_instance_singletons();
         res
@@ -882,6 +890,7 @@ impl Store {
             symbol_neq: None,
             default_copy_hooks: None,
             builtin_to_s: None,
+            symbol_string_methods: None,
             // No class_version is this wide: nothing is memoized yet.
             to_s_builtin_at: std::cell::Cell::new(u64::MAX),
             method_cache: RefCell::new(GlobalMethodCache::default()),
@@ -947,6 +956,25 @@ impl Store {
         v.set_frozen();
         pool.insert(bytes.into(), v);
         v
+    }
+
+    ///
+    /// *obj* is the pooled String of its content — a frozen string literal,
+    /// `-str`, a `"lit".freeze` (CRuby's `RSTRING_FSTR`). Such a String is
+    /// shared by everything that names the same content, so it cannot be
+    /// given a singleton class: `rb_singleton_class` raises TypeError for
+    /// it, where any other frozen String gets a (frozen) one.
+    ///
+    pub(crate) fn is_fstring(&self, obj: Value) -> bool {
+        let Some(inner) = obj.is_rstring_inner() else {
+            return false;
+        };
+        obj.is_frozen()
+            && self
+                .frozen_str_pool
+                .get(&inner.encoding())
+                .and_then(|pool| pool.get(inner.as_bytes()))
+                .is_some_and(|pooled| pooled.id() == obj.id())
     }
 
     ///
@@ -2146,6 +2174,21 @@ impl Store {
                 .and_then(|e| e.func_id())
         });
         self.builtin_to_s = Some(resolved);
+        self.symbol_string_methods =
+            Some(crate::builtins::symbol::SYMBOL_STRING_METHODS.map(|name| {
+                self.search_method_by_class_id(STRING_CLASS, IdentId::get_id(name))
+                    .and_then(|e| e.func_id())
+            }));
+    }
+
+    /// String's builtin `which`, for a Symbol method to run on the
+    /// symbol's name whatever `String#upcase` and the like have since
+    /// become. `None` while the core library is still loading.
+    pub(crate) fn symbol_string_method(
+        &self,
+        which: crate::builtins::symbol::SymStr,
+    ) -> Option<FuncId> {
+        self.symbol_string_methods?[which as usize]
     }
 
     ///

@@ -412,8 +412,11 @@ class Hash
     res
   end
 
-  def min_by
-    return to_enum(:min_by) unless block_given?
+  def min_by(*n)
+    # With a count this is Enumerable's (`min_by(2) { }`); the loop below
+    # is the single-entry form only.
+    return super unless n.empty?
+    return to_enum(:min_by) { size } unless block_given?
     min_entry = nil
     min_val = nil
     each do |k, v|

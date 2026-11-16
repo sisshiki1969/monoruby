@@ -468,6 +468,10 @@ pub struct Executor {
     /// the error may be the only reference to its exception object.
     ///
     held_errors: Vec<MonorubyErr>,
+    /// A redefined `Symbol#to_s` is running to render the name in a
+    /// NameError's message (`Self::name_error_through_to_s`): an error
+    /// raised and rescued inside it keeps the plain name.
+    naming_error: bool,
     /// The `Fiber` object whose body is currently executing on this
     /// `Executor`, or `None` for a thread's root context (which falls back
     /// to the per-thread root Fiber object). Exposed as `Fiber.current` so
@@ -541,6 +545,7 @@ impl std::default::Default for Executor {
             deferred_unwind: vec![],
             deferred_top_lfp: None,
             held_errors: vec![],
+            naming_error: false,
             current_fiber: None,
             resuming_fiber: None,
             return_to: None,
@@ -2431,7 +2436,72 @@ impl Executor {
         self.method_missing_style = MethodMissingStyle::Plain;
     }
 
+    /// `name` as a redefined `Symbol#to_s` renders it, for the message of
+    /// a NameError / NoMethodError; `None` while that method is the
+    /// builtin one, which is one memo read to find out.
+    ///
+    /// CRuby builds such a message from a format and the name *as a
+    /// Symbol* (`name_err_mesg_to_str`), so the name goes through
+    /// `Symbol#to_s`: under `class Symbol; def to_s = "SYM"; end`,
+    /// `nil.foo` reports `undefined method 'SYM' for nil` (#1929).
+    ///
+    /// The caller keeps whatever the error holds alive.
+    pub(crate) fn name_through_to_s(
+        &mut self,
+        globals: &mut Globals,
+        name: IdentId,
+    ) -> Option<String> {
+        if self.naming_error
+            || globals
+                .store
+                .to_s_is_builtin(SYMBOL_CLASS, Globals::class_version())
+        {
+            return None;
+        }
+        self.naming_error = true;
+        let shown = self.obj_as_string(globals, Value::symbol(name));
+        self.naming_error = false;
+        // CRuby renders the name each time the message is read, and a
+        // `to_s` that raises does so out of `Exception#message`. Here
+        // the name is rendered once, when the error is raised, and a
+        // `to_s` that raises leaves it as it is.
+        let shown = shown.ok()?;
+        let shown = shown.is_rstring_inner()?;
+        Some(String::from_utf8_lossy(shown.as_bytes()).into_owned())
+    }
+
+    /// [`Self::name_through_to_s`] for the pending error. Its message was
+    /// formatted when the error was created, with no interpreter at
+    /// hand, so the quoted name in it is replaced now that the exception
+    /// object is being made.
+    fn name_error_through_to_s(&mut self, globals: &mut Globals) {
+        let Some(err) = &self.exception else { return };
+        let (MonorubyErrKind::NotMethod {
+            name: Some(name), ..
+        }
+        | MonorubyErrKind::Name(Some(name), _)) = err.kind()
+        else {
+            return;
+        };
+        let name = *name;
+        if err.original.is_some() || err.raw_message.is_some() {
+            return;
+        }
+        let Some(shown) = self.with_pending_error_held(|vm| vm.name_through_to_s(globals, name))
+        else {
+            return;
+        };
+        let quoted = format!("'{name}'");
+        if let Some(err) = &mut self.exception
+            && let Some(at) = err.message.find(&quoted)
+        {
+            err.message
+                .replace_range(at + 1..at + quoted.len() - 1, &shown);
+        }
+    }
+
     pub(crate) fn take_ex_obj(&mut self, globals: &mut Globals) -> Value {
+        self.name_error_through_to_s(globals);
         let mut err = self.take_error();
         let explicit_cause = err.explicit_cause;
         // Re-raise of an existing exception object (`raise exc`): return
@@ -4344,6 +4414,10 @@ impl Executor {
             // (relevant to interpolation: `"abc#{x}"` for an `x`
             // tagged UTF-8 with broken bytes).
             RV::String(_) => (!self.to_s_is_refined(globals)).then_some(receiver),
+            // `Complex#to_s` and `Rational#to_s` format their parts
+            // through *those* objects' `to_s`: with any of the builtin
+            // ones replaced, the method has to run to find out.
+            RV::Complex(_) | RV::Rational(_) if !all => None,
             _ if !all && !self.to_s_shortcut(globals, receiver) => None,
             RV::Symbol(sym) if exact_encoding => Some(Value::string_from_inner(
                 crate::builtins::symbol::symbol_string_inner(sym),
@@ -4363,6 +4437,28 @@ impl Executor {
     pub(crate) fn tos_dispatch(&mut self, globals: &mut Globals, receiver: Value) -> Result<Value> {
         let func_id = self.find_method(globals, receiver, IdentId::TO_S, true)?;
         self.invoke_func_inner(globals, func_id, receiver, &[], None, None)
+    }
+
+    /// CRuby's `rb_obj_as_string`: a String is its own answer, anything
+    /// else is asked for its `to_s`, and a `to_s` that answers something
+    /// else than a String is replaced by the default `#<Class:0x…>`
+    /// rendering (`rb_any_to_s`, a BINARY String).
+    pub(crate) fn obj_as_string(&mut self, globals: &mut Globals, v: Value) -> Result<Value> {
+        if v.is_rstring_inner().is_some() {
+            return Ok(v);
+        }
+        let s = self.tos_dispatch(globals, v)?;
+        if s.is_rstring_inner().is_some() {
+            return Ok(s);
+        }
+        let s = format!(
+            "#<{}:0x{:016x}>",
+            v.get_real_class_name(&globals.store),
+            v.id()
+        );
+        Ok(Value::string_from_inner(
+            crate::value::rvalue::RStringInner::from_encoding(s.as_bytes(), Encoding::Ascii8),
+        ))
     }
 
     ///

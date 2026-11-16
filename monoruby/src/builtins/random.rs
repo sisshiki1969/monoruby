@@ -681,15 +681,11 @@ fn instance_bytes(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
-    let size = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
-    if size < 0 {
-        return Err(MonorubyErr::argumenterr("negative string size".to_string()));
-    }
-    let size = size as usize;
+    let size = bytes_size(vm, globals, lfp.arg(0))?;
     // ceil(size/4) 32-bit words are consumed (a trailing partial word
     // still draws a full u32, matching CRuby).
     let words = size.div_ceil(4) as u64;
-    let mut buf = vec![0u8; size];
+    let mut buf = zeroed_bytes(vm, globals, size)?;
     with_mt_in_place(globals, self_, |mt, cnt| {
         mt.fill_bytes(&mut buf);
         *cnt += words;
@@ -726,28 +722,66 @@ fn new_seed(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePt
 /// - urandom(size) -> String
 #[monoruby_builtin]
 fn urandom(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    random_bytes_inner(vm, globals, lfp.arg(0))
+    // CRuby reads this one with NUM2ULONG (`random_raw_seed`), so a Bignum
+    // is named after `unsigned long` and a Float is range-checked rather
+    // than converted with `to_int`; a value that fits an `unsigned long`
+    // but not a `long` is a negative size, which `rb_str_new` rejects
+    // like `-1`.
+    match lfp.arg(0).unpack() {
+        RV::BigInt(b) if b.bits() > 64 => Err(MonorubyErr::rangeerr(
+            "bignum too big to convert into 'unsigned long'",
+        )),
+        RV::BigInt(b) if *b < num::BigInt::from(i64::MIN) => Err(MonorubyErr::rangeerr(
+            "bignum out of range of unsigned long",
+        )),
+        RV::BigInt(_) => Err(MonorubyErr::argumenterr(
+            "negative string size (or size too big)",
+        )),
+        RV::Float(f) if !(f < 18446744073709551616.0 && f >= -9223372036854775808.0) => {
+            Err(MonorubyErr::float_out_of_range_of_integer(f))
+        }
+        RV::Float(f) if f >= 9223372036854775808.0 => Err(MonorubyErr::argumenterr(
+            "negative string size (or size too big)",
+        )),
+        _ => random_bytes_inner(vm, globals, lfp.arg(0)),
+    }
+}
+
+/// The size argument of `Random.bytes` / `Random#bytes`:
+/// CRuby's `NUM2LONG(rb_to_int(len))`, then `rb_str_new`'s check. So a
+/// Float truncates (`bytes(2.5)` is two bytes, `bytes(-0.5)` none) and a
+/// negative size is `rb_str_new`'s "negative string size (or size too
+/// big)" (#1930).
+fn bytes_size(vm: &mut Executor, globals: &mut Globals, size_arg: Value) -> Result<usize> {
+    let size = size_arg.coerce_to_int_i64(vm, globals)?;
+    if size < 0 {
+        return Err(MonorubyErr::argumenterr(
+            "negative string size (or size too big)",
+        ));
+    }
+    Ok(size as usize)
+}
+
+/// A buffer of `size` zero bytes, or NoMemoryError when the allocator
+/// refuses the size (`Random.bytes(2**62)`), where `vec![0; size]` would
+/// abort the process.
+fn zeroed_bytes(vm: &mut Executor, globals: &mut Globals, size: usize) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    if buf.try_reserve_exact(size).is_err() {
+        return Err(crate::builtins::string::no_memory_error(vm, globals));
+    }
+    buf.resize(size, 0);
+    Ok(buf)
 }
 
 fn random_bytes_inner(vm: &mut Executor, globals: &mut Globals, size_arg: Value) -> Result<Value> {
-    let size = if let Some(size) = size_arg.try_fixnum() {
-        size
-    } else if let Some(size) = size_arg.try_float() {
-        size.round() as i64
-    } else {
-        size_arg.coerce_to_int_i64(vm, globals)?
-    };
+    let size = bytes_size(vm, globals, size_arg)?;
     if size == 0 {
         return Ok(Value::bytes(vec![]));
     }
-    let size = if size < 0 {
-        return Err(MonorubyErr::argumenterr("negative string size".to_string()));
-    } else {
-        size as usize
-    };
     // CRuby `rb_rand_bytes`: little-endian 32-bit words off the default
     // PRNG, a trailing partial word consuming a full draw.
-    let mut v = vec![0; size];
+    let mut v = zeroed_bytes(vm, globals, size)?;
     globals.random_fill_bytes(&mut v);
     Ok(Value::bytes(v))
 }

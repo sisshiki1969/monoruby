@@ -1528,27 +1528,13 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 // is not UTF-8 has to reach `#write` as the bytes that
                 // went in, where `String::from_utf8_lossy` would put
                 // replacement characters (#1516).
-                let (bytes, enc) = if v.is_nil() {
-                    (Vec::new(), crate::value::Encoding::UsAscii)
-                } else if let Some(rs) = v.is_rstring() {
-                    (rs.as_bytes().to_vec(), rs.encoding())
-                } else {
-                    // Stringify through the value's (possibly Ruby-defined)
-                    // `to_s`, matching CRuby's `rb_obj_as_string`; fall back
-                    // to the Rust-side formatter when `to_s` misbehaves.
-                    let sv = vm.invoke_method_inner(
-                        globals,
-                        IdentId::get_id("to_s"),
-                        v,
-                        &[],
-                        None,
-                        None,
-                    )?;
-                    match sv.is_rstring() {
-                        Some(rs) => (rs.as_bytes().to_vec(), rs.encoding()),
-                        None => (v.to_s(globals).into_bytes(), crate::value::Encoding::UTF8),
-                    }
-                };
+                // CRuby's `rb_obj_as_string`: a String as it is, anything
+                // else through its (possibly Ruby-defined) `to_s`. `nil`
+                // is no exception — its empty line is what `NilClass#to_s`
+                // answers (#1929).
+                let line = vm.obj_as_string(globals, v)?;
+                let line = line.as_rstring_inner();
+                let (bytes, enc) = (line.as_bytes().to_vec(), line.encoding());
                 // `rb_io_puts` asks whether the line ends with the
                 // *character* `\n`, which in a wide encoding is more
                 // than one byte, and appends `rb_default_rs` — a
@@ -1714,15 +1700,26 @@ pub(super) fn getline_args(
             limit_arg = Some(v1);
         }
     }
-    let limit = match limit_arg {
-        None => None,
-        Some(v) => {
-            let l = v.coerce_to_int_i64(vm, globals)?;
-            if l < 0 { None } else { Some(l as usize) }
-        }
-    };
+    let limit = getline_limit(vm, globals, limit_arg)?;
     let chomp = lfp.try_arg(kw_chomp_idx).is_some_and(|v| v.as_bool());
     Ok((sep, limit, chomp))
+}
+
+/// The limit of a line reader, as `extract_getline_args` reads it: `nil`
+/// is no limit (`gets(" ", nil)`), anything else goes through NUM2LONG
+/// and a negative one is no limit either.
+pub(super) fn getline_limit(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    limit_arg: Option<Value>,
+) -> Result<Option<usize>> {
+    match limit_arg {
+        Some(v) if !v.is_nil() => {
+            let l = v.num2long(vm, globals)?;
+            Ok(if l < 0 { None } else { Some(l as usize) })
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Apply `chomp: true` to a line read with `sep`.
@@ -2967,13 +2964,7 @@ fn class_getline_args(
             limit_arg = Some(v1);
         }
     }
-    let limit = match limit_arg {
-        None => None,
-        Some(v) => {
-            let l = v.coerce_to_int_i64(vm, globals)?;
-            if l < 0 { None } else { Some(l as usize) }
-        }
-    };
+    let limit = getline_limit(vm, globals, limit_arg)?;
     let open = class_read_opts(vm, globals, opts)?;
     let ecopts = class_read_ecopts(vm, globals, opts)?;
     Ok((sep, limit, chomp, open, ecopts))
@@ -5017,7 +5008,23 @@ fn io_syswrite(
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/pread.html]
 #[monoruby_builtin]
 fn io_pread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let maxlen = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    // CRuby reads the length with NUM2SIZET, so a Bignum that does not
+    // fit is named after `unsigned long long`; one that does but exceeds
+    // a `long` is the negative size below, like a negative Fixnum.
+    let maxlen = match lfp.arg(0).unpack() {
+        RV::BigInt(b) if b.bits() > 64 => {
+            return Err(MonorubyErr::rangeerr(
+                "bignum too big to convert into 'unsigned long long'",
+            ));
+        }
+        RV::BigInt(b) if *b < num::BigInt::from(i64::MIN) => {
+            return Err(MonorubyErr::rangeerr(
+                "bignum out of range of unsigned long long",
+            ));
+        }
+        RV::BigInt(_) => -1,
+        _ => lfp.arg(0).coerce_to_int_i64(vm, globals)?,
+    };
     if maxlen < 0 {
         return Err(MonorubyErr::argumenterr(
             "negative string size (or size too big)",
@@ -5136,10 +5143,11 @@ fn io_pwrite(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 fn io_sysread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let maxlen = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     if maxlen < 0 {
-        return Err(MonorubyErr::argumenterr(format!(
-            "negative length {} given",
-            maxlen
-        )));
+        // `rb_io_sysread` has no check of its own: the message is the
+        // buffer's (`io_setstrbuf` → `rb_str_new`).
+        return Err(MonorubyErr::argumenterr(
+            "negative string size (or size too big)",
+        ));
     }
     let buffer: Option<Value> = match lfp.try_arg(1) {
         Some(v) if !v.is_nil() => Some(v.coerce_to_rstring(vm, globals)?.as_val()),
@@ -5201,7 +5209,9 @@ fn io_readpartial(
 ) -> Result<Value> {
     let maxlen = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
     if maxlen < 0 {
-        return Err(MonorubyErr::argumenterr("negative length"));
+        return Err(MonorubyErr::argumenterr(format!(
+            "negative length {maxlen} given"
+        )));
     }
     let buffer: Option<Value> = match lfp.try_arg(1) {
         Some(v) if !v.is_nil() => Some(v.coerce_to_rstring(vm, globals)?.as_val()),

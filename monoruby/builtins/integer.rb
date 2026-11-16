@@ -251,10 +251,11 @@ class Integer
   def self.sqrt(n)
     unless n.is_a?(Integer)
       if n.respond_to?(:to_int)
-        n = n.to_int
-        unless n.is_a?(Integer)
-          raise TypeError, "can't convert #{n.class} into Integer (#{n.class}#to_int gives #{n.class})"
+        r = n.to_int
+        unless r.is_a?(Integer)
+          raise TypeError, "can't convert #{n.class} to Integer (#{n.class}#to_int gives #{r.class})"
         end
+        n = r
       else
         raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
       end
@@ -280,7 +281,7 @@ class Integer
       elsif result.is_a?(Integer)
         result
       else
-        raise TypeError, "can't convert #{obj.class} into Integer (#{obj.class}#to_int gives #{result.class})"
+        raise TypeError, "can't convert #{obj.class} to Integer (#{obj.class}#to_int gives #{result.class})"
       end
     else
       nil
@@ -310,7 +311,7 @@ class Integer
         raise TypeError, "no implicit conversion of #{__builtin_class_name(ndigits)} into Integer"
       end
       unless result.is_a?(Integer)
-        raise TypeError, "can't convert #{ndigits.class} into Integer (#{ndigits.class}#to_int gives #{result.class})"
+        raise TypeError, "can't convert #{ndigits.class} to Integer (#{ndigits.class}#to_int gives #{result.class})"
       end
       ndigits = result
     else
@@ -326,10 +327,13 @@ class Integer
   public
 
   def digits(base = 10)
-    base = base.to_int
+    # CRuby's `rb_int_digits`: the receiver's sign first, then the radix
+    # through `rb_to_int`, a negative one named as such (#1930).
     if self < 0
       raise Math::DomainError, "out of domain"
     end
+    base = __to_int(base)
+    raise ArgumentError, "negative radix" if base < 0
     if base < 2
       raise ArgumentError, "invalid radix #{base}"
     end

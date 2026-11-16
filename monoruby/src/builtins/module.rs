@@ -2114,10 +2114,21 @@ fn extend_object(
 ) -> Result<Value> {
     require_module_receiver(globals, lfp.self_val(), "extend_object")?;
     let obj = lfp.arg(0);
-    // Refuse to extend a frozen object — CRuby raises `RuntimeError`
-    // (a FrozenError, which is a RuntimeError subclass) before
-    // mutating anything.
-    obj.ensure_not_frozen(&globals.store)?;
+    // CRuby's `rb_extend_object` is `rb_include_module(rb_singleton_class(obj), mod)`,
+    // and the frozen check is the include's, on that class. So an
+    // Integer, a Float, a Symbol or a pooled String fails first, with the
+    // TypeError of having no singleton class; `nil`, `true` and `false`,
+    // frozen as they are, take the module into NilClass / TrueClass /
+    // FalseClass (#1943); and any other frozen object is refused before
+    // anything is mutated.
+    if !obj.is_special_singleton() {
+        if matches!(obj.class(), INTEGER_CLASS | FLOAT_CLASS | SYMBOL_CLASS)
+            || globals.store.is_fstring(obj)
+        {
+            return Err(MonorubyErr::typeerr("can't define singleton"));
+        }
+        obj.ensure_not_frozen(&globals.store)?;
+    }
     // A plain object without a singleton class gets one made right here.
     // Nothing has resolved anything through that class yet, so mixing the
     // module into it invalidates nothing: a program that `extend`s every

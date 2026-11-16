@@ -1981,12 +1981,11 @@ fn file_symlink(
 #[monoruby_builtin]
 fn readlines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let path = lfp.arg(0).coerce_to_str(vm, globals)?;
-    let content = std::fs::read(&path)
-        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
     // Optional separator / limit, `chomp:` keyword — `IO#gets` rules,
-    // shifted one slot right of the path argument.
+    // shifted one slot right of the path argument, and read before the
+    // file is opened (`extract_getline_args`, then `open_key_args`).
     let mut sep: Option<Vec<u8>> = globals.rs_bytes();
-    let mut limit: Option<usize> = None;
+    let mut limit_arg: Option<Value> = None;
     match (lfp.try_arg(1), lfp.try_arg(2)) {
         (None, _) => {}
         (Some(v), None) => {
@@ -1994,9 +1993,10 @@ fn readlines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 sep = None;
             } else if let Some(rs) = v.is_rstring() {
                 sep = Some(rs.as_bytes().to_vec());
+            } else if globals.check_method(v, IdentId::TO_STR).is_some() {
+                sep = Some(v.coerce_to_rstring(vm, globals)?.as_bytes().to_vec());
             } else {
-                let l = v.coerce_to_int_i64(vm, globals)?;
-                limit = (l >= 0).then_some(l as usize);
+                limit_arg = Some(v);
             }
         }
         (Some(v), Some(l)) => {
@@ -2005,9 +2005,15 @@ fn readlines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             } else {
                 Some(v.coerce_to_rstring(vm, globals)?.as_bytes().to_vec())
             };
-            let l = l.coerce_to_int_i64(vm, globals)?;
-            limit = (l >= 0).then_some(l as usize);
+            limit_arg = Some(l);
         }
+    }
+    let limit = super::io::getline_limit(vm, globals, limit_arg)?;
+    let content = std::fs::read(&path)
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
+    // A zero limit would never advance (`io_readlines`).
+    if limit == Some(0) {
+        return Err(MonorubyErr::argumenterr("invalid limit: 0 for readlines"));
     }
     let chomp = lfp.try_arg(3).is_some_and(|v| v.as_bool());
     let lines: Vec<Value> = split_records(&content, sep.as_deref(), limit, chomp)

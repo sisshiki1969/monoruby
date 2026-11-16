@@ -520,10 +520,17 @@ fn force_decimal_point(s: &str) -> String {
 /// the form CRuby's `rb_raise` uses in "float %g out of range of ..."
 /// messages (e.g. `1e+19`, `-2.5`, `NaN`, `-Inf`).
 pub(crate) fn float_g_image(f: f64) -> String {
+    float_g_image_with(f, 6)
+}
+
+/// [`float_g_image`] with `precision` significant digits: `%.10g` is
+/// what `NUM2LONG` names an out-of-range Float with
+/// (`out_of_range_float`).
+pub(crate) fn float_g_image_with(f: f64, precision: usize) -> String {
     if f.is_nan() {
         return "NaN".to_string();
     }
-    let s = normalize_sci_exponent(&format_g(f.abs(), 6, false, true));
+    let s = normalize_sci_exponent(&format_g(f.abs(), precision, false, true));
     if f.is_sign_negative() {
         format!("-{s}")
     } else {

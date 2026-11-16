@@ -5483,7 +5483,9 @@ fn define_singleton_method(
     let self_val = lfp.self_val();
     warn_if_chilled_string(vm, globals, self_val)?;
     let class_id = globals.store.get_singleton(self_val)?.id();
-    if self_val.is_frozen() {
+    // `nil`, `true` and `false` are frozen, but their singleton class is
+    // NilClass / TrueClass / FalseClass, which is not.
+    if self_val.is_frozen() && !self_val.is_special_singleton() {
         return Err(MonorubyErr::cant_modify_frozen(&globals.store, self_val));
     }
     let name = lfp.arg(0).expect_symbol_or_string(globals)?;
@@ -6322,14 +6324,12 @@ fn singleton_class(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    // A frozen String can never be given a singleton class (CRuby,
-    // observable with deduplicated `"..."` literals under
-    // frozen-string-literal).
+    // A pooled String (a deduplicated `"..."` literal under
+    // frozen-string-literal, `-str`) can never be given a singleton
+    // class: `Store::get_singleton` refuses it. Any other frozen String
+    // gets a frozen one, as in CRuby.
     let recv = lfp.self_val();
     warn_if_chilled_string(vm, globals, recv)?;
-    if recv.is_rstring().is_some() && recv.is_frozen() {
-        return Err(MonorubyErr::typeerr("can't define singleton"));
-    }
     let s = lfp.self_val().get_singleton(&mut globals.store)?;
     // MRI's `rb_singleton_class`: for a Class receiver, the exposed
     // eigenclass is made to belong to its *own* eigenclass — building
