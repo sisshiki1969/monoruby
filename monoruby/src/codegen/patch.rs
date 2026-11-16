@@ -94,7 +94,7 @@ impl Codegen {
         unsafe { *(slot.as_ptr() as *mut u64) = guard_addr };
         // Record the slot so the recompiler can overwrite it in place later
         // (this is the slot the wrapper / guard chain uses to reach
-        // `self_class`'s entry; `jit_compile_patch` passes the right one for
+        // `self_class`'s entry; `jit_profile_patch` passes the right one for
         // both the head class and chained classes).
         globals.store[iseq_id].set_jit_slot(self_class, slot.as_ptr() as u64);
         // Publish the *guard-free* dispatch slot: a heap word holding the bare

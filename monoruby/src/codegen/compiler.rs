@@ -887,10 +887,19 @@ thread_local! {
 }
 
 /// Whether a panic raised now is contained by a JIT compile entry
-/// ([`contain_compile_panic`]) rather than aborting the process: what the
-/// panic hook says after the message (`executor::install_panic_hook`).
-pub(crate) fn compile_panic_contained() -> bool {
+/// ([`contain_compile_panic`]) rather than aborting the process.
+fn compile_panic_contained() -> bool {
     PANIC_CONTAINED.with(|c| c.get() != 0)
+}
+
+/// What the panic hook prints after the panic message
+/// (`executor::install_panic_hook`): where a panic raised now ends up.
+pub(crate) fn panic_outcome() -> &'static str {
+    if compile_panic_contained() {
+        "monoruby: the JIT compiler panicked: this compile is abandoned and the code keeps running in the interpreter."
+    } else {
+        "monoruby: the panic will now propagate to an `extern \"C\"` boundary and abort the process."
+    }
 }
 
 ///
@@ -1082,21 +1091,6 @@ pub(in crate::codegen) extern "C" fn jit_recompile_specialized(
             codegen
                 .borrow_mut()
                 .recompile_specialized(globals, idx, reason);
-        });
-    });
-}
-
-#[allow(dead_code)] // referenced by the aarch64 patch path; dead on x86.
-pub(in crate::codegen) extern "C" fn jit_compile_patch(
-    globals: &mut Globals,
-    lfp: Lfp,
-    entry_patch_point: monoasm::CodePtr,
-) {
-    contain_compile_panic("compile_patch", || {
-        CODEGEN.with(|codegen| {
-            codegen
-                .borrow_mut()
-                .compile_patch(globals, lfp, entry_patch_point);
         });
     });
 }
@@ -1437,10 +1431,12 @@ mod tests {
         let contained = || CODEGEN.with(|codegen| codegen.borrow().contained_panics);
         let before = contained();
         assert!(!compile_panic_contained());
+        assert!(panic_outcome().contains("abort the process"));
         // A compile that completes: the panic hook is told a panic in it
         // would be contained.
         assert!(contain_compile_panic("test", || {
-            assert!(compile_panic_contained())
+            assert!(compile_panic_contained());
+            assert!(panic_outcome().contains("keeps running in the interpreter"));
         }));
         // An internal error of the compiler stops at the entry point.
         assert!(!contain_compile_panic("test", || {
