@@ -1,0 +1,194 @@
+
+==================== monoruby prof (3.293 s) ====================
+
+---- CPU: 3193 samples, main thread's wall clock at 1000 Hz ----
+sampled run: 3.195 s wall, 3.181 s CPU; one sample = 1.001 ms (effective 999 Hz)
+
+where the time went
+  # Every sample is in exactly one tier: the runtime phase its thread was in
+  # (GC, JIT compile, parse / bytecodegen, malloc / free, the profiler), else
+  # where its PC was (a JIT unit's code, the VM's code, other JIT memory, or
+  # Rust / libc code).
+  tier                                 samples       %
+  JIT code                                1961   61.4%
+  VM interpreter                             1    0.0%
+  JIT stubs / invokers / wrappers          174    5.4%
+  builtins / runtime (Rust, libc)          710   22.2%
+  GC                                       311    9.7%
+  JIT compile                               25    0.8%
+  parse / bytecodegen                        1    0.0%
+  malloc / free                             10    0.3%
+
+methods by self time (top 30)
+  # self: samples whose newest Ruby frame is the method: its own code and the
+  #   builtins, runtime and GC working for it. A native method (Array#sort) is
+  #   a frame of its own.
+  # total: samples with the method anywhere on the Ruby stack.
+  # jit .. prof: self by tier (JIT code, VM, JIT stubs, builtins / runtime, GC,
+  #   JIT compile, parse, malloc / free, the profiler).
+  # A frameless-inlined callee has no frame: it counts as the method it was inlined into (MONORUBY_PROF_INLINE=1 tells them apart).
+     self      %   total      %    jit    vm  stub native    gc  comp parse mallc  prof  method
+     1347  42.2%    1348  42.2%    974     0    97     12   263     0     0     1     0  Sphere#intersect (app_aobench.rb:75)
+      970  30.4%    2869  89.9%    547     0    28    395     0     0     0     0     0  block (2 levels) in Scene#ambient_occlusion (app_aobench.rb:205)
+      380  11.9%     380  11.9%    321     0    21      0    37     1     0     0     0  Plane#intersect (app_aobench.rb:106)
+      234   7.3%     234   7.3%      0     0    19    215     0     0     0     0     0  Kernel#rand (native)
+       57   1.8%    3192 100.0%     47     0     0      0    10     0     0     0     0  Integer#times (integer.rb:20)
+       37   1.2%    3084  96.6%     27     0     2      0     0     8     0     0     0  block (4 levels) in Scene#render (app_aobench.rb:244)
+       35   1.1%      35   1.1%     25     0     4      4     0     1     0     1     0  Object#otherBasis (app_aobench.rb:162)
+       34   1.1%      74   2.3%      0     1     0     30     0     0     0     3     0  Kernel#print (native)
+       24   0.8%      40   1.3%      0     0     0     24     0     0     0     0     0  IO#print (native)
+       16   0.5%      16   0.5%      0     0     2     11     0     0     0     3     0  IO#write (native)
+       15   0.5%    3183  99.7%      4     0     0      7     0     4     0     0     0  block (2 levels) in Scene#render (app_aobench.rb:239)
+       11   0.3%      15   0.5%      1     0     0      8     0     2     0     0     0  Class#new (class.rb:17)
+       10   0.3%    2915  91.3%      9     0     0      0     0     1     0     0     0  block in Scene#ambient_occlusion (app_aobench.rb:204)
+        9   0.3%    2982  93.4%      5     0     1      0     0     2     0     1     0  Scene#ambient_occlusion (app_aobench.rb:192)
+        4   0.1%    3192 100.0%      0     0     0      0     0     4     0     0     0  block in Scene#render (app_aobench.rb:238)
+        2   0.1%       2   0.1%      0     0     0      2     0     0     0     0     0  Integer#chr (native)
+        2   0.1%       2   0.1%      0     0     0      2     0     0     0     0     0  Array#__init_fill (native)
+        2   0.1%       4   0.1%      1     0     0      0     1     0     0     0     0  Array#initialize (array.rb:43)
+        2   0.1%    3090  96.8%      0     0     0      0     0     2     0     0     0  block (3 levels) in Scene#render (app_aobench.rb:243)
+        1   0.0%       0   0.0%      0     0     0      0     0     0     1     0     0  <no ruby frame>
+        1   0.0%       1   0.0%      0     0     0      0     0     0     0     1     0  Vec#vsub (app_aobench.rb:36)
+
+methods by total time (top 30)
+  # Samples with the method anywhere on the Ruby stack: the method and
+  # everything it called. A recursive method is counted once per sample.
+    total      %  method
+     3192 100.0%  Integer#times (integer.rb:20)
+     3192 100.0%  <main> (app_aobench.rb:1)
+     3192 100.0%  Scene#render (app_aobench.rb:236)
+     3192 100.0%  block in Scene#render (app_aobench.rb:238)
+     3183  99.7%  block (2 levels) in Scene#render (app_aobench.rb:239)
+     3090  96.8%  block (3 levels) in Scene#render (app_aobench.rb:243)
+     3084  96.6%  block (4 levels) in Scene#render (app_aobench.rb:244)
+     2982  93.4%  Scene#ambient_occlusion (app_aobench.rb:192)
+     2915  91.3%  block in Scene#ambient_occlusion (app_aobench.rb:204)
+     2869  89.9%  block (2 levels) in Scene#ambient_occlusion (app_aobench.rb:205)
+     1348  42.2%  Sphere#intersect (app_aobench.rb:75)
+      380  11.9%  Plane#intersect (app_aobench.rb:106)
+      234   7.3%  Kernel#rand (native)
+       74   2.3%  Kernel#print (native)
+       40   1.3%  IO#print (native)
+       35   1.1%  Object#otherBasis (app_aobench.rb:162)
+       16   0.5%  IO#write (native)
+       15   0.5%  Class#new (class.rb:17)
+        4   0.1%  Array#initialize (array.rb:43)
+        2   0.1%  Integer#chr (native)
+        2   0.1%  Array#__init_fill (native)
+        1   0.0%  Vec#vsub (app_aobench.rb:36)
+        1   0.0%  Isect#initialize (app_aobench.rb:141)
+
+JIT units by samples in their code (top 30)
+  # Samples whose PC was in the machine code of one compilation: a whole
+  # method or one loop, compiled for one class of self. Callees inlined into
+  # the unit are part of it; the runtime functions it calls are not.
+  # code: the unit's machine code size.
+  samples      %      code  kind   method <class of self>
+      961  30.1%    31579B  method Sphere#intersect (app_aobench.rb:75) <Sphere>
+      604  18.9%    49986B  method Scene#ambient_occlusion (app_aobench.rb:192) <Scene>
+      313   9.8%    11571B  method Plane#intersect (app_aobench.rb:106) <Plane>
+       25   0.8%    46001B  method Object#otherBasis (app_aobench.rb:162) <Scene>
+       15   0.5%    61223B  method block in Scene#render (app_aobench.rb:238) <Scene>
+       13   0.4%    10317B  method Sphere#intersect (app_aobench.rb:75) <Sphere>
+       13   0.4%    54163B  method block in Scene#render (app_aobench.rb:238) <Scene>
+        6   0.2%     6988B  method Plane#intersect (app_aobench.rb:106) <Plane>
+        6   0.2%    51159B  method block (2 levels) in Scene#render (app_aobench.rb:239) <Scene>
+        5   0.2%    58203B  method block (2 levels) in Scene#render (app_aobench.rb:239) <Scene>
+
+native functions by self samples (top 30)
+  # Samples outside generated code, by the Rust / C function the PC was in
+  # (not its callers), with the tier the sample was counted in.
+     self      %  [tier] function
+      248   7.8%  [gc] <monoruby::value::rvalue::RValue as monoruby::alloc::GCBox>::free
+      144   4.5%  [native] monoruby::builtins::kernel::rand
+      132   4.1%  [native] do_sin
+       83   2.6%  [native] do_cos
+       71   2.2%  [native] <monoruby::globals::prng::Mt>::next_u32
+       58   1.8%  [native] __cos_fma
+       51   1.6%  [native] reduce_sincos
+       35   1.1%  [gc] <monoruby::alloc::Allocator<monoruby::value::rvalue::RValue>>::gc::<monoruby::executor::Root>
+       25   0.8%  [native] libc_feholdsetround_sse_ctx
+       19   0.6%  [native] <monoruby::id_table::IdentId>::get_id
+       19   0.6%  [native] <monoruby::value::rvalue::RValue>::pack
+       18   0.6%  [native] <monoruby::alloc::Allocator<monoruby::value::rvalue::RValue>>::alloc
+       17   0.5%  [native] __sin_fma
+        6   0.2%  [native] monoruby::builtins::math::extern_cos
+        6   0.2%  [native] monoruby::builtins::math::extern_sin
+        6   0.2%  [native] monoruby::codegen::runtime::args::handle_invoker_arguments
+        5   0.2%  [gc] <monoruby::globals::store::Store as monoruby::alloc::GC<monoruby::value::rvalue::RValue>>::mark
+        5   0.2%  [gc] <monoruby::globals::store::iseq::ISeqInfo as monoruby::alloc::GC<monoruby::value::rvalue::RValue>>::mark
+        5   0.2%  [native] <monoruby::executor::Executor>::find_method
+        5   0.2%  [native] do_sincos
+        4   0.1%  [compile] __memcpy_avx512_unaligned_erms
+        4   0.1%  [native] monoruby::builtins::io::io_write_method
+        3   0.1%  [compile] <monoasm::jit_memory::JitMemory>::encode
+        3   0.1%  [gc] <monoruby::alloc::Allocator<monoruby::value::rvalue::RValue>>::mark
+        3   0.1%  [gc] <monoruby::globals::store::class::ClassInfo as monoruby::alloc::GC<monoruby::value::rvalue::RValue>>::mark
+        3   0.1%  [native] <monoruby::globals::store::GlobalMethodCache>::get
+        3   0.1%  [native] <monoruby::vm::ALLOC::{closure#0} as core::ops::function::FnOnce<(&monoruby::vm::Vm,)>>::call_once
+        2   0.1%  [gc] <hashbrown::raw::RawIterRange<(monoruby::id_table::IdentId, monoruby::globals::store::class::constants::ConstState)>>::fold_impl::<<hashbrown::map::Iter<monoruby::id_table::IdentId, monoruby::globals::store::class::constants::ConstState> as core::iter::traits::iterator::Iterator>::fold<(), <std::collections::hash::map::Values<monoruby::id_table::IdentId, monoruby::globals::store::class::constants::ConstState> as core::iter::traits::iterator::Iterator>::fold<(), core::iter::traits::iterator::Iterator::for_each::call<&monoruby::globals::store::class::constants::ConstState, <monoruby::globals::store::class::ClassInfo as monoruby::alloc::GC<monoruby::value::rvalue::RValue>>::mark::{closure#0}>::{closure#0}>::{closure#0}>::{closure#0}, ()>
+        2   0.1%  [gc] <monoruby::alloc::Allocator<monoruby::value::rvalue::RValue>>::drain_mark_queue
+        2   0.1%  [gc] __memcpy_avx512_unaligned_erms
+
+---- JIT: 41 compiles (4 loop, 0 abandoned), 30.447 ms, 765424 bytes of code ----
+
+compiles by time (top 30)
+  # The slowest compilations. One row per compilation: a method compiled
+  # twice is two rows.
+          time     code  kind   method <class of self>
+      4.555 ms   54163B  method block in Scene#render (app_aobench.rb:238) <Scene>
+      4.339 ms   61223B  method block in Scene#render (app_aobench.rb:238) <Scene>
+      3.528 ms   51159B  method block (2 levels) in Scene#render (app_aobench.rb:239) <Scene>
+      2.303 ms   58203B  method block (2 levels) in Scene#render (app_aobench.rb:239) <Scene>
+      2.299 ms   49986B  method Scene#ambient_occlusion (app_aobench.rb:192) <Scene>
+      1.607 ms   38495B  method block (3 levels) in Scene#render (app_aobench.rb:243) <Scene>
+      1.078 ms   45571B  method block (3 levels) in Scene#render (app_aobench.rb:243) <Scene>
+      0.988 ms   46001B  method Object#otherBasis (app_aobench.rb:162) <Scene>
+      0.946 ms   45552B  method Object#otherBasis (app_aobench.rb:162) <Scene>
+      0.919 ms   36053B  method block in Scene#ambient_occlusion (app_aobench.rb:204) <Scene>
+      0.846 ms   35502B  method block (4 levels) in Scene#render (app_aobench.rb:244) <Scene>
+      0.713 ms   43868B  method Object#otherBasis (app_aobench.rb:162) <Scene>
+      0.702 ms   42211B  method block (4 levels) in Scene#render (app_aobench.rb:244) <Scene>
+      0.670 ms   31579B  method Sphere#intersect (app_aobench.rb:75) <Sphere>
+      0.513 ms   32246B  method block (2 levels) in Scene#ambient_occlusion (app_aobench.rb:205) <Scene>
+      0.371 ms   11571B  method Plane#intersect (app_aobench.rb:106) <Plane>
+      0.357 ms   10317B  method Sphere#intersect (app_aobench.rb:75) <Sphere>
+      0.320 ms    3049B  method Vec#vsub (app_aobench.rb:36) <Vec>
+      0.280 ms    3911B  method block in <module:Errno> (error.rb:137) <#<Class:Errno>>
+      0.272 ms    6988B  method Plane#intersect (app_aobench.rb:106) <Plane>
+      0.254 ms    2459B  loop   Hash#each (hash.rb:26) <Hash>
+      0.210 ms    2209B  method Array#each (array.rb:94) <Array>
+      0.203 ms    1844B  method Class#new (class.rb:17) <#<Class:Vec>>
+      0.196 ms    3924B  method Class#new (class.rb:17) <#<Class:Isect>>
+      0.190 ms    2204B  loop   Hash#each_value (hash.rb:76) <Hash>
+      0.168 ms    6579B  method Vec#vnormalize (app_aobench.rb:54) <Vec>
+      0.157 ms    2026B  loop   Array#each (array.rb:94) <Array>
+      0.154 ms    5126B  method block in RbConfig.expand (rbconfig.rb:310) <#<Class:RbConfig>>
+      0.154 ms    2204B  method block in <module:RbConfig> (rbconfig.rb:299) <#<Class:RbConfig>>
+      0.150 ms    1460B  loop   Integer#times (integer.rb:20) <Integer>
+
+compiled more than once (top 30)
+  # Recompiles: the same method or loop compiled again for the same class of
+  # self, with the time all its compilations took together.
+  times     total time  kind   method <class of self>
+      3 x     2.646 ms  method Object#otherBasis (app_aobench.rb:162) <Scene>
+      2 x     8.894 ms  method block in Scene#render (app_aobench.rb:238) <Scene>
+      2 x     5.832 ms  method block (2 levels) in Scene#render (app_aobench.rb:239) <Scene>
+      2 x     2.685 ms  method block (3 levels) in Scene#render (app_aobench.rb:243) <Scene>
+      2 x     1.548 ms  method block (4 levels) in Scene#render (app_aobench.rb:244) <Scene>
+      2 x     1.027 ms  method Sphere#intersect (app_aobench.rb:75) <Sphere>
+      2 x     0.643 ms  method Plane#intersect (app_aobench.rb:106) <Plane>
+
+---- GC: 556 collections, 322.408 ms ----
+
+collections by kind
+  # Every collection, timed. time = mark + sweep; us/GC = time per collection;
+  # marked/GC = objects marked (found live) per collection.
+  kind    count      time ms      mark ms     sweep ms      us/GC  marked/GC
+  minor     548      316.773       21.157      295.617      578.1         81
+  major       8        5.635        1.245        4.390      704.4       3629
+
+heap at exit
+  # The object heap when the report was written.
+  31 pages, 62 live objects after the last GC, 80414840 objects allocated in all
+==================================================================

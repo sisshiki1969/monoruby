@@ -36,6 +36,7 @@ run time with `--no-jit`. (The old `jit` / `jit_x86` build cfgs and the
 | `chain-deopt-log` | Trace every chain-deopt escalation to stderr. Deliberately **not** implied by `deopt` / `profile`: it fires hundreds of thousands of times per activerecord iteration and once wrote 160 MB of stderr in five iterations |
 | `profile` | Collect deopt / recompile statistics (implies `dump-traceir` for the deopt-site table, but not the bytecode dumps) |
 | `perf` | Emit perf-compatible symbol maps so JIT frames get names |
+| `prof` | The [built-in profiler](profiler.md), selected at run time with `MONORUBY_PROF=cpu,alloc,malloc`; `MONORUBY_PROF_OUT=PREFIX` also writes `PREFIX.html`, a self-contained viewer |
 
 ### GC
 
@@ -380,7 +381,11 @@ variants — `NotCached`, `MethodNotFound`, `IvarIdNotFound`,
 how the log names the guard that actually branched when exits have been
 deduplicated.
 
-For time rather than counts, see [Benchmarks](benchmarks.md#profiling).
+For time rather than counts, build with `--features prof` and see
+[Built-in Profiler](profiler.md): methods by self and total time split by
+runtime tier, allocations, GC, JIT compiles and `malloc` call sites, as a text
+report and as an HTML page. [Benchmarks](benchmarks.md#profiling) covers
+Linux `perf`.
 
 ## JIT thresholds
 

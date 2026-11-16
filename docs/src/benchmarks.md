@@ -93,6 +93,19 @@ script, which is often more informative than an absolute number.
 
 ## Profiling
 
+monoruby has a profiler of its own that knows about Ruby frames and the
+runtime's tiers — see [Built-in Profiler](profiler.md), which includes a live
+example of the HTML page it writes:
+
+```sh
+cargo build --release --features prof
+MONORUBY_PROF=cpu MONORUBY_PROF_OUT=/tmp/p target/release/monoruby benchmark/app_fib.rb
+# -> /tmp/p.txt, /tmp/p.html, /tmp/p.cpu.folded
+```
+
+Linux `perf` works too, and sees what a sampling profiler inside the process
+cannot (the kernel, other processes):
+
 ```sh
 # Flame graph via Linux perf (needs ../FlameGraph)
 bin/perf benchmark/app_fib.rb

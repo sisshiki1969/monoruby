@@ -53,6 +53,10 @@ binary) with the run's data in it — so it needs no server and no network,
 and can be copied, attached or archived as it is. Light and dark follow
 the system (or the button at the top right).
 
+Two pages to try, written by real runs (optcarrot with all three profiles,
+aobench with `cpu` alone), are on the documentation site:
+<https://sisshiki1969.github.io/monoruby/docs/profiler.html>.
+
 - **Time line** (when `cpu` is on) — the run cut into up to 300 equal
   buckets of CPU samples, each drawn as its mix of tiers, with the objects
   allocated and the bytes `malloc`ed in each below. **Drag over a part of
