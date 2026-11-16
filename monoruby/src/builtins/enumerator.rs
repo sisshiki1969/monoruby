@@ -56,7 +56,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ENUMERATOR_CLASS, "peek_values", peek_values, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "feed", feed, 1);
-    globals.define_builtin_funcs(ENUMERATOR_CLASS, "size", &["length"], enumerator_size, 0);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "size", enumerator_size, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "inspect", enumerator_inspect, 0);
 
     // `Enumerator::Yielder` inherits from `Object` (as in CRuby), NOT `Array`.
@@ -94,6 +94,87 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(GENERATOR_CLASS, "each", generator_each);
 }
 
+/// Which of the two Enumerators standing behind an
+/// `Enumerator::ArithmeticSequence` a builtin of this file works on. The
+/// sequence is an Enumerator by class and keeps its own payload
+/// (`ObjTy::ARITHMETIC_SEQUENCE`), so what `Enumerator`'s methods need —
+/// a source to call, a Fiber to step — is held by a real Enumerator the
+/// sequence builds on demand.
+#[derive(Clone, Copy)]
+enum Backing {
+    /// External iteration (`next`, `peek`, …) runs over the sequence's
+    /// own `each`.
+    Each,
+    /// What made the sequence — `1.step(10, 3)`, `(1..3).step(2)` — as
+    /// an Enumerator records it (receiver, method, arguments): what
+    /// `Enumerator#inspect` and `#size` bound to a sequence report.
+    Source,
+    /// `with_index`, `with_object` and `each` call what made the
+    /// sequence, with a block (`enumerator_block_call`). The sequence's
+    /// own `each` walks the same terms and is the one the JIT knows, so
+    /// it stands in — except for a beginless sequence, where calling
+    /// `Range#step` is what raises `#step iteration for beginless ranges
+    /// is meaningless`.
+    Iterate,
+}
+
+/// What an iterator of `self_val` answers once its block has run
+/// through, given what the iteration itself answered: for a sequence
+/// iterated over its own `each` (`Backing::Iterate`), the receiver it was
+/// made from — `1.step(3).with_index { }` is `1`, the value of
+/// `1.step(3) { }`.
+fn iteration_result(globals: &Globals, self_val: Value, res: Value) -> Value {
+    if self_val.ty() == Some(ObjTy::ARITHMETIC_SEQUENCE)
+        && !self_val.as_arithmetic_sequence_inner().begin().is_nil()
+        && let Some(origin) = globals
+            .store
+            .get_ivar(self_val, IdentId::get_id("/__receiver"))
+        && !origin.is_nil()
+    {
+        origin
+    } else {
+        res
+    }
+}
+
+/// The initialized Enumerator `self_val` is, or the one standing behind
+/// it when it is an ArithmeticSequence.
+fn receiver(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    backing: Backing,
+) -> Result<Enumerator> {
+    let val = if self_val.ty() == Some(ObjTy::ARITHMETIC_SEQUENCE) {
+        let source = match backing {
+            Backing::Each => false,
+            Backing::Source => true,
+            Backing::Iterate => self_val.as_arithmetic_sequence_inner().begin().is_nil(),
+        };
+        // The sequence builds each on first use and keeps it in a hidden
+        // instance variable (`builtins/arithmetic_sequence.rb`).
+        let (slot, builder) = if source {
+            ("/__source_enum", "__source_enum")
+        } else {
+            ("/__enum", "__enum")
+        };
+        match globals.store.get_ivar(self_val, IdentId::get_id(slot)) {
+            Some(val) if !val.is_nil() => val,
+            _ => vm.invoke_method_inner(
+                globals,
+                IdentId::get_id(builder),
+                self_val,
+                &[],
+                None,
+                None,
+            )?,
+        }
+    } else {
+        self_val
+    };
+    Enumerator::expect_initialized(val)
+}
+
 ///
 /// ### Enumerator#inspect
 ///
@@ -120,7 +201,14 @@ fn enumerator_inspect(
     let name = globals
         .store
         .get_class_name(self_val.real_class(&globals.store).id());
-    let e = self_val.as_enumerator_inner();
+    // An ArithmeticSequence reached through `Enumerator#inspect` itself
+    // (it has an `inspect` of its own) shows what made it.
+    let shown = if self_val.ty() == Some(ObjTy::ARITHMETIC_SEQUENCE) {
+        receiver(vm, globals, self_val, Backing::Source)?.into()
+    } else {
+        self_val
+    };
+    let e = shown.as_enumerator_inner();
     if !e.is_initialized() {
         return Ok(Value::string_sprintf(format!("#<{name}: uninitialized>")));
     }
@@ -200,7 +288,10 @@ fn enumerator_size(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let e = lfp.self_val();
+    let mut e = lfp.self_val();
+    if e.ty() == Some(ObjTy::ARITHMETIC_SEQUENCE) {
+        e = receiver(vm, globals, e, Backing::Source)?.into();
+    }
     if e.ty() != Some(ObjTy::ENUMERATOR) {
         return Ok(Value::nil());
     }
@@ -308,7 +399,7 @@ fn enumerator_initialize(
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/next.html]
 #[monoruby_builtin]
 fn next(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut e = Enumerator::expect_initialized(lfp.self_val())?;
+    let mut e = receiver(vm, globals, lfp.self_val(), Backing::Each)?;
     e.next(vm, globals)
 }
 
@@ -325,7 +416,7 @@ fn next_values(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut e = Enumerator::expect_initialized(lfp.self_val())?;
+    let mut e = receiver(vm, globals, lfp.self_val(), Backing::Each)?;
     Ok(e.next_values(vm, globals)?.into())
 }
 
@@ -338,11 +429,13 @@ fn next_values(
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/each.html]
 #[monoruby_builtin]
 fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let self_val = Enumerator::expect_initialized(lfp.self_val())?;
+    let self_val = receiver(vm, globals, lfp.self_val(), Backing::Iterate)?;
     let extra: Array = lfp.arg(0).as_array();
     let Some(bh) = lfp.block() else {
         if extra.len() == 0 {
-            return Ok(self_val.into());
+            // The receiver itself: an arithmetic sequence, not the
+            // Enumerator standing behind it.
+            return Ok(lfp.self_val());
         }
         // `e.each(*args)` without a block hands back a *new* enumerator
         // carrying the extra arguments (CRuby's `enumerator_each`).
@@ -396,7 +489,7 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         self_val.kw_args,
     );
     globals.pop_enum_block_arity();
-    res
+    Ok(iteration_result(globals, lfp.self_val(), res?))
 }
 
 ///
@@ -508,7 +601,7 @@ fn with_index(
             _ => Value::integer(v.coerce_to_int_i64(vm, globals)?),
         },
     };
-    let self_val = Enumerator::expect_initialized(lfp.self_val())?;
+    let self_val = receiver(vm, globals, lfp.self_val(), Backing::Iterate)?;
     let Some(bh) = lfp.block() else {
         // The offset is part of the enumerator's replayed arguments —
         // `e.with_index(5).to_a` must start at 5 — but only when one was
@@ -526,7 +619,16 @@ fn with_index(
             self_val.size(),
         );
     };
-    enum_adapter_call(vm, globals, self_val, bh, offset, WITH_INDEX_ADAPTER_FUNCID, pc)
+    let res = enum_adapter_call(
+        vm,
+        globals,
+        self_val,
+        bh,
+        offset,
+        WITH_INDEX_ADAPTER_FUNCID,
+        pc,
+    )?;
+    Ok(iteration_result(globals, lfp.self_val(), res))
 }
 
 ///
@@ -544,7 +646,7 @@ fn with_object(
     pc: BytecodePtr,
 ) -> Result<Value> {
     let memo = lfp.arg(0);
-    let self_val = Enumerator::expect_initialized(lfp.self_val())?;
+    let self_val = receiver(vm, globals, lfp.self_val(), Backing::Iterate)?;
     let Some(bh) = lfp.block() else {
         return vm.generate_enumerator_with_size(
             super::kernel::invoked_name(vm, globals, lfp.self_val(), IdentId::get_id("with_object")),
@@ -611,7 +713,7 @@ fn enum_adapter_call(
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/peek.html]
 #[monoruby_builtin]
 fn peek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut e = Enumerator::expect_initialized(lfp.self_val())?;
+    let mut e = receiver(vm, globals, lfp.self_val(), Backing::Each)?;
     e.peek(vm, globals)
 }
 
@@ -632,7 +734,7 @@ fn peek_values(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut e = Enumerator::expect_initialized(lfp.self_val())?;
+    let mut e = receiver(vm, globals, lfp.self_val(), Backing::Each)?;
     Ok(e.peek_values(vm, globals)?.into())
 }
 
@@ -644,14 +746,20 @@ fn peek_values(
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/rewind.html]
 #[monoruby_builtin]
 fn rewind(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut e = Enumerator::expect_initialized(lfp.self_val())?;
+    let mut e = receiver(vm, globals, lfp.self_val(), Backing::Each)?;
     // CRuby's `enumerator_rewind` first asks the source to rewind, if it
     // knows how (`rb_check_funcall(e->obj, id_rewind, 0, 0)`), then drops
     // the external-iteration state.
+    // The Enumerator behind an arithmetic sequence iterates the sequence
+    // itself, whose `rewind` is this very method.
     let obj = e.obj;
-    vm.invoke_method_if_exists(globals, IdentId::get_id("rewind"), obj, &[], None, None)?;
+    if obj.id() != lfp.self_val().id() {
+        vm.invoke_method_if_exists(globals, IdentId::get_id("rewind"), obj, &[], None, None)?;
+    }
     e.rewind_external();
-    Ok(e.into())
+    // `rewind` answers its receiver — the sequence, not the Enumerator
+    // behind it.
+    Ok(lfp.self_val())
 }
 
 ///
@@ -665,8 +773,8 @@ fn rewind(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/feed.html]
 #[monoruby_builtin]
-fn feed(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut e = Enumerator::expect_initialized(lfp.self_val())?;
+fn feed(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut e = receiver(vm, globals, lfp.self_val(), Backing::Each)?;
     e.set_feed(lfp.arg(0))?;
     Ok(Value::nil())
 }

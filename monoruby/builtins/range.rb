@@ -311,7 +311,8 @@ class Range
       if self.end.nil?
         raise RangeError, "cannot get the minimum of endless range with custom comparison method"
       end
-      return __builtin_min(&block) if n.nil?
+      # `range_min` hands a call with a block to Enumerable#min.
+      return super(&block) if n.nil?
       return to_a.sort(&block).first(__nmin_n(n))
     end
     return __builtin_min if no_n
@@ -328,6 +329,13 @@ class Range
     res
   end
 
+  # CRuby's `range_minmax`: with a block it is Enumerable#minmax; without
+  # one, `[min, max]`, computed from the endpoints.
+  def minmax(&block)
+    return super if block
+    __builtin_minmax
+  end
+
   def max(n = (no_n = true; nil), &block)
     e = self.end
     raise RangeError, "cannot get the maximum of endless range" if e.nil?
@@ -335,7 +343,7 @@ class Range
       if self.begin.nil?
         raise RangeError, "cannot get the maximum of beginless range with custom comparison method"
       end
-      return __builtin_max(&block) if n.nil?
+      return super(&block) if n.nil?
       return to_a.sort(&block).last(__nmin_n(n)).reverse
     end
     if n.nil?

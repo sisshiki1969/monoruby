@@ -193,6 +193,9 @@ class Enumerator
   end
 
   class Yielder
+    # A C struct in CRuby, with no `_dump_data`: `Marshal.dump` refuses it.
+    @__no_dump_data = true
+
     # `obj.each(&yielder)` — CRuby's `yielder_to_proc` wraps the yielder
     # so it can stand in for a block.
     def to_proc

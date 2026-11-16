@@ -501,6 +501,16 @@ pub struct ClassInfo {
     /// `doc/singleton_class_facts.md`.
     ///
     instance_singleton: bool,
+    ///
+    /// On the singleton class of a *module*: something has asked for it
+    /// (`singleton_class`, `def mod.m`, `class << mod`, `extend`).
+    /// monoruby gives every module its singleton class up front, where
+    /// CRuby makes one on demand, and `Method#inspect` shows the
+    /// difference (`Comparable.method(:to_s)` is `Module#to_s`, not
+    /// `#<Class:Comparable>(Module)#to_s`) — see
+    /// [`Self::singleton_materialized`].
+    ///
+    singleton_requested: bool,
 }
 
 /// C-level allocator function pointer. Given a class id (and a globals
@@ -647,6 +657,7 @@ impl ClassInfo {
             hash_method_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
             instance_singleton: false,
+            singleton_requested: false,
         }
     }
 
@@ -677,6 +688,7 @@ impl ClassInfo {
             hash_method_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
             instance_singleton: false,
+            singleton_requested: false,
         }
     }
 
@@ -688,6 +700,13 @@ impl ClassInfo {
 
     pub(in crate::globals) fn set_instance_singleton(&mut self) {
         self.instance_singleton = true;
+    }
+
+    /// Whether this singleton class of a module is one CRuby would have
+    /// made by now: it was asked for, or it carries a method (a module
+    /// function, however it was defined).
+    pub(crate) fn singleton_materialized(&self) -> bool {
+        self.singleton_requested || !self.methods.is_empty()
     }
 
     ///
@@ -1306,6 +1325,9 @@ impl ClassInfoTable {
         }
         let org_class = self[obj.class()].get_module();
         if org_class.is_singleton().is_some() {
+            if obj.ty() == Some(ObjTy::MODULE) && !self[org_class.id()].singleton_requested {
+                self[org_class.id()].singleton_requested = true;
+            }
             return Ok(org_class);
         }
         // A Range or a Complex is frozen but an ordinary object: it gets

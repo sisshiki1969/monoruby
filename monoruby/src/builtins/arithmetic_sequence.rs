@@ -16,11 +16,15 @@ use num::{BigInt, Zero};
 //
 
 pub(super) fn init(globals: &mut Globals) {
-    let object_class = globals.object_class();
+    // A subclass of Enumerator, as in CRuby, with a payload of its own:
+    // the Enumerator builtins that need an Enumerator's payload take it
+    // from the one the sequence keeps behind it (`enumerator.rs`,
+    // `Backing`).
+    let enumerator_class = globals.store[ENUMERATOR_CLASS].get_module();
     globals.define_builtin_class(
         "ArithmeticSequence",
         ARITHMETIC_SEQUENCE_CLASS,
-        object_class,
+        enumerator_class,
         ENUMERATOR_CLASS,
         ObjTy::ARITHMETIC_SEQUENCE,
     );
@@ -78,11 +82,13 @@ pub(super) fn init(globals: &mut Globals) {
     // `builtins/arithmetic_sequence.rb` (Ruby) so monoruby's JIT can
     // inline the block dispatch directly into the loop. See benchmark
     // discussion in PR comments.
-    globals.define_builtin_funcs(ARITHMETIC_SEQUENCE_CLASS, "size", &["length"], size, 0);
+    globals.define_builtin_func(ARITHMETIC_SEQUENCE_CLASS, "size", size, 0);
     globals.define_builtin_func(ARITHMETIC_SEQUENCE_CLASS, "__float_step", float_step, 0);
     globals.define_builtin_func_with(ARITHMETIC_SEQUENCE_CLASS, "first", first, 0, 1, false);
     globals.define_builtin_func_with(ARITHMETIC_SEQUENCE_CLASS, "last", last, 0, 1, false);
-    globals.define_builtin_func(ARITHMETIC_SEQUENCE_CLASS, "[]", index_op, 1);
+    // `Array#[]` with a sequence as its index. Not a method of the class in
+    // CRuby, hence the internal name.
+    globals.define_builtin_func(ARITHMETIC_SEQUENCE_CLASS, "__slice_array", index_op, 1);
 }
 
 ///
@@ -776,11 +782,11 @@ fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 // ─── [] (Array stride-aware index) ─────────────────────────────────
 
 ///
-/// ### Enumerator::ArithmeticSequence#[]
+/// ### Enumerator::ArithmeticSequence#__slice_array
 ///
-/// - self[ary] -> Array
+/// - __slice_array(ary) -> Array
 ///
-/// `aseq[ary]` extracts the slice of `ary` whose indices are the terms
+/// `aseq.__slice_array(ary)` extracts the slice of `ary` whose indices are the terms
 /// of this sequence. Mirrors CRuby's `rb_ary_subseq_step`: integer
 /// indices only (the caller is expected to be passing an AS built for
 /// slicing — `Numeric#step` / `Range#step` / `Range#%`).

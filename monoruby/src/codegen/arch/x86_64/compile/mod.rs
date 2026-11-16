@@ -1718,14 +1718,10 @@ impl Codegen {
         base: SlotBase,
         args: SlotId,
         len: u16,
-        min: bool,
+        min: MinMaxOp,
         using_fpr: UsingFpr,
     ) -> bool {
-        let f = if min {
-            runtime::opt_array_min as *const () as usize
-        } else {
-            runtime::opt_array_max as *const () as usize
-        };
+        let f = min.func();
         self.fpr_save(using_fpr);
         self.caller_slot_addr(base, args, GP::Rdx);
         monoasm!( &mut self.jit,

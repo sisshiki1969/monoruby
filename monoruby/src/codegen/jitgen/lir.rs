@@ -905,7 +905,7 @@ pub(in crate::codegen) enum LInst {
         base: SlotBase,
         args: SlotId,
         len: u16,
-        min: bool,
+        min: MinMaxOp,
         using_fpr: UsingFpr,
     },
     CreateArrayFrom {

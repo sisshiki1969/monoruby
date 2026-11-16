@@ -1223,7 +1223,8 @@ impl<'a> JitContext<'a> {
                         else {
                             unreachable!()
                         };
-                        self.emit_elements_op(state, ir, op, base, src, len, call_dst);
+                        let newarray = self.store[callid].newarray_recv;
+                        self.emit_elements_op(state, ir, op, base, src, len, call_dst, newarray);
                     }
                     ElementsPlan::Hash(fold) => self.emit_hash_fold(state, ir, fold, call_dst),
                     ElementsPlan::Range(plan) => {
@@ -1909,6 +1910,9 @@ impl<'a> JitContext<'a> {
         src: SlotId,
         len: u16,
         dst: Option<SlotId>,
+        // The call is written on the Array literal itself
+        // (`CallSiteInfo::newarray_recv`).
+        newarray: bool,
     ) {
         match op {
             ElementsOp::Min | ElementsOp::Max => {
@@ -1920,7 +1924,8 @@ impl<'a> JitContext<'a> {
                 state.discard(dst);
                 let using_fpr = state.get_using_fpr(ir);
                 let error = ir.new_error(state);
-                ir.array_min_max(using_fpr, base, src, len, op == ElementsOp::Min);
+                let op = MinMaxOp::new(op == ElementsOp::Min, newarray);
+                ir.array_min_max(using_fpr, base, src, len, op);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
                 state.unset_side_effect_guard();

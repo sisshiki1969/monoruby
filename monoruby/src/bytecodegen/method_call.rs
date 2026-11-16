@@ -40,7 +40,31 @@ impl<'a> BytecodeGen<'a> {
         self.emit_call(callsite, loc);
     }
 
-    pub(super) fn gen_method_call(
+/// Whether CRuby compiles `node` as a *static literal*: an Array literal
+    /// made of these alone is one shared object behind `duparray`, and a
+    /// `min` / `max` written on it is an ordinary send rather than
+    /// `opt_newarray_send`. A String literal is static only under the
+    /// `frozen_string_literal` pragma.
+    fn is_static_literal(&self, node: &Node) -> bool {
+        match &node.kind {
+            NodeKind::Nil
+            | NodeKind::Bool(_)
+            | NodeKind::Integer(_)
+            | NodeKind::Bignum(_)
+            | NodeKind::Float(_)
+            | NodeKind::Imaginary(_)
+            | NodeKind::Rational(_)
+            | NodeKind::RImaginary(_)
+            | NodeKind::Symbol(_) => true,
+            NodeKind::String(_) | NodeKind::Bytes(_) | NodeKind::EncodedString(..) => {
+                self.frozen_string_literal()
+            }
+            NodeKind::Array(elems, _) => elems.iter().all(|n| self.is_static_literal(n)),
+            _ => false,
+        }
+    }
+
+        pub(super) fn gen_method_call(
         &mut self,
         method: IdentId,
         receiver: Option<Node>,
@@ -113,6 +137,23 @@ impl<'a> BytecodeGen<'a> {
             }
             return Ok(());
         }
+        // `[e1, .., en].min` / `.max`: CRuby's `opt_newarray_send` shape
+        // (`CallSiteInfo::newarray_recv`).
+        let newarray_recv = !safe_nav
+            && (method == IdentId::get_id("min") || method == IdentId::get_id("max"))
+            && arglist.args.is_empty()
+            && arglist.kw_args.is_empty()
+            && arglist.hash_splat.is_empty()
+            && arglist.block.is_none()
+            && !arglist.forwarding
+            && !arglist.delegate_block
+            && match receiver.as_ref().map(|r| &r.kind) {
+                Some(NodeKind::Array(elems, _)) => {
+                    !elems.iter().any(|n| matches!(n.kind, NodeKind::Splat(..)))
+                        && !elems.iter().all(|n| self.is_static_literal(n))
+                }
+                _ => false,
+            };
         let recv = match receiver {
             Some(receiver) => {
                 if receiver.kind == NodeKind::SelfValue {
@@ -175,6 +216,7 @@ impl<'a> BytecodeGen<'a> {
         };
 
         let mut callid = self.handle_arguments(arglist, method, recv, dst, loc)?;
+        callid.newarray_recv = newarray_recv;
 
         if builtin_initialize {
             callid.bypass_visibility = true;

@@ -193,6 +193,12 @@ class Numeric
     # The positional spelling as written, kept for
     # `ArithmeticSequence#inspect` (`1.step(10, 3)` prints itself back).
     given_args = no_step ? (limit.nil? ? [] : [limit]) : [limit, step]
+    given_kw = nil
+    unless by.nil? && to.nil?
+      given_kw = {}
+      given_kw[:by] = by unless by.nil?
+      given_kw[:to] = to unless to.nil?
+    end
     if !to.nil? && !limit.nil?
       raise ArgumentError, "to is given twice"
     end
@@ -217,7 +223,7 @@ class Numeric
       if step.is_a?(Numeric) && (limit.nil? || limit.is_a?(Numeric))
         return Enumerator::ArithmeticSequence
           .__build(self, limit, step, false)
-          .__set_origin(self, :step, given_args)
+          .__set_origin(self, :step, given_args, given_kw)
       else
         return to_enum(:step, limit, step) { __step_size(limit, step) }
       end

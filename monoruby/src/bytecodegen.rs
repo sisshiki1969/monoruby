@@ -292,6 +292,9 @@ struct CallSite {
     /// `encode_call` gives the site a twin describing `yield e1, .., en`
     /// — see `CallSiteInfo::yield_expanded`.
     yield_expanded: Option<usize>,
+    /// `[e1, .., en].min` / `.max` written on the Array literal itself —
+    /// see `CallSiteInfo::newarray_recv`.
+    newarray_recv: bool,
 }
 
 impl CallSite {
@@ -324,6 +327,7 @@ impl CallSite {
             send_direct_name: None,
             class_new_init: false,
             yield_expanded: None,
+            newarray_recv: false,
         }
     }
 

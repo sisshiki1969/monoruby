@@ -21,6 +21,22 @@ class NoMatchingPatternKeyError < NoMatchingPatternError
   end
 end
 
+class UncaughtThrowError
+  # `UncaughtThrowError.new(tag, value, message = nil)`. The message is
+  # a format that `#to_s` applies to the tag (`uncaught_throw_to_s`).
+  def initialize(tag, value, *rest)
+    @__tag = tag
+    @__value = value
+    @__format = true
+    super(*rest)
+  end
+
+  def to_s
+    s = super
+    @__format ? format(s, @__tag) : s
+  end
+end
+
 class Exception
   class << self
     # `Exception.exception(...)` is an alias of `.new`, inherited by every

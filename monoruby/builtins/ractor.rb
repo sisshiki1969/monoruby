@@ -18,6 +18,9 @@
 # `Ractor.recv`, `Ractor.yield`, `Ractor.current` / `.main` / `.main?` /
 # `.count`, `Ractor.make_shareable` / `.shareable?`, `#name`, `#inspect`.
 class Ractor
+  # A C struct in CRuby, with no `_dump_data`: `Marshal.dump` refuses it.
+  @__no_dump_data = true
+
   class Error < StandardError; end
   class IsolationError < ArgumentError; end
   class MovedError < Error; end

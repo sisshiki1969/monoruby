@@ -235,6 +235,10 @@ pub(super) fn init(globals: &mut Globals) -> Module {
             .set_ivar(kernel, IdentId::get_id("/undef"), undef)
             .unwrap();
     }
+    // `__cmpint(res, a, b)`: CRuby's `rb_cmpint`, for the Ruby-written
+    // Enumerable methods to read the result of `a <=> b` (or of a
+    // comparator block) with.
+    globals.define_private_builtin_func(kernel_class, "__cmpint", kernel_cmpint, 3);
     globals.define_private_builtin_func(kernel_class, "__String", kernel_string, 1);
     globals.define_private_builtin_func(kernel_class, "__Hash", kernel_hash, 1);
     // Called by `monoruby_hooks/bundler_runtime.rb` once `Bundler.setup`
@@ -387,7 +391,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     let send_fid = globals.define_builtin_inline_funcs_with_kw(
         kernel_class,
         "send",
-        &["__send__"],
+        &[],
         crate::builtins::send,
         inline_gen2!(crate::builtins::object_send),
         0,
@@ -1441,15 +1445,24 @@ fn caller_frames(
     Ok(Value::array_from_vec(v))
 }
 
-/// Whether a native frame is a pure invocation trampoline that CRuby
-/// leaves off the stack trace entirely: `Proc#call` (and aliases) and
-/// `Method#call` push the target's own frame and are themselves
-/// invisible — unlike `instance_exec` / `Integer#times`-style cfuncs,
-/// which do appear.
+/// Whether a native frame is a pure invocation trampoline that is left
+/// off the stack trace entirely: `Proc#call` (and aliases) and `send` /
+/// `__send__` are optimized methods in CRuby, which push the target's
+/// own frame and are themselves invisible — unlike `public_send`,
+/// `instance_exec` or `Integer#times`-style cfuncs, which do appear.
+/// `Method#call` is left off as well, which CRuby does show: the JIT
+/// compiles it in place with no frame, and the two tiers have to agree.
 fn is_transparent_native_frame(globals: &Globals, func_id: FuncId) -> bool {
     let info = &globals.store[func_id];
     if info.is_iseq().is_some() {
         return false;
+    }
+    // `send` / `__send__` are optimized methods in CRuby
+    // (`VM_METHOD_TYPE_OPTIMIZED`): the target runs in a frame pushed by
+    // the caller and no frame of `send` itself exists. (`public_send` is
+    // an ordinary C function and does appear.)
+    if globals.store.is_object_send(func_id) {
+        return true;
     }
     let Some(name) = info.name() else {
         return false;
@@ -4524,7 +4537,7 @@ pub(super) fn invoked_name(
 /// call-instruction index and the ISeq's `callsite_map` — which only
 /// holds real ones — tells them apart without decoding anything.
 ///
-fn call_site_id(store: &Store, iseq_id: ISeqId, method_cfp: Cfp) -> Option<CallSiteId> {
+pub(super) fn call_site_id(store: &Store, iseq_id: ISeqId, method_cfp: Cfp) -> Option<CallSiteId> {
     let info = &store[iseq_id];
     let slot = method_cfp.caller_pc_slot();
     if slot == 0 || slot as usize % std::mem::align_of::<Bytecode>() != 0 {
@@ -4630,8 +4643,8 @@ fn throw_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             // two). Surfaced as `UncaughtThrowError#tag` / `#value`; the
             // `original` object keeps its ivars through `take_ex_obj`.
             let exc = Value::new_exception_from(msg.clone(), class_id);
-            globals.store.set_ivar(exc, IdentId::get_id("/tag"), tag)?;
-            globals.store.set_ivar(exc, IdentId::get_id("/value"), value)?;
+            globals.store.set_ivar(exc, IdentId::get_id("/__tag"), tag)?;
+            globals.store.set_ivar(exc, IdentId::get_id("/__value"), value)?;
             return Err(MonorubyErr::new(MonorubyErrKind::Other(class_id), msg).with_original(exc));
         }
         return Err(MonorubyErr::argumenterr(msg));
@@ -5550,6 +5563,21 @@ fn warn_caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
     let msg = lfp.arg(0).expect_string(&globals.store)?;
     vm.ruby_warn_caller(globals, &msg)?;
     Ok(Value::nil())
+}
+
+/// `Kernel#__cmpint(res, a, b)`: CRuby's `rb_cmpint` — the sign of a
+/// comparison result as -1, 0 or 1. A `nil` result is "comparison of A
+/// with B failed" (`rb_cmperr`), and a result that is no Integer is asked
+/// `> 0`, then `< 0`.
+#[monoruby_builtin]
+fn kernel_cmpint(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let ord = vm.cmpint(globals, lfp.arg(0), lfp.arg(1), lfp.arg(2))?;
+    Ok(Value::integer(ord as i64))
 }
 
 /// `Kernel#__to_int(val)`: CRuby's `rb_to_int`.

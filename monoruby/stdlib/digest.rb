@@ -155,6 +155,9 @@ module Digest
 
   # Base class for the buffered algorithm implementations.
   class Base < Digest::Class
+    # A C struct in CRuby, with no `_dump_data`: `Marshal.dump` refuses it.
+    @__no_dump_data = true
+
     def initialize
       @__buffer = ''.b
     end

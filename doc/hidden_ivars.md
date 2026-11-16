@@ -135,9 +135,18 @@ Besides renaming `@name` to `@__name` under the magic comment:
 - **Rust readers** of the variable: `get_id("@name")` becomes
   `get_id("/__name")` (`fill_stat_ivars`, `dir_path_ivar`, the scheduler).
 - **Marshal.** Hidden slots are not dumped. Where CRuby dumps a field of
-  the C struct under a name without `@` — an exception's `errno`, `signo`,
-  `key`, `matchee`, the conversion errors' fields — `marshal.rs` maps the
-  wire name to the slot in both directions (`EXCEPTION_FIELDS`).
+  the C struct under a name without `@` — an exception's `key`,
+  `receiver`, `name`, `args`, `status`, `tag`, `result`, `errno`, `signo`,
+  `matchee`, the conversion errors' fields, `Process::Status`'s `status`
+  and `pid` — `marshal.rs` maps the wire name to the slot in both
+  directions (`EXCEPTION_FIELDS`, `OBJECT_FIELDS`; #2005). A field of a
+  loaded exception that no class claims is kept under `/marshal/<name>`
+  and written back.
+  A class whose CRuby object is a C struct with no `_dump_data` (`Dir`,
+  `File::Stat`, `StringScanner`, `Digest::Base`, `ThreadGroup`, …) says
+  so with a class-level `@__no_dump_data = true`; `Marshal.dump` of an
+  instance (or of a subclass's) raises CRuby's `no _dump_data is defined
+  for class X` instead of writing an object with no state.
 - **Frozen objects.** State in hidden slots no longer makes a frozen
   object unusable, which is CRuby's behaviour for most of these classes
   (`StringScanner#scan`, `Digest#update`, an `Enumerator::Chain`). Where
@@ -160,3 +169,6 @@ lock, subclasses with colliding names), and the mechanism itself
 instance variables, nothing in `inspect`, subclasses with colliding
 names, frozen objects, copies, the Struct classes and the Marshal round
 trip of the exception fields.
+`monoruby/tests/marshal_exception_fields.rs`: what `Marshal` writes for
+an exception (field names, order, `bt_locations`), the round trip of
+every builtin exception's fields, and the objects that cannot be dumped.

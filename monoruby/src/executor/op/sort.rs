@@ -38,11 +38,11 @@ impl Executor {
         if sort_homogeneous(globals, vec) {
             return Ok(());
         }
-        let is_less = |a: Value, b: Value| {
+        let is_greater = |a: Value, b: Value| {
             let ord = Executor::compare_values(self, globals, a, b)?;
-            Result::Ok(ord == std::cmp::Ordering::Less)
+            Result::Ok(ord == std::cmp::Ordering::Greater)
         };
-        merge_sort(vec, buf, is_less)
+        merge_sort(vec, buf, is_greater)
     }
 
     ///
@@ -267,24 +267,39 @@ pub(crate) fn cmperr(store: &Store, x: Value, y: Value) -> MonorubyErr {
 }
 
 ///
-/// Execute merge sort for Vec of *Value*s with `compare`.
+/// Execute merge sort for a slice with `compare`: of *Value*s (see
+/// `Executor::sort` for the `buf` contract), or of indices into a rooted
+/// key table (`sort_by`), for which any buffer of
+/// `merge_scratch_len(vec.len())` elements will do.
 ///
-/// See `Executor::sort` for the `buf` contract.
+/// `compare(a, b)` is always asked with `a` the element currently to the
+/// left of `b`, and the first error ends the sort.
 ///
-pub(crate) fn sort_by<F>(vec: &mut [Value], buf: *mut Value, mut compare: F) -> Result<()>
+pub(crate) fn sort_by<T, F>(vec: &mut [T], buf: *mut T, mut compare: F) -> Result<()>
 where
-    F: FnMut(Value, Value) -> Result<std::cmp::Ordering>,
+    T: Copy,
+    F: FnMut(T, T) -> Result<std::cmp::Ordering>,
 {
-    let f = |a: Value, b: Value| {
+    let f = |a: T, b: T| {
         let ord = compare(a, b)?;
-        Result::Ok(ord == std::cmp::Ordering::Less)
+        Result::Ok(ord == std::cmp::Ordering::Greater)
     };
     merge_sort(vec, buf, f)
 }
 
-fn merge_sort<F>(v: &mut [Value], buf: *mut Value, mut is_less: F) -> Result<()>
+///
+/// The sort itself. `is_greater(a, b)` is only ever asked about a pair in
+/// its current order — `a` to the left of `b` — and answers whether the two
+/// are out of order. That is the question CRuby's comparator answers
+/// (`sort_2` calls `a <=> b` with `a` the element qsort holds on the left),
+/// so the receiver of each `<=>`, the arguments of a sort block and the
+/// operands `rb_cmperr` names are the ones CRuby has: `[1, "a"].sort` is
+/// "comparison of Integer with String failed" (#2007).
+///
+fn merge_sort<T, F>(v: &mut [T], buf: *mut T, mut is_greater: F) -> Result<()>
 where
-    F: FnMut(Value, Value) -> Result<bool>,
+    T: Copy,
+    F: FnMut(T, T) -> Result<bool>,
 {
     // Very short runs are extended using insertion sort to span at least this many elements.
     const MIN_RUN: usize = 10;
@@ -295,7 +310,7 @@ where
     if len <= MAX_INSERTION {
         if len >= 2 {
             for i in (0..len - 1).rev() {
-                insert_head(&mut v[i..], &mut is_less)?;
+                insert_head(&mut v[i..], &mut is_greater)?;
             }
         }
         return Ok(());
@@ -310,16 +325,16 @@ where
         if start > 0 {
             start -= 1;
             unsafe {
-                if is_less(*v.get_unchecked(start + 1), *v.get_unchecked(start))? {
+                if is_greater(*v.get_unchecked(start), *v.get_unchecked(start + 1))? {
                     while start > 0
-                        && is_less(*v.get_unchecked(start), *v.get_unchecked(start - 1))?
+                        && is_greater(*v.get_unchecked(start - 1), *v.get_unchecked(start))?
                     {
                         start -= 1;
                     }
                     v[start..end].reverse();
                 } else {
                     while start > 0
-                        && !is_less(*v.get_unchecked(start), *v.get_unchecked(start - 1))?
+                        && !is_greater(*v.get_unchecked(start - 1), *v.get_unchecked(start))?
                     {
                         start -= 1;
                     }
@@ -331,7 +346,7 @@ where
         // merge sort on short sequences, so this significantly improves performance.
         while start > 0 && end - start < MIN_RUN {
             start -= 1;
-            insert_head(&mut v[start..end], &mut is_less)?;
+            insert_head(&mut v[start..end], &mut is_greater)?;
         }
 
         // Push this run onto the stack.
@@ -349,7 +364,7 @@ where
                 &mut v[left.start..right.start + right.len],
                 left.len,
                 buf,
-                &mut is_less,
+                &mut is_greater,
             )?;
             runs[r] = Run {
                 start: left.start,
@@ -389,11 +404,12 @@ where
     }
 }
 
-fn insert_head<F>(v: &mut [Value], is_less: &mut F) -> Result<()>
+fn insert_head<T, F>(v: &mut [T], is_greater: &mut F) -> Result<()>
 where
-    F: FnMut(Value, Value) -> Result<bool>,
+    T: Copy,
+    F: FnMut(T, T) -> Result<bool>,
 {
-    if v.len() >= 2 && is_less(v[1], v[0])? {
+    if v.len() >= 2 && is_greater(v[0], v[1])? {
         unsafe {
             let mut tmp = std::mem::ManuallyDrop::new(std::ptr::read(&v[0]));
 
@@ -405,7 +421,7 @@ where
             std::ptr::copy_nonoverlapping(&v[1], &mut v[0], 1);
 
             for i in 2..v.len() {
-                if !is_less(v[i], *tmp)? {
+                if !is_greater(*tmp, v[i])? {
                     break;
                 }
                 std::ptr::copy_nonoverlapping(&v[i], &mut v[i - 1], 1);
@@ -431,9 +447,10 @@ where
     }
 }
 
-fn merge<F>(v: &mut [Value], mid: usize, buf: *mut Value, is_less: &mut F) -> Result<()>
+fn merge<T, F>(v: &mut [T], mid: usize, buf: *mut T, is_greater: &mut F) -> Result<()>
 where
-    F: FnMut(Value, Value) -> Result<bool>,
+    T: Copy,
+    F: FnMut(T, T) -> Result<bool>,
 {
     let len = v.len();
     let v = v.as_mut_ptr();
@@ -461,7 +478,7 @@ where
             // Consume the lesser side.
             // If equal, prefer the left run to maintain stability.
             unsafe {
-                let to_copy = if is_less(*right, **left)? {
+                let to_copy = if is_greater(**left, *right)? {
                     get_and_increment(&mut right)
                 } else {
                     get_and_increment(left)
@@ -489,7 +506,7 @@ where
             // Consume the greater side.
             // If equal, prefer the right run to maintain stability.
             unsafe {
-                let to_copy = if is_less(*right.offset(-1), *left.offset(-1))? {
+                let to_copy = if is_greater(*left.offset(-1), *right.offset(-1))? {
                     decrement_and_get(left)
                 } else {
                     decrement_and_get(right)

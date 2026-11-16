@@ -2878,7 +2878,7 @@ fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     if let Some(cached) = globals.store[class_id].cached_name_value() {
         return Ok(cached);
     }
-    let class_name = globals.store.get_class_name(class_id);
+    let class_name = globals.store.get_class_path(class_id);
     let mut val = Value::string_usascii(class_name);
     // The class path is an fstring (`rb_fstring` in `build_const_path`).
     val.set_fstring();

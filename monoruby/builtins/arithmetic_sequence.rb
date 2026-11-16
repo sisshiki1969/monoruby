@@ -6,42 +6,32 @@
 # behaves like an Enumerator over the sequence and is also
 # accepted by `Array#[]` / `Array#slice` as a stride-aware index.
 #
-# We don't subclass Enumerator (its Fiber machinery only works
-# for Enumerators built from a real iterator), so `is_a?` /
-# `kind_of?` are overridden to keep `is_a?(Enumerator)` truthy
-# for spec compatibility.
+# It is a subclass of Enumerator, as in CRuby, but not an Enumerator
+# by representation: what Enumerator's own methods need (a source to
+# call with a block, a Fiber for external iteration) is held by a real
+# Enumerator the sequence builds on demand (`__enum`, `__source_enum`;
+# see `Backing` in `src/builtins/enumerator.rs`).
 #
 # Storage lives in a dedicated `RValue` variant
 # (`ObjTy::ARITHMETIC_SEQUENCE`); ALL behavioural methods —
 # `__build`, `begin`, `end`, `step`, `exclude_end?`,
-# `size`, `first`, `last`, and `[]` — are Rust builtins (see
+# `size`, `first`, `last` — are Rust builtins (see
 # `src/builtins/arithmetic_sequence.rs`). What remains here is
-# the Enumerable include, the `is_a?` override (so `is_a?(Enumerator)`
-# stays truthy without making AS a real Enumerator subclass), and
 # inspect / to_a / each — Ruby-level conveniences that don't benefit from
 # native code. The origin `#inspect` reports is kept in hidden instance
 # variables (doc/hidden_ivars.md): CRuby keeps it in the C struct.
 class Enumerator
   class ArithmeticSequence
-    include Enumerable
-
-    def is_a?(klass)
-      return true if klass == Enumerator::ArithmeticSequence
-      return true if klass == Enumerator
-      return true if klass == Enumerable
-      super
-    end
-    alias kind_of? is_a?
-
     # Records how the sequence was produced, which is all `#inspect`
     # reports: `1.step(10)` prints `(1.step(10))` while `(1..10).step`
     # prints `((1..10).step)` even though both describe 1, 2, … 10.
     # CRuby keeps the same three fields (`receiver`, `meth`, `arguments`)
     # on the object. Called by `Numeric#step` / `Range#step` / `Range#%`.
-    def __set_origin(receiver, meth, args)
+    def __set_origin(receiver, meth, args, kw = nil)
       @__receiver = receiver
       @__meth = meth
       @__args = args
+      @__kw = kw
       self
     end
 
@@ -63,13 +53,12 @@ class Enumerator
       end
       body = recv.is_a?(Range) ? "(#{recv.inspect})" : recv.inspect
       out = "(#{body}.#{@__meth}"
-      args = @__args
-      if args && !args.empty?
-        out = out + "(#{args.map { |a| a.inspect }.join(', ')})"
-      end
+      shown = (@__args || []).map { |a| a.inspect }
+      # Keywords are shown as written: `(1.step(by: 2, to: 10))`.
+      @__kw&.each { |k, v| shown << "#{k}: #{v.inspect}" }
+      out = out + "(#{shown.join(', ')})" unless shown.empty?
       __sprintf_repr(out + ")")
     end
-    alias to_s inspect
 
     # Two sequences are equal when they describe the same progression —
     # how each was spelled (`1.step(10)` vs `(1..10).step`) is irrelevant.
@@ -81,6 +70,7 @@ class Enumerator
         self.step == other.step &&
         exclude_end? == other.exclude_end?
     end
+    alias === ==
     alias eql? ==
 
     def hash
@@ -103,7 +93,6 @@ class Enumerator
       each { |v| ary << v }
       ary
     end
-    alias entries to_a
 
     # CRuby's `arith_seq_each`, in Ruby (rather than Rust) so that
     # monoruby's JIT can inline the block dispatch directly into the
@@ -190,42 +179,26 @@ class Enumerator
       self
     end
 
-    # In CRuby the sequence *is* an Enumerator, and `#each` without a
-    # block answers the sequence itself; here it is a class of its own
-    # (see the top of the file), so what a caller then asks of that
-    # enumerator — external iteration, `with_index`, `+` — is forwarded
-    # to a real one over `#each`.
-    def next = __enum.next
-    def peek = __enum.peek
-    def next_values = __enum.next_values
-    def peek_values = __enum.peek_values
-    def feed(v) = __enum.feed(v)
-
-    def rewind
-      @__enum&.rewind
-      self
-    end
-
-    def with_index(offset = 0, &block)
-      return to_enum(:with_index, offset) { size } unless block
-      to_enum(:each).with_index(offset, &block)
-      self
-    end
-
-    def with_object(memo, &block)
-      return to_enum(:with_object, memo) { size } unless block
-      each { |v| block.call(v, memo) }
-      memo
-    end
-
-    def +(other)
-      Enumerator::Chain.new(self, other)
-    end
-
     private
 
+    # External iteration (`next`, `peek`, `rewind`, …, Enumerator's own)
+    # runs over the sequence's `#each`.
     def __enum
       @__enum ||= to_enum(:each) { size }
+    end
+
+    # Enumerator's iterators (`with_index`, `with_object`,
+    # `each_with_index`) call what made the sequence, with a block —
+    # `1.step(10, 3) { … }`, `(..3).step(1) { … }` — as CRuby's do with
+    # the receiver, method and arguments an Enumerator records.
+    def __source_enum
+      @__source_enum ||=
+        if @__receiver.nil?
+          to_enum(:each) { size }
+        else
+          seq = self
+          @__receiver.to_enum(@__meth, *(@__args || []), **(@__kw || {})) { seq.size }
+        end
     end
 
     # CRuby's `num_idiv`: the floored quotient as an Integer.
