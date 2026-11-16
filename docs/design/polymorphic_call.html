@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-fb52a4ad.js";
+            window.path_to_searchindex_js = "../searchindex-5a95720f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-9192be69.js"></script>
@@ -606,7 +606,14 @@ splat・kw・ブロックのない 8 引数以下の呼び出しは、呼び先�
 届き、JIT フレームがヒープへ昇格する。残余アームでは
 <code>no_capture_guard</code> を落とし、send 後の capture ガードで deopt して
 ヒープ側のローカルを読む。</li>
-<li><strong>対象外</strong>: ブロック付き呼び出し、<code>...</code> 転送、名前のない呼び出し。</li>
+<li><strong>対象外</strong>: ブロック付き呼び出し、名前のない呼び出し。</li>
+<li><strong><code>...</code> 転送サイト</strong>(2026-11、#1948): 当初は対象外で、<code>relation_class.new(model, ...)</code>
+のようなメガモーフィックな転送サイトは呼び出しのたびに deopt していた。
+実行時の束縛は VM と同じ <code>vm_handle_arguments</code> なので、転送された rest が
+実 <code>Array</code> でも遅延転送マーカーでもそのまま束縛できる。JIT 側で要るのは、
+引数充填(<code>set_arguments</code> の転送アーム)を通らないぶんの後始末だけで、
+<code>settle_operands_for_runtime_binder</code> が elided のままの rest / <code>**kwrest</code> を
+実体化し、K1 の kw スキップに拒否権を出す(<code>arg_forwarding_jit.md</code>)。</li>
 </ul>
 <p>テスト: <code>pic_overflow_generic_residual</code>(アリティ差・kw・splat+ブロック
 引数・<code>method_missing</code>・private・<code>alias tag binding</code>)、
