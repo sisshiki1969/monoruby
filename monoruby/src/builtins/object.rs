@@ -1106,7 +1106,7 @@ mod tests {
             r##"
         s = Struct.new(:a)
         d = Data.define(:a)
-        b = Class.new do
+        class NeqElem
           def initialize(x) = @x = x
           attr_reader :x
           def ==(o)
@@ -1114,6 +1114,7 @@ mod tests {
             @x == o.x
           end
         end
+        b = NeqElem
         def nne(a, b) = a != b
         res = []
         40.times { |i| res << nne(s.new(b.new(1)), s.new(b.new(i % 3))) }
@@ -1124,15 +1125,28 @@ mod tests {
         40.times { |i| res << nne(1r / 3, Rational(i % 3, 3)) }
         40.times { |i| res << nne(Complex(1, 2), Complex(i % 3, 2)) }
         res = res.chunk_while { |x, y| x == y }.map(&:first)
-        [s.new(b.new(0)), [b.new(0)], { a: b.new(0) }, d.new(b.new(0))].each do |v|
+        mk = [->(x) { s.new(x) }, ->(x) { [x] }, ->(x) { { a: x } }, ->(x) { d.new(x) }]
+        mk.each do |f|
           res << begin
-            nne(v, v.dup)
+            nne(f.(b.new(0)), f.(b.new(0)))
           rescue => e
-            [e.class, e.message, e.backtrace.first(3).map { |l| l[/'(.*)'/, 1].sub(/\A#<Class:0x\h+>/, "") }]
+            [e.class, e.message]
           end
         end
-        # the frame is `!=`'s own again afterwards
-        40.times { |i| res << nne(s.new(b.new(1)), s.new(b.new(i % 3))) }
+        # A site of one receiver class calls `BasicObject#!=` itself: the
+        # error is traced through `==` and `!=`, and the frame is `!=`'s
+        # own again afterwards.
+        def nne_s(a, b) = a != b
+        def nne_a(a, b) = a != b
+        [[:nne_s, mk[0]], [:nne_a, mk[1]]].each do |m, f|
+          40.times { |i| res << send(m, f.(b.new(1)), f.(b.new(i % 3))) }
+          res << begin
+            send(m, f.(b.new(0)), f.(b.new(0)))
+          rescue => e
+            [e.class, e.message, e.backtrace.first(4).map { |l| l[/'(.*)'/, 1] }]
+          end
+          40.times { |i| res << send(m, f.(b.new(1)), f.(b.new(i % 3))) }
+        end
         res
         "##,
         );
