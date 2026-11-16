@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-55171338.js";
+            window.path_to_searchindex_js = "searchindex-dfc2dc62.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -9505,7 +9505,11 @@ callee’s <code>RecvEscape</code>:</p>
 <li><code>elements: Some(op)</code> — an allocation-free lowering over the object’s
 elements, for a <code>Slots</code> or <code>CallerSlots</code> object and an argument-less,
 block-less call. <code>Min</code> / <code>Max</code> compare the elements in their slots
-(<code>ArrayMinMax</code>, over the frame’s own slots or the caller’s window);
+(<code>ArrayMinMax</code>, over the frame’s own slots or the caller’s window), in
+the order the call it stands for would: <code>best &lt;=&gt; v</code> for <code>Array#min</code>,
+<code>v &lt;=&gt; best</code> when the call is written on the literal itself
+(<code>[a, b].max</code>, CRuby’s <code>opt_newarray_send</code>; <code>CallSiteInfo::newarray_recv</code>,
+<code>MinMaxOp</code>) — which is the operand a failed comparison names (#2007);
 <code>Size</code>, <code>Empty</code> are answered at compile time; <code>First</code>, <code>Last</code> are a copy
 of one element slot (<code>LoadCallerSlot</code> for a handed-over object);
 <code>ArrayIndex</code> (<code>%d = %base[%idx]</code>) is that same copy for a compile-time
