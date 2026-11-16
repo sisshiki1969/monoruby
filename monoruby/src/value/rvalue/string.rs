@@ -2976,6 +2976,16 @@ impl EncBuf {
         buf_append(&mut self.buf, s);
     }
 
+    /// Append bytes as they are, whatever they hold, without touching
+    /// the encoding: CRuby's `rb_str_buf_cat` of bytes that are not
+    /// known to be ASCII (a regexp group name in `match_inspect`). The
+    /// buffer stops being 7-bit when they are not, so a later non-ASCII
+    /// piece in another encoding is refused as CRuby refuses it.
+    pub fn push_bytes(&mut self, s: &[u8]) {
+        self.seven_bit &= s.is_ascii();
+        buf_append(&mut self.buf, s);
+    }
+
     /// Re-tag what has been built so far: CRuby's `rb_enc_copy`.
     pub fn set_encoding(&mut self, enc: Encoding) {
         self.enc = enc;

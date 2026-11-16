@@ -237,15 +237,25 @@ matches:  SmallVec<[Span; 2]>   // 24
 
 ### 2.4 一時の stash と保存経路
 
-- `sp_match_regex`: 進行中の `Regexp`。次の `save_capture_special_variables`
-  が名前付きキャプチャ用に付ける。消費されたら消える。
+- `MatchOrigin`: マッチの出どころ。`Regexp(Value)`（照合した Regexp。
+  `$~.regexp`・グループ名・`$~[:name]` が読む）か `Substring`（String
+  パターンの部分文字列検索。CRuby の `rb_backref_set_string` と同じく
+  Regexp を持たず、`#regexp` / `#==` / `#hash` が要求した時にマッチ文字列
+  から組む）。保存関数（`save_capture_*` / `save_spans` /
+  `RegexpInner::captures_*`）の**必須引数**なので、渡し忘れた経路は
+  コンパイルが通らない（以前は任意の stash で、`sub` / `scan` / `index` /
+  `[]` / `partition` などが付け忘れていた — #1946）。
+- `sp_match_regex`: 保存中のマッチの `MatchOrigin`。`MatchData` を確保する
+  間だけの GC root（`"a".match("b")` がその場で組んだ Regexp は他に root
+  が無い）。
 - `sp_match_haystack`: 被照合 String の `Value`。`resolve_haystack` は照合側
   の `&str` が本当にそのバッファを借りているかを**ポインタの包含**で
   検証し、`(subject, byte offset)` を返す。古い stash は単に `None` に
   解決してコピーに落ちるだけで、誤帰属はしない。
 - 両方とも `Executor::mark` の GC root（`MatchData` 確保が GC を起こす）。
-- `save_capture_special_variables` / `_bytes` が `MatchData` を組み、regexp を
-  付け、`SVAR_BACKREF` に格納する。呼び出し側は `String#match` / `=~` /
+- `save_capture_special_variables` / `_bytes` が `MatchData` を組み、
+  `MatchOrigin` を付け、`SVAR_BACKREF` に格納する（`Executor::store_match`）。
+  呼び出し側は `String#match` / `=~` /
   `[]` 系 / `split` / `sub` / `gsub` / `scan`、`Regexp#=~` / `===` / `match`。
 
 ### 2.5 `MatchData` を**確保しない**場合
@@ -364,7 +374,7 @@ mark が erubi で 291 → 5）。
 |---|---|
 | `Regexp#=~` | nil 引数は `$~` を消して nil（エンジン呼び出し無し）。1 回の `from_utf8` 検証後 `from_utf8_unchecked` でバイト列を借り、CoW スナップショットのために被照合を stash。**バイト**オフセットを返す |
 | `Regexp#===` | nil / Regexp / 非文字列様の引数は照合せず false。Symbol → String、他は `to_str` |
-| `Regexp#match?` | `match_pred`。`MatchData` 無し、`$~` 無し、`sp_match_regex` 無し |
+| `Regexp#match?` | `match_pred`。`MatchData` 無し、`$~` 無し |
 | `Regexp#match` | まずエンコーディング検証。非 SevenBit でコーデックのある被照合は **native コーデックのバイト経路**（`.` が宣言エンコーディングに従う）、それ以外は借用 UTF-8 経路で、保存したばかりの `$~` を返す |
 | `String#=~` | Regexp 右辺が高速経路で**文字**添字を返す。String 右辺は `TypeError`、他は `to_str` の前に `rhs =~ self` を逆 dispatch |
 | `String#match` | 両引数を借用の前に変換（ユーザーの `to_str` がレシーバを変えうる）。文字 → バイト位置は ASCII のみで O(1)、末尾超えは CRuby どおり clamp |

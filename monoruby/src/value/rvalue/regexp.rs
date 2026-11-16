@@ -1967,8 +1967,13 @@ impl RegexpInner {
         }
     }
 
-    pub fn captures<'a>(&self, given: &'a str, vm: &mut Executor) -> Result<Option<Captures<'a>>> {
-        self.captures_from_pos(given, 0, vm)
+    pub fn captures<'a>(
+        &self,
+        given: &'a str,
+        vm: &mut Executor,
+        origin: MatchOrigin,
+    ) -> Result<Option<Captures<'a>>> {
+        self.captures_from_pos(given, 0, vm, origin)
     }
 
     /// Subjects up to this many bytes are probed for 7-bit content when
@@ -2090,8 +2095,9 @@ impl RegexpInner {
         given: &'a str,
         pos: usize,
         vm: &mut Executor,
+        origin: MatchOrigin,
     ) -> Result<Option<Captures<'a>>> {
-        self.captures_from_pos_with(self.engine_for(given, None), given, pos, vm)
+        self.captures_from_pos_with(self.engine_for(given, None), given, pos, vm, origin)
     }
 
     /// [`captures_from_pos`](Self::captures_from_pos) with `\G` pinned
@@ -2103,6 +2109,7 @@ impl RegexpInner {
         gpos: usize,
         pos: usize,
         vm: &mut Executor,
+        origin: MatchOrigin,
     ) -> Result<Option<Captures<'a>>> {
         let _deadline = self.deadline();
         match self
@@ -2111,7 +2118,7 @@ impl RegexpInner {
         {
             Ok(res) => {
                 if let Some(captures) = &res {
-                    vm.save_capture_special_variables(captures, given)
+                    vm.save_capture_special_variables(captures, given, origin)
                 } else {
                     vm.clear_capture_special_variables();
                 }
@@ -2129,12 +2136,13 @@ impl RegexpInner {
         given: &'a str,
         pos: usize,
         vm: &mut Executor,
+        origin: MatchOrigin,
     ) -> Result<Option<Captures<'a>>> {
         let _deadline = self.deadline();
         match engine.captures_from_pos(given, pos) {
             Ok(res) => {
                 if let Some(captures) = &res {
-                    vm.save_capture_special_variables(captures, given)
+                    vm.save_capture_special_variables(captures, given, origin)
                 } else {
                     vm.clear_capture_special_variables();
                 }
@@ -2318,12 +2326,13 @@ impl RegexpInner {
         enc: OnigmoEncoding,
         pos: usize,
         vm: &mut Executor,
+        origin: MatchOrigin,
     ) -> Result<Option<onigmo_regex::CapturesBytes<'a>>> {
         let native = self.native_regex(enc)?;
         match native.captures_bytes_from_pos(given, pos) {
             Ok(res) => {
                 if let Some(captures) = &res {
-                    vm.save_capture_special_variables_bytes(captures, given_value);
+                    vm.save_capture_special_variables_bytes(captures, given_value, origin);
                 } else {
                     vm.clear_capture_special_variables();
                 }
@@ -2339,8 +2348,9 @@ impl RegexpInner {
         &self,
         vm: &mut Executor,
         given: &'a str,
+        origin: MatchOrigin,
     ) -> Result<Option<std::ops::Range<usize>>> {
-        match self.captures(given, vm)? {
+        match self.captures(given, vm, origin)? {
             None => Ok(None),
             Some(captures) => Ok(captures.get(0).map(|m| m.range())),
         }
@@ -2853,11 +2863,33 @@ pub(crate) fn spans_of(region: &onigmo_regex::Region) -> Spans {
 
 /// Save `spans` (a match over `subject`) as `$~`; `owner` is the String
 /// Value whose bytes `subject` walks — a byte subject's raw bytes, or
-/// the string a text view was cut from.
-pub(crate) fn save_spans(vm: &mut Executor, subject: &Subject, spans: &[Option<(usize, usize)>], owner: Value) {
+/// the string a text view was cut from. `origin` is the Regexp that
+/// matched, or says that a String pattern did.
+pub(crate) fn save_spans(
+    vm: &mut Executor,
+    subject: &Subject,
+    spans: &[Option<(usize, usize)>],
+    owner: Value,
+    origin: MatchOrigin,
+) {
     match subject.as_text() {
-        Some(s) => vm.save_capture_spans_in(spans, s, owner),
-        None => vm.save_capture_spans_bytes(spans, owner),
+        Some(s) if subject.mapped() => match owner.is_rstring_inner() {
+            // A surrogate image has one character per byte of the
+            // string it stands for, so a character count is a byte
+            // offset there: `$~` is over the string itself, not over
+            // its image (`$~.pre_match` in the receiver's encoding).
+            Some(raw) if raw.len() == s.chars().count() => {
+                let at = |pos: usize| s[..pos].chars().count();
+                let spans: Spans = spans
+                    .iter()
+                    .map(|span| span.map(|(start, end)| (at(start), at(end))))
+                    .collect();
+                vm.save_capture_spans_bytes(&spans, owner, origin)
+            }
+            _ => vm.save_capture_spans_in(spans, s, owner, origin),
+        },
+        Some(s) => vm.save_capture_spans_in(spans, s, owner, origin),
+        None => vm.save_capture_spans_bytes(spans, owner, origin),
     }
 }
 
@@ -3007,7 +3039,14 @@ impl RegexpInner {
         replace: &RStringInner,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, re_val, |re, vm, globals| {
-            re.replace_once(vm, &globals.store, subject, owner, replace)
+            re.replace_once(
+                vm,
+                &globals.store,
+                subject,
+                owner,
+                replace,
+                MatchOrigin::of(re_val),
+            )
         })
     }
 
@@ -3044,12 +3083,14 @@ impl RegexpInner {
             }
             let spans = spans_of(&region);
             let (start, end) = spans[0].unwrap();
-            vm.set_match_regex(re.backref_regexp(re_val));
-            save_spans(vm, subject, &spans, owner);
+            save_spans(vm, subject, &spans, owner, MatchOrigin::of(re_val));
             let matched = subject.chunk(None, start..end);
             let before = subject.as_bytes().to_vec();
-            let (view_enc, is_ascii, mapped) =
-                (subject.view_encoding(), subject.is_ascii(), subject.mapped());
+            let (view_enc, is_ascii, mapped) = (
+                subject.view_encoding(),
+                subject.is_ascii(),
+                subject.mapped(),
+            );
             let owner_len = owner.as_rstring_inner().len();
             let result = vm.invoke_block_once(globals, bh, &[matched])?;
             let haystack = if bang {
@@ -3088,7 +3129,14 @@ impl RegexpInner {
         replace: &RStringInner,
     ) -> Result<(RStringInner, bool)> {
         Self::with_coerced_regexp(vm, globals, regexp, |re, vm, globals| {
-            re.replace_repeat(vm, &globals.store, subject, owner, replace)
+            re.replace_repeat(
+                vm,
+                &globals.store,
+                subject,
+                owner,
+                replace,
+                MatchOrigin::of(regexp),
+            )
         })
     }
 
@@ -3143,10 +3191,10 @@ impl RegexpInner {
             // of the view as UTF-8.
             vm.set_match_haystack(snapshot);
             // Every `$~` the walk saves names this Regexp (`$~.names`,
-            // `$~[:name]` inside the block), so it is made once and
-            // rooted with the snapshot.
-            let re_obj = re.backref_regexp(re_val);
-            vm.temp_push(re_obj);
+            // `$~[:name]` inside the block) — `re_val` itself, which the
+            // caller's frame roots — or is a substring match, for a
+            // String pattern.
+            let origin = MatchOrigin::of(re_val);
             let res = re.replace_all_block_inner(
                 vm,
                 globals,
@@ -3155,7 +3203,7 @@ impl RegexpInner {
                 bh,
                 first,
                 regexp_pattern,
-                re_obj,
+                origin,
             );
             vm.temp_clear(tmp);
             res
@@ -3171,7 +3219,7 @@ impl RegexpInner {
         bh: BlockHandler,
         first: usize,
         regexp_pattern: bool,
-        re_obj: Value,
+        origin: MatchOrigin,
     ) -> Result<(RStringInner, bool)> {
         // `snapshot` is frozen and temp-rooted by the caller, so the
         // subject and the matched views stay valid across `invoke_block`.
@@ -3224,8 +3272,7 @@ impl RegexpInner {
             last_match_end = Some(end);
 
             let matched = subject.chunk(Some(snapshot), start..end);
-            vm.set_match_regex(re_obj);
-            save_spans(vm, &subject, &spans, snapshot);
+            save_spans(vm, &subject, &spans, snapshot, origin);
             last_spans = Some(spans);
             let result = vm.invoke_block(globals, &data, &[matched])?;
             check_string_not_modified(recv, recv_len)?;
@@ -3239,8 +3286,7 @@ impl RegexpInner {
         // is over, so a block that matched something of its own does not
         // leave that behind as the caller's backref.
         if let Some(spans) = &last_spans {
-            vm.set_match_regex(re_obj);
-            save_spans(vm, &subject, spans, snapshot);
+            save_spans(vm, &subject, spans, snapshot, origin);
         }
 
         let is_empty = last_spans.is_none();
@@ -3269,7 +3315,7 @@ impl RegexpInner {
             }
             let spans = spans_of(&region);
             let (start, end) = spans[0].unwrap();
-            save_spans(vm, subject, &spans, owner);
+            save_spans(vm, subject, &spans, owner, MatchOrigin::of(re_val));
             let key = subject.chunk(None, start..end);
             let rep_inner = lookup_hash_replacement(vm, globals, hash_val, key, subject.mapped())?;
             let res = RStringInner::sub_splice(
@@ -3308,17 +3354,6 @@ impl RegexpInner {
             vm.temp_clear(tmp);
             res
         })
-    }
-
-    /// The Regexp `$~` reports after a replace driven by `self`: `re_val`
-    /// itself when it is one, else a fresh Regexp for a pattern that was
-    /// coerced from a String.
-    fn backref_regexp(&self, re_val: Value) -> Value {
-        if re_val.is_regex().is_some() {
-            re_val
-        } else {
-            Value::regexp(self.clone())
-        }
     }
 
     /// `gsub(regex, hash)` when nothing between two matches can run
@@ -3413,8 +3448,7 @@ impl RegexpInner {
                 &replacements,
             )?;
             if !is_empty {
-                vm.set_match_regex(self.backref_regexp(re_val));
-                vm.save_capture_spans(&last, given);
+                vm.save_capture_spans(&last, given, MatchOrigin::of(re_val));
             }
             return Ok(Some((res, !is_empty)));
         }
@@ -3462,15 +3496,14 @@ impl RegexpInner {
 
         let is_empty = replacements.is_empty();
         let res = RStringInner::splice_all(
-                &globals.store,
-                given.as_bytes(),
-                recv_inner.encoding(),
-                recv_inner.is_ascii_only(),
-                &replacements,
-            )?;
+            &globals.store,
+            given.as_bytes(),
+            recv_inner.encoding(),
+            recv_inner.is_ascii_only(),
+            &replacements,
+        )?;
         if !is_empty {
-            vm.set_match_regex(self.backref_regexp(re_val));
-            vm.save_capture_spans(&last, given);
+            vm.save_capture_spans(&last, given, MatchOrigin::of(re_val));
         }
         Ok(Some((res, !is_empty)))
     }
@@ -3524,9 +3557,9 @@ impl RegexpInner {
             last_match_end = Some(end);
 
             let key = subject.chunk(Some(snapshot), start..end);
-            vm.set_match_regex(self.backref_regexp(re_val));
-            save_spans(vm, &subject, &spans, snapshot);
-            let replacement = lookup_hash_replacement(vm, globals, hash_val, key, subject.mapped())?;
+            save_spans(vm, &subject, &spans, snapshot, MatchOrigin::of(re_val));
+            let replacement =
+                lookup_hash_replacement(vm, globals, hash_val, key, subject.mapped())?;
             check_string_not_modified(recv, recv_len)?;
             buf.append_stretch(&globals.store, &bytes[copied..start], enc, seven_bit)?;
             buf.append_inner(&globals.store, &replacement)?;
@@ -3550,15 +3583,11 @@ impl RegexpInner {
         block: Option<BlockHandler>,
         byte_pos: usize,
     ) -> Result<Value> {
-        // Attach the Regexp to the `$~` this match is about to save, so
-        // named-capture lookup (`$~[:name]`) works after `String#match`
-        // (same stash `Regexp#match` sets on its own path).
-        vm.set_match_regex(re.as_val());
-        match re.captures_from_pos(given, byte_pos, vm)? {
+        match re.captures_from_pos(given, byte_pos, vm, MatchOrigin::Regexp(re.as_val()))? {
             None => Ok(Value::nil()),
             Some(captures) => {
                 // `captures_from_pos` has just saved this match as `$~`
-                // (with the Regexp attached through the stash above), and
+                // (with the Regexp attached), and
                 // that object *is* the result — `str.match(re).equal?($~)`
                 // holds in CRuby — so hand it back rather than building
                 // a second MatchData with a second haystack view. A
@@ -3679,6 +3708,7 @@ impl RegexpInner {
         vm: &mut Executor,
         snapshot: Value,
         subject: &Subject,
+        origin: MatchOrigin,
     ) -> Result<Vec<Value>> {
         let mut ary = vec![];
         let mut last: Option<Spans> = None;
@@ -3717,7 +3747,7 @@ impl RegexpInner {
         }
 
         if let Some(spans) = last {
-            save_spans(vm, subject, &spans, snapshot);
+            save_spans(vm, subject, &spans, snapshot, origin);
         }
         Ok(ary)
     }
@@ -3737,6 +3767,7 @@ impl RegexpInner {
         subject: &Subject,
         owner: Value,
         replace: &RStringInner,
+        origin: MatchOrigin,
     ) -> Result<(RStringInner, bool)> {
         // Walk the haystack manually rather than relying on
         // `captures_iter`, which can skip the zero-width match that
@@ -3778,10 +3809,7 @@ impl RegexpInner {
         let res = buf.finish();
 
         if let Some(spans) = last {
-            // Attach the (possibly coerced-from-String) Regexp to `$~` so
-            // `$~.regexp` works after `gsub(String)`.
-            vm.set_match_regex(Value::regexp(self.clone()));
-            save_spans(vm, subject, &spans, owner);
+            save_spans(vm, subject, &spans, owner, origin);
         }
 
         Ok((res, !is_empty))
@@ -4041,6 +4069,7 @@ impl RegexpInner {
         subject: &Subject,
         owner: Value,
         replace: &RStringInner,
+        origin: MatchOrigin,
     ) -> Result<(RStringInner, bool)> {
         let mut region = ScratchRegion::take();
         if !self.find_spans(subject, 0, &mut region)? {
@@ -4058,7 +4087,7 @@ impl RegexpInner {
             start..end,
             &rep,
         )?;
-        save_spans(vm, subject, &spans, owner);
+        save_spans(vm, subject, &spans, owner, origin);
         Ok((res, true))
     }
 }
