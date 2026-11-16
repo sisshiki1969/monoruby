@@ -567,3 +567,114 @@ fn comparable_eq_propagates() {
         "##,
     );
 }
+
+/// `Integer#===` / `Float#===` are their `==`: an argument that is no
+/// number is asked `arg == self`, from the operator, from `case`/`when`
+/// and from the builtins that match with `===`.
+#[test]
+fn teq_reverse_dispatch() {
+    run_test_once(
+        r##"
+        class TeqObj1982
+          def ==(o) = $teq_boom1982 ? raise("y") : (o == 1 || o == 1.5 || o == 2**70)
+        end
+        o = TeqObj1982.new
+        $teq_boom1982 = false
+        res = []
+        res << [o].grep(1).size << [o].grep(1.5).size << [o].grep(2**70).size << [o].grep(2).size
+        res << [o].any?(1) << [o].all?(1.5) << [o].none?(2**70) << [o].one?(3)
+        res << [o, o].any?(2.5) << [o].all?(3**70)
+        res << (1 === o) << (1.5 === o) << ((2**70) === o) << (2 === o)
+        res << (case o when 1 then :a else :b end) << (case o when 2.5 then :a else :b end)
+        $teq_boom1982 = true
+        # The frame between the two is `Integer#===` in CRuby and the
+        # method it is an alias of here: only its presence is compared.
+        begin
+          1 === o
+        rescue => e
+          bt = e.backtrace.map { |l| l.sub(/\A.*:(\d+:in )/, '\1') }
+          res << [bt.size, bt.first, bt.last]
+        end
+        res << (([o].grep(1.5) rescue $!.message)) << (([o].any?(2**70) rescue $!.message))
+        res
+        "##,
+    );
+}
+
+/// A `throw` out of the `==` a default `!=` or a reverse dispatch called
+/// is no exception: it has no backtrace to add a frame to.
+#[test]
+fn throw_through_elided_frames() {
+    run_test_once(
+        r##"
+        class ThrowEq1982
+          def ==(o) = throw(:eq1982, :thrown)
+        end
+        res = []
+        res << catch(:eq1982) { ThrowEq1982.new != 1 }
+        res << catch(:eq1982) { 1 == ThrowEq1982.new }
+        res << catch(:eq1982) { 1 != ThrowEq1982.new }
+        res << catch(:eq1982) { 1.5 == ThrowEq1982.new }
+        res << catch(:eq1982) { [ThrowEq1982.new] != [1] }
+        res
+        "##,
+    );
+}
+
+/// The body of `String#==` reached through a real call (`send`,
+/// `Method#call`): an argument that responds to `to_str` is asked.
+#[test]
+fn string_eq_body_asks_a_to_str_argument() {
+    run_test_once(
+        r##"
+        class StrLike1970
+          def to_str = "a"
+          def ==(o) = o == "a" ? :yes : nil
+        end
+        s = StrLike1970.new
+        ["a".send(:==, s), "b".send(:==, s), "a".public_send(:==, s),
+         "a".method(:==).call(s), "a" == s, "b" == s, "a" != s, "b" != s]
+        "##,
+    );
+}
+
+/// No `==` and no `method_missing` either: the NoMethodError of the `==`.
+#[test]
+fn eq_without_method_missing() {
+    run_test_once(
+        r##"
+        class NoMM1971 < BasicObject
+          undef_method :==
+          undef_method :method_missing
+        end
+        n = NoMM1971.new
+        [((n == 1) rescue $!.class), ((n != 1) rescue $!.class),
+         (([n] == [1]) rescue $!.class), ((1 == n) rescue $!.class),
+         (([n].include?(1)) rescue $!.class)]
+        "##,
+    );
+}
+
+/// `Complex#to_i` / `#to_f` / `#to_r` ask a custom imaginary part whether
+/// it `== 0`.
+#[test]
+fn complex_conversions_ask_the_imaginary_part() {
+    run_test_once(
+        r##"
+        class ImNum1970 < Numeric
+          def initialize(v) = @v = v
+          def ==(o) = @v == o
+          def real? = true
+          def coerce(o) = [o, @v]
+          def to_s = "im#{@v}"
+          def negative? = false
+          def <(o) = @v < o
+        end
+        c0 = Complex(1, ImNum1970.new(0))
+        c1 = Complex(1, ImNum1970.new(2))
+        [c0, c1].flat_map do |c|
+          [(c.to_i rescue $!.class), (c.to_f rescue $!.class), (c.to_r rescue $!.class)]
+        end
+        "##,
+    );
+}
