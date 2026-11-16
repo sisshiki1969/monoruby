@@ -880,6 +880,46 @@ impl Codegen {
 // JIT Compiler API for asm codes.
 //
 
+thread_local! {
+    /// The number of compile entries on this thread's stack that contain a
+    /// panic of the compiler ([`contain_compile_panic`]).
+    static PANIC_CONTAINED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether a panic raised now is contained by a JIT compile entry
+/// ([`contain_compile_panic`]) rather than aborting the process: what the
+/// panic hook says after the message (`executor::install_panic_hook`).
+pub(crate) fn compile_panic_contained() -> bool {
+    PANIC_CONTAINED.with(|c| c.get() != 0)
+}
+
+///
+/// Run the compile *f* of a JIT entry point, containing a panic of the
+/// compiler; returns whether *f* completed.
+///
+/// Every entry point is an `extern "C"` function called from generated
+/// code, so a panic that left it would abort the process. A compile is
+/// only ever an optimization: on a panic (an internal error of the
+/// compiler, or on aarch64 a branch out of range in a large body) nothing
+/// is published, the JIT region is re-armed as executable (the aborted
+/// emit may have left it writable) and the caller carries on as after a
+/// declined compile — the warm-up counter that led here has run out, so
+/// the method or loop stays interpreted, and a failed recompile leaves
+/// the old code in place, deopting as before. The panic hook has
+/// reported the panic by then, so it is not silent.
+///
+fn contain_compile_panic(_entry: &str, f: impl FnOnce()) -> bool {
+    PANIC_CONTAINED.with(|c| c.set(c.get() + 1));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    PANIC_CONTAINED.with(|c| c.set(c.get() - 1));
+    if result.is_err() {
+        #[cfg(feature = "jit-log")]
+        eprintln!("[JIT] {_entry} panicked, falling back to VM interpreter");
+        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
+    }
+    result.is_ok()
+}
+
 #[cfg(target_arch = "x86_64")]
 extern "C" fn jit_recompile_specialized(
     globals: &mut Globals,
@@ -889,10 +929,12 @@ extern "C" fn jit_recompile_specialized(
     if salvage_specialized(globals, idx, reason) {
         return;
     }
-    CODEGEN.with(|codegen| {
-        codegen
-            .borrow_mut()
-            .recompile_specialized(globals, idx, reason);
+    contain_compile_panic("recompile_specialized", || {
+        CODEGEN.with(|codegen| {
+            codegen
+                .borrow_mut()
+                .recompile_specialized(globals, idx, reason);
+        });
     });
 }
 
@@ -1014,10 +1056,9 @@ fn salvage_method_const(globals: &mut Globals, lfp: Lfp, reason: RecompileReason
 
 /// aarch64 specialized recompile entry, called from the
 /// `GuardClassVersionSpecialized` / `RecompileDeoptSpecialized` lowering
-/// (`arch/aarch64/compile.rs`). Unlike x86 this catches a recompile-time panic so it
-/// cannot abort across the `extern "C"` boundary (aarch64 can panic emitting a
-/// large body); on panic it re-arms the JIT region as executable (mirrors
-/// `jit_compile_loop`) and returns — the generated code then just deopts to the
+/// (`arch/aarch64/compile.rs`). A recompile-time panic is contained
+/// ([`contain_compile_panic`]; aarch64 can panic emitting a large body), as in
+/// the x86 entry — the generated code then just deopts to the
 /// interpreter (the old specialized body stays installed). No `Option<Value>`
 /// is returned: there is no FatalError path here, matching x86's recompile
 /// behavior (which is best-effort and falls back to deopt on failure).
@@ -1030,16 +1071,13 @@ pub(in crate::codegen) extern "C" fn jit_recompile_specialized(
     if salvage_specialized(globals, idx, reason) {
         return;
     }
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    contain_compile_panic("recompile_specialized", || {
         CODEGEN.with(|codegen| {
             codegen
                 .borrow_mut()
                 .recompile_specialized(globals, idx, reason);
         });
-    }));
-    if result.is_err() {
-        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
-    }
+    });
 }
 
 #[allow(dead_code)] // referenced by the aarch64 patch path; dead on x86.
@@ -1048,17 +1086,13 @@ pub(in crate::codegen) extern "C" fn jit_compile_patch(
     lfp: Lfp,
     entry_patch_point: monoasm::CodePtr,
 ) {
-    //let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-    CODEGEN.with(|codegen| {
-        codegen
-            .borrow_mut()
-            .compile_patch(globals, lfp, entry_patch_point);
+    contain_compile_panic("compile_patch", || {
+        CODEGEN.with(|codegen| {
+            codegen
+                .borrow_mut()
+                .compile_patch(globals, lfp, entry_patch_point);
+        });
     });
-    //}));
-    //if result.is_err() {
-    //    #[cfg(feature = "jit-log")]
-    //    eprintln!("[JIT] compile_patch panicked, falling back to VM interpreter");
-    //}
 }
 
 /// Warm-up profiler hook: called from the JIT stub when its per-stub warm-up
@@ -1083,10 +1117,14 @@ pub(in crate::codegen) extern "C" fn jit_profile_patch(
     let func_id = lfp.func_id();
     let iseq_id = globals.store[func_id].as_iseq();
     if globals.store[iseq_id].profile_self_class(self_class) {
-        CODEGEN.with(|codegen| {
-            codegen
-                .borrow_mut()
-                .compile_patch(globals, lfp, entry_patch_point);
+        // A panic leaves the stub's counter run out, as a declined compile
+        // does: the method stays interpreted.
+        contain_compile_panic("compile_patch", || {
+            CODEGEN.with(|codegen| {
+                codegen
+                    .borrow_mut()
+                    .compile_patch(globals, lfp, entry_patch_point);
+            });
         });
     } else {
         // Not hot yet — keep interpreting and sample again later, after the
@@ -1126,15 +1164,11 @@ extern "C" fn jit_recompile_method(globals: &mut Globals, lfp: Lfp, reason: Reco
     if salvage_method_const(globals, lfp, reason) {
         return;
     }
-    //let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-    CODEGEN.with(|codegen| {
-        codegen.borrow_mut().recompile_method(globals, lfp, reason);
+    contain_compile_panic("recompile_method", || {
+        CODEGEN.with(|codegen| {
+            codegen.borrow_mut().recompile_method(globals, lfp, reason);
+        });
     });
-    //}));
-    //if result.is_err() {
-    //    #[cfg(feature = "jit-log")]
-    //    eprintln!("[JIT] recompile_method panicked, falling back to VM interpreter");
-    //}
 }
 
 /// aarch64 counterpart, called from the `RecompileDeopt` lowering
@@ -1172,13 +1206,12 @@ pub(in crate::codegen) extern "C" fn jit_recompile_method(
     if salvage_method_const(globals, lfp, reason) {
         return Some(Value::nil());
     }
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let completed = contain_compile_panic("recompile_method", || {
         CODEGEN.with(|codegen| {
             codegen.borrow_mut().recompile_method(globals, lfp, reason);
         });
-    }));
-    if result.is_err() {
-        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
+    });
+    if !completed {
         vm.set_error(MonorubyErr::fatal(
             "internal error: JIT method recompilation panicked.",
         ));
@@ -1215,13 +1248,12 @@ pub(in crate::codegen) extern "C" fn jit_recompile_method_with_recovery(
         crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_OK);
         return 2;
     }
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let completed = contain_compile_panic("recompile_method", || {
         CODEGEN.with(|codegen| {
             codegen.borrow_mut().recompile_method(globals, lfp, reason);
         });
-    }));
-    if result.is_err() {
-        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
+    });
+    if !completed {
         vm.set_error(MonorubyErr::fatal(
             "internal error: JIT method recompilation panicked.",
         ));
@@ -1251,15 +1283,14 @@ pub(in crate::codegen) extern "C" fn jit_recompile_loop(
     if salvage_loop(globals, lfp, pc, reason) {
         return Some(Value::nil());
     }
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let completed = contain_compile_panic("recompile_loop", || {
         CODEGEN.with(|codegen| {
             codegen
                 .borrow_mut()
                 .compile_partial(globals, lfp, pc, Some(reason));
         });
-    }));
-    if result.is_err() {
-        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
+    });
+    if !completed {
         vm.set_error(MonorubyErr::fatal(
             "internal error: JIT loop recompilation panicked.",
         ));
@@ -1281,15 +1312,11 @@ extern "C" fn jit_recompile_method_with_recovery(
         crate::codegen::jit_stats::bump(&crate::codegen::jit_stats::SALVAGE_OK);
         return 1;
     };
-    //    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-    CODEGEN.with(|codegen| {
-        codegen.borrow_mut().recompile_method(globals, lfp, reason);
+    contain_compile_panic("recompile_method", || {
+        CODEGEN.with(|codegen| {
+            codegen.borrow_mut().recompile_method(globals, lfp, reason);
+        });
     });
-    //    }));
-    //if result.is_err() {
-    //    #[cfg(feature = "jit-log")]
-    //    eprintln!("[JIT] recompile_method_with_recovery panicked, falling back to VM interpreter");
-    //}
     0
 }
 
@@ -1315,14 +1342,10 @@ pub(in crate::codegen) extern "C" fn jit_compile_loop(
     // loop body (e.g. an out-of-range `TBZ`/`TBNZ` to a far deopt — imm14 is
     // only ±32 KiB); catch it, leave the codeptr unpublished (the VM keeps
     // interpreting and parks the loop counter), and re-arm the JIT region as
-    // executable since the aborted emit left it writable. A no-op on x86,
-    // whose branches reach far enough never to overflow.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        compile_loop(globals, lfp, pc, None);
-    }));
-    if result.is_err() {
-        CODEGEN.with(|codegen| codegen.borrow_mut().jit.finalize());
-    }
+    // executable since the aborted emit left it writable. On x86, whose
+    // branches reach far enough never to overflow, only an internal error of
+    // the compiler gets here (issue #1980).
+    contain_compile_panic("compile_loop", || compile_loop(globals, lfp, pc, None));
 }
 
 ///
@@ -1338,7 +1361,9 @@ extern "C" fn jit_recompile_loop(
     if salvage_loop(globals, lfp, pc, reason) {
         return;
     }
-    compile_loop(globals, lfp, pc, Some(reason));
+    contain_compile_panic("recompile_loop", || {
+        compile_loop(globals, lfp, pc, Some(reason))
+    });
 }
 
 /// ④: before recompiling a loop body whose class-version guard failed,
@@ -1394,4 +1419,38 @@ fn compile_loop(
             .borrow_mut()
             .compile_partial(globals, lfp, pc, is_recompile);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::*;
+
+    #[test]
+    fn compile_panic_is_contained() {
+        assert!(!compile_panic_contained());
+        // A compile that completes: the panic hook is told a panic in it
+        // would be contained.
+        assert!(contain_compile_panic("test", || {
+            assert!(compile_panic_contained())
+        }));
+        // An internal error of the compiler stops at the entry point.
+        assert!(!contain_compile_panic("test", || {
+            unreachable!("a compiler bug (expected by this test)")
+        }));
+        assert!(!compile_panic_contained());
+        // The JIT is intact afterwards.
+        run_test(
+            r#"
+            def f(x) = x * 2 + 1
+            s = 0
+            i = 0
+            while i < 100
+              s += f(i)
+              i += 1
+            end
+            s
+            "#,
+        );
+    }
 }

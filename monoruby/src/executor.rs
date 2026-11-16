@@ -110,9 +110,16 @@ pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         eprintln!("monoruby: Rust panic — this is a bug, please report it.");
         prev(info);
-        eprintln!(
-            "monoruby: the panic will now propagate to an `extern \"C\"` boundary and abort the process."
-        );
+        if crate::codegen::compile_panic_contained() {
+            // A compile entry catches it (`codegen::contain_compile_panic`).
+            eprintln!(
+                "monoruby: the JIT compiler panicked: this compile is abandoned and the code keeps running in the interpreter."
+            );
+        } else {
+            eprintln!(
+                "monoruby: the panic will now propagate to an `extern \"C\"` boundary and abort the process."
+            );
+        }
     }));
 }
 

@@ -2673,3 +2673,50 @@ fn local_object_materialized_after_an_inner_loop() {
         "#,
     );
 }
+
+#[test]
+fn elided_receiver_with_an_elided_argument() {
+    // Issue #1980: an elided Range receiver and an elided literal argument
+    // at one call. Each is consumable on its own — the receiver by the
+    // compare in place, the argument by being handed to `Range#cover?`
+    // (a Ruby method) — but not both: the in-place lowering read the
+    // argument's slot, which holds no value, and the compiler panicked.
+    // The call takes both instead.
+    run_test(
+        r#"
+        def a = (1..10).cover?(1..5)
+        def b = (1..10).cover?(0..5)
+        def c = (1..10).cover?([1, 2])
+        def d = (1..10).cover?({a: 1})
+        def e(x) = (1..x).cover?(2..3)
+        def f(x) = (1..x).cover?(2..x)
+        def g(x) = [(1...x).cover?(1..x), (x..).cover?(1..), (..x).cover?(3...4), (1..x).cover?(1...x)]
+        def h(x)
+          n = 0
+          n += 1 if (1..x).cover?(2..3)
+          n += 2 unless (1..10).cover?([x])
+          n
+        end
+        res = []
+        30.times { |i| res << [a, b, c, d, e(i), f(i), g(i), h(i)] }
+        res.uniq
+        "#,
+    );
+}
+
+#[test]
+fn elided_receiver_with_an_elided_argument_in_a_loop() {
+    // The same call as a loop's body (the loop JIT, whose back-edge
+    // analysis walks it first).
+    run_test(
+        r#"
+        res = []
+        i = 0
+        while i < 40
+          res << [(1..10).cover?(1..5), (1..i).cover?(2..3), (1..10).cover?([i]), (i..10).cover?(4..i)]
+          i += 1
+        end
+        res.uniq
+        "#,
+    );
+}

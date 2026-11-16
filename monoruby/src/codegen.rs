@@ -83,6 +83,7 @@ pub(crate) type FiberInvoker = extern "C" fn(
 
 /// The interpreter's code generator, one per [`crate::vm::Vm`].
 pub(crate) use crate::vm::CODEGEN;
+pub(crate) use compiler::compile_panic_contained;
 
 #[cfg(feature = "perf")]
 thread_local! {
