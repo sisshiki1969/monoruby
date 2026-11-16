@@ -373,6 +373,20 @@ fn parse_coding_directive(comment: &str) -> Option<String> {
 /// that is not a comment. Returns `Some(true)`/`Some(false)` for the last
 /// matching directive, or `None` when the pragma is absent.
 fn detect_frozen_string_literal(code: &[u8]) -> Option<bool> {
+    detect_bool_pragma(code, "frozen_string_literal")
+}
+
+/// Detect monoruby's own `# monoruby-hidden-ivars: true` magic comment,
+/// which the runtime's Ruby files use to keep state where CRuby keeps it
+/// in a C struct (see `SourceInfo::hidden_ivars`). Same placement rules
+/// as `frozen_string_literal`.
+fn detect_hidden_ivars(code: &[u8]) -> bool {
+    detect_bool_pragma(code, "monoruby_hidden_ivars") == Some(true)
+}
+
+/// The value of the boolean magic comment `key` in the leading comment
+/// block of `code`, the last one winning.
+fn detect_bool_pragma(code: &[u8], key: &str) -> Option<bool> {
     let mut result = None;
     for (idx, line) in code.split(|&b| b == b'\n').enumerate() {
         // Only ASCII whitespace may precede the `#`.
@@ -389,7 +403,7 @@ fn detect_frozen_string_literal(code: &[u8]) -> Option<bool> {
         match rest.strip_prefix(b"#") {
             Some(comment) => {
                 if let Ok(s) = std::str::from_utf8(comment) {
-                    if let Some(v) = parse_frozen_directive(s) {
+                    if let Some(v) = parse_bool_directive(s, key) {
                         result = Some(v);
                     }
                 }
@@ -401,15 +415,15 @@ fn detect_frozen_string_literal(code: &[u8]) -> Option<bool> {
     result
 }
 
-/// Scan a comment body for `frozen_string_literal` immediately followed
-/// (after optional blanks) by `:` or `=` and a `true`/`false` value.
-fn parse_frozen_directive(comment: &str) -> Option<bool> {
+/// Scan a comment body for `key` (`frozen_string_literal`, say)
+/// immediately followed (after optional blanks) by `:` or `=` and a
+/// `true`/`false` value.
+fn parse_bool_directive(comment: &str, key: &str) -> Option<bool> {
     // CRuby treats `-` and `_` in magic-comment names as equivalent
     // (`# frozen-string-literal: false` appears in the stock
     // `rbconfig.rb`), so normalize before matching.
     let lower = comment.to_ascii_lowercase().replace('-', "_");
     let lb = lower.as_bytes();
-    let key = "frozen_string_literal";
     let mut from = 0;
     while let Some(off) = lower[from..].find(key) {
         let mut j = from + off + key.len();
@@ -519,7 +533,8 @@ fn try_prism_inner(
         )
         .with_absolute_path(absolute_path)
         .with_source_encoding(source_encoding)
-        .with_frozen_string_literal(frozen_string_literal),
+        .with_frozen_string_literal(frozen_string_literal)
+        .with_hidden_ivars(detect_hidden_ivars(code)),
     );
 
     if let Some(diag) = result.errors().next() {
@@ -6643,13 +6658,28 @@ $1
     #[test]
     fn frozen_string_literal_placement_rules() {
         // Case-insensitive key, `:` or `=` separator, true/false values.
-        assert_eq!(parse_frozen_directive(" frozen_string_literal: true"), Some(true));
-        assert_eq!(parse_frozen_directive(" Frozen_String_Literal = FALSE"), Some(false));
+        assert_eq!(
+            parse_bool_directive(" frozen_string_literal: true", "frozen_string_literal"),
+            Some(true)
+        );
+        assert_eq!(
+            parse_bool_directive(" Frozen_String_Literal = FALSE", "frozen_string_literal"),
+            Some(false)
+        );
         // Missing or non-boolean value does not match.
-        assert_eq!(parse_frozen_directive(" frozen_string_literal:"), None);
-        assert_eq!(parse_frozen_directive(" frozen_string_literal: yes"), None);
+        assert_eq!(
+            parse_bool_directive(" frozen_string_literal:", "frozen_string_literal"),
+            None
+        );
+        assert_eq!(
+            parse_bool_directive(" frozen_string_literal: yes", "frozen_string_literal"),
+            None
+        );
         // Key must be followed by `:`/`=`.
-        assert_eq!(parse_frozen_directive(" frozen_string_literal true"), None);
+        assert_eq!(
+            parse_bool_directive(" frozen_string_literal true", "frozen_string_literal"),
+            None
+        );
 
         // First line, or after a shebang.
         assert_eq!(
@@ -6670,6 +6700,18 @@ $1
         );
         // Absent, or after the leading comment block, yields None.
         assert_eq!(detect_frozen_string_literal(b"x = 1\n"), None);
+        // monoruby's own pragma shares the scanner.
+        assert!(detect_hidden_ivars(
+            b"# monoruby-hidden-ivars: true\nx = 1\n"
+        ));
+        assert!(detect_hidden_ivars(
+            b"# frozen_string_literal: true\n# monoruby_hidden_ivars: true\n"
+        ));
+        assert!(!detect_hidden_ivars(b"# monoruby-hidden-ivars: false\n"));
+        assert!(!detect_hidden_ivars(
+            b"x = 1\n# monoruby-hidden-ivars: true\n"
+        ));
+        assert!(!detect_hidden_ivars(b"# hidden-ivars: true\n"));
         assert_eq!(
             detect_frozen_string_literal(b"\n# frozen_string_literal: true\n"),
             None

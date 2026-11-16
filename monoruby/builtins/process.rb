@@ -17,7 +17,7 @@ module Process
       end
       pid = converted
     end
-    Thread::Waiter.new(pid)
+    Process::Waiter.__detach(pid)
   end
 
   class Tms

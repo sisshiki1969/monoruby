@@ -475,17 +475,65 @@ pub(crate) fn struct_keyword_init(store: &Store, class_obj: Module) -> bool {
 }
 
 #[monoruby_builtin]
-fn inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let mut set = std::collections::HashSet::new();
-    // The entry point owns the receiver's recursion mark; nested values
-    // are marked by `inspect_inner` as it walks into them.
-    set.insert(self_val.id());
-    Ok(Value::string_sprintf(render_struct(
-        &globals.store,
-        self_val,
-        &mut set,
-    )?))
+    let store = &globals.store;
+    let class_id = self_val.real_class(store).id();
+    let open = match if store[class_id].get_name().is_some() {
+        qualified_real_class_name(store, class_id)
+    } else {
+        None
+    } {
+        Some(name) => format!("#<struct {name}"),
+        None => "#<struct".to_string(),
+    };
+    let recursive = recursive_struct_label(store, self_val);
+    inspect_members(vm, globals, self_val, open, recursive)
+}
+
+/// `Struct#inspect` and `Data#inspect` (CRuby's `inspect_struct`):
+/// `open`, then each member as `name=value` with the value through
+/// `rb_inspect` — its own `#inspect`, dispatched — and `recursive` in
+/// place of the whole when the value is reached again from one of its
+/// own members.
+pub(super) fn inspect_members(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    open: String,
+    recursive: String,
+) -> Result<Value> {
+    use crate::builtins::encoding::{InspectBuf, inspect_resenc, rb_inspect_in};
+    let class_id = self_val.real_class(&globals.store).id();
+    let members: Vec<IdentId> = get_members(&globals.store, globals.store[class_id].get_module())?
+        .iter()
+        .map(|m| m.try_symbol().unwrap())
+        .collect();
+    crate::value::exec_recursive(
+        self_val.id(),
+        || {
+            let resenc = inspect_resenc(globals);
+            let mut buf = InspectBuf::new("");
+            buf.append_str(&globals.store, &open)?;
+            for (i, name) in members.iter().enumerate() {
+                buf.cat(if i == 0 { " " } else { ", " });
+                buf.append_str(&globals.store, &member_label(&globals.store, *name))?;
+                buf.cat("=");
+                // Read when it is shown: a member's `#inspect` may have
+                // assigned the ones after it.
+                match self_val.try_struct().and_then(|s| s.try_get(i)) {
+                    Some(v) => {
+                        let s = rb_inspect_in(vm, globals, v, resenc)?;
+                        buf.append(&globals.store, s.as_rstring_inner())?;
+                    }
+                    None => buf.cat("nil"),
+                }
+            }
+            buf.cat(">");
+            Ok(buf.into_value())
+        },
+        Value::string_sprintf(recursive),
+    )
 }
 
 /// Render a `Struct` instance as `#inspect` does. Shared with the
@@ -532,10 +580,27 @@ pub(crate) fn render_struct(
         };
         inspect.push_str(if first { " " } else { ", " });
         first = false;
-        inspect.push_str(&format!("{name:?}={v}"));
+        inspect.push_str(&format!("{}={v}", member_label(store, name)));
     }
     inspect.push('>');
     Ok(inspect)
+}
+
+/// A member's name as `inspect` shows it: bare when it could be a local
+/// variable or a constant, as a Symbol literal otherwise (`:"a b"`,
+/// `:c?`) — CRuby's `rb_is_local_id(id) || rb_is_const_id(id)`.
+pub(super) fn member_label(store: &Store, name: IdentId) -> String {
+    let s = name.get_name();
+    let mut chars = s.chars();
+    let plain = chars
+        .next()
+        .is_some_and(|c| c == '_' || c.is_alphabetic() || !c.is_ascii())
+        && chars.all(|c| c == '_' || c.is_alphanumeric() || !c.is_ascii());
+    if plain {
+        s
+    } else {
+        Value::symbol(name).inspect(store)
+    }
 }
 
 /// The label a self-referential `Struct` renders as: `#<struct S:...>`,

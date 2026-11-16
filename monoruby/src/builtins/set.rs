@@ -23,8 +23,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SET_CLASS, "delete?", delete_q, 1);
     globals.define_builtin_func(SET_CLASS, "each", each, 0);
     globals.define_builtin_func(SET_CLASS, "to_a", to_a, 0);
-    // inspect/to_s dispatch to RValue::hash_inspect (value/rvalue.rs) via a shared
-    // FuncId so that `Set#to_s` and `Set#inspect` compare equal as Method objects.
+    // One FuncId, so that `Set#to_s` and `Set#inspect` compare equal as
+    // Method objects.
     globals.define_builtin_funcs(SET_CLASS, "inspect", &["to_s"], set_inspect, 0);
     globals.define_builtin_funcs_with_kw(SET_CLASS, "dup", &["clone"], dup, 0, 1, false, &[], false);
     globals.define_builtin_func_rest(SET_CLASS, "merge", merge);
@@ -409,21 +409,86 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Set/i/inspect.html]
 ///
-/// Delegates to the shared `Value::inspect` path (which dispatches to
-/// `RValue::hash_inspect` for HASH-typed values and handles cycle
-/// detection). Registered as an alias pair so the two method names
-/// share a single `FuncId` and compare equal as `Method` objects.
+/// CRuby's `set_inspect`: every element through `rb_inspect` — its own
+/// `#inspect`, dispatched — under `rb_exec_recursive`, so a set reached
+/// again from one of its own elements is `Set[...]`. A subclass answers
+/// in the older `#<MySet: {…}>` shape, as `Set::SubclassCompatible#inspect`
+/// (which CRuby mixes into every subclass of `Set`) does.
+///
+/// Registered as an alias pair so the two method names share a single
+/// `FuncId` and compare equal as `Method` objects.
 #[monoruby_builtin]
 fn set_inspect(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let s = lfp.self_val().inspect(&globals.store);
-    // CRuby's `set_i_inspect` builds this with `rb_sprintf`, so an
-    // all-ASCII rendering comes back ASCII-8BIT (#1494).
-    Ok(Value::string_sprintf(s))
+    use crate::builtins::encoding::{InspectBuf, inspect_resenc, rb_inspect_in};
+    let self_val = lfp.self_val();
+    let class = self_val.real_class(&globals.store).id();
+    let name = globals.store.get_class_name(class);
+    let core = class == SET_CLASS;
+    let (open, close) = if core {
+        (format!("{name}["), "]")
+    } else {
+        (format!("#<{name}: {{"), "}>")
+    };
+    // `rb_sprintf` (the core class) leaves an all-ASCII rendering
+    // ASCII-8BIT (#1494); `Kernel#sprintf` in subclass_compatible.rb
+    // leaves it in the source encoding.
+    let finish = |buf: InspectBuf| {
+        let v = buf.into_value();
+        if core {
+            return v;
+        }
+        let inner = v.as_rstring_inner();
+        match inner.encoding() {
+            Encoding::Ascii8 | Encoding::UsAscii if inner.as_bytes().is_ascii() => {
+                Value::string_from_inner(RStringInner::from_encoding(
+                    inner.as_bytes(),
+                    Encoding::UTF8,
+                ))
+            }
+            _ => v,
+        }
+    };
+    // The class name may be anything; only the punctuation is ASCII.
+    let start = |store: &Store| -> Result<InspectBuf> {
+        let mut buf = InspectBuf::new("");
+        buf.append_str(store, &open)?;
+        Ok(buf)
+    };
+    let mut recursive = start(&globals.store)?;
+    recursive.cat("...");
+    recursive.cat(close);
+    let recursive = finish(recursive);
+    // The elements are the ones the set held when `inspect` began,
+    // whatever an `#inspect` along the way removes — so they are rooted
+    // here rather than through the set.
+    let keys = set_keys(self_val);
+    vm.with_temp_scope(|vm| {
+        for k in &keys {
+            vm.temp_push(*k);
+        }
+        crate::value::exec_recursive(
+            self_val.id(),
+            || {
+                let resenc = inspect_resenc(globals);
+                let mut buf = start(&globals.store)?;
+                for (i, k) in keys.iter().enumerate() {
+                    if i > 0 {
+                        buf.cat(", ");
+                    }
+                    let s = rb_inspect_in(vm, globals, *k, resenc)?;
+                    buf.append(&globals.store, s.as_rstring_inner())?;
+                }
+                buf.cat(close);
+                Ok(finish(buf))
+            },
+            recursive,
+        )
+    })
 }
 
 ///

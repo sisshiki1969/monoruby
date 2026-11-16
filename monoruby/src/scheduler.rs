@@ -1991,7 +1991,7 @@ fn queue_exception_report(globals: &mut Globals, thread: Value) {
             }
         }
     };
-    let ivar = IdentId::get_id("@report_on_exception");
+    let ivar = IdentId::get_id("/__report_on_exception");
     // An ivar explicitly set to nil counts as unset (the Ruby-side
     // accessors treat nil as "fall back to the default").
     let report = globals
@@ -2017,12 +2017,12 @@ fn queue_exception_report(globals: &mut Globals, thread: Value) {
     // location) must round-trip.
     let name = globals
         .store
-        .get_ivar(thread, IdentId::get_id("@name"))
+        .get_ivar(thread, IdentId::get_id("/__name"))
         .and_then(|v| v.is_str().map(|s| format!("@{s}")))
         .unwrap_or_default();
     let location = globals
         .store
-        .get_ivar(thread, IdentId::get_id("@__spawn_location"))
+        .get_ivar(thread, IdentId::get_id("/__spawn_location"))
         .and_then(|v| v.is_str().map(|s| format!(" {s}")))
         .unwrap_or_default();
     // `object_id << 1`, exactly as the Ruby-side `Thread#to_s` prints
@@ -2159,7 +2159,7 @@ fn forward_exception_to_main(globals: &mut Globals, thread: Value) -> bool {
         return false;
     };
     let forward = matches!(err.kind(), MonorubyErrKind::SystemExit(_)) || {
-        let ivar = IdentId::get_id("@abort_on_exception");
+        let ivar = IdentId::get_id("/__abort_on_exception");
         let per_thread = globals
             .store
             .get_ivar(thread, ivar)

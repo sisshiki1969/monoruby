@@ -3629,7 +3629,8 @@ impl Executor {
         method_name: IdentId,
         visi: Visibility,
     ) -> Result<IdentId> {
-        let (name, func_id) = globals.define_attr_reader(class_id, method_name, visi);
+        let ivar_name = self.attr_ivar_name(&globals.store, method_name);
+        let (name, func_id) = globals.define_attr_reader_of(class_id, method_name, ivar_name, visi);
         self.record_attr_def_site(globals, func_id);
         self.invoke_method_added(globals, class_id, name, None)?;
         Ok(name)
@@ -3643,10 +3644,28 @@ impl Executor {
         method_name: IdentId,
         visi: Visibility,
     ) -> Result<IdentId> {
-        let (name, func_id) = globals.define_attr_writer(class_id, method_name, visi);
+        let ivar_name = self.attr_ivar_name(&globals.store, method_name);
+        let (name, func_id) = globals.define_attr_writer_of(class_id, method_name, ivar_name, visi);
         self.record_attr_def_site(globals, func_id);
         self.invoke_method_added(globals, class_id, name, None)?;
         Ok(name)
+    }
+
+    /// The instance variable behind the attribute *method_name* an
+    /// `attr_*` call is defining: `@name` — except that in a file with
+    /// the `# monoruby-hidden-ivars: true` magic comment, `attr_reader
+    /// :__name` is over the hidden `/__name`, the variable the file's
+    /// own `@__name` names (`BytecodeGen::ivar_ident`).
+    fn attr_ivar_name(&self, store: &Store, method_name: IdentId) -> IdentId {
+        if method_name.name_starts_with(b"__")
+            && self
+                .nearest_caller_site(store)
+                .is_some_and(|(sourceinfo, _)| sourceinfo.hidden_ivars)
+        {
+            IdentId::get_id(&format!("/{}", method_name.get_name()))
+        } else {
+            IdentId::add_ivar_prefix(method_name)
+        }
     }
 
     /// Remember where the `attr_*` call that defined *func_id* was

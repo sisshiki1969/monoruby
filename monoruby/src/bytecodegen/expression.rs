@@ -306,7 +306,7 @@ impl<'a> BytecodeGen<'a> {
                 self.emit_load_const(dst.into(), base, toplevel, name, prefix, loc);
             }
             NodeKind::InstanceVar(name) => {
-                let name = self.ident(&name);
+                let name = self.ivar_ident(&name);
                 self.emit_load_ivar(dst.into(), name, loc);
             }
             NodeKind::GlobalVar(name) => {

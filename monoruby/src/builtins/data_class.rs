@@ -173,17 +173,19 @@ fn deconstruct(
 /// anonymous class — matching CRuby.
 #[monoruby_builtin]
 fn data_inspect(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     let store = &globals.store;
-    let mut set = std::collections::HashSet::new();
-    set.insert(self_val.id());
-    let s = render_data(store, self_val, &mut set)?;
-    Ok(Value::string_sprintf(s))
+    let open = match data_class_label(store, self_val.real_class(store).id()) {
+        Some(name) => format!("#<data {name}"),
+        None => "#<data".to_string(),
+    };
+    let recursive = recursive_struct_label(store, self_val);
+    super::struct_class::inspect_members(vm, globals, self_val, open, recursive)
 }
 
 /// The label a self-referential `STRUCT`-typed value renders as:
@@ -256,7 +258,10 @@ pub(crate) fn render_data(
         };
         out.push_str(if first { " " } else { ", " });
         first = false;
-        out.push_str(&format!("{name:?}={rendered}"));
+        out.push_str(&format!(
+            "{}={rendered}",
+            super::struct_class::member_label(store, name)
+        ));
     }
     out.push('>');
     Ok(out)

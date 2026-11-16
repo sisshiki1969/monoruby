@@ -946,6 +946,18 @@ feature have been removed — backend selection is purely by `target_arch`.
    - `globals.define_builtin_func_rest(class_id, "method_name", method_name)`
    - `globals.define_builtin_class_func(class_id, "method_name", method_name, arity)`
 
+### State of a built-in class written in Ruby
+
+A class that is C in CRuby and Ruby here (`Thread::Mutex`, `Thread::Queue`,
+`Monitor`, …) keeps its state in **hidden instance variables**, not
+ordinary ones: put `# monoruby-hidden-ivars: true` in the file's leading
+comment block and spell the variable `@__name` (and its accessor
+`attr_accessor :__name`). Such a slot is invisible to `inspect`,
+`instance_variables`, `Marshal` and `instance_variable_get`, cannot
+collide with a subclass's `@name`, and is writable on a frozen object —
+what a field of the C struct is in CRuby. The Rust side reads it as
+`IdentId::get_id("/__name")`. See `doc/hidden_ivars.md`.
+
 ### Safety Conventions
 
 - `unsafe` blocks for raw pointer operations are expected in the VM, JIT, and frame code

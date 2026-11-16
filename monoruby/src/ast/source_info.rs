@@ -116,6 +116,11 @@ pub struct SourceInfo {
     /// default). When `Some(true)`, every string literal in the file is a
     /// shared, frozen, deduplicated object.
     pub frozen_string_literal: Option<bool>,
+    /// Whether the file carries the `# monoruby-hidden-ivars: true`
+    /// magic comment: an instance variable it spells `@__name` is then a
+    /// *hidden* one (`/__name`), which no Ruby program can name and no
+    /// reflection lists. See `doc/hidden_ivars.md`.
+    pub hidden_ivars: bool,
 }
 
 impl Default for SourceInfo {
@@ -141,6 +146,7 @@ impl SourceInfo {
             line_offset: 0,
             source_encoding: None,
             frozen_string_literal: None,
+            hidden_ivars: false,
         }
     }
 
@@ -167,6 +173,7 @@ impl SourceInfo {
             line_offset,
             source_encoding: None,
             frozen_string_literal: None,
+            hidden_ivars: false,
         }
     }
 
@@ -181,6 +188,12 @@ impl SourceInfo {
     /// Builder: attach the `# frozen_string_literal:` magic-comment value.
     pub fn with_frozen_string_literal(mut self, frozen: Option<bool>) -> Self {
         self.frozen_string_literal = frozen;
+        self
+    }
+
+    /// Builder: attach the `# monoruby-hidden-ivars:` magic-comment value.
+    pub fn with_hidden_ivars(mut self, hidden: bool) -> Self {
+        self.hidden_ivars = hidden;
         self
     }
 
