@@ -26,6 +26,9 @@
 # primitive call per scan.
 
 class StringScanner
+  # A C struct in CRuby, with no `_dump_data`: `Marshal.dump` refuses it.
+  @__no_dump_data = true
+
   # The strscan version CRuby 4.0.2 ships (rexml 3.4 branches on it).
   Version = "3.1.6"
 

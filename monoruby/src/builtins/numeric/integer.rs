@@ -77,7 +77,18 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_inline_binary_funcs(
         INTEGER_CLASS,
         "==",
-        &["==="],
+        &[],
+        eq,
+        integer_cmp_gen(CmpKind::Eq),
+        1,
+    );
+    // `Integer#===` is a method of its own over the same function, as in
+    // CRuby (`rb_define_method(rb_cInteger, "===", rb_int_equal, 1)`): a
+    // backtrace frame is labelled with the function's own name.
+    globals.define_builtin_inline_binary_funcs(
+        INTEGER_CLASS,
+        "===",
+        &[],
         eq,
         integer_cmp_gen(CmpKind::Eq),
         1,

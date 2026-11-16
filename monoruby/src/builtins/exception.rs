@@ -121,6 +121,12 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func(NO_METHOD_ERROR_CLASS, "args", nomethoderr_args, 0);
+    globals.define_builtin_func(
+        NO_METHOD_ERROR_CLASS,
+        "private_call?",
+        nomethoderr_private_call,
+        0,
+    );
 
     let runtimeerr =
         globals.define_builtin_exception_class("RuntimeError", RUNTIME_ERROR_CLASS, standarderr);
@@ -200,7 +206,7 @@ fn uncaught_throw_tag(
 ) -> Result<Value> {
     Ok(globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("/tag"))
+        .get_ivar(lfp.self_val(), IdentId::get_id("/__tag"))
         .unwrap_or_default())
 }
 
@@ -215,7 +221,7 @@ fn uncaught_throw_value(
 ) -> Result<Value> {
     Ok(globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("/value"))
+        .get_ivar(lfp.self_val(), IdentId::get_id("/__value"))
         .unwrap_or_default())
 }
 
@@ -395,6 +401,14 @@ fn nomethoderr_initialize(
             .store
             .set_ivar(self_, IdentId::get_id("/args"), args)?;
     }
+    // `priv`: whether the failed call was written without a receiver.
+    if let Some(v) = lfp.try_arg(3) {
+        globals.store.set_ivar(
+            self_,
+            IdentId::get_id("/private_call"),
+            Value::bool(v.as_bool()),
+        )?;
+    }
     // `receiver:` keyword (slot 4).
     if let Some(v) = lfp.try_arg(4)
         && !v.is_nil()
@@ -402,6 +416,21 @@ fn nomethoderr_initialize(
         globals.store.set_ivar(self_, IdentId::get_id("/receiver"), v)?;
     }
     Ok(Value::nil())
+}
+
+/// `NoMethodError#private_call?` — whether the failed call was written
+/// without a receiver, as `NoMethodError.new`'s fourth argument says.
+#[monoruby_builtin]
+fn nomethoderr_private_call(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(globals
+        .store
+        .get_ivar(lfp.self_val(), IdentId::get_id("/private_call"))
+        .unwrap_or(Value::bool(false)))
 }
 
 /// `NoMethodError#args` — the arguments of the failed call (nil when
@@ -477,14 +506,12 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // the path taken since `Exception.new` routes through `Class#new`'s
     // full dispatch. The positional-hash arms above remain for internal
     // Rust-side callers that flatten keywords into the argument array.
-    if let Some(v) = lfp.try_arg(2)
-        && !v.is_nil()
-    {
+    // A keyword that was given counts even when it is nil (`key: nil`
+    // makes `#key` nil; no `key:` makes it raise).
+    if let Some(v) = lfp.try_arg(2) {
         globals.store.set_ivar(self_, IdentId::get_id("/receiver"), v)?;
     }
-    if let Some(v) = lfp.try_arg(3)
-        && !v.is_nil()
-    {
+    if let Some(v) = lfp.try_arg(3) {
         globals.store.set_ivar(self_, IdentId::get_id("/key"), v)?;
     }
     Ok(Value::nil())
@@ -782,12 +809,15 @@ fn keyerror_receiver(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let self_val = lfp.self_val();
-    let v = globals
+    // CRuby raises ArgumentError when the KeyError carries no receiver
+    // (`KeyError.new("x").receiver`), rather than returning nil.
+    match globals
         .store
-        .get_ivar(self_val, IdentId::get_id("/receiver"))
-        .unwrap_or_default();
-    Ok(v)
+        .get_ivar(lfp.self_val(), IdentId::get_id("/receiver"))
+    {
+        Some(v) => Ok(v),
+        None => Err(MonorubyErr::argumenterr("no receiver is available")),
+    }
 }
 
 /// ### KeyError#key
@@ -798,12 +828,10 @@ fn keyerror_key(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let self_val = lfp.self_val();
-    let v = globals
-        .store
-        .get_ivar(self_val, IdentId::get_id("/key"))
-        .unwrap_or_default();
-    Ok(v)
+    match globals.store.get_ivar(lfp.self_val(), IdentId::get_id("/key")) {
+        Some(v) => Ok(v),
+        None => Err(MonorubyErr::argumenterr("no key is available")),
+    }
 }
 
 ///

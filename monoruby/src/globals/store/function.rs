@@ -1180,6 +1180,15 @@ impl FuncInfo {
         self.data.stack_offset()
     }*/
 
+    /// The address of a builtin method's function; `None` for anything
+    /// else.
+    pub(crate) fn native_address(&self) -> Option<u64> {
+        match &self.kind {
+            FuncKind::Builtin { abs_address } => Some(*abs_address),
+            _ => None,
+        }
+    }
+
     pub(crate) fn name(&self) -> Option<IdentId> {
         self.ext.name
     }

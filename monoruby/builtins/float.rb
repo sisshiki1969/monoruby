@@ -65,7 +65,6 @@ end
 # aliased original must already be defined (natively or above) by now.
 
 class Float
-  alias === ==
   alias modulo %
   alias quo fdiv
 end

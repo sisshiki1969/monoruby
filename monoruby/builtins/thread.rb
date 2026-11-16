@@ -1111,6 +1111,9 @@ class Thread
     end
 
     class Location
+      # A C struct in CRuby, with no `_dump_data`: `Marshal.dump` refuses it.
+      @__no_dump_data = true
+
       # Structured form (from `Kernel.__caller_frames`):
       # `[to_s, path, absolute_path, lineno, label]` — carries the
       # load-time canonical absolute path. String form (from raw
@@ -1189,6 +1192,9 @@ SizedQueue = Thread::SizedQueue
 # their CRuby role. The timeout gem needs `Thread#group`,
 # `ThreadGroup#enclosed?` and `ThreadGroup::Default.add`.
 class ThreadGroup
+  # A C struct in CRuby, with no `_dump_data`: `Marshal.dump` refuses it.
+  @__no_dump_data = true
+
   def initialize
     @__enclosed = false
   end

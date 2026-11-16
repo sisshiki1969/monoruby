@@ -893,6 +893,7 @@ impl<'a> BytecodeGen<'a> {
             send_direct_name: _,
             class_new_init: _,
             yield_expanded: _,
+            newarray_recv,
         } = callsite;
 
         let args = self.slot_id(&args);
@@ -922,7 +923,7 @@ impl<'a> BytecodeGen<'a> {
         } else {
             (SlotId(0), indexmap::IndexMap::default(), vec![], vec![])
         };
-        Ok(self.store.new_callsite(
+        let callid = self.store.new_callsite(
             name,
             bc_pos,
             pos_num,
@@ -939,7 +940,11 @@ impl<'a> BytecodeGen<'a> {
             forwarding,
             bypass_visibility,
             vcall,
-        ))
+        );
+        if newarray_recv {
+            self.store.set_newarray_recv(callid);
+        }
+        Ok(callid)
     }
 }
 

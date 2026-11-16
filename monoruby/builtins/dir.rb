@@ -8,6 +8,8 @@
 # the methods that CRuby guards with `rb_check_frozen` (everything that
 # goes through `GetDIR`) check for themselves.
 class Dir
+  # A C struct in CRuby, with no `_dump_data`: `Marshal.dump` refuses it.
+  @__no_dump_data = true
   include Enumerable
 
   def self.open(path, encoding: nil, &block)

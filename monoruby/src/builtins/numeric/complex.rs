@@ -78,18 +78,85 @@ fn complex_eq(
     other: Value,
 ) -> Result<bool> {
     let lhs = self_val.as_complex();
+    let (re, im) = (lhs.re().get(), lhs.im().get());
     if let Some(rhs) = other.try_complex() {
-        return Ok(&*lhs == rhs);
+        let (rhs_re, rhs_im) = (rhs.re().get(), rhs.im().get());
+        if [re, im, rhs_re, rhs_im].iter().all(|v| is_builtin_real(*v)) {
+            return Ok(&*lhs == rhs);
+        }
+        // A part that is a user-defined Numeric is asked (`f_eqeq_p`).
+        return Ok(rb_equal(vm, globals, re, rhs_re)? && rb_equal(vm, globals, im, rhs_im)?);
     }
     if is_real_like_numeric(vm, globals, other)? {
-        if !lhs.im().is_zero() {
-            return Ok(false);
-        }
-        let r = vm.eq_values_funcall(globals, lhs.re().get(), other)?;
-        return Ok(r.as_bool());
+        return Ok(rb_equal(vm, globals, re, other)? && f_zero_p(vm, globals, im)?);
     }
     let r = vm.eq_values_funcall(globals, other, self_val)?;
     Ok(r.as_bool())
+}
+
+/// `self` as an error message shows it: through `Complex#to_s`, which
+/// asks a part that is a user-defined Numeric for its own `to_s`.
+fn message_to_s(vm: &mut Executor, globals: &mut Globals, self_val: Value) -> Result<String> {
+    let s = vm.invoke_method_inner(globals, IdentId::TO_S, self_val, &[], None, None)?;
+    Ok(match s.is_rstring() {
+        Some(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
+        None => self_val.to_s(&globals.store),
+    })
+}
+
+/// CRuby's `rb_equal`: the same object is equal without being asked.
+fn rb_equal(vm: &mut Executor, globals: &mut Globals, x: Value, y: Value) -> Result<bool> {
+    Ok(x.id() == y.id() || vm.eq_values_funcall(globals, x, y)?.as_bool())
+}
+
+/// CRuby's `rb_num_coerce_cmp(x, y, <=>)`: `y.coerce(x)` supplies the two
+/// operands; nil when `y` cannot coerce.
+fn num_coerce_cmp(vm: &mut Executor, globals: &mut Globals, x: Value, y: Value) -> Result<Value> {
+    let coerce = IdentId::get_id("coerce");
+    if globals.check_method(y, coerce).is_none() {
+        return Ok(Value::nil());
+    }
+    let pair = vm.invoke_method_inner(globals, coerce, y, &[x], None, None)?;
+    if pair.is_nil() {
+        return Ok(Value::nil());
+    }
+    match pair.try_array_ty() {
+        Some(ary) if ary.len() == 2 => {
+            let (a, b) = (ary[0], ary[1]);
+            vm.invoke_method_inner(globals, IdentId::_CMP, a, &[b], None, None)
+        }
+        _ => Err(MonorubyErr::typeerr("coerce must return [x, y]")),
+    }
+}
+
+/// Integer, Float or Rational: a part of a Complex whose value is read
+/// without calling a method.
+fn is_builtin_real(v: Value) -> bool {
+    v.try_fixnum().is_some()
+        || v.try_float().is_some()
+        || matches!(v.ty(), Some(ObjTy::BIGNUM | ObjTy::RATIONAL))
+}
+
+/// CRuby's `f_zero_p`: a part that is a user-defined Numeric is asked
+/// `== 0`.
+fn f_zero_p(vm: &mut Executor, globals: &mut Globals, x: Value) -> Result<bool> {
+    Ok(match x.unpack() {
+        RV::Fixnum(i) => i == 0,
+        RV::BigInt(b) => b.is_zero(),
+        RV::Float(f) => f == 0.0,
+        _ => {
+            if let Some(r) = x.try_rational() {
+                r.is_zero()
+            } else {
+                rb_equal(vm, globals, x, Value::integer(0))?
+            }
+        }
+    })
+}
+
+/// CRuby's `k_exact_zero_p`: zero and not a Float.
+fn k_exact_zero_p(vm: &mut Executor, globals: &mut Globals, x: Value) -> Result<bool> {
+    Ok(!matches!(x.unpack(), RV::Float(_)) && f_zero_p(vm, globals, x)?)
 }
 
 ///
@@ -278,6 +345,10 @@ fn is_real_like_numeric(
     globals: &mut Globals,
     other: Value,
 ) -> Result<bool> {
+    // `f_real_p`: an Integer, Float or Rational is not asked.
+    if is_builtin_real(other) {
+        return Ok(true);
+    }
     // Must be a Numeric subclass.
     let numeric_id = IdentId::get_id("Numeric");
     let numeric = match globals.store.get_constant_noautoload(OBJECT_CLASS, numeric_id) {
@@ -387,28 +458,29 @@ fn infinite_q(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// argument is not a real Numeric. Otherwise compares the real parts.
 #[monoruby_builtin]
 fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // `nucomp_cmp`.
     let self_val = lfp.self_val();
-    let lhs = self_val.as_complex();
     let other = lfp.arg(0);
+    if !is_builtin_real(other) && !other.is_kind_of(&globals.store, NUMERIC_CLASS) {
+        return num_coerce_cmp(vm, globals, self_val, other);
+    }
+    let lhs = self_val.as_complex();
+    let (lhs_re, lhs_im) = (lhs.re().get(), lhs.im().get());
     // If self has an imaginary part, no ordering exists.
-    if !lhs.im().is_zero() {
+    if !f_zero_p(vm, globals, lhs_im)? {
         return Ok(Value::nil());
     }
-    let lhs_re = lhs.re().get();
-    // Complex-like: unwrap to its real part if imaginary is zero.
     if let Some(rhs) = other.try_complex() {
-        if !rhs.im().is_zero() {
+        let (rhs_re, rhs_im) = (rhs.re().get(), rhs.im().get());
+        if !f_zero_p(vm, globals, rhs_im)? {
             return Ok(Value::nil());
         }
-        let cmp_id = IdentId::_CMP;
-        return vm.invoke_method_inner(globals, cmp_id, lhs_re, &[rhs.re().get()], None, None);
+        return vm.invoke_method_inner(globals, IdentId::_CMP, lhs_re, &[rhs_re], None, None);
     }
-    match other.unpack() {
-        RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) => {
-            let cmp_id = IdentId::_CMP;
-            vm.invoke_method_inner(globals, cmp_id, lhs_re, &[other], None, None)
-        }
-        _ => Ok(Value::nil()),
+    if is_real_like_numeric(vm, globals, other)? {
+        vm.invoke_method_inner(globals, IdentId::_CMP, lhs_re, &[other], None, None)
+    } else {
+        num_coerce_cmp(vm, globals, lhs_re, other)
     }
 }
 
@@ -557,24 +629,10 @@ fn complex_to_real(
     // Numeric subclass whose `==` returns true for 0. Float 0.0 is NOT
     // allowed (CRuby raises RangeError in that case).
     let im = c.im().get();
-    let is_exact_zero = match im.unpack() {
-        RV::Fixnum(i) => i == 0,
-        RV::BigInt(b) => b.is_zero(),
-        RV::Float(_) => false,
-        _ => {
-            if let Some(r) = im.try_rational() {
-                r.is_zero()
-            } else {
-                let res = vm.eq_values_funcall(globals, im, Value::integer(0))?;
-                res.as_bool()
-            }
-        }
-    };
-    if !is_exact_zero {
+    if !k_exact_zero_p(vm, globals, im)? {
+        let this = message_to_s(vm, globals, self_val)?;
         return Err(MonorubyErr::rangeerr(format!(
-            "can't convert {} into {}",
-            self_val.to_s(&globals.store),
-            error_label
+            "can't convert {this} into {error_label}"
         )));
     }
     // Dispatch to the real part's coercion method.
@@ -599,23 +657,10 @@ fn to_r(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let self_val = lfp.self_val();
     let c = self_val.as_complex();
     let im = c.im().get();
-    let is_zero = match im.unpack() {
-        RV::Fixnum(i) => i == 0,
-        RV::BigInt(b) => b.is_zero(),
-        RV::Float(f) => f == 0.0,
-        _ => {
-            if let Some(r) = im.try_rational() {
-                r.is_zero()
-            } else {
-                let res = vm.eq_values_funcall(globals, im, Value::integer(0))?;
-                res.as_bool()
-            }
-        }
-    };
-    if !is_zero {
+    if !f_zero_p(vm, globals, im)? {
+        let this = message_to_s(vm, globals, self_val)?;
         return Err(MonorubyErr::rangeerr(format!(
-            "can't convert {} into Rational",
-            self_val.to_s(&globals.store)
+            "can't convert {this} into Rational"
         )));
     }
     let to_r_id = IdentId::get_id("to_r");
@@ -920,22 +965,12 @@ fn rationalize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
     let self_val = lfp.self_val();
     let c = self_val.as_complex();
     let im = c.im().get();
-    // Only Integer 0 or Rational 0 counts as "zero" for rationalize.
-    let is_exact_zero = match im.unpack() {
-        RV::Fixnum(i) => i == 0,
-        RV::BigInt(b) => b.is_zero(),
-        _ => {
-            if let Some(r) = im.try_rational() {
-                r.is_zero()
-            } else {
-                false
-            }
-        }
-    };
-    if !is_exact_zero {
+    // An exact zero: Integer 0, Rational 0, or a user-defined Numeric
+    // that answers `== 0` (`k_exact_zero_p`). Float 0.0 is not.
+    if !k_exact_zero_p(vm, globals, im)? {
+        let this = message_to_s(vm, globals, self_val)?;
         return Err(MonorubyErr::rangeerr(format!(
-            "can't convert {} into Rational",
-            self_val.to_s(&globals.store)
+            "can't convert {this} into Rational"
         )));
     }
     let rationalize_id = IdentId::get_id("rationalize");

@@ -74,7 +74,11 @@ callee's `RecvEscape`:
 - `elements: Some(op)` — an allocation-free lowering over the object's
   elements, for a `Slots` or `CallerSlots` object and an argument-less,
   block-less call. `Min` / `Max` compare the elements in their slots
-  (`ArrayMinMax`, over the frame's own slots or the caller's window);
+  (`ArrayMinMax`, over the frame's own slots or the caller's window), in
+  the order the call it stands for would: `best <=> v` for `Array#min`,
+  `v <=> best` when the call is written on the literal itself
+  (`[a, b].max`, CRuby's `opt_newarray_send`; `CallSiteInfo::newarray_recv`,
+  `MinMaxOp`) — which is the operand a failed comparison names (#2007);
   `Size`, `Empty` are answered at compile time; `First`, `Last` are a copy
   of one element slot (`LoadCallerSlot` for a handed-over object);
   `ArrayIndex` (`%d = %base[%idx]`) is that same copy for a compile-time
