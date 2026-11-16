@@ -1478,25 +1478,31 @@ impl Value {
         // and leave it mutable inside the Hash.) Only a String proper:
         // an instance of a subclass is stored as it is
         // (`RHASH_STRING_KEY_P`).
-        if self.is_rstring_inner().is_some()
-            && !self.is_frozen()
-            && self.real_class(store).id() == STRING_CLASS
-        {
-            let inner = self.as_rstring_inner().clone();
-            let mut dup = Value::string_from_inner(inner);
-            // `rb_hash_key_str`: the copy of a bare String — no singleton
-            // class, no instance variables — is its fstring, which
-            // refuses a singleton class of its own; any other key gets
-            // a plain frozen copy (`rb_str_new_frozen`).
-            if self.class() == STRING_CLASS && !self.rvalue().has_var_table() {
-                dup.set_fstring();
-            } else {
-                dup.set_frozen();
-            }
-            dup
-        } else {
-            self
+        let Some(rv) = self.try_rvalue() else {
+            return self;
+        };
+        if rv.ty() != ObjTy::STRING || rv.is_frozen() {
+            return self;
         }
+        // The usual key has no singleton class: its class word says
+        // String without a walk to the real class.
+        let bare = rv.class() == STRING_CLASS;
+        if !bare && rv.real_class(store).id() != STRING_CLASS {
+            return self;
+        }
+        // SAFETY: the type check above ensures this RValue is a String.
+        let inner = unsafe { rv.as_rstring() }.clone();
+        let mut dup = Value::string_from_inner(inner);
+        // `rb_hash_key_str`: the copy of a bare String — no singleton
+        // class, no instance variables — is its fstring, which refuses
+        // a singleton class of its own; any other key gets a plain
+        // frozen copy (`rb_str_new_frozen`).
+        if bare && !rv.has_var_table() {
+            dup.set_fstring();
+        } else {
+            dup.set_frozen();
+        }
+        dup
     }
 
     pub fn array(ary: ArrayInner) -> Self {

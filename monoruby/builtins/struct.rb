@@ -66,14 +66,24 @@ class Struct
         raise NameError.__showing("no member '", key, "' in struct", self) unless i
         return __slot_get(i)
       end
+      key = __num2long(key)
     end
-    key = __num2long(key)
     i = key
     i += size if i < 0
-    raise IndexError, "offset #{key} too small for struct(size:#{size})" if i < 0
-    raise IndexError, "offset #{key} too large for struct(size:#{size})" if i >= size
+    __invalid_struct_pos(key, i) if i < 0 || i >= size
     __slot_get(i)
   end
+
+  # An integer index outside the struct. The index is an Integer here but
+  # not necessarily a C long: a Bignum is NUM2LONG's RangeError, not an
+  # offset (kept out of `[]` / `[]=`, whose in-range path then never
+  # calls the conversion for an Integer).
+  def __invalid_struct_pos(key, i)
+    __num2long(key)
+    raise IndexError, "offset #{key} too small for struct(size:#{size})" if i < 0
+    raise IndexError, "offset #{key} too large for struct(size:#{size})"
+  end
+  private :__invalid_struct_pos
 
   def []=(key, value)
     unless key.is_a?(Integer)
@@ -83,12 +93,11 @@ class Struct
         raise FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self) if frozen?
         return __slot_set(i, value)
       end
+      key = __num2long(key)
     end
-    key = __num2long(key)
     i = key
     i += size if i < 0
-    raise IndexError, "offset #{key} too small for struct(size:#{size})" if i < 0
-    raise IndexError, "offset #{key} too large for struct(size:#{size})" if i >= size
+    __invalid_struct_pos(key, i) if i < 0 || i >= size
     raise FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self) if frozen?
     __slot_set(i, value)
   end

@@ -102,8 +102,9 @@ module Kernel
     raise ArgumentError, "array size too big" if n > (by ? 0x01ff_ffff_ffff_ffff : 0x03ff_ffff_ffff_ffff)
   end
 
-  # A count CRuby allocates an Array of up front (`rb_ary_new2(n)` in
-  # `Enumerable#take` / `first(n)`): longer than ARY_MAX_SIZE is refused.
+  # A count CRuby allocates an Array of up front (`rb_ary_new2(n)`):
+  # longer than ARY_MAX_SIZE is refused. (`Enumerable#take` / `first(n)`
+  # spell the same check out, to stay one frame shallower.)
   def __ary_capa(n)
     raise ArgumentError, "array size too big" if n > 0x0fff_ffff_ffff_ffff
     n

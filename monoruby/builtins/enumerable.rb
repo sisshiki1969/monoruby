@@ -259,7 +259,7 @@ module Enumerable
     raise ArgumentError, "attempt to take negative size" if n < 0
     res = []
     return res if n == 0
-    __ary_capa(n)
+    raise ArgumentError, "array size too big" if n > 0x0fff_ffff_ffff_ffff
     __gather_each do |x|
       res << x
       break if res.size >= n
@@ -666,7 +666,7 @@ module Enumerable
     raise ArgumentError, "attempt to take negative size" if n < 0
     res = []
     return res if n == 0
-    __ary_capa(n)
+    raise ArgumentError, "array size too big" if n > 0x0fff_ffff_ffff_ffff
     # Push-then-break so exactly `n` elements are consumed (the
     # underlying `each` is not advanced past what is needed).
     __gather_each do |x|
