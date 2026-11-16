@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+# monoruby-hidden-ivars: true
 #
 # Monitor, MonitorMixin and MonitorMixin::ConditionVariable.
 #
@@ -17,6 +18,12 @@
 # entered. Only the owner reads or writes `@count`, and `@owner` changes
 # hands only while the mutex is held, so neither needs a lock of its own.
 #
+# The three are hidden instance variables (`@__name` under this file's
+# `monoruby-hidden-ivars` magic comment, doc/hidden_ivars.md): CRuby keeps
+# them in the object's C struct, so no reflection shows them and a frozen
+# monitor still locks. MonitorMixin's own, below, are ordinary ones, as
+# they are in CRuby's monitor.rb.
+#
 class Monitor
   # CRuby makes the mutex in the allocator, so a subclass whose
   # `initialize` does not call `super` still has one; here it is made on
@@ -26,16 +33,16 @@ class Monitor
   # primitives, see Thread::Mutex in thread.rb).
   private def __mutex
     m = Thread::Mutex.new
-    @mutex ||= m
+    @__mutex ||= m
   end
 
   # A copy is a new monitor nobody holds: CRuby's `dup` runs the
   # allocator, and the lock is not state it copies.
   private def initialize_copy(other)
     super
-    @mutex = nil
-    @owner = nil
-    @count = 0
+    @__mutex = nil
+    @__owner = nil
+    @__count = 0
     self
   end
 
@@ -43,10 +50,6 @@ class Monitor
   def marshal_dump
     raise TypeError, "no _dump_data is defined for class #{self.class}"
   end
-
-  # CRuby keeps the mutex, the owner and the count in the object's C
-  # struct, so its `inspect` shows none of them.
-  private def instance_variables_to_inspect = []
 
   #
   # call-seq:
@@ -56,12 +59,12 @@ class Monitor
   #
   def try_enter
     cur = Fiber.current
-    unless @owner.equal?(cur)
-      return false unless (@mutex || __mutex).try_lock
-      @owner = cur
-      @count = 0
+    unless @__owner.equal?(cur)
+      return false unless (@__mutex || __mutex).try_lock
+      @__owner = cur
+      @__count = 0
     end
-    @count += 1
+    @__count += 1
     true
   end
 
@@ -73,17 +76,17 @@ class Monitor
   #
   def enter
     cur = Fiber.current
-    unless @owner.equal?(cur)
+    unless @__owner.equal?(cur)
       # Nothing can interrupt this thread between the mutex being
       # handed over and the owner being recorded: asynchronous interrupts
       # are delivered where a Ruby method or block is entered and on loop
       # back edges, and there is neither on the way. `try_lock` first:
       # it is all of `lock` when nobody holds the mutex.
-      (m = @mutex || __mutex).try_lock || m.lock
-      @owner = cur
-      @count = 0
+      (m = @__mutex || __mutex).try_lock || m.lock
+      @__owner = cur
+      @__count = 0
     end
-    @count += 1
+    @__count += 1
     nil
   end
 
@@ -94,10 +97,10 @@ class Monitor
   # Leaves exclusive section.
   #
   def exit
-    unless @owner.equal?(Fiber.current)
+    unless @__owner.equal?(Fiber.current)
       raise ThreadError, "current fiber not owner"
     end
-    if @count == 1
+    if @__count == 1
       # The outermost `exit`. In C this cannot be interrupted half way;
       # here `Mutex#unlock` is a Ruby method, and a `Thread#raise` or a
       # kill delivered on its way in would leave a mutex that is still
@@ -110,14 +113,14 @@ class Monitor
       # no delivery point on the way into it either.
       Thread.__uninterruptible_begin
       begin
-        @count = 0
-        @owner = nil
-        @mutex.unlock
+        @__count = 0
+        @__owner = nil
+        @__mutex.unlock
       ensure
         Thread.__uninterruptible_end
       end
     else
-      @count -= 1
+      @__count -= 1
     end
     nil
   end
@@ -137,32 +140,32 @@ class Monitor
     # `enter` and `exit` spelled out, with the current fiber looked up
     # once for both, as monitor_synchronize does.
     cur = Fiber.current
-    unless @owner.equal?(cur)
-      (m = @mutex || __mutex).try_lock || m.lock
-      @owner = cur
-      @count = 0
+    unless @__owner.equal?(cur)
+      (m = @__mutex || __mutex).try_lock || m.lock
+      @__owner = cur
+      @__count = 0
     end
-    @count += 1
+    @__count += 1
     begin
       yield
     ensure
-      unless @owner.equal?(cur)
+      unless @__owner.equal?(cur)
         raise ThreadError, "current fiber not owner"
       end
-      if @count == 1
+      if @__count == 1
         # See #exit. This one must not be a call to a Ruby method that
         # then opens the section: an interrupt delivered on the way into
         # that method would leave this `ensure` with the monitor held.
         Thread.__uninterruptible_begin
         begin
-          @count = 0
-          @owner = nil
-          @mutex.unlock
+          @__count = 0
+          @__owner = nil
+          @__mutex.unlock
         ensure
           Thread.__uninterruptible_end
         end
       else
-        @count -= 1
+        @__count -= 1
       end
     end
   end
@@ -172,18 +175,18 @@ class Monitor
   # Internal methods for MonitorMixin.
 
   def mon_locked?
-    (m = @mutex) ? m.locked? : false
+    (m = @__mutex) ? m.locked? : false
   end
 
   def mon_check_owner
-    unless @owner.equal?(Fiber.current)
+    unless @__owner.equal?(Fiber.current)
       raise ThreadError, "current fiber not owner"
     end
     nil
   end
 
   def mon_owned?
-    (m = @mutex) ? m.locked? && @owner.equal?(Fiber.current) : false
+    (m = @__mutex) ? m.locked? && @__owner.equal?(Fiber.current) : false
   end
 
   # Internal method for MonitorMixin::ConditionVariable: wait on `cond`
@@ -192,14 +195,14 @@ class Monitor
   # `cond.wait` returns with the mutex held again either way.
   def wait_for_cond(cond, timeout)
     cur = Fiber.current
-    count = @count
-    @owner = nil
-    @count = 0
+    count = @__count
+    @__owner = nil
+    @__count = 0
     begin
-      cond.wait(@mutex || __mutex, timeout) ? true : false
+      cond.wait(@__mutex || __mutex, timeout) ? true : false
     ensure
-      @owner = cur
-      @count = count
+      @__owner = cur
+      @__count = count
     end
   end
 

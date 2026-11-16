@@ -3843,25 +3843,100 @@ fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 ///
 /// - sleep -> Integer
 /// - sleep(sec) -> Integer
-/// Coerce a `sleep` duration: numerics via `#to_f` semantics, any
-/// other object through `#divmod(1)` (CRuby `rb_time_interval` — the
-/// quotient plus remainder is the interval in seconds).
-fn sleep_duration(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f64> {
-    let numeric = v.try_fixnum().is_some()
-        || v.is_float()
-        || v.try_rational().is_some()
-        || matches!(v.unpack(), RV::BigInt(_));
-    if !numeric && let Some(fid) = globals.check_method(v, IdentId::get_id("divmod")) {
-        let res = vm.invoke_func_inner(globals, fid, v, &[Value::integer(1)], None, None)?;
-        if let Some(arr) = res.try_array_ty()
-            && arr.len() == 2
-        {
-            let q = arr[0].coerce_to_f64(vm, globals)?;
-            let r = arr[1].coerce_to_f64(vm, globals)?;
-            return Ok(q + r);
+/// CRuby's `rb_time_interval` (`time_timespec(num, TRUE)` in time.c):
+/// the conversion every blocking call applies to the number of seconds
+/// it is given — `Kernel#sleep`, `Mutex#sleep`, `IO.select`,
+/// `IO#wait_readable`. An Integer or a Float is taken as it is, anything
+/// else through `divmod(1)` (which is how a Rational or a BigDecimal
+/// gets here): whole seconds plus `remainder * 1000000000` nanoseconds.
+///
+/// - an object without a usable `divmod` is `TypeError: can't convert
+///   <class> into time interval`,
+/// - a negative interval is `ArgumentError: time interval must not be
+///   negative`,
+/// - a Float that is not a number of seconds at all (NaN, Infinity,
+///   beyond `time_t`) is `RangeError: <x> out of Time range`.
+pub(crate) fn time_interval(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<std::time::Duration> {
+    use std::time::Duration;
+    fn negative() -> MonorubyErr {
+        MonorubyErr::argumenterr("time interval must not be negative")
+    }
+    fn secs(i: i64) -> Result<u64> {
+        u64::try_from(i).map_err(|_| negative())
+    }
+    match v.unpack() {
+        RV::Fixnum(i) => Ok(Duration::from_secs(secs(i)?)),
+        RV::Float(x) => {
+            if x < 0.0 {
+                return Err(negative());
+            }
+            // `modf`: the fraction rounds to the nearest nanosecond and
+            // may carry into the seconds.
+            let mut whole = x.trunc();
+            let mut nsec = ((x - whole) * 1e9 + 0.5) as u32;
+            if nsec >= 1_000_000_000 {
+                nsec -= 1_000_000_000;
+                whole += 1.0;
+            }
+            // `(time_t)f != f`. NaN fails every comparison, so it lands
+            // here as well.
+            if !(whole < 9_223_372_036_854_775_808.0) {
+                // `%f` as CRuby's `rb_raise` renders it.
+                let shown = if x.is_nan() {
+                    "NaN".to_string()
+                } else if x.is_infinite() {
+                    "Inf".to_string()
+                } else {
+                    format!("{x:.6}")
+                };
+                return Err(MonorubyErr::rangeerr(format!("{shown} out of Time range")));
+            }
+            Ok(Duration::new(whole as u64, nsec))
+        }
+        RV::BigInt(b) => {
+            let i = b
+                .to_i64()
+                .ok_or_else(|| MonorubyErr::rangeerr("bignum too big to convert into 'long'"))?;
+            Ok(Duration::from_secs(secs(i)?))
+        }
+        _ => {
+            if let Some(fid) = globals.check_method(v, IdentId::get_id("divmod")) {
+                let res = vm.invoke_func_inner(globals, fid, v, &[Value::integer(1)], None, None)?;
+                if let Some(ary) = res.try_array_ty() {
+                    let (q, r) = (
+                        ary.first().copied().unwrap_or_default(),
+                        ary.get(1).copied().unwrap_or_default(),
+                    );
+                    // The pair stays rooted across the calls below.
+                    let len = vm.temp_len();
+                    vm.temp_push(res);
+                    let parts = (|| {
+                        let sec = secs(q.coerce_to_int_i64(vm, globals)?)?;
+                        let nsec = vm.invoke_method_inner(
+                            globals,
+                            IdentId::_MUL,
+                            r,
+                            &[Value::integer(1_000_000_000)],
+                            None,
+                            None,
+                        )?;
+                        Ok((sec, nsec.coerce_to_int_i64(vm, globals)?))
+                    })();
+                    vm.temp_clear(len);
+                    let (sec, nsec) = parts?;
+                    return Ok(Duration::new(sec, nsec.clamp(0, 999_999_999) as u32));
+                }
+            }
+            Err(MonorubyErr::typeerr(format!(
+                "can't convert {} into time interval",
+                v.get_real_class_name(&globals.store)
+            )))
         }
     }
-    v.coerce_to_f64(vm, globals)
 }
 
 ///
@@ -3888,7 +3963,8 @@ fn sleep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         // what the hook returned.
         return Ok(Value::integer(now.elapsed().as_secs() as i64));
     }
-    sleep_thread(vm, globals, lfp.try_arg(0))?;
+    // `sleep(nil)` is `sleep`.
+    sleep_thread(vm, globals, lfp.try_arg(0).filter(|v| !v.is_nil()))?;
     Ok(Value::integer(now.elapsed().as_secs() as i64))
 }
 
@@ -3902,34 +3978,21 @@ pub(crate) fn sleep_thread(
     sec: Option<Value>,
 ) -> Result<bool> {
     let now = std::time::Instant::now();
+    // The interval is converted, and refused, before anything waits.
+    let dur = match sec {
+        Some(sec) => Some(time_interval(vm, globals, sec)?),
+        None => None,
+    };
     // With other live green threads, sleeping must yield to the
     // scheduler so they run during the wait (and a no-duration sleep
     // parks until Thread#wakeup instead of returning immediately).
     if crate::scheduler::has_other_live_threads() {
-        let dur = match sec {
-            Some(sec) => {
-                let sec = sleep_duration(vm, globals, sec)?;
-                if sec.is_nan() || sec < 0.0 {
-                    return Err(MonorubyErr::argumenterr(
-                        "time interval must not be negative or NaN",
-                    ));
-                }
-                Some(std::time::Duration::from_secs_f64(sec))
-            }
-            None => None,
-        };
         let (_, woken) = crate::scheduler::sleep_woken(vm, globals, dur)?;
         return Ok(woken);
     }
     // No other thread exists to wake this one, so only the time running
     // out ends the wait.
-    if let Some(sec) = sec {
-        let sec = sleep_duration(vm, globals, sec)?;
-        if sec.is_nan() || sec < 0.0 {
-            return Err(MonorubyErr::argumenterr(
-                "time interval must not be negative or NaN",
-            ));
-        }
+    if let Some(dur) = dur {
         // Sleep interruptibly, like CRuby: a delivered signal (whose async
         // handler set a pending bit) breaks nanosleep with EINTR; drain it
         // at this safepoint so a SIGTERM etc. raises its SignalException
@@ -3940,7 +4003,11 @@ pub(crate) fn sleep_thread(
         // some later poll point (racy: the surrounding block may end
         // first, and e.g. a fork child would then exit 0 instead of dying
         // signal-terminated).
-        let deadline = now + std::time::Duration::from_secs_f64(sec);
+        // A span no clock can hold (`sleep(2**62)`) is, for every
+        // purpose, the longest one it can.
+        let deadline = now
+            .checked_add(dur)
+            .unwrap_or_else(|| now + std::time::Duration::from_secs(u32::MAX as u64));
         loop {
             // Drain signals that arrived *before* (re-)entering nanosleep —
             // e.g. delivered between fork return and this call. Such a
@@ -5880,21 +5947,8 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     if self_val.ty() != Some(ObjTy::OBJECT)
         || globals.store.get_ivar(self_val, IdentId::_NAME).is_some()
     {
-        // A String of the result encoding's own multibyte encoding keeps
-        // its printable characters as they are — bytes, not UTF-8 text.
-        if let Some(inner) = self_val.is_rstring_inner()
-            && globals.store.inspect_escape()
-            && crate::value::rvalue::may_be_native_mbc(globals.store.inspect_escape_encoding())
-            && let Some(body) = inner.inspect_in(globals.store.inspect_escape_encoding())
-        {
-            let mut out = Vec::with_capacity(body.len() + 2);
-            out.push(b'"');
-            out.extend(body);
-            out.push(b'"');
-            return Ok(Value::string_from_inner(RStringInner::from_encoding(
-                &out,
-                inner.encoding(),
-            )));
+        if let Some(inner) = self_val.is_rstring_inner() {
+            return Ok(crate::builtins::encoding::str_inspect(globals, inner));
         }
         let s = self_val.inspect(&globals.store);
         // A Regexp's rendering carries the *regexp's* own encoding,
@@ -5932,15 +5986,12 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         None => all_ivars,
         Some(v) if v.is_nil() => all_ivars,
         Some(v) => match v.try_array_ty() {
-            Some(arr) => arr
-                .iter()
-                .filter_map(|e| e.try_symbol())
-                .filter_map(|nm| {
-                    all_ivars
-                        .iter()
-                        .find(|(n, _)| *n == nm)
-                        .map(|(n, val)| (*n, *val))
-                })
+            // The list selects; the order stays the object's own
+            // (`inspect_i` runs over the instance variables and looks
+            // each one up in the list).
+            Some(arr) => all_ivars
+                .into_iter()
+                .filter(|(n, _)| arr.iter().any(|e| e.try_symbol() == Some(*n)))
                 .collect(),
             None => {
                 let cls = globals
@@ -5956,27 +6007,51 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let class_name = globals
         .store
         .get_class_name(self_val.real_class(&globals.store).id());
-    let mut s = format!("#<{}:0x{:016x}", class_name, self_val.id());
-    for (i, (name, val)) in chosen.iter().enumerate() {
-        s += if i == 0 { " " } else { ", " };
-        // Only the values are escaped, and each on its own: the
-        // rendering around them is `rb_sprintf`'s, which CRuby hands
-        // back as it built it.
-        let text = crate::builtins::encoding::inspect_embedded(globals, val.inspect(&globals.store));
-        s += &format!("{name}={text}");
+    let open = format!("#<{}:0x{:016x}", class_name, self_val.id());
+    if chosen.is_empty() {
+        // `rb_any_to_s`.
+        return Ok(Value::string_sprintf(open + ">"));
     }
-    s += ">";
-    Ok(Value::string_sprintf(s))
+    // CRuby's `inspect_obj`: each value through `rb_inspect` — its own
+    // `#inspect`, dispatched, and escaped where the result encoding
+    // cannot show the answer — under `rb_exec_recursive`, so an object
+    // reached again from one of its own instance variables is `#<A:0x…
+    // ...>`.
+    use crate::builtins::encoding::{InspectBuf, inspect_resenc, rb_inspect_in};
+    let recursive = Value::string_sprintf(format!("{open} ...>"));
+    // The values are the ones the object held when `inspect` began
+    // (`rb_ivar_foreach_buffered`), whatever an `#inspect` along the way
+    // removes — so they are rooted here rather than through the object.
+    vm.with_temp_scope(|vm| {
+        for (_, val) in &chosen {
+            vm.temp_push(*val);
+        }
+        crate::value::exec_recursive(
+            self_val.id(),
+            || {
+                let resenc = inspect_resenc(globals);
+                let mut buf = InspectBuf::new("");
+                buf.append_str(&globals.store, &open)?;
+                for (i, (name, val)) in chosen.iter().enumerate() {
+                    buf.cat(if i == 0 { " " } else { ", " });
+                    buf.append_str(&globals.store, &format!("{name}="))?;
+                    let s = rb_inspect_in(vm, globals, *val, resenc)?;
+                    buf.append(&globals.store, s.as_rstring_inner())?;
+                }
+                buf.cat(">");
+                Ok(buf.into_value())
+            },
+            recursive,
+        )
+    })
 }
 
-/// `rb_inspect`: dispatch `#inspect` and render what it answered the
-/// way CRuby displays it. An `#inspect` — a user-defined one, or
-/// `Exception`'s — may hand back text in an encoding the result
-/// encoding cannot show, and CRuby escapes it there rather than in
-/// every `#inspect`: `rb_inspect` escapes to `\uXXXX` unless the
-/// answer is already ASCII-only (the builtin renderers' is, since
-/// [`inspect_result`](crate::builtins::encoding::inspect_result)
-/// escaped it). `Kernel#p` is its caller, as in CRuby.
+/// `Kernel#p`'s rendering of one argument: `rb_inspect`
+/// ([`rb_inspect`](crate::builtins::encoding::rb_inspect)), which
+/// dispatches `#inspect` and escapes an answer the result encoding
+/// cannot show — `\uXXXX` for Unicode text, `\xXX` for the bytes of
+/// any other encoding, a BINARY rendering such as `MatchData#inspect`'s
+/// with a non-ASCII group name included (#1907).
 #[monoruby_builtin]
 fn display_inspect(
     vm: &mut Executor,
@@ -5984,23 +6059,7 @@ fn display_inspect(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let obj = lfp.arg(0);
-    let res = vm.invoke_method_inner(globals, IdentId::get_id("inspect"), obj, &[], None, None)?;
-    if !globals.store.inspect_escape() {
-        return Ok(res);
-    }
-    match res.is_str() {
-        // Already showable as it stands — CRuby hands back the very
-        // string `#inspect` returned, encoding and all.
-        Some(inner) if !inner.as_bytes().is_ascii() => {
-            let text = String::from_utf8_lossy(inner.as_bytes()).into_owned();
-            Ok(Value::string_from_inner(RStringInner::from_encoding(
-                crate::value::escape_nonascii_to_u(&text).as_bytes(),
-                globals.store.inspect_escape_encoding(),
-            )))
-        }
-        _ => Ok(res),
-    }
+    crate::builtins::encoding::rb_inspect(vm, globals, lfp.arg(0))
 }
 
 ///
@@ -8579,13 +8638,14 @@ mod tests {
 
     #[test]
     fn sleep_nan_error() {
-        run_test_no_result_check(
+        // `rb_time_interval`: not negative, and not a time either.
+        run_test(
             r##"
         begin
           sleep(Float::NAN)
           false
-        rescue ArgumentError
-          true
+        rescue RangeError => e
+          e.message
         end
         "##,
         );

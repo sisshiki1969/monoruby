@@ -74,7 +74,7 @@ stateDiagram-v2
   `sleepers` の両方)。どちらか一方の経路で起きたら他方のエントリは stale になり、
   `wake_due_sleepers` / `prune_io_waiters` が状態を再検査して破棄する。
   スプリアス起床は常に許容され、呼び出し元のループが条件を再検査する。
-- **`Thread.allocate` の shell**(`Thread::Waiter` 等)は最初から `Dead` で
+- **`Thread.allocate` の shell**(`Process::Waiter` 等)は最初から `Dead` で
   生成され、スケジュールされない。
 
 ### `Thread#status` との対応

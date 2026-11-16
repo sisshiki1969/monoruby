@@ -1755,6 +1755,23 @@ impl<'a> BytecodeGen<'a> {
         }
     }
 
+    /// The *IdentId* of the instance variable this file spells `name`.
+    /// In a file with the `# monoruby-hidden-ivars: true` magic comment
+    /// `@__name` is the hidden variable `/__name`: a slot like any other
+    /// to the VM and the JIT, but with a name no Ruby source can write,
+    /// so `instance_variables`, `inspect`, `Marshal` and
+    /// `instance_variable_get` do not see it, a subclass cannot collide
+    /// with it, and a store into it is not a modification `freeze`
+    /// forbids — what a field of the object's C struct is in CRuby.
+    pub(crate) fn ivar_ident(&self, name: &str) -> IdentId {
+        if self.sourceinfo.hidden_ivars
+            && let Some(rest) = name.strip_prefix("@__")
+        {
+            return IdentId::get_id(&format!("/__{rest}"));
+        }
+        self.ident(name)
+    }
+
     pub(crate) fn symbol_id(&self, name: &IdentName) -> IdentId {
         Value::symbol_from_source_name(name, self.source_encoding()).as_symbol()
     }
@@ -2114,7 +2131,7 @@ impl<'a> BytecodeGen<'a> {
                 }
             }
             NodeKind::InstanceVar(name) => {
-                let name = self.ident(name);
+                let name = self.ivar_ident(name);
                 LvalueKind::InstanceVar(name)
             }
             NodeKind::ClassVar(name) => {

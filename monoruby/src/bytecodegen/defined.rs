@@ -398,7 +398,7 @@ impl<'a> BytecodeGen<'a> {
             }
             NodeKind::LocalVar(..) => {}
             NodeKind::InstanceVar(name) => {
-                let name = self.ident(&name);
+                let name = self.ivar_ident(&name);
                 self.emit(BytecodeInst::DefinedIvar { ret, name }, node.loc);
             }
             NodeKind::GlobalVar(name) => {

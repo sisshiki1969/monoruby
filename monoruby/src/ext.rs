@@ -2670,7 +2670,7 @@ unsafe extern "C" fn mr_thread_local_aref(ctx: *mut MrContext, thread: MrValue, 
         }
         static FIBER_LOCALS: std::sync::OnceLock<IdentId> = std::sync::OnceLock::new();
         static ROOT: std::sync::OnceLock<IdentId> = std::sync::OnceLock::new();
-        let ivar = *FIBER_LOCALS.get_or_init(|| IdentId::get_id("@fiber_locals"));
+        let ivar = *FIBER_LOCALS.get_or_init(|| IdentId::get_id("/__fiber_locals"));
         // No locals yet: nil.
         let Some(all) = globals.store.get_ivar(th, ivar).filter(|v| !v.is_nil()) else {
             return Some(Value::nil());

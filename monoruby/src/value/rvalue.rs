@@ -789,7 +789,13 @@ impl RValue {
                 // OBJECT — `Struct#inspect` (Rust builtin) is what users
                 // see; this is just for internal diagnostics.
                 ObjTy::STRUCT => self.object_debug(store),
-                _ => format!("{:016x}", self.id()),
+                // A Thread, and whatever else has nothing to say here:
+                // the address form, never the bare address.
+                _ => format!(
+                    "#<{}:0x{:016x}>",
+                    store.get_class_name(self.real_class(store).id()),
+                    self.id()
+                ),
             }
         }
     }
@@ -1522,10 +1528,13 @@ impl RValue {
         self.get_ivar_by_ivarid(id)
     }
 
+    /// The instance variables a program can see: the hidden (`/`-named)
+    /// slots are left out, as in [`Store::get_ivars`].
     pub(crate) fn get_ivars(&self, store: &Store) -> Vec<(IdentId, Value)> {
         let class_id = self.class();
         store[class_id]
             .ivar_names()
+            .filter(|(name, _)| !name.is_hidden_ivar())
             .filter_map(|(name, id)| self.get_ivar_by_ivarid(*id).map(|v| (*name, v)))
             .collect()
     }
@@ -3076,6 +3085,10 @@ impl RValue {
 
     pub(super) unsafe fn as_match_data(&self) -> &MatchDataInner {
         unsafe { &self.kind.matchdata }
+    }
+
+    pub(super) unsafe fn as_match_data_mut(&mut self) -> &mut MatchDataInner {
+        unsafe { &mut self.kind.matchdata }
     }
 }
 

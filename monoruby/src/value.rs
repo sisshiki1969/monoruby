@@ -3601,6 +3601,12 @@ impl Value {
         // SAFETY: The assert ensures this RValue contains match data.
         unsafe { self.rvalue().as_match_data() }
     }
+
+    pub(crate) fn as_match_data_mut(&mut self) -> &mut MatchDataInner {
+        assert_eq!(ObjTy::MATCHDATA, self.rvalue().ty());
+        // SAFETY: The assert ensures this RValue contains match data.
+        unsafe { self.rvalue_mut().as_match_data_mut() }
+    }
 }
 
 impl Value {

@@ -12,7 +12,7 @@ use crate::value::rvalue::{InterruptTiming, PendingInterrupt, ThreadInner, Threa
 // calling thread on the scheduler instead of blocking the process.
 //
 // Ruby-level surface that is pure bookkeeping (name, thread/fiber-local
-// storage, `Thread::Waiter` for `Process.detach`) stays in
+// storage, `Process::Waiter` for `Process.detach`) stays in
 // monoruby/builtins/startup.rb.
 
 pub(super) fn init(globals: &mut Globals) {
@@ -34,6 +34,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(THREAD_CLASS, "stop", thread_stop, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "__stop", thread_park_forever, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "__sleep", thread_sleep_woken, 1);
+    globals.define_builtin_class_func(THREAD_CLASS, "__time_interval", thread_time_interval, 1);
     globals.define_builtin_class_func(THREAD_CLASS, "ignore_deadlock", thread_ignore_deadlock, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "ignore_deadlock=", thread_set_ignore_deadlock, 1);
 
@@ -392,7 +393,7 @@ fn thread_class_exit(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: Byteco
 }
 
 /// Allocator: an inert shell (never scheduled). Exists for Ruby-level
-/// subclasses with their own life cycle — `Thread::Waiter.allocate` from
+/// subclasses with their own life cycle — `Process::Waiter.allocate` from
 /// `Process.detach` — not for user `Thread.allocate` + `#run`.
 pub(crate) extern "C" fn thread_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
     Value::new_thread(class_id, ThreadInner::shell())
@@ -480,7 +481,7 @@ fn thread_initialize(
         let loc = Value::string(format!("{path}:{line}"));
         let _ = globals
             .store
-            .set_ivar(self_, IdentId::get_id("@__spawn_location"), loc);
+            .set_ivar(self_, IdentId::get_id("/__spawn_location"), loc);
     }
     let args = lfp.arg(0).as_array().to_vec();
     *self_.as_thread_inner_mut() = ThreadInner::new(proc, args);
@@ -529,7 +530,7 @@ fn thread_start(
         let loc = Value::string(format!("{path}:{line}"));
         let _ = globals
             .store
-            .set_ivar(thread, IdentId::get_id("@__spawn_location"), loc);
+            .set_ivar(thread, IdentId::get_id("/__spawn_location"), loc);
     }
     let _ = &mut thread;
     scheduler::spawn(vm, globals, thread)?;
@@ -617,6 +618,21 @@ fn thread_sleep_woken(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byt
     Ok(Value::bool(woken))
 }
 
+/// `Thread.__time_interval(sec)`: `rb_time_interval` for the Ruby half
+/// (`Mutex#sleep` validates its timeout before it unlocks). Answers the
+/// interval as a Float, so that an object converted through `divmod`
+/// is asked only once.
+#[monoruby_builtin]
+fn thread_time_interval(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let dur = super::kernel::time_interval(vm, globals, lfp.arg(0))?;
+    Ok(Value::float(dur.as_secs_f64()))
+}
+
 ///
 /// ### Thread.ignore_deadlock
 ///
@@ -640,20 +656,67 @@ fn thread_set_ignore_deadlock(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: By
     Ok(v)
 }
 
-fn join_timeout(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Option<std::time::Duration>> {
-    match lfp.try_arg(0) {
-        None => Ok(None),
-        Some(v) if v.is_nil() => Ok(None),
-        Some(v) => {
-            let secs = v.coerce_to_f64(vm, globals)?;
-            if secs.is_nan() || secs < 0.0 {
-                return Err(MonorubyErr::argumenterr(
-                    "time interval must not be negative or NaN",
-                ));
-            }
-            Ok(Some(std::time::Duration::from_secs_f64(secs)))
+/// The limit of `Thread#join`, as CRuby's `thread_join_m` reads it: not
+/// a time interval (`rb_time_interval`), since a negative limit and an
+/// infinite one are both accepted. An Integer is whole seconds, anything
+/// else goes through `rb_num2dbl`; zero or less has already run out,
+/// and a Float beyond what a clock holds is no limit at all.
+fn join_timeout(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+) -> Result<Option<std::time::Duration>> {
+    use std::time::Duration;
+    let v = match lfp.try_arg(0) {
+        Some(v) if !v.is_nil() => v,
+        _ => return Ok(None),
+    };
+    let limit = if let Some(i) = v.try_fixnum() {
+        Duration::from_secs(i.max(0) as u64)
+    } else {
+        let secs = num2dbl(vm, globals, v)?;
+        if secs <= 0.0 {
+            Duration::ZERO
+        } else if secs < 9_223_372_036_854_775_808.0 {
+            Duration::from_secs_f64(secs)
+        } else {
+            // Too long to count, or NaN (which CRuby's cast turns into
+            // the longest wait there is on x86-64).
+            return Ok(None);
         }
+    };
+    // A deadline no clock can hold is no deadline.
+    Ok(std::time::Instant::now().checked_add(limit).map(|_| limit))
+}
+
+/// CRuby's `rb_num2dbl`: a Float from a number, `to_f` for other
+/// objects that have one, and its own wording for the ones that are
+/// never a number.
+fn num2dbl(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<f64> {
+    if v.is_str().is_some() {
+        return Err(MonorubyErr::typeerr(
+            "no implicit conversion to float from string",
+        ));
     }
+    // A special constant that is no number: named by what it is.
+    let special = match v.unpack() {
+        RV::Nil => Some("nil"),
+        RV::Bool(true) => Some("true"),
+        RV::Bool(false) => Some("false"),
+        _ => None,
+    };
+    if let Some(special) = special {
+        return Err(MonorubyErr::typeerr(format!(
+            "no implicit conversion to float from {special}"
+        )));
+    }
+    if v.try_fixnum().is_none()
+        && !v.is_float()
+        && globals.check_method(v, IdentId::TO_F).is_none()
+    {
+        return Err(MonorubyErr::cant_convert_into_float(&globals.store, v));
+    }
+    v.coerce_to_f64(vm, globals)
 }
 
 /// `Thread#join` / `#value`: in a non-blocking fiber with a fiber

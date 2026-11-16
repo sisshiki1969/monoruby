@@ -540,6 +540,15 @@ impl IdentId {
         ID.read().unwrap().get_ident_name(*self).to_string_lossy()
     }
 
+    /// Whether this names a *hidden* instance variable: one of the
+    /// `/`-prefixed slots the runtime keeps on an object for itself (a
+    /// Struct class's `/members`, a Mutex's `/__owner`). No Ruby source
+    /// can spell such a name; reflection skips it, and a store into it
+    /// is allowed on a frozen object.
+    pub fn is_hidden_ivar(&self) -> bool {
+        self.name_starts_with(b"/")
+    }
+
     /// Whether the name begins with `prefix`, without copying it out of
     /// the table.
     pub fn name_starts_with(&self, prefix: &[u8]) -> bool {

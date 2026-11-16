@@ -1017,6 +1017,18 @@ impl Globals {
         visi: Visibility,
     ) -> (IdentId, FuncId) {
         let ivar_name = IdentId::add_ivar_prefix(method_name);
+        self.define_attr_reader_of(class_id, method_name, ivar_name, visi)
+    }
+
+    /// [`define_attr_reader`](Self::define_attr_reader) over the instance
+    /// variable *ivar_name*, whatever the method is called.
+    pub(crate) fn define_attr_reader_of(
+        &mut self,
+        class_id: ClassId,
+        method_name: IdentId,
+        ivar_name: IdentId,
+        visi: Visibility,
+    ) -> (IdentId, FuncId) {
         let func_id = self.store.new_attr_reader(method_name, ivar_name);
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
@@ -1033,6 +1045,18 @@ impl Globals {
         visi: Visibility,
     ) -> (IdentId, FuncId) {
         let ivar_name = IdentId::add_ivar_prefix(method_name);
+        self.define_attr_writer_of(class_id, method_name, ivar_name, visi)
+    }
+
+    /// [`define_attr_writer`](Self::define_attr_writer) over the instance
+    /// variable *ivar_name*: the method is `method_name=`.
+    pub(crate) fn define_attr_writer_of(
+        &mut self,
+        class_id: ClassId,
+        method_name: IdentId,
+        ivar_name: IdentId,
+        visi: Visibility,
+    ) -> (IdentId, FuncId) {
         let method_name = IdentId::add_assign_postfix(method_name);
         let func_id = self.store.new_attr_writer(method_name, ivar_name);
         self.gen_wrapper(func_id);

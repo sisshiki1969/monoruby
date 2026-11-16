@@ -1185,30 +1185,34 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         {
             let regex = other.coerce_to_regexp_or_string(vm, globals)?;
             super::regexp::check_match_encoding(&globals.store, &regex, &s)?;
-            vm.set_match_regex(regex.as_val());
-            let res =
-                match regex.captures_bytes_from_pos(s.as_bytes(), self_val, native_enc, 0, vm)? {
-                    Some(captures) => {
-                        let start = captures.pos(0).map_or(0, |(b, _)| b);
-                        Value::integer(super::regexp::char_index_of_byte(s, start) as i64)
-                    }
-                    None => Value::nil(),
-                };
+            let res = match regex.captures_bytes_from_pos(
+                s.as_bytes(),
+                self_val,
+                native_enc,
+                0,
+                vm,
+                MatchOrigin::Regexp(regex.as_val()),
+            )? {
+                Some(captures) => {
+                    let start = captures.pos(0).map_or(0, |(b, _)| b);
+                    Value::integer(super::regexp::char_index_of_byte(s, start) as i64)
+                }
+                None => Value::nil(),
+            };
             return Ok(res);
         }
         let regex = &other.coerce_to_regexp_or_string(vm, globals)?;
-    // Ahead of the view split below, not inside its native branch: a
-    // subject whose encoding is UTF-8's bytes under another name
-    // (`UTF8-MAC`) reads through the `&str` path, and CRuby refuses a
-    // UTF-8 regexp against it all the same (#1562).
+        // Ahead of the view split below, not inside its native branch: a
+        // subject whose encoding is UTF-8's bytes under another name
+        // (`UTF8-MAC`) reads through the `&str` path, and CRuby refuses a
+        // UTF-8 regexp against it all the same (#1562).
         super::regexp::check_match_encoding(&globals.store, regex, &s)?;
         let given = s.regex_view()?;
         let given: &str = &given;
         // Enable zero-copy $~ haystack snapshots (CoW), which also
         // propagate the subject's encoding to $&/$`/$'/$1..$N.
         vm.set_match_haystack(self_val);
-        vm.set_match_regex(other);
-        let res = match regex.find_one(vm, given)? {
+        let res = match regex.find_one(vm, given, MatchOrigin::Regexp(other))? {
             Some(r) => {
                 let char_idx = given
                     .get(..r.start)
@@ -1546,7 +1550,7 @@ fn partition_main(
             vec![whole, empty(), empty()]
         }));
     };
-    save_spans(vm, &subject, &spans, self_val);
+    save_spans(vm, &subject, &spans, self_val, MatchOrigin::Regexp(sep));
     let (start, end) = spans[0].unwrap();
     Ok(Value::array_from_vec(vec![
         subject.chunk(None, 0..start),
@@ -1582,7 +1586,7 @@ fn string_match_index(
     globals: &Globals,
     self_val: Value,
     s: &RStringInner,
-    re: &RegexpInner,
+    re: &Regexp,
     nth: i64,
 ) -> Result<Value> {
     let mut view = None;
@@ -1593,7 +1597,13 @@ fn string_match_index(
         return Ok(Value::nil());
     }
     let spans = spans_of(&region);
-    save_spans(vm, &subject, &spans, self_val);
+    save_spans(
+        vm,
+        &subject,
+        &spans,
+        self_val,
+        MatchOrigin::Regexp(re.as_val()),
+    );
     let len = spans.len() as i64;
     let nth = if nth >= 0 {
         nth as usize
@@ -1614,7 +1624,7 @@ fn string_match_named(
     globals: &Globals,
     self_val: Value,
     s: &RStringInner,
-    re: &RegexpInner,
+    re: &Regexp,
     name: &[u8],
 ) -> Result<Value> {
     let members = re.get_group_members(name);
@@ -1632,7 +1642,13 @@ fn string_match_named(
         return Ok(Value::nil());
     }
     let spans = spans_of(&region);
-    save_spans(vm, &subject, &spans, self_val);
+    save_spans(
+        vm,
+        &subject,
+        &spans,
+        self_val,
+        MatchOrigin::Regexp(re.as_val()),
+    );
     // Pick the rightmost matched group sharing the name (matches CRuby).
     for &idx in members.iter().rev() {
         if let Some((start, end)) = spans.get(idx as usize).copied().flatten() {
@@ -2002,7 +2018,13 @@ fn locate_regex_match(
         return Err(MonorubyErr::indexerr("regexp not matched"));
     }
     let spans = spans_of(&region);
-    save_spans(vm, &subject, &spans, *self_val);
+    save_spans(
+        vm,
+        &subject,
+        &spans,
+        *self_val,
+        MatchOrigin::Regexp(re.as_val()),
+    );
     let total = spans.len();
     let idx = if let Some(nth) = nth_arg {
         let n = nth.coerce_to_int_i64(vm, globals)?;
@@ -2750,13 +2772,20 @@ pub(crate) fn string_start_with(
             let mut region = crate::value::rvalue::regexp::ScratchRegion::take();
             if re.find_spans(&subject, 0, &mut region)? {
                 let spans = spans_of(&region);
-                save_spans(vm, &subject, &spans, owner);
+                // `rb_reg_start_with_p` matches at the start only, so a
+                // match further on is no match and leaves `$~` nil.
                 if spans[0].unwrap().0 == 0 {
+                    // A Symbol receiver has no String for `$~` to be a
+                    // match over until one matches.
+                    let owner = match owner.is_rstring_inner() {
+                        Some(_) => owner,
+                        None => Value::string_from_inner(self_inner.clone()),
+                    };
+                    save_spans(vm, &subject, &spans, owner, MatchOrigin::Regexp(*v));
                     return Ok(Value::bool(true));
                 }
-            } else {
-                vm.clear_capture_special_variables();
             }
+            vm.clear_capture_special_variables();
             continue;
         }
         let arg_inner = coerce_to_rstring_inner(v, vm, globals)?;
@@ -3418,7 +3447,10 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         Awk,
         Chars,
         Str(String),
-        Re(crate::value::Regexp),
+        /// A Regexp, and whether it is the caller's own (its matches
+        /// are `$~`) rather than one built to walk a wide String
+        /// separator, which CRuby searches for without touching `$~`.
+        Re(crate::value::Regexp, bool),
     }
     let resolve = |vm: &mut Executor, globals: &mut Globals, v: Value| -> Result<SepKind> {
         if let Some(sep) = v.is_rstring_inner() {
@@ -3458,7 +3490,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             } else if src == " " {
                 SepKind::Str(" ".to_string())
             } else {
-                SepKind::Re(re)
+                SepKind::Re(re, true)
             })
         } else if let Some(inner) = v.is_rstring_inner() {
             if inner.encoding().is_wide() {
@@ -3485,7 +3517,10 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     Some(enc),
                     Some(escaped),
                 )?;
-                return Ok(SepKind::Re(crate::value::Regexp::new_unchecked(Value::regexp(re))));
+                return Ok(SepKind::Re(
+                    crate::value::Regexp::new_unchecked(Value::regexp(re)),
+                    false,
+                ));
             }
             let s = inner.regex_view()?;
             Ok(if s.is_empty() {
@@ -3584,7 +3619,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // `hay` is those bytes and the fields are cut from them. Every
     // other walk is over the view.
     let native_re = match &sep {
-        SepKind::Re(re) => re.native_subject(self_.as_rstring_inner(), &globals.store, true)?,
+        SepKind::Re(re, _) => re.native_subject(self_.as_rstring_inner(), &globals.store, true)?,
         _ => None,
     };
     // The view is only taken when the walk is over it: a UTF-16
@@ -3776,7 +3811,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             // character, and CRuby's trailing field starts here.
             beg = from.min(len);
         }
-        SepKind::Re(re) => {
+        SepKind::Re(re, backref) => {
             let view_subject;
             let subject = match &native_re {
                 Some(subject) => subject,
@@ -3793,11 +3828,15 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     break;
                 }
                 if !re.find_spans(subject, start, &mut region)? {
-                    vm.clear_capture_special_variables();
+                    if backref {
+                        vm.clear_capture_special_variables();
+                    }
                     break;
                 }
                 let spans = spans_of(&region);
-                save_spans(vm, subject, &spans, self_);
+                if backref {
+                    save_spans(vm, subject, &spans, self_, MatchOrigin::Regexp(re.as_val()));
+                }
                 let (b0, e0) = spans[0].unwrap();
                 if start == b0 && b0 == e0 {
                     if last_null {
@@ -3950,7 +3989,7 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             return Ok(Value::nil());
         }
         let spans = spans_of(&region);
-        save_spans(vm, &subject, &spans, self_);
+        save_spans(vm, &subject, &spans, self_, MatchOrigin::Regexp(arg0));
         let len = spans.len() as i64;
         let nth = if nth >= 0 {
             nth as usize
@@ -4006,7 +4045,7 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         } else {
             0
         };
-        match info.captures(&lhs, vm)? {
+        match info.captures(&lhs, vm, MatchOrigin::Regexp(lfp.arg(0)))? {
             None => Ok(Value::nil()),
             Some(captures) => {
                 let len = captures.len() as i64;
@@ -4993,7 +5032,7 @@ fn string_pattern_replace(
     let res = RStringInner::from_encoding_scanned(&out, enc);
     match last_hit {
         Some(hit) => {
-            vm.save_capture_span(self_val, hit, hit + needle.len(), pattern);
+            vm.save_capture_span(self_val, hit, hit + needle.len());
             Some((res, true))
         }
         None => {
@@ -5787,7 +5826,7 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         match lfp.block() {
             None => {
                 if let Some(&(start, end)) = hits.last() {
-                    vm.save_capture_span(subject_val, start, end, arg0);
+                    vm.save_capture_span(subject_val, start, end);
                 } else {
                     vm.clear_capture_special_variables();
                 }
@@ -5801,15 +5840,19 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 let res = (|| -> Result<()> {
                     for (i, v) in found.iter().enumerate() {
                         let (start, end) = hits[i];
-                        vm.save_capture_span(subject_val, start, end, arg0);
+                        vm.save_capture_span(subject_val, start, end);
                         vm.invoke_block(globals, &data, &[*v])?;
                     }
                     Ok(())
                 })();
                 vm.temp_pop();
                 res?;
-                if hits.is_empty() {
-                    vm.clear_capture_special_variables();
+                // The block may have clobbered `$~`, and CRuby searches
+                // for the last hit once more (`rb_pat_search`): `$~` is
+                // that match, in an object of its own.
+                match hits.last() {
+                    Some(&(start, end)) => vm.save_capture_span(subject_val, start, end),
+                    None => vm.clear_capture_special_variables(),
                 }
                 return Ok(lfp.self_val());
             }
@@ -5834,19 +5877,11 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             // is never reallocated; `string_substring(subject_val, …)`
             // only reads.
             let (subject, _view) = pattern_subject(globals, subject_val, arg0)?;
-            let vec = re.scan(vm, subject_val, &subject)?;
+            let vec = re.scan(vm, subject_val, &subject, MatchOrigin::of(arg0))?;
             Ok(Value::array_from_vec(vec))
         }
         Some(block) => {
-            scan_with_block(
-                vm,
-                globals,
-                re,
-                self_,
-                subject_val,
-                block,
-                arg0,
-            )?;
+            scan_with_block(vm, globals, re, self_, subject_val, block, arg0)?;
             Ok(lfp.self_val())
         }
     }
@@ -5869,14 +5904,20 @@ fn scan_with_block(
     // block drops every reference to the receiver.
     let temp_len = vm.temp_len();
     vm.temp_push(subject);
-    // The Regexp every saved `$~` names (`$~.names`, `$~[:name]` in the
-    // block), rooted alongside.
-    let re_obj = match pattern.is_regex() {
-        Some(_) => pattern,
-        None => Value::regexp(re.clone()),
-    };
-    vm.temp_push(re_obj);
-    let res = scan_block_loop(vm, globals, re, recv, subject, &data, regexp_pattern, re_obj);
+    // What every saved `$~` names: the Regexp (`$~.names`, `$~[:name]`
+    // in the block), which the caller's frame roots, or a substring
+    // search for a String pattern.
+    let origin = MatchOrigin::of(pattern);
+    let res = scan_block_loop(
+        vm,
+        globals,
+        re,
+        recv,
+        subject,
+        &data,
+        regexp_pattern,
+        origin,
+    );
     vm.temp_clear(temp_len);
     res
 }
@@ -5889,7 +5930,7 @@ fn scan_block_loop(
     subject_val: Value,
     data: &ProcData,
     regexp_pattern: bool,
-    re_obj: Value,
+    origin: MatchOrigin,
 ) -> Result<()> {
     // `subject_val` is frozen (stable buffer) and temp-rooted by the
     // caller, so this borrow stays valid across `invoke_block`. Matching
@@ -5923,8 +5964,7 @@ fn scan_block_loop(
         }
         let spans = spans_of(&region);
         let (start, end) = spans[0].unwrap();
-        vm.set_match_regex(re_obj);
-        save_spans(vm, &subject, &spans, subject_val);
+        save_spans(vm, &subject, &spans, subject_val, origin);
         match spans.len() {
             0 => unreachable!(),
             1 => {
@@ -5957,10 +5997,7 @@ fn scan_block_loop(
         };
     }
     match last {
-        Some(spans) => {
-            vm.set_match_regex(re_obj);
-            save_spans(vm, &subject, &spans, subject_val)
-        }
+        Some(spans) => save_spans(vm, &subject, &spans, subject_val, origin),
         None => vm.clear_capture_special_variables(),
     }
     Ok(())
@@ -6044,9 +6081,9 @@ fn string_match(
                 super::regexp::byte_offset_of_char(s, pos as usize)
             }
         };
-        vm.set_match_regex(re.as_val());
         let bytes = s.as_bytes();
-        let md = match re.captures_bytes_from_pos(bytes, self_, native_enc, byte_pos, vm)? {
+        let origin = MatchOrigin::Regexp(re.as_val());
+        let md = match re.captures_bytes_from_pos(bytes, self_, native_enc, byte_pos, vm, origin)? {
             Some(captures) => Value::new_matchdata_bytes(&captures, self_, re),
             None => return Ok(Value::nil()),
         };
@@ -6403,7 +6440,13 @@ fn string_index(
         return Ok(Value::nil());
     }
     let spans = spans_of(&region);
-    save_spans(vm, &subject, &spans, self_);
+    save_spans(
+        vm,
+        &subject,
+        &spans,
+        self_,
+        MatchOrigin::Regexp(re.as_val()),
+    );
     let start = spans[0].unwrap().0;
     // In surrogate space one view char is one receiver char, so counting
     // view chars gives the character index there too.
@@ -6469,6 +6512,7 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     }
 
     let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
+    let origin = MatchOrigin::Regexp(re.as_val());
     // A receiver Onigmo walks natively (a CJK code page, UTF-16 / UTF-32)
     // is searched on its own bytes; the offset has to be a character
     // boundary in its encoding (`str_check_byte_pos`).
@@ -6479,7 +6523,14 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             )));
         }
         return Ok(
-            match re.captures_bytes_from_pos(haystack, self_, native_enc, byte_offset, vm)? {
+            match re.captures_bytes_from_pos(
+                haystack,
+                self_,
+                native_enc,
+                byte_offset,
+                vm,
+                origin,
+            )? {
                 Some(captures) => Value::integer(captures.pos(0).map_or(0, |(b, _)| b) as i64),
                 None => Value::nil(),
             },
@@ -6494,7 +6545,7 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         )));
     }
 
-    match re.captures_from_pos(s, byte_offset, vm)? {
+    match re.captures_from_pos(s, byte_offset, vm, origin)? {
         None => Ok(Value::nil()),
         Some(captures) => {
             let start = captures.get(0).unwrap().start();
@@ -6578,6 +6629,7 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     }
 
     let re = coerce_pattern_for_byte_search(vm, globals, lfp.arg(0))?;
+    let origin = MatchOrigin::Regexp(re.as_val());
     // A receiver Onigmo walks natively: the same forward scan as below,
     // over the receiver's own bytes and character heads.
     if let Some(native_enc) = RegexpInner::native_codec_for(&given) {
@@ -6590,10 +6642,11 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         let mut best: Option<usize> = None;
         let mut pos = 0usize;
         while pos <= bytesize {
-            let start = match re.captures_bytes_from_pos(haystack, self_, native_enc, pos, vm)? {
-                None => break,
-                Some(c) => c.pos(0).map_or(0, |(b, _)| b),
-            };
+            let start =
+                match re.captures_bytes_from_pos(haystack, self_, native_enc, pos, vm, origin)? {
+                    None => break,
+                    Some(c) => c.pos(0).map_or(0, |(b, _)| b),
+                };
             if start > byte_offset {
                 break;
             }
@@ -6608,7 +6661,7 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             Some(p) => {
                 // The last probe ran past `p`; re-run there so `$~` is
                 // the match reported.
-                re.captures_bytes_from_pos(haystack, self_, native_enc, p, vm)?;
+                re.captures_bytes_from_pos(haystack, self_, native_enc, p, vm, origin)?;
                 Value::integer(p as i64)
             }
             None => {
@@ -6633,7 +6686,7 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let mut best: Option<usize> = None;
     let mut pos = 0usize;
     while pos <= s.len() {
-        let captures = match re.captures_from_pos_gpos(s, byte_offset, pos, vm)? {
+        let captures = match re.captures_from_pos_gpos(s, byte_offset, pos, vm, origin)? {
             None => break,
             Some(c) => c,
         };
@@ -6843,7 +6896,13 @@ fn string_rindex(
                 let bp = bounds.get(cp).copied().unwrap_or(len);
                 if re.find_spans_gpos(&subject, gpos, bp, &mut region)? {
                     let spans = spans_of(&region);
-                    save_spans(vm, &subject, &spans, self_);
+                    save_spans(
+                        vm,
+                        &subject,
+                        &spans,
+                        self_,
+                        MatchOrigin::Regexp(re.as_val()),
+                    );
                 } else {
                     vm.clear_capture_special_variables();
                 }
@@ -6926,7 +6985,7 @@ fn rindex_set_backref(
 ) -> Result<()> {
     match byte_pos {
         Some(p) => {
-            re.captures_from_pos_gpos(s, gpos, p, vm)?;
+            re.captures_from_pos_gpos(s, gpos, p, vm, MatchOrigin::Regexp(re.as_val()))?;
         }
         None => vm.clear_capture_special_variables(),
     }

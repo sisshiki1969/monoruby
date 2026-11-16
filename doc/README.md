@@ -24,6 +24,7 @@ Two things to know before reading:
 | Document | Lang | Kind | Answers |
 |---|---|---|---|
 | [`stack_frame.md`](stack_frame.md) | EN | reference | What a local frame looks like in memory: LFP / CFP offsets, where `self`, the block and the registers sit. |
+| [`hidden_ivars.md`](hidden_ivars.md) | EN | reference | Hidden (`/`-named) instance variables: how a built-in class written in Ruby keeps state that CRuby keeps in a C struct — out of `inspect` / `instance_variables`, safe from subclasses, writable when frozen — and the `# monoruby-hidden-ivars: true` magic comment that lets a Ruby file name one as `@__name`. |
 | [block_param.md](block_param.md) | design | EN | The `&block` parameter: a sentinel-initialized local slot, lazy `Proc` with write-back, proxy forwarding (CRuby's scheme) |
 | [`method_args.md`](method_args.md) | JA | reference | What `pos_num`, `req_num`, `optional`, `rest` actually count, and what they exclude. |
 | [`native_func.md`](native_func.md) | EN | reference | How to declare a builtin that takes optional / rest / keyword parameters. |

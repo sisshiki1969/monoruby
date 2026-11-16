@@ -57,6 +57,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(ENUMERATOR_CLASS, "rewind", rewind, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "feed", feed, 1);
     globals.define_builtin_funcs(ENUMERATOR_CLASS, "size", &["length"], enumerator_size, 0);
+    globals.define_builtin_func(ENUMERATOR_CLASS, "inspect", enumerator_inspect, 0);
 
     // `Enumerator::Yielder` inherits from `Object` (as in CRuby), NOT `Array`.
     // The yielder object is a plain OBJECT-typed RValue; inheriting `Array`
@@ -91,6 +92,93 @@ pub(super) fn init(globals: &mut Globals) {
         Effect::CAPTURE,
     );
     globals.define_builtin_func_rest(GENERATOR_CLASS, "each", generator_each);
+}
+
+///
+/// ### Enumerator#inspect
+///
+/// - inspect -> String
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/inspect.html]
+///
+/// CRuby's `inspect_enumerator`: `#<Enumerator: <recv>:<meth>(<args>)>`,
+/// the receiver and the positional arguments through `rb_inspect` —
+/// their own `#inspect`, dispatched — under `rb_exec_recursive`, so an
+/// enumerator reached again from its own receiver or arguments is
+/// `#<Enumerator: ...>`. The class name is the receiver's own (a user
+/// subclass shows up as itself), and an `allocate`d-but-not-
+/// `initialize`d one reads `#<Enumerator: uninitialized>`.
+#[monoruby_builtin]
+fn enumerator_inspect(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    use crate::builtins::encoding::{InspectBuf, inspect_resenc, rb_inspect_in};
+    let self_val = lfp.self_val();
+    let name = globals
+        .store
+        .get_class_name(self_val.real_class(&globals.store).id());
+    let e = self_val.as_enumerator_inner();
+    if !e.is_initialized() {
+        return Ok(Value::string_sprintf(format!("#<{name}: uninitialized>")));
+    }
+    let obj = e.obj;
+    let method = e.method;
+    let args: Vec<Value> = e.args.iter().copied().collect();
+    // The keywords go in as `key: value` with *`to_s`* on both halves
+    // (`kwd_append`) — which is why `k: nil` comes out as a bare `k: `
+    // and `k: :v` as `k: v`. A keyword hash holding a key that is not a
+    // Symbol cannot be written that way at all, so the whole hash goes
+    // in as one positional instead.
+    let mut kwds: Vec<(Value, Value)> = vec![];
+    let mut kw_hash = None;
+    if let Some(kw) = &e.kw_args
+        && !kw.is_empty()
+    {
+        if kw.iter().all(|(k, _)| k.try_symbol().is_some()) {
+            kwds = kw.iter().collect();
+        } else {
+            kw_hash = Some(kw.as_val());
+        }
+    }
+    let recursive = Value::string_sprintf(format!("#<{name}: ...>"));
+    crate::value::exec_recursive(
+        self_val.id(),
+        || {
+            let resenc = inspect_resenc(globals);
+            let mut buf = InspectBuf::new("");
+            buf.append_str(&globals.store, &format!("#<{name}: "))?;
+            let s = rb_inspect_in(vm, globals, obj, resenc)?;
+            buf.append(&globals.store, s.as_rstring_inner())?;
+            buf.append_str(&globals.store, &format!(":{method}"))?;
+            if !args.is_empty() || !kwds.is_empty() || kw_hash.is_some() {
+                buf.cat("(");
+                let mut first = true;
+                for arg in args.iter().copied().chain(kw_hash) {
+                    if !std::mem::take(&mut first) {
+                        buf.cat(", ");
+                    }
+                    let s = rb_inspect_in(vm, globals, arg, resenc)?;
+                    buf.append(&globals.store, s.as_rstring_inner())?;
+                }
+                for (k, v) in &kwds {
+                    if !std::mem::take(&mut first) {
+                        buf.cat(", ");
+                    }
+                    let label = format!("{}: ", k.to_s(&globals.store));
+                    buf.append_str(&globals.store, &label)?;
+                    let s = crate::builtins::encoding::rb_obj_as_string(vm, globals, *v)?;
+                    buf.append(&globals.store, s.as_rstring_inner())?;
+                }
+                buf.cat(")");
+            }
+            buf.cat(">");
+            Ok(buf.into_value())
+        },
+        recursive,
+    )
 }
 
 ///
