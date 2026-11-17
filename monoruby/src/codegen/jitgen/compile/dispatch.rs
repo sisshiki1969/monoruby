@@ -54,6 +54,7 @@
 //!   merge:                            ; the CondBr itself emits nothing
 //! ```
 
+use super::escape::DeadLocal;
 use super::*;
 
 ///
@@ -102,14 +103,17 @@ impl<'a> JitContext<'a> {
         // reach the branch target through the arm's side-branch state
         // while the fall-through materializes it, and the merge of the
         // two would drop the object — so those are performed here too,
-        // the dead ones dropped, exactly as at a block's last instruction.
+        // as at a block's last instruction. A local's object nothing can
+        // observe after the branch is performed as well: the dispatch is
+        // still to run, and a receiver that misses every arm sends a
+        // message the interpreter resolves (`doc/escape_analysis.md` §12).
         for slot in operands {
             if state.virtual_at(*slot).is_some() {
                 self.materialize_virtual(state, ir, *slot);
             }
         }
         if let Some(sink) = sink {
-            self.settle_virtuals_before_branch(state, ir, sink.pos, false, &[]);
+            self.settle_virtuals_before_branch(state, ir, sink.pos, false, &[], DeadLocal::Build);
         }
         state.write_back_slots(ir, operands);
         state.flush_gp(ir);

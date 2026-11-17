@@ -345,12 +345,6 @@ impl<'a> JitContext<'a> {
             // (`x = 1..n` over an elided `x`) ends the object as a dead
             // one does: nothing can observe it any more.
             let redefined = defined_slot(trace_ir, self.store) == Some(dst);
-            if !read && (dead || redefined) {
-                // Dead, and never observed: the allocation is simply gone.
-                state.take_virtual(dst);
-                state.discard_dead_elements(src, dst);
-                continue;
-            }
             // A store into an element slot: a push onto one (an argument
             // of the use pushed over an element, `[a, b].include?(x)`), a
             // store into a local endpoint of an elided Range, or a fill of
@@ -365,6 +359,29 @@ impl<'a> JitContext<'a> {
             let overwrites = src
                 .own_slots()
                 .any(|s| s != dst && (written == Some(s) || in_window(s)));
+            if !read && (dead || redefined) {
+                // An instruction that may send a message keeps a local's
+                // object through itself (`doc/escape_analysis.md` §12):
+                // if it leaves by a side exit, the interpreter runs it,
+                // and the callee it finds there may be `binding`. The
+                // object stays elided (the exit's write-back builds it)
+                // and is dropped once the instruction is done: by its
+                // own definition of the slot, by the block's end
+                // ([`Self::settle_virtuals_at_bb_end`]) or by the next
+                // instruction. One whose elements the instruction
+                // overwrites cannot be kept that way, and is built.
+                let kept = !self.is_temp(dst) && trace_ir.may_dispatch();
+                if !kept {
+                    // Dead, and never observed: the allocation is simply
+                    // gone.
+                    state.take_virtual(dst);
+                    state.discard_dead_elements(src, dst);
+                    continue;
+                }
+                if !overwrites {
+                    continue;
+                }
+            }
             let carried = bb_end && self.merge_carries_virtual(bc_pos, dst, src);
             if read || (bb_end && !carried) || overwrites || (self.is_temp(dst) && !survives) {
                 self.materialize_virtual(state, ir, dst);
@@ -386,7 +403,7 @@ impl<'a> JitContext<'a> {
         if !self.is_bb_end(bc_pos) {
             return;
         }
-        self.settle_virtuals_before_branch(state, ir, bc_pos, true, &[]);
+        self.settle_virtuals_before_branch(state, ir, bc_pos, true, &[], DeadLocal::Drop);
     }
 
     ///
@@ -396,7 +413,9 @@ impl<'a> JitContext<'a> {
     /// [`JitContext::declare_merge`]), dropping the dead ones. With
     /// *carries*, a local's object is left for the merges that may carry
     /// it ([`Self::merge_carries_virtual`]). The objects in *keep* are
-    /// left alone.
+    /// left alone. *dead_local* says what becomes of a local's object
+    /// nothing can observe after the branch, which depends on what is
+    /// still to run before it ([`DeadLocal`]).
     ///
     pub(super) fn settle_virtuals_before_branch(
         &mut self,
@@ -405,6 +424,7 @@ impl<'a> JitContext<'a> {
         branch_pos: BcIndex,
         carries: bool,
         keep: &[SlotId],
+        dead_local: DeadLocal,
     ) {
         let next_sp = state.next_sp();
         let settled: Vec<_> = state
@@ -419,11 +439,25 @@ impl<'a> JitContext<'a> {
             } else {
                 !self.local_live_after(branch_pos, dst)
             };
-            if dead {
-                state.take_virtual(dst);
-                state.discard_dead_elements(src, dst);
-            } else if !(carries && self.merge_carries_virtual(branch_pos, dst, src)) {
-                self.materialize_virtual(state, ir, dst);
+            let dead_local = if self.is_temp(dst) {
+                DeadLocal::Drop
+            } else {
+                dead_local
+            };
+            match (dead, dead_local) {
+                (true, DeadLocal::Drop) => {
+                    state.take_virtual(dst);
+                    state.discard_dead_elements(src, dst);
+                }
+                // Left for the branch, whose own settling drops the
+                // object without emitting anything (`settle_virtuals`).
+                (true, DeadLocal::Keep) => {}
+                (true, DeadLocal::Build) => self.materialize_virtual(state, ir, dst),
+                (false, _) => {
+                    if !(carries && self.merge_carries_virtual(branch_pos, dst, src)) {
+                        self.materialize_virtual(state, ir, dst);
+                    }
+                }
             }
         }
     }
@@ -446,6 +480,11 @@ impl<'a> JitContext<'a> {
     /// receiver) runs with the sink installed, answering in the flags or
     /// declining before it emits anything.
     ///
+    /// A local's object nothing can observe after the branch is not
+    /// dropped here: the producer is still to run, and may send a message
+    /// (`doc/escape_analysis.md` §12). It is dropped where the branch
+    /// itself is settled, which emits nothing.
+    ///
     pub(super) fn settle_virtuals_for_sink(
         &mut self,
         state: &mut AbstractState,
@@ -453,7 +492,7 @@ impl<'a> JitContext<'a> {
         reads: &[SlotId],
         sink_pos: BcIndex,
     ) {
-        self.settle_virtuals_before_branch(state, ir, sink_pos, true, reads);
+        self.settle_virtuals_before_branch(state, ir, sink_pos, true, reads, DeadLocal::Keep);
     }
 
     ///
@@ -636,32 +675,38 @@ impl<'a> JitContext<'a> {
 
     ///
     /// Whether a block literal of this frame (or a block nested in one)
-    /// may read or write the local *slot*: a `LoadDynVar` / `StoreDynVar`
-    /// of it at the block's depth (a write replaces the elided object
-    /// behind the compiler's back, so it has to be real by then), or — since a `binding` or `eval` inside the block captures
-    /// the whole frame — a call in the block resolved to a capturing
-    /// callee or to nothing the compiler can name, a lambda literal
-    /// (whose body is not reachable from here), or a handler in the
-    /// block (whose instructions the JIT does not decode).
+    /// may observe the object the local *slot* holds: a `LoadDynVar` /
+    /// `StoreDynVar` of it at the block's depth (a write replaces the
+    /// elided object behind the compiler's back, so it has to be real by
+    /// then), or — since a `binding` or `eval` inside the block captures
+    /// the whole frame — any instruction in the block that may send a
+    /// message (`doc/escape_analysis.md` §12: the callee the interpreter
+    /// finds for it may be `binding` under another name), a lambda
+    /// literal (whose body is not reachable from here), or a handler in
+    /// the block (whose instructions the JIT does not decode).
     ///
     fn touched_by_blocks(&self, slot: SlotId) -> bool {
-        self.table_touched_by_blocks(slot)
+        self.table_touched_as_object(slot)
     }
 
     ///
-    /// Whether the local *slot* may be read after the instruction at
-    /// *bc_pos*: by the rest of its basic block, or by any block control
-    /// can reach from there, counting a capture point
-    /// ([`Self::capture_point`]) as a read of every local a block or a
-    /// `binding` could reach ([`Self::touched_by_blocks`]). A write before
-    /// any read ends the slot's life on that path (`defined_slot`); the
+    /// Whether the object the local *slot* holds may be observed after
+    /// the instruction at *bc_pos*, as the interpreter sees the frame
+    /// (`doc/escape_analysis.md` §12): by the rest of its basic block, or
+    /// by any block control can reach from there, counting every
+    /// instruction that may send a message as a read of every local. A
+    /// side exit hands the frame to the interpreter, where a call the
+    /// compilation resolved to a callee that captures nothing may reach
+    /// `binding` after all, so the compilation's own capture points
+    /// ([`Self::capture_point`]) are not the measure. A write before any
+    /// read ends the slot's life on that path (`defined_slot`); the
     /// instructions whose destination is not plain are neither a read
     /// nor a kill. Always true in a body with an exception handler, where
-    /// the handler may read anything. Answered from the liveness tables
-    /// (`slot_analysis::UnitLiveness`).
+    /// the handler may read anything, or a lambda literal. Answered from
+    /// the frame liveness (`slot_analysis::SlotAnalysis`).
     ///
     fn local_live_after(&self, bc_pos: BcIndex, slot: SlotId) -> bool {
-        self.table_live_after(bc_pos, slot)
+        self.table_frame_live_after(bc_pos, slot)
     }
 
     ///
@@ -2132,6 +2177,24 @@ impl AbstractFrame {
 /// The slot *trace_ir* defines without reading ([`TraceIr::defined_slot`]).
 fn defined_slot(trace_ir: &TraceIr, store: &Store) -> Option<SlotId> {
     trace_ir.defined_slot(store)
+}
+
+///
+/// What [`JitContext::settle_virtuals_before_branch`] does with a local's
+/// elided object nothing can observe after the branch
+/// (`doc/escape_analysis.md` §12).
+///
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::codegen::jitgen) enum DeadLocal {
+    /// Nothing runs between here and the branch: the object is gone.
+    Drop,
+    /// The instruction producing the branch's condition is still to run
+    /// and may send a message, so the object has to outlive it. It stays
+    /// elided, for the branch's own settling to drop.
+    Keep,
+    /// As `Keep`, where the producer is a dispatch that branches in every
+    /// arm: no arm takes an elided object over, so it is built.
+    Build,
 }
 
 /// What a call may capture of this frame ([`JitContext::capture_point`]).
