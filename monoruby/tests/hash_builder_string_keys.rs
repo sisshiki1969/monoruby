@@ -140,3 +140,162 @@ fn set_elements() {
 fn mutating_the_original_key() {
     probe(&[r####"s = +"k"; h = [[s, 1]].to_h; s << "x"; [h, h["k"], h["kx"]]"####]);
 }
+
+/// `hash_aset_str`: the frozen copy is made for a new key only. A store
+/// to a key the Hash already has keeps the stored key object and leaves
+/// the String it was given alone, whatever the representation (inline
+/// pairs, the linear table, the indexed one), and is the one store an
+/// iteration allows.
+#[test]
+fn an_existing_key_is_kept() {
+    run_test(
+        r####"
+        r = []
+        [1, 3, 4, 9, 40].each do |n|
+          src = (0...n).map { |i| "k#{i}" }
+          h = {}
+          src.each { |s| h[s] = 1 }
+          r << [n, h.keys.all?(&:frozen?), src.none?(&:frozen?), h.keys.zip(src).none? { |a, b| a.equal?(b) }]
+          keys = h.keys
+          again = (0...n).map { |i| "k#{i}" }
+          again.each { |s| h[s] = 2 }
+          r << [h.keys.zip(keys).all? { |a, b| a.equal?(b) }, again.none?(&:frozen?), h.values.uniq, h.size]
+          src.each { |s| s << "x" }
+          r << [h["k0"], h.key?("k0x"), h.keys.first]
+          h.each { |k, _| h[k.dup] = 3 }
+          r << h.values.uniq
+          r << (begin; h.each { h["new#{n}".dup] = 1 }; :no; rescue => e; [e.class, e.message]; end)
+          r << [h.size, h.key?("new#{n}")]
+          h.store("k0".dup, 9)
+          r << [h["k0"], h.keys.zip(keys).all? { |a, b| a.equal?(b) }]
+        end
+        r
+        "####,
+    );
+}
+
+/// The same store from compiled code (`Hash#[]=` inlined into a method
+/// and a loop): new keys are copied, repeated ones are not.
+#[test]
+fn an_existing_key_is_kept_compiled() {
+    run_test(
+        r####"
+        def put(h, k, v) = h[k] = v
+        def count(words)
+          c = Hash.new(0)
+          words.each { |w| c[w] += 1 }
+          c
+        end
+        h = {}
+        srcs = []
+        300.times { |i| s = "k#{i % 7}"; srcs << s; put(h, s, i) }
+        keys = h.keys
+        300.times { |i| put(h, "k#{i % 7}", -i) }
+        words = (0...300).map { |i| "w#{i % 11}" }
+        c = count(words)
+        [h, h.keys.all?(&:frozen?), srcs.none?(&:frozen?),
+         h.keys.zip(keys).all? { |a, b| a.equal?(b) },
+         h.keys.none? { |k| srcs.any? { |s| s.equal?(k) } },
+         c, c.keys.all?(&:frozen?), words.none?(&:frozen?)]
+        "####,
+    );
+}
+
+/// Which key object a store keeps, by the kind of String: a frozen one
+/// is stored as it is, an identity Hash keeps every String it is given,
+/// a String with a singleton class or instance variables is copied
+/// without them, an instance of a subclass is stored as it is, and two
+/// Hashes share the copy of a bare String (its fstring).
+#[test]
+fn key_kinds() {
+    run_test(
+        r####"
+        r = []
+        fk = "frz".dup.freeze
+        h = {}
+        h[fk] = 1
+        r << h.keys[0].equal?(fk)
+        h["frz".dup] = 2
+        r << [h.keys[0].equal?(fk), h[fk]]
+        ih = {}.compare_by_identity
+        s = "id".dup
+        ih[s] = 1
+        ih[s] = 2
+        t = "id".dup
+        ih[t] = 3
+        r << [ih.size, ih.keys[0].equal?(s), ih.keys[0].frozen?, ih.keys[1].equal?(t)]
+        sc = "sing".dup
+        def sc.foo = 1
+        h = {}
+        h[sc] = 1
+        r << [h.keys[0].frozen?, h.keys[0].equal?(sc), h.keys[0].respond_to?(:foo), sc.frozen?]
+        h[sc] = 2
+        r << [h.size, h["sing"]]
+        iv = "ivar".dup
+        iv.instance_variable_set(:@a, 1)
+        h[iv] = 1
+        h[iv] = 5
+        r << [h.keys[1].frozen?, h.keys[1].equal?(iv), h.keys[1].instance_variable_get(:@a), h.size, h["ivar"]]
+        class MyS2023 < String; end
+        ms = MyS2023.new("sub")
+        h[ms] = 1
+        h[MyS2023.new("sub")] = 2
+        h["sub"] = 3
+        r << [h.keys[2].equal?(ms), h.keys[2].frozen?, h.keys[2].class, h.size, h.values.last(2)]
+        a = {}; b = {}
+        a["shared-key".dup] = 1
+        b["shared-key".dup] = 1
+        r << [a.keys[0].equal?(b.keys[0]), a.keys[0].equal?(-"shared-key".dup)]
+        c = Hash.new { |hh, k| hh[k] = [] }
+        %w[a b a].map(&:dup).each_with_index { |w, i| c[w] << i }
+        r << [c, c.keys.all?(&:frozen?)]
+        bk = "\xff\xfe".b
+        bh = {}; bh[bk] = 1; bh["\xff\xfe".b] = 2
+        r << [bh.size, bh.keys[0].frozen?, bh.keys[0].encoding.name, bh.values]
+        eh = {}; eh["é".dup] = 1; eh["é".encode("ISO-8859-1")] = 2; eh["é".dup] = 3
+        r << [eh.size, eh.values, eh.keys.map { |k| k.encoding.name }]
+        r
+        "####,
+    );
+}
+
+/// The builders with a key given more than once: one frozen key per
+/// content, the Strings they were given untouched.
+#[test]
+fn builders_with_repeated_keys() {
+    run_test(
+        r####"
+        require "set"
+        r = []
+        src = %w[x y x z y x].map(&:dup)
+        prs = src.each_with_index.to_a
+        th = prs.to_h
+        r << [th, th.keys.all?(&:frozen?), src.none?(&:frozen?), th.keys[0].equal?(src[0])]
+        th2 = prs.to_h { |k, v| [k, v * 2] }
+        r << [th2, th2.keys.all?(&:frozen?)]
+        g = src.group_by { |x| x }
+        r << [g.keys, g.keys.all?(&:frozen?), g.values.map(&:size)]
+        hh = Hash[prs]
+        r << [hh, hh.keys.all?(&:frozen?)]
+        hh2 = Hash[*prs.flatten]
+        r << [hh2, hh2.keys.all?(&:frozen?)]
+        hh3 = Hash[{}.compare_by_identity.tap { |q| src.each_with_index { |k, i| q[k] = i } }]
+        r << [hh3, hh3.keys.all?(&:frozen?), hh3.compare_by_identity?]
+        inv = { 1 => "p".dup, 2 => "q".dup, 3 => "p".dup }.invert
+        r << [inv, inv.keys.all?(&:frozen?)]
+        m = { "a".dup => 1 }.merge({ "a" => 2, "b" => 3 }) { |k, x, y| x + y }
+        r << [m, m.keys.all?(&:frozen?)]
+        st = Set.new(src)
+        r << [st.to_a, st.to_a.all?(&:frozen?), st.size]
+        st2 = Set.new; src.each { |x| st2 << x; st2.add(x.dup) }
+        r << [st2.to_a, st2.size]
+        k1 = "dyn".dup
+        lit = { k1 => 1, "dyn".dup => 2, "#{k1}2" => 3, k1 => 4 }
+        r << [lit, lit.keys.all?(&:frozen?), k1.frozen?]
+        u = {}; u.update({}.compare_by_identity.tap { |q| q["u".dup] = 1; q["u".dup] = 2 })
+        r << [u, u.keys.all?(&:frozen?)]
+        r << src.none?(&:frozen?)
+        r
+        "####,
+    );
+}

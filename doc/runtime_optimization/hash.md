@@ -53,8 +53,8 @@ boxed の `HashContent::IdentMap`。boxed 側は `Box<RubyMap<Option<Value>, Val
   （再定義された `String#eql?` / `#hash` はどちらの表現でも参照しない）、frozen
   なら探索中に内容が変わらない。
 
-リテラルのキーも `h["k"] = v` の格納キー（`Value::frozen_hash_key` が
-コピーして freeze する）も frozen なので、**String キーの小さな Hash リテラルは
+リテラルのキーも `h["k"] = v` の格納キー（新しいキーのときに
+`Value::frozen_hash_key` がコピーして freeze する）も frozen なので、**String キーの小さな Hash リテラルは
 boxed map を作らない**。
 
 `compare_by_identity` な inline hash は id 走査だけなので、任意のキー（可変な
@@ -489,7 +489,7 @@ boxed Hash の実体（インデックステーブルとエントリ Vec）は g
 | 挿入順序 | `st_table` のエントリ配列 | `rubymap`（IndexMap 系）: エントリ `Vec` + 位置の index table。観測される順序は同じ |
 | 反復中の変更 | 追加は例外、`delete` は許可（`RHASH_ITER_LEV`） | 同じ規則（既存キーの更新は許可）。機構は tombstone + `dead` カウンタ + `compact_if_dirty`。inline hash は tombstone を置く前に boxed へ昇格する。深度は inline が 2 ビット飽和、boxed が `Cell<u32>` |
 | 走査の実装 | `rb_hash_foreach`（C のコールバックループ） | `each` は Ruby の位置ループ（§1.6）。JIT がブロックごと展開するため |
-| String キーの複製 | `rb_hash_key_str` が fstring テーブルに**インターン**（Hash 間で共有） | 同じ。`Value::frozen_hash_key` が内容の fstring を引き（`Store::fstring`）、無ければ frozen コピーを作って弱いテーブルに登録する（string.md §3.1）。特異クラスやインスタンス変数を持つキーは素の frozen コピー |
+| String キーの複製 | `rb_hash_key_str` が fstring テーブルに**インターン**（Hash 間で共有） | 同じ。`Value::frozen_hash_key` が内容の fstring を引き（`Store::fstring`）、無ければ frozen コピーを作って弱いテーブルに登録する（string.md §3.1）。特異クラスやインスタンス変数を持つキーは素の frozen コピー。コピーするのは CRuby（`hash_aset_str`）と同じく**新しいキーのときだけ**で、既存キーへの格納は格納済みのキーを残して何も確保しない（`HashRefMut::aset`） |
 | String キーの比較・ハッシュ | 内容のみ、`String#hash` は dispatch しない。クラスが `String` ちょうどのときだけバイト比較で短絡（`rb_any_cmp` / `any_hash`） | 同じ規則（`Value::eql`、`string_key_eq`）。ただしバイト比較は `RStringInner::eq` で**エンコーディングを見ない**。CRuby の `rb_str_hash` は非 ASCII 文字列でエンコーディング index を混ぜる |
 | `compare_by_identity` | `st_table` の型を `identhash` に切り替えて再ハッシュ | inline は `IDENT_BIT` を立てるだけ（packed キーは `eql?` と同一性が一致するので inline のまま）。boxed は**別型**の `RubyMap<Option<IdentKey>, Value>` に作り直す。空マップ限定で双方向に切り替える `set_compare_by_identity_empty` があり、`Hash#replace` / `Set` が使う |
 | デフォルト値／proc | `ifnone` スロット | `Option<Box<HashDefault>>`。null なら「どちらも無し」を 1 ロードで判定でき、JIT のミス経路が in-line で nil を返せる。デフォルトを持つと boxed 強制（`Hash.new(7)` は確保する）。`clear` はデフォルトを保つ（CRuby と同じ） |

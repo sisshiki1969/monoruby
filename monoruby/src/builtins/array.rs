@@ -680,7 +680,7 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     elem.len()
                 )));
             }
-            vm.temp_hash_insert(globals, elem[0].frozen_hash_key(&globals.store), elem[1])?;
+            vm.temp_hash_aset(globals, elem[0], elem[1])?;
             i += 1;
         }
         Ok(())

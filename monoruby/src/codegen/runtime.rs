@@ -1029,7 +1029,7 @@ fn gen_hash_inner(
             .copied()
             .rev();
         while let Ok(chunk) = iter.next_chunk::<2>() {
-            map.insert(chunk[0].frozen_hash_key(&globals.store), chunk[1], vm, globals)?;
+            map.aset(chunk[0], chunk[1], vm, globals)?;
         }
     }
     Ok(map)
@@ -1056,7 +1056,7 @@ pub(super) extern "C" fn hash_insert(
             .copied()
             .rev();
         while let Ok(chunk) = iter.next_chunk::<2>() {
-            if let Err(err) = h.insert(chunk[0].frozen_hash_key(&globals.store), chunk[1], vm, globals) {
+            if let Err(err) = h.aset(chunk[0], chunk[1], vm, globals) {
                 vm.set_error(err);
                 return None;
             }
@@ -2774,14 +2774,9 @@ pub(super) extern "C" fn set_index(
         // the JIT's polymorphic `[]=` dispatch; going through
         // `invoke_method` here meant a global-method-cache probe per store
         // (10M of them in an activerecord run).
-        let key = if base.as_hash().is_compare_by_identity() {
-            index
-        } else {
-            index.frozen_hash_key(&globals.store)
-        };
         let res = base
             .as_hash_mut(&globals.store)
-            .and_then(|mut h| h.insert(key, src, vm, globals));
+            .and_then(|mut h| h.aset(index, src, vm, globals));
         return match res {
             Ok(()) => Some(src),
             Err(err) => {

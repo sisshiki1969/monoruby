@@ -452,11 +452,11 @@ fn hash_bracket(
             if arg.try_hash_ty().is_some() {
                 // Single hash argument: return a fresh hash with copied entries
                 // (do NOT carry over default value/proc or compare_by_identity).
-                let mut map = RubyMap::default();
+                let mut map = HashmapInner::default();
                 for (k, v) in arg.as_hash().iter() {
-                    map.insert(k.frozen_hash_key(&globals.store), v, vm, globals)?;
+                    map.aset(k, v, vm, globals)?;
                 }
-                Value::hash(map)
+                Value::hash_from_inner(map)
             } else if let Some(ary) = arg.try_array_ty() {
                 // Single array argument: try to convert [[k,v], ...] to hash
                 hash_from_array_pairs(ary.iter().copied(), vm, globals)?
@@ -466,11 +466,11 @@ fn hash_bracket(
                 if let Some(coerced) = crate::coerce::check_funcall(vm, globals, arg, to_hash_id)?
                     && coerced.try_hash_ty().is_some()
                 {
-                    let mut map = RubyMap::default();
+                    let mut map = HashmapInner::default();
                     for (k, v) in coerced.as_hash().iter() {
-                        map.insert(k.frozen_hash_key(&globals.store), v, vm, globals)?;
+                        map.aset(k, v, vm, globals)?;
                     }
-                    Value::hash(map)
+                    Value::hash_from_inner(map)
                 } else if let Some(coerced) =
                     crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_ARY)?
                     && let Some(ary) = coerced.try_array_ty()
@@ -489,16 +489,11 @@ fn hash_bracket(
                     "odd number of arguments for Hash".to_string(),
                 ));
             }
-            let mut map = RubyMap::default();
+            let mut map = HashmapInner::default();
             for i in (0..len).step_by(2) {
-                map.insert(
-                    args[i].frozen_hash_key(&globals.store),
-                    args[i + 1],
-                    vm,
-                    globals,
-                )?;
+                map.aset(args[i], args[i + 1], vm, globals)?;
             }
-            Value::hash(map)
+            Value::hash_from_inner(map)
         }
     };
     // Tag the result with the calling class so `MyHash[...]` returns a
@@ -518,7 +513,7 @@ fn hash_from_array_pairs(
     vm: &mut Executor,
     globals: &mut Globals,
 ) -> Result<Value> {
-    let mut map = RubyMap::default();
+    let mut map = HashmapInner::default();
     for (idx, elem) in iter.enumerate() {
         let Some(pair) = elem.check_array_type(vm, globals)? else {
             // CRuby formats `nil`/`true`/`false` literally and uses class
@@ -539,10 +534,10 @@ fn hash_from_array_pairs(
         };
         match pair.len() {
             1 => {
-                map.insert(pair[0].frozen_hash_key(&globals.store), Value::nil(), vm, globals)?;
+                map.aset(pair[0], Value::nil(), vm, globals)?;
             }
             2 => {
-                map.insert(pair[0].frozen_hash_key(&globals.store), pair[1], vm, globals)?;
+                map.aset(pair[0], pair[1], vm, globals)?;
             }
             n => {
                 return Err(MonorubyErr::argumenterr(format!(
@@ -552,7 +547,7 @@ fn hash_from_array_pairs(
             }
         }
     }
-    Ok(Value::hash(map))
+    Ok(Value::hash_from_inner(map))
 }
 
 ///
@@ -1011,20 +1006,17 @@ fn index_assign(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let mut key = lfp.arg(0);
+    let key = lfp.arg(0);
     let val = lfp.arg(1);
     // CRuby: when storing into a Hash with a fresh String key, the key
     // is dup'd and frozen so later mutation of the caller's String can't
-    // corrupt the hash. Frozen strings are stored as-is; existing-key
-    // preservation is handled by the underlying RubyMap. A
-    // compare_by_identity hash keys on object identity, so it stores
-    // the caller's String as-is (no copy, no freeze).
-    if !lfp.self_val().as_hash().is_compare_by_identity() {
-        key = key.frozen_hash_key(&globals.store);
-    }
+    // corrupt the hash — only when the key is new: an existing key is
+    // kept, and nothing is copied (`Hashmap::aset`). Frozen strings are
+    // stored as-is. A compare_by_identity hash keys on object identity,
+    // so it stores the caller's String as-is (no copy, no freeze).
     lfp.self_val()
         .as_hash_mut(&globals.store)?
-        .insert(key, val, vm, globals)?;
+        .aset(key, val, vm, globals)?;
     Ok(val)
 }
 
@@ -1981,14 +1973,9 @@ extern "C" fn hashindex_assign(
     key: Value,
     val: Value,
 ) -> Option<Value> {
-    let key = if base.as_hash().is_compare_by_identity() {
-        key
-    } else {
-        key.frozen_hash_key(&globals.store)
-    };
     let res = base
         .as_hash_mut(&globals.store)
-        .and_then(|mut h| h.insert(key, val, vm, globals));
+        .and_then(|mut h| h.aset(key, val, vm, globals));
     match res {
         Ok(()) => Some(val),
         Err(err) => {
@@ -2021,13 +2008,8 @@ extern "C" fn hashindex_assign_pure(
     if !(ident || key.is_packed_value() || key.is_plain_rstring_inner().is_some()) {
         return None;
     }
-    let key = if ident {
-        key
-    } else {
-        key.frozen_hash_key(&globals.store)
-    };
     let mut h = base.as_hash_mut(&globals.store).ok()?;
-    h.insert(key, val, vm, globals).ok()?;
+    h.aset(key, val, vm, globals).ok()?;
     Some(val)
 }
 
@@ -2541,11 +2523,11 @@ fn rassoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.expect_no_block()?;
     let hash = lfp.self_val().as_hash();
-    let mut map = RubyMap::default();
+    let mut map = HashmapInner::default();
     for (k, v) in hash.iter() {
-        map.insert(v.frozen_hash_key(&globals.store), k, vm, globals)?;
+        map.aset(v, k, vm, globals)?;
     }
-    Ok(Value::hash(map))
+    Ok(Value::hash_from_inner(map))
 }
 
 ///
@@ -3875,8 +3857,7 @@ fn env_slice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 let v = env_read_string(vm, globals, v)?;
                 // The result is keyed by the *given* name, which — as any
                 // `Hash#[]=` does — is stored as a frozen copy.
-                let k = k.frozen_hash_key(&globals.store);
-                vm.temp_at(idx).as_hash().insert(k, v, vm, globals)?;
+                vm.temp_at(idx).as_hash().aset(*k, v, vm, globals)?;
             }
         }
         Ok(vm.temp_at(idx))

@@ -911,9 +911,10 @@ impl Executor {
     }
 
     #[inline]
-    pub fn temp_hash_insert(&mut self, globals: &mut Globals, k: Value, v: Value) -> Result<()> {
+    /// `rb_hash_aset` on the Hash on top of the temp stack.
+    pub fn temp_hash_aset(&mut self, globals: &mut Globals, k: Value, v: Value) -> Result<()> {
         let mut h = self.temp_stack.last_mut().unwrap().as_hash();
-        h.insert(k, v, self, globals)
+        h.aset(k, v, self, globals)
     }
 
     pub fn temp_array_extend_from_slice(&mut self, slice: &[Value]) {
