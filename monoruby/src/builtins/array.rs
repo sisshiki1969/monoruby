@@ -7795,7 +7795,10 @@ mod tests {
     #[test]
     fn array_new_huge_size() {
         run_test_error(r##"Array.new(2**62)"##);
-        run_test_error(r##"Array.new(1 << 31)"##);
+        // Under `ARY_MAX_SIZE`, so the allocator is asked: a size no
+        // address space holds, never one a machine with enough memory
+        // and overcommit would grant (and then have to fill).
+        run_test_error(r##"Array.new(1 << 59)"##);
     }
 
     #[test]
