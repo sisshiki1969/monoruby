@@ -598,6 +598,22 @@ pub(super) struct JitStackFrame {
     /// that arrives through `widen_outer_slot` / `widen_outer_at_pos`.
     ///
     abstract_state: Option<AbstractFrame>,
+    ///
+    /// The refinement set the code written in this frame's iseq resolves
+    /// under (`Store::iseq_refinements`): the snapshot its `def` took for
+    /// a method, the home scope's live cell for a block.
+    ///
+    /// Per frame, not per compilation unit: a callee inlined into a scope
+    /// that activated refinements was still written outside it, and a
+    /// refined method inlined into an unrefined caller sees its own
+    /// refinement's siblings (`doc/refinements.md` §3.5). `EMPTY` for
+    /// every frame of a program that never refines anything, which keeps
+    /// the emitted code what it was before refinements existed. Recorded
+    /// with each compile-time resolution in
+    /// [`JitContext::inline_method_cache`], so the class-version repair
+    /// re-asks the question the frame asked (§6.6).
+    ///
+    refinements: RefinementSetId,
 
     ///
     /// Whether this function is a method, a class definition, or a top-level.
@@ -915,6 +931,12 @@ impl JitStackFrame {
             labels.push(None);
         }
         let stack_offset = store[iseq_id].stack_offset() + CONTINUATION_FRAME_SIZE; // size of continuation frame
+        // One load in a program that refines nothing.
+        let refinements = if store.refinements().is_active() {
+            store.iseq_refinements(iseq_id)
+        } else {
+            RefinementSetId::EMPTY
+        };
         Self {
             asm_info: AsmInfo {
                 jit_type,
@@ -948,6 +970,7 @@ impl JitStackFrame {
             outer,
             callid: None,
             abstract_state,
+            refinements,
             is_not_block,
             loop_info: indexmap::IndexMap::default(),
             loop_outer_reads: HashMap::default(),
@@ -984,6 +1007,7 @@ impl JitStackFrame {
             outer: self.outer,
             callid: self.callid,
             abstract_state: self.abstract_state.clone(),
+            refinements: self.refinements,
             is_not_block: self.is_not_block,
             loop_info: indexmap::IndexMap::default(),
             loop_outer_reads: HashMap::default(),
@@ -1176,18 +1200,6 @@ pub(crate) struct JitContext<'a> {
     const_version: u64,
 
     ///
-    /// The refinement set the body being compiled resolves under.
-    ///
-    /// `EMPTY` for every compilation in a program that never refines
-    /// anything, which is what keeps the emitted code identical to what
-    /// it was before refinements existed. Recorded alongside each
-    /// compile-time resolution in [`Self::inline_method_cache`] so the
-    /// class-version repair re-asks the same question
-    /// (`doc/refinements.md` §6.6).
-    ///
-    refinements: RefinementSetId,
-
-    ///
     /// Inline cache for method calls.
     ///
     pub(crate) inline_method_cache: Vec<InlineCacheEntry>,
@@ -1375,7 +1387,6 @@ impl<'a> JitContext<'a> {
         codegen_mode: bool,
         class_version: u32,
         const_version: u64,
-        refinements: RefinementSetId,
         stack_frame: Vec<JitStackFrame>,
     ) -> Self {
         Self {
@@ -1388,7 +1399,6 @@ impl<'a> JitContext<'a> {
             in_set_guarded_arm: false,
             class_version,
             const_version,
-            refinements,
             inline_method_cache: vec![],
             singleton_deps: vec![],
             ivar_ty_deps: vec![],
@@ -1463,7 +1473,6 @@ impl<'a> JitContext<'a> {
             in_set_guarded_arm: false,
             class_version: self.class_version,
             const_version: self.const_version,
-            refinements: self.refinements,
             inline_method_cache: vec![],
             singleton_deps: vec![],
             ivar_ty_deps: vec![],
@@ -3047,6 +3056,9 @@ impl<'a> JitContext<'a> {
             outer: _,
             specialized_id: _,
             callid: _,
+            // A function of the frame's iseq, which the chain names: the
+            // store does not change under a compilation.
+            refinements: _,
             // Read only through `JitContext::loop_count`, i.e. of the
             // frame being compiled, which for the whole of a nested
             // call is the callee's own.
@@ -3670,9 +3682,48 @@ impl<'a> JitContext<'a> {
         self.iseq().total_reg_num()
     }
 
-    /// The refinement set the body being compiled resolves under.
+    /// The refinement set the frame being compiled resolves under: its
+    /// own, whatever frame it is inlined into (see
+    /// [`JitStackFrame::refinements`]).
     pub(crate) fn refinements(&self) -> RefinementSetId {
-        self.refinements
+        self.current_frame().refinements
+    }
+
+    ///
+    /// The scope a pure `==` / `!=` helper called from the body being
+    /// compiled has to answer for (`executor::op::PureScope`), `None`
+    /// when no helper can.
+    ///
+    /// A helper that resolves an operator at run time asks the nearest
+    /// control frame which refinements are active and whether it is the
+    /// Ruby-written core (`Executor::basic_op_refinements`,
+    /// `Executor::dispatch_redefined_op`). A frameless body has no
+    /// control frame, so that walk answers for the frame *hosting* it —
+    /// right only while the two were written under the same set, on the
+    /// same side of the core's boundary. Where they were not (a callee
+    /// inlined across a `using`, a user's block run inside `Array#each`)
+    /// the helper is told instead, in the one case that needs no frame to
+    /// describe: user code with no refinement active. Any other body
+    /// gets no helper, and with it a frame of its own.
+    ///
+    pub(super) fn pure_eq_scope(&self) -> Option<crate::executor::op::PureScope> {
+        use crate::executor::op::PureScope;
+        let internal = |frame: &JitStackFrame| {
+            self.store[self.store[frame.iseq_id].func_id()]
+                .meta()
+                .is_internal_builtin()
+        };
+        let cur = self.current_frame();
+        let host = self.stack_frame.iter().rev().find(|frame| !frame.frameless);
+        if host.is_none_or(|host| {
+            host.refinements == cur.refinements && internal(host) == internal(cur)
+        }) {
+            Some(PureScope::Frame)
+        } else if !internal(cur) && cur.refinements.is_empty() {
+            Some(PureScope::Plain)
+        } else {
+            None
+        }
     }
 
     pub(crate) fn class_version(&self) -> u32 {
