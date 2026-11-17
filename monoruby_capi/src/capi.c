@@ -2354,16 +2354,31 @@ rb_class_inherited_p(VALUE mod, VALUE arg)
     return rb_funcall(mod, rb_intern("<="), 1, arg);
 }
 
-int
-rb_respond_to(VALUE obj, ID id)
-{
-    return RTEST(rb_funcall(obj, rb_intern("respond_to?"), 1, ID2SYM(id)));
-}
-
+/* CRuby's rb_obj_respond_to: a respond_to? the program defined is
+ * called; the builtin one is answered by the interpreter without a call
+ * (the method table, then a user respond_to_missing?). Either may run
+ * Ruby, so the frame is kept across it as for a funcall. */
 int
 rb_obj_respond_to(VALUE obj, ID id, int priv)
 {
-    return RTEST(rb_funcall(obj, rb_intern("respond_to?"), 2, ID2SYM(id), priv ? Qtrue : Qfalse));
+    if (!HAVE_API(obj_respond_to))
+        return RTEST(rb_funcall(obj, rb_intern("respond_to?"), 2, ID2SYM(id), priv ? Qtrue : Qfalse));
+    struct capi_frame *saved = frame();
+    if (capi_ios)
+        io_out_all();
+    int r = api->obj_respond_to(saved->ctx, M(obj), (MrSym)id, priv);
+    capi_cur = saved;
+    if (capi_ios)
+        io_in_all();
+    if (r < 0)
+        capi_unwind();
+    return r;
+}
+
+int
+rb_respond_to(VALUE obj, ID id)
+{
+    return rb_obj_respond_to(obj, id, 0);
 }
 
 VALUE

@@ -6155,84 +6155,104 @@ fn respond_to(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     } else {
         false
     };
-    // Ruby 4.0 has the reflective entry points honour refinements, so
-    // this resolves through the *caller's* set, not through none.
-    let set = vm.caller_refinements(globals);
-    let found = match name.and_then(|name| {
-        globals
-            .store
-            .check_method_with_refinements(lfp.self_val().class(), name, set)
-    }) {
+    let self_val = lfp.self_val();
+    if let Some(name) = name {
+        // Ruby 4.0 has the reflective entry points honour refinements, so
+        // this resolves through the *caller's* set, not through none.
+        let set = vm.caller_refinements(globals);
+        let responds = basic_obj_respond_to(vm, globals, self_val, name, include_all, set)?;
+        return Ok(Value::bool(responds));
+    }
+    // A String no symbol existed for (CRuby's `obj_respond_to`): no method
+    // has that name, so only `respond_to_missing?` is left to ask. The
+    // name is interned for it and the second argument passed *as given*
+    // (nil when omitted), and the override's answer is returned as is.
+    if let Some(fid) = globals.check_method(self_val, IdentId::RESPOND_TO_MISSING_) {
+        if let Some(v) = respond_to_missing_const(globals, fid) {
+            return Ok(v);
+        }
+        // Only now, and only for a body that will see it, is the name
+        // interned.
+        let name = lfp.arg(0).expect_symbol_or_to_str(vm, globals)?;
+        let priv_ = lfp.try_arg(1).unwrap_or(Value::nil());
+        return vm.invoke_func_inner(
+            globals,
+            fid,
+            self_val,
+            &[Value::symbol(name), priv_],
+            None,
+            None,
+        );
+    }
+    Ok(Value::bool(false))
+}
+
+/// What a `respond_to_missing?` that never reads its arguments answers.
+///
+/// The default `Object#respond_to_missing?` is `false` — an ISeq whose
+/// hint says it returns a constant — and so is the common user override
+/// that answers a literal. Such a body can be answered from the hint (the
+/// same shortcut `invoke_func_inner` takes) without a Ruby call and, for a
+/// name no symbol existed for, without interning it.
+fn respond_to_missing_const(globals: &Globals, fid: FuncId) -> Option<Value> {
+    let func = &globals.store[fid];
+    if let Some(iseq) = func.is_iseq()
+        && func.is_not_block()
+        && let ISeqHint::ConstReturn(v) = globals.store[iseq].hint
+        && func.no_keyword()
+        && func.positional_arity_ok(2)
+    {
+        Some(Value::from(v))
+    } else {
+        None
+    }
+}
+
+/// The builtin `respond_to?` for a name that is a symbol (CRuby's
+/// `basic_obj_respond_to`): a method `name` that `recv` has — a public
+/// one unless `include_all` — or else what `respond_to_missing?(name,
+/// include_all)` answers, as a boolean.
+///
+/// `set` is the refinement set the method is looked up through: that of
+/// the code that called `Kernel#respond_to?`, or called into the C
+/// extension asking `rb_obj_respond_to`.
+pub(crate) fn basic_obj_respond_to(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+    name: IdentId,
+    include_all: bool,
+    set: RefinementSetId,
+) -> Result<bool> {
+    let found = match globals
+        .store
+        .check_method_with_refinements(recv.class(), name, set)
+    {
         Some(entry) => {
-            entry.func_id().is_some()
-                && (include_all || entry.visibility() == Visibility::Public)
+            entry.func_id().is_some() && (include_all || entry.visibility() == Visibility::Public)
         }
         None => false,
     };
     if found {
-        return Ok(Value::bool(true));
+        return Ok(true);
     }
-    // Call respond_to_missing? as CRuby does. CRuby has two shapes of that
-    // call: for a name that is a symbol (`basic_obj_respond_to`) it passes
-    // `(Symbol, bool)` and truthifies the answer; for a String no symbol
-    // existed for (`obj_respond_to`) it interns the name and passes it
-    // with the second argument *as given* (nil when omitted), returning
-    // the override's answer as is.
-    let respond_to_missing = IdentId::RESPOND_TO_MISSING_;
-    if let Some(fid) = globals.check_method(lfp.self_val(), respond_to_missing) {
-        // The default `Object#respond_to_missing?` is `false` — an ISeq
-        // whose hint says it returns a constant — and so is the common
-        // user override that answers a literal. Such a body never reads
-        // its arguments, so answer from the hint here (the same shortcut
-        // `invoke_func_inner` takes) without a Ruby call and, for a name
-        // no symbol existed for, without interning it.
-        let func = &globals.store[fid];
-        let const_return = if let Some(iseq) = func.is_iseq()
-            && func.is_not_block()
-            && let ISeqHint::ConstReturn(v) = globals.store[iseq].hint
-            && func.no_keyword()
-            && func.positional_arity_ok(2)
-        {
-            Some(Value::from(v))
-        } else {
-            None
-        };
-        let result = match name {
-            Some(name) => {
-                if let Some(v) = const_return {
-                    return Ok(Value::bool(v.as_bool()));
-                }
-                let result = vm.invoke_func_inner(
-                    globals,
-                    fid,
-                    lfp.self_val(),
-                    &[Value::symbol(name), Value::bool(include_all)],
-                    None,
-                    None,
-                )?;
-                Value::bool(result.as_bool())
-            }
-            None => {
-                if let Some(v) = const_return {
-                    return Ok(v);
-                }
-                // Only now, and only for a body that will see it, is the
-                // name interned.
-                let name = lfp.arg(0).expect_symbol_or_to_str(vm, globals)?;
-                let priv_ = lfp.try_arg(1).unwrap_or(Value::nil());
-                vm.invoke_func_inner(
-                    globals,
-                    fid,
-                    lfp.self_val(),
-                    &[Value::symbol(name), priv_],
-                    None,
-                    None,
-                )?
-            }
-        };
-        return Ok(result);
+    // Call respond_to_missing? as CRuby does: `(Symbol, bool)`, and the
+    // answer truthified.
+    let Some(fid) = globals.check_method(recv, IdentId::RESPOND_TO_MISSING_) else {
+        return Ok(false);
+    };
+    if let Some(v) = respond_to_missing_const(globals, fid) {
+        return Ok(v.as_bool());
     }
-    Ok(Value::bool(false))
+    let result = vm.invoke_func_inner(
+        globals,
+        fid,
+        recv,
+        &[Value::symbol(name), Value::bool(include_all)],
+        None,
+        None,
+    )?;
+    Ok(result.as_bool())
 }
 
 fn object_respond_to(

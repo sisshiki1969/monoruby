@@ -1129,6 +1129,7 @@ liquid-c はこれで止まっていた。
 | `str_modify` | `rb_str_modify`: 長さより後ろのバイトに触れない（§3.22） |
 | `obj_class` | `rb_obj_class`: 特異クラスを飛ばした本当のクラス（§3.23） |
 | `intern_check` | `rb_check_symbol_cstr` / `rb_check_id_cstr`: intern 済みの名前だけを返す（§3.24） |
+| `obj_respond_to` | `rb_respond_to` / `rb_obj_respond_to`（と、それを使う `rb_check_funcall`）: 組み込みの `respond_to?` なら呼び出さずにメソッド表と `respond_to_missing?` で答える。プログラムが定義した `respond_to?` は CRuby の `vm_respond_to` と同じ引数（`priv` 指定かつ 1 引数でないときだけ第 2 引数）で呼ぶ。以前は毎回 `respond_to?` の funcall で、liquid-c は 1 レンダリングあたり 60,900 回 × 約 1,300 Ir を払っていた |
 
 あわせて `ary_push` / `hash_set` が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。

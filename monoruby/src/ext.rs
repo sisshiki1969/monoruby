@@ -892,6 +892,7 @@ pub(crate) static MR_API: MrApi = MrApi {
     str_modify: mr_str_modify,
     obj_class: mr_obj_class,
     intern_check: mr_intern_check,
+    obj_respond_to: mr_obj_respond_to,
 };
 
 // ---- regexp (ruby/re.h) ----------------------------------------------
@@ -2177,6 +2178,70 @@ unsafe extern "C" fn mr_intern_check(_: *mut MrContext, ptr: *const u8, len: usi
         .map_or(MR_NO_SYM, |id| id.get())
 }
 
+/// `rb_obj_respond_to` (CRuby's `rb_ec_obj_respond_to`). An extension
+/// asks this far more often than it calls anything (liquid-c: 60,900
+/// times per render), and as a `funcall` of `respond_to?` each question
+/// cost a full method call for the builtin to do one cached lookup.
+unsafe extern "C" fn mr_obj_respond_to(
+    ctx: *mut MrContext,
+    v: MrValue,
+    sym: MrSym,
+    include_all: c_int,
+) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(recv) = val(v) else {
+        return -1;
+    };
+    if sym == MR_NO_SYM {
+        return 0;
+    }
+    let name = IdentId::from(sym);
+    let include_all = include_all != 0;
+    let res = match globals.check_method(recv, IdentId::RESPOND_TO_) {
+        // A `respond_to?` of the program's own decides (CRuby's
+        // `vm_respond_to`). It is given `include_all` only when that is
+        // asked for, and then unless the method takes exactly one
+        // parameter, the deprecated signature.
+        Some(fid) if Some(fid) != globals.store.respond_to_fid() => {
+            let args = [Value::symbol(name), Value::bool(true)];
+            let arity = if include_all {
+                globals.store[fid].arity()
+            } else {
+                1
+            };
+            if arity > 2 {
+                Err(MonorubyErr::argumenterr(format!(
+                    "respond_to? must accept 1 or 2 arguments (requires {arity})"
+                )))
+            } else {
+                let argc = if arity == 1 { 1 } else { 2 };
+                vm.invoke_func_inner(globals, fid, recv, &args[..argc], None, None)
+                    .map(|v| v.as_bool())
+            }
+        }
+        // The builtin one, or none at all (a `BasicObject`): what the
+        // builtin answers. C has no `using` of its own; as on CRuby, the
+        // refinements are those of the Ruby code that called into the
+        // extension.
+        _ => {
+            let set = if globals.store.refinements().is_active() {
+                vm.current_refinements(globals)
+            } else {
+                RefinementSetId::EMPTY
+            };
+            crate::builtins::basic_obj_respond_to(vm, globals, recv, name, include_all, set)
+        }
+    };
+    match res {
+        Ok(b) => b as c_int,
+        Err(e) => {
+            set_err(vm, e);
+            -1
+        }
+    }
+}
+
 unsafe extern "C" fn mr_funcall_sym(
     ctx: *mut MrContext,
     recv: MrValue,
@@ -3186,6 +3251,94 @@ mod tests {
             assert_eq!(mr_io_update(ctx, closed.id(), -1, 0, 0), 0);
             assert!(closed.as_io_inner().is_closed());
             assert_eq!(Value::from_u64(mr_obj_class(ctx, r.id())).as_class_id(), IO_CLASS);
+        }
+    }
+
+    /// `obj_respond_to` (`rb_obj_respond_to`): the builtin `respond_to?`
+    /// answered from the method table and `respond_to_missing?`, a
+    /// `respond_to?` of the program's own called with CRuby's arguments,
+    /// and the three ways it reports -1.
+    #[test]
+    fn abi_obj_respond_to() {
+        let mut globals = Globals::new_test();
+        let res = globals
+            .run(
+                r#"class RtPlain
+                     def pub = 1
+                     private def priv = 2
+                     def respond_to_missing?(name, all) = name == :ghost || (all && name == :deep)
+                   end
+                   class RtOwn
+                     def respond_to?(name, all = false) = name == :mine || (all && name == :deep)
+                   end
+                   class RtOne; def respond_to?(name) = name == :mine; end
+                   class RtThree; def respond_to?(a, b, c) = true; end
+                   class RtRaise; def respond_to_missing?(name, all) = raise("no"); end
+                   $capi_rt_keep = [RtPlain.new, RtOwn.new, RtOne.new, RtThree.new, RtRaise.new, BasicObject.new]"#,
+                std::path::Path::new("."),
+            )
+            .unwrap();
+        let mut vm = Executor::init(&mut globals, "abi_obj_respond_to").unwrap();
+        let items: Vec<Value> = res.as_array_inner().iter().copied().collect();
+        let (plain, own, one, three, raising, bare) =
+            (items[0], items[1], items[2], items[3], items[4], items[5]);
+        let mut ctx = make_ctx(&mut vm, &mut globals, None, None);
+        let ctx = &mut ctx as *mut MrContext;
+        let sym = |name: &str| IdentId::get_id(name).get();
+        // SAFETY: a live context over this test's interpreter; every
+        // value is rooted by `$capi_rt_keep`.
+        unsafe {
+            let ask =
+                |v: Value, name: &str, all: c_int| mr_obj_respond_to(ctx, v.id(), sym(name), all);
+            let failed = |ctx: *mut MrContext| {
+                let (vm, _) = parts(ctx);
+                assert!(vm.has_error());
+                vm.take_error();
+            };
+            // The builtin: public methods, private ones only when asked,
+            // then `respond_to_missing?(name, all)`.
+            assert_eq!(
+                [
+                    ask(plain, "pub", 0),
+                    ask(plain, "priv", 0),
+                    ask(plain, "priv", 1)
+                ],
+                [1, 0, 1]
+            );
+            assert_eq!(
+                [
+                    ask(plain, "ghost", 0),
+                    ask(plain, "deep", 0),
+                    ask(plain, "deep", 1)
+                ],
+                [1, 0, 1]
+            );
+            assert_eq!([ask(plain, "to_s", 0), ask(plain, "nope", 1)], [1, 0]);
+            // A BasicObject has no `respond_to?` at all: the same answer.
+            assert_eq!([ask(bare, "__id__", 0), ask(bare, "inspect", 1)], [1, 0]);
+            // The program's own: `all` reaches it only when asked for…
+            assert_eq!(
+                [
+                    ask(own, "mine", 0),
+                    ask(own, "deep", 0),
+                    ask(own, "deep", 1),
+                    ask(own, "to_s", 1)
+                ],
+                [1, 0, 1, 0]
+            );
+            // …and never when it takes one parameter.
+            assert_eq!([ask(one, "mine", 1), ask(one, "to_s", 0)], [1, 0]);
+            // No name, no method.
+            assert_eq!(mr_obj_respond_to(ctx, plain.id(), MR_NO_SYM, 1), 0);
+            // -1: a pending error handed back in, a `respond_to?` that
+            // cannot be asked with two arguments, a raising
+            // `respond_to_missing?`.
+            assert_eq!(mr_obj_respond_to(ctx, MR_UNDEF, sym("to_s"), 0), -1);
+            assert_eq!(ask(three, "x", 1), -1);
+            failed(ctx);
+            assert_eq!(ask(raising, "x", 0), -1);
+            failed(ctx);
+            assert_eq!(ask(raising, "to_s", 0), 1);
         }
     }
 }

@@ -74,6 +74,46 @@ fn prism_native_half_rejects_bad_arguments() {
 }
 
 #[test]
+fn prism_loader_reads_through_the_ruby_byte_reader() {
+    // `Prism::Serialize::Loader` reads the serialized tree a byte at a
+    // time. The gem gives it `::StringIO` on every engine but
+    // TruffleRuby; on monoruby that is a C extension behind the C API
+    // layer, so the stand-in for the gem's extension re-registers
+    // `Prism::Serialize`'s autoload to `prism/serialize_reader`, which
+    // swaps in a pure-Ruby reader. Monoruby's own arrangement, so not
+    // oracle-checked — what the loader then builds is, by the tests
+    // around this one.
+    let v = run_test_no_result_check(
+        r##"
+        require "prism"
+        r = []
+        r << Prism.autoload?(:Serialize)
+        res = Prism.parse("# c\nx = [1, 2.5, 3r, 4i, 10**30, :sym, 'str', /re/, \"é\"]\n")
+        r << res.value.statements.body[0].value.elements.map { |n| n.class.name.sub("Prism::", "") }
+        r << res.comments.size << res.value.statements.body[0].value.elements[1].value
+        ser = Prism.send(:const_get, :Serialize)
+        reader = ser.send(:const_get, :FastStringIO)
+        r << reader.name << (ser.constants & [:FastStringIO, :ByteReader])
+        io = reader.new("ab\xFFcdef".b)
+        r << io.getbyte << io.getbyte << io.getbyte << io.pos << io.read(2) << io.eof?
+        io.pos -= 1
+        r << io.read(3) << io.eof? << io.getbyte << io.read(1)
+        expected = [
+          "prism/serialize_reader",
+          %w[IntegerNode FloatNode RationalNode ImaginaryNode CallNode SymbolNode StringNode RegularExpressionNode StringNode],
+          1, 2.5,
+          "Prism::Serialize::ByteReader", [],
+          97, 98, 255, 3, "cd", false,
+          "def", true, nil, nil,
+        ]
+        raise "got #{r.inspect}" unless r == expected
+        r.size
+        "##,
+    );
+    assert_eq!(v.try_fixnum(), Some(16));
+}
+
+#[test]
 fn prism_visitors_and_translations_load() {
     // The pure-Ruby layers over the tree: a Visitor walk, the pattern
     // matcher, `Prism::Translation::Ripper` (§ below) and the node

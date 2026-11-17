@@ -291,3 +291,66 @@ fn time_local_isdst_picks_the_side_of_a_fall_back() {
         "#,
     );
 }
+
+#[test]
+fn time_local_finds_the_instant_in_every_zone() {
+    // `Time.local` away from an offset change finds its instant with
+    // `localtime_r` alone (the wall clock read as UTC, minus the offset
+    // there, checked at the result and a day either side), and within a
+    // day of a change falls back to probing `mktime`. Swept hourly over
+    // the days around each zone's transitions — half-hour daylight
+    // saving, a +5:45 zone, +14:00, the far past and future — so both
+    // paths and the hand-over between them are compared with CRuby.
+    let _tz = tz_lock();
+    run_test_once(
+        r#"
+        old = ENV['TZ']
+        zones = %w[UTC Asia/Tokyo America/New_York Europe/London Australia/Lord_Howe
+                   Asia/Kathmandu America/St_Johns Asia/Kolkata Pacific/Kiritimati America/Sao_Paulo]
+        days = [[2024, 3, 9], [2024, 3, 29], [2024, 4, 6], [2024, 10, 5], [2024, 10, 26], [2024, 11, 2],
+                [1970, 1, 1], [1900, 1, 1], [1883, 11, 17], [2037, 3, 7], [2100, 6, 1], [1, 1, 1], [9999, 12, 28]]
+        r = []
+        zones.each do |z|
+          ENV['TZ'] = z
+          n = 0
+          sum = 0
+          days.each do |y, m, d|
+            (0...72).each do |h|
+              t = Time.local(y, m, d + h / 24, h % 24, 30, 7)
+              n += 1
+              sum += t.to_i * 31 + t.utc_offset + (t.dst? ? 1 : 0)
+            end
+          end
+          t = Time.local(2024, 7, 1, 12, 0, 0)
+          u = Time.local(2024, 1, 1, 12, 0, 0)
+          r << [z, n, sum, t.to_i, t.utc_offset, t.zone, u.to_i, u.utc_offset, u.zone]
+        end
+        # The zone a Time was made in travels with it; `mktime` is an alias.
+        ENV['TZ'] = 'Asia/Kathmandu'
+        t = Time.mktime(2024, 2, 29, 23, 59, 59.5)
+        r << [t.to_s, t.to_f, t.utc_offset, (t + 1).to_s, Time.local(2024, 12, 31, 23, 59, 60).to_s]
+        ENV['TZ'] = old
+        r
+        "#,
+    );
+}
+
+#[test]
+fn time_local_in_the_system_zone() {
+    // With `TZ` unset the zone is `/etc/localtime`, whatever the machine
+    // has there, so this one is compared with a live CRuby. It is also
+    // the shape that made `Time.local` slow: every `mktime` is a `tzset`,
+    // and with no `TZ` to compare glibc `stat`s the file each time.
+    let _tz = tz_lock();
+    run_test_once_live(
+        r#"
+        old = ENV.delete('TZ')
+        r = [[2024, 1, 15, 8, 0, 0], [2024, 7, 15, 20, 30, 15], [1999, 12, 31, 23, 59, 59], [2038, 1, 19, 3, 14, 8]].map do |a|
+          t = Time.local(*a)
+          [t.to_i, t.utc_offset, t.to_s]
+        end
+        ENV['TZ'] = old if old
+        r
+        "#,
+    );
+}

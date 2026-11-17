@@ -325,6 +325,24 @@ v_check_call(VALUE self, VALUE obj, VALUE name)
     return r == Qundef ? ID2SYM(rb_intern("undef")) : r;
 }
 
+/* rb_respond_to / rb_obj_respond_to with and without private methods. */
+static VALUE
+v_responds(VALUE self, VALUE obj, VALUE name)
+{
+    ID id = rb_to_id(name);
+    return rb_ary_new_from_args(3, rb_respond_to(obj, id) ? Qtrue : Qfalse,
+                                rb_obj_respond_to(obj, id, 0) ? Qtrue : Qfalse,
+                                rb_obj_respond_to(obj, id, 1) ? Qtrue : Qfalse);
+}
+
+/* rb_obj_respond_to alone: one question, so that what a respond_to? of
+ * the program's own was asked can be told apart. */
+static VALUE
+v_responds1(VALUE self, VALUE obj, VALUE name, VALUE priv)
+{
+    return rb_obj_respond_to(obj, rb_to_id(name), RTEST(priv)) ? Qtrue : Qfalse;
+}
+
 /* rb_str_tmp_new: a String of `len` writable bytes. */
 static VALUE
 v_tmp_fill(VALUE self, VALUE len, VALUE ch)
@@ -401,6 +419,8 @@ Init_capi_value(void)
     rb_define_singleton_method(mV, "buf_build", v_buf_build, 1);
     rb_define_singleton_method(mV, "freeze_", v_freeze, 1);
     rb_define_singleton_method(mV, "null_id", v_null_id, 0);
+    rb_define_singleton_method(mV, "responds", v_responds, 2);
+    rb_define_singleton_method(mV, "responds1", v_responds1, 3);
     VALUE cHolder = rb_define_class_under(mV, "Holder", rb_cObject);
     rb_define_alloc_func(cHolder, holder_alloc);
     rb_define_method(cHolder, "set", holder_set, 1);

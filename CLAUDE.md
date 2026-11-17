@@ -650,7 +650,13 @@ reproducible build. It performs two jobs:
      extension: `src/builtins/prism.rs` runs libprism's serializers and the
      gem's `Prism::Serialize` builds the node tree. The serialization format
      is per prism version, so bumping the crate means re-vendoring these
-     files from the matching gem. `stdlib/ripper.rb` is
+     files from the matching gem — all but `prism.rb` and
+     `serialize_reader.rb`, which are monoruby's own: the latter is what
+     `Prism::Serialize`'s autoload points at here, loading the gem's
+     `prism/serialize` and then giving its loader a pure-Ruby byte reader
+     in place of `::StringIO` (a C extension on monoruby, so ~680
+     instructions per `getbyte` against a few JIT-compiled ones; ruby-lsp's
+     indexing went from 163 ms to 117 ms). `stdlib/ripper.rb` is
      `Prism::Translation::Ripper` on top of it. `gem/psych/` is the psych
      5.3.1 gem's Ruby half (Ruby 4.0.9's) plus `gem/psych/psych.rb`, the
      stand-in for its C extension: it requires the `ext/psych` extension,
