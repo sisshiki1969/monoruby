@@ -1129,6 +1129,19 @@ impl ISeqInfo {
             .find_map(|(local, base, len)| (*local == slot).then_some((*base, *len)))
     }
 
+    ///
+    /// The first scratch-window slot (`Self::local_scratch`): the windows
+    /// are laid out together above every temporary the bytecode uses.
+    /// The register count when there is none.
+    ///
+    pub(crate) fn scratch_start(&self) -> SlotId {
+        self.local_scratch
+            .iter()
+            .map(|(_, base, _)| base.0)
+            .min()
+            .map_or(SlotId(self.total_reg_num() as u16), SlotId)
+    }
+
     #[cfg(feature = "emit-bc")]
     pub(crate) fn get_exception_map(
         &self,

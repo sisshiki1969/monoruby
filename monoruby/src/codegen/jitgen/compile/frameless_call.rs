@@ -816,7 +816,7 @@ impl AbstractState {
         }
         // The elided arguments are the callee's now (see `set_arguments`).
         for slot in args..args + req {
-            if let Some(src) = self.take_virtual(slot) {
+            if let Some(src) = self.drop_virtual(slot) {
                 self.discard_dead_elements(src, slot);
             }
         }

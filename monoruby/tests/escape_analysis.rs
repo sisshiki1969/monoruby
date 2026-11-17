@@ -2720,3 +2720,160 @@ fn elided_receiver_with_an_elided_argument_in_a_loop() {
         "#,
     );
 }
+
+#[test]
+fn dropped_local_object_seen_by_a_binding_after_a_side_exit() {
+    // Issue #1910. A local's elided object is dropped once nothing the
+    // compiler can see reads the local — and a call the inline cache
+    // resolved to a non-capturing callee is not a read. When that call
+    // site then reaches `binding` under another name, the class guard
+    // exits to the interpreter, which makes the Binding over a frame
+    // whose local has to hold the Array the compiled code never built.
+    run_test(
+        r#"
+        class A1910; def get = nil; end
+        class B1910; alias_method :get, :binding; public :get; end
+        def probe1910(b) = b && b.local_variable_get(:x)
+        def w1910(n, os)
+          i = 0; s = 0; r = []
+          while i < n
+            x = [i, i + 1]
+            s += x[0] + x[1]
+            r << probe1910(os[i].get)
+            i += 1
+          end
+          [s, r]
+        end
+        as = [A1910.new, A1910.new, A1910.new]
+        30.times { w1910(3, as) }
+        w1910(3, [B1910.new, A1910.new, B1910.new])
+        "#,
+    );
+}
+
+#[test]
+fn dropped_local_object_seen_across_blocks_and_loops() {
+    // The marker a dropped object leaves in its local is carried like
+    // any constant: out of a loop, through a branch, past an unrelated
+    // side exit (the Integer overflow), and it is the redefinition of
+    // the local that ends it.
+    run_test(
+        r#"
+        class A1910b; def get = nil; end
+        class B1910b; alias_method :get, :binding; public :get; end
+        def probe1910b(b, name = :x) = b && b.local_variable_get(name)
+        def after_loop(n, o)
+          i = 0; s = 0
+          while i < n
+            x = [i, i + 1]
+            s += x[0] + x[1]
+            i += 1
+          end
+          [s, probe1910b(o.get)]
+        end
+        def behind_branch(i, o, c)
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          r = c ? probe1910b(o.get) : 0
+          [s, r]
+        end
+        def after_overflow(i, o, big)
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          t = big + big
+          [s, t, probe1910b(o.get)]
+        end
+        def redefined(i, o)
+          x = [1, 2, 3]
+          s = x[0] + i
+          r1 = probe1910b(o.get)
+          x = (i..i + 2)
+          s += x.first
+          r2 = probe1910b(o.get)
+          x = i
+          [s, r1, r2, probe1910b(o.get)]
+        end
+        def hash_in_block(i, o)
+          h = {a: 1, b: 2}
+          s = h[:a] + i
+          r = nil
+          1.times { r = probe1910b(o.get, :h) }
+          [s, r]
+        end
+        a = A1910b.new
+        b = B1910b.new
+        30.times do |i|
+          after_loop(3, a)
+          behind_branch(i, a, true)
+          after_overflow(i, a, 1)
+          redefined(i, a)
+          hash_in_block(i, a)
+        end
+        [after_loop(3, b), behind_branch(7, b, true), behind_branch(7, b, false),
+         after_overflow(7, b, 2**62), redefined(7, b), hash_in_block(7, b)]
+        "#,
+    );
+}
+
+#[test]
+fn dropped_local_object_after_each_consuming_use() {
+    // Every lowering that takes a dead local's object without building
+    // it leaves the marker: an index, a folded call on it, a multiple
+    // assignment out of it, a move to another local, a hand-over to a
+    // specialized callee. `eval` under another name reads the frame as
+    // `binding` does, and a Binding shows one object however often it
+    // is asked.
+    run_test(
+        r#"
+        class A1910c; def get = nil; def ev(s) = nil; end
+        class B1910c
+          alias_method :get, :binding
+          alias_method :ev, :eval
+          public :get, :ev
+        end
+        def probe1910c(b, name = :x) = b && b.local_variable_get(name)
+        def by_eval(i, o)
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          [s, o.ev("x")]
+        end
+        def moved(i, o)
+          x = [i, i + 1]
+          y = x
+          s = y[0] + y[1]
+          b = o.get
+          [s, probe1910c(b), probe1910c(b, :y)]
+        end
+        def expanded(i, o)
+          x = [i, i + 1]
+          a, b = x
+          [a + b, probe1910c(o.get)]
+        end
+        def sum1910c(v) = v[0] + v[1]
+        def handed_over(i, o)
+          x = [i, i + 1]
+          s = sum1910c(x)
+          [s, probe1910c(o.get)]
+        end
+        def folded_call(i, o)
+          x = [i, i + 1]
+          m = x.max
+          [m, probe1910c(o.get)]
+        end
+        def asked_twice(i, o)
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          b = o.get
+          r = b && [b.local_variable_get(:x).equal?(b.local_variable_get(:x)),
+                    (b.local_variable_get(:x) << 9; b.local_variable_get(:x)),
+                    b.eval("x")]
+          [s, r]
+        end
+        a = A1910c.new
+        b = B1910c.new
+        ms = %i[by_eval moved expanded handed_over folded_call asked_twice]
+        ms.each { |m| 30.times { |i| send(m, i, a) } }
+        ms.map { |m| send(m, 7, b) }
+        "#,
+    );
+}

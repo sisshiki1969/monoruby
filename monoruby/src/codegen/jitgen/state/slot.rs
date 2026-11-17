@@ -281,6 +281,14 @@ pub(crate) struct SlotState {
     /// [`Slot`] is plain data, which is what makes copying a state (once
     /// per branch edge, in every walk) a block copy.
     dynvar_aliases: Vec<(SlotId, DynVarAliasLoad)>,
+    /// The first scratch-window slot of a frame with a real Ruby frame
+    /// under it (`ISeqInfo::scratch_start`; `None` in a frameless callee,
+    /// and in a unit test's bare state). The windows of such a frame are
+    /// `nil`-filled at entry and written only with the elements of an
+    /// elided object, so their memory is left alone when the state holds
+    /// nothing for them (`wb_void`): the marker a dropped object leaves
+    /// in its local ([`Self::drop_virtual`]) is read back from there.
+    scratch_start: Option<SlotId>,
 }
 
 ///
@@ -395,6 +403,7 @@ impl SlotState {
             copy_srcs: 0,
             virtuals: vec![],
             dynvar_aliases: vec![],
+            scratch_start: (!cc.in_frameless_frame()).then(|| cc.iseq().scratch_start()),
         };
         ctx.set_S_with_guard(SlotId::self_(), self_class);
         ctx
@@ -1051,6 +1060,37 @@ impl SlotState {
     pub(in crate::codegen::jitgen) fn take_virtual(&mut self, slot: SlotId) -> Option<VirtualSrc> {
         let i = self.virtuals.iter().position(|(dst, _)| *dst == slot)?;
         Some(self.virtuals.remove(i).1)
+    }
+
+    ///
+    /// Forget the elided object in *slot*, which nothing the compiler can
+    /// see reads any more, leaving its marker as the slot's value where
+    /// the slot is a local variable (`elided_local`, issue #1910).
+    ///
+    /// The compiled code never reads the marker; a side exit writes it to
+    /// the frame like any constant, and whatever captures the frame
+    /// afterwards — a `binding` reached where the inline cache named
+    /// another callee — builds the object from it. No marker is left
+    ///
+    /// - in a temporary, which no Binding shows;
+    /// - in a frameless callee, whose window is not a frame until a side
+    ///   exit makes it one (and `nil`-fills what the state does not hold);
+    /// - for an object whose elements are not all in this frame's scratch
+    ///   windows: one handed over by the caller.
+    ///
+    /// The slot then keeps whatever its memory holds, as before.
+    ///
+    pub(in crate::codegen::jitgen) fn drop_virtual(&mut self, slot: SlotId) -> Option<VirtualSrc> {
+        let src = self.take_virtual(slot)?;
+        if let Some(scratch) = self.scratch_start
+            && self.locals().contains(&slot)
+            && src.own_slots().all(|s| s >= scratch)
+            && let Some(marker) = crate::elided_local::marker(src)
+        {
+            debug_assert_eq!(self.mode(slot), LinkMode::V);
+            self.set_mode(slot, LinkMode::C(marker));
+        }
+        Some(src)
     }
 
     /// Whether *slot* holds an element of an elided Array literal (or an
@@ -2640,10 +2680,20 @@ impl AbstractFrame {
     /// Array returned elided has its first element in its own slot,
     /// `doc/escape_analysis.md` §9) — such a slot holds a valid value the
     /// object's materialization reads, and is overwritten by it.
+    ///
+    /// Nor a scratch-window slot of a real frame (`scratch_start`): it
+    /// holds `nil` or the elements of the last object elided into its
+    /// local, which a marker left in that local may still refer to
+    /// ([`Self::drop_virtual`]).
     pub(super) fn wb_void(&self) -> Vec<SlotId> {
         self.all_regs()
             .filter_map(|idx| match self.mode(idx) {
-                LinkMode::V if !self.is_virtual_src(idx) => Some(idx),
+                LinkMode::V
+                    if !self.is_virtual_src(idx)
+                        && self.scratch_start.is_none_or(|scratch| idx < scratch) =>
+                {
+                    Some(idx)
+                }
                 _ => None,
             })
             .collect()

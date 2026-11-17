@@ -347,7 +347,12 @@ impl<'a> JitContext<'a> {
             let redefined = defined_slot(trace_ir, self.store) == Some(dst);
             if !read && (dead || redefined) {
                 // Dead, and never observed: the allocation is simply gone.
-                state.take_virtual(dst);
+                // A local keeps the object's marker until it is assigned
+                // again (`SlotState::drop_virtual`) — until the
+                // instruction's own definition, for a redefined one: a
+                // side exit before that hands the interpreter a frame in
+                // which the local still holds the object.
+                state.drop_virtual(dst);
                 state.discard_dead_elements(src, dst);
                 continue;
             }
@@ -420,7 +425,7 @@ impl<'a> JitContext<'a> {
                 !self.local_live_after(branch_pos, dst)
             };
             if dead {
-                state.take_virtual(dst);
+                state.drop_virtual(dst);
                 state.discard_dead_elements(src, dst);
             } else if !(carries && self.merge_carries_virtual(branch_pos, dst, src)) {
                 self.materialize_virtual(state, ir, dst);
@@ -996,7 +1001,10 @@ impl<'a> JitContext<'a> {
             state.def_virtual(dst, obj);
             return;
         }
-        let obj = state.take_virtual(src).unwrap();
+        // The source local is dead, but it still names the object as far
+        // as a Binding is concerned: it keeps the marker of its own view
+        // (its window is left as it is).
+        let obj = state.drop_virtual(src).unwrap();
         let moved = if self.is_temp(dst) {
             obj
         } else {
@@ -1213,7 +1221,7 @@ impl<'a> JitContext<'a> {
                 // receiver still live afterwards (a parameter read again
                 // later) stays elided for its next use.
                 if recv_dead {
-                    state.take_virtual(recv);
+                    state.drop_virtual(recv);
                 }
                 match plan {
                     ElementsPlan::Array(base, src, len) => {
@@ -1273,7 +1281,7 @@ impl<'a> JitContext<'a> {
         dst: SlotId,
         len: u16,
     ) {
-        let virt = state.take_virtual(src).unwrap();
+        let virt = state.drop_virtual(src).unwrap();
         // The targets may overlap the element slots (`a, b = f(x, y)`
         // expands into the temporaries right above the result, which hold
         // the elements of an Array returned elided): copy from the far
@@ -1330,7 +1338,11 @@ impl<'a> JitContext<'a> {
         let is_target = |s: SlotId| (dst.0..dst.0 + len).contains(&s.0);
         let next_sp = state.next_sp();
         for s in std::iter::once(src).chain(virt.own_slots()) {
-            if !is_target(s) && (s == src || s >= next_sp) && !state.is_virtual_src(s) {
+            // A local the object was expanded out of keeps its marker
+            // (`SlotState::drop_virtual`).
+            let marked = s == src && state.mode(s) != LinkMode::V;
+            if !is_target(s) && !marked && (s == src || s >= next_sp) && !state.is_virtual_src(s)
+            {
                 state.discard(s);
             }
         }
@@ -1463,7 +1475,7 @@ impl<'a> JitContext<'a> {
                 self.guard_class_version(state, ir, true);
                 self.guard_range_cover_arg(state, ir, &plan);
                 if recv_dead {
-                    state.take_virtual(lhs);
+                    state.drop_virtual(lhs);
                 }
                 self.emit_range_plan(state, ir, plan, resolved.unwrap(), dst);
                 true
@@ -1731,25 +1743,25 @@ impl<'a> JitContext<'a> {
                 match plan {
                     IndexPlan::Hash(fold) => {
                         if recv_dead {
-                            state.take_virtual(base);
+                            state.drop_virtual(base);
                         }
                         self.emit_hash_fold(state, ir, fold, Some(dst));
                     }
                     IndexPlan::Array(ArrayIndexPlan::Nil) => {
                         if recv_dead {
-                            state.take_virtual(base);
+                            state.drop_virtual(base);
                         }
                         state.def_C(dst, Value::nil());
                     }
                     IndexPlan::Array(ArrayIndexPlan::Elem(SlotBase::Own, elem)) => {
                         if recv_dead {
-                            state.take_virtual(base);
+                            state.drop_virtual(base);
                         }
                         self.copy_element(state, ir, elem, dst);
                     }
                     IndexPlan::Array(ArrayIndexPlan::Elem(elem_base, elem)) => {
                         if recv_dead {
-                            state.take_virtual(base);
+                            state.drop_virtual(base);
                         }
                         state.flush_gp(ir);
                         ir.load_caller_slot(elem_base, elem);
@@ -1765,7 +1777,7 @@ impl<'a> JitContext<'a> {
                         }
                         state.load_fixnum(ir, idx, GP::Rsi);
                         if recv_dead {
-                            state.take_virtual(base);
+                            state.drop_virtual(base);
                         }
                         ir.elided_array_index(elem_base, src, len);
                         state.def_rax2acc(ir, dst);

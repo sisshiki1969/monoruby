@@ -4105,7 +4105,7 @@ impl AbstractState {
             // this frame does before the call returns), and the argument
             // slots are dead once it does.
             for slot in args..args + pos_num {
-                if let Some(src) = self.take_virtual(slot) {
+                if let Some(src) = self.drop_virtual(slot) {
                     self.discard_dead_elements(src, slot);
                 }
             }
