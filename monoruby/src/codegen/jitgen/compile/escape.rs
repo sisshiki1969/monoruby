@@ -320,8 +320,10 @@ impl<'a> JitContext<'a> {
         };
         // A call that may read every local of this frame behind the
         // compiler's back (`doc/escape_analysis.md` §10): a block literal
-        // (its body reads the frame's locals through the outer chain, and
-        // a `binding` in it captures the frame), a callee that captures
+        // (its body reads the frame's locals through the outer chain, a
+        // `binding` in it captures the frame, and so does the callee by
+        // asking the block it was handed for its binding, whatever the
+        // body holds: #2058), a callee that captures
         // its caller's frame (`binding` / `eval`,
         // `unbox_to_S_for_outgoing_block`), or a call resolved by neither
         // (a generic `send` could be any of these).
@@ -332,7 +334,7 @@ impl<'a> JitContext<'a> {
             }
             let captured = match capture {
                 Some(Capture::Frame) => true,
-                Some(Capture::Block) => !self.is_temp(dst) && self.touched_by_blocks(dst),
+                Some(Capture::Block) => !self.is_temp(dst),
                 None => false,
             };
             let read = reads.contains(&dst) || captured;
@@ -525,8 +527,8 @@ impl<'a> JitContext<'a> {
     /// *src* in the local *dst* across its head (`doc/escape_analysis.md`
     /// §3): by the tables, no block of the loop writes the local (nor a
     /// local among the object's element slots; the others are the local's
-    /// scratch window, which only a literal into the local writes), and no
-    /// capture point in the loop reaches it. The body may still read the
+    /// scratch window, which only a literal into the local writes), and
+    /// the loop holds no capture point. The body may still read the
     /// object in a way that materializes it; the back-edge fixpoint then
     /// says so, and the loop's entries materialize it instead
     /// ([`JitContext::settle_entries`]).
@@ -551,9 +553,11 @@ impl<'a> JitContext<'a> {
             return false;
         }
         let (begin, end) = (iseq.bb_info[loop_start].begin, iseq.bb_info[loop_end].end);
-        let u = self.unit_liveness(iseq_id);
+        if self.unit_liveness(iseq_id).captured_in(begin, end) {
+            return false;
+        }
         for slot in locals {
-            if a.defined_in_blocks(loop_start, loop_end, slot) || u.captured_in(begin, end, slot) {
+            if a.defined_in_blocks(loop_start, loop_end, slot) {
                 return false;
             }
         }
@@ -655,8 +659,9 @@ impl<'a> JitContext<'a> {
     /// `unbox_to_S_for_outgoing_block`) or resolved to nothing the
     /// compiler can name (a generic `send` could be any of these);
     /// `Some(Capture::Block)` for a call passing a block literal, whose
-    /// body reads the frame's locals through the outer chain (and may
-    /// capture the frame from inside); `None` otherwise.
+    /// body reads the frame's locals through the outer chain and may
+    /// capture the frame from inside, and whose binding (the frame) the
+    /// callee can ask for; `None` otherwise.
     ///
     pub(in crate::codegen::jitgen) fn capture_point(&self, trace_ir: &TraceIr) -> Option<Capture> {
         let TraceIr::MethodCall { callid, cache, .. } = trace_ir else {
@@ -671,22 +676,6 @@ impl<'a> JitContext<'a> {
         } else {
             None
         }
-    }
-
-    ///
-    /// Whether a block literal of this frame (or a block nested in one)
-    /// may observe the object the local *slot* holds: a `LoadDynVar` /
-    /// `StoreDynVar` of it at the block's depth (a write replaces the
-    /// elided object behind the compiler's back, so it has to be real by
-    /// then), or — since a `binding` or `eval` inside the block captures
-    /// the whole frame — any instruction in the block that may send a
-    /// message (`doc/escape_analysis.md` §12: the callee the interpreter
-    /// finds for it may be `binding` under another name), a lambda
-    /// literal (whose body is not reachable from here), or a handler in
-    /// the block (whose instructions the JIT does not decode).
-    ///
-    fn touched_by_blocks(&self, slot: SlotId) -> bool {
-        self.table_touched_as_object(slot)
     }
 
     ///
@@ -2203,7 +2192,12 @@ pub(in crate::codegen::jitgen) enum Capture {
     /// The whole frame, through a `binding` / `eval` (or a call the
     /// compiler cannot name).
     Frame,
-    /// The locals a block literal passed to the call reads.
+    /// The whole frame as well, through a block literal passed to the
+    /// call: its body reads the frame's locals through the outer chain,
+    /// and the callee may keep it and ask for its binding. Told apart
+    /// from `Frame` because the block is run by a callee the compiler
+    /// knows: only what the block's body touches is a read for the
+    /// compiled code's own liveness (`slot_analysis.rs`, Layer B).
     Block,
 }
 

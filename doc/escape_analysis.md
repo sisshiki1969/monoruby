@@ -685,17 +685,15 @@ before
   frame (`binding`, `eval`, `local_variables`) or resolved to nothing
   the compiler can name (a generic `send`, which could be any of these)
   materializes every object; one passing a block literal materializes
-  the objects of the locals the block, or a block nested in it, touches
-  (`touched_by_blocks`: a `LoadDynVar` / `StoreDynVar` of the local at
-  the block's depth — a store replaces the object behind the compiler's
-  back — a lambda literal, or a capturing or unresolved call inside the
-  block, which could reach the whole frame) — and every object when a
-  block holds an instruction that may send a message at all, since the
-  callee the interpreter finds for it may be `binding` (§12). The same
-  check covers a parameter's handed-over object;
+  the object of every local too. The block's body reads and writes the
+  frame's locals through the outer chain (a store replaces the object
+  behind the compiler's back), a `binding` or `eval` it reaches sees the
+  whole frame, and so does the callee, by asking the block it was handed
+  for its binding (§12). The same check covers a parameter's handed-over
+  object;
 - a block boundary into a loop head whose loop writes the local or holds
-  a capture point reaching it (a forward merge, or a loop that does
-  neither, carries it, §3).
+  a capture point (a forward merge, or a loop that does neither, carries
+  it, §3).
 
 Everything else — the frame's own calls to known callees, operators,
 instance-variable loads, loads of other locals — leaves the object in
@@ -822,8 +820,7 @@ temporary's view may be consumed by is `SlotAnalysis::alias_stop`; the
 call-site and receiver-class conditions of `alias_consumed_by_call` are
 checked on it as before.
 
-`local_live_after`, `touched_by_blocks` and `alias_consumed_by_call`
-are table lookups; the forward scans they replaced were checked against
+`local_live_after` and `alias_consumed_by_call` are table lookups; the forward scans they replaced were checked against
 the tables, call for call, on the whole test suite, ruby/spec core and
 optcarrot before being removed.
 
@@ -872,9 +869,8 @@ does not: control flow, moves, literals of immediates and Arrays, and
 the loads and stores of locals, instance and class variables. The table
 is exhaustive over `TraceIr`, so a new instruction has to say which it
 is. It depends on no inline cache — that is the point — and so it is a
-Layer A fact (§11): one bit per instruction, a flag for the frame's
-blocks, and one more live-out matrix, built the first time a compilation
-of the iseq asks. A frame with a lambda literal answers "live"
+Layer A fact (§11): one bit per instruction and one more live-out
+matrix, built the first time a compilation of the iseq asks. A frame with a lambda literal answers "live"
 throughout, as one that rescues does.
 
 `local_live_after` is this liveness, and it is the only question
@@ -909,14 +905,29 @@ object stops being tracked:
 its outer chain, and so does a `binding` or `eval` called inside it. The
 compilation's view (`touched`, §11) counts the locals the block names
 and widens to every local when a call in the block is unresolved or
-capturing. The interpreter's view is wider for the same reason as
-above: a block that holds any sending instruction
-(`SlotAnalysis::block_dispatches`, blocks nested in it included) may
-reach `binding`, so a call passing such a block builds every local's
-object (`table_touched_as_object`), and a loop holding such a call
-carries none across its head (`UnitLiveness::captured_in`). Only a block
-that sends nothing — `{ }`, `{ |v| v }`, `{ @x }` — keeps the narrower
-set.
+capturing. That view is not enough for an elided object, on two counts.
+The interpreter's view of the block's body is wider for the same reason
+as above: any instruction in it that sends a message may reach
+`binding`. And the body is not the only way in: the callee can keep the
+block it was handed and ask for its binding, which is the caller's
+frame with every local in it, whatever the body holds (issue #2058):
+
+```ruby
+def foo(&b) = b.binding.local_variable_get(:x)
+
+def f(i)
+  x = [i, i + 1]
+  s = x[0] + x[1]
+  [s, foo { }]               # CRuby: [s, [i, i + 1]]
+end
+```
+
+Nothing exits to the interpreter here, so the object has to be real by
+the call. A call passing a block literal (`Capture::Block`) therefore
+builds every local's object (`settle_virtuals`), a dead one included,
+and a loop holding such a call carries none across its head
+(`UnitLiveness::captured_in`). This is the one read of §12 that
+allocates.
 
 **What it costs.** Nothing in straight-line code: the object is tracked
 a little longer and never built. An allocation appears where the longer
@@ -929,6 +940,9 @@ life meets a boundary an elided object cannot cross:
 | the same in a `while` loop | 1 → 100,001 |
 | literal in a `while` loop, a call after the loop | 1 → 100,001 |
 | literal, then `1.times { o.foo }` | 1 → 100,001 |
+| literal, then `a.each { \|v\| s += v }` | 1 → 100,001 |
+| literal, then a call passing `{ nil }` | 1 → 100,001 |
+| a call passing `{ nil }`, then the literal | 1 → 1 |
 | `if c; x = [a, b]; …; end; o.foo` | 1 → 50,001 |
 
 A `while` loop is the costly one: its condition is a comparison, which
@@ -937,17 +951,18 @@ loop head, where the entry brings no object and the back edge has to
 build its own (§3). A block-based loop pays nothing, since each
 iteration is a frame of its own. Over 81 benchmarks (ruby-bench,
 `benchmark/`, optcarrot) the allocation counts are unchanged except for
-three Rails applications — lobsters +0.4%, shipit +0.4%, activerecord
-+0.08% — and all of that is objects handed over in a parameter (`*rest`,
-`**kwrest`), not literals in locals.
+three Rails applications — lobsters +0.3 to +0.4%, activerecord +0.08%,
+and shipit +0.2% over its usual count, which is less than that count
+moves from run to run without the change — and all of that is objects
+handed over in a parameter (`*rest`, `**kwrest`), not literals in
+locals. The hard read at a call passing a block adds nothing to it: the
+three applications give the same counts with and without it, and no
+other benchmark's count moved beyond what it varies by on its own.
 
 **What it does not cover.** The frame liveness makes the object survive
 until a *side exit* can build it. A capture that reaches the frame with
 no side exit in between still finds the object elided:
 
-- a callee that keeps the block it was passed and asks for its binding
-  (`def foo(&b) = b.binding`, called as `foo { }`), when the block
-  sends nothing and names none of the locals (issue #2058);
 - `binding` or `eval` reached *in place* from compiled code: through a
   native method that calls back (`send(:binding)`, `[o].include?("x")`
   with `==` aliased to `eval`), through an operator lowered to a generic

@@ -21,8 +21,8 @@
 //! backward liveness dataflow over the basic blocks that counts a capture
 //! point as a read of every local it may reach.
 //!
-//! `local_live_after`, `touched_by_blocks` and `alias_consumed_by_call`
-//! in `compile/escape.rs` are lookups in these tables.
+//! `local_live_after` and `alias_consumed_by_call` in
+//! `compile/escape.rs` are lookups in these tables.
 //!
 //! Layer A also holds the **frame liveness**
 //! ([`SlotAnalysis::frame_live_out`]): liveness as the interpreter sees
@@ -234,11 +234,6 @@ pub(crate) struct SlotAnalysis {
     /// Per instruction, by `BcIndex`, as a bitset: the interpreter may
     /// send a message there (`TraceIr::may_dispatch`).
     dispatches: Box<[u64]>,
-    /// A block literal of this frame (or a block nested in one) holds
-    /// such an instruction: a callee it reaches may be `binding` or
-    /// `eval` under another name, which sees every local of the frame
-    /// through the block's outer chain.
-    block_dispatches: bool,
     /// Per basic block: live at its exit with every dispatching
     /// instruction counted as a read of every local
     /// ([`Self::frame_live_out`]), built on first use.
@@ -306,7 +301,6 @@ impl SlotAnalysis {
         // chain, and the calls in them.
         let mut block_touched = SlotSet::empty(total_reg_num);
         let mut block_opaque = false;
-        let mut block_dispatches = false;
         let mut has_lambda = false;
         let mut block_calls = vec![];
         let mut stack: Vec<(ISeqId, usize)> = vec![(iseq_id, 0)];
@@ -314,7 +308,6 @@ impl SlotAnalysis {
             let block = &store[bid];
             if depth > 0 && block.has_exception_handler() {
                 block_opaque = true;
-                block_dispatches = true;
                 break 'walk;
             }
             for i in 0..block.bytecode().len() {
@@ -323,7 +316,6 @@ impl SlotAnalysis {
                     continue;
                 }
                 let ir = TraceIr::from_pc(pc, store);
-                block_dispatches |= depth > 0 && ir.may_dispatch();
                 match ir {
                     TraceIr::LoadDynVar(_, DynVar { reg, outer })
                     | TraceIr::StoreDynVar(DynVar { reg, outer }, _)
@@ -333,7 +325,6 @@ impl SlotAnalysis {
                     }
                     TraceIr::Lambda if depth > 0 => {
                         block_opaque = true;
-                        block_dispatches = true;
                         break 'walk;
                     }
                     // The frame's own body is walked first and to its
@@ -369,7 +360,6 @@ impl SlotAnalysis {
             block_calls: block_calls.into_boxed_slice(),
             has_lambda,
             dispatches,
-            block_dispatches,
             frame_live_out: std::cell::OnceCell::new(),
         }
     }
@@ -489,12 +479,6 @@ impl SlotAnalysis {
         self.dispatches[i / 64] & (1u64 << (i % 64)) != 0
     }
 
-    /// Whether a block literal of the frame (or a block nested in one)
-    /// holds an instruction that may send a message.
-    pub(crate) fn block_dispatches(&self) -> bool {
-        self.block_dispatches
-    }
-
     ///
     /// The frame liveness: per basic block, the slots live at its exit
     /// when every instruction that may send a message reads every local
@@ -571,9 +555,6 @@ pub(crate) struct UnitLiveness {
     /// `live_out` with every capture point counted as a read of every
     /// local (`JitContext::table_observable_after`), built on first use.
     observable_out: std::cell::OnceCell<SlotSets>,
-    /// Layer A's `block_dispatches`: a block literal of the frame holds
-    /// an instruction that may send a message.
-    block_dispatches: bool,
 }
 
 impl UnitLiveness {
@@ -584,14 +565,14 @@ impl UnitLiveness {
         self.blocks_opaque
     }
 
-    /// Whether a capture point in `begin..=end` may read the local
-    /// *slot*, as the object it holds (`table_touched_as_object`).
-    pub(crate) fn captured_in(&self, begin: BcIndex, end: BcIndex, slot: SlotId) -> bool {
-        (begin.to_usize()..=end.to_usize()).any(|i| match self.captures[i] {
-            Some(Capture::Frame) => true,
-            Some(Capture::Block) => self.block_dispatches || self.touched.contains(slot),
-            None => false,
-        })
+    /// Whether `begin..=end` holds a capture point. Either kind may
+    /// observe the object any local holds: a callee handed a block can
+    /// keep it and ask for its binding, which is the whole frame
+    /// (`doc/escape_analysis.md` §12).
+    pub(crate) fn captured_in(&self, begin: BcIndex, end: BcIndex) -> bool {
+        self.captures[begin.to_usize()..=end.to_usize()]
+            .iter()
+            .any(|c| c.is_some())
     }
 }
 
@@ -657,7 +638,6 @@ impl<'a> JitContext<'a> {
             blocks_opaque,
             live_out,
             observable_out: std::cell::OnceCell::new(),
-            block_dispatches: a.block_dispatches(),
         }
     }
 
@@ -796,18 +776,6 @@ impl<'a> JitContext<'a> {
             }
         }
         a.frame_live_out(bb_info).contains(bb.index(), slot)
-    }
-
-    ///
-    /// Whether a block literal of the current frame may observe the
-    /// object the local *slot* holds: it reads or writes the local
-    /// ([`Self::table_touched_by_blocks`]), or holds an instruction that
-    /// may send a message, whose callee may be `binding` or `eval` under
-    /// another name.
-    ///
-    pub(in crate::codegen::jitgen) fn table_touched_as_object(&self, slot: SlotId) -> bool {
-        let u = self.unit_liveness(self.iseq_id());
-        u.block_dispatches || u.touched.contains(slot)
     }
 
     /// Whether the call at *bc_pos* is a capture point of this
