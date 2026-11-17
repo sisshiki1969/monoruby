@@ -663,6 +663,19 @@ pub struct MrApi {
     /// otherwise (and for a name that is not UTF-8).
     pub intern_check:
         unsafe extern "C" fn(ctx: *mut MrContext, ptr: *const u8, len: usize) -> MrSym,
+    /// `rb_obj_respond_to`: whether `v` responds to `sym`, private and
+    /// protected methods counting when `include_all` is nonzero. A
+    /// `respond_to?` the program defined is called (with `include_all`
+    /// only when nonzero and the method takes it); the builtin one is
+    /// answered without a call — the method table, then a
+    /// `respond_to_missing?` the program defined. 1 or 0, or -1 with an
+    /// error pending.
+    pub obj_respond_to: unsafe extern "C" fn(
+        ctx: *mut MrContext,
+        v: MrValue,
+        sym: MrSym,
+        include_all: c_int,
+    ) -> c_int,
 }
 
 /// [`MrApi::io_state`]'s result. `mode` holds CRuby's FMODE_* bits.

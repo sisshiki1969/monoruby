@@ -66,3 +66,74 @@ p((V.throw_(:nobody, 1) rescue [$!.class, $!.message]))
 p((V.catch_(:a, nil) { }).inspect, catch(:b) { V.catch_(:c, :inner) ; throw :b, :ruby })
 # rb_id2str / rb_id2name of the null ID
 p V.null_id
+# rb_respond_to / rb_obj_respond_to: the builtin respond_to? is answered
+# from the method table (public only unless `priv`), then by a
+# respond_to_missing? of the program's own; a respond_to? of the program's
+# own is called, with the second argument only when `priv` is set and the
+# method takes it
+class Vis
+  def pub = 1
+  protected def prot = 2
+  private def priv = 3
+  def gone = 4
+  undef_method :gone
+end
+class VisSub < Vis; public :priv; end
+vis = Vis.new
+p %i[pub prot priv gone nope to_s puts initialize].map { V.responds(vis, _1) }
+p V.responds(VisSub.new, :priv), V.responds(VisSub.new, "pub"), V.responds(vis, "no such name ever")
+p V.responds(nil, :to_a), V.responds(1, :+), V.responds(:s, :to_proc), V.responds(Vis, :new), V.responds(Vis, :pub)
+def vis.single = 5
+p V.responds(vis, :single), V.responds(Vis.new, :single)
+class Ghostly
+  def respond_to_missing?(name, all = false) = ($asked << [name, all]; name == :ghost || (all && name == :hidden))
+end
+$asked = []
+p V.responds(Ghostly.new, :ghost), V.responds(Ghostly.new, :hidden), V.responds(Ghostly.new, :other), V.responds(Ghostly.new, :to_s)
+p $asked
+class TruthyMissing; def respond_to_missing?(*) = :yes; end
+class NilMissing; def respond_to_missing?(*) = nil; end
+p V.responds(TruthyMissing.new, :x), V.responds(NilMissing.new, :x)
+class Own2
+  def respond_to?(name, all = false) = ($asked << [name, all]; name == :mine || (all && name == :deep))
+end
+class Own1
+  def respond_to?(name) = ($asked << [name]; name == :mine)
+end
+class OwnRest
+  def respond_to?(*a) = ($asked << a; a.size == 2)
+end
+$asked = []
+p V.responds(Own2.new, :mine), V.responds(Own2.new, :deep), V.responds(Own2.new, :to_s)
+p V.responds(Own1.new, :mine), V.responds(Own1.new, :to_s), V.responds(OwnRest.new, :to_s)
+p $asked
+class Own3; def respond_to?(a, b, c) = true; end
+p((V.responds1(Own3.new, :x, true) rescue [$!.class, $!.message]), (V.responds1(Own3.new, :x, false) rescue $!.class))
+class Own0; def respond_to?(a = 1, b = 2, c = 3) = [a, b, c] == [:x, true, 3]; end
+p V.responds1(Own0.new, :x, true), V.responds1(Own0.new, :x, false)
+class Angry
+  def respond_to_missing?(name, all) = raise(IOError, "missing #{name} #{all}")
+end
+class Furious
+  def respond_to?(name, all = false) = raise(IOError, "asked #{name} #{all}")
+end
+p((V.responds(Angry.new, :x) rescue [$!.class, $!.message]), V.responds(Angry.new, :to_s))
+p((V.responds1(Angry.new, :x, true) rescue [$!.class, $!.message]), (V.responds1(Furious.new, :x, true) rescue [$!.class, $!.message]))
+class Bare < BasicObject
+  def here = 1
+  private def there = 2
+end
+p V.responds(Bare.new, :here), V.responds(Bare.new, :there), V.responds(Bare.new, :inspect), V.responds(BasicObject.new, :__id__)
+class BareMissing < BasicObject; def respond_to_missing?(name, all) = name == :ghost; end
+p V.responds(BareMissing.new, :ghost), V.responds(BareMissing.new, :nope)
+# a refinement active where the extension was called from is seen
+module VisRefine; refine(Vis) { def refined = 1; private def refined_priv = 2 }; end
+using VisRefine
+p vis.respond_to?(:refined), V.responds(vis, :refined), V.responds(vis, :refined_priv)
+# redefining respond_to? after the first question is seen
+late = Class.new { def m = 1 }
+p V.responds(late.new, :m), V.responds(late.new, :zz)
+late.class_eval { def respond_to?(name, all = false) = name == :zz }
+p V.responds(late.new, :m), V.responds(late.new, :zz)
+# rb_check_funcall asks with private methods included
+p V.check_call(vis, :priv), V.check_call(vis, :prot), V.check_call(vis, :gone), V.check_call(Own2.new, :to_s).class, V.check_call(Own2.new, :pub)

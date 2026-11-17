@@ -20,6 +20,10 @@
 module Prism
   VERSION = __version.freeze
 
+  # `prism.rb` registered `prism/serialize`; go through the file that also
+  # gives the loader a pure-Ruby byte reader (see there for why).
+  autoload :Serialize, "prism/serialize_reader"
+
   SERIALIZE_PARSE = 0
   SERIALIZE_LEX = 1
   SERIALIZE_PARSE_LEX = 2

@@ -304,12 +304,36 @@ fn bind(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// the receiver's class (the metaclass, for a class/module receiver) to
 /// have `owner` in its ancestor chain.
 fn check_bind_receiver(globals: &mut Globals, owner: ClassId, recv: Value) -> Result<()> {
-    let class_of = if let Some(m) = recv.is_class_or_module() {
-        globals.store.get_metaclass(m.id()).id()
+    let owner_module = globals.store[owner].get_module();
+    // A module's method binds to anything: the module could be mixed
+    // into the receiver.
+    if owner_module.as_val().ty() == Some(ObjTy::MODULE) {
+        return Ok(());
+    }
+    // CRuby's `rb_obj_is_kind_of(recv, owner)`: the owner is on the
+    // superclass chain of the receiver's class. Walked in place —
+    // `bind_call` asks this on every call, and sorbet-runtime's method
+    // wrappers make that every call of a typed program.
+    let kind_of = if let Some(m) = recv.is_class_or_module() {
+        // A class's own class is its metaclass, which exists only once
+        // asked for.
+        let meta = globals.store.get_metaclass(m.id());
+        meta.id() == owner || owner_module.is_ancestor_of(meta)
     } else {
-        recv.class()
+        recv.is_kind_of(&globals.store, owner)
     };
-    super::module::validate_bind_target(globals, owner, class_of)
+    if kind_of {
+        return Ok(());
+    }
+    if owner_module.is_singleton().is_some() {
+        return Err(MonorubyErr::typeerr(
+            "singleton method called for a different object",
+        ));
+    }
+    Err(MonorubyErr::typeerr(format!(
+        "bind argument must be an instance of {}",
+        globals.store.get_class_name(owner)
+    )))
 }
 
 fn source_loc_suffix(store: &Store, func_id: FuncId, is_mm: bool) -> String {
@@ -909,26 +933,29 @@ fn umethod_hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn bind_call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let method = self_val.as_umethod();
-    let mut args: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
-    if args.is_empty() {
-        return Err(MonorubyErr::argumenterr(
-            "wrong number of arguments (given 0, expected 1+)",
-        ));
-    }
-    let receiver = args.remove(0);
+    // The rest Array is this frame's own: the arguments are passed on as
+    // a slice of it, not copied out (sorbet-runtime's wrappers make this
+    // the hottest builtin of a typed program).
+    let rest = lfp.arg(0).as_array();
+    let mut kw = forwarded_kw(lfp, 1);
+    let (receiver, args) = match rest.split_first() {
+        Some((&receiver, args)) => (receiver, args),
+        // Keywords alone are the receiver, a Hash, as for any method
+        // that takes no keywords of its own.
+        None => match kw.take() {
+            Some(h) => (h.into(), &[][..]),
+            None => {
+                return Err(MonorubyErr::argumenterr(
+                    "wrong number of arguments (given 0, expected 1+)",
+                ));
+            }
+        },
+    };
     let owner = method.owner();
     let func_id = method.func_id();
     check_bind_receiver(globals, owner, receiver)?;
     let name = method.lookup_name(&globals.store);
-    vm.invoke_func_named(
-        globals,
-        func_id,
-        name,
-        receiver,
-        &args,
-        lfp.block(),
-        forwarded_kw(lfp, 1),
-    )
+    vm.invoke_func_named(globals, func_id, name, receiver, args, lfp.block(), kw)
 }
 
 #[cfg(test)]
@@ -1814,6 +1841,68 @@ mod tests {
               def x; end
             end
             Foo.instance_method(:x).bind_call
+            "##,
+        );
+    }
+
+    #[test]
+    fn umethod_bind_call_receivers() {
+        // Which receivers a method may be bound to: an instance of the
+        // owner or of a subclass (the superclass chain, walked without
+        // building the ancestor list), anything for a module's method,
+        // a class object for a singleton method of an ancestor.
+        run_test_once(
+            r##"
+            module BcMix; def mixed(a = 0) = [:mixed, self.class, a]; end
+            module BcPre; def base(*a, **k, &b) = [:pre, super]; end
+            class BcBase
+              def base(*a, **k, &b) = [:base, self.class, a, k, b&.call]
+              def self.klass_m(x) = [:klass_m, self, x]
+            end
+            class BcSub < BcBase; end
+            class BcLeaf < BcSub; include BcMix; end
+            class BcOther; end
+            class BcPrepended < BcBase; prepend BcPre; end
+            m = BcBase.instance_method(:base)
+            err = ->(&b) { begin; b.call; rescue => e; [e.class, e.message]; end }
+            r = []
+            r << m.bind_call(BcBase.new) << m.bind_call(BcSub.new, 1) << m.bind_call(BcLeaf.new, 1, 2, k: 3) { :blk }
+            r << m.bind_call(BcPrepended.new, 4)
+            r << BcPrepended.instance_method(:base).bind_call(BcPrepended.new, 5)
+            r << err.() { BcPrepended.instance_method(:base).bind_call(BcBase.new) }
+            r << err.() { m.bind_call(BcOther.new) } << err.() { m.bind_call(nil) } << err.() { m.bind_call(BcBase) }
+            r << err.() { BcSub.instance_method(:base).bind_call(BcOther.new) }
+            r << err.() { BcLeaf.instance_method(:mixed).bind_call(BcBase.new, 9) }
+            r << BcMix.instance_method(:mixed).bind_call(BcOther.new, 7) << BcMix.instance_method(:mixed).bind_call(3)
+            r << Kernel.instance_method(:frozen?).bind_call(BasicObject.new)
+            r << Object.instance_method(:to_s).bind_call(BcLeaf.new).sub(/0x\h+/, "XX")
+            r << Kernel.instance_method(:to_s).bind_call(BasicObject.new).sub(/0x\h+/, "XX")
+            r << err.() { m.bind(BcOther.new) } << m.bind(BcLeaf.new).call(8)
+            anon = Class.new { def anon_m = 1 }
+            r << err.() { anon.instance_method(:anon_m).bind_call(1) }.then { |c, msg| [c, msg.sub(/0x\h+/, "XX")] }
+            km = BcBase.method(:klass_m).unbind
+            r << km.bind_call(BcBase, 1) << km.bind_call(BcSub, 2) << km.bind_call(BcLeaf, 3)
+            r << err.() { km.bind(BcOther) } << km.bind(BcSub).call(9)
+            r << err.() { km.bind_call(BcOther, 4) } << err.() { km.bind_call(BcBase.new, 5) } << err.() { km.bind_call(Class, 6) }
+            o = BcBase.new
+            def o.single = :single
+            sm = o.method(:single).unbind
+            r << sm.bind_call(o) << err.() { sm.bind_call(BcBase.new) }
+            r << Integer.instance_method(:+).bind_call(1, 2) << err.() { Integer.instance_method(:+).bind_call(1.5, 2) }
+            r << Comparable.instance_method(:clamp).bind_call(5, 1, 3)
+            r << err.() { m.bind_call } << err.() { m.bind_call(k: 1) }
+            r
+            "##,
+        );
+        // The same receivers from a warmed-up loop: the argument slice
+        // handed on is the call's own rest Array each time.
+        run_test(
+            r##"
+            class BcLoop; def add(a, b = 10, *r, k: 0) = a + b + r.sum + k; end
+            class BcLoopSub < BcLoop; end
+            m = BcLoop.instance_method(:add)
+            o = BcLoopSub.new
+            [m.bind_call(o, 1), m.bind_call(o, 1, 2), m.bind_call(o, 1, 2, 3, 4), m.bind_call(o, 1, k: 5), m.bind_call(o, *[1, 2, 3], k: 6)]
             "##,
         );
     }
