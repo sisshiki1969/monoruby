@@ -2039,7 +2039,8 @@ impl<'a> JitContext<'a> {
                 class_version,
             )?
         };
-        Some((entry.func_id()?, entry.visibility()))
+        let func_id = self.store.site_target(name, refinements, entry.func_id()?);
+        Some((func_id, entry.visibility()))
     }
 
     ///

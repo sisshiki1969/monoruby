@@ -3138,6 +3138,7 @@ impl Store {
             self.check_method_with_refinements(recv_class, method_name, refinements)
                 .map(|entry| entry.func_id())
                 .flatten()
+                .map(|fid| self.site_target(method_name, refinements, fid))
         } else if let Some(func_id) = super_of {
             // The question the compiler asked (`jit_check_super`): the JIT
             // compiles a `super` only where its answer does not depend on

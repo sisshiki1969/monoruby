@@ -140,6 +140,10 @@ pub struct Store {
     /// skipped (`MONORUBY_SKIP_STARTUP`), which simply disables that
     /// specialization.
     class_new_fid: Option<FuncId>,
+    /// `FuncId` of the native twin of `Class#new` a call site resolves to
+    /// instead when its scope may refine `initialize` — see
+    /// [`Self::site_target`].
+    class_new_refined_fid: Option<FuncId>,
     /// `FuncId` of the native `Struct#initialize`, recorded at
     /// registration. `inline_class_new` recognises a struct whose
     /// constructor is still this one and writes the arguments straight
@@ -906,6 +910,7 @@ impl Store {
             kernel_hash_fid: None,
             kernel_binding_fid: None,
             class_new_fid: None,
+            class_new_refined_fid: None,
             struct_initialize_fid: None,
             object_send_fids: vec![],
             array_hash_fid: None,
@@ -1201,6 +1206,41 @@ impl Store {
         self.class_new_fid
     }
 
+    /// Record the native twin of `Class#new`. Called at its registration.
+    pub(crate) fn record_class_new_refined_fid(&mut self, fid: FuncId) {
+        self.class_new_refined_fid = Some(fid);
+    }
+
+    ///
+    /// The function a call site written under the refinements *set*
+    /// dispatches to, given that the lookup of *name* found *fid*.
+    ///
+    /// That is *fid*, with one exception. `Foo.new(...)` written at a
+    /// call site is, in CRuby 4.0, an allocation followed by a call of
+    /// `initialize` *from that site* (`opt_new`) — so an `initialize`
+    /// the site's scope refines is the one that runs, although the
+    /// `Class#new` method itself (reached through `send`, a `Method`
+    /// object, or C) calls `initialize` with no refinement. monoruby's
+    /// `Class#new` is a Ruby method of the core library, whose own call
+    /// of `initialize` sees no refinement either (#2029); a site in a
+    /// refining scope therefore gets a native twin of it that asks its
+    /// caller's scope. Only once some refinement defines `initialize`:
+    /// until then the two cannot differ, and `Class#new` keeps its
+    /// inlined fast paths.
+    ///
+    pub(crate) fn site_target(&self, name: IdentId, set: RefinementSetId, fid: FuncId) -> FuncId {
+        if !set.is_empty()
+            && name == IdentId::NEW
+            && Some(fid) == self.class_new_fid
+            && self.refinements.is_refined_name(IdentId::INITIALIZE)
+            && let Some(twin) = self.class_new_refined_fid
+        {
+            twin
+        } else {
+            fid
+        }
+    }
+
     /// Record the native `Struct#initialize`. Called at its registration.
     pub(crate) fn record_struct_initialize_fid(&mut self, fid: FuncId) {
         self.struct_initialize_fid = Some(fid);
@@ -1411,11 +1451,6 @@ impl Store {
                     .iter()
                     .any(|m| self[m.id()].own_method_table().any(|(n, _)| *n == name))
             })
-    }
-
-    /// Whether `name` is one of the operators with a lookup-free fast path.
-    pub(crate) fn is_basic_op_name(&self, name: IdentId) -> bool {
-        self.basic_ops.is_basic_op_name(name)
     }
 
     #[cfg(feature = "emit-bc")]

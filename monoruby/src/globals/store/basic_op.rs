@@ -144,10 +144,8 @@ pub(crate) const BASIC_OP_DEFS: &[(ClassId, &str)] = &[
 /// Interned [`BASIC_OP_DEFS`], plus the bootstrap latch.
 pub(crate) struct BasicOpTable {
     set: HashSet<(ClassId, IdentId)>,
-    /// Just the *names* in [`BASIC_OP_DEFS`], any class. Used to tell an
-    /// operator apart from a conversion performed on the caller's behalf
-    /// when resolving under refinements — see
-    /// `Executor::basic_op_refinements`.
+    /// Just the *names* in [`BASIC_OP_DEFS`], any class: the cheap first
+    /// test of "does this definition touch an operator fast path".
     names: HashSet<IdentId>,
     /// False until the builtins — Rust *and* the Ruby ones in
     /// `builtins/*.rb` — have finished defining themselves. Their own

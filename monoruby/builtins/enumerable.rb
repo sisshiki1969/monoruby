@@ -30,7 +30,7 @@ module Enumerable
   # `inject` (a.k.a. `reduce`) accepts five argument shapes:
   #   inject() { |acc, x| ... }            # first element seeds acc
   #   inject(init) { |acc, x| ... }        # `init` seeds acc
-  #   inject(sym)                          # acc.send(sym, x) per step
+  #   inject(sym)                          # acc.public_send(sym, x) per step
   #   inject(init, sym)                    # `init` seeds; symbol form
   #   inject(str_or_to_str)                # same as sym; `to_str` coerced
   # Disambiguation of single-arg call: if a block is given, the arg is
@@ -70,11 +70,11 @@ module Enumerable
             acc = x
             first = false
           else
-            acc = acc.send(sym, x)
+            acc = acc.public_send(sym, x)
           end
         end
       else
-        __gather_each { |x| acc = acc.send(sym, x) }
+        __gather_each { |x| acc = acc.public_send(sym, x) }
       end
     else
       if !has_init

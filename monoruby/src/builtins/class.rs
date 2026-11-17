@@ -173,6 +173,20 @@ pub(super) fn init(globals: &mut Globals) {
         alloc_fid,
         Visibility::Private,
     );
+    // The twin of the Ruby `Class#new` for a call site whose scope may
+    // refine `initialize` (`Store::site_target`). In no method table: a
+    // site reaches it only by that redirection, under the name `new`.
+    let fid = globals.define_unbound_builtin_func_with_kw(
+        "new",
+        class_new_refined,
+        0,
+        0,
+        true,
+        &[],
+        true,
+    );
+    globals.store[fid].set_owner_class(CLASS_CLASS);
+    globals.store.record_class_new_refined_fid(fid);
     // NOTE: no native `Class#new` — the canonical instance constructor is
     // the Ruby trampoline in startup.rb (`__builtin_allocate__` +
     // forwarded `__builtin_initialize__`), whose `(...)` forward the
@@ -363,6 +377,51 @@ fn superclass(
 /// Default `allocate` for every class. Looks up `ClassInfo.alloc_func` on
 /// the receiver class and invokes it. Raises TypeError when the class has
 /// no allocator (None).
+///
+/// `Class#new` for a call site in a scope that may refine `initialize`:
+/// the allocation, then `initialize` looked up as the *calling site*
+/// sees it. CRuby 4.0 compiles `Foo.new(...)` to exactly that
+/// (`opt_new`), so a refined `initialize` runs there although
+/// `Class#new` itself — `Foo.send(:new)`, `Foo.method(:new).call` —
+/// never sees one. See `Store::site_target`.
+///
+#[monoruby_builtin]
+fn class_new_refined(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let class_id = lfp.self_val().as_class_id();
+    let obj = call_alloc_func(globals, class_id)?;
+    // A site that passes a block is not an `opt_new` in CRuby but an
+    // ordinary send of `new`, so its `initialize` is the unrefined one.
+    // So is `Array.new`, which is a method of its own there
+    // (`rb_ary_s_new`) and calls `initialize` from C.
+    let is_array = globals.store.class_in_ancestors(class_id, ARRAY_CLASS);
+    let set = if lfp.block().is_some() || is_array {
+        RefinementSetId::EMPTY
+    } else {
+        vm.caller_site_refinements(globals)
+    };
+    let args = lfp.arg(0).as_array();
+    let kw = lfp
+        .try_arg(1)
+        .and_then(|kw| kw.try_hash_ty())
+        .filter(|kw| !kw.is_empty());
+    vm.invoke_method_in(
+        globals,
+        IdentId::INITIALIZE,
+        obj,
+        &args,
+        lfp.block(),
+        kw,
+        true,
+        set,
+    )?;
+    Ok(obj)
+}
+
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Class/i/allocate.html]
 #[monoruby_builtin]

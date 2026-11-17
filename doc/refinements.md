@@ -270,7 +270,7 @@ argument info are threaded today.
 >
 > The run-time half is the *frameless* callee (`compile/frameless_call.rs`),
 > which has no control frame: a helper it calls that reads the scope off
-> the nearest control frame (`Executor::basic_op_refinements`,
+> the nearest control frame (`Executor::site_refinements`,
 > `Executor::dispatch_redefined_op`) finds the frame *hosting* the body. The
 > only such helpers a frameless body may call are the pure `==` / `!=`
 > ones, so the JIT tells them whose scope they answer for
@@ -544,14 +544,11 @@ and taking the global basic-op cliff. With `refined_names` it is neither:
 > - **The inline-generator half**, which is still ungated.
 >
 > One boundary had to be drawn to make any of this correct — see
-> `Executor::basic_op_refinements`. monoruby writes part of its core
-> library in Ruby where CRuby uses C, and those frames are transparent to
-> refinements so that `&obj` / interpolation, which monoruby converts in
-> the callee and CRuby in the caller, reach the user's scope. An operator
-> is never such a conversion: `Array#map`'s own `i += 1` is library code,
+> `Executor::site_refinements`. monoruby writes part of its core library
+> in Ruby where CRuby uses C: `Array#map`'s own `i += 1` is library code,
 > C in CRuby and invisible to any refinement. Resolving it against the
-> caller ended the loop after one iteration. So operator names stop the
-> walk at the library boundary and everything else still walks out.
+> caller ended the loop after one iteration. This was first drawn for
+> operator names only; §6.10 is the rule as it stands, for every name.
 
 ### 6.8 The remaining pieces
 
@@ -562,7 +559,8 @@ and taking the global basic-op cliff. With `refined_names` it is neither:
   chain (§3.7).
 - **Reflection** (`send`, `respond_to?`, `Object#method`) resolves with the
   *caller's* set: the same `nearest_ruby_frame` walk the eval builtins now
-  use, then that frame's set id. Only reached with the gate on.
+  use, then that frame's set id. Only reached with the gate on. (Called by
+  the Ruby-written core they see no refinement — §6.10.)
 
 ### 6.9 Order of work — as landed
 
@@ -592,6 +590,74 @@ and language, the four steps took 137 failing examples to 30. What is left
 is §6.7's basic ops, the per-iseq cell's re-execution case, and one
 `import_methods` example that is not a defect (monoruby implements Zlib in
 Ruby, so importing from it legitimately succeeds).
+
+### 6.10 Whose lookup is it — call site, Ruby-level funcall, or funcall
+
+A refinement reaches the call sites *written* in the scope that activated
+it. Everything else that looks a method up is a builtin doing so, and
+CRuby is specific about which of those see a refinement. monoruby had one
+`find_method` for all of them, which asked the nearest Ruby frame — so a
+refined `R#<=>` was what `[r, r1].sort` compared with (#1998), and a
+refined `Array#size` was what `Array#each`, written in Ruby here, looped
+to (#2029). There are three scopes now, and the caller says which it
+means:
+
+| Scope | `Executor` | Answers | Used for |
+|---|---|---|---|
+| **Call site** | `site_refinements` | the running frame's own set; `EMPTY` for a native frame and for a frame of the Ruby-written core | call sites and operators (`find_method_at_site`, `invoke_method_op`), interpolation, `case` / `when` and `rescue`'s `===`, `defined?(recv.m)` |
+| **Ruby level** | `ruby_level_refinements` | the nearest *user* Ruby frame's set, walking out through native frames and frames of the Ruby-written core — CRuby's `rb_vm_cref()`, the core being C there | `public_send` and `&:sym` (`CALL_PUBLIC`), `&obj` → `to_proc`, the second try of `rb_funcallv_public`, the C API's `rb_respond_to`, the scope a `def` / `refine` snapshots |
+| **Funcall** | — (`RefinementSetId::EMPTY`) | no refinement | everything else a builtin calls: `find_method`, `invoke_method_inner`, `invoke_method_if_exists` — `rb_funcall` / `rb_check_funcall` |
+
+The default is the blind one. `<=>` under `sort`, `coerce` under `1 + x`,
+`to_ary` under a destructuring, `to_s` under `puts`, `inspect` under `p`,
+`each` under `Enumerable`, `initialize_copy` under `dup`,
+`method_missing`, `respond_to_missing?` and the rest are all lookups a
+builtin makes with `rb_funcall`, and none of them is refinable.
+
+The reflective builtins (`send`, `__send__`, `respond_to?`, `method`,
+`instance_method`, …) resolve under `caller_refinements`: the Ruby-level
+scope of whoever called them, except that a call *from the Ruby-written
+core* gets no refinement. There `x.respond_to?(:m)` followed by `x.m` is
+the core's spelling of `rb_check_funcall` and `x.__send__(:m)` of
+`rb_funcall`; the core says `public_send` where CRuby says
+`rb_funcallv_public`.
+
+Four places where CRuby's own rule is less obvious, and monoruby follows
+it:
+
+- **`rb_funcallv_public`** (`inject(:sym)`, `Random.rand` on a duck)
+  asks the class first, through the global call cache, which knows no
+  refinement. Only when that finds no *public* method does `rb_call0`
+  look again, and for `CALL_PUBLIC` it does so with the Ruby-level
+  refinements. So `[r, r].inject(:+)` calls a `+` that only a refinement
+  gives `R`, and the class's own `+` if it has one
+  (`Executor::public_funcall_refinements`). Under `Enumerable#inject`
+  the nearest Ruby frame is the receiver's own `each`.
+- **`Foo.new(...)`** at a call site is `opt_new` in CRuby 4.0: an
+  allocation, then a call of `initialize` *from that site*. A refined
+  `initialize` therefore runs, although `Class#new` the method —
+  `Foo.send(:new)`, `Foo.method(:new).call`, a site that passes a block —
+  calls it blind. monoruby's `Class#new` is a Ruby method of the core,
+  whose `initialize` call is blind like any other; once some refinement
+  defines `initialize`, a `new` site in a refining scope dispatches to a
+  native twin that asks its caller's scope (`Store::site_target`, applied
+  by the VM's lookup, the JIT's, and the class-version repair alike, so
+  that they agree on the target).
+- **`&:sym`** written where any refinement is active is not
+  `Symbol#to_proc`'s proc but one made for that scope
+  (`refine_sym_proc_call`), which calls whatever the refined lookup finds
+  with no visibility check. `:sym.to_proc.call(x)` keeps the check.
+- **The C API**: `rb_check_funcall` and the conversions built on it
+  (`rb_check_convert_type`, `rb_check_array_type`, …) probe blind and
+  count private methods, as the call that follows does;
+  `rb_respond_to` sees the Ruby-level refinements
+  (`MR_RESPOND_TO_FUNCALL`).
+
+Two things CRuby does that monoruby does not reproduce, both a
+refinement-aware `rb_respond_to` followed by a blind call that then
+raises: `Marshal.dump` of an object whose `marshal_dump` exists only in a
+refinement, and `$stdout = obj` where only a refinement gives `obj` a
+`write`.
 
 ---
 
