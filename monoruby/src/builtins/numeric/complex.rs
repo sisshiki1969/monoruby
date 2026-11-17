@@ -807,11 +807,8 @@ pub(crate) fn exact_parts_op(
         // Any other Integer or Float coerces: `Complex(lhs, 0) op rhs`.
         (None, Some(r)) => ((lhs, Value::integer(0)), parts(r)),
         (Some(l), None) => return with_real(vm, globals, op, parts(l), rhs),
-        (None, None) => {
-            return Err(MonorubyErr::typeerr(
-                "Complex arithmetic without a Complex operand",
-            ));
-        }
+        // Not what the operators hand over: the operator itself answers.
+        (None, None) => return vm.invoke_method_inner(globals, op, lhs, &[rhs], None, None),
     };
     vm.with_temp_scope(|vm| {
         let (re, im) = if op == IdentId::_MUL {

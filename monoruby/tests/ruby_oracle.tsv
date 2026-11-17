@@ -324,6 +324,7 @@
 0bed14b5ca7255ea7ed4b0be4974e839	[["a", "b"], [], ["foobarbaz", "foo", "bar", "baz"], ["baz", "bar", nil, nil], ["foo", "bar", nil], "foobar", nil, 6, 3, nil, 0, 3, [3, 6], [nil, nil], [6, 9]]	__a = [];__a << (/(?<a>foo)(?<b>bar)/.match("foobar").names);__a << (/(foo)(bar)
 0bf01b82bc454210a419258c2067223b	["nil", 1000.0, 12.0, "nil"]	__a = [];__a << (Float(nil, exception: false).inspect);__a << (Float("1.0e3"));_
 0bf3e4e12fb0833a787910618bcde3ad	[28, "28-28", 61, 60, 36, 31, 1, 29, "29-29", 104]	def helper(x) = x + 1\n        def g(a, b = 1) = a + b + helper(a)\n     
+0c0bc9d67e34fde6e516cd172b22f517	["((-1/27)+(0/1)*i)", "((0/1)+(1/27)*i)", "((2/27)-(2/27)*i)", "(8.0+0.0i)", "(-4.0+0.0i)", "(0.0-8.0i)", "(0.0+8.0i)", "(-0.5+Infinity*i)", "(-0.5+Infinity*i)", "(0.0+0.0i)", "(NaN+NaN*i)", "RuntimeError: boom", "RuntimeError: boom", "RuntimeError: boom", "RuntimeError: boom"]	t = ->(&b) { begin; b.call.inspect.gsub(/0x\\h+/, "0x"); rescue Exception => e
 0c1d024a77553ba059ad52023369c614	[false, false]	t = Thread.new { loop {} }\n            sleep 0.05\n            t.kil
 0c212589acd72c8069cfd7db7ba46930	[211.560074274065, 2.5]	def call_block\n          yield\n        end\n        def p4\n          k =
 0c3005b2149fb98fa994246d9d03adbd	[["alpha", "beta"], {"a" => "alpha", "b" => "beta"}, "(?<a>\\\\w+)", "4242"]	__a = [];__a << ("alpha beta".match(/(?<a>\\w+) (?<b>\\w+)/); [$~[:a], $~[:b]]);__
@@ -5764,6 +5765,7 @@ ee4c6dfe09877efbefcf09ad4f885a30	[700.012271, 2.699313]	def tf\n          a = 2.
 ee506f7a4e17e46a218f4c08e690d77c	[:bar, true]	class Foo\n              def bar; 1; end\n            end\n           
 ee62bb9cc0c6e09de70aa7d1eb0c840b	[["UTF-8", 6, true], ["UTF-8", "abcx", true]]	def mism()\n          s = String.new(encoding: Encoding::BINARY)\n       
 ee7fd51256850720ca8f1ead78be9653	["line1\\nline2", "tab\\there", "back\\\\slash", "quote\\"here", "slash/ok", "bs\\b", "ff\\f", "cr\\r", true, true, true]	__a = [];__a << (require "json"; JSON.parse("\\"line1\\\\nline2\\""));__a << (requir
+ee9936a3f3432d9dd869111fef1e9866	["16777218", "16777219", "16777218", "16777218", "16777218"]	t = ->(&b) { begin; b.call.inspect.gsub(/0x\\h+/, "0x"); rescue Exception => e
 ee9c2499ceaa7c8febe00ce67d194d40	[:c, :m2, :m1]	m1 = Module.new { def chain; super << :m1; end }\n            m2 = M
 eea84468101cbf88d3da51526fc75b65	["s1\\n", "s2\\n", "s3\\ns4\\n", "s5\\n"]	require "tmpdir"\n            res = []\n            Dir.mktmpdir do |
 eea91b91ea3435a323b4dd3c1b5f380d	[#<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, 16, #<Encoding:BINARY (ASCII-8BIT)>, true, [73, 72, 68, 82], [0, 0, 0, 13], #<Encoding:BINARY (ASCII-8BIT)>, nil, true, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, #<Encoding:BINARY (ASCII-8BIT)>, [99, 97, 102, 195, 169, 255, 254], #<Encoding:UTF-8>, [99, 97, 102, 195, 169, 120], #<Encoding:UTF-8>, #<Encoding:BINARY (ASCII-8BIT)>]	require "stringio"\n        r = []\n        io = StringIO.new\n        io.

@@ -2258,16 +2258,10 @@ unsafe extern "C" fn mr_check_funcall(
 ) -> MrValue {
     // SAFETY: the table's contract.
     let (vm, globals) = unsafe { parts(ctx) };
-    let Some(recv) = val(recv) else {
+    let Some(recv) = val(recv).filter(|_| sym != MR_NO_SYM) else {
+        set_err(vm, MonorubyErr::argumenterr("check_funcall: bad argument"));
         return MR_UNDEF;
     };
-    if sym == MR_NO_SYM {
-        set_err(
-            vm,
-            MonorubyErr::argumenterr("check_funcall was given MR_NO_SYM"),
-        );
-        return MR_UNDEF;
-    }
     let n = argc.max(0) as usize;
     let args: smallvec::SmallVec<[Value; 8]> = (0..n)
         // SAFETY: the table's contract — `argv` points at `argc` values.

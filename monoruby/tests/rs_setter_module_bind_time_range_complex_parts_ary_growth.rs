@@ -260,6 +260,57 @@ fn complex_parts_strings_fdiv() {
     );
 }
 
+/// The corners of the exact-parts arithmetic: a negative part on an axis
+/// or a diagonal, Float parts there, an infinite part times zero
+/// (`safe_multiply`), and a part whose own operator raises.
+#[test]
+fn complex_exact_parts_edges() {
+    probe(
+        r####"
+        class CxN < Numeric
+          def +(o) = raise("boom")
+          def *(o) = raise("boom")
+          def -(o) = raise("boom")
+          def real? = true
+          def coerce(o) = [CxN.new, self]
+        end
+        "####,
+        &[
+            "Complex(-1r/3, 0) ** 3",
+            "Complex(0, -1r/3) ** 3",
+            "Complex(-1r/3, -1r/3) ** 3",
+            "Complex(2.0, 0) ** 3",
+            "Complex(0, 2.0) ** 2",
+            "Complex(0, 2.0) ** 3",
+            "Complex(2.0, 2.0) ** 2",
+            "Complex(Float::INFINITY, 1r/2) * Complex(0, 1)",
+            "Complex(0, 1) * Complex(Float::INFINITY, 1r/2)",
+            "Complex(1r/2, -Float::INFINITY) * Complex(0, 0)",
+            "Complex(1r/2, Float::NAN) * Complex(0, 0)",
+            "Complex(CxN.new, 1) + 1",
+            "Complex(CxN.new, 1) * Complex(1, 2)",
+            "1 - Complex(CxN.new, 1)",
+            "Complex(1r/3, 1r/2) + Complex(CxN.new, 1)",
+        ],
+    );
+}
+
+/// Growth past the size the allocator is asked about first, when there
+/// is room for it: the store goes through.
+#[test]
+fn array_growth_allowed_past_the_probe() {
+    probe(
+        "",
+        &[
+            "a = [1]; a[2**24 + 1] = 1; a.size",
+            "a = [1]; a[2**24 + 1, 1] = [1, 2]; a.size",
+            "a = [1]; a[2**24 + 1, 1] = 5; a.size",
+            "a = [1]; a.insert(2**24 + 1, 5); a.size",
+            "[1].fill(0, 0, 2**24 + 2).size",
+        ],
+    );
+}
+
 /// The examples of #2032. The sizes refused are ones no machine has
 /// memory for (2**40 elements and up).
 #[test]
