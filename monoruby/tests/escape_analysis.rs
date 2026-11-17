@@ -2973,8 +2973,8 @@ fn dropped_local_object_seen_from_a_block_after_a_side_exit() {
     // none of the frame's locals and its calls are resolved to callees
     // that capture nothing, until one of them is `binding` or `eval`,
     // which reaches the frame's locals through the block's outer chain.
-    // So a block that may send a message at all counts as reading every
-    // local of the frame.
+    // A call passing a block builds every local's object, whatever the
+    // block holds.
     run_test(
         r#"
         class A1910f; def get = nil; def ev(s) = nil; def [](k) = nil; end
@@ -3024,6 +3024,104 @@ fn dropped_local_object_seen_from_a_block_after_a_side_exit() {
         res << blk_nested(7, b)
         30.times { |i| blk_yield(i, a) }
         res << blk_yield(7, b)
+        res
+        "#,
+    );
+}
+
+#[test]
+fn local_object_seen_through_the_binding_of_a_passed_block() {
+    // Issue #2058: the callee keeps the block it was passed and asks for
+    // its binding, which is the caller's frame with every local in it,
+    // whether or not the block's body names the local or sends anything.
+    // No side exit comes in between, so the object has to be real by the
+    // call.
+    run_test(
+        r#"
+        def bx2058(&b) = b.binding.local_variable_get(:x)
+        def keep2058(&b) = b
+        def run2058 = yield
+        # the block sends nothing and names no local; `x` is read afterwards
+        def live2058(i)
+          x = [i, i + 1]
+          r = bx2058 { }
+          [x[0], r]
+        end
+        # `x` is dead by the time of the call
+        def dead2058(i)
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          r = bx2058 { }
+          [s, r]
+        end
+        # a Range, a Hash
+        def range2058(i)
+          x = (i..i + 1)
+          r = bx2058 { }
+          [x.first, r]
+        end
+        def hash2058(i)
+          x = {a: i, b: i + 1}
+          s = x[:a] + x[:b]
+          r = bx2058 { }
+          [s, r]
+        end
+        # the Proc comes back and is asked later
+        def proc2058(i)
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          pr = keep2058 { }
+          [s, pr.binding.local_variable_get(:x)]
+        end
+        # the Proc is kept first and the local written afterwards
+        def kept2058(i)
+          pr = keep2058 { }
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          [s, pr.binding.local_variable_get(:x)]
+        end
+        # the block names another local only
+        def other2058(i)
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          y = 0
+          r = bx2058 { y }
+          [s, r]
+        end
+        # in a loop
+        def loop2058(n)
+          i = 0
+          r = []
+          while i < n
+            x = [i, i + 1]
+            i += x[1] - x[0]
+            r << bx2058 { }
+          end
+          r
+        end
+        # an object handed over in a parameter
+        def rest2058(*x) = [x[0] + x[1], bx2058 { }]
+        def kw2058(**x) = [x[:a], bx2058 { }]
+        # the site is compiled for a callee that only yields
+        def late2058(i, f)
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          r = f ? bx2058 { } : run2058 { }
+          [s, r]
+        end
+        res = []
+        30.times { |i| res[0] = live2058(i) }
+        30.times { |i| res[1] = dead2058(i) }
+        30.times { |i| res[2] = range2058(i) }
+        30.times { |i| res[3] = hash2058(i) }
+        30.times { |i| res[4] = proc2058(i) }
+        30.times { |i| res[5] = other2058(i) }
+        30.times { |i| res[6] = loop2058(3) }
+        30.times { |i| res[7] = rest2058(i, i + 1) }
+        30.times { |i| res[8] = kw2058(a: i, b: 2) }
+        30.times { |i| res[9] = kept2058(i) }
+        30.times { |i| late2058(i, false) }
+        res << late2058(7, true)
         res
         "#,
     );
