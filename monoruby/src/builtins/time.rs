@@ -94,132 +94,127 @@ pub(crate) fn local_is_dst(utc_secs: i64) -> bool {
 /// The UTC instant a local wall clock names.
 ///
 /// A wall clock in the hour a zone falls back names two instants, and
-/// `isdst` says which: `Some(true)` the daylight one, `Some(false)` the
-/// standard one, `None` the standard one too — CRuby's own choice when
-/// `Time.local` is called without the argument.
-///
-/// libc cannot be asked this directly. `tm_isdst = -1` lets `mktime`
-/// pick, but glibc picks by the *last* conversion it made, so the same
-/// call answers differently depending on what ran before it; CRuby
-/// searches for the instant itself and is deterministic. So both sides
-/// are converted and the answer chosen here.
+/// `isdst` says which: `Some(true)` the earlier one (the daylight side
+/// of a fall-back), `Some(false)` and `None` the later one — CRuby's
+/// own choice when `Time.local` is called without the argument.
 ///
 /// A wall clock in the hour a zone *springs forward* names no instant
-/// at all, and neither side comes back naming the time that was asked
-/// for. CRuby extrapolates forward there whatever `isdst` says, which
-/// is the later of the two.
+/// at all. CRuby extrapolates forward there whatever `isdst` says, from
+/// the offset in force before the change.
+///
+/// libc is asked for offsets (`localtime_r`) and never for the instant
+/// (`mktime`), which is how CRuby finds it too. `mktime` cannot be
+/// relied on here: with `tm_isdst = -1` glibc picks the side of a
+/// repeated hour by the *last* conversion it made, so the same call
+/// answers differently depending on what ran before it; with
+/// `tm_isdst = 1` in a zone that has no daylight time it goes looking
+/// for one, over and over (against CRuby's 513 ns, `Time.local`
+/// measured 35 us under `TZ=UTC` and 139 us under `TZ=Asia/Tokyo`);
+/// every call is a `tzset`, which with `TZ` unset is a
+/// `stat("/etc/localtime")` — a system call where `localtime_r` reads
+/// the zone already loaded (1,240 ns against 455 with `TZ` set); and
+/// macOS's refuses every year before 1900 outright. ruby-bench's sequel
+/// pays for each `Time.local` on every DATETIME column of every row it
+/// loads, since Sequel turns each back into a Time.
 fn local_naive_to_utc_isdst(naive: NaiveDateTime, isdst: Option<bool>) -> Option<i64> {
     refresh_tz();
-    // Away from a transition the wall clock names exactly one instant,
-    // `isdst` has nothing to choose between, and the instant can be
-    // found without `mktime` at all: read the wall clock as if it were
-    // UTC, take the local offset there as a first guess, and step back
-    // by it. If the offset at the instant that gives is the guess, the
-    // instant's wall clock is the one asked for; if the offset also
-    // holds a day either side, no other instant shares it.
-    //
-    // This is worth a fast path twice over. The probes below are not
-    // cheap in the shape that matters most: asking glibc for
-    // `tm_isdst = 1` in a zone that has no daylight time sends it
-    // looking for one, over and over (against CRuby's 513 ns,
-    // `Time.local` measured 35 us under `TZ=UTC` and 139 us under
-    // `TZ=Asia/Tokyo`). And every `mktime` is a `tzset`, which with `TZ`
-    // unset is a `stat("/etc/localtime")` per call — a system call where
-    // `localtime_r` reads the zone already loaded (1,240 ns against 455
-    // with `TZ` set). ruby-bench's sequel pays either on every DATETIME
-    // column of every row it loads, since Sequel turns each back into a
-    // Time.
+    // Away from a transition the wall clock names exactly one instant
+    // and `isdst` has nothing to choose between.
     if let Some(t) = unique_instant_by_offset(naive) {
         return Some(t);
     }
-    // Either side can fail outright: glibc answers `-1` when no instant
-    // with the requested `tm_isdst` exists at all, which is what a zone
-    // with no daylight saving does to the daylight side. Only the side
-    // that came back is then a candidate — hence no `?` here, which
-    // would let that one failure take the whole conversion down.
-    let daylight = mktime_isdst(naive, 1);
-    let standard = mktime_isdst(naive, 0);
-    Some(match (daylight, standard) {
-        // Both name the wall clock asked for: it happens twice, and
-        // only `isdst` can say which one is meant. The daylight side is
-        // the earlier instant.
-        (Some((d, true)), Some((s, true))) => {
-            if isdst == Some(true) {
-                d.min(s)
-            } else {
-                d.max(s)
-            }
-        }
-        (Some((d, true)), _) => d,
-        (_, Some((s, true))) => s,
-        // Neither names it: the wall clock does not exist here, and
-        // CRuby extrapolates forward — the later of the two.
-        (Some((d, false)), Some((s, false))) => d.max(s),
-        (Some((d, false)), None) => d,
-        (None, Some((s, false))) => s,
-        (None, None) => return None,
-    })
+    instant_near_offset_change(naive, isdst)
 }
 
-/// The one UTC instant whose local wall clock is `naive`, found with
-/// `localtime_r` alone, or `None` when that cannot be established this
-/// way: the wall clock is within a day of an offset change (it may then
-/// name two instants or none), or libc rejects an instant on the way.
+/// The local offset, in seconds east of UTC, at a UTC instant; `None`
+/// for an instant libc cannot break down.
+fn local_gmtoff_at(utc_secs: i64) -> Option<i64> {
+    local_tm(utc_secs).map(|tm| tm.tm_gmtoff as i64)
+}
+
+/// The one UTC instant whose local wall clock is `naive`, or `None`
+/// when that cannot be established in a handful of lookups: the wall
+/// clock is within a day of an offset change (it may then name two
+/// instants or none), or libc rejects an instant on the way.
 ///
-/// "Within a day" is the question "could `tm_isdst` matter here": an
-/// offset that holds for a day on both sides leaves the wall clock
-/// naming one instant, since a zone that falls back repeats an hour and
-/// one that springs forward skips one, both within minutes of the
-/// change. A day is far wider than either needs, and being wrong in
-/// this direction only costs the slow path — which is the correct one
-/// anyway.
+/// Read the wall clock as if it were UTC, take the local offset there
+/// as a first guess, and step back by it. If the offset at the instant
+/// that gives is the guess, the instant's wall clock is the one asked
+/// for; if the offset also holds a day either side, no other instant
+/// shares it: a zone that falls back repeats an hour and one that
+/// springs forward skips one, both within minutes of the change. A day
+/// is far wider than either needs, and being wrong in this direction
+/// only costs the search below — which is correct everywhere.
 fn unique_instant_by_offset(naive: NaiveDateTime) -> Option<i64> {
     const DAY: i64 = 24 * 60 * 60;
-    let offset_at = |t: i64| local_tm(t).map(|tm| tm.tm_gmtoff as i64);
     let as_utc = naive.and_utc().timestamp();
-    let guess = offset_at(as_utc)?;
+    let guess = local_gmtoff_at(as_utc)?;
     let t = as_utc.checked_sub(guess)?;
     // `t + offset(t) == as_utc` is "the wall clock at `t` is `naive`".
-    let holds = offset_at(t)? == guess
-        && offset_at(t.saturating_sub(DAY))? == guess
-        && offset_at(t.saturating_add(DAY))? == guess;
+    let holds = local_gmtoff_at(t)? == guess
+        && local_gmtoff_at(t.saturating_sub(DAY))? == guess
+        && local_gmtoff_at(t.saturating_add(DAY))? == guess;
     holds.then_some(t)
 }
 
-/// `mktime` for `naive` with a given `tm_isdst`. The second element is
-/// whether libc's answer still names the wall clock that was asked for:
-/// `mktime` normalizes `tm` in place, so a field that came back changed
-/// means the time does not exist in this zone.
-fn mktime_isdst(naive: NaiveDateTime, tm_isdst: i32) -> Option<(i64, bool)> {
-    let (year, mon0, mday) = (naive.year().checked_sub(1900)?, naive.month0(), naive.day());
-    let (hour, min, sec) = (naive.hour(), naive.minute(), naive.second());
-    // SAFETY: `tm` is zeroed and every field libc reads is set below;
-    // `mktime` only reads it and normalizes it in place.
-    unsafe {
-        let mut tm: libc::tm = std::mem::zeroed();
-        tm.tm_year = year;
-        tm.tm_mon = mon0 as i32;
-        tm.tm_mday = mday as i32;
-        tm.tm_hour = hour as i32;
-        tm.tm_min = min as i32;
-        tm.tm_sec = sec as i32;
-        tm.tm_isdst = tm_isdst;
-        // A sentinel for "mktime never normalized this": the call fills
-        // `tm_wday` in on success and leaves the struct untouched when
-        // it fails, so this is what tells a failure apart from the one
-        // valid instant that is also `-1`, 1969-12-31 23:59:59Z.
-        tm.tm_wday = -1;
-        let t = libc::mktime(&mut tm);
-        if t == -1 && tm.tm_wday == -1 {
-            return None;
+/// The instant for a wall clock that may sit in a repeated or a skipped
+/// stretch of local time.
+///
+/// An instant `t` shows the wall clock `naive` exactly when
+/// `t + offset(t)` is `naive` read as UTC, so every answer is that
+/// reading minus one of the offsets in force around it. No offset
+/// reaches a day, which bounds where "around it" is: the offsets a day
+/// either side and in the middle are the candidates, joined by whatever
+/// offset a candidate instant turns out to have itself (two changes
+/// inside the two days).
+fn instant_near_offset_change(naive: NaiveDateTime, isdst: Option<bool>) -> Option<i64> {
+    const DAY: i64 = 24 * 60 * 60;
+    let as_utc = naive.and_utc().timestamp();
+    let mut offsets: Vec<i64> = Vec::with_capacity(4);
+    let mut add = |offsets: &mut Vec<i64>, o: Option<i64>| {
+        if let Some(o) = o
+            && !offsets.contains(&o)
+        {
+            offsets.push(o);
         }
-        let kept = tm.tm_year == year
-            && tm.tm_mon == mon0 as i32
-            && tm.tm_mday == mday as i32
-            && tm.tm_hour == hour as i32
-            && tm.tm_min == min as i32
-            && tm.tm_sec == sec as i32;
-        Some((t as i64, kept))
+    };
+    for probe in [
+        as_utc.saturating_sub(DAY),
+        as_utc,
+        as_utc.saturating_add(DAY),
+    ] {
+        add(&mut offsets, local_gmtoff_at(probe));
+    }
+    let mut named: Option<(i64, i64)> = None; // (earliest, latest)
+    let mut i = 0;
+    while let Some(&o) = offsets.get(i) {
+        i += 1;
+        let Some(t) = as_utc.checked_sub(o) else {
+            continue;
+        };
+        let here = local_gmtoff_at(t);
+        if here == Some(o) {
+            named = Some(match named {
+                Some((lo, hi)) => (lo.min(t), hi.max(t)),
+                None => (t, t),
+            });
+        } else {
+            add(&mut offsets, here);
+        }
+    }
+    match named {
+        // It happens once, or twice and only `isdst` can say which one
+        // is meant: the daylight side of a fall-back is the earlier.
+        Some((earliest, latest)) => Some(if isdst == Some(true) {
+            earliest
+        } else {
+            latest
+        }),
+        // It does not happen at all: the clock jumped over it. CRuby
+        // extrapolates from the last instant before the jump, whose
+        // offset is the smallest of those around (a jump forward is an
+        // offset going up) — the latest of the candidates.
+        None => offsets.iter().filter_map(|o| as_utc.checked_sub(*o)).max(),
     }
 }
 

@@ -294,10 +294,10 @@ fn time_local_isdst_picks_the_side_of_a_fall_back() {
 
 #[test]
 fn time_local_finds_the_instant_in_every_zone() {
-    // `Time.local` away from an offset change finds its instant with
-    // `localtime_r` alone (the wall clock read as UTC, minus the offset
+    // `Time.local` away from an offset change finds its instant in four
+    // `localtime_r` lookups (the wall clock read as UTC, minus the offset
     // there, checked at the result and a day either side), and within a
-    // day of a change falls back to probing `mktime`. Swept hourly over
+    // day of a change searches the offsets around it. Swept hourly over
     // the days around each zone's transitions — half-hour daylight
     // saving, a +5:45 zone, +14:00, the far past and future — so both
     // paths and the hand-over between them are compared with CRuby.
@@ -329,6 +329,58 @@ fn time_local_finds_the_instant_in_every_zone() {
         ENV['TZ'] = 'Asia/Kathmandu'
         t = Time.mktime(2024, 2, 29, 23, 59, 59.5)
         r << [t.to_s, t.to_f, t.utc_offset, (t + 1).to_s, Time.local(2024, 12, 31, 23, 59, 60).to_s]
+        ENV['TZ'] = old
+        r
+        "#,
+    );
+}
+
+#[test]
+fn time_local_at_offset_changes_without_daylight_time() {
+    // A zone can move its clock with no daylight saving involved, and
+    // `tm_isdst` then tells the two sides apart no more than the wall
+    // clock does: Moscow fell back an hour for good in 2014, Pyongyang
+    // and Caracas by half an hour, New York by 3:58 when it left local
+    // mean time in 1883, Kathmandu sprang forward 15 minutes, and Samoa
+    // skipped a whole day in 2011. `mktime` answered these by the state
+    // an earlier conversion left behind (and on macOS not at all before
+    // 1900); the instant is found from the offsets instead, as CRuby
+    // finds it — the later instant of a repeated wall clock, the
+    // earlier one when `isdst` is true, and a skipped one extrapolated
+    // from the offset before the jump.
+    let _tz = tz_lock();
+    run_test_once(
+        r#"
+        old = ENV['TZ']
+        r = []
+        [["Europe/Moscow", [2014, 10, 25]], ["Europe/Moscow", [2011, 3, 26]],
+         ["Asia/Pyongyang", [2015, 8, 14]], ["Asia/Pyongyang", [2018, 5, 4]],
+         ["America/Caracas", [2007, 12, 8]], ["America/Caracas", [2016, 4, 30]],
+         ["America/New_York", [1883, 11, 17]], ["Asia/Kathmandu", [1985, 12, 31]],
+         ["Pacific/Apia", [2011, 12, 29]], ["Pacific/Kiritimati", [1994, 12, 30]],
+         ["Asia/Tokyo", [1887, 12, 30]]].each do |z, (y, m, d)|
+          ENV['TZ'] = z
+          base = Time.utc(y, m, d).to_i
+          sums = [0, 0, 0]
+          (0...(72 * 60 / 7)).each do |i|
+            a = Time.at(base + i * 7 * 60 + 11).utc.to_a[0, 6]
+            [Time.local(*a.reverse),
+             Time.local(*a, 0, 0, true, z),
+             Time.local(*a, 0, 0, false, z)].each_with_index do |t, k|
+              sums[k] += t.to_i * 31 + t.utc_offset + (t.dst? ? 1 : 0)
+            end
+          end
+          r << [z, y, sums]
+        end
+        ENV['TZ'] = "Europe/Moscow"
+        r << [nil, true, false].map { |isdst|
+          t = isdst.nil? ? Time.local(2014, 10, 26, 1, 30, 0) : Time.local(0, 30, 1, 26, 10, 2014, 0, 0, isdst, nil)
+          [t.to_i, t.utc_offset, t.zone]
+        }
+        ENV['TZ'] = "Pacific/Apia"
+        r << [Time.local(2011, 12, 30, 12, 0, 0), Time.local(2011, 12, 29, 23, 59, 59), Time.local(2011, 12, 31, 0, 0, 0)].map { |t| [t.to_i, t.utc_offset, t.day] }
+        ENV['TZ'] = "America/New_York"
+        r << [Time.local(1883, 11, 18, 12, 1, 0), Time.local(1883, 11, 18, 11, 59, 0), Time.local(1883, 11, 18, 12, 5, 0)].map { |t| [t.to_i, t.utc_offset] }
         ENV['TZ'] = old
         r
         "#,
