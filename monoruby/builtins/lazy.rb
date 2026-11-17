@@ -43,7 +43,9 @@ class Enumerator
     def initialize(obj, size = nil, &block)
       raise ArgumentError, "tried to call lazy new without a block" unless block
       @__lazy_source = obj
-      @__lazy_method = nil
+      # `lazy_initialize` records `:each`; `Enumerable#lazy` clears it
+      # (`__lazy_unnamed`), so only `Lazy.new` inspects with `:each`.
+      @__lazy_method = :each
       @__lazy_args = nil
       # `*args` are the ones `#each` / `#force` were called with; CRuby's
       # `lazy_init_block` forwards them to the source's `each` too.
@@ -429,6 +431,11 @@ class Enumerator
       super
     end
     alias each_with_object with_object
+
+    def __lazy_unnamed # :nodoc:
+      @__lazy_method = nil
+      self
+    end
 
     def inspect
       src = @__lazy_source

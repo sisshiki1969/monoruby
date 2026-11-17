@@ -379,26 +379,27 @@ impl IdentId {
     pub const GVAR_VERBOSE_W: IdentId = id!(215); // $-w
     pub const GVAR_PROGRAM_NAME0: IdentId = id!(216); // $0
     pub const GVAR_PROGRAM_NAME: IdentId = id!(217); // $PROGRAM_NAME
+    pub const GVAR_STDOUT_ALIAS: IdentId = id!(218); // $>
     /// The hidden ivar `pack('p')` hangs the pointed-to objects on
     /// (`/packed_pointers`). `String#unpack` / `unpack1` look it up on
     /// every call, so it is interned up front rather than by name each time.
-    pub const _PACKED_POINTERS: IdentId = id!(218);
+    pub const _PACKED_POINTERS: IdentId = id!(219);
     /// The hidden ivar an IO keeps its read-conversion options in
     /// (`/ecopts`: `invalid:` / `undef:` / `replace:`). Every read that
     /// converts to an internal encoding looks it up.
-    pub const _IO_ECOPTS: IdentId = id!(219);
+    pub const _IO_ECOPTS: IdentId = id!(220);
     /// `coerce`: asked of the other operand by every numeric operator
     /// that does not know its class.
-    pub const COERCE: IdentId = id!(220);
+    pub const COERCE: IdentId = id!(221);
     /// `/receiver`: the receiver a NameError / NoMethodError / KeyError
     /// / FrozenError is about, read every time a NameError message is.
-    pub const _RECEIVER: IdentId = id!(221);
+    pub const _RECEIVER: IdentId = id!(222);
 
     /// Name ↔ id pairing for the block above — the single source of truth:
     /// `IdentifierTable::new` interns from it, and [`Self::special_gvar_name`]
     /// reads a name back without materializing a String. Order must follow
     /// the ids (checked by the const assertion below).
-    pub(crate) const SPECIAL_GVARS: [(&'static str, IdentId); 16] = [
+    pub(crate) const SPECIAL_GVARS: [(&'static str, IdentId); 17] = [
         ("$?", Self::GVAR_CHILD_STATUS),
         ("$<", Self::GVAR_ARGF),
         ("$FILENAME", Self::GVAR_FILENAME),
@@ -415,12 +416,12 @@ impl IdentId {
         ("$-w", Self::GVAR_VERBOSE_W),
         ("$0", Self::GVAR_PROGRAM_NAME0),
         ("$PROGRAM_NAME", Self::GVAR_PROGRAM_NAME),
+        ("$>", Self::GVAR_STDOUT_ALIAS),
     ];
 
     /// Whether this id names one of the special globals above.
     pub(crate) fn is_special_gvar(self) -> bool {
-        (Self::GVAR_CHILD_STATUS.0.get()..=Self::GVAR_PROGRAM_NAME.0.get())
-            .contains(&self.0.get())
+        (Self::GVAR_CHILD_STATUS.0.get()..=Self::GVAR_STDOUT_ALIAS.0.get()).contains(&self.0.get())
     }
 
     /// The name of a special global, as a static str — the ids are
@@ -673,7 +674,7 @@ impl IdentifierTable {
     /// Slots the predefined ids occupy; new names are numbered after
     /// them. The ASCII range below `IdentId::PREDEFINED_FIRST` holds only
     /// the operators, the other slots there stay unnamed.
-    const PREDEFINED_LEN: usize = 221;
+    const PREDEFINED_LEN: usize = 222;
 
     pub(crate) fn new() -> Self {
         let mut table = IdentifierTable {

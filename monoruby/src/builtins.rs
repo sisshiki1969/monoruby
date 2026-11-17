@@ -65,6 +65,7 @@ use num::ToPrimitive;
 pub(crate) use kernel::object_send;
 pub(crate) use numeric::complex::{
     exact_parts_op as complex_exact_parts_op, has_exact_part as complex_has_exact_part,
+    native_product_has_nan as complex_product_has_nan, native_safe_mul as complex_safe_mul,
 };
 pub(crate) use kernel::basic_obj_respond_to;
 pub(crate) use method::source_path_line as method_source_path_line;

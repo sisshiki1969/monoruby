@@ -1559,6 +1559,11 @@ impl<'a> JitContext<'a> {
                 if let (RangeEnd::Const(s), RangeEnd::Const(e)) = (start, end)
                     && self.basic_op_assumable(CachedClass::INTEGER, IdentId::_CMP)
                     && let Some(v) = runtime::range_fold(op, s, e, exclude_end)
+                    // A Bignum or `Infinity` answer is a heap object the
+                    // compiled code would hold with no GC root; it is
+                    // made per call by the helper instead, as CRuby
+                    // makes a new one (#2059).
+                    && v.is_packed_value()
                 {
                     return Some(RangePlan::Fold(v));
                 }

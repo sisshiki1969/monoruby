@@ -285,11 +285,6 @@ module Kernel
     end
   end
 
-  def puts(*args)
-    $stdout.puts(*args)
-    nil
-  end
-
   # `Kernel#print` is a native builtin (see builtins/kernel.rs): it
   # delegates to `$stdout.print` but additionally writes `$_` when
   # called with no arguments, which a pure-Ruby definition can't do
@@ -304,15 +299,18 @@ module Kernel
     # escapes the answer if `Encoding.default_external` cannot show it
     # (`p "\u3044"` is `"\u3044"` under a `C` locale). Calling
     # `.inspect` directly here would skip that, as it does in CRuby.
+    #
+    # Each line goes to `$stdout.write` (`rb_p_write`), and the flush is
+    # only for an IO, so any object with a `write` can be `$stdout`.
     if args.size == 1
-      $stdout.puts(__inspect(args[0]))
-      $stdout.flush
+      __p_write(__inspect(args[0]))
+      __p_flush
       args[0]
     elsif args.empty?
       nil
     else
-      args.each { |a| $stdout.puts(__inspect(a)) }
-      $stdout.flush
+      args.each { |a| __p_write(__inspect(a)) }
+      __p_flush
       args
     end
   end

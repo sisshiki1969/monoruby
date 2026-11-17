@@ -665,7 +665,7 @@ fn write_special_check(
         IdentId::GVAR_LINENO => Ok(Value::integer(val.coerce_to_int_i64(vm, globals)?)),
         // `$stdout` / `$stderr` accept any object with a `write`
         // method.
-        IdentId::GVAR_STDOUT | IdentId::GVAR_STDERR => {
+        IdentId::GVAR_STDOUT | IdentId::GVAR_STDOUT_ALIAS | IdentId::GVAR_STDERR => {
             if globals
                 .store
                 .check_method_for_class(val.class(), IdentId::get_id("write"))
@@ -1062,6 +1062,7 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
 
     // English aliases and the command-line-flag spellings.
     globals.alias_global_variable(IdentId::get_id("$-0"), IdentId::get_id("$/"));
+    globals.alias_global_variable(IdentId::GVAR_STDOUT_ALIAS, IdentId::GVAR_STDOUT);
     globals.alias_global_variable(IdentId::get_id("$-F"), IdentId::get_id("$;"));
 
     // --- Exception backtrace --------------------------------------------------

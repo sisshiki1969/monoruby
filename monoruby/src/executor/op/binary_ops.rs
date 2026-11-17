@@ -302,7 +302,11 @@ macro_rules! binop_values {
                     }
                     (RV::BigInt(lhs), RV::Complex(rhs)) => {
                         let lhs = num::complex::Complex::from(Real::from(lhs.clone()));
-                        Value::complex_from(lhs.$op(rhs))
+                        let v = lhs.$op(rhs);
+                        if $op_str == IdentId::_MUL && crate::builtins::complex_product_has_nan(&v) {
+                            return Some(crate::builtins::complex_safe_mul(&lhs, rhs));
+                        }
+                        Value::complex_from(v)
                     }
                     (RV::Fixnum(_) | RV::BigInt(_), _) => {
                         return try_coerce_and_apply(vm, globals, $op_str, lhs, rhs, "Integer");
@@ -310,7 +314,11 @@ macro_rules! binop_values {
 
                     (RV::Float(lhs), RV::Complex(rhs)) => {
                         let lhs = num::complex::Complex::from(Real::from(lhs));
-                        Value::complex_from(lhs.$op(rhs))
+                        let v = lhs.$op(rhs);
+                        if $op_str == IdentId::_MUL && crate::builtins::complex_product_has_nan(&v) {
+                            return Some(crate::builtins::complex_safe_mul(&lhs, rhs));
+                        }
+                        Value::complex_from(v)
                     }
                     (RV::Float(_), _) => {
                         return try_coerce_and_apply(vm, globals, $op_str, lhs, rhs, "Float");
@@ -325,7 +333,13 @@ macro_rules! binop_values {
                         complex_with_real($op_str, lhs, Real::from(rhs))
                     }
                     (RV::Complex(lhs), RV::Complex(rhs)) => {
-                        Value::complex_from(lhs.$op(rhs))
+                        let v = lhs.$op(rhs);
+                        // An infinite part times a zero is taken for its
+                        // sign (`comp_mul`'s `safe_mul`).
+                        if $op_str == IdentId::_MUL && crate::builtins::complex_product_has_nan(&v) {
+                            return Some(crate::builtins::complex_safe_mul(lhs, rhs));
+                        }
+                        Value::complex_from(v)
                     }
                     (RV::Complex(_), _) => {
                         return complex_real_op(vm, globals, $op_str, lhs, rhs);

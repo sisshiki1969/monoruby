@@ -371,8 +371,9 @@ fn enumerator_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
 /// - initialize(size = nil) {|y| ... } -> self
 ///
 /// Private hook called by `Enumerator.new`. The block becomes the
-/// generator body; `size` is stored verbatim (nil / Integer / Float /
-/// `Float::INFINITY` / Proc) and resolved lazily by `#size`.
+/// generator body; `size` is kept when it is nil, callable or
+/// `Float::INFINITY` and otherwise converted with `to_int`
+/// (`convert_to_feasible_size_value`), and resolved lazily by `#size`.
 #[monoruby_builtin]
 fn enumerator_initialize(
     vm: &mut Executor,
@@ -396,14 +397,42 @@ fn enumerator_initialize(
         ));
     };
     let proc = vm.generate_proc(globals, bh, pc)?;
+    vm.temp_push(proc.into());
+    let size = match lfp.try_arg(0).filter(|v| !v.is_nil()) {
+        Some(v) => Some(feasible_size(vm, globals, v)),
+        None => None,
+    };
+    vm.temp_pop();
+    let size = size.transpose()?;
     let obj = Value::new_generator(proc);
-    let size = lfp.try_arg(0).filter(|v| !v.is_nil());
     let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);
     let yielder = Proc::from_outer(outer_lfp, ENUM_YIELDER_FUNCID, pc);
     self_val
         .as_enumerator_inner_mut()
         .initialize(obj, IdentId::EACH, yielder, vec![], None, size);
     Ok(self_val)
+}
+
+/// CRuby's `convert_to_feasible_size_value`: a size that answers `call`
+/// or is `Float::INFINITY` stays as it is, anything else is `rb_to_int`
+/// (`Enumerator.new(3.7)` is 3, `Enumerator.new("x")` a TypeError).
+fn feasible_size(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Value> {
+    // A fixnum, and a Proc (which answers `call`), are kept without
+    // asking.
+    if v.is_fixnum() || v.is_proc().is_some() {
+        return Ok(v);
+    }
+    let call = Value::symbol(IdentId::get_id("call"));
+    if vm
+        .invoke_method_inner(globals, IdentId::RESPOND_TO_, v, &[call], None, None)?
+        .as_bool()
+    {
+        return Ok(v);
+    }
+    if v.try_float() == Some(f64::INFINITY) {
+        return Ok(v);
+    }
+    v.coerce_to_int(vm, globals)
 }
 
 ///
