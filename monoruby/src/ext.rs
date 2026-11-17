@@ -893,6 +893,7 @@ pub(crate) static MR_API: MrApi = MrApi {
     obj_class: mr_obj_class,
     intern_check: mr_intern_check,
     obj_respond_to: mr_obj_respond_to,
+    check_funcall: mr_check_funcall,
 };
 
 // ---- regexp (ruby/re.h) ----------------------------------------------
@@ -2241,6 +2242,41 @@ unsafe extern "C" fn mr_obj_respond_to(
         Err(e) => {
             set_err(vm, e);
             -1
+        }
+    }
+}
+
+/// `rb_check_funcall`: the protocol the interpreter's own conversions
+/// use ([`crate::coerce::check_funcall_args`]).
+unsafe extern "C" fn mr_check_funcall(
+    ctx: *mut MrContext,
+    recv: MrValue,
+    sym: MrSym,
+    argc: c_int,
+    argv: *const MrValue,
+    answered: *mut c_int,
+) -> MrValue {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(recv) = val(recv).filter(|_| sym != MR_NO_SYM) else {
+        set_err(vm, MonorubyErr::argumenterr("check_funcall: bad argument"));
+        return MR_UNDEF;
+    };
+    let n = argc.max(0) as usize;
+    let args: smallvec::SmallVec<[Value; 8]> = (0..n)
+        // SAFETY: the table's contract — `argv` points at `argc` values.
+        .map(|i| unsafe { *argv.add(i) })
+        .filter_map(val)
+        .collect();
+    match crate::coerce::check_funcall_args(vm, globals, recv, IdentId::from(sym), &args) {
+        Ok(res) => {
+            // SAFETY: the table's contract — `answered` is writable.
+            unsafe { *answered = res.is_some() as c_int };
+            res.unwrap_or(Value::nil()).id()
+        }
+        Err(e) => {
+            set_err(vm, e);
+            MR_UNDEF
         }
     }
 }

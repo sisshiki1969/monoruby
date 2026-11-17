@@ -2522,18 +2522,36 @@ impl RValue {
         }
     }
 
+    /// `bound`: made by `UnboundMethod#bind`. CRuby binds a module's
+    /// method through an iclass of the module (whether or not the
+    /// receiver's class includes it), so such a Method is displayed by
+    /// its owner alone and is not `==` to the one `receiver.method(name)`
+    /// answers. Kept in the header's `ty_flags` byte, which is written
+    /// with the rest of the header: `bind` is on the path of every call
+    /// of a wrapped method, and a field of its own would be one more
+    /// store there.
     pub(super) fn new_method_named(
         receiver: Value,
         func_id: FuncId,
         owner: ClassId,
         lookup_name: IdentId,
         original_name: IdentId,
+        bound: bool,
     ) -> Self {
+        let mut header = Header::new(METHOD_CLASS, ObjTy::METHOD);
+        header.set_ty_flags(bound as u8);
         RValue {
-            header: Header::new(METHOD_CLASS, ObjTy::METHOD),
+            header,
             kind: ObjKind::method_named(receiver, func_id, owner, lookup_name, original_name),
             var_table: None,
         }
+    }
+
+    /// Whether this Method was made by `UnboundMethod#bind` (see
+    /// [`Self::new_method_named`]).
+    pub(crate) fn method_is_bound(&self) -> bool {
+        debug_assert_eq!(self.ty(), ObjTy::METHOD);
+        self.header.ty_flags() != 0
     }
 
     pub(super) fn new_method_missing_proxy(

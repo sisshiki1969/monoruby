@@ -2516,6 +2516,49 @@ fn kernel_complex(
         }
     }
 
+    // `nucomp_convert`: with two arguments a String one is parsed first
+    // (`Complex("1", "2")` is `(1+2i)`, `Complex(1, "2i")` is `(-1+0i)`),
+    // and a Complex whose imaginary part is an exact zero stands for its
+    // real part. The parsed values are referenced by nothing but these
+    // locals, so they are rooted across the dispatches below.
+    if let Some(a1) = arg1
+        && (arg0.is_rstring_inner().is_some() || a1.is_rstring_inner().is_some())
+    {
+        let mut parts = [arg0, a1];
+        for part in &mut parts {
+            let RV::String(b) = part.unpack() else {
+                continue;
+            };
+            let parsed = match parse_complex_string(globals, b) {
+                Ok(v) => v,
+                Err(e) if exception || e.kind() != &MonorubyErrKind::Arguments => return Err(e),
+                Err(_) => return Ok(Value::nil()),
+            };
+            *part = match parsed.try_complex() {
+                Some(c) if !matches!(c.im().get().unpack(), RV::Float(_)) && c.im().is_zero() => {
+                    c.re().get()
+                }
+                _ => parsed,
+            };
+        }
+        let [re, im] = parts;
+        return vm.with_temp_scope(|vm| {
+            vm.temp_push(re);
+            vm.temp_push(im);
+            complex_convert(vm, globals, re, Some(im), exception)
+        });
+    }
+    complex_convert(vm, globals, arg0, arg1, exception)
+}
+
+/// `Kernel#Complex` once nil and String arguments are dealt with.
+fn complex_convert(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg0: Value,
+    arg1: Option<Value>,
+    exception: bool,
+) -> Result<Value> {
     // When a second argument is present, evaluate it first: a non-Numeric
     // second argument is always swallowable with `exception: false`
     // (`Complex(0, :sym, exception: false)` -> nil), whereas a non-Numeric

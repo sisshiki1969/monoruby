@@ -63,6 +63,9 @@ pub use monoasm::*;
 use monoruby_attr::monoruby_builtin;
 use num::ToPrimitive;
 pub(crate) use kernel::object_send;
+pub(crate) use numeric::complex::{
+    exact_parts_op as complex_exact_parts_op, has_exact_part as complex_has_exact_part,
+};
 pub(crate) use kernel::basic_obj_respond_to;
 pub(crate) use method::source_path_line as method_source_path_line;
 pub(crate) use kernel::{

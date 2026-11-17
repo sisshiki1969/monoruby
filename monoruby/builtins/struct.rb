@@ -150,7 +150,8 @@ class Struct
           __slot_get(idx)
         end
       elsif key.is_a?(Symbol) || key.is_a?(String)
-        idx = __members.index(key.to_sym)
+        key = __existing_sym(key) if key.is_a?(String)
+        idx = key && __members.index(key)
         idx ? __slot_get(idx) : nil
       else
         # `rb_struct_lookup`: an index is read with NUM2LONG, and one

@@ -150,6 +150,31 @@ impl Array {
 
 pub(crate) type ArrayBuf = SmallVec<[Value; ARRAY_INLINE_CAPA]>;
 
+/// CRuby's `ARY_MAX_SIZE`: the element count past which an Array is
+/// "too big" whatever memory there is.
+pub(crate) const ARY_MAX_SIZE: usize = (i64::MAX / 8) as usize;
+
+/// An Array longer than this is asked of the allocator before it is
+/// built or grown ([`check_array_growth`], `array_capa_available`), so that a
+/// refusal is a NoMemoryError and not an abort; a shorter one is not
+/// worth the extra allocation.
+pub(crate) const ARY_CAPA_PROBE: usize = 1 << 24;
+
+/// What `rb_ary_store` / `rb_ary_splice` check before they grow an Array
+/// to `new_len` elements for a store at `index`: an index at or past
+/// `ARY_MAX_SIZE` is an IndexError, and a length the allocator refuses a
+/// NoMemoryError (`a[2**40] = 1`) — `resize` would abort the process.
+#[cold]
+pub(crate) fn check_array_growth(index: usize, new_len: usize) -> Result<()> {
+    if index >= ARY_MAX_SIZE || new_len > ARY_MAX_SIZE {
+        return Err(MonorubyErr::indexerr(format!("index {index} too big")));
+    }
+    if !crate::builtins::kernel::array_capa_available(new_len) {
+        return Err(MonorubyErr::nomemoryerr());
+    }
+    Ok(())
+}
+
 /// The root and buffer a view of `parent` can be taken from, making one
 /// if it has none yet — or `None` when `parent` keeps its elements inline,
 /// which cannot be viewed (the buffer lives in the cell and moves with it).
@@ -551,7 +576,12 @@ impl ArrayInner {
                 Some(v) => *v = src,
                 None => {
                     let idx = idx as usize;
-                    self.resize(idx, Value::nil());
+                    if idx > self.len() {
+                        if idx > ARY_CAPA_PROBE {
+                            check_array_growth(idx, idx + 1)?;
+                        }
+                        self.resize(idx, Value::nil());
+                    }
                     self.push(src);
                 }
             }
@@ -588,6 +618,9 @@ impl ArrayInner {
                 };
                 let ary_len = ary_slice.len();
                 if index >= len || index + length > len {
+                    if index > ARY_CAPA_PROBE {
+                        check_array_growth(index, index + ary_len)?;
+                    }
                     self.resize(index + ary_len, Value::nil());
                 } else if ary_len > length {
                     self.resize(len + ary_len - length, Value::nil());
@@ -600,6 +633,9 @@ impl ArrayInner {
             }
             None => {
                 if index >= len {
+                    if index > ARY_CAPA_PROBE {
+                        check_array_growth(index, index + 1)?;
+                    }
                     self.resize(index + 1, Value::nil());
                 } else if length == 0 {
                     self.push(Value::nil());

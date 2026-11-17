@@ -871,15 +871,6 @@ fn ary_and(lhs: Array, rhs: Array, vm: &mut Executor, globals: &mut Globals) -> 
 /// - self * sep -> String
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/=2a.html]
-/// CRuby's `ARY_MAX_SIZE`: the element count past which an Array is
-/// "too big" whatever memory there is.
-const ARY_MAX_SIZE: usize = (i64::MAX / 8) as usize;
-
-/// An Array longer than this is asked of the allocator before it is
-/// built (`array_capa_available`), so that a refusal is a NoMemoryError
-/// and not an abort; a shorter one is not worth the extra allocation.
-const ARY_CAPA_PROBE: usize = 1 << 24;
-
 #[monoruby_builtin]
 fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().as_array();
@@ -1924,12 +1915,15 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     Ok(ary.into())
 }
 
-/// Helper to resize array for fill, raising ArgumentError if too large.
+/// Grow the array for `fill`. As in `rb_ary_fill`, an end past
+/// `ARY_MAX_SIZE` is an ArgumentError and a length the allocator refuses
+/// a NoMemoryError (`[1].fill(0, 0, 2**40)`).
 fn fill_resize(ary: &mut Array, new_len: usize) -> Result<()> {
-    // Limit to prevent capacity overflow panics. CRuby also refuses huge sizes.
-    const MAX_FILL_SIZE: usize = 1 << 30; // ~1 billion elements
-    if new_len > MAX_FILL_SIZE {
+    if new_len > ARY_MAX_SIZE {
         return Err(MonorubyErr::argumenterr("argument too big"));
+    }
+    if new_len > ARY_CAPA_PROBE && !crate::builtins::kernel::array_capa_available(new_len) {
+        return Err(MonorubyErr::nomemoryerr());
     }
     ary.resize(new_len, Value::nil());
     Ok(())
@@ -4180,23 +4174,41 @@ fn product(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             vm.temp_push(list.into());
             lists.push(list);
         }
-        // Check total product size to avoid memory exhaustion.
+        if let Some(bh) = lfp.block() {
+            // Each combination goes to the block, so the count has no
+            // limit.
+            let iter = product_inner(lhs, lists);
+            vm.invoke_block_iter1(globals, bh, iter)?;
+            return Ok(lfp.self_val());
+        }
+        // `rb_ary_product` without a block builds the result, so it
+        // computes the length first: one that overflows a `long` is a
+        // RangeError, one past the Array size limit an ArgumentError
+        // (`rb_ary_new2`), and one the allocator refuses a NoMemoryError
+        // — the result's own buffer, or the combinations, which are all
+        // created before the next collection can run.
+        // An empty list ends the count there, as in CRuby.
         let mut total: usize = lhs.len();
         for l in &lists {
+            if l.len() == 0 {
+                total = 0;
+                break;
+            }
             total = total
                 .checked_mul(l.len())
+                .filter(|total| *total <= i64::MAX as usize)
                 .ok_or_else(|| MonorubyErr::rangeerr("too big to product"))?;
-            if total > 1_000_000 {
-                return Err(MonorubyErr::rangeerr("too big to product"));
-            }
         }
-        let iter = product_inner(lhs, lists);
-        if let Some(bh) = lfp.block() {
-            vm.invoke_block_iter1(globals, bh, iter)?;
-            Ok(lfp.self_val())
-        } else {
-            Ok(Value::array_from_iter(iter))
+        if total > ARY_MAX_SIZE {
+            return Err(MonorubyErr::argumenterr("array size too big"));
         }
+        if total > ARY_CAPA_PROBE
+            && !(crate::builtins::kernel::array_capa_available(total)
+                && crate::alloc::ALLOC.with(|alloc| alloc.borrow().has_room_for(total)))
+        {
+            return Err(MonorubyErr::nomemoryerr());
+        }
+        Ok(Value::array_from_iter(product_inner(lhs, lists)))
     })
 }
 
@@ -5191,6 +5203,10 @@ fn insert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         nth as usize
     };
     if nth >= ary.len() {
+        // `rb_ary_splice`: see `check_array_growth`.
+        if nth > ARY_CAPA_PROBE {
+            check_array_growth(nth, nth + val.len())?;
+        }
         ary.resize(nth, Value::nil());
     }
     if val.len() == 1 {
@@ -5906,12 +5922,13 @@ mod tests {
             "##,
         ]);
         // respond_to_missing? => true with only the default
-        // method_missing dispatches for real and raises NoMethodError
-        run_test_error(
+        // method_missing: the default one is not consulted, so the
+        // object does not convert
+        run_test(
             r##"
             o = Object.new
             def o.respond_to_missing?(name, priv) = true
-            [o].flatten
+            [[o].flatten.size, [o].flatten[0].equal?(o)]
             "##,
         );
         // a to_ary that returns neither Array nor nil is a TypeError
@@ -7374,16 +7391,19 @@ mod tests {
 
     #[test]
     fn product_size_check() {
-        run_test_no_result_check(
+        // A billion combinations: more objects than the heap can hold
+        // (CRuby runs out of memory part way; not something to run there).
+        let res = run_test_no_result_check(
             r##"
         begin
           ([0] * 1000).product([0] * 1000, [0] * 1000)
           false
-        rescue RangeError
+        rescue NoMemoryError
           true
         end
         "##,
         );
+        assert_eq!(res, crate::Value::bool(true));
     }
 
     #[test]

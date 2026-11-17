@@ -38,7 +38,7 @@ pub(super) fn init(globals: &mut Globals) {
     // These all inherit directly from `Exception`, not `StandardError`, so a
     // bare `rescue` (== `rescue StandardError`) does not catch them — matching
     // CRuby's hierarchy.
-    globals.define_class("NoMemoryError", exception_class, OBJECT_CLASS);
+    globals.define_builtin_exception_class("NoMemoryError", NO_MEMORY_ERROR_CLASS, exception_class);
     globals.define_class("SecurityError", exception_class, OBJECT_CLASS);
     // `SystemStackError` is raised on stack overflow.
     globals.define_class("SystemStackError", exception_class, OBJECT_CLASS);
