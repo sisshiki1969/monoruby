@@ -2723,12 +2723,14 @@ fn elided_receiver_with_an_elided_argument_in_a_loop() {
 
 #[test]
 fn dropped_local_object_seen_by_a_binding_after_a_side_exit() {
-    // Issue #1910. A local's elided object is dropped once nothing the
-    // compiler can see reads the local — and a call the inline cache
-    // resolved to a non-capturing callee is not a read. When that call
-    // site then reaches `binding` under another name, the class guard
-    // exits to the interpreter, which makes the Binding over a frame
-    // whose local has to hold the Array the compiled code never built.
+    // Issue #1910. A local's elided object used to be dropped once
+    // nothing the compiler could see read the local — and a call the
+    // inline cache resolved to a non-capturing callee was not a read.
+    // When that call site then reaches `binding` under another name, the
+    // class guard exits to the interpreter, which makes the Binding over
+    // a frame whose local has to hold the Array the compiled code never
+    // built. The object now lives as long as the interpreter could
+    // observe it: the exit's write-back builds it.
     run_test(
         r#"
         class A1910; def get = nil; end
@@ -2753,10 +2755,10 @@ fn dropped_local_object_seen_by_a_binding_after_a_side_exit() {
 
 #[test]
 fn dropped_local_object_seen_across_blocks_and_loops() {
-    // The marker a dropped object leaves in its local is carried like
-    // any constant: out of a loop, through a branch, past an unrelated
-    // side exit (the Integer overflow), and it is the redefinition of
-    // the local that ends it.
+    // The object outlives its last compiled read wherever a call may
+    // follow: out of a loop, through a branch, past an unrelated side
+    // exit (the Integer overflow), and it is the redefinition of the
+    // local that ends it.
     run_test(
         r#"
         class A1910b; def get = nil; end
@@ -2817,12 +2819,12 @@ fn dropped_local_object_seen_across_blocks_and_loops() {
 
 #[test]
 fn dropped_local_object_after_each_consuming_use() {
-    // Every lowering that takes a dead local's object without building
-    // it leaves the marker: an index, a folded call on it, a multiple
-    // assignment out of it, a move to another local, a hand-over to a
-    // specialized callee. `eval` under another name reads the frame as
-    // `binding` does, and a Binding shows one object however often it
-    // is asked.
+    // Every lowering that reads a local's object without building it
+    // leaves it for a later capture: an index, a folded call on it, a
+    // multiple assignment out of it, a move to another local, a
+    // hand-over to a specialized callee. `eval` under another name reads
+    // the frame as `binding` does, and a Binding shows one object
+    // however often it is asked.
     run_test(
         r#"
         class A1910c; def get = nil; def ev(s) = nil; end
@@ -2874,6 +2876,155 @@ fn dropped_local_object_after_each_consuming_use() {
         ms = %i[by_eval moved expanded handed_over folded_call asked_twice]
         ms.each { |m| 30.times { |i| send(m, i, a) } }
         ms.map { |m| send(m, 7, b) }
+        "#,
+    );
+}
+
+#[test]
+fn handed_over_object_seen_by_a_binding_after_a_side_exit() {
+    // Issue #1910, for the objects a specialized callee receives elided
+    // in a parameter: a rest Array, a keyword-rest Hash, an Array
+    // literal. Their last compiled read is not the end of them either.
+    run_test(
+        r#"
+        class A1910d; def get = nil; def ev(s) = nil; end
+        class B1910d
+          alias_method :get, :binding
+          alias_method :ev, :eval
+          public :get, :ev
+        end
+        def probe1910d(b, name) = b && b.local_variable_get(name)
+        def rest_callee(o, *rest)
+          s = rest[0] + rest[1]
+          [s, probe1910d(o.get, :rest)]
+        end
+        def rest_caller(i, o) = rest_callee(o, i, i + 1)
+        def kw_callee(o, **kw)
+          s = kw[:a] + kw[:b]
+          [s, probe1910d(o.get, :kw)]
+        end
+        def kw_caller(i, o) = kw_callee(o, a: i, b: i + 1)
+        def lit_callee(o, v)
+          s = v[0] + v[1]
+          [s, probe1910d(o.get, :v)]
+        end
+        def lit_caller(i, o) = lit_callee(o, [i, i + 1])
+        def rest_eval(o, *rest)
+          s = rest[0] + rest[1]
+          [s, o.ev("rest")]
+        end
+        def rest_eval_caller(i, o) = rest_eval(o, i, i + 1)
+        a = A1910d.new
+        b = B1910d.new
+        res = []
+        30.times { |i| rest_caller(i, a) }
+        res << rest_caller(7, b)
+        30.times { |i| kw_caller(i, a) }
+        res << kw_caller(7, b)
+        30.times { |i| lit_caller(i, a) }
+        res << lit_caller(7, b)
+        30.times { |i| rest_eval_caller(i, a) }
+        res << rest_eval_caller(7, b)
+        res
+        "#,
+    );
+}
+
+#[test]
+fn dropped_local_object_seen_through_an_operator_after_a_side_exit() {
+    // Issue #1910: the instruction that reaches `eval` after the side
+    // exit need not be a method call. An index sends a message too, once
+    // its receiver is not what the compiled code guarded for.
+    run_test(
+        r#"
+        class A1910e; def [](k) = nil; def []=(k, v); end; end
+        class B1910e
+          alias_method :[], :eval
+          alias_method :[]=, :instance_eval
+          public :[], :[]=
+        end
+        def idx1910e(i, o)
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          [s, o["x"]]
+        end
+        def idx_assign1910e(i, o)
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          $r1910e = nil
+          o["$r1910e = x"] = "f"
+          [s, $r1910e]
+        end
+        a = A1910e.new
+        b = B1910e.new
+        res = []
+        30.times { |i| idx1910e(i, a) }
+        res << idx1910e(7, b)
+        30.times { |i| idx_assign1910e(i, a) }
+        res << idx_assign1910e(7, b)
+        res
+        "#,
+    );
+}
+
+#[test]
+fn dropped_local_object_seen_from_a_block_after_a_side_exit() {
+    // Issue #1910, from inside a block of the frame: the block touches
+    // none of the frame's locals and its calls are resolved to callees
+    // that capture nothing, until one of them is `binding` or `eval`,
+    // which reaches the frame's locals through the block's outer chain.
+    // So a block that may send a message at all counts as reading every
+    // local of the frame.
+    run_test(
+        r#"
+        class A1910f; def get = nil; def ev(s) = nil; def [](k) = nil; end
+        class B1910f
+          alias_method :get, :binding
+          alias_method :ev, :eval
+          alias_method :[], :eval
+          public :get, :ev, :[]
+        end
+        def probe1910f(b) = b && b.local_variable_get(:x)
+        def blk_call(i, o)
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          r = nil
+          1.times { r = probe1910f(o.get) }
+          [s, r]
+        end
+        def blk_op(i, o)
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          r = nil
+          1.times { r = o["x"] }
+          [s, r]
+        end
+        def blk_nested(i, o)
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          r = nil
+          1.times { 1.times { r = o.ev("x") } }
+          [s, r]
+        end
+        def yld1910f = yield
+        def blk_yield(i, o)
+          x = [i, i + 1]
+          s = x[0] + x[1]
+          r = yld1910f { o.ev("x") }
+          [s, r]
+        end
+        a = A1910f.new
+        b = B1910f.new
+        res = []
+        30.times { |i| blk_call(i, a) }
+        res << blk_call(7, b)
+        30.times { |i| blk_op(i, a) }
+        res << blk_op(7, b)
+        30.times { |i| blk_nested(i, a) }
+        res << blk_nested(7, b)
+        30.times { |i| blk_yield(i, a) }
+        res << blk_yield(7, b)
+        res
         "#,
     );
 }
