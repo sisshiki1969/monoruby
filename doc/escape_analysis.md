@@ -635,8 +635,9 @@ clobbering).
 other statements, after calls — and never let out of the frame. The
 object is elided into the local and stays elided until something could
 observe it; the rules of §3 apply, with a local's lifetime (it survives
-the frame's calls, is dropped when nothing reads it any more, and
-crosses a forward merge) and the escape points below.
+the frame's calls, is dropped when nothing reads it any more — leaving
+a marker for a later Binding, §12 — and crosses a forward merge) and
+the escape points below.
 
 **Scratch windows.** A temporary's elements stay in the temporaries the
 literal was built from, which the next push overwrites — so a local's
@@ -818,3 +819,88 @@ checked on it as before.
 are table lookups; the forward scans they replaced were checked against
 the tables, call for call, on the whole test suite, ruby/spec core and
 optcarrot before being removed.
+
+## 12. A dropped local leaves a marker (`elided_local.rs`)
+
+"Dead" in §3 and §10 is the compiled code's view: no instruction the
+compiler can see reads the local again, and a call cached to a callee
+that cannot capture its caller's frame is not a read (§11, Layer B). A
+side exit ends that view. The interpreter resumes with the same frame,
+and there the same call site may reach `binding` under another name
+(issue #1910):
+
+```ruby
+x = [i, i + 1]          # elided into x
+s += x[0] + x[1]        # the last read: x's object is dropped
+os[i].get               # cached to a plain method; one receiver's `get`
+                        # is `binding.local_variable_get(:x)`
+```
+
+The class guard of `os[i].get` fails for that receiver, the exit's write
+back finds nothing pending for `x` (the slot is `V`, which a deopt does
+not store), and the Binding the interpreter then makes shows whatever
+the slot held — `nil` from the frame's prologue. Compiled code never
+calls a capturing callee itself (a generic send that resolves to one
+deopts first), so every such capture goes through a side exit, and any
+exit after the drop will do, not only one at the call.
+
+So a dropped object leaves a **marker** behind
+(`SlotState::drop_virtual`, which takes the place of `take_virtual`
+wherever an object goes away without being built: the dead / redefined
+drop of `settle_virtuals` and `settle_virtuals_before_branch`, the
+consuming lowerings when the local is dead after them — index, folded
+call, `===`, expand, `y = x` — and the hand-over to a specialized or
+frameless callee). The marker is a hidden object, one per distinct
+source description, kept in a per-interpreter table (`ELIDED_LOCALS`,
+a GC root), and the local's slot state becomes the constant
+`C(marker)`:
+
+- **It costs nothing where nothing exits.** A constant is stored only
+  by a write back (a side exit, the GC slow path) or by a merge that
+  has to reconcile it with another mode — the loop back edge of
+  `x = [i, i + 1]` at the top of a loop body stores it once per
+  iteration when the loop head carries `x` in memory, which is the
+  whole of the fast-path cost (two instructions; +4.6% on a loop that
+  does nothing else, within noise on the benchmarks).
+- **It follows the local.** Merges, loop heads, the next assignment to
+  the local and the frame's own liveness treat it as they treat any
+  constant; nothing in the bytecode reads it, since no read of the
+  local was left (that is what made the object dead).
+- **It describes the object by the frame alone**: `Slots { src, len }`
+  over the local's scratch window, a `Literal`'s id (the table keeps
+  the literal alive), or a `Range` over constants and window slots. The
+  window is rewritten only by the next literal assigned to the same
+  local, which also replaces the marker; `wb_void` leaves the windows
+  of a framed frame out of the GC write back's `nil` fill, so a
+  dropped object's elements outlive a collection (they are homed
+  `Value`s and are scanned like any register). A frozen literal that
+  is the same object at every evaluation (a Range of constants) is its
+  own marker.
+
+**Materialization** (`elided_local::materialize`) replaces every
+marker in a frame and the frames of its outer chain with the object it
+stands for, built from the frame's registers. It runs wherever a
+frame's locals become readable by name:
+
+| Where | Why |
+| --- | --- |
+| `RValue::new_binding` | `Kernel#binding`, `Proc#binding`, `TOPLEVEL_BINDING`: the frame has just moved to the heap |
+| `Globals::compile_script_eval` | `eval(str)` / `instance_eval(str)` compile against the live frame |
+| `Globals::compile_script_binding_inner` | `eval(str, b)`, `b.eval(str)`: a marker written after `b` was made |
+| `lookup_local_in_binding` | `b.local_variable_get` / `local_variable_defined?`, likewise |
+
+With no marker ever handed out the walk is skipped (`described` is
+empty); otherwise it is a scan of the frame's registers against one
+hash table, on a path that is about to parse or to look a name up.
+
+**Not covered.** An object whose elements are not in the frame gets no
+marker and stays invisible as before: one handed over by the caller
+(`CallerSlots`, `CallerKw` — an elided `*rest` / `**kwrest` dropped in
+the callee), and any object of a frameless callee (it has no frame to
+find the marker in; a capture there needs the materializing exit
+first). After `y = x` with `x` dead both locals describe the same
+window, so a Binding shows two equal Arrays where CRuby shows one
+object. And the Binding of a *block* passed to a callee that reifies
+it (`def foo(&b) = b.binding`) still misses the objects of live locals
+the block body does not touch (#2058): that is `Capture::Block`'s
+reach, not a dropped object.
