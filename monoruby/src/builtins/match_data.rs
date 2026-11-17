@@ -1003,7 +1003,8 @@ fn named_captures(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         let val = last_matched_named(&m, names, name)
             .and_then(|i| m.at_value(i))
             .unwrap_or_default();
-        map.insert(key, val, vm, globals)?;
+        // `rb_hash_aset`: a String name goes in as its frozen copy.
+        map.insert(key.frozen_hash_key(&globals.store), val, vm, globals)?;
     }
     Ok(Value::hash(map))
 }

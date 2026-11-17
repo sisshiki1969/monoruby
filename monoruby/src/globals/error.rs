@@ -930,7 +930,7 @@ impl MonorubyErr {
     /// asked of the class itself when the message is read
     /// ([`MonorubyErr::class_span`]).
     ///
-    fn receiver_description(store: &Store, obj: Value) -> (String, usize) {
+    pub(crate) fn receiver_description(store: &Store, obj: Value) -> (String, usize) {
         if obj.is_nil() {
             ("nil".to_string(), 0)
         } else if obj == Value::bool(true) {

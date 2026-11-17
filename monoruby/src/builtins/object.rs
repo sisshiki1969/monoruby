@@ -342,6 +342,49 @@ fn no_method_error_with_args(
     err.with_original(exc)
 }
 
+/// The NoMethodError of a call by a name no Symbol exists for
+/// (`rb_make_no_method_exception` from `send`): `#name` is the String
+/// the caller gave, as it is in the message.
+pub(crate) fn no_method_error_unknown(
+    globals: &mut Globals,
+    receiver: Value,
+    name: Value,
+    args: &[Value],
+    private_call: bool,
+) -> MonorubyErr {
+    let inner = name.as_rstring_inner();
+    let (bytes, enc) = (inner.as_bytes().to_vec(), inner.encoding());
+    let (desc, class_len) = MonorubyErr::receiver_description(&globals.store, receiver);
+    let raw = [
+        b"undefined method '".as_slice(),
+        &bytes,
+        b"' for ",
+        desc.as_bytes(),
+    ]
+    .concat();
+    let mut err = MonorubyErr::with_message(
+        MonorubyErrKind::NotMethod {
+            name: None,
+            receiver: Some(receiver),
+        },
+        String::from_utf8_lossy(&raw).into_owned(),
+    )
+    .showing_class(class_len, 0);
+    // A name that is not UTF-8 is shown as its own bytes.
+    if std::str::from_utf8(&raw).is_err() {
+        err.raw_message = Some((raw, enc));
+    }
+    let call_args = Value::array_from_iter(args.iter().cloned());
+    let err = no_method_error_with_args(globals, err, call_args, private_call);
+    if let Some(mut exc) = err.original {
+        let _ = globals.store.set_ivar(exc, IdentId::_NAME, name);
+        if let Some(inner) = exc.is_exception_mut() {
+            inner.raw_message = err.raw_message.clone();
+        }
+    }
+    err
+}
+
 ///
 /// ### BasicObject#!
 ///

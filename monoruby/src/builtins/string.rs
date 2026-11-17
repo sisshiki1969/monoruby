@@ -418,9 +418,24 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let self_ = lfp.self_val();
     let inner = self_.as_rstring_inner();
     let byte_len = inner.as_bytes().len();
-    // Guard against overflow / OOM for huge counts
-    if byte_len > 0 && count > (u32::MAX as usize) / byte_len {
+    // `rb_str_times`: a product past `LONG_MAX` is an ArgumentError, and
+    // a length the allocator refuses a NoMemoryError (`"abc" * 2**40`),
+    // which `repeat` would abort the process on.
+    let Some(total) = byte_len
+        .checked_mul(count)
+        .filter(|total| *total <= isize::MAX as usize)
+    else {
         return Err(MonorubyErr::argumenterr("argument too big"));
+    };
+    if !string_capa_available(total) {
+        // With no room left for the terminator the request never
+        // reaches the allocator in CRuby.
+        let msg = if total == isize::MAX as usize {
+            "too large allocation size"
+        } else {
+            "failed to allocate memory"
+        };
+        return Err(no_memory_error_with(vm, globals, msg));
     }
     let res = Value::string_from_inner(inner.repeat(count));
     Ok(res)
@@ -7567,7 +7582,8 @@ fn write_pad(out: &mut SmallVec<[u8; STRING_INLINE_CAP]>, pad: &RStringInner, n_
 /// into a single buffer (one allocation), with a `memset`/`memcpy` fast
 /// path for ASCII pads. Encoding compatibility between `self_inner`
 /// and `pad_inner` is the caller's responsibility (typically via
-/// `check_string_encoding_compat`).
+/// `check_string_encoding_compat`). `None` when the allocator refuses
+/// the padded length (a NoMemoryError for the caller to raise).
 fn pad_string_inner(
     self_inner: &RStringInner,
     width: i64,
@@ -7575,13 +7591,13 @@ fn pad_string_inner(
     side: PadSide,
     out_enc: crate::value::Encoding,
     default_pad: bool,
-) -> RStringInner {
+) -> Option<RStringInner> {
     let self_chars = self_inner.char_length();
     let self_bytes = self_inner.as_bytes();
     // No padding needed: CRuby returns a *fresh* String (not self),
     // so clone — preserves the cached code range.
     if width <= 0 || (width as usize) <= self_chars {
-        return self_inner.clone();
+        return Some(self_inner.clone());
     }
     let needed = (width as usize) - self_chars;
     let (head, tail) = match side {
@@ -7596,7 +7612,10 @@ fn pad_string_inner(
     };
     let head_bytes = pad_byte_size(pad_inner, head);
     let tail_bytes = pad_byte_size(pad_inner, tail);
-    let total = head_bytes + self_bytes.len() + tail_bytes;
+    let total = head_bytes
+        .checked_add(self_bytes.len())
+        .and_then(|n| n.checked_add(tail_bytes))
+        .filter(|total| string_capa_available(*total))?;
     let mut out: SmallVec<[u8; STRING_INLINE_CAP]> = SmallVec::with_capacity(total);
     write_pad(&mut out, pad_inner, head);
     out.extend_from_slice(self_bytes);
@@ -7606,7 +7625,7 @@ fn pad_string_inner(
     // Output ASCII-ness is closed under concatenation: SevenBit + SevenBit
     // stays SevenBit, so we can tag the result without re-scanning.
     if self_inner.is_ascii_only() && pad_inner.is_ascii_only() {
-        return RStringInner::from_ascii_bytes(out, out_enc);
+        return Some(RStringInner::from_ascii_bytes(out, out_enc));
     }
     // `rb_str_justify` records the receiver's code range, AND-ed with
     // the pad's when one was given — and the default `" "` is a bare
@@ -7625,9 +7644,9 @@ fn pad_string_inner(
         }
     };
     if cr == CodeRange::Broken || cr == CodeRange::Unknown || out_enc != self_inner.encoding() {
-        return RStringInner::from_encoding(&out, out_enc);
+        return Some(RStringInner::from_encoding(&out, out_enc));
     }
-    RStringInner::from_buf_cr(out, out_enc, cr)
+    Some(RStringInner::from_buf_cr(out, out_enc, cr))
 }
 
 /// Common entry point shared by `ljust` / `rjust` / `center`. Handles
@@ -7654,8 +7673,10 @@ fn pad_builtin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, side: PadSide
         let out_enc = self_inner
             .compatible_encoding(&pad)
             .unwrap_or_else(|| self_inner.encoding());
-        let result = pad_string_inner(self_inner, width, &pad, side, out_enc, false);
-        Ok(Value::string_from_inner(result))
+        match pad_string_inner(self_inner, width, &pad, side, out_enc, false) {
+            Some(result) => Ok(Value::string_from_inner(result)),
+            None => Err(no_memory_error(vm, globals)),
+        }
     } else {
         // Default padding is a single US-ASCII space. Synthesise it
         // inline rather than allocating a per-call placeholder — the
@@ -7665,8 +7686,10 @@ fn pad_builtin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, side: PadSide
             crate::value::Encoding::UsAscii,
         );
         let enc = self_inner.encoding();
-        let result = pad_string_inner(self_inner, width, &pad, side, enc, true);
-        Ok(Value::string_from_inner(result))
+        match pad_string_inner(self_inner, width, &pad, side, enc, true) {
+            Some(result) => Ok(Value::string_from_inner(result)),
+            None => Err(no_memory_error(vm, globals)),
+        }
     }
 }
 
@@ -9401,6 +9424,27 @@ pub(crate) fn check_symbol_bytes(store: &Store, inner: &RStringInner, name: bool
         ));
     }
     Ok(())
+}
+
+/// The Symbol [`intern_name_string`] would answer, when it exists
+/// already: `rb_check_id`, which makes no Symbol for a name that is
+/// about to be refused. The bytes are taken as valid
+/// ([`check_symbol_bytes`]).
+pub(crate) fn existing_name_id(inner: &RStringInner) -> Option<IdentId> {
+    use crate::value::Encoding as E;
+    let src = inner.encoding();
+    let bytes = inner.as_bytes();
+    let ascii = bytes.is_ascii();
+    if src == E::UsAscii && !ascii {
+        IdentId::try_get_id_from_bytes(bytes, E::UsAscii)
+    } else if (ascii && src.is_ascii_compatible()) || src == E::UTF8 {
+        match std::str::from_utf8(bytes) {
+            Ok(s) => IdentId::try_get_id(s),
+            Err(_) => IdentId::try_get_id_from_bytes(bytes, E::Ascii8),
+        }
+    } else {
+        IdentId::try_get_id_from_bytes(bytes, src)
+    }
 }
 
 fn intern_string_as(store: &Store, inner: &RStringInner, name: bool) -> Result<IdentId> {
@@ -12108,18 +12152,42 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// Built through the class object because the error kind is not one of
 /// `MonorubyErrKind`'s own variants.
 pub(crate) fn no_memory_error(vm: &mut Executor, globals: &mut Globals) -> MonorubyErr {
-    const MSG: &str = "failed to allocate memory";
+    no_memory_error_with(vm, globals, "failed to allocate memory")
+}
+
+/// A String longer than this many bytes is asked of the allocator before
+/// it is built, so that a refusal is a NoMemoryError and not an abort; a
+/// shorter one is not worth the extra allocation.
+const STR_CAPA_PROBE: usize = 1 << 27;
+
+/// Whether the allocator would hand out a String of `bytes` bytes now.
+fn string_capa_available(bytes: usize) -> bool {
+    if bytes <= STR_CAPA_PROBE {
+        return true;
+    }
+    if crate::alloc::would_exceed_malloc_hard_limit(bytes) {
+        return false;
+    }
+    Vec::<u8>::new().try_reserve_exact(bytes).is_ok()
+}
+
+/// [`no_memory_error`] with the message CRuby gives the failure at hand.
+pub(crate) fn no_memory_error_with(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    msg: &'static str,
+) -> MonorubyErr {
     let Some(klass) = globals
         .store
         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("NoMemoryError"))
     else {
-        return MonorubyErr::runtimeerr(MSG);
+        return MonorubyErr::runtimeerr(msg);
     };
     match vm.invoke_method_inner(
         globals,
         IdentId::NEW,
         klass,
-        &[Value::string_from_str(MSG)],
+        &[Value::string_from_str(msg)],
         None,
         None,
     ) {

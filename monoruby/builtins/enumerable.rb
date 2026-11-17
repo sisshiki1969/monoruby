@@ -416,9 +416,9 @@ module Enumerable
       raise FrozenError, "can't modify frozen Hash: #{hash.inspect}" if hash.frozen?
     end
     h = hash || {}
-    __gather_each do |x|
-      h[x] = (h.key?(x) ? h[x] : 0) + 1
-    end
+    # `tally_up` rather than `h[x] = ...`: the element is the key as it
+    # is (no frozen copy of a String), whatever default the Hash has.
+    __gather_each { |x| __tally_up(h, x) }
     h
   end
   private :__tally_into

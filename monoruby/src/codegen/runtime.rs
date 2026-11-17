@@ -2105,6 +2105,50 @@ pub(super) extern "C" fn object_send_missing(
 }
 
 ///
+/// The name an inlined `send` / `__send__` was given when it is not a
+/// Symbol: what `to_str` answers, as the method it names.
+///
+/// A String no Symbol exists for is the NoMethodError here, unless the
+/// receiver has its own `method_missing` (`send_method_name`); the
+/// arguments it reports are read back from the caller's frame, as
+/// [`object_send_missing`] reads them.
+///
+pub(crate) extern "C" fn object_send_name(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name: Value,
+    callid: CallSiteId,
+    lfp: Lfp,
+) -> Option<IdentId> {
+    if let Some(id) = name.try_symbol() {
+        return Some(id);
+    }
+    let cs = &globals.store[callid];
+    let (recv, args_slot, pos_num, single_splat, fcall) = (
+        cs.recv,
+        cs.args,
+        cs.pos_num,
+        cs.object_send_single_splat(),
+        cs.is_func_call(),
+    );
+    // SAFETY: the slots come from the call site being executed, so they
+    // name live registers of this very frame.
+    let receiver = lfp.register(recv).unwrap();
+    let mut args = unsafe { lfp.args_to_vec(args_slot, pos_num) };
+    if single_splat {
+        args = match args[0].try_array_ty() {
+            Some(ary) => ary.to_vec(),
+            None => vec![args[0]],
+        };
+    }
+    // The splat form hands over the element the name was read from.
+    args[0] = name;
+    crate::builtins::send_method_name(vm, globals, receiver, &args, |_, _| fcall)
+        .map_err(|err| vm.set_error(err))
+        .ok()
+}
+
+///
 /// `Method#call` on a Method the inline path cannot call itself.
 ///
 /// The inlined `Method#call` (`Codegen::method_object_call_inline`) reads

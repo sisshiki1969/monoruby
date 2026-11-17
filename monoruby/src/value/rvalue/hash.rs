@@ -2126,6 +2126,29 @@ impl Hashmap {
 
     // Write-barrier-protected stores.
 
+    ///
+    /// `rb_hash_aset`: store *k* => *v* the way `Hash#[]=` does — an
+    /// unfrozen String key goes in as its frozen copy
+    /// ([`Value::frozen_hash_key`]) unless the Hash compares by identity.
+    /// What a builder of a Hash from caller-supplied keys wants
+    /// (`merge`, `group_by`, a Set's elements); [`Hashmap::insert`] stores
+    /// the key object as it is.
+    ///
+    pub fn aset(
+        &mut self,
+        k: Value,
+        v: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        let k = if self.is_compare_by_identity() {
+            k
+        } else {
+            k.frozen_hash_key(&globals.store)
+        };
+        self.insert(k, v, vm, globals)
+    }
+
     pub fn insert(
         &mut self,
         k: Value,

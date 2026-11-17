@@ -133,9 +133,15 @@ class Exception
       msg = highlight ? "\e[1;4m#{self.class}\e[m" : self.class.to_s
     end
     bt = backtrace
-    # An exception that was never raised has no backtrace; CRuby shows
-    # the caller of full_message instead.
-    bt = caller if bt.nil? || bt.empty?
+    # An exception that was never raised has no backtrace: the report
+    # then has the one position `error_pos_str` gives, where this method
+    # was called, labelled with the name it was called by — and no
+    # further frames.
+    if bt.nil? || bt.empty?
+      loc = caller_locations(1, 1)
+      loc = loc[0] if loc
+      bt = loc ? ["#{loc.path}:#{loc.lineno}:in '#{__callee__}'"] : nil
+    end
     if bt && !bt.empty?
       rest = bt[1..]
       limit = Kernel.__backtrace_limit

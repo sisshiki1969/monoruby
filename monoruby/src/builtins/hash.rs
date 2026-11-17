@@ -454,7 +454,7 @@ fn hash_bracket(
                 // (do NOT carry over default value/proc or compare_by_identity).
                 let mut map = RubyMap::default();
                 for (k, v) in arg.as_hash().iter() {
-                    map.insert(k, v, vm, globals)?;
+                    map.insert(k.frozen_hash_key(&globals.store), v, vm, globals)?;
                 }
                 Value::hash(map)
             } else if let Some(ary) = arg.try_array_ty() {
@@ -468,7 +468,7 @@ fn hash_bracket(
                 {
                     let mut map = RubyMap::default();
                     for (k, v) in coerced.as_hash().iter() {
-                        map.insert(k, v, vm, globals)?;
+                        map.insert(k.frozen_hash_key(&globals.store), v, vm, globals)?;
                     }
                     Value::hash(map)
                 } else if let Some(coerced) =
@@ -491,7 +491,12 @@ fn hash_bracket(
             }
             let mut map = RubyMap::default();
             for i in (0..len).step_by(2) {
-                map.insert(args[i], args[i + 1], vm, globals)?;
+                map.insert(
+                    args[i].frozen_hash_key(&globals.store),
+                    args[i + 1],
+                    vm,
+                    globals,
+                )?;
             }
             Value::hash(map)
         }
@@ -534,10 +539,10 @@ fn hash_from_array_pairs(
         };
         match pair.len() {
             1 => {
-                map.insert(pair[0], Value::nil(), vm, globals)?;
+                map.insert(pair[0].frozen_hash_key(&globals.store), Value::nil(), vm, globals)?;
             }
             2 => {
-                map.insert(pair[0], pair[1], vm, globals)?;
+                map.insert(pair[0].frozen_hash_key(&globals.store), pair[1], vm, globals)?;
             }
             n => {
                 return Err(MonorubyErr::argumenterr(format!(
@@ -2538,9 +2543,39 @@ fn invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let hash = lfp.self_val().as_hash();
     let mut map = RubyMap::default();
     for (k, v) in hash.iter() {
-        map.insert(v, k, vm, globals)?;
+        map.insert(v.frozen_hash_key(&globals.store), k, vm, globals)?;
     }
     Ok(Value::hash(map))
+}
+
+///
+/// ### Kernel#__tally_up (monoruby intrinsic)
+///
+/// - __tally_up(hash, key) -> Integer
+///
+/// One step of `Enumerable#tally` (CRuby's `tally_up`, an `st_update`):
+/// count *key* once more in *hash*. The key object is stored as it is — a String
+/// is not copied and frozen, which is `rb_hash_aset`'s doing — the
+/// Hash's default is not consulted, and a count that is not an Integer
+/// is a TypeError.
+///
+#[monoruby_builtin]
+pub(super) fn tally_up(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // `FIXNUM_MAX`: a count that has reached it fails `tally_up`'s
+    // `Check_Type(tally, T_BIGNUM)`, as it does in CRuby.
+    const FIXNUM_MAX: i64 = (1 << 62) - 1;
+    let key = lfp.arg(1);
+    let mut h = lfp.arg(0).as_hash_mut(&globals.store)?;
+    let count = match h.get(key, vm, globals)? {
+        None => Value::integer(1),
+        Some(v) => match v.unpack() {
+            RV::Fixnum(i) if i < FIXNUM_MAX => Value::integer(i + 1),
+            RV::BigInt(b) => Value::bigint(b + 1),
+            _ => return Err(MonorubyErr::wrong_argument_type(&globals.store, v, "Integer")),
+        },
+    };
+    h.insert(key, count, vm, globals)?;
+    Ok(count)
 }
 
 ///
@@ -2566,9 +2601,9 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             for (k, other_v) in other_val.iter() {
                 if let Some(self_v) = h.get(k, vm, globals)? {
                     let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
-                    h.insert(k, v, vm, globals)?;
+                    h.aset(k, v, vm, globals)?;
                 } else {
-                    h.insert(k, other_v, vm, globals)?;
+                    h.aset(k, other_v, vm, globals)?;
                 }
             }
         }
@@ -2576,7 +2611,7 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         for arg in lfp.arg(0).as_array().iter() {
             let other_val = arg.coerce_to_hash(vm, globals)?;
             for (k, v) in other_val.iter() {
-                h.insert(k, v, vm, globals)?;
+                h.aset(k, v, vm, globals)?;
             }
         }
     }
@@ -2605,9 +2640,9 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             for (k, other_v) in other.iter() {
                 if let Some(self_v) = h.get(k, vm, globals)? {
                     let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
-                    h.insert(k, v, vm, globals)?;
+                    h.aset(k, v, vm, globals)?;
                 } else {
-                    h.insert(k, other_v, vm, globals)?;
+                    h.aset(k, other_v, vm, globals)?;
                 }
             }
         }
@@ -2616,7 +2651,7 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             let other_val = arg.coerce_to_hash(vm, globals)?;
             let other = other_val;
             for (k, v) in other.iter() {
-                h.insert(k, v, vm, globals)?;
+                h.aset(k, v, vm, globals)?;
             }
         }
     }

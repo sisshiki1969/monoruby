@@ -1092,6 +1092,8 @@ impl Executor {
                     width = width
                         .checked_mul(10)
                         .and_then(|w| w.checked_add(ch as usize - '0' as usize))
+                        // `GETNUM`: the width is an `int`.
+                        .filter(|w| *w <= i32::MAX as usize)
                         .ok_or_else(|| MonorubyErr::argumenterr("width too big"))?;
                     i += 1;
                     if i >= flen {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::builtins::kernel::{CheckedName, checked_name, name_error_unknown};
 
 //
 // Module class
@@ -535,7 +536,7 @@ fn alias_method(
     let class_id = self_val.as_class_id();
     globals.store.class_modify_check(class_id)?;
     let new_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
-    let old_name = lfp.arg(1).coerce_to_symbol_or_string(vm, globals)?;
+    let old_name = existing_method_name(vm, globals, class_id, lfp.arg(1))?;
     vm.alias_method_for_class(globals, class_id, new_name, old_name)?;
     Ok(Value::symbol(new_name))
 }
@@ -1323,13 +1324,25 @@ fn check_constant_path_string(store: &Store, path: &RStringInner) -> Result<()> 
     }
 }
 
+/// One segment of a [`ConstPath`] that is a constant name
+/// (`rb_check_id_cstr`'s answer for it).
+enum ConstSeg {
+    /// The name, as the Symbol that exists for it.
+    Id(IdentId),
+    /// A name no Symbol exists for — so nothing is defined under it, and
+    /// it is not interned to find that out. The segment as a String (the
+    /// path itself when the segment is all of it), which is what a
+    /// NameError about it carries as `#name`.
+    Unknown(Value),
+}
+
 /// A constant path given to `const_get` / `const_defined?` /
 /// `const_source_location`, as far as it can be walked.
 struct ConstPath {
     /// A String path that starts with `::` is looked up from Object.
     start_at_object: bool,
-    /// The leading segments that are constant names, interned.
-    segs: Vec<IdentId>,
+    /// The leading segments that are constant names.
+    segs: Vec<ConstSeg>,
     /// What stops the walk after `segs`: the "wrong constant name"
     /// NameError of the first segment that is no constant name (or of
     /// the whole path, when it is malformed at that point). CRuby
@@ -1397,7 +1410,11 @@ fn constant_path_segments(
                 receiver,
             )
         });
-        let segs = if bad.is_some() { vec![] } else { vec![sym] };
+        let segs = if bad.is_some() {
+            vec![]
+        } else {
+            vec![ConstSeg::Id(sym)]
+        };
         return Ok(ConstPath {
             start_at_object: false,
             segs,
@@ -1465,29 +1482,34 @@ fn constant_path_segments(
                 _ => return done(segs, Some(whole(globals)), start_at_object),
             },
         };
+        // The segment's Symbol when there is one of that name already
+        // (`rb_check_id_cstr`), else the segment as a String.
+        let existing = match std::str::from_utf8(seg) {
+            Ok(s) => IdentId::try_get_id(s),
+            Err(_) => IdentId::try_get_id_from_bytes(seg, enc),
+        };
+        let seg_string = || {
+            if tail.is_none() && seg.len() == bytes.len() {
+                path
+            } else {
+                let mut name = Value::string_from_inner(RStringInner::from_encoding(seg, enc));
+                name.set_frozen();
+                name
+            }
+        };
         if !is_const_name_bytes(seg, enc) {
-            // `#name` is the segment: its Symbol when there is one of
-            // that name already (`rb_check_id_cstr`), else the String.
-            let existing = match std::str::from_utf8(seg) {
-                Ok(s) => IdentId::try_get_id(s),
-                Err(_) => IdentId::try_get_id_from_bytes(seg, enc),
-            };
+            // `#name` is the segment.
             let name = match existing {
                 Some(id) => Value::symbol(id),
-                None if tail.is_none() && seg.len() == bytes.len() => path,
-                None => {
-                    let mut name = Value::string_from_inner(RStringInner::from_encoding(seg, enc));
-                    name.set_frozen();
-                    name
-                }
+                None => seg_string(),
             };
             let bad = name_error_reflection_bytes(globals, WRONG, seg, enc, "", name, receiver);
             return done(segs, Some(bad), start_at_object);
         }
-        segs.push(crate::builtins::string::intern_name_string(
-            &globals.store,
-            &RStringInner::from_encoding(seg, enc),
-        )?);
+        segs.push(match existing {
+            Some(id) => ConstSeg::Id(id),
+            None => ConstSeg::Unknown(seg_string()),
+        });
         match tail {
             Some(tail) => rest = tail,
             None => return done(segs, None, start_at_object),
@@ -1517,6 +1539,31 @@ fn call_const_missing(
     }
 }
 
+/// [`call_const_missing`] for a segment no Symbol exists for
+/// (`rb_mod_const_get`): the default `const_missing` raises its
+/// NameError about the String itself — no Symbol is made for a name
+/// that names nothing — while a `const_missing` of the scope's own is
+/// called with the Symbol.
+fn call_const_missing_unknown(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    scope: Module,
+    name: Value,
+) -> Result<Value> {
+    let const_missing = IdentId::get_id("const_missing");
+    let basic = globals
+        .check_method(scope.as_val(), const_missing)
+        .is_none_or(|fid| matches!(globals.store[fid].kind, FuncKind::Builtin { .. }));
+    if !basic {
+        let id = crate::builtins::string::intern_name_string(
+            &globals.store,
+            name.as_rstring_inner(),
+        )?;
+        return call_const_missing(vm, globals, scope, id);
+    }
+    vm.invoke_method_inner(globals, const_missing, scope.as_val(), &[name], None, None)
+}
+
 /// Walk a (possibly scoped) constant path for `Module#const_get`
 /// (`rb_mod_const_get`): a segment the scope reached so far does not
 /// have goes to that scope's `const_missing`, a segment with more path
@@ -1542,7 +1589,21 @@ fn lookup_constant_path(
         receiver
     };
     let last_idx = path.last_idx();
-    for (i, id) in std::mem::take(&mut path.segs).into_iter().enumerate() {
+    for (i, seg) in std::mem::take(&mut path.segs).into_iter().enumerate() {
+        let id = match seg {
+            ConstSeg::Id(id) => id,
+            ConstSeg::Unknown(name) => {
+                let v = call_const_missing_unknown(vm, globals, current, name)?;
+                if Some(i) == last_idx {
+                    return Ok(v);
+                }
+                match v.is_class_or_module() {
+                    Some(m) => current = m,
+                    None => return Err(path.not_a_module(&globals.store)),
+                }
+                continue;
+            }
+        };
         // For the *first* segment, defer to the inherit flag (and
         // implicitly walk Object for modules / superclasses for
         // classes, as `get_constant_superclass_with_class` does). For
@@ -1594,7 +1655,11 @@ fn probe_constant_path(
         receiver
     };
     let last_idx = path.last_idx();
-    for (i, id) in std::mem::take(&mut path.segs).into_iter().enumerate() {
+    for (i, seg) in std::mem::take(&mut path.segs).into_iter().enumerate() {
+        // A name no Symbol exists for is not defined anywhere.
+        let ConstSeg::Id(id) = seg else {
+            return Ok(false);
+        };
         if Some(i) == last_idx {
             // Final segment: non-triggering probe. For the receiver
             // (i == 0) honour `inherit`; for nested resolved classes
@@ -1779,7 +1844,11 @@ fn lookup_constant_with_owner(
         receiver
     };
     let last_idx = path.last_idx();
-    for (i, id) in std::mem::take(&mut path.segs).into_iter().enumerate() {
+    for (i, seg) in std::mem::take(&mut path.segs).into_iter().enumerate() {
+        // A name no Symbol exists for is not defined anywhere.
+        let ConstSeg::Id(id) = seg else {
+            return Ok(None);
+        };
         // First segment honours `inherit`; later segments are looked
         // up directly on the resolved class, matching CRuby's scoped
         // resolution.
@@ -1838,7 +1907,7 @@ fn remove_const(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let name = crate::builtins::kernel::setter_name_id(
+    let name = crate::builtins::kernel::setter_name_check(
         vm,
         globals,
         lfp.self_val(),
@@ -1849,6 +1918,19 @@ fn remove_const(
     )?;
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let module = lfp.self_val().as_class().id();
+    let name = match name {
+        CheckedName::Id(name) => name,
+        CheckedName::Unknown(name) => {
+            let before = format!("constant {}::", globals.store.get_class_name(module));
+            return Err(crate::builtins::kernel::name_error_unknown(
+                globals,
+                &before,
+                name,
+                " not defined",
+                lfp.self_val(),
+            ));
+        }
+    };
     // CRuby 3.4+ emits the deprecation warning when removing a
     // deprecated constant (matches `remove_const` reading the slot
     // before deleting it). The message uses the receiver's full
@@ -2546,7 +2628,7 @@ fn instance_method(
     _: BytecodePtr,
 ) -> Result<Value> {
     let klass = lfp.self_val().as_class();
-    let method_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
+    let method_name = existing_method_name(vm, globals, klass.id(), lfp.arg(0))?;
     let set = vm.caller_refinements(globals);
     let (func_id, _, owner) = globals
         .store
@@ -2573,7 +2655,7 @@ fn public_instance_method(
     _: BytecodePtr,
 ) -> Result<Value> {
     let klass = lfp.self_val().as_class();
-    let method_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
+    let method_name = existing_method_name(vm, globals, klass.id(), lfp.arg(0))?;
     let (func_id, visibility, owner) = globals
         .store
         .find_instance_method(klass.id(), method_name, RefinementSetId::EMPTY)
@@ -2623,7 +2705,10 @@ fn undef_method(
     // "raises a TypeError when passed a not name" spec.
     let resolved: Vec<IdentId> = names
         .iter()
-        .map(|n| n.coerce_to_symbol_or_string(vm, globals))
+        .map(|n| match checked_name(vm, globals, *n)? {
+            CheckedName::Id(id) => Ok(id),
+            CheckedName::Unknown(s) => Err(undef_method_unknown(globals, class_id, s)),
+        })
         .collect::<Result<_>>()?;
     if !resolved.is_empty() {
         globals.store.class_modify_check(class_id)?;
@@ -2653,7 +2738,19 @@ fn remove_method(
     let names = lfp.arg(0).as_array();
     let resolved: Vec<IdentId> = names
         .iter()
-        .map(|n| n.coerce_to_symbol_or_string(vm, globals))
+        .map(|n| match checked_name(vm, globals, *n)? {
+            CheckedName::Id(id) => Ok(id),
+            CheckedName::Unknown(s) => {
+                let class_name = globals.store.nameerr_class_name(class_id);
+                Err(name_error_unknown(
+                    globals,
+                    "method '",
+                    s,
+                    &format!("' not defined in {class_name}"),
+                    self_val,
+                ))
+            }
+        })
         .collect::<Result<_>>()?;
     if !resolved.is_empty() {
         globals.store.class_modify_check(class_id)?;
@@ -2671,7 +2768,10 @@ fn check_method_defined(
     lfp: Lfp,
 ) -> Result<Option<Visibility>> {
     let class_id = lfp.self_val().as_class_id();
-    let func_name = lfp.arg(0).coerce_to_symbol_or_string(vm, globals)?;
+    // A name no Symbol exists for names no method.
+    let CheckedName::Id(func_name) = checked_name(vm, globals, lfp.arg(0))? else {
+        return Ok(None);
+    };
     let inherit = if let Some(arg) = lfp.try_arg(1) {
         arg.as_bool()
     } else {
@@ -2768,7 +2868,7 @@ fn private_class_method(
 ) -> Result<Value> {
     let singleton = globals.store.get_singleton(lfp.self_val())?;
     let arg = lfp.arg(0).as_array();
-    let (_, names) = extract_names(globals, arg)?;
+    let (_, names) = extract_names(globals, singleton.id(), arg)?;
     globals.change_method_visibility_for_class(singleton.id(), &names, Visibility::Private)?;
     Ok(lfp.self_val())
 }
@@ -2790,7 +2890,7 @@ fn public_class_method(
 ) -> Result<Value> {
     let singleton = globals.store.get_singleton(lfp.self_val())?;
     let arg = lfp.arg(0).as_array();
-    let (_, names) = extract_names(globals, arg)?;
+    let (_, names) = extract_names(globals, singleton.id(), arg)?;
     globals.change_method_visibility_for_class(singleton.id(), &names, Visibility::Public)?;
     Ok(lfp.self_val())
 }
@@ -2933,7 +3033,19 @@ fn class_variable_get(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let name = coerce_to_class_var_name(vm, globals, lfp.self_val(), lfp.arg(0))?;
+    let name = match class_var_name_check(vm, globals, lfp.self_val(), lfp.arg(0))? {
+        CheckedName::Id(name) => name,
+        CheckedName::Unknown(name) => {
+            let after = format!(" in {}", globals.store.get_class_name(class_id));
+            return Err(crate::builtins::kernel::name_error_unknown(
+                globals,
+                "uninitialized class variable ",
+                name,
+                &after,
+                lfp.self_val(),
+            ));
+        }
+    };
     let module = globals.store[class_id].get_module();
     globals.get_class_variable(module, name).map(|(_, v)| v)
 }
@@ -2952,7 +3064,11 @@ fn class_variable_defined(
     _: BytecodePtr,
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
-    let name = coerce_to_class_var_name(vm, globals, lfp.self_val(), lfp.arg(0))?;
+    // A name no Symbol exists for names no variable.
+    let CheckedName::Id(name) = class_var_name_check(vm, globals, lfp.self_val(), lfp.arg(0))?
+    else {
+        return Ok(Value::bool(false));
+    };
     let module = globals.store[class_id].get_module();
     Ok(Value::bool(globals.get_class_variable(module, name).is_ok()))
 }
@@ -2979,6 +3095,25 @@ fn coerce_to_class_var_name(
     )
 }
 
+/// [`coerce_to_class_var_name`] for the readers, which do not intern a
+/// name there is no Symbol for (`rb_check_id`).
+fn class_var_name_check(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Value,
+    name_arg: Value,
+) -> Result<crate::builtins::kernel::CheckedName> {
+    crate::builtins::kernel::setter_name_check(
+        vm,
+        globals,
+        receiver,
+        name_arg,
+        crate::builtins::kernel::is_valid_cvar_name,
+        "'",
+        "' is not allowed as a class variable name",
+    )
+}
+
 ///
 /// ### Module#remove_class_variable
 ///
@@ -2994,7 +3129,7 @@ fn remove_class_variable(
 ) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
     // `rb_mod_remove_cvar` words the bad name its own way.
-    let name = crate::builtins::kernel::setter_name_id(
+    let name = crate::builtins::kernel::setter_name_check(
         vm,
         globals,
         lfp.self_val(),
@@ -3003,6 +3138,19 @@ fn remove_class_variable(
         "wrong class variable name ",
         "",
     )?;
+    let name = match name {
+        crate::builtins::kernel::CheckedName::Id(name) => name,
+        crate::builtins::kernel::CheckedName::Unknown(name) => {
+            let after = format!(" not defined for {}", class_id.get_name(&globals.store));
+            return Err(crate::builtins::kernel::name_error_unknown(
+                globals,
+                "class variable ",
+                name,
+                &after,
+                lfp.self_val(),
+            ));
+        }
+    };
     match globals.store[class_id].remove_cvar(name) {
         Some(val) => Ok(val),
         None => Err(MonorubyErr::nameerr_showing(
@@ -3783,7 +3931,7 @@ fn module_function(
     let class_id = lfp.self_val().as_class_id();
     let mut names: Vec<IdentId> = Vec::with_capacity(args.len());
     for v in args.iter() {
-        names.push(v.coerce_to_symbol_or_string(vm, globals)?);
+        names.push(existing_method_name(vm, globals, class_id, *v)?);
     }
     for &name in &names {
         let func_id = globals
@@ -3875,7 +4023,7 @@ pub(super) fn change_visi(
         .get_module()
         .as_val()
         .ensure_not_frozen(&globals.store)?;
-    let (res, names) = extract_names(globals, arg)?;
+    let (res, names) = extract_names(globals, class_id, arg)?;
     // CRuby fires `method_added` only when `private` / `protected` /
     // `public` adds a *new* entry to the receiver's method table —
     // i.e. when the method was inherited rather than defined locally.
@@ -3894,24 +4042,87 @@ pub(super) fn change_visi(
     Ok(res)
 }
 
-fn extract_names(store: &Store, arg: Array) -> Result<(Value, Vec<IdentId>)> {
-    if arg.len() == 1 {
-        let mut names = vec![];
-        if let Some(ary) = arg[0].try_array_ty() {
-            for v in ary.iter() {
-                names.push(v.expect_symbol_or_string(store)?);
-            }
-        } else {
-            names.push(arg[0].expect_symbol_or_string(store)?);
+/// The method names a visibility setter was given (`set_method_visibility`):
+/// one Array of them, or the arguments themselves. A name no Symbol
+/// exists for names no method of *class_id* (`rb_print_undef_str`).
+fn extract_names(
+    globals: &mut Globals,
+    class_id: ClassId,
+    arg: Array,
+) -> Result<(Value, Vec<IdentId>)> {
+    let (res, list) = match arg.len() {
+        1 => match arg[0].try_array_ty() {
+            Some(ary) => (arg[0], ary.to_vec()),
+            None => (arg[0], vec![arg[0]]),
+        },
+        _ => (arg.as_val(), arg.to_vec()),
+    };
+    let mut names = Vec::with_capacity(list.len());
+    for v in list {
+        match v.expect_symbol_or_existing_string(&globals.store)? {
+            Some(id) => names.push(id),
+            None => return Err(undefined_method_unknown(globals, class_id, v)),
         }
-        Ok((arg[0], names))
-    } else {
-        let mut names = vec![];
-        for v in arg.iter() {
-            names.push(v.expect_symbol_or_string(store)?);
-        }
-        Ok((arg.as_val(), names))
     }
+    Ok((res, names))
+}
+
+/// The name of a method of *class_id* that has to exist already
+/// (`rb_check_id`, then `rb_print_undef_str`): a String no Symbol
+/// exists for is the NameError with that String as `#name`, and makes
+/// no Symbol.
+fn existing_method_name(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    class_id: ClassId,
+    arg: Value,
+) -> Result<IdentId> {
+    match checked_name(vm, globals, arg)? {
+        CheckedName::Id(id) => Ok(id),
+        CheckedName::Unknown(s) => Err(undefined_method_unknown(globals, class_id, s)),
+    }
+}
+
+/// `rb_print_undef_str`: [`MonorubyErr::method_name_error`] about a
+/// name that is a String.
+fn undefined_method_unknown(globals: &mut Globals, class_id: ClassId, name: Value) -> MonorubyErr {
+    let module = globals.store[class_id].get_module();
+    let kind = if module.is_singleton().is_none() && module.as_val().ty() == Some(ObjTy::MODULE) {
+        "module"
+    } else {
+        "class"
+    };
+    let class_name = globals.store.nameerr_class_name(class_id);
+    name_error_unknown(
+        globals,
+        "undefined method '",
+        name,
+        &format!("' for {kind} '{class_name}'"),
+        module.as_val(),
+    )
+}
+
+/// `rb_method_name_error` with a String:
+/// [`MonorubyErr::undef_method_name_error`] about a name no Symbol
+/// exists for.
+fn undef_method_unknown(globals: &mut Globals, class_id: ClassId, name: Value) -> MonorubyErr {
+    let module = globals.store[class_id].get_module();
+    let (kind, shown) = match module.is_singleton() {
+        Some(attached) => match attached.is_class_or_module() {
+            Some(m) => ("class", m),
+            None => ("class", module),
+        },
+        None if module.as_val().ty() == Some(ObjTy::MODULE) => ("module", module),
+        None => ("class", module),
+    };
+    let class_name = globals.store.nameerr_class_name(shown.id());
+    name_error_unknown(
+        globals,
+        "undefined method '",
+        name,
+        &format!("' for {kind} '{class_name}'"),
+        shown.as_val(),
+    )
 }
 
 #[cfg(test)]
