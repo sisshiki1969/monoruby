@@ -836,6 +836,10 @@ pub(super) fn terminate_all(vm: &mut Executor, globals: &mut Globals) {
             .collect()
     });
     if !targets.is_empty() {
+        // Each target is finalized — and so leaves the registry — while
+        // the others are still unwinding and allocating, and the loop
+        // below reads all of them at every turn.
+        let _rooted = super::Terminating::root(&targets);
         for mut t in targets.iter().copied() {
             t.as_thread_inner_mut()
                 .pending
