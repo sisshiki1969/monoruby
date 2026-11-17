@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f6c8207e.js";
+            window.path_to_searchindex_js = "searchindex-67e0a5de.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -10029,8 +10029,9 @@ clobbering).</p>
 other statements, after calls — and never let out of the frame. The
 object is elided into the local and stays elided until something could
 observe it; the rules of §3 apply, with a local’s lifetime (it survives
-the frame’s calls, is dropped when nothing reads it any more, and
-crosses a forward merge) and the escape points below.</p>
+the frame’s calls, is dropped when nothing can observe it any more —
+§12 says how long that is — and crosses a forward merge) and the escape
+points below.</p>
 <p><strong>Scratch windows.</strong> A temporary’s elements stay in the temporaries the
 literal was built from, which the next push overwrites — so a local’s
 object cannot keep its elements there across the statements that follow.
@@ -10079,8 +10080,10 @@ the objects of the locals the block, or a block nested in it, touches
 (<code>touched_by_blocks</code>: a <code>LoadDynVar</code> / <code>StoreDynVar</code> of the local at
 the block’s depth — a store replaces the object behind the compiler’s
 back — a lambda literal, or a capturing or unresolved call inside the
-block, which could reach the whole frame). The same check covers a
-parameter’s handed-over object;</li>
+block, which could reach the whole frame) — and every object when a
+block holds an instruction that may send a message at all, since the
+callee the interpreter finds for it may be <code>binding</code> (§12). The same
+check covers a parameter’s handed-over object;</li>
 <li>a block boundary into a loop head whose loop writes the local or holds
 a capture point reaching it (a forward merge, or a loop that does
 neither, carries it, §3).</li>
@@ -10118,12 +10121,14 @@ same. An object in a temporary likewise outlives the instructions that
 write a plain destination (<code>defined_slot</code>: the operator computing the
 argument), not only the <code>Mov</code> / literal family; a call is still a
 boundary for it. Liveness is kill-aware
-(<code>local_live_after</code>, <code>defined_slot</code>): a write to the local before any
-read ends its life on that path, so <code>x = [a, b]; n = x.max; x = 1</code> and a
-literal rebuilt at the top of a loop body do not keep the previous
-object alive. An instruction that redefines the local without reading
-it (<code>x = 1..n</code>, <code>x = f(y)</code> over an elided <code>x</code>) drops the object the same
-way (<code>settle_virtuals</code>, <code>redefined</code>) instead of building it first.</p>
+(<code>local_live_after</code>, <code>defined_slot</code>): a write to the local before
+anything that counts as a read (§12) ends its life on that path, so
+<code>x = [a, b]; n = x.max; x = 1</code> does not keep the previous object alive.
+An instruction that redefines the local without reading it (<code>x = [c, d]</code>,
+<code>x = f(y)</code> over an elided <code>x</code>) ends the object the same way
+(<code>settle_virtuals</code>, <code>redefined</code>) instead of building it first; one that
+may send a message keeps the object until its own definition of the
+slot (§12).</p>
 <p><strong>Across calls.</strong> The local’s slot is <code>V</code> (the GC write back and any
 side exit <code>nil</code>-fill or build it), the window is homed, and the frame is
 on the chain. A chain deopt that converts the frame while it is
@@ -10191,7 +10196,10 @@ code), so the table is built when first asked for and shared with the
 analysis clones (<code>JitContext::unit_liveness</code>).</p>
 <p>A query is then a scan of the rest of the instruction’s basic block
 over Layer A’s summaries, with Layer B’s capture verdicts, and the
-block’s live-out set past it (<code>table_live_after</code>). The one instruction a
+block’s live-out set past it (<code>table_live_after</code>). The loop analysis
+asks it that way. The life of an elided object in a local is the <em>frame
+liveness</em> of §12 instead (<code>table_frame_live_after</code>), which depends on no
+inline cache and so lives in Layer A. The one instruction a
 temporary’s view may be consumed by is <code>SlotAnalysis::alias_stop</code>; the
 call-site and receiver-class conditions of <code>alias_consumed_by_call</code> are
 checked on it as before.</p>
@@ -10199,6 +10207,125 @@ checked on it as before.</p>
 are table lookups; the forward scans they replaced were checked against
 the tables, call for call, on the whole test suite, ruby/spec core and
 optcarrot before being removed.</p>
+<h2 id="12-how-long-a-locals-object-lives-the-frame-liveness"><a class="header" href="#12-how-long-a-locals-object-lives-the-frame-liveness">12. How long a local’s object lives: the frame liveness</a></h2>
+<p>A local’s elided object has to exist whenever something could observe
+it, and what can observe a local is not only the compiled code. A side
+exit hands the frame to the interpreter, which honours none of the
+compilation’s inline caches: the call the compiler resolved to a callee
+that captures nothing is, there, a call to whatever the receiver
+answers — <code>binding</code> or <code>eval</code> under another name included (issue #1910):</p>
+<pre><code class="language-ruby">class A; def get = nil; end
+class B; alias_method :get, :binding; public :get; end
+
+def f(i, o)
+  x = [i, i + 1]
+  s = x[0] + x[1]            # the last read the compiled code can see
+  b = o.get                  # an `A` so far: resolved, captures nothing
+  [s, b &amp;&amp; b.local_variable_get(:x)]
+end
+</code></pre>
+<p>Compiled for <code>A</code>, the call is not a capture point, and a liveness that
+counts only what the compiled code reads says <code>x</code> is dead after
+<code>x[1]</code>. Dropping the object there is wrong: called with a <code>B</code>, the class
+guard of <code>o.get</code> exits to the interpreter with <code>x</code> written back as
+<code>nil</code>, and the Binding the interpreter makes shows <code>nil</code> where CRuby
+shows <code>[i, i + 1]</code>. The compiled code never calls a capturing callee
+itself (<code>capture_point</code> builds every object first and the call is left
+to the interpreter), so the capture is always behind a side exit, where
+the write-back can still build an object that is tracked — but not one
+that was dropped.</p>
+<dl>
+<dt id="the-frame-liveness-slotanalysisframe_live_out-table_frame_live_after-is-therefore-liveness-as-the-interpreter-sees-the-frame-every-instruction-that-may-send-a-message-traceirmay_dispatch-reads-every-local-that-is-every-method-call-and-yield-the-operators-and-index-instructions-alias_method-"><a class="header" href="#the-frame-liveness-slotanalysisframe_live_out-table_frame_live_after-is-therefore-liveness-as-the-interpreter-sees-the-frame-every-instruction-that-may-send-a-message-traceirmay_dispatch-reads-every-local-that-is-every-method-call-and-yield-the-operators-and-index-instructions-alias_method-"><strong>The frame liveness</strong> (<code>SlotAnalysis::frame_live_out</code>,
+<code>table_frame_live_after</code>) is therefore liveness as the interpreter sees
+the frame: every instruction that may send a message
+(<code>TraceIr::may_dispatch</code>) reads every local. That is every method call
+and <code>yield</code>, the operators and index instructions (`alias_method :[],</a></dt>
+<dd>eval<code>reaches</code>eval<code>from</code>o[“x”]<code>), and whatever else runs a method of the program: string interpolation (</code>to_s<code>), a splat (</code>to_a<code>), a multiple assignment (</code>to_ary<code>), a Hash or Range literal (</code>hash<code>, </code>&lt;=&gt;<code>), a constant load (</code>const_missing<code>), a definition (</code>method_added<code>). What does not: control flow, moves, literals of immediates and Arrays, and the loads and stores of locals, instance and class variables. The table is exhaustive over </code>TraceIr`, so a new instruction has to say which it
+is. It depends on no inline cache — that is the point — and so it is a
+Layer A fact (§11): one bit per instruction, a flag for the frame’s
+blocks, and one more live-out matrix, built the first time a compilation
+of the iseq asks. A frame with a lambda literal answers “live”
+throughout, as one that rescues does.</dd>
+</dl>
+<p><code>local_live_after</code> is this liveness, and it is the only question
+<code>settle_virtuals</code> asks about a local’s object: the object lives until
+nothing can read the local before it is written again, with every
+sending instruction counted as a read.</p>
+<p><strong>A read that builds nothing.</strong> A sending instruction is not an escape
+point. The object stays elided across it, exactly as it stays across a
+call it is live after (§10): its elements are in the window, and the
+side exits of the instruction build it. What changes is only when the
+object stops being tracked:</p>
+<ul>
+<li>an object nothing can observe <em>after</em> a sending instruction is kept
+<em>through</em> it (<code>settle_virtuals</code>, <code>kept</code>) and dropped by the next
+instruction, or by the block’s end (<code>settle_virtuals_at_bb_end</code>). So
+the last call of a method keeps the object for its own side exit and
+costs nothing;</li>
+<li>a sending instruction that redefines the local (<code>x = f(y)</code>) keeps the
+old object until its own definition of the slot removes it;</li>
+<li>where the instruction would overwrite the object’s elements (<code>x = a..b</code> over an elided <code>x</code>, which refills the window) the object cannot
+be kept that way and is built;</li>
+<li>a comparison or call whose answer goes straight to a branch
+(<code>CondBrSink</code>) settles the block’s end ahead of itself (§3). A dead
+local’s object is left alone there (<code>DeadLocal::Keep</code>) and dropped
+where the branch is settled, which emits nothing; in front of a
+dispatch that branches in every arm it is built (<code>DeadLocal::Build</code>),
+since no arm takes an elided object over.</li>
+</ul>
+<p><strong>The blocks of the frame.</strong> A block reads the frame’s locals through
+its outer chain, and so does a <code>binding</code> or <code>eval</code> called inside it. The
+compilation’s view (<code>touched</code>, §11) counts the locals the block names
+and widens to every local when a call in the block is unresolved or
+capturing. The interpreter’s view is wider for the same reason as
+above: a block that holds any sending instruction
+(<code>SlotAnalysis::block_dispatches</code>, blocks nested in it included) may
+reach <code>binding</code>, so a call passing such a block builds every local’s
+object (<code>table_touched_as_object</code>), and a loop holding such a call
+carries none across its head (<code>UnitLiveness::captured_in</code>). Only a block
+that sends nothing — <code>{ }</code>, <code>{ |v| v }</code>, <code>{ @x }</code> — keeps the narrower
+set.</p>
+<p><strong>What it costs.</strong> Nothing in straight-line code: the object is tracked
+a little longer and never built. An allocation appears where the longer
+life meets a boundary an elided object cannot cross:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>shape</th><th>allocations per 100k runs, before → after</th></tr>
+</thead>
+<tbody>
+<tr><td><code>x = [a, b]; s = x[0] + x[1]; o.foo; s</code></td><td>1 → 1</td></tr>
+<tr><td>the same in a block body (<code>n.times { … }</code>)</td><td>1 → 1</td></tr>
+<tr><td>the same in a <code>while</code> loop</td><td>1 → 100,001</td></tr>
+<tr><td>literal in a <code>while</code> loop, a call after the loop</td><td>1 → 100,001</td></tr>
+<tr><td>literal, then <code>1.times { o.foo }</code></td><td>1 → 100,001</td></tr>
+<tr><td><code>if c; x = [a, b]; …; end; o.foo</code></td><td>1 → 50,001</td></tr>
+</tbody>
+</table>
+</div>
+<p>A <code>while</code> loop is the costly one: its condition is a comparison, which
+sends a message, so the object of the previous iteration is live at the
+loop head, where the entry brings no object and the back edge has to
+build its own (§3). A block-based loop pays nothing, since each
+iteration is a frame of its own. Over 81 benchmarks (ruby-bench,
+<code>benchmark/</code>, optcarrot) the allocation counts are unchanged except for
+three Rails applications — lobsters +0.4%, shipit +0.4%, activerecord
++0.08% — and all of that is objects handed over in a parameter (<code>*rest</code>,
+<code>**kwrest</code>), not literals in locals.</p>
+<p><strong>What it does not cover.</strong> The frame liveness makes the object survive
+until a <em>side exit</em> can build it. A capture that reaches the frame with
+no side exit in between still finds the object elided:</p>
+<ul>
+<li>a callee that keeps the block it was passed and asks for its binding
+(<code>def foo(&amp;b) = b.binding</code>, called as <code>foo { }</code>), when the block
+sends nothing and names none of the locals (issue #2058);</li>
+<li><code>binding</code> or <code>eval</code> reached <em>in place</em> from compiled code: through a
+native method that calls back (<code>send(:binding)</code>, <code>[o].include?("x")</code>
+with <code>==</code> aliased to <code>eval</code>), through an operator lowered to a generic
+helper, or through <code>yield</code> to <code>&amp;:name</code> (issue #2069). Here the object
+is live and tracked; it is the capture that would have to convert the
+frame.</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="instance-variable-type-tracking"><a class="header" href="#instance-variable-type-tracking">Instance variable type tracking</a></h1>
 <p><code>src/ivar_ty.rs</code>. The JIT types an ivar load by what has ever been stored
