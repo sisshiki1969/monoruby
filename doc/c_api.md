@@ -1139,6 +1139,16 @@ Ruby 実装）で、`getpwuid` / `getpwnam` / `getgrgid` / `getgrnam` 以外は
 - **core から消えたもの**: `Process.__getpwnam` / `__getpwuid` /
   `__getgrnam` / `__getgrgid`（スタブ専用だった）。`Process.euid = "name"`
   などが使う名前引きだけ `uid_by_name` / `gid_by_name` として残る。
+- **`require` の繰り返し**: スタブを置かないと、読み込み済みの判定が
+  どの近道にも乗らない（`<root>/ext/` は `$LOAD_PATH` にもスタブ pin にも
+  無い）。そのままだと 2 回目以降の `require "etc"` が毎回 `etc.rb` を
+  `$LOAD_PATH` とホストの全 gem の `lib/` から探し直していた（1 回
+  ~100 µs。mail の `Socket.gethostname` はメッセージごとに `require "etc"`
+  する）。`Globals::shipped_extension_features` が「素の `.so` 候補 →
+  同梱拡張として読み込んだパス」を覚え、`require_lib` は探索の前に
+  そのパスが `$LOADED_FEATURES` にあるかだけを見る（~0.5 µs、スタブ
+  だった頃の 1/10 以下。`$LOADED_FEATURES` から消されていれば普通に
+  読み直す）。
 - **挙動が変わる点**: `Etc.nprocessors` が実際の CPU 数を返す（以前は 1）。
   concurrent-ruby や parallel はこれでスレッドプールの大きさを決める。
 - **結果**: ruby/spec `library/etc` 50 例 0 失敗、`tests/etc.rs` が Etc の

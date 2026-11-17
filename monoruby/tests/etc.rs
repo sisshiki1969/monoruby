@@ -2,7 +2,9 @@
 //! (`monoruby_capi/ext/etc`). These pin the whole module against the host
 //! CRuby on the machine the test runs on: the user and group databases,
 //! the kernel's answers and the locale are the environment's, so every
-//! comparison is against a live CRuby, never the snapshot.
+//! comparison is against a live CRuby, never the snapshot. Each answer is
+//! compared as its `inspect` (the harness re-reads CRuby's output as Ruby
+//! source, which a Struct's or an Encoding's is not).
 
 extern crate monoruby;
 use monoruby::tests::*;
@@ -31,7 +33,7 @@ fn etc_module_surface() {
           IO.instance_method(:pathconf).owner,
           Etc::Passwd.new("a", "b", 1, 2).to_a,
           (Struct::Passwd rescue $!.class), (Struct::Group rescue $!.class),
-        ]
+        ].map(&:inspect)
         "#,
     );
 }
@@ -44,7 +46,7 @@ fn etc_passwd_and_group_lookup() {
     run_test_once_live(
         r#"
         require "etc"
-        t = ->(&b) { b.call rescue [$!.class, $!.message] }
+        t = ->(&b) { b.call.inspect rescue [$!.class, $!.message].inspect }
         shape = ->(s) { s.to_a.map { |x| [x.class, (x.encoding if x.is_a?(String)), x.frozen?] } }
         gr = Etc.getgrgid(0)
         [
@@ -92,7 +94,7 @@ fn etc_database_enumeration() {
     run_test_once_live(
         r#"
         require "etc"
-        t = ->(&b) { b.call rescue [$!.class, $!.message] }
+        t = ->(&b) { b.call.inspect rescue [$!.class, $!.message].inspect }
         [
           t.() { a = []; Etc.passwd { |pw| a << [pw.name, pw.uid] }; a },
           t.() { Etc.endpwent; Etc.passwd.class },
@@ -133,7 +135,7 @@ fn etc_system_information() {
     run_test_once_live(
         r#"
         require "etc"
-        t = ->(&b) { b.call rescue [$!.class, $!.message] }
+        t = ->(&b) { b.call.inspect rescue [$!.class, $!.message].inspect }
         r, w = IO.pipe
         res = [
           t.() { Etc.nprocessors },
