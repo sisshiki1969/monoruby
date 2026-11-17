@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-f144900f.js";
+            window.path_to_searchindex_js = "../searchindex-f6c8207e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -861,8 +861,16 @@ refinement のメソッドは refinement モジュール側の ClassId に入る
 <code>map</code> が 1 周で終了していた（<code>[1,2,3].map { |x| x*2 }</code> → <code>[2, nil, nil]</code>、
 <code>(1..3).sum</code> → 42）。</p>
 <p>そこで <code>find_method</code> が解決対象の<strong>名前</strong>で分岐するようにした:
-<code>BASIC_OP_DEFS</code> の演算子名ならライブラリ境界で歩みを止め
-（<code>Executor::basic_op_refinements</code>）、それ以外は従来どおり透過する。</p>
+<code>BASIC_OP_DEFS</code> の演算子名ならライブラリ境界で歩みを止め、それ以外は
+従来どおり透過する。</p>
+<blockquote>
+<p><strong>その後（#1998, #2029）:</strong> この「名前で分岐」は廃止した。呼び出しサイトの
+解決は名前によらず「いま実行中のフレームが書いたスコープ」
+（<code>Executor::site_refinements</code>）で行い、ネイティブフレームと Ruby 製コアの
+フレームは常に refinement なしになる。<code>&amp;obj</code> の <code>to_proc</code> のように呼び出し
+側のために行う変換だけが、明示的に呼び出し側まで歩く
+（<code>Executor::ruby_level_refinements</code>）。<code>doc/refinements.md</code> §6.10 参照。</p>
+</blockquote>
 <h3 id="step-3b--jit-をスコープ単位にする--実装済み"><a class="header" href="#step-3b--jit-をスコープ単位にする--実装済み">Step 3b — JIT をスコープ単位にする — <strong>実装済み</strong></a></h3>
 <p>Step 3 直後はペアの記録がプロセス全体だったので、<code>refine</code> しただけで
 （<code>using</code> していないスコープでも）その演算子の inline を失っていた

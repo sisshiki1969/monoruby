@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-f144900f.js";
+            window.path_to_searchindex_js = "searchindex-f6c8207e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -7959,8 +7959,16 @@ refinement のメソッドは refinement モジュール側の ClassId に入る
 <code>map</code> が 1 周で終了していた（<code>[1,2,3].map { |x| x*2 }</code> → <code>[2, nil, nil]</code>、
 <code>(1..3).sum</code> → 42）。</p>
 <p>そこで <code>find_method</code> が解決対象の<strong>名前</strong>で分岐するようにした:
-<code>BASIC_OP_DEFS</code> の演算子名ならライブラリ境界で歩みを止め
-（<code>Executor::basic_op_refinements</code>）、それ以外は従来どおり透過する。</p>
+<code>BASIC_OP_DEFS</code> の演算子名ならライブラリ境界で歩みを止め、それ以外は
+従来どおり透過する。</p>
+<blockquote>
+<p><strong>その後（#1998, #2029）:</strong> この「名前で分岐」は廃止した。呼び出しサイトの
+解決は名前によらず「いま実行中のフレームが書いたスコープ」
+（<code>Executor::site_refinements</code>）で行い、ネイティブフレームと Ruby 製コアの
+フレームは常に refinement なしになる。<code>&amp;obj</code> の <code>to_proc</code> のように呼び出し
+側のために行う変換だけが、明示的に呼び出し側まで歩く
+（<code>Executor::ruby_level_refinements</code>）。<code>doc/refinements.md</code> §6.10 参照。</p>
+</blockquote>
 <h3 id="step-3b--jit-をスコープ単位にする--実装済み"><a class="header" href="#step-3b--jit-をスコープ単位にする--実装済み">Step 3b — JIT をスコープ単位にする — <strong>実装済み</strong></a></h3>
 <p>Step 3 直後はペアの記録がプロセス全体だったので、<code>refine</code> しただけで
 （<code>using</code> していないスコープでも）その演算子の inline を失っていた
@@ -14167,7 +14175,7 @@ inlined into a refined caller resolves its own calls under no refinement
 at all, as its stand-alone compilation always did.</p>
 <p>The run-time half is the <em>frameless</em> callee (<code>compile/frameless_call.rs</code>),
 which has no control frame: a helper it calls that reads the scope off
-the nearest control frame (<code>Executor::basic_op_refinements</code>,
+the nearest control frame (<code>Executor::site_refinements</code>,
 <code>Executor::dispatch_redefined_op</code>) finds the frame <em>hosting</em> the body. The
 only such helpers a frameless body may call are the pure <code>==</code> / <code>!=</code>
 ones, so the JIT tells them whose scope they answer for
@@ -14411,14 +14419,11 @@ the dispatch it falls through to, which is refinement-aware.</li>
 <li><strong>The inline-generator half</strong>, which is still ungated.</li>
 </ul>
 <p>One boundary had to be drawn to make any of this correct — see
-<code>Executor::basic_op_refinements</code>. monoruby writes part of its core
-library in Ruby where CRuby uses C, and those frames are transparent to
-refinements so that <code>&amp;obj</code> / interpolation, which monoruby converts in
-the callee and CRuby in the caller, reach the user’s scope. An operator
-is never such a conversion: <code>Array#map</code>’s own <code>i += 1</code> is library code,
+<code>Executor::site_refinements</code>. monoruby writes part of its core library
+in Ruby where CRuby uses C: <code>Array#map</code>’s own <code>i += 1</code> is library code,
 C in CRuby and invisible to any refinement. Resolving it against the
-caller ended the loop after one iteration. So operator names stop the
-walk at the library boundary and everything else still walks out.</p>
+caller ended the loop after one iteration. This was first drawn for
+operator names only; §6.10 is the rule as it stands, for every name.</p>
 </blockquote>
 <h3 id="68-the-remaining-pieces"><a class="header" href="#68-the-remaining-pieces">6.8 The remaining pieces</a></h3>
 <ul>
@@ -14429,7 +14434,8 @@ one, instead of trying to express it as a position in the real ancestor
 chain (§3.7).</li>
 <li><strong>Reflection</strong> (<code>send</code>, <code>respond_to?</code>, <code>Object#method</code>) resolves with the
 <em>caller’s</em> set: the same <code>nearest_ruby_frame</code> walk the eval builtins now
-use, then that frame’s set id. Only reached with the gate on.</li>
+use, then that frame’s set id. Only reached with the gate on. (Called by
+the Ruby-written core they see no refinement — §6.10.)</li>
 </ul>
 <h3 id="69-order-of-work--as-landed"><a class="header" href="#69-order-of-work--as-landed">6.9 Order of work — as landed</a></h3>
 <p>Each step shipped on its own, with the spec ledger and (from step 3) the
@@ -14457,6 +14463,75 @@ and language, the four steps took 137 failing examples to 30. What is left
 is §6.7’s basic ops, the per-iseq cell’s re-execution case, and one
 <code>import_methods</code> example that is not a defect (monoruby implements Zlib in
 Ruby, so importing from it legitimately succeeds).</p>
+<h3 id="610-whose-lookup-is-it--call-site-ruby-level-funcall-or-funcall"><a class="header" href="#610-whose-lookup-is-it--call-site-ruby-level-funcall-or-funcall">6.10 Whose lookup is it — call site, Ruby-level funcall, or funcall</a></h3>
+<p>A refinement reaches the call sites <em>written</em> in the scope that activated
+it. Everything else that looks a method up is a builtin doing so, and
+CRuby is specific about which of those see a refinement. monoruby had one
+<code>find_method</code> for all of them, which asked the nearest Ruby frame — so a
+refined <code>R#&lt;=&gt;</code> was what <code>[r, r1].sort</code> compared with (#1998), and a
+refined <code>Array#size</code> was what <code>Array#each</code>, written in Ruby here, looped
+to (#2029). There are three scopes now, and the caller says which it
+means:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Scope</th><th><code>Executor</code></th><th>Answers</th><th>Used for</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Call site</strong></td><td><code>site_refinements</code></td><td>the running frame’s own set; <code>EMPTY</code> for a native frame and for a frame of the Ruby-written core</td><td>call sites and operators (<code>find_method_at_site</code>, <code>invoke_method_op</code>), interpolation, <code>case</code> / <code>when</code> and <code>rescue</code>’s <code>===</code>, <code>defined?(recv.m)</code></td></tr>
+<tr><td><strong>Ruby level</strong></td><td><code>ruby_level_refinements</code></td><td>the nearest <em>user</em> Ruby frame’s set, walking out through native frames and frames of the Ruby-written core — CRuby’s <code>rb_vm_cref()</code>, the core being C there</td><td><code>public_send</code> and <code>&amp;:sym</code> (<code>CALL_PUBLIC</code>), <code>&amp;obj</code> → <code>to_proc</code>, the second try of <code>rb_funcallv_public</code>, the C API’s <code>rb_respond_to</code>, the scope a <code>def</code> / <code>refine</code> snapshots</td></tr>
+<tr><td><strong>Funcall</strong></td><td>— (<code>RefinementSetId::EMPTY</code>)</td><td>no refinement</td><td>everything else a builtin calls: <code>find_method</code>, <code>invoke_method_inner</code>, <code>invoke_method_if_exists</code> — <code>rb_funcall</code> / <code>rb_check_funcall</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The default is the blind one. <code>&lt;=&gt;</code> under <code>sort</code>, <code>coerce</code> under <code>1 + x</code>,
+<code>to_ary</code> under a destructuring, <code>to_s</code> under <code>puts</code>, <code>inspect</code> under <code>p</code>,
+<code>each</code> under <code>Enumerable</code>, <code>initialize_copy</code> under <code>dup</code>,
+<code>method_missing</code>, <code>respond_to_missing?</code> and the rest are all lookups a
+builtin makes with <code>rb_funcall</code>, and none of them is refinable.</p>
+<p>The reflective builtins (<code>send</code>, <code>__send__</code>, <code>respond_to?</code>, <code>method</code>,
+<code>instance_method</code>, …) resolve under <code>caller_refinements</code>: the Ruby-level
+scope of whoever called them, except that a call <em>from the Ruby-written
+core</em> gets no refinement. There <code>x.respond_to?(:m)</code> followed by <code>x.m</code> is
+the core’s spelling of <code>rb_check_funcall</code> and <code>x.__send__(:m)</code> of
+<code>rb_funcall</code>; the core says <code>public_send</code> where CRuby says
+<code>rb_funcallv_public</code>.</p>
+<p>Four places where CRuby’s own rule is less obvious, and monoruby follows
+it:</p>
+<ul>
+<li><strong><code>rb_funcallv_public</code></strong> (<code>inject(:sym)</code>, <code>Random.rand</code> on a duck)
+asks the class first, through the global call cache, which knows no
+refinement. Only when that finds no <em>public</em> method does <code>rb_call0</code>
+look again, and for <code>CALL_PUBLIC</code> it does so with the Ruby-level
+refinements. So <code>[r, r].inject(:+)</code> calls a <code>+</code> that only a refinement
+gives <code>R</code>, and the class’s own <code>+</code> if it has one
+(<code>Executor::public_funcall_refinements</code>). Under <code>Enumerable#inject</code>
+the nearest Ruby frame is the receiver’s own <code>each</code>.</li>
+<li><strong><code>Foo.new(...)</code></strong> at a call site is <code>opt_new</code> in CRuby 4.0: an
+allocation, then a call of <code>initialize</code> <em>from that site</em>. A refined
+<code>initialize</code> therefore runs, although <code>Class#new</code> the method —
+<code>Foo.send(:new)</code>, <code>Foo.method(:new).call</code>, a site that passes a block —
+calls it blind. monoruby’s <code>Class#new</code> is a Ruby method of the core,
+whose <code>initialize</code> call is blind like any other; once some refinement
+defines <code>initialize</code>, a <code>new</code> site in a refining scope dispatches to a
+native twin that asks its caller’s scope (<code>Store::site_target</code>, applied
+by the VM’s lookup, the JIT’s, and the class-version repair alike, so
+that they agree on the target).</li>
+<li><strong><code>&amp;:sym</code></strong> written where any refinement is active is not
+<code>Symbol#to_proc</code>’s proc but one made for that scope
+(<code>refine_sym_proc_call</code>), which calls whatever the refined lookup finds
+with no visibility check. <code>:sym.to_proc.call(x)</code> keeps the check.</li>
+<li><strong>The C API</strong>: <code>rb_check_funcall</code> and the conversions built on it
+(<code>rb_check_convert_type</code>, <code>rb_check_array_type</code>, …) probe blind and
+count private methods, as the call that follows does;
+<code>rb_respond_to</code> sees the Ruby-level refinements
+(<code>MR_RESPOND_TO_FUNCALL</code>).</li>
+</ul>
+<p>Two things CRuby does that monoruby does not reproduce, both a
+refinement-aware <code>rb_respond_to</code> followed by a blind call that then
+raises: <code>Marshal.dump</code> of an object whose <code>marshal_dump</code> exists only in a
+refinement, and <code>$stdout = obj</code> where only a refinement gives <code>obj</code> a
+<code>write</code>.</p>
 <hr>
 <h2 id="7-does-this-change-the-method-frame-layout"><a class="header" href="#7-does-this-change-the-method-frame-layout">7. Does this change the method frame layout?</a></h2>
 <p>Not for method frames. It does need a mutable cell somewhere for the
