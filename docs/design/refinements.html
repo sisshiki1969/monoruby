@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-b32fdcd7.js";
+            window.path_to_searchindex_js = "../searchindex-03cf4cca.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -374,6 +374,35 @@ inside it resolve under the refinement module’s scope, not the caller’s.
 Inlining across that boundary needs a per-inlined-frame cref threaded
 through <code>JitContext</code>, in the same place the specialized frame sizes and
 argument info are threaded today.</p>
+<blockquote>
+<p><strong>As landed (#1973).</strong> The set is a field of each frame on the JIT’s
+specialization stack (<code>JitStackFrame::refinements</code>, read from
+<code>Store::iseq_refinements</code> of the frame’s own iseq when the frame is
+pushed), not of the compilation unit, and <code>JitContext::refinements()</code>
+answers for the frame being compiled. It works in both directions: a
+helper written before <code>using</code> and inlined into a block that activated
+refinements keeps its plain <code>+</code>, and a method written under <code>using</code> and
+inlined into a caller that activated nothing keeps its refined one. Every
+recorded resolution (<code>InlineCacheEntry::refinements</code>, §6.6) carries the
+set of the frame that asked, so the class-version repair re-asks each
+frame’s question under that frame’s set. A Ruby-written core method
+inlined into a refined caller resolves its own calls under no refinement
+at all, as its stand-alone compilation always did.</p>
+<p>The run-time half is the <em>frameless</em> callee (<code>compile/frameless_call.rs</code>),
+which has no control frame: a helper it calls that reads the scope off
+the nearest control frame (<code>Executor::basic_op_refinements</code>,
+<code>Executor::dispatch_redefined_op</code>) finds the frame <em>hosting</em> the body. The
+only such helpers a frameless body may call are the pure <code>==</code> / <code>!=</code>
+ones, so the JIT tells them whose scope they answer for
+(<code>JitContext::pure_eq_scope</code>, <code>executor::op::PureScope</code>): the host’s when
+the body was written in the same scope, “user code with no refinement”
+when it was not — a plain callee under a refined caller, a user’s block
+run inside <code>Array#each</code> — and no helper at all (hence a frame) for a
+body under a set its host does not share. The second case was wrong
+without any refinement in the program: a block compiled into the
+Ruby-written <code>Array#each</code> took the core’s exemption from a redefined
+<code>String#==</code> / <code>Float#==</code>.</p>
+</blockquote>
 <h3 id="36-inlined-builtins-and-basic-ops"><a class="header" href="#36-inlined-builtins-and-basic-ops">3.6 Inlined builtins and basic ops</a></h3>
 <p>Two mechanisms bypass dispatch entirely:</p>
 <ul>
