@@ -667,23 +667,16 @@ fn instance_eval_inner(
             1
         };
         let src_encoding = crate::builtins::eval_src_encoding(args[0]);
-        // CRuby's instance_eval cref is the receiver's *singleton*
-        // class: `def` inside the string lands there, and class
-        // variables skip it (singleton cref) and resolve in the
-        // caller's scope.
-        //
-        // A receiver that cannot have one — an Integer, a Symbol, a
-        // Float, an fstring — is still evaluated: CRuby's cref holds the
-        // receiver and asks for the singleton class only when something
-        // is defined (`CREF_CLASS_FOR_DEFINITION`), reading constants
-        // through `CLASS_OF(self)` until then. So the body's lexical
-        // class is the receiver's own class here, and a `def` in it
-        // raises the TypeError through the runtime cref
-        // (`DefinitionContext::Receiver`).
-        let receiver_class = match globals.store.get_singleton(self_val) {
-            Ok(singleton) => singleton.id(),
-            Err(_) => self_val.class(),
-        };
+        // CRuby's instance_eval cref holds the receiver and a
+        // "singleton" flag: constants are read through `CLASS_OF(self)`
+        // and the singleton class is made only when something is
+        // defined in the body (`CREF_CLASS_FOR_DEFINITION`) — so an
+        // eval that defines nothing leaves the receiver without one,
+        // and a receiver that cannot have one (an Integer, a Symbol, an
+        // fstring) is evaluated all the same. The body's innermost
+        // lexical class starts as the receiver's class as it is and
+        // follows it from there; see `Executor::instance_eval_frame`.
+        let receiver_class = self_val.class();
         let fid = globals.compile_script_eval(
             expr,
             path,

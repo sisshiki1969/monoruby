@@ -142,7 +142,7 @@ class Enumerator
       return nil if enums.nil?
       sizes = []
       enums.each do |e|
-        s = e.respond_to?(:size) ? e.size : nil
+        s = __check_funcall(e, :size, nil)
         return 0 if s == 0
         sizes << s
       end
@@ -159,7 +159,7 @@ class Enumerator
     def rewind
       enums = @__enums
       return self if enums.nil?
-      enums.each { |e| e.rewind if e.respond_to?(:rewind) }
+      enums.each { |e| __check_funcall(e, :rewind, nil) }
       self
     end
 

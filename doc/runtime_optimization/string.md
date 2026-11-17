@@ -181,6 +181,29 @@ define singleton`）を意味する。プールを通らずに同じ扱いにな
 `NEWBORN_FLAG_MASK` の外にあるので、`dup` / `clone` したものは普通の String に
 なる。`Store::is_fstring` はこのビットを読むだけで、プールは引かない。
 
+Hash キーのコピーは CRuby の `rb_fstring` と同じく**内容ごとに 1 個**で、
+`-str` や frozen リテラルとも同一オブジェクトになる。プール
+（`frozen_str_pool`）は GC root なので、実行時に作られるキーをそこへ入れると
+解放されなくなる。そこで「内容 → fstring」の対応は別の**弱いテーブル**
+`value/rvalue/fstring.rs` の `FstringTable`（`vm::FSTRINGS`）が持つ。
+プールに入る String もキーのコピーもここに登録され、プールはそのうち
+リテラルと `-str` の分を root として握るだけになる。テーブルは mark されず、
+エントリはセルが解放されるとき（`RValue::free` の STRING 腕が `FSTR_BIT` を
+見て `fstring::forget`）に外す。全ての死んだセルは `free` を通るので、
+テーブルが解放済みのセルを指すことは無い。
+
+キーは内容（バイト列 + エンコーディング）の 64 ビット Fx ハッシュそのもので、
+1 回の操作で 1 度だけ計算し、テーブル側では再ハッシュしない（`PassThrough`
+hasher）。`Value::frozen_hash_key` は `fstring::intern` でテーブルを引き、
+当たればそのまま返し（**格納ごとの複製が無くなる**）、外れたときだけ複製して
+登録する。ハッシュが衝突した 2 つ目の内容は登録されず、fstring ではあるが
+同一性は保証されない（2⁻⁶⁴ の事象）。
+
+計測（cachegrind Ir）: 既存キーへの `h["k#{i % 64}"] = v` は複製が消えて
+−9.9%、`freq[seq.byteslice(i, n)] += 1`（k-nucleotide の形）は −3.5%。新しい
+キーを作り続ける `h["key#{i}"] = i` は登録の分 +7.0%（キーあたり約 200 Ir）、
+Hash ごと捨てる場合は解放時の削除も加わって +10.7%。
+
 ### 3.2 `# frozen_string_literal: true`
 
 `emit_string` / `emit_bytes` は pragma 下で `emit_frozen_interned` →
@@ -229,10 +252,9 @@ BOP 表に `(STRING_CLASS, "freeze")` があり、JIT は `basic_op_assumable` �
 計測: `'abc'.freeze` **67.6 → 9.8 ns**（YJIT 26）、`buf << 'lit'.freeze`
 **73 → 15.9 ns**（YJIT 21）。
 
-**`-"lit"`（`opt_str_uminus`）の畳み込みは無い。** `String#-@` は Ruby で
-`frozen? ? self : dup.freeze` と定義されていて（`builtins/string.rb`）、
-CRuby の `rb_fstring` のような**重複排除テーブルは無い**。`String#+@` は
-chilled フラグに Ruby レベルの述語が無いため Rust のまま。
+**`-"lit"`（`opt_str_uminus`）の畳み込みは無い。** `String#-@` は Rust の
+`string_uminus` で、素の String は fstring プール（§3.1、Hash キーの弱い
+テーブルを含む）を通して重複排除される。
 
 ---
 
@@ -503,7 +525,7 @@ inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも
 | 共有の方針 | 積極的（`rb_str_new_shared`、`RSTRING_EMBED_LEN_MAX` 超の `rb_str_substr`） | `len > 32` **かつ**親が既に共有かヒープあふれのときだけ |
 | root | 共有の親自身が共有でありうる（連鎖、`rb_str_shared_root` で解決） | 隠れた **frozen** root。sharer は連鎖しない。frozen な親は自分自身が root |
 | CoW | `rb_str_modify` → `str_make_independent` | `owned_mut()` / `uniquify()` の単一入口 |
-| `rb_fstring` の重複排除 | pragma のリテラル**と**実行時の `-"str"` / `String#-@` / Hash キーに適用 | コンパイル時のリテラルプール `Store::frozen_str_pool`（`(bytes, encoding)` キー）**のみ**。`String#-@` は素の `dup.freeze`（**実行時の重複排除無し**）。Hash の String キーは格納ごとに `dup` + `freeze` でインターンしない（コピーには `FSTR_BIT` を立てるので特異クラスは CRuby と同じく作れないが、`-"k"` と同一オブジェクトにはならない） |
+| `rb_fstring` の重複排除 | pragma のリテラル**と**実行時の `-"str"` / `String#-@` / Hash キーに適用 | 同じ範囲。リテラルと `-str` は GC root のプール `Store::frozen_str_pool`（`(bytes, encoding)` キー）、Hash の String キーのコピーは弱いテーブル `rvalue::fstring`（§3.1）で、互いに同一オブジェクトになる |
 | chilled リテラル | CRuby 3.4 の `STR_CHILLED` | ヘッダフラグのビット 7 `CHILLED_LITERAL_BIT`、`Symbol#to_s` 用の別の `is_chilled` ビット、`--debug-frozen-string-literal` の出自テーブル |
 | coderange | `ENC_CODERANGE_*` を RBasic のフラグにキャッシュ | JIT 既知オフセットの `Cell<CodeRange>`（`repr(u8)`）。**遅延**計算で、追記・部分文字列・repeat では再計算でなく O(1) で畳む |
 | `String#hash` | seeded SipHash。fstring 側でキャッシュ | seeded SipHash（`DefaultHasher` + プロセスごとの `RandomState`）。**String ごとのキャッシュ無し**（2026-09 の yjit-bench 調査が未解決コストとして挙げる） |

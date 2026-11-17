@@ -27,9 +27,7 @@ class Dir
   end
 
   def initialize(path, encoding: nil)
-    path = path.to_path if path.respond_to?(:to_path)
-    path = path.to_str if path.respond_to?(:to_str)
-    raise TypeError, "no implicit conversion of #{__builtin_class_name(path)} into String" unless path.is_a?(String)
+    path = __to_path(path)
     @__path = path
     # Every Dir holds a real O_DIRECTORY|O_CLOEXEC descriptor (like
     # CRuby's DIR*): #fileno returns it, #close closes it at the

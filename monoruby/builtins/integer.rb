@@ -80,11 +80,12 @@ class Integer
   end
 
   def div(other)
-    raise ZeroDivisionError, "divided by 0" if other == 0 || (other.is_a?(Float) && other == 0.0)
-    if other.respond_to?(:coerce) && !other.is_a?(Integer) && !other.is_a?(Float) && !other.is_a?(Rational)
-      a, b = other.coerce(self)
+    unless other.is_a?(Integer) || other.is_a?(Float) || other.is_a?(Rational)
+      # `rb_num_coerce_bin(x, y, id_div)`
+      a, b = __num_coerce(self, other)
       return a.div(b)
     end
+    raise ZeroDivisionError, "divided by 0" if other == 0
     (self / other).floor
   end
 
@@ -92,7 +93,10 @@ class Integer
     -(-self).div(other)
   end
 
+  # `int_remainder`. The Integer case stays this small so that the JIT
+  # inlines it; everything else is in `__remainder_slow`.
   def remainder(other)
+    return __remainder_slow(other) unless other.is_a?(Integer)
     r = self % other
     if r != 0 && (self < 0) != (other < 0)
       r - other
@@ -100,6 +104,17 @@ class Integer
       r
     end
   end
+
+  # A Fixnum goes on to `num_remainder`; a Bignum coerces and asks again
+  # (`rb_big_remainder`).
+  def __remainder_slow(other)
+    if self <= 0x3fff_ffff_ffff_ffff && self >= -0x4000_0000_0000_0000
+      return __num_remainder(other)
+    end
+    a, b = __num_coerce(self, other)
+    a.remainder(b)
+  end
+  private :__remainder_slow
 
   def fdiv(other)
     if other.is_a?(Integer)
@@ -140,11 +155,9 @@ class Integer
       end
     elsif other.is_a?(Float)
       self.to_f / other
-    elsif other.respond_to?(:coerce)
-      a, b = other.coerce(self)
-      a.fdiv(b)
     else
-      raise TypeError, "#{__coerce_failed_name(other)} can't be coerced into Integer"
+      a, b = __num_coerce(self, other)
+      a.fdiv(b)
     end
   end
 
@@ -177,26 +190,17 @@ class Integer
 
 
   def allbits?(mask)
-    unless mask.respond_to?(:to_int)
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(mask)} into Integer"
-    end
-    mask = mask.to_int
+    mask = __to_int(mask)
     (self & mask) == mask
   end
 
   def anybits?(mask)
-    unless mask.respond_to?(:to_int)
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(mask)} into Integer"
-    end
-    mask = mask.to_int
+    mask = __to_int(mask)
     (self & mask) != 0
   end
 
   def nobits?(mask)
-    unless mask.respond_to?(:to_int)
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(mask)} into Integer"
-    end
-    mask = mask.to_int
+    mask = __to_int(mask)
     (self & mask) == 0
   end
 
@@ -221,14 +225,8 @@ class Integer
         raise ArgumentError, "invalid value for Float(): #{other.inspect}"
       end
       [Float(other), self.to_f]
-    elsif other.respond_to?(:to_f)
-      result = other.to_f
-      unless result.is_a?(Float)
-        raise TypeError, "can't convert #{other.class} into Float (#{other.class}#to_f gives #{result.class})"
-      end
-      [result, self.to_f]
     else
-      raise TypeError, "can't convert #{other.class} into Float"
+      [__convert_type(other, Float, "Float", :to_f, false), self.to_f]
     end
   end
 
@@ -249,17 +247,7 @@ class Integer
   end
 
   def self.sqrt(n)
-    unless n.is_a?(Integer)
-      if n.respond_to?(:to_int)
-        r = n.to_int
-        unless r.is_a?(Integer)
-          raise TypeError, "can't convert #{n.class} to Integer (#{n.class}#to_int gives #{r.class})"
-        end
-        n = r
-      else
-        raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
-      end
-    end
+    n = __to_int(n)
     raise Math::DomainError, "out of domain - isqrt" if n < 0
     return 0 if n == 0
     # Newton's method for integer square root
@@ -274,17 +262,13 @@ class Integer
   def self.try_convert(obj)
     if obj.is_a?(Integer)
       obj
-    elsif obj.respond_to?(:to_int)
-      result = obj.to_int
-      if result.nil?
-        nil
-      elsif result.is_a?(Integer)
-        result
-      else
+    else
+      # `rb_check_integer_type`: nil for no answer or a nil one.
+      result = __check_funcall(obj, :to_int, nil)
+      unless result.nil? || result.is_a?(Integer)
         raise TypeError, "can't convert #{obj.class} to Integer (#{obj.class}#to_int gives #{result.class})"
       end
-    else
-      nil
+      result
     end
   end
 
@@ -305,17 +289,8 @@ class Integer
         raise RangeError, "float NaN out of range of integer"
       end
       ndigits = ndigits.to_int
-    elsif ndigits.respond_to?(:to_int)
-      result = ndigits.to_int
-      if result.nil?
-        raise TypeError, "no implicit conversion of #{__builtin_class_name(ndigits)} into Integer"
-      end
-      unless result.is_a?(Integer)
-        raise TypeError, "can't convert #{ndigits.class} to Integer (#{ndigits.class}#to_int gives #{result.class})"
-      end
-      ndigits = result
     else
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(ndigits)} into Integer"
+      ndigits = __to_int(ndigits)
     end
     # Check for large values after conversion
     if ndigits > 0x3FFFFFFF || ndigits < -0x40000000
