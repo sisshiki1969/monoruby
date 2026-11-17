@@ -87,3 +87,72 @@ fn values_and_enumeration() {
         r####"o = 1.step(to: 3, by: 1); m = Marshal.load(Marshal.dump(o)) rescue $!.class"####,
     ]);
 }
+
+const CALLERS: &str = r####"
+def fwd(...) = 1.step(...)
+def fwd2(...) = fwd(...)
+def rest(*a, **k, &b) = fwd2(*a, **k, &b)
+def wrap(to:, by:) = 1.step(by: by, to: to)
+class Integer; alias step_alias step; end
+def w(**k) = 1.step(**k)
+def w2(**k) = 1.step(to: 5, **k)
+def w3(**k) = 1.step(**k, to: 5)
+def w4(**k) = w(**k)
+def opt(to:, by:, o: nil) = 1.step(**o, by: by, to: to)
+def two(o = nil, **k) = 1.step(**o, **k)
+def set(**k) = (k[:by] = 2; 1.step(**k))
+H1 = {to: 10, by: 2}
+H2 = {by: 2, to: 10}
+M = 1.method(:step)
+"####;
+
+/// `step` declares `by:` and `to:`, so the order they were written in
+/// is read off the call that entered it: literal keywords, the keys of
+/// a `**hash`, through `send` / `Method#call`, and through `(...)`.
+#[test]
+fn keyword_order_is_read_from_the_call() {
+    let exprs = [
+        r####"[1.step(**H1), 1.step(**H2)]"####,
+        r####"[1.step(to: 10, **{by: 2}), 1.step(**{by: 2}, to: 10), 1.step(**{by: 2}, **{to: 10})]"####,
+        r####"[1.send(:step, to: 10, by: 2), 1.public_send(:step, by: 2, to: 10), 1.__send__("step", to: 10, by: 2)]"####,
+        r####"[M.call(to: 10, by: 2), M.(by: 2, to: 10), M.to_proc.call(to: 10, by: 2)]"####,
+        r####"[1.step_alias(to: 10, by: 2), wrap(to: 10, by: 2), wrap(by: 2, to: 10)]"####,
+        r####"[fwd(to: 10, by: 2), fwd(by: 2, to: 10), fwd(**H1), fwd(1, to: 10, by: 2)]"####,
+        r####"[fwd2(to: 10, by: 2), fwd2(by: 2, to: 10), rest(to: 10, by: 2), rest(**H2)]"####,
+        r####"[eval("1.step(to: 5, by: 2, to: 10)"), eval("1.step(to: 5, by: 2, to: 10, **{})")]"####,
+        r####"[w(to: 10, by: 2), w(by: 2, to: 10), w2(by: 2), w3(by: 2), w4(to: 10, by: 2), w4(by: 2, to: 10)]"####,
+        r####"[opt(to: 1, by: 2), opt(by: 2, to: 1), opt(to: 1, by: 2, o: {}), two(to: 1, by: 2), two({by: 1}, to: 3), two({by: 1, to: 2}), set(to: 3)]"####,
+        r####"pr = proc { |**k| 1.step(**k) }; [pr.call(to: 10, by: 2), 1.then { _1.step(by: 2, to: 10) }, 1.instance_eval { step(to: 10, by: 2) }]"####,
+        r####"e = 1.step(to: 10, by: 2); [e, e.to_a, e.size, e.each_slice(2).to_a, e.dup, e == 1.step(by: 2, to: 10)]"####,
+        r####"a = []; 1.step(to: 10, by: 3) { |i| a << i }; 10.step(by: -3, to: 1) { |i| a << i }; a"####,
+    ];
+    let list = exprs
+        .iter()
+        .map(|s| format!("try {{ {s} }}"))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    run_test_once(&format!("$VERBOSE = nil\n{HELPER}\n{CALLERS}\n[{list}]"));
+}
+
+/// The same once the callers are compiled.
+#[test]
+fn keyword_order_is_read_from_the_call_compiled() {
+    run_test_with_prelude(
+        r####"
+        r = []
+        40.times do |i|
+          r = [
+            1.step(to: 10, by: 2), 1.step(by: 2, to: 10), 1.step(**H1), 1.step(**H2),
+            fwd(to: 10, by: 2), fwd2(by: 2, to: 10), rest(to: i, by: 2), wrap(to: 10, by: 2),
+            1.send(:step, to: 10, by: i + 1), M.call(by: 2, to: 10),
+            w(to: 10, by: 2), w(by: 2, to: 10), w2(by: 2), w3(by: 2), w4(to: i, by: 2), w4(by: 2, to: i),
+            opt(to: 1, by: 2), opt(by: 2, to: 1), two(to: 1, by: 2), two({by: 1}, to: 3), set(to: 3),
+          ].map(&:inspect)
+        end
+        s = 0
+        200.times { 1.step(by: 3, to: 10) { |i| s += i }; 1.step(10, 3) { |i| s += i } }
+        [r, s]
+        "####,
+        CALLERS,
+    );
+}

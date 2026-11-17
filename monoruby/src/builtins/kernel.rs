@@ -223,6 +223,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_private_builtin_func(kernel_class, "__to_hash", kernel_to_hash, 1);
     globals.define_private_builtin_func(kernel_class, "__tally_up", super::hash::tally_up, 2);
     globals.define_private_builtin_func(kernel_class, "__existing_sym", existing_sym, 1);
+    globals.define_private_builtin_func_rest(kernel_class, "__keyword_order", keyword_order);
     globals.define_private_builtin_func(kernel_class, "__to_path", kernel_to_path, 1);
     globals.define_private_builtin_func(kernel_class, "__num2dbl", kernel_num2dbl, 1);
     globals.define_private_builtin_func_rest(kernel_class, "__check_funcall", kernel_check_funcall);
@@ -7116,6 +7117,115 @@ fn existing_sym(
         CheckedName::Id(id) => Value::symbol(id),
         CheckedName::Unknown(_) => Value::nil(),
     })
+}
+
+/// `__keyword_order(*names)`: the keys of the keyword arguments the
+/// calling method was called with, in the order they were written — the
+/// literal `k: v` pairs by name and the keys of each `**hash`, as the
+/// keyword Hash of a `**kw` parameter would have them — or `nil` when
+/// the call cannot be read back. *names* are keywords the method knows
+/// it was given.
+///
+/// A method that declares its keywords (`by:`, `to:`) is specialized by
+/// the JIT where one with a keyword rest is not, but it no longer sees
+/// the order they came in. The few that show it (`Numeric#step`, in
+/// `ArithmeticSequence#inspect`) ask here, on the path that needs it.
+///
+/// The call is the site that entered the frame below this one; a
+/// built-in that forwards its arguments (`send`, `public_send`,
+/// `Method#call`) is read through to the site that called it. A `**hash`
+/// operand is read from the caller's register, which is where the
+/// argument binder read it and which nothing has written since: the
+/// caller is suspended in that call.
+///
+/// A caller that only passes its own keywords along (`def f(...) =
+/// g(...)`, `def f(**k) = g(**k)`) may never have built that Hash: the
+/// JIT routes the keywords of *its* call straight to the callee, and the
+/// register is still nil. When the keys found lack one of *names*, such
+/// a nil is read as the keywords of the call that entered the caller.
+#[monoruby_builtin]
+fn keyword_order(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let names = lfp.arg(0).as_array();
+    let complete = |keys: &[Value]| names.iter().all(|name| keys.iter().any(|k| k.id() == name.id()));
+    let seen = keyword_order_of_caller(vm, globals, false);
+    let keys = match seen {
+        Some(keys) if complete(&keys) => Some(keys),
+        seen => keyword_order_of_caller(vm, globals, true).or(seen),
+    };
+    Ok(keys.map(Value::array_from_vec).unwrap_or_default())
+}
+
+fn keyword_order_of_caller(
+    vm: &Executor,
+    globals: &Globals,
+    through_nil: bool,
+) -> Option<Vec<Value>> {
+    // The frame of the method that asks.
+    let mut cfp = vm.cfp().prev()?;
+    let callid = loop {
+        if let Some((_, callid)) = crate::codegen::runtime::entered_by(globals, cfp) {
+            break callid;
+        }
+        cfp = cfp.prev()?;
+        if globals.store[cfp.lfp().func_id()].is_iseq().is_some() {
+            return None;
+        }
+    };
+    let mut keys = vec![];
+    keyword_keys_of_site(globals, callid, cfp.prev()?, through_nil, &mut keys)?;
+    Some(keys)
+}
+
+/// The keyword keys the call site *callid* of the frame *caller* passes,
+/// in order, appended to *keys*.
+fn keyword_keys_of_site(
+    globals: &Globals,
+    callid: CallSiteId,
+    caller: crate::executor::Cfp,
+    through_nil: bool,
+    keys: &mut Vec<Value>,
+) -> Option<()> {
+    use crate::globals::KwElem;
+    let cs = &globals.store[callid];
+    for (i, elem) in cs.kw_order().iter().enumerate() {
+        match elem {
+            // `f(a: 1, b: 2, a: 3)` passes `{b: 2, a: 3}`.
+            KwElem::Kw(_) if cs.kw_overwritten_literal(i) => {}
+            KwElem::Kw(name) => keys.push(Value::symbol(*name)),
+            KwElem::Splat => {
+                let v = caller.lfp().register(cs.kw_pos + i)?;
+                if let Some(h) = v.try_hash_ty() {
+                    keys.extend(h.keys());
+                    continue;
+                }
+                let entered = crate::codegen::runtime::entered_by(globals, caller);
+                // A `(...)` trampoline that has not materialized its
+                // arguments holds the id of the call that entered it
+                // (`resolve_lazy_forwarding`).
+                let marker = cs.forwarding
+                    && v.try_fixnum().is_some_and(|orig| {
+                        entered.is_some_and(|(_, callid)| callid.get() as i64 == orig)
+                    });
+                let passes_its_own = cs.forwarding
+                    || globals.store[caller.lfp().func_id()]
+                        .kw_rest()
+                        .is_some();
+                if marker || (v.is_nil() && through_nil && passes_its_own) {
+                    if let Some((_, entered)) = entered {
+                        keyword_keys_of_site(globals, entered, caller.prev()?, through_nil, keys)?;
+                    }
+                } else if !v.is_nil() {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(())
 }
 
 /// [`setter_name_id`] for a reader or a remover, which does not intern

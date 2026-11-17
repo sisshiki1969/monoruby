@@ -189,45 +189,37 @@ class Numeric
     to_f.truncate(ndigits)
   end
 
-  # `rb_get_kwargs`' complaint about the keywords `step` does not take.
-  # A method of its own so that `step` holds no block literal.
-  def __step_unknown_keywords(kw)
-    unknown = kw.keys - [:to, :by]
-    raise ArgumentError,
-          "unknown keyword#{'s' if unknown.size > 1}: #{unknown.map { |k| k.inspect }.join(', ')}"
-  end
-  private :__step_unknown_keywords
-
-  def step(limit = (no_limit = true; nil), step = (no_step = true; nil), **kw)
-    # `num_step_extract_args`: `to:` and `by:` are told apart from an
-    # absent keyword (`to: nil` with a positional limit is still "given
-    # twice"), and the Hash keeps the order they were written in, which
-    # `ArithmeticSequence#inspect` shows.
-    to_given = by_given = false
-    by = nil
-    if kw.empty?
-      kw = nil
+  # The keywords of a `step` without a block as a Hash in the order they
+  # were written, which `ArithmeticSequence#inspect` shows
+  # (`(1.step(to: 10, by: 2))`). Only two keywords given together have
+  # an order, and only then is the call site asked for it. *order* is
+  # `__keyword_order`'s answer for the call that entered `step`.
+  def __step_keywords(no_by, by, no_to, to, order)
+    return nil if no_by && no_to
+    return { to: to } if no_by
+    return { by: by } if no_to
+    if order && (t = order.index(:to)) && (b = order.index(:by)) && t < b
+      { to: to, by: by }
     else
-      known = 0
-      if kw.key?(:to)
-        known += 1
-        to_given = true
-      end
-      if kw.key?(:by)
-        known += 1
-        by_given = true
-      end
-      __step_unknown_keywords(kw) unless kw.size == known
-      if to_given
-        raise ArgumentError, "to is given twice" unless no_limit
-        limit = kw[:to]
-      end
-      if by_given
-        raise ArgumentError, "step is given twice" unless no_step
-        by = kw[:by]
-      end
+      { by: by, to: to }
     end
-    if by_given
+  end
+  private :__step_keywords
+
+  # `to:` and `by:` are declared keywords with a default that records
+  # their absence (`num_step_extract_args` tells `to: nil` from no `to:`,
+  # so `1.step(5, to: nil)` is still "given twice"). A `**kw` here would
+  # keep the order they were written in, but a method with a keyword
+  # rest is not specialized by the JIT, which every `step` with a block
+  # would pay for; the order is read off the call site when it is shown.
+  def step(limit = (no_limit = true; nil), step = (no_step = true; nil),
+           by: (no_by = true; nil), to: (no_to = true; nil))
+    unless no_to
+      raise ArgumentError, "to is given twice" unless no_limit
+      limit = to
+    end
+    if !no_by
+      raise ArgumentError, "step is given twice" unless no_step
       step = by
     elsif step.nil? && !no_step && block_given?
       # `1.step(5, nil)` with a block: the nil was written, so it is not
@@ -249,7 +241,9 @@ class Numeric
         given_args = no_limit ? [] : no_step ? [limit] : [limit, written_step]
         return Enumerator::ArithmeticSequence
           .__build(self, limit, step, false)
-          .__set_origin(self, :step, given_args, kw)
+          .__set_origin(self, :step, given_args,
+                        __step_keywords(no_by, by, no_to, to,
+                                        no_by || no_to ? nil : __keyword_order(:by, :to)))
       else
         return to_enum(:step, limit, step) { __step_size(limit, step) }
       end
