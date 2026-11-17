@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-03cf4cca.js";
+            window.path_to_searchindex_js = "../../searchindex-00aa06af.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-afb61271.js"></script>
@@ -228,8 +228,8 @@ boxed の <code>HashContent::IdentMap</code>。boxed 側は <code>Box&lt;RubyMap
 （再定義された <code>String#eql?</code> / <code>#hash</code> はどちらの表現でも参照しない）、frozen
 なら探索中に内容が変わらない。</li>
 </ul>
-<p>リテラルのキーも <code>h["k"] = v</code> の格納キー（<code>Value::frozen_hash_key</code> が
-コピーして freeze する）も frozen なので、<strong>String キーの小さな Hash リテラルは
+<p>リテラルのキーも <code>h["k"] = v</code> の格納キー（新しいキーのときに
+<code>Value::frozen_hash_key</code> がコピーして freeze する）も frozen なので、<strong>String キーの小さな Hash リテラルは
 boxed map を作らない</strong>。</p>
 <p><code>compare_by_identity</code> な inline hash は id 走査だけなので、任意のキー（可変な
 ヒープオブジェクトを含む）を保持できる（<code>IDENT_BIT</code>）。</p>
@@ -659,7 +659,7 @@ true になる）。空でない Hash 同士では identity モードが違え�
 <tr><td>挿入順序</td><td><code>st_table</code> のエントリ配列</td><td><code>rubymap</code>（IndexMap 系）: エントリ <code>Vec</code> + 位置の index table。観測される順序は同じ</td></tr>
 <tr><td>反復中の変更</td><td>追加は例外、<code>delete</code> は許可（<code>RHASH_ITER_LEV</code>）</td><td>同じ規則（既存キーの更新は許可）。機構は tombstone + <code>dead</code> カウンタ + <code>compact_if_dirty</code>。inline hash は tombstone を置く前に boxed へ昇格する。深度は inline が 2 ビット飽和、boxed が <code>Cell&lt;u32&gt;</code></td></tr>
 <tr><td>走査の実装</td><td><code>rb_hash_foreach</code>（C のコールバックループ）</td><td><code>each</code> は Ruby の位置ループ（§1.6）。JIT がブロックごと展開するため</td></tr>
-<tr><td>String キーの複製</td><td><code>rb_hash_key_str</code> が fstring テーブルに<strong>インターン</strong>（Hash 間で共有）</td><td>同じ。<code>Value::frozen_hash_key</code> が内容の fstring を引き（<code>Store::fstring</code>）、無ければ frozen コピーを作って弱いテーブルに登録する（string.md §3.1）。特異クラスやインスタンス変数を持つキーは素の frozen コピー</td></tr>
+<tr><td>String キーの複製</td><td><code>rb_hash_key_str</code> が fstring テーブルに<strong>インターン</strong>（Hash 間で共有）</td><td>同じ。<code>Value::frozen_hash_key</code> が内容の fstring を引き（<code>Store::fstring</code>）、無ければ frozen コピーを作って弱いテーブルに登録する（string.md §3.1）。特異クラスやインスタンス変数を持つキーは素の frozen コピー。コピーするのは CRuby（<code>hash_aset_str</code>）と同じく<strong>新しいキーのときだけ</strong>で、既存キーへの格納は格納済みのキーを残して何も確保しない（<code>HashRefMut::aset</code>）</td></tr>
 <tr><td>String キーの比較・ハッシュ</td><td>内容のみ、<code>String#hash</code> は dispatch しない。クラスが <code>String</code> ちょうどのときだけバイト比較で短絡（<code>rb_any_cmp</code> / <code>any_hash</code>）</td><td>同じ規則（<code>Value::eql</code>、<code>string_key_eq</code>）。ただしバイト比較は <code>RStringInner::eq</code> で<strong>エンコーディングを見ない</strong>。CRuby の <code>rb_str_hash</code> は非 ASCII 文字列でエンコーディング index を混ぜる</td></tr>
 <tr><td><code>compare_by_identity</code></td><td><code>st_table</code> の型を <code>identhash</code> に切り替えて再ハッシュ</td><td>inline は <code>IDENT_BIT</code> を立てるだけ（packed キーは <code>eql?</code> と同一性が一致するので inline のまま）。boxed は<strong>別型</strong>の <code>RubyMap&lt;Option&lt;IdentKey&gt;, Value&gt;</code> に作り直す。空マップ限定で双方向に切り替える <code>set_compare_by_identity_empty</code> があり、<code>Hash#replace</code> / <code>Set</code> が使う</td></tr>
 <tr><td>デフォルト値／proc</td><td><code>ifnone</code> スロット</td><td><code>Option&lt;Box&lt;HashDefault&gt;&gt;</code>。null なら「どちらも無し」を 1 ロードで判定でき、JIT のミス経路が in-line で nil を返せる。デフォルトを持つと boxed 強制（<code>Hash.new(7)</code> は確保する）。<code>clear</code> はデフォルトを保つ（CRuby と同じ）</td></tr>

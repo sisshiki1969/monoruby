@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-03cf4cca.js";
+            window.path_to_searchindex_js = "../../searchindex-00aa06af.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-afb61271.js"></script>
@@ -357,7 +357,11 @@ SmallVec / 共有 union への改修より前のものであり、§2 が挙げ�
 1 回の操作で 1 度だけ計算し、テーブル側では再ハッシュしない（<code>PassThrough</code>
 hasher）。<code>Value::frozen_hash_key</code> は <code>fstring::intern</code> でテーブルを引き、
 当たればそのまま返し（<strong>格納ごとの複製が無くなる</strong>）、外れたときだけ複製して
-登録する。ハッシュが衝突した 2 つ目の内容は登録されず、fstring ではあるが
+登録する。そもそもこの検索が走るのは <strong>Hash にとって新しいキーのときだけ</strong>
+である: <code>rb_hash_aset</code> に当たる <code>HashRefMut::aset</code> は CRuby の <code>hash_aset_str</code>
+と同じ順序で、先に Hash 自身を（キーのバイト列で）探し、既にあるキーなら値だけ
+を書き換えて格納済みのキーを残す。既存キーへの格納（集計の <code>h[word] += 1</code>
+など）は fstring テーブルに触れない。ハッシュが衝突した 2 つ目の内容は登録されず、fstring ではあるが
 同一性は保証されない（2⁻⁶⁴ の事象）。</p>
 <p>計測（cachegrind Ir）: 既存キーへの <code>h["k#{i % 64}"] = v</code> は複製が消えて
 −9.9%、<code>freq[seq.byteslice(i, n)] += 1</code>（k-nucleotide の形）は −3.5%。新しい
