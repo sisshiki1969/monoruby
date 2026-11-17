@@ -211,14 +211,15 @@ fn send_of_an_unknown_string_name_compiled() {
         def s4(o) = o.public_send("zq2025s4")
         def s5(o) = o.__send__("zq2025s5", 1, 2)
         def s6(o) = o.send("zq2025s6", 3)
+        # Enough calls for the callers to be compiled with `send` inlined.
         d = ->(x) { [x.class, x.name, x.args, x.private_call?, x.receiver.class, x.message.gsub(/0x\h+/, "")] }
         r = []
-        30.times { r << (s1(Object.new) rescue d.($!)) }
-        30.times { r << (s2 rescue d.($!)) }
-        30.times { r << (s3("zq2025s3", 4) rescue d.($!)) }
-        30.times { r << (s4(Object.new) rescue d.($!)) }
-        30.times { r << (s5(BasicObject.new) rescue [$!.name, $!.args, $!.private_call?]) }
-        30.times { r << s6(MM2025.new) }
+        300.times { r << (s1(Object.new) rescue d.($!)) }
+        300.times { r << (s2 rescue d.($!)) }
+        300.times { r << (s3("zq2025s3", 4) rescue d.($!)) }
+        300.times { r << (s4(Object.new) rescue d.($!)) }
+        300.times { r << (s5(BasicObject.new) rescue [$!.name, $!.args, $!.private_call?]) }
+        300.times { r << s6(MM2025.new) }
         r.uniq
         "####,
     );
