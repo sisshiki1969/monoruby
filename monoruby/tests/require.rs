@@ -401,19 +401,39 @@ fn unloadable_program_file_prints_loaderror() {
     assert_eq!(stderr.trim(), "monoruby: Is a directory -- /etc (LoadError)");
 }
 
-// A stand-in from the stub pin (`etc` here) answers a repeat `require`
-// from `$LOADED_FEATURES` without walking `$LOAD_PATH`. The stub
+// A stand-in from the stub pin (`stringio` here) answers a repeat
+// `require` from `$LOADED_FEATURES` without walking `$LOAD_PATH`. The stub
 // directory is not on `$LOAD_PATH`, so the feature-index check used to
 // miss it and every repeat re-ran the search — which, for a stand-in,
-// `dlopen`s each same-named host CRuby `.so` it finds on the way (mail's
-// `Socket.gethostname` requires `etc` once per message).
+// `dlopen`s each same-named host CRuby `.so` it finds on the way.
 #[test]
 fn a_stub_feature_is_not_searched_for_again() {
     run_test_once(
         r#"
+        first = require "stringio"
+        [first, require("stringio"),
+         $LOADED_FEATURES.count { _1.match?(%r{/stringio\.(rb|so|bundle|dylib)\z}) } > 0]
+        "#,
+    );
+}
+
+// The same for an extension monoruby ships with no stand-in in front of
+// it (`etc` is `ext/etc.so` and nothing else): the install root's `ext/`
+// is not on `$LOAD_PATH` either, so a repeat used to search for an
+// `etc.rb` everywhere, every host gem's `lib/` included, before finding
+// the `.so` again (mail's `Socket.gethostname` requires `etc` once per
+// message). The remembered path is only a shortcut to
+// `$LOADED_FEATURES`: an entry removed from there is loaded again.
+#[test]
+fn a_shipped_extension_is_not_searched_for_again() {
+    run_test_once(
+        r#"
+        so = ->(f) { f.match?(%r{/etc\.(rb|so|bundle|dylib)\z}) }
         first = require "etc"
-        [first, require("etc"),
-         $LOADED_FEATURES.count { _1.end_with?("/etc.rb") || _1.end_with?("/etc.so") }]
+        res = [first, require("etc"), require("etc.so"), $LOADED_FEATURES.count(&so)]
+        $LOADED_FEATURES.delete_if(&so)
+        $VERBOSE = nil
+        res << require("etc") << require("etc") << $LOADED_FEATURES.count(&so) << Etc.getpwuid(0).uid
         "#,
     );
 }

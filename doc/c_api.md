@@ -1096,6 +1096,65 @@ liquid-c はこれで止まっていた。
   `ruby/vm.h` の `ruby_vm_at_exit`（プロセス終了時に逆順で呼ぶ）。
   `tests/capi/capi_gaps.c`。
 
+### 3.25 etc も CRuby の C 拡張に（段階 17）
+
+`Etc` は `stdlib/etc.rb`（`Process.__getpwnam` などの隠し builtin の上の
+Ruby 実装）で、`getpwuid` / `getpwnam` / `getgrgid` / `getgrnam` 以外は
+スタブだった（`nprocessors` は常に 1、`uname` は固定値、`sysconf` は nil、
+`passwd` / `group` は nil、`getlogin` / `confstr` / `IO#pathconf` / `SC_*`
+などの定数は無し）。CRuby の `ext/etc`（etc gem 1.4.6）をそのまま層で
+ビルドして同梱する（issue #1806）。
+
+- **ソース**: `monoruby_capi/ext/etc/`。`etc.c` は CRuby 4.0.9 のまま、
+  `constdefs.h` は同じディレクトリの `mkconstants.rb` の出力（プラット
+  フォームに依らない `#ifdef` の列）。`extconf.h` が Linux（glibc）と
+  macOS で `extconf.rb` が見つけるもの（`getpwent` / `getgrent`、
+  `struct passwd` のメンバ、`uname`、`sysconf` / `confstr` / `fpathconf`、
+  Linux の `sched_getaffinity`）を define する。`SYSCONFDIR` は `/etc`
+  （CRuby では `RbConfig::CONFIG["sysconfdir"]`、つまり prefix の下。
+  monoruby には prefix の `etc` が無い）。
+- **スタブを置かない**: `stdlib/etc.rb` は削除し、`require "etc"` は
+  `<install root>/ext/etc.so` に直接解決する（`date_core` と同じ
+  `ext::find_extension`）。`$LOAD_PATH.resolve_feature_path("etc")` が
+  CRuby と同じ `[:so, …]` になり、ruby/spec `language/predefined_spec.rb`
+  に残っていた唯一のタグ（`spec/tags/language/predefined_tags.txt`）が
+  消えた。
+- **etc が要求して層に足したもの**:
+  - `ruby/ruby.h` が先頭で `RUBY_EXTCONF_H` を include する（CRuby の
+    `ruby.h` / `ruby/defines.h` と同じ）。mkmf の `create_header` は
+    `-DRUBY_EXTCONF_H="extconf.h"` を渡すだけなので、自分では include
+    しない拡張（etc.c がそう）は `HAVE_*` を一つも見ていなかった。
+    `gem install` でビルドする gem にも効く。
+  - `rb_uid_t` / `rb_gid_t`、`rb_filesystem_str_new` / `_cstr`。
+  - `rb_locale_encoding` / `rb_filesystem_encoding` を
+    `Encoding.find("locale")` / `("filesystem")` に（これまで常に UTF-8。
+    C ロケールでは CRuby と同じ US-ASCII になる）。`rb_external_str_new` /
+    `rb_locale_str_new` / `rb_filesystem_str_new` は CRuby の string.c と
+    同じく `rb_external_str_new_with_enc` 経由にし、US-ASCII に収まらない
+    バイトを含むときは BINARY にする（`default_internal` への変換は
+    していない）。
+  - `NUM2UINT` / `NUM2ULONG` / `NUM2ULL` に nil を渡したときの文言を
+    CRuby の `rb_num2ulong_internal` に合わせた（`no implicit conversion
+    of nil into Integer`。`rb_num2long` は `from nil to integer`）。
+- **core から消えたもの**: `Process.__getpwnam` / `__getpwuid` /
+  `__getgrnam` / `__getgrgid`（スタブ専用だった）。`Process.euid = "name"`
+  などが使う名前引きだけ `uid_by_name` / `gid_by_name` として残る。
+- **`require` の繰り返し**: スタブを置かないと、読み込み済みの判定が
+  どの近道にも乗らない（`<root>/ext/` は `$LOAD_PATH` にもスタブ pin にも
+  無い）。そのままだと 2 回目以降の `require "etc"` が毎回 `etc.rb` を
+  `$LOAD_PATH` とホストの全 gem の `lib/` から探し直していた（1 回
+  ~100 µs。mail の `Socket.gethostname` はメッセージごとに `require "etc"`
+  する）。`Globals::shipped_extension_features` が「素の `.so` 候補 →
+  同梱拡張として読み込んだパス」を覚え、`require_lib` は探索の前に
+  そのパスが `$LOADED_FEATURES` にあるかだけを見る（~0.5 µs、スタブ
+  だった頃の 1/10 以下。`$LOADED_FEATURES` から消されていれば普通に
+  読み直す）。
+- **挙動が変わる点**: `Etc.nprocessors` が実際の CPU 数を返す（以前は 1）。
+  concurrent-ruby や parallel はこれでスレッドプールの大きさを決める。
+- **結果**: ruby/spec `library/etc` 50 例 0 失敗、`tests/etc.rs` が Etc の
+  全 API（探索・列挙・`uname` / `sysconf` / `confstr` / `pathconf`・
+  エラー）を同じマシンの CRuby と比較する。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -1153,6 +1212,7 @@ liquid-c はこれで止まっていた。
 | 14 | CRuby の `ext/socket` を層でビルドして同梱（`src/builtins/socket.rs` を削除）、`rb_io_t`、待ちと fd 集合の API、`IO#timeout` | 済（§3.22、ruby/spec `library/socket` 1463 例で 1F） |
 | 15 | CRuby の `ext/openssl` を層でビルドしシステムの OpenSSL にリンク（`ext/openssl` crate と Ruby 実装を削除）、`rb_attr`、`ruby_verbose`、`rb_obj_class` の ABI | 済（§3.23、ruby/spec `library/openssl` / `net-ftp` 全通過） |
 | 16 | ホストの CRuby が入れた gem の C 拡張を層で建て直して読む、alloc 関数の self、`rb_str_capacity` の下限、`ruby_vsnprintf` の無限ループ、`rb_check_symbol` 系 | 済（§3.24、ruby-bench の graphql-native / liquid-c が完走、liquid-c の出力は CRuby と一致） |
+| 17 | CRuby の `ext/etc` を層でビルドして同梱（`stdlib/etc.rb` と隠し builtin を削除）、`RUBY_EXTCONF_H` の include、ロケール / ファイルシステムのエンコーディング、符号なし変換の nil の文言 | 済（§3.25、ruby/spec `library/etc` 全通過、`resolve_feature_path("etc")` が `:so`） |
 
 ## 6. 既知の制約
 

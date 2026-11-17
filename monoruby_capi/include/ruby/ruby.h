@@ -35,6 +35,14 @@
 #ifndef MONORUBY_CAPI_RUBY_RUBY_H
 #define MONORUBY_CAPI_RUBY_RUBY_H 1
 
+/* As CRuby's ruby.h and ruby/defines.h: the header mkmf's `create_header`
+ * writes (and names with -DRUBY_EXTCONF_H) comes before everything else,
+ * so its HAVE_* answers are in force for an extension that does not
+ * include it itself. */
+#ifdef RUBY_EXTCONF_H
+#include RUBY_EXTCONF_H
+#endif
+
 #include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -81,6 +89,8 @@ typedef intptr_t SIGNED_VALUE;
 typedef uintptr_t st_data_t;
 #define ST_DATA_T_DEFINED
 typedef pid_t rb_pid_t;
+typedef uid_t rb_uid_t;
+typedef gid_t rb_gid_t;
 
 /* ruby/defines.h's stringification helpers. */
 #define STRINGIZE(expr) STRINGIZE0(expr)
@@ -926,6 +936,8 @@ VALUE rb_external_str_new(const char *ptr, long len);
 VALUE rb_external_str_new_cstr(const char *ptr);
 VALUE rb_locale_str_new(const char *ptr, long len);
 VALUE rb_locale_str_new_cstr(const char *ptr);
+VALUE rb_filesystem_str_new(const char *ptr, long len);
+VALUE rb_filesystem_str_new_cstr(const char *ptr);
 #define rb_str_new2 rb_str_new_cstr
 #define rb_str_new3 rb_str_new_shared
 #define rb_str_new4 rb_str_new_frozen

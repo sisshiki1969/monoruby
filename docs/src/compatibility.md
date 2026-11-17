@@ -83,9 +83,8 @@ Both dashboards come from the same workflow shape
   `data/timeouts.csv`. Both groups currently record **zero** timeouts.
 - `--excl-tag fails` excludes examples tagged in this repository's
   `spec/tags/`. That list is deliberately tiny, and has shrunk as the
-  implementation caught up — **2 examples** in 2 files at present:
-  `Refinement#import_methods` from a C extension, and
-  `$LOAD_PATH.resolve_feature_path` for a `.so`. The published pass rate is
+  implementation caught up — **1 example** at present:
+  `Refinement#import_methods` from a C extension. The published pass rate is
   therefore within a rounding error of an unfiltered one.
 
 The audit that cut the skip list down from coarse file-level exclusions to

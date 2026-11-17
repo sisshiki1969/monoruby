@@ -465,6 +465,13 @@ pub struct Globals {
     /// (a `gem install` over it) has a new stamp and is asked again.
     capi_extensions:
         std::cell::RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, u64, bool)>>,
+    /// Where a bare native feature (`etc.so`) was loaded from when the
+    /// answer was an extension monoruby ships (`ext::find_extension`:
+    /// the install root's `ext/`, which is not on `$LOAD_PATH`). A
+    /// repeated `require` looks its candidate up here and asks
+    /// `$LOADED_FEATURES` about that one path, instead of searching
+    /// again — see `require_lib`.
+    shipped_extension_features: std::collections::HashMap<PathBuf, PathBuf>,
     /// Features whose `require` body is currently executing, keyed by
     /// the canonical path registered in `$LOADED_FEATURES`, with the
     /// loading green thread's object id. A second thread requiring the
@@ -993,6 +1000,7 @@ impl Globals {
             loaded_features_index: std::cell::RefCell::new(LoadedFeatureIndex::default()),
             canonical_dirs: std::cell::RefCell::new(std::collections::HashMap::new()),
             capi_extensions: std::cell::RefCell::new(std::collections::HashMap::new()),
+            shipped_extension_features: std::collections::HashMap::new(),
             loading_features: std::collections::HashMap::default(),
             ext: crate::ext::ExtState::default(),
             gvar_traces: std::collections::HashMap::default(),

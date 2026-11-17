@@ -119,6 +119,18 @@ fn has_loadable_ext(path: &std::path::Path) -> bool {
     }
 }
 
+/// The stem of a bare `.so` candidate (`etc.so`, no directory): the form
+/// that names an extension monoruby ships (`ext::find_extension`).
+fn bare_native_stem(cand: &std::path::Path) -> Option<String> {
+    if cand.extension().map(|e| e.as_bytes()) == Some(b"so")
+        && cand.parent().is_none_or(|p| p.as_os_str().is_empty())
+    {
+        Some(cand.file_stem()?.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
 /// The stub pin: monoruby's own stand-ins, searched ahead of `$LOAD_PATH`
 /// (see `Globals::search_candidate`).
 fn stub_dirs() -> [PathBuf; 2] {
@@ -253,6 +265,25 @@ impl Globals {
             if has_loadable_ext(file_name) && self.is_feature_loaded(file_name) {
                 return Ok(RequireLoad::AlreadyLoaded(file_name.into()));
             }
+            // An extension monoruby ships, loaded before: it sits in the
+            // install root's `ext/`, outside `$LOAD_PATH` and the stub
+            // pin (`ext::find_extension`), so neither check below sees
+            // it. A feature with no stand-in in front of it — `etc`,
+            // which is `etc.so` and nothing else — otherwise repeated
+            // the whole search on each `require`, the walk of every host
+            // gem `lib/` for an `etc.rb` included (~100 us a call; mail's
+            // `Socket.gethostname` requires `etc` per message). Any
+            // candidate found loaded answers "already loaded" below, so
+            // asking this one first changes nothing but the cost.
+            if !self.shipped_extension_features.is_empty() {
+                for cand in require_candidates(file_name) {
+                    if let Some(p) = self.shipped_extension_features.get(&cand)
+                        && self.is_feature_loaded(p)
+                    {
+                        return Ok(RequireLoad::AlreadyLoaded(p.clone()));
+                    }
+                }
+            }
             let entries = self.load_path_entries(vm);
             // For feature matching, `$LOAD_PATH` directories compare in
             // their canonical (symlink-resolved) form.
@@ -295,7 +326,14 @@ impl Globals {
             }
             for cand in require_candidates(file_name) {
                 if let Some(found) = self.search_candidate(&cand, &entries, bundler_priority) {
-                    return self.require_lib_file(found);
+                    let load = self.require_lib_file(found)?;
+                    if let RequireLoad::Native(p) = &load
+                        && bare_native_stem(&cand).is_some()
+                        && crate::ext::is_extension_path(p)
+                    {
+                        self.shipped_extension_features.insert(cand, p.clone());
+                    }
+                    return Ok(load);
                 }
             }
             // Resolution failed: an extensionless verbatim entry means
@@ -522,10 +560,8 @@ impl Globals {
         // a gem's own `require "sqlite3/4.0/sqlite3_native"` must keep
         // reaching the `.rb` stand-in (which is what requires the bare
         // `.so`), not jump to the library and skip the Ruby it carries.
-        if cand.extension().map(|e| e.as_bytes()) == Some(b"so")
-            && cand.parent().is_none_or(|p| p.as_os_str().is_empty())
-            && let Some(stem) = cand.file_stem()
-            && let Some(p) = crate::ext::find_extension(&stem.to_string_lossy())
+        if let Some(stem) = bare_native_stem(cand)
+            && let Some(p) = crate::ext::find_extension(&stem)
         {
             // An extension of the same name that a gem built against
             // the C API layer, on `$LOAD_PATH` because the gem is

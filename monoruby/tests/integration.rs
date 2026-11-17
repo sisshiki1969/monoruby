@@ -86,6 +86,7 @@ mod eq_search;
 mod equal_identity;
 mod errinfo_inline_load;
 mod escape_analysis;
+mod etc;
 mod exception_api;
 mod exit_before_regions_value;
 mod exit_handler_error_roots;

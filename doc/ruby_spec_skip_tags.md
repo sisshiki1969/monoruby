@@ -22,6 +22,9 @@
 >   するが、実態と違う値を報告することになる)、`/o` は
 >   `regex_flags_from_closing` が `o` を落とす本物の未実装
 >   (`doc/runtime_optimization/regexp.md` §5)。**残す**。
+>   （追記: `predefined_tags.txt` は、`etc` を CRuby の `ext/etc` に
+>   置き換えて `resolve_feature_path("etc")` が `[:so, …]` を返すように
+>   なったので削除した。`doc/c_api.md` §3.25。）
 >
 > 副産物: `pattern_matching_spec` の `Hash pattern raises
 > NoMatchingPatternKeyError if the key does not match` がタグ無しで error
