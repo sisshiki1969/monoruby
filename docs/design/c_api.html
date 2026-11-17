@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d6b649f7.js";
+            window.path_to_searchindex_js = "../searchindex-f144900f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -1322,7 +1322,8 @@ concurrent-ruby や parallel はこれでスレッドプールの大きさを決
 | <code>io_state</code> / <code>io_update</code> | 層の <code>struct rb_io</code> と IO オブジェクトの同期（§3.22） |
 | <code>str_modify</code> | <code>rb_str_modify</code>: 長さより後ろのバイトに触れない（§3.22） |
 | <code>obj_class</code> | <code>rb_obj_class</code>: 特異クラスを飛ばした本当のクラス（§3.23） |
-| <code>intern_check</code> | <code>rb_check_symbol_cstr</code> / <code>rb_check_id_cstr</code>: intern 済みの名前だけを返す（§3.24） |</p>
+| <code>intern_check</code> | <code>rb_check_symbol_cstr</code> / <code>rb_check_id_cstr</code>: intern 済みの名前だけを返す（§3.24） |
+| <code>obj_respond_to</code> | <code>rb_respond_to</code> / <code>rb_obj_respond_to</code>（と、それを使う <code>rb_check_funcall</code>）: 組み込みの <code>respond_to?</code> なら呼び出さずにメソッド表と <code>respond_to_missing?</code> で答える。プログラムが定義した <code>respond_to?</code> は CRuby の <code>vm_respond_to</code> と同じ引数（<code>priv</code> 指定かつ 1 引数でないときだけ第 2 引数）で呼ぶ。以前は毎回 <code>respond_to?</code> の funcall で、liquid-c は 1 レンダリングあたり 60,900 回 × 約 1,300 Ir を払っていた |</p>
 <p>あわせて <code>ary_push</code> / <code>hash_set</code> が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。</p>
 <h2 id="5-段階計画"><a class="header" href="#5-段階計画">5. 段階計画</a></h2>
