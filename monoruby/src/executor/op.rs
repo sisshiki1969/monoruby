@@ -485,7 +485,8 @@ impl Executor {
         // on the receiver's class has to take over here.
         if self.dispatch_redefined_op(globals, lhs.class(), IdentId::_EQ) {
             return self.at_site(|vm| {
-                vm.invoke_method_inner(globals, IdentId::_EQ, lhs, &[rhs], None, None)
+                let set = vm.site_refinements(globals);
+                vm.invoke_method_in(globals, IdentId::_EQ, lhs, &[rhs], None, None, true, set)
             });
         }
         // The String arms below are `String#==`'s own; an instance of a
@@ -830,7 +831,7 @@ impl Executor {
                 .custom_neq(lhs.class(), Globals::class_version())
                 .is_some()
         {
-            let func_id = self.find_method(globals, lhs, IdentId::_NEQ, is_func_call)?;
+            let func_id = self.find_method_at_site(globals, lhs, IdentId::_NEQ, is_func_call)?;
             if Some(func_id) != globals.store.default_neq() {
                 return self
                     .at_site(|vm| vm.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None));
@@ -855,7 +856,7 @@ impl Executor {
 /// which refinements, and on which side of the boundary of monoruby's
 /// Ruby-written core, which stands in for CRuby's C and sees neither a
 /// refinement nor a redefinition of an operator
-/// (`Executor::basic_op_refinements`, `Executor::dispatch_redefined_op`).
+/// (`Executor::site_refinements`, `Executor::dispatch_redefined_op`).
 /// The ordinary helpers read both off the control frame they are called
 /// from. A frameless body has none: the nearest control frame is the one
 /// *hosting* it, which may have been written somewhere else — a callee
@@ -952,7 +953,7 @@ impl Executor {
             _ => {
                 let fid = match scope {
                     PureScope::Frame => self
-                        .find_method(globals, lhs, IdentId::_EQ, is_func_call)
+                        .find_method_at_site(globals, lhs, IdentId::_EQ, is_func_call)
                         .ok()?,
                     // No frame to ask, and none needed: no refinement is
                     // active where the site was written. Anything but a
@@ -1180,7 +1181,7 @@ fn cmp_teq_values_impl(
     private_ok: bool,
 ) -> Option<Value> {
     if vm.dispatch_redefined_op(globals, lhs.class(), IdentId::_TEQ) {
-        return vm.invoke_method(globals, IdentId::_TEQ, private_ok, lhs, &[rhs], None, None);
+        return vm.invoke_method_site(globals, IdentId::_TEQ, private_ok, lhs, &[rhs]);
     }
     // See `cmp_values`: Integers that fit an `i128` compare there.
     if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
@@ -1223,7 +1224,7 @@ fn cmp_teq_values_impl(
             return teq_reverse(vm, globals, lhs, rhs);
         }
         _ => {
-            return vm.invoke_method(globals, IdentId::_TEQ, private_ok, lhs, &[rhs], None, None);
+            return vm.invoke_method_site(globals, IdentId::_TEQ, private_ok, lhs, &[rhs]);
         }
     };
     Some(Value::bool(b))

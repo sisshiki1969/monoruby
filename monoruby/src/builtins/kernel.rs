@@ -4971,8 +4971,21 @@ fn public_send(
     // re-derives the visibility to word it "private method 'priv'
     // called…" rather than "undefined method" (`bo_method_missing`), so
     // the message for a receiver without a handler is unchanged.
+    //
+    // `CALL_PUBLIC` resolves with the refinements of the nearest Ruby
+    // frame: the scope that wrote the `public_send`. Written by one of
+    // the Ruby-written core methods it is that method's spelling of
+    // `rb_funcallv_public`, which asks the class itself first
+    // (`Executor::public_funcall_refinements`).
+    let set = if vm.called_by_core() {
+        vm.public_funcall_refinements(globals, receiver, method)
+    } else {
+        vm.ruby_level_refinements(globals)
+    };
     let class_id = receiver.class();
-    if let Some(entry) = globals.check_method_for_class(class_id, method)
+    if let Some(entry) = globals
+        .store
+        .check_method_with_refinements(class_id, method, set)
         && matches!(
             entry.visibility(),
             Visibility::Private | Visibility::Protected
@@ -4991,13 +5004,15 @@ fn public_send(
             forwarded_kw_hash(lfp),
         );
     }
-    vm.invoke_method_inner(
+    vm.invoke_method_in(
         globals,
         method,
         receiver,
         &args[1..],
         lfp.block(),
         forwarded_kw_hash(lfp),
+        true,
+        set,
     )
 }
 
@@ -5042,7 +5057,10 @@ pub(crate) fn send(
     } else {
         None
     };
-    match vm.find_method(globals, receiver, method, true) {
+    // Under the refinements of the scope that wrote the `send`, which
+    // Ruby 4.0 has it honour.
+    let set = vm.caller_refinements(globals);
+    match vm.find_method_in(globals, receiver, method, true, set) {
         Ok(func_id) => {
             vm.invoke_func_named(globals, func_id, method, receiver, &args[1..], lfp.block(), kw)
         }

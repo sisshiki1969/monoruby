@@ -102,6 +102,11 @@ typedef enum MrErrorKind {
 #define MR_METHOD_PRIVATE   1u
 #define MR_METHOD_SINGLETON 2u
 #define MR_CLASS_NATIVE     1u
+
+/* `obj_respond_to`'s `include_all`: bit 0 is CRuby's `priv`; bit 1 asks
+ * the question as `rb_check_funcall` does — blind to the refinements of
+ * the Ruby frame that called into the extension. */
+#define MR_RESPOND_TO_FUNCALL 2
 #define MR_ARGC_VARIADIC    (-1)
 #define MR_ALLOC_NATIVE     1u   /* class_set_alloc: instances carry a native payload */
 #define MR_ALLOC_UNDEF      2u   /* class_set_alloc: no allocator */

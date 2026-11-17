@@ -2175,7 +2175,9 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         start = i;
     }
     for v in self_[start..].iter() {
-        res = vm.invoke_method_inner(globals, sym, res, &[*v], None, None)?;
+        // `rb_funcallv_public`: a public method, found under the
+        // refinements of the Ruby code that called `inject`.
+        res = vm.invoke_method_public(globals, sym, res, &[*v], None, None)?;
     }
     Ok(res)
 }
@@ -4786,14 +4788,13 @@ fn duck_rand_upto(
 ) -> Result<usize> {
     // `rb_funcallv_public`: `Kernel#rand` is private, so a receiver that
     // only inherits it (`random: nil`) must raise, not quietly work.
-    let v = vm.invoke_method_inner_vis(
+    let v = vm.invoke_method_public(
         globals,
         IdentId::get_id("rand"),
         random,
         &[Value::integer(max as i64 + 1)],
         None,
         None,
-        false,
     )?;
     let r = v.coerce_to_int_i64(vm, globals)?;
     if r < 0 {

@@ -2357,22 +2357,30 @@ rb_class_inherited_p(VALUE mod, VALUE arg)
 /* CRuby's rb_obj_respond_to: a respond_to? the program defined is
  * called; the builtin one is answered by the interpreter without a call
  * (the method table, then a user respond_to_missing?). Either may run
- * Ruby, so the frame is kept across it as for a funcall. */
-int
-rb_obj_respond_to(VALUE obj, ID id, int priv)
+ * Ruby, so the frame is kept across it as for a funcall. Bit 1 of *flags*
+ * (MR_RESPOND_TO_FUNCALL) asks as rb_check_funcall does: blind to the
+ * refinements of the Ruby frame that called in. */
+static int
+obj_respond_to(VALUE obj, ID id, int flags)
 {
     if (!HAVE_API(obj_respond_to))
-        return RTEST(rb_funcall(obj, rb_intern("respond_to?"), 2, ID2SYM(id), priv ? Qtrue : Qfalse));
+        return RTEST(rb_funcall(obj, rb_intern("respond_to?"), 2, ID2SYM(id), (flags & 1) ? Qtrue : Qfalse));
     struct capi_frame *saved = frame();
     if (capi_ios)
         io_out_all();
-    int r = api->obj_respond_to(saved->ctx, M(obj), (MrSym)id, priv);
+    int r = api->obj_respond_to(saved->ctx, M(obj), (MrSym)id, flags);
     capi_cur = saved;
     if (capi_ios)
         io_in_all();
     if (r < 0)
         capi_unwind();
     return r;
+}
+
+int
+rb_obj_respond_to(VALUE obj, ID id, int priv)
+{
+    return obj_respond_to(obj, id, priv ? 1 : 0);
 }
 
 int
@@ -2384,7 +2392,9 @@ rb_respond_to(VALUE obj, ID id)
 VALUE
 rb_check_funcall(VALUE recv, ID mid, int argc, const VALUE *argv)
 {
-    if (!rb_obj_respond_to(recv, mid, 1))
+    /* The probe reads the method table as the call below does: with no
+       refinement, whatever scope called into the extension. */
+    if (!obj_respond_to(recv, mid, 1 | MR_RESPOND_TO_FUNCALL))
         return Qundef;
     return rb_funcallv(recv, mid, argc, argv);
 }
@@ -3233,7 +3243,7 @@ rb_check_to_integer(VALUE v, const char *method)
 {
     if (RB_INTEGER_TYPE_P(v))
         return v;
-    if (!rb_respond_to(v, rb_intern(method)))
+    if (!obj_respond_to(v, rb_intern(method), 1 | MR_RESPOND_TO_FUNCALL))
         return Qnil;
     VALUE r = rb_funcall(v, rb_intern(method), 0);
     return RB_INTEGER_TYPE_P(r) ? r : Qnil;
@@ -3250,7 +3260,7 @@ rb_check_convert_type(VALUE v, int type, const char *tname, const char *method)
      * `respond_to?` call costs a dispatch. */
     if (RB_SPECIAL_CONST_P(v) && !api->respond_to(ctx(), M(v), method))
         return Qnil;
-    if (!rb_respond_to(v, rb_intern(method)))
+    if (!obj_respond_to(v, rb_intern(method), 1 | MR_RESPOND_TO_FUNCALL))
         return Qnil;
     VALUE r = rb_funcall(v, rb_intern(method), 0);
     if (NIL_P(r))
@@ -4420,8 +4430,11 @@ int
 rb_range_values(VALUE range, VALUE *begp, VALUE *endp, int *exclp)
 {
     if (!RTEST(rb_obj_is_kind_of(range, rb_cRange))) {
-        if (!rb_respond_to(range, rb_intern("begin")) || !rb_respond_to(range, rb_intern("end")) ||
-            !rb_respond_to(range, rb_intern("exclude_end?")))
+        /* rb_check_funcall's probe: private methods count, refinements
+           do not. */
+        const int fl = 1 | MR_RESPOND_TO_FUNCALL;
+        if (!obj_respond_to(range, rb_intern("begin"), fl) || !obj_respond_to(range, rb_intern("end"), fl) ||
+            !obj_respond_to(range, rb_intern("exclude_end?"), fl))
             return 0;
     }
     *begp = rb_funcall(range, rb_intern("begin"), 0);

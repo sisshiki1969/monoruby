@@ -3696,7 +3696,7 @@ impl<'a> JitContext<'a> {
     ///
     /// A helper that resolves an operator at run time asks the nearest
     /// control frame which refinements are active and whether it is the
-    /// Ruby-written core (`Executor::basic_op_refinements`,
+    /// Ruby-written core (`Executor::site_refinements`,
     /// `Executor::dispatch_redefined_op`). A frameless body has no
     /// control frame, so that walk answers for the frame *hosting* it —
     /// right only while the two were written under the same set, on the

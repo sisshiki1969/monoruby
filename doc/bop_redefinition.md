@@ -712,8 +712,15 @@ refinement のメソッドは refinement モジュール側の ClassId に入る
 `(1..3).sum` → 42）。
 
 そこで `find_method` が解決対象の**名前**で分岐するようにした:
-`BASIC_OP_DEFS` の演算子名ならライブラリ境界で歩みを止め
-（`Executor::basic_op_refinements`）、それ以外は従来どおり透過する。
+`BASIC_OP_DEFS` の演算子名ならライブラリ境界で歩みを止め、それ以外は
+従来どおり透過する。
+
+> **その後（#1998, #2029）:** この「名前で分岐」は廃止した。呼び出しサイトの
+> 解決は名前によらず「いま実行中のフレームが書いたスコープ」
+> （`Executor::site_refinements`）で行い、ネイティブフレームと Ruby 製コアの
+> フレームは常に refinement なしになる。`&obj` の `to_proc` のように呼び出し
+> 側のために行う変換だけが、明示的に呼び出し側まで歩く
+> （`Executor::ruby_level_refinements`）。`doc/refinements.md` §6.10 参照。
 
 ### Step 3b — JIT をスコープ単位にする — **実装済み**
 

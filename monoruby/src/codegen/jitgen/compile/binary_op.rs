@@ -161,7 +161,7 @@ impl<'a> JitContext<'a> {
         // `i += 1` is `rb_int_plus` there, and cannot see `Integer#+` being
         // redefined *or* refined at all. The runtime twins of this are
         // `Executor::dispatch_redefined_op` (#1135) and
-        // `Executor::basic_op_refinements` (#1066), which decline for the
+        // `Executor::site_refinements` (#1066), which decline for the
         // same reason; without it, the compiled body of every such method
         // dispatched into the redefinition and returned a silently short
         // result.

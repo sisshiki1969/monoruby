@@ -24,6 +24,25 @@ impl Globals {
         func_id
     }
 
+    /// A native function in no method table: callable only by whoever
+    /// holds the returned `FuncId`. *name* is what backtraces call it.
+    pub(crate) fn define_unbound_builtin_func_with_kw(
+        &mut self,
+        name: &str,
+        address: BuiltinFn,
+        min: usize,
+        max: usize,
+        rest: bool,
+        kw: &[&str],
+        kw_rest: bool,
+    ) -> FuncId {
+        let func_id = self
+            .store
+            .new_builtin_func(name, address, min, max, rest, kw, kw_rest);
+        self.gen_wrapper(func_id);
+        func_id
+    }
+
     fn new_builtin_fn_rest(
         &mut self,
         class_id: ClassId,

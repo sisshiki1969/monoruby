@@ -2197,7 +2197,10 @@ unsafe extern "C" fn mr_obj_respond_to(
         return 0;
     }
     let name = IdentId::from(sym);
-    let include_all = include_all != 0;
+    // Bit 1 (`MR_RESPOND_TO_FUNCALL`): the probe of `rb_check_funcall`,
+    // which finds the method as `rb_funcall` will — with no refinement.
+    let funcall = include_all & 2 != 0;
+    let include_all = include_all & 1 != 0;
     let res = match globals.check_method(recv, IdentId::RESPOND_TO_) {
         // A `respond_to?` of the program's own decides (CRuby's
         // `vm_respond_to`). It is given `include_all` only when that is
@@ -2225,10 +2228,10 @@ unsafe extern "C" fn mr_obj_respond_to(
         // refinements are those of the Ruby code that called into the
         // extension.
         _ => {
-            let set = if globals.store.refinements().is_active() {
-                vm.current_refinements(globals)
-            } else {
+            let set = if funcall {
                 RefinementSetId::EMPTY
+            } else {
+                vm.ruby_level_refinements(globals)
             };
             crate::builtins::basic_obj_respond_to(vm, globals, recv, name, include_all, set)
         }

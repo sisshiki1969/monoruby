@@ -670,6 +670,13 @@ pub struct MrApi {
     /// answered without a call — the method table, then a
     /// `respond_to_missing?` the program defined. 1 or 0, or -1 with an
     /// error pending.
+    ///
+    /// `include_all` is a bit set: bit 0 is the flag above, and bit 1
+    /// (`MR_RESPOND_TO_FUNCALL` in the C header) asks as the probe of
+    /// `rb_check_funcall` does — the method table is read with no
+    /// refinement, as the `rb_funcall` that follows will read it, where
+    /// `rb_obj_respond_to` itself sees the refinements of the Ruby code
+    /// that called into the extension.
     pub obj_respond_to: unsafe extern "C" fn(
         ctx: *mut MrContext,
         v: MrValue,

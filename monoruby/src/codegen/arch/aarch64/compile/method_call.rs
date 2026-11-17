@@ -48,7 +48,12 @@ extern "C" fn find(
     recv: Value,
     func_name: IdentId,
 ) -> Option<FuncId> {
-    vm.find_method(globals, recv, func_name, true)
+    // The inlined `send` has no frame of its own: the frame running is
+    // the one that wrote it, whose refinements `send` honours. Not
+    // `find_method_at_site`: `send(:new)` is `Class#new` the method, not
+    // the `new` of a call site (`Store::site_target`).
+    let set = vm.site_refinements(globals);
+    vm.find_method_in(globals, recv, func_name, true, set)
         .map_err(|err| vm.set_error(err))
         .ok()
 }

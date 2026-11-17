@@ -361,13 +361,13 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             // is `{k: 1}.to_s` in CRuby, the body having no keyword
             // parameters to bind them to.
             if let Some(kw) = kw {
-                return vm.dispatch_symbol_proc_kw(globals, symbol_id, kw.as_val(), &[], bh, None);
+                return vm.call_symbol_proc_kw(globals, symbol_id, kw.as_val(), &[], bh, None);
             }
             return Err(MonorubyErr::argumenterr("no receiver given"));
         };
         // Same dispatch as a yield to this proc — one public-restricted
         // lookup, the arguments still rooted by this frame's slots.
-        return vm.dispatch_symbol_proc_kw(globals, symbol_id, *recv, rest, bh, kw);
+        return vm.call_symbol_proc_kw(globals, symbol_id, *recv, rest, bh, kw);
     }
     let bh = lfp.block();
     let args = lfp.variadic_args();
