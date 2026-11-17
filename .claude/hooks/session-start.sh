@@ -33,7 +33,8 @@ echo "==> cruby: $pin"
 rb="$RBENV_ROOT/plugins/ruby-build"
 if [ ! -f "$rb/share/ruby-build/$pin" ]; then
     echo "--> updating ruby-build (no definition for $pin)"
-    git -C "$rb" fetch --depth 50 --tags origin
+    # By URL: not every image's copy of the plugin has an `origin` remote.
+    git -C "$rb" fetch --depth 50 --tags https://github.com/rbenv/ruby-build.git
     git -C "$rb" checkout --detach "$(git -C "$rb" tag --sort=-v:refname | head -1)"
 fi
 

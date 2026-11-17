@@ -47,8 +47,18 @@ pub(super) fn init(globals: &mut Globals) {
         4,
         false,
     );
-    globals.define_builtin_func_with(ENUMERATOR_CLASS, "with_index", with_index, 0, 1, false);
-    globals.define_builtin_func(ENUMERATOR_CLASS, "with_object", with_object, 1);
+    // `#with_index` / `#with_object` are Ruby (`builtins/enumerator.rb`):
+    // for a source the JIT can see through they call it directly, and
+    // come here for every other one.
+    globals.define_private_builtin_func(ENUMERATOR_CLASS, "__with_index", with_index, 1);
+    globals.define_private_builtin_func(ENUMERATOR_CLASS, "__with_object", with_object, 1);
+    globals.define_private_builtin_func(ENUMERATOR_CLASS, "__direct_source", direct_source, 0);
+    globals.define_private_builtin_func(
+        ENUMERATOR_CLASS,
+        "__source_receiver",
+        source_receiver,
+        0,
+    );
     globals.define_builtin_func(ENUMERATOR_CLASS, "next", next, 0);
     globals.define_builtin_func(ENUMERATOR_CLASS, "next_values", next_values, 0);
     globals.define_builtin_func_rest(ENUMERATOR_CLASS, "each", each);
@@ -114,7 +124,9 @@ enum Backing {
     /// own `each` walks the same terms and is the one the JIT knows, so
     /// it stands in — except for a beginless sequence, where calling
     /// `Range#step` is what raises `#step iteration for beginless ranges
-    /// is meaningless`.
+    /// is meaningless`, and for a sequence whose `each` is no longer the
+    /// builtin one (a singleton `each`, a redefinition), which does not
+    /// stand for what made the sequence (#2036).
     Iterate,
 }
 
@@ -149,7 +161,10 @@ fn receiver(
         let source = match backing {
             Backing::Each => false,
             Backing::Source => true,
-            Backing::Iterate => self_val.as_arithmetic_sequence_inner().begin().is_nil(),
+            Backing::Iterate => {
+                self_val.as_arithmetic_sequence_inner().begin().is_nil()
+                    || direct_source_of(globals, self_val) != DirectSource::SequenceEach
+            }
         };
         // The sequence builds each on first use and keeps it in a hidden
         // instance variable (`builtins/arithmetic_sequence.rb`).
@@ -577,12 +592,14 @@ fn enum_init_method(
 }
 
 ///
-/// ### Enumerator#with_index
+/// ### Enumerator#__with_index
 ///
-/// - with_index(offset = 0) {|(*args), idx| ... } -> object
-/// - with_index(offset = 0) -> Enumerator
+/// - __with_index(offset) {|(*args), idx| ... } -> object
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/with_index.html]
+/// `Enumerator#with_index` with a block, for a source
+/// `Enumerator#__direct_source` does not know: the source runs with a
+/// native adapter block (`enum_adapter_call`). `offset` is the Integer
+/// the Ruby half made of its argument.
 #[monoruby_builtin]
 fn with_index(
     vm: &mut Executor,
@@ -590,35 +607,9 @@ fn with_index(
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    let offset = match lfp.try_arg(0) {
-        // CRuby: `NIL_P(memo) ? 0 : rb_to_int(memo)` — an explicit nil
-        // means 0, a Float truncates, anything else goes through #to_int.
-        None => Value::integer(0),
-        Some(v) if v.is_nil() => Value::integer(0),
-        Some(v) => match v.unpack() {
-            RV::Fixnum(_) | RV::BigInt(_) => v,
-            RV::Float(f) => Value::integer(f as i64),
-            _ => Value::integer(v.coerce_to_int_i64(vm, globals)?),
-        },
-    };
+    let offset = lfp.arg(0);
     let self_val = receiver(vm, globals, lfp.self_val(), Backing::Iterate)?;
-    let Some(bh) = lfp.block() else {
-        // The offset is part of the enumerator's replayed arguments —
-        // `e.with_index(5).to_a` must start at 5 — but only when one was
-        // given: CRuby hands `argc` / `argv` to `RETURN_SIZED_ENUMERATOR`,
-        // so a bare `#with_index` records no argument at all.
-        let args = match lfp.try_arg(0) {
-            Some(_) => vec![offset],
-            None => vec![],
-        };
-        return vm.generate_enumerator_with_size(
-            super::kernel::invoked_name(vm, globals, lfp.self_val(), IdentId::get_id("with_index")),
-            lfp.self_val(),
-            args,
-            pc,
-            self_val.size(),
-        );
-    };
+    let bh = lfp.expect_block()?;
     let res = enum_adapter_call(
         vm,
         globals,
@@ -632,12 +623,12 @@ fn with_index(
 }
 
 ///
-/// ### Enumerator#with_object
+/// ### Enumerator#__with_object
 ///
-/// - with_object(memo) {|(*args), memo| ... } -> memo
-/// - with_object(memo) -> Enumerator
+/// - __with_object(memo) {|(*args), memo| ... } -> memo
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Enumerator/i/with_object.html]
+/// `Enumerator#with_object` with a block, as [`with_index`] is to
+/// `#with_index`.
 #[monoruby_builtin]
 fn with_object(
     vm: &mut Executor,
@@ -647,18 +638,121 @@ fn with_object(
 ) -> Result<Value> {
     let memo = lfp.arg(0);
     let self_val = receiver(vm, globals, lfp.self_val(), Backing::Iterate)?;
-    let Some(bh) = lfp.block() else {
-        return vm.generate_enumerator_with_size(
-            super::kernel::invoked_name(vm, globals, lfp.self_val(), IdentId::get_id("with_object")),
-            lfp.self_val(),
-            vec![memo],
-            pc,
-            self_val.size(),
-        );
-    };
+    let bh = lfp.expect_block()?;
     enum_adapter_call(vm, globals, self_val, bh, memo, WITH_OBJECT_ADAPTER_FUNCID, pc)?;
     // CRuby returns the memo, not the source's return value.
     Ok(memo)
+}
+
+/// What `Enumerator#__direct_source` answers: the builtin iterator the
+/// enumerator's source resolves to, as the Ruby half of `#with_index` /
+/// `#with_object` reads it (`builtins/enumerator.rb`). The order is that
+/// of `Store::record_enum_direct_sources`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(i64)]
+enum DirectSource {
+    /// Anything else: the native adapter runs it.
+    None = 0,
+    /// `Array#each` on an Array.
+    ArrayEach = 1,
+    /// `Array#map` (or `#collect`) on an Array.
+    ArrayMap = 2,
+    /// `ArithmeticSequence#each`, the receiver being the sequence itself.
+    SequenceEach = 3,
+}
+
+///
+/// ### Enumerator#__direct_source
+///
+/// - __direct_source -> Integer
+///
+/// Whether iterating this enumerator is one of the builtin iterators
+/// written in Ruby that yield exactly one value at a time, called with
+/// no argument — a [`DirectSource`] as an Integer. `#with_index` then
+/// calls that method on `__source_receiver` with a block of its own, a
+/// call the JIT inlines together with the block, instead of running the
+/// source with the native adapter, which costs two calls through the
+/// interpreter's generic paths per element (#2020).
+///
+/// The method is looked up on the receiver as the call will look it up,
+/// and only the builtin definition counts: one the program redefined, or
+/// overrode in a subclass or a singleton class, may yield several values,
+/// which the adapter packs into an Array and a one-parameter block would
+/// truncate.
+#[monoruby_builtin]
+fn direct_source(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::integer(direct_source_of(globals, lfp.self_val()) as i64))
+}
+
+fn direct_source_of(globals: &Globals, self_val: Value) -> DirectSource {
+    let (obj, method, wanted) = match self_val.ty() {
+        // What `receiver(.., Backing::Iterate)` iterates for a sequence
+        // with a begin: the sequence's own `each`.
+        Some(ObjTy::ARITHMETIC_SEQUENCE) => {
+            if self_val.as_arithmetic_sequence_inner().begin().is_nil() {
+                return DirectSource::None;
+            }
+            (self_val, IdentId::EACH, &[DirectSource::SequenceEach][..])
+        }
+        Some(ObjTy::ENUMERATOR) => {
+            let e = self_val.as_enumerator_inner();
+            if !e.is_initialized()
+                || !e.args.is_empty()
+                || e.kw_args.is_some_and(|kw| !kw.is_empty())
+                || !e.obj.is_array_ty()
+            {
+                return DirectSource::None;
+            }
+            (
+                e.obj,
+                e.method,
+                &[DirectSource::ArrayEach, DirectSource::ArrayMap][..],
+            )
+        }
+        _ => return DirectSource::None,
+    };
+    let store = &globals.store;
+    let Some(entry) = store.check_method_for_class(obj.class(), method) else {
+        return DirectSource::None;
+    };
+    // The Ruby half calls it with an explicit receiver.
+    if !entry.is_public() {
+        return DirectSource::None;
+    }
+    let Some(fid) = entry.func_id() else {
+        return DirectSource::None;
+    };
+    wanted
+        .iter()
+        .copied()
+        .find(|kind| store.enum_direct_source(*kind as usize - 1) == Some(fid))
+        .unwrap_or(DirectSource::None)
+}
+
+///
+/// ### Enumerator#__source_receiver
+///
+/// - __source_receiver -> object
+///
+/// The object the enumerator iterates, for a source `__direct_source`
+/// recognized.
+#[monoruby_builtin]
+fn source_receiver(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    if self_val.ty() != Some(ObjTy::ENUMERATOR) {
+        return Ok(self_val);
+    }
+    Ok(Enumerator::expect_initialized(self_val)?.obj)
 }
 
 /// Run the enumerator's source with a *native* adapter block
@@ -911,6 +1005,259 @@ mod tests {
             end
             [a.next, a.peek, a.peek, a.next, a.peek, a.next]
             "##,
+        );
+    }
+
+    #[test]
+    fn with_index_direct_sources() {
+        // `Array#each`, `Array#map` / `#collect` and an arithmetic
+        // sequence are called directly by the Ruby half (#2020): what
+        // they answer, the offset, and the ways out of the block.
+        run_test(
+            r#"
+            a = [10, 20, 30]
+            r = []
+            x = a.each.with_index { |v, i| r << [v, i] }
+            y = a.each.with_index(5) { |v, i| r << [v, i] }
+            z = a.each.each_with_index { |v, i| r << [v, i] }
+            [x.equal?(a), y.equal?(a), z.equal?(a), r]
+            "#,
+        );
+        run_test(
+            r#"
+            a = [10, 20, 30]
+            [a.map.with_index(1) { |v, i| v * i }, a.collect.with_index { |v, i| [v, i] },
+             a.map.each_with_index { |v, i| v + i }, a.map.with_index(&:+)]
+            "#,
+        );
+        run_test(
+            r#"
+            r = []
+            w = 1.step(10, 3).with_index { |v, i| r << [v, i] }
+            x = 1.step(10, 3).each_with_index { |v, i| r << [v, i] }
+            y = (1..10).step(3).with_index(1) { |v, i| r << [v, i] }
+            z = 1.0.step(2.0, 0.5).with_index { |v, i| r << [v, i] }
+            1.step(by: 2).with_index { |v, i| r << [v, i]; break if i == 2 }
+            [w, x, y, z, r]
+            "#,
+        );
+        run_test(
+            r#"
+            a = [10, 20, 30]
+            m = []
+            [a.each.with_object(m) { |v, o| o << v }.equal?(m), a.map.with_object([]) { |v, o| o << v * 2 },
+             a.each.each_with_object([]) { |v, o| o << v }, 1.step(7, 3).with_object([]) { |v, o| o << v }, m]
+            "#,
+        );
+        // The offset: nil is 0, a Float truncates, anything else is
+        // `#to_int`, and the count runs on into Bignums.
+        run_test(
+            r#"
+            a = [10, 20]
+            o = Object.new
+            def o.to_int = 7
+            [a.map.with_index(nil) { |v, i| i }, a.map.with_index(2.9) { |v, i| i },
+             a.map.with_index(o) { |v, i| i }, a.map.with_index(2**64) { |v, i| i },
+             a.map.with_index(4611686018427387903) { |v, i| i }]
+            "#,
+        );
+        run_test_error(r#"[1, 2].map.with_index("x") { |v, i| i }"#);
+        run_test_error(r#"[1, 2].each.with_index(1, 2) { }"#);
+        run_test_error(r#"[1, 2].each.each_with_index(1) { }"#);
+        run_test_error(r#"[1, 2].each.with_object { }"#);
+        // `break`, `next`, `return` and an exception leave as they do
+        // from the block of any iterator.
+        run_test(
+            r#"
+            def m(a) = a.each.with_index { |v, i| return [v, i] if i == 2 }
+            a = [10, 20, 30]
+            [a.each.with_index { |v, i| break v * 2 if i == 1 },
+             a.map.with_index { |v, i| next 0 if i == 1; v },
+             m(a),
+             (a.each.with_index { |v, i| raise "boom#{i}" if i == 1 } rescue $!.message),
+             1.step(10, 3).with_index { |v, i| break [v, i] if i == 1 }]
+            "#,
+        );
+        // Block shapes: one parameter, a rest, more than two, a lambda.
+        run_test(
+            r#"
+            a = [[1, 2], [3, 4]]
+            r = []
+            a.each.with_index { |v| r << v }
+            a.each.with_index { |*v| r << v }
+            a.each.with_index { |v, i, j| r << [v, i, j] }
+            a.each.with_index { |(x, y), i| r << [x, y, i] }
+            a.each.with_index { |v, i| r << v.equal?(a[i]) }
+            r << a.map.with_index(&->(v, i) { [v, i] })
+            r << (a.map.with_index(&->(v) { v }) rescue $!.class)
+            r
+            "#,
+        );
+        // Nested, and the Array changing under the iteration.
+        run_test(
+            r#"
+            a = [1, 2, 3, 4]
+            r = []
+            a.each.with_index { |v, i| a.each.with_index(100) { |w, j| r << [i, j] if w == 1 } }
+            a.each.with_index { |v, i| a.pop if i == 0; r << v }
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn with_index_only_calls_builtin_sources_directly() {
+        // A source that is not the builtin iterator may yield any number
+        // of values, which only the adapter packs: a subclass's or a
+        // singleton's `each`, a redefined `Array#each`, a private `map`.
+        run_test(
+            r#"
+            class WiSub < Array
+              def each
+                yield 1, 2
+                yield 3
+              end
+            end
+            class WiPlain < Array; end
+            s = [7, 8]
+            def s.each = yield(:a, :b)
+            r = []
+            WiSub.new([9]).to_enum(:each).with_index { |v, i| r << [v, i] }
+            WiSub.new([9, 8]).map.with_index { |v, i| r << [v, i] }
+            WiSub.new([9, 8]).to_enum(:each).with_object(:m) { |v, m| r << [v, m] }
+            s.to_enum(:each).with_index { |v, i| r << [v, i] }
+            s.to_enum(:each).with_object(:m) { |v, m| r << [v, m] }
+            WiPlain.new([7, 8]).each.with_index { |v, i| r << [v, i] }
+            r << WiPlain.new([7, 8]).map.with_index { |v, i| v + i }.class.name
+            r
+            "#,
+        );
+        run_test(
+            r#"
+            e = [1, 2].each
+            r = []
+            class Array
+              alias __wi_orig_each each
+              def each
+                return to_enum(:each) unless block_given?
+                __wi_orig_each { |x| yield x, x * 10 }
+              end
+            end
+            begin
+              e.with_index { |v, i| r << [v, i] }
+              [5, 6].each.with_index(1) { |v, i| r << [v, i] }
+              [5, 6].each.with_object(:m) { |v, m| r << [v, m] }
+            ensure
+              class Array
+                alias each __wi_orig_each
+              end
+            end
+            [5, 6].each.with_index(1) { |v, i| r << [v, i] }
+            class Array; private :map; end
+            begin
+              r << [5, 6].to_enum(:map).with_index { |v, i| v + i }
+            ensure
+              class Array; public :map; end
+            end
+            r
+            "#,
+        );
+        // A sequence whose `each` is not the builtin one is iterated by
+        // what made it, as CRuby iterates every sequence (#2036).
+        run_test(
+            r#"
+            q = 1.step(7, 3)
+            def q.each = yield(9)
+            q2 = (1..7).step(3)
+            def q2.each = yield(9)
+            r = []
+            r << q.with_index { |v, i| r << [v, i] }
+            r << q.each_with_index { |v, i| r << [v, i] }
+            r << q.with_object(:m) { |v, m| r << [v, m] }
+            r << q2.with_index { |v, i| r << [v, i] }
+            r << q.with_index.to_a
+            r
+            "#,
+        );
+    }
+
+    #[test]
+    fn with_index_adapter_packs_any_number_of_values() {
+        // The adapters read what a source yields out of their frame's
+        // fixed slots (`Lfp::variadic_args`); more values than there are
+        // slots overflow into an Array, and all of them are packed.
+        run_test(
+            r#"
+            a = [1, 2]
+            e = Enumerator.new do |y|
+              y.yield
+              y.yield 1
+              y.yield [1]
+              y.yield 1, 2
+              y.yield a
+              y.yield nil
+              y.yield []
+              y.yield 1, 2, 3, 4, 5, 6, 7, 8
+              y.yield 1, 2, 3, 4, 5, 6, 7, 8, 9
+              y.yield(*(1..20))
+            end
+            r = []
+            e.with_index(10) { |v, i| r << [v, i, v.equal?(a)] }
+            e.each_with_index { |v, i| r << [v, i] }
+            e.with_object(:m) { |v, m| r << [v, m] }
+            r
+            "#,
+        );
+        // Sources the Ruby half does not call directly.
+        run_test(
+            r#"
+            r = []
+            { a: 1 }.each.with_index { |(k, v), i| r << [k, v, i] }
+            r << (1..3).each.with_index(1).to_a
+            r << [1, 2, 3].each_slice(2).with_index.map { |v, i| [v, i] }
+            r << [1, 2, 3].each_with_index.with_index(1).map { |(v, i), j| [v, i, j] }
+            r << [1, 2, 3].select.with_index { |v, i| i != 1 }
+            r << "abc".each_char.with_index.map { |c, i| c * (i + 1) }
+            r << [1, 2, 3].each.with_index.with_index(5).to_a
+            r << [1, 2].lazy.with_index.map { |v, i| v * i }.to_a
+            r << [4, 5].each_with_index.with_object([]) { |(v, i), m| m << v + i }
+            r
+            "#,
+        );
+        // `Lazy` overrides `with_index`, not `each_with_index`, which
+        // stays the eager one (#2038).
+        run_test(
+            r#"
+            r = []
+            x = [1, 2, 3].lazy.each_with_index { |v, i| r << [v, i] }
+            [x, r, [1, 2, 3].lazy.each_with_index.to_a, [1, 2, 3].lazy.with_index(2).to_a,
+             [1, 2, 3].lazy.each_with_object([]) { |v, m| m << v }]
+            "#,
+        );
+    }
+
+    #[test]
+    fn with_index_without_a_block_records_its_argument() {
+        // The Enumerator records the argument as given — it is converted
+        // when the block form runs — and an uninitialized receiver is
+        // wrapped without being looked at (#2034, #2036).
+        run_test(
+            r#"
+            e = [1, 2].each
+            o = Object.new
+            def o.to_int = 7
+            [e.with_index.inspect, e.with_index(nil).inspect, e.with_index(2.9).inspect,
+             e.with_index("x").inspect, e.with_index(o).inspect.sub(/0x\h+/, "XX"),
+             e.with_index(2.9).to_a, e.with_index(nil).to_a, e.with_index(o).to_a,
+             (e.with_index("x").to_a rescue $!.class),
+             e.with_index.size, e.with_index(3).size,
+             e.each_with_index.inspect, e.with_object(:m).inspect, e.each_with_object(:m).inspect,
+             1.step(10, 3).with_index(1).inspect, 1.step(10, 3).each_with_index.inspect,
+             1.step(10, 3).with_index.size,
+             Enumerator.allocate.with_index.inspect,
+             (Enumerator.allocate.with_index { } rescue $!.message),
+             (Enumerator.allocate.with_object(1) { } rescue $!.message)]
+            "#,
         );
     }
 

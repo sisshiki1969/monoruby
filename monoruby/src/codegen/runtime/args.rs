@@ -1067,6 +1067,46 @@ pub(crate) fn positional_invoker(
     }
 }
 
+/// The positional binding of a variadic native (`Lfp::variadic_args`)
+/// handed no more than its fixed slots hold — `send`, `Proc#call`, an
+/// Enumerator adapter run once per element: the arguments, then `None`
+/// up to and including the overflow slot, which sits right after the
+/// fixed ones (a native has no post parameters). Answers `false`, having
+/// stored nothing, for any other callee or count.
+///
+/// These are the stores `fill_positional_args` makes for the same call;
+/// it is on its own so that the yield path can bind such a block body
+/// without the three calls the general binder takes (#2020).
+#[inline]
+pub(crate) fn bind_variadic_native(
+    dst: *mut Option<Value>,
+    callee: &FuncInfo,
+    src: *const Value,
+    len: usize,
+    upward: bool,
+) -> bool {
+    if !callee.native_rest_optional() || callee.post_num() != 0 {
+        return false;
+    }
+    let fixed = callee.reqopt_num();
+    if len < callee.req_num() || len > fixed {
+        return false;
+    }
+    // SAFETY: the callee frame has a slot for every parameter — `fixed`
+    // positional ones and the overflow slot after them — and `src` runs
+    // `len` values in the direction `upward` says.
+    unsafe {
+        for i in 0..len {
+            let v = if upward { *src.add(i) } else { *src.sub(i) };
+            *dst.sub(i) = Some(v);
+        }
+        for i in len..=fixed {
+            *dst.sub(i) = None;
+        }
+    }
+    true
+}
+
 fn fill_positional_args1(dst: *mut Option<Value>, callee: &FuncInfo, buf: &[Value]) -> Result<()> {
     fill_positional_args(dst, callee, buf.as_ptr(), buf.len(), true)
 }
@@ -1123,6 +1163,10 @@ fn fill_positional_args(
         && callee.total_positional_args() == buf_len
     {
         memcpy(dst, 0, buf_ptr, 0..buf_len, upward);
+        return Ok(());
+    }
+
+    if bind_variadic_native(dst, callee, buf_ptr, buf_len, upward) {
         return Ok(());
     }
 
