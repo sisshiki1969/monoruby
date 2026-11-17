@@ -3381,10 +3381,20 @@ num2u64_big(VALUE v, uint64_t *out)
     return 1;
 }
 
+/* The unsigned conversions word a nil differently from `rb_num2long`
+ * (numeric.c `rb_num2ulong_internal`, `rb_num2ull`). */
+static void
+unsigned_nil_check(VALUE v)
+{
+    if (NIL_P(v))
+        rb_raise(rb_eTypeError, "no implicit conversion of nil into Integer");
+}
+
 unsigned long
 rb_num2ulong(VALUE v)
 {
     uint64_t u;
+    unsigned_nil_check(v);
     if (num2u64_big(v, &u))
         return (unsigned long)u;
     return (unsigned long)rb_num2long(v);
@@ -3394,6 +3404,7 @@ unsigned long long
 rb_num2ull(VALUE v)
 {
     uint64_t u;
+    unsigned_nil_check(v);
     if (num2u64_big(v, &u))
         return u;
     if (RB_TYPE_P(v, T_BIGNUM))
@@ -3425,6 +3436,7 @@ rb_fix2int(VALUE v)
 unsigned long
 rb_num2uint(VALUE v)
 {
+    unsigned_nil_check(v);
     long n = rb_num2long(v);
     if (n < INT_MIN || n > (long)UINT_MAX)
         out_of_range(n, "unsigned int");
@@ -3646,41 +3658,42 @@ rb_utf8_str_new_cstr(const char *ptr)
     return rb_utf8_str_new(ptr, (long)strlen(ptr));
 }
 
+/* CRuby's string.c: the external, locale and filesystem constructors are
+ * `rb_external_str_new_with_enc` with the encoding in question. */
 VALUE
 rb_external_str_new(const char *ptr, long len)
 {
-    return rb_utf8_str_new(ptr, len);
+    return rb_external_str_new_with_enc(ptr, len, rb_default_external_encoding());
 }
 
 VALUE
 rb_external_str_new_cstr(const char *ptr)
 {
-    return rb_utf8_str_new_cstr(ptr);
+    return rb_external_str_new_with_enc(ptr, (long)strlen(ptr), rb_default_external_encoding());
 }
 
 VALUE
 rb_locale_str_new(const char *ptr, long len)
 {
-    return rb_utf8_str_new(ptr, len);
+    return rb_external_str_new_with_enc(ptr, len, rb_locale_encoding());
 }
 
 VALUE
 rb_locale_str_new_cstr(const char *ptr)
 {
-    return rb_utf8_str_new_cstr(ptr);
+    return rb_external_str_new_with_enc(ptr, (long)strlen(ptr), rb_locale_encoding());
 }
 
-/* The filesystem encoding is UTF-8 here (`rb_filesystem_encoding`). */
 VALUE
 rb_filesystem_str_new(const char *ptr, long len)
 {
-    return rb_utf8_str_new(ptr, len);
+    return rb_external_str_new_with_enc(ptr, len, rb_filesystem_encoding());
 }
 
 VALUE
 rb_filesystem_str_new_cstr(const char *ptr)
 {
-    return rb_utf8_str_new_cstr(ptr);
+    return rb_external_str_new_with_enc(ptr, (long)strlen(ptr), rb_filesystem_encoding());
 }
 
 VALUE
@@ -4513,16 +4526,22 @@ rb_usascii_encoding(void)
     return encodings[2];
 }
 
+/* `Encoding.find("locale")` / `Encoding.find("filesystem")`: what the
+ * interpreter derived from the environment (US-ASCII under the C locale,
+ * as in CRuby). The locale does not change while the process runs. */
 rb_encoding *
 rb_locale_encoding(void)
 {
-    return rb_utf8_encoding();
+    static rb_encoding *locale;
+    if (!locale)
+        locale = rb_to_encoding(rb_funcall(rb_cEncoding, rb_intern("find"), 1, rb_str_new_cstr("locale")));
+    return locale;
 }
 
 rb_encoding *
 rb_filesystem_encoding(void)
 {
-    return rb_utf8_encoding();
+    return rb_to_encoding(rb_funcall(rb_cEncoding, rb_intern("find"), 1, rb_str_new_cstr("filesystem")));
 }
 
 rb_encoding *
@@ -4757,9 +4776,17 @@ rb_enc_str_new_static(const char *ptr, long len, rb_encoding *enc)
     return rb_enc_str_new(ptr, len, enc);
 }
 
+/* As CRuby's: bytes US-ASCII cannot hold make a BINARY string. (The
+ * conversion to `Encoding.default_internal` is not done.) */
 VALUE
 rb_external_str_new_with_enc(const char *ptr, long len, rb_encoding *enc)
 {
+    if (ptr && enc == rb_usascii_encoding()) {
+        for (long i = 0; i < len; i++) {
+            if ((unsigned char)ptr[i] & 0x80)
+                return rb_str_new(ptr, len);
+        }
+    }
     return rb_enc_str_new(ptr, len, enc);
 }
 

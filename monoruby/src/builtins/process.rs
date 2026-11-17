@@ -139,12 +139,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(klass, "gid=", process_gid_set, 1);
     globals.define_builtin_module_func(klass, "euid=", process_euid_set, 1);
     globals.define_builtin_module_func(klass, "egid=", process_egid_set, 1);
-    // Hidden passwd/group database accessors backing `Etc` (stdlib/etc.rb)
-    // and the String forms of the uid/gid setters.
-    globals.define_builtin_module_func(klass, "__getpwnam", process_getpwnam, 1);
-    globals.define_builtin_module_func(klass, "__getpwuid", process_getpwuid, 1);
-    globals.define_builtin_module_func(klass, "__getgrnam", process_getgrnam, 1);
-    globals.define_builtin_module_func(klass, "__getgrgid", process_getgrgid, 1);
     // wait(2) flag constants.
     globals.set_constant_by_str(klass, "WNOHANG", Value::integer(libc::WNOHANG as i64));
     globals.set_constant_by_str(klass, "WUNTRACED", Value::integer(libc::WUNTRACED as i64));
@@ -856,8 +850,8 @@ fn process_groups_set(
     let mut gids: Vec<libc::gid_t> = Vec::with_capacity(ary.len());
     for v in ary.iter() {
         let gid = if let Some(name) = v.is_str() {
-            match getgr_by_name(name) {
-                Some(g) => g.gid,
+            match gid_by_name(name) {
+                Some(gid) => gid,
                 None => {
                     return Err(MonorubyErr::argumenterr(format!(
                         "can't find group for {name}"
@@ -1876,15 +1870,15 @@ fn resolve_id_arg(_vm: &mut Executor, globals: &mut Globals, v: Value, group: bo
     }
     if let Some(name) = v.is_str() {
         return if group {
-            match getgr_by_name(name) {
-                Some(g) => Ok(g.gid),
+            match gid_by_name(name) {
+                Some(gid) => Ok(gid),
                 None => Err(MonorubyErr::argumenterr(format!(
                     "can't find group for {name}"
                 ))),
             }
         } else {
-            match getpw_by_name(name) {
-                Some(p) => Ok(p.uid),
+            match uid_by_name(name) {
+                Some(uid) => Ok(uid),
                 None => Err(MonorubyErr::argumenterr(format!(
                     "can't find user for {name}"
                 ))),
@@ -1935,160 +1929,28 @@ id_setter!(
 id_setter!(process_euid_set, false, |u| libc::seteuid(u), "seteuid");
 id_setter!(process_egid_set, true, |g| libc::setegid(g), "setegid");
 
-// ----- passwd/group database (backing Etc and the String id setters) -----
+// ----- passwd/group database (the String id setters; `Etc` itself is
+// CRuby's ext/etc, `monoruby_capi/ext/etc`) -----
 
-struct PwEnt {
-    name: String,
-    passwd: String,
-    uid: u32,
-    gid: u32,
-    gecos: String,
-    dir: String,
-    shell: String,
-}
-
-struct GrEnt {
-    name: String,
-    passwd: String,
-    gid: u32,
-    mem: Vec<String>,
-}
-
-/// # Safety
-/// `p` must be a valid pointer returned by getpwnam/getpwuid.
-unsafe fn pw_from_raw(p: *mut libc::passwd) -> PwEnt {
-    // SAFETY: the caller guarantees `p` points at a live passwd record;
-    // the string fields are NUL-terminated C strings owned by libc.
-    unsafe {
-        let cstr = |q: *mut libc::c_char| -> String {
-            if q.is_null() {
-                String::new()
-            } else {
-                std::ffi::CStr::from_ptr(q).to_string_lossy().into_owned()
-            }
-        };
-        PwEnt {
-            name: cstr((*p).pw_name),
-            passwd: cstr((*p).pw_passwd),
-            uid: (*p).pw_uid,
-            gid: (*p).pw_gid,
-            gecos: cstr((*p).pw_gecos),
-            dir: cstr((*p).pw_dir),
-            shell: cstr((*p).pw_shell),
-        }
-    }
-}
-
-/// # Safety
-/// `g` must be a valid pointer returned by getgrnam/getgrgid.
-unsafe fn gr_from_raw(g: *mut libc::group) -> GrEnt {
-    // SAFETY: the caller guarantees `g` points at a live group record.
-    unsafe {
-        let cstr = |q: *mut libc::c_char| -> String {
-            if q.is_null() {
-                String::new()
-            } else {
-                std::ffi::CStr::from_ptr(q).to_string_lossy().into_owned()
-            }
-        };
-        let mut mem = vec![];
-        let mut mp = (*g).gr_mem;
-        while !mp.is_null() && !(*mp).is_null() {
-            mem.push(cstr(*mp));
-            mp = mp.add(1);
-        }
-        GrEnt {
-            name: cstr((*g).gr_name),
-            passwd: cstr((*g).gr_passwd),
-            gid: (*g).gr_gid,
-            mem,
-        }
-    }
-}
-
-fn getpw_by_name(name: &str) -> Option<PwEnt> {
+/// The uid of the user named `name` (getpwnam(3)).
+fn uid_by_name(name: &str) -> Option<u32> {
     let c = std::ffi::CString::new(name).ok()?;
-    // SAFETY: getpwnam returns a pointer to a static passwd entry or NULL.
-    let p = unsafe { libc::getpwnam(c.as_ptr()) };
-    if p.is_null() {
-        None
-    } else {
-        Some(unsafe { pw_from_raw(p) })
+    // SAFETY: getpwnam returns a pointer to a static passwd entry or NULL,
+    // and the entry is read before anything else can overwrite it.
+    unsafe {
+        let p = libc::getpwnam(c.as_ptr());
+        (!p.is_null()).then(|| (*p).pw_uid)
     }
 }
 
-fn getpw_by_uid(uid: u32) -> Option<PwEnt> {
-    // SAFETY: getpwuid returns a pointer to a static passwd entry or NULL.
-    let p = unsafe { libc::getpwuid(uid) };
-    if p.is_null() {
-        None
-    } else {
-        Some(unsafe { pw_from_raw(p) })
-    }
-}
-
-fn getgr_by_name(name: &str) -> Option<GrEnt> {
+/// The gid of the group named `name` (getgrnam(3)).
+fn gid_by_name(name: &str) -> Option<u32> {
     let c = std::ffi::CString::new(name).ok()?;
-    // SAFETY: getgrnam returns a pointer to a static group entry or NULL.
-    let g = unsafe { libc::getgrnam(c.as_ptr()) };
-    if g.is_null() {
-        None
-    } else {
-        Some(unsafe { gr_from_raw(g) })
-    }
-}
-
-fn getgr_by_gid(gid: u32) -> Option<GrEnt> {
-    // SAFETY: getgrgid returns a pointer to a static group entry or NULL.
-    let g = unsafe { libc::getgrgid(gid) };
-    if g.is_null() {
-        None
-    } else {
-        Some(unsafe { gr_from_raw(g) })
-    }
-}
-
-fn pw_to_hash(vm: &mut Executor, globals: &mut Globals, pw: PwEnt) -> Result<Value> {
-    let mut map = rubymap::RubyMap::default();
-    let mut ins = |k: &str, v: Value| -> Result<()> {
-        map.insert(Value::symbol(IdentId::get_id(k)), v, vm, globals)?;
-        Ok(())
-    };
-    ins("name", Value::string(pw.name))?;
-    ins("passwd", Value::string(pw.passwd))?;
-    ins("uid", Value::integer(pw.uid as i64))?;
-    ins("gid", Value::integer(pw.gid as i64))?;
-    ins("gecos", Value::string(pw.gecos))?;
-    ins("dir", Value::string(pw.dir))?;
-    ins("shell", Value::string(pw.shell))?;
-    Ok(Value::hash(map))
-}
-
-fn gr_to_hash(vm: &mut Executor, globals: &mut Globals, gr: GrEnt) -> Result<Value> {
-    let mut map = rubymap::RubyMap::default();
-    let mem = Value::array_from_vec(gr.mem.into_iter().map(Value::string).collect());
-    let mut ins = |k: &str, v: Value| -> Result<()> {
-        map.insert(Value::symbol(IdentId::get_id(k)), v, vm, globals)?;
-        Ok(())
-    };
-    ins("name", Value::string(gr.name))?;
-    ins("passwd", Value::string(gr.passwd))?;
-    ins("gid", Value::integer(gr.gid as i64))?;
-    ins("mem", mem)?;
-    Ok(Value::hash(map))
-}
-
-#[monoruby_builtin]
-fn process_getpwnam(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let name = lfp.arg(0).expect_string(globals)?;
-    match getpw_by_name(&name) {
-        Some(pw) => pw_to_hash(vm, globals, pw),
-        None => Ok(Value::nil()),
+    // SAFETY: getgrnam returns a pointer to a static group entry or NULL,
+    // and the entry is read before anything else can overwrite it.
+    unsafe {
+        let g = libc::getgrnam(c.as_ptr());
+        (!g.is_null()).then(|| (*g).gr_gid)
     }
 }
 
@@ -2098,48 +1960,6 @@ fn process_executable(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr)
         Ok(exe) => Value::string_from_str(&exe.to_string_lossy()),
         Err(_) => Value::nil(),
     })
-}
-
-#[monoruby_builtin]
-fn process_getpwuid(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let uid = lfp.arg(0).coerce_to_int_i64(vm, globals)? as u32;
-    match getpw_by_uid(uid) {
-        Some(pw) => pw_to_hash(vm, globals, pw),
-        None => Ok(Value::nil()),
-    }
-}
-
-#[monoruby_builtin]
-fn process_getgrnam(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let name = lfp.arg(0).expect_string(globals)?;
-    match getgr_by_name(&name) {
-        Some(gr) => gr_to_hash(vm, globals, gr),
-        None => Ok(Value::nil()),
-    }
-}
-
-#[monoruby_builtin]
-fn process_getgrgid(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let gid = lfp.arg(0).coerce_to_int_i64(vm, globals)? as u32;
-    match getgr_by_gid(gid) {
-        Some(gr) => gr_to_hash(vm, globals, gr),
-        None => Ok(Value::nil()),
-    }
 }
 
 #[cfg(test)]
@@ -3395,7 +3215,7 @@ mod new_api_tests {
 
     #[test]
     fn etc_passwd_group_database() {
-        // The hidden __getpw*/__getgr* helpers behind stdlib Etc.
+        // `Etc` is CRuby's ext/etc (monoruby_capi/ext/etc).
         run_test_once(
             r#"
             require "etc"
