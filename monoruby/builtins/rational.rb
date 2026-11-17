@@ -45,8 +45,9 @@ class Rational
     zero? ? nil : self
   end
 
+  # `numeric_to_c`: the Rational itself is the real part.
   def to_c
-    Complex(to_f, 0)
+    Complex.rect(self, 0)
   end
 
   def coerce(other)

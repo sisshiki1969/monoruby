@@ -3616,10 +3616,13 @@ impl AbstractFrame {
                 }
             }
             (LinkMode::C(l), LinkMode::Sf(r, _)) => {
+                // The constant itself goes to the stack: boxing `f`
+                // again would make a heap Float (one that is not a
+                // flonum) that nothing roots (#2059).
                 let (v, f) = if let Some(f) = l.try_float() {
-                    (Value::float(f), f)
+                    (l, f)
                 } else if let Some(i) = l.try_fixnum() {
-                    (Value::integer(i), i as f64)
+                    (l, i as f64)
                 } else {
                     self.const_placement_miss(ir, slot, pc);
                     self.set_Sf_float(slot, r);

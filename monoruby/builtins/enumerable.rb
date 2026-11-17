@@ -963,7 +963,7 @@ module Enumerable
     src = self
     Enumerator::Lazy.new(self, -> { __check_funcall(src, :size, nil) }) do |y, *vals|
       y.yield(*vals)
-    end
+    end.__lazy_unnamed
   end
 
   ##

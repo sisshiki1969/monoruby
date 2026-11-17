@@ -171,13 +171,7 @@ fn complex_polar(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
     } else {
         Real::from(0)
     };
-    // `f_complex_polar_real`: when either part is zero the magnitude type is
-    // preserved (imaginary becomes Float 0.0); otherwise use the float form.
-    if abs.is_zero() || arg.is_zero() {
-        return Ok(Value::complex(abs, Real::from(0.0)));
-    }
-    let c = num::complex::Complex::from_polar(abs.to_f64(), arg.to_f64());
-    Ok(Value::complex(Real::from(c.re), Real::from(c.im)))
+    polar_real(vm, globals, abs.get(), arg.get())
 }
 
 ///
@@ -241,7 +235,10 @@ fn real_component_for_rect(
 /// [https://docs.ruby-lang.org/ja/latest/method/Complex/i/abs.html]
 #[monoruby_builtin]
 fn abs(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_val = lfp.self_val();
+    complex_abs(vm, globals, lfp.self_val())
+}
+
+fn complex_abs(vm: &mut Executor, globals: &mut Globals, self_val: Value) -> Result<Value> {
     let c = self_val.as_complex();
     let (re, im) = (c.re().get(), c.im().get());
     // `rb_complex_abs`: with a zero part the answer is the other part's
@@ -776,6 +773,42 @@ fn is_native_part(v: Value) -> bool {
     v.is_fixnum() || v.is_flonum() || matches!(v.ty(), Some(ObjTy::BIGNUM | ObjTy::FLOAT))
 }
 
+/// Whether a product of two Complex numbers with native parts has a
+/// NaN part, which may come from an infinite part times a zero: CRuby's
+/// `comp_mul` (`safe_mul`) takes such a zero for its sign alone, so the
+/// product is computed again by `native_safe_mul`. Only a heap Float can
+/// be NaN, so an immediate part is one bit test.
+#[inline(always)]
+pub(crate) fn native_product_has_nan(v: &num::complex::Complex<Real>) -> bool {
+    #[inline(never)]
+    fn heap_nan(v: Value) -> bool {
+        v.try_float().is_some_and(f64::is_nan)
+    }
+    (!v.re.get().is_packed_value() && heap_nan(v.re.get()))
+        || (!v.im.get().is_packed_value() && heap_nan(v.im.get()))
+}
+
+#[cold]
+pub(crate) fn native_safe_mul(
+    l: &num::complex::Complex<Real>,
+    r: &num::complex::Complex<Real>,
+) -> Value {
+    let safe = |a: Real, b: Real| {
+        let unit = |x: Real| match x.get().try_float() {
+            Some(f) if !f.is_nan() => Real::from(1.0f64.copysign(f)),
+            _ => x,
+        };
+        let (az, bz) = (a.is_zero(), b.is_zero());
+        let a = if !az && bz { unit(a) } else { a };
+        let b = if !bz && az { unit(b) } else { b };
+        a * b
+    };
+    Value::complex(
+        safe(l.re, r.re) - safe(l.im, r.im),
+        safe(l.re, r.im) + safe(l.im, r.re),
+    )
+}
+
 /// Whether a part of `c` is neither an Integer nor a Float. The
 /// operators ask this of every Complex operand before they compute in
 /// `Real`s, so it is a few tag tests.
@@ -1142,37 +1175,129 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         }
         return pow_by_integer_exp(self_val, i);
     }
-    if let RV::BigInt(b) = rhs.unpack() {
-        use num::ToPrimitive;
-        if let Some(i) = b.to_i64() {
-            return pow_by_integer_exp(self_val, i);
+    if matches!(rhs.unpack(), RV::BigInt(_)) {
+        let c = self_val.as_complex();
+        let (re, im) = (c.re().get(), c.im().get());
+        if let Some(v) = vm.with_temp_scope(|vm| pow_for_special_angle(vm, globals, re, im, rhs))? {
+            return Ok(v);
         }
+        if globals
+            .get_gvar(IdentId::get_id("$VERBOSE"))
+            .is_some_and(|v| !v.is_nil())
+        {
+            vm.ruby_warn_caller(globals, "warning: in a**b, b may be too big")?;
+        }
+        return pow_by_real(vm, globals, self_val, rhs);
     }
+    if let Some(e) = rhs.try_complex() {
+        // `exp(e.re * log r - e.im * theta)` at
+        // `theta * e.re + e.im * log r`.
+        let base = self_val.as_complex().to_complex_f64();
+        let (r, theta) = (base.norm(), base.im.atan2(base.re));
+        let e = e.to_complex_f64();
+        let log_r = r.ln();
+        let nr = (e.re * log_r - e.im * theta).exp();
+        let ntheta = theta * e.re + e.im * log_r;
+        return Ok(polar_f64(nr, ntheta));
+    }
+    if rhs.try_float().is_some() || rhs.try_rational().is_some() {
+        return pow_by_real(vm, globals, self_val, rhs);
+    }
+    // coerce protocol
+    crate::value::coerce::num_coerce_bin(vm, globals, IdentId::_POW, self_val, rhs, "Complex")
+}
 
-    // Non-integer exponents: use f64 polar form.
-    let base = self_val.as_complex().to_complex_f64();
-    let exp = match rhs.unpack() {
-        RV::Float(f) => num::complex::Complex::new(f, 0.0),
-        _ => {
-            if let Some(r) = rhs.try_complex() {
-                r.to_complex_f64()
-            } else if let Some(r) = rhs.try_rational() {
-                num::complex::Complex::new(r.to_f(), 0.0)
-            } else {
-                // coerce protocol
-                return crate::value::coerce::num_coerce_bin(
-                    vm,
-                    globals,
-                    IdentId::_POW,
-                    self_val,
-                    rhs,
-                    "Complex",
-                );
-            }
-        }
+/// `rb_complex_pow` for a real exponent that is not a fixnum:
+/// `abs ** e` at the angle `arg * e`.
+fn pow_by_real(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    e: Value,
+) -> Result<Value> {
+    let c = self_val.as_complex();
+    let cf = c.to_complex_f64();
+    let theta = cf.arg();
+    if let Some(ef) = e.try_float()
+        && !has_exact_part(c)
+    {
+        // Native parts: `abs` is the other part's own magnitude when one
+        // is zero, and `Integer ** Float` / `Float ** Float` of a
+        // non-negative base is `pow` either way.
+        let r = if cf.re == 0.0 {
+            cf.im.abs()
+        } else if cf.im == 0.0 {
+            cf.re.abs()
+        } else {
+            cf.norm()
+        };
+        return Ok(polar_f64(r.powf(ef), theta * ef));
+    }
+    let r = complex_abs(vm, globals, self_val)?;
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(r);
+        let nr = vm.invoke_method_inner(globals, IdentId::_POW, r, &[e], None, None)?;
+        vm.temp_push(nr);
+        let ntheta = f_mul(vm, globals, Value::float(theta), e)?;
+        vm.temp_push(ntheta);
+        polar_real(vm, globals, nr, ntheta)
+    })
+}
+
+/// `polar_real` for a Float magnitude and a Float angle.
+fn polar_f64(x: f64, y: f64) -> Value {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let (re, im) = if x == 0.0 || y == 0.0 {
+        (x, 0.0)
+    } else if y == PI {
+        (-x, 0.0)
+    } else if y == FRAC_PI_2 {
+        (0.0, x)
+    } else if y == FRAC_PI_2 + PI {
+        (0.0, -x)
+    } else {
+        (x * y.cos(), x * y.sin())
     };
-    let result = base.powc(exp);
-    Ok(Value::complex(Real::from(result.re), Real::from(result.im)))
+    Value::complex(Real::from(re), Real::from(im))
+}
+
+/// CRuby's `f_complex_polar_real`: the Complex at magnitude `x` and
+/// angle `y`, both real. A zero magnitude or angle keeps `x` as it is,
+/// and the angles pi, pi/2 and 3pi/2 give exact axes.
+fn polar_real(vm: &mut Executor, globals: &mut Globals, x: Value, y: Value) -> Result<Value> {
+    let real = |globals: &Globals, v: Value| Real::try_from(&globals.store, v);
+    if f_zero_p(vm, globals, x)? || f_zero_p(vm, globals, y)? {
+        return Ok(Value::complex(real(globals, x)?, Real::from(0.0)));
+    }
+    let Some(arg) = y.try_float() else {
+        let yf = y.coerce_to_f64(vm, globals)?;
+        return vm.with_temp_scope(|vm| {
+            let re = f_mul(vm, globals, x, Value::float(yf.cos()))?;
+            vm.temp_push(re);
+            let im = f_mul(vm, globals, x, Value::float(yf.sin()))?;
+            Ok(Value::complex(real(globals, re)?, real(globals, im)?))
+        });
+    };
+    let negate = |vm: &mut Executor, globals: &mut Globals, x: Value| {
+        vm.invoke_method_inner(globals, IdentId::get_id("-@"), x, &[], None, None)
+    };
+    let (re, im) = if arg == std::f64::consts::PI {
+        (negate(vm, globals, x)?, Value::float(0.0))
+    } else if arg == std::f64::consts::FRAC_PI_2 {
+        (Value::float(0.0), x)
+    } else if arg == std::f64::consts::FRAC_PI_2 + std::f64::consts::PI {
+        (Value::float(0.0), negate(vm, globals, x)?)
+    } else if let Some(abs) = x.try_float() {
+        (Value::float(abs * arg.cos()), Value::float(abs * arg.sin()))
+    } else {
+        return vm.with_temp_scope(|vm| {
+            let im = f_mul(vm, globals, x, Value::float(arg.sin()))?;
+            vm.temp_push(im);
+            let re = f_mul(vm, globals, x, Value::float(arg.cos()))?;
+            Ok(Value::complex(real(globals, re)?, real(globals, im)?))
+        });
+    };
+    Ok(Value::complex(real(globals, re)?, real(globals, im)?))
 }
 
 /// Raise a Complex to an integer exponent by repeated multiplication,
@@ -1197,7 +1322,7 @@ fn pow_exact_parts(
         return Ok(Value::complex(c.re(), c.im()));
     }
     vm.with_temp_scope(|vm| {
-        if let Some(v) = pow_for_special_angle(vm, globals, re, im, exp)? {
+        if let Some(v) = pow_for_special_angle(vm, globals, re, im, Value::integer(exp))? {
             return Ok(v);
         }
         // `f_reciprocal` for a negative exponent.
@@ -1248,7 +1373,7 @@ fn pow_for_special_angle(
     globals: &mut Globals,
     re: Value,
     im: Value,
-    exp: i64,
+    exp: Value,
 ) -> Result<Option<Value>> {
     let f_negate = |vm: &mut Executor, globals: &mut Globals, x: Value| {
         vm.invoke_method_inner(globals, IdentId::get_id("-@"), x, &[], None, None)
@@ -1275,17 +1400,27 @@ fn pow_for_special_angle(
         vm.temp_push(x);
         dir += 4;
     }
+    // `exp.div(2)`, `exp.odd?` and `exp % 8` of a fixnum or a bignum.
+    let (half, odd, mod8) = match exp.unpack() {
+        RV::Fixnum(i) => (Value::integer(i.div_euclid(2)), i & 1 == 1, i.rem_euclid(8)),
+        RV::BigInt(b) => {
+            use num::{BigInt, Integer, ToPrimitive};
+            let m = b.mod_floor(&BigInt::from(8)).to_i64().unwrap();
+            (Value::bigint(b.div_floor(&BigInt::from(2))), b.is_odd(), m)
+        }
+        _ => unreachable!(),
+    };
     let pow = IdentId::_POW;
     let zx = if dir % 2 == 0 {
-        vm.invoke_method_inner(globals, pow, x, &[Value::integer(exp)], None, None)?
+        vm.invoke_method_inner(globals, pow, x, &[exp], None, None)?
     } else {
+        vm.temp_push(half);
         let x2 = f_mul(vm, globals, Value::integer(2), x)?;
         vm.temp_push(x2);
         let xx = f_mul(vm, globals, x2, x)?;
         vm.temp_push(xx);
-        let half = Value::integer(exp.div_euclid(2));
         let zx = vm.invoke_method_inner(globals, pow, xx, &[half], None, None)?;
-        if exp.rem_euclid(2) == 1 {
+        if odd {
             vm.temp_push(zx);
             f_mul(vm, globals, zx, x)?
         } else {
@@ -1303,8 +1438,8 @@ fn pow_for_special_angle(
         (0, -1),
         (1, -1),
     ];
-    let (dr, di) = DIRS[(dir as i128 * exp as i128).rem_euclid(8) as usize];
-    let mut part = |vm: &mut Executor, globals: &mut Globals, d: i8| -> Result<Value> {
+    let (dr, di) = DIRS[(dir as i64 * mod8).rem_euclid(8) as usize];
+    let part = |vm: &mut Executor, globals: &mut Globals, d: i8| -> Result<Value> {
         Ok(match d {
             1 => zx,
             -1 => {

@@ -184,7 +184,6 @@ pub(super) fn init(globals: &mut Globals) {
     let stdout = Value::new_io_stdout();
     globals.set_constant_by_str(OBJECT_CLASS, "STDOUT", stdout);
     globals.set_gvar(IdentId::get_id("$stdout"), stdout);
-    globals.set_gvar(IdentId::get_id("$>"), stdout);
 
     let stderr = Value::new_io_stderr();
     globals.set_constant_by_str(OBJECT_CLASS, "STDERR", stderr);
@@ -1440,6 +1439,57 @@ fn ends_with_ascii_newline(bytes: &[u8], enc: crate::value::Encoding) -> bool {
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/puts.html]
 #[monoruby_builtin]
 fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    io_puts(vm, globals, lfp.self_val(), lfp.arg(0).as_array())
+}
+
+/// `rb_io_writev`'s warning for a `write` that takes exactly one
+/// argument, shown under `$VERBOSE` (and the deprecated category) unless
+/// `out` is `$stderr`.
+pub(crate) fn warn_unary_write(vm: &mut Executor, globals: &mut Globals, out: Value) -> Result<()> {
+    if !globals
+        .get_gvar(IdentId::GVAR_VERBOSE)
+        .is_some_and(|v| v.as_bool())
+        || globals
+            .get_gvar(IdentId::GVAR_STDERR)
+            .is_some_and(|e| e.id() == out.id())
+    {
+        return Ok(());
+    }
+    let singleton = globals.store[out.class()]
+        .get_module()
+        .is_singleton()
+        .is_some();
+    let (name, sep) = if singleton {
+        (out.inspect(&globals.store), '.')
+    } else {
+        (out.get_real_class_name(&globals.store), '#')
+    };
+    let loc = vm
+        .nearest_caller_location(&globals.store)
+        .map(|l| format!("{l}: "))
+        .unwrap_or_default();
+    vm.warn_deprecated(
+        globals,
+        &format!(
+            "{loc}warning: {name}{sep}write is outdated interface which accepts just one argument"
+        ),
+    )
+}
+
+/// Whether `fid` is IO's own `write`.
+pub(crate) fn is_builtin_write(globals: &Globals, fid: FuncId) -> bool {
+    let builtin_write: BuiltinFn = io_write_method;
+    globals.store[fid].native_address() == Some(builtin_write as *const u8 as u64)
+}
+
+/// CRuby's `rb_io_puts` on `out`, which need not be an IO: every line
+/// goes to its `#write`.
+pub(crate) fn io_puts(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    out: Value,
+    args: Array,
+) -> Result<Value> {
     // CRuby's rb_io_puts: a real Array recurses; any other non-String is
     // first offered `#to_ary` (an Array result recurses, `nil` falls back
     // to `#to_s`, anything else is the usual conversion TypeError).
@@ -1500,7 +1550,6 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     }
     vm.with_temp_scope(|vm| {
         let mut seen = Vec::new();
-        let args = lfp.arg(0).as_array();
         let no_args = args.is_empty();
         vm.temp_array_new(None);
         let root_idx = vm.temp_len() - 1;
@@ -1508,8 +1557,19 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             decompose(vm, globals, root_idx, v, &mut seen)?;
         }
 
-        let self_val = lfp.self_val();
+        let self_val = out;
         let write_id = IdentId::get_id("write");
+        // `rb_io_writev(out, [line, "\n"])`: IO's own `write` takes the
+        // two at once, which is one String here; a `write` of another's
+        // gets them as two arguments, or in two calls when it takes
+        // exactly one.
+        let (own_write, unary) = match globals.check_method(out, write_id) {
+            Some(fid) => (
+                is_builtin_write(globals, fid),
+                globals.store[fid].arity() == 1,
+            ),
+            None => (false, false),
+        };
         if no_args {
             // puts with no args writes a newline. (An empty *array* argument
             // decomposes to nothing and writes nothing — only the genuinely
@@ -1536,6 +1596,29 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 // than one byte, and appends `rb_default_rs` — a
                 // US-ASCII newline — when it does not.
                 let needs_newline = !ends_with_ascii_newline(&bytes, enc);
+                if !own_write {
+                    if bytes.is_empty() {
+                        let nl = Value::string_from_str("\n");
+                        vm.invoke_method_inner(globals, write_id, out, &[nl], None, None)?;
+                        continue;
+                    }
+                    let line = Value::string_from_inner(RStringInner::from_encoding(&bytes, enc));
+                    vm.temp_push(line);
+                    if !needs_newline {
+                        vm.invoke_method_inner(globals, write_id, out, &[line], None, None)?;
+                        continue;
+                    }
+                    let nl = Value::string_from_str("\n");
+                    vm.temp_push(nl);
+                    if unary {
+                        warn_unary_write(vm, globals, out)?;
+                        vm.invoke_method_inner(globals, write_id, out, &[line], None, None)?;
+                        vm.invoke_method_inner(globals, write_id, out, &[nl], None, None)?;
+                    } else {
+                        vm.invoke_method_inner(globals, write_id, out, &[line, nl], None, None)?;
+                    }
+                    continue;
+                }
                 let (line, extra) = if needs_newline && enc.is_ascii_compatible() {
                     let mut b = bytes;
                     b.push(b'\n');
@@ -1568,46 +1651,42 @@ fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/print.html]
 #[monoruby_builtin]
 fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_val = lfp.self_val();
-    let write_id = IdentId::get_id("write");
-    // Each object goes through `#to_s` (never `#to_str`); the output
-    // field separator `$,` goes between objects and the output record
-    // separator `$\` is appended, both only when non-nil (CRuby).
-    let to_str_val = |vm: &mut Executor, globals: &mut Globals, v: Value| -> Result<Value> {
-        if v.is_rstring().is_some() {
-            Ok(v)
-        } else {
-            let s = vm.to_s(globals, v)?;
-            Ok(Value::string(s))
-        }
-    };
-    let sep = Some(globals.ofs()).filter(|v| !v.is_nil());
-    let rs = Some(globals.ors()).filter(|v| !v.is_nil());
-    let args = lfp.arg(0).as_array();
-    if args.is_empty() {
-        // `print` with no arguments writes `$_` (the caller's frame-local
-        // last-read line; resolved past this native frame). A nil `$_`
-        // still writes `$\`.
-        let lastline = vm.get_last_read_line();
-        if !lastline.is_nil() {
-            let sv = to_str_val(vm, globals, lastline)?;
-            vm.invoke_method_inner(globals, write_id, self_val, &[sv], None, None)?;
-        }
-    } else {
-        for (i, v) in args.iter().cloned().enumerate() {
-            if i > 0 && let Some(sep) = sep {
-                let sv = to_str_val(vm, globals, sep)?;
-                vm.invoke_method_inner(globals, write_id, self_val, &[sv], None, None)?;
-            }
-            let str_val = to_str_val(vm, globals, v)?;
-            vm.invoke_method_inner(globals, write_id, self_val, &[str_val], None, None)?;
-        }
-    }
-    if let Some(rs) = rs {
-        let sv = to_str_val(vm, globals, rs)?;
-        vm.invoke_method_inner(globals, write_id, self_val, &[sv], None, None)?;
-    }
+    io_print(vm, globals, lfp.self_val(), &lfp.arg(0).as_array())?;
     Ok(Value::nil())
+}
+
+/// CRuby's `rb_io_print` on `out`, which need not be an IO: each object
+/// is handed to its `#write` as it is (`#write` converts it), the output
+/// field separator `$,` between objects and the output record separator
+/// `$\` after them, both only when non-nil. With no objects it writes
+/// `$_`, the caller's frame-local last-read line (resolved past this
+/// native frame), nil included.
+pub(crate) fn io_print(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    out: Value,
+    args: &[Value],
+) -> Result<()> {
+    let write_id = IdentId::get_id("write");
+    let lastline;
+    let args = if args.is_empty() {
+        lastline = [vm.get_last_read_line()];
+        &lastline[..]
+    } else {
+        args
+    };
+    for (i, v) in args.iter().cloned().enumerate() {
+        let sep = globals.ofs();
+        if i > 0 && !sep.is_nil() {
+            vm.invoke_method_inner(globals, write_id, out, &[sep], None, None)?;
+        }
+        vm.invoke_method_inner(globals, write_id, out, &[v], None, None)?;
+    }
+    let rs = globals.ors();
+    if !rs.is_nil() {
+        vm.invoke_method_inner(globals, write_id, out, &[rs], None, None)?;
+    }
+    Ok(())
 }
 
 ///

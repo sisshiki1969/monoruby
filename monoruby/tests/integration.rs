@@ -253,6 +253,7 @@ mod symbol_proc_no_receiver;
 mod system_exit_status;
 mod time_interval;
 mod time_timezone;
+mod to_c_enum_size_integer_complex_pow_stdout_lazy;
 mod tr_wide_replacement;
 mod type_error_names;
 mod usascii_8bit_symbol;

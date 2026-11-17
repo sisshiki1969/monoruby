@@ -41,7 +41,9 @@ pub(super) fn init(globals: &mut Globals) -> Module {
         inline_gen2!(kernel_not_match),
         1,
     );
-    //globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
+    globals.define_builtin_module_func_rest(kernel_class, "puts", puts);
+    globals.define_private_builtin_func(kernel_class, "__p_write", p_write, 1);
+    globals.define_private_builtin_func(kernel_class, "__p_flush", p_flush, 0);
     globals.define_builtin_module_func(kernel_class, "gets", gets, 0);
     globals.define_builtin_module_func_rest(kernel_class, "print", print);
     globals.define_builtin_module_func_with_effect(
@@ -649,52 +651,6 @@ fn kernel_block_given(
 }
 
 ///
-/// ### Kernel.#puts
-///
-/// - puts(*arg) -> nil
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
-#[monoruby_builtin]
-fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    fn decompose(collector: &mut Vec<Value>, val: Value) {
-        match val.try_array_ty() {
-            Some(ary) => {
-                ary.iter().for_each(|v| decompose(collector, *v));
-            }
-            None => collector.push(val),
-        }
-    }
-    let mut collector = Vec::new();
-    for v in lfp.arg(0).as_array().iter().cloned() {
-        decompose(&mut collector, v);
-    }
-
-    let to_s_id = IdentId::get_id("to_s");
-    for v in collector {
-        // Non-String values stringify through their (possibly
-        // user- or Ruby-defined) `to_s` method, matching CRuby's
-        // `rb_obj_as_string`; the Rust-side fallback only handles
-        // objects whose `to_s` returns a non-String.
-        if v.is_rstring().is_some() {
-            globals.print_value(v)?;
-        } else {
-            let s = vm.invoke_method_inner(globals, to_s_id, v, &[], None, None)?;
-            if s.is_rstring().is_some() {
-                globals.print_value(s)?;
-            } else {
-                globals.print_value(v)?;
-            }
-        }
-        globals.write_stdout(b"\n")?;
-    }
-    // No flush: `rb_io_puts` is ordinary buffered output, so on a
-    // non-TTY stdout the bytes wait for the buffer to fill, an explicit
-    // `#flush`, a fork, or exit. (`Kernel#p` below does flush, as CRuby's
-    // `rb_p` does.)
-    Ok(Value::nil())
-}
-
-///
 /// ### Kernel.#gets
 ///
 /// - gets([NOT SUPPORTED]rs = $/) -> String | nil
@@ -834,25 +790,77 @@ fn backtrace_limit(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/print.html]
 #[monoruby_builtin]
 fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // `rb_f_print` is `rb_io_print(args, $stdout)`: it writes through
+    // `$stdout.write` rather than calling `$stdout.print`, which an
+    // object without its own `print` would answer with this method.
+    let stdout = globals.get_gvar(IdentId::GVAR_STDOUT).unwrap_or_default();
+    super::io::io_print(vm, globals, stdout, &lfp.arg(0).as_array())?;
+    Ok(Value::nil())
+}
+
+///
+/// ### Kernel.#puts
+///
+/// - puts(*arg) -> nil
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/puts.html]
+#[monoruby_builtin]
+fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // `rb_f_puts`: called on `$stdout` itself (which is how an object
+    // without its own `puts` gets here) it is `rb_io_puts`, writing
+    // through `#write`; otherwise it calls `$stdout.puts`, private or not.
+    let stdout = globals.get_gvar(IdentId::GVAR_STDOUT).unwrap_or_default();
     let args = lfp.arg(0).as_array();
-    // Delegate to `$stdout.print` so output-stream reassignment is
-    // honoured (and so the `IO#print` write path stays the single
-    // source of truth), reading `$stdout` dynamically each call.
-    let stdout = globals
-        .get_gvar(IdentId::get_id("$stdout"))
-        .unwrap_or_default();
-    let print_id = IdentId::get_id("print");
-    if args.len() == 0 {
-        // `print` with no arguments writes `$_` (the caller's
-        // frame-local last-read line). `vm.get_last_read_line` resolves
-        // the LEP past this native frame, so it sees the Ruby caller's
-        // `$_`, not print's own. Passed down explicitly (a nil `$_`
-        // prints as "") so `IO#print` still appends `$\`.
-        let lastline = vm.get_last_read_line();
-        vm.invoke_method_inner(globals, print_id, stdout, &[lastline], None, None)?;
+    if stdout.id() == lfp.self_val().id() {
+        return super::io::io_puts(vm, globals, stdout, args);
+    }
+    vm.invoke_method_inner(globals, IdentId::get_id("puts"), stdout, &args, None, None)?;
+    Ok(Value::nil())
+}
+
+/// `rb_p_write`: `str` and a newline to `$stdout.write`, in one call
+/// unless that `write` takes exactly one argument.
+#[monoruby_builtin]
+fn p_write(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let stdout = globals.get_gvar(IdentId::GVAR_STDOUT).unwrap_or_default();
+    let write_id = IdentId::get_id("write");
+    let s = lfp.arg(0);
+    let Some(fid) = globals.check_method(stdout, write_id) else {
+        // No `write`: the call raises NoMethodError.
+        vm.invoke_method_inner(globals, write_id, stdout, &[s], None, None)?;
+        return Ok(Value::nil());
+    };
+    // IO's own `write` gets the line and its newline as one String.
+    if super::io::is_builtin_write(globals, fid)
+        && let Some(inner) = s.is_rstring_inner()
+        && inner.encoding().is_ascii_compatible()
+    {
+        let mut bytes = inner.as_bytes().to_vec();
+        bytes.push(b'\n');
+        let line = Value::string_from_inner(RStringInner::from_encoding(&bytes, inner.encoding()));
+        vm.invoke_func_inner(globals, fid, stdout, &[line], None, None)?;
+        return Ok(Value::nil());
+    }
+    let nl = Value::string_from_str("\n");
+    vm.temp_push(nl);
+    let res = if globals.store[fid].arity() == 1 {
+        super::io::warn_unary_write(vm, globals, stdout)
+            .and_then(|_| vm.invoke_func_inner(globals, fid, stdout, &[s], None, None))
+            .and_then(|_| vm.invoke_func_inner(globals, fid, stdout, &[nl], None, None))
     } else {
-        let argvec: Vec<Value> = args.iter().cloned().collect();
-        vm.invoke_method_inner(globals, print_id, stdout, &argvec, None, None)?;
+        vm.invoke_func_inner(globals, fid, stdout, &[s, nl], None, None)
+    };
+    vm.temp_pop();
+    res?;
+    Ok(Value::nil())
+}
+
+/// `rb_p_result`'s flush, done only when `$stdout` is an IO.
+#[monoruby_builtin]
+fn p_flush(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
+    let stdout = globals.get_gvar(IdentId::GVAR_STDOUT).unwrap_or_default();
+    if stdout.is_kind_of(&globals.store, IO_CLASS) {
+        vm.invoke_method_inner(globals, IdentId::get_id("flush"), stdout, &[], None, None)?;
     }
     Ok(Value::nil())
 }
@@ -2000,15 +2008,18 @@ fn kernel_integer(
         Some(v) => bool_expected(&globals.store, "exception", v)?,
         None => true,
     };
-    match kernel_integer_inner(vm, globals, lfp) {
+    let arg0 = lfp.arg(0);
+    if arg0.is_fixnum() && lfp.try_arg(1).is_none() {
+        return Ok(arg0);
+    }
+    // `hard` is set around the steps whose errors `exception: false`
+    // does not turn into nil on CRuby either: the radix, `to_str` (and
+    // what it answers), an ASCII-incompatible String.
+    let mut hard = false;
+    match kernel_integer_inner(vm, globals, lfp, exception, &mut hard) {
         Ok(v) => Ok(v),
-        Err(e) => {
-            if exception {
-                Err(e)
-            } else {
-                Ok(Value::nil())
-            }
-        }
+        Err(e) if exception || hard => Err(e),
+        Err(_) => Ok(Value::nil()),
     }
 }
 
@@ -2038,7 +2049,13 @@ fn kernel_must_ascii_compatible(globals: &Globals, s: &RStringInner) -> Result<(
     ))
 }
 
-fn kernel_integer_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
+fn kernel_integer_inner(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    exception: bool,
+    hard: &mut bool,
+) -> Result<Value> {
     let arg0 = lfp.arg(0);
     // nil -> TypeError ("can't convert nil into Integer"), always; under
     // `exception: false` the outer wrapper turns this into nil.
@@ -2049,23 +2066,30 @@ fn kernel_integer_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> R
     // the string's prefix; 2..=36 = forced base, with the prefix
     // optional — `Integer("0x42", 16)` is ok but `("0x42", 10)` errors).
     let base = if let Some(b) = lfp.try_arg(1) {
+        *hard = true;
         let b = b.coerce_to_int_i64(vm, globals)?;
         if b < 0 || b > 36 || b == 1 {
             return Err(MonorubyErr::argumenterr(format!("invalid radix {}", b)));
         }
+        *hard = false;
         Some(b as u32)
     } else {
         None
     };
     if base.is_some() && !matches!(arg0.unpack(), RV::String(_)) {
-        // With an explicit base only Strings (and #to_str convertibles,
-        // handled below) are acceptable.
-        if let Some(result) = crate::coerce::check_funcall(vm, globals, arg0, IdentId::TO_STR)? {
-            if let Some(s) = result.is_str() {
-                return parse_kernel_integer(s, base.unwrap_or(0));
-            }
+        // With an explicit base only Strings (and #to_str convertibles)
+        // are acceptable.
+        *hard = true;
+        if let Some(s) = arg0.check_string_type(vm, globals)? {
+            let s = s.as_rstring_inner();
+            kernel_must_ascii_compatible(globals, s)?;
+            *hard = false;
+            return parse_kernel_integer(s.check_utf8()?, base.unwrap_or(0));
         }
-        return Err(MonorubyErr::argumenterr("base specified for non string value"));
+        *hard = false;
+        return Err(MonorubyErr::argumenterr(
+            "base specified for non string value",
+        ));
     }
     match arg0.unpack() {
         RV::Fixnum(num) => return Ok(Value::integer(num)),
@@ -2089,49 +2113,75 @@ fn kernel_integer_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> R
             return Ok(Value::bigint(t.to_bigint().unwrap()));
         }
         RV::String(b) => {
+            *hard = true;
             kernel_must_ascii_compatible(globals, b)?;
+            *hard = false;
             let s = b.check_utf8()?;
             return parse_kernel_integer(s, base.unwrap_or(0));
         }
         _ => {}
     };
-    // Try to_int coercion. If it returns a non-Integer (or nil), fall
-    // through to `to_i` instead of erroring immediately (CRuby semantics).
-    if let Some(result) = crate::coerce::check_funcall(vm, globals, arg0, IdentId::TO_INT)? {
-        match result.unpack() {
-            RV::Fixnum(i) => return Ok(Value::integer(i)),
-            RV::BigInt(b) => return Ok(Value::bigint(b.clone())),
-            _ => {}
+    // `rb_convert_to_integer`: `to_int` is tried under `rb_protect`, so
+    // whatever it raises is dropped and the other conversions follow; a
+    // non-Integer answer is passed over the same way.
+    match crate::coerce::check_funcall(vm, globals, arg0, IdentId::TO_INT) {
+        Ok(Some(result)) if result.is_integer() => {
+            return Ok(result);
         }
+        Ok(_) => {}
+        Err(e) if swallowed_by_protect(&e) => {}
+        Err(e) => return Err(e),
     }
-    // Then #to_str (an object convertible to a String parses like one) —
-    // preferred over #to_i (CRuby).
-    if let Some(result) = crate::coerce::check_funcall(vm, globals, arg0, IdentId::TO_STR)? {
-        if let Some(s) = result.is_str() {
-            return parse_kernel_integer(s, 0);
-        }
+    // Then #to_str (`rb_check_string_type`: a non-String answer other
+    // than nil is a TypeError) — preferred over #to_i.
+    *hard = true;
+    if let Some(s) = arg0.check_string_type(vm, globals)? {
+        let s = s.as_rstring_inner();
+        kernel_must_ascii_compatible(globals, s)?;
+        *hard = false;
+        return parse_kernel_integer(s.check_utf8()?, 0);
     }
-    // Try to_i coercion as a fallback
-    let to_i_id = IdentId::get_id("to_i");
-    if let Some(func_id) = globals.check_method(arg0, to_i_id) {
-        let result = vm.invoke_func_inner(globals, func_id, arg0, &[], None, None)?;
-        match result.unpack() {
-            RV::Fixnum(i) => return Ok(Value::integer(i)),
-            RV::BigInt(b) => return Ok(Value::bigint(b.clone())),
-            _ => {
-                return Err(MonorubyErr::typeerr(format!(
-                    "can't convert {} to Integer ({}#to_i gives {})",
-                    arg0.get_real_class_name(globals),
-                    arg0.get_real_class_name(globals),
-                    result.get_real_class_name(globals),
-                )));
-            }
-        }
+    *hard = false;
+    // `to_i`, also asked with `rb_check_funcall` (a `respond_to?` of the
+    // object's own can refuse it). Under `exception: false` it is
+    // protected like `to_int`, and anything but an Integer is nil.
+    let to_i = crate::coerce::check_funcall(vm, globals, arg0, IdentId::get_id("to_i"));
+    if !exception {
+        return Ok(match to_i {
+            Ok(Some(r)) if r.is_integer() => r,
+            Ok(_) => Value::nil(),
+            Err(e) if swallowed_by_protect(&e) => Value::nil(),
+            Err(e) => return Err(e),
+        });
     }
-    Err(MonorubyErr::typeerr(format!(
-        "can't convert {} into Integer",
-        arg0.builtin_class_name(globals),
-    )))
+    match to_i? {
+        Some(result) if result.is_integer() => Ok(result),
+        Some(result) => Err(MonorubyErr::typeerr(format!(
+            "can't convert {} to Integer ({}#to_i gives {})",
+            arg0.get_real_class_name(globals),
+            arg0.get_real_class_name(globals),
+            result.get_real_class_name(globals),
+        ))),
+        None => Err(MonorubyErr::typeerr(format!(
+            "can't convert {} into Integer",
+            arg0.builtin_class_name(globals),
+        ))),
+    }
+}
+
+/// What `rb_protect` stops: an exception and a `throw` (CRuby drops
+/// both). The frame-bound unwinds (`return` / `break` / `retry` /
+/// `redo`), a fiber kill and a fatal error pass through.
+fn swallowed_by_protect(e: &MonorubyErr) -> bool {
+    !matches!(
+        e.kind,
+        MonorubyErrKind::MethodReturn(..)
+            | MonorubyErrKind::BlockBreak(..)
+            | MonorubyErrKind::Retry
+            | MonorubyErrKind::Redo
+            | MonorubyErrKind::FiberKill
+            | MonorubyErrKind::Fatal
+    )
 }
 
 /// Parse `s` as an integer literal the way `Kernel#Integer(s, base)`

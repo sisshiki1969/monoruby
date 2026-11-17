@@ -2430,34 +2430,22 @@ fn array_join(
             visited.remove(&inner_ary.id());
             continue;
         }
-        // Conversion order: to_str -> to_ary -> to_s
-        if let Some(ret) = crate::coerce::check_funcall(vm, globals, *v, IdentId::TO_STR)? {
-            if let Some(inner) = ret.is_rstring_inner() {
-                append_string(out, state, inner, &globals.store)?;
-                continue;
-            }
-            if !ret.is_nil() {
-                let inner = RStringInner::from_str_scanned(&ret.to_s(&globals.store));
-                append_string(out, state, &inner, &globals.store)?;
-                continue;
-            }
+        // Conversion order: to_str -> to_ary -> to_s, the first two by
+        // `rb_check_string_type` / `rb_check_array_type` (an answer of
+        // the wrong class other than nil is a TypeError).
+        if let Some(ret) = v.check_string_type(vm, globals)? {
+            append_string(out, state, ret.as_rstring_inner(), &globals.store)?;
+            continue;
         }
-        if let Some(ret) = crate::coerce::check_funcall(vm, globals, *v, IdentId::TO_ARY)? {
-            if let Some(inner_ary) = ret.try_array_ty() {
-                if !visited.insert(inner_ary.id()) {
-                    return Err(MonorubyErr::argumenterr("recursive array join"));
-                }
-                array_join(
-                    vm, globals, inner_ary, sep, sep_enc, sep_cr, visited, out, state,
-                )?;
-                visited.remove(&inner_ary.id());
-                continue;
+        if let Some(inner_ary) = v.check_array_type(vm, globals)? {
+            if !visited.insert(inner_ary.id()) {
+                return Err(MonorubyErr::argumenterr("recursive array join"));
             }
-            if !ret.is_nil() {
-                let inner = RStringInner::from_str_scanned(&ret.to_s(&globals.store));
-                append_string(out, state, &inner, &globals.store)?;
-                continue;
-            }
+            array_join(
+                vm, globals, inner_ary, sep, sep_enc, sep_cr, visited, out, state,
+            )?;
+            visited.remove(&inner_ary.id());
+            continue;
         }
         if let Some(fid) = globals.check_method(*v, IdentId::TO_S) {
             let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
