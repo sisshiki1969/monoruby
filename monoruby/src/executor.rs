@@ -6839,9 +6839,6 @@ impl<'a, 'b> alloc::GC<RValue> for Root<'a, 'b> {
         // thread's, while a green thread is the one triggering GC) are
         // reachable only through the scheduler registry.
         crate::scheduler::mark(alloc);
-        // The markers of dropped elided locals: compiled code holds them
-        // as constants, and a frame may hold one in a local.
-        crate::elided_local::mark(alloc);
     }
 }
 

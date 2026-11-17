@@ -82,9 +82,6 @@ pub(crate) struct Vm {
     ivar_tys: RefCell<crate::ivar_ty::IvarTyTable>,
     /// The `is_a?` answers compiled units assumed (`ancestry::ANCESTRY`).
     ancestry: RefCell<crate::ancestry::AncestryTable>,
-    /// The markers of the elided objects compiled code dropped from a
-    /// local (`elided_local::ELIDED_LOCALS`).
-    elided_locals: RefCell<crate::elided_local::ElidedLocals>,
     /// Where `codegen` keeps the VM's class-version word; null until
     /// `codegen` exists. See [`class_version`].
     class_version_word: Cell<*const u32>,
@@ -116,7 +113,6 @@ impl Vm {
             owned_fds: RefCell::new(crate::HashSet::default()),
             ivar_tys: RefCell::new(Default::default()),
             ancestry: RefCell::new(Default::default()),
-            elided_locals: RefCell::new(Default::default()),
             class_version_word: Cell::new(std::ptr::null()),
         }
     }
@@ -413,9 +409,4 @@ pub(crate) fn ivar_tys(vm: &Vm) -> &RefCell<crate::ivar_ty::IvarTyTable> {
 /// Field projection for [`crate::ancestry::ANCESTRY`].
 pub(crate) fn ancestry(vm: &Vm) -> &RefCell<crate::ancestry::AncestryTable> {
     &vm.ancestry
-}
-
-/// Field projection for [`crate::elided_local::ELIDED_LOCALS`].
-pub(crate) fn elided_locals(vm: &Vm) -> &RefCell<crate::elided_local::ElidedLocals> {
-    &vm.elided_locals
 }

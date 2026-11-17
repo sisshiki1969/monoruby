@@ -816,6 +816,97 @@ impl TraceIr {
     }
 
     ///
+    /// Whether the interpreter, running this instruction, may send a
+    /// message: call a method looked up by name on a value of the frame,
+    /// which a program can make `binding` or `eval` under another name
+    /// (`alias_method :-@, :binding`; `alias_method :[], :eval`), or run a
+    /// block (`yield` to `&:name`). Such a callee sees every local of the
+    /// frame that executes the instruction, so the frame liveness
+    /// (`SlotAnalysis::frame_live_out`, `doc/escape_analysis.md` §12)
+    /// counts the instruction as a read of every local.
+    ///
+    /// Exhaustive by construction: a new instruction has to say which it
+    /// is. The ones that answer `false` run no method of the program:
+    /// control flow, moves, literals, and the variable loads and stores
+    /// that reach no hook. (A constant load can run `const_missing` or an
+    /// autoload, a global store a `trace_var` hook, a definition
+    /// `method_added` / `inherited`: all `true`.)
+    ///
+    pub(crate) fn may_dispatch(&self) -> bool {
+        match self {
+            TraceIr::Br(..)
+            | TraceIr::CondBr(..)
+            | TraceIr::NilBr(..)
+            | TraceIr::CheckLocal(..)
+            | TraceIr::OptCase { .. }
+            | TraceIr::CheckKwRest(..)
+            | TraceIr::FrozenLiteral(..)
+            | TraceIr::StringFreeze(..)
+            | TraceIr::Literal(..)
+            | TraceIr::Array { .. }
+            | TraceIr::Lambda
+            | TraceIr::BlockArgProxy(..)
+            | TraceIr::BlockArg(..)
+            | TraceIr::LoadDynVar(..)
+            | TraceIr::StoreDynVar(..)
+            | TraceIr::LoadIvar(..)
+            | TraceIr::StoreIvar(..)
+            | TraceIr::LoadGvar { .. }
+            | TraceIr::LoadCvar { .. }
+            | TraceIr::CheckCvar { .. }
+            | TraceIr::StoreCvar { .. }
+            | TraceIr::Ret(..)
+            | TraceIr::MethodRet(..)
+            | TraceIr::BlockBreak(..)
+            | TraceIr::CheckExit(..)
+            | TraceIr::Retry
+            | TraceIr::Redo
+            | TraceIr::EnsureEnd
+            | TraceIr::Mov(..)
+            | TraceIr::InitMethod(..)
+            | TraceIr::InlineCache
+            | TraceIr::AliasGvar { .. }
+            | TraceIr::DefinedYield { .. }
+            | TraceIr::DefinedSuper { .. }
+            | TraceIr::DefinedGvar { .. }
+            | TraceIr::DefinedIvar { .. }
+            | TraceIr::DefinedCvar { .. }
+            | TraceIr::LoopStart { .. }
+            | TraceIr::LoopEnd => false,
+            TraceIr::ArrayConcat { .. }
+            | TraceIr::Hash { .. }
+            | TraceIr::HashInsert { .. }
+            | TraceIr::Range { .. }
+            | TraceIr::LoadConst(..)
+            | TraceIr::StoreConst(..)
+            | TraceIr::StoreGvar { .. }
+            | TraceIr::UnOp { .. }
+            | TraceIr::BinOp { .. }
+            | TraceIr::BinCmp { .. }
+            | TraceIr::ArrayTEq { .. }
+            | TraceIr::ArrayAny { .. }
+            | TraceIr::Index { .. }
+            | TraceIr::IndexAssign { .. }
+            | TraceIr::MethodCall { .. }
+            | TraceIr::Raise(..)
+            | TraceIr::ToA { .. }
+            | TraceIr::Yield { .. }
+            | TraceIr::MethodDef { .. }
+            | TraceIr::SingletonMethodDef { .. }
+            | TraceIr::ClassDef { .. }
+            | TraceIr::ModuleDef { .. }
+            | TraceIr::SingletonClassDef { .. }
+            | TraceIr::ConcatStr(..)
+            | TraceIr::ConcatRegexp(..)
+            | TraceIr::ExpandArray { .. }
+            | TraceIr::UndefMethod { .. }
+            | TraceIr::AliasMethod { .. }
+            | TraceIr::DefinedConst { .. }
+            | TraceIr::DefinedMethod { .. } => true,
+        }
+    }
+
+    ///
     /// The slot this instruction defines (writes without reading), for
     /// the instructions whose destination is plain; `None` for the rest,
     /// which the liveness scans treat as neither a read nor a kill

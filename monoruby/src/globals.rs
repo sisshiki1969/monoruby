@@ -1641,13 +1641,7 @@ impl Globals {
             loop {
                 match frame {
                     Some(cfp) => match self.store[cfp.lfp().func_id()].is_iseq() {
-                        Some(iseq) => {
-                            // The code reads this frame's locals (and its
-                            // outer frames') by name: build the elided
-                            // objects compiled code dropped from them.
-                            crate::elided_local::materialize(cfp.lfp());
-                            break Some(iseq);
-                        }
+                        Some(iseq) => break Some(iseq),
                         None => frame = cfp.prev(),
                     },
                     None => break None,
@@ -1746,9 +1740,6 @@ impl Globals {
         main_style: bool,
     ) -> Result<Option<usize>> {
         let line_offset = lineno - 1;
-        // A marker written to the captured frame after the Binding was
-        // made (the frame was still running compiled code then).
-        crate::elided_local::materialize(binding.binding().unwrap_or(binding.outer_lfp()));
         let outer_fid = binding.outer_fid();
         if self.store[outer_fid].is_iseq().is_none() {
             return Err(MonorubyErr::runtimeerr(

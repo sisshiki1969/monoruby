@@ -57,7 +57,6 @@ mod builtins;
 mod bytecode;
 mod bytecodegen;
 mod codegen;
-mod elided_local;
 mod executor;
 mod ext;
 mod fork;

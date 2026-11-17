@@ -531,9 +531,6 @@ fn lookup_local_in_binding(
         Some(l) => l,
         None => inner.outer_lfp(),
     };
-    // A marker written to the captured frame after the Binding was made
-    // (the frame was still running compiled code then).
-    crate::elided_local::materialize(lfp);
     loop {
         let fid = lfp.func_id();
         if let Some(iseq_id) = globals.store[fid].is_iseq() {

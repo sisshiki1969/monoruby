@@ -345,17 +345,6 @@ impl<'a> JitContext<'a> {
             // (`x = 1..n` over an elided `x`) ends the object as a dead
             // one does: nothing can observe it any more.
             let redefined = defined_slot(trace_ir, self.store) == Some(dst);
-            if !read && (dead || redefined) {
-                // Dead, and never observed: the allocation is simply gone.
-                // A local keeps the object's marker until it is assigned
-                // again (`SlotState::drop_virtual`) — until the
-                // instruction's own definition, for a redefined one: a
-                // side exit before that hands the interpreter a frame in
-                // which the local still holds the object.
-                state.drop_virtual(dst);
-                state.discard_dead_elements(src, dst);
-                continue;
-            }
             // A store into an element slot: a push onto one (an argument
             // of the use pushed over an element, `[a, b].include?(x)`), a
             // store into a local endpoint of an elided Range, or a fill of
@@ -370,6 +359,29 @@ impl<'a> JitContext<'a> {
             let overwrites = src
                 .own_slots()
                 .any(|s| s != dst && (written == Some(s) || in_window(s)));
+            if !read && (dead || redefined) {
+                // An instruction that may send a message keeps a local's
+                // object through itself (`doc/escape_analysis.md` §12):
+                // if it leaves by a side exit, the interpreter runs it,
+                // and the callee it finds there may be `binding`. The
+                // object stays elided (the exit's write-back builds it)
+                // and is dropped once the instruction is done: by its
+                // own definition of the slot, by the block's end
+                // ([`Self::settle_virtuals_at_bb_end`]) or by the next
+                // instruction. One whose elements the instruction
+                // overwrites cannot be kept that way, and is built.
+                let kept = !self.is_temp(dst) && trace_ir.may_dispatch();
+                if !kept {
+                    // Dead, and never observed: the allocation is simply
+                    // gone.
+                    state.take_virtual(dst);
+                    state.discard_dead_elements(src, dst);
+                    continue;
+                }
+                if !overwrites {
+                    continue;
+                }
+            }
             let carried = bb_end && self.merge_carries_virtual(bc_pos, dst, src);
             if read || (bb_end && !carried) || overwrites || (self.is_temp(dst) && !survives) {
                 self.materialize_virtual(state, ir, dst);
@@ -391,7 +403,7 @@ impl<'a> JitContext<'a> {
         if !self.is_bb_end(bc_pos) {
             return;
         }
-        self.settle_virtuals_before_branch(state, ir, bc_pos, true, &[]);
+        self.settle_virtuals_before_branch(state, ir, bc_pos, true, &[], DeadLocal::Drop);
     }
 
     ///
@@ -401,7 +413,9 @@ impl<'a> JitContext<'a> {
     /// [`JitContext::declare_merge`]), dropping the dead ones. With
     /// *carries*, a local's object is left for the merges that may carry
     /// it ([`Self::merge_carries_virtual`]). The objects in *keep* are
-    /// left alone.
+    /// left alone. *dead_local* says what becomes of a local's object
+    /// nothing can observe after the branch, which depends on what is
+    /// still to run before it ([`DeadLocal`]).
     ///
     pub(super) fn settle_virtuals_before_branch(
         &mut self,
@@ -410,6 +424,7 @@ impl<'a> JitContext<'a> {
         branch_pos: BcIndex,
         carries: bool,
         keep: &[SlotId],
+        dead_local: DeadLocal,
     ) {
         let next_sp = state.next_sp();
         let settled: Vec<_> = state
@@ -424,11 +439,25 @@ impl<'a> JitContext<'a> {
             } else {
                 !self.local_live_after(branch_pos, dst)
             };
-            if dead {
-                state.drop_virtual(dst);
-                state.discard_dead_elements(src, dst);
-            } else if !(carries && self.merge_carries_virtual(branch_pos, dst, src)) {
-                self.materialize_virtual(state, ir, dst);
+            let dead_local = if self.is_temp(dst) {
+                DeadLocal::Drop
+            } else {
+                dead_local
+            };
+            match (dead, dead_local) {
+                (true, DeadLocal::Drop) => {
+                    state.take_virtual(dst);
+                    state.discard_dead_elements(src, dst);
+                }
+                // Left for the branch, whose own settling drops the
+                // object without emitting anything (`settle_virtuals`).
+                (true, DeadLocal::Keep) => {}
+                (true, DeadLocal::Build) => self.materialize_virtual(state, ir, dst),
+                (false, _) => {
+                    if !(carries && self.merge_carries_virtual(branch_pos, dst, src)) {
+                        self.materialize_virtual(state, ir, dst);
+                    }
+                }
             }
         }
     }
@@ -451,6 +480,11 @@ impl<'a> JitContext<'a> {
     /// receiver) runs with the sink installed, answering in the flags or
     /// declining before it emits anything.
     ///
+    /// A local's object nothing can observe after the branch is not
+    /// dropped here: the producer is still to run, and may send a message
+    /// (`doc/escape_analysis.md` §12). It is dropped where the branch
+    /// itself is settled, which emits nothing.
+    ///
     pub(super) fn settle_virtuals_for_sink(
         &mut self,
         state: &mut AbstractState,
@@ -458,7 +492,7 @@ impl<'a> JitContext<'a> {
         reads: &[SlotId],
         sink_pos: BcIndex,
     ) {
-        self.settle_virtuals_before_branch(state, ir, sink_pos, true, reads);
+        self.settle_virtuals_before_branch(state, ir, sink_pos, true, reads, DeadLocal::Keep);
     }
 
     ///
@@ -650,7 +684,7 @@ impl<'a> JitContext<'a> {
     /// block (whose instructions the JIT does not decode).
     ///
     fn touched_by_blocks(&self, slot: SlotId) -> bool {
-        self.table_touched_by_blocks(slot)
+        self.table_touched_as_object(slot)
     }
 
     ///
@@ -666,7 +700,7 @@ impl<'a> JitContext<'a> {
     /// (`slot_analysis::UnitLiveness`).
     ///
     fn local_live_after(&self, bc_pos: BcIndex, slot: SlotId) -> bool {
-        self.table_live_after(bc_pos, slot)
+        self.table_frame_live_after(bc_pos, slot)
     }
 
     ///
@@ -1001,10 +1035,7 @@ impl<'a> JitContext<'a> {
             state.def_virtual(dst, obj);
             return;
         }
-        // The source local is dead, but it still names the object as far
-        // as a Binding is concerned: it keeps the marker of its own view
-        // (its window is left as it is).
-        let obj = state.drop_virtual(src).unwrap();
+        let obj = state.take_virtual(src).unwrap();
         let moved = if self.is_temp(dst) {
             obj
         } else {
@@ -1221,7 +1252,7 @@ impl<'a> JitContext<'a> {
                 // receiver still live afterwards (a parameter read again
                 // later) stays elided for its next use.
                 if recv_dead {
-                    state.drop_virtual(recv);
+                    state.take_virtual(recv);
                 }
                 match plan {
                     ElementsPlan::Array(base, src, len) => {
@@ -1281,7 +1312,7 @@ impl<'a> JitContext<'a> {
         dst: SlotId,
         len: u16,
     ) {
-        let virt = state.drop_virtual(src).unwrap();
+        let virt = state.take_virtual(src).unwrap();
         // The targets may overlap the element slots (`a, b = f(x, y)`
         // expands into the temporaries right above the result, which hold
         // the elements of an Array returned elided): copy from the far
@@ -1338,11 +1369,7 @@ impl<'a> JitContext<'a> {
         let is_target = |s: SlotId| (dst.0..dst.0 + len).contains(&s.0);
         let next_sp = state.next_sp();
         for s in std::iter::once(src).chain(virt.own_slots()) {
-            // A local the object was expanded out of keeps its marker
-            // (`SlotState::drop_virtual`).
-            let marked = s == src && state.mode(s) != LinkMode::V;
-            if !is_target(s) && !marked && (s == src || s >= next_sp) && !state.is_virtual_src(s)
-            {
+            if !is_target(s) && (s == src || s >= next_sp) && !state.is_virtual_src(s) {
                 state.discard(s);
             }
         }
@@ -1475,7 +1502,7 @@ impl<'a> JitContext<'a> {
                 self.guard_class_version(state, ir, true);
                 self.guard_range_cover_arg(state, ir, &plan);
                 if recv_dead {
-                    state.drop_virtual(lhs);
+                    state.take_virtual(lhs);
                 }
                 self.emit_range_plan(state, ir, plan, resolved.unwrap(), dst);
                 true
@@ -1743,25 +1770,25 @@ impl<'a> JitContext<'a> {
                 match plan {
                     IndexPlan::Hash(fold) => {
                         if recv_dead {
-                            state.drop_virtual(base);
+                            state.take_virtual(base);
                         }
                         self.emit_hash_fold(state, ir, fold, Some(dst));
                     }
                     IndexPlan::Array(ArrayIndexPlan::Nil) => {
                         if recv_dead {
-                            state.drop_virtual(base);
+                            state.take_virtual(base);
                         }
                         state.def_C(dst, Value::nil());
                     }
                     IndexPlan::Array(ArrayIndexPlan::Elem(SlotBase::Own, elem)) => {
                         if recv_dead {
-                            state.drop_virtual(base);
+                            state.take_virtual(base);
                         }
                         self.copy_element(state, ir, elem, dst);
                     }
                     IndexPlan::Array(ArrayIndexPlan::Elem(elem_base, elem)) => {
                         if recv_dead {
-                            state.drop_virtual(base);
+                            state.take_virtual(base);
                         }
                         state.flush_gp(ir);
                         ir.load_caller_slot(elem_base, elem);
@@ -1777,7 +1804,7 @@ impl<'a> JitContext<'a> {
                         }
                         state.load_fixnum(ir, idx, GP::Rsi);
                         if recv_dead {
-                            state.drop_virtual(base);
+                            state.take_virtual(base);
                         }
                         ir.elided_array_index(elem_base, src, len);
                         state.def_rax2acc(ir, dst);
@@ -2144,6 +2171,24 @@ impl AbstractFrame {
 /// The slot *trace_ir* defines without reading ([`TraceIr::defined_slot`]).
 fn defined_slot(trace_ir: &TraceIr, store: &Store) -> Option<SlotId> {
     trace_ir.defined_slot(store)
+}
+
+///
+/// What [`JitContext::settle_virtuals_before_branch`] does with a local's
+/// elided object nothing can observe after the branch
+/// (`doc/escape_analysis.md` §12).
+///
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::codegen::jitgen) enum DeadLocal {
+    /// Nothing runs between here and the branch: the object is gone.
+    Drop,
+    /// The instruction producing the branch's condition is still to run
+    /// and may send a message, so the object has to outlive it. It stays
+    /// elided, for the branch's own settling to drop.
+    Keep,
+    /// As `Keep`, where the producer is a dispatch that branches in every
+    /// arm: no arm takes an elided object over, so it is built.
+    Build,
 }
 
 /// What a call may capture of this frame ([`JitContext::capture_point`]).
