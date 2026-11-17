@@ -548,6 +548,22 @@ fn build_capi_extensions(capi_dir: &Path) {
             macos: &["__APPLE_USE_RFC_3542", "RUBY_EXTCONF_H=\"extconf.h\""],
         },
         Ext {
+            name: "etc",
+            dir: "etc",
+            files: &["etc.c"],
+            // `extconf.h` (next to the source, with the `constdefs.h` its
+            // mkconstants.rb generates) is what CRuby 4.0.9's extconf.rb
+            // finds on Linux (glibc) and on macOS. `SYSCONFDIR` is
+            // `RbConfig::CONFIG["sysconfdir"]` there; monoruby has no
+            // prefix of its own to put an `etc` under.
+            defines: &["RUBY_EXTCONF_H=\"extconf.h\"", "SYSCONFDIR=\"/etc\""],
+            zlib: false,
+            openssl: false,
+            // `sched_getaffinity` and `CPU_ALLOC` (`Etc.nprocessors`).
+            linux: &["_GNU_SOURCE"],
+            macos: &[],
+        },
+        Ext {
             name: "openssl",
             dir: "openssl",
             files: &[

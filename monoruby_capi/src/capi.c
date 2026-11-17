@@ -3670,6 +3670,19 @@ rb_locale_str_new_cstr(const char *ptr)
     return rb_utf8_str_new_cstr(ptr);
 }
 
+/* The filesystem encoding is UTF-8 here (`rb_filesystem_encoding`). */
+VALUE
+rb_filesystem_str_new(const char *ptr, long len)
+{
+    return rb_utf8_str_new(ptr, len);
+}
+
+VALUE
+rb_filesystem_str_new_cstr(const char *ptr)
+{
+    return rb_utf8_str_new_cstr(ptr);
+}
+
 VALUE
 rb_str_cat(VALUE str, const char *ptr, long len)
 {

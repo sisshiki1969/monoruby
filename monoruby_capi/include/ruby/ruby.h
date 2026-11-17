@@ -926,6 +926,8 @@ VALUE rb_external_str_new(const char *ptr, long len);
 VALUE rb_external_str_new_cstr(const char *ptr);
 VALUE rb_locale_str_new(const char *ptr, long len);
 VALUE rb_locale_str_new_cstr(const char *ptr);
+VALUE rb_filesystem_str_new(const char *ptr, long len);
+VALUE rb_filesystem_str_new_cstr(const char *ptr);
 #define rb_str_new2 rb_str_new_cstr
 #define rb_str_new3 rb_str_new_shared
 #define rb_str_new4 rb_str_new_frozen
