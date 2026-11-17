@@ -2940,6 +2940,7 @@ pub(super) extern "C" fn singleton_define_method(
         vm.set_error(err);
         return None;
     }
+    vm.instance_eval_cref_refresh(globals);
     let current_func = vm.definition_func_id(globals);
     if let Some(iseq) = globals.store[func].is_iseq() {
         // See `Executor::define_method`: the parent frame may be a

@@ -49,21 +49,14 @@ module Enumerable
       if block_given?
         has_init = true
         init = a
-      elsif a.is_a?(Symbol) || a.is_a?(String) || a.respond_to?(:to_str)
-        a = a.to_str if !a.is_a?(Symbol) && !a.is_a?(String)
-        raise TypeError, "#{args[0].inspect} is not a symbol nor a string" if a.nil?
-        sym = a.to_sym
       else
-        raise TypeError, "#{args[0].inspect} is not a symbol nor a string"
+        sym = __check_id(a).to_sym
       end
     when 2
       warn "given block not used", uplevel: 1 if block_given?
       has_init = true
       init = args[0]
-      a = args[1]
-      a = a.to_str if !a.is_a?(Symbol) && !a.is_a?(String) && a.respond_to?(:to_str)
-      raise TypeError, "#{args[1].inspect} is not a symbol nor a string" unless a.is_a?(Symbol) || a.is_a?(String)
-      sym = a.to_sym
+      sym = __check_id(args[1]).to_sym
     else
       raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..2)"
     end
@@ -105,7 +98,7 @@ module Enumerable
   def each_slice(n)
     n = __num2long(n)
     raise ArgumentError, "invalid slice size" if n <= 0
-    return to_enum(:each_slice, n) { respond_to?(:size) ? (size.to_f / n).ceil : nil } unless block_given?
+    return to_enum(:each_slice, n) { sz = __check_funcall(self, :size, nil); sz.nil? ? nil : (sz.to_f / n).ceil } unless block_given?
     slice = []
     __gather_each do |x|
       slice << x
@@ -119,7 +112,7 @@ module Enumerable
   end
 
   def each_with_index(*args)
-    return to_enum(:each_with_index, *args) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(:each_with_index, *args) { __check_funcall(self, :size, nil) } unless block_given?
     i = 0
     each(*args) do |*xs|
       yield(xs.empty? ? nil : xs.size == 1 ? xs[0] : xs, i)
@@ -129,7 +122,7 @@ module Enumerable
   end
 
   def each_with_object(obj)
-    return to_enum(:each_with_object, obj) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(:each_with_object, obj) { __check_funcall(self, :size, nil) } unless block_given?
     __gather_each do |x|
       yield x, obj
     end
@@ -140,7 +133,7 @@ module Enumerable
     # `__callee__` so `#collect` records itself rather than `#map` —
     # CRuby names the Enumerator with `rb_frame_this_func()`, the name
     # at the call site. Same for every aliased method below.
-    return to_enum(__callee__) { respond_to?(:size) ? size : nil } unless blk
+    return to_enum(__callee__) { __check_funcall(self, :size, nil) } unless blk
     res = []
     # The user block is called with the *original* values `each`
     # yields (arity-adaptive), not the packed element: for
@@ -210,7 +203,7 @@ module Enumerable
   end
 
   def filter
-    return to_enum(__callee__) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(__callee__) { __check_funcall(self, :size, nil) } unless block_given?
     res = []
     __gather_each do |x|
       if yield(x)
@@ -262,6 +255,10 @@ module Enumerable
     res = []
     return res if n == 0
     raise ArgumentError, "array size too big" if n > 0x0fff_ffff_ffff_ffff
+    # CRuby allocates the result for `n` elements up front
+    # (`rb_ary_new2`), so a count the allocator refuses is a
+    # NoMemoryError whatever the receiver holds.
+    __array_capa_check(n) if n > 0x0fff_ffff
     __gather_each do |x|
       res << x
       break if res.size >= n
@@ -360,7 +357,7 @@ module Enumerable
   end
 
   def min_by(n = nil)
-    return to_enum(:min_by, *(n.nil? ? [] : [n])) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(:min_by, *(n.nil? ? [] : [n])) { __check_funcall(self, :size, nil) } unless block_given?
     if n.nil?
       elem = nil
       res = nil
@@ -391,24 +388,16 @@ module Enumerable
   end
 
   def flat_map
-    return to_enum(__callee__) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(__callee__) { __check_funcall(self, :size, nil) } unless block_given?
     res = []
     __gather_each do |x|
       r = yield(x)
       if r.is_a?(Array)
         res.concat(r)
-      elsif !r.is_a?(String) && r.respond_to?(:to_ary)
-        a = r.to_ary
-        if a.is_a?(Array)
-          res.concat(a)
-        elsif a.nil?
-          res << r
-        else
-          raise TypeError,
-                "can't convert #{r.class} to Array (#{r.class}#to_ary gives #{a.class})"
-        end
-      else
+      elsif (a = __check_ary(r)).nil?
         res << r
+      else
+        res.concat(a)
       end
     end
     res
@@ -416,11 +405,14 @@ module Enumerable
   alias collect_concat flat_map
 
   def tally(hash = nil)
+    __tally_into(hash)
+  end
+
+  # `enum_tally`, also what `Array#tally(hash)` runs (a `super` there
+  # would keep the JIT from inlining the plain `tally`).
+  def __tally_into(hash)
     unless hash.nil?
-      unless hash.is_a?(Hash)
-        hash = hash.to_hash if hash.respond_to?(:to_hash)
-        raise TypeError, "wrong argument type #{__builtin_class_name(hash)} (expected Hash)" unless hash.is_a?(Hash)
-      end
+      hash = __to_hash(hash)
       raise FrozenError, "can't modify frozen Hash: #{hash.inspect}" if hash.frozen?
     end
     h = hash || {}
@@ -429,6 +421,7 @@ module Enumerable
     end
     h
   end
+  private :__tally_into
 
   def chunk(&blk)
     return to_enum(:chunk) unless blk
@@ -531,8 +524,9 @@ module Enumerable
     result = []
     arr = self.to_a
     others_arrays = others.map do |other|
-      if other.respond_to?(:to_ary)
-        other.to_ary
+      ary = __check_ary(other)
+      if !ary.nil?
+        ary
       elsif other.respond_to?(:each)
         other.to_enum(:each).to_a
       else
@@ -554,7 +548,7 @@ module Enumerable
   end
 
   def group_by
-    return to_enum(:group_by) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(:group_by) { __check_funcall(self, :size, nil) } unless block_given?
     h = {}
     __gather_each do |x|
       key = yield(x)
@@ -568,7 +562,7 @@ module Enumerable
   end
 
   def sort_by
-    return to_enum(:sort_by) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(:sort_by) { __check_funcall(self, :size, nil) } unless block_given?
     # Use the *packed* element (`__gather_each`) — `sort_by` treats a
     # multi-value `yield` as a single Array element. (Public `map`
     # forwards the raw values arity-adaptively, which is the wrong
@@ -582,7 +576,7 @@ module Enumerable
   end
 
   def max_by(n = nil)
-    return to_enum(:max_by, *(n.nil? ? [] : [n])) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(:max_by, *(n.nil? ? [] : [n])) { __check_funcall(self, :size, nil) } unless block_given?
     if n.nil?
       elem = nil
       res = nil
@@ -679,6 +673,7 @@ module Enumerable
     res = []
     return res if n == 0
     raise ArgumentError, "array size too big" if n > 0x0fff_ffff_ffff_ffff
+    __array_capa_check(n) if n > 0x0fff_ffff   # see `take`
     # Push-then-break so exactly `n` elements are consumed (the
     # underlying `each` is not advanced past what is needed).
     __gather_each do |x|
@@ -719,8 +714,9 @@ module Enumerable
       x = xs.empty? ? nil : xs.size == 1 ? xs[0] : xs
       pair = blk ? blk.call(*xs) : x
       unless pair.is_a?(Array)
-        pair = pair.to_ary if pair.respond_to?(:to_ary)
-        raise TypeError, "wrong element type #{pair.class} (expected array)" unless pair.is_a?(Array)
+        ary = __check_ary(pair)
+        raise TypeError, "wrong element type #{pair.class} (expected array)" if ary.nil?
+        pair = ary
       end
       raise ArgumentError, "element has wrong array length (expected 2, was #{pair.size})" unless pair.size == 2
       h[pair[0]] = pair[1]
@@ -729,7 +725,7 @@ module Enumerable
   end
 
   def reject
-    return to_enum(:reject) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(:reject) { __check_funcall(self, :size, nil) } unless block_given?
     res = []
     __gather_each do |x|
       res << x unless yield(x)
@@ -756,7 +752,7 @@ module Enumerable
   def each_cons(n)
     n = __num2long(n)
     raise ArgumentError, "invalid size" if n <= 0
-    return to_enum(:each_cons, n) { respond_to?(:size) ? [size - n + 1, 0].max : nil } unless block_given?
+    return to_enum(:each_cons, n) { sz = __check_funcall(self, :size, nil); sz.nil? ? nil : [sz - n + 1, 0].max } unless block_given?
     buf = []
     __gather_each do |x|
       buf << x
@@ -965,7 +961,7 @@ module Enumerable
   # nil `size` is never computed here).
   def lazy
     src = self
-    Enumerator::Lazy.new(self, -> { src.respond_to?(:size) ? src.size : nil }) do |y, *vals|
+    Enumerator::Lazy.new(self, -> { __check_funcall(src, :size, nil) }) do |y, *vals|
       y.yield(*vals)
     end
   end
@@ -983,7 +979,7 @@ module Enumerable
 
   # Returns `[truthy_array, falsey_array]`.
   def partition
-    return to_enum(:partition) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(:partition) { __check_funcall(self, :size, nil) } unless block_given?
     yes_arr = []
     no_arr = []
     __gather_each do |x|
@@ -999,7 +995,7 @@ module Enumerable
   # Returns `[obj_with_smallest_score, obj_with_largest_score]` after
   # mapping each element through the block.
   def minmax_by
-    return to_enum(:minmax_by) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(:minmax_by) { __check_funcall(self, :size, nil) } unless block_given?
     # CRuby's `minmax_by_i`: pairwise, like `minmax` above, over the
     # block's values.
     min_elem = max_elem = nil
@@ -1065,7 +1061,7 @@ module Enumerable
   # yields as Arrays (matches CRuby's `each_entry`). Mostly useful on
   # enumerables whose `each` yields more than one value at a time.
   def each_entry(*args)
-    return to_enum(:each_entry, *args) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(:each_entry, *args) { __check_funcall(self, :size, nil) } unless block_given?
     self.each(*args) do |*x|
       yield(x.empty? ? nil : x.size == 1 ? x[0] : x)
     end
@@ -1077,7 +1073,7 @@ module Enumerable
   # an efficient native `reverse_each` (Array, String, …) override
   # this on their own class.
   def reverse_each(*args)
-    return to_enum(:reverse_each, *args) { respond_to?(:size) ? size : nil } unless block_given?
+    return to_enum(:reverse_each, *args) { __check_funcall(self, :size, nil) } unless block_given?
     self.to_a.reverse_each { |x| yield(x) }
     self
   end
@@ -1087,7 +1083,7 @@ module Enumerable
   # returns `nil` without calling `each`.
   def cycle(n = nil)
     if n.nil?
-      return to_enum(:cycle) { sz = respond_to?(:size) ? size : nil; sz.nil? ? nil : (sz == 0 ? 0 : Float::INFINITY) } unless block_given?
+      return to_enum(:cycle) { sz = __check_funcall(self, :size, nil); sz.nil? ? nil : (sz == 0 ? 0 : Float::INFINITY) } unless block_given?
       cache = []
       each do |*xs|
         x = xs.empty? ? nil : xs.size == 1 ? xs[0] : xs
@@ -1104,7 +1100,7 @@ module Enumerable
       # sized (`enum_cycle_size`, which asks the receiver's size first).
       unless block_given?
         return to_enum(:cycle, n) {
-          sz = respond_to?(:size) ? size : nil
+          sz = __check_funcall(self, :size, nil)
           if sz.nil?
             nil
           elsif sz == 0
@@ -1141,8 +1137,8 @@ module Enumerable
           x
         elsif x.is_a?(Symbol)
           x.to_s
-        elsif x.respond_to?(:to_str)
-          x.to_str
+        else
+          __check_str(x)
         end
         res << x if str && pattern.match?(str)
       end
@@ -1167,8 +1163,8 @@ module Enumerable
           x
         elsif x.is_a?(Symbol)
           x.to_s
-        elsif x.respond_to?(:to_str)
-          x.to_str
+        else
+          __check_str(x)
         end
         res << x unless str && pattern.match?(str)
       end
@@ -1306,7 +1302,7 @@ class Enumerator
     def size
       total = 0
       @__enums.each do |e|
-        s = e.respond_to?(:size) ? e.size : nil
+        s = __check_funcall(e, :size, nil)
         return s if s.nil? || (s.respond_to?(:infinite?) && s.infinite?)
         total += s
       end
@@ -1319,7 +1315,7 @@ class Enumerator
       i = @__pos
       while i >= 0
         e = @__enums[i]
-        e.rewind if e.respond_to?(:rewind)
+        __check_funcall(e, :rewind, nil)
         i -= 1
       end
       @__pos = -1

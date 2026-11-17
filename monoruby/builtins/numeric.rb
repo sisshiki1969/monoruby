@@ -104,20 +104,24 @@ class Numeric
   alias % modulo
 
   def remainder(other)
-    if other.respond_to?(:coerce)
-      a, b = other.coerce(self)
-    else
+    __num_remainder(other)
+  end
+
+  # `num_remainder`: only what is not a Numeric is coerced here.
+  def __num_remainder(other)
+    if other.is_a?(Numeric)
       a, b = self, other
+    else
+      a, b = __num_coerce(self, other)
     end
     mod = a % b
-    if mod == 0
-      mod
-    elsif (a < 0 && b > 0) || (a > 0 && b < 0)
-      mod - b
-    else
-      mod
+    if !(mod == 0) && ((a < 0 && b > 0) || (a > 0 && b < 0))
+      return a if b.is_a?(Float) && b.infinite?
+      return mod - b
     end
+    mod
   end
+  private :__num_remainder
 
   def singleton_method_added(name)
     raise TypeError, "can't define singleton method \"#{name}\" for #{self.class}"

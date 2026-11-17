@@ -216,6 +216,25 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_private_builtin_func(kernel_class, "__to_int", kernel_to_int, 1);
     globals.define_private_builtin_func(kernel_class, "__to_str", kernel_to_str, 1);
     globals.define_private_builtin_func(kernel_class, "__num2long_slow", kernel_num2long, 1);
+    globals.define_private_builtin_func(kernel_class, "__array_capa_check", array_capa_check, 1);
+    globals.define_private_builtin_func(kernel_class, "__check_ary", kernel_check_ary, 1);
+    globals.define_private_builtin_func(kernel_class, "__check_str", kernel_check_str, 1);
+    globals.define_private_builtin_func(kernel_class, "__check_int", kernel_check_int, 1);
+    globals.define_private_builtin_func(kernel_class, "__to_hash", kernel_to_hash, 1);
+    globals.define_private_builtin_func(kernel_class, "__to_path", kernel_to_path, 1);
+    globals.define_private_builtin_func(kernel_class, "__num2dbl", kernel_num2dbl, 1);
+    globals.define_private_builtin_func_rest(kernel_class, "__check_funcall", kernel_check_funcall);
+    globals.define_private_builtin_func(kernel_class, "__undef", kernel_undef, 0);
+    {
+        // What `__check_funcall` answers for "does not respond" when the
+        // caller has to tell that from every value a method can return.
+        let undef = Value::object(OBJECT_CLASS);
+        let kernel = globals.store[kernel_class].get_module().as_val();
+        globals
+            .store
+            .set_ivar(kernel, IdentId::get_id("/undef"), undef)
+            .unwrap();
+    }
     // `__cmpint(res, a, b)`: CRuby's `rb_cmpint`, for the Ruby-written
     // Enumerable methods to read the result of `a <=> b` (or of a
     // comparator block) with.
@@ -1126,10 +1145,13 @@ pub(crate) fn make_exception_error(
     // object expected"` (note: distinct from the
     // "exception class/object expected" emitted when arg0 doesn't
     // even respond to `#exception`).
+    //
+    // `rb_check_funcall`, so an `exception` answered by `method_missing`
+    // counts.
     let exception_id = IdentId::get_id("exception");
-    if globals.check_method(a0, exception_id).is_some() {
-        let cargs: Vec<Value> = msg_arg.into_iter().collect();
-        let result = vm.invoke_method_inner(globals, exception_id, a0, &cargs, None, None)?;
+    let cargs: Vec<Value> = msg_arg.into_iter().collect();
+    if let Some(result) = crate::coerce::check_funcall_args(vm, globals, a0, exception_id, &cargs)?
+    {
         match result.is_exception() {
             Some(ex) => {
                 // Root the `#exception` result across `#set_backtrace`.
@@ -1495,13 +1517,17 @@ pub(crate) fn native_call_site(
 
 /// Whether a native frame is the raise machinery itself. CRuby's
 /// backtraces never show `Kernel#raise` / `Kernel#fail` — the raised
-/// exception is attributed to the Ruby frame that called them.
+/// exception is attributed to the Ruby frame that called them. The
+/// default `Module#const_missing` is the same: it pops its own frame
+/// before raising (`rb_vm_pop_cfunc_frame`), so an explicit
+/// `Object.const_missing(:Zork)` starts its backtrace at the caller,
+/// as a missing constant does.
 fn is_raise_like(globals: &Globals, func_id: FuncId) -> bool {
     let info = &globals.store[func_id];
     info.is_iseq().is_none()
         && info.name().is_some_and(|n| {
             let n = n.get_name();
-            n == "raise" || n == "fail"
+            n == "raise" || n == "fail" || n == "const_missing"
         })
 }
 
@@ -3916,9 +3942,17 @@ pub(crate) fn time_interval(
             Ok(Duration::from_secs(secs(i)?))
         }
         _ => {
-            if let Some(fid) = globals.check_method(v, IdentId::get_id("divmod")) {
-                let res = vm.invoke_func_inner(globals, fid, v, &[Value::integer(1)], None, None)?;
-                if let Some(ary) = res.try_array_ty() {
+            // `rb_check_funcall(num, idDivmod, 1, &i)`, then
+            // `rb_check_array_type` of what it answers.
+            let one = [Value::integer(1)];
+            let divmod = IdentId::get_id("divmod");
+            if let Some(res) = crate::coerce::check_funcall_args(vm, globals, v, divmod, &one)? {
+                let len = vm.temp_len();
+                vm.temp_push(res);
+                let ary = res.check_array_type(vm, globals);
+                vm.temp_clear(len);
+                if let Some(ary) = ary? {
+                    let res: Value = ary.into();
                     let (q, r) = (
                         ary.first().copied().unwrap_or_default(),
                         ary.get(1).copied().unwrap_or_default(),
@@ -5589,6 +5623,176 @@ fn kernel_to_str(
     Ok(lfp.arg(0).coerce_to_rstring(vm, globals)?.as_val())
 }
 
+/// `Kernel#__array_capa_check(n)`: whether an Array of `n` elements can
+/// be allocated at all, for the builtins written in Ruby whose CRuby
+/// counterpart allocates its result up front (`rb_ary_new2(n)` in
+/// `Enumerable#take` / `#first`): NoMemoryError when the allocator
+/// refuses the size, nothing kept otherwise.
+#[monoruby_builtin]
+fn array_capa_check(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let n = lfp.arg(0).expect_integer(&globals.store)? as usize;
+    if !array_capa_available(n) {
+        return Err(crate::builtins::string::no_memory_error(vm, globals));
+    }
+    Ok(Value::nil())
+}
+
+/// Whether the allocator would hand out room for `n` Values now.
+pub(crate) fn array_capa_available(n: usize) -> bool {
+    let Some(bytes) = n.checked_mul(std::mem::size_of::<Value>()) else {
+        return false;
+    };
+    if crate::alloc::would_exceed_malloc_hard_limit(bytes) {
+        return false;
+    }
+    Vec::<Value>::new().try_reserve_exact(n).is_ok()
+}
+
+/// `Kernel#__check_ary(val)`: CRuby's `rb_check_array_type` — the
+/// Array `val` is or converts to by `to_ary`, nil when it does not
+/// convert. Like the other `__check_*` helpers it asks through
+/// `rb_check_funcall`, so a `method_missing`-backed conversion counts,
+/// which `val.respond_to?(:to_ary)` in a builtin written in Ruby would
+/// miss (#1985).
+#[monoruby_builtin]
+fn kernel_check_ary(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(match lfp.arg(0).check_array_type(vm, globals)? {
+        Some(ary) => ary.into(),
+        None => Value::nil(),
+    })
+}
+
+/// `Kernel#__check_str(val)`: CRuby's `rb_check_string_type`.
+#[monoruby_builtin]
+fn kernel_check_str(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp
+        .arg(0)
+        .check_string_type(vm, globals)?
+        .unwrap_or(Value::nil()))
+}
+
+/// `Kernel#__check_int(val)`: CRuby's `rb_check_to_int` — the Integer
+/// `val` is or answers from `to_int`, nil otherwise (no error for a
+/// `to_int` that answers something else).
+#[monoruby_builtin]
+fn kernel_check_int(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp
+        .arg(0)
+        .check_to_int(vm, globals)?
+        .unwrap_or(Value::nil()))
+}
+
+/// `Kernel#__to_hash(val)`: CRuby's `rb_to_hash_type`.
+#[monoruby_builtin]
+fn kernel_to_hash(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp.arg(0).coerce_to_hash(vm, globals)?.as_val())
+}
+
+/// `Kernel#__to_path(val)`: CRuby's `rb_get_path` without the NUL
+/// check — `to_path` when the object has one, then `StringValue`.
+#[monoruby_builtin]
+fn kernel_to_path(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(lfp
+        .arg(0)
+        .coerce_to_path_rstring_allow_nul(vm, globals)?
+        .as_val())
+}
+
+/// `Kernel#__num2dbl(val)`: CRuby's `NUM2DBL` (`rb_num2dbl`) — a
+/// number as a Float, anything else through `to_f`, a String and what
+/// does not convert being a TypeError.
+#[monoruby_builtin]
+fn kernel_num2dbl(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::float(super::thread::num2dbl(
+        vm,
+        globals,
+        lfp.arg(0),
+    )?))
+}
+
+/// `Kernel#__check_funcall(recv, name, default, *args)`: CRuby's
+/// `rb_check_funcall_default` — `recv.name(*args)` when `recv` answers
+/// to it by the whole protocol (`respond_to?`, the method,
+/// `respond_to_missing?`, `method_missing`), `default` when it does
+/// not. `__undef` is the default to pass when no value will do.
+#[monoruby_builtin]
+fn kernel_check_funcall(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let args = lfp.arg(0).as_array();
+    if args.len() < 3 {
+        return Err(MonorubyErr::wrong_number_of_arg_min(args.len(), 3));
+    }
+    let Some(name) = args[1].try_symbol() else {
+        return Err(MonorubyErr::is_not_symbol_nor_string(
+            &globals.store,
+            args[1],
+        ));
+    };
+    // `args` is this frame's rest Array, so the slice stays rooted.
+    Ok(
+        crate::coerce::check_funcall_args(vm, globals, args[0], name, &args[3..])?
+            .unwrap_or(args[2]),
+    )
+}
+
+/// `Kernel#__undef`: the "does not respond" marker for
+/// [`kernel_check_funcall`].
+#[monoruby_builtin]
+fn kernel_undef(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    // The marker lives in a hidden instance variable of Kernel, the
+    // module this method belongs to.
+    let kernel = globals.store[lfp.func_id()].owner_class()[0];
+    let kernel = globals.store[kernel].get_module().as_val();
+    Ok(globals
+        .store
+        .get_ivar(kernel, IdentId::get_id("/undef"))
+        .unwrap_or(Value::nil()))
+}
+
 /// `Kernel#__num2long_slow(val)`: CRuby's `NUM2LONG`
 /// ([`Value::num2long`]); `__num2long` in `builtins/kernel.rb` answers
 /// a Fixnum itself.
@@ -6665,30 +6869,51 @@ fn singleton_methods(
 /// are — and a name in an encoding that is not ASCII-compatible is no
 /// name at all.
 fn is_valid_ivar_name(bytes: &[u8], enc: Encoding) -> bool {
+    bytes
+        .strip_prefix(b"@")
+        .is_some_and(|rest| is_identifier_bytes(rest, enc))
+}
+
+/// `@@` followed by an identifier (`rb_is_class_name`).
+pub(crate) fn is_valid_cvar_name(bytes: &[u8], enc: Encoding) -> bool {
+    bytes
+        .strip_prefix(b"@@")
+        .is_some_and(|rest| is_identifier_bytes(rest, enc))
+}
+
+/// An attribute name (`rb_is_attr_name`): a local-variable or a
+/// constant name, so an identifier with nothing after it — no `?`,
+/// `!` or `=`.
+pub(crate) fn is_valid_attr_name(bytes: &[u8], enc: Encoding) -> bool {
+    is_identifier_bytes(bytes, enc)
+}
+
+/// A non-empty identifier that does not start with a digit, walked in
+/// its own encoding.
+fn is_identifier_bytes(rest: &[u8], enc: Encoding) -> bool {
     if !enc.is_ascii_compatible() {
         return false;
     }
-    let Some(rest) = bytes.strip_prefix(b"@") else {
-        return false;
-    };
     if rest.first().is_none_or(|c| c.is_ascii_digit()) {
         return false;
     }
     let mut pos = 0;
     while pos < rest.len() {
         let c = rest[pos];
-        if c.is_ascii() && c != b'_' && !c.is_ascii_alphanumeric() {
-            return false;
+        // An ASCII byte at a character boundary is a character of its
+        // own in every ASCII-compatible encoding.
+        if c.is_ascii() {
+            if c != b'_' && !c.is_ascii_alphanumeric() {
+                return false;
+            }
+            pos += 1;
+        } else {
+            pos += crate::value::rvalue::char_width_at(enc, rest, pos);
         }
-        pos += crate::value::rvalue::char_width_at(enc, rest, pos);
     }
     true
 }
 
-/// Resolve an `instance_variable_*` name argument with CRuby
-/// semantics: Symbol/String are used directly, anything else is
-/// coerced via `#to_str` (TypeError otherwise), and the resulting
-/// name must be a valid instance-variable name (NameError otherwise).
 /// Build a `NameError` for the `instance_variable_*` / `class_variable_*`
 /// reflection methods, carrying `name_value` verbatim as `#name` (CRuby
 /// preserves the exact argument object, which the spec checks with
@@ -6709,55 +6934,103 @@ pub(crate) fn name_error_reflection(
     MonorubyErr::nameerr(msg).with_original(exc)
 }
 
+/// [`name_error_reflection`] with the message *before*, *name*,
+/// *after* — the name's own bytes, kept as they are when they are not
+/// UTF-8 (CRuby formats the String itself into the message).
+pub(crate) fn name_error_reflection_bytes(
+    globals: &mut Globals,
+    before: &str,
+    name: &[u8],
+    enc: Encoding,
+    after: &str,
+    name_value: Value,
+    receiver: Value,
+) -> MonorubyErr {
+    let raw = [before.as_bytes(), name, after.as_bytes()].concat();
+    let err = name_error_reflection(
+        globals,
+        String::from_utf8_lossy(&raw).into_owned(),
+        name_value,
+        receiver,
+    );
+    // A name that is not UTF-8 is shown as its own bytes.
+    if std::str::from_utf8(&raw).is_err()
+        && let Some(mut exc) = err.original
+        && let Some(inner) = exc.is_exception_mut()
+    {
+        inner.raw_message = Some((raw, enc));
+    }
+    err
+}
+
+/// CRuby's `check_setter_id`: the name argument of a reflection method
+/// that names a variable, a constant or an attribute of *receiver*.
+///
+/// A Symbol is the name; anything else is a String or what `to_str`
+/// answers (`rb_check_string_type`, TypeError "is not a symbol nor a
+/// string" otherwise), refused before it is looked at when its bytes
+/// are broken. A name *valid* does not accept is the NameError *before*
+/// name *after*, carrying the receiver and — as `#name` — the name as
+/// it was given: the Symbol, or the String itself (the spec checks it
+/// with `equal?`; for a `to_str` object, the String that answered).
+pub(crate) fn setter_name_id(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Value,
+    arg: Value,
+    valid: fn(&[u8], Encoding) -> bool,
+    before: &str,
+    after: &str,
+) -> Result<IdentId> {
+    if let Some(sym) = arg.try_symbol() {
+        // The usual case, under one read of the table and with no copy
+        // of the name.
+        if sym.with_ident_name(|name, enc| valid(name.as_bytes(), enc.unwrap_or(Encoding::UTF8))) {
+            return Ok(sym);
+        }
+        let ident = sym.get_ident_name_clone();
+        let enc = sym.symbol_encoding().unwrap_or(Encoding::UTF8);
+        return Err(name_error_reflection_bytes(
+            globals,
+            before,
+            ident.as_bytes(),
+            enc,
+            after,
+            arg,
+            receiver,
+        ));
+    }
+    let Some(s) = arg.check_string_type(vm, globals)? else {
+        return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg));
+    };
+    let inner = s.as_rstring_inner();
+    crate::builtins::string::check_symbol_bytes(&globals.store, inner, true)?;
+    if !valid(inner.as_bytes(), inner.encoding()) {
+        let (name, enc) = (inner.as_bytes().to_vec(), inner.encoding());
+        return Err(name_error_reflection_bytes(
+            globals, before, &name, enc, after, s, receiver,
+        ));
+    }
+    crate::builtins::string::intern_name_string(&globals.store, inner)
+}
+
+/// The name argument of `instance_variable_get` / `_set` /
+/// `_defined?` / `remove_instance_variable` ([`setter_name_id`]).
 fn ivar_name_id(
     vm: &mut Executor,
     globals: &mut Globals,
     receiver: Value,
     arg: Value,
 ) -> Result<IdentId> {
-    // CRuby surfaces the given name and the receiver on this
-    // NameError (`#name` / `#receiver`); `#name` is the *exact*
-    // argument object (a String/Symbol), which the spec checks with
-    // `equal?`, so carry the original `arg` value.
-    let not_allowed = |globals: &mut Globals, name: &[u8], enc: Encoding| {
-        let raw = [b"'", name, b"' is not allowed as an instance variable name"].concat();
-        let err = name_error_reflection(
-            globals,
-            String::from_utf8_lossy(&raw).into_owned(),
-            arg,
-            receiver,
-        );
-        // A name that is not UTF-8 is shown as its own bytes.
-        if std::str::from_utf8(&raw).is_err()
-            && let Some(mut exc) = err.original
-            && let Some(inner) = exc.is_exception_mut()
-        {
-            inner.raw_message = Some((raw, enc));
-        }
-        err
-    };
-    if let Some(sym) = arg.try_symbol() {
-        let ident = sym.get_ident_name_clone();
-        let enc = sym.symbol_encoding().unwrap_or(Encoding::UTF8);
-        if !is_valid_ivar_name(ident.as_bytes(), enc) {
-            return Err(not_allowed(globals, ident.as_bytes(), enc));
-        }
-        return Ok(sym);
-    }
-    // `rb_check_id`: a String, or what `to_str` answers
-    // (`rb_check_string_type`); one that is broken in an
-    // ASCII-compatible encoding is refused as a name before the name is
-    // looked at (#1987).
-    let Some(s) = arg.check_string_type(vm, globals)? else {
-        return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg));
-    };
-    let inner = s.as_rstring_inner();
-    crate::builtins::string::check_symbol_bytes(&globals.store, inner, true)?;
-    if !is_valid_ivar_name(inner.as_bytes(), inner.encoding()) {
-        let (name, enc) = (inner.as_bytes().to_vec(), inner.encoding());
-        return Err(not_allowed(globals, &name, enc));
-    }
-    crate::builtins::string::intern_name_string(&globals.store, inner)
+    setter_name_id(
+        vm,
+        globals,
+        receiver,
+        arg,
+        is_valid_ivar_name,
+        "'",
+        "' is not allowed as an instance variable name",
+    )
 }
 
 ///

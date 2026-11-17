@@ -211,15 +211,21 @@ class Array
   def dig(idx, *rest)
     val = self[idx]
     return val if rest.empty? || val.nil?
-    raise TypeError, "#{val.class} does not have #dig method" unless val.respond_to?(:dig)
-    val.dig(*rest)
+    # `rb_obj_dig`: the next level is asked by `rb_check_funcall`.
+    return val.dig(*rest) if val.is_a?(::Array) || val.is_a?(::Hash)
+    undef_ = __undef
+    cur = val
+    val = __check_funcall(cur, :dig, undef_, *rest)
+    raise TypeError, "#{cur.class} does not have #dig method" if undef_.equal?(val)
+    val
   end
 
   # Array#sum is implemented in Rust (see builtins/array.rs::sum) with a
   # Fixnum fast-path. Falling back to the Ruby version below would skip
   # that fast-path, so it stays out of the Array re-opens.
 
-  def tally
+  def tally(hash = nil)
+    return __tally_into(hash) unless hash.nil?
     h = {}
     each do |x|
       h[x] = (h[x] || 0) + 1

@@ -449,7 +449,7 @@ impl Executor {
         current_func: FuncId,
     ) -> ClassId {
         let current_func = globals.store.lexical_owner(current_func);
-        let frame_func = self.cfp().lfp().func_id();
+        let frame_func = globals.store.lexical_owner(self.cfp().lfp().func_id());
         if frame_func != current_func {
             let fc = frame_func.lexical_class(globals);
             if fc != OBJECT_CLASS {
@@ -476,7 +476,7 @@ impl Executor {
         let current_func = globals.store.lexical_owner(current_func);
         // Search the current frame's lexical_context first (covers string
         // eval where the eval's ISeqInfo has the receiver's class set).
-        let frame_func = self.cfp().lfp().func_id();
+        let frame_func = globals.store.lexical_owner(self.cfp().lfp().func_id());
         if frame_func != current_func {
             // instance_eval("...") checks the receiver's class between
             // the singleton class and the caller's lexical scopes. The
@@ -485,6 +485,7 @@ impl Executor {
             // is split around the receiver-class check.
             match Self::instance_eval_class(globals, frame_func) {
                 Some(c) => {
+                    self.instance_eval_cref_refresh(globals);
                     if let Some(v) = self.search_lexical_slice(globals, name, frame_func, 0..1)? {
                         return Ok(Some(v));
                     }
@@ -729,7 +730,7 @@ impl Executor {
             // Single-segment unqualified reference: walk lexical
             // contexts (innermost first), then the enclosing class's
             // ancestor chain — all non-triggering.
-            let frame_func = self.cfp().lfp().func_id();
+            let frame_func = globals.store.lexical_owner(self.cfp().lfp().func_id());
             if frame_func != current_func {
                 if self.probe_lexical_stack(globals, name, frame_func) {
                     return true;

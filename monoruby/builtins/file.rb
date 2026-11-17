@@ -92,15 +92,8 @@ class File
   # resolve `.`/`..` or collapse interior slashes; it only strips the last
   # `/component` (and the slashes immediately before it), `level` times.
   def self.dirname(path, level = 1)
-    path = path.to_path if !path.is_a?(String) && path.respond_to?(:to_path)
-    path = path.to_str  if !path.is_a?(String) && path.respond_to?(:to_str)
-    raise TypeError, "no implicit conversion of #{__builtin_class_name(path)} into String" unless path.is_a?(String)
-    unless level.is_a?(Integer)
-      unless level.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{__builtin_class_name(level)} into Integer"
-      end
-      level = level.to_int
-    end
+    path = __to_path(path) unless path.is_a?(String)
+    level = __to_int(level)
     raise ArgumentError, "negative level: #{level}" if level < 0
     result = path
     level.times do

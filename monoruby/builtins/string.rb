@@ -157,16 +157,7 @@ class String
     # CRuby coerces `max` via `to_str`; anything else (Integer,
     # Symbol, an object without `to_str`) raises TypeError before
     # we look at length / `<=>`.
-    unless max.is_a?(String)
-      if max.respond_to?(:to_str)
-        max = max.to_str
-        unless max.is_a?(String)
-          raise TypeError, "no implicit conversion of #{__builtin_class_name(max)} into String"
-        end
-      else
-        raise TypeError, "no implicit conversion of #{__builtin_class_name(max)} into String"
-      end
-    end
+    max = __to_str(max) unless max.is_a?(String)
     return to_enum(:upto, max, exclusive) unless block
     # Encoding compatibility: CRuby raises `Encoding::CompatibilityError`
     # when the receiver and `max` have incompatible encodings (matters

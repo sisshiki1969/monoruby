@@ -54,10 +54,7 @@ class SystemCallError
       return errno.real.to_i
     end
     return errno.to_i if errno.is_a?(Numeric)
-    unless errno.respond_to?(:to_int)
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(errno)} into Integer"
-    end
-    errno.to_int
+    __to_int(errno)
   end
 
   def self.new(*args)
@@ -105,11 +102,7 @@ class SystemCallError
 
   private def __syserr_init(msg, errno, loc, reported_errno = nil)
     unless msg.nil? || msg.is_a?(String)
-      if msg.respond_to?(:to_str)
-        msg = msg.to_str
-      else
-        raise TypeError, "no implicit conversion of #{__builtin_class_name(msg)} into String"
-      end
+      msg = __to_str(msg)
     end
     @__errno = reported_errno.nil? ? errno : reported_errno
     # CRuby's `NUM2INT(error)` before `strerror`.

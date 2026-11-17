@@ -991,8 +991,14 @@ impl Store {
         if let Some(v) = pool.get(bytes) {
             return *v;
         }
-        let mut v = Value::string_from_source_bytes(bytes, enc);
-        v.set_fstring();
+        // The fstring of this content, if one is alive already (a Hash
+        // made it as the copy of a key), is the one to answer — and is
+        // held from now on.
+        let v = crate::value::rvalue::fstring::intern(bytes, enc, || {
+            let mut v = Value::string_from_source_bytes(bytes, enc);
+            v.set_fstring();
+            v
+        });
         pool.insert(bytes.into(), v);
         v
     }
@@ -1028,9 +1034,13 @@ impl Store {
         if let Some(v) = pool.get(bytes) {
             return *v;
         }
-        s.set_fstring();
-        pool.insert(bytes.into(), s);
-        s
+        let v = crate::value::rvalue::fstring::lookup(bytes, enc).unwrap_or_else(|| {
+            s.set_fstring();
+            crate::value::rvalue::fstring::insert(s);
+            s
+        });
+        pool.insert(bytes.into(), v);
+        v
     }
 
     pub fn iseq(&self, func_id: FuncId) -> &ISeqInfo {
@@ -2167,22 +2177,29 @@ impl Store {
     /// lookup from `fid`.
     ///
     /// A block carries no lexical context of its own (it is written inside
-    /// its mother and inherits that scope), and `Lfp::outermost` stops at a
-    /// `define_method` body because that frame *is* the method boundary —
-    /// so a bmethod's `method_func_id` is the block itself. Climb to the
-    /// nearest mother that owns a lexical context, so `K` inside
-    /// `define_method(:m) { K }` resolves through the enclosing
+    /// an enclosing body and inherits that scope), and `Lfp::outermost`
+    /// stops at a `define_method` body because that frame *is* the method
+    /// boundary — so a bmethod's `method_func_id` is the block itself.
+    /// Climb to the nearest enclosing iseq that owns a lexical context, so
+    /// `K` inside `define_method(:m) { K }` resolves through the enclosing
     /// `module`/`class` nesting exactly as in a plain block.
+    ///
+    /// The climb is by `outer`, one enclosing body at a time, not straight
+    /// to the mother: a receiver-anchored string eval body
+    /// (`K.class_eval "[1].each { C }"`) carries a lexical context of its
+    /// own between a block written in it and the method that called the
+    /// eval.
     pub(crate) fn lexical_owner(&self, fid: FuncId) -> FuncId {
         let mut fid = fid;
         while let Some(iseq) = self[fid].is_iseq()
             && self[iseq].lexical_context.is_empty()
         {
-            let mother = self[self[iseq].mother().0].func_id();
-            if mother == fid {
+            let enclosing = self[iseq].outer.unwrap_or(self[iseq].mother().0);
+            let enclosing = self[enclosing].func_id();
+            if enclosing == fid {
                 break;
             }
-            fid = mother;
+            fid = enclosing;
         }
         fid
     }

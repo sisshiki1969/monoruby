@@ -92,7 +92,7 @@ module ObjectSpace
       raise ArgumentError, "wrong number of arguments (given 1, expected 2)"
     end
     unless callable.respond_to?(:call)
-      raise ArgumentError, "no _id2ref or finalizer is given; must respond to #call"
+      raise ArgumentError, "wrong type argument #{callable.class} (should be callable)"
     end
     # The primitive returns the effective callable: the one already
     # registered when an equal finalizer was given before, else +callable+.

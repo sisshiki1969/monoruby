@@ -115,17 +115,7 @@ class Thread
   # embedded NULs, and allows nil to clear the name.
   def name=(name)
     unless name.nil?
-      unless name.is_a?(String)
-        if name.respond_to?(:to_str)
-          name = name.to_str
-          unless name.is_a?(String)
-            Kernel.raise TypeError,
-              "can't convert #{name.class} to String (#{name.class}#to_str gives #{name.class})"
-          end
-        else
-          Kernel.raise TypeError, "no implicit conversion of #{__builtin_class_name(name)} into String"
-        end
-      end
+      name = __to_str(name) unless name.is_a?(String)
       if name.include?("\0")
         Kernel.raise ArgumentError, "string contains null byte"
       end
@@ -220,11 +210,7 @@ class Thread
     when String
       key.to_sym
     else
-      if key.respond_to?(:to_str)
-        key.to_str.to_sym
-      else
-        Kernel.raise TypeError, "#{key.inspect} is not a symbol nor a string"
-      end
+      __check_id(key).to_sym
     end
   end
   private :__thread_key
@@ -335,11 +321,7 @@ class Thread
   end
 
   def priority=(value)
-    unless value.is_a?(Integer)
-      unless value.respond_to?(:to_int) && (value = value.to_int).is_a?(Integer)
-        Kernel.raise TypeError, "no implicit conversion of #{__builtin_class_name(value)} into Integer"
-      end
-    end
+    value = __num2long(value)
     # CRuby clamps the stored priority to -3..3.
     value = 3 if value > 3
     value = -3 if value < -3
@@ -742,14 +724,7 @@ class Thread
       @__cv_pop = ConditionVariable.new
       unless enum.nil?
         # CRuby's rb_convert_type protocol (to_a), messages included.
-        unless enum.respond_to?(:to_a)
-          raise TypeError, "can't convert #{__builtin_class_name(enum)} into Array"
-        end
-        ary = enum.to_a # a NoMethodError raised inside #to_a propagates
-        unless ary.is_a?(Array)
-          raise TypeError,
-                "can't convert #{enum.class} into Array (#{enum.class}#to_a gives #{ary.class})"
-        end
+        ary = __convert_type(enum, Array, "Array", :to_a, false)
         @__items.concat(ary)
       end
     end
@@ -779,20 +754,8 @@ class Thread
       return nil if timeout.nil?
       raise ArgumentError, "can't set a timeout if non_block is enabled" if non_block
       return timeout if Numeric === timeout
-      case timeout
-      when true, false, String
-        desc = String === timeout ? "string" : timeout.inspect
-        raise TypeError, "no implicit conversion to float from #{desc}"
-      end
-      unless timeout.respond_to?(:to_f)
-        raise TypeError, "can't convert #{__builtin_class_name(timeout)} into Float"
-      end
-      f = timeout.to_f
-      unless Float === f
-        raise TypeError,
-              "can't convert #{timeout.class} to Float (#{timeout.class}#to_f gives #{f.class})"
-      end
-      f
+      # `rb_num2dbl`
+      __num2dbl(timeout)
     end
     private :__check_timeout
 
@@ -875,17 +838,7 @@ class Thread
     # via #to_int (so 12.9 truncates to 12), anything inconvertible is a
     # TypeError, and only then is positivity checked (ArgumentError).
     def __check_capacity(v)
-      unless v.is_a?(Integer)
-        unless v.respond_to?(:to_int)
-          raise TypeError, "no implicit conversion of #{__builtin_class_name(v)} into Integer"
-        end
-        klass = v.class
-        v = v.to_int
-        unless v.is_a?(Integer)
-          raise TypeError,
-                "can't convert #{klass} to Integer (#{klass}#to_int gives #{v.class})"
-        end
-      end
+      v = __num2long(v)
       raise ArgumentError, "queue size must be positive" unless v > 0
       v
     end
@@ -1103,11 +1056,9 @@ class Thread
 
     def self.__slice_int(v)
       return v if v.is_a?(Integer)
-      if v.respond_to?(:to_int)
-        r = v.to_int
-        return r if r.is_a?(Integer)
-      end
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(v)} into Integer"
+      r = __check_int(v)
+      raise TypeError, "no implicit conversion of #{__builtin_class_name(v)} into Integer" if r.nil?
+      r
     end
 
     class Location
