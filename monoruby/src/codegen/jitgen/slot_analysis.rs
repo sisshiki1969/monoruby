@@ -778,26 +778,6 @@ impl<'a> JitContext<'a> {
         bc_pos: BcIndex,
         slot: SlotId,
     ) -> bool {
-        self.frame_live(bc_pos, bc_pos.to_usize() + 1, slot)
-    }
-
-    ///
-    /// [`Self::table_frame_live_after`] for the point before the
-    /// instruction at *bc_pos*: whether that instruction or anything
-    /// after it may read the local *slot*, as the interpreter sees the
-    /// frame.
-    ///
-    pub(in crate::codegen::jitgen) fn table_frame_live_at(
-        &self,
-        bc_pos: BcIndex,
-        slot: SlotId,
-    ) -> bool {
-        self.frame_live(bc_pos, bc_pos.to_usize(), slot)
-    }
-
-    /// The frame liveness of *slot* from the instruction index *from* in
-    /// the basic block of *bc_pos*.
-    fn frame_live(&self, bc_pos: BcIndex, from: usize, slot: SlotId) -> bool {
         let iseq_id = self.iseq_id();
         let a = self.slot_analysis(iseq_id);
         if a.all_live() || a.has_lambda {
@@ -806,7 +786,7 @@ impl<'a> JitContext<'a> {
         let bb_info = &self.store[iseq_id].bb_info;
         let bb = bb_info.get_bb_id(bc_pos);
         let end = bb_info[bb].end;
-        for i in from..=end.to_usize() {
+        for i in bc_pos.to_usize() + 1..=end.to_usize() {
             let pos = BcIndex::from(i);
             if a.dispatches(pos) || a.reads(pos).contains(&slot) {
                 return true;

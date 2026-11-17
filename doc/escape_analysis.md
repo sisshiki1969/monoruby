@@ -951,5 +951,7 @@ no side exit in between still finds the object elided:
 - `binding` or `eval` reached *in place* from compiled code: through a
   native method that calls back (`send(:binding)`, `[o].include?("x")`
   with `==` aliased to `eval`), through an operator lowered to a generic
-  helper, or through `yield` to `&:name`.
+  helper, or through `yield` to `&:name` (issue #2069). Here the object
+  is live and tracked; it is the capture that would have to convert the
+  frame.
 

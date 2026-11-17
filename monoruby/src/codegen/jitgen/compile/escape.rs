@@ -675,29 +675,35 @@ impl<'a> JitContext<'a> {
 
     ///
     /// Whether a block literal of this frame (or a block nested in one)
-    /// may read or write the local *slot*: a `LoadDynVar` / `StoreDynVar`
-    /// of it at the block's depth (a write replaces the elided object
-    /// behind the compiler's back, so it has to be real by then), or — since a `binding` or `eval` inside the block captures
-    /// the whole frame — a call in the block resolved to a capturing
-    /// callee or to nothing the compiler can name, a lambda literal
-    /// (whose body is not reachable from here), or a handler in the
-    /// block (whose instructions the JIT does not decode).
+    /// may observe the object the local *slot* holds: a `LoadDynVar` /
+    /// `StoreDynVar` of it at the block's depth (a write replaces the
+    /// elided object behind the compiler's back, so it has to be real by
+    /// then), or — since a `binding` or `eval` inside the block captures
+    /// the whole frame — any instruction in the block that may send a
+    /// message (`doc/escape_analysis.md` §12: the callee the interpreter
+    /// finds for it may be `binding` under another name), a lambda
+    /// literal (whose body is not reachable from here), or a handler in
+    /// the block (whose instructions the JIT does not decode).
     ///
     fn touched_by_blocks(&self, slot: SlotId) -> bool {
         self.table_touched_as_object(slot)
     }
 
     ///
-    /// Whether the local *slot* may be read after the instruction at
-    /// *bc_pos*: by the rest of its basic block, or by any block control
-    /// can reach from there, counting a capture point
-    /// ([`Self::capture_point`]) as a read of every local a block or a
-    /// `binding` could reach ([`Self::touched_by_blocks`]). A write before
-    /// any read ends the slot's life on that path (`defined_slot`); the
+    /// Whether the object the local *slot* holds may be observed after
+    /// the instruction at *bc_pos*, as the interpreter sees the frame
+    /// (`doc/escape_analysis.md` §12): by the rest of its basic block, or
+    /// by any block control can reach from there, counting every
+    /// instruction that may send a message as a read of every local. A
+    /// side exit hands the frame to the interpreter, where a call the
+    /// compilation resolved to a callee that captures nothing may reach
+    /// `binding` after all, so the compilation's own capture points
+    /// ([`Self::capture_point`]) are not the measure. A write before any
+    /// read ends the slot's life on that path (`defined_slot`); the
     /// instructions whose destination is not plain are neither a read
     /// nor a kill. Always true in a body with an exception handler, where
-    /// the handler may read anything. Answered from the liveness tables
-    /// (`slot_analysis::UnitLiveness`).
+    /// the handler may read anything, or a lambda literal. Answered from
+    /// the frame liveness (`slot_analysis::SlotAnalysis`).
     ///
     fn local_live_after(&self, bc_pos: BcIndex, slot: SlotId) -> bool {
         self.table_frame_live_after(bc_pos, slot)
