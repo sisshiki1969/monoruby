@@ -472,8 +472,8 @@ pub(crate) extern "C" fn pow_ff(lhs: f64, rhs: f64) -> Value {
 
 /// Float modulo with Ruby's floor-mod semantics.
 ///
-/// Used by the Integer#% inline JIT helper for the
-/// `Integer % Float` case (result is always Float).
+/// Called by the JIT's inline `Float#%` and `Integer % Float`
+/// (`AbstractState::float_rem`), which keep a zero divisor away from it.
 pub(crate) extern "C" fn rem_ff(lhs: f64, rhs: f64) -> f64 {
     lhs.ruby_mod(&rhs)
 }

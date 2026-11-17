@@ -93,6 +93,15 @@ pub(super) fn proc_is_lambda(globals: &Globals, proc: &Proc) -> bool {
     if proc.func_id() == PROC_CURRY_BODY_FUNCID {
         return proc.self_val().as_array()[3].as_bool();
     }
+    // The block `Enumerator#with_index` / `#with_object` hand to the
+    // source is a C function block in CRuby (`rb_block_call`), which is
+    // not a lambda; a native body reads as one here (#2037).
+    if matches!(
+        proc.func_id(),
+        WITH_INDEX_ADAPTER_FUNCID | WITH_OBJECT_ADAPTER_FUNCID
+    ) {
+        return false;
+    }
     !globals[proc.func_id()].is_block_style()
 }
 

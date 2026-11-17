@@ -471,6 +471,15 @@ impl Value {
     /// `get_prehashed` in `rvalue/hash.rs`) replicate the exact digest the
     /// general path computes. Any change here changes both in lockstep.
     pub(crate) fn ruby_hash_packed<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.ruby_hash_packed_zero(state);
+    }
+
+    /// [`Self::ruby_hash_packed`], also answering whether `self` is the
+    /// flonum `0.0` — the one packed key bit equality is not `eql?` for
+    /// (see the arm below). The answer is a constant in every arm, so a
+    /// caller that branches on it pays nothing on the others.
+    #[inline(always)]
+    pub(crate) fn ruby_hash_packed_zero<H: std::hash::Hasher>(&self, state: &mut H) -> bool {
         use std::hash::{Hash, Hasher};
         match self.unpack() {
             // `Integer#hash`/`Float#hash` digest the numeric *value*
@@ -489,10 +498,16 @@ impl Value {
                 i.hash(&mut s);
                 ((s.finish() as i64) >> 1).hash(state);
             }
+            // `0.0` is the one flonum that is `eql?` to a heap Float —
+            // `-0.0`, which has no flonum form (CRuby's `flo_eql`
+            // compares the values) — so it takes the digest
+            // `ruby_hash` gives that one.
+            RV::Float(f) if f == 0.0 => {
+                (-0.0f64).to_bits().hash(state);
+                return true;
+            }
             RV::Float(f) => {
                 let mut s = crate::value::seeded_hasher();
-                // Float#hash normalises -0.0 to +0.0 before hashing.
-                let f = if f == 0.0 { 0.0 } else { f };
                 f.to_bits().hash(&mut s);
                 ((s.finish() as i64) >> 1).hash(state);
             }
@@ -502,6 +517,7 @@ impl Value {
             // desynchronise the two hash functions for Symbol keys.
             _ => self.0.hash(state),
         }
+        false
     }
 }
 
@@ -520,6 +536,9 @@ impl RubyHash<Executor, Globals, MonorubyErr> for Value {
                 match lhs.ty() {
                     //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", lhs),
                     ObjTy::BIGNUM => lhs.as_bignum().hash(state),
+                    // A heap `-0.0` and the flonum `0.0` are `eql?` and
+                    // one Hash key: `ruby_hash_packed` gives the flonum
+                    // this same digest.
                     ObjTy::FLOAT => lhs.as_float().to_bits().hash(state),
                     ObjTy::STRING => lhs.as_rstring().hash(state),
                     // The native structural hash applies only while the
@@ -681,7 +700,12 @@ impl RubyEql<Executor, Globals, MonorubyErr> for Value {
                     })
                 }
             }
-            _ => Ok(false),
+            // One immediate, one heap value: only a flonum `0.0` and a
+            // heap `-0.0` are `eql?`.
+            (Some(heap), None) | (None, Some(heap)) => Ok(heap.ty() == ObjTy::FLOAT
+                // SAFETY: `ty()` says the payload is a float.
+                && unsafe { heap.as_float() } == 0.0
+                && (self.id() == FLOAT_ZERO || other.id() == FLOAT_ZERO)),
         }
     }
 }

@@ -107,6 +107,20 @@ impl Codegen {
         );
     }
 
+    /// Deopt when the double in `fsrc` is `0.0` or `-0.0` (the divisor of a
+    /// float modulo, which raises). NaN is unordered and passes. aarch64
+    /// twin of x86 `guard_fpr_nonzero`.
+    ///
+    /// ### destroy
+    /// - d0
+    pub(crate) fn guard_fpr_nonzero(&mut self, fsrc: FPReg, deopt: &DestLabel, base: usize) {
+        self.a64_fpr_into_d0(fsrc, base);
+        let deopt = deopt.clone();
+        monoasm_arm64!(&mut self.jit, fcmp d0, #0.0;);
+        // Unordered sets Z=0, so `eq` is exactly "ordered and equal".
+        self.jit.bcond_label(monoasm::Cond::Eq, &deopt);
+    }
+
     /// Deopt unless the tagged fixnum in Rdi (x4) lies in `[-2**53, 2**53)`,
     /// the range whose f64 conversion is exact (an Integer/Float
     /// comparison). aarch64 twin of x86 `guard_fixnum_f64_exact`.

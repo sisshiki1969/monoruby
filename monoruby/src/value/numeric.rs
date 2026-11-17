@@ -665,15 +665,13 @@ impl RubyMod for f64 {
     type Output = f64;
     #[inline]
     fn ruby_mod(&self, rhs: &f64) -> Self::Output {
+        // CRuby's `flodivmod`: `fmod` keeps the sign of the dividend (a
+        // zero result included), and the divisor is added when the two
+        // signs differ — tested, as there, on the product, so a product
+        // that underflows to zero leaves the remainder as `fmod` gave it
+        // (`1e-200 % -3e-200` is `1.0e-200`).
         let r = *self % *rhs;
-        if r == 0.0 {
-            // Preserve sign: result is -0.0 when self is negative
-            if self.is_sign_negative() { -0.0 } else { 0.0 }
-        } else if (*self > 0.0 && *rhs < 0.0) || (*self < 0.0 && *rhs > 0.0) {
-            r + *rhs
-        } else {
-            r
-        }
+        if *rhs * r < 0.0 { r + *rhs } else { r }
     }
 }
 

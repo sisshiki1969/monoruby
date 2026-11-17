@@ -68,7 +68,89 @@ impl AbstractState {
         Some((lhs, rhs))
     }
 
-
+    ///
+    /// `Float#%` and `Integer#%` with a Float divisor: `f(lhs, rhs)` on two
+    /// doubles, with the zero divisor left to the builtin, which raises
+    /// ZeroDivisionError (`flodivmod`; issue #2042).
+    ///
+    /// A constant divisor is tested here: zero declines (the ordinary call
+    /// raises), anything else needs no guard. A divisor known only at run
+    /// time is compared with `0.0` and deopts when equal, so that the
+    /// interpreter runs the operator again and raises — also when the
+    /// result is discarded.
+    ///
+    /// *int_recv*: the receiver is an Integer (converted to a double).
+    ///
+    pub(crate) fn float_rem(
+        &mut self,
+        ir: &mut AsmIr,
+        f: extern "C" fn(f64, f64) -> f64,
+        dst: Option<SlotId>,
+        recv: SlotId,
+        args: SlotId,
+        int_recv: bool,
+    ) -> bool {
+        // A constant divisor that is neither an Integer nor a Float has no
+        // FP load (see `is_C_non_f64`).
+        if self.is_C_non_f64(args) {
+            return false;
+        }
+        let divisor = self.coerce_C_f64(args);
+        if divisor == Some(0.0) {
+            return false;
+        }
+        if divisor.is_some()
+            && let Some((lhs, rhs)) = self.check_binary_C_f64(recv, args)
+        {
+            let res = f(lhs, rhs);
+            if match dst {
+                Some(dst) => self.def_C_float(dst, res),
+                None => true,
+            } {
+                return true;
+            }
+        }
+        if divisor.is_some() && dst.is_none() {
+            // Nothing to raise and nothing to compute.
+            return true;
+        }
+        // Pin each operand across the loads and the dst alloc that follow:
+        // the allocator may otherwise pick its fpr as the spill victim.
+        let lhs = if int_recv {
+            self.load_fpr_fixnum(ir, recv)
+        } else {
+            self.load_fpr(ir, recv)
+        };
+        self.pin_fpr(lhs);
+        let rhs = self.load_fpr(ir, args);
+        self.pin_fpr(rhs);
+        if divisor.is_none() {
+            let deopt = ir.new_deopt(self);
+            ir.inline(move |r#gen, _, labels, base| {
+                let deopt = r#gen.deopt_label(
+                    labels,
+                    deopt,
+                    crate::codegen::jitgen::deopt_log::DeoptCause::Static("float modulo by zero"),
+                );
+                r#gen.guard_fpr_nonzero(rhs, &deopt, base);
+            });
+        }
+        if let Some(dst) = dst {
+            self.discard(dst);
+            let using_fpr = self.get_using_fpr(ir);
+            let dst = self.def_F(dst);
+            ir.push(AsmInst::CFunc_FF_F {
+                f,
+                lhs,
+                rhs,
+                dst,
+                using_fpr,
+            });
+        }
+        self.unpin_fpr(rhs);
+        self.unpin_fpr(lhs);
+        true
+    }
 
     fn binop_integer_folded(&mut self, kind: BinOpK, lhs: i64, rhs: i64) -> Option<Immediate> {
         match kind {

@@ -579,6 +579,12 @@ fn try_prism_inner(
                 || msg == "found '= literal' in conditional, should be =="
                 || msg == "integer literal in flip-flop"
                 || msg == "regex literal in condition"
+                // A repeated static key in a Hash literal or in the
+                // keyword arguments of a call
+                // (`pm_hash_key_static_literals_add`), placed at the key
+                // that is overwritten.
+                || (msg.starts_with("key ")
+                    && msg.contains(" is duplicated and overwritten on line "))
             {
                 false
             } else if msg == "possibly useless use of defined? in void context"
@@ -592,6 +598,13 @@ fn try_prism_inner(
             };
             let loc = location_to_loc(&w.location());
             let line = source_info.get_line(&loc);
+            // prism prints a `__FILE__` key by the file name it was
+            // given, and this parse gives it none.
+            let msg = if w.location().as_slice() == b"__FILE__" {
+                msg.replacen("key \"\"", &format!("key {path_display:?}"), 1)
+            } else {
+                msg.to_string()
+            };
             Some((
                 format!("{}:{}: warning: {}", path_display, line, msg),
                 verbose_only,

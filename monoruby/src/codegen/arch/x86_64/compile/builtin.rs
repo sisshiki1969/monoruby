@@ -1498,6 +1498,35 @@ impl Codegen {
         }
     }
 
+    /// Deopt when the double in `fsrc` is `0.0` or `-0.0` (the divisor of a
+    /// float modulo, which raises). NaN is unordered and passes.
+    ///
+    /// ### destroy
+    /// - xmm0
+    pub(crate) fn guard_fpr_nonzero(&mut self, fsrc: FPReg, deopt: &DestLabel, base: usize) {
+        let ok = self.jit.label();
+        monoasm! { &mut self.jit,
+            xorps xmm0, xmm0;
+        }
+        // ucomisd's first operand must be a register; the second may be
+        // memory, and equality does not depend on the order.
+        match PhysMap::new(base).resolve(fsrc) {
+            FPRegLoc::Xmm(p) => monoasm! { &mut self.jit,
+                ucomisd xmm(p), xmm0;
+            },
+            FPRegLoc::Spill(off) => monoasm! { &mut self.jit,
+                ucomisd xmm0, [rbp - (off)];
+            },
+        }
+        // ZF=1, PF=0: equal. ZF=1, PF=1: unordered.
+        monoasm! { &mut self.jit,
+            jne  ok;
+            jp   ok;
+            jmp  deopt;
+        ok:
+        }
+    }
+
     /// Deopt unless the tagged fixnum in rdi lies in `[-2**53, 2**53)`, the
     /// range whose f64 conversion is exact (an Integer/Float comparison).
     /// `2n+1` is in range iff `2n+1 + 2**54` is in `[1, 2**55)`; anything

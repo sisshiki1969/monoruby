@@ -443,6 +443,5 @@ class Enumerator
       end
       __sprintf_repr(s + ">")
     end
-    alias to_s inspect
   end
 end

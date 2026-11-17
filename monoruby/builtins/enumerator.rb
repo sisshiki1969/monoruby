@@ -74,6 +74,9 @@ class Enumerator
   # "call `#__product_each` on myself", so `#next` / `#peek` work through
   # the usual external-iteration machinery.
   class Product < Enumerator
+    # As on a Chain (`builtins/enumerable.rb`).
+    undef_method :next, :peek, :next_values, :peek_values, :feed
+
     def initialize(*enums)
       @__enums = enums
       __enum_init_method__(self, :__product_each, [], -> { size })
@@ -171,7 +174,6 @@ class Enumerator
         guard.pop
       end
     end
-    alias to_s inspect
   end
 end
 

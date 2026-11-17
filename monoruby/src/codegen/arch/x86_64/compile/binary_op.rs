@@ -281,37 +281,6 @@ impl Codegen {
     }
 
     ///
-    /// gen code for `Integer#%` with a Float rhs.
-    ///
-    /// Calls `rem_ff(lhs, rhs)` and stores the f64 result in `dst_fpr`.
-    ///
-    /// ### in
-    /// - xmm(*lhs_fpr*): lhs as f64 (Integer converted to f64)
-    /// - xmm(*rhs_fpr*): rhs as f64
-    ///
-    /// ### out
-    /// - xmm(*dst_fpr*): result f64
-    ///
-    pub(crate) fn gen_int_rem_if(
-        &mut self,
-        lhs_fpr: FPReg,
-        rhs_fpr: FPReg,
-        dst_fpr: FPReg,
-        using_fpr: UsingFpr,
-        base: usize,
-    ) {
-        self.fpr_save(using_fpr);
-        self.load_fpr_into_xmm0(lhs_fpr, base);
-        self.load_fpr_into_xmm1(rhs_fpr, base);
-        monoasm!( &mut self.jit,
-            movq rax, (rem_ff as *const ());
-            call rax;
-        );
-        self.fpr_restore(using_fpr);
-        self.store_fpr_into_xmm(dst_fpr, base);
-    }
-
-    ///
     /// gen code for `Integer#**` with a Float rhs.
     ///
     /// Calls `pow_ff(lhs, rhs)` and returns a `Value` (Float or Complex)

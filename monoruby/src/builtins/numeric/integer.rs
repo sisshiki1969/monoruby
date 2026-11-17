@@ -40,6 +40,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         1,
     );
     globals.define_builtin_inline_func(INTEGER_CLASS, "**", int_pow, inline_gen2!(integer_pow), 1);
+    globals.define_private_builtin_func(INTEGER_CLASS, "__fdiv_coerce", int_fdiv_coerce, 1);
     globals.define_builtin_inline_binary_funcs(
         INTEGER_CLASS,
         "&",
@@ -743,6 +744,37 @@ fn int_rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         .ok_or_else(|| vm.take_error())
 }
 
+///
+/// ### Integer#__fdiv_coerce
+///
+/// - __fdiv_coerce(other) -> Float
+///
+/// `Integer#fdiv` with an argument that is neither an Integer nor a
+/// Float (`builtins/integer.rb`): CRuby's
+/// `NUM2DBL(rb_num_coerce_bin(x, y, idFdiv))`.
+#[monoruby_builtin]
+fn int_fdiv_coerce(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let res = crate::coerce::num_coerce_bin(
+        vm,
+        globals,
+        IdentId::get_id("fdiv"),
+        lfp.self_val(),
+        lfp.arg(0),
+        "Integer",
+    )?;
+    if res.try_float().is_some() {
+        return Ok(res);
+    }
+    Ok(Value::float(crate::builtins::thread::num2dbl(
+        vm, globals, res,
+    )?))
+}
+
 fn integer_rem(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -821,29 +853,7 @@ fn integer_rem_float_rhs(
     recv: SlotId,
     args: SlotId,
 ) -> bool {
-    // Constant folding: both operands are concrete (Integer | Float).
-    // ruby_mod of any two reals where one is float produces a float.
-    if let Some(lhs) = state.coerce_C_f64(recv)
-        && let Some(rhs) = state.coerce_C_f64(args)
-    {
-        let result = lhs.ruby_mod(&rhs);
-        if state.def_C_float(dst, result) {
-            return true;
-        }
-    }
-
-    let lhs_fpr = state.load_fpr_fixnum(ir, recv);
-    let rhs_fpr = state.load_fpr(ir, args);
-    let Some(dst) = dst else {
-        // Result discarded; no work needed (rem_ff is pure).
-        return true;
-    };
-    let dst_fpr = state.def_F(dst);
-    let using_fpr = state.get_using_fpr(ir);
-    ir.inline(move |r#gen, _, _, base| {
-        r#gen.gen_int_rem_if(lhs_fpr, rhs_fpr, dst_fpr, using_fpr, base)
-    });
-    true
+    state.float_rem(ir, crate::executor::op::rem_ff, dst, recv, args, true)
 }
 
 ///

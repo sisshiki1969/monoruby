@@ -53,7 +53,7 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
         float_binop_gen(BinOpK::Div),
         1,
     );
-    globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "%", rem, rem_ff_f, 1);
+    globals.define_builtin_inline_func(FLOAT_CLASS, "%", rem, inline_gen2!(float_rem), 1);
     globals.define_builtin_cfunc_ff_f(FLOAT_CLASS, "**", pow, pow_ff_f, 1);
     globals.define_builtin_inline_unary_func(FLOAT_CLASS, "-@", super::neg, float_neg_gen());
     globals.define_builtin_func(FLOAT_CLASS, "hash", hash, 0);
@@ -343,9 +343,25 @@ extern "C" fn pow_ff_f(lhs: f64, rhs: f64) -> f64 {
     lhs.powf(rhs)
 }
 
-
-extern "C" fn rem_ff_f(lhs: f64, rhs: f64) -> f64 {
-    lhs.ruby_mod(&rhs)
+/// `Float#%`: an xmm C call to `rem_ff`, behind a guard for the zero
+/// divisor, which raises (see `AbstractState::float_rem`).
+fn float_rem(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let CallSiteInfo {
+        dst, recv, args, ..
+    } = *callsite;
+    state.float_rem(ir, crate::executor::op::rem_ff, dst, recv, args, false)
 }
 
 fn float_toi(
