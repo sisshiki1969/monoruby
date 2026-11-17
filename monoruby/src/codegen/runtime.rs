@@ -78,7 +78,7 @@ pub(super) extern "C" fn find_method(
     let mut cacheable = true;
     let fid = if let Some(func_name) = name {
         let is_func_call = globals[callid].is_func_call();
-        vm.find_method(globals, recv, func_name, is_func_call)
+        vm.find_method_at_site(globals, recv, func_name, is_func_call)
     } else {
         find_super(vm, globals, callid).map(|(fid, c)| {
             cacheable = c;
@@ -585,7 +585,7 @@ pub(super) extern "C" fn enter_classdef<'a>(
     // legal, so it owns a refinement cell. Seed it from the enclosing
     // scope on every entry; each `using` in the body updates it from
     // there (`ISeqInfo::refinements`).
-    let outer_refinements = vm.current_refinements(globals);
+    let outer_refinements = vm.ruby_level_refinements(globals);
     if let Some(info) = globals.store.iseq_mut(func_id) {
         info.lexical_context = lexical_context;
         info.refinements = Some(outer_refinements);
@@ -1095,14 +1095,14 @@ pub(super) extern "C" fn array_concat(
 /// overridden `respond_to?`, a receiver without one (`BasicObject`),
 /// or a computing `respond_to_missing?` behave exactly as before.
 ///
-/// `name` is resolved through the current frame's refinement set — the
-/// set the invoked builtin would read as its caller's. On activerecord
-/// this removes one builtin frame per non-Array splat/destructure
-/// operand (4.7M `to_ary`/`to_a` probes per benchmark run, String and
-/// nil sources almost all of them).
+/// `name` is resolved as `rb_check_funcall` resolves it once the
+/// `respond_to?` in charge is the builtin one: with no refinement
+/// (`rb_search_method_entry`), whatever scope wrote the destructuring
+/// or the splat (#1998). On activerecord this removes one builtin frame
+/// per non-Array splat/destructure operand (4.7M `to_ary`/`to_a` probes
+/// per benchmark run, String and nil sources almost all of them).
 ///
 pub(crate) fn default_responds_to(
-    vm: &Executor,
     globals: &mut Globals,
     recv: Value,
     name: IdentId,
@@ -1111,13 +1111,8 @@ pub(crate) fn default_responds_to(
     if Some(rt_fid) != globals.store.respond_to_fid() {
         return None;
     }
-    // `include_all = true`: visibility never matters here; refinements do.
-    let set = vm.current_refinements(globals);
-    if globals
-        .store
-        .check_method_with_refinements(recv.class(), name, set)
-        .is_some_and(|e| e.func_id().is_some())
-    {
+    // `include_all = true`: visibility never matters here.
+    if globals.check_method(recv, name).is_some() {
         return Some(true);
     }
     // Missing: the dynamic predicate falls to `respond_to_missing?`.
@@ -1154,16 +1149,13 @@ pub(crate) fn check_funcall_cached(
     recv: Value,
     name: IdentId,
 ) -> Result<Option<Value>> {
-    // `default_responds_to` resolves `name` through the caller's
-    // refinements, which the memo knows nothing about.
-    if !globals.store.refinements().is_active()
-        && globals
-            .store
-            .no_conversion(recv.class(), name, Globals::class_version())
+    if globals
+        .store
+        .no_conversion(recv.class(), name, Globals::class_version())
     {
         return Ok(None);
     }
-    match default_responds_to(vm, globals, recv, name) {
+    match default_responds_to(globals, recv, name) {
         Some(true) => vm
             .invoke_method_inner(globals, name, recv, &[], None, None)
             .map(Some),
@@ -3220,7 +3212,13 @@ pub(super) extern "C" fn defined_method(
 ) {
     use crate::executor::Visibility;
     let is_func_call = vm.cfp().lfp().self_val() == recv;
-    if let Some(entry) = globals.store.check_method_for_class(recv.class(), name) {
+    // The call `defined?` asks about is one written at this site, so it
+    // is looked up as that call would be: under the scope's refinements.
+    let set = vm.site_refinements(globals);
+    if let Some(entry) = globals
+        .store
+        .check_method_with_refinements(recv.class(), name, set)
+    {
         if entry.func_id().is_some() {
             let visible = match entry.visibility() {
                 Visibility::Public => true,

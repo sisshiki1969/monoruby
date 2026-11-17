@@ -3352,36 +3352,48 @@ impl Executor {
     }
 
     ///
-    /// The refinement set the code in the *current* frame resolves under.
+    /// CRuby's `rb_vm_cref()` for a lookup made from native code: the
+    /// refinement set of the nearest *user* Ruby frame at or outside the
+    /// current one. Native frames are walked through, and so are the
+    /// frames of monoruby's Ruby-written core builtins (`builtins/*.rb`),
+    /// which are C frames in CRuby.
     ///
-    /// See `Store::iseq_refinements` for why one rule (walk to the mother
-    /// iseq) covers methods, class bodies, the top level and blocks alike.
-    /// A native frame has no scope of its own, so the walk skips out to
-    /// the Ruby frame that called it.
+    /// This is the scope of what CRuby resolves *with* refinements
+    /// although the lookup is not a call site of the running frame:
     ///
-    pub(crate) fn current_refinements(&self, globals: &Globals) -> RefinementSetId {
+    /// - a call made with `CALL_PUBLIC` (`rb_funcallv_public`:
+    ///   `inject(:+)`, `public_send`, `ARGF`'s forwarding) — see
+    ///   [`Self::invoke_method_public`];
+    /// - `&obj`: CRuby calls `#to_proc` in the caller's own iseq
+    ///   (`vm_caller_setup_arg_block`), under that iseq's refinements;
+    ///   monoruby passes the object through the block slot and converts
+    ///   lazily, in whatever frame first needs the block;
+    /// - `&:sym`: CRuby builds the proc at the call site with the site's
+    ///   refinements captured (`refine_sym_proc_call`); monoruby carries
+    ///   the bare Symbol and resolves the name when the block is yielded
+    ///   to, from inside e.g. the Ruby-written `Array#map`;
+    /// - `rb_respond_to` asked by a C extension, and the scope a `def`, a
+    ///   class body or a `refine` block is evaluated in.
+    ///
+    /// Every *other* lookup is either a call site of the running frame
+    /// ([`Self::site_refinements`]) or native code calling a method of
+    /// its operand, which sees no refinement — see [`Self::find_method`].
+    ///
+    pub(crate) fn ruby_level_refinements(&self, globals: &Globals) -> RefinementSetId {
+        if !globals.store.refinements().is_active() {
+            return RefinementSetId::EMPTY;
+        }
         Self::frame_refinements(globals, self.cfp)
     }
 
-    /// The set for the nearest Ruby frame at or outside *cfp*. `EMPTY`
+    /// The set for the nearest user frame at or outside *cfp*: native
+    /// frames and the Ruby-written core's are walked through. `EMPTY`
     /// when there is no frame at all (an `at_exit` handler runs with the
-    /// control-frame chain already torn down) or no Ruby frame below.
+    /// control-frame chain already torn down) or no such frame below.
     fn frame_refinements(globals: &Globals, cfp: Option<Cfp>) -> RefinementSetId {
         let mut cfp = cfp;
         while let Some(c) = cfp {
             let fid = c.lfp().func_id();
-            // monoruby writes part of its core library in Ruby
-            // (`builtins/*.rb`). Those bodies are not the scope the user
-            // wrote against, so a protocol dispatch made from inside one
-            // — `#to_proc` for a `&obj` argument, `#to_s` behind
-            // interpolation — must keep walking out to the caller's
-            // scope. CRuby performs those conversions in the caller's own
-            // iseq; monoruby performs them inside the callee, and walking
-            // out is what makes the two agree. The same frames are already
-            // transparent to `$~`.
-            //
-            // The library's *own* operations are the opposite case, and
-            // `lexical_frame_refinements` handles them.
             if !globals.store[fid].meta().is_internal_builtin()
                 && let Some(iseq) = globals.store[fid].is_iseq()
             {
@@ -3393,21 +3405,36 @@ impl Executor {
     }
 
     ///
-    /// The set for a *basic operation* resolved from the current frame.
+    /// The refinement set of the code *written* in the frame the
+    /// interpreter is running — what a call site, an operator or an
+    /// interpolation of that frame resolves under.
     ///
-    /// Same walk as [`Self::current_refinements`] except that monoruby's
-    /// Ruby-written core library ends it instead of being walked through.
-    /// The two cases the transparency serves pull in opposite directions:
+    /// Only a Ruby frame has one. Two kinds of frame answer `EMPTY`:
     ///
-    /// - `&obj` / interpolation convert in the callee here where CRuby
-    ///   converts in the caller, so those must reach the caller's scope.
-    /// - `Array#map`'s own `i += 1` is the library's code, and in CRuby it
-    ///   is C — invisible to any refinement. Reaching the caller's scope
-    ///   there let a refined `Integer#+` end the loop after one iteration.
+    /// - A **native** frame. A builtin calls the methods of its operands
+    ///   as CRuby's C does, with `rb_funcall`, which no `using` reaches:
+    ///   `[r, r1].sort` compares with the `<=>` the class defines, not the
+    ///   one a refinement active where `sort` was called put in front of
+    ///   it (#1998). The helpers the VM shares with the builtins
+    ///   (`cmp_values`, `add_values`, …) read the scope here, so the same
+    ///   helper is refinement-aware under `a <=> b` written in a refined
+    ///   scope and blind under `Array#sort`.
+    /// - One of monoruby's **Ruby-written core** methods
+    ///   (`builtins/*.rb`). Those bodies are C in CRuby: `Array#map`'s own
+    ///   `i += 1` is `rb_int_plus` and `Array#each`'s own `size` is
+    ///   `RARRAY_LEN`. Resolving them against the scope that called the
+    ///   builtin let a refined `Integer#+` end the loop after one
+    ///   iteration (#1066) and a refined `Array#size` make `p 1` raise
+    ///   (#2029).
     ///
-    /// An operator is never a conversion performed on the caller's behalf,
-    /// so the operator paths ask this instead. See #1066.
-    ///
+    pub(crate) fn site_refinements(&self, globals: &Globals) -> RefinementSetId {
+        // One load in a program that refines nothing.
+        if !globals.store.refinements().is_active() {
+            return RefinementSetId::EMPTY;
+        }
+        Self::frame_site_refinements(globals, self.cfp)
+    }
+
     ///
     /// Whether the frame currently running is one of monoruby's Ruby-written
     /// core builtins (`builtins/*.rb`) — see [`Meta::set_internal_builtin`].
@@ -3421,7 +3448,7 @@ impl Executor {
     /// Whether an operator applied to a receiver of `class` must be handed
     /// to a user redefinition instead of being computed by the builtin.
     ///
-    /// The redefinition twin of [`Self::basic_op_refinements`], and it
+    /// The redefinition twin of [`Self::site_refinements`], and it
     /// declines for the same reason: `Array#map`'s own `i += 1` is the
     /// library's code, and in CRuby it is C — `rb_int_plus`, which cannot
     /// see `Integer#+` being redefined at all. Letting the redefinition
@@ -3439,39 +3466,65 @@ impl Executor {
             && !self.in_internal_builtin()
     }
 
-    pub(crate) fn basic_op_refinements(&self, globals: &Globals) -> RefinementSetId {
-        let mut cfp = self.cfp;
-        while let Some(c) = cfp {
-            let fid = c.lfp().func_id();
-            if globals.store[fid].meta().is_internal_builtin() {
-                return RefinementSetId::EMPTY;
-            }
-            if let Some(iseq) = globals.store[fid].is_iseq() {
-                return globals.store.iseq_refinements(iseq);
-            }
-            cfp = c.prev();
-        }
-        RefinementSetId::EMPTY
-    }
-
     ///
-    /// Whether the scope [`Self::basic_op_refinements`] answers for — the
+    /// Whether the scope [`Self::site_refinements`] answers for — the
     /// code that wrote the operator being run — activated any refinement.
-    /// One load in a program that refines nothing.
     ///
+    ///
+    /// [`Self::site_refinements`] of the frame that called the builtin
+    /// currently running, for a builtin that stands in for something
+    /// CRuby does at the call site itself (`Store::site_target`): the
+    /// caller's set if that is a user frame, no refinement if the builtin
+    /// was reached any other way.
+    ///
+    pub(crate) fn caller_site_refinements(&self, globals: &Globals) -> RefinementSetId {
+        if !globals.store.refinements().is_active() {
+            return RefinementSetId::EMPTY;
+        }
+        Self::frame_site_refinements(globals, self.cfp.and_then(|c| c.prev()))
+    }
+
+    fn frame_site_refinements(globals: &Globals, cfp: Option<Cfp>) -> RefinementSetId {
+        let Some(cfp) = cfp else {
+            return RefinementSetId::EMPTY;
+        };
+        let info = &globals.store[cfp.lfp().func_id()];
+        match info.is_iseq() {
+            Some(iseq) if !info.meta().is_internal_builtin() => {
+                globals.store.iseq_refinements(iseq)
+            }
+            _ => RefinementSetId::EMPTY,
+        }
+    }
+
     pub(crate) fn in_refined_scope(&self, globals: &Globals) -> bool {
-        globals.store.refinements().is_active() && !self.basic_op_refinements(globals).is_empty()
+        !self.site_refinements(globals).is_empty()
     }
 
     ///
-    /// The refinement set of the scope that called the builtin currently
-    /// running — what `Module.used_refinements` and the reflective entry
-    /// points (`send`, `respond_to?`, …) must resolve under.
+    /// The refinement set of the code that called the builtin currently
+    /// running — what the reflective entry points (`send`, `respond_to?`,
+    /// `method`, …) resolve under, and what `Module.used_refinements`
+    /// reports.
+    ///
+    /// Called from user code, or through native frames from it, that is
+    /// the nearest user frame's set. Called by one of monoruby's
+    /// Ruby-written core methods it is no refinement at all: there
+    /// `x.respond_to?(:m)` followed by `x.m` is the core's spelling of
+    /// CRuby's `rb_check_funcall`, and `x.__send__(:m)` of `rb_funcall`,
+    /// neither of which a `using` reaches (#2029). The core says
+    /// `public_send` where CRuby says `rb_funcallv_public`, which does
+    /// see the user's refinements ([`Self::ruby_level_refinements`]).
     ///
     pub(crate) fn caller_refinements(&self, globals: &Globals) -> RefinementSetId {
+        if !globals.store.refinements().is_active() {
+            return RefinementSetId::EMPTY;
+        }
+        if self.called_by_core() {
+            return RefinementSetId::EMPTY;
+        }
         Self::frame_refinements(globals, self.cfp.and_then(|c| c.prev()))
     }
-
 
     ///
     /// `using`: activate *added* in the calling scope.
@@ -3567,7 +3620,7 @@ impl Executor {
         if entries.is_empty() {
             return;
         }
-        let base = self.current_refinements(globals);
+        let base = self.ruby_level_refinements(globals);
         let set = globals.store.refinements_mut().activated(base, &entries);
         let iseqs: Vec<ISeqId> = entries
             .iter()
@@ -3614,7 +3667,7 @@ impl Executor {
     /// The refinement set the definition site of a new method should
     /// snapshot — see `ISeqInfo::refinements`.
     pub(crate) fn definition_refinements(&self, globals: &Globals) -> RefinementSetId {
-        self.current_refinements(globals)
+        self.ruby_level_refinements(globals)
     }
 
     /// The definition site of the innermost `method_added`-style hook
@@ -4022,7 +4075,18 @@ impl Executor {
 
 impl Executor {
     ///
-    /// Find method *name* for object *obj*.
+    /// Find method *name* for object *obj*, as native code calling it
+    /// finds it: CRuby's `rb_funcall` / `rb_check_funcall`, which see no
+    /// refinement whatever scope the builtin was called from.
+    ///
+    /// `[r, r1].sort` compares with the `<=>` the class defines, `puts r`
+    /// prints what its `to_s` answers and `a, b = r` asks its `to_ary`,
+    /// not the ones a refinement active at the call site put in front of
+    /// them (#1998). A method call, an operator or an interpolation
+    /// *written* in Ruby code resolves with [`Self::find_method_at_site`]
+    /// instead, and the few native calls CRuby makes with `CALL_PUBLIC`
+    /// (`rb_funcallv_public`: `inject(:+)`, a `Symbol#to_proc` proc) ask
+    /// for the scope explicitly — see [`Self::invoke_method_public`].
     ///
     /// If not found, return MethodNotFound error.
     ///
@@ -4033,30 +4097,52 @@ impl Executor {
         func_name: IdentId,
         is_func_call: bool,
     ) -> Result<FuncId> {
+        self.find_method_in(
+            globals,
+            recv,
+            func_name,
+            is_func_call,
+            RefinementSetId::EMPTY,
+        )
+    }
+
+    ///
+    /// Find method *name* for object *obj*, called by code written in the
+    /// frame the interpreter is running: under the refinements of that
+    /// scope ([`Self::site_refinements`]).
+    ///
+    pub(crate) fn find_method_at_site(
+        &mut self,
+        globals: &mut Globals,
+        recv: Value,
+        func_name: IdentId,
+        is_func_call: bool,
+    ) -> Result<FuncId> {
+        // `EMPTY` — every scope in a program that never refines anything
+        // — takes the same path as before.
+        let set = self.site_refinements(globals);
+        let fid = self.find_method_in(globals, recv, func_name, is_func_call, set)?;
+        Ok(globals.store.site_target(func_name, set, fid))
+    }
+
+    ///
+    /// Find method *name* for object *obj* as seen from a scope whose
+    /// activated refinements are *set*.
+    ///
+    pub(crate) fn find_method_in(
+        &mut self,
+        globals: &mut Globals,
+        recv: Value,
+        func_name: IdentId,
+        is_func_call: bool,
+        set: RefinementSetId,
+    ) -> Result<FuncId> {
         // Use the IC class (BOOL_CLASS for bools) so the VM caches a
         // single class id for `true` / `false` receivers. Lookup on
         // BOOL_CLASS is implemented in `check_method_for_class` and only
         // succeeds when both `TrueClass` and `FalseClass` resolve to the
         // same `FuncId`; otherwise it falls back to the per-class lookup.
         let class_id = recv.class_for_ic();
-        // The resolved method depends on the *caller's* scope once
-        // refinements are in play. `EMPTY` — every scope in a program
-        // that never refines anything — takes the same path as before.
-        //
-        // An operator is resolved against the scope that *wrote* it, which
-        // is not the same walk: monoruby's Ruby-written core library must
-        // not pick up a caller's refinement of `Integer#+` for its own
-        // `i += 1`, while a conversion it performs for the caller (`&obj`,
-        // interpolation) must. See `Self::basic_op_refinements`.
-        let set = if globals.store.refinements().is_active() {
-            if globals.store.is_basic_op_name(func_name) {
-                self.basic_op_refinements(globals)
-            } else {
-                self.current_refinements(globals)
-            }
-        } else {
-            RefinementSetId::EMPTY
-        };
         let entry = globals
             .store
             .check_method_with_refinements(class_id.id(), func_name, set)
@@ -4130,7 +4216,8 @@ impl Executor {
     }
 
     ///
-    /// Invoke method for *receiver* and *method*.
+    /// Invoke method for *receiver* and *method*, as native code calls it
+    /// (`rb_funcall`: no refinement, see [`Self::find_method`]).
     ///
     pub(crate) fn invoke_method(
         &mut self,
@@ -4151,12 +4238,43 @@ impl Executor {
             bh,
             kw_args,
             MethodMissingStyle::Plain,
+            false,
+        )
+    }
+
+    ///
+    /// [`Self::invoke_method`] for a call the code of the running frame
+    /// wrote — `pattern === value` behind `case` / `when` and `rescue`,
+    /// which CRuby dispatches with the refinements of that scope
+    /// (`check_match`: `rb_vm_call_with_refinements`).
+    ///
+    pub(crate) fn invoke_method_site(
+        &mut self,
+        globals: &mut Globals,
+        method: IdentId,
+        is_func_call: bool,
+        receiver: Value,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.invoke_method_styled(
+            globals,
+            method,
+            is_func_call,
+            receiver,
+            args,
+            None,
+            None,
+            MethodMissingStyle::Plain,
+            true,
         )
     }
 
     ///
     /// [`Self::invoke_method`], with the way the call was written for
-    /// the `method_missing` a failed lookup falls back to (`missing`).
+    /// the `method_missing` a failed lookup falls back to (`missing`),
+    /// and whether it resolves as a call site of the running frame does
+    /// (`at_site`, [`Self::find_method_at_site`]). `method_missing`
+    /// itself is always found as `rb_funcall` finds it.
     ///
     fn invoke_method_styled(
         &mut self,
@@ -4168,8 +4286,14 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
         missing: MethodMissingStyle,
+        at_site: bool,
     ) -> Option<Value> {
-        let func_id = match self.find_method(globals, receiver, method, is_func_call) {
+        let found = if at_site {
+            self.find_method_at_site(globals, receiver, method, is_func_call)
+        } else {
+            self.find_method(globals, receiver, method, is_func_call)
+        };
+        let func_id = match found {
             Ok(id) => id,
             Err(original_err) => {
                 // Fall back to method_missing, matching CRuby behavior.
@@ -4212,9 +4336,9 @@ impl Executor {
     ///
     /// Invoke method for *receiver* and *method*.
     ///
-    /// Funcall semantics: private methods are reachable. For a
-    /// visibility-honouring dispatch (CRuby's `rb_funcallv_public`) use
-    /// [`Self::invoke_method_inner_vis`].
+    /// Funcall semantics (CRuby's `rb_funcall`): private methods are
+    /// reachable and no refinement is seen. For the visibility-honouring
+    /// dispatch (`rb_funcallv_public`) use [`Self::invoke_method_public`].
     ///
     pub(crate) fn invoke_method_inner(
         &mut self,
@@ -4225,15 +4349,88 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
     ) -> Result<Value> {
-        self.invoke_method_inner_vis(globals, method, receiver, args, bh, kw_args, true)
+        self.invoke_method_in(
+            globals,
+            method,
+            receiver,
+            args,
+            bh,
+            kw_args,
+            true,
+            RefinementSetId::EMPTY,
+        )
     }
 
     ///
-    /// Invoke method for *receiver* and *method*, with the call site's
-    /// func-call flag spelled out: `is_func_call = false` restricts the
-    /// lookup to public methods, as CRuby's `rb_funcallv_public` does.
+    /// Invoke method for *receiver* and *method* as CRuby's
+    /// `rb_funcallv_public` does: only a public method is callable, and
+    /// it is looked up under [`Self::public_funcall_refinements`]. That
+    /// is how `[r, r].inject(:+)` reaches a `+` that only a refinement
+    /// gives `R` although `[r, r].sum` does not.
     ///
-    pub(crate) fn invoke_method_inner_vis(
+    pub(crate) fn invoke_method_public(
+        &mut self,
+        globals: &mut Globals,
+        method: IdentId,
+        receiver: Value,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+        kw_args: Option<Hashmap>,
+    ) -> Result<Value> {
+        let set = self.public_funcall_refinements(globals, receiver, method);
+        self.invoke_method_in(globals, method, receiver, args, bh, kw_args, false, set)
+    }
+
+    ///
+    /// The refinements `rb_funcallv_public(recv, method)` resolves under.
+    ///
+    /// None, if the class itself answers with a public method: the call
+    /// goes through CRuby's global call cache, which knows no refinement
+    /// (`rb_funcallv_scope`'s fast path). Only when that fails — no such
+    /// method, or one that is not public — does `rb_call0` look again,
+    /// and for `CALL_PUBLIC` alone it does so with the refinements of the
+    /// nearest Ruby frame ([`Self::ruby_level_refinements`]).
+    ///
+    pub(crate) fn public_funcall_refinements(
+        &self,
+        globals: &Globals,
+        recv: Value,
+        method: IdentId,
+    ) -> RefinementSetId {
+        if !globals.store.refinements().is_active()
+            || !globals.store.refinements().is_refined_name(method)
+        {
+            return RefinementSetId::EMPTY;
+        }
+        match globals.store.check_method_for_class(recv.class(), method) {
+            Some(entry)
+                if entry.func_id().is_some() && entry.visibility() == Visibility::Public =>
+            {
+                RefinementSetId::EMPTY
+            }
+            _ => self.ruby_level_refinements(globals),
+        }
+    }
+
+    ///
+    /// Whether the builtin currently running was called by one of
+    /// monoruby's Ruby-written core methods — see
+    /// [`Self::caller_refinements`].
+    ///
+    pub(crate) fn called_by_core(&self) -> bool {
+        self.cfp
+            .and_then(|c| c.prev())
+            .is_some_and(|c| c.lfp().meta().is_internal_builtin())
+    }
+
+    ///
+    /// Invoke method for *receiver* and *method* as seen from a scope
+    /// whose activated refinements are *set*, with the call site's
+    /// func-call flag spelled out: `is_func_call = false` restricts the
+    /// lookup to public methods. A failed lookup falls back to
+    /// `method_missing`.
+    ///
+    pub(crate) fn invoke_method_in(
         &mut self,
         globals: &mut Globals,
         method: IdentId,
@@ -4242,8 +4439,9 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
         is_func_call: bool,
+        set: RefinementSetId,
     ) -> Result<Value> {
-        match self.find_method(globals, receiver, method, is_func_call) {
+        match self.find_method_in(globals, receiver, method, is_func_call, set) {
             Ok(func_id) => {
                 self.invoke_func_named(globals, func_id, method, receiver, args, bh, kw_args)
             }
@@ -4339,7 +4537,7 @@ impl Executor {
         rhs: Value,
         is_func_call: bool,
     ) -> Result<Value> {
-        match self.find_method(globals, lhs, IdentId::_EQ, is_func_call) {
+        match self.find_method_at_site(globals, lhs, IdentId::_EQ, is_func_call) {
             Ok(func_id) => self.invoke_func_inner(globals, func_id, lhs, &[rhs], None, None),
             Err(err) => {
                 self.invoke_method_missing_for(globals, lhs, IdentId::_EQ, &[rhs], None, None, err)
@@ -4515,7 +4713,7 @@ impl Executor {
     pub(crate) fn to_s_is_refined(&mut self, globals: &mut Globals) -> bool {
         globals.store.refinements().is_active()
             && globals.store.refinements().is_refined_name(IdentId::TO_S)
-            && !self.current_refinements(globals).is_empty()
+            && !self.site_refinements(globals).is_empty()
     }
 
     /// Whether every interpolated value that has a shortcut — an Integer,
@@ -4590,9 +4788,11 @@ impl Executor {
     }
 
     /// `receiver.to_s`, called: the interpolated value `tos_direct` did
-    /// not answer.
+    /// not answer. An interpolation is written in the running frame, so
+    /// it sees that scope's refinements (CRuby's `objtostring` has a call
+    /// cache of its own).
     pub(crate) fn tos_dispatch(&mut self, globals: &mut Globals, receiver: Value) -> Result<Value> {
-        let func_id = self.find_method(globals, receiver, IdentId::TO_S, true)?;
+        let func_id = self.find_method_at_site(globals, receiver, IdentId::TO_S, true)?;
         self.invoke_func_inner(globals, func_id, receiver, &[], None, None)
     }
 
@@ -4604,7 +4804,9 @@ impl Executor {
         if v.is_rstring_inner().is_some() {
             return Ok(v);
         }
-        let s = self.tos_dispatch(globals, v)?;
+        // `rb_funcall`: no refinement, whatever scope called the builtin.
+        let func_id = self.find_method(globals, v, IdentId::TO_S, true)?;
+        let s = self.invoke_func_inner(globals, func_id, v, &[], None, None)?;
         if s.is_rstring_inner().is_some() {
             return Ok(s);
         }
@@ -4694,8 +4896,8 @@ impl Executor {
         self.dispatch_symbol_proc_kw(globals, symbol, recv, args, bh, None)
     }
 
-    /// [`Self::dispatch_symbol_proc`] with keyword arguments — `Proc#call`
-    /// on a symbol proc forwards the keywords it was given.
+    /// [`Self::dispatch_symbol_proc`] with keyword arguments, for a
+    /// *yield* to the proc: the `&:sym` of a block argument.
     pub(crate) fn dispatch_symbol_proc_kw(
         &mut self,
         globals: &mut Globals,
@@ -4704,6 +4906,34 @@ impl Executor {
         args: &[Value],
         bh: Option<BlockHandler>,
         kw: Option<Hashmap>,
+    ) -> Result<Value> {
+        self.dispatch_symbol_proc_inner(globals, symbol, recv, args, bh, kw, true)
+    }
+
+    /// [`Self::dispatch_symbol_proc_kw`] for `Proc#call` on a symbol
+    /// proc, which forwards the keywords it was given: the proc as an
+    /// object is `Symbol#to_proc`'s, public methods only.
+    pub(crate) fn call_symbol_proc_kw(
+        &mut self,
+        globals: &mut Globals,
+        symbol: IdentId,
+        recv: Value,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+        kw: Option<Hashmap>,
+    ) -> Result<Value> {
+        self.dispatch_symbol_proc_inner(globals, symbol, recv, args, bh, kw, false)
+    }
+
+    fn dispatch_symbol_proc_inner(
+        &mut self,
+        globals: &mut Globals,
+        symbol: IdentId,
+        recv: Value,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+        kw: Option<Hashmap>,
+        block_arg: bool,
     ) -> Result<Value> {
         // `&:sym` is a *call site*, and like every other call site it
         // deserves an inline cache: `ary.map(&:to_s)` asks for one symbol
@@ -4719,7 +4949,22 @@ impl Executor {
         // As `public_send` does, the refusal goes to `method_missing`, so
         // a receiver that handles it sees the name, and the default one
         // words the NoMethodError by the visibility.
-        if let Some(entry) = globals.check_method_for_class(recv.class(), symbol)
+        //
+        // Under the refinements of the scope that wrote `&:sym` — see
+        // `Self::ruby_level_refinements`. (`symbol_proc_method` answered
+        // above unless a refinement is active somewhere.)
+        let set = self.ruby_level_refinements(globals);
+        if block_arg && !set.is_empty() {
+            // A `&:sym` written where any refinement is active is not
+            // `Symbol#to_proc`'s proc in CRuby but one made for that
+            // scope (`refine_sym_proc_call`), which looks the method up
+            // with the scope's refinements and calls whatever it finds:
+            // there is no visibility check on that path.
+            return self.invoke_method_in(globals, symbol, recv, args, bh, kw, true, set);
+        }
+        if let Some(entry) = globals
+            .store
+            .check_method_with_refinements(recv.class(), symbol, set)
             && matches!(
                 entry.visibility(),
                 Visibility::Private | Visibility::Protected
@@ -4738,7 +4983,7 @@ impl Executor {
                 kw,
             );
         }
-        self.invoke_method_inner_vis(globals, symbol, recv, args, bh, kw, false)
+        self.invoke_method_in(globals, symbol, recv, args, bh, kw, false, set)
     }
 
     ///
@@ -5031,6 +5276,9 @@ impl Executor {
         })
     }
 
+    /// `receiver.method(*args)` if the receiver has such a method, found
+    /// as native code finds it (CRuby's `rb_check_funcall` without the
+    /// `respond_to?` probe: no refinement, any visibility).
     pub(crate) fn invoke_method_if_exists(
         &mut self,
         globals: &mut Globals,
@@ -5040,15 +5288,29 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
     ) -> Result<Option<Value>> {
-        // Resolve through the caller's refinement set: this is how
-        // `&obj`'s `#to_proc` coercion, the `#to_s` behind string
-        // interpolation and the other implicit-protocol dispatches reach
-        // a refined method (`doc/refinements.md` §1(d)).
-        let set = if globals.store.refinements().is_active() {
-            self.current_refinements(globals)
-        } else {
-            RefinementSetId::EMPTY
-        };
+        self.invoke_method_if_exists_in(
+            globals,
+            method,
+            receiver,
+            args,
+            bh,
+            kw_args,
+            RefinementSetId::EMPTY,
+        )
+    }
+
+    /// [`Self::invoke_method_if_exists`] as seen from a scope whose
+    /// activated refinements are *set*.
+    fn invoke_method_if_exists_in(
+        &mut self,
+        globals: &mut Globals,
+        method: IdentId,
+        receiver: Value,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+        kw_args: Option<Hashmap>,
+        set: RefinementSetId,
+    ) -> Result<Option<Value>> {
         let func_id = globals
             .store
             .check_method_with_refinements(receiver.class(), method, set)
@@ -5059,6 +5321,14 @@ impl Executor {
             }
             None => None,
         })
+    }
+
+    /// `obj.to_proc` for a `&obj` block argument, if `obj` has one: under
+    /// the refinements of the scope that wrote the `&`
+    /// ([`Self::ruby_level_refinements`]), where CRuby makes this call.
+    fn block_arg_to_proc(&mut self, globals: &mut Globals, obj: Value) -> Result<Option<Value>> {
+        let set = self.ruby_level_refinements(globals);
+        self.invoke_method_if_exists_in(globals, IdentId::TO_PROC, obj, &[], None, None, set)
     }
 
     ///
@@ -5196,6 +5466,7 @@ impl Executor {
             None,
             None,
             missing,
+            true,
         )
     }
 
@@ -5323,8 +5594,7 @@ impl Executor {
         }
         // General `to_proc` fallback: covers user-defined classes that
         // implement `to_proc` (e.g. Method#to_proc).
-        if let Some(proc) =
-            self.invoke_method_if_exists(globals, IdentId::TO_PROC, bh.0, &[], None, None)?
+        if let Some(proc) = self.block_arg_to_proc(globals, bh.0)?
             && let Some(proc) = proc.is_proc()
         {
             return Ok(ProcData::from_proc(&proc));
@@ -5536,9 +5806,7 @@ impl Executor {
         // `to_proc` fallback (Method#to_proc, user classes with #to_proc,
         // ...). Matches CRuby's `&obj` coercion: a non-Proc `#to_proc`
         // result and a missing `#to_proc` both raise TypeError.
-        if let Some(result) =
-            self.invoke_method_if_exists(globals, IdentId::TO_PROC, bh.0, &[], None, None)?
-        {
+        if let Some(result) = self.block_arg_to_proc(globals, bh.0)? {
             if let Some(proc) = result.is_proc() {
                 return Ok(proc);
             }

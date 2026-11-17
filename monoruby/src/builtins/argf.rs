@@ -478,7 +478,7 @@ fn forward_call_to_stdin(
         }
         None => None,
     };
-    vm.invoke_method_inner_vis(globals, IdentId::get_id(method), stdin, args, bh, kw_args, false)
+    vm.invoke_method_public(globals, IdentId::get_id(method), stdin, args, bh, kw_args)
 }
 
 /// The call's own arguments, as given, for forwarding: the positional
