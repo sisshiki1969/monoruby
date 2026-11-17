@@ -115,6 +115,10 @@ pub const BIGNUM_CLASS: ClassId = ClassId::new(62);
 /// building one needs no `Store` lookup from inside the matcher.
 pub const REGEX_TIMEOUT_ERROR_CLASS: ClassId = ClassId::new(63);
 
+/// `NoMemoryError`. A fixed id for the same reason: the Array code that
+/// refuses to grow has no `Store` at hand.
+pub const NO_MEMORY_ERROR_CLASS: ClassId = ClassId::new(64);
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ClassId(NonZeroU32);

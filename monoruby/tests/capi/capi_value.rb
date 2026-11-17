@@ -137,3 +137,15 @@ late.class_eval { def respond_to?(name, all = false) = name == :zz }
 p V.responds(late.new, :m), V.responds(late.new, :zz)
 # rb_check_funcall asks with private methods included
 p V.check_call(vis, :priv), V.check_call(vis, :prot), V.check_call(vis, :gone), V.check_call(Own2.new, :to_s).class, V.check_call(Own2.new, :pub)
+# rb_check_funcall, the rest of the protocol: a respond_to? that claims a
+# method which does not exist is not an answer (Qundef, no NoMethodError),
+# a respond_to_missing? that refuses stops before method_missing, and a
+# NoMethodError from method_missing is re-raised only for an object that
+# claimed to respond
+p V.check_call(Own2.new, :deep), V.check_call(late.new, :zz)
+class CfRefuse; def respond_to?(n, a = false) = true; def respond_to_missing?(n, a) = false; def method_missing(n, *) = :mm; end
+class CfMissing; def respond_to_missing?(n, a) = n == :ghost; def method_missing(n, *) = n == :ghost ? [:mm, n] : super; end
+class CfSuper; def method_missing(n, *) = super; end
+class CfClaim; def respond_to?(n, a = false) = true; def method_missing(n, *) = super; end
+p V.check_call(CfRefuse.new, :ghost), V.check_call(CfMissing.new, :ghost), V.check_call(CfMissing.new, :other), V.check_call(CfSuper.new, :ghost)
+p((V.check_call(CfClaim.new, :ghost) rescue [$!.class, $!.name]))

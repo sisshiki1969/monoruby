@@ -253,6 +253,7 @@ struct MrApi {
     MrValue (*obj_class)(MrContext *, MrValue v);  /* rb_obj_class: past a singleton class */
     MrSym   (*intern_check)(MrContext *, const uint8_t *ptr, size_t len);  /* the name's MrSym if already interned, else MR_NO_SYM */
     int     (*obj_respond_to)(MrContext *, MrValue v, MrSym sym, int include_all);  /* rb_obj_respond_to without a call to the builtin respond_to?; -1 error */
+    MrValue (*check_funcall)(MrContext *, MrValue recv, MrSym sym, int argc, const MrValue *argv, int *answered);  /* rb_check_funcall: *answered 0 (nil returned) when recv does not answer; MR_UNDEF error */
 };
 
 /* Onigmo's entry points as linked into monoruby, types erased: regex_t *

@@ -423,21 +423,17 @@ fn to_s(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let proc = Proc::new(self_);
     let func_id = proc.func_id();
     let is_lambda = !globals[func_id].is_block_style();
-    // A Method#to_proc proc reports the method's source location.
-    let src_fid = if func_id == METHOD_TO_PROC_BODY_FUNCID
-        && let Some(m) = proc.self_val().is_method()
-    {
-        m.func_id()
-    } else {
-        func_id
-    };
     let mut s = format!("#<Proc:0x{:016x}", self_.id());
     if func_id == SYMBOL_TO_PROC_BODY_FUNCID
         && let Some(sym) = proc.self_val().try_symbol()
     {
         // `:foo.to_proc` renders as `#<Proc:0x..(&:foo) (lambda)>`.
         s.push_str(&format!("(&:{})", sym));
-    } else if let Some(iseq) = globals.store.resolve_iseq(src_fid) {
+    } else if func_id == METHOD_TO_PROC_BODY_FUNCID {
+        // A `Method#to_proc` proc has no block of its own to locate
+        // (`rb_block_to_s` writes nothing for it), although its
+        // `source_location` is the method's.
+    } else if let Some(iseq) = globals.store.resolve_iseq(func_id) {
         let info = &globals.store[iseq];
         s.push_str(&format!(
             " {}:{}",

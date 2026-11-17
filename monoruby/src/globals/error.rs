@@ -516,8 +516,8 @@ impl MonorubyErr {
     /// `#detailed_message` (so a class's own `message` / `to_s` /
     /// `detailed_message` shows), which the printing code — it has only
     /// the store — reads back through [`report_message`]. An exception
-    /// whose `detailed_message` raises or answers a non-String keeps the
-    /// built-in rendering.
+    /// whose `detailed_message` raises or answers anything but a
+    /// non-empty String is reported by its class name.
     ///
     pub(crate) fn render_report_messages(vm: &mut Executor, globals: &mut Globals, obj: Value) {
         let cause_id = IdentId::get_id("/cause");
@@ -533,12 +533,29 @@ impl MonorubyErr {
                 None,
                 None,
             ) {
-                Ok(msg) if msg.is_rstring().is_some() => {
+                Ok(msg) if msg.is_rstring().is_some_and(|s| !s.as_bytes().is_empty()) => {
                     let _ = globals
                         .store
                         .set_ivar(cur, IdentId::get_id("/__report"), msg);
                 }
-                _ => {}
+                // `rb_error_write` with no usable message: the class
+                // name alone.
+                res if res.is_ok() || seen.len() == 1 => {
+                    let name = Value::string(cur.get_real_class_name(&globals.store));
+                    let _ = globals
+                        .store
+                        .set_ivar(cur, IdentId::get_id("/__report"), name);
+                }
+                // A cause whose `detailed_message` raises ends the
+                // report: neither it nor its own causes are shown.
+                _ => {
+                    let _ = globals.store.set_ivar(
+                        cur,
+                        IdentId::get_id("/__report"),
+                        Value::bool(false),
+                    );
+                    break;
+                }
             }
             match globals.store.get_ivar(cur, cause_id) {
                 Some(cause) => cur = cause,
@@ -582,6 +599,10 @@ impl MonorubyErr {
             let Some(inner) = cause.is_exception() else {
                 break;
             };
+            // See `render_report_messages`.
+            if store.get_ivar(cause, IdentId::get_id("/__report")) == Some(Value::bool(false)) {
+                break;
+            }
             let msg = report_message(store, cause).unwrap_or_else(|| {
                 format!("{} ({})", inner.message(), cause.get_real_class_name(store))
             });
@@ -1645,6 +1666,14 @@ impl MonorubyErr {
     /// straight through.
     pub fn regex_timeout_err(msg: impl Into<String>) -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::RegexTimeout, msg.into())
+    }
+
+    /// `NoMemoryError`, with the message CRuby's allocator gives it.
+    pub fn nomemoryerr() -> MonorubyErr {
+        MonorubyErr::new(
+            MonorubyErrKind::Other(NO_MEMORY_ERROR_CLASS),
+            "failed to allocate memory",
+        )
     }
 
     pub(crate) fn runtimeerr(msg: impl ToString) -> MonorubyErr {

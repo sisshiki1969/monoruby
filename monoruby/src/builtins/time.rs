@@ -2442,9 +2442,7 @@ fn build_time_string(
     in_arg: Option<Value>,
 ) -> Result<TimeInner> {
     let bad = || MonorubyErr::argumenterr("argument out of range");
-    let date = NaiveDate::from_ymd_opt(year as i32, mon, day).ok_or_else(bad)?;
-    let time = NaiveTime::from_hms_opt(hh, mi, ss).ok_or_else(bad)?;
-    let naive = NaiveDateTime::new(date, time);
+    let naive = validated_naive_datetime(year as i32, mon, day, hh, mi, ss, 0)?;
     let (fixed, utc) = if !off_str.is_empty() {
         (
             Some(parse_utc_offset_string(off_str)?),
@@ -2740,10 +2738,9 @@ fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<ArgsR
         _ => (0, 0),
     };
     let nsec: u32 = match usec_arg {
-        Some(v) if !v.is_nil() => match time_usec_to_nsec(vm, globals, v)? {
-            Some(u) => u,
-            None => return Ok(None),
-        },
+        // A `usec` outside a second is reported after the fields before
+        // it (`subsecx out of range`, by `build_naive_datetime`).
+        Some(v) if !v.is_nil() => time_usec_to_nsec(vm, globals, v)?.unwrap_or(u32::MAX),
         _ => sec_fractional_nsec,
     };
     let sec_u32 = match u32::try_from(sec) {
@@ -2773,11 +2770,10 @@ fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<ArgsR
     )))
 }
 
-/// Build a `NaiveDateTime` honouring CRuby's "carry forward" rules:
-/// - `sec == 60` carries to `+1` minute (leap-second tolerance);
-/// - a `mday` that exceeds the month's actual length carries into the
-///   next month, provided `mday <= 31` (the spec's hard ceiling — `day=32`
-///   is rejected even though `Dec 32` would arithmetically be Jan 1).
+/// Build a `NaiveDateTime` from the fields of `Time.utc` / `Time.local`
+/// / `Time.new`, as CRuby's `time_arg` does: a field that does not fit
+/// the bit width `obj2ubits` gives it is refused before any range is
+/// named, then the fields are validated in order (`validate_vtm`).
 fn build_naive_datetime(
     year: i32,
     mon: u32,
@@ -2787,15 +2783,49 @@ fn build_naive_datetime(
     sec: u32,
     nsec: u32,
 ) -> Result<NaiveDateTime> {
-    if !(1..=12).contains(&mon) {
+    if mon > 15 || day > 31 || hour > 31 || min > 63 || sec > 63 {
         return Err(MonorubyErr::argumenterr("argument out of range"));
+    }
+    validated_naive_datetime(year, mon, day, hour, min, sec, nsec)
+}
+
+/// CRuby's `validate_vtm` and the carries that follow it:
+/// - each field out of its range is an ArgumentError naming the field;
+/// - `24:00:00` (minute and second zero, any sub-second) is midnight of
+///   the following day;
+/// - `sec == 60` carries to `+1` minute (leap-second tolerance);
+/// - a `mday` that exceeds the month's actual length carries into the
+///   next month (`Feb 30` is `Mar 1` or `Mar 2`).
+fn validated_naive_datetime(
+    year: i32,
+    mon: u32,
+    day: u32,
+    hour: u32,
+    min: u32,
+    sec: u32,
+    nsec: u32,
+) -> Result<NaiveDateTime> {
+    let range = |field: &str| MonorubyErr::argumenterr(format!("{field} out of range"));
+    if !(1..=12).contains(&mon) {
+        return Err(range("mon"));
     }
     if !(1..=31).contains(&day) {
-        return Err(MonorubyErr::argumenterr("argument out of range"));
+        return Err(range("mday"));
     }
-    if hour > 23 || min > 59 || sec > 60 || nsec >= 1_000_000_000 {
-        return Err(MonorubyErr::argumenterr("argument out of range"));
+    if hour > 24 {
+        return Err(range("hour"));
     }
+    let midnight = hour == 24;
+    if min > if midnight { 0 } else { 59 } {
+        return Err(range("min"));
+    }
+    if sec > if midnight { 0 } else { 60 } {
+        return Err(range("sec"));
+    }
+    if nsec >= 1_000_000_000 {
+        return Err(range("subsecx"));
+    }
+    let hour = if midnight { 0 } else { hour };
     // `sec == 60` builds with sec=0 and then adds one minute, matching
     // CRuby's leap-second normalisation. Carrying past midnight cascades
     // through `chrono::Duration` so day/month/year roll over correctly.
@@ -2804,7 +2834,7 @@ fn build_naive_datetime(
         Some(d) => d,
         None => {
             // Day exceeds days-in-month; carry the excess into the next
-            // month if `day <= 31`.
+            // month.
             let dim = days_in_month(year, mon);
             if day <= dim {
                 // shouldn't happen — `from_ymd_opt` only fails for invalid combos.
@@ -2826,6 +2856,11 @@ fn build_naive_datetime(
     if leap_carry {
         dt = dt
             .checked_add_signed(Duration::minutes(1))
+            .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
+    }
+    if midnight {
+        dt = dt
+            .checked_add_signed(Duration::days(1))
             .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
     }
     Ok(dt)
@@ -2870,7 +2905,7 @@ fn time_month_to_i64(vm: &mut Executor, globals: &mut Globals, v: Value) -> Resu
         }
         trimmed
             .parse::<i64>()
-            .map_err(|_| MonorubyErr::argumenterr(format!("argument out of range: {:?}", trimmed)))
+            .map_err(|_| MonorubyErr::argumenterr(format!("invalid value for Integer(): {:?}", s)))
     };
     if let Some(s) = v.is_str() {
         return parse_str(s);

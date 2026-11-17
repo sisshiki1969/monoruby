@@ -1850,7 +1850,19 @@ impl Value {
         lookup_name: IdentId,
         original_name: IdentId,
     ) -> Self {
-        RValue::new_method_named(receiver, func_id, owner, lookup_name, original_name).pack()
+        RValue::new_method_named(receiver, func_id, owner, lookup_name, original_name, false).pack()
+    }
+
+    /// [`Self::new_method_named`] for `UnboundMethod#bind` (see
+    /// `RValue::new_method_named`).
+    pub(crate) fn new_method_bound(
+        receiver: Value,
+        func_id: FuncId,
+        owner: ClassId,
+        lookup_name: IdentId,
+        original_name: IdentId,
+    ) -> Self {
+        RValue::new_method_named(receiver, func_id, owner, lookup_name, original_name, true).pack()
     }
 
     pub fn new_method_missing_proxy(

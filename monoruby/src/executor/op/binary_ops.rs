@@ -65,6 +65,42 @@ fn rhs_is_real_numeric(vm: &mut Executor, globals: &mut Globals, rhs: Value) -> 
         .as_bool())
 }
 
+/// `Complex op real` for an Integer or Float operand, as CRuby's
+/// `nucomp_add` / `nucomp_sub` / `rb_complex_mul` compute it: the real part
+/// alone for `+` / `-`, each part for `*` — so `Complex(1.5, 2) * 2` is
+/// `(3.0+4i)`, the imaginary part still an Integer.
+/// A Complex operand with a part that is neither an Integer nor a Float
+/// (`Complex(1r/3, 1r/2) + 1`): out of line, the operators' `Real`
+/// arithmetic is the common case.
+#[cold]
+#[inline(never)]
+fn complex_exact_parts(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    op: IdentId,
+    lhs: Value,
+    rhs: Value,
+) -> Option<Value> {
+    match crate::builtins::complex_exact_parts_op(vm, globals, op, lhs, rhs) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+fn complex_with_real(op: IdentId, c: &num::complex::Complex<Real>, r: Real) -> Value {
+    let (re, im) = (c.re, c.im);
+    if op == IdentId::_MUL {
+        Value::complex(re * r, im * r)
+    } else if op == IdentId::_ADD {
+        Value::complex(re + r, im)
+    } else {
+        Value::complex(re - r, im)
+    }
+}
+
 /// CRuby's `Complex#+/-/*` for a RHS that is not a built-in Integer/Float/
 /// BigInt/Complex (i.e. Rational, a Numeric subclass, or an object needing
 /// coercion). A real numeric RHS is applied component-wise — only the real
@@ -237,6 +273,29 @@ macro_rules! binop_values {
                     _ => {}
                 }
                 let v = match (lhs.unpack(), rhs.unpack()) {
+                    // A Complex with a Rational part computes through the
+                    // parts' own operators.
+                    (RV::Complex(l), RV::Complex(r))
+                        if crate::builtins::complex_has_exact_part(l)
+                            || crate::builtins::complex_has_exact_part(r) =>
+                    {
+                        return complex_exact_parts(vm, globals, $op_str, lhs, rhs);
+                    }
+                    (RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_), RV::Complex(r))
+                        if crate::builtins::complex_has_exact_part(r) =>
+                    {
+                        return complex_exact_parts(vm, globals, $op_str, lhs, rhs);
+                    }
+                    (RV::Complex(l), RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_))
+                        if crate::builtins::complex_has_exact_part(l) =>
+                    {
+                        return complex_exact_parts(vm, globals, $op_str, lhs, rhs);
+                    }
+                    // `fix_plus` / `fix_mul` hand a Complex operand to
+                    // the Complex's own operator, operands swapped.
+                    (RV::Fixnum(lhs), RV::Complex(rhs)) if $op_str != IdentId::_SUB => {
+                        complex_with_real($op_str, rhs, Real::from(lhs))
+                    }
                     (RV::Fixnum(lhs), RV::Complex(rhs)) => {
                         let lhs = num::complex::Complex::from(Real::from(lhs));
                         Value::complex_from(lhs.$op(rhs))
@@ -257,16 +316,13 @@ macro_rules! binop_values {
                         return try_coerce_and_apply(vm, globals, $op_str, lhs, rhs, "Float");
                     }
                     (RV::Complex(lhs), RV::Fixnum(rhs)) => {
-                        let rhs = num::complex::Complex::from(Real::from(rhs));
-                        Value::complex_from(lhs.$op(rhs))
+                        complex_with_real($op_str, lhs, Real::from(rhs))
                     }
                     (RV::Complex(lhs), RV::BigInt(rhs)) => {
-                        let rhs = num::complex::Complex::from(Real::from(rhs.clone()));
-                        Value::complex_from(lhs.$op(rhs))
+                        complex_with_real($op_str, lhs, Real::from(rhs.clone()))
                     }
                     (RV::Complex(lhs), RV::Float(rhs)) => {
-                        let rhs = num::complex::Complex::from(Real::from(rhs));
-                        Value::complex_from(lhs.$op(rhs))
+                        complex_with_real($op_str, lhs, Real::from(rhs))
                     }
                     (RV::Complex(lhs), RV::Complex(rhs)) => {
                         Value::complex_from(lhs.$op(rhs))

@@ -72,7 +72,9 @@ fn method_eq(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     }
     let a = self_val.as_method();
     let b = other.as_method();
-    if a.receiver() != b.receiver() {
+    if a.receiver() != b.receiver()
+        || module_bound(&globals.store, self_val) != module_bound(&globals.store, other)
+    {
         return Ok(Value::bool(false));
     }
     let eq = match (a.method_missing_name(), b.method_missing_name()) {
@@ -293,9 +295,22 @@ fn bind(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let lookup = method.lookup_name(&globals.store);
     let original = method.original_name(&globals.store);
     check_bind_receiver(globals, owner, recv)?;
-    Ok(Value::new_method_named(
+    Ok(Value::new_method_bound(
         recv, func_id, owner, lookup, original,
     ))
+}
+
+/// Whether `method` is one `UnboundMethod#bind` made of a module's
+/// method: CRuby binds it through an iclass of the module
+/// (`convert_umethod_to_method_components`), whatever the receiver. A
+/// refinement's method is bound to the refined class instead, like a
+/// method of that class.
+fn module_bound(store: &Store, method: Value) -> bool {
+    if !method.rvalue().method_is_bound() {
+        return false;
+    }
+    let owner = store[method.as_method().owner()].get_module().as_val();
+    owner.ty() == Some(ObjTy::MODULE) && owner.class() != REFINEMENT_CLASS
 }
 
 /// CRuby `convert_umethod_to_method` bind check: the receiver must be
@@ -400,11 +415,7 @@ fn method_inspect_str(
                 };
                 let mut s = store.get_class_name(disp.id());
                 // The defining module is named beside the receiver's
-                // class when the method was found above it. A module's
-                // method bound to an object that does not have the
-                // module (`UnboundMethod#bind`) is completed with the
-                // receiver's class instead
-                // (`rb_method_entry_complement_defined_class`).
+                // class when the method was found above it.
                 if owner != disp.id() && recv.is_kind_of(store, owner) {
                     s = format!("{}({})", s, store.get_class_name(owner));
                 }
@@ -444,7 +455,9 @@ fn inspect(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let s = method_inspect_str(
         store,
         "Method",
-        Some(method.receiver()),
+        // A module's method bound by `UnboundMethod#bind` is named by
+        // the module alone, as an UnboundMethod is.
+        (!module_bound(store, self_val)).then(|| method.receiver()),
         method.owner(),
         &name,
         method.func_id(),

@@ -215,6 +215,7 @@ mod rescue;
 mod residual_arm_rollback;
 mod retry_errinfo;
 mod return_state;
+mod rs_setter_module_bind_time_range_complex_parts_ary_growth;
 mod ruby2_keywords;
 mod runtime_malloc_trim;
 mod scrub_block_and_replacement;

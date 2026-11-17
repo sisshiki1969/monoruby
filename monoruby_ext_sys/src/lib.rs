@@ -683,6 +683,21 @@ pub struct MrApi {
         sym: MrSym,
         include_all: c_int,
     ) -> c_int,
+    /// `rb_check_funcall`: call `sym` on `recv` if it answers to it, by
+    /// CRuby's protocol — a `respond_to?` the program defined is asked
+    /// first, a method that exists (private ones included) is called,
+    /// and otherwise a `respond_to_missing?` and then a `method_missing`
+    /// the program defined. `*answered` is set to 1 and the result
+    /// returned, or to 0 (and nil returned) when the object does not
+    /// answer; [`MR_UNDEF`] with an error pending.
+    pub check_funcall: unsafe extern "C" fn(
+        ctx: *mut MrContext,
+        recv: MrValue,
+        sym: MrSym,
+        argc: c_int,
+        argv: *const MrValue,
+        answered: *mut c_int,
+    ) -> MrValue,
 }
 
 /// [`MrApi::io_state`]'s result. `mode` holds CRuby's FMODE_* bits.

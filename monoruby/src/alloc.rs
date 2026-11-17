@@ -1468,6 +1468,20 @@ impl<T: GCBox> Allocator<T> {
         self.free_list_count + (DATA_LEN - self.used_in_current)
     }
 
+    /// Whether `n` more objects fit in the arena with no collection in
+    /// between: what the pages in service can still hand out, the pages
+    /// waiting to be reused, and the pages the reservation has left. An
+    /// allocation past the reservation has nowhere to go, so a builtin
+    /// about to create that many objects in one go (`Array#product`)
+    /// asks first and answers with NoMemoryError.
+    pub fn has_room_for(&self, n: usize) -> bool {
+        let base = self.arena_base.as_ptr() as usize;
+        let head = self.head_page.as_ptr() as usize;
+        let fresh = MAX_PAGES - ((head - base) / ALLOC_SIZE + 1);
+        let pages = fresh + self.free_pages.len() + self.released_pages.len();
+        n <= self.allocatable_slots() + pages * DATA_LEN
+    }
+
     /// Bytes one object slot occupies.
     pub const fn slot_size() -> usize {
         GCBOX_SIZE

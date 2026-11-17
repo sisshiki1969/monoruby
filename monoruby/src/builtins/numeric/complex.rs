@@ -240,9 +240,25 @@ fn real_component_for_rect(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Complex/i/abs.html]
 #[monoruby_builtin]
-fn abs(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let abs = lfp.self_val().as_complex().to_complex_f64().norm();
-    Ok(Value::float(abs))
+fn abs(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let c = self_val.as_complex();
+    let (re, im) = (c.re().get(), c.im().get());
+    // `rb_complex_abs`: with a zero part the answer is the other part's
+    // own `abs` (`Complex(3, 0).abs` is `3`, `Complex(1r/3, 0).abs` is
+    // `(1/3)`), a Float only when the zero part was one.
+    let (zero, other) = if f_zero_p(vm, globals, re)? {
+        (re, im)
+    } else if f_zero_p(vm, globals, im)? {
+        (im, re)
+    } else {
+        return Ok(Value::float(c.to_complex_f64().norm()));
+    };
+    let a = f_abs(vm, globals, other)?;
+    if zero.try_float().is_some() && a.try_float().is_none() {
+        return vm.invoke_method_inner(globals, IdentId::get_id("to_f"), a, &[], None, None);
+    }
+    Ok(a)
 }
 
 ///
@@ -374,9 +390,15 @@ fn imaginary(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 /// ### Complex#conj
 ///
 #[monoruby_builtin]
-fn conjugate(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn conjugate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let c = self_val.as_complex();
+    if !is_native_part(c.im().get()) {
+        // A Rational imaginary part is negated as a Rational.
+        let neg = IdentId::get_id("-@");
+        let im = vm.invoke_method_inner(globals, neg, c.im().get(), &[], None, None)?;
+        return Ok(Value::complex(c.re(), Real::try_from(globals, im)?));
+    }
     Ok(Value::complex(c.re(), -c.im()))
 }
 
@@ -386,9 +408,19 @@ fn conjugate(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 /// Returns |z|^2 = re^2 + im^2. Preserves the component type (Integer
 /// stays Integer) by delegating through Real arithmetic.
 #[monoruby_builtin]
-fn abs2(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn abs2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     let c = self_val.as_complex();
+    if has_exact_part(c) {
+        let (re, im) = (c.re().get(), c.im().get());
+        return vm.with_temp_scope(|vm| {
+            let re_sq = f_mul(vm, globals, re, re)?;
+            vm.temp_push(re_sq);
+            let im_sq = f_mul(vm, globals, im, im)?;
+            vm.temp_push(im_sq);
+            f_add(vm, globals, re_sq, im_sq)
+        });
+    }
     let re_sq = c.re() * c.re();
     let im_sq = c.im() * c.im();
     Ok((re_sq + im_sq).get())
@@ -473,38 +505,17 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 ///
 /// ### Complex#fdiv
 ///
+/// CRuby's `f_divide(self, other, f_fdiv, id_fdiv)`: the division of
+/// `Complex#/` with every `quo` replaced by `fdiv`.
 #[monoruby_builtin]
 fn fdiv(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_val = lfp.self_val();
-    let c = self_val.as_complex();
-    let other = lfp.arg(0);
-    // fdiv requires a numeric argument.
-    match other.unpack() {
-        RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_) => {}
-        _ => {
-            return Err(MonorubyErr::typeerr(format!(
-                "{} can't be coerced into Float",
-                other.coerce_failed_name(globals)
-            )));
-        }
-    }
-    let fdiv_id = IdentId::get_id("fdiv");
-    // Extract each result to an f64 *before* the next dispatch: a heap
-    // Float held only in a Rust local would not survive the GC a
-    // (possibly redefined) `fdiv` can trigger.
-    let re = vm.invoke_method_inner(globals, fdiv_id, c.re().get(), &[other], None, None)?;
-    let re_f = match re.unpack() {
-        RV::Float(f) => f,
-        RV::Fixnum(i) => i as f64,
-        _ => return Err(MonorubyErr::typeerr("fdiv did not return Float")),
-    };
-    let im = vm.invoke_method_inner(globals, fdiv_id, c.im().get(), &[other], None, None)?;
-    let im_f = match im.unpack() {
-        RV::Float(f) => f,
-        RV::Fixnum(i) => i as f64,
-        _ => return Err(MonorubyErr::typeerr("fdiv did not return Float")),
-    };
-    Ok(Value::complex(Real::from(re_f), Real::from(im_f)))
+    f_divide(
+        vm,
+        globals,
+        lfp.self_val(),
+        lfp.arg(0),
+        IdentId::get_id("fdiv"),
+    )
 }
 
 ///
@@ -757,11 +768,143 @@ fn to_c(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
     Ok(lfp.self_val())
 }
 
-/// `x.quo(y)` — exact division that yields a Rational for integer operands
-/// and a Float when either operand is a Float (mirrors CRuby's `f_quo`).
-fn f_quo(vm: &mut Executor, globals: &mut Globals, x: Value, y: Value) -> Result<Value> {
-    let quo_id = IdentId::get_id("quo");
-    vm.invoke_method_inner(globals, quo_id, x, &[y], None, None)
+/// An Integer or a Float: a part `num::complex::Complex<Real>` computes
+/// as CRuby does. A Rational (or a user-defined Numeric) part has to go
+/// through its own operators, since `RealKind` reads it as a Float.
+#[inline(always)]
+fn is_native_part(v: Value) -> bool {
+    v.is_fixnum() || v.is_flonum() || matches!(v.ty(), Some(ObjTy::BIGNUM | ObjTy::FLOAT))
+}
+
+/// Whether a part of `c` is neither an Integer nor a Float. The
+/// operators ask this of every Complex operand before they compute in
+/// `Real`s, so it is a few tag tests.
+#[inline(always)]
+pub(crate) fn has_exact_part(c: &num::complex::Complex<Real>) -> bool {
+    !(is_native_part(c.re.get()) && is_native_part(c.im.get()))
+}
+
+/// `Complex#+` / `#-` / `#*` when a part of an operand is neither an
+/// Integer nor a Float ([`has_exact_part`]) and the other operand is a
+/// Complex, an Integer or a Float: CRuby's `nucomp_add` / `nucomp_sub` /
+/// `rb_complex_mul` over the parts' own operators, so that
+/// `Complex(1r/3, 1r/2) + 1` keeps its Rational parts.
+pub(crate) fn exact_parts_op(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    op: IdentId,
+    lhs: Value,
+    rhs: Value,
+) -> Result<Value> {
+    let parts = |c: &ComplexInner| (c.re().get(), c.im().get());
+    let (a, b) = match (lhs.try_complex(), rhs.try_complex()) {
+        (Some(l), Some(r)) => (parts(l), parts(r)),
+        // A fixnum `+` / `*` a Complex is the Complex's own operator
+        // with the operands swapped (`fix_plus`, `fix_mul`).
+        (None, Some(r)) if lhs.is_fixnum() && op != IdentId::_SUB => {
+            return with_real(vm, globals, op, parts(r), lhs);
+        }
+        // Any other Integer or Float coerces: `Complex(lhs, 0) op rhs`.
+        (None, Some(r)) => ((lhs, Value::integer(0)), parts(r)),
+        (Some(l), None) => return with_real(vm, globals, op, parts(l), rhs),
+        (None, None) => {
+            return Err(MonorubyErr::typeerr(
+                "Complex arithmetic without a Complex operand",
+            ));
+        }
+    };
+    vm.with_temp_scope(|vm| {
+        let (re, im) = if op == IdentId::_MUL {
+            comp_mul(vm, globals, a, b)?
+        } else {
+            let re = vm.invoke_method_inner(globals, op, a.0, &[b.0], None, None)?;
+            vm.temp_push(re);
+            let im = vm.invoke_method_inner(globals, op, a.1, &[b.1], None, None)?;
+            (re, im)
+        };
+        Ok(Value::complex(
+            Real::try_from(globals, re)?,
+            Real::try_from(globals, im)?,
+        ))
+    })
+}
+
+/// A Complex and a real operand: the real part alone for `+` / `-`, each
+/// part for `*`.
+fn with_real(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    op: IdentId,
+    (a_re, a_im): (Value, Value),
+    real: Value,
+) -> Result<Value> {
+    vm.with_temp_scope(|vm| {
+        let re = vm.invoke_method_inner(globals, op, a_re, &[real], None, None)?;
+        vm.temp_push(re);
+        let im = if op == IdentId::_MUL {
+            vm.invoke_method_inner(globals, op, a_im, &[real], None, None)?
+        } else {
+            a_im
+        };
+        Ok(Value::complex(
+            Real::try_from(globals, re)?,
+            Real::try_from(globals, im)?,
+        ))
+    })
+}
+
+/// CRuby's `comp_mul`. The results are left on the temp stack of the
+/// caller's scope.
+fn comp_mul(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    (a_re, a_im): (Value, Value),
+    (b_re, b_im): (Value, Value),
+) -> Result<(Value, Value)> {
+    let arz = f_zero_p(vm, globals, a_re)?;
+    let aiz = f_zero_p(vm, globals, a_im)?;
+    let brz = f_zero_p(vm, globals, b_re)?;
+    let biz = f_zero_p(vm, globals, b_im)?;
+    let rr = safe_multiply(vm, globals, a_re, b_re, arz, brz)?;
+    vm.temp_push(rr);
+    let ii = safe_multiply(vm, globals, a_im, b_im, aiz, biz)?;
+    vm.temp_push(ii);
+    let re = f_sub(vm, globals, rr, ii)?;
+    vm.temp_push(re);
+    let ri = safe_multiply(vm, globals, a_re, b_im, arz, biz)?;
+    vm.temp_push(ri);
+    let ir = safe_multiply(vm, globals, a_im, b_re, aiz, brz)?;
+    vm.temp_push(ir);
+    let im = f_add(vm, globals, ri, ir)?;
+    vm.temp_push(im);
+    Ok((re, im))
+}
+
+/// CRuby's `safe_multiply`: a non-NaN Float multiplied by a zero counts
+/// only for its sign, so that an infinite part times zero is not NaN.
+fn safe_multiply(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    a: Value,
+    b: Value,
+    a_zero: bool,
+    b_zero: bool,
+) -> Result<Value> {
+    let unit = |v: Value| match v.try_float() {
+        Some(f) if !f.is_nan() => Some(Value::float(1.0f64.copysign(f))),
+        _ => None,
+    };
+    let a = if !a_zero && b_zero {
+        unit(a).unwrap_or(a)
+    } else {
+        a
+    };
+    let b = if !b_zero && a_zero {
+        unit(b).unwrap_or(b)
+    } else {
+        b
+    };
+    f_mul(vm, globals, a, b)
 }
 
 fn f_add(vm: &mut Executor, globals: &mut Globals, x: Value, y: Value) -> Result<Value> {
@@ -827,14 +970,34 @@ fn is_real_divisor(vm: &mut Executor, globals: &mut Globals, other: Value) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Complex/i/=2f.html]
 #[monoruby_builtin]
 fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_val = lfp.self_val();
-    let other = lfp.arg(0);
+    f_divide(
+        vm,
+        globals,
+        lfp.self_val(),
+        lfp.arg(0),
+        IdentId::get_id("quo"),
+    )
+}
+
+/// CRuby's `f_divide`: `Complex#/` (`quo`) and `Complex#fdiv` (`fdiv`)
+/// differ only in the method that divides two parts.
+fn f_divide(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    other: Value,
+    quo: IdentId,
+) -> Result<Value> {
+    let f_quo = |vm: &mut Executor, globals: &mut Globals, x: Value, y: Value| {
+        vm.invoke_method_inner(globals, quo, x, &[y], None, None)
+    };
     let (a_re, a_im) = {
         let c = self_val.as_complex();
         (c.re().get(), c.im().get())
     };
 
-    // Complex / Complex: Smith's algorithm using `quo` on the components.
+    // Complex / Complex: Smith's algorithm using `quo` (`fdiv`) on the
+    // components.
     // Every intermediate can be a heap numeric (Rational/Bignum) that
     // only a Rust local references while the next `quo`/`*`/`+` dispatch
     // runs Ruby — root each until the components are extracted.
@@ -914,8 +1077,8 @@ fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     }
 
     // Otherwise fall back to the coerce protocol (`rb_num_coerce_bin`). The
-    // re-dispatch uses `quo` (CRuby passes `id_quo` to `f_divide`), so e.g.
-    // `coerce` returning `[5, 2]` yields `5.quo(2) == (5/2)`.
+    // re-dispatch uses `quo` / `fdiv` (the id CRuby passes to `f_divide`),
+    // so e.g. `coerce` returning `[5, 2]` yields `5.quo(2) == (5/2)`.
     match crate::value::coerce::do_coerce(vm, globals, self_val, other, false)? {
         Some((x, y)) => f_quo(vm, globals, x, y),
         None => Err(MonorubyErr::typeerr(format!(
@@ -957,11 +1120,29 @@ fn rationalize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePt
 #[monoruby_builtin]
 fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let rhs = lfp.arg(0);
+    let mut rhs = lfp.arg(0);
+    // `rb_complex_pow`'s canonicalization of the exponent: a Rational
+    // with denominator 1 is its numerator, a Complex with an exact zero
+    // imaginary part its real part.
+    rhs = rational_canonicalize(rhs);
+    if let Some(c) = rhs.try_complex()
+        && k_exact_zero_p(vm, globals, c.im().get())?
+    {
+        rhs = c.re().get();
+    }
 
     // Integer exponents: repeat multiplication in the native ComplexInner
     // representation so integer-valued parts stay Integer (CRuby compatible).
     if let RV::Fixnum(i) = rhs.unpack() {
+        let c = self_val.as_complex();
+        // On an axis or a diagonal (`complex_pow_for_special_angle`).
+        let special = {
+            let (re, im) = (c.re(), c.im());
+            re.is_zero() || im.is_zero() || re == im || re == -im
+        };
+        if i <= 1 || special || has_exact_part(c) {
+            return pow_exact_parts(vm, globals, self_val, i);
+        }
         return pow_by_integer_exp(self_val, i);
     }
     if let RV::BigInt(b) = rhs.unpack() {
@@ -999,6 +1180,170 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 
 /// Raise a Complex to an integer exponent by repeated multiplication,
 /// preserving the component types (Integer stays Integer).
+/// `Complex#**` with a fixnum exponent as `rb_complex_pow` computes it,
+/// over the parts' own operators: used for a Complex with a Rational (or
+/// user-defined) part, and for the exponents the `Real` arithmetic of
+/// `pow_by_integer_exp` answers differently (a negative one is exact for
+/// Integer parts, `1` keeps the parts as they are).
+fn pow_exact_parts(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    exp: i64,
+) -> Result<Value> {
+    let c = self_val.as_complex();
+    let (re, im) = (c.re().get(), c.im().get());
+    if exp == 0 {
+        return Ok(Value::complex(Real::from(1), Real::from(0)));
+    }
+    if exp == 1 {
+        return Ok(Value::complex(c.re(), c.im()));
+    }
+    vm.with_temp_scope(|vm| {
+        if let Some(v) = pow_for_special_angle(vm, globals, re, im, exp)? {
+            return Ok(v);
+        }
+        // `f_reciprocal` for a negative exponent.
+        let (mut xr, mut xi) = if exp < 0 {
+            let quo = IdentId::get_id("quo");
+            let inv =
+                vm.invoke_method_inner(globals, quo, Value::integer(1), &[self_val], None, None)?;
+            vm.temp_push(inv);
+            match inv.try_complex() {
+                Some(c) => (c.re().get(), c.im().get()),
+                None => return Err(MonorubyErr::typeerr("not a Complex")),
+            }
+        } else {
+            (re, im)
+        };
+        let (mut zr, mut zi) = (xr, xi);
+        let two = Value::integer(2);
+        let mut n = exp.unsigned_abs() - 1;
+        while n > 0 {
+            while n % 2 == 0 {
+                let rr = f_mul(vm, globals, xr, xr)?;
+                vm.temp_push(rr);
+                let ii = f_mul(vm, globals, xi, xi)?;
+                vm.temp_push(ii);
+                let tmp = f_sub(vm, globals, rr, ii)?;
+                vm.temp_push(tmp);
+                let r2 = f_mul(vm, globals, two, xr)?;
+                vm.temp_push(r2);
+                xi = f_mul(vm, globals, r2, xi)?;
+                vm.temp_push(xi);
+                xr = tmp;
+                n /= 2;
+            }
+            (zr, zi) = comp_mul(vm, globals, (zr, zi), (xr, xi))?;
+            n -= 1;
+        }
+        Ok(Value::complex(
+            Real::try_from(globals, zr)?,
+            Real::try_from(globals, zi)?,
+        ))
+    })
+}
+
+/// CRuby's `complex_pow_for_special_angle`: a Complex on an axis or a
+/// diagonal raised to an Integer is one real power placed by the angle.
+fn pow_for_special_angle(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    re: Value,
+    im: Value,
+    exp: i64,
+) -> Result<Option<Value>> {
+    let f_negate = |vm: &mut Executor, globals: &mut Globals, x: Value| {
+        vm.invoke_method_inner(globals, IdentId::get_id("-@"), x, &[], None, None)
+    };
+    let (mut x, mut dir) = if f_zero_p(vm, globals, im)? {
+        (re, 0)
+    } else if f_zero_p(vm, globals, re)? {
+        (im, 2)
+    } else if rb_equal(vm, globals, re, im)? {
+        (re, 1)
+    } else {
+        let neg = f_negate(vm, globals, im)?;
+        vm.temp_push(neg);
+        if !rb_equal(vm, globals, re, neg)? {
+            return Ok(None);
+        }
+        (im, 3)
+    };
+    let negative = vm
+        .invoke_method_inner(globals, IdentId::get_id("negative?"), x, &[], None, None)?
+        .as_bool();
+    if negative {
+        x = f_negate(vm, globals, x)?;
+        vm.temp_push(x);
+        dir += 4;
+    }
+    let pow = IdentId::_POW;
+    let zx = if dir % 2 == 0 {
+        vm.invoke_method_inner(globals, pow, x, &[Value::integer(exp)], None, None)?
+    } else {
+        let x2 = f_mul(vm, globals, Value::integer(2), x)?;
+        vm.temp_push(x2);
+        let xx = f_mul(vm, globals, x2, x)?;
+        vm.temp_push(xx);
+        let half = Value::integer(exp.div_euclid(2));
+        let zx = vm.invoke_method_inner(globals, pow, xx, &[half], None, None)?;
+        if exp.rem_euclid(2) == 1 {
+            vm.temp_push(zx);
+            f_mul(vm, globals, zx, x)?
+        } else {
+            zx
+        }
+    };
+    vm.temp_push(zx);
+    const DIRS: [(i8, i8); 8] = [
+        (1, 0),
+        (1, 1),
+        (0, 1),
+        (-1, 1),
+        (-1, 0),
+        (-1, -1),
+        (0, -1),
+        (1, -1),
+    ];
+    let (dr, di) = DIRS[(dir as i128 * exp as i128).rem_euclid(8) as usize];
+    let mut part = |vm: &mut Executor, globals: &mut Globals, d: i8| -> Result<Value> {
+        Ok(match d {
+            1 => zx,
+            -1 => {
+                let v = f_negate(vm, globals, zx)?;
+                vm.temp_push(v);
+                v
+            }
+            // `zero_for`: a zero of the kind `zx` is.
+            _ => {
+                if zx.try_float().is_some() {
+                    Value::float(0.0)
+                } else if zx.try_rational().is_some() {
+                    let v = vm.invoke_method_inner(
+                        globals,
+                        IdentId::get_id("to_r"),
+                        Value::integer(0),
+                        &[],
+                        None,
+                        None,
+                    )?;
+                    vm.temp_push(v);
+                    v
+                } else {
+                    Value::integer(0)
+                }
+            }
+        })
+    };
+    let zr = part(vm, globals, dr)?;
+    let zi = part(vm, globals, di)?;
+    Ok(Some(Value::complex(
+        Real::try_from(globals, zr)?,
+        Real::try_from(globals, zi)?,
+    )))
+}
+
 fn pow_by_integer_exp(self_val: Value, exp: i64) -> Result<Value> {
     if exp == 0 {
         return Ok(Value::complex(Real::from(1), Real::from(0)));

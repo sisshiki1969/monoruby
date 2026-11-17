@@ -106,6 +106,9 @@ pub enum GvarEntry {
 pub struct SpecialGvars {
     /// `$/` — input record separator. `nil` means "slurp".
     rs: Value,
+    /// CRuby's `rb_default_rs`: the frozen `"\n"` that `$/` starts as, and
+    /// that an assignment of any String equal to it stores again.
+    default_rs: Value,
     /// `$\` — output record separator, appended by `IO#print`.
     ors: Value,
     /// `$,` — output field separator for `IO#print` and `Array#join`.
@@ -118,11 +121,13 @@ pub struct SpecialGvars {
 
 impl Default for SpecialGvars {
     fn default() -> Self {
-        // `$/` starts as a frozen "\n" (CRuby); the rest start nil / 0.
-        let mut rs = Value::string_from_str("\n");
+        // `$/` starts as a frozen US-ASCII "\n" (CRuby's `rb_default_rs`);
+        // the rest start nil / 0.
+        let mut rs = Value::string_usascii_from_str("\n");
         rs.set_frozen();
         Self {
             rs,
+            default_rs: rs,
             ors: Value::nil(),
             ofs: Value::nil(),
             fs: Value::nil(),
@@ -134,6 +139,7 @@ impl Default for SpecialGvars {
 impl SpecialGvars {
     pub(crate) fn mark<F: FnMut(Value)>(&self, mut f: F) {
         f(self.rs);
+        f(self.default_rs);
         f(self.ors);
         f(self.ofs);
         f(self.fs);
@@ -160,6 +166,11 @@ impl Globals {
 
     pub(crate) fn set_rs(&mut self, val: Value) {
         self.special_gvars.rs = val;
+    }
+
+    /// The default record separator object (`rb_default_rs`).
+    pub(crate) fn default_rs(&self) -> Value {
+        self.special_gvars.default_rs
     }
 
     /// `$\` — output record separator.
@@ -559,11 +570,13 @@ fn write_special_check(
     name: IdentId,
     val: Value,
 ) -> Result<Value> {
-    /// `$/`-style setter (Ruby 4.0 semantics): the value must be a
-    /// String or nil. Unless it is already a frozen bare String, it is
-    /// replaced by a frozen plain-String copy (subclass and instance
-    /// variables are dropped, like CRuby's `rb_str_new_frozen`).
-    fn frozen_string_or_nil(name: &str, val: Value) -> Result<Value> {
+    /// `$/`-style setter (Ruby 4.0 semantics, `deprecated_rs_setter`):
+    /// the value must be a String or nil. A String equal to the default
+    /// separator stores the default separator itself. Any other one,
+    /// unless it is already a frozen bare String (`String` itself, no
+    /// instance variables), is replaced by a frozen plain-String copy
+    /// (`rb_str_frozen_bare_string`).
+    fn frozen_string_or_nil(globals: &Globals, name: &str, val: Value) -> Result<Value> {
         if val.is_nil() {
             return Ok(val);
         }
@@ -572,7 +585,11 @@ fn write_special_check(
                 "value of {name} must be String"
             )));
         };
-        if val.is_frozen() && val.class() == STRING_CLASS {
+        if s.as_bytes() == b"\n" && s.encoding().is_ascii_compatible() {
+            return Ok(globals.default_rs());
+        }
+        if val.is_frozen() && val.class() == STRING_CLASS && globals.store.get_ivars(val).is_empty()
+        {
             return Ok(val);
         }
         let mut v = Value::string_from_inner(s.clone());
@@ -619,7 +636,7 @@ fn write_special_check(
                 return Err(MonorubyErr::typeerr(format!("value of {n} must be String")));
             }
             warn_deprecated_separator(vm, globals, n, val);
-            frozen_string_or_nil(n, val)
+            frozen_string_or_nil(globals, n, val)
         }
         // Output record / field separators: String or nil, stored
         // as-is (CRuby does not copy these).

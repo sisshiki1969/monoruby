@@ -2,7 +2,7 @@ use super::*;
 use crate::bytecodegen::UnOpK;
 use paste::paste;
 
-mod complex;
+pub(crate) mod complex;
 mod float;
 mod integer;
 pub(super) use float::float_cmp_inline;

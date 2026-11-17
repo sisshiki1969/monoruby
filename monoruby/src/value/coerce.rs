@@ -799,13 +799,15 @@ impl Value {
 /// 1. a *user-redefined* `respond_to?` gates everything — a false
 ///    answer stops the probe even when the method exists;
 /// 2. otherwise a defined method is simply called;
-/// 3. with the default `respond_to?`, a *user-defined*
-///    `respond_to_missing?` gates the missing-dispatch: falsy means
-///    "does not answer" and `method_missing` is not consulted;
+/// 3. a *user-defined* `respond_to_missing?` gates the missing-dispatch:
+///    falsy means "does not answer" and `method_missing` is not
+///    consulted;
 /// 4. a *user-defined* `method_missing` is then consulted with the
-///    name. A `NoMethodError` it raises for that name is re-raised when
-///    the object claimed to respond (CRuby's `check_funcall_failed`)
-///    and otherwise means "does not answer".
+///    name — the default one is not, so an object whose `respond_to?`
+///    claims a method that does not exist "does not answer". A
+///    `NoMethodError` it raises for that name is re-raised when the
+///    object claimed to respond (CRuby's `check_funcall_failed`) and
+///    otherwise means "does not answer".
 pub(crate) fn check_funcall(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -839,7 +841,7 @@ pub(crate) fn check_funcall_args(
     let default_fid = |globals: &Globals, class: ClassId, name: IdentId| {
         globals
             .store
-            .check_method_for_class(class, name)
+            .check_method_for_class_with_version(class, name, class_version)
             .and_then(|e| e.func_id())
     };
     let user_fid = |globals: &Globals, method: IdentId, class: ClassId| {
@@ -881,28 +883,23 @@ pub(crate) fn check_funcall_args(
     {
         return Ok(None);
     }
-    // 3. Default respond_to?: a user-defined respond_to_missing? gates
-    //    the missing-dispatch.
-    if respond < 0
-        && let Some(fid) = user_fid(globals, IdentId::RESPOND_TO_MISSING_, OBJECT_CLASS)
-    {
+    // 3. A user-defined respond_to_missing? gates the missing-dispatch,
+    //    whatever respond_to? said (`check_funcall_missing` asks it
+    //    first thing).
+    let mut claimed = respond > 0;
+    if let Some(fid) = user_fid(globals, IdentId::RESPOND_TO_MISSING_, OBJECT_CLASS) {
         let responds = vm
             .invoke_func_inner(globals, fid, recv, &probe_args, None, None)?
             .as_bool();
         if !responds {
             return Ok(None);
         }
-        respond = 1;
+        claimed = true;
     }
-    // 4. A user-defined method_missing is consulted with the name.
+    // 4. A user-defined method_missing is consulted with the name. The
+    //    default one is not: an object that only claims to respond does
+    //    not answer.
     let Some(fid) = user_fid(globals, IdentId::METHOD_MISSING, BASIC_OBJECT_CLASS) else {
-        if respond > 0 {
-            // Claimed to respond but only the default method_missing
-            // exists: dispatch for real so the NoMethodError propagates.
-            return Ok(Some(
-                vm.invoke_method_inner(globals, name, recv, args, None, None)?,
-            ));
-        }
         return Ok(None);
     };
     let mm_args: Vec<Value> = std::iter::once(Value::symbol(name))
@@ -911,7 +908,7 @@ pub(crate) fn check_funcall_args(
     match vm.invoke_func_inner(globals, fid, recv, &mm_args, None, None) {
         Ok(result) => Ok(Some(result)),
         Err(err)
-            if respond < 0
+            if !claimed
                 && matches!(
                     &err.kind,
                     MonorubyErrKind::NotMethod { name: n, .. }

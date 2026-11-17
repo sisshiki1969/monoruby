@@ -2392,11 +2392,29 @@ rb_respond_to(VALUE obj, ID id)
 VALUE
 rb_check_funcall(VALUE recv, ID mid, int argc, const VALUE *argv)
 {
-    /* The probe reads the method table as the call below does: with no
-       refinement, whatever scope called into the extension. */
-    if (!obj_respond_to(recv, mid, 1 | MR_RESPOND_TO_FUNCALL))
-        return Qundef;
-    return rb_funcallv(recv, mid, argc, argv);
+    if (!HAVE_API(check_funcall)) {
+        /* The probe reads the method table as the call below does: with
+           no refinement, whatever scope called into the extension. */
+        if (!obj_respond_to(recv, mid, 1 | MR_RESPOND_TO_FUNCALL))
+            return Qundef;
+        return rb_funcallv(recv, mid, argc, argv);
+    }
+    /* CRuby's protocol: a respond_to? the program defined, the method
+     * when there is one, and respond_to_missing? / method_missing
+     * otherwise. An object that only claims to respond gives Qundef.
+     * Like the fallback above, it sees no refinement. */
+    struct capi_frame *saved = frame();
+    MrValue small[CAPI_SMALL_ARGS];
+    int answered = 0;
+    if (capi_ios)
+        io_out_all();
+    MrValue r = api->check_funcall(saved->ctx, M(recv), (MrSym)mid, argc,
+                                   mr_args(argc, argv, small), &answered);
+    capi_cur = saved;
+    if (capi_ios)
+        io_in_all();
+    VALUE v = check(r);
+    return answered ? v : Qundef;
 }
 
 /* ---------------------------------------------------------------------
