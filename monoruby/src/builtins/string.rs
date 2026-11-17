@@ -9437,7 +9437,10 @@ pub(crate) fn existing_name_id(inner: &RStringInner) -> Option<IdentId> {
     let ascii = bytes.is_ascii();
     if src == E::UsAscii && !ascii {
         IdentId::try_get_id_from_bytes(bytes, E::UsAscii)
-    } else if (ascii && src.is_ascii_compatible()) || src == E::UTF8 {
+    } else if ascii && src.is_ascii_compatible() {
+        // SAFETY: ASCII bytes are valid UTF-8.
+        IdentId::try_get_id(unsafe { std::str::from_utf8_unchecked(bytes) })
+    } else if src == E::UTF8 {
         match std::str::from_utf8(bytes) {
             Ok(s) => IdentId::try_get_id(s),
             Err(_) => IdentId::try_get_id_from_bytes(bytes, E::Ascii8),

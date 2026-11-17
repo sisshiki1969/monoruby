@@ -2972,18 +2972,26 @@ fn singleton_tos(
 #[monoruby_builtin]
 fn name(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class_id = lfp.self_val().as_class_id();
+    Ok(class_name_value(globals, class_id).unwrap_or_default())
+}
+
+///
+/// What the builtin `Module#name` answers for *class_id*: the frozen,
+/// cached class path, or `None` for an anonymous class or module.
+///
+pub(crate) fn class_name_value(globals: &mut Globals, class_id: ClassId) -> Option<Value> {
     if globals.store[class_id].get_name().is_none() || globals.store.is_name_erased(class_id) {
-        return Ok(Value::nil());
+        return None;
     }
     if let Some(cached) = globals.store[class_id].cached_name_value() {
-        return Ok(cached);
+        return Some(cached);
     }
     let class_name = globals.store.get_class_path(class_id);
     let mut val = Value::string_usascii(class_name);
     // The class path is an fstring (`rb_fstring` in `build_const_path`).
     val.set_fstring();
     globals.store[class_id].set_cached_name_value(val);
-    Ok(val)
+    Some(val)
 }
 
 ///

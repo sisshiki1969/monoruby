@@ -137,3 +137,43 @@ fn uncaught_report_uses_detailed_message() {
         assert_eq!(String::from_utf8_lossy(&out.stderr), expected, "{script}");
     }
 }
+
+/// A thread that dies of an exception reports it the same way
+/// (`report_on_exception`): the message line is `#detailed_message`'s,
+/// under both thread models. The first line carries the thread's
+/// address and is left out.
+#[test]
+fn thread_report_uses_detailed_message() {
+    let cases = [
+        (
+            "Thread.new { throw :foo }.join rescue 1",
+            "-e:1:in 'Kernel#throw': uncaught throw :foo (UncaughtThrowError)\n\tfrom -e:1:in 'block in <main>'\n",
+        ),
+        (
+            r#"class E < StandardError; def detailed_message(**) = "DM"; end; Thread.new { raise E, "x" }.join rescue 1"#,
+            "-e:1:in 'block in <main>': DM\n",
+        ),
+        (
+            r#"Thread.new { raise "boom" }.join rescue 1"#,
+            "-e:1:in 'block in <main>': boom (RuntimeError)\n",
+        ),
+    ];
+    for model in ["native", "green"] {
+        for (script, expected) in cases {
+            let out = std::process::Command::new(env!("CARGO_BIN_EXE_monoruby"))
+                .env_remove("RUBYOPT")
+                .env_remove("RUBYLIB")
+                .env("MONORUBY_THREAD_MODEL", model)
+                .args(["--disable=gems", "-e", script])
+                .output()
+                .expect("spawn monoruby");
+            let err = String::from_utf8_lossy(&out.stderr).into_owned();
+            let (head, rest) = err.split_once('\n').unwrap_or((&err, ""));
+            assert!(
+                head.ends_with("terminated with exception (report_on_exception is true):"),
+                "{model}: {script}: {err}"
+            );
+            assert_eq!(rest, expected, "{model}: {script}");
+        }
+    }
+}

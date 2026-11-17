@@ -327,7 +327,7 @@ fn no_method_error_with_args(
     if let Some(receiver) = receiver {
         let _ = globals
             .store
-            .set_ivar(exc, IdentId::get_id("/receiver"), receiver);
+            .set_ivar(exc, IdentId::_RECEIVER, receiver);
     }
     let _ = globals
         .store

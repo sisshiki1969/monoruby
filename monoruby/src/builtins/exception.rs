@@ -191,7 +191,7 @@ fn exc_receiver(
     let self_val = lfp.self_val();
     // CRuby raises ArgumentError when the NameError carries no receiver
     // (e.g. `NameError.new.receiver`), rather than returning nil.
-    match globals.store.get_ivar(self_val, IdentId::get_id("/receiver")) {
+    match globals.store.get_ivar(self_val, IdentId::_RECEIVER) {
         Some(v) => Ok(v),
         None => Err(MonorubyErr::argumenterr("no receiver is available")),
     }
@@ -328,7 +328,7 @@ fn nameerr_initialize(
     if let Some(v) = lfp.try_arg(3)
         && !v.is_nil()
     {
-        globals.store.set_ivar(self_, IdentId::get_id("/receiver"), v)?;
+        globals.store.set_ivar(self_, IdentId::_RECEIVER, v)?;
     }
     Ok(Value::nil())
 }
@@ -367,7 +367,7 @@ fn nameerr_showing(
     globals.store.set_ivar(exc, IdentId::_NAME, name)?;
     globals
         .store
-        .set_ivar(exc, IdentId::get_id("/receiver"), receiver)?;
+        .set_ivar(exc, IdentId::_RECEIVER, receiver)?;
     Ok(exc)
 }
 
@@ -414,7 +414,7 @@ fn nomethoderr_initialize(
     if let Some(v) = lfp.try_arg(4)
         && !v.is_nil()
     {
-        globals.store.set_ivar(self_, IdentId::get_id("/receiver"), v)?;
+        globals.store.set_ivar(self_, IdentId::_RECEIVER, v)?;
     }
     Ok(Value::nil())
 }
@@ -510,7 +510,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // A keyword that was given counts even when it is nil (`key: nil`
     // makes `#key` nil; no `key:` makes it raise).
     if let Some(v) = lfp.try_arg(2) {
-        globals.store.set_ivar(self_, IdentId::get_id("/receiver"), v)?;
+        globals.store.set_ivar(self_, IdentId::_RECEIVER, v)?;
     }
     if let Some(v) = lfp.try_arg(3) {
         globals.store.set_ivar(self_, IdentId::get_id("/key"), v)?;
@@ -580,18 +580,24 @@ fn message_rendered(vm: &mut Executor, globals: &mut Globals, exception: Value) 
         return Ok(message_value(&globals.store, exception));
     }
     // (start, length, replacement): CRuby renders the class first.
-    let mut parts: Vec<(usize, usize, Value)> = Vec::with_capacity(2);
+    let mut parts: Vec<(usize, usize, Value)> = Vec::new();
     if let Some((start, len)) = exception.is_exception().unwrap().class_span
         && let Some(receiver) = globals
             .store
-            .get_ivar(exception, IdentId::get_id("/receiver"))
+            .get_ivar(exception, IdentId::_RECEIVER)
     {
         let class = match receiver.is_class_or_module() {
             Some(m) => m,
             None => receiver.real_class(&globals.store),
         };
-        let shown = nameerr_class_text(vm, globals, class);
-        parts.push((start as usize, len as usize, shown));
+        // The usual case costs no call: the class has the builtin
+        // `name`, and the name it has is the one the message shows.
+        let message = exception.is_exception().unwrap().message.as_bytes();
+        let shown_now = message.get(start as usize..(start + len) as usize);
+        if !shown_now.is_some_and(|text| class_name_is(globals, class, text)) {
+            let shown = nameerr_class_text(vm, globals, class);
+            parts.push((start as usize, len as usize, shown));
+        }
     }
     if let Some((start, len)) = exception.is_exception().unwrap().name_span
         && !globals
@@ -641,6 +647,21 @@ fn message_rendered(vm: &mut Executor, globals: &mut Globals, exception: Value) 
 }
 
 ///
+/// Whether [`nameerr_class_text`] would answer exactly *text* for
+/// *class* without running any Ruby: its `name` is the builtin
+/// `Module#name`, and that answers *text*. An anonymous class is not
+/// decided here (its `inspect` is asked).
+///
+fn class_name_is(globals: &mut Globals, class: Module, text: &[u8]) -> bool {
+    let builtin = globals
+        .check_method(class.as_val(), IdentId::NAME)
+        .is_some_and(|fid| matches!(globals.store[fid].kind, FuncKind::Builtin { .. }));
+    builtin
+        && super::module::class_name_value(globals, class.id())
+            .is_some_and(|name| name.as_rstring_inner().as_bytes() == text)
+}
+
+///
 /// How a NameError / NoMethodError message shows a class or module
 /// (`name_err_mesg_to_str`): by its Ruby-level `name`; by its `inspect`
 /// when that answers nil or raises (`rb_inspect`, so what `inspect`
@@ -650,7 +671,7 @@ fn message_rendered(vm: &mut Executor, globals: &mut Globals, exception: Value) 
 ///
 fn nameerr_class_text(vm: &mut Executor, globals: &mut Globals, class: Module) -> Value {
     let c = class.as_val();
-    let shown = match vm.invoke_method_inner(globals, IdentId::get_id("name"), c, &[], None, None) {
+    let shown = match vm.invoke_method_inner(globals, IdentId::NAME, c, &[], None, None) {
         Ok(name) if !name.is_nil() => Some(name),
         _ => vm
             .invoke_method_inner(globals, IdentId::INSPECT, c, &[], None, None)
@@ -894,7 +915,7 @@ fn keyerror_receiver(
     // (`KeyError.new("x").receiver`), rather than returning nil.
     match globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("/receiver"))
+        .get_ivar(lfp.self_val(), IdentId::_RECEIVER)
     {
         Some(v) => Ok(v),
         None => Err(MonorubyErr::argumenterr("no receiver is available")),

@@ -1971,7 +1971,9 @@ fn queue_exception_report(globals: &mut Globals, thread: Value) {
                 // the non-highlighted, non-reversed layout): the
                 // innermost frame heads the message line, the rest
                 // follow as `\tfrom` lines.
-                let head = format!("{} ({})", err.message(), err.class_name(&globals.store));
+                // The message line is `#detailed_message`'s, rendered by
+                // the thread's exit hook (`render_exception_report`).
+                let head = err.get_error_message(&globals.store);
                 let frames: Vec<String> = err
                     .trace
                     .iter()
@@ -1991,23 +1993,7 @@ fn queue_exception_report(globals: &mut Globals, thread: Value) {
             }
         }
     };
-    let ivar = IdentId::get_id("/__report_on_exception");
-    // An ivar explicitly set to nil counts as unset (the Ruby-side
-    // accessors treat nil as "fall back to the default").
-    let report = globals
-        .store
-        .get_ivar(thread, ivar)
-        .filter(|v| !v.is_nil())
-        .map(|v| v.as_bool())
-        .or_else(|| {
-            globals
-                .store
-                .get_ivar(globals.store.get_module(THREAD_CLASS).as_val(), ivar)
-                .filter(|v| !v.is_nil())
-                .map(|v| v.as_bool())
-        })
-        .unwrap_or(true);
-    if !report {
+    if !reports_on_exception(globals, thread) {
         return;
     }
     // The header mirrors Thread#inspect
@@ -2113,10 +2099,60 @@ pub(crate) extern "C" fn thread_body_exit(
     vm.with_temp_scope(|vm| {
         if ret != 0 {
             vm.temp_push(Value::from_u64(ret));
+        } else {
+            render_exception_report(vm, globals);
         }
         vm.with_pending_error_held(|vm| run_thread_exit_hooks(vm, globals));
     });
     ret
+}
+
+/// The exception a thread body died of, readied for its
+/// `report_on_exception` report: that prints what `#detailed_message`
+/// answers (`rb_error_write`), which is Ruby and so has to run here, in
+/// the thread's own context — the report itself is put together where no
+/// Ruby may run ([`queue_exception_report`]). The pending error becomes
+/// its exception object, as it does for the report of the main thread
+/// (`Globals::run_with_prelude`). A kill unwind and the non-local exits
+/// `finalize` rewords are left as they are.
+fn render_exception_report(vm: &mut Executor, globals: &mut Globals) {
+    let thread = current_thread(vm);
+    let reportable = vm.exception().is_some_and(|err| {
+        !matches!(
+            err.kind(),
+            MonorubyErrKind::SystemExit(_)
+                | MonorubyErrKind::MethodReturn(..)
+                | MonorubyErrKind::BlockBreak(..)
+        )
+    });
+    if !reportable || thread.as_thread_inner().killed || !reports_on_exception(globals, thread) {
+        return;
+    }
+    let obj = vm.take_ex_obj(globals);
+    vm.temp_push(obj);
+    MonorubyErr::render_report_messages(vm, globals, obj);
+    vm.set_error(MonorubyErr::new_from_exception(obj.is_exception().unwrap()).with_original(obj));
+}
+
+/// `Thread#report_on_exception` of *thread*: its own flag, else the
+/// `Thread` class-level default, else true.
+fn reports_on_exception(globals: &Globals, thread: Value) -> bool {
+    let ivar = IdentId::get_id("/__report_on_exception");
+    // An ivar explicitly set to nil counts as unset (the Ruby-side
+    // accessors treat nil as "fall back to the default").
+    globals
+        .store
+        .get_ivar(thread, ivar)
+        .filter(|v| !v.is_nil())
+        .map(|v| v.as_bool())
+        .or_else(|| {
+            globals
+                .store
+                .get_ivar(globals.store.get_module(THREAD_CLASS).as_val(), ivar)
+                .filter(|v| !v.is_nil())
+                .map(|v| v.as_bool())
+        })
+        .unwrap_or(true)
 }
 
 fn run_thread_exit_hooks(vm: &mut Executor, globals: &mut Globals) {

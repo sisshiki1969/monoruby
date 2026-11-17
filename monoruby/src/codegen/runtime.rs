@@ -2120,9 +2120,16 @@ pub(crate) extern "C" fn object_send_name(
     callid: CallSiteId,
     lfp: Lfp,
 ) -> Option<IdentId> {
-    if let Some(id) = name.try_symbol() {
-        return Some(id);
-    }
+    use crate::builtins::CheckedName;
+    let name = match crate::builtins::checked_name(vm, globals, name) {
+        Ok(CheckedName::Id(id)) => return Some(id),
+        Ok(CheckedName::Unknown(name)) => name,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    // Rare from here on: the call is read back for the error.
     let cs = &globals.store[callid];
     let (recv, args_slot, pos_num, single_splat, fcall) = (
         cs.recv,
@@ -2141,9 +2148,8 @@ pub(crate) extern "C" fn object_send_name(
             None => vec![args[0]],
         };
     }
-    // The splat form hands over the element the name was read from.
-    args[0] = name;
-    crate::builtins::send_method_name(vm, globals, receiver, &args, |_, _| fcall)
+    let args = args.get(1..).unwrap_or_default();
+    crate::builtins::send_unknown_name(globals, receiver, name, args, fcall)
         .map_err(|err| vm.set_error(err))
         .ok()
 }

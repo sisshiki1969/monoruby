@@ -5078,22 +5078,40 @@ pub(crate) fn send_method_name(
     args: &[Value],
     private_call: impl FnOnce(&Executor, &Globals) -> bool,
 ) -> Result<IdentId> {
-    let s = match checked_name(vm, globals, args[0])? {
-        CheckedName::Id(id) => return Ok(id),
-        CheckedName::Unknown(s) => s,
-    };
+    match checked_name(vm, globals, args[0])? {
+        CheckedName::Id(id) => Ok(id),
+        CheckedName::Unknown(name) => {
+            let private_call = private_call(vm, globals);
+            send_unknown_name(globals, receiver, name, &args[1..], private_call)
+        }
+    }
+}
+
+/// [`send_method_name`] for a name no Symbol exists for (*name*, a
+/// String): the Symbol it now becomes when the receiver has a
+/// `method_missing` of its own, the NoMethodError about *args*
+/// otherwise.
+pub(crate) fn send_unknown_name(
+    globals: &mut Globals,
+    receiver: Value,
+    name: Value,
+    args: &[Value],
+    private_call: bool,
+) -> Result<IdentId> {
     let basic = globals
         .check_method(receiver, IdentId::METHOD_MISSING)
         .is_none_or(|fid| matches!(globals.store[fid].kind, FuncKind::Builtin { .. }));
     if !basic {
-        return crate::builtins::string::intern_name_string(&globals.store, s.as_rstring_inner());
+        return crate::builtins::string::intern_name_string(
+            &globals.store,
+            name.as_rstring_inner(),
+        );
     }
-    let private_call = private_call(vm, globals);
     Err(super::object::no_method_error_unknown(
         globals,
         receiver,
-        s,
-        &args[1..],
+        name,
+        args,
         private_call,
     ))
 }
@@ -6977,7 +6995,7 @@ pub(crate) fn name_error_reflection(
     let _ = globals.store.set_ivar(exc, IdentId::_NAME, name_value);
     let _ = globals
         .store
-        .set_ivar(exc, IdentId::get_id("/receiver"), receiver);
+        .set_ivar(exc, IdentId::_RECEIVER, receiver);
     MonorubyErr::nameerr(msg).with_original(exc)
 }
 
@@ -7193,7 +7211,10 @@ fn ivar_name_check(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
 #[monoruby_builtin]
 fn iv_defined(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = ivar_name_id(vm, globals, lfp.self_val(), lfp.arg(0))?;
+    // A name no Symbol exists for names no variable.
+    let CheckedName::Id(id) = ivar_name_check(vm, globals, lfp.self_val(), lfp.arg(0))? else {
+        return Ok(Value::bool(false));
+    };
     let b = globals.store.get_ivar(lfp.self_val(), id).is_some();
     Ok(Value::bool(b))
 }

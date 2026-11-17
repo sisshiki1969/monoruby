@@ -2559,7 +2559,7 @@ impl Executor {
                 if let Some(receiver) = receiver {
                     globals
                         .store
-                        .set_ivar(v, IdentId::get_id("/receiver"), receiver)
+                        .set_ivar(v, IdentId::_RECEIVER, receiver)
                         .unwrap();
                 }
                 v
@@ -2579,7 +2579,7 @@ impl Executor {
                 if let Some(receiver) = receiver {
                     globals
                         .store
-                        .set_ivar(v, IdentId::get_id("/receiver"), receiver)
+                        .set_ivar(v, IdentId::_RECEIVER, receiver)
                         .unwrap();
                 }
                 v
@@ -2637,7 +2637,7 @@ impl Executor {
                 let v = Value::new_exception(err);
                 globals
                     .store
-                    .set_ivar(v, IdentId::get_id("/receiver"), receiver)
+                    .set_ivar(v, IdentId::_RECEIVER, receiver)
                     .unwrap();
                 v
             }
@@ -2646,7 +2646,7 @@ impl Executor {
                 let v = Value::new_exception(err);
                 globals
                     .store
-                    .set_ivar(v, IdentId::get_id("/receiver"), receiver)
+                    .set_ivar(v, IdentId::_RECEIVER, receiver)
                     .unwrap();
                 globals
                     .store
