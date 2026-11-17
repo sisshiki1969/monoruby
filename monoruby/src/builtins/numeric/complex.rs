@@ -47,7 +47,6 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_func(COMPLEX_CLASS, "**", pow, 1);
     globals.define_builtin_func(COMPLEX_CLASS, "numerator", numerator, 0);
     globals.define_builtin_func(COMPLEX_CLASS, "denominator", denominator, 0);
-    globals.define_builtin_func(COMPLEX_CLASS, "integer?", integer_q, 0);
     globals.define_builtin_func(COMPLEX_CLASS, "hash", hash, 0);
     globals.define_builtin_func(COMPLEX_CLASS, "marshal_dump", marshal_dump, 0);
     globals.define_builtin_func(COMPLEX_CLASS, "to_f", to_f, 0);
@@ -566,15 +565,6 @@ fn complex_denominator(
     let im_den = vm.invoke_method_inner(globals, den_id, c.im().get(), &[], None, None)?;
     let lcm_id = IdentId::get_id("lcm");
     vm.invoke_method_inner(globals, lcm_id, re_den, &[im_den], None, None)
-}
-
-///
-/// ### Complex#integer?
-///
-/// Always returns false.
-#[monoruby_builtin]
-fn integer_q(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(false))
 }
 
 ///

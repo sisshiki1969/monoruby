@@ -1404,6 +1404,9 @@ impl Globals {
                         crate::rvalue::io::flush_std_streams();
                         crate::executor::terminate_with_signal(signo);
                     }
+                    if let Some(obj) = err.original {
+                        MonorubyErr::render_report_messages(executor, self, obj);
+                    }
                     err.show_error_message_and_all_loc(&self.store);
                     1
                 }
@@ -1549,9 +1552,10 @@ impl Globals {
         // (`original`), so the top-level report can show a custom
         // string backtrace and walk the `#cause` chain. Control-flow
         // pseudo-errors and `SystemExit` keep their dedicated handling
-        // in `main::handle_error`. Nothing Ruby-level runs after this
-        // point, so the object can't be collected out from under the
-        // report.
+        // in `main::handle_error`. The last Ruby that runs is each
+        // exception's `#detailed_message`, for the report's text (the
+        // object is rooted across it); nothing Ruby-level runs after
+        // that, so it can't be collected out from under the report.
         let res = match res {
             Err(err)
                 if !matches!(
@@ -1563,6 +1567,8 @@ impl Globals {
             {
                 executor.set_error(err);
                 let obj = executor.take_ex_obj(self);
+                executor.temp_push(obj);
+                MonorubyErr::render_report_messages(&mut executor, self, obj);
                 let err =
                     MonorubyErr::new_from_exception(obj.is_exception().unwrap()).with_original(obj);
                 Err(err)

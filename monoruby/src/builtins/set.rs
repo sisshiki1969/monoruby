@@ -15,7 +15,11 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SET_CLASS, "<<", add, 1);
     globals.define_builtin_func(SET_CLASS, "add", add, 1);
     globals.define_builtin_func(SET_CLASS, "add?", add_q, 1);
-    globals.define_builtin_funcs(SET_CLASS, "===", &["include?", "member?"], teq, 1);
+    // `include?` is the method; `member?` and `===` are its aliases
+    // (`rb_define_alias(rb_cSet, "===", "include?")`), which is what
+    // `Method#original_name` and `#inspect` report — builtins/set.rb
+    // re-declares the alias groups of this table as true aliases.
+    globals.define_builtin_funcs(SET_CLASS, "include?", &["member?", "==="], teq, 1);
     globals.define_builtin_funcs(SET_CLASS, "size", &["length"], size, 0);
     globals.define_builtin_func(SET_CLASS, "empty?", empty_, 0);
     globals.define_builtin_func(SET_CLASS, "clear", clear, 0);
@@ -127,7 +131,7 @@ fn set_from_iter(
     let set = new_empty_set();
     let mut h = set.as_hash();
     for v in iter {
-        h.insert(v, Value::bool(true), vm, globals)?;
+        h.aset(v, Value::bool(true), vm, globals)?;
     }
     Ok(set)
 }
@@ -142,7 +146,7 @@ fn set_from_iter_like(
     let set = new_empty_set_like(model, &globals.store)?;
     let mut h = set.as_hash();
     for v in iter {
-        h.insert(v, Value::bool(true), vm, globals)?;
+        h.aset(v, Value::bool(true), vm, globals)?;
     }
     Ok(set)
 }
@@ -230,7 +234,7 @@ fn set_index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let set = Value::hash_with_class_and_default(lfp.self_val().as_class().id(), Value::nil());
     let mut h = set.as_hash();
     for v in args.iter().copied() {
-        h.insert(v, Value::bool(true), vm, globals)?;
+        h.aset(v, Value::bool(true), vm, globals)?;
     }
     Ok(set)
 }
@@ -248,7 +252,7 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let self_val = lfp.self_val();
     self_val
         .as_hash_mut(&globals.store)?
-        .insert(val, Value::bool(true), vm, globals)?;
+        .aset(val, Value::bool(true), vm, globals)?;
     Ok(self_val)
 }
 
@@ -268,7 +272,7 @@ fn add_q(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         Ok(Value::nil())
     } else {
         self_val
-            .as_hash().insert(val, Value::bool(true), vm, globals)?;
+            .as_hash().aset(val, Value::bool(true), vm, globals)?;
         Ok(self_val)
     }
 }
@@ -521,7 +525,7 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let elems = enum_to_vec(vm, globals, arg)?;
         for elem in elems {
             self_val
-                .as_hash().insert(elem, Value::bool(true), vm, globals)?;
+                .as_hash().aset(elem, Value::bool(true), vm, globals)?;
         }
     }
     Ok(self_val)
@@ -570,7 +574,7 @@ fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     }
     for elem in elems {
         self_val
-            .as_hash().insert(elem, Value::bool(true), vm, globals)?;
+            .as_hash().aset(elem, Value::bool(true), vm, globals)?;
     }
     Ok(self_val)
 }
@@ -598,7 +602,7 @@ fn intersection(
     let other = new_empty_set_like(self_val, &globals.store)?;
     for elem in other_elems {
         other
-            .as_hash().insert(elem, Value::bool(true), vm, globals)?;
+            .as_hash().aset(elem, Value::bool(true), vm, globals)?;
     }
     let other_inner = other.as_hashmap_inner();
     // Since 4.0.9 the result compares like `self` too (CRuby 4.0.6 built a
@@ -607,7 +611,7 @@ fn intersection(
     for (k, _) in self_inner.iter() {
         if other_inner.contains_key(k, vm, globals)? {
             result
-                .as_hash().insert(k, Value::bool(true), vm, globals)?;
+                .as_hash().aset(k, Value::bool(true), vm, globals)?;
         }
     }
     Ok(result)
@@ -630,11 +634,11 @@ fn union_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let result = new_empty_set_like(lfp.self_val(), &globals.store)?;
     for k in self_keys {
         result
-            .as_hash().insert(k, Value::bool(true), vm, globals)?;
+            .as_hash().aset(k, Value::bool(true), vm, globals)?;
     }
     for k in other_elems {
         result
-            .as_hash().insert(k, Value::bool(true), vm, globals)?;
+            .as_hash().aset(k, Value::bool(true), vm, globals)?;
     }
     Ok(result)
 }
@@ -657,14 +661,14 @@ fn difference(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let other = new_empty_set_like(self_val, &globals.store)?;
     for elem in other_elems {
         other
-            .as_hash().insert(elem, Value::bool(true), vm, globals)?;
+            .as_hash().aset(elem, Value::bool(true), vm, globals)?;
     }
     let other_inner = other.as_hashmap_inner();
     let result = new_empty_set_like(self_val, &globals.store)?;
     for (k, _) in self_inner.iter() {
         if !other_inner.contains_key(k, vm, globals)? {
             result
-                .as_hash().insert(k, Value::bool(true), vm, globals)?;
+                .as_hash().aset(k, Value::bool(true), vm, globals)?;
         }
     }
     Ok(result)
@@ -691,20 +695,20 @@ fn symmetric_difference(
     let other = new_empty_set_like(self_val, &globals.store)?;
     for elem in other_elems {
         other
-            .as_hash().insert(elem, Value::bool(true), vm, globals)?;
+            .as_hash().aset(elem, Value::bool(true), vm, globals)?;
     }
     let other_inner = other.as_hashmap_inner();
     let result = new_empty_set_like(self_val, &globals.store)?;
     for (k, _) in self_inner.iter() {
         if !other_inner.contains_key(k, vm, globals)? {
             result
-                .as_hash().insert(k, Value::bool(true), vm, globals)?;
+                .as_hash().aset(k, Value::bool(true), vm, globals)?;
         }
     }
     for (k, _) in other_inner.iter() {
         if !self_inner.contains_key(k, vm, globals)? {
             result
-                .as_hash().insert(k, Value::bool(true), vm, globals)?;
+                .as_hash().aset(k, Value::bool(true), vm, globals)?;
         }
     }
     Ok(result)
@@ -1173,7 +1177,7 @@ fn collect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
         for i in 0..n {
             let elem = vm.temp_at(new_elems_idx).as_array()[i];
             self_val
-                .as_hash().insert(elem, Value::bool(true), vm, globals)?;
+                .as_hash().aset(elem, Value::bool(true), vm, globals)?;
         }
         Ok(self_val)
     })
@@ -1215,7 +1219,7 @@ fn flatten_set_into(
             seen.remove(&val.id());
         } else {
             result
-                .as_hash().insert(val, Value::bool(true), vm, globals)?;
+                .as_hash().aset(val, Value::bool(true), vm, globals)?;
         }
     }
     Ok(())
@@ -1247,7 +1251,7 @@ fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let new_keys = set_keys(result);
     for k in new_keys {
         self_val
-            .as_hash().insert(k, Value::bool(true), vm, globals)?;
+            .as_hash().aset(k, Value::bool(true), vm, globals)?;
     }
     Ok(self_val)
 }
@@ -1319,14 +1323,14 @@ fn classify(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
             vm.temp_push(classification);
             let existing = result_hash.as_hashmap_inner().get(classification, vm, globals)?;
             if let Some(set) = existing {
-                set.as_hash().insert(k, Value::bool(true), vm, globals)?;
+                set.as_hash().aset(k, Value::bool(true), vm, globals)?;
             } else {
                 // Each subset is of `self`'s class and (since 4.0.9)
                 // comparison mode.
                 let new_set = new_empty_set_like(lfp.self_val(), &globals.store)?;
                 vm.temp_push(new_set);
-                new_set.as_hash().insert(k, Value::bool(true), vm, globals)?;
-                result_hash.as_hash().insert(classification, new_set, vm, globals)?;
+                new_set.as_hash().aset(k, Value::bool(true), vm, globals)?;
+                result_hash.as_hash().aset(classification, new_set, vm, globals)?;
             }
             vm.temp_clear(depth);
         }
@@ -1456,7 +1460,7 @@ fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
                 let subset = set_from_iter_like(lfp.self_val(), elems.into_iter(), vm, globals)?;
                 let depth = vm.temp_len();
                 vm.temp_push(subset);
-                result_set.as_hash().insert(subset, Value::bool(true), vm, globals)?;
+                result_set.as_hash().aset(subset, Value::bool(true), vm, globals)?;
                 vm.temp_clear(depth);
             }
             Ok(result_set)
@@ -1489,7 +1493,7 @@ fn divide(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
                     let subset = set_from_iter_like(lfp.self_val(), elems.into_iter(), vm, globals)?;
                     let depth = vm.temp_len();
                     vm.temp_push(subset);
-                    result_set.as_hash().insert(subset, Value::bool(true), vm, globals)?;
+                    result_set.as_hash().aset(subset, Value::bool(true), vm, globals)?;
                     vm.temp_clear(depth);
                 }
             }

@@ -73,11 +73,13 @@ class Array
       # the `Class#new` forwarding chain, so each element is an inlined
       # block call. Incremental push keeps CRuby's partial-contents
       # semantics when the block `break`s.
-      # CRuby checks the size before running the block; mirror the
-      # native cap (MAX_ARRAY_SIZE in __init_fill) and `long` range.
-      if n > 1073741824
+      # CRuby checks the size, and allocates the Array, before running
+      # the block: the `long` range, ARY_MAX_SIZE, then a NoMemoryError
+      # when the allocator refuses it (as `__init_fill` does).
+      if n > 16777216
         raise RangeError, "bignum too big to convert into 'long'" if n > 9223372036854775807
-        raise ArgumentError, "array size too big"
+        raise ArgumentError, "array size too big" if n > 0x0fff_ffff_ffff_ffff
+        __array_capa_check(n)
       end
       __init_fill(0, nil)
       i = 0
@@ -227,9 +229,8 @@ class Array
   def tally(hash = nil)
     return __tally_into(hash) unless hash.nil?
     h = {}
-    each do |x|
-      h[x] = (h[x] || 0) + 1
-    end
+    # `tally_up`: the element is the key as it is (see `__tally_into`).
+    each { |x| __tally_up(h, x) }
     h
   end
 

@@ -20,16 +20,6 @@ struct CacheEntry {
 #[repr(C)]
 struct Cache([CacheEntry; CACHE_SIZE]);
 
-extern "C" fn expect_string(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    v: Value,
-) -> Option<IdentId> {
-    v.expect_symbol_or_to_str(vm, globals)
-        .map_err(|err| vm.set_error(err))
-        .ok()
-}
-
 extern "C" fn no_method_name(vm: &mut Executor) -> Option<Value> {
     let err = MonorubyErr::argumenterr("no method name given.");
     vm.set_error(err);
@@ -377,7 +367,7 @@ impl Codegen {
     /// FuncId in x0. Twin of x86 `object_send_inner`: an LFU symbol cache
     /// (4 entries) keyed by `IdentId`, promoting hot entries by swapping with
     /// the least-used slot; a miss calls `find`, a non-Symbol arg0 is coerced
-    /// via `expect_string`. x0 == 0 (None) on error is caught by the caller's
+    /// via `runtime::object_send_name`. x0 == 0 (None) on error is caught by the caller's
     /// `handle_error`. aarch64: no `select_page`, so the cold blocks are inline;
     /// `csel` replaces `cmovltq`. Regs: x11 IdentId, x12 cur, x13 min, x14/x15/x9
     /// scratch.
@@ -392,6 +382,7 @@ impl Codegen {
     fn object_send_inner(
         &mut self,
         recv: SlotId,
+        callid: CallSiteId,
         cache_addr: u64,
         missing: &DestLabel,
         error: &DestLabel,
@@ -483,8 +474,10 @@ impl Codegen {
             mov x0, x19;                              // vm
             mov x1, x20;                              // globals
             mov x2, x11;                              // arg0 value
+            mov x3, (callid.get() as u64);            // CallSiteId
+            mov x4, x22;                              // caller's lfp
             str x30, [sp, #-16]!;
-            mov x9, (expect_string as *const () as u64);
+            mov x9, (runtime::object_send_name as *const () as u64);
             blr x9;                                   // x0 = Option<IdentId>
             ldr x30, [sp], #16;
         );
@@ -793,11 +786,11 @@ impl Codegen {
                 );
             } else {
                 self.a64_frame_load(11, lfp, conv(args) as u32); // x11 = arg0
-                self.object_send_inner(recv, cache_addr, &missing, error);
+                self.object_send_inner(recv, callid, cache_addr, &missing, error);
             }
         } else {
             self.object_send_splat_arg0(args, error);
-            self.object_send_inner(recv, cache_addr, &missing, error);
+            self.object_send_inner(recv, callid, cache_addr, &missing, error);
         }
         self.emit_handle_error(error);
         // FuncId (x0) -> &FuncData in x26 (callee-saved, survives the arg C-calls

@@ -416,9 +416,9 @@ module Enumerable
       raise FrozenError, "can't modify frozen Hash: #{hash.inspect}" if hash.frozen?
     end
     h = hash || {}
-    __gather_each do |x|
-      h[x] = (h.key?(x) ? h[x] : 0) + 1
-    end
+    # `tally_up` rather than `h[x] = ...`: the element is the key as it
+    # is (no frozen copy of a String), whatever default the Hash has.
+    __gather_each { |x| __tally_up(h, x) }
     h
   end
   private :__tally_into
@@ -684,6 +684,11 @@ module Enumerable
   end
 
   def to_a(*args)
+    # An ArithmeticSequence has no `to_a` of its own (CRuby's is this
+    # one), but an Integer sequence has a closed form.
+    if ::Enumerator::ArithmeticSequence === self && args.empty? && (res = __integer_terms)
+      return res
+    end
     res = []
     self.each(*args) do |*ys|
       res << (ys.empty? ? nil : ys.size == 1 ? ys[0] : ys)

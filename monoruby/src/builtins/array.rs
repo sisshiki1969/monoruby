@@ -329,9 +329,15 @@ fn init_fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         return Err(MonorubyErr::negative_array_size());
     }
     let size = size as usize;
-    const MAX_ARRAY_SIZE: usize = 1 << 30; // ~1 billion elements
-    if size > MAX_ARRAY_SIZE {
-        return Err(MonorubyErr::argumenterr(format!("array size too big")));
+    // `rb_ary_initialize`: a size past `ARY_MAX_SIZE` is an ArgumentError,
+    // and one the allocator refuses a NoMemoryError (`Array.new(2**34)`),
+    // which the fill below would abort the process on. Only a size that
+    // could plausibly fail is tried first.
+    if size > ARY_MAX_SIZE {
+        return Err(MonorubyErr::argumenterr("array size too big"));
+    }
+    if size > ARY_CAPA_PROBE && !crate::builtins::kernel::array_capa_available(size) {
+        return Err(crate::builtins::string::no_memory_error(vm, globals));
     }
     let val = lfp.arg(1);
     *self_val = ArrayInner::from(smallvec![val; size]);
@@ -674,7 +680,7 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     elem.len()
                 )));
             }
-            vm.temp_hash_insert(globals, elem[0], elem[1])?;
+            vm.temp_hash_aset(globals, elem[0], elem[1])?;
             i += 1;
         }
         Ok(())
@@ -868,6 +874,11 @@ fn ary_and(lhs: Array, rhs: Array, vm: &mut Executor, globals: &mut Globals) -> 
 /// CRuby's `ARY_MAX_SIZE`: the element count past which an Array is
 /// "too big" whatever memory there is.
 const ARY_MAX_SIZE: usize = (i64::MAX / 8) as usize;
+
+/// An Array longer than this is asked of the allocator before it is
+/// built (`array_capa_available`), so that a refusal is a NoMemoryError
+/// and not an abort; a shorter one is not worth the extra allocation.
+const ARY_CAPA_PROBE: usize = 1 << 24;
 
 #[monoruby_builtin]
 fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
@@ -3574,7 +3585,7 @@ fn group_by_inner(
                 None => {
                     let new_arr = Value::array1(elem);
                     vm.temp_push(new_arr);
-                    h_val.as_hash().insert(key, new_arr, vm, globals)?;
+                    h_val.as_hash().aset(key, new_arr, vm, globals)?;
                 }
             }
             Ok(())
@@ -7784,7 +7795,10 @@ mod tests {
     #[test]
     fn array_new_huge_size() {
         run_test_error(r##"Array.new(2**62)"##);
-        run_test_error(r##"Array.new(1 << 31)"##);
+        // Under `ARY_MAX_SIZE`, so the allocator is asked: a size no
+        // address space holds, never one a machine with enough memory
+        // and overcommit would grant (and then have to fill).
+        run_test_error(r##"Array.new(1 << 59)"##);
     }
 
     #[test]

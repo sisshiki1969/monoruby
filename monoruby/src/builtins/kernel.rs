@@ -221,6 +221,9 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_private_builtin_func(kernel_class, "__check_str", kernel_check_str, 1);
     globals.define_private_builtin_func(kernel_class, "__check_int", kernel_check_int, 1);
     globals.define_private_builtin_func(kernel_class, "__to_hash", kernel_to_hash, 1);
+    globals.define_private_builtin_func(kernel_class, "__tally_up", super::hash::tally_up, 2);
+    globals.define_private_builtin_func(kernel_class, "__existing_sym", existing_sym, 1);
+    globals.define_private_builtin_func_rest(kernel_class, "__keyword_order", keyword_order);
     globals.define_private_builtin_func(kernel_class, "__to_path", kernel_to_path, 1);
     globals.define_private_builtin_func(kernel_class, "__num2dbl", kernel_num2dbl, 1);
     globals.define_private_builtin_func_rest(kernel_class, "__check_funcall", kernel_check_funcall);
@@ -1236,7 +1239,9 @@ fn block_given(vm: &mut Executor, _globals: &mut Globals, _: Lfp, _: BytecodePtr
 fn format(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let args = lfp.arg(0).as_array();
     if args.is_empty() {
-        return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
+        // `rb_f_sprintf` takes any number of arguments and `rb_str_format`
+        // then misses the format.
+        return Err(MonorubyErr::argumenterr("too few arguments"));
     }
     let fmt_val = args[0];
     let arguments = &args[1..];
@@ -4632,7 +4637,9 @@ fn throw_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // `UncaughtThrowError` (< ArgumentError) rather than letting the
     // control-flow `Throw` escape uncatchably.
     if !vm.is_catch_tag_active(tag) {
-        let msg = format!("uncaught throw {}", tag.inspect(&globals.store));
+        // The message is a format (`uncaught_throw_to_s` applies it to
+        // the tag each time the message is read).
+        let msg = "uncaught throw %p".to_string();
         if let Some(klass) = globals
             .store
             .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("UncaughtThrowError"))
@@ -4647,7 +4654,10 @@ fn throw_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             globals.store.set_ivar(exc, IdentId::get_id("/__value"), value)?;
             return Err(MonorubyErr::new(MonorubyErrKind::Other(class_id), msg).with_original(exc));
         }
-        return Err(MonorubyErr::argumenterr(msg));
+        return Err(MonorubyErr::argumenterr(format!(
+            "uncaught throw {}",
+            tag.inspect(&globals.store)
+        )));
     }
     Err(MonorubyErr::throw(tag, value))
 }
@@ -4946,8 +4956,8 @@ fn public_send(
     if args.is_empty() {
         return Err(MonorubyErr::argumenterr("no method name given"));
     }
-    let method = args[0].expect_symbol_or_to_str(vm, globals)?;
     let receiver = lfp.self_val();
+    let method = send_method_name(vm, globals, receiver, &args, |_, _| false)?;
     // public_send only allows public methods. Both private and protected
     // are rejected unconditionally — unlike an ordinary call, where a
     // protected method is reachable from a caller whose `self` is a kind
@@ -5016,22 +5026,95 @@ pub(crate) fn send(
     if args.is_empty() {
         return Err(MonorubyErr::argumenterr("no method name given"));
     }
-    let method = args[0].expect_symbol_or_to_str(vm, globals)?;
-    vm.invoke_method_inner(
+    let receiver = lfp.self_val();
+    // Whether this `send` was itself written as a function call; a
+    // caller that cannot be read (`Method#call`, an extension) is
+    // `rb_f_send`, which is one.
+    let method = send_method_name(vm, globals, receiver, &args, |vm, globals| {
+        crate::codegen::runtime::entered_by(globals, vm.cfp())
+            .is_none_or(|(_, callid)| globals.store[callid].is_func_call())
+    })?;
+    let kw = if let Some(kw) = lfp.variadic_kw()
+        && let Some(kw) = kw.try_hash_ty()
+        && !kw.is_empty()
+    {
+        Some(kw)
+    } else {
+        None
+    };
+    match vm.find_method(globals, receiver, method, true) {
+        Ok(func_id) => {
+            vm.invoke_func_named(globals, func_id, method, receiver, &args[1..], lfp.block(), kw)
+        }
+        // `send` is a function call whatever receiver it was written
+        // with (`rb_f_send`: `CALL_FCALL`), which is what the
+        // NoMethodError's `private_call?` then says.
+        Err(err) => vm.invoke_method_missing_styled(
+            globals,
+            receiver,
+            method,
+            &args[1..],
+            lfp.block(),
+            kw,
+            err,
+            crate::executor::MethodMissingStyle::FCall,
+        ),
+    }
+}
+
+/// The method `send` / `__send__` / `public_send` were asked to call
+/// (`send_internal`, `vm_call_symbol`): `args[0]`, a Symbol or what
+/// `to_str` answers.
+///
+/// A String no Symbol exists for names no method — nothing can have been
+/// defined under it. Unless the receiver has a `method_missing` of its
+/// own to hand the name to, that is the NoMethodError right here, with
+/// the String as its `#name` and no Symbol made for it (Feature #5112).
+/// *private_call* says whether the call was written as a function call,
+/// which is what the error's `private_call?` reports.
+pub(crate) fn send_method_name(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Value,
+    args: &[Value],
+    private_call: impl FnOnce(&Executor, &Globals) -> bool,
+) -> Result<IdentId> {
+    match checked_name(vm, globals, args[0])? {
+        CheckedName::Id(id) => Ok(id),
+        CheckedName::Unknown(name) => {
+            let private_call = private_call(vm, globals);
+            send_unknown_name(globals, receiver, name, &args[1..], private_call)
+        }
+    }
+}
+
+/// [`send_method_name`] for a name no Symbol exists for (*name*, a
+/// String): the Symbol it now becomes when the receiver has a
+/// `method_missing` of its own, the NoMethodError about *args*
+/// otherwise.
+pub(crate) fn send_unknown_name(
+    globals: &mut Globals,
+    receiver: Value,
+    name: Value,
+    args: &[Value],
+    private_call: bool,
+) -> Result<IdentId> {
+    let basic = globals
+        .check_method(receiver, IdentId::METHOD_MISSING)
+        .is_none_or(|fid| matches!(globals.store[fid].kind, FuncKind::Builtin { .. }));
+    if !basic {
+        return crate::builtins::string::intern_name_string(
+            &globals.store,
+            name.as_rstring_inner(),
+        );
+    }
+    Err(super::object::no_method_error_unknown(
         globals,
-        method,
-        lfp.self_val(),
-        &args[1..],
-        lfp.block(),
-        if let Some(kw) = lfp.variadic_kw()
-            && let Some(kw) = kw.try_hash_ty()
-            && !kw.is_empty()
-        {
-            Some(kw)
-        } else {
-            None
-        },
-    )
+        receiver,
+        name,
+        args,
+        private_call,
+    ))
 }
 
 pub fn object_send(
@@ -6583,6 +6666,14 @@ fn method_object_impl(
             // `Module.new.method(:x)` names `Module`.
             let class = match receiver.ty() {
                 Some(ObjTy::CLASS) => globals.store.get_singleton(receiver)?.id(),
+                // A refinement always has a singleton class in CRuby
+                // (`refine` gives it one), so the lookup is named
+                // against `#<Class:#<refinement:String@M>>`.
+                Some(ObjTy::MODULE)
+                    if receiver.real_class(&globals.store).id() == REFINEMENT_CLASS =>
+                {
+                    globals.store.get_singleton(receiver)?.id()
+                }
                 Some(ObjTy::MODULE) => match globals.store.has_singleton(receiver) {
                     Some(sc)
                         if globals.store.get_method_names(sc.id()).is_empty()
@@ -6905,7 +6996,7 @@ pub(crate) fn name_error_reflection(
     let _ = globals.store.set_ivar(exc, IdentId::_NAME, name_value);
     let _ = globals
         .store
-        .set_ivar(exc, IdentId::get_id("/receiver"), receiver);
+        .set_ivar(exc, IdentId::_RECEIVER, receiver);
     MonorubyErr::nameerr(msg).with_original(exc)
 }
 
@@ -6957,11 +7048,202 @@ pub(crate) fn setter_name_id(
     before: &str,
     after: &str,
 ) -> Result<IdentId> {
+    match setter_name_check(vm, globals, receiver, arg, valid, before, after)? {
+        CheckedName::Id(id) => Ok(id),
+        CheckedName::Unknown(s) => {
+            crate::builtins::string::intern_name_string(&globals.store, s.as_rstring_inner())
+        }
+    }
+}
+
+/// `rb_check_id`'s answer for a name argument: the Symbol the name is,
+/// or — when no Symbol of that name exists, so that nothing can be
+/// defined under it — the name as the String that was given (what
+/// `to_str` answered). A lookup that is bound to fail raises with that
+/// String as `NameError#name` instead of making a Symbol for it.
+pub(crate) enum CheckedName {
+    Id(IdentId),
+    Unknown(Value),
+}
+
+/// The NameError *before* name *after* about a name no Symbol exists
+/// for ([`CheckedName::Unknown`]): `#name` is the String itself.
+pub(crate) fn name_error_unknown(
+    globals: &mut Globals,
+    before: &str,
+    name: Value,
+    after: &str,
+    receiver: Value,
+) -> MonorubyErr {
+    let inner = name.as_rstring_inner();
+    let (bytes, enc) = (inner.as_bytes().to_vec(), inner.encoding());
+    name_error_reflection_bytes(globals, before, &bytes, enc, after, name, receiver)
+}
+
+/// `rb_check_id` for a name argument with no shape of its own to check
+/// (a method name): the Symbol, or the String no Symbol exists for.
+pub(crate) fn checked_name(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg: Value,
+) -> Result<CheckedName> {
+    if let Some(sym) = arg.try_symbol() {
+        return Ok(CheckedName::Id(sym));
+    }
+    let Some(s) = arg.check_string_type(vm, globals)? else {
+        return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg));
+    };
+    let inner = s.as_rstring_inner();
+    crate::builtins::string::check_symbol_bytes(&globals.store, inner, true)?;
+    Ok(
+        match crate::builtins::string::existing_name_id(inner) {
+            Some(id) => CheckedName::Id(id),
+            None => CheckedName::Unknown(s.into()),
+        },
+    )
+}
+
+/// `__existing_sym(str)`: the Symbol of that name when there is one,
+/// `nil` otherwise — `rb_check_id` for the builtins written in Ruby,
+/// which must not make a Symbol of a name they are about to refuse.
+#[monoruby_builtin]
+fn existing_sym(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(match checked_name(vm, globals, lfp.arg(0))? {
+        CheckedName::Id(id) => Value::symbol(id),
+        CheckedName::Unknown(_) => Value::nil(),
+    })
+}
+
+/// `__keyword_order(*names)`: the keys of the keyword arguments the
+/// calling method was called with, in the order they were written — the
+/// literal `k: v` pairs by name and the keys of each `**hash`, as the
+/// keyword Hash of a `**kw` parameter would have them — or `nil` when
+/// the call cannot be read back. *names* are keywords the method knows
+/// it was given.
+///
+/// A method that declares its keywords (`by:`, `to:`) is specialized by
+/// the JIT where one with a keyword rest is not, but it no longer sees
+/// the order they came in. The few that show it (`Numeric#step`, in
+/// `ArithmeticSequence#inspect`) ask here, on the path that needs it.
+///
+/// The call is the site that entered the frame below this one; a
+/// built-in that forwards its arguments (`send`, `public_send`,
+/// `Method#call`) is read through to the site that called it. A `**hash`
+/// operand is read from the caller's register, which is where the
+/// argument binder read it and which nothing has written since: the
+/// caller is suspended in that call.
+///
+/// A caller that only passes its own keywords along (`def f(...) =
+/// g(...)`, `def f(**k) = g(**k)`) may never have built that Hash: the
+/// JIT routes the keywords of *its* call straight to the callee, and the
+/// register is still nil. When the keys found lack one of *names*, such
+/// a nil is read as the keywords of the call that entered the caller.
+#[monoruby_builtin]
+fn keyword_order(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let names = lfp.arg(0).as_array();
+    let complete = |keys: &[Value]| names.iter().all(|name| keys.iter().any(|k| k.id() == name.id()));
+    let seen = keyword_order_of_caller(vm, globals, false);
+    let keys = match seen {
+        Some(keys) if complete(&keys) => Some(keys),
+        seen => keyword_order_of_caller(vm, globals, true).or(seen),
+    };
+    Ok(keys.map(Value::array_from_vec).unwrap_or_default())
+}
+
+fn keyword_order_of_caller(
+    vm: &Executor,
+    globals: &Globals,
+    through_nil: bool,
+) -> Option<Vec<Value>> {
+    // The frame of the method that asks.
+    let mut cfp = vm.cfp().prev()?;
+    let callid = loop {
+        if let Some((_, callid)) = crate::codegen::runtime::entered_by(globals, cfp) {
+            break callid;
+        }
+        cfp = cfp.prev()?;
+        if globals.store[cfp.lfp().func_id()].is_iseq().is_some() {
+            return None;
+        }
+    };
+    let mut keys = vec![];
+    keyword_keys_of_site(globals, callid, cfp.prev()?, through_nil, &mut keys)?;
+    Some(keys)
+}
+
+/// The keyword keys the call site *callid* of the frame *caller* passes,
+/// in order, appended to *keys*.
+fn keyword_keys_of_site(
+    globals: &Globals,
+    callid: CallSiteId,
+    caller: crate::executor::Cfp,
+    through_nil: bool,
+    keys: &mut Vec<Value>,
+) -> Option<()> {
+    use crate::globals::KwElem;
+    let cs = &globals.store[callid];
+    for (i, elem) in cs.kw_order().iter().enumerate() {
+        match elem {
+            // `f(a: 1, b: 2, a: 3)` passes `{b: 2, a: 3}`.
+            KwElem::Kw(_) if cs.kw_overwritten_literal(i) => {}
+            KwElem::Kw(name) => keys.push(Value::symbol(*name)),
+            KwElem::Splat => {
+                let v = caller.lfp().register(cs.kw_pos + i)?;
+                if let Some(h) = v.try_hash_ty() {
+                    keys.extend(h.keys());
+                    continue;
+                }
+                let entered = crate::codegen::runtime::entered_by(globals, caller);
+                // A `(...)` trampoline that has not materialized its
+                // arguments holds the id of the call that entered it
+                // (`resolve_lazy_forwarding`).
+                let marker = cs.forwarding
+                    && v.try_fixnum().is_some_and(|orig| {
+                        entered.is_some_and(|(_, callid)| callid.get() as i64 == orig)
+                    });
+                let passes_its_own = cs.forwarding
+                    || globals.store[caller.lfp().func_id()]
+                        .kw_rest()
+                        .is_some();
+                if marker || (v.is_nil() && through_nil && passes_its_own) {
+                    if let Some((_, entered)) = entered {
+                        keyword_keys_of_site(globals, entered, caller.prev()?, through_nil, keys)?;
+                    }
+                } else if !v.is_nil() {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(())
+}
+
+/// [`setter_name_id`] for a reader or a remover, which does not intern
+/// a name it has no Symbol for ([`CheckedName`]).
+pub(crate) fn setter_name_check(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Value,
+    arg: Value,
+    valid: fn(&[u8], Encoding) -> bool,
+    before: &str,
+    after: &str,
+) -> Result<CheckedName> {
     if let Some(sym) = arg.try_symbol() {
         // The usual case, under one read of the table and with no copy
         // of the name.
         if sym.with_ident_name(|name, enc| valid(name.as_bytes(), enc.unwrap_or(Encoding::UTF8))) {
-            return Ok(sym);
+            return Ok(CheckedName::Id(sym));
         }
         let ident = sym.get_ident_name_clone();
         let enc = sym.symbol_encoding().unwrap_or(Encoding::UTF8);
@@ -6986,7 +7268,12 @@ pub(crate) fn setter_name_id(
             globals, before, &name, enc, after, s, receiver,
         ));
     }
-    crate::builtins::string::intern_name_string(&globals.store, inner)
+    Ok(
+        match crate::builtins::string::existing_name_id(inner) {
+            Some(id) => CheckedName::Id(id),
+            None => CheckedName::Unknown(s.into()),
+        },
+    )
 }
 
 /// The name argument of `instance_variable_get` / `_set` /
@@ -7008,6 +7295,24 @@ fn ivar_name_id(
     )
 }
 
+/// [`ivar_name_id`] without interning ([`setter_name_check`]).
+fn ivar_name_check(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    receiver: Value,
+    arg: Value,
+) -> Result<CheckedName> {
+    setter_name_check(
+        vm,
+        globals,
+        receiver,
+        arg,
+        is_valid_ivar_name,
+        "'",
+        "' is not allowed as an instance variable name",
+    )
+}
+
 ///
 /// ### Kernel#instance_variable_defined?
 ///
@@ -7016,7 +7321,10 @@ fn ivar_name_id(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_defined=3f.html]
 #[monoruby_builtin]
 fn iv_defined(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = ivar_name_id(vm, globals, lfp.self_val(), lfp.arg(0))?;
+    // A name no Symbol exists for names no variable.
+    let CheckedName::Id(id) = ivar_name_check(vm, globals, lfp.self_val(), lfp.arg(0))? else {
+        return Ok(Value::bool(false));
+    };
     let b = globals.store.get_ivar(lfp.self_val(), id).is_some();
     Ok(Value::bool(b))
 }
@@ -7044,7 +7352,10 @@ fn iv_set(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/instance_variable_get.html]
 #[monoruby_builtin]
 fn iv_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = ivar_name_id(vm, globals, lfp.self_val(), lfp.arg(0))?;
+    // A name no Symbol exists for names no variable.
+    let CheckedName::Id(id) = ivar_name_check(vm, globals, lfp.self_val(), lfp.arg(0))? else {
+        return Ok(Value::nil());
+    };
     let v = globals
         .store
         .get_ivar(lfp.self_val(), id)
@@ -7076,7 +7387,21 @@ fn iv(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/remove_instance_variable.html]
 #[monoruby_builtin]
 fn iv_remove(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let id = ivar_name_id(vm, globals, lfp.self_val(), lfp.arg(0))?;
+    let id = match ivar_name_check(vm, globals, lfp.self_val(), lfp.arg(0))? {
+        CheckedName::Id(id) => id,
+        CheckedName::Unknown(name) => {
+            // `rb_obj_remove_instance_variable`: the frozen check comes
+            // before the name is looked up.
+            lfp.self_val().ensure_not_frozen(&globals.store)?;
+            return Err(name_error_unknown(
+                globals,
+                "instance variable ",
+                name,
+                " not defined",
+                lfp.self_val(),
+            ));
+        }
+    };
     globals.store.remove_ivar(lfp.self_val(), id)
 }
 
