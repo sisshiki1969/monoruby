@@ -295,6 +295,31 @@ fn complex_exact_parts_edges() {
     );
 }
 
+/// `pack`'s padding directives with a count no machine has memory for
+/// (#2032), and with one past the probe size that does fit.
+#[test]
+fn pack_padding_refused() {
+    probe(
+        "",
+        &[
+            "[0].pack(\"x#{2**40}\").size",
+            "[1].pack(\"@#{2**40}\").size",
+            "[1, 2].pack(\"Cx#{2**40}C\").size",
+            "[1, 2].pack(\"C@#{2**40}C\").size",
+            "begin; [0].pack(\"x#{2**40}\"); rescue NoMemoryError => e; [e.class.ancestors.take(2), e.message]; end",
+            "[1, 2].pack(\"Cx#{2**24 + 1}C\").size",
+            "[1, 2].pack(\"C@#{2**24 + 1}C\").size",
+            "[1, 2, 3].pack(\"Cx3C@8C\")",
+            "[1, 2].pack(\"C@0C\")",
+            "[0].pack(\"x#{2**62}\").size",
+            "[0].pack(\"x#{2**63 - 1}\").size",
+            "[0].pack(\"@#{2**63 - 1}\").size",
+            "[1, 2].pack(\"Cx#{2**63 - 2}C\").size",
+            "s = +\"ab\"; [1].pack(\"@#{2**40}C\", buffer: s).size",
+        ],
+    );
+}
+
 /// Growth past the size the allocator is asked about first, when there
 /// is room for it: the store goes through.
 #[test]

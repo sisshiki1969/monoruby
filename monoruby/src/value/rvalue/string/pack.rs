@@ -728,6 +728,29 @@ fn pack_single_numeric(
     ))))
 }
 
+/// A run of padding longer than this (`x`, `@`) is asked of the
+/// allocator before it is written.
+const PAD_PROBE: usize = 1 << 24;
+
+/// Whether `len + add` bytes can be had: the padding of `x<count>` /
+/// `@<pos>` is the one part of a packed String whose size comes from the
+/// template alone, so `[0].pack("x#{2**40}")` is CRuby's NoMemoryError
+/// here and not an abort in the allocator. A total past a C `long` is
+/// `rb_str_modify_expand`'s ArgumentError.
+#[cold]
+fn pad_available(len: usize, add: usize) -> Result<()> {
+    if add >= (i64::MAX as usize).saturating_sub(len) {
+        return Err(MonorubyErr::argumenterr("string size too big"));
+    }
+    let n = len + add;
+    if crate::alloc::would_exceed_malloc_hard_limit(n)
+        || Vec::<u8>::new().try_reserve_exact(n).is_err()
+    {
+        return Err(MonorubyErr::nomemoryerr());
+    }
+    Ok(())
+}
+
 pub(crate) fn pack(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -938,6 +961,9 @@ pub(crate) fn pack(
             }
             Template::Null => {
                 if let Some(repeat) = repeat {
+                    if repeat > PAD_PROBE {
+                        pad_available(packed.len(), repeat)?;
+                    }
                     for _ in 0..repeat {
                         packed.push(0);
                     }
@@ -963,6 +989,9 @@ pub(crate) fn pack(
                 // `@`/`X`/`x`, so `@*` rewinds to position 0.
                 let pos = repeat.unwrap_or(0);
                 if pos > packed.len() {
+                    if pos > PAD_PROBE {
+                        pad_available(0, pos)?;
+                    }
                     packed.resize(pos, 0);
                 } else {
                     packed.truncate(pos);
