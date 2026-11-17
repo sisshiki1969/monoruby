@@ -8,9 +8,10 @@ use num::{BigInt, Signed, ToPrimitive, Zero};
 use paste::paste;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Mul, Rem, Shl, Shr, Sub};
 
-/// Try the `coerce` protocol: call `rhs.coerce(lhs)` and if it returns
-/// a 2-element array, call `ary[0].op(ary[1])`.  Returns `None` if
-/// `coerce` is not defined on `rhs`.
+/// CRuby's `rb_num_coerce_bin(lhs, rhs, op)`: `rhs.coerce(lhs)` (asked as
+/// `rb_check_funcall` asks, see [`crate::value::coerce::do_coerce`])
+/// supplies the two operands `op` is applied to. A `rhs` that does not
+/// coerce is `"<rhs> can't be coerced into <type_name>"`.
 pub(crate) fn try_coerce_and_apply(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -19,20 +20,9 @@ pub(crate) fn try_coerce_and_apply(
     rhs: Value,
     type_name: &'static str,
 ) -> Option<Value> {
-    let coerce_id = IdentId::get_id("coerce");
-    match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
-        Ok(Some(result)) => {
-            if let Some(ary) = result.try_array_ty() {
-                if ary.len() == 2 {
-                    return vm.invoke_method_simple(globals, op, ary[0], &[ary[1]]);
-                }
-            }
-            let err = MonorubyErr::typeerr("coerce must return [x, y]".to_string());
-            vm.set_error(err);
-            None
-        }
+    match crate::value::coerce::do_coerce(vm, globals, lhs, rhs, false) {
+        Ok(Some((x, y))) => vm.invoke_method_simple(globals, op, x, &[y]),
         Ok(None) => {
-            // coerce method not defined
             let err = MonorubyErr::cant_coerced_into(globals, op, rhs, type_name);
             vm.set_error(err);
             None
@@ -127,15 +117,11 @@ fn complex_real_op(
     Some(Value::complex(re_r, im_r))
 }
 
-/// CRuby-compatible coerce for bitwise operations (Integer#&, |, ^).
-///
-/// CRuby's rb_num_coerce_bit:
-/// 1. Call rhs.coerce(lhs) → [x, y]
-/// 2. Re-dispatch x.op(y)
-/// 3. If coerced x is not Integer, the re-dispatch will call Integer#op again,
-///    which calls coerce again → CRuby detects this and raises TypeError.
-///
-/// We simplify: after coerce, check that x is Integer. If not, raise TypeError.
+/// CRuby's `rb_num_coerce_bit` for the bitwise operators of Integer
+/// (`&`, `|`, `^`): `rhs.coerce(lhs)` answers `[x, y]`, and `x.op(y)` is
+/// asked with `rb_check_funcall`. A `rhs` that does not coerce, or an
+/// `x` that has no such operator, is `"<rhs> can't be coerced into
+/// Integer"`.
 pub(crate) fn try_coerce_and_apply_bit(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -143,31 +129,34 @@ pub(crate) fn try_coerce_and_apply_bit(
     lhs: Value,
     rhs: Value,
 ) -> Option<Value> {
-    let coerce_id = IdentId::get_id("coerce");
-    match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
-        Ok(Some(result)) => {
-            if let Some(ary) = result.try_array_ty() {
-                if ary.len() == 2 {
-                    let x = ary[0];
-                    // Check that coerced lhs is Integer — if not, TypeError
-                    match x.unpack() {
-                        RV::Fixnum(_) | RV::BigInt(_) => {
-                            return vm.invoke_method_simple(globals, op, x, &[ary[1]]);
-                        }
-                        _ => {
-                            let err = MonorubyErr::typeerr(format!(
-                                "{} can't be coerced into Integer",
-                                rhs.coerce_failed_name(&globals.store),
-                            ));
-                            vm.set_error(err);
-                            return None;
-                        }
-                    }
+    match crate::value::coerce::do_coerce(vm, globals, lhs, rhs, false) {
+        Ok(Some((x, y))) => {
+            // `num_funcall_bit_1`: the operator is asked of the coerced
+            // receiver with `rb_check_funcall`; one that has no such
+            // operator (a Float) is the failure, shown for the original
+            // operand. The pair is all that holds `x` and `y`, and a
+            // redefined `respond_to?` runs before the operator's frame
+            // holds them.
+            let temp = vm.temp_len();
+            vm.temp_push(x);
+            vm.temp_push(y);
+            let res = crate::value::coerce::check_funcall_args(vm, globals, x, op, &[y]);
+            vm.temp_clear(temp);
+            match res {
+                Ok(Some(v)) => Some(v),
+                Ok(None) => {
+                    let err = MonorubyErr::typeerr(format!(
+                        "{} can't be coerced into Integer",
+                        rhs.coerce_failed_name(&globals.store),
+                    ));
+                    vm.set_error(err);
+                    None
+                }
+                Err(err) => {
+                    vm.set_error(err);
+                    None
                 }
             }
-            let err = MonorubyErr::typeerr("coerce must return [x, y]".to_string());
-            vm.set_error(err);
-            None
         }
         Ok(None) => {
             let err = MonorubyErr::cant_coerced_into(globals, op, rhs, "Integer");

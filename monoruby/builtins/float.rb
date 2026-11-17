@@ -21,17 +21,11 @@ class Float
     false
   end
 
+  # `flo_coerce`: the argument through `rb_Float`.
   def coerce(other)
-    if other.is_a?(Integer)
-      [other.to_f, self]
-    elsif other.is_a?(Float)
-      [other, self]
-    elsif other.is_a?(String)
-      [Float(other), self]
-    else
-      # CRuby's flo_coerce is num_coerce: rb_Float()'s error.
-      raise TypeError, "can't convert #{__builtin_class_name(other)} into Float"
-    end
+    return [other, self] if other.is_a?(Float)
+    return [other.to_f, self] if other.is_a?(Integer)
+    [Float(other), self]
   end
 
   def numerator

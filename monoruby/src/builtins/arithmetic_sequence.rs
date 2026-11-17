@@ -401,10 +401,13 @@ fn int_op(
     if x.is_integer() {
         return call(vm, globals, x, op, y);
     }
-    let pair = call(vm, globals, y, IdentId::get_id("coerce"), x)?;
-    match pair.try_array_ty() {
-        Some(pair) if pair.len() == 2 => call(vm, globals, pair[0], op, pair[1]),
-        _ => Err(MonorubyErr::typeerr("coerce must return [x, y]")),
+    match crate::value::coerce::do_coerce(vm, globals, x, y, false)? {
+        Some((a, b)) => call(vm, globals, a, op, b),
+        None => Err(MonorubyErr::typeerr(format!(
+            "{} can't be coerced into {}",
+            y.coerce_failed_name(&globals.store),
+            x.get_real_class_name(&globals.store),
+        ))),
     }
 }
 

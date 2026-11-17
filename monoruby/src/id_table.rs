@@ -387,6 +387,9 @@ impl IdentId {
     /// (`/ecopts`: `invalid:` / `undef:` / `replace:`). Every read that
     /// converts to an internal encoding looks it up.
     pub const _IO_ECOPTS: IdentId = id!(219);
+    /// `coerce`: asked of the other operand by every numeric operator
+    /// that does not know its class.
+    pub const COERCE: IdentId = id!(220);
 
     /// Name ↔ id pairing for the block above — the single source of truth:
     /// `IdentifierTable::new` interns from it, and [`Self::special_gvar_name`]
@@ -667,7 +670,7 @@ impl IdentifierTable {
     /// Slots the predefined ids occupy; new names are numbered after
     /// them. The ASCII range below `IdentId::PREDEFINED_FIRST` holds only
     /// the operators, the other slots there stay unnamed.
-    const PREDEFINED_LEN: usize = 219;
+    const PREDEFINED_LEN: usize = 220;
 
     pub(crate) fn new() -> Self {
         let mut table = IdentifierTable {
@@ -773,6 +776,7 @@ impl IdentifierTable {
         table.set_id("default", IdentId::DEFAULT);
         table.set_id("/packed_pointers", IdentId::_PACKED_POINTERS);
         table.set_id("/ecopts", IdentId::_IO_ECOPTS);
+        table.set_id("coerce", IdentId::COERCE);
         table
     }
 

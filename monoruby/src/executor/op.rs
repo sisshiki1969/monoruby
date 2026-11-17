@@ -282,14 +282,15 @@ macro_rules! cmp_values {
                         }
                     }
                     (RV::Fixnum(_)| RV::BigInt(_) , _) => {
-                        // Try coerce protocol for comparison, propagate exceptions
-                        let coerce_id = IdentId::get_id("coerce");
-                        match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
-                            Ok(Some(result)) => {
-                                if let Some(ary) = result.try_array_ty() {
-                                    if ary.len() == 2 {
-                                        return vm.invoke_method_simple(globals, $op_str, ary[0], &[ary[1]]);
-                                    }
+                        // `rb_num_coerce_relop`: the operator applied to
+                        // the pair `rhs.coerce(lhs)` answers; a `rhs`
+                        // that does not coerce, or a nil answer, is the
+                        // comparison failure for the original operands.
+                        match crate::value::coerce::do_coerce(vm, globals, lhs, rhs, true) {
+                            Ok(Some((x, y))) => {
+                                let res = vm.invoke_method_simple(globals, $op_str, x, &[y])?;
+                                if !res.is_nil() {
+                                    return Some(res);
                                 }
                             }
                             Ok(None) => {}
@@ -315,14 +316,15 @@ macro_rules! cmp_values {
                     }
                     (RV::Float(lhs), RV::Float(rhs)) => lhs.$op(&rhs),
                     (RV::Float(_) , _) => {
-                        // Try coerce protocol for comparison, propagate exceptions
-                        let coerce_id = IdentId::get_id("coerce");
-                        match vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None) {
-                            Ok(Some(result)) => {
-                                if let Some(ary) = result.try_array_ty() {
-                                    if ary.len() == 2 {
-                                        return vm.invoke_method_simple(globals, $op_str, ary[0], &[ary[1]]);
-                                    }
+                        // `rb_num_coerce_relop`: the operator applied to
+                        // the pair `rhs.coerce(lhs)` answers; a `rhs`
+                        // that does not coerce, or a nil answer, is the
+                        // comparison failure for the original operands.
+                        match crate::value::coerce::do_coerce(vm, globals, lhs, rhs, true) {
+                            Ok(Some((x, y))) => {
+                                let res = vm.invoke_method_simple(globals, $op_str, x, &[y])?;
+                                if !res.is_nil() {
+                                    return Some(res);
                                 }
                             }
                             Ok(None) => {}

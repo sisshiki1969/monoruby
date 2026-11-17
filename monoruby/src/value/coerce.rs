@@ -828,9 +828,10 @@ pub(crate) fn check_funcall_args(
     // The probe that misses on every count is by far the common one,
     // and is remembered (`Store::no_conversion`).
     let class_version = Globals::class_version();
+    let recv_class = recv.class();
     if globals
         .store
-        .no_conversion_memoized(recv.class(), name, class_version)
+        .no_conversion_memoized(recv_class, name, class_version)
     {
         return Ok(None);
     }
@@ -842,7 +843,7 @@ pub(crate) fn check_funcall_args(
             .and_then(|e| e.func_id())
     };
     let user_fid = |globals: &Globals, method: IdentId, class: ClassId| {
-        let fid = globals.check_method(recv, method)?;
+        let fid = default_fid(globals, recv_class, method)?;
         // The builtin `respond_to?` is the default without asking what
         // `Object` resolves it to.
         if method == respond_to && Some(fid) == globals.store.respond_to_fid() {
@@ -865,7 +866,7 @@ pub(crate) fn check_funcall_args(
         respond = 1;
     }
     // 2. A defined method is simply called.
-    if let Some(fid) = globals.check_method(recv, name) {
+    if let Some(fid) = default_fid(globals, recv_class, name) {
         return Ok(Some(
             vm.invoke_func_inner(globals, fid, recv, args, None, None)?,
         ));
@@ -876,7 +877,7 @@ pub(crate) fn check_funcall_args(
     if respond < 0
         && globals
             .store
-            .no_conversion(recv.class(), name, class_version)
+            .no_conversion(recv_class, name, class_version)
     {
         return Ok(None);
     }
@@ -920,5 +921,66 @@ pub(crate) fn check_funcall_args(
             Ok(None)
         }
         Err(err) => Err(err),
+    }
+}
+
+/// CRuby's `do_coerce(&x, &y, err)`: `y.coerce(x)`, asked with
+/// `rb_check_funcall` (so a `method_missing`-backed `coerce` counts and
+/// a redefined `respond_to?` can veto one that exists), handing back the
+/// pair to apply the operator to.
+///
+/// `Ok(None)` is "`y` does not coerce" — the caller raises its
+/// `coerce_failed` (the arithmetic operators) or answers nil / the
+/// comparison failure (`<=>` and the relational operators, `nil_ok`).
+/// Under `nil_ok` (CRuby's `err == FALSE`) a `coerce` that answers nil
+/// is read the same way. Anything else that is not a two-element Array
+/// is `TypeError: coerce must return [x, y]`.
+pub(crate) fn do_coerce(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    x: Value,
+    y: Value,
+    nil_ok: bool,
+) -> Result<Option<(Value, Value)>> {
+    let Some(pair) = check_funcall_args(vm, globals, y, IdentId::COERCE, &[x])? else {
+        return Ok(None);
+    };
+    if nil_ok && pair.is_nil() {
+        return Ok(None);
+    }
+    match pair.try_array_ty() {
+        Some(ary) if ary.len() == 2 => Ok(Some((ary[0], ary[1]))),
+        _ => Err(MonorubyErr::typeerr("coerce must return [x, y]")),
+    }
+}
+
+/// CRuby's `rb_num_coerce_bin(x, y, op)`: `a.op(b)` for the pair
+/// `y.coerce(x)` answers; `"<y> can't be coerced into <type_name>"` when
+/// `y` does not coerce.
+pub(crate) fn num_coerce_bin(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    op: IdentId,
+    x: Value,
+    y: Value,
+    type_name: &'static str,
+) -> Result<Value> {
+    match do_coerce(vm, globals, x, y, false)? {
+        Some((a, b)) => vm.invoke_method_inner(globals, op, a, &[b], None, None),
+        None => Err(MonorubyErr::cant_coerced_into(globals, op, y, type_name)),
+    }
+}
+
+/// CRuby's `rb_num_coerce_cmp(x, y, op)`: nil when `y` does not coerce.
+pub(crate) fn num_coerce_cmp(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    op: IdentId,
+    x: Value,
+    y: Value,
+) -> Result<Value> {
+    match do_coerce(vm, globals, x, y, true)? {
+        Some((a, b)) => vm.invoke_method_inner(globals, op, a, &[b], None, None),
+        None => Ok(Value::nil()),
     }
 }

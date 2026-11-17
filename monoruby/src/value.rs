@@ -30,6 +30,78 @@ pub const TAG_SYMBOL: u64 = 0x0c; // 0000_1100
 
 pub const FLOAT_ZERO: u64 = (0b1000 << 60) | 0b10;
 
+/// The other shortest digit string, when the double lies exactly halfway
+/// between two of them and Rust's choice is the odd one.
+///
+/// `23855792383581.3125` is equally far from `…581.312` and `…581.313`,
+/// both of which read back as it. `ruby_dtoa` (mode 0) settles such a
+/// tie on the even last digit; Rust's shortest formatting rounds it up.
+/// `digits` / `decpt` are Rust's digits and the position of the point.
+///
+/// A double is `m * 2^e` with `m` odd, and for `e < 0` its exact decimal
+/// expansion has `-e` fractional digits, the last one a 5. It is a
+/// midpoint of two strings with `frac` fractional digits exactly when
+/// `-e == frac + 1`, which is the only test the common case pays for.
+#[inline]
+fn shortest_digits_tie_to_even(f: f64, digits: &str, decpt: i32) -> Option<String> {
+    let bits = f.to_bits();
+    let biased = ((bits >> 52) & 0x7ff) as i32;
+    let frac_bits = bits & ((1u64 << 52) - 1);
+    let (m, e) = if biased == 0 {
+        (frac_bits, -1074)
+    } else {
+        (frac_bits | (1u64 << 52), biased - 1075)
+    };
+    let tz = m.trailing_zeros();
+    let (m, e) = (m >> tz, e + tz as i32);
+    let frac = digits.len() as i32 - decpt;
+    if -e != frac + 1 {
+        return None;
+    }
+    shortest_digits_tie(f, m, e, digits, frac)
+}
+
+/// The rest of [`shortest_digits_tie_to_even`], for a double `m * 2^e`
+/// that is a midpoint of two strings with `frac` fractional digits.
+#[cold]
+#[inline(never)]
+fn shortest_digits_tie(f: f64, m: u64, e: i32, digits: &str, frac: i32) -> Option<String> {
+    // `5^27 < 2^63`: past that the exact expansion has more than the 18
+    // digits a tie of two 17-digit strings can have.
+    // (`digits` keeps the zeros Rust writes before the point of a value
+    // below 1: "015982437133789063" for 0.15982437133789063.)
+    let significant = digits.trim_start_matches('0').len();
+    if !(1..=27).contains(&-e) || significant > 17 {
+        return None;
+    }
+    // The exact value is `n * 10^-(frac + 1)`, Rust's `d * 10^-frac`.
+    let n = (m as u128) * 5u128.pow((-e) as u32);
+    let d: u128 = digits.parse().ok()?;
+    let other = if n == d * 10 + 5 {
+        d + 1
+    } else if d > 0 && n == d * 10 - 5 {
+        d - 1
+    } else {
+        return None;
+    };
+    if d % 2 == 0 {
+        return None;
+    }
+    let other = format!("{other:0width$}", width = digits.len());
+    // One of two shortest strings neither ends in a zero nor has another
+    // length; and it has to read back as the same double.
+    if other.len() != digits.len()
+        || other.trim_start_matches('0').len() != significant
+        || other.ends_with('0')
+    {
+        return None;
+    }
+    let reads_back = format!("{other}e{}", -frac)
+        .parse::<f64>()
+        .is_ok_and(|g| g == f.abs());
+    reads_back.then_some(other)
+}
+
 /// Format an f64 value as a String matching CRuby's `Float#to_s` / `Float#inspect` output.
 ///
 /// Uses Rust's `{:?}` formatting (Ryu algorithm, shortest round-trip representation)
@@ -81,7 +153,11 @@ pub fn ruby_float_to_s(f: f64) -> String {
     };
 
     let dot_pos = mantissa_str.find('.').unwrap_or(mantissa_str.len());
-    let all_digits: String = mantissa_str.chars().filter(|&c| c != '.').collect();
+    let mut all_digits = String::with_capacity(mantissa_str.len());
+    all_digits.push_str(&mantissa_str[..dot_pos]);
+    if dot_pos < mantissa_str.len() {
+        all_digits.push_str(&mantissa_str[dot_pos + 1..]);
+    }
     // Strip trailing zeros to get significant digits only (matching ruby_dtoa output)
     let digits = all_digits.trim_end_matches('0');
     let digits = if digits.is_empty() { "0" } else { digits };
@@ -93,7 +169,10 @@ pub fn ruby_float_to_s(f: f64) -> String {
         dot_pos as i32
     };
 
-    let mut result = String::new();
+    let even = shortest_digits_tie_to_even(f, digits, decpt);
+    let digits = even.as_deref().unwrap_or(digits);
+
+    let mut result = String::with_capacity(digits.len() + 8);
     if negative {
         result.push('-');
     }
