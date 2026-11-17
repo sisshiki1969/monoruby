@@ -163,7 +163,7 @@ fn packed_digest<S: std::hash::BuildHasher>(hash_builder: &S, k: Value) -> usize
 
 /// [`packed_digest`], and whether `k` is the flonum `0.0`: a heap `-0.0`
 /// key is `eql?` to it, which the prehashed probe's bit equality cannot
-/// see.
+/// see, so that one key takes the general probe.
 #[inline(always)]
 fn packed_digest_zero<S: std::hash::BuildHasher>(hash_builder: &S, k: Value) -> (usize, bool) {
     use std::hash::Hasher;
@@ -994,12 +994,13 @@ impl<'a> HashRef<'a> {
                 // and so does a String key (vm-free digest and byte
                 // equality — `string_digest` / `string_key_eq`).
                 if k.is_packed_value() {
-                    let hash = packed_digest(m.hasher(), k);
-                    match m.get_prehashed(hash, &Some(k), vm, globals)?.copied() {
+                    let (hash, zero) = packed_digest_zero(m.hasher(), k);
+                    if zero {
                         // `0.0` is `eql?` to a heap `-0.0` key, which bit
                         // equality cannot see.
-                        None if k.id() == FLOAT_ZERO => m.get(&k, vm, globals)?.copied(),
-                        v => v,
+                        m.get(&k, vm, globals)?.copied()
+                    } else {
+                        m.get_prehashed(hash, &Some(k), vm, globals)?.copied()
                     }
                 } else if let Some(s) = k.is_plain_rstring_inner() {
                     let hash = string_digest(m.hasher(), s);
@@ -1026,10 +1027,13 @@ impl<'a> HashRef<'a> {
                 // and so does a String key (vm-free digest and byte
                 // equality — `string_digest` / `string_key_eq`).
                 if k.is_packed_value() {
-                    let hash = packed_digest(m.hasher(), k);
-                    Ok(m.get_prehashed(hash, &Some(k), vm, globals)?.is_some()
+                    let (hash, zero) = packed_digest_zero(m.hasher(), k);
+                    if zero {
                         // See `get`: a heap `-0.0` key answers for `0.0`.
-                        || (k.id() == FLOAT_ZERO && m.contains_key(&k, vm, globals)?))
+                        m.contains_key(&k, vm, globals)
+                    } else {
+                        Ok(m.get_prehashed(hash, &Some(k), vm, globals)?.is_some())
+                    }
                 } else if let Some(s) = k.is_plain_rstring_inner() {
                     let hash = string_digest(m.hasher(), s);
                     Ok(m

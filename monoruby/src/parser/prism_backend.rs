@@ -579,6 +579,12 @@ fn try_prism_inner(
                 || msg == "found '= literal' in conditional, should be =="
                 || msg == "integer literal in flip-flop"
                 || msg == "regex literal in condition"
+                // A repeated static key in a Hash literal or in the
+                // keyword arguments of a call
+                // (`pm_hash_key_static_literals_add`), placed at the key
+                // that is overwritten.
+                || (msg.starts_with("key ")
+                    && msg.contains(" is duplicated and overwritten on line "))
             {
                 false
             } else if msg == "possibly useless use of defined? in void context"
@@ -592,6 +598,13 @@ fn try_prism_inner(
             };
             let loc = location_to_loc(&w.location());
             let line = source_info.get_line(&loc);
+            // prism prints a `__FILE__` key by the file name it was
+            // given, and this parse gives it none.
+            let msg = if w.location().as_slice() == b"__FILE__" {
+                msg.replacen("key \"\"", &format!("key {path_display:?}"), 1)
+            } else {
+                msg.to_string()
+            };
             Some((
                 format!("{}:{}: warning: {}", path_display, line, msg),
                 verbose_only,
@@ -698,14 +711,6 @@ struct Lowerer<'pr> {
     /// by `try_prism_inner`. Same shape: (formatted message,
     /// verbose-only flag).
     warnings: Vec<(String, bool)>,
-    /// Start offsets of the `{...}` literals whose keys an enclosing
-    /// literal or keyword list has already checked for duplicates (the
-    /// direct operand of a `**`, see `warn_duplicated_keys`), each taken
-    /// out again when that literal is lowered.
-    shared_key_hashes: Vec<usize>,
-    /// `(overwritten key, overwriting key)` start offsets already warned
-    /// about, so a construct that is lowered twice warns once.
-    dup_keys_warned: Vec<(usize, usize)>,
     /// `true` for `eval` / `binding.eval` parses. Suppresses warnings
     /// that only apply to a script file's top level (e.g. "argument of
     /// top-level return is ignored" — a return in an eval belongs to
@@ -761,8 +766,6 @@ impl<'pr> Lowerer<'pr> {
             anon_kwrest_levels: Vec::new(),
             scope_wraps: Vec::new(),
             warnings: Vec::new(),
-            shared_key_hashes: Vec::new(),
-            dup_keys_warned: Vec::new(),
             eval_parse: ctx.eval_parse,
             pm_temp: 0,
             pm_key_error: None,
@@ -2576,7 +2579,6 @@ impl<'pr> Lowerer<'pr> {
                 let kh_loc = location_to_loc(&kh.location());
                 let mut pairs: Vec<(Node, Node)> = Vec::new();
                 let mut splat: Vec<(usize, Node)> = Vec::new();
-                self.warn_duplicated_keys(&kh.elements());
                 for elem in kh.elements().iter() {
                     match elem {
                         prism::Node::AssocNode { .. } => {
@@ -2624,15 +2626,6 @@ impl<'pr> Lowerer<'pr> {
         // it, so `gen_hash` can replay the elements strictly left-to-right
         // (later entries overwrite earlier ones — `{a: 1, **h, c: 4}`).
         let mut splat: Vec<(usize, Node)> = Vec::new();
-        // The operand of a `**` shares the key set of the literal around
-        // it, which has warned for it already.
-        let start = node.location().start_offset();
-        match self.shared_key_hashes.iter().position(|&o| o == start) {
-            Some(i) => {
-                self.shared_key_hashes.swap_remove(i);
-            }
-            None => self.warn_duplicated_keys(&node.elements()),
-        }
         for elem in node.elements().iter() {
             match elem {
                 prism::Node::AssocNode { .. } => {
@@ -2659,151 +2652,6 @@ impl<'pr> Lowerer<'pr> {
             kind: NodeKind::Hash(pairs, splat),
             loc,
         })
-    }
-
-    ///
-    /// CRuby's "key ... is duplicated and overwritten" warning, for the
-    /// elements of a hash literal or of the keyword arguments of a call
-    /// (`f(to: 5, by: 2, to: 10)`, issue #2041).
-    ///
-    /// This is prism's `pm_hash_key_static_literals_add`: only keys that
-    /// are static literals take part, a `{...}` written directly after
-    /// `**` shares the key set of the list around it, and a repeat is
-    /// reported at the key it overwrites, naming the line of the key that
-    /// overwrites it.
-    ///
-    fn warn_duplicated_keys(&mut self, elements: &prism::NodeList<'pr>) {
-        // One element cannot repeat a key; a lone `**{...}` is checked
-        // when that literal is lowered.
-        if elements.iter().nth(1).is_none() {
-            return;
-        }
-        // The usual list is a few plain labels (`a: 1, b: 2`), which are
-        // one key exactly when their source text is the same: those are
-        // told apart without building the keys.
-        let mut labels: [&[u8]; 8] = [&[]; 8];
-        let mut n = 0;
-        let distinct_labels = elements.iter().all(|elem| {
-            let label = elem
-                .as_assoc_node()
-                .and_then(|assoc| assoc.key().as_symbol_node())
-                .filter(|sym| sym.opening_loc().is_none())
-                .and_then(|sym| sym.value_loc())
-                .map(|loc| loc.as_slice());
-            match label {
-                Some(label) if n < labels.len() && !labels[..n].contains(&label) => {
-                    labels[n] = label;
-                    n += 1;
-                    true
-                }
-                _ => false,
-            }
-        });
-        if distinct_labels {
-            return;
-        }
-        let mut seen: Vec<(StaticKey, usize)> = Vec::new();
-        self.collect_static_keys(elements, &mut seen);
-    }
-
-    fn collect_static_keys(
-        &mut self,
-        elements: &prism::NodeList<'pr>,
-        seen: &mut Vec<(StaticKey, usize)>,
-    ) {
-        for elem in elements.iter() {
-            match elem {
-                prism::Node::AssocNode { .. } => {
-                    let key = elem.as_assoc_node().unwrap().key();
-                    let Some(k) = self.static_key(&key) else {
-                        continue;
-                    };
-                    let start = key.location().start_offset();
-                    match seen.iter_mut().find(|(e, _)| *e == k) {
-                        Some((_, prev)) => {
-                            let overwritten = std::mem::replace(prev, start);
-                            self.warn_duplicated_key(&k, overwritten, start);
-                        }
-                        None => seen.push((k, start)),
-                    }
-                }
-                prism::Node::AssocSplatNode { .. } => {
-                    // The literal the operand *starts* with shares the
-                    // set, the receiver of `**{a: 1}.merge(h)` included.
-                    let mut operand = elem.as_assoc_splat_node().unwrap().value();
-                    while let Some(prism::Node::CallNode { .. }) = operand {
-                        operand = operand.unwrap().as_call_node().unwrap().receiver();
-                    }
-                    if let Some(inner) = operand.as_ref().and_then(|n| n.as_hash_node()) {
-                        self.shared_key_hashes.push(inner.location().start_offset());
-                        self.collect_static_keys(&inner.elements(), seen);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// The key of a hash element as prism's static-literal set sees it,
-    /// `None` for a key that is not a static literal.
-    fn static_key(&mut self, key: &prism::Node<'pr>) -> Option<StaticKey> {
-        match key {
-            prism::Node::SymbolNode { .. } => Some(StaticKey::Symbol(
-                key.as_symbol_node().unwrap().unescaped().to_vec(),
-            )),
-            prism::Node::StringNode { .. } => Some(StaticKey::String(
-                key.as_string_node().unwrap().unescaped().to_vec(),
-            )),
-            prism::Node::SourceFileNode { .. } => {
-                Some(StaticKey::String(self.path.clone().into_bytes()))
-            }
-            prism::Node::RegularExpressionNode { .. } => {
-                let n = key.as_regular_expression_node().unwrap();
-                let mut flags = String::new();
-                for (set, c) in [
-                    (n.is_multi_line(), 'm'),
-                    (n.is_ignore_case(), 'i'),
-                    (n.is_extended(), 'x'),
-                    (n.is_ascii_8bit(), 'n'),
-                ] {
-                    if set {
-                        flags.push(c);
-                    }
-                }
-                Some(StaticKey::Regexp(n.unescaped().to_vec(), flags))
-            }
-            prism::Node::IntegerNode { .. }
-            | prism::Node::FloatNode { .. }
-            | prism::Node::RationalNode { .. }
-            | prism::Node::ImaginaryNode { .. }
-            | prism::Node::SourceLineNode { .. }
-            | prism::Node::TrueNode { .. }
-            | prism::Node::FalseNode { .. }
-            | prism::Node::NilNode { .. } => {
-                // Lowering one of these is pure and gives the value.
-                let node = self.lower_node(key).ok()?;
-                StaticKey::of_literal(&node.kind)
-            }
-            _ => None,
-        }
-    }
-
-    fn warn_duplicated_key(&mut self, key: &StaticKey, overwritten: usize, by: usize) {
-        if self.dup_keys_warned.contains(&(overwritten, by)) {
-            return;
-        }
-        self.dup_keys_warned.push((overwritten, by));
-        let line = |off| source_line_for_offset(self.source, off) as i64 + self.line_offset;
-        self.warnings.push((
-            format!(
-                "{}:{}: warning: key {} is duplicated and overwritten on line {}",
-                self.path,
-                line(overwritten),
-                key.inspect(),
-                line(by),
-            ),
-            false,
-        ));
     }
 
     fn lower_range(&mut self, node: &RangeNode<'pr>) -> Result<Node, MonorubyErr> {
@@ -3467,7 +3315,6 @@ impl<'pr> Lowerer<'pr> {
             prism::Node::KeywordHashNode { .. } => {
                 let kh = n.as_keyword_hash_node().unwrap();
                 let kh_loc = location_to_loc(&kh.location());
-                self.warn_duplicated_keys(&kh.elements());
                 // ruruby splits trailing keyword pairs into
                 // `arglist.kw_args` (static-symbol keys) and
                 // `arglist.hash_splat` (`**` splats); a key that
@@ -5903,133 +5750,6 @@ fn is_constant_literal(kind: &NodeKind) -> bool {
     )
 }
 
-/// A hash key that is a static literal, as prism's duplicate-key check
-/// compares and prints it (`pm_static_literals_add`,
-/// `pm_static_literal_inspect`). Numbers are equal within their own
-/// kind only: `1`, `1.0` and `1r` are three keys.
-#[derive(PartialEq)]
-enum StaticKey {
-    Symbol(Vec<u8>),
-    String(Vec<u8>),
-    /// Unescaped source and the option letters.
-    Regexp(Vec<u8>, String),
-    /// Anything else: what it compares by, and how it prints.
-    Other(String, String),
-}
-
-impl StaticKey {
-    fn of_literal(kind: &NodeKind) -> Option<Self> {
-        fn rational(n: &num::BigInt, d: &num::BigInt) -> String {
-            format!("({n}/{d})")
-        }
-        // The sign a positive imaginary part is written with.
-        fn plus(negative: bool) -> &'static str {
-            if negative { "" } else { "+" }
-        }
-        use num::Signed;
-        let (eq, inspect) = match kind {
-            NodeKind::Integer(i) => (format!("i{i}"), format!("{i}")),
-            NodeKind::Bignum(n) => (format!("i{n}"), format!("{n}")),
-            // Bitwise, as the set hashes the value first: `0.0` and
-            // `-0.0` are not reported.
-            NodeKind::Float(f) => (format!("f{:x}", f.to_bits()), static_float_inspect(*f)),
-            NodeKind::Rational(deref!((n, d))) => (format!("r{n}/{d}"), rational(n, d)),
-            NodeKind::Imaginary(NReal::Integer(i)) => {
-                (format!("ci{i}"), format!("(0{}{i}i)", plus(*i < 0)))
-            }
-            NodeKind::Imaginary(NReal::Bignum(n)) => (
-                format!("ci{n}"),
-                format!("(0{}{n}i)", plus(n.is_negative())),
-            ),
-            NodeKind::Imaginary(NReal::Float(f)) => (
-                format!("cf{:x}", f.to_bits()),
-                format!("(0{}{}i)", plus(*f <= 0.0), static_float_inspect(*f)),
-            ),
-            NodeKind::RImaginary(deref!((n, d))) => (
-                format!("cr{n}/{d}"),
-                format!("(0{}{}*i)", plus(n.is_negative()), rational(n, d)),
-            ),
-            NodeKind::Bool(b) => (format!("{b}"), format!("{b}")),
-            NodeKind::Nil => ("nil".to_string(), "nil".to_string()),
-            _ => return None,
-        };
-        Some(StaticKey::Other(eq, inspect))
-    }
-
-    fn inspect(&self) -> String {
-        match self {
-            StaticKey::Symbol(s) => format!(":{}", static_source_escape(s)),
-            StaticKey::String(s) => format!("\"{}\"", static_source_escape(s)),
-            StaticKey::Regexp(s, flags) => format!("/{}/{flags}", static_source_escape(s)),
-            StaticKey::Other(_, inspect) => inspect.clone(),
-        }
-    }
-}
-
-/// prism's `pm_buffer_append_source` with `PM_BUFFER_ESCAPING_RUBY`.
-fn static_source_escape(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len());
-    for (i, &b) in bytes.iter().enumerate() {
-        match b {
-            0x07 => out.push_str("\\a"),
-            0x08 => out.push_str("\\b"),
-            b'\t' => out.push_str("\\t"),
-            b'\n' => out.push_str("\\n"),
-            0x0b => out.push_str("\\v"),
-            0x0c => out.push_str("\\f"),
-            b'\r' => out.push_str("\\r"),
-            b'"' => out.push_str("\\\""),
-            b'\\' => out.push_str("\\\\"),
-            b'#' => {
-                if matches!(bytes.get(i + 1), Some(b'$' | b'@' | b'{')) {
-                    out.push('\\');
-                }
-                out.push('#');
-            }
-            0x00..=0x06 | 0x0e..=0x1f | 0x7f..=0xff => out.push_str(&format!("\\x{b:02X}")),
-            _ => out.push(b as char),
-        }
-    }
-    out
-}
-
-/// A Float key as prism prints it: C's `%g`, with `.0` put in when that
-/// left no decimal point (`1.0e+100`).
-fn static_float_inspect(f: f64) -> String {
-    if f.is_infinite() {
-        return if f < 0.0 { "-Infinity" } else { "Infinity" }.to_string();
-    }
-    if f == 0.0 {
-        return if f.is_sign_negative() { "-0.0" } else { "0.0" }.to_string();
-    }
-    // `%g`: six significant digits, in exponent form when the decimal
-    // exponent (after rounding) is below -4 or at least 6, and no
-    // trailing zeros either way.
-    let sci = format!("{f:.5e}");
-    let (mantissa, exp) = sci.split_once('e').unwrap();
-    let exp: i32 = exp.parse().unwrap();
-    let trim = |s: &str| -> String {
-        if s.contains('.') {
-            s.trim_end_matches('0').trim_end_matches('.').to_string()
-        } else {
-            s.to_string()
-        }
-    };
-    if !(-4..6).contains(&exp) {
-        let mut m = trim(mantissa);
-        if !m.contains('.') {
-            m.push_str(".0");
-        }
-        let sign = if exp < 0 { '-' } else { '+' };
-        format!("{m}e{sign}{:02}", exp.abs())
-    } else {
-        let mut s = trim(&format!("{f:.*}", (5 - exp) as usize));
-        if !s.contains('.') {
-            s.push_str(".0");
-        }
-        s
-    }
-}
 
 /// 1-based line number of `offset` in `source`, used to inline
 /// `__LINE__`.

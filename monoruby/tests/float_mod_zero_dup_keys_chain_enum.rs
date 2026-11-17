@@ -180,7 +180,7 @@ fn duplicated_hash_key_warning_as_prism_reports_it() {
           cap("{/a b/ix => 1, /a b/ix => 2, /a/ => 1, /a/i => 2, /\\// => 1, /\\// => 2, %r{x/y}m => 1, %r{x/y}m => 2}"),
           cap("{true => 1, true => 2, false => 1, false => 2, nil => 1, nil => 2}"),
           cap("{1 => 1, 1.0 => 2, 1r => 3, '1' => 4, :'1' => 5}"),
-          cap("{__LINE__ => 1, 10 => 2, __FILE__ => 1, 'dup.rb' => 2}"),
+          cap("{__LINE__ => 1, 10 => 2, __FILE__ => 1, __FILE__ => 2, __ENCODING__ => 1, __ENCODING__ => 2}"),
           cap(%q[{"a" "b" => 1, "ab" => 2, 'ab' => 3, %q(ab) => 4, ?a => 1, "a" => 2}]),
           cap(%q[x = 1; {x => 1, x => 2, "#{x}" => 1, "#{x}" => 2, [1] => 1, [1] => 2, (1) => 1, (1) => 2}]),
         ]
