@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-dfc2dc62.js";
+            window.path_to_searchindex_js = "../../searchindex-b32fdcd7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-afb61271.js"></script>
@@ -343,6 +343,26 @@ SmallVec / 共有 union への改修より前のものであり、§2 が挙げ�
 コピー（<code>Value::frozen_hash_key</code>、CRuby の <code>rb_hash_key_str</code>）。ビットは
 <code>NEWBORN_FLAG_MASK</code> の外にあるので、<code>dup</code> / <code>clone</code> したものは普通の String に
 なる。<code>Store::is_fstring</code> はこのビットを読むだけで、プールは引かない。</p>
+<p>Hash キーのコピーは CRuby の <code>rb_fstring</code> と同じく<strong>内容ごとに 1 個</strong>で、
+<code>-str</code> や frozen リテラルとも同一オブジェクトになる。プール
+（<code>frozen_str_pool</code>）は GC root なので、実行時に作られるキーをそこへ入れると
+解放されなくなる。そこで「内容 → fstring」の対応は別の<strong>弱いテーブル</strong>
+<code>value/rvalue/fstring.rs</code> の <code>FstringTable</code>（<code>vm::FSTRINGS</code>）が持つ。
+プールに入る String もキーのコピーもここに登録され、プールはそのうち
+リテラルと <code>-str</code> の分を root として握るだけになる。テーブルは mark されず、
+エントリはセルが解放されるとき（<code>RValue::free</code> の STRING 腕が <code>FSTR_BIT</code> を
+見て <code>fstring::forget</code>）に外す。全ての死んだセルは <code>free</code> を通るので、
+テーブルが解放済みのセルを指すことは無い。</p>
+<p>キーは内容（バイト列 + エンコーディング）の 64 ビット Fx ハッシュそのもので、
+1 回の操作で 1 度だけ計算し、テーブル側では再ハッシュしない（<code>PassThrough</code>
+hasher）。<code>Value::frozen_hash_key</code> は <code>fstring::intern</code> でテーブルを引き、
+当たればそのまま返し（<strong>格納ごとの複製が無くなる</strong>）、外れたときだけ複製して
+登録する。ハッシュが衝突した 2 つ目の内容は登録されず、fstring ではあるが
+同一性は保証されない（2⁻⁶⁴ の事象）。</p>
+<p>計測（cachegrind Ir）: 既存キーへの <code>h["k#{i % 64}"] = v</code> は複製が消えて
+−9.9%、<code>freq[seq.byteslice(i, n)] += 1</code>（k-nucleotide の形）は −3.5%。新しい
+キーを作り続ける <code>h["key#{i}"] = i</code> は登録の分 +7.0%（キーあたり約 200 Ir）、
+Hash ごと捨てる場合は解放時の削除も加わって +10.7%。</p>
 <h3 id="32--frozen_string_literal-true"><a class="header" href="#32--frozen_string_literal-true">3.2 <code># frozen_string_literal: true</code></a></h3>
 <p><code>emit_string</code> / <code>emit_bytes</code> は pragma 下で <code>emit_frozen_interned</code> →
 <code>BytecodeInst::FrozenLiteral</code>（<strong>そのままロード、複製しない</strong>）。pragma が
@@ -381,10 +401,9 @@ BOP 表に <code>(STRING_CLASS, "freeze")</code> があり、JIT は <code>basic
 に再定義済みなら無条件 deopt。</p>
 <p>計測: <code>'abc'.freeze</code> <strong>67.6 → 9.8 ns</strong>（YJIT 26）、<code>buf &lt;&lt; 'lit'.freeze</code>
 <strong>73 → 15.9 ns</strong>（YJIT 21）。</p>
-<p><strong><code>-"lit"</code>（<code>opt_str_uminus</code>）の畳み込みは無い。</strong> <code>String#-@</code> は Ruby で
-<code>frozen? ? self : dup.freeze</code> と定義されていて（<code>builtins/string.rb</code>）、
-CRuby の <code>rb_fstring</code> のような<strong>重複排除テーブルは無い</strong>。<code>String#+@</code> は
-chilled フラグに Ruby レベルの述語が無いため Rust のまま。</p>
+<p><strong><code>-"lit"</code>（<code>opt_str_uminus</code>）の畳み込みは無い。</strong> <code>String#-@</code> は Rust の
+<code>string_uminus</code> で、素の String は fstring プール（§3.1、Hash キーの弱い
+テーブルを含む）を通して重複排除される。</p>
 <hr>
 <h2 id="4-vm-の経路"><a class="header" href="#4-vm-の経路">4. VM の経路</a></h2>
 <h3 id="41---"><a class="header" href="#41---">4.1 <code>+</code> / <code>&lt;&lt;</code></a></h3>
@@ -634,7 +653,7 @@ inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも
 <tr><td>共有の方針</td><td>積極的（<code>rb_str_new_shared</code>、<code>RSTRING_EMBED_LEN_MAX</code> 超の <code>rb_str_substr</code>）</td><td><code>len &gt; 32</code> <strong>かつ</strong>親が既に共有かヒープあふれのときだけ</td></tr>
 <tr><td>root</td><td>共有の親自身が共有でありうる（連鎖、<code>rb_str_shared_root</code> で解決）</td><td>隠れた <strong>frozen</strong> root。sharer は連鎖しない。frozen な親は自分自身が root</td></tr>
 <tr><td>CoW</td><td><code>rb_str_modify</code> → <code>str_make_independent</code></td><td><code>owned_mut()</code> / <code>uniquify()</code> の単一入口</td></tr>
-<tr><td><code>rb_fstring</code> の重複排除</td><td>pragma のリテラル<strong>と</strong>実行時の <code>-"str"</code> / <code>String#-@</code> / Hash キーに適用</td><td>コンパイル時のリテラルプール <code>Store::frozen_str_pool</code>（<code>(bytes, encoding)</code> キー）<strong>のみ</strong>。<code>String#-@</code> は素の <code>dup.freeze</code>（<strong>実行時の重複排除無し</strong>）。Hash の String キーは格納ごとに <code>dup</code> + <code>freeze</code> でインターンしない（コピーには <code>FSTR_BIT</code> を立てるので特異クラスは CRuby と同じく作れないが、<code>-"k"</code> と同一オブジェクトにはならない）</td></tr>
+<tr><td><code>rb_fstring</code> の重複排除</td><td>pragma のリテラル<strong>と</strong>実行時の <code>-"str"</code> / <code>String#-@</code> / Hash キーに適用</td><td>同じ範囲。リテラルと <code>-str</code> は GC root のプール <code>Store::frozen_str_pool</code>（<code>(bytes, encoding)</code> キー）、Hash の String キーのコピーは弱いテーブル <code>rvalue::fstring</code>（§3.1）で、互いに同一オブジェクトになる</td></tr>
 <tr><td>chilled リテラル</td><td>CRuby 3.4 の <code>STR_CHILLED</code></td><td>ヘッダフラグのビット 7 <code>CHILLED_LITERAL_BIT</code>、<code>Symbol#to_s</code> 用の別の <code>is_chilled</code> ビット、<code>--debug-frozen-string-literal</code> の出自テーブル</td></tr>
 <tr><td>coderange</td><td><code>ENC_CODERANGE_*</code> を RBasic のフラグにキャッシュ</td><td>JIT 既知オフセットの <code>Cell&lt;CodeRange&gt;</code>（<code>repr(u8)</code>）。<strong>遅延</strong>計算で、追記・部分文字列・repeat では再計算でなく O(1) で畳む</td></tr>
 <tr><td><code>String#hash</code></td><td>seeded SipHash。fstring 側でキャッシュ</td><td>seeded SipHash（<code>DefaultHasher</code> + プロセスごとの <code>RandomState</code>）。<strong>String ごとのキャッシュ無し</strong>（2026-09 の yjit-bench 調査が未解決コストとして挙げる）</td></tr>
