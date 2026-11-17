@@ -1593,6 +1593,10 @@ fn resolve_feature_path(
     match globals.search_lib(vm, &file_name) {
         Some(path) => {
             let ext = match path.extension().and_then(|s| s.to_str()) {
+                // CRuby answers `:so` for a native library whatever the
+                // platform calls it (`.bundle` on macOS; monoruby's own
+                // extensions are `.dylib` there).
+                Some(_) if crate::ext::has_native_lib_ext(&path) => Value::symbol_from_str("so"),
                 Some(ext) => Value::symbol_from_str(ext),
                 _ => {
                     return Err(MonorubyErr::runtimeerr(

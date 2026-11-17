@@ -412,7 +412,7 @@ fn a_stub_feature_is_not_searched_for_again() {
         r#"
         first = require "stringio"
         [first, require("stringio"),
-         $LOADED_FEATURES.count { _1.end_with?("/stringio.rb") || _1.end_with?("/stringio.so") } > 0]
+         $LOADED_FEATURES.count { _1.match?(%r{/stringio\.(rb|so|bundle|dylib)\z}) } > 0]
         "#,
     );
 }
@@ -428,7 +428,7 @@ fn a_stub_feature_is_not_searched_for_again() {
 fn a_shipped_extension_is_not_searched_for_again() {
     run_test_once(
         r#"
-        so = ->(f) { f.end_with?("/etc.rb") || f.end_with?("/etc.so") }
+        so = ->(f) { f.match?(%r{/etc\.(rb|so|bundle|dylib)\z}) }
         first = require "etc"
         res = [first, require("etc"), require("etc.so"), $LOADED_FEATURES.count(&so)]
         $LOADED_FEATURES.delete_if(&so)
