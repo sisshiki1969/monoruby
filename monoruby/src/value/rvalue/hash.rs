@@ -1520,14 +1520,21 @@ impl<'a> HashRefMut<'a> {
     /// and is called from every such `&mut` entry point. Never called with
     /// a traversal live: the callers either raise on iteration first or
     /// take the tombstoning branch instead.
+    ///
+    /// The test is inlined into every caller (it is on the path of each
+    /// insertion); the compaction itself is not.
+    #[inline(always)]
     fn compact_if_dirty(&mut self) {
-        if self.is_inline() {
+        if self.is_inline() || self.boxed_mut().dead.get() == 0 {
             return;
         }
+        self.compact_dirty();
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn compact_dirty(&mut self) {
         let b = self.boxed_mut();
-        if b.dead.get() == 0 {
-            return;
-        }
         debug_assert_eq!(b.iter_lev.get(), 0);
         match &mut b.content {
             HashContent::Map(m) => m.compact_tombstones(|k| k.is_none()),

@@ -55,9 +55,7 @@ class IO
     if ch.is_a?(String)
       write(ch[0])
     else
-      i = ch.is_a?(Integer) ? ch : (ch.respond_to?(:to_int) ? ch.to_int : nil)
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(ch)} into Integer" if i.nil?
-      write((i & 0xff).chr)
+      write((__num2long(ch) & 0xff).chr)
     end
     ch
   end
@@ -115,7 +113,7 @@ class IO
     # `rb_check_string_type` comes first in `extract_getline_args`).
     at = if args.size >= 2
            1
-         elsif args.size == 1 && !args[0].is_a?(String) && !args[0].respond_to?(:to_str)
+         elsif args.size == 1 && !args[0].is_a?(String) && __check_str(args[0]).nil?
            0
          end
     lim = nil

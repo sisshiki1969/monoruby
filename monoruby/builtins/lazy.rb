@@ -96,15 +96,7 @@ class Enumerator
     end
 
     private def __lazy_to_int(n)
-      return n if n.is_a?(Integer)
-      unless n.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{__builtin_class_name(n)} into Integer"
-      end
-      i = n.to_int
-      unless i.is_a?(Integer)
-        raise TypeError, "can't convert #{n.class} to Integer (#{n.class}#to_int gives #{i.class})"
-      end
-      i
+      __to_int(n)
     end
 
     # ---------------------------------------------------------------
@@ -129,8 +121,10 @@ class Enumerator
         # plain Enumerator alone.
         if v.is_a?(Array) || (v.respond_to?(:force) && v.respond_to?(:each))
           v.each { |e| y << e }
-        else
+        elsif (ary = __check_ary(v)).nil?
           y << v
+        else
+          ary.each { |e| y << e }
         end
       end
     end
@@ -304,8 +298,9 @@ class Enumerator
       # through to `Enumerable#zip`.
       return super if block
       lists = others.map do |o|
-        if o.respond_to?(:to_ary)
-          o.to_ary
+        ary = __check_ary(o)
+        if !ary.nil?
+          ary
         elsif o.respond_to?(:each)
           o
         else

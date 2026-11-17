@@ -274,6 +274,10 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             return Err(MonorubyErr::argumenterr("array size too big"));
         }
         let n = n as usize;
+        // … and one the allocator refuses is a NoMemoryError.
+        if n > 0x0fff_ffff && !crate::builtins::kernel::array_capa_available(n) {
+            return Err(crate::builtins::string::no_memory_error(vm, globals));
+        }
         if let Some((start, end)) = range.try_fixnum() {
             let vec: Vec<Value> = (start..end).take(n).map(Value::integer).collect();
             return Ok(Value::array_from_vec(vec));

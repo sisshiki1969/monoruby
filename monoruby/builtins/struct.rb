@@ -46,8 +46,11 @@ class Struct
     h = {}
     each_pair do |k, v|
       pair = yield k, v
-      pair = pair.to_ary if !pair.is_a?(Array) && pair.respond_to?(:to_ary)
-      raise TypeError, "wrong element type #{pair.class} (expected Array)" unless pair.is_a?(Array)
+      unless pair.is_a?(Array)
+        ary = __check_ary(pair)
+        raise TypeError, "wrong element type #{pair.class} (expected array)" if ary.nil?
+        pair = ary
+      end
       raise ArgumentError, "element has wrong array length (expected 2, was #{pair.size})" unless pair.size == 2
       h[pair[0]] = pair[1]
     end
@@ -153,8 +156,13 @@ class Struct
         idx < 0 || idx >= size ? nil : __slot_get(idx)
       end
     return val if rest.empty? || val.nil?
-    raise TypeError, "#{val.class} does not have #dig method" unless val.respond_to?(:dig)
-    val.dig(*rest)
+    # `rb_obj_dig`: the next level is asked by `rb_check_funcall`.
+    return val.dig(*rest) if val.is_a?(::Array) || val.is_a?(::Hash)
+    undef_ = __undef
+    cur = val
+    val = __check_funcall(cur, :dig, undef_, *rest)
+    raise TypeError, "#{cur.class} does not have #dig method" if undef_.equal?(val)
+    val
   end
 
   def deconstruct_keys(keys)
@@ -172,16 +180,7 @@ class Struct
         # stays String) per CRuby `rb_struct_deconstruct_keys`.
         h[k] = __slot_get(idx)
       else
-        i = if k.is_a?(Integer)
-              k
-            elsif k.respond_to?(:to_int)
-              c = k.to_int
-              raise TypeError, "can't convert #{k.class} to Integer (#{k.class}#to_int gives #{c.class})" unless c.is_a?(Integer)
-              c
-            else
-              raise TypeError, "no implicit conversion of #{__builtin_class_name(k)} into Integer"
-            end
-        idx = i
+        idx = __num2long(k)
         idx += size if idx < 0
         return h if idx < 0 || idx >= size
         # Position numbers are returned AS the original key in the output.
