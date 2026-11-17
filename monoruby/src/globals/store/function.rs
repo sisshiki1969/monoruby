@@ -483,18 +483,31 @@ pub(crate) const WITH_OBJECT_ADAPTER_FUNCID: FuncId = FuncId::new(7);
 
 /// Pack a source yield the way CRuby's `rb_enum_values_pack` does:
 /// nothing -> nil, one value -> itself, several -> an Array.
+///
+/// The adapters are variadic natives (`Lfp::variadic_args`), so the
+/// values a source yields sit in the frame's fixed slots: a yield of one
+/// value — nearly every yield there is — is read straight out of slot 0
+/// and builds nothing. They were rest natives once, and the Array the
+/// binder made for each element (only to be peeled again here) was 40% of
+/// what `enum.with_index { }` cost per element (#2020).
+#[inline]
 fn pack_source_yield(lfp: Lfp) -> Value {
-    let args: Array = lfp.arg(0).as_array();
-    args.peel()
+    match (lfp.try_arg(0), lfp.try_arg(1)) {
+        (None, _) => Value::nil(),
+        (Some(v), None) => v,
+        _ => Value::array_from_slice(&lfp.variadic_args()),
+    }
 }
 
-/// The user block parked in slot 1 of an adapter's state Array (see
-/// `enum_adapter_call`).
-fn adapter_block(state: &Array) -> Result<ProcData> {
+/// The two slots of an adapter's state Array (see `enum_adapter_call`):
+/// the running index or the memo, and the user block.
+#[inline]
+fn adapter_state(lfp: Lfp) -> Result<(Array, ProcData)> {
+    let state = lfp.self_val().as_array();
     let proc = state[1]
         .is_proc()
         .ok_or_else(|| MonorubyErr::runtimeerr("enumerator adapter lost its block"))?;
-    Ok(ProcData::from_proc(&proc))
+    Ok((state, ProcData::from_proc(&proc)))
 }
 
 #[monoruby_builtin]
@@ -504,15 +517,16 @@ pub(crate) fn with_index_adapter(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let state = lfp.self_val();
     let packed = pack_source_yield(lfp);
-    let mut arr = state.as_array();
-    let data = adapter_block(&arr)?;
-    let idx = arr[0];
-    arr[0] = match idx.unpack() {
-        RV::Fixnum(i) => Value::integer(i + 1),
-        RV::BigInt(i) => Value::bigint(i + 1),
-        _ => return Err(MonorubyErr::runtimeerr("with_index counter is not an Integer")),
+    let (mut state, data) = adapter_state(lfp)?;
+    let idx = state[0];
+    state[0] = match idx.try_fixnum() {
+        // `Value::integer` promotes past the Fixnum range.
+        Some(i) => Value::integer(i + 1),
+        None => match idx.unpack() {
+            RV::BigInt(i) => Value::bigint(i + 1),
+            _ => return Err(MonorubyErr::runtimeerr("with_index counter is not an Integer")),
+        },
     };
     vm.invoke_block(globals, &data, &[packed, idx])
 }
@@ -524,11 +538,9 @@ pub(crate) fn with_object_adapter(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let state = lfp.self_val();
     let packed = pack_source_yield(lfp);
-    let arr = state.as_array();
-    let data = adapter_block(&arr)?;
-    let memo = arr[0];
+    let (state, data) = adapter_state(lfp)?;
+    let memo = state[0];
     vm.invoke_block(globals, &data, &[packed, memo])
 }
 

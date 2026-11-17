@@ -239,6 +239,10 @@ pub struct Store {
     /// while the core library is still loading, its own definitions are
     /// the builtin ones. See `to_s_builtin_classes`.
     builtin_to_s: Option<[Option<FuncId>; TO_S_SHORTCUT_CLASSES.len()]>,
+    /// The builtin iterators `Enumerator#with_index` calls directly
+    /// (`record_enum_direct_sources`); all `None` until the core library
+    /// has loaded.
+    enum_direct_sources: [Option<FuncId>; 3],
     /// String's builtin methods that the Symbol methods of the same name
     /// run on the symbol's name (`builtins::symbol::SymStr`), recorded
     /// with `builtin_to_s`.
@@ -929,6 +933,7 @@ impl Store {
             symbol_eq_fid: None,
             default_copy_hooks: None,
             builtin_to_s: None,
+            enum_direct_sources: [None; 3],
             symbol_string_methods: None,
             // No class_version is this wide: nothing is memoized yet.
             to_s_builtin_at: std::cell::Cell::new(u64::MAX),
@@ -2371,6 +2376,30 @@ impl Store {
         } else {
             false
         }
+    }
+
+    /// Record the builtin iterators `Enumerator#with_index` / `#with_object`
+    /// call directly rather than through their native adapter
+    /// (`Enumerator#__direct_source`): `Array#each`, `Array#map` and
+    /// `ArithmeticSequence#each`, in the order of `DirectSource` in
+    /// `builtins/enumerator.rs`. Called once, when the Ruby core library
+    /// has defined them, so that what a program defines later is not one.
+    pub(crate) fn record_enum_direct_sources(&mut self) {
+        self.enum_direct_sources = [
+            (ARRAY_CLASS, "each"),
+            (ARRAY_CLASS, "map"),
+            (ARITHMETIC_SEQUENCE_CLASS, "each"),
+        ]
+        .map(|(class_id, name)| {
+            self.search_method_by_class_id(class_id, IdentId::get_id(name))
+                .and_then(|e| e.func_id())
+        });
+    }
+
+    /// The builtin iterator recorded at `index`
+    /// (`record_enum_direct_sources`).
+    pub(crate) fn enum_direct_source(&self, index: usize) -> Option<FuncId> {
+        self.enum_direct_sources[index]
     }
 
     /// Record what `to_s` resolves to on the classes an interpolation

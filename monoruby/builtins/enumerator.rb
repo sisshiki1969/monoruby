@@ -14,10 +14,6 @@ end
 # Numeric#/ (and the `/` *operator*, which has a separate fast path that is
 # itself buggy — e.g. `Complex(1,2) / 2` => `(0+1i)`) are genuinely different
 # implementations, so aliasing them changes results. Tracked as an issue.
-class Enumerator
-  # identical to with_object; re-root on Enumerator (overrides Enumerable's).
-  alias each_with_object with_object
-end
 # (Thread#to_s / #inspect are defined in startup.rb in CRuby's
 # `#<Thread:0xADDR status>` format — no override needed here.)
 
@@ -180,17 +176,107 @@ class Enumerator
 end
 
 class Enumerator
+  # `e.with_index(offset = 0) { |x, i| … }` — CRuby's
+  # `enumerator_with_index`: the source runs with a block that packs what
+  # it yields into one value and hands it on with the running index.
+  #
+  # The general form of that is native (`__with_index`: the source is
+  # called with an adapter block, which costs two trips through the
+  # interpreter's generic call paths per element). When the source is a
+  # builtin iterator written in Ruby that yields one value at a time
+  # (`__direct_source`: `Array#each`, `Array#map`, an arithmetic
+  # sequence's `each`), it is called here instead, with a block of this
+  # method's own — a call the JIT inlines together with both blocks, so
+  # `ary.each.with_index { }` compiles to the loop `ary.each_with_index { }`
+  # is (#2020).
+  def with_index(offset = (omitted = true; nil), &block)
+    unless block_given?
+      # The Enumerator records the argument as given, and only when one
+      # was given; it is converted when the block form runs (#2034).
+      return omitted ? to_enum(:with_index) { size } : to_enum(:with_index, offset) { size }
+    end
+    # `NIL_P(memo) ? 0 : rb_to_int(memo)`
+    i = offset.nil? ? 0 : __to_int(offset)
+    # 1: `Array#each`, 2: `Array#map`, 3: this sequence's `each`
+    # (`DirectSource` in src/builtins/enumerator.rs).
+    kind = __direct_source
+    if kind == 1
+      __source_receiver.each do |x|
+        yield x, i
+        i += 1
+      end
+    elsif kind == 2
+      __source_receiver.map do |x|
+        r = yield x, i
+        i += 1
+        r
+      end
+    elsif kind == 3
+      each do |x|
+        yield x, i
+        i += 1
+      end
+      # What the call that made the sequence answers with a block:
+      # `1.step(7, 3) { }` is 1.
+      (r = @__receiver).nil? ? self : r
+    else
+      __with_index(i, &block)
+    end
+  end
+
   # CRuby roots `each_with_index` on Enumerator as `with_index` with no
-  # offset (`enumerator_with_index`), so it returns the *source's* return
-  # value and rejects arguments — unlike `Enumerable#each_with_index`,
-  # which the plain inheritance would otherwise supply.
+  # offset (`enumerator_each_with_index`), so it returns the *source's*
+  # return value and rejects arguments — unlike
+  # `Enumerable#each_with_index`, which the plain inheritance would
+  # otherwise supply.
   def each_with_index(&block)
     # Not a bare delegation: `with_index` would build the Enumerator and
-    # record *its* name and offset. CRuby's `enumerator_with_index`
-    # answers `#<Enumerator: …:each_with_index>` with no argument.
-    return to_enum(:each_with_index) { size } unless block
-    with_index(0, &block)
+    # record *its* name. CRuby answers `#<Enumerator: …:each_with_index>`.
+    return to_enum(:each_with_index) { size } unless block_given?
+    # `with_index(0, &block)`, spelled out: handing the block on would
+    # put a call the JIT does not inline between it and the loop.
+    i = 0
+    kind = __direct_source
+    if kind == 1
+      __source_receiver.each do |x|
+        yield x, i
+        i += 1
+      end
+    elsif kind == 2
+      __source_receiver.map do |x|
+        r = yield x, i
+        i += 1
+        r
+      end
+    elsif kind == 3
+      each do |x|
+        yield x, i
+        i += 1
+      end
+      (r = @__receiver).nil? ? self : r
+    else
+      __with_index(0, &block)
+    end
   end
+
+  # `e.with_object(memo) { |x, memo| … }` — as `with_index`, the memo in
+  # place of the index, and the memo is what it answers.
+  def with_object(memo, &block)
+    return to_enum(__callee__, memo) { size } unless block_given?
+    kind = __direct_source
+    if kind == 1
+      __source_receiver.each { |x| yield x, memo }
+    elsif kind == 2
+      __source_receiver.map { |x| yield x, memo }
+    elsif kind == 3
+      each { |x| yield x, memo }
+    else
+      __with_object(memo, &block)
+    end
+    memo
+  end
+  # One method under two names, as in CRuby (overrides Enumerable's).
+  alias each_with_object with_object
 
   class Yielder
     # A C struct in CRuby, with no `_dump_data`: `Marshal.dump` refuses it.
