@@ -1450,15 +1450,16 @@ impl<'a> JitContext<'a> {
         self.guard_class_version(state, ir, true);
         // In a frameless body, `==` / `!=` through the helper that
         // declines instead of calling a user-defined `==`
-        // (`JitContext::wants_pure_helper`).
+        // (`JitContext::wants_pure_helper`), for the scope the body was
+        // written in (`JitContext::pure_eq_scope`). A body with no such
+        // helper takes the ordinary one below, whose error exit ends the
+        // frameless attempt and gives the callee a frame.
         if let Some(kind @ (CmpKind::Eq | CmpKind::Ne)) = binop.cmp_kind()
             && self.wants_pure_helper(state)
+            && let Some(scope) = self.pure_eq_scope()
             && self.opt_eq_assumable(kind)
         {
-            let func: crate::executor::BinaryOpFn = match kind {
-                CmpKind::Eq => crate::executor::op::cmp_eq_values_pure,
-                _ => crate::executor::op::cmp_ne_values_pure,
-            };
+            let func = crate::executor::op::pure_eq_helper(scope, kind == CmpKind::Ne);
             ir.opt_eq_cmp(state, lhs, rhs, kind, func, is_func_call);
             self.pure_helper_exit(state, ir);
             return;

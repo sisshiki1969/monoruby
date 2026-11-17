@@ -785,10 +785,10 @@ impl Codegen {
             JitType::Entry
         };
         let frame = JitStackFrame::new(store, jit_type, 0, iseq_id, None, self_class, None);
-        // The set the body resolves under is a compile-time constant of
-        // the iseq (`doc/refinements.md` §6.1); `using` moves the class
-        // version, which is what re-checks it.
-        let refinements = store.iseq_refinements(iseq_id);
+        // The set each frame of the unit resolves under is a compile-time
+        // constant of its iseq (`JitStackFrame::refinements`,
+        // `doc/refinements.md` §6.1); `using` moves the class version,
+        // which is what re-checks it.
         // Two version words, two jobs. The context validates the VM's
         // inline caches, which the VM stamps with *its* word, so it gets
         // that one; the unit's own snapshot and guards (below) take the
@@ -799,7 +799,6 @@ impl Codegen {
             true,
             vm_class_version,
             const_version,
-            refinements,
             vec![],
         );
         ctx.loop_hoist_disabled = self.loop_hoist_disabled();
