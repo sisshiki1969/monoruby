@@ -78,56 +78,90 @@ binop!(add, sub, mul, div, rem, pow);
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/divmod.html]
 #[monoruby_builtin]
-fn divmod(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn divmod(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val();
     let rhs = lfp.arg(0);
-
-    // Helper for FloatDomainError
-    let float_domain_err = |msg: &str| -> MonorubyErr {
-        let class_id = globals
-            .store
-            .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("FloatDomainError"))
-            .map(|v| v.as_class_id());
-        match class_id {
-            Some(cid) => MonorubyErr::new(MonorubyErrKind::Other(cid), msg),
-            None => MonorubyErr::rangeerr(msg),
+    // A pair of immediates with a Float in it, as doubles without
+    // building a `RealKind`.
+    let as_f64 = |v: Value| -> Option<f64> {
+        match v.try_fixnum() {
+            Some(i) => Some(i as f64),
+            None => v.try_float(),
         }
     };
-    let (div, modulo) = match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
+    if !(lhs.is_fixnum() && rhs.is_fixnum())
+        && let (Some(x), Some(y)) = (as_f64(lhs), as_f64(rhs))
+    {
+        return float_divmod(globals, x, y);
+    }
+    match (RealKind::try_from(lhs), RealKind::try_from(rhs)) {
+        (Some(lhs), Some(rhs)) if lhs.is_float() || rhs.is_float() => {
+            float_divmod(globals, lhs.to_f64(), rhs.to_f64())
+        }
         (Some(lhs), Some(rhs)) => {
-            // NaN raises FloatDomainError
-            if let RealKind::Float(f) = rhs {
-                if f.is_nan() {
-                    return Err(float_domain_err("NaN"));
-                }
-            }
-            if let RealKind::Float(f) = lhs {
-                if f.is_nan() {
-                    return Err(float_domain_err("NaN"));
-                }
-                if f.is_infinite() {
-                    return Err(float_domain_err(if f > 0.0 {
-                        "Infinity"
-                    } else {
-                        "-Infinity"
-                    }));
-                }
-            }
-            // For divmod, both integer zero and float zero raise ZeroDivisionError
-            if rhs.check_zero_div() || rhs.is_float_zero() {
+            if rhs.check_zero_div() {
                 return Err(MonorubyErr::divide_by_zero());
             }
             let (div, modulo) = lhs.ruby_div_mod(&rhs);
-            // Ruby's divmod always returns an Integer quotient
-            let div = match div {
-                RealKind::Float(f) => Value::coerce_f64_to_int(f)?,
-                _ => div.into(),
-            };
-            (div, modulo.into())
+            Ok(Value::array2(div.into(), modulo.into()))
         }
-        _ => return Err(MonorubyErr::cant_convert_into_float(globals, lfp.arg(0))),
+        _ => {
+            // `fix_divmod` / `rb_big_divmod` / `flo_divmod`: an argument
+            // that is not an Integer or a Float is
+            // `rb_num_coerce_bin(x, y, id_divmod)`.
+            let type_name = if lhs.is_float() { "Float" } else { "Integer" };
+            crate::value::coerce::num_coerce_bin(
+                vm,
+                globals,
+                IdentId::get_id("divmod"),
+                lhs,
+                rhs,
+                type_name,
+            )
+        }
+    }
+}
+
+/// CRuby's `flodivmod`, then `dbl2ival` for the quotient: the zero check
+/// comes before anything is said about NaN or an infinity, and it is the
+/// quotient that has to be finite.
+fn float_divmod(globals: &Globals, x: f64, y: f64) -> Result<Value> {
+    if y == 0.0 {
+        return Err(MonorubyErr::divide_by_zero());
+    }
+    let (div, modulo) = if y.is_nan() {
+        (y, y)
+    } else {
+        let mut modulo = if x == 0.0 || (y.is_infinite() && !x.is_infinite()) {
+            x
+        } else {
+            x % y
+        };
+        let mut div = if x.is_infinite() && !y.is_infinite() {
+            x
+        } else {
+            ((x - modulo) / y).round()
+        };
+        if y * modulo < 0.0 {
+            modulo += y;
+            div -= 1.0;
+        }
+        (div, modulo)
     };
-    Ok(Value::array2(div, modulo))
+    // Well inside i64 in the common case; NaN fails the comparison.
+    let div = if div.abs() < 4.0e18 {
+        Value::integer(div as i64)
+    } else if div.is_nan() {
+        return Err(float::float_domain_error(globals, "NaN"));
+    } else if div.is_infinite() {
+        return Err(float::float_domain_error(
+            globals,
+            if div > 0.0 { "Infinity" } else { "-Infinity" },
+        ));
+    } else {
+        Value::coerce_f64_to_int(div)?
+    };
+    Ok(Value::array2(div, Value::float(modulo)))
 }
 
 macro_rules! unop {

@@ -457,30 +457,10 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
             None => return Ok(Value::nil()),
         },
         _ => {
-            // Try coerce protocol: call rhs.coerce(lhs), propagate
-            // exceptions. CRuby's `do_coerce` probes with
-            // `rb_check_funcall`, so a redefined `respond_to?` is asked.
-            let coerce_id = IdentId::get_id("coerce");
-            match crate::value::coerce::check_funcall_args(vm, globals, rhs, coerce_id, &[lhs]) {
-                Ok(Some(result)) => {
-                    if let Some(ary) = result.try_array_ty() {
-                        if ary.len() == 2 {
-                            let cmp_id = IdentId::_CMP;
-                            return vm.invoke_method_inner(
-                                globals,
-                                cmp_id,
-                                ary[0],
-                                &[ary[1]],
-                                None,
-                                None,
-                            );
-                        }
-                    }
-                    return Ok(Value::nil());
-                }
-                Ok(None) => return Ok(Value::nil()),
-                Err(e) => return Err(e), // Propagate exception from coerce
-            }
+            // `rb_num_coerce_cmp`: `rhs.coerce(lhs)`, asked as
+            // `rb_check_funcall` asks (a redefined `respond_to?` is
+            // consulted); exceptions propagate.
+            return crate::value::coerce::num_coerce_cmp(vm, globals, IdentId::_CMP, lhs, rhs);
         }
     };
     Ok(Value::from_ord(ord))

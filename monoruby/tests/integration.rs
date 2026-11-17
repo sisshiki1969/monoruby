@@ -170,6 +170,7 @@ mod nonlocal_exit_inline_ensure;
 mod nonlocal_exit_intermediate_ensure;
 mod nonlocal_exit_rescue;
 mod nonlocal_return;
+mod num_coerce_cmpint_float_ties_set_marshal;
 mod numbered_param;
 mod openssl_cipher;
 mod openssl_digest;
