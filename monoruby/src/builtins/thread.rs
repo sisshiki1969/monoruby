@@ -2819,6 +2819,22 @@ mod tests {
         );
     }
 
+    /// #2027: the threads killed at exit die one after another, each
+    /// leaving the registry as it does, and nothing else refers to these
+    /// (`Thread.new` with the result dropped). A collection run by the
+    /// ensure clause of one that dies later must not free the ones that
+    /// died before it: `terminate_all` still reads their state to learn
+    /// that they are all gone.
+    #[test]
+    fn threads_killed_at_exit_stay_rooted_until_all_are_dead() {
+        run_test_once(
+            r#"
+            4.times { Thread.new { begin; sleep; ensure; GC.start; end } }
+            Thread.list.size
+            "#,
+        );
+    }
+
     #[test]
     fn deadlock_detected_by_main() {
         // Main parks forever while the only other thread is already parked

@@ -254,6 +254,35 @@ Inlining across that boundary needs a per-inlined-frame cref threaded
 through `JitContext`, in the same place the specialized frame sizes and
 argument info are threaded today.
 
+> **As landed (#1973).** The set is a field of each frame on the JIT's
+> specialization stack (`JitStackFrame::refinements`, read from
+> `Store::iseq_refinements` of the frame's own iseq when the frame is
+> pushed), not of the compilation unit, and `JitContext::refinements()`
+> answers for the frame being compiled. It works in both directions: a
+> helper written before `using` and inlined into a block that activated
+> refinements keeps its plain `+`, and a method written under `using` and
+> inlined into a caller that activated nothing keeps its refined one. Every
+> recorded resolution (`InlineCacheEntry::refinements`, §6.6) carries the
+> set of the frame that asked, so the class-version repair re-asks each
+> frame's question under that frame's set. A Ruby-written core method
+> inlined into a refined caller resolves its own calls under no refinement
+> at all, as its stand-alone compilation always did.
+>
+> The run-time half is the *frameless* callee (`compile/frameless_call.rs`),
+> which has no control frame: a helper it calls that reads the scope off
+> the nearest control frame (`Executor::basic_op_refinements`,
+> `Executor::dispatch_redefined_op`) finds the frame *hosting* the body. The
+> only such helpers a frameless body may call are the pure `==` / `!=`
+> ones, so the JIT tells them whose scope they answer for
+> (`JitContext::pure_eq_scope`, `executor::op::PureScope`): the host's when
+> the body was written in the same scope, "user code with no refinement"
+> when it was not — a plain callee under a refined caller, a user's block
+> run inside `Array#each` — and no helper at all (hence a frame) for a
+> body under a set its host does not share. The second case was wrong
+> without any refinement in the program: a block compiled into the
+> Ruby-written `Array#each` took the core's exemption from a redefined
+> `String#==` / `Float#==`.
+
 ### 3.6 Inlined builtins and basic ops
 
 Two mechanisms bypass dispatch entirely:

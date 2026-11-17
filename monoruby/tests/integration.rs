@@ -198,6 +198,7 @@ mod rbconfig;
 mod receiver_eval_order;
 mod recompile_budget;
 mod redefine;
+mod refinement_inline;
 mod regexp_ascii_engine;
 mod regexp_binary_subject;
 mod regexp_once;

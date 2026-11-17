@@ -846,6 +846,29 @@ impl Executor {
     }
 }
 
+///
+/// Whose scope a pure `==` / `!=` helper answers for.
+///
+/// What `==` means at a site depends on where the site was written: under
+/// which refinements, and on which side of the boundary of monoruby's
+/// Ruby-written core, which stands in for CRuby's C and sees neither a
+/// refinement nor a redefinition of an operator
+/// (`Executor::basic_op_refinements`, `Executor::dispatch_redefined_op`).
+/// The ordinary helpers read both off the control frame they are called
+/// from. A frameless body has none: the nearest control frame is the one
+/// *hosting* it, which may have been written somewhere else — a callee
+/// inlined across a `using`, a user's block run inside `Array#each`. So
+/// the JIT says which it is (`JitContext::pure_eq_scope`).
+///
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PureScope {
+    /// The nearest control frame's: the body was written in the scope of
+    /// the frame hosting it.
+    Frame,
+    /// User code with no refinement active, whatever frame hosts it.
+    Plain,
+}
+
 impl Executor {
     ///
     /// `lhs == rhs` where it is decided without running Ruby code or
@@ -853,7 +876,7 @@ impl Executor {
     /// receiver whose `==` is `BasicObject#==`. `None` for the rest — a
     /// user-defined (or redefined) `==`, a reverse dispatch, a lookup that
     /// fails. This is `==` for a frameless body
-    /// (`JitContext::wants_pure_helper`).
+    /// (`JitContext::wants_pure_helper`), written in *scope*.
     ///
     fn eq_values_pure(
         &mut self,
@@ -861,8 +884,18 @@ impl Executor {
         lhs: Value,
         rhs: Value,
         is_func_call: bool,
+        scope: PureScope,
     ) -> Option<bool> {
-        if self.dispatch_redefined_op(globals, lhs.class(), IdentId::_EQ) {
+        let redefined = match scope {
+            PureScope::Frame => self.dispatch_redefined_op(globals, lhs.class(), IdentId::_EQ),
+            PureScope::Plain => {
+                globals.store.basic_op_redefined()
+                    && globals
+                        .store
+                        .basic_op_redefined_for(lhs.class(), IdentId::_EQ)
+            }
+        };
+        if redefined {
             return None;
         }
         if let Some(rv) = lhs.try_rvalue()
@@ -899,7 +932,7 @@ impl Executor {
             // that one is decided here; *rhs* is no number, so this does
             // not come back.
             (RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_), _) => {
-                return self.eq_values_pure(globals, rhs, lhs, true);
+                return self.eq_values_pure(globals, rhs, lhs, true, scope);
             }
             (RV::String(lhs), RV::String(rhs)) => {
                 lhs.eq(rhs) && lhs.compatible_encoding(rhs).is_some()
@@ -915,9 +948,27 @@ impl Executor {
                 }
             }
             _ => {
-                let fid = self
-                    .find_method(globals, lhs, IdentId::_EQ, is_func_call)
-                    .ok()?;
+                let fid = match scope {
+                    PureScope::Frame => self
+                        .find_method(globals, lhs, IdentId::_EQ, is_func_call)
+                        .ok()?,
+                    // No frame to ask, and none needed: no refinement is
+                    // active where the site was written. Anything but a
+                    // public method (or a func-call site, which sees them
+                    // all) is left to the interpreter, in a frame whose
+                    // `self` the protected check can read.
+                    PureScope::Plain => {
+                        let entry = globals.store.check_method_with_refinements(
+                            lhs.class(),
+                            IdentId::_EQ,
+                            RefinementSetId::EMPTY,
+                        )?;
+                        if !is_func_call && entry.visibility() != Visibility::Public {
+                            return None;
+                        }
+                        entry.func_id()?
+                    }
+                };
                 if globals.store.identity_eq_fid() != Some(fid) {
                     return None;
                 }
@@ -925,41 +976,76 @@ impl Executor {
             }
         })
     }
-}
 
-/// `==` for a frameless body: [`cmp_eq_values`] where no Ruby code has to
-/// run, 0 (nothing raised) where it would.
-pub(crate) extern "C" fn cmp_eq_values_pure(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-    is_func_call: bool,
-) -> Option<Value> {
-    vm.eq_values_pure(globals, lhs, rhs, is_func_call)
-        .map(Value::bool)
-}
-
-/// `!=` for a frameless body; see [`cmp_eq_values_pure`].
-pub(crate) extern "C" fn cmp_ne_values_pure(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lhs: Value,
-    rhs: Value,
-    is_func_call: bool,
-) -> Option<Value> {
-    // A scope with refinements may see another `!=`, and its `==` is not
-    // the one the default `!=` calls: left to `cmp_ne_values`.
-    if vm.in_refined_scope(globals)
-        || globals
-            .store
-            .custom_neq(lhs.class(), Globals::class_version())
-            .is_some()
-    {
-        return None;
+    /// `!=` for a frameless body written in *scope*; see
+    /// [`Self::eq_values_pure`].
+    fn ne_values_pure(
+        &mut self,
+        globals: &mut Globals,
+        lhs: Value,
+        rhs: Value,
+        is_func_call: bool,
+        scope: PureScope,
+    ) -> Option<bool> {
+        // A scope with refinements may see another `!=`, and its `==` is
+        // not the one the default `!=` calls: left to `cmp_ne_values`.
+        if (scope == PureScope::Frame && self.in_refined_scope(globals))
+            || globals
+                .store
+                .custom_neq(lhs.class(), Globals::class_version())
+                .is_some()
+        {
+            return None;
+        }
+        self.eq_values_pure(globals, lhs, rhs, is_func_call, scope)
+            .map(|b| !b)
     }
-    vm.eq_values_pure(globals, lhs, rhs, is_func_call)
-        .map(|b| Value::bool(!b))
+}
+
+/// The pure `==` / `!=` helpers of one [`PureScope`]: [`cmp_eq_values`] /
+/// [`cmp_ne_values`] where no Ruby code has to run, 0 (nothing raised)
+/// where it would.
+macro_rules! pure_eq_helpers {
+    ($eq:ident, $ne:ident, $scope:expr) => {
+        pub(crate) extern "C" fn $eq(
+            vm: &mut Executor,
+            globals: &mut Globals,
+            lhs: Value,
+            rhs: Value,
+            is_func_call: bool,
+        ) -> Option<Value> {
+            vm.eq_values_pure(globals, lhs, rhs, is_func_call, $scope)
+                .map(Value::bool)
+        }
+
+        pub(crate) extern "C" fn $ne(
+            vm: &mut Executor,
+            globals: &mut Globals,
+            lhs: Value,
+            rhs: Value,
+            is_func_call: bool,
+        ) -> Option<Value> {
+            vm.ne_values_pure(globals, lhs, rhs, is_func_call, $scope)
+                .map(Value::bool)
+        }
+    };
+}
+
+pure_eq_helpers!(cmp_eq_values_pure, cmp_ne_values_pure, PureScope::Frame);
+pure_eq_helpers!(
+    cmp_eq_values_pure_plain,
+    cmp_ne_values_pure_plain,
+    PureScope::Plain
+);
+
+/// The pure `==` (`ne` false) or `!=` helper answering for *scope*.
+pub(crate) fn pure_eq_helper(scope: PureScope, ne: bool) -> crate::executor::BinaryOpFn {
+    match (scope, ne) {
+        (PureScope::Frame, false) => cmp_eq_values_pure,
+        (PureScope::Frame, true) => cmp_ne_values_pure,
+        (PureScope::Plain, false) => cmp_eq_values_pure_plain,
+        (PureScope::Plain, true) => cmp_ne_values_pure_plain,
+    }
 }
 
 // `==` / `!=` wrappers return the dispatched method's value as-is (the
