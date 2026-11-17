@@ -5727,6 +5727,25 @@ impl Executor {
         pc: BytecodePtr,
         size: Option<Value>,
     ) -> Result<Value> {
+        // CRuby's `rb_enumeratorize_with_size_kw`: an Enumerator made of a
+        // method of an `Enumerator::Chain` is over `chain.each`, a plain
+        // Enumerator, which is what lets `chain.with_index.to_a` run
+        // although `chain.with_index { }` raises (#2038).
+        let obj = if crate::builtins::enumerator::is_enum_chain(obj) {
+            let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);
+            let proc = Proc::from_outer(outer_lfp, ENUM_YIELDER_FUNCID, pc);
+            Value::new_enumerator(
+                ENUMERATOR_CLASS,
+                obj,
+                IdentId::EACH,
+                proc,
+                vec![],
+                None,
+                None,
+            )
+        } else {
+            obj
+        };
         let outer_lfp = Lfp::dummy_heap_frame_with_self(obj);
         let proc = Proc::from_outer(outer_lfp, ENUM_YIELDER_FUNCID, pc);
         let e = Value::new_enumerator(class_id, obj, method, proc, args, kw_args, size);

@@ -161,6 +161,18 @@ fn packed_digest<S: std::hash::BuildHasher>(hash_builder: &S, k: Value) -> usize
     h.finish() as usize
 }
 
+/// [`packed_digest`], and whether `k` is the flonum `0.0`: a heap `-0.0`
+/// key is `eql?` to it, which the prehashed probe's bit equality cannot
+/// see.
+#[inline(always)]
+fn packed_digest_zero<S: std::hash::BuildHasher>(hash_builder: &S, k: Value) -> (usize, bool) {
+    use std::hash::Hasher;
+    debug_assert!(k.is_packed_value());
+    let mut h = hash_builder.build_hasher();
+    let zero = k.ruby_hash_packed_zero(&mut h);
+    (h.finish() as usize, zero)
+}
+
 ///
 /// The bucketing digest of a packed key, for the JIT's inline probe.
 ///
@@ -972,7 +984,12 @@ impl<'a> HashRef<'a> {
                 // equality — `string_digest` / `string_key_eq`).
                 if k.is_packed_value() {
                     let hash = packed_digest(m.hasher(), k);
-                    m.get_prehashed(hash, &Some(k), vm, globals)?.copied()
+                    match m.get_prehashed(hash, &Some(k), vm, globals)?.copied() {
+                        // `0.0` is `eql?` to a heap `-0.0` key, which bit
+                        // equality cannot see.
+                        None if k.id() == FLOAT_ZERO => m.get(&k, vm, globals)?.copied(),
+                        v => v,
+                    }
                 } else if let Some(s) = k.is_plain_rstring_inner() {
                     let hash = string_digest(m.hasher(), s);
                     m.get_prehashed_with(hash, |ek| string_key_eq(ek, k, s), vm, globals)?
@@ -999,7 +1016,9 @@ impl<'a> HashRef<'a> {
                 // equality — `string_digest` / `string_key_eq`).
                 if k.is_packed_value() {
                     let hash = packed_digest(m.hasher(), k);
-                    Ok(m.get_prehashed(hash, &Some(k), vm, globals)?.is_some())
+                    Ok(m.get_prehashed(hash, &Some(k), vm, globals)?.is_some()
+                        // See `get`: a heap `-0.0` key answers for `0.0`.
+                        || (k.id() == FLOAT_ZERO && m.contains_key(&k, vm, globals)?))
                 } else if let Some(s) = k.is_plain_rstring_inner() {
                     let hash = string_digest(m.hasher(), s);
                     Ok(m
@@ -1488,12 +1507,18 @@ impl<'a> HashRefMut<'a> {
         match &mut self.boxed_mut().content {
             HashContent::Map(m) => {
                 if k.is_packed_value() {
-                    // A packed key's `eql?` is exactly bit equality (an
-                    // immediate is never `eql?` to a heap value, and
-                    // immediate-vs-immediate compares ids), and its digest
-                    // is vm-free — so the whole probe is vm-free.
-                    let hash = packed_digest(m.hasher(), k);
-                    m.insert_prehashed(hash, Some(k), v);
+                    // A packed key's `eql?` is exactly bit equality
+                    // (immediate-vs-immediate compares ids, and the one
+                    // heap value an immediate is `eql?` to is the `-0.0`
+                    // handled below), and its digest is vm-free — so the
+                    // whole probe is vm-free.
+                    let (hash, zero) = packed_digest_zero(m.hasher(), k);
+                    if zero {
+                        // The general probe asks `eql?`.
+                        m.insert(Some(k), v, vm, globals)?;
+                    } else {
+                        m.insert_prehashed(hash, Some(k), v);
+                    }
                 } else if let Some(s) = k.is_plain_rstring_inner() {
                     // A String key's digest and `eql?` are likewise
                     // vm-free: byte content only, dispatching neither

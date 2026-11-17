@@ -1185,8 +1185,9 @@ fn hash_index(
         && let Some(v) = state.concrete_value(callsite.args)
     {
         use crate::codegen::jitgen::asmir::ProbeDigest;
-        let const_probe = if v.is_packed_value() {
-            // Identity (`key_eq: None`) is exact for every packed key.
+        let const_probe = if v.is_packed_value() && v.id() != FLOAT_ZERO {
+            // Identity (`key_eq: None`) is exact for every packed key but
+            // `0.0`, which a heap `-0.0` key answers for too.
             Some((ProbeDigest::Const(packed_digest_c(v.id())), None))
         } else if v.is_plain_rstring_inner().is_some() {
             Some((

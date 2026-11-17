@@ -1249,7 +1249,9 @@ class Enumerator
   # at its own `#__chain_each`, so `#next` / `#peek` / `#+` all work
   # without further plumbing.
   class Chain < Enumerator
-    include Enumerable
+    # External iteration is undefined on a Chain, as in CRuby
+    # (`rb_undef_method`): `chain.each.next` is the way (#2038).
+    undef_method :next, :peek, :next_values, :peek_values, :feed
 
     def initialize(*enums)
       @__enums = enums
@@ -1318,10 +1320,9 @@ class Enumerator
     end
 
     def inspect
-      return __sprintf_repr("#<Enumerator::Chain: uninitialized>") if @__enums.nil?
-      __sprintf_repr("#<Enumerator::Chain: #{@__enums.inspect}>")
+      return __sprintf_repr("#<#{self.class}: uninitialized>") if @__enums.nil?
+      __sprintf_repr("#<#{self.class}: #{@__enums.inspect}>")
     end
-    alias to_s inspect
   end
 
 end

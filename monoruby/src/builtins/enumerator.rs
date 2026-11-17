@@ -609,6 +609,7 @@ fn with_index(
 ) -> Result<Value> {
     let offset = lfp.arg(0);
     let self_val = receiver(vm, globals, lfp.self_val(), Backing::Iterate)?;
+    expect_enumerator_payload(&self_val)?;
     let bh = lfp.expect_block()?;
     let res = enum_adapter_call(
         vm,
@@ -638,10 +639,50 @@ fn with_object(
 ) -> Result<Value> {
     let memo = lfp.arg(0);
     let self_val = receiver(vm, globals, lfp.self_val(), Backing::Iterate)?;
+    expect_enumerator_payload(&self_val)?;
     let bh = lfp.expect_block()?;
-    enum_adapter_call(vm, globals, self_val, bh, memo, WITH_OBJECT_ADAPTER_FUNCID, pc)?;
+    enum_adapter_call(
+        vm,
+        globals,
+        self_val,
+        bh,
+        memo,
+        WITH_OBJECT_ADAPTER_FUNCID,
+        pc,
+    )?;
     // CRuby returns the memo, not the source's return value.
     Ok(memo)
+}
+
+/// The entry points of `Enumerator::Chain#each` / `Product#each` that
+/// their inherited Enumerator payload calls (`builtins/enumerable.rb`,
+/// `builtins/enumerator.rb`): what tells the two from an Enumerator
+/// proper.
+const CHAIN_EACH: &str = "__chain_each";
+const PRODUCT_EACH: &str = "__product_each";
+
+/// Whether `obj` is an `Enumerator::Chain` (`rb_obj_is_kind_of(obj,
+/// rb_cEnumChain)`).
+pub(crate) fn is_enum_chain(obj: Value) -> bool {
+    obj.ty() == Some(ObjTy::ENUMERATOR)
+        && obj.as_enumerator_inner().method == IdentId::get_id(CHAIN_EACH)
+}
+
+/// CRuby's `enumerator_ptr` for `#with_index` / `#with_object` (and
+/// `#each_with_index` / `#each_with_object`) with a block: a Chain or a
+/// Product is an Enumerator by class but its data is not an enumerator's,
+/// so these raise (issue #2038).
+fn expect_enumerator_payload(e: &Enumerator) -> Result<()> {
+    let name = if e.method == IdentId::get_id(CHAIN_EACH) {
+        "chain"
+    } else if e.method == IdentId::get_id(PRODUCT_EACH) {
+        "product"
+    } else {
+        return Ok(());
+    };
+    Err(MonorubyErr::typeerr(format!(
+        "wrong argument type {name} (expected enumerator)"
+    )))
 }
 
 /// What `Enumerator#__direct_source` answers: the builtin iterator the

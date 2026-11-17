@@ -157,8 +157,9 @@ class Integer
     elsif other.is_a?(Float)
       self.to_f / other
     else
-      a, b = __num_coerce(self, other)
-      a.fdiv(b)
+      # `rb_int_fdiv_double`: `NUM2DBL(rb_num_coerce_bin(x, y, idFdiv))`,
+      # so whatever the coerced receiver answers is made a Float (#2045).
+      __fdiv_coerce(other)
     end
   end
 

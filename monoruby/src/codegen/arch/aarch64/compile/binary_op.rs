@@ -453,31 +453,6 @@ impl Codegen {
         );
     }
 
-    /// `Integer#%` with a Float rhs: `rem_ff(lhs, rhs)` (f64,f64 -> f64). The
-    /// operands are loaded into d0/d1, the result (d0) stored into `dst_fpr`.
-    /// aarch64 twin of x86 `gen_int_rem_if`.
-    pub(crate) fn gen_int_rem_if(
-        &mut self,
-        lhs_fpr: FPReg,
-        rhs_fpr: FPReg,
-        dst_fpr: FPReg,
-        using_fpr: UsingFpr,
-        base: usize,
-    ) {
-        let f = crate::executor::op::rem_ff as *const () as u64;
-        monoasm_arm64!(&mut self.jit, str x30, [sp, #-16]!;);
-        self.emit_fpr_save(using_fpr, false);
-        self.a64_fpr_into_d(lhs_fpr, 0, base);
-        self.a64_fpr_into_d(rhs_fpr, 1, base);
-        monoasm_arm64!(&mut self.jit,
-            mov x9, (f);
-            blr x9;                  // d0 = rem_ff(d0, d1)
-        );
-        self.emit_fpr_restore(using_fpr, false);
-        monoasm_arm64!(&mut self.jit, ldr x30, [sp], #16;);
-        self.a64_d0_into_fpr(dst_fpr, base);
-    }
-
     /// `Integer#**` with a Float rhs: `pow_ff(lhs, rhs)` (f64,f64 -> Value, which
     /// may be Complex). The operands are loaded into d0/d1; the result Value
     /// lands in Rax (x0). aarch64 twin of x86 `gen_int_pow_if`.
