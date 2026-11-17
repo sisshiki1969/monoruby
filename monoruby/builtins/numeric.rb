@@ -82,10 +82,9 @@ class Numeric
     to_r.denominator
   end
 
+  # `rb_numeric_quo`: the division is Rational's, which coerces an
+  # argument that is not a number.
   def quo(other)
-    unless other.is_a?(Numeric)
-      raise TypeError, "#{__coerce_failed_name(other)} can't be coerced into Rational"
-    end
     Rational(self) / other
   end
 

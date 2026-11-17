@@ -111,21 +111,7 @@ fn rb_equal(vm: &mut Executor, globals: &mut Globals, x: Value, y: Value) -> Res
 /// CRuby's `rb_num_coerce_cmp(x, y, <=>)`: `y.coerce(x)` supplies the two
 /// operands; nil when `y` cannot coerce.
 fn num_coerce_cmp(vm: &mut Executor, globals: &mut Globals, x: Value, y: Value) -> Result<Value> {
-    let coerce = IdentId::get_id("coerce");
-    if globals.check_method(y, coerce).is_none() {
-        return Ok(Value::nil());
-    }
-    let pair = vm.invoke_method_inner(globals, coerce, y, &[x], None, None)?;
-    if pair.is_nil() {
-        return Ok(Value::nil());
-    }
-    match pair.try_array_ty() {
-        Some(ary) if ary.len() == 2 => {
-            let (a, b) = (ary[0], ary[1]);
-            vm.invoke_method_inner(globals, IdentId::_CMP, a, &[b], None, None)
-        }
-        _ => Err(MonorubyErr::typeerr("coerce must return [x, y]")),
-    }
+    crate::value::coerce::num_coerce_cmp(vm, globals, IdentId::_CMP, x, y)
 }
 
 /// Integer, Float or Rational: a part of a Complex whose value is read
@@ -315,10 +301,11 @@ fn coerce(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
         _ => {}
     }
-    // Rational: spec expects `Complex.kind_of?` to be true for the first
-    // element, so we convert it (to_f; precision may be lost).
-    if let Some(r) = other.try_rational() {
-        let wrapped = Value::complex(Real::from(r.to_f()), Real::from(0));
+    // Rational: `Complex(other, 0)` with the Rational kept as it is
+    // (`nucomp_coerce`), so that `(1r/3) + Complex(1, 2)` stays exact.
+    if other.try_rational().is_some() {
+        let re = Real::try_from(globals, other)?;
+        let wrapped = Value::complex(re, Real::from(0));
         return Ok(Value::array2(wrapped, self_val));
     }
     // Numeric subclass with real? → true: wrap as Complex(other, 0).
@@ -929,20 +916,13 @@ fn div(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     // Otherwise fall back to the coerce protocol (`rb_num_coerce_bin`). The
     // re-dispatch uses `quo` (CRuby passes `id_quo` to `f_divide`), so e.g.
     // `coerce` returning `[5, 2]` yields `5.quo(2) == (5/2)`.
-    let coerce_id = IdentId::get_id("coerce");
-    if globals.check_method(other, coerce_id).is_none() {
-        return Err(MonorubyErr::typeerr(format!(
+    match crate::value::coerce::do_coerce(vm, globals, self_val, other, false)? {
+        Some((x, y)) => f_quo(vm, globals, x, y),
+        None => Err(MonorubyErr::typeerr(format!(
             "{} can't be coerced into Complex",
             other.coerce_failed_name(&globals.store)
-        )));
+        ))),
     }
-    let result = vm.invoke_method_inner(globals, coerce_id, other, &[self_val], None, None)?;
-    if let Some(ary) = result.try_array_ty() {
-        if ary.len() == 2 {
-            return f_quo(vm, globals, ary[0], ary[1]);
-        }
-    }
-    Err(MonorubyErr::typeerr("coerce must return [x, y]".to_string()))
 }
 
 ///
@@ -1002,21 +982,14 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 num::complex::Complex::new(r.to_f(), 0.0)
             } else {
                 // coerce protocol
-                let coerce_id = IdentId::get_id("coerce");
-                if globals.check_method(rhs, coerce_id).is_none() {
-                    return Err(MonorubyErr::typeerr(format!(
-                        "{} can't be coerced into Complex",
-                        rhs.coerce_failed_name(&globals.store)
-                    )));
-                }
-                let result = vm.invoke_method_inner(globals, coerce_id, rhs, &[self_val], None, None)?;
-                if let Some(ary) = result.try_array_ty() {
-                    if ary.len() == 2 {
-                        let pow_id = IdentId::_POW;
-                        return vm.invoke_method_inner(globals, pow_id, ary[0], &[ary[1]], None, None);
-                    }
-                }
-                return Err(MonorubyErr::typeerr("coerce must return [x, y]"));
+                return crate::value::coerce::num_coerce_bin(
+                    vm,
+                    globals,
+                    IdentId::_POW,
+                    self_val,
+                    rhs,
+                    "Complex",
+                );
             }
         }
     };

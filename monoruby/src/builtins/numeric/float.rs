@@ -328,7 +328,7 @@ fn float_rationalize(
 }
 
 /// Helper to raise FloatDomainError
-fn float_domain_error(globals: &Globals, msg: &str) -> MonorubyErr {
+pub(super) fn float_domain_error(globals: &Globals, msg: &str) -> MonorubyErr {
     let class_id = globals
         .store
         .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("FloatDomainError"))
@@ -442,23 +442,45 @@ fn toi(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Numeric/i/div.html]
 #[monoruby_builtin]
-fn div_floor(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn div_floor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let lhs = lfp.self_val().try_float().unwrap();
-    if lhs.is_nan() {
-        return Err(float_domain_error(globals, "NaN"));
-    }
-    if lhs.is_infinite() {
-        return Err(float_domain_error(
-            globals,
-            if lhs > 0.0 { "Infinity" } else { "-Infinity" },
-        ));
-    }
-    let rhs = RealKind::expect(globals, lfp.arg(0))?.to_f64();
+    // CRuby has no `Float#div`: it is `Numeric#div` (`num_div`), a zero
+    // check and `(self / other).floor`. The arithmetic below is that for
+    // an Integer or a Float; anything else is asked.
+    let arg = lfp.arg(0);
+    let rhs = if let Some(i) = arg.try_fixnum() {
+        i as f64
+    } else if let Some(f) = arg.try_float() {
+        f
+    } else if let Some(real) = RealKind::try_from(arg) {
+        real.to_f64()
+    } else {
+        if vm
+            .eq_values_funcall(globals, Value::integer(0), arg)?
+            .as_bool()
+        {
+            return Err(MonorubyErr::divide_by_zero());
+        }
+        let quo =
+            vm.invoke_method_inner(globals, IdentId::_DIV, lfp.self_val(), &[arg], None, None)?;
+        return vm.invoke_method_inner(globals, IdentId::get_id("floor"), quo, &[], None, None);
+    };
     if rhs == 0.0 {
         return Err(MonorubyErr::divide_by_zero());
     }
-    let div_floor = (lhs / rhs).floor();
-    Value::coerce_f64_to_int(div_floor)
+    // `Float#floor` of the quotient: it is the quotient that is NaN or
+    // infinite (`Infinity.div(-1)` is "-Infinity").
+    let quo = lhs / rhs;
+    if quo.is_nan() {
+        return Err(float_domain_error(globals, "NaN"));
+    }
+    if quo.is_infinite() {
+        return Err(float_domain_error(
+            globals,
+            if quo > 0.0 { "Infinity" } else { "-Infinity" },
+        ));
+    }
+    Value::coerce_f64_to_int(quo.floor())
 }
 
 ///
@@ -534,23 +556,8 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                     return Ok(Value::integer(ord));
                 }
             }
-            // Try coerce protocol for non-numeric types
-            let coerce_id = IdentId::get_id("coerce");
-            if let Some(result) =
-                vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lhs], None, None)?
-            {
-                if let Some(ary) = result.try_array_ty() {
-                    if ary.len() == 2 {
-                        let cmp_id = IdentId::_CMP;
-                        let res =
-                            vm.invoke_method_inner(globals, cmp_id, ary[0], &[ary[1]], None, None)?;
-                        return Ok(res);
-                    }
-                }
-                // coerce returned something other than a 2-element array
-                return Err(MonorubyErr::typeerr("coerce must return [x, y]"));
-            }
-            None
+            // `rb_num_coerce_cmp` for non-numeric types
+            return crate::value::coerce::num_coerce_cmp(vm, globals, IdentId::_CMP, lhs, rhs);
         }
     };
     Ok(match ord {
@@ -1274,23 +1281,10 @@ fn quo(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         RV::Fixnum(i) => i as f64,
         RV::BigInt(b) => b.to_f64().unwrap_or(f64::INFINITY),
         _ => {
-            let coerce_id = IdentId::get_id("coerce");
-            if let Some(result) =
-                vm.invoke_method_if_exists(globals, coerce_id, rhs, &[lfp.self_val()], None, None)?
+            if let Some((x, y)) =
+                crate::value::coerce::do_coerce(vm, globals, lfp.self_val(), rhs, false)?
             {
-                if let Some(ary) = result.try_array_ty() {
-                    if ary.len() == 2 {
-                        let div_id = IdentId::_DIV;
-                        return vm.invoke_method_inner(
-                            globals,
-                            div_id,
-                            ary[0],
-                            &[ary[1]],
-                            None,
-                            None,
-                        );
-                    }
-                }
+                return vm.invoke_method_inner(globals, IdentId::_DIV, x, &[y], None, None);
             }
             return Err(MonorubyErr::cant_convert_into_float(globals, rhs));
         }

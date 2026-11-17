@@ -126,7 +126,8 @@ class Integer
         # We scale the numerator up so that the integer quotient has
         # ~54 significant bits, then use Math.ldexp to apply the
         # 2^(-extra) scaling without overflow.
-        return 0.0 if self == 0
+        # A zero numerator keeps the divisor's sign (`0.0 / -x`).
+        return (other < 0 ? -0.0 : 0.0) if self == 0
         if other == 0
           return sf.infinite? ? sf / 0.0 : 1.0 / 0.0 * (self < 0 ? -1 : 1)
         end
@@ -206,28 +207,14 @@ class Integer
 
   # bit_length is defined in Rust for performance with BigInt
 
+  # `rb_int_coerce`: an Integer is paired as it is; for anything else
+  # both sides go through `rb_Float`, so a Rational or a Complex argument
+  # is a pair of Floats (and a Complex with an imaginary part the
+  # RangeError of its `to_f`).
   def coerce(other)
-    if other.is_a?(Integer)
-      [other, self]
-    elsif other.is_a?(Float)
-      [other, self.to_f]
-    elsif other.is_a?(Rational)
-      [other, Rational(self, 1)]
-    elsif other.is_a?(Complex)
-      [other, Complex(self)]
-    elsif other.nil? || other.equal?(true) || other.equal?(false) || other.is_a?(Symbol)
-      # CRuby's rb_int_coerce goes through rb_Float(): its error, not
-      # the operators' "can't be coerced".
-      raise TypeError, "can't convert #{__builtin_class_name(other)} into Float"
-    elsif other.is_a?(String)
-      stripped = other.strip
-      if stripped.empty? || stripped !~ /\A[+-]?(\d+\.?\d*|\d*\.?\d+)([eE][+-]?\d+)?\z/
-        raise ArgumentError, "invalid value for Float(): #{other.inspect}"
-      end
-      [Float(other), self.to_f]
-    else
-      [__convert_type(other, Float, "Float", :to_f, false), self.to_f]
-    end
+    return [other, self] if other.is_a?(Integer)
+    return [other, to_f] if other.is_a?(Float)
+    [Float(other), to_f]
   end
 
   def numerator

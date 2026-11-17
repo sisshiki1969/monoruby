@@ -11,48 +11,44 @@ module Comparable
     !(res > 0) && !(res < 0)
   end
 
+  # CRuby's `rb_cmpint` for a `<=>` answer that is not an Integer: nil
+  # is the comparison failure, anything else is asked `> 0` and then
+  # `< 0`, and whatever those raise is the caller's to see (a String
+  # answer is "comparison of String with 0 failed", an Object a
+  # NoMethodError for `>`). An answer that is neither -- NaN -- reads
+  # as 0.
+  def __cmpint(res, recv, other)
+    if res.nil?
+      raise ArgumentError, "comparison of #{recv.class} with #{__coerce_failed_name(other)} failed"
+    end
+    return 1 if res > 0
+    return -1 if res < 0
+    0
+  end
+  private :__cmpint
+
   def >=(other)
     res = self <=> other
-    if res.nil?
-      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
-    elsif res.is_a?(Numeric)
-      res >= 0
-    else
-      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
-    end
+    return res >= 0 if res.is_a?(Integer)
+    __cmpint(res, self, other) >= 0
   end
 
   def >(other)
     res = self <=> other
-    if res.nil?
-      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
-    elsif res.is_a?(Numeric)
-      res > 0
-    else
-      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
-    end
+    return res > 0 if res.is_a?(Integer)
+    __cmpint(res, self, other) > 0
   end
 
   def <=(other)
     res = self <=> other
-    if res.nil?
-      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
-    elsif res.is_a?(Numeric)
-      res <= 0
-    else
-      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
-    end
+    return res <= 0 if res.is_a?(Integer)
+    __cmpint(res, self, other) <= 0
   end
 
   def <(other)
     res = self <=> other
-    if res.nil?
-      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
-    elsif res.is_a?(Numeric)
-      res < 0
-    else
-      raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(other)} failed"
-    end
+    return res < 0 if res.is_a?(Integer)
+    __cmpint(res, self, other) < 0
   end
 
   def clamp(min_val = nil, max_val = nil)

@@ -2392,6 +2392,19 @@ pub(super) extern "C" fn jit_handle_arguments_no_block_for_yield(
         }
         return Some(Value::nil());
     }
+    // A variadic native block body taking no keywords — the adapter of
+    // `Enumerator#with_index` / `#with_object`, run once per element.
+    if info.no_keyword()
+        && args::bind_variadic_native(
+            callee_lfp.register_ptr(SlotId(1)) as *mut Option<Value>,
+            info,
+            src,
+            pos_num,
+            false,
+        )
+    {
+        return Some(Value::nil());
+    }
     match set_frame_arguments_simple(vm, globals, callee_lfp, caller_lfp, callid, src, pos_num) {
         Ok(_) => Some(Value::nil()),
         Err(mut err) => {

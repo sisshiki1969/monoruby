@@ -158,8 +158,9 @@ that is already set up is a no-op.
 ```sh
 # 1. The image's ruby-build plugin is usually too old to know 4.0.9
 #    (`rbenv install --list | grep '^4\.'` tells you). Update it:
+#    (by URL: not every image's copy of the plugin has an `origin` remote)
 rb="$(rbenv root)/plugins/ruby-build"
-git -C "$rb" fetch --depth 50 origin
+git -C "$rb" fetch --depth 50 --tags https://github.com/rbenv/ruby-build.git
 git -C "$rb" checkout "$(git -C "$rb" tag --sort=-v:refname | head -1)"
 ls "$rb/share/ruby-build/" | grep '^4\.0'              # 4.0.9 must appear
 

@@ -932,7 +932,16 @@ impl<'a> MarshalReader<'a> {
             .alloc_func()
             .map(|f| f as *const () == crate::default_alloc_func as *const ())
             .unwrap_or(true);
-        let obj = Value::object(module.id());
+        // A Set arrives as an object whose `@hash` holds its members
+        // (see `marshal_dump_set`). The real, still empty, Set is what
+        // gets registered, so that a member linking back to the set
+        // finds it.
+        let is_set = module_inherits(module, SET_CLASS);
+        let obj = if is_set {
+            super::set::set_alloc_func(module.id(), globals)
+        } else {
+            Value::object(module.id())
+        };
         // Register the (still-empty) instance right away: the rooted
         // link table keeps the fresh object alive across the ivar
         // `read_value`s below, and a self-reference resolves to the
@@ -1035,6 +1044,37 @@ impl<'a> MarshalReader<'a> {
                 globals.set_ivar(exc, name, val)?;
             }
             exc
+        } else if is_set {
+            // CRuby reads the fields into a scratch object and takes
+            // `@hash` from it: any other field is dropped, and a missing
+            // one is nil, which is not a Hash.
+            let hash = ivars
+                .iter()
+                .rev()
+                .find(|(name, _)| name.get_name() == "@hash")
+                .map_or(Value::nil(), |(_, val)| *val);
+            if hash.ty() != Some(ObjTy::HASH) {
+                return Err(MonorubyErr::wrong_argument_type(globals, hash, "Hash"));
+            }
+            // The members are already keyed in the Hash just read, so its
+            // content is taken over as it is (with its identity mode)
+            // rather than inserted a second time.
+            if let Some((_, val)) = hash
+                .as_hashmap_inner()
+                .iter()
+                .find(|(_, val)| val.id() != Value::bool(true).id())
+            {
+                return Err(MonorubyErr::runtimeerr(format!(
+                    "expect true as Set value: {}",
+                    val.get_real_class_name(&globals.store)
+                )));
+            }
+            let mut set = obj.as_hash();
+            set.replace_inner(hash.as_hashmap_inner().clone_inner());
+            // `@hash` is dumped with CRuby's default of `false`; a Set
+            // here has none.
+            set.set_defalut_value(Value::nil(), vm, globals)?;
+            obj
         } else if native_class {
             return Err(MonorubyErr::argumenterr(format!(
                 "can't load instance of {} from generic marshal object",
@@ -1315,7 +1355,9 @@ impl<'a> MarshalReader<'a> {
             payload_ty,
             None | Some(ObjTy::OBJECT) | Some(ObjTy::CLASS) | Some(ObjTy::MODULE)
         );
-        if !swappable || class_ty != payload_ty {
+        // A Set shares a Hash's storage here but is no Hash: CRuby's
+        // `T_SET` never matches a `T_HASH` payload.
+        if !swappable || class_ty != payload_ty || module_inherits(module, SET_CLASS) {
             return Err(MonorubyErr::argumenterr("dump format error (user class)"));
         }
         inner.change_class(module.id());
@@ -1741,9 +1783,14 @@ const EXTRA_FIELD_PREFIX: &str = "/marshal/";
 /// can consolidate once the marshal module gets access to it.
 /// Return true if `class` is `Exception` or one of its subclasses.
 fn is_exception_class(_globals: &Globals, class: Module) -> bool {
+    module_inherits(class, EXCEPTION_CLASS)
+}
+
+/// Is `class` the class `ancestor` or one of its subclasses?
+fn module_inherits(class: Module, ancestor: ClassId) -> bool {
     let mut cur = Some(class);
     while let Some(c) = cur {
-        if c.id() == EXCEPTION_CLASS {
+        if c.id() == ancestor {
             return true;
         }
         cur = c.superclass();
@@ -2138,6 +2185,85 @@ fn marshal_write_extended_and_class(
         }
         buf.push(b'C');
         marshal_write_symbol(buf, IdentId::get_id(&name), symbols);
+    }
+    Ok(())
+}
+
+/// A `Set` on the wire is what `set.rb` used to write, and what CRuby
+/// 4.0 (where `Set` is a core class) still writes so that the two can
+/// read each other: an ordinary object (`'o'`) with the single instance
+/// variable `@hash`, a Hash of the members to `true` whose default is
+/// `false`. A `compare_by_identity` set carries that on the inner Hash
+/// (`C :Hash`); the set's own instance variables go in an `'I'` block
+/// around the object, not among its fields.
+fn marshal_dump_set(
+    buf: &mut Vec<u8>,
+    obj: Value,
+    vm: &mut Executor,
+    globals: &mut Globals,
+    symbols: &mut Vec<IdentId>,
+    objects: &mut Vec<u64>,
+    limit: i32,
+) -> Result<()> {
+    marshal_check_singleton(globals, obj)?;
+    let class_name = obj.get_real_class_name(&globals.store);
+    if class_name.starts_with("#<") {
+        return Err(MonorubyErr::typeerr(format!(
+            "can't dump anonymous class {class_name}"
+        )));
+    }
+    // Snapshot the members: dumping one can re-enter user code.
+    let (members, cbi): (Vec<Value>, bool) = {
+        let inner = obj.as_hashmap_inner();
+        (inner.keys(), inner.is_compare_by_identity())
+    };
+    let ivars = globals.get_ivars(obj);
+    if !ivars.is_empty() {
+        buf.push(b'I');
+    }
+    for m in marshal_extended_modules(globals, obj) {
+        let name = globals.get_class_name(m);
+        if name.starts_with("#<") {
+            return Err(MonorubyErr::typeerr(format!(
+                "can't dump anonymous class {name}"
+            )));
+        }
+        buf.push(b'e');
+        marshal_write_symbol(buf, IdentId::get_id(&name), symbols);
+    }
+    buf.push(b'o');
+    marshal_write_symbol(buf, IdentId::get_id(&class_name), symbols);
+    marshal_write_fixnum(buf, 1);
+    marshal_write_symbol(buf, IdentId::get_id("@hash"), symbols);
+    // The inner Hash is an object of its own in CRuby's link table (a
+    // fresh one per dump, so nothing ever links back to it): it takes a
+    // slot, and every later link index counts it.
+    objects.push(0);
+    if cbi {
+        buf.push(b'C');
+        marshal_write_symbol(buf, IdentId::get_id("Hash"), symbols);
+    }
+    buf.push(b'}');
+    marshal_write_fixnum(buf, members.len() as i32);
+    // The inner Hash spends a level of `Marshal.dump(obj, limit)` too.
+    if limit == 0 {
+        return Err(MonorubyErr::argumenterr("exceed depth limit"));
+    }
+    for member in members {
+        marshal_dump_value(buf, member, vm, globals, symbols, objects, limit - 1)?;
+        // The `true` each member maps to, and
+        if limit == 1 {
+            return Err(MonorubyErr::argumenterr("exceed depth limit"));
+        }
+        buf.push(b'T');
+    }
+    // the Hash's default: immediates, which are depth-checked as well.
+    if limit == 1 {
+        return Err(MonorubyErr::argumenterr("exceed depth limit"));
+    }
+    buf.push(b'F');
+    if !ivars.is_empty() {
+        marshal_write_ivar_block(buf, &ivars, vm, globals, symbols, objects, limit)?;
     }
     Ok(())
 }
@@ -2598,6 +2724,9 @@ fn marshal_dump_value(
                         marshal_dump_value(buf, begin, vm, globals, symbols, objects, limit)?;
                         marshal_write_symbol(buf, IdentId::get_id("end"), symbols);
                         marshal_dump_value(buf, end, vm, globals, symbols, objects, limit)?;
+                    }
+                    Some(ObjTy::HASH) if obj.is_kind_of(&globals.store, SET_CLASS) => {
+                        marshal_dump_set(buf, obj, vm, globals, symbols, objects, limit)?;
                     }
                     Some(ObjTy::HASH) => {
                         // Snapshot the pairs to avoid holding a borrow into

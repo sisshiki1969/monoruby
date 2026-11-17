@@ -789,6 +789,8 @@ impl Executor {
         // Likewise for `to_s`: what it resolves to now is what the
         // interpolation shortcuts stand for.
         globals.store.record_builtin_to_s();
+        // And for the iterators `Enumerator#with_index` calls directly.
+        globals.store.record_enum_direct_sources();
         #[cfg(feature = "profile")]
         globals.clear_stats();
         Ok(executor)

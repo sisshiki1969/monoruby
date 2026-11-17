@@ -71,31 +71,17 @@ class Rational
     end
   end
 
+  # `rb_rational_fdiv`: the quotient is Rational's own (which coerces
+  # an argument that is not a number), converted afterwards.
   def fdiv(other)
-    to_f / other.to_f
+    return self / 0.0 if other == 0
+    return to_f if other.equal?(1)
+    quo = self / other
+    quo.is_a?(Float) ? quo : quo.to_f
   end
 
-  def remainder(other)
-    self - (self / other).truncate * other
-  end
-
-  def div(other)
-    raise TypeError, "#{__coerce_failed_name(other)} can't be coerced into Rational" unless other.is_a?(Numeric)
-    raise ZeroDivisionError, "divided by 0" if other == 0
-    (self / other).floor
-  end
-
-  def divmod(other)
-    raise TypeError, "#{__coerce_failed_name(other)} can't be coerced into Rational" unless other.is_a?(Numeric)
-    raise ZeroDivisionError, "divided by 0" if other == 0
-    q = (self / other).floor
-    [q, self - q * other]
-  end
-
-  def %(other)
-    divmod(other)[1]
-  end
-  alias modulo %
+  # `div`, `divmod`, `%` / `modulo` and `remainder` are Numeric's, as in
+  # CRuby (rational.c defines none of them).
 
   def rationalize(eps = nil)
     return self if eps.nil?

@@ -1093,14 +1093,18 @@ impl Globals {
                 false
             )
         );
-        assert_eq!(
-            WITH_INDEX_ADAPTER_FUNCID,
-            globals.define_anonymous_builtin(with_index_adapter, 0, 0, true, &[], false)
-        );
-        assert_eq!(
-            WITH_OBJECT_ADAPTER_FUNCID,
-            globals.define_anonymous_builtin(with_object_adapter, 0, 0, true, &[], false)
-        );
+        // Variadic, not rest: the adapters run once per element, and what
+        // a source yields is read out of the frame's fixed slots.
+        assert_eq!(WITH_INDEX_ADAPTER_FUNCID, {
+            let fid = globals.define_anonymous_builtin(with_index_adapter, 0, cap, true, &[], false);
+            globals.store[fid].set_native_variadic();
+            fid
+        });
+        assert_eq!(WITH_OBJECT_ADAPTER_FUNCID, {
+            let fid = globals.define_anonymous_builtin(with_object_adapter, 0, cap, true, &[], false);
+            globals.store[fid].set_native_variadic();
+            fid
+        });
         globals.random_init(None);
         gvar::init_builtin_gvars(&mut globals);
         crate::builtins::init_builtins(&mut globals);
