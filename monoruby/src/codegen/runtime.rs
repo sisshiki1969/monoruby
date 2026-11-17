@@ -1029,7 +1029,7 @@ fn gen_hash_inner(
             .copied()
             .rev();
         while let Ok(chunk) = iter.next_chunk::<2>() {
-            map.insert(chunk[0].frozen_hash_key(&globals.store), chunk[1], vm, globals)?;
+            map.aset(chunk[0], chunk[1], vm, globals)?;
         }
     }
     Ok(map)
@@ -1056,7 +1056,7 @@ pub(super) extern "C" fn hash_insert(
             .copied()
             .rev();
         while let Ok(chunk) = iter.next_chunk::<2>() {
-            if let Err(err) = h.insert(chunk[0].frozen_hash_key(&globals.store), chunk[1], vm, globals) {
+            if let Err(err) = h.aset(chunk[0], chunk[1], vm, globals) {
                 vm.set_error(err);
                 return None;
             }
@@ -2105,6 +2105,56 @@ pub(super) extern "C" fn object_send_missing(
 }
 
 ///
+/// The name an inlined `send` / `__send__` was given when it is not a
+/// Symbol: what `to_str` answers, as the method it names.
+///
+/// A String no Symbol exists for is the NoMethodError here, unless the
+/// receiver has its own `method_missing` (`send_method_name`); the
+/// arguments it reports are read back from the caller's frame, as
+/// [`object_send_missing`] reads them.
+///
+pub(crate) extern "C" fn object_send_name(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name: Value,
+    callid: CallSiteId,
+    lfp: Lfp,
+) -> Option<IdentId> {
+    use crate::builtins::CheckedName;
+    let name = match crate::builtins::checked_name(vm, globals, name) {
+        Ok(CheckedName::Id(id)) => return Some(id),
+        Ok(CheckedName::Unknown(name)) => name,
+        Err(err) => {
+            vm.set_error(err);
+            return None;
+        }
+    };
+    // Rare from here on: the call is read back for the error.
+    let cs = &globals.store[callid];
+    let (recv, args_slot, pos_num, single_splat, fcall) = (
+        cs.recv,
+        cs.args,
+        cs.pos_num,
+        cs.object_send_single_splat(),
+        cs.is_func_call(),
+    );
+    // SAFETY: the slots come from the call site being executed, so they
+    // name live registers of this very frame.
+    let receiver = lfp.register(recv).unwrap();
+    let mut args = unsafe { lfp.args_to_vec(args_slot, pos_num) };
+    if single_splat {
+        args = match args[0].try_array_ty() {
+            Some(ary) => ary.to_vec(),
+            None => vec![args[0]],
+        };
+    }
+    let args = args.get(1..).unwrap_or_default();
+    crate::builtins::send_unknown_name(globals, receiver, name, args, fcall)
+        .map_err(|err| vm.set_error(err))
+        .ok()
+}
+
+///
 /// `Method#call` on a Method the inline path cannot call itself.
 ///
 /// The inlined `Method#call` (`Codegen::method_object_call_inline`) reads
@@ -2546,15 +2596,7 @@ pub(super) extern "C" fn get_index(
         .store
         .basic_op_redefined_for(base_classid, IdentId::_INDEX)
     {
-        return vm.invoke_method(
-            globals,
-            IdentId::_INDEX,
-            is_func_call,
-            base,
-            &[index],
-            None,
-            None,
-        );
+        return vm.invoke_method_op(globals, IdentId::_INDEX, is_func_call, base, &[index]);
     }
     match base_classid {
         ARRAY_CLASS => {
@@ -2656,15 +2698,7 @@ pub(super) extern "C" fn get_index(
         }
         _ => {}
     }
-    vm.invoke_method(
-        globals,
-        IdentId::_INDEX,
-        is_func_call,
-        base,
-        &[index],
-        None,
-        None,
-    )
+    vm.invoke_method_op(globals, IdentId::_INDEX, is_func_call, base, &[index])
 }
 
 /// `StringFreeze` (`"lit".freeze`, CRuby's `opt_str_freeze`): while
@@ -2740,14 +2774,9 @@ pub(super) extern "C" fn set_index(
         // the JIT's polymorphic `[]=` dispatch; going through
         // `invoke_method` here meant a global-method-cache probe per store
         // (10M of them in an activerecord run).
-        let key = if base.as_hash().is_compare_by_identity() {
-            index
-        } else {
-            index.frozen_hash_key(&globals.store)
-        };
         let res = base
             .as_hash_mut(&globals.store)
-            .and_then(|mut h| h.insert(key, src, vm, globals));
+            .and_then(|mut h| h.aset(index, src, vm, globals));
         return match res {
             Ok(()) => Some(src),
             Err(err) => {
@@ -2756,15 +2785,7 @@ pub(super) extern "C" fn set_index(
             }
         };
     }
-    vm.invoke_method(
-        globals,
-        IdentId::_INDEX_ASSIGN,
-        is_func_call,
-        base,
-        &[index, src],
-        None,
-        None,
-    )
+    vm.invoke_method_op(globals, IdentId::_INDEX_ASSIGN, is_func_call, base, &[index, src])
 }
 
 /*///

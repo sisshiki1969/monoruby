@@ -464,16 +464,6 @@ impl std::fmt::Debug for CacheEntry {
 #[derive(Debug)]
 struct Cache([CacheEntry; CACHE_SIZE]);
 
-extern "C" fn expect_string(
-    vm: &mut Executor,     // rdi
-    globals: &mut Globals, // rsi
-    v: Value,              // rdx
-) -> Option<IdentId> {
-    v.expect_symbol_or_to_str(vm, globals)
-        .map_err(|err| vm.set_error(err))
-        .ok()
-}
-
 extern "C" fn no_method_name(vm: &mut Executor) -> Option<Value> {
     let err = MonorubyErr::argumenterr("no method name given.");
     vm.set_error(err);
@@ -549,11 +539,11 @@ impl Codegen {
                 monoasm! { &mut self.jit,
                     movq rcx, [rbp - (jrbp_local(args))];
                 }
-                self.object_send_inner(recv, cache, &missing, &error);
+                self.object_send_inner(recv, callid, cache, &missing, &error);
             }
         } else {
             self.object_send_splat_arg0(args, &error);
-            self.object_send_inner(recv, cache, &missing, &error);
+            self.object_send_inner(recv, callid, cache, &missing, &error);
         }
         self.handle_error(&error);
         monoasm! { &mut self.jit,
@@ -1336,6 +1326,7 @@ impl Codegen {
     fn object_send_inner(
         &mut self,
         recv: SlotId,
+        callid: CallSiteId,
         cache: DestLabel,
         missing: &DestLabel,
         error: &DestLabel,
@@ -1420,7 +1411,9 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movq rdx, rcx;
-            movq rax, (expect_string);
+            movl rcx, (callid.get());
+            movq r8, r14;
+            movq rax, (runtime::object_send_name);
             call rax;
             movl rax, rax;
         }

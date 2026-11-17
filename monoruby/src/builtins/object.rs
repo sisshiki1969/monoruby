@@ -19,6 +19,13 @@ pub(super) fn init_kernel(globals: &mut Globals, kernel_class: ClassId) {
     // mspec's `SpecPositiveOperatorMatcher`) instead of routing through
     // `method_missing`, breaking the `actual.should === expected` idiom.
     globals.define_builtin_func(kernel_class, "===", case_eq, 1);
+    // `nil`, `true` and `false` have a `===` of their own in CRuby — the
+    // same `case_equal` (`rb_equal`: identity, then `==`), defined on
+    // NilClass, TrueClass and FalseClass as well as on Kernel — so
+    // `nil.method(:===).owner` is NilClass (#2017).
+    for class_id in [NIL_CLASS, TRUE_CLASS, FALSE_CLASS] {
+        globals.define_builtin_func(class_id, "===", case_eq, 1);
+    }
     globals.define_builtin_func(kernel_class, "freeze", freeze, 0);
     globals.define_builtin_inline_func(
         kernel_class,
@@ -215,30 +222,32 @@ fn bo_method_missing(
     // a failed `super` raises the super-flavored NoMethodError.
     use crate::executor::MethodMissingStyle;
     let style = vm.take_method_missing_style();
-    // How CRuby's `name_err_mesg_to_str` names the receiver: through
-    // the Ruby-level `#name` of its class, so a class with an overridden
-    // `def self.name` shows that name.
-    let desc = nme_receiver_description(vm, globals, recv);
+    // How the receiver is named — a class by its Ruby-level `#name` —
+    // is settled when the message is read, as CRuby's
+    // `name_err_mesg_to_str` does (`MonorubyErr::class_span`).
     match style {
         MethodMissingStyle::VCall => {
             // `undefined local variable or method 'name' for <recv>`,
             // carrying the receiver on `#receiver`.
-            return Err(MonorubyErr::nameerr_showing(
-                format_args!("undefined local variable or method '"),
+            return Err(MonorubyErr::undefined_local_or_method(
+                &globals.store,
                 name,
-                format_args!("' for {desc}"),
-                Some(recv),
+                recv,
             ));
         }
         MethodMissingStyle::Super => {
-            return Err(MonorubyErr::no_method_error(
+            // A `super` is a function call (`VM_CALL_FCALL`).
+            let err = MonorubyErr::no_method_error(
+                &globals.store,
                 "super: no superclass method '",
                 name,
                 recv,
-                format_args!("' for {desc}"),
-            ));
+                "' for ",
+            );
+            let call_args = Value::array_from_iter(args.iter().skip(1).cloned());
+            return Err(no_method_error_with_args(globals, err, call_args, true));
         }
-        MethodMissingStyle::Plain => {}
+        MethodMissingStyle::Plain | MethodMissingStyle::FCall => {}
     }
     // Reaching the default `method_missing` while the method actually
     // exists means the call violated visibility (a private method called
@@ -252,80 +261,56 @@ fn bo_method_missing(
     };
     match visibility {
         Some(Visibility::Private) => Err(MonorubyErr::no_method_error(
+            &globals.store,
             "private method '",
             name,
             recv,
-            format_args!("' called for {desc}"),
+            "' called for ",
         )),
         Some(Visibility::Protected) => Err(MonorubyErr::no_method_error(
+            &globals.store,
             "protected method '",
             name,
             recv,
-            format_args!("' called for {desc}"),
+            "' called for ",
         )),
         _ => {
             // A genuine NoMethodError carries the call arguments on
             // `#args` (`args[0]` is the method name; the rest are the
             // call arguments).
             let err = MonorubyErr::no_method_error(
+                &globals.store,
                 "undefined method '",
                 name,
                 recv,
-                format_args!("' for {desc}"),
+                "' for ",
             );
             let call_args = Value::array_from_iter(args.iter().skip(1).cloned());
-            Err(no_method_error_with_args(globals, err, call_args))
+            // `private_call?`: the call was written as a function call
+            // (CRuby's `last_call_status & MISSING_FCALL`).
+            let private_call = style == MethodMissingStyle::FCall;
+            Err(no_method_error_with_args(
+                globals,
+                err,
+                call_args,
+                private_call,
+            ))
         }
     }
-}
-
-/// CRuby's receiver rendering for a NameError / NoMethodError message
-/// (`name_err_mesg_to_str`): `nil` / `true` / `false`; `class <C>` /
-/// `module <M>`; `main`, or the default `#<Class:0x…>` form, for a
-/// receiver that has a singleton class; `an instance of <C>` otherwise.
-/// The class is shown by its Ruby-level `#name`, by its `#inspect` when
-/// that answers nil (an anonymous class) or raises, and by the default
-/// `#<Class:0x…>` form when neither answers a String. An exception from
-/// either method is dropped, as `rb_protect` drops it there.
-fn nme_receiver_description(vm: &mut Executor, globals: &mut Globals, recv: Value) -> String {
-    if recv.is_nil() {
-        return "nil".to_string();
-    } else if recv == Value::bool(true) {
-        return "true".to_string();
-    } else if recv == Value::bool(false) {
-        return "false".to_string();
-    }
-    let (prefix, class) = if let Some(m) = recv.is_class_or_module() {
-        (if m.is_module() { "module " } else { "class " }, m)
-    } else {
-        let class = globals.store[recv.class()].get_module();
-        if class.is_singleton().is_some() {
-            return MonorubyErr::singleton_receiver_description(&globals.store, recv);
-        }
-        ("an instance of ", class)
-    };
-    let c = class.as_val();
-    let shown = match vm.invoke_method_inner(globals, IdentId::get_id("name"), c, &[], None, None) {
-        Ok(name) if !name.is_nil() => Some(name),
-        _ => vm
-            .invoke_method_inner(globals, IdentId::INSPECT, c, &[], None, None)
-            .ok(),
-    };
-    let shown = match shown.and_then(|v| {
-        v.is_rstring_inner()
-            .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
-    }) {
-        Some(s) => s,
-        None => globals.store.get_class_name(class.id()),
-    };
-    format!("{prefix}{shown}")
 }
 
 /// Re-materialize a NoMethodError so it also carries `#args`. The
 /// `NotMethod` error's name / receiver are transferred onto a
 /// pre-built exception object (via `take_ex_obj`'s standard path) and
-/// the arguments array is attached as the hidden `/args` ivar.
-fn no_method_error_with_args(globals: &mut Globals, err: MonorubyErr, call_args: Value) -> MonorubyErr {
+/// the arguments array is attached as the hidden `/args` ivar, and
+/// `private_call` — whether the call was written as a function call —
+/// as `/private_call` (`NoMethodError#private_call?`).
+fn no_method_error_with_args(
+    globals: &mut Globals,
+    err: MonorubyErr,
+    call_args: Value,
+    private_call: bool,
+) -> MonorubyErr {
     let (name, receiver) = match err.kind() {
         MonorubyErrKind::NotMethod { name, receiver } => (*name, *receiver),
         _ => (None, None),
@@ -333,6 +318,7 @@ fn no_method_error_with_args(globals: &mut Globals, err: MonorubyErr, call_args:
     let mut exc = Value::new_exception_from(err.message().to_string(), NO_METHOD_ERROR_CLASS);
     // The pre-built object shows the name where the error did.
     exc.is_exception_mut().unwrap().name_span = err.name_span;
+    exc.is_exception_mut().unwrap().class_span = err.class_span;
     if let Some(name) = name {
         let _ = globals
             .store
@@ -341,12 +327,62 @@ fn no_method_error_with_args(globals: &mut Globals, err: MonorubyErr, call_args:
     if let Some(receiver) = receiver {
         let _ = globals
             .store
-            .set_ivar(exc, IdentId::get_id("/receiver"), receiver);
+            .set_ivar(exc, IdentId::_RECEIVER, receiver);
     }
     let _ = globals
         .store
         .set_ivar(exc, IdentId::get_id("/args"), call_args);
+    if private_call {
+        let _ = globals.store.set_ivar(
+            exc,
+            IdentId::get_id("/private_call"),
+            Value::bool(true),
+        );
+    }
     err.with_original(exc)
+}
+
+/// The NoMethodError of a call by a name no Symbol exists for
+/// (`rb_make_no_method_exception` from `send`): `#name` is the String
+/// the caller gave, as it is in the message.
+pub(crate) fn no_method_error_unknown(
+    globals: &mut Globals,
+    receiver: Value,
+    name: Value,
+    args: &[Value],
+    private_call: bool,
+) -> MonorubyErr {
+    let inner = name.as_rstring_inner();
+    let (bytes, enc) = (inner.as_bytes().to_vec(), inner.encoding());
+    let (desc, class_len) = MonorubyErr::receiver_description(&globals.store, receiver);
+    let raw = [
+        b"undefined method '".as_slice(),
+        &bytes,
+        b"' for ",
+        desc.as_bytes(),
+    ]
+    .concat();
+    let mut err = MonorubyErr::with_message(
+        MonorubyErrKind::NotMethod {
+            name: None,
+            receiver: Some(receiver),
+        },
+        String::from_utf8_lossy(&raw).into_owned(),
+    )
+    .showing_class(class_len, 0);
+    // A name that is not UTF-8 is shown as its own bytes.
+    if std::str::from_utf8(&raw).is_err() {
+        err.raw_message = Some((raw, enc));
+    }
+    let call_args = Value::array_from_iter(args.iter().cloned());
+    let err = no_method_error_with_args(globals, err, call_args, private_call);
+    if let Some(mut exc) = err.original {
+        let _ = globals.store.set_ivar(exc, IdentId::_NAME, name);
+        if let Some(inner) = exc.is_exception_mut() {
+            inner.raw_message = err.raw_message.clone();
+        }
+    }
+    err
 }
 
 ///

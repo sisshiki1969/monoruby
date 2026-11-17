@@ -26,7 +26,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(IO_CLASS, "<<", shl, 1);
     globals.define_builtin_func_with(IO_CLASS, "puts", puts, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "print", print, 0, 0, true);
-    globals.define_builtin_func_with(IO_CLASS, "printf", printf, 1, 1, true);
+    globals.define_builtin_func_rest(IO_CLASS, "printf", printf);
     globals.define_builtin_func(IO_CLASS, "flush", flush, 0);
     globals.define_builtin_func(IO_CLASS, "inspect", io_inspect, 0);
     globals.define_builtin_func_with_kw(IO_CLASS, "gets", gets, 0, 2, false, &["chomp"], true);
@@ -1618,19 +1618,25 @@ fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/printf.html]
 #[monoruby_builtin]
 fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let args = lfp.arg(1).as_array();
+    let all = lfp.arg(0).as_array();
+    // `rb_io_printf` hands everything to `rb_f_sprintf`, which misses
+    // the format when there is none.
+    let Some((fmt_val, args)) = all.split_first() else {
+        return Err(MonorubyErr::argumenterr("too few arguments"));
+    };
+    let fmt_val = *fmt_val;
     // Format through the shared encoding negotiation so a binary or
     // broken argument reaches the fd as its own bytes.
-    let fmt_inner = match lfp.arg(0).is_rstring_inner() {
+    let fmt_inner = match fmt_val.is_rstring_inner() {
         Some(inner) => inner.clone(),
         None => {
-            let s = lfp.arg(0).coerce_to_string(vm, globals)?;
+            let s = fmt_val.coerce_to_string(vm, globals)?;
             RStringInner::from_encoding_scanned(s.as_bytes(), Encoding::UTF8)
         }
     };
-    let ctx = crate::executor::format::negotiate_format(&globals.store, &fmt_inner, &args)?;
+    let ctx = crate::executor::format::negotiate_format(&globals.store, &fmt_inner, args)?;
     let format_str = ctx.view_owned(&fmt_inner)?;
-    let out = vm.format_by_args(globals, &format_str, &args, ctx)?;
+    let out = vm.format_by_args(globals, &format_str, args, ctx)?;
     let buf = ctx.finish(&out).as_rstring_inner().as_bytes().to_vec();
     let mut done = 0;
     blocking_io_region(vm, globals, lfp.self_val(), libc::POLLOUT, |_store| {

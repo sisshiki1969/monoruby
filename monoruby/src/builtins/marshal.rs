@@ -289,6 +289,11 @@ struct MarshalReader<'a> {
     /// The next object read is the target of the `'e'` wrappers in
     /// `extmod` (CRuby passes `extmod` only to that one `r_object0`).
     extmod_armed: bool,
+    /// The Hash about to be read is wrapped in `C :Hash`, CRuby's marker
+    /// for a compare_by_identity Hash: it compares by identity before its
+    /// entries go in, so a String key is stored as the object read (not
+    /// as a frozen copy).
+    identity_hash_next: bool,
 }
 
 impl<'a> MarshalReader<'a> {
@@ -306,6 +311,7 @@ impl<'a> MarshalReader<'a> {
             building: std::collections::HashSet::new(),
             extmod: Vec::new(),
             extmod_armed: false,
+            identity_hash_next: false,
         }
     }
 
@@ -885,10 +891,13 @@ impl<'a> MarshalReader<'a> {
         self.objects.push(hash);
         self.building.insert(hash.id());
         let mut map = hash.as_hash();
+        if std::mem::take(&mut self.identity_hash_next) {
+            map.compare_by_identity(vm, globals)?;
+        }
         for _ in 0..len {
             let key = self.read_value(vm, globals)?;
             let val = self.read_value(vm, globals)?;
-            map.insert(key, val, vm, globals)?;
+            map.aset(key, val, vm, globals)?;
         }
         self.building.remove(&hash.id());
         if has_default {
@@ -1300,6 +1309,8 @@ impl<'a> MarshalReader<'a> {
         // so its class can still be swapped; the outer `read_value`
         // freezes the final wrapped result.
         let saved_no_intern = std::mem::replace(&mut self.no_intern, true);
+        self.identity_hash_next = class_sym.get_name() == "Hash"
+            && matches!(self.data.get(self.pos), Some(b'{' | b'}'));
         let inner = self.read_value_inner(vm, globals);
         self.no_intern = saved_no_intern;
         let mut inner = inner?;

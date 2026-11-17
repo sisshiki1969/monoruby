@@ -51,11 +51,15 @@ class Enumerator
         step_part = s.nil? ? "" : s.inspect
         return __sprintf_repr("((#{lo}#{sep}#{hi}).step(#{step_part}))")
       end
-      body = recv.is_a?(Range) ? "(#{recv.inspect})" : recv.inspect
+      # The receiver and the keyword values are shown by `to_s`
+      # (`"%"PRIsVALUE`), the positional arguments by `inspect`:
+      # `(1/1.step(to: 3, by: 2/1))` but `(1.step((3/1)))`.
+      body = recv.is_a?(Range) ? "(#{recv})" : "#{recv}"
       out = "(#{body}.#{@__meth}"
       shown = (@__args || []).map { |a| a.inspect }
-      # Keywords are shown as written: `(1.step(by: 2, to: 10))`.
-      @__kw&.each { |k, v| shown << "#{k}: #{v.inspect}" }
+      # Keywords are shown as written, in the order written:
+      # `(1.step(by: 2, to: 10))`, and `(1.step(to: ))` for a nil.
+      @__kw&.each { |k, v| shown << "#{k}: #{v}" }
       out = out + "(#{shown.join(', ')})" unless shown.empty?
       __sprintf_repr(out + ")")
     end
@@ -77,22 +81,20 @@ class Enumerator
       [Enumerator::ArithmeticSequence, self.begin, self.end, self.step, exclude_end?].hash
     end
 
-    # `Enumerable#to_a` over `#each`, with a shortcut for the Integer
-    # sequence, whose terms have a closed form: `Array.new(n) { ... }`
-    # JIT-compiles to a tight loop. A Float sequence must go through
-    # `#each`, which is what knows how its terms are counted and rounded.
-    def to_a
+    # The terms of an Integer sequence, which have a closed form
+    # (`Array.new(n) { ... }` JIT-compiles to a tight loop), or nil for
+    # any other sequence: a Float one must go through `#each`, which is
+    # what knows how its terms are counted and rounded. `Enumerable#to_a`
+    # asks this first.
+    def __integer_terms
       b = self.begin
       e = self.end
       s = self.step
       if b.is_a?(Integer) && e.is_a?(Integer) && s.is_a?(Integer)
-        return Array.new(size) { |i| b + i * s }
+        Array.new(size) { |i| b + i * s }
       end
-      raise RangeError, "cannot convert endless arithmetic sequence to array" if size == Float::INFINITY
-      ary = []
-      each { |v| ary << v }
-      ary
     end
+    private :__integer_terms
 
     # CRuby's `arith_seq_each`, in Ruby (rather than Rust) so that
     # monoruby's JIT can inline the block dispatch directly into the

@@ -36,6 +36,7 @@ impl ExceptionInner {
         self.message = msg;
         self.default_message_class = None;
         self.name_span = None;
+        self.class_span = None;
     }
 
     pub fn kind(&self) -> MonorubyErrKind {

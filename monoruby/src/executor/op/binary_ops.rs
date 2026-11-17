@@ -6,7 +6,7 @@ use super::*;
 
 use num::{BigInt, Signed, ToPrimitive, Zero};
 use paste::paste;
-use std::ops::{Add, BitAnd, BitOr, BitXor, Mul, Rem, Shl, Shr, Sub};
+use std::ops::{Add, BitAnd, BitOr, BitXor, Mul, Shl, Shr, Sub};
 
 /// CRuby's `rb_num_coerce_bin(lhs, rhs, op)`: `rhs.coerce(lhs)` (asked as
 /// `rb_check_funcall` asks, see [`crate::value::coerce::do_coerce`])
@@ -394,43 +394,17 @@ pub(crate) extern "C" fn rem_values_raw(
         }
         _ => {}
     }
-    let v = match (lhs.unpack(), rhs.unpack()) {
-        (RV::BigInt(lhs), RV::Complex(rhs)) => {
-            let lhs = num::complex::Complex::from(Real::from(lhs.clone()));
-            Value::complex_from(lhs.rem(rhs))
-        }
+    // Complex has no `%` (`Init_Complex` undefines it): a Complex on the
+    // left is a NoMethodError, and one on the right is reached through
+    // `coerce`, which makes the left operand a Complex with the same
+    // outcome.
+    match (lhs.unpack(), rhs.unpack()) {
         (RV::Fixnum(_) | RV::BigInt(_), _) => {
-            return try_coerce_and_apply(vm, globals, IdentId::_REM, lhs, rhs, "Integer");
+            try_coerce_and_apply(vm, globals, IdentId::_REM, lhs, rhs, "Integer")
         }
-
-        (RV::Float(lhs), RV::Complex(rhs)) => {
-            let lhs = num::complex::Complex::from(Real::from(lhs));
-            Value::complex_from(lhs.rem(rhs))
-        }
-        (RV::Float(_), _) => {
-            return try_coerce_and_apply(vm, globals, IdentId::_REM, lhs, rhs, "Float");
-        }
-        (RV::Complex(lhs), RV::Fixnum(rhs)) => {
-            let rhs = num::complex::Complex::from(Real::from(rhs));
-            Value::complex_from(lhs.rem(rhs))
-        }
-        (RV::Complex(lhs), RV::BigInt(rhs)) => {
-            let rhs = num::complex::Complex::from(Real::from(rhs.clone()));
-            Value::complex_from(lhs.rem(rhs))
-        }
-        (RV::Complex(lhs), RV::Float(rhs)) => {
-            let rhs = num::complex::Complex::from(Real::from(rhs));
-            Value::complex_from(lhs.rem(rhs))
-        }
-        (RV::Complex(lhs), RV::Complex(rhs)) => Value::complex_from(lhs.rem(rhs)),
-        (RV::Complex(_), _) => {
-            return try_coerce_and_apply(vm, globals, IdentId::_REM, lhs, rhs, "Complex");
-        }
-        _ => {
-            return vm.invoke_method_at_site(globals, IdentId::_REM, is_func_call, lhs, &[rhs]);
-        }
-    };
-    Some(v)
+        (RV::Float(_), _) => try_coerce_and_apply(vm, globals, IdentId::_REM, lhs, rhs, "Float"),
+        _ => vm.invoke_method_at_site(globals, IdentId::_REM, is_func_call, lhs, &[rhs]),
+    }
 }
 
 /// Maximum result size in bits for integer exponentiation (16 GB on 64-bit).

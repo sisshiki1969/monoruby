@@ -587,6 +587,17 @@ impl HashmapInner {
         self.as_mut().insert(k, v, vm, globals)
     }
 
+    /// `rb_hash_aset` (see [`HashRefMut::aset`]).
+    pub fn aset(
+        &mut self,
+        k: Value,
+        v: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        self.as_mut().aset(k, v, vm, globals)
+    }
+
     pub fn remove(
         &mut self,
         k: Value,
@@ -1465,6 +1476,63 @@ impl<'a> HashRefMut<'a> {
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<()> {
+        self.store::<false>(k, v, vm, globals)
+    }
+
+    ///
+    /// `rb_hash_aset`: store *k* => *v* the way `Hash#[]=` does. An
+    /// unfrozen String key goes in as its frozen copy
+    /// ([`Value::frozen_hash_key`]) unless the Hash compares by identity
+    /// — and, as in `hash_aset_str`, the copy is made only when the key
+    /// is new: an update of an existing key keeps the stored key and
+    /// allocates nothing.
+    ///
+    pub fn aset(
+        &mut self,
+        k: Value,
+        v: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        // Only an unfrozen String is ever copied (`frozen_hash_key`).
+        // One whose class word says String is the usual key, and the one
+        // the probe compares by its bytes (`is_plain_rstring_inner`), so
+        // whether it is new is known before the copy is made. The rest —
+        // an unfrozen String with a singleton class — is rare and is
+        // copied first.
+        match k.try_rvalue() {
+            Some(rv)
+                if rv.ty() == ObjTy::STRING
+                    && !rv.is_frozen()
+                    && !self.as_ref().is_compare_by_identity() =>
+            {
+                if rv.class() == STRING_CLASS {
+                    self.store::<true>(k, v, vm, globals)
+                } else {
+                    let k = k.frozen_hash_key(&globals.store);
+                    self.insert(k, v, vm, globals)
+                }
+            }
+            _ => self.store::<false>(k, v, vm, globals),
+        }
+    }
+
+    /// The store behind [`Self::insert`] and [`Self::aset`]. With `COPY`
+    /// the key is an unfrozen plain String (`is_plain_rstring_inner`) of
+    /// an eql?-keyed Hash, and a new entry gets its
+    /// [`Value::frozen_hash_key`] in place of the key itself.
+    ///
+    /// A const parameter and not an argument: each caller gets the body
+    /// for its own case, as measured — with a flag tested at run time the
+    /// copying store cost 28 instructions more.
+    #[inline(always)]
+    fn store<const COPY: bool>(
+        &mut self,
+        k: Value,
+        v: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
         // Stale tombstones must go before an insert: growing the index
         // table re-inserts every raw bucket, which would resurrect them.
         // (During iteration the new-key check below raises first, and an
@@ -1484,7 +1552,15 @@ impl<'a> HashRefMut<'a> {
             if let Some(i) = self.as_ref().inline_pos_noobs(k) {
                 // SAFETY: rep is inline; i < len.
                 unsafe { self.body_mut().inline[i].1 = v };
-            } else if (ident || is_inline_key(k)) && len < INLINE_CAP {
+                return Ok(());
+            }
+            // A new key.
+            let k = if COPY {
+                k.frozen_hash_key(&globals.store)
+            } else {
+                k
+            };
+            if (ident || is_inline_key(k)) && len < INLINE_CAP {
                 // An identity-keyed inline hash accepts any key (id
                 // probing never goes stale); an eql?-keyed one only
                 // packed immediates and frozen Strings (`is_inline_key`).
@@ -1519,14 +1595,30 @@ impl<'a> HashRefMut<'a> {
                     } else {
                         m.insert_prehashed(hash, Some(k), v);
                     }
-                } else if let Some(s) = k.is_plain_rstring_inner() {
+                } else if let Some(s) = if COPY {
+                    // SAFETY: with `COPY` the caller (`aset`) has checked
+                    // that `k` is a String.
+                    k.try_rvalue().map(|rv| unsafe { rv.as_rstring() })
+                } else {
+                    k.is_plain_rstring_inner()
+                } {
                     // A String key's digest and `eql?` are likewise
                     // vm-free: byte content only, dispatching neither
                     // `String#hash` nor `String#eql?` — exactly what the
                     // general probe does for a String key
                     // (`string_digest` / `string_key_eq`).
                     let hash = string_digest(m.hasher(), s);
-                    m.insert_prehashed_with(hash, Some(k), v, |ek| string_key_eq(ek, k, s));
+                    if COPY {
+                        let store = &globals.store;
+                        m.insert_prehashed_with_key(
+                            hash,
+                            || Some(k.frozen_hash_key(store)),
+                            v,
+                            |ek| string_key_eq(ek, k, s),
+                        );
+                    } else {
+                        m.insert_prehashed_with(hash, Some(k), v, |ek| string_key_eq(ek, k, s));
+                    }
                 } else {
                     m.insert(Some(k), v, vm, globals)?;
                 }
@@ -2150,6 +2242,26 @@ impl Hashmap {
     }
 
     // Write-barrier-protected stores.
+
+    ///
+    /// `rb_hash_aset`: store *k* => *v* the way `Hash#[]=` does — an
+    /// unfrozen String key that is new to the Hash goes in as its frozen
+    /// copy ([`Value::frozen_hash_key`]) unless the Hash compares by
+    /// identity. What a builder of a Hash from caller-supplied keys wants
+    /// (`merge`, `group_by`, a Set's elements); [`Hashmap::insert`] stores
+    /// the key object as it is.
+    ///
+    pub fn aset(
+        &mut self,
+        k: Value,
+        v: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        self.0.as_hashmap_inner_mut().aset(k, v, vm, globals)?;
+        self.0.write_barrier_bulk();
+        Ok(())
+    }
 
     pub fn insert(
         &mut self,

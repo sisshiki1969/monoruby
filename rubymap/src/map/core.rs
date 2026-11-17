@@ -619,6 +619,21 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         hash: HashValue,
         key: K,
         value: V,
+        eq: impl FnMut(&K) -> bool,
+    ) -> (usize, Option<V>) {
+        self.insert_full_prehashed_with_key(hash, || key, value, eq)
+    }
+
+    /// [`Self::insert_full_prehashed_with`] for a key that is only made
+    /// when the map has none `eq` accepts: `key` is called at most once,
+    /// after the probe has missed, and what it returns is stored under
+    /// `hash` — so it must digest to `hash` and be one `eq` would accept.
+    /// An update of an existing entry never calls it.
+    pub(crate) fn insert_full_prehashed_with_key(
+        &mut self,
+        hash: HashValue,
+        key: impl FnOnce() -> K,
+        value: V,
         mut eq: impl FnMut(&K) -> bool,
     ) -> (usize, Option<V>) {
         if self.linear {
@@ -629,7 +644,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
             }
             if self.entries.len() < AR_MAX {
                 let i = self.entries.len();
-                self.push_entry(hash, key, value);
+                self.push_entry(hash, key(), value);
                 return (i, None);
             }
             self.ensure_indexed();
@@ -644,6 +659,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
             }
             hash_table::Entry::Vacant(entry) => {
                 let i = self.entries.len();
+                let key = key();
                 entry.insert(i);
                 self.push_entry(hash, key, value);
                 debug_assert_eq!(self.indices.len(), self.entries.len());

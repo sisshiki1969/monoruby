@@ -65,7 +65,9 @@ class Struct
   def [](key)
     unless key.is_a?(Integer)
       if key.is_a?(Symbol) || key.is_a?(String)
-        i = __members.index(key.to_sym)
+        # A String no Symbol exists for names no member (`rb_check_id`).
+        sym = __existing_sym(key)
+        i = sym && __members.index(sym)
         raise NameError.__showing("no member '", key, "' in struct", self) unless i
         return __slot_get(i)
       end
@@ -91,7 +93,9 @@ class Struct
   def []=(key, value)
     unless key.is_a?(Integer)
       if key.is_a?(Symbol) || key.is_a?(String)
-        i = __members.index(key.to_sym)
+        # A String no Symbol exists for names no member (`rb_check_id`).
+        sym = __existing_sym(key)
+        i = sym && __members.index(sym)
         raise NameError.__showing("no member '", key, "' in struct", self) unless i
         raise FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self) if frozen?
         return __slot_set(i, value)

@@ -475,6 +475,24 @@ where
             .1
     }
 
+    /// [`Self::insert_prehashed_with`] for a key that is only made when
+    /// the map has none `eq` accepts (a Ruby `Hash` stores the frozen
+    /// copy of an unfrozen `String` key, and makes that copy only for a
+    /// new key). `key` is called at most once, after the probe has
+    /// missed; what it returns must digest to `hash` and be a key `eq`
+    /// accepts.
+    pub fn insert_prehashed_with_key(
+        &mut self,
+        hash: usize,
+        key: impl FnOnce() -> K,
+        value: V,
+        eq: impl FnMut(&K) -> bool,
+    ) -> Option<V> {
+        self.core
+            .insert_full_prehashed_with_key(HashValue(hash), key, value, eq)
+            .1
+    }
+
     /// Positional lookup twin of [`Self::insert_prehashed_with`]: a
     /// caller-computed digest probed with a caller-supplied equality
     /// predicate (same soundness conditions).
