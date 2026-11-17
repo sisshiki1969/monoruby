@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-00aa06af.js";
+            window.path_to_searchindex_js = "../searchindex-d6b649f7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -199,7 +199,10 @@ GitHub runner 上でだけ起きるハング(下記)なので、ローカルで�
 (<code>RbConfig::CONFIG["EXTSTATIC"]</code> を <code>"static"</code> にすれば spec 側が skip
 するが、実態と違う値を報告することになる)、<code>/o</code> は
 <code>regex_flags_from_closing</code> が <code>o</code> を落とす本物の未実装
-(<code>doc/runtime_optimization/regexp.md</code> §5)。<strong>残す</strong>。</li>
+(<code>doc/runtime_optimization/regexp.md</code> §5)。<strong>残す</strong>。
+（追記: <code>predefined_tags.txt</code> は、<code>etc</code> を CRuby の <code>ext/etc</code> に
+置き換えて <code>resolve_feature_path("etc")</code> が <code>[:so, …]</code> を返すように
+なったので削除した。<code>doc/c_api.md</code> §3.25。）</li>
 </ul>
 <p>副産物: <code>pattern_matching_spec</code> の <code>Hash pattern raises NoMatchingPatternKeyError if the key does not match</code> がタグ無しで error
 している(<code>NoMatchingPatternKeyError</code> が上がらない)。タグとは無関係の

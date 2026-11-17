@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-00aa06af.js";
+            window.path_to_searchindex_js = "../searchindex-d6b649f7.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -1225,6 +1225,66 @@ gem home の <code>host_extensions/&lt;platform&gt;/&lt;gem&gt;-&lt;version&gt;/
 <code>ruby/vm.h</code> の <code>ruby_vm_at_exit</code>（プロセス終了時に逆順で呼ぶ）。
 <code>tests/capi/capi_gaps.c</code>。</li>
 </ul>
+<h3 id="325-etc-も-cruby-の-c-拡張に段階-17"><a class="header" href="#325-etc-も-cruby-の-c-拡張に段階-17">3.25 etc も CRuby の C 拡張に（段階 17）</a></h3>
+<p><code>Etc</code> は <code>stdlib/etc.rb</code>（<code>Process.__getpwnam</code> などの隠し builtin の上の
+Ruby 実装）で、<code>getpwuid</code> / <code>getpwnam</code> / <code>getgrgid</code> / <code>getgrnam</code> 以外は
+スタブだった（<code>nprocessors</code> は常に 1、<code>uname</code> は固定値、<code>sysconf</code> は nil、
+<code>passwd</code> / <code>group</code> は nil、<code>getlogin</code> / <code>confstr</code> / <code>IO#pathconf</code> / <code>SC_*</code>
+などの定数は無し）。CRuby の <code>ext/etc</code>（etc gem 1.4.6）をそのまま層で
+ビルドして同梱する（issue #1806）。</p>
+<ul>
+<li><strong>ソース</strong>: <code>monoruby_capi/ext/etc/</code>。<code>etc.c</code> は CRuby 4.0.9 のまま、
+<code>constdefs.h</code> は同じディレクトリの <code>mkconstants.rb</code> の出力（プラット
+フォームに依らない <code>#ifdef</code> の列）。<code>extconf.h</code> が Linux（glibc）と
+macOS で <code>extconf.rb</code> が見つけるもの（<code>getpwent</code> / <code>getgrent</code>、
+<code>struct passwd</code> のメンバ、<code>uname</code>、<code>sysconf</code> / <code>confstr</code> / <code>fpathconf</code>、
+Linux の <code>sched_getaffinity</code>）を define する。<code>SYSCONFDIR</code> は <code>/etc</code>
+（CRuby では <code>RbConfig::CONFIG["sysconfdir"]</code>、つまり prefix の下。
+monoruby には prefix の <code>etc</code> が無い）。</li>
+<li><strong>スタブを置かない</strong>: <code>stdlib/etc.rb</code> は削除し、<code>require "etc"</code> は
+<code>&lt;install root&gt;/ext/etc.so</code> に直接解決する（<code>date_core</code> と同じ
+<code>ext::find_extension</code>）。<code>$LOAD_PATH.resolve_feature_path("etc")</code> が
+CRuby と同じ <code>[:so, …]</code> になり、ruby/spec <code>language/predefined_spec.rb</code>
+に残っていた唯一のタグ（<code>spec/tags/language/predefined_tags.txt</code>）が
+消えた。</li>
+<li><strong>etc が要求して層に足したもの</strong>:
+<ul>
+<li><code>ruby/ruby.h</code> が先頭で <code>RUBY_EXTCONF_H</code> を include する（CRuby の
+<code>ruby.h</code> / <code>ruby/defines.h</code> と同じ）。mkmf の <code>create_header</code> は
+<code>-DRUBY_EXTCONF_H="extconf.h"</code> を渡すだけなので、自分では include
+しない拡張（etc.c がそう）は <code>HAVE_*</code> を一つも見ていなかった。
+<code>gem install</code> でビルドする gem にも効く。</li>
+<li><code>rb_uid_t</code> / <code>rb_gid_t</code>、<code>rb_filesystem_str_new</code> / <code>_cstr</code>。</li>
+<li><code>rb_locale_encoding</code> / <code>rb_filesystem_encoding</code> を
+<code>Encoding.find("locale")</code> / <code>("filesystem")</code> に（これまで常に UTF-8。
+C ロケールでは CRuby と同じ US-ASCII になる）。<code>rb_external_str_new</code> /
+<code>rb_locale_str_new</code> / <code>rb_filesystem_str_new</code> は CRuby の string.c と
+同じく <code>rb_external_str_new_with_enc</code> 経由にし、US-ASCII に収まらない
+バイトを含むときは BINARY にする（<code>default_internal</code> への変換は
+していない）。</li>
+<li><code>NUM2UINT</code> / <code>NUM2ULONG</code> / <code>NUM2ULL</code> に nil を渡したときの文言を
+CRuby の <code>rb_num2ulong_internal</code> に合わせた（<code>no implicit conversion of nil into Integer</code>。<code>rb_num2long</code> は <code>from nil to integer</code>）。</li>
+</ul>
+</li>
+<li><strong>core から消えたもの</strong>: <code>Process.__getpwnam</code> / <code>__getpwuid</code> /
+<code>__getgrnam</code> / <code>__getgrgid</code>（スタブ専用だった）。<code>Process.euid = "name"</code>
+などが使う名前引きだけ <code>uid_by_name</code> / <code>gid_by_name</code> として残る。</li>
+<li><strong><code>require</code> の繰り返し</strong>: スタブを置かないと、読み込み済みの判定が
+どの近道にも乗らない（<code>&lt;root&gt;/ext/</code> は <code>$LOAD_PATH</code> にもスタブ pin にも
+無い）。そのままだと 2 回目以降の <code>require "etc"</code> が毎回 <code>etc.rb</code> を
+<code>$LOAD_PATH</code> とホストの全 gem の <code>lib/</code> から探し直していた（1 回
+~100 µs。mail の <code>Socket.gethostname</code> はメッセージごとに <code>require "etc"</code>
+する）。<code>Globals::shipped_extension_features</code> が「素の <code>.so</code> 候補 →
+同梱拡張として読み込んだパス」を覚え、<code>require_lib</code> は探索の前に
+そのパスが <code>$LOADED_FEATURES</code> にあるかだけを見る（~0.5 µs、スタブ
+だった頃の 1/10 以下。<code>$LOADED_FEATURES</code> から消されていれば普通に
+読み直す）。</li>
+<li><strong>挙動が変わる点</strong>: <code>Etc.nprocessors</code> が実際の CPU 数を返す（以前は 1）。
+concurrent-ruby や parallel はこれでスレッドプールの大きさを決める。</li>
+<li><strong>結果</strong>: ruby/spec <code>library/etc</code> 50 例 0 失敗、<code>tests/etc.rs</code> が Etc の
+全 API（探索・列挙・<code>uname</code> / <code>sysconf</code> / <code>confstr</code> / <code>pathconf</code>・
+エラー）を同じマシンの CRuby と比較する。</li>
+</ul>
 <h2 id="4-abi-への追加mrapi末尾に追記版は据え置き"><a class="header" href="#4-abi-への追加mrapi末尾に追記版は据え置き">4. ABI への追加（<code>MrApi</code>、末尾に追記、版は据え置き）</a></h2>
 <div class="table-wrapper">
 <table>
@@ -1288,6 +1348,7 @@ gem home の <code>host_extensions/&lt;platform&gt;/&lt;gem&gt;-&lt;version&gt;/
 <tr><td>14</td><td>CRuby の <code>ext/socket</code> を層でビルドして同梱（<code>src/builtins/socket.rs</code> を削除）、<code>rb_io_t</code>、待ちと fd 集合の API、<code>IO#timeout</code></td><td>済（§3.22、ruby/spec <code>library/socket</code> 1463 例で 1F）</td></tr>
 <tr><td>15</td><td>CRuby の <code>ext/openssl</code> を層でビルドしシステムの OpenSSL にリンク（<code>ext/openssl</code> crate と Ruby 実装を削除）、<code>rb_attr</code>、<code>ruby_verbose</code>、<code>rb_obj_class</code> の ABI</td><td>済（§3.23、ruby/spec <code>library/openssl</code> / <code>net-ftp</code> 全通過）</td></tr>
 <tr><td>16</td><td>ホストの CRuby が入れた gem の C 拡張を層で建て直して読む、alloc 関数の self、<code>rb_str_capacity</code> の下限、<code>ruby_vsnprintf</code> の無限ループ、<code>rb_check_symbol</code> 系</td><td>済（§3.24、ruby-bench の graphql-native / liquid-c が完走、liquid-c の出力は CRuby と一致）</td></tr>
+<tr><td>17</td><td>CRuby の <code>ext/etc</code> を層でビルドして同梱（<code>stdlib/etc.rb</code> と隠し builtin を削除）、<code>RUBY_EXTCONF_H</code> の include、ロケール / ファイルシステムのエンコーディング、符号なし変換の nil の文言</td><td>済（§3.25、ruby/spec <code>library/etc</code> 全通過、<code>resolve_feature_path("etc")</code> が <code>:so</code>）</td></tr>
 </tbody>
 </table>
 </div>
