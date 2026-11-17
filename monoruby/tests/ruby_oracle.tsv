@@ -2375,6 +2375,7 @@
 636feedd88a7f207c65caff6bc3c0222	[1, [98], 0, "b", [[98], [254]], 0, 0, 0, 0, [233]]	# A BINARY subject with 8-bit content also uses the US-ASCII\n        # 
 63700eed1bc37e1cd39e92995ac606f2	[[1.1805916207174113e+21, 1180591620717411303425, 3.5, 5.5, 7.5], 2361183241434822606848, 7.0, 1180591620717411303425]	class T\n              def initialize = (@a = [1, 2.5, 3, 4.5, 1 << 
 6377913f14aa78b7b4e9f356bfb1e184	[1..2, true, 1...2, false, true, 5..6, true, ["NameError", "'initialize' called twice"], "FrozenError", "ArgumentError"]	sub = Class.new(Range)\n        errs = []\n        begin; sub.new(1, 2).s
+637d871eecd6787f7015869928575351	[true, true]	require "etc"\n            name = ->(gid) { Etc.getgrgid(gid).name r
 63a1cac5592593fff5c2fe629c0eba9d	16336317884979378143	m = 0xffff_ffff_ffff_ffff\n            x = 88172645463325252\n       
 63a9bd642fd895ef294a01db60ca5c2d	{amount: 42, unit: "km"}	M = Data.define(:amount, :unit)\nM.new(amount: 42, unit: "km").to_h
 63ae129d0273fad94c91f73160dc689d	422100	class Foo\n              def initialize(a, b, c); @a = a; @b = b; @c

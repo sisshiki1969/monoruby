@@ -3314,6 +3314,35 @@ mod new_api_tests {
     }
 
     #[test]
+    fn process_group_ids_by_name() {
+        // A group given by name goes through getgrnam(3): the effective
+        // gid set to its current value (allowed without privileges), and
+        // the supplementary groups set to themselves (EPERM unless root,
+        // after the names were resolved either way). A gid with no entry
+        // in the database stays an Integer.
+        run_test_once(
+            r#"
+            require "etc"
+            name = ->(gid) { Etc.getgrgid(gid).name rescue gid }
+            before = Process.egid
+            Process.egid = name.(before)
+            groups = if RUBY_PLATFORM =~ /linux/
+              begin
+                g = Process.groups
+                Process.groups = g.map(&name)
+                Process.groups.sort == g.sort
+              rescue SystemCallError
+                true
+              end
+            else
+              true
+            end
+            [Process.egid == before, groups]
+            "#,
+        );
+    }
+
+    #[test]
     fn process_groups_set_by_name_error() {
         run_test_error(r#"Process.groups = ["no-such-group-xyzzy"]"#);
         run_test_error(r#"Process.maxgroups = -3"#);
