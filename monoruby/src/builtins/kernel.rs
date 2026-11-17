@@ -4598,7 +4598,9 @@ fn throw_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // `UncaughtThrowError` (< ArgumentError) rather than letting the
     // control-flow `Throw` escape uncatchably.
     if !vm.is_catch_tag_active(tag) {
-        let msg = format!("uncaught throw {}", tag.inspect(&globals.store));
+        // The message is a format (`uncaught_throw_to_s` applies it to
+        // the tag each time the message is read).
+        let msg = "uncaught throw %p".to_string();
         if let Some(klass) = globals
             .store
             .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("UncaughtThrowError"))
@@ -4613,7 +4615,10 @@ fn throw_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             globals.store.set_ivar(exc, IdentId::get_id("/__value"), value)?;
             return Err(MonorubyErr::new(MonorubyErrKind::Other(class_id), msg).with_original(exc));
         }
-        return Err(MonorubyErr::argumenterr(msg));
+        return Err(MonorubyErr::argumenterr(format!(
+            "uncaught throw {}",
+            tag.inspect(&globals.store)
+        )));
     }
     Err(MonorubyErr::throw(tag, value))
 }
@@ -4983,21 +4988,33 @@ pub(crate) fn send(
         return Err(MonorubyErr::argumenterr("no method name given"));
     }
     let method = args[0].expect_symbol_or_to_str(vm, globals)?;
-    vm.invoke_method_inner(
-        globals,
-        method,
-        lfp.self_val(),
-        &args[1..],
-        lfp.block(),
-        if let Some(kw) = lfp.variadic_kw()
-            && let Some(kw) = kw.try_hash_ty()
-            && !kw.is_empty()
-        {
-            Some(kw)
-        } else {
-            None
-        },
-    )
+    let receiver = lfp.self_val();
+    let kw = if let Some(kw) = lfp.variadic_kw()
+        && let Some(kw) = kw.try_hash_ty()
+        && !kw.is_empty()
+    {
+        Some(kw)
+    } else {
+        None
+    };
+    match vm.find_method(globals, receiver, method, true) {
+        Ok(func_id) => {
+            vm.invoke_func_named(globals, func_id, method, receiver, &args[1..], lfp.block(), kw)
+        }
+        // `send` is a function call whatever receiver it was written
+        // with (`rb_f_send`: `CALL_FCALL`), which is what the
+        // NoMethodError's `private_call?` then says.
+        Err(err) => vm.invoke_method_missing_styled(
+            globals,
+            receiver,
+            method,
+            &args[1..],
+            lfp.block(),
+            kw,
+            err,
+            crate::executor::MethodMissingStyle::FCall,
+        ),
+    }
 }
 
 pub fn object_send(
@@ -6379,6 +6396,14 @@ fn method_object_impl(
             // `Module.new.method(:x)` names `Module`.
             let class = match receiver.ty() {
                 Some(ObjTy::CLASS) => globals.store.get_singleton(receiver)?.id(),
+                // A refinement always has a singleton class in CRuby
+                // (`refine` gives it one), so the lookup is named
+                // against `#<Class:#<refinement:String@M>>`.
+                Some(ObjTy::MODULE)
+                    if receiver.real_class(&globals.store).id() == REFINEMENT_CLASS =>
+                {
+                    globals.store.get_singleton(receiver)?.id()
+                }
                 Some(ObjTy::MODULE) => match globals.store.has_singleton(receiver) {
                     Some(sc)
                         if globals.store.get_method_names(sc.id()).is_empty()

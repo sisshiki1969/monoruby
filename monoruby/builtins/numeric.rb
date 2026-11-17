@@ -185,30 +185,53 @@ class Numeric
     to_f.truncate(ndigits)
   end
 
-  def step(limit = nil, step = (no_step = true; nil), by: nil, to: nil)
-    # The positional spelling as written, kept for
-    # `ArithmeticSequence#inspect` (`1.step(10, 3)` prints itself back).
-    given_args = no_step ? (limit.nil? ? [] : [limit]) : [limit, step]
-    given_kw = nil
-    unless by.nil? && to.nil?
-      given_kw = {}
-      given_kw[:by] = by unless by.nil?
-      given_kw[:to] = to unless to.nil?
+  # `rb_get_kwargs`' complaint about the keywords `step` does not take.
+  # A method of its own so that `step` holds no block literal.
+  def __step_unknown_keywords(kw)
+    unknown = kw.keys - [:to, :by]
+    raise ArgumentError,
+          "unknown keyword#{'s' if unknown.size > 1}: #{unknown.map { |k| k.inspect }.join(', ')}"
+  end
+  private :__step_unknown_keywords
+
+  def step(limit = (no_limit = true; nil), step = (no_step = true; nil), **kw)
+    # `num_step_extract_args`: `to:` and `by:` are told apart from an
+    # absent keyword (`to: nil` with a positional limit is still "given
+    # twice"), and the Hash keeps the order they were written in, which
+    # `ArithmeticSequence#inspect` shows.
+    to_given = by_given = false
+    by = nil
+    if kw.empty?
+      kw = nil
+    else
+      known = 0
+      if kw.key?(:to)
+        known += 1
+        to_given = true
+      end
+      if kw.key?(:by)
+        known += 1
+        by_given = true
+      end
+      __step_unknown_keywords(kw) unless kw.size == known
+      if to_given
+        raise ArgumentError, "to is given twice" unless no_limit
+        limit = kw[:to]
+      end
+      if by_given
+        raise ArgumentError, "step is given twice" unless no_step
+        by = kw[:by]
+      end
     end
-    if !to.nil? && !limit.nil?
-      raise ArgumentError, "to is given twice"
-    end
-    if !by.nil? && !step.nil?
-      raise ArgumentError, "step is given twice"
-    end
-    limit = to unless to.nil?
-    # `1.step(5, nil)` with a block: the nil was written, so it is not
-    # the default (CRuby's "compatibility" check in
-    # `num_step_check_fix_args`). Without a block it reads as 1.
-    if step.nil? && by.nil? && !no_step && block_given?
+    if by_given
+      step = by
+    elsif step.nil? && !no_step && block_given?
+      # `1.step(5, nil)` with a block: the nil was written, so it is not
+      # the default (CRuby's "compatibility" check in
+      # `num_step_check_fix_args`). Without a block it reads as 1.
       raise TypeError, "step must be numeric"
     end
-    step = by unless by.nil?
+    written_step = step
     step ||= 1
     raise ArgumentError, "step can't be 0" if step == 0
     unless block_given?
@@ -217,9 +240,12 @@ class Numeric
       # Anything else keeps the plain-Enumerator contract: nothing is
       # checked until it is iterated or asked its `size`.
       if step.is_a?(Numeric) && (limit.nil? || limit.is_a?(Numeric))
+        # The arguments as written, for `ArithmeticSequence#inspect`
+        # (`1.step(10, 3)` prints itself back).
+        given_args = no_limit ? [] : no_step ? [limit] : [limit, written_step]
         return Enumerator::ArithmeticSequence
           .__build(self, limit, step, false)
-          .__set_origin(self, :step, given_args, given_kw)
+          .__set_origin(self, :step, given_args, kw)
       else
         return to_enum(:step, limit, step) { __step_size(limit, step) }
       end

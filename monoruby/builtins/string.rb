@@ -6,6 +6,18 @@ class String
   # `<` / `<=` / `>` / `>=` onto the slower `<=>`-based path.
   include Comparable
 
+  class << self
+    # CRuby's String has a `new` of its own (`rb_str_s_new`, a singleton
+    # method of String), so `String.method(:new)` is `String.new` and
+    # not `Class#new`. The body is `Class#new`'s, and compiles the same
+    # way (see builtins/class.rb).
+    def new(...)
+      o = __builtin_allocate__
+      o.__builtin_initialize__(...)
+      o
+    end
+  end
+
   # `rb_str_to_s`: a String is its own `to_s`, but a *subclass*
   # instance converts to a plain String.
   def to_s

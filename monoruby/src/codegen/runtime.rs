@@ -2533,15 +2533,7 @@ pub(super) extern "C" fn get_index(
         .store
         .basic_op_redefined_for(base_classid, IdentId::_INDEX)
     {
-        return vm.invoke_method(
-            globals,
-            IdentId::_INDEX,
-            is_func_call,
-            base,
-            &[index],
-            None,
-            None,
-        );
+        return vm.invoke_method_op(globals, IdentId::_INDEX, is_func_call, base, &[index]);
     }
     match base_classid {
         ARRAY_CLASS => {
@@ -2643,15 +2635,7 @@ pub(super) extern "C" fn get_index(
         }
         _ => {}
     }
-    vm.invoke_method(
-        globals,
-        IdentId::_INDEX,
-        is_func_call,
-        base,
-        &[index],
-        None,
-        None,
-    )
+    vm.invoke_method_op(globals, IdentId::_INDEX, is_func_call, base, &[index])
 }
 
 /// `StringFreeze` (`"lit".freeze`, CRuby's `opt_str_freeze`): while
@@ -2743,15 +2727,7 @@ pub(super) extern "C" fn set_index(
             }
         };
     }
-    vm.invoke_method(
-        globals,
-        IdentId::_INDEX_ASSIGN,
-        is_func_call,
-        base,
-        &[index, src],
-        None,
-        None,
-    )
+    vm.invoke_method_op(globals, IdentId::_INDEX_ASSIGN, is_func_call, base, &[index, src])
 }
 
 /*///

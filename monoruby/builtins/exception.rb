@@ -22,18 +22,24 @@ class NoMatchingPatternKeyError < NoMatchingPatternError
 end
 
 class UncaughtThrowError
-  # `UncaughtThrowError.new(tag, value, message = nil)`. The message is
-  # a format that `#to_s` applies to the tag (`uncaught_throw_to_s`).
-  def initialize(tag, value, *rest)
-    @__tag = tag
-    @__value = value
-    @__format = true
-    super(*rest)
+  # `UncaughtThrowError.new(tag, value, message = nil)`
+  # (`uncaught_throw_init`: at least two arguments, the rest handed to
+  # `Exception#initialize`).
+  def initialize(*args)
+    if args.size < 2
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 2+)"
+    end
+    @__tag = args[0]
+    @__value = args[1]
+    super(*args[2..])
   end
 
+  # `uncaught_throw_to_s`: the message is a format, applied to the tag
+  # each time it is read (`rb_str_format(1, &tag, mesg)`) — `throw`
+  # raises this with "uncaught throw %p". With no message there is no
+  # format, which is a TypeError as it is in CRuby.
   def to_s
-    s = super
-    @__format ? format(s, @__tag) : s
+    Kernel.format(__mesg, @__tag)
   end
 end
 
@@ -193,6 +199,14 @@ class Exception
     end
     ([head] + rest).join("\n")
   end
+
+  # What the report of an uncaught exception prints for this one
+  # (`rb_error_write`): its #detailed_message, when that is a String.
+  def __report_message
+    m = detailed_message(highlight: false)
+    m if ::String === m
+  end
+  private :__report_message
 end
 
 class FloatDomainError < RangeError; end

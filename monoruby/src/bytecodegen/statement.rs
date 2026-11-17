@@ -588,9 +588,13 @@ impl<'a> BytecodeGen<'a> {
                     // StandardError and its subclasses are caught, so a
                     // non-StandardError (Exception, SignalException,
                     // SystemExit, …) propagates instead of being swallowed.
+                    // The class itself (`::StandardError`), not whatever
+                    // the name resolves to lexically: a body under
+                    // BasicObject has no `StandardError` in scope, and
+                    // CRuby compares against `rb_eStandardError`.
                     let std_err = Node::new_const(
                         "StandardError".to_string(),
-                        false,
+                        true,
                         None,
                         vec![],
                         Loc::default(),

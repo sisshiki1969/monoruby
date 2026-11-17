@@ -15,7 +15,11 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SET_CLASS, "<<", add, 1);
     globals.define_builtin_func(SET_CLASS, "add", add, 1);
     globals.define_builtin_func(SET_CLASS, "add?", add_q, 1);
-    globals.define_builtin_funcs(SET_CLASS, "===", &["include?", "member?"], teq, 1);
+    // `include?` is the method; `member?` and `===` are its aliases
+    // (`rb_define_alias(rb_cSet, "===", "include?")`), which is what
+    // `Method#original_name` and `#inspect` report — builtins/set.rb
+    // re-declares the alias groups of this table as true aliases.
+    globals.define_builtin_funcs(SET_CLASS, "include?", &["member?", "==="], teq, 1);
     globals.define_builtin_funcs(SET_CLASS, "size", &["length"], size, 0);
     globals.define_builtin_func(SET_CLASS, "empty?", empty_, 0);
     globals.define_builtin_func(SET_CLASS, "clear", clear, 0);

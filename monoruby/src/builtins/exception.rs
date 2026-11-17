@@ -161,6 +161,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(EXCEPTION_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "__raise_backtrace", raise_backtrace, 0);
+    globals.define_private_builtin_func(EXCEPTION_CLASS, "__mesg", mesg, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "set_backtrace", set_backtrace, 1);
     // Internal alias: `startup.rb` redefines `set_backtrace` with a Ruby
     // wrapper that also accepts `Thread::Backtrace::Location` arrays
@@ -543,59 +544,123 @@ fn message(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    if self_.is_exception().unwrap().name_span.is_some()
-        && !globals
-            .store
-            .to_s_is_builtin(SYMBOL_CLASS, Globals::class_version())
+    let ex = self_.is_exception().unwrap();
+    if ex.class_span.is_some()
+        || (ex.name_span.is_some()
+            && !globals
+                .store
+                .to_s_is_builtin(SYMBOL_CLASS, Globals::class_version()))
     {
-        return message_showing_name(vm, globals, self_);
+        return message_rendered(vm, globals, self_);
     }
     Ok(message_value(&globals.store, self_))
 }
 
 ///
-/// The message of a NameError / NoMethodError that shows the name it is
-/// about, once `Symbol#to_s` has been redefined.
+/// The message of a NameError / NoMethodError that shows the name and
+/// the class it is about, rendered as it is read.
 ///
 /// CRuby keeps such a message as a format and its arguments and renders
-/// it when it is read (`name_err_mesg_to_str`), the name through
-/// `rb_obj_as_string`: under `class Symbol; def to_s = "SYM"; end`,
-/// `nil.foo` reports `undefined method 'SYM' for nil`, that `to_s` runs
-/// again on every read of the message, and what it raises comes out of
-/// `Exception#message` (#1929, #1954). A name that is a String
-/// (`undef_method`'s) is its own rendering.
+/// it on every read (`name_err_mesg_to_str`):
 ///
-fn message_showing_name(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    exception: Value,
-) -> Result<Value> {
-    let name = globals.store.get_ivar(exception, IdentId::_NAME);
-    let Some(name) = name.filter(|name| name.try_symbol().is_some()) else {
+/// * the name through `rb_obj_as_string`: under `class Symbol; def to_s
+///   = "SYM"; end`, `nil.foo` reports `undefined method 'SYM' for nil`,
+///   that `to_s` runs again on every read of the message, and what it
+///   raises comes out of `Exception#message` (#1929, #1954). A name that
+///   is a String (`undef_method`'s) is its own rendering. Only a
+///   redefined `Symbol#to_s` is asked here; the builtin one answers
+///   what the message already holds.
+/// * a class or module by its `name` and, when that answers nil or
+///   raises, by its `inspect` — the class's own methods when the
+///   program defines them, and whatever it is called by the time the
+///   message is read (#2018). See [`nameerr_class_text`].
+///
+fn message_rendered(vm: &mut Executor, globals: &mut Globals, exception: Value) -> Result<Value> {
+    if exception.is_exception().unwrap().raw_message.is_some() {
         return Ok(message_value(&globals.store, exception));
-    };
-    let shown = vm.obj_as_string(globals, name)?;
+    }
+    // (start, length, replacement): CRuby renders the class first.
+    let mut parts: Vec<(usize, usize, Value)> = Vec::with_capacity(2);
+    if let Some((start, len)) = exception.is_exception().unwrap().class_span
+        && let Some(receiver) = globals
+            .store
+            .get_ivar(exception, IdentId::get_id("/receiver"))
+    {
+        let class = match receiver.is_class_or_module() {
+            Some(m) => m,
+            None => receiver.real_class(&globals.store),
+        };
+        let shown = nameerr_class_text(vm, globals, class);
+        parts.push((start as usize, len as usize, shown));
+    }
+    if let Some((start, len)) = exception.is_exception().unwrap().name_span
+        && !globals
+            .store
+            .to_s_is_builtin(SYMBOL_CLASS, Globals::class_version())
+        && let Some(name) = globals
+            .store
+            .get_ivar(exception, IdentId::_NAME)
+            .filter(|name| name.try_symbol().is_some())
+    {
+        let shown = vm.obj_as_string(globals, name)?;
+        parts.push((start as usize, len as usize, shown));
+    }
     let ex = exception.is_exception().unwrap();
-    let (Some((start, len)), None) = (ex.name_span, &ex.raw_message) else {
+    if parts.is_empty() || ex.raw_message.is_some() {
         return Ok(message_value(&globals.store, exception));
-    };
-    let (start, len) = (start as usize, len as usize);
+    }
+    parts.sort_by_key(|(start, _, _)| *start);
     let message = ex.message.as_bytes();
-    let shown = shown.as_rstring_inner();
-    let mut bytes = Vec::with_capacity(message.len() - len + shown.len());
-    bytes.extend_from_slice(&message[..start]);
-    bytes.extend_from_slice(shown.as_bytes());
-    bytes.extend_from_slice(&message[start + len..]);
-    // The format is ASCII and the rest of the message UTF-8: a name in
+    let mut bytes = Vec::with_capacity(message.len() + 16);
+    let mut pos = 0;
+    // The format is ASCII and the rest of the message UTF-8: a part in
     // another encoding brings its own, as `rb_str_format` has it.
-    let enc = if shown.as_bytes().is_ascii() || std::str::from_utf8(&bytes).is_ok() {
-        crate::value::Encoding::UTF8
-    } else {
-        shown.encoding()
+    let mut other_enc = None;
+    for (start, len, shown) in &parts {
+        // A message the exception was given since (`initialize` called
+        // again from one of the methods above) has no such span.
+        if *start < pos || start + len > message.len() {
+            return Ok(message_value(&globals.store, exception));
+        }
+        let shown = shown.as_rstring_inner();
+        bytes.extend_from_slice(&message[pos..*start]);
+        bytes.extend_from_slice(shown.as_bytes());
+        pos = start + len;
+        if !shown.as_bytes().is_ascii() && other_enc.is_none() {
+            other_enc = Some(shown.encoding());
+        }
+    }
+    bytes.extend_from_slice(&message[pos..]);
+    let enc = match other_enc {
+        Some(enc) if std::str::from_utf8(&bytes).is_err() => enc,
+        _ => crate::value::Encoding::UTF8,
     };
     Ok(Value::string_from_inner(RStringInner::from_encoding(
         &bytes, enc,
     )))
+}
+
+///
+/// How a NameError / NoMethodError message shows a class or module
+/// (`name_err_mesg_to_str`): by its Ruby-level `name`; by its `inspect`
+/// when that answers nil or raises (`rb_inspect`, so what `inspect`
+/// answers is converted with `to_s`); and by the default `#<Class:0x…>`
+/// form when the result is not a String. An exception from either
+/// method is dropped, as `rb_protect` drops it there.
+///
+fn nameerr_class_text(vm: &mut Executor, globals: &mut Globals, class: Module) -> Value {
+    let c = class.as_val();
+    let shown = match vm.invoke_method_inner(globals, IdentId::get_id("name"), c, &[], None, None) {
+        Ok(name) if !name.is_nil() => Some(name),
+        _ => vm
+            .invoke_method_inner(globals, IdentId::INSPECT, c, &[], None, None)
+            .and_then(|v| vm.obj_as_string(globals, v))
+            .ok(),
+    };
+    match shown.filter(|v| v.is_rstring_inner().is_some()) {
+        Some(s) => s,
+        None => Value::string(globals.store.get_class_name(class.id())),
+    }
 }
 
 ///
@@ -649,6 +714,22 @@ fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         .store
         .set_ivar(self_, IdentId::get_id("/backtrace"), array)?;
     Ok(array)
+}
+
+///
+/// ### Exception#__mesg (monoruby intrinsic)
+///
+/// CRuby's `mesg` field as it is: the message the exception was given,
+/// or nil when it was given none (where `#to_s` answers the class
+/// name). `UncaughtThrowError#to_s` formats the tag with it.
+///
+#[monoruby_builtin]
+fn mesg(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_ = lfp.self_val();
+    if self_.is_exception().unwrap().default_message_class.is_some() {
+        return Ok(Value::nil());
+    }
+    Ok(message_value(&globals.store, self_))
 }
 
 ///

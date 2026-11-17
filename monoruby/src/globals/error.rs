@@ -44,6 +44,13 @@ pub(crate) const ENC_ERR_IVARS: [&str; 5] = [
 
 use super::*;
 
+/// The report text [`MonorubyErr::render_report_messages`] left on
+/// *obj*, if it rendered one.
+fn report_message(store: &Store, obj: Value) -> Option<String> {
+    let msg = store.get_ivar(obj, IdentId::get_id("/__report"))?;
+    Some(msg.is_rstring()?.to_str().ok()?.to_string())
+}
+
 /// The string backtrace stored on an exception object (`/backtrace`
 /// ivar: installed by `#set_backtrace` / the third `raise` argument, or
 /// memoized by `Exception#backtrace`). `None` when absent, cleared, or
@@ -156,6 +163,20 @@ pub struct MonorubyErr {
     /// `None` for a message the name is not part of — every message a
     /// program gave itself (`NameError.new(msg, name)`).
     pub(crate) name_span: Option<(u32, u32)>,
+    /// Where a NameError / NoMethodError message shows the class or
+    /// module it is about, as `(start, length)` in bytes of `message`.
+    ///
+    /// The other half of the format CRuby renders on every read
+    /// (`name_err_mesg_to_str`): a class is shown by calling its `name`
+    /// and, when that answers nil, its `inspect` — the program's own
+    /// methods when it defines them, and whatever the class is called
+    /// by then (#2018). The message here is built with the name the
+    /// class table has, and `Exception#to_s` swaps this span for what
+    /// the class answers. The class is the error's receiver when that
+    /// is a class or module, and the receiver's class otherwise (`an
+    /// instance of C`). `None` when the message shows no class that
+    /// way.
+    pub(crate) class_span: Option<(u32, u32)>,
 }
 
 impl MonorubyErr {
@@ -180,6 +201,7 @@ impl MonorubyErr {
             raw_message: None,
             default_message_class: None,
             name_span: None,
+            class_span: None,
         }
     }
 
@@ -221,6 +243,20 @@ impl MonorubyErr {
         self.default_message_class = None;
         self.raw_message = None;
         self.name_span = Some((start as u32, len as u32));
+        self.class_span = None;
+    }
+
+    ///
+    /// Record that the message shows the class or module it is about in
+    /// the `len` bytes that end `tail` bytes before its end (see
+    /// [`MonorubyErr::class_span`]). `len == 0` records nothing.
+    ///
+    pub(crate) fn showing_class(mut self, len: usize, tail: usize) -> Self {
+        if len != 0 {
+            let start = self.message.len() - tail - len;
+            self.class_span = Some((start as u32, len as u32));
+        }
+        self
     }
 
     ///
@@ -258,6 +294,7 @@ impl MonorubyErr {
             raw_message: ex.raw_message.clone(),
             default_message_class: ex.default_message_class,
             name_span: ex.name_span,
+            class_span: ex.class_span,
         }
     }
 
@@ -286,6 +323,7 @@ impl MonorubyErr {
             payload: None,
             default_message_class: None,
             name_span: None,
+            class_span: None,
         }
     }
 
@@ -371,6 +409,7 @@ impl MonorubyErr {
         self.message = msg;
         self.default_message_class = None;
         self.name_span = None;
+        self.class_span = None;
     }
 
     pub fn trace(&self) -> &[TraceEntry] {
@@ -471,6 +510,43 @@ impl MonorubyErr {
         std::mem::take(&mut self.trace)
     }
 
+    ///
+    /// Render the report text of the uncaught exception *obj* and of its
+    /// `#cause` chain while Ruby can still run: CRuby's report prints
+    /// `#detailed_message` (so a class's own `message` / `to_s` /
+    /// `detailed_message` shows), which the printing code — it has only
+    /// the store — reads back through [`report_message`]. An exception
+    /// whose `detailed_message` raises or answers a non-String keeps the
+    /// built-in rendering.
+    ///
+    pub(crate) fn render_report_messages(vm: &mut Executor, globals: &mut Globals, obj: Value) {
+        let cause_id = IdentId::get_id("/cause");
+        let mut seen = vec![];
+        let mut cur = obj;
+        while cur.is_exception().is_some() && !seen.contains(&cur.id()) {
+            seen.push(cur.id());
+            match vm.invoke_method_inner(
+                globals,
+                IdentId::get_id("__report_message"),
+                cur,
+                &[],
+                None,
+                None,
+            ) {
+                Ok(msg) if msg.is_rstring().is_some() => {
+                    let _ = globals
+                        .store
+                        .set_ivar(cur, IdentId::get_id("/__report"), msg);
+                }
+                _ => {}
+            }
+            match globals.store.get_ivar(cur, cause_id) {
+                Some(cause) => cur = cause,
+                None => break,
+            }
+        }
+    }
+
     pub fn show_error_message_and_all_loc(&self, store: &Store) {
         // A string backtrace installed via `raise ..., bt` /
         // `#set_backtrace` replaces the runtime capture in CRuby's
@@ -506,7 +582,9 @@ impl MonorubyErr {
             let Some(inner) = cause.is_exception() else {
                 break;
             };
-            let msg = format!("{} ({})", inner.message(), cause.get_real_class_name(store));
+            let msg = report_message(store, cause).unwrap_or_else(|| {
+                format!("{} ({})", inner.message(), cause.get_real_class_name(store))
+            });
             if let Some(bt) = backtrace_strings(store, cause) {
                 show_string_backtrace(&bt, &msg);
             } else {
@@ -551,6 +629,13 @@ impl MonorubyErr {
     }
 
     pub fn get_error_message(&self, store: &Store) -> String {
+        // The top-level report prints what `#detailed_message` answered
+        // (`rb_error_write`), rendered while the executor was alive.
+        if let Some(obj) = self.original
+            && let Some(report) = report_message(store, obj)
+        {
+            return report;
+        }
         format!("{} ({})", self.message, self.class_name(store))
     }
 
@@ -840,25 +925,32 @@ impl MonorubyErr {
     /// (anonymous ones fall back to their `#<Class:0x…>` display), and
     /// `an instance of Foo` for everything else.
     ///
-    fn receiver_description(store: &Store, obj: Value) -> String {
+    /// The second value is the length of the class name the description
+    /// ends with (`Foo` above), `0` when it names no class: that part is
+    /// asked of the class itself when the message is read
+    /// ([`MonorubyErr::class_span`]).
+    ///
+    fn receiver_description(store: &Store, obj: Value) -> (String, usize) {
         if obj.is_nil() {
-            "nil".to_string()
+            ("nil".to_string(), 0)
         } else if obj == Value::bool(true) {
-            "true".to_string()
+            ("true".to_string(), 0)
         } else if obj == Value::bool(false) {
-            "false".to_string()
+            ("false".to_string(), 0)
         } else if let Some(m) = obj.is_class_or_module() {
             let kind = if m.is_module() { "module" } else { "class" };
             // `get_class_name` resolves names assigned via constant
             // assignment (`MyClass = Class.new`) too, unlike the raw
             // `to_s`, and falls back to `#<Class:0x…>` when anonymous.
-            format!("{kind} {}", store.nameerr_class_name(m.id()))
+            let name = store.nameerr_class_name(m.id());
+            (format!("{kind} {name}"), name.len())
         } else if store[obj.class()].get_module().is_singleton().is_some() {
             // A receiver with a singleton class keeps the address form
             // (`for #<Object:0x…>`) in CRuby, not `an instance of …`.
-            Self::singleton_receiver_description(store, obj)
+            (Self::singleton_receiver_description(store, obj), 0)
         } else {
-            format!("an instance of {}", obj.get_real_class_name(store))
+            let name = obj.get_real_class_name(store);
+            (format!("an instance of {name}"), name.len())
         }
     }
 
@@ -879,27 +971,21 @@ impl MonorubyErr {
     }
 
     fn not_method(store: &Store, before: &str, name: IdentId, obj: Value) -> MonorubyErr {
-        Self::with_shown_name(
-            MonorubyErrKind::NotMethod {
-                name: Some(name),
-                receiver: Some(obj),
-            },
-            format_args!("{before}"),
-            name,
-            format_args!("' for {}", Self::receiver_description(store, obj)),
-        )
+        Self::no_method_error(store, before, name, obj, "' for ")
     }
 
     /// A NoMethodError about calling *name* on *obj*, whose message is
-    /// *before*, the name, *after* — for a caller that has described
-    /// the receiver itself (`Kernel#method_missing`, which can ask the
-    /// receiver's class for its `#name`).
+    /// *before*, the name, *mid* and the receiver's description
+    /// (`an instance of Foo`), the class in it asked for its name when
+    /// the message is read.
     pub(crate) fn no_method_error(
+        store: &Store,
         before: &str,
         name: IdentId,
         obj: Value,
-        after: std::fmt::Arguments,
+        mid: &str,
     ) -> MonorubyErr {
+        let (desc, class_len) = Self::receiver_description(store, obj);
         Self::with_shown_name(
             MonorubyErrKind::NotMethod {
                 name: Some(name),
@@ -907,8 +993,27 @@ impl MonorubyErr {
             },
             format_args!("{before}"),
             name,
-            after,
+            format_args!("{mid}{desc}"),
         )
+        .showing_class(class_len, 0)
+    }
+
+    /// The NameError of a failed variable call — a bare identifier that
+    /// is neither a local variable nor a method: `undefined local
+    /// variable or method 'x' for <receiver>`.
+    pub(crate) fn undefined_local_or_method(
+        store: &Store,
+        name: IdentId,
+        obj: Value,
+    ) -> MonorubyErr {
+        let (desc, class_len) = Self::receiver_description(store, obj);
+        Self::nameerr_showing(
+            format_args!("undefined local variable or method '"),
+            name,
+            format_args!("' for {desc}"),
+            Some(obj),
+        )
+        .showing_class(class_len, 0)
     }
 
     pub(crate) fn method_not_found(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
@@ -973,6 +1078,7 @@ impl MonorubyErr {
             format_args!("' for {kind} '{class_name}'{after}"),
             Some(module.as_val()),
         )
+        .showing_class(class_name.len(), 1 + after.len())
     }
 
     /// CRuby's `rb_method_name_error` as `rb_undef` calls it
@@ -996,14 +1102,13 @@ impl MonorubyErr {
             None if module.as_val().ty() == Some(ObjTy::MODULE) => ("module", module),
             None => ("class", module),
         };
+        let class_name = store.nameerr_class_name(shown.id());
         let mut err = Self::nameerr_with_name_receiver(
-            format!(
-                "undefined method '{name}' for {kind} '{}'",
-                store.nameerr_class_name(shown.id())
-            ),
+            format!("undefined method '{name}' for {kind} '{class_name}'"),
             name,
             shown.as_val(),
-        );
+        )
+        .showing_class(class_name.len(), 1);
         err.payload = Some((
             Value::string_from_inner(crate::builtins::symbol::symbol_string_inner(name)),
             NAME_PAYLOAD,
@@ -1018,12 +1123,14 @@ impl MonorubyErr {
         name: IdentId,
         class: ClassId,
     ) -> MonorubyErr {
+        let class_name = store.nameerr_class_name(class);
         Self::nameerr_showing(
             format_args!("method '"),
             name,
-            format_args!("' not defined in {}", store.nameerr_class_name(class)),
+            format_args!("' not defined in {class_name}"),
             Some(store[class].get_module().as_val()),
         )
+        .showing_class(class_name.len(), 0)
     }
 
     /// `Module#remove_const` of a constant the module does not define
@@ -1033,24 +1140,19 @@ impl MonorubyErr {
         name: IdentId,
         class: ClassId,
     ) -> MonorubyErr {
-        Self::nameerr_showing(
-            format_args!("constant {}::", store.get_class_name(class)),
+        let class_name = store.get_class_name(class);
+        let mut err = Self::nameerr_showing(
+            format_args!("constant {class_name}::"),
             name,
             format_args!(" not defined"),
             Some(store[class].get_module().as_val()),
-        )
+        );
+        err.class_span = Some(("constant ".len() as u32, class_name.len() as u32));
+        err
     }
 
     fn not_method_called(store: &Store, before: &str, name: IdentId, obj: Value) -> MonorubyErr {
-        Self::with_shown_name(
-            MonorubyErrKind::NotMethod {
-                name: Some(name),
-                receiver: Some(obj),
-            },
-            format_args!("{before}"),
-            name,
-            format_args!("' called for {}", Self::receiver_description(store, obj)),
-        )
+        Self::no_method_error(store, before, name, obj, "' called for ")
     }
 
     pub(crate) fn private_method_called(store: &Store, name: IdentId, obj: Value) -> MonorubyErr {
@@ -1186,6 +1288,11 @@ impl MonorubyErr {
         if !same {
             self.name_span = None;
         }
+        // The class the message shows is the old receiver (or its
+        // class): under another receiver the text stays as it is.
+        if receiver.is_some() && receiver != old_receiver {
+            self.class_span = None;
+        }
         self.kind = MonorubyErrKind::Name(Some(name), receiver.or(old_receiver));
         self
     }
@@ -1222,6 +1329,7 @@ impl MonorubyErr {
             format_args!(" in {class_name}"),
             Some(receiver),
         )
+        .showing_class(class_name.len(), 0)
     }
 
     pub(crate) fn typeerr(msg: impl ToString) -> MonorubyErr {

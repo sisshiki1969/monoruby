@@ -224,6 +224,11 @@ pub(crate) enum MethodMissingStyle {
     VCall,
     /// A `super` call that found no superclass method.
     Super,
+    /// A function call — no receiver, or `self` written as one
+    /// (`foo()`, `self.foo`, `send(:foo)`): the call could have reached
+    /// a private method, which is what `NoMethodError#private_call?`
+    /// reports (CRuby's `MISSING_FCALL`).
+    FCall,
 }
 
 /// Where a definition hook (`method_added`, `const_added`, ...) was
@@ -4056,11 +4061,38 @@ impl Executor {
         bh: Option<BlockHandler>,
         kw_args: Option<Hashmap>,
     ) -> Option<Value> {
+        self.invoke_method_styled(
+            globals,
+            method,
+            is_func_call,
+            receiver,
+            args,
+            bh,
+            kw_args,
+            MethodMissingStyle::Plain,
+        )
+    }
+
+    ///
+    /// [`Self::invoke_method`], with the way the call was written for
+    /// the `method_missing` a failed lookup falls back to (`missing`).
+    ///
+    fn invoke_method_styled(
+        &mut self,
+        globals: &mut Globals,
+        method: IdentId,
+        is_func_call: bool,
+        receiver: Value,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+        kw_args: Option<Hashmap>,
+        missing: MethodMissingStyle,
+    ) -> Option<Value> {
         let func_id = match self.find_method(globals, receiver, method, is_func_call) {
             Ok(id) => id,
             Err(original_err) => {
                 // Fall back to method_missing, matching CRuby behavior.
-                self.method_missing_style = MethodMissingStyle::Plain;
+                self.method_missing_style = missing;
                 match self.find_method(globals, receiver, IdentId::METHOD_MISSING, true) {
                     Ok(mm_func_id) => {
                         // On the stack for the usual few arguments: this is
@@ -4162,7 +4194,35 @@ impl Executor {
         kw_args: Option<Hashmap>,
         original_err: MonorubyErr,
     ) -> Result<Value> {
-        self.method_missing_style = MethodMissingStyle::Plain;
+        self.invoke_method_missing_styled(
+            globals,
+            receiver,
+            method,
+            args,
+            bh,
+            kw_args,
+            original_err,
+            MethodMissingStyle::Plain,
+        )
+    }
+
+    ///
+    /// [`Self::invoke_method_missing_for`], with the way the failed call
+    /// was written: `Kernel#send` is a function call whatever its own
+    /// receiver was (`rb_f_send` dispatches with `CALL_FCALL`).
+    ///
+    pub(crate) fn invoke_method_missing_styled(
+        &mut self,
+        globals: &mut Globals,
+        receiver: Value,
+        method: IdentId,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+        kw_args: Option<Hashmap>,
+        original_err: MonorubyErr,
+        style: MethodMissingStyle,
+    ) -> Result<Value> {
+        self.method_missing_style = style;
         match self.find_method(globals, receiver, IdentId::METHOD_MISSING, true) {
             Ok(mm_func_id) => {
                 // On the stack for the usual few arguments: this is
@@ -4219,9 +4279,12 @@ impl Executor {
             MethodMissingStyle::Super
         } else if cs.vcall {
             MethodMissingStyle::VCall
+        } else if cs.is_func_call() {
+            MethodMissingStyle::FCall
         } else {
             MethodMissingStyle::Plain
         };
+        let style = self.method_missing_style;
         let cs_name = cs.name;
         let bh = cs.block_handler(lfp);
 
@@ -4250,6 +4313,9 @@ impl Executor {
         // pre-adjustment, block_arg in the method_missing body would try to
         // walk too many frames and panic.
         let bh = bh.map(|bh| bh.undelegate());
+        // Building the arguments may have run Ruby code (a splat's
+        // `to_a`), and a failed call in there leaves its own style.
+        self.method_missing_style = style;
         let res = self.invoke_method(
             globals,
             IdentId::METHOD_MISSING,
@@ -5008,7 +5074,7 @@ impl Executor {
         res
     }
 
-    /// [`Self::invoke_method`] under [`Self::at_site`].
+    /// [`Self::invoke_method_op`] under [`Self::at_site`].
     pub(crate) fn invoke_method_at_site(
         &mut self,
         globals: &mut Globals,
@@ -5017,9 +5083,39 @@ impl Executor {
         receiver: Value,
         args: &[Value],
     ) -> Option<Value> {
-        self.at_site(|vm| {
-            vm.invoke_method(globals, method, is_func_call, receiver, args, None, None)
-        })
+        self.at_site(|vm| vm.invoke_method_op(globals, method, is_func_call, receiver, args))
+    }
+
+    ///
+    /// [`Self::invoke_method`] for an operator written at a call site,
+    /// `is_func_call` saying whether its receiver is `self`: such a call
+    /// (`self + 1`, `-self`, `self[i]`) is a function call as any call
+    /// on `self` is, and a `NoMethodError` it ends in says so
+    /// (`private_call?`).
+    ///
+    pub(crate) fn invoke_method_op(
+        &mut self,
+        globals: &mut Globals,
+        method: IdentId,
+        is_func_call: bool,
+        receiver: Value,
+        args: &[Value],
+    ) -> Option<Value> {
+        let missing = if is_func_call {
+            MethodMissingStyle::FCall
+        } else {
+            MethodMissingStyle::Plain
+        };
+        self.invoke_method_styled(
+            globals,
+            method,
+            is_func_call,
+            receiver,
+            args,
+            None,
+            None,
+            missing,
+        )
     }
 
     pub(crate) fn invoke_func_inner(

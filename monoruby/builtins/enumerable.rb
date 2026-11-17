@@ -689,6 +689,11 @@ module Enumerable
   end
 
   def to_a(*args)
+    # An ArithmeticSequence has no `to_a` of its own (CRuby's is this
+    # one), but an Integer sequence has a closed form.
+    if ::Enumerator::ArithmeticSequence === self && args.empty? && (res = __integer_terms)
+      return res
+    end
     res = []
     self.each(*args) do |*ys|
       res << (ys.empty? ? nil : ys.size == 1 ? ys[0] : ys)

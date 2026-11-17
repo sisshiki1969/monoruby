@@ -3046,6 +3046,15 @@ impl Store {
         if name == IdentId::_EQ && self.basic_ops.contains(class_id, IdentId::_NEQ) {
             self.set_bop_redefine(class_id, IdentId::_NEQ);
         }
+        // `nil`, `true` and `false` answer `===` with `rb_equal`
+        // (`case_equal`): identity, then the receiver's `==`. Their
+        // `===` fast path stands on that `==` in the same way.
+        if name == IdentId::_EQ
+            && matches!(class_id, NIL_CLASS | TRUE_CLASS | FALSE_CLASS)
+            && self.basic_ops.contains(class_id, IdentId::_TEQ)
+        {
+            self.set_bop_redefine(class_id, IdentId::_TEQ);
+        }
     }
 
     ///

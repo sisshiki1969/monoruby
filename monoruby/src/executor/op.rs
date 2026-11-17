@@ -1159,6 +1159,11 @@ pub(crate) fn cmp_teq_values_bool(
     lhs: Value,
     rhs: Value,
 ) -> Result<bool> {
+    if vm.dispatch_redefined_op(globals, lhs.class(), IdentId::_TEQ) {
+        return vm
+            .invoke_method_inner(globals, IdentId::_TEQ, lhs, &[rhs], None, None)
+            .map(|v| v.as_bool());
+    }
     // See `cmp_values`: Integers that fit an `i128` compare there.
     if let (Some(l), Some(r)) = (lhs.as_i128(), rhs.as_i128()) {
         return Ok(l == r);
@@ -1613,7 +1618,7 @@ pub(crate) extern "C" fn neg_value(
     is_func_call: bool,
 ) -> Option<Value> {
     if vm.dispatch_redefined_op(globals, lhs.class(), IdentId::_UMINUS) {
-        return vm.invoke_method(globals, IdentId::_UMINUS, is_func_call, lhs, &[], None, None);
+        return vm.invoke_method_op(globals, IdentId::_UMINUS, is_func_call, lhs, &[]);
     }
     neg_value_raw(vm, globals, lhs, is_func_call)
 }
@@ -1650,11 +1655,11 @@ pub(crate) extern "C" fn neg_value_raw(
             } else {
                 // Custom Numeric components: dispatch `-@` to each part via
                 // `Complex#-@` (`neg_op`, not `neg_value`), so no recursion.
-                return vm.invoke_method(globals, IdentId::_UMINUS, is_func_call, lhs, &[], None, None);
+                return vm.invoke_method_op(globals, IdentId::_UMINUS, is_func_call, lhs, &[]);
             }
         }
         _ => {
-            return vm.invoke_method(globals, IdentId::_UMINUS, is_func_call, lhs, &[], None, None);
+            return vm.invoke_method_op(globals, IdentId::_UMINUS, is_func_call, lhs, &[]);
         }
     };
     Some(v)
@@ -1669,7 +1674,7 @@ pub(crate) extern "C" fn pos_value(
     is_func_call: bool,
 ) -> Option<Value> {
     if vm.dispatch_redefined_op(globals, lhs.class(), IdentId::_UPLUS) {
-        return vm.invoke_method(globals, IdentId::_UPLUS, is_func_call, lhs, &[], None, None);
+        return vm.invoke_method_op(globals, IdentId::_UPLUS, is_func_call, lhs, &[]);
     }
     pos_value_raw(vm, globals, lhs, is_func_call)
 }
@@ -1686,7 +1691,7 @@ pub(crate) extern "C" fn pos_value_raw(
         RV::BigInt(lhs) => Value::bigint(lhs.clone()),
         RV::Float(lhs) => Value::float(lhs),
         _ => {
-            return vm.invoke_method(globals, IdentId::_UPLUS, is_func_call, lhs, &[], None, None);
+            return vm.invoke_method_op(globals, IdentId::_UPLUS, is_func_call, lhs, &[]);
         }
     };
     Some(v)
@@ -1701,7 +1706,7 @@ pub(crate) extern "C" fn not_value(
     is_func_call: bool,
 ) -> Option<Value> {
     if vm.dispatch_redefined_op(globals, lhs.class(), IdentId::_NOT) {
-        return vm.invoke_method(globals, IdentId::_NOT, is_func_call, lhs, &[], None, None);
+        return vm.invoke_method_op(globals, IdentId::_NOT, is_func_call, lhs, &[]);
     }
     not_value_raw(vm, globals, lhs, is_func_call)
 }
@@ -1723,7 +1728,7 @@ pub(crate) extern "C" fn not_value_raw(
         | RV::Bool(true) => Value::bool(false),
         RV::Bool(false) | RV::Nil => Value::bool(true),
         _ => {
-            return vm.invoke_method(globals, IdentId::_NOT, is_func_call, lhs, &[], None, None);
+            return vm.invoke_method_op(globals, IdentId::_NOT, is_func_call, lhs, &[]);
         }
     };
     Some(v)
@@ -1738,7 +1743,7 @@ pub(crate) extern "C" fn bitnot_value(
     is_func_call: bool,
 ) -> Option<Value> {
     if vm.dispatch_redefined_op(globals, lhs.class(), IdentId::_BNOT) {
-        return vm.invoke_method(globals, IdentId::_BNOT, is_func_call, lhs, &[], None, None);
+        return vm.invoke_method_op(globals, IdentId::_BNOT, is_func_call, lhs, &[]);
     }
     bitnot_value_raw(vm, globals, lhs, is_func_call)
 }
@@ -1755,7 +1760,7 @@ pub(crate) extern "C" fn bitnot_value_raw(
         _ if let Some(l) = lhs.as_i128() => Value::from_i128(!l),
         RV::BigInt(lhs) => Value::bigint(!lhs),
         _ => {
-            return vm.invoke_method(globals, IdentId::_BNOT, is_func_call, lhs, &[], None, None);
+            return vm.invoke_method_op(globals, IdentId::_BNOT, is_func_call, lhs, &[]);
         }
     };
     Some(v)

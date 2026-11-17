@@ -47,4 +47,19 @@ class Set
   alias > proper_superset?
   alias << add
   alias eql? ==
+  # The rest of what `Init_Set` defines with `rb_define_alias`, so that
+  # `Method#original_name` and `#inspect` name the original
+  # (`#<UnboundMethod: Set#===(include?)(_)>`, #2017).
+  alias === include?
+  alias member? include?
+  alias + |
+  alias union |
+  alias <= subset?
+  alias >= superset?
+  alias difference -
+  alias intersection &
+  alias filter! select!
+  alias map! collect!
+  alias length size
+  alias to_s inspect
 end
