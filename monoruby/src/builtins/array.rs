@@ -2710,38 +2710,141 @@ fn minmax_n(vm: &mut Executor, globals: &mut Globals, n: Value) -> Result<usize>
 
 ///
 /// The `min(n)` / `max(n)` forms: the `n` smallest (ascending) or largest
-/// (descending) elements.
+/// (descending) elements, by CRuby's `rb_nmin_run` (enum.c), so the
+/// comparator is called with the same pairs in the same order (#2014).
 ///
-/// Sorting the whole receiver is more work than CRuby's partial selection,
-/// but it reuses the one sort — including its homogeneous fast path and its
-/// GC-rooted merge buffer — and these forms are called for a *ranking*, on
-/// arrays small enough that the sort is not the cost. The receiver itself is
-/// never touched: the sort runs on a fresh copy.
+/// The elements are gathered into a buffer of `4 * n`; whenever it fills
+/// it is cut down to the `n` best by a quickselect (`nmin_filter`), and
+/// the worst of those becomes a limit that later elements are compared
+/// against before they are let in. At the end the buffer is filtered once
+/// more, sorted (in `ruby_qsort`'s order, `merge_sort`), and reversed for
+/// `max`.
 ///
 fn min_max_n(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     n: Value,
-    take_max: bool,
+    rev: bool,
 ) -> Result<Value> {
     let n = minmax_n(vm, globals, n)?;
-    // The copy is freshly allocated and not yet reachable from any GC root,
-    // and the comparator block can collect — root it for the sort, exactly
-    // as `Array#sort` does with its own copy.
-    let copy = Array::new_from_vec(lfp.self_val().as_array().to_vec());
-    let sorted = vm.with_temp_scope(|vm| {
-        vm.temp_push(copy.into());
-        sort_inner(vm, globals, lfp, copy)
-    })?;
-    let sorted = sorted.as_array();
-    let n = n.min(sorted.len());
-    let res: Vec<Value> = if take_max {
-        sorted[sorted.len() - n..].iter().rev().copied().collect()
-    } else {
-        sorted[..n].to_vec()
+    if n == 0 {
+        return Ok(Value::array_empty());
+    }
+    let block = match lfp.block() {
+        Some(bh) => Some(vm.get_block_data(globals, bh)?),
+        None => None,
     };
-    Ok(Value::array_from_vec(res))
+    let recv = lfp.self_val().as_array();
+    // The buffer can hold the only reference to an element once the
+    // comparator has taken it out of the receiver, so it is an Array on
+    // the temp stack.
+    let mut buf = Array::new_empty();
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(buf.into());
+        let mut cmp = |vm: &mut Executor, globals: &mut Globals, a: Value, b: Value| match &block {
+            Some(data) => {
+                let res = vm.invoke_block(globals, data, &[a, b])?;
+                vm.cmpint(globals, res, a, b)
+            }
+            None => vm.compare_values(globals, a, b),
+        };
+        let bufmax = n.saturating_mul(4);
+        let mut limit: Option<Value> = None;
+        let mut i = 0;
+        // The length is read again on every round: the comparator is Ruby
+        // code and may change the receiver.
+        while i < recv.len() {
+            let v = recv[i];
+            i += 1;
+            if let Some(limit) = limit {
+                let mut c = cmp(vm, globals, v, limit)?;
+                if rev {
+                    c = c.reverse();
+                }
+                if c != std::cmp::Ordering::Less {
+                    continue;
+                }
+            }
+            buf.push(v);
+            if buf.len() == bufmax {
+                limit = nmin_filter(vm, globals, &mut buf, n, rev, &mut cmp)?;
+            }
+        }
+        nmin_filter(vm, globals, &mut buf, n, rev, &mut cmp)?;
+        executor::op::sort_by(&mut buf, |a, b| cmp(vm, globals, a, b))?;
+        let mut res: Vec<Value> = buf.to_vec();
+        if rev {
+            res.reverse();
+        }
+        Ok(Value::array_from_vec(res))
+    })
+}
+
+///
+/// CRuby's `nmin_filter`: when `buf` holds more than `n` elements,
+/// partition it (a quickselect, with the elements equal to each pivot
+/// gathered at its side) until the `n` best are in front, cut it to them
+/// and answer the last pivot, the limit later elements must beat.
+///
+fn nmin_filter(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    buf: &mut Array,
+    n: usize,
+    rev: bool,
+    cmp: &mut impl FnMut(&mut Executor, &mut Globals, Value, Value) -> Result<std::cmp::Ordering>,
+) -> Result<Option<Value>> {
+    if buf.len() <= n {
+        return Ok(None);
+    }
+    let n = n as isize;
+    let mut left: isize = 0;
+    let mut right: isize = buf.len() as isize - 1;
+    let store_index = loop {
+        let pivot_index = left + (right - left) / 2;
+        let mut num_pivots: isize = 1;
+        buf.swap(pivot_index as usize, right as usize);
+        let pivot_index = right;
+        let mut store_index = left;
+        let mut i = left;
+        while i <= right - num_pivots {
+            let mut c = cmp(vm, globals, buf[i as usize], buf[pivot_index as usize])?;
+            if rev {
+                c = c.reverse();
+            }
+            if c == std::cmp::Ordering::Equal {
+                buf.swap(i as usize, (right - num_pivots) as usize);
+                num_pivots += 1;
+                continue;
+            }
+            if c == std::cmp::Ordering::Less {
+                buf.swap(i as usize, store_index as usize);
+                store_index += 1;
+            }
+            i += 1;
+        }
+        let mut j = store_index;
+        let mut i = right;
+        while right - num_pivots < i {
+            if j <= i {
+                buf.swap(j as usize, i as usize);
+                j += 1;
+            }
+            i -= 1;
+        }
+        if store_index <= n && n <= store_index + num_pivots {
+            break store_index;
+        }
+        if n < store_index {
+            right = store_index - 1;
+        } else {
+            left = store_index + num_pivots;
+        }
+    };
+    let limit = buf[store_index as usize];
+    buf.truncate(n as usize);
+    Ok(Some(limit))
 }
 
 ///
@@ -3068,43 +3171,16 @@ fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
     ))
 }
 
-pub(super) fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, ary: Array) -> Result<Value> {
-    // The merge buffer must be scanned by the GC: while a merge is in
-    // flight it holds the only reference to one run's elements (their
-    // slots in `ary` have already been overwritten with merge output),
-    // and the comparator below runs Ruby, so a GC can happen right in
-    // that window. Back it with a `nil`-filled Array on the temp stack —
-    // every slot is then always a valid, markable Value, and the storage
-    // address is stable (the collector does not move objects).
-    let scratch_len = executor::op::merge_scratch_len(ary.len());
-    vm.with_temp_scope(|vm| {
-        let buf = if scratch_len == 0 {
-            std::ptr::null_mut()
-        } else {
-            let mut scratch = Array::new_from_vec(vec![Value::nil(); scratch_len]);
-            vm.temp_push(scratch.into());
-            scratch.as_mut_ptr()
-        };
-        sort_with_buf(vm, globals, lfp, ary, buf)
-    })
-}
-
-fn sort_with_buf(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    mut ary: Array,
-    buf: *mut Value,
-) -> Result<Value> {
+pub(super) fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
         let f = |lhs: Value, rhs: Value| -> Result<std::cmp::Ordering> {
             let block_res = vm.invoke_block(globals, &data, &[lhs, rhs])?;
             vm.cmpint(globals, block_res, lhs, rhs)
         };
-        executor::op::sort_by(&mut ary, buf, f)?;
+        executor::op::sort_by(&mut ary, f)?;
     } else {
-        vm.sort(globals, &mut ary, buf)?;
+        vm.sort(globals, &mut ary)?;
     }
     Ok(ary.into())
 }
@@ -3119,11 +3195,6 @@ fn sort_with_buf(
 #[monoruby_builtin]
 fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
-    // NOTE: the receiver being rooted through `lfp` is NOT enough to keep
-    // the merge buffer's contents alive — `merge` overwrites the
-    // receiver's slots before the corresponding buffer entries are
-    // consumed, so during that window the buffer is their only reference.
-    // `sort_inner` therefore roots the buffer itself.
     let ary = lfp.self_val().as_array();
     sort_inner(vm, globals, lfp, ary)
 }
@@ -3139,7 +3210,7 @@ fn sort_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // `ary` is a freshly-allocated Array that is not yet referenced from
     // any GC root. Push it onto the temp_stack inside a scope so that the
-    // RValue (and transitively its merge-buffer copies) survives any GC
+    // RValue (and so every element being sorted) survives any GC
     // triggered from the comparator block, and is automatically dropped
     // when this builtin returns or unwinds.
     let ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
@@ -3205,16 +3276,14 @@ fn sort_by_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
 /// each pair compared as `keys[left] <=> keys[right]` — CRuby's
 /// `sort_by_cmp`, which is why `[1, nil].sort_by { _1 }` reports
 /// "comparison of Integer with nil failed". The keys are rooted by the
-/// caller; the indices need no rooting, so the merge buffer is a plain
-/// `Vec`.
+/// caller.
 fn sort_indices_by_keys(
     vm: &mut Executor,
     globals: &mut Globals,
     keys: &[Value],
     indices: &mut [usize],
 ) -> Result<()> {
-    let mut buf = vec![0usize; executor::op::merge_scratch_len(indices.len())];
-    executor::op::sort_by(indices, buf.as_mut_ptr(), |a, b| {
+    executor::op::sort_by(indices, |a, b| {
         Executor::compare_values(vm, globals, keys[a], keys[b])
     })
 }
@@ -5266,10 +5335,12 @@ mod tests {
 
     #[test]
     fn sort_bang_rooted_merge_buffer() {
-        // `sort!`'s merge buffer holds the only reference to one run's
-        // elements while `merge` overwrites their slots in the receiver,
-        // and the comparator can allocate (and thus GC) right in that
-        // window — so the buffer itself has to be GC-visible.
+        // `sort!`'s comparator allocates (and so collects) in the middle
+        // of every merge: each element has to stay reachable from the
+        // receiver throughout. (A merge used to overwrite the receiver's
+        // slots while its buffer held the only reference to one run, so
+        // that buffer had to be GC-visible; the merge now completes in
+        // the buffer before it is copied back.)
         //
         // As above: the large size makes a GC land in that window by
         // chance in a normal build, while under gc-stress every safepoint

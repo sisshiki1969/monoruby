@@ -2452,7 +2452,7 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             executor::op::homogeneous_ord(globals, &keys),
             Some(executor::op::HomogeneousOrd::Fixnum | executor::op::HomogeneousOrd::String)
         ) {
-            vm.sort(globals, &mut keys, std::ptr::null_mut())?;
+            vm.sort(globals, &mut keys)?;
             let pairs = keys
                 .into_iter()
                 .map(|k| {

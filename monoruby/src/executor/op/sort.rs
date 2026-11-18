@@ -1,40 +1,12 @@
 use super::*;
 
-/// Slices of up to this length get sorted using insertion sort, which
-/// needs no merge buffer.
-const MAX_INSERTION: usize = 20;
-
-///
-/// Number of scratch `Value` slots `merge_sort` needs to sort `len`
-/// elements; 0 when insertion sort covers it.
-///
-/// The caller owns the scratch buffer because it must be **GC-visible**:
-/// during a merge the buffer holds the only reference to the elements of
-/// one run (their slots in the receiver have already been overwritten by
-/// merge output), and the comparator runs arbitrary Ruby — and therefore
-/// may trigger a GC — between the copy-in and the copy-out. A plain
-/// Rust `Vec<Value>` is not scanned by the collector, so those elements
-/// were swept and the sort resumed on dangling pointers. Callers back
-/// the buffer with a `nil`-filled Array kept on the temp stack (every
-/// slot then always holds a valid, markable `Value`).
-///
-pub(crate) fn merge_scratch_len(len: usize) -> usize {
-    if len <= MAX_INSERTION { 0 } else { len / 2 }
-}
-
 impl Executor {
     ///
-    /// Execute merge sort for Vec of *Value*s with `<=>`.
+    /// Sort *vec* with `<=>`: natively when that runs no Ruby
+    /// ([`sort_homogeneous`]), and otherwise by CRuby's merge order
+    /// (`merge_sort`).
     ///
-    /// `buf` must point to at least `merge_scratch_len(vec.len())`
-    /// initialized, GC-rooted `Value`s (may be null when that is 0).
-    ///
-    pub(crate) fn sort(
-        &mut self,
-        globals: &mut Globals,
-        vec: &mut [Value],
-        buf: *mut Value,
-    ) -> Result<()> {
+    pub(crate) fn sort(&mut self, globals: &mut Globals, vec: &mut [Value]) -> Result<()> {
         if sort_homogeneous(globals, vec) {
             return Ok(());
         }
@@ -42,7 +14,7 @@ impl Executor {
             let ord = Executor::compare_values(self, globals, a, b)?;
             Result::Ok(ord == std::cmp::Ordering::Greater)
         };
-        merge_sort(vec, buf, is_greater)
+        merge_sort(vec, is_greater)
     }
 
     ///
@@ -267,15 +239,13 @@ pub(crate) fn cmperr(store: &Store, x: Value, y: Value) -> MonorubyErr {
 }
 
 ///
-/// Execute merge sort for a slice with `compare`: of *Value*s (see
-/// `Executor::sort` for the `buf` contract), or of indices into a rooted
-/// key table (`sort_by`), for which any buffer of
-/// `merge_scratch_len(vec.len())` elements will do.
+/// Sort a slice with `compare` in CRuby's merge order: of *Value*s
+/// (a sort block), or of indices into a rooted key table (`sort_by`).
 ///
 /// `compare(a, b)` is always asked with `a` the element currently to the
 /// left of `b`, and the first error ends the sort.
 ///
-pub(crate) fn sort_by<T, F>(vec: &mut [T], buf: *mut T, mut compare: F) -> Result<()>
+pub(crate) fn sort_by<T, F>(vec: &mut [T], mut compare: F) -> Result<()>
 where
     T: Copy,
     F: FnMut(T, T) -> Result<std::cmp::Ordering>,
@@ -284,266 +254,68 @@ where
         let ord = compare(a, b)?;
         Result::Ok(ord == std::cmp::Ordering::Greater)
     };
-    merge_sort(vec, buf, f)
+    merge_sort(vec, f)
 }
 
 ///
-/// The sort itself. `is_greater(a, b)` is only ever asked about a pair in
-/// its current order — `a` to the left of `b` — and answers whether the two
-/// are out of order. That is the question CRuby's comparator answers
-/// (`sort_2` calls `a <=> b` with `a` the element qsort holds on the left),
-/// so the receiver of each `<=>`, the arguments of a sort block and the
-/// operands `rb_cmperr` names are the ones CRuby has: `[1, "a"].sort` is
+/// The sort itself: glibc's `msort_with_tmp`, which is what CRuby's
+/// `ruby_qsort` is on Linux (`qsort_r`), so a comparator that runs Ruby —
+/// a sort block, a user-defined `<=>` — is called with the same pairs, in
+/// the same order and the same number of times as there (#2014). Top-down:
+/// the first `n / 2` elements and the rest are sorted, then merged, the
+/// left element taken while it is not greater than the right one.
+///
+/// `is_greater(a, b)` is only ever asked about a pair in its current order
+/// — `a` to the left of `b` — and answers whether the two are out of
+/// order. That is the question CRuby's comparator answers (`sort_2` calls
+/// `a <=> b` with `a` the element qsort holds on the left), so the
+/// receiver of each `<=>`, the arguments of a sort block and the operands
+/// `rb_cmperr` names are the ones CRuby has: `[1, "a"].sort` is
 /// "comparison of Integer with String failed" (#2007).
 ///
-fn merge_sort<T, F>(v: &mut [T], buf: *mut T, mut is_greater: F) -> Result<()>
+/// A merge writes into a scratch buffer and copies it back only once it
+/// is complete, so every element stays in `v` while the comparator runs:
+/// a collection it triggers finds them all through the slice's owner, and
+/// an error leaves `v` a permutation of what it was. The scratch buffer
+/// therefore needs no rooting.
+///
+fn merge_sort<T, F>(v: &mut [T], mut is_greater: F) -> Result<()>
 where
     T: Copy,
     F: FnMut(T, T) -> Result<bool>,
 {
-    // Very short runs are extended using insertion sort to span at least this many elements.
-    const MIN_RUN: usize = 10;
-
-    let len = v.len();
-
-    // Short arrays get sorted in-place via insertion sort to avoid allocations.
-    if len <= MAX_INSERTION {
-        if len >= 2 {
-            for i in (0..len - 1).rev() {
-                insert_head(&mut v[i..], &mut is_greater)?;
-            }
-        }
+    if v.len() < 2 {
         return Ok(());
     }
+    let mut tmp = Vec::with_capacity(v.len());
+    return msort(v, &mut tmp, &mut is_greater);
 
-    debug_assert!(!buf.is_null());
-    let mut runs = vec![];
-    let mut end = len;
-    while end > 0 {
-        // Find the next natural run, and reverse it if it's strictly descending.
-        let mut start = end - 1;
-        if start > 0 {
-            start -= 1;
-            unsafe {
-                if is_greater(*v.get_unchecked(start), *v.get_unchecked(start + 1))? {
-                    while start > 0
-                        && is_greater(*v.get_unchecked(start - 1), *v.get_unchecked(start))?
-                    {
-                        start -= 1;
-                    }
-                    v[start..end].reverse();
-                } else {
-                    while start > 0
-                        && !is_greater(*v.get_unchecked(start - 1), *v.get_unchecked(start))?
-                    {
-                        start -= 1;
-                    }
-                }
-            }
+    fn msort<T, F>(b: &mut [T], tmp: &mut Vec<T>, is_greater: &mut F) -> Result<()>
+    where
+        T: Copy,
+        F: FnMut(T, T) -> Result<bool>,
+    {
+        let n = b.len();
+        if n < 2 {
+            return Ok(());
         }
-
-        // Insert some more elements into the run if it's too short. Insertion sort is faster than
-        // merge sort on short sequences, so this significantly improves performance.
-        while start > 0 && end - start < MIN_RUN {
-            start -= 1;
-            insert_head(&mut v[start..end], &mut is_greater)?;
-        }
-
-        // Push this run onto the stack.
-        runs.push(Run {
-            start,
-            len: end - start,
-        });
-        end = start;
-
-        // Merge some pairs of adjacent runs to satisfy the invariants.
-        while let Some(r) = collapse(&runs) {
-            let left = runs[r + 1];
-            let right = runs[r];
-            merge(
-                &mut v[left.start..right.start + right.len],
-                left.len,
-                buf,
-                &mut is_greater,
-            )?;
-            runs[r] = Run {
-                start: left.start,
-                len: left.len + right.len,
-            };
-            runs.remove(r + 1);
-        }
-    }
-
-    debug_assert!(runs.len() == 1 && runs[0].start == 0 && runs[0].len == len);
-
-    return Ok(());
-
-    #[inline]
-    fn collapse(runs: &[Run]) -> Option<usize> {
-        let n = runs.len();
-        if n >= 2
-            && (runs[n - 1].start == 0
-                || runs[n - 2].len <= runs[n - 1].len
-                || (n >= 3 && runs[n - 3].len <= runs[n - 2].len + runs[n - 1].len)
-                || (n >= 4 && runs[n - 4].len <= runs[n - 3].len + runs[n - 2].len))
-        {
-            if n >= 3 && runs[n - 3].len < runs[n - 1].len {
-                Some(n - 3)
+        let n1 = n / 2;
+        msort(&mut b[..n1], tmp, is_greater)?;
+        msort(&mut b[n1..], tmp, is_greater)?;
+        tmp.clear();
+        let (mut i, mut j) = (0, n1);
+        while i < n1 && j < n {
+            if is_greater(b[i], b[j])? {
+                tmp.push(b[j]);
+                j += 1;
             } else {
-                Some(n - 2)
-            }
-        } else {
-            None
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    struct Run {
-        start: usize,
-        len: usize,
-    }
-}
-
-fn insert_head<T, F>(v: &mut [T], is_greater: &mut F) -> Result<()>
-where
-    T: Copy,
-    F: FnMut(T, T) -> Result<bool>,
-{
-    if v.len() >= 2 && is_greater(v[0], v[1])? {
-        unsafe {
-            let mut tmp = std::mem::ManuallyDrop::new(std::ptr::read(&v[0]));
-
-            // initially held exactly once.
-            let mut hole = InsertionHole {
-                src: &mut *tmp,
-                dest: &mut v[1],
-            };
-            std::ptr::copy_nonoverlapping(&v[1], &mut v[0], 1);
-
-            for i in 2..v.len() {
-                if !is_greater(*tmp, v[i])? {
-                    break;
-                }
-                std::ptr::copy_nonoverlapping(&v[i], &mut v[i - 1], 1);
-                hole.dest = &mut v[i];
-            }
-            // `hole` gets dropped and thus copies `tmp` into the remaining hole in `v`.
-        }
-    }
-    return Ok(());
-
-    // When dropped, copies from `src` into `dest`.
-    struct InsertionHole<T> {
-        src: *mut T,
-        dest: *mut T,
-    }
-
-    impl<T> Drop for InsertionHole<T> {
-        fn drop(&mut self) {
-            unsafe {
-                std::ptr::copy_nonoverlapping(self.src, self.dest, 1);
+                tmp.push(b[i]);
+                i += 1;
             }
         }
-    }
-}
-
-fn merge<T, F>(v: &mut [T], mid: usize, buf: *mut T, is_greater: &mut F) -> Result<()>
-where
-    T: Copy,
-    F: FnMut(T, T) -> Result<bool>,
-{
-    let len = v.len();
-    let v = v.as_mut_ptr();
-    let (v_mid, v_end) = unsafe { (v.add(mid), v.add(len)) };
-
-    let mut hole;
-
-    if mid <= len - mid {
-        // The left run is shorter.
-        unsafe {
-            std::ptr::copy_nonoverlapping(v, buf, mid);
-            hole = MergeHole {
-                start: buf,
-                end: buf.add(mid),
-                dest: v,
-            };
-        }
-
-        // Initially, these pointers point to the beginnings of their arrays.
-        let left = &mut hole.start;
-        let mut right = v_mid;
-        let out = &mut hole.dest;
-
-        while *left < hole.end && right < v_end {
-            // Consume the lesser side.
-            // If equal, prefer the left run to maintain stability.
-            unsafe {
-                let to_copy = if is_greater(**left, *right)? {
-                    get_and_increment(&mut right)
-                } else {
-                    get_and_increment(left)
-                };
-                std::ptr::copy_nonoverlapping(to_copy, get_and_increment(out), 1);
-            }
-        }
-    } else {
-        // The right run is shorter.
-        unsafe {
-            std::ptr::copy_nonoverlapping(v_mid, buf, len - mid);
-            hole = MergeHole {
-                start: buf,
-                end: buf.add(len - mid),
-                dest: v_mid,
-            };
-        }
-
-        // Initially, these pointers point past the ends of their arrays.
-        let left = &mut hole.dest;
-        let right = &mut hole.end;
-        let mut out = v_end;
-
-        while v < *left && buf < *right {
-            // Consume the greater side.
-            // If equal, prefer the right run to maintain stability.
-            unsafe {
-                let to_copy = if is_greater(*left.offset(-1), *right.offset(-1))? {
-                    decrement_and_get(left)
-                } else {
-                    decrement_and_get(right)
-                };
-                std::ptr::copy_nonoverlapping(to_copy, decrement_and_get(&mut out), 1);
-            }
-        }
-    };
-    return Ok(());
-    // Finally, `hole` gets dropped. If the shorter run was not fully consumed, whatever remains of
-    // it will now be copied into the hole in `v`.
-
-    unsafe fn get_and_increment<T>(ptr: &mut *mut T) -> *mut T {
-        let old = *ptr;
-        unsafe { *ptr = ptr.offset(1) };
-        old
-    }
-
-    unsafe fn decrement_and_get<T>(ptr: &mut *mut T) -> *mut T {
-        unsafe { *ptr = ptr.offset(-1) };
-        *ptr
-    }
-
-    // When dropped, copies the range `start..end` into `dest..`.
-    struct MergeHole<T> {
-        start: *mut T,
-        end: *mut T,
-        dest: *mut T,
-    }
-
-    impl<T> Drop for MergeHole<T> {
-        fn drop(&mut self) {
-            // `T` is not a zero-sized type, so it's okay to divide by its size.
-            let len = (self.end as usize - self.start as usize) / std::mem::size_of::<T>();
-            unsafe {
-                std::ptr::copy_nonoverlapping(self.start, self.dest, len);
-            }
-        }
+        // What is left of the right run is already in place.
+        tmp.extend_from_slice(&b[i..n1]);
+        b[..tmp.len()].copy_from_slice(tmp);
+        Ok(())
     }
 }

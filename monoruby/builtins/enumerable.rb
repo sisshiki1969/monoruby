@@ -381,9 +381,7 @@ module Enumerable
     else
       n = __nmin_n(n, true)
       return [] if n == 0
-      pairs = []
-      __gather_each { |x| pairs << [yield(x), x] }
-      pairs.sort_by { |pair| pair[0] }.first(n).map { |pair| pair[1] }
+      __nmin_run(n, true, false) { |x| yield(x) }
     end
   end
 
@@ -600,9 +598,7 @@ module Enumerable
     else
       n = __nmin_n(n, true)
       return [] if n == 0
-      pairs = []
-      __gather_each { |x| pairs << [yield(x), x] }
-      pairs.sort_by { |pair| pair[0] }.last(n).reverse.map { |pair| pair[1] }
+      __nmin_run(n, true, true) { |x| yield(x) }
     end
   end
 
@@ -762,6 +758,112 @@ module Enumerable
     self
   end
 
+  # CRuby's `rb_nmin_run` (enum.c), behind `min(n)` / `max(n)` (`rev`)
+  # and `min_by(n)` / `max_by(n)` (`by`, the block giving each element's
+  # key), so the comparisons are the same pairs in the same order (#2014).
+  # The elements are gathered into a buffer of `4 * n`; whenever it fills
+  # it is cut down to the `n` best (`__nmin_filter`), and the worst of
+  # those becomes a limit that later elements must beat to be let in. At
+  # the end the buffer is filtered once more, sorted, and reversed for
+  # `max`. Without `by` the block, if any, is the comparator.
+  def __nmin_run(n, by, rev, &blk)
+    bufmax = n * 4
+    vals = []
+    keys = by ? [] : vals
+    limit = nil
+    has_limit = false
+    __gather_each do |x|
+      k = by ? blk.call(x) : x
+      if has_limit
+        c = __nmin_cmp(k, limit, by, blk)
+        c = -c if rev
+        next if c >= 0
+      end
+      keys << k if by
+      vals << x
+      if vals.size == bufmax
+        limit = __nmin_filter(keys, vals, n, by, rev, blk)
+        has_limit = true
+      end
+    end
+    __nmin_filter(keys, vals, n, by, rev, blk)
+    res = if by
+      (0...vals.size).to_a.sort { |i, j| __nmin_cmp(keys[i], keys[j], by, blk) }.map { |i| vals[i] }
+    elsif blk
+      vals.sort(&blk)
+    else
+      vals.sort
+    end
+    rev ? res.reverse : res
+  end
+
+  # `nmin_cmp` / `nmin_block_cmp`: `a <=> b`, or the comparator block, read
+  # as `rb_cmpint`.
+  def __nmin_cmp(a, b, by, blk)
+    if blk && !by
+      __cmpint(blk.call(a, b), a, b)
+    else
+      __cmpint(a <=> b, a, b)
+    end
+  end
+
+  # `nmin_filter`: partition the buffer (a quickselect, the elements equal
+  # to each pivot gathered at its side) until the `n` best are in front,
+  # cut it to them and answer the last pivot.
+  def __nmin_filter(keys, vals, n, by, rev, blk)
+    return nil if vals.size <= n
+    left = 0
+    right = vals.size - 1
+    store = 0
+    while true
+      pivot = left + (right - left) / 2
+      num_pivots = 1
+      __nmin_swap(keys, vals, by, pivot, right)
+      pivot = right
+      store = left
+      i = left
+      while i <= right - num_pivots
+        c = __nmin_cmp(keys[i], keys[pivot], by, blk)
+        c = -c if rev
+        if c == 0
+          __nmin_swap(keys, vals, by, i, right - num_pivots)
+          num_pivots += 1
+          next
+        end
+        if c < 0
+          __nmin_swap(keys, vals, by, i, store)
+          store += 1
+        end
+        i += 1
+      end
+      j = store
+      i = right
+      while right - num_pivots < i
+        if j <= i
+          __nmin_swap(keys, vals, by, j, i)
+          j += 1
+        end
+        i -= 1
+      end
+      break if store <= n && n <= store + num_pivots
+      if n < store
+        right = store - 1
+      else
+        left = store + num_pivots
+      end
+    end
+    limit = keys[store]
+    keys.slice!(n..) if by
+    vals.slice!(n..)
+    limit
+  end
+
+  def __nmin_swap(keys, vals, by, i, j)
+    vals[i], vals[j] = vals[j], vals[i]
+    keys[i], keys[j] = keys[j], keys[i] if by
+  end
+  private :__nmin_run, :__nmin_cmp, :__nmin_filter, :__nmin_swap
+
   def min(n = nil)
     if n.nil?
       m = nil
@@ -794,9 +896,9 @@ module Enumerable
       n = __nmin_n(n)
       return [] if n == 0
       if block_given?
-        self.to_a.sort { |a, b| yield(a, b) }.first(n)
+        __nmin_run(n, false, false) { |a, b| yield(a, b) }
       else
-        self.to_a.sort.first(n)
+        __nmin_run(n, false, false)
       end
     end
   end
@@ -833,9 +935,9 @@ module Enumerable
       n = __nmin_n(n)
       return [] if n == 0
       if block_given?
-        self.to_a.sort { |a, b| yield(a, b) }.last(n).reverse
+        __nmin_run(n, false, true) { |a, b| yield(a, b) }
       else
-        self.to_a.sort.last(n).reverse
+        __nmin_run(n, false, true)
       end
     end
   end

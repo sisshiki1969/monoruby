@@ -312,8 +312,9 @@ class Range
         raise RangeError, "cannot get the minimum of endless range with custom comparison method"
       end
       # `range_min` hands a call with a block to Enumerable#min.
+      # So does one with a count (`rb_nmin_run` over `each`).
       return super(&block) if n.nil?
-      return to_a.sort(&block).first(__nmin_n(n))
+      return super(n, &block)
     end
     return __builtin_min if no_n
     n = __minmax_n(n)
@@ -344,7 +345,7 @@ class Range
         raise RangeError, "cannot get the maximum of beginless range with custom comparison method"
       end
       return super(&block) if n.nil?
-      return to_a.sort(&block).last(__nmin_n(n)).reverse
+      return super(n, &block)
     end
     if n.nil?
       if exclude_end? && !e.is_a?(Numeric)
