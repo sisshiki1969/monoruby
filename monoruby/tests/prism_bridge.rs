@@ -1,14 +1,15 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// The Ruby-level `Prism` module (`gem/prism`: the prism 1.9.0 gem's Ruby
+// The Ruby-level `Prism` module (`gem/prism`: the prism 2.1.0 gem's Ruby
 // half over `src/builtins/prism.rs`, which serializes with the libprism
 // monoruby links) and the Ripper it provides (`Prism::Translation::Ripper`).
 // Every expectation is the CRuby oracle's. The oracle runs CRuby with
-// `--disable=gems`, i.e. its *default* prism (1.8.1 on Ruby 4.0.2), so the
+// `--disable=gems`, i.e. its *default* prism (1.8.2 on Ruby 4.0.9), so the
 // comparisons stay to what has not changed between that and the vendored
-// 1.9.0 (`Prism.lex_compat` gained `on_sp` tokens in between; the Ripper
-// test covers it against CRuby's own Ripper instead).
+// 2.1.0 (`Prism.lex_compat` gained `on_sp` tokens in between, and the
+// serialization format changed, so `Prism.dump`'s size is not compared; the
+// Ripper test covers lexing against CRuby's own Ripper instead).
 
 #[test]
 fn prism_parses_lexes_and_queries() {
@@ -29,7 +30,7 @@ fn prism_parses_lexes_and_queries() {
         r << Prism.parse("x = 1\nx.foo(2) { |y| y }", line: 10).value.statements.body.last.location.start_line
         r << [Prism::StringQuery.local?("foo"), Prism::StringQuery.local?("Foo"), Prism::StringQuery.constant?("Foo"), Prism::StringQuery.method_name?("foo?"), Prism::StringQuery.method_name?("1a")]
         r << Prism.parse_comments("# one\n1 # two\n=begin\nthree\n=end\n").map { |c| [c.class.name, c.slice] }
-        r << Prism.dump("1").bytesize << Prism.dump("1")[0, 5]
+        r << Prism.dump("1")[0, 5]
         r << Prism.parse_lex("1 + 2").value.last.map { |tok, _| tok.type }
         r << Prism.parse("é = 1").value.statements.body.first.name
         r << Prism.parse("x", scopes: [[:x]]).value.statements.body.first.class.name
@@ -173,4 +174,19 @@ fn ripper_is_prisms_translation() {
         r
         "##,
     );
+}
+
+#[test]
+fn ast_option_dumps_prisms_tree_and_its_errors() {
+    // `monoruby --ast` prints prism's own tree (and any parse error, with
+    // its byte range) to stderr and exits without running the script.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_monoruby"))
+        .args(["--disable=gems", "--ast", "-e", "puts 1 +"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(out.stdout.is_empty(), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("prism error at 8..8: unexpected end-of-input"), "{err}");
+    assert!(err.contains("ProgramNode"), "{err}");
 }

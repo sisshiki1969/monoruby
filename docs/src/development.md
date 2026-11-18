@@ -398,20 +398,14 @@ in test builds, so tests reach compiled code without long warm-up loops.
 `hashbrown/` is a workspace member (a local fork). `smallvec` is also a fork
 but is consumed as a git dependency rather than in-tree.
 
-The `ruby-prism` wrapper is pinned to the `monoruby-vendored` branch of
-[`sisshiki1969/prism`](https://github.com/sisshiki1969/prism). That fork has
-two branches:
-
-- `monoruby` — the minimal upstream-bound diff (the Rust `parse_with_options`
-  API plus `ruby-prism-sys` bindgen allowlist additions). The base for any
-  upstream PR to `ruby/prism`.
-- `monoruby-vendored` — `monoruby` plus one commit checking in the C sources
-  the upstream `vendored.rs` build script needs, so consumers need neither
-  bundler nor `rake cargo:build`.
-
-To bump the prism revision: push to the fork's `monoruby` branch, run
-`bin/refresh-prism-vendored` (which rebuilds and force-pushes
-`monoruby-vendored`), then `cargo update -p ruby-prism` here.
+`ruby-prism` is the published crate from crates.io (upstream
+[`ruby/prism`](https://github.com/ruby/prism)); its `ruby-prism-sys` ships
+prism's C source and pre-generated bindings, so no fork or bindgen is
+needed. To bump it, change the version in `monoruby/Cargo.toml` and
+re-vendor the prism gem's Ruby half of the same version into
+`monoruby/gem/prism/` (keeping monoruby's own `prism/prism.rb` and
+`prism/serialize_reader.rb`, and porting changes to the gem's options
+packing into `prism/prism.rb`).
 
 `bin/vendor-ruby-stdlib` re-snapshots CRuby's pure-Ruby stdlib and default
 gems into `monoruby/vendor/ruby-stdlib/`. It is a maintenance step, never run

@@ -33,12 +33,15 @@ pub struct PrismTree {
     /// out; [`PrismTree::root`] re-borrows it for no longer than the
     /// tree itself.
     result: prism::ParseResult<'static>,
+    /// prism >= 2.0 ties a `ParseResult` to the options it was parsed
+    /// with as well; dropped after `result`, boxed for a stable address.
+    _options: Box<prism::ParseOptions>,
     /// Boxed, so the bytes keep their address when the `PrismTree` moves.
     source: Box<[u8]>,
 }
 
 impl PrismTree {
-    pub fn parse(source: Vec<u8>, options: Option<&prism::Options>) -> Self {
+    pub fn parse(source: Vec<u8>, options: Option<prism::Options>) -> Self {
         let source: Box<[u8]> = source.into_boxed_slice();
         // SAFETY: `source` is boxed and this struct never exposes a way to
         // mutate or reallocate it, so the bytes stay at this address for
@@ -46,11 +49,23 @@ impl PrismTree {
         // `source`, so it is dropped — freeing prism's parser and node
         // arena — while those bytes are still valid.
         let borrowed: &'static [u8] = unsafe { std::mem::transmute(&*source) };
-        let result = match options {
-            Some(opts) => prism::parse_with_options(borrowed, opts),
-            None => prism::parse(borrowed),
-        };
-        Self { result, source }
+        // Pin the syntax to the Ruby monoruby conforms to: an unset
+        // version is prism's *latest* (4.1 in prism 2.x).
+        let options = Box::new(
+            options
+                .unwrap_or_default()
+                .version(prism::Version::CRuby4_0)
+                .build(),
+        );
+        // SAFETY: as for `source`: boxed, never mutated, dropped after
+        // `result`.
+        let opts: &'static prism::ParseOptions = unsafe { std::mem::transmute(&*options) };
+        let result = prism::parse_with_options(borrowed, opts);
+        Self {
+            result,
+            _options: options,
+            source,
+        }
     }
 
     pub fn source(&self) -> &[u8] {
@@ -115,24 +130,20 @@ impl AnonForwarding {
     /// The `PM_OPTIONS_SCOPE_FORWARDING_*` bits prism wants, so that
     /// `*` / `**` / `&` / `...` parse as forwarding rather than as the
     /// syntax errors they are outside a method that declared them.
-    pub fn prism_flags(&self) -> u8 {
-        // Mirrors `PM_OPTIONS_SCOPE_FORWARDING_*` in prism's options.h.
-        const POSITIONALS: u8 = 0x1;
-        const KEYWORDS: u8 = 0x2;
-        const BLOCK: u8 = 0x4;
-        const ALL: u8 = 0x8;
-        let mut flags = 0;
+    pub fn prism_flags(&self) -> Vec<prism::ScopeForwardingFlag> {
+        use prism::ScopeForwardingFlag as F;
+        let mut flags = vec![];
         if self.rest.is_some() {
-            flags |= POSITIONALS;
+            flags.push(F::Positionals);
         }
         if self.kwrest.is_some() {
-            flags |= KEYWORDS;
+            flags.push(F::Keywords);
         }
         if self.block {
-            flags |= BLOCK;
+            flags.push(F::Block);
         }
         if self.all {
-            flags |= ALL;
+            flags.push(F::All);
         }
         flags
     }
@@ -229,16 +240,12 @@ impl Clone for DeferredDef {
 impl PartialEq for DeferredDef {
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.ctx, &other.ctx)
-            && self.node().location().start_offset() == other.node().location().start_offset()
+            && self.node().location().start() == other.node().location().start()
     }
 }
 
 impl std::fmt::Debug for DeferredDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "DeferredDef(@{})",
-            self.node().location().start_offset()
-        )
+        write!(f, "DeferredDef(@{})", self.node().location().start())
     }
 }

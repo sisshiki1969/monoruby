@@ -88,7 +88,6 @@ monoruby/                   # Workspace root
 │   ├── test-aarch64        # aarch64 test run (qemu / cross)
 │   ├── setup-aarch64-cross # Set up the aarch64 cross-build toolchain
 │   ├── bench               # Benchmark runner
-│   ├── refresh-prism-vendored # Rebuild/force-push the prism vendored branch
 │   └── irm                 # Launch REPL (cargo run --bin irm)
 ├── doc/                    # Architecture documentation
 │   ├── README.md           # Index of every document, with kind + language
@@ -496,7 +495,7 @@ External crates (fetched from git):
 
 - `monoasm` / `monoasm_macro` — dynamic assembler (`aarch` branch; x86-64 + aarch64)
 - `onigmo-regex` — Onigmo regular expression engine
-- `ruby-prism` — prism parser bindings (pinned `monoruby-vendored` branch; see below)
+- `ruby-prism` — prism parser bindings (crates.io release; see below)
 - `smallvec` — local fork with `const_generics` (pinned via git, not vendored in-tree)
 - The **system OpenSSL** (libssl-dev on Linux, Homebrew's `openssl@3` on
   macOS; `OPENSSL_DIR` overrides, see `build.rs` `openssl_link`) — linked
@@ -645,7 +644,7 @@ reproducible build. It performs two jobs:
      C-extension-backed libraries, laid down last so they win name clashes;
      the `stub/` copy is pinned ahead of `$LOAD_PATH` by the require resolver.
      `gem/prism/` is the prism gem's Ruby half (the version the `ruby-prism`
-     crate links, 1.9.0 today; the vendored Ruby 4.0.9 snapshot carries
+     crate links, 2.1.0 today; the vendored Ruby 4.0.9 snapshot carries
      1.8.2) plus `gem/prism/prism.rb`, monoruby's stand-in for the gem's C
      extension: `src/builtins/prism.rs` runs libprism's serializers and the
      gem's `Prism::Serialize` builds the node tree. The serialization format
@@ -1060,21 +1059,28 @@ The repository vendors `hashbrown/` as a local-path fork (a workspace member).
 path. The old in-tree `rust-smallvec/` and `ruruby-parse/` directories have been
 removed.
 
-The `ruby-prism` Rust wrapper is consumed as a `git` dependency against the
-`monoruby-vendored` branch of [`sisshiki1969/prism`](https://github.com/sisshiki1969/prism).
-That fork is split into two branches:
+The `ruby-prism` Rust wrapper is the published crate from crates.io
+(`ruby-prism = "2.1.0"`, upstream [`ruby/prism`](https://github.com/ruby/prism)).
+`ruby-prism-sys` ships prism's C source and pre-generated bindings, so the
+build needs neither bindgen/libclang nor a fork carrying vendored sources
+(the old `sisshiki1969/prism` `monoruby-vendored` branch is no longer used).
+The eval / `binding` support (`Options::line`, `Options::scopes` with
+`Scope::locals` / `Scope::forwarding`, `parse_with_options`) is upstream's
+own API. Two things to keep in mind:
 
-- `monoruby` — minimal upstream-bound diff (Rust `parse_with_options` API +
-  `ruby-prism-sys` bindgen allowlist additions). Used as the base for any
-  upstream PR to `ruby/prism`.
-- `monoruby-vendored` — `monoruby` plus a single commit that checks in
-  `rust/ruby-prism{,-sys}/vendor/prism-{ver}/` (the C source the upstream
-  `vendored.rs` build script needs). This is the branch `monoruby/Cargo.toml`
-  pins, so consumers don't need bundler or `rake cargo:build` locally.
+- A `ParseResult` borrows the `ParseOptions` it was parsed with, so
+  `ast::deferred::PrismTree` owns both, boxed, next to the source.
+- prism's default syntax version is its *latest* (Ruby 4.1 in 2.x), so
+  `PrismTree::parse` always sets `Version::CRuby4_0`, the Ruby monoruby
+  conforms to; move it with the pin.
 
-To bump the prism rev: push the change to the fork's `monoruby` branch,
-run `bin/refresh-prism-vendored` (rebuilds and force-pushes
-`monoruby-vendored`), then `cargo update -p ruby-prism` in this repo.
+To bump prism: change the version in `monoruby/Cargo.toml`, re-vendor the
+gem's Ruby half into `gem/prism/` from the matching `prism-<ver>.gem`
+(everything under its `lib/` except monoruby's own `prism/prism.rb` and
+`prism/serialize_reader.rb`; `gem/prism.rb` is the gem's `lib/prism.rb`),
+and port any change to the gem's `lib/prism/ffi.rb` options packing
+(`dump_options`) into `gem/prism/prism.rb`, since the serialization format
+and the options blob are per prism version.
 
 ---
 

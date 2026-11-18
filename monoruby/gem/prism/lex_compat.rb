@@ -1,26 +1,64 @@
 # frozen_string_literal: true
 # :markup: markdown
+#--
+# rbs_inline: enabled
 
 module Prism
+  # @rbs!
+  #    module Translation
+  #      class Ripper
+  #        EXPR_NONE: Integer
+  #        EXPR_BEG: Integer
+  #        EXPR_MID: Integer
+  #        EXPR_END: Integer
+  #        EXPR_CLASS: Integer
+  #        EXPR_VALUE: Integer
+  #        EXPR_ARG: Integer
+  #        EXPR_CMDARG: Integer
+  #        EXPR_ENDARG: Integer
+  #        EXPR_ENDFN: Integer
+  #
+  #        class Lexer < Ripper
+  #          class State
+  #            def self.[]: (Integer value) -> State
+  #          end
+  #        end
+  #
+  #        class LineAndColumnCache
+  #          def initialize: (Source source) -> void
+  #
+  #          def line_and_column: (Integer byte_offset) -> [Integer, Integer]
+  #        end
+  #      end
+  #    end
+
   # This class is responsible for lexing the source using prism and then
   # converting those tokens to be compatible with Ripper. In the vast majority
   # of cases, this is a one-to-one mapping of the token type. Everything else
   # generally lines up. However, there are a few cases that require special
   # handling.
   class LexCompat # :nodoc:
+    # @rbs!
+    #    # A token produced by the Ripper lexer that Prism is replicating.
+    #    type lex_compat_token = [[Integer, Integer], Symbol, String, untyped]
+
     # A result class specialized for holding tokens produced by the lexer.
     class Result < Prism::Result
       # The list of tokens that were produced by the lexer.
-      attr_reader :value
+      attr_reader :value #: Array[lex_compat_token]
 
       # Create a new lex compat result object with the given values.
-      def initialize(value, comments, magic_comments, data_loc, errors, warnings, source)
+      #
+      #: (Array[lex_compat_token] value, Array[MagicComment] magic_comments, Location? data_loc, Array[ParseError] errors, Array[ParseWarning] warnings, bool continuable, Source source) -> void
+      def initialize(value, magic_comments, data_loc, errors, warnings, continuable, source)
         @value = value
-        super(comments, magic_comments, data_loc, errors, warnings, source)
+        super(magic_comments, data_loc, errors, warnings, continuable, source)
       end
 
       # Implement the hash pattern matching interface for Result.
-      def deconstruct_keys(keys)
+      #
+      #: (Array[Symbol]? keys) -> Hash[Symbol, untyped]
+      def deconstruct_keys(keys) # :nodoc:
         super.merge!(value: value)
       end
     end
@@ -40,6 +78,8 @@ module Prism
       BANG_EQUAL: :on_op,
       BANG_TILDE: :on_op,
       BRACE_LEFT: :on_lbrace,
+      BRACE_LEFT_ARGUMENT: :on_lbrace,
+      BRACE_LEFT_HASH: :on_lbrace,
       BRACE_RIGHT: :on_rbrace,
       BRACKET_LEFT: :on_lbracket,
       BRACKET_LEFT_ARRAY: :on_lbracket,
@@ -102,6 +142,8 @@ module Prism
       KEYWORD_DEF: :on_kw,
       KEYWORD_DEFINED: :on_kw,
       KEYWORD_DO: :on_kw,
+      KEYWORD_DO_BLOCK: :on_kw,
+      KEYWORD_DO_LAMBDA: :on_kw,
       KEYWORD_DO_LOOP: :on_kw,
       KEYWORD_ELSE: :on_kw,
       KEYWORD_ELSIF: :on_kw,
@@ -149,8 +191,10 @@ module Prism
       MINUS_EQUAL: :on_op,
       MINUS_GREATER: :on_tlambda,
       NEWLINE: :on_nl,
+      NEWLINE_TERMINATOR: :on_ignored_nl,
       NUMBERED_REFERENCE: :on_backref,
       PARENTHESIS_LEFT: :on_lparen,
+      PARENTHESIS_LEFT_GROUPING: :on_lparen,
       PARENTHESIS_LEFT_PARENTHESES: :on_lparen,
       PARENTHESIS_RIGHT: :on_rparen,
       PERCENT: :on_op,
@@ -193,59 +237,9 @@ module Prism
       USTAR: :on_op,
       USTAR_STAR: :on_op,
       WORDS_SEP: :on_words_sep,
+      XSTRING_BEGIN: :on_backtick,
       "__END__": :on___end__
     }.freeze
-
-    # When we produce tokens, we produce the same arrays that Ripper does.
-    # However, we add a couple of convenience methods onto them to make them a
-    # little easier to work with. We delegate all other methods to the array.
-    class Token < BasicObject
-      # Create a new token object with the given ripper-compatible array.
-      def initialize(array)
-        @array = array
-      end
-
-      # The location of the token in the source.
-      def location
-        @array[0]
-      end
-
-      # The type of the token.
-      def event
-        @array[1]
-      end
-
-      # The slice of the source that this token represents.
-      def value
-        @array[2]
-      end
-
-      # The state of the lexer when this token was produced.
-      def state
-        @array[3]
-      end
-
-      # We want to pretend that this is just an Array.
-      def ==(other) # :nodoc:
-        @array == other
-      end
-
-      def respond_to_missing?(name, include_private = false) # :nodoc:
-        @array.respond_to?(name, include_private)
-      end
-
-      def method_missing(name, ...) # :nodoc:
-        @array.send(name, ...)
-      end
-    end
-
-    # Tokens where state should be ignored
-    # used for :on_sp, :on_comment, :on_heredoc_end, :on_embexpr_end
-    class IgnoreStateToken < Token
-      def ==(other) # :nodoc:
-        self[0...-1] == other[0...-1]
-      end
-    end
 
     # A heredoc in this case is a list of tokens that belong to the body of the
     # heredoc that should be appended onto the list of tokens when the heredoc
@@ -256,16 +250,19 @@ module Prism
       # order back into the token stream and set the state of the last token to
       # the state that the heredoc was opened in.
       class PlainHeredoc # :nodoc:
-        attr_reader :tokens
+        attr_reader :tokens #: Array[lex_compat_token]
 
+        #: () -> void
         def initialize
           @tokens = []
         end
 
+        #: (lex_compat_token token) -> void
         def <<(token)
           tokens << token
         end
 
+        #: () -> Array[lex_compat_token]
         def to_a
           tokens
         end
@@ -275,22 +272,26 @@ module Prism
       # that need to be split on "\\\n" to mimic Ripper's behavior. We also need
       # to keep track of the state that the heredoc was opened in.
       class DashHeredoc # :nodoc:
-        attr_reader :split, :tokens
+        attr_reader :split #: bool
+        attr_reader :tokens #: Array[lex_compat_token]
 
+        #: (bool split) -> void
         def initialize(split)
           @split = split
           @tokens = []
         end
 
+        #: (lex_compat_token token) -> void
         def <<(token)
           tokens << token
         end
 
+        #: () -> Array[lex_compat_token]
         def to_a
           embexpr_balance = 0
 
-          tokens.each_with_object([]) do |token, results| #$ Array[Token]
-            case token.event
+          tokens.each_with_object([]) do |token, results| #$ Array[lex_compat_token]
+            case token[1]
             when :on_embexpr_beg
               embexpr_balance += 1
               results << token
@@ -305,9 +306,9 @@ module Prism
                 if split
                   # Split on "\\\n" to mimic Ripper's behavior. Use a lookbehind
                   # to keep the delimiter in the result.
-                  token.value.split(/(?<=[^\\]\\\n)|(?<=[^\\]\\\r\n)/).each_with_index do |value, index|
+                  token[2].split(/(?<=[^\\]\\\n)|(?<=[^\\]\\\r\n)/).each_with_index do |value, index|
                     column = 0 if index > 0
-                    results << Token.new([[lineno, column], :on_tstring_content, value, token.state])
+                    results << [[lineno, column], :on_tstring_content, value, token[3]]
                     lineno += value.count("\n")
                   end
                 else
@@ -336,8 +337,13 @@ module Prism
       class DedentingHeredoc # :nodoc:
         TAB_WIDTH = 8
 
-        attr_reader :tokens, :dedent_next, :dedent, :embexpr_balance
+        attr_reader :tokens #: Array[lex_compat_token]
+        attr_reader :dedent_next #: bool
+        attr_reader :dedent #: Integer?
+        attr_reader :embexpr_balance #: Integer
+        # @rbs @ended_on_newline: bool
 
+        #: () -> void
         def initialize
           @tokens = []
           @dedent_next = true
@@ -349,8 +355,10 @@ module Prism
         # As tokens are coming in, we track the minimum amount of common leading
         # whitespace on plain string content tokens. This allows us to later
         # remove that amount of whitespace from the beginning of each line.
+        #
+        #: (lex_compat_token token) -> void
         def <<(token)
-          case token.event
+          case token[1]
           when :on_embexpr_beg, :on_heredoc_beg
             @embexpr_balance += 1
             @dedent = 0 if @dedent_next && @ended_on_newline
@@ -358,10 +366,10 @@ module Prism
             @embexpr_balance -= 1
           when :on_tstring_content
             if embexpr_balance == 0
-              line = token.value
+              line = token[2]
 
               if dedent_next && !(line.strip.empty? && line.end_with?("\n"))
-                leading = line[/\A(\s*)\n?/, 1]
+                leading = line[/\A(\s*)\n?/, 1] #: String
                 next_dedent = 0
 
                 leading.each_char do |char|
@@ -381,20 +389,21 @@ module Prism
             end
           end
 
-          @dedent_next = token.event == :on_tstring_content && embexpr_balance == 0
+          @dedent_next = token[1] == :on_tstring_content && embexpr_balance == 0
           @ended_on_newline = false
           tokens << token
         end
 
+        #: () -> Array[lex_compat_token]
         def to_a
           # If every line in the heredoc is blank, we still need to split up the
           # string content token into multiple tokens.
           if dedent.nil?
-            results = [] #: Array[Token]
+            results = [] #: Array[lex_compat_token]
             embexpr_balance = 0
 
             tokens.each do |token|
-              case token.event
+              case token[1]
               when :on_embexpr_beg, :on_heredoc_beg
                 embexpr_balance += 1
                 results << token
@@ -406,9 +415,9 @@ module Prism
                   lineno = token[0][0]
                   column = token[0][1]
 
-                  token.value.split(/(?<=\n)/).each_with_index do |value, index|
+                  token[2].split(/(?<=\n)/).each_with_index do |value, index|
                     column = 0 if index > 0
-                    results << Token.new([[lineno, column], :on_tstring_content, value, token.state])
+                    results << [[lineno, column], :on_tstring_content, value, token[3]]
                     lineno += 1
                   end
                 else
@@ -425,7 +434,7 @@ module Prism
           # If the minimum common whitespace is 0, then we need to concatenate
           # string nodes together that are immediately adjacent.
           if dedent == 0
-            results = [] #: Array[Token]
+            results = [] #: Array[lex_compat_token]
             embexpr_balance = 0
 
             index = 0
@@ -436,15 +445,15 @@ module Prism
               results << token
               index += 1
 
-              case token.event
+              case token[1]
               when :on_embexpr_beg, :on_heredoc_beg
                 embexpr_balance += 1
               when :on_embexpr_end, :on_heredoc_end
                 embexpr_balance -= 1
               when :on_tstring_content
                 if embexpr_balance == 0
-                  while index < max_index && tokens[index].event == :on_tstring_content && !token.value.match?(/\\\r?\n\z/)
-                    token.value << tokens[index].value
+                  while index < max_index && tokens[index][1] == :on_tstring_content && !token[2].match?(/\\\r?\n\z/)
+                    token[2] << tokens[index][2]
                     index += 1
                   end
                 end
@@ -458,7 +467,7 @@ module Prism
           # insert on_ignored_sp tokens for the amount of dedent that we need to
           # perform. We also need to remove the dedent from the beginning of
           # each line of plain string content tokens.
-          results = [] #: Array[Token]
+          results = [] #: Array[lex_compat_token]
           dedent_next = true
           embexpr_balance = 0
 
@@ -467,7 +476,7 @@ module Prism
             # whitespace calculation we performed above. This is because
             # checking if the subsequent token needs to be dedented is common to
             # both the dedent calculation and the ignored_sp insertion.
-            case token.event
+            case token[1]
             when :on_embexpr_beg
               embexpr_balance += 1
               results << token
@@ -479,7 +488,7 @@ module Prism
                 # Here we're going to split the string on newlines, but maintain
                 # the newlines in the resulting array. We'll do that with a look
                 # behind assertion.
-                splits = token.value.split(/(?<=\n)/)
+                splits = token[2].split(/(?<=\n)/)
                 index = 0
 
                 while index < splits.length
@@ -497,7 +506,8 @@ module Prism
                   # line or this line doesn't start with whitespace, then we
                   # should concatenate the rest of the string to match ripper.
                   if dedent == 0 && (!dedent_next || !line.start_with?(/\s/))
-                    line = splits[index..].join
+                    unjoined = splits[index..] #: Array[String]
+                    line = unjoined.join
                     index = splits.length
                   end
 
@@ -536,12 +546,12 @@ module Prism
                       ignored = deleted_chars.join
                       line.delete_prefix!(ignored)
 
-                      results << Token.new([[lineno, 0], :on_ignored_sp, ignored, token[3]])
+                      results << [[lineno, 0], :on_ignored_sp, ignored, token[3]]
                       column = ignored.length
                     end
                   end
 
-                  results << Token.new([[lineno, column], token[1], line, token[3]]) unless line.empty?
+                  results << [[lineno, column], token[1], line, token[3]] unless line.empty?
                   index += 1
                 end
               else
@@ -552,7 +562,7 @@ module Prism
             end
 
             dedent_next =
-              ((token.event == :on_tstring_content) || (token.event == :on_heredoc_end)) &&
+              ((token[1] == :on_tstring_content) || (token[1] == :on_heredoc_end)) &&
               embexpr_balance == 0
           end
 
@@ -562,12 +572,14 @@ module Prism
 
       # Here we will split between the two types of heredocs and return the
       # object that will store their tokens.
+      #
+      #: (lex_compat_token opening) -> (PlainHeredoc | DashHeredoc | DedentingHeredoc)
       def self.build(opening)
-        case opening.value[2]
+        case opening[2][2]
         when "~"
           DedentingHeredoc.new
         when "-"
-          DashHeredoc.new(opening.value[3] != "'")
+          DashHeredoc.new(opening[2][3] != "'")
         else
           PlainHeredoc.new
         end
@@ -581,31 +593,74 @@ module Prism
     BOM_FLUSHED = RUBY_VERSION >= "3.3.0"
     private_constant :BOM_FLUSHED
 
-    attr_reader :options
+    attr_reader :options #: Hash[Symbol, untyped]
+    # @rbs @source: String
 
-    def initialize(code, **options)
-      @code = code
+    #: (String source, **untyped options) -> void
+    def initialize(source, **options)
+      @source = source
       @options = options
     end
 
+    #: () -> Result
     def result
-      tokens = [] #: Array[LexCompat::Token]
+      tokens = [] #: Array[lex_compat_token]
 
       state = :default
       heredoc_stack = [[]] #: Array[Array[Heredoc::PlainHeredoc | Heredoc::DashHeredoc | Heredoc::DedentingHeredoc]]
 
-      result = Prism.lex(@code, **options)
+      result = Prism.lex(@source, **options)
       source = result.source
       result_value = result.value
-      previous_state = nil #: State?
+      previous_state = nil #: Translation::Ripper::Lexer::State?
       last_heredoc_end = nil #: Integer?
-      eof_token = nil
+      eof_token = nil #: Token?
+
+      # The two tokens Ripper scanned most recently, oldest last. Tokens that
+      # this loop does not emit are not part of Ripper's view, so they never
+      # become either one.
+      previous_token = nil #: Token?
+      previous_previous_token = nil #: Token?
+
+      # The lex state in effect at each embedded expression that is still open,
+      # innermost last, and the state at the opener of the one that closed most
+      # recently. Ending an embedded expression restores the state its opener
+      # had, which on_regexp_end below has to reproduce.
+      embexpr_states = [] #: Array[Integer]
+      last_embexpr_state = nil #: Integer?
 
       bom = source.slice(0, 3) == "\xEF\xBB\xBF"
 
-      result_value.each_with_index do |(token, lex_state), index|
-        lineno = token.location.start_line
-        column = token.location.start_column
+      last_comment_token = nil #: lex_compat_token?
+      last_comment_end = nil #: Integer?
+
+      result_value.each_with_index do |prism_token, index|
+        lineno = prism_token.location.start_line
+        column = prism_token.location.start_column
+
+        # Ripper is a scanner, so every event it emits corresponds to source
+        # characters. Implicit word separators have none.
+        next if prism_token.type == :WORDS_SEP_IMPLICIT
+
+        event = RIPPER.fetch(prism_token.type)
+        value = prism_token.value
+        lex_state = Translation::Ripper::Lexer::State[prism_token._ripper_state]
+
+        # A comment token does not include its terminating newline, but
+        # ripper's comment value does, so the newline token that directly
+        # follows a comment is folded back into it.
+        if last_comment_token && last_comment_end == prism_token.location.start_offset && (event == :on_nl || event == :on_ignored_nl)
+          last_comment_token[2] += value
+          last_comment_token = nil
+          last_comment_end = nil
+
+          # The newline's characters are part of the comment Ripper emits, so
+          # it is still the token Ripper scanned most recently, and the trailing
+          # whitespace check at on_eof measures from its end.
+          previous_previous_token = previous_token
+          previous_token = prism_token
+          next
+        end
 
         # If there's a UTF-8 byte-order mark as the start of the file, then for
         # certain tokens ripper sets the first token back by 3 bytes. It also
@@ -617,46 +672,45 @@ module Prism
 
           if index == 0 && column == 0 && !BOM_FLUSHED
             flushed =
-              case token.type
+              case prism_token.type
               when :BACK_REFERENCE, :INSTANCE_VARIABLE, :CLASS_VARIABLE,
                   :GLOBAL_VARIABLE, :NUMBERED_REFERENCE, :PERCENT_LOWER_I,
                   :PERCENT_LOWER_X, :PERCENT_LOWER_W, :PERCENT_UPPER_I,
                   :PERCENT_UPPER_W, :STRING_BEGIN
                 true
               when :REGEXP_BEGIN, :SYMBOL_BEGIN
-                token.value.start_with?("%")
+                value.start_with?("%")
               else
                 false
               end
 
             unless flushed
               column -= 3
-              value = token.value
               value.prepend(String.new("\xEF\xBB\xBF", encoding: value.encoding))
             end
           end
         end
 
-        event = RIPPER.fetch(token.type)
-        value = token.value
-        lex_state = Translation::Ripper::Lexer::State.cached(lex_state)
-
-        token =
+        lex_compat_token =
           case event
           when :on___end__
             # Ripper doesn't include the rest of the token in the event, so we need to
             # trim it down to just the content on the first line.
-            value = value[0..value.index("\n")]
-            Token.new([[lineno, column], event, value, lex_state])
+            value = value[0..value.index("\n")] #: String
+            [[lineno, column], event, value, lex_state]
           when :on_comment
-            IgnoreStateToken.new([[lineno, column], event, value, lex_state])
+            [[lineno, column], event, value, lex_state]
           when :on_heredoc_end
             # Heredoc end tokens can be emitted in an odd order, so we don't
             # want to bother comparing the state on them.
-            last_heredoc_end = token.location.end_offset
-            IgnoreStateToken.new([[lineno, column], event, value, lex_state])
+            last_heredoc_end = prism_token.location.end_offset
+            [[lineno, column], event, value, lex_state]
+          when :on_embexpr_beg
+            embexpr_states.push(prism_token._ripper_state)
+            [[lineno, column], event, value, lex_state]
           when :on_embexpr_end
-            IgnoreStateToken.new([[lineno, column], event, value, lex_state])
+            last_embexpr_state = embexpr_states.pop
+            [[lineno, column], event, value, lex_state]
           when :on_words_sep
             # Ripper emits one token each per line.
             value.each_line.with_index do |line, index|
@@ -664,9 +718,9 @@ module Prism
                 lineno += 1
                 column = 0
               end
-              tokens << Token.new([[lineno, column], event, line, lex_state])
+              tokens << [[lineno, column], event, line, lex_state]
             end
-            tokens.pop
+            tokens.pop #: lex_compat_token
           when :on_regexp_end
             # On regex end, Ripper scans and then sets end state, so the ripper
             # lexed output is begin, when it should be end. prism sets lex state
@@ -674,63 +728,64 @@ module Prism
             # Ripper's lexed state. So here, if it's a regexp end token, we
             # output the state as the previous state, solely for the sake of
             # comparison.
-            previous_token = result_value[index - 1][0]
             lex_state =
-              if RIPPER.fetch(previous_token.type) == :on_embexpr_end
-                # If the previous token is embexpr_end, then we have to do even
-                # more processing. The end of an embedded expression sets the
-                # state to the state that it had at the beginning of the
-                # embedded expression. So we have to go and find that state and
-                # set it here.
-                counter = 1
-                current_index = index - 1
-
-                until counter == 0
-                  current_index -= 1
-                  current_event = RIPPER.fetch(result_value[current_index][0].type)
-                  counter += { on_embexpr_beg: -1, on_embexpr_end: 1 }[current_event] || 0
-                end
-
-                Translation::Ripper::Lexer::State.cached(result_value[current_index][1])
+              if previous_token&.type == :EMBEXPR_END && last_embexpr_state
+                # An embedded expression that just closed restored the state its
+                # opener had, so that is the state Ripper reports here.
+                Translation::Ripper::Lexer::State[last_embexpr_state]
               else
                 previous_state
               end
 
-            Token.new([[lineno, column], event, value, lex_state])
+            [[lineno, column], event, value, lex_state]
           when :on_eof
-            eof_token = token
-            previous_token = result_value[index - 1][0]
+            eof_token = prism_token
 
-            # If we're at the end of the file and the previous token was a
-            # comment and there is still whitespace after the comment, then
-            # Ripper will append a on_nl token (even though there isn't
-            # necessarily a newline). We mirror that here.
-            if previous_token.type == :COMMENT
-              # If the comment is at the start of a heredoc: <<HEREDOC # comment
-              # then the comment's end_offset is up near the heredoc_beg.
-              # This is not the correct offset to use for figuring out if
-              # there is trailing whitespace after the last token.
-              # Use the greater offset of the two to determine the start of
-              # the trailing whitespace.
-              start_offset = [previous_token.location.end_offset, last_heredoc_end].compact.max
-              end_offset = token.location.start_offset
+            if (previous = previous_token)
+              # A newline that was folded back into a comment still marks the
+              # comment boundary for the check below.
+              before = previous_previous_token
+              comment_boundary = previous.type == :COMMENT ||
+                (before && %i[NEWLINE NEWLINE_TERMINATOR IGNORED_NEWLINE].include?(previous.type) && before.type == :COMMENT && before.location.end_offset == previous.location.start_offset)
 
-              if start_offset < end_offset
-                if bom
-                  start_offset += 3
-                  end_offset += 3
+              # If we're at the end of the file and the previous token was a
+              # comment and there is still whitespace after the comment, then
+              # Ripper will append a on_nl token (even though there isn't
+              # necessarily a newline). We mirror that here.
+              if comment_boundary
+                # If the comment is at the start of a heredoc: <<HEREDOC # comment
+                # then the comment's end_offset is up near the heredoc_beg.
+                # This is not the correct offset to use for figuring out if
+                # there is trailing whitespace after the last token.
+                # Use the greater offset of the two to determine the start of
+                # the trailing whitespace.
+                start_offset = [previous.location.end_offset, last_heredoc_end].compact.max
+                end_offset = prism_token.location.start_offset
+
+                if start_offset < end_offset
+                  if bom
+                    start_offset += 3
+                    end_offset += 3
+                  end
+
+                  tokens << [[lineno, 0], :on_nl, source.slice(start_offset, end_offset - start_offset), lex_state]
                 end
-
-                tokens << Token.new([[lineno, 0], :on_nl, source.slice(start_offset, end_offset - start_offset), lex_state])
               end
             end
 
-            Token.new([[lineno, column], event, value, lex_state])
+            [[lineno, column], event, value, lex_state]
           else
-            Token.new([[lineno, column], event, value, lex_state])
-          end
+            [[lineno, column], event, value, lex_state]
+          end #: lex_compat_token
 
         previous_state = lex_state
+        previous_previous_token = previous_token
+        previous_token = prism_token
+
+        if event == :on_comment
+          last_comment_token = lex_compat_token
+          last_comment_end = prism_token.location.end_offset
+        end
 
         # The order in which tokens appear in our lexer is different from the
         # order that they appear in Ripper. When we hit the declaration of a
@@ -745,19 +800,19 @@ module Prism
         when :default
           # The default state is when there are no heredocs at all. In this
           # state we can append the token to the list of tokens and move on.
-          tokens << token
+          tokens << lex_compat_token
 
           # If we get the declaration of a heredoc, then we open a new heredoc
           # and move into the heredoc_opened state.
           if event == :on_heredoc_beg
             state = :heredoc_opened
-            heredoc_stack.last << Heredoc.build(token)
+            heredoc_stack.last << Heredoc.build(lex_compat_token)
           end
         when :heredoc_opened
           # The heredoc_opened state is when we've seen the declaration of a
           # heredoc and are now lexing the body of the heredoc. In this state we
           # push tokens onto the most recently created heredoc.
-          heredoc_stack.last.last << token
+          heredoc_stack.last.last << lex_compat_token
 
           case event
           when :on_heredoc_beg
@@ -765,7 +820,7 @@ module Prism
             # heredoc, this means we have nested heredocs. In this case we'll
             # push a new heredoc onto the stack and stay in the heredoc_opened
             # state since we're now lexing the body of the new heredoc.
-            heredoc_stack << [Heredoc.build(token)]
+            heredoc_stack << [Heredoc.build(lex_compat_token)]
           when :on_heredoc_end
             # If we receive the end of a heredoc, then we're done lexing the
             # body of the heredoc. In this case we now have a completed heredoc
@@ -774,10 +829,10 @@ module Prism
             state = :heredoc_closed
           end
         when :heredoc_closed
-          if %i[on_nl on_ignored_nl on_comment].include?(event) || (event == :on_tstring_content && value.end_with?("\n"))
+          if %i[on_nl on_ignored_nl on_comment].include?(event) || ((event == :on_tstring_content) && value.end_with?("\n"))
             if heredoc_stack.size > 1
-              flushing = heredoc_stack.pop
-              heredoc_stack.last.last << token
+              flushing = heredoc_stack.pop #: Array[Heredoc::PlainHeredoc | Heredoc::DashHeredoc | Heredoc::DedentingHeredoc]
+              heredoc_stack.last.last << lex_compat_token
 
               flushing.each do |heredoc|
                 heredoc.to_a.each do |flushed_token|
@@ -789,12 +844,12 @@ module Prism
               next
             end
           elsif event == :on_heredoc_beg
-            tokens << token
+            tokens << lex_compat_token
             state = :heredoc_opened
-            heredoc_stack.last << Heredoc.build(token)
+            heredoc_stack.last << Heredoc.build(lex_compat_token)
             next
           elsif heredoc_stack.size > 1
-            heredoc_stack[-2].last << token
+            heredoc_stack[-2].last << lex_compat_token
             next
           end
 
@@ -805,34 +860,44 @@ module Prism
           heredoc_stack.last.clear
           state = :default
 
-          tokens << token
+          tokens << lex_compat_token
         end
       end
 
-      # Drop the EOF token from the list
-      tokens = tokens[0...-1]
+      # Drop the EOF token from the list. The EOF token may not be
+      # present if the source was syntax invalid
+      if tokens.dig(-1, 1) == :on_eof
+        tokens = tokens[0...-1] #: Array[lex_compat_token]
+      end
 
       # We sort by location because Ripper.lex sorts.
-      # Manually implemented instead of `sort_by!(&:location)` for performance.
       tokens.sort_by! do |token|
-        line, column = token.location
+        line, column = token[0]
         source.byte_offset(line, column)
       end
 
-      # Add :on_sp tokens
-      tokens = add_on_sp_tokens(tokens, source, result.data_loc, bom, eof_token)
+      tokens = post_process_tokens(tokens, source, result.data_loc, bom, eof_token)
 
-      Result.new(tokens, result.comments, result.magic_comments, result.data_loc, result.errors, result.warnings, source)
+      Result.new(tokens, result.magic_comments, result.data_loc, result.errors, result.warnings, result.continuable?, source)
     end
 
-    def add_on_sp_tokens(tokens, source, data_loc, bom, eof_token)
-      new_tokens = []
+    private
 
-      prev_token_state = Translation::Ripper::Lexer::State.cached(Translation::Ripper::EXPR_BEG)
+    #: (Array[lex_compat_token] tokens, Source source, Location? data_loc, bool bom, Token? eof_token) -> Array[lex_compat_token]
+    def post_process_tokens(tokens, source, data_loc, bom, eof_token)
+      new_tokens = [] #: Array[lex_compat_token]
+
+      prev_token_state = Translation::Ripper::Lexer::State[Translation::Ripper::EXPR_BEG]
       prev_token_end = bom ? 3 : 0
 
+      cache = Translation::Ripper::LineAndColumnCache.new(source)
+
       tokens.each do |token|
-        line, column = token.location
+        # Skip missing heredoc ends.
+        next if token[1] == :on_heredoc_end && token[2] == ""
+
+        # Add :on_sp tokens.
+        line, column = token[0]
         start_offset = source.byte_offset(line, column)
 
         # Ripper reports columns on line 1 without counting the BOM, so we
@@ -841,8 +906,7 @@ module Prism
 
         if start_offset > prev_token_end
           sp_value = source.slice(prev_token_end, start_offset - prev_token_end)
-          sp_line = source.line(prev_token_end)
-          sp_column = source.column(prev_token_end)
+          sp_line, sp_column = cache.line_and_column(prev_token_end)
           # Ripper reports columns on line 1 without counting the BOM
           sp_column -= 3 if sp_line == 1 && bom
           continuation_index = sp_value.byteindex("\\")
@@ -852,54 +916,32 @@ module Prism
             next_whitespace_index = continuation_index + 1
             next_whitespace_index += 1 if sp_value.byteslice(next_whitespace_index) == "\r"
             next_whitespace_index += 1
-            first_whitespace = sp_value[0...continuation_index]
-            continuation = sp_value[continuation_index...next_whitespace_index]
-            second_whitespace = sp_value[next_whitespace_index..]
+            first_whitespace = sp_value[0...continuation_index] #: String
+            continuation = sp_value[continuation_index...next_whitespace_index] #: String
+            second_whitespace = sp_value[next_whitespace_index..] || ""
 
-            new_tokens << IgnoreStateToken.new([
-              [sp_line, sp_column],
-              :on_sp,
-              first_whitespace,
-              prev_token_state
-            ]) unless first_whitespace.empty?
-
-            new_tokens << IgnoreStateToken.new([
-              [sp_line, sp_column + continuation_index],
-              :on_sp,
-              continuation,
-              prev_token_state
-            ])
-
-            new_tokens << IgnoreStateToken.new([
-              [sp_line + 1, 0],
-              :on_sp,
-              second_whitespace,
-              prev_token_state
-            ]) unless second_whitespace.empty?
+            new_tokens << [[sp_line, sp_column], :on_sp, first_whitespace, prev_token_state] unless first_whitespace.empty?
+            new_tokens << [[sp_line, sp_column + continuation_index], :on_sp, continuation, prev_token_state]
+            new_tokens << [[sp_line + 1, 0], :on_sp, second_whitespace, prev_token_state] unless second_whitespace.empty?
           else
-            new_tokens << IgnoreStateToken.new([
-              [sp_line, sp_column],
-              :on_sp,
-              sp_value,
-              prev_token_state
-            ])
+            new_tokens << [[sp_line, sp_column], :on_sp, sp_value, prev_token_state]
           end
         end
 
         new_tokens << token
-        prev_token_state = token.state
-        prev_token_end = start_offset + token.value.bytesize
+        prev_token_state = token[3]
+        prev_token_end = start_offset + token[2].bytesize
       end
 
-      unless data_loc # no trailing :on_sp with __END__ as it is always preceded by :on_nl
+      if !data_loc && eof_token # no trailing :on_sp with __END__ as it is always preceded by :on_nl
         end_offset = eof_token.location.end_offset
         if prev_token_end < end_offset
-          new_tokens << IgnoreStateToken.new([
+          new_tokens << [
             [source.line(prev_token_end), source.column(prev_token_end)],
             :on_sp,
             source.slice(prev_token_end, end_offset - prev_token_end),
             prev_token_state
-          ])
+          ]
         end
       end
 

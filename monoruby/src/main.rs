@@ -45,9 +45,9 @@ fn dump_ast(code: &[u8]) {
     for diag in result.errors() {
         eprintln!(
             "prism error at {}..{}: {}",
-            diag.location().start_offset(),
-            diag.location().end_offset(),
-            diag.message(),
+            diag.location().start(),
+            diag.location().end(),
+            String::from_utf8_lossy(diag.message()),
         );
     }
     eprintln!("{:#?}", result.node());

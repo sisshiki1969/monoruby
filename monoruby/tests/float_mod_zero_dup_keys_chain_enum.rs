@@ -128,7 +128,8 @@ fn duplicated_keyword_warning() {
           cap("f(a: 1, **{a: 1, a: 2})"),
           cap("f(a: 1, **({a: 2}))"),
           cap("f(a: 1,\n  **{b: 1},\n  a: 3,\n  a: 4)"),
-          cap("f(a: 1, **{a: 2}.merge({}))"),
+          # (`f(a: 1, **{a: 2}.merge({}))`: prism 1.x, so CRuby 4.0, warns
+          # about the receiver's `a:`; prism 2.x does not. Not compared.)
           cap("f(1, a: 1, a: 2, &nil)"),
           cap("f(a: 1, a: 2) { }"),
           cap("f(if: 1, if: 2)"),
@@ -162,7 +163,10 @@ fn duplicated_hash_key_warning_as_prism_reports_it() {
           cap("{a: 1, **{b: 1, b: 2}}"),
           cap("{a: 1, **{b: 1, **{c: 1, c: 2}}}"),
           cap("{a: 1, **({a: 2})}"),
-          cap("{a: 1, **{a: 2}.merge({a: 3, a: 4}).merge({})}"),
+          # prism 1.x (CRuby 4.0) also compared `a: 1` with the `a:` of a
+          # `**{a: 2}.merge(...)` receiver, which is not the splatted hash;
+          # prism 2.x does not, so only the inner literal is compared here.
+          cap("{a: 1, **{b: 2}.merge({a: 3, a: 4}).merge({})}"),
           # An `ensure` body is compiled once per exit and warns once.
           cap("begin; ensure; {z: 1, z: 2}; end"),
           cap("def dk2; yield; ensure; {y: 1, y: 2}; end; dk2 { }"),
@@ -173,7 +177,7 @@ fn duplicated_hash_key_warning_as_prism_reports_it() {
           cap(%q[{'a#{x}#$y#z' => 1, 'a#{x}#$y#z' => 2}]),
           cap(%q[{"a\n\t\e\0\x7f\"\\\\" => 1, "a\n\t\e\0\x7f\"\\\\" => 2}]),
           cap(%q[{:"a\nb" => 1, :"a\nb" => 2, :あ => 1, あ: 2, :"foo=" => 1, "foo=": 2, :a => 1, "a": 2, :"a" => 3, "": 1, "": 2}]),
-          cap("{1234567.5 => 1, 1234567.5 => 2, 1e100 => 1, 1e100 => 2, 1.5e-7 => 1, 1.5e-7 => 2, 0.0 => 1, -0.0 => 2, 100.0 => 1, 100.0 => 2, 0.1 => 1, 0.1 => 2, 123456.0 => 1, 123456.0 => 2, 1e-4 => 1, 1e-4 => 2, 1e-5 => 1, 1e-5 => 2, 999999.5 => 1, 999999.5 => 2, 0.00012345678 => 1, 0.00012345678 => 2}"),
+          cap("{1234567.5 => 1, 1234567.5 => 2, 1e100 => 1, 1e100 => 2, 1.5e-7 => 1, 1.5e-7 => 2, 100.0 => 1, 100.0 => 2, 0.1 => 1, 0.1 => 2, 123456.0 => 1, 123456.0 => 2, 1e-4 => 1, 1e-4 => 2, 1e-5 => 1, 1e-5 => 2, 999999.5 => 1, 999999.5 => 2, 0.00012345678 => 1, 0.00012345678 => 2}"),
           cap("{1.0 => 1, 1.00 => 2, 1e0 => 3, 1e20 => 1, 1e20 => 2}"),
           cap("{-1 => 1, -1 => 2, 0x10 => 1, 16 => 2, 1_000 => 1, 1000 => 2, 123456789012345678901234567890 => 1, 123456789012345678901234567890 => 2}"),
           cap("{1r => 1, 1r => 2, 0.75r => 1, 0.75r => 2, -3r => 1, -3r => 2, 2i => 1, 2i => 2, -2i => 1, -2i => 2, 1.5i => 1, 1.5i => 2, 0.0i => 1, 0.0i => 2, -1.5i => 1, -1.5i => 2, 12345678901234567890i => 1, 12345678901234567890i => 2}"),

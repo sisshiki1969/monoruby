@@ -201,7 +201,7 @@ fn build_prism_options(
                     names.push(name);
                 }
             }
-            scopes.push(prism::Scope::new(names));
+            scopes.push(prism::Scope::default().locals(names));
         }
     }
 
@@ -229,9 +229,9 @@ fn build_prism_options(
                 crate::id_table::uncarry_source_ident(n).unwrap_or_else(|| n.as_bytes().to_vec())
             })
             .collect();
-        scopes.push(prism::Scope::new(names));
+        scopes.push(prism::Scope::default().locals(names));
     } else {
-        scopes.push(prism::Scope::new(Vec::<&[u8]>::new()));
+        scopes.push(prism::Scope::default());
     }
 
     let anon = resolve_anon_forwarding(extern_context, binding_locals);
@@ -244,14 +244,13 @@ fn build_prism_options(
     // the parameters were actually declared, they read as a conflict
     // and the error does not change.
     let flags = anon.prism_flags();
-    if flags != 0
+    if !flags.is_empty()
         && let Some(outermost) = scopes.first_mut()
     {
-        *outermost = std::mem::replace(outermost, prism::Scope::new(Vec::<&[u8]>::new()))
-            .forwarding(flags);
+        *outermost = std::mem::replace(outermost, prism::Scope::default()).forwarding(flags);
     }
 
-    (prism::Options::new().line(line).scopes(scopes), anon)
+    (prism::Options::default().line(line).scopes(scopes), anon)
 }
 
 /// Find the anonymous parameters the frames around an `eval` declared,
@@ -492,16 +491,17 @@ fn try_prism_inner(
     // prints a `__FILE__` key by it, so `{__FILE__ => 1, "t.rb" => 2}`
     // warns as on CRuby (#2050). A plain parse needs an options block
     // for it, which is otherwise the defaults (`line(1)` is what no
-    // options at all would give).
+    // options at all would give). The crate hands the name to prism as a
+    // C string, so it stops at a NUL an `eval` file name may contain.
     let is_eval = options.is_some();
     let prism_options = options
-        .unwrap_or_else(|| prism::Options::new().line(1))
-        .filepath(path_display.as_bytes());
+        .unwrap_or_else(|| prism::Options::default().line(1))
+        .filepath(path_display.split('\0').next().unwrap_or_default());
 
-    let tree = PrismTree::parse(code, Some(&prism_options));
+    let tree = PrismTree::parse(code, Some(prism_options));
     let result = tree.result();
     let code = tree.source();
-    let data_loc_start = result.data_loc().map(|loc| loc.start_offset());
+    let data_loc_start = result.data_loc().map(|loc| loc.start() as usize);
 
     // Detect the source encoding from the `# coding:` / `# encoding:`
     // magic comment ourselves rather than via prism's `magic_comments()`
@@ -516,6 +516,10 @@ fn try_prism_inner(
     let source_encoding: Option<String> = detect_source_encoding(code)
         .or(cli_source_encoding)
         .or(default_encoding);
+    let regexp_check_encoding = source_encoding
+        .as_deref()
+        .and_then(|name| crate::value::Encoding::try_from_str(name).ok())
+        .unwrap_or(crate::value::Encoding::UTF8);
     // Per-file magic comment wins; otherwise fall back to the
     // `--enable/--disable-frozen-string-literal` process default.
     let frozen_string_literal: Option<bool> = detect_frozen_string_literal(code)
@@ -547,7 +551,18 @@ fn try_prism_inner(
         .with_hidden_ivars(detect_hidden_ivars(code)),
     );
 
-    if let Some(diag) = result.errors().next() {
+    // prism >= 2.0 validates the byte escapes of a regexp literal against
+    // its encoding and calls every sequence it rejects an "invalid
+    // multibyte escape" — including a valid character spelled with mixed
+    // escapes (`/\xE3\201\202/`) and a truncated one, which CRuby 4.0
+    // (prism 1.x) accepts or calls "too short escaped multibyte
+    // character". `rb_reg_preprocess`, which monoruby ports as
+    // `reg_preprocess` and runs where the literal is compiled, is the
+    // authority: prism's diagnostic stands only when it agrees.
+    if let Some(diag) = result
+        .errors()
+        .find(|d| !is_regexp_escape_left_to_preprocess(d, regexp_check_encoding))
+    {
         let loc = location_to_loc(&diag.location());
         // CRuby embeds the location in the SyntaxError *message* itself
         // ("file:line: syntax error, ..."), and callers regex on it.
@@ -556,7 +571,7 @@ fn try_prism_inner(
         return Err(MonorubyErr::parse(crate::ast::ParseErr {
             kind: crate::ast::ParseErrKind::SyntaxError(format!(
                 "{file}:{line}: prism: {}",
-                diag.message()
+                String::from_utf8_lossy(diag.message())
             )),
             loc,
             source_info,
@@ -575,7 +590,8 @@ fn try_prism_inner(
     let warnings: Vec<(String, bool)> = result
         .warnings()
         .filter_map(|w| {
-            let msg = w.message();
+            let msg = String::from_utf8_lossy(w.message()).into_owned();
+            let msg = msg.as_str();
             // `-e` scripts suppress the flip-flop / condition-literal
             // warnings, exactly like CRuby's prism `COMMAND_LINE_E` gate
             // (these are the idiomatic awk/sed `-ne`/`-pe` conditions).
@@ -2185,7 +2201,7 @@ impl<'pr> Lowerer<'pr> {
                     let name = String::from_utf8_lossy(raw).into_owned();
                     // CRuby's parser warns (default level) that the
                     // reference is unusable and always nil.
-                    let line = source_line_for_offset(self.source, node.location().start_offset())
+                    let line = source_line_for_offset(self.source, node.location().start() as usize)
                         as i64
                         + self.line_offset;
                     self.warnings.push((
@@ -2229,7 +2245,7 @@ impl<'pr> Lowerer<'pr> {
                 // start offset, then adding the eval line offset
                 // (0 for ordinary file parses, `lineno - 1` for
                 // `eval(_, _, _, lineno)`).
-                let off = node.location().start_offset();
+                let off = node.location().start() as usize;
                 let line = source_line_for_offset(self.source, off) as i64 + self.line_offset;
                 Node {
                     kind: NodeKind::Integer(line),
@@ -3998,8 +4014,9 @@ impl<'pr> Lowerer<'pr> {
                 Node::new_array_member(d(loc), vec![Node::new_integer(0, loc), i(loc)], loc);
             arm.push(pm_assign(target, slice));
         }
-        if let prism::Node::SplatNode { .. } = &n.right() {
-            let sp = n.right().as_splat_node().unwrap();
+        {
+            // prism >= 2.0 types the trailing splat as a `SplatNode`.
+            let sp = n.right();
             if let Some(expr) = sp.expression() {
                 let target = self.lower_assign_target(&expr)?;
                 let from = Node::new_binop(BinOp::Add, i(loc), Node::new_integer(k, loc));
@@ -5312,7 +5329,9 @@ impl<'pr> Lowerer<'pr> {
         }
 
         // Block param (`&blk` / `&`)
-        if let Some(bp) = params.block() {
+        // prism >= 2.0: `block` is a `BlockParameterNode` or (Ruby 4.1's
+        // `&nil`) a `NoBlockParameterNode`, which 4.0 syntax rejects.
+        if let Some(bp) = params.block().and_then(|n| n.as_block_parameter_node()) {
             let loc = location_to_loc(&bp.location());
             let name = match bp.name() {
                 Some(id) => Some(self.constant_name(&id)?),
@@ -6049,9 +6068,38 @@ fn unop_from_name(name: &str) -> Option<UnOp> {
     })
 }
 
+/// Whether `diag` is prism's "invalid multibyte escape" for a regexp
+/// literal that CRuby's `rb_reg_preprocess` does not refuse as such:
+/// one it accepts, or refuses with another message (see the call site).
+fn is_regexp_escape_left_to_preprocess(
+    diag: &prism::Diagnostic<'_>,
+    source_encoding: crate::value::Encoding,
+) -> bool {
+    if !diag.message().starts_with(b"invalid multibyte escape: /") {
+        return false;
+    }
+    // The location is the literal, `/body/flags` or `%r<d>body<d>flags`.
+    let lit = diag.location().as_slice();
+    let flags_len = lit.iter().rev().take_while(|b| b.is_ascii_alphabetic()).count();
+    let open = if lit.starts_with(b"%r") { 2 } else { 0 };
+    let close = lit.len() - flags_len - 1;
+    let (body, flags) = (&lit[(open + 1).min(close)..close], &lit[close + 1..]);
+    let enc = match flags.iter().rev().find(|b| b"esun".contains(b)) {
+        Some(b'n') => return false,
+        Some(b'e') => crate::value::Encoding::try_from_str("EUC-JP").unwrap(),
+        Some(b's') => crate::value::Encoding::try_from_str("Windows-31J").unwrap(),
+        Some(_) => crate::value::Encoding::UTF8,
+        None => source_encoding,
+    };
+    !matches!(
+        crate::value::rvalue::regexp::reg_preprocess(body, enc, flags.contains(&b'x')),
+        Err("invalid multibyte escape")
+    )
+}
+
 fn location_to_loc(loc: &Location<'_>) -> Loc {
-    let start = loc.start_offset();
-    let end = loc.end_offset();
+    let start = loc.start() as usize;
+    let end = loc.end() as usize;
     Loc(start, end.saturating_sub(1).max(start))
 }
 
@@ -6836,7 +6884,7 @@ $1
         assert_ne!(a, b);
         assert!(format!("{a:?}").starts_with("DeferredDef(@"));
         // The tree outlives the parse: the handles still resolve.
-        assert!(a.node().location().start_offset() < b.node().location().start_offset());
+        assert!(a.node().location().start() < b.node().location().start());
         assert_eq!(a.scope_level(), 0);
         assert_eq!(a.pm_temp(), 0);
     }
