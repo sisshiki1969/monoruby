@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c53f5da5.js";
+            window.path_to_searchindex_js = "searchindex-990f75ac.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -758,20 +758,14 @@ in test builds, so tests reach compiled code without long warm-up loops.</p>
 <h2 id="vendored-and-pinned-dependencies"><a class="header" href="#vendored-and-pinned-dependencies">Vendored and pinned dependencies</a></h2>
 <p><code>hashbrown/</code> is a workspace member (a local fork). <code>smallvec</code> is also a fork
 but is consumed as a git dependency rather than in-tree.</p>
-<p>The <code>ruby-prism</code> wrapper is pinned to the <code>monoruby-vendored</code> branch of
-<a href="https://github.com/sisshiki1969/prism"><code>sisshiki1969/prism</code></a>. That fork has
-two branches:</p>
-<ul>
-<li><code>monoruby</code> — the minimal upstream-bound diff (the Rust <code>parse_with_options</code>
-API plus <code>ruby-prism-sys</code> bindgen allowlist additions). The base for any
-upstream PR to <code>ruby/prism</code>.</li>
-<li><code>monoruby-vendored</code> — <code>monoruby</code> plus one commit checking in the C sources
-the upstream <code>vendored.rs</code> build script needs, so consumers need neither
-bundler nor <code>rake cargo:build</code>.</li>
-</ul>
-<p>To bump the prism revision: push to the fork’s <code>monoruby</code> branch, run
-<code>bin/refresh-prism-vendored</code> (which rebuilds and force-pushes
-<code>monoruby-vendored</code>), then <code>cargo update -p ruby-prism</code> here.</p>
+<p><code>ruby-prism</code> is the published crate from crates.io (upstream
+<a href="https://github.com/ruby/prism"><code>ruby/prism</code></a>); its <code>ruby-prism-sys</code> ships
+prism’s C source and pre-generated bindings, so no fork or bindgen is
+needed. To bump it, change the version in <code>monoruby/Cargo.toml</code> and
+re-vendor the prism gem’s Ruby half of the same version into
+<code>monoruby/gem/prism/</code> (keeping monoruby’s own <code>prism/prism.rb</code> and
+<code>prism/serialize_reader.rb</code>, and porting changes to the gem’s options
+packing into <code>prism/prism.rb</code>).</p>
 <p><code>bin/vendor-ruby-stdlib</code> re-snapshots CRuby’s pure-Ruby stdlib and default
 gems into <code>monoruby/vendor/ruby-stdlib/</code>. It is a maintenance step, never run
 by <code>cargo build</code>.</p>
