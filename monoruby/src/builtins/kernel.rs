@@ -4288,7 +4288,9 @@ pub(super) fn abort(
         }
         s
     } else {
-        "abort".to_string()
+        // CRuby's `rb_f_abort` without a message raises
+        // `SystemExit.new(1)`, whose message is the class's default.
+        "exit".to_string()
     };
     Err(MonorubyErr::new(MonorubyErrKind::SystemExit(1), msg))
 }

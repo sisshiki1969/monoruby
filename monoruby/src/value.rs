@@ -3145,6 +3145,41 @@ impl Value {
         }
     }
 
+    /// See [`RValue::exception_is_uninitialized`]. False for anything but
+    /// an exception.
+    pub(crate) fn exception_is_uninitialized(&self) -> bool {
+        self.try_rvalue()
+            .is_some_and(|rv| rv.ty() == ObjTy::EXCEPTION && rv.exception_is_uninitialized())
+    }
+
+    pub(crate) fn set_exception_uninitialized(&mut self) {
+        if let Some(rv) = self.try_rvalue_mut() {
+            rv.set_exception_uninitialized(true);
+        }
+    }
+
+    /// See [`RValue::exception_receiver_first`].
+    pub(crate) fn exception_receiver_first(&self) -> bool {
+        self.try_rvalue()
+            .is_some_and(|rv| rv.ty() == ObjTy::EXCEPTION && rv.exception_receiver_first())
+    }
+
+    pub(crate) fn set_exception_receiver_first(&mut self) {
+        if let Some(rv) = self.try_rvalue_mut()
+            && rv.ty() == ObjTy::EXCEPTION
+        {
+            rv.set_exception_receiver_first();
+        }
+    }
+
+    pub(crate) fn set_exception_initialized(&mut self) {
+        if let Some(rv) = self.try_rvalue_mut()
+            && rv.ty() == ObjTy::EXCEPTION
+        {
+            rv.set_exception_uninitialized(false);
+        }
+    }
+
     pub(crate) fn is_exception_mut(&mut self) -> Option<&mut ExceptionInner> {
         let rv = self.try_rvalue_mut()?;
         // SAFETY: The type check ensures this RValue contains an exception.

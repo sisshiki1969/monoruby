@@ -14,6 +14,9 @@
 //!   `max(n)` / `min_by(n)` / `max_by(n)` are `rb_nmin_run`. A block or a
 //!   user-defined `<=>` sees the same pairs in the same order.
 //! - **Instance variables and uninitialized objects** (#2006).
+//! - **Marshal of exceptions** (#2013): uninitialized ones, `SystemExit`'s
+//!   own `initialize`, `KeyError`'s receiver/key order, ENV, anonymous
+//!   Struct classes and `abort`'s message.
 
 use monoruby::tests::*;
 
@@ -171,6 +174,35 @@ fn uninitialized_status_and_stat() {
               rdev_minor sticky?].map {{ |m| t.() {{ st.public_send(m) }} }},
           t.() {{ st.inspect }}, t.() {{ st <=> File::Stat.new(".") }}, t.() {{ File::Stat.new(".") <=> st }},
           t.() {{ File::Stat.new(".").dup.directory? }},
+        ]
+        "#
+    ));
+}
+
+/// The fields `Marshal.dump` writes for an exception follow CRuby's
+/// `exc_dump_data` (#2013).
+#[test]
+fn exception_marshal_fields() {
+    run_test_once(&format!(
+        r#"
+        {HELPER}
+        f = ->(e) {{ Marshal.dump(e).b.scan(/[a-z_]{{2,}}/) }}
+        class SE2 < SystemExit; def initialize; end; end
+        [
+          t.() {{ f.(SystemExit.allocate) }}, t.() {{ f.(NameError.allocate) }}, t.() {{ f.(RuntimeError.allocate) }},
+          t.() {{ f.(SE2.new) }}, t.() {{ SE2.new.status }}, t.() {{ f.(SystemExit.new) }},
+          t.() {{ f.(KeyError.new("x", receiver: 1, key: 2)) }}, t.() {{ f.(KeyError.new("x", key: 2, receiver: 1)) }},
+          t.() {{ f.(KeyError.new("x", key: 2)) }},
+          t.() {{ e = Marshal.load(Marshal.dump(KeyError.new("x", receiver: 1, key: 2))); [e.receiver, e.key, e.message] }},
+          t.() {{ e = Marshal.load(Marshal.dump(SystemExit.allocate)); [e.class, e.message, e.status] }},
+          t.() {{ [SystemExit.new(false).status, SystemExit.new(3, "m").message, SystemExit.new("m").status] }},
+          t.() {{ SystemExit.new(1, 2, 3) }}, t.() {{ SystemExit.new(true, "a", "b") }},
+          t.() {{ Marshal.dump(ENV) }}, t.() {{ Marshal.dump(Struct.new(:a).new(1)) }},
+          t.() {{ begin; abort; rescue SystemExit => e; [e.message, e.status]; end }},
+          *[RuntimeError.new("x"), KeyError.new("x", receiver: 1, key: 2), SystemExit.allocate].map {{ |e|
+            t.() {{ 2.times {{ e = Marshal.load(Marshal.dump(e)) }}; f.(e) }} }},
+          t.() {{ e = (raise SystemExit.allocate rescue $!); [f.(e).first(3), e.message] }},
+          t.() {{ [RuntimeError.allocate.dup.message, f.(RuntimeError.allocate.dup)] }},
         ]
         "#
     ));

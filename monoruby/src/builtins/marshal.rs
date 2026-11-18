@@ -978,6 +978,20 @@ impl<'a> MarshalReader<'a> {
             let mut backtrace: Option<Value> = None;
             let mut cause: Option<Value> = None;
             let mut user_ivars: Vec<(IdentId, Value)> = Vec::new();
+            // CRuby restores the fields as they come: one dumped without
+            // `mesg` stays uninitialized, and `receiver` before `key`
+            // keeps that order on the next dump (#2013).
+            let mut has_mesg = false;
+            let mut receiver_first = false;
+            let mut seen_key = false;
+            for (name, _) in &ivars {
+                match name.get_name().as_str() {
+                    "key" => seen_key = true,
+                    "receiver" if !seen_key => receiver_first = true,
+                    "mesg" => has_mesg = true,
+                    _ => {}
+                }
+            }
             for (name, val) in &ivars {
                 match name.get_name().as_str() {
                     "mesg" => {
@@ -1032,6 +1046,12 @@ impl<'a> MarshalReader<'a> {
             let mut exc = Value::new_exception_from_with_class(msg, module.id(), module.id());
             if raw_message.is_some() {
                 exc.is_exception_mut().unwrap().raw_message = raw_message;
+            }
+            if !has_mesg {
+                exc.set_exception_uninitialized();
+            }
+            if receiver_first && seen_key {
+                exc.set_exception_receiver_first();
             }
             if let Some(bt) = backtrace {
                 let set_bt = IdentId::get_id("set_backtrace");
@@ -2720,6 +2740,16 @@ fn marshal_dump_value(
                     Some(ObjTy::HASH) if obj.is_kind_of(&globals.store, SET_CLASS) => {
                         marshal_dump_set(buf, obj, vm, globals, symbols, objects, limit)?;
                     }
+                    Some(ObjTy::HASH)
+                        if globals
+                            .store
+                            .get_ivar(obj, IdentId::get_id("/__env"))
+                            .is_some() =>
+                    {
+                        return Err(MonorubyErr::typeerr(
+                            "no _dump_data is defined for class Object",
+                        ));
+                    }
                     Some(ObjTy::HASH) => {
                         // Snapshot the pairs to avoid holding a borrow into
                         // the live hash across re-entrant user code.
@@ -2847,9 +2877,9 @@ fn marshal_dump_value(
                         // as `#<Class:0x...>`, which is not a valid
                         // constant path.
                         if class_name.starts_with("#<") {
-                            return Err(MonorubyErr::typeerr(
-                                "can't dump anonymous class Struct",
-                            ));
+                            return Err(MonorubyErr::typeerr(format!(
+                                "can't dump anonymous class {class_name}"
+                            )));
                         }
                         let class_name_id = IdentId::get_id(&class_name);
                         // SAFETY: STRUCT-typed values are only produced
@@ -2958,11 +2988,17 @@ fn marshal_dump_value(
                         // The fields of the builtin exceptions, under the
                         // names CRuby dumps them by.
                         let real_class = obj.real_class(&globals.store);
-                        let fields: Vec<_> = exception_fields_of(&globals.store, real_class)
+                        // An exception `allocate` made and no `initialize`
+                        // reached (CRuby's `exc_init`) has no `mesg` and,
+                        // until it is raised, no `bt`; nor the fields an
+                        // `initialize` would have stored (#2013).
+                        let uninit = obj.exception_is_uninitialized();
+                        let mut fields: Vec<_> = exception_fields_of(&globals.store, real_class)
                             .filter_map(|f| {
                                 let val = match globals.store.get_ivar(obj, IdentId::get_id(f.slot))
                                 {
                                     Some(val) => val,
+                                    None if uninit => return None,
                                     None => match f.unset {
                                         UnsetField::Skip => return None,
                                         UnsetField::Nil => Value::nil(),
@@ -3024,11 +3060,25 @@ fn marshal_dump_value(
                             .collect();
                         let bt_locations = IdentId::get_id("bt_locations");
                         extras.sort_by_key(|(name, _)| *name == bt_locations);
+                        // `KeyError.new(msg, receiver:, key:)` sets the
+                        // receiver first, the VM's own KeyError the key:
+                        // CRuby dumps them in the order they were set.
+                        if obj.exception_receiver_first()
+                            && let [(k, _), (r, _), ..] = fields[..]
+                            && k == IdentId::get_id("key")
+                            && r == IdentId::get_id("receiver")
+                        {
+                            fields.swap(0, 1);
+                        }
+                        let write_mesg = !uninit;
+                        let write_bt = !uninit || has_locations;
                         buf.push(b'o');
                         marshal_write_symbol(buf, class_name_id, symbols);
                         marshal_write_fixnum(
                             buf,
-                            (2 + fields.len()
+                            (usize::from(write_mesg)
+                                + usize::from(write_bt)
+                                + fields.len()
                                 + user_ivars.len()
                                 + usize::from(cause.is_some())
                                 + usize::from(has_locations)
@@ -3036,20 +3086,24 @@ fn marshal_dump_value(
                         );
                         // :mesg — CRuby stores nil until a message is
                         // explicitly given.
-                        marshal_write_symbol(buf, IdentId::get_id("mesg"), symbols);
-                        if msg_unset {
-                            buf.push(b'0'); // nil
-                        } else {
-                            // The message's *own* bytes and encoding, not
-                            // a UTF-8 rebuild of its text: CRuby dumps a
-                            // BINARY message as a bare string, and a
-                            // UTF-8 one wrapped in `I…:E`.
-                            let msg_val = super::exception::message_value(&globals.store, obj);
-                            marshal_dump_value(buf, msg_val, vm, globals, symbols, objects, limit)?;
+                        if write_mesg {
+                            marshal_write_symbol(buf, IdentId::get_id("mesg"), symbols);
+                            if msg_unset {
+                                buf.push(b'0'); // nil
+                            } else {
+                                // The message's *own* bytes and encoding, not
+                                // a UTF-8 rebuild of its text: CRuby dumps a
+                                // BINARY message as a bare string, and a
+                                // UTF-8 one wrapped in `I…:E`.
+                                let msg_val = super::exception::message_value(&globals.store, obj);
+                                marshal_dump_value(buf, msg_val, vm, globals, symbols, objects, limit)?;
+                            }
                         }
                         // :bt
-                        marshal_write_symbol(buf, IdentId::get_id("bt"), symbols);
-                        marshal_dump_value(buf, bt, vm, globals, symbols, objects, limit)?;
+                        if write_bt {
+                            marshal_write_symbol(buf, IdentId::get_id("bt"), symbols);
+                            marshal_dump_value(buf, bt, vm, globals, symbols, objects, limit)?;
+                        }
                         for (name, val) in fields.into_iter().chain(user_ivars) {
                             marshal_write_symbol(buf, name, symbols);
                             marshal_dump_value(buf, val, vm, globals, symbols, objects, limit)?;
