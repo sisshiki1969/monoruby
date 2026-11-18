@@ -46,6 +46,45 @@ pub(super) extern "C" fn chain_deopt(vm: &mut Executor, frames: u32) {
     });
 }
 
+///
+/// A capture (`binding`, `eval`, `instance_eval` / `class_eval` with a
+/// String) is about to read the frame *target*; *from* is the capturing
+/// builtin's own frame, above *target* on the control-frame chain.
+///
+/// If *target* is a compiled frame, some of its state may not be in its
+/// slots: an object escape analysis left unallocated, an unboxed Float, a
+/// local the JIT folded to a constant. A capture point the JIT knew about
+/// (a direct call to `binding` / `eval`) homes all of that first, but a
+/// capture can also come in through a call the JIT took for something else
+/// (`send(:eval, ...)`, a block, `[o].include?(...)` with `==` aliased to
+/// `eval`) or through a frameless helper (an operator, `[]`, a Hash
+/// literal's `hash`). Then:
+///
+/// - *target* suspended at a registered call site: run that site's
+///   chain-deopt conversion now, before the capture copies the frame. The
+///   frame gets its write-back and resumes in the interpreter when the call
+///   returns, where it also sees what `eval` wrote into its locals.
+/// - *target* inside a frameless helper (`Executor::jit_helper_cfp`): fail
+///   with `JitReenter`. The error leaves the helper through the
+///   instruction's ordinary error exit, which writes the frame back, and
+///   `handle_error` resumes the interpreter at the same instruction, which
+///   runs it again on the consistent frame.
+///
+pub(crate) fn convert_frame_for_capture(vm: &Executor, from: Cfp, target: Cfp) -> Result<()> {
+    let mut callee = from;
+    while let Some(prev) = callee.prev() {
+        if prev == target {
+            if vm.jit_helper_cfp == target.as_ptr() as usize {
+                return Err(MonorubyErr::jit_reenter());
+            }
+            CODEGEN.with(|codegen| codegen.borrow_mut().convert_for_capture(callee));
+            return Ok(());
+        }
+        callee = prev;
+    }
+    Ok(())
+}
+
 /// Detach a shared (copy-on-write) String receiver so the JIT's inline
 /// byte-store fast path can write its buffer in place instead of deopting
 /// (see `RStringInner::detach`). Infallible; copies with a plain malloc, so

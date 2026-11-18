@@ -3825,6 +3825,43 @@ impl AbstractState {
         ir.push(AsmInst::ChainExit { evict, spec });
     }
 
+    ///
+    /// Before a call an inline generator emits itself (`send`,
+    /// `Method#call`): drop `dst`, as a compiled call does before it, and
+    /// reserve the site's evict id. The generator's code records the call's
+    /// return address under it (`set_deopt_with_return_addr`), and
+    /// [`Self::inline_call_epilogue`] registers the site for chain deopt.
+    /// Without that, a capture reaching this frame through the call
+    /// (`send(:eval, ...)`) could not convert it (`convert_for_capture`).
+    ///
+    pub(crate) fn inline_call_prologue(&mut self, ir: &mut AsmIr, dst: Option<SlotId>) -> AsmEvict {
+        self.discard(dst);
+        ir.new_evict()
+    }
+
+    ///
+    /// After the inline call of [`Self::inline_call_prologue`] (whose code
+    /// has restored the FPRs and taken the error exit): register the site,
+    /// define `dst` from the result, and guard against a capture of this
+    /// frame by the callee, as `compile_yield` does.
+    ///
+    pub(crate) fn inline_call_epilogue(
+        &mut self,
+        ir: &mut AsmIr,
+        store: &Store,
+        evict: AsmEvict,
+        using_fpr: UsingFpr,
+        dst: Option<SlotId>,
+    ) {
+        self.chain_exit(ir, evict, using_fpr, dst);
+        if self.no_capture_guard() {
+            self.def_rax2gp(ir, dst);
+        } else {
+            self.def_rax2acc_capturing(ir, dst);
+        }
+        self.immediate_evict(ir, store, evict, dst);
+    }
+
     /// Post-call bookkeeping: fill in the `Evict` side-exit slot this site
     /// reserved, and re-arm the capture guard.
     ///

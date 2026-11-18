@@ -515,6 +515,11 @@ impl AsmIr {
     /// frameless window a frame. Empty in the analysis pass, like
     /// [`Self::exit_write_back`].
     ///
+    /// This frame's depth in the compilation unit (`chain_frames`).
+    pub(crate) fn chain_frames(&self) -> u32 {
+        self.chain_frames
+    }
+
     pub(crate) fn plain_write_back(&self, state: &AbstractFrame) -> WriteBack {
         if self.codegen_mode {
             state.get_write_back()

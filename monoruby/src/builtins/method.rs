@@ -209,14 +209,16 @@ pub fn method_object_call(
 
     state.write_back_recv_and_callargs(ir, callsite);
     let using_fpr = state.get_using_fpr(ir);
+    let dst = callsite.dst;
+    let evict = state.inline_call_prologue(ir, dst);
     let error = ir.new_error(state);
     let callid = callsite.id;
     let call_site_pc = state.pc().as_ptr() as u64;
     ir.inline(move |r#gen, store, labels, _| {
         let error = &labels[error];
-        r#gen.method_object_call_inline(callid, store, using_fpr, error, call_site_pc);
+        r#gen.method_object_call_inline(callid, store, using_fpr, error, call_site_pc, evict);
     });
-    state.def_reg2acc(ir, GP::Rax, callsite.dst);
+    state.inline_call_epilogue(ir, store, evict, using_fpr, dst);
     // The method called runs arbitrary Ruby: it can define methods and
     // give the objects this frame holds singleton classes.
     state.unset_class_version_guard();
