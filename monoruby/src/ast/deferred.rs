@@ -246,10 +246,6 @@ impl PartialEq for DeferredDef {
 
 impl std::fmt::Debug for DeferredDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "DeferredDef(@{})",
-            self.node().location().start()
-        )
+        write!(f, "DeferredDef(@{})", self.node().location().start())
     }
 }

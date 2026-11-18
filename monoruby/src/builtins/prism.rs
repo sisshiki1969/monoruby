@@ -12,11 +12,11 @@ use std::ffi::{c_char, c_int};
 // which `Prism::Serialize` turns into node objects. That is exactly what
 // the gem's FFI backend (`prism/ffi.rb`) does through the ffi gem; these
 // builtins do the same through the library we already carry, and
-// `stdlib/prism/prism.rb` (standing in for the gem's C extension
+// `gem/prism/prism.rb` (standing in for the gem's C extension
 // `prism/prism.so`) builds the public API on them.
 //
 // The serialization format is tied to the prism version: the crate and
-// the vendored gem must agree (both 1.9.0 today; `Prism::VERSION` is
+// the vendored gem must agree (both 2.1.0 today; `Prism::VERSION` is
 // read from the library so a mismatch shows up as a version rather than
 // as garbage). The C signatures are declared here rather than taken from
 // the crate's bindings, which allowlist only what the Rust parser uses.

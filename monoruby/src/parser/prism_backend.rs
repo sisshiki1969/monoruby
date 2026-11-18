@@ -247,8 +247,7 @@ fn build_prism_options(
     if !flags.is_empty()
         && let Some(outermost) = scopes.first_mut()
     {
-        *outermost = std::mem::replace(outermost, prism::Scope::default())
-            .forwarding(flags);
+        *outermost = std::mem::replace(outermost, prism::Scope::default()).forwarding(flags);
     }
 
     (prism::Options::default().line(line).scopes(scopes), anon)
@@ -506,6 +505,10 @@ fn try_prism_inner(
     let source_encoding: Option<String> = detect_source_encoding(code)
         .or(cli_source_encoding)
         .or(default_encoding);
+    let regexp_check_encoding = source_encoding
+        .as_deref()
+        .and_then(|name| crate::value::Encoding::try_from_str(name).ok())
+        .unwrap_or(crate::value::Encoding::UTF8);
     // Per-file magic comment wins; otherwise fall back to the
     // `--enable/--disable-frozen-string-literal` process default.
     let frozen_string_literal: Option<bool> = detect_frozen_string_literal(code)
@@ -537,7 +540,18 @@ fn try_prism_inner(
         .with_hidden_ivars(detect_hidden_ivars(code)),
     );
 
-    if let Some(diag) = result.errors().next() {
+    // prism >= 2.0 validates the byte escapes of a regexp literal against
+    // its encoding and calls every sequence it rejects an "invalid
+    // multibyte escape" — including a valid character spelled with mixed
+    // escapes (`/\xE3\201\202/`) and a truncated one, which CRuby 4.0
+    // (prism 1.x) accepts or calls "too short escaped multibyte
+    // character". `rb_reg_preprocess`, which monoruby ports as
+    // `reg_preprocess` and runs where the literal is compiled, is the
+    // authority: prism's diagnostic stands only when it agrees.
+    if let Some(diag) = result
+        .errors()
+        .find(|d| !is_regexp_escape_left_to_preprocess(d, regexp_check_encoding))
+    {
         let loc = location_to_loc(&diag.location());
         // CRuby embeds the location in the SyntaxError *message* itself
         // ("file:line: syntax error, ..."), and callers regex on it.
@@ -6048,6 +6062,48 @@ fn unop_from_name(name: &str) -> Option<UnOp> {
         "!" => UnOp::Not,
         _ => return None,
     })
+}
+
+/// Whether `diag` is prism's "invalid multibyte escape" for a regexp
+/// literal that CRuby's `rb_reg_preprocess` does not refuse as such:
+/// one it accepts, or refuses with another message (see the call site).
+fn is_regexp_escape_left_to_preprocess(
+    diag: &prism::Diagnostic<'_>,
+    source_encoding: crate::value::Encoding,
+) -> bool {
+    if !diag.message().starts_with(b"invalid multibyte escape: /") {
+        return false;
+    }
+    // The location is the literal: `/body/flags`.
+    let lit = diag.location().as_slice();
+    let (Some(open), Some(close)) = (
+        lit.iter().position(|&b| b == b'/'),
+        lit.iter().rposition(|&b| b == b'/'),
+    ) else {
+        return false;
+    };
+    if close <= open {
+        return false;
+    }
+    let (body, flags) = (&lit[open + 1..close], &lit[close + 1..]);
+    let enc = if flags.contains(&b'e') {
+        crate::value::Encoding::try_from_str("EUC-JP").ok()
+    } else if flags.contains(&b's') {
+        crate::value::Encoding::try_from_str("Windows-31J").ok()
+    } else if flags.contains(&b'u') {
+        Some(crate::value::Encoding::UTF8)
+    } else if flags.contains(&b'n') {
+        None
+    } else {
+        Some(source_encoding)
+    };
+    let Some(enc) = enc else {
+        return false;
+    };
+    !matches!(
+        crate::value::rvalue::regexp::reg_preprocess(body, enc, flags.contains(&b'x')),
+        Err("invalid multibyte escape")
+    )
 }
 
 fn location_to_loc(loc: &Location<'_>) -> Loc {

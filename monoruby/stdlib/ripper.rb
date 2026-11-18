@@ -37,10 +37,18 @@ class Prism::Translation::Ripper
     def result
       @result ||= begin
         result = super
-        result.errors.map! do |error|
-          message = PARSE_Y_ERROR_MESSAGES[error.type]
-          next error unless message
-          Prism::ParseError.new(error.type, message, error.location, error.level)
+        if result.errors.any? { |error| PARSE_Y_ERROR_MESSAGES.key?(error.type) }
+          # prism >= 2.0 parses with `freeze: true` here, so the result
+          # and its error list are frozen: rebuild them.
+          errors = result.errors.map do |error|
+            message = PARSE_Y_ERROR_MESSAGES[error.type]
+            next error unless message
+            Prism::ParseError.new(error.type, message, error.location, error.level)
+          end
+          result = Prism::ParseResult.new(
+            result.value, result.magic_comments, result.data_loc, errors.freeze,
+            result.warnings, result.continuable?, result.source
+          ).freeze
         end
         result
       end
