@@ -22,37 +22,53 @@ module Digest
   end
 
   # Digest::SHA2.new(bitlen) — CRuby's bit-length-parameterized wrapper
-  # (defaults to 256). Delegates to the fixed-width algorithm above.
-  class SHA2 < Base
+  # (ext/digest/sha2/lib/sha2.rb, as it is): it delegates to an instance
+  # of the fixed-width class, kept in `@sha2` (#2006).
+  class SHA2 < Digest::Class
     def initialize(bitlen = 256)
-      @__algorithm, @__digest_length, @__block_length =
-        case bitlen
-        when 256 then ['sha256', 32, 64]
-        when 384 then ['sha384', 48, 128]
-        when 512 then ['sha512', 64, 128]
-        else raise ArgumentError, "unsupported bit length: #{bitlen.inspect}"
-        end
+      case bitlen
+      when 256
+        @sha2 = Digest::SHA256.new
+      when 384
+        @sha2 = Digest::SHA384.new
+      when 512
+        @sha2 = Digest::SHA512.new
+      else
+        raise ArgumentError, "unsupported bit length: %s" % bitlen.inspect
+      end
       @bitlen = bitlen
-      super()
     end
 
-    def finish
-      String.__digest(@__algorithm, @__buffer)
+    def reset
+      @sha2.reset
+      self
+    end
+
+    def update(str)
+      @sha2.update(str)
+      self
+    end
+    alias << update
+
+    def finish # :nodoc:
+      @sha2.digest!
     end
     private :finish
 
-    def digest_length
-      @__digest_length
-    end
-    alias length digest_length
-    alias size digest_length
-
     def block_length
-      @__block_length
+      @sha2.block_length
     end
 
-    def inspect
-      "#<#{self.class.name}:#{@bitlen} #{hexdigest}>"
+    def digest_length
+      @sha2.digest_length
+    end
+
+    def initialize_copy(other) # :nodoc:
+      @sha2 = other.instance_eval { @sha2.clone }
+    end
+
+    def inspect # :nodoc:
+      "#<%s:%d %s>" % [self.class.name, @bitlen, hexdigest]
     end
   end
 end

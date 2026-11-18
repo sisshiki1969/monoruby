@@ -244,6 +244,13 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     // Enumerable methods to read the result of `a <=> b` (or of a
     // comparator block) with.
     globals.define_private_builtin_func(kernel_class, "__cmpint", kernel_cmpint, 3);
+    // `answer.__cmpint_of(recv, other)`: the same, asked of the answer,
+    // so that `Integer#__cmpint_of` (builtins/integer.rb, `= self`) folds
+    // to the answer in compiled code (`ISeqHint::SelfReturn`) where an
+    // `is_a?(Integer)` test would cost a constant guard per comparison
+    // (`Comparable#between?`, #2046). On BasicObject, since an answer
+    // need not be an Object.
+    globals.define_builtin_func(BASIC_OBJECT_CLASS, "__cmpint_of", basic_object_cmpint_of, 2);
     globals.define_private_builtin_func(kernel_class, "__String", kernel_string, 1);
     globals.define_private_builtin_func(kernel_class, "__Hash", kernel_hash, 1);
     // Called by `monoruby_hooks/bundler_runtime.rb` once `Bundler.setup`
@@ -3777,7 +3784,7 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         {
             if let Ok(status_obj) = vm.invoke_method_inner(
                 globals,
-                IdentId::NEW,
+                IdentId::get_id("__new"),
                 status_class,
                 &[Value::integer(raw as i64), Value::integer(pid as i64)],
                 None,
@@ -3952,7 +3959,7 @@ fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             {
                 if let Ok(status_obj) = vm.invoke_method_inner(
                     globals,
-                    IdentId::NEW,
+                    IdentId::get_id("__new"),
                     status_class,
                     &[Value::integer(raw as i64), Value::integer(pid as i64)],
                     None,
@@ -4281,7 +4288,9 @@ pub(super) fn abort(
         }
         s
     } else {
-        "abort".to_string()
+        // CRuby's `rb_f_abort` without a message raises
+        // `SystemExit.new(1)`, whose message is the class's default.
+        "exit".to_string()
     };
     Err(MonorubyErr::new(MonorubyErrKind::SystemExit(1), msg))
 }
@@ -5771,6 +5780,19 @@ fn kernel_cmpint(
     _: BytecodePtr,
 ) -> Result<Value> {
     let ord = vm.cmpint(globals, lfp.arg(0), lfp.arg(1), lfp.arg(2))?;
+    Ok(Value::integer(ord as i64))
+}
+
+/// `BasicObject#__cmpint_of(recv, other)`: CRuby's `rb_cmpint` of the
+/// receiver, a `recv <=> other` answer.
+#[monoruby_builtin]
+fn basic_object_cmpint_of(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let ord = vm.cmpint(globals, lfp.self_val(), lfp.arg(0), lfp.arg(1))?;
     Ok(Value::integer(ord as i64))
 }
 

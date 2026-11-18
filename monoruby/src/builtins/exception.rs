@@ -31,7 +31,7 @@ pub(super) fn init(globals: &mut Globals) {
         exception_class,
     );
     let system_exit_id = system_exit.id();
-    globals.define_builtin_class_func_with(system_exit_id, "new", system_exit_new, 0, 2, false);
+    globals.define_builtin_func_rest(system_exit_id, "initialize", system_exit_initialize);
     globals.define_builtin_func(system_exit_id, "status", system_exit_status, 0);
     globals.define_builtin_func(system_exit_id, "success?", system_exit_success_p, 0);
 
@@ -252,12 +252,13 @@ fn localjump_exit_value(
 ) -> Result<Value> {
     Ok(globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("/exit_value"))
+        .get_ivar(lfp.self_val(), IdentId::get_id("@exit_value"))
         .unwrap_or_default())
 }
 
-/// `LocalJumpError#reason` — the jump kind (`:return`, `:break`, …);
-/// `:noreason` when unknown, like CRuby's default.
+/// `LocalJumpError#reason` — the jump kind (`:return`, `:break`, …,
+/// `:noreason` for a VM error that names none). Like `#exit_value`, it is
+/// CRuby's ordinary instance variable (`@reason`), nil until set.
 #[monoruby_builtin]
 fn localjump_reason(
     _vm: &mut Executor,
@@ -267,8 +268,8 @@ fn localjump_reason(
 ) -> Result<Value> {
     Ok(globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("/reason"))
-        .unwrap_or_else(|| Value::symbol(IdentId::get_id("noreason"))))
+        .get_ivar(lfp.self_val(), IdentId::get_id("@reason"))
+        .unwrap_or_default())
 }
 
 /// `NameError#name` — returns the missing-name Symbol that was passed
@@ -315,6 +316,7 @@ fn nameerr_initialize(
         globals.store.get_class_name(class_id)
     };
     self_.is_exception_mut().unwrap().set_message(message);
+    self_.set_exception_initialized();
     if let Some(name) = lfp.try_arg(1) {
         if !name.is_nil() {
             // Store the name verbatim — typically a Symbol — so that
@@ -389,6 +391,7 @@ fn nomethoderr_initialize(
         globals.store.get_class_name(class_id)
     };
     self_.is_exception_mut().unwrap().set_message(message);
+    self_.set_exception_initialized();
     if let Some(name) = lfp.try_arg(1)
         && !name.is_nil()
     {
@@ -452,9 +455,15 @@ fn nomethoderr_args(
 /// Allocator for `Exception` and its subclasses. The exception is created
 /// with its message set to the class name (matching CRuby:
 /// `Exception.allocate.message # => "Exception"`).
+///
+/// It is marked uninitialized until `exc_init` runs: CRuby's
+/// `exc_initialize` is what gives an exception its `mesg` and `bt`, so
+/// one whose `initialize` never got there dumps neither (#2013).
 pub(crate) extern "C" fn exception_alloc_func(class_id: ClassId, globals: &mut Globals) -> Value {
     let _ = globals;
-    Value::new_exception_with_class_default_message(class_id)
+    let mut v = Value::new_exception_with_class_default_message(class_id);
+    v.set_exception_uninitialized();
+    v
 }
 
 ///
@@ -466,12 +475,38 @@ pub(crate) extern "C" fn exception_alloc_func(class_id: ClassId, globals: &mut G
 #[monoruby_builtin]
 fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val();
+    exc_init(vm, globals, self_, lfp.try_arg(0))?;
+    // Real keyword arguments (`receiver:` at slot 2, `key:` at slot 3) —
+    // the path taken since `Exception.new` routes through `Class#new`'s
+    // full dispatch. The positional-hash arms above remain for internal
+    // Rust-side callers that flatten keywords into the argument array.
+    // A keyword that was given counts even when it is nil (`key: nil`
+    // makes `#key` nil; no `key:` makes it raise).
+    if let Some(v) = lfp.try_arg(2) {
+        globals.store.set_ivar(self_, IdentId::_RECEIVER, v)?;
+    }
+    if let Some(v) = lfp.try_arg(3) {
+        globals.store.set_ivar(self_, IdentId::get_id("/key"), v)?;
+        if lfp.try_arg(2).is_some() {
+            self_.set_exception_receiver_first();
+        }
+    }
+    Ok(Value::nil())
+}
+
+///
+/// CRuby's `exc_init`: give the exception its message (`nil` or none: the
+/// class name, rendered when read) and mark it initialized, so that it
+/// has `mesg` and `bt` for `Marshal` (an exception `allocate` made and no
+/// `initialize` reached has neither, #2013).
+///
+fn exc_init(vm: &mut Executor, globals: &mut Globals, mut self_: Value, msg: Option<Value>) -> Result<()> {
     let class_id = self_.real_class(&globals.store).id();
     // The message String is kept as its own bytes *and* encoding: CRuby
     // hands `#message` back the String it was given, so a BINARY or
     // US-ASCII message must not come back as UTF-8.
     let mut raw = None;
-    let message = if let Some(msg) = lfp.try_arg(0)
+    let message = if let Some(msg) = msg
         && !msg.is_nil()
     {
         let msg = if msg.is_rstring().is_some() {
@@ -503,19 +538,8 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         }
         ex.raw_message = raw;
     }
-    // Real keyword arguments (`receiver:` at slot 2, `key:` at slot 3) —
-    // the path taken since `Exception.new` routes through `Class#new`'s
-    // full dispatch. The positional-hash arms above remain for internal
-    // Rust-side callers that flatten keywords into the argument array.
-    // A keyword that was given counts even when it is nil (`key: nil`
-    // makes `#key` nil; no `key:` makes it raise).
-    if let Some(v) = lfp.try_arg(2) {
-        globals.store.set_ivar(self_, IdentId::_RECEIVER, v)?;
-    }
-    if let Some(v) = lfp.try_arg(3) {
-        globals.store.set_ivar(self_, IdentId::get_id("/key"), v)?;
-    }
-    Ok(Value::nil())
+    self_.set_exception_initialized();
+    Ok(())
 }
 
 ///
@@ -952,7 +976,7 @@ fn loaderror_path(
     let self_ = lfp.self_val();
     Ok(globals
         .store
-        .get_ivar(self_, IdentId::get_id("/path"))
+        .get_ivar(self_, IdentId::get_id("@path"))
         .unwrap_or_default())
 }
 
@@ -977,57 +1001,47 @@ fn system_exit_status(
 }
 
 ///
-/// ### SystemExit.new
+/// ### SystemExit#initialize
 ///
-/// - new(status = 0, error_message = "") -> SystemExit
+/// - new(status = 0, error_message = nil) -> SystemExit
 ///
-/// `status` may be an Integer (used as exit status), `true` (status 0),
-/// `false` (status 1), or `nil` (status 0, default message). Any other
-/// value is treated as the message and the status defaults to 0.
+/// CRuby's `exit_initialize`: a first argument that is `true` (0),
+/// `false` (1) or converts with `to_int` is the status and is taken off
+/// the arguments; otherwise the status is 0. What is left is the
+/// message (`Exception#initialize`), and the status is set after it —
+/// so `Class#new` reaches a subclass's own `initialize`, and one that
+/// never calls `super` leaves the exception without either (#2013).
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/SystemExit/s/new.html]
 #[monoruby_builtin]
-fn system_exit_new(
+fn system_exit_initialize(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let class_id = lfp.self_val().expect_class(globals)?.id();
-    let default_msg = class_id.get_name(&globals.store);
-    // Determine `status` from arg0 and whether arg0 should also act as the
-    // message (only when it's not Integer / Bool / nil).
-    let (status, arg0_as_msg) = if let Some(arg0) = lfp.try_arg(0) {
-        match arg0.unpack() {
-            RV::Bool(true) => (0, None),
-            RV::Bool(false) => (1, None),
-            RV::Nil => (0, None),
-            RV::Fixnum(_) | RV::BigInt(_) => (arg0.coerce_to_int_i64(vm, globals)?, None),
-            _ => (0, Some(arg0)),
+    let self_ = lfp.self_val();
+    let args = lfp.arg(0).as_array();
+    let mut rest = &args[..];
+    let mut status = Value::integer(0);
+    if let Some(&arg0) = args.first() {
+        let taken = match arg0.unpack() {
+            RV::Bool(b) => Some(Value::integer(if b { 0 } else { 1 })),
+            _ => arg0.check_to_int(vm, globals)?,
+        };
+        if let Some(s) = taken {
+            status = s;
+            rest = &args[1..];
         }
-    } else {
-        (0, None)
-    };
-    // Resolve the message: arg1 takes precedence; otherwise arg0 (if it
-    // wasn't an Integer/Bool); otherwise the class name.
-    let msg = if let Some(arg1) = lfp.try_arg(1) {
-        if arg1.is_nil() {
-            default_msg.clone()
-        } else {
-            arg1.coerce_to_str(vm, globals)?
-        }
-    } else if let Some(arg0) = arg0_as_msg {
-        arg0.coerce_to_str(vm, globals)?
-    } else {
-        default_msg.clone()
-    };
-    let ex = Value::new_exception_from(msg, class_id);
+    }
+    if rest.len() > 1 {
+        return Err(MonorubyErr::wrong_number_of_arg_range(rest.len(), 0..=1));
+    }
+    exc_init(vm, globals, self_, rest.first().copied())?;
     globals
         .store
-        .set_ivar(ex, IdentId::get_id("/status"), Value::integer(status))
-        .unwrap();
-
-    Ok(ex)
+        .set_ivar(self_, IdentId::get_id("/status"), status)?;
+    Ok(Value::nil())
 }
 
 ///

@@ -13,19 +13,19 @@ class File
     @__no_dump_data = true
     include Comparable
 
-    def dev ; @__dev ; end
-    def ino ; @__ino ; end
-    def mode ; @__mode ; end
-    def nlink ; @__nlink ; end
-    def uid ; @__uid ; end
-    def gid ; @__gid ; end
-    def rdev ; @__rdev ; end
-    def size ; @__size ; end
-    def blksize ; @__blksize ; end
-    def blocks ; @__blocks ; end
-    def atime ; @__atime ; end
-    def mtime ; @__mtime ; end
-    def ctime ; @__ctime ; end
+    def dev ; (@__dev || __uninitialized) ; end
+    def ino ; (@__ino || __uninitialized) ; end
+    def mode ; (@__mode || __uninitialized) ; end
+    def nlink ; (@__nlink || __uninitialized) ; end
+    def uid ; (@__uid || __uninitialized) ; end
+    def gid ; (@__gid || __uninitialized) ; end
+    def rdev ; (@__rdev || __uninitialized) ; end
+    def size ; (@__size || __uninitialized) ; end
+    def blksize ; (@__blksize || __uninitialized) ; end
+    def blocks ; (@__blocks || __uninitialized) ; end
+    def atime ; (@__atime || __uninitialized) ; end
+    def mtime ; (@__mtime || __uninitialized) ; end
+    def ctime ; (@__ctime || __uninitialized) ; end
 
     S_IFMT   = 0o170000
     S_IFSOCK = 0o140000
@@ -36,16 +36,16 @@ class File
     S_IFCHR  = 0o020000
     S_IFIFO  = 0o010000
 
-    def directory? ; (@__mode & S_IFMT) == S_IFDIR  ; end
-    def file?      ; (@__mode & S_IFMT) == S_IFREG  ; end
-    def symlink?   ; (@__mode & S_IFMT) == S_IFLNK  ; end
-    def blockdev?  ; (@__mode & S_IFMT) == S_IFBLK  ; end
-    def chardev?   ; (@__mode & S_IFMT) == S_IFCHR  ; end
-    def pipe?      ; (@__mode & S_IFMT) == S_IFIFO  ; end
-    def socket?    ; (@__mode & S_IFMT) == S_IFSOCK ; end
+    def directory? ; ((@__mode || __uninitialized) & S_IFMT) == S_IFDIR  ; end
+    def file?      ; ((@__mode || __uninitialized) & S_IFMT) == S_IFREG  ; end
+    def symlink?   ; ((@__mode || __uninitialized) & S_IFMT) == S_IFLNK  ; end
+    def blockdev?  ; ((@__mode || __uninitialized) & S_IFMT) == S_IFBLK  ; end
+    def chardev?   ; ((@__mode || __uninitialized) & S_IFMT) == S_IFCHR  ; end
+    def pipe?      ; ((@__mode || __uninitialized) & S_IFMT) == S_IFIFO  ; end
+    def socket?    ; ((@__mode || __uninitialized) & S_IFMT) == S_IFSOCK ; end
 
     def ftype
-      case @__mode & S_IFMT
+      case (@__mode || __uninitialized) & S_IFMT
       when S_IFREG  then "file"
       when S_IFDIR  then "directory"
       when S_IFCHR  then "characterSpecial"
@@ -57,23 +57,23 @@ class File
       end
     end
 
-    def setuid?  ; (@__mode & 0o4000) != 0 ; end
-    def setgid?  ; (@__mode & 0o2000) != 0 ; end
-    def sticky?  ; (@__mode & 0o1000) != 0 ; end
+    def setuid?  ; ((@__mode || __uninitialized) & 0o4000) != 0 ; end
+    def setgid?  ; ((@__mode || __uninitialized) & 0o2000) != 0 ; end
+    def sticky?  ; ((@__mode || __uninitialized) & 0o1000) != 0 ; end
 
     def world_readable?
-      (@__mode & 0o004) != 0 ? (@__mode & 0o777) : nil
+      ((@__mode || __uninitialized) & 0o004) != 0 ? ((@__mode || __uninitialized) & 0o777) : nil
     end
 
     def world_writable?
-      (@__mode & 0o002) != 0 ? (@__mode & 0o777) : nil
+      ((@__mode || __uninitialized) & 0o002) != 0 ? ((@__mode || __uninitialized) & 0o777) : nil
     end
 
-    def zero?     ; @__size == 0 ; end
-    def size?     ; @__size == 0 ? nil : @__size ; end
+    def zero?     ; (@__size || __uninitialized) == 0 ; end
+    def size?     ; (@__size || __uninitialized) == 0 ? nil : (@__size || __uninitialized) ; end
 
-    def owned?    ; @__uid == Process.euid ; end
-    def grpowned? ; @__gid == Process.egid ; end
+    def owned?    ; (@__uid || __uninitialized) == Process.euid ; end
+    def grpowned? ; (@__gid || __uninitialized) == Process.egid ; end
 
     def readable?       ; _access_ok?(Process.euid, Process.egid, 4) ; end
     def readable_real?  ; _access_ok?(Process.uid, Process.gid, 4) ; end
@@ -86,25 +86,33 @@ class File
     # The superuser reads/writes anything and executes whenever any x
     # bit is set (CRuby's eaccess semantics).
     private def _access_ok?(uid, gid, bit)
+      __uninitialized if @__mode.nil?
       if uid == 0
-        return bit != 1 || (@__mode & 0o111) != 0
+        return bit != 1 || ((@__mode || __uninitialized) & 0o111) != 0
       end
-      shift = @__uid == uid ? 6 : (@__gid == gid ? 3 : 0)
-      ((@__mode >> shift) & bit) != 0
+      shift = (@__uid || __uninitialized) == uid ? 6 : ((@__gid || __uninitialized) == gid ? 3 : 0)
+      (((@__mode || __uninitialized) >> shift) & bit) != 0
     end
 
-    def dev_major  ; @__dev >> 8 ; end
-    def dev_minor  ; @__dev & 0xff ; end
-    def rdev_major ; @__rdev >> 8 ; end
-    def rdev_minor ; @__rdev & 0xff ; end
+    def dev_major  ; (@__dev || __uninitialized) >> 8 ; end
+    def dev_minor  ; (@__dev || __uninitialized) & 0xff ; end
+    def rdev_major ; (@__rdev || __uninitialized) >> 8 ; end
+    def rdev_minor ; (@__rdev || __uninitialized) & 0xff ; end
 
     def birthtime
+      __uninitialized if @__dev.nil?
       raise NotImplementedError, "birthtime() function is unimplemented"
     end
 
     def <=>(other)
       return nil unless other.is_a?(File::Stat)
-      @__mtime <=> other.mtime
+      (@__mtime || __uninitialized) <=> other.mtime
+    end
+
+    # A Stat that `allocate` made and no `initialize` filled in raises
+    # TypeError from every reader, as CRuby's `get_stat` does (#2006).
+    private def __uninitialized
+      raise TypeError, "uninitialized File::Stat"
     end
 
     def inspect

@@ -248,6 +248,12 @@ pub(super) fn init(globals: &mut Globals) {
 
     let env = Value::hash(env_map);
     globals.set_constant_by_str(OBJECT_CLASS, "ENV", env);
+    // CRuby's ENV is a plain Object with no `_dump_data`: Marshal refuses
+    // it rather than dumping a Hash (#2013).
+    globals
+        .store
+        .set_ivar(env, IdentId::get_id("/__env"), Value::bool(true))
+        .unwrap();
     globals.define_builtin_singleton_func_with(env, "fetch", env_fetch, 1, 2, false);
     globals.define_builtin_singleton_func(env, "[]", env_index, 1);
     globals.define_builtin_singleton_func(env, "[]=", env_index_assign, 2);
@@ -2452,7 +2458,7 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             executor::op::homogeneous_ord(globals, &keys),
             Some(executor::op::HomogeneousOrd::Fixnum | executor::op::HomogeneousOrd::String)
         ) {
-            vm.sort(globals, &mut keys, std::ptr::null_mut())?;
+            vm.sort(globals, &mut keys)?;
             let pairs = keys
                 .into_iter()
                 .map(|k| {

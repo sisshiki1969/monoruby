@@ -114,6 +114,10 @@ pub const RVALUE_OFFSET_FLAG: usize = std::mem::offset_of!(RValue, header.meta.f
 pub const RVALUE_OFFSET_TY: usize = std::mem::offset_of!(RValue, header.meta.ty);
 // `ty_flags_ptr` addresses the per-type metadata byte as `ty` + 1.
 const _: () = assert!(std::mem::offset_of!(RValue, header.meta.ty_flags) == RVALUE_OFFSET_TY + 1);
+
+/// `ty_flags` bits of an exception (`ObjTy::EXCEPTION`).
+const EXC_UNINITIALIZED: u8 = 1;
+const EXC_RECEIVER_FIRST: u8 = 2;
 pub const RVALUE_OFFSET_CLASS: usize = std::mem::offset_of!(RValue, header.meta.class);
 pub const RVALUE_OFFSET_VAR: usize = std::mem::offset_of!(RValue, var_table);
 pub const RVALUE_OFFSET_KIND: usize = std::mem::offset_of!(RValue, kind);
@@ -2545,6 +2549,37 @@ impl RValue {
             kind: ObjKind::method_named(receiver, func_id, owner, lookup_name, original_name),
             var_table: None,
         }
+    }
+
+    /// Whether this exception was made by `allocate` and no `initialize`
+    /// has reached `Exception#initialize` since (CRuby's `exc_init`): it
+    /// then has no `mesg` / `bt` to dump. Kept in the header's `ty_flags`
+    /// byte, so marking it costs no store of its own.
+    pub(crate) fn exception_is_uninitialized(&self) -> bool {
+        debug_assert_eq!(self.ty(), ObjTy::EXCEPTION);
+        self.header.ty_flags() & EXC_UNINITIALIZED != 0
+    }
+
+    pub(crate) fn set_exception_uninitialized(&mut self, uninit: bool) {
+        debug_assert_eq!(self.ty(), ObjTy::EXCEPTION);
+        let flags = self.header.ty_flags() & !EXC_UNINITIALIZED;
+        self.header
+            .set_ty_flags(flags | if uninit { EXC_UNINITIALIZED } else { 0 });
+    }
+
+    /// Whether `Exception#initialize` was given both `receiver:` and
+    /// `key:`, and so set the receiver first (`KeyError.new`), where the
+    /// VM's own KeyError sets the key first. `Marshal` dumps them in that
+    /// order, as CRuby dumps instance variables in the order they were set.
+    pub(crate) fn exception_receiver_first(&self) -> bool {
+        debug_assert_eq!(self.ty(), ObjTy::EXCEPTION);
+        self.header.ty_flags() & EXC_RECEIVER_FIRST != 0
+    }
+
+    pub(crate) fn set_exception_receiver_first(&mut self) {
+        debug_assert_eq!(self.ty(), ObjTy::EXCEPTION);
+        let flags = self.header.ty_flags();
+        self.header.set_ty_flags(flags | EXC_RECEIVER_FIRST);
     }
 
     /// Whether this Method was made by `UnboundMethod#bind` (see

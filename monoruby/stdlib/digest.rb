@@ -126,8 +126,16 @@ module Digest
     def digest_length
       self.class::DIGEST_LENGTH
     end
-    alias length digest_length
-    alias size digest_length
+
+    # `rb_digest_instance_length`: whatever `digest_length` answers, so a
+    # class that defines only that (`Digest::SHA2`) has these too.
+    def length
+      digest_length
+    end
+
+    def size
+      digest_length
+    end
 
     def block_length
       self.class::BLOCK_LENGTH

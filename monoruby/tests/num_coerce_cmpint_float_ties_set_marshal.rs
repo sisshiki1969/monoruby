@@ -198,8 +198,6 @@ fn division_matrix() {
           ops << :remainder if a.is_a?(Rational)
           vals.each do |b|
             ops.each do |op|
-              # CRuby truncates a bignum's `div` by a Float (#2045).
-              next if op == :div && a.is_a?(Integer) && a.abs > 2**62 && b.is_a?(Float)
               res << t.() {{ a.send(op, b) }}
             end
           end

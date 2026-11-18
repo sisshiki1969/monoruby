@@ -2528,16 +2528,20 @@ impl Executor {
             MonorubyErrKind::Load(path) => {
                 // An empty path is a file that was found but failed to
                 // load (CRuby leaves `LoadError#path` nil there).
+                // CRuby's `rb_loaderror_with_path` keeps it in `@path`,
+                // an ordinary instance variable.
                 let path = if path.as_os_str().is_empty() {
-                    Value::nil()
+                    None
                 } else {
-                    Value::string_from_str(&path.as_os_str().to_string_lossy())
+                    Some(Value::string_from_str(&path.as_os_str().to_string_lossy()))
                 };
                 let v = Value::new_exception(err);
-                globals
-                    .store
-                    .set_ivar(v, IdentId::get_id("/path"), path)
-                    .unwrap();
+                if let Some(path) = path {
+                    globals
+                        .store
+                        .set_ivar(v, IdentId::get_id("@path"), path)
+                        .unwrap();
+                }
                 v
             }
             MonorubyErrKind::SystemExit(status) => {
@@ -2590,20 +2594,22 @@ impl Executor {
             MonorubyErrKind::LocalJump => {
                 let payload = err.payload;
                 let v = Value::new_exception(err);
-                if let Some((val, reason)) = payload {
-                    globals
-                        .store
-                        .set_ivar(v, IdentId::get_id("/exit_value"), val)
-                        .unwrap();
-                    globals
-                        .store
-                        .set_ivar(
-                            v,
-                            IdentId::get_id("/reason"),
-                            Value::symbol(IdentId::get_id(reason)),
-                        )
-                        .unwrap();
-                }
+                // CRuby's `rb_vm_localjump_error` sets both as ordinary
+                // instance variables, `nil` / `:noreason` for an error
+                // that carries no jump (`yield` without a block).
+                let (val, reason) = payload.unwrap_or((Value::nil(), "noreason"));
+                globals
+                    .store
+                    .set_ivar(v, IdentId::get_id("@exit_value"), val)
+                    .unwrap();
+                globals
+                    .store
+                    .set_ivar(
+                        v,
+                        IdentId::get_id("@reason"),
+                        Value::symbol(IdentId::get_id(reason)),
+                    )
+                    .unwrap();
                 v
             }
             MonorubyErrKind::StopIteration => {
@@ -2630,7 +2636,7 @@ impl Executor {
                 if let Some(path) = path {
                     globals
                         .store
-                        .set_ivar(v, IdentId::get_id("/path"), path)
+                        .set_ivar(v, IdentId::get_id("@path"), path)
                         .unwrap();
                 }
                 v

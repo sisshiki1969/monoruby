@@ -123,6 +123,7 @@ mod hash_each_pair_yield;
 mod hash_probe_jit;
 mod hash_seed;
 mod hash_string_keys;
+mod heap_limit_div_between_sort_order;
 mod hidden_ivars;
 mod hidden_state;
 mod inspect_dispatch;
