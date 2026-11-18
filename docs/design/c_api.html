@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-990f75ac.js";
+            window.path_to_searchindex_js = "../searchindex-bae83ccc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -1323,7 +1323,10 @@ concurrent-ruby や parallel はこれでスレッドプールの大きさを決
 | <code>str_modify</code> | <code>rb_str_modify</code>: 長さより後ろのバイトに触れない（§3.22） |
 | <code>obj_class</code> | <code>rb_obj_class</code>: 特異クラスを飛ばした本当のクラス（§3.23） |
 | <code>intern_check</code> | <code>rb_check_symbol_cstr</code> / <code>rb_check_id_cstr</code>: intern 済みの名前だけを返す（§3.24） |
-| <code>obj_respond_to</code> | <code>rb_respond_to</code> / <code>rb_obj_respond_to</code>（と、それを使う <code>rb_check_funcall</code>）: 組み込みの <code>respond_to?</code> なら呼び出さずにメソッド表と <code>respond_to_missing?</code> で答える。プログラムが定義した <code>respond_to?</code> は CRuby の <code>vm_respond_to</code> と同じ引数（<code>priv</code> 指定かつ 1 引数でないときだけ第 2 引数）で呼ぶ。以前は毎回 <code>respond_to?</code> の funcall で、liquid-c は 1 レンダリングあたり 60,900 回 × 約 1,300 Ir を払っていた |</p>
+| <code>obj_respond_to</code> | <code>rb_respond_to</code> / <code>rb_obj_respond_to</code>（と、それを使う <code>rb_check_funcall</code>）: 組み込みの <code>respond_to?</code> なら呼び出さずにメソッド表と <code>respond_to_missing?</code> で答える。プログラムが定義した <code>respond_to?</code> は CRuby の <code>vm_respond_to</code> と同じ引数（<code>priv</code> 指定かつ 1 引数でないときだけ第 2 引数）で呼ぶ。以前は毎回 <code>respond_to?</code> の funcall で、liquid-c は 1 レンダリングあたり 60,900 回 × 約 1,300 Ir を払っていた |
+| <code>hash_aref</code> | <code>rb_hash_aref</code>: <code>[]</code> を呼ばずに引く（CRuby と同じく、<code>Hash</code> のサブクラスが <code>[]</code> を再定義していても使わない）。キーがなければ <code>default</code> メソッドの答えで、<code>default</code> が組み込みのままなら既定値・既定の proc を直接読む（<code>Hash#[]</code> も同じ経路、<code>builtins::hash::hash_aref</code>）。以前は <code>[]</code> の funcall で、キーがないとさらに <code>default</code> を dispatch していた（liquid-c の環境探索は 1 回 1,600 Ir → 620 Ir） |
+| <code>ivar_get_sym</code> / <code>ivar_set_sym</code> | <code>rb_ivar_get</code> / <code>rb_ivar_set</code> / <code>rb_attr_get</code> を名前の文字列に戻さずに。<code>@</code> のない名前（隠し ivar、liquid-c の <code>vm</code> など）は <code>/</code> 付きの名前にした ID を層が小さなキャッシュに持つ。以前は毎回名前を組み立てて intern し直していた（1 回 550 Ir） |
+| <code>str_append</code> | <code>rb_str_buf_append</code>（<code>rb_str_append</code> も）: <code>String#&lt;&lt;</code> に String を渡したときと同じ処理を呼び出しなしで（frozen 判定、エンコーディングの合わせ方、<code>Encoding::CompatibilityError</code>）。以前はエンコーディングを ABI で 3 回問い合わせてから追記していた（1 回 890 Ir → 510 Ir） |</p>
 <p>あわせて <code>ary_push</code> / <code>hash_set</code> が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。</p>
 <h2 id="5-段階計画"><a class="header" href="#5-段階計画">5. 段階計画</a></h2>
