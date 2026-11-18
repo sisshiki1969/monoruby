@@ -175,3 +175,18 @@ fn ripper_is_prisms_translation() {
         "##,
     );
 }
+
+#[test]
+fn ast_option_dumps_prisms_tree_and_its_errors() {
+    // `monoruby --ast` prints prism's own tree (and any parse error, with
+    // its byte range) to stderr and exits without running the script.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_monoruby"))
+        .args(["--disable=gems", "--ast", "-e", "puts 1 +"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(out.stdout.is_empty(), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("prism error at 8..8: unexpected end-of-input"), "{err}");
+    assert!(err.contains("ProgramNode"), "{err}");
+}
