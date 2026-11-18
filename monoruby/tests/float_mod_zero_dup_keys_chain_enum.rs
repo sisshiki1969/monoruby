@@ -181,6 +181,8 @@ fn duplicated_hash_key_warning_as_prism_reports_it() {
           cap("{true => 1, true => 2, false => 1, false => 2, nil => 1, nil => 2}"),
           cap("{1 => 1, 1.0 => 2, 1r => 3, '1' => 4, :'1' => 5}"),
           cap("{__LINE__ => 1, 10 => 2, __FILE__ => 1, __FILE__ => 2, __ENCODING__ => 1, __ENCODING__ => 2}"),
+          # A `__FILE__` key is the file name prism was given (#2050).
+          cap(%q[eval(%q({__FILE__ => 1, "dk.rb" => 2, "dk.rb" => 3, __FILE__ => 4}), nil, "dk.rb")]),
           cap(%q[{"a" "b" => 1, "ab" => 2, 'ab' => 3, %q(ab) => 4, ?a => 1, "a" => 2}]),
           cap(%q[x = 1; {x => 1, x => 2, "#{x}" => 1, "#{x}" => 2, [1] => 1, [1] => 2, (1) => 1, (1) => 2}]),
         ]

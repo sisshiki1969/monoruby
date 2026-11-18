@@ -487,8 +487,18 @@ fn try_prism_inner(
     // vendored ruby-prism wrapper doesn't expose the `command_line`
     // option, so we replicate the gate here when forwarding warnings.
     let cli_e_script = super::take_cli_e_script(&path);
+    // prism reads the file name wherever the parser itself needs the
+    // value of `__FILE__`: the duplicated-key warning compares and
+    // prints a `__FILE__` key by it, so `{__FILE__ => 1, "t.rb" => 2}`
+    // warns as on CRuby (#2050). A plain parse needs an options block
+    // for it, which is otherwise the defaults (`line(1)` is what no
+    // options at all would give).
+    let is_eval = options.is_some();
+    let prism_options = options
+        .unwrap_or_else(|| prism::Options::new().line(1))
+        .filepath(path_display.as_bytes());
 
-    let tree = PrismTree::parse(code, options.as_ref());
+    let tree = PrismTree::parse(code, Some(&prism_options));
     let result = tree.result();
     let code = tree.source();
     let data_loc_start = result.data_loc().map(|loc| loc.start_offset());
@@ -520,7 +530,7 @@ fn try_prism_inner(
     // and the TOPLEVEL_BINDING-hosted main script). Eval'd sources —
     // whatever filename they claim — get `None`:
     // `Location#absolute_path` is nil for them in CRuby.
-    let absolute_path = if options.is_none() || main_script {
+    let absolute_path = if !is_eval || main_script {
         std::fs::canonicalize(&path).ok()
     } else {
         None
@@ -598,13 +608,6 @@ fn try_prism_inner(
             };
             let loc = location_to_loc(&w.location());
             let line = source_info.get_line(&loc);
-            // prism prints a `__FILE__` key by the file name it was
-            // given, and this parse gives it none.
-            let msg = if w.location().as_slice() == b"__FILE__" {
-                msg.replacen("key \"\"", &format!("key {path_display:?}"), 1)
-            } else {
-                msg.to_string()
-            };
             Some((
                 format!("{}:{}: warning: {}", path_display, line, msg),
                 verbose_only,
@@ -632,7 +635,7 @@ fn try_prism_inner(
         // The main script parses with binding scopes (it executes inside
         // TOPLEVEL_BINDING) but *is* a script top level — keep script-level
         // warnings like "argument of top-level return is ignored".
-        eval_parse: options.is_some() && !main_script,
+        eval_parse: is_eval && !main_script,
         anon_forwarding,
     });
     let root = ctx.tree.root();
