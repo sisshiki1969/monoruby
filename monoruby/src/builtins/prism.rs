@@ -22,18 +22,18 @@ use std::ffi::{c_char, c_int};
 // the crate's bindings, which allowlist only what the Rust parser uses.
 //
 
-/// `pm_buffer_t` (include/prism/util/pm_buffer.h): the growable byte
-/// buffer the serializers write into.
+/// `pm_buffer_t` (include/prism/buffer.h): opaque since prism 2.0; only
+/// ever handled through a pointer from `pm_buffer_new`.
 #[repr(C)]
 struct PmBuffer {
-    length: usize,
-    capacity: usize,
-    value: *mut c_char,
+    _private: [u8; 0],
 }
 
 unsafe extern "C" {
     fn pm_version() -> *const c_char;
-    fn pm_buffer_init(buffer: *mut PmBuffer) -> bool;
+    fn pm_buffer_new() -> *mut PmBuffer;
+    fn pm_buffer_value(buffer: *const PmBuffer) -> *const c_char;
+    fn pm_buffer_length(buffer: *const PmBuffer) -> usize;
     fn pm_buffer_free(buffer: *mut PmBuffer);
     fn pm_serialize_parse(buffer: *mut PmBuffer, source: *const u8, size: usize, data: *const c_char);
     fn pm_serialize_parse_comments(
@@ -49,7 +49,7 @@ unsafe extern "C" {
         size: usize,
         data: *const c_char,
     );
-    fn pm_parse_success_p(source: *const u8, size: usize, data: *const c_char) -> bool;
+    fn pm_serialize_parse_success_p(source: *const u8, size: usize, data: *const c_char) -> bool;
     fn pm_string_query_local(source: *const u8, length: usize, encoding_name: *const c_char) -> c_int;
     fn pm_string_query_constant(source: *const u8, length: usize, encoding_name: *const c_char) -> c_int;
     fn pm_string_query_method_name(
@@ -93,30 +93,26 @@ fn serialize(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let (source_v, options_v) = (lfp.arg(1), lfp.arg(2));
     let source = source_v.expect_bytes(&globals.store)?;
     let options = options_v.expect_bytes(&globals.store)?;
-    let mut buffer = PmBuffer {
-        length: 0,
-        capacity: 0,
-        value: std::ptr::null_mut(),
-    };
     // SAFETY: `buffer` is initialized by prism and freed below; `source`
     // and `options` outlive the calls, which only read them.
     let bytes = unsafe {
-        if !pm_buffer_init(&mut buffer) {
+        let buffer = pm_buffer_new();
+        if buffer.is_null() {
             return Err(MonorubyErr::runtimeerr("Prism: could not allocate the buffer"));
         }
         let data = options_ptr(options);
         match kind {
-            0 => pm_serialize_parse(&mut buffer, source.as_ptr(), source.len(), data),
-            1 => pm_serialize_lex(&mut buffer, source.as_ptr(), source.len(), data),
-            2 => pm_serialize_parse_lex(&mut buffer, source.as_ptr(), source.len(), data),
-            3 => pm_serialize_parse_comments(&mut buffer, source.as_ptr(), source.len(), data),
+            0 => pm_serialize_parse(buffer, source.as_ptr(), source.len(), data),
+            1 => pm_serialize_lex(buffer, source.as_ptr(), source.len(), data),
+            2 => pm_serialize_parse_lex(buffer, source.as_ptr(), source.len(), data),
+            3 => pm_serialize_parse_comments(buffer, source.as_ptr(), source.len(), data),
             _ => {
-                pm_buffer_free(&mut buffer);
+                pm_buffer_free(buffer);
                 return Err(MonorubyErr::argumenterr(format!("unknown serializer {kind}")));
             }
         }
-        let bytes = std::slice::from_raw_parts(buffer.value as *const u8, buffer.length).to_vec();
-        pm_buffer_free(&mut buffer);
+        let bytes = std::slice::from_raw_parts(pm_buffer_value(buffer) as *const u8, pm_buffer_length(buffer)).to_vec();
+        pm_buffer_free(buffer);
         bytes
     };
     Ok(Value::bytes(bytes))
@@ -131,7 +127,7 @@ fn parse_success(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
     let source = source_v.expect_bytes(&globals.store)?;
     let options = options_v.expect_bytes(&globals.store)?;
     // SAFETY: both slices outlive the call, which only reads them.
-    let ok = unsafe { pm_parse_success_p(source.as_ptr(), source.len(), options_ptr(options)) };
+    let ok = unsafe { pm_serialize_parse_success_p(source.as_ptr(), source.len(), options_ptr(options)) };
     Ok(Value::bool(ok))
 }
 

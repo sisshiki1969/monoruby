@@ -160,26 +160,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bindgen"
-version = "0.72.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
-dependencies = [
- "bitflags 2.13.1",
- "cexpr",
- "clang-sys",
- "itertools 0.13.0",
- "log",
- "prettyplease",
- "proc-macro2",
- "quote",
- "regex",
- "rustc-hash",
- "shlex 1.3.0",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -495,7 +475,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -556,7 +536,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1296,7 +1276,7 @@ name = "onigmo-regex"
 version = "0.1.0"
 source = "git+https://github.com/sisshiki1969/onigmo-regex.git#204c31d7f4c14de0cece1e43d79bc385d03c15b7"
 dependencies = [
- "bindgen 0.71.1",
+ "bindgen",
  "cc",
  "num_enum",
  "pkg-config",
@@ -1560,8 +1540,9 @@ dependencies = [
 
 [[package]]
 name = "ruby-prism"
-version = "1.9.0"
-source = "git+https://github.com/sisshiki1969/prism.git?branch=monoruby-vendored#1170cbd82a33a5423f32ba78483213f9355abea6"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef9dd23fe10d6335d390c9fd23cf7dac83f594be5676ad28de58d6f2bac65f4c"
 dependencies = [
  "ruby-prism-sys",
  "serde",
@@ -1570,11 +1551,12 @@ dependencies = [
 
 [[package]]
 name = "ruby-prism-sys"
-version = "1.9.0"
-source = "git+https://github.com/sisshiki1969/prism.git?branch=monoruby-vendored#1170cbd82a33a5423f32ba78483213f9355abea6"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3e6b1801eb164c6b2c6c6cd42e55bf61d73f973719f675370769ce0295ba7f1"
 dependencies = [
- "bindgen 0.72.1",
  "cc",
+ "shlex 2.0.1",
 ]
 
 [[package]]
@@ -1627,7 +1609,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1821,10 +1803,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

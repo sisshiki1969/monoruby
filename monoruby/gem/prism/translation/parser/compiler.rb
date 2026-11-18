@@ -6,9 +6,9 @@ module Prism
     class Parser
       # A visitor that knows how to convert a prism syntax tree into the
       # whitequark/parser gem's syntax tree.
-      class Compiler < ::Prism::Compiler
+      class Compiler < ::Prism::Compiler # :nodoc:
         # Raised when the tree is malformed or there is a bug in the compiler.
-        class CompilationError < StandardError
+        class CompilationError < StandardError # :nodoc:
         end
 
         # The Parser::Base instance that is being used to build the AST.
@@ -140,7 +140,7 @@ module Prism
                 if key.opening.nil?
                   builder.match_hash_var([key.unescaped, srange(key.location)])
                 else
-                  builder.match_hash_var_from_str(token(key.opening_loc), [builder.string_internal([key.unescaped, srange(key.value_loc)])], token(key.closing_loc))
+                  builder.match_hash_var_from_str(token(key.opening_loc), [builder.string_internal([key.unescaped, srange(key.content_loc)])], token(key.closing_loc))
                 end
               else
                 builder.match_hash_var_from_str(token(key.opening_loc), visit_all(key.parts), token(key.closing_loc))
@@ -151,9 +151,9 @@ module Prism
               implicit_value = if value.is_a?(CallNode)
                 builder.call_method(nil, nil, [value.name, srange(value.message_loc)])
               elsif value.is_a?(ConstantReadNode)
-                builder.const([value.name, srange(key.value_loc)])
+                builder.const([value.name, srange(key.content_loc)])
               else
-                builder.ident([value.name, srange(key.value_loc)]).updated(:lvar)
+                builder.ident([value.name, srange(key.content_loc)]).updated(:lvar)
               end
 
               builder.pair_keyword([key.unescaped, srange(key)], implicit_value)
@@ -165,7 +165,14 @@ module Prism
           else
             parts =
               if key.is_a?(SymbolNode)
-                [builder.string_internal([key.unescaped, srange(key.value_loc)])]
+                content = key.content
+                if content == ""
+                  []
+                elsif content.include?("\n")
+                  string_nodes_from_line_continuations(key.unescaped, content, key.content_loc.start_offset, key.opening)
+                else
+                  [builder.string_internal([key.unescaped, srange(key.content_loc)])]
+                end
               else
                 visit_all(key.parts)
               end
@@ -297,11 +304,6 @@ module Prism
 
           if node.call_operator_loc.nil?
             case name
-            when :-@
-              case (receiver = node.receiver).type
-              when :integer_node, :float_node, :rational_node, :imaginary_node
-                return visit(numeric_negate(node.message_loc, receiver))
-              end
             when :!
               return visit_block(builder.not_op(token(node.message_loc), token(node.opening_loc), visit(node.receiver), token(node.closing_loc)), block)
             when :=~
@@ -975,17 +977,17 @@ module Prism
             guard = builder.if_guard(token(node.pattern.if_keyword_loc), visit(node.pattern.predicate))
           when UnlessNode
             pattern = within_pattern { |compiler| node.pattern.statements.accept(compiler) }
-            guard = builder.unless_guard(token(node.pattern.keyword_loc), visit(node.pattern.predicate))
+            guard = builder.unless_guard(token(node.pattern.unless_keyword_loc), visit(node.pattern.predicate))
           else
             pattern = within_pattern { |compiler| node.pattern.accept(compiler) }
           end
 
           builder.in_pattern(
-            token(node.in_loc),
+            token(node.in_keyword_loc),
             pattern,
             guard,
-            if (then_loc = node.then_loc)
-              token(then_loc)
+            if (then_keyword_loc = node.then_keyword_loc)
+              token(then_keyword_loc)
             else
               srange_semicolon(node.pattern.location.end_offset, node.statements&.location&.start_offset)
             end,
@@ -1296,7 +1298,7 @@ module Prism
         def visit_match_predicate_node(node)
           builder.match_pattern_p(
             visit(node.value),
-            token(node.operator_loc),
+            token(node.keyword_loc),
             within_pattern { |compiler| node.pattern.accept(compiler) }
           )
         end
@@ -1324,7 +1326,7 @@ module Prism
         # A node that is missing from the syntax tree. This is only used in the
         # case of a syntax error. The parser gem doesn't have such a concept, so
         # we invent our own here.
-        def visit_missing_node(node)
+        def visit_error_recovery_node(node)
           ::AST::Node.new(:missing, [], location: ::Parser::Source::Map.new(srange(node.location)))
         end
 
@@ -1388,6 +1390,12 @@ module Prism
         # ^^^
         def visit_nil_node(node)
           builder.nil(token(node.location))
+        end
+
+        # def foo(&nil); end
+        #         ^^^^
+        def visit_no_block_parameter_node(node)
+          builder.blocknilarg(token(node.operator_loc), token(node.keyword_loc))
         end
 
         # def foo(**nil); end
@@ -1767,12 +1775,12 @@ module Prism
             end
           else
             parts =
-              if node.value == ""
+              if node.content == ""
                 []
-              elsif node.value.include?("\n")
-                string_nodes_from_line_continuations(node.unescaped, node.value, node.value_loc.start_offset, node.opening)
+              elsif node.content.include?("\n")
+                string_nodes_from_line_continuations(node.unescaped, node.content, node.content_loc.start_offset, node.opening)
               else
-                [builder.string_internal([node.unescaped, srange(node.value_loc)])]
+                [builder.string_internal([node.unescaped, srange(node.content_loc)])]
               end
 
             builder.symbol_compose(
@@ -1801,9 +1809,9 @@ module Prism
         # bar unless foo
         # ^^^^^^^^^^^^^^
         def visit_unless_node(node)
-          if node.keyword_loc.start_offset == node.location.start_offset
+          if node.unless_keyword_loc.start_offset == node.location.start_offset
             builder.condition(
-              token(node.keyword_loc),
+              token(node.unless_keyword_loc),
               visit(node.predicate),
               if (then_keyword_loc = node.then_keyword_loc)
                 token(then_keyword_loc)
@@ -1819,7 +1827,7 @@ module Prism
             builder.condition_mod(
               visit(node.else_clause),
               visit(node.statements),
-              token(node.keyword_loc),
+              token(node.unless_keyword_loc),
               visit(node.predicate)
             )
           end
@@ -1831,24 +1839,24 @@ module Prism
         # bar until foo
         # ^^^^^^^^^^^^^
         def visit_until_node(node)
-          if node.location.start_offset == node.keyword_loc.start_offset
+          if node.location.start_offset == node.until_keyword_loc.start_offset
             builder.loop(
               :until,
-              token(node.keyword_loc),
+              token(node.until_keyword_loc),
               visit(node.predicate),
               if (do_keyword_loc = node.do_keyword_loc)
                 token(do_keyword_loc)
               else
-                srange_semicolon(node.predicate.location.end_offset, (node.statements&.location || node.closing_loc).start_offset)
+                srange_semicolon(node.predicate.location.end_offset, (node.statements&.location || node.end_keyword_loc).start_offset)
               end,
               visit(node.statements),
-              token(node.closing_loc)
+              token(node.end_keyword_loc)
             )
           else
             builder.loop_mod(
               :until,
               visit(node.statements),
-              token(node.keyword_loc),
+              token(node.until_keyword_loc),
               visit(node.predicate)
             )
           end
@@ -1858,7 +1866,7 @@ module Prism
         #           ^^^^^^^^^^^^^
         def visit_when_node(node)
           builder.when(
-            token(node.keyword_loc),
+            token(node.when_keyword_loc),
             visit_all(node.conditions),
             if (then_keyword_loc = node.then_keyword_loc)
               token(then_keyword_loc)
@@ -1875,24 +1883,24 @@ module Prism
         # bar while foo
         # ^^^^^^^^^^^^^
         def visit_while_node(node)
-          if node.location.start_offset == node.keyword_loc.start_offset
+          if node.location.start_offset == node.while_keyword_loc.start_offset
             builder.loop(
               :while,
-              token(node.keyword_loc),
+              token(node.while_keyword_loc),
               visit(node.predicate),
               if (do_keyword_loc = node.do_keyword_loc)
                 token(do_keyword_loc)
               else
-                srange_semicolon(node.predicate.location.end_offset, (node.statements&.location || node.closing_loc).start_offset)
+                srange_semicolon(node.predicate.location.end_offset, (node.statements&.location || node.end_keyword_loc).start_offset)
               end,
               visit(node.statements),
-              token(node.closing_loc)
+              token(node.end_keyword_loc)
             )
           else
             builder.loop_mod(
               :while,
               visit(node.statements),
-              token(node.keyword_loc),
+              token(node.while_keyword_loc),
               visit(node.predicate)
             )
           end
@@ -1965,22 +1973,6 @@ module Prism
           elements << node.rest if !node.rest.nil? && !node.rest.is_a?(ImplicitRestNode)
           elements.concat(node.rights)
           elements
-        end
-
-        # Negate the value of a numeric node. This is a special case where you
-        # have a negative sign on one line and then a number on the next line.
-        # In normal Ruby, this will always be a method call. The parser gem,
-        # however, marks this as a numeric literal. We have to massage the tree
-        # here to get it into the correct form.
-        def numeric_negate(message_loc, receiver)
-          case receiver.type
-          when :integer_node, :float_node
-            receiver.copy(value: -receiver.value, location: message_loc.join(receiver.location))
-          when :rational_node
-            receiver.copy(numerator: -receiver.numerator, location: message_loc.join(receiver.location))
-          when :imaginary_node
-            receiver.copy(numeric: numeric_negate(message_loc, receiver.numeric), location: message_loc.join(receiver.location))
-          end
         end
 
         # Blocks can have a special set of parameters that automatically expand
@@ -2193,7 +2185,7 @@ module Prism
                   else
                     lines.sum do |line|
                       count = line.scan(/(\\*)n/).count { |(backslashes)| backslashes&.length&.odd? }
-                      count -= 1 if !line.end_with?("\n") && count > 0
+                      count -= 1 if line.match?(/(?:\A|[^\\])(?:\\\\)*\\n\z/) && count > 0
                       count
                     end
                   end

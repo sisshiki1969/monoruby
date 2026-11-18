@@ -137,7 +137,7 @@ paste = "1.0.15"
 monoasm_macro = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "aarch" }
 monoasm = { git = "https://github.com/sisshiki1969/monoasm.git", branch = "aarch" }
 onigmo-regex = { git = "https://github.com/sisshiki1969/onigmo-regex.git" }
-ruby-prism = { git = "https://github.com/sisshiki1969/prism.git", branch = "monoruby-vendored" }
+ruby-prism = "2.1.0"
 monoruby-attr = { path = "../monoruby_attr" }
 # The C ABI handed to dynamically loaded extensions (src/ext.rs).
 monoruby-ext-sys = { path = "../monoruby_ext_sys" }

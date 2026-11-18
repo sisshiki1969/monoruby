@@ -201,7 +201,7 @@ fn build_prism_options(
                     names.push(name);
                 }
             }
-            scopes.push(prism::Scope::new(names));
+            scopes.push(prism::Scope::default().locals(names));
         }
     }
 
@@ -229,9 +229,9 @@ fn build_prism_options(
                 crate::id_table::uncarry_source_ident(n).unwrap_or_else(|| n.as_bytes().to_vec())
             })
             .collect();
-        scopes.push(prism::Scope::new(names));
+        scopes.push(prism::Scope::default().locals(names));
     } else {
-        scopes.push(prism::Scope::new(Vec::<&[u8]>::new()));
+        scopes.push(prism::Scope::default());
     }
 
     let anon = resolve_anon_forwarding(extern_context, binding_locals);
@@ -244,14 +244,14 @@ fn build_prism_options(
     // the parameters were actually declared, they read as a conflict
     // and the error does not change.
     let flags = anon.prism_flags();
-    if flags != 0
+    if !flags.is_empty()
         && let Some(outermost) = scopes.first_mut()
     {
-        *outermost = std::mem::replace(outermost, prism::Scope::new(Vec::<&[u8]>::new()))
+        *outermost = std::mem::replace(outermost, prism::Scope::default())
             .forwarding(flags);
     }
 
-    (prism::Options::new().line(line).scopes(scopes), anon)
+    (prism::Options::default().line(line).scopes(scopes), anon)
 }
 
 /// Find the anonymous parameters the frames around an `eval` declared,
@@ -488,10 +488,10 @@ fn try_prism_inner(
     // option, so we replicate the gate here when forwarding warnings.
     let cli_e_script = super::take_cli_e_script(&path);
 
-    let tree = PrismTree::parse(code, options.as_ref());
+    let tree = PrismTree::parse(code, options.clone());
     let result = tree.result();
     let code = tree.source();
-    let data_loc_start = result.data_loc().map(|loc| loc.start_offset());
+    let data_loc_start = result.data_loc().map(|loc| loc.start() as usize);
 
     // Detect the source encoding from the `# coding:` / `# encoding:`
     // magic comment ourselves rather than via prism's `magic_comments()`
@@ -546,7 +546,7 @@ fn try_prism_inner(
         return Err(MonorubyErr::parse(crate::ast::ParseErr {
             kind: crate::ast::ParseErrKind::SyntaxError(format!(
                 "{file}:{line}: prism: {}",
-                diag.message()
+                String::from_utf8_lossy(diag.message())
             )),
             loc,
             source_info,
@@ -565,7 +565,8 @@ fn try_prism_inner(
     let warnings: Vec<(String, bool)> = result
         .warnings()
         .filter_map(|w| {
-            let msg = w.message();
+            let msg = String::from_utf8_lossy(w.message()).into_owned();
+            let msg = msg.as_str();
             // `-e` scripts suppress the flip-flop / condition-literal
             // warnings, exactly like CRuby's prism `COMMAND_LINE_E` gate
             // (these are the idiomatic awk/sed `-ne`/`-pe` conditions).
@@ -2182,7 +2183,7 @@ impl<'pr> Lowerer<'pr> {
                     let name = String::from_utf8_lossy(raw).into_owned();
                     // CRuby's parser warns (default level) that the
                     // reference is unusable and always nil.
-                    let line = source_line_for_offset(self.source, node.location().start_offset())
+                    let line = source_line_for_offset(self.source, node.location().start() as usize)
                         as i64
                         + self.line_offset;
                     self.warnings.push((
@@ -2226,7 +2227,7 @@ impl<'pr> Lowerer<'pr> {
                 // start offset, then adding the eval line offset
                 // (0 for ordinary file parses, `lineno - 1` for
                 // `eval(_, _, _, lineno)`).
-                let off = node.location().start_offset();
+                let off = node.location().start() as usize;
                 let line = source_line_for_offset(self.source, off) as i64 + self.line_offset;
                 Node {
                     kind: NodeKind::Integer(line),
@@ -3995,8 +3996,9 @@ impl<'pr> Lowerer<'pr> {
                 Node::new_array_member(d(loc), vec![Node::new_integer(0, loc), i(loc)], loc);
             arm.push(pm_assign(target, slice));
         }
-        if let prism::Node::SplatNode { .. } = &n.right() {
-            let sp = n.right().as_splat_node().unwrap();
+        {
+            // prism >= 2.0 types the trailing splat as a `SplatNode`.
+            let sp = n.right();
             if let Some(expr) = sp.expression() {
                 let target = self.lower_assign_target(&expr)?;
                 let from = Node::new_binop(BinOp::Add, i(loc), Node::new_integer(k, loc));
@@ -5309,7 +5311,9 @@ impl<'pr> Lowerer<'pr> {
         }
 
         // Block param (`&blk` / `&`)
-        if let Some(bp) = params.block() {
+        // prism >= 2.0: `block` is a `BlockParameterNode` or (Ruby 4.1's
+        // `&nil`) a `NoBlockParameterNode`, which 4.0 syntax rejects.
+        if let Some(bp) = params.block().and_then(|n| n.as_block_parameter_node()) {
             let loc = location_to_loc(&bp.location());
             let name = match bp.name() {
                 Some(id) => Some(self.constant_name(&id)?),
@@ -6047,8 +6051,8 @@ fn unop_from_name(name: &str) -> Option<UnOp> {
 }
 
 fn location_to_loc(loc: &Location<'_>) -> Loc {
-    let start = loc.start_offset();
-    let end = loc.end_offset();
+    let start = loc.start() as usize;
+    let end = loc.end() as usize;
     Loc(start, end.saturating_sub(1).max(start))
 }
 
@@ -6833,7 +6837,7 @@ $1
         assert_ne!(a, b);
         assert!(format!("{a:?}").starts_with("DeferredDef(@"));
         // The tree outlives the parse: the handles still resolve.
-        assert!(a.node().location().start_offset() < b.node().location().start_offset());
+        assert!(a.node().location().start() < b.node().location().start());
         assert_eq!(a.scope_level(), 0);
         assert_eq!(a.pm_temp(), 0);
     }
