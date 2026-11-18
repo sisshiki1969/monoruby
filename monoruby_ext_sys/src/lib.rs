@@ -698,6 +698,27 @@ pub struct MrApi {
         argv: *const MrValue,
         answered: *mut c_int,
     ) -> MrValue,
+    /// `rb_hash_aref`: `hash[key]` without a dispatch of `[]` — the
+    /// stored value, or on a miss the `default` method's answer (read
+    /// directly while `default` is the builtin one). [`MR_UNDEF`] with
+    /// an error pending (`hash` not a Hash, or `hash` / `eql?` /
+    /// the default proc raised).
+    pub hash_aref:
+        unsafe extern "C" fn(ctx: *mut MrContext, hash: MrValue, key: MrValue) -> MrValue,
+    /// `rb_ivar_get` by name symbol: as [`MrApi::ivar_get`], with the
+    /// name already interned. The caller maps a hidden name (no `@`)
+    /// to the `/` spelling itself.
+    pub ivar_get_sym:
+        unsafe extern "C" fn(ctx: *mut MrContext, obj: MrValue, sym: MrSym) -> MrValue,
+    /// `rb_ivar_set` by name symbol: as [`MrApi::ivar_set`], with the
+    /// name already interned.
+    pub ivar_set_sym:
+        unsafe extern "C" fn(ctx: *mut MrContext, obj: MrValue, sym: MrSym, v: MrValue) -> c_int,
+    /// `rb_str_buf_append`: append the String `src` to the String
+    /// `dst` as `String#<<` does (frozen check, encoding negotiation,
+    /// `Encoding::CompatibilityError`), without a dispatch. 0, or -1
+    /// with an error pending.
+    pub str_append: unsafe extern "C" fn(ctx: *mut MrContext, dst: MrValue, src: MrValue) -> c_int,
 }
 
 /// [`MrApi::io_state`]'s result. `mode` holds CRuby's FMODE_* bits.

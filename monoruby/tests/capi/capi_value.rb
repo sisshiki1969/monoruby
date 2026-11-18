@@ -149,3 +149,28 @@ class CfSuper; def method_missing(n, *) = super; end
 class CfClaim; def respond_to?(n, a = false) = true; def method_missing(n, *) = super; end
 p V.check_call(CfRefuse.new, :ghost), V.check_call(CfMissing.new, :ghost), V.check_call(CfMissing.new, :other), V.check_call(CfSuper.new, :ghost)
 p((V.check_call(CfClaim.new, :ghost) rescue [$!.class, $!.name]))
+# rb_obj_is_proc: a Proc of any kind, nothing else
+class VProc < Proc; end
+p [proc {}, lambda {}, VProc.new {}, method(:p), :sym.to_proc, nil, 1, "s", Object.new, Proc].map { V.is_proc(_1) }
+# rb_hash_aref: no dispatch of `[]`; the default value, the default proc,
+# or a `default` the program redefined
+class VDefHash < Hash; def default(k = nil) = [:mine, k]; end
+class VBrkHash < Hash; def [](k) = :overridden; end
+vb = VBrkHash.new; vb[:a] = 1
+vph = Hash.new { |hh, k| hh[k] = k.to_s * 2 }
+p V.hash_aref({a: 1}, :a), V.hash_aref({a: 1}, :zz), V.hash_aref(Hash.new(5), :zz), V.hash_aref(vph, :ab), vph
+p V.hash_aref(VDefHash.new, :q), V.hash_aref(vb, :a), V.hash_aref(vb, :zz), V.hash_aref({"k" => 1}, +"k")
+p((V.hash_aref(Hash.new { raise IOError, "dp" }, 1) rescue [$!.class, $!.message]))
+# rb_ivar_get / rb_ivar_set / rb_attr_get by ID, visible and hidden names
+vo = Object.new
+V.ivar_set(vo, "@vis", 1); V.ivar_set(vo, "hid", 2)
+p V.ivar_get(vo, "@vis"), V.ivar_get(vo, "hid"), V.attr_get(vo, "@vis"), V.attr_get(vo, "hid"), V.ivar_get(vo, "@none")
+p vo.instance_variables, vo.instance_variable_get(:@vis)
+p((V.ivar_set(vo.freeze, "@vis", 3) rescue $!.class))
+# rb_str_buf_append: String#<< with a String
+vs = +"abc"; p V.buf_append(vs, "def"), vs.encoding
+vu = +"a\u00e9"; p V.buf_append(vu, "x".b), vu.encoding
+vbs = "\xff".b; p V.buf_append(vbs, "x"), vbs.encoding
+p((V.buf_append(+"\u00e9", "\xff".b) rescue $!.class))
+p((V.buf_append("lit".freeze, "x") rescue $!.class))
+vt = +"ab"; p V.buf_append(vt, vt)

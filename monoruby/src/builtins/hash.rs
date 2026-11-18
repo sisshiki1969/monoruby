@@ -640,13 +640,7 @@ fn try_convert(
 fn default(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let hash = lfp.self_val().as_hash();
     match lfp.try_arg(0) {
-        Some(key) => {
-            if let Some(default_proc) = hash.defalut_proc() {
-                vm.invoke_proc(globals, &default_proc, &[lfp.self_val(), key])
-            } else {
-                Ok(hash.defalut_value().unwrap_or_default())
-            }
-        }
+        Some(key) => builtin_default_for(vm, globals, lfp.self_val(), key),
         None => {
             let default = hash.defalut_value().unwrap_or_default();
             Ok(default)
@@ -1034,18 +1028,43 @@ fn index_assign(
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/=5b=5d.html]
 #[monoruby_builtin]
 fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let key = lfp.arg(0);
-    let self_val = lfp.self_val();
-    let h = Hashmap::new(self_val);
-    if let Some(v) = h.get(key, vm, globals)? {
-        Ok(v)
+    hash_aref(vm, globals, lfp.self_val(), lfp.arg(0))
+}
+
+/// `Hash#[]` on the Hash *hash*, as CRuby's `rb_hash_aref`: the stored
+/// value, or on a miss the `default` *method* (`rb_funcall id_default`),
+/// so that a Hash subclass overriding `#default` is honoured — unless
+/// `default` is still the builtin (`rb_method_basic_definition_p`), whose
+/// answer is read here without a dispatch.
+pub(crate) fn hash_aref(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    hash: Value,
+    key: Value,
+) -> Result<Value> {
+    if let Some(v) = Hashmap::new(hash).get(key, vm, globals)? {
+        return Ok(v);
+    }
+    if hash_default_is_builtin(&globals.store, hash.class()) {
+        builtin_default_for(vm, globals, hash, key)
     } else {
-        // CRuby's `Hash#[]` invokes the `default` *method* on a miss
-        // (rb_funcall id_default), so Hash subclasses overriding
-        // `#default` are honoured. The default `Hash#default` builtin
-        // returns the stored value / runs the default proc, so plain
-        // hashes behave exactly as before.
-        vm.invoke_method_inner(globals, IdentId::DEFAULT, self_val, &[key], None, None)
+        vm.invoke_method_inner(globals, IdentId::DEFAULT, hash, &[key], None, None)
+    }
+}
+
+/// The builtin `Hash#default(key)`: the default proc's answer for
+/// (*hash*, *key*), or the default value.
+fn builtin_default_for(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    hash: Value,
+    key: Value,
+) -> Result<Value> {
+    let h = hash.as_hash();
+    if let Some(default_proc) = h.defalut_proc() {
+        vm.invoke_proc(globals, &default_proc, &[hash, key])
+    } else {
+        Ok(h.defalut_value().unwrap_or_default())
     }
 }
 

@@ -387,6 +387,53 @@ v_null_id(VALUE self)
     return rb_ary_new_from_args(2, str, name == NULL ? Qnil : rb_str_new_cstr(name));
 }
 
+/* rb_obj_is_proc: any Proc, a subclass's too, and nothing else. */
+static VALUE
+v_is_proc(VALUE self, VALUE x)
+{
+    (void)self;
+    return rb_obj_is_proc(x);
+}
+
+/* rb_hash_aref: never dispatches `[]`; on a miss the default. */
+static VALUE
+v_hash_aref(VALUE self, VALUE h, VALUE k)
+{
+    (void)self;
+    return rb_hash_aref(h, k);
+}
+
+/* rb_ivar_get / rb_ivar_set / rb_attr_get by ID, a name without '@'
+ * being a hidden instance variable. */
+static VALUE
+v_ivar_get(VALUE self, VALUE obj, VALUE name)
+{
+    (void)self;
+    return rb_ivar_get(obj, rb_intern_str(name));
+}
+
+static VALUE
+v_ivar_set(VALUE self, VALUE obj, VALUE name, VALUE val)
+{
+    (void)self;
+    return rb_ivar_set(obj, rb_intern_str(name), val);
+}
+
+static VALUE
+v_attr_get(VALUE self, VALUE obj, VALUE name)
+{
+    (void)self;
+    return rb_attr_get(obj, rb_intern_str(name));
+}
+
+/* rb_str_buf_append: String#<< with a String, without a dispatch. */
+static VALUE
+v_buf_append(VALUE self, VALUE a, VALUE b)
+{
+    (void)self;
+    return rb_str_buf_append(a, b);
+}
+
 void
 Init_capi_value(void)
 {
@@ -421,6 +468,12 @@ Init_capi_value(void)
     rb_define_singleton_method(mV, "null_id", v_null_id, 0);
     rb_define_singleton_method(mV, "responds", v_responds, 2);
     rb_define_singleton_method(mV, "responds1", v_responds1, 3);
+    rb_define_singleton_method(mV, "is_proc", v_is_proc, 1);
+    rb_define_singleton_method(mV, "hash_aref", v_hash_aref, 2);
+    rb_define_singleton_method(mV, "ivar_get", v_ivar_get, 2);
+    rb_define_singleton_method(mV, "ivar_set", v_ivar_set, 3);
+    rb_define_singleton_method(mV, "attr_get", v_attr_get, 2);
+    rb_define_singleton_method(mV, "buf_append", v_buf_append, 2);
     VALUE cHolder = rb_define_class_under(mV, "Holder", rb_cObject);
     rb_define_alloc_func(cHolder, holder_alloc);
     rb_define_method(cHolder, "set", holder_set, 1);

@@ -1465,7 +1465,14 @@ rb_proc_call_with_block(VALUE proc, int argc, const VALUE *argv, VALUE passed_pr
 VALUE
 rb_obj_is_proc(VALUE obj)
 {
-    return rb_obj_is_kind_of(obj, rb_cProc);
+    /* Every Proc (a subclass's too: Proc has no allocator) is a PROC
+     * cell, and nothing else is: one byte of the header, as CRuby's
+     * rb_typeddata_is_kind_of(obj, &proc_data_type) is one compare. */
+    if (RB_SPECIAL_CONST_P(obj))
+        return Qfalse;
+    return ((const unsigned char *)obj)[RB_MONORUBY_CELL_TYPE_OFFSET] == RB_MONORUBY_CELL_PROC
+               ? Qtrue
+               : Qfalse;
 }
 
 VALUE
@@ -2677,15 +2684,65 @@ rb_iv_set(VALUE obj, const char *name, VALUE val)
     return val;
 }
 
+/* The name the interpreter keeps the instance variable `id` under, as
+ * an MrSym: `id` itself for `@x` (or an already '/'-spelled name), the
+ * '/' spelling of a hidden one (`rb_intern("vm")`, see ivar_name). An
+ * extension asks with the same few IDs over and over (liquid-c reads
+ * its VM out of the Context's hidden `vm` on every render), so the
+ * answers are kept in a small direct-mapped cache instead of building
+ * and interning the '/' name each time. MR_NO_SYM when the name is
+ * unknown or too long. */
+#define IVAR_SYM_CACHE 64
+static struct {
+    ID id;
+    MrSym sym;
+} ivar_sym_cache[IVAR_SYM_CACHE];
+
+static MrSym
+ivar_sym(ID id)
+{
+    size_t i = (size_t)(id * 2654435761u) & (IVAR_SYM_CACHE - 1);
+    if (id != 0 && ivar_sym_cache[i].id == id)
+        return ivar_sym_cache[i].sym;
+    const char *name = rb_id2name(id);
+    if (!name)
+        return MR_NO_SYM;
+    MrSym sym = (MrSym)id;
+    if (name[0] != '@' && name[0] != '/') {
+        char buf[256];
+        size_t len = strlen(name);
+        if (len > 254)
+            return MR_NO_SYM;
+        buf[0] = '/';
+        memcpy(buf + 1, name, len + 1);
+        sym = (MrSym)rb_intern2(buf, (long)len + 1);
+    }
+    ivar_sym_cache[i].id = id;
+    ivar_sym_cache[i].sym = sym;
+    return sym;
+}
+
 VALUE
 rb_ivar_get(VALUE obj, ID id)
 {
+    if (HAVE_API(ivar_get_sym)) {
+        MrSym sym = ivar_sym(id);
+        if (sym != MR_NO_SYM)
+            return check(api->ivar_get_sym(ctx(), M(obj), sym));
+    }
     return rb_iv_get(obj, rb_id2name(id));
 }
 
 VALUE
 rb_ivar_set(VALUE obj, ID id, VALUE val)
 {
+    if (HAVE_API(ivar_set_sym)) {
+        MrSym sym = ivar_sym(id);
+        if (sym != MR_NO_SYM) {
+            check_rc(api->ivar_set_sym(ctx(), M(obj), sym, M(val)));
+            return val;
+        }
+    }
     return rb_iv_set(obj, rb_id2name(id), val);
 }
 
@@ -3758,6 +3815,10 @@ VALUE
 rb_str_buf_append(VALUE str, VALUE str2)
 {
     StringValue(str2);
+    if (HAVE_API(str_append) && RB_TYPE_P(str, T_STRING)) {
+        check_rc(api->str_append(ctx(), M(str), M(str2)));
+        return str;
+    }
     /* The cases string.c appends without a change of encoding: the same
      * encoding, or ASCII-only text onto an ASCII-compatible string. */
     if (HAVE_API(str_cat) && HAVE_API(str_rptr) && str != str2 && RB_TYPE_P(str, T_STRING)) {
@@ -3778,8 +3839,7 @@ rb_str_buf_append(VALUE str, VALUE str2)
 VALUE
 rb_str_append(VALUE str, VALUE str2)
 {
-    StringValue(str2);
-    return rb_funcall(str, rb_intern("<<"), 1, str2);
+    return rb_str_buf_append(str, str2);
 }
 
 VALUE
@@ -4319,6 +4379,10 @@ rb_hash_aset(VALUE hash, VALUE key, VALUE val)
 VALUE
 rb_hash_aref(VALUE hash, VALUE key)
 {
+    /* CRuby's rb_hash_aref never dispatches `[]`; on a miss it calls
+     * `default` only when that is redefined. */
+    if (HAVE_API(hash_aref) && RB_TYPE_P(hash, T_HASH))
+        return check(api->hash_aref(ctx(), M(hash), M(key)));
     return rb_funcall(hash, rb_intern("[]"), 1, key);
 }
 
