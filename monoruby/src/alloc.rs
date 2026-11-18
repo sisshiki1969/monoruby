@@ -545,7 +545,19 @@ const PAGES_PER_GC_TRIGGER: u32 = 32;
 const GC_HEAP_FRACTION: u32 = 16;
 const ALLOC_SIZE: usize = PAGE_LEN * GCBOX_SIZE; // 2^18 = 256kb
 const MALLOC_THRESHOLD: usize = 256 * 1024;
-const MAX_PAGES: usize = 8192;
+/// Pages the object arena reserves: 64 GiB of address space, about
+/// 1.07 billion objects. Only the pages handed out are ever touched, so a
+/// large reservation costs address space and nothing else
+/// (`reserve_arena`). Where the system refuses that much, `Allocator::new`
+/// halves the request down to `MIN_ARENA_PAGES`.
+///
+/// It was 8192 pages (2 GiB, about 33.5 million objects) until #2067: a
+/// program that keeps more objects alive than that is unusual but
+/// legitimate (CRuby holds 40 million empty Arrays in 1.6 GB), and it
+/// segfaulted on the page past the reservation.
+const MAX_PAGES: usize = 1 << 18;
+/// The smallest arena `Allocator::new` settles for before giving up.
+const MIN_ARENA_PAGES: usize = 1 << 10;
 
 /// Byte offset of the cell array inside a page, and the cell stride, so the
 /// JIT's inline bump fast path can compute a cell address as
@@ -791,6 +803,9 @@ pub struct Allocator<T: GCBox> {
     /// [`Allocator::drop`] unmaps. `head_page` walks away from it, so it
     /// is kept separately.
     arena_base: PageRef<T>,
+    /// Pages in the arena reservation (`MAX_PAGES`, or less where the
+    /// system refused that much). `new_page` never hands out one past it.
+    arena_pages: usize,
     /// Current page.
     current_page: PageRef<T>,
     /// Topmost page.
@@ -1052,7 +1067,7 @@ pub(crate) fn tracked_addr() -> Option<usize> {
 /// `MAP_NORESERVE` and committed lazily as pages are handed out.
 ///
 /// **`MAP_NORESERVE` is the point of this function.** The arena is
-/// `MAX_PAGES` pages — 2 GiB — of which a typical process touches a few
+/// `MAX_PAGES` pages — 64 GiB — of which a typical process touches a few
 /// MiB. Linux accounts a plain private anonymous mapping against the
 /// commit limit, and does so per *VMA*, merging adjacent mappings that
 /// share their flags into one. So several arenas that happen to land next
@@ -1066,6 +1081,9 @@ pub(crate) fn tracked_addr() -> Option<usize> {
 ///
 /// The reservation is never released (no `Drop` on `Allocator`), so there
 /// is no unmapping counterpart.
+///
+/// Null when the system refuses the mapping (`reserve_largest_arena`
+/// then asks for less).
 ///
 fn reserve_arena(size: usize, align: usize) -> *mut u8 {
     // Over-reserve by one alignment unit so an aligned base exists inside
@@ -1081,11 +1099,9 @@ fn reserve_arena(size: usize, align: usize) -> *mut u8 {
             0,
         )
     };
-    assert!(
-        raw != libc::MAP_FAILED,
-        "could not reserve {slack} bytes for the object arena: {}",
-        std::io::Error::last_os_error()
-    );
+    if raw == libc::MAP_FAILED {
+        return std::ptr::null_mut();
+    }
     let raw = raw as usize;
     let base = (raw + align - 1) & !(align - 1);
     // SAFETY: both ranges are inside the mapping just made, and neither is
@@ -1100,6 +1116,63 @@ fn reserve_arena(size: usize, align: usize) -> *mut u8 {
         }
     }
     base as *mut u8
+}
+
+///
+/// Reserve the arena for an `Allocator`: `MAX_PAGES` pages, or the
+/// largest power-of-two share of it the system grants (a strict
+/// overcommit policy charges even a `MAP_NORESERVE` mapping, and an
+/// address-space limit caps it), down to `MIN_ARENA_PAGES`. Returns the
+/// base and the page count.
+///
+fn reserve_largest_arena() -> (*mut u8, usize) {
+    let mut pages = MAX_PAGES;
+    // Under an address-space limit (`ulimit -v`) the arena takes no more
+    // than a third of it: the JIT's code reservation and `malloc` live in
+    // the same budget, and an arena that took all it could get would
+    // leave them nothing.
+    let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+    // SAFETY: getrlimit(2) writes the struct it is given.
+    if unsafe { libc::getrlimit(libc::RLIMIT_AS, limit.as_mut_ptr()) } == 0 {
+        // SAFETY: getrlimit succeeded, so the struct is initialised.
+        let cur = unsafe { limit.assume_init() }.rlim_cur;
+        if cur != libc::RLIM_INFINITY {
+            let share = (cur as usize / 3) / ALLOC_SIZE;
+            while pages > MIN_ARENA_PAGES && pages > share {
+                pages /= 2;
+            }
+        }
+    }
+    loop {
+        let ptr = reserve_arena(ALLOC_SIZE * pages, ALLOC_SIZE);
+        if !ptr.is_null() {
+            return (ptr, pages);
+        }
+        assert!(
+            pages > MIN_ARENA_PAGES,
+            "could not reserve {} bytes for the object arena: {}",
+            ALLOC_SIZE * pages,
+            std::io::Error::last_os_error()
+        );
+        pages /= 2;
+    }
+}
+
+///
+/// Every page of the arena is in use and a collection freed none: the
+/// object heap is full. The allocation path cannot raise, so this ends the
+/// process the way CRuby does when the heap cannot grow, naming the limit
+/// rather than faulting on the page past the reservation (#2067).
+///
+#[cold]
+#[inline(never)]
+fn arena_exhausted(pages: usize) -> ! {
+    eprintln!(
+        "[FATAL] failed to allocate memory: the object heap is full ({} objects in {} MiB)",
+        pages * DATA_LEN,
+        pages * ALLOC_SIZE / (1024 * 1024)
+    );
+    std::process::abort()
 }
 
 ///
@@ -1188,7 +1261,7 @@ impl<T: GCBox> Drop for Allocator<T> {
         // SAFETY: `arena_base` is exactly what `reserve_arena` returned
         // for this allocator, and every cell in it has just been dropped.
         unsafe {
-            libc::munmap(base as *mut libc::c_void, ALLOC_SIZE * MAX_PAGES);
+            libc::munmap(base as *mut libc::c_void, ALLOC_SIZE * self.arena_pages);
         }
         #[cfg(test)]
         TEARDOWN_FREED.fetch_add(before.saturating_sub(malloc_amount()), Ordering::Relaxed);
@@ -1199,7 +1272,7 @@ impl<T: GCBox> Allocator<T> {
     pub(crate) fn new() -> Self {
         assert_eq!(64, GCBOX_SIZE);
         assert!(std::mem::size_of::<Page<T>>() <= ALLOC_SIZE);
-        let ptr = reserve_arena(ALLOC_SIZE * MAX_PAGES, ALLOC_SIZE);
+        let (ptr, arena_pages) = reserve_largest_arena();
         let ptr: PageRef<T> = std::ptr::NonNull::new(ptr as _).unwrap();
         // The arena is freshly reserved (uninitialised as far as this code
         // is concerned). Zero the first page's old-generation bitmap so the
@@ -1211,6 +1284,7 @@ impl<T: GCBox> Allocator<T> {
         unsafe { (*ptr.as_ptr()).clear_old_bits() };
         Allocator {
             arena_base: ptr,
+            arena_pages,
             current_page: ptr,
             head_page: ptr,
             pages: vec![],
@@ -1265,6 +1339,11 @@ impl<T: GCBox> Allocator<T> {
 
 
     fn new_page(&mut self) -> PageRef<T> {
+        let base = self.arena_base.as_ptr() as usize;
+        let head = self.head_page.as_ptr() as usize;
+        if (head - base) / ALLOC_SIZE + 1 >= self.arena_pages {
+            arena_exhausted(self.arena_pages);
+        }
         let ptr = unsafe { (self.head_page.as_ptr() as *mut u8).add(ALLOC_SIZE) } as _;
         let ptr = std::ptr::NonNull::new(ptr).unwrap();
         self.head_page = ptr;
@@ -1477,7 +1556,7 @@ impl<T: GCBox> Allocator<T> {
     pub fn has_room_for(&self, n: usize) -> bool {
         let base = self.arena_base.as_ptr() as usize;
         let head = self.head_page.as_ptr() as usize;
-        let fresh = MAX_PAGES - ((head - base) / ALLOC_SIZE + 1);
+        let fresh = self.arena_pages - ((head - base) / ALLOC_SIZE + 1);
         let pages = fresh + self.free_pages.len() + self.released_pages.len();
         n <= self.allocatable_slots() + pages * DATA_LEN
     }
@@ -2751,6 +2830,35 @@ mod arena_reservation_tests {
         assert_eq!(0, base as usize % ALLOC_SIZE, "arena base is misaligned");
         // SAFETY: nothing was handed out of this reservation.
         unsafe { libc::munmap(base as _, size) };
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod arena_size_tests {
+    use super::*;
+
+    /// The arena holds far more than the 2 GiB (about 33.5 million
+    /// objects) it used to, past which the process segfaulted (#2067).
+    /// Only where nothing caps the address space: under `ulimit -v` the
+    /// arena deliberately takes less.
+    #[test]
+    fn arena_reserves_past_the_old_two_gib() {
+        let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+        let unlimited = unsafe { libc::getrlimit(libc::RLIMIT_AS, limit.as_mut_ptr()) } == 0
+            && unsafe { limit.assume_init() }.rlim_cur == libc::RLIM_INFINITY;
+        if !unlimited {
+            return;
+        }
+        std::thread::spawn(|| {
+            let alloc = Allocator::<crate::RValue>::new();
+            assert_eq!(MAX_PAGES, alloc.arena_pages);
+            assert!(alloc.arena_pages * DATA_LEN > 1_000_000_000);
+            // Every reserved page but the first is still to be handed out.
+            assert!(alloc.has_room_for((MAX_PAGES - 1) * DATA_LEN));
+            assert!(!alloc.has_room_for(MAX_PAGES * DATA_LEN + DATA_LEN));
+        })
+        .join()
+        .unwrap();
     }
 }
 
