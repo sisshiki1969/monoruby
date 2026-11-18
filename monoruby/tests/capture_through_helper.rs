@@ -107,3 +107,42 @@ fn locals_written_after_a_capture_stay_alive() {
         "##,
     );
 }
+
+/// Here the frame moves for the first time *inside* the helper, and the
+/// helper goes on to write the result: the main script's frame is promoted
+/// to the heap by the first read of `TOPLEVEL_BINDING` (reached through
+/// `const_get`, since a script that names the constant runs inside the
+/// binding from the start). `expand_array` writes the targets, and
+/// `defined?`'s `respond_to_missing?` path writes `nil`, to the slots of the
+/// frame where it lives now.
+#[test]
+fn frame_moved_inside_the_helper() {
+    run_test_once(
+        r##"
+        class Arr
+          def to_ary
+            Object.const_get(:TOPLEVEL_BINDING)
+            [1, "two" * 2]
+          end
+        end
+        x, y = Arr.new
+        GC.start
+        tb = Object.const_get(:TOPLEVEL_BINDING)
+        [x, y, tb.local_variable_get(:x), tb.local_variable_get(:y)]
+        "##,
+    );
+    run_test_once(
+        r##"
+        class Rtm
+          def respond_to_missing?(name, priv)
+            Object.const_get(:TOPLEVEL_BINDING)
+            false
+          end
+        end
+        d = 1
+        d = defined?(Rtm.new.foo)
+        tb = Object.const_get(:TOPLEVEL_BINDING)
+        [d, tb.local_variable_get(:d)]
+        "##,
+    );
+}
