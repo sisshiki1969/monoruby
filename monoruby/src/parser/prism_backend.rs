@@ -6078,31 +6078,18 @@ fn is_regexp_escape_left_to_preprocess(
     if !diag.message().starts_with(b"invalid multibyte escape: /") {
         return false;
     }
-    // The location is the literal: `/body/flags`.
+    // The location is the literal, `/body/flags` or `%r<d>body<d>flags`.
     let lit = diag.location().as_slice();
-    let (Some(open), Some(close)) = (
-        lit.iter().position(|&b| b == b'/'),
-        lit.iter().rposition(|&b| b == b'/'),
-    ) else {
-        return false;
-    };
-    if close <= open {
-        return false;
-    }
-    let (body, flags) = (&lit[open + 1..close], &lit[close + 1..]);
-    let enc = if flags.contains(&b'e') {
-        crate::value::Encoding::try_from_str("EUC-JP").ok()
-    } else if flags.contains(&b's') {
-        crate::value::Encoding::try_from_str("Windows-31J").ok()
-    } else if flags.contains(&b'u') {
-        Some(crate::value::Encoding::UTF8)
-    } else if flags.contains(&b'n') {
-        None
-    } else {
-        Some(source_encoding)
-    };
-    let Some(enc) = enc else {
-        return false;
+    let flags_len = lit.iter().rev().take_while(|b| b.is_ascii_alphabetic()).count();
+    let open = if lit.starts_with(b"%r") { 2 } else { 0 };
+    let close = lit.len() - flags_len - 1;
+    let (body, flags) = (&lit[(open + 1).min(close)..close], &lit[close + 1..]);
+    let enc = match flags.iter().rev().find(|b| b"esun".contains(b)) {
+        Some(b'n') => return false,
+        Some(b'e') => crate::value::Encoding::try_from_str("EUC-JP").unwrap(),
+        Some(b's') => crate::value::Encoding::try_from_str("Windows-31J").unwrap(),
+        Some(_) => crate::value::Encoding::UTF8,
+        None => source_encoding,
     };
     !matches!(
         crate::value::rvalue::regexp::reg_preprocess(body, enc, flags.contains(&b'x')),

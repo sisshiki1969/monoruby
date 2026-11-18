@@ -3577,6 +3577,21 @@ mod tests {
     }
 
     #[test]
+    fn a_regexp_literal_s_escapes_are_judged_as_rb_reg_preprocess_does() {
+        // prism (2.x) refuses every byte-escape sequence it cannot read as
+        // a character as an "invalid multibyte escape"; the parser keeps
+        // that verdict only where `rb_reg_preprocess` agrees, in every
+        // literal form and under each encoding modifier.
+        run_test_once(
+            r##"
+            x = ->(s) { begin; eval(s).source; rescue SyntaxError => err; [err.class, err.message[/(invalid|too short)[^\n]*/]]; end }
+            [x.('%r{\xe3}'), x.('%r!\xC6!e'), x.('%r[\xE3\201\202]'), x.('/\x82/s'), x.('/\x82\xA0/s'),
+             x.('/\xe3\x81/x'), x.('/\xe3/ix'), x.('/\xff/n'), x.('/\xff/'), x.('%r{\xff}u'), x.('/\xE3\201\202/u')]
+            "##,
+        );
+    }
+
+    #[test]
     fn a_regexp_literal_in_a_non_utf8_source_reads_the_file_s_encoding() {
         // `# encoding: EUC-JP` reaches regexp literals as it does string
         // literals: the bytes as written are the pattern, in EUC-JP,
