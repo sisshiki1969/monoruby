@@ -25,9 +25,20 @@ module Process
   #   bit  7     = core dumped flag
   #   bits 8..15 = exit code (for normal exit)
   #   low byte 0x7F = stopped (SIGSTOP etc.)
+  #
+  # As in CRuby, a Status is made only by the interpreter (`Status.new` is
+  # undefined; the runtime calls `__new`), and one made otherwise —
+  # `allocate`, or `dup` / `clone`, which do not copy the C struct — is
+  # uninitialized: its fields read as 0 and it inspects as
+  # "uninitialized" (#2006).
   class Status
+    class << self
+      alias __new new
+      undef_method :new
+    end
+
     def pid
-      @__pid
+      @__pid || 0
     end
 
     def initialize(raw_status, pid)
@@ -38,33 +49,39 @@ module Process
       freeze
     end
 
+    def initialize_copy(other)
+      @__status = nil
+      @__pid = nil
+    end
+    private :initialize_copy
+
     def exited?
-      (@__status & 0x7F) == 0
+      (to_i & 0x7F) == 0
     end
 
     def exitstatus
-      exited? ? (@__status >> 8) & 0xFF : nil
+      exited? ? (to_i >> 8) & 0xFF : nil
     end
 
     def signaled?
-      low = @__status & 0x7F
+      low = to_i & 0x7F
       low != 0 && low != 0x7F
     end
 
     def termsig
-      signaled? ? @__status & 0x7F : nil
+      signaled? ? to_i & 0x7F : nil
     end
 
     def stopped?
-      (@__status & 0xFF) == 0x7F
+      (to_i & 0xFF) == 0x7F
     end
 
     def stopsig
-      stopped? ? (@__status >> 8) & 0xFF : nil
+      stopped? ? (to_i >> 8) & 0xFF : nil
     end
 
     def coredump?
-      (@__status & 0x80) != 0
+      (to_i & 0x80) != 0
     end
 
     def success?
@@ -72,20 +89,21 @@ module Process
     end
 
     def to_i
-      @__status
+      @__status || 0
     end
 
     def to_s
       if signaled?
-        "pid #{@__pid} SIG#{termsig}#{coredump? ? ' (core dumped)' : ''}"
+        "pid #{pid} SIG#{termsig}#{coredump? ? ' (core dumped)' : ''}"
       elsif stopped?
-        "pid #{@__pid} stopped SIG#{stopsig}"
+        "pid #{pid} stopped SIG#{stopsig}"
       else
-        "pid #{@__pid} exit #{exitstatus}"
+        "pid #{pid} exit #{exitstatus}"
       end
     end
 
     def inspect
+      return "#<Process::Status: uninitialized>" if @__status.nil?
       __sprintf_repr("#<Process::Status: #{to_s}>")
     end
 

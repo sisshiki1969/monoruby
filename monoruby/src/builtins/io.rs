@@ -2473,7 +2473,7 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
         let status_obj = vm.invoke_method_inner(
             globals,
-            IdentId::NEW,
+            IdentId::get_id("__new"),
             status_class,
             &[
                 Value::integer(exit_status as i64),
@@ -3581,7 +3581,7 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                 {
                     if let Ok(status_obj) = vm.invoke_method_inner(
                         globals,
-                        IdentId::NEW,
+                        IdentId::get_id("__new"),
                         status_class,
                         &[
                             Value::integer(exit_status as i64),

@@ -252,12 +252,13 @@ fn localjump_exit_value(
 ) -> Result<Value> {
     Ok(globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("/exit_value"))
+        .get_ivar(lfp.self_val(), IdentId::get_id("@exit_value"))
         .unwrap_or_default())
 }
 
-/// `LocalJumpError#reason` — the jump kind (`:return`, `:break`, …);
-/// `:noreason` when unknown, like CRuby's default.
+/// `LocalJumpError#reason` — the jump kind (`:return`, `:break`, …,
+/// `:noreason` for a VM error that names none). Like `#exit_value`, it is
+/// CRuby's ordinary instance variable (`@reason`), nil until set.
 #[monoruby_builtin]
 fn localjump_reason(
     _vm: &mut Executor,
@@ -267,8 +268,8 @@ fn localjump_reason(
 ) -> Result<Value> {
     Ok(globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id("/reason"))
-        .unwrap_or_else(|| Value::symbol(IdentId::get_id("noreason"))))
+        .get_ivar(lfp.self_val(), IdentId::get_id("@reason"))
+        .unwrap_or_default())
 }
 
 /// `NameError#name` — returns the missing-name Symbol that was passed
@@ -952,7 +953,7 @@ fn loaderror_path(
     let self_ = lfp.self_val();
     Ok(globals
         .store
-        .get_ivar(self_, IdentId::get_id("/path"))
+        .get_ivar(self_, IdentId::get_id("@path"))
         .unwrap_or_default())
 }
 

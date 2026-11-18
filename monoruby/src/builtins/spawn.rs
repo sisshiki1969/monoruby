@@ -1003,7 +1003,7 @@ fn set_status(vm: &mut Executor, globals: &mut Globals, raw: i32, pid: i32) -> R
     let status_class = vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
     let status_obj = vm.invoke_method_inner(
         globals,
-        IdentId::NEW,
+        IdentId::get_id("__new"),
         status_class,
         &[Value::integer(raw as i64), Value::integer(pid as i64)],
         None,

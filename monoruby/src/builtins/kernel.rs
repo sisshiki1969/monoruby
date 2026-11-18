@@ -3784,7 +3784,7 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         {
             if let Ok(status_obj) = vm.invoke_method_inner(
                 globals,
-                IdentId::NEW,
+                IdentId::get_id("__new"),
                 status_class,
                 &[Value::integer(raw as i64), Value::integer(pid as i64)],
                 None,
@@ -3959,7 +3959,7 @@ fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             {
                 if let Ok(status_obj) = vm.invoke_method_inner(
                     globals,
-                    IdentId::NEW,
+                    IdentId::get_id("__new"),
                     status_class,
                     &[Value::integer(raw as i64), Value::integer(pid as i64)],
                     None,

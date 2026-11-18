@@ -1607,7 +1607,8 @@ fn resolve_class_path(globals: &Globals, path: &str) -> Option<Module> {
 /// `NoMatchingPatternKeyError#matchee` / `#key`, and what a transcoding
 /// error knows about the conversion that failed. `LocalJumpError` and
 /// `LoadError` / `SyntaxError` keep theirs in real instance variables
-/// (`@exit_value`, `@reason`, `@path`).
+/// (`@exit_value`, `@reason`, `@path`), here as there (#2006), so they
+/// are dumped and loaded as any instance variable is.
 ///
 /// monoruby keeps the same state in hidden slots (doc/hidden_ivars.md).
 /// The table is in the order CRuby dumps the fields of one exception.
@@ -1648,7 +1649,7 @@ const fn field(
     }
 }
 
-const EXCEPTION_FIELDS: [ExceptionField; 23] = [
+const EXCEPTION_FIELDS: [ExceptionField; 19] = [
     field("key", "/key", Some("KeyError"), UnsetField::Skip),
     field("receiver", "/receiver", Some("KeyError"), UnsetField::Skip),
     // A NameError's receiver is under an internal id in CRuby and is
@@ -1670,15 +1671,6 @@ const EXCEPTION_FIELDS: [ExceptionField; 23] = [
         UnsetField::Nil,
     ),
     field("result", "/result", Some("StopIteration"), UnsetField::Skip),
-    field(
-        "@exit_value",
-        "/exit_value",
-        Some("LocalJumpError"),
-        UnsetField::Skip,
-    ),
-    field("@reason", "/reason", Some("LocalJumpError"), UnsetField::Skip),
-    field("@path", "/path", Some("LoadError"), UnsetField::Skip),
-    field("@path", "/path", Some("SyntaxError"), UnsetField::Skip),
     field("errno", "/__errno", None, UnsetField::Skip),
     field("signo", "/__signo", None, UnsetField::Skip),
     field("matchee", "/__matchee", None, UnsetField::Skip),

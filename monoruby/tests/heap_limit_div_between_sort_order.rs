@@ -13,6 +13,7 @@
 //!   on Linux is glibc's `qsort_r`, a top-down merge sort; `min(n)` /
 //!   `max(n)` / `min_by(n)` / `max_by(n)` are `rb_nmin_run`. A block or a
 //!   user-defined `<=>` sees the same pairs in the same order.
+//! - **Instance variables and uninitialized objects** (#2006).
 
 use monoruby::tests::*;
 
@@ -116,6 +117,60 @@ fn sort_and_nmin_errors_name_crubys_pair() {
           t.() {{ [3, "a", 1, nil].sort }}, t.() {{ [2, 1, "a"].each.min(2) }},
           t.() {{ [3, 1, 2].min(2) {{ nil }} }}, t.() {{ [3, 1, 2].max(2) {{ 1.5 }} }},
           t.() {{ [1, nil].sort_by {{ _1 }} }}, t.() {{ [3, 1, 2].sort {{ |a, b| raise "x" if a == 1; a <=> b }} }},
+        ]
+        "#
+    ));
+}
+
+/// What CRuby keeps in ordinary instance variables is in them here too:
+/// `LocalJumpError`'s `@exit_value` / `@reason`, `LoadError`'s and
+/// `SyntaxError`'s `@path`, `Digest::SHA2`'s `@sha2` (#2006).
+#[test]
+fn exception_and_digest_instance_variables() {
+    run_test_once(&format!(
+        r#"
+        {HELPER}
+        require "digest/sha2"
+        def ff = yield
+        [
+          t.() {{ e = (begin; ff; rescue LocalJumpError => e; e; end); [e.instance_variables, e.exit_value, e.reason] }},
+          t.() {{ e = LocalJumpError.new("x"); [e.instance_variables, e.exit_value, e.reason] }},
+          t.() {{ e = (begin; require "zzz_nonexistent"; rescue LoadError => e; e; end); [e.instance_variables, e.path] }},
+          t.() {{ e = LoadError.new("x"); e.instance_variable_set(:@path, "p"); [e.instance_variables, e.path] }},
+          t.() {{ e = (begin; eval("1 +"); rescue SyntaxError => e; e; end); [e.instance_variables, e.path.class] }},
+          t.() {{ e = SyntaxError.new("x"); [e.instance_variables, e.path] }},
+          t.() {{ e = (begin; ff; rescue LocalJumpError => e; e; end); e = Marshal.load(Marshal.dump(e)); [e.instance_variables, e.exit_value, e.reason] }},
+          t.() {{ e = (begin; require "zzz_nonexistent"; rescue LoadError => e; e; end); e = Marshal.load(Marshal.dump(e)); [e.instance_variables, e.path] }},
+          t.() {{ d = Digest::SHA2.new; d << "a"; e = d.dup; e << "b"; [d.instance_variables, d.hexdigest, e.hexdigest, d.size, d.length, d.block_length, d.inspect] }},
+          t.() {{ [Digest::SHA2.new(384).length, Digest::SHA2.new(512).hexdigest("x"), Digest::SHA2.hexdigest("a"), Digest::SHA256.new.size] }},
+          t.() {{ Digest::SHA2.new(1) }}, t.() {{ Digest::SHA2.instance_methods(false).sort }},
+        ]
+        "#
+    ));
+}
+
+/// A `Process::Status` is made by the interpreter only, and one made
+/// otherwise is uninitialized; an uninitialized `File::Stat` raises from
+/// every reader (#2006).
+#[test]
+fn uninitialized_status_and_stat() {
+    run_test_once(&format!(
+        r#"
+        {HELPER}
+        s = Process::Status.allocate
+        st = File::Stat.allocate
+        `true`
+        [
+          t.() {{ Process::Status.new }}, t.() {{ Process::Status.new(0, 1) }},
+          t.() {{ [s.inspect, s.to_s, s.pid, s.to_i, s.exitstatus, s.success?, s == 0, s.exited?, s.signaled?] }},
+          t.() {{ d = $?.dup; [d.pid == $?.pid, d.pid, d.to_i, d.inspect, d.frozen?] }},
+          t.() {{ c = $?.clone; [c.pid == $?.pid, c.inspect, c.frozen?] }},
+          t.() {{ [$?.inspect =~ /exit 0/, $?.success?, $?.frozen?] }},
+          *%i[dev ino mode nlink uid gid rdev size blksize blocks atime mtime ctime birthtime directory? file?
+              ftype setuid? readable? writable_real? executable? world_readable? zero? size? owned? dev_major
+              rdev_minor sticky?].map {{ |m| t.() {{ st.public_send(m) }} }},
+          t.() {{ st.inspect }}, t.() {{ st <=> File::Stat.new(".") }}, t.() {{ File::Stat.new(".") <=> st }},
+          t.() {{ File::Stat.new(".").dup.directory? }},
         ]
         "#
     ));

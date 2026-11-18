@@ -986,7 +986,7 @@ pub(super) fn waitpid_status(
     let status_class = vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
     let status_obj = vm.invoke_method_inner(
         globals,
-        IdentId::NEW,
+        IdentId::get_id("__new"),
         status_class,
         &[Value::integer(status as i64), Value::integer(ret as i64)],
         None,
@@ -1055,7 +1055,7 @@ fn process_status_wait(
     let status_class = vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
     vm.invoke_method_inner(
         globals,
-        IdentId::NEW,
+        IdentId::get_id("__new"),
         status_class,
         &[Value::integer(raw as i64), Value::integer(pid as i64)],
         None,
@@ -1697,7 +1697,7 @@ fn process_waitall(
                 vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
             let status_obj = vm.invoke_method_inner(
                 globals,
-                IdentId::NEW,
+                IdentId::get_id("__new"),
                 status_class,
                 &[Value::integer(status as i64), Value::integer(ret as i64)],
                 None,
