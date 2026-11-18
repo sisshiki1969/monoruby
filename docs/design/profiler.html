@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-bae83ccc.js";
+            window.path_to_searchindex_js = "../searchindex-49140532.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -238,7 +238,10 @@ allocated and the bytes <code>malloc</code>ed in each below. <strong>Drag over a
 it</strong> and every table and flame graph on the page is recomputed for that
 part: the warm-up apart from the steady state, one GC burst, the
 stretch where the JIT was compiling. A click, or <em>Whole run</em>, clears the
-selection.</li>
+selection. <strong>Click a tier in the legend</strong> to pick it out: it moves to
+the bottom of each bar in its own color, so its share reads off the
+axis, and the other tiers turn gray; a second click (or Escape) brings
+them back.</li>
 <li><strong>Overview</strong> — the totals, the tiers, the hottest methods, the most
 allocated classes, the collector.</li>
 <li><strong>Flame graph</strong> — of CPU time, objects allocated, <code>malloc</code> calls or

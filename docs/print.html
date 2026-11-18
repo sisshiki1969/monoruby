@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bae83ccc.js";
+            window.path_to_searchindex_js = "searchindex-49140532.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -1045,7 +1045,7 @@ binary.</p>
 tabs, click a frame of the flame graph.
 <strong><a href="profiler/optcarrot.html">Open it in a tab of its own</a></strong> for the full
 width.</p>
-<iframe src="profiler/optcarrot.html" title="monoruby profiler viewer: 600 frames of optcarrot" loading="lazy" style="width: 100%; height: 760px; border: 1px solid var(--table-border-color); border-radius: 6px;"></iframe>
+<iframe src="profiler/optcarrot.html" title="monoruby profiler viewer: 600 frames of optcarrot" loading="lazy" style="width: 100%; height: 860px; border: 1px solid var(--table-border-color); border-radius: 6px;"></iframe>
 <p>Things to try in it:</p>
 <ul>
 <li><strong>Drag over the first 300 ms of the time line.</strong> Every table and flame
@@ -1054,6 +1054,10 @@ program from the steady state: optcarrot is building its lookup tables
 (<code>Array#transpose</code>, <code>PPU#setup_lut</code>), the JIT compiler takes a fifth of the
 samples, and JIT code only a quarter instead of 70%. A click, or <em>Whole
 run</em>, clears the selection.</li>
+<li><strong>Click <em>JIT compile</em> in the legend above the time line.</strong> The other
+tiers turn gray and the compiler’s share stands on the baseline, so the
+bursts of compiling are easy to find: most of them in the first 500 ms,
+and a tall one at 600 ms. A second click brings the other tiers back.</li>
 <li><strong><a href="profiler/optcarrot.html#flame">Flame graph</a>.</strong> Ruby frames are neutral;
 the colored frame under each stack is the tier the sample was counted in.
 <code>Optcarrot::PPU#render_pixel</code> is in italics and marked <code>[inlined]</code>: the JIT
@@ -20784,7 +20788,10 @@ allocated and the bytes <code>malloc</code>ed in each below. <strong>Drag over a
 it</strong> and every table and flame graph on the page is recomputed for that
 part: the warm-up apart from the steady state, one GC burst, the
 stretch where the JIT was compiling. A click, or <em>Whole run</em>, clears the
-selection.</li>
+selection. <strong>Click a tier in the legend</strong> to pick it out: it moves to
+the bottom of each bar in its own color, so its share reads off the
+axis, and the other tiers turn gray; a second click (or Escape) brings
+them back.</li>
 <li><strong>Overview</strong> — the totals, the tiers, the hottest methods, the most
 allocated classes, the collector.</li>
 <li><strong>Flame graph</strong> — of CPU time, objects allocated, <code>malloc</code> calls or

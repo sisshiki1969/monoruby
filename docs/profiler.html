@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bae83ccc.js";
+            window.path_to_searchindex_js = "searchindex-49140532.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -234,7 +234,7 @@ binary.</p>
 tabs, click a frame of the flame graph.
 <strong><a href="profiler/optcarrot.html">Open it in a tab of its own</a></strong> for the full
 width.</p>
-<iframe src="profiler/optcarrot.html" title="monoruby profiler viewer: 600 frames of optcarrot" loading="lazy" style="width: 100%; height: 760px; border: 1px solid var(--table-border-color); border-radius: 6px;"></iframe>
+<iframe src="profiler/optcarrot.html" title="monoruby profiler viewer: 600 frames of optcarrot" loading="lazy" style="width: 100%; height: 860px; border: 1px solid var(--table-border-color); border-radius: 6px;"></iframe>
 <p>Things to try in it:</p>
 <ul>
 <li><strong>Drag over the first 300 ms of the time line.</strong> Every table and flame
@@ -243,6 +243,10 @@ program from the steady state: optcarrot is building its lookup tables
 (<code>Array#transpose</code>, <code>PPU#setup_lut</code>), the JIT compiler takes a fifth of the
 samples, and JIT code only a quarter instead of 70%. A click, or <em>Whole
 run</em>, clears the selection.</li>
+<li><strong>Click <em>JIT compile</em> in the legend above the time line.</strong> The other
+tiers turn gray and the compiler’s share stands on the baseline, so the
+bursts of compiling are easy to find: most of them in the first 500 ms,
+and a tall one at 600 ms. A second click brings the other tiers back.</li>
 <li><strong><a href="profiler/optcarrot.html#flame">Flame graph</a>.</strong> Ruby frames are neutral;
 the colored frame under each stack is the tier the sample was counted in.
 <code>Optcarrot::PPU#render_pixel</code> is in italics and marked <code>[inlined]</code>: the JIT

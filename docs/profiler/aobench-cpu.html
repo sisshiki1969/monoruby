@@ -17,7 +17,7 @@
 :root {
   --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
   --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10); --wash: rgba(11,11,11,.05);
-  --frame: #e9e8e2; --frame-native: #d5d3c8; --frame-dim: #f0efea;
+  --frame: #e9e8e2; --frame-native: #d5d3c8; --frame-dim: #f0efea; --tier-dim: #dcdbd3;
   --accent: #2a78d6; --accent-wash: rgba(42,120,214,.12);
   --t0: #2a78d6; --t1: #eb6834; --t2: #1baf7a; --t3: #eda100; --t4: #e87ba4;
   --t5: #008300; --t6: #6250d6; --t7: #e34948; --t8: #898781; --t9: #c3c2b7;
@@ -27,7 +27,7 @@
   :root:not([data-theme="light"]) {
     --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.06);
-    --frame: #33332f; --frame-native: #4a4943; --frame-dim: #262624;
+    --frame: #33332f; --frame-native: #4a4943; --frame-dim: #262624; --tier-dim: #3a3a37;
     --accent: #3987e5; --accent-wash: rgba(57,135,229,.18);
     --t0: #3987e5; --t1: #d95926; --t2: #199e70; --t3: #c98500; --t4: #d55181;
     --t5: #0ca30c; --t6: #9085e9; --t7: #e66767; --t8: #898781; --t9: #55544f;
@@ -37,7 +37,7 @@
 :root[data-theme="dark"] {
   --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
   --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.06);
-  --frame: #33332f; --frame-native: #4a4943; --frame-dim: #262624;
+  --frame: #33332f; --frame-native: #4a4943; --frame-dim: #262624; --tier-dim: #3a3a37;
   --accent: #3987e5; --accent-wash: rgba(57,135,229,.18);
   --t0: #3987e5; --t1: #d95926; --t2: #199e70; --t3: #c98500; --t4: #d55181;
   --t5: #0ca30c; --t6: #9085e9; --t7: #e66767; --t8: #898781; --t9: #55544f;
@@ -75,6 +75,11 @@ nav.tabs button { border: 0; background: none; border-radius: 6px 6px 0 0; heigh
 nav.tabs button[aria-selected="true"] { color: var(--ink); font-weight: 650; border-bottom-color: var(--accent); }
 .legend { display: flex; gap: 4px 14px; flex-wrap: wrap; color: var(--ink2); margin: 6px 0 2px; }
 .legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.legend button { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; border: 0; background: none; height: 24px; padding: 2px 6px; margin: 0 -6px; color: inherit; }
+.legend button:hover { background: var(--wash); }
+.legend button[aria-pressed="true"] { color: var(--ink); font-weight: 650; }
+.legend.only button[aria-pressed="false"] { color: var(--muted); }
+.legend.only button[aria-pressed="false"] .sw { background: var(--tier-dim) !important; }
 .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; flex: none; }
 canvas { display: block; width: 100%; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; margin-bottom: 12px; }
@@ -145,7 +150,7 @@ tbody tr.click { cursor: pointer; }
   <section class="card" id="tl-card" hidden>
     <div class="row">
       <h2>Time line</h2>
-      <span class="muted" id="tl-hint">Share of each bucket's CPU samples by tier. Drag to look at a part of the run; everything below follows.</span>
+      <span class="muted" id="tl-hint">Share of each bucket's CPU samples by tier. Drag to look at a part of the run; everything below follows. Click a tier in the legend to pick it out.</span>
       <span class="grow"></span>
       <span id="tl-range" class="mono"></span>
       <button id="tl-reset" hidden>Whole run</button>
@@ -496,7 +501,7 @@ function mixBar(tiers) {
 //
 // Time line
 //
-const tl = { canvas: document.getElementById("tl"), drag: null, hover: -1, series: null };
+const tl = { canvas: document.getElementById("tl"), drag: null, hover: -1, series: null, only: -1 };
 function timelineSeries() {
   if (tl.series) return tl.series;
   const tiers = Array.from({ length: NB }, () => new Float64Array(NT));
@@ -513,7 +518,7 @@ function timelineSeries() {
   if (PROFILES.malloc.on) extra.push({ label: "malloc", data: per(PROFILES.malloc, 2), fmt: fmtBytes });
   return tl.series = { tiers, extra };
 }
-const TL = { left: 62, right: 8, top: 4, plot: 84, axis: 18, rowH: 20 };
+const TL = { left: 62, right: 8, top: 4, plot: 168, axis: 18, rowH: 20 };
 function drawTimeline() {
   const c = tl.canvas;
   if (document.getElementById("tl-card").hidden) return;
@@ -535,13 +540,18 @@ function drawTimeline() {
     g.fillStyle = muted; g.fillText(label, x0 - 6, Math.min(Math.max(y, TL.top + 5), TL.top + TL.plot - 5));
     g.fillStyle = grid; g.fillRect(x0, Math.round(y), pw, 1);
   }
-  const colors = D.tiers.map((_, t) => tierColor(t));
+  // with a tier picked out in the legend, it sits on the baseline in its
+  // color, so its share reads off the axis, and the rest are one gray
+  const only = tl.only, dim = css("--tier-dim");
+  const colors = D.tiers.map((_, t) => only < 0 || t === only ? tierColor(t) : dim);
+  const order = Array.from({ length: NT }, (_, t) => t);
+  if (only >= 0) order.sort((p, q) => (q === only) - (p === only));
   for (let b = 0; b < NB; b++) {
     const total = sum(s.tiers[b]);
     if (!total) continue;
     let y = TL.top + TL.plot;
     const xa = Math.round(x0 + b * bw), xb = Math.round(x0 + (b + 1) * bw);
-    for (let t = 0; t < NT; t++) {
+    for (const t of order) {
       const h = s.tiers[b][t] / total * TL.plot;
       if (!h) continue;
       g.fillStyle = colors[t];
@@ -614,9 +624,20 @@ function initTimeline() {
   if (!PROFILES.cpu.on || NB < 2) return;
   document.getElementById("tl-card").hidden = false;
   const lg = document.getElementById("tl-legend"), tt = sum2(timelineSeries().tiers);
+  const pick = (t) => {
+    tl.only = tl.only === t ? -1 : t;
+    lg.classList.toggle("only", tl.only >= 0);
+    for (const btn of lg.children) btn.setAttribute("aria-pressed", String(+btn.dataset.tier === tl.only));
+    drawTimeline();
+  };
   for (let t = 0; t < NT; t++) {
-    if (tt[t]) lg.append(el("span", null, el("i", { class: "sw", style: "background:var(--t" + t + ")" }), D.tiers[t][1]));
+    if (!tt[t]) continue;
+    const btn = el("button", { "aria-pressed": "false", "data-tier": t, title: "Show only " + D.tiers[t][1] + " (click again for all)" },
+      el("i", { class: "sw", style: "background:var(--t" + t + ")" }), D.tiers[t][1]);
+    btn.addEventListener("click", () => pick(t));
+    lg.append(btn);
   }
+  lg.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && tl.only >= 0) pick(tl.only); });
   const c = tl.canvas;
   c.addEventListener("pointerdown", (ev) => {
     const b = bucketAt(ev);
@@ -639,7 +660,10 @@ function initTimeline() {
       t.append(el("div", { class: "h", text: fmtMs(bucketTime(b)) + " – " + fmtMs(bucketTime(b + 1)) }));
       t.append(el("div", { class: "sub", text: fmtInt(total) + " CPU samples" }));
       const rows = [];
-      for (let i = 0; i < NT; i++) if (s.tiers[b][i]) rows.push([tierColor(i), fmtPct(s.tiers[b][i], total), D.tiers[i][1]]);
+      for (let i = 0; i < NT; i++) {
+        if (s.tiers[b][i] && (tl.only < 0 || i === tl.only)) rows.push([tierColor(i), fmtPct(s.tiers[b][i], total), D.tiers[i][1]]);
+      }
+      if (tl.only >= 0 && total > s.tiers[b][tl.only]) rows.push([css("--tier-dim"), fmtPct(total - s.tiers[b][tl.only], total), "other tiers"]);
       for (const e of s.extra) rows.push([null, e.fmt(e.data[b]), e.label === "objects" ? "objects allocated" : "malloc'ed"]);
       tipRows(t, rows);
     });
