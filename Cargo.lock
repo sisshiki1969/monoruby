@@ -1561,7 +1561,7 @@ dependencies = [
 [[package]]
 name = "ruby-prism"
 version = "1.9.0"
-source = "git+https://github.com/sisshiki1969/prism.git?branch=monoruby-vendored#1170cbd82a33a5423f32ba78483213f9355abea6"
+source = "git+https://github.com/sisshiki1969/prism.git?branch=monoruby-vendored#a96cd16790bbb8a99b6aebae32d449a44e4d077c"
 dependencies = [
  "ruby-prism-sys",
  "serde",
@@ -1571,7 +1571,7 @@ dependencies = [
 [[package]]
 name = "ruby-prism-sys"
 version = "1.9.0"
-source = "git+https://github.com/sisshiki1969/prism.git?branch=monoruby-vendored#1170cbd82a33a5423f32ba78483213f9355abea6"
+source = "git+https://github.com/sisshiki1969/prism.git?branch=monoruby-vendored#a96cd16790bbb8a99b6aebae32d449a44e4d077c"
 dependencies = [
  "bindgen 0.72.1",
  "cc",
