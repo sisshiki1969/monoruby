@@ -1553,10 +1553,17 @@ impl<T: GCBox> Allocator<T> {
     /// allocation past the reservation has nowhere to go, so a builtin
     /// about to create that many objects in one go (`Array#product`)
     /// asks first and answers with NoMemoryError.
+    ///
+    /// The reservation is address space, not memory (64 GiB, #2067), so
+    /// the pages it has left are counted only as far as the machine's
+    /// physical memory could back them: past that the objects cannot
+    /// all exist at once, and creating them would end in the kernel's
+    /// OOM killer rather than an exception.
     pub fn has_room_for(&self, n: usize) -> bool {
         let base = self.arena_base.as_ptr() as usize;
         let head = self.head_page.as_ptr() as usize;
         let fresh = self.arena_pages - ((head - base) / ALLOC_SIZE + 1);
+        let fresh = fresh.min(physical_memory() / ALLOC_SIZE);
         let pages = fresh + self.free_pages.len() + self.released_pages.len();
         n <= self.allocatable_slots() + pages * DATA_LEN
     }
@@ -2833,6 +2840,18 @@ mod arena_reservation_tests {
     }
 }
 
+/// Bytes of physical memory the machine has (`usize::MAX` when the
+/// system does not say).
+fn physical_memory() -> usize {
+    // SAFETY: `sysconf` only reads system configuration.
+    let (pages, page_size) =
+        unsafe { (libc::sysconf(libc::_SC_PHYS_PAGES), libc::sysconf(libc::_SC_PAGESIZE)) };
+    if pages <= 0 || page_size <= 0 {
+        return usize::MAX;
+    }
+    (pages as usize).saturating_mul(page_size as usize)
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod arena_size_tests {
     use super::*;
@@ -2854,8 +2873,10 @@ mod arena_size_tests {
             assert_eq!(MAX_PAGES, alloc.arena_pages);
             assert!(alloc.arena_pages * DATA_LEN > 1_000_000_000);
             // Every reserved page but the first is still to be handed out.
-            assert!(alloc.has_room_for((MAX_PAGES - 1) * DATA_LEN));
-            assert!(!alloc.has_room_for(MAX_PAGES * DATA_LEN + DATA_LEN));
+            // What is left of it counts as far as physical memory goes.
+            let fresh = (MAX_PAGES - 1).min(physical_memory() / ALLOC_SIZE);
+            assert!(alloc.has_room_for(fresh * DATA_LEN));
+            assert!(!alloc.has_room_for(fresh * DATA_LEN + 2 * DATA_LEN));
         })
         .join()
         .unwrap();
