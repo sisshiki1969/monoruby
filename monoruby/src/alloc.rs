@@ -1126,23 +1126,18 @@ fn reserve_arena(size: usize, align: usize) -> *mut u8 {
 /// base and the page count.
 ///
 fn reserve_largest_arena() -> (*mut u8, usize) {
-    let mut pages = MAX_PAGES;
     // Under an address-space limit (`ulimit -v`) the arena takes no more
     // than a third of it: the JIT's code reservation and `malloc` live in
     // the same budget, and an arena that took all it could get would
     // leave them nothing.
     let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
-    // SAFETY: getrlimit(2) writes the struct it is given.
-    if unsafe { libc::getrlimit(libc::RLIMIT_AS, limit.as_mut_ptr()) } == 0 {
-        // SAFETY: getrlimit succeeded, so the struct is initialised.
-        let cur = unsafe { limit.assume_init() }.rlim_cur;
-        if cur != libc::RLIM_INFINITY {
-            let share = (cur as usize / 3) / ALLOC_SIZE;
-            while pages > MIN_ARENA_PAGES && pages > share {
-                pages /= 2;
-            }
-        }
-    }
+    // SAFETY: getrlimit(2) writes the struct it is given, and the struct
+    // is read only when it succeeded.
+    let mut pages = if unsafe { libc::getrlimit(libc::RLIMIT_AS, limit.as_mut_ptr()) } == 0 {
+        arena_pages_within(unsafe { limit.assume_init() }.rlim_cur)
+    } else {
+        MAX_PAGES
+    };
     loop {
         let ptr = reserve_arena(ALLOC_SIZE * pages, ALLOC_SIZE);
         if !ptr.is_null() {
@@ -1156,6 +1151,20 @@ fn reserve_largest_arena() -> (*mut u8, usize) {
         );
         pages /= 2;
     }
+}
+
+/// The arena pages to reserve under an address-space limit of `limit`
+/// bytes (`RLIM_INFINITY`: none): `MAX_PAGES`, halved until it takes at
+/// most a third of the limit, but never below `MIN_ARENA_PAGES`.
+fn arena_pages_within(limit: libc::rlim_t) -> usize {
+    let mut pages = MAX_PAGES;
+    if limit != libc::RLIM_INFINITY {
+        let share = (limit as usize / 3) / ALLOC_SIZE;
+        while pages > MIN_ARENA_PAGES && pages > share {
+            pages /= 2;
+        }
+    }
+    pages
 }
 
 ///
@@ -2880,6 +2889,20 @@ mod arena_size_tests {
         })
         .join()
         .unwrap();
+    }
+
+    /// Under `ulimit -v` the arena takes at most a third of the limit,
+    /// in halvings of the full size, and never less than the minimum.
+    #[test]
+    fn arena_pages_under_an_address_space_limit() {
+        const GIB: libc::rlim_t = 1 << 30;
+        assert_eq!(MAX_PAGES, arena_pages_within(libc::RLIM_INFINITY));
+        assert_eq!(MAX_PAGES, arena_pages_within(192 * GIB));
+        assert_eq!(MAX_PAGES / 2, arena_pages_within(192 * GIB - 1));
+        // 7.5 GiB: 2.5 GiB for the arena, so 2 GiB.
+        assert_eq!((2 * GIB) as usize / ALLOC_SIZE, arena_pages_within(15 * GIB / 2));
+        assert_eq!(MIN_ARENA_PAGES, arena_pages_within(GIB));
+        assert_eq!(MIN_ARENA_PAGES, arena_pages_within(0));
     }
 }
 
