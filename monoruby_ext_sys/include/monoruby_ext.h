@@ -254,6 +254,10 @@ struct MrApi {
     MrSym   (*intern_check)(MrContext *, const uint8_t *ptr, size_t len);  /* the name's MrSym if already interned, else MR_NO_SYM */
     int     (*obj_respond_to)(MrContext *, MrValue v, MrSym sym, int include_all);  /* rb_obj_respond_to without a call to the builtin respond_to?; -1 error */
     MrValue (*check_funcall)(MrContext *, MrValue recv, MrSym sym, int argc, const MrValue *argv, int *answered);  /* rb_check_funcall: *answered 0 (nil returned) when recv does not answer; MR_UNDEF error */
+    MrValue (*hash_aref)(MrContext *, MrValue hash, MrValue key);  /* rb_hash_aref: no dispatch of [], builtin default read directly; MR_UNDEF error */
+    MrValue (*ivar_get_sym)(MrContext *, MrValue obj, MrSym sym);  /* ivar_get with an interned name */
+    int     (*ivar_set_sym)(MrContext *, MrValue obj, MrSym sym, MrValue v);  /* ivar_set with an interned name; -1 error */
+    int     (*str_append)(MrContext *, MrValue dst, MrValue src);  /* rb_str_buf_append as String#<<, no dispatch; -1 error */
 };
 
 /* Onigmo's entry points as linked into monoruby, types erased: regex_t *

@@ -1189,6 +1189,9 @@ Ruby 実装）で、`getpwuid` / `getpwnam` / `getgrgid` / `getgrnam` 以外は
 | `obj_class` | `rb_obj_class`: 特異クラスを飛ばした本当のクラス（§3.23） |
 | `intern_check` | `rb_check_symbol_cstr` / `rb_check_id_cstr`: intern 済みの名前だけを返す（§3.24） |
 | `obj_respond_to` | `rb_respond_to` / `rb_obj_respond_to`（と、それを使う `rb_check_funcall`）: 組み込みの `respond_to?` なら呼び出さずにメソッド表と `respond_to_missing?` で答える。プログラムが定義した `respond_to?` は CRuby の `vm_respond_to` と同じ引数（`priv` 指定かつ 1 引数でないときだけ第 2 引数）で呼ぶ。以前は毎回 `respond_to?` の funcall で、liquid-c は 1 レンダリングあたり 60,900 回 × 約 1,300 Ir を払っていた |
+| `hash_aref` | `rb_hash_aref`: `[]` を呼ばずに引く（CRuby と同じく、`Hash` のサブクラスが `[]` を再定義していても使わない）。キーがなければ `default` メソッドの答えで、`default` が組み込みのままなら既定値・既定の proc を直接読む（`Hash#[]` も同じ経路、`builtins::hash::hash_aref`）。以前は `[]` の funcall で、キーがないとさらに `default` を dispatch していた（liquid-c の環境探索は 1 回 1,600 Ir → 620 Ir） |
+| `ivar_get_sym` / `ivar_set_sym` | `rb_ivar_get` / `rb_ivar_set` / `rb_attr_get` を名前の文字列に戻さずに。`@` のない名前（隠し ivar、liquid-c の `vm` など）は `/` 付きの名前にした ID を層が小さなキャッシュに持つ。以前は毎回名前を組み立てて intern し直していた（1 回 550 Ir） |
+| `str_append` | `rb_str_buf_append`（`rb_str_append` も）: `String#<<` に String を渡したときと同じ処理を呼び出しなしで（frozen 判定、エンコーディングの合わせ方、`Encoding::CompatibilityError`）。以前はエンコーディングを ABI で 3 回問い合わせてから追記していた（1 回 890 Ir → 510 Ir） |
 
 あわせて `ary_push` / `hash_set` が frozen なレシーバを拒むようにした
 （以前は素通りしていた）。

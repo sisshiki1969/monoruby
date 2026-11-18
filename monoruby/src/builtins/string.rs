@@ -960,7 +960,7 @@ fn shl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     shl_inner(vm, globals, lfp.self_val(), lfp.arg(0))
 }
 
-fn shl_inner(
+pub(crate) fn shl_inner(
     vm: &mut Executor,
     globals: &mut Globals,
     mut recv: Value,

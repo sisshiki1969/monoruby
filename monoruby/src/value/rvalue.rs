@@ -3219,6 +3219,7 @@ const _: () = {
     assert!(ObjTy::FLOAT.0.get() == 5);
     assert!(ObjTy::STRING.0.get() == 6);
     assert!(ObjTy::ARRAY.0.get() == 8);
+    assert!(ObjTy::PROC.0.get() == 11);
     assert!(ObjTy::HASH.0.get() == 12);
     assert!(ObjTy::REGEXP.0.get() == 13);
     assert!(ObjTy::MATCHDATA.0.get() == 22);

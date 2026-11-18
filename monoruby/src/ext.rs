@@ -894,6 +894,10 @@ pub(crate) static MR_API: MrApi = MrApi {
     intern_check: mr_intern_check,
     obj_respond_to: mr_obj_respond_to,
     check_funcall: mr_check_funcall,
+    hash_aref: mr_hash_aref,
+    ivar_get_sym: mr_ivar_get_sym,
+    ivar_set_sym: mr_ivar_set_sym,
+    str_append: mr_str_append,
 };
 
 // ---- regexp (ruby/re.h) ----------------------------------------------
@@ -1974,6 +1978,84 @@ unsafe extern "C" fn mr_hash_get(ctx: *mut MrContext, hash: MrValue, key: MrValu
         Err(e) => {
             set_err(vm, e);
             MR_UNDEF
+        }
+    }
+}
+
+unsafe extern "C" fn mr_hash_aref(ctx: *mut MrContext, hash: MrValue, key: MrValue) -> MrValue {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let (Some(hash), Some(key)) = (val(hash), val(key)) else {
+        return MR_UNDEF;
+    };
+    if hash.try_hash_ty().is_none() {
+        set_err(vm, MonorubyErr::typeerr("Hash expected"));
+        return MR_UNDEF;
+    }
+    match crate::builtins::hash::hash_aref(vm, globals, hash, key) {
+        Ok(v) => v.id(),
+        Err(e) => {
+            set_err(vm, e);
+            MR_UNDEF
+        }
+    }
+}
+
+unsafe extern "C" fn mr_ivar_get_sym(ctx: *mut MrContext, obj: MrValue, sym: MrSym) -> MrValue {
+    // SAFETY: the table's contract.
+    let (_, globals) = unsafe { parts(ctx) };
+    let Some(obj) = val(obj) else { return MR_UNDEF };
+    if sym == MR_NO_SYM {
+        return Value::nil().id();
+    }
+    globals
+        .store
+        .get_ivar(obj, IdentId::from(sym))
+        .unwrap_or(Value::nil())
+        .id()
+}
+
+unsafe extern "C" fn mr_ivar_set_sym(
+    ctx: *mut MrContext,
+    obj: MrValue,
+    sym: MrSym,
+    v: MrValue,
+) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let (Some(obj), Some(v)) = (val(obj), val(v)) else {
+        return -1;
+    };
+    if sym == MR_NO_SYM {
+        set_err(
+            vm,
+            MonorubyErr::argumenterr("ivar_set_sym was given MR_NO_SYM"),
+        );
+        return -1;
+    }
+    match globals.store.set_ivar(obj, IdentId::from(sym), v) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_err(vm, e);
+            -1
+        }
+    }
+}
+
+unsafe extern "C" fn mr_str_append(ctx: *mut MrContext, dst: MrValue, src: MrValue) -> c_int {
+    // SAFETY: the table's contract.
+    let (vm, globals) = unsafe { parts(ctx) };
+    let Some(dst) = string_arg(vm, globals, dst) else {
+        return -1;
+    };
+    let Some(src) = string_arg(vm, globals, src) else {
+        return -1;
+    };
+    match crate::builtins::string::shl_inner(vm, globals, dst, src) {
+        Ok(_) => 0,
+        Err(e) => {
+            set_err(vm, e);
+            -1
         }
     }
 }
@@ -3379,6 +3461,101 @@ mod tests {
             assert_eq!(ask(raising, "x", 0), -1);
             failed(ctx);
             assert_eq!(ask(raising, "to_s", 0), 1);
+        }
+    }
+
+    /// `hash_aref`, `ivar_get_sym` / `ivar_set_sym` and `str_append`:
+    /// what `rb_hash_aref`, `rb_ivar_get` / `rb_ivar_set` and
+    /// `rb_str_buf_append` answer without a dispatch, and how each
+    /// reports an error.
+    #[test]
+    fn abi_hash_aref_ivar_sym_str_append() {
+        let mut globals = Globals::new_test();
+        let res = globals
+            .run(
+                r#"class HaDef < Hash; def default(k = nil) = [:mine, k]; end
+                   class HaIdx < Hash; def [](k) = :overridden; end
+                   idx = HaIdx.new; idx[:a] = 1
+                   $capi_ha_keep = [{a: 1}, Hash.new(5), Hash.new { |h, k| h[k] = k.to_s * 2 },
+                                    HaDef.new, idx, Hash.new { raise "dp" }, Object.new,
+                                    +"ab", "fz".freeze, +"\u00e9", "\xff".b, 1]"#,
+                std::path::Path::new("."),
+            )
+            .unwrap();
+        let mut vm = Executor::init(&mut globals, "abi_hash_aref_ivar_sym_str_append").unwrap();
+        let v: Vec<Value> = res.as_array_inner().iter().copied().collect();
+        let mut ctx = make_ctx(&mut vm, &mut globals, None, None);
+        let ctx = &mut ctx as *mut MrContext;
+        let sym = |name: &str| IdentId::get_id(name).get();
+        let key = |name: &str| Value::symbol_from_str(name).id();
+        // SAFETY: a live context over this test's interpreter; every
+        // value is rooted by `$capi_ha_keep`.
+        unsafe {
+            let failed = |ctx: *mut MrContext| {
+                let (vm, _) = parts(ctx);
+                assert!(vm.has_error());
+                vm.take_error();
+            };
+            let int = |r: MrValue| Value::from_u64(r).try_fixnum();
+            let inspect = |r: MrValue| {
+                let (_, globals) = parts(ctx);
+                Value::from_u64(r).inspect(&globals.store)
+            };
+            // A hit, a miss with no default, the default value, the
+            // default proc (which stores), a redefined `default`, and a
+            // redefined `[]` that is not dispatched.
+            assert_eq!(int(mr_hash_aref(ctx, v[0].id(), key("a"))), Some(1));
+            assert!(Value::from_u64(mr_hash_aref(ctx, v[0].id(), key("zz"))).is_nil());
+            assert_eq!(int(mr_hash_aref(ctx, v[1].id(), key("zz"))), Some(5));
+            assert_eq!(inspect(mr_hash_aref(ctx, v[2].id(), key("ab"))), "\"abab\"");
+            assert_eq!(inspect(v[2].id()), "{ab: \"abab\"}");
+            assert_eq!(
+                inspect(mr_hash_aref(ctx, v[3].id(), key("q"))),
+                "[:mine, :q]"
+            );
+            assert_eq!(int(mr_hash_aref(ctx, v[4].id(), key("a"))), Some(1));
+            assert!(Value::from_u64(mr_hash_aref(ctx, v[4].id(), key("zz"))).is_nil());
+            // A raising default proc, a non-Hash, no value at all.
+            assert_eq!(mr_hash_aref(ctx, v[5].id(), key("x")), MR_UNDEF);
+            failed(ctx);
+            assert_eq!(mr_hash_aref(ctx, v[6].id(), key("x")), MR_UNDEF);
+            failed(ctx);
+            assert_eq!(mr_hash_aref(ctx, MR_UNDEF, key("x")), MR_UNDEF);
+
+            // Instance variables by symbol, a hidden ('/') one included.
+            let obj = v[6].id();
+            assert_eq!(
+                mr_ivar_set_sym(ctx, obj, sym("@vis"), Value::i32(7).id()),
+                0
+            );
+            assert_eq!(
+                mr_ivar_set_sym(ctx, obj, sym("/hid"), Value::i32(8).id()),
+                0
+            );
+            assert_eq!(int(mr_ivar_get_sym(ctx, obj, sym("@vis"))), Some(7));
+            assert_eq!(int(mr_ivar_get_sym(ctx, obj, sym("/hid"))), Some(8));
+            assert!(Value::from_u64(mr_ivar_get_sym(ctx, obj, sym("@none"))).is_nil());
+            assert!(Value::from_u64(mr_ivar_get_sym(ctx, obj, MR_NO_SYM)).is_nil());
+            assert_eq!(mr_ivar_get_sym(ctx, MR_UNDEF, sym("@vis")), MR_UNDEF);
+            assert_eq!(mr_ivar_set_sym(ctx, MR_UNDEF, sym("@vis"), obj), -1);
+            assert_eq!(mr_ivar_set_sym(ctx, obj, MR_NO_SYM, obj), -1);
+            failed(ctx);
+            // A frozen receiver.
+            assert_eq!(mr_ivar_set_sym(ctx, v[8].id(), sym("@x"), obj), -1);
+            failed(ctx);
+
+            // String#<< with a String: same encoding, the receiver itself,
+            // then a frozen receiver, incompatible encodings and non-Strings.
+            assert_eq!(mr_str_append(ctx, v[7].id(), v[7].id()), 0);
+            assert_eq!(inspect(v[7].id()), "\"abab\"");
+            assert_eq!(mr_str_append(ctx, v[8].id(), v[7].id()), -1);
+            failed(ctx);
+            assert_eq!(mr_str_append(ctx, v[9].id(), v[10].id()), -1);
+            failed(ctx);
+            assert_eq!(mr_str_append(ctx, v[11].id(), v[7].id()), -1);
+            failed(ctx);
+            assert_eq!(mr_str_append(ctx, v[7].id(), v[11].id()), -1);
+            failed(ctx);
         }
     }
 }
