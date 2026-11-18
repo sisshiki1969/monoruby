@@ -62,7 +62,7 @@ tabs, click a frame of the flame graph.
 **[Open it in a tab of its own](profiler/optcarrot.html)** for the full
 width.
 
-<iframe src="profiler/optcarrot.html" title="monoruby profiler viewer: 600 frames of optcarrot" loading="lazy" style="width: 100%; height: 760px; border: 1px solid var(--table-border-color); border-radius: 6px;"></iframe>
+<iframe src="profiler/optcarrot.html" title="monoruby profiler viewer: 600 frames of optcarrot" loading="lazy" style="width: 100%; height: 860px; border: 1px solid var(--table-border-color); border-radius: 6px;"></iframe>
 
 Things to try in it:
 
@@ -72,6 +72,10 @@ Things to try in it:
   (`Array#transpose`, `PPU#setup_lut`), the JIT compiler takes a fifth of the
   samples, and JIT code only a quarter instead of 70%. A click, or *Whole
   run*, clears the selection.
+- **Click *JIT compile* in the legend above the time line.** The other
+  tiers turn gray and the compiler's share stands on the baseline, so the
+  bursts of compiling are easy to find: most of them in the first 500 ms,
+  and a tall one at 600 ms. A second click brings the other tiers back.
 - **[Flame graph](profiler/optcarrot.html#flame).** Ruby frames are neutral;
   the colored frame under each stack is the tier the sample was counted in.
   `Optcarrot::PPU#render_pixel` is in italics and marked `[inlined]`: the JIT

@@ -63,7 +63,10 @@ aobench with `cpu` alone), are on the documentation site:
   it** and every table and flame graph on the page is recomputed for that
   part: the warm-up apart from the steady state, one GC burst, the
   stretch where the JIT was compiling. A click, or *Whole run*, clears the
-  selection.
+  selection. **Click a tier in the legend** to pick it out: it moves to
+  the bottom of each bar in its own color, so its share reads off the
+  axis, and the other tiers turn gray; a second click (or Escape) brings
+  them back.
 - **Overview** — the totals, the tiers, the hottest methods, the most
   allocated classes, the collector.
 - **Flame graph** — of CPU time, objects allocated, `malloc` calls or
