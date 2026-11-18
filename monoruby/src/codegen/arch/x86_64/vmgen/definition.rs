@@ -135,6 +135,9 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::define_method);
             call rax;
+            // A hook (`method_added`, `const_added`) may have moved this
+            // frame to the heap.
+            movq r14, [rbp - (BP_CFP + CFP_LFP)];
             testq rax, rax;
             jz   raise;
         };
@@ -166,6 +169,9 @@ impl Codegen {
             movq rsi, r12;  // &mut Globals
             movq rax, (runtime::singleton_define_method);
             call rax;
+            // A hook (`method_added`, `const_added`) may have moved this
+            // frame to the heap.
+            movq r14, [rbp - (BP_CFP + CFP_LFP)];
             testq rax, rax;
             jz   raise;
         };

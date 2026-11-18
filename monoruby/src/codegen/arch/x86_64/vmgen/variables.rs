@@ -74,6 +74,9 @@ impl Codegen {
             addq [rip + const_version], 1;
             movq rax, (runtime::set_constant);
             call rax;
+            // A hook (`method_added`, `const_added`) may have moved this
+            // frame to the heap.
+            movq r14, [rbp - (BP_CFP + CFP_LFP)];
             testq rax, rax;
             jz   raise;
         };

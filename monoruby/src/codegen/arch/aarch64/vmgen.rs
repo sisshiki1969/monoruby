@@ -587,6 +587,7 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x9, (runtime::alias_method as *const () as u64);
             blr x9;
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];  // reload LFP (see `a64_checked_store_next`)
             cbz x0, raise;
             add x(PC.0), x(PC.0), #(16);
         );
@@ -604,6 +605,7 @@ impl Codegen {
             ldr w2, [x(PC.0)];  // name
             mov x9, (runtime::undef_method as *const () as u64);
             blr x9;
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];  // reload LFP (see `a64_checked_store_next`)
             cbz x0, raise;
             add x(PC.0), x(PC.0), #(16);
         );
@@ -689,6 +691,7 @@ impl Codegen {
             mov x1, x(GLOBALS.0);
             mov x9, (runtime::set_index as *const () as u64);
             blr x9;
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];  // reload LFP (see `a64_checked_store_next`)
             cbz x0, raise;
             add x(PC.0), x(PC.0), #(16);
         );
@@ -698,9 +701,19 @@ impl Codegen {
 
     /// Store the Option<Value> result in X0 to the dst slot `[pc+4]`: branch
     /// to `raise` if it is 0 (error), else store, advance PC, and dispatch.
+    ///
+    /// LFP is reloaded from the cfp first. The helper just called may have run
+    /// Ruby code (an operator, `[]`, `hash`, `to_s`, ...) that is `binding` /
+    /// `eval` or calls them on this frame, which moves the frame to the heap
+    /// and redirects the cfp's LFP slot; the stack copy LFP still points at
+    /// is no longer the frame (nor a GC root). x86's `vm_handle_error` does
+    /// the same.
     pub(in crate::codegen) fn a64_checked_store_next(&mut self, raise: &DestLabel) {
         let skip = self.jit.label();
         let ok = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];
+        );
         // `cbz x0, raise` but long-range. `remove_vm_bop_optimization`
         // regenerates the binop/cmp/unop handlers at runtime, far (> ±1MB)
         // from the startup `entry_raise`, so a bare conditional branch (imm19)
@@ -760,6 +773,7 @@ impl Codegen {
             mov x1, x(GLOBALS.0);
             mov x9, (f);
             blr x9;
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];  // reload LFP (see `a64_checked_store_next`)
             cbz x0, raise;
         // dst slot = lhs slot from [PC+2]
             ldrh x10, [x(PC.0), #(2)];
@@ -935,6 +949,7 @@ impl Codegen {
             ldrh x5, [x(PC.0), #(8)];  // rest
             mov x9, (runtime::expand_array as *const () as u64);
             blr x9;
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];  // reload LFP (see `a64_checked_store_next`)
             cbz x0, raise;
             add x(PC.0), x(PC.0), #(16);
         );
@@ -1119,6 +1134,7 @@ impl Codegen {
             ldrh x2, [x(PC.0), #(2)];  // kind
             mov x9, (runtime::check_nonlocal_exit as *const () as u64);
             blr x9;
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];  // reload LFP (see `a64_checked_store_next`)
             cbz x0, raise;
             add x(PC.0), x(PC.0), #(16);
         );

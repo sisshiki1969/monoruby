@@ -89,6 +89,7 @@
 0313a7cddb77c62a6ef7d6684386d3fb	[["CRNum is not a class", "previous definition of CRNum was here"], ["CRMod is not a class", "previous definition of CRMod was here"], ["CRCls is not a module", "previous definition of CRCls was here"], ["nil is not a class/module", nil], ["1 is not a class/module", nil], ["nil is not a class/module", nil]]	CRNum = 1\n        module CRMod; end\n        class CRCls; end\n        r 
 0314ce7239f180c37dacc23fb9132d85	[99.5, 1.0]	class Foo; def to_f; 99.5; end; end\n        \n1.coerce(Foo.new)
 031ad87ebabae242dd38bfb958220ca3	[[ArgumentError, "negative offset -1 given"], [ArgumentError, "negative length -1 given"], [ArgumentError, "negative offset -3 given"]]	__a = [];__a << ((IO.read("/dev/null", nil, -1) rescue [$!.class, $!.message]));
+0322400f6ce4bf0feb5f87f57c951d71	[1, "twotwo", 1, "twotwo"]	class Arr\n          def to_ary\n            Object.const_get(:TOPLEVEL_B
 0324b81d611aaf41f40336b6e6cfc324	[1, 2, 3, 4, 5, 6, 7, 8]	class C\n          attr_reader :a, :b, :c, :d, :e, :f, :g, :h\n          
 0328a628714e073c1fac1d7db99f0db5	["hit", "dflt", "hit", "blk:MONORUBY_COV_ABSENT", "hit", "block wins", KeyError]	ENV["MONORUBY_COV_FETCH"] = "hit"\n            res = [\n             
 0332d7474185d3de185d29800a44d680	[[[97, 47, 98, 47, 99], "UTF-8"], [[98, 47, 97, 47, 99], "UTF-8"], [[227, 129, 130, 47, 98, 47, 99], "UTF-8"], [[], "ASCII-8BIT"], [[], "ASCII-8BIT"], [[47], "ASCII-8BIT"], [[97, 47, 227, 129, 130], "UTF-8"], ["ArgumentError", "string contains null byte"], ["Encoding::CompatibilityError", "path name must be ASCII-compatible (UTF-16LE): \\"x\\""], ["Encoding::CompatibilityError", "path name must be ASCII-compatible (UTF-16LE): \\"x\\""], ["ArgumentError", "path name contains null byte"], ["Encoding::CompatibilityError", "path name must be ASCII-compatible (UTF-16BE): \\"\\\\u3042\\""]]	(f=->(&b){ begin; v=b.call; v.is_a?(String) ? [v.bytes, v.encoding.name] : v; re
@@ -931,6 +932,7 @@
 251463e9ea3898eef34264e66a5b59f3	["ok Foo", "ok Bar", "ok Foo", "ok Bar"]	module Foo\n          def a\n            'ok Foo'\n          end\n        e
 252e16384b990691c23941b1a151829a	[[ArgumentError, "exceed depth limit"], [ArgumentError, "exceed depth limit"], [ArgumentError, "exceed depth limit"], [ArgumentError, "exceed depth limit"], 43, "\\x04\\b[\\ao:\\vObject\\x00@\\x06", "\\x04\\b[\\bl+\\n\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x01\\x00o:\\vObject\\x00@\\a", "\\x04\\b[\\bl+\\t\\x00\\x00\\x00\\x00\\x00\\x00\\x01\\x00o:\\vObject\\x00@\\a", "\\x04\\b[\\bl+\\b\\x00\\x00\\x00\\x00\\x01\\x00o:\\vObject\\x00@\\a", "\\x04\\b/\\x00\\x10", "ASCII-8BIT", ["UTF-32LE", [97, 0, 0, 0]], ["a", "a"], ["x", "x", true]]	r = []\n            h = {'one' => {'two' => {'three' => 0}}}\n       
 252e6cf6e7acf0be7bc132c5fd317305	[true, nil, false, "/home/user/monoruby/monoruby\\n", ""]	__a = [];__a << (system "ls");__a << (system "jkjkjk");__a << (system "*");__a <
+2540ae40f7098391735b7e09a4fb39e5	[Binding, {a: [1, 2]}, "sss", {"sss" => {a: [1, 2]}}, TypeError, TypeError, nil, nil, nil]	class Neg\n          alias_method :-@, :binding\n          public :-@\n   
 2544a8f94d2969a859e5ab589a67438b	[2, 2, 5, 2]	q = SizedQueue.new(2)\n            pushed = 0\n            t = Thread
 254596e4a11ae8569f20585ff35424bc	[["\\e[1msecond line\\e[m\\n", "\\e[1mthird line\\e[m\\n"], "a.rb:1: unhandled exception\\n", "a.rb:1: \\e[1;4munhandled exception\\e[m\\n", true]	res = []\n        begin\n          raise "first line\\nsecond line\\nthird 
 255446c3b754da9870de5a3f4fa85c65	[:wait_readable, "k"]	r, w = IO.pipe\n            a = r.read_nonblock(1, exception: false)
@@ -956,6 +958,7 @@
 26910d85396ab0aa2bb9db9ae4b66bca	[[225.0, 191751.0592328841, 191976.0592328841, "225.0"], 230.0, 675.0, 0.0, 2.25e+302]	def after_use(arr); s = 0.0; t = 1.0; arr.each { |x| s += x; t *= 1.5 }
 269718bdf89b8bdcb0901cb7e5ff324c	["nil", "outer"]	res = []\n        catch(:a) do\n          begin\n            raise "boom"\n
 26a76c3e0118f9b66da86729e50796ef	99	IO.popen("exit 99") { |io| io.read }\n            Process.last_statu
+26aaa0e4c65e4dea45d58b8beed990cc	[22, 20, 22, [Binding, Binding, Binding]]	class Neg\n          alias_method :-@, :binding\n          alias_method :
 26b78fc3382ae3db23b930049f26460c	true	__ENCODING__.is_a?(Encoding)
 26bbb593a7573a0944938274bf5c46aa	[[9.0, [nil, 0.0, 1.5, 3.0]], [0.0, []], [4.5, [nil, 0.0, 1.5]], [4.5, 3.0], [0.0, nil], [3.0, 1.5], [9.0, [1.5, 3.0]], 7.5, [6.75, [0.75, 2.25]], [5.312662293228351e+21, [1.770887431076117e+21, 1.770887431076117e+21]]]	def peek(pr) = pr.binding.local_variable_get(:x)\n        def c1(n)\n    
 26bbc4560fcf13c127538f0f36e3b0d5	[3, nil]	class C\n          D = nil\n        end\n        load "a.rb", true\n       
@@ -2289,6 +2292,7 @@
 5eeb620d0147e289ac5adddbb4f41e79	20100	f = ->{ _1 + _2 }; s = 0; i = 0; while i < 200; s += f.call(i, 1); i += 1; end; 
 5eecdf3af171258d2183384a2c3370c7	["abc", "a", "b", "c"]	"abc" =~ /(.)(.)(.)/\n            alias $md $~\n            $md.to_a\n
 5ef4ae2fc57aa31c629a25dfa84f272e	[[:has, 1], [:hasnt, :poke, [1]]]	class Has\n          def poke(x) = [:has, x]\n        end\n        class H
+5efcc186bd4503f9b258178578760d0b	[2, TypeError]	class Key\n          alias_method :hash, :binding\n          public :hash
 5f01b61b54eff66626bd4e39f4fe48c3	[42, 42]	__a = [];__a << (if 4 == 4 and 3 < 1 then 0 else 42 end);__a << (if 4 != 4 or 3 
 5f0569ade8d86da38a36eb38659c1886	[100, 200, [100, 200]]	S = Struct.new(:x, :y)\n            \n\n            s = S.new(1, 2)\n  
 5f0e1ee5c3eec7de1b8accfe9540877d	[[122, 129, 65, 122, 130, 96, 122], [122, 129, 65, 130, 96], 3, [[129, 65], [130, 96]]]	s = [0x81, 0x41, 0x82, 0x60].pack("C*").force_encoding("Shift_JIS")
@@ -5299,6 +5303,7 @@ dadc24d7048ed4366c071526b9479288	["Sub(Base#a)", "Sub(Base#b)"]	class SupBase4\n
 dae52af79f68fd59e79d94c60e7c3a75	"US-ASCII"	s = "abc".dup.force_encoding("ASCII-8BIT")\n              s.unpack
 dae678c7230abbc68fd9e71f3ce16a0c	8400	class Target\n          def value_plus(n) = 2 + n\n        end\n        cl
 dae90ab3ae1aa4e8058cace910bd3a82	[40, 40, -1, 0, 39, ["k0", "k1", "k2"], 780]	def big; {"k0"=>0,"k1"=>1,"k2"=>2,"k3"=>3,"k4"=>4,"k5"=>5,"k6"=>6,"
+daf4185cf8ad28b16b9fdec456ec6adf	[nil, nil]	class Rtm\n          def respond_to_missing?(name, priv)\n            Obj
 daf62f948691605a5f1305cef30a7ba1	[["UTC", 936, 452871039601512, 1719835200, 0, "UTC", 1704110400, 0, "UTC"], ["Asia/Tokyo", 936, 452870124889032, 1719802800, 32400, "JST", 1704078000, 32400, "JST"], ["America/New_York", 936, 452871492978069, 1719849600, -14400, "EDT", 1704128400, -18000, "EST"], ["Europe/London", 936, 452871003587376, 1719831600, 3600, "BST", 1704110400, 0, "GMT"], ["Australia/Lord_Howe", 936, 452869957150415, 1719797400, 37800, "+1030", 1704070800, 39600, "+11"], ["Asia/Kathmandu", 936, 452870461741032, 1719814500, 20700, "+0545", 1704089700, 20700, "+0545"], ["America/St_Johns", 936, 452871342454149, 1719844200, -9000, "NDT", 1704123000, -12600, "NST"], ["Asia/Kolkata", 936, 452870482865832, 1719815400, 19800, "IST", 1704090600, 19800, "IST"], ["Pacific/Kiritimati", 936, 452870387454312, 1719784800, 50400, "+14", 1704060000, 50400, "+14"], ["America/Sao_Paulo", 936, 452871345379752, 1719846000, -10800, "-03", 1704121200, -10800, "-03"], ["2024-02-29 23:59:59 +0545", 1709230499.5, 20700, "2024-03-01 00:00:00 +0545", "2025-01-01 00:00:00 +0545"]]	old = ENV['TZ']\n        zones = %w[UTC Asia/Tokyo America/New_York Euro
 db00180168f82ac3f47a720c4c80a330	[]	[] | []
 db1d122ccf500fce3b16c8ab7548f6cf	"ab"	$/ = "cdef"; r = "abcdef".chomp; $/ = "\\n"; r
@@ -5668,6 +5673,7 @@ e961a6a3fb8c0fabf5bf3d9f167f67a1	[[[164]], [[97], [255], [98]], [[97]], [[7]], [
 e9639e1aa6eb40b642b5ca4cb0483158	[:$ruby, :$0, :$~, :$&, :$', :$+, :$-w, :@ruby, :@@ruby]	__a = [];__a << (:$ruby);__a << (:$0);__a << (:$~);__a << (:$&);__a << (:$');__a
 e963bd998698b312c68f3775a2588785	[true, false]	class Foo\n              def bar; end\n            end\n            \n\n
 e96a170243d6faf056a4f119684b2388	[300, 300]	ids = []\n        300.times do |i|\n          o = Object.new\n          id
+e97e48ccf167eeea654df8280d0b45cf	[17, 17]	class Idx\n          alias_method :[], :eval\n          public :[]\n      
 e984e74e084abe31a4e683d859f4c148	:OVERRIDDEN	class Integer; def >>(o); :OVERRIDDEN; end; end; 3 >> 4
 e992704edbab063479116ca53c9ebb40	21	class A\n          attr_accessor :v\n        end\n        a = A.new\n      
 e998efb918e0f3284b4cc627c1379bfa	[[[97, 240, 159, 152, 128], []], [[97], [230, 188, 162]], [[[], [], []], [227, 129, 140]], [[[], [], []], [164, 172]]]	__a = [];__a << (\n              c = Encoding::Converter.new("UTF8-MAC", "UTF-8")

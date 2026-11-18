@@ -133,6 +133,7 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x9, (set_fn);
             blr x9;
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];  // reload LFP (see `a64_checked_store_next`)
             cbz x0, raise;
             add x(PC.0), x(PC.0), #(16);
         );
@@ -197,6 +198,7 @@ impl Codegen {
             add x5, x(PC.0), #(8);  // &cache
             mov x9, (set_instance_var_with_cache as *const () as u64);
             blr x9;
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];  // reload LFP (see `a64_checked_store_next`)
             cbz x0, raise;
             add x(PC.0), x(PC.0), #(16);
         );
@@ -220,6 +222,7 @@ impl Codegen {
             mov x1, x(GLOBALS.0);
             mov x9, (get_fn);
             blr x9;
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];  // reload LFP (see `a64_checked_store_next`)
             cbz x0, raise;
             ldrh x10, [x(PC.0), #(4)];  // dst slot
             cbz x10, skip;
@@ -255,6 +258,7 @@ impl Codegen {
             mov x1, x(GLOBALS.0);
             mov x9, (runtime::set_constant as *const () as u64);
             blr x9;
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];  // reload LFP (see `a64_checked_store_next`)
             cbz x0, raise;
             add x(PC.0), x(PC.0), #(16);
         );
