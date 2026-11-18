@@ -1029,6 +1029,7 @@ fn class_eval(
         // (`send`, a Rust helper, mspec, …). The location below still
         // comes from the immediate caller, whose pc we were handed.
         let outer_cfp = caller_cfp.nearest_ruby_frame();
+        crate::codegen::runtime::convert_frame_for_capture(vm, cfp, outer_cfp)?;
         let path = if supplied >= 2 {
             args[1].coerce_to_str(vm, globals)?
         } else {

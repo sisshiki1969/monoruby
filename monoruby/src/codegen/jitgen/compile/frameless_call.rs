@@ -722,7 +722,7 @@ impl AbstractState {
         // *after* everything the site did on the way in (`inline_class_new`
         // allocates the receiver before the body runs; the interpreter
         // resumes after the call, with the object in its slot).
-        let spec = ChainExitSpec::new_with(ir.exit_write_back(self), using_fpr, dst, self.pc());
+        let spec = ChainExitSpec::new_with(ir, ir.exit_write_back(self), using_fpr, dst, self.pc());
         ir.push(AsmInst::InlineCall {
             spec_id,
             delta,
@@ -900,7 +900,7 @@ impl AbstractState {
         self.clear_above_next_sp();
         // What a materializing exit of the block writes back into this
         // frame (`send_frameless`).
-        let spec = ChainExitSpec::new_with(ir.exit_write_back(self), using_fpr, dst, self.pc());
+        let spec = ChainExitSpec::new_with(ir, ir.exit_write_back(self), using_fpr, dst, self.pc());
         ir.push(AsmInst::InlineCall {
             spec_id,
             delta,

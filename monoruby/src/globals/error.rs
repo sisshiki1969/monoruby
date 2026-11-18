@@ -480,6 +480,7 @@ impl MonorubyErr {
                 | MonorubyErrKind::Throw(..)
                 | MonorubyErrKind::FiberKill
                 | MonorubyErrKind::Retry
+                | MonorubyErrKind::JitReenter
                 | MonorubyErrKind::Redo
         ) && !self.is_signal_interrupt()
             && !self.is_would_block_interrupt()
@@ -691,6 +692,7 @@ impl MonorubyErr {
             MonorubyErrKind::Throw(..) => "UncaughtThrowError",
             MonorubyErrKind::FiberKill => "FiberKill",
             MonorubyErrKind::Retry => "Retry",
+            MonorubyErrKind::JitReenter => "JitReenter",
             MonorubyErrKind::Redo => "Redo",
             MonorubyErrKind::Fatal => "FatalError",
         }
@@ -708,6 +710,7 @@ impl MonorubyErr {
             | MonorubyErrKind::Throw(..)
             | MonorubyErrKind::FiberKill
             | MonorubyErrKind::Retry
+            | MonorubyErrKind::JitReenter
             | MonorubyErrKind::Redo => false,
             _ => {
                 let mut module = Some(store[self.class_id()].get_module());
@@ -752,6 +755,7 @@ impl MonorubyErr {
             | MonorubyErrKind::Throw(..)
             | MonorubyErrKind::FiberKill
             | MonorubyErrKind::Retry
+            | MonorubyErrKind::JitReenter
             | MonorubyErrKind::Redo => {
                 unreachable!()
             }
@@ -933,6 +937,10 @@ impl MonorubyErr {
 
     pub(crate) fn retry() -> MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Retry, String::new())
+    }
+
+    pub(crate) fn jit_reenter() -> MonorubyErr {
+        MonorubyErr::new(MonorubyErrKind::JitReenter, String::new())
     }
 
     pub(crate) fn redo() -> MonorubyErr {
@@ -2040,6 +2048,12 @@ pub enum MonorubyErrKind {
     BlockBreak(Value, FuncId, Lfp),
     Retry,
     Redo,
+    /// A capture (`binding` / `eval`) reached a compiled frame in place
+    /// while the frame was inside a frameless runtime helper. Never seen by
+    /// Ruby code: the frame's error exit turns it into a re-run of the
+    /// instruction in the interpreter (`runtime::convert_frame_for_capture`,
+    /// `jit_module::handle_error`).
+    JitReenter,
     /// Kernel#throw — carries (tag, value). Not catchable by `rescue`;
     /// only `Kernel#catch` with a matching tag intercepts it.
     Throw(Value, Value),

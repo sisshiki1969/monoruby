@@ -1034,10 +1034,12 @@ pub struct Codegen {
     /// `doc/chain_deopt.md` §5 step 1 / §9.3. Keyed by the return-address
     /// slot of a suspended frame (§3.4), which is all the walk has to go on:
     /// return address of a chain-eligible call -> the entry of that site's
-    /// compiled conversion stub (`gen_chain_replay_stub`). The stub encodes
-    /// everything the conversion does, so the walk carries no per-site data
-    /// and never clones a `ChainReplay`.
-    chain_deopt_table: HashMap<CodePtr, CodePtr>,
+    /// compiled conversion stub (`gen_chain_replay_stub`), plus the site's
+    /// depth in its compilation unit for a capture's conversion
+    /// (`convert_for_capture`). The stub encodes everything the conversion
+    /// does, so the walk carries no other per-site data and never clones a
+    /// `ChainReplay`.
+    chain_deopt_table: HashMap<CodePtr, ChainSite>,
     /// The shared chain-deopt post-call continuation stub
     /// (`gen_chain_cont_stub`): the single address every converted frame's
     /// return-address slot is pointed at. Emitted with the VM handlers, so
@@ -2120,7 +2122,9 @@ impl Codegen {
         #[cfg(target_arch = "aarch64")]
         let stub = self.a64_gen_chain_replay_stub(&replay, cont_stub);
         self.jit.select_page(saved_page);
-        self.chain_deopt_table.insert(return_addr, stub);
+        let frames = replay.frames();
+        self.chain_deopt_table
+            .insert(return_addr, ChainSite { stub, frames });
     }
 
     ///
@@ -2199,7 +2203,7 @@ impl Codegen {
                 "chain deopt: unregistered return address inside the compilation unit"
             );
             if !self.check_vm_address(ret)
-                && let Some(site_stub) = self.chain_deopt_table.get(&ret).copied()
+                && let Some(site_stub) = self.chain_deopt_table.get(&ret).map(|site| site.stub)
             {
                 #[cfg(feature = "chain-deopt-log")]
                 eprintln!("### chain deopt: frame return {ret:?} -> chain conversion");
@@ -2226,6 +2230,42 @@ impl Codegen {
             return_addr = unsafe { cfp.return_addr() };
         }
     }
+
+    ///
+    /// A capture (`binding` / `eval`) is about to read the frame *callee* was
+    /// called from (`runtime::convert_frame_for_capture`). If that frame is a
+    /// compiled frame suspended at a registered call site, convert it to an
+    /// interpreter frame first, so its elided objects and register-held
+    /// locals are in its slots before the capture copies them, and it reads
+    /// back what `eval` writes once the call returns.
+    ///
+    /// The walk goes down to the root of the frame's compilation unit (the
+    /// site's depth plus the frame itself), as a side exit's escalation does:
+    /// a frame inside the unit may read an outer local that a frame below
+    /// keeps unboxed. Frames of other units are left compiled.
+    ///
+    pub(crate) fn convert_for_capture(&mut self, callee: Cfp) {
+        let Some(ret) = (unsafe { callee.return_addr() }) else {
+            return;
+        };
+        if self.check_vm_address(ret) {
+            return;
+        }
+        if let Some(site) = self.chain_deopt_table.get(&ret) {
+            let frames = site.frames as usize + 1;
+            self.chain_deopt_into(callee, Some(frames));
+        }
+    }
+}
+
+/// A registered chain-deopt call site (`Codegen::chain_deopt_table`).
+#[derive(Clone, Copy)]
+struct ChainSite {
+    /// The site's compiled conversion stub (`gen_chain_replay_stub`).
+    stub: CodePtr,
+    /// The calling frame's depth in its compilation unit
+    /// (`JitContext::chain_deopt_frames`).
+    frames: u32,
 }
 
 #[repr(C)]

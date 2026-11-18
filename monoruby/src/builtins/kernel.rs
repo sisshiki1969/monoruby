@@ -939,6 +939,9 @@ fn binding(vm: &mut Executor, globals: &mut Globals, _: Lfp, pc: BytecodePtr) ->
         }
         caller = cfp.prev();
     }
+    if let Some(target) = caller {
+        crate::codegen::runtime::convert_frame_for_capture(vm, vm.cfp(), target)?;
+    }
     // Code later eval'd against this Binding can reach raw parameter
     // slots on the captured frame's outer chain — materialize any
     // pending lazy `(...)`-forwarding marker first.
@@ -2185,6 +2188,7 @@ fn swallowed_by_protect(e: &MonorubyErr) -> bool {
         MonorubyErrKind::MethodReturn(..)
             | MonorubyErrKind::BlockBreak(..)
             | MonorubyErrKind::Retry
+            | MonorubyErrKind::JitReenter
             | MonorubyErrKind::Redo
             | MonorubyErrKind::FiberKill
             | MonorubyErrKind::Fatal
@@ -3592,6 +3596,7 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         vm.flush_compile_warnings(globals);
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
+        crate::codegen::runtime::convert_frame_for_capture(vm, cfp, outer_cfp)?;
         let fid = globals
             .compile_script_eval(expr, fname, outer_cfp, None, lineno, src_encoding)
             .map_err(downgrade_eval_fatal)?;
@@ -5254,14 +5259,24 @@ pub fn object_send(
 
     state.write_back_recv_and_callargs(ir, callsite);
     let using_fpr = state.get_using_fpr(ir);
+    let dst = callsite.dst;
+    let evict = state.inline_call_prologue(ir, dst);
     let error = ir.new_error(state);
     let callid = callsite.id;
     let call_site_pc = state.pc().as_ptr() as u64;
     ir.inline(move |r#gen, store, labels, _| {
         let error = &labels[error];
-        r#gen.object_send_inline(callid, store, using_fpr, &error, no_splat, call_site_pc);
+        r#gen.object_send_inline(
+            callid,
+            store,
+            using_fpr,
+            &error,
+            no_splat,
+            call_site_pc,
+            evict,
+        );
     });
-    state.def_reg2acc(ir, GP::Rax, callsite.dst);
+    state.inline_call_epilogue(ir, store, evict, using_fpr, dst);
     // The method sent to runs arbitrary Ruby: it can define methods and
     // give the objects this frame holds singleton classes.
     state.unset_class_version_guard();

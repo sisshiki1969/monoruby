@@ -113,6 +113,14 @@ pub(super) extern "C" fn handle_error(
     match &func_info.kind {
         FuncKind::ISeq(info) => {
             let bc_base = globals.store[*info].get_top_pc();
+            // A capture reached this compiled frame inside a frameless
+            // helper (`runtime::convert_frame_for_capture`): the error exit
+            // has written the frame back, so run the same instruction again
+            // in the interpreter.
+            if let MonorubyErrKind::JitReenter = vm.exception().unwrap().kind() {
+                vm.take_error();
+                return ErrorReturn::goto(pc);
+            }
             // check Retry/Redo first.
             // Retry/Redo opcode encodes disp in the lower 32 bits of op1.
             // handle_error receives pc pointing to the retry/redo instruction itself

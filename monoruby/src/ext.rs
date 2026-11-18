@@ -1493,6 +1493,7 @@ unsafe extern "C" fn mr_error_take(ctx: *mut MrContext) -> MrValue {
             | MonorubyErrKind::Throw(..)
             | MonorubyErrKind::FiberKill
             | MonorubyErrKind::Retry
+            | MonorubyErrKind::JitReenter
             | MonorubyErrKind::Redo => Value::new_exception_boxed(err, EXCEPTION_CLASS).id(),
             _ => Value::new_exception(err).id(),
         }

@@ -511,6 +511,7 @@ impl Codegen {
         error: &DestLabel,
         no_splat: bool,
         call_site_pc: u64,
+        evict: AsmEvict,
     ) {
         let CallSiteInfo {
             recv,
@@ -586,7 +587,10 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq r13, (call_site_pc + 16);
         }
-        self.call_funcdata();
+        let return_addr = self.call_funcdata();
+        // Registered for chain deopt by the generator's `ChainExit`
+        // (`AbstractState::inline_call_epilogue`).
+        self.set_deopt_with_return_addr(return_addr, evict);
         monoasm! { &mut self.jit,
         done:
         }
@@ -606,8 +610,12 @@ impl Codegen {
             movq rsi, r12;
             movl rdx, (callid.get());
             movq r8, r14;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (runtime::object_send_missing);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
             jmp  done;
         }
         self.jit.select_page(0);
@@ -637,6 +645,7 @@ impl Codegen {
         using_fpr: UsingFpr,
         error: &DestLabel,
         call_site_pc: u64,
+        evict: AsmEvict,
     ) {
         let CallSiteInfo {
             recv,
@@ -690,7 +699,10 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq r13, (call_site_pc + 16);
         }
-        self.call_funcdata();
+        let return_addr = self.call_funcdata();
+        // Registered for chain deopt by the generator's `ChainExit`
+        // (`AbstractState::inline_call_epilogue`).
+        self.set_deopt_with_return_addr(return_addr, evict);
         monoasm! { &mut self.jit,
         done:
         }
@@ -704,8 +716,12 @@ impl Codegen {
             movq rsi, r12;
             movl rdx, (callid.get());
             movq rcx, r14;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (runtime::method_object_call_proxy);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
             jmp  done;
         }
         self.jit.select_page(0);

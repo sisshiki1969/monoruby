@@ -593,6 +593,9 @@ pub(crate) struct ChainExitSpec {
     using_fpr: UsingFpr,
     dst: Option<SlotId>,
     pc: BytecodePtr,
+    /// The calling frame's depth in its compilation unit
+    /// (`JitContext::chain_deopt_frames`).
+    frames: u32,
 }
 
 impl ChainExitSpec {
@@ -618,6 +621,7 @@ impl ChainExitSpec {
             using_fpr,
             dst,
             pc: state.pc(),
+            frames: ir.chain_frames(),
         }
     }
 
@@ -625,6 +629,7 @@ impl ChainExitSpec {
     /// also covers the window's unwritten slots when the frame is itself
     /// frameless (`AsmIr::exit_write_back`), for `AsmInst::InlineCall`.
     pub(crate) fn new_with(
+        ir: &AsmIr,
         wb: WriteBack,
         using_fpr: UsingFpr,
         dst: Option<SlotId>,
@@ -635,6 +640,7 @@ impl ChainExitSpec {
             using_fpr,
             dst,
             pc,
+            frames: ir.chain_frames(),
         }
     }
 
@@ -645,6 +651,7 @@ impl ChainExitSpec {
             using_fpr: self.using_fpr,
             dst: self.dst,
             pc: self.pc,
+            frames: self.frames,
         }
     }
 }
@@ -667,9 +674,15 @@ pub(crate) struct ChainReplay {
     dst: Option<SlotId>,
     /// The call-site pc.
     pc: BytecodePtr,
+    /// The calling frame's depth in its compilation unit.
+    frames: u32,
 }
 
 impl ChainReplay {
+    pub(crate) fn frames(&self) -> u32 {
+        self.frames
+    }
+
     #[cfg(feature = "jit-log")]
     pub(crate) fn write_back(&self) -> &WriteBack {
         &self.wb

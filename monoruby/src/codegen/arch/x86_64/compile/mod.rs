@@ -1801,8 +1801,12 @@ impl Codegen {
             lea  rdx, [rbp - (jrbp_local(args))];
             movq rcx, (len);
             movq r8, [rbp - (jrbp_local(hash))];
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (runtime::hash_insert);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         );
         self.fpr_restore(using_fpr);
         true
@@ -1822,8 +1826,12 @@ impl Codegen {
             movq rsi, r12;
             movq rdx, [rbp - (jrbp_local(dst))];
             movq rcx, [rbp - (jrbp_local(src))];
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (runtime::array_concat);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         );
         self.fpr_restore(using_fpr);
         true
@@ -2260,8 +2268,12 @@ impl Codegen {
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (runtime::array_teq);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         );
         self.fpr_restore(using_fpr);
     }
@@ -2305,8 +2317,12 @@ impl Codegen {
             // The operator's pc, for the helper (`Executor::site_pc`).
             movq rax, (pc.as_ptr() as u64);
             movq [rbx + (EXECUTOR_SITE_PC)], rax;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (func);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         );
         self.fpr_restore(using_fpr);
     }
@@ -2377,8 +2393,12 @@ impl Codegen {
             // The operator's pc, for the helper (`Executor::site_pc`).
             movq rax, (pc.as_ptr() as u64);
             movq [rbx + (EXECUTOR_SITE_PC)], rax;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (func);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         );
         self.fpr_restore(using_fpr);
         monoasm!( &mut self.jit,
@@ -2417,8 +2437,12 @@ impl Codegen {
             movq rsi, r12;
             lea  rdx, [rbp - (jrbp_local(args))];
             movq rcx, (len);
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (runtime::gen_hash);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         );
         self.fpr_restore(using_fpr);
     }
@@ -2429,8 +2453,12 @@ impl Codegen {
             movq rdx, rbx; // &mut Executor
             movq rcx, r12; // &mut Globals
             movl r8, (exclude_end as u32);
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (runtime::gen_range);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         };
         self.fpr_restore(using_fpr);
     }
@@ -2442,8 +2470,12 @@ impl Codegen {
             movq rsi, r12;
             lea rdx, [rbp - (jrbp_local(arg))];
             movq rcx, (len);
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (runtime::concatenate_string);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         );
         self.fpr_restore(using_fpr);
     }
@@ -2464,8 +2496,12 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             movq rdx, rax;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (runtime::to_a);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         );
         self.fpr_restore(using_fpr);
         monoasm!( &mut self.jit,
@@ -2481,8 +2517,12 @@ impl Codegen {
             movq rsi, r12;
             lea rdx, [rbp - (jrbp_local(arg))];
             movq rcx, (len);
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (runtime::concatenate_regexp);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         );
         self.fpr_restore(using_fpr);
     }
@@ -3115,8 +3155,12 @@ impl Codegen {
             movq r9, (rest);
             movq rdi, rbx;
             movq rsi, r12;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (runtime::expand_array);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         );
         self.fpr_restore(using_fpr);
         if let Some(exit) = fast {

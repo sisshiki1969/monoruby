@@ -83,7 +83,7 @@ impl Cfp {
     ///
     /// Get inner raw pointer.
     ///
-    fn as_ptr(&self) -> *const Option<Cfp> {
+    pub(crate) fn as_ptr(&self) -> *const Option<Cfp> {
         self.0.as_ptr()
     }
 

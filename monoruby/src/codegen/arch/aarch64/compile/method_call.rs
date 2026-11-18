@@ -650,6 +650,7 @@ impl Codegen {
         using_fpr: UsingFpr,
         error: &DestLabel,
         call_site_pc: u64,
+        evict: AsmEvict,
     ) {
         let CallSiteInfo {
             recv,
@@ -711,6 +712,12 @@ impl Codegen {
             ldr x21, [x26, #(FUNCDATA_PC as u32)];
             ldr x10, [x26, #(FUNCDATA_CODEPTR as u32)];
             blr x10;                                       // x0 = result
+        );
+        // Registered for chain deopt by the generator's `ChainExit`
+        // (`AbstractState::inline_call_epilogue`).
+        let return_addr = self.jit.get_current_address();
+        self.set_deopt_with_return_addr(return_addr, evict);
+        monoasm_arm64!(&mut self.jit,
             sub x11, sp, #(RSP_CFP as u32);
             ldr x10, [x11];
             str x10, [x19, #(EXECUTOR_CFP as u32)];
@@ -728,8 +735,12 @@ impl Codegen {
             mov x2, (callid.get() as u64);            // CallSiteId
             mov x3, x22;                              // caller LFP
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (crate::codegen::runtime::method_object_call_proxy as *const () as u64);
             blr x9;                                   // x0 = Option<Value>
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
         );
 
@@ -753,6 +764,7 @@ impl Codegen {
         error: &DestLabel,
         no_splat: bool,
         call_site_pc: u64,
+        evict: AsmEvict,
     ) {
         let CallSiteInfo {
             recv,
@@ -837,6 +849,12 @@ impl Codegen {
             ldr x21, [x26, #(FUNCDATA_PC as u32)];         // PC <- callee pc
             ldr x10, [x26, #(FUNCDATA_CODEPTR as u32)];
             blr x10;                                       // x0 = result
+        );
+        // Registered for chain deopt by the generator's `ChainExit`
+        // (`AbstractState::inline_call_epilogue`).
+        let return_addr = self.jit.get_current_address();
+        self.set_deopt_with_return_addr(return_addr, evict);
+        monoasm_arm64!(&mut self.jit,
             sub x11, sp, #(RSP_CFP as u32);
             ldr x10, [x11];
             str x10, [x19, #(EXECUTOR_CFP as u32)];
@@ -858,8 +876,12 @@ impl Codegen {
             mov x3, x11;                              // the resolved IdentId
             mov x4, x22;                              // caller LFP
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (crate::codegen::runtime::object_send_missing as *const () as u64);
             blr x9;                                   // x0 = Option<Value>
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
         );
 
