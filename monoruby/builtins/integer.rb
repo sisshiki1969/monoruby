@@ -86,6 +86,12 @@ class Integer
       return a.div(b)
     end
     raise ZeroDivisionError, "divided by 0" if other == 0
+    # A bignum receiver over a Float is `rb_big_divide`'s `div` row,
+    # `rb_dbl2big(x / y)`: the quotient is truncated toward zero, where
+    # a fixnum receiver (`fix_divide`) floors it (#2045).
+    if other.is_a?(Float) && (self > 0x3fff_ffff_ffff_ffff || self < -0x4000_0000_0000_0000)
+      return (self.to_f / other).truncate
+    end
     (self / other).floor
   end
 
@@ -107,6 +113,10 @@ class Integer
 
   # A Fixnum goes on to `num_remainder`; a Bignum coerces and asks again
   # (`rb_big_remainder`).
+  # An Integer `<=>` answer is read by its sign: itself (see
+  # `BasicObject#__cmpint_of` in src/builtins/kernel.rs).
+  def __cmpint_of(recv, other) = self
+
   def __remainder_slow(other)
     if self <= 0x3fff_ffff_ffff_ffff && self >= -0x4000_0000_0000_0000
       return __num_remainder(other)

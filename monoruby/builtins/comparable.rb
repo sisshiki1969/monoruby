@@ -92,12 +92,13 @@ module Comparable
   # `<=>`), so a receiver whose `<=>` answers for foreign operands —
   # ActiveSupport's Time, say — is honoured, and a nil answer is the
   # usual comparison failure.
+  #
+  # Each answer is read as `rb_cmpint` reads it (#2046): an Integer by its
+  # sign, anything else by `__cmpint` (nil is the comparison failure, then
+  # `> 0` and `< 0` are asked, and an answer that is neither -- NaN -- is
+  # 0).
   def between?(min, max)
-    c = (self <=> min)
-    raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(min)} failed" if c.nil?
-    return false if c < 0
-    c = (self <=> max)
-    raise ArgumentError, "comparison of #{self.class} with #{__coerce_failed_name(max)} failed" if c.nil?
-    c <= 0
+    return false if (self <=> min).__cmpint_of(self, min) < 0
+    (self <=> max).__cmpint_of(self, max) <= 0
   end
 end
