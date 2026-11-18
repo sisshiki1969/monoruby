@@ -83,7 +83,7 @@ impl Codegen {
         done:
         };
         self.pop_cont_frame();
-        self.vm_handle_error();
+        self.vm_handle_error_no_reload();
         self.vm_store_rdi(GP::Rax);
         self.fetch_and_dispatch();
 
@@ -137,7 +137,7 @@ impl Codegen {
         self.vm_check_stack();
         self.get_proc_data();
         // rax: outer, rdx: FuncId
-        self.vm_handle_error();
+        self.vm_handle_error_no_reload();
         // `&:sym` answers no FuncId, the symbol's frame in rax: the named
         // method is called straight from this frame, with no block frame
         // between (`yield_symbol_proc`).
@@ -154,7 +154,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
         done:
         }
-        self.vm_handle_error();
+        self.vm_handle_error_no_reload();
         self.vm_store_rdi(GP::Rax);
         self.fetch_and_dispatch();
 
@@ -168,6 +168,9 @@ impl Codegen {
             movq rcx, r14;
             movq rax, (runtime::yield_symbol_proc);
             call rax;
+            // The named method runs with this frame as its caller, so it may
+            // have moved the frame to the heap (`binding` / `eval`).
+            movq r14, [rbp - (BP_CFP + CFP_LFP)];
             // What `pop_cont_frame` leaves behind: the ret slot in rdi,
             // r13 past the 2-unit instruction (it enters one unit in).
             movzxw rdi, [r13 + (RET_REG)];
@@ -284,7 +287,7 @@ impl Codegen {
             self.jit.bind_label(generic);
             self.call_prep();
             self.generic_handle_arguments(runtime::vm_handle_arguments);
-            self.vm_handle_error();
+            self.vm_handle_error_no_reload();
             monoasm! { &mut self.jit,
                 jmp exit;
             }
@@ -292,7 +295,7 @@ impl Codegen {
         } else {
             self.call_prep();
             self.generic_handle_arguments(runtime::vm_handle_arguments);
-            self.vm_handle_error();
+            self.vm_handle_error_no_reload();
         }
         self.call_funcdata();
     }

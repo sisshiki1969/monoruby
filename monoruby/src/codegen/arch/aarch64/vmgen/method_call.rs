@@ -380,6 +380,9 @@ impl Codegen {
             mov x3, x(LFP.0);
             mov x9, (runtime::yield_symbol_proc as *const () as u64);
             blr x9;
+            // The named method runs with this frame as its caller, so it may
+            // have moved the frame to the heap (`binding` / `eval`).
+            ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];
         );
         self.jit.b_label(&done);
         p

@@ -42,6 +42,7 @@ mod bundler_host_checkout;
 mod capi;
 mod capture_callee_no_abort;
 mod capture_ret;
+mod capture_through_helper;
 mod case;
 mod case_mapping;
 mod cesu8;

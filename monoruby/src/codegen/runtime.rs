@@ -1685,6 +1685,24 @@ pub(super) extern "C" fn concatenate_regexp(
     Some(Value::regexp(inner))
 }
 
+///
+/// *ptr* points at a slot of the current frame, computed from the frame's LFP
+/// *before*. Ruby code run since then (a `#to_ary`, a `respond_to?`) may have
+/// moved the frame to the heap (`binding` / `eval`), which redirects the cfp's
+/// LFP; answer the same slot of the frame where it lives now. A heap frame
+/// keeps the stack layout, so the offset from the LFP carries over.
+///
+fn rebase_slot_ptr(vm: &Executor, before: Lfp, ptr: *mut Value) -> *mut Value {
+    let now = vm.cfp().lfp();
+    if now.as_ptr() == before.as_ptr() {
+        return ptr;
+    }
+    let offset = before.as_ptr() as isize - ptr as isize;
+    // SAFETY: *ptr* was `before - offset` inside the stack frame; the heap
+    // copy has the same layout, so `now - offset` is the same slot.
+    unsafe { now.as_ptr().offset(-offset) as *mut Value }
+}
+
 pub(super) extern "C" fn expand_array(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1693,6 +1711,7 @@ pub(super) extern "C" fn expand_array(
     len: usize,
     rest: usize,
 ) -> Option<Value> {
+    let lfp = vm.cfp().lfp();
     // Destructuring (multiple assignment and block/proc `|(a, b)|` params)
     // coerces a non-Array `src` once via `#to_ary`: an Array result is
     // expanded, `nil` or a missing `#to_ary` leaves `src` a scalar, and any
@@ -1802,6 +1821,15 @@ pub(super) extern "C" fn expand_array(
                     unsafe { *dst.sub(i) = Value::nil() }
                 }
             }
+        }
+    }
+    // `#to_ary` may have moved this frame to the heap (`binding` / `eval`),
+    // where the VM reads the locals from now on. The stack copy keeps the
+    // values too, for JIT code that goes on addressing its slots by rbp.
+    let moved = rebase_slot_ptr(vm, lfp, dst);
+    if moved != dst {
+        for i in 0..len {
+            unsafe { *moved.sub(i) = *dst.sub(i) }
         }
     }
     Some(Value::nil())
@@ -3210,6 +3238,18 @@ pub(super) extern "C" fn defined_method(
     recv: Value,
     name: IdentId,
 ) {
+    let lfp = vm.cfp().lfp();
+    if !is_method_defined(vm, globals, recv, name) {
+        unsafe { *reg = Value::nil() }
+        // `respond_to?` / `respond_to_missing?` may have moved this frame to
+        // the heap: write the slot there too (see `expand_array`).
+        let moved = rebase_slot_ptr(vm, lfp, reg);
+        unsafe { *moved = Value::nil() }
+    }
+}
+
+/// `defined?(recv.name)`: whether the call would find a method.
+fn is_method_defined(vm: &mut Executor, globals: &mut Globals, recv: Value, name: IdentId) -> bool {
     use crate::executor::Visibility;
     let is_func_call = vm.cfp().lfp().self_val() == recv;
     // The call `defined?` asks about is one written at this site, so it
@@ -3237,7 +3277,7 @@ pub(super) extern "C" fn defined_method(
                 Visibility::Undefined => false,
             };
             if visible {
-                return;
+                return true;
             }
         }
     }
@@ -3259,14 +3299,10 @@ pub(super) extern "C" fn defined_method(
         let args = if one_param { &args[..1] } else { &args[..] };
         match vm.invoke_func_inner(globals, rt_fid, recv, args, None, None) {
             Ok(v) if v.as_bool() => {}
-            Ok(_) => {
-                unsafe { *reg = Value::nil() }
-                return;
-            }
+            Ok(_) => return false,
             Err(_) => {
                 vm.discard_error();
-                unsafe { *reg = Value::nil() }
-                return;
+                return false;
             }
         }
     }
@@ -3282,7 +3318,7 @@ pub(super) extern "C" fn defined_method(
             None,
             None,
         ) {
-            Ok(v) if v.as_bool() => return,
+            Ok(v) if v.as_bool() => return true,
             Ok(_) => {}
             // `defined?` never propagates an exception raised by
             // `respond_to_missing?`; discard it and report nil. The error
@@ -3294,7 +3330,7 @@ pub(super) extern "C" fn defined_method(
             }
         }
     }
-    unsafe { *reg = Value::nil() }
+    false
 }
 
 /// CRuby's deprecation warning for a `respond_to?` that takes one

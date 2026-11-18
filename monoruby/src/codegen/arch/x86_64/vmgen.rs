@@ -328,7 +328,6 @@ impl Codegen {
         let toa = self.jit.get_current_address();
         let raise = self.entry_raise();
         self.fetch3();
-        self.vm_get_slot_addr(GP::R15);
         self.vm_get_slot_value(GP::Rdi);
         monoasm! { &mut self.jit,
             movq rdx, rdi;
@@ -336,8 +335,17 @@ impl Codegen {
             movq rsi, r12;
             movq rax, (runtime::to_a);
             call rax;
+        };
+        // `to_a` may run Ruby code that moves this frame to the heap
+        // (`binding` / `eval`), so the slot address is taken after the call
+        // from the reloaded LFP.
+        self.restore_lfp();
+        monoasm! { &mut self.jit,
             testq rax, rax;
             je  raise;
+        };
+        self.vm_get_slot_addr(GP::R15);
+        monoasm! { &mut self.jit,
             movq [r15], rax;
         };
         self.fetch_and_dispatch();
@@ -807,7 +815,26 @@ impl Codegen {
         };
     }
 
+    ///
+    /// Check the result of a runtime helper (`None` = error) after reloading
+    /// the LFP.
+    ///
+    /// A helper may run Ruby code (an operator, `[]`, `hash`, `to_s`, ...)
+    /// that is `binding` / `eval` or calls them on this frame, which moves the
+    /// frame to the heap and redirects the cfp's LFP slot. r14 must be read
+    /// again before the result is stored or any local is touched, and before
+    /// `raise` reads the frame's meta.
+    ///
     fn vm_handle_error(&mut self) {
+        self.restore_lfp();
+        self.vm_handle_error_no_reload();
+    }
+
+    ///
+    /// Check the result of a call whose return path already reloaded the LFP
+    /// (`pop_frame`).
+    ///
+    fn vm_handle_error_no_reload(&mut self) {
         let raise = self.entry_raise();
         monoasm! { &mut self.jit,
             testq rax, rax;
