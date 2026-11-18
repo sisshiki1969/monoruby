@@ -41,6 +41,7 @@ mod builtin_operator_binding;
 mod bundler_host_checkout;
 mod capi;
 mod capture_callee_no_abort;
+mod capture_in_compiled_frame;
 mod capture_ret;
 mod capture_through_helper;
 mod case;

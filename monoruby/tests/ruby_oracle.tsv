@@ -2167,6 +2167,7 @@
 59104be79a3c34af64f1252be7287e04	42	x = 1\n            binding.eval("x = 42")\n            x\n            
 591cc1df80c9acab4811bc6f380f4314	"<STDIN>"	$stdin.path
 5935b2a14b1389efa07807ca17f49618	true	f = File.open("Cargo.toml")\n            begin\n              f.flush
+593b27cb7424e4ef76709f682a4fd66f	[[[7, 8], 7], [true, 7], [4.5, 4.5], [5, 2.25]]	class Ev\n  alias_method :+, :eval\n  alias_method :==, :eval\n  alias_method :===
 593d1fe183f6cc466dfa216c4c63799a	[1234567.8901, -5.5e-49, 0.0, 1.0, 1.0, 1.0, 1.2]	__a = [];__a << ("1_234_567.890_1".to_f);__a << ("-5_5e-5_0".to_f);__a << ("_9".
 596860b159ef241b182864379aa164bc	[:locked, true]	require 'fcntl'\n        fmt = "s!s!l!l!i!"\n        path = "/tmp/monorub
 5977ceb1393805e0581d80719dcdd920	["US-ASCII", "UTF-8", "US-ASCII"]	s = "ab,cd".dup.force_encoding("US-ASCII")\n              s.partit
@@ -3230,6 +3231,7 @@
 86a4d6ced3f4342dfd6b853b74858c93	[[1, 2, {}, 1], [18, 2, {c: 4, z: 6}, 2], [1, 2, {z: 7, 5 => 2}, 3]]	def f(a:1,b:2,**c,&block)\n          [a, b, c, block.call]\n        end\n 
 86addf8e26db6827d46f956b835833d8	[true, true, true, true, true, true, true, true, true, true, true, true, true, {a: 2}, {a: 2, b: 3, c: 3}]	require 'stringio'\n            def cap; $stderr = StringIO.new; yie
 86c85a886f92af3f3937458b7014a715	[23, [200, 2]]	def a3\n          s = 0\n          [1, 2].each do |i|\n            begin\n 
+86c8ccbfe5feaf5095adced429cbd247	[[5, 2.25, [7, 8], 7], [[7, 8], 7]]	def dyn_send(i)\n          k = 3\n          y = i * 0.5\n          x = [i,
 86cc33f4ca22bf932070781d16fd754e	0	Time.utc(2000,1,1,0,0,0).subsec
 86d11f499f4564bd38894f0e76fbaae9	["ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "US-ASCII", "US-ASCII", "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "US-ASCII", "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "ASCII-8BIT", "US-ASCII", "US-ASCII", "ASCII-8BIT"]	class Zt; end\n              St = Struct.new(:a)\n              Et 
 86d696d70f945c0bb7e8d1652b3416ff	["\\"(1.step(to: 7, by: 2))\\"", "\\"(1.step(by: 2, to: 7))\\"", "\\"(1.step(to: , by: 2))\\"", "\\"(1.step(by: , to: 3))\\"", "\\"(1.step(by: ))\\"", "\\"(1.step(10, by: 3))\\"", "\\"(1.step(by: 2, to: 1.0))\\"", "ArgumentError: to is given twice", "ArgumentError: step is given twice", "[\\"(1.step(by: 2))\\", [1, 3, 5]]", "\\"(1.0.step(by: 2, to: 5))\\"", "ArgumentError: to is given twice", "\\"(1/1.step(to: 3, by: 1))\\"", "\\"(1.step(by: 2/1, to: 7))\\"", "\\"(1.step((7/1), (2/1)))\\"", "\\"(1.step(to: 7.0, by: 2/1))\\"", "\\"(1.step(by: 2, to: Infinity))\\"", "\\"(1.step(to: 3, by: 1))\\""]	def try = (yield).inspect rescue "#{$!.class}: #{$!.message}"\n\n[try { 1.step(to
@@ -3864,6 +3866,7 @@ a17e4a90be7c13df8da3ad95a70e95da	[[TypeError, "no implicit conversion of nil int
 a17f4a8a2beeb2a7e6652eb0c268a320	6.0	def kill_dyn(n, vals)\n          acc = 0.0\n          n.times do |i|\n    
 a180a2108d9f8bb4ce3878d9a0f0dc83	[[0, 0, 255, 128, 64, 255, 0, 0], [255, 0, 0, 0, 0, 0, 0, 0], [0, 200, 201, 0, 0, 0, 0], [0, 0, 1, 2, 0, 0], [[97, 98, 255, 128, 101, 102], "ASCII-8BIT"], [97, 98, 255, 128, 101, 102], [97, 98, 255, 128, 101, 102]]	__a = [];__a << (s = "\\x00".b * 8; s[2, 4] = [255, 128, 64, 255].pack("C*"); s.b
 a189356012c67f14ffd149bedd2d23b2	nil	$/ = "xyz"; r = "abcde".chomp!; $/ = "\\n"; r
+a18ebda2365024f3727552862decaf65	[[[[[[7, 8], 4.5], 7, 4.5], [[7, 8], 7], [[7, 8], 7]], [["s[x, y]", 7, 4.5], [false, 7], [nil, 7]], [nil, [false, 7], nil]], [:hit, 7], [:hit, 7]]	class Ev\n  alias_method :+, :eval\n  alias_method :==, :eval\n  alias_method :===
 a19474330777374fd8e9f255dc6aec66	11340	def e\n          10.times do\n            $x += yield\n          end\n     
 a1a984bb2edd75a78229a94547d15825	[true, true, :outer, "nil", ["NoMethodError", "RuntimeError"], "RuntimeError"]	def restore_check(log)\n          outer = StandardError.new "outer"\n    
 a1c158bb5cda397daafc91b89b56a7a7	["#<Method: Object#fa(x, y=..., *r, z, k:, k2: ..., **kw, &b)>", "#<Method: Object#fb(...)>", "#<Method: Object#fc()>", "#<Method: Integer#to_s(*)>", "#<Method: String#sub(*)>", "#<UnboundMethod: Integer#+(_)>", "#<UnboundMethod: Fd#x()>", "#<UnboundMethod: Fd#x=(_)>"]	def fa(x, y = 1, *r, z, k:, k2: 2, **kw, &b); end\n              d
@@ -5681,6 +5684,7 @@ e9b15424843d1a3f73616028e55ed531	[1, 0, 24, 1, 4, 12, 24, 24, 0, 0, 1, 0, 1, 3, 
 e9d4802e950b78158c8e4240b64d6772	["127.0.0.1", true, true, :neg, true, true, :not_unix]	require "socket"\n            res = []\n            s = TCPServer.new
 e9dc5cc83c580492d481d015d537e291	["global-variable", nil, nil, nil, nil, "global-variable", "global-variable", "global-variable", "global-variable"]	[defined?($~), defined?($&), defined?($'), defined?($`),\n          
 e9e35f041d04e6d4499450a91957eaa7	5	class C\n              CONST = 1\n              def f\n               
+e9e9b2a98add793cd58f28b4f69d6250	[[7, 8], 3.5, {a: [7, 8]}]	class Ev\n  alias_method :+, :eval\n  alias_method :==, :eval\n  alias_method :===
 e9ed3c91c241cacff421ec62d7907898	"!"	$\\ = "!"; r = $\\; $\\ = nil; r
 e9f926668828584ed6da3a112bc1d4b5	["abcdZf", FrozenError, IndexError, "index 5 out of string", false, 5]	r = []\n        20.times do\n          s = "abcdef".dup\n          s.setby
 ea07ecaa90c2d393514090eaf2eb6009	[1.0, -Infinity]	[1.0, -1.0 / 0.0]

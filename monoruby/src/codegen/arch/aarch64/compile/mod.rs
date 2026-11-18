@@ -3229,8 +3229,12 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x3, (len as u64);
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (f);
             blr x9;
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
@@ -3342,8 +3346,12 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x3, (len as u64);
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (f);
             blr x9;
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
@@ -3371,8 +3379,12 @@ impl Codegen {
         self.a64_frame_load(3, lfp, src_off); // x3 = src value
         monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (f);
             blr x9;
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
@@ -3399,8 +3411,12 @@ impl Codegen {
             mov x3, x20;              // globals
             mov x4, (exclude_end as u64);
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (f);
             blr x9;
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
@@ -3583,8 +3599,12 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x3, (len as u64);
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (f);
             blr x9;
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
@@ -3612,8 +3632,12 @@ impl Codegen {
             mov x0, x19;            // vm
             mov x1, x20;            // globals
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (f);
             blr x9;                 // result in x0
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
             exit:
         );
@@ -4109,8 +4133,12 @@ impl Codegen {
         self.a64_frame_load(3, lfp, off_r); // x3 = rhs
         monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (f);
             blr x9;
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
@@ -4166,8 +4194,12 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x3, (len as u64);        // len
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (f);
             blr x9;
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
@@ -4211,8 +4243,12 @@ impl Codegen {
             mov x4, (len as u64);        // len
             mov x5, (rest);              // rest (0 = none)
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (f);
             blr x9;
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);

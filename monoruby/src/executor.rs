@@ -203,6 +203,9 @@ pub(crate) const EXECUTOR_STACK_LIMIT: i64 = std::mem::offset_of!(Executor, stac
 /// The pc of the binary operator whose generic helper is being called —
 /// see the `site_pc` field.
 pub(crate) const EXECUTOR_SITE_PC: i64 = std::mem::offset_of!(Executor, site_pc) as _;
+/// The compiled frame inside a frameless runtime helper — see the
+/// `jit_helper_cfp` field.
+pub(crate) const EXECUTOR_JIT_HELPER_CFP: i64 = std::mem::offset_of!(Executor, jit_helper_cfp) as _;
 /// Scratch words a deopt trampoline fills in before branching to its
 /// (deduplicated) handler — see `codegen::jitgen::deopt_log`.
 #[cfg(feature = "deopt")]
@@ -302,6 +305,17 @@ pub struct Executor {
     /// is harmless to the readers, which check the pc against the
     /// bytecode of the frame they attribute it to.
     site_pc: usize,
+    /// The cfp of the compiled frame whose code is inside a call to a
+    /// frameless runtime helper that may run Ruby (a generic operator, a
+    /// Hash literal, string interpolation, ...), or 0. Compiled code sets
+    /// it before such a call and clears it after; the Rust paths a helper
+    /// runs Ruby code through (`invoke_func`, the block invokers) put
+    /// the value back when that code returns, since compiled code it ran
+    /// cleared it. So it names the innermost such frame. A capture (`binding` / `eval`) that
+    /// reaches this frame in place cannot convert it through a call site
+    /// (the helper is no registered site): it gives the instruction back to
+    /// the interpreter instead (`runtime::convert_frame_for_capture`).
+    pub(crate) jit_helper_cfp: usize,
     /// Set while a helper is about to call a method for its operator:
     /// the next method invocation takes [`Self::site_pc`] as its call
     /// site. See [`Self::at_site`].
@@ -557,6 +571,7 @@ impl std::default::Default for Executor {
             parent_fiber: None,
             stack_limit: 0,
             site_pc: 0,
+            jit_helper_cfp: 0,
             armed_site: false,
             #[cfg(feature = "deopt")]
             deopt_cause_bits: 0,
@@ -1424,7 +1439,9 @@ impl Executor {
         #[cfg(feature = "emit-bc")]
         globals.dump_bc();
 
+        let mark = self.jit_helper_cfp;
         let res = (globals.invokers.binding)(self, globals, binding_lfp);
+        self.jit_helper_cfp = mark;
         res.ok_or_else(|| self.take_error())
     }
 
@@ -4850,7 +4867,8 @@ impl Executor {
         {
             return self.invoke_symbol_proc(globals, symbol, args, None);
         }
-        (globals.invokers.block)(
+        let mark = self.jit_helper_cfp;
+        let res = (globals.invokers.block)(
             self,
             globals,
             data,
@@ -4858,8 +4876,9 @@ impl Executor {
             args.as_ptr(),
             args.len(),
             None,
-        )
-        .ok_or_else(|| self.take_error())
+        );
+        self.jit_helper_cfp = mark;
+        res.ok_or_else(|| self.take_error())
     }
 
     ///
@@ -5052,7 +5071,8 @@ impl Executor {
         self_val: Value,
         args: &[Value],
     ) -> Result<Value> {
-        (globals.invokers.block_with_self)(
+        let mark = self.jit_helper_cfp;
+        let res = (globals.invokers.block_with_self)(
             self,
             globals,
             data as _,
@@ -5060,8 +5080,9 @@ impl Executor {
             args.as_ptr(),
             args.len(),
             None,
-        )
-        .ok_or_else(|| self.take_error())
+        );
+        self.jit_helper_cfp = mark;
+        res.ok_or_else(|| self.take_error())
     }
 
     pub(crate) fn module_eval(
@@ -5252,7 +5273,8 @@ impl Executor {
             Some(handler) => handler.delegate().get(),
             None => Value::nil(),
         };
-        (globals.invokers.block)(
+        let mark = self.jit_helper_cfp;
+        let res = (globals.invokers.block)(
             self,
             globals,
             &proc,
@@ -5260,8 +5282,9 @@ impl Executor {
             args.as_ptr(),
             args.len(),
             kw,
-        )
-        .ok_or_else(|| {
+        );
+        self.jit_helper_cfp = mark;
+        res.ok_or_else(|| {
             let err = self.take_error();
             // A `return` inside a (non-lambda) Proc unwinds to the method
             // that created it. If that method's frame is still on the
@@ -5389,6 +5412,10 @@ impl Executor {
         } else {
             globals.invokers.method
         };
+        // A frameless helper of compiled code may be calling this method
+        // (`jit_helper_cfp`): compiled code the callee runs sets and clears
+        // the mark around its own helpers, so put the caller's back.
+        let mark = self.jit_helper_cfp;
         let res = invoker(
             self,
             globals,
@@ -5399,6 +5426,7 @@ impl Executor {
             bh,
             kw_args,
         );
+        self.jit_helper_cfp = mark;
         if kw_ext {
             // Taken by the trampoline on entry; dropped here should the
             // invoker have failed before reaching it.

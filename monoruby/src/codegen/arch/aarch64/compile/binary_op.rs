@@ -594,8 +594,12 @@ impl Codegen {
             mov x9, (pc.as_ptr() as u64);
             str x9, [x19, #(EXECUTOR_SITE_PC as u32)];
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (f);
             blr x9;
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
@@ -672,8 +676,12 @@ impl Codegen {
         self.emit_fpr_save(using_fpr, false);
         monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (f);
             blr x9;
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
