@@ -60,7 +60,10 @@ monoruby の `Value`（`value.rs`）とは層（`capi.c`）が境界で相互変
   …）は関数。`RBasic` / `RString` 構造体は無い。`RARRAY_PTR` /
   `RARRAY_CONST_PTR` は要素を変換した**コピー**を指し（§3.15）、読み取り
   専用（書くときは `rb_ary_store` / `RARRAY_ASET`）。
-- 世代別 GC が無いので write barrier（`RB_OBJ_WRITE` 等）は代入だけ。
+- write barrier（`RB_OBJ_WRITE` 等）は代入だけ。C の構造体に `VALUE` を
+  持てるのは TypedData（`ObjTy::NATIVE`）だけで、NATIVE は old 世代に
+  昇格しない（`RValue::is_promotable`）ので、minor GC でも毎回 `dmark`
+  が走る。
 
 ## 3. 設計
 
@@ -120,6 +123,17 @@ C に渡す**ヒープ上の `VALUE` はすべて temp stack に積む**（`root
 temp stack はメソッド呼び出し（と `Init_`）が戻ったときにインタプリタが
 切り詰める。TruffleRuby の `ExtensionCallStack` と同じ考え方
 （`doc/c_extention.md` §3.4）。
+
+新しく作った値だけでなく、**ほかのオブジェクトから読み出した値も積む**:
+`rb_ary_entry`（`RARRAY_AREF`）、`RARRAY_CONST_PTR` のコピーの要素、
+`rb_gv_get`、`rb_backref_get`、`rb_lastline_get`。読んだあと元の場所から
+外れても（`rb_ary_clear`、`rb_gv_set`、次のマッチ）C が持っている間は
+生きていなければならない（CRuby では C スタックの走査が守る。#2085）。
+`RARRAY_CONST_PTR` は前回のコピーと同じ位置に同じ値がある要素は積み直さ
+ない（その呼び出しの temp stack に既にある）ので、変わらない Array の
+ポインタをループで取り直しても temp stack は伸びない。
+`rb_errinfo` は呼び出しをまたいで残るので temp stack ではなく pin する
+（`errinfo_set`）。
 
 呼び出しを越えて C のグローバル変数に持つ値は CRuby と同じく
 `rb_gc_register_address` / `rb_global_variable`（アドレスを毎回読む新しい
@@ -557,7 +571,8 @@ CRuby と比較する。`bin/test-gems` に `strptime`（0.2.5）と
   コピーは現在の Ruby 呼び出し（`capi_frame` の owner）が持ち、呼び出し
   が戻るとき解放する。1 呼び出しにつき 8 スロット（Array ごとに 1 つ、
   同じ Array はスロットを再利用して要素を取り直す）なので、CRuby と同じ
-  ように複数の Array のポインタを同時に持てる。`RARRAY_AREF` は
+  ように複数の Array のポインタを同時に持てる。要素は temp stack に
+  積む（§3.3）。`RARRAY_AREF` は
   `rb_ary_entry`（変換あり）。
 - TypedData の `dmark` / ブロックの `mark`: `rb_gc_mark(VALUE)` が
   `M()` してコアに渡す。
