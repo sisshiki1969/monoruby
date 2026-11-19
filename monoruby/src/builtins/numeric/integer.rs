@@ -14,6 +14,10 @@ use crate::codegen::jitgen::deopt_log::DeoptCause;
 pub(super) fn init(globals: &mut Globals, numeric: Module) {
     globals.define_builtin_class("Integer", INTEGER_CLASS, numeric, OBJECT_CLASS, None);
     globals.store[INTEGER_CLASS].clear_alloc_func();
+    // `Integer.new` is undefined (`rb_undef_method(CLASS_OF(rb_cInteger),
+    // "new")`): NoMethodError, not the allocator's TypeError (#2092).
+    let integer_meta = globals.store.get_metaclass(INTEGER_CLASS).id();
+    globals.add_empty_method(integer_meta, IdentId::NEW, Visibility::Undefined);
     globals.define_builtin_func_with(INTEGER_CLASS, "chr", chr, 0, 1, false);
     globals.define_builtin_func(INTEGER_CLASS, "hash", hash, 0);
     // `next` is a true alias of `succ`.

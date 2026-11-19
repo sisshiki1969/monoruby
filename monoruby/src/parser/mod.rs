@@ -96,6 +96,60 @@ pub(crate) fn take_cli_e_script(path: &std::path::Path) -> bool {
     }
 }
 
+thread_local! {
+    /// The file a `require` / `load` is running and the encoding of its
+    /// path String (#2090); consumed by its parse.
+    static LOADING_FILE: std::cell::RefCell<Option<(PathBuf, crate::value::Encoding)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Arm (or, with `None`, disarm) the marker for the file a `require` /
+/// `load` is about to parse, with the encoding of its path String.
+pub(crate) fn set_loading_file(file: Option<(PathBuf, crate::value::Encoding)>) {
+    LOADING_FILE.with(|r| *r.borrow_mut() = file);
+}
+
+/// The encoding of the path String CRuby keeps for a source parsed from
+/// *path* (see `SourceInfo::path_encoding`). For an `eval`: BINARY for
+/// the `(eval at …)` name it makes up, UTF-8 for a name it was given.
+/// For a file `require` / `load` runs: the encoding of the feature
+/// String it was given (`require "x".b` makes it BINARY), which
+/// [`set_loading_file`] left for it. For the main script and `-e`: the
+/// locale encoding. A file of the `builtins/` tree takes the locale
+/// encoding too: its `<internal:…>` frames stand in for C frames, which
+/// CRuby shows at their caller's path, and that is the locale's unless a
+/// `require` or an `eval` made it.
+pub(crate) fn source_path_encoding(
+    path: &std::path::Path,
+    is_eval: bool,
+) -> crate::value::Encoding {
+    if crate::globals::is_builtins_path(path) {
+        return crate::builtins::encoding::locale_encoding();
+    }
+    if is_eval {
+        return if path
+            .as_os_str()
+            .as_encoded_bytes()
+            .starts_with(b"(eval at ")
+        {
+            crate::value::Encoding::Ascii8
+        } else {
+            crate::value::Encoding::UTF8
+        };
+    }
+    LOADING_FILE.with(|r| {
+        let mut r = r.borrow_mut();
+        match &*r {
+            Some((p, enc)) if p == path => {
+                let enc = *enc;
+                *r = None;
+                enc
+            }
+            _ => crate::builtins::encoding::locale_encoding(),
+        }
+    })
+}
+
 /// Process-wide default for the `frozen_string_literal` pragma, set by
 /// the `--enable/--disable-frozen-string-literal` command-line flags.
 /// A per-file magic comment still wins. -1 = unset, 0 = false, 1 = true.

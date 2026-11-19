@@ -965,8 +965,7 @@ impl<'a> MarshalReader<'a> {
         } else if is_exception_class(globals, module) {
             // Rebuild an Exception from its `:mesg` / `:bt` ivars, then
             // restore any user ivars and the backtrace.
-            let mut message: Option<String> = None;
-            let mut raw_message: Option<(Vec<u8>, crate::value::Encoding)> = None;
+            let mut mesg: Option<Value> = None;
             let mut backtrace: Option<Value> = None;
             let mut cause: Option<Value> = None;
             let mut user_ivars: Vec<(IdentId, Value)> = Vec::new();
@@ -987,14 +986,11 @@ impl<'a> MarshalReader<'a> {
             }
             for (name, val) in &ivars {
                 match name.get_name().as_str() {
+                    // The dumped object is the message object, whatever it
+                    // is (#2031): a String keeps its bytes and encoding.
                     "mesg" => {
-                        if let Some(s) = val.is_rstring_inner() {
-                            message = Some(String::from_utf8_lossy(s.as_bytes()).into_owned());
-                            // Keep the dumped bytes and encoding so a
-                            // BINARY message does not come back UTF-8.
-                            if s.encoding() != crate::value::Encoding::UTF8 {
-                                raw_message = Some((s.as_bytes().to_vec(), s.encoding()));
-                            }
+                        if !val.is_nil() {
+                            mesg = Some(*val);
                         }
                     }
                     "bt" => {
@@ -1044,16 +1040,18 @@ impl<'a> MarshalReader<'a> {
             );
             // A nil `:mesg` means "no explicit message"; CRuby's default
             // message is then the class name.
-            let given = message.is_some();
-            let msg = message.unwrap_or_else(|| class_name.clone());
-            let mut exc = Value::new_exception_from_with_class(msg, module.id(), module.id());
-            {
-                let ex = exc.is_exception_mut().unwrap();
-                if raw_message.is_some() {
-                    ex.raw_message = raw_message;
+            let mut exc =
+                Value::new_exception_from_with_class(class_name.clone(), module.id(), module.id());
+            match mesg {
+                // The dumped message is the message now, whoever built it.
+                Some(mesg) => super::exception::set_mesg(exc.is_exception_mut().unwrap(), mesg),
+                // None: the class name, as a fresh exception's.
+                None => {
+                    let ex = exc.is_exception_mut().unwrap();
+                    ex.set_message(String::new());
+                    ex.given_message = false;
+                    ex.default_message_class = Some(module.id());
                 }
-                // The dumped String is the message now, whoever built it.
-                ex.given_message = given;
             }
             if !has_mesg {
                 exc.set_exception_uninitialized();
@@ -3183,7 +3181,7 @@ fn marshal_dump_value(
                                 // a UTF-8 rebuild of its text: CRuby dumps a
                                 // BINARY message as a bare string, and a
                                 // UTF-8 one wrapped in `I…:E`.
-                                let msg_val = super::exception::message_value(&globals.store, obj);
+                                let msg_val = super::exception::mesg_value(&globals.store, obj);
                                 if name_err_mesg {
                                     marshal_write_name_err_mesg(buf, msg_val, symbols, objects);
                                 } else {

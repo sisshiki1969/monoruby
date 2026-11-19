@@ -28,6 +28,12 @@ module Kernel
     s.ascii_only? ? s.b : s
   end
 
+  # The same for a String CRuby builds in US-ASCII while it is all ASCII
+  # (`Exception#detailed_message`).
+  def __usascii_repr(s)
+    s.ascii_only? ? String.new(s, encoding: Encoding::US_ASCII) : s
+  end
+
   # How a type error names an argument (CRuby's rb_builtin_class_name):
   # nil / true / false by keyword, anything else by its class — "no
   # implicit conversion of nil into String", "wrong argument type true

@@ -144,17 +144,28 @@ pub(super) fn init(globals: &mut Globals) {
         standarderr,
     );
 
-    // `receiver:` / `key:` keywords: CRuby scopes these to FrozenError /
-    // KeyError, which in monoruby share this base initializer; accepting
-    // them here preserves the pre-Class#new-routing tolerance.
+    // `Exception#initialize(message = nil)` (`rb_check_arity(argc, 0, 1)`,
+    // a keyword Hash counting as an argument); the `receiver:` / `key:`
+    // keywords are FrozenError's and KeyError's own (#2031).
+    globals.define_builtin_func_with(EXCEPTION_CLASS, "initialize", initialize, 0, 1, false);
     globals.define_builtin_func_with_kw(
-        EXCEPTION_CLASS,
+        KEY_ERROR_CLASS,
         "initialize",
-        initialize,
+        keyerror_initialize,
         0,
-        2,
+        1,
         false,
         &["receiver", "key"],
+        false,
+    );
+    globals.define_builtin_func_with_kw(
+        FROZEN_ERROR_CLASS,
+        "initialize",
+        frozenerror_initialize,
+        0,
+        1,
+        false,
+        &["receiver"],
         false,
     );
     globals.define_builtin_func(EXCEPTION_CLASS, "message", message, 0);
@@ -292,22 +303,6 @@ fn nameerr_name(
 }
 
 ///
-/// Give an exception *message*, or, for none, leave it to default to
-/// the class name (CRuby's `mesg` stays nil, so `Marshal.dump` writes
-/// nil and the default is US-ASCII).
-///
-fn set_message_or_default(ex: &mut ExceptionInner, message: Option<String>, class_id: ClassId) {
-    match message {
-        Some(message) => ex.set_message(message),
-        None => {
-            ex.set_message(String::new());
-            ex.given_message = false;
-            ex.default_message_class = Some(class_id);
-        }
-    }
-}
-
-///
 /// `NameError.new(msg = nil, name = nil)`
 ///
 /// Adds the second positional `name` argument on top of `Exception#initialize`,
@@ -315,18 +310,14 @@ fn set_message_or_default(ex: &mut ExceptionInner, message: Option<String>, clas
 ///
 #[monoruby_builtin]
 fn nameerr_initialize(
-    vm: &mut Executor,
+    _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let class_id = self_.real_class(&globals.store).id();
-    let message = match lfp.try_arg(0) {
-        Some(msg) if !msg.is_nil() => Some(msg.coerce_to_string(vm, globals)?),
-        _ => None,
-    };
-    set_message_or_default(self_.is_exception_mut().unwrap(), message, class_id);
+    set_mesg_or_default(self_.is_exception_mut().unwrap(), lfp.try_arg(0), class_id);
     self_.set_exception_initialized();
     if let Some(name) = lfp.try_arg(1) {
         if !name.is_nil() {
@@ -387,18 +378,14 @@ fn nameerr_showing(
 /// `NoMethodError.new(msg = nil, name = nil, args = nil, receiver: …)`.
 #[monoruby_builtin]
 fn nomethoderr_initialize(
-    vm: &mut Executor,
+    _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let class_id = self_.real_class(&globals.store).id();
-    let message = match lfp.try_arg(0) {
-        Some(msg) if !msg.is_nil() => Some(msg.coerce_to_string(vm, globals)?),
-        _ => None,
-    };
-    set_message_or_default(self_.is_exception_mut().unwrap(), message, class_id);
+    set_mesg_or_default(self_.is_exception_mut().unwrap(), lfp.try_arg(0), class_id);
     self_.set_exception_initialized();
     if let Some(name) = lfp.try_arg(1)
         && !name.is_nil()
@@ -481,23 +468,58 @@ pub(crate) extern "C" fn exception_alloc_func(class_id: ClassId, globals: &mut G
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/s/exception.html]
 #[monoruby_builtin]
-fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn initialize(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    exc_init(globals, lfp.self_val(), lfp.try_arg(0));
+    Ok(Value::nil())
+}
+
+///
+/// ### KeyError#initialize
+///
+/// - new(error_message = nil, receiver: nil, key: nil) -> KeyError
+///
+/// A keyword that was given counts even when it is nil (`key: nil`
+/// makes `#key` nil; no `key:` makes it raise).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/KeyError/s/new.html]
+#[monoruby_builtin]
+fn keyerror_initialize(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     let mut self_ = lfp.self_val();
-    exc_init(vm, globals, self_, lfp.try_arg(0))?;
-    // Real keyword arguments (`receiver:` at slot 2, `key:` at slot 3) —
-    // the path taken since `Exception.new` routes through `Class#new`'s
-    // full dispatch. The positional-hash arms above remain for internal
-    // Rust-side callers that flatten keywords into the argument array.
-    // A keyword that was given counts even when it is nil (`key: nil`
-    // makes `#key` nil; no `key:` makes it raise).
-    if let Some(v) = lfp.try_arg(2) {
+    exc_init(globals, self_, lfp.try_arg(0));
+    if let Some(v) = lfp.try_arg(1) {
         globals.store.set_ivar(self_, IdentId::_RECEIVER, v)?;
     }
-    if let Some(v) = lfp.try_arg(3) {
+    if let Some(v) = lfp.try_arg(2) {
         globals.store.set_ivar(self_, IdentId::get_id("/key"), v)?;
-        if lfp.try_arg(2).is_some() {
+        if lfp.try_arg(1).is_some() {
             self_.set_exception_receiver_first();
         }
+    }
+    Ok(Value::nil())
+}
+
+///
+/// ### FrozenError#initialize
+///
+/// - new(error_message = nil, receiver: nil) -> FrozenError
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/FrozenError/s/new.html]
+#[monoruby_builtin]
+fn frozenerror_initialize(
+    _: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    exc_init(globals, self_, lfp.try_arg(0));
+    if let Some(v) = lfp.try_arg(1) {
+        globals.store.set_ivar(self_, IdentId::_RECEIVER, v)?;
     }
     Ok(Value::nil())
 }
@@ -508,46 +530,53 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// has `mesg` and `bt` for `Marshal` (an exception `allocate` made and no
 /// `initialize` reached has neither, #2013).
 ///
-fn exc_init(vm: &mut Executor, globals: &mut Globals, mut self_: Value, msg: Option<Value>) -> Result<()> {
+/// The message is kept as the object it is (`mesg`): `#to_s` answers a
+/// String as that very object and converts anything else when it is
+/// read, not here (#2031).
+///
+fn exc_init(globals: &mut Globals, mut self_: Value, msg: Option<Value>) {
     let class_id = self_.real_class(&globals.store).id();
-    // The message String is kept as its own bytes *and* encoding: CRuby
-    // hands `#message` back the String it was given, so a BINARY or
-    // US-ASCII message must not come back as UTF-8.
-    let mut raw = None;
-    let message = if let Some(msg) = msg
-        && !msg.is_nil()
-    {
-        let msg = if msg.is_rstring().is_some() {
-            msg
-        } else {
-            // CRuby accepts any message object and stringifies it
-            // via #to_s (`Exception#to_s calls #to_s on the message`).
-            vm.invoke_method_inner(globals, IdentId::TO_S, msg, &[], None, None)?
-        };
-        if let Some(inner) = msg.is_rstring_inner()
-            && inner.encoding() != crate::value::Encoding::UTF8
-        {
-            raw = Some((inner.as_bytes().to_vec(), inner.encoding()));
-        }
-        Some(msg.coerce_to_string(vm, globals)?)
-    } else {
-        // No message given: the default is the class name, left deferred
-        // rather than rendered here (see `default_message_class`).
-        None
-    };
-    {
-        let ex = self_.is_exception_mut().unwrap();
-        match message {
-            Some(message) => ex.set_message(message),
-            None => {
-                ex.message.clear();
-                ex.default_message_class = Some(class_id);
-            }
-        }
-        ex.raw_message = raw;
-    }
+    set_mesg_or_default(self_.is_exception_mut().unwrap(), msg, class_id);
     self_.set_exception_initialized();
-    Ok(())
+}
+
+///
+/// Give an exception *msg* as its message object, or, for none or nil,
+/// leave its message to default to the name of *class_id* (CRuby's
+/// `mesg` stays nil, so `Marshal.dump` writes nil and the default is
+/// US-ASCII).
+///
+fn set_mesg_or_default(ex: &mut MonorubyErr, msg: Option<Value>, class_id: ClassId) {
+    match msg.filter(|msg| !msg.is_nil()) {
+        Some(msg) => set_mesg(ex, msg),
+        None => {
+            ex.set_msg(String::new());
+            ex.given_message = false;
+            ex.raw_message = None;
+            ex.default_message_class = Some(class_id);
+        }
+    }
+}
+
+///
+/// Give an exception *mesg* as its message object (see
+/// [`MonorubyErr::mesg`]), with the rendering the Rust side reads: a
+/// String's text (and, for one that is not UTF-8, its bytes and
+/// encoding), nothing for any other object.
+///
+pub(crate) fn set_mesg(ex: &mut MonorubyErr, mesg: Value) {
+    let (text, raw) = match mesg.is_rstring_inner() {
+        Some(inner) => (
+            String::from_utf8_lossy(inner.as_bytes()).into_owned(),
+            (inner.encoding() != crate::value::Encoding::UTF8)
+                .then(|| (inner.as_bytes().to_vec(), inner.encoding())),
+        ),
+        None => (String::new(), None),
+    };
+    ex.set_msg(text);
+    ex.raw_message = raw;
+    ex.given_message = true;
+    ex.mesg = Some(mesg);
 }
 
 ///
@@ -577,6 +606,14 @@ fn message(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let ex = self_.is_exception().unwrap();
+    // `exc_to_s`: the message object as it is when it is a String, else
+    // `rb_String` of it, on every read (#2031).
+    if let Some(mesg) = ex.mesg {
+        if mesg.is_rstring().is_some() {
+            return Ok(mesg);
+        }
+        return super::kernel::rb_string(vm, globals, mesg);
+    }
     if ex.class_span.is_some()
         || (ex.name_span.is_some()
             && !globals
@@ -727,6 +764,11 @@ fn nameerr_class_text(vm: &mut Executor, globals: &mut Globals, class: Module) -
 ///
 pub(crate) fn message_value(store: &Store, exception: Value) -> Value {
     let ex = exception.is_exception().unwrap();
+    if let Some(mesg) = ex.mesg
+        && mesg.is_rstring().is_some()
+    {
+        return mesg;
+    }
     if let Some((raw, enc)) = &ex.raw_message {
         return Value::string_from_inner(crate::value::RStringInner::from_encoding(raw, *enc));
     }
@@ -799,7 +841,7 @@ fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     if let Some(bt) = globals.store.get_ivar(self_, IdentId::get_id("/backtrace")) {
         return Ok(bt);
     }
-    let traces: Vec<String> = self_.is_exception().unwrap().trace_location(globals);
+    let traces = self_.is_exception().unwrap().trace_values(globals);
     if traces.is_empty() {
         // Exception was constructed (e.g. `Exception.new`) but never
         // raised, so there is no backtrace to report.
@@ -808,7 +850,7 @@ fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // Memoize the built array so repeated `#backtrace` calls return the
     // *same* object (CRuby: `e.backtrace.unshift(...)` is visible on the
     // next `#backtrace`, and `e.dup.backtrace.equal?(e.backtrace)`).
-    let array = Value::array_from_iter(traces.into_iter().map(|s| Value::string(s)));
+    let array = Value::array_from_vec(traces);
     globals
         .store
         .set_ivar(self_, IdentId::get_id("/backtrace"), array)?;
@@ -824,11 +866,24 @@ fn backtrace(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 ///
 #[monoruby_builtin]
 fn mesg(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
-    if self_.is_exception().unwrap().default_message_class.is_some() {
-        return Ok(Value::nil());
+    Ok(mesg_value(&globals.store, lfp.self_val()))
+}
+
+///
+/// CRuby's `mesg` field of *exception*: the object it was given as its
+/// message, nil when it was given none, and for a message the
+/// interpreter built, that message as a String. `Marshal.dump` writes
+/// this as `:mesg`.
+///
+pub(crate) fn mesg_value(store: &Store, exception: Value) -> Value {
+    let ex = exception.is_exception().unwrap();
+    if let Some(mesg) = ex.mesg {
+        return mesg;
     }
-    Ok(message_value(&globals.store, self_))
+    if ex.default_message_class.is_some() {
+        return Value::nil();
+    }
+    message_value(store, exception)
 }
 
 ///
@@ -848,13 +903,11 @@ fn raise_backtrace(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
-    let traces: Vec<String> = self_.is_exception().unwrap().trace_location(globals);
+    let traces = self_.is_exception().unwrap().trace_values(globals);
     if traces.is_empty() {
         return Ok(Value::nil());
     }
-    Ok(Value::array_from_iter(
-        traces.into_iter().map(|s| Value::string(s)),
-    ))
+    Ok(Value::array_from_vec(traces))
 }
 
 ///
@@ -909,12 +962,13 @@ fn set_backtrace(
 /// With no arguments (or with `self` as the argument) returns `self`.
 /// Otherwise returns a copy of `self` (via `#dup`, so subclass-defined
 /// instance variables such as `CustomArgumentError#val` are preserved)
-/// with *error_message* coerced through `#to_str` as the new `#message`.
+/// with *error_message* as its message object, as it is (`#to_s`
+/// converts it when it is read).
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/exception.html]
 #[monoruby_builtin]
 fn exception_method(
-    vm: &mut Executor,
+    _vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -926,11 +980,11 @@ fn exception_method(
     if arg.id() == self_v.id() {
         return Ok(self_v);
     }
-    // Coerce first: `#to_s` re-enters Ruby, and the dup would live only
-    // in a Rust local across it.
-    let msg = arg.coerce_to_string(vm, globals)?;
+    // `exc_exception`: a copy whose `mesg` is the argument as it is,
+    // converted when the message is read (#2031).
     let mut new_exc = self_v.dup();
-    new_exc.is_exception_mut().unwrap().set_message(msg);
+    let class_id = new_exc.real_class(&globals.store).id();
+    set_mesg_or_default(new_exc.is_exception_mut().unwrap(), Some(arg), class_id);
     Ok(new_exc)
 }
 
@@ -939,8 +993,9 @@ fn exception_method(
 ///
 /// - self == other -> bool
 ///
-/// Returns `true` when *other* is an Exception of the same class with
-/// the same `#message` and an equal `#backtrace`; otherwise `false`.
+/// Returns `true` when *other* is an Exception of the same class whose
+/// message object is `==` to this one's and whose `#backtrace` is
+/// equal; otherwise `false`.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Exception/i/=3d=3d.html]
 #[monoruby_builtin]
@@ -955,18 +1010,17 @@ fn exception_eq(
     if self_v.id() == other.id() {
         return Ok(Value::bool(true));
     }
-    let self_ex = match self_v.is_exception() {
-        Some(e) => e,
-        None => return Ok(Value::bool(false)),
-    };
-    let other_ex = match other.is_exception() {
-        Some(e) => e,
-        None => return Ok(Value::bool(false)),
-    };
-    if self_v.class() != other.class() {
+    if self_v.is_exception().is_none()
+        || other.is_exception().is_none()
+        || self_v.class() != other.class()
+    {
         return Ok(Value::bool(false));
     }
-    if self_ex.message() != other_ex.message() {
+    // `exc_equal`: the two `mesg` fields by `==` — nil for no message, so
+    // `RuntimeError.new` is not `RuntimeError.new("RuntimeError")`.
+    let self_mesg = mesg_value(&globals.store, self_v);
+    let other_mesg = mesg_value(&globals.store, other);
+    if !vm.eq_values_bool(globals, self_mesg, other_mesg)? {
         return Ok(Value::bool(false));
     }
     // Compare backtraces using #backtrace (so we go through the same
@@ -1091,7 +1145,7 @@ fn system_exit_initialize(
     if rest.len() > 1 {
         return Err(MonorubyErr::wrong_number_of_arg_range(rest.len(), 0..=1));
     }
-    exc_init(vm, globals, self_, rest.first().copied())?;
+    exc_init(globals, self_, rest.first().copied());
     globals
         .store
         .set_ivar(self_, IdentId::get_id("/status"), status)?;

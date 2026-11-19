@@ -461,6 +461,10 @@ fn try_prism_inner(
     anon_forwarding: AnonForwarding,
 ) -> Result<ParseResult, MonorubyErr> {
     let path_display = path.display().to_string();
+    // An `eval` arrives with its options; a file (the main script with
+    // TOPLEVEL_BINDING included) is not one, whatever options the
+    // `-e` / `-K` handling below gives it.
+    let is_eval_source = options.is_some() && !main_script;
     // `-n` / `-p`: the main script (and only the main script) gets its
     // top-level statements wrapped in an implicit `while gets ... end`.
     let cli_loop_wrap = super::take_cli_loop_wrap(&path);
@@ -550,6 +554,10 @@ fn try_prism_inner(
         .with_frozen_string_literal(frozen_string_literal)
         .with_hidden_ivars(detect_hidden_ivars(code)),
     );
+    source_info.set_path_encoding(super::source_path_encoding(
+        &source_info.path,
+        is_eval_source,
+    ));
 
     // prism >= 2.0 validates the byte escapes of a regexp literal against
     // its encoding and calls every sequence it rejects an "invalid

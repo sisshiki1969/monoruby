@@ -90,6 +90,7 @@ mod errinfo_inline_load;
 mod escape_analysis;
 mod etc;
 mod exception_api;
+mod exception_mesg_and_encodings;
 mod exit_before_regions_value;
 mod exit_handler_error_roots;
 mod exit_order;

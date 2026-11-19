@@ -174,13 +174,19 @@ class Exception
     # Chain the cause's report so every exception in the chain appears.
     c = cause
     out += c.full_message(highlight: highlight, order: :top) if c
-    out
+    # `rb_str_new` grown by appends: BINARY while it is all ASCII (#2090).
+    __sprintf_repr(out)
   end
 
   # CRuby `Exception#detailed_message(highlight: false, **)`:
   # decorate the message with the class name; empty-message and
-  # anonymous-class cases have special forms.
+  # anonymous-class cases have special forms. The result is US-ASCII
+  # while it is all ASCII, whatever the message's encoding (#2090).
   def detailed_message(highlight: false, **)
+    __usascii_repr(__detailed_message(highlight))
+  end
+
+  private def __detailed_message(highlight)
     highlight = Exception.__check_highlight(highlight) || false
     msg = message.to_s
     cls = self.class

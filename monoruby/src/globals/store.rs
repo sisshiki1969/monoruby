@@ -1769,6 +1769,16 @@ impl Store {
     /// One backtrace entry as CRuby prints it: `file:line:in 'label'`,
     /// `file:line` for a frame with no function, `<internal>:in 'label'`
     /// for a native frame with no source location.
+    /// [`Self::trace_entry_location`] as the String a backtrace holds,
+    /// in the encoding CRuby gives it (see [`backtrace_line`]).
+    pub(crate) fn trace_entry_value(&self, entry: &TraceEntry) -> Value {
+        let enc = match &entry.0 {
+            Some((_, source)) => path_encoding(source),
+            None => crate::value::Encoding::UsAscii,
+        };
+        backtrace_line(self.trace_entry_location(entry), enc)
+    }
+
     pub(crate) fn trace_entry_location(&self, entry: &TraceEntry) -> String {
         let (source_loc, func_id, hint) = entry;
         match (source_loc, func_id) {
@@ -1827,7 +1837,12 @@ thread_local! {
 /// CRuby implements in C. Their frames stand in for C frames
 /// (see `Meta::set_internal_builtin`).
 fn is_internal_source(source: &SourceInfoRef) -> bool {
-    BUILTINS_DIR.with(|dir| source.path.starts_with(dir))
+    is_builtins_path(&source.path)
+}
+
+/// Whether *path* is a file of the `builtins/` bootstrap tree.
+pub(crate) fn is_builtins_path(path: &std::path::Path) -> bool {
+    BUILTINS_DIR.with(|dir| path.starts_with(dir))
 }
 
 /// CRuby-style display path for backtrace strings: sources shipped in
@@ -1848,6 +1863,42 @@ pub(crate) fn display_path(source: &SourceInfoRef) -> std::borrow::Cow<'_, str> 
     match internal {
         Some(s) => std::borrow::Cow::Owned(s),
         None => source.file_name(),
+    }
+}
+
+/// The encoding of the path String a backtrace line read from *source*
+/// starts with: the source's own (`SourceInfo::path_encoding`), fixed
+/// when it was parsed (`parser::source_path_encoding`).
+pub(crate) fn path_encoding(source: &SourceInfoRef) -> crate::value::Encoding {
+    source.path_encoding()
+}
+
+/// A backtrace line as the String CRuby makes it (`location_format`, in
+/// `rb_enc_compatible(path, label)`): in the encoding of its path,
+/// *path_enc*, while it is all ASCII, and in the label's, UTF-8, when a
+/// method name is not (#2090).
+#[inline]
+pub(crate) fn backtrace_line(line: String, path_enc: crate::value::Encoding) -> Value {
+    let ascii = path_enc != crate::value::Encoding::UTF8 && line.is_ascii();
+    backtrace_string(line, path_enc, ascii)
+}
+
+/// [`backtrace_line`] for a caller that already knows whether *line* is
+/// all ASCII (`ascii`, only consulted for a *path_enc* other than UTF-8).
+#[inline]
+pub(crate) fn backtrace_string(
+    line: String,
+    path_enc: crate::value::Encoding,
+    ascii: bool,
+) -> Value {
+    if ascii && path_enc != crate::value::Encoding::UTF8 {
+        Value::string_from_inner(crate::value::RStringInner::from_vec_cr(
+            line.into_bytes(),
+            path_enc,
+            crate::value::CodeRange::SevenBit,
+        ))
+    } else {
+        Value::string(line)
     }
 }
 

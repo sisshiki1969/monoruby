@@ -250,7 +250,7 @@ fn file_binread(
             return Err(MonorubyErr::errno_with_path(
                 &globals.store,
                 &err,
-                "rb_io_read",
+                "io_fread",
                 &filename_str,
             ));
         };
@@ -261,7 +261,7 @@ fn file_binread(
             return Err(MonorubyErr::errno_with_path(
                 &globals.store,
                 &err,
-                "rb_io_read",
+                "io_fread",
                 &filename_str,
             ));
         };

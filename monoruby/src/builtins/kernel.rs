@@ -1036,6 +1036,29 @@ fn raise(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     if let Some(kw) = kw_rest {
         args.push(kw);
     }
+    // A message the core's own Ruby code raises is one CRuby's C builds
+    // with `rb_sprintf`: BINARY while it is all ASCII (#2090).
+    if vm
+        .cfp()
+        .prev()
+        .is_some_and(|caller| caller.lfp().meta().is_internal_builtin())
+    {
+        let at = if args.first().is_some_and(|a| a.is_rstring().is_some()) {
+            0
+        } else {
+            1
+        };
+        if let Some(msg) = args.get_mut(at)
+            && let Some(inner) = msg.is_rstring_inner()
+            && inner.encoding() != crate::value::Encoding::Ascii8
+            && inner.as_bytes().is_ascii()
+        {
+            *msg = Value::string_from_inner(RStringInner::from_encoding(
+                inner.as_bytes(),
+                crate::value::Encoding::Ascii8,
+            ));
+        }
+    }
     if args.is_empty() {
         // CRuby: passing `cause:` with no positional arguments raises
         // `ArgumentError "only cause is given with no arguments"`.
@@ -1154,19 +1177,17 @@ pub(crate) fn make_exception_error(
         }
         return Err(MonorubyErr::typeerr("exception class/object expected"));
     }
-    if let Some(message) = a0.is_rstring() {
+    if a0.is_rstring().is_some() {
         // A bare String message is only accepted as the sole positional
         // argument (`raise "a", "b"` is a TypeError in CRuby).
         if msg_arg.is_some() {
             return Err(MonorubyErr::typeerr("exception class/object expected"));
         }
-        // Keep the message's own bytes and encoding, as `Exception#initialize`
-        // does: `raise "x".b` must not report a UTF-8 message.
-        let mut err = MonorubyErr::runtimeerr(message.to_str()?);
-        err.given_message = true;
-        if message.encoding() != crate::value::Encoding::UTF8 {
-            err.raw_message = Some((message.as_bytes().to_vec(), message.encoding()));
-        }
+        // The String is the message object, as `Exception#initialize`
+        // keeps it: `#message` answers that very String (#2031), in its
+        // own encoding.
+        let mut err = MonorubyErr::runtimeerr(String::new());
+        super::exception::set_mesg(&mut err, a0);
         return apply_cause(globals, err, None, cause_kwarg);
     }
     // Duck-typed exception. CRuby drives `arg0.exception(msg)` (or
@@ -1449,9 +1470,17 @@ fn caller_frames(
                             None => Value::nil(),
                         }
                     };
+                    let enc = crate::globals::path_encoding(&source);
+                    // The frame line is ASCII when its path and label are.
+                    let path_ascii = enc != crate::value::Encoding::UTF8 && path.is_ascii();
+                    let line_ascii = path_ascii && label.is_ascii();
                     vec![
-                        Value::string(format!("{path}:{line}:in '{label}'")),
-                        Value::string(path),
+                        crate::globals::backtrace_string(
+                            format!("{path}:{line}:in '{label}'"),
+                            enc,
+                            line_ascii,
+                        ),
+                        crate::globals::backtrace_string(path, enc, path_ascii),
                         absolute,
                         Value::integer(line as i64),
                         Value::string(label),
@@ -1694,8 +1723,9 @@ pub(super) fn collect_backtrace(
                 // monoruby targets Ruby 4.0 so we follow suit. Keeps
                 // `caller_locations` (which regex-parses these
                 // strings) able to extract the label.
-                v.push(Value::string_from_vec(
-                    format!("{loc}:in '{desc}'").into_bytes(),
+                v.push(crate::globals::backtrace_line(
+                    format!("{loc}:in '{desc}'"),
+                    crate::globals::path_encoding(&info.sourceinfo),
                 ));
             } else if include_native {
                 let desc = globals
@@ -1721,19 +1751,24 @@ pub(super) fn collect_backtrace(
                     }
                     let idx = info.get_pc_index(Some(pc)).to_usize();
                     let loc = info.sourcemap[idx];
-                    Some(format!(
-                        "{}:{}",
-                        crate::globals::display_path(&info.sourceinfo),
-                        info.sourceinfo.get_line(&loc)
+                    Some((
+                        format!(
+                            "{}:{}",
+                            crate::globals::display_path(&info.sourceinfo),
+                            info.sourceinfo.get_line(&loc)
+                        ),
+                        crate::globals::path_encoding(&info.sourceinfo),
                     ))
                 });
-                v.push(Value::string_from_vec(
-                    match loc {
-                        Some(l) => format!("{l}:in '{desc}'"),
-                        None => format!("<internal>:in '{desc}'"),
+                v.push(match loc {
+                    Some((l, enc)) => {
+                        crate::globals::backtrace_line(format!("{l}:in '{desc}'"), enc)
                     }
-                    .into_bytes(),
-                ));
+                    None => crate::globals::backtrace_line(
+                        format!("<internal>:in '{desc}'"),
+                        crate::value::Encoding::UsAscii,
+                    ),
+                });
             }
         }
         if let Some(prev_cfp) = prev_cfp {
@@ -3385,8 +3420,25 @@ fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // `#to_path`/`#to_str` chain.
     let feature = path_arg_to_string(vm, globals, lfp.arg(0))?;
     let file_name = std::path::PathBuf::from(feature);
+    vm.feature_encoding = feature_encoding(globals, lfp.arg(0));
     let b = vm.require(globals, &file_name, false)?;
     Ok(Value::bool(b))
+}
+
+/// The encoding the loaded file's path String takes (#2090): the
+/// feature String's, except that a US-ASCII or BINARY one is the
+/// filesystem encoding (`rb_file_expand_path` associates that with such
+/// a path), which is `Encoding.default_external` on Linux and macOS.
+fn feature_encoding(globals: &mut Globals, arg: Value) -> Option<crate::value::Encoding> {
+    use crate::value::Encoding;
+    let enc = arg.is_rstring_inner()?.encoding();
+    Some(match enc {
+        Encoding::UsAscii | Encoding::Ascii8 => globals
+            .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+            .and_then(|v| globals.encoding_of_object(v))
+            .unwrap_or_else(super::encoding::locale_encoding),
+        enc => enc,
+    })
 }
 
 /// CRuby's `rb_get_path`: convert a path argument to a String via
@@ -3433,6 +3485,7 @@ fn require_relative(
     // No extension munging here: the shared resolution appends `.rb`
     // itself, and `require_relative "x.ext"` must mean `x.ext.rb`
     // (set_extension would *replace* the foreign extension).
+    vm.feature_encoding = feature_encoding(globals, lfp.arg(0));
     let b = vm.require(globals, &file_name, true)?;
     Ok(Value::bool(b))
 }
@@ -3458,6 +3511,7 @@ fn load_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         None
     };
+    vm.feature_encoding = feature_encoding(globals, lfp.arg(0));
     vm.load(globals, &file_name, wrap)?;
     Ok(Value::bool(true))
 }
@@ -6052,7 +6106,13 @@ fn kernel_string(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let arg = lfp.arg(0);
+    rb_string(vm, globals, lfp.arg(0))
+}
+
+/// CRuby's `rb_String`: *arg* by `to_str` when it converts by it
+/// (`rb_check_string_type`), else by `to_s`, which has to be there and
+/// answer a String.
+pub(crate) fn rb_string(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<Value> {
     if let Some(s) = arg.check_string_type(vm, globals)? {
         return Ok(s);
     }
