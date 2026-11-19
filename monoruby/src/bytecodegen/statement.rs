@@ -243,6 +243,7 @@ impl<'a> BytecodeGen<'a> {
         reg: BcReg,
         cont_pos: Label,
         jmp_if_true: bool,
+        case_dispatch: bool,
     ) -> Result<()> {
         if let NodeKind::Splat(deref!(when)) = when.kind {
             let loc = when.loc;
@@ -260,7 +261,7 @@ impl<'a> BytecodeGen<'a> {
             self.emit_condbr(lhs, cont_pos, jmp_if_true, false);
             Ok(())
         } else {
-            self.gen_teq_condbr(when, reg, cont_pos, jmp_if_true)
+            self.gen_teq_condbr(when, reg, cont_pos, jmp_if_true, case_dispatch)
         }
     }
 
@@ -335,7 +336,15 @@ impl<'a> BytecodeGen<'a> {
             if let Some((min, max)) = check_opt(&when_) {
                 let mut table = vec![];
                 let mut bodies = vec![];
-                let mut labels = vec![else_pos];
+                // A key the table does not answer for — one that is no
+                // number, special constant or String, or any key once an
+                // `===` the dispatch stands on was replaced
+                // (`OptCaseInfo::find`, `runtime::opt_case`) — goes through
+                // the `when` values one by one, as a `case` of fewer of
+                // them does. `labels` is [fallback, else, then...].
+                let fallback_pos = self.new_label();
+                let mut fallback = vec![];
+                let mut labels = vec![fallback_pos, else_pos];
                 for branch in when_ {
                     let CaseBranch { body: deref!(body), when } = branch;
                     let then_pos = self.new_label();
@@ -347,6 +356,7 @@ impl<'a> BytecodeGen<'a> {
                             unreachable!()
                         };
                         table.push((idx, then_pos));
+                        fallback.push((when, then_pos));
                     }
                     bodies.push((then_pos, body));
                 }
@@ -360,25 +370,54 @@ impl<'a> BytecodeGen<'a> {
                     },
                     loc,
                 );
+                // Every jump forward: the JIT takes a backward one for a
+                // loop's back edge.
+                self.apply_label(fallback_pos);
+                for (when, then_pos) in fallback {
+                    self.gen_teq_condbr(when, reg, then_pos, true, true)?;
+                }
+                self.temp = base;
+                self.emit_br(else_pos);
                 for (then_pos, body) in bodies {
-                    self.temp = base;
+                    // Reached from the fallback above too, which holds the
+                    // key (`reg`) still.
+                    self.temp = base + 1;
                     self.apply_label(then_pos);
+                    self.temp = base;
                     self.gen_expr(body, use_mode)?;
                     if !use_mode.is_ret() {
                         self.emit_br(exit_pos);
                     }
                 }
             } else {
+                // CRuby's `opt_case_dispatch`: a `case` whose `when` values
+                // are all literals compares by value (`CaseTEq`).
+                let case_dispatch = when_.iter().all(|branch| {
+                    branch.when.iter().all(|node| {
+                        matches!(
+                            node.kind,
+                            NodeKind::Nil
+                                | NodeKind::Bool(_)
+                                | NodeKind::Integer(_)
+                                | NodeKind::Bignum(_)
+                                | NodeKind::Float(_)
+                                | NodeKind::Symbol(_)
+                                | NodeKind::String(_)
+                                | NodeKind::Bytes(_)
+                                | NodeKind::EncodedString(..)
+                        )
+                    })
+                });
                 for branch in when_ {
                     let CaseBranch { body: deref!(body), mut when } = branch;
                     let succ_pos = self.new_label();
                     if when.len() == 1 {
                         let when = when.remove(0);
-                        self.gen_case_teq_condbr(when, reg, succ_pos, false)?;
+                        self.gen_case_teq_condbr(when, reg, succ_pos, false, case_dispatch)?;
                     } else {
                         let then_pos = self.new_label();
                         for when in when {
-                            self.gen_case_teq_condbr(when, reg, then_pos, true)?;
+                            self.gen_case_teq_condbr(when, reg, then_pos, true, case_dispatch)?;
                         }
                         self.emit_br(succ_pos);
                         self.apply_label(then_pos);
@@ -599,7 +638,7 @@ impl<'a> BytecodeGen<'a> {
                         vec![],
                         Loc::default(),
                     );
-                    self.gen_teq_condbr(std_err, err_reg, cont_pos, true)?;
+                    self.gen_teq_condbr(std_err, err_reg, cont_pos, true, false)?;
                     self.emit_br(next_pos);
                 };
                 self.apply_label(cont_pos);

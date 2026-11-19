@@ -26,9 +26,10 @@ impl RefinementSetId {
         self == Self::EMPTY
     }
 
-    //pub fn get(self) -> u32 {
-    //    self.0
-    //}
+    /// The raw id, for machine code that hands a set to a runtime helper.
+    pub(crate) fn get(self) -> u32 {
+        self.0
+    }
 }
 
 impl Default for RefinementSetId {

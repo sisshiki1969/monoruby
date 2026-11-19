@@ -507,3 +507,77 @@ fn capi_check_funcall_is_refinement_blind() {
         "##,
     );
 }
+
+/// `&:sym` written where a refinement is active (#2063): the block the
+/// call receives finds the method under that scope's refinements, as
+/// CRuby's cached refined Symbol proc does, wherever it is called from —
+/// a builtin's `yield`, a Ruby `yield`, `Proc#call`, a forwarded `&b`,
+/// `super(&:sym)`, `method_missing`. A private method stays callable
+/// through it; a bare `:sym.to_proc` and a `&:sym` written outside the
+/// scope call only public methods and see no refinement.
+#[test]
+fn refined_symbol_block_argument() {
+    run_test_once(&format!(
+        r##"
+        class C2063; def pub = :pub_orig; end
+        module R2063
+          refine C2063 do
+            def hello = :refined
+            def pub = :pub_refined
+            def kw(a: 1) = [:kw, a]
+          end
+        end
+        class C2063
+          private def pv = :priv
+          protected def pt = :prot
+        end
+        class En2063
+          include Enumerable
+          def each; yield C2063.new; end
+          def my_map(&b) = [b.call(C2063.new)]
+          def fwd(&b) = [C2063.new].map(&b)
+          def y1 = yield(C2063.new)
+          def ykw = yield(C2063.new, a: 5)
+          def getb(&b) = b
+          def method_missing(n, *a, &b) = b.call(C2063.new)
+          def respond_to_missing?(*) = true
+        end
+        class Base2063; def m(&b) = b.call(C2063.new); end
+        class Unref2063
+          def self.go = (En2063.new.map(&:hello) rescue $!.class)
+          def self.go2 = En2063.new.y1(&:pub)
+          def self.go3 = (En2063.new.y1(&:pv) rescue $!.class)
+          def self.blk = (En2063.new.getb(&:hello).call(C2063.new) rescue $!.class)
+        end
+        using R2063
+        class Sub2063 < Base2063; def m = super(&:hello); end
+        res = []
+        {runs}.times do
+          r = []
+          r << [C2063.new].map(&:hello)
+          r << En2063.new.map(&:hello)
+          r << En2063.new.my_map(&:hello)
+          r << En2063.new.fwd(&:hello)
+          s = :hello; r << [C2063.new].map(&s)
+          r << En2063.new.send(:map, &:hello)
+          r << En2063.new.zork(&:hello)
+          r << Sub2063.new.m
+          r << En2063.new.y1(&:pv)
+          r << (En2063.new.y1(&:pt) rescue $!.class)
+          r << En2063.new.y1(&:pub)
+          r << En2063.new.ykw(&:kw)
+          r << (En2063.new.y1(&:nosuch) rescue $!.class)
+          r << (:hello.to_proc.call(C2063.new) rescue $!.class)
+          r << Unref2063.go << Unref2063.go2 << Unref2063.go3 << Unref2063.blk
+          b = En2063.new.getb(&:hello)
+          r << b.lambda? << b.call(C2063.new) << b.arity << (b.call rescue $!.class)
+          r << b.equal?(En2063.new.getb(&:hello)) << b.equal?(:hello.to_proc)
+          r << En2063.new.getb(&:to_s).equal?(:to_s.to_proc)
+          r << [1, 2].map(&:to_s) << [1, 2].inject(&:+)
+          res << r
+        end
+        [res.uniq.size, res.last]
+        "##,
+        runs = runs()
+    ));
+}

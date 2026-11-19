@@ -99,9 +99,13 @@ class File
     def rdev_major ; (@__rdev || __uninitialized) >> 8 ; end
     def rdev_minor ; (@__rdev || __uninitialized) & 0xff ; end
 
+    # The birth time `statx(2)` reported (`stx_btime`). A file system that
+    # records none raises, as CRuby's `statx_birthtime` does.
     def birthtime
       __uninitialized if @__dev.nil?
-      raise NotImplementedError, "birthtime() function is unimplemented"
+      sec = @__btime_sec
+      raise NotImplementedError, "birthtime is unimplemented on this filesystem" if sec.nil?
+      Time.at(sec, @__btime_nsec, :nanosecond)
     end
 
     def <=>(other)

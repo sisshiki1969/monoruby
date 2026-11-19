@@ -376,6 +376,16 @@ pub struct Globals {
     /// given an instance variable, through one `to_proc` is the same
     /// object the next one returns.
     symbol_procs: HashMap<IdentId, Value>,
+    /// The proc a `&:sym` written in a scope that activated refinements
+    /// becomes (CRuby's `refine_sym_proc_call` lambda), one per symbol and
+    /// refinement set, as CRuby caches it per scope (`cref->refinements`).
+    /// Each sits over a frame of its own — `self` the symbol, as for the
+    /// shared one — so the body can tell it apart by its outer frame
+    /// ([`Globals::refined_symbol_proc_set`]).
+    refined_symbol_procs: HashMap<(IdentId, RefinementSetId), Value>,
+    /// The refinement set of each frame in `refined_symbol_procs`, by the
+    /// frame's address.
+    refined_symbol_frames: HashMap<usize, RefinementSetId>,
     /// The last method a `&:sym` dispatch resolved — a one-entry inline
     /// cache, since that is the shape the dispatch meets: `ary.map(&:to_s)`
     /// asks for the same symbol on the same class for every element, and
@@ -693,6 +703,46 @@ impl Globals {
         self.symbol_procs.insert(symbol, proc);
         proc
     }
+
+    ///
+    /// The block a `&:sym` written in a scope whose refinement set is *set*
+    /// passes (`set` not empty): CRuby's `vm_caller_setup_arg_block` makes
+    /// it at the call site, a lambda that looks *symbol* up with that
+    /// scope's refinements whoever calls it (`refine_sym_proc_call`). One
+    /// per symbol and set, over a frame of its own.
+    ///
+    pub(crate) fn refined_symbol_proc(
+        &mut self,
+        symbol: IdentId,
+        set: RefinementSetId,
+        pc: BytecodePtr,
+    ) -> Value {
+        if let Some(proc) = self.refined_symbol_procs.get(&(symbol, set)) {
+            return *proc;
+        }
+        let meta = self.store[SYMBOL_TO_PROC_BODY_FUNCID].meta();
+        let outer_lfp = Lfp::heap_frame(Value::symbol(symbol), meta);
+        let proc = Proc::from_outer(outer_lfp, SYMBOL_TO_PROC_BODY_FUNCID, pc).into();
+        self.refined_symbol_procs.insert((symbol, set), proc);
+        self.refined_symbol_frames
+            .insert(outer_lfp.as_ptr() as usize, set);
+        proc
+    }
+
+    ///
+    /// The refinement set a `Symbol#to_proc`-bodied proc over *outer* looks
+    /// its method up with: `Some` for one [`Globals::refined_symbol_proc`]
+    /// made, `None` for `Symbol#to_proc`'s own (and for `&:sym` passed
+    /// bare), which calls with `CALL_PUBLIC` semantics instead.
+    ///
+    pub(crate) fn refined_symbol_proc_set(&self, outer: Lfp) -> Option<RefinementSetId> {
+        if self.refined_symbol_frames.is_empty() {
+            return None;
+        }
+        self.refined_symbol_frames
+            .get(&(outer.as_ptr() as usize))
+            .copied()
+    }
 }
 
 impl alloc::GC<RValue> for Globals {
@@ -702,6 +752,9 @@ impl alloc::GC<RValue> for Globals {
             lfp.mark(alloc);
         }
         for proc in self.symbol_procs.values() {
+            proc.mark(alloc);
+        }
+        for proc in self.refined_symbol_procs.values() {
             proc.mark(alloc);
         }
         self.load_path.mark(alloc);
@@ -984,6 +1037,8 @@ impl Globals {
             main_object,
             symbol_proc_frames: HashMap::default(),
             symbol_procs: HashMap::default(),
+            refined_symbol_procs: HashMap::default(),
+            refined_symbol_frames: HashMap::default(),
             symbol_proc_cache: None,
             store: Store::new(),
             gvars: GvarTable::new(),

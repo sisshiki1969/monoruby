@@ -288,6 +288,7 @@ pub(crate) fn init_leaf_builtins(globals: &mut Globals) {
         // `Kernel#class` / `#nil?` and `Object#frozen?`, as an Object
         // finds them.
         (OBJECT_CLASS, false, &["class", "nil?", "frozen?"], Always),
+        (NIL_CLASS, false, &["nil?"], Always),
         (FLOAT_CLASS, false, &["to_s", "abs"], Always),
         (INTEGER_CLASS, false, &["abs"], Always),
         (INTEGER_CLASS, false, &["to_s"], IntArgs),

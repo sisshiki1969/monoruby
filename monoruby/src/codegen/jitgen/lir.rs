@@ -981,6 +981,12 @@ pub(in crate::codegen) enum LInst {
         src: SlotId,
         using_fpr: UsingFpr,
     },
+    BlockCode {
+        src: SlotId,
+        set: RefinementSetId,
+        pc: BytecodePtr,
+        using_fpr: UsingFpr,
+    },
     DeepCopyLit {
         v: Value,
         using_fpr: UsingFpr,

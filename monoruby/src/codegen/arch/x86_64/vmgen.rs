@@ -67,6 +67,17 @@ impl Codegen {
     /// by `cmp_teq_case_values` (funcall semantics) — the handler for
     /// the optimizable TEq opcode, which only case/when emits.
     fn vm_teq_case_opt_rr(&mut self) -> CodePtr {
+        self.vm_teq_case_rr(cmp_teq_case_values as _)
+    }
+
+    /// The handler for the CaseTEq opcode (a `when` value of a `case`
+    /// whose `when` values are all literals): `vm_teq_case_opt_rr` over
+    /// `cmp_teq_dispatch_values`.
+    fn vm_teq_dispatch_rr(&mut self) -> CodePtr {
+        self.vm_teq_case_rr(cmp_teq_dispatch_values as _)
+    }
+
+    fn vm_teq_case_rr(&mut self, func: BinaryOpFn) -> CodePtr {
         let label = self.jit.get_current_address();
         let generic = self.jit.label();
         self.fetch3();
@@ -80,7 +91,7 @@ impl Codegen {
         self.vm_store_r15(GP::Rax);
         self.fetch_and_dispatch();
 
-        self.vm_generic_binop(&generic, cmp_teq_case_values as _);
+        self.vm_generic_binop(&generic, func);
         self.fetch_and_dispatch();
 
         label
@@ -350,6 +361,32 @@ impl Codegen {
         };
         self.fetch_and_dispatch();
 
+        //BcOp::BlockCode
+        // A non-Symbol passes as it is with no call; a Symbol asks
+        // `runtime::vm_block_code`, which answers it unchanged unless this
+        // frame's scope activated refinements. Runs no Ruby, cannot fail.
+        let block_code = self.jit.get_current_address();
+        let store = self.jit.label();
+        self.fetch3();
+        self.vm_get_slot_value(GP::Rdi);
+        monoasm! { &mut self.jit,
+            movq rax, rdi;
+            cmpb rdi, (crate::value::TAG_SYMBOL);
+            jne  store;
+            movq rdx, rdi;
+            movq rdi, rbx;
+            movq rsi, r12;
+            lea  rcx, [r13 - 16];
+            movq rax, (runtime::vm_block_code);
+            call rax;
+        store:
+        };
+        self.vm_get_slot_addr(GP::R15);
+        monoasm! { &mut self.jit,
+            movq [r15], rax;
+        };
+        self.fetch_and_dispatch();
+
         //BcOp::Mov
         let mov = self.jit.get_current_address();
         self.fetch3();
@@ -460,6 +497,7 @@ impl Codegen {
             ge: self.vm_ge_opt_rr(),
             teq: self.vm_teq_opt_rr(),
             teq_case: self.vm_teq_case_opt_rr(),
+            teq_dispatch: self.vm_teq_dispatch_rr(),
             teq_rescue: self.vm_teq_rescue_rr(),
             load_dvar: self.vm_load_dvar(),
             store_dvar: self.vm_store_dvar(),
@@ -480,6 +518,7 @@ impl Codegen {
             alias_method: self.vm_alias_method(),
             hash: self.vm_hash(),
             to_a: toa,
+            block_code,
             mov,
             range_incl: self.vm_range(false),
             range_excl: self.vm_range(true),

@@ -1301,6 +1301,9 @@ pub(crate) struct VmHandlers {
     /// TEq for rescue-clause matching (opcode 157): validates that
     /// the clause is a Class/Module, then dispatches like `teq_case`.
     pub teq_rescue: CodePtr,
+    /// TEq of a `case` whose `when` values are all literals (opcode 158,
+    /// `CaseTEq`): CRuby's `opt_case_dispatch` compare.
+    pub teq_dispatch: CodePtr,
     pub load_dvar: CodePtr,    // 148
     pub store_dvar: CodePtr,   // 149
     pub add: CodePtr,          // 160
@@ -1324,6 +1327,7 @@ pub(crate) struct VmHandlers {
     pub range_incl: CodePtr,   // 179
     pub range_excl: CodePtr,   // 180
     pub concat: CodePtr,       // 181
+    pub block_code: CodePtr,   // 182
 }
 
 impl Codegen {
@@ -1473,6 +1477,7 @@ impl Codegen {
         // rescue matching, whose `===` uses funcall semantics.
         self.dispatch[156] = h.teq_case;
         self.dispatch[157] = h.teq_rescue;
+        self.dispatch[158] = h.teq_dispatch;
 
         self.dispatch[160] = h.add;
         self.dispatch[161] = h.sub;
@@ -1496,6 +1501,7 @@ impl Codegen {
         self.dispatch[179] = h.range_incl;
         self.dispatch[180] = h.range_excl;
         self.dispatch[181] = h.concat;
+        self.dispatch[182] = h.block_code;
     }
 
     pub fn new() -> Self {

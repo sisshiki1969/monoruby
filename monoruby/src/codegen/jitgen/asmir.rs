@@ -1412,6 +1412,24 @@ impl AsmIr {
         });
     }
 
+    /// rax <- the block the `&expr` value in `src` passes from a scope
+    /// whose refinement set is `set` (`runtime::jit_block_code`).
+    pub(super) fn block_code(
+        &mut self,
+        state: &AbstractFrame,
+        src: SlotId,
+        set: RefinementSetId,
+        pc: BytecodePtr,
+    ) {
+        let using_fpr = state.using_fpr_offset();
+        self.push(AsmInst::BlockCode {
+            src,
+            set,
+            pc,
+            using_fpr,
+        });
+    }
+
     pub(super) fn to_a(&mut self, state: &AbstractFrame, src: SlotId) {
         let using_fpr = state.using_fpr_offset();
         self.push(AsmInst::ToA { src, using_fpr });
@@ -3683,6 +3701,13 @@ pub(super) enum AsmInst {
     },
     ToA {
         src: SlotId,
+        using_fpr: UsingFpr,
+    },
+    /// rax <- `runtime::jit_block_code(vm, globals, [src], set, pc)`.
+    BlockCode {
+        src: SlotId,
+        set: RefinementSetId,
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     },
     ConcatStr {

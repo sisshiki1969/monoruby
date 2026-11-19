@@ -91,6 +91,7 @@ impl Codegen {
             | AsmInst::RangeOp { .. }
             | AsmInst::ConcatStr { .. }
             | AsmInst::ToA { .. }
+            | AsmInst::BlockCode { .. }
             | AsmInst::DeepCopyLit(..)
             | AsmInst::FprMove(..)
             | AsmInst::FprSwap(..)
@@ -2043,6 +2044,29 @@ impl Codegen {
     ) -> bool {
         self.to_a(src, using_fpr);
         true
+    }
+
+    /// rax <- `runtime::jit_block_code(vm, globals, [src], set, pc)`: the
+    /// block a `&expr` value passes from a body whose refinements are
+    /// `set`. Runs no Ruby and cannot fail.
+    pub(in crate::codegen::jitgen) fn emit_block_code(
+        &mut self,
+        src: SlotId,
+        set: RefinementSetId,
+        pc: BytecodePtr,
+        using_fpr: UsingFpr,
+    ) {
+        self.fpr_save(using_fpr);
+        monoasm!( &mut self.jit,
+            movq rdi, rbx;
+            movq rsi, r12;
+            movq rdx, [rbp - (jrbp_local(src))];
+            movq rcx, (set.get() as u64);
+            movq r8, (pc.as_ptr() as u64);
+            movq rax, (runtime::jit_block_code);
+            call rax;
+        );
+        self.fpr_restore(using_fpr);
     }
 
     /// rax <- a deep copy of literal `v` (fresh mutable object per evaluation).

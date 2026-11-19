@@ -7,6 +7,16 @@ use super::*;
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("NilClass", NIL_CLASS, None);
     globals.store[NIL_CLASS].clear_alloc_func();
+    // `NilClass` answers `nil?` itself (`rb_true`), ahead of `Kernel#nil?`:
+    // reflection sees `NilClass` as the owner. The same body and inline
+    // generator as Kernel's, which compare the receiver against nil.
+    globals.define_builtin_inline_func(
+        NIL_CLASS,
+        "nil?",
+        super::kernel::nil,
+        inline_gen2!(super::kernel::kernel_nil),
+        0,
+    );
 }
 
 #[cfg(test)]

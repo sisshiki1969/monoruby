@@ -118,6 +118,11 @@ impl Codegen {
         // Funcall-semantics TEq for the optimizable opcode (case/when
         // and rescue matching).
         let teq_case = self.a64_op_cmp(Cond::Eq, cmp_teq_case_values as *const () as u64, VmBop::TEq);
+        let teq_dispatch = self.a64_op_cmp(
+            Cond::Eq,
+            cmp_teq_dispatch_values as *const () as u64,
+            VmBop::TEq,
+        );
         // RescueTEq: no fixnum fast path (a non-Module clause must
         // raise TypeError, so everything goes through the runtime
         // helper).
@@ -199,6 +204,7 @@ impl Codegen {
         let block_arg_proxy = self.a64_op_block_arg_proxy();
 
         let to_a = self.a64_op_to_a();
+        let block_code = self.a64_op_block_code();
 
         // remaining binary operators (ops 164-170): bitor/bitand/bitxor/
         // rem/pow/shl/shr -- no fixnum fast path, straight to the runtime op.
@@ -288,6 +294,7 @@ impl Codegen {
             ge,
             teq,
             teq_case,
+            teq_dispatch,
             teq_rescue,
             load_dvar,
             store_dvar,
@@ -308,6 +315,7 @@ impl Codegen {
             alias_method,
             hash,
             to_a,
+            block_code,
             mov,
             range_incl,
             range_excl,
@@ -477,6 +485,46 @@ impl Codegen {
             blr x9;
         );
         self.a64_checked_store_next(&raise);
+        p
+    }
+
+    /// op 182 `BlockCode`: dst `[pc+4]` <- the block the `&expr` value in
+    /// src `[pc+2]` passes. A non-Symbol passes as it is with no call; a
+    /// Symbol asks `runtime::vm_block_code`, which answers it unchanged
+    /// unless this frame's scope activated refinements. Runs no Ruby and
+    /// cannot fail. (x86 `BcOp::BlockCode`.)
+    pub(in crate::codegen) fn a64_op_block_code(&mut self) -> CodePtr {
+        let p = self.jit.get_current_address();
+        let call = self.jit.label();
+        let store = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            ldrh x10, [x(PC.0), #(2)];  // src slot
+        );
+        self.a64_slot_value(X10); // X10 = slot[src]
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x10;
+            mov x9, (0xff);
+            and x9, x10, x9;
+            cmp x9, #(crate::value::TAG_SYMBOL as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &call);
+        monoasm_arm64!(&mut self.jit,
+            b store;
+            call:
+            mov x0, x(EXEC.0);
+            mov x1, x(GLOBALS.0);
+            mov x2, x10;
+            mov x3, x(PC.0);
+            mov x9, (runtime::vm_block_code as *const () as u64);
+            blr x9;
+            store:
+            ldrh x11, [x(PC.0), #(4)];  // dst slot
+            neg x11, x11;
+            add x12, x(LFP.0), x11, lsl #(3);
+            stur x0, [x12, #(-(LFP_SELF as i32))];
+            add x(PC.0), x(PC.0), #(16);
+        );
+        self.a64_fetch_and_dispatch();
         p
     }
 
