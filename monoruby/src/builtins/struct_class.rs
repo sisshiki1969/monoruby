@@ -223,20 +223,28 @@ fn struct_initialize(
     // Struct default. Inheriting from `Struct` keeps the user-overrideable
     // method-lookup chain intact.
 
-    let members = ArrayInner::from_iter(args.iter().cloned());
-
-    // Reject duplicate member names (matches CRuby's
-    // `rb_struct_define_without_accessor`).
-    let mut seen: Vec<IdentId> = Vec::with_capacity(members.len());
-    for arg in members.iter() {
-        let name = arg.expect_symbol_or_to_str(vm, globals)?;
+    // `rb_struct_s_def`: every member is made a Symbol (`rb_to_symbol`,
+    // so a String is interned as `String#to_sym` interns it), and one
+    // that is a setter's name, or a duplicate, is refused before any
+    // accessor is defined.
+    let mut seen: Vec<IdentId> = Vec::with_capacity(args.len());
+    for arg in args.iter() {
+        let name = struct_member_symbol(vm, globals, *arg)?;
+        if is_attrset_name(&name.get_ident_name_clone()) {
+            return Err(MonorubyErr::argumenterr(format!(
+                "invalid struct member: {}",
+                name.get_name()
+            )));
+        }
         if seen.contains(&name) {
             return Err(MonorubyErr::argumenterr(format!(
-                "duplicate member: {name:?}"
+                "duplicate member: {}",
+                name.get_name()
             )));
         }
         seen.push(name);
     }
+    let members = ArrayInner::from_iter(seen.iter().map(|id| Value::symbol(*id)));
 
     // Slot-based readers/writers: each member name gets a dedicated
     // `FuncKind::StructReader { slot_index }` / `StructWriter`, baking
@@ -249,13 +257,12 @@ fn struct_initialize(
     // (e.g. `def self.method_added`) see the same `[:x, :x=, :y, :y=]`
     // sequence that `attr_reader`/`attr_writer` would have produced.
     let inline = members.len() <= crate::value::STRUCT_INLINE_SLOTS;
-    for (i, arg) in members.iter().enumerate() {
-        let name = arg.expect_symbol_or_to_str(vm, globals)?;
+    for (i, name) in seen.iter().copied().enumerate() {
         let slot = i as u16;
         globals.define_struct_reader(class_id, name, slot, inline, Visibility::Public);
         vm.invoke_method_added(globals, class_id, name, None)?;
-        let writer_name =
-            globals.define_struct_writer(class_id, name, slot, inline, Visibility::Public);
+        let writer_name = struct_attrset_id(globals, name)?;
+        globals.define_struct_writer(class_id, writer_name, slot, inline, Visibility::Public);
         vm.invoke_method_added(globals, class_id, writer_name, None)?;
     }
 
@@ -267,6 +274,91 @@ fn struct_initialize(
         vm.module_eval(globals, new_module, bh)?;
     };
     Ok(Value::nil())
+}
+
+/// `rb_to_symbol` of a member name: a Symbol; a String, or what
+/// `to_str` answers, interned as `String#to_sym` interns it; and a
+/// TypeError for anything else.
+fn struct_member_symbol(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<IdentId> {
+    if let Some(sym) = arg.try_symbol() {
+        return Ok(sym);
+    }
+    let s = if arg.is_rstring().is_some() {
+        arg
+    } else {
+        match arg.check_string_type(vm, globals)? {
+            Some(s) => s,
+            None => return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, arg)),
+        }
+    };
+    super::string::intern_string(&globals.store, s.as_rstring_inner())
+}
+
+/// `rb_is_attrset_sym`: a setter's name — `=` after the name of a local
+/// or constant (a method name ending in `?` or `!` included), or of an
+/// instance, class or global variable.
+fn is_attrset_name(name: &IdentName) -> bool {
+    let Some(prefix) = name.as_str().and_then(|s| s.strip_suffix('=')) else {
+        return false;
+    };
+    let starts_like_operator = prefix
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_punctuation() && !matches!(c, '@' | '$' | '_'));
+    !prefix.is_empty()
+        && !prefix.ends_with('=')
+        && !starts_like_operator
+        && crate::value::is_simple_symbol(&IdentName::Utf8(prefix.to_string()))
+}
+
+/// `rb_id_attrset`: the name of the setter of *member*. An operator has
+/// none — the empty name, a single ASCII punctuation character other
+/// than `_`, and the operator tokens — except `[]` and `[]=`, whose
+/// setter is `[]=`. Any other name gets `=` appended, which is refused
+/// as a name when its bytes are broken (a US-ASCII member with 8-bit
+/// bytes).
+fn struct_attrset_id(globals: &Globals, member: IdentId) -> Result<IdentId> {
+    let name = super::symbol::symbol_string_inner(member);
+    let bytes = name.as_bytes();
+    let operator = match bytes {
+        b"[]" | b"[]=" => return Ok(IdentId::get_id("[]=")),
+        [] => true,
+        [c] => c.is_ascii_punctuation() && *c != b'_',
+        _ => matches!(
+            bytes,
+            b".."
+                | b"..."
+                | b"+@"
+                | b"-@"
+                | b"**"
+                | b"<=>"
+                | b"=="
+                | b"==="
+                | b"!="
+                | b">="
+                | b"<="
+                | b"&&"
+                | b"||"
+                | b"=~"
+                | b"!~"
+                | b"<<"
+                | b">>"
+                | b"&."
+                | b"::"
+        ),
+    };
+    if operator {
+        return Err(MonorubyErr::new(
+            MonorubyErrKind::Name(Some(member), None),
+            format!("cannot make operator ID :{} attrset", member.get_name()),
+        ));
+    }
+    let mut setter = bytes.to_vec();
+    setter.push(b'=');
+    super::string::intern_name_string(
+        &globals.store,
+        &RStringInner::from_encoding(&setter, name.encoding()),
+    )
 }
 
 #[monoruby_builtin]

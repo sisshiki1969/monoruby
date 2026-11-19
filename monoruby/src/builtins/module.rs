@@ -711,6 +711,37 @@ fn autoload(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
     autoload_on(vm, globals, lfp.self_val(), lfp.arg(0), lfp.arg(1), pc)
 }
 
+/// `rb_str_quote_unprintable`: *s* as it is when it is printable and
+/// in the result encoding (`default_internal`, else `default_external`)
+/// or ASCII only, and escaped (`rb_str_escape`) otherwise — how CRuby's
+/// `QUOTE_ID` shows a name in a message. Answered as UTF-8 text: a name
+/// kept as it is in another encoding is valid UTF-8 or ASCII here only
+/// when that encoding is UTF-8, so anything else is escaped.
+pub(crate) fn quote_unprintable(store: &Store, s: &RStringInner) -> String {
+    let enc = s.encoding();
+    let resenc = if store.inspect_escape() {
+        store.inspect_escape_encoding()
+    } else {
+        crate::value::Encoding::UTF8
+    };
+    let bytes = s.as_bytes();
+    let printable = match std::str::from_utf8(bytes) {
+        Ok(text) if bytes.is_ascii() => text.bytes().all(|b| (0x20..0x7f).contains(&b)),
+        Ok(text) => {
+            matches!(enc, crate::value::Encoding::Utf8(_))
+                && enc == resenc
+                && text.chars().all(|c| !c.is_control())
+        }
+        Err(_) => false,
+    };
+    if printable {
+        // SAFETY: checked to be UTF-8 above.
+        unsafe { std::str::from_utf8_unchecked(bytes) }.to_string()
+    } else {
+        crate::builtins::encoding::str_escape(s)
+    }
+}
+
 /// Shared body of `Module#autoload` and `Kernel#autoload` (the latter
 /// passes its caller's cbase as *target*).
 pub(super) fn autoload_on(
@@ -721,20 +752,36 @@ pub(super) fn autoload_on(
     feature_arg: Value,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    let const_name = name_arg.expect_symbol_or_to_str(vm, globals)?;
+    // `rb_to_id`: a String is interned as `String#to_sym` interns it, so
+    // a US-ASCII name with 8-bit bytes is a Symbol, not an EncodingError.
+    let const_name = match name_arg.try_symbol() {
+        Some(sym) => sym,
+        None => {
+            let s = if name_arg.is_rstring().is_some() {
+                name_arg
+            } else {
+                match name_arg.check_string_type(vm, globals)? {
+                    Some(s) => s,
+                    None => {
+                        return Err(MonorubyErr::is_not_symbol_nor_string(
+                            &globals.store,
+                            name_arg,
+                        ));
+                    }
+                }
+            };
+            crate::builtins::string::intern_string(&globals.store, s.as_rstring_inner())?
+        }
+    };
     {
-        // `rb_autoload_str`'s own complaint, with no name / receiver.
-        let ident = const_name.get_ident_name_clone();
-        let enc = const_name
-            .symbol_encoding()
-            .unwrap_or(crate::value::Encoding::UTF8);
-        if !is_const_name_bytes(ident.as_bytes(), enc) {
-            return Err(MonorubyErr::nameerr_with_bytes(
-                "autoload must be constant name: ",
-                ident.as_bytes(),
-                enc,
-                "",
-            ));
+        // `rb_autoload_str`'s own complaint, with no name / receiver:
+        // the name `QUOTE_ID`'d.
+        let name = crate::builtins::symbol::symbol_string_inner(const_name);
+        if !is_const_name_bytes(name.as_bytes(), name.encoding()) {
+            let shown = quote_unprintable(&globals.store, &name);
+            return Err(MonorubyErr::nameerr(format!(
+                "autoload must be constant name: {shown}"
+            )));
         }
     }
     let feature = feature_arg.coerce_to_path_rstring(vm, globals)?;
@@ -1220,11 +1267,17 @@ fn const_missing(
             Some(self_val),
         ));
     }
+    // The String is formatted into the message as its own bytes, in its
+    // own encoding (`const_get` with an EUC-JP name no Symbol exists for).
     let shown = vm.obj_as_string(globals, name)?;
-    let shown = String::from_utf8_lossy(shown.as_rstring_inner().as_bytes()).into_owned();
-    Err(crate::builtins::kernel::name_error_reflection(
+    let shown = shown.as_rstring_inner();
+    let (bytes, enc) = (shown.as_bytes().to_vec(), shown.encoding());
+    Err(crate::builtins::kernel::name_error_reflection_bytes(
         globals,
-        format!("uninitialized constant {prefix}{shown}"),
+        &format!("uninitialized constant {prefix}"),
+        &bytes,
+        enc,
+        "",
         name,
         self_val,
     ))
@@ -1243,43 +1296,142 @@ fn const_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     lookup_constant_path(vm, globals, module, lfp.arg(0), inherit)
 }
 
-/// True if `name` is a syntactically valid constant identifier — first
-/// character is uppercase ASCII, the rest are word characters (`\w`).
-/// Used by `const_defined?` / `const_get` / `const_set` to raise a
-/// NameError for `"name"`, `"_X"`, `"@X"`, etc., matching CRuby's
-/// `rb_check_id_without_pindown` validation.
-fn is_valid_const_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    let first = match chars.next() {
-        Some(c) => c,
-        None => return false,
-    };
-    // The first character must be uppercase — Unicode-aware, so non-ASCII
-    // uppercase letters (e.g. Greek `Ἅ`) are valid constant-name starts,
-    // matching CRuby's `rb_enc_isupper`.
-    if !first.is_uppercase() {
-        return false;
-    }
-    chars.all(|c| c.is_alphanumeric() || c == '_')
-}
-
-/// `rb_is_const_name` of a String's bytes: [`is_valid_const_name`] for
-/// text, and for a name that is not UTF-8 the bytewise reading CRuby's
-/// `rb_enc_*` predicates give — an uppercase ASCII letter first, every
-/// byte of a multibyte character (>= 0x80) a name character. Nothing in
-/// an encoding that is not ASCII-compatible is a name.
+/// `rb_is_const_name` of a name's bytes in *enc*: a character that
+/// starts a constant name ([`is_const_start`]), then name characters
+/// ([`ident_chars_from`]). Nothing in an encoding that is not
+/// ASCII-compatible is a name.
 pub(crate) fn is_const_name_bytes(bytes: &[u8], enc: crate::value::Encoding) -> bool {
     if !enc.is_ascii_compatible() || enc.is_cruby_dummy() {
         return false;
     }
-    match std::str::from_utf8(bytes) {
-        Ok(s) => is_valid_const_name(s),
-        Err(_) => {
-            matches!(bytes.first(), Some(c) if c.is_ascii_uppercase())
-                && bytes[1..]
-                    .iter()
-                    .all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c >= 0x80)
+    !bytes.is_empty() && is_const_start(bytes, enc) && ident_chars_from(bytes, enc, 0)
+}
+
+/// `is_identchar` over the characters of *bytes* from *start*: an ASCII
+/// letter, digit or `_`, or any character that is not ASCII — a byte
+/// that starts no character of *enc* included, which CRuby steps over
+/// as one (`rb_enc_mbclen`), so a US-ASCII `"A\xE9b"` is a constant
+/// name.
+pub(crate) fn ident_chars_from(bytes: &[u8], enc: crate::value::Encoding, start: usize) -> bool {
+    use crate::value::rvalue::PreciseLen;
+    let mut pos = start;
+    while pos < bytes.len() {
+        let b = bytes[pos];
+        if b.is_ascii() {
+            if !(b.is_ascii_alphanumeric() || b == b'_') {
+                return false;
+            }
+            pos += 1;
+            continue;
         }
+        match crate::value::rvalue::precise_mbclen(enc, bytes, pos) {
+            PreciseLen::Char(len) => pos += len,
+            _ => pos += 1,
+        }
+    }
+    true
+}
+
+/// `rb_sym_constant_char_p`: whether the character *bytes* start with
+/// starts a constant name in *enc*. An ASCII one is an uppercase letter;
+/// any other is one the encoding calls uppercase (or titlecase), or —
+/// in an encoding that is not Unicode — one its case folding changes.
+///
+/// Those tables are Onigmo's, per encoding. What they answer was asked
+/// of CRuby 4.0.9 character by character: in a Unicode encoding the
+/// Unicode properties; in the single-byte encodings with case tables
+/// the bytes in [`single_byte_const_starts`]; in the EUC-JP and
+/// Shift_JIS families the full-width Latin, Greek and Cyrillic capital
+/// letters (the only letters with a case mapping there); and in every
+/// other encoding (the Chinese and Korean sets, BINARY, the code pages
+/// without case tables) no character that is not ASCII.
+pub(crate) fn is_const_start(bytes: &[u8], enc: crate::value::Encoding) -> bool {
+    let Some(&first) = bytes.first() else {
+        return false;
+    };
+    if first.is_ascii() {
+        return first.is_ascii_uppercase();
+    }
+    is_const_start_nonascii(bytes, enc)
+}
+
+#[cold]
+fn is_const_start_nonascii(bytes: &[u8], enc: crate::value::Encoding) -> bool {
+    use crate::value::Encoding as E;
+    let first = bytes[0];
+    let two = bytes
+        .get(1)
+        .map(|second| u16::from_be_bytes([first, *second]));
+    match enc {
+        // CESU-8 stores the Basic Multilingual Plane as UTF-8 does.
+        E::Utf8(_) => unicode_const_start(bytes),
+        _ if enc.name() == "CESU-8" => unicode_const_start(bytes),
+        E::EucJp(_) => {
+            two.is_some_and(|c| matches!(c, 0xA3C1..=0xA3DA | 0xA6A1..=0xA6B8 | 0xA7A1..=0xA7C1))
+        }
+        E::Sjis(_) => {
+            two.is_some_and(|c| matches!(c, 0x8260..=0x8279 | 0x839F..=0x83B6 | 0x8440..=0x8460))
+        }
+        _ => single_byte_const_starts(enc.name()) >> (first - 0x80) & 1 != 0,
+    }
+}
+
+/// The first character of a UTF-8 name: uppercase or titlecase.
+fn unicode_const_start(bytes: &[u8]) -> bool {
+    let len = bytes.len().min(4);
+    let c = match std::str::from_utf8(&bytes[..len]) {
+        Ok(s) => s.chars().next(),
+        Err(e) => std::str::from_utf8(&bytes[..e.valid_up_to()])
+            .ok()
+            .and_then(|s| s.chars().next()),
+    };
+    c.is_some_and(|c| {
+        c.is_uppercase()
+            // General category Lt: the titlecase digraphs and the Greek
+            // letters with a prosgegrammeni.
+            || matches!(
+                c,
+                '\u{01C5}'
+                    | '\u{01C8}'
+                    | '\u{01CB}'
+                    | '\u{01F2}'
+                    | '\u{1F88}'..='\u{1F8F}'
+                    | '\u{1F98}'..='\u{1F9F}'
+                    | '\u{1FA8}'..='\u{1FAF}'
+                    | '\u{1FBC}'
+                    | '\u{1FCC}'
+                    | '\u{1FFC}'
+            )
+    })
+}
+
+/// The bytes 0x80..=0xFF that start a constant name in a single-byte
+/// encoding, bit `b - 0x80` set for byte `b` — as CRuby 4.0.9 answers
+/// `const_defined?("<b>x")`. Some rows carry the quirks of Onigmo's
+/// ctype tables (Windows-1252 0xAF, Windows-1250 0xD7).
+fn single_byte_const_starts(name: &str) -> u128 {
+    match name {
+        "ISO-8859-1" => 0x000000007f7fffff0000000000000000,
+        "ISO-8859-10" => 0x000000007fffffff0000df7e00000000,
+        "ISO-8859-13" => 0x000000007f7fffff0000850000000000,
+        "ISO-8859-14" => 0x000000007fffffff2895955200000000,
+        "ISO-8859-15" => 0x000000007f7fffff5010004000000000,
+        "ISO-8859-16" => 0x000000007fffffff5014945a00000000,
+        "ISO-8859-2" => 0x000000007f7fffff0000de6a00000000,
+        "ISO-8859-3" => 0x000000007f7efff700009e4200000000,
+        "ISO-8859-4" => 0x000000007f7fffff20005e6a00000000,
+        "ISO-8859-5" => 0x000000000000ffffffffdffe00000000,
+        "ISO-8859-7" => 0x000000000ffbfffed740000000000000,
+        "ISO-8859-9" => 0x000000007f7fffff0000000000000000,
+        "KOI8-R" => 0xffffffff000000000008000000000000,
+        "KOI8-U" => 0xffffffff0000000020d8000000000000,
+        "Windows-1250" => 0x000000007fffffff100084280000f400,
+        "Windows-1251" => 0x00000000ffffffff2004852a0000f403,
+        "Windows-1252" => 0x000000007fffffff0000800080005400,
+        "Windows-1253" => 0x000000000ffbfffed740000400000000,
+        "Windows-1254" => 0x000000007f7fffff0000000080001400,
+        "Windows-1257" => 0x000000007f7fffff0000850000000000,
+        _ => 0,
     }
 }
 
@@ -2916,6 +3068,15 @@ fn tos(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         // `get_class_name` answers the `#<Class:0x…>` rendering
         // instead — which CRuby builds with `rb_sprintf`, not with the
         // name builder, and tags accordingly (#1494).
+        if let Some((bytes, enc)) = globals.store.get_class_path_raw(module.id())
+            && globals.store.get_class_name(module.id())
+                == globals.store.get_class_path(module.id())
+        {
+            // A name that is not UTF-8 text, as `Module#name` gives it.
+            return Ok(Value::string_from_inner(RStringInner::from_encoding(
+                &bytes, enc,
+            )));
+        }
         let class_name = globals.store.get_class_name(module.id());
         Ok(Value::string_name_or_repr(class_name))
     } else {
@@ -2987,8 +3148,12 @@ pub(crate) fn class_name_value(globals: &mut Globals, class_id: ClassId) -> Opti
     if let Some(cached) = globals.store[class_id].cached_name_value() {
         return Some(cached);
     }
-    let class_name = globals.store.get_class_path(class_id);
-    let mut val = Value::string_usascii(class_name);
+    let mut val = match globals.store.get_class_path_raw(class_id) {
+        // A name that is not UTF-8 text is its own bytes (`Struct::\xC9`
+        // in ISO-8859-1).
+        Some((bytes, enc)) => Value::string_from_inner(RStringInner::from_encoding(&bytes, enc)),
+        None => Value::string_usascii(globals.store.get_class_path(class_id)),
+    };
     // The class path is an fstring (`rb_fstring` in `build_const_path`).
     val.set_fstring();
     globals.store[class_id].set_cached_name_value(val);

@@ -4056,6 +4056,37 @@ pub(crate) fn dummy_wide_source(
     }
 }
 
+/// An error converting from what a dummy `UTF-16` / `UTF-32` source's
+/// BOM selected (*wide*), told as CRuby tells it: about the dummy
+/// encoding itself (`incomplete "\x00" on UTF-16`, `#source_encoding_name`
+/// `"UTF-16"`, `in conversion from UTF-16 to UTF-8 …`).
+pub(crate) fn error_on_dummy_wide(
+    mut err: MonorubyErr,
+    wide: crate::value::Encoding,
+    dummy: crate::value::Encoding,
+) -> MonorubyErr {
+    let (from, to) = (wide.name(), dummy.name());
+    let on = format!(" on {from}");
+    if let Some(head) = err.message.strip_suffix(on.as_str()) {
+        err.message = format!("{head} on {to}");
+    }
+    err.message = err
+        .message
+        .replace(&format!("from {from} to "), &format!("from {to} to "));
+    if let Some((detail, _)) = &mut err.payload
+        && let Some(fields) = detail.try_array_ty()
+        && fields
+            .first()
+            .and_then(|v| v.is_str())
+            .is_some_and(|name| name == from)
+    {
+        let mut fields: Vec<Value> = fields.iter().copied().collect();
+        fields[0] = Value::string_from_str(to);
+        *detail = Value::array_from_vec(fields);
+    }
+    err
+}
+
 /// The endianness-less dummy `UTF-16` / `UTF-32` as an encode target:
 /// returns the big-endian concrete encoding CRuby writes after a BOM.
 pub(crate) fn dummy_wide_target(enc: crate::value::Encoding) -> Option<crate::value::Encoding> {

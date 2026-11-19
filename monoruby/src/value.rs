@@ -2533,7 +2533,7 @@ fn is_label_symbol(s: &str) -> bool {
 }
 
 /// Test whether a symbol name can be rendered without surrounding quotes.
-fn is_simple_symbol(name: &IdentName) -> bool {
+pub(crate) fn is_simple_symbol(name: &IdentName) -> bool {
     let s = match name.as_str() {
         Some(s) => s,
         None => return false,
@@ -2836,19 +2836,20 @@ impl Value {
         if let Some(sym) = self.try_symbol() {
             return Some(sym);
         }
-        if let Some(s) = self.is_str() {
-            return Some(IdentId::get_id(s));
-        }
-        // A String names an identifier by its bytes. `is_str` only
-        // accepts valid UTF-8, so an EUC-JP constant name would fall
-        // through here and be reported as un-nameable; intern the raw
-        // bytes under their encoding instead, exactly as a Symbol
-        // built from the same String would be.
+        // A String names an identifier by its bytes, under its encoding
+        // as `String#to_sym` interns them: ASCII in an ASCII-compatible
+        // encoding and UTF-8 text are the plain names, and anything else
+        // — an EUC-JP constant name, a UTF-16 method name, whose bytes
+        // may well be valid UTF-8 (`"A".encode("UTF-16LE")`) — keeps
+        // its encoding.
         let inner = self.is_rstring_inner()?;
-        Some(IdentId::get_id_from_bytes(
-            inner.as_bytes().to_vec(),
-            inner.encoding(),
-        ))
+        let (bytes, enc) = (inner.as_bytes(), inner.encoding());
+        if (bytes.is_ascii() && enc.is_ascii_compatible()) || enc == crate::value::Encoding::UTF8 {
+            if let Ok(s) = std::str::from_utf8(bytes) {
+                return Some(IdentId::get_id(s));
+            }
+        }
+        Some(IdentId::get_id_from_bytes(bytes.to_vec(), enc))
     }
 
     ///
@@ -2861,14 +2862,15 @@ impl Value {
         if let Some(sym) = self.try_symbol() {
             return Some(Some(sym));
         }
-        if let Some(s) = self.is_str() {
-            return Some(IdentId::try_get_id(s));
-        }
+        // The same reading of a String as `try_symbol_or_string`'s.
         let inner = self.is_rstring_inner()?;
-        Some(IdentId::try_get_id_from_bytes(
-            inner.as_bytes(),
-            inner.encoding(),
-        ))
+        let (bytes, enc) = (inner.as_bytes(), inner.encoding());
+        if (bytes.is_ascii() && enc.is_ascii_compatible()) || enc == crate::value::Encoding::UTF8 {
+            if let Ok(s) = std::str::from_utf8(bytes) {
+                return Some(IdentId::try_get_id(s));
+            }
+        }
+        Some(IdentId::try_get_id_from_bytes(bytes, enc))
     }
 
     ///

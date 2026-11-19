@@ -1491,6 +1491,22 @@ impl Store {
         }
     }
 
+    /// [`Self::get_class_path`] as bytes, when a name on the path is not
+    /// UTF-8 text; `None` otherwise (and for an anonymous class or one
+    /// with a temporary name).
+    pub(crate) fn get_class_path_raw(
+        &self,
+        class: ClassId,
+    ) -> Option<(Vec<u8>, crate::value::Encoding)> {
+        if self.classes[class].get_name().is_none()
+            || self.classes.is_name_erased(class)
+            || self.classes[class].is_name_explicit_temporary()
+        {
+            return None;
+        }
+        self.classes.get_class_path_raw(class)
+    }
+
     /// The name of *ClassId* as `Module#name` gives it (`rb_class_path`):
     /// [`Self::get_class_name`] without the refinement form.
     pub(crate) fn get_class_path(&self, class: ClassId) -> String {

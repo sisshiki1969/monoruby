@@ -6275,7 +6275,8 @@ pub(crate) fn transcode_bytes_with_opts(
         let Some((wide, rest)) = dummy_wide_source(src_enc, src_bytes) else {
             return Err(invalid_byte_sequence(store, src_enc, dst_enc, src_bytes));
         };
-        return transcode_bytes_with_opts(rest, wide, dst_enc, opts, store);
+        return transcode_bytes_with_opts(rest, wide, dst_enc, opts, store)
+            .map_err(|err| transcode::error_on_dummy_wide(err, wide, src_enc));
     }
     // EUC-JP ↔ Shift_JIS needs no pivot: CRuby maps the shared JIS
     // X 0208 plane cell to cell, which reaches the cells its own

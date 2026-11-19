@@ -236,12 +236,29 @@ impl MonorubyErr {
         message.clear();
         let _ = message.write_fmt(before);
         let start = message.len();
-        let _ = write!(message, "{name}");
+        // A name that is not UTF-8 text (`:"A\xE9b"` in BINARY, EUC-JP
+        // bytes) is formatted into CRuby's message as its own bytes, in
+        // its own encoding: `message` keeps the lossy rendering for the
+        // Rust side and `raw_message` the exact bytes.
+        let raw_name = name.with_ident_name(|ident, enc| match ident {
+            crate::IdentName::Utf8(s) => {
+                message.push_str(s);
+                None
+            }
+            crate::IdentName::Bytes(b) => {
+                message.push_str(&String::from_utf8_lossy(b));
+                Some((b.clone(), enc.unwrap_or(crate::value::Encoding::Ascii8)))
+            }
+        });
         let len = message.len() - start;
         let _ = message.write_fmt(after);
+        self.raw_message = raw_name.map(|(name_bytes, enc)| {
+            let tail = &message.as_bytes()[start + len..];
+            let raw = [&message.as_bytes()[..start], &name_bytes, tail].concat();
+            (raw, enc)
+        });
         self.message = message;
         self.default_message_class = None;
-        self.raw_message = None;
         self.name_span = Some((start as u32, len as u32));
         self.class_span = None;
     }
@@ -1132,12 +1149,14 @@ impl MonorubyErr {
             None => ("class", module),
         };
         let class_name = store.nameerr_class_name(shown.id());
-        let mut err = Self::nameerr_with_name_receiver(
-            format!("undefined method '{name}' for {kind} '{class_name}'"),
+        let mut err = Self::nameerr_with_name_receiver(String::new(), name, shown.as_val());
+        // A name that is not UTF-8 text is shown as its own bytes.
+        err.set_msg_showing(
+            format_args!("undefined method '"),
             name,
-            shown.as_val(),
-        )
-        .showing_class(class_name.len(), 1);
+            format_args!("' for {kind} '{class_name}'"),
+        );
+        let mut err = err.showing_class(class_name.len(), 1);
         err.payload = Some((
             Value::string_from_inner(crate::builtins::symbol::symbol_string_inner(name)),
             NAME_PAYLOAD,

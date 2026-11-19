@@ -221,6 +221,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_private_builtin_func(kernel_class, "__array_capa_check", array_capa_check, 1);
     globals.define_private_builtin_func(kernel_class, "__check_ary", kernel_check_ary, 1);
     globals.define_private_builtin_func(kernel_class, "__check_str", kernel_check_str, 1);
+    globals.define_private_builtin_func(kernel_class, "__name_to_sym", kernel_name_to_sym, 1);
     globals.define_private_builtin_func(kernel_class, "__check_int", kernel_check_int, 1);
     globals.define_private_builtin_func(kernel_class, "__to_hash", kernel_to_hash, 1);
     globals.define_private_builtin_func(kernel_class, "__tally_up", super::hash::tally_up, 2);
@@ -5898,6 +5899,29 @@ fn kernel_check_str(
         .arg(0)
         .check_string_type(vm, globals)?
         .unwrap_or(Value::nil()))
+}
+
+/// `Kernel#__name_to_sym(name)`: the Symbol a Symbol or String names as
+/// `rb_check_id` reads it — a String whose bytes are broken in its
+/// encoding is refused (`EncodingError: invalid symbol in encoding …`),
+/// a US-ASCII one with 8-bit bytes included, where `String#to_sym`
+/// would intern it.
+#[monoruby_builtin]
+fn kernel_name_to_sym(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let name = lfp.arg(0);
+    if name.try_symbol().is_some() {
+        return Ok(name);
+    }
+    let id = match name.is_rstring_inner() {
+        Some(inner) => super::string::intern_name_string(&globals.store, inner)?,
+        None => return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, name)),
+    };
+    Ok(Value::symbol(id))
 }
 
 /// `Kernel#__check_int(val)`: CRuby's `rb_check_to_int` — the Integer
