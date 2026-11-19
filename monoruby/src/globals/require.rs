@@ -226,10 +226,7 @@ impl Globals {
             // request: `require_relative "../x"` joins its caller's dir
             // and CRuby reports (and stores in `LoadError#path`) the
             // collapsed form.
-            return Err(MonorubyErr::cant_load(
-                None,
-                &lexically_normalize(file_name),
-            ));
+            return Err(MonorubyErr::cant_load(&lexically_normalize(file_name)));
         }
 
         // Relative path (starts with ./ or ../): resolve from CWD.
@@ -255,7 +252,7 @@ impl Globals {
             if self.is_feature_loaded(file_name) {
                 return Ok(RequireLoad::AlreadyLoaded(file_name.into()));
             }
-            return Err(MonorubyErr::cant_load(None, file_name));
+            return Err(MonorubyErr::cant_load(file_name));
         }
 
         // Bare path: check $LOADED_FEATURES, then search $LOAD_PATH.
@@ -342,7 +339,7 @@ impl Globals {
                 return Ok(RequireLoad::AlreadyLoaded(file_name.into()));
             }
         }
-        Err(MonorubyErr::cant_load(None, file_name))
+        Err(MonorubyErr::cant_load(file_name))
     }
 
     /// `$LOAD_PATH` as strings: String entries verbatim, non-String
@@ -810,7 +807,7 @@ pub(crate) fn lexically_normalize(path: &std::path::Path) -> std::path::PathBuf 
 }
 
 pub fn load_file(path: &std::path::Path) -> Result<(Vec<u8>, std::path::PathBuf)> {
-    read_source_file(path).map_err(|err| MonorubyErr::cant_load(Some(err), path))
+    read_source_file(path).map_err(|_| MonorubyErr::cant_load(path))
 }
 
 ///

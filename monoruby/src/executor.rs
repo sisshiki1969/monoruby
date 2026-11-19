@@ -429,6 +429,11 @@ pub struct Executor {
     /// keeps answering the path for them and a later reference loads
     /// the file again. See `Executor::require`.
     autoload_require: bool,
+    /// The encoding of the feature String the `require` / `load` about
+    /// to run was given, which the loaded file's path String takes in
+    /// CRuby and its backtrace lines with it (#2090). Set by the
+    /// builtins, consumed by the next `require` / `load`.
+    pub(crate) feature_encoding: Option<crate::value::Encoding>,
     /// Stack of definition sites (source, `Loc`) for the
     /// `method_added` / `singleton_method_added` / `const_added` hooks
     /// currently running.
@@ -587,6 +592,7 @@ impl std::default::Default for Executor {
             break_barriers: Vec::new(),
             pending_const_loc: None,
             autoload_require: false,
+            feature_encoding: None,
             hook_sites: Vec::new(),
             temp_stack: vec![],
             method_missing_style: MethodMissingStyle::Plain,
@@ -1471,6 +1477,7 @@ impl Executor {
         // Consumed here, not at the dispatch site: the file's own
         // `require`s run after this point and are direct ones.
         let from_autoload = std::mem::take(&mut self.autoload_require);
+        let feature_encoding = self.feature_encoding.take();
         let (file_body, canonicalized_path) = loop {
             let found = match globals.require_lib(self, file_name, is_relative) {
                 // Not on `$LOAD_PATH` nor in a host gem: an installed gem
@@ -1596,7 +1603,13 @@ impl Executor {
                     AutoloadState::Loading { owner: loader },
                 );
             }
-            let res = self.load_impl(globals, file_body, &canonicalized_path, None);
+            let res = self.load_impl(
+                globals,
+                file_body,
+                &canonicalized_path,
+                None,
+                feature_encoding,
+            );
             // The lock only needs to cover the body: waiters woken from
             // here on see either the registered feature (success) or a
             // retriable miss (failure removed it just below).
@@ -1957,17 +1970,23 @@ impl Executor {
         file_name: &std::path::Path,
         wrap: Option<Module>,
     ) -> Result<()> {
+        let feature_encoding = self.feature_encoding.take();
         let (file_body, path) = globals.find_for_load(self, file_name)?;
-        self.load_impl(globals, file_body, &path, wrap)?;
+        self.load_impl(globals, file_body, &path, wrap, feature_encoding)?;
         Ok(())
     }
 
+    ///
+    /// Run the file at *path*, whose path String is in *path_encoding*
+    /// (the feature's; UTF-8 when no feature String named it).
+    ///
     fn load_impl(
         &mut self,
         globals: &mut Globals,
         file_body: Vec<u8>,
         path: &std::path::Path,
         wrap: Option<Module>,
+        path_encoding: Option<crate::value::Encoding>,
     ) -> Result<()> {
         let _level = self.inc_require_level();
 
@@ -1985,7 +2004,12 @@ impl Executor {
         }
         self.loading_paths.push(path.to_path_buf());
         let saved_wrapper = std::mem::replace(&mut self.top_wrapper, wrap);
+        crate::parser::set_loading_file(Some((
+            path.to_path_buf(),
+            path_encoding.unwrap_or(crate::value::Encoding::UTF8),
+        )));
         let res = self.exec_script_with_wrap(globals, file_body, path, wrap);
+        crate::parser::set_loading_file(None);
         self.top_wrapper = saved_wrapper;
         self.loading_paths.pop();
         self.exit_class_context();

@@ -421,6 +421,7 @@ fn read_partial_chunk<T: Read>(
     need: usize,
     no_block: bool,
     store: &Store,
+    path: Option<&[u8]>,
 ) -> Result<Vec<u8>> {
     let avail: &[u8] = if no_block {
         reader.buffer()
@@ -436,10 +437,19 @@ fn read_partial_chunk<T: Read>(
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     return Err(MonorubyErr::would_block_interrupt());
                 }
-                // The read(2) failed: `Errno::*`, as CRuby raises (a pty's
-                // master reads EIO once the slave side has closed).
+                // The read(2) failed: `Errno::*`, as CRuby's
+                // `io_getpartial` raises it (a pty's master reads EIO once
+                // the slave side has closed).
                 Err(e) if e.raw_os_error().is_some() => {
-                    return Err(MonorubyErr::errno_plain(store, &e));
+                    return Err(match path {
+                        Some(path) => MonorubyErr::errno_with_path(
+                            store,
+                            &e,
+                            "io_getpartial",
+                            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(path),
+                        ),
+                        None => MonorubyErr::errno_plain(store, &e),
+                    });
                 }
                 Err(e) => return Err(MonorubyErr::ioerr(e.to_string())),
             }
@@ -522,6 +532,32 @@ pub struct FileDescriptor {
 }
 
 impl FileDescriptor {
+    /// CRuby's `fptr->pathv` as bytes: the path the stream was opened
+    /// from, `None` for one made from a bare fd.
+    fn path_bytes(&self) -> Option<&[u8]> {
+        if !self.has_path {
+            return None;
+        }
+        Some(match &self.path_raw {
+            Some((bytes, _)) => bytes,
+            None => self.name.as_bytes(),
+        })
+    }
+
+    /// A read of the fd that failed with *err*, as CRuby's `io_fread`
+    /// reports it (`rb_sys_fail_path(fptr->pathv)`).
+    fn fread_error(&self, err: &std::io::Error) -> MonorubyErr {
+        MonorubyErr::os_error_pending(err, "io_fread", self.path_bytes())
+    }
+
+    /// A refill of the read buffer that failed with *err*, as CRuby's
+    /// `io_fillbuf` reports it: the fd, then the path.
+    fn fillbuf_error(&self, err: &std::io::Error) -> MonorubyErr {
+        let mut path = format!("fd:{} ", self.reader.get_ref().as_raw_fd()).into_bytes();
+        path.extend_from_slice(self.path_bytes().unwrap_or_default());
+        MonorubyErr::os_error_pending(err, "io_fillbuf", Some(&path))
+    }
+
     /// Push this descriptor's write buffer out to the fd. Writes go
     /// through `&std::fs::File`, so no unique borrow of the reader is
     /// needed and a buffered write can be flushed from a `&self` path.
@@ -1638,6 +1674,22 @@ impl IoInner {
         self.read_impl(length, true)
     }
 
+    /// The one byte `#eof?` reads, as [`Self::read`] reads it; a failed
+    /// read is reported as CRuby's `io_fillbuf`, which `eof?` fills the
+    /// buffer with.
+    pub fn read_eof_probe(&mut self) -> Result<Vec<u8>> {
+        match self.read(Some(1)) {
+            Err(err)
+                if let Some((errno, crate::globals::OS_ERRNO_PAYLOAD)) = err.payload
+                    && let IoKind::File(file) = &self.kind =>
+            {
+                let errno = errno.try_fixnum().unwrap_or(0) as i32;
+                Err(file.fillbuf_error(&std::io::Error::from_raw_os_error(errno)))
+            }
+            res => res,
+        }
+    }
+
     /// Like [`Self::read`], but a sized read may fill the BufReader's
     /// page from the fd (the classic buffered behavior). The
     /// character-oriented readers (getc/getbyte) use this — CRuby
@@ -1772,7 +1824,10 @@ impl IoInner {
                     Err(e) if is_interrupt_kind(e.kind()) => {
                         Err(interrupted(e.kind(), buf, Some(&file.pushback)))
                     }
-                    Err(e) => Err(MonorubyErr::runtimeerr(e.to_string())),
+                    // A sized read through the buffer is CRuby's
+                    // `io_fillbuf`; any other, `io_fread`.
+                    Err(e) if length.is_some() && !exact => Err(file.fillbuf_error(&e)),
+                    Err(e) => Err(file.fread_error(&e)),
                 }
             }
             IoKind::Popen(popen) => {
@@ -1858,7 +1913,13 @@ impl IoInner {
                         }
                         return Err(interrupt_marker(e.kind()));
                     }
-                    Err(e) => return Err(MonorubyErr::runtimeerr(e.to_string())),
+                    Err(e) => {
+                        return Err(MonorubyErr::os_error_pending(
+                            &e,
+                            "rb_io_sysread",
+                            fdesc.path_bytes(),
+                        ));
+                    }
                 };
                 buf.truncate(n);
                 buf
@@ -1988,7 +2049,7 @@ impl IoInner {
                 Some(e) if e == libc::EAGAIN || e == libc::EWOULDBLOCK => {
                     Ok(NonblockRead::WouldBlock)
                 }
-                _ => Err(MonorubyErr::from_io_err(store, &err, "read_nonblock".to_string())),
+                _ => Err(self.errno_for(store, &err, "io_read_nonblock")),
             }
         }
     }
@@ -2054,7 +2115,7 @@ impl IoInner {
             }
             IoKind::Stdin => {
                 if !had_pushback {
-                    let chunk = read_partial_chunk(&mut stdin_buf(), need, false, store)?;
+                    let chunk = read_partial_chunk(&mut stdin_buf(), need, false, store, None)?;
                     out.extend(chunk);
                 }
             }
@@ -2062,8 +2123,10 @@ impl IoInner {
                 if !file.readable {
                     return Err(MonorubyErr::ioerr("not opened for reading"));
                 }
-                let reader = &mut *Rc::get_mut(file).unwrap().reader;
-                let chunk = read_partial_chunk(reader, need, had_pushback, store)?;
+                let file = Rc::get_mut(file).unwrap();
+                let path = file.path_bytes().map(<[u8]>::to_vec);
+                let chunk =
+                    read_partial_chunk(&mut file.reader, need, had_pushback, store, path.as_deref())?;
                 out.extend(chunk);
             }
             IoKind::Popen(popen) => {
@@ -2072,7 +2135,7 @@ impl IoInner {
                     .reader
                     .as_mut()
                     .ok_or_else(|| MonorubyErr::ioerr("not opened for reading"))?;
-                let chunk = read_partial_chunk(reader, need, had_pushback, store)?;
+                let chunk = read_partial_chunk(reader, need, had_pushback, store, None)?;
                 out.extend(chunk);
             }
         }
@@ -2152,7 +2215,7 @@ impl IoInner {
                     Err(e) if is_interrupt_kind(e.kind()) => {
                         return Err(interrupted(e.kind(), buf, Some(&file.pushback)));
                     }
-                    Err(e) => return Err(MonorubyErr::runtimeerr(e.to_string())),
+                    Err(e) => return Err(file.fillbuf_error(&e)),
                 }
             }
             IoKind::Popen(popen) => {

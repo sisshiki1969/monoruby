@@ -2028,20 +2028,30 @@ fn bump_lineno(globals: &mut Globals, mut io: Value) -> Result<()> {
 /// CRuby raises (e.g. `read` on a listening socket must be
 /// `Errno::ENOTCONN`). Rebuild such errors here, where `globals` is in
 /// reach, by parsing the errno std::io::Error stably formats into the
-/// message. A structural fix (errors carrying their errno) can replace
-/// this; until then every blocking-region operation gets the right
-/// class on every platform.
+/// message. Every blocking-region operation gets the right class on
+/// every platform this way.
+///
+/// An error the IO layer built with [`MonorubyErr::os_error_pending`]
+/// carries the errno and CRuby's message already. For any other, the
+/// errno comes out of the ` (os error N)` tail, which is dropped: the
+/// message is the description, as CRuby's for a stream with no path.
 fn errnoify(globals: &Globals, err: MonorubyErr) -> MonorubyErr {
     if !matches!(err.kind(), MonorubyErrKind::Runtime) {
         return err;
     }
+    if let Some((errno, crate::globals::OS_ERRNO_PAYLOAD)) = err.payload {
+        let io_err = std::io::Error::from_raw_os_error(errno.try_fixnum().unwrap_or(0) as i32);
+        let mut e = MonorubyErr::from_io_err(&globals.store, &io_err, err.message().to_string());
+        e.raw_message = err.raw_message;
+        return e;
+    }
     let msg = err.message();
-    if let Some(pos) = msg.rfind("(os error ")
+    if let Some(pos) = msg.rfind(" (os error ")
         && let Some(end) = msg[pos..].find(')')
-        && let Ok(errno) = msg[pos + 10..pos + end].parse::<i32>()
+        && let Ok(errno) = msg[pos + 11..pos + end].parse::<i32>()
     {
         let io_err = std::io::Error::from_raw_os_error(errno);
-        return MonorubyErr::from_io_err(&globals.store, &io_err, msg.to_string());
+        return MonorubyErr::from_io_err(&globals.store, &io_err, msg[..pos].to_string());
     }
     err
 }
@@ -2826,7 +2836,7 @@ fn io_class_read(
         Read::by_ref(&mut file)
             .take(n as u64)
             .read_to_end(&mut buf)
-            .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_io_read", &filename))?;
+            .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "io_fread", &filename))?;
         if buf.is_empty() && n > 0 {
             return Ok(Value::nil());
         }
@@ -2839,7 +2849,7 @@ fn io_class_read(
 
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)
-        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_io_read", &filename))?;
+        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "io_fread", &filename))?;
     if universal {
         buf = crate::value::rvalue::io::universal_newline_bytes(buf);
     }
@@ -4513,7 +4523,7 @@ fn io_eof_(
     }
     // Read 1 byte; if empty, we're at EOF.
     let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
-        lfp.self_val().as_io_inner_mut().read(Some(1))
+        lfp.self_val().as_io_inner_mut().read_eof_probe()
     })?;
     let io = self_.as_io_inner_mut();
     if buf.is_empty() {
@@ -5149,7 +5159,7 @@ fn io_pread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     };
     if n < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "pread"));
+        return Err(lfp.self_val().as_io_inner().errno_for(&globals.store, &err, "rb_io_pread"));
     }
     if n == 0 {
         // CRuby empties the caller's buffer before raising at EOF.

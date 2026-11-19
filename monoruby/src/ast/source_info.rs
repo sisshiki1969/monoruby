@@ -121,6 +121,13 @@ pub struct SourceInfo {
     /// *hidden* one (`/__name`), which no Ruby program can name and no
     /// reflection lists. See `doc/hidden_ivars.md`.
     pub hidden_ivars: bool,
+    /// The encoding of the path String CRuby keeps for this source, which
+    /// every backtrace line read from it is built in (#2090): the locale
+    /// encoding for a file named on the command line, `-e`, or reached
+    /// through `$LOAD_PATH`; UTF-8 for one `require_relative` loaded and
+    /// an `eval` given a file name; BINARY for the `(eval at …)` name of
+    /// one given none. Settled once the parse has made the source.
+    path_encoding: std::cell::Cell<crate::value::Encoding>,
 }
 
 impl Default for SourceInfo {
@@ -147,6 +154,7 @@ impl SourceInfo {
             source_encoding: None,
             frozen_string_literal: None,
             hidden_ivars: false,
+            path_encoding: std::cell::Cell::new(crate::value::Encoding::UTF8),
         }
     }
 
@@ -174,6 +182,7 @@ impl SourceInfo {
             source_encoding: None,
             frozen_string_literal: None,
             hidden_ivars: false,
+            path_encoding: std::cell::Cell::new(crate::value::Encoding::UTF8),
         }
     }
 
@@ -189,6 +198,15 @@ impl SourceInfo {
     pub fn with_frozen_string_literal(mut self, frozen: Option<bool>) -> Self {
         self.frozen_string_literal = frozen;
         self
+    }
+
+    /// The encoding of this source's path String (see `path_encoding`).
+    pub fn path_encoding(&self) -> crate::value::Encoding {
+        self.path_encoding.get()
+    }
+
+    pub fn set_path_encoding(&self, enc: crate::value::Encoding) {
+        self.path_encoding.set(enc);
     }
 
     /// Builder: attach the `# monoruby-hidden-ivars:` magic-comment value.

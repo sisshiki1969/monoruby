@@ -27,6 +27,12 @@ pub(crate) const SIGNO_PAYLOAD: &str = "signo";
 /// to `#instance_variables`).
 pub(crate) const SIGNO_IVAR: &str = "/signo";
 
+/// The `payload` tag of an OS error out of the IO layer, which has no
+/// `Store` to find its `Errno` class in: a RuntimeError carrying the
+/// errno, already worded as CRuby words it, that the IO builtins turn
+/// into its class (see [`MonorubyErr::os_error_pending`]).
+pub(crate) const OS_ERRNO_PAYLOAD: &str = "os_errno";
+
 /// The `payload` tag of a NameError whose `#name` is not the Symbol of
 /// its kind but the Value carried here — the String `undef_method`
 /// reports (see [`MonorubyErr::undef_method_name_error`]).
@@ -193,6 +199,18 @@ pub struct MonorubyErr {
     /// `Marshal.dump` writes an ivar set later after it (#2013). `None`
     /// until the first raise.
     pub(crate) ivars_at_raise: Option<u64>,
+    /// The message object the exception was given (CRuby's `mesg`), as
+    /// it was given: `Exception#initialize`, `Exception#exception`,
+    /// `raise "x"`. `#to_s` answers it on every read, a String as that
+    /// very object and anything else converted then (`rb_String`), so a
+    /// later change to it shows and its `to_s` runs per read, not at
+    /// `initialize` (#2031).
+    ///
+    /// `message` then holds a rendering for the Rust side (an error
+    /// report that cannot run Ruby): a String's text as it was given,
+    /// and nothing for any other object. `None` for a message the
+    /// interpreter built, and for no message at all.
+    pub(crate) mesg: Option<Value>,
 }
 
 impl MonorubyErr {
@@ -220,6 +238,7 @@ impl MonorubyErr {
             class_span: None,
             given_message: false,
             ivars_at_raise: None,
+            mesg: None,
         }
     }
 
@@ -276,6 +295,7 @@ impl MonorubyErr {
             (raw, enc)
         });
         self.message = message;
+        self.mesg = None;
         self.default_message_class = None;
         self.name_span = Some((start as u32, len as u32));
         self.class_span = None;
@@ -332,6 +352,7 @@ impl MonorubyErr {
             class_span: ex.class_span,
             given_message: ex.given_message,
             ivars_at_raise: ex.ivars_at_raise,
+            mesg: ex.mesg,
         }
     }
 
@@ -363,6 +384,7 @@ impl MonorubyErr {
             class_span: None,
             given_message: false,
             ivars_at_raise: None,
+            mesg: None,
         }
     }
 
@@ -391,6 +413,9 @@ impl MonorubyErr {
         }
         if let Some((val, _)) = self.payload {
             f(val);
+        }
+        if let Some(mesg) = self.mesg {
+            f(mesg);
         }
         match &self.kind {
             // The receiver that triggered the NoMethodError (set by
@@ -446,6 +471,7 @@ impl MonorubyErr {
 
     pub fn set_msg(&mut self, msg: String) {
         self.message = msg;
+        self.mesg = None;
         self.default_message_class = None;
         self.name_span = None;
         self.class_span = None;
@@ -1694,13 +1720,11 @@ impl MonorubyErr {
         MonorubyErr::new(MonorubyErrKind::Load(path), msg)
     }
 
-    pub(crate) fn cant_load(err: Option<std::io::Error>, path: &std::path::Path) -> MonorubyErr {
-        let display = path.display();
+    /// `cannot load such file -- <path>`, whatever stopped the read (a
+    /// missing file, a directory): CRuby's `load_failed` names no cause.
+    pub(crate) fn cant_load(path: &std::path::Path) -> MonorubyErr {
         MonorubyErr::loaderr(
-            match err {
-                Some(err) => format!("cannot load such file -- {display} ({err})"),
-                None => format!("cannot load such file -- {display}"),
-            },
+            format!("cannot load such file -- {}", path.display()),
             path.into(),
         )
     }
@@ -1974,6 +1998,38 @@ impl MonorubyErr {
             raw.extend_from_slice(bytes);
             e.raw_message = Some((raw, crate::value::Encoding::Ascii8));
         }
+        e
+    }
+
+    /// An OS error for the IO layer to hand to the IO builtins, which
+    /// make it the `Errno::*` it is (`errnoify`): a RuntimeError tagged
+    /// with the errno ([`OS_ERRNO_PAYLOAD`]), its message CRuby's
+    /// `rb_syserr_fail_path(e, path)` from *func* — `"<description> @
+    /// <func> - <path>"`, or the bare description for a stream with no
+    /// path.
+    pub(crate) fn os_error_pending(
+        err: &std::io::Error,
+        func: &str,
+        path: Option<&[u8]>,
+    ) -> MonorubyErr {
+        let desc = errno_description(err);
+        let mut e = match path {
+            Some(path) => {
+                let mut e = MonorubyErr::runtimeerr(format!(
+                    "{desc} @ {func} - {}",
+                    String::from_utf8_lossy(path)
+                ));
+                if std::str::from_utf8(path).is_err() {
+                    let mut raw = format!("{desc} @ {func} - ").into_bytes();
+                    raw.extend_from_slice(path);
+                    e.raw_message = Some((raw, crate::value::Encoding::Ascii8));
+                }
+                e
+            }
+            None => MonorubyErr::runtimeerr(desc),
+        };
+        let errno = err.raw_os_error().unwrap_or(0);
+        e.payload = Some((Value::integer(errno as i64), OS_ERRNO_PAYLOAD));
         e
     }
 

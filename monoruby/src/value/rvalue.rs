@@ -782,7 +782,7 @@ impl RValue {
                     store.get_class_name(self.class()),
                     self.as_io().kind().descriptor()
                 ),
-                ObjTy::EXCEPTION => self.as_exception().message().to_string(),
+                ObjTy::EXCEPTION => self.as_exception().debug_message(store),
                 ObjTy::METHOD => self.as_method().debug(store),
                 ObjTy::FIBER => self.fiber_debug(store),
                 ObjTy::ENUMERATOR => self.enumerator_inspect(store),
@@ -852,7 +852,7 @@ impl RValue {
                 ObjTy::OBJECT | ObjTy::NATIVE => self.object_inspect(store, set),
                 ObjTy::EXCEPTION => {
                     let class_name = store.get_class_name(self.class());
-                    let msg = self.as_exception().message();
+                    let msg = self.as_exception().debug_message(store);
                     // CRuby: an empty message inspects as just the
                     // class name.
                     if msg.is_empty() {

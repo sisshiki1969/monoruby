@@ -34,6 +34,7 @@ impl ExceptionInner {
 
     pub fn set_message(&mut self, msg: String) {
         self.message = msg;
+        self.mesg = None;
         self.default_message_class = None;
         self.name_span = None;
         self.class_span = None;
@@ -48,8 +49,26 @@ impl ExceptionInner {
         &self.message
     }
 
+    /// The message for the core's own renderings (`debug`, the Rust-side
+    /// `inspect`), which cannot call `#to_s`: a message object that is not
+    /// a String is shown as the core renders it.
+    pub fn debug_message(&self, store: &Store) -> String {
+        match self.mesg {
+            Some(mesg) if mesg.is_rstring_inner().is_none() => mesg.to_s(store),
+            _ => self.message.clone(),
+        }
+    }
+
     pub fn trace(&self) -> &[TraceEntry] {
         &self.trace
+    }
+
+    /// The backtrace lines, as the Strings `#backtrace` answers.
+    pub fn trace_values(&self, store: &Store) -> Vec<Value> {
+        self.trace
+            .iter()
+            .map(|entry| store.trace_entry_value(entry))
+            .collect()
     }
 
     pub fn trace_location(&self, store: &Store) -> Vec<String> {
