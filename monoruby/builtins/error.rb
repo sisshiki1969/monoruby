@@ -149,7 +149,8 @@ class SignalException < Exception
       name = Signal.signame(sig)
       raise ArgumentError, "invalid signal number (#{sig})" unless name
       @__signo = sig
-      super(message || "SIG#{name}")
+      # `rb_sprintf("SIG%s")`: BINARY, as CRuby builds it.
+      super(message || "SIG#{name}".b)
     elsif !sig.nil?
       # CRuby: a message is only accepted together with a *numeric* signal;
       # a signal name plus a message is an ArgumentError.
@@ -160,7 +161,7 @@ class SignalException < Exception
       signo = Signal.list[name]
       raise ArgumentError, "unsupported signal `SIG#{name}'" unless signo
       @__signo = signo
-      super("SIG#{name}")
+      super("SIG#{name}".b)
     else
       super("SignalException")
     end
@@ -187,6 +188,8 @@ class Interrupt < SignalException
     @__signo = Signal.list["INT"]
     # Interrupt's default message is its class name, not "SIGINT";
     # bypass SignalException#initialize.
-    ::Exception.instance_method(:initialize).bind(self).call(message || "Interrupt")
+    # The default is US-ASCII, as CRuby's `rb_usascii_str_new`.
+    message ||= String.new("Interrupt", encoding: Encoding::US_ASCII)
+    ::Exception.instance_method(:initialize).bind(self).call(message)
   end
 end

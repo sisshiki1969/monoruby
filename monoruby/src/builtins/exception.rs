@@ -292,6 +292,22 @@ fn nameerr_name(
 }
 
 ///
+/// Give an exception *message*, or, for none, leave it to default to
+/// the class name (CRuby's `mesg` stays nil, so `Marshal.dump` writes
+/// nil and the default is US-ASCII).
+///
+fn set_message_or_default(ex: &mut ExceptionInner, message: Option<String>, class_id: ClassId) {
+    match message {
+        Some(message) => ex.set_message(message),
+        None => {
+            ex.set_message(String::new());
+            ex.given_message = false;
+            ex.default_message_class = Some(class_id);
+        }
+    }
+}
+
+///
 /// `NameError.new(msg = nil, name = nil)`
 ///
 /// Adds the second positional `name` argument on top of `Exception#initialize`,
@@ -306,16 +322,11 @@ fn nameerr_initialize(
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let class_id = self_.real_class(&globals.store).id();
-    let message = if let Some(msg) = lfp.try_arg(0) {
-        if msg.is_nil() {
-            globals.store.get_class_name(class_id)
-        } else {
-            msg.coerce_to_string(vm, globals)?
-        }
-    } else {
-        globals.store.get_class_name(class_id)
+    let message = match lfp.try_arg(0) {
+        Some(msg) if !msg.is_nil() => Some(msg.coerce_to_string(vm, globals)?),
+        _ => None,
     };
-    self_.is_exception_mut().unwrap().set_message(message);
+    set_message_or_default(self_.is_exception_mut().unwrap(), message, class_id);
     self_.set_exception_initialized();
     if let Some(name) = lfp.try_arg(1) {
         if !name.is_nil() {
@@ -383,14 +394,11 @@ fn nomethoderr_initialize(
 ) -> Result<Value> {
     let mut self_ = lfp.self_val();
     let class_id = self_.real_class(&globals.store).id();
-    let message = if let Some(msg) = lfp.try_arg(0)
-        && !msg.is_nil()
-    {
-        msg.coerce_to_string(vm, globals)?
-    } else {
-        globals.store.get_class_name(class_id)
+    let message = match lfp.try_arg(0) {
+        Some(msg) if !msg.is_nil() => Some(msg.coerce_to_string(vm, globals)?),
+        _ => None,
     };
-    self_.is_exception_mut().unwrap().set_message(message);
+    set_message_or_default(self_.is_exception_mut().unwrap(), message, class_id);
     self_.set_exception_initialized();
     if let Some(name) = lfp.try_arg(1)
         && !name.is_nil()
@@ -663,7 +671,8 @@ fn message_rendered(vm: &mut Executor, globals: &mut Globals, exception: Value) 
     bytes.extend_from_slice(&message[pos..]);
     let enc = match other_enc {
         Some(enc) if std::str::from_utf8(&bytes).is_err() => enc,
-        _ => crate::value::Encoding::UTF8,
+        _ if ex.given_message => crate::value::Encoding::UTF8,
+        _ => built_message_encoding(exception, &bytes),
     };
     Ok(Value::string_from_inner(RStringInner::from_encoding(
         &bytes, enc,
@@ -712,7 +721,9 @@ fn nameerr_class_text(vm: &mut Executor, globals: &mut Globals, class: Module) -
 /// The `String` an exception's message is, with the bytes and encoding
 /// it was built from — a BINARY message stays BINARY. `#to_s` and
 /// `#message` answer this, and `Marshal.dump` writes it as the `:mesg`
-/// field, so a dump round-trips the message's encoding.
+/// field, so a dump round-trips the message's encoding. A message the
+/// interpreter built takes the encoding CRuby's would have
+/// ([`built_message_encoding`]).
 ///
 pub(crate) fn message_value(store: &Store, exception: Value) -> Value {
     let ex = exception.is_exception().unwrap();
@@ -723,9 +734,52 @@ pub(crate) fn message_value(store: &Store, exception: Value) -> Value {
     // one — comes from `rb_usascii_str_new`; a message the caller gave
     // keeps whatever encoding that string had.
     if ex.default_message_class.is_some() {
-        return Value::string_usascii(ex.message_with(store).into_owned());
+        // An anonymous class's name is an `rb_sprintf` of its address,
+        // so BINARY.
+        let name = ex.message_with(store).into_owned();
+        if name.starts_with("#<") {
+            return Value::string_from_inner(crate::value::RStringInner::from_encoding(
+                name.as_bytes(),
+                crate::value::Encoding::Ascii8,
+            ));
+        }
+        return Value::string_usascii(name);
     }
-    Value::string_from_str(&ex.message_with(store))
+    if ex.given_message {
+        return Value::string_from_str(&ex.message);
+    }
+    let enc = built_message_encoding(exception, ex.message.as_bytes());
+    Value::string_from_inner(crate::value::RStringInner::from_encoding(
+        ex.message.as_bytes(),
+        enc,
+    ))
+}
+
+///
+/// The encoding CRuby leaves on a message it built itself (#2013).
+///
+/// `rb_raise` formats with `rb_sprintf`, whose result stays BINARY
+/// until a non-ASCII String is formatted into it; a NameError /
+/// NoMethodError message is a `NameError::message`, rendered US-ASCII
+/// (`name_err_mesg_to_str`). A SyntaxError's and a RegexpError's
+/// carry the source's text and are UTF-8. A message with non-ASCII
+/// text is UTF-8 here: what was formatted into it was.
+///
+pub(crate) fn built_message_encoding(exception: Value, message: &[u8]) -> crate::value::Encoding {
+    use crate::value::Encoding;
+    if !message.is_ascii() {
+        return Encoding::UTF8;
+    }
+    // The kind says it, without a walk of the ancestors: a message is
+    // built only by the interpreter, and an error it builds as
+    // `Other(class)` is never of the NameError / SyntaxError /
+    // RegexpError families (a Ruby-made instance's message is given or
+    // its class's name).
+    match exception.is_exception().map(|ex| &ex.kind) {
+        Some(MonorubyErrKind::NotMethod { .. } | MonorubyErrKind::Name(..)) => Encoding::UsAscii,
+        Some(MonorubyErrKind::Syntax | MonorubyErrKind::Regex) => Encoding::UTF8,
+        _ => Encoding::Ascii8,
+    }
 }
 
 ///

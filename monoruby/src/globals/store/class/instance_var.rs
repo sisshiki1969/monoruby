@@ -4,6 +4,11 @@ use super::*;
 #[repr(transparent)]
 pub struct IvarId(u32);
 
+/// The bit of [`Store::ivar_slots_present`] for slot *id*.
+pub(crate) fn ivar_slot_bit(id: IvarId) -> u64 {
+    1 << id.get().min(63)
+}
+
 impl IvarId {
     pub(crate) fn new(id: u32) -> Self {
         Self(id)
@@ -58,6 +63,15 @@ impl Store {
             .filter(|(name, _)| !name.is_hidden_ivar())
             .filter_map(|(name, id)| rval.get_ivar_by_ivarid(*id).map(|v| (*name, v)))
             .collect()
+    }
+
+    ///
+    /// The instance variables *val* has, hidden ones included, as a bit
+    /// per slot of its class's ivar table (slots from 63 on share the
+    /// top bit).
+    ///
+    pub(crate) fn ivar_slots_present(&self, val: Value) -> u64 {
+        val.try_rvalue().map_or(0, |rval| rval.ivar_slot_bits())
     }
 
     ///

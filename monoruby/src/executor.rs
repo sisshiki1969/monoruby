@@ -2726,9 +2726,15 @@ impl Executor {
     fn chain_cause(
         &mut self,
         globals: &mut Globals,
-        v: Value,
+        mut v: Value,
         explicit_cause: Option<Value>,
     ) -> Value {
+        // What `Marshal.dump` writes ahead of `bt_locations`, which CRuby
+        // sets at the first raise (#2013).
+        if v.is_exception().is_some_and(|ex| ex.ivars_at_raise.is_none()) {
+            let slots = globals.store.ivar_slots_present(v);
+            v.is_exception_mut().unwrap().ivars_at_raise = Some(slots);
+        }
         let cause_id = IdentId::get_id("/cause");
         if let Some(cause) = explicit_cause {
             // `cause: nil` suppresses implicit chaining but keeps any cause

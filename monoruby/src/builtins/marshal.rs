@@ -970,6 +970,7 @@ impl<'a> MarshalReader<'a> {
             let mut backtrace: Option<Value> = None;
             let mut cause: Option<Value> = None;
             let mut user_ivars: Vec<(IdentId, Value)> = Vec::new();
+            let mut split_at: Option<usize> = None;
             // CRuby restores the fields as they come: one dumped without
             // `mesg` stays uninitialized, and `receiver` before `key`
             // keeps that order on the next dump (#2013).
@@ -1013,7 +1014,12 @@ impl<'a> MarshalReader<'a> {
                     // the backtrace as strings and has nothing to restore.
                     // `exception_loader` leaves the field nil (it is the
                     // backtrace itself on the wire).
-                    "bt_locations" => {}
+                    // Where it came is kept: an instance variable after it
+                    // was set after the raise, and goes after it again on
+                    // the next dump (#2013).
+                    "bt_locations" => {
+                        split_at.get_or_insert(user_ivars.len());
+                    }
                     // A field of a builtin exception goes back to the
                     // hidden slot its accessor reads; any other name
                     // without an `@` is kept where nothing but the next
@@ -1028,16 +1034,26 @@ impl<'a> MarshalReader<'a> {
                     },
                 }
             }
-            user_ivars.push((
-                IdentId::get_id(&format!("{EXTRA_FIELD_PREFIX}bt_locations")),
-                Value::nil(),
-            ));
+            let bt_locations_at = split_at.unwrap_or(user_ivars.len());
+            user_ivars.insert(
+                bt_locations_at,
+                (
+                    IdentId::get_id(&format!("{EXTRA_FIELD_PREFIX}bt_locations")),
+                    Value::nil(),
+                ),
+            );
             // A nil `:mesg` means "no explicit message"; CRuby's default
             // message is then the class name.
+            let given = message.is_some();
             let msg = message.unwrap_or_else(|| class_name.clone());
             let mut exc = Value::new_exception_from_with_class(msg, module.id(), module.id());
-            if raw_message.is_some() {
-                exc.is_exception_mut().unwrap().raw_message = raw_message;
+            {
+                let ex = exc.is_exception_mut().unwrap();
+                if raw_message.is_some() {
+                    ex.raw_message = raw_message;
+                }
+                // The dumped String is the message now, whoever built it.
+                ex.given_message = given;
             }
             if !has_mesg {
                 exc.set_exception_uninitialized();
@@ -1052,7 +1068,11 @@ impl<'a> MarshalReader<'a> {
             if let Some(cause) = cause {
                 globals.set_ivar(exc, IdentId::get_id("/cause"), cause)?;
             }
-            for (name, val) in user_ivars {
+            for (i, (name, val)) in user_ivars.into_iter().enumerate() {
+                if i == bt_locations_at && split_at.is_some() {
+                    let slots = globals.store.ivar_slots_present(exc);
+                    exc.is_exception_mut().unwrap().ivars_at_raise = Some(slots);
+                }
                 globals.set_ivar(exc, name, val)?;
             }
             exc
@@ -1147,10 +1167,18 @@ impl<'a> MarshalReader<'a> {
         bytes: &[u8],
         encoding: Encoding,
     ) -> Result<Value> {
-        let class_name = class_sym.get_name();
-        let module = resolve_class(globals, &class_name)?;
         // Hand the payload string to `_load` in its recorded encoding.
         let payload = Value::string_from_inner(RStringInner::from_encoding(bytes, encoding));
+        let class_name = class_sym.get_name();
+        // A NameError's deferred message (CRuby's `NameError::message`,
+        // a class no Ruby code can name) loads as the String it was
+        // dumped as, which is what its `_load` answers (#2013).
+        if class_name == "NameError::message" {
+            self.user_protocol_slots.insert(self.objects.len());
+            self.objects.push(payload);
+            return Ok(payload);
+        }
+        let module = resolve_class(globals, &class_name)?;
         let load_id = IdentId::get_id("_load");
         let mut result =
             vm.invoke_method_inner(globals, load_id, module.as_val(), &[payload], None, None)?;
@@ -2083,6 +2111,32 @@ fn marshal_write_symbol(buf: &mut Vec<u8>, id: IdentId, symbols: &mut Vec<IdentI
         marshal_write_encoding_ivar_pair(buf, enc, symbols);
     }
 }
+
+/// A `NameError::message` holding *mesg*, as its `_dump` writes it
+/// (`name_err_mesg_dump` answers the rendered String): a `'u'` record
+/// of the String's bytes, wrapped in `'I'` for its encoding. The object
+/// takes a slot of the link table, as in CRuby; nothing can link to it.
+fn marshal_write_name_err_mesg(
+    buf: &mut Vec<u8>,
+    mesg: Value,
+    symbols: &mut Vec<IdentId>,
+    objects: &mut Vec<u64>,
+) {
+    let inner = mesg.as_rstring_inner();
+    // A built NameError message is US-ASCII, or UTF-8 with non-ASCII
+    // text (`built_message_encoding`), never BINARY, so it always has
+    // its `'I'`.
+    let enc = inner.encoding();
+    buf.push(b'I');
+    buf.push(b'u');
+    marshal_write_symbol(buf, IdentId::get_id("NameError::message"), symbols);
+    marshal_write_fixnum(buf, inner.len() as i32);
+    buf.extend_from_slice(inner.as_bytes());
+    marshal_write_fixnum(buf, 1);
+    marshal_write_encoding_ivar_pair(buf, enc, symbols);
+    objects.push(0);
+}
+
 /// Write just the encoding instance-variable *pair* (symbol + value),
 /// without the leading ivar count — used when other user ivars share the
 /// same `I` block.
@@ -2985,7 +3039,13 @@ fn marshal_dump_value(
                         let msg_unset = obj
                             .is_exception()
                             .is_some_and(|e| e.default_message_class.is_some());
-                        let user_ivars = globals.get_ivars(obj);
+                        // A NameError / NoMethodError the interpreter
+                        // raised keeps its message as a
+                        // `NameError::message`, which goes out through its
+                        // `_dump` (#2013).
+                        let name_err_mesg = !msg_unset
+                            && obj.is_exception().is_some_and(|e| !e.given_message)
+                            && obj.is_kind_of(&globals.store, NAME_ERROR_CLASS);
                         // The fields of the builtin exceptions, under the
                         // names CRuby dumps them by.
                         let real_class = obj.real_class(&globals.store);
@@ -3044,23 +3104,47 @@ fn marshal_dump_value(
                                     })
                             });
                         let has_locations = !captured.is_empty();
-                        // What a load kept without an accessor;
-                        // `bt_locations` was set last (`exception_loader`).
-                        let mut extras: Vec<_> = globals
-                            .store
-                            .get_all_ivars(obj)
-                            .into_iter()
-                            .filter_map(|(name, val)| {
-                                let name = name.get_name();
-                                let wire = name.strip_prefix(EXTRA_FIELD_PREFIX)?;
-                                if wire == "bt_locations" && has_locations {
-                                    return None;
-                                }
-                                Some((IdentId::get_id(wire), val))
-                            })
-                            .collect();
+                        // The program's instance variables, and what a load
+                        // kept without an accessor (under their wire
+                        // names). CRuby writes ivars in the order they were
+                        // set, and a raise sets `bt_locations`: those set
+                        // after the first raise go after it (#2013). One
+                        // never raised keeps a loaded `bt_locations` last,
+                        // where `exception_loader` set it.
+                        let at_raise = obj.is_exception().and_then(|e| e.ivars_at_raise);
                         let bt_locations = IdentId::get_id("bt_locations");
-                        extras.sort_by_key(|(name, _)| *name == bt_locations);
+                        let mut loaded_locations = None;
+                        let mut user_ivars = vec![];
+                        let mut late_ivars = vec![];
+                        let rval = obj.rvalue();
+                        for (name, id) in globals.store[obj.class()].ivar_names() {
+                            let Some(val) = rval.get_ivar_by_ivarid(*id) else {
+                                continue;
+                            };
+                            let wire = if !name.is_hidden_ivar() {
+                                *name
+                            } else if let Some(wire) =
+                                name.get_name().strip_prefix(EXTRA_FIELD_PREFIX)
+                            {
+                                IdentId::get_id(wire)
+                            } else {
+                                continue;
+                            };
+                            if wire == bt_locations {
+                                if !has_locations {
+                                    loaded_locations = Some((wire, val));
+                                }
+                            } else if at_raise.is_some_and(|bits| bits & ivar_slot_bit(*id) == 0) {
+                                late_ivars.push((wire, val));
+                            } else {
+                                user_ivars.push((wire, val));
+                            }
+                        }
+                        let (early_locations, loaded_locations) = if at_raise.is_some() {
+                            (loaded_locations, None)
+                        } else {
+                            (None, loaded_locations)
+                        };
                         // `KeyError.new(msg, receiver:, key:)` sets the
                         // receiver first, the VM's own KeyError the key:
                         // CRuby dumps them in the order they were set.
@@ -3081,9 +3165,12 @@ fn marshal_dump_value(
                                 + usize::from(write_bt)
                                 + fields.len()
                                 + user_ivars.len()
+                                + late_ivars.len()
                                 + usize::from(cause.is_some())
                                 + usize::from(has_locations)
-                                + extras.len()) as i32,
+                                + usize::from(early_locations.is_some())
+                                + usize::from(loaded_locations.is_some()))
+                                as i32,
                         );
                         // :mesg — CRuby stores nil until a message is
                         // explicitly given.
@@ -3097,7 +3184,13 @@ fn marshal_dump_value(
                                 // BINARY message as a bare string, and a
                                 // UTF-8 one wrapped in `I…:E`.
                                 let msg_val = super::exception::message_value(&globals.store, obj);
-                                marshal_dump_value(buf, msg_val, vm, globals, symbols, objects, limit)?;
+                                if name_err_mesg {
+                                    marshal_write_name_err_mesg(buf, msg_val, symbols, objects);
+                                } else {
+                                    marshal_dump_value(
+                                        buf, msg_val, vm, globals, symbols, objects, limit,
+                                    )?;
+                                }
                             }
                         }
                         // :bt
@@ -3129,7 +3222,11 @@ fn marshal_dump_value(
                                 buf, locations, vm, globals, symbols, objects, limit,
                             )?;
                         }
-                        for (name, val) in extras {
+                        for (name, val) in early_locations
+                            .into_iter()
+                            .chain(late_ivars)
+                            .chain(loaded_locations)
+                        {
                             marshal_write_symbol(buf, name, symbols);
                             marshal_dump_value(buf, val, vm, globals, symbols, objects, limit)?;
                         }

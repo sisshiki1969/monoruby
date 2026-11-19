@@ -1664,6 +1664,21 @@ impl RValue {
         unsafe { self.as_rstring() }.inline_copyable()
     }
 
+    ///
+    /// A bit per ivar slot this object has a value in (slots from 63 on
+    /// share the top bit) — see [`Store::ivar_slots_present`]. Only an
+    /// exception is asked (`MonorubyErr::ivars_at_raise`), and all of
+    /// its ivars are in `var_table`: inline slots are an `OBJECT`'s.
+    ///
+    pub(crate) fn ivar_slot_bits(&self) -> u64 {
+        debug_assert_ne!(self.ty(), ObjTy::OBJECT);
+        let slots = self.var_table.iter().flat_map(|table| table.iter());
+        slots
+            .enumerate()
+            .filter(|(_, v)| v.is_some())
+            .fold(0, |bits, (i, _)| bits | 1u64 << i.min(63))
+    }
+
     pub(crate) fn get_ivar_by_ivarid(&self, id: IvarId) -> Option<Value> {
         let mut i = id.into_usize();
         if self.ty() == ObjTy::OBJECT {

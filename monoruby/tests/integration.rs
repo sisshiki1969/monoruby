@@ -226,6 +226,7 @@ mod runtime_malloc_trim;
 mod scrub_block_and_replacement;
 mod self_ivar_base;
 mod set;
+mod set_subclass_compat_exception_messages;
 mod setivar_wb;
 mod signal_handling;
 mod signal_trap;

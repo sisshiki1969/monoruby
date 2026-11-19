@@ -1132,9 +1132,12 @@ pub(crate) fn make_exception_error(
     if let Some(klass) = a0.is_class() {
         if klass.id() == STOP_ITERATION_CLASS && msg_arg.is_none() && bt_arg.is_none() {
             // Fast path skipping the exception-object allocation; the
-            // message still defaults to the class name like
-            // `Exception#message` would.
-            let err = MonorubyErr::stopiterationerr("StopIteration".to_string());
+            // message is left to default to the class name, as
+            // `Exception#initialize` leaves it.
+            let err = MonorubyErr::with_class_default_message(
+                MonorubyErrKind::StopIteration,
+                STOP_ITERATION_CLASS,
+            );
             return apply_cause(globals, err, None, cause_kwarg);
         } else if klass.is_exception() {
             let cargs: Vec<Value> = msg_arg.into_iter().collect();
@@ -1160,6 +1163,7 @@ pub(crate) fn make_exception_error(
         // Keep the message's own bytes and encoding, as `Exception#initialize`
         // does: `raise "x".b` must not report a UTF-8 message.
         let mut err = MonorubyErr::runtimeerr(message.to_str()?);
+        err.given_message = true;
         if message.encoding() != crate::value::Encoding::UTF8 {
             err.raw_message = Some((message.as_bytes().to_vec(), message.encoding()));
         }
@@ -4296,13 +4300,26 @@ pub(super) fn abort(
                 None,
             )?;
         }
-        s
+        // The message is the String given, in its own encoding.
+        let raw = arg0
+            .is_rstring_inner()
+            .filter(|given| given.encoding() != crate::value::Encoding::UTF8)
+            .map(|given| (given.as_bytes().to_vec(), given.encoding()));
+        Some((s, raw))
     } else {
+        None
+    };
+    Err(match msg {
+        Some((msg, raw)) => {
+            let mut err = MonorubyErr::new(MonorubyErrKind::SystemExit(1), msg);
+            err.given_message = true;
+            err.raw_message = raw;
+            err
+        }
         // CRuby's `rb_f_abort` without a message raises
         // `SystemExit.new(1)`, whose message is the class's default.
-        "exit".to_string()
-    };
-    Err(MonorubyErr::new(MonorubyErrKind::SystemExit(1), msg))
+        None => MonorubyErr::new(MonorubyErrKind::SystemExit(1), "exit"),
+    })
 }
 
 ///

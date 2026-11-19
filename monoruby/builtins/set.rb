@@ -63,3 +63,27 @@ class Set
   alias length size
   alias to_s inspect
 end
+
+# Subclassing Set directly brings in the compatibility layer for code
+# written against the pre-4.0 pure-Ruby Set (`set_s_inherited` in
+# CRuby's set.c, #2044): the subclass includes
+# `Set::SubclassCompatible` and extends its `ClassMethods`, so that
+# `MySet[...]` and `MySet.new(enum)` go through the subclass's own
+# `initialize` / `add`. `Set::CoreSet` is created before the hook, so
+# it (and what inherits from it) opts out.
+class Set
+  class CoreSet < Set
+  end
+
+  class << self
+    def inherited(subclass)
+      if equal?(Set)
+        require "set/subclass_compatible"
+        subclass.include(SubclassCompatible)
+        subclass.extend(SubclassCompatible::ClassMethods)
+      end
+      nil
+    end
+    private :inherited
+  end
+end

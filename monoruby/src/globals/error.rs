@@ -177,6 +177,22 @@ pub struct MonorubyErr {
     /// instance of C`). `None` when the message shows no class that
     /// way.
     pub(crate) class_span: Option<(u32, u32)>,
+    /// Whether the message is one the program gave (`raise "x"`,
+    /// `Exception#initialize`, `#exception(msg)`, a `Marshal.load`ed
+    /// `mesg`) rather than one the interpreter built.
+    ///
+    /// CRuby builds its own messages with `rb_sprintf` — BINARY while
+    /// they are all ASCII — or, for a NameError / NoMethodError, as a
+    /// `NameError::message` that renders US-ASCII; a message the
+    /// program gave keeps its own String (#2013). See
+    /// `exception::message_value`.
+    pub(crate) given_message: bool,
+    /// The instance variables the exception had when it was first
+    /// raised, as a bit per slot of its class's ivar table (slots past
+    /// 63 count as present). CRuby sets `bt_locations` at the raise, so
+    /// `Marshal.dump` writes an ivar set later after it (#2013). `None`
+    /// until the first raise.
+    pub(crate) ivars_at_raise: Option<u64>,
 }
 
 impl MonorubyErr {
@@ -202,6 +218,8 @@ impl MonorubyErr {
             default_message_class: None,
             name_span: None,
             class_span: None,
+            given_message: false,
+            ivars_at_raise: None,
         }
     }
 
@@ -312,6 +330,8 @@ impl MonorubyErr {
             default_message_class: ex.default_message_class,
             name_span: ex.name_span,
             class_span: ex.class_span,
+            given_message: ex.given_message,
+            ivars_at_raise: ex.ivars_at_raise,
         }
     }
 
@@ -341,6 +361,8 @@ impl MonorubyErr {
             default_message_class: None,
             name_span: None,
             class_span: None,
+            given_message: false,
+            ivars_at_raise: None,
         }
     }
 
@@ -1859,6 +1881,9 @@ impl MonorubyErr {
     /// `C` locale an all-ASCII message is US-ASCII, not UTF-8.
     fn syserr(class_id: ClassId, msg: String) -> MonorubyErr {
         let mut e = MonorubyErr::with_message(MonorubyErrKind::Other(class_id), msg);
+        // Its encoding is decided here, not by the `rb_sprintf` rule of
+        // the interpreter's other messages.
+        e.given_message = true;
         let locale = crate::builtins::encoding::locale_encoding();
         if locale != crate::value::Encoding::UTF8 && e.message.is_ascii() {
             e.raw_message = Some((e.message.as_bytes().to_vec(), locale));

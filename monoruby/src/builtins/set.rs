@@ -404,9 +404,10 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 ///
 /// CRuby's `set_inspect`: every element through `rb_inspect` — its own
 /// `#inspect`, dispatched — under `rb_exec_recursive`, so a set reached
-/// again from one of its own elements is `Set[...]`. A subclass answers
-/// in the older `#<MySet: {…}>` shape, as `Set::SubclassCompatible#inspect`
-/// (which CRuby mixes into every subclass of `Set`) does.
+/// again from one of its own elements is `Set[...]`. A direct subclass
+/// of Set never gets here: `Set::SubclassCompatible#inspect`, which
+/// `Set.inherited` mixes into it, answers in the older `#<MySet: {…}>`
+/// shape.
 ///
 /// Registered as an alias pair so the two method names share a single
 /// `FuncId` and compare equal as `Method` objects.
@@ -421,31 +422,11 @@ fn set_inspect(
     let self_val = lfp.self_val();
     let class = self_val.real_class(&globals.store).id();
     let name = globals.store.get_class_name(class);
-    let core = class == SET_CLASS;
-    let (open, close) = if core {
-        (format!("{name}["), "]")
-    } else {
-        (format!("#<{name}: {{"), "}>")
-    };
-    // `rb_sprintf` (the core class) leaves an all-ASCII rendering
-    // ASCII-8BIT (#1494); `Kernel#sprintf` in subclass_compatible.rb
-    // leaves it in the source encoding.
-    let finish = |buf: InspectBuf| {
-        let v = buf.into_value();
-        if core {
-            return v;
-        }
-        let inner = v.as_rstring_inner();
-        match inner.encoding() {
-            Encoding::Ascii8 | Encoding::UsAscii if inner.as_bytes().is_ascii() => {
-                Value::string_from_inner(RStringInner::from_encoding(
-                    inner.as_bytes(),
-                    Encoding::UTF8,
-                ))
-            }
-            _ => v,
-        }
-    };
+    // `Set[...]`-style for every class that reaches here: a direct
+    // subclass of Set has `Set::SubclassCompatible#inspect` in front
+    // of this (the old `#<Name: {...}>` form), so only Set itself and
+    // `Set::CoreSet` and its descendants get here (#2044).
+    let (open, close) = (format!("{name}["), "]");
     // The class name may be anything; only the punctuation is ASCII.
     let start = |store: &Store| -> Result<InspectBuf> {
         let mut buf = InspectBuf::new("");
@@ -455,7 +436,7 @@ fn set_inspect(
     let mut recursive = start(&globals.store)?;
     recursive.cat("...");
     recursive.cat(close);
-    let recursive = finish(recursive);
+    let recursive = recursive.into_value();
     // The elements are the ones the set held when `inspect` began,
     // whatever an `#inspect` along the way removes — so they are rooted
     // here rather than through the set.
@@ -477,7 +458,7 @@ fn set_inspect(
                     buf.append(&globals.store, s.as_rstring_inner())?;
                 }
                 buf.cat(close);
-                Ok(finish(buf))
+                Ok(buf.into_value())
             },
             recursive,
         )
