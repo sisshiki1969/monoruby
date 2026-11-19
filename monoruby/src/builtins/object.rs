@@ -214,7 +214,21 @@ fn bo_method_missing(
     _: BytecodePtr,
 ) -> Result<Value> {
     let args = lfp.arg(0).as_array();
-    let name = args[0].expect_symbol_or_to_str(vm, globals)?;
+    // `raise_method_missing`: the first argument must be the Symbol of
+    // the method that was not found.
+    let name = match args.first() {
+        None => return Err(MonorubyErr::argumenterr("no method name given")),
+        Some(name) => match name.try_symbol() {
+            Some(name) => name,
+            None => {
+                let class = name.real_class(&globals.store).id();
+                return Err(MonorubyErr::argumenterr(format!(
+                    "method name must be a Symbol but {} is given",
+                    globals.store.get_class_name(class)
+                )));
+            }
+        },
+    };
     let recv = lfp.self_val();
     // The call style shapes the error, mirroring CRuby's default
     // method_missing: a failed "variable call" (bare identifier —
@@ -319,6 +333,8 @@ fn no_method_error_with_args(
     // The pre-built object shows the name where the error did.
     exc.is_exception_mut().unwrap().name_span = err.name_span;
     exc.is_exception_mut().unwrap().class_span = err.class_span;
+    // A name that is not UTF-8 text is in the message as its own bytes.
+    exc.is_exception_mut().unwrap().raw_message = err.raw_message.clone();
     if let Some(name) = name {
         let _ = globals
             .store
@@ -376,11 +392,8 @@ pub(crate) fn no_method_error_unknown(
     }
     let call_args = Value::array_from_iter(args.iter().cloned());
     let err = no_method_error_with_args(globals, err, call_args, private_call);
-    if let Some(mut exc) = err.original {
+    if let Some(exc) = err.original {
         let _ = globals.store.set_ivar(exc, IdentId::_NAME, name);
-        if let Some(inner) = exc.is_exception_mut() {
-            inner.raw_message = err.raw_message.clone();
-        }
     }
     err
 }

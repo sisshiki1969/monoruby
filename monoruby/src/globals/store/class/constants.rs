@@ -579,7 +579,7 @@ impl ClassInfoTable {
                 // parent chain at lookup time and joins the segments.
                 // Anonymous ancestors are rendered using their inspect
                 // form during the walk (see `get_parents`).
-                self[target].set_name(name.to_string());
+                self[target].set_name_ident(name);
                 self[target].set_name_permanent(parent_permanent);
             } else if target_was_non_permanent && parent_permanent {
                 // Promotion: an existing non-permanent name (anonymous
@@ -589,7 +589,7 @@ impl ClassInfoTable {
                 // `Module#name` calls render the parent chain. Mirrors
                 // CRuby's `rb_set_class_path` re-binding behaviour.
                 self[target].set_parent(class_id);
-                self[target].set_name(name.to_string());
+                self[target].set_name_ident(name);
                 self[target].set_name_permanent(true);
             }
             // When the target's permanence flipped, walk its descendants

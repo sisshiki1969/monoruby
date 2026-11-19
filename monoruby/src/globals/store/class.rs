@@ -325,6 +325,32 @@ impl ClassId {
     }
 }
 
+/// Whether any class has ever been named by a constant whose name is
+/// not UTF-8 text (see `ClassInfo::name_raw`). Never cleared, and shared
+/// by every interpreter in the process: it only lets the usual
+/// `Module#name` / `#to_s` skip looking for such a name.
+static ANY_RAW_CLASS_NAME: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The bytes and encoding of a constant's name that is not UTF-8 text.
+fn raw_class_name(name: IdentId) -> Option<Box<(Vec<u8>, crate::value::Encoding)>> {
+    name.with_ident_name(|ident, enc| match ident {
+        crate::IdentName::Utf8(_) => None,
+        crate::IdentName::Bytes(b) => {
+            ANY_RAW_CLASS_NAME.store(true, std::sync::atomic::Ordering::Relaxed);
+            Some(Box::new((
+                b.clone(),
+                enc.unwrap_or(crate::value::Encoding::Ascii8),
+            )))
+        }
+    })
+}
+
+/// Whether some class may have a name that is not UTF-8 text.
+pub(crate) fn any_raw_class_name() -> bool {
+    ANY_RAW_CLASS_NAME.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
     ///
@@ -332,6 +358,12 @@ pub struct ClassInfo {
     /// if this class object is not bound to any constant, this is None.
     ///
     name: Option<String>,
+    ///
+    /// The bytes and encoding of `name` when it is not UTF-8 text — a
+    /// constant named in EUC-JP or ISO-8859-1 — where `name` holds the
+    /// lossy rendering. `Module#name` is built from these bytes.
+    ///
+    name_raw: Option<Box<(Vec<u8>, crate::value::Encoding)>>,
     ///
     /// Cached frozen `String` Value of `name`. Lazily populated by
     /// `Module#name` so that repeated calls return the same identical
@@ -637,6 +669,7 @@ impl ClassInfo {
     pub(super) fn new() -> Self {
         Self {
             name: None,
+            name_raw: None,
             name_value: None,
             name_permanent: false,
             name_explicit_temporary: false,
@@ -668,6 +701,7 @@ impl ClassInfo {
     pub(super) fn copy(&self) -> Self {
         Self {
             name: None,
+            name_raw: None,
             name_value: None,
             name_permanent: false,
             name_explicit_temporary: false,
@@ -859,6 +893,7 @@ impl ClassInfo {
 
     pub(crate) fn set_name(&mut self, name: String) {
         self.name = Some(name);
+        self.name_raw = None;
         // Invalidate any cached frozen name Value so the next call to
         // `Module#name` rebuilds it from the current `name`.
         self.name_value = None;
@@ -871,8 +906,22 @@ impl ClassInfo {
     /// `set_name` so `set_temporary_name` round-trips correctly and a
     /// later constant assignment can still promote the module to a
     /// permanent name.
+    /// [`set_name`](Self::set_name) to a constant's name, its bytes
+    /// kept when they are not UTF-8.
+    pub(crate) fn set_name_ident(&mut self, name: IdentId) {
+        self.set_name(name.to_string());
+        self.name_raw = raw_class_name(name);
+    }
+
+    /// The bytes and encoding of the leaf name, when they are not
+    /// UTF-8 (see `name_raw`).
+    pub(crate) fn name_raw(&self) -> Option<&(Vec<u8>, crate::value::Encoding)> {
+        self.name_raw.as_deref()
+    }
+
     pub(crate) fn set_temporary_name(&mut self, name: String) {
         self.name = Some(name);
+        self.name_raw = None;
         self.name_value = None;
         self.name_permanent = false;
         self.name_explicit_temporary = true;
@@ -881,6 +930,7 @@ impl ClassInfo {
 
     pub(crate) fn clear_name(&mut self) {
         self.name = None;
+        self.name_raw = None;
         self.name_value = None;
         self.name_permanent = false;
         self.name_explicit_temporary = false;
@@ -1191,6 +1241,54 @@ impl ClassInfoTable {
             cur = parent;
         }
         false
+    }
+
+    /// The path [`get_parents`](Self::get_parents) renders, as bytes,
+    /// when a name on it is not UTF-8 text (see `ClassInfo::name_raw`):
+    /// each such segment as its own bytes, the path in that segment's
+    /// encoding. `None` when every segment is UTF-8.
+    pub(crate) fn get_class_path_raw(
+        &self,
+        class: ClassId,
+    ) -> Option<(Vec<u8>, crate::value::Encoding)> {
+        // The usual answer, without rendering anything: no class on the
+        // chain has such a name.
+        let mut c = class;
+        for depth in 0.. {
+            if self[c].name_raw.is_some() {
+                break;
+            }
+            match self[c].parent {
+                // (A chain that comes round is cut where `get_parents`
+                // cuts it; the bound only keeps any other loop finite.)
+                Some(p) if p != OBJECT_CLASS && p != class && depth < 1024 => c = p,
+                _ => return None,
+            }
+        }
+        // `get_parents` walks the parent chain from the leaf, a segment
+        // per class, until it renders an anonymous one (always last).
+        let segments = self.get_parents(class);
+        let mut enc = None;
+        let mut out: Vec<Vec<u8>> = Vec::with_capacity(segments.len());
+        let mut cur = Some(class);
+        for seg in &segments {
+            let raw = cur.and_then(|c| {
+                self[c]
+                    .name_raw()
+                    .filter(|_| self[c].name.as_deref() == Some(seg.as_str()))
+            });
+            match raw {
+                Some((bytes, e)) => {
+                    enc.get_or_insert(*e);
+                    out.push(bytes.clone());
+                }
+                None => out.push(seg.as_bytes().to_vec()),
+            }
+            cur = cur.and_then(|c| self[c].parent);
+        }
+        let enc = enc?;
+        out.reverse();
+        Some((out.join(&b"::"[..]), enc))
     }
 
     pub(crate) fn get_parents(&self, mut class: ClassId) -> Vec<String> {
@@ -2131,6 +2229,7 @@ impl ClassInfoTable {
         self.set_object(class_id, class_obj.as_class());
         self[class_id].mark_dirty();
         self[class_id].name = name.map(|id| id.to_string());
+        self[class_id].name_raw = name.and_then(raw_class_name);
         self[class_id].name_permanent = name.is_some() && parent_permanent;
         self[class_id].parent = parent;
         self[class_id].instance_ty = instance_ty;
@@ -2291,6 +2390,7 @@ impl ClassInfoTable {
         self.set_object(new_id, class_obj.as_class());
         let info = &mut self[new_id];
         info.name = None;
+        info.name_raw = None;
         info.parent = None;
         info.instance_ty = instance_ty;
         info.methods = methods;

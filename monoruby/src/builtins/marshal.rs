@@ -560,13 +560,7 @@ impl<'a> MarshalReader<'a> {
             // a class or a module (Ruby 1.8 wrote this for both).
             b'M' => self.read_class_or_module_ref(globals),
             _ => Err(MonorubyErr::argumenterr(format!(
-                "unsupported marshal type tag: 0x{:02x} ('{}')",
-                tag,
-                if tag.is_ascii_graphic() {
-                    tag as char
-                } else {
-                    '?'
-                }
+                "dump format error(0x{tag:x})"
             ))),
         }
     }
@@ -921,9 +915,7 @@ impl<'a> MarshalReader<'a> {
 
         // Look up the class, walking a `::`-separated path so nested
         // classes (e.g. `MarshalSpec::Foo`) resolve correctly.
-        let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
-            MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
-        })?;
+        let module = resolve_class(globals, &class_name)?;
         // Classes with a custom allocator have internal storage (e.g.
         // Range, Time, Exception). Creating a generic Value::object for
         // them would violate later invariants and cause native panics when
@@ -1156,9 +1148,7 @@ impl<'a> MarshalReader<'a> {
         encoding: Encoding,
     ) -> Result<Value> {
         let class_name = class_sym.get_name();
-        let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
-            MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
-        })?;
+        let module = resolve_class(globals, &class_name)?;
         // Hand the payload string to `_load` in its recorded encoding.
         let payload = Value::string_from_inner(RStringInner::from_encoding(bytes, encoding));
         let load_id = IdentId::get_id("_load");
@@ -1244,9 +1234,7 @@ impl<'a> MarshalReader<'a> {
     ) -> Result<Value> {
         let class_sym = self.read_symbol(vm, globals)?;
         let class_name = class_sym.get_name();
-        let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
-            MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
-        })?;
+        let module = resolve_class(globals, &class_name)?;
         // Rational / Complex dump via #marshal_dump but are immutable
         // numerics with no Ruby-level allocator or #marshal_load; rebuild
         // them through their Kernel constructor (`Rational(n, d)` /
@@ -1298,9 +1286,7 @@ impl<'a> MarshalReader<'a> {
         let class_sym = self.read_symbol(vm, globals)?;
         let value = self.read_value(vm, globals)?;
         let class_name = class_sym.get_name();
-        let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
-            MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
-        })?;
+        let module = resolve_class(globals, &class_name)?;
         // `_load_data` must be defined (CRuby raises TypeError with
         // this exact message when it is missing).
         let load_data_id = IdentId::get_id("_load_data");
@@ -1342,15 +1328,7 @@ impl<'a> MarshalReader<'a> {
         // the one Rails hands `Marshal.dump` for every cached template —
         // never resolved, so `Marshal.load` raised `undefined
         // class/module` on a dump monoruby had written itself.
-        let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
-            MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
-        })?;
-        if module.as_val().ty() == Some(ObjTy::MODULE) {
-            return Err(MonorubyErr::argumenterr(format!(
-                "{} is not a class",
-                class_name
-            )));
-        }
+        let module = resolve_class(globals, &class_name)?;
         // A `C :Hash` wrapper around a Hash is CRuby's marker for a
         // compare_by_identity hash (not an actual class change).
         if module.id() == HASH_CLASS && inner.ty() == Some(ObjTy::HASH) {
@@ -1414,9 +1392,7 @@ impl<'a> MarshalReader<'a> {
     fn read_extended(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let module_sym = self.read_symbol(vm, globals)?;
         let module_name = module_sym.get_name();
-        let module = resolve_class_path(globals, &module_name).ok_or_else(|| {
-            MonorubyErr::argumenterr(format!("undefined class/module {}", module_name))
-        })?;
+        let module = resolve_class_path(globals, &module_name)?;
         if module.as_val().is_class().is_some() {
             // CRuby: a Class here records a module prepended to the
             // object's own class; it must name that very class.
@@ -1490,18 +1466,21 @@ impl<'a> MarshalReader<'a> {
         self.objects.push(Value::nil());
 
         let class_name = class_sym.get_name();
-        let module = resolve_class_path(globals, &class_name).ok_or_else(|| {
-            MonorubyErr::argumenterr(format!("undefined class/module {}", class_name))
-        })?;
+        let module = resolve_class(globals, &class_name)?;
 
         // The declared member list lives on the class (or an
         // ancestor — direct `class A < SomeStruct` subclasses
         // inherit `/members` from their `Struct.new`-produced
         // superclass). Walking the chain matches the existing
         // `Struct#get_members` lookup. Absence ⇒ not a Struct.
-        let members = lookup_struct_members(globals, module).ok_or_else(|| {
-            MonorubyErr::typeerr(format!("{} is not a Struct", class_name))
-        })?;
+        // `rb_obj_alloc` comes first: a class with no allocator says so.
+        if globals.store[module.id()].alloc_func().is_none() {
+            return Err(MonorubyErr::typeerr(format!(
+                "allocator undefined for {class_name}"
+            )));
+        }
+        let members = lookup_struct_members(globals, module)
+            .ok_or_else(|| MonorubyErr::typeerr(format!("class {} not a struct", class_name)))?;
 
         // CRuby's struct loader enforces that the marshalled member
         // names exactly match the class's declared members (same
@@ -1561,11 +1540,12 @@ impl<'a> MarshalReader<'a> {
     /// the resolved constant is a Module).
     fn read_class_ref(&mut self, globals: &mut Globals) -> Result<Value> {
         let name = self.read_class_or_module_name()?;
-        let module = resolve_class_path(globals, &name).ok_or_else(|| {
-            MonorubyErr::argumenterr(format!("undefined class/module {}", name))
-        })?;
+        let module = resolve_class_path(globals, &name)?;
         if module.as_val().ty() == Some(ObjTy::MODULE) {
-            return Err(MonorubyErr::argumenterr(format!("{} is not a class", name)));
+            return Err(MonorubyErr::argumenterr(format!(
+                "{} does not refer to class",
+                name
+            )));
         }
         let val = module.as_val();
         self.objects.push(val);
@@ -1576,11 +1556,12 @@ impl<'a> MarshalReader<'a> {
     /// but rejects Class with `TypeError`.
     fn read_module_ref(&mut self, globals: &mut Globals) -> Result<Value> {
         let name = self.read_class_or_module_name()?;
-        let module = resolve_class_path(globals, &name).ok_or_else(|| {
-            MonorubyErr::argumenterr(format!("undefined class/module {}", name))
-        })?;
+        let module = resolve_class_path(globals, &name)?;
         if module.as_val().ty() != Some(ObjTy::MODULE) {
-            return Err(MonorubyErr::argumenterr(format!("{} is not a module", name)));
+            return Err(MonorubyErr::argumenterr(format!(
+                "{} does not refer to module",
+                name
+            )));
         }
         let val = module.as_val();
         self.objects.push(val);
@@ -1591,30 +1572,50 @@ impl<'a> MarshalReader<'a> {
     /// that accepts either a class or a module.
     fn read_class_or_module_ref(&mut self, globals: &mut Globals) -> Result<Value> {
         let name = self.read_class_or_module_name()?;
-        let module = resolve_class_path(globals, &name).ok_or_else(|| {
-            MonorubyErr::argumenterr(format!("undefined class/module {}", name))
-        })?;
+        let module = resolve_class_path(globals, &name)?;
         let val = module.as_val();
         self.objects.push(val);
         Ok(val)
     }
 }
 
-/// Walk a `::`-separated constant path starting at `Object`.
-/// Returns `None` if any segment is missing or not a class/module.
-fn resolve_class_path(globals: &Globals, path: &str) -> Option<Module> {
+/// Walk a `::`-separated constant path starting at `Object`
+/// (`rb_path_to_class`): a segment that is not there is the
+/// ArgumentError `undefined class/module …` (naming the path up to it),
+/// and one that is no class or module the TypeError `… does not refer
+/// to class/module`.
+fn resolve_class_path(globals: &Globals, path: &str) -> Result<Module> {
     let mut current_class_id = OBJECT_CLASS;
     let mut last: Option<Module> = None;
+    let mut end = 0;
     for segment in path.split("::") {
+        end += if last.is_some() { 2 } else { 0 } + segment.len();
         let name = IdentId::get_id(segment);
         let val = globals
             .get_constant(current_class_id, name)
-            .and_then(|s| s.loaded_value())?;
-        let module = val.is_class_or_module()?;
+            .and_then(|s| s.loaded_value())
+            .ok_or_else(|| {
+                MonorubyErr::argumenterr(format!("undefined class/module {}", &path[..end]))
+            })?;
+        let module = val.is_class_or_module().ok_or_else(|| {
+            MonorubyErr::typeerr(format!("{} does not refer to class/module", path))
+        })?;
         current_class_id = module.id();
         last = Some(module);
     }
-    last
+    last.ok_or_else(|| MonorubyErr::argumenterr(format!("undefined class/module {path}")))
+}
+
+/// `path2class`: [`resolve_class_path`], and a module where a class is
+/// wanted is the ArgumentError `… does not refer to class`.
+fn resolve_class(globals: &Globals, path: &str) -> Result<Module> {
+    let module = resolve_class_path(globals, path)?;
+    if module.as_val().ty() == Some(ObjTy::MODULE) {
+        return Err(MonorubyErr::argumenterr(format!(
+            "{path} does not refer to class"
+        )));
+    }
+    Ok(module)
 }
 
 /// State of the builtin exception classes that CRuby keeps in instance

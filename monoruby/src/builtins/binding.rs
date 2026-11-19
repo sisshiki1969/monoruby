@@ -173,13 +173,15 @@ fn local_variable_defined(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let arg = lfp.arg(0);
-    let name = arg_to_local_name(arg, vm, globals)?
-        .ok_or_else(|| name_not_local_err(arg, &globals.store))?;
-    if let Some(err) = numbered_param_error(name) {
+    let self_val = lfp.self_val();
+    let name = match check_local_id(vm, globals, self_val, lfp.arg(0))? {
+        LocalName::Id(name) => name,
+        // No Symbol of that name exists, so no local has it.
+        LocalName::Unknown(_) => return Ok(Value::bool(false)),
+    };
+    if let Some(err) = numbered_param_error(name, self_val) {
         return Err(err);
     }
-    let self_val = lfp.self_val();
     let inner = self_val.as_binding_inner();
     if name.get_name() == "it" && it_is_implicit_param(globals, inner) {
         return Ok(Value::bool(false));
@@ -202,13 +204,29 @@ fn local_variable_get(
     lfp: Lfp,
     pc: BytecodePtr,
 ) -> Result<Value> {
-    let arg = lfp.arg(0);
-    let name = arg_to_local_name(arg, vm, globals)?
-        .ok_or_else(|| name_not_local_err(arg, &globals.store))?;
-    if let Some(err) = numbered_param_error(name) {
+    let self_val = lfp.self_val();
+    let name = match check_local_id(vm, globals, self_val, lfp.arg(0))? {
+        LocalName::Id(name) => name,
+        // No Symbol of that name exists, so no local has it: the
+        // NameError is about the String.
+        LocalName::Unknown(name) => {
+            let shown = self_val.to_s(&globals.store);
+            let inner = name.as_rstring_inner();
+            let (bytes, enc) = (inner.as_bytes().to_vec(), inner.encoding());
+            return Err(crate::builtins::kernel::name_error_reflection_bytes(
+                globals,
+                "local variable '",
+                &bytes,
+                enc,
+                &format!("' is not defined for {shown}"),
+                name,
+                self_val,
+            ));
+        }
+    };
+    if let Some(err) = numbered_param_error(name, self_val) {
         return Err(err);
     }
-    let self_val = lfp.self_val();
     let inner = self_val.as_binding_inner();
     // The implicit `it` parameter is not a local variable — report it as
     // undefined rather than returning the parameter's value.
@@ -248,14 +266,18 @@ fn local_variable_set(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let arg = lfp.arg(0);
-    let name = arg_to_local_name(arg, vm, globals)?
-        .ok_or_else(|| name_not_local_err(arg, &globals.store))?;
-    if let Some(err) = numbered_param_error(name) {
+    let self_val = lfp.self_val();
+    let name = match check_local_id(vm, globals, self_val, lfp.arg(0))? {
+        LocalName::Id(name) => name,
+        // `rb_intern_str`: the new local's name.
+        LocalName::Unknown(name) => {
+            crate::builtins::string::intern_name_string(&globals.store, name.as_rstring_inner())?
+        }
+    };
+    if let Some(err) = numbered_param_error(name, self_val) {
         return Err(err);
     }
     let val = lfp.arg(1);
-    let self_val = lfp.self_val();
     let inner = self_val.as_binding_inner();
     // Assigning `:it` when `it` is the implicit block parameter does not
     // touch the parameter (it is not a real local); match CRuby by leaving
@@ -272,8 +294,14 @@ fn local_variable_set(
     // Not yet bound — introduce the local in the binding's eval scope by
     // compiling a stub `<name> = nil`, then write the actual value.
     let binding = Binding::try_new(self_val).expect("self is Binding");
-    let stub = format!("{} = nil", name);
-    globals.compile_script_binding(stub.into_bytes(), "(local_variable_set)", binding, 1, None)?;
+    // The stub is source in the name's own encoding, so a name that is
+    // not UTF-8 (EUC-JP, BINARY) is read back as the same bytes.
+    let (mut stub, src_enc) = name.with_ident_name(|ident, enc| {
+        let enc = enc.filter(|_| !ident.is_utf8());
+        (ident.as_bytes().to_vec(), enc.map(|e| e.name().to_string()))
+    });
+    stub.extend_from_slice(b" = nil");
+    globals.compile_script_binding(stub, "(local_variable_set)", binding, 1, src_enc)?;
     vm.invoke_binding(globals, binding.binding().unwrap())?;
     let inner = self_val.as_binding_inner();
     let (mut host, slot) = lookup_local_in_binding(globals, inner, name)
@@ -431,33 +459,103 @@ fn arg_to_implicit_name(arg: Value, vm: &mut Executor, globals: &mut Globals) ->
     )))
 }
 
-/// Coerce a `local_variable_*` argument to an interned name. Returns
-/// `Ok(None)` when the value parses to something that cannot be a local
-/// variable (e.g. `:$0`, `:@x`, `:Foo`); callers decide whether that
-/// becomes `false` (defined?) or a NameError (get/set).
-fn arg_to_local_name(
-    arg: Value,
-    vm: &mut Executor,
-    globals: &mut Globals,
-) -> Result<Option<IdentId>> {
-    // Same coercion — and the same TypeError — as the implicit-parameter
-    // accessors: CRuby names the offending object rather than reporting a
-    // generic conversion failure.
-    let name = arg_to_implicit_name(arg, vm, globals)?;
-    let s = name.get_name();
-    if is_valid_local_name(&s) {
-        Ok(Some(name))
-    } else {
-        Ok(None)
-    }
+/// A `local_variable_*` name as [`check_local_id`] reads it.
+enum LocalName {
+    /// The name's Symbol.
+    Id(IdentId),
+    /// A local name no Symbol exists for — so no local has it — as the
+    /// String given (or what `to_str` answered).
+    Unknown(Value),
 }
 
-fn name_not_local_err(arg: Value, store: &Store) -> MonorubyErr {
-    MonorubyErr::nameerr(format!(
-        "wrong local variable name `{}' for {}",
-        arg.to_s(store),
-        "Binding"
-    ))
+/// CRuby's `check_local_id`: the name argument of `local_variable_get`
+/// / `_set` / `_defined?`, through `rb_check_id` — a Symbol; a String,
+/// or what `to_str` answers, which is refused when its bytes are broken
+/// (`EncodingError: invalid symbol in encoding …`) and looked up without
+/// interning; and a TypeError naming anything else. A name that is no
+/// local variable name is the NameError `wrong local variable name
+/// '…' for <binding>`, about the Symbol when one exists and the String
+/// otherwise, the name's bytes kept as they are in the message.
+fn check_local_id(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    bind: Value,
+    arg: Value,
+) -> Result<LocalName> {
+    let (id, string) = if let Some(sym) = arg.try_symbol() {
+        (Some(sym), None)
+    } else {
+        let s = if arg.is_rstring().is_some() {
+            arg
+        } else {
+            match arg.check_string_type(vm, globals)? {
+                Some(s) => s,
+                None => {
+                    return Err(MonorubyErr::typeerr(format!(
+                        "{} is not a symbol nor a string",
+                        arg.inspect(&globals.store)
+                    )));
+                }
+            }
+        };
+        let inner = s.as_rstring_inner();
+        crate::builtins::string::check_symbol_bytes(&globals.store, inner, true)?;
+        (crate::builtins::string::existing_name_id(inner), Some(s))
+    };
+    let (bytes, enc, shown) = match (id, string) {
+        (Some(id), _) => {
+            let name = crate::builtins::symbol::symbol_string_inner(id);
+            (name.as_bytes().to_vec(), name.encoding(), Value::symbol(id))
+        }
+        (None, Some(s)) => {
+            let inner = s.as_rstring_inner();
+            (inner.as_bytes().to_vec(), inner.encoding(), s)
+        }
+        (None, None) => unreachable!(),
+    };
+    if !is_local_name_bytes(&bytes, enc) {
+        let after = format!("' for {}", bind.to_s(&globals.store));
+        return Err(crate::builtins::kernel::name_error_reflection_bytes(
+            globals,
+            "wrong local variable name '",
+            &bytes,
+            enc,
+            &after,
+            shown,
+            bind,
+        ));
+    }
+    Ok(match id {
+        Some(id) => LocalName::Id(id),
+        // `_1`..`_9` always exist as Symbols in CRuby: the reserved
+        // numbered parameters are refused by name.
+        None if bytes.len() == 2 && bytes[0] == b'_' && (b'1'..=b'9').contains(&bytes[1]) => {
+            // SAFETY: two ASCII bytes.
+            LocalName::Id(IdentId::get_id(unsafe {
+                std::str::from_utf8_unchecked(&bytes)
+            }))
+        }
+        None => LocalName::Unknown(shown),
+    })
+}
+
+/// `rb_is_local_name`: a lowercase ASCII letter, `_` or a character
+/// that is not ASCII and does not start a constant name, then letters,
+/// digits, `_` and characters that are not ASCII. Nothing in an
+/// encoding that is not ASCII-compatible is one.
+fn is_local_name_bytes(bytes: &[u8], enc: crate::value::Encoding) -> bool {
+    if !enc.is_ascii_compatible() || enc.is_cruby_dummy() {
+        return false;
+    }
+    let Some(&first) = bytes.first() else {
+        return false;
+    };
+    let first_ok = if first.is_ascii() {
+        first.is_ascii_lowercase() || first == b'_'
+    } else {
+        !crate::builtins::module::is_const_start(bytes, enc)
+    };
+    first_ok && crate::builtins::module::ident_chars_from(bytes, enc, 0)
 }
 
 /// Whether `it` resolves to the implicit block parameter (Ruby 3.4) in this
@@ -491,7 +589,7 @@ fn it_is_implicit_param(globals: &Globals, inner: &BindingInner) -> bool {
 /// raise a specific NameError for them regardless of whether the block
 /// actually uses numbered parameters (matching CRuby). `_0` and `_10`+ are
 /// ordinary names.
-fn numbered_param_error(name: IdentId) -> Option<MonorubyErr> {
+fn numbered_param_error(name: IdentId, bind: Value) -> Option<MonorubyErr> {
     let s = name.get_name();
     let b = s.as_bytes();
     if b.len() == 2 && b[0] == b'_' && (b'1'..=b'9').contains(&b[1]) {
@@ -499,23 +597,11 @@ fn numbered_param_error(name: IdentId) -> Option<MonorubyErr> {
             format_args!("numbered parameter '"),
             name,
             format_args!("' is not a local variable"),
-            None,
+            Some(bind),
         ))
     } else {
         None
     }
-}
-
-fn is_valid_local_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    let valid_first = first.is_ascii_lowercase() || first == '_' || !first.is_ascii();
-    if !valid_first {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || !c.is_ascii())
 }
 
 /// Walk the lfp chain captured by the binding looking for `name` in

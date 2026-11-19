@@ -166,6 +166,7 @@ mod module_instance_method;
 mod monitor;
 mod mul_assign;
 mod name_argument_checks;
+mod name_argument_leftovers;
 mod name_error_api;
 mod name_error_messages;
 mod name_errors_singleton_fstring;
