@@ -672,7 +672,7 @@ fn message_rendered(vm: &mut Executor, globals: &mut Globals, exception: Value) 
     let enc = match other_enc {
         Some(enc) if std::str::from_utf8(&bytes).is_err() => enc,
         _ if ex.given_message => crate::value::Encoding::UTF8,
-        _ => built_message_encoding(&globals.store, exception, &bytes),
+        _ => built_message_encoding(exception, &bytes),
     };
     Ok(Value::string_from_inner(RStringInner::from_encoding(
         &bytes, enc,
@@ -748,7 +748,7 @@ pub(crate) fn message_value(store: &Store, exception: Value) -> Value {
     if ex.given_message {
         return Value::string_from_str(&ex.message);
     }
-    let enc = built_message_encoding(store, exception, ex.message.as_bytes());
+    let enc = built_message_encoding(exception, ex.message.as_bytes());
     Value::string_from_inner(crate::value::RStringInner::from_encoding(
         ex.message.as_bytes(),
         enc,
@@ -765,33 +765,20 @@ pub(crate) fn message_value(store: &Store, exception: Value) -> Value {
 /// carry the source's text and are UTF-8. A message with non-ASCII
 /// text is UTF-8 here: what was formatted into it was.
 ///
-pub(crate) fn built_message_encoding(
-    store: &Store,
-    exception: Value,
-    message: &[u8],
-) -> crate::value::Encoding {
+pub(crate) fn built_message_encoding(exception: Value, message: &[u8]) -> crate::value::Encoding {
     use crate::value::Encoding;
     if !message.is_ascii() {
         return Encoding::UTF8;
     }
-    // The kind says it for the interpreter's own errors, without a walk
-    // of the ancestors.
+    // The kind says it, without a walk of the ancestors: a message is
+    // built only by the interpreter, and an error it builds as
+    // `Other(class)` is never of the NameError / SyntaxError /
+    // RegexpError families (a Ruby-made instance's message is given or
+    // its class's name).
     match exception.is_exception().map(|ex| &ex.kind) {
-        Some(MonorubyErrKind::NotMethod { .. } | MonorubyErrKind::Name(..)) => {
-            return Encoding::UsAscii;
-        }
-        Some(MonorubyErrKind::Syntax | MonorubyErrKind::Regex) => return Encoding::UTF8,
-        Some(MonorubyErrKind::Other(_)) | None => {}
-        Some(_) => return Encoding::Ascii8,
-    }
-    if exception.is_kind_of(store, NAME_ERROR_CLASS) {
-        Encoding::UsAscii
-    } else if exception.is_kind_of(store, SYNTAX_ERROR_CLASS)
-        || exception.is_kind_of(store, REGEX_ERROR_CLASS)
-    {
-        Encoding::UTF8
-    } else {
-        Encoding::Ascii8
+        Some(MonorubyErrKind::NotMethod { .. } | MonorubyErrKind::Name(..)) => Encoding::UsAscii,
+        Some(MonorubyErrKind::Syntax | MonorubyErrKind::Regex) => Encoding::UTF8,
+        _ => Encoding::Ascii8,
     }
 }
 

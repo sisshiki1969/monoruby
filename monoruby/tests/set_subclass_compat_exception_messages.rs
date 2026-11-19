@@ -80,7 +80,7 @@ fn built_message_encodings() {
           enc.() {{ {{}}.fetch(:a) }}, enc.() {{ foo }}, enc.() {{ 1.foo }}, enc.() {{ raise "x" }},
           enc.() {{ raise "x".b }}, enc.() {{ Integer("z") }}, enc.() {{ [].fetch(3) }}, enc.() {{ 1 / 0 }},
           enc.() {{ nil + 1 }}, enc.() {{ throw :a }}, enc.() {{ raise ArgumentError }}, enc.() {{ Foo }},
-          enc.() {{ m }}, enc.() {{ exit }}, enc.() {{ abort }}, enc.() {{ Object.const_get(:lower) }},
+          enc.() {{ m }}, enc.() {{ exit }}, enc.() {{ abort }}, enc.() {{ abort "x".b }}, enc.() {{ Object.const_get(:lower) }},
           enc.() {{ "a".freeze << "b" }}, enc.() {{ [].each.next }}, enc.() {{ raise StopIteration }},
           enc.() {{ raise Interrupt }}, enc.() {{ raise SignalException, "INT" }},
           enc.() {{ raise Class.new(StandardError) }}, enc.() {{ raise ArgumentError, "given" }},

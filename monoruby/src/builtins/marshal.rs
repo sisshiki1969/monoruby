@@ -2111,14 +2111,11 @@ fn marshal_write_symbol(buf: &mut Vec<u8>, id: IdentId, symbols: &mut Vec<IdentI
         marshal_write_encoding_ivar_pair(buf, enc, symbols);
     }
 }
-/// Write just the encoding instance-variable *pair* (symbol + value),
-/// without the leading ivar count — used when other user ivars share the
-/// same `I` block.
+
 /// A `NameError::message` holding *mesg*, as its `_dump` writes it
 /// (`name_err_mesg_dump` answers the rendered String): a `'u'` record
-/// of the String's bytes, wrapped in `'I'` for its encoding unless it
-/// is BINARY. The object takes a slot of the link table, as in CRuby;
-/// nothing can link to it.
+/// of the String's bytes, wrapped in `'I'` for its encoding. The object
+/// takes a slot of the link table, as in CRuby; nothing can link to it.
 fn marshal_write_name_err_mesg(
     buf: &mut Vec<u8>,
     mesg: Value,
@@ -2126,22 +2123,23 @@ fn marshal_write_name_err_mesg(
     objects: &mut Vec<u64>,
 ) {
     let inner = mesg.as_rstring_inner();
+    // A built NameError message is US-ASCII, or UTF-8 with non-ASCII
+    // text (`built_message_encoding`), never BINARY, so it always has
+    // its `'I'`.
     let enc = inner.encoding();
-    let has_i = enc != Encoding::Ascii8;
-    if has_i {
-        buf.push(b'I');
-    }
+    buf.push(b'I');
     buf.push(b'u');
     marshal_write_symbol(buf, IdentId::get_id("NameError::message"), symbols);
     marshal_write_fixnum(buf, inner.len() as i32);
     buf.extend_from_slice(inner.as_bytes());
-    if has_i {
-        marshal_write_fixnum(buf, 1);
-        marshal_write_encoding_ivar_pair(buf, enc, symbols);
-    }
+    marshal_write_fixnum(buf, 1);
+    marshal_write_encoding_ivar_pair(buf, enc, symbols);
     objects.push(0);
 }
 
+/// Write just the encoding instance-variable *pair* (symbol + value),
+/// without the leading ivar count — used when other user ivars share the
+/// same `I` block.
 fn marshal_write_encoding_ivar_pair(buf: &mut Vec<u8>, enc: Encoding, symbols: &mut Vec<IdentId>) {
     match enc {
         // The short `E: true/false` form names UTF-8, US-ASCII and
@@ -3118,31 +3116,28 @@ fn marshal_dump_value(
                         let mut loaded_locations = None;
                         let mut user_ivars = vec![];
                         let mut late_ivars = vec![];
-                        if let Some(rval) = obj.try_rvalue() {
-                            for (name, id) in globals.store[obj.class()].ivar_names() {
-                                let Some(val) = rval.get_ivar_by_ivarid(*id) else {
-                                    continue;
-                                };
-                                let wire = if !name.is_hidden_ivar() {
-                                    *name
-                                } else if let Some(wire) =
-                                    name.get_name().strip_prefix(EXTRA_FIELD_PREFIX)
-                                {
-                                    IdentId::get_id(wire)
-                                } else {
-                                    continue;
-                                };
-                                if wire == bt_locations {
-                                    if !has_locations {
-                                        loaded_locations = Some((wire, val));
-                                    }
-                                } else if at_raise
-                                    .is_some_and(|bits| bits & ivar_slot_bit(*id) == 0)
-                                {
-                                    late_ivars.push((wire, val));
-                                } else {
-                                    user_ivars.push((wire, val));
+                        let rval = obj.rvalue();
+                        for (name, id) in globals.store[obj.class()].ivar_names() {
+                            let Some(val) = rval.get_ivar_by_ivarid(*id) else {
+                                continue;
+                            };
+                            let wire = if !name.is_hidden_ivar() {
+                                *name
+                            } else if let Some(wire) =
+                                name.get_name().strip_prefix(EXTRA_FIELD_PREFIX)
+                            {
+                                IdentId::get_id(wire)
+                            } else {
+                                continue;
+                            };
+                            if wire == bt_locations {
+                                if !has_locations {
+                                    loaded_locations = Some((wire, val));
                                 }
+                            } else if at_raise.is_some_and(|bits| bits & ivar_slot_bit(*id) == 0) {
+                                late_ivars.push((wire, val));
+                            } else {
+                                user_ivars.push((wire, val));
                             }
                         }
                         let (early_locations, loaded_locations) = if at_raise.is_some() {
