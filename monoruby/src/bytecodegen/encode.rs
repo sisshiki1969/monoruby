@@ -246,7 +246,9 @@ impl<'a> BytecodeGen<'a> {
                 labels,
             } => {
                 // 36
-                let else_ = labels[0];
+                // `labels` is [fallback, else, then...]: a table entry no
+                // `when` names is the `else` body.
+                let else_ = labels[1];
                 let else_ofs = u32::try_from(self[else_] - bc_pos - 1).unwrap();
                 let mut branch_table = vec![else_ofs; (max - min + 1) as usize];
                 for (i, label) in table {
@@ -539,6 +541,17 @@ impl<'a> BytecodeGen<'a> {
                 let op2 = self.slot_id(&rhs);
                 Bytecode::from_with_class2(enc_www(157, op1.0, op1.0, op2.0))
             }
+            BytecodeInst::CaseTEq { lhs, rhs } => {
+                let op1 = self.slot_id(&lhs);
+                let op2 = self.slot_id(&rhs);
+                let callid = self.new_callsite(
+                    CallSite::binary(Some(IdentId::_TEQ), lhs, rhs, Some(lhs)),
+                    bc_pos,
+                )?;
+                self.store
+                    .new_callsite_map_entry(self.iseq_id, bc_pos, callid);
+                Bytecode::from_with_class2(enc_www(158, op1.0, op1.0, op2.0))
+            }
             BytecodeInst::Cmp(kind, ret, (lhs, rhs), optimizable) => {
                 let op1 = ret.map_or(SlotId::self_(), |ret| self.slot_id(&ret));
                 let op2 = self.slot_id(&lhs);
@@ -713,6 +726,11 @@ impl<'a> BytecodeGen<'a> {
                 let op1 = self.slot_id(&dst);
                 let op2 = self.slot_id(&src);
                 Bytecode::from(enc_ww(177, op1.0, op2.0))
+            }
+            BytecodeInst::BlockCode { dst, src } => {
+                let op1 = self.slot_id(&dst);
+                let op2 = self.slot_id(&src);
+                Bytecode::from(enc_ww(182, op1.0, op2.0))
             }
             BytecodeInst::Mov(dst, src) => {
                 let op1 = self.slot_id(&dst);

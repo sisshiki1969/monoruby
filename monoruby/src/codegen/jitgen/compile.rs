@@ -1133,6 +1133,26 @@ impl<'a> JitContext<'a> {
                 state.def_rax2acc(ir, dst);
                 state.unset_side_effect_guard();
             }
+            TraceIr::BlockCode { dst, src } => {
+                // Only a Symbol in a scope with refinements active becomes
+                // something else (`runtime::jit_block_code`); the set is
+                // this body's, a compile-time constant (`using` bumps the
+                // class version).
+                let set = self.refinements();
+                if set.is_empty() || state.class(src).is_some_and(|c| c != SYMBOL_CLASS) {
+                    if dst != src {
+                        if !matches!(state.mode(src), LinkMode::S(_) | LinkMode::C(_)) {
+                            state.flush_gp(ir);
+                        }
+                        state.copy_slot(ir, src, dst);
+                    }
+                } else {
+                    state.flush_gp(ir);
+                    state.write_back(ir, src, Keep::All);
+                    ir.block_code(state, src, set, pc);
+                    state.def_rax2acc(ir, dst);
+                }
+            }
             TraceIr::Mov(dst, src) => {
                 // An elided object moving into `dst`
                 // (`doc/escape_analysis.md` §10; `settle_virtuals` has
@@ -1643,12 +1663,22 @@ impl<'a> JitContext<'a> {
                 min,
                 max,
                 else_disp,
+                fallback_disp,
                 branch_table,
             } => {
+                let else_dest = self.iseq().get_bb(bc_pos + 1 + else_disp);
+                // The table answers as `Integer#===` would: without it, the
+                // `when` values are compared one by one.
+                if !self.basic_op_assumable(CachedClass::INTEGER, IdentId::_TEQ) {
+                    state.flush_gp_keep_pin(ir);
+                    return Ok(CompileResult::Branch(
+                        self.iseq().get_bb(bc_pos + 1 + fallback_disp),
+                    ));
+                }
+                self.record_bop_dep(CachedClass::INTEGER, IdentId::_TEQ);
                 state.flush_gp(ir);
                 state.load_fixnum(ir, cond, GP::Rdi);
                 let mut branch_labels = vec![];
-                let else_dest = self.iseq().get_bb(bc_pos + 1 + else_disp);
                 for disp in branch_table {
                     let branch_dest = self.label();
                     branch_labels.push(branch_dest);

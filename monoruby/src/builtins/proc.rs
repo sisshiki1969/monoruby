@@ -168,14 +168,18 @@ fn proc_eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resul
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Proc/i/hash.html]
 ///
-/// Hashes on a subset of the equality components (`FuncId` + captured
-/// `self`) so that `==`-equal procs are guaranteed to hash equal.
+/// Hashes on a subset of the equality components (`FuncId`, captured
+/// `self` and the outer frame) so that `==`-equal procs are guaranteed to
+/// hash equal.
 #[monoruby_builtin]
 fn proc_hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let proc = Proc::new(lfp.self_val());
+    let outer = proc.outer_lfp().map_or(0, |lfp| lfp.as_ptr() as u64);
     let h = (proc.func_id().get() as u64)
         .wrapping_mul(31)
-        .wrapping_add(proc.self_val().id());
+        .wrapping_add(proc.self_val().id())
+        .wrapping_mul(31)
+        .wrapping_add(outer);
     Ok(Value::from_hash_digest(h))
 }
 
@@ -350,7 +354,10 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // block passed to Proc#call is forwarded to the invoked method. The
     // regular invoke_proc/block_invoker path currently drops block handlers.
     if proc.func_id() == SYMBOL_TO_PROC_BODY_FUNCID {
-        let symbol_id = proc
+        let outer = proc
+            .outer_lfp()
+            .expect("symbol-to-proc proc without an outer frame");
+        let symbol_id = outer
             .self_val()
             .try_symbol()
             .expect("symbol-to-proc outer self is not a Symbol");
@@ -361,13 +368,21 @@ fn call(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             // is `{k: 1}.to_s` in CRuby, the body having no keyword
             // parameters to bind them to.
             if let Some(kw) = kw {
-                return vm.call_symbol_proc_kw(globals, symbol_id, kw.as_val(), &[], bh, None);
+                return vm.dispatch_symbol_proc(
+                    globals,
+                    symbol_id,
+                    outer,
+                    kw.as_val(),
+                    &[],
+                    bh,
+                    None,
+                );
             }
             return Err(MonorubyErr::argumenterr("no receiver given"));
         };
-        // Same dispatch as a yield to this proc — one public-restricted
-        // lookup, the arguments still rooted by this frame's slots.
-        return vm.call_symbol_proc_kw(globals, symbol_id, *recv, rest, bh, kw);
+        // Same dispatch as a yield to this proc, the arguments still
+        // rooted by this frame's slots.
+        return vm.dispatch_symbol_proc(globals, symbol_id, outer, *recv, rest, bh, kw);
     }
     let bh = lfp.block();
     let args = lfp.variadic_args();
@@ -424,11 +439,17 @@ fn to_s(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     let func_id = proc.func_id();
     let is_lambda = !globals[func_id].is_block_style();
     let mut s = format!("#<Proc:0x{:016x}", self_.id());
-    if func_id == SYMBOL_TO_PROC_BODY_FUNCID
-        && let Some(sym) = proc.self_val().try_symbol()
-    {
-        // `:foo.to_proc` renders as `#<Proc:0x..(&:foo) (lambda)>`.
-        s.push_str(&format!("(&:{})", sym));
+    if func_id == SYMBOL_TO_PROC_BODY_FUNCID {
+        // `:foo.to_proc` renders as `#<Proc:0x..(&:foo) (lambda)>`. The
+        // proc a `&:foo` written under refinements becomes is a C lambda
+        // in CRuby (`rb_func_lambda_new`), which names nothing.
+        if let Some(sym) = proc.self_val().try_symbol()
+            && proc
+                .outer_lfp()
+                .is_none_or(|outer| globals.refined_symbol_proc_set(outer).is_none())
+        {
+            s.push_str(&format!("(&:{})", sym));
+        }
     } else if func_id == METHOD_TO_PROC_BODY_FUNCID {
         // A `Method#to_proc` proc has no block of its own to locate
         // (`rb_block_to_s` writes nothing for it), although its

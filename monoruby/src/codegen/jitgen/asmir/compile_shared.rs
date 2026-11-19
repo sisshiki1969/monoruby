@@ -407,6 +407,17 @@ impl Codegen {
                 using_fpr,
             }),
             AsmInst::ToA { src, using_fpr } => self.encode_linst(LInst::ToA { src, using_fpr }),
+            AsmInst::BlockCode {
+                src,
+                set,
+                pc,
+                using_fpr,
+            } => self.encode_linst(LInst::BlockCode {
+                src,
+                set,
+                pc,
+                using_fpr,
+            }),
             AsmInst::DeepCopyLit(v, using_fpr) => {
                 self.encode_linst(LInst::DeepCopyLit { v, using_fpr })
             }
@@ -2211,6 +2222,14 @@ impl Codegen {
             }
             LInst::ToA { src, using_fpr } => {
                 self.emit_to_a(src, using_fpr);
+            }
+            LInst::BlockCode {
+                src,
+                set,
+                pc,
+                using_fpr,
+            } => {
+                self.emit_block_code(src, set, pc, using_fpr);
             }
             LInst::DeepCopyLit { v, using_fpr } => {
                 self.emit_deep_copy_lit(v, using_fpr);

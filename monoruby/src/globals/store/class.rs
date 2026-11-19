@@ -3136,6 +3136,16 @@ impl Store {
     }
 
     fn set_bop_redefine(&mut self, class_id: ClassId, name: IdentId) {
+        // Every class with a `===` pair is one a `case` dispatches on.
+        if name == IdentId::_TEQ {
+            self.basic_ops.disable_case_dispatch();
+        }
+        self.mark_bop_redefined(class_id, name);
+    }
+
+    /// [`Self::set_bop_redefine`] without its own consequences for a
+    /// `case`: what a redefined `==` takes down along with it.
+    fn mark_bop_redefined(&mut self, class_id: ClassId, name: IdentId) {
         self.basic_ops.mark_redefined(class_id, name);
         self.invalidate_bop_fast_paths(class_id, name);
         // No class has a `!=` of its own: it is `BasicObject#!=`, which
@@ -3144,7 +3154,7 @@ impl Store {
         // *refinement* of `==`, which `BasicObject#!=` never sees — it
         // calls `==` as C does. See `Executor::eq_values_funcall`.)
         if name == IdentId::_EQ && self.basic_ops.contains(class_id, IdentId::_NEQ) {
-            self.set_bop_redefine(class_id, IdentId::_NEQ);
+            self.mark_bop_redefined(class_id, IdentId::_NEQ);
         }
         // `nil`, `true` and `false` answer `===` with `rb_equal`
         // (`case_equal`): identity, then the receiver's `==`. Their
@@ -3153,7 +3163,7 @@ impl Store {
             && matches!(class_id, NIL_CLASS | TRUE_CLASS | FALSE_CLASS)
             && self.basic_ops.contains(class_id, IdentId::_TEQ)
         {
-            self.set_bop_redefine(class_id, IdentId::_TEQ);
+            self.mark_bop_redefined(class_id, IdentId::_TEQ);
         }
     }
 

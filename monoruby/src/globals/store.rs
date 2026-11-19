@@ -1395,6 +1395,13 @@ impl Store {
     /// ran) — the definition monoruby's own Ruby-written core is bound to,
     /// whatever the live method table says now. `None` for a pair the table
     /// does not track, or before it is armed.
+    /// Whether a `case` whose `when` values are all literals compares by
+    /// value still (CRuby's `opt_case_dispatch`): no `===` of a class it
+    /// dispatches on was ever replaced.
+    pub(crate) fn case_dispatch_enabled(&self) -> bool {
+        self.basic_ops.case_dispatch_enabled()
+    }
+
     pub(crate) fn basic_op_armed_func(&self, class_id: ClassId, name: IdentId) -> Option<FuncId> {
         self.basic_ops.armed_func(class_id, name).flatten()
     }
@@ -3788,15 +3795,33 @@ pub struct OptCaseInfo {
 }
 
 impl OptCaseInfo {
+    /// The branch for the key *idx*, as CRuby's `opt_case_dispatch` looks
+    /// a `case` whose `when` values are all Integer literals up: a Fixnum
+    /// or an integral Float by value, any other number, special constant
+    /// or String to the `else` body (`offsets[1]`). Any other key is
+    /// matched by calling `===` on each `when` value, in the fallback
+    /// chain (`offsets[0]`).
     pub(crate) fn find(&self, idx: Value) -> u32 {
-        if let Some(idx) = idx.try_fixnum() {
-            if let Ok(idx) = u16::try_from(idx) {
-                if idx >= self.min && idx <= self.max {
-                    return self.branch_table[(idx - self.min) as usize];
-                }
-            }
+        let int = if let Some(i) = idx.try_fixnum() {
+            Some(i)
+        } else if let Some(f) = idx.try_float() {
+            (f.fract() == 0.0 && f.abs() < 65536.0).then_some(f as i64)
+        } else if idx.is_packed_value()
+            || matches!(idx.unpack(), RV::BigInt(_))
+            || idx.is_rstring_inner().is_some()
+        {
+            None
+        } else {
+            return self.offsets[0];
+        };
+        if let Some(i) = int
+            && let Ok(i) = u16::try_from(i)
+            && i >= self.min
+            && i <= self.max
+        {
+            return self.branch_table[(i - self.min) as usize];
         }
-        self.offsets[0]
+        self.offsets[1]
     }
 }
 

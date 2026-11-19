@@ -68,6 +68,9 @@ impl<'a> BytecodeGen<'a> {
         rhs: BcReg,
         cont_pos: Label,
         jmp_if_true: bool,
+        // A `when` value of a `case` whose `when` values are all literals
+        // (`BytecodeInst::CaseTEq`).
+        case_dispatch: bool,
     ) -> Result<()> {
         let loc = lhs.loc;
         let old = self.temp;
@@ -89,10 +92,14 @@ impl<'a> BytecodeGen<'a> {
         } else {
             self.push_expr(lhs)?.into()
         };
-        self.emit(
-            BytecodeInst::Cmp(CmpKind::TEq, Some(lhs), (lhs, rhs), true),
-            loc,
-        );
+        if case_dispatch {
+            self.emit(BytecodeInst::CaseTEq { lhs, rhs }, loc);
+        } else {
+            self.emit(
+                BytecodeInst::Cmp(CmpKind::TEq, Some(lhs), (lhs, rhs), true),
+                loc,
+            );
+        }
         self.temp = old;
         self.emit_condbr(lhs, cont_pos, jmp_if_true, true);
         Ok(())

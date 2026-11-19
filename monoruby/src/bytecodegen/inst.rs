@@ -205,6 +205,15 @@ pub(super) enum BytecodeInst {
         lhs: BcReg,
         rhs: BcReg,
     },
+    /// `lhs = lhs === rhs` for a `when` value of a `case` whose `when`
+    /// values are all literals: CRuby's `opt_case_dispatch`, which
+    /// compares a key of a literal's class by value and calls no `===`
+    /// (`op::cmp_teq_dispatch_values`). Like the optimizable `Cmp`, only
+    /// the following `CondBr` reads the result.
+    CaseTEq {
+        lhs: BcReg,
+        rhs: BcReg,
+    },
     /// Subject-less `case`/`when *arr` match: set `reg` to `true` if any
     /// element of the array in `reg` is truthy, `false` otherwise.
     ArrayAny {
@@ -213,6 +222,14 @@ pub(super) enum BytecodeInst {
     Cmp(CmpKind, Option<BcReg>, (BcReg, BcReg), bool), // kind, dst, (lhs, rhs), optimizable
     Mov(BcReg, BcReg),                                 // dst, offset
     ToA {
+        dst: BcReg,
+        src: BcReg,
+    },
+    /// The block a `&expr` block argument passes, from the value of
+    /// `expr` in `src`: a Symbol becomes the refined symbol proc of the
+    /// scope's refinements when that scope activated any (CRuby's
+    /// `vm_caller_setup_arg_block`); anything else passes as it is.
+    BlockCode {
         dst: BcReg,
         src: BcReg,
     },

@@ -595,10 +595,10 @@ pub(crate) fn symbol_to_proc_body(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let symbol_val = lfp
+    let outer = lfp
         .outer()
-        .expect("symbol_to_proc_body called without outer_lfp")
-        .self_val();
+        .expect("symbol_to_proc_body called without outer_lfp");
+    let symbol_val = outer.self_val();
     let symbol = symbol_val
         .try_symbol()
         .expect("symbol_to_proc_body invoked with non-symbol outer self");
@@ -609,7 +609,7 @@ pub(crate) fn symbol_to_proc_body(
         return Err(MonorubyErr::argumenterr("no receiver given"));
     };
     let bh = lfp.block();
-    vm.dispatch_symbol_proc(globals, symbol, *recv, rest, bh)
+    vm.dispatch_symbol_proc(globals, symbol, outer, *recv, rest, bh, None)
 }
 
 ///

@@ -215,20 +215,13 @@ class Thread
   end
   private :__thread_key
 
-  # `rb_check_id`'s reading of a key (`#[]`, `#key?`, `#fetch`): as
-  # `__thread_key`, except that a String broken in its encoding is an
-  # EncodingError where `#[]=` would make it a Symbol.
-  def __thread_key_check(key)
-    case key
-    when Symbol
-      key
-    when String
-      __name_to_sym(key)
-    else
-      __name_to_sym(__check_id(key))
-    end
+  # The key of a lookup that must not make a Symbol (`rb_check_id`):
+  # `nil` when no Symbol of that name exists, so nothing can be stored
+  # under it.
+  def __thread_lookup_key(key)
+    key.is_a?(Symbol) ? key : __existing_sym(key)
   end
-  private :__thread_key_check
+  private :__thread_lookup_key
 
   # Fiber-locals genuinely belong to the *fiber* (CRuby): reads/writes
   # key a per-fiber table. At a thread's root context (no explicit
@@ -260,7 +253,8 @@ class Thread
   private :__fiber_local_table
 
   def [](key)
-    k = __thread_key_check(key)
+    k = __thread_lookup_key(key)
+    return nil if k.nil?
     t = __fiber_local_table(false)
     t && t[k]
   end
@@ -279,7 +273,8 @@ class Thread
   end
 
   def key?(key)
-    k = __thread_key_check(key)
+    k = __thread_lookup_key(key)
+    return false if k.nil?
     t = __fiber_local_table(false)
     !!(t && t.key?(k))
   end
@@ -293,8 +288,8 @@ class Thread
     if default.size > 1
       Kernel.raise ArgumentError, "wrong number of arguments (given #{default.size + 1}, expected 1..2)"
     end
-    k = __thread_key_check(key)
-    t = __fiber_local_table(false)
+    k = __thread_lookup_key(key)
+    t = k.nil? ? nil : __fiber_local_table(false)
     if t && t.key?(k)
       t[k]
     elsif block_given?

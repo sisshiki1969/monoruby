@@ -2690,17 +2690,26 @@ fn system_time_to_value(
     globals: &mut Globals,
     t: std::time::SystemTime,
 ) -> Result<Value> {
-    let dur = t
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| MonorubyErr::runtimeerr(format!("invalid time: {}", e)))?;
-    let secs = Value::integer(dur.as_secs() as i64);
-    let usec = Value::integer((dur.subsec_micros()) as i64);
-    let time_class = globals
-        .store
-        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Time"))
-        .ok_or_else(|| MonorubyErr::runtimeerr("Time class not defined"))?;
-    let at = IdentId::get_id("at");
-    vm.invoke_method_inner(globals, at, time_class, &[secs, usec], None, None)
+    let (secs, nsec) = system_time_parts(t);
+    // To the nanosecond, as the stat(2) fields are (`File.mtime(path) ==
+    // File.stat(path).mtime`).
+    time_from_secs_nsec(vm, globals, secs, nsec)
+}
+
+/// *t* as seconds since the epoch and nanoseconds (`0..1_000_000_000`).
+fn system_time_parts(t: std::time::SystemTime) -> (i64, i64) {
+    match t.duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => (d.as_secs() as i64, d.subsec_nanos() as i64),
+        Err(e) => {
+            let d = e.duration();
+            let (secs, nsec) = (-(d.as_secs() as i64), d.subsec_nanos() as i64);
+            if nsec == 0 {
+                (secs, 0)
+            } else {
+                (secs - 1, 1_000_000_000 - nsec)
+            }
+        }
+    }
 }
 
 fn file_time_attr(
@@ -2873,6 +2882,16 @@ fn fill_stat_ivars(
     obj.set_instance_var(&mut globals.store, "/__atime", atime)?;
     obj.set_instance_var(&mut globals.store, "/__mtime", mtime)?;
     obj.set_instance_var(&mut globals.store, "/__ctime", ctime)?;
+    // The birth time, when the file system records one (`statx(2)`'s
+    // `stx_btime`, which `Metadata::created` reads): kept as seconds and
+    // nanoseconds, and made a Time only if `#birthtime` asks. Left unset
+    // otherwise, for `#birthtime` to raise NotImplementedError as CRuby's
+    // `statx_birthtime` does.
+    if let Ok(t) = metadata.created() {
+        let (sec, nsec) = system_time_parts(t);
+        obj.set_instance_var(&mut globals.store, "/__btime_sec", Value::integer(sec))?;
+        obj.set_instance_var(&mut globals.store, "/__btime_nsec", Value::integer(nsec))?;
+    }
     Ok(())
 }
 
@@ -3641,6 +3660,27 @@ mod tests {
             r#"
             stat = File.stat("src")
             [stat.file?, stat.directory?]
+            "#,
+        );
+    }
+
+    /// `File::Stat#birthtime` (#2076) and the timestamps at nanosecond
+    /// precision, which `File.mtime` and friends used to cut to
+    /// microseconds. Live: whether the file system records a birth time
+    /// decides between a Time and NotImplementedError.
+    #[test]
+    fn file_stat_birthtime() {
+        run_test_once_live(
+            r#"
+            s = File.stat("Cargo.toml")
+            b = begin
+              [s.birthtime.class, s.birthtime == File.birthtime("Cargo.toml")]
+            rescue NotImplementedError => e
+              e.class
+            end
+            [b, s.mtime == File.mtime("Cargo.toml"), s.atime == File.atime("Cargo.toml"),
+             s.ctime == File.ctime("Cargo.toml"),
+             (File::Stat.allocate.birthtime rescue $!.class)]
             "#,
         );
     }

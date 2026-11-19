@@ -428,6 +428,7 @@ impl<'a> BytecodeGen<'a> {
                 let dst = self.push().into();
                 if let Some(local) = self.refer_local(&proc_local) {
                     self.emit_mov(dst, local);
+                    self.emit_block_code(dst, loc);
                 } else {
                     let slot = self.block_param_slot_of(0);
                     self.emit(BytecodeInst::BlockArgProxy(dst, 0, slot), loc);
@@ -439,15 +440,30 @@ impl<'a> BytecodeGen<'a> {
                 if let Some(src) = self.refer_dynamic_local_read(outer, proc_local) {
                     let src = src.into();
                     self.emit(BytecodeInst::LoadDynVar { dst, src, outer }, loc);
+                    self.emit_block_code(dst, loc);
                 } else {
                     assert_eq!(Some(proc_local), self.outer_block_param_name(outer));
                     self.emit_block_forward(dst, outer, loc);
                 }
             }
-            _ => {
+            // `&nil` passes no block, and nothing else but a Symbol is
+            // converted here.
+            NodeKind::Nil => {
                 self.push_expr(block)?;
+            }
+            _ => {
+                let dst = self.push_expr(block)?.into();
+                self.emit_block_code(dst, loc);
             }
         }
         Ok(None)
+    }
+
+    /// Convert the `&expr` value in `reg` into the block it passes, in
+    /// place ([`BytecodeInst::BlockCode`]). A block parameter handed on
+    /// (`&b` while `b` is still the frame's block) is not a `&expr` value
+    /// and passes as the handler it is, as CRuby's `getblockparamproxy`.
+    fn emit_block_code(&mut self, reg: BcReg, loc: Loc) {
+        self.emit(BytecodeInst::BlockCode { dst: reg, src: reg }, loc);
     }
 }

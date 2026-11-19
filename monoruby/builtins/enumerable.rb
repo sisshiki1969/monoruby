@@ -37,6 +37,23 @@ module Enumerable
   # `init` regardless of its type — matches CRuby's
   # `12.times.reduce("ン") { |c| c.succ }`, where `"ン"` seeds the
   # accumulator and is *not* treated as a method name.
+  # The method name of `inject(sym)` as `rb_check_id` leaves it: the
+  # Symbol, or the String no Symbol exists for (each step then sends the
+  # String, which makes no Symbol unless `method_missing` is the
+  # receiver's own).
+  def __inject_name(a)
+    s = __check_id(a)
+    s.is_a?(::Symbol) ? s : (__existing_sym(s) || s)
+  end
+  private :__inject_name
+
+  # A step of `inject` with a name no Symbol exists for: CRuby's
+  # `rb_f_send`, a function call (`private_call?` is true).
+  def __inject_send(acc, name, x)
+    acc.instance_exec(name, x) { |n, y| __send__(n, y) }
+  end
+  private :__inject_send
+
   def inject(*args)
     has_init = false
     init = nil
@@ -50,19 +67,30 @@ module Enumerable
         has_init = true
         init = a
       else
-        sym = __check_id(a).to_sym
+        sym = __inject_name(a)
       end
     when 2
       warn "given block not used", uplevel: 1 if block_given?
       has_init = true
       init = args[0]
-      sym = __check_id(args[1]).to_sym
+      sym = __inject_name(args[1])
     else
       raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..2)"
     end
 
     acc = init
-    if sym
+    if ::String === sym
+      # A name no Symbol exists for.
+      first = !has_init
+      __gather_each do |x|
+        if first
+          acc = x
+          first = false
+        else
+          acc = __inject_send(acc, sym, x)
+        end
+      end
+    elsif sym
       if !has_init
         first = true
         __gather_each do |x|
@@ -681,8 +709,11 @@ module Enumerable
 
   def to_a(*args)
     # An ArithmeticSequence has no `to_a` of its own (CRuby's is this
-    # one), but an Integer sequence has a closed form.
-    if ::Enumerator::ArithmeticSequence === self && args.empty? && (res = __integer_terms)
+    # one), but an Integer sequence has a closed form — as long as its
+    # `each` is the builtin one, which is what this iterates
+    # (`__direct_source` 3: not redefined, nor a singleton's).
+    if ::Enumerator::ArithmeticSequence === self && args.empty? &&
+       __direct_source == 3 && (res = __integer_terms)
       return res
     end
     res = []

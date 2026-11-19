@@ -90,7 +90,10 @@ pub(crate) enum TraceIr {
         cond: SlotId,
         min: u16,
         max: u16,
+        /// The `else` body: a Fixnum key no `when` names.
         else_disp: i32,
+        /// The `when` values compared one by one (`OptCaseInfo::find`).
+        fallback_disp: i32,
         branch_table: Box<[i32]>,
     },
     CheckKwRest(SlotId),
@@ -269,6 +272,12 @@ pub(crate) enum TraceIr {
     EnsureEnd,
     /// toa{%src, %dst}
     ToA {
+        dst: SlotId,
+        src: SlotId,
+    },
+    /// `dst = ` the block `src` passes as a `&expr` argument
+    /// (`BytecodeInst::BlockCode`).
+    BlockCode {
         dst: SlotId,
         src: SlotId,
     },
@@ -501,7 +510,8 @@ impl TraceIr {
                         offsets,
                         branch_table,
                     } = &store[optid];
-                    let else_disp = offsets[0] as i32;
+                    let fallback_disp = offsets[0] as i32;
+                    let else_disp = offsets[1] as i32;
                     let branch_table: Box<[_]> =
                         branch_table.iter().map(|ofs| *ofs as i32).collect();
                     TraceIr::OptCase {
@@ -509,6 +519,7 @@ impl TraceIr {
                         min: *min,
                         max: *max,
                         else_disp,
+                        fallback_disp,
                         branch_table,
                     }
                 }
@@ -676,8 +687,15 @@ impl TraceIr {
                     },
                     SlotId::new(op3_w3),
                 ),
-                150..=156 => {
-                    let kind = CmpKind::from(opcode - 150);
+                // 158: CaseTEq, a fused TEq whose generic fallback is the
+                // `opt_case_dispatch` compare (`compile_binary` reads the
+                // opcode back for that).
+                150..=156 | 158 => {
+                    let kind = if opcode == 158 {
+                        CmpKind::TEq
+                    } else {
+                        CmpKind::from(opcode - 150)
+                    };
                     let dst = SlotId::from(op1_w1);
                     let lhs = SlotId::new(op2_w2);
                     let rhs = SlotId::new(op3_w3);
@@ -773,6 +791,10 @@ impl TraceIr {
                     dst: SlotId::new(op1_w1),
                     src: SlotId::new(op2_w2),
                 },
+                182 => TraceIr::BlockCode {
+                    dst: SlotId::new(op1_w1),
+                    src: SlotId::new(op2_w2),
+                },
                 178 => TraceIr::Mov(SlotId::new(op1_w1), SlotId::new(op2_w2)),
                 179..=180 => TraceIr::Range {
                     dst: SlotId::new(op1_w1),
@@ -863,6 +885,7 @@ impl TraceIr {
             | TraceIr::Redo
             | TraceIr::EnsureEnd
             | TraceIr::Mov(..)
+            | TraceIr::BlockCode { .. }
             | TraceIr::InitMethod(..)
             | TraceIr::InlineCache
             | TraceIr::AliasGvar { .. }
@@ -929,7 +952,8 @@ impl TraceIr {
             | TraceIr::UnOp { _dst: dst, .. }
             | TraceIr::Index { _dst: dst, .. }
             | TraceIr::BlockArgProxy(dst, ..)
-            | TraceIr::BlockArg(dst, ..) => Some(*dst),
+            | TraceIr::BlockArg(dst, ..)
+            | TraceIr::BlockCode { dst, .. } => Some(*dst),
             TraceIr::BinOp { dst, .. } | TraceIr::BinCmp { dst, .. } => *dst,
             TraceIr::ConcatStr(dst, ..) => *dst,
             TraceIr::MethodCall { callid, .. } => store[*callid].dst,
@@ -1009,6 +1033,7 @@ impl TraceIr {
             | TraceIr::Raise(slot)
             | TraceIr::CheckExit(_, slot)
             | TraceIr::ToA { src: slot, .. }
+            | TraceIr::BlockCode { src: slot, .. }
             | TraceIr::Mov(_, slot)
             | TraceIr::SingletonMethodDef { obj: slot, .. }
             | TraceIr::SingletonClassDef { base: slot, .. }
@@ -1146,6 +1171,7 @@ impl TraceIr {
                 max,
                 else_disp,
                 branch_table,
+                ..
             } => {
                 let else_dest = iseq.get_bb(bc_pos + 1 + else_disp);
                 let branch_table: Vec<String> = branch_table
@@ -1355,6 +1381,7 @@ impl TraceIr {
             TraceIr::Redo => format!("redo"),
             TraceIr::EnsureEnd => format!("ensure_end"),
             TraceIr::ToA { dst, src } => format!("{dst:?} = {src:?}.to_a"),
+            TraceIr::BlockCode { dst, src } => format!("{dst:?} = block_code({src:?})"),
             TraceIr::Mov(dst, src) => format!("{dst:?} = {src:?}"),
             TraceIr::MethodCall {
                 _polymorphic: polymorphic,

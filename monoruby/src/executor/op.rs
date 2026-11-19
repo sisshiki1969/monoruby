@@ -1153,6 +1153,56 @@ pub(crate) extern "C" fn cmp_teq_case_values(
     cmp_teq_values_impl(vm, globals, lhs, rhs, true)
 }
 
+/// `===` for a `when` value of a `case` whose `when` values are all
+/// literals (the CaseTEq opcode): CRuby compiles such a `case` to
+/// `opt_case_dispatch`, which looks a key that is a special constant, a
+/// Float, a Bignum or a String up in a table of the literals, by value,
+/// and calls no `===` at all — unless the `===` of one of those classes
+/// was ever replaced ([`Store::case_dispatch_enabled`]). So a redefined
+/// `NilClass#==`, which `nil === 1` would call, is not asked. Any other
+/// key is matched by calling `===`, as case/when does
+/// ([`cmp_teq_case_values`]).
+pub(crate) extern "C" fn cmp_teq_dispatch_values(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lhs: Value,
+    rhs: Value,
+    _is_func_call: bool,
+) -> Option<Value> {
+    if globals.store.case_dispatch_enabled()
+        && let Some(b) = case_dispatch_eq(lhs, rhs)
+    {
+        return Some(Value::bool(b));
+    }
+    cmp_teq_values_impl(vm, globals, lhs, rhs, true)
+}
+
+/// Whether the literal *lit* is the table entry `opt_case_dispatch`
+/// finds for *key* — numbers by value (an integral Float on either side
+/// is its Integer), Strings by content, the rest by identity — or `None`
+/// for a key it does not look up.
+fn case_dispatch_eq(lit: Value, key: Value) -> Option<bool> {
+    let key_is_number = matches!(key.unpack(), RV::Fixnum(_) | RV::BigInt(_) | RV::Float(_));
+    if let Some(key_str) = key.is_rstring_inner() {
+        return Some(lit.is_rstring_inner().is_some_and(|l| *l == *key_str));
+    }
+    if !(key.is_packed_value() || key_is_number) {
+        return None;
+    }
+    Some(match (lit.unpack(), key.unpack()) {
+        (RV::Fixnum(l), RV::Fixnum(r)) => l == r,
+        (RV::Fixnum(l), RV::BigInt(r)) => BigInt::from(l).eq(r),
+        (RV::BigInt(l), RV::Fixnum(r)) => l.eq(&BigInt::from(r)),
+        (RV::BigInt(l), RV::BigInt(r)) => l.eq(r),
+        (RV::Fixnum(l), RV::Float(r)) => fixnum_cmp_float(l, r) == Some(std::cmp::Ordering::Equal),
+        (RV::BigInt(l), RV::Float(r)) => bigint_cmp_float(l, r) == Some(std::cmp::Ordering::Equal),
+        (RV::Float(l), RV::Fixnum(r)) => fixnum_cmp_float(r, l) == Some(std::cmp::Ordering::Equal),
+        (RV::Float(l), RV::BigInt(r)) => bigint_cmp_float(r, l) == Some(std::cmp::Ordering::Equal),
+        (RV::Float(l), RV::Float(r)) => l == r,
+        _ => lit.id() == key.id(),
+    })
+}
+
 /// `===` dispatch for rescue-clause matching (the RescueTEq opcode):
 /// the clause must be a Class or Module — CRuby raises TypeError
 /// before any `===` dispatch — and the call itself has funcall

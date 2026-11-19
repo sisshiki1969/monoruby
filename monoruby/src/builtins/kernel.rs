@@ -221,7 +221,6 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_private_builtin_func(kernel_class, "__array_capa_check", array_capa_check, 1);
     globals.define_private_builtin_func(kernel_class, "__check_ary", kernel_check_ary, 1);
     globals.define_private_builtin_func(kernel_class, "__check_str", kernel_check_str, 1);
-    globals.define_private_builtin_func(kernel_class, "__name_to_sym", kernel_name_to_sym, 1);
     globals.define_private_builtin_func(kernel_class, "__check_int", kernel_check_int, 1);
     globals.define_private_builtin_func(kernel_class, "__to_hash", kernel_to_hash, 1);
     globals.define_private_builtin_func(kernel_class, "__tally_up", super::hash::tally_up, 2);
@@ -475,14 +474,19 @@ pub(super) fn init(globals: &mut Globals) -> Module {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/nil=3f.html]
 #[monoruby_builtin]
-fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn nil(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
 /// Reads only the receiver Value, so it keeps firing where the class is
 /// unproven: a pure Value
 /// comparison against `nil`, correct for any receiver.
-fn kernel_nil(
+pub(super) fn kernel_nil(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     ctx: &JitContext,
@@ -5901,29 +5905,6 @@ fn kernel_check_str(
         .unwrap_or(Value::nil()))
 }
 
-/// `Kernel#__name_to_sym(name)`: the Symbol a Symbol or String names as
-/// `rb_check_id` reads it — a String whose bytes are broken in its
-/// encoding is refused (`EncodingError: invalid symbol in encoding …`),
-/// a US-ASCII one with 8-bit bytes included, where `String#to_sym`
-/// would intern it.
-#[monoruby_builtin]
-fn kernel_name_to_sym(
-    _vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    _: BytecodePtr,
-) -> Result<Value> {
-    let name = lfp.arg(0);
-    if name.try_symbol().is_some() {
-        return Ok(name);
-    }
-    let id = match name.is_rstring_inner() {
-        Some(inner) => super::string::intern_name_string(&globals.store, inner)?,
-        None => return Err(MonorubyErr::is_not_symbol_nor_string(&globals.store, name)),
-    };
-    Ok(Value::symbol(id))
-}
-
 /// `Kernel#__check_int(val)`: CRuby's `rb_check_to_int` — the Integer
 /// `val` is or answers from `to_int`, nil otherwise (no error for a
 /// `to_int` that answers something else).
@@ -6131,7 +6112,7 @@ fn define_singleton_method(
     if self_val.is_frozen() && !self_val.is_special_singleton() {
         return Err(MonorubyErr::cant_modify_frozen(&globals.store, self_val));
     }
-    let name = lfp.arg(0).expect_symbol_or_to_str(vm, globals)?;
+    let name = super::module::defined_method_name(vm, globals, lfp, false)?;
     // For a proc/block body, the runtime LFP carries the *block*'s
     // FuncId. `super` resolution (`find_super`) reads that FuncId's
     // `name`, so it must be set or it panics. Mirror the decoration
