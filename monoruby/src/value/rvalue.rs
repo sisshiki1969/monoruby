@@ -1664,6 +1664,32 @@ impl RValue {
         unsafe { self.as_rstring() }.inline_copyable()
     }
 
+    ///
+    /// A bit per ivar slot this object has a value in (slots from 63 on
+    /// share the top bit) — see [`Store::ivar_slots_present`].
+    ///
+    pub(crate) fn ivar_slot_bits(&self) -> u64 {
+        let bit = |i: usize| 1u64 << i.min(63);
+        let mut bits = 0;
+        let mut base = 0;
+        if self.ty() == ObjTy::OBJECT {
+            for (i, v) in self.as_object().iter().enumerate() {
+                if v.is_some() {
+                    bits |= bit(i);
+                }
+            }
+            base = OBJECT_INLINE_IVAR;
+        }
+        if let Some(table) = &self.var_table {
+            for (i, v) in table.iter().enumerate() {
+                if v.is_some() {
+                    bits |= bit(base + i);
+                }
+            }
+        }
+        bits
+    }
+
     pub(crate) fn get_ivar_by_ivarid(&self, id: IvarId) -> Option<Value> {
         let mut i = id.into_usize();
         if self.ty() == ObjTy::OBJECT {

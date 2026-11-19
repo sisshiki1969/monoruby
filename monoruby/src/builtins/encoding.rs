@@ -521,7 +521,6 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         enc_err_readagain_bytes,
         0,
     );
-    globals.define_builtin_func(undef_conv.id(), "error_bytes", enc_err_error_bytes, 0);
 
     // Encoding class methods
     globals.define_builtin_class_func(enc.id(), "default_external", enc_default_external, 0);
