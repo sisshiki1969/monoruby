@@ -1494,10 +1494,19 @@ impl Store {
     /// [`Self::get_class_path`] as bytes, when a name on the path is not
     /// UTF-8 text; `None` otherwise (and for an anonymous class or one
     /// with a temporary name).
+    #[inline]
     pub(crate) fn get_class_path_raw(
         &self,
         class: ClassId,
     ) -> Option<(Vec<u8>, crate::value::Encoding)> {
+        if !class::any_raw_class_name() {
+            return None;
+        }
+        self.get_class_path_raw_named(class)
+    }
+
+    #[cold]
+    fn get_class_path_raw_named(&self, class: ClassId) -> Option<(Vec<u8>, crate::value::Encoding)> {
         if self.classes[class].get_name().is_none()
             || self.classes.is_name_erased(class)
             || self.classes[class].is_name_explicit_temporary()

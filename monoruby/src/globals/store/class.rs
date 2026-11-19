@@ -325,15 +325,30 @@ impl ClassId {
     }
 }
 
+/// Whether any class has ever been named by a constant whose name is
+/// not UTF-8 text (see `ClassInfo::name_raw`). Never cleared, and shared
+/// by every interpreter in the process: it only lets the usual
+/// `Module#name` / `#to_s` skip looking for such a name.
+static ANY_RAW_CLASS_NAME: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// The bytes and encoding of a constant's name that is not UTF-8 text.
 fn raw_class_name(name: IdentId) -> Option<Box<(Vec<u8>, crate::value::Encoding)>> {
     name.with_ident_name(|ident, enc| match ident {
         crate::IdentName::Utf8(_) => None,
-        crate::IdentName::Bytes(b) => Some(Box::new((
-            b.clone(),
-            enc.unwrap_or(crate::value::Encoding::Ascii8),
-        ))),
+        crate::IdentName::Bytes(b) => {
+            ANY_RAW_CLASS_NAME.store(true, std::sync::atomic::Ordering::Relaxed);
+            Some(Box::new((
+                b.clone(),
+                enc.unwrap_or(crate::value::Encoding::Ascii8),
+            )))
+        }
     })
+}
+
+/// Whether some class may have a name that is not UTF-8 text.
+pub(crate) fn any_raw_class_name() -> bool {
+    ANY_RAW_CLASS_NAME.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 #[derive(Debug, Clone)]
