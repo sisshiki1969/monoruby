@@ -42,7 +42,7 @@ fn out_dir(flavor: &str) -> PathBuf {
 /// script: the stage 1 surface and the stage 2 one (TypedData, alloc
 /// functions, blocks from C, `rb_call_super`, Struct), and the stages
 /// after them.
-const FIXTURES: [&str; 10] = [
+const FIXTURES: [&str; 11] = [
     "capi_hello",
     "capi_data",
     "capi_st",
@@ -53,6 +53,7 @@ const FIXTURES: [&str; 10] = [
     "capi_ids",
     "capi_nogvl",
     "capi_vars",
+    "capi_roots",
 ];
 
 /// The C++ extension source, built by the C++ compiler on both sides.

@@ -92,6 +92,10 @@ struct capi_ary_slot {
     MrValue ary;
     VALUE *buf;
     size_t cap;
+    /* How many of buf's entries hold values from an earlier fill: each
+     * of those was rooted then, in the owning call's temp stack, which
+     * outlives the slot. */
+    size_t len;
 };
 
 struct capi_method;
@@ -222,6 +226,10 @@ R(MrValue v)
         return ((VALUE)(v >> 32) << RUBY_SPECIAL_SHIFT) | RUBY_SYMBOL_FLAG;
     return (VALUE)v;
 }
+
+/* Whether an interpreter value is a heap object (8-aligned, nonzero:
+ * MR_UNDEF is 0). */
+#define MR_HEAP_P(v) ((v) != 0 && ((v) & 7) == 0)
 
 /* Keep `v` alive until the current Ruby call returns. */
 static VALUE
@@ -962,6 +970,22 @@ rb_warning(const char *fmt, ...)
     va_end(ap);
 }
 
+/* `rb_errinfo` outlives the call that set it (an extension may ask for
+ * it in a later call), so its value is pinned rather than left on the
+ * temp stack of that call. */
+static void
+errinfo_set(VALUE v)
+{
+    VALUE old = capi_errinfo;
+    if (old == v)
+        return;
+    if (!RB_SPECIAL_CONST_P(v))
+        api->gc_pin(ctx(), M(v));
+    capi_errinfo = v;
+    if (!RB_SPECIAL_CONST_P(old))
+        api->gc_unpin(ctx(), M(old));
+}
+
 VALUE
 rb_protect(VALUE (*func)(VALUE), VALUE arg, int *state)
 {
@@ -979,7 +1003,7 @@ rb_protect(VALUE (*func)(VALUE), VALUE arg, int *state)
     }
     capi_cur = outer;
     MrValue err = api->error_take(outer->ctx);
-    capi_errinfo = err == MR_UNDEF ? Qnil : root(R(err));
+    errinfo_set(err == MR_UNDEF ? Qnil : root(R(err)));
     if (state)
         *state = TAG_RAISE;
     return Qnil;
@@ -989,8 +1013,8 @@ void
 rb_jump_tag(int state)
 {
     (void)state;
-    VALUE exc = capi_errinfo;
-    capi_errinfo = Qnil;
+    VALUE exc = root(capi_errinfo);
+    errinfo_set(Qnil);
     if (NIL_P(exc))
         rb_raise(rb_eRuntimeError, "rb_jump_tag: no pending exception");
     rb_exc_raise(exc);
@@ -1005,7 +1029,7 @@ rb_errinfo(void)
 void
 rb_set_errinfo(VALUE err)
 {
-    capi_errinfo = err;
+    errinfo_set(err);
 }
 
 VALUE
@@ -1013,10 +1037,10 @@ rb_ensure(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*e_proc)(VALUE), VALUE dat
 {
     int state;
     VALUE result = rb_protect(b_proc, data1, &state);
-    VALUE pending = capi_errinfo;
+    VALUE pending = root(capi_errinfo);
     e_proc(data2);
     if (state) {
-        capi_errinfo = pending;
+        errinfo_set(pending);
         rb_jump_tag(state);
     }
     return result;
@@ -1030,18 +1054,18 @@ vrescue(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALU
     VALUE result = rb_protect(b_proc, data1, &state);
     if (!state)
         return result;
-    VALUE exc = capi_errinfo;
+    VALUE exc = root(capi_errinfo);
     for (int i = 0; i < nclasses; i++) {
         if (api->is_kind_of(ctx(), M(exc), M(classes[i]))) {
             /* `$!` is the exception while the rescue function runs, as in
              * CRuby (zlib's read fallback asks rb_errinfo which it was),
              * and is cleared once it returns. */
             if (!r_proc) {
-                capi_errinfo = Qnil;
+                errinfo_set(Qnil);
                 return Qnil;
             }
             VALUE r = r_proc(data2, exc);
-            capi_errinfo = Qnil;
+            errinfo_set(Qnil);
             return r;
         }
     }
@@ -2816,7 +2840,7 @@ rb_gv_get(const char *name)
     char buf[256];
     if (api->size >= offsetof(MrApi, gvar_get) + sizeof(api->gvar_get)) {
         snprintf(buf, sizeof(buf), "%s%s", name[0] == '$' ? "" : "$", name);
-        return R(api->gvar_get(ctx(), buf));
+        return root(R(api->gvar_get(ctx(), buf)));
     }
     return rb_eval_string(gvar_name(name, buf, sizeof(buf)));
 }
@@ -3217,7 +3241,7 @@ VALUE
 rb_backref_get(void)
 {
     if (HAVE_API(backref_get))
-        return R(api->backref_get(ctx()));
+        return root(R(api->backref_get(ctx())));
     return rb_funcall(rb_cRegexp, rb_intern("last_match"), 0);
 }
 
@@ -4193,6 +4217,7 @@ rb_array_const_ptr(VALUE ary)
         slot = &owner->ary[owner->ary_init++];
         slot->buf = NULL;
         slot->cap = 0;
+        slot->len = 0;
     }
     else if (!slot) {
         slot = &owner->ary[owner->ary_next];
@@ -4207,8 +4232,20 @@ rb_array_const_ptr(VALUE ary)
         slot->cap = cap;
     }
     slot->ary = a;
-    for (size_t i = 0; i < len; i++)
-        slot->buf[i] = R(p[i]);
+    /* The copy is C memory the collector cannot see, and an element can
+     * leave the Array while C still holds it (`rb_ary_clear`, then a
+     * call back into Ruby): root every element, as CRuby's stack scan
+     * keeps it. One already in the slot from an earlier fill is rooted
+     * already, so refreshing the pointer to an unchanged Array, which a
+     * loop may do on every iteration, pushes nothing. */
+    size_t old = slot->len;
+    for (size_t i = 0; i < len; i++) {
+        VALUE v = R(p[i]);
+        if ((i >= old || slot->buf[i] != v) && MR_HEAP_P(p[i]))
+            api->temp_push(owner->ctx, p[i]);
+        slot->buf[i] = v;
+    }
+    slot->len = len;
     return slot->buf;
 }
 
@@ -4216,14 +4253,20 @@ VALUE
 rb_ary_entry(VALUE ary, long offset)
 {
     size_t len;
-    const MrValue *p = api->ary_ptr(ctx(), M(ary), &len);
+    MrContext *c = ctx();
+    const MrValue *p = api->ary_ptr(c, M(ary), &len);
     if (!p)
         capi_unwind();
     if (offset < 0)
         offset += (long)len;
     if (offset < 0 || (size_t)offset >= len)
         return Qnil;
-    return R(p[offset]);
+    /* Rooted: the element may leave the Array while C holds it. Through
+     * `c`, not root(): the context is a thread-local lookup. */
+    MrValue v = p[offset];
+    if (MR_HEAP_P(v))
+        api->temp_push(c, v);
+    return R(v);
 }
 
 VALUE
@@ -7877,7 +7920,7 @@ VALUE
 rb_lastline_get(void)
 {
     if (HAVE_API(lastline_get))
-        return R(api->lastline_get(ctx()));
+        return root(R(api->lastline_get(ctx())));
     return Qnil;
 }
 
