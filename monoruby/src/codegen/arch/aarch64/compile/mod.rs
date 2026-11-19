@@ -3645,6 +3645,35 @@ impl Codegen {
         true
     }
 
+    /// rax <- `runtime::jit_block_code(vm, globals, [src], set, pc)`.
+    /// Mirrors x86 `emit_block_code`; runs no Ruby and cannot fail.
+    pub(in crate::codegen::jitgen) fn emit_block_code(
+        &mut self,
+        src: SlotId,
+        set: RefinementSetId,
+        pc: BytecodePtr,
+        using_fpr: UsingFpr,
+    ) {
+        let lfp = GP::R14.a64().0;
+        let off = src.0 as u32 * 8 + LFP_SELF as u32;
+        self.emit_fpr_save(using_fpr, false);
+        self.a64_frame_load(2, lfp, off); // val
+        let f = runtime::jit_block_code as *const () as u64;
+        let set = set.get() as u64;
+        let pc = pc.as_ptr() as u64;
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;            // vm
+            mov x1, x20;            // globals
+            mov x3, (set);
+            mov x4, (pc);
+            str x30, [sp, #-16]!;
+            mov x9, (f);
+            blr x9;                 // result in x0
+            ldr x30, [sp], #16;
+        );
+        self.emit_fpr_restore(using_fpr, false);
+    }
+
     /// rax <- a deep copy of literal `v` (a fresh mutable object per
     /// evaluation). Mirrors x86 `deepcopy_literal`.
     ///

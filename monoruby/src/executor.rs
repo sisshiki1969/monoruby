@@ -4865,7 +4865,7 @@ impl Executor {
             && let Some(outer) = data.outer()
             && let Some(symbol) = outer.self_val().try_symbol()
         {
-            return self.invoke_symbol_proc(globals, symbol, args, None);
+            return self.invoke_symbol_proc(globals, symbol, outer, args, None);
         }
         let mark = self.jit_helper_cfp;
         let res = (globals.invokers.block)(
@@ -4882,111 +4882,76 @@ impl Executor {
     }
 
     ///
-    /// The body of a `Symbol#to_proc` proc, called directly: `args[0]`
-    /// receives `symbol`, the rest are its arguments. Same visibility
-    /// rule as `public_send` (which is what `&:sym` documents), and the
-    /// same answer as running `symbol_to_proc_body` — only without the
-    /// frame and the rest array that body's `*rest` parameter forces.
+    /// The body of a `Symbol#to_proc` proc over *outer*, called directly:
+    /// `args[0]` receives `symbol`, the rest are its arguments. The same
+    /// answer as running `symbol_to_proc_body` — only without the frame
+    /// and the rest array that body's `*rest` parameter forces.
     ///
     pub(crate) fn invoke_symbol_proc(
         &mut self,
         globals: &mut Globals,
         symbol: IdentId,
+        outer: Lfp,
         args: &[Value],
         bh: Option<BlockHandler>,
     ) -> Result<Value> {
         let Some((recv, rest)) = args.split_first() else {
             return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
         };
-        self.dispatch_symbol_proc(globals, symbol, *recv, rest, bh)
+        self.dispatch_symbol_proc(globals, symbol, outer, *recv, rest, bh, None)
     }
 
     ///
-    /// `recv.public_send(symbol, *args, &bh)` — the one dispatch behind
-    /// `&:sym`, shared by the block-call fast path above and by
-    /// `symbol_to_proc_body` (the general entry, reached when the proc is
-    /// called as an object). `is_func_call = false` is what makes it
-    /// *public*_send: it restricts the lookup to public methods, which is
-    /// one lookup rather than a visibility probe followed by a second,
-    /// unrestricted one.
+    /// `recv.symbol(*args, &bh)` for a proc with `Symbol#to_proc`'s body
+    /// over *outer* — the one dispatch behind `&:sym`, shared by a yield
+    /// to it, `Proc#call` on it and `symbol_to_proc_body` (the general
+    /// entry). Two kinds of proc share the body:
+    ///
+    /// - `Symbol#to_proc`'s own, which is also what a `&:sym` passes from
+    ///   a scope with no refinement active: `rb_sym_proc_call`, a call
+    ///   with `CALL_PUBLIC` looked up as `public_send` does, under the
+    ///   refinements of the nearest Ruby frame
+    ///   ([`Self::ruby_level_refinements`]); a private or protected method
+    ///   is refused.
+    /// - the one a `&:sym` written where refinements are active becomes at
+    ///   the call site (`Globals::refined_symbol_proc`, CRuby's
+    ///   `refine_sym_proc_call`): the method that scope's refinements
+    ///   give, whoever yields to it, called with no visibility check.
     ///
     pub(crate) fn dispatch_symbol_proc(
         &mut self,
         globals: &mut Globals,
         symbol: IdentId,
-        recv: Value,
-        args: &[Value],
-        bh: Option<BlockHandler>,
-    ) -> Result<Value> {
-        self.dispatch_symbol_proc_kw(globals, symbol, recv, args, bh, None)
-    }
-
-    /// [`Self::dispatch_symbol_proc`] with keyword arguments, for a
-    /// *yield* to the proc: the `&:sym` of a block argument.
-    pub(crate) fn dispatch_symbol_proc_kw(
-        &mut self,
-        globals: &mut Globals,
-        symbol: IdentId,
+        outer: Lfp,
         recv: Value,
         args: &[Value],
         bh: Option<BlockHandler>,
         kw: Option<Hashmap>,
-    ) -> Result<Value> {
-        self.dispatch_symbol_proc_inner(globals, symbol, recv, args, bh, kw, true)
-    }
-
-    /// [`Self::dispatch_symbol_proc_kw`] for `Proc#call` on a symbol
-    /// proc, which forwards the keywords it was given: the proc as an
-    /// object is `Symbol#to_proc`'s, public methods only.
-    pub(crate) fn call_symbol_proc_kw(
-        &mut self,
-        globals: &mut Globals,
-        symbol: IdentId,
-        recv: Value,
-        args: &[Value],
-        bh: Option<BlockHandler>,
-        kw: Option<Hashmap>,
-    ) -> Result<Value> {
-        self.dispatch_symbol_proc_inner(globals, symbol, recv, args, bh, kw, false)
-    }
-
-    fn dispatch_symbol_proc_inner(
-        &mut self,
-        globals: &mut Globals,
-        symbol: IdentId,
-        recv: Value,
-        args: &[Value],
-        bh: Option<BlockHandler>,
-        kw: Option<Hashmap>,
-        block_arg: bool,
     ) -> Result<Value> {
         // `&:sym` is a *call site*, and like every other call site it
         // deserves an inline cache: `ary.map(&:to_s)` asks for one symbol
         // on one class per element, and the lookup was what made it cost
         // an explicit `public_send` per element rather than a plain call.
+        // (Only while no refinement is active anywhere, so never for a
+        // refined proc.)
         if let Some(func_id) = self.symbol_proc_method(globals, symbol, recv) {
             return self.invoke_func_inner(globals, func_id, recv, args, bh, kw);
         }
-        // `&:sym` calls with `CALL_PUBLIC` (`rb_sym_proc_call`): a private
-        // or protected method is refused whatever frame the call comes
-        // from — a yield from a Ruby `tap` has the receiver itself for
-        // `self`, which the ordinary protected rule would let through.
+        if let Some(set) = globals.refined_symbol_proc_set(outer) {
+            return self.invoke_method_in(globals, symbol, recv, args, bh, kw, true, set);
+        }
+        // A private or protected method is refused whatever frame the call
+        // comes from — a yield from a Ruby `tap` has the receiver itself
+        // for `self`, which the ordinary protected rule would let through.
         // As `public_send` does, the refusal goes to `method_missing`, so
         // a receiver that handles it sees the name, and the default one
         // words the NoMethodError by the visibility.
         //
-        // Under the refinements of the scope that wrote `&:sym` — see
-        // `Self::ruby_level_refinements`. (`symbol_proc_method` answered
-        // above unless a refinement is active somewhere.)
+        // Under the refinements of the nearest Ruby frame, as `public_send`
+        // looks up — see `Self::ruby_level_refinements`.
+        // (`symbol_proc_method` answered above unless a refinement is
+        // active somewhere.)
         let set = self.ruby_level_refinements(globals);
-        if block_arg && !set.is_empty() {
-            // A `&:sym` written where any refinement is active is not
-            // `Symbol#to_proc`'s proc in CRuby but one made for that
-            // scope (`refine_sym_proc_call`), which looks the method up
-            // with the scope's refinements and calls whatever it finds:
-            // there is no visibility check on that path.
-            return self.invoke_method_in(globals, symbol, recv, args, bh, kw, true, set);
-        }
         if let Some(entry) = globals
             .store
             .check_method_with_refinements(recv.class(), symbol, set)
@@ -5017,7 +4982,7 @@ impl Executor {
     ///
     /// `None` whenever the plain path must run instead: a receiver whose
     /// `symbol` is private, protected or absent (the refusal and the
-    /// `method_missing` fallback are `dispatch_symbol_proc_kw`'s to
+    /// `method_missing` fallback are `dispatch_symbol_proc`'s to
     /// produce, and are not worth caching), or an active refinement, which
     /// makes the resolution depend on the calling scope rather than on the
     /// receiver's class alone. Only a *public* method is cached: the cache

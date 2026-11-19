@@ -174,6 +174,7 @@ mod native_ext;
 mod negative_count_messages;
 mod nested_float_loop;
 mod nil_eqq_string_new_set_alias;
+mod nil_nilp_set_copy_unknown_names;
 mod no_method_error_message;
 mod nonlocal_exit_ensure;
 mod nonlocal_exit_inline_ensure;

@@ -376,3 +376,77 @@ fn case_splat_teq_jit() {
         "#,
     );
 }
+
+/// A `case` whose `when` values are all literals compares a key of a
+/// literal's class by value, as CRuby's `opt_case_dispatch` does, and
+/// calls no `===` — so a redefined `NilClass#==` (which `nil === 1`
+/// calls) is not asked (#2033). A key of another class, a `when` value
+/// that is no literal, a splat, and every `case` once the `===` of a
+/// class the dispatch stands on was replaced (for good, as CRuby's
+/// flag) go through `===`.
+#[test]
+fn case_literal_dispatch() {
+    run_test_once(
+        r##"
+        def run
+          r = []
+          30.times { r << yield }
+          r.uniq
+        end
+        def c1(x) = (case x; when nil then :a; else :b; end)
+        def c2(x) = (case x; when nil then :a; when Integer then :i; else :b; end)
+        def c3(x) = (case x; when nil, 2 then :a; else :b; end)
+        def c4(x) = (case x; when true then :t; when false then :f; else :b; end)
+        def c5(x) = (case x; when :z then :z; when "s" then :s; when 1.5 then :f; else :b; end)
+        def c6(x) = (if nil === x then :a else :b end)
+        def c7(x, v) = (case x; when v then :a; else :b; end)
+        def c8(x) = (case x; when *[nil] then :a; else :b; end)
+        class NilClass; def ==(o) = true; end
+        class TrueClass; def ==(o) = true; end
+        class FalseClass; def ==(o) = true; end
+        res = []
+        res << run { c1(1) } << run { c1(Object.new) } << run { c1(nil) }
+        res << run { c1(1.0) } << run { c1("x") } << run { c2(1) }
+        res << run { c3(1) } << run { c3(2) } << run { c3(2.0) }
+        res << run { c4(1) } << run { c4(false) }
+        res << run { c5(:q) } << run { c5(1.5) } << run { c5("s") }
+        res << run { c6(1) } << run { c7(1, nil) } << run { c8(1) }
+        class Symbol; def ==(o) = true; end
+        res << run { c5(:q) }
+        class Symbol; def ===(o) = true; end
+        res << run { c5(:q) } << run { c1(1) }
+        class Symbol; remove_method :===; end
+        res << run { c1(1) }
+        res
+        "##,
+    );
+}
+
+/// The table of a `case` with many Integer `when` values (`OptCase`)
+/// answers a Fixnum key only: a Float, a Bignum or any other key, and
+/// every key once `Integer#===` was replaced, goes through the `when`
+/// values one by one.
+#[test]
+fn case_opt_table_fallback() {
+    run_test_once(
+        r##"
+        def run
+          r = []
+          30.times { r << yield }
+          r.uniq
+        end
+        def oc(x) = (case x; when 1 then :a; when 2 then :b; when 3 then :c; when 4 then :d; when 5 then :e; when 6 then :f; when 7 then :g; when 8 then :h; else :z; end)
+        res = []
+        res << run { oc(3) } << run { oc(3.0) } << run { oc(2**70) } << run { oc("3") }
+        res << run { oc(3.5) } << run { oc(-0.0) } << run { oc(Float::INFINITY) } << run { oc(nil) }
+        res << run { oc(:a) } << run { oc(0) } << run { oc(100) } << run { oc(-1) }
+        o = Object.new; def o.==(x) = true
+        res << run { oc(o) }
+        class Integer; def ===(o) = o == 5; end
+        res << run { oc(5) } << run { oc(3) }
+        class Integer; remove_method :===; end
+        res << run { oc(3) }
+        res
+        "##,
+    );
+}

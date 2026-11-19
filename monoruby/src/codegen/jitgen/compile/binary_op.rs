@@ -938,6 +938,23 @@ impl<'a> JitContext<'a> {
 
         let (lhs_class, rhs_class) = state.binary_class(lhs, rhs, ic);
 
+        // ---- 1. A `when` literal of a `case` whose `when` values are all
+        // literals (CaseTEq) whose class's `===` cannot be assumed — a
+        // redefined `NilClass#==` takes `NilClass#===` down with it. CRuby's
+        // `opt_case_dispatch` still compares such a key by value, so neither
+        // the inline compare nor a call of `===` is right: the helper
+        // decides per key. (While the `===` can be assumed, the inline
+        // compare answers as the dispatch would.)
+        if case_semantics
+            && matches!(binop, BinaryOp::Cmp(CmpKind::TEq))
+            && state.pc().opcode() == 158
+            && lhs_class.is_none_or(|c| !self.basic_op_assumable(c, IdentId::_TEQ))
+        {
+            state.flush_gp(ir);
+            self.emit_generic_binary(state, ir, binop, lhs, rhs, case_semantics, true);
+            return Ok(BinaryLowering::Generic);
+        }
+
         // ---- 2. A site the VM saw comparing more than one lhs class, whose
         // lhs the abstract state cannot pin down: dispatch instead of
         // guarding. (A proven lhs class is monomorphic by construction,
@@ -1474,7 +1491,12 @@ impl<'a> JitContext<'a> {
             }
             // case/when `===` is funcall regardless (the helper forces it).
             Some(CmpKind::TEq) if case_semantics => {
-                ir.generic_binop(state, lhs, rhs, crate::executor::op::cmp_teq_case_values, true)
+                let func = if state.pc().opcode() == 158 {
+                    crate::executor::op::cmp_teq_dispatch_values
+                } else {
+                    crate::executor::op::cmp_teq_case_values
+                };
+                ir.generic_binop(state, lhs, rhs, func, true)
             }
             _ => ir.generic_binop(state, lhs, rhs, binop.generic_fn(), is_func_call),
         }

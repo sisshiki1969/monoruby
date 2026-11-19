@@ -759,24 +759,64 @@ pub(super) extern "C" fn yield_symbol_proc(
             let rest: smallvec::SmallVec<[Value; 8]> = (1..pos_num)
                 .map(|i| lfp.register(args_slot + i).unwrap())
                 .collect();
-            vm.dispatch_symbol_proc_kw(globals, symbol, recv, &rest, None, None)
+            vm.dispatch_symbol_proc(globals, symbol, outer, recv, &rest, None, None)
         }
     } else {
         vm.callsite_args(globals, lfp, callid, None)
             .and_then(|(args, kw)| match (args.split_first(), kw) {
                 (Some((recv, rest)), kw) => {
-                    vm.dispatch_symbol_proc_kw(globals, symbol, *recv, rest, None, kw)
+                    vm.dispatch_symbol_proc(globals, symbol, outer, *recv, rest, None, kw)
                 }
                 // Keywords alone are the receiver, as for `Proc#call`:
                 // `yield(k: 1)` to `&:to_s` is `{k: 1}.to_s`, the body
                 // having no keyword parameters to bind them to.
                 (None, Some(kw)) => {
-                    vm.dispatch_symbol_proc_kw(globals, symbol, kw.as_val(), &[], None, None)
+                    vm.dispatch_symbol_proc(globals, symbol, outer, kw.as_val(), &[], None, None)
                 }
                 (None, None) => Err(MonorubyErr::argumenterr("no receiver given")),
             })
     };
     res.map_err(|err| vm.set_error(err)).ok()
+}
+
+///
+/// `BlockCode` in the VM: the block the `&expr` value *val* passes from the
+/// running frame. A Symbol written where refinements are active becomes
+/// the refined symbol proc of that scope (CRuby's
+/// `vm_caller_setup_arg_block`, `Globals::refined_symbol_proc`), which
+/// carries the scope's refinements to whoever yields to it; every other
+/// value, and any Symbol while the scope activated none, passes as it is.
+///
+pub(super) extern "C" fn vm_block_code(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+    pc: BytecodePtr,
+) -> Value {
+    let set = vm.site_refinements(globals);
+    block_code(globals, val, set, pc)
+}
+
+///
+/// [`vm_block_code`] for JIT code, which knows the refinement set of the
+/// body it was compiled for (a body inlined into another runs on that
+/// one's frame, so the frame cannot tell).
+///
+pub(super) extern "C" fn jit_block_code(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+    set: RefinementSetId,
+    pc: BytecodePtr,
+) -> Value {
+    block_code(globals, val, set, pc)
+}
+
+fn block_code(globals: &mut Globals, val: Value, set: RefinementSetId, pc: BytecodePtr) -> Value {
+    match val.try_symbol() {
+        Some(symbol) if !set.is_empty() => globals.refined_symbol_proc(symbol, set, pc),
+        _ => val,
+    }
 }
 
 /// `BlockArg`: the value of the `&block` parameter of the frame `outer`
@@ -2112,6 +2152,11 @@ pub(crate) extern "C" fn opt_case(
     callid: OptCaseId,
     idx: Value,
 ) -> u32 {
+    // Once an `===` the dispatch stands on was replaced, the `when` values
+    // are compared one by one (the table's fallback, `offsets[0]`).
+    if !globals.store.case_dispatch_enabled() {
+        return globals.store[callid].offsets[0];
+    }
     globals.store[callid].find(idx)
 }
 

@@ -30,7 +30,9 @@ pub(super) fn init(globals: &mut Globals) {
     // One FuncId, so that `Set#to_s` and `Set#inspect` compare equal as
     // Method objects.
     globals.define_builtin_funcs(SET_CLASS, "inspect", &["to_s"], set_inspect, 0);
-    globals.define_builtin_funcs_with_kw(SET_CLASS, "dup", &["clone"], dup, 0, 1, false, &[], false);
+    // No `dup` / `clone` of its own, as in CRuby: `Kernel#dup` copies the
+    // table (and its comparison mode) and then runs this.
+    globals.define_private_builtin_func(SET_CLASS, "initialize_copy", initialize_copy, 1);
     globals.define_builtin_func_rest(SET_CLASS, "merge", merge);
     globals.define_builtin_func(SET_CLASS, "subtract", subtract, 1);
     globals.define_builtin_func(SET_CLASS, "replace", replace, 1);
@@ -122,21 +124,8 @@ fn new_empty_set_like(model: Value, store: &Store) -> Result<Value> {
     Ok(set)
 }
 
-/// Create a Set from an iterator of values.
-fn set_from_iter(
-    iter: impl Iterator<Item = Value>,
-    vm: &mut Executor,
-    globals: &mut Globals,
-) -> Result<Value> {
-    let set = new_empty_set();
-    let mut h = set.as_hash();
-    for v in iter {
-        h.aset(v, Value::bool(true), vm, globals)?;
-    }
-    Ok(set)
-}
-
-/// [`set_from_iter`], into a Set like `model` ([`new_empty_set_like`]).
+/// Create a Set like `model` ([`new_empty_set_like`]) from an iterator
+/// of values.
 fn set_from_iter_like(
     model: Value,
     iter: impl Iterator<Item = Value>,
@@ -496,18 +485,37 @@ fn set_inspect(
 }
 
 ///
-/// ### Set#dup
+/// ### Set#initialize_copy
 ///
-/// - dup -> Set
-/// - clone -> Set
+/// - initialize_copy(other) -> self
 ///
-/// [https://docs.ruby-lang.org/ja/latest/method/Set/i/dup.html]
+/// Make `self` a copy of the Set *other*: its elements and its comparison
+/// mode. What `dup` and `clone` run on the copy (CRuby's
+/// `set_i_initialize_copy`).
 #[monoruby_builtin]
-fn dup(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let keys = set_keys(lfp.self_val());
-    // Of `self`'s class, and `compare_by_identity` persists across
-    // #dup / #clone.
-    set_from_iter_like(lfp.self_val(), keys.into_iter(), vm, globals)
+fn initialize_copy(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let other = lfp.arg(0);
+    if self_val.id() == other.id() {
+        return Ok(self_val);
+    }
+    if !is_set(other, &globals.store) {
+        return Err(MonorubyErr::wrong_argument_type(
+            &globals.store,
+            other,
+            "set",
+        ));
+    }
+    // The table as it is — members and the `compare_by_identity` mode —
+    // with no rehashing.
+    let inner = other.as_hash().inner().clone_inner();
+    self_val.as_hash_mut(&globals.store)?.replace_inner(inner);
+    Ok(self_val)
 }
 
 ///

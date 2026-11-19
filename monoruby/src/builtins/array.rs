@@ -2133,18 +2133,38 @@ fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // The `inject(sym)` form may consume the first element as the
     // initial accumulator; track where the remaining elements start.
     // A non-Symbol/String method name is coerced via `#to_str`.
-    let (sym, mut res, mut start) = if let Some(arg0) = lfp.try_arg(0) {
+    // The name is looked up as `rb_check_id` does: a String no Symbol
+    // exists for stays a String, and each step is a `send` of it (which
+    // makes the Symbol only for a receiver with a `method_missing` of
+    // its own).
+    let (name, mut res, mut start) = if let Some(arg0) = lfp.try_arg(0) {
         if let Some(arg1) = lfp.try_arg(1) {
-            (arg1.coerce_to_symbol_or_string(vm, globals)?, arg0, 0usize)
+            (
+                super::kernel::checked_name(vm, globals, arg1)?,
+                arg0,
+                0usize,
+            )
         } else {
-            let sym = arg0.coerce_to_symbol_or_string(vm, globals)?;
+            let name = super::kernel::checked_name(vm, globals, arg0)?;
             if self_.len() == 0 {
                 return Ok(Value::nil());
             }
-            (sym, self_[0], 1usize)
+            (name, self_[0], 1usize)
         }
     } else {
         return Err(MonorubyErr::argumenterr("wrong number of arguments"));
+    };
+    let sym = match name {
+        super::kernel::CheckedName::Id(id) => id,
+        super::kernel::CheckedName::Unknown(name) => {
+            let Some(v) = self_.get(start).copied() else {
+                return Ok(res);
+            };
+            let id = super::kernel::send_unknown_name(globals, res, name, &[v], true)?;
+            res = vm.invoke_method_inner(globals, id, res, &[v], None, None)?;
+            start += 1;
+            id
+        }
     };
     // Fast path for `inject(:+)` on a Fixnum accumulator: skip method
     // dispatch entirely while elements stay in i64 range.

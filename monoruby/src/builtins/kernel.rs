@@ -474,14 +474,19 @@ pub(super) fn init(globals: &mut Globals) -> Module {
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/nil=3f.html]
 #[monoruby_builtin]
-fn nil(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+pub(super) fn nil(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
     Ok(Value::bool(lfp.self_val().is_nil()))
 }
 
 /// Reads only the receiver Value, so it keeps firing where the class is
 /// unproven: a pure Value
 /// comparison against `nil`, correct for any receiver.
-fn kernel_nil(
+pub(super) fn kernel_nil(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     ctx: &JitContext,
@@ -6107,7 +6112,7 @@ fn define_singleton_method(
     if self_val.is_frozen() && !self_val.is_special_singleton() {
         return Err(MonorubyErr::cant_modify_frozen(&globals.store, self_val));
     }
-    let name = lfp.arg(0).expect_symbol_or_to_str(vm, globals)?;
+    let name = super::module::defined_method_name(vm, globals, lfp, false)?;
     // For a proc/block body, the runtime LFP carries the *block*'s
     // FuncId. `super` resolution (`find_super`) reads that FuncId's
     // `name`, so it must be set or it panics. Mirror the decoration

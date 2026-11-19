@@ -1988,6 +1988,48 @@ fn define_method(
     define_method_in(vm, globals, lfp, pc, class_id, false)
 }
 
+/// The name of a `define_method` / `define_singleton_method` call:
+/// `rb_check_id`, then the checks on the body, and only then a Symbol
+/// made for a name that has none — so a call that is refused makes no
+/// Symbol (CRuby's `rb_mod_define_method_with_visibility`).
+/// *class_name* says whether a body of the wrong type is named by its
+/// class (`define_method`) or as `wrong_argument_type` does.
+pub(super) fn defined_method_name(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    class_name: bool,
+) -> Result<IdentId> {
+    let name = super::kernel::checked_name(vm, globals, lfp.arg(0))?;
+    if let Some(body) = lfp.try_arg(1) {
+        if body.is_proc().is_none() && body.is_method().is_none() && body.is_umethod().is_none() {
+            return Err(if class_name {
+                // `rb_mod_define_method` names the argument's *class*, so
+                // `nil` reports `NilClass` rather than the
+                // `wrong_argument_type` helper's keyword spelling.
+                MonorubyErr::typeerr(format!(
+                    "wrong argument type {} (expected Proc/Method/UnboundMethod)",
+                    body.get_real_class_name(&globals.store),
+                ))
+            } else {
+                MonorubyErr::wrong_argument_type(globals, body, "Proc/Method/UnboundMethod")
+            });
+        }
+    } else if lfp.block().is_none() {
+        // No body at all: CRuby's `rb_block_lambda` reports the missing
+        // block rather than an arity mismatch.
+        return Err(MonorubyErr::argumenterr(
+            "tried to create Proc object without a block",
+        ));
+    }
+    match name {
+        super::kernel::CheckedName::Id(id) => Ok(id),
+        super::kernel::CheckedName::Unknown(s) => {
+            super::string::intern_name_string(&globals.store, s.as_rstring_inner())
+        }
+    }
+}
+
 /// `Module#define_method` on *class_id*, with the name in `arg(0)` and
 /// the body in `arg(1)` or the block. `main.define_method` is this on
 /// `Object` (CRuby's `top_define_method` calls `rb_mod_define_method`
@@ -2004,8 +2046,7 @@ pub(super) fn define_method_in(
     globals.store.class_modify_check(class_id)?;
     // The name accepts Symbol / String and anything `to_str`-convertible
     // (CRuby's `define_method(obj)` with `obj.to_str`).
-    let name_val = lfp.arg(0);
-    let name = name_val.expect_symbol_or_to_str(vm, globals)?;
+    let name = defined_method_name(vm, globals, lfp, true)?;
     // For proc-based define_method, the runtime LFP has the *block*'s
     // FuncId (the wrapper jumps directly to the block code, only
     // tagging the meta with `PROC_METHOD_MASK`). For `super` to work

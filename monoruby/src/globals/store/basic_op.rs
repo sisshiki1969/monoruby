@@ -80,6 +80,7 @@ pub(crate) const BASIC_OP_DEFS: &[(ClassId, &str)] = &[
     (FLOAT_CLASS, "==="),
     (STRING_CLASS, "=="),
     (STRING_CLASS, "!="),
+    (STRING_CLASS, "==="),
     (SYMBOL_CLASS, "=="),
     (SYMBOL_CLASS, "==="),
     (NIL_CLASS, "=="),
@@ -189,6 +190,14 @@ pub(crate) struct BasicOpTable {
     /// place every `def` / `define_method` / `alias` / `attr_*` passes
     /// through with both in hand.
     pending_warnings: Vec<(ClassId, IdentId)>,
+    /// Set for good once `===` of a class a `case` may dispatch on
+    /// (Integer, Float, Symbol, String, nil, true, false) is replaced:
+    /// CRuby's `opt_case_dispatch` then stops comparing a `case` whose
+    /// `when` values are all literals by value, and calls `===` on each
+    /// (`BASIC_OP_UNREDEFINED_P(BOP_EQQ, ...)`, a flag nothing clears).
+    /// A redefined `==` of nil / true / false, which marks their `===`
+    /// pair too, does not set it.
+    case_dispatch_off: bool,
 }
 
 impl BasicOpTable {
@@ -209,7 +218,20 @@ impl BasicOpTable {
             refined_set: HashSet::default(),
             armed_funcs: HashMap::default(),
             pending_warnings: Vec::new(),
+            case_dispatch_off: false,
         }
+    }
+
+    /// See [`Self::case_dispatch_off`](BasicOpTable).
+    pub(crate) fn disable_case_dispatch(&mut self) {
+        self.case_dispatch_off = true;
+    }
+
+    /// Whether a `case` whose `when` values are all literals still
+    /// compares a key of a literal's class by value (CRuby's
+    /// `opt_case_dispatch`) rather than by calling `===`.
+    pub(crate) fn case_dispatch_enabled(&self) -> bool {
+        !self.case_dispatch_off
     }
 
     /// Start reporting. Called once, after startup.rb and the gems have
@@ -484,6 +506,7 @@ mod tests {
             ("Float", "!", "!(3.0)"),
             ("String", "==(o)", r#""a" == "b""#),
             ("String", "!=(o)", r#""a" != "b""#),
+            ("String", "===(o)", r#""a" === "b""#),
             ("String", "!", r#"!("a")"#),
             ("String", "freeze", r#""a".freeze"#),
             ("Symbol", "==(o)", ":a == :b"),
