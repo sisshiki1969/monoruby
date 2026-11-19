@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-49140532.js";
+            window.path_to_searchindex_js = "../searchindex-76d1f02a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -233,7 +233,10 @@ monoruby の <code>Value</code>（<code>value.rs</code>）とは層（<code>capi
 …）は関数。<code>RBasic</code> / <code>RString</code> 構造体は無い。<code>RARRAY_PTR</code> /
 <code>RARRAY_CONST_PTR</code> は要素を変換した<strong>コピー</strong>を指し（§3.15）、読み取り
 専用（書くときは <code>rb_ary_store</code> / <code>RARRAY_ASET</code>）。</li>
-<li>世代別 GC が無いので write barrier（<code>RB_OBJ_WRITE</code> 等）は代入だけ。</li>
+<li>write barrier（<code>RB_OBJ_WRITE</code> 等）は代入だけ。C の構造体に <code>VALUE</code> を
+持てるのは TypedData（<code>ObjTy::NATIVE</code>）だけで、NATIVE は old 世代に
+昇格しない（<code>RValue::is_promotable</code>）ので、minor GC でも毎回 <code>dmark</code>
+が走る。</li>
 </ul>
 <h2 id="3-設計"><a class="header" href="#3-設計">3. 設計</a></h2>
 <h3 id="31-シムは拡張に静的リンクする"><a class="header" href="#31-シムは拡張に静的リンクする">3.1 シムは拡張に静的リンクする</a></h3>
@@ -289,6 +292,16 @@ C に渡す<strong>ヒープ上の <code>VALUE</code> はすべて temp stack �
 temp stack はメソッド呼び出し（と <code>Init_</code>）が戻ったときにインタプリタが
 切り詰める。TruffleRuby の <code>ExtensionCallStack</code> と同じ考え方
 （<code>doc/c_extention.md</code> §3.4）。</p>
+<p>新しく作った値だけでなく、<strong>ほかのオブジェクトから読み出した値も積む</strong>:
+<code>rb_ary_entry</code>（<code>RARRAY_AREF</code>）、<code>RARRAY_CONST_PTR</code> のコピーの要素、
+<code>rb_gv_get</code>、<code>rb_backref_get</code>、<code>rb_lastline_get</code>。読んだあと元の場所から
+外れても（<code>rb_ary_clear</code>、<code>rb_gv_set</code>、次のマッチ）C が持っている間は
+生きていなければならない（CRuby では C スタックの走査が守る。#2085）。
+<code>RARRAY_CONST_PTR</code> は前回のコピーと同じ位置に同じ値がある要素は積み直さ
+ない（その呼び出しの temp stack に既にある）ので、変わらない Array の
+ポインタをループで取り直しても temp stack は伸びない。
+<code>rb_errinfo</code> は呼び出しをまたいで残るので temp stack ではなく pin する
+（<code>errinfo_set</code>）。</p>
 <p>呼び出しを越えて C のグローバル変数に持つ値は CRuby と同じく
 <code>rb_gc_register_address</code> / <code>rb_global_variable</code>（アドレスを毎回読む新しい
 ABI 項目 <code>gc_register_address</code>）か <code>rb_gc_register_mark_object</code>（pin）。</p>
@@ -697,7 +710,8 @@ pin した隠しネイティブオブジェクト 1 個の <code>mark</code> か
 コピーは現在の Ruby 呼び出し（<code>capi_frame</code> の owner）が持ち、呼び出し
 が戻るとき解放する。1 呼び出しにつき 8 スロット（Array ごとに 1 つ、
 同じ Array はスロットを再利用して要素を取り直す）なので、CRuby と同じ
-ように複数の Array のポインタを同時に持てる。<code>RARRAY_AREF</code> は
+ように複数の Array のポインタを同時に持てる。要素は temp stack に
+積む（§3.3）。<code>RARRAY_AREF</code> は
 <code>rb_ary_entry</code>（変換あり）。</li>
 <li>TypedData の <code>dmark</code> / ブロックの <code>mark</code>: <code>rb_gc_mark(VALUE)</code> が
 <code>M()</code> してコアに渡す。</li>
