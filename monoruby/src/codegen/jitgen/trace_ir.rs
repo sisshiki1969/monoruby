@@ -65,7 +65,6 @@ pub(crate) enum MethodCache {
     /// → recompile, looping forever). `version` is the class version at the time
     /// the VM populated the cache.
     MethodMissing {
-        #[allow(dead_code)] // kept for debugging/symmetry; only `version` is read.
         recv_class: CachedClass,
         version: u32,
     },

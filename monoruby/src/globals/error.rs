@@ -934,22 +934,6 @@ impl MonorubyErr {
         )
     }
 
-    pub(crate) fn unsupported_feature(
-        msg: &str,
-        loc: Loc,
-        sourceinfo: SourceInfoRef,
-        func_id: FuncId,
-    ) -> MonorubyErr {
-        let msg = msg.to_string();
-        MonorubyErr::new_with_loc(
-            MonorubyErrKind::Unimplemented,
-            msg,
-            loc,
-            sourceinfo,
-            func_id,
-        )
-    }
-
     pub(crate) fn syntax(
         msg: String,
         loc: Loc,

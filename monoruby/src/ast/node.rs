@@ -176,27 +176,6 @@ impl std::default::Default for NodeKind {
     }
 }
 
-impl NodeKind {
-    pub fn is_identifier(&self) -> Option<&str> {
-        match self {
-            NodeKind::Ident(s) => Some(s),
-            NodeKind::LocalVar(_, s) => Some(s),
-            NodeKind::Const(ConstInfo {
-                toplevel: false,
-                parent: None,
-                prefix,
-                name,
-            }) if prefix.is_empty() => Some(name),
-            NodeKind::String(s) => Some(s),
-            NodeKind::SelfValue => Some("self"),
-            NodeKind::Bool(true) => Some("true"),
-            NodeKind::Bool(false) => Some("false"),
-            NodeKind::Nil => Some("nil"),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockInfo {
     pub params: Vec<FormalParam>,
@@ -225,62 +204,6 @@ impl BlockInfo {
 }
 
 pub type FormalParam = Annot<ParamKind>;
-
-impl FormalParam {
-    pub(crate) fn req_param(name: String, loc: Loc) -> Self {
-        FormalParam::new(ParamKind::Param(name), loc)
-    }
-
-    pub(crate) fn optional(name: String, default: Node, loc: Loc) -> Self {
-        FormalParam::new(ParamKind::Optional(name, Box::new(default)), loc)
-    }
-
-    pub(crate) fn rest(name: String, loc: Loc) -> Self {
-        FormalParam::new(ParamKind::Rest(Some(name)), loc)
-    }
-
-    pub(crate) fn rest_discard(loc: Loc) -> Self {
-        FormalParam::new(ParamKind::Rest(None), loc)
-    }
-
-    pub(crate) fn post(name: String, loc: Loc) -> Self {
-        FormalParam::new(ParamKind::Post(Some(name)), loc)
-    }
-
-    /// Anonymous post param, used to inject a trailing-comma auto-splat
-    /// hint into block / lambda parameter lists. Does not allocate a local.
-    /// Lowers `|a,|`-style trailing commas to `ParamKind::ImplicitRest`
-    /// so the rest-slot only counts toward block-style auto-splat /
-    /// extras absorption, not toward `arity` or method-style strict
-    /// checks.
-    pub(crate) fn post_discard(loc: Loc) -> Self {
-        FormalParam::new(ParamKind::ImplicitRest, loc)
-    }
-
-    pub(crate) fn keyword(name: String, default: Option<Node>, loc: Loc) -> Self {
-        FormalParam::new(ParamKind::Keyword(name, default.map(Box::new)), loc)
-    }
-
-    pub(crate) fn kwrest(name: String, loc: Loc) -> Self {
-        FormalParam::new(ParamKind::KWRest(Some(name)), loc)
-    }
-
-    pub(crate) fn kwrest_discard(loc: Loc) -> Self {
-        FormalParam::new(ParamKind::KWRest(None), loc)
-    }
-
-    pub(crate) fn block(name: String, loc: Loc) -> Self {
-        FormalParam::new(ParamKind::Block(Some(name)), loc)
-    }
-
-    pub(crate) fn block_discard(loc: Loc) -> Self {
-        FormalParam::new(ParamKind::Block(None), loc)
-    }
-
-    pub(crate) fn forwarding(loc: Loc) -> Self {
-        FormalParam::new(ParamKind::Forwarding, loc)
-    }
-}
 
 /// One element of a destructuring block/lambda parameter (`|(a, *b, (c, d))|`).
 /// A whole destructure target is a `Vec<DestructEntry>` with at most one
@@ -388,22 +311,12 @@ impl ArgList {
             zsuper: false,
         }
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaseBranch {
     pub when: Vec<Node>,
     pub body: Box<Node>,
-}
-
-impl CaseBranch {
-    pub(crate) fn new(when: Vec<Node>, body: Node) -> Self {
-        CaseBranch {
-            when,
-            body: Box::new(body),
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -486,10 +399,6 @@ impl Node {
         }
     }
 
-    pub(crate) fn is_integer(&self) -> bool {
-        matches!(&self.kind, NodeKind::Integer(_) | NodeKind::Bignum(_))
-    }
-
     pub(crate) fn is_const_expr(&self) -> bool {
         matches!(
             &self.kind,
@@ -504,28 +413,6 @@ impl Node {
         )
     }
 
-    pub(crate) fn is_symbol_key(&self) -> Option<String> {
-        let s: &str = match &self.kind {
-            NodeKind::Ident(s) => s,
-            NodeKind::LocalVar(_, s) => s,
-            NodeKind::Const(ConstInfo {
-                toplevel: false,
-                parent: None,
-                prefix,
-                name,
-            }) if prefix.is_empty() => name,
-            NodeKind::String(s) => s,
-            // Reserved-word literals are accepted as symbol shorthand keys
-            // (`nil:`, `false:`, `true:`) -- matching CRuby's hash literal
-            // grammar.
-            NodeKind::Nil => "nil",
-            NodeKind::Bool(true) => "true",
-            NodeKind::Bool(false) => "false",
-            _ => return None,
-        };
-        Some(s.to_string())
-    }
-
     pub fn new_nil(loc: Loc) -> Self {
         Node::new(NodeKind::Nil, loc)
     }
@@ -534,28 +421,8 @@ impl Node {
         Node::new(NodeKind::Integer(num), loc)
     }
 
-    pub(crate) fn new_bignum(num: BigInt, loc: Loc) -> Self {
-        Node::new(NodeKind::Bignum(num), loc)
-    }
-
     pub(crate) fn new_bool(b: bool, loc: Loc) -> Self {
         Node::new(NodeKind::Bool(b), loc)
-    }
-
-    pub(crate) fn new_float(num: f64, loc: Loc) -> Self {
-        Node::new(NodeKind::Float(num), loc)
-    }
-
-    pub(crate) fn new_imaginary(num: NReal, loc: Loc) -> Self {
-        Node::new(NodeKind::Imaginary(num), loc)
-    }
-
-    pub(crate) fn new_rational(num: BigInt, den: BigInt, loc: Loc) -> Self {
-        Node::new(NodeKind::Rational(Box::new((num, den))), loc)
-    }
-
-    pub(crate) fn new_rimaginary(num: BigInt, den: BigInt, loc: Loc) -> Self {
-        Node::new(NodeKind::RImaginary(Box::new((num, den))), loc)
     }
 
     pub(crate) fn new_array(nodes: Vec<Node>, loc: Loc) -> Self {
@@ -565,82 +432,6 @@ impl Node {
         };
         let is_const = nodes.iter().all(|n| n.is_const_expr());
         Node::new(NodeKind::Array(nodes, is_const), loc)
-    }
-
-    pub(crate) fn new_range(
-        start: Option<Node>,
-        end: Option<Node>,
-        exclude_end: bool,
-        loc: Loc,
-    ) -> Self {
-        let is_const = if let (Some(s), Some(e)) = (start.as_ref(), end.as_ref()) {
-            s.is_integer() && e.is_integer()
-        } else {
-            false
-        };
-        Node::new(
-            NodeKind::Range {
-                start: Box::new(start),
-                end: Box::new(end),
-                exclude_end,
-                is_const,
-            },
-            loc,
-        )
-    }
-
-    pub(crate) fn new_hash(key_value: Vec<(Node, Node)>, loc: Loc) -> Self {
-        Node::new(NodeKind::Hash(key_value, vec![]), loc)
-    }
-
-    pub(crate) fn new_hash_with_splat(
-        key_value: Vec<(Node, Node)>,
-        splat: Vec<(usize, Node)>,
-        loc: Loc,
-    ) -> Self {
-        Node::new(NodeKind::Hash(key_value, splat), loc)
-    }
-
-    pub(crate) fn new_regexp(regex: Vec<Node>, postfix: String, loc: Loc) -> Self {
-        let is_const = regex.iter().all(|n| matches!(n.kind, NodeKind::String(_)));
-        Node::new(NodeKind::RegExp(regex, postfix, is_const), loc)
-    }
-
-    pub(crate) fn new_self(loc: Loc) -> Self {
-        Node::new(NodeKind::SelfValue, loc)
-    }
-
-    pub(crate) fn new_interporated_string(nodes: Vec<Node>, loc: Loc) -> Self {
-        let nodes = nodes
-            .into_iter()
-            .filter(|node| match &node.kind {
-                NodeKind::String(s) => !s.is_empty(),
-                _ => true,
-            })
-            .collect();
-        Node::new(NodeKind::InterporatedString(nodes), loc)
-    }
-
-    pub(crate) fn new_command(node: Node) -> Self {
-        let loc = node.loc;
-        Node::new(NodeKind::Command(Box::new(node)), loc)
-    }
-
-    pub(crate) fn new_defined(node: Node) -> Self {
-        let loc = node.loc;
-        Node::new(NodeKind::Defined(Box::new(node)), loc)
-    }
-
-    pub(crate) fn new_alias(new: Node, old: Node, loc: Loc) -> Self {
-        Node::new(NodeKind::AliasMethod(Box::new(new), Box::new(old)), loc)
-    }
-
-    pub(crate) fn new_undef(undef: Node, loc: Loc) -> Self {
-        Node::new(NodeKind::UndefMethod(Box::new(undef)), loc)
-    }
-
-    pub(crate) fn new_discard(loc: Loc) -> Self {
-        Node::new(NodeKind::DiscardLhs, loc)
     }
 
     pub(crate) fn new_comp_stmt(mut nodes: Vec<Node>, mut loc: Loc) -> Self {
@@ -697,14 +488,6 @@ impl Node {
         Node::new(NodeKind::Symbol(symbol), loc)
     }
 
-    pub(crate) fn new_instance_var(name: String, loc: Loc) -> Self {
-        Node::new(NodeKind::InstanceVar(name), loc)
-    }
-
-    pub(crate) fn new_class_var(name: String, loc: Loc) -> Self {
-        Node::new(NodeKind::ClassVar(name), loc)
-    }
-
     pub(crate) fn new_global_var(name: String, loc: Loc) -> Self {
         Node::new(NodeKind::GlobalVar(name), loc)
     }
@@ -743,53 +526,10 @@ impl Node {
         Node::new(NodeKind::MulAssign(mlhs, mrhs), loc)
     }
 
-    pub(crate) fn new_assign_op(op: BinOp, lhs: Node, rhs: Node) -> Self {
-        let loc = lhs.loc().merge(rhs.loc());
-        Node::new(NodeKind::AssignOp(op, Box::new(lhs), Box::new(rhs)), loc)
-    }
-
     // `new_method_decl` / `new_singleton_method_decl` used to live here.
     // The lowerer builds both variants itself — a `def` carries a
     // `DefBody`, which is a deferred handle on prism's node unless the
     // parse asked for the eager form — so neither had a caller.
-
-    pub(crate) fn new_class_decl(
-        base: Option<Node>,
-        name: String,
-        superclass: Option<Node>,
-        body: Node,
-        lvar: LvarCollector,
-        is_module: bool,
-        loc: Loc,
-    ) -> Self {
-        let info = BlockInfo::new(vec![], body, lvar, loc);
-        Node::new(
-            NodeKind::ClassDef {
-                base: base.map(Box::new),
-                name,
-                superclass: superclass.map(Box::new),
-                info: Box::new(info),
-                is_module,
-            },
-            loc,
-        )
-    }
-
-    pub(crate) fn new_singleton_class_decl(
-        singleton: Node,
-        body: Node,
-        lvar: LvarCollector,
-        loc: Loc,
-    ) -> Self {
-        let info = BlockInfo::new(vec![], body, lvar, loc);
-        Node::new(
-            NodeKind::SingletonClassDef {
-                singleton: Box::new(singleton),
-                info: Box::new(info),
-            },
-            loc,
-        )
-    }
 
     pub(crate) fn new_mcall(
         receiver: Node,
@@ -875,134 +615,7 @@ impl Node {
         )
     }
 
-    pub(crate) fn new_while_postfix(cond: Node, body: Node, cond_op: bool, loc: Loc) -> Self {
-        let loc = loc.merge(body.loc());
-        Node::new(
-            NodeKind::While {
-                cond: Box::new(cond),
-                body: Box::new(body),
-                cond_op,
-                postfix: true,
-            },
-            loc,
-        )
-    }
-
-    pub(crate) fn new_case(
-        cond: Option<Node>,
-        when_: Vec<CaseBranch>,
-        else_: Node,
-        loc: Loc,
-    ) -> Self {
-        let loc = loc.merge(else_.loc());
-        Node::new(
-            NodeKind::Case {
-                cond: cond.map(Box::new),
-                when_,
-                else_: Box::new(else_),
-            },
-            loc,
-        )
-    }
-
-    pub(crate) fn new_begin(
-        body: Node,
-        rescue: Vec<RescueEntry>, //Vec<(Vec<Node>, Box<Node>)>,
-        else_: Option<Node>,
-        ensure: Option<Node>,
-    ) -> Self {
-        let mut loc = body.loc();
-        let else_ = match else_ {
-            Some(else_) => {
-                loc = loc.merge(else_.loc);
-                Some(Box::new(else_))
-            }
-            None => None,
-        };
-        let ensure = match ensure {
-            Some(ensure) => {
-                loc = loc.merge(ensure.loc());
-                Some(Box::new(ensure))
-            }
-            None => None,
-        };
-        Node::new(
-            NodeKind::Begin {
-                body: Box::new(body),
-                rescue,
-                else_,
-                ensure,
-            },
-            loc,
-        )
-    }
-
-    pub(crate) fn new_break(val: Node, loc: Loc) -> Self {
-        Node::new(NodeKind::Break(Box::new(val)), loc)
-    }
-
-    pub(crate) fn new_next(val: Node, loc: Loc) -> Self {
-        Node::new(NodeKind::Next(Box::new(val)), loc)
-    }
-
-    pub(crate) fn new_redo(loc: Loc) -> Self {
-        Node::new(NodeKind::Redo, loc)
-    }
-
-    pub(crate) fn new_retry(loc: Loc) -> Self {
-        Node::new(NodeKind::Retry, loc)
-    }
-
-    pub(crate) fn new_return(val: Node, loc: Loc) -> Self {
-        Node::new(NodeKind::Return(Box::new(val)), loc)
-    }
-
-    pub(crate) fn new_yield(args: ArgList, loc: Loc) -> Self {
-        Node::new(NodeKind::Yield(Box::new(args)), loc)
-    }
-
-    pub(crate) fn new_super(args: impl Into<Option<ArgList>>, loc: Loc) -> Self {
-        let args: Option<ArgList> = args.into();
-        let args = args.map(Box::new);
-        Node::new(NodeKind::Super(args), loc)
-    }
-
-    pub(crate) fn new_lambda(
-        params: Vec<FormalParam>,
-        body: Node,
-        lvar: LvarCollector,
-        loc: Loc,
-    ) -> Self {
-        let mut info = BlockInfo::new(params, body, lvar, loc);
-        info.is_lambda = true;
-        Node::new(NodeKind::Lambda(Box::new(info)), loc)
-    }
-
     pub fn is_splat(&self) -> bool {
         matches!(self.kind, NodeKind::Splat(_))
-    }
-
-    pub fn is_imm_u32(&self) -> Option<u32> {
-        if let NodeKind::Integer(i) = self.kind {
-            if 0 <= i && i <= u32::MAX as i64 {
-                Some(i as u32)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
-    pub fn is_imm_i32(&self) -> Option<i32> {
-        if let NodeKind::Integer(i) = self.kind {
-            if i32::MIN as i64 <= i && i <= i32::MAX as i64 {
-                Some(i as i32)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
     }
 }

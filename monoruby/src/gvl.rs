@@ -11,12 +11,6 @@
 //! and immediately re-acquires would starve everyone else (the classic
 //! GVL convoy), so a release hands the lock *directly* to the longest
 //! waiter, FIFO, and a yielding holder joins the back of the queue.
-//!
-//! A single-threaded program pays nothing: while only one thread is
-//! registered, [`Gvl::without`] runs its region inline — no lock
-//! traffic at all — and the lock changes hands only once a second
-//! thread registers. Until the kernel-thread model lands, the `Vm`'s
-//! creating thread is the sole registrant and the only holder.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
@@ -52,9 +46,6 @@ struct State {
     held: bool,
     /// Threads waiting for the lock, oldest first.
     waiters: VecDeque<Arc<Slot>>,
-    /// Threads registered on this lock (the "live" count that decides
-    /// whether releasing is worth anything).
-    registered: usize,
     /// The thread that held the lock last (kept alive here, so a later
     /// thread's slot can never be mistaken for it). A thread that takes
     /// the lock back with nobody having held it in between skips the
@@ -92,7 +83,6 @@ impl GvlForkGuard {
         } = self;
         state.held = true;
         state.waiters.clear();
-        state.registered = 1;
         state.last = None;
         *survivor.granted.lock().unwrap_or_else(|e| e.into_inner()) = false;
     }
@@ -106,7 +96,6 @@ impl Gvl {
             state: Mutex::new(State {
                 held: true,
                 waiters: VecDeque::new(),
-                registered: 1,
                 last: None,
             }),
         };
@@ -119,21 +108,13 @@ impl Gvl {
     /// Register a new kernel thread. It does not hold the lock yet;
     /// [`Gvl::acquire`] is its first step.
     pub(crate) fn register(&self) -> GvlThread {
-        self.state.lock().unwrap().registered += 1;
         GvlThread {
             slot: Arc::new(Slot::new()),
         }
     }
 
     /// The thread is done for good. Must not hold the lock.
-    pub(crate) fn unregister(&self, _th: GvlThread) {
-        self.state.lock().unwrap().registered -= 1;
-    }
-
-    /// How many threads share this lock.
-    pub(crate) fn registered(&self) -> usize {
-        self.state.lock().unwrap().registered
-    }
+    pub(crate) fn unregister(&self, _th: GvlThread) {}
 
     /// Whether `th` is queued for the lock right now. A spawner uses it
     /// to hand a freshly started thread its first slice: once the new
@@ -245,22 +226,6 @@ impl Gvl {
         self.on_acquired(th);
     }
 
-    /// Run `f` without the lock: the blocking region. `f` must not
-    /// touch the heap, `Globals`, or anything else the lock guards.
-    ///
-    /// With no other thread registered the region runs inline, so the
-    /// single-threaded program never touches the lock.
-    #[inline]
-    pub(crate) fn without<R>(&self, th: &GvlThread, f: impl FnOnce() -> R) -> R {
-        if self.registered() == 1 {
-            return f();
-        }
-        self.release(th);
-        let r = f();
-        self.acquire(th);
-        r
-    }
-
     /// The holder that just left may have written or patched JIT code
     /// (a compile, an entry jump reverted by a basic-op redefinition, a
     /// version word re-stamped by a salvage); it flushed on its side.
@@ -310,12 +275,9 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn creator_holds_it_and_a_single_thread_runs_regions_inline() {
+    fn creator_holds_it() {
         let (gvl, main) = Gvl::new();
-        assert_eq!(gvl.registered(), 1);
-        // No release happens here: the region runs with `held` still true.
-        let r = gvl.without(&main, || gvl.state.lock().unwrap().held);
-        assert!(r);
+        assert!(gvl.state.lock().unwrap().held);
         gvl.yield_now(&main);
         assert!(gvl.state.lock().unwrap().held);
     }
@@ -351,12 +313,10 @@ mod tests {
         };
         wait_for_waiters(&gvl, 1);
         assert_eq!(ran_in_region.load(Ordering::SeqCst), 0);
-        // Two registrants now, so the region really releases.
-        gvl.without(&main, || {
-            other.join().unwrap();
-        });
+        gvl.release(&main);
+        other.join().unwrap();
+        gvl.acquire(&main);
         assert_eq!(ran_in_region.load(Ordering::SeqCst), 1);
-        assert_eq!(gvl.registered(), 1);
         assert!(gvl.state.lock().unwrap().held);
     }
 
@@ -438,6 +398,5 @@ mod tests {
         gvl.release(&main);
         other.join().unwrap();
         gvl.acquire(&main);
-        assert_eq!(gvl.registered(), 1);
     }
 }

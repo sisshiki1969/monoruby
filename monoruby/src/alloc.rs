@@ -836,10 +836,8 @@ pub struct Allocator<T: GCBox> {
     total_gc_counter: usize,
     /// Counter of minor (young-generation) GC executions. Always 0 until
     /// minor GC lands; see `doc/gc.md`.
-    #[allow(dead_code)]
     minor_gc_count: usize,
     /// Counter of major (full-heap) GC executions.
-    #[allow(dead_code)]
     major_gc_count: usize,
     /// Minor GCs performed since the last major GC. Drives the
     /// minor/major choice in `decide_gc_kind`.
@@ -1451,7 +1449,6 @@ impl<T: GCBox> Allocator<T> {
     /// Returns a number of objects in the free list.
     /// (sweeped objects in the previous GC cycle.)
     ///
-    #[allow(unused)]
     pub fn free_count(&self) -> usize {
         self.free_list_count
     }
@@ -1459,7 +1456,6 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Returns a number of live objects in the previous GC cycle.
     ///
-    #[allow(unused)]
     pub fn live_count(&self) -> usize {
         self.mark_counter
     }
@@ -1467,7 +1463,6 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Returns a number of total allocated objects.
     ///
-    #[allow(unused)]
     pub fn total_allocated(&self) -> usize {
         self.total_allocated_objects
     }
@@ -1475,7 +1470,6 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Returns a number of total gc execution count.
     ///
-    #[allow(unused)]
     pub fn total_gc_counter(&self) -> usize {
         self.total_gc_counter
     }
@@ -1483,7 +1477,6 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Returns the number of minor (young-generation) GC executions.
     ///
-    #[allow(unused)]
     pub fn minor_gc_count(&self) -> usize {
         self.minor_gc_count
     }
@@ -1491,7 +1484,6 @@ impl<T: GCBox> Allocator<T> {
     ///
     /// Returns the number of major (full-heap) GC executions.
     ///
-    #[allow(unused)]
     pub fn major_gc_count(&self) -> usize {
         self.major_gc_count
     }
@@ -1691,10 +1683,6 @@ impl<T: GCBox> Allocator<T> {
         c
     }
 
-    ///
-    /// Returns total active pages.
-    ///
-    #[allow(unused)]
     ///
     /// Call `f` with every cell in the heap that currently holds an
     /// object.

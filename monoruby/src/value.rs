@@ -3193,7 +3193,6 @@ impl Value {
 
     /// Read-only access to the slot array of a `Struct` subclass
     /// instance. Asserts the receiver is a STRUCT-typed RValue.
-    #[allow(dead_code)]
     pub(crate) fn as_struct(&self) -> &StructInner {
         assert_eq!(ObjTy::STRUCT, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue is a Struct instance.
@@ -3594,7 +3593,6 @@ impl Value {
         IoBuffer::new_unchecked(*self)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn as_io_inner(&self) -> &IoInner {
         assert_eq!(ObjTy::IO, self.rvalue().ty());
         // SAFETY: The assert ensures this RValue contains an IO object.

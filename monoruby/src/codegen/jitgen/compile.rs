@@ -279,11 +279,6 @@ impl<'a> JitContext<'a> {
                     ir.deopt(&mut state);
                     return Ok(ir);
                 }
-                CompileResult::Abort => {
-                    #[cfg(feature = "emit-bc")]
-                    self.dump_iseq();
-                    unreachable!("JIT compilation aborted at bc_pos={:?}", bc_pos);
-                }
             }
             state.clear_above_next_sp();
         }

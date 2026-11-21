@@ -208,11 +208,6 @@ impl ConstState {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn is_loaded(&self) -> bool {
-        matches!(self.kind, ConstStateKind::Loaded(_))
-    }
-
     pub(crate) fn is_autoload(&self) -> bool {
         matches!(self.kind, ConstStateKind::Autoload(_))
     }

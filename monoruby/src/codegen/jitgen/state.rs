@@ -1617,13 +1617,6 @@ impl ReturnValue {
 }
 
 impl ReturnState {
-    pub(super) fn default() -> Self {
-        ReturnState {
-            ret: ReturnValue::Value,
-            invariants: Invariants::default(),
-        }
-    }
-
     pub(super) fn may_side_effect() -> Self {
         ReturnState {
             ret: ReturnValue::UD,

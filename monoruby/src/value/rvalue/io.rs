@@ -2142,12 +2142,6 @@ impl IoInner {
         Ok(out)
     }
 
-    pub fn read_line(&mut self) -> Result<Option<String>> {
-        Ok(self
-            .read_line_bytes()?
-            .map(|v| String::from_utf8_lossy(&v).into_owned()))
-    }
-
     /// Read one `\n`-terminated line as raw bytes (pushback-aware).
     pub fn read_line_bytes(&mut self) -> Result<Option<Vec<u8>>> {
         self.read_line_bytes_by(|b: &[u8]| memchr::memchr(b'\n', b))
@@ -2739,14 +2733,6 @@ impl IoInner {
             // SAFETY: isatty only inspects the descriptor.
             IoKind::File(_) => self.fileno().is_ok_and(|fd| unsafe { libc::isatty(fd) } == 1),
             IoKind::Popen(_) | IoKind::Closed(..) => false,
-        }
-    }
-
-    /// Returns the file name/path if this is a File IO, None otherwise.
-    pub fn name(&self) -> Option<&str> {
-        match &self.kind {
-            IoKind::File(file) => Some(&file.name),
-            _ => None,
         }
     }
 

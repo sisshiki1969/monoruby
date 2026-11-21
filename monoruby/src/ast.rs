@@ -5,11 +5,6 @@
 //! `ruruby-parse` is gone and the AST is owned by monoruby: the Prism lowerer
 //! (`crate::parser::prism_backend`) builds these nodes directly, and the
 //! bytecode compiler consumes them through `crate::ast::*`.
-//!
-//! The node-construction helpers (`Node::new_*`, etc.) are retained as the
-//! AST's API even though the lowerer mostly builds nodes via struct literals;
-//! `allow(dead_code)` keeps the unused ones from warning.
-#![allow(dead_code)]
 
 mod deferred;
 mod error;
@@ -55,7 +50,6 @@ pub trait LocalsContext: Sized {
 #[derive(Debug)]
 pub struct ParseResult {
     pub node: Node,
-    pub lvar_collector: LvarCollector,
     pub source_info: SourceInfoRef,
     /// Parse-time warnings forwarded from prism, already formatted as
     /// `path:line: warning: message`. The `bool` is `true` for

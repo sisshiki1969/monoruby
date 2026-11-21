@@ -60,6 +60,7 @@ impl SlotSet {
         set
     }
 
+    #[cfg(test)]
     pub(crate) fn contains(&self, slot: SlotId) -> bool {
         word_contains(&self.words, slot)
     }
@@ -70,6 +71,7 @@ impl SlotSet {
     }
 
     /// `self |= other`; whether anything changed.
+    #[cfg(test)]
     pub(crate) fn union_with(&mut self, other: &SlotSet) -> bool {
         word_union(&mut self.words, &other.words)
     }

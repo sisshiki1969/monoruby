@@ -2922,15 +2922,6 @@ impl EncBuf {
         }
     }
 
-    /// The encoding the buffer has settled on so far.
-    pub fn encoding(&self) -> Encoding {
-        self.enc
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.buf.is_empty()
-    }
-
     /// Append `piece`, which is in `enc`; `known_7bit` says the caller
     /// knows it to be ASCII-only (it is checked otherwise).
     pub fn append(

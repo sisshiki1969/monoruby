@@ -683,11 +683,9 @@ fn try_prism_inner(
     let body = lowerer.lower_top(&root)?;
     let mut warnings = warnings;
     warnings.append(&mut lowerer.warnings);
-    let lvar_collector = lowerer.into_lvars();
 
     Ok(ParseResult {
         node: body,
-        lvar_collector,
         source_info,
         warnings,
         data_offset,
@@ -695,7 +693,6 @@ fn try_prism_inner(
 }
 
 struct Lowerer<'pr> {
-    #[allow(dead_code)]
     source: &'pr [u8],
     /// The path of the file we're lowering. Inlined for `__FILE__`.
     path: String,
@@ -941,10 +938,6 @@ impl<'pr> Lowerer<'pr> {
             }
         }
         depth + hops
-    }
-
-    fn into_lvars(self) -> LvarCollector {
-        self.lvars
     }
 
     /// Build the canonical "prism lowerer hit an unsupported node"

@@ -1,5 +1,6 @@
 use crate::bytecodegen::BinOpK;
 use crate::executor::inline::ElementsOp;
+#[cfg(target_arch = "x86_64")]
 use crate::codegen::jitgen::lir::{LInst, LSideExitKind, Lir};
 
 use super::*;

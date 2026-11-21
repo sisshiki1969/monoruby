@@ -44,7 +44,6 @@ mod compile;
 pub(in crate::codegen) mod context;
 mod definition;
 pub(crate) mod deopt_log;
-#[allow(dead_code)]
 mod gp_alloc;
 #[cfg(target_arch = "x86_64")]
 mod deoptimize;
@@ -97,9 +96,6 @@ enum CompileResult {
     /// dispatch site, which the JIT cannot lower but the VM handles — recompiling
     /// would loop forever on `NotCached`).
     Deopt,
-    /// internal error.
-    #[allow(dead_code)]
-    Abort,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -455,27 +451,6 @@ impl WriteBack {
         Self::new(vec![], vec![], vec![], vec![], vec![], vec![])
     }
 
-    /// Whether a chain-deopt replay of this write-back would do nothing —
-    /// i.e. the suspended frame is already in interpreter-consistent shape
-    /// and only its return address has to be rewritten. Counted under
-    /// `jit-log` to size the "write everything back at cross-unit calls"
-    /// question: if conversions are mostly empty already, the conservative
-    /// spill costs little and removes the replay entirely.
-    #[cfg(feature = "jit-log")]
-    pub(crate) fn is_replay_empty(&self) -> bool {
-        self.fpr.is_empty()
-            && self.literal.is_empty()
-            && self.void.is_empty()
-            && self.gp.is_empty()
-            && self.forward_kwrest.is_empty()
-            && self.virtual_obj.is_empty()
-    }
-
-    #[cfg(feature = "jit-log")]
-    pub(crate) fn has_unboxed_float(&self) -> bool {
-        !self.fpr.is_empty()
-    }
-
     /// Read-only views for the compiled replay stub, which needs the same
     /// data the interpreted replay walked.
     pub(crate) fn fpr_entries(&self) -> &[(FPReg, Vec<SlotId>)] {
@@ -681,11 +656,6 @@ pub(crate) struct ChainReplay {
 impl ChainReplay {
     pub(crate) fn frames(&self) -> u32 {
         self.frames
-    }
-
-    #[cfg(feature = "jit-log")]
-    pub(crate) fn write_back(&self) -> &WriteBack {
-        &self.wb
     }
 
 
@@ -1550,13 +1520,12 @@ impl Codegen {
 }
 
 #[cfg(target_arch = "x86_64")]
-macro_rules! load_store {
+macro_rules! store_reg {
     ($reg: ident) => {
         paste! {
             ///
             /// store $reg to *reg*
             ///
-            #[allow(dead_code)]
             pub(crate) fn [<store_ $reg>](&mut self, reg: impl Into<Option<SlotId>>) {
                 let reg = reg.into();
                 if let Some(reg) = reg {
@@ -1565,11 +1534,17 @@ macro_rules! load_store {
                     }
                 }
             }
+        }
+    };
+}
 
+#[cfg(target_arch = "x86_64")]
+macro_rules! load_reg {
+    ($reg: ident) => {
+        paste! {
             ///
             /// load *reg* to $reg
             ///
-            #[allow(dead_code)]
             pub(crate) fn [<load_ $reg>](&mut self, reg: SlotId) {
                 monoasm!( &mut self.jit,
                     movq $reg, [rbp - (jrbp_local(reg))];
@@ -1581,12 +1556,11 @@ macro_rules! load_store {
 
 #[cfg(target_arch = "x86_64")]
 impl JitModule {
-    load_store!(rax);
-    load_store!(rdi);
-    load_store!(rsi);
-    load_store!(rdx);
-    load_store!(rcx);
-    load_store!(r15);
+    store_reg!(rax);
+    load_reg!(rdi);
+    load_reg!(rsi);
+    load_reg!(rdx);
+    load_reg!(rcx);
 
     pub(crate) fn fpr_save(&mut self, using_fpr: UsingFpr) {
         self.fpr_save_with_cont(using_fpr, false);

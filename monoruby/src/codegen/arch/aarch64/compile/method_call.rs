@@ -1,6 +1,5 @@
 use super::*;
 use monoasm_macro::monoasm_arm64;
-use crate::codegen::jitgen::lir::ConstMiss;
 
 // ---- Object#send inline symbol cache (aarch64 twin of the x86_64 copy in
 // arch/x86_64/compile/method_call.rs; the two files are arch-selected so the

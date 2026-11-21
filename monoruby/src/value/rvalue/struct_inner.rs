@@ -59,16 +59,4 @@ impl StructInner {
     pub fn iter(&self) -> std::slice::Iter<'_, Value> {
         self.0.iter()
     }
-
-    pub fn values(&self) -> &[Value] {
-        &self.0
-    }
-
-    /// True if the slot vector spilled to the heap (member count
-    /// exceeded [`STRUCT_INLINE_SLOTS`]). The JIT call-site path uses
-    /// this to decide between the inline and heap codegen variants
-    /// per receiver class.
-    pub fn is_heap(&self) -> bool {
-        self.0.spilled()
-    }
 }
