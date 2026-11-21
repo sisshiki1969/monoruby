@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-76d1f02a.js";
+            window.path_to_searchindex_js = "../searchindex-00069bc9.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -933,8 +933,8 @@ code), so the table is built when first asked for and shared with the
 analysis clones (<code>JitContext::unit_liveness</code>).</p>
 <p>A query is then a scan of the rest of the instruction’s basic block
 over Layer A’s summaries, with Layer B’s capture verdicts, and the
-block’s live-out set past it (<code>table_live_after</code>). The loop analysis
-asks it that way. The life of an elided object in a local is the <em>frame
+block’s live-out set past it (<code>table_observable_after</code>, which counts
+every capture point as a read of every local). The life of an elided object in a local is the <em>frame
 liveness</em> of §12 instead (<code>table_frame_live_after</code>), which depends on no
 inline cache and so lives in Layer A. The one instruction a
 temporary’s view may be consumed by is <code>SlotAnalysis::alias_stop</code>; the
