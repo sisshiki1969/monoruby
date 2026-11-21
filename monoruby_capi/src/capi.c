@@ -3491,6 +3491,9 @@ void rb_class_modify_check(VALUE klass);
 VALUE rb_ident_hash_new(void);
 int rb_thread_check_trap_pending(void);
 void rb_gc_mark_values(long n, const VALUE *values);
+VALUE rb_gc_disable_no_rest(void);
+VALUE rb_gcd(VALUE x, VALUE y);
+VALUE rb_gcd_normal(VALUE x, VALUE y);
 
 /* A C pointer carried through a Ruby value (an Integer, which the
  * collector does not follow). */

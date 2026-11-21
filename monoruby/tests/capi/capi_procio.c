@@ -5,11 +5,17 @@
 #include "ruby/io.h"
 #include "ruby/encoding.h"
 #include "ruby/thread.h"
+#include "ruby/util.h"
 #include <string.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+/* CRuby exports these but declares them only in its internal headers. */
+VALUE rb_gc_disable_no_rest(void);
+VALUE rb_gcd(VALUE x, VALUE y);
+VALUE rb_gcd_normal(VALUE x, VALUE y);
 
 static VALUE m;
 

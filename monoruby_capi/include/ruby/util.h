@@ -20,6 +20,8 @@ unsigned long ruby_scan_digits(const char *str, ssize_t len, int base, size_t *r
 void ruby_qsort(void *base, const size_t nel, const size_t size,
                 int (*cmp)(const void *, const void *, void *), void *d);
 char *ruby_getcwd(void);
+void ruby_setenv(const char *key, const char *val);
+void ruby_unsetenv(const char *key);
 
 #ifdef __cplusplus
 }
