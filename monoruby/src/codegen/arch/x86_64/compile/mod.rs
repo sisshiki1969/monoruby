@@ -12,10 +12,10 @@ mod variables;
 
 use super::compile_shared::{extend_ivar, unreachable};
 use crate::alloc::{BUMP_INLINE_LIMIT, CELL_SIZE_SHIFT, PAGE_DATA_OFFSET};
+use crate::codegen::jitgen::deopt_log::DeoptCause;
 use crate::codegen::jitgen::lir::{
     LAluOp, LCond, LInst, LMem, LOperand, LReg, LSideExitKind, LSplicedArm,
 };
-use crate::codegen::jitgen::deopt_log::DeoptCause;
 
 /// Resolve a LIR register operand to its x86 register number. The scratch
 /// pointer is `rdx`.
@@ -236,7 +236,11 @@ impl Codegen {
                 unreachable!("handled by the shared compile_asmir dispatcher")
             }
             AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
-                let deopt = &self.deopt_label(labels, deopt, DeoptCause::Static("class version (specialized)"));
+                let deopt = &self.deopt_label(
+                    labels,
+                    deopt,
+                    DeoptCause::Static("class version (specialized)"),
+                );
                 self.guard_class_version_specialized(
                     class_version,
                     self.specialized_base + idx,
@@ -248,7 +252,11 @@ impl Codegen {
                 idx,
                 deopt,
             } => {
-                let deopt = &self.deopt_label(labels, deopt, DeoptCause::Static("const version (specialized)"));
+                let deopt = &self.deopt_label(
+                    labels,
+                    deopt,
+                    DeoptCause::Static("const version (specialized)"),
+                );
                 self.guard_const_version_specialized(
                     const_version,
                     self.specialized_base + idx,
@@ -256,7 +264,11 @@ impl Codegen {
                 );
             }
             AsmInst::RecompileDeoptSpecialized { idx, deopt, reason } => {
-                let deopt = &self.deopt_label(labels, deopt, DeoptCause::Static("recompile counter (specialized)"));
+                let deopt = &self.deopt_label(
+                    labels,
+                    deopt,
+                    DeoptCause::Static("recompile counter (specialized)"),
+                );
                 self.recompile_and_deopt_specialized(deopt, self.specialized_base + idx, reason)
             }
             AsmInst::SetArgumentsForwarded {
@@ -283,8 +295,7 @@ impl Codegen {
                 };
                 // K1: pair the routed caller slots with the callee's kw
                 // register base.
-                let kw_route =
-                    kw_route.map(|route| (store[callee_fid].kw_reg_pos(), route));
+                let kw_route = kw_route.map(|route| (store[callee_fid].kw_reg_pos(), route));
                 self.jit_set_arguments_forwarded(
                     callid,
                     callee_fid,
@@ -454,7 +465,12 @@ impl Codegen {
             }
             // dst <- lhs <kind> !!rhs, lhs a Ruby bool. Destroys rhs;
             // dst, lhs, rhs distinct.
-            LInst::BoolBinOp { kind, dst, lhs, rhs } => {
+            LInst::BoolBinOp {
+                kind,
+                dst,
+                lhs,
+                rhs,
+            } => {
                 let (d, l, r) = (dst as u64, lhs as u64, rhs as u64);
                 debug_assert!(d != l && d != r && l != r);
                 // nil / false are the only words with `w | 0x10 == 0x14`.
@@ -713,9 +729,7 @@ impl Codegen {
                 }
             }
             // Type / class guards: deopt (jump to the side-exit) on a mismatch.
-            LInst::GuardClass { reg, class, deopt } => {
-                self.guard_class_deopt(reg, class, &deopt)
-            }
+            LInst::GuardClass { reg, class, deopt } => self.guard_class_deopt(reg, class, &deopt),
             // Dispatch arm: the miss is the next arm, not a side exit.
             LInst::BrClassNe { reg, class, target } => self.guard_class(reg, class, &target),
             // Same membership chain as `GuardClassIn`, with the last
@@ -908,7 +922,9 @@ impl Codegen {
                 match src {
                     OuterFprSrc::Fpr(src) => match PhysMap::new(base).resolve(src) {
                         FPRegLoc::Xmm(p) => monoasm!( &mut self.jit, movq xmm1, xmm(p); ),
-                        FPRegLoc::Spill(off) => monoasm!( &mut self.jit, movq xmm1, [rbp - (off)]; ),
+                        FPRegLoc::Spill(off) => {
+                            monoasm!( &mut self.jit, movq xmm1, [rbp - (off)]; )
+                        }
                     },
                     OuterFprSrc::Imm(bits) => monoasm!( &mut self.jit,
                         movq rax, (bits);
@@ -920,8 +936,10 @@ impl Codegen {
                 monoasm!( &mut self.jit, movq rax, (NIL_VALUE); );
             }
             LInst::FloatArgMove { src, dst, base } => {
-                let (FPRegLoc::Xmm(d), s) = (PhysMap::new(base).resolve(dst), PhysMap::new(base).resolve(src))
-                else {
+                let (FPRegLoc::Xmm(d), s) = (
+                    PhysMap::new(base).resolve(dst),
+                    PhysMap::new(base).resolve(src),
+                ) else {
                     unreachable!("float-argument destination is not pool-resident: {dst:?}")
                 };
                 match s {
@@ -929,12 +947,10 @@ impl Codegen {
                     FPRegLoc::Spill(off) => monoasm!( &mut self.jit, movq xmm(d), [rbp - (off)]; ),
                 }
             }
-            LInst::FloatRetLoad { dst, base } => {
-                match PhysMap::new(base).resolve(dst) {
-                    FPRegLoc::Xmm(p) => monoasm!( &mut self.jit, movq xmm(p), xmm1; ),
-                    FPRegLoc::Spill(off) => monoasm!( &mut self.jit, movq [rbp - (off)], xmm1; ),
-                }
-            }
+            LInst::FloatRetLoad { dst, base } => match PhysMap::new(base).resolve(dst) {
+                FPRegLoc::Xmm(p) => monoasm!( &mut self.jit, movq xmm(p), xmm1; ),
+                FPRegLoc::Spill(off) => monoasm!( &mut self.jit, movq [rbp - (off)], xmm1; ),
+            },
             LInst::FprSwap { lhs, rhs, base } => {
                 if lhs != rhs {
                     match (
@@ -2141,7 +2157,7 @@ impl Codegen {
         monoasm! { &mut self.jit,
             movq rdi, rax;
             movq rsi, (v.id());
-            movq rax, (Value::fill_immediate_array_cell as u64);
+            movq rax, (Value::fill_immediate_array_cell as *const () as u64);
             call rax;
         }
         self.fpr_restore(using_fpr);

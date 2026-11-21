@@ -1941,18 +1941,6 @@ pub(crate) fn sprintf_result(globals: &mut Globals, s: String) -> Value {
     Value::string_sprintf(text)
 }
 
-/// A value's `#inspect` as it goes *into* a `#<…>` rendering. CRuby
-/// reaches it through `rb_inspect`, which escapes to `\uXXXX` when the
-/// result encoding cannot show the answer — the rendering around it is
-/// not escaped, only what it embeds (#1494).
-pub(crate) fn inspect_embedded(globals: &Globals, s: String) -> String {
-    if globals.store.inspect_escape() && !s.is_ascii() {
-        crate::value::escape_nonascii_to_u(&s)
-    } else {
-        s
-    }
-}
-
 /// `rb_inspect`: `obj.inspect`, as `rb_obj_as_string` turns its answer
 /// into a String, and escaped by [`str_escape`] when the result
 /// encoding — `default_internal`, else `default_external` — cannot show
@@ -3011,7 +2999,9 @@ fn conversion_error_message(
     src_enc: crate::value::Encoding,
     dst_enc: crate::value::Encoding,
 ) -> String {
-    canonical_econv_message(conversion_error_message_as_named(result, meta, src_enc, dst_enc))
+    canonical_econv_message(conversion_error_message_as_named(
+        result, meta, src_enc, dst_enc,
+    ))
 }
 
 fn conversion_error_message_as_named(

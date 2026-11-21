@@ -604,9 +604,10 @@ impl Globals {
         arg_num: usize,
     ) -> FuncId {
         let fid = self.define_basic_op(class_id, name, address, arg_num);
-        self.store
-            .inline_info
-            .add_inline(fid, inline::InlineFuncInfo::new_inline_gen_binary(inline_gen));
+        self.store.inline_info.add_inline(
+            fid,
+            inline::InlineFuncInfo::new_inline_gen_binary(inline_gen),
+        );
         fid
     }
 
@@ -631,9 +632,10 @@ impl Globals {
             &[],
             false,
         );
-        self.store
-            .inline_info
-            .add_inline(fid, inline::InlineFuncInfo::new_inline_gen_unary(inline_gen));
+        self.store.inline_info.add_inline(
+            fid,
+            inline::InlineFuncInfo::new_inline_gen_unary(inline_gen),
+        );
         fid
     }
 
@@ -659,9 +661,10 @@ impl Globals {
             &[],
             false,
         );
-        self.store
-            .inline_info
-            .add_inline(fid, inline::InlineFuncInfo::new_inline_gen_binary(inline_gen));
+        self.store.inline_info.add_inline(
+            fid,
+            inline::InlineFuncInfo::new_inline_gen_binary(inline_gen),
+        );
         for alias in alias {
             self.add_method(class_id, IdentId::get_id(alias), fid, Visibility::Public);
         }
@@ -1024,19 +1027,6 @@ impl Globals {
         func_id
     }
 
-    ///
-    /// Define attribute reader for *class_id* and *ivar_name*.
-    ///
-    pub(crate) fn define_attr_reader(
-        &mut self,
-        class_id: ClassId,
-        method_name: IdentId,
-        visi: Visibility,
-    ) -> (IdentId, FuncId) {
-        let ivar_name = IdentId::add_ivar_prefix(method_name);
-        self.define_attr_reader_of(class_id, method_name, ivar_name, visi)
-    }
-
     /// [`define_attr_reader`](Self::define_attr_reader) over the instance
     /// variable *ivar_name*, whatever the method is called.
     pub(crate) fn define_attr_reader_of(
@@ -1050,19 +1040,6 @@ impl Globals {
         self.gen_wrapper(func_id);
         self.add_method(class_id, method_name, func_id, visi);
         (method_name, func_id)
-    }
-
-    ///
-    /// Define attribute writer for *class_id* and *ivar_name*.
-    ///
-    pub(crate) fn define_attr_writer(
-        &mut self,
-        class_id: ClassId,
-        method_name: IdentId,
-        visi: Visibility,
-    ) -> (IdentId, FuncId) {
-        let ivar_name = IdentId::add_ivar_prefix(method_name);
-        self.define_attr_writer_of(class_id, method_name, ivar_name, visi)
     }
 
     /// [`define_attr_writer`](Self::define_attr_writer) over the instance
@@ -1096,7 +1073,9 @@ impl Globals {
         inline: bool,
         visi: Visibility,
     ) -> IdentId {
-        let func_id = self.store.new_struct_reader(member_name, slot_index, inline);
+        let func_id = self
+            .store
+            .new_struct_reader(member_name, slot_index, inline);
         self.gen_wrapper(func_id);
         self.add_method(class_id, member_name, func_id, visi);
         member_name
@@ -1117,7 +1096,9 @@ impl Globals {
         inline: bool,
         visi: Visibility,
     ) -> IdentId {
-        let func_id = self.store.new_struct_writer(writer_name, slot_index, inline);
+        let func_id = self
+            .store
+            .new_struct_writer(writer_name, slot_index, inline);
         self.gen_wrapper(func_id);
         self.add_method(class_id, writer_name, func_id, visi);
         writer_name

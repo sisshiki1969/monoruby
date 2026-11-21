@@ -76,6 +76,7 @@ use crate::*;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::Write;
+use std::ptr::NonNull;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
@@ -203,13 +204,22 @@ pub(crate) fn init() {
     });
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+struct ExecutorRef(NonNull<Executor>);
+
+impl ExecutorRef {
+    unsafe fn cfp(&self) -> Option<Cfp> {
+        unsafe { self.0.as_ref().try_cfp() }
+    }
+}
+
 //
 // Per-thread context
 //
 
 thread_local! {
     /// The `Executor` whose Ruby code runs on this OS thread (0 = none).
-    static EXEC: Cell<usize> = const { Cell::new(0) };
+    static EXEC: Cell<Option<ExecutorRef>> = const { Cell::new(None) };
     /// This OS thread's own stack, `[lo, hi)` (0 = unknown).
     static STACK_LO: Cell<usize> = const { Cell::new(0) };
     static STACK_HI: Cell<usize> = const { Cell::new(0) };
@@ -275,7 +285,7 @@ pub(crate) fn phase(phase: Phase) -> PhaseGuard {
 ///
 #[inline]
 pub(crate) fn set_executor(exec: *const Executor) {
-    EXEC.set(exec as usize);
+    EXEC.set(Some(ExecutorRef(NonNull::new(exec as _).unwrap())));
 }
 
 ///
@@ -501,10 +511,11 @@ impl Reader {
 ///
 /// The `FuncId`s of *exec*'s Ruby frames, newest first, into *out*.
 ///
-fn walk_ruby(r: &mut Reader, exec: usize, out: &mut [u64]) -> usize {
-    if exec == 0 {
-        return 0;
-    }
+fn walk_ruby(r: &mut Reader, exec: Option<ExecutorRef>, out: &mut [u64]) -> usize {
+    let exec = match exec {
+        Some(exec) => exec.0.as_ptr() as usize,
+        None => return 0,
+    };
     let Some(mut cfp) = r.read(exec + executor::EXECUTOR_CFP as usize) else {
         return 0;
     };
@@ -531,23 +542,14 @@ fn walk_ruby(r: &mut Reader, exec: usize, out: &mut [u64]) -> usize {
 /// The `FuncId` of *exec*'s newest frame (0: none), read directly: only
 /// for code that called the profiler, where the frames are consistent.
 ///
-fn top_func(exec: usize) -> u32 {
-    if exec == 0 {
-        return 0;
-    }
+fn top_func(exec: Option<ExecutorRef>) -> Option<FuncId> {
     // SAFETY: *exec* is the live executor of this thread, whose newest
     // control frame and its local frame are fully built (see `Reader`).
-    unsafe {
-        let cfp = *((exec + executor::EXECUTOR_CFP as usize) as *const usize);
-        if cfp == 0 {
-            return 0;
-        }
-        let lfp = *((cfp - executor::CFP_LFP as usize) as *const usize);
-        if lfp < 4096 {
-            return 0;
-        }
-        *((lfp - executor::LFP_META as usize) as *const u32)
+    let lfp = unsafe { exec?.cfp()?.lfp() };
+    if (lfp.as_ptr() as usize) < 4096 {
+        return None;
     }
+    Some(lfp.meta().func_id())
 }
 
 /// How far up the frame-pointer chain the JIT code under a sample is
@@ -621,7 +623,7 @@ fn take_sample(
 ) {
     let mut ruby = [0u64; MAX_RUBY];
     let mut native = [0u64; MAX_NATIVE];
-    let exec = EXEC.try_with(|e| e.get()).unwrap_or(0);
+    let exec = EXEC.try_with(|e| e.get()).unwrap_or(None);
     let phase = PHASE.try_with(|p| p.get()).unwrap_or(0);
     let nr = walk_ruby(&mut ruby_reader, exec, &mut ruby);
     let nn = if fp != 0 && native_depth != 0 {
@@ -808,10 +810,10 @@ pub(crate) fn start(exec: *const Executor) {
 /// (allocating method's FuncId, ClassId, site) -> count, merged from the
 /// per-thread tables when a thread ends and at [`finish`]. The site is
 /// [`site_of`] the allocation with `MONORUBY_PROF_INLINE`, else 0.
-static ALLOCS: Mutex<Option<fxhash::FxHashMap<(u32, u32, u64), u64>>> = Mutex::new(None);
+static ALLOCS: Mutex<Option<fxhash::FxHashMap<(Option<FuncId>, u32, u64), u64>>> = Mutex::new(None);
 
 #[derive(Default)]
-struct AllocTable(std::cell::RefCell<fxhash::FxHashMap<(u32, u32, u64), u64>>);
+struct AllocTable(std::cell::RefCell<fxhash::FxHashMap<(Option<FuncId>, u32, u64), u64>>);
 
 impl AllocTable {
     fn merge(&self) {
@@ -1229,10 +1231,13 @@ impl Inlines {
     }
 
     /// The function an allocation by *func* at *site* is charged to.
-    fn allocator(&self, func: u32, site: u64) -> u32 {
+    fn allocator(&self, func: Option<FuncId>, site: u64) -> u32 {
         match self.chain(site as usize) {
-            Some((chain, host)) if site != 0 && host.get() == func => chain[0].get(),
-            _ => func,
+            Some((chain, host)) if site != 0 && Some(host) == func => chain[0].get(),
+            _ => match func {
+                Some(func) => func.get(),
+                None => 0,
+            },
         }
     }
 }
@@ -2909,10 +2914,10 @@ mod tests {
         assert_eq!(None, chain(910));
         // An allocation is the callee's only when it was made in the frame
         // the body runs in.
-        assert_eq!(3, inl.allocator(1, 130));
-        assert_eq!(7, inl.allocator(7, 130));
-        assert_eq!(1, inl.allocator(1, 0));
-        assert_eq!(1, inl.allocator(1, 250));
+        assert_eq!(3, inl.allocator(Some(FuncId::new(1)), 130));
+        assert_eq!(7, inl.allocator(Some(FuncId::new(7)), 130));
+        assert_eq!(1, inl.allocator(Some(FuncId::new(1)), 0));
+        assert_eq!(1, inl.allocator(Some(FuncId::new(1)), 250));
     }
 
     #[test]

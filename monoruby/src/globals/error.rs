@@ -1312,13 +1312,6 @@ impl MonorubyErr {
         Self::new(MonorubyErrKind::Name(None, None), msg)
     }
 
-    /// Like [`nameerr`], but additionally records the missing-name
-    /// symbol so the resulting `NameError`'s `#name` Ruby method returns
-    /// it (matches CRuby's `rb_name_err_new`).
-    pub(crate) fn nameerr_with_name(msg: impl ToString, name: IdentId) -> MonorubyErr {
-        Self::new(MonorubyErrKind::Name(Some(name), None), msg)
-    }
-
     /// Like [`nameerr_with_name`], but also records the receiver `Value`
     /// (the object the missing name was looked up on) so the resulting
     /// `NameError`'s `#receiver` Ruby method returns it.
@@ -1327,10 +1320,7 @@ impl MonorubyErr {
         name: IdentId,
         receiver: Value,
     ) -> MonorubyErr {
-        Self::new(
-            MonorubyErrKind::Name(Some(name), Some(receiver)),
-            msg,
-        )
+        Self::new(MonorubyErrKind::Name(Some(name), Some(receiver)), msg)
     }
 
     /// A NameError whose message is *before*, *name*, *after*, for a
@@ -1391,15 +1381,6 @@ impl MonorubyErr {
         }
         self.kind = MonorubyErrKind::Name(Some(name), receiver.or(old_receiver));
         self
-    }
-
-    pub(crate) fn uninitialized_constant(name: IdentId) -> MonorubyErr {
-        Self::nameerr_showing(
-            format_args!("uninitialized constant "),
-            name,
-            format_args!(""),
-            None,
-        )
     }
 
     /// As [`Self::uninitialized_constant`], but also records the module
@@ -1464,7 +1445,10 @@ impl MonorubyErr {
     /// Set TypeError with message "*name* is not Symbol nor String".
     ///
     pub(crate) fn is_not_symbol_nor_string(store: &Store, val: Value) -> MonorubyErr {
-        MonorubyErr::typeerr(format!("{} is not a symbol nor a string", val.inspect(store)))
+        MonorubyErr::typeerr(format!(
+            "{} is not a symbol nor a string",
+            val.inspect(store)
+        ))
     }
 
     /// Build an `Encoding::CompatibilityError` with the CRuby-format
@@ -1496,7 +1480,8 @@ impl MonorubyErr {
     /// classes), falling back to `RuntimeError` if the class isn't
     /// registered yet.
     pub(crate) fn encoding_error_with_store(store: &Store, msg: String) -> MonorubyErr {
-        if let Some(c) = store.get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("EncodingError"))
+        if let Some(c) =
+            store.get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("EncodingError"))
         {
             return MonorubyErr::new(MonorubyErrKind::Other(c.as_class_id()), msg);
         }

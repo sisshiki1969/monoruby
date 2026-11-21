@@ -28,8 +28,7 @@ pub type BuiltinFn = extern "C" fn(&mut Executor, &mut Globals, Lfp, BytecodePtr
 /// process started, sampled by [`record_closed_std_fds`] before Rust's
 /// runtime could paper over them. `0` when that constructor did not run
 /// (an unsupported target, or the lib used outside the binary).
-static STD_FDS_CLOSED_AT_START: std::sync::atomic::AtomicU8 =
-    std::sync::atomic::AtomicU8::new(0);
+static STD_FDS_CLOSED_AT_START: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// Sample which of fds 0/1/2 arrived closed, as a pre-`main` constructor.
 ///
@@ -1844,7 +1843,9 @@ impl Executor {
                 .ok()
                 .flatten()?;
             let s = res.is_str()?.to_string();
-            Some(crate::globals::lexically_normalize(std::path::Path::new(&s)))
+            Some(crate::globals::lexically_normalize(std::path::Path::new(
+                &s,
+            )))
         })();
         self.temp_clear(temp_base);
         // A failed build keeps the original LoadError: drop whatever the
@@ -2321,11 +2322,6 @@ impl Executor {
         std::mem::take(&mut self.exception).unwrap()
     }
 
-    /// The pending error, if any, leaving none.
-    pub(crate) fn take_pending_error(&mut self) -> Option<MonorubyErr> {
-        self.exception.take()
-    }
-
     /// Run `f` with the pending error (if any) set aside, rooted, and
     /// put it back afterwards. An error `f` leaves pending is dropped.
     pub(crate) fn with_pending_error_held<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
@@ -2333,7 +2329,11 @@ impl Executor {
         let is_held = held.is_some();
         self.held_errors.extend(held);
         let res = f(self);
-        self.exception = if is_held { self.held_errors.pop() } else { None };
+        self.exception = if is_held {
+            self.held_errors.pop()
+        } else {
+            None
+        };
         res
     }
 
@@ -2755,7 +2755,9 @@ impl Executor {
     ) -> Value {
         // What `Marshal.dump` writes ahead of `bt_locations`, which CRuby
         // sets at the first raise (#2013).
-        if v.is_exception().is_some_and(|ex| ex.ivars_at_raise.is_none()) {
+        if v.is_exception()
+            .is_some_and(|ex| ex.ivars_at_raise.is_none())
+        {
             let slots = globals.store.ivar_slots_present(v);
             v.is_exception_mut().unwrap().ivars_at_raise = Some(slots);
         }

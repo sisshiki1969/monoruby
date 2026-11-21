@@ -171,7 +171,7 @@ fn instant_near_offset_change(naive: NaiveDateTime, isdst: Option<bool>) -> Opti
     const DAY: i64 = 24 * 60 * 60;
     let as_utc = naive.and_utc().timestamp();
     let mut offsets: Vec<i64> = Vec::with_capacity(4);
-    let mut add = |offsets: &mut Vec<i64>, o: Option<i64>| {
+    let add = |offsets: &mut Vec<i64>, o: Option<i64>| {
         if let Some(o) = o
             && !offsets.contains(&o)
         {
