@@ -2039,6 +2039,14 @@ define_class_check(VALUE outer, const char *name, VALUE super)
      * any) cannot be asked about through `const_defined?`. */
     int defined = rb_is_const_id(id) &&
         (top ? rb_const_defined(where, id) : rb_const_defined_at(where, id));
+    /* A constant still pending as an autoload is left alone rather than
+     * loaded. CRuby counts it as undefined while its feature is being
+     * required (ext/socket's Init_socket defining IPSocket under uri's
+     * `autoload :IPSocket, "socket"`); monoruby does not tell that case
+     * apart, and loading the feature from inside its own require fails. */
+    if (defined &&
+        !NIL_P(rb_funcall(where, rb_intern("autoload?"), 2, ID2SYM(id), top ? Qtrue : Qfalse)))
+        defined = 0;
     if (defined) {
         VALUE klass = top ? rb_const_get(where, id) : rb_const_get_at(where, id);
         if (!RB_TYPE_P(klass, T_CLASS)) {
