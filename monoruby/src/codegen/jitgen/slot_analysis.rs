@@ -543,13 +543,6 @@ impl SlotAnalysis {
 pub(crate) struct UnitLiveness {
     /// Per instruction: the capture verdict of the call there, if any.
     captures: Vec<Option<Capture>>,
-    /// The locals a block literal of the frame may read or write: Layer
-    /// A's `block_touched`, or every slot when a block is opaque or holds a
-    /// call this compilation cannot resolve to a non-capturing callee.
-    touched: SlotSet,
-    /// The latter case: `touched` is every slot.
-    #[cfg(feature = "jit-log")]
-    blocks_opaque: bool,
     /// Per basic block: live at its exit, the capture reads counted.
     live_out: SlotSets,
     /// `live_out` with every capture point counted as a read of every
@@ -558,13 +551,6 @@ pub(crate) struct UnitLiveness {
 }
 
 impl UnitLiveness {
-    /// Whether a block literal of the frame is opaque to the compilation
-    /// (`JitContext::table_blocks_opaque`).
-    #[cfg(feature = "jit-log")]
-    pub(crate) fn blocks_opaque(&self) -> bool {
-        self.blocks_opaque
-    }
-
     /// Whether `begin..=end` holds a capture point. Either kind may
     /// observe the object any local holds: a callee handed a block can
     /// keep it and ask for its binding, which is the whole frame
@@ -607,8 +593,6 @@ impl<'a> JitContext<'a> {
             let ir = TraceIr::from_pc(self.store[*bid].get_pc(*pos), self.store);
             !self.call_resolved_non_capturing(&ir)
         });
-        #[cfg(feature = "jit-log")]
-        let blocks_opaque = a.block_opaque || unresolved;
         let touched = if a.block_opaque || unresolved {
             SlotSet::full(n)
         } else {
@@ -633,9 +617,6 @@ impl<'a> JitContext<'a> {
         let live_out = SlotAnalysis::dataflow(bb_info, &bb_use, &a.bb_def);
         UnitLiveness {
             captures,
-            touched,
-            #[cfg(feature = "jit-log")]
-            blocks_opaque,
             live_out,
             observable_out: std::cell::OnceCell::new(),
         }
@@ -651,49 +632,12 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Whether the slot *slot* of the current frame may be read after the
-    /// instruction at *bc_pos*, by the tables: the rest of its basic
-    /// block, then the block's live-out, with every capture point of
-    /// this compilation counted as a read of the locals it may reach.
-    ///
-    pub(in crate::codegen::jitgen) fn table_live_after(
-        &self,
-        bc_pos: BcIndex,
-        slot: SlotId,
-    ) -> bool {
-        let iseq_id = self.iseq_id();
-        let a = self.slot_analysis(iseq_id);
-        if a.all_live() {
-            return true;
-        }
-        let u = self.unit_liveness(iseq_id);
-        let bb_info = &self.store[iseq_id].bb_info;
-        let bb = bb_info.get_bb_id(bc_pos);
-        let end = bb_info[bb].end;
-        for i in bc_pos.to_usize() + 1..=end.to_usize() {
-            let pos = BcIndex::from(i);
-            let captured = match u.captures[i] {
-                Some(Capture::Frame) => true,
-                Some(Capture::Block) => u.touched.contains(slot),
-                None => false,
-            };
-            if captured || a.reads(pos).contains(&slot) {
-                return true;
-            }
-            if a.def(pos) == Some(slot) {
-                return false;
-            }
-        }
-        u.live_out.contains(bb.index(), slot)
-    }
-
-    ///
     /// Whether anything may observe the local *slot* of the current
     /// frame after the instruction at *bc_pos*, before it is written
-    /// again: [`Self::table_live_after`] for a slot whose *content* is
-    /// in question, not just whether the frame's copy of it is current.
+    /// again, by the tables: the rest of its basic block, then the
+    /// block's observable-out set.
     ///
-    /// A capture point then counts as a read of every local, whatever
+    /// A capture point counts as a read of every local, whatever
     /// the block it passes touches: the callee may keep the block as a
     /// `Proc`, whose `binding` reaches all of them, and the capture
     /// guard after the call hands the frame to the interpreter as the
@@ -782,24 +726,6 @@ impl<'a> JitContext<'a> {
     /// compilation ([`Self::capture_point`]).
     pub(in crate::codegen::jitgen) fn table_capture_at(&self, bc_pos: BcIndex) -> bool {
         self.unit_liveness(self.iseq_id()).captures[bc_pos.to_usize()].is_some()
-    }
-
-    ///
-    /// Whether a block literal of the current frame may read or write the
-    /// local *slot*, by the tables.
-    ///
-    pub(in crate::codegen::jitgen) fn table_touched_by_blocks(&self, slot: SlotId) -> bool {
-        self.unit_liveness(self.iseq_id()).touched.contains(slot)
-    }
-
-    ///
-    /// Whether a block literal of the current frame is opaque to this
-    /// compilation: it has a handler or a lambda literal, or holds a call
-    /// not resolved to a callee that cannot capture its caller.
-    ///
-    #[cfg(feature = "jit-log")]
-    pub(in crate::codegen::jitgen) fn table_blocks_opaque(&self) -> bool {
-        self.unit_liveness(self.iseq_id()).blocks_opaque
     }
 }
 
