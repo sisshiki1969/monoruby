@@ -1050,22 +1050,7 @@ fn main() {
         }
     }
 
-    let from_exec = !opts.exec.is_empty();
-    match globals.run_with_prelude(&requires, &prelude, code, &path) {
-        Ok(_val) => {
-            // Debug builds echo the result value of `-e` one-liners to
-            // stderr — but only on an interactive terminal, so test
-            // harnesses (mspec, `diff`-based CI checks) that capture a
-            // piped stderr never see it.
-            #[cfg(debug_assertions)]
-            if from_exec && std::io::IsTerminal::is_terminal(&std::io::stderr()) {
-                eprintln!("=> {:?}", _val)
-            }
-            #[cfg(not(debug_assertions))]
-            let _ = from_exec;
-        }
-        Err(err) => {
-            handle_error(err, &globals);
-        }
+    if let Err(err) = globals.run_with_prelude(&requires, &prelude, code, &path) {
+        handle_error(err, &globals);
     }
 }
