@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6d493328.js";
+            window.path_to_searchindex_js = "../searchindex-aae1f280.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -1367,6 +1367,63 @@ ruby/spec <code>optional/capi</code> は 1037 例・822 通過から 1515 例・
 （以前は読み込みで落ちていた spec ファイルが動くようになり例数が増えた。
 既に動いていた例で新たに落ちたものは無い）。</li>
 </ul>
+<h3 id="327-データ型の残りの関数段階-19"><a class="header" href="#327-データ型の残りの関数段階-19">3.27 データ型の残りの関数（段階 19）</a></h3>
+<p>§3.26 に続き、String / Array / Hash / Set / Struct / Data / 数値 /
+Complex / ID のうち層に無かった関数を足した。これも <code>MrApi</code> には手を
+入れず、Ruby のメソッドを呼ぶか CRuby の C を写している。</p>
+<ul>
+<li><strong>String</strong>: <code>rb_str_subpos</code> / <code>rb_str_sublen</code> / <code>rb_str_offset</code>、
+<code>rb_str_update</code>（文言は CRuby の <code>index %ld out of string</code>）、
+<code>rb_str_export(_locale)</code> / <code>rb_str_encode_ospath</code>、<code>rb_str_free</code>、
+<code>rb_str_comparable</code>、<code>rb_str_hash_cmp</code>、<code>rb_str_ellipsize</code>、
+<code>rb_str_scrub</code>（壊れていなければ nil）、<code>rb_str_succ</code>、
+<code>rb_usascii_str_new_static</code>、<code>rb_interned_str(_cstr)</code>（<code>-@</code>）、
+<code>rb_invalid_str</code>、<code>rb_uv_to_utf8</code>、<code>rb_memcicmp</code>、<code>rb_mem_clear</code>。
+既存のものの直し: <code>rb_str_new_with_class</code> が元の String の
+encoding とクラスを継ぐ、<code>rb_external_str_new_with_enc</code> を CRuby の写しに
+（BINARY の扱いと <code>default_internal</code> への変換）、<code>rb_str_export_to_enc</code> は
+<code>rb_str_conv_enc</code>、<code>rb_str_encode</code> が <code>ECONV_*</code> のフラグを <code>encode</code> の
+オプションに直す（invalid / undef の置換、改行変換、XML の text /
+attr。<code>ECONV_UNDEF_HEX_CHARREF</code> は渡さない）、<code>rb_string_value_cstr</code> が
+UTF-16 / 32 で文字単位の NUL を見る、<code>rb_str_locktmp</code> が凍結を検査する、
+<code>rb_cstr_to_inum</code> の <code>base &lt;= 0</code>（C 文字列では接頭辞を見ない CRuby の癖
+まで同じ）、<code>PRIsVALUE</code> の幅・精度・<code>-</code> フラグ。</li>
+<li><strong>Array / Hash / Set</strong>: <code>rb_ary_modify</code>、<code>rb_ary_free</code>、
+<code>rb_ary_resurrect</code>、<code>rb_ary_rotate</code>（動かなければ nil）、<code>rb_ary_cmp</code>、
+<code>rb_ary_replace</code>、<code>rb_ary_rassoc</code>、<code>rb_ary_each</code>、<code>rb_hash_delete_if</code>、
+<code>rb_hash_bulk_insert</code>、<code>rb_hash_update_by</code>、Set の C API 一式
+（<code>rb_set_new(_capa)</code> / <code>lookup</code> / <code>add</code> / <code>clear</code> / <code>delete</code> / <code>size</code> /
+<code>foreach</code>。<code>foreach</code> は <code>to_a</code> の写しを回し、<code>ST_STOP</code> / <code>ST_DELETE</code> を
+受ける）。<code>rb_ary_new_capa</code> / <code>rb_hash_new_capa</code> の負の大きさを CRuby と
+同じ例外に、<code>rb_hash</code> が Bignum の <code>#hash</code> を CRuby と同じく丸める。</li>
+<li><strong>Struct / Data</strong>: <code>rb_struct_alloc_noinit</code>、
+<code>rb_struct_define_without_accessor(_under)</code>（<code>Struct.new</code> してアクセサを
+undef する。親が Struct 以外なら NotImplementedError、alloc 関数は
+無視）、<code>rb_data_define</code>。<code>rb_struct_initialize</code> は Data では位置引数を
+キーワードに直して <code>initialize</code> を呼び、凍結する（多すぎれば
+<code>struct size differs</code>）。凍結済みなら FrozenError（core の
+<code>Struct#initialize</code> / <code>Data#initialize</code> は凍結を見ていない。#2105）。</li>
+<li><strong>数値</strong>: <code>rb_num_zerodiv</code>、<code>rb_out_of_int</code>、<code>rb_cmperr</code>、
+<code>rb_num_coerce_bit</code>、<code>rb_num2fix</code>、<code>rb_fix2short</code> / <code>ushort</code>、
+<code>rb_fix2str</code>、<code>rb_dbl_cmp</code>、<code>rb_check_to_int</code> / <code>float</code>、<code>rb_big_sign</code> /
+<code>bigzero_p</code> / <code>clone</code> / <code>eql</code> / <code>idiv</code> / <code>divmod</code>、<code>rb_absint_numwords</code>、
+<code>rb_integer_unpack</code>、<code>rb_big_pack</code> / <code>unpack</code>、
+<code>rb_flt_rationalize(_with_prec)</code>、Complex の関数一式（<code>rb_complex_raw</code> /
+<code>new_polar</code> / <code>real</code> / <code>imag</code> / <code>abs</code> / <code>arg</code> / <code>plus</code> / <code>mul</code> / <code>pow</code> …）。
+<code>rb_num2long</code> / <code>rb_num2ulong</code> が Float の範囲外を CRuby と同じ文言
+（<code>float 1e+20 out of range of integer</code>）で拒み、<code>rb_num2dbl</code> は nil /
+true / false / String に <code>no implicit conversion to float from ...</code>。
+bigdecimal の <code>missing.h</code> が <code>rb_complex_real</code> / <code>imag</code> の static 版を
+持つので、<code>build.rs</code> で <code>HAVE_RB_COMPLEX_REAL</code> / <code>IMAG</code> を定義する。</li>
+<li><strong>ID</strong>: <code>rb_is_{const,class,global,instance,attrset,local,junk}_id</code>、
+<code>rb_id_attrset</code>（演算子は NameError、<code>[]</code> は <code>[]=</code>）、<code>rb_name_error(_str)</code>、
+<code>rb_enc_symname_p</code> / <code>rb_enc_symname2_p</code> / <code>rb_symname_p</code>、
+<code>rb_sym_all_symbols</code>。ID の種類は CRuby の <code>rb_enc_symname_type</code> の写しで
+決める（<code>$1</code> は global、<code>[]=</code> は attrset）。</li>
+<li><strong>試験</strong>: <code>tests/capi/capi_datatypes.c</code> が上の関数を CRuby と比べる。
+ruby/spec <code>optional/capi</code> は 1525 例・1359 通過（段階 18 の後は
+1525 例・1255 通過。既に通っていた例で新たに落ちたものは無い）。</li>
+</ul>
 <h2 id="4-abi-への追加mrapi末尾に追記版は据え置き"><a class="header" href="#4-abi-への追加mrapi末尾に追記版は据え置き">4. ABI への追加（<code>MrApi</code>、末尾に追記、版は据え置き）</a></h2>
 <div class="table-wrapper">
 <table>
@@ -1436,6 +1493,7 @@ ruby/spec <code>optional/capi</code> は 1037 例・822 通過から 1515 例・
 <tr><td>16</td><td>ホストの CRuby が入れた gem の C 拡張を層で建て直して読む、alloc 関数の self、<code>rb_str_capacity</code> の下限、<code>ruby_vsnprintf</code> の無限ループ、<code>rb_check_symbol</code> 系</td><td>済（§3.24、ruby-bench の graphql-native / liquid-c が完走、liquid-c の出力は CRuby と一致）</td></tr>
 <tr><td>17</td><td>CRuby の <code>ext/etc</code> を層でビルドして同梱（<code>stdlib/etc.rb</code> と隠し builtin を削除）、<code>RUBY_EXTCONF_H</code> の include、ロケール / ファイルシステムのエンコーディング、符号なし変換の nil の文言</td><td>済（§3.25、ruby/spec <code>library/etc</code> 全通過、<code>resolve_feature_path("etc")</code> が <code>:so</code>）</td></tr>
 <tr><td>18</td><td>アーキテクチャを変えずに足せる API（リフレクション、<code>rb_path_to_class</code>、<code>rb_exec_recursive</code> 系、警告カテゴリ、ArithmeticSequence、public 呼び出し、<code>rb_stdout</code> などのマクロ化、<code>rb_alloc_func_t</code>）</td><td>済（§3.26、<code>tests/capi/capi_reflect.c</code>、ruby/spec <code>optional/capi</code> 822 → 1255 通過）</td></tr>
+<tr><td>19</td><td>データ型の残りの関数（String / Array / Hash / Set / Struct / Data / 数値 / Complex / ID）、<code>rb_str_encode</code> の ECONV フラグ、Float の範囲外の文言</td><td>済（§3.27、<code>tests/capi/capi_datatypes.c</code>、ruby/spec <code>optional/capi</code> 1255 → 1359 通過）</td></tr>
 </tbody>
 </table>
 </div>
@@ -1492,6 +1550,11 @@ stub が読まれる）ので、monoruby で使うには monoruby で入れ直�
 <li>組み込みのレイアウトを持つクラス（String / Array などの派生）には
 <code>rb_define_alloc_func</code> できない（TypeError）。普通のクラスでも alloc
 関数は遅延して走るので、<code>klass.allocate</code> の直後にはまだ走っていない（§3.7）。</li>
+<li><code>rb_id2str</code> などが返す名前の encoding は Symbol のものでなく
+US-ASCII / UTF-8（層の ID はバイト列で引くので、UTF-16 の Symbol の
+encoding が落ちる）。</li>
+<li><code>rb_struct_define_without_accessor</code> は親が Struct のときだけ使え、
+alloc 関数は無視する。<code>rb_set_foreach</code> は呼んだ時点の要素の写しを回す。</li>
 <li><code>rb_call_super</code> はエイリアスで二つの名前に定義した同じ C 関数の
 super を区別しない。<code>rb_errinfo</code> は Ruby の <code>$!</code> と別物（<code>rb_protect</code>
 の中で <code>$!</code> を設定しない）。</li>
