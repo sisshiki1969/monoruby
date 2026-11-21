@@ -167,6 +167,8 @@ NORETURN(void rb_enc_raise(rb_encoding *enc, VALUE exc, const char *fmt, ...));
 #define ECONV_DEFAULT_NEWLINE_DECORATOR         0
 #define ECONV_PARTIAL_INPUT                     0x00020000
 #define ECONV_AFTER_OUTPUT                      0x00040000
+int rb_enc_symname_p(const char *str, rb_encoding *enc);
+int rb_enc_symname2_p(const char *name, long len, rb_encoding *enc);
 int rb_econv_prepare_options(VALUE opthash, VALUE *ecopts, int ecflags);
 int rb_econv_prepare_opts(VALUE opthash, VALUE *ecopts);
 
