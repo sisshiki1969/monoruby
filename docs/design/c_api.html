@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-00069bc9.js";
+            window.path_to_searchindex_js = "../searchindex-6d493328.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -1299,6 +1299,74 @@ concurrent-ruby や parallel はこれでスレッドプールの大きさを決
 全 API（探索・列挙・<code>uname</code> / <code>sysconf</code> / <code>confstr</code> / <code>pathconf</code>・
 エラー）を同じマシンの CRuby と比較する。</li>
 </ul>
+<h3 id="326-アーキテクチャを変えずに足せる-api段階-18"><a class="header" href="#326-アーキテクチャを変えずに足せる-api段階-18">3.26 アーキテクチャを変えずに足せる API（段階 18）</a></h3>
+<p>CRuby 4.0.9 のヘッダと ruby/spec <code>optional/capi</code> を突き合わせ、層に無い
+関数のうち、既存の Ruby メソッドと ABI の組み合わせだけで CRuby と同じ
+振る舞いになるものを足した。どれも <code>MrApi</code> に手を入れていない。</p>
+<ul>
+<li><strong>リフレクション</strong>: <code>rb_define_class_id(_under)</code> / <code>rb_define_module_id(_under)</code>、
+<code>rb_class_get_superclass</code>（モジュールと最上位は <code>Qfalse</code>）、
+<code>rb_class_attached_object</code>、<code>rb_class_subclasses</code>、<code>rb_class_path_cached</code>、
+<code>rb_class_{,public_,protected_,private_}instance_methods</code>、
+<code>rb_obj_singleton_methods</code>、<code>rb_mod_ancestors</code> / <code>include_p</code> /
+<code>included_modules</code> / <code>constants</code> / <code>class_variables</code>、
+<code>rb_mod_remove_const</code> / <code>rb_const_remove</code> / <code>rb_mod_remove_cvar</code>、
+<code>rb_obj_remove_instance_variable</code>、<code>rb_free_generic_ivar</code>、<code>rb_ivar_count</code>、
+<code>rb_method_boundp</code>（<code>ex</code> の 2 のビットで protected も外す）、<code>rb_obj_method</code>、
+<code>rb_obj_method_arity</code> / <code>rb_mod_method_arity</code>、<code>rb_cvar_defined</code>、
+<code>rb_define_class_variable</code>、<code>rb_f_global_variables</code>。対応する Ruby メソッドを
+呼ぶだけ。<code>rb_const_get_from</code> / <code>rb_const_defined_from</code> は CRuby の
+<code>exclude = FALSE, recurse = TRUE, visibility = FALSE</code> を祖先の
+<code>const_defined?(name, false)</code> で再現する（<code>Object</code> は <code>space</code> が <code>Object</code>
+のときだけ探し、見つからなければ <code>const_missing</code>）。<code>rb_ivar_foreach</code> は
+クラス / モジュールではクラス変数も回す（CRuby の <code>class_ivar_each</code> と同じ順）。
+<code>rb_class_real</code> は特異クラスの連なりを上る。<code>rb_class_inherited_p</code> は
+クラス / モジュール以外に TypeError。</li>
+<li><strong><code>rb_path_to_class</code> / <code>rb_path2class</code></strong>: CRuby の variable.c の写し
+（<code>::</code> ごとに <code>const_defined?(id, false)</code>、無名クラスの <code>#&lt;</code> は
+ArgumentError、クラス / モジュール以外は TypeError、文言も同じ）。</li>
+<li><strong>再帰検出</strong>: <code>rb_exec_recursive(_paired)(_outer)</code>。CRuby と同じく
+ファイバーローカル（<code>Thread.current[:__recursive_key__]</code>）の Hash に、
+呼び出したメソッドの ID ごとの identity Hash を置く。メソッドは
+<code>capi_cur</code> を上って最初の C メソッドのフレームから取る（C 関数の
+ブロックのフレームでは <code>rb_frame_this_func</code> が 0 になるため）。
+<code>_outer</code> は <code>rb_catch_obj</code> / <code>rb_throw_obj</code> で最外の呼び出しまで戻る。</li>
+<li><strong>警告</strong>: <code>rb_warning_category_t</code>、<code>rb_category_warn</code> / <code>rb_category_warning</code>
+（<code>Warning[cat]</code> を見て <code>Warning.warn(msg, category:)</code>。<code>NONE</code> は出さない）、
+<code>rb_compile_warn</code> / <code>rb_compile_warning</code>（<code>file:line: warning: ...</code>）、
+<code>rb_sys_warning</code>、<code>rb_make_backtrace</code> / <code>rb_backtrace</code>、
+<code>rb_set_end_proc</code>（<code>at_exit</code> に C 関数のブロックを渡す）。</li>
+<li><strong>ArithmeticSequence と Range</strong>: <code>rb_arithmetic_sequence_extract</code> /
+<code>rb_arithmetic_sequence_beg_len_step</code> は CRuby の enumerator.c / range.c の
+写し。<code>rb_range_beg_len</code> も CRuby と同じく「範囲外なら nil を返す」核を
+分け、<code>err</code> のときの RangeError の文言を <code>%+</code> の範囲表示にそろえた。</li>
+<li><strong>呼び出し</strong>: <code>rb_funcallv_public</code> と <code>rb_funcall_with_block(_kw)</code> は
+private / protected を拒む（<code>public_send</code> 経由、CRuby の
+<code>CALL_PUBLIC</code>）。<code>rb_funcallv_kw</code> などの kw_splat は最後の引数が Hash で
+なければ <code>to_hash</code> で変換する。<code>rb_rescue2</code> のクラス以外は TypeError
+<code>class or module required</code>。</li>
+<li><strong>大域値</strong>: <code>rb_stdin</code> / <code>rb_stdout</code> / <code>rb_stderr</code> / <code>rb_defout</code> /
+<code>rb_output_fs</code> / <code>rb_argv</code> を呼ぶたびに <code>$stdin</code> などを読むマクロに
+（CRuby では変数だが、<code>$stdout = io</code> の後で古い値を見ないため）。
+<code>rb_mFileTest</code>、<code>rb_cRefinement</code>、<code>rb_mGC</code>、<code>rb_cBinding</code>、
+<code>rb_mWaitReadable</code> / <code>rb_mWaitWritable</code> を宣言、<code>RB_TYPE_P</code> の別名
+<code>rb_type_p</code>。<code>rb_alloc_func_t</code> を CRuby と同じ関数ポインタ型にした
+（以前は関数型で、<code>rb_alloc_func_t allocator = rb_get_alloc_func(k);</code> が
+通らなかった）。<code>rb_get_alloc_func</code> は C の alloc 関数が無いクラスでは
+組み込みの allocate を呼ぶ関数を返す（ruby/spec の <code>speced_allocator</code> が
+親の allocator を呼ぶ形）。<code>T_DATA</code> に Time を足した。</li>
+<li><strong>core 側で直したもの</strong>: x86-64 の with-self ブロック invoker が self を
+ブロック欄に入れていた（<code>instance_exec(&amp;method_proc)</code> で <code>&amp;b</code> を取る
+メソッドに self がブロックとして渡る。#2102）。<code>Class.new(S)</code> が <code>S</code> の
+インスタンス型を継がず、Marshal の往復が失敗し、C API からは
+<code>Class.new(String)</code> に native インスタンスを作らせてしまっていた（#2103）。
+<code>Encoding.default_internal</code> が未設定の <code>$DEFAULT_INTERNAL</code> を読んで
+<code>$VERBOSE</code> で警告していた。</li>
+<li><strong>試験</strong>: <code>tests/capi/capi_reflect.c</code> が上の関数を CRuby と比べる。
+ruby/spec <code>optional/capi</code> は 1037 例・822 通過から 1515 例・1255 通過に
+（以前は読み込みで落ちていた spec ファイルが動くようになり例数が増えた。
+既に動いていた例で新たに落ちたものは無い）。</li>
+</ul>
 <h2 id="4-abi-への追加mrapi末尾に追記版は据え置き"><a class="header" href="#4-abi-への追加mrapi末尾に追記版は据え置き">4. ABI への追加（<code>MrApi</code>、末尾に追記、版は据え置き）</a></h2>
 <div class="table-wrapper">
 <table>
@@ -1367,6 +1435,7 @@ concurrent-ruby や parallel はこれでスレッドプールの大きさを決
 <tr><td>15</td><td>CRuby の <code>ext/openssl</code> を層でビルドしシステムの OpenSSL にリンク（<code>ext/openssl</code> crate と Ruby 実装を削除）、<code>rb_attr</code>、<code>ruby_verbose</code>、<code>rb_obj_class</code> の ABI</td><td>済（§3.23、ruby/spec <code>library/openssl</code> / <code>net-ftp</code> 全通過）</td></tr>
 <tr><td>16</td><td>ホストの CRuby が入れた gem の C 拡張を層で建て直して読む、alloc 関数の self、<code>rb_str_capacity</code> の下限、<code>ruby_vsnprintf</code> の無限ループ、<code>rb_check_symbol</code> 系</td><td>済（§3.24、ruby-bench の graphql-native / liquid-c が完走、liquid-c の出力は CRuby と一致）</td></tr>
 <tr><td>17</td><td>CRuby の <code>ext/etc</code> を層でビルドして同梱（<code>stdlib/etc.rb</code> と隠し builtin を削除）、<code>RUBY_EXTCONF_H</code> の include、ロケール / ファイルシステムのエンコーディング、符号なし変換の nil の文言</td><td>済（§3.25、ruby/spec <code>library/etc</code> 全通過、<code>resolve_feature_path("etc")</code> が <code>:so</code>）</td></tr>
+<tr><td>18</td><td>アーキテクチャを変えずに足せる API（リフレクション、<code>rb_path_to_class</code>、<code>rb_exec_recursive</code> 系、警告カテゴリ、ArithmeticSequence、public 呼び出し、<code>rb_stdout</code> などのマクロ化、<code>rb_alloc_func_t</code>）</td><td>済（§3.26、<code>tests/capi/capi_reflect.c</code>、ruby/spec <code>optional/capi</code> 822 → 1255 通過）</td></tr>
 </tbody>
 </table>
 </div>
@@ -1420,6 +1489,12 @@ monoruby 側を先に activate すれば両方そろう。</li>
 <li><code>gem install</code> は monoruby の gem home に入れる。ホスト CRuby で
 入れた C 拡張 gem の <code>.so</code> は monoruby では読めない（stub のあるものは
 stub が読まれる）ので、monoruby で使うには monoruby で入れ直す。</li>
+<li>組み込みのレイアウトを持つクラス（String / Array などの派生）には
+<code>rb_define_alloc_func</code> できない（TypeError）。普通のクラスでも alloc
+関数は遅延して走るので、<code>klass.allocate</code> の直後にはまだ走っていない（§3.7）。</li>
+<li><code>rb_call_super</code> はエイリアスで二つの名前に定義した同じ C 関数の
+super を区別しない。<code>rb_errinfo</code> は Ruby の <code>$!</code> と別物（<code>rb_protect</code>
+の中で <code>$!</code> を設定しない）。</li>
 </ul>
 
                     </main>
