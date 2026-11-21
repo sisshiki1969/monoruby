@@ -11,7 +11,11 @@
 # finished: monoruby hung and was killed by the outer timeout(1), or it
 # crashed. The site then shows 0% for the category. A monoruby CI job that
 # did not succeed at all (e.g. hit its job timeout) publishes nothing and is
-# reported as well.
+# reported as well -- unless the only step that failed is the final
+# `Commit and push`: the matrix jobs push to master within seconds of each
+# other, and losing that race says nothing about monoruby (the specs ran;
+# only the results commit was rejected), so it goes to the step summary
+# instead of an issue.
 #
 # One issue per (source, category-or-job), labelled `rubyspec-stats`, keyed
 # by an HTML comment in the body. The same finding on newer results adds a
@@ -35,6 +39,14 @@ TOKEN = ENV['GITHUB_TOKEN'].to_s
 DRY_RUN = ENV['DRY_RUN'] == '1' || ENV['DRY_RUN'] == 'true'
 LABEL = 'rubyspec-stats'
 KEY = 'rubyspec-stats-watch'
+# The rubyspec-stats CI step (both instances) that commits and pushes the
+# results once every category has run.
+PUSH_STEP = 'Commit and push'
+# Step conclusions that fail a job. A spec step that failed under
+# `continue-on-error` reports `success` here, so it does not count.
+FAILED_STEP = %w[failure cancelled timed_out].freeze
+# Things worth a line in the run summary but not an issue.
+NOTES = []
 API = 'https://api.github.com'
 
 def http(method, url, body = nil, auth: true)
@@ -126,7 +138,8 @@ def latest_ci_run(repo)
   jobs = api(:get, "/repos/#{repo}/actions/runs/#{run['id']}/jobs?per_page=50")['jobs']
   job = jobs.find { |j| j['name'].start_with?('specs (monoruby') }
   { id: run['id'], url: run['html_url'], number: run['run_number'], created: run['created_at'],
-    job_id: job && job['id'], job_url: job && job['html_url'], job_conclusion: job && job['conclusion'] }
+    job_id: job && job['id'], job_url: job && job['html_url'], job_conclusion: job && job['conclusion'],
+    failed_steps: job ? (job['steps'] || []).select { |s| FAILED_STEP.include?(s['conclusion']) }.map { |s| s['name'] } : [] }
 end
 
 def results_commit(repo, category)
@@ -143,12 +156,15 @@ def check_source(repo, site)
     nil
   end
 
-  if run && run[:job_id] && run[:job_conclusion] != 'success'
+  if run && run[:job_id] && run[:job_conclusion] != 'success' && run[:failed_steps] == [PUSH_STEP]
+    NOTES << "#{repo}: CI run ##{run[:number]}: only `#{PUSH_STEP}` failed (lost a push race to another matrix job), not reported: #{run[:job_url]}"
+  elsif run && run[:job_id] && run[:job_conclusion] != 'success'
+    failed = run[:failed_steps].empty? ? '' : " (failed steps: #{run[:failed_steps].map { |n| "`#{n}`" }.join(', ')})"
     findings << {
       repo: repo, kind: 'job', id: "run-#{run[:id]}",
       title: "rubyspec-stats: monoruby job did not succeed on #{repo} (no results published)",
       body: <<~BODY,
-        The monoruby job of #{repo}'s CI run [##{run[:number]}](#{run[:url]}) (#{run[:created]}) finished with conclusion **#{run[:job_conclusion]}** ([job](#{run[:job_url]})), so no new results were committed and #{site} still shows the previous ones.
+        The monoruby job of #{repo}'s CI run [##{run[:number]}](#{run[:url]}) (#{run[:created]}) finished with conclusion **#{run[:job_conclusion]}**#{failed} ([job](#{run[:job_url]})), so no new results were committed and #{site} still shows the previous ones.
 
         Usually this means more than one category hung and the per-category timeouts added up to the job's `timeout-minutes`. Check the last description line of each `... specs` step in the job log; with the example trace from `spec/default.mspec` that is the example that was running when it was killed.
       BODY
@@ -279,6 +295,7 @@ def main
     summary << "#{repo} #{kind}: recovered, closed ##{issue['number']}"
   end
 
+  summary.concat(NOTES)
   summary << 'no findings' if summary.empty?
   puts summary
   File.open(ENV['GITHUB_STEP_SUMMARY'], 'a') { |f| f.puts(summary.map { |s| "- #{s}" }) } if ENV['GITHUB_STEP_SUMMARY']
