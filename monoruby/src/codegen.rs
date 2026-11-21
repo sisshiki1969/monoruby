@@ -2559,29 +2559,6 @@ pub(crate) mod jit_stats {
     /// between: the walk could only repeat the previous one (step D).
     /// They are not counted in `FX_WALKS`.
     pub static FX_ENTRY_REPEATS: AtomicUsize = AtomicUsize::new(0);
-    /// §5.4 recording stage (`record_pre_fixpoint_floats`): loop-entry
-    /// merges compared, those where the two float sets agree, and the
-    /// slots in both, adopted from the fixpoint only (of them, touched by
-    /// a block literal, and not live at the head), and chosen before the
-    /// fixpoint only.
-    pub static FX54_HEADS: AtomicUsize = AtomicUsize::new(0);
-    pub static FX54_SAME: AtomicUsize = AtomicUsize::new(0);
-    pub static FX54_BOTH: AtomicUsize = AtomicUsize::new(0);
-    pub static FX54_FIX_ONLY: AtomicUsize = AtomicUsize::new(0);
-    pub static FX54_FIX_ONLY_BLOCK: AtomicUsize = AtomicUsize::new(0);
-    pub static FX54_FIX_ONLY_DEAD: AtomicUsize = AtomicUsize::new(0);
-    pub static FX54_PRE_ONLY: AtomicUsize = AtomicUsize::new(0);
-    /// The yield side (`record_pre_fixpoint_outer_floats`): loop-entry
-    /// merges whose loop reaches a slot of an outer frame, those where
-    /// the two float sets agree, and the outer slots in both, held as a
-    /// float by the merge only, and chosen before the fixpoint only (of
-    /// which: slots the loop also writes).
-    pub static FX54O_HEADS: AtomicUsize = AtomicUsize::new(0);
-    pub static FX54O_SAME: AtomicUsize = AtomicUsize::new(0);
-    pub static FX54O_BOTH: AtomicUsize = AtomicUsize::new(0);
-    pub static FX54O_FIX_ONLY: AtomicUsize = AtomicUsize::new(0);
-    pub static FX54O_PRE_ONLY: AtomicUsize = AtomicUsize::new(0);
-    pub static FX54O_PRE_ONLY_WRITTEN: AtomicUsize = AtomicUsize::new(0);
     /// Fixpoints `analyse_loop_head` ran again without the `Array` seed.
     pub static FX_SEED_RETRIES: AtomicUsize = AtomicUsize::new(0);
     /// A head's first recorded back edge.
@@ -2642,33 +2619,6 @@ pub(crate) mod jit_stats {
         eprintln!(
             "    Array seed retries:              {}",
             g(&FX_SEED_RETRIES)
-        );
-        eprintln!("  loop-head floats, adopted vs chosen before the fixpoint (§5.4):");
-        eprintln!(
-            "    heads compared / same set:       {}/{}",
-            g(&FX54_HEADS),
-            g(&FX54_SAME)
-        );
-        eprintln!(
-            "    slots both / fixpoint only (block, dead) / pre only: {}/{} ({}, {})/{}",
-            g(&FX54_BOTH),
-            g(&FX54_FIX_ONLY),
-            g(&FX54_FIX_ONLY_BLOCK),
-            g(&FX54_FIX_ONLY_DEAD),
-            g(&FX54_PRE_ONLY)
-        );
-        eprintln!("  the same for the frames outside a loop's own (yield side):");
-        eprintln!(
-            "    heads compared / same set:       {}/{}",
-            g(&FX54O_HEADS),
-            g(&FX54O_SAME)
-        );
-        eprintln!(
-            "    outer slots both / fixpoint only / pre only (written): {}/{}/{} ({})",
-            g(&FX54O_BOTH),
-            g(&FX54O_FIX_ONLY),
-            g(&FX54O_PRE_ONLY),
-            g(&FX54O_PRE_ONLY_WRITTEN)
         );
         eprintln!(
             "  back-edge records first/rise/descent/incomparable: {}/{}/{}/{}",

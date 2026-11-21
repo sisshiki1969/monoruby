@@ -812,8 +812,8 @@ analysis clones (`JitContext::unit_liveness`).
 
 A query is then a scan of the rest of the instruction's basic block
 over Layer A's summaries, with Layer B's capture verdicts, and the
-block's live-out set past it (`table_live_after`). The loop analysis
-asks it that way. The life of an elided object in a local is the *frame
+block's live-out set past it (`table_observable_after`, which counts
+every capture point as a read of every local). The life of an elided object in a local is the *frame
 liveness* of §12 instead (`table_frame_live_after`), which depends on no
 inline cache and so lives in Layer A. The one instruction a
 temporary's view may be consumed by is `SlotAnalysis::alias_stop`; the

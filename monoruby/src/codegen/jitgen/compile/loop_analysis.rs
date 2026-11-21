@@ -493,19 +493,15 @@ impl<'a> JitContext<'a> {
 }
 
 ///
-/// `doc/fixpoint_engine_plan.md` §5.4, the recording stage: the float
-/// slots a loop head would unbox if the choice were made *before* the
-/// back-edge fixpoint, from the bytecode, the inline caches and the
-/// incoming state alone, to be compared with the set the loop-entry merge
-/// adopts from the fixpoint's back edge (`keep_backedge_floats`). The
-/// recording itself (`jit-log`) feeds nothing back into the compile; the
-/// block summaries below are also what `block_float_accumulators` reads,
-/// which does.
+/// Block summaries: what a block literal does to the slots of an outer
+/// frame, read off the bytecode and the inline caches alone
+/// (`doc/fixpoint_engine_plan.md` §5.4). `block_float_accumulators`
+/// reads them at a call that hands a block to an inlined callee.
 ///
 use crate::bytecodegen::{BinOpK, UnOpK};
 
 ///
-/// What one definition puts in a slot of the frame a loop is in.
+/// What one definition puts in a slot of an outer frame.
 ///
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum FloatDef {
@@ -641,28 +637,8 @@ fn block_literal(ir: &TraceIr, store: &Store) -> Option<ISeqId> {
 struct BlockSummary {
     /// Read as a float operand.
     float_read: Vec<bool>,
-    /// Read in some basic block of the block before that basic block
-    /// writes it.
-    exposed: Vec<bool>,
     /// What each write puts there.
     defs: Vec<Vec<FloatDef>>,
-}
-
-#[cfg(feature = "jit-log")]
-impl BlockSummary {
-    /// Add what *other* may do as well.
-    fn merge(&mut self, other: &BlockSummary) {
-        for i in 0..self.defs.len().min(other.defs.len()) {
-            self.float_read[i] |= other.float_read[i];
-            self.exposed[i] |= other.exposed[i];
-            self.defs[i].extend(&other.defs[i]);
-        }
-    }
-
-    /// Whether anything here reads or writes the slot.
-    fn touches(&self, i: usize) -> bool {
-        self.float_read[i] || self.exposed[i] || !self.defs[i].is_empty()
-    }
 }
 
 impl<'a> JitContext<'a> {
@@ -686,7 +662,7 @@ impl<'a> JitContext<'a> {
     /// (`block_summary`). When the call is not expected to compile the
     /// block into this unit, the block runs as a unit of its own, reading
     /// and writing the slots in the frame: its float reads say nothing to
-    /// the loop, and what it writes is a boxed value of no known class.
+    /// the caller, and what it writes is a boxed value of no known class.
     ///
     fn block_summary_at(
         &self,
@@ -716,23 +692,7 @@ impl<'a> JitContext<'a> {
     /// what a float is, so the summary belongs to the moment it is made.
     ///
     fn block_summary(&self, block: ISeqId, depth: usize, n: usize) -> BlockSummary {
-        self.region_summary(block, None, depth, n)
-    }
-
-    ///
-    /// `block_summary` for the basic blocks *region* (inclusive) of
-    /// *iseq* alone, or all of them: what a loop in a block does to the
-    /// frame *depth* levels out, through the outer chain and through the
-    /// block literals it passes.
-    ///
-    fn region_summary(
-        &self,
-        block: ISeqId,
-        region: Option<(BasicBlockId, BasicBlockId)>,
-        depth: usize,
-        n: usize,
-    ) -> BlockSummary {
-        use std::collections::{HashMap, HashSet};
+        use std::collections::HashMap;
         /// What a slot of the block's own frame holds.
         #[derive(Clone, Copy)]
         enum Tmp {
@@ -745,22 +705,15 @@ impl<'a> JitContext<'a> {
         let iseq = &store[block];
         let mut sum = BlockSummary {
             float_read: vec![false; n],
-            exposed: vec![false; n],
             defs: vec![vec![]; n],
         };
-        let (first, last) = match region {
-            Some((first, last)) => (first.index(), last.index()),
-            None => (0, iseq.bb_info.len().saturating_sub(1)),
-        };
-        for bb in first..=last {
+        for bb in 0..iseq.bb_info.len() {
             let mut tmp: HashMap<SlotId, Tmp> = Default::default();
             // The outer slot an own slot was loaded from, and how many
             // times this basic block had written that outer slot by then.
             let mut src: HashMap<SlotId, (SlotId, usize)> = Default::default();
             // What this basic block (certainly) left in an outer slot.
             let mut outer_now: HashMap<SlotId, FloatDef> = Default::default();
-            // The outer slots this basic block has certainly written.
-            let mut certain: HashSet<SlotId> = Default::default();
             // How many times this basic block has (maybe) written an
             // outer slot.
             let mut generation: HashMap<SlotId, usize> = Default::default();
@@ -818,9 +771,6 @@ impl<'a> JitContext<'a> {
                         if *outer == depth && (reg.0 as usize) < n =>
                     {
                         let x = *reg;
-                        if !certain.contains(&x) {
-                            sum.exposed[x.0 as usize] = true;
-                        }
                         tmp.insert(
                             *dst,
                             match outer_now.get(&x) {
@@ -848,7 +798,6 @@ impl<'a> JitContext<'a> {
                         }
                         sum.defs[x.0 as usize].push(def);
                         outer_now.insert(x, def);
-                        certain.insert(x);
                         *generation.entry(x).or_default() += 1;
                     }
                     _ => {}
@@ -859,9 +808,6 @@ impl<'a> JitContext<'a> {
                     for i in 0..n {
                         let x = SlotId(i as u16);
                         sum.float_read[i] |= inner.float_read[i];
-                        if inner.exposed[i] && !certain.contains(&x) {
-                            sum.exposed[i] = true;
-                        }
                         if !inner.defs[i].is_empty() {
                             sum.defs[i].extend(&inner.defs[i]);
                             outer_now.remove(&x);
@@ -872,507 +818,6 @@ impl<'a> JitContext<'a> {
             }
         }
         sum
-    }
-}
-
-#[cfg(feature = "jit-log")]
-impl<'a> JitContext<'a> {
-    ///
-    /// Per slot, whether it is a candidate of the loop
-    /// `loop_start..=loop_end` in the innermost frame, given the state
-    /// *incoming* from before the loop, or why not; and per slot whether
-    /// it is live at the head (below). A candidate is a slot
-    /// that
-    /// some instruction of the loop reads as a float operand (a `BinOp`,
-    /// `BinCmp` or `UnOp` whose cache says `Float` for it), every entry
-    /// can bridge to a float (*promotable*), the loop may read before it
-    /// writes it (live at the head by the tables, and read before written
-    /// in some basic block of the loop), and that either
-    ///
-    /// - the loop defines only by float arithmetic (a numeric `BinOp` or
-    ///   `UnOp` with a `Float` operand in its cache), float literals, and
-    ///   copies of slots that are float by this same rule, or
-    /// - the loop does not define, and *incoming* has as a `Float` or as a
-    ///   value of no known class (the float reads guard it).
-    ///
-    /// A block literal passed in the loop counts through its summary
-    /// (`block_summary_at`): its reads and writes of the frame's slots
-    /// are reads and writes the loop may make at the call. A slot the
-    /// frame's blocks touch is no candidate when one of them is opaque to
-    /// this compilation (`table_blocks_opaque`), where no summary holds.
-    ///
-    pub(in crate::codegen::jitgen) fn loop_float_candidates(
-        &self,
-        loop_start: BasicBlockId,
-        loop_end: BasicBlockId,
-        incoming: &AbstractState,
-        promotable: impl Fn(SlotId) -> bool,
-    ) -> (Vec<std::result::Result<(), &'static str>>, Vec<bool>) {
-        use FloatDef as Def;
-        use std::collections::{HashMap, HashSet};
-        let iseq = self.iseq();
-        let store = self.store;
-        let n = self.total_reg_num();
-        let mut defs: Vec<Vec<Def>> = vec![vec![]; n];
-        let mut float_use = vec![false; n];
-        // Read in some basic block of the loop before that block writes it.
-        let mut exposed = vec![false; n];
-        let table = self.slot_analysis(self.iseq_id());
-        for bb in loop_start..=loop_end {
-            // The definitions made so far in this basic block.
-            let mut local: HashMap<SlotId, Def> = Default::default();
-            // The slots this basic block has certainly written.
-            let mut certain: HashSet<SlotId> = Default::default();
-            // The slot whose value a slot copied in this basic block holds.
-            let mut copy_src: HashMap<SlotId, SlotId> = Default::default();
-            // A slot this basic block defined other than as a float, not
-            // read since: the indices of those definitions in `defs`
-            // (more than one when a block may have written it).
-            let mut pending: HashMap<SlotId, Vec<usize>> = Default::default();
-            let BasicBlockInfoEntry { begin, end, .. } = iseq.bb_info[bb];
-            for pos in begin..=end {
-                let pc = iseq.get_pc(pos);
-                if TraceIr::is_handler_only(pc) {
-                    continue;
-                }
-                for r in table.reads(pos) {
-                    if (r.0 as usize) < n && !certain.contains(r) {
-                        exposed[r.0 as usize] = true;
-                    }
-                }
-                let ir = TraceIr::from_pc(pc, store);
-                let (float_reads, float_def) = float_ops(&ir);
-                // The reads come before the writes. A float read of a copy
-                // is a float read of what it copies; a float read guards
-                // the value a slot was given in this block (an `Index`
-                // read, a call's result), so that definition is a float
-                // on the paths that reach the loop's back edge.
-                for r in float_reads {
-                    for r in std::iter::once(r).chain(copy_src.get(&r).copied()) {
-                        if let Some(f) = float_use.get_mut(r.0 as usize) {
-                            *f = true;
-                        }
-                    }
-                    if let Some(idxs) = pending.remove(&r) {
-                        for idx in idxs {
-                            defs[r.0 as usize][idx] = Def::Float;
-                        }
-                        local.insert(r, Def::Float);
-                    }
-                }
-                // A block literal passed here may run, any number of
-                // times, before the call's own result is written.
-                if let Some(block) = block_literal(&ir, store) {
-                    let sum = self.block_summary_at(&ir, block, 1, n);
-                    for i in 0..n {
-                        let x = SlotId(i as u16);
-                        if sum.float_read[i] {
-                            float_use[i] = true;
-                            if let Some(y) = copy_src.get(&x) {
-                                float_use[y.0 as usize] = true;
-                            }
-                        }
-                        if sum.exposed[i] && !certain.contains(&x) {
-                            exposed[i] = true;
-                        }
-                        if sum.defs[i].is_empty() {
-                            continue;
-                        }
-                        for d in &sum.defs[i] {
-                            if *d == Def::Other {
-                                pending.entry(x).or_default().push(defs[i].len());
-                            }
-                            defs[i].push(*d);
-                        }
-                        // Written or not: whatever the slot holds.
-                        local.insert(x, Def::CopyOf(x));
-                        copy_src.remove(&x);
-                    }
-                }
-                for w in written_slots(&ir, store) {
-                    if w.0 as usize >= n {
-                        continue;
-                    }
-                    copy_src.remove(&w);
-                    pending.remove(&w);
-                    certain.insert(w);
-                    let def = if float_def == Some(w) {
-                        Def::Float
-                    } else if let TraceIr::Mov(dst, src) = ir
-                        && dst == w
-                    {
-                        copy_src.insert(dst, copy_src.get(&src).copied().unwrap_or(src));
-                        local.get(&src).copied().unwrap_or(Def::CopyOf(src))
-                    } else {
-                        pending.insert(w, vec![defs[w.0 as usize].len()]);
-                        Def::Other
-                    };
-                    local.insert(w, def);
-                    defs[w.0 as usize].push(def);
-                }
-            }
-        }
-        // The greatest set closed under "every definition is a float".
-        let float_valued = |ok: &[bool], s: SlotId| {
-            let i = s.0 as usize;
-            i < n
-                && if defs[i].is_empty() {
-                    // Loop-invariant: a Float on entry, or one the float
-                    // reads would guard on every iteration (a guard the
-                    // merge hoists to the entries; *promotable* checks
-                    // that they can take it).
-                    incoming.guarded(s).class().is_none_or(|c| c == FLOAT_CLASS)
-                } else {
-                    ok[i]
-                }
-        };
-        let mut ok: Vec<bool> = defs.iter().map(|d| !d.contains(&Def::Other)).collect();
-        loop {
-            let mut changed = false;
-            for i in 0..n {
-                if ok[i]
-                    && defs[i]
-                        .iter()
-                        .any(|d| matches!(d, Def::CopyOf(s) if !float_valued(&ok, *s)))
-                {
-                    ok[i] = false;
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        let head_pos = iseq.bb_info[loop_start].begin;
-        let blocks_opaque = self.table_blocks_opaque();
-        let live: Vec<bool> = (0..n)
-            .map(|i| exposed[i] && self.table_live_after(head_pos, SlotId(i as u16)))
-            .collect();
-        let verdicts = (0..n)
-            .map(|i| {
-                let s = SlotId(i as u16);
-                if i == 0 {
-                    Err("self")
-                } else if self.table_touched_by_blocks(s) && blocks_opaque {
-                    // A block has a handler or a lambda, or a call that
-                    // may capture the frame: its summary does not hold.
-                    Err("touched by an opaque block")
-                } else if !float_use[i] {
-                    Err("no float read")
-                } else if !float_valued(&ok, s) {
-                    Err(if defs[i].is_empty() {
-                        "not a Float on entry, by class"
-                    } else if defs[i].contains(&Def::Other) {
-                        "a non-float def"
-                    } else {
-                        "a copy of a non-float"
-                    })
-                } else if !live[i] {
-                    Err("dead at the head")
-                } else if !promotable(s) {
-                    Err("an entry is not float")
-                } else {
-                    Ok(())
-                }
-            })
-            .collect();
-        (verdicts, live)
-    }
-}
-
-#[cfg(feature = "jit-log")]
-impl<'a> JitContext<'a> {
-    ///
-    /// Compare the floats the loop-entry merge of *head* adopted (`F`, or
-    /// `Sf` guarded `Float`, in the innermost frame of *target*) with the
-    /// candidates *pre* chosen before the fixpoint
-    /// (`loop_float_candidates`), into the `FX54_*` counters. With
-    /// `MONORUBY_FX54_LOG` set, each head where the two differ is printed.
-    ///
-    pub(in crate::codegen::jitgen) fn record_pre_fixpoint_floats(
-        &self,
-        head: BasicBlockId,
-        target: &AbstractState,
-        backedge: &state::SlotState,
-        (verdicts, live): &(Vec<std::result::Result<(), &'static str>>, Vec<bool>),
-    ) {
-        let live = |s: SlotId| live[s.0 as usize];
-        let pre: Vec<SlotId> = (0..verdicts.len())
-            .filter(|&i| verdicts[i].is_ok())
-            .map(|i| SlotId(i as u16))
-            .collect();
-        use crate::codegen::jit_stats::*;
-        use std::sync::atomic::Ordering::Relaxed;
-        let adopted: Vec<SlotId> = (1..self.total_reg_num())
-            .map(|i| SlotId(i as u16))
-            .filter(|&s| {
-                matches!(
-                    target.mode(s),
-                    LinkMode::F(_) | LinkMode::Sf(_, state::SfGuarded::Float)
-                )
-            })
-            .collect();
-        let both = adopted.iter().filter(|s| pre.contains(s)).count();
-        let fix_only: Vec<SlotId> = adopted
-            .iter()
-            .copied()
-            .filter(|s| !pre.contains(s))
-            .collect();
-        let fix_only_block = fix_only
-            .iter()
-            .filter(|&&s| self.table_touched_by_blocks(s))
-            .count();
-        // Not read before written in the loop: an adoption the loop never
-        // reads from the head.
-        let fix_only_dead = fix_only.iter().filter(|&&s| !live(s)).count();
-        let pre_only: Vec<SlotId> = pre
-            .iter()
-            .copied()
-            .filter(|s| !adopted.contains(s))
-            .collect();
-        bump(&FX54_HEADS);
-        if fix_only.is_empty() && pre_only.is_empty() {
-            bump(&FX54_SAME);
-        }
-        FX54_BOTH.fetch_add(both, Relaxed);
-        FX54_FIX_ONLY.fetch_add(fix_only.len(), Relaxed);
-        FX54_FIX_ONLY_BLOCK.fetch_add(fix_only_block, Relaxed);
-        FX54_FIX_ONLY_DEAD.fetch_add(fix_only_dead, Relaxed);
-        FX54_PRE_ONLY.fetch_add(pre_only.len(), Relaxed);
-        if (!fix_only.is_empty() || !pre_only.is_empty())
-            && std::env::var_os("MONORUBY_FX54_LOG").is_some()
-        {
-            let iseq = self.iseq();
-            eprintln!(
-                "[fx54] {:?} {} {head:?}: both {both}, fixpoint only {:?}, pre only {:?}",
-                self.iseq_id(),
-                iseq.name(),
-                fix_only
-                    .iter()
-                    .map(|&s| format!(
-                        "{s:?} {:?}{}: {}",
-                        target.mode(s),
-                        if live(s) { "" } else { " (dead at head)" },
-                        verdicts[s.0 as usize].err().unwrap_or("?")
-                    ))
-                    .collect::<Vec<_>>(),
-                pre_only
-                    .iter()
-                    .map(|&s| format!(
-                        "{s:?} {:?} (back edge {:?}){}",
-                        target.mode(s),
-                        backedge.mode(s),
-                        if self.table_touched_by_blocks(s) {
-                            ", touched by a block"
-                        } else {
-                            ""
-                        }
-                    ))
-                    .collect::<Vec<_>>(),
-            );
-        }
-    }
-}
-
-#[cfg(feature = "jit-log")]
-impl<'a> JitContext<'a> {
-    ///
-    /// The yield side of `record_pre_fixpoint_floats`: at the loop-entry
-    /// merge of *head*, compare the floats the merge holds in the frames
-    /// **outside** the loop's own (`F`, or `Sf` guarded `Float`, in
-    /// *target*) with a choice made before the fixpoint, for the slots the
-    /// loop reaches. A loop reaches an outer frame's slots
-    ///
-    /// - through the outer chain, when its frame is a block (its own
-    ///   `LoadDynVar` / `StoreDynVar`, and the block literals it passes),
-    ///   and
-    /// - through a `yield` to the block literal its method was given,
-    ///   whose summary (`block_summary`) says what that block does to the
-    ///   frame that wrote it and to that frame's lexical ancestors.
-    ///
-    /// The choice is the one `loop_float_candidates` makes for the loop's
-    /// own frame, read off the summaries: a slot the loop reads as a
-    /// float, may read before it writes, whose every definition in the
-    /// loop is a float (or, with none, that comes in as a `Float` or with
-    /// no known class), and that every entry can bridge to a float. Into
-    /// the `FX54O_*` counters; with `MONORUBY_FX54_LOG` set, each head
-    /// where the two differ is printed.
-    ///
-    pub(in crate::codegen::jitgen) fn record_pre_fixpoint_outer_floats(
-        &self,
-        head: BasicBlockId,
-        loop_start: BasicBlockId,
-        loop_end: BasicBlockId,
-        target: &AbstractState,
-        entries: &[BranchEntry],
-        incoming: &AbstractState,
-    ) {
-        use crate::codegen::jit_stats::*;
-        use FloatDef as Def;
-        use std::sync::atomic::Ordering::Relaxed;
-        let store = self.store;
-        let innermost = self.stack_frame_len() - 1;
-        if innermost == 0 || target.depth() != innermost + 1 {
-            return;
-        }
-        // What the loop may do to each outer frame, by stack position.
-        let mut effects: std::collections::BTreeMap<usize, BlockSummary> = Default::default();
-        let mut add = |pos: usize, sum: BlockSummary| match effects.get_mut(&pos) {
-            Some(e) => e.merge(&sum),
-            None => {
-                effects.insert(pos, sum);
-            }
-        };
-        let slots_at = |pos: usize| store[self.frame_iseq_at(pos)].total_reg_num();
-        // Through the outer chain.
-        let mut depth = 1;
-        while let Some(pos) = self.outer_pos(depth) {
-            add(
-                pos,
-                self.region_summary(
-                    self.iseq_id(),
-                    Some((loop_start, loop_end)),
-                    depth,
-                    slots_at(pos),
-                ),
-            );
-            depth += 1;
-        }
-        // Through a `yield` in the loop.
-        let iseq = self.iseq();
-        let yields = (loop_start..=loop_end).any(|bb| {
-            let BasicBlockInfoEntry { begin, end, .. } = iseq.bb_info[bb];
-            (begin..=end).any(|pos| {
-                let pc = iseq.get_pc(pos);
-                !TraceIr::is_handler_only(pc)
-                    && matches!(TraceIr::from_pc(pc, store), TraceIr::Yield { .. })
-            })
-        });
-        if yields
-            && let Some(info) = self.current_method_given_block()
-            && let Some(block) = store[info.block_fid].is_iseq()
-        {
-            let mut pos = innermost.checked_sub(info.outer);
-            let mut depth = 1;
-            while let Some(p) = pos {
-                add(p, self.block_summary(block, depth, slots_at(p)));
-                pos = self.lexical_outer_at(p);
-                depth += 1;
-            }
-        }
-        let float_bridgeable = |m: LinkMode| {
-            matches!(m, LinkMode::F(_) | LinkMode::S(_) | LinkMode::Sf(_, _))
-                || matches!(m, LinkMode::C(v) if v.is_float())
-        };
-        let (mut both, mut fix_only, mut pre_only) = (vec![], vec![], vec![]);
-        for (&pos, sum) in &effects {
-            let n = sum.defs.len();
-            let opaque = self.unit_liveness(self.frame_iseq_at(pos)).blocks_opaque();
-            // The greatest set closed under "every definition is a float".
-            let float_valued = |ok: &[bool], i: usize| {
-                if sum.defs[i].is_empty() {
-                    incoming[pos]
-                        .guarded(SlotId(i as u16))
-                        .class()
-                        .is_none_or(|c| c == FLOAT_CLASS)
-                } else {
-                    ok[i]
-                }
-            };
-            let mut ok: Vec<bool> = sum.defs.iter().map(|d| !d.contains(&Def::Other)).collect();
-            loop {
-                let mut changed = false;
-                for i in 0..n {
-                    if ok[i]
-                        && sum.defs[i].iter().any(|d| {
-                            matches!(d, Def::CopyOf(s)
-                                if (s.0 as usize) >= n || !float_valued(&ok, s.0 as usize))
-                        })
-                    {
-                        ok[i] = false;
-                        changed = true;
-                    }
-                }
-                if !changed {
-                    break;
-                }
-            }
-            for i in 1..n {
-                if !sum.touches(i) {
-                    continue;
-                }
-                let slot = SlotId(i as u16);
-                let verdict = if opaque {
-                    Err("an opaque block")
-                } else if !sum.float_read[i] {
-                    Err("no float read")
-                } else if !float_valued(&ok, i) {
-                    Err(if sum.defs[i].is_empty() {
-                        "not a Float on entry, by class"
-                    } else {
-                        "a non-float def"
-                    })
-                } else if !sum.exposed[i] {
-                    Err("written before read")
-                } else if !entries
-                    .iter()
-                    .all(|e| e.state.depth() > pos && float_bridgeable(e.state[pos].mode(slot)))
-                {
-                    Err("an entry is not float")
-                } else {
-                    Ok(())
-                };
-                let mode = target[pos].mode(slot);
-                // A float constant at the head needs no register: no
-                // choice to compare.
-                if matches!(mode, LinkMode::C(v) if v.is_float()) {
-                    continue;
-                }
-                let adopted = matches!(
-                    mode,
-                    LinkMode::F(_) | LinkMode::Sf(_, state::SfGuarded::Float)
-                );
-                match (adopted, verdict) {
-                    (true, Ok(())) => both.push((pos, slot)),
-                    (true, Err(why)) => fix_only.push(format!("{pos}:{slot:?} {mode:?}: {why}")),
-                    (false, Ok(())) => {
-                        let written = !sum.defs[i].is_empty();
-                        if written {
-                            bump(&FX54O_PRE_ONLY_WRITTEN);
-                        }
-                        pre_only.push(format!(
-                            "{pos}:{slot:?} {mode:?} ({}, entry {:?})",
-                            if written { "written" } else { "read only" },
-                            incoming[pos].mode(slot)
-                        ))
-                    }
-                    (false, Err(_)) => {}
-                }
-            }
-        }
-        if effects
-            .values()
-            .all(|sum| (1..sum.defs.len()).all(|i| !sum.touches(i)))
-        {
-            return;
-        }
-        bump(&FX54O_HEADS);
-        if fix_only.is_empty() && pre_only.is_empty() {
-            bump(&FX54O_SAME);
-        }
-        FX54O_BOTH.fetch_add(both.len(), Relaxed);
-        FX54O_FIX_ONLY.fetch_add(fix_only.len(), Relaxed);
-        FX54O_PRE_ONLY.fetch_add(pre_only.len(), Relaxed);
-        if (!fix_only.is_empty() || !pre_only.is_empty())
-            && std::env::var_os("MONORUBY_FX54_LOG").is_some()
-        {
-            eprintln!(
-                "[fx54-outer] {:?} {} {head:?}: both {}, fixpoint only {fix_only:?}, pre only {pre_only:?}",
-                self.iseq_id(),
-                iseq.name(),
-                both.len(),
-            );
-        }
     }
 }
 

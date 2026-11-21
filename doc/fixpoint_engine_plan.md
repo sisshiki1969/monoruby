@@ -1101,6 +1101,27 @@ optcarrot では、jit-log の walk 数と JIT コードの総バイト数が変
   - 不動点の側で「事前の集合」を使う変更は、この形には要らなかった。
     最内フレームでは、事前の集合と不動点の集合は生きているスロットで一致している。
 
+#### 記録段階の削除(2026-11-21)
+
+§5.4 の記録段階(`loop_float_candidates`、`record_pre_fixpoint_floats`、
+`record_pre_fixpoint_outer_floats`、`FX54_*` / `FX54O_*` の統計、`MONORUBY_FX54_LOG`)を
+削除した。記録は `jit-log` ビルドだけにあり、コンパイルへは何も返していなかった。
+問いには答えが出ている。最内フレームの生きているスロットでは、事前の集合と不動点の集合が
+すべてのヘッドで一致した。yield 側の差は、呼び出し位置の変更(float リテラルの保持)で
+閉じた。不動点の側で事前の集合を使う変更は要らなかった。
+
+- **残したもの。** ブロックの要約(`block_summary`)。`block_float_accumulators` が
+  使っており、生成コードに効く。要約から、記録だけが読んでいた部分を外した。
+  - 「書く前に読むか」(`exposed`)。
+  - ループの範囲に限る形(`region_summary`)。
+- **一緒に消したもの。** 記録だけが使っていた次の補助関数。
+  - `BlockSummary::merge` / `touches`。
+  - `JitContext::frame_iseq_at` / `lexical_outer_at`。
+  - `table_live_after` / `table_touched_by_blocks` / `table_blocks_opaque`。
+  - `UnitLiveness` の `touched` と `blocks_opaque`。
+- **確認。** `emit-asm` の出力を master と比べた。so_nbody・so_mandelbrot・app_aobench と、
+  `fx54_block_samples` の小品 8 本で、統計の行を除いて一致した。
+
 ### 5.5 不動点探索から表現を外す案(ユーザー提案、2026-11-13)
 
 提案: 不動点探索を独立したパスにし、そこではレジスタ割り当てとエスケープ解析を行わない。
