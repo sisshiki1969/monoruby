@@ -606,27 +606,31 @@ capi_vformat(struct sbuf *b, const char *fmt, va_list ap)
             p++;
             continue;
         }
-        int plus = 0, nstar = 0, w[2] = {0, 0};
+        int plus = 0, minus = 0, nstar = 0, w[2] = {0, 0};
+        long width = 0, prec = -1;
         while (*p && strchr("-+ #0", *p)) {
             if (*p == '+')
                 plus = 1;
+            else if (*p == '-')
+                minus = 1;
             p++;
         }
         if (*p == '*') {
-            w[nstar++] = va_arg(ap, int);
+            width = w[nstar++] = va_arg(ap, int);
             p++;
         } else {
             while (*p >= '0' && *p <= '9')
-                p++;
+                width = width * 10 + (*p++ - '0');
         }
         if (*p == '.') {
             p++;
+            prec = 0;
             if (*p == '*') {
-                w[nstar++] = va_arg(ap, int);
+                prec = w[nstar++] = va_arg(ap, int);
                 p++;
             } else {
                 while (*p >= '0' && *p <= '9')
-                    p++;
+                    prec = prec * 10 + (*p++ - '0');
             }
         }
         int len = LEN_NONE;
@@ -659,7 +663,22 @@ capi_vformat(struct sbuf *b, const char *fmt, va_list ap)
             p++;
             VALUE v = va_arg(ap, VALUE);
             VALUE s = plus ? rb_inspect(v) : rb_obj_as_string(v);
-            sb_add(b, RSTRING_PTR(s), (size_t)RSTRING_LEN(s));
+            /* Width and precision count bytes, as CRuby's BSD vfprintf
+             * applies them to the string it is handed. */
+            long n = RSTRING_LEN(s);
+            if (prec >= 0 && prec < n)
+                n = prec;
+            if (width < 0) {
+                minus = 1;
+                width = -width;
+            }
+            if (!minus)
+                for (long i = n; i < width; i++)
+                    sb_add(b, " ", 1);
+            sb_add(b, RSTRING_PTR(s), (size_t)n);
+            if (minus)
+                for (long i = n; i < width; i++)
+                    sb_add(b, " ", 1);
             continue;
         }
         char spec[64];
@@ -2638,10 +2657,25 @@ rb_eql(VALUE a, VALUE b)
     return RTEST(rb_funcall(a, rb_intern("eql?"), 1, b));
 }
 
+/* hash.c's obj_any_hash: whatever #hash answers is brought into Fixnum
+ * range, a Bignum by its low word and anything else by #to_int. */
 VALUE
 rb_hash(VALUE obj)
 {
-    return rb_funcall(obj, rb_intern("hash"), 0);
+    VALUE hval = rb_funcall(obj, rb_intern("hash"), 0);
+    while (!FIXNUM_P(hval)) {
+        if (RB_TYPE_P(hval, T_BIGNUM)) {
+            unsigned long ul;
+            int sign = rb_integer_pack(hval, &ul, 1, sizeof(ul), 0, INTEGER_PACK_NATIVE_BYTE_ORDER);
+            if (sign < 0)
+                hval = LONG2FIX((long)(ul | (unsigned long)FIXNUM_MIN));
+            else
+                hval = LONG2FIX((long)(ul & (unsigned long)FIXNUM_MAX));
+        }
+        else
+            hval = rb_to_int(hval);
+    }
+    return hval;
 }
 
 VALUE
@@ -3302,6 +3336,11 @@ rb_num_coerce_relop(VALUE x, VALUE y, ID func)
 VALUE
 rb_cstr_to_inum(const char *str, int base, int badcheck)
 {
+    /* bignum.c reads a C string with length -1, and rb_int_parse_cstr
+     * looks for a 0x / 0b / 0o / 0 prefix only when the length is more
+     * than 1: base 0 parses decimal here. */
+    if (base <= 0)
+        base = base < -1 ? -base : 10;
     return rb_str_to_inum(rb_str_new_cstr(str), base, badcheck);
 }
 
@@ -3548,6 +3587,30 @@ rb_ull2inum(unsigned long long n)
     return rb_uint2inum((uintptr_t)n);
 }
 
+/* numeric.c's FLOAT_OUT_OF_RANGE. */
+#define LONG_MIN_MINUS_ONE ((double)LONG_MIN - 1)
+#define LONG_MAX_PLUS_ONE (2 * (double)(LONG_MAX / 2 + 1))
+#define ULONG_MAX_PLUS_ONE (2 * (double)(ULONG_MAX / 2 + 1))
+#define LONG_MIN_MINUS_ONE_IS_LESS_THAN(n) \
+    (LONG_MIN_MINUS_ONE == (double)LONG_MIN ? LONG_MIN <= (n) : LONG_MIN_MINUS_ONE < (n))
+
+static void
+float_out_of_range(VALUE v, const char *type)
+{
+    char buf[24], *sp;
+    double d = RFLOAT_VALUE(v);
+    /* CRuby's own snprintf (BSD vfprintf) spells these NaN / Inf. */
+    if (isnan(d))
+        snprintf(buf, sizeof(buf), "NaN");
+    else if (isinf(d))
+        snprintf(buf, sizeof(buf), "%sInf", d < 0 ? "-" : "");
+    else
+        snprintf(buf, sizeof(buf), "%-.10g", d);
+    if ((sp = strchr(buf, ' ')) != 0)
+        *sp = '\0';
+    rb_raise(rb_eRangeError, "float %s out of range of %s", buf, type);
+}
+
 long
 rb_num2long(VALUE v)
 {
@@ -3555,6 +3618,12 @@ rb_num2long(VALUE v)
         return FIX2LONG(v);
     if (NIL_P(v))
         rb_raise(rb_eTypeError, "no implicit conversion from nil to integer");
+    if (RB_FLOAT_TYPE_P(v)) {
+        double d = RFLOAT_VALUE(v);
+        if (d < LONG_MAX_PLUS_ONE && LONG_MIN_MINUS_ONE_IS_LESS_THAN(d))
+            return (long)d;
+        float_out_of_range(v, "integer");
+    }
     int64_t i;
     if (!api->int_get(ctx(), M(v), &i))
         capi_unwind();
@@ -3609,6 +3678,12 @@ rb_num2ulong(VALUE v)
 {
     uint64_t u;
     unsigned_nil_check(v);
+    if (RB_FLOAT_TYPE_P(v)) {
+        double d = RFLOAT_VALUE(v);
+        if (d < ULONG_MAX_PLUS_ONE && LONG_MIN_MINUS_ONE_IS_LESS_THAN(d))
+            return d < 0 ? (unsigned long)(long)d : (unsigned long)d;
+        float_out_of_range(v, "integer");
+    }
     if (num2u64_big(v, &u))
         return (unsigned long)u;
     return (unsigned long)rb_num2long(v);
@@ -3685,6 +3760,16 @@ double
 rb_num2dbl(VALUE v)
 {
     double d;
+    /* object.c's implicit_conversion_to_float: these are not converted
+     * through #to_f. */
+    if (NIL_P(v))
+        rb_raise(rb_eTypeError, "no implicit conversion to float from nil");
+    if (v == Qtrue)
+        rb_raise(rb_eTypeError, "no implicit conversion to float from true");
+    if (v == Qfalse)
+        rb_raise(rb_eTypeError, "no implicit conversion to float from false");
+    if (RB_TYPE_P(v, T_STRING))
+        rb_raise(rb_eTypeError, "no implicit conversion to float from string");
     if (!api->float_get(ctx(), M(v), &d))
         capi_unwind();
     return d;
@@ -3803,11 +3888,18 @@ rb_str_new_shared(VALUE str)
     return rb_str_dup(str);
 }
 
+/* An instance of `obj`'s class in `obj`'s encoding (string.c's
+ * str_enc_new), made without running #initialize. */
 VALUE
 rb_str_new_with_class(VALUE obj, const char *ptr, long len)
 {
-    (void)obj;
-    return rb_str_new(ptr, len);
+    VALUE s = rb_enc_str_new(ptr, len, rb_enc_get(obj));
+    VALUE klass = rb_obj_class(obj);
+    if (klass == rb_cString)
+        return s;
+    VALUE r = rb_obj_alloc(klass);
+    rb_funcall(r, rb_intern("replace"), 1, s);
+    return r;
 }
 
 VALUE
@@ -4104,7 +4196,22 @@ rb_string_value_cstr(volatile VALUE *ptr)
     if (!p)
         capi_unwind();
     long len = (long)n;
-    if (memchr(p, 0, (size_t)len))
+    /* string.c's str_null_check: a wide encoding looks for a NUL
+     * character, not a NUL byte. */
+    int minlen = rb_enc_mbminlen(rb_enc_get(s));
+    if (minlen > 1) {
+        for (long i = 0; i + minlen <= len; i += minlen) {
+            int zero = 1;
+            for (int j = 0; j < minlen; j++)
+                if (p[i + j]) {
+                    zero = 0;
+                    break;
+                }
+            if (zero)
+                rb_raise(rb_eArgError, "string contains null char");
+        }
+    }
+    else if (memchr(p, 0, (size_t)len))
         rb_raise(rb_eArgError, "string contains null byte");
     return p;
 }
@@ -4178,7 +4285,8 @@ rb_str2inum(VALUE str, int base)
 VALUE
 rb_cstr2inum(const char *str, int base)
 {
-    return rb_str_to_inum(rb_str_new_cstr(str), base, 1);
+    /* bignum.c: strict only when the base is to be detected. */
+    return rb_cstr_to_inum(str, base, base == 0);
 }
 
 double
@@ -4208,7 +4316,9 @@ rb_ary_new(void)
 VALUE
 rb_ary_new_capa(long capa)
 {
-    (void)capa;
+    /* array.c's ary_new: the capacity itself is only a hint here. */
+    if (capa < 0 || (unsigned long)capa > LONG_MAX / sizeof(VALUE))
+        rb_raise(rb_eArgError, "negative array size (or size too big)");
     return rb_ary_new();
 }
 
@@ -4494,7 +4604,9 @@ rb_hash_new(void)
 VALUE
 rb_hash_new_capa(long capa)
 {
-    (void)capa;
+    /* A negative capacity is a huge st_index_t to CRuby's st.c. */
+    if (capa < 0)
+        rb_raise(rb_eRuntimeError, "st_table too big");
     return rb_hash_new();
 }
 
@@ -5026,24 +5138,38 @@ rb_enc_str_new_static(const char *ptr, long len, rb_encoding *enc)
     return rb_enc_str_new(ptr, len, enc);
 }
 
-/* As CRuby's: bytes US-ASCII cannot hold make a BINARY string. (The
- * conversion to `Encoding.default_internal` is not done.) */
+static int
+has_nonascii(const char *ptr, long len)
+{
+    for (long i = 0; i < len; i++)
+        if ((unsigned char)ptr[i] & 0x80)
+            return 1;
+    return 0;
+}
+
+/* string.c's: bytes US-ASCII cannot hold make a BINARY string, and text
+ * is converted to `Encoding.default_internal` when one is set (kept in
+ * its own encoding when it cannot be). */
 VALUE
 rb_external_str_new_with_enc(const char *ptr, long len, rb_encoding *enc)
 {
-    if (ptr && enc == rb_usascii_encoding()) {
-        for (long i = 0; i < len; i++) {
-            if ((unsigned char)ptr[i] & 0x80)
-                return rb_str_new(ptr, len);
-        }
-    }
-    return rb_enc_str_new(ptr, len, enc);
+    if (!ptr)
+        return rb_enc_str_new(ptr, len, enc);
+    if (enc == rb_ascii8bit_encoding() || (enc == rb_usascii_encoding() && has_nonascii(ptr, len)))
+        return rb_str_new(ptr, len);
+    rb_encoding *ienc = rb_default_internal_encoding();
+    if (!ienc || enc == ienc)
+        return rb_enc_str_new(ptr, len, enc);
+    if (enc == rb_usascii_encoding() || (rb_enc_asciicompat(enc) && !has_nonascii(ptr, len)))
+        return rb_enc_str_new(ptr, len, ienc);
+    VALUE str = rb_enc_str_new(ptr, len, enc);
+    return rb_str_conv_enc(str, enc, ienc);
 }
 
 VALUE
 rb_str_export_to_enc(VALUE str, rb_encoding *enc)
 {
-    return rb_funcall(str, rb_intern("encode"), 1, rb_str_new_cstr(enc->name));
+    return rb_str_conv_enc(str, rb_enc_get(str), enc);
 }
 
 struct conv_args {
@@ -5088,13 +5214,37 @@ rb_str_conv_enc(VALUE str, rb_encoding *from, rb_encoding *to)
     return r;
 }
 
+/* transcode.c's: the ECONV_* flags become String#encode's options, on
+ * top of the options Hash (whose :replace is the one other key a C
+ * caller sets). ECONV_UNDEF_HEX_CHARREF has no option of its own and
+ * is not passed on. */
 VALUE
 rb_str_encode(VALUE str, VALUE to, int ecflags, VALUE ecopts)
 {
-    (void)ecflags;
-    if (NIL_P(ecopts))
-        return rb_funcall(str, rb_intern("encode"), 1, to);
-    return rb_funcall(str, rb_intern("encode"), 2, to, ecopts);
+    VALUE opts = NIL_P(ecopts) ? rb_hash_new() : rb_hash_dup(ecopts);
+    if ((ecflags & ECONV_INVALID_MASK) == ECONV_INVALID_REPLACE)
+        rb_hash_aset(opts, ID2SYM(rb_intern("invalid")), ID2SYM(rb_intern("replace")));
+    if ((ecflags & ECONV_UNDEF_MASK) == ECONV_UNDEF_REPLACE)
+        rb_hash_aset(opts, ID2SYM(rb_intern("undef")), ID2SYM(rb_intern("replace")));
+    if (ecflags & ECONV_UNIVERSAL_NEWLINE_DECORATOR)
+        rb_hash_aset(opts, ID2SYM(rb_intern("universal_newline")), Qtrue);
+    if (ecflags & ECONV_CRLF_NEWLINE_DECORATOR)
+        rb_hash_aset(opts, ID2SYM(rb_intern("crlf_newline")), Qtrue);
+    if (ecflags & ECONV_CR_NEWLINE_DECORATOR)
+        rb_hash_aset(opts, ID2SYM(rb_intern("cr_newline")), Qtrue);
+    if (ecflags & ECONV_LF_NEWLINE_DECORATOR)
+        rb_hash_aset(opts, ID2SYM(rb_intern("lf_newline")), Qtrue);
+    if (ecflags & ECONV_XML_TEXT_DECORATOR)
+        rb_hash_aset(opts, ID2SYM(rb_intern("xml")), ID2SYM(rb_intern("text")));
+    if (ecflags & ECONV_XML_ATTR_CONTENT_DECORATOR)
+        rb_hash_aset(opts, ID2SYM(rb_intern("xml")), ID2SYM(rb_intern("attr")));
+    VALUE r;
+    if (RHASH_SIZE(opts) == 0)
+        r = rb_funcall(str, rb_intern("encode"), 1, to);
+    else
+        r = rb_funcallv_kw(str, rb_intern("encode"), 2, (VALUE[]){to, opts}, RB_PASS_KEYWORDS);
+    /* A new String even when nothing changed. */
+    return r == str ? rb_str_dup(str) : r;
 }
 
 /* Per encoding index: 0 not asked yet, 1 ASCII-compatible, 2 not. */
@@ -6083,7 +6233,25 @@ rb_struct_alloc(VALUE klass, VALUE values)
 VALUE
 rb_struct_initialize(VALUE self, VALUE values)
 {
-    rb_apply(self, rb_intern("initialize"), values);
+    /* struct.c's rb_struct_modify: a frozen struct or Data is not
+     * refilled (Data#initialize itself does not check). */
+    rb_check_frozen(self);
+    VALUE data = rb_const_get(rb_cObject, rb_intern("Data"));
+    if (!RTEST(rb_obj_is_kind_of(self, data))) {
+        rb_apply(self, rb_intern("initialize"), values);
+        return Qnil;
+    }
+    /* struct.c fills a Data positionally, as Struct#initialize would,
+     * and freezes it: Data#initialize takes the members by keyword. */
+    VALUE members = rb_funcall(rb_obj_class(self), rb_intern("members"), 0);
+    long n = RARRAY_LEN(members), argc = RARRAY_LEN(values);
+    if (argc > n)
+        rb_raise(rb_eArgError, "struct size differs");
+    VALUE kw = rb_hash_new();
+    for (long i = 0; i < n; i++)
+        rb_hash_aset(kw, RARRAY_AREF(members, i), i < argc ? RARRAY_AREF(values, i) : Qnil);
+    rb_funcallv_kw(self, rb_intern("initialize"), 1, &kw, RB_PASS_KEYWORDS);
+    rb_obj_freeze(self);
     return Qnil;
 }
 
@@ -8101,6 +8269,7 @@ VALUE
 rb_str_locktmp(VALUE str)
 {
     StringValue(str);
+    rb_check_frozen(str);
     return str;
 }
 
@@ -8108,6 +8277,7 @@ VALUE
 rb_str_unlocktmp(VALUE str)
 {
     StringValue(str);
+    rb_check_frozen(str);
     return str;
 }
 
@@ -10098,4 +10268,951 @@ rb_arithmetic_sequence_beg_len_step(VALUE obj, long *begp, long *lenp, long *ste
         return Qnil;
     }
     return range_component_beg_len(aseq.begin, aseq.end, aseq.exclude_end, begp, lenp, len, err);
+}
+
+/* ---------------------------------------------------------------------
+ * Data types: the functions doc/c_api.md §3.27 adds (String, Array,
+ * Hash, Set, Struct / Data, numbers, Symbols and IDs), each over the
+ * Ruby method CRuby's own implementation amounts to.
+ * --------------------------------------------------------------------- */
+
+/* String */
+
+static long
+str_char_len(VALUE str)
+{
+    return NUM2LONG(rb_str_length(str));
+}
+
+static long
+str_char_bytes(VALUE str, long beg, long len)
+{
+    VALUE sub = rb_str_substr(str, beg, len);
+    return NIL_P(sub) ? 0 : RSTRING_LEN(sub);
+}
+
+char *
+rb_str_subpos(VALUE str, long beg, long *lenp)
+{
+    long len = *lenp;
+    if (len < 0 || beg == LONG_MIN)
+        return NULL;
+    long slen = str_char_len(str);
+    if (beg < 0) {
+        beg += slen;
+        if (beg < 0)
+            return NULL;
+    }
+    if (beg > slen)
+        return NULL;
+    if (len > slen - beg)
+        len = slen - beg;
+    long off = str_char_bytes(str, 0, beg);
+    *lenp = str_char_bytes(str, beg, len);
+    return RSTRING_PTR(str) + off;
+}
+
+long
+rb_str_sublen(VALUE str, long pos)
+{
+    if (pos <= 0)
+        return pos;
+    if (pos > RSTRING_LEN(str))
+        pos = RSTRING_LEN(str);
+    VALUE head = rb_str_subseq(str, 0, pos);
+    return str_char_len(head);
+}
+
+long
+rb_str_offset(VALUE str, long pos)
+{
+    long slen = str_char_len(str);
+    if (pos >= slen)
+        return RSTRING_LEN(str);
+    return pos <= 0 ? 0 : str_char_bytes(str, 0, pos);
+}
+
+void
+rb_str_update(VALUE str, long beg, long len, VALUE val)
+{
+    if (len < 0)
+        rb_raise(rb_eIndexError, "negative length %ld", len);
+    StringValue(val);
+    rb_enc_check(str, val);
+    long slen = str_char_len(str);
+    if (slen < beg || (beg < 0 && beg + slen < 0))
+        rb_raise(rb_eIndexError, "index %ld out of string", beg);
+    rb_funcall(str, rb_intern("[]="), 3, LONG2NUM(beg), LONG2NUM(len), val);
+}
+
+VALUE
+rb_str_export(VALUE str)
+{
+    return rb_str_export_to_enc(str, rb_default_external_encoding());
+}
+
+VALUE
+rb_str_export_locale(VALUE str)
+{
+    return rb_str_export_to_enc(str, rb_locale_encoding());
+}
+
+VALUE
+rb_str_encode_ospath(VALUE path)
+{
+    /* Only Windows converts (file.c). */
+    return path;
+}
+
+void
+rb_str_free(VALUE str)
+{
+    /* The collector owns a String's buffer. */
+    (void)str;
+}
+
+int
+rb_str_comparable(VALUE str1, VALUE str2)
+{
+    if (RSTRING_LEN(str1) == 0 || RSTRING_LEN(str2) == 0)
+        return 1;
+    rb_encoding *e1 = rb_enc_get(str1), *e2 = rb_enc_get(str2);
+    if (e1 == e2)
+        return 1;
+    int a1 = rb_enc_str_coderange(str1) == ENC_CODERANGE_7BIT;
+    int a2 = rb_enc_str_coderange(str2) == ENC_CODERANGE_7BIT;
+    if (a1 && (a2 || rb_enc_asciicompat(e2)))
+        return 1;
+    if (a2 && rb_enc_asciicompat(e1))
+        return 1;
+    return 0;
+}
+
+int
+rb_str_hash_cmp(VALUE str1, VALUE str2)
+{
+    return RSTRING_LEN(str1) != RSTRING_LEN(str2) || !rb_str_comparable(str1, str2) ||
+           memcmp(RSTRING_PTR(str1), RSTRING_PTR(str2), (size_t)RSTRING_LEN(str1)) != 0;
+}
+
+VALUE
+rb_str_ellipsize(VALUE str, long len)
+{
+    if (len < 0)
+        rb_raise(rb_eIndexError, "negative length %ld", len);
+    if (str_char_len(str) <= len)
+        return str;
+    VALUE dots = rb_str_new_cstr("...");
+    rb_encoding *enc = rb_enc_get(str);
+    if (len <= 3) {
+        VALUE r = rb_str_new("...", len);
+        if (rb_enc_asciicompat(enc))
+            return rb_enc_associate(r, enc);
+        return rb_str_encode(rb_enc_associate(r, rb_usascii_encoding()), rb_enc_from_encoding(enc), 0, Qnil);
+    }
+    VALUE r = rb_str_substr(str, 0, len - 3);
+    if (!rb_enc_asciicompat(enc))
+        dots = rb_str_encode(rb_enc_associate(dots, rb_usascii_encoding()), rb_enc_from_encoding(enc), 0, Qnil);
+    return rb_str_plus(r, dots);
+}
+
+/* Qnil when there is nothing to replace (string.c's enc_str_scrub). */
+VALUE
+rb_str_scrub(VALUE str, VALUE repl)
+{
+    if (RTEST(rb_funcall(str, rb_intern("valid_encoding?"), 0)))
+        return Qnil;
+    if (NIL_P(repl))
+        return rb_funcall(str, rb_intern("scrub"), 0);
+    return rb_funcall(str, rb_intern("scrub"), 1, repl);
+}
+
+VALUE
+rb_str_succ(VALUE orig)
+{
+    return rb_funcall(orig, rb_intern("succ"), 0);
+}
+
+VALUE
+rb_usascii_str_new_static(const char *ptr, long len)
+{
+    return rb_usascii_str_new(ptr, len);
+}
+
+/* A frozen, deduplicated String: US-ASCII, or BINARY when the bytes
+ * are not ASCII. */
+VALUE
+rb_interned_str(const char *ptr, long len)
+{
+    VALUE s = has_nonascii(ptr, len) ? rb_str_new(ptr, len) : rb_usascii_str_new(ptr, len);
+    return rb_funcall(s, rb_intern("-@"), 0);
+}
+
+VALUE
+rb_interned_str_cstr(const char *ptr)
+{
+    return rb_interned_str(ptr, (long)strlen(ptr));
+}
+
+void
+rb_invalid_str(const char *str, const char *type)
+{
+    rb_raise(rb_eArgError, "invalid value for %s: %+" PRIsVALUE, type, rb_str_new_cstr(str));
+}
+
+/* pack.c's: up to six bytes, as Array#pack("U") writes. */
+int
+rb_uv_to_utf8(char buf[6], unsigned long uv)
+{
+    if (uv <= 0x7f) {
+        buf[0] = (char)uv;
+        return 1;
+    }
+    if (uv <= 0x7ff) {
+        buf[0] = (char)(((uv >> 6) & 0xff) | 0xc0);
+        buf[1] = (char)((uv & 0x3f) | 0x80);
+        return 2;
+    }
+    if (uv <= 0xffff) {
+        buf[0] = (char)(((uv >> 12) & 0xff) | 0xe0);
+        buf[1] = (char)(((uv >> 6) & 0x3f) | 0x80);
+        buf[2] = (char)((uv & 0x3f) | 0x80);
+        return 3;
+    }
+    if (uv <= 0x1fffff) {
+        buf[0] = (char)(((uv >> 18) & 0xff) | 0xf0);
+        buf[1] = (char)(((uv >> 12) & 0x3f) | 0x80);
+        buf[2] = (char)(((uv >> 6) & 0x3f) | 0x80);
+        buf[3] = (char)((uv & 0x3f) | 0x80);
+        return 4;
+    }
+    if (uv <= 0x3ffffff) {
+        buf[0] = (char)(((uv >> 24) & 0xff) | 0xf8);
+        buf[1] = (char)(((uv >> 18) & 0x3f) | 0x80);
+        buf[2] = (char)(((uv >> 12) & 0x3f) | 0x80);
+        buf[3] = (char)(((uv >> 6) & 0x3f) | 0x80);
+        buf[4] = (char)((uv & 0x3f) | 0x80);
+        return 5;
+    }
+    if (uv <= 0x7fffffff) {
+        buf[0] = (char)(((uv >> 30) & 0xff) | 0xfc);
+        buf[1] = (char)(((uv >> 24) & 0x3f) | 0x80);
+        buf[2] = (char)(((uv >> 18) & 0x3f) | 0x80);
+        buf[3] = (char)(((uv >> 12) & 0x3f) | 0x80);
+        buf[4] = (char)(((uv >> 6) & 0x3f) | 0x80);
+        buf[5] = (char)((uv & 0x3f) | 0x80);
+        return 6;
+    }
+    rb_raise(rb_eRangeError, "pack(U): value out of range");
+    UNREACHABLE_RETURN(0);
+}
+
+int
+rb_memcicmp(const void *x, const void *y, long len)
+{
+    const unsigned char *p1 = x, *p2 = y;
+    while (len-- > 0) {
+        int c1 = *p1++, c2 = *p2++;
+        if (c1 >= 'A' && c1 <= 'Z')
+            c1 += 'a' - 'A';
+        if (c2 >= 'A' && c2 <= 'Z')
+            c2 += 'a' - 'A';
+        if (c1 != c2)
+            return c1 - c2;
+    }
+    return 0;
+}
+
+/* Array */
+
+void
+rb_mem_clear(VALUE *mem, long size)
+{
+    while (size-- > 0)
+        *mem++ = Qnil;
+}
+
+void
+rb_ary_modify(VALUE ary)
+{
+    rb_check_frozen(ary);
+}
+
+void
+rb_ary_free(VALUE ary)
+{
+    (void)ary;
+}
+
+VALUE
+rb_ary_resurrect(VALUE ary)
+{
+    return rb_ary_dup(ary);
+}
+
+/* The Array rotated in place, or nil when nothing moved. */
+VALUE
+rb_ary_rotate(VALUE ary, long cnt)
+{
+    rb_ary_modify(ary);
+    long len = RARRAY_LEN(ary);
+    if (cnt == 0 || len <= 1 || cnt % len == 0)
+        return Qnil;
+    rb_funcall(ary, rb_intern("rotate!"), 1, LONG2NUM(cnt));
+    return ary;
+}
+
+VALUE
+rb_ary_cmp(VALUE ary1, VALUE ary2)
+{
+    if (NIL_P(rb_check_array_type(ary2)))
+        return Qnil;
+    return rb_funcall(ary1, rb_intern("<=>"), 1, ary2);
+}
+
+VALUE
+rb_ary_replace(VALUE copy, VALUE orig)
+{
+    return rb_funcall(copy, rb_intern("replace"), 1, orig);
+}
+
+VALUE
+rb_ary_rassoc(VALUE ary, VALUE value)
+{
+    return rb_funcall(ary, rb_intern("rassoc"), 1, value);
+}
+
+/* Array#each itself: yields to the calling method's block, or answers
+ * an Enumerator without one. */
+VALUE
+rb_ary_each(VALUE ary)
+{
+    return rb_funcall_passing_block(ary, rb_intern("each"), 0, NULL);
+}
+
+/* Hash */
+
+void
+rb_hash_bulk_insert(long argc, const VALUE *argv, VALUE hash)
+{
+    for (long i = 0; i + 1 < argc; i += 2)
+        rb_hash_aset(hash, argv[i], argv[i + 1]);
+}
+
+VALUE
+rb_hash_delete_if(VALUE hash)
+{
+    return rb_funcall_passing_block(hash, rb_intern("delete_if"), 0, NULL);
+}
+
+struct hash_update_by_arg {
+    VALUE hash;
+    rb_hash_update_func *func;
+};
+
+static int
+hash_update_by_i(VALUE key, VALUE value, VALUE data)
+{
+    struct hash_update_by_arg *a = (struct hash_update_by_arg *)data;
+    if (a->func && RTEST(rb_funcall(a->hash, rb_intern("key?"), 1, key)))
+        value = (*a->func)(key, rb_hash_aref(a->hash, key), value);
+    rb_hash_aset(a->hash, key, value);
+    return ST_CONTINUE;
+}
+
+VALUE
+rb_hash_update_by(VALUE hash1, VALUE hash2, rb_hash_update_func *func)
+{
+    rb_check_frozen(hash1);
+    hash2 = rb_convert_type(hash2, T_HASH, "Hash", "to_hash");
+    struct hash_update_by_arg a = {hash1, func};
+    rb_hash_foreach(hash2, hash_update_by_i, (VALUE)&a);
+    return hash1;
+}
+
+/* Set (set.c's C API, new in Ruby 4.0) */
+
+VALUE
+rb_set_new(void)
+{
+    return rb_class_new_instance(0, NULL, rb_cSet);
+}
+
+VALUE
+rb_set_new_capa(size_t capa)
+{
+    (void)capa;
+    return rb_set_new();
+}
+
+bool
+rb_set_lookup(VALUE set, VALUE element)
+{
+    return RTEST(rb_funcall(set, rb_intern("include?"), 1, element));
+}
+
+bool
+rb_set_add(VALUE set, VALUE element)
+{
+    return !NIL_P(rb_funcall(set, rb_intern("add?"), 1, element));
+}
+
+VALUE
+rb_set_clear(VALUE set)
+{
+    return rb_funcall(set, rb_intern("clear"), 0);
+}
+
+bool
+rb_set_delete(VALUE set, VALUE element)
+{
+    return !NIL_P(rb_funcall(set, rb_intern("delete?"), 1, element));
+}
+
+size_t
+rb_set_size(VALUE set)
+{
+    return NUM2SIZET(rb_funcall(set, rb_intern("size"), 0));
+}
+
+/* Each element of a snapshot, until `func` answers ST_STOP; ST_DELETE
+ * removes the element. */
+void
+rb_set_foreach(VALUE set, int (*func)(VALUE element, VALUE arg), VALUE arg)
+{
+    VALUE elems = rb_funcall(set, rb_intern("to_a"), 0);
+    for (long i = 0; i < RARRAY_LEN(elems); i++) {
+        VALUE e = RARRAY_AREF(elems, i);
+        int st = (*func)(e, arg);
+        if (st == ST_STOP)
+            break;
+        if (st == ST_DELETE)
+            rb_funcall(set, rb_intern("delete"), 1, e);
+    }
+}
+
+/* Struct / Data */
+
+VALUE
+rb_struct_alloc_noinit(VALUE klass)
+{
+    return rb_obj_alloc(klass);
+}
+
+/* struct.c's struct_make_members_list. */
+static VALUE
+struct_members_list(va_list ap)
+{
+    VALUE list = rb_ary_new();
+    for (const char *m; (m = va_arg(ap, const char *)) != NULL;) {
+        VALUE sym = ID2SYM(rb_intern(m));
+        if (RTEST(rb_ary_includes(list, sym)))
+            rb_raise(rb_eArgError, "duplicate member: %s", m);
+        rb_ary_push(list, sym);
+    }
+    return list;
+}
+
+/* A Struct class with the members but without their accessors. Only
+ * Struct itself can be the superclass, and the allocator stays the
+ * Struct one. */
+static VALUE
+struct_define_without_accessor(VALUE outer, const char *name, VALUE super, VALUE members)
+{
+    if (super && super != rb_cStruct)
+        rb_raise(rb_eNotImpError, "rb_struct_define_without_accessor: a superclass other than Struct");
+    VALUE klass = rb_apply(rb_cStruct, rb_intern("new"), members);
+    for (long i = 0; i < RARRAY_LEN(members); i++) {
+        ID id = SYM2ID(RARRAY_AREF(members, i));
+        rb_undef_method(klass, rb_id2name(id));
+        rb_undef_method(klass, rb_id2name(rb_id_attrset(id)));
+    }
+    if (name)
+        rb_const_set(outer ? outer : rb_cObject, rb_intern(name), klass);
+    return klass;
+}
+
+VALUE
+rb_struct_define_without_accessor(const char *name, VALUE super, rb_alloc_func_t alloc, ...)
+{
+    (void)alloc;
+    va_list ap;
+    va_start(ap, alloc);
+    VALUE members = struct_members_list(ap);
+    va_end(ap);
+    return struct_define_without_accessor(0, name, super, members);
+}
+
+VALUE
+rb_struct_define_without_accessor_under(VALUE outer, const char *name, VALUE super,
+                                        rb_alloc_func_t alloc, ...)
+{
+    (void)alloc;
+    va_list ap;
+    va_start(ap, alloc);
+    VALUE members = struct_members_list(ap);
+    va_end(ap);
+    return struct_define_without_accessor(outer, name, super, members);
+}
+
+VALUE
+rb_data_define(VALUE super, ...)
+{
+    va_list ap;
+    va_start(ap, super);
+    VALUE members = struct_members_list(ap);
+    va_end(ap);
+    if (!super)
+        super = rb_const_get(rb_cObject, rb_intern("Data"));
+    Check_Type(super, T_CLASS);
+    VALUE klass = rb_apply(super, rb_intern("define"), members);
+    rb_gc_register_mark_object(klass);
+    return klass;
+}
+
+/* Numbers */
+
+void
+rb_num_zerodiv(void)
+{
+    rb_raise(rb_eZeroDivError, "divided by 0");
+}
+
+void
+rb_out_of_int(SIGNED_VALUE num)
+{
+    rb_raise(rb_eRangeError, "integer %" PRIdVALUE " too %s to convert to 'int'", num,
+             num < 0 ? "small" : "big");
+}
+
+void
+rb_cmperr(VALUE x, VALUE y)
+{
+    rb_raise(rb_eArgError, "comparison of %" PRIsVALUE " with %" PRIsVALUE " failed",
+             rb_obj_class(x), coerce_desc(y));
+}
+
+VALUE
+rb_num_coerce_bit(VALUE x, VALUE y, ID func)
+{
+    num_coerce(&x, &y, 1);
+    return rb_funcall(x, func, 1, y);
+}
+
+VALUE
+rb_num2fix(VALUE val)
+{
+    if (FIXNUM_P(val))
+        return val;
+    long v = rb_num2long(val);
+    if (!FIXABLE(v))
+        rb_raise(rb_eRangeError, "integer %ld out of range of fixnum", v);
+    return LONG2FIX(v);
+}
+
+short
+rb_fix2short(VALUE num)
+{
+    return rb_num2short(num);
+}
+
+unsigned short
+rb_fix2ushort(VALUE num)
+{
+    return rb_num2ushort(num);
+}
+
+VALUE
+rb_fix2str(VALUE val, int base)
+{
+    return rb_funcall(val, rb_intern("to_s"), 1, INT2FIX(base));
+}
+
+VALUE
+rb_dbl_cmp(double a, double b)
+{
+    if (isnan(a) || isnan(b))
+        return Qnil;
+    if (a == b)
+        return INT2FIX(0);
+    return INT2FIX(a > b ? 1 : -1);
+}
+
+VALUE
+rb_check_to_int(VALUE val)
+{
+    if (RB_INTEGER_TYPE_P(val))
+        return val;
+    val = rb_check_funcall(val, rb_intern("to_int"), 0, NULL);
+    return RB_INTEGER_TYPE_P(val) ? val : Qnil;
+}
+
+VALUE
+rb_check_to_float(VALUE val)
+{
+    if (RB_FLOAT_TYPE_P(val))
+        return val;
+    if (!rb_obj_is_kind_of(val, rb_cNumeric))
+        return Qnil;
+    return rb_check_convert_type(val, T_FLOAT, "Float", "to_f");
+}
+
+int
+rb_big_sign(VALUE num)
+{
+    return !RTEST(rb_funcall(num, rb_intern("negative?"), 0));
+}
+
+int
+rb_bigzero_p(VALUE x)
+{
+    return RTEST(rb_funcall(x, rb_intern("zero?"), 0));
+}
+
+VALUE
+rb_big_clone(VALUE num)
+{
+    /* An Integer is immutable here: the value itself stands in. */
+    return num;
+}
+
+VALUE
+rb_big_eql(VALUE x, VALUE y)
+{
+    return RTEST(rb_funcall(x, rb_intern("eql?"), 1, y)) ? Qtrue : Qfalse;
+}
+
+VALUE
+rb_big_idiv(VALUE x, VALUE y)
+{
+    return rb_funcall(x, rb_intern("div"), 1, y);
+}
+
+VALUE
+rb_big_divmod(VALUE x, VALUE y)
+{
+    return rb_funcall(x, rb_intern("divmod"), 1, y);
+}
+
+/* bignum.c's absint_numwords_generic: words of `word_numbits` bits the
+ * absolute value needs, and the unused leading bits of the last one. */
+size_t
+rb_absint_numwords(VALUE val, size_t word_numbits, size_t *nlz_bits_ret)
+{
+    VALUE abs = rb_funcall(rb_to_int(val), rb_intern("abs"), 0);
+    size_t bits = NUM2SIZET(rb_funcall(abs, rb_intern("bit_length"), 0));
+    size_t words = (bits + word_numbits - 1) / word_numbits;
+    if (nlz_bits_ret)
+        *nlz_bits_ret = words * word_numbits - bits;
+    return words;
+}
+
+/* The bytes of `words` as an Integer, MS byte first. */
+VALUE
+rb_integer_unpack(const void *words, size_t numwords, size_t wordsize, size_t nails, int flags)
+{
+    if (nails != 0)
+        rb_raise(rb_eNotImpError, "rb_integer_unpack: nails are not supported");
+    size_t n = numwords * wordsize;
+    const unsigned char *in = (const unsigned char *)words;
+    int msword = flags & INTEGER_PACK_MSWORD_FIRST;
+    int msbyte = (flags & INTEGER_PACK_MSBYTE_FIRST) ||
+                 ((flags & INTEGER_PACK_NATIVE_BYTE_ORDER) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__);
+    char *hex = ALLOCA_N(char, n * 2 + 2);
+    static const char digits[] = "0123456789abcdef";
+    for (size_t i = 0; i < n; i++) {
+        /* i counts from the most significant byte. */
+        size_t k = n - 1 - i, w = k / wordsize, b = k % wordsize;
+        size_t wi = msword ? numwords - 1 - w : w;
+        size_t bi = msbyte ? wordsize - 1 - b : b;
+        unsigned char c = in[wi * wordsize + bi];
+        hex[i * 2] = digits[c >> 4];
+        hex[i * 2 + 1] = digits[c & 15];
+    }
+    if (n == 0)
+        hex[n++ * 2] = '0', hex[1] = '0';
+    hex[n * 2] = 0;
+    VALUE v = rb_cstr_to_inum(hex, 16, 0);
+    if (flags & INTEGER_PACK_2COMP) {
+        int top = n > 0 && (hex[0] >= '8');
+        if ((flags & INTEGER_PACK_NEGATIVE) || top) {
+            VALUE limit = rb_funcall(INT2FIX(1), rb_intern("<<"), 1, SIZET2NUM(numwords * wordsize * 8));
+            if ((flags & INTEGER_PACK_NEGATIVE) && RTEST(rb_funcall(v, rb_intern("zero?"), 0)))
+                v = rb_funcall(limit, rb_intern("-@"), 0);
+            else if (top)
+                v = rb_funcall(v, rb_intern("-"), 1, limit);
+        }
+    }
+    else if (flags & INTEGER_PACK_NEGATIVE)
+        v = rb_funcall(v, rb_intern("-@"), 0);
+    return v;
+}
+
+void
+rb_big_pack(VALUE val, unsigned long *buf, long num_longs)
+{
+    rb_integer_pack(val, buf, (size_t)num_longs, sizeof(long), 0,
+                    INTEGER_PACK_LSWORD_FIRST | INTEGER_PACK_NATIVE_BYTE_ORDER | INTEGER_PACK_2COMP);
+}
+
+VALUE
+rb_big_unpack(unsigned long *buf, long num_longs)
+{
+    return rb_integer_unpack(buf, (size_t)num_longs, sizeof(long), 0,
+                             INTEGER_PACK_LSWORD_FIRST | INTEGER_PACK_NATIVE_BYTE_ORDER | INTEGER_PACK_2COMP);
+}
+
+VALUE
+rb_flt_rationalize(VALUE flt)
+{
+    return rb_funcall(flt, rb_intern("rationalize"), 0);
+}
+
+VALUE
+rb_flt_rationalize_with_prec(VALUE flt, VALUE prec)
+{
+    return rb_funcall(flt, rb_intern("rationalize"), 1, prec);
+}
+
+/* Complex */
+
+VALUE
+rb_complex_raw(VALUE real, VALUE imag)
+{
+    return rb_funcall(rb_cComplex, rb_intern("rect"), 2, real, imag);
+}
+
+VALUE
+rb_dbl_complex_new(double real, double imag)
+{
+    return rb_complex_raw(DBL2NUM(real), DBL2NUM(imag));
+}
+
+VALUE
+rb_complex_new_polar(VALUE abs, VALUE arg)
+{
+    return rb_funcall(rb_cComplex, rb_intern("polar"), 2, abs, arg);
+}
+
+VALUE
+rb_complex_polar(VALUE abs, VALUE arg)
+{
+    return rb_complex_new_polar(abs, arg);
+}
+
+#define COMPLEX_UNARY(name, meth)                       \
+    VALUE name(VALUE z) { return rb_funcall(z, rb_intern(meth), 0); }
+#define COMPLEX_BINARY(name, meth)                      \
+    VALUE name(VALUE x, VALUE y) { return rb_funcall(x, rb_intern(meth), 1, y); }
+COMPLEX_UNARY(rb_complex_real, "real")
+COMPLEX_UNARY(rb_complex_imag, "imaginary")
+COMPLEX_UNARY(rb_complex_abs, "abs")
+COMPLEX_UNARY(rb_complex_arg, "arg")
+COMPLEX_UNARY(rb_complex_conjugate, "conjugate")
+COMPLEX_UNARY(rb_complex_uminus, "-@")
+COMPLEX_BINARY(rb_complex_plus, "+")
+COMPLEX_BINARY(rb_complex_minus, "-")
+COMPLEX_BINARY(rb_complex_mul, "*")
+COMPLEX_BINARY(rb_complex_div, "/")
+COMPLEX_BINARY(rb_complex_pow, "**")
+#undef COMPLEX_UNARY
+#undef COMPLEX_BINARY
+
+/* Symbols and IDs: symbol.c's ID scopes, read off the name as
+ * rb_enc_symname_type parses it. */
+
+enum id_scope { IDS_LOCAL, IDS_INSTANCE, IDS_GLOBAL, IDS_ATTRSET, IDS_CONST, IDS_CLASS, IDS_JUNK, IDS_OP };
+
+static int
+ident_char(unsigned char c)
+{
+    return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+           c >= 0x80;
+}
+
+/* The operator IDs (symbol.c's op_tbl, and every one-character name
+ * that is not an identifier). */
+static int
+op_name(const char *s, long n)
+{
+    static const char *const ops[] = {"..", "...", "+@", "-@", "**", "<=>", "==", "===", "!=", ">=", "<=",
+                                      "&&", "||", "=~", "!~", "[]", "<<",  ">>", "::", "->", NULL};
+    if (n == 1)
+        return !ident_char((unsigned char)s[0]);
+    for (int i = 0; ops[i]; i++)
+        if ((long)strlen(ops[i]) == n && memcmp(ops[i], s, (size_t)n) == 0)
+            return 1;
+    return 0;
+}
+
+/* The operator names a Symbol may spell without quotes. */
+static int
+op_symname(const char *s, long n)
+{
+    static const char *const ops[] = {"<",  "<<", "<=", "<=>", ">",  ">>", ">=", "==", "===", "=~",
+                                      "*",  "**", "+",  "-",   "+@", "-@", "|",  "^",  "&",   "/",
+                                      "%",  "~",  "`",  "[]",  "!",  "!=", "!~", NULL};
+    for (int i = 0; ops[i]; i++)
+        if ((long)strlen(ops[i]) == n && memcmp(ops[i], s, (size_t)n) == 0)
+            return 1;
+    return 0;
+}
+
+static int
+special_global(const char *s, long n)
+{
+    if (n == 1 && strchr("~*$?!@/\\;,.=:<>\"&`'+0", s[0]))
+        return 1;
+    if (s[0] == '-')
+        return n == 2 && ident_char((unsigned char)s[1]);
+    for (long i = 0; i < n; i++)
+        if (s[i] < '0' || s[i] > '9')
+            return 0;
+    return 1;
+}
+
+/* symbol.c's rb_enc_symname_type: the scope of a name, or -1 when it
+ * is not one a Symbol can spell without quotes. */
+static int
+symname_type(VALUE str)
+{
+    const char *s = RSTRING_PTR(str);
+    long n = RSTRING_LEN(str), m = 0;
+    int type;
+    if (n == 0)
+        return -1;
+    if (n == 3 && memcmp(s, "[]=", 3) == 0)
+        return IDS_ATTRSET;
+    if (op_symname(s, n))
+        return IDS_OP;
+    switch (s[0]) {
+    case '$':
+        if (n > 1 && special_global(s + 1, n - 1))
+            return IDS_GLOBAL;
+        type = IDS_GLOBAL;
+        m = 1;
+        break;
+    case '@':
+        type = IDS_INSTANCE;
+        m = 1;
+        if (n > 1 && s[1] == '@') {
+            type = IDS_CLASS;
+            m = 2;
+        }
+        break;
+    default: {
+        unsigned char c = (unsigned char)s[0];
+        if (c >= 'A' && c <= 'Z')
+            type = IDS_CONST;
+        else if (c >= 0x80 &&
+                 RTEST(rb_funcall(str, rb_intern("match?"), 1, rb_reg_new("\\A[[:upper:]]", 13, 0))))
+            type = IDS_CONST;
+        else if (ident_char(c))
+            type = IDS_LOCAL;
+        else
+            return -1;
+    }
+    }
+    if (m >= n || !ident_char((unsigned char)s[m]) || (s[m] >= '0' && s[m] <= '9'))
+        return -1;
+    while (m < n && ident_char((unsigned char)s[m]))
+        m++;
+    if (m < n && (s[m] == '!' || s[m] == '?')) {
+        if (type == IDS_GLOBAL || type == IDS_CLASS || type == IDS_INSTANCE)
+            return -1;
+        type = IDS_JUNK;
+        m++;
+    }
+    else if (m < n && s[m] == '=') {
+        type = IDS_ATTRSET;
+        m++;
+    }
+    return m == n ? type : -1;
+}
+
+static enum id_scope
+id_scope_of(ID id)
+{
+    VALUE str = rb_id2str(id);
+    if (!RTEST(str))
+        return IDS_JUNK;
+    if (RSTRING_LEN(str) == 3 && memcmp(RSTRING_PTR(str), "[]=", 3) == 0)
+        return IDS_ATTRSET;
+    if (op_name(RSTRING_PTR(str), RSTRING_LEN(str)))
+        return IDS_OP;
+    int t = symname_type(str);
+    return t < 0 || t == IDS_OP ? IDS_JUNK : (enum id_scope)t;
+}
+
+int rb_is_const_id(ID id) { return id_scope_of(id) == IDS_CONST; }
+int rb_is_class_id(ID id) { return id_scope_of(id) == IDS_CLASS; }
+int rb_is_global_id(ID id) { return id_scope_of(id) == IDS_GLOBAL; }
+int rb_is_instance_id(ID id) { return id_scope_of(id) == IDS_INSTANCE; }
+int rb_is_attrset_id(ID id) { return id_scope_of(id) == IDS_ATTRSET; }
+int rb_is_local_id(ID id) { return id_scope_of(id) == IDS_LOCAL; }
+int rb_is_junk_id(ID id) { return id_scope_of(id) == IDS_JUNK; }
+
+ID
+rb_id_attrset(ID id)
+{
+    enum id_scope scope = id_scope_of(id);
+    VALUE name = rb_id2str(id);
+    if (scope == IDS_OP) {
+        if (strcmp(RSTRING_PTR(name), "[]") == 0 || strcmp(RSTRING_PTR(name), "[]=") == 0)
+            return rb_intern("[]=");
+        rb_name_error(id, "cannot make operator ID :%" PRIsVALUE " attrset", name);
+    }
+    /* ID_JUNK is ID_INTERNAL, which takes an `=` too. */
+    if (scope == IDS_ATTRSET)
+        return id;
+    VALUE s = rb_str_dup(name);
+    rb_str_cat(s, "=", 1);
+    return rb_intern_str(s);
+}
+
+void
+rb_name_error(ID id, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    VALUE msg = rb_vsprintf(fmt, ap);
+    va_end(ap);
+    rb_exc_raise(rb_funcall(rb_eNameError, rb_intern("new"), 2, msg, ID2SYM(id)));
+}
+
+void
+rb_name_error_str(VALUE str, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    VALUE msg = rb_vsprintf(fmt, ap);
+    va_end(ap);
+    rb_exc_raise(rb_funcall(rb_eNameError, rb_intern("new"), 2, msg, str));
+}
+
+/* Whether a Symbol can spell the name without quotes. */
+int
+rb_enc_symname2_p(const char *name, long len, rb_encoding *enc)
+{
+    if (len <= 0)
+        return 0;
+    return symname_type(rb_enc_str_new(name, len, enc)) >= 0;
+}
+
+int
+rb_enc_symname_p(const char *name, rb_encoding *enc)
+{
+    return rb_enc_symname2_p(name, (long)strlen(name), enc);
+}
+
+int
+rb_symname_p(const char *name)
+{
+    return rb_enc_symname_p(name, rb_ascii8bit_encoding());
+}
+
+VALUE
+rb_sym_all_symbols(void)
+{
+    return rb_funcall(rb_cSymbol, rb_intern("all_symbols"), 0);
 }

@@ -498,6 +498,8 @@ fn build_capi_extensions(capi_dir: &Path) {
                 "HAVE_MATH_H",
                 "HAVE_STDBOOL_H",
                 "HAVE_STDLIB_H",
+                "HAVE_RB_COMPLEX_REAL",
+                "HAVE_RB_COMPLEX_IMAG",
             ],
             zlib: false,
             openssl: false,

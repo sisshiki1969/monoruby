@@ -1239,6 +1239,64 @@ CRuby 4.0.9 のヘッダと ruby/spec `optional/capi` を突き合わせ、層�
   （以前は読み込みで落ちていた spec ファイルが動くようになり例数が増えた。
   既に動いていた例で新たに落ちたものは無い）。
 
+### 3.27 データ型の残りの関数（段階 19）
+
+§3.26 に続き、String / Array / Hash / Set / Struct / Data / 数値 /
+Complex / ID のうち層に無かった関数を足した。これも `MrApi` には手を
+入れず、Ruby のメソッドを呼ぶか CRuby の C を写している。
+
+- **String**: `rb_str_subpos` / `rb_str_sublen` / `rb_str_offset`、
+  `rb_str_update`（文言は CRuby の `index %ld out of string`）、
+  `rb_str_export(_locale)` / `rb_str_encode_ospath`、`rb_str_free`、
+  `rb_str_comparable`、`rb_str_hash_cmp`、`rb_str_ellipsize`、
+  `rb_str_scrub`（壊れていなければ nil）、`rb_str_succ`、
+  `rb_usascii_str_new_static`、`rb_interned_str(_cstr)`（`-@`）、
+  `rb_invalid_str`、`rb_uv_to_utf8`、`rb_memcicmp`、`rb_mem_clear`。
+  既存のものの直し: `rb_str_new_with_class` が元の String の
+  encoding とクラスを継ぐ、`rb_external_str_new_with_enc` を CRuby の写しに
+  （BINARY の扱いと `default_internal` への変換）、`rb_str_export_to_enc` は
+  `rb_str_conv_enc`、`rb_str_encode` が `ECONV_*` のフラグを `encode` の
+  オプションに直す（invalid / undef の置換、改行変換、XML の text /
+  attr。`ECONV_UNDEF_HEX_CHARREF` は渡さない）、`rb_string_value_cstr` が
+  UTF-16 / 32 で文字単位の NUL を見る、`rb_str_locktmp` が凍結を検査する、
+  `rb_cstr_to_inum` の `base <= 0`（C 文字列では接頭辞を見ない CRuby の癖
+  まで同じ）、`PRIsVALUE` の幅・精度・`-` フラグ。
+- **Array / Hash / Set**: `rb_ary_modify`、`rb_ary_free`、
+  `rb_ary_resurrect`、`rb_ary_rotate`（動かなければ nil）、`rb_ary_cmp`、
+  `rb_ary_replace`、`rb_ary_rassoc`、`rb_ary_each`、`rb_hash_delete_if`、
+  `rb_hash_bulk_insert`、`rb_hash_update_by`、Set の C API 一式
+  （`rb_set_new(_capa)` / `lookup` / `add` / `clear` / `delete` / `size` /
+  `foreach`。`foreach` は `to_a` の写しを回し、`ST_STOP` / `ST_DELETE` を
+  受ける）。`rb_ary_new_capa` / `rb_hash_new_capa` の負の大きさを CRuby と
+  同じ例外に、`rb_hash` が Bignum の `#hash` を CRuby と同じく丸める。
+- **Struct / Data**: `rb_struct_alloc_noinit`、
+  `rb_struct_define_without_accessor(_under)`（`Struct.new` してアクセサを
+  undef する。親が Struct 以外なら NotImplementedError、alloc 関数は
+  無視）、`rb_data_define`。`rb_struct_initialize` は Data では位置引数を
+  キーワードに直して `initialize` を呼び、凍結する（多すぎれば
+  `struct size differs`）。凍結済みなら FrozenError（core の
+  `Struct#initialize` / `Data#initialize` は凍結を見ていない。#2105）。
+- **数値**: `rb_num_zerodiv`、`rb_out_of_int`、`rb_cmperr`、
+  `rb_num_coerce_bit`、`rb_num2fix`、`rb_fix2short` / `ushort`、
+  `rb_fix2str`、`rb_dbl_cmp`、`rb_check_to_int` / `float`、`rb_big_sign` /
+  `bigzero_p` / `clone` / `eql` / `idiv` / `divmod`、`rb_absint_numwords`、
+  `rb_integer_unpack`、`rb_big_pack` / `unpack`、
+  `rb_flt_rationalize(_with_prec)`、Complex の関数一式（`rb_complex_raw` /
+  `new_polar` / `real` / `imag` / `abs` / `arg` / `plus` / `mul` / `pow` …）。
+  `rb_num2long` / `rb_num2ulong` が Float の範囲外を CRuby と同じ文言
+  （`float 1e+20 out of range of integer`）で拒み、`rb_num2dbl` は nil /
+  true / false / String に `no implicit conversion to float from ...`。
+  bigdecimal の `missing.h` が `rb_complex_real` / `imag` の static 版を
+  持つので、`build.rs` で `HAVE_RB_COMPLEX_REAL` / `IMAG` を定義する。
+- **ID**: `rb_is_{const,class,global,instance,attrset,local,junk}_id`、
+  `rb_id_attrset`（演算子は NameError、`[]` は `[]=`）、`rb_name_error(_str)`、
+  `rb_enc_symname_p` / `rb_enc_symname2_p` / `rb_symname_p`、
+  `rb_sym_all_symbols`。ID の種類は CRuby の `rb_enc_symname_type` の写しで
+  決める（`$1` は global、`[]=` は attrset）。
+- **試験**: `tests/capi/capi_datatypes.c` が上の関数を CRuby と比べる。
+  ruby/spec `optional/capi` は 1525 例・1359 通過（段階 18 の後は
+  1525 例・1255 通過。既に通っていた例で新たに落ちたものは無い）。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -1302,6 +1360,7 @@ CRuby 4.0.9 のヘッダと ruby/spec `optional/capi` を突き合わせ、層�
 | 16 | ホストの CRuby が入れた gem の C 拡張を層で建て直して読む、alloc 関数の self、`rb_str_capacity` の下限、`ruby_vsnprintf` の無限ループ、`rb_check_symbol` 系 | 済（§3.24、ruby-bench の graphql-native / liquid-c が完走、liquid-c の出力は CRuby と一致） |
 | 17 | CRuby の `ext/etc` を層でビルドして同梱（`stdlib/etc.rb` と隠し builtin を削除）、`RUBY_EXTCONF_H` の include、ロケール / ファイルシステムのエンコーディング、符号なし変換の nil の文言 | 済（§3.25、ruby/spec `library/etc` 全通過、`resolve_feature_path("etc")` が `:so`） |
 | 18 | アーキテクチャを変えずに足せる API（リフレクション、`rb_path_to_class`、`rb_exec_recursive` 系、警告カテゴリ、ArithmeticSequence、public 呼び出し、`rb_stdout` などのマクロ化、`rb_alloc_func_t`） | 済（§3.26、`tests/capi/capi_reflect.c`、ruby/spec `optional/capi` 822 → 1255 通過） |
+| 19 | データ型の残りの関数（String / Array / Hash / Set / Struct / Data / 数値 / Complex / ID）、`rb_str_encode` の ECONV フラグ、Float の範囲外の文言 | 済（§3.27、`tests/capi/capi_datatypes.c`、ruby/spec `optional/capi` 1255 → 1359 通過） |
 
 ## 6. 既知の制約
 
@@ -1356,6 +1415,11 @@ CRuby 4.0.9 のヘッダと ruby/spec `optional/capi` を突き合わせ、層�
 - 組み込みのレイアウトを持つクラス（String / Array などの派生）には
   `rb_define_alloc_func` できない（TypeError）。普通のクラスでも alloc
   関数は遅延して走るので、`klass.allocate` の直後にはまだ走っていない（§3.7）。
+- `rb_id2str` などが返す名前の encoding は Symbol のものでなく
+  US-ASCII / UTF-8（層の ID はバイト列で引くので、UTF-16 の Symbol の
+  encoding が落ちる）。
+- `rb_struct_define_without_accessor` は親が Struct のときだけ使え、
+  alloc 関数は無視する。`rb_set_foreach` は呼んだ時点の要素の写しを回す。
 - `rb_call_super` はエイリアスで二つの名前に定義した同じ C 関数の
   super を区別しない。`rb_errinfo` は Ruby の `$!` と別物（`rb_protect`
   の中で `$!` を設定しない）。

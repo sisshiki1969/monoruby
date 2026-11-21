@@ -1637,6 +1637,115 @@ extern "C" {
  * `func` with `arg` until it returns ST_STOP. */
 void rb_ivar_foreach(VALUE obj, int (*func)(ID name, VALUE val, st_data_t arg), st_data_t arg);
 st_index_t rb_ivar_count(VALUE obj);
+
+/* Strings (string.c) */
+char *rb_str_subpos(VALUE str, long beg, long *len);
+long rb_str_sublen(VALUE str, long pos);
+long rb_str_offset(VALUE str, long pos);
+void rb_str_update(VALUE dst, long beg, long len, VALUE src);
+VALUE rb_str_export(VALUE obj);
+VALUE rb_str_export_locale(VALUE obj);
+VALUE rb_str_encode_ospath(VALUE path);
+void rb_str_free(VALUE str);
+int rb_str_comparable(VALUE str1, VALUE str2);
+int rb_str_hash_cmp(VALUE str1, VALUE str2);
+VALUE rb_str_ellipsize(VALUE str, long len);
+VALUE rb_str_scrub(VALUE str, VALUE repl);
+VALUE rb_str_succ(VALUE orig);
+VALUE rb_usascii_str_new_static(const char *ptr, long len);
+VALUE rb_interned_str(const char *ptr, long len);
+VALUE rb_interned_str_cstr(const char *ptr);
+void rb_invalid_str(const char *str, const char *type);
+int rb_uv_to_utf8(char buf[6], unsigned long uv);
+int rb_memcicmp(const void *s1, const void *s2, long n);
+
+/* Arrays (array.c) */
+void rb_mem_clear(VALUE *buf, long len);
+void rb_ary_modify(VALUE ary);
+void rb_ary_free(VALUE ary);
+VALUE rb_ary_resurrect(VALUE ary);
+VALUE rb_ary_rotate(VALUE ary, long rot);
+VALUE rb_ary_cmp(VALUE lhs, VALUE rhs);
+VALUE rb_ary_replace(VALUE copy, VALUE orig);
+VALUE rb_ary_rassoc(VALUE alist, VALUE key);
+VALUE rb_ary_each(VALUE ary);
+
+/* Hashes (hash.c) */
+typedef VALUE rb_hash_update_func(VALUE newkey, VALUE oldkey, VALUE value);
+void rb_hash_bulk_insert(long argc, const VALUE *argv, VALUE hash);
+VALUE rb_hash_delete_if(VALUE hash);
+VALUE rb_hash_update_by(VALUE hash1, VALUE hash2, rb_hash_update_func *func);
+
+/* Sets (set.c, Ruby 4.0) */
+void rb_set_foreach(VALUE set, int (*func)(VALUE element, VALUE arg), VALUE arg);
+VALUE rb_set_new(void);
+VALUE rb_set_new_capa(size_t capa);
+bool rb_set_lookup(VALUE set, VALUE element);
+bool rb_set_add(VALUE set, VALUE element);
+VALUE rb_set_clear(VALUE set);
+bool rb_set_delete(VALUE set, VALUE element);
+size_t rb_set_size(VALUE set);
+
+/* Struct / Data (struct.c) */
+VALUE rb_struct_alloc_noinit(VALUE klass);
+VALUE rb_struct_define_without_accessor(const char *name, VALUE super, rb_alloc_func_t func, ...);
+VALUE rb_struct_define_without_accessor_under(VALUE outer, const char *class_name, VALUE super,
+                                              rb_alloc_func_t alloc, ...);
+VALUE rb_data_define(VALUE super, ...);
+
+/* Numbers (numeric.c, bignum.c, complex.c, rational.c) */
+void rb_num_zerodiv(void);
+void rb_out_of_int(SIGNED_VALUE num);
+void rb_cmperr(VALUE a, VALUE b);
+VALUE rb_num_coerce_bit(VALUE lhs, VALUE rhs, ID op);
+VALUE rb_num2fix(VALUE val);
+short rb_fix2short(VALUE num);
+unsigned short rb_fix2ushort(VALUE num);
+VALUE rb_fix2str(VALUE val, int base);
+VALUE rb_dbl_cmp(double lhs, double rhs);
+VALUE rb_check_to_int(VALUE val);
+VALUE rb_check_to_float(VALUE val);
+int rb_big_sign(VALUE num);
+int rb_bigzero_p(VALUE x);
+VALUE rb_big_clone(VALUE num);
+VALUE rb_big_eql(VALUE lhs, VALUE rhs);
+VALUE rb_big_idiv(VALUE x, VALUE y);
+VALUE rb_big_divmod(VALUE x, VALUE y);
+void rb_big_pack(VALUE val, unsigned long *buf, long num_longs);
+VALUE rb_big_unpack(unsigned long *buf, long num_longs);
+size_t rb_absint_numwords(VALUE val, size_t word_numbits, size_t *nlz_bits_ret);
+VALUE rb_integer_unpack(const void *words, size_t numwords, size_t wordsize, size_t nails, int flags);
+VALUE rb_flt_rationalize_with_prec(VALUE flt, VALUE prec);
+VALUE rb_flt_rationalize(VALUE flt);
+VALUE rb_complex_raw(VALUE real, VALUE imag);
+VALUE rb_complex_new_polar(VALUE abs, VALUE arg);
+VALUE rb_complex_polar(VALUE abs, VALUE arg);
+VALUE rb_complex_real(VALUE z);
+VALUE rb_complex_imag(VALUE z);
+VALUE rb_complex_plus(VALUE x, VALUE y);
+VALUE rb_complex_minus(VALUE x, VALUE y);
+VALUE rb_complex_mul(VALUE x, VALUE y);
+VALUE rb_complex_div(VALUE x, VALUE y);
+VALUE rb_complex_uminus(VALUE z);
+VALUE rb_complex_conjugate(VALUE z);
+VALUE rb_complex_abs(VALUE z);
+VALUE rb_complex_arg(VALUE z);
+VALUE rb_complex_pow(VALUE base, VALUE exp);
+VALUE rb_dbl_complex_new(double real, double imag);
+
+/* Symbols and IDs (symbol.c) */
+int rb_is_const_id(ID id);
+int rb_is_global_id(ID id);
+int rb_is_instance_id(ID id);
+int rb_is_attrset_id(ID id);
+int rb_is_class_id(ID id);
+int rb_is_local_id(ID id);
+int rb_is_junk_id(ID id);
+ID rb_id_attrset(ID id);
+int rb_symname_p(const char *str);
+VALUE rb_sym_all_symbols(void);
+void rb_name_error(ID name, const char *fmt, ...);
+void rb_name_error_str(VALUE name, const char *fmt, ...);
 #ifdef __cplusplus
 }
 #endif
