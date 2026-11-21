@@ -1297,6 +1297,82 @@ Complex / ID のうち層に無かった関数を足した。これも `MrApi` �
   ruby/spec `optional/capi` は 1525 例・1359 通過（段階 18 の後は
   1525 例・1255 通過。既に通っていた例で新たに落ちたものは無い）。
 
+### 3.28 Proc・Fiber・Thread・例外・IO・GC・プロセスの関数（段階 20）
+
+§3.27 に続き、データ型以外で層に無かった関数を足した。どれも Ruby の
+メソッドを呼ぶか CRuby の C を写しており、`MrApi` には手を入れていない。
+
+- **Proc / Method**: `rb_proc_call_kw` / `rb_proc_call_with_block_kw`、
+  `rb_method_call(_kw)` / `rb_method_call_with_block(_kw)`、
+  `rb_yield_values_kw` / `rb_yield_splat_kw`（キーワード付きはブロックを
+  Proc にして呼ぶ。ABI の yield は位置引数だけ）、`rb_yield_block`、
+  `rb_funcallv_public_kw`、`rb_eval_cmd_kw`、
+  `rb_method_basic_definition_p`（CRuby の「組み込みのまま」の印は見え
+  ないので、ソース位置の無いメソッドを basic とみなす。Ruby で書いた
+  定義と未定義は 0）。
+- **Fiber**: `rb_fiber_new` / `rb_fiber_new_storage`（C 関数は §3.11 の
+  ブロックの仕組みで Fiber の本体に）、`rb_fiber_resume` / `yield` /
+  `transfer`（`_kw` も）、`rb_fiber_current`、`rb_fiber_alive_p`、
+  `rb_fiber_raise`。
+- **Thread**: `rb_thread_create`（関数ポインタと引数を Integer にして
+  ブロックの data に載せる）、`rb_thread_main`、`rb_thread_alone`、
+  `rb_thread_wakeup(_alive)`、`rb_thread_run` / `kill` / `stop`、
+  `rb_thread_sleep(_forever / _deadly)`、`rb_thread_wait_for`、
+  `rb_thread_interrupted`（`pending_interrupt?`）、`rb_thread_fd_close`
+  （何もしない）、`ruby_thread_has_gvl_p`（`rb_nogvl` の関数の中だけ 0）。
+- **例外**: `rb_make_exception`（eval.c の写し）、`rb_syserr_new_str`、
+  `rb_syserr_new_path_in` / `rb_syserr_fail_path_in` /
+  `rb_sys_fail_path_in`（CRuby と同じく公開ヘッダには宣言しない）、
+  `rb_error_frozen`、`rb_error_frozen_object`（`rb_exec_recursive` で
+  inspect し、再帰すれば " ..."）、`rb_frozen_error_raise`（`receiver`
+  付き）、`rb_class_modify_check`、`rb_errno` / `_ptr` / `_set`、
+  `rb_bug_errno`、`rb_interrupt`、`rb_exit`、`rb_f_exit` / `abort` /
+  `exec` / `kill`。`rb_set_errinfo` は例外でも nil でもない値に
+  TypeError（`assigning non-exception to $!`）。
+- **IO**: `rb_io_closed_p`、`rb_io_path`、`rb_io_timeout` /
+  `rb_io_set_timeout`、`rb_io_ungetc` / `ungetbyte`、`rb_io_bufwrite`、
+  `rb_io_open_descriptor`（FMODE をモード文字列に、path・timeout・
+  encoding を設定）、`rb_cloexec_open` / `dup` / `dup2` / `fcntl_dupfd` /
+  `pipe`（ヘッダにだけあった）、`rb_pipe`、`rb_fdopen`。
+  `rb_io_maybe_wait` は閉じた IO に IOError（CRuby と同じく最初に
+  `rb_io_check_closed`）、`rb_io_mode` は記述子の `O_APPEND` から
+  `FMODE_APPEND` を立てる。
+- **GC**: `rb_gc_count`、`rb_gc_stat`、`rb_gc_latest_gc_info`（型の検査は
+  層、値は `GC.latest_gc_info`。core に無い: #2107）、
+  `rb_gc_adjust_memory_usage` / `rb_gc_force_recycle`（何もしない）、
+  `rb_gc_disable_no_rest`、`rb_gc_mark_values`、`rb_define_finalizer` /
+  `rb_undefine_finalizer`。
+- **プロセスとファイル**: `rb_waitpid`（`Process.waitpid2` なので `$?`
+  も立つ。失敗は例外でなく -1 と errno。core の Errno 例外は `errno` が
+  nil なので、そのときはクラスの `Errno` を読む: #2110）、`rb_syswait`、
+  `rb_detach_process`、`rb_spawn`、`rb_proc_times`、`rb_last_status_get`、
+  `rb_file_expand_path` / `absolute_path`（`rb_file_s_*` も）、
+  `rb_file_dirname`、`rb_file_directory_p`、`rb_file_size`。
+- **その他**: `rb_ident_hash_new`、`rb_gcd(_normal)`、`ruby_setenv` /
+  `ruby_unsetenv`（`ENV` 経由。逆向きに、拡張が `setenv(3)` した値を
+  `ENV` が見ないのは core の問題: #2109）、`ruby_signal_name`、
+  `rb_sourcefile` / `rb_sourceline`（呼び出した Ruby の
+  `caller_locations`）、`rb_frame_method_id_and_class`。
+- **既存の関数の直し**: `rb_str_format` が引数を 1 つの Array にまとめて
+  `format` に渡していた。`rb_enumeratorize_with_size` が size 関数を
+  無視していた（`to_enum` の size ブロックから `size_fn(obj, args,
+  enum)` を呼ぶ）。`rb_class_new` が `Class`・特異クラス・クラス以外を
+  親に取れた（`rb_check_inheritable`）。`rb_define_class(_under)` が既存の
+  クラスの superclass の食い違い、クラスでない定数、`super == 0` を
+  見ていなかった（class.c と同じ文言で TypeError / ArgumentError）。
+  `rb_undef_method` が未定義の名前で NameError を出していた（CRuby は
+  何も言わない。凍結したクラスなら FrozenError）。`rb_define_const` /
+  `rb_const_set` が既存の定数の上書きで `already initialized constant`
+  を出さなかった（`const_set` を通す）。
+- **core 側で見つけたもの**（Issue のみ）: `GC.latest_gc_info` が無い
+  （#2107）、allocate しただけの IO が "uninitialized stream" でなく閉じた
+  IO に見える（#2108）、拡張の `setenv(3)` が `ENV` に見えない（#2109）、
+  組み込みが上げる `Errno` 例外の `errno` が nil（#2110）、
+  `IO#readpartial` が空のバッファで頼んだ以上を読み込む（#2111）。
+- **試験**: `tests/capi/capi_procio.c` が上の関数を CRuby と比べる。
+  ruby/spec `optional/capi` は 1525 例・1359 通過から 1422 通過に
+  （既に通っていた例で新たに落ちたものは無い）。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -1361,6 +1437,7 @@ Complex / ID のうち層に無かった関数を足した。これも `MrApi` �
 | 17 | CRuby の `ext/etc` を層でビルドして同梱（`stdlib/etc.rb` と隠し builtin を削除）、`RUBY_EXTCONF_H` の include、ロケール / ファイルシステムのエンコーディング、符号なし変換の nil の文言 | 済（§3.25、ruby/spec `library/etc` 全通過、`resolve_feature_path("etc")` が `:so`） |
 | 18 | アーキテクチャを変えずに足せる API（リフレクション、`rb_path_to_class`、`rb_exec_recursive` 系、警告カテゴリ、ArithmeticSequence、public 呼び出し、`rb_stdout` などのマクロ化、`rb_alloc_func_t`） | 済（§3.26、`tests/capi/capi_reflect.c`、ruby/spec `optional/capi` 822 → 1255 通過） |
 | 19 | データ型の残りの関数（String / Array / Hash / Set / Struct / Data / 数値 / Complex / ID）、`rb_str_encode` の ECONV フラグ、Float の範囲外の文言 | 済（§3.27、`tests/capi/capi_datatypes.c`、ruby/spec `optional/capi` 1255 → 1359 通過） |
+| 20 | Proc / Fiber / Thread / 例外 / IO / GC / プロセスの関数、`rb_str_format`・`rb_enumeratorize_with_size`・`rb_class_new`・`rb_define_class` の検査・`rb_undef_method`・`rb_define_const` の直し | 済（§3.28、`tests/capi/capi_procio.c`、ruby/spec `optional/capi` 1359 → 1422 通過） |
 
 ## 6. 既知の制約
 
@@ -1420,6 +1497,12 @@ Complex / ID のうち層に無かった関数を足した。これも `MrApi` �
   encoding が落ちる）。
 - `rb_struct_define_without_accessor` は親が Struct のときだけ使え、
   alloc 関数は無視する。`rb_set_foreach` は呼んだ時点の要素の写しを回す。
+- `rb_class_new` は `Class.new` なので親の `inherited` が呼ばれる（CRuby の
+  `rb_class_new` は呼ばない）。`rb_method_basic_definition_p` はソース位置
+  の有無で決める近似。`rb_io_mode` は `FMODE_CREATE` / `FMODE_TRUNC` を
+  返さない（core が開いたときのフラグを持たない）。`rb_io_set_write_io`
+  と `rb_io_stdio_file` は無い。`rb_exc_fatal` は `fatal` クラスが無いので
+  渡した例外をそのまま上げる。
 - `rb_call_super` はエイリアスで二つの名前に定義した同じ C 関数の
   super を区別しない。`rb_errinfo` は Ruby の `$!` と別物（`rb_protect`
   の中で `$!` を設定しない）。

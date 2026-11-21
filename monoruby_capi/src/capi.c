@@ -821,8 +821,11 @@ rb_str_catf(VALUE str, const char *fmt, ...)
 VALUE
 rb_str_format(int argc, const VALUE *argv, VALUE fmt)
 {
-    VALUE args = rb_ary_new_from_values(argc, argv);
-    return rb_funcall(rb_mKernel, rb_intern("format"), 2, fmt, args);
+    VALUE a = rb_ary_new_capa(argc + 1);
+    rb_ary_push(a, fmt);
+    for (int i = 0; i < argc; i++)
+        rb_ary_push(a, argv[i]);
+    return rb_funcallv(rb_mKernel, rb_intern("format"), (int)RARRAY_LEN(a), RARRAY_CONST_PTR(a));
 }
 
 /* ---------------------------------------------------------------------
@@ -1044,6 +1047,8 @@ rb_errinfo(void)
 void
 rb_set_errinfo(VALUE err)
 {
+    if (!NIL_P(err) && !RTEST(rb_obj_is_kind_of(err, rb_eException)))
+        rb_raise(rb_eTypeError, "assigning non-exception to $!");
     errinfo_set(err);
 }
 
@@ -2020,15 +2025,66 @@ rb_check_symbol_cstr(const char *ptr, long len, rb_encoding *enc)
  * Classes and methods
  * --------------------------------------------------------------------- */
 
+/* class.c's checks before a class is (re)defined: an existing one must
+ * be a class with that superclass, a new one needs a superclass. `outer`
+ * is Qundef for rb_define_class, which looks the name up through
+ * Object's ancestors and words the messages without the outer name. */
+static void
+define_class_check(VALUE outer, const char *name, VALUE super)
+{
+    ID id = rb_intern(name);
+    int top = outer == Qundef;
+    VALUE where = top ? rb_cObject : outer;
+    /* A name Ruby would not accept as a constant (CRuby's C API takes
+     * any) cannot be asked about through `const_defined?`. */
+    int defined = rb_is_const_id(id) &&
+        (top ? rb_const_defined(where, id) : rb_const_defined_at(where, id));
+    /* A constant still pending as an autoload is left alone rather than
+     * loaded. CRuby counts it as undefined while its feature is being
+     * required (ext/socket's Init_socket defining IPSocket under uri's
+     * `autoload :IPSocket, "socket"`); monoruby does not tell that case
+     * apart, and loading the feature from inside its own require fails. */
+    if (defined &&
+        !NIL_P(rb_funcall(where, rb_intern("autoload?"), 2, ID2SYM(id), top ? Qtrue : Qfalse)))
+        defined = 0;
+    if (defined) {
+        VALUE klass = top ? rb_const_get(where, id) : rb_const_get_at(where, id);
+        if (!RB_TYPE_P(klass, T_CLASS)) {
+            if (top)
+                rb_raise(rb_eTypeError, "%s is not a class (%" PRIsVALUE ")", name, rb_obj_class(klass));
+            rb_raise(rb_eTypeError, "%" PRIsVALUE "::%s is not a class (%" PRIsVALUE ")", outer, name,
+                     rb_obj_class(klass));
+        }
+        VALUE sup = rb_class_superclass(klass);
+        if (!NIL_P(sup))
+            sup = rb_class_real(sup);
+        if (sup != super) {
+            if (top)
+                rb_raise(rb_eTypeError, "superclass mismatch for class %s", name);
+            rb_raise(rb_eTypeError,
+                     "superclass mismatch for class %" PRIsVALUE "::%s (%" PRIsVALUE " is given but was %" PRIsVALUE ")",
+                     outer, name, sup, super);
+        }
+        return;
+    }
+    if (!super) {
+        if (top)
+            rb_raise(rb_eArgError, "no super class for '%s'", name);
+        rb_raise(rb_eArgError, "no super class for '%" PRIsVALUE "::%s'", rb_class_path(outer), name);
+    }
+}
+
 VALUE
 rb_define_class_under(VALUE outer, const char *name, VALUE super)
 {
+    define_class_check(outer, name, super);
     return check(api->define_class(ctx(), M(outer), name, M(super), 0));
 }
 
 VALUE
 rb_define_class(const char *name, VALUE super)
 {
+    define_class_check(Qundef, name, super);
     return check(api->define_class(ctx(), MR_UNDEF, name, M(super), 0));
 }
 
@@ -2231,10 +2287,32 @@ rb_alias(VALUE klass, ID name1, ID name2)
     rb_funcall(klass, rb_intern("alias_method"), 2, ID2SYM(name1), ID2SYM(name2));
 }
 
+/* eval.c's: a frozen class or module cannot gain or lose methods (a
+ * singleton class reports its object). */
+void
+rb_class_modify_check(VALUE klass)
+{
+    if (RB_SPECIAL_CONST_P(klass))
+        Check_Type(klass, T_CLASS);
+    if (!OBJ_FROZEN(klass))
+        return;
+    if (RTEST(rb_funcall(klass, rb_intern("singleton_class?"), 0)))
+        klass = rb_funcall(klass, rb_intern("attached_object"), 0);
+    rb_error_frozen_object(klass);
+}
+
 void
 rb_undef_method(VALUE klass, const char *name)
 {
-    rb_funcall(klass, rb_intern("undef_method"), 1, ID2SYM(rb_intern(name)));
+    /* CRuby's adds the undef entry without looking: a name nothing
+     * defines is no error (there is nothing for it to hide either). */
+    VALUE sym = ID2SYM(rb_intern(name));
+    if (!RTEST(rb_funcall(klass, rb_intern("method_defined?"), 1, sym)) &&
+        !RTEST(rb_funcall(klass, rb_intern("private_method_defined?"), 1, sym))) {
+        rb_class_modify_check(klass);
+        return;
+    }
+    rb_funcall(klass, rb_intern("undef_method"), 1, sym);
 }
 
 void
@@ -2264,6 +2342,14 @@ rb_define_attr(VALUE klass, const char *name, int read, int write)
 void
 rb_define_const(VALUE klass, const char *name, VALUE val)
 {
+    /* Redefining a constant goes through `const_set`, which warns
+     * "already initialized constant" as CRuby's rb_const_set does. A
+     * name Ruby would not accept is set as it is. */
+    ID id = rb_intern(name);
+    if (rb_is_const_id(id) && rb_const_defined_at(klass, id)) {
+        rb_funcall(klass, rb_intern("const_set"), 2, ID2SYM(id), val);
+        return;
+    }
     api->const_set(ctx(), M(klass), name, M(val));
     if (api->error_pending(ctx()))
         capi_unwind();
@@ -3397,16 +3483,65 @@ rb_copy_generic_ivar(VALUE clone, VALUE obj)
     }
 }
 
+/* CRuby exports these without declaring them in its public headers. */
+VALUE rb_syserr_new_path_in(const char *func_name, int n, VALUE path);
+NORETURN(void rb_syserr_fail_path_in(const char *func_name, int n, VALUE path));
+NORETURN(void rb_sys_fail_path_in(const char *func_name, VALUE path));
+void rb_class_modify_check(VALUE klass);
+VALUE rb_ident_hash_new(void);
+int rb_thread_check_trap_pending(void);
+void rb_gc_mark_values(long n, const VALUE *values);
+VALUE rb_gc_disable_no_rest(void);
+VALUE rb_gcd(VALUE x, VALUE y);
+VALUE rb_gcd_normal(VALUE x, VALUE y);
+
+/* A C pointer carried through a Ruby value (an Integer, which the
+ * collector does not follow). */
+static VALUE
+ptr2num(const void *p)
+{
+    return ULL2NUM((unsigned long long)(uintptr_t)p);
+}
+
+static void *
+num2ptr(VALUE v)
+{
+    return (void *)(uintptr_t)NUM2ULL(v);
+}
+
+static VALUE block_proc_new(rb_block_call_func_t func, VALUE arg, VALUE block);
+
+/* The size block of an enumerator with a C size function: data is
+ * [size_fn, obj, args, enumerator]. */
+static VALUE
+enum_size_call(RB_BLOCK_CALL_FUNC_ARGLIST(yielded_arg, data))
+{
+    (void)yielded_arg;
+    (void)argc;
+    (void)argv;
+    (void)blockarg;
+    rb_enumerator_size_func *fn = (rb_enumerator_size_func *)num2ptr(RARRAY_AREF(data, 0));
+    return fn(RARRAY_AREF(data, 1), RARRAY_AREF(data, 2), RARRAY_AREF(data, 3));
+}
+
 VALUE
 rb_enumeratorize_with_size_kw(VALUE obj, VALUE meth, int argc, const VALUE *argv,
                               rb_enumerator_size_func *size_fn, int kw_splat)
 {
     VALUE *args = ALLOCA_N(VALUE, argc + 1);
-    (void)size_fn;
     args[0] = meth;
     if (argc > 0)
         memcpy(args + 1, argv, sizeof(VALUE) * argc);
-    return rb_funcallv_kw(obj, rb_intern("to_enum"), argc + 1, args, kw_splat);
+    if (!size_fn)
+        return rb_funcallv_kw(obj, rb_intern("to_enum"), argc + 1, args, kw_splat);
+    /* `to_enum`'s size block calls size_fn(obj, args, enumerator); the
+     * enumerator goes into the block's data once it exists. */
+    VALUE data = rb_ary_new_from_args(4, ptr2num((const void *)(uintptr_t)size_fn), obj,
+                                      rb_ary_new_from_values(argc, argv), Qnil);
+    VALUE blk = block_proc_new(enum_size_call, data, Qnil);
+    VALUE e = rb_funcall_with_block_kw(obj, rb_intern("to_enum"), argc + 1, args, blk, kw_splat);
+    rb_ary_store(data, 3, e);
+    return e;
 }
 
 VALUE
@@ -5891,9 +6026,24 @@ rb_class_new_instance_pass_kw(int argc, const VALUE *argv, VALUE klass)
     return rb_class_new_instance_kw(argc, argv, klass, rb_keyword_given_p());
 }
 
+/* class.c's */
+void
+rb_check_inheritable(VALUE super)
+{
+    if (!RB_TYPE_P(super, T_CLASS))
+        rb_raise(rb_eTypeError, "superclass must be an instance of Class (given an instance of %" PRIsVALUE ")",
+                 rb_obj_class(super));
+    if (RTEST(rb_funcall(super, rb_intern("singleton_class?"), 0)))
+        rb_raise(rb_eTypeError, "can't make subclass of singleton class");
+    if (super == rb_cClass)
+        rb_raise(rb_eTypeError, "can't make subclass of Class");
+}
+
 VALUE
 rb_class_new(VALUE super)
 {
+    Check_Type(super, T_CLASS);
+    rb_check_inheritable(super);
     return rb_funcall(rb_cClass, rb_intern("new"), 1, super);
 }
 
@@ -8961,7 +9111,13 @@ rb_io_mode(VALUE io)
 {
     rb_io_t *fptr;
     GetOpenFile(rb_io_get_io(io), fptr);
-    return fptr->mode;
+    int mode = fptr->mode;
+    /* The interpreter does not keep the open flags; append mode is the
+     * descriptor's own (FMODE_CREATE / FMODE_TRUNC are not known). */
+    int fl = fcntl(fptr->fd, F_GETFL);
+    if (fl != -1 && (fl & O_APPEND))
+        mode |= FMODE_APPEND;
+    return mode;
 }
 
 VALUE
@@ -9006,6 +9162,9 @@ rb_io_wait(VALUE io, VALUE events, VALUE timeout)
 VALUE
 rb_io_maybe_wait(int error, VALUE io, VALUE events, VALUE timeout)
 {
+    /* io.c's: the descriptor may have been closed while the GVL was
+     * released. */
+    rb_io_check_closed(rb_io_get_fptr(io));
     switch (error) {
     case EINTR:
 #ifdef ERESTART
@@ -11215,4 +11374,952 @@ VALUE
 rb_sym_all_symbols(void)
 {
     return rb_funcall(rb_cSymbol, rb_intern("all_symbols"), 0);
+}
+
+/* ---------------------------------------------------------------------
+ * Procs, fibers, threads, exceptions, IO, GC and processes: the
+ * functions doc/c_api.md §3.28 adds. Each is the Ruby method CRuby's
+ * C function implements, or a port of the C.
+ * --------------------------------------------------------------------- */
+
+/* argv as an Array with `head` (when not Qundef) in front. */
+static VALUE
+args_with_head(VALUE head, int argc, const VALUE *argv)
+{
+    VALUE a = rb_ary_new_capa(argc + 1);
+    if (head != Qundef)
+        rb_ary_push(a, head);
+    for (int i = 0; i < argc; i++)
+        rb_ary_push(a, argv[i]);
+    return a;
+}
+
+/* --- Proc / Method ---------------------------------------------------- */
+
+VALUE
+rb_proc_call_kw(VALUE proc, VALUE args, int kw_splat)
+{
+    return rb_funcallv_kw(proc, rb_intern("call"), (int)RARRAY_LEN(args), RARRAY_CONST_PTR(args), kw_splat);
+}
+
+VALUE
+rb_proc_call_with_block_kw(VALUE proc, int argc, const VALUE *argv, VALUE passed_proc, int kw_splat)
+{
+    return rb_funcall_with_block_kw(proc, rb_intern("call"), argc, argv, passed_proc, kw_splat);
+}
+
+VALUE
+rb_method_call_with_block_kw(int argc, const VALUE *argv, VALUE method, VALUE passed_proc, int kw_splat)
+{
+    return rb_funcall_with_block_kw(method, rb_intern("call"), argc, argv, passed_proc, kw_splat);
+}
+
+VALUE
+rb_method_call_with_block(int argc, const VALUE *argv, VALUE method, VALUE passed_proc)
+{
+    return rb_method_call_with_block_kw(argc, argv, method, passed_proc, RB_NO_KEYWORDS);
+}
+
+VALUE
+rb_method_call_kw(int argc, const VALUE *argv, VALUE method, int kw_splat)
+{
+    return rb_method_call_with_block_kw(argc, argv, method, Qnil, kw_splat);
+}
+
+VALUE
+rb_method_call(int argc, const VALUE *argv, VALUE method)
+{
+    return rb_method_call_with_block_kw(argc, argv, method, Qnil, RB_NO_KEYWORDS);
+}
+
+/* The yields with keywords go through the block as a Proc (the ABI's
+ * yield passes positional arguments only). */
+VALUE
+rb_yield_values_kw(int argc, const VALUE *argv, int kw_splat)
+{
+    if (kw_splat == RB_NO_KEYWORDS)
+        return rb_yield_values2(argc, argv);
+    return rb_funcallv_kw(rb_block_proc(), rb_intern("call"), argc, argv, kw_splat);
+}
+
+VALUE
+rb_yield_splat_kw(VALUE args, int kw_splat)
+{
+    VALUE ary = rb_check_array_type(args);
+    if (NIL_P(ary))
+        rb_raise(rb_eArgError, "not an array");
+    return rb_yield_values_kw((int)RARRAY_LEN(ary), RARRAY_CONST_PTR(ary), kw_splat);
+}
+
+/* A block function that passes everything, its block included, on to
+ * the current block. */
+VALUE
+rb_yield_block(RB_BLOCK_CALL_FUNC_ARGLIST(yielded_arg, callback_arg))
+{
+    (void)yielded_arg;
+    (void)callback_arg;
+    return rb_funcall_with_block(rb_block_proc(), rb_intern("call"), argc, argv, blockarg);
+}
+
+VALUE
+rb_funcallv_public_kw(VALUE recv, ID mid, int argc, const VALUE *argv, int kw_splat)
+{
+    VALUE a = args_with_head(ID2SYM(mid), argc, argv);
+    return rb_funcallv_kw(recv, rb_intern("public_send"), (int)RARRAY_LEN(a), RARRAY_CONST_PTR(a), kw_splat);
+}
+
+/* vm_eval.c's: a String is evaluated, anything else is `call`ed with
+ * the arguments. */
+VALUE
+rb_eval_cmd_kw(VALUE cmd, VALUE arg, int kw_splat)
+{
+    if (!RB_TYPE_P(cmd, T_STRING))
+        return rb_funcallv_kw(cmd, rb_intern("call"), (int)RARRAY_LEN(arg), RARRAY_CONST_PTR(arg), kw_splat);
+    return rb_funcall(rb_mKernel, rb_intern("eval"), 1, cmd);
+}
+
+/* Whether `klass#mid` is still the interpreter's own definition. The
+ * layer cannot see CRuby's "basic" flag; a method without a source
+ * location (a builtin, or another extension's C function) counts as
+ * basic, one written in Ruby does not, and so does a missing one. */
+int
+rb_method_basic_definition_p(VALUE klass, ID mid)
+{
+    if (!RTEST(rb_funcall(klass, rb_intern("method_defined?"), 1, ID2SYM(mid))) &&
+        !RTEST(rb_funcall(klass, rb_intern("private_method_defined?"), 1, ID2SYM(mid))))
+        return 0;
+    VALUE m = rb_funcall(klass, rb_intern("instance_method"), 1, ID2SYM(mid));
+    return NIL_P(rb_funcall(m, rb_intern("source_location"), 0));
+}
+
+/* --- Fiber ------------------------------------------------------------ */
+
+static VALUE
+fiber_class(void)
+{
+    return rb_const_get(rb_cObject, rb_intern("Fiber"));
+}
+
+static VALUE
+fiber_new(rb_block_call_func_t func, VALUE obj, VALUE storage)
+{
+    VALUE blk = block_proc_new(func, obj, Qnil);
+    if (storage == Qundef || storage == Qtrue)
+        return rb_funcall_with_block(fiber_class(), rb_intern("new"), 0, NULL, blk);
+    VALUE kw = rb_hash_new();
+    rb_hash_aset(kw, ID2SYM(rb_intern("storage")), storage);
+    return rb_funcall_with_block_kw(fiber_class(), rb_intern("new"), 1, &kw, blk, RB_PASS_KEYWORDS);
+}
+
+VALUE
+rb_fiber_new(rb_block_call_func_t func, VALUE obj)
+{
+    return fiber_new(func, obj, Qundef);
+}
+
+VALUE
+rb_fiber_new_storage(rb_block_call_func_t func, VALUE obj, VALUE storage)
+{
+    return fiber_new(func, obj, storage);
+}
+
+VALUE
+rb_fiber_current(void)
+{
+    return rb_funcall(fiber_class(), rb_intern("current"), 0);
+}
+
+VALUE
+rb_fiber_alive_p(VALUE fiber)
+{
+    return rb_funcall(fiber, rb_intern("alive?"), 0);
+}
+
+VALUE
+rb_fiber_resume_kw(VALUE fiber, int argc, const VALUE *argv, int kw_splat)
+{
+    return rb_funcallv_kw(fiber, rb_intern("resume"), argc, argv, kw_splat);
+}
+
+VALUE
+rb_fiber_resume(VALUE fiber, int argc, const VALUE *argv)
+{
+    return rb_fiber_resume_kw(fiber, argc, argv, RB_NO_KEYWORDS);
+}
+
+VALUE
+rb_fiber_yield_kw(int argc, const VALUE *argv, int kw_splat)
+{
+    return rb_funcallv_kw(fiber_class(), rb_intern("yield"), argc, argv, kw_splat);
+}
+
+VALUE
+rb_fiber_yield(int argc, const VALUE *argv)
+{
+    return rb_fiber_yield_kw(argc, argv, RB_NO_KEYWORDS);
+}
+
+VALUE
+rb_fiber_transfer_kw(VALUE fiber, int argc, const VALUE *argv, int kw_splat)
+{
+    return rb_funcallv_kw(fiber, rb_intern("transfer"), argc, argv, kw_splat);
+}
+
+VALUE
+rb_fiber_transfer(VALUE fiber, int argc, const VALUE *argv)
+{
+    return rb_fiber_transfer_kw(fiber, argc, argv, RB_NO_KEYWORDS);
+}
+
+VALUE
+rb_fiber_raise(VALUE fiber, int argc, const VALUE *argv)
+{
+    return rb_funcallv(fiber, rb_intern("raise"), argc, argv);
+}
+
+/* --- Thread ----------------------------------------------------------- */
+
+static VALUE
+thread_start(RB_BLOCK_CALL_FUNC_ARGLIST(yielded_arg, data))
+{
+    (void)yielded_arg;
+    (void)argc;
+    (void)argv;
+    (void)blockarg;
+    VALUE (*fn)(void *) = (VALUE (*)(void *))num2ptr(RARRAY_AREF(data, 0));
+    return fn(num2ptr(RARRAY_AREF(data, 1)));
+}
+
+VALUE
+rb_thread_create(VALUE (*fn)(void *), void *arg)
+{
+    VALUE data = rb_ary_new_from_args(2, ptr2num((const void *)(uintptr_t)fn), ptr2num(arg));
+    VALUE blk = block_proc_new(thread_start, data, Qnil);
+    return rb_funcall_with_block(rb_cThread, rb_intern("new"), 0, NULL, blk);
+}
+
+VALUE
+rb_thread_main(void)
+{
+    return rb_funcall(rb_cThread, rb_intern("main"), 0);
+}
+
+int
+rb_thread_alone(void)
+{
+    return RARRAY_LEN(rb_funcall(rb_cThread, rb_intern("list"), 0)) == 1;
+}
+
+VALUE
+rb_thread_wakeup(VALUE thread)
+{
+    return rb_funcall(thread, rb_intern("wakeup"), 0);
+}
+
+/* As rb_thread_wakeup, but nil for a dead thread instead of ThreadError. */
+VALUE
+rb_thread_wakeup_alive(VALUE thread)
+{
+    if (!RTEST(rb_funcall(thread, rb_intern("alive?"), 0)))
+        return Qnil;
+    return rb_thread_wakeup(thread);
+}
+
+VALUE
+rb_thread_run(VALUE thread)
+{
+    return rb_funcall(thread, rb_intern("run"), 0);
+}
+
+VALUE
+rb_thread_kill(VALUE thread)
+{
+    return rb_funcall(thread, rb_intern("kill"), 0);
+}
+
+VALUE
+rb_thread_stop(void)
+{
+    return rb_funcall(rb_cThread, rb_intern("stop"), 0);
+}
+
+void
+rb_thread_sleep(int sec)
+{
+    rb_funcall(rb_mKernel, rb_intern("sleep"), 1, INT2FIX(sec));
+}
+
+void
+rb_thread_sleep_forever(void)
+{
+    rb_funcall(rb_mKernel, rb_intern("sleep"), 0);
+}
+
+void
+rb_thread_sleep_deadly(void)
+{
+    rb_thread_sleep_forever();
+}
+
+void
+rb_thread_wait_for(struct timeval time)
+{
+    double sec = (double)time.tv_sec + (double)time.tv_usec / 1e6;
+    rb_funcall(rb_mKernel, rb_intern("sleep"), 1, DBL2NUM(sec));
+}
+
+int
+rb_thread_interrupted(VALUE thread)
+{
+    return RTEST(rb_funcall(thread, rb_intern("pending_interrupt?"), 0));
+}
+
+/* No thread of monoruby's blocks inside the layer on a descriptor it
+ * could be told about. */
+void
+rb_thread_fd_close(int fd)
+{
+    (void)fd;
+}
+
+int
+rb_thread_check_trap_pending(void)
+{
+    return 0;
+}
+
+/* Outside a blocking region's function (rb_nogvl) this thread holds
+ * the GVL. */
+int
+ruby_thread_has_gvl_p(void)
+{
+    return capi_in_nogvl == 0;
+}
+
+/* --- Exceptions ------------------------------------------------------- */
+
+/* eval.c's make_exception: what `raise` makes of its arguments. */
+VALUE
+rb_make_exception(int argc, const VALUE *argv)
+{
+    VALUE mesg = Qnil;
+    switch (argc) {
+    case 0:
+        return Qnil;
+    case 1:
+        if (!NIL_P(argv[0])) {
+            mesg = rb_check_string_type(argv[0]);
+            if (!NIL_P(mesg))
+                return rb_exc_new_str(rb_eRuntimeError, mesg);
+        }
+        break;
+    case 2:
+    case 3:
+        break;
+    default:
+        rb_error_arity(argc, 0, 3);
+    }
+    mesg = rb_check_funcall(argv[0], rb_intern("exception"), argc != 1, &argv[1]);
+    if (mesg == Qundef)
+        rb_raise(rb_eTypeError, "exception class/object expected");
+    if (!RTEST(rb_obj_is_kind_of(mesg, rb_eException)))
+        rb_raise(rb_eTypeError, "exception object expected");
+    if (argc == 3)
+        rb_funcall(mesg, rb_intern("set_backtrace"), 1, argv[2]);
+    return mesg;
+}
+
+VALUE
+rb_syserr_new_str(int n, VALUE arg)
+{
+    return rb_funcall(rb_eSystemCallError, rb_intern("new"), 2, arg, INT2FIX(n));
+}
+
+VALUE
+rb_syserr_new_path_in(const char *func_name, int n, VALUE path)
+{
+    if (!path)
+        path = Qnil;
+    if (n == 0)
+        rb_bug("rb_sys_fail_path_in(%s, %s) - errno == 0", func_name ? func_name : "(null)",
+               NIL_P(path) ? "" : RSTRING_PTR(path));
+    return rb_funcall(rb_eSystemCallError, rb_intern("new"), 3, path, INT2FIX(n),
+                      rb_str_new_cstr(func_name ? func_name : "(null)"));
+}
+
+void
+rb_syserr_fail_path_in(const char *func_name, int n, VALUE path)
+{
+    rb_exc_raise(rb_syserr_new_path_in(func_name, n, path));
+}
+
+void
+rb_sys_fail_path_in(const char *func_name, VALUE path)
+{
+    int n = errno;
+    errno = 0;
+    rb_syserr_fail_path_in(func_name, n, path);
+}
+
+static VALUE
+frozen_error_new(VALUE mesg, VALUE recv)
+{
+    VALUE kw = rb_hash_new();
+    rb_hash_aset(kw, ID2SYM(rb_intern("receiver")), recv);
+    VALUE args[2] = {mesg, kw};
+    return rb_funcallv_kw(rb_eFrozenError, rb_intern("new"), 2, args, RB_PASS_KEYWORDS);
+}
+
+void
+rb_error_frozen(const char *what)
+{
+    rb_raise(rb_eFrozenError, "can't modify frozen %s", what);
+}
+
+void
+rb_frozen_error_raise(VALUE frozen_obj, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    VALUE mesg = rb_vsprintf(fmt, ap);
+    va_end(ap);
+    rb_exc_raise(frozen_error_new(mesg, frozen_obj));
+}
+
+static VALUE
+inspect_frozen_obj(VALUE obj, VALUE mesg, int recur)
+{
+    if (recur)
+        rb_str_cat_cstr(mesg, " ...");
+    else
+        rb_str_append(mesg, rb_inspect(obj));
+    return mesg;
+}
+
+/* error.c's: the message is built after the exception holds it, an
+ * inspect that comes back here ends in " ...". */
+void
+rb_error_frozen_object(VALUE frozen_obj)
+{
+    VALUE mesg = rb_sprintf("can't modify frozen %" PRIsVALUE ": ", rb_obj_class(frozen_obj));
+    VALUE exc = frozen_error_new(mesg, frozen_obj);
+    rb_exec_recursive(inspect_frozen_obj, frozen_obj, mesg);
+    rb_exc_raise(exc);
+}
+
+/* There is no `fatal` class to raise; an Exception carries the message
+ * (doc/c_api.md §6). */
+void
+rb_exc_fatal(VALUE mesg)
+{
+    rb_exc_raise(mesg);
+}
+
+int
+rb_errno(void)
+{
+    return errno;
+}
+
+int *
+rb_errno_ptr(void)
+{
+    return &errno;
+}
+
+void
+rb_errno_set(int e)
+{
+    errno = e;
+}
+
+void
+rb_bug_errno(const char *mesg, int errno_arg)
+{
+    rb_bug("%s: %s (%d)", mesg, strerror(errno_arg), errno_arg);
+}
+
+void
+rb_interrupt(void)
+{
+    rb_exc_raise(rb_exc_new_str(rb_eInterrupt, rb_str_new_cstr("")));
+}
+
+void
+rb_exit(int status)
+{
+    rb_funcall(rb_mKernel, rb_intern("exit"), 1, INT2FIX(status));
+    UNREACHABLE;
+}
+
+VALUE
+rb_f_exit(int argc, const VALUE *argv)
+{
+    return rb_funcallv(rb_mKernel, rb_intern("exit"), argc, argv);
+}
+
+VALUE
+rb_f_abort(int argc, const VALUE *argv)
+{
+    return rb_funcallv(rb_mKernel, rb_intern("abort"), argc, argv);
+}
+
+VALUE
+rb_f_exec(int argc, const VALUE *argv)
+{
+    return rb_funcallv(rb_mKernel, rb_intern("exec"), argc, argv);
+}
+
+VALUE
+rb_f_kill(int argc, const VALUE *argv)
+{
+    return rb_funcallv(rb_mProcess, rb_intern("kill"), argc, argv);
+}
+
+/* --- IO --------------------------------------------------------------- */
+
+VALUE
+rb_io_closed_p(VALUE io)
+{
+    return rb_funcall(io, rb_intern("closed?"), 0);
+}
+
+VALUE
+rb_io_path(VALUE io)
+{
+    VALUE p = rb_funcall(io, rb_intern("path"), 0);
+    return NIL_P(p) ? p : rb_obj_dup(p);
+}
+
+VALUE
+rb_io_timeout(VALUE io)
+{
+    return rb_funcall(io, rb_intern("timeout"), 0);
+}
+
+VALUE
+rb_io_set_timeout(VALUE io, VALUE timeout)
+{
+    return rb_funcall(io, rb_intern("timeout="), 1, timeout);
+}
+
+VALUE
+rb_io_ungetc(VALUE io, VALUE c)
+{
+    return rb_funcall(io, rb_intern("ungetc"), 1, c);
+}
+
+VALUE
+rb_io_ungetbyte(VALUE io, VALUE b)
+{
+    return rb_funcall(io, rb_intern("ungetbyte"), 1, b);
+}
+
+ssize_t
+rb_io_bufwrite(VALUE io, const void *buf, size_t size)
+{
+    VALUE n = rb_io_write(io, rb_str_new((const char *)buf, (long)size));
+    return NUM2SSIZET(n);
+}
+
+/* io.c's: an IO of `klass` over the descriptor, with the access, path,
+ * timeout and encodings given (the FMODE bits other than read / write /
+ * binmode / sync have nothing to set). */
+VALUE
+rb_io_open_descriptor(VALUE klass, int descriptor, int mode, VALUE path, VALUE timeout,
+                      struct rb_io_encoding *encoding)
+{
+    const char *m;
+    if ((mode & FMODE_READWRITE) == FMODE_READWRITE)
+        m = (mode & FMODE_APPEND) ? "a+" : "r+";
+    else if (mode & FMODE_WRITABLE)
+        m = (mode & FMODE_APPEND) ? "a" : "w";
+    else
+        m = "r";
+    VALUE mstr = rb_str_new_cstr(m);
+    if (mode & FMODE_BINMODE)
+        rb_str_cat_cstr(mstr, "b");
+    VALUE kw = rb_hash_new();
+    if (!NIL_P(path) && path != Qundef)
+        rb_hash_aset(kw, ID2SYM(rb_intern("path")), path);
+    VALUE args[3] = {INT2FIX(descriptor), mstr, kw};
+    VALUE io = rb_obj_alloc(klass);
+    rb_funcallv_kw(io, rb_intern("initialize"), 3, args, RB_PASS_KEYWORDS);
+    if (!NIL_P(timeout) && timeout != Qundef)
+        rb_io_set_timeout(io, timeout);
+    if (mode & FMODE_SYNC)
+        rb_funcall(io, rb_intern("sync="), 1, Qtrue);
+    if (encoding) {
+        VALUE ext = encoding->enc ? rb_enc_from_encoding(encoding->enc) : Qnil;
+        VALUE in = encoding->enc2 ? rb_enc_from_encoding(encoding->enc2) : Qnil;
+        if (!NIL_P(ext) || !NIL_P(in)) {
+            /* CRuby's rb_io_encoding: enc2 is the external one when both
+             * are set, enc the internal one. */
+            if (!NIL_P(in))
+                rb_funcall(io, rb_intern("set_encoding"), 2, in, ext);
+            else
+                rb_funcall(io, rb_intern("set_encoding"), 1, ext);
+        }
+    }
+    return io;
+}
+
+int
+rb_cloexec_open(const char *pathname, int flags, mode_t mode)
+{
+    int fd = open(pathname, flags | O_CLOEXEC, mode);
+    if (fd >= 0)
+        rb_update_max_fd(fd);
+    return fd;
+}
+
+int
+rb_cloexec_dup(int oldfd)
+{
+    return rb_cloexec_fcntl_dupfd(oldfd, 3);
+}
+
+int
+rb_cloexec_dup2(int oldfd, int newfd)
+{
+    int fd;
+    if (oldfd == newfd) {
+        fd = newfd;
+    } else {
+        /* dup3 is Linux's alone: dup2, then mark it (not the standard
+         * descriptors, as CRuby's rb_maygvl_fd_fix_cloexec). */
+        fd = dup2(oldfd, newfd);
+        if (fd > 2)
+            fcntl(fd, F_SETFD, fcntl(fd, F_GETFD) | FD_CLOEXEC);
+    }
+    if (fd >= 0)
+        rb_update_max_fd(fd);
+    return fd;
+}
+
+int
+rb_cloexec_fcntl_dupfd(int fd, int minfd)
+{
+    int ret = fcntl(fd, F_DUPFD_CLOEXEC, minfd);
+    if (ret >= 0)
+        rb_update_max_fd(ret);
+    return ret;
+}
+
+int
+rb_cloexec_pipe(int fildes[2])
+{
+    int r = pipe(fildes);
+    if (r == 0) {
+        fcntl(fildes[0], F_SETFD, FD_CLOEXEC);
+        fcntl(fildes[1], F_SETFD, FD_CLOEXEC);
+        rb_update_max_fd(fildes[0]);
+        rb_update_max_fd(fildes[1]);
+    }
+    return r;
+}
+
+int
+rb_pipe(int *pipes)
+{
+    return rb_cloexec_pipe(pipes);
+}
+
+FILE *
+rb_fdopen(int fd, const char *modestr)
+{
+    FILE *f = fdopen(fd, modestr);
+    if (!f)
+        rb_syserr_fail(errno, "fdopen");
+    return f;
+}
+
+/* --- GC --------------------------------------------------------------- */
+
+size_t
+rb_gc_count(void)
+{
+    return NUM2SIZET(rb_funcall(rb_mGC, rb_intern("count"), 0));
+}
+
+/* gc.c's: a Symbol answers that one counter, a Hash is filled. */
+size_t
+rb_gc_stat(VALUE key)
+{
+    if (SYMBOL_P(key))
+        return NUM2SIZET(rb_funcall(rb_mGC, rb_intern("stat"), 1, key));
+    rb_funcall(rb_mGC, rb_intern("stat"), 1, key);
+    return 0;
+}
+
+VALUE
+rb_gc_latest_gc_info(VALUE key)
+{
+    if (!SYMBOL_P(key) && !RB_TYPE_P(key, T_HASH))
+        rb_raise(rb_eTypeError, "non-hash or symbol given");
+    return rb_funcall(rb_mGC, rb_intern("latest_gc_info"), 1, key);
+}
+
+/* The collector is not told about memory outside its heap. */
+void
+rb_gc_adjust_memory_usage(ssize_t diff)
+{
+    (void)diff;
+}
+
+VALUE
+rb_gc_disable_no_rest(void)
+{
+    return rb_gc_disable();
+}
+
+void
+rb_gc_mark_values(long n, const VALUE *values)
+{
+    for (long i = 0; i < n; i++)
+        rb_gc_mark(values[i]);
+}
+
+/* Freeing an object early is never required for correctness. */
+void
+rb_gc_force_recycle(VALUE obj)
+{
+    (void)obj;
+}
+
+VALUE
+rb_define_finalizer(VALUE obj, VALUE block)
+{
+    VALUE os = rb_const_get(rb_cObject, rb_intern("ObjectSpace"));
+    return rb_funcall(os, rb_intern("define_finalizer"), 2, obj, block);
+}
+
+VALUE
+rb_undefine_finalizer(VALUE obj)
+{
+    VALUE os = rb_const_get(rb_cObject, rb_intern("ObjectSpace"));
+    return rb_funcall(os, rb_intern("undefine_finalizer"), 1, obj);
+}
+
+/* --- Processes and files ---------------------------------------------- */
+
+static VALUE
+waitpid_call(VALUE args)
+{
+    return rb_funcallv(rb_mProcess, rb_intern("waitpid2"), 2, RARRAY_CONST_PTR(args));
+}
+
+static VALUE
+waitpid_rescue(VALUE errnop, VALUE exc)
+{
+    VALUE e = rb_funcall(exc, rb_intern("errno"), 0);
+    /* The class's Errno when the exception does not carry one. */
+    if (NIL_P(e) && rb_const_defined_at(rb_obj_class(exc), rb_intern("Errno")))
+        e = rb_const_get_at(rb_obj_class(exc), rb_intern("Errno"));
+    *(int *)num2ptr(errnop) = NIL_P(e) ? EINVAL : NUM2INT(e);
+    return Qnil;
+}
+
+/* `Process.waitpid2`, so `$?` is set as CRuby's sets it; a failure is -1
+ * with errno, not an exception. */
+rb_pid_t
+rb_waitpid(rb_pid_t pid, int *status, int flags)
+{
+    int err = 0;
+    VALUE args = rb_ary_new_from_args(2, PIDT2NUM(pid), INT2FIX(flags));
+    VALUE r = rb_rescue2(waitpid_call, args, waitpid_rescue, ptr2num(&err),
+                         rb_eSystemCallError, (VALUE)0);
+    if (NIL_P(r)) {
+        if (err) {
+            errno = err;
+            return -1;
+        }
+        return 0; /* WNOHANG and nothing exited */
+    }
+    if (status) {
+        VALUE st = rb_ary_entry(r, 1);
+        *status = NUM2INT(rb_funcall(st, rb_intern("to_i"), 0));
+    }
+    return NUM2PIDT(rb_ary_entry(r, 0));
+}
+
+void
+rb_syswait(rb_pid_t pid)
+{
+    int status;
+    rb_waitpid(pid, &status, 0);
+}
+
+VALUE
+rb_detach_process(rb_pid_t pid)
+{
+    return rb_funcall(rb_mProcess, rb_intern("detach"), 1, PIDT2NUM(pid));
+}
+
+rb_pid_t
+rb_spawn(int argc, const VALUE *argv)
+{
+    return NUM2PIDT(rb_funcallv(rb_mProcess, rb_intern("spawn"), argc, argv));
+}
+
+VALUE
+rb_proc_times(VALUE obj)
+{
+    (void)obj;
+    return rb_funcall(rb_mProcess, rb_intern("times"), 0);
+}
+
+VALUE
+rb_last_status_get(void)
+{
+    return rb_gv_get("$?");
+}
+
+VALUE
+rb_file_expand_path(VALUE fname, VALUE dname)
+{
+    return rb_funcall(rb_cFile, rb_intern("expand_path"), 2, fname, dname);
+}
+
+VALUE
+rb_file_absolute_path(VALUE fname, VALUE dname)
+{
+    return rb_funcall(rb_cFile, rb_intern("absolute_path"), 2, fname, dname);
+}
+
+VALUE
+rb_file_s_expand_path(int argc, const VALUE *argv)
+{
+    return rb_funcallv(rb_cFile, rb_intern("expand_path"), argc, argv);
+}
+
+VALUE
+rb_file_s_absolute_path(int argc, const VALUE *argv)
+{
+    return rb_funcallv(rb_cFile, rb_intern("absolute_path"), argc, argv);
+}
+
+VALUE
+rb_file_dirname(VALUE fname)
+{
+    return rb_funcall(rb_cFile, rb_intern("dirname"), 1, fname);
+}
+
+VALUE
+rb_file_directory_p(VALUE obj, VALUE fname)
+{
+    (void)obj;
+    return rb_funcall(rb_cFile, rb_intern("directory?"), 1, fname);
+}
+
+VALUE
+rb_file_size(VALUE file)
+{
+    return rb_funcall(file, rb_intern("size"), 0);
+}
+
+/* --- Odds and ends ---------------------------------------------------- */
+
+VALUE
+rb_ident_hash_new(void)
+{
+    return rb_funcall(rb_hash_new(), rb_intern("compare_by_identity"), 0);
+}
+
+VALUE
+rb_gcd(VALUE x, VALUE y)
+{
+    return rb_funcall(x, rb_intern("gcd"), 1, y);
+}
+
+VALUE
+rb_gcd_normal(VALUE x, VALUE y)
+{
+    return rb_gcd(x, y);
+}
+
+void
+ruby_setenv(const char *name, const char *value)
+{
+    VALUE env = rb_const_get(rb_cObject, rb_intern("ENV"));
+    rb_funcall(env, rb_intern("[]="), 2, rb_str_new_cstr(name),
+               value ? rb_str_new_cstr(value) : Qnil);
+}
+
+void
+ruby_unsetenv(const char *name)
+{
+    ruby_setenv(name, NULL);
+}
+
+/* The name `Signal.signame` gives, kept for the caller (as CRuby's
+ * table is). */
+const char *
+ruby_signal_name(int no)
+{
+    static char *names[128];
+    if (no < 0 || no >= 128)
+        return NULL;
+    if (!names[no]) {
+        VALUE s = rb_funcall(rb_const_get(rb_cObject, rb_intern("Signal")), rb_intern("signame"), 1,
+                             INT2FIX(no));
+        if (NIL_P(s))
+            return NULL;
+        names[no] = strdup(StringValueCStr(s));
+    }
+    return names[no];
+}
+
+/* The Ruby code that called into the extension: its file (kept alive
+ * for the caller until the next call) and line. */
+static VALUE
+caller_location(void)
+{
+    VALUE locs = rb_funcall(rb_mKernel, rb_intern("caller_locations"), 2, INT2FIX(1), INT2FIX(1));
+    return RARRAY_LEN(locs) > 0 ? RARRAY_AREF(locs, 0) : Qnil;
+}
+
+const char *
+rb_sourcefile(void)
+{
+    static __thread char *file;
+    VALUE loc = caller_location();
+    if (NIL_P(loc))
+        return NULL;
+    VALUE path = rb_funcall(loc, rb_intern("path"), 0);
+    if (NIL_P(path))
+        return NULL;
+    char *s = strndup(RSTRING_PTR(path), (size_t)RSTRING_LEN(path));
+    if (!s)
+        rb_memerror();
+    free(file);
+    file = s;
+    return file;
+}
+
+int
+rb_sourceline(void)
+{
+    VALUE loc = caller_location();
+    return NIL_P(loc) ? 0 : NUM2INT(rb_funcall(loc, rb_intern("lineno"), 0));
+}
+
+/* The running C method's name and the class it was called on. */
+int
+rb_frame_method_id_and_class(ID *idp, VALUE *klassp)
+{
+    ID id = rb_frame_this_func();
+    if (!id)
+        return 0;
+    if (idp)
+        *idp = id;
+    if (klassp) {
+        VALUE self = frame()->owner->self_val;
+        *klassp = Qnil;
+        if (self != Qundef) {
+            VALUE m = rb_funcall(self, rb_intern("method"), 1, ID2SYM(id));
+            *klassp = rb_funcall(m, rb_intern("owner"), 0);
+        }
+    }
+    return 1;
 }
