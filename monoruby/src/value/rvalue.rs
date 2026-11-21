@@ -54,9 +54,8 @@ pub(crate) use string::{
     utf8_to_cesu8, utf8_to_mac, walk_mbc, walk_mbc_with,
 };
 pub use string::{
-    CharByteIter, CodeRange, EncBuf, Encoding, RString, RStringInner, STRING_CR_OFFSET,
-    STRING_TY_MAX_INLINE_SHL, STRING_TY_OFFSET, STRING_TY_PAYLOAD_OFFSET, STRING_TY_PAYLOAD_TAG,
-    map_bytes_to_utf8,
+    CodeRange, EncBuf, Encoding, RString, RStringInner, STRING_CR_OFFSET, STRING_TY_MAX_INLINE_SHL,
+    STRING_TY_OFFSET, STRING_TY_PAYLOAD_OFFSET, STRING_TY_PAYLOAD_TAG, map_bytes_to_utf8,
 };
 pub(crate) use string::{
     STRING_SHARED_TAG, StringBuf, buf_append, check_string_not_modified, share_string_buffer,

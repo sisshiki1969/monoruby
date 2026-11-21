@@ -331,6 +331,7 @@ impl GpRegFile {
     }
 
     /// True when `reg` holds no resident (free for immediate reuse).
+    #[cfg(test)]
     pub(in crate::codegen::jitgen) fn is_free(&self, reg: GP) -> bool {
         self.pin_reg() != Some(reg) && self.holders[Self::index_of(reg)].is_empty()
     }
@@ -339,6 +340,7 @@ impl GpRegFile {
     /// place in a register only under this condition: with more holders the
     /// register carries other slots' (not yet stored) values, and overwriting
     /// it would corrupt them.
+    #[cfg(test)]
     pub(in crate::codegen::jitgen) fn holds_only(&self, reg: GP, slot: SlotId) -> bool {
         matches!(self.holders[Self::index_of(reg)].as_slice(), [h] if h.slot == slot)
     }
@@ -458,6 +460,7 @@ impl GpRegFile {
     /// mixed `Integer + Float` op), without evicting the resident: it stays
     /// cached (now clean), so a following integer op still reuses it and a later
     /// flush does not re-spill it.
+    #[cfg(test)]
     pub(in crate::codegen::jitgen) fn sync(&mut self, slot: SlotId) -> Option<GP> {
         let (i, j) = self.position_of(slot)?;
         self.holders[i][j].dirty = false;

@@ -1937,7 +1937,6 @@ impl ParamsInfo {
         self.rest_is_implicit
     }
 
-    #[allow(dead_code)]
     pub fn forwarding(&self) -> bool {
         self.forwarding
     }

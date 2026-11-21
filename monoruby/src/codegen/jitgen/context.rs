@@ -1659,11 +1659,6 @@ impl<'a> JitContext<'a> {
         self.store[self.func_id()].meta().is_internal_builtin()
     }
 
-    #[cfg(feature = "emit-bc")]
-    pub(super) fn dump_iseq(&self) {
-        self.store.dump_iseq(self.iseq_id());
-    }
-
     pub(super) fn func_id(&self) -> FuncId {
         self.iseq().func_id()
     }

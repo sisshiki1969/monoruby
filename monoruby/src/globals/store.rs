@@ -1063,20 +1063,6 @@ impl Store {
         Some(&mut self[iseq])
     }
 
-    ///
-    /// Search for the `ISeqId` whose bytecode contains *pc*.
-    ///
-    /// Returns `Some(ISeqId)` if found, `None` otherwise.
-    ///
-    #[allow(dead_code)]
-    pub(crate) fn iseq_id_from_pc(&self, pc: BytecodePtr) -> Option<(ISeqId, BcIndex)> {
-        self.iseqs
-            .iter()
-            .enumerate()
-            .find(|(_, iseq)| iseq.contains_pc(pc))
-            .map(|(idx, info)| (ISeqId::new(idx), info.get_pc_index(Some(pc))))
-    }
-
     pub fn ancestors(&self, class_id: ClassId) -> Vec<Module> {
         // CRuby's `Module#ancestors` returns just the module itself
         // (plus iclasses for any included/prepended modules) when called
@@ -3597,7 +3583,6 @@ pub struct CallSiteInfo {
     pub(crate) kw_pos: SlotId,
     /// Position where the result is to be stored to.
     pub(crate) dst: Option<SlotId>,
-    #[allow(dead_code)]
     pub(crate) forwarding: bool,
     /// Treat this call as a function call for visibility purposes
     /// (bypass `private`), regardless of whether the receiver is

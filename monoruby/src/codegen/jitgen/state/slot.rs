@@ -527,6 +527,7 @@ impl SlotState {
 
     /// The slot's abstract type as a lattice element; the sentinels
     /// (`None` / `MaybeNone` / `V`) carry no type and read as ⊤.
+    #[cfg(debug_assertions)]
     fn ty(&self, slot: SlotId) -> Guarded {
         match self.mode(slot) {
             LinkMode::None | LinkMode::MaybeNone | LinkMode::V => Guarded::Value,

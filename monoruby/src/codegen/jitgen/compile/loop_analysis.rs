@@ -475,11 +475,6 @@ impl<'a> JitContext<'a> {
                     }
                     return Ok(());
                 }
-                CompileResult::Abort => {
-                    #[cfg(feature = "emit-bc")]
-                    self.dump_iseq();
-                    unreachable!()
-                }
             }
             state.clear_above_next_sp();
         }

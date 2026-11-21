@@ -2433,11 +2433,6 @@ impl<'a> BytecodeGen<'a> {
         MonorubyErr::syntax(msg.into(), loc, self.sourceinfo.clone(), self.func_id)
     }
 
-    #[allow(dead_code)]
-    fn unsupported_feature(&self, msg: &str, loc: Loc) -> MonorubyErr {
-        MonorubyErr::unsupported_feature(msg, loc, self.sourceinfo.clone(), self.func_id)
-    }
-
     fn unsupported_lhs(&self, lhs: &Node) -> MonorubyErr {
         MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone(), self.func_id)
     }

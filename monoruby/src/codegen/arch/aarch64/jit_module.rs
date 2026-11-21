@@ -56,35 +56,6 @@ impl JitModule {
         );
     }
 
-    /// VM entry prologue: save the callee-saved global registers + fp/lr.
-    /// x86 analogue: `pushq rbp; movq rbp, rsp`.
-    pub(in crate::codegen) fn a64_prologue(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            stp x29, x30, [sp, #-16]!;                  // fp, lr
-            stp x(EXEC.0), x(GLOBALS.0), [sp, #-16]!;
-            stp x(PC.0), x(LFP.0), [sp, #-16]!;
-            stp x(ACC.0), x(X19_PAD.0), [sp, #-16]!;    // ACC + 8-byte pad (16-align)
-        );
-    }
-
-    /// VM exit epilogue: restore the callee-saved registers. x86: `leave; ret`.
-    pub(in crate::codegen) fn a64_epilogue(&mut self) {
-        monoasm_arm64!(&mut self.jit,
-            ldp x(ACC.0), x(X19_PAD.0), [sp], #16;
-            ldp x(PC.0), x(LFP.0), [sp], #16;
-            ldp x(EXEC.0), x(GLOBALS.0), [sp], #16;
-            ldp x29, x30, [sp], #16;
-            ret;
-        );
-    }
-    /// Bind `label` at the current position and emit a trap.
-    pub(in crate::codegen) fn a64_brk_stub(&mut self, label: &DestLabel) {
-        monoasm_arm64!(&mut self.jit,
-        label:
-            brk #0;
-        );
-    }
-
     /// Like `a64_brk_stub` but reports a diagnostic id before trapping.
     pub(in crate::codegen) fn a64_brk_stub_diag(&mut self, label: &DestLabel, id: u64) {
         monoasm_arm64!(&mut self.jit,
@@ -94,21 +65,6 @@ impl JitModule {
             blr x9;
             brk #0;
         );
-    }
-
-    /// Emit a `brk` trampoline and return its address as a typed fn pointer.
-    /// TODO(aarch64): replace each caller with the real invoker.
-    pub(in crate::codegen) fn a64_stub_fn<T>(&mut self, id: u64) -> T {
-        let p = self.jit.get_current_address();
-        monoasm_arm64!(&mut self.jit,
-            mov x0, (0x51410000 + id);                   // DIAG: stub invoker hit
-            mov x9, (crate::codegen::runtime::report_unimpl_op as *const () as u64);
-            blr x9;
-            brk #0;
-        );
-        // SAFETY: T is always a pointer-sized `extern "C"` fn pointer; the
-        // trampoline traps if ever called (M0 in progress).
-        unsafe { std::mem::transmute_copy::<*mut u8, T>(&p.as_ptr()) }
     }
 
     pub(in crate::codegen) fn new() -> Self {

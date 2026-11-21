@@ -41,12 +41,6 @@ pub(in crate::codegen) const ACC: GReg = X23; // accumulator      (x86 r15)
 pub(in crate::codegen) const TBL: GReg = X9;
 pub(in crate::codegen) const OP: GReg = X10;
 pub(in crate::codegen) const TGT: GReg = X11;
-pub(in crate::codegen) const TMP: GReg = X12;
-pub(in crate::codegen) const TMP2: GReg = X13;
-
-// A scratch register used only as 16-byte-alignment padding in the prologue
-// pair stores (x24 is callee-saved but unused by the VM globals).
-pub(in crate::codegen) const X19_PAD: GReg = X24;
 
 mod codegen;
 mod invoker;

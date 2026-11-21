@@ -3783,11 +3783,6 @@ pub(super) extern "C" fn err_redo(vm: &mut Executor) {
     vm.set_error(MonorubyErr::redo());
 }
 
-#[allow(dead_code)] // extern "C" helper, currently unreferenced.
-pub(super) extern "C" fn check_err(vm: &mut Executor) -> usize {
-    vm.exception().is_some().into()
-}
-
 ///
 /// `EnsureEnd` opcode helper: the `ensure` body for the current frame has
 /// just finished. Restore a deferred `MethodReturn` / `Throw` (suspended

@@ -53,23 +53,6 @@ pub struct LvarCollector {
 }
 
 impl LvarCollector {
-    pub fn from(id: String) -> Self {
-        let mut table = LvarTable::new();
-        table.push(id);
-        Self {
-            kw: vec![],
-            table,
-            kwrest: None,
-            block: None,
-            forwarding_param: None,
-            numbered_param: None,
-            numbered_param_max: 0,
-            prohibit_numbered_param: None,
-        }
-    }
-}
-
-impl LvarCollector {
     /// Create new `LvarCollector`.
     pub fn new() -> Self {
         LvarCollector {
@@ -131,46 +114,14 @@ impl LvarCollector {
         Some(lvar)
     }
 
-    fn get_name_id(&self, id: LvarId) -> Option<String> {
-        self.table.get(id.into())
-    }
-
-    /// Get name string of `id`.
-    pub fn get_name(&self, id: LvarId) -> String {
-        match self.get_name_id(id) {
-            Some(id) => format!("{:?}", id),
-            None => "<unnamed>".to_string(),
-        }
-    }
-
-    #[inline(always)]
-    pub fn kwrest_param(&self) -> Option<LvarId> {
-        self.kwrest
-    }
-
-    #[inline(always)]
-    pub fn block_param(&self) -> Option<LvarId> {
-        self.block
-    }
-
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.table.0.len()
     }
 
     #[inline(always)]
-    pub fn is_empty(&self) -> bool {
-        self.table.0.is_empty()
-    }
-
-    #[inline(always)]
     pub fn table(&self) -> &Vec<String> {
         &self.table.0
-    }
-
-    #[inline(always)]
-    pub fn block(&self) -> &Option<LvarId> {
-        &self.block
     }
 }
 
@@ -188,9 +139,5 @@ impl LvarTable {
 
     fn push(&mut self, name: String) {
         self.0.push(name)
-    }
-
-    fn get(&self, i: usize) -> Option<String> {
-        self.0.get(i).cloned()
     }
 }
