@@ -319,14 +319,14 @@ free_bufs(struct capi_frame *f)
  * --------------------------------------------------------------------- */
 
 VALUE rb_mKernel, rb_mComparable, rb_mEnumerable, rb_mErrno, rb_mMath,
-    rb_mProcess, rb_mGC;
+    rb_mProcess, rb_mGC, rb_mFileTest;
 VALUE rb_cBasicObject, rb_cObject, rb_cArray, rb_cClass, rb_cComplex,
     rb_cDir, rb_cEncoding, rb_cEnumerator, rb_cFalseClass, rb_cFile,
     rb_cFloat, rb_cHash, rb_cIO, rb_cInteger, rb_cMatch, rb_cMethod,
     rb_cModule, rb_cNilClass, rb_cNumeric, rb_cProc, rb_cRandom, rb_cRange,
     rb_cRational, rb_cRegexp, rb_cSet, rb_cStat, rb_cString, rb_cStruct,
     rb_cSymbol, rb_cThread, rb_cTime, rb_cTrueClass, rb_cUnboundMethod,
-    rb_cBinding;
+    rb_cBinding, rb_cRefinement;
 VALUE rb_eException, rb_eStandardError, rb_eSystemExit, rb_eInterrupt,
     rb_eSignal, rb_eFatal, rb_eArgError, rb_eEOFError, rb_eIndexError,
     rb_eStopIteration, rb_eKeyError, rb_eRangeError, rb_eIOError,
@@ -339,7 +339,6 @@ VALUE rb_eException, rb_eStandardError, rb_eSystemExit, rb_eInterrupt,
     rb_eScriptError, rb_eNameError, rb_eSyntaxError, rb_eLoadError,
     rb_eMathDomainError, rb_eIOTimeoutError;
 VALUE rb_mWaitReadable, rb_mWaitWritable;
-VALUE rb_stdin, rb_stdout, rb_stderr;
 
 static const struct {
     VALUE *slot;
@@ -348,6 +347,7 @@ static const struct {
     {&rb_mKernel, "Kernel"}, {&rb_mComparable, "Comparable"},
     {&rb_mEnumerable, "Enumerable"}, {&rb_mErrno, "Errno"},
     {&rb_mMath, "Math"}, {&rb_mProcess, "Process"}, {&rb_mGC, "GC"},
+    {&rb_mFileTest, "FileTest"}, {&rb_cRefinement, "Refinement"},
     {&rb_cBasicObject, "BasicObject"}, {&rb_cObject, "Object"},
     {&rb_cArray, "Array"}, {&rb_cClass, "Class"}, {&rb_cComplex, "Complex"},
     {&rb_cDir, "Dir"}, {&rb_cEncoding, "Encoding"},
@@ -420,10 +420,6 @@ init_globals(void)
 {
     for (size_t i = 0; i < sizeof(capi_globals) / sizeof(capi_globals[0]); i++)
         *capi_globals[i].slot = lookup_path(capi_globals[i].path);
-    /* The standard streams as the process started with them. */
-    rb_stdin = lookup_path("STDIN");
-    rb_stdout = lookup_path("STDOUT");
-    rb_stderr = lookup_path("STDERR");
 }
 
 /* ---------------------------------------------------------------------
@@ -1056,6 +1052,11 @@ vrescue(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*r_proc)(VALUE, VALUE), VALU
         return result;
     VALUE exc = root(capi_errinfo);
     for (int i = 0; i < nclasses; i++) {
+        int t = RB_SPECIAL_CONST_P(classes[i]) ? -1 : TYPE(classes[i]);
+        if (t != T_CLASS && t != T_MODULE) {
+            errinfo_set(Qnil);
+            rb_raise(rb_eTypeError, "class or module required");
+        }
         if (api->is_kind_of(ctx(), M(exc), M(classes[i]))) {
             /* `$!` is the exception while the rescue function runs, as in
              * CRuby (zlib's read fallback asks rb_errinfo which it was),
@@ -1288,6 +1289,11 @@ rb_extract_keywords(VALUE *orighash)
  * Calling Ruby
  * --------------------------------------------------------------------- */
 
+static int obj_respond_to(VALUE obj, ID id, int flags);
+static int public_callable(VALUE recv, ID mid);
+static VALUE public_send_block_kw(VALUE recv, ID mid, int argc, const VALUE *argv, MrValue block,
+                                  int kw_splat);
+
 static VALUE
 funcall_block(VALUE recv, ID mid, int argc, const VALUE *argv, MrValue block)
 {
@@ -1308,8 +1314,15 @@ funcall_block(VALUE recv, ID mid, int argc, const VALUE *argv, MrValue block)
 static VALUE
 funcall_block_kw(VALUE recv, ID mid, int argc, const VALUE *argv, MrValue block, int kw_splat)
 {
-    if (!kw_splat || argc == 0 || !RB_TYPE_P(argv[argc - 1], T_HASH) ||
-        api->size < offsetof(MrApi, funcall_kw) + sizeof(api->funcall_kw))
+    if (kw_splat && argc > 0 && !RB_TYPE_P(argv[argc - 1], T_HASH)) {
+        /* CRuby converts the keywords with #to_hash (TypeError when it
+           does not respond or answers something else). */
+        VALUE *a = (VALUE *)frame_buf(sizeof(VALUE) * (size_t)argc);
+        memcpy(a, argv, sizeof(VALUE) * (size_t)argc);
+        a[argc - 1] = rb_convert_type(argv[argc - 1], T_HASH, "Hash", "to_hash");
+        argv = a;
+    }
+    if (!kw_splat || argc == 0 || api->size < offsetof(MrApi, funcall_kw) + sizeof(api->funcall_kw))
         return funcall_block(recv, mid, argc, argv, block);
     struct capi_frame *saved = frame();
     MrValue small[CAPI_SMALL_ARGS];
@@ -1338,7 +1351,10 @@ rb_funcall_passing_block_kw(VALUE recv, ID mid, int argc, const VALUE *argv, int
 VALUE
 rb_funcall_with_block_kw(VALUE recv, ID mid, int argc, const VALUE *argv, VALUE procval, int kw_splat)
 {
-    return funcall_block_kw(recv, mid, argc, argv, NIL_P(procval) ? MR_UNDEF : M(procval), kw_splat);
+    MrValue block = NIL_P(procval) ? MR_UNDEF : M(procval);
+    if (!public_callable(recv, mid))
+        return public_send_block_kw(recv, mid, argc, argv, block, kw_splat);
+    return funcall_block_kw(recv, mid, argc, argv, block, kw_splat);
 }
 
 VALUE
@@ -1347,9 +1363,31 @@ rb_funcallv(VALUE recv, ID mid, int argc, const VALUE *argv)
     return funcall_block(recv, mid, argc, argv, MR_UNDEF);
 }
 
+/* The public-only calls (CRuby's rb_funcallv_public, rb_funcall_with_block
+ * and its _kw form): a method the receiver has but not publicly goes
+ * through `public_send`, which raises the NoMethodError CRuby's call does
+ * (or reaches method_missing as it would). */
+static int
+public_callable(VALUE recv, ID mid)
+{
+    return obj_respond_to(recv, mid, MR_RESPOND_TO_FUNCALL) || !obj_respond_to(recv, mid, 1 | MR_RESPOND_TO_FUNCALL);
+}
+
+static VALUE
+public_send_block_kw(VALUE recv, ID mid, int argc, const VALUE *argv, MrValue block, int kw_splat)
+{
+    VALUE *a = (VALUE *)frame_buf(sizeof(VALUE) * ((size_t)argc + 1));
+    a[0] = ID2SYM(mid);
+    if (argc > 0)
+        memcpy(a + 1, argv, sizeof(VALUE) * (size_t)argc);
+    return funcall_block_kw(recv, rb_intern("public_send"), argc + 1, a, block, kw_splat);
+}
+
 VALUE
 rb_funcallv_public(VALUE recv, ID mid, int argc, const VALUE *argv)
 {
+    if (!public_callable(recv, mid))
+        return public_send_block_kw(recv, mid, argc, argv, MR_UNDEF, 0);
     return rb_funcallv(recv, mid, argc, argv);
 }
 
@@ -1390,7 +1428,7 @@ rb_funcall_passing_block(VALUE recv, ID mid, int argc, const VALUE *argv)
 VALUE
 rb_funcall_with_block(VALUE recv, ID mid, int argc, const VALUE *argv, VALUE procval)
 {
-    return funcall_block(recv, mid, argc, argv, NIL_P(procval) ? MR_UNDEF : M(procval));
+    return rb_funcall_with_block_kw(recv, mid, argc, argv, procval, 0);
 }
 
 VALUE
@@ -1537,7 +1575,7 @@ rb_monoruby_heap_type(VALUE obj)
     } kinds[] = {
         {&rb_cRegexp, T_REGEXP}, {&rb_cStruct, T_STRUCT}, {&rb_cRange, T_STRUCT},
         {&rb_cMatch, T_MATCH}, {&rb_cRational, T_RATIONAL},
-        {&rb_cComplex, T_COMPLEX}, {&rb_cIO, T_FILE},
+        {&rb_cComplex, T_COMPLEX}, {&rb_cIO, T_FILE}, {&rb_cTime, T_DATA},
     };
     for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
         VALUE k = *kinds[i].klass;
@@ -2248,16 +2286,48 @@ rb_const_set(VALUE klass, ID id, VALUE val)
     rb_define_const(klass, rb_id2name(id), val);
 }
 
+/* CRuby's variable.c: each segment must be defined directly in the
+ * previous one (not inherited from Object), may autoload, and must be a
+ * class or module. */
 VALUE
-rb_path2class(const char *path)
+rb_path_to_class(VALUE pathname)
 {
-    return rb_funcall(rb_cObject, rb_intern("const_get"), 1, rb_str_new_cstr(path));
+    VALUE path = rb_str_to_str(pathname);
+    const char *p = RSTRING_PTR(path);
+    long len = RSTRING_LEN(path);
+    const char *pend = p + len;
+    VALUE c = rb_cObject;
+    if (len == 0 || p[0] == '#')
+        rb_raise(rb_eArgError, "can't retrieve anonymous class %" PRIsVALUE, path);
+    const char *pbeg = p;
+    while (p < pend) {
+        while (p < pend && *p != ':')
+            p++;
+        VALUE seg = rb_str_new(pbeg, p - pbeg);
+        if (p < pend) {
+            if (p + 1 >= pend || p[1] != ':')
+                goto undefined_class;
+            p += 2;
+            pbeg = p;
+        }
+        ID id = rb_check_id(&seg);
+        if (!id || !RTEST(rb_funcall(c, rb_intern("const_defined?"), 2, ID2SYM(id), Qfalse)))
+            goto undefined_class;
+        c = rb_funcall(c, rb_intern("const_get"), 2, ID2SYM(id), Qfalse);
+        int t = RB_SPECIAL_CONST_P(c) ? -1 : TYPE(c);
+        if (t != T_CLASS && t != T_MODULE)
+            rb_raise(rb_eTypeError, "%" PRIsVALUE " does not refer to class/module", path);
+    }
+    return c;
+undefined_class:
+    rb_raise(rb_eArgError, "undefined class/module %" PRIsVALUE,
+             rb_str_subseq(path, 0, p - RSTRING_PTR(path)));
 }
 
 VALUE
-rb_path_to_class(VALUE path)
+rb_path2class(const char *path)
 {
-    return rb_funcall(rb_cObject, rb_intern("const_get"), 1, path);
+    return rb_path_to_class(rb_str_new_cstr(path));
 }
 
 void
@@ -2337,9 +2407,15 @@ rb_class_superclass(VALUE klass)
     return rb_funcall(klass, rb_intern("superclass"), 0);
 }
 
+/* The first ancestor that is neither a singleton class nor (CRuby) an
+ * iclass; monoruby's superclass chain has no iclasses. */
 VALUE
 rb_class_real(VALUE klass)
 {
+    if (!klass)
+        return 0;
+    while (klass != Qnil && RTEST(rb_funcall(klass, rb_intern("singleton_class?"), 0)))
+        klass = rb_class_superclass(klass);
     return klass;
 }
 
@@ -2382,6 +2458,8 @@ rb_obj_is_instance_of(VALUE obj, VALUE klass)
 VALUE
 rb_class_inherited_p(VALUE mod, VALUE arg)
 {
+    if (RB_SPECIAL_CONST_P(arg) || !is_module(arg))
+        rb_raise(rb_eTypeError, "compared with non class/module");
     return rb_funcall(mod, rb_intern("<="), 1, arg);
 }
 
@@ -2640,6 +2718,18 @@ rb_obj_instance_variables(VALUE obj)
 void
 rb_ivar_foreach(VALUE obj, int (*func)(ID, VALUE, st_data_t), st_data_t arg)
 {
+    /* A class's or module's table holds its class variables as well
+       (CRuby keeps both in one). */
+    if (!RB_SPECIAL_CONST_P(obj) && is_module(obj)) {
+        VALUE cvars = rb_funcall(obj, rb_intern("class_variables"), 1, Qfalse);
+        long m = RARRAY_LEN(cvars);
+        for (long i = 0; i < m; i++) {
+            VALUE sym = rb_ary_entry(cvars, i);
+            VALUE v = rb_funcall(obj, rb_intern("class_variable_get"), 1, sym);
+            if (func(SYM2ID(sym), v, arg) == ST_STOP)
+                return;
+        }
+    }
     VALUE names = rb_obj_instance_variables(obj);
     long n = RARRAY_LEN(names);
     for (long i = 0; i < n; i++) {
@@ -4571,6 +4661,9 @@ rb_range_values(VALUE range, VALUE *begp, VALUE *endp, int *exclp)
 /* CRuby's range.c: `range` as (begin, length) over a sequence of `len`
  * elements. Qfalse for a non-range; Qnil (err 0) or RangeError (err 1)
  * when out of range; err 2 clamps like err 0 but raises. */
+static VALUE range_component_beg_len(VALUE b, VALUE e, int excl, long *begp, long *lenp,
+                                     long len, int err);
+
 VALUE
 rb_range_beg_len(VALUE range, long *begp, long *lenp, long len, int err)
 {
@@ -4578,36 +4671,40 @@ rb_range_beg_len(VALUE range, long *begp, long *lenp, long len, int err)
     int excl;
     if (!rb_range_values(range, &b, &e, &excl))
         return Qfalse;
+    VALUE res = range_component_beg_len(b, e, excl, begp, lenp, len, err);
+    if (NIL_P(res) && err)
+        rb_raise(rb_eRangeError, "%+" PRIsVALUE " out of range", range);
+    return res;
+}
+
+/* rb_range_beg_len over the parts of a range (CRuby's
+ * rb_range_component_beg_len): nil when out of range, whatever `err`. */
+static VALUE
+range_component_beg_len(VALUE b, VALUE e, int excl, long *begp, long *lenp, long len, int err)
+{
     long beg = NIL_P(b) ? 0 : NUM2LONG(b);
     long end = NIL_P(e) ? -1 : NUM2LONG(e);
     if (NIL_P(e))
         excl = 0;
-    long origbeg = beg, origend = end;
     if (beg < 0) {
         beg += len;
         if (beg < 0)
-            goto out_of_range;
+            return Qnil;
     }
     if (end < 0)
         end += len;
-    if (!excl)
+    /* LONG_MAX + 1 is not representable: saturate. */
+    if (!excl && end < LONG_MAX)
         end++;
     if (err == 0 || err == 2) {
         if (beg > len)
-            goto out_of_range;
+            return Qnil;
         if (end > len)
             end = len;
     }
-    len = end - beg;
-    if (len < 0)
-        len = 0;
     *begp = beg;
-    *lenp = len;
+    *lenp = end > beg ? end - beg : 0;
     return Qtrue;
-out_of_range:
-    if (err)
-        rb_raise(rb_eRangeError, "%ld..%s%ld out of range", origbeg, excl ? "." : "", origend);
-    return Qnil;
 }
 
 /* ---------------------------------------------------------------------
@@ -5209,7 +5306,7 @@ static const MrNativeOps data_ops = { "Data", data_mark, data_free, NULL };
  */
 struct capi_alloc {
     VALUE klass;
-    rb_alloc_func_t *func;
+    rb_alloc_func_t func;
     int native;
 };
 
@@ -5257,7 +5354,7 @@ ensure_native(VALUE klass)
 }
 
 void
-rb_define_alloc_func(VALUE klass, rb_alloc_func_t *func)
+rb_define_alloc_func(VALUE klass, rb_alloc_func_t func)
 {
     ensure_native(klass);
     alloc_entry(klass)->func = func;
@@ -5270,8 +5367,30 @@ rb_undef_alloc_func(VALUE klass)
     alloc_entry_add(klass)->func = NULL;
 }
 
-rb_alloc_func_t *
+/* The interpreter's own allocator (CRuby's rb_class_allocate_instance
+ * and friends): `Class#allocate` as Class defines it. */
+static VALUE
+builtin_alloc(VALUE klass)
+{
+    VALUE allocate = rb_funcall(rb_cClass, rb_intern("instance_method"), 1, ID2SYM(rb_intern("allocate")));
+    return rb_funcall(allocate, rb_intern("bind_call"), 1, klass);
+}
+
+static rb_alloc_func_t alloc_func_lookup(VALUE klass);
+
+/* CRuby answers the builtin allocator for a class that has no C one,
+ * and NULL once it is undefined. */
+rb_alloc_func_t
 rb_get_alloc_func(VALUE klass)
+{
+    for (VALUE c = klass; c != Qnil; c = rb_class_superclass(c))
+        if (alloc_entry(c))
+            return alloc_func_lookup(klass);
+    return builtin_alloc;
+}
+
+static rb_alloc_func_t
+alloc_func_lookup(VALUE klass)
 {
     for (VALUE c = klass; c != Qnil; c = rb_class_superclass(c)) {
         struct capi_alloc *e = alloc_entry(c);
@@ -5394,7 +5513,7 @@ data_of(VALUE obj, int raise)
     }
     if (api->type_of(ctx(), M(obj)) == MR_T_NATIVE) {
         VALUE klass = rb_obj_class(obj);
-        rb_alloc_func_t *alloc = rb_get_alloc_func(klass);
+        rb_alloc_func_t alloc = alloc_func_lookup(klass);
         if (alloc) {
             pending_alloc.obj = obj;
             pending_alloc.klass = klass;
@@ -7898,6 +8017,36 @@ rb_monoruby_output_rs(void)
 }
 
 VALUE
+rb_monoruby_stdin(void)
+{
+    return rb_gv_get("$stdin");
+}
+
+VALUE
+rb_monoruby_stdout(void)
+{
+    return rb_gv_get("$stdout");
+}
+
+VALUE
+rb_monoruby_stderr(void)
+{
+    return rb_gv_get("$stderr");
+}
+
+VALUE
+rb_monoruby_output_fs(void)
+{
+    return rb_gv_get("$,");
+}
+
+VALUE
+rb_get_argv(void)
+{
+    return rb_const_get(rb_cObject, rb_intern("ARGV"));
+}
+
+VALUE
 rb_monoruby_fs(void)
 {
     return rb_gv_get("$;");
@@ -9284,4 +9433,669 @@ ruby_vm_at_exit(void (*func)(ruby_vm_t *))
     if (vm_at_exit_len == 0)
         atexit(run_vm_at_exit);
     vm_at_exit_fns[vm_at_exit_len++] = func;
+}
+
+/* ---------------------------------------------------------------------
+ * Reflection: the C sides of Module / Class / Object methods. CRuby's
+ * read the class tables directly; here each is the Ruby method it
+ * implements, so they agree with Ruby by construction.
+ * --------------------------------------------------------------------- */
+
+VALUE
+rb_define_class_id(ID id, VALUE super)
+{
+    /* CRuby: an anonymous subclass, neither named nor assigned to a
+       constant, and `inherited` is not called (the caller does it). */
+    (void)id;
+    return rb_class_new(super ? super : rb_cObject);
+}
+
+VALUE
+rb_define_class_id_under(VALUE outer, ID id, VALUE super)
+{
+    return rb_define_class_under(outer, rb_id2name(id), super);
+}
+
+VALUE
+rb_define_module_id(ID id)
+{
+    (void)id;
+    return rb_module_new();
+}
+
+VALUE
+rb_define_module_id_under(VALUE outer, ID id)
+{
+    return rb_define_module_under(outer, rb_id2name(id));
+}
+
+/* CRuby answers the raw super pointer: 0 (false) above BasicObject. */
+VALUE
+rb_class_get_superclass(VALUE klass)
+{
+    if (TYPE(klass) == T_MODULE)
+        return Qfalse;
+    VALUE super = rb_class_superclass(klass);
+    return NIL_P(super) ? Qfalse : super;
+}
+
+VALUE
+rb_class_attached_object(VALUE klass)
+{
+    return rb_funcall(klass, rb_intern("attached_object"), 0);
+}
+
+VALUE
+rb_class_subclasses(VALUE klass)
+{
+    return rb_funcall(klass, rb_intern("subclasses"), 0);
+}
+
+/* The permanent name, or nil for an anonymous class or module. */
+VALUE
+rb_class_path_cached(VALUE mod)
+{
+    return rb_mod_name(mod);
+}
+
+VALUE
+rb_class_instance_methods(int argc, const VALUE *argv, VALUE mod)
+{
+    return rb_funcallv(mod, rb_intern("instance_methods"), argc, argv);
+}
+
+VALUE
+rb_class_public_instance_methods(int argc, const VALUE *argv, VALUE mod)
+{
+    return rb_funcallv(mod, rb_intern("public_instance_methods"), argc, argv);
+}
+
+VALUE
+rb_class_protected_instance_methods(int argc, const VALUE *argv, VALUE mod)
+{
+    return rb_funcallv(mod, rb_intern("protected_instance_methods"), argc, argv);
+}
+
+VALUE
+rb_class_private_instance_methods(int argc, const VALUE *argv, VALUE mod)
+{
+    return rb_funcallv(mod, rb_intern("private_instance_methods"), argc, argv);
+}
+
+VALUE
+rb_obj_singleton_methods(int argc, const VALUE *argv, VALUE obj)
+{
+    return rb_funcallv(obj, rb_intern("singleton_methods"), argc, argv);
+}
+
+VALUE
+rb_mod_ancestors(VALUE mod)
+{
+    return rb_funcall(mod, rb_intern("ancestors"), 0);
+}
+
+VALUE
+rb_mod_include_p(VALUE child, VALUE parent)
+{
+    return rb_funcall(child, rb_intern("include?"), 1, parent);
+}
+
+VALUE
+rb_mod_included_modules(VALUE mod)
+{
+    return rb_funcall(mod, rb_intern("included_modules"), 0);
+}
+
+VALUE
+rb_mod_constants(int argc, const VALUE *argv, VALUE mod)
+{
+    return rb_funcallv(mod, rb_intern("constants"), argc, argv);
+}
+
+VALUE
+rb_mod_class_variables(int argc, const VALUE *argv, VALUE mod)
+{
+    return rb_funcallv(mod, rb_intern("class_variables"), argc, argv);
+}
+
+VALUE
+rb_mod_remove_const(VALUE space, VALUE name)
+{
+    return rb_funcall(space, rb_intern("remove_const"), 1, name);
+}
+
+VALUE
+rb_const_remove(VALUE space, ID name)
+{
+    return rb_mod_remove_const(space, ID2SYM(name));
+}
+
+VALUE
+rb_mod_remove_cvar(VALUE mod, VALUE name)
+{
+    return rb_funcall(mod, rb_intern("remove_class_variable"), 1, name);
+}
+
+/* CRuby's rb_const_get_from / rb_const_defined_from: `space` and its
+ * ancestors, but not Object (nor what Object includes) unless `space`
+ * is Object itself; a miss calls `const_missing`. */
+static VALUE
+const_owner_from(VALUE space, ID name)
+{
+    VALUE sym = ID2SYM(name);
+    VALUE ancestors = rb_mod_ancestors(space);
+    long n = RARRAY_LEN(ancestors);
+    for (long i = 0; i < n; i++) {
+        VALUE mod = rb_ary_entry(ancestors, i);
+        if (mod == rb_cObject && space != rb_cObject)
+            break;
+        if (RTEST(rb_funcall(mod, rb_intern("const_defined?"), 2, sym, Qfalse)))
+            return mod;
+    }
+    return Qundef;
+}
+
+VALUE
+rb_const_get_from(VALUE space, ID name)
+{
+    VALUE owner = const_owner_from(space, name);
+    if (owner == Qundef)
+        return rb_funcall(space, rb_intern("const_missing"), 1, ID2SYM(name));
+    return rb_funcall(owner, rb_intern("const_get"), 2, ID2SYM(name), Qfalse);
+}
+
+int
+rb_const_defined_from(VALUE space, ID name)
+{
+    return const_owner_from(space, name) != Qundef;
+}
+
+VALUE
+rb_obj_remove_instance_variable(VALUE obj, VALUE name)
+{
+    return rb_funcall(obj, rb_intern("remove_instance_variable"), 1, name);
+}
+
+/* CRuby frees the ivar table of an object that keeps its instance
+ * variables outside itself (a String, an Array, ...): every instance
+ * variable is gone. */
+void
+rb_free_generic_ivar(VALUE obj)
+{
+    VALUE names = rb_obj_instance_variables(obj);
+    long n = RARRAY_LEN(names);
+    for (long i = 0; i < n; i++)
+        rb_obj_remove_instance_variable(obj, rb_ary_entry(names, i));
+}
+
+st_index_t
+rb_ivar_count(VALUE obj)
+{
+    return (st_index_t)RARRAY_LEN(rb_obj_instance_variables(obj));
+}
+
+/* CRuby's vm_method.c: `ex` & 1 (BOUND_PRIVATE) leaves private methods
+ * out, and with `ex` & 2 (BOUND_RESPONDS) protected ones too. */
+int
+rb_method_boundp(VALUE klass, ID id, int ex)
+{
+    VALUE sym = ID2SYM(id);
+    int pub = RTEST(rb_funcall(klass, rb_intern("public_method_defined?"), 1, sym));
+    int prot = !pub && RTEST(rb_funcall(klass, rb_intern("protected_method_defined?"), 1, sym));
+    int priv = !pub && !prot && RTEST(rb_funcall(klass, rb_intern("private_method_defined?"), 1, sym));
+    if (!pub && !prot && !priv)
+        return 0;
+    if (ex & ~2) {
+        if (priv)
+            return 0;
+        if (prot && (ex & 2))
+            return 0;
+    }
+    return 1;
+}
+
+VALUE
+rb_obj_method(VALUE recv, VALUE mid)
+{
+    return rb_funcall(recv, rb_intern("method"), 1, mid);
+}
+
+int
+rb_obj_method_arity(VALUE obj, ID mid)
+{
+    return NUM2INT(rb_funcall(rb_obj_method(obj, ID2SYM(mid)), rb_intern("arity"), 0));
+}
+
+int
+rb_mod_method_arity(VALUE mod, ID mid)
+{
+    VALUE m = rb_funcall(mod, rb_intern("instance_method"), 1, ID2SYM(mid));
+    return NUM2INT(rb_funcall(m, rb_intern("arity"), 0));
+}
+
+VALUE
+rb_cvar_defined(VALUE klass, ID id)
+{
+    return RTEST(rb_funcall(klass, rb_intern("class_variable_defined?"), 1, ID2SYM(id))) ? Qtrue
+                                                                                        : Qfalse;
+}
+
+void
+rb_define_class_variable(VALUE klass, const char *name, VALUE val)
+{
+    rb_cv_set(klass, name, val);
+}
+
+VALUE
+rb_f_global_variables(void)
+{
+    return rb_funcall(rb_mKernel, rb_intern("global_variables"), 0);
+}
+
+/* ---------------------------------------------------------------------
+ * rb_exec_recursive: CRuby's thread.c. The objects each method is
+ * working on are kept per method name in a fiber-local Hash (Thread#[]
+ * is fiber-local, as CRuby's ec-local storage is), so a call that comes
+ * back to an object already in progress sees `recursive` set.
+ * --------------------------------------------------------------------- */
+
+struct exec_recursive_params {
+    VALUE (*func)(VALUE, VALUE, int);
+    VALUE list;
+    VALUE obj;
+    VALUE pairid;
+    VALUE arg;
+};
+
+static VALUE
+identity_hash_new(void)
+{
+    VALUE h = rb_hash_new();
+    rb_funcall(h, rb_intern("compare_by_identity"), 0);
+    return h;
+}
+
+static VALUE
+recursive_list(void)
+{
+    ID key = rb_intern("__recursive_key__");
+    VALUE th = rb_thread_current();
+    VALUE hash = rb_thread_local_aref(th, key);
+    if (!RB_TYPE_P(hash, T_HASH)) {
+        hash = rb_hash_new();
+        rb_thread_local_aset(th, key, hash);
+    }
+    /* CRuby's rb_frame_last_func: the innermost C method, through the
+       frames of C blocks (an `_outer` call runs its function in one). */
+    ID mid = 0;
+    for (const struct capi_frame *f = capi_cur; f && !mid; f = f->prev)
+        if (f->method)
+            mid = f->method->mid;
+    VALUE sym = ID2SYM(mid ? mid : key);
+    VALUE list = rb_hash_lookup2(hash, sym, Qundef);
+    if (list == Qundef || !RB_TYPE_P(list, T_HASH)) {
+        list = identity_hash_new();
+        rb_hash_aset(hash, sym, list);
+    }
+    return list;
+}
+
+static int
+recursive_check(VALUE list, VALUE obj, VALUE paired)
+{
+    VALUE pair_list = rb_hash_lookup2(list, obj, Qundef);
+    if (pair_list == Qundef)
+        return 0;
+    if (paired != Qundef) {
+        if (!RB_TYPE_P(pair_list, T_HASH))
+            return 0;
+        if (rb_hash_lookup2(pair_list, paired, Qundef) == Qundef)
+            return 0;
+    }
+    return 1;
+}
+
+static void
+recursive_push(VALUE list, VALUE obj, VALUE paired)
+{
+    if (paired == Qundef) {
+        rb_hash_aset(list, obj, Qtrue);
+        return;
+    }
+    VALUE pair_list = rb_hash_lookup2(list, obj, Qundef);
+    if (pair_list == Qundef || !RB_TYPE_P(pair_list, T_HASH)) {
+        pair_list = identity_hash_new();
+        rb_hash_aset(list, obj, pair_list);
+    }
+    rb_hash_aset(pair_list, paired, Qtrue);
+}
+
+static void
+recursive_pop(VALUE list, VALUE obj, VALUE paired)
+{
+    if (paired != Qundef) {
+        VALUE pair_list = rb_hash_lookup2(list, obj, Qundef);
+        if (RB_TYPE_P(pair_list, T_HASH)) {
+            rb_hash_delete(pair_list, paired);
+            if (RHASH_SIZE(pair_list) > 0)
+                return;
+        }
+    }
+    rb_hash_delete(list, obj);
+}
+
+static VALUE
+exec_recursive_body(VALUE data)
+{
+    struct exec_recursive_params *p = (struct exec_recursive_params *)data;
+    return p->func(p->obj, p->arg, 0);
+}
+
+static VALUE
+exec_recursive_pop(VALUE data)
+{
+    struct exec_recursive_params *p = (struct exec_recursive_params *)data;
+    recursive_pop(p->list, p->obj, p->pairid);
+    return Qnil;
+}
+
+/* The outermost call of an `_outer` family catches the inner call that
+ * found recursion; `p` travels as an Integer, since a block's data is
+ * marked as a VALUE. */
+static VALUE
+exec_recursive_outer_i(VALUE tag, VALUE data, int argc, const VALUE *argv, VALUE blockarg)
+{
+    (void)tag;
+    (void)argc;
+    (void)argv;
+    (void)blockarg;
+    VALUE p = (VALUE)(intptr_t)NUM2LONG(data);
+    return rb_ensure(exec_recursive_body, p, exec_recursive_pop, p);
+}
+
+static VALUE
+exec_recursive_catch(VALUE data)
+{
+    struct exec_recursive_params *p = (struct exec_recursive_params *)data;
+    return rb_catch_obj(p->list, exec_recursive_outer_i, LONG2NUM((long)(intptr_t)p));
+}
+
+static VALUE
+exec_recursive(VALUE (*func)(VALUE, VALUE, int), VALUE obj, VALUE pairid, VALUE arg, int outer)
+{
+    struct exec_recursive_params p;
+    VALUE outer_key = ID2SYM(rb_intern("__recursive_key__"));
+    p.func = func;
+    p.list = recursive_list();
+    p.obj = obj;
+    p.pairid = pairid;
+    p.arg = arg;
+    int outermost = outer && !recursive_check(p.list, outer_key, Qundef);
+    if (recursive_check(p.list, obj, pairid)) {
+        if (outer && !outermost)
+            rb_throw_obj(p.list, p.list);
+        return func(obj, arg, 1);
+    }
+    recursive_push(p.list, obj, pairid);
+    if (!outermost)
+        return rb_ensure(exec_recursive_body, (VALUE)&p, exec_recursive_pop, (VALUE)&p);
+    recursive_push(p.list, outer_key, Qundef);
+    int state;
+    VALUE result = rb_protect(exec_recursive_catch, (VALUE)&p, &state);
+    recursive_pop(p.list, outer_key, Qundef);
+    if (state)
+        rb_jump_tag(state);
+    if (result == p.list)
+        result = func(obj, arg, 1);
+    return result;
+}
+
+VALUE
+rb_exec_recursive(VALUE (*func)(VALUE, VALUE, int), VALUE obj, VALUE arg)
+{
+    return exec_recursive(func, obj, Qundef, arg, 0);
+}
+
+VALUE
+rb_exec_recursive_paired(VALUE (*func)(VALUE, VALUE, int), VALUE obj, VALUE paired_obj, VALUE arg)
+{
+    return exec_recursive(func, obj, paired_obj, arg, 0);
+}
+
+VALUE
+rb_exec_recursive_outer(VALUE (*func)(VALUE, VALUE, int), VALUE obj, VALUE arg)
+{
+    return exec_recursive(func, obj, Qundef, arg, 1);
+}
+
+VALUE
+rb_exec_recursive_paired_outer(VALUE (*func)(VALUE, VALUE, int), VALUE obj, VALUE paired_obj,
+                               VALUE arg)
+{
+    return exec_recursive(func, obj, paired_obj, arg, 1);
+}
+
+/* ---------------------------------------------------------------------
+ * Warnings, backtraces and end procs
+ * --------------------------------------------------------------------- */
+
+static VALUE
+warning_category_sym(rb_warning_category_t category)
+{
+    switch (category) {
+    case RB_WARN_CATEGORY_DEPRECATED:
+        return ID2SYM(rb_intern("deprecated"));
+    case RB_WARN_CATEGORY_EXPERIMENTAL:
+        return ID2SYM(rb_intern("experimental"));
+    case RB_WARN_CATEGORY_PERFORMANCE:
+        return ID2SYM(rb_intern("performance"));
+    case RB_WARN_CATEGORY_STRICT_UNUSED_BLOCK:
+        return ID2SYM(rb_intern("strict_unused_block"));
+    default:
+        return Qnil;
+    }
+}
+
+/* CRuby's error.c: nothing when `$VERBOSE` is nil (or not true, for the
+ * `warning` form) or the category is disabled (`Warning[cat]`); the
+ * NONE category always is. */
+static int
+category_enabled(rb_warning_category_t category)
+{
+    VALUE sym = warning_category_sym(category);
+    if (NIL_P(sym))
+        return 0;
+    VALUE warning = rb_const_get(rb_cObject, rb_intern("Warning"));
+    return RTEST(rb_funcall(warning, rb_intern("[]"), 1, sym));
+}
+
+/* `Warning.warn(message, category: cat)`, as CRuby's rb_warn_category. */
+static void
+vcategory_warn(rb_warning_category_t category, const char *fmt, va_list ap)
+{
+    size_t len;
+    const char *msg = vformat_buf(fmt, ap, &len);
+    VALUE args[2];
+    args[0] = rb_utf8_str_new_cstr("warning: ");
+    rb_str_cat(args[0], msg, (long)len);
+    rb_str_cat_cstr(args[0], "\n");
+    args[1] = rb_hash_new();
+    rb_hash_aset(args[1], ID2SYM(rb_intern("category")), warning_category_sym(category));
+    VALUE warning = rb_const_get(rb_cObject, rb_intern("Warning"));
+    rb_funcallv_kw(warning, rb_intern("warn"), 2, args, RB_PASS_KEYWORDS);
+}
+
+void
+rb_category_warn(rb_warning_category_t category, const char *fmt, ...)
+{
+    if (NIL_P(rb_gv_get("$VERBOSE")) || !category_enabled(category))
+        return;
+    va_list ap;
+    va_start(ap, fmt);
+    vcategory_warn(category, fmt, ap);
+    va_end(ap);
+}
+
+void
+rb_category_warning(rb_warning_category_t category, const char *fmt, ...)
+{
+    if (rb_gv_get("$VERBOSE") != Qtrue || !category_enabled(category))
+        return;
+    va_list ap;
+    va_start(ap, fmt);
+    vcategory_warn(category, fmt, ap);
+    va_end(ap);
+}
+
+/* `file:line: warning: ...`, at the location the caller names. */
+static void
+vcompile_warn(const char *file, int line, const char *fmt, va_list ap)
+{
+    size_t len;
+    const char *msg = vformat_buf(fmt, ap, &len);
+    VALUE s = rb_sprintf("%s:%d: warning: ", file, line);
+    rb_str_cat(s, msg, (long)len);
+    rb_str_cat_cstr(s, "\n");
+    VALUE warning = rb_const_get(rb_cObject, rb_intern("Warning"));
+    rb_funcall(warning, rb_intern("warn"), 1, s);
+}
+
+void
+rb_compile_warn(const char *file, int line, const char *fmt, ...)
+{
+    if (NIL_P(rb_gv_get("$VERBOSE")))
+        return;
+    va_list ap;
+    va_start(ap, fmt);
+    vcompile_warn(file, line, fmt, ap);
+    va_end(ap);
+}
+
+void
+rb_compile_warning(const char *file, int line, const char *fmt, ...)
+{
+    if (rb_gv_get("$VERBOSE") != Qtrue)
+        return;
+    va_list ap;
+    va_start(ap, fmt);
+    vcompile_warn(file, line, fmt, ap);
+    va_end(ap);
+}
+
+/* `warning: <message>: <strerror(errno)>`, verbose mode only. */
+void
+rb_sys_warning(const char *fmt, ...)
+{
+    int err = errno;
+    if (rb_gv_get("$VERBOSE") != Qtrue)
+        return;
+    va_list ap;
+    va_start(ap, fmt);
+    size_t len;
+    const char *msg = vformat_buf(fmt, ap, &len);
+    va_end(ap);
+    VALUE s = rb_utf8_str_new_cstr("warning: ");
+    rb_str_cat(s, msg, (long)len);
+    rb_str_cat_cstr(s, ": ");
+    rb_str_cat_cstr(s, strerror(err));
+    rb_funcall(rb_mKernel, rb_intern("warn"), 1, s);
+}
+
+/* The Ruby-level backtrace of the running C method's caller, as
+ * `caller(0)` sees it. */
+VALUE
+rb_make_backtrace(void)
+{
+    return rb_funcall(rb_mKernel, rb_intern("caller"), 1, INT2FIX(0));
+}
+
+void
+rb_backtrace(void)
+{
+    VALUE bt = rb_make_backtrace();
+    VALUE err = rb_gv_get("$stderr");
+    long n = RARRAY_LEN(bt);
+    for (long i = 0; i < n; i++)
+        rb_io_write(err, rb_sprintf("\tfrom %" PRIsVALUE "\n", rb_ary_entry(bt, i)));
+}
+
+/* `at_exit` with a Proc that calls `func(arg)`; the function pointer
+ * rides along as an Integer, `arg` as a marked VALUE. */
+static VALUE
+end_proc_call(VALUE yielded, VALUE data, int argc, const VALUE *argv, VALUE blockarg)
+{
+    (void)yielded;
+    (void)argc;
+    (void)argv;
+    (void)blockarg;
+    void (*func)(VALUE) = (void (*)(VALUE))(intptr_t)NUM2LONG(rb_ary_entry(data, 0));
+    func(rb_ary_entry(data, 1));
+    return Qnil;
+}
+
+void
+rb_set_end_proc(void (*func)(VALUE arg), VALUE arg)
+{
+    VALUE data = rb_ary_new_from_args(2, LONG2NUM((long)(intptr_t)func), arg);
+    VALUE proc = rb_proc_new(end_proc_call, data);
+    rb_funcall_with_block(rb_mKernel, rb_intern("at_exit"), 0, NULL, proc);
+}
+
+/* ---------------------------------------------------------------------
+ * Arithmetic sequences (CRuby's enumerator.c)
+ * --------------------------------------------------------------------- */
+
+int
+rb_arithmetic_sequence_extract(VALUE obj, rb_arithmetic_sequence_components_t *component)
+{
+    static VALUE arith_seq;
+    if (!arith_seq) {
+        arith_seq = lookup_path("Enumerator::ArithmeticSequence");
+        if (!RB_SPECIAL_CONST_P(arith_seq))
+            api->gc_pin(ctx(), M(arith_seq));
+    }
+    if (!NIL_P(arith_seq) && RTEST(rb_obj_is_kind_of(obj, arith_seq))) {
+        component->begin = rb_funcall(obj, rb_intern("begin"), 0);
+        component->end = rb_funcall(obj, rb_intern("end"), 0);
+        component->step = rb_funcall(obj, rb_intern("step"), 0);
+        component->exclude_end = RTEST(rb_funcall(obj, rb_intern("exclude_end?"), 0));
+        return 1;
+    }
+    if (rb_range_values(obj, &component->begin, &component->end, &component->exclude_end)) {
+        component->step = INT2FIX(1);
+        return 1;
+    }
+    return 0;
+}
+
+VALUE
+rb_arithmetic_sequence_beg_len_step(VALUE obj, long *begp, long *lenp, long *stepp, long len,
+                                    int err)
+{
+    rb_arithmetic_sequence_components_t aseq;
+    if (!rb_arithmetic_sequence_extract(obj, &aseq))
+        return Qfalse;
+    long step = NIL_P(aseq.step) ? 1 : NUM2LONG(aseq.step);
+    *stepp = step;
+    if (step < 0) {
+        if (aseq.exclude_end && !NIL_P(aseq.end)) {
+            /* The exclusion applies before the range is reversed, and
+               the previous beginning is not excluded. */
+            aseq.end = LONG2NUM(NUM2LONG(aseq.end) + 1);
+            aseq.exclude_end = 0;
+        }
+        VALUE tmp = aseq.begin;
+        aseq.begin = aseq.end;
+        aseq.end = tmp;
+    }
+    if (err == 0 && (step < -1 || step > 1)) {
+        if (range_component_beg_len(aseq.begin, aseq.end, aseq.exclude_end, begp, lenp, len, 1) ==
+            Qtrue) {
+            if (*begp > len || *lenp > len)
+                rb_raise(rb_eRangeError, "%+" PRIsVALUE " out of range", obj);
+            return Qtrue;
+        }
+        return Qnil;
+    }
+    return range_component_beg_len(aseq.begin, aseq.end, aseq.exclude_end, begp, lenp, len, err);
 }

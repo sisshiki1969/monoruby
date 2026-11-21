@@ -589,9 +589,21 @@ impl JitModule {
     ///
     fn invoker_frame_setup(&mut self, invoke_block: bool, specify_self: bool) {
         if invoke_block {
+            if specify_self {
+                // rcx holds self here, not a block handler: the
+                // with-self invoker forwards no block (as on aarch64).
+                // A Method#to_proc body reads this slot to forward a
+                // block, so it must not see self there.
+                monoasm! { &mut self.jit,
+                    movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], 0;
+                };
+            } else {
+                monoasm! { &mut self.jit,
+                    // set block (rcx holds optional block handler passed from caller)
+                    movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], rcx;
+                };
+            }
             monoasm! { &mut self.jit,
-                // set block (rcx holds optional block handler passed from caller)
-                movq [rsp - (RSP_LOCAL_FRAME + LFP_BLOCK)], rcx;
                 movq rax, [rdx + (PROCDATA_OUTER)];        // rax <- outer_lfp
                 movl rdx, [rdx + (PROCDATA_FUNCID)];    // rdx <- FuncId
             };

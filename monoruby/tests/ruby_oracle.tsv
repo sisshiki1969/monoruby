@@ -3336,6 +3336,7 @@
 8a44343beec7f35a4c79738be44889de	[",", ","]	$; = ","; r = [$;, $-F]; $; = nil; r
 8a45cc21144735e8505e2a9b3b2065d5	[:considered, :moved, :moved_up, :moved_down]	GC.latest_compact_info.keys
 8a608d11c3f657ca379bad311ef65e13	294	class C\n          def f\n            x = 0\n            7.times { x += yi
+8a68d38302e71f932e51ba0fec545d34	["abc", true, 1, [1, 2], true]	K = Class.new(String) { attr_accessor :a }\n        s = K.new("abc")\n   
 8a6b94b64e2a0b0af3908b52f147185f	true	class S\n        end\n        class C < S\n        end\n        S === C.new
 8a7650d64512f44fb51f061b3ebb7a33	["UTF-8", "US-ASCII", true, "UTF-8", "UTF-8", 3, [ArgumentError, "wrong number of arguments (given 2, expected 0..1)"], [4, 8, 73, 117, 58, 13, 69, 110, 99, 111, 100, 105, 110, 103, 10, 85, 84, 70, 45, 56, 6, 58, 6, 69, 70], true, ["UTF-8", "ASCII-8BIT", "ISO-2022-JP", "Windows-31J"], [["UTF-8", "x"]], [ArgumentError, "unknown encoding name - nope"], "UTF-8", "EUC-JP"]	e = Encoding::UTF_8\n            r = [e._dump(-1), e._dump(-1).encod
 8a7a2003e2b8f02739808a7e001b3a59	[[:block, :block, :unblock, :unblock, :block], true, true, false, true, 5]	class Sched\n              attr_reader :events\n              def ini
@@ -3432,6 +3433,7 @@
 8e37978f76d7ac490782732805b127a6	["#<A:0x @a=\\"\\\\u3044\\", @b=\\\\u3046\\\\u3046>", "ASCII-8BIT", "#<struct S a=\\"\\\\u3044\\", b=\\\\u3046\\\\u3046>", "ASCII-8BIT", "#<data D a=\\"\\\\u3044\\", b=\\\\u3046\\\\u3046>", "#<A:0x @a=\\"\\\\u3044\\", @b=\\\\u3046\\\\u3046>", "#<struct S a=\\"\\\\u3044\\", b=\\\\u3046\\\\u3046>"]	require "monitor"\n  class B; def inspect; "BBB"; end; end\n  class U; def insp
 8e430b6b2eaf098fe9c551a79ce5e682	[1, 5, nil, 1, 0, 17, 9, nil, :frozen, :frozen, :frozen, 3, :d, 3, "p:x", 1, :d]	def run(h, k, n = 300)\n          r = nil; i = 0\n          while i < n; 
 8e45329e063fad5a4cfe525144c9d0b1	["3/2", Float, "-1/2", Float, "3/2", Float, "1/6", Float, :nm, :zd, :zd, :zd, :zd, :te, "1/1", "1/1", "-1/1", 1, :ae, 0.5, 500.0, "-1/3", "-1/3", "-3/10", "1/3", "3/4", "not an integer", "not an integer", "not an integer", "233/100", true, [3, 5]]	__a = [];__a << ((Rational(1, 2) + 1).to_s);__a << ((Rational(1, 2) + 0.5).class
+8e4b77d6748153c0cb7f7f0c4f7b5468	[[[1], nil, IeC], [[], nil, IeC], []]	class IeC\n          def m(*a, &b) = [a, b, self.class]\n        end\n    
 8e4e8019a5cb826e7c04db9f7be00c08	[[10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4], [10, 2, 3, 4]]	def g(a, b, c, d) = [a, b, c, d]\n        def f(...) = g(10, ...)\n      
 8e4f08d4b180fdfd409311ea49ee15b5	[1, 3, 0, 999, 999, 40]	__a = [];__a << ([0,1,2,3].fetch(1));__a << ([0,1,2,3].fetch(-1));__a << ([0,1,2
 8e5bf6a49a3af8219a95bf2205693b54	"from ensure"	def m\n              raise "orig"\n            rescue\n              r
