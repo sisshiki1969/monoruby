@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-aae1f280.js";
+            window.path_to_searchindex_js = "searchindex-e88729c4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -18796,6 +18796,80 @@ bigdecimal の <code>missing.h</code> が <code>rb_complex_real</code> / <code>i
 ruby/spec <code>optional/capi</code> は 1525 例・1359 通過（段階 18 の後は
 1525 例・1255 通過。既に通っていた例で新たに落ちたものは無い）。</li>
 </ul>
+<h3 id="328-procfiberthread例外iogcプロセスの関数段階-20"><a class="header" href="#328-procfiberthread例外iogcプロセスの関数段階-20">3.28 Proc・Fiber・Thread・例外・IO・GC・プロセスの関数（段階 20）</a></h3>
+<p>§3.27 に続き、データ型以外で層に無かった関数を足した。どれも Ruby の
+メソッドを呼ぶか CRuby の C を写しており、<code>MrApi</code> には手を入れていない。</p>
+<ul>
+<li><strong>Proc / Method</strong>: <code>rb_proc_call_kw</code> / <code>rb_proc_call_with_block_kw</code>、
+<code>rb_method_call(_kw)</code> / <code>rb_method_call_with_block(_kw)</code>、
+<code>rb_yield_values_kw</code> / <code>rb_yield_splat_kw</code>（キーワード付きはブロックを
+Proc にして呼ぶ。ABI の yield は位置引数だけ）、<code>rb_yield_block</code>、
+<code>rb_funcallv_public_kw</code>、<code>rb_eval_cmd_kw</code>、
+<code>rb_method_basic_definition_p</code>（CRuby の「組み込みのまま」の印は見え
+ないので、ソース位置の無いメソッドを basic とみなす。Ruby で書いた
+定義と未定義は 0）。</li>
+<li><strong>Fiber</strong>: <code>rb_fiber_new</code> / <code>rb_fiber_new_storage</code>（C 関数は §3.11 の
+ブロックの仕組みで Fiber の本体に）、<code>rb_fiber_resume</code> / <code>yield</code> /
+<code>transfer</code>（<code>_kw</code> も）、<code>rb_fiber_current</code>、<code>rb_fiber_alive_p</code>、
+<code>rb_fiber_raise</code>。</li>
+<li><strong>Thread</strong>: <code>rb_thread_create</code>（関数ポインタと引数を Integer にして
+ブロックの data に載せる）、<code>rb_thread_main</code>、<code>rb_thread_alone</code>、
+<code>rb_thread_wakeup(_alive)</code>、<code>rb_thread_run</code> / <code>kill</code> / <code>stop</code>、
+<code>rb_thread_sleep(_forever / _deadly)</code>、<code>rb_thread_wait_for</code>、
+<code>rb_thread_interrupted</code>（<code>pending_interrupt?</code>）、<code>rb_thread_fd_close</code>
+（何もしない）、<code>ruby_thread_has_gvl_p</code>（<code>rb_nogvl</code> の関数の中だけ 0）。</li>
+<li><strong>例外</strong>: <code>rb_make_exception</code>（eval.c の写し）、<code>rb_syserr_new_str</code>、
+<code>rb_syserr_new_path_in</code> / <code>rb_syserr_fail_path_in</code> /
+<code>rb_sys_fail_path_in</code>（CRuby と同じく公開ヘッダには宣言しない）、
+<code>rb_error_frozen</code>、<code>rb_error_frozen_object</code>（<code>rb_exec_recursive</code> で
+inspect し、再帰すれば “ …“）、<code>rb_frozen_error_raise</code>（<code>receiver</code>
+付き）、<code>rb_class_modify_check</code>、<code>rb_errno</code> / <code>_ptr</code> / <code>_set</code>、
+<code>rb_bug_errno</code>、<code>rb_interrupt</code>、<code>rb_exit</code>、<code>rb_f_exit</code> / <code>abort</code> /
+<code>exec</code> / <code>kill</code>。<code>rb_set_errinfo</code> は例外でも nil でもない値に
+TypeError（<code>assigning non-exception to $!</code>）。</li>
+<li><strong>IO</strong>: <code>rb_io_closed_p</code>、<code>rb_io_path</code>、<code>rb_io_timeout</code> /
+<code>rb_io_set_timeout</code>、<code>rb_io_ungetc</code> / <code>ungetbyte</code>、<code>rb_io_bufwrite</code>、
+<code>rb_io_open_descriptor</code>（FMODE をモード文字列に、path・timeout・
+encoding を設定）、<code>rb_cloexec_open</code> / <code>dup</code> / <code>dup2</code> / <code>fcntl_dupfd</code> /
+<code>pipe</code>（ヘッダにだけあった）、<code>rb_pipe</code>、<code>rb_fdopen</code>。
+<code>rb_io_maybe_wait</code> は閉じた IO に IOError（CRuby と同じく最初に
+<code>rb_io_check_closed</code>）、<code>rb_io_mode</code> は記述子の <code>O_APPEND</code> から
+<code>FMODE_APPEND</code> を立てる。</li>
+<li><strong>GC</strong>: <code>rb_gc_count</code>、<code>rb_gc_stat</code>、<code>rb_gc_latest_gc_info</code>（型の検査は
+層、値は <code>GC.latest_gc_info</code>。core に無い: #2107）、
+<code>rb_gc_adjust_memory_usage</code> / <code>rb_gc_force_recycle</code>（何もしない）、
+<code>rb_gc_disable_no_rest</code>、<code>rb_gc_mark_values</code>、<code>rb_define_finalizer</code> /
+<code>rb_undefine_finalizer</code>。</li>
+<li><strong>プロセスとファイル</strong>: <code>rb_waitpid</code>（<code>Process.waitpid2</code> なので <code>$?</code>
+も立つ。失敗は例外でなく -1 と errno。core の Errno 例外は <code>errno</code> が
+nil なので、そのときはクラスの <code>Errno</code> を読む: #2110）、<code>rb_syswait</code>、
+<code>rb_detach_process</code>、<code>rb_spawn</code>、<code>rb_proc_times</code>、<code>rb_last_status_get</code>、
+<code>rb_file_expand_path</code> / <code>absolute_path</code>（<code>rb_file_s_*</code> も）、
+<code>rb_file_dirname</code>、<code>rb_file_directory_p</code>、<code>rb_file_size</code>。</li>
+<li><strong>その他</strong>: <code>rb_ident_hash_new</code>、<code>rb_gcd(_normal)</code>、<code>ruby_setenv</code> /
+<code>ruby_unsetenv</code>（<code>ENV</code> 経由。逆向きに、拡張が <code>setenv(3)</code> した値を
+<code>ENV</code> が見ないのは core の問題: #2109）、<code>ruby_signal_name</code>、
+<code>rb_sourcefile</code> / <code>rb_sourceline</code>（呼び出した Ruby の
+<code>caller_locations</code>）、<code>rb_frame_method_id_and_class</code>。</li>
+<li><strong>既存の関数の直し</strong>: <code>rb_str_format</code> が引数を 1 つの Array にまとめて
+<code>format</code> に渡していた。<code>rb_enumeratorize_with_size</code> が size 関数を
+無視していた（<code>to_enum</code> の size ブロックから <code>size_fn(obj, args, enum)</code> を呼ぶ）。<code>rb_class_new</code> が <code>Class</code>・特異クラス・クラス以外を
+親に取れた（<code>rb_check_inheritable</code>）。<code>rb_define_class(_under)</code> が既存の
+クラスの superclass の食い違い、クラスでない定数、<code>super == 0</code> を
+見ていなかった（class.c と同じ文言で TypeError / ArgumentError）。
+<code>rb_undef_method</code> が未定義の名前で NameError を出していた（CRuby は
+何も言わない。凍結したクラスなら FrozenError）。<code>rb_define_const</code> /
+<code>rb_const_set</code> が既存の定数の上書きで <code>already initialized constant</code>
+を出さなかった（<code>const_set</code> を通す）。</li>
+<li><strong>core 側で見つけたもの</strong>（Issue のみ）: <code>GC.latest_gc_info</code> が無い
+（#2107）、allocate しただけの IO が “uninitialized stream” でなく閉じた
+IO に見える（#2108）、拡張の <code>setenv(3)</code> が <code>ENV</code> に見えない（#2109）、
+組み込みが上げる <code>Errno</code> 例外の <code>errno</code> が nil（#2110）、
+<code>IO#readpartial</code> が空のバッファで頼んだ以上を読み込む（#2111）。</li>
+<li><strong>試験</strong>: <code>tests/capi/capi_procio.c</code> が上の関数を CRuby と比べる。
+ruby/spec <code>optional/capi</code> は 1525 例・1359 通過から 1422 通過に
+（既に通っていた例で新たに落ちたものは無い）。</li>
+</ul>
 <h2 id="4-abi-への追加mrapi末尾に追記版は据え置き"><a class="header" href="#4-abi-への追加mrapi末尾に追記版は据え置き">4. ABI への追加（<code>MrApi</code>、末尾に追記、版は据え置き）</a></h2>
 <div class="table-wrapper">
 <table>
@@ -18866,6 +18940,7 @@ ruby/spec <code>optional/capi</code> は 1525 例・1359 通過（段階 18 の�
 <tr><td>17</td><td>CRuby の <code>ext/etc</code> を層でビルドして同梱（<code>stdlib/etc.rb</code> と隠し builtin を削除）、<code>RUBY_EXTCONF_H</code> の include、ロケール / ファイルシステムのエンコーディング、符号なし変換の nil の文言</td><td>済（§3.25、ruby/spec <code>library/etc</code> 全通過、<code>resolve_feature_path("etc")</code> が <code>:so</code>）</td></tr>
 <tr><td>18</td><td>アーキテクチャを変えずに足せる API（リフレクション、<code>rb_path_to_class</code>、<code>rb_exec_recursive</code> 系、警告カテゴリ、ArithmeticSequence、public 呼び出し、<code>rb_stdout</code> などのマクロ化、<code>rb_alloc_func_t</code>）</td><td>済（§3.26、<code>tests/capi/capi_reflect.c</code>、ruby/spec <code>optional/capi</code> 822 → 1255 通過）</td></tr>
 <tr><td>19</td><td>データ型の残りの関数（String / Array / Hash / Set / Struct / Data / 数値 / Complex / ID）、<code>rb_str_encode</code> の ECONV フラグ、Float の範囲外の文言</td><td>済（§3.27、<code>tests/capi/capi_datatypes.c</code>、ruby/spec <code>optional/capi</code> 1255 → 1359 通過）</td></tr>
+<tr><td>20</td><td>Proc / Fiber / Thread / 例外 / IO / GC / プロセスの関数、<code>rb_str_format</code>・<code>rb_enumeratorize_with_size</code>・<code>rb_class_new</code>・<code>rb_define_class</code> の検査・<code>rb_undef_method</code>・<code>rb_define_const</code> の直し</td><td>済（§3.28、<code>tests/capi/capi_procio.c</code>、ruby/spec <code>optional/capi</code> 1359 → 1422 通過）</td></tr>
 </tbody>
 </table>
 </div>
@@ -18927,6 +19002,12 @@ US-ASCII / UTF-8（層の ID はバイト列で引くので、UTF-16 の Symbol 
 encoding が落ちる）。</li>
 <li><code>rb_struct_define_without_accessor</code> は親が Struct のときだけ使え、
 alloc 関数は無視する。<code>rb_set_foreach</code> は呼んだ時点の要素の写しを回す。</li>
+<li><code>rb_class_new</code> は <code>Class.new</code> なので親の <code>inherited</code> が呼ばれる（CRuby の
+<code>rb_class_new</code> は呼ばない）。<code>rb_method_basic_definition_p</code> はソース位置
+の有無で決める近似。<code>rb_io_mode</code> は <code>FMODE_CREATE</code> / <code>FMODE_TRUNC</code> を
+返さない（core が開いたときのフラグを持たない）。<code>rb_io_set_write_io</code>
+と <code>rb_io_stdio_file</code> は無い。<code>rb_exc_fatal</code> は <code>fatal</code> クラスが無いので
+渡した例外をそのまま上げる。</li>
 <li><code>rb_call_super</code> はエイリアスで二つの名前に定義した同じ C 関数の
 super を区別しない。<code>rb_errinfo</code> は Ruby の <code>$!</code> と別物（<code>rb_protect</code>
 の中で <code>$!</code> を設定しない）。</li>
