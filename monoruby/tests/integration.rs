@@ -263,6 +263,7 @@ mod time_timezone;
 mod to_c_enum_size_integer_complex_pow_stdout_lazy;
 mod tr_wide_replacement;
 mod type_error_names;
+mod unnamed_class_layout_instance_exec;
 mod usascii_8bit_symbol;
 mod variables;
 mod warning_gating;

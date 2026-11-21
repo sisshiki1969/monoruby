@@ -2314,7 +2314,9 @@ impl ClassInfoTable {
             Some(class) => class,
             None => self.object_class(),
         };
-        self.define_class_inner(None, superclass, None, false, Some(ObjTy::OBJECT))
+        // The instance layout is the superclass's, as for `class X < S`:
+        // `Class.new(String)` makes Strings.
+        self.define_class_inner(None, superclass, None, false, None)
     }
 
     /// Allocate an uninitialized class object (no superclass).

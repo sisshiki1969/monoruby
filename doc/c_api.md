@@ -1170,6 +1170,75 @@ Ruby 実装）で、`getpwuid` / `getpwnam` / `getgrgid` / `getgrnam` 以外は
   全 API（探索・列挙・`uname` / `sysconf` / `confstr` / `pathconf`・
   エラー）を同じマシンの CRuby と比較する。
 
+### 3.26 アーキテクチャを変えずに足せる API（段階 18）
+
+CRuby 4.0.9 のヘッダと ruby/spec `optional/capi` を突き合わせ、層に無い
+関数のうち、既存の Ruby メソッドと ABI の組み合わせだけで CRuby と同じ
+振る舞いになるものを足した。どれも `MrApi` に手を入れていない。
+
+- **リフレクション**: `rb_define_class_id(_under)` / `rb_define_module_id(_under)`、
+  `rb_class_get_superclass`（モジュールと最上位は `Qfalse`）、
+  `rb_class_attached_object`、`rb_class_subclasses`、`rb_class_path_cached`、
+  `rb_class_{,public_,protected_,private_}instance_methods`、
+  `rb_obj_singleton_methods`、`rb_mod_ancestors` / `include_p` /
+  `included_modules` / `constants` / `class_variables`、
+  `rb_mod_remove_const` / `rb_const_remove` / `rb_mod_remove_cvar`、
+  `rb_obj_remove_instance_variable`、`rb_free_generic_ivar`、`rb_ivar_count`、
+  `rb_method_boundp`（`ex` の 2 のビットで protected も外す）、`rb_obj_method`、
+  `rb_obj_method_arity` / `rb_mod_method_arity`、`rb_cvar_defined`、
+  `rb_define_class_variable`、`rb_f_global_variables`。対応する Ruby メソッドを
+  呼ぶだけ。`rb_const_get_from` / `rb_const_defined_from` は CRuby の
+  `exclude = FALSE, recurse = TRUE, visibility = FALSE` を祖先の
+  `const_defined?(name, false)` で再現する（`Object` は `space` が `Object`
+  のときだけ探し、見つからなければ `const_missing`）。`rb_ivar_foreach` は
+  クラス / モジュールではクラス変数も回す（CRuby の `class_ivar_each` と同じ順）。
+  `rb_class_real` は特異クラスの連なりを上る。`rb_class_inherited_p` は
+  クラス / モジュール以外に TypeError。
+- **`rb_path_to_class` / `rb_path2class`**: CRuby の variable.c の写し
+  （`::` ごとに `const_defined?(id, false)`、無名クラスの `#<` は
+  ArgumentError、クラス / モジュール以外は TypeError、文言も同じ）。
+- **再帰検出**: `rb_exec_recursive(_paired)(_outer)`。CRuby と同じく
+  ファイバーローカル（`Thread.current[:__recursive_key__]`）の Hash に、
+  呼び出したメソッドの ID ごとの identity Hash を置く。メソッドは
+  `capi_cur` を上って最初の C メソッドのフレームから取る（C 関数の
+  ブロックのフレームでは `rb_frame_this_func` が 0 になるため）。
+  `_outer` は `rb_catch_obj` / `rb_throw_obj` で最外の呼び出しまで戻る。
+- **警告**: `rb_warning_category_t`、`rb_category_warn` / `rb_category_warning`
+  （`Warning[cat]` を見て `Warning.warn(msg, category:)`。`NONE` は出さない）、
+  `rb_compile_warn` / `rb_compile_warning`（`file:line: warning: ...`）、
+  `rb_sys_warning`、`rb_make_backtrace` / `rb_backtrace`、
+  `rb_set_end_proc`（`at_exit` に C 関数のブロックを渡す）。
+- **ArithmeticSequence と Range**: `rb_arithmetic_sequence_extract` /
+  `rb_arithmetic_sequence_beg_len_step` は CRuby の enumerator.c / range.c の
+  写し。`rb_range_beg_len` も CRuby と同じく「範囲外なら nil を返す」核を
+  分け、`err` のときの RangeError の文言を `%+` の範囲表示にそろえた。
+- **呼び出し**: `rb_funcallv_public` と `rb_funcall_with_block(_kw)` は
+  private / protected を拒む（`public_send` 経由、CRuby の
+  `CALL_PUBLIC`）。`rb_funcallv_kw` などの kw_splat は最後の引数が Hash で
+  なければ `to_hash` で変換する。`rb_rescue2` のクラス以外は TypeError
+  `class or module required`。
+- **大域値**: `rb_stdin` / `rb_stdout` / `rb_stderr` / `rb_defout` /
+  `rb_output_fs` / `rb_argv` を呼ぶたびに `$stdin` などを読むマクロに
+  （CRuby では変数だが、`$stdout = io` の後で古い値を見ないため）。
+  `rb_mFileTest`、`rb_cRefinement`、`rb_mGC`、`rb_cBinding`、
+  `rb_mWaitReadable` / `rb_mWaitWritable` を宣言、`RB_TYPE_P` の別名
+  `rb_type_p`。`rb_alloc_func_t` を CRuby と同じ関数ポインタ型にした
+  （以前は関数型で、`rb_alloc_func_t allocator = rb_get_alloc_func(k);` が
+  通らなかった）。`rb_get_alloc_func` は C の alloc 関数が無いクラスでは
+  組み込みの allocate を呼ぶ関数を返す（ruby/spec の `speced_allocator` が
+  親の allocator を呼ぶ形）。`T_DATA` に Time を足した。
+- **core 側で直したもの**: x86-64 の with-self ブロック invoker が self を
+  ブロック欄に入れていた（`instance_exec(&method_proc)` で `&b` を取る
+  メソッドに self がブロックとして渡る。#2102）。`Class.new(S)` が `S` の
+  インスタンス型を継がず、Marshal の往復が失敗し、C API からは
+  `Class.new(String)` に native インスタンスを作らせてしまっていた（#2103）。
+  `Encoding.default_internal` が未設定の `$DEFAULT_INTERNAL` を読んで
+  `$VERBOSE` で警告していた。
+- **試験**: `tests/capi/capi_reflect.c` が上の関数を CRuby と比べる。
+  ruby/spec `optional/capi` は 1037 例・822 通過から 1515 例・1255 通過に
+  （以前は読み込みで落ちていた spec ファイルが動くようになり例数が増えた。
+  既に動いていた例で新たに落ちたものは無い）。
+
 ## 4. ABI への追加（`MrApi`、末尾に追記、版は据え置き）
 
 | 項目 | 用途 |
@@ -1232,6 +1301,7 @@ Ruby 実装）で、`getpwuid` / `getpwnam` / `getgrgid` / `getgrnam` 以外は
 | 15 | CRuby の `ext/openssl` を層でビルドしシステムの OpenSSL にリンク（`ext/openssl` crate と Ruby 実装を削除）、`rb_attr`、`ruby_verbose`、`rb_obj_class` の ABI | 済（§3.23、ruby/spec `library/openssl` / `net-ftp` 全通過） |
 | 16 | ホストの CRuby が入れた gem の C 拡張を層で建て直して読む、alloc 関数の self、`rb_str_capacity` の下限、`ruby_vsnprintf` の無限ループ、`rb_check_symbol` 系 | 済（§3.24、ruby-bench の graphql-native / liquid-c が完走、liquid-c の出力は CRuby と一致） |
 | 17 | CRuby の `ext/etc` を層でビルドして同梱（`stdlib/etc.rb` と隠し builtin を削除）、`RUBY_EXTCONF_H` の include、ロケール / ファイルシステムのエンコーディング、符号なし変換の nil の文言 | 済（§3.25、ruby/spec `library/etc` 全通過、`resolve_feature_path("etc")` が `:so`） |
+| 18 | アーキテクチャを変えずに足せる API（リフレクション、`rb_path_to_class`、`rb_exec_recursive` 系、警告カテゴリ、ArithmeticSequence、public 呼び出し、`rb_stdout` などのマクロ化、`rb_alloc_func_t`） | 済（§3.26、`tests/capi/capi_reflect.c`、ruby/spec `optional/capi` 822 → 1255 通過） |
 
 ## 6. 既知の制約
 
@@ -1283,3 +1353,9 @@ Ruby 実装）で、`getpwuid` / `getpwnam` / `getgrgid` / `getgrnam` 以外は
 - `gem install` は monoruby の gem home に入れる。ホスト CRuby で
   入れた C 拡張 gem の `.so` は monoruby では読めない（stub のあるものは
   stub が読まれる）ので、monoruby で使うには monoruby で入れ直す。
+- 組み込みのレイアウトを持つクラス（String / Array などの派生）には
+  `rb_define_alloc_func` できない（TypeError）。普通のクラスでも alloc
+  関数は遅延して走るので、`klass.allocate` の直後にはまだ走っていない（§3.7）。
+- `rb_call_super` はエイリアスで二つの名前に定義した同じ C 関数の
+  super を区別しない。`rb_errinfo` は Ruby の `$!` と別物（`rb_protect`
+  の中で `$!` を設定しない）。

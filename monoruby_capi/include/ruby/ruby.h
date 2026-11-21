@@ -314,6 +314,7 @@ rb_type(VALUE obj)
 #define RB_INTEGER_TYPE_P(obj) (RB_FIXNUM_P(obj) || RB_TYPE_P(obj, T_BIGNUM))
 #define RUBY_INTEGER_UNIFICATION 1
 #define RB_BIGNUM_TYPE_P(obj) RB_TYPE_P(obj, T_BIGNUM)
+#define rb_type_p RB_TYPE_P
 #define RB_SYMBOL_TYPE_P(obj) RB_SYMBOL_P(obj)
 
 void rb_check_type(VALUE v, int t);
@@ -388,7 +389,7 @@ void rb_gc_writebarrier_unprotect(VALUE obj);
 #ifndef __
 #define __(args) args
 #endif
-typedef VALUE rb_alloc_func_t(VALUE klass);
+typedef VALUE (*rb_alloc_func_t)(VALUE klass);
 
 VALUE rb_define_class(const char *name, VALUE super);
 VALUE rb_define_class_under(VALUE outer, const char *name, VALUE super);
@@ -454,6 +455,35 @@ VALUE rb_obj_is_instance_of(VALUE obj, VALUE klass);
 VALUE rb_class_inherited_p(VALUE mod, VALUE arg);
 int rb_respond_to(VALUE obj, ID id);
 int rb_obj_respond_to(VALUE obj, ID id, int priv);
+VALUE rb_define_class_id(ID id, VALUE super);
+VALUE rb_define_class_id_under(VALUE outer, ID id, VALUE super);
+VALUE rb_define_module_id(ID id);
+VALUE rb_define_module_id_under(VALUE outer, ID id);
+VALUE rb_class_get_superclass(VALUE klass);
+VALUE rb_class_attached_object(VALUE klass);
+VALUE rb_class_subclasses(VALUE klass);
+VALUE rb_class_path_cached(VALUE mod);
+VALUE rb_class_instance_methods(int argc, const VALUE *argv, VALUE mod);
+VALUE rb_class_public_instance_methods(int argc, const VALUE *argv, VALUE mod);
+VALUE rb_class_protected_instance_methods(int argc, const VALUE *argv, VALUE mod);
+VALUE rb_class_private_instance_methods(int argc, const VALUE *argv, VALUE mod);
+VALUE rb_obj_singleton_methods(int argc, const VALUE *argv, VALUE obj);
+VALUE rb_mod_ancestors(VALUE mod);
+VALUE rb_mod_include_p(VALUE child, VALUE parent);
+VALUE rb_mod_included_modules(VALUE mod);
+VALUE rb_mod_constants(int argc, const VALUE *argv, VALUE mod);
+VALUE rb_mod_class_variables(int argc, const VALUE *argv, VALUE mod);
+VALUE rb_mod_remove_const(VALUE space, VALUE name);
+VALUE rb_const_remove(VALUE space, ID name);
+VALUE rb_mod_remove_cvar(VALUE mod, VALUE name);
+VALUE rb_const_get_from(VALUE space, ID name);
+int rb_const_defined_from(VALUE space, ID name);
+VALUE rb_obj_remove_instance_variable(VALUE obj, VALUE name);
+void rb_free_generic_ivar(VALUE obj);
+int rb_method_boundp(VALUE klass, ID id, int ex);
+VALUE rb_obj_method(VALUE recv, VALUE mid);
+int rb_obj_method_arity(VALUE obj, ID mid);
+int rb_mod_method_arity(VALUE mod, ID mid);
 
 /* ---- objects ---------------------------------------------------------- */
 
@@ -582,6 +612,9 @@ VALUE rb_attr_get(VALUE obj, ID id);
 void rb_attr(VALUE klass, ID name, int need_reader, int need_writer, int honour_visibility);
 VALUE rb_cvar_get(VALUE klass, ID id);
 void rb_cvar_set(VALUE klass, ID id, VALUE val);
+VALUE rb_cvar_defined(VALUE klass, ID id);
+void rb_define_class_variable(VALUE klass, const char *name, VALUE val);
+VALUE rb_f_global_variables(void);
 VALUE rb_cv_get(VALUE klass, const char *name);
 void rb_cv_set(VALUE klass, const char *name, VALUE val);
 VALUE rb_gv_get(const char *name);
@@ -689,6 +722,16 @@ ID rb_frame_callee(void);
  * used (the enumerator's `size` is nil). */
 typedef VALUE rb_enumerator_size_func(VALUE, VALUE, VALUE);
 VALUE rb_enumeratorize(VALUE obj, VALUE meth, int argc, const VALUE *argv);
+/* CRuby's ruby/internal/intern/enumerator.h. */
+typedef struct {
+    VALUE begin;
+    VALUE end;
+    VALUE step;
+    int exclude_end;
+} rb_arithmetic_sequence_components_t;
+int rb_arithmetic_sequence_extract(VALUE as, rb_arithmetic_sequence_components_t *buf);
+VALUE rb_arithmetic_sequence_beg_len_step(VALUE as, long *begp, long *lenp, long *stepp, long len,
+                                          int err);
 VALUE rb_enumeratorize_with_size(VALUE obj, VALUE meth, int argc, const VALUE *argv,
                                  rb_enumerator_size_func *size_fn);
 VALUE rb_enumeratorize_with_size_kw(VALUE obj, VALUE meth, int argc, const VALUE *argv,
@@ -769,6 +812,34 @@ VALUE rb_exc_new_str(VALUE klass, VALUE str);
 VALUE rb_syserr_new(int err, const char *msg);
 void rb_warn(const char *fmt, ...);
 void rb_warning(const char *fmt, ...);
+/* CRuby's ruby/internal/error.h. */
+typedef enum {
+    RB_WARN_CATEGORY_NONE,
+    RB_WARN_CATEGORY_DEPRECATED,
+    RB_WARN_CATEGORY_EXPERIMENTAL,
+    RB_WARN_CATEGORY_PERFORMANCE,
+    RB_WARN_CATEGORY_STRICT_UNUSED_BLOCK,
+    RB_WARN_CATEGORY_DEFAULT_BITS = ((1U << RB_WARN_CATEGORY_DEPRECATED) |
+                                     (1U << RB_WARN_CATEGORY_EXPERIMENTAL) | 0),
+    RB_WARN_CATEGORY_ALL_BITS = ((1U << RB_WARN_CATEGORY_DEPRECATED) |
+                                 (1U << RB_WARN_CATEGORY_EXPERIMENTAL) |
+                                 (1U << RB_WARN_CATEGORY_PERFORMANCE) |
+                                 (1U << RB_WARN_CATEGORY_STRICT_UNUSED_BLOCK) | 0)
+} rb_warning_category_t;
+void rb_category_warn(rb_warning_category_t category, const char *fmt, ...);
+void rb_category_warning(rb_warning_category_t category, const char *fmt, ...);
+void rb_compile_warn(const char *file, int line, const char *fmt, ...);
+void rb_compile_warning(const char *file, int line, const char *fmt, ...);
+void rb_sys_warning(const char *fmt, ...);
+VALUE rb_exec_recursive(VALUE (*f)(VALUE obj, VALUE arg, int recursive), VALUE obj, VALUE arg);
+VALUE rb_exec_recursive_paired(VALUE (*f)(VALUE obj, VALUE arg, int recursive), VALUE obj,
+                               VALUE paired_obj, VALUE arg);
+VALUE rb_exec_recursive_outer(VALUE (*f)(VALUE obj, VALUE arg, int recursive), VALUE obj, VALUE arg);
+VALUE rb_exec_recursive_paired_outer(VALUE (*f)(VALUE obj, VALUE arg, int recursive), VALUE obj,
+                                     VALUE paired_obj, VALUE arg);
+VALUE rb_make_backtrace(void);
+void rb_backtrace(void);
+void rb_set_end_proc(void (*func)(VALUE arg), VALUE arg);
 /* `$VERBOSE` / `$DEBUG`, read through a pointer as CRuby's are. The
  * pointee is refreshed from the global on every call, and a store
  * through it does not reach the global. */
@@ -1199,14 +1270,14 @@ VALUE rb_range_beg_len(VALUE range, long *begp, long *lenp, long len, int err);
 /* ---- global classes, filled in when the extension is loaded ------------ */
 
 RUBY_EXTERN VALUE rb_mKernel, rb_mComparable, rb_mEnumerable, rb_mErrno,
-    rb_mMath, rb_mProcess, rb_mGC;
+    rb_mMath, rb_mProcess, rb_mGC, rb_mFileTest;
 RUBY_EXTERN VALUE rb_cBasicObject, rb_cObject, rb_cArray, rb_cClass,
     rb_cComplex, rb_cDir, rb_cEncoding, rb_cEnumerator, rb_cFalseClass,
     rb_cFile, rb_cFloat, rb_cHash, rb_cIO, rb_cInteger, rb_cMatch,
     rb_cMethod, rb_cModule, rb_cNilClass, rb_cNumeric, rb_cProc,
     rb_cRandom, rb_cRange, rb_cRational, rb_cRegexp, rb_cSet, rb_cStat,
     rb_cString, rb_cStruct, rb_cSymbol, rb_cThread, rb_cTime,
-    rb_cTrueClass, rb_cUnboundMethod, rb_cBinding;
+    rb_cTrueClass, rb_cUnboundMethod, rb_cBinding, rb_cRefinement;
 RUBY_EXTERN VALUE rb_eException, rb_eStandardError, rb_eSystemExit,
     rb_eInterrupt, rb_eSignal, rb_eFatal, rb_eArgError, rb_eEOFError,
     rb_eIndexError, rb_eStopIteration, rb_eKeyError, rb_eRangeError,
@@ -1217,7 +1288,15 @@ RUBY_EXTERN VALUE rb_eException, rb_eStandardError, rb_eSystemExit,
     rb_eEncCompatError, rb_eNoMatchingPatternError,
     rb_eNoMatchingPatternKeyError, rb_eScriptError, rb_eNameError,
     rb_eSyntaxError, rb_eLoadError, rb_eMathDomainError;
-RUBY_EXTERN VALUE rb_stdin, rb_stdout, rb_stderr;
+RUBY_EXTERN VALUE rb_mWaitReadable, rb_mWaitWritable;
+/* CRuby's are the variables behind `$stdin` / `$stdout` / `$stderr`, so
+ * they follow a reassignment of those; here each reads the global. */
+VALUE rb_monoruby_stdin(void);
+VALUE rb_monoruby_stdout(void);
+VALUE rb_monoruby_stderr(void);
+#define rb_stdin (rb_monoruby_stdin())
+#define rb_stdout (rb_monoruby_stdout())
+#define rb_stderr (rb_monoruby_stderr())
 
 /* ---- allocators, Data and TypedData ----------------------------------- */
 
@@ -1225,9 +1304,9 @@ RUBY_EXTERN VALUE rb_stdin, rb_stdout, rb_stderr;
  * define `new` by hand (dropping keyword arguments on the way to
  * `initialize`) unless they see it. */
 #define HAVE_RB_DEFINE_ALLOC_FUNC 1
-void rb_define_alloc_func(VALUE klass, rb_alloc_func_t *func);
+void rb_define_alloc_func(VALUE klass, rb_alloc_func_t func);
 void rb_undef_alloc_func(VALUE klass);
-rb_alloc_func_t *rb_get_alloc_func(VALUE klass);
+rb_alloc_func_t rb_get_alloc_func(VALUE klass);
 void rb_obj_call_init(VALUE obj, int argc, const VALUE *argv);
 void rb_obj_call_init_kw(VALUE obj, int argc, const VALUE *argv, int kw_splat);
 VALUE rb_class_new(VALUE super);
@@ -1478,6 +1557,12 @@ VALUE rb_monoruby_default_rs(void);
 #define rb_output_rs (rb_monoruby_output_rs())
 #define rb_fs (rb_monoruby_fs())
 #define rb_default_rs (rb_monoruby_default_rs())
+VALUE rb_monoruby_output_fs(void);
+#define rb_output_fs (rb_monoruby_output_fs())
+/* CRuby's `rb_defout` is `rb_stdout`, and `rb_argv` is `ARGV`. */
+#define rb_defout rb_stdout
+VALUE rb_get_argv(void);
+#define rb_argv rb_get_argv()
 VALUE rb_str_replace(VALUE str, VALUE str2);
 VALUE rb_str_to_interned_str(VALUE str);
 #define RB_OBJ_FROZEN_RAW(x) RB_OBJ_FROZEN(x)
@@ -1551,6 +1636,7 @@ extern "C" {
 /* The instance variables #instance_variables lists, each handed to
  * `func` with `arg` until it returns ST_STOP. */
 void rb_ivar_foreach(VALUE obj, int (*func)(ID name, VALUE val, st_data_t arg), st_data_t arg);
+st_index_t rb_ivar_count(VALUE obj);
 #ifdef __cplusplus
 }
 #endif

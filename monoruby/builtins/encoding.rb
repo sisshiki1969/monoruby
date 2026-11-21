@@ -6,7 +6,9 @@ class Encoding
   class Converter; end
 
   def self.default_internal
-    $DEFAULT_INTERNAL
+    # Unset until `Encoding.default_internal=` / `-E` / `-U` assigns it;
+    # `defined?` keeps a plain read from warning under `$VERBOSE`.
+    $DEFAULT_INTERNAL if defined?($DEFAULT_INTERNAL)
   end
 end
 
