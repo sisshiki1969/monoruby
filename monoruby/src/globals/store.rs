@@ -149,6 +149,14 @@ pub struct Store {
     /// constructor is still this one and writes the arguments straight
     /// into the new object's slots.
     struct_initialize_fid: Option<FuncId>,
+    /// The ids of the `Errno::*` classes `errno::init` defines, which it
+    /// defines one after another, and each one's errno by
+    /// `id - errno_classes.start` (0 for an id in between that is not
+    /// one); see [`Self::errno_of_class`].
+    errno_classes: std::ops::Range<u32>,
+    errno_numbers: Vec<i32>,
+    /// `/__errno`, `SystemCallError#errno`'s hidden ivar, interned once.
+    errno_ivar: Option<IdentId>,
     /// `FuncId`s of the builtin `send` / `__send__` (one on `Kernel`, one
     /// on `BasicObject`), recorded at registration. A call site that
     /// resolves to one of them and whose method-name argument is a literal
@@ -908,6 +916,9 @@ impl Store {
             functions: function::Funcs::default(),
             basic_ops: basic_op::BasicOpTable::new(),
             kernel_hash_fid: None,
+            errno_classes: 0..0,
+            errno_numbers: vec![],
+            errno_ivar: None,
             kernel_binding_fid: None,
             class_new_fid: None,
             class_new_refined_fid: None,
@@ -1225,6 +1236,47 @@ impl Store {
         } else {
             fid
         }
+    }
+
+    /// Record the `Errno::*` classes `errno::init` defined, with their
+    /// errnos.
+    pub(crate) fn record_errno_classes(&mut self, classes: &[(ClassId, i32)]) {
+        let start = classes.iter().map(|(c, _)| c.u32()).min().unwrap_or(0);
+        let end = classes.iter().map(|(c, _)| c.u32() + 1).max().unwrap_or(0);
+        let mut numbers = vec![0; (end - start) as usize];
+        for (c, n) in classes {
+            numbers[(c.u32() - start) as usize] = *n;
+        }
+        self.errno_classes = start..end;
+        self.errno_numbers = numbers;
+        self.errno_ivar = Some(IdentId::get_id("/__errno"));
+    }
+
+    /// The hidden ivar `SystemCallError#errno` reads.
+    pub(crate) fn errno_ivar(&self) -> IdentId {
+        self.errno_ivar.unwrap()
+    }
+
+    /// The errno of an `Errno::*` class, or of a class just below one
+    /// (`IO::EAGAINWaitReadable` < `IO::WaitReadable`'s iclass <
+    /// `Errno::EAGAIN`). `None` for every other class.
+    pub(crate) fn errno_of_class(&self, class_id: ClassId) -> Option<Value> {
+        let number = |id: ClassId| {
+            let i = id.u32().checked_sub(self.errno_classes.start)?;
+            let n = *self.errno_numbers.get(i as usize)?;
+            (n != 0).then(|| Value::integer(n as i64))
+        };
+        if let Some(n) = number(class_id) {
+            return Some(n);
+        }
+        let mut module = self.get_module(class_id);
+        for _ in 0..2 {
+            module = module.superclass()?;
+            if let Some(n) = number(module.id()) {
+                return Some(n);
+            }
+        }
+        None
     }
 
     /// Record the native `Struct#initialize`. Called at its registration.

@@ -2732,31 +2732,15 @@ impl Executor {
                 // which is what records `#errno`; take it from the
                 // class's `Errno` constant, as CRuby's `rb_syserr_new`
                 // hands it to `syserr_initialize`.
-                // `IO::EAGAINWaitReadable` inherits its constant from
-                // `Errno::EAGAIN`; the walk stops at the first class
-                // that has one (`Object`'s is the module).
                 let errno = match err.kind() {
-                    MonorubyErrKind::Other(class_id) => {
-                        let errno_id = IdentId::get_id("Errno");
-                        let mut module = Some(globals.store.get_module(*class_id));
-                        let mut found = None;
-                        while let Some(m) = module {
-                            if let Some(v) = globals.store.get_constant_noautoload(m.id(), errno_id)
-                            {
-                                found = v.try_fixnum().map(|_| v);
-                                break;
-                            }
-                            module = m.superclass();
-                        }
-                        found
-                    }
+                    MonorubyErrKind::Other(class_id) => globals.store.errno_of_class(*class_id),
                     _ => None,
                 };
                 let v = Value::new_exception(err);
                 if let Some(errno) = errno {
                     globals
                         .store
-                        .set_ivar(v, IdentId::get_id("/__errno"), errno)
+                        .set_ivar(v, globals.store.errno_ivar(), errno)
                         .unwrap();
                 }
                 match payload {

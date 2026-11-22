@@ -423,17 +423,23 @@ impl ClassInfoTable {
         {
             return false;
         }
-        let stem_matches = |p: &std::path::Path| {
-            feature.extension().is_none()
-                && p.file_stem() == feature.file_name()
+        let Some(name) = feature.file_name() else {
+            return false;
+        };
+        let bare_name = feature.extension().is_none();
+        paths.iter().any(|p| {
+            // The last component first: it rules out nearly every entry.
+            let last_matches = if p.file_name() == Some(name) {
+                true
+            } else {
+                bare_name && p.file_stem() == Some(name)
+            };
+            last_matches
                 && match (p.parent(), feature.parent()) {
                     (Some(dir), Some(fdir)) => dir.ends_with(fdir),
                     _ => false,
                 }
-        };
-        paths
-            .iter()
-            .any(|p| p.ends_with(feature) || stem_matches(p))
+        })
     }
 
     fn autoload_feature_matches_path(entry: &AutoloadEntry, paths: &[std::path::PathBuf]) -> bool {
