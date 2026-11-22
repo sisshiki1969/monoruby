@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e88729c4.js";
+            window.path_to_searchindex_js = "searchindex-8df343bb.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -6492,7 +6492,7 @@ identically to <code>Slot</code>.</p>
 </thead>
 <tbody>
 <tr><td><strong>Installing / re-pointing JIT code</strong></td><td>patches branches in place (<code>apply_jmp_patch_address</code>, the <code>patch_point</code> <code>call</code>)</td><td>indirect heap slots — <code>ISeqInfo::jit_slot</code> and <code>jit_guard_free_slot</code> are <code>#[cfg(target_arch = "aarch64")]</code> fields — plus <code>Codegen::patch_call_to_entry</code>, a single <code>bl</code> rewrite under the MAP_JIT writable/executable flip</td></tr>
-<tr><td><strong>Cold-code placement</strong></td><td>cold handlers go on page 1 (<code>select_page</code>, ~90 sites)</td><td>page 1 is past <code>B</code>/<code>BL</code> range from page 0, so cold blocks are laid inline (~7 sites). In exchange aarch64 has an optimization x86 has no use for: <code>AsmIr::as_pure_deopt</code> / <code>pure_deopt_target</code> (<code>#[cfg(target_arch = "aarch64")]</code>) emit a deopt-only block’s handler <em>at</em> the block label, so predecessors branch straight onto the deopt code</td></tr>
+<tr><td><strong>Cold-code placement</strong></td><td>cold handlers go on page 1 (<code>select_page</code>, ~90 sites)</td><td>page 1 is past <code>B</code>/<code>BL</code> range from page 0, so side-exit handlers, and the slow paths of the safepoint poll and the class- / const-version guards (<code>Codegen::a64_cold_stub</code>), go into <em>side-exit islands</em> in the same code stream: one at the frame’s end, behind a <code>b skip</code> only where code can fall into it, plus range thunks every 8 KiB of hot code (<code>a64_drain_side_exits</code>, <code>a64_thunk_side_exits</code>). The hot path is one conditional branch to cold code, as on x86. In exchange aarch64 has an optimization x86 has no use for: <code>AsmIr::as_pure_deopt</code> / <code>pure_deopt_target</code> (<code>#[cfg(target_arch = "aarch64")]</code>) emit a deopt-only block’s handler <em>at</em> the block label, so predecessors branch straight onto the deopt code</td></tr>
 <tr><td><strong>Branch range</strong></td><td>never a constraint</td><td>a large loop body can put a <code>TBZ</code>/<code>TBNZ</code> further from its deopt than imm14 (+/-32 KiB) reaches, which panics the emit. <code>jit_compile_loop</code> catches it and leaves the codeptr unpublished; <code>a64_op_loop_start</code>’s tri-state slot (<code>0</code> / <code>1</code> sentinel / codeptr) stops the retry loop</td></tr>
 <tr><td><strong>A panic inside a compile</strong></td><td>contained at every entry point (<code>compiler.rs</code> <code>contain_compile_panic</code>): nothing is published, the warm-up counter has run out so the method / loop stays interpreted, and a failed recompile leaves the old code deopting as before</td><td>the same for a first compile; a <em>recompile</em> panic additionally sets a Ruby <code>FatalError</code> (the row below)</td></tr>
 <tr><td><strong><code>RecompileDeopt</code> error exit</strong></td><td><code>error: None</code></td><td>needs <code>Some(ir.new_error(state))</code> — a recompile-time panic surfaces as a Ruby <code>FatalError</code> to branch to (<code>jitgen/compile.rs</code>)</td></tr>
@@ -6523,8 +6523,8 @@ range). x86 has no such limit.</li>
 coverage — aarch64 lowers everything (large immediates via scratch
 registers), so the <code>bool</code> bail return is vestigial. What remains is
 non-coverage: different <strong>code-installation</strong> mechanisms (branch patching
-vs indirect slots) and <strong>cold-code placement</strong> (page 1 vs inline, which
-buys aarch64 the <code>as_pure_deopt</code> collapse), and aarch64’s <strong>branch-range</strong>
+vs indirect slots) and <strong>cold-code placement</strong> (page 1 vs in-stream
+islands, which buys aarch64 the <code>as_pure_deopt</code> collapse), and aarch64’s <strong>branch-range</strong>
 ceiling on very large loop bodies (§5c). Guards, the recovery jump-back,
 BOP eviction, block/method inlining and the GP pool are all symmetric.</p>
 </blockquote>
