@@ -52,10 +52,12 @@ impl Codegen {
     // gvar/cvar go through a runtime C call; dynvar walks the outer-LFP chain.
     // All bail (`false`) on a live xmm / out-of-range offset (no FP save yet).
 
-    /// rax <- $gvar via runtime::get_global_var(vm, globals, name).
+    /// rax <- $gvar via runtime::get_global_var(vm, globals, name, cache);
+    /// `cache` is the address of the site's cache word.
     pub(in crate::codegen::jitgen) fn emit_load_gvar(
         &mut self,
         name: IdentId,
+        cache: u64,
         using_fpr: UsingFpr,
     ) -> bool {
         let f = runtime::get_global_var as *const () as u64;
@@ -64,6 +66,7 @@ impl Codegen {
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
             mov x2, (name.get() as u64); // name (IdentId)
+            mov x3, (cache);              // &cache word
             str x30, [sp, #-16]!;         // save LR across the call
             mov x9, (f);
             blr x9;                       // result in x0 (= rax)
@@ -82,10 +85,23 @@ impl Codegen {
         true
     }
 
-    /// $gvar <- src via runtime::set_global_var(vm, globals, name, val).
+    /// `$! <- src`. The whole of `AsmInst::StoreErrinfo`.
+    pub(in crate::codegen::jitgen) fn emit_store_errinfo(&mut self, src: SlotId) -> bool {
+        let lfp = GP::R14.a64().0;
+        let off = src.0 as u32 * 8 + LFP_SELF as u32;
+        self.a64_frame_load(0, lfp, off); // x0 = val (from slot)
+        monoasm_arm64!(&mut self.jit,
+            str x0, [x19, #(EXECUTOR_ERRINFO as u32)];
+        );
+        true
+    }
+
+    /// $gvar <- src via runtime::set_global_var(vm, globals, name, val,
+    /// cache).
     pub(in crate::codegen::jitgen) fn emit_store_gvar(
         &mut self,
         name: IdentId,
+        cache: u64,
         src: SlotId,
         using_fpr: UsingFpr,
     ) -> bool {
@@ -97,6 +113,7 @@ impl Codegen {
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
             mov x2, (name.get() as u64); // name (IdentId)
+            mov x4, (cache);              // &cache word
         );
         self.a64_frame_load(3, lfp, off); // x3 = val (from slot)
         monoasm_arm64!(&mut self.jit,
@@ -109,10 +126,12 @@ impl Codegen {
         true
     }
 
-    /// rax <- @@cvar via runtime::get_class_var(vm, globals, name).
+    /// rax <- @@cvar via runtime::get_class_var(vm, globals, name, cache);
+    /// `cache` is the address of the site's cache word.
     pub(in crate::codegen::jitgen) fn emit_load_cvar(
         &mut self,
         name: IdentId,
+        cache: u64,
         using_fpr: UsingFpr,
     ) -> bool {
         let f = runtime::get_class_var as *const () as u64;
@@ -121,6 +140,7 @@ impl Codegen {
             mov x0, x19;                  // vm
             mov x1, x20;                  // globals
             mov x2, (name.get() as u64); // name
+            mov x3, (cache);              // &cache word
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;                       // result in x0
@@ -449,11 +469,12 @@ impl Codegen {
     }
 
     /// Check class variable existence via runtime::check_class_var(vm, globals,
-    /// name); the looked-up Value lands in x0. Bails when an xmm pool register
-    /// is live (no xmm save around the C call yet).
+    /// name, cache); the looked-up Value lands in x0. Bails when an xmm pool
+    /// register is live (no xmm save around the C call yet).
     pub(in crate::codegen::jitgen) fn emit_check_cvar(
         &mut self,
         name: IdentId,
+        cache: u64,
         using_fpr: UsingFpr,
     ) -> bool {
         let f = runtime::check_class_var as *const () as u64;
@@ -462,6 +483,7 @@ impl Codegen {
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
             mov x2, (name.get() as u64); // name (IdentId)
+            mov x3, (cache);              // &cache word
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;
@@ -478,6 +500,7 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_store_cvar(
         &mut self,
         name: IdentId,
+        cache: u64,
         src: SlotId,
         using_fpr: UsingFpr,
     ) -> bool {
@@ -489,6 +512,7 @@ impl Codegen {
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
             mov x2, (name.get() as u64); // name (IdentId)
+            mov x4, (cache);              // &cache word
         );
         self.a64_frame_load(3, lfp, off); // x3 = val (from slot)
         monoasm_arm64!(&mut self.jit,

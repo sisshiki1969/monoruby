@@ -453,6 +453,13 @@ impl BytecodePtr {
 }
 
 impl BytecodePtr {
+    /// The address of this instruction's second word, where `LoadGvar` /
+    /// `StoreGvar` / `LoadCvar` / `StoreCvar` keep their site cache — what
+    /// the JIT passes the runtime for it (the VM passes `pc + 8`).
+    pub(crate) fn cache_word_addr(&self) -> u64 {
+        self.as_ptr() as u64 + 8
+    }
+
     pub(crate) fn next(&self) -> BytecodePtr {
         match self.opcode() {
             // MethodCall, Yield, and Super have an extra instruction (InlineCache)

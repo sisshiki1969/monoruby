@@ -578,6 +578,19 @@ impl alloc::GC<RValue> for ISeqInfo {
 
 impl ISeqInfo {
     ///
+    /// Replace the lexical module stack. A class-variable access reads its
+    /// starting class off this stack, and its site cache trusts the class
+    /// it resolved to (`Executor::find_class_variable_cached`), so a stack
+    /// that really changes moves the class-variable state.
+    ///
+    pub(crate) fn set_lexical_context(&mut self, ctx: Vec<ClassId>) {
+        if self.lexical_context != ctx {
+            self.lexical_context = ctx;
+            crate::globals::cvar_state_inc();
+        }
+    }
+
+    ///
     /// Bytes this iseq owns outside its own struct, split into the
     /// tables that scale with the bytecode and everything else.
     /// Consumed by `Store::memory_report`.

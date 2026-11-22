@@ -73,7 +73,8 @@ impl Codegen {
         p
     }
 
-    /// op 24 `CheckCvar`: check_class_var(vm, globals, name `[pc+0]`) -> dst.
+    /// op 24 `CheckCvar`: check_class_var(vm, globals, name `[pc+0]`,
+    /// &cache `pc+8`) -> dst.
     pub(in crate::codegen) fn a64_op_check_cvar(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
@@ -81,6 +82,7 @@ impl Codegen {
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
             ldr w2, [x(PC.0)];  // name
+            add x3, x(PC.0), #(8);  // &cache
             mov x9, (runtime::check_class_var as *const () as u64);
             blr x9;
         );
@@ -88,7 +90,8 @@ impl Codegen {
         p
     }
 
-    /// op 25 `LoadGvar`: get_global_var(vm, globals, name `[pc+0]`) -> Value.
+    /// op 25 `LoadGvar`: get_global_var(vm, globals, name `[pc+0]`,
+    /// &cache `pc+8`) -> Value.
     pub(in crate::codegen) fn a64_op_load_gvar(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
@@ -96,6 +99,7 @@ impl Codegen {
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
             ldr w2, [x(PC.0)];  // name
+            add x3, x(PC.0), #(8);  // &cache
             mov x9, (runtime::get_global_var as *const () as u64);
             blr x9;
         );
@@ -103,7 +107,8 @@ impl Codegen {
         p
     }
 
-    /// op 27 `LoadCvar`: get_class_var(vm, globals, name `[pc+0]`) -> Option.
+    /// op 27 `LoadCvar`: get_class_var(vm, globals, name `[pc+0]`,
+    /// &cache `pc+8`) -> Option.
     pub(in crate::codegen) fn a64_op_load_cvar(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
@@ -111,6 +116,7 @@ impl Codegen {
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
             ldr w2, [x(PC.0)];  // name
+            add x3, x(PC.0), #(8);  // &cache
             mov x9, (runtime::get_class_var as *const () as u64);
             blr x9;
         );
@@ -119,7 +125,7 @@ impl Codegen {
     }
 
     /// ops 26/29 `StoreGvar`/`StoreCvar`: set_*_var(vm, globals, name `[pc+0]`,
-    /// val `[pc+4]`) -> Option (error-only; no result slot).
+    /// val `[pc+4]`, &cache `pc+8`) -> Option (error-only; no result slot).
     pub(in crate::codegen) fn a64_op_store_var(&mut self, set_fn: u64) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
@@ -131,6 +137,7 @@ impl Codegen {
         );
         self.a64_slot_value(X3); // val
         monoasm_arm64!(&mut self.jit,
+            add x4, x(PC.0), #(8);  // &cache
             mov x9, (set_fn);
             blr x9;
             ldur x(LFP.0), [x29, #(-((BP_CFP + CFP_LFP) as i32))];  // reload LFP (see `a64_checked_store_next`)

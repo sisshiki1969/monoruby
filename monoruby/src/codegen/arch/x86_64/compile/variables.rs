@@ -442,62 +442,83 @@ impl Codegen {
 }
 
 impl Codegen {
-    pub(super) fn load_cvar(&mut self, name: IdentId, using_fpr: UsingFpr) {
+    /// `cache` is the address of the site's cache word (the `LoadCvar`
+    /// instruction's second word).
+    pub(super) fn load_cvar(&mut self, name: IdentId, cache: u64, using_fpr: UsingFpr) {
         self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (name.get());
+            movq rcx, (cache);
             movq rax, (runtime::get_class_var);
             call rax;
         };
         self.fpr_restore(using_fpr);
     }
 
-    pub(super) fn check_cvar(&mut self, name: IdentId, using_fpr: UsingFpr) {
+    pub(super) fn check_cvar(&mut self, name: IdentId, cache: u64, using_fpr: UsingFpr) {
         self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (name.get());
+            movq rcx, (cache);
             movq rax, (runtime::check_class_var);
             call rax;
         };
         self.fpr_restore(using_fpr);
     }
 
-    pub(super) fn store_cvar(&mut self, name: IdentId, src: SlotId, using_fpr: UsingFpr) {
+    pub(super) fn store_cvar(
+        &mut self,
+        name: IdentId,
+        cache: u64,
+        src: SlotId,
+        using_fpr: UsingFpr,
+    ) {
         self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (name.get());
             movq rcx, [rbp - (jrbp_local(src))];
+            movq r8, (cache);
             movq rax, (runtime::set_class_var);
             call rax;
         };
         self.fpr_restore(using_fpr);
     }
 
-    pub(super) fn load_gvar(&mut self, name: IdentId, using_fpr: UsingFpr) {
+    /// `cache` is the address of the site's cache word (the `LoadGvar`
+    /// instruction's second word).
+    pub(super) fn load_gvar(&mut self, name: IdentId, cache: u64, using_fpr: UsingFpr) {
         self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (name.get());
+            movq rcx, (cache);
             movq rax, (runtime::get_global_var);
             call rax;
         };
         self.fpr_restore(using_fpr);
     }
 
-    pub(super) fn store_gvar(&mut self, name: IdentId, src: SlotId, using_fpr: UsingFpr) {
+    pub(super) fn store_gvar(
+        &mut self,
+        name: IdentId,
+        cache: u64,
+        src: SlotId,
+        using_fpr: UsingFpr,
+    ) {
         self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (name.get());
             movq rcx, [rbp - (jrbp_local(src))];
+            movq r8, (cache);
             movq rax, (runtime::set_global_var);
             call rax;
         };

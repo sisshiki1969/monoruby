@@ -4032,21 +4032,35 @@ pub(super) enum AsmInst {
         dst: SlotId,
         src: GP,
     },
+    ///
+    /// `rax <- @@name`. `pc` is the `LoadCvar` instruction, whose second
+    /// word is the site's cache (`Executor::find_class_variable_cached`).
+    ///
     LoadCVar {
         name: IdentId,
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     },
+    /// `rax <- @@name` or nil; `pc` as in [`Self::LoadCVar`].
     CheckCVar {
         name: IdentId,
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     },
+    /// `@@name <- src`; `pc` as in [`Self::LoadCVar`].
     StoreCVar {
         name: IdentId,
+        pc: BytecodePtr,
         src: SlotId,
         using_fpr: UsingFpr,
     },
+    ///
+    /// `rax <- $name`. `pc` is the `LoadGvar` instruction, whose second
+    /// word is the site's cache (`GvarTable::get_cached`).
+    ///
     LoadGVar {
         name: IdentId,
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     },
     ///
@@ -4066,8 +4080,18 @@ pub(super) enum AsmInst {
     /// - rax: the current `$!`
     ///
     LoadErrinfo,
+    ///
+    /// `$! <- src`, the store counterpart of [`Self::LoadErrinfo`]: a
+    /// protected region's exit restores `$(errinfo)`, and its hook only
+    /// writes the `Executor` field.
+    ///
+    StoreErrinfo {
+        src: SlotId,
+    },
+    /// `$name <- src`; `pc` as in [`Self::LoadGVar`].
     StoreGVar {
         name: IdentId,
+        pc: BytecodePtr,
         src: SlotId,
         using_fpr: UsingFpr,
     },

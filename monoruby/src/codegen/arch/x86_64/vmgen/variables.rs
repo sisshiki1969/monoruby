@@ -134,12 +134,13 @@ impl Codegen {
     ///
     /// ~~~text
     /// +---+---+---+---++---+---+---+---+
-    /// | name  |dst| op||               |
+    /// | name  |dst| op||     cache     |
     /// +---+---+---+---++---+---+---+---+
     ///    rdi   r15
     /// ~~~
     /// - name: name of class variable (IdentId)
     /// - dst: destination slot (SlotId)
+    /// - cache: the site's cache word (`Executor::find_class_variable_cached`)
     ///
     pub(super) fn vm_load_cvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
@@ -148,6 +149,7 @@ impl Codegen {
             movl rdx, rdi; // name: IdentId
             movq rdi, rbx; // &mut Executor
             movq rsi, r12; // &mut Globals
+            lea rcx, [r13 - 8]; // &mut cache word
             movq rax, (runtime::get_class_var);
             call rax;
         };
@@ -162,12 +164,13 @@ impl Codegen {
     ///
     /// ~~~text
     /// +---+---+---+---++---+---+---+---+
-    /// | name  |dst| op||               |
+    /// | name  |dst| op||     cache     |
     /// +---+---+---+---++---+---+---+---+
     ///    rdi   r15
     /// ~~~
     /// - name: name of class variable (IdentId)
     /// - dst: destination slot (SlotId)
+    /// - cache: the site's cache word
     ///
     pub(super) fn vm_check_cvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
@@ -176,6 +179,7 @@ impl Codegen {
             movl rdx, rdi; // name: IdentId
             movq rdi, rbx; // &mut Executor
             movq rsi, r12; // &mut Globals
+            lea rcx, [r13 - 8]; // &mut cache word
             movq rax, (runtime::check_class_var);
             call rax;
         };
@@ -189,12 +193,13 @@ impl Codegen {
     ///
     /// ~~~text
     /// +---+---+---+---++---+---+---+---+
-    /// | name  |val| op||               |
+    /// | name  |val| op||     cache     |
     /// +---+---+---+---++---+---+---+---+
     ///    rdi   r15
     /// ~~~
     /// - name: name of the class variable (IdentId)
     /// - val: source slot (Value)
+    /// - cache: the site's cache word
     ///
     pub(super) fn vm_store_cvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
@@ -205,6 +210,7 @@ impl Codegen {
             movq rdi, rbx; // &mut Executor
             movq rsi, r12; // &mut Globals
             movq rcx, r15;  // dst: Value
+            lea r8, [r13 - 8]; // &mut cache word
             movq rax, (runtime::set_class_var);
             call rax;
         };
@@ -218,11 +224,12 @@ impl Codegen {
     ///
     /// ~~~text
     /// +---+---+---+---++---+---+---+---+
-    /// | name  |dst| op||               |
+    /// | name  |dst| op||     cache     |
     /// +---+---+---+---++---+---+---+---+
     /// ~~~
     /// - name: name of the global variable (IdentId)
     /// - dst: destination slot (SlotId)
+    /// - cache: the site's cache word (`GvarTable::get_cached`)
     ///
     pub(super) fn vm_load_gvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
@@ -231,6 +238,7 @@ impl Codegen {
             movl rdx, rdi; // name: IdentId
             movq rdi, rbx; // &mut Executor
             movq rsi, r12; // &mut Globals
+            lea rcx, [r13 - 8]; // &mut cache word
             movq rax, (runtime::get_global_var);
             call rax;
         };
@@ -244,11 +252,12 @@ impl Codegen {
     ///
     /// ~~~text
     /// +---+---+---+---++---+---+---+---+
-    /// | name  |val| op||               |
+    /// | name  |val| op||     cache     |
     /// +---+---+---+---++---+---+---+---+
     /// ~~~
     /// - name: name of the global variable (IdentId)
     /// - val: source slot (Value)
+    /// - cache: the site's cache word
     ///
     pub(super) fn vm_store_gvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
@@ -259,6 +268,7 @@ impl Codegen {
             movq rdi, rbx;  // &mut Executor
             movq rsi, r12;  // &mut Globals
             movq rcx, r15;  // val: Value
+            lea r8, [r13 - 8]; // &mut cache word
             movq rax, (runtime::set_global_var);
             call rax;
         };

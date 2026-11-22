@@ -1206,7 +1206,7 @@ impl Executor {
         let fid = bytecodegen::bytecode_compile_script(globals, res)?;
         self.flush_compile_warnings(globals);
         if let Some(iseq) = globals.store.iseq_mut(fid) {
-            iseq.lexical_context = vec![wrap.id()];
+            iseq.set_lexical_context(vec![wrap.id()]);
         }
         let main_object = globals.main_object;
         let top_self = self.invoke_method_inner(
@@ -3325,6 +3325,65 @@ impl Executor {
     }
 
     ///
+    /// [`Self::find_class_variable`] for a `LoadCvar` site, through the
+    /// site's cache word (`cache`, the instruction's second word):
+    /// `cvar_state << 32 | owner`, the class the name resolved to from
+    /// this site's scope. While the state stands, nothing that decides the
+    /// resolution has changed (`globals::cvar_state`): the walk up the
+    /// ancestry, its "overtaken" check and the lexical scope walk are all
+    /// skipped, and the read is one lookup in the owner's table.
+    ///
+    pub(crate) fn find_class_variable_cached(
+        &self,
+        globals: &mut Globals,
+        name: IdentId,
+        cache: &mut u64,
+    ) -> Result<Value> {
+        let state = crate::globals::cvar_state();
+        if (*cache >> 32) as u32 == state
+            && let Some(owner) = ClassId::from(*cache as u32)
+            && let Some(v) = globals.own_class_variable(owner, name)
+        {
+            return Ok(v);
+        }
+        let parent = self.get_parent(globals)?;
+        let (owner, v) = globals.get_class_variable(parent, name)?;
+        *cache = ((state as u64) << 32) | owner.id().u32() as u64;
+        Ok(v)
+    }
+
+    ///
+    /// [`Self::set_class_variable`] for a `StoreCvar` site, through the
+    /// site's cache word (see [`Self::find_class_variable_cached`]).
+    ///
+    pub(crate) fn set_class_variable_cached(
+        &self,
+        globals: &mut Globals,
+        name: IdentId,
+        val: Value,
+        cache: &mut u64,
+    ) -> Result<()> {
+        if (*cache >> 32) as u32 == crate::globals::cvar_state()
+            && let Some(owner) = ClassId::from(*cache as u32)
+        {
+            // The owner has the variable (removing it moves the state),
+            // so this store creates nothing and leaves the state alone.
+            globals.set_class_variable(owner, name, val);
+            return Ok(());
+        }
+        let parent = self.get_parent(globals)?;
+        let owner = match globals.search_class_variables_superclass(parent, name) {
+            Some((module, _)) => module,
+            None => parent,
+        };
+        globals.set_class_variable(owner.id(), name, val);
+        // Read after the store: creating the variable moved the state, and
+        // from now on the name resolves to `owner` from this scope.
+        *cache = ((crate::globals::cvar_state() as u64) << 32) | owner.id().u32() as u64;
+        Ok(())
+    }
+
+    ///
     /// Set a class variable with `name` to `value`.
     ///
     pub(crate) fn set_class_variable(
@@ -4105,7 +4164,7 @@ impl Executor {
                 Some(parent) => globals.store[parent].lexical_context.clone(),
                 None => Vec::new(),
             };
-            globals.store[iseq].lexical_context = parent_ctx;
+            globals.store[iseq].set_lexical_context(parent_ctx);
         } else {
             runtime::_dump_stacktrace(self, globals);
             return Err(MonorubyErr::runtimeerr(format!(

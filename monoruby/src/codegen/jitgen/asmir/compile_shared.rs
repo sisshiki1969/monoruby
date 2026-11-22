@@ -255,21 +255,36 @@ impl Codegen {
             // Variable access. gvar/cvar go via a runtime call; dynvar walks the
             // outer-LFP chain.
             AsmInst::LoadErrinfo => self.encode_linst(LInst::LoadErrinfo),
-            AsmInst::LoadGVar { name, using_fpr } => {
-                self.encode_linst(LInst::LoadGVar { name, using_fpr })
-            }
+            AsmInst::StoreErrinfo { src } => self.encode_linst(LInst::StoreErrinfo { src }),
+            AsmInst::LoadGVar {
+                name,
+                pc,
+                using_fpr,
+            } => self.encode_linst(LInst::LoadGVar {
+                name,
+                pc,
+                using_fpr,
+            }),
             AsmInst::StoreGVar {
                 name,
+                pc,
                 src,
                 using_fpr,
             } => self.encode_linst(LInst::StoreGVar {
                 name,
+                pc,
                 src,
                 using_fpr,
             }),
-            AsmInst::LoadCVar { name, using_fpr } => {
-                self.encode_linst(LInst::LoadCVar { name, using_fpr })
-            }
+            AsmInst::LoadCVar {
+                name,
+                pc,
+                using_fpr,
+            } => self.encode_linst(LInst::LoadCVar {
+                name,
+                pc,
+                using_fpr,
+            }),
             AsmInst::LoadDynVar { src } => self.encode_linst(LInst::LoadDynVar { src }),
             AsmInst::StoreDynVar { dst, src } => self.encode_linst(LInst::StoreDynVar { dst, src }),
             // Runtime allocation / C-call family: each builds a heap object via a
@@ -1228,15 +1243,23 @@ impl Codegen {
                 using_fpr,
             }),
             // Runtime-call class-variable / method-alias ops.
-            AsmInst::CheckCVar { name, using_fpr } => {
-                self.encode_linst(LInst::CheckCVar { name, using_fpr })
-            }
+            AsmInst::CheckCVar {
+                name,
+                pc,
+                using_fpr,
+            } => self.encode_linst(LInst::CheckCVar {
+                name,
+                pc,
+                using_fpr,
+            }),
             AsmInst::StoreCVar {
                 name,
+                pc,
                 src,
                 using_fpr,
             } => self.encode_linst(LInst::StoreCVar {
                 name,
+                pc,
                 src,
                 using_fpr,
             }),
@@ -2104,18 +2127,30 @@ impl Codegen {
             LInst::LoadErrinfo => {
                 self.emit_load_errinfo();
             }
-            LInst::LoadGVar { name, using_fpr } => {
-                self.emit_load_gvar(name, using_fpr);
+            LInst::StoreErrinfo { src } => {
+                self.emit_store_errinfo(src);
+            }
+            LInst::LoadGVar {
+                name,
+                pc,
+                using_fpr,
+            } => {
+                self.emit_load_gvar(name, pc.cache_word_addr(), using_fpr);
             }
             LInst::StoreGVar {
                 name,
+                pc,
                 src,
                 using_fpr,
             } => {
-                self.emit_store_gvar(name, src, using_fpr);
+                self.emit_store_gvar(name, pc.cache_word_addr(), src, using_fpr);
             }
-            LInst::LoadCVar { name, using_fpr } => {
-                self.emit_load_cvar(name, using_fpr);
+            LInst::LoadCVar {
+                name,
+                pc,
+                using_fpr,
+            } => {
+                self.emit_load_cvar(name, pc.cache_word_addr(), using_fpr);
             }
             LInst::LoadDynVar { src } => {
                 self.emit_load_dyn_var(src);
@@ -2265,15 +2300,20 @@ impl Codegen {
             } => {
                 self.emit_alias_gvar(new, old, using_fpr);
             }
-            LInst::CheckCVar { name, using_fpr } => {
-                self.emit_check_cvar(name, using_fpr);
+            LInst::CheckCVar {
+                name,
+                pc,
+                using_fpr,
+            } => {
+                self.emit_check_cvar(name, pc.cache_word_addr(), using_fpr);
             }
             LInst::StoreCVar {
                 name,
+                pc,
                 src,
                 using_fpr,
             } => {
-                self.emit_store_cvar(name, src, using_fpr);
+                self.emit_store_cvar(name, pc.cache_word_addr(), src, using_fpr);
             }
             LInst::AliasMethod {
                 new,

@@ -657,16 +657,30 @@ impl AbstractState {
             return;
         }
         let using_fpr = self.get_using_fpr(ir);
-        ir.push(AsmInst::LoadGVar { name, using_fpr });
+        let pc = self.pc();
+        ir.push(AsmInst::LoadGVar {
+            name,
+            pc,
+            using_fpr,
+        });
         self.def_rax2acc(ir, dst);
     }
 
     pub(super) fn jit_store_gvar(&mut self, ir: &mut AsmIr, name: IdentId, src: SlotId) {
         self.write_back_slots(ir, &[src]);
+        // The restore of `$(errinfo)` at a protected region's exit — the
+        // store counterpart of `jit_load_gvar`'s read. Its hook only
+        // writes the `Executor` field and cannot fail.
+        if name == IdentId::GVAR_ERRINFO_INTERNAL {
+            ir.push(AsmInst::StoreErrinfo { src });
+            return;
+        }
         let using_fpr = self.get_using_fpr(ir);
         let error = ir.new_error(self);
+        let pc = self.pc();
         ir.push(AsmInst::StoreGVar {
             name,
+            pc,
             src,
             using_fpr,
         });
@@ -677,7 +691,12 @@ impl AbstractState {
         self.discard(dst);
         let using_fpr = self.get_using_fpr(ir);
         let error = ir.new_error(self);
-        ir.push(AsmInst::LoadCVar { name, using_fpr });
+        let pc = self.pc();
+        ir.push(AsmInst::LoadCVar {
+            name,
+            pc,
+            using_fpr,
+        });
         ir.handle_error(error);
         self.def_rax2acc(ir, dst);
     }
@@ -685,7 +704,12 @@ impl AbstractState {
     pub(super) fn jit_check_cvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.discard(dst);
         let using_fpr = self.get_using_fpr(ir);
-        ir.push(AsmInst::CheckCVar { name, using_fpr });
+        let pc = self.pc();
+        ir.push(AsmInst::CheckCVar {
+            name,
+            pc,
+            using_fpr,
+        });
         self.def_rax2acc(ir, dst);
     }
 
@@ -693,8 +717,10 @@ impl AbstractState {
         self.write_back_slots(ir, &[src]);
         let using_fpr = self.get_using_fpr(ir);
         let error = ir.new_error(self);
+        let pc = self.pc();
         ir.push(AsmInst::StoreCVar {
             name,
+            pc,
             src,
             using_fpr,
         });

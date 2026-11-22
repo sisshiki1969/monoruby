@@ -871,17 +871,24 @@ pub(in crate::codegen) enum LInst {
     /// `rax <- $!` read straight off the `Executor` — see
     /// `AsmInst::LoadErrinfo`.
     LoadErrinfo,
+    /// `$! <- src` — see `AsmInst::StoreErrinfo`.
+    StoreErrinfo {
+        src: SlotId,
+    },
     LoadGVar {
         name: IdentId,
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     },
     StoreGVar {
         name: IdentId,
+        pc: BytecodePtr,
         src: SlotId,
         using_fpr: UsingFpr,
     },
     LoadCVar {
         name: IdentId,
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     },
     LoadDynVar {
@@ -1008,10 +1015,12 @@ pub(in crate::codegen) enum LInst {
     },
     CheckCVar {
         name: IdentId,
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     },
     StoreCVar {
         name: IdentId,
+        pc: BytecodePtr,
         src: SlotId,
         using_fpr: UsingFpr,
     },
