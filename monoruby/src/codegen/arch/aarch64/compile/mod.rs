@@ -175,7 +175,17 @@ impl Codegen {
             .into_iter()
             .map(Some)
             .collect();
+        // The out-of-line slow paths (`a64_cold_stub`) go last, and the
+        // island before them can itself be large: a frame with thousands
+        // of guards lays down over 1 MiB of stubs. Their hot-path branches
+        // reach ±1 MiB, so once the island has run
+        // `COLD_STUB_THUNK_AGE` past the oldest one still referenced only
+        // by its branch, every such branch is handed to a thunk at that
+        // point (`a64_cold_range_check`) — once per island at most.
+        let mut stubs = std::mem::take(&mut self.pending_cold_stubs);
+        let mut oldest_fresh = stubs.iter().filter_map(|stub| stub.referenced_at).min();
         for i in 0..pending.len() {
+            self.a64_cold_range_check(&mut stubs, 0, &mut oldest_fresh);
             if self.jit.get_current() - frame.side_exit_watermark > SIDE_EXIT_DRAIN_THRESHOLD {
                 // The island is outgrowing the range invariant; re-thunk the
                 // *referenced* remainder (same selection as the mid-stream
@@ -205,10 +215,13 @@ impl Codegen {
         }
         // Slow paths taken off the hot path (`a64_cold_stub`), each under
         // the frame displacement of the code that branches to it.
-        for stub in std::mem::take(&mut self.pending_cold_stubs) {
-            self.jit.bind_label(stub.entry);
-            let saved = set_fdisp(stub.fdisp);
-            (stub.body)(self);
+        for i in 0..stubs.len() {
+            self.a64_cold_range_check(&mut stubs, i, &mut oldest_fresh);
+            let entry = stubs[i].entry.clone();
+            self.jit.bind_label(entry);
+            let saved = set_fdisp(stubs[i].fdisp);
+            let body = std::mem::replace(&mut stubs[i].body, Box::new(|_| {}));
+            body(self);
             set_fdisp(saved);
         }
         if let Some(skip) = skip {
@@ -240,6 +253,33 @@ impl Codegen {
             body: Box::new(body),
         });
         entry
+    }
+
+    /// Inside a side-exit island: if the oldest hot-path branch to a stub
+    /// of `stubs[from..]` not yet bound (`oldest_fresh`) is falling out of
+    /// reach, bind every such stub's entry here to a `b successor` thunk.
+    /// The code before is a handler's or stub's unconditional way out, so
+    /// nothing falls into the thunks.
+    fn a64_cold_range_check(
+        &mut self,
+        stubs: &mut [A64ColdStub],
+        from: usize,
+        oldest_fresh: &mut Option<usize>,
+    ) {
+        let Some(at) = *oldest_fresh else {
+            return;
+        };
+        if self.jit.get_current() - at <= COLD_STUB_THUNK_AGE {
+            return;
+        }
+        for stub in &mut stubs[from..] {
+            if stub.referenced_at.take().is_some() {
+                let succ = self.jit.label();
+                self.jit.bind_label(std::mem::replace(&mut stub.entry, succ.clone()));
+                monoasm_arm64!(&mut self.jit, b succ;);
+            }
+        }
+        *oldest_fresh = None;
     }
 
     /// Range thunks for out-of-line slow paths whose hot-path branch has
