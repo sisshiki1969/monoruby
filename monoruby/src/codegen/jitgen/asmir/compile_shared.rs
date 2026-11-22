@@ -815,9 +815,8 @@ impl Codegen {
             // non-argument locals (aarch64 bails if the frame exceeds the 12-bit
             // sub-sp immediate).
             // An inline callee's frame is the window its caller filled,
-            // addressed through the frame pointer and the LFP moved into it
-            // (aarch64) or through the frame displacement (x86-64,
-            // `InlineCall`): no prologue. Its non-argument locals are not
+            // addressed through the frame displacement (`InlineCall`,
+            // `jitgen::fdisp`): no prologue. Its non-argument locals are not
             // nil-filled either — the abstract state binds them to `nil`
             // and nothing reads a slot it has not written, since the body
             // has no safepoint to scan the window; the one exit that makes
