@@ -285,7 +285,7 @@ pub(crate) fn phase(phase: Phase) -> PhaseGuard {
 ///
 #[inline]
 pub(crate) fn set_executor(exec: *const Executor) {
-    EXEC.set(Some(ExecutorRef(NonNull::new(exec as _).unwrap())));
+    EXEC.set(NonNull::new(exec as _).map(ExecutorRef));
 }
 
 ///
@@ -2844,6 +2844,21 @@ mod tests {
             .exe_name(elf_functions as *const () as usize)
             .expect("own function not in the executable's symbols");
         assert!(name.contains("prof::elf_functions"), "{name}");
+    }
+
+    /// A thread leaving Ruby hands `null` (the native thread's exit, the
+    /// green scheduler regaining control): that clears the executor
+    /// instead of panicking.
+    #[test]
+    fn set_executor_accepts_null() {
+        let dummy = 8usize as *const Executor;
+        set_executor(dummy);
+        assert_eq!(
+            Some(dummy as usize),
+            EXEC.get().map(|e| e.0.as_ptr() as usize)
+        );
+        set_executor(std::ptr::null());
+        assert!(EXEC.get().is_none());
     }
 
     #[test]
