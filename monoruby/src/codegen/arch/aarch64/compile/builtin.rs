@@ -835,7 +835,6 @@ impl Codegen {
         let lp = self.jit.label();
         let next = self.jit.label();
         let indexed = self.jit.label();
-        let group = self.jit.label();
         let exhausted = self.jit.label();
         let miss = self.jit.label();
         let done = self.jit.label();
@@ -950,6 +949,10 @@ impl Codegen {
         indexed:
         );
         if layout.group_width == 16 {
+            // Created here, not with the others: a label is kept by
+            // `JitMemory` until it is bound, so one this regime never binds
+            // would stay in its list for good.
+            let group = self.jit.label();
             let lo = 0x0101_0101_0101_0101u64;
             let hi = 0x8080_8080_8080_8080u64;
             monoasm_arm64!(&mut self.jit,
