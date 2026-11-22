@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Run dewasm's DOOM (the wasm module converted to Ruby, gosu window frontend)
+# on monoruby. Arguments are forwarded to gui/main.rb:
+#
+#   bin/dewasm-doom                  # play in a window
+#   bin/dewasm-doom --scale 4        # also --fullscreen, --smooth
+#   bin/dewasm-doom --smoke          # headless self-check: 60 ticks, tick rate, screenshot.png
+#
+# The frontend needs the gosu and ffi gems, installed for the host CRuby
+# monoruby probes (`gem install gosu ffi`) or for monoruby itself.
+# dewasm is expected at ../dewasm (override with DEWASM_DIR). The generated
+# library doom_gen.rb (~10MB, gitignored there) is built with dewasm's own
+# build.sh when it is missing; DEWASM_REBUILD=1 forces a regeneration.
+# MONORUBY=<path> runs that binary instead of building target/release/monoruby.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+dewasm_dir="${DEWASM_DIR:-$repo_root/../dewasm}"
+doom_dir="$dewasm_dir/examples/doom/ruby"
+
+if [ ! -f "$doom_dir/gui/main.rb" ]; then
+    echo "dewasm-doom: $doom_dir/gui/main.rb not found (clone dewasm next to monoruby, or set DEWASM_DIR)" >&2
+    exit 1
+fi
+
+if [ -n "${MONORUBY:-}" ]; then
+    monoruby="$(realpath "$MONORUBY")"
+else
+    (cd "$repo_root" && cargo build --release)
+    monoruby="$repo_root/target/release/monoruby"
+fi
+
+if [ ! -f "$doom_dir/doom_gen.rb" ] || [ -n "${DEWASM_REBUILD:-}" ]; then
+    "$doom_dir/build.sh"
+fi
+
+if ! "$monoruby" -e 'require "gosu"; require "ffi"' 2>/dev/null; then
+    echo "dewasm-doom: monoruby cannot load gosu / ffi; run \`gem install gosu ffi\` on the host Ruby" >&2
+    echo "             (then MONORUBY_REPROBE=1 $monoruby -e '')" >&2
+    exit 1
+fi
+
+# main.rb keeps .savegame/ and screenshot.png relative to the current directory.
+cd "$doom_dir/gui"
+exec "$monoruby" main.rb "$@"
