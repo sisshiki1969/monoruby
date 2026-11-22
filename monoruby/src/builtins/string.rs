@@ -12168,7 +12168,7 @@ fn string_capa_available(bytes: usize) -> bool {
     if bytes <= STR_CAPA_PROBE {
         return true;
     }
-    if crate::alloc::would_exceed_malloc_hard_limit(bytes) {
+    if !crate::alloc::may_allocate(bytes) {
         return false;
     }
     Vec::<u8>::new().try_reserve_exact(bytes).is_ok()

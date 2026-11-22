@@ -5932,12 +5932,13 @@ fn array_capa_check(
     Ok(Value::nil())
 }
 
-/// Whether the allocator would hand out room for `n` Values now.
+/// Whether the allocator would hand out room for `n` Values now (see
+/// [`crate::alloc::may_allocate`] for what is refused before asking it).
 pub(crate) fn array_capa_available(n: usize) -> bool {
     let Some(bytes) = n.checked_mul(std::mem::size_of::<Value>()) else {
         return false;
     };
-    if crate::alloc::would_exceed_malloc_hard_limit(bytes) {
+    if !crate::alloc::may_allocate(bytes) {
         return false;
     }
     Vec::<Value>::new().try_reserve_exact(n).is_ok()

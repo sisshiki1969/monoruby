@@ -4040,10 +4040,11 @@ impl RStringInner {
         if additional == 0 {
             return true;
         }
-        // Ask the `MONORUBY_MALLOC_HARD_LIMIT` guard first: it aborts the
-        // process rather than failing the allocation, so `try_reserve`
-        // would never get to report a `capacity: 2 ** 62`.
-        if crate::alloc::would_exceed_malloc_hard_limit(additional) {
+        // Ask `may_allocate` first: the `MONORUBY_MALLOC_HARD_LIMIT` guard
+        // aborts the process rather than failing the allocation, so
+        // `try_reserve` would never get to report a `capacity: 2 ** 62`,
+        // and macOS would grant one past physical memory.
+        if !crate::alloc::may_allocate(additional) {
             return false;
         }
         buf.try_reserve(additional).is_ok()
