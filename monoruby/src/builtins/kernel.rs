@@ -305,7 +305,13 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     //globals.define_builtin_inline_func(kernel_class, "____min", min, inline_gen!(inline_min), 2);
 
     // Kernel methods (matching CRuby: these are defined on Kernel, not Object)
-    globals.define_builtin_func(kernel_class, "class", class, 0);
+    globals.define_builtin_inline_func(
+        kernel_class,
+        "class",
+        class,
+        inline_gen2!(kernel_class_gen),
+        0,
+    );
     let kernel_hash = globals.define_builtin_func(kernel_class, "hash", hash, 0);
     globals.store.set_kernel_hash_fid(kernel_hash);
     globals.define_builtin_func(kernel_class, "eql?", eql_, 1);
@@ -6726,6 +6732,31 @@ fn display_inspect(
 #[monoruby_builtin]
 fn class(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(lfp.self_val().real_class(&globals.store).as_val())
+}
+
+/// `Kernel#class` on a receiver of a proven class is that class's real
+/// class, a constant.
+fn kernel_class_gen(
+    state: &mut AbstractState,
+    _: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    recv_class: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    // Synthetic classes (e.g. BOOL_CLASS) have no backing Module object.
+    let Some(module) = recv_class.and_then(|class| store[class.id()].try_get_module()) else {
+        return false;
+    };
+    if let Some(dst) = callsite.dst {
+        state.def_C(dst, module.get_real_class().as_val());
+    }
+    true
 }
 
 ///

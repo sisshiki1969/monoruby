@@ -1193,6 +1193,13 @@ pub struct Codegen {
     /// around each run: on x86-64 such a panic is always a bug, and the
     /// code it leaves interpreted still answers correctly.
     pub(crate) contained_panics: usize,
+    /// Calls lowered in the unit being compiled that wait for their iseq
+    /// callee's body for a proven receiver class: `(callee, class, x86: the
+    /// address of the `call` through the wrapper / aarch64: the guard-free
+    /// slot the call reads)`. `Codegen::compile` hands them to the store
+    /// once the unit is installed, and `compile_patch` points them at the
+    /// body when it is compiled.
+    pub(crate) late_direct_calls: Vec<(ISeqId, ClassId, u64)>,
     /// aarch64 branch relaxation: set while emitting a frame so large that
     /// an Imm19 (`b.cond`/`cbz`, ±1 MiB) or Adr (±1 MiB) reference between
     /// basic blocks might not reach. BB-edge branches then emit their long
@@ -1627,6 +1634,7 @@ impl Codegen {
             scheduler_resume,
             startup_flag: false,
             contained_panics: 0,
+            late_direct_calls: Vec::new(),
             #[cfg(target_arch = "aarch64")]
             far_branch_mode: false,
             #[cfg(target_arch = "aarch64")]

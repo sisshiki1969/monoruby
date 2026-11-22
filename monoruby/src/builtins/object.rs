@@ -54,7 +54,14 @@ pub(super) fn init(globals: &mut Globals) {
     // entry/FuncId), so `BasicObject.instance_method(:equal?) ==
     // BasicObject.instance_method(:==)` holds — see ruby/spec
     // core/basicobject/equal_spec.rb.
-    globals.define_builtin_funcs(BASIC_OBJECT_CLASS, "==", &["equal?"], eq, 1);
+    globals.define_builtin_inline_funcs(
+        BASIC_OBJECT_CLASS,
+        "==",
+        &["equal?"],
+        eq,
+        inline_gen2!(super::symbol::symbol_eq),
+        1,
+    );
     globals.define_builtin_inline_func(BASIC_OBJECT_CLASS, "!", not_, inline_gen2!(object_not), 0);
     let neq_fid = globals.define_builtin_inline_func(
         BASIC_OBJECT_CLASS,

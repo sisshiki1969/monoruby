@@ -1,6 +1,8 @@
 use super::*;
 use crate::scheduler;
 use crate::value::rvalue::{InterruptTiming, PendingInterrupt, ThreadInner, ThreadState};
+#[cfg(target_arch = "aarch64")]
+use jitgen::{AbstractState, JitContext};
 
 //
 // Thread class
@@ -27,7 +29,13 @@ pub(super) fn init(globals: &mut Globals) {
     // `fork` is re-pointed at `start` as a true alias in builtins/thread.rb
     // (ruby/spec checks `Thread.method(:fork) == Thread.method(:start)`).
     globals.define_builtin_class_func_rest(THREAD_CLASS, "fork", thread_start);
-    globals.define_builtin_class_func(THREAD_CLASS, "current", thread_current, 0);
+    globals.define_builtin_class_inline_func(
+        THREAD_CLASS,
+        "current",
+        thread_current,
+        inline_gen2!(thread_current_gen),
+        0,
+    );
     globals.define_builtin_class_func(THREAD_CLASS, "main", thread_main, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "pass", thread_pass, 0);
     globals.define_builtin_class_func(THREAD_CLASS, "list", thread_list, 0);
@@ -545,6 +553,36 @@ fn thread_start(
 #[monoruby_builtin]
 fn thread_current(vm: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
     Ok(scheduler::current_thread(vm))
+}
+
+fn thread_current_gen(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    super::hash::inline_helper_call(
+        state,
+        ir,
+        store,
+        callid,
+        0,
+        thread_current_c as *const () as u64,
+        false,
+    )
+}
+
+/// [`thread_current`] for the JIT, in the `Hash#[]` helper ABI.
+extern "C" fn thread_current_c(
+    vm: &mut Executor,
+    _: &mut Globals,
+    _: Value,
+    _: Value,
+) -> Option<Value> {
+    Some(scheduler::current_thread(vm))
 }
 
 ///

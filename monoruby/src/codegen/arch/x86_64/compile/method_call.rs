@@ -345,6 +345,10 @@ impl Codegen {
     /// deopt. Store/frame-dependent target info is pre-resolved
     /// by the dispatcher (codeptr / is_iseq / pcs / JIT entry), so this is
     /// store-free.
+    ///
+    /// Returns the address of the `call` (a 5-byte `call rel32`) when an
+    /// iseq callee was entered through its wrapper, so that the caller can
+    /// have it repatched to a body compiled later (`late_direct`).
     pub(in crate::codegen::jitgen) fn emit_call(
         &mut self,
         codeptr: CodePtr,
@@ -355,10 +359,11 @@ impl Codegen {
         // aarch64 guard-free dispatch slot; x86 dispatches via `jit_entry`.
         _jit_slot: Option<u64>,
         evict: AsmEvict,
-    ) {
+    ) -> Option<CodePtr> {
         self.set_lfp();
         self.push_frame();
 
+        let mut wrapper_call = None;
         if is_iseq {
             match jit_entry {
                 Some(dest) => {
@@ -371,6 +376,7 @@ impl Codegen {
                     monoasm! { &mut self.jit,
                         movq r13, (callee_pc.unwrap().as_ptr());
                     }
+                    wrapper_call = Some(self.jit.get_current_address());
                     self.call_codeptr(codeptr);
                 }
             };
@@ -386,6 +392,7 @@ impl Codegen {
 
         self.pop_frame();
         self.set_deopt_with_return_addr(return_addr, evict);
+        wrapper_call
     }
 
     pub(in crate::codegen::jitgen) fn do_specialized_call(&mut self, entry: DestLabel) -> CodePtr {

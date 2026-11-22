@@ -26,7 +26,13 @@ pub(super) fn init(globals: &mut Globals) {
         fiber_yield,
         inline_gen2!(fiber_yield_inline),
     );
-    globals.define_builtin_class_func(FIBER_CLASS, "current", current, 0);
+    globals.define_builtin_class_inline_func(
+        FIBER_CLASS,
+        "current",
+        current,
+        inline_gen2!(fiber_current_gen),
+        0,
+    );
     // The fiber running on this executor, or nil at a thread's root context
     // (where `Fiber.current` substitutes the root Fiber object). Internal:
     // `Thread#[]`'s fiber-local tables key off it (`:root` for nil).
@@ -202,6 +208,42 @@ fn storage_key(vm: &mut Executor, globals: &mut Globals, key: Value) -> Result<V
 #[monoruby_builtin]
 fn current(vm: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
     current_fiber_obj(vm, globals)
+}
+
+fn fiber_current_gen(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    super::hash::inline_helper_call(
+        state,
+        ir,
+        store,
+        callid,
+        0,
+        fiber_current_c as *const () as u64,
+        true,
+    )
+}
+
+/// [`current`] for the JIT, in the `Hash#[]` helper ABI.
+extern "C" fn fiber_current_c(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    _: Value,
+    _: Value,
+) -> Option<Value> {
+    match current_fiber_obj(vm, globals) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 /// `Fiber.__current_fiber` — see `init`.

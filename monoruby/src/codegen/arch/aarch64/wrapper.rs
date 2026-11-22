@@ -133,7 +133,7 @@ impl Codegen {
             }
             FuncKind::Builtin { abs_address } => {
                 let abs = *abs_address;
-                self.a64_gen_native_func_wrapper(abs);
+                self.a64_gen_native_func_wrapper(abs, globals.store[fid].meta().reg_num());
             }
             FuncKind::AttrReader { ivar_name } => {
                 let name = *ivar_name;
@@ -450,21 +450,49 @@ impl Codegen {
 
     /// Native (builtin) method wrapper: allocate the arg stack region and call
     /// the Rust builtin `fn(vm, globals, lfp)`. Mirrors x86
-    /// `gen_native_func_wrapper`.
-    pub(in crate::codegen) fn a64_gen_native_func_wrapper(&mut self, abs_address: u64) {
+    /// `gen_native_func_wrapper`, including its constant frame size (the
+    /// builtin's `reg_num` never changes after definition; debug builds check
+    /// the frame's `meta` agrees).
+    pub(in crate::codegen) fn a64_gen_native_func_wrapper(
+        &mut self,
+        abs_address: u64,
+        reg_num: u16,
+    ) {
+        // ((reg_num + (RSP_LOCAL_FRAME+LFP_ARG0)/8 + 1) & !1) * 8
+        let frame_size =
+            ((reg_num as u64 + ((RSP_LOCAL_FRAME + LFP_ARG0) / 8 + 1) as u64) & !1) * 8;
         monoasm_arm64!(&mut self.jit,
             stp x29, x30, [sp, #(-16)]!;
             mov x29, sp;
-        // stack offset = ((reg_num + (RSP_LOCAL_FRAME+LFP_ARG0)/8 + 1) & !1) * 8
-            sub x10, x(LFP.0), #(LFP_REGNUM as u32);
-            ldrh x10, [x10];  // reg_num
-            add x10, x10, #(((RSP_LOCAL_FRAME + LFP_ARG0) / 8 + 1) as u32);
-            mov x11, (!1u64);
-            and x10, x10, x11;
-            lsl x10, x10, #(3);
-            mov x11, sp;
-            sub x11, x11, x10;
-            mov sp, x11;
+        );
+        #[cfg(debug_assertions)]
+        {
+            let ok = self.jit.label();
+            monoasm_arm64!(&mut self.jit,
+                sub x10, x(LFP.0), #(LFP_REGNUM as u32);
+                ldrh x10, [x10];  // reg_num
+                mov x11, (reg_num as u64);
+                cmp x10, x11;
+            );
+            self.jit.bcond_label(monoasm::Cond::Eq, &ok);
+            monoasm_arm64!(&mut self.jit,
+                brk #(0);
+            );
+            self.jit.bind_label(ok);
+        }
+        if frame_size < 4096 {
+            monoasm_arm64!(&mut self.jit,
+                sub sp, sp, #(frame_size as u32);
+            );
+        } else {
+            monoasm_arm64!(&mut self.jit,
+                mov x10, (frame_size);
+                mov x11, sp;
+                sub x11, x11, x10;
+                mov sp, x11;
+            );
+        }
+        monoasm_arm64!(&mut self.jit,
         // builtin(vm, globals, lfp)
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);

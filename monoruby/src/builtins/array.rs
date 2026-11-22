@@ -60,7 +60,13 @@ pub(super) fn init(globals: &mut Globals) {
         0,
     );
     globals.define_builtin_func_with(ARRAY_CLASS, "count", count, 0, 1, false);
-    globals.define_builtin_func(ARRAY_CLASS, "empty?", empty, 0);
+    globals.define_builtin_inline_func(
+        ARRAY_CLASS,
+        "empty?",
+        empty,
+        inline_gen2!(array_empty),
+        0,
+    );
     globals.define_builtin_funcs(ARRAY_CLASS, "inspect", &["to_s"], inspect, 0);
     globals.define_builtin_func(ARRAY_CLASS, "to_a", to_a, 0);
     globals.define_builtin_func(ARRAY_CLASS, "to_h", to_h, 0);
@@ -417,6 +423,27 @@ fn array_size(
     // of the array receiver in Rdi, fixnum-tagged into Rax.
     ir.array_len_fixnum(GP::Rax, GP::Rdi);
     state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+    true
+}
+
+fn array_empty(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let dst = callsite.dst;
+    state.load(ir, callsite.recv, GP::Rdi);
+    ir.array_len_fixnum(GP::Rsi, GP::Rdi);
+    ir.fixnum_zero_to_bool(GP::Rsi);
+    state.def_rax2acc(ir, dst);
     true
 }
 
