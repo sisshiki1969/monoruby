@@ -264,7 +264,7 @@ Neither a coverage gap nor a guard difference, but worth knowing:
 | | x86-64 | aarch64 |
 | --- | --- | --- |
 | **Installing / re-pointing JIT code** | patches branches in place (`apply_jmp_patch_address`, the `patch_point` `call`) | indirect heap slots — `ISeqInfo::jit_slot` and `jit_guard_free_slot` are `#[cfg(target_arch = "aarch64")]` fields — plus `Codegen::patch_call_to_entry`, a single `bl` rewrite under the MAP_JIT writable/executable flip |
-| **Cold-code placement** | cold handlers go on page 1 (`select_page`, ~90 sites) | page 1 is past `B`/`BL` range from page 0, so cold blocks are laid inline (~7 sites). In exchange aarch64 has an optimization x86 has no use for: `AsmIr::as_pure_deopt` / `pure_deopt_target` (`#[cfg(target_arch = "aarch64")]`) emit a deopt-only block's handler *at* the block label, so predecessors branch straight onto the deopt code |
+| **Cold-code placement** | cold handlers go on page 1 (`select_page`, ~90 sites) | page 1 is past `B`/`BL` range from page 0, so side-exit handlers, and the slow paths of the safepoint poll and the class- / const-version guards (`Codegen::a64_cold_stub`), go into *side-exit islands* in the same code stream: one at the frame's end, behind a `b skip` only where code can fall into it, plus range thunks every 8 KiB of hot code (`a64_drain_side_exits`, `a64_thunk_side_exits`). The hot path is one conditional branch to cold code, as on x86. In exchange aarch64 has an optimization x86 has no use for: `AsmIr::as_pure_deopt` / `pure_deopt_target` (`#[cfg(target_arch = "aarch64")]`) emit a deopt-only block's handler *at* the block label, so predecessors branch straight onto the deopt code |
 | **Branch range** | never a constraint | a large loop body can put a `TBZ`/`TBNZ` further from its deopt than imm14 (+/-32 KiB) reaches, which panics the emit. `jit_compile_loop` catches it and leaves the codeptr unpublished; `a64_op_loop_start`'s tri-state slot (`0` / `1` sentinel / codeptr) stops the retry loop |
 | **A panic inside a compile** | contained at every entry point (`compiler.rs` `contain_compile_panic`): nothing is published, the warm-up counter has run out so the method / loop stays interpreted, and a failed recompile leaves the old code deopting as before | the same for a first compile; a *recompile* panic additionally sets a Ruby `FatalError` (the row below) |
 | **`RecompileDeopt` error exit** | `error: None` | needs `Some(ir.new_error(state))` — a recompile-time panic surfaces as a Ruby `FatalError` to branch to (`jitgen/compile.rs`) |
@@ -295,7 +295,7 @@ prologue and only the latter has already reserved the unit's spill region.
 > coverage — aarch64 lowers everything (large immediates via scratch
 > registers), so the `bool` bail return is vestigial. What remains is
 > non-coverage: different **code-installation** mechanisms (branch patching
-> vs indirect slots) and **cold-code placement** (page 1 vs inline, which
-> buys aarch64 the `as_pure_deopt` collapse), and aarch64's **branch-range**
+> vs indirect slots) and **cold-code placement** (page 1 vs in-stream
+> islands, which buys aarch64 the `as_pure_deopt` collapse), and aarch64's **branch-range**
 > ceiling on very large loop bodies (§5c). Guards, the recovery jump-back,
 > BOP eviction, block/method inlining and the GP pool are all symmetric.

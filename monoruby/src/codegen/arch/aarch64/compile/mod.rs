@@ -34,6 +34,7 @@ use crate::codegen::jitgen::deopt_log::DeoptCause;
 use crate::bytecode::OPCODE_SUB_POLY;
 use crate::codegen::jitgen::lir::ConstMiss;
 use crate::codegen::jitgen::{fdisp, set_fdisp};
+use crate::codegen::A64ColdStub;
 
 /// The LFP (x22) and the frame pointer (x29). Inside a frameless body they
 /// stay where the host frame put them, and the body addresses its window
@@ -131,6 +132,13 @@ fn a64_float_cond_for_cmp(kind: CmpKind, brkind: BrKind) -> monoasm::Cond {
 /// ≈ 24 KiB, comfortably inside imm14.
 const SIDE_EXIT_DRAIN_THRESHOLD: usize = 8 * 1024;
 
+/// How far the hot path may run past an out-of-line slow path's
+/// conditional branch (`b.cond` / `cbnz`, imm19: ±1 MiB) before the
+/// branch is handed to a range thunk (`a64_thunk_cold_stubs`). Only frames
+/// this large pay the thunk's extra `b`, on the cold path; the margin
+/// left covers the rest of the frame's run and its side-exit island.
+const COLD_STUB_THUNK_AGE: usize = 256 * 1024;
+
 impl Codegen {
     /// Emit the frame's accumulated side-exit handlers as one outlined
     /// island and reset the hot-run watermark. `fallthrough_in` guards the
@@ -141,7 +149,10 @@ impl Codegen {
         frame: &mut AsmInfo,
         fallthrough_in: bool,
     ) {
-        if frame.pending_side_exits.is_empty() && self.pending_redo_trampolines.is_empty() {
+        if frame.pending_side_exits.is_empty()
+            && self.pending_redo_trampolines.is_empty()
+            && self.pending_cold_stubs.is_empty()
+        {
             frame.side_exit_watermark = self.jit.get_current();
             return;
         }
@@ -192,10 +203,71 @@ impl Codegen {
             self.inline_fpr_restore(using_fpr);
             monoasm_arm64!(&mut self.jit, b deopt;);
         }
+        // Slow paths taken off the hot path (`a64_cold_stub`), each under
+        // the frame displacement of the code that branches to it.
+        for stub in std::mem::take(&mut self.pending_cold_stubs) {
+            self.jit.bind_label(stub.entry);
+            let saved = set_fdisp(stub.fdisp);
+            (stub.body)(self);
+            set_fdisp(saved);
+        }
         if let Some(skip) = skip {
             self.jit.bind_label(skip);
         }
         frame.side_exit_watermark = self.jit.get_current();
+    }
+
+    /// Take a slow path off the hot path: `body` is laid down in the next
+    /// side-exit island (`a64_drain_side_exits`) under the current frame
+    /// displacement, and the returned label is its entry, for the hot
+    /// path's one conditional branch (`b.cond`, `cbz` / `cbnz`; not
+    /// `tbz` / `tbnz`, whose ±32 KiB the thunks here do not keep). `body`
+    /// leaves with unconditional branches only: back to a label the hot
+    /// path binds after its branch, or on to a deopt / error exit.
+    ///
+    /// x86 gets the same shape from its cold page. Before this, the poll's
+    /// GC call (~36 instructions) sat inline behind a `cbz` and every
+    /// version guard took a `b done` over its recompile call.
+    pub(in crate::codegen) fn a64_cold_stub(
+        &mut self,
+        body: impl FnOnce(&mut Codegen) + 'static,
+    ) -> DestLabel {
+        let entry = self.jit.label();
+        self.pending_cold_stubs.push(A64ColdStub {
+            entry: entry.clone(),
+            fdisp: fdisp(),
+            referenced_at: Some(self.jit.get_current()),
+            body: Box::new(body),
+        });
+        entry
+    }
+
+    /// Range thunks for out-of-line slow paths whose hot-path branch has
+    /// fallen [`COLD_STUB_THUNK_AGE`] behind: bind the entry here to a
+    /// `b successor` (±128 MiB) and leave the body to the island under the
+    /// successor. Each stub is thunked at most once — after that its only
+    /// reference is the thunk's `b`. Runs with the side-exit thunk pass,
+    /// i.e. at least every [`SIDE_EXIT_DRAIN_THRESHOLD`] of hot code.
+    fn a64_thunk_cold_stubs(&mut self) {
+        let now = self.jit.get_current();
+        let due = |stub: &A64ColdStub| {
+            stub.referenced_at
+                .is_some_and(|at| now - at > COLD_STUB_THUNK_AGE)
+        };
+        if !self.pending_cold_stubs.iter().any(due) {
+            return;
+        }
+        let mut stubs = std::mem::take(&mut self.pending_cold_stubs);
+        let skip = self.jit.label();
+        monoasm_arm64!(&mut self.jit, b skip;);
+        for stub in stubs.iter_mut().filter(|stub| due(stub)) {
+            let succ = self.jit.label();
+            self.jit.bind_label(std::mem::replace(&mut stub.entry, succ.clone()));
+            monoasm_arm64!(&mut self.jit, b succ;);
+            stub.referenced_at = None;
+        }
+        self.jit.bind_label(skip);
+        self.pending_cold_stubs = stubs;
     }
 
     /// Write the absolute dest addresses into the frame's inline `OptCase`
@@ -265,6 +337,7 @@ impl Codegen {
         labels: &mut SideExitLabels,
         links: &[(usize, usize)],
     ) {
+        self.a64_thunk_cold_stubs();
         frame.touched_side_exits.extend(labels.take_touched());
         if frame.touched_side_exits.is_empty() {
             frame.side_exit_watermark = self.jit.get_current();
@@ -2244,22 +2317,18 @@ impl Codegen {
                     ldr x10, [x10];
                     cmp x9, x10;
                 );
-                {
-                    let miss_label = self.jit.label();
-                    let done = self.jit.label();
-                    self.jit.bcond_label(monoasm::Cond::Ne, &miss_label);
-                    monoasm_arm64!(&mut self.jit, b done;);
-                    self.jit.bind_label(miss_label);
+                // Out of line (`a64_cold_stub`): one `b.ne` on the hot path.
+                let miss_label = self.a64_cold_stub(move |cg| {
                     match miss {
-                        ConstMiss::Recompile(position) => self.a64_call_recompile(
+                        ConstMiss::Recompile(position) => cg.a64_call_recompile(
                             position,
                             RecompileReason::ConstVersionGuardFailed,
                         ),
-                        ConstMiss::Salvage => self.a64_call_salvage_const(),
+                        ConstMiss::Salvage => cg.a64_call_salvage_const(),
                     }
-                    monoasm_arm64!(&mut self.jit, b deopt;);
-                    self.jit.bind_label(done);
-                }
+                    monoasm_arm64!(&mut cg.jit, b deopt;);
+                });
+                self.jit.bcond_label(monoasm::Cond::Ne, &miss_label);
             }
             // Block-passing side-effect guard: deopt if the frame was captured
             // or invalidated.
@@ -2854,9 +2923,9 @@ impl Codegen {
     /// Safepoint poll: if any lane of the poll word is set (GC request,
     /// preempt tick, pending signal — see poll_flag.rs), write back live
     /// values, run execute_gc(vm, globals), and on error jump to the error
-    /// handler. The slow path is laid out inline but skipped on the common
-    /// path. Bails (`false`) like `emit_check_stack`. `base` is unused on
-    /// aarch64. Mirrors x86 `jit_execute_gc`.
+    /// handler. The hot path is the load and one `cbnz` to the slow path,
+    /// which goes into the next side-exit island (`a64_cold_stub`). Bails
+    /// (`false`) like `emit_check_stack`. Mirrors x86 `jit_execute_gc`.
     pub(in crate::codegen::jitgen) fn emit_exec_gc(
         &mut self,
         write_back: WriteBack,
@@ -2865,17 +2934,39 @@ impl Codegen {
         base: usize,
     ) -> bool {
         let error = error.clone();
-        let skip = self.jit.label();
+        let deopt = deopt.clone();
+        let cont = self.jit.label();
         let pf_addr = self
             .jit
             .get_label_address(&self.poll_flag.clone())
             .as_ptr() as u64;
+        let slow = {
+            let cont = cont.clone();
+            self.a64_cold_stub(move |cg| {
+                cg.a64_exec_gc_slow(&write_back, base, &error, &deopt, &cont)
+            })
+        };
         monoasm_arm64!(&mut self.jit,
             mov x9, (pf_addr);
             ldr w9, [x9];         // zero-extends into x9
-            cbz x9, skip;         // all lanes clear -> no poll
+            cbnz x9, slow;        // any lane set -> poll
         );
-        self.a64_gen_write_back_for_deopt(&write_back, base);
+        self.jit.bind_label(cont);
+        true
+    }
+
+    /// The poll's slow path (see `emit_exec_gc`), laid down in a side-exit
+    /// island: back to `cont` once the GC (or whatever the poll word asked
+    /// for) has run.
+    fn a64_exec_gc_slow(
+        &mut self,
+        write_back: &WriteBack,
+        base: usize,
+        error: &DestLabel,
+        deopt: &DestLabel,
+        cont: &DestLabel,
+    ) {
+        self.a64_gen_write_back_for_deopt(write_back, base);
         let f = crate::executor::execute_gc as *const () as u64;
         // Preserve the caller-saved halves of BOTH allocation pools across the
         // call: the GP pool (x5-x8 = GP::R8-R11) and the FP pool (d2-d7).
@@ -2926,20 +3017,27 @@ impl Codegen {
             ldp x7, x8, [sp, #(64)];
             add sp, sp, #(80);
         );
+        // None -> error. The island may sit far from the error and deopt
+        // exits and from `cont`, so every way out is an unconditional `b`.
+        let ok = self.jit.label();
         monoasm_arm64!(&mut self.jit,
-            cbz x0, error;             // None -> error
+            cbnz x0, ok;
+            b error;
         );
+        self.jit.bind_label(ok);
         // `executor::POLL_DEOPT`: the body was evicted while the frame
         // waited at this poll; leave for the interpreter (x86: the same
         // compare in `execute_gc_inner`).
         let poll_deopt = Value::integer(crate::executor::POLL_DEOPT).id();
+        let evicted = self.jit.label();
         monoasm_arm64!(&mut self.jit,
             mov x9, (poll_deopt);
             cmp x0, x9;
         );
-        self.jit.bcond_label(monoasm::Cond::Eq, deopt);
-        self.jit.bind_label(skip);
-        true
+        self.jit.bcond_label(monoasm::Cond::Eq, &evicted);
+        monoasm_arm64!(&mut self.jit, b cont;);
+        self.jit.bind_label(evicted);
+        monoasm_arm64!(&mut self.jit, b deopt;);
     }
 
     // ---- runtime allocation primitives (aarch64) --------------------------
@@ -4070,22 +4168,35 @@ impl Codegen {
         // Otherwise (recompiled, x0 == 1; or a recompile panic, x0 == 0 with
         // a FatalError set on vm) fall to the deopt, where the interpreter
         // resumes — or propagates the fatal — exactly as before.
-        let miss = self.jit.label();
-        let done = self.jit.label();
+        //
+        // The miss path is out of line (`a64_cold_stub`): the hot path is
+        // the compare and one `b.ne`.
+        let recover = with_recovery && position.is_none();
+        // Only when it is used: `JitMemory` keeps every label until it is
+        // bound.
+        let done = recover.then(|| self.jit.label());
+        let miss = {
+            let done = done.clone();
+            self.a64_cold_stub(move |cg| {
+                if let Some(done) = done {
+                    cg.a64_call_recompile_with_recovery(RecompileReason::ClassVersionGuardFailed);
+                    let recompiled = cg.jit.label();
+                    monoasm_arm64!(&mut cg.jit,
+                        cmp x0, #2;
+                    );
+                    cg.jit.bcond_label(monoasm::Cond::Ne, &recompiled);
+                    monoasm_arm64!(&mut cg.jit, b done;); // salvaged -> resume in place
+                    cg.jit.bind_label(recompiled);
+                } else {
+                    cg.a64_call_recompile(position, RecompileReason::ClassVersionGuardFailed);
+                }
+                monoasm_arm64!(&mut cg.jit, b deopt;); // recompiled -> resume via deopt
+            })
+        };
         self.a64_guard_class_version(&class_version, &miss); // version mismatch -> miss
-        monoasm_arm64!(&mut self.jit, b done;); // match -> continue in JIT
-        self.jit.bind_label(miss);
-        if with_recovery && position.is_none() {
-            self.a64_call_recompile_with_recovery(RecompileReason::ClassVersionGuardFailed);
-            monoasm_arm64!(&mut self.jit,
-                cmp x0, #2;
-            );
-            self.jit.bcond_label(monoasm::Cond::Eq, &done); // salvaged -> resume in place
-        } else {
-            self.a64_call_recompile(position, RecompileReason::ClassVersionGuardFailed);
+        if let Some(done) = done {
+            self.jit.bind_label(done);
         }
-        monoasm_arm64!(&mut self.jit, b deopt;); // recompiled -> resume via deopt
-        self.jit.bind_label(done);
     }
 
     /// Recompile-or-deopt point. Counter-gates a one-shot recompile, then falls
@@ -4931,17 +5042,14 @@ impl Codegen {
             AsmInst::GuardClassVersionSpecialized { idx, deopt } => {
                 let global_idx = self.specialized_base + idx;
                 let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("class version (specialized)"));
-                let miss = self.jit.label();
-                let done = self.jit.label();
+                let miss = self.a64_cold_stub(move |cg| {
+                    cg.a64_call_recompile_specialized(
+                        global_idx,
+                        RecompileReason::ClassVersionGuardFailed,
+                    );
+                    monoasm_arm64!(&mut cg.jit, b deopt;);
+                });
                 self.a64_guard_class_version(&class_version, &miss); // mismatch -> miss
-                monoasm_arm64!(&mut self.jit, b done;); // match -> continue
-                self.jit.bind_label(miss.clone());
-                self.a64_call_recompile_specialized(
-                    global_idx,
-                    RecompileReason::ClassVersionGuardFailed,
-                );
-                monoasm_arm64!(&mut self.jit, b deopt;);
-                self.jit.bind_label(done);
             }
             // Constant-version twin of GuardClassVersionSpecialized: on a
             // version move, recompile this specialized entry (re-folding the
@@ -4953,8 +5061,13 @@ impl Codegen {
             } => {
                 let global_idx = self.specialized_base + idx;
                 let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("const version (specialized)"));
-                let miss = self.jit.label();
-                let done = self.jit.label();
+                let miss = self.a64_cold_stub(move |cg| {
+                    cg.a64_call_recompile_specialized(
+                        global_idx,
+                        RecompileReason::ConstVersionGuardFailed,
+                    );
+                    monoasm_arm64!(&mut cg.jit, b deopt;);
+                });
                 let gv_addr = self
                     .jit
                     .get_label_address(&self.const_version_label())
@@ -4972,14 +5085,6 @@ impl Codegen {
                     cmp x9, x10;
                 );
                 self.jit.bcond_label(monoasm::Cond::Ne, &miss); // mismatch -> miss
-                monoasm_arm64!(&mut self.jit, b done;); // match -> continue
-                self.jit.bind_label(miss.clone());
-                self.a64_call_recompile_specialized(
-                    global_idx,
-                    RecompileReason::ConstVersionGuardFailed,
-                );
-                monoasm_arm64!(&mut self.jit, b deopt;);
-                self.jit.bind_label(done);
             }
             // Specialized recompile-or-deopt point (mirrors x86
             // `recompile_and_deopt_specialized`): it rebuilds the root unit,
