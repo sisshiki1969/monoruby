@@ -126,8 +126,10 @@ impl Codegen {
             frame.side_exit_watermark = self.jit.get_current();
             return;
         }
-        let skip = self.jit.label();
-        if fallthrough_in {
+        // Only when it is used: `JitMemory` keeps every label until it is
+        // bound, so an unused one would stay in its list for good.
+        let skip = fallthrough_in.then(|| self.jit.label());
+        if let Some(skip) = &skip {
             monoasm_arm64!(&mut self.jit, b skip;);
         }
         // The island itself counts against the range invariant: every
@@ -164,7 +166,7 @@ impl Codegen {
             let inst = pending[i].take().unwrap();
             self.encode_linst(inst);
         }
-        if fallthrough_in {
+        if let Some(skip) = skip {
             self.jit.bind_label(skip);
         }
         frame.side_exit_watermark = self.jit.get_current();
