@@ -49,6 +49,7 @@ class Ractor
   end
 
   @__count = 0
+  @__multi = false
   @__main = nil
   @__sequence = 0
 
@@ -57,11 +58,18 @@ class Ractor
     # (green) thread; the thread's value is the Ractor's value.
     def new(*args, name: nil, &block)
       raise ArgumentError, "must be called with a block" unless block
+      # CRuby warns while the main ractor is still the only one ever
+      # made (`ruby_single_main_ractor`), so once per process.
+      unless @__multi
+        Kernel.warn("Ractor API is experimental and may change in future versions of Ruby.",
+                    uplevel: 1, category: :experimental)
+      end
       unless name.nil? || name.is_a?(String)
         raise TypeError, "no implicit conversion of #{__builtin_class_name(name)} into String"
       end
       r = __builtin_allocate__
       r.__send__(:__ractor_init, args, name, block)
+      @__multi = true
       r
     end
 

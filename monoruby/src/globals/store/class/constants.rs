@@ -380,22 +380,66 @@ impl ClassInfoTable {
     /// flip every matching autoload slot to `Loading` for the duration
     /// of the load and clean them up afterwards (matching CRuby's
     /// behaviour: a same-file direct require "consumes" the autoload).
+    ///
+    /// The autoload entries whose feature names one of `paths`, and —
+    /// second — those registered under a bare feature (`"socket"`,
+    /// `"net/http"`) that `path` ends in, which only a `$LOAD_PATH`
+    /// search can settle (`Executor::require` does it).
+    ///
     pub(crate) fn find_autoload_entries_for_paths(
         &self,
         paths: &[std::path::PathBuf],
-    ) -> Vec<(ClassId, IdentId)> {
+    ) -> (
+        Vec<(ClassId, IdentId)>,
+        Vec<(ClassId, IdentId, std::path::PathBuf)>,
+    ) {
         let mut result = Vec::new();
+        let mut bare = Vec::new();
         for idx in 1..self.classinfo_len() {
             let class_id = ClassId::new(idx as u32);
             for (name, state) in self[class_id].constants.iter() {
                 if let ConstStateKind::Autoload(entry) = &state.kind {
                     if Self::autoload_feature_matches_path(entry, paths) {
                         result.push((class_id, *name));
+                    } else if Self::bare_feature_may_name(&entry.feature, paths) {
+                        bare.push((class_id, *name, entry.feature.clone()));
                     }
                 }
             }
         }
-        result
+        (result, bare)
+    }
+
+    /// Whether `feature` is a bare one (searched on `$LOAD_PATH`) that
+    /// one of `paths` ends in, with or without its extension.
+    fn bare_feature_may_name(feature: &std::path::Path, paths: &[std::path::PathBuf]) -> bool {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = feature.as_os_str().as_bytes();
+        if bytes.is_empty()
+            || bytes[0] == b'/'
+            || bytes[0] == b'~'
+            || bytes.starts_with(b"./")
+            || bytes.starts_with(b"../")
+        {
+            return false;
+        }
+        let Some(name) = feature.file_name() else {
+            return false;
+        };
+        let bare_name = feature.extension().is_none();
+        paths.iter().any(|p| {
+            // The last component first: it rules out nearly every entry.
+            let last_matches = if p.file_name() == Some(name) {
+                true
+            } else {
+                bare_name && p.file_stem() == Some(name)
+            };
+            last_matches
+                && match (p.parent(), feature.parent()) {
+                    (Some(dir), Some(fdir)) => dir.ends_with(fdir),
+                    _ => false,
+                }
+        })
     }
 
     fn autoload_feature_matches_path(entry: &AutoloadEntry, paths: &[std::path::PathBuf]) -> bool {

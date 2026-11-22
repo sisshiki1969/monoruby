@@ -361,10 +361,13 @@ pub(super) fn init(globals: &mut Globals) {
     // `Errno::EPROTO`), which a class would reject with a TypeError.
     let errno_id = globals.define_toplevel_module("Errno").id();
 
+    let mut classes = Vec::with_capacity(ERRNO_TABLE.len());
     for (name, num) in ERRNO_TABLE {
         let cls = globals.define_class(name, syscall_err_module, errno_id);
         globals.set_constant_by_str(cls.id(), "Errno", Value::integer(*num as i64));
+        classes.push((cls.id(), *num as i32));
     }
+    globals.store.record_errno_classes(&classes);
     globals.define_builtin_class_func(syscall_err_module.id(), "__strerror", syserr_strerror, 1);
     for (alias, canonical) in ERRNO_ALIASES {
         let target = globals

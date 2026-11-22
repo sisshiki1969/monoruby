@@ -327,6 +327,16 @@ impl ExternalContext {
         self.forwarding
     }
 
+    /// Whether the chain declares nothing at all: no local, no block
+    /// parameter, no `...`.
+    pub(crate) fn is_vacant(&self) -> bool {
+        !self.forwarding
+            && self
+                .scope
+                .iter()
+                .all(|(locals, block)| locals.is_empty() && block.is_none())
+    }
+
     pub(crate) fn push_scope(
         &mut self,
         locals: indexmap::IndexMap<IdentId, bytecodegen::BcLocal>,

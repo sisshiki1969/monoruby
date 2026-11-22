@@ -24,6 +24,8 @@ module GC
     while count == before && spins < 100
       spins += 1
     end
+    # For `latest_gc_info`: the collection this call caused.
+    @__method_gc_count = count if count != before
     nil
   end
 
@@ -38,6 +40,7 @@ module GC
   # yjit-bench's harness-common.rb which calls `GC.auto_compact = false`
   # unconditionally) get the same interface as CRuby without errors.
   @__auto_compact = false
+  @__method_gc_count = nil
 
   def self.auto_compact
     @__auto_compact
@@ -59,6 +62,37 @@ module GC
   # What the last (non-)compaction did — same shape as `compact`.
   def self.latest_compact_info
     { considered: {}, moved: {}, moved_up: {}, moved_down: {} }
+  end
+
+  # What started the latest collection and what kind it was, in
+  # CRuby's keys (`rb_gc_impl_latest_gc_info`). A collection
+  # `GC.start` asked for is `gc_by: :method`, swept at once; any other
+  # is `:newobj`. monoruby sweeps inside the collection, so the state
+  # is always `:none`, and it has no finalizer queue or weak-reference
+  # table to count.
+  def self.latest_gc_info(hash_or_key = nil)
+    major = __latest_gc_major
+    by_method = !major.nil? && @__method_gc_count == count
+    info = {
+      major_by: major ? (by_method ? :force : :oldgen) : nil,
+      need_major_by: nil,
+      gc_by: by_method ? :method : :newobj,
+      have_finalizer: false,
+      immediate_sweep: by_method,
+      state: :none,
+      weak_references_count: 0,
+      retained_weak_references_count: 0,
+    }
+    if hash_or_key.nil?
+      info
+    elsif hash_or_key.is_a?(Symbol)
+      info.fetch(hash_or_key) { raise ArgumentError, "unknown key: #{hash_or_key}" }
+    elsif hash_or_key.is_a?(Hash)
+      info.each { |k, v| hash_or_key[k] = v }
+      hash_or_key
+    else
+      raise TypeError, "non-hash or symbol given"
+    end
   end
 
   # --- GC.config ----------------------------------------------------------

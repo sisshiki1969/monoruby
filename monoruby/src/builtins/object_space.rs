@@ -77,6 +77,64 @@ pub(super) fn init(globals: &mut Globals) {
         1,
         false,
     );
+    globals.define_builtin_module_func(object_space, "__id2ref_immediate", id2ref_immediate, 1);
+}
+
+///
+/// Internal: the immediate `ObjectSpace._id2ref` resolves an id to.
+///
+/// The `#object_id` of an immediate is its own bit pattern (see
+/// `Value::id`), so such an id needs decoding rather than a heap search,
+/// as CRuby's `id2ref` decodes a special constant. Answers `[value]`
+/// for an immediate, nil when the id would be a heap object's (a cell
+/// address, low three bits clear), and raises CRuby's RangeError for a
+/// pattern that is no immediate's. *id* is already an Integer.
+///
+#[monoruby_builtin]
+fn id2ref_immediate(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let id = lfp.arg(0);
+    let not_an_id = || {
+        Err(MonorubyErr::rangeerr(format!(
+            "{} is not an id value",
+            id.debug(&globals.store)
+        )))
+    };
+    // CRuby's `NUM2PTR`: an Integer that fits a pointer, negative ones
+    // as their two's complement.
+    let bits = match id.unpack() {
+        RV::Fixnum(i) => i as u64,
+        RV::BigInt(b) => match b.to_u64().or_else(|| b.to_i64().map(|i| i as u64)) {
+            Some(bits) => bits,
+            None => return not_an_id(),
+        },
+        _ => return not_an_id(),
+    };
+    if bits & 0b111 == 0 {
+        return Ok(Value::nil());
+    }
+    let is_immediate = bits & 0b1 == 1 // Fixnum
+        || bits & 0b11 == 0b10 // Flonum
+        || bits == NIL_VALUE
+        || bits == TRUE_VALUE
+        || bits == FALSE_VALUE;
+    if is_immediate {
+        return Ok(Value::array1(Value::from_u64(bits)));
+    }
+    if bits & 0xff == TAG_SYMBOL {
+        let valid = bits & 0xffff_ff00 == 0 && IdentId::exists((bits >> 32) as u32);
+        if valid {
+            return Ok(Value::array1(Value::from_u64(bits)));
+        }
+        return Err(MonorubyErr::rangeerr(format!(
+            "{bits:#018x} is not a symbol id value"
+        )));
+    }
+    not_an_id()
 }
 
 ///
