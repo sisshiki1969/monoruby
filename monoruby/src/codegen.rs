@@ -975,6 +975,22 @@ impl AllocFastState {
     }
 }
 
+/// aarch64: one out-of-line slow path waiting for the next side-exit
+/// island (`Codegen::pending_cold_stubs`, `Codegen::a64_cold_stub`).
+#[cfg(target_arch = "aarch64")]
+pub(in crate::codegen) struct A64ColdStub {
+    /// What the hot path's conditional branch targets.
+    pub(in crate::codegen) entry: DestLabel,
+    /// The frame displacement at the hot path (`jitgen::fdisp`), back in
+    /// force while `body` is emitted.
+    pub(in crate::codegen) fdisp: i32,
+    /// Where the hot path referenced `entry`, while that conditional
+    /// branch (±1 MiB) is still the only reference; `None` once a range
+    /// thunk took it over (`a64_thunk_cold_stubs`).
+    pub(in crate::codegen) referenced_at: Option<usize>,
+    pub(in crate::codegen) body: Box<dyn FnOnce(&mut Codegen)>,
+}
+
 ///
 /// Machine code generator
 ///
@@ -1201,6 +1217,13 @@ pub struct Codegen {
     /// path out of the body.
     #[cfg(target_arch = "aarch64")]
     pub(in crate::codegen) pending_redo_trampolines: Vec<(DestLabel, jitgen::UsingFpr, DestLabel)>,
+    /// aarch64: slow paths taken off the hot path (`a64_cold_stub`) — the
+    /// safepoint poll's GC call, the class- and const-version guards'
+    /// recompile calls — not laid down yet. The next side-exit island
+    /// emits them (`a64_drain_side_exits`), so the hot path is one
+    /// conditional branch to cold code, as x86's cold page gives it.
+    #[cfg(target_arch = "aarch64")]
+    pub(in crate::codegen) pending_cold_stubs: Vec<A64ColdStub>,
     /// Set by [`Self::set_bop_redefine`], consumed by the next
     /// [`Self::check_bop_redefine`]. On-stack eviction has to happen for the
     /// definition that *made* a basic op stale, not for every definition that
@@ -1610,6 +1633,8 @@ impl Codegen {
             pending_jump_tables: Vec::new(),
             #[cfg(target_arch = "aarch64")]
             pending_redo_trampolines: Vec::new(),
+            #[cfg(target_arch = "aarch64")]
+            pending_cold_stubs: Vec::new(),
             bop_eviction_pending: false,
             #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
             jit_compile_time: std::time::Duration::default(),

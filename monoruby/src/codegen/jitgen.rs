@@ -1145,6 +1145,13 @@ impl Codegen {
         // arches agree.
         frame.start_codepos = self.jit.get_current();
         frame.side_exit_watermark = self.jit.get_current();
+        // A compile panic that was contained (`contain_compile_panic`)
+        // leaves its unit's not-yet-emitted island material behind.
+        #[cfg(target_arch = "aarch64")]
+        if self.inline_ctx.is_empty() {
+            self.pending_redo_trampolines.clear();
+            self.pending_cold_stubs.clear();
+        }
 
         #[cfg(all(feature = "perf", target_arch = "x86_64"))]
         let pair = self.get_address_pair();
@@ -1318,6 +1325,7 @@ impl Codegen {
         if self.inline_ctx.is_empty() {
             self.a64_patch_jump_tables();
             debug_assert!(self.pending_redo_trampolines.is_empty());
+            debug_assert!(self.pending_cold_stubs.is_empty());
         }
         #[cfg(not(target_arch = "aarch64"))]
         let _ = (had_outline_bridges, last_bridge_falls);
