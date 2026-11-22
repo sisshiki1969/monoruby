@@ -856,9 +856,9 @@ impl Codegen {
                     && n >= 2
                     && self.self_ivars_prepared[n - 2];
                 let heap_len = if covered { None } else { heap_len };
-                if let Some(top) = self.self_ivars_prepared.last_mut() {
-                    *top = covered || heap_len.is_some();
-                }
+                // This frame's own entry, pushed by `gen_machine_code`
+                // (the only caller of `gen_asm`).
+                *self.self_ivars_prepared.last_mut().unwrap() = covered || heap_len.is_some();
                 self.encode_linst(LInst::Preparation { heap_len });
             }
             // Fixnum unary ops on the tagged value. Negate deopts on i63
