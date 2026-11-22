@@ -1125,8 +1125,11 @@ impl ClassInfo {
 
     fn set_cvar(&mut self, name: IdentId, val: Value) {
         if let Some(cv) = &mut self.class_variables {
-            cv.insert(name, val);
+            if cv.insert(name, val).is_none() {
+                crate::globals::cvar_state_inc();
+            }
         } else {
+            crate::globals::cvar_state_inc();
             let mut cv = indexmap::IndexMap::default();
             cv.insert(name, val);
             self.class_variables = Some(cv);
@@ -1141,7 +1144,11 @@ impl ClassInfo {
     pub(crate) fn remove_cvar(&mut self, name: IdentId) -> Option<Value> {
         // `shift_remove`, not `swap_remove`: removing one class variable
         // must not reorder the rest.
-        self.class_variables.as_mut()?.shift_remove(&name)
+        let removed = self.class_variables.as_mut()?.shift_remove(&name);
+        if removed.is_some() {
+            crate::globals::cvar_state_inc();
+        }
+        removed
     }
 
     fn cvar_names(&self) -> Vec<IdentId> {
@@ -1171,6 +1178,12 @@ impl ClassInfo {
 }
 
 impl ClassInfoTable {
+    /// The class variable `name` of `class_id`'s own table.
+    #[inline]
+    pub(crate) fn get_cvar(&self, class_id: ClassId, name: IdentId) -> Option<Value> {
+        self[class_id].get_cvar(name)
+    }
+
     pub(crate) fn get_module(&self, class_id: ClassId) -> Module {
         self[class_id].object.unwrap()
     }
@@ -2059,6 +2072,8 @@ impl ClassInfoTable {
             let new_iclass = Value::iclass(prepend_id, Some(target)).as_class();
             let mut prev_mut = prev;
             prev_mut.set_superclass(Some(new_iclass));
+            // An existing chain changed under its class variables.
+            crate::globals::cvar_state_inc();
         }
     }
 
@@ -2399,6 +2414,7 @@ impl ClassInfoTable {
         info.constants = constants;
         info.constant_locations = constant_locations;
         info.class_variables = class_variables;
+        crate::globals::cvar_state_inc();
         info.alloc_func = alloc_func;
         info.mark_dirty();
 
@@ -2434,6 +2450,7 @@ impl ClassInfoTable {
         new_meta_info.constants = m_constants;
         new_meta_info.constant_locations = m_constant_locations;
         new_meta_info.class_variables = m_class_variables;
+        crate::globals::cvar_state_inc();
         new_meta_info.mark_dirty();
 
         // Replicate `extend`-ed modules (iclasses hanging off the original
@@ -2503,6 +2520,7 @@ impl ClassInfoTable {
         new_info.constants = constants;
         new_info.constant_locations = constant_locations;
         new_info.class_variables = class_variables;
+        crate::globals::cvar_state_inc();
         new_info.mark_dirty();
         // Replicate `extend`-ed modules (iclasses on the original
         // singleton's superclass chain) in the same order; `include_module`

@@ -626,7 +626,7 @@ pub(super) extern "C" fn enter_classdef<'a>(
     // there (`ISeqInfo::refinements`).
     let outer_refinements = vm.ruby_level_refinements(globals);
     if let Some(info) = globals.store.iseq_mut(func_id) {
-        info.lexical_context = lexical_context;
+        info.set_lexical_context(lexical_context);
         info.refinements = Some(outer_refinements);
     }
     // This body's own iseq is the first place that knows the line of the
@@ -2932,12 +2932,16 @@ pub(super) extern "C" fn set_constant(
 ///
 /// Get class variable.
 ///
+/// `cache` is the site's cache word, the instruction's second word
+/// (`Executor::find_class_variable_cached`).
+///
 pub(super) extern "C" fn get_class_var(
     vm: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
+    cache: &mut u64,
 ) -> Option<Value> {
-    match vm.find_class_variable(globals, name) {
+    match vm.find_class_variable_cached(globals, name, cache) {
         Ok(val) => Some(val),
         Err(err) => {
             vm.set_error(err);
@@ -2963,13 +2967,16 @@ pub(super) extern "C" fn check_class_var(
 ///
 /// Set class variable.
 ///
+/// `cache` is the site's cache word (see [`get_class_var`]).
+///
 pub(super) extern "C" fn set_class_var(
     vm: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
     src: Value,
+    cache: &mut u64,
 ) -> Option<Value> {
-    match vm.set_class_variable(globals, name, src) {
+    match vm.set_class_variable_cached(globals, name, src, cache) {
         Ok(_) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);
@@ -2983,21 +2990,27 @@ pub(super) extern "C" fn set_class_var(
 ///
 /// rax: Value
 ///
+/// `cache` is the site's cache word, the instruction's second word
+/// (`GvarTable::get_cached`).
+///
 pub(super) extern "C" fn get_global_var(
     vm: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
+    cache: &mut u64,
 ) -> Value {
-    GvarTable::get(vm, globals, name)
+    GvarTable::get_cached(vm, globals, name, cache)
 }
 
+/// `cache` is the site's cache word (see [`get_global_var`]).
 pub(super) extern "C" fn set_global_var(
     vm: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
     val: Value,
+    cache: &mut u64,
 ) -> Option<Value> {
-    match GvarTable::set(vm, globals, name, val) {
+    match GvarTable::set_cached(vm, globals, name, val, cache) {
         Ok(()) => Some(Value::nil()),
         Err(err) => {
             vm.set_error(err);
@@ -3113,7 +3126,7 @@ pub(super) extern "C" fn singleton_define_method(
             Some(parent) => globals.store[parent].lexical_context.clone(),
             None => Vec::new(),
         };
-        globals.store[iseq].lexical_context = parent_ctx;
+        globals.store[iseq].set_lexical_context(parent_ctx);
         globals.store[iseq].refinements = Some(vm.definition_refinements(globals));
         // `def expr.m` captures the *surrounding* cref, not the
         // receiver's singleton: a plain nested `def` in its body

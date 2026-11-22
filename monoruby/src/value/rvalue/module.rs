@@ -77,6 +77,10 @@ impl Module {
         module.mixed_in = true;
         if invalidate {
             Globals::class_version_inc();
+            // Class variables resolve through the ancestry. (A fresh
+            // singleton, `invalidate == false`, is no class-variable scope:
+            // the lookup starts at the lexical class, never a singleton.)
+            crate::globals::cvar_state_inc();
             // The newly-inserted iclass exposes `module`'s constants to
             // anything that previously resolved unqualified constants
             // against `self`'s ancestor chain. Invalidate the constant
@@ -168,6 +172,7 @@ impl Module {
             if next.is_iclass() && next.id() == base.id() && !include_module.is_ancestor_of(next) {
                 let at = next;
                 self.splice_module_chain(at, include_module, false);
+                crate::globals::cvar_state_inc();
                 changed = true;
                 cur = at;
             } else {
@@ -257,6 +262,7 @@ impl Module {
             let origin = self.make_iclass(self.superclass());
             self.superclass = Some(origin);
             self.origin = Some(origin);
+            crate::globals::cvar_state_inc();
             self.0.write_barrier(origin.as_val());
         }
         self.include_or_prepend_module(module, true, true)

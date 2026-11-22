@@ -72,6 +72,7 @@ impl Codegen {
             | AsmInst::StoreConstant { .. }
             | AsmInst::LoadGVar { .. }
             | AsmInst::LoadErrinfo
+            | AsmInst::StoreErrinfo { .. }
             | AsmInst::StoreGVar { .. }
             | AsmInst::LoadCVar { .. }
             | AsmInst::LoadDynVar { .. }
@@ -1336,9 +1337,10 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_load_gvar(
         &mut self,
         name: IdentId,
+        cache: u64,
         using_fpr: UsingFpr,
     ) -> bool {
-        self.load_gvar(name, using_fpr);
+        self.load_gvar(name, cache, using_fpr);
         true
     }
 
@@ -1351,14 +1353,24 @@ impl Codegen {
         true
     }
 
+    /// `$! <- src`. The whole of `AsmInst::StoreErrinfo`.
+    pub(in crate::codegen::jitgen) fn emit_store_errinfo(&mut self, src: SlotId) -> bool {
+        monoasm! { &mut self.jit,
+            movq rax, [rbp - (jrbp_local(src))];
+            movq [rbx + (EXECUTOR_ERRINFO)], rax;
+        };
+        true
+    }
+
     /// $gvar <- src.
     pub(in crate::codegen::jitgen) fn emit_store_gvar(
         &mut self,
         name: IdentId,
+        cache: u64,
         src: SlotId,
         using_fpr: UsingFpr,
     ) -> bool {
-        self.store_gvar(name, src, using_fpr);
+        self.store_gvar(name, cache, src, using_fpr);
         true
     }
 
@@ -1366,9 +1378,10 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_load_cvar(
         &mut self,
         name: IdentId,
+        cache: u64,
         using_fpr: UsingFpr,
     ) -> bool {
-        self.load_cvar(name, using_fpr);
+        self.load_cvar(name, cache, using_fpr);
         true
     }
 
@@ -2999,10 +3012,11 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_store_cvar(
         &mut self,
         name: IdentId,
+        cache: u64,
         src: SlotId,
         using_fpr: UsingFpr,
     ) -> bool {
-        self.store_cvar(name, src, using_fpr);
+        self.store_cvar(name, cache, src, using_fpr);
         true
     }
 

@@ -763,6 +763,11 @@ impl Globals {
         self.store.classes[target].set_cvar(name, val);
     }
 
+    /// The class variable `name` in `class_id`'s own table, with no walk.
+    pub(crate) fn own_class_variable(&self, class_id: ClassId, name: IdentId) -> Option<Value> {
+        self.store.classes.get_cvar(class_id, name)
+    }
+
     pub(crate) fn get_class_variable(
         &self,
         parent: Module,

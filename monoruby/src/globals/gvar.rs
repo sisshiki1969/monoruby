@@ -217,6 +217,11 @@ pub struct GvarTable {
     index: HashMap<IdentId, GvarId>,
     /// Entries. Position is stable: entries are never reordered or removed.
     entries: Vec<GvarEntry>,
+    /// Moves whenever a name may start resolving to another entry (an
+    /// alias, or a hook installed over one). A `LoadGvar` / `StoreGvar`
+    /// site caches the entry its name resolved to, tagged with this
+    /// ([`GvarTable::cached_entry`]).
+    epoch: u32,
 }
 
 /// Maximum number of alias hops that [`GvarTable::resolve`] will follow before
@@ -259,6 +264,29 @@ impl GvarTable {
         self.entries.push(GvarEntry::Simple(Value::nil()));
         self.index.insert(name, id);
         id
+    }
+
+    /// The entry a `LoadGvar` / `StoreGvar` site's cache word names, if
+    /// the word was filled since the last change of resolution.
+    ///
+    /// The word is the instruction's second word: `epoch << 32 | id + 1`,
+    /// so the zero it starts as is never a hit.
+    #[inline]
+    fn cached_entry(&self, cache: u64) -> Option<GvarId> {
+        let id = cache as u32;
+        if id != 0 && (cache >> 32) as u32 == self.epoch {
+            Some(GvarId(id - 1))
+        } else {
+            None
+        }
+    }
+
+    fn cache_word(&self, id: GvarId) -> u64 {
+        ((self.epoch as u64) << 32) | (id.0 as u64 + 1)
+    }
+
+    fn bump_epoch(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
     }
 
     /// Resolve `id` through any alias chain and return the terminal entry id.
@@ -305,6 +333,33 @@ impl GvarTable {
                 }
                 Value::nil()
             }
+        }
+    }
+
+    /// [`Self::get`] for a `LoadGvar` site, through the site's cache word
+    /// (`cache`, the instruction's second word): a plain global is one
+    /// tag compare and a load, with no hashing of the name.
+    pub fn get_cached(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        name: IdentId,
+        cache: &mut u64,
+    ) -> Value {
+        let gvars = &globals.gvars;
+        let id = match gvars.cached_entry(*cache) {
+            Some(id) => id,
+            None => match gvars.index.get(&name) {
+                Some(&id) => {
+                    let id = gvars.resolve(id);
+                    *cache = gvars.cache_word(id);
+                    id
+                }
+                None => return Self::get(vm, globals, name),
+            },
+        };
+        match gvars.entries[id.index()] {
+            GvarEntry::Simple(v) => v,
+            _ => Self::get(vm, globals, name),
         }
     }
 
@@ -377,6 +432,42 @@ impl GvarTable {
         // going through the hook path.
         let id = globals.gvars.entry_id(name);
         let id = globals.gvars.resolve(id);
+        Self::store(vm, globals, name, id, val)
+    }
+
+    /// [`Self::set`] for a `StoreGvar` site, through the site's cache word
+    /// (see [`Self::get_cached`]).
+    pub fn set_cached(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        name: IdentId,
+        val: Value,
+        cache: &mut u64,
+    ) -> Result<()> {
+        // First, as in `set`: the check can run Ruby code (a deprecation
+        // warning), which could alias the name.
+        let val = write_special_check(vm, globals, name, val)?;
+        let id = match globals.gvars.cached_entry(*cache) {
+            Some(id) => id,
+            None => {
+                let id = globals.gvars.entry_id(name);
+                let id = globals.gvars.resolve(id);
+                *cache = globals.gvars.cache_word(id);
+                id
+            }
+        };
+        Self::store(vm, globals, name, id, val)
+    }
+
+    /// Store `val` into the resolved entry `id` of `name`, then run the
+    /// `trace_var` hooks.
+    fn store(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        name: IdentId,
+        id: GvarId,
+        val: Value,
+    ) -> Result<()> {
         match &mut globals.gvars.entries[id.index()] {
             GvarEntry::Simple(slot) => {
                 *slot = val;
@@ -401,7 +492,9 @@ impl GvarTable {
         // the `__gvar_trace_eval` Ruby shim, NOT the eval builtin
         // directly: `eval` reads its caller's bytecode pc, which this
         // runtime helper doesn't have.
-        if let Some(cmds) = globals.gvar_traces.get(&name) {
+        if !globals.gvar_traces.is_empty()
+            && let Some(cmds) = globals.gvar_traces.get(&name)
+        {
             let cmds = cmds.clone();
             let call = IdentId::get_id("call");
             let eval_shim = IdentId::get_id("__gvar_trace_eval");
@@ -481,6 +574,7 @@ impl GvarTable {
     ) {
         let id = self.entry_id(name);
         self.entries[id.index()] = GvarEntry::Hooked { getter, setter };
+        self.bump_epoch();
     }
 
     /// Install an extension's hooks for `name`, replacing whatever entry
@@ -488,6 +582,7 @@ impl GvarTable {
     pub fn define_native_hook(&mut self, name: IdentId, hook: NativeGvar) {
         let id = self.entry_id(name);
         self.entries[id.index()] = GvarEntry::Native(hook);
+        self.bump_epoch();
     }
 
     /// Install an alias: reading or writing `new_name` is redirected to
@@ -501,6 +596,7 @@ impl GvarTable {
             return;
         }
         self.entries[id.index()] = GvarEntry::Alias(target);
+        self.bump_epoch();
     }
 
     /// Iterate over the [`Value`]s stored directly in [`GvarEntry::Simple`]

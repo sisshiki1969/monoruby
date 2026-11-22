@@ -16,6 +16,36 @@ mod store;
 #[cfg(any(feature = "deopt", feature = "profile"))]
 pub(crate) use dump::log_deoptimize;
 pub use error::*;
+
+/// The class-variable resolution state (CRuby's `global_cvar_state`).
+///
+/// A `LoadCvar` / `StoreCvar` site caches the class its `@@name` resolved
+/// to, tagged with this word, and trusts that class while the word stands
+/// (`Executor::find_class_variable_cached`). It moves on anything that can
+/// change where a name resolves from a given scope: a class variable
+/// created or removed anywhere (`ClassInfo::set_cvar` / `remove_cvar`,
+/// a class's variables copied into a clone), an ancestry change
+/// (`Module::set_superclass`, include / prepend), and a body's lexical
+/// scope changing (`ISeqInfo::set_lexical_context`), which is what the
+/// site's starting class is read from.
+///
+/// One word for the process rather than one per interpreter: a test
+/// process runs several, and a move in one only costs the others a slow
+/// lookup. Within one interpreter the GVL orders every move before the
+/// reads that must see it.
+static CVAR_STATE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+pub(crate) fn cvar_state() -> u32 {
+    CVAR_STATE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) fn cvar_state_inc() {
+    let prev = CVAR_STATE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // 0 is the empty cache word's tag: step over it.
+    if prev == u32::MAX {
+        CVAR_STATE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 pub use gvar::*;
 use prng::*;
 pub(crate) use require::{RequireLoad, foreign_extension_error, lexically_normalize};
@@ -1740,16 +1770,16 @@ impl Globals {
                     // receiver first and then the caller's lexical
                     // scope. A block carries no nesting of its own, so
                     // take its mother's.
-                    let outer_ctx = {
+                    let mut ctx = {
                         let mut iseq = outer;
                         if self.store[iseq].lexical_context.is_empty() {
                             iseq = self.store[iseq].mother().0;
                         }
                         self.store[iseq].lexical_context.clone()
                     };
+                    ctx.push(class_id);
                     if let Some(info) = self.store.iseq_mut(fid) {
-                        info.lexical_context = outer_ctx;
-                        info.lexical_context.push(class_id);
+                        info.set_lexical_context(ctx);
                         // A receiver-anchored eval (`class_eval` /
                         // `instance_eval` with a string) defines
                         // methods on its receiver through the runtime
