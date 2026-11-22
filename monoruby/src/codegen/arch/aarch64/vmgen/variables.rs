@@ -73,7 +73,8 @@ impl Codegen {
         p
     }
 
-    /// op 24 `CheckCvar`: check_class_var(vm, globals, name `[pc+0]`) -> dst.
+    /// op 24 `CheckCvar`: check_class_var(vm, globals, name `[pc+0]`,
+    /// &cache `pc+8`) -> dst.
     pub(in crate::codegen) fn a64_op_check_cvar(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let skip = self.jit.label();
@@ -81,6 +82,7 @@ impl Codegen {
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);
             ldr w2, [x(PC.0)];  // name
+            add x3, x(PC.0), #(8);  // &cache
             mov x9, (runtime::check_class_var as *const () as u64);
             blr x9;
         );

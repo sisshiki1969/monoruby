@@ -3002,9 +3002,10 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_check_cvar(
         &mut self,
         name: IdentId,
+        cache: u64,
         using_fpr: UsingFpr,
     ) -> bool {
-        self.check_cvar(name, using_fpr);
+        self.check_cvar(name, cache, using_fpr);
         true
     }
 

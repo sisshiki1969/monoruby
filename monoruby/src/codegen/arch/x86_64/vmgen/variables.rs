@@ -164,12 +164,13 @@ impl Codegen {
     ///
     /// ~~~text
     /// +---+---+---+---++---+---+---+---+
-    /// | name  |dst| op||               |
+    /// | name  |dst| op||     cache     |
     /// +---+---+---+---++---+---+---+---+
     ///    rdi   r15
     /// ~~~
     /// - name: name of class variable (IdentId)
     /// - dst: destination slot (SlotId)
+    /// - cache: the site's cache word
     ///
     pub(super) fn vm_check_cvar(&mut self) -> CodePtr {
         let label = self.jit.get_current_address();
@@ -178,6 +179,7 @@ impl Codegen {
             movl rdx, rdi; // name: IdentId
             movq rdi, rbx; // &mut Executor
             movq rsi, r12; // &mut Globals
+            lea rcx, [r13 - 8]; // &mut cache word
             movq rax, (runtime::check_class_var);
             call rax;
         };

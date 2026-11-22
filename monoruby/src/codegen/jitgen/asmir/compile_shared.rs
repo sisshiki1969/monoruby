@@ -1243,9 +1243,15 @@ impl Codegen {
                 using_fpr,
             }),
             // Runtime-call class-variable / method-alias ops.
-            AsmInst::CheckCVar { name, using_fpr } => {
-                self.encode_linst(LInst::CheckCVar { name, using_fpr })
-            }
+            AsmInst::CheckCVar {
+                name,
+                pc,
+                using_fpr,
+            } => self.encode_linst(LInst::CheckCVar {
+                name,
+                pc,
+                using_fpr,
+            }),
             AsmInst::StoreCVar {
                 name,
                 pc,
@@ -2294,8 +2300,12 @@ impl Codegen {
             } => {
                 self.emit_alias_gvar(new, old, using_fpr);
             }
-            LInst::CheckCVar { name, using_fpr } => {
-                self.emit_check_cvar(name, using_fpr);
+            LInst::CheckCVar {
+                name,
+                pc,
+                using_fpr,
+            } => {
+                self.emit_check_cvar(name, pc.cache_word_addr(), using_fpr);
             }
             LInst::StoreCVar {
                 name,

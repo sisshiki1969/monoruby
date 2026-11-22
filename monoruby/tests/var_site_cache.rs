@@ -162,3 +162,23 @@ fn errinfo_restore_in_jit() {
         "#,
     );
 }
+
+#[test]
+fn cvar_cache_check_cvar() {
+    // `@@x ||= v` reads through `CheckCvar`, which shares the cache.
+    run_test_once(
+        r#"
+        class CvM0; end
+        class CvM < CvM0; def m; @@m ||= 1; end; def r; @@m; end; end
+        o = CvM.new
+        res = []
+        30.times { res << o.m }
+        CvM.remove_class_variable(:@@m)
+        30.times { res << o.m }
+        CvM0.class_variable_set(:@@n, 2)
+        class CvM; def n; @@n ||= 3; end; end
+        30.times { res << o.n }
+        res
+        "#,
+    );
+}

@@ -469,11 +469,12 @@ impl Codegen {
     }
 
     /// Check class variable existence via runtime::check_class_var(vm, globals,
-    /// name); the looked-up Value lands in x0. Bails when an xmm pool register
-    /// is live (no xmm save around the C call yet).
+    /// name, cache); the looked-up Value lands in x0. Bails when an xmm pool
+    /// register is live (no xmm save around the C call yet).
     pub(in crate::codegen::jitgen) fn emit_check_cvar(
         &mut self,
         name: IdentId,
+        cache: u64,
         using_fpr: UsingFpr,
     ) -> bool {
         let f = runtime::check_class_var as *const () as u64;
@@ -482,6 +483,7 @@ impl Codegen {
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
             mov x2, (name.get() as u64); // name (IdentId)
+            mov x3, (cache);              // &cache word
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;

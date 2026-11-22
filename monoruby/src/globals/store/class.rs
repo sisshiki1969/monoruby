@@ -2414,7 +2414,6 @@ impl ClassInfoTable {
         info.constants = constants;
         info.constant_locations = constant_locations;
         info.class_variables = class_variables;
-        crate::globals::cvar_state_inc();
         info.alloc_func = alloc_func;
         info.mark_dirty();
 
@@ -2450,7 +2449,6 @@ impl ClassInfoTable {
         new_meta_info.constants = m_constants;
         new_meta_info.constant_locations = m_constant_locations;
         new_meta_info.class_variables = m_class_variables;
-        crate::globals::cvar_state_inc();
         new_meta_info.mark_dirty();
 
         // Replicate `extend`-ed modules (iclasses hanging off the original
@@ -2520,7 +2518,6 @@ impl ClassInfoTable {
         new_info.constants = constants;
         new_info.constant_locations = constant_locations;
         new_info.class_variables = class_variables;
-        crate::globals::cvar_state_inc();
         new_info.mark_dirty();
         // Replicate `extend`-ed modules (iclasses on the original
         // singleton's superclass chain) in the same order; `include_module`

@@ -4041,8 +4041,10 @@ pub(super) enum AsmInst {
         pc: BytecodePtr,
         using_fpr: UsingFpr,
     },
+    /// `rax <- @@name` or nil; `pc` as in [`Self::LoadCVar`].
     CheckCVar {
         name: IdentId,
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     },
     /// `@@name <- src`; `pc` as in [`Self::LoadCVar`].

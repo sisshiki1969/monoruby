@@ -2951,14 +2951,16 @@ pub(super) extern "C" fn get_class_var(
 }
 
 ///
-/// Check class variable.
+/// Check class variable. `cache` is the site's cache word (see
+/// [`get_class_var`]).
 ///
 pub(super) extern "C" fn check_class_var(
     vm: &mut Executor,
     globals: &mut Globals,
     name: IdentId,
+    cache: &mut u64,
 ) -> Value {
-    match vm.find_class_variable(globals, name) {
+    match vm.find_class_variable_cached(globals, name, cache) {
         Ok(val) => val,
         Err(_) => Value::nil(),
     }

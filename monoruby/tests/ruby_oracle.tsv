@@ -1489,6 +1489,7 @@
 3c317b41d6a90f7b882850a676d924f0	[40, 36, 39]	def __f(x)\n          \n        a = x\n        b = a\n        a += 1\n      
 3c3e9df720bcfc9e16e5388ec370e1a6	3.15	class Foo; def to_int; 2; end; end\n            3.14159.ceil(Foo.new
 3c69555cfc9c304438892b113e9bb012	[[:@@inherited, :@@own], [:@@own]]	parent = Class.new\n            parent.class_variable_set(:@@inherit
+3c7cf72cdffed3cc6ecd7f8744ea5da7	[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]	class CvM0; end\n        class CvM < CvM0; def m; @@m ||= 1; end; def r;
 3c7f081b962e4c7272b51d99d568feb4	["outer", "outer", "outer", "outer", "nil"]	def brk_while(log)\n          outer = StandardError.new "outer"\n        
 3c88ba5aa7e8c749800f8e214ca30279	[10, 10, 12354, 128512, [2, [[61, 216, 0, 222], [97, 0]], [97, 0, 61, 216, 0, 222]], 1, [128512], [97, 98], [0, 0, 0, 97, 0, 0, 0, 98, 0, 0, 0, 99], [97, 0, 98, 0, 99, 0], [0, 0, 0, 97, 0, 0, 0, 98, 0, 0, 0, 99], "abc", "FrozenError", [nil, nil, "hello"], ["FrozenError", "FrozenError", "FrozenError"], ["FrozenError", "FrozenError", "FrozenError"]]	__a = [];__a << ("\\n".encode("utf-32be").ord);__a << ("\\n".encode("utf-16le").or
 3c8c62dfbc6ab8e4b391463cee4bdbb0	[true, true]	require "io/wait"\n            [IO.instance_method(:wait_readable).i

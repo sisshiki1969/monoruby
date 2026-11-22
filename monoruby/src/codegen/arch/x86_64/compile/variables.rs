@@ -457,12 +457,13 @@ impl Codegen {
         self.fpr_restore(using_fpr);
     }
 
-    pub(super) fn check_cvar(&mut self, name: IdentId, using_fpr: UsingFpr) {
+    pub(super) fn check_cvar(&mut self, name: IdentId, cache: u64, using_fpr: UsingFpr) {
         self.fpr_save(using_fpr);
         monoasm! { &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
             movl rdx, (name.get());
+            movq rcx, (cache);
             movq rax, (runtime::check_class_var);
             call rax;
         };

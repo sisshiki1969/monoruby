@@ -23,11 +23,15 @@ pub use error::*;
 /// to, tagged with this word, and trusts that class while the word stands
 /// (`Executor::find_class_variable_cached`). It moves on anything that can
 /// change where a name resolves from a given scope: a class variable
-/// created or removed anywhere (`ClassInfo::set_cvar` / `remove_cvar`,
-/// a class's variables copied into a clone), an ancestry change
-/// (`Module::set_superclass`, include / prepend), and a body's lexical
-/// scope changing (`ISeqInfo::set_lexical_context`), which is what the
-/// site's starting class is read from.
+/// created or removed in an existing class (`ClassInfo::set_cvar` /
+/// `remove_cvar`), a change to an existing ancestry (include / prepend
+/// and their propagation), and a body's lexical scope changing
+/// (`ISeqInfo::set_lexical_context`), which is what the site's starting
+/// class is read from.
+///
+/// A class that is being made (`Class.new`, `dup` / `clone`, a singleton
+/// class, its first superclass) moves nothing: no scope can have resolved
+/// a name through a class that did not exist yet.
 ///
 /// One word for the process rather than one per interpreter: a test
 /// process runs several, and a move in one only costs the others a slow

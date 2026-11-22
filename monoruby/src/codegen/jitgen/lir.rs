@@ -1015,6 +1015,7 @@ pub(in crate::codegen) enum LInst {
     },
     CheckCVar {
         name: IdentId,
+        pc: BytecodePtr,
         using_fpr: UsingFpr,
     },
     StoreCVar {

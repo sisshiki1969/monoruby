@@ -704,7 +704,12 @@ impl AbstractState {
     pub(super) fn jit_check_cvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.discard(dst);
         let using_fpr = self.get_using_fpr(ir);
-        ir.push(AsmInst::CheckCVar { name, using_fpr });
+        let pc = self.pc();
+        ir.push(AsmInst::CheckCVar {
+            name,
+            pc,
+            using_fpr,
+        });
         self.def_rax2acc(ir, dst);
     }
 
