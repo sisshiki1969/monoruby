@@ -2996,6 +2996,12 @@ fn file_instance_lstat(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // `rb_file_lstat` goes through `GetOpenFile`: a closed or
+    // never-initialized File has no stream to ask.
+    let io = lfp.self_val();
+    if io.as_io_inner().is_closed() {
+        return Err(io.as_io_inner().closed_error());
+    }
     let path = match lfp.self_val().as_io_inner().path() {
         Some(p) => Value::string(p),
         None => {

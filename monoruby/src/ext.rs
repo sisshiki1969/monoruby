@@ -2934,6 +2934,9 @@ unsafe extern "C" fn mr_io_state(ctx: *mut MrContext, io: MrValue, out: *mut MrI
     if fd >= 0 && inner.sync() {
         mode |= FMODE_SYNC;
     }
+    if inner.is_uninit() {
+        mode |= monoruby_ext_sys::MR_IO_UNINIT;
+    }
     // SAFETY: the caller's out-parameter.
     unsafe {
         *out = MrIoState {

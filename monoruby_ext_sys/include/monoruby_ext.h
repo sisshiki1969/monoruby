@@ -113,8 +113,14 @@ typedef enum MrErrorKind {
 
 /* Entries are only ever appended; `size` says how many bytes the running
  * monoruby fills. */
-/* MrApi::io_state's result; `mode` holds CRuby's FMODE_* bits, `rbuf` the
- * bytes read from the descriptor and not yet consumed. */
+/* Set in MrIoState::mode next to the FMODE_* bits for an IO object that
+ * was allocated and never initialized (CRuby's RFile with a NULL fptr).
+ * Never passed back to io_update. */
+#define MR_IO_UNINIT (1 << 30)
+
+/* MrApi::io_state's result; `mode` holds CRuby's FMODE_* bits (and
+ * MR_IO_UNINIT), `rbuf` the bytes read from the descriptor and not yet
+ * consumed. */
 typedef struct MrIoState {
     int fd;
     int mode;

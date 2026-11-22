@@ -955,6 +955,50 @@ fn autoload_feature_already_loaded(vm: &Executor, globals: &Globals, feature: &s
     false
 }
 
+/// Whether `feature` names a file this thread is in the middle of
+/// loading.
+///
+/// CRuby's `check_autoload_required` finds such a feature "provided" and
+/// leaves the autoload alone: the constant reads as undefined for now,
+/// its registration stays, and the file — which is still running — may
+/// yet define it. Dispatching `require` instead could only answer false,
+/// with a "circular require" warning on the way and an "Expected … to
+/// define …" one after it. The prism gem relies on this: `prism/visitor`
+/// is the autoload target of both `BasicVisitor` and `Visitor`, and
+/// `class Visitor < BasicVisitor` looks `Visitor` up while the file
+/// runs for `BasicVisitor` (#2116).
+pub(crate) fn autoload_feature_in_flight(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    feature: &std::path::Path,
+) -> bool {
+    // Nearly every autoload fires for a file that is not running; tell
+    // by the file name alone, before resolving anything.
+    let Some(stem) = feature.file_stem() else {
+        return false;
+    };
+    if !vm.is_loading_stem(stem) {
+        return false;
+    }
+    let name = feature.to_string_lossy();
+    if autoload_resolution_candidates(globals, &name)
+        .iter()
+        .any(|path| vm.is_loading_path(path))
+    {
+        return true;
+    }
+    // A bare feature may also resolve into the stub tree, which is
+    // searched ahead of `$LOAD_PATH` and is not listed on it.
+    if feature.is_absolute() || name.starts_with("./") || name.starts_with("../") {
+        return false;
+    }
+    globals.search_lib(vm, feature).is_some_and(|found| {
+        let found =
+            crate::globals::lexically_normalize(&std::path::absolute(&found).unwrap_or(found));
+        vm.is_loading_path(&found)
+    })
+}
+
 /// Build the list of candidate canonical paths that the given autoload
 /// `feature` might resolve to. Mirrors the search rules in
 /// `Globals::require_lib`/`search_lib` but only returns the paths so we
@@ -1098,6 +1142,9 @@ fn class_eval(
             lineno,
             src_encoding,
         )?;
+        // The parse's warnings, before the body runs — as `eval` and
+        // `instance_eval` print theirs.
+        vm.flush_compile_warnings(globals);
         let proc = ProcData::new(outer_cfp.lfp(), fid);
         // class_eval "..." string form: runtime-only push, just like
         // the block form. The compiled eval body itself receives the

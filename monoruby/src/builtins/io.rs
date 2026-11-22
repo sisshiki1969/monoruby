@@ -193,7 +193,7 @@ pub(super) fn init(globals: &mut Globals) {
 #[monoruby_builtin]
 fn io_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let class = lfp.self_val().as_class_id();
-    let obj = Value::new_io_with_class(IoInner::closed(None), class);
+    let obj = Value::new_io_with_class(IoInner::uninit(), class);
     // Root the fresh IO across `io_init_from_fd` / `warn`, which re-enter
     // Ruby while it lives only in this Rust local.
     vm.with_temp_scope(|vm| {
@@ -1305,7 +1305,7 @@ fn parse_newline_option(
 
 /// Allocator for `IO` and its subclasses.
 pub(crate) extern "C" fn io_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
-    Value::new_io_with_class(IoInner::closed(None), class_id)
+    Value::new_io_with_class(IoInner::uninit(), class_id)
 }
 
 
@@ -2461,7 +2461,9 @@ fn isatty(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 #[monoruby_builtin]
 fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // CRuby's `IO#close` is idempotent — closing an already-closed
-    // stream is a no-op that returns nil (no IOError).
+    // stream is a no-op that returns nil (no IOError). A stream that was
+    // never initialized is not a closed one, though.
+    lfp.self_val().as_io_inner().check_initialized()?;
     if lfp.self_val().as_io_inner().is_closed() {
         return Ok(Value::nil());
     }
@@ -2562,7 +2564,10 @@ fn close_read(
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/closed=3f.html]
 #[monoruby_builtin]
 fn closed_(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(lfp.self_val().as_io_inner().is_closed()))
+    let self_ = lfp.self_val();
+    let io = self_.as_io_inner();
+    io.check_initialized()?;
+    Ok(Value::bool(io.is_closed()))
 }
 
 ///
@@ -2648,6 +2653,14 @@ fn seek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn io_inspect(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let name = globals.store.get_class_name(self_.class());
+    // `rb_io_inspect`: with no `rb_io_t` there is nothing to describe,
+    // and the object prints as any other does (`rb_any_to_s`).
+    if self_.as_io_inner().is_uninit() {
+        return Ok(Value::string_sprintf(format!(
+            "#<{name}:0x{:016x}>",
+            self_.id()
+        )));
+    }
     Ok(Value::string_sprintf(format!(
         "#<{name}:{}>",
         self_.as_io_inner().kind().descriptor()
@@ -3311,7 +3324,7 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // core/io/pipe_spec "does not use IO.new method").
     let init_id = IdentId::get_id("initialize");
     let make_end = |vm: &mut Executor, globals: &mut Globals, fd: i32, mode: &str| -> Result<Value> {
-        let obj = Value::new_io_with_class(IoInner::closed(None), class);
+        let obj = Value::new_io_with_class(IoInner::uninit(), class);
         vm.invoke_method_inner(
             globals,
             init_id,
@@ -5246,7 +5259,7 @@ fn io_sysread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         _ => None,
     };
     if lfp.self_val().as_io_inner().is_closed() {
-        return Err(MonorubyErr::ioerr("closed stream"));
+        return Err(lfp.self_val().as_io_inner().closed_error());
     }
     lfp.self_val().as_io_inner().check_byte_readable()?;
     // `rb_io_sysread` refuses to read past what the buffered path has
@@ -5310,7 +5323,7 @@ fn io_readpartial(
         _ => None,
     };
     if lfp.self_val().as_io_inner().is_closed() {
-        return Err(MonorubyErr::ioerr("closed stream"));
+        return Err(lfp.self_val().as_io_inner().closed_error());
     }
     lfp.self_val().as_io_inner().check_byte_readable()?;
     if maxlen == 0 {
@@ -5409,7 +5422,7 @@ fn io_read_nonblock(
     // `exception:` keyword is at slot 2 (positional max 2).
     let exception = nonblock_exception_kw(&globals.store, lfp.try_arg(2))?;
     if lfp.self_val().as_io_inner().is_closed() {
-        return Err(MonorubyErr::ioerr("closed stream"));
+        return Err(lfp.self_val().as_io_inner().closed_error());
     }
     lfp.self_val().as_io_inner().check_byte_readable()?;
     if maxlen == 0 {
@@ -5487,7 +5500,7 @@ fn io_write_nonblock(
     // `exception:` keyword is at slot 1 (positional max 1).
     let exception = nonblock_exception_kw(&globals.store, lfp.try_arg(1))?;
     if lfp.self_val().as_io_inner().is_closed() {
-        return Err(MonorubyErr::ioerr("closed stream"));
+        return Err(lfp.self_val().as_io_inner().closed_error());
     }
     let outcome = lfp
         .self_val()
@@ -5876,6 +5889,7 @@ fn set_encoding(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
+    self_.as_io_inner().check_initialized()?;
     // Signature: set_encoding(ext, int = nil, **opts) — a third
     // positional is only legal as the options Hash.
     if let Some(a2) = lfp.try_arg(2)
@@ -6072,6 +6086,7 @@ fn set_encoding_by_bom(
     _: BytecodePtr,
 ) -> Result<Value> {
     let self_ = lfp.self_val();
+    self_.as_io_inner().check_initialized()?;
     if !self_.as_io_inner().is_readable() {
         return Ok(Value::nil());
     }
@@ -6452,6 +6467,9 @@ fn external_encoding(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    // CRuby dereferences the missing `rb_io_t` here and crashes; raise
+    // what every other method does.
+    lfp.self_val().as_io_inner().check_initialized()?;
     Ok(read_io_encoding(globals, lfp.self_val(), false))
 }
 
@@ -6467,6 +6485,7 @@ fn internal_encoding(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    lfp.self_val().as_io_inner().check_initialized()?;
     Ok(read_io_encoding(globals, lfp.self_val(), true))
 }
 
@@ -6514,6 +6533,7 @@ fn io_timeout_ivar() -> IdentId {
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/timeout.html]
 #[monoruby_builtin]
 fn io_timeout(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().as_io_inner().check_initialized()?;
     Ok(globals
         .store
         .get_ivar(lfp.self_val(), io_timeout_ivar())
@@ -6526,6 +6546,7 @@ fn io_timeout(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// - timeout = duration or nil
 #[monoruby_builtin]
 fn io_set_timeout(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    lfp.self_val().as_io_inner().check_initialized()?;
     let t = lfp.arg(0);
     if !t.is_nil() {
         parse_wait_timeout(vm, globals, Some(t))?;
@@ -6543,7 +6564,7 @@ fn io_set_timeout(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
 /// underlying syscalls fail with `Errno::EBADF` or silently return.
 fn ensure_io_open(self_val: Value) -> Result<()> {
     if self_val.as_io_inner().is_closed() {
-        return Err(MonorubyErr::ioerr("closed stream"));
+        return Err(self_val.as_io_inner().closed_error());
     }
     Ok(())
 }
@@ -6593,7 +6614,7 @@ fn wait_single_fd_events(
 
 fn poll_single_fd(self_val: Value, events: i16, timeout_ms: i32) -> Result<i16> {
     if self_val.as_io_inner().is_closed() {
-        return Err(MonorubyErr::ioerr("closed stream"));
+        return Err(self_val.as_io_inner().closed_error());
     }
     let fd = self_val.as_io_inner().wait_fd_for(events)?;
     let mut pfd = libc::pollfd {
@@ -6645,7 +6666,7 @@ fn mode_symbol_to_events(name: &str) -> Option<i64> {
 fn io_wait(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
     if self_val.as_io_inner().is_closed() {
-        return Err(MonorubyErr::ioerr("closed stream"));
+        return Err(self_val.as_io_inner().closed_error());
     }
     let args = lfp.arg(0).as_array();
 

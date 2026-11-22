@@ -59,6 +59,11 @@ rd, wr = IO.pipe
 p P.io_misc(rd, wr)
 rd.close
 p t { P.io_maybe_wait_closed(rd) }
+# Never initialized is not the same as closed (#2108).
+p t { P.io_maybe_wait_closed(IO.allocate) }
+p t { P.io_get_open_file(IO.allocate) }
+p t { P.io_get_open_file(rd) }
+p t { P.io_get_open_file(wr) }
 wr.close
 path = File.join(__dir__, "capi_procio.rb")
 File.open(path) { |f| p P.io_path(f) == path }

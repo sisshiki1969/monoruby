@@ -35,4 +35,24 @@ class << ENV
   def except(*keys)
     to_h.except(*keys)
   end
+
+  # ENV keeps no state of its own: every access reads the process
+  # environment, which native code changes with setenv(3) behind
+  # monoruby's back. The Hash underneath is only a snapshot, so `Hash`'s
+  # methods have to be kept off it.
+  def inspect
+    to_h.inspect
+  end
+
+  def freeze
+    raise TypeError, "cannot freeze ENV"
+  end
+
+  # CRuby's ENV is a plain Object extended with Enumerable, so these run
+  # Enumerable's implementation over `ENV.each` — the pairs of the
+  # moment, as frozen copies — where `Hash` has one of its own that
+  # walks the snapshot.
+  %i[all? any? collect compact count each_with_object flat_map map min_by sort].each do |name|
+    define_method(name, Enumerable.instance_method(name))
+  end
 end

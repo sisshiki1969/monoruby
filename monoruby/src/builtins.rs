@@ -38,7 +38,7 @@ pub(crate) mod process;
 mod random;
 pub(crate) mod range;
 mod regexp;
-pub(crate) use module::autoload_pending;
+pub(crate) use module::{autoload_feature_in_flight, autoload_pending};
 pub(crate) use regexp::{
     check_match_encoding, check_regexp_preprocess, regexp_inner_from_parts,
     regexp_inner_from_string,

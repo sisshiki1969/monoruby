@@ -999,7 +999,13 @@ stringio / zlib は C 拡張のまま。
   インタプリタが使わない FMODE ビット（`FMODE_NOREVLOOKUP`、`FMODE_UNIX` …）は
   `IoInner` の欄に残り、消費した `rbuf` は捨てる。書き戻しは Ruby を呼ぶ前
   （`funcall` の入口）とフレームの終わり、呼んだ後は読み直すので、Ruby 側の
-  `close` は CRuby と同じく `fd == -1` に見える。
+  `close` は CRuby と同じく `fd == -1` に見える。確保されただけで初期化
+  されていない IO（`IO.allocate`、`IO#initialize` に届かない `initialize` を
+  持つサブクラス）は CRuby では `fptr` が NULL。ここでは `io_state` の `mode`
+  に層内部のビット `MR_IO_UNINIT` が立ち、`rb_io_check_initialized`（と
+  それを通る `rb_io_check_closed` / `GetOpenFile`）が "uninitialized stream"
+  を上げる。拡張に見える `fptr->mode` からは落としてあり、`MakeOpenFile`
+  で消える。
 - **待ち**: `rb_io_wait` はファイバースケジューラがあればその `io_wait` の答えを
   そのまま、無ければ `IO#wait`（`IO#timeout` を既定に。`IO#timeout` /
   `timeout=` は今回足した。インタプリタ自身の read / write は見ない）、

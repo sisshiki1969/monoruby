@@ -491,23 +491,37 @@ fn try_prism_inner(
     {
         code.splice(0..0, format!("# encoding: {enc}\n").into_bytes());
         line_offset -= 1;
-        options = Some(build_prism_options(None, seed_lvars.as_ref(), line_offset).0);
+        // No scopes unless there are locals to seed: any scope at all
+        // makes the parse an eval's to prism (`parsing_eval`).
+        options = Some(match &seed_lvars {
+            Some(_) => build_prism_options(None, seed_lvars.as_ref(), line_offset).0,
+            None => {
+                let line = line_offset.saturating_add(1).clamp(0, i32::MAX as i64) as i32;
+                prism::Options::default().line(line)
+            }
+        });
     }
-    // `-e`: prism's `PM_OPTIONS_COMMAND_LINE_E` suppresses the flip-flop /
-    // condition-literal parse warnings for command-line scripts. The
-    // vendored ruby-prism wrapper doesn't expose the `command_line`
-    // option, so we replicate the gate here when forwarding warnings.
     let cli_e_script = super::take_cli_e_script(&path);
     // prism takes any options scope for an eval (`parsing_eval`) and
-    // then keeps a top-level "assigned but unused variable" to itself.
-    // CRuby warns about those for a script file, so a main script whose
+    // then keeps to itself what it reports about a script's top level:
+    // an "assigned but unused variable" there, and a last statement
+    // whose value nothing uses (an eval's is the eval's value). CRuby
+    // warns about both for a script, so a main script whose
     // TOPLEVEL_BINDING has nothing in it yet parses without scopes,
     // which resolves every name exactly as the one empty scope would.
-    // A `-e` script keeps them: there prism's command-line flag
-    // silences the top level, and the scopes stand in for that flag.
-    if scopes_droppable && !cli_e_script {
+    if scopes_droppable {
         let line = line_offset.saturating_add(1).clamp(0, i32::MAX as i64) as i32;
         options = Some(prism::Options::default().line(line));
+    }
+    // `-e`: prism's own command-line flag, as CRuby sets it. It keeps the
+    // flip-flop / condition-literal warnings (the idiomatic awk/sed
+    // `-ne` / `-pe` conditions) and a top-level unused variable quiet.
+    if cli_e_script {
+        options = Some(
+            options
+                .unwrap_or_else(|| prism::Options::default().line(1))
+                .command_line(vec![prism::CommandLineFlag::E]),
+        );
     }
     // prism reads the file name wherever the parser itself needs the
     // value of `__FILE__`: the duplicated-key warning compares and
@@ -610,24 +624,12 @@ fn try_prism_inner(
     // warning level we have verified are forwarded — the Rust prism
     // wrapper does not expose the diagnostic level, so an allowlist
     // (message → verbose-only flag) stands in for it. Everything else
-    // is dropped rather than risking warnings CRuby would not print
-    // (e.g. prism flags an eval's final literal as "useless use of a
-    // literal in void context"; CRuby does not, since that literal is
-    // the eval's value).
+    // is dropped rather than risking warnings CRuby would not print.
     let warnings: Vec<(String, bool)> = result
         .warnings()
         .filter_map(|w| {
             let msg = String::from_utf8_lossy(w.message()).into_owned();
             let msg = msg.as_str();
-            // `-e` scripts suppress the flip-flop / condition-literal
-            // warnings, exactly like CRuby's prism `COMMAND_LINE_E` gate
-            // (these are the idiomatic awk/sed `-ne`/`-pe` conditions).
-            if cli_e_script
-                && (msg == "integer literal in flip-flop"
-                    || msg == "regex literal in condition")
-            {
-                return None;
-            }
             // prism decides where it applies (not at the top level of
             // an eval or of `-e`) and skips `_`-prefixed names, as
             // CRuby's own check does.
@@ -645,10 +647,15 @@ fn try_prism_inner(
                     && msg.contains(" is duplicated and overwritten on line "))
             {
                 false
-            } else if msg == "possibly useless use of defined? in void context"
+            } else if
+            // `PM_WARN_VOID_STATEMENT`: a statement whose value nothing
+            // uses — "a variable", "a literal", "==", "self", "defined?"
+            // … prism leaves out the last statement of an eval, which
+            // is the eval's value.
+            (msg.starts_with("possibly useless use of ")
+                && msg.ends_with(" in void context"))
                 || msg == "'frozen_string_literal' is ignored after any tokens"
-                || (msg.starts_with("'when' clause on line ")
-                    && msg.ends_with(" and is ignored"))
+                || (msg.starts_with("'when' clause on line ") && msg.ends_with(" and is ignored"))
             {
                 true
             } else {
