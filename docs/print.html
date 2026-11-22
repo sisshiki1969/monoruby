@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-8df343bb.js";
+            window.path_to_searchindex_js = "searchindex-24328759.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -18501,7 +18501,13 @@ Ruby 呼び出し（owner フレーム）の間だけ渡す。中身は ABI <cod
 インタプリタが使わない FMODE ビット（<code>FMODE_NOREVLOOKUP</code>、<code>FMODE_UNIX</code> …）は
 <code>IoInner</code> の欄に残り、消費した <code>rbuf</code> は捨てる。書き戻しは Ruby を呼ぶ前
 （<code>funcall</code> の入口）とフレームの終わり、呼んだ後は読み直すので、Ruby 側の
-<code>close</code> は CRuby と同じく <code>fd == -1</code> に見える。</li>
+<code>close</code> は CRuby と同じく <code>fd == -1</code> に見える。確保されただけで初期化
+されていない IO（<code>IO.allocate</code>、<code>IO#initialize</code> に届かない <code>initialize</code> を
+持つサブクラス）は CRuby では <code>fptr</code> が NULL。ここでは <code>io_state</code> の <code>mode</code>
+に層内部のビット <code>MR_IO_UNINIT</code> が立ち、<code>rb_io_check_initialized</code>（と
+それを通る <code>rb_io_check_closed</code> / <code>GetOpenFile</code>）が “uninitialized stream”
+を上げる。拡張に見える <code>fptr-&gt;mode</code> からは落としてあり、<code>MakeOpenFile</code>
+で消える。</li>
 <li><strong>待ち</strong>: <code>rb_io_wait</code> はファイバースケジューラがあればその <code>io_wait</code> の答えを
 そのまま、無ければ <code>IO#wait</code>（<code>IO#timeout</code> を既定に。<code>IO#timeout</code> /
 <code>timeout=</code> は今回足した。インタプリタ自身の read / write は見ない）、
