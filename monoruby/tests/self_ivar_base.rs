@@ -206,3 +206,59 @@ fn self_ivar_base_table_grows_in_another_thread() {
         "#
     ));
 }
+
+// A frameless callee on its caller's `self` skips its own entry check of the
+// heap ivar table when the caller's entry already sized it
+// (`Codegen::self_ivars_prepared`). The objects here are made before the
+// class gains its last ivars, so their tables start short and only an entry
+// check grows them.
+const SHORT_TABLE_PRELUDE: &str = r#"
+class D
+  def initialize
+    @p0 = 0; @p1 = 0; @p2 = 0; @p3 = 0; @p4 = 0; @p5 = 0
+    @a = 1
+  end
+  # same self, caller touches heap ivars too
+  def outer
+    @a += 1
+    bump
+    bump
+    [@a, @late]
+  end
+  def bump
+    @late = (@late || 0) + @a
+  end
+  # same self, caller touches no heap ivar
+  def outer_light(x)
+    bump2(x)
+  end
+  def bump2(x)
+    @later = x
+    @later2 = x + 1
+    [@later, @later2]
+  end
+  # another object of the same class as receiver
+  def poke(other)
+    @a += 1
+    other.bump
+  end
+end
+"#;
+
+#[test]
+fn self_ivar_base_frameless_same_self_prepared() {
+    run_test_with_prelude(
+        r#"
+        objs = Array.new(40) { D.new }
+        res = []
+        objs.each_with_index do |d, i|
+          res << d.outer
+          res << objs[39 - i].outer_light(i)
+          res << d.poke(objs[39 - i])
+        end
+        res << objs.map { |d| d.instance_variables.size }
+        res
+        "#,
+        SHORT_TABLE_PRELUDE,
+    );
+}

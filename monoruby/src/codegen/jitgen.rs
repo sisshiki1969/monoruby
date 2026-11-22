@@ -1032,6 +1032,7 @@ impl Codegen {
     ) {
         // `prof`: a frame of its own hosts the frameless bodies emitted
         // inside it.
+        self.self_ivars_prepared.push(false);
         #[cfg(feature = "prof")]
         let prof_host = !frame.frameless;
         #[cfg(feature = "prof")]
@@ -1065,6 +1066,7 @@ impl Codegen {
         if prof_host {
             self.prof_hosts.pop();
         }
+        self.self_ivars_prepared.pop();
     }
 
     fn gen_machine_code_inner(
