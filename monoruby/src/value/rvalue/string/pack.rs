@@ -743,8 +743,7 @@ fn pad_available(len: usize, add: usize) -> Result<()> {
         return Err(MonorubyErr::argumenterr("string size too big"));
     }
     let n = len + add;
-    if crate::alloc::would_exceed_malloc_hard_limit(n)
-        || Vec::<u8>::new().try_reserve_exact(n).is_err()
+    if !crate::alloc::may_allocate(n) || Vec::<u8>::new().try_reserve_exact(n).is_err()
     {
         return Err(MonorubyErr::nomemoryerr());
     }

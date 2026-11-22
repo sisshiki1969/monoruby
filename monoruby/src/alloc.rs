@@ -364,6 +364,27 @@ pub(crate) fn would_exceed_malloc_hard_limit(size: usize) -> bool {
     limit != 0 && malloc_amount_relaxed().saturating_add(size) > limit
 }
 
+/// May a buffer of `bytes` bytes be asked of the allocator at all?
+///
+/// The pre-check of every place that answers an over-large request with
+/// `NoMemoryError` instead of an abort (an Array or String built at a
+/// size, `pack` padding, `Random.bytes`, `String.new(capacity:)`); the
+/// caller still does its own `try_reserve` after it. Two refusals come
+/// first, because the allocator cannot report either:
+///
+/// - Past the `MONORUBY_MALLOC_HARD_LIMIT` cap, which aborts rather than
+///   failing ([`would_exceed_malloc_hard_limit`]).
+/// - Larger than the machine's physical memory. The buffer is about to
+///   be filled, and one that size never can be. macOS hands out such a
+///   reservation lazily — `try_reserve` of 8 TiB succeeds — and the fill
+///   then eats memory until the kernel kills processes
+///   (`[].send(:__init_fill, 1 << 40, nil)`, `[0].pack("x#{2**40}")`);
+///   Linux's overcommit heuristic already refuses it up front, so this
+///   is what makes macOS answer the way Linux does.
+pub(crate) fn may_allocate(bytes: usize) -> bool {
+    bytes <= physical_memory() && !would_exceed_malloc_hard_limit(bytes)
+}
+
 /// `"123"`, `"512K"`, `"64M"`, `"3G"` → bytes. Anything else → None.
 fn parse_byte_size(s: &str) -> Option<usize> {
     let (num, mult) = match s.as_bytes().last()? {
@@ -2846,8 +2867,13 @@ mod arena_reservation_tests {
 }
 
 /// Bytes of physical memory the machine has (`usize::MAX` when the
-/// system does not say).
-fn physical_memory() -> usize {
+/// system does not say). Asked once.
+pub(crate) fn physical_memory() -> usize {
+    static PHYSICAL: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *PHYSICAL.get_or_init(query_physical_memory)
+}
+
+fn query_physical_memory() -> usize {
     // SAFETY: `sysconf` only reads system configuration.
     let (pages, page_size) =
         unsafe { (libc::sysconf(libc::_SC_PHYS_PAGES), libc::sysconf(libc::_SC_PAGESIZE)) };

@@ -767,7 +767,7 @@ fn bytes_size(vm: &mut Executor, globals: &mut Globals, size_arg: Value) -> Resu
 /// abort the process.
 fn zeroed_bytes(vm: &mut Executor, globals: &mut Globals, size: usize) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
-    if buf.try_reserve_exact(size).is_err() {
+    if !crate::alloc::may_allocate(size) || buf.try_reserve_exact(size).is_err() {
         return Err(crate::builtins::string::no_memory_error(vm, globals));
     }
     buf.resize(size, 0);
