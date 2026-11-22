@@ -262,7 +262,8 @@ pub struct EntriesLayout {
     pub indices_ctrl_offset: usize,
     /// Offset from `&RubyMap` to the indices table's `bucket_mask`.
     pub indices_mask_offset: usize,
-    /// The control-group width the probe steps by (16 with SSE2 / NEON).
+    /// The control-group width the probe steps by: 16 with SSE2, 8 with NEON
+    /// (aarch64) and with hashbrown's generic implementation.
     pub group_width: usize,
 }
 

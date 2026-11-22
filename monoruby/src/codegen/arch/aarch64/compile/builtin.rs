@@ -948,11 +948,17 @@ impl Codegen {
             b lp;
         indexed:
         );
-        if layout.group_width == 16 {
+        // hashbrown's control group is 16 bytes with SSE2 and 8 with NEON
+        // (aarch64) or its generic SWAR implementation, and the walk below
+        // handles both: a group is one or two 64-bit control words, and the
+        // triangular probe steps by the group width, as hashbrown's does.
+        let group_width = layout.group_width;
+        if group_width == 8 || group_width == 16 {
             // Created here, not with the others: a label is kept by
             // `JitMemory` until it is bound, so one this regime never binds
             // would stay in its list for good.
             let group = self.jit.label();
+            let words = group_width / 8;
             let lo = 0x0101_0101_0101_0101u64;
             let hi = 0x8080_8080_8080_8080u64;
             monoasm_arm64!(&mut self.jit,
@@ -961,33 +967,46 @@ impl Codegen {
                 mov x4, #(0);                   // x4 = stride
             group:
             );
-            // The two words of the group at pos; x3 walks pos, pos + 8.
-            for word in 0..2 {
-                if word == 1 {
+            // The words of the group at pos; x3 walks pos (, pos + 8).
+            for word in 0..words {
+                if word != 0 {
                     monoasm_arm64!(&mut self.jit, add x3, x3, #(8););
                 }
                 self.gen_hash_probe_word(&layout, key_eq, lo, hi, &miss, &done);
             }
-            monoasm_arm64!(&mut self.jit,
-                // Back to pos. An EMPTY byte in the group ends the walk.
-                sub x3, x3, #(8);
-                ldr x9, [x2, #(map_ptr)];
-                ldr x9, [x9, #(ctrl_off)];
-                ldr x0, [x9, x3];
-                lsl x11, x0, #(1);
-                and x0, x0, x11;
-                add x11, x3, #(8);
-                ldr x12, [x9, x11];
-                lsl x11, x12, #(1);
-                and x12, x12, x11;
-                orr x0, x0, x12;
-                mov x11, (hi);
-                tst x0, x11;
-            );
+            // An EMPTY byte in the group ends the walk.
+            if words == 2 {
+                monoasm_arm64!(&mut self.jit,
+                    // Back to pos.
+                    sub x3, x3, #(8);
+                    ldr x9, [x2, #(map_ptr)];
+                    ldr x9, [x9, #(ctrl_off)];
+                    ldr x0, [x9, x3];
+                    lsl x11, x0, #(1);
+                    and x0, x0, x11;
+                    add x11, x3, #(8);
+                    ldr x12, [x9, x11];
+                    lsl x11, x12, #(1);
+                    and x12, x12, x11;
+                    orr x0, x0, x12;
+                    mov x11, (hi);
+                    tst x0, x11;
+                );
+            } else {
+                monoasm_arm64!(&mut self.jit,
+                    ldr x9, [x2, #(map_ptr)];
+                    ldr x9, [x9, #(ctrl_off)];
+                    ldr x0, [x9, x3];
+                    lsl x11, x0, #(1);
+                    and x0, x0, x11;
+                    mov x11, (hi);
+                    tst x0, x11;
+                );
+            }
             self.jit.bcond_label(monoasm::Cond::Ne, &exhausted);
             monoasm_arm64!(&mut self.jit,
-                // pos = (pos + stride) & bucket_mask, stride += 16.
-                add x4, x4, #(16);
+                // pos = (pos + stride) & bucket_mask, stride += group width.
+                add x4, x4, #(group_width as u32);
                 add x3, x3, x4;
                 ldr x11, [x2, #(map_ptr)];
                 ldr x11, [x11, #(mask_off)];
