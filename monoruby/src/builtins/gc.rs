@@ -19,6 +19,7 @@ pub(super) fn init(globals: &mut Globals) {
     // `builtins/gc.rb` drive; see there for why they are split.
     globals.define_builtin_module_func(klass, "__request_gc", request_gc, 1);
     globals.define_builtin_module_func(klass, "__allow_full_mark", allow_full_mark, 0);
+    globals.define_builtin_module_func(klass, "__latest_gc_major", latest_gc_major, 0);
     globals.define_builtin_module_func(klass, "__allow_full_mark=", set_allow_full_mark, 1);
 
     let profiler = globals
@@ -190,6 +191,20 @@ fn count(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) 
 fn request_gc(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     crate::alloc::request_gc(lfp.arg(0).as_bool());
     Ok(Value::nil())
+}
+
+///
+/// Internal: whether the latest collection was a major one, nil before
+/// the first. `GC.latest_gc_info` (`builtins/gc.rb`) builds on it.
+#[monoruby_builtin]
+fn latest_gc_major(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    _lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let major = crate::alloc::ALLOC.with(|alloc| alloc.borrow().latest_gc_major());
+    Ok(major.map_or(Value::nil(), Value::bool))
 }
 
 ///

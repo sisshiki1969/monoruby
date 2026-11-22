@@ -113,6 +113,7 @@ mod forwarding_megamorphic;
 mod forwarding_recompile;
 mod fp_inline_const_operand;
 mod frameless_call;
+mod frozen_init_errno_id2ref_gc_info;
 mod fused_branch_nested;
 mod gem_boot_compat;
 mod gem_prelude;

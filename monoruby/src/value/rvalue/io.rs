@@ -423,11 +423,22 @@ fn read_partial_chunk<T: Read>(
     store: &Store,
     path: Option<&[u8]>,
 ) -> Result<Vec<u8>> {
+    // With nothing buffered, read at most `need` bytes from the fd into
+    // the result itself, as CRuby's `io_getpartial` does: the rest stays
+    // in the kernel, where `IO#wait_readable` and a later `ungetc` +
+    // read see it as CRuby's do.
+    let direct = !no_block && reader.buffer().is_empty();
+    let mut out = if direct { vec![0u8; need] } else { vec![] };
     let avail: &[u8] = if no_block {
         reader.buffer()
     } else {
         loop {
-            match reader.fill_buf() {
+            let res = if direct {
+                reader.read_unbuffered(&mut out).map(|n| out.truncate(n))
+            } else {
+                reader.fill_buf().map(|_| ())
+            };
+            match res {
                 Ok(_) => break,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
                     if signal_pending() {
@@ -453,6 +464,9 @@ fn read_partial_chunk<T: Read>(
                 }
                 Err(e) => return Err(MonorubyErr::ioerr(e.to_string())),
             }
+        }
+        if direct {
+            return Ok(out);
         }
         reader.buffer()
     };

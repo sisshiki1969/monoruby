@@ -404,6 +404,9 @@ pub(super) fn get_members(store: &Store, mut class: Module) -> Result<Array> {
 
 #[monoruby_builtin]
 fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // `rb_struct_modify`: refilling a frozen instance is a FrozenError,
+    // checked before the arguments are looked at.
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
     let pos_args = lfp.arg(0).as_array();
     let kw_args_val = lfp
         .try_arg(1)

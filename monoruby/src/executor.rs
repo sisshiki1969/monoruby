@@ -1591,9 +1591,23 @@ impl Executor {
             let matching = if from_autoload {
                 Vec::new()
             } else {
-                globals
+                let (mut matching, bare) = globals
                     .store
-                    .find_autoload_entries_for_paths(&[canonicalized_path.clone()])
+                    .find_autoload_entries_for_paths(&[canonicalized_path.clone()]);
+                // A bare feature names this file when requiring it
+                // would load this file — the stub tree included, which
+                // is searched ahead of `$LOAD_PATH` (#2113).
+                for (class_id, name, feature) in bare {
+                    if let Some(found) = globals.search_lib(self, &feature) {
+                        let found = crate::globals::lexically_normalize(
+                            &std::path::absolute(&found).unwrap_or(found),
+                        );
+                        if found == canonicalized_path {
+                            matching.push((class_id, name));
+                        }
+                    }
+                }
+                matching
             };
             for (class_id, name) in &matching {
                 globals.store.set_autoload_state(
@@ -2713,7 +2727,38 @@ impl Executor {
                 // `StopIteration` carry theirs through their own arms
                 // above.)
                 let payload = err.payload;
+                // An `Errno::*` raised from Rust (`MonorubyErr::from_io_err`
+                // and friends) never runs `SystemCallError#initialize`,
+                // which is what records `#errno`; take it from the
+                // class's `Errno` constant, as CRuby's `rb_syserr_new`
+                // hands it to `syserr_initialize`.
+                // `IO::EAGAINWaitReadable` inherits its constant from
+                // `Errno::EAGAIN`; the walk stops at the first class
+                // that has one (`Object`'s is the module).
+                let errno = match err.kind() {
+                    MonorubyErrKind::Other(class_id) => {
+                        let errno_id = IdentId::get_id("Errno");
+                        let mut module = Some(globals.store.get_module(*class_id));
+                        let mut found = None;
+                        while let Some(m) = module {
+                            if let Some(v) = globals.store.get_constant_noautoload(m.id(), errno_id)
+                            {
+                                found = v.try_fixnum().map(|_| v);
+                                break;
+                            }
+                            module = m.superclass();
+                        }
+                        found
+                    }
+                    _ => None,
+                };
                 let v = Value::new_exception(err);
+                if let Some(errno) = errno {
+                    globals
+                        .store
+                        .set_ivar(v, IdentId::get_id("/__errno"), errno)
+                        .unwrap();
+                }
                 match payload {
                     // A `SystemCallError` that ends the process by a
                     // signal when uncaught (EPIPE on STDOUT): CRuby's

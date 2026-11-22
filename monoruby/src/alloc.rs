@@ -1475,6 +1475,14 @@ impl<T: GCBox> Allocator<T> {
     }
 
     ///
+    /// Whether the latest collection was a major one; `None` before the
+    /// first (`GC.latest_gc_info`).
+    ///
+    pub fn latest_gc_major(&self) -> Option<bool> {
+        (self.total_gc_counter != 0).then_some(self.current_kind != 0)
+    }
+
+    ///
     /// Returns the number of minor (young-generation) GC executions.
     ///
     pub fn minor_gc_count(&self) -> usize {

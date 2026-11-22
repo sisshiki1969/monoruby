@@ -42,6 +42,12 @@ class Data
   # The base initializer, reachable as `Data.instance_method(:initialize)`
   # (used by e.g. marshalling libraries to populate an allocated instance).
   def initialize(**kw)
+    # `rb_struct_modify` comes first in CRuby's `rb_data_initialize_m`:
+    # an instance is frozen once initialized, so running `initialize`
+    # on it again is a FrozenError before the arguments are checked.
+    if frozen?
+      raise FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self)
+    end
     __data_init(::Data.__data_values(self.class.members, kw))
   end
 

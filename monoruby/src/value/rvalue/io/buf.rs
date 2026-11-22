@@ -169,6 +169,18 @@ impl<T> IoReader<T> {
         self.buf = grown.into_boxed_slice();
     }
 
+    /// Read straight from the fd into `out`, past the (empty) buffer:
+    /// CRuby's `io_getpartial` with nothing in `rbuf` reads at most the
+    /// requested length into the result, leaving the rest in the kernel.
+    pub(crate) fn read_unbuffered(&mut self, out: &mut [u8]) -> std::io::Result<usize>
+    where
+        T: Read,
+    {
+        debug_assert!(self.pos == self.cap);
+        self.discard_buffer();
+        self.inner.read(out)
+    }
+
     fn discard_buffer(&mut self) {
         self.pos = 0;
         self.cap = 0;

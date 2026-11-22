@@ -442,6 +442,13 @@ impl IdentId {
     }
 
     ///
+    /// Whether *id* names an interned identifier.
+    ///
+    pub(crate) fn exists(id: u32) -> bool {
+        id != 0 && id as usize <= ID.read().unwrap().table.len()
+    }
+
+    ///
     /// Get an inner id as u32.
     ///
     pub(crate) fn get(&self) -> u32 {

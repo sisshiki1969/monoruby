@@ -75,6 +75,7 @@ pub(super) fn parse_program(
         false,
         defer_bodies,
         AnonForwarding::default(),
+        false,
     )
 }
 
@@ -97,6 +98,7 @@ pub(super) fn parse_program_eval(
         false,
         true,
         anon_forwarding,
+        false,
     )
 }
 
@@ -153,6 +155,10 @@ pub(super) fn parse_program_binding(
     inject_encoding_comment(&mut code, &default_encoding, &mut line_offset);
     let (options, anon_forwarding) =
         build_prism_options(extern_context, context.as_ref(), line_offset);
+    // The main script's scopes stand for a still empty TOPLEVEL_BINDING;
+    // see `try_prism_inner` for why they may be left out.
+    let scopes_droppable =
+        main_script && context.is_none() && extern_context.is_none_or(ExternalContext::is_vacant);
     try_prism_inner(
         code,
         path,
@@ -163,6 +169,7 @@ pub(super) fn parse_program_binding(
         main_script,
         true,
         anon_forwarding,
+        scopes_droppable,
     )
 }
 
@@ -459,6 +466,7 @@ fn try_prism_inner(
     main_script: bool,
     defer_bodies: bool,
     anon_forwarding: AnonForwarding,
+    scopes_droppable: bool,
 ) -> Result<ParseResult, MonorubyErr> {
     let path_display = path.display().to_string();
     // An `eval` arrives with its options; a file (the main script with
@@ -490,6 +498,17 @@ fn try_prism_inner(
     // vendored ruby-prism wrapper doesn't expose the `command_line`
     // option, so we replicate the gate here when forwarding warnings.
     let cli_e_script = super::take_cli_e_script(&path);
+    // prism takes any options scope for an eval (`parsing_eval`) and
+    // then keeps a top-level "assigned but unused variable" to itself.
+    // CRuby warns about those for a script file, so a main script whose
+    // TOPLEVEL_BINDING has nothing in it yet parses without scopes,
+    // which resolves every name exactly as the one empty scope would.
+    // A `-e` script keeps them: there prism's command-line flag
+    // silences the top level, and the scopes stand in for that flag.
+    if scopes_droppable && !cli_e_script {
+        let line = line_offset.saturating_add(1).clamp(0, i32::MAX as i64) as i32;
+        options = Some(prism::Options::default().line(line));
+    }
     // prism reads the file name wherever the parser itself needs the
     // value of `__FILE__`: the duplicated-key warning compares and
     // prints a `__FILE__` key by it, so `{__FILE__ => 1, "t.rb" => 2}`
@@ -609,7 +628,12 @@ fn try_prism_inner(
             {
                 return None;
             }
-            let verbose_only = if msg == "END in method; use at_exit"
+            // prism decides where it applies (not at the top level of
+            // an eval or of `-e`) and skips `_`-prefixed names, as
+            // CRuby's own check does.
+            let verbose_only = if msg.starts_with("assigned but unused variable - ") {
+                true
+            } else if msg == "END in method; use at_exit"
                 || msg == "found '= literal' in conditional, should be =="
                 || msg == "integer literal in flip-flop"
                 || msg == "regex literal in condition"

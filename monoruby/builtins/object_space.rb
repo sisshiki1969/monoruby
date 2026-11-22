@@ -109,22 +109,21 @@ module ObjectSpace
 
   # Resolve an `#object_id` back to its object.
   #
-  # Deprecated in Ruby 4.0 and warned about on every call, which is the
-  # only thing ruby/spec still checks for it there.
+  # Deprecated in Ruby 4.0: CRuby warns in the `deprecated` category,
+  # which is off unless `-W:deprecated` (or `-w`) turns it on.
   #
-  # It used to raise for everything, because there was no way to find an
-  # object by id; `each_object` gives one. `each_object(Object)` rather
-  # than the bare form, since a BasicObject has no `#object_id` to
-  # compare. An Integer, Symbol or Float id still does not resolve —
-  # those encode their value in the id itself and have no cell to find,
-  # so they would need a decoder rather than a search.
+  # The id of an immediate is its own bit pattern and decodes back to
+  # it (`__id2ref_immediate`). Any other id is a heap object's, found
+  # by `each_object(Object)` rather than the bare form, since a
+  # BasicObject has no `#object_id` to compare.
   def self._id2ref(id)
-    warn "ObjectSpace._id2ref is deprecated", uplevel: 1
-    return nil if nil.object_id == id
-    return true if true.object_id == id
-    return false if false.object_id == id
+    warn "ObjectSpace._id2ref is deprecated", uplevel: 1, category: :deprecated
+    id = __to_int(id)
+    if (imm = __id2ref_immediate(id))
+      return imm[0]
+    end
     each_object(Object) { |o| return o if o.object_id == id }
-    raise RangeError, "0x#{id.to_s(16)} is not id value"
+    raise RangeError, "#{id} is not an id value"
   end
 
   def self.count_objects(result_hash = {})
