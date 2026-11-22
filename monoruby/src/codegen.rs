@@ -872,13 +872,11 @@ pub(in crate::codegen) struct InlineCtx {
     /// The continuation of the `InlineCall`: the body's `Ret` jumps here
     /// with the return value in rax / x0 (or xmm1 / d1 for a raw float).
     pub(in crate::codegen) done: DestLabel,
-    /// Where a redo exit of the body goes: a trampoline that undoes the
-    /// frame shift (if any) and continues to the caller's deopt
-    /// at the call.
+    /// Where a redo exit of the body goes: a trampoline that restores the
+    /// caller's fprs and continues to the caller's deopt at the call.
     pub(in crate::codegen) redo: DestLabel,
-    /// How far below the enclosing frame the window starts (the frame
-    /// pointer and the LFP are moved this far on aarch64; x86-64 adds it
-    /// to the frame displacement, `jitgen::fdisp`).
+    /// How far below the enclosing frame the window starts (added to the
+    /// frame displacement, `jitgen::fdisp`, for the body).
     pub(in crate::codegen) delta: i32,
     /// The caller's fprs the `InlineCall` saved below the stack pointer.
     pub(in crate::codegen) using_fpr: jitgen::UsingFpr,
@@ -1196,6 +1194,13 @@ pub struct Codegen {
     /// by `a64_patch_jump_tables` before the frame ends.
     #[cfg(target_arch = "aarch64")]
     pub(in crate::codegen) pending_jump_tables: Vec<(DestLabel, Box<[DestLabel]>)>,
+    /// aarch64: the cold ways out of inline bodies not laid down yet —
+    /// `(redo, the caller's live fprs, the caller's deopt)`, see
+    /// `inline_redo_trampoline`. The next side-exit island emits them
+    /// (`a64_drain_side_exits`), so that no `b` around them sits on the
+    /// path out of the body.
+    #[cfg(target_arch = "aarch64")]
+    pub(in crate::codegen) pending_redo_trampolines: Vec<(DestLabel, jitgen::UsingFpr, DestLabel)>,
     /// Set by [`Self::set_bop_redefine`], consumed by the next
     /// [`Self::check_bop_redefine`]. On-stack eviction has to happen for the
     /// definition that *made* a basic op stale, not for every definition that
@@ -1603,6 +1608,8 @@ impl Codegen {
             far_branch_mode: false,
             #[cfg(target_arch = "aarch64")]
             pending_jump_tables: Vec::new(),
+            #[cfg(target_arch = "aarch64")]
+            pending_redo_trampolines: Vec::new(),
             bop_eviction_pending: false,
             #[cfg(any(feature = "jit-log", feature = "jit-debug"))]
             jit_compile_time: std::time::Duration::default(),

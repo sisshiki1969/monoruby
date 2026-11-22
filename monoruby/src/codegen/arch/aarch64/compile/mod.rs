@@ -33,6 +33,25 @@ use monoasm_macro::monoasm_arm64;
 use crate::codegen::jitgen::deopt_log::DeoptCause;
 use crate::bytecode::OPCODE_SUB_POLY;
 use crate::codegen::jitgen::lir::ConstMiss;
+use crate::codegen::jitgen::{fdisp, set_fdisp};
+
+/// The LFP (x22) and the frame pointer (x29). Inside a frameless body they
+/// stay where the host frame put them, and the body addresses its window
+/// through the frame displacement (`jitgen::fdisp`) instead.
+const A64_LFP: u32 = 22;
+const A64_FP: u32 = 29;
+
+/// The frame displacement an access based on `base` adds: the LFP and the
+/// frame pointer address the frame being emitted `fdisp` bytes above it
+/// (`Codegen::gen_inline_call`); any other base register is unaffected (a
+/// copy of the LFP taken with `a64_lfp_into` already has it applied).
+fn a64_base_disp(base: u32) -> u32 {
+    if base == A64_LFP || base == A64_FP {
+        fdisp() as u32
+    } else {
+        0
+    }
+}
 
 mod binary_op;
 mod builtin;
@@ -122,7 +141,7 @@ impl Codegen {
         frame: &mut AsmInfo,
         fallthrough_in: bool,
     ) {
-        if frame.pending_side_exits.is_empty() {
+        if frame.pending_side_exits.is_empty() && self.pending_redo_trampolines.is_empty() {
             frame.side_exit_watermark = self.jit.get_current();
             return;
         }
@@ -165,6 +184,13 @@ impl Codegen {
             }
             let inst = pending[i].take().unwrap();
             self.encode_linst(inst);
+        }
+        // Inline bodies' ways out (`inline_redo_trampoline`): only the
+        // bodies' own islands branch to them, unconditionally.
+        for (redo, using_fpr, deopt) in std::mem::take(&mut self.pending_redo_trampolines) {
+            self.jit.bind_label(redo);
+            self.inline_fpr_restore(using_fpr);
+            monoasm_arm64!(&mut self.jit, b deopt;);
         }
         if let Some(skip) = skip {
             self.jit.bind_label(skip);
@@ -301,8 +327,12 @@ impl Codegen {
         // (no `entry`/`exit` wrapper) is handled; anything else falls through to
         // the ordinary path. (The block's `BcIndex` source-position marker is
         // dropped here — perf/emit-asm cosmetic only, no machine-code effect.)
+        // Not in a frameless body: its exits redo the call or materialize
+        // the window (`LSideExitKind::Redo` / `Materialize`), never resume
+        // the interpreter in a frame that is not there.
         if entry.is_none()
             && exit.is_none()
+            && !frame.frameless
             && let Some((bb, deopt)) = ir.as_pure_deopt()
             && let Some((pc, wb, chain)) = ir.pure_deopt_target(deopt)
         {
@@ -638,12 +668,16 @@ impl Codegen {
             .redo
             .clone();
         if let Some((reason, target)) = recompile {
+            // The conditional branches out of here land next to it: `redo`
+            // is laid down in a later island (`inline_redo_trampoline`),
+            // possibly beyond a `tbz`'s reach.
+            let out = self.jit.label();
             if reason == RecompileReason::BecamePolymorphic {
                 let poly_byte = pc.as_ptr() as u64 + 7;
                 monoasm_arm64!(&mut self.jit,
                     mov x9, (poly_byte);
                     ldrb w9, [x9];
-                    tbz w9, #(OPCODE_SUB_POLY.trailing_zeros()), redo;
+                    tbz w9, #(OPCODE_SUB_POLY.trailing_zeros()), out;
                 );
             }
             // Stamp the site for the recompile (`compile_binary` 2a); see
@@ -662,7 +696,8 @@ impl Codegen {
                 stamped:
                 );
             }
-            self.emit_recompile_deopt(target, &redo, None, reason);
+            self.emit_recompile_deopt(target, &out, None, reason);
+            self.jit.bind_label(out);
         }
         monoasm_arm64!(&mut self.jit,
             b redo;
@@ -689,6 +724,12 @@ impl Codegen {
         #[cfg(feature = "deopt")] exit_id: u32,
     ) {
         self.jit.bind_label(entry);
+        // From here on the frames are real ones: move x29 / x22 to the
+        // callee's window (the body left them where they were,
+        // `inline_frame_enter`), and address everything from there.
+        let disp = set_fdisp(0);
+        debug_assert_ne!(0, disp, "frameless materialize outside an inline body");
+        self.inline_frame_shift(disp);
         self.a64_gen_write_back_for_deopt(wb, base);
         let cont_stub = self.jit.get_label_address(&self.chain_cont_stub).as_ptr() as u64;
         let levels: Vec<(i32, UsingFpr, ChainReplay, u64, bool)> = self
@@ -797,22 +838,42 @@ impl Codegen {
             let fetch = self.vm_fetch();
             self.a64_far_branch(&fetch, false);
         }
+        set_fdisp(disp);
     }
 
-    /// Enter an inline callee's window (`Codegen::gen_inline_call`): move
-    /// the frame pointer and the LFP down into it (x86-64 adds a frame
-    /// displacement instead).
+    /// `x(reg) <-` the LFP of the frame being emitted: x22, less the frame
+    /// displacement inside a frameless body that left x22 alone (`fdisp`).
+    pub(in crate::codegen) fn a64_lfp_into(&mut self, reg: u32) {
+        debug_assert_ne!(reg, A64_LFP);
+        let disp = fdisp() as u32;
+        if disp == 0 {
+            monoasm_arm64!(&mut self.jit, mov x(reg), x22;);
+        } else if disp <= 4095 {
+            monoasm_arm64!(&mut self.jit, sub x(reg), x22, #(disp););
+        } else {
+            monoasm_arm64!(&mut self.jit,
+                mov x(reg), (disp as u64);
+                sub x(reg), x22, x(reg);
+            );
+        }
+    }
+
+    /// Enter an inline callee's window, *delta* below the frame being
+    /// emitted (`Codegen::gen_inline_call`): x29 / x22 stay where they
+    /// are, and the body is emitted with the frame displacement grown by
+    /// *delta* (`fdisp`), so every frame-relative access of it lands in
+    /// the window.
     pub(in crate::codegen) fn inline_frame_enter(&mut self, delta: i32) {
-        self.inline_frame_shift(delta);
+        set_fdisp(fdisp() + delta);
     }
 
     /// Leave the window `inline_frame_enter` entered.
     pub(in crate::codegen) fn inline_frame_leave(&mut self, delta: i32) {
-        self.inline_frame_unshift(delta);
+        set_fdisp(fdisp() - delta);
     }
 
     /// Move the frame pointer and the LFP down into an inline callee's
-    /// window.
+    /// window (for real: a materializing exit).
     pub(in crate::codegen) fn inline_frame_shift(&mut self, delta: i32) {
         let delta = delta as u32;
         if delta <= 4095 {
@@ -849,24 +910,22 @@ impl Codegen {
         self.emit_fpr_restore(using_fpr, false);
     }
 
-    /// The cold way out of an inline body: undo the frame shift, bring the
-    /// caller's fprs back and take the caller's deopt. aarch64 has no cold
-    /// page: it is laid down in the stream, behind the `b cont` that skips
-    /// it.
+    /// The cold way out of an inline body: bring the caller's fprs back
+    /// and take the caller's deopt (the frame registers never moved, see
+    /// `inline_frame_enter`). aarch64 has no cold page: it goes into the
+    /// next side-exit island (`a64_drain_side_exits`), which every way
+    /// in already skips, where it needs nothing of the frame being
+    /// emitted (the fprs are restored from sp).
     pub(in crate::codegen) fn inline_redo_trampoline(
         &mut self,
         redo: DestLabel,
-        delta: i32,
+        _delta: i32,
         using_fpr: UsingFpr,
         deopt: &DestLabel,
-        cont: &DestLabel,
+        _cont: &DestLabel,
     ) {
-        let (deopt, cont) = (deopt.clone(), cont.clone());
-        monoasm_arm64!(&mut self.jit, b cont;);
-        self.jit.bind_label(redo);
-        self.inline_frame_unshift(delta);
-        self.inline_fpr_restore(using_fpr);
-        monoasm_arm64!(&mut self.jit, b deopt;);
+        self.pending_redo_trampolines
+            .push((redo, using_fpr, deopt.clone()));
     }
 
     /// `LInst::InlineRet`: leave the inline callee's body for the
@@ -1137,6 +1196,7 @@ impl Codegen {
             // caller's is the value saved at `[x29]`, and the caller's
             // slot is at `[caller_fp - rbp_local(slot)]`.
             SlotBase::SavedFp => {
+                debug_assert_eq!(0, fdisp(), "a frameless body has no saved fp");
                 monoasm_arm64!(&mut self.jit, ldr x9, [x29];);
                 self.a64_addr_sub(addr, 9, rbp_local(slot) as u32);
             }
@@ -1154,6 +1214,22 @@ impl Codegen {
     /// (so `addr` must differ from `base`).
     fn a64_addr_add(&mut self, addr: u32, base: u32, off: u32) {
         debug_assert_ne!(addr, base, "a64_addr_add: addr must differ from base");
+        // `base + off` in the frame being emitted is `base + off - disp`
+        // physically, which can go below `base`.
+        let disp = a64_base_disp(base);
+        if off < disp {
+            let off = disp - off;
+            if off <= 4095 {
+                monoasm_arm64!(&mut self.jit, sub x(addr), x(base), #(off););
+            } else {
+                monoasm_arm64!(&mut self.jit,
+                    mov x(addr), (off as u64);
+                    sub x(addr), x(base), x(addr);
+                );
+            }
+            return;
+        }
+        let off = off - disp;
         if off <= 4095 {
             monoasm_arm64!(&mut self.jit, add x(addr), x(base), #(off););
         } else {
@@ -1199,6 +1275,7 @@ impl Codegen {
         let lfp = GP::R14.a64().0; // x22
         let data = self.a64_inline_rest_kw_table(table);
         let f = runtime::correct_rest_kw as *const () as u64;
+        debug_assert_eq!(0, fdisp(), "a frameless body has no saved fp");
         monoasm_arm64!(&mut self.jit,
             ldr x1, [x29];                     // caller fp
             mov x9, (RBP_LOCAL_FRAME as u64);
@@ -1721,12 +1798,12 @@ impl Codegen {
             // a `proc_method` (define_method body) boundary; yield keeps
             // block semantics there and ignores the call-site block (CRuby).
             LInst::BlockGiven { dst } => {
-                let (d, lfp, rdi) = (dst.a64().0, GP::R14.a64().0, GP::Rdi.a64().0);
+                let (d, rdi) = (dst.a64().0, GP::Rdi.a64().0);
                 let exit = self.jit.label();
                 let walk = self.jit.label();
                 let found = self.jit.label();
+                self.a64_lfp_into(rdi); // rdi = current LFP
                 monoasm_arm64!(&mut self.jit,
-                    mov x(rdi), x(lfp);              // rdi = current LFP
                 walk:
                     ldr x9, [x(rdi)];                // outer LFP (LFP_OUTER == 0)
                     cbz x9, found;                   // no outer -> rdi is the home
@@ -2189,8 +2266,8 @@ impl Codegen {
             LInst::GuardCapture { deopt } => {
                 let lfp = GP::R14.a64().0; // x22
                 let off = (LFP_META as i64 - META_KIND as i64) as u32; // == 1 (kind byte)
+                self.a64_addr_sub(10, lfp, off);
                 monoasm_arm64!(&mut self.jit,
-                    sub x10, x(lfp), #(off);
                     ldrb w9, [x10];
                     mov x11, (0b1000_1000u64);
                     tst x9, x11;                 // captured or invalidated?
@@ -2202,8 +2279,8 @@ impl Codegen {
             LInst::BrIfNotCaptured { dest } => {
                 let lfp = GP::R14.a64().0; // x22
                 let off = (LFP_META as i64 - META_KIND as i64) as u32;
+                self.a64_addr_sub(10, lfp, off);
                 monoasm_arm64!(&mut self.jit,
-                    sub x10, x(lfp), #(off);
                     ldrb w9, [x10];
                     mov x11, (0b1000_1000u64);
                     tst x9, x11;
@@ -2467,7 +2544,7 @@ impl Codegen {
             // the x10 scratch like `load_dyn_var_specialized`; d0 is the f64
             // scratch (dead outside FP calls, like the CFunc lowerings).
             LInst::LoadDynVarSpecF { offset, disp, dst, base } => {
-                let e = offset as i64 + disp as i64;
+                let e = offset as i64 + disp as i64 - fdisp() as i64;
                 monoasm_arm64!(&mut self.jit,
                     mov x10, (e as u64);
                     add x10, x29, x10;
@@ -2476,7 +2553,7 @@ impl Codegen {
                 self.a64_fpr_save(dst, 0, base);
             }
             LInst::StoreDynVarSpecF { offset, disp, src, base } => {
-                let e = offset as i64 + disp as i64;
+                let e = offset as i64 + disp as i64 - fdisp() as i64;
                 self.a64_fpr_load(src, 0, base);
                 monoasm_arm64!(&mut self.jit,
                     mov x10, (e as u64);
@@ -2620,6 +2697,7 @@ impl Codegen {
     /// as the materialization scratch, so it must differ from `base`.
     fn a64_addr_sub(&mut self, addr: u32, base: u32, off: u32) {
         debug_assert_ne!(addr, base, "a64_addr_sub: addr must differ from base");
+        let off = off + a64_base_disp(base);
         if off <= 4095 {
             monoasm_arm64!(&mut self.jit, sub x(addr), x(base), #(off););
         } else {
@@ -2636,7 +2714,8 @@ impl Codegen {
     /// to one instruction. A larger offset forms the address in scratch x10
     /// (so `dst` must not be x10).
     fn a64_frame_load(&mut self, dst: u32, lfp: u32, off: u32) {
-        if off <= 256 {
+        if off + a64_base_disp(lfp) <= 256 {
+            let off = off + a64_base_disp(lfp);
             let neg = -(off as i32);
             monoasm_arm64!(&mut self.jit, ldur x(dst), [x(lfp), #(neg)];);
         } else {
@@ -2650,7 +2729,8 @@ impl Codegen {
     /// a larger offset forms the address in scratch x10 (so `src` must not be
     /// x10).
     fn a64_frame_store(&mut self, src: u32, lfp: u32, off: u32) {
-        if off <= 256 {
+        if off + a64_base_disp(lfp) <= 256 {
+            let off = off + a64_base_disp(lfp);
             let neg = -(off as i32);
             monoasm_arm64!(&mut self.jit, stur x(src), [x(lfp), #(neg)];);
         } else {
@@ -2906,11 +2986,11 @@ impl Codegen {
         let lfp = GP::R14.a64().0;
         let f = runtime::gen_array as *const () as u64;
         self.emit_fpr_save(using_fpr, false);
+        self.a64_addr_sub(3, lfp, LFP_SELF as u32); // &[lfp - LFP_SELF]
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                       // vm
             mov x1, x20;                       // globals
             mov x2, (callid.get() as u64);     // callid
-            sub x3, x(lfp), #(LFP_SELF as u32); // &[lfp - LFP_SELF]
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;
@@ -3891,6 +3971,7 @@ impl Codegen {
     /// Method epilogue: the result is already in x0; tear down the frame and
     /// return (matches the VM's `a64_op_ret`: `mov sp,x29; ldp; ret`).
     pub(in crate::codegen::jitgen) fn emit_ret(&mut self, check_deferred: bool) {
+        debug_assert_eq!(0, fdisp(), "a frameless body has no method return");
         // Mirror of x86 `emit_ret`'s #1186 gate; x0 (the return value) is
         // saved around the call, x30 is dead (the epilogue reloads it).
         if check_deferred {
@@ -4454,6 +4535,7 @@ impl Codegen {
         spliced_ret: Option<LSplicedArm>,
     ) -> bool {
         let raise = self.entry_raise();
+        debug_assert_eq!(0, fdisp(), "a frameless body has no ensure");
         let cont = self.jit.label();
         let pc0 = pc.as_ptr() as u64;
         if spliced_break.is_none() && spliced_ret.is_none() {
@@ -4594,6 +4676,8 @@ impl Codegen {
         base: usize,
     ) -> bool {
         let Some(disp) = disp else { return true };
+        // The outer frame is `disp` above the frame being emitted.
+        let disp = disp - fdisp() as i64;
         match src {
             OuterFprSrc::Fpr(src) => {
                 self.a64_fpr_load(src, 0, base); // value -> d0 (pool fmov or spill load)
@@ -4627,6 +4711,7 @@ impl Codegen {
         reg: SlotId,
     ) -> bool {
         let f64_to_val_addr = self.jit.get_label_address(&self.f64_to_val).as_ptr() as u64;
+        let disp = disp - fdisp() as i64;
         monoasm_arm64!(&mut self.jit,
             mov x10, (disp as u64);
             add x10, x29, x10;
@@ -4646,6 +4731,7 @@ impl Codegen {
         disp: i64,
         base: usize,
     ) -> bool {
+        let disp = disp - fdisp() as i64;
         monoasm_arm64!(&mut self.jit,
             mov x10, (disp as u64);
             add x10, x29, x10;
@@ -4668,6 +4754,7 @@ impl Codegen {
     ) -> bool {
         let r = src.a64().0;
         let rdi = GP::Rdi.a64().0;
+        let disp = disp - fdisp() as i64;
         let heap = self.jit.label();
         let exit = self.jit.label();
         let miss = self.jit.label();
@@ -4728,6 +4815,7 @@ impl Codegen {
         let val = GP::Rdx.a64().0;
         let tag = kind.outer_tag();
         let cont = self.jit.label();
+        debug_assert_eq!(0, fdisp(), "a frameless body has no spliced exit");
         monoasm_arm64!(&mut self.jit,
             mov x2, x(val);          // value
             mov x10, (host as u64);

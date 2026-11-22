@@ -7,7 +7,11 @@ impl Codegen {
     /// `[lfp]` is the immediately-enclosing frame (LFP_OUTER == 0); each extra
     /// step dereferences again. Mirrors x86 `get_outer`. `outer >= 1`.
     pub(super) fn a64_get_outer(&mut self, outer: usize, lfp: u32, dst: u32) {
-        monoasm_arm64!(&mut self.jit, ldr x(dst), [x(lfp)];);
+        if a64_base_disp(lfp) == 0 {
+            monoasm_arm64!(&mut self.jit, ldr x(dst), [x(lfp)];);
+        } else {
+            self.a64_frame_load(dst, lfp, LFP_OUTER as u32);
+        }
         for _ in 0..outer.saturating_sub(1) {
             monoasm_arm64!(&mut self.jit, ldr x(dst), [x(dst)];);
         }
@@ -20,7 +24,8 @@ impl Codegen {
     /// scratch and added to x29 (x9..x15 are reserved lowering temps, never a
     /// GP-mapped register).
     pub(in crate::codegen::jitgen::asmir) fn load_dyn_var_specialized(&mut self, offset: usize, reg: SlotId) {
-        let e: i64 = offset as i64 - (BP_CFP + CFP_LFP) as i64 - 8 - conv(reg) as i64;
+        let e: i64 =
+            offset as i64 - (BP_CFP + CFP_LFP) as i64 - 8 - conv(reg) as i64 - fdisp() as i64;
         let rax = GP::Rax.a64().0;
         monoasm_arm64!(&mut self.jit,
             mov x10, (e as u64);
@@ -33,7 +38,8 @@ impl Codegen {
     /// `load_dyn_var_specialized`. `src` maps to x0..x8 / x20..x23, never
     /// the x10 scratch, so there is no clobber.
     pub(in crate::codegen::jitgen::asmir) fn store_dyn_var_specialized(&mut self, offset: usize, dst: SlotId, src: GP) {
-        let e: i64 = offset as i64 - (BP_CFP + CFP_LFP) as i64 - 8 - conv(dst) as i64;
+        let e: i64 =
+            offset as i64 - (BP_CFP + CFP_LFP) as i64 - 8 - conv(dst) as i64 - fdisp() as i64;
         let s = src.a64().0;
         monoasm_arm64!(&mut self.jit,
             mov x10, (e as u64);

@@ -87,8 +87,8 @@ impl Codegen {
             mov x1, x20;                       // globals
         );
         self.a64_frame_load(2, lfp, conv(recv) as u32); // x2 = receiver
+        self.a64_lfp_into(3); // this frame's LFP
         monoasm_arm64!(&mut self.jit,
-            mov x3, x22;                       // this frame's LFP
             mov x4, (callid.get() as u64);     // CallSiteId
             str x30, [sp, #-16]!;
             mov x9, (crate::codegen::runtime::invoke_method_missing as *const () as u64);
@@ -479,7 +479,9 @@ impl Codegen {
             mov x1, x20;                              // globals
             mov x2, x11;                              // arg0 value
             mov x3, (callid.get() as u64);            // CallSiteId
-            mov x4, x22;                              // caller's lfp
+        );
+        self.a64_lfp_into(4); // caller's lfp
+        monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             mov x9, (runtime::object_send_name as *const () as u64);
             blr x9;                                   // x0 = Option<IdentId>
@@ -503,7 +505,9 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;                              // vm
             mov x1, x20;                              // globals
-            mov x2, x22;                              // caller LFP
+        );
+        self.a64_lfp_into(2); // caller LFP
+        monoasm_arm64!(&mut self.jit,
             sub x3, sp, #(RSP_LOCAL_FRAME as u32);    // callee LFP (before reserving)
             mov x4, (callid.get() as u64);            // callid
             str x30, [sp, #-16]!;                     // save LR
@@ -732,7 +736,9 @@ impl Codegen {
             mov x0, x19;                              // vm
             mov x1, x20;                              // globals
             mov x2, (callid.get() as u64);            // CallSiteId
-            mov x3, x22;                              // caller LFP
+        );
+        self.a64_lfp_into(3); // caller LFP
+        monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
             ldr x10, [x19, #(EXECUTOR_CFP as u32)];
@@ -873,7 +879,9 @@ impl Codegen {
             mov x1, x20;                              // globals
             mov x2, (callid.get() as u64);            // CallSiteId
             mov x3, x11;                              // the resolved IdentId
-            mov x4, x22;                              // caller LFP
+        );
+        self.a64_lfp_into(4); // caller LFP
+        monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
             ldr x10, [x19, #(EXECUTOR_CFP as u32)];
@@ -1064,6 +1072,7 @@ impl Codegen {
         const CLFP: u32 = 13;
         const VAL: u32 = 12;
         const CALLER_FP: u32 = 11;
+        debug_assert_eq!(0, fdisp(), "a frameless body has no saved fp");
         let lfp = GP::R14.a64().0; // x22: f's own LFP
         let expected_len = layout.from_src;
         // A `*rest` callee gets its `Array` built straight off the
@@ -1395,6 +1404,7 @@ impl Codegen {
     /// native frame base (x29), then run the standard epilogue. No error path —
     /// the value is already in the accumulator and the caller frame is JIT'd.
     pub(in crate::codegen::jitgen::asmir) fn method_return_specialized(&mut self, rbp_offset: usize) {
+        debug_assert_eq!(0, fdisp(), "a frameless body has no method return");
         monoasm_arm64!(&mut self.jit,
             mov x10, (rbp_offset as u64);
             add x29, x29, x10;          // rbp += off (skip inlined frames)
@@ -1509,22 +1519,16 @@ impl Codegen {
         // `fp - RBP_LOCAL_FRAME` for a handed-over `**kwrest`,
         // `VirtualSrc::CallerKw`).
         match base {
-            SlotBase::Own => {
-                monoasm_arm64!(&mut self.jit, mov x1, x22;);
-            }
+            SlotBase::Own => self.a64_lfp_into(1),
             SlotBase::SavedFp => {
+                debug_assert_eq!(0, fdisp(), "a frameless body has no saved fp");
                 monoasm_arm64!(&mut self.jit,
                     ldr x1, [x29];
                     mov x9, (RBP_LOCAL_FRAME as u64);
                     sub x1, x1, x9;
                 );
             }
-            SlotBase::Window(delta) => {
-                monoasm_arm64!(&mut self.jit,
-                    mov x9, (delta as u64);
-                    add x1, x22, x9;
-                );
-            }
+            SlotBase::Window(delta) => self.a64_addr_add(1, A64_LFP, delta as u32),
         }
         monoasm_arm64!(&mut self.jit,
             mov x0, (data);        // &table
@@ -1667,8 +1671,8 @@ impl Codegen {
             stp x7, x8, [sp, #(64)];
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
-            mov x2, x22;                  // lfp
         );
+        self.a64_lfp_into(2); // lfp
         let f = if let Some(pc) = position {
             let pc_ptr = pc.as_ptr() as u64;
             monoasm_arm64!(&mut self.jit,
@@ -1726,7 +1730,9 @@ impl Codegen {
             stp x7, x8, [sp, #(96)];
             mov x0, x19;                  // vm (Executor)
             mov x1, x20;                  // globals
-            mov x2, x22;                  // lfp
+        );
+        self.a64_lfp_into(2); // lfp
+        monoasm_arm64!(&mut self.jit,
             mov x3, (reason as u64);
             str x30, [sp, #-16]!;
             mov x9, (f);
@@ -1769,7 +1775,9 @@ impl Codegen {
             stp x5, x6, [sp, #(48)];
             stp x7, x8, [sp, #(64)];
             mov x0, x20;                  // globals
-            mov x1, x22;                  // lfp
+        );
+        self.a64_lfp_into(1); // lfp
+        monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             mov x9, (f);
             blr x9;
@@ -1843,21 +1851,12 @@ impl Codegen {
         evict: AsmEvict,
     ) {
         // A call from inside a frameless window (a leaf builtin,
-        // `JitContext::leaf_call`): x29 and the LFP were moved into the
-        // window (`inline_frame_shift`), while the pop after the call reads
-        // this frame's control frame and LFP through x29. They go back to
-        // the real frame for the call — the callee then saves the real
-        // frame pointer too — and into the window again after it. x86-64
-        // addresses the window by a displacement and has nothing to undo.
-        let window: i32 = self.inline_ctx.iter().map(|ctx| ctx.delta).sum();
-        if window != 0 {
-            self.inline_frame_unshift(window);
-        }
+        // `JitContext::leaf_call`) needs nothing around it: x29 and the LFP
+        // stay this frame's for the body (`inline_frame_enter`), so the pop
+        // after the call reads this frame's control frame and LFP through
+        // x29 as it should, and the callee saves the real frame pointer.
         let return_addr =
             self.a64_do_call(codeptr, is_iseq, callee_pc, call_site_bc_ptr, jit_slot);
-        if window != 0 {
-            self.inline_frame_shift(window);
-        }
         self.set_deopt_with_return_addr(return_addr, evict);
     }
 
@@ -1975,7 +1974,9 @@ impl Codegen {
             mov sp, x11;
             mov x0, x19;
             mov x1, x20;
-            mov x2, x22;                             // caller LFP
+        );
+        self.a64_lfp_into(2); // caller LFP
+        monoasm_arm64!(&mut self.jit,
             mov x4, (callid.get() as u64);
             mov x9, (f_args);
             blr x9;                                  // x0 = Option<Value>
@@ -2017,7 +2018,9 @@ impl Codegen {
             mov x0, x19;
             mov x1, x20;
             mov x2, (callid.get() as u64);
-            mov x3, x22;
+        );
+        self.a64_lfp_into(3);
+        monoasm_arm64!(&mut self.jit,
             str x30, [sp, #-16]!;
             mov x9, (runtime::yield_symbol_proc as *const () as u64);
             blr x9;
@@ -2049,12 +2052,9 @@ impl Codegen {
         let tag = ((outer << 2) + 2) as u32;
         // get_method_lfp(outer): x0 <- method LFP (walk `outer` outer links).
         if outer == 0 {
-            monoasm_arm64!(&mut self.jit, mov x(rax), x(lfp););
+            self.a64_lfp_into(rax);
         } else {
-            monoasm_arm64!(&mut self.jit, ldr x(rax), [x(lfp)];);
-            for _ in 0..outer - 1 {
-                monoasm_arm64!(&mut self.jit, ldr x(rax), [x(rax)];);
-            }
+            self.a64_get_outer(outer, lfp, rax);
         }
         let exit = self.jit.label();
         // The parameter's slot (`slot` != 0): an assigned value is the
@@ -2117,7 +2117,9 @@ impl Codegen {
         monoasm_arm64!(&mut self.jit,
             mov x0, x19;          // vm
             mov x1, x20;          // globals
-            mov x2, x(lfp);       // caller LFP
+        );
+        self.a64_lfp_into(2); // caller LFP
+        monoasm_arm64!(&mut self.jit,
             mov x3, (cs);         // call-site bc ptr
             str x30, [sp, #-16]!;
             mov x9, (f);

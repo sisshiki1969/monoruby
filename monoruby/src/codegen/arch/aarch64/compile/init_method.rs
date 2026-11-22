@@ -17,6 +17,7 @@ impl Codegen {
         info: FnInitInfo,
         prologue_offset: PrologueOffset,
     ) -> bool {
+        debug_assert_eq!(0, fdisp(), "a frameless body has no prologue");
         let lfp = GP::R14.a64().0;
         let prologue_bytes = prologue_offset.unwrap_concrete();
         monoasm_arm64!(&mut self.jit,
@@ -81,8 +82,8 @@ impl Codegen {
         // (x4) so that, as on x86, the register holds it afterwards on both
         // paths: a frameless callee's entry relies on that
         // (`note_rdi_holds` in the frameless `InitMethod`).
+        self.a64_frame_load(rdi, lfp, LFP_SELF as u32); // self
         monoasm_arm64!(&mut self.jit,
-            ldur x(rdi), [x(lfp), #(-(LFP_SELF as i32))]; // self
             mov x0, x(rdi);
             mov x1, (heap_len as u64);                  // heap_len
             ldr x9, [x0, #(RVALUE_OFFSET_VAR as u32)];  // var_table ptr
@@ -102,8 +103,10 @@ impl Codegen {
             mov x9, (f);
             blr x9;
             ldr x30, [sp], #16;
-            // The call clobbered rdi (x4, caller-saved); put `self` back.
-            ldur x(rdi), [x(lfp), #(-(LFP_SELF as i32))];
+        );
+        // The call clobbered rdi (x4, caller-saved); put `self` back.
+        self.a64_frame_load(rdi, lfp, LFP_SELF as u32);
+        monoasm_arm64!(&mut self.jit,
             exit:
         );
     }

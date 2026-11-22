@@ -1195,8 +1195,7 @@ impl Codegen {
         let mut first_bridge_fallthrough = false;
         // The same for a body with no bridge at all whose last main block
         // ends in the `Ret` (see `elide_last_ret` below).
-        if cfg!(target_arch = "x86_64")
-            && frame.frameless
+        if frame.frameless
             && outline_bridges.is_empty()
             && let Some((bbid, ir)) = ir_vec.last_mut()
             && !frame.inline_bridge_exists_for(*bbid)
@@ -1266,21 +1265,24 @@ impl Codegen {
         // unconditional `b exit`, so neither it nor its successor is
         // fall-through reachable.
         let had_outline_bridges = !outline_bridges.is_empty();
-        // x86: an inline callee's `Ret` is a jump to the `InlineCall`'s
+        // An inline callee's `Ret` is a jump to the `InlineCall`'s
         // continuation (`emit_inline_ret`), which `gen_inline_call` binds
         // right after this body; nothing else of the body goes on the hot
         // page after the last bridge, so a `Ret` ending the last bridge
         // (or, with no bridge, the last main block) is a jump to the next
         // instruction and goes. aarch64 lays its side-exit island after the
-        // bridges, so the jump stays there.
-        let elide_last_ret = cfg!(target_arch = "x86_64") && frame.frameless;
+        // bridges: the body then falls into the island's `b skip`, which is
+        // the same jump, and into nothing when the island is empty.
+        let elide_last_ret = frame.frameless;
         let n = outline_bridges.len();
+        let mut last_bridge_falls = false;
         for (i, (mut ir, entry, exit)) in outline_bridges.into_iter().enumerate() {
             let entry = frame.resolve_label(&mut self.jit, entry);
             let mut exit = Some(exit);
             if elide_last_ret && i + 1 == n && ir.ends_with_ret() {
                 ir.pop_trailing_ret();
                 exit = None;
+                last_bridge_falls = !ir.ends_unconditionally();
             }
             self.gen_asm(
                 ir,
@@ -1296,20 +1298,29 @@ impl Codegen {
         // aarch64: emit the frame's remaining side-exit handlers as the
         // final outlined island (see `a64_drain_side_exits`; x86 outlines
         // its handlers to the cold page inside its own `gen_asm`). An
-        // outline bridge always ends in `b exit`, so after any bridge the
-        // island cannot be fallen into; otherwise the last main block
+        // outline bridge ends in `b exit`, so after a bridge the island
+        // cannot be fallen into unless that was an inline callee's `Ret`
+        // and went (`elide_last_ret`); with no bridge the last main block
         // decides.
         #[cfg(target_arch = "aarch64")]
-        self.a64_drain_side_exits(&mut frame, !had_outline_bridges && fallthrough_in);
+        {
+            let island_fallthrough = if had_outline_bridges {
+                last_bridge_falls
+            } else {
+                fallthrough_in
+            };
+            self.a64_drain_side_exits(&mut frame, island_fallthrough);
+        }
         // The pending jump tables are the whole unit's, and an inline body
         // ends with its caller's still referencing blocks not yet emitted;
         // the outermost frame patches them all.
         #[cfg(target_arch = "aarch64")]
         if self.inline_ctx.is_empty() {
             self.a64_patch_jump_tables();
+            debug_assert!(self.pending_redo_trampolines.is_empty());
         }
         #[cfg(not(target_arch = "aarch64"))]
-        let _ = had_outline_bridges;
+        let _ = (had_outline_bridges, last_bridge_falls);
 
         if !frame.is_specialized() {
             self.specialized_base = self.specialized_info.len();
@@ -1351,20 +1362,20 @@ impl Codegen {
     /// (`using_fpr`); from here:
     ///
     /// ```text
-    ///     [aarch64: <frame pointer, LFP -= delta>]
     ///     <callee body>            Ret -> done, every side exit -> redo
     /// done:
-    ///     [aarch64: <frame pointer, LFP += delta>]; <restore fprs>
-    /// redo:  (cold: the x86 cold page, or behind a `b cont` on aarch64)
-    ///     [aarch64: <frame pointer, LFP += delta>]; <restore fprs>; jmp deopt
+    ///     <restore fprs>
     /// cont:
+    ///
+    /// redo:  (cold: the x86 cold page, or the next side-exit island on
+    ///         aarch64, `Codegen::pending_redo_trampolines`)
+    ///     <restore fprs>; jmp deopt
     /// ```
     ///
     /// The body addresses the window as a frame of its own, prologue and
-    /// `ret` aside (`LInst::InlineRet`, the `Init` lowering). aarch64
-    /// moves the frame pointer and the LFP down into the window for it.
-    /// x86-64 leaves them alone and emits the body with the frame
-    /// displacement (`fdisp`) grown by *delta* instead: every
+    /// `ret` aside (`LInst::InlineRet`, the `Init` lowering). The native
+    /// frame pointer and the LFP stay where they are: the body is emitted
+    /// with the frame displacement (`fdisp`) grown by *delta*, and every
     /// frame-pointer-relative access (slots, spill slots, an outer frame's
     /// locals) and every LFP-relative one (the header, `self`, a helper's
     /// `lfp` argument) adds it, so the entry and the exit cost nothing.
@@ -2460,8 +2471,8 @@ impl Codegen {
     /// (`JitContext::inline_window_delta`); what it lacks is written here:
     ///
     /// 1. the callee's write-back, like any deopt's (the frame pointer and
-    ///    the LFP are the callee's: x86-64 moves them into its window
-    ///    first, as the body addressed it through the frame displacement);
+    ///    the LFP are the callee's: they are moved into its window first,
+    ///    as the body addressed it through the frame displacement);
     /// 2. for every inline level, innermost first: the LFP header (outer
     ///    `0` — or, for a block run by a frameless `yield`, the home LFP
     ///    the yield site already stored —, the callee's meta, svar `0`,
