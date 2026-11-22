@@ -3198,6 +3198,13 @@ impl<'a> JitContext<'a> {
         let mut frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
         frame.asm_info.frameless = frameless;
         frame.asm_info.self_fresh = frameless && std::mem::take(&mut self.pending_fresh_self);
+        // A method body only: a block's `self` is its defining frame's,
+        // whatever the yielding site's receiver slot says.
+        frame.asm_info.self_is_callers = frameless
+            && outer.is_none()
+            && !bmethod
+            && self.store[callid].recv == SlotId::self_()
+            && self.self_class() == self_class;
         if bmethod {
             // A define_method proc-method body: semantically a METHOD
             // frame even though its iseq is a block — `return` targets

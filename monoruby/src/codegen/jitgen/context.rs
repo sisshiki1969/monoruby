@@ -190,6 +190,12 @@ pub(in crate::codegen) struct AsmInfo {
     ///
     pub(super) self_fresh: bool,
     ///
+    /// A frameless callee whose receiver is its caller's own `self` (same
+    /// object, so same class): the caller's entry check of `self`'s heap
+    /// ivar table covers this frame too (`Codegen::self_ivars_prepared`).
+    ///
+    pub(super) self_is_callers: bool,
+    ///
     /// Level of inlining.
     ///
     specialize_level: usize,
@@ -332,6 +338,7 @@ impl AsmInfo {
             jit_type: self.jit_type.clone(),
             frameless: self.frameless,
             self_fresh: self.self_fresh,
+            self_is_callers: self.self_is_callers,
             specialize_level: self.specialize_level,
             iseq_id: self.iseq_id,
             self_class: self.self_class,
@@ -942,6 +949,7 @@ impl JitStackFrame {
                 jit_type,
                 frameless: false,
                 self_fresh: false,
+                self_is_callers: false,
                 specialize_level,
                 iseq_id,
                 self_class,

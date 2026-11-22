@@ -844,6 +844,21 @@ impl Codegen {
                 } else {
                     None
                 };
+                // A frameless callee on its caller's `self` whose caller's
+                // entry already sized the table (`self_ivars_prepared`):
+                // the caller's check dominates this one (it sits at the
+                // caller's method / loop entry) and covered the same
+                // length, so this one would always pass. `self` is in rdi
+                // either way (`fill_window` loads it last).
+                let n = self.self_ivars_prepared.len();
+                let covered = frame.frameless
+                    && frame.self_is_callers
+                    && n >= 2
+                    && self.self_ivars_prepared[n - 2];
+                let heap_len = if covered { None } else { heap_len };
+                // This frame's own entry, pushed by `gen_machine_code`
+                // (the only caller of `gen_asm`).
+                *self.self_ivars_prepared.last_mut().unwrap() = covered || heap_len.is_some();
                 self.encode_linst(LInst::Preparation { heap_len });
             }
             // Fixnum unary ops on the tagged value. Negate deopts on i63

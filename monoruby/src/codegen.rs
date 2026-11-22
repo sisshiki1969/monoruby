@@ -1089,6 +1089,15 @@ pub struct Codegen {
     /// The `InlineCall`s whose bodies are being emitted, innermost last:
     /// where the body's `Ret` continues and where its side exits go.
     pub(in crate::codegen) inline_ctx: Vec<InlineCtx>,
+    /// One entry per frame whose machine code is being emitted
+    /// (`gen_machine_code`), innermost last: whether `self`'s heap ivar
+    /// table is known to hold the class's ivars from that frame's entry on
+    /// — its `Preparation` checked (and if need be grew) it, or a frame
+    /// below with the same `self` did. A frameless callee whose `self` is
+    /// its caller's (`AsmInfo::self_is_callers`) skips its own check when
+    /// the caller's entry says so: a table never shrinks, and both frames
+    /// size it from the same class's ivar count.
+    pub(in crate::codegen) self_ivars_prepared: Vec<bool>,
     /// `prof`: the functions whose frames the code being emitted runs in,
     /// innermost last (the unit's own, then a framed specialized callee's).
     /// A frameless body is recorded against the last one
@@ -1562,6 +1571,7 @@ impl Codegen {
             specialized_base: 0,
             inline_bodies: HashMap::default(),
             inline_ctx: Vec::new(),
+            self_ivars_prepared: Vec::new(),
             #[cfg(feature = "prof")]
             prof_hosts: Vec::new(),
             unit_const_version: None,
