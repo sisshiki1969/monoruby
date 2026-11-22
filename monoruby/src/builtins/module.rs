@@ -47,7 +47,14 @@ pub(super) fn init(globals: &mut Globals) {
     );
 
     // instance methods
-    globals.define_builtin_func(MODULE_CLASS, "==", eq, 1);
+    // Two modules are equal only when they are the same object.
+    globals.define_builtin_inline_func(
+        MODULE_CLASS,
+        "==",
+        eq,
+        inline_gen2!(super::symbol::symbol_eq),
+        1,
+    );
     globals.define_builtin_func(MODULE_CLASS, "===", teq, 1);
     globals.define_builtin_func(MODULE_CLASS, "<", lt, 1);
     globals.define_builtin_func(MODULE_CLASS, ">", gt, 1);

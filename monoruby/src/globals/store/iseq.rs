@@ -398,6 +398,13 @@ pub struct ISeqInfo {
     /// codeptr).
     #[cfg(target_arch = "aarch64")]
     pub(super) jit_guard_free_slot: HashMap<ClassId, u64>,
+    /// x86-64 only: per self class, the `call`s through this iseq's wrapper
+    /// made by callers that proved the receiver class before this iseq had
+    /// a body for it (`Codegen::late_direct_calls`). `compile_patch` points
+    /// them at the class's `patch_point` — the entry earlier-compiled
+    /// callers reach with a direct `call` — once the body exists.
+    #[cfg(target_arch = "x86_64")]
+    pub(super) late_direct_calls: HashMap<ClassId, Vec<u64>>,
     /// Bounded per-self-class warm-up profile used to decide *which* receiver
     /// class is hot enough to specialize for. Without it, the first call that
     /// trips the global warm-up counter compiles for whatever class happens to
@@ -657,6 +664,8 @@ impl ISeqInfo {
             jit_slot: HashMap::default(),
             #[cfg(target_arch = "aarch64")]
             jit_guard_free_slot: HashMap::default(),
+            #[cfg(target_arch = "x86_64")]
+            late_direct_calls: HashMap::default(),
             jit_class_profile: Vec::new(),
             jit_invalidated: false,
             bop_deps: Vec::new(),
@@ -1254,8 +1263,38 @@ impl ISeqInfo {
         );
     }
 
+    /// Remember a call site that proved its receiver to be `class` before
+    /// this iseq had a body for it (`Codegen::late_direct_calls`).
+    ///
+    /// x86-64: `addr` is the site's `call rel32` through the wrapper, which
+    /// [`Self::take_late_direct_calls`] hands to `compile_patch`.
+    ///
+    /// aarch64: `addr` is the guard-free slot the site reads, made zero (so
+    /// the site takes the wrapper) for the pair. It becomes the pair's slot,
+    /// which `compile_patch` fills — unless the pair got one meanwhile; the
+    /// site's slot then stays zero and the site keeps taking the wrapper.
+    pub(crate) fn add_late_direct_call(&mut self, class: ClassId, addr: u64) {
+        if self.jit_invalidated {
+            return;
+        }
+        #[cfg(target_arch = "x86_64")]
+        if !self.jit_entry.contains_key(&class) {
+            self.late_direct_calls.entry(class).or_default().push(addr);
+        }
+        #[cfg(target_arch = "aarch64")]
+        self.jit_guard_free_slot.entry(class).or_insert(addr);
+    }
+
+    /// x86-64 only: the waiting calls of [`Self::add_late_direct_call`] for
+    /// `class`, now that it has a body.
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn take_late_direct_calls(&mut self, class: ClassId) -> Vec<u64> {
+        self.late_direct_calls.remove(&class).unwrap_or_default()
+    }
+
     /// aarch64 only: the guard-free dispatch-slot address for a self class,
-    /// if compiled. `None` once invalidated (the slots are also zeroed then,
+    /// if compiled or awaited by a caller (a zero slot until compiled, see
+    /// [`Self::add_late_direct_call`]). `None` once invalidated (the slots are also zeroed then,
     /// but new call-site lowering must stop resolving them entirely).
     #[cfg(target_arch = "aarch64")]
     pub(crate) fn get_jit_guard_free_slot(&self, self_class: ClassId) -> Option<u64> {
@@ -1466,6 +1505,9 @@ impl ISeqInfo {
     pub(crate) fn invalidate_jit_code(&mut self) {
         self.jit_invalidated = true;
         self.drop_jit_code();
+        // No body will come for the waiting calls to be pointed at.
+        #[cfg(target_arch = "x86_64")]
+        self.late_direct_calls.clear();
     }
 
     /// Detach every compiled body of this iseq so nothing can branch into it

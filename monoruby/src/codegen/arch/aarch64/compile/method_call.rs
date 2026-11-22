@@ -1825,6 +1825,27 @@ impl Codegen {
         );
     }
 
+    /// A guard-free slot for a call whose callee has no body for the proven
+    /// receiver class yet: zero (the call takes the wrapper) until
+    /// `compile_patch` fills it, after the unit hands it to the store
+    /// (`ISeqInfo::add_late_direct_call`). One per pair within a unit.
+    pub(in crate::codegen::jitgen) fn late_guard_free_slot(
+        &mut self,
+        iseq: ISeqId,
+        class: ClassId,
+    ) -> u64 {
+        if let Some(&(_, _, slot)) = self
+            .late_direct_calls
+            .iter()
+            .find(|(i, c, _)| *i == iseq && *c == class)
+        {
+            return slot;
+        }
+        let slot = Box::into_raw(Box::new(0u64)) as u64;
+        self.late_direct_calls.push((iseq, class, slot));
+        slot
+    }
+
     /// The call itself. `jit_entry` (an x86 `DestLabel`) is unused; the
     /// aarch64 twin is `jit_slot` — the guard-free dispatch-slot address for a
     /// callee already compiled for this call site's statically-guarded
@@ -1849,7 +1870,7 @@ impl Codegen {
         _jit_entry: Option<DestLabel>,
         jit_slot: Option<u64>,
         evict: AsmEvict,
-    ) {
+    ) -> Option<CodePtr> {
         // A call from inside a frameless window (a leaf builtin,
         // `JitContext::leaf_call`) needs nothing around it: x29 and the LFP
         // stay this frame's for the body (`inline_frame_enter`), so the pop
@@ -1858,6 +1879,9 @@ impl Codegen {
         let return_addr =
             self.a64_do_call(codeptr, is_iseq, callee_pc, call_site_bc_ptr, jit_slot);
         self.set_deopt_with_return_addr(return_addr, evict);
+        // A late body is reached through `jit_slot` here (no branch is
+        // repatched on aarch64).
+        None
     }
 
     /// Keyword-rest fixup: if the `slot` is nil, replace it with a fresh empty

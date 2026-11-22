@@ -145,8 +145,20 @@ pub(super) fn init(globals: &mut Globals) {
         1,
     );
     globals.define_builtin_func(HASH_CLASS, "__set_value_at", set_value_at, 2);
-    globals.define_builtin_func(HASH_CLASS, "__iter_begin", iter_begin, 0);
-    globals.define_builtin_func(HASH_CLASS, "__iter_end", iter_end, 1);
+    globals.define_builtin_inline_func(
+        HASH_CLASS,
+        "__iter_begin",
+        iter_begin,
+        inline_gen2!(hash_iter_begin_gen),
+        0,
+    );
+    globals.define_builtin_inline_func(
+        HASH_CLASS,
+        "__iter_end",
+        iter_end,
+        inline_gen2!(hash_iter_end_gen),
+        1,
+    );
     globals.define_builtin_inline_func(
         HASH_CLASS,
         "[]=",
@@ -165,13 +177,14 @@ pub(super) fn init(globals: &mut Globals) {
     // and the block (same reasoning as `each`).
     globals.define_builtin_funcs(HASH_CLASS, "select", &["filter"], select, 0);
     globals.define_builtin_funcs(HASH_CLASS, "select!", &["filter!"], select_, 0);
-    globals.define_builtin_func(HASH_CLASS, "empty?", empty_, 0);
+    globals.define_builtin_inline_func(HASH_CLASS, "empty?", empty_, inline_gen2!(hash_empty), 0);
     globals.define_builtin_func_with(HASH_CLASS, "fetch", fetch, 1, 2, false);
-    globals.define_builtin_funcs(
+    globals.define_builtin_inline_funcs(
         HASH_CLASS,
         "include?",
         &["has_key?", "key?", "member?"],
         include,
+        inline_gen2!(hash_include_gen),
         1,
     );
     globals.define_builtin_funcs(HASH_CLASS, "inspect", &["to_s"], inspect, 0);
@@ -1368,6 +1381,142 @@ fn hash_get_or_key(
 }
 
 ///
+/// A builtin with at most one argument, compiled as a direct call to a
+/// runtime helper `f(vm, globals, recv, arg)` of the [`hashindex`] ABI,
+/// skipping the Ruby method frame (the builtin's native wrapper and its
+/// frame). `may_fail` puts the error exit behind the call: the helper
+/// returns 0 with the error set.
+///
+pub(super) fn inline_helper_call(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    store: &Store,
+    callid: CallSiteId,
+    pos_num: usize,
+    f: u64,
+    may_fail: bool,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != pos_num {
+        return false;
+    }
+    debug_assert!(pos_num <= 1);
+    if pos_num == 1 {
+        state.load(ir, callsite.args, GP::Rcx);
+    }
+    state.load(ir, callsite.recv, GP::Rdx);
+    let using_fpr = state.get_using_fpr(ir);
+    ir.fpr_save(using_fpr);
+    ir.inline(move |r#gen, _, _, _| r#gen.emit_call_2args(f));
+    ir.fpr_restore(using_fpr);
+    if may_fail {
+        let error = ir.new_error(state);
+        ir.handle_error(error);
+    }
+    state.def_rax2acc(ir, callsite.dst);
+    true
+}
+
+/// `Hash#include?` / `key?` / `has_key?` / `member?`: a key's `#hash` /
+/// `#eql?` may be Ruby code, which may raise.
+fn hash_include_gen(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    inline_helper_call(
+        state,
+        ir,
+        store,
+        callid,
+        1,
+        hashinclude as *const () as u64,
+        true,
+    )
+}
+
+fn hash_iter_begin_gen(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    inline_helper_call(
+        state,
+        ir,
+        store,
+        callid,
+        0,
+        hash_iter_begin_c as *const () as u64,
+        false,
+    )
+}
+
+fn hash_iter_end_gen(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    inline_helper_call(
+        state,
+        ir,
+        store,
+        callid,
+        1,
+        hash_iter_end_c as *const () as u64,
+        false,
+    )
+}
+
+/// [`include`] for the JIT, in the [`hashindex`] ABI.
+extern "C" fn hashinclude(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    base: Value,
+    key: Value,
+) -> Option<Value> {
+    match base.as_hash().contains_key(key, vm, globals) {
+        Ok(b) => Some(Value::bool(b)),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
+}
+
+/// [`iter_begin`] for the JIT, in the [`hashindex`] ABI.
+extern "C" fn hash_iter_begin_c(
+    _: &mut Executor,
+    _: &mut Globals,
+    base: Value,
+    _: Value,
+) -> Option<Value> {
+    Some(Value::bool(base.as_hash().iter_incr()))
+}
+
+/// [`iter_end`] for the JIT, in the [`hashindex`] ABI.
+extern "C" fn hash_iter_end_c(
+    _: &mut Executor,
+    _: &mut Globals,
+    base: Value,
+    recorded: Value,
+) -> Option<Value> {
+    base.as_hash().iter_decr(recorded.as_bool());
+    Some(Value::nil())
+}
+
+///
 /// Inline `Hash#[]=` as a direct call to `hashindex_assign`, skipping the Ruby
 /// method frame.
 ///
@@ -1812,6 +1961,33 @@ fn hash_size(
     state.load(ir, callsite.recv, GP::Rdi);
     ir.hash_len_fixnum(GP::Rax, GP::Rdi, layout, true);
     state.def_reg2acc_fixnum(ir, GP::Rax, dst);
+    true
+}
+
+///
+/// Inline `Hash#empty?` as machine code: `Hash#size` compared with 0.
+///
+fn hash_empty(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() {
+        return false;
+    }
+    let Some(layout) = hash_entries_layout() else {
+        return false;
+    };
+    let dst = callsite.dst;
+    state.load(ir, callsite.recv, GP::Rdi);
+    ir.hash_len_fixnum(GP::Rax, GP::Rdi, layout, true);
+    ir.fixnum_zero_to_bool(GP::Rax);
+    state.def_rax2acc(ir, dst);
     true
 }
 

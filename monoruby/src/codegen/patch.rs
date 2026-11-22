@@ -183,10 +183,13 @@ impl Codegen {
         let chain = unsafe { *(head as *const u64) };
         let mut dispatch = ClassDispatch::new(chain, tail);
         for (class, guard_free) in info.jit_guard_free_slots() {
-            if ClassDispatch::holds(class) {
-                // SAFETY: a heap-leaked word holding the class's current
-                // entry (`compile_patch`, `recompile_method_by_id`).
-                dispatch.insert(class, unsafe { *(guard_free as *const u64) });
+            // SAFETY: a heap-leaked word holding the class's current entry
+            // (`compile_patch`, `recompile_method_by_id`), or zero while a
+            // caller waits for a class not compiled yet
+            // (`ISeqInfo::add_late_direct_call`).
+            let entry = unsafe { *(guard_free as *const u64) };
+            if entry != 0 && ClassDispatch::holds(class) {
+                dispatch.insert(class, entry);
             }
         }
         let header = dispatch.header_addr();
@@ -251,6 +254,13 @@ impl Codegen {
                 const_map,
             );
             self.jit.apply_jmp_patch_address(entry, &guard);
+            // Callers compiled before this body went through the wrapper;
+            // give them the direct entry later callers get
+            // (`ISeqInfo::add_late_direct_call`).
+            for call in globals.store[iseq_id].take_late_direct_calls(self_class) {
+                self.jit
+                    .apply_jmp_patch_address(CodePtr::from(call as *mut u8), &patch_point);
+            }
             self.class_dispatch_note(globals, iseq_id, self_class, &guard, &patch_point, &tail);
             self.jit.finalize();
             Some(())

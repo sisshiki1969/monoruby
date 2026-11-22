@@ -86,7 +86,9 @@ impl Codegen {
                     jmp [r15 + (FUNCDATA_CODEPTR)];    // CALL_SITE
                 }
             }
-            FuncKind::Builtin { abs_address } => self.gen_native_func_wrapper(*abs_address),
+            FuncKind::Builtin { abs_address } => {
+                self.gen_native_func_wrapper(*abs_address, globals.store[fid].meta().reg_num())
+            }
             FuncKind::AttrReader { ivar_name } => self.gen_attr_reader(*ivar_name),
             FuncKind::AttrWriter { ivar_name } => self.gen_attr_writer(*ivar_name),
             FuncKind::StructReader { slot_index, inline } => {
@@ -155,16 +157,29 @@ impl Codegen {
     ///   r13: pc (dummy for builtin funcions)
     /// ~~~
     ///
-    fn gen_native_func_wrapper(&mut self, abs_address: u64) {
-        // calculate stack offset
+    /// The frame a builtin is entered with is laid out from its own `meta`
+    /// (`reg_num`), which never changes after definition, so the size the
+    /// callee frame takes below `rsp` is a constant here
+    /// ([`native_frame_size`]); debug builds check the frame's `meta` agrees.
+    fn gen_native_func_wrapper(&mut self, abs_address: u64, reg_num: u16) {
+        let frame_size = native_frame_size(reg_num);
         monoasm!( &mut self.jit,
             pushq rbp;
             movq rbp, rsp;
-            movzxw rax, [r14 - (LFP_REGNUM)];
-            addq rax, ((RSP_LOCAL_FRAME + LFP_ARG0) / 8 + 1);
-            andq rax, (-2);
-            shlq rax, 3;
-            subq rsp, rax;
+        );
+        #[cfg(debug_assertions)]
+        {
+            let ok = self.jit.label();
+            monoasm!( &mut self.jit,
+                movzxw rax, [r14 - (LFP_REGNUM)];
+                cmpq rax, (reg_num as i32);
+                jeq ok;
+                int3;
+            ok:
+            );
+        }
+        monoasm!( &mut self.jit,
+            subq rsp, (frame_size);
 
             movq rdi, rbx;
             movq rsi, r12;
@@ -295,4 +310,11 @@ impl Codegen {
             ret;
         );
     }
+}
+
+/// The bytes a native wrapper reserves below its frame pointer for the
+/// callee frame of a builtin with `reg_num` registers, rounded to keep `rsp`
+/// 16-byte aligned: `((reg_num + (RSP_LOCAL_FRAME + LFP_ARG0) / 8 + 1) & !1) * 8`.
+pub(in crate::codegen) fn native_frame_size(reg_num: u16) -> i32 {
+    ((reg_num as i32 + (RSP_LOCAL_FRAME + LFP_ARG0) / 8 + 1) & !1) * 8
 }

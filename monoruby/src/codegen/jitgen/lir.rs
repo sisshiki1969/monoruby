@@ -1392,6 +1392,13 @@ pub(in crate::codegen) enum LInst {
         /// redundant `self.class` re-guard. `None` on x86 (which uses
         /// `jit_entry` directly) and for uncompiled/unknown-class callees.
         jit_slot: Option<u64>,
+        /// x86: the callee and the proven receiver class of an iseq call
+        /// that goes through the wrapper only because the callee has no
+        /// body for that class yet. The encoder records the `call` so that
+        /// `compile_patch` can point it at the body once one exists
+        /// (`ISeqInfo::late_direct_calls`). Always `None` on aarch64, which
+        /// does the same through `jit_slot`.
+        late_direct: Option<(ISeqId, ClassId)>,
         evict: AsmEvict,
     },
     /// A cold side-exit (deopt) handler block: bind `entry`, undo any loop-JIT

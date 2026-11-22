@@ -306,9 +306,10 @@ impl Codegen {
         let prof_phase = crate::prof::phase(crate::prof::Phase::JitCompile);
 
         let const_version = self.const_version();
+        self.late_direct_calls.clear();
         #[cfg(feature = "jit-log")]
         crate::codegen::jit_timing::begin_unit();
-        match self.jit_compile(
+        let result = self.jit_compile(
             &globals.store,
             iseq_id,
             self_class,
@@ -316,7 +317,9 @@ impl Codegen {
             entry_label.clone(),
             class_version,
             const_version,
-        ) {
+        );
+        let late_direct_calls = std::mem::take(&mut self.late_direct_calls);
+        match result {
             Ok((
                 cache,
                 singleton_deps,
@@ -326,6 +329,9 @@ impl Codegen {
                 const_map,
             )) => {
                 globals.store[iseq_id].add_bop_deps(bop_deps);
+                for (callee, class, addr) in late_direct_calls {
+                    globals.store[callee].add_late_direct_call(class, addr);
+                }
                 let codeptr = self.jit.get_label_address(&entry_label);
                 let (end0, end1) = self.get_address_pair();
                 let elapsed = now.elapsed();

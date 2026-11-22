@@ -810,12 +810,29 @@ impl Codegen {
                 // it), which is exactly the precondition for skipping the
                 // wrapper's `self.class` re-guard — same soundness argument
                 // as x86's direct `call jit_entry`.
-                #[cfg(target_arch = "aarch64")]
-                let jit_slot = recv_class.and_then(|rc| {
-                    is_iseq.and_then(|iseq| store[iseq].get_jit_guard_free_slot(rc))
+                //
+                // A callee is usually compiled *after* its first caller, so a
+                // proven-class site often finds no body yet. Such a site is
+                // remembered and pointed at the body once one exists
+                // (`Codegen::late_direct_calls`): x86 repatches the `call`,
+                // aarch64 reads a guard-free slot made for the pair now and
+                // filled by `compile_patch`. A permanently un-JIT-able
+                // callee never gets a body, so it is not remembered.
+                let late = recv_class.and_then(|rc| {
+                    is_iseq.and_then(|iseq| (!store[iseq].jit_invalidated()).then_some((iseq, rc)))
                 });
+                #[cfg(target_arch = "aarch64")]
+                let jit_slot = late.map(|(iseq, rc)| {
+                    store[iseq]
+                        .get_jit_guard_free_slot(rc)
+                        .unwrap_or_else(|| self.late_guard_free_slot(iseq, rc))
+                });
+                #[cfg(target_arch = "aarch64")]
+                let late_direct = None;
                 #[cfg(not(target_arch = "aarch64"))]
                 let jit_slot = None;
+                #[cfg(not(target_arch = "aarch64"))]
+                let late_direct = if jit_entry.is_none() { late } else { None };
                 self.encode_linst(LInst::Call {
                     codeptr,
                     is_iseq: is_iseq.is_some(),
@@ -823,6 +840,7 @@ impl Codegen {
                     call_site_bc_ptr: pc,
                     jit_entry,
                     jit_slot,
+                    late_direct,
                     evict,
                 });
             }
@@ -2671,9 +2689,10 @@ impl Codegen {
                 call_site_bc_ptr,
                 jit_entry,
                 jit_slot,
+                late_direct,
                 evict,
             } => {
-                self.emit_call(
+                let call = self.emit_call(
                     codeptr,
                     is_iseq,
                     callee_pc,
@@ -2682,6 +2701,10 @@ impl Codegen {
                     jit_slot,
                     evict,
                 );
+                if let (Some((iseq, class)), Some(call)) = (late_direct, call) {
+                    self.late_direct_calls
+                        .push((iseq, class, call.as_ptr() as u64));
+                }
             }
             other => unreachable!("encode_linst_macro: unexpected {other:?}"),
         }

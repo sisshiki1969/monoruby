@@ -638,7 +638,10 @@ fn eq(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Val
 /// argument is. `case sym when :a ...` tests each `when` this way; the
 /// compare feeds the branch directly.
 ///
-fn symbol_eq(
+/// Also the inline form of every other `==` that is object identity
+/// (`BasicObject#==` / `equal?`, `Module#==`).
+///
+pub(super) fn symbol_eq(
     state: &mut AbstractState,
     ir: &mut AsmIr,
     ctx: &JitContext,

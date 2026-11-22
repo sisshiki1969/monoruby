@@ -2013,6 +2013,25 @@ impl AsmIr {
         self.inst.push(AsmInst::StringLenFixnum { dst, base });
     }
 
+    /// `rax <- Value::bool(src == fixnum(0))` for a fixnum-tagged `src`
+    /// (`Array#empty?` / `Hash#empty?` on a length). Destroys `GP::Rsi`
+    /// when `src` is `GP::Rax`, which the compare must not read.
+    pub(crate) fn fixnum_zero_to_bool(&mut self, src: GP) {
+        let lhs = if src == GP::Rax {
+            self.reg_move(GP::Rax, GP::Rsi);
+            GP::Rsi
+        } else {
+            src
+        };
+        self.push(AsmInst::IntegerCmpImm {
+            kind: CmpKind::Eq,
+            dst: None,
+            lhs,
+            // fixnum(0)
+            imm: 1,
+        });
+    }
+
     /// Emit `dst <- (src == nil)` as a Ruby bool `Value` (`Object#nil?`). Typed
     /// alternative to `inline`; destroys the `GP::Rsi` scratch.
     pub(crate) fn is_nil_to_bool(&mut self, dst: GP, src: GP) {
