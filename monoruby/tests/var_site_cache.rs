@@ -78,7 +78,8 @@ fn cvar_cache_class_variable_set_and_singleton_scope() {
 
 #[test]
 fn cvar_cache_remove() {
-    // CRuby 4.0.9 reads a freed slot here (a crash), so the expectation is
+    // CRuby (3.2 and later, 4.0.9 included) returns Qundef from the warmed
+    // cache here and crashes on the next use of it, so the expectation is
     // spelled out instead of asked of a live ruby.
     let v = run_test_no_result_check(
         r#"
