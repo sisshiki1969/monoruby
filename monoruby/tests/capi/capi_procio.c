@@ -283,6 +283,15 @@ io_maybe_wait_closed(VALUE self, VALUE io)
     return rb_io_maybe_wait(EAGAIN, io, INT2FIX(RUBY_IO_READABLE), Qnil);
 }
 
+/* `GetOpenFile` on an IO that was allocated and never initialized. */
+static VALUE
+io_get_open_file(VALUE self, VALUE io)
+{
+    rb_io_t *fptr;
+    GetOpenFile(io, fptr);
+    return INT2FIX(fptr->fd >= 0);
+}
+
 static VALUE
 io_open_descriptor(VALUE self, VALUE path)
 {
@@ -513,6 +522,7 @@ Init_capi_procio(void)
     rb_define_module_function(m, "io_path", io_path, 1);
     rb_define_module_function(m, "io_mode_append", io_mode_append, 1);
     rb_define_module_function(m, "io_maybe_wait_closed", io_maybe_wait_closed, 1);
+    rb_define_module_function(m, "io_get_open_file", io_get_open_file, 1);
     rb_define_module_function(m, "io_open_descriptor", io_open_descriptor, 1);
     rb_define_module_function(m, "cloexec", cloexec, 0);
     rb_define_module_function(m, "gc_misc", gc_misc, 0);

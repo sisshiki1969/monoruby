@@ -119,6 +119,14 @@ impl Executor {
             },
         };
 
+        // The file is already running on this thread — for another
+        // constant, or required directly before this one was registered.
+        // There is nothing to load: the constant is undefined for now,
+        // and still registered.
+        if crate::builtins::autoload_feature_in_flight(self, globals, &feature) {
+            return Ok(None);
+        }
+
         // A slot that was already `Consumed` goes back to `Consumed` if
         // this load does not define it either — unlike a fresh (`Idle`)
         // registration, which is dropped so later references stop

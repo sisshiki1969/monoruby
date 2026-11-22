@@ -635,6 +635,12 @@ pub enum IoKind {
     /// (CRuby keeps `File#path` readable after close; tempfile.rb relies
     /// on `File.unlink(file.path)` from its cleanup/finalizer paths).
     Closed(Option<Box<String>>),
+    /// Allocated but never initialized (`IO.allocate`, or a subclass
+    /// whose `initialize` does not call `super`): CRuby's `RFile` with no
+    /// `rb_io_t`. Not a closed stream — nearly every method raises
+    /// `IOError: uninitialized stream` (`rb_io_check_initialized`), the
+    /// ones that are no-ops on a closed stream included.
+    Uninit,
 }
 
 /// Which of `IO#external_encoding`'s four states a stream is in.
@@ -785,6 +791,7 @@ impl std::clone::Clone for IoKind {
             Self::File(file) => Self::File(file.clone()),
             Self::Popen(popen) => Self::Popen(popen.clone()),
             Self::Closed(p) => Self::Closed(p.clone()),
+            Self::Uninit => Self::Uninit,
         }
     }
 }
@@ -808,6 +815,7 @@ impl IoKind {
             // CRuby still prints ahead of the `(closed)` marker.
             Self::Closed(Some(path)) => Cow::Owned(format!("{path} (closed)")),
             Self::Closed(None) => Cow::Borrowed("(closed)"),
+            Self::Uninit => Cow::Borrowed("(uninitialized)"),
         }
     }
 }
@@ -978,7 +986,7 @@ impl IoInner {
                     None => return Ok(()),
                 }
             }
-            IoKind::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
+            IoKind::Closed(..) | IoKind::Uninit => return Err(self.closed_error()),
         };
         res.map_err(|e| {
             drain_err(e, self.signal_on_epipe, |err| {
@@ -1017,7 +1025,7 @@ impl IoInner {
             IoKind::Popen(p) => p.writer.as_ref().map(|w| w.sync()).unwrap_or(false),
             // A read-only stream has no write buffer to bypass; CRuby
             // reports false.
-            IoKind::Stdin | IoKind::Closed(..) => false,
+            IoKind::Stdin | IoKind::Closed(..) | IoKind::Uninit => false,
         }
     }
 
@@ -1033,19 +1041,19 @@ impl IoInner {
                     w.set_sync(sync)
                 }
             }
-            IoKind::Stdin | IoKind::Closed(..) => {}
+            IoKind::Stdin | IoKind::Closed(..) | IoKind::Uninit => {}
         }
     }
 
     pub fn is_closed(&self) -> bool {
-        matches!(self.kind, IoKind::Closed(..))
+        matches!(self.kind, IoKind::Closed(..) | IoKind::Uninit)
     }
 
     /// Whether the stream may be read from.
     pub fn is_readable(&self) -> bool {
         match &self.kind {
             IoKind::Stdin => true,
-            IoKind::Stdout | IoKind::Stderr | IoKind::Closed(..) => false,
+            IoKind::Stdout | IoKind::Stderr | IoKind::Closed(..) | IoKind::Uninit => false,
             IoKind::File(f) => f.readable,
             IoKind::Popen(p) => p.reader.is_some(),
         }
@@ -1055,7 +1063,7 @@ impl IoInner {
     pub fn is_writable(&self) -> bool {
         match &self.kind {
             IoKind::Stdout | IoKind::Stderr => true,
-            IoKind::Stdin | IoKind::Closed(..) => false,
+            IoKind::Stdin | IoKind::Closed(..) | IoKind::Uninit => false,
             IoKind::File(f) => f.writable,
             IoKind::Popen(p) => p.writer.is_some(),
         }
@@ -1064,7 +1072,7 @@ impl IoInner {
     /// `IOError` unless the stream is open for reading.
     pub fn ensure_readable(&self) -> Result<()> {
         if self.is_closed() {
-            return Err(MonorubyErr::ioerr("closed stream"));
+            return Err(self.closed_error());
         }
         if !self.is_readable() {
             return Err(MonorubyErr::ioerr("not opened for reading"));
@@ -1075,7 +1083,7 @@ impl IoInner {
     /// `IOError` unless the stream is open for writing.
     pub fn ensure_writable(&self) -> Result<()> {
         if self.is_closed() {
-            return Err(MonorubyErr::ioerr("closed stream"));
+            return Err(self.closed_error());
         }
         if !self.is_writable() {
             return Err(MonorubyErr::ioerr("not opened for writing"));
@@ -1102,7 +1110,7 @@ impl IoInner {
     /// duration (closing a `sleep 30` child's IO froze them for 30 s).
     pub fn close_detaching_child(&mut self, store: &Store) -> Result<Option<u32>> {
         if self.is_closed() {
-            return Err(MonorubyErr::ioerr("closed stream"));
+            return Err(self.closed_error());
         }
         // Anything still buffered has to reach the fd before it goes away
         // (CRuby's `finish_writeconv` / `io_fflush` in `rb_io_close`). A
@@ -1150,6 +1158,38 @@ impl IoInner {
     /// readable after close.
     pub fn closed(path: Option<String>) -> Self {
         Self::with_kind(IoKind::Closed(path.map(Box::new)))
+    }
+
+    /// What the allocator makes: a stream `initialize` has not run on.
+    pub fn uninit() -> Self {
+        Self::with_kind(IoKind::Uninit)
+    }
+
+    /// Whether `initialize` has yet to run on this stream.
+    pub fn is_uninit(&self) -> bool {
+        matches!(self.kind, IoKind::Uninit)
+    }
+
+    /// `rb_io_check_initialized`: `IOError` for a stream that was never
+    /// initialized. For the methods that do *not* raise on a closed
+    /// stream (`close`, `closed?`, …); the others get the same answer
+    /// from [`Self::closed_error`].
+    pub fn check_initialized(&self) -> Result<()> {
+        if self.is_uninit() {
+            return Err(self.closed_error());
+        }
+        Ok(())
+    }
+
+    /// The `IOError` of a method that needs an open stream and found
+    /// this one closed (`rb_io_check_closed`) — or never initialized,
+    /// which CRuby checks first and words differently.
+    pub fn closed_error(&self) -> MonorubyErr {
+        MonorubyErr::ioerr(if self.is_uninit() {
+            "uninitialized stream"
+        } else {
+            "closed stream"
+        })
     }
 
     /// Copy the per-object state (`#lineno`, encodings, binmode) from
@@ -1376,7 +1416,7 @@ impl IoInner {
         // than an IOError. A *closed* stream still raises.
         if data.is_empty() {
             if self.is_closed() {
-                return Err(MonorubyErr::ioerr("closed stream"));
+                return Err(self.closed_error());
             }
             return Ok(());
         }
@@ -1396,7 +1436,7 @@ impl IoInner {
                 writer.write(data, progress, &signal_pending)
             }
             // `ensure_writable` already rejected non-writable streams.
-            IoKind::Stdin | IoKind::Closed(..) => unreachable!(),
+            IoKind::Stdin | IoKind::Closed(..) | IoKind::Uninit => unreachable!(),
         };
         res.map_err(|e| {
             drain_err(e, self.signal_on_epipe, |err| {
@@ -1508,7 +1548,7 @@ impl IoInner {
     /// ungets behave LIFO while a single multi-byte unget preserves order.
     pub fn unget(&mut self, bytes: &[u8]) -> Result<()> {
         match &self.kind {
-            IoKind::Closed(..) => Err(MonorubyErr::ioerr("closed stream")),
+            IoKind::Closed(..) | IoKind::Uninit => Err(self.closed_error()),
             // The standard input's pushback goes into its (process-wide)
             // read buffer, as CRuby's goes into the IO's `rbuf`.
             IoKind::Stdin => {
@@ -1591,7 +1631,7 @@ impl IoInner {
             return self.unget(bytes);
         }
         match &self.kind {
-            IoKind::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
+            IoKind::Closed(..) | IoKind::Uninit => return Err(self.closed_error()),
             IoKind::Stdout | IoKind::Stderr => {
                 return Err(MonorubyErr::ioerr("not opened for reading"));
             }
@@ -1785,7 +1825,7 @@ impl IoInner {
             interrupt_marker(kind)
         };
         match &mut self.kind {
-            IoKind::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
+            IoKind::Closed(..) | IoKind::Uninit => return Err(self.closed_error()),
             IoKind::Stdin => {
                 let mut buf = vec![];
                 let res = if let Some(length) = length {
@@ -1890,7 +1930,7 @@ impl IoInner {
         }
         let need = maxlen - out.len();
         let chunk = match &mut self.kind {
-            IoKind::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
+            IoKind::Closed(..) | IoKind::Uninit => return Err(self.closed_error()),
             IoKind::Stdout | IoKind::Stderr => {
                 return Err(MonorubyErr::ioerr("not opened for reading"));
             }
@@ -2123,7 +2163,7 @@ impl IoInner {
         }
         let need = maxlen - out.len();
         match &mut self.kind {
-            IoKind::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
+            IoKind::Closed(..) | IoKind::Uninit => return Err(self.closed_error()),
             IoKind::Stdout | IoKind::Stderr => {
                 return Err(MonorubyErr::ioerr("not opened for reading"));
             }
@@ -2208,7 +2248,7 @@ impl IoInner {
             interrupt_marker(kind)
         };
         let size = match &mut self.kind {
-            IoKind::Closed(..) => return Err(MonorubyErr::ioerr("closed stream")),
+            IoKind::Closed(..) | IoKind::Uninit => return Err(self.closed_error()),
             IoKind::Stdin => read_until_step(&mut *stdin_buf(), find, &mut buf)
                 .map_err(|e| map_read_err(e, MonorubyErr::runtimeerr))?,
             IoKind::Stdout => return Err(MonorubyErr::argumenterr("can't read from $stdin")),
@@ -2616,7 +2656,7 @@ impl IoInner {
                     Err(MonorubyErr::ioerr("closed stream"))
                 }
             }
-            IoKind::Closed(..) => Err(MonorubyErr::ioerr("closed stream")),
+            IoKind::Closed(..) | IoKind::Uninit => Err(self.closed_error()),
         }
     }
 
@@ -2732,7 +2772,7 @@ impl IoInner {
                 }
                 buf.get_mut().seek(seek_from)
             }
-            IoKind::Closed(..) => Err(std::io::Error::from_raw_os_error(9)), // EBADF
+            IoKind::Closed(..) | IoKind::Uninit => Err(std::io::Error::from_raw_os_error(9)), // EBADF
             IoKind::Popen(_) => Err(std::io::Error::from_raw_os_error(ESPIPE)),
         }
     }
@@ -2746,7 +2786,7 @@ impl IoInner {
             // device (`File.open("/dev/tty")`, PTY's slave).
             // SAFETY: isatty only inspects the descriptor.
             IoKind::File(_) => self.fileno().is_ok_and(|fd| unsafe { libc::isatty(fd) } == 1),
-            IoKind::Popen(_) | IoKind::Closed(..) => false,
+            IoKind::Popen(_) | IoKind::Closed(..) | IoKind::Uninit => false,
         }
     }
 
@@ -2761,6 +2801,7 @@ impl IoInner {
             IoKind::Stderr => Some("<STDERR>".to_string()),
             IoKind::File(file) if file.has_path => Some(file.name.clone()),
             IoKind::Closed(p) => p.as_deref().cloned(),
+            IoKind::Uninit => None,
             IoKind::File(_) | IoKind::Popen(_) => None,
         }
     }

@@ -904,6 +904,29 @@ fn main() {
         globals.set_argf_inplace(ext);
     }
 
+    // `-e`: mark the main script so the parser hands prism its `-e` flag,
+    // which keeps the flip-flop / condition-literal warnings and a
+    // top-level unused variable quiet. Before `-c`, whose parse is the
+    // main script's too.
+    if !opts.exec.is_empty() {
+        parser::set_cli_e_script(path.clone());
+        // A `-e` script is read in the *locale's* encoding, not UTF-8 —
+        // so under a `C` locale a multibyte character in it is a
+        // SyntaxError, as in CRuby. A `# encoding:` comment in the
+        // script still wins (the parser prefers it), and so does `-K`,
+        // which overwrites this below.
+        if let Some(enc) = monoruby::locale_source_encoding_name() {
+            parser::set_cli_source_encoding(path.clone(), enc.to_string());
+        }
+    } else if path.as_os_str() == "-" {
+        // So is a script read from stdin (CRuby: `ruby < script.rb`
+        // under a `C` locale has `__ENCODING__` US-ASCII); a magic
+        // comment and `-K` still win, as for `-e`.
+        if let Some(enc) = monoruby::locale_source_encoding_name() {
+            parser::set_cli_source_encoding(path.clone(), enc.to_string());
+        }
+    }
+
     if opts.ast {
         dump_ast(&code);
         return;
@@ -914,7 +937,15 @@ fn main() {
         // `-c` never compiles, so a construct the lowerer doesn't accept
         // inside a method body would otherwise go unreported.
         match parser::parse_program_eager(code, path.as_path()) {
-            Ok(_) => {
+            Ok(res) => {
+                // The parse's warnings, by the level `-w` / `-W` asked
+                // for: nothing runs under `-c`, so `$VERBOSE` is never
+                // set and nothing else would print them.
+                for (msg, verbose_only) in &res.warnings {
+                    if warning_level >= 2 || (warning_level == 1 && !verbose_only) {
+                        eprintln!("{msg}");
+                    }
+                }
                 println!("Syntax OK");
                 return;
             }
@@ -939,27 +970,6 @@ fn main() {
                 chomp: opts.line_ending,
             },
         );
-    }
-
-    // `-e`: mark the main script so the parser suppresses the flip-flop /
-    // condition-literal warnings for it (prism's `COMMAND_LINE_E` gate).
-    if !opts.exec.is_empty() {
-        parser::set_cli_e_script(path.clone());
-        // A `-e` script is read in the *locale's* encoding, not UTF-8 —
-        // so under a `C` locale a multibyte character in it is a
-        // SyntaxError, as in CRuby. A `# encoding:` comment in the
-        // script still wins (the parser prefers it), and so does `-K`,
-        // which overwrites this below.
-        if let Some(enc) = monoruby::locale_source_encoding_name() {
-            parser::set_cli_source_encoding(path.clone(), enc.to_string());
-        }
-    } else if path.as_os_str() == "-" {
-        // So is a script read from stdin (CRuby: `ruby < script.rb`
-        // under a `C` locale has `__ENCODING__` US-ASCII); a magic
-        // comment and `-K` still win, as for `-e`.
-        if let Some(enc) = monoruby::locale_source_encoding_name() {
-            parser::set_cli_source_encoding(path.clone(), enc.to_string());
-        }
     }
 
     // Ruby prelude synthesized from the remaining switches; runs inside

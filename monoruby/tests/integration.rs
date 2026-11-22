@@ -267,6 +267,7 @@ mod type_error_names;
 mod unnamed_class_layout_instance_exec;
 mod usascii_8bit_symbol;
 mod variables;
+mod void_warn_autoload_env_uninit_io;
 mod warning_gating;
 mod watchdog;
 mod weakmap;

@@ -721,7 +721,14 @@ pub struct MrApi {
     pub str_append: unsafe extern "C" fn(ctx: *mut MrContext, dst: MrValue, src: MrValue) -> c_int,
 }
 
-/// [`MrApi::io_state`]'s result. `mode` holds CRuby's FMODE_* bits.
+/// Set in [`MrIoState::mode`] next to the FMODE_* bits for an IO object
+/// that was allocated and never initialized — CRuby's `RFile` with a NULL
+/// `fptr`, which `rb_io_check_initialized` raises "uninitialized stream"
+/// for. Never passed back to [`MrApi::io_update`].
+pub const MR_IO_UNINIT: c_int = 1 << 30;
+
+/// [`MrApi::io_state`]'s result. `mode` holds CRuby's FMODE_* bits, and
+/// [`MR_IO_UNINIT`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MrIoState {

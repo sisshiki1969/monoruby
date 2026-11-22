@@ -77,16 +77,42 @@ class File
   # Instance timestamp readers (core/file/{atime,mtime,ctime,birthtime}_spec.rb).
   # monoruby only defined the File.<name>(path) class methods; delegate the
   # instance form through the receiver's #path.
-  def atime;     File.atime(path);     end
-  def mtime;     File.mtime(path);     end
-  def ctime;     File.ctime(path);     end
-  def birthtime; File.birthtime(path); end
+  # CRuby's work on the descriptor (fstat), so a closed stream raises —
+  # and one that was never initialized says so, through #closed?.
+  def atime
+    raise IOError, "closed stream" if closed?
+    File.atime(path)
+  end
+
+  def mtime
+    raise IOError, "closed stream" if closed?
+    File.mtime(path)
+  end
+
+  def ctime
+    raise IOError, "closed stream" if closed?
+    File.ctime(path)
+  end
+
+  def birthtime
+    raise IOError, "closed stream" if closed?
+    File.birthtime(path)
+  end
 
   # Instance chmod/chown (core/file/{chmod,chown}_spec.rb): only the class
   # forms existed. Delegate through #path and return 0, as CRuby's instance
   # forms do (the class forms return the number of files affected).
-  def chmod(mode);         File.chmod(mode, path);          0; end
-  def chown(owner, group); File.chown(owner, group, path);  0; end
+  def chmod(mode)
+    raise IOError, "closed stream" if closed?
+    File.chmod(mode, path)
+    0
+  end
+
+  def chown(owner, group)
+    raise IOError, "closed stream" if closed?
+    File.chown(owner, group, path)
+    0
+  end
 
   # Purely lexical `dirname` (core/file/dirname_spec.rb). CRuby does *not*
   # resolve `.`/`..` or collapse interior slashes; it only strips the last

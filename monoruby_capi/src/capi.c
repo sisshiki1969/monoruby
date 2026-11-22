@@ -8856,19 +8856,24 @@ struct capi_io {
     rb_io_t fptr;
     /* What the object said at the last sync. */
     int fd0, mode0, rlen0;
+    /* Allocated and never initialized: CRuby has no fptr at all for
+     * such an object, and rb_io_check_initialized says so. */
+    int uninit;
 };
 
 static void
 io_fill(struct capi_io *e, const MrIoState *st)
 {
+    int mode = st->mode & ~MR_IO_UNINIT;
+    e->uninit = (st->mode & MR_IO_UNINIT) != 0;
     e->fptr.fd = st->fd;
-    e->fptr.mode = st->mode;
+    e->fptr.mode = mode;
     e->fptr.rbuf.ptr = (char *)st->rbuf;
     e->fptr.rbuf.off = 0;
     e->fptr.rbuf.len = (int)st->rbuf_len;
     e->fptr.rbuf.capa = (int)st->rbuf_len;
     e->fd0 = st->fd;
-    e->mode0 = st->mode;
+    e->mode0 = mode;
     e->rlen0 = (int)st->rbuf_len;
 }
 
@@ -9023,13 +9028,18 @@ rb_io_make_open_file(VALUE obj)
     e->fptr.mode = 0;
     e->mode0 = 0;
     e->fptr.rbuf.len = e->rlen0 = 0;
+    /* MakeOpenFile is what gives the object its fptr. */
+    e->uninit = 0;
     return &e->fptr;
 }
 
 void
 rb_io_check_initialized(rb_io_t *fptr)
 {
-    if (!fptr)
+    /* Every fptr handed out is the one inside its capi_io. */
+    if (!fptr
+        || (fptr->fd < 0
+            && ((struct capi_io *)((char *)fptr - offsetof(struct capi_io, fptr)))->uninit))
         rb_raise(rb_eIOError, "uninitialized stream");
 }
 

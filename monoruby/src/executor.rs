@@ -2046,6 +2046,15 @@ impl Executor {
         self.loading_paths.iter().any(|p| p == path)
     }
 
+    /// Whether a file named `stem` (extension aside) is among the files
+    /// this thread is loading. A cheap pre-check for
+    /// `autoload_feature_in_flight`.
+    pub(crate) fn is_loading_stem(&self, stem: &std::ffi::OsStr) -> bool {
+        self.loading_paths
+            .iter()
+            .any(|p| p.file_stem() == Some(stem))
+    }
+
     pub(crate) fn enter_class_context(&mut self) {
         self.lexical_class.push(vec![]);
     }
