@@ -645,7 +645,7 @@ impl AbstractState {
 
     pub(super) fn jit_load_gvar(&mut self, ir: &mut AsmIr, name: IdentId, dst: SlotId) {
         self.discard(dst);
-        // `$(errinfo)` — bytecodegen's name for a protected region's
+        // `/errinfo` — bytecodegen's name for a protected region's
         // entry save of `$!` — is read once per invocation of every
         // method carrying such a region, and `$!` is a plain `Value`
         // field of the `Executor`. Read it directly instead of paying the
@@ -668,9 +668,11 @@ impl AbstractState {
 
     pub(super) fn jit_store_gvar(&mut self, ir: &mut AsmIr, name: IdentId, src: SlotId) {
         self.write_back_slots(ir, &[src]);
-        // The restore of `$(errinfo)` at a protected region's exit — the
+        // The restore of `/errinfo` at a protected region's exit — the
         // store counterpart of `jit_load_gvar`'s read. Its hook only
-        // writes the `Executor` field and cannot fail.
+        // writes the `Executor` field and cannot fail, and no `trace_var`
+        // hook can be on the name: it is not a `$` name, so no program
+        // can spell it (`ERRINFO_INTERNAL_GVAR`).
         if name == IdentId::GVAR_ERRINFO_INTERNAL {
             ir.push(AsmInst::StoreErrinfo { src });
             return;

@@ -2020,6 +2020,11 @@ fn untrace_var(
 
 /// Coerce a `trace_var`/`untrace_var` variable name (Symbol or String)
 /// and require the `$` prefix.
+///
+/// The prefix is also what keeps a hook off the interpreter's own
+/// entries of the global variable table, which are named without it
+/// (`globals::ERRINFO_INTERNAL_GVAR`): the JIT stores `$!`'s save without
+/// asking for hooks, so one there would fire in the interpreter only.
 fn gvar_trace_name(globals: &mut Globals, v: Value) -> Result<IdentId> {
     let name = v.expect_symbol_or_string(globals)?;
     let s = name.get_name();

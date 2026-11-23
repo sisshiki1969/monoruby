@@ -268,18 +268,17 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_singleton_func_with(env, "merge!", env_merge_bang, 0, 0, true);
     globals.define_builtin_singleton_func_with(env, "update", env_merge_bang, 0, 0, true);
     globals.define_builtin_singleton_func(env, "replace", env_replace, 1);
-    // `ENV`'s destructive methods need `unsetenv`, which `Hash`'s do not
-    // call — without these the variable left `ENV` but stayed in the
-    // environment a child process inherits.
+    // The destructive methods. Each removal is an `unsetenv`, so the
+    // variable also leaves the environment a child process inherits.
     globals.define_builtin_singleton_func(env, "clear", env_clear, 0);
     globals.define_builtin_singleton_func(env, "shift", env_shift, 0);
     globals.define_builtin_singleton_func(env, "delete_if", env_delete_if, 0);
     globals.define_builtin_singleton_func(env, "reject!", env_reject_bang, 0);
     globals.define_builtin_singleton_func(env, "keep_if", env_keep_if, 0);
     globals.define_builtin_singleton_funcs(env, "select!", &["filter!"], env_select_bang, 0);
-    // ENV's readers all hand out fresh frozen copies transcoded to
-    // `Encoding.default_internal`; `Hash`'s would expose the stored
-    // strings in the locale encoding.
+    // The readers. They all hand out fresh frozen copies, transcoded to
+    // `Encoding.default_internal` when one is set (the environment's own
+    // bytes are taken to be in the locale encoding).
     globals.define_builtin_singleton_funcs(env, "each_pair", &["each"], env_each_pair, 0);
     globals.define_builtin_singleton_func(env, "each_key", env_each_key, 0);
     globals.define_builtin_singleton_func(env, "each_value", env_each_value, 0);
@@ -3180,8 +3179,9 @@ fn env_fresh_string_in(
 
 /// The whole environment, for the readers that hand out every variable:
 /// the bytes copied out of `environ` in one go, turned into Strings one
-/// variable at a time as the reader gets to it. Nothing here consults
-/// ENV's backing Hash.
+/// variable at a time as the reader gets to it. ENV keeps no state of
+/// its own: this copy, and `getenv` for what changed since it was taken
+/// (`live_value`), are all a reader consults.
 struct EnvReader {
     live: crate::environ::Snapshot,
     target: Option<crate::value::Encoding>,

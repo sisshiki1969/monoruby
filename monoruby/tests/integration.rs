@@ -134,6 +134,7 @@ mod hidden_state;
 mod inspect_dispatch;
 mod install_root;
 mod integer_64bit;
+mod internal_gvars_hidden;
 mod interpolation_to_s;
 mod invoked_name;
 mod io_console;

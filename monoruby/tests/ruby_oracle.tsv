@@ -281,6 +281,7 @@
 0a5b4d0ac946d24249dbf3aa75d75a4f	[27720, 62874]	n = 0\n        acc = 1\n        while true\n          n += 1\n          whi
 0a5c363b65cd1a510f100e09a5d67f34	[[[], 4, 4, false], [1, 4, 4, false], [[1], 4, 4, false], [1, 4, 4, false], [[1, 2], 4, 4, false], [1, 4, 4, false], [[], 4, 4, false], [1, 4, 4, false], [[1], 4, 4, false], [1, 4, 4, false], [[1, 2], 4, 4, false], [1, 4, 4, false], [[], 4, 4, false], [1, 4, 4, false], [[1], 4, 4, false], [1, 4, 4, false], [[1, 2], 4, 4, false], [1, 4, 4, false], [[], 4, 4, false], [1, 4, 4, false], [[1], 4, 4, false], [1, 4, 4, false], [[1, 2], 4, 4, false], [1, 4, 4, false], [[], 4, 4, false], [1, 4, 4, false], [[1], 4, 4, false], [1, 4, 4, false], [[1, 2], 4, 4, false], [1, 4, 4, false], [[], 4, 4, false], [1, 4, 4, false], [[1], 4, 4, false], [1, 4, 4, false], [[1, 2], 4, 4, false], [1, 4, 4, false], [[], 4, 4, false], [1, 4, 4, false], [[1], 4, 4, false], [1, 4, 4, false], [[1, 2], 4, 4, false], [1, 4, 4, false], [[], 4, 4, false], [1, 4, 4, false], [[1], 4, 4, false], [1, 4, 4, false], [[1, 2], 4, 4, false], [1, 4, 4, false], [[], 4, 4, false], [1, 4, 4, false], [[1], 4, 4, false], [1, 4, 4, false], [[1, 2], 4, 4, false], [1, 4, 4, false], [[], 4, 4, false], [1, 4, 4, false], [[1], 4, 4, false], [1, 4, 4, false], [[1, 2], 4, 4, false], [1, 4, 4, false]]	class LeafSplat\n          def initialize(a) = @a = a\n          def h1(a
 0a660509cb2049c6dd520da000143f32	["prop", "prop", "myprop", 42, "0..3"]	__a = [];__a << (\n              r = "noraise"\n              begin; (0..5).each {
+0a6918a9a1665a3cb343822e9c1e56a6	[[3, 4, 5], [0, nil], false, false, [], []]	def region\n          begin\n            :body\n          ensure\n         
 0a6f79673dd2f2b98a07a7368a4dc89b	[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 15, [Symbol, String, Integer, K, Integer, K, Integer, K, Integer, Integer, Integer, Integer, Integer, Integer, Integer], true, true, 30, FrozenError, true, "can't add a new key into hash during iteration", {a: 3}]	class K\n          def initialize(v) = (@v = v)\n          attr_reader :v
 0a7830af364740112d73028e415a2dac	[9223372036854775875, [9223372036854775811, 1, 2, 9223372036854775824, 9223372036854775823, 9223372036854775836]]	M = 0xffff_ffff_ffff_ffff\n\n\n        a = 2**63 | 3\n        r = []\n        20.tim
 0a79e21afd9bcf9cb5c4bc6b701f2274	[[:source_buffer_empty, :finished, [], [], [226, 128, 148, 227, 128, 156]], [:source_buffer_empty, :finished, [], [], [226, 128, 148, 227, 128, 156]], [:source_buffer_empty, :finished, [], [], [226, 128, 148, 227, 128, 156]], [:source_buffer_empty, :undefined_conversion, [], [], []], [:source_buffer_empty, :undefined_conversion, [], [], []]]	["\\xA1\\xBD\\xA1\\xC1", "\\x8F\\xA1\\xA1"].flat_map do |bytes|\n          
@@ -358,6 +359,7 @@
 0cdabbe05b9ecc2794d6a11ee1d7030e	[20, 300, 5, [1, 2, -1, -2, -3, :l]]	$lj = []\n        def vb; [1, 2, 3].each { |x| begin; break x * 10 if x 
 0ce8e3a422f611614838f29cc5c6a5e5	[67, 340, 27, 17, 93, 69, 351, 27, 17, 96]	def rng(lo, hi, n)\n          r = (lo..hi)\n          i = 0\n          c =
 0cebe4bdba51d916fafb772a61e36f04	42	x = 42\n            binding.local_variable_get(:x)\n            
+0cf2d6a654c10135a5b94b3e48e7a0e2	[[nil, :body, "x", 0], 0, 1]	$errinfo_hook = 0\n        trace_var(:"$(errinfo)") { $errinfo_hook += 1
 0cf52da8cfa0528dc273b8d510378aad	["not_myobj", false]	class MyObj\n          def !\n            "not_myobj"\n          end\n     
 0cfcbed94adc4cbe114ac962853741db	[".", "foo", "nil"]	__a = [];__a << (eval("__dir__", nil, "foo.rb"));__a << (eval("__dir__", nil, "f
 0d15e11cd1a3b81c19b4c71f397879fd	nil	("hello" =~ /z/)
@@ -1740,6 +1742,7 @@
 4636a2a9542130c0eed3c834be76e22b	[[-5, 0, 1, 1, 2, 3], [-1.25, 0.0, 2.0, 3.5, 3.5], ["apple", "apple", "fig", "pear"], [-5, 0, 1, 1, 2, 3], [-1.25, 0.0, 2.0, 3.5, 3.5], ["apple", "apple", "fig", "pear"]]	ints = [3, 1, 2, 1, -5, 0]\n        floats = [3.5, -1.25, 2.0, 3.5, 0.0]
 464097b0dec5ef95d2a454202f882ff3	[1, true, false]	idh = {}.compare_by_identity\n        foo = 'foo'\n        idh[foo] = tru
 4646d58775453b5799c1369ea16d3305	true	Thread.new { 42 }.is_a?(Thread)
+464ddfae07642d52af9135dd7374d9e8	[[2, 3], 0, nil]	def once(s) = (s =~ /#{s}/o)\n        64.times do |n|\n          eval("$_
 46549ee749d5a577015a441da86d9c82	[:te, :te]	__a = [];__a << (begin; Complex.rectangular(1.0 + 1i, 2); rescue TypeError; :te;
 46590c38d8a9995223435001dd59bc53	[Regexp, "abc", 1]	bytes = "\\x04\\x08\\x49\\x2f\\x08\\x61\\x62\\x63\\x01\\x06\\x3a\\x06\\x45\\x46"\n
 465ff3e1364db1761afb663540910025	C	class C\n          self\n        end\n        
@@ -5173,6 +5176,7 @@ d2d454c3c434f7a0270284339dc74b4d	[["CP852", "CP852", ["CP852"], false, true, [[t
 d2d68c2a74f6d68120e5956fce5a79a5	[[42, 42, 5, 42, 4], A]	class A < Array\n        end\n        \n\n        a = A.new(4, 42)\n        
 d2dd6a660aa2f306d4fade3735511335	[[10, 0, 1, 100], [10, 0, 2, 101], [20, 1, 1, 100], [20, 1, 2, 101]]	out = []\n               [10, 20].each.with_index do |a, i|\n                 [1, 
 d2e3132d8485717e9e7b6c31358ee82f	[1, 2]	[->{ _1 }.arity, ->{ _1 + _2 }.arity]
+d2f64635eca08bab8a1d21bdc980e099	[["global variable '$__never_set_2158' not initialized", "global variable '$_never_set_2158' not initialized"], [2, 3], 0]	log = []\n        cap = Object.new\n        cap.define_singleton_method(:
 d30342d7b758abff40f7d6b3c8477b6b	[10, 20, 30]	class C\n              attr_accessor :x,:y,:z\n            end\n      
 d3330b15fc6b7a90ae94f2200f155e57	[[], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []]	require "digest"\n  require "digest/sha2"\n  require "strscan"\n  require "etc"\n
 d333b9dcc1340bcc14af5a43f9166fa7	["bb", "cc"]	"foo" =~ /(o+)/\n            e = Enumerator.new { |y| "bb" =~ /(b+)/
@@ -5875,6 +5879,7 @@ edb5dbcaeaf97748d60848f2d876bf85	87520950	a = 0\n        for x in 0..20\n       
 edb915162043d994549434f1c1361e14	[true, :redefined]	M = 0xffff_ffff_ffff_ffff\n        def t(x) = x <= M\n        r = []\n    
 edcf1de8d941008af35a6c1fa66292f5	["myfile.rb", 10, "inst.rb", 3, "cls.rb", 7, "custom.rb", 5]	__a = [];__a << (\n            eval("__FILE__", nil, "myfile.rb", 10)\n        );_
 edd7521592e8b800133323de5557ca5d	[[1, 0], [2, 1]]	r = []; [1, 2].each.with_index { |v, i| r << [v, i] }; r
+eddb658d87683c7e0871e7377f3133af	[[0, 3, 4, 5], 0]	$internal_hook = 0\n        %w[/errinfo /flip_flop_0 /end_block_0 /regex
 edde049eae97374b923d22cf95c4230d	[[3, 3, 3], [4, 5, 5], [5, 7, 7], [6, 9, 9], [7, 11, 11], [8, 13, 13], [9, 15, 15], [10, 17, 17], [11, 19, 19], [12, 21, 21], [13, 23, 23], [14, 25, 25], [15, 27, 27], [16, 29, 29], [17, 31, 31], [18, 33, 33], [19, 35, 35], [20, 37, 37], [21, 39, 39], [22, 41, 41]]	def g(x) = x\n        class C\n          @@cv = nil\n          def f(a, b)
 ede0f98a190a84d1b889531d9cac3754	[[false, true, false, false]]	def f(s, i)\n          x = (i % 2 == 0)\n          [s == x, s != x, "a" =
 edfa5f14dfb3ce9aa5f33fbf8b2f4c1f	[3, 3]	class C\n              def each_twice(n); r = []; 2.times { r << (yi

@@ -497,7 +497,7 @@ pub struct Executor {
     /// own `Executor`, which gives `$!` its fiber-local semantics. Ruby
     /// code reads it through the read-only `$!` gvar hook and the VM /
     /// bytecodegen save-restore protocol writes it through the internal
-    /// `$(errinfo)` hook (see `globals/gvar.rs`).
+    /// `/errinfo` hook (see `globals/gvar.rs`).
     errinfo: Value,
     /// Non-local control-flow errors (`MethodReturn` / `Throw`) that were
     /// temporarily moved out of `exception` so an `ensure` body can run

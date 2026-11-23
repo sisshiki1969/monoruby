@@ -345,8 +345,9 @@ impl IdentId {
     /// per object.
     pub const _MEMBERS: IdentId = id!(197);
     pub const _KEYWORD_INIT: IdentId = id!(198);
-    /// `$(errinfo)` — the internal name bytecodegen uses for the
-    /// region-entry `$!` save of a protected region. Pre-interned so the
+    /// `/errinfo` (`ERRINFO_INTERNAL_GVAR`) — the internal name
+    /// bytecodegen uses for the region-entry `$!` save of a protected
+    /// region, outside the `$` namespace. Pre-interned so the
     /// JIT can recognize it with an integer compare rather than a lock and
     /// a string hash (`jit_load_gvar`'s fast path).
     pub const GVAR_ERRINFO_INTERNAL: IdentId = id!(199);

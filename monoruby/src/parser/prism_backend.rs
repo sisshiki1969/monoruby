@@ -2747,14 +2747,15 @@ impl<'pr> Lowerer<'pr> {
 
     /// Lower a flip-flop (`(a)..(b)` in a conditional) by desugaring
     /// it into an `if` chain over a hidden global variable that
-    /// carries the per-site on/off state:
+    /// carries the per-site on/off state (hidden by its name, which
+    /// has no `$`: see `globals::ERRINFO_INTERNAL_GVAR`):
     ///
     /// ```text
-    /// if $__flip_flop_N          # currently on
-    ///   $__flip_flop_N = false if (b)
+    /// if <state>                 # currently on (the global `/flip_flop_N`)
+    ///   <state> = false if (b)
     ///   true
     /// elsif (a)                  # currently off, begin-condition hit
-    ///   $__flip_flop_N = <`..`: !(b), `...`: true>
+    ///   <state> = <`..`: !(b), `...`: true>
     ///   true
     /// else
     ///   false
@@ -2776,7 +2777,7 @@ impl<'pr> Lowerer<'pr> {
         static NEXT_FLIP_FLOP_ID: AtomicUsize = AtomicUsize::new(0);
         let loc = location_to_loc(&node.location());
         let state = format!(
-            "$__flip_flop_{}",
+            "/flip_flop_{}",
             NEXT_FLIP_FLOP_ID.fetch_add(1, Ordering::Relaxed)
         );
         let left = self.lower_flip_flop_operand(node.left(), loc)?;
@@ -2844,8 +2845,8 @@ impl<'pr> Lowerer<'pr> {
     /// repeatedly:
     ///
     /// ```text
-    /// unless $__end_block_N   # once-only gate, fresh id per site
-    ///   $__end_block_N = true
+    /// unless <gate>           # once-only gate, fresh id per site
+    ///   <gate> = true         # (the global `/end_block_N`)
     ///   at_exit { <body> }
     /// end
     /// ```
@@ -2863,7 +2864,7 @@ impl<'pr> Lowerer<'pr> {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static NEXT_END_BLOCK_ID: AtomicUsize = AtomicUsize::new(0);
         let gate = format!(
-            "$__end_block_{}",
+            "/end_block_{}",
             NEXT_END_BLOCK_ID.fetch_add(1, Ordering::Relaxed)
         );
         self.scope_wraps.push(ScopeWrap {
@@ -5870,11 +5871,12 @@ fn regex_flags_from_closing(closing: &Location<'_>) -> String {
 /// evaluation yields the Regexp the first one built. Lowered to
 ///
 /// ```text
-/// $__regexp_once_N || ($__regexp_once_N = /#{...}/)
+/// <cache> || (<cache> = /#{...}/)      # the global `/regexp_once_N`
 /// ```
 ///
 /// with a fresh hidden global per site (as `END { }` and flip-flops
-/// keep their per-site state; `global_variables` hides `$__` names).
+/// keep their per-site state). The name has no `$`, so no program can
+/// read, write or trace it and `global_variables` does not list it.
 /// A Regexp is always truthy, so the gate is the cached value itself.
 /// Without `o` the node is returned unchanged.
 fn regex_once(regex: Node, closing: &Location<'_>, loc: Loc) -> Node {
@@ -5885,7 +5887,7 @@ fn regex_once(regex: Node, closing: &Location<'_>, loc: Loc) -> Node {
         return regex;
     }
     let cache = format!(
-        "$__regexp_once_{}",
+        "/regexp_once_{}",
         NEXT_REGEXP_ONCE_ID.fetch_add(1, Ordering::Relaxed)
     );
     let cache_var = || Node::new_global_var(cache.clone(), loc);
