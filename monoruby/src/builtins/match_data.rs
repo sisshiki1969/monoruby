@@ -569,72 +569,79 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let self_ = lfp.self_val();
     let m = self_.as_match_data();
     let args = lfp.arg(0).as_array();
-    let mut res = vec![];
-    for a in args.iter() {
-        // Range argument: append the slice (out-of-range range
-        // raises RangeError).
-        if let Some(range) = a.is_range() {
-            let len = m.len() as i64;
-            let (start, slice_len) = match range_to_slice(range, len) {
-                Some(v) => v,
-                None => {
-                    let sep = if range.exclude_end() { "..." } else { ".." };
-                    return Err(MonorubyErr::rangeerr(format!(
-                        "{}{sep}{} out of range",
-                        range.start().to_s(&globals.store),
-                        range.end().to_s(&globals.store),
-                    )));
+    // The captures accumulate in a rooted Array: each `at_value` is a fresh
+    // String, and a later index's `to_int` may run a collection, which
+    // would free the ones held in a Rust Vec.
+    vm.with_temp_scope(|vm| {
+        let res = Value::array_with_capacity(args.len());
+        vm.temp_push(res);
+        let mut res = res.as_array();
+        for a in args.iter() {
+            // Range argument: append the slice (out-of-range range
+            // raises RangeError).
+            if let Some(range) = a.is_range() {
+                let len = m.len() as i64;
+                let (start, slice_len) = match range_to_slice(range, len) {
+                    Some(v) => v,
+                    None => {
+                        let sep = if range.exclude_end() { "..." } else { ".." };
+                        return Err(MonorubyErr::rangeerr(format!(
+                            "{}{sep}{} out of range",
+                            range.start().to_s(&globals.store),
+                            range.end().to_s(&globals.store),
+                        )));
+                    }
+                };
+                let s = start as usize;
+                let e = (s + slice_len as usize).min(m.len());
+                for i in s..e {
+                    res.push(
+                        m.at_value(i)
+                            .unwrap_or_default(),
+                    );
                 }
-            };
-            let s = start as usize;
-            let e = (s + slice_len as usize).min(m.len());
-            for i in s..e {
+                // Pad with nil for positions past the end.
+                let requested = (start + slice_len) as usize;
+                for _ in e..requested {
+                    res.push(Value::nil());
+                }
+                continue;
+            }
+            // Symbol/String: named-capture lookup.
+            if let Some(group_name) = group_name_of(*a) {
+                let i = m
+                    .regexp()
+                    .and_then(|r| r.get_group_members(&group_name).last().copied())
+                    .map(|i| i as usize)
+                    .ok_or_else(|| undefined_group_name(&group_name))?;
                 res.push(
                     m.at_value(i)
+                        .unwrap_or_else(Value::nil),
+                );
+                continue;
+            }
+            let idx = a.coerce_to_int_i64(vm, globals)?;
+            let idx = if idx >= 0 {
+                idx as usize
+            } else {
+                let v = idx + m.len() as i64;
+                if v < 0 {
+                    res.push(Value::nil());
+                    continue;
+                }
+                v as usize
+            };
+            if idx >= m.len() {
+                res.push(Value::nil());
+            } else {
+                res.push(
+                    m.at_value(idx)
                         .unwrap_or_default(),
                 );
             }
-            // Pad with nil for positions past the end.
-            let requested = (start + slice_len) as usize;
-            for _ in e..requested {
-                res.push(Value::nil());
-            }
-            continue;
         }
-        // Symbol/String: named-capture lookup.
-        if let Some(group_name) = group_name_of(*a) {
-            let i = m
-                .regexp()
-                .and_then(|r| r.get_group_members(&group_name).last().copied())
-                .map(|i| i as usize)
-                .ok_or_else(|| undefined_group_name(&group_name))?;
-            res.push(
-                m.at_value(i)
-                    .unwrap_or_else(Value::nil),
-            );
-            continue;
-        }
-        let idx = a.coerce_to_int_i64(vm, globals)?;
-        let idx = if idx >= 0 {
-            idx as usize
-        } else {
-            let v = idx + m.len() as i64;
-            if v < 0 {
-                res.push(Value::nil());
-                continue;
-            }
-            v as usize
-        };
-        if idx >= m.len() {
-            res.push(Value::nil());
-        } else {
-            res.push(
-                m.at_value(idx)
-                    .unwrap_or_default(),
-            );
-        }
-    }
-    Ok(Value::array_from_vec(res))
+        Ok(res.as_val())
+    })
 }
 
 ///
@@ -1735,6 +1742,25 @@ mod tests {
         r << "abcab".split(/b/).size << $~.inspect
         r
         "##,
+        );
+    }
+
+    /// `MatchData#values_at` gathers the captures in a rooted Array: each
+    /// is a fresh String, and they were held in a Rust Vec while a later
+    /// index's `to_int` ran a collection, which freed them.
+    #[test]
+    fn values_at_survives_gc_in_to_int() {
+        run_test_once(
+            r##"
+            class I
+              def initialize(i) = @i = i
+              def to_int = (GC.start; @i)
+            end
+            md = /(\w+) (\w+) (\w+)/.match("alpha beta gamma")
+            r = nil
+            5.times { r = md.values_at(1, I.new(2), I.new(3), 0..1, I.new(-1)) }
+            r
+            "##,
         );
     }
 }

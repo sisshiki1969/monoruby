@@ -868,6 +868,35 @@ impl Executor {
         self.temp_stack.truncate(len);
     }
 
+    /// Push the key and the value of every pair of `hash`, in order, and
+    /// answer how many pairs were pushed: a builtin that walks a copy of a
+    /// Hash's pairs while Ruby runs keeps the copy here, and reads pair `i`
+    /// back with [`Self::temp_pair`].
+    pub(crate) fn temp_push_pairs(&mut self, hash: Hashmap) -> usize {
+        self.temp_stack.reserve(hash.len() * 2);
+        let base = self.temp_stack.len();
+        for (k, v) in hash.iter() {
+            self.temp_stack.push(k);
+            self.temp_stack.push(v);
+        }
+        (self.temp_stack.len() - base) / 2
+    }
+
+    /// Pair `i` of the pairs that [`Self::temp_push_pairs`] pushed from
+    /// depth `base`.
+    #[inline]
+    pub(crate) fn temp_pair(&self, base: usize, i: usize) -> (Value, Value) {
+        (self.temp_stack[base + 2 * i], self.temp_stack[base + 2 * i + 1])
+    }
+
+    /// Overwrite slot `idx`, one the caller pushed and has not cleared: a
+    /// loop that roots one item at a time keeps a fixed slot for it rather
+    /// than pushing and clearing on every turn.
+    #[inline]
+    pub fn temp_set(&mut self, idx: usize, val: Value) {
+        self.temp_stack[idx] = val;
+    }
+
     pub fn temp_array_new(&mut self, size_hint: impl Into<Option<usize>>) {
         let size_hint = size_hint.into();
         if let Some(size_hint) = size_hint {
@@ -5712,6 +5741,36 @@ impl Executor {
         bh: BlockHandler,
         cfp: Cfp,
     ) -> Result<ProcData> {
+        self.block_data_from(globals, bh, cfp, false)
+    }
+
+    /// [`Self::get_block_data`] for a builtin that runs Ruby between
+    /// resolving its block and its last yield (an argument's `to_str` or
+    /// `to_hash`, a key's `hash`), called inside a temp scope
+    /// ([`Self::with_temp_scope`]).
+    ///
+    /// A `&obj` block argument reaches the builtin as `obj` itself, and
+    /// is turned into a Proc here by `obj.to_proc`. Nothing references
+    /// that Proc but the `ProcData`, which the collector does not see: a
+    /// collection before a yield would free it, and with it the frame its
+    /// block closes over, and the yield would run on freed memory. So it
+    /// is pushed on the temp stack. A literal block, a Proc and a Symbol
+    /// are rooted by a frame already, and push nothing.
+    pub(crate) fn get_block_data_rooted(
+        &mut self,
+        globals: &mut Globals,
+        bh: BlockHandler,
+    ) -> Result<ProcData> {
+        self.block_data_from(globals, bh, self.cfp(), true)
+    }
+
+    fn block_data_from(
+        &mut self,
+        globals: &mut Globals,
+        bh: BlockHandler,
+        cfp: Cfp,
+        root: bool,
+    ) -> Result<ProcData> {
         if let Some((outer, fid)) = self.resolve_block_target(globals, cfp, bh) {
             // outer is left un-moved: ProcData is transient and the
             // dispatch runs immediately, so the on-stack frame (for
@@ -5720,9 +5779,12 @@ impl Executor {
         }
         // General `to_proc` fallback: covers user-defined classes that
         // implement `to_proc` (e.g. Method#to_proc).
-        if let Some(proc) = self.block_arg_to_proc(globals, bh.0)?
-            && let Some(proc) = proc.is_proc()
+        if let Some(val) = self.block_arg_to_proc(globals, bh.0)?
+            && let Some(proc) = val.is_proc()
         {
+            if root {
+                self.temp_push(val);
+            }
             return Ok(ProcData::from_proc(&proc));
         }
         Err(MonorubyErr::wrong_argument_type(globals, bh.0, "Proc"))
