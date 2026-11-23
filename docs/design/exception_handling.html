@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-24328759.js";
+            window.path_to_searchindex_js = "../searchindex-6f20bb35.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -448,22 +448,23 @@ carries the same gate. Worth about 10% on a hot method with a trivial
 <code>rescue</code> clause can put it back (§5). That save read <code>$!</code> through the generic
 hooked-global runtime call, once per invocation of <em>every</em> method carrying a
 <code>begin</code>..<code>ensure</code> or <code>begin</code>..<code>rescue</code>:</p>
-<pre><code class="language-text">:00001 %2 = $(errinfo)
+<pre><code class="language-text">:00001 %2 = /errinfo
       mov  rdi,rbx / mov rsi,r12 / mov edx,0x6a      before
       movabs rax,&lt;runtime::get_global_var&gt; / call rax
 
       mov  rax,QWORD PTR [rbx+0x198]                 after
 </code></pre>
-<p><code>$!</code> is a plain <code>Value</code> field of the <code>Executor</code> and <code>$(errinfo)</code>’s hook is
+<p><code>$!</code> is a plain <code>Value</code> field of the <code>Executor</code> and <code>/errinfo</code>’s hook is
 <code>Some(vm.errinfo())</code>, so <code>AsmInst::LoadErrinfo</code> is the same read — with the
 call’s FP save set and GP flush gone with it. The load is equivalent only
 because <code>rbx</code> is the <em>current</em> <code>Executor</code>, which is what <code>$!</code> is per (CRuby
 keeps errinfo per execution context, and so does monoruby), so a Fiber or
 Thread reads its own.</p>
-<p>Only the internal name is specialized. <code>$(errinfo)</code> is what bytecodegen emits
-and is not a name Ruby’s parser can produce, so no program can alias it,
-<code>trace_var</code> it or otherwise put a hook in the way; user-written <code>$!</code> reads keep
-the generic path. The name is pre-interned as
+<p>Only the internal name is specialized. <code>/errinfo</code> is what bytecodegen emits
+and is not a <code>$</code> name — which the parser, <code>trace_var</code> / <code>untrace_var</code> and the C
+API’s <code>rb_gv_get</code> / <code>rb_gv_set</code> all require or prepend, and the only kind
+<code>global_variables</code> lists — so no program can alias it, <code>trace_var</code> it or
+otherwise put a hook in the way; user-written <code>$!</code> reads keep the generic path. The name is pre-interned as
 <code>IdentId::GVAR_ERRINFO_INTERNAL</code> so the recognition is an integer compare
 rather than a lock and a string hash.</p>
 <p>Worth about 28% on a hot method with a trivial <code>ensure</code> (0.663-0.675 s -&gt;
